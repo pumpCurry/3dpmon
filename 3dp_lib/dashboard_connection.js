@@ -19,7 +19,6 @@ import * as printManager from "./dashboard_printManager.js";
 
 let ws = null;
 let heartbeatInterval = null;
-let aggregatorTimer   = null;
 let reconnectAttempts = 0;
 let reconnectTimeout  = null;
 const MAX_RECONNECT   = 5;
