@@ -1,0 +1,128 @@
+/**
+ * @fileoverview ファイルマネージャ UI モジュール。
+ * プリント履歴データの保存と表示を担当する。
+ */
+
+const containerId = 'filemanager-history';
+const STORAGE_KEY = '3dp-filemanager-history';
+
+/**
+ * @typedef {Object} HistoryEntry
+ * @property {number} id             ジョブID
+ * @property {string} filename       ファイル名（パスを含む場合あり）
+ * @property {number} starttime      開始時刻の UNIX タイムスタンプ（秒）
+ * @property {number} [usagematerial] 使用量（mm）
+ * @property {string} [thumbnail]    サムネイル URL
+ */
+
+/**
+ * @typedef {Object} VideoEntry
+ * @property {number} id    ジョブID に対応
+ * @property {string} video 動画 URL
+ */
+
+/**
+ * 履歴データを localStorage に保存する（内部用）。
+ *
+ * @private
+ * @param {HistoryEntry[]} historyList - 整形済み履歴エントリ配列
+ * @param {VideoEntry[]}   videoList   - 関連動画エントリ配列
+ */
+function _saveHistoryData(historyList, videoList) {
+  const data = { historyList, elapseVideoList: videoList };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[FileManager] saveHistoryData failed:', e);
+  }
+}
+
+/**
+ * localStorage から履歴データを読み込む（内部用）。
+ *
+ * @private
+ * @returns {{
+ *   historyList: HistoryEntry[],
+ *   elapseVideoList: VideoEntry[]
+ * }}
+ */
+function _loadHistoryData() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return { historyList: [], elapseVideoList: [] };
+  try {
+    const data = JSON.parse(raw);
+    return {
+      historyList: Array.isArray(data.historyList) ? data.historyList : [],
+      elapseVideoList: Array.isArray(data.elapseVideoList) ? data.elapseVideoList : []
+    };
+  } catch (e) {
+    console.warn('[FileManager] loadHistoryData parse error:', e);
+    return { historyList: [], elapseVideoList: [] };
+  }
+}
+
+/**
+ * ファイルマネージャ UI モジュール。
+ */
+export const FileManager = {
+  /**
+   * 初期化処理。履歴ビューの初回描画を行う。
+   */
+  init() {
+    this.render();
+  },
+
+  /**
+   * プリンタから受け取った生データを永続化し、UIを再描画する。
+   *
+   * @param {object}               printerData
+   * @param {{ rawValue: HistoryEntry[] }} printerData.historyList
+   *   - 生データの印刷履歴配列
+   * @param {{ rawValue: VideoEntry[] }}   printerData.elapseVideoList
+   *   - 生データの動画リスト配列
+   * @returns {void}
+   */
+  saveFromPrinterData({ historyList, elapseVideoList }) {
+    const history = historyList?.rawValue || [];
+    const videos  = elapseVideoList?.rawValue || [];
+    _saveHistoryData(history, videos);
+    this.render();
+  },
+
+  /**
+   * 保存された履歴データを読み込み、HTML要素として描画する。
+   *
+   * @returns {void}
+   */
+  render() {
+    const { historyList, elapseVideoList } = _loadHistoryData();
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+
+    historyList.forEach(entry => {
+      const card = document.createElement('div');
+      card.className = 'history-card';
+
+      const fileName = entry.filename?.split('/').pop() || '（不明）';
+      const dateStr  = new Date(entry.starttime * 1000).toLocaleString();
+      const thumbHtml = entry.thumbnail
+        ? `<img src="${entry.thumbnail}" width="100" alt="サムネイル">`
+        : '';
+
+      const video = elapseVideoList.find(v => v.id === entry.id);
+      const videoLink = video
+        ? `<a href="${video.video}" target="_blank" rel="noopener">📹 動画</a>`
+        : '';
+
+      card.innerHTML = `
+        <div class="card-header"><strong>${fileName}</strong></div>
+        <div>開始日時: ${dateStr}</div>
+        <div>材料使用量: ${Math.round(entry.usagematerial || 0)} mm</div>
+        ${thumbHtml}
+        <div>${videoLink}</div>
+      `;
+      container.appendChild(card);
+    });
+  }
+};

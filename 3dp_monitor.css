@@ -1,0 +1,781 @@
+/* 
+  3dp_monitor.css
+  Version1.338 
+*/
+
+/* ---------------------------------------------------------------
+   共通リセット＆基本スタイル
+--------------------------------------------------------------- */
+body {
+  font-family: Arial, sans-serif;
+  background-color: #f4f4f4;
+  margin: 0;
+  padding: 10px;
+}
+.card {
+  background: #fff;
+  padding: 10px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  margin-bottom: 10px;
+}
+.card-title {
+  background-color: #444;
+  color: #fff;
+  font-size: 14px;
+  margin: 0 0 8px 0;
+  padding: 4px 8px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: nowrap;
+  margin-bottom: 10px;
+}
+
+/* ---------------------------------------------------------------
+   タイトルバー
+--------------------------------------------------------------- */
+.title-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #ddd;
+  padding: 5px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+.title-bar .left span {
+  margin-right: 5px;
+}
+/* ---------------------------------------------------------------
+   再生トグルボタン用スタイル
+--------------------------------------------------------------- */
+#audio-test-controls button {
+  font-size: 1.5em;
+  position: relative;
+  width: 2.2em; height:2.2em;
+}
+.status-blue::after {
+  content: "？"; color: blue; font-weight:bold;
+  position:absolute; top:0; left:0;
+}
+.status-red::after {
+  content: "／"; color: red; font-weight:bold;
+  position:absolute; top:0; left:0;
+}
+.status-green::after {
+  content: "○"; color: green; font-weight:bold;
+  position:absolute; top:0; left:0;
+}
+
+/* ---------------------------------------------------------------
+   Audio‑Unlock ポップアップ用
+--------------------------------------------------------------- */
+#audio-unlock-pop button { margin-top:10px; font-size:14px; }
+
+
+/* ---------------------------------------------------------------
+   通知領域
+--------------------------------------------------------------- */
+
+.notification-container {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;     /* 背面の操作を邪魔しない */
+  z-index: 2000;
+  margin-top: 1rem;
+}
+
+.notification-alert {
+  position: relative;
+  pointer-events: auto;     /* この要素だけクリック可能にする */
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.25rem;
+  color: #fff;
+  opacity: 0.75;
+  box-shadow: 0 0 8px rgba(0,0,0,0.2);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.notification-alert.info    { background-color: #17a2b8; }
+.notification-alert.warn    { background-color: #ffc107; color: #212529; }
+.notification-alert.error   { background-color: #dc3545; }
+.notification-alert.success { background-color: #28a745; }
+
+.notification-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* フェードイン／アウト */
+.notification-alert.enter {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+.notification-alert.enter-active {
+  opacity: 0.75;
+  transform: translateY(0);
+}
+.notification-alert.exit {
+  opacity: 0.75;
+  transform: translateY(0);
+}
+.notification-alert.exit-active {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+
+/* ---------------------------------------------------------------
+   カメラ映像エリア
+--------------------------------------------------------------- */
+.camera-wrapper {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%;    /* 16:9 アスペクト比 */
+  border: 5px solid #333;
+  background-color: #555;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+  overflow: hidden;        /* はみ出しを隠す */
+}
+
+/* 画像をコンテナいっぱいにフィットさせる */
+#camera-feed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* off 時は見えないように */
+#camera-feed.off {
+  display: none !important;
+}
+
+/* NO SIGNAL 表示（broken-img連動） */
+.no-signal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+  display: none;
+}
+#camera-feed.off + .no-signal {
+  display: block;
+}
+
+/* 状態メッセージ枠（connecting/retrying時） */
+.camera-status {
+  display: flex;
+  position: absolute;
+  top: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255,255,255,0.95);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.1rem;
+  font-family: sans-serif;
+  font-weight: bold;
+  z-index: 10;
+}
+
+/* 非表示用ヘルパー */
+.camera-status.hidden {
+  display: none !important;
+}
+
+/* CONNECT CANCEL ボタン */
+.camera-cancel-btn {
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.9rem;
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.camera-cancel-btn:hover {
+  background: #c0392b;
+}
+
+/* ---------------------------------------------------------------
+   ヘッドプレビューエリア
+--------------------------------------------------------------- */
+
+.chamber {
+  position: relative;
+  width: 190px;
+  height: 190px;
+  background-color: #222;
+  border-top: 4px solid #111144;
+  border-left: 4px solid #111144;
+  border-right: 4px solid #111144;
+  border-bottom: 4px solid #222;
+  box-sizing: border-box;
+}
+.stage {
+  position: absolute;
+  width: 150px;
+  height: 150px;
+  bottom: 15px;
+  right: 15px;
+  background-color: #555;
+  border-top: 2px solid darkgoldenrod;
+  border-left: 2px solid #666;
+  border-right: 2px solid #666;
+  border-bottom: 2px solid #666;
+  box-sizing: border-box;
+}
+
+#z-preview-container {
+  width: 70px;
+  height: 190px;
+  border: 1px solid #aaa;
+  position: relative;
+  text-align: center;
+}
+#z-preview {
+  position: absolute;
+  top: 25px;
+  left: 10px;
+  width: 50px;
+  background: rgba(255, 0, 0, 0.6);
+  border-top: 1px solid black;
+  border-bottom: 3px solid red;
+}
+#z-value {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  font-weight: bold;
+}
+
+/* 共通ユーティリティ */
+.hidden {
+  display: none !important;
+}
+
+/* メインステータスの強調 */
+#camera-status-label {
+  font-weight: bold;
+}
+
+/* サブテキストは少し小さめに */
+#camera-status-sub {
+  color: #666;
+  font-size: 0.8rem;
+}
+
+/* スピナー本体 */
+.spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* スピナー回転アニメーション */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* アクセシビリティ用の非表示テキスト */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; 
+  height: 1px; 
+  margin: -1px; 
+  padding: 0; 
+  overflow: hidden; 
+  clip: rect(0 0 0 0); 
+  border: 0;
+}
+
+
+/* ---------------------------------------------------------------
+   印刷状態・制御/温度/照明エリア
+--------------------------------------------------------------- */
+.status-control-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.col1 { flex: 1; min-width: 360px; }
+.col2 { flex: 1; min-width: 320px; font-family: "Arial Narrow", Arial, sans-serif; }
+.print-status-table {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin-bottom: 8px;
+  font-size: 0.9em;
+}
+.print-status-table strong {
+  text-align: right;
+  white-space: nowrap;
+}
+.control-temp-area { font-size: 0.9em; }
+.control-temp-area .temp-row {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 5px;
+}
+.temp-box {
+  background-color: #ddd;
+  padding: 5px;
+  border-radius: 3px;
+  flex: 1;
+  text-align: center;
+  min-width: 70px;
+}
+.fan-lights-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.fan-item {
+  background-color: #eee;
+  padding: 5px;
+  border-radius: 3px;
+  text-align: center;
+  flex: 1;
+  min-width: 70px;
+}
+.fan-item strong {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 3px;
+}
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 18px;
+  margin: 0 4px;
+  vertical-align: middle;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+  border-radius: 18px;
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #fff;
+  transition: .4s;
+  border-radius: 50%;
+}
+input:checked + .slider {
+  background-color: #2196F3;
+}
+input:checked + .slider:before {
+  transform: translateX(18px);
+}
+
+/* ---------------------------------------------------------------
+   プレビューエリア
+--------------------------------------------------------------- */
+.preview-wrapper {
+  border: 2px solid green;
+  padding: 10px;
+  background-color: #f8f8f8;
+  min-width: 300px;
+}
+.preview-header { margin-bottom: 8px; font-weight: bold; }
+.preview-body {
+  display: flex;
+  background-color: #fff;
+  padding: 8px;
+  border-radius: 4px;
+  gap: 10px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.stage .grid-line { position: absolute; background-color: #777777; }
+.stage .grid-line.center { background-color: #999999; }
+.stage .grid-line.vertical { width: 1px; height: 100%; }
+.stage .grid-line.vertical.center { width: 2px; }
+.stage .grid-line.horizontal { height: 1px; width: 100%; }
+.stage .grid-line.horizontal.center { height: 2px; }
+.stage .xy-label {
+  position: absolute;
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.z-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.z-label-top { position: absolute; top: 0; width: 100%; font-size: 10px; }
+.z-label-bottom { position: absolute; bottom: 0; width: 100%; font-size: 10px; }
+.xy-value-extra {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  color: #333;
+  background-color: #fafafa;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.z-value-extra {
+  font-size: 12px;
+  margin-top: 4px;
+  font-weight: bold;
+}
+
+/* ---------------------------------------------------------------
+   機器情報＆ログエリア
+--------------------------------------------------------------- */
+.info-wrapper { border: 2px solid green; padding: 10px; background-color: #f8f8f8; min-width: 200px; }
+.info-card { flex: 1; min-width: 250px; }
+.log-card { flex: 2; min-width: 300px; }
+.log-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+.tabs button {
+  margin-right: 5px;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.log-controls button {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+#last-log-timestamp { font-size:12px; }
+
+
+/* エラー状況フィールド */
+[data-field="errorStatus"] {
+  display: inline-block;
+  border-radius: 3px;
+  min-width: 4em;
+}
+
+/* 値が "---" ではない（＝エラー発生）ときだけ背景と太字 */
+.error-active[data-field="errorStatus"] {
+  background-color: #fdecea;
+  font-weight: bold;
+  color: #a71d2a;
+}
+
+/* ---------------------------------------------------------------
+   ログボックス
+--------------------------------------------------------------- */
+.log-box {
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid #ccc;
+  background: #fff;
+  font-family: "Arial Narrow", Arial, sans-serif; 
+}
+
+.log-info {
+  background-color: #e7f3fe;
+  color: #084298;
+}
+
+.log-warn {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.log-error {
+  background-color: #f8d7da;
+  color: #842029;
+}
+
+.log-success {
+  background-color: #d1e7dd;
+  color: #0f5132;
+}
+
+.log-normal {
+  background-color: #f3f3f3;
+  color: #333;
+}
+
+.log-send {
+  background-color: #e673d2;
+  color: #4d2646;
+}
+
+
+
+#error-history .error-entry {
+  font-family: Consolas, monospace;
+  font-size: 90%;
+  padding: 3px;
+  border-bottom: 1px solid #ccc;
+}
+
+/* ---------------------------------------------------------------
+   エラーバー（最新エラー表示）
+--------------------------------------------------------------- */
+#latest-error {
+  background: #ffdddd;
+  border: 1px solid #ff8888;
+  color: #a00;
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  display: none;
+  position: relative;
+}
+#latest-error button {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: #a00;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------
+   ログ行の状態
+--------------------------------------------------------------- */
+.log-line { margin: 0; padding: 2px 0; }
+.new { color: #007BFF; }
+.old { color: #666666; }
+.initial-log { background: #eef; }
+.state-log { background-color: #dfd; }
+.error-entry {
+  background-color: #ffe9e9;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  border-radius: 3px;
+}
+
+
+.confirm-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------------------------------------------------------------
+   モーダル画面
+--------------------------------------------------------------- */
+.confirm-modal-box {
+  background: white;
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 0 10px #333;
+  text-align: center;
+}
+.confirm-modal-box .btn-group {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: space-around;
+}
+
+/* ---------------------------------------------------------------
+   設定カード：通知設定
+--------------------------------------------------------------- */
+.tts-settings legend {
+  font-size: 0.95em;
+}
+.tts-settings label {
+  font-size: 0.9em;
+}
+#tts-rate {
+  vertical-align: middle;
+}
+#tts-rate-value {
+  display: inline-block;
+  width: 2em;
+  text-align: right;
+  font-weight: bold;
+}
+
+
+/* ---------------------------------------------------------------
+   印刷履歴カード（v1.327 追加）
+--------------------------------------------------------------- */
+.print-history-card {
+  margin-top: 1rem;
+  padding: 0.5rem;
+}
+.print-history-card .card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.print-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.print-job-item {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+  border-bottom: 1px solid #ddd;
+}
+.print-job-item:last-child {
+  border-bottom: none;
+}
+.print-job-thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  margin-right: 0.75rem;
+  background: #f5f5f5;
+}
+.print-job-info {
+  flex: 1;
+}
+.print-job-info .filename {
+  font-weight: bold;
+  margin-bottom: 0.25rem;
+}
+.print-job-info .times,
+.print-job-info .material-used {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+/* 2-tab panels */
+.print-history-card .tabs button.active { background:#444; color:#fff; }
+.print-history-card .tabs button { cursor:pointer; }
+
+
+/* -------------------------------
+   両テーブル共通：固定ヘッダー＋スクロール
+------------------------------- */
+/* 固定ヘッダー・スクロール本体 */
+.fixed-header {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;   /* 固定幅ではなく auto に */
+}
+
+.fixed-header th, .fixed-header td {
+  padding: 4px;
+  border: 1px solid #ccc;
+  box-sizing: border-box;
+}
+
+.fixed-header th {
+  position: sticky;
+  top: 0;
+  background: #fff;   /* ヘッダー背景を白に */
+  z-index: 2;         /* 本文セルの上に */
+}
+
+.scrollable-body { max-height:15em; overflow:auto; }
+
+/* -------------------------------
+   印刷履歴テーブル用：ストライプ＆フォント
+------------------------------- */
+/* フォント設定 */
+#print-history-table, #print-history-table th, #print-history-table td,
+#file-list-table, #file-list-table th, #file-list-table td {
+  font-family: "Arial Narrow", "Yu Gothic UI", "Helvetica Neue", Helvetica, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Meiryo UI", Meiryo, sans-serif;
+}
+
+/* 奇数偶数行 */
+#print-history-table tbody tr:nth-child(odd),
+#file-list-table tbody tr:nth-child(odd) {
+  background: #fafafa;
+}
+#print-history-table tbody tr:nth-child(even),
+#file-list-table tbody tr:nth-child(even) {
+  background: #fff;
+}
+
+/* 右揃えカラム */
+#print-history-table td[data-key="number"],
+#print-history-table td[data-key="id"],
+#print-history-table td[data-key="size"],
+#print-history-table td[data-key="usagetime"],
+#print-history-table td[data-key="usagematerial"],
+#file-list-table td[data-key="number"],
+#file-list-table td[data-key="layer"],
+#file-list-table td[data-key="size"],
+#file-list-table td[data-key="expect"] {
+  text-align: right;
+}
+
+/* ソート可能カーソル */
+.fixed-header th {
+  cursor: pointer;
+  user-select: none;
+}
+
+
+
+/* ---------------------------------------------------------------
+   折りたたみカード
+--------------------------------------------------------------- */
+
+.settings-card { border: 1px solid #ccc; margin: 1em 0; border-radius: 4px; }
+.card-header { background: #f5f5f5; padding: 0.5em; width:100%; text-align:left; cursor:pointer; display:flex; justify-content:space-between; }
+.card-body { padding: 0.5em; }
+.cmd-group { margin-bottom: 0.75em; display:flex; align-items:center; gap:0.5em; }
+.command-palette button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

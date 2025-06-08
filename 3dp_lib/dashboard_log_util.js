@@ -1,0 +1,364 @@
+/**
+ * @fileoverview
+ * dashboard_log_util.js (ver.1.336)
+ *
+ * 汎用ログ管理モジュール。
+ * - LogManager: 全ログ・エラーログの保持とイベント通知（メモリ上限付き）。
+ * - initLogAutoScroll: ログビューに対する自動スクロール支援（rAFスロットリング）。
+ * - initLogRenderer: 差分レンダリングによるログ行追加／クリア機能。
+ * - flushNormalLogsToDom / flushErrorLogsToDom: 一括描画機能。
+ * - pushLog: ログ追加ユーティリティ（レベル管理＋メモリ制限）。
+ *
+ * 長期稼働でもブラウザクラッシュを防ぐため、最新 MAX_LOG_LINES 件のみ保持します。
+ */
+
+"use strict";
+
+import { getCurrentTimestamp } from "./dashboard_utils.js";
+import { LEVELS, ERROR_LEVELS } from "./dashboard_constants.js";
+import { monitorData } from "./dashboard_data.js";
+
+/** 最大保持ログ行数 */
+// const MAX_LOG_LINES = 1000; // monitorDataからもってくることになりました
+
+
+/* ============================================================================
+ * Function: ログ保存件数最大数取得
+ * ============================================================================ */
+/**
+ * @function getMaxLogLines
+ * @description
+ *   アプリ設定（monitorData.appSettings.logMaxLines）から
+ *   ログの最大行数を取得します。
+ *   - 正の整数であればその値を返す
+ *   - それ以外（未設定・不正値）の場合はデフォルトの1000を返す
+ *
+ * @returns {number} 表示する最大ログ行数
+ */
+export function getMaxLogLines() {
+  const raw = monitorData.appSettings.logMaxLines;
+  const v   = Number(raw);
+  // 正の整数かどうかチェック
+  if (Number.isInteger(v) && v > 0) {
+    return v;
+  }
+  // デフォルト値
+  return 1000;
+}
+
+/* ============================================================================
+ * Class: LogManager
+ * ============================================================================ */
+/**
+ * @typedef {Object} LogEntry
+ * @property {string} timestamp - ISO8601形式などのログ時刻文字列
+ * @property {string} level     - ログレベル (LEVELS に含まれる文字列)
+ * @property {string} msg       - ログメッセージ本文
+ */
+
+/**
+ * ログ管理クラス。
+ * - 全ログ (`logsAll`) と、エラーログ (`logsError`) を保持。
+ * - メモリ上限を超えたら古いエントリを破棄。
+ * - "log:added"/"log:cleared" カスタムイベントで UI と連携。
+ */
+export class LogManager {
+  constructor() {
+    /** @type {LogEntry[]} 全ログ */
+    this.logsAll = [];
+    /** @type {LogEntry[]} エラーログ */
+    this.logsError = [];
+  }
+
+  /**
+   * ログを追加し、"log:added" イベントを発火。
+   * - メモリ上限を超えたら先頭エントリを破棄。
+   *
+   * @param {LogEntry} entry - 追加するログエントリ
+   * @fires window#log:added
+   */
+  add(entry) {
+    this.logsAll.push(entry);
+    if (ERROR_LEVELS.has(entry.level)) {
+      this.logsError.push(entry);
+    }
+  
+    // 設定に応じてメモリ内ログをトリミング
+    const max = getMaxLogLines();
+    if (this.logsAll.length > max) {
+      this.logsAll.shift();
+    }
+    if (this.logsError.length > max) {
+      this.logsError.shift();
+    }
+  
+    window.dispatchEvent(new CustomEvent("log:added", { detail: entry }));
+  }
+
+  /**
+   * 全ログをクリアし、"log:cleared" イベントを発火。
+   *
+   * @fires window#log:cleared
+   */
+  clear() {
+    this.logsAll.length = 0;
+    this.logsError.length = 0;
+    window.dispatchEvent(new Event("log:cleared"));
+  }
+
+  /** @returns {LogEntry[]} 全ログのコピー */
+  getAll() {
+    return [...this.logsAll];
+  }
+
+  /** @returns {LogEntry[]} エラーログのコピー */
+  getError() {
+    return [...this.logsError];
+  }
+}
+
+/** グローバル LogManager インスタンス */
+export const logManager = new LogManager();
+
+/* ============================================================================
+ * Function: initLogAutoScroll
+ * ============================================================================ */
+/**
+ * ログ表示要素に自動スクロール機能を付加。
+ * - ユーザが下端にいる場合のみ追従。
+ * - scroll/resize を rAF スロットリングで処理。
+ *
+ * @param {HTMLElement} containerEl - ログビューのコンテナ要素
+ * @returns {Function} destroy - 登録リスナー解除用クリーンアップ関数
+ */
+export function initLogAutoScroll(containerEl) {
+  let scheduled = false;
+  const SCROLL_THRESHOLD_PX = 50;
+
+  function isScrolledCloseToBottom() {
+    if (containerEl.scrollHeight <= containerEl.clientHeight) return true;
+    return (containerEl.scrollHeight - (containerEl.scrollTop + containerEl.clientHeight)) < SCROLL_THRESHOLD_PX;
+  }
+
+  function updateScroll() {
+    scheduled = false;
+    if (isScrolledCloseToBottom()) {
+      containerEl.scrollTop = containerEl.scrollHeight;
+    }
+  }
+
+  function requestUpdate() {
+    if (!scheduled) {
+      scheduled = true;
+      requestAnimationFrame(updateScroll);
+    }
+  }
+
+  function cleanup() {
+    containerEl.removeEventListener("scroll", requestUpdate);
+    window.removeEventListener("resize", requestUpdate);
+    window.removeEventListener("beforeunload", cleanup);
+  }
+
+  containerEl.addEventListener("scroll", requestUpdate);
+  window.addEventListener("resize", requestUpdate);
+  window.addEventListener("beforeunload", cleanup);
+
+  requestUpdate();
+  return cleanup;
+}
+
+/* ============================================================================
+ * Function: initLogRenderer
+ * ============================================================================ */
+/*
+ * @function initLogRenderer
+ * @description
+ *   指定したコンテナ要素にログの描画機能を初期化します。
+ *   - `log:added` イベントを購読し、新規ログを追加
+ *   - `log:cleared` イベントでログをクリア
+ *   - メモリ上の既存ログを一括描画
+ *   - 最大行数を超えた古いログは自動で削除
+ *
+ * @param {HTMLElement} containerEl - ログを表示するコンテナ要素
+ * @returns {Function} イベントハンドラを解除するクリーンアップ関数
+ */
+export function initLogRenderer(containerEl) {
+  if (!containerEl) return () => {};
+
+  // 自動スクロール許容のしきい値(px)
+  const SCROLL_THRESHOLD = 50;
+
+  /**
+   * ログエントリを表示コンテナに追加し、
+   * ERROR_LEVELS の場合はエラー履歴にも追加、
+   * 行数オーバーした古いものを削除、
+   * 自動スクロールを制御します。
+   *
+   * @param {{ level: string, timestamp: string, msg: string }} entry
+   */
+  function appendLog(entry) {
+    // スクロール位置が最下部付近かを判定
+    const atBottom = 
+      containerEl.scrollHeight <= containerEl.clientHeight ||
+      containerEl.scrollHeight - (containerEl.scrollTop + containerEl.clientHeight) < SCROLL_THRESHOLD;
+
+    // p.log-line.new.log-{level} 要素を作成
+    const p = document.createElement("p");
+    p.className = `log-line new log-${entry.level}`;
+    p.textContent = `[${entry.timestamp}] ${entry.msg}`;
+    containerEl.appendChild(p);
+
+    // エラーレベルなら error-history にも複製追加
+    if (ERROR_LEVELS.has(entry.level)) {
+      const errBox = document.getElementById("error-history");
+      if (errBox) {
+        const clone = p.cloneNode(true);
+        clone.className = "error-entry";
+        errBox.appendChild(clone);
+      }
+    }
+
+
+    // 行数制限を超えた分だけ古い通常ログを削除
+    const max = getMaxLogLines();
+    const lines = containerEl.querySelectorAll("p.log-line");
+    if (lines.length > max) {
+      const removeCount = lines.length - max;
+      for (let i = 0; i < removeCount; i++) {
+        containerEl.removeChild(lines[i]);
+      }
+    }
+
+    // 行数制限を超えた分だけ古いエラーログを削除
+    if (ERROR_LEVELS.has(entry.level)) {
+      const errBox = document.getElementById("error-history");
+      if (errBox) {
+        const errLines = errBox.querySelectorAll("p.error-entry");
+        if (errLines.length > max) {
+          const removeErrCount = errLines.length - max;
+          for (let i = 0; i < removeErrCount; i++) {
+            errBox.removeChild(errLines[i]);
+          }
+        }
+      }
+    }
+
+
+    // 自動スクロール
+    if (atBottom) {
+      containerEl.scrollTop = containerEl.scrollHeight - containerEl.clientHeight;
+    }
+  }
+
+  /**
+   * ログ表示エリアとエラー履歴エリアをクリアします。
+   */
+  function clearLogs() {
+    containerEl.innerHTML = "";
+    const errBox = document.getElementById("error-history");
+    if (errBox) errBox.innerHTML = "";
+  }
+
+  /**
+   * `log:added` イベントハンドラ。
+   * 既存の「new」を「old」に切り替えてから新規ログを追加。
+   *
+   * @param {CustomEvent} ev - ev.detail にログエントリが入っています
+   */
+  function onAdded(ev) {
+    containerEl.querySelectorAll("p.new")
+      .forEach(el => el.classList.replace("new", "old"));
+    appendLog(ev.detail);
+  }
+
+  // イベント購読
+  window.addEventListener("log:added", onAdded);
+  window.addEventListener("log:cleared", clearLogs);
+
+  // 起動時にメモリ上の既存ログを一括描画
+  logManager.getAll().forEach(appendLog);
+
+  // クリーンアップ関数を返す
+  return () => {
+    window.removeEventListener("log:added", onAdded);
+    window.removeEventListener("log:cleared", clearLogs);
+  };
+}
+
+/* ============================================================================
+ * Function: flushNormalLogsToDom / flushErrorLogsToDom
+ * ============================================================================ */
+/**
+ * 指定ログ配列を一括描画する共通処理
+ * @param {LogEntry[]} logs
+ * @param {HTMLElement} container
+ * @param {string} className
+ */
+function writeLogsToContainer(logs, container, className) {
+  if (!container) return;
+  container.innerHTML = "";
+  logs.forEach(e => {
+    const p = document.createElement("p");
+    p.className = className;
+    p.textContent = `[${e.timestamp}] ${e.msg}`;
+    container.appendChild(p);
+  });
+}
+
+/**
+ * 通常/情報ログを再描画
+ */
+export function flushNormalLogsToDom() {
+  writeLogsToContainer(
+    logManager.getAll().filter(e => ["info", "normal"].includes(e.level)),
+    document.getElementById("log"),
+    "log-line"
+  );
+}
+
+/**
+ * エラーログを再描画
+ */
+export function flushErrorLogsToDom() {
+  writeLogsToContainer(
+    logManager.getError(),
+    document.getElementById("error-history"),
+    "error-entry"
+  );
+}
+
+/* ============================================================================
+ * Function: pushLog
+ * ============================================================================ */
+/**
+ * ログを追加し、差分レンダリングをキック。
+ *
+ * @param {string|number|Object} msg - ログ内容
+ * @param {string} [level="info"]    - ログレベル (LEVELS から選択)
+ */
+export function pushLog(msg, level = "info") {
+  let safeMessage;
+  if (msg == null || msg === "") {
+    safeMessage = "(空メッセージ)";
+    level = "debug";
+  } else if (typeof msg === "object") {
+    try {
+      safeMessage = JSON.stringify(msg);
+    } catch {
+      safeMessage = String(msg);
+      level = "debug";
+    }
+  } else {
+    safeMessage = String(msg);
+  }
+
+  if (!LEVELS.includes(level)) level = "normal";
+
+  const entry = {
+    timestamp: getCurrentTimestamp(),
+    level,
+    msg: safeMessage
+  };
+  logManager.add(entry);
+}

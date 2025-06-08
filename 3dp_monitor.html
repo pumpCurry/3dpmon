@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>3Dプリンタ監視ダッシュボード - Version 1.37</title>
+
+  <!-- 外部CSS読み込み -->
+  <link rel="stylesheet" href="3dp_monitor.css">
+
+  <!-- Chart.js ライブラリ (温度グラフ用) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+</head>
+<body>
+  <!-- ===============================================================
+       最新エラー表示（エラー発生時に表示）
+  =============================================================== -->
+  <div class="notification-container" id="notification-container"></div>
+
+  <!-- ===============================================================
+       タイトルバー
+  =============================================================== -->
+  <div class="title-bar">
+    <div class="left">
+      <!-- ver.1.125で定義された data-field="hostname", data-field="printingState" などを継承 -->
+      <span data-field="hostname">
+        <span class="value">----</span><span class="unit"></span>
+      </span>
+      :
+      <span data-field="printState">
+        <span class="value">----</span><span class="unit"></span>
+      </span>
+      <span data-field="printFileName">
+        <span class="value">----</span><span class="unit"></span>
+      </span>
+    </div>
+    <div class="right">
+
+      <!-- ミュートインジケータ（自動生成されるので初期は非表示） -->
+      <span id="audio-muted-tag" style="display:none; cursor:pointer; font-size:12px; margin-left:4px;">
+        🔇:ミュート中
+      </span>
+      <!-- 接続先入力 -->
+      <input id="destination-input" type="text" placeholder="IP アドレス">
+      <span id="destination-display">----</span>
+
+      <!-- 自動接続(ON/OFF) -->
+      <label style="font-size:12px;">
+        <input type="checkbox" id="auto-connect-toggle">
+        自動接続
+      </label>
+
+      <!-- 接続ボタン / 切断ボタン -->
+      <button id="connect-button" style="font-size:12px;" class="hidden">接続</button>
+      <button id="disconnect-button" style="font-size:12px; class="hidden">切断</button>
+      <span id="connection-status" style="margin-left:5px; font-size:12px;">----</span>
+    </div>
+  </div>
+
+
+  <!-- ===============================================================
+       Audio‑Unlock ポップアップ（自動挿入）
+  =============================================================== -->
+  <template id="audio-unlock-template">
+    <div id="audio-unlock-pop" class="card" style="position:fixed; inset:20px; z-index:9999;
+         display:flex; flex-direction:column; align-items:center; justify-content:center;
+         background:#0008; color:#fff; backdrop-filter:blur(2px);">
+      <p style="font-size:1.1em; text-align:center;">サウンドテスト<br>画面ををタップしてください</p>
+      <p id="unlock-count" style="font-size:2em; margin:8px 0 0;">8</p>
+    </div>
+  </template>
+
+  <!-- ===============================================================
+       監視カード（カメラ＋印刷状態・制御/温度/照明）
+  =============================================================== -->
+  <div class="card camera-print-card">
+
+    <h2 class="card-title">
+      監視
+    </h2>
+    <label style="font-size:12px; margin-left:10px; display:inline-block;">
+      <input type="checkbox" id="camera-toggle-title"> カメラON/OFF
+    </label>
+
+    <!-- カメラエリア: ver.1.3で初期class="off"にしてNO SIGNAL表示可能 -->
+    <div class="camera-wrapper">
+      <img id="camera-feed" class="off" alt="カメラ映像">
+      <div class="no-signal">- NO SIGNAL -</div>
+      <div id="camera-status" class="camera-status hidden">
+        <span id="camera-status-label"></span>
+        <span id="camera-status-sub"></span>
+        <div id="camera-spinner" class="spinner hidden"></div>
+        <br>
+        <button id="camera-cancel-button" class="camera-cancel-btn hidden">接続キャンセル</button>
+      </div>
+    </div>
+
+    <!-- プレビュー・状態・温度グラフの行 (1.125~1.3で継承) -->
+    <div class="row">
+      <!-- 左側：XY/Zプレビュー領域 -->
+      <div class="preview-wrapper">
+        <div class="preview-header">
+          <h2 class="card-title">ヘッド位置プレビュー</h2>
+        </div>
+        <div class="preview-body">
+          <div class="chamber-container">
+            <div class="chamber" id="xy-chamber">
+              <div class="stage" id="xy-stage"></div>
+            </div>
+            <div class="xy-value-extra">
+              X:
+              <span data-field="positionX">
+                <span class="value">---.--</span><span class="unit"></span>
+              </span>,
+              Y:
+              <span data-field="positionY">
+                <span class="value">---.--</span><span class="unit"></span>
+              </span>
+            </div>
+          </div>
+          <div class="z-container">
+            <div id="z-preview-container">
+              <div class="z-label-top">0</div>
+              <div class="z-label-bottom">300</div>
+              <div id="z-preview"></div>
+              <div id="z-value"></div>
+            </div>
+            <div class="z-value-extra">
+              Z:
+              <span data-field="positionZ">
+                <span class="value">---.--</span><span class="unit"></span>
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top: 5px;">
+          <strong>レイヤー数:</strong>
+          <span data-field="layer">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+          /
+          <span data-field="TotalLayer">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+      </div>
+
+      <!-- 中央：状態情報 -->
+      <div class="info-wrapper">
+        <div class="status-control-row">
+          <div class="col1">
+            <h2 class="card-title">状態</h2>
+            <div class="print-status-table">
+              <strong>エラー状況:</strong>
+              <span data-field="errorStatus">
+                <span class="value">--------</span><span class="unit"></span>
+              </span>
+              <strong>機器状態:</strong>
+              <span data-field="deviceState">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>印刷状態:</strong>
+              <span data-field="printState">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>印刷開始:</strong>
+              <span data-field="printStartTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>実印刷開始時刻:</strong>
+              <span data-field="actualStartTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+
+              <strong>(開始時残り時間):</strong>
+              <span data-field="initialLeftTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              
+              <strong>(開始時終了日時):</strong>
+              <span data-field="initialLeftAt">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+
+              <strong>印刷終了(見込):</strong>
+              <span data-field="printFinishTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>印刷進捗率:</strong>
+              <span data-field="printProgress">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>ジョブ時間:</strong>
+              <span data-field="printJobTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>残り時間:</strong>
+              <span data-field="printLeftTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>予想残り:</strong>
+              <span data-field="estimatedRemainingTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>予想終了:</strong>
+              <span data-field="estimatedCompletionTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>終了時刻:</strong>
+              <span data-field="expectedEndTime">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>印刷前準備時間:</strong>
+              <span data-field="preparationTime">
+                <span class="value">-----</span><span class="unit"></span>
+              </span>
+              <strong>印刷中確認時間:</strong>
+              <span data-field="firstLayerCheckTime">
+                <span class="value">-----</span><span class="unit"></span>
+              </span>
+              <strong>一時停止時間:</strong>
+              <span data-field="pauseTime">
+                <span class="value">-----</span><span class="unit"></span>
+              </span>
+             
+              <strong>完了後経過時間:</strong>
+              <span data-field="completionElapsedTime">
+                <span class="value">-----</span><span class="unit"></span>
+              </span>
+              <strong>セルフテスト:</strong>
+              <span data-field="selfTest">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>ｾﾙﾌﾃｽﾄ進捗:</strong>
+              <span data-field="withSelfTest">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>印刷速度:</strong>
+              <span data-field="curFeedratePct">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+              <strong>材料消費量:</strong>
+              <span data-field="materialLength">
+                <span class="value">----</span><span class="unit"></span>
+              </span>
+            </div>
+          </div>
+
+
+
+          <div class="col2">
+
+          <div class="cmd-group">
+            <button id="btn-stop-print">停止</button>
+            <button id="btn-pause-print">一時停止</button>
+            <button id="btn-resume-print">再開</button>
+            <button id="btn-ack-error">エラー了承</button>
+          </div>
+          <div class="cmd-group">
+            <button id="btn-history-list">履歴一覧取得</button>
+            <button id="btn-file-list">ファイル一覧取得</button>
+            <button id="btn-send-raw-json">JSONコマンド送信</button>
+          </div>
+          <div class="control-temp-area">
+            <div class="temp-row" style="margin-top:5px;">
+              <div class="temp-box">
+                <div style="font-weight:bold;">ノズル温度</div>
+                <div>上限:
+                  <span data-field="maxNozzleTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>目標:
+                  <span data-field="targetNozzleTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>現在:
+                  <span data-field="nozzleTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>差:
+                  <span data-field="nozzleDiff">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div class="control-row">
+                  <input type="range" id="nozzleTempSlider" data-field="targetNozzleTemp" min="0" max="0" step="1" />
+                  <input type="number" id="nozzleTempInput" data-field="targetNozzleTemp" min="0" max="0" style="width:4em" />
+                </div>
+              </div>
+
+              <div class="temp-box">
+                <div style="font-weight:bold;">ベッド温度</div>
+                <div>上限:
+                  <span data-field="maxBedTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>目標:
+                  <span data-field="targetBedTemp0">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>現在:
+                  <span data-field="bedTemp0">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>差:
+                  <span data-field="bedDiff">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div class="control-row">
+                  <input type="range"  id="bedTempSlider" data-field="targetBedTemp0" min="0" max="0" step="1" />
+                  <input type="number" id="bedTempInput"  data-field="targetBedTemp0" min="0" max="0" style="width:4em" />
+                </div>
+              </div>
+
+              <div class="temp-box">
+                <div style="font-weight:bold;">箱内温度</div>
+                <div>&nbsp;<span><br /></span></div>
+                <div>&nbsp;<span><br /></span></div>
+                <div>現在:
+                  <span data-field="boxTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="fan-lights-row">
+              <div class="fan-item">
+                <strong>モデルFAN</strong>
+                <label class="switch">
+                  <input type="checkbox" id="modelFanToggle2" data-field="fan">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="modelFanPct">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+                <div>
+                  <input type="range" id="modelFanSlider" min="0" max="100" step="1" data-field="modelFanPct">
+                  <span data-field="modelFanPct" id="modelFanSliderValue">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+
+              </div>
+              <div class="fan-item">
+                <strong>側面FAN</strong>
+                <label class="switch">
+                  <input type="checkbox" id="sideFanToggle2" data-field="fanAuxiliary">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="auxiliaryFanPct">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+                  <input type="range" id="auxiliaryFanSlider" min="0" max="100" step="1" data-field="auxiliaryFanPct">
+                  <span data-field="auxiliaryFanPct" id="auxiliaryFanSliderValue">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+              </div>
+              <div class="fan-item">
+                <strong>背面FAN</strong>
+                <label class="switch">
+                  <input type="checkbox" id="backFanToggle2" data-field="fanCase">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="caseFanPct">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+                <div>
+                  <input type="range" id="caseFanSlider" min="0" max="100" step="1" data-field="caseFanPct">
+                  <span data-field="caseFanPct" id="caseFanSliderValue">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="fan-lights-row">
+              <div class="fan-item">
+                <strong>LED照明</strong>
+                <label class="switch">
+                  <input type="checkbox" id="ledToggle2" data-field="lightSw">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="lightSw">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+              </div>
+              <div class="fan-item">
+                <strong>材料切れ検知</strong>
+                <label class="switch">
+                  <input type="checkbox" id="materialDetectToggle" data-field="materialDetect">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="materialDetect">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>
+                  <span data-field="materialStatus">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ─────────── 印刷速度スライダー ─────────── -->
+            <div class="slider-box">
+              <div style="font-weight:bold;">印刷速度</div>
+              <div>現在:
+                <span data-field="curFeedratePct">
+                  <span class="value">--</span><span class="unit">%</span>
+                </span>
+              </div>
+              <div class="control-row">
+                <input type="range"
+                       id="feedrateSlider"
+                       data-field="curFeedratePct"
+                       step="1" 
+                       min="0" max="200" />
+                <input type="number"
+                       id="feedrateInput"
+                       data-field="curFeedratePct"
+                       min="0" max="200"
+                       step="1" 
+                       style="width:4em" />
+              </div>
+            </div>
+            
+            <!-- ─────────── フロー率スライダー ─────────── -->
+            <div class="slider-box">
+              <div style="font-weight:bold;">フロー率</div>
+              <div>現在:
+                <span data-field="curFlowratePct">
+                  <span class="value">--</span><span class="unit">%</span>
+                </span>
+              </div>
+              <div class="control-row">
+                <input type="range"
+                       id="flowrateSlider"
+                       data-field="curFlowratePct"
+                       step="1"
+                       min="0" max="200" />
+                <input type="number"
+                       id="flowrateInput"
+                       data-field="curFlowratePct"
+                       min="0" max="200"
+                       style="width:4em" />
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右側：温度グラフ -->
+    <div class="graph-wrapper" style="flex: 1 1 auto; margin-left: 10px;">
+      <div class="card" id="temp-graph-card">
+        <h2 class="card-title">温度グラフ (過去15分)</h2>
+        <div style="position: relative; width: 100%; height: 300px;">
+          <canvas id="temp-graph-canvas" style="width:100%; height:300px;"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+  <!-- ===============================================================
+       下段：機器情報＆ログカード
+  =============================================================== -->
+  <div class="row">
+    <div class="card info-card">
+      <h2 class="card-title">機器情報</h2>
+      <div style="font-size:0.9em;">
+        <div><strong>加速度制限:</strong>
+          <span data-field="accelerationLimits">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>速度制限:</strong>
+          <span data-field="velocityLimits">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>コーナー速度制限:</strong>
+          <span data-field="cornerVelocityLimits">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>加減速制御:</strong>
+          <span data-field="accelToDecelLimits">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>圧力先行:</strong>
+          <span data-field="pressureAdvance">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>リアルタイムフロー:</strong>
+          <span data-field="realTimeFlow">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>リアルタイム印刷速度:</strong>
+          <span data-field="realTimeSpeed">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>ホーミング情報:</strong>
+          <span data-field="autohome">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>接続状態:</strong>
+          <span data-field="sysConnection">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>プリンタモデル:</strong>
+          <span data-field="model">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div><strong>モデルVer:</strong>
+          <span data-field="modelVersion">
+            <span class="value">----</span><span class="unit"></span>
+          </span>
+        </div>
+        <div>
+          <strong>総ジョブ数:</strong>
+          <span data-field="totalJob"><span class="value">----</span><span class="unit"></span>
+        </div>
+        <div>
+          <strong>総稼働時間:</strong>
+          <span data-field="totalUsageTime"><span class="value">----</span><span class="unit"></span>
+        </div>
+        <div>
+          <strong>総材料量:</strong>
+          <span data-field="totalUsageMaterial"><span class="value">----</span><span class="unit"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card log-card">
+      <h2 class="card-title">ログ</h2>
+      <div class="log-card-header">
+        <div class="tabs">
+          <button id="tab-received" class="active">受信ログ</button>
+          <button id="tab-error">エラーログ</button>
+        </div>
+        <div id="log-controls" class="log-controls">
+          <button id="copy-all-button" data-original="全てコピー" style="font-size:12px;">全てコピー</button>
+          <button id="copy-last-50-button" data-original="最後50行コピー" style="font-size:12px;">最後50行コピー</button>
+          <button id="copy-storeddata-button" data-original="storedDataコピー" style="font-size:12px;">storedDataコピー</button>
+        </div>
+        <div id="last-log-timestamp" class="log-timestamp" style="font-size:12px;">
+          最新受信日時:
+          <span data-field="lastLogTimestamp" class="old">
+            <span class="value">====-==-==T--:--:--.------Z</span><span class="unit"></span>
+          </span>
+        </div>
+        <div id="last-error-timestamp" class="log-timestamp hidden" style="font-size:12px;">
+          最新エラー日時:
+          <span data-field="lastErrorTimestamp" class="old">
+            <span class="value">====-==-==T--:--:--.------Z</span><span class="unit"></span>
+          </span>
+        </div>
+        <div id="error-controls" class="log-controls hidden">
+          <button id="copy-all-error-button" data-original="全エラーコピー" style="font-size:12px;">全エラーコピー</button>
+          <button id="copy-last-50-error-button" data-original="最後50行エラーコピー" style="font-size:12px;">最後50行エラーコピー</button>
+          <button id="clear-error-logs-button" data-original="エラー全消去" style="font-size:12px;">エラー全消去</button>
+        </div>
+      </div>
+
+      <!-- ログ表示エリア -->
+      <div id="log" class="log-box"></div>
+
+      <!-- エラー表示エリア (hidden 初期表示) -->
+      <div id="error-history" class="log-box hidden"></div>
+    </div>
+  </div>
+
+
+  <!-- ──────────────── 印刷状況カード群 ──────────────── -->
+  <!-- ① 現在の印刷カード -->
+  <div class="card" id="print-current-card">
+    <h2 class="card-title">現在の印刷</h2>
+    <div id="print-current-container" style="font-size:0.9em;">
+      <!-- JavaScript で renderPrintCurrent が埋めます -->
+    </div>
+  </div>
+
+  <!-- ② 印刷履歴カード -->
+  <div class="card print-history-card" id="print-history-card">
+
+    <div class="card-header">
+      <div class="tabs">
+        <button id="tab-print-history" class="active">印刷履歴</button>
+        <button id="tab-file-list">ファイル一覧</button>
+      </div>
+    </div>
+
+    <!-- ─── 印刷履歴タブ ─── -->
+    <div id="panel-print-history">
+  
+      <h2 class="card-title">印刷履歴</h2>
+      <div style="font-size:0.9em;">
+        <div>
+          <strong>総ジョブ数:</strong>
+          <span data-field="totalJob"><span class="value">----</span><span class="unit"></span>
+        </div>
+        <div>
+          <strong>総稼働時間:</strong>
+          <span data-field="totalUsageTime"><span class="value">----</span><span class="unit"></span>
+        </div>
+        <div>
+          <strong>総材料量:</strong>
+          <span data-field="totalUsageMaterial"><span class="value">----</span><span class="unit"></span>
+        </div>
+      </div>
+      <button id="history-refresh-btn" class="btn" aria-label="履歴を更新">再読み込み</button>
+  
+      <!-- 暫定配置 ファイル一覧に本来ならあるべき -->
+      <div class="cmd-group">
+        <label>アップロード GCode:</label>
+        <input type="file" id="gcode-upload-input" accept=".gcode" />
+        <button id="gcode-upload-btn">アップロード</button>
+      </div>
+      <!-- /暫定配置 -->
+      <div id="panel-print-history" class="scrollable-body">
+        <table id="print-history-table" class="fixed-header" border="1" style="border-collapse: collapse; width:100%;">
+          <thead>
+            <tr>
+                <th data-key="command">ｺﾏﾝﾄﾞ</th>
+                <th data-key="number">#</th>
+                <th data-key="id">ID</th>
+                <th data-key="thumbnail">ｻﾑﾈｲﾙ</th>
+                <th data-key="filename">ファイル名</th>
+                <th data-key="startway">開始方式</th>
+                <th data-key="size">サイズ</th>
+                <th data-key="ctime">作成時間</th>
+                <th data-key="starttime">開始時間</th>
+                <th data-key="usagetime">使用時間</th>
+                <th data-key="usagematerial">使用量（mm）</th>
+                <th data-key="printfinish">is成功?</th>
+                <th data-key="filemd5">ファイルMD5</th>
+            </tr>
+          </thead>
+          <tbody>
+          <tr><td colspan='13'>データ読み込み待ち</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ─── ファイル一覧タブ ─── -->
+    <div id="panel-file-list" class="hidden">
+      <div>総ファイル数: <span id="file-list-total">0</span></div>
+      <div class="filelist-container scrollable-body">
+        <table id="file-list-table" class="fixed-header" style="width:100%; table-layout:auto;">
+          <thead>
+            <tr>
+              <th data-key="command">ｺﾏﾝﾄﾞ</th>
+              <th data-key="number">#</th>
+              <th data-key="thumb">ｻﾑﾈｲﾙ</th>
+              <th data-key="filename">ファイル名</th>
+              <th data-key="layer">積層厚さ(mm)</th>
+              <th data-key="size">サイズ(バイト)</th>
+              <th data-key="mtime">更新日時</th>
+              <th data-key="expect">予定使用量(mm)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="settings-card" class="card">
+    <h2  class="card-title">設定</h2>
+    <div id="storage-panel-container">
+      <!-- ─────────────── ストレージ同期パネル ─────────────── -->
+      <details id="storage-panel" style="margin-top:10px;">
+        <summary style="cursor:pointer; font-weight:bold;">ストレージ設定</summary>
+        <div style="padding:8px; font-size:0.9em;">
+          <div>使用量: <span id="storage-usage">-- / -- (--%)</span></div>
+          <div>最終同期: <span id="storage-last-sync">----</span></div>
+          <button id="storage-save-btn" style="font-size:12px; margin-top:5px;">保存</button>
+          <button id="storage-quota-test-btn" style="font-size:12px; margin-top:5px;">クォータテスト</button>
+          <button id="clear-storage-button" class="btn btn-danger btn-sm ms-2">全ストレージ削除</button>
+          <div id="storage-error" style="color:red; display:none; margin-top:5px;">⚠ 容量取得エラー</div>
+        </div>
+        <div class="cmd-group">
+          <label for="setting-log-max-lines"><strong>ログ最大行数:</strong></label>
+          <input type="number" id="setting-log-max-lines"
+            min="100"
+            step="100"
+            value="1000"
+            style="width:6em;" />
+        </div>
+
+
+        <!-- 確認ダイアログ -->
+        <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
+          <div class="confirm-modal-box">
+            <p>全ストレージを本当に削除しますか？</p>
+            <div class="btn-group">
+              <button id="confirm-delete-ok" class="btn btn-danger btn-sm">削除する</button>
+              <button id="confirm-delete-cancel" class="btn btn-secondary btn-sm">キャンセル</button>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div id="notification-settings-panel">
+      <!-- ───────────── 通知設定パネル ───────────── -->
+      <details id="notification-panel" style="margin-top:10px;">
+        <summary style="cursor:pointer; font-weight:bold;">通知設定</summary>
+        <fieldset class="notification-panel-field" style="margin-top:1em; padding:0.5em; border:1px solid #ccc; border-radius:4px;">
+          <legend style="font-weight:bold;">メッセージ内容設定</legend>
+          <div id="notification-panel-body" style="padding:8px; font-size:0.9em;">
+            <!-- 各通知タイプの切り替えUIはここに動的追加 -->
+          </div>
+        </fieldset>
+      </details>
+
+
+    </div>
+<!-- 既存の設定カードの直後に追加 -->
+    <div id="command-palette-panel-container">
+      <!-- ─────────────── ストレージ同期パネル ─────────────── -->
+      <details id="command-palette" style="margin-top:10px;">
+        <summary style="cursor:pointer; font-weight:bold;">コマンドパレット</summary>
+          <!-- 新: 停止・一時停止・再開 -->
+          <div class="cmd-group">
+            <button id="btn-stop-print">停止</button>
+            <button id="btn-pause-print">一時停止</button>
+            <button id="btn-resume-print">再開</button>
+          </div>
+          <br/><br/><br/>
+          <!-- 新: 履歴一覧取得 -->
+          <div class="cmd-group">
+            <button id="btn-history-list">履歴一覧取得</button>
+          </div>
+          <!-- 新: G-codeファイル一覧取得 -->
+          <div class="cmd-group">
+            <button id="btn-file-list">ファイル一覧取得</button>
+          </div>
+
+          <div class="col2">
+          <div class="control-temp-area">
+            <div class="temp-row" style="margin-top:5px;">
+              <div class="temp-box">
+                <div style="font-weight:bold;">ノズル温度</div>
+                <div>上限:
+                  <span data-field="maxNozzleTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>目標:
+                  <span data-field="targetNozzleTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>現在:
+                  <span data-field="nozzleTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>差:
+                  <span data-field="nozzleDiff">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div class="control-row">
+                  <input type="range" id="nozzleTempSlider" data-field="targetNozzleTemp" min="0" max="0" step="1" />
+                  <input type="number" id="nozzleTempInput" data-field="targetNozzleTemp" min="0" max="0" step="1" style="width:4em" />
+                </div>
+              </div>
+
+              <div class="temp-box">
+                <div style="font-weight:bold;">ベッド温度</div>
+                <div>上限:
+                  <span data-field="maxBedTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>目標:
+                  <span data-field="targetBedTemp0">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>現在:
+                  <span data-field="bedTemp0">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>差:
+                  <span data-field="bedDiff">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div class="control-row">
+                  <input type="range"  id="bedTempSlider" data-field="targetBedTemp0" min="0" max="0" step="1" />
+                  <input type="number" id="bedTempInput"  data-field="targetBedTemp0" min="0" max="0" step="1" style="width:4em" />
+                </div>
+              </div>
+
+              <div class="temp-box">
+                <div style="font-weight:bold;">箱内温度</div>
+                <div>&nbsp;<span><br /></span></div>
+                <div>&nbsp;<span><br /></span></div>
+                <div>現在:
+                  <span data-field="boxTemp">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="fan-lights-row">
+              <div class="fan-item">
+                <strong>モデルFAN</strong>
+                <label class="switch">
+                  <input type="checkbox" id="modelFanToggle2" data-field="fan">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="modelFanPct">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+                <div>
+                  <input type="range" id="modelFanSlider" min="0" max="100" step="1" data-field="modelFanPct">
+                  <span data-field="modelFanPct" id="modelFanSliderValue">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+
+              </div>
+              <div class="fan-item">
+                <strong>側面FAN</strong>
+                <label class="switch">
+                  <input type="checkbox" id="sideFanToggle2" data-field="fanAuxiliary">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="auxiliaryFanPct">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+                  <input type="range" id="auxiliaryFanSlider" min="0" max="100" step="1" data-field="auxiliaryFanPct">
+                  <span data-field="auxiliaryFanPct" id="auxiliaryFanSliderValue">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+              </div>
+              <div class="fan-item">
+                <strong>背面FAN</strong>
+                <label class="switch">
+                  <input type="checkbox" id="backFanToggle2" data-field="fanCase">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="caseFanPct">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+                <div>
+                  <input type="range" id="caseFanSlider" min="0" max="100" step="1" data-field="caseFanPct">
+                  <span data-field="caseFanPct" id="caseFanSliderValue">
+                    <span class="value">--</span><span class="unit">%</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="fan-lights-row">
+              <div class="fan-item">
+                <strong>LED照明</strong>
+                <label class="switch">
+                  <input type="checkbox" id="ledToggle2" data-field="lightSw">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="lightSw">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+              </div>
+              <div class="fan-item">
+                <strong>材料切れ検知</strong>
+                <label class="switch">
+                  <input type="checkbox" id="materialDetectToggle" data-field="materialDetect">
+                  <span class="slider"></span>
+                </label>
+                <div>
+                  <span data-field="materialDetect">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+                <div>
+                  <span data-field="materialStatus">
+                    <span class="value">--</span><span class="unit"></span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 新: 温度取得 -->
+          <div class="cmd-group">
+            <button id="btn-get-status">温度取得</button>
+          </div>
+      
+          <!-- 新: 印刷開始（ファイルパス指定） -->
+          <div class="cmd-group">
+            <label>印刷ファイルパス:</label>
+            <input id="cmd-print-filepath" type="text" placeholder="例: /gcode/test.gcode" />
+            <button id="btn-print-file">印刷開始</button>
+          </div>
+      
+
+      
+          <!-- 新: ホーム復帰・ベッドレベリング -->
+          <div class="cmd-group">
+            <button id="btn-autohome">ホーム復帰</button>
+            <button id="btn-autolevel">ベッドレベリング</button>
+          </div>
+      
+          <!-- 新: G-code 実行 -->
+          <div class="cmd-group">
+            <label>G-code:</label>
+            <input id="cmd-gcode-cmd" type="text" placeholder="例: M104 S200" />
+            <button id="btn-run-gcode">実行</button>
+          </div>
+      
+          <!-- 旧: 履歴取得 -->
+          <div class="cmd-group">
+            <label>履歴取得 件数:</label>
+            <input type="number" id="cmd-history-limit" value="50" min="1" />
+            <button id="btn-get-history">取得</button>
+          </div>
+      
+          <!-- 旧: ファイルリスト取得 -->
+          <div class="cmd-group">
+            <label>ファイルリスト パス:</label>
+            <input type="text" id="cmd-filelist-path" value="/" />
+            <button id="btn-get-filelist">取得</button>
+          </div>
+      
+          <!-- 新: ファイル削除 -->
+          <div class="cmd-group">
+            <label>削除パス:</label>
+            <input id="cmd-delete-path" type="text" />
+            <button id="btn-delete-file">削除</button>
+          </div>
+      
+          <!-- 新: ファイルアップロード -->
+          <div class="cmd-group">
+            <label>アップロードパス:</label>
+            <input id="cmd-upload-path" type="text" />
+            <label>Base64データ:</label>
+            <textarea id="cmd-upload-data"></textarea>
+            <button id="btn-upload-file">アップロード</button>
+          </div>
+      
+          <!-- 新: タイムラプス一覧取得 -->
+          <div class="cmd-group">
+            <button id="btn-elapse-video-list">タイムラプス一覧取得</button>
+          </div>
+      
+          <!-- 新: ファームウェアアップグレード / 工場リセット -->
+          <div class="cmd-group">
+            <button id="btn-upgrade-firmware">ファームアップグレード</button>
+            <button id="btn-factory-reset">工場リセット</button>
+          </div>
+      
+          <!-- 旧: フィラメント状態取得 -->
+          <div class="cmd-group">
+            <button id="btn-get-filament">フィラメント状態取得</button>
+          </div>
+      
+          <!-- 旧: フィラメントロード/アンロード -->
+          <div class="cmd-group">
+            <label>動作:</label>
+            <select id="cmd-filament-action">
+              <option value="load">ロード</option>
+              <option value="unload">アンロード</option>
+            </select>
+            <button id="btn-set-filament">実行</button>
+          </div>
+      
+          <!-- 旧: ファン風圧設定 -->
+          <div class="cmd-group">
+            <label>ファンID:</label>
+            <input type="number" id="cmd-fan-id" value="0" min="0" />
+            <label>速度(%):</label>
+            <input type="number" id="cmd-fan-speed" value="50" min="0" max="100" />
+            <button id="btn-set-fan">設定</button>
+          </div>
+      
+          <!-- 新: モデルファン ON/OFF -->
+          <div class="cmd-group">
+            <label>モデルファン:</label>
+            <select id="cmd-fan-model-state">
+              <option value="true">ON</option>
+              <option value="false">OFF</option>
+            </select>
+            <button id="btn-set-model-fan">送信</button>
+          </div>
+      
+          <!-- 新: 側面ファン ON/OFF -->
+          <div class="cmd-group">
+            <label>側面ファン:</label>
+            <select id="cmd-fan-aux-state">
+              <option value="true">ON</option>
+              <option value="false">OFF</option>
+            </select>
+            <button id="btn-set-aux-fan">送信</button>
+          </div>
+      
+          <!-- 旧: スイッチ ON/OFF -->
+          <div class="cmd-group">
+            <label>スイッチ:</label>
+            <select id="cmd-switch-name">
+              <option value="power">電源</option>
+              <option value="beeper">ブザー</option>
+              <option value="camera">カメラ</option>
+            </select>
+            <label>状態:</label>
+            <select id="cmd-switch-state">
+              <option value="true">ON</option>
+              <option value="false">OFF</option>
+            </select>
+            <button id="btn-set-switch">設定</button>
+          </div>
+      
+          <!-- 旧: ベッド温度変更 -->
+          <div class="cmd-group">
+            <label>ベッド温度(℃):</label>
+            <input type="number" id="cmd-bed-temp" value="60" min="0" max="120" />
+            <button id="btn-set-bed-temp">設定</button>
+          </div>
+      
+          <!-- 旧 & 新: ノズル温度変更 -->
+          <div class="cmd-group">
+            <label>ノズル温度(℃):</label>
+            <input type="number" id="cmd-nozzle-temp" value="200" min="0" max="300" />
+            <button id="btn-set-nozzle-temp">設定</button>
+          </div>
+      
+          <!-- 旧 & 新: LED ON/OFF -->
+          <div class="cmd-group">
+            <label>LED:</label>
+            <select id="cmd-led-state">
+              <option value="true">ON</option>
+              <option value="false">OFF</option>
+            </select>
+            <button id="btn-set-led">設定</button>
+          </div>
+
+
+
+
+
+        </div>
+      </div>
+
+
+
+
+
+
+  </div>
+
+  <!-- スクリプト読み込み -->
+  <script type="module" src="3dp_lib/3dp_dashboard_main.js"></script>
+
+</body>
+</html>
+
