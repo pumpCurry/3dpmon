@@ -159,32 +159,5 @@ export function getDisplayValue(fieldName) {
   return { value: String(d.rawValue ?? ""), unit: "" };
 }
 
-/**
- * processData:
- *  - WebSocket 受信データを machine.runtimeData / machine.storedData にマージする
- *
- * @param {Object} data - 受信 JSON
- */
-export function processData(data) {
-alert("!!!");
-  const machine = getCurrentMachine();
-  if (!machine) return;
 
-  // heartbeat 応答
-  if (data.ModeCode === "heart_beat") {
-    machine.runtimeData.lastHeartbeat = new Date().toISOString();
-    return;
-  }
-
-  // エラー処理やプレビュー更新は各所で行われるため割愛...
-  // ここでは残りを storedData に統合
-  Object.entries(data).forEach(([k,v]) => {
-    machine.storedData[k] = { rawValue: v, computedValue: null, isNew: true };
-  });
-
-  // 印刷完了履歴追加
-  if (data.printProgress !== undefined && parseInt(data.printProgress, 10) >= 100) {
-    machine.historyData.push(data);
-  }
-}
 
