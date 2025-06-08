@@ -38,7 +38,7 @@ export function updateDataField(fieldName, data = undefined) {
   const elements = document.querySelectorAll(`[data-field="${fieldName}"]`);
 
   elements.forEach(el => {
-    const valdashboard_uiueEl = el.querySelector(".value");
+    const valueEl = el.querySelector(".value");
     const unitEl = el.querySelector(".unit");
 
     if (displayData && typeof displayData === "object" && "value" in displayData) {
