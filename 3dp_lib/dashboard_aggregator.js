@@ -29,10 +29,6 @@ import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 /** aggregatorUpdate 用タイマー ID */
 let aggregatorTimer = null;
 
-
-// aggrigateタイマー開始検知
-let hasStartedAggregator = false;
-
 // タイマー計測用
 let tsPrepStart       = null, totalPrepSec       = 0;
 let tsCheckStart      = null, totalCheckSec      = 0;
