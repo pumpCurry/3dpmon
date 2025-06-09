@@ -58,6 +58,24 @@ The main monitor card shows the camera feed and print controls, while
 other cards allow file management, temperature adjustments and various
 settings.
 
+## Dashboard Layout
+- **Title Bar** – Shows the printer hostname and print state. Enter the
+  destination IP here and use the Connect/Disconnect buttons. A mute
+  indicator appears if sound is disabled.
+- **Monitor Card** – Combines the camera feed, head position preview and
+  print controls. Here you can pause or stop printing, adjust nozzle and
+  bed temperatures and toggle fans or the LED light.
+- **Temperature Graph** – Displays a live chart of nozzle and bed
+  temperatures.
+- **Info Card** – Lists machine limits, model details and overall usage
+  statistics.
+- **Log Card** – Shows received messages and errors in separate tabs with
+  buttons to copy the logs.
+- **Print History Card** – Contains a history of completed jobs and a
+  file list tab with upload controls for G-code files.
+- **Settings Card** – Provides storage settings, notification options and
+  a command palette for frequently used commands.
+
 ---
 
 ## 初回接続手順 (Japanese)
@@ -78,3 +96,12 @@ settings.
 監視カードではカメラ映像と印刷操作をまとめて表示し、その他のカー
 ドでファイル管理や温度調整、各種設定が行えます。プリンタから得ら
 れる情報はすべてダッシュボード上に表示されます。
+
+## 画面構成
+- **タイトルバー** – プリンタ名や印刷状態を表示し、接続先 IP 入力欄と接続/切断ボタンがあります。音声が無効な場合はミュート表示が出ます。
+- **監視カード** – カメラ映像、ヘッド位置プレビュー、印刷状態テーブル、停止・一時停止ボタンなどをまとめています。ノズルやベッド温度の調整、各ファンや LED の切り替えも行えます。
+- **温度グラフ** – ノズルとベッドの温度推移を折れ線グラフで表示します。
+- **機器情報カード** – 加速度制限やモデル情報、使用統計を確認できます。
+- **ログカード** – 受信ログとエラーログをタブで切り替え、コピー用ボタンも備えています。
+- **印刷履歴カード** – 印刷履歴一覧とファイル一覧タブがあり、G-code アップロードも可能です。
+- **設定カード** – ストレージ設定や通知設定、コマンドパレットなどをまとめたエリアです。

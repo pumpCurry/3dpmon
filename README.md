@@ -12,7 +12,8 @@ Browser-based monitor for Clarity K1 series 3D printers.
 3. ブラウザで [http://localhost:8000/3dp_monitor.html](http://localhost:8000/3dp_monitor.html) を開きます
 
 初回接続方法や音声設定などの詳細な操作説明は
-[USAGE-ja-en.md](USAGE-ja-en.md) を参照してください。
+[USAGE-ja-en.md](USAGE-ja-en.md) を参照してください。画面構成の詳細も同ガイドの
+"Dashboard Layout / 画面構成" セクションにまとめています。
 
 ## License
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
