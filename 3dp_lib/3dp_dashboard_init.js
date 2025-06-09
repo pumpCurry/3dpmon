@@ -197,17 +197,17 @@ export function initializeDashboard({
     });
   }
 
-  // (14.5) 上部クイックボタン → コマンドパレットボタンの代理クリック
+  // (14.5) コマンドパレット側ボタン → 上部クイックボタンの代理クリック
   const aliasClick = (src, dest) => {
     const s = document.getElementById(src);
     const d = document.getElementById(dest);
     if (s && d) s.addEventListener("click", () => d.click());
   };
-  aliasClick("btn-stop-print-top",   "btn-stop-print");
-  aliasClick("btn-pause-print-top",  "btn-pause-print");
-  aliasClick("btn-resume-print-top", "btn-resume-print");
-  aliasClick("btn-history-list-main","btn-history-list");
-  aliasClick("btn-file-list-main",  "btn-file-list");
+  aliasClick("btn-stop-print-cmd",   "btn-stop-print");
+  aliasClick("btn-pause-print-cmd",  "btn-pause-print");
+  aliasClick("btn-resume-print-cmd", "btn-resume-print");
+  aliasClick("btn-history-list-cmd","btn-history-list");
+  aliasClick("btn-file-list-cmd",  "btn-file-list");
 
   printManager.initHistoryTabs();
 
