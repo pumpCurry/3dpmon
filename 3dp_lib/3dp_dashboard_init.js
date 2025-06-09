@@ -197,6 +197,18 @@ export function initializeDashboard({
     });
   }
 
+  // (14.5) 上部クイックボタン → コマンドパレットボタンの代理クリック
+  const aliasClick = (src, dest) => {
+    const s = document.getElementById(src);
+    const d = document.getElementById(dest);
+    if (s && d) s.addEventListener("click", () => d.click());
+  };
+  aliasClick("btn-stop-print-top",   "btn-stop-print");
+  aliasClick("btn-pause-print-top",  "btn-pause-print");
+  aliasClick("btn-resume-print-top", "btn-resume-print");
+  aliasClick("btn-history-list-main","btn-history-list");
+  aliasClick("btn-file-list-main",  "btn-file-list");
+
   printManager.initHistoryTabs();
 
   // (15) ファイルアップロード初期化

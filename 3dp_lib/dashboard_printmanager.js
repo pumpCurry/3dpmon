@@ -139,6 +139,31 @@ export function saveHistory(jobs) {
   pushLog("[saveHistory] 印刷履歴を保存しました", "info");
 }
 
+/**
+ * 保存済みジョブ配列を履歴テーブル用の簡易 raw 形式に変換します。
+ *
+ * @param {Array<Object>} jobs - loadHistory() で取得した履歴配列
+ * @returns {Array<Object>} テーブル描画用のオブジェクト配列
+ */
+export function jobsToRaw(jobs) {
+  return jobs.map(job => {
+    const startEpoch = job.startTime ? Date.parse(job.startTime) / 1000 : 0;
+    const finishEpoch = job.finishTime ? Date.parse(job.finishTime) / 1000 : 0;
+    return {
+      id:            job.id,
+      filename:      job.filename,
+      startway:      null,
+      size:          0,
+      ctime:         startEpoch,
+      starttime:     startEpoch,
+      usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
+      usagematerial: job.materialUsedMm,
+      printfinish:   finishEpoch ? 1 : 0,
+      filemd5:       ""
+    };
+  });
+}
+
 // ---------------------- 描画テンプレート ----------------------
 
 /**
@@ -290,10 +315,18 @@ export async function refreshHistory(
   const sd  = await fetchStoredData();
   const raw = Array.isArray(sd.historyList) ? sd.historyList : [];
 
-  // パース → 永続化 → 描画
-  const jobs = parseRawHistoryList(raw, baseUrl);
+  // パース → 永続化（既存データとマージ）
+  const newJobs = parseRawHistoryList(raw, baseUrl);
+  const oldJobs = loadHistory();
+  const mergedMap = new Map();
+  newJobs.forEach(j => mergedMap.set(j.id, j));
+  oldJobs.forEach(j => {
+    if (!mergedMap.has(j.id)) mergedMap.set(j.id, j);
+  });
+  const jobs = Array.from(mergedMap.values())
+    .sort((a, b) => b.id - a.id)
+    .slice(0, MAX_HISTORY);
   saveHistory(jobs);
-  //renderPrintHistory(document.getElementById(historyContainerId));
 
   // 現在印刷中ジョブの更新があれば再描画
   const prev = loadCurrent();
@@ -303,7 +336,16 @@ export async function refreshHistory(
   }
 
   // --- テーブル描画 ---
-  renderHistoryTable(raw, baseUrl);
+  const rawMap = new Map(raw.map(r => [r.id, r]));
+  jobs.forEach(j => {
+    if (!rawMap.has(j.id)) {
+      rawMap.set(j.id, jobsToRaw([j])[0]);
+    }
+  });
+  const mergedRaw = Array.from(rawMap.values())
+    .sort((a, b) => b.id - a.id)
+    .slice(0, MAX_HISTORY);
+  renderHistoryTable(mergedRaw, baseUrl);
 }
 
 /**
@@ -332,7 +374,20 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const fallback = `${baseUrl}/downloads/defData/file_icon.png`;
 
     // テーブル行を作成
-    const startwayLabel = startwayMap[raw.startway] || raw.startway;
+    const startwayLabel =
+      raw.startway !== undefined
+        ? (startwayMap[raw.startway] || raw.startway)
+        : "—";
+    const size      = raw.size != null ? raw.size.toLocaleString() : "—";
+    const ctime     = raw.ctime ? fmt(raw.ctime) : "—";
+    const stime     = raw.starttime ? fmt(raw.starttime) : "—";
+    const utime     = raw.usagetime != null ? raw.usagetime : "—";
+    const umaterial =
+      raw.usagematerial != null
+        ? (Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()
+        : "—";
+    const finish    = raw.printfinish ? "✔︎" : "";
+    const md5       = raw.filemd5 || "—";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -352,13 +407,13 @@ export function renderHistoryTable(rawArray, baseUrl) {
       </td>
       <td>${name}</td>
       <td data-key="startway">${startwayLabel}</td>
-      <td>${raw.size.toLocaleString()}</td>
-      <td>${fmt(raw.ctime)}</td>
-      <td>${fmt(raw.starttime)}</td>
-      <td>${raw.usagetime}</td>
-      <td>${(Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()}</td>
-      <td>${raw.printfinish ? "✔︎" : ""}</td>
-      <td>${raw.filemd5}</td>
+      <td>${size}</td>
+      <td>${ctime}</td>
+      <td>${stime}</td>
+      <td>${utime}</td>
+      <td>${umaterial}</td>
+      <td>${finish}</td>
+      <td>${md5}</td>
     `;
     tbody.appendChild(tr);
 
@@ -573,7 +628,7 @@ export function setupUploadUI() {
 export function initHistoryTabs() {
   const btnH = document.getElementById("tab-print-history");
   const btnF = document.getElementById("tab-file-list");
-  const pH = document.getElementById("panel-print-history");
+  const pH = document.getElementById("panel-print-history-tab");
   const pF = document.getElementById("panel-file-list");
   btnH.addEventListener("click", () => {
     btnH.classList.add("active"); btnF.classList.remove("active");

@@ -252,14 +252,14 @@
           <div class="col2">
 
           <div class="cmd-group">
-            <button id="btn-stop-print">停止</button>
-            <button id="btn-pause-print">一時停止</button>
-            <button id="btn-resume-print">再開</button>
+            <button id="btn-stop-print-top">停止</button>
+            <button id="btn-pause-print-top">一時停止</button>
+            <button id="btn-resume-print-top">再開</button>
             <button id="btn-ack-error">エラー了承</button>
           </div>
           <div class="cmd-group">
-            <button id="btn-history-list">履歴一覧取得</button>
-            <button id="btn-file-list">ファイル一覧取得</button>
+            <button id="btn-history-list-main">履歴一覧取得</button>
+            <button id="btn-file-list-main">ファイル一覧取得</button>
             <button id="btn-send-raw-json">JSONコマンド送信</button>
           </div>
           <div class="control-temp-area">
@@ -617,7 +617,7 @@
     </div>
 
     <!-- ─── 印刷履歴タブ ─── -->
-    <div id="panel-print-history">
+    <div id="panel-print-history-tab">
   
       <h2 class="card-title">印刷履歴</h2>
       <div style="font-size:0.9em;">
@@ -643,7 +643,7 @@
         <button id="gcode-upload-btn">アップロード</button>
       </div>
       <!-- /暫定配置 -->
-      <div id="panel-print-history" class="scrollable-body">
+      <div id="print-history-body" class="scrollable-body">
         <table id="print-history-table" class="fixed-header" border="1" style="border-collapse: collapse; width:100%;">
           <thead>
             <tr>
