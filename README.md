@@ -1,16 +1,20 @@
 # 3dpmon
-## 3D printer monitor
-- Clearity K1/K1C/K1A/K1 Max で稼働する、3Dプリンタモニターアプリです。
-- 現在オープンにしてありますが、まだ開発中です。
 
-## 使い方
-- ダウンロードし、フォルダに配置する。
-- windows の場合
-```
-c:\3dpmon> python -m http.server 8000
-```
-  - このようにして起動して、http://localhost:8000/3dp_monitor.html を呼ぶと、起動できます。
-  - すべて javascriptなので、インストール等を行う必要がありません
+Browser-based monitor for Clarity K1 series 3D printers.
+開発中の3Dプリンタ監視ダッシュボードです。
 
-## copyright
-- (C) pumpCurry
+## Quick Start / 使い方
+1. ダウンロードしたファイルを任意のフォルダに配置します
+2. Windows 例:
+   ```
+   c:\3dpmon> python -m http.server 8000
+   ```
+3. ブラウザで [http://localhost:8000/3dp_monitor.html](http://localhost:8000/3dp_monitor.html) を開きます
+
+詳細な操作説明は [USAGE-ja-en.md](USAGE-ja-en.md) を参照してください。
+
+## License
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Copyright
+(C) pumpCurry
