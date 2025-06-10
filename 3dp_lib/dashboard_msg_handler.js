@@ -30,6 +30,8 @@ import { updateXYPreview, updateZPreview } from "./dashboard_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { ingestData, restoreAggregatorState, restartAggregatorTimer } from "./dashboard_aggregator.js";
 import { restorePrintResume } from "./3dp_dashboard_init.js";
+import * as printManager from "./dashboard_printmanager.js";
+import { getDeviceIp } from "./dashboard_connection.js";
 
 /** タイマーID／タイムスタンプ／累積値 */
 let prepTimerId, checkTimerId, pauseTimerId, completionTimer;
@@ -93,6 +95,17 @@ export function handleMessage(data) {
 
     restartAggregatorTimer();
     restorePrintResume();
+
+    // 保存済み履歴と現在印刷を表示
+    const baseUrlStored = `http://${getDeviceIp()}:80`;
+    const jobs = printManager.loadHistory();
+    if (jobs.length) {
+      const raw = printManager.jobsToRaw(jobs);
+      printManager.renderHistoryTable(raw, baseUrlStored);
+    }
+    printManager.renderPrintCurrent(
+      document.getElementById("print-current-container")
+    );
 
   }
 
