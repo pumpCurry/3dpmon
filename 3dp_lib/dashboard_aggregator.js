@@ -349,7 +349,13 @@ function aggregateTimersAndPredictions(data) {
   }
 
   // ── 5) 予想残り時間／予想終了時刻 ────────────────────────────────
-  if (actualStartEpoch !== null && progPct > 0) {
+  if (doneStates.has(st)) {
+    // 印刷終了または失敗時は予測値をリセット
+    setStoredData("predictedFinishEpoch",    null, true);
+    setStoredData("estimatedRemainingTime",  null, true);
+    setStoredData("estimatedCompletionTime", null, true);
+  }
+  else if (actualStartEpoch !== null && progPct > 0) {
     const elapsed  = (nowSec - actualStartEpoch) - (totalCheckSec + totalPauseSec);
     const totalEst = elapsed / progPct;
     const remSec   = totalEst - elapsed;
