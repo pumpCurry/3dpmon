@@ -245,6 +245,10 @@ export function initializeDashboard({
 
 // 印刷再開用に保存したいキー
 const persistKeys = [
+  "preparationTime",
+  "firstLayerCheckTime",
+  "pauseTime",
+  "completionElapsedTime",
   "actualStartTime",
   "initialLeftTime",
   "initialLeftAt",
