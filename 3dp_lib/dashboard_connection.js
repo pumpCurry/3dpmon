@@ -568,3 +568,11 @@ export function updateConnectionUI(state, opt = {}) {
       console.error(`updateConnectionUI: unknown state="${state}"`);
   }
 }
+
+/**
+ * Debug helper: treat a raw JSON string as a received WebSocket message.
+ * @param {string} jsonStr - JSON text to process
+ */
+export function simulateReceivedJson(jsonStr) {
+  handleSocketMessage({ data: jsonStr });
+}
