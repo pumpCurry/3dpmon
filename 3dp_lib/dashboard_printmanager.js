@@ -558,68 +558,165 @@ async function extractThumbnailFromFile(file) {
 
 /** アップロード UI の初期化 */
 export function setupUploadUI() {
-  const btn   = document.getElementById("gcode-upload-btn");
-  const input = document.getElementById("gcode-upload-input");
-  if (!btn || !input) return;
+  const btn        = document.getElementById("gcode-upload-btn");
+  const input      = document.getElementById("gcode-upload-input");
+  const progress   = document.getElementById("gcode-upload-progress");
+  const percentEl  = document.getElementById("gcode-upload-percent");
+  const dropLayer  = document.getElementById("drop-overlay");
+  if (!btn || !input || !progress || !percentEl || !dropLayer) return;
 
-  btn.addEventListener("click", async () => {
-    if (!input.files?.length) {
-      alert("まず .gcode ファイルを選択してください");
-      return;
-    }
-    const file = input.files[0];
-    // 1) サムネ抽出 or フォールバック
-    let thumb = await extractThumbnailFromFile(file);
-    if (!thumb) {
-      const ip = getDeviceIp();
-      thumb = `http://${ip}/downloads/defData/file_icon.png`;
-    }
-    // 2) 確認ダイアログ
-    const html = `
-      <img src="${thumb}" style="width:100px; display:block; margin-bottom:8px">
-      <div><strong>${file.name}</strong> をアップロードしますか？</div>
-    `;
-    const ok = await showConfirmDialog({
-      level:       "info",
-      title:       "ファイルアップロードの確認",
-      html:        html,
-      confirmText: "アップロード",
-      cancelText:  "キャンセル"
+  let currentFile = null;
+
+  function updateProgress(loaded, total) {
+    if (!total) { percentEl.textContent = "0%"; return; }
+    const pct = Math.floor((loaded / total) * 100);
+    const remain = total - loaded;
+    const remainMb = (remain / (1024 * 1024)).toFixed(1);
+    percentEl.textContent = `${pct}% (残り ${remainMb}MB)`;
+  }
+
+  function showProgress() { progress.classList.remove("hidden"); }
+  function hideProgress() { progress.classList.add("hidden"); updateProgress(0,0); }
+
+  function readFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onprogress = e => {
+        if (e.lengthComputable) updateProgress(e.loaded, e.total);
+      };
+      reader.onerror = () => reject(new Error("read error"));
+      reader.onload = () => resolve(reader.result);
+      reader.readAsText(file);
     });
-    if (!ok) return;
+  }
 
-    // 3) POST 送信
+  function extractThumb(text) {
+    const lines = text.split(/\r?\n/);
+    const s = lines.findIndex(l => /^\s*;\s*png begin/.test(l));
+    const e = lines.findIndex(l => /^\s*;\s*png end/.test(l), s + 1);
+    if (s < 0 || e < 0) return null;
+    const b64 = lines.slice(s + 1, e).map(l => l.replace(/^\s*;\s*/, "")).join("");
+    return `data:image/png;base64,${b64}`;
+  }
+
+  async function prepareAndConfirm(file) {
+    currentFile = file;
+    btn.disabled = true;
+    showProgress();
     try {
-      const ip  = getDeviceIp();
-      const url = `http://${ip}/upload/${encodeURIComponent(file.name)}`;
-
-      // FormData にファイルを詰める
-      const form = new FormData();
-      form.append("file", file, file.name);
-
-      const res = await fetch(url, {
-        method: "POST",
-        body: form,
-        // ヘッダーはブラウザにお任せ
+      const text = await readFile(file);
+      updateProgress(file.size, file.size);
+      let thumb = extractThumb(text);
+      if (!thumb) {
+        const ip = getDeviceIp();
+        thumb = `http://${ip}/downloads/defData/file_icon.png`;
+      }
+      hideProgress();
+      btn.disabled = false;
+      const html = `
+        <img src="${thumb}" style="width:100px; display:block; margin-bottom:8px">
+        <div><strong>${file.name}</strong> をアップロードしますか？</div>`;
+      const ok = await showConfirmDialog({
+        level: "info",
+        title: "ファイルアップロードの確認",
+        html,
+        confirmText: "アップロード",
+        cancelText: "キャンセル"
       });
-
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      await showConfirmDialog({
-        level:       "success",
-        title:       "アップロード完了",
-        message:     `${file.name} を正常にアップロードしました。`,
-        confirmText: "OK",
-        cancelText:  ""
-      });
+      if (ok) uploadFile(file);
     } catch (e) {
+      hideProgress();
+      btn.disabled = false;
       console.error(e);
-      await showConfirmDialog({
-        level:       "error",
-        title:       "アップロード失敗",
-        message:     `エラー: ${e.message}`,
-        confirmText: "OK",
-        cancelText:  ""
+      showConfirmDialog({
+        level: "error",
+        title: "ファイル読み込み失敗",
+        message: e.message,
+        confirmText: "OK"
       });
+    }
+  }
+
+  function uploadFile(file) {
+    btn.disabled = true;
+    showProgress();
+    updateProgress(0, file.size);
+
+    const ip  = getDeviceIp();
+    const url = `http://${ip}/upload/${encodeURIComponent(file.name)}`;
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) updateProgress(e.loaded, e.total);
+    };
+    xhr.onload = async () => {
+      hideProgress();
+      btn.disabled = false;
+      if (xhr.status === 200) {
+        await showConfirmDialog({
+          level: "success",
+          title: "アップロード完了",
+          message: `${file.name} を正常にアップロードしました。`,
+          confirmText: "OK"
+        });
+        currentFile = null;
+        input.value = "";
+      } else {
+        await showConfirmDialog({
+          level: "error",
+          title: "アップロード失敗",
+          message: `エラー: ${xhr.status} ${xhr.statusText}`,
+          confirmText: "OK"
+        });
+      }
+    };
+    const handleError = async () => {
+      hideProgress();
+      btn.disabled = false;
+      await showConfirmDialog({
+        level: "error",
+        title: "アップロード失敗",
+        message: "ネットワークエラー",
+        confirmText: "OK"
+      });
+    };
+    xhr.onerror = handleError;
+    xhr.onabort = handleError;
+    xhr.ontimeout = handleError;
+    xhr.send(form);
+  }
+
+  input.addEventListener("change", () => {
+    if (input.files?.length) prepareAndConfirm(input.files[0]);
+  });
+
+  btn.addEventListener("click", () => {
+    if (currentFile) {
+      uploadFile(currentFile);
+    } else if (input.files?.length) {
+      prepareAndConfirm(input.files[0]);
+    } else {
+      alert("まず .gcode ファイルを選択してください");
+    }
+  });
+
+  document.addEventListener("dragover", e => {
+    e.preventDefault();
+    dropLayer.classList.remove("hidden");
+  });
+  document.addEventListener("dragleave", e => {
+    if (e.target === document || e.target === dropLayer) {
+      dropLayer.classList.add("hidden");
+    }
+  });
+  document.addEventListener("drop", e => {
+    e.preventDefault();
+    dropLayer.classList.add("hidden");
+    if (e.dataTransfer?.files?.length) {
+      prepareAndConfirm(e.dataTransfer.files[0]);
     }
   });
 }

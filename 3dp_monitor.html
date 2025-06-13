@@ -641,6 +641,10 @@
         <label>アップロード GCode:</label>
         <input type="file" id="gcode-upload-input" accept=".gcode" />
         <button id="gcode-upload-btn">アップロード</button>
+        <span id="gcode-upload-progress" class="upload-progress hidden">
+          <span class="spinner"></span>
+          <span id="gcode-upload-percent">0%</span>
+        </span>
       </div>
       <!-- /暫定配置 -->
       <div id="print-history-body" class="scrollable-body">
@@ -1087,6 +1091,11 @@
 
 
 
+  </div>
+
+  <!-- ドラッグ&ドロップ用オーバーレイ -->
+  <div id="drop-overlay" class="drop-overlay hidden">
+    ファイルをドロップしてアップロード
   </div>
 
   <!-- スクリプト読み込み -->
