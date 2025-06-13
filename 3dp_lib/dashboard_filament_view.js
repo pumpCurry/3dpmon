@@ -157,7 +157,7 @@
  * @property {boolean} [showUsedUpIndicator]         完了インジケータ表示
  * @property {string}  [blinkingLightColor]          ライト色（CSSカラー）
  *
- * @property {number} [widthPx]                      描画幅 [px]
+ * @property {number} [widthPx]                      描画幅 [px]（フォントスケール基準）
  * @property {number} [heightPx]                     描画高 [px]
  * @property {number} [initialRotX]                  初期X回転角度 [deg]
  * @property {number} [initialRotY]                  初期Y回転角度 [deg]
@@ -372,6 +372,8 @@ function createFilamentPreview(mount, opts) {
   const root = div('dfv-root');
   root.style.width  = o.widthPx  + 'px';
   root.style.height = o.heightPx + 'px';
+  const scale = o.widthPx / 300;
+  root.style.fontSize = (16 * scale) + 'px';
   root.style.perspective = (Math.max(o.widthPx, o.heightPx) * 2) + 'px';
   root.classList.add('root');
   mount.appendChild(root);
@@ -394,10 +396,10 @@ function createFilamentPreview(mount, opts) {
 
   /* --- スケール計算 ------------------------------------------------ */
   const reelOuterPx = o.widthPx * 0.85;
-  const scale = reelOuterPx / o.reelOuterDiameter;
-  const thicknessPx = o.reelThickness * scale;
-  const innerPx     = o.reelWindingInnerDiameter * scale;
-  const holePx      = o.reelCenterHoleDiameter * scale;
+  const geoScale = reelOuterPx / o.reelOuterDiameter;
+  const thicknessPx = o.reelThickness * geoScale;
+  const innerPx     = o.reelWindingInnerDiameter * geoScale;
+  const holePx      = o.reelCenterHoleDiameter * geoScale;
 
   /* --- Zオフセット -------------------------------------------------- */
   const zHalf = thicknessPx / 2;
@@ -726,8 +728,8 @@ function createFilamentPreview(mount, opts) {
     const usedUp = isPresent && currentLen <= 1e-3 * o.filamentTotalLength;
 
     /* ----- 直径(px) ----- */
-    const solidDiaPx   = Math.max(innerPx, m.Dfloor * scale);
-    const partialDiaPx = Math.max(solidDiaPx, m.Dnext  * scale);
+    const solidDiaPx   = Math.max(innerPx, m.Dfloor * geoScale);
+    const partialDiaPx = Math.max(solidDiaPx, m.Dnext  * geoScale);
 
     /* ----- ゲージ直径(px) ----- */
     const gaugeDiaPx = {};
@@ -735,7 +737,7 @@ function createFilamentPreview(mount, opts) {
       const mm = o.filamentTotalLength * p;
       const gm = calcMetrics(mm, d, r0, h, A, o.reelWindingInnerDiameter);
       const dia = Math.max(innerPx,
-        (o.reelWindingInnerDiameter + 2 * gm.Nf * h) * scale);
+        (o.reelWindingInnerDiameter + 2 * gm.Nf * h) * geoScale);
       gaugeDiaPx[p] = dia;
     });
 
