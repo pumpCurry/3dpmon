@@ -830,6 +830,19 @@ function createFilamentPreview(mount, opts) {
       `transform:translate(-50%,-50%) rotateX(90deg); background:${cylColor};`+
       'border-radius:2px;';
 
+    // --- フィラメント不在時はすべて点線表示に
+    if (!isPresent) {
+      [filSolidBack, filPartBack, filSolidFront, filPartFront].forEach(e => {
+        e.style.background = 'transparent';
+        e.style.border = `1px dashed ${o.filamentColor}`;
+        e.style.opacity = '1';
+      });
+      [filSolidCyl, filPartCyl].forEach(e => {
+        e.style.background = 'transparent';
+        e.style.border = `2px dashed ${o.filamentColor}`;
+      });
+    }
+
 
     /* ----- スラッシュ / ライト ----- */
     slash.style.display = ( (usedUp && o.showUsedUpIndicator) || !isPresent ) ? 'block':'none';
