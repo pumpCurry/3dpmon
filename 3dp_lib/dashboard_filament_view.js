@@ -157,7 +157,7 @@
  * @property {boolean} [showUsedUpIndicator]         完了インジケータ表示
  * @property {string}  [blinkingLightColor]          ライト色（CSSカラー）
  *
- * @property {number} [widthPx]                      描画幅 [px]（フォントスケール基準）
+ * @property {number} [widthPx]                      描画幅 [px]（フォント・スライダー幅スケール基準）
  * @property {number} [heightPx]                     描画高 [px]
  * @property {number} [initialRotX]                  初期X回転角度 [deg]
  * @property {number} [initialRotY]                  初期Y回転角度 [deg]
@@ -566,6 +566,7 @@ function createFilamentPreview(mount, opts) {
   slider.max   = String(o.filamentTotalLength);
   slider.value = String(currentLen);
   slider.className = 'dfv-slider';
+  slider.style.width = o.widthPx + 'px';
 
   if (o.disableInteraction) {
     slider.disabled = true;
