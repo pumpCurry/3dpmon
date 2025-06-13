@@ -9,7 +9,7 @@
 
 "use strict";
 
-import { getDeviceIp, sendCommand } from "./dashboard_connection.js";
+import { getDeviceIp, sendCommand, simulateReceivedJson } from "./dashboard_connection.js";
 import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
@@ -555,5 +555,24 @@ export function initSendRawJson() {
       }
       break;
     }
+  });
+}
+
+/**
+ * "JSONコマンドテスト" ボタンの設定とハンドラ登録
+ * 指定テキストボックスの内容を受信メッセージとして処理します。
+ */
+export function initTestRawJson() {
+  const btn   = document.getElementById("btn-test-raw-json");
+  const input = document.getElementById("cmd-test-json");
+  if (!btn || !input) return;
+
+  btn.addEventListener("click", () => {
+    const raw = input.value.trim();
+    if (!raw) {
+      showAlert("JSON文字列を入力してください。", "warn");
+      return;
+    }
+    simulateReceivedJson(raw);
   });
 }

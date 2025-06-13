@@ -48,7 +48,7 @@ import {
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { persistAggregatorState,stopAggregatorTimer } from "./dashboard_aggregator.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { initSendRawJson } from "./dashboard_send_command.js";
+import { initSendRawJson, initTestRawJson } from "./dashboard_send_command.js";
 /**
  * @fileoverview
  * ダッシュボードを初期化します。
@@ -233,6 +233,7 @@ export function initializeDashboard({
 
   // (19) JSONコマンド送信機能
   initSendRawJson();
+  initTestRawJson();
 }
 
 // ────────────── 印刷再開データの復元／永続化 ──────────────
