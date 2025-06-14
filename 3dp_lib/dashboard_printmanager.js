@@ -30,6 +30,7 @@ import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
 import { getCurrentSpool, useFilament } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
+import { showVideoOverlay } from "./dashboard_video_player.js";
 
 /** 履歴の最大件数 */
 export const MAX_HISTORY = 150;
@@ -409,7 +410,8 @@ export async function refreshHistory(
 
   const videoMap = loadVideos();
   jobs.forEach(j => {
-    if (videoMap[j.id]) j.videoUrl = videoMap[j.id];
+    const info = videoMap[j.id];
+    if (info && info.videoUrl) j.videoUrl = info.videoUrl;
   });
   saveHistory(jobs);
 
@@ -491,7 +493,8 @@ export function updateHistoryList(
 
   const videoMap = loadVideos();
   jobs.forEach(j => {
-    if (videoMap[j.id]) j.videoUrl = videoMap[j.id];
+    const info = videoMap[j.id];
+    if (info && info.videoUrl) j.videoUrl = info.videoUrl;
   });
   saveHistory(jobs);
   pushLog(
@@ -529,8 +532,10 @@ export function updateVideoList(videoArray, baseUrl) {
   videoArray.forEach(v => {
     if (!v.id) return;
     const url = `${baseUrl}/downloads/video/${v.id}.mp4`;
-    if (map[v.id] !== url) {
-      map[v.id] = url;
+    const entry = { ...v, videoUrl: url };
+    const cur = map[v.id];
+    if (!cur || JSON.stringify(cur) !== JSON.stringify(entry)) {
+      map[v.id] = entry;
       updated = true;
     }
   });
@@ -539,9 +544,9 @@ export function updateVideoList(videoArray, baseUrl) {
   const jobs = loadHistory();
   let changed = false;
   jobs.forEach(job => {
-    const url = map[job.id];
-    if (url && job.videoUrl !== url) {
-      job.videoUrl = url;
+    const info = map[job.id];
+    if (info && info.videoUrl && job.videoUrl !== info.videoUrl) {
+      job.videoUrl = info.videoUrl;
       changed = true;
     }
   });
@@ -599,7 +604,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
         : "—";
     const finish    = raw.printfinish ? "✔︎" : "";
     const md5       = raw.filemd5 || "—";
-    const videoLink = raw.videoUrl ? `<a href="${raw.videoUrl}" target="_blank" rel="noopener">📹</a>` : "";
+    const videoLink = raw.videoUrl
+      ? `<button class="video-link" data-url="${raw.videoUrl}">📹</button>`
+      : "";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -639,6 +646,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
     });
     tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
       handleDeleteClick(raw);
+    });
+    tr.querySelector(".video-link")?.addEventListener("click", () => {
+      showVideoOverlay(raw.videoUrl);
     });
   });
 
