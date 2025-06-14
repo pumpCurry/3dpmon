@@ -19,7 +19,9 @@ import {
   loadPrintCurrent,
   savePrintCurrent,
   loadPrintHistory,
-  savePrintHistory
+  savePrintHistory,
+  loadPrintVideos,
+  savePrintVideos
 } from "./dashboard_storage.js";
 
 import { formatEpochToDateTime } from "./dashboard_utils.js";
@@ -173,6 +175,22 @@ export function saveHistory(jobs) {
 }
 
 /**
+ * 保存済みの動画マップを取得する。
+ * @returns {Record<string, string>}
+ */
+export function loadVideos() {
+  return loadPrintVideos();
+}
+
+/**
+ * 動画マップを保存する。
+ * @param {Record<string, string>} map
+ */
+export function saveVideos(map) {
+  savePrintVideos(map);
+}
+
+/**
  * 保存済みジョブ配列を履歴テーブル用の簡易 raw 形式に変換します。
  *
  * @param {Array<Object>} jobs - loadHistory() で取得した履歴配列
@@ -193,6 +211,7 @@ export function jobsToRaw(jobs) {
       usagematerial: job.materialUsedMm,
       printfinish:   finishEpoch ? 1 : 0,
       filemd5:       "",
+      ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
       ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
       ...(job.pauseTime             !== undefined && { pauseTime:             job.pauseTime }),
@@ -387,6 +406,11 @@ export async function refreshHistory(
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
+
+  const videoMap = loadVideos();
+  jobs.forEach(j => {
+    if (videoMap[j.id]) j.videoUrl = videoMap[j.id];
+  });
   saveHistory(jobs);
 
   // 現在印刷中ジョブの更新があれば再描画
@@ -407,6 +431,41 @@ export async function refreshHistory(
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
   renderHistoryTable(mergedRaw, baseUrl);
+}
+
+/**
+ * 動画リストをマージし履歴に適用する。
+ * @param {Array<Object>} videoArray
+ * @param {string} baseUrl
+ */
+export function updateVideoList(videoArray, baseUrl) {
+  if (!Array.isArray(videoArray) || !videoArray.length) return;
+  const map = { ...loadVideos() };
+  let updated = false;
+  videoArray.forEach(v => {
+    if (!v.id) return;
+    const url = `${baseUrl}/downloads/video/${v.id}.mp4`;
+    if (map[v.id] !== url) {
+      map[v.id] = url;
+      updated = true;
+    }
+  });
+  if (updated) saveVideos(map);
+
+  const jobs = loadHistory();
+  let changed = false;
+  jobs.forEach(job => {
+    const url = map[job.id];
+    if (url && job.videoUrl !== url) {
+      job.videoUrl = url;
+      changed = true;
+    }
+  });
+  if (changed) {
+    saveHistory(jobs);
+    const raw = jobsToRaw(jobs);
+    renderHistoryTable(raw, baseUrl);
+  }
 }
 
 /**
@@ -449,6 +508,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
         : "—";
     const finish    = raw.printfinish ? "✔︎" : "";
     const md5       = raw.filemd5 || "—";
+    const videoLink = raw.videoUrl ? `<a href="${raw.videoUrl}" target="_blank" rel="noopener">📹</a>` : "";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -475,6 +535,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td>${umaterial}</td>
       <td>${finish}</td>
       <td>${md5}</td>
+      <td>${videoLink}</td>
     `;
     tbody.appendChild(tr);
 

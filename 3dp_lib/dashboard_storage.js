@@ -316,3 +316,23 @@ export function savePrintHistory(history) {
     history.slice(0, MAX_HISTORY);
   saveUnifiedStorage();
 }
+
+/**
+ * 印刷動画マップを取得する。
+ *
+ * @returns {Record<string, string>} id をキーとした動画 URL マップ
+ */
+export function loadPrintVideos() {
+  return monitorData.appSettings.printManager?.videos || {};
+}
+
+/**
+ * 印刷動画マップを保存する。
+ *
+ * @param {Record<string, string>} map - id をキーとした動画 URL マップ
+ */
+export function savePrintVideos(map) {
+  monitorData.appSettings.printManager ??= {};
+  monitorData.appSettings.printManager.videos = map;
+  saveUnifiedStorage();
+}

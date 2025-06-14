@@ -204,6 +204,10 @@ function handleSocketMessage(event) {
       const baseUrl = `http://${getDeviceIp()}:80`;
       printManager.refreshHistory(fetchStoredData, baseUrl);
     }
+    if (Array.isArray(data.elapseVideoList)) {
+      const baseUrl = `http://${getDeviceIp()}:80`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl);
+    }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
     console.error("[ws.onmessage] 印刷履歴処理エラー:", e);
