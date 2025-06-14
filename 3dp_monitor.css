@@ -815,29 +815,32 @@ input:checked + .slider:before {
 .stage-wing {
   position: absolute;
   bottom: 0;
-  width: 40px;
-  height: 30px;
+  width: 35px;
+  height: 20px;
   background: #555;
   clip-path: polygon(0 100%, 100% 100%, 50% 0);
+  border: 1px solid #666;
+  z-index: -1;
 }
 .stage-wing.left {
-  left: -30px;
+  left: -20px;
   transform: rotateY(180deg);
 }
 .stage-wing.right {
-  right: -30px;
+  right: -20px;
 }
 .stage-tab {
   position: absolute;
   bottom: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 40px;
+  width: 20px;
   height: 15px;
   background: #555;
   border-radius: 4px 4px 0 0;
-  border: 1px solid #333;
+  border: 1px solid #666;
+  z-index: -1;
 }
+.stage-tab.left { left: 10%; transform: translateX(0%); }
+.stage-tab.right { right: 10%; transform: translateX(0%); }
 
 /* XYZ axis indicators */
 .axis {
