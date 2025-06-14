@@ -243,6 +243,8 @@ function initAutoScrollHandlers() {
 function initTabHandlers() {
   tabReceived.addEventListener("click", () => {
     lastActiveTab = "received";
+    tabReceived.classList.add("active");
+    tabNotification.classList.remove("active");
     receivedBox.classList.remove("hidden");
     tsReceivedEl.classList.remove("hidden");
     notifBox.classList.add("hidden");
@@ -254,6 +256,8 @@ function initTabHandlers() {
 
   tabNotification.addEventListener("click", () => {
     lastActiveTab = "notification";
+    tabNotification.classList.add("active");
+    tabReceived.classList.remove("active");
     receivedBox.classList.add("hidden");
     tsReceivedEl.classList.add("hidden");
     notifBox.classList.remove("hidden");
