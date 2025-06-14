@@ -159,7 +159,13 @@ export function jobsToRaw(jobs) {
       usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
       usagematerial: job.materialUsedMm,
       printfinish:   finishEpoch ? 1 : 0,
-      filemd5:       ""
+      filemd5:       "",
+      ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
+      ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
+      ...(job.pauseTime             !== undefined && { pauseTime:             job.pauseTime }),
+      ...(job.filamentId            !== undefined && { filamentId:            job.filamentId }),
+      ...(job.filamentColor         !== undefined && { filamentColor:         job.filamentColor }),
+      ...(job.filamentType          !== undefined && { filamentType:          job.filamentType })
     };
   });
 }
