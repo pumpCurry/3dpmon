@@ -3,6 +3,30 @@
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 
+// Material density [g/cm^3]
+export const MATERIAL_DENSITY = {
+  PLA: 1.24,
+  PETG: 1.27,
+  ABS: 1.04,
+  TPU: 1.20
+};
+
+export function getMaterialDensity(mat) {
+  return MATERIAL_DENSITY[mat] || MATERIAL_DENSITY.PLA;
+}
+
+export function lengthFromWeight(weightGram, density, diameterMm = 1.75) {
+  const d = density || MATERIAL_DENSITY.PLA;
+  const area = Math.PI * (diameterMm / 2) ** 2; // mm^2
+  return (weightGram * 1000) / (area * d); // mm
+}
+
+export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
+  const d = density || MATERIAL_DENSITY.PLA;
+  const area = Math.PI * (diameterMm / 2) ** 2; // mm^2
+  return (area * lengthMm * d) / 1000; // g
+}
+
 function genId() {
   return `spool_${Date.now()}_${Math.random().toString(16).slice(2,8)}`;
 }
@@ -36,6 +60,7 @@ export function addSpool(data) {
     material: data.material || "",
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
+    weightGram: Number(data.weightGram) || 0,
     deleted: false
   };
   monitorData.filamentSpools.push(spool);
