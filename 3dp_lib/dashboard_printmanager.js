@@ -436,10 +436,19 @@ export async function refreshHistory(
 }
 
 /**
- * 履歴リストをマージして更新する。
+ * 履歴リストをマージして保存し、UI を更新する。
+ *
+ * 受信した `rawArray` を内部モデルに変換し、既に保存されている履歴と
+ * 一時バッファの内容を統合した上で `saveHistory()` を実行する。保存後は
+ * `jobsToRaw()` で簡易形式へ変換し、`renderHistoryTable()` によって
+ * ダッシュボードの表へ反映する。これにより表示内容は常にマージ済みの
+ * 最新状態となる。
+ *
  * @param {Array<Object>} rawArray - プリンタから受信した生履歴データ配列
  * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
  * @param {string} [currentContainerId="print-current-container"]
+ *          現在ジョブ表示用コンテナの要素 ID
+ * @returns {void}
  */
 export function updateHistoryList(
   rawArray,
@@ -508,14 +517,10 @@ export function updateHistoryList(
     renderPrintCurrent(document.getElementById(currentContainerId));
   }
 
-  const rawMap = new Map(rawArray.map(r => [r.id, r]));
-  jobs.forEach(j => {
-    if (!rawMap.has(j.id)) rawMap.set(j.id, jobsToRaw([j])[0]);
-  });
-  const mergedRaw = Array.from(rawMap.values())
-    .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_HISTORY);
-  renderHistoryTable(mergedRaw, baseUrl);
+  // ここから UI 更新処理。保存済みジョブ配列を簡易 raw 形式に変換し、
+  // 統合された履歴としてテーブルへ描画する
+  const raw = jobsToRaw(jobs);
+  renderHistoryTable(raw, baseUrl);
   pushLog("[updateHistoryList] UI へ反映しました", "info");
 }
 
