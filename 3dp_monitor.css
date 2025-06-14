@@ -909,7 +909,7 @@ input:checked + .slider:before {
   width: 40px;
   height: 3px;
   background: #4ea3ff;
-  transform: rotateX(-90deg) translateZ(2px);
+  transform: rotateX(90deg) rotateY(90deg) rotateZ(90deg);
 }
 
 /* stage rotation control buttons */
@@ -926,7 +926,7 @@ input:checked + .slider:before {
 }
 .stage-rotate-buttons .stage-spin-active {
   background: #e5e7eb;
-  border: 1px solid #888;
+  border: 2px solid #888;
 }
 
 /* ---------- Video Overlay ---------- */
