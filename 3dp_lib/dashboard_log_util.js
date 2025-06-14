@@ -3,10 +3,10 @@
  * dashboard_log_util.js (ver.1.336)
  *
  * 汎用ログ管理モジュール。
- * - LogManager: 全ログ・エラーログの保持とイベント通知（メモリ上限付き）。
+ * - LogManager: 全ログ・通知ログの保持とイベント通知（メモリ上限付き）。
  * - initLogAutoScroll: ログビューに対する自動スクロール支援（rAFスロットリング）。
  * - initLogRenderer: 差分レンダリングによるログ行追加／クリア機能。
- * - flushNormalLogsToDom / flushErrorLogsToDom: 一括描画機能。
+ * - flushNormalLogsToDom / flushNotificationLogsToDom: 一括描画機能。
  * - pushLog: ログ追加ユーティリティ（レベル管理＋メモリ制限）。
  *
  * 長期稼働でもブラウザクラッシュを防ぐため、最新 MAX_LOG_LINES 件のみ保持します。
@@ -15,7 +15,7 @@
 "use strict";
 
 import { getCurrentTimestamp } from "./dashboard_utils.js";
-import { LEVELS, ERROR_LEVELS } from "./dashboard_constants.js";
+import { LEVELS } from "./dashboard_constants.js";
 import { monitorData } from "./dashboard_data.js";
 
 /** 最大保持ログ行数 */
@@ -58,7 +58,7 @@ export function getMaxLogLines() {
 
 /**
  * ログ管理クラス。
- * - 全ログ (`logsAll`) と、エラーログ (`logsError`) を保持。
+ * - 全ログ (`logsAll`) と、通知ログ (`logsNotifications`) を保持。
  * - メモリ上限を超えたら古いエントリを破棄。
  * - "log:added"/"log:cleared" カスタムイベントで UI と連携。
  */
@@ -66,8 +66,8 @@ export class LogManager {
   constructor() {
     /** @type {LogEntry[]} 全ログ */
     this.logsAll = [];
-    /** @type {LogEntry[]} エラーログ */
-    this.logsError = [];
+    /** @type {LogEntry[]} 通知ログ */
+    this.logsNotifications = [];
   }
 
   /**
@@ -79,8 +79,8 @@ export class LogManager {
    */
   add(entry) {
     this.logsAll.push(entry);
-    if (ERROR_LEVELS.has(entry.level)) {
-      this.logsError.push(entry);
+    if (entry.notify) {
+      this.logsNotifications.push(entry);
     }
   
     // 設定に応じてメモリ内ログをトリミング
@@ -88,8 +88,8 @@ export class LogManager {
     if (this.logsAll.length > max) {
       this.logsAll.shift();
     }
-    if (this.logsError.length > max) {
-      this.logsError.shift();
+    if (this.logsNotifications.length > max) {
+      this.logsNotifications.shift();
     }
   
     window.dispatchEvent(new CustomEvent("log:added", { detail: entry }));
@@ -102,7 +102,7 @@ export class LogManager {
    */
   clear() {
     this.logsAll.length = 0;
-    this.logsError.length = 0;
+    this.logsNotifications.length = 0;
     window.dispatchEvent(new Event("log:cleared"));
   }
 
@@ -111,9 +111,9 @@ export class LogManager {
     return [...this.logsAll];
   }
 
-  /** @returns {LogEntry[]} エラーログのコピー */
-  getError() {
-    return [...this.logsError];
+  /** @returns {LogEntry[]} 通知ログのコピー */
+  getNotifications() {
+    return [...this.logsNotifications];
   }
 }
 
@@ -191,7 +191,7 @@ export function initLogRenderer(containerEl) {
 
   /**
    * ログエントリを表示コンテナに追加し、
-   * ERROR_LEVELS の場合はエラー履歴にも追加、
+   * 通知ログの場合は通知履歴にも追加、
    * 行数オーバーした古いものを削除、
    * 自動スクロールを制御します。
    *
@@ -209,12 +209,12 @@ export function initLogRenderer(containerEl) {
     p.textContent = `[${entry.timestamp}] ${entry.msg}`;
     containerEl.appendChild(p);
 
-    // エラーレベルなら error-history にも複製追加
-    if (ERROR_LEVELS.has(entry.level)) {
-      const errBox = document.getElementById("error-history");
+    // 通知ログなら notification-history にも複製追加
+    if (entry.notify) {
+      const errBox = document.getElementById("notification-history");
       if (errBox) {
         const clone = p.cloneNode(true);
-        clone.className = "error-entry";
+        clone.className = "notification-entry";
         errBox.appendChild(clone);
       }
     }
@@ -230,11 +230,11 @@ export function initLogRenderer(containerEl) {
       }
     }
 
-    // 行数制限を超えた分だけ古いエラーログを削除
-    if (ERROR_LEVELS.has(entry.level)) {
-      const errBox = document.getElementById("error-history");
+    // 行数制限を超えた分だけ古い通知ログを削除
+    if (entry.notify) {
+      const errBox = document.getElementById("notification-history");
       if (errBox) {
-        const errLines = errBox.querySelectorAll("p.error-entry");
+        const errLines = errBox.querySelectorAll("p.notification-entry");
         if (errLines.length > max) {
           const removeErrCount = errLines.length - max;
           for (let i = 0; i < removeErrCount; i++) {
@@ -252,11 +252,11 @@ export function initLogRenderer(containerEl) {
   }
 
   /**
-   * ログ表示エリアとエラー履歴エリアをクリアします。
-   */
+   * ログ表示エリアと通知履歴エリアをクリアします。
+  */
   function clearLogs() {
     containerEl.innerHTML = "";
-    const errBox = document.getElementById("error-history");
+    const errBox = document.getElementById("notification-history");
     if (errBox) errBox.innerHTML = "";
   }
 
@@ -287,7 +287,7 @@ export function initLogRenderer(containerEl) {
 }
 
 /* ============================================================================
- * Function: flushNormalLogsToDom / flushErrorLogsToDom
+ * Function: flushNormalLogsToDom / flushNotificationLogsToDom
  * ============================================================================ */
 /**
  * 指定ログ配列を一括描画する共通処理
@@ -318,13 +318,13 @@ export function flushNormalLogsToDom() {
 }
 
 /**
- * エラーログを再描画
+ * 通知ログを再描画
  */
-export function flushErrorLogsToDom() {
+export function flushNotificationLogsToDom() {
   writeLogsToContainer(
-    logManager.getError(),
-    document.getElementById("error-history"),
-    "error-entry"
+    logManager.getNotifications(),
+    document.getElementById("notification-history"),
+    "notification-entry"
   );
 }
 
@@ -337,7 +337,7 @@ export function flushErrorLogsToDom() {
  * @param {string|number|Object} msg - ログ内容
  * @param {string} [level="info"]    - ログレベル (LEVELS から選択)
  */
-export function pushLog(msg, level = "info") {
+export function pushLog(msg, level = "info", notify = false) {
   let safeMessage;
   if (msg == null || msg === "") {
     safeMessage = "(空メッセージ)";
@@ -358,7 +358,17 @@ export function pushLog(msg, level = "info") {
   const entry = {
     timestamp: getCurrentTimestamp(),
     level,
-    msg: safeMessage
+    msg: safeMessage,
+    notify
   };
   logManager.add(entry);
+}
+
+/**
+ * 通知ログ専用のユーティリティ
+ * @param {string|number|Object} msg
+ * @param {string} [level="info"]
+ */
+export function pushNotificationLog(msg, level = "info") {
+  pushLog(msg, level, true);
 }

@@ -27,7 +27,7 @@ import {
   initLogAutoScroll,
   initLogRenderer,
   logManager,
-  flushErrorLogsToDom,
+  flushNotificationLogsToDom,
   pushLog
 } from "./dashboard_log_util.js";
 import { updateConnectionUI, fetchStoredData, sendCommand, getDeviceIp } from "./dashboard_connection.js";
@@ -121,14 +121,14 @@ export function initializeDashboard({
   btnDisc?.addEventListener("click", onDisconnect);
 
   // (6) ログコピー・クリア操作
-  document.getElementById("copy-all-error-button")
-    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getError(), null, e.currentTarget));
-  document.getElementById("copy-last-50-error-button")
-    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getError(), 50, e.currentTarget));
-  document.getElementById("clear-error-logs-button")
+  document.getElementById("copy-all-notification-button")
+    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getNotifications(), null, e.currentTarget));
+  document.getElementById("copy-last-50-notification-button")
+    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getNotifications(), 50, e.currentTarget));
+  document.getElementById("clear-notification-logs-button")
     ?.addEventListener("click", () => {
       logManager.clear();
-      flushErrorLogsToDom();
+      flushNotificationLogsToDom();
     });
   document.getElementById("copy-all-button")
     ?.addEventListener("click", e => copyLogsToClipboard(logManager.getAll(), null, e.currentTarget));

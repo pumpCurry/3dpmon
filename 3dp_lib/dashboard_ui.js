@@ -201,15 +201,15 @@ export function updateStoredDataToDOM() {
     d.isNew = false;
   }
 }
-/** ログ／エラーボックス・タブ ボタンの参照 */
+/** ログ／通知ボックス・タブ ボタンの参照 */
 const tabReceived  = document.getElementById("tab-received");
-const tabError     = document.getElementById("tab-error");
+const tabNotification = document.getElementById("tab-notification");
 const receivedBox  = document.getElementById("log");
-const errorBox     = document.getElementById("error-history");
+const notifBox     = document.getElementById("notification-history");
 
 // タイムスタンプ表示エリア
 const tsReceivedEl = document.getElementById("last-log-timestamp");
-const tsErrorEl    = document.getElementById("last-error-timestamp");
+const tsErrorEl    = document.getElementById("last-notification-timestamp");
 
 /** 自動スクロール状態と最後にアクティブだったタブ */
 let isAutoScrollEnabled = true;
@@ -217,7 +217,7 @@ let lastActiveTab       = "received";
 
 /** (A) 自動スクロール ON/OFF の検知 */
 function initAutoScrollHandlers() {
-  [receivedBox, errorBox].forEach(box => {
+  [receivedBox, notifBox].forEach(box => {
     box.addEventListener("scroll", () => {
       const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 5;
       isAutoScrollEnabled = atBottom;
@@ -231,21 +231,21 @@ function initTabHandlers() {
     lastActiveTab = "received";
     receivedBox.classList.remove("hidden");
     tsReceivedEl.classList.remove("hidden");
-    errorBox.classList.add("hidden");
+    notifBox.classList.add("hidden");
     tsErrorEl.classList.add("hidden");
     if (isAutoScrollEnabled) {
       receivedBox.scrollTop = receivedBox.scrollHeight;
     }
   });
 
-  tabError.addEventListener("click", () => {
-    lastActiveTab = "error";
+  tabNotification.addEventListener("click", () => {
+    lastActiveTab = "notification";
     receivedBox.classList.add("hidden");
     tsReceivedEl.classList.add("hidden");
-    errorBox.classList.remove("hidden");
+    notifBox.classList.remove("hidden");
     tsErrorEl.classList.remove("hidden");
     if (isAutoScrollEnabled) {
-      errorBox.scrollTop = errorBox.scrollHeight;
+      notifBox.scrollTop = notifBox.scrollHeight;
     }
   });
 }
