@@ -25,7 +25,7 @@ import {
 import { formatEpochToDateTime } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
-import { monitorData } from "./dashboard_data.js"; // filament残量取得用
+import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 
 /** 履歴の最大件数 */
@@ -318,6 +318,27 @@ export async function refreshHistory(
 
   // パース → 永続化（既存データとマージ）
   const newJobs = parseRawHistoryList(raw, baseUrl);
+  // --- monitorData の一時履歴データを取り込み ---
+  const machine = monitorData.machines[currentHostname];
+  const buf = machine ? machine.historyData : [];
+  const appliedIdx = new Set();
+  if (buf && buf.length) {
+    const bufMap = new Map(buf.map((b, i) => [b.id, { data: b, idx: i }]));
+    newJobs.forEach(job => {
+      const found = bufMap.get(job.id);
+      if (!found) return;
+      Object.entries(found.data).forEach(([k, v]) => {
+        if (k === "id") return;
+        if (v != null && (job[k] == null)) {
+          job[k] = v;
+        }
+      });
+      appliedIdx.add(found.idx);
+    });
+    if (machine) {
+      machine.historyData = buf.filter((_, i) => !appliedIdx.has(i));
+    }
+  }
   const oldJobs = loadHistory();
   const mergedMap = new Map();
   newJobs.forEach(j => mergedMap.set(j.id, j));
