@@ -80,6 +80,27 @@ settings.
 - **Settings Card** – Provides storage settings, notification options and
   a command palette for frequently used commands.
 
+## Filament Spool Management
+- Register each spool's total length, color and optional weight.
+- Choose the active spool from the list in the Print History card.
+- Remaining length is updated automatically after each job.
+- A 3D preview visualizes the spool and warns when filament runs out.
+  ```html
+  <div id="filament-preview"></div>
+  <script src="3dp_lib/dashboard_filament_view.js"></script>
+  <script>
+    const preview = createFilamentPreview(
+      document.getElementById('filament-preview'),
+      {
+        filamentDiameter: 1.75,
+        filamentTotalLength: 330000,
+        filamentCurrentLength: 120000,
+        filamentColor: '#22C55E'
+      }
+    );
+  </script>
+  ```
+
 ---
 
 ## 初回接続手順 (Japanese)
@@ -109,3 +130,9 @@ settings.
 - **ログカード** – 受信ログと通知ログをタブで切り替え、コピー用ボタンも備えています。
 - **印刷履歴カード** – 印刷履歴一覧とファイル一覧タブがあり、G-code アップロードも可能です。
 - **設定カード** – ストレージ設定や通知設定、コマンドパレットなどをまとめたエリアです。
+
+## フィラメントスプール管理
+- スプールの総長さや色、重量を登録し管理できます。
+- 印刷履歴カードのスプール一覧から使用中のリールを選択します。
+- 印刷完了後は残量が自動更新され、3D プレビューで確認できます。
+- `createFilamentPreview` 関数を使えば独自ページにも埋め込めます。
