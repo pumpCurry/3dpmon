@@ -185,9 +185,10 @@ export const renderTemplates = {
   */
   current(job, baseUrl) {
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
+    const ts = Date.now();
     // 大サムネイル URL
-    const currentUrl = `${baseUrl}/downloads/original/current_print_image.png`;
-    const prevUrl    = `${baseUrl}/downloads/original/temp_image.png`;
+    const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
+    const prevUrl    = `${baseUrl}/downloads/original/temp_image.png?${ts}`;
     // フォールバック画像
     const fallback   = `${baseUrl}/downloads/defData/file_print_photo.png`;
     return `
