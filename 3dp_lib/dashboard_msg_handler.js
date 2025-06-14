@@ -26,7 +26,10 @@ import { pushLog } from "./dashboard_log_util.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { handlePrintStateTransition } from "./dashboard_printstatus.js";
 import { parseCurPosition } from "./dashboard_utils.js";
-import { updateXYPreview, updateZPreview } from "./dashboard_preview.js";
+import {
+  updateXYPreview,
+  updateZPreview
+} from "./dashboard_stage_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { ingestData, restoreAggregatorState, restartAggregatorTimer } from "./dashboard_aggregator.js";
 import { restorePrintResume } from "./3dp_dashboard_init.js";

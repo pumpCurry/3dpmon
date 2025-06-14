@@ -1,5 +1,5 @@
 /**
- * dashboard_preview.js (ver.1.129 / 1.3β)
+ * dashboard_stage_preview.js (ver.1.129 / 1.3β)
  * XYプレビューやZプレビューを担当する処理
  *
  * - 1.125のコードを継承し、特に大幅な変更はなし
@@ -15,6 +15,10 @@ let xyInitialized = false;
 let xyHistory = [];       // { x, y }の履歴を保持
 let xyHistoryIndex = 0;   // xyDotsに割り当てるインデックス
 let lastXYPosition = { x: 0, y: 0 };
+
+// 回転状態
+let stageRotX = 0;
+let stageRotZ = 0;
 
 /**
  * XYプレビューをlocalStorageから復元
@@ -102,6 +106,18 @@ function initXYPreview() {
   label0.style.bottom = "4px";
   container.appendChild(label0);
 
+  // 左右の羽
+  const leftWing = document.createElement("div");
+  leftWing.className = "stage-wing left";
+  container.appendChild(leftWing);
+  const rightWing = document.createElement("div");
+  rightWing.className = "stage-wing right";
+  container.appendChild(rightWing);
+  // 下のつまみ
+  const tab = document.createElement("div");
+  tab.className = "stage-tab";
+  container.appendChild(tab);
+
   // 履歴用ドット生成
   for (let i = 0; i < maxDots; i++) {
     const dot = document.createElement("div");
@@ -134,6 +150,33 @@ function initXYPreview() {
   currentCircle.style.border = "2px solid red";
   currentCircle.style.borderRadius = "50%";
   container.appendChild(currentCircle);
+
+  // ドラッグ回転
+  let dragging = false, lastX = 0, lastY = 0;
+  container.style.cursor = "grab";
+  const onMouseMove = e => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    stageRotZ += dx * 0.5;
+    stageRotX -= dy * 0.5;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    applyStageTransform();
+  };
+  container.addEventListener("mousedown", e => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    container.style.cursor = "grabbing";
+  });
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mouseup", () => {
+    dragging = false;
+    container.style.cursor = "grab";
+  });
+
+  applyStageTransform();
 
   xyInitialized = true;
   xyUpdateCount = 0;
@@ -198,4 +241,23 @@ function updateZPreview(z) {
   }
 }
 
-export { restoreXYPreviewState, saveXYPreviewState, initXYPreview, updateXYPreview, updateZPreview };
+function applyStageTransform() {
+  const container = document.getElementById("xy-stage");
+  if (container) {
+    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
+  }
+}
+
+function setTopView() {
+  stageRotX = 0;
+  stageRotZ = 0;
+  applyStageTransform();
+}
+
+function setCameraView() {
+  stageRotX = 50;
+  stageRotZ = 50;
+  applyStageTransform();
+}
+
+export { restoreXYPreviewState, saveXYPreviewState, initXYPreview, updateXYPreview, updateZPreview, applyStageTransform, setTopView, setCameraView };
