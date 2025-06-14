@@ -861,19 +861,19 @@ input:checked + .slider:before {
 }
 .x-axis {
   width: 40px;
-  height: 2px;
+  height: 3px;
   background: red;
 }
 .y-axis {
-  width: 2px;
+  width: 3px;
   height: 40px;
   background: green;
 }
 .z-axis {
   width: 40px;
-  height: 2px;
+  height: 3px;
   background: blue;
-  transform: rotateX(90deg);
+  transform: rotateX(-90deg) rotateZ(-90deg);
 }
 
 /* stage rotation control buttons */
