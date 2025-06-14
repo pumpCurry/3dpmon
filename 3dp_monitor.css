@@ -244,6 +244,7 @@ body {
   box-sizing: border-box;
   perspective: 400px;
   perspective-origin: center;
+  overflow: hidden;
 }
 .stage {
   position: absolute;
@@ -836,6 +837,31 @@ input:checked + .slider:before {
   background: #555;
   border-radius: 4px 4px 0 0;
   border: 1px solid #333;
+}
+
+/* XYZ axis indicators */
+.axis {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  transform-origin: bottom left;
+  pointer-events: none;
+}
+.x-axis {
+  width: 40px;
+  height: 2px;
+  background: red;
+}
+.y-axis {
+  width: 2px;
+  height: 40px;
+  background: green;
+}
+.z-axis {
+  width: 40px;
+  height: 2px;
+  background: blue;
+  transform: rotateX(90deg);
 }
 
 /* stage rotation control buttons */
