@@ -28,7 +28,14 @@ export function setCurrentSpoolId(id) {
   saveUnifiedStorage();
 }
 
+/**
+ * 新しいスプール（フィラメントリール）情報を追加する
+ *
+ * @param {Object} data 追加するスプール情報オブジェクト
+ * @returns {Object} 登録されたスプールオブジェクト
+ */
 export function addSpool(data) {
+  // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const spool = {
     id: genId(),
     name: data.name || "",
@@ -52,11 +59,10 @@ export function addSpool(data) {
     reelFlangeTransparency: data.reelFlangeTransparency ?? 0.4,
     manufacturerName: data.manufacturerName || "",
     purchasePrice: Number(data.purchasePrice) || 0,
-    density: Number(data.density) || 0,
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
     deleted: false,
-    // old keys for backward compatibility
+    // 後方互換性維持のため旧フィールドを残しておく
     color: data.color || "",
     material: data.material || ""
   };
