@@ -850,3 +850,7 @@ input:checked + .slider:before {
 .stage-rotate-buttons button:last-child {
   margin-right: 0;
 }
+.stage-rotate-buttons button.active {
+  background-color: #3b82f6;
+  color: white;
+}

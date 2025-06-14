@@ -166,6 +166,7 @@ function initXYPreview() {
   };
   container.addEventListener("mousedown", e => {
     dragging = true;
+    stopZSpin();
     lastX = e.clientX;
     lastY = e.clientY;
     container.style.cursor = "grabbing";
@@ -241,7 +242,16 @@ function updateZPreview(z) {
   }
 }
 
+function clampAngle(angle) {
+  angle = angle % 360;
+  if (angle > 180) angle -= 360;
+  if (angle <= -180) angle += 360;
+  return angle;
+}
+
 function applyStageTransform() {
+  stageRotX = clampAngle(stageRotX);
+  stageRotZ = clampAngle(stageRotZ);
   const container = document.getElementById("xy-stage");
   if (container) {
     container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
@@ -249,12 +259,14 @@ function applyStageTransform() {
 }
 
 function setTopView() {
+  stopZSpin();
   stageRotX = 0;
   stageRotZ = 0;
   applyStageTransform();
 }
 
 function setCameraView() {
+  stopZSpin();
   stageRotX = 50;
   stageRotZ = 50;
   applyStageTransform();
@@ -262,31 +274,42 @@ function setCameraView() {
 
 // --- 新しい固定アングル ---
 function setFlatView() {
+  stopZSpin();
   stageRotX = 0;
   stageRotZ = 0;
   applyStageTransform();
 }
 
 function setTilt45View() {
+  stopZSpin();
   stageRotX = 45;
   stageRotZ = 0;
   applyStageTransform();
 }
 
 function setObliqueView() {
+  stopZSpin();
   stageRotX = 65;
   stageRotZ = 72.5;
   applyStageTransform();
 }
 
 let spinTimer = null;
-function toggleZSpin() {
+function stopZSpin() {
   if (spinTimer) {
     clearInterval(spinTimer);
     spinTimer = null;
+    document.getElementById("btn-stage-spin")?.classList.remove("active");
+  }
+}
+
+function toggleZSpin() {
+  if (spinTimer) {
+    stopZSpin();
   } else {
+    document.getElementById("btn-stage-spin")?.classList.add("active");
     spinTimer = setInterval(() => {
-      stageRotZ = (stageRotZ + 2) % 360;
+      stageRotZ += 2;
       applyStageTransform();
     }, 100);
   }
@@ -304,5 +327,6 @@ export {
   setFlatView,
   setTilt45View,
   setObliqueView,
+  stopZSpin,
   toggleZSpin
 };

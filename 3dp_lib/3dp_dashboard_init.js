@@ -28,6 +28,7 @@ import {
   setFlatView,
   setTilt45View,
   setObliqueView,
+  stopZSpin,
   toggleZSpin
 } from "./dashboard_stage_preview.js";
 import {
