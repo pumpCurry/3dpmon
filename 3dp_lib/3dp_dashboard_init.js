@@ -294,7 +294,8 @@ const persistKeys = [
   "predictedFinishEpoch",
   "estimatedRemainingTime",
   "tsCompleteStart",
-  "printFinishTime"
+  "printFinishTime",
+  "prevPrintID"
 ];
 
 /**
@@ -349,7 +350,7 @@ export function persistPrintResume() {
 
  
 /** 自動保存間隔（ミリ秒） */
-const AUTO_SAVE_INTERVAL_MS = 10 * 1000; // 10秒
+const AUTO_SAVE_INTERVAL_MS = 3 * 60 * 1000; // 3分
 
 /**
  * autoSaveAll:
