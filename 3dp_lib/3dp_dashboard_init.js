@@ -22,7 +22,10 @@ import {
   monitorData,
   setStoredData
 } from "./dashboard_data.js";
-import { restoreXYPreviewState, initXYPreview } from "./dashboard_preview.js";
+import {
+  restoreXYPreviewState,
+  initXYPreview
+} from "./dashboard_stage_preview.js";
 import {
   initLogAutoScroll,
   initLogRenderer,
