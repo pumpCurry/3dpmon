@@ -261,6 +261,8 @@ function aggregateTimersAndPredictions(data) {
   const { value: selfRaw } = getMergedValueWithSource("withSelfTest",   data);
   const { value: progRaw } = getMergedValueWithSource("printProgress",  data);
   const { value: leftRaw } = getMergedValueWithSource("printLeftTime",  data);
+  const { value: deviceRaw } = getMergedValueWithSource("deviceState", data);
+  const { value: finishRaw } = getMergedValueWithSource("printFinishTime", data);
 
   const id      = Number(idRaw)   || null;
   const st      = Number(stRaw)   || 0;
@@ -268,6 +270,8 @@ function aggregateTimersAndPredictions(data) {
   const selfPct = Number(selfRaw) || 0;
   const progPct = (Number(progRaw) || 0) / 100;
   const left    = Number(leftRaw) || 0;
+  const device  = Number(deviceRaw) || 0;
+  const finish  = Number(finishRaw) || 0;
 
   // ── 2) PrintID 切替検出 → 各種リセット ────────────────────────────────────
   if (prevPrintID !== null && id !== prevPrintID) {
@@ -331,11 +335,33 @@ function aggregateTimersAndPredictions(data) {
   }
 
   // 4-4. 完了後経過時間
+  //   - 通常の完了状態(printDone/printFailed)で開始
+  //   - 機器側が Idle (deviceState=0) でも printFinishTime が取得できる場合は
+  //     その時刻から計測
+  //   - Idle かつ printFinishTime も取得できない場合は現在時刻から計測
+  //   - それ以外の状態に遷移したらリセット
   const doneStates = new Set([
     PRINT_STATE_CODE.printDone,
     PRINT_STATE_CODE.printFailed
   ]);
+  const isIdle = device === PRINT_STATE_CODE.printIdle;
   if (doneStates.has(st)) {
+    // 印刷完了状態: printFinishTime があればその時刻から、なければ現在時刻から開始
+    if (!tsCompleteStart) {
+      tsCompleteStart = finish ? finish * 1000 : nowMs;
+      setStoredData("completionElapsedTime", 0, true);
+    }
+    const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
+    setStoredData("completionElapsedTime", sec, true);
+  } else if (isIdle && finish > 0) {
+    // Idle 状態で終了時刻のみ取得できたケース
+    if (!tsCompleteStart) {
+      tsCompleteStart = finish * 1000;
+    }
+    const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
+    setStoredData("completionElapsedTime", sec, true);
+  } else if (isIdle && finish === 0) {
+    // Idle かつ終了時刻すら無い場合は今から計測
     if (!tsCompleteStart) {
       tsCompleteStart = nowMs;
       setStoredData("completionElapsedTime", 0, true);
@@ -344,6 +370,7 @@ function aggregateTimersAndPredictions(data) {
       setStoredData("completionElapsedTime", sec, true);
     }
   } else if (tsCompleteStart) {
+    // その他の状態に遷移したらリセット
     tsCompleteStart = null;
     setStoredData("completionElapsedTime", null, true);
   }
@@ -504,7 +531,8 @@ export function restoreAggregatorState() {
     "tsPauseStart","totalPauseSec",
     "tsCompleteStart",
     "actualStartEpoch",
-    "initialLeftSec","initialLeftEpoch"
+    "initialLeftSec","initialLeftEpoch",
+    "prevPrintID"
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
@@ -530,6 +558,7 @@ export function restoreAggregatorState() {
       case "actualStartEpoch": actualStartEpoch = v; break;
       case "initialLeftSec":   initialLeftSec   = v; break;
       case "initialLeftEpoch": initialLeftEpoch = v; break;
+      case "prevPrintID":      prevPrintID      = v; break;
     }
     // storedData にも復元
     let field = k;
@@ -540,6 +569,7 @@ export function restoreAggregatorState() {
     if (k === "actualStartEpoch")  field = "actualStartTime";
     if (k === "initialLeftSec")    field = "initialLeftTime";
     if (k === "initialLeftEpoch")  field = "initialLeftAt";
+    if (k === "prevPrintID")      field = "prevPrintID";
     setStoredData(field, v, true);
   });
 }
@@ -561,7 +591,8 @@ export function persistAggregatorState() {
     tsPauseStart, totalPauseSec,
     tsCompleteStart,
     actualStartEpoch,
-    initialLeftSec, initialLeftEpoch
+    initialLeftSec, initialLeftEpoch,
+    prevPrintID
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;
