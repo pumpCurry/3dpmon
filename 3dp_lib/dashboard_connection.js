@@ -201,10 +201,12 @@ function handleSocketMessage(event) {
     // 印刷履歴の再取得・保存・レンダリング は各モジュールで行われています
     // （dashboard_printManager.js 側で実装）
     if (Array.isArray(data.historyList)) {
+      pushLog("historyList を受信しました", "info");
       const baseUrl = `http://${getDeviceIp()}:80`;
       printManager.updateHistoryList(data.historyList, baseUrl);
     }
     if (Array.isArray(data.elapseVideoList)) {
+      pushLog("elapseVideoList を受信しました", "info");
       const baseUrl = `http://${getDeviceIp()}:80`;
       printManager.updateVideoList(data.elapseVideoList, baseUrl);
     }
@@ -218,6 +220,7 @@ function handleSocketMessage(event) {
     // 印刷履歴の再取得・保存・レンダリング は各モジュールで行われています
     // （dashboard_printManager.js 側で実装）
     if (data.retGcodeFileInfo) {
+      pushLog("retGcodeFileInfo を受信しました", "info");
       printManager.renderFileList(data.retGcodeFileInfo, baseUrl);
     }
   } catch (e) {
