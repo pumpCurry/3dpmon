@@ -32,11 +32,26 @@ export function addSpool(data) {
   const spool = {
     id: genId(),
     name: data.name || "",
-    color: data.color || "",
-    material: data.material || "",
+    reelSubName: data.reelSubName || "",
+    materialName: data.materialName || data.material || "",
+    materialSubName: data.materialSubName || "",
+    filamentDiameter: Number(data.filamentDiameter) || 1.75,
+    filamentColor: data.filamentColor || data.color || "#22C55E",
+    reelOuterDiameter: Number(data.reelOuterDiameter) || 200,
+    reelThickness: Number(data.reelThickness) || 68,
+    reelWindingInnerDiameter: Number(data.reelWindingInnerDiameter) || 95,
+    reelCenterHoleDiameter: Number(data.reelCenterHoleDiameter) || 54,
+    reelBodyColor: data.reelBodyColor || "#A1A1AA",
+    reelFlangeTransparency: data.reelFlangeTransparency ?? 0.4,
+    manufacturerName: data.manufacturerName || "",
+    purchasePrice: Number(data.purchasePrice) || 0,
+    density: Number(data.density) || 0,
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
-    deleted: false
+    deleted: false,
+    // old keys for backward compatibility
+    color: data.color || "",
+    material: data.material || ""
   };
   monitorData.filamentSpools.push(spool);
   saveUnifiedStorage();

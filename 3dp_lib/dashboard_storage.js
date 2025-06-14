@@ -18,6 +18,24 @@ import { logManager } from "./dashboard_log_util.js";
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
 
+function applySpoolDefaults(sp) {
+  sp.filamentDiameter ??= 1.75;
+  sp.filamentColor ??= "#22C55E";
+  sp.reelOuterDiameter ??= 200;
+  sp.reelThickness ??= 68;
+  sp.reelWindingInnerDiameter ??= 95;
+  sp.reelCenterHoleDiameter ??= 54;
+  sp.reelBodyColor ??= "#A1A1AA";
+  sp.reelFlangeTransparency ??= 0.4;
+  sp.manufacturerName ??= "";
+  sp.materialName ??= sp.material ?? "";
+  sp.materialSubName ??= "";
+  sp.purchasePrice ??= 0;
+  sp.density ??= 0;
+  sp.reelSubName ??= "";
+  return sp;
+}
+
 /**
  * ローカルストレージ保存時のデバッグログを有効／無効化する。
  *
@@ -112,7 +130,7 @@ export function restoreUnifiedStorage() {
       if (data.appSettings)    monitorData.appSettings    = data.appSettings;
       if (data.machines)       monitorData.machines       = data.machines;
       if (Array.isArray(data.filamentSpools))
-        monitorData.filamentSpools = data.filamentSpools;
+        monitorData.filamentSpools = data.filamentSpools.map(sp => applySpoolDefaults(sp));
       if ("currentSpoolId" in data)
         monitorData.currentSpoolId = data.currentSpoolId;
       _lastSavedJson = saved;
