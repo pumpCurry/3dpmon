@@ -16,7 +16,12 @@ const LEVEL_CONFIG = {
 };
 
 let styleInjected = false;
-/** 最初の呼び出し時に必要な CSS を document.head に注入 */
+/**
+ * 最初の呼び出し時に必要な CSS を document.head に注入します。
+ * 二度目以降は何もしません。
+ *
+ * @returns {void}
+ */
 function injectStyles() {
   if (styleInjected) return;
   styleInjected = true;
@@ -196,6 +201,10 @@ export function showConfirmDialog({
       btns.appendChild(btnCancel);
     }
 
+    /**
+     * ダイアログ要素を除去します。
+     * @returns {void}
+     */
     function cleanup() {
       document.body.removeChild(overlay);
     }
@@ -321,6 +330,11 @@ export function showInputDialog({
 
     inputEl.focus();
 
+    /**
+     * ダイアログ終了処理。
+     * @param {string|null|boolean} result - 入力値または確定フラグ
+     * @returns {void}
+     */
     function finish(result) {
       document.removeEventListener("keydown", finish);
       overlay.remove();

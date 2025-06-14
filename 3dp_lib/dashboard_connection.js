@@ -116,10 +116,10 @@ export function connectWs() {
 }
 
 /**
- * WebSocket が open したときのハンドラ。
- * - heartbeat と aggregatorUpdate の定期実行を開始
- * - reconnectAttempts をリセット
- * - UI を「接続済み」に切り替え
+ * WebSocket が open した際の処理を行います。
+ * heartbeat タイマーと集計タイマーを開始し、
+ * UI を接続済み状態へ更新します。
+ * @returns {void}
  */
 function handleSocketOpen() {
   pushLog("WebSocket接続が確立しました。", "info");
@@ -154,7 +154,8 @@ function handleSocketOpen() {
  * - "ok" は heartbeat 応答として無視
  * - JSON をパースして handleMessage() に渡す
  *
- * @param {MessageEvent} event
+ * @param {MessageEvent} event - 受信イベント
+ * @returns {void}
  */
 function handleSocketMessage(event) {
   // 1) --- 生データ "ok" はスキップ ---
@@ -247,6 +248,7 @@ function handleSocketMessage(event) {
  * エラー情報を pushLog に記録し、コンソールにも出力。
  *
  * @param {Event} error - WebSocket エラーイベント
+ * @returns {void}
  */
 function handleSocketError(error) {
   const msg = "WebSocketエラー: " + (error?.message || String(error));
@@ -260,9 +262,9 @@ function handleSocketError(error) {
  * 接続が閉じられた際、UI の更新および heartbeat タイマーの停止、
  * 自動再接続処理を実施する。
  * WebSocket が close したときのハンドラ。
- * - heartbeat/aggregator タイマーをクリア
- * - ユーザ切断 or 上限超えなら UI を切断状態へ
- * - それ以外は Exponential Backoff で再接続
+ * heartbeat/aggregator タイマーを停止し、
+ * 必要なら再接続を試みます。
+ * @returns {void}
  */
 function handleSocketClose() {
   pushLog("WebSocket接続が閉じられました。", "warn");
@@ -473,6 +475,7 @@ export function sendCommand(method, params = {}) {
  *   接続状態を指定
  * @param {{attempt?: number, max?: number, wait?: number}} [opt={}]
  *   connecting/waiting 時に使用する { attempt, max, wait }
+ * @returns {void}
  */
 export function updateConnectionUI(state, opt = {}) {
   const ipInput       = document.getElementById("destination-input");
@@ -487,6 +490,10 @@ export function updateConnectionUI(state, opt = {}) {
   const hostOnly = rawDest.split(":")[0] || "";
 
   // 入力欄を隠し・無効化
+  /**
+   * IPアドレス入力欄を非表示にして無効化します。
+   * @returns {void}
+   */
   function hideInput() {
     if (ipInput) {
       ipInput.classList.add("hidden");
@@ -495,6 +502,10 @@ export function updateConnectionUI(state, opt = {}) {
   }
 
   // 入力欄を表示・有効化し、値を復元
+  /**
+   * IPアドレス入力欄を表示し、保存値を復元します。
+   * @returns {void}
+   */
   function showInput() {
     if (ipInput) {
       ipInput.classList.remove("hidden");
@@ -504,6 +515,10 @@ export function updateConnectionUI(state, opt = {}) {
   }
 
   // ミュート中タグを隠す
+  /**
+   * ミュート表示タグを非表示にします。
+   * @returns {void}
+   */
   function hideMute() {
     if (muteTag) {
       muteTag.classList.add("hidden");
@@ -587,6 +602,7 @@ export function updateConnectionUI(state, opt = {}) {
 /**
  * Debug helper: treat a raw JSON string as a received WebSocket message.
  * @param {string} jsonStr - JSON text to process
+ * @returns {void}
  */
 export function simulateReceivedJson(jsonStr) {
   handleSocketMessage({ data: jsonStr });

@@ -1,33 +1,70 @@
 "use strict";
 
+/**
+ * @fileoverview
+ * フィラメントスプールの一覧と選択状態を管理するモジュール。
+ * CRUD 操作と使用量の更新を担当します。
+ */
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 
+/**
+ * 一意なスプールIDを生成します。
+ * @returns {string} 生成されたID文字列
+ */
 function genId() {
   return `spool_${Date.now()}_${Math.random().toString(16).slice(2,8)}`;
 }
 
+/**
+ * スプール一覧を取得します。
+ * @param {boolean} [includeDeleted=false] - 削除フラグの立ったスプールも含める場合は true
+ * @returns {Array<Object>} スプールオブジェクト配列
+ */
 export function getSpools(includeDeleted = false) {
   return includeDeleted ? monitorData.filamentSpools : monitorData.filamentSpools.filter(s => !s.deleted);
 }
 
+/**
+ * 指定IDのスプールを取得します。
+ * @param {string} id - スプールID
+ * @returns {Object|null} 見つかったスプール、存在しない場合 null
+ */
 export function getSpoolById(id) {
   return monitorData.filamentSpools.find(s => s.id === id && !s.deleted) || null;
 }
 
+/**
+ * 現在選択中のスプールIDを返します。
+ * @returns {string|null} 選択されていない場合は null
+ */
 export function getCurrentSpoolId() {
   return monitorData.currentSpoolId;
 }
 
+/**
+ * 現在選択中のスプールオブジェクトを返します。
+ * @returns {Object|null} 選択スプール、存在しない場合 null
+ */
 export function getCurrentSpool() {
   return getSpoolById(monitorData.currentSpoolId);
 }
 
+/**
+ * 選択中スプールIDを設定します。
+ * @param {string|null} id - 設定するスプールID
+ * @returns {void}
+ */
 export function setCurrentSpoolId(id) {
   monitorData.currentSpoolId = id;
   saveUnifiedStorage();
 }
 
+/**
+ * 新しいスプールを追加します。
+ * @param {Object} data - 追加するスプール情報
+ * @returns {Object} 追加されたスプールオブジェクト
+ */
 export function addSpool(data) {
   const spool = {
     id: genId(),
@@ -65,6 +102,12 @@ export function addSpool(data) {
   return spool;
 }
 
+/**
+ * 既存スプールの情報を更新します。
+ * @param {string} id - 更新対象スプールID
+ * @param {Object} patch - 更新するプロパティ群
+ * @returns {void}
+ */
 export function updateSpool(id, patch) {
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
@@ -72,6 +115,11 @@ export function updateSpool(id, patch) {
   saveUnifiedStorage();
 }
 
+/**
+ * スプールを論理削除します。
+ * @param {string} id - 削除対象ID
+ * @returns {void}
+ */
 export function deleteSpool(id) {
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
@@ -80,6 +128,11 @@ export function deleteSpool(id) {
   saveUnifiedStorage();
 }
 
+/**
+ * 現在選択中のスプールの残量を減らします。
+ * @param {number} lengthMm - 使用したフィラメント長(mm)
+ * @returns {void}
+ */
 export function useFilament(lengthMm) {
   const s = getCurrentSpool();
   if (!s) return;

@@ -18,6 +18,11 @@ import { logManager } from "./dashboard_log_util.js";
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
 
+/**
+ * スプールオブジェクトに不足フィールドの初期値を設定します。
+ * @param {Object} sp - スプール情報
+ * @returns {Object} 補完後の同オブジェクト
+ */
 function applySpoolDefaults(sp) {
   sp.filamentDiameter ??= 1.75;
   sp.filamentColor ??= "#22C55E";

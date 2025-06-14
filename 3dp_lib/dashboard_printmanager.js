@@ -807,6 +807,12 @@ export function setupUploadUI() {
 
   let currentFile = null;
 
+  /**
+   * 進捗バーを更新します。
+   * @param {number} loaded - 読み込み済みバイト数
+   * @param {number} total  - 総バイト数
+   * @returns {void}
+   */
   function updateProgress(loaded, total) {
     if (!total) { percentEl.textContent = "0%"; return; }
     const pct = Math.floor((loaded / total) * 100);
@@ -815,9 +821,16 @@ export function setupUploadUI() {
     percentEl.textContent = `${pct}% (残り ${remainMb}MB)`;
   }
 
+  /** 表示用の進捗バーを表示します。 */
   function showProgress() { progress.classList.remove("hidden"); }
+  /** 進捗バーを非表示にし値をリセットします。 */
   function hideProgress() { progress.classList.add("hidden"); updateProgress(0,0); }
 
+  /**
+   * File オブジェクトを読み込みテキストを返します。
+   * @param {File} file - 読み込むファイル
+   * @returns {Promise<string>} 読み込み結果のテキスト
+   */
   function readFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -830,6 +843,11 @@ export function setupUploadUI() {
     });
   }
 
+  /**
+   * GCode 内に埋め込まれた PNG サムネイルを抽出します。
+   * @param {string} text - GCode ファイル内容
+   * @returns {string|null} dataURI 形式の PNG 文字列
+   */
   function extractThumb(text) {
     const lines = text.split(/\r?\n/);
     const s = lines.findIndex(l => /^\s*;\s*png begin/.test(l));
@@ -839,6 +857,11 @@ export function setupUploadUI() {
     return `data:image/png;base64,${b64}`;
   }
 
+  /**
+   * アップロード前の確認ダイアログを表示します。
+   * @param {File} file - 選択されたファイル
+   * @returns {Promise<void>}
+   */
   async function prepareAndConfirm(file) {
     currentFile = file;
     btn.disabled = true;
@@ -877,6 +900,11 @@ export function setupUploadUI() {
     }
   }
 
+  /**
+   * XMLHttpRequest を用いてファイルを送信します。
+   * @param {File} file - アップロード対象
+   * @returns {void}
+   */
   function uploadFile(file) {
     btn.disabled = true;
     showProgress();
@@ -977,7 +1005,12 @@ export function initHistoryTabs() {
   });
 }
 
-/** --- 2) fileInfo テキストをパースして配列に --- */
+/**
+ * ファイル一覧テキストをパースし表示用オブジェクト配列を返します。
+ * @param {string} text - "path:filename:size:layer:mtime:expect:thumb" の ';' 区切り文字列
+ * @param {string} baseUrl - サムネイル取得用ベースURL
+ * @returns {Array<Object>} 解析結果配列
+ */
 function parseFileInfo(text, baseUrl) {
   // 各ファイル情報は「;」区切り
   return text.split(";").filter(s=>s).map((entry, idx) => {
@@ -1061,7 +1094,12 @@ export function renderFileList(info, baseUrl) {
   pushLog("[renderFileList] UI へ反映しました", "info");
 }
 
-/** --- 4) 汎用ソート関数 --- */
+/**
+ * 任意テーブルの列をクリックソートします。
+ * @param {string} selector - テーブル要素のセレクタ
+ * @param {string} key - ソート対象セルの data-key
+ * @returns {void}
+ */
 function sortTable(selector, key) {
   const table = document.querySelector(selector);
   const tbody = table.querySelector("tbody");

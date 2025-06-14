@@ -229,7 +229,10 @@ const tsErrorEl    = document.getElementById("last-notification-timestamp");
 let isAutoScrollEnabled = true;
 let lastActiveTab       = "received";
 
-/** (A) 自動スクロール ON/OFF の検知 */
+/**
+ * ログ表示領域の自動スクロール設定を監視します。
+ * @returns {void}
+ */
 function initAutoScrollHandlers() {
   [receivedBox, notifBox].forEach(box => {
     box.addEventListener("scroll", () => {
@@ -239,7 +242,10 @@ function initAutoScrollHandlers() {
   });
 }
 
-/** (B) タブ切り替え時の表示切り替え＋スクロール復帰 */
+/**
+ * ログ/通知タブ切り替え時の表示調整を行います。
+ * @returns {void}
+ */
 function initTabHandlers() {
   tabReceived.addEventListener("click", () => {
     lastActiveTab = "received";
@@ -269,7 +275,10 @@ function initTabHandlers() {
 }
 
 /**
- * 外部から一度だけ呼び出すイニシャライザ
+ * 外部から一度だけ呼び出すイニシャライザです。
+ * 各種 UI イベントハンドラの登録を行います。
+ *
+ * @returns {void}
  */
 export function initUIEventHandlers() {
   initAutoScrollHandlers();

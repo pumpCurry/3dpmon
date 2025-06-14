@@ -1,5 +1,10 @@
 "use strict";
 
+/**
+ * @fileoverview
+ * ダウンロードした動画を再生するオーバーレイUIを提供します。
+ * 進捗表示と保存ボタンを備えています。
+ */
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 /**
@@ -37,7 +42,12 @@ export async function showVideoOverlay(url) {
   const btnSave    = overlay.querySelector(".video-save");
   const btnBack    = overlay.querySelector(".video-back");
 
-  /** 進捗バー更新 */
+  /**
+   * 進捗バーを更新します。
+   * @param {number} loaded - 受信済みバイト数
+   * @param {number} total - 総バイト数
+   * @returns {void}
+   */
   const updateProgress = (loaded, total) => {
     if (!total) return;
     const pct = Math.floor((loaded / total) * 100);

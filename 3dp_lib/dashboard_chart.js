@@ -165,7 +165,8 @@ function filterOldData(arr, now) {
 }
 
 /**
- * Chart.jsの更新を間引き制御（スロットリング）して呼び出す
+ * Chart.js の update 呼び出し回数を間引きます。
+ * @returns {void}
  */
 function scheduleChartUpdate() {
   const now = Date.now();

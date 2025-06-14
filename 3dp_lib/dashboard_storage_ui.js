@@ -41,6 +41,12 @@ function panelToast(msg, isErr = false) {
 /* ------------------------------------------------------------------ */
 document.addEventListener("DOMContentLoaded", initStorageUI);
 
+/**
+ * ストレージ情報パネルを初期化します。
+ * DOM 要素の取得とイベントリスナー登録を行います。
+ *
+ * @returns {void}
+ */
 function initStorageUI() {
   // DOM キャッシュ
   const elPanel = document.getElementById("storage-panel");
@@ -142,7 +148,9 @@ function initStorageUI() {
 /* ------------------------------------------------------------------ */
 
 /**
- * ストレージ使用量とクォータを取得し、UI に表示
+ * ストレージ使用量とクォータを取得し UI に反映します。
+ *
+ * @returns {Promise<void>} 更新完了を示す Promise
  */
 async function updateUsage() {
   try {
@@ -160,26 +168,43 @@ async function updateUsage() {
   }
 }
 
-/** 最終同期時刻を更新 */
+/**
+ * 最終同期時刻を更新します。
+ *
+ * @param {number} ts - UNIX エポックミリ秒
+ * @returns {void}
+ */
 function updateSyncTime(ts) {
   const elSync = document.getElementById("storage-last-sync");
   if (!elSync) return;
   elSync.textContent = new Date(ts).toLocaleString();
 }
 
-/** 使用量ライブ更新開始（2 秒ごと） */
+/**
+ * 使用量ライブ更新を開始します。
+ * 2 秒ごとに updateUsage() を呼び出します。
+ *
+ * @returns {void}
+ */
 function startLiveUsage() {
   if (liveTimer) return;
   liveTimer = setInterval(updateUsage, 2000);
 }
 
-/** 使用量ライブ更新停止 */
+/**
+ * 使用量ライブ更新を停止します。
+ * @returns {void}
+ */
 function stopLiveUsage() {
   clearInterval(liveTimer);
   liveTimer = null;
 }
 
-/** クォータテスト */
+/**
+ * ローカルストレージの最大書込量を計測します。
+ *
+ * @returns {Promise<void>} 計測完了を示す Promise
+ */
 async function handleQuotaTest() {
   const btnTest = document.getElementById("storage-quota-test-btn");
   if (!btnTest) return;
@@ -200,7 +225,12 @@ async function handleQuotaTest() {
   }
 }
 
-/** バイト数を “X.XX MiB” に変換 */
+/**
+ * バイト数を "X.XX MiB" 形式に変換します。
+ *
+ * @param {number} b - バイト数
+ * @returns {string} フォーマット済み文字列
+ */
 function formatBytes(b) {
   return (b / 1024 / 1024).toFixed(2) + " MiB";
 }

@@ -1,3 +1,7 @@
+/**
+ * @fileoverview
+ * 素材ごとの推奨温度や密度をまとめた定数テーブル。
+ */
 "use strict";
 
 export const MATERIAL_SPECS = {

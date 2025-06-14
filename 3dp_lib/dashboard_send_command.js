@@ -276,10 +276,12 @@ export function initializeCommandPalette() {
 }
 
 /**
- * ファン／LED トグル & スライダー制御を初期化します
+ * ファンおよび LED 制御 UI を初期化します。
  *
- * • トグル（change）→ {"method":"set","params":{param:0|1}}
- * • スライダー（mouseup）→ {"method":"set","params":{"gcodeCmd":"M106 P<p> S<s>"}} 
+ * - トグル操作で on/off を送信
+ * - スライダー操作で M106 コマンドを送信
+ *
+ * @returns {void}
  */
 function initializeFanControls() {
   // ── トグルのみ 0/1 を送る
@@ -327,11 +329,12 @@ function initializeFanControls() {
 }
 
 /**
- * ノズル／ベッド温度コントロールの初期化
+ * ノズル／ベッド温度コントロールを初期化します。
  *
- * - スライダーは 0–max（max は DOM の data-field="maxXXX" から取得）
- * - テキストボックスは同じ範囲、Enter or blur で送信
- * - 双方向同期で無限ループを防止
+ * - スライダーは data-field から取得した最大値を使用
+ * - テキストボックスとの双方向同期を行い、範囲外入力は補正します。
+ *
+ * @returns {void}
  */
 function initializeTempControls() {
   const configs = [

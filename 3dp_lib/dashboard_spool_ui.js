@@ -1,5 +1,12 @@
 "use strict";
 
+/**
+ * @fileoverview
+ * スプール管理UIを提供するモジュール。
+ * スプール追加・選択・編集ダイアログの描画と
+ * プレビュー更新処理を担当します。
+ */
+
 import {
   getSpools,
   getCurrentSpoolId,
@@ -14,6 +21,10 @@ import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { MATERIAL_SPECS } from "./material_specs.js";
 
 let styleInjected = false;
+/**
+ * スタイルシートを一度だけ DOM に挿入します。
+ * @returns {void}
+ */
 function injectStyles() {
   if (styleInjected) return;
   styleInjected = true;
@@ -39,6 +50,11 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
+/**
+ * スプール編集/追加ダイアログを表示します。
+ * @param {{title?: string, spool?: Object}} param0 - 表示オプション
+ * @returns {Promise<Object|null>} 入力結果オブジェクトまたは null
+ */
 function showSpoolDialog({ title = "", spool = {} }) {
   injectStyles();
   return new Promise(resolve => {
@@ -106,20 +122,29 @@ function showSpoolDialog({ title = "", spool = {} }) {
       if (ok) { cleanup(); resolve(null); }
     });
 
+    /**
+     * ダイアログ要素を除去します。
+     * @returns {void}
+     */
     function cleanup() { overlay.remove(); }
   });
 }
 
 document.addEventListener("DOMContentLoaded", initSpoolUI);
 
+/**
+ * スプールUIを初期化します。
+ * @returns {void}
+ */
 function initSpoolUI() {
   const listEl = document.getElementById("spool-list");
   const addBtn = document.getElementById("spool-add-btn");
   if (!listEl || !addBtn) return;
 
   /**
-   * 現在選択中のスプール情報をプレビューに反映
-   * @param {Object} sp スプールデータ
+   * 現在選択中のスプール情報をプレビューに反映します。
+   * @param {Object} sp - スプールデータ
+   * @returns {void}
    */
   function updatePreview(sp) {
     const fp = window.filamentPreview;
@@ -144,6 +169,10 @@ function initSpoolUI() {
       fp.setRemainingLength(sp.remainingLengthMm);
   }
 
+  /**
+   * スプール一覧を描画します。
+   * @returns {void}
+   */
   function render() {
     const spools = getSpools();
     listEl.innerHTML = "";

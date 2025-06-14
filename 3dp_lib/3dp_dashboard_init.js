@@ -1,6 +1,6 @@
 /**
  * @fileoverview
- * dashboard_storage.js (v1.331)
+ * 3dp_dashboard_init.js (v1.331)
  *
  * - initializeDashboard(): ダッシュボード初期化
  * - restorePrintResume(): 印刷再開用データ復元

@@ -1,8 +1,8 @@
 /**
- * 印刷ステート履歴を保持し、状態変化に応じて通知・ログ出力を行うユーティリティ
- * 
- * - 状態履歴は最大4つまで記録
- * - 特定のステート遷移に対して通知を出す
+ * @fileoverview
+ * 印刷ステータスの履歴管理と通知トリガーを提供するユーティリティ。
+ *
+ * - 履歴を最大4件保持し、変化時に通知を発火します。
  */
 
 const MAX_HISTORY_LENGTH = 4;
@@ -30,7 +30,9 @@ const transitionMessages = {
 let stateHistory = [];
 
 /**
- * ステート履歴をクリアする
+ * ステート履歴をクリアします。
+ *
+ * @returns {void}
  */
 function resetStateHistory() {
   stateHistory.length = 0;

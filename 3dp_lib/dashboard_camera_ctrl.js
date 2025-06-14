@@ -203,7 +203,8 @@ export function handleCameraError() {
  * _connectImgStream
  * 実際に <img> の src を切り替えてストリームを開始／再接続します。
  *
- * @param {string} host
+ * @param {string} host - 接続先ホスト
+ * @returns {void}
  */
 function _connectImgStream(host) {
   if (userRequestedDisconnect) return;

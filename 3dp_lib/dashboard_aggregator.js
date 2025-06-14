@@ -69,8 +69,9 @@ let prevMaterialStatus           = null;
  *
  * @param {object} data  - WebSocket で受信した生データ
  *
- *   - WebSocket で受信した生データオブジェクト。  
+ *   - WebSocket で受信した生データオブジェクト。
  *     各フィールドは undefined, null, 数値, 文字列など多様。
+ * @returns {void}
  */
 export function ingestData(data) {
   const nowMs  = Date.now();
@@ -249,6 +250,9 @@ export function ingestData(data) {
  *   formatDuration() で「hh:mm:ss(秒)」表記
  * - 予想終了時刻など epoch 値は formatEpochToDateTime() で日付文字列化
  * - rawValue=true （内部計算用）と rawValue=false（表示用 computedValue）を両方セット
+ *
+ * @param {object} data - 受信データオブジェクト
+ * @returns {void}
  */
 function aggregateTimersAndPredictions(data) {
   const nowMs  = Date.now();
@@ -417,6 +421,8 @@ function aggregateTimersAndPredictions(data) {
  *   - 差分主導で再計算／表示更新
  *   - 温度グラフ更新
  *   - 永続化
+ *
+ * @returns {void}
  */
 export function aggregatorUpdate() {
 
@@ -520,6 +526,7 @@ export function aggregatorUpdate() {
  * restoreAggregatorState:
  *   localStorage に保存された集約状態を読み出し、
  *   内部タイマー変数と storedData を復元します。
+ * @returns {void}
  */
 export function restoreAggregatorState() {
   const host = currentHostname;
@@ -577,6 +584,7 @@ export function restoreAggregatorState() {
 /**
  * persistAggregatorState:
  *   現在の集約状態を localStorage に保存します。
+ * @returns {void}
  */
 export function persistAggregatorState() {
   const host = currentHostname;
@@ -616,6 +624,7 @@ export function persistAggregatorState() {
  *   - 既存タイマーをクリア（後勝ち）
  *   - monitorData.appSettings.updateInterval を
  *     1000ms 以上に補正して集約ループを開始
+ * @returns {void}
  */
 export function restartAggregatorTimer() {
   if (aggregatorTimer !== null) clearInterval(aggregatorTimer);
@@ -640,6 +649,7 @@ export function restartAggregatorTimer() {
 /**
  * stopAggregatorTimer:
  *   - 集約ループを停止
+ * @returns {void}
  */
 export function stopAggregatorTimer() {
   if (aggregatorTimer !== null) {

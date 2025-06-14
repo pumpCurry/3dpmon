@@ -1,3 +1,8 @@
+/**
+ * @fileoverview
+ * フィラメントリールを描画するスタンドアロンのプレビューモジュール。
+ * ダッシュボード外からも利用可能な軽量ウィジェットです。
+ */
 /* -----------------------------------------------------------------------
    dashboard_filament_view.js  (2025-06)
    Stand-Alone Filament Reel Preview
@@ -86,6 +91,12 @@
 /* --------------------------------------------------------------------- */
 /*  0.  CSS インジェクション（重複挿入防止）                            */
 /* --------------------------------------------------------------------- */
+/**
+ * スタイルシートを一度だけ DOM に挿入します。
+ * 既に同 ID の要素がある場合は何もしません。
+ *
+ * @returns {void}
+ */
 (function injectCSS() {
   const ID = 'dfv-style';
   if (document.getElementById(ID)) return;
@@ -258,6 +269,7 @@ function formatHexColor(r, g, b) {
  * @param {number} a
  * @param {number} b
  * @param {number} c
+ * @returns {number} 正の解。存在しない場合は NaN
  */
 function solveQuadraticPositive(a, b, c) {
   if (Math.abs(a) < 1e-9) return Math.abs(b) > 1e-9 ? -c / b : NaN;
@@ -283,6 +295,8 @@ function solveQuadraticPositive(a, b, c) {
  * @param {number} h   層ピッチ[mm]
  * @param {number} A   円周長定数
  * @param {number} windingInnerDia
+ * @returns {{Nf:number,Nfull:number,f:number,Dfloor:number,Dnext:number}}
+ *   計算結果オブジェクト
  */
 function calcMetrics(L, d, r0, h, A, windingInnerDia) {
   if (L <= 1e-6) {

@@ -135,11 +135,13 @@ export function initLogAutoScroll(containerEl) {
   let scheduled = false;
   const SCROLL_THRESHOLD_PX = 50;
 
+  /** 現在スクロール位置が末尾付近か判定します。 */
   function isScrolledCloseToBottom() {
     if (containerEl.scrollHeight <= containerEl.clientHeight) return true;
     return (containerEl.scrollHeight - (containerEl.scrollTop + containerEl.clientHeight)) < SCROLL_THRESHOLD_PX;
   }
 
+  /** rAF 経由でスクロール追従を実行します。 */
   function updateScroll() {
     scheduled = false;
     if (isScrolledCloseToBottom()) {
@@ -147,6 +149,7 @@ export function initLogAutoScroll(containerEl) {
     }
   }
 
+  /** スクロール更新を予約します。 */
   function requestUpdate() {
     if (!scheduled) {
       scheduled = true;
@@ -154,6 +157,7 @@ export function initLogAutoScroll(containerEl) {
     }
   }
 
+  /** 登録したイベントリスナーを解除します。 */
   function cleanup() {
     containerEl.removeEventListener("scroll", requestUpdate);
     window.removeEventListener("resize", requestUpdate);
@@ -196,6 +200,8 @@ export function initLogRenderer(containerEl) {
    * 自動スクロールを制御します。
    *
    * @param {{ level: string, timestamp: string, msg: string }} entry
+   *   追加するログデータ
+   * @returns {void}
    */
   function appendLog(entry) {
     // スクロール位置が最下部付近かを判定
