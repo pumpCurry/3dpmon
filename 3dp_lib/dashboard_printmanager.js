@@ -56,7 +56,20 @@ function makeThumbUrl(baseUrl, rawFilename) {
  * 生の履歴エントリをモデル化
  * @param {Object} raw           - 元データ
  * @param {string} baseUrl       - サムネイル取得用ベース URL
- * @returns {{id:number,filename:string,startTime:string,finishTime?:string|null,materialUsedMm:number,thumbUrl:string}}
+ * @returns {{
+ *   id:number,
+ *   filename:string,
+ *   startTime:string,
+ *   finishTime?:string|null,
+ *   materialUsedMm:number,
+ *   thumbUrl:string,
+ *   preparationTime?:number,
+ *   firstLayerCheckTime?:number,
+ *   pauseTime?:number,
+ *   filamentId?:string,
+ *   filamentColor?:string,
+ *   filamentType?:string
+ * }}
  */
 export function parseRawHistoryEntry(raw, baseUrl) {
   const id             = raw.id;
@@ -73,8 +86,27 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   // raw.filename に基づくサムネイル生成
   const thumbUrl       = makeThumbUrl(baseUrl, raw.filename);
 
+  const preparationTime     = raw.preparationTime;
+  const firstLayerCheckTime = raw.firstLayerCheckTime;
+  const pauseTime           = raw.pauseTime;
+  const filamentId          = raw.filamentId;
+  const filamentColor       = raw.filamentColor;
+  const filamentType        = raw.filamentType;
 
-  return { id, filename, startTime, finishTime, materialUsedMm, thumbUrl };
+  return {
+    id,
+    filename,
+    startTime,
+    finishTime,
+    materialUsedMm,
+    thumbUrl,
+    preparationTime,
+    firstLayerCheckTime,
+    pauseTime,
+    filamentId,
+    filamentColor,
+    filamentType
+  };
 }
 
 /**
