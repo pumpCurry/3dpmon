@@ -5,6 +5,7 @@
 
 const containerId = 'filemanager-history';
 const STORAGE_KEY = '3dp-filemanager-history';
+const MAX_HISTORY = 150;
 
 /**
  * @typedef {Object} HistoryEntry
@@ -85,7 +86,23 @@ export const FileManager = {
   saveFromPrinterData({ historyList, elapseVideoList }) {
     const history = historyList?.rawValue || [];
     const videos  = elapseVideoList?.rawValue || [];
-    _saveHistoryData(history, videos);
+    const stored = _loadHistoryData();
+
+    const histMap = new Map(stored.historyList.map(h => [h.id, h]));
+    history.forEach(h => {
+      if (h && h.id != null) histMap.set(h.id, h);
+    });
+    const mergedHistory = Array.from(histMap.values())
+      .sort((a, b) => b.id - a.id)
+      .slice(0, MAX_HISTORY);
+
+    const videoMap = new Map(stored.elapseVideoList.map(v => [v.id, v]));
+    videos.forEach(v => {
+      if (v && v.id != null) videoMap.set(v.id, v);
+    });
+    const mergedVideos = Array.from(videoMap.values());
+
+    _saveHistoryData(mergedHistory, mergedVideos);
     this.render();
   },
 
