@@ -28,7 +28,10 @@ const STAGE_SIZE_MM = 300;
 const STAGE_SCALE = 0.5;
 
 /**
- * XYプレビューをlocalStorageから復元
+ * localStorage から保存済みの XY プレビュー情報を読み込み、
+ * 各種履歴データを復元する。
+ *
+ * @returns {void}
  */
 function restoreXYPreviewState() {
   try {
@@ -45,7 +48,9 @@ function restoreXYPreviewState() {
 }
 
 /**
- * XYプレビュー状態をlocalStorageへ保存
+ * 現在の XY プレビュー履歴情報を localStorage へ保存する。
+ *
+ * @returns {void}
  */
 function saveXYPreviewState() {
   const obj = {
@@ -61,7 +66,8 @@ function saveXYPreviewState() {
 }
 
 /**
- * 保存されているXY履歴をDOM上へ復元する
+ * 保存済みの XY 履歴を画面上のドットへ展開し、
+ * 表示状態を復元する。
  *
  * @returns {void}
  */
@@ -83,7 +89,10 @@ function restoreXYHistoryDots() {
 }
 
 /**
- * XYプレビューの初期化(背景格子, ラベル, ドット生成)
+ * XY ステージの背景格子やラベル、履歴表示用ドットなど
+ * 初期描画を行う。
+ *
+ * @returns {void}
  */
 function initXYPreview() {
   const container = document.getElementById("xy-stage");
@@ -236,9 +245,12 @@ function initXYPreview() {
 }
 
 /**
- * XYプレビューを更新する(即時呼び出し)
- * @param {number} x
- * @param {number} y
+ * 渡された X,Y 座標を元に XY プレビューの現在位置および
+ * 履歴ドットを更新する。
+ *
+ * @param {number} x - X 座標値(mm)
+ * @param {number} y - Y 座標値(mm)
+ * @returns {void}
  */
 function updateXYPreview(x, y) {
   if (!xyInitialized) {
@@ -273,8 +285,10 @@ function updateXYPreview(x, y) {
 }
 
 /**
- * Zプレビュー更新(即時呼び出し)
- * @param {number} z
+ * Z 軸の進捗バーおよび数値表示を更新する。
+ *
+ * @param {number} z - Z 座標値(mm)
+ * @returns {void}
  */
 function updateZPreview(z) {
   const scale = 0.5;
@@ -291,6 +305,12 @@ function updateZPreview(z) {
   }
 }
 
+/**
+ * 現在保持している回転値を DOM に反映させ、
+ * ステージの傾きと回転を更新する。
+ *
+ * @returns {void}
+ */
 function applyStageTransform() {
   const container = document.getElementById("xy-stage");
   if (container) {
@@ -300,12 +320,22 @@ function applyStageTransform() {
   }
 }
 
+/**
+ * ステージを真上から見た角度にリセットする。
+ *
+ * @returns {void}
+ */
 function setTopView() {
   stageRotX = 0;
   stageRotZ = 0;
   applyStageTransform();
 }
 
+/**
+ * カメラ視点からの角度に設定する。
+ *
+ * @returns {void}
+ */
 function setCameraView() {
   stageRotX = 50;
   stageRotZ = 50;
@@ -313,6 +343,11 @@ function setCameraView() {
 }
 
 // --- 新しい固定アングル ---
+/**
+ * ステージを完全な俯瞰状態にし、Z スピンも停止する。
+ *
+ * @returns {void}
+ */
 function setFlatView() {
   stopZSpin();
   stageRotX = 0;
@@ -320,6 +355,12 @@ function setFlatView() {
   applyStageTransform();
 }
 
+/**
+ * 45 度の傾きを持つ斜め視点に設定する。
+ * Z スピンは停止される。
+ *
+ * @returns {void}
+ */
 function setTilt45View() {
   stopZSpin();
   stageRotX = 45;
@@ -327,6 +368,12 @@ function setTilt45View() {
   applyStageTransform();
 }
 
+/**
+ * 斜め上から見下ろす視点に設定する。
+ * Z スピンは停止される。
+ *
+ * @returns {void}
+ */
 function setObliqueView() {
   stopZSpin();
   stageRotX = 65;
@@ -335,6 +382,12 @@ function setObliqueView() {
 }
 
 let spinTimer = null;
+/**
+ * スピンボタンの状態を切り替える。
+ *
+ * @param {boolean} active - ボタンをアクティブ表示にするかどうか
+ * @returns {void}
+ */
 function updateSpinButton(active) {
   const btn = document.getElementById("btn-stage-spin");
   if (!btn) return;
@@ -345,6 +398,11 @@ function updateSpinButton(active) {
   }
 }
 
+/**
+ * Z スピンを停止し、タイマーをクリアする。
+ *
+ * @returns {void}
+ */
 function stopZSpin() {
   if (spinTimer) {
     clearInterval(spinTimer);
@@ -352,6 +410,11 @@ function stopZSpin() {
     updateSpinButton(false);
   }
 }
+/**
+ * Z スピンの開始と停止をトグルする。
+ *
+ * @returns {void}
+ */
 function toggleZSpin() {
   if (spinTimer) {
     stopZSpin();
