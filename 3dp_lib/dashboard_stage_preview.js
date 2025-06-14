@@ -260,4 +260,49 @@ function setCameraView() {
   applyStageTransform();
 }
 
-export { restoreXYPreviewState, saveXYPreviewState, initXYPreview, updateXYPreview, updateZPreview, applyStageTransform, setTopView, setCameraView };
+// --- 新しい固定アングル ---
+function setFlatView() {
+  stageRotX = 0;
+  stageRotZ = 0;
+  applyStageTransform();
+}
+
+function setTilt45View() {
+  stageRotX = 45;
+  stageRotZ = 0;
+  applyStageTransform();
+}
+
+function setObliqueView() {
+  stageRotX = 65;
+  stageRotZ = 72.5;
+  applyStageTransform();
+}
+
+let spinTimer = null;
+function toggleZSpin() {
+  if (spinTimer) {
+    clearInterval(spinTimer);
+    spinTimer = null;
+  } else {
+    spinTimer = setInterval(() => {
+      stageRotZ = (stageRotZ + 2) % 360;
+      applyStageTransform();
+    }, 100);
+  }
+}
+
+export {
+  restoreXYPreviewState,
+  saveXYPreviewState,
+  initXYPreview,
+  updateXYPreview,
+  updateZPreview,
+  applyStageTransform,
+  setTopView,
+  setCameraView,
+  setFlatView,
+  setTilt45View,
+  setObliqueView,
+  toggleZSpin
+};

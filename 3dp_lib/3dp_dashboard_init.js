@@ -24,7 +24,11 @@ import {
 } from "./dashboard_data.js";
 import {
   restoreXYPreviewState,
-  initXYPreview
+  initXYPreview,
+  setFlatView,
+  setTilt45View,
+  setObliqueView,
+  toggleZSpin
 } from "./dashboard_stage_preview.js";
 import {
   initLogAutoScroll,
@@ -105,6 +109,12 @@ export function initializeDashboard({
     filamentPreview = createFilamentPreview(fpMount, opts);
     window.filamentPreview = filamentPreview;
   }
+
+  // ステージ回転ボタン
+  document.getElementById("btn-stage-flat")?.addEventListener("click", setFlatView);
+  document.getElementById("btn-stage-45")?.addEventListener("click", setTilt45View);
+  document.getElementById("btn-stage-65-72")?.addEventListener("click", setObliqueView);
+  document.getElementById("btn-stage-spin")?.addEventListener("click", toggleZSpin);
 
   // (4) ログ描画・自動スクロール設定
   const logBox = document.getElementById("log");

@@ -837,3 +837,16 @@ input:checked + .slider:before {
   border-radius: 4px 4px 0 0;
   border: 1px solid #333;
 }
+
+/* stage rotation control buttons */
+.stage-rotate-buttons {
+  margin-top: 4px;
+}
+.stage-rotate-buttons button {
+  font-size: 12px;
+  padding: 2px 4px;
+  margin-right: 2px;
+}
+.stage-rotate-buttons button:last-child {
+  margin-right: 0;
+}
