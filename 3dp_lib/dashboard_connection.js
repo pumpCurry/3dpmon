@@ -411,6 +411,7 @@ export function disconnectWs() {
 
 /**
  * connect ボタンにクリック時の WebSocket 接続処理をバインドします
+ * @returns {void}
  */
 export function setupConnectButton() {
   const btn = document.getElementById("connect-button");
@@ -422,8 +423,8 @@ export function setupConnectButton() {
 /**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
  * @param {string} method - コマンド名
- * @param {object} params - パラメータ
- * @returns {Promise<object>} サーバー result フィールド
+ * @param {Object} params - パラメータ
+ * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendCommand(method, params = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
