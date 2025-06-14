@@ -485,7 +485,7 @@ input:checked + .slider:before {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 5px;
+  margin-bottom: 0;
 }
 .log-card .tabs {
   display: flex;
@@ -504,6 +504,14 @@ input:checked + .slider:before {
 .log-card .tabs button.active {
   background: #fff;
   font-weight: bold;
+}
+.log-card .tab-content {
+  border: 1px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+}
+.log-card .log-box {
+  border: none;
 }
 .log-controls button {
   font-size: 12px;
@@ -712,8 +720,30 @@ input:checked + .slider:before {
 }
 
 /* 2-tab panels */
-.print-history-card .tabs button.active { background:#444; color:#fff; }
-.print-history-card .tabs button { cursor:pointer; }
+.print-history-card .tabs {
+  display: flex;
+  border-bottom: 1px solid #ccc;
+}
+.print-history-card .tabs button {
+  margin-right: 2px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-bottom: none;
+  background: #eee;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.print-history-card .tabs button.active {
+  background: #fff;
+  font-weight: bold;
+}
+.print-history-card .tab-content {
+  border: 1px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  padding: 0.5rem;
+}
 
 
 /* -------------------------------
