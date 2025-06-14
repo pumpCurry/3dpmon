@@ -605,11 +605,13 @@
         </div>
       </div>
 
-      <!-- ログ表示エリア -->
-      <div id="log" class="log-box"></div>
+      <div class="tab-content">
+        <!-- ログ表示エリア -->
+        <div id="log" class="log-box"></div>
 
-      <!-- 通知表示エリア (hidden 初期表示) -->
-      <div id="notification-history" class="log-box hidden"></div>
+        <!-- 通知表示エリア (hidden 初期表示) -->
+        <div id="notification-history" class="log-box hidden"></div>
+      </div>
     </div>
   </div>
 
@@ -633,8 +635,9 @@
       </div>
     </div>
 
-    <!-- ─── 印刷履歴タブ ─── -->
-    <div id="panel-print-history-tab">
+    <div class="tab-content">
+      <!-- ─── 印刷履歴タブ ─── -->
+      <div id="panel-print-history-tab">
   
       <h2 class="card-title">印刷履歴</h2>
       <div style="font-size:0.9em;">
@@ -688,10 +691,10 @@
           </tbody>
         </table>
       </div>
-    </div>
+      </div>
 
-    <!-- ─── ファイル一覧タブ ─── -->
-    <div id="panel-file-list" class="hidden">
+      <!-- ─── ファイル一覧タブ ─── -->
+      <div id="panel-file-list" class="hidden">
       <div>総ファイル数: <span id="file-list-total">0</span></div>
       <div class="filelist-container scrollable-body">
         <table id="file-list-table" class="fixed-header" style="width:100%; table-layout:auto;">
@@ -710,9 +713,9 @@
           <tbody></tbody>
         </table>
       </div>
-    </div>
+      </div>
 
-  </div>
+    </div>
 
 
   <div id="settings-card" class="card">
