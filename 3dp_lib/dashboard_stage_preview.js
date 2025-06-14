@@ -114,10 +114,13 @@ function initXYPreview() {
   const rightWing = document.createElement("div");
   rightWing.className = "stage-wing right";
   container.appendChild(rightWing);
-  // 下のつまみ
-  const tab = document.createElement("div");
-  tab.className = "stage-tab";
-  container.appendChild(tab);
+  // 下のつまみ（左右それぞれ）
+  const leftTab = document.createElement("div");
+  leftTab.className = "stage-tab left";
+  container.appendChild(leftTab);
+  const rightTab = document.createElement("div");
+  rightTab.className = "stage-tab right";
+  container.appendChild(rightTab);
 
   // 履歴用ドット生成
   for (let i = 0; i < maxDots; i++) {
