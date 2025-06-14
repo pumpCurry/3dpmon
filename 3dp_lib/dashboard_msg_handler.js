@@ -80,8 +80,11 @@ export function handleMessage(data) {
     // ── (1.a) プリンタから直接履歴が送られてきたら即パース＆描画 ──
     if (Array.isArray(data.historyList)) {
       const baseUrl = `http://${getDeviceIp()}`;
-      // fetchStoredData() will give us latestStoredData which contains this data
-      printManager.refreshHistory(fetchStoredData, baseUrl);
+      printManager.updateHistoryList(data.historyList, baseUrl);
+    }
+    if (Array.isArray(data.elapseVideoList)) {
+      const baseUrl = `http://${getDeviceIp()}`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl);
     }
 
 

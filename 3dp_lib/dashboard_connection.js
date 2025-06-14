@@ -202,7 +202,11 @@ function handleSocketMessage(event) {
     // （dashboard_printManager.js 側で実装）
     if (Array.isArray(data.historyList)) {
       const baseUrl = `http://${getDeviceIp()}:80`;
-      printManager.refreshHistory(fetchStoredData, baseUrl);
+      printManager.updateHistoryList(data.historyList, baseUrl);
+    }
+    if (Array.isArray(data.elapseVideoList)) {
+      const baseUrl = `http://${getDeviceIp()}:80`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl);
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
