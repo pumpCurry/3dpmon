@@ -487,10 +487,23 @@ input:checked + .slider:before {
   justify-content: space-between;
   margin-bottom: 5px;
 }
-.tabs button {
-  margin-right: 5px;
+.log-card .tabs {
+  display: flex;
+  border-bottom: 1px solid #ccc;
+}
+.log-card .tabs button {
+  margin-right: 2px;
   font-size: 12px;
-  padding: 2px 4px;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-bottom: none;
+  background: #eee;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.log-card .tabs button.active {
+  background: #fff;
+  font-weight: bold;
 }
 .log-controls button {
   font-size: 12px;
@@ -560,8 +573,6 @@ input:checked + .slider:before {
 #notification-history .notification-entry {
   font-family: Consolas, monospace;
   font-size: 90%;
-  padding: 3px;
-  border-bottom: 1px solid #ccc;
 }
 
 /* ---------------------------------------------------------------
@@ -597,10 +608,8 @@ input:checked + .slider:before {
 .initial-log { background: #eef; }
 .state-log { background-color: #dfd; }
 .notification-entry {
-  background-color: #ffe9e9;
-  padding: 4px 8px;
-  margin-bottom: 4px;
-  border-radius: 3px;
+  margin: 0;
+  padding: 2px 0;
 }
 
 
