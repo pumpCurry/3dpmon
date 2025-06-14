@@ -22,6 +22,11 @@ let stageRotZ = 0;
 const STAGE_ROT_X_MIN = 0;
 const STAGE_ROT_X_MAX = 70;
 
+// XYプレビューのスケール関連定数
+// ステージサイズ（mm）および表示倍率を定数化
+const STAGE_SIZE_MM = 300;
+const STAGE_SCALE = 0.5;
+
 /**
  * XYプレビューをlocalStorageから復元
  */
@@ -53,6 +58,28 @@ function saveXYPreviewState() {
   } catch (e) {
     console.warn("XYプレビュー保存エラー:", e);
   }
+}
+
+/**
+ * 保存されているXY履歴をDOM上へ復元する
+ *
+ * @returns {void}
+ */
+function restoreXYHistoryDots() {
+  const stagePx = STAGE_SIZE_MM * STAGE_SCALE;
+  xyDots.forEach(dot => {
+    dot.style.display = "none";
+  });
+  xyHistory.forEach((pos, idx) => {
+    if (idx >= xyDots.length) return;
+    const screenX = stagePx - (pos.x * STAGE_SCALE);
+    const screenY = pos.y * STAGE_SCALE;
+    const dot = xyDots[idx];
+    dot.style.right = (screenX - 1.5) + "px";
+    dot.style.bottom = (screenY - 1.5) + "px";
+    dot.style.display = "block";
+  });
+  xyUpdateCount = xyHistoryIndex + 1;
 }
 
 /**
@@ -179,7 +206,8 @@ function initXYPreview() {
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
-    stageRotZ = (stageRotZ + dx * 0.5 + 360) % 360;
+    // マウス移動量に応じてZ軸回転値を更新（右ドラッグで右回転）
+    stageRotZ -= dx * 0.5;
     const newX = stageRotX - dy * 0.5;
     stageRotX = Math.min(Math.max(newX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     lastX = e.clientX;
@@ -202,9 +230,9 @@ function initXYPreview() {
   });
 
   applyStageTransform();
+  restoreXYHistoryDots();
 
   xyInitialized = true;
-  xyUpdateCount = 0;
 }
 
 /**
@@ -217,12 +245,9 @@ function updateXYPreview(x, y) {
     initXYPreview();
   }
   // スケール定義
-  const STAGE_SIZE_MM = 300;
-  const SCALE = 0.5;
-
-  const stagePx = STAGE_SIZE_MM * SCALE;
-  const screenX = stagePx - (x * SCALE);
-  const screenY = y * SCALE;
+  const stagePx = STAGE_SIZE_MM * STAGE_SCALE;
+  const screenX = stagePx - (x * STAGE_SCALE);
+  const screenY = y * STAGE_SCALE;
 
   const currentDot = document.getElementById("xy-current-dot");
   const currentCircle = document.getElementById("xy-current-circle");
@@ -270,8 +295,8 @@ function applyStageTransform() {
   const container = document.getElementById("xy-stage");
   if (container) {
     stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
-    stageRotZ = (stageRotZ + 360) % 360;
-    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
+    const rotZ = ((stageRotZ % 360) + 360) % 360;
+    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${rotZ}deg)`;
   }
 }
 
@@ -332,7 +357,8 @@ function toggleZSpin() {
     stopZSpin();
   } else {
     spinTimer = setInterval(() => {
-      stageRotZ = (stageRotZ + 2) % 360;
+      // 連続回転させるため値を増加させ続ける
+      stageRotZ += 2;
       applyStageTransform();
     }, 100);
     updateSpinButton(true);
