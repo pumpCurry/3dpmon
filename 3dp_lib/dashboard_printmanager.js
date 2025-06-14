@@ -434,6 +434,78 @@ export async function refreshHistory(
 }
 
 /**
+ * 履歴リストをマージして更新する。
+ * @param {Array<Object>} rawArray - プリンタから受信した生履歴データ配列
+ * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
+ * @param {string} [currentContainerId="print-current-container"]
+ */
+export function updateHistoryList(
+  rawArray,
+  baseUrl,
+  currentContainerId = "print-current-container"
+) {
+  if (!Array.isArray(rawArray)) return;
+  const newJobs = parseRawHistoryList(rawArray, baseUrl);
+
+  const machine = monitorData.machines[currentHostname];
+  const buf = machine ? machine.historyData : [];
+  const appliedIdx = new Set();
+  if (buf && buf.length) {
+    const bufMap = new Map(buf.map((b, i) => [b.id, { data: b, idx: i }]));
+    newJobs.forEach(job => {
+      const found = bufMap.get(job.id);
+      if (!found) return;
+      Object.entries(found.data).forEach(([k, v]) => {
+        if (k === "id") return;
+        if (v != null && job[k] == null) job[k] = v;
+      });
+      appliedIdx.add(found.idx);
+    });
+    if (machine) {
+      machine.historyData = buf.filter((_, i) => !appliedIdx.has(i));
+    }
+  }
+
+  const oldJobs = loadHistory();
+  const mergedMap = new Map();
+  newJobs.forEach(j => mergedMap.set(j.id, j));
+  oldJobs.forEach(j => {
+    const cur = mergedMap.get(j.id);
+    if (cur) {
+      Object.entries(j).forEach(([k, v]) => {
+        if (cur[k] == null && v != null) cur[k] = v;
+      });
+    } else {
+      mergedMap.set(j.id, j);
+    }
+  });
+  const jobs = Array.from(mergedMap.values())
+    .sort((a, b) => b.id - a.id)
+    .slice(0, MAX_HISTORY);
+
+  const videoMap = loadVideos();
+  jobs.forEach(j => {
+    if (videoMap[j.id]) j.videoUrl = videoMap[j.id];
+  });
+  saveHistory(jobs);
+
+  const prev = loadCurrent();
+  if (jobs[0]?.id !== prev?.id) {
+    saveCurrent(jobs[0]);
+    renderPrintCurrent(document.getElementById(currentContainerId));
+  }
+
+  const rawMap = new Map(rawArray.map(r => [r.id, r]));
+  jobs.forEach(j => {
+    if (!rawMap.has(j.id)) rawMap.set(j.id, jobsToRaw([j])[0]);
+  });
+  const mergedRaw = Array.from(rawMap.values())
+    .sort((a, b) => b.id - a.id)
+    .slice(0, MAX_HISTORY);
+  renderHistoryTable(mergedRaw, baseUrl);
+}
+
+/**
  * 動画リストをマージし履歴に適用する。
  * @param {Array<Object>} videoArray
  * @param {string} baseUrl
@@ -553,7 +625,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
 
   // ソート用リスナ追加
   document.querySelectorAll("#print-history-table th").forEach(th => {
-    th.addEventListener("click", () => sortTable("#print-history-table", th.dataset.key));
+    th.onclick = () => sortTable("#print-history-table", th.dataset.key);
   });
 
 }
