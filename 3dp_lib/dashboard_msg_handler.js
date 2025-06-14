@@ -71,20 +71,38 @@ export function handleMessage(data) {
     cleanupLegacy();
 
     // 接続前に溜めていた分を一気に処理
-    monitorData.temporaryBuffer.forEach(d => processData(d));
+    // historyList / elapseVideoList を保持していた場合は
+    // このタイミングでまとめてマージするため一時配列へ収集
+    const bufHistory = [];
+    const bufVideos  = [];
+    monitorData.temporaryBuffer.forEach(d => {
+      if (Array.isArray(d.historyList)) {
+        bufHistory.push(...d.historyList);
+      }
+      if (Array.isArray(d.elapseVideoList)) {
+        bufVideos.push(...d.elapseVideoList);
+      }
+      processData(d); // 既存データ処理も実行
+    });
     monitorData.temporaryBuffer = [];
 
     // 印刷再開用データの復元
     restoreAggregatorState();
 
-    // ── (1.a) プリンタから直接履歴が送られてきたら即パース＆描画 ──
+    // ── (1.a) 直接受信した履歴データも含めてマージ処理 ──
     if (Array.isArray(data.historyList)) {
-      const baseUrl = `http://${getDeviceIp()}`;
-      printManager.updateHistoryList(data.historyList, baseUrl);
+      bufHistory.push(...data.historyList);
     }
     if (Array.isArray(data.elapseVideoList)) {
-      const baseUrl = `http://${getDeviceIp()}`;
-      printManager.updateVideoList(data.elapseVideoList, baseUrl);
+      bufVideos.push(...data.elapseVideoList);
+    }
+
+    const baseUrl = `http://${getDeviceIp()}`;
+    if (bufHistory.length) {
+      printManager.updateHistoryList(bufHistory, baseUrl);
+    }
+    if (bufVideos.length) {
+      printManager.updateVideoList(bufVideos, baseUrl);
     }
 
 
