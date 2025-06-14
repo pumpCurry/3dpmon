@@ -101,6 +101,11 @@
   @keyframes dfv-blink-light { 0%,100%{opacity:1;transform:scale(1);}50%{opacity:.3;transform:scale(.8);} }
   .dfv-blink-slash { animation: dfv-blink-slash 0.5s infinite alternate ease-in-out; }
   @keyframes dfv-blink-slash { from{opacity:1;} to{opacity:.3;} }
+  /* ─────────── ボタン群ラッパー ─────────── */
+  .dfv-btn-wrapper { margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
+  .dfv-purchase-btn { font-size:1.2em; }
+  .dfv-price { font-weight:bold; margin-left:4px; align-self:center; }
+  .dfv-price-date { font-size:0.8em; color:#666; margin-left:4px; align-self:center; }
 
   /* オーバーレイ */
   .dfv-overlay { position:absolute; top:6px; left:6px; bottom:6px; right:6px; pointer-events:none; z-index:12; }
@@ -210,7 +215,12 @@
  * @property {boolean} [showInfoPercent]             情報欄に残％表示
  * @property {boolean} [showInfoLayers]              情報欄に残レイヤー数表示
  * @property {boolean} [showRotationInfo]            情報欄に回転角度表示
- */
+ * @property {string}  [purchaseLink]                購入先URL
+ * @property {number}  [price]                       価格
+ * @property {string}  [currencySymbol]              通貨記号（例: '¥', '$')
+ * @property {string}  [priceCheckDate]              価格確認日（YYYY-MM-DD）
+ * @property {boolean} [showPurchaseButton]          購入ボタン表示
+*/
 
 /* --------------------------------------------------------------------- */
 /*  2.  ユーティリティ                                                   */
@@ -386,6 +396,11 @@ export function createFilamentPreview(mount, opts) {
     showMaterialColorCode: false,
     manufacturerName: '',
     showManufacturerName: false,
+    purchaseLink:        '',       // 購入先URL
+    price:               0,        // 価格
+    currencySymbol:      '¥',      // 通貨記号
+    priceCheckDate:      '',       // 価格確認日
+    showPurchaseButton:  false,    // 購入ボタン表示
 
   }, opts);
 
@@ -603,6 +618,9 @@ export function createFilamentPreview(mount, opts) {
   const controlsDiv = div('dfv-controls');
   root.appendChild(controlsDiv);
   controlsDiv.appendChild(slider);
+  // ───────── ボタン群のラッパー ─────────
+  const btnWrapper = div('dfv-btn-wrapper');
+  controlsDiv.appendChild(btnWrapper);
 
   // ───────────── ビュー初期化ボタン ─────────────
   let btnReset;
@@ -610,7 +628,7 @@ export function createFilamentPreview(mount, opts) {
     btnReset = document.createElement('button');
     btnReset.textContent = '↩︎';
     btnReset.className = 'dfv-btn';
-    controlsDiv.appendChild(btnReset);
+    btnWrapper.appendChild(btnReset);
 
     btnReset.addEventListener('click', () => {
       // 自動回転を解除
@@ -647,7 +665,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    controlsDiv.appendChild(btnProfile);
+    btnWrapper.appendChild(btnProfile);
   }
   let btnSide;
   if (o.showSideViewButton) {
@@ -669,7 +687,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    controlsDiv.appendChild(btnSide);
+    btnWrapper.appendChild(btnSide);
   }
 
   let btnFront;
@@ -692,7 +710,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    controlsDiv.appendChild(btnFront);
+    btnWrapper.appendChild(btnFront);
   }
 
   // --- Y軸自動回転トグルボタン --- 
@@ -702,7 +720,7 @@ export function createFilamentPreview(mount, opts) {
     btnAuto.textContent = '⟲';
     btnAuto.className = 'dfv-btn';
     btnAuto.title = 'Toggle auto-rotate';
-    controlsDiv.appendChild(btnAuto);
+    btnWrapper.appendChild(btnAuto);
     btnAuto.addEventListener('click', () => {
       if (autoRotate) {
         cancelAnimationFrame(autoRotateId);
@@ -719,6 +737,28 @@ export function createFilamentPreview(mount, opts) {
         })();
       }
     });
+  }
+
+  // ───────────── 購入ボタン＆価格表示 ─────────────
+  if (o.showPurchaseButton && o.purchaseLink) {
+    const btnBuy = document.createElement('button');
+    btnBuy.textContent = '🛒';
+    btnBuy.className = 'dfv-btn dfv-purchase-btn';
+    btnBuy.title = '購入ページを開く';
+    btnBuy.addEventListener('click', () => {
+      window.open(o.purchaseLink, '_blank');
+    });
+    btnWrapper.appendChild(btnBuy);
+
+    const priceSpan = div('dfv-price');
+    priceSpan.textContent = `${o.currencySymbol}${o.price.toLocaleString()}`;
+    btnWrapper.appendChild(priceSpan);
+
+    if (o.priceCheckDate) {
+      const dateSpan = div('dfv-price-date');
+      dateSpan.textContent = o.priceCheckDate;
+      btnWrapper.appendChild(dateSpan);
+    }
   }
 
   /* --- 情報表示用コンテナ ---------------------------------------- */
