@@ -902,8 +902,14 @@ input:checked + .slider:before {
 .z-axis {
   width: 40px;
   height: 3px;
-  background: blue;
+  background: #4ea3ff;
   transform: rotateX(-90deg) rotateZ(-90deg) translateZ(2px);
+}
+.z-axis-cross {
+  width: 40px;
+  height: 3px;
+  background: #4ea3ff;
+  transform: rotateX(-90deg) translateZ(2px);
 }
 
 /* stage rotation control buttons */

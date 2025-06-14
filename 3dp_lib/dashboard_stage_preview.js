@@ -91,6 +91,9 @@ function initXYPreview() {
   const axisZ = document.createElement("div");
   axisZ.className = "axis z-axis";
   container.appendChild(axisZ);
+  const axisZCross = document.createElement("div");
+  axisZCross.className = "axis z-axis-cross";
+  container.appendChild(axisZCross);
   
   for (let i = 1; i <= gridCount; i++) {
     // 横線
