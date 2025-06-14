@@ -6,6 +6,8 @@
 - Displays camera stream, temperature chart and print status in real time
 - Includes remote commands, file management and notification system
 - Settings and history are stored in the browser
+- Preparation time, first-layer check time, pause duration and filament
+  information are included in the print history
 
 ## Usage (English)
 1. Download this repository and place the files in a folder
@@ -25,6 +27,8 @@
 - カメラ映像、温度グラフ、印刷状態をリアルタイム表示
 - 遠隔操作、ファイル管理、通知機能を搭載
 - 設定や履歴はブラウザのローカルストレージに保存されます
+- 準備時間、1層目確認時間、一時停止時間、使用フィラメント情報も
+  印刷履歴に記録されます
 
 ## 操作説明 (Japanese)
 1. リポジトリをダウンロードし、任意のフォルダに配置します
