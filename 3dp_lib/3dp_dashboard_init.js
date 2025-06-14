@@ -37,7 +37,7 @@ import {
   flushNotificationLogsToDom,
   pushLog
 } from "./dashboard_log_util.js";
-import { updateConnectionUI, fetchStoredData, sendCommand, getDeviceIp } from "./dashboard_connection.js";
+import { updateConnectionUI } from "./dashboard_connection.js";
 import {
   startCameraStream,
   stopCameraStream
@@ -211,6 +211,19 @@ export function initializeDashboard({
     setTimeout(startCameraStream(), 1500);
   }
 
+  // (12.5) 保存済みの履歴と現在印刷を表示
+  const savedJobs = printManager.loadHistory();
+  if (savedJobs.length) {
+    const baseUrl = monitorData.appSettings.wsDest
+      ? `http://${monitorData.appSettings.wsDest}:80`
+      : "";
+    const raw = printManager.jobsToRaw(savedJobs);
+    printManager.renderHistoryTable(raw, baseUrl);
+  }
+  printManager.renderPrintCurrent(
+    document.getElementById("print-current-container")
+  );
+
   // (13) ファイルマネージャ初期化
   FileManager.init();
 
@@ -218,14 +231,7 @@ export function initializeDashboard({
   const historyBtn = document.getElementById("history-refresh-btn");
   if (historyBtn) {
     historyBtn.addEventListener("click", () => {
-      const ip = getDeviceIp();
-      // IP が取れない（未接続・まだデータ受信前など）はアラート
-      if (!ip) {
-        showAlert("プリンタに接続されていません。先に接続してください。", "warn");
-        return;
-      }
-      const baseUrl = `http://${ip}:80`;
-      printManager.refreshHistory(fetchStoredData, baseUrl);
+      document.getElementById("btn-history-list")?.click();
     });
   }
 
