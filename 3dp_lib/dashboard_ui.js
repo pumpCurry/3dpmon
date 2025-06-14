@@ -197,6 +197,20 @@ export function updateStoredDataToDOM() {
       el.classList.toggle("old", !d.isNew);
     });
 
+    if (window.filamentPreview) {
+      if (key === "filamentRemainingMm") {
+        const val = Number(d.rawValue);
+        if (!isNaN(val)) window.filamentPreview.setRemainingLength(val);
+      }
+      if (key === "materialStatus") {
+        const present = Number(d.rawValue) === 0;
+        window.filamentPreview.setState({
+          isFilamentPresent: present,
+          showUsedUpIndicator: !present
+        });
+      }
+    }
+
     // --- ⑤ isNew フラグリセット ---
     d.isNew = false;
   }
