@@ -26,6 +26,7 @@ import { formatEpochToDateTime } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
+import { getCurrentSpool, useFilament } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 
 /** 履歴の最大件数 */
@@ -466,12 +467,12 @@ export function renderHistoryTable(rawArray, baseUrl) {
  * @param {string} thumbUrl - サムネイル画像の URL
  */
 async function handlePrintClick(raw, thumbUrl) {
-  const usedSec          = raw.usagetime;
-  const expectedFinish   = new Date(Date.now() + usedSec * 1000).toLocaleString();
-  const materialNeeded   = Math.ceil(raw.usagematerial * 100) / 100;
-  const machine          = monitorData.machines[monitorData.currentHostname] || {};
-  const remaining        = machine.settings?.filamentRemainingMm ?? 0;
-  const afterRemaining   = Math.max(0, remaining - materialNeeded).toLocaleString();
+  const usedSec        = raw.usagetime;
+  const expectedFinish = new Date(Date.now() + usedSec * 1000).toLocaleString();
+  const materialNeeded = Math.ceil(raw.usagematerial * 100) / 100;
+  const spool          = getCurrentSpool();
+  const remaining      = spool?.remainingLengthMm ?? 0;
+  const afterRemaining = Math.max(0, remaining - materialNeeded).toLocaleString();
 
   const html = `
     <img src="${thumbUrl}" style="width:80px; float:left; margin:0 12px 12px 0">
@@ -489,6 +490,10 @@ async function handlePrintClick(raw, thumbUrl) {
     cancelText:  "キャンセル"
   });
   if (!ok) return;
+
+  if (spool) {
+    useFilament(materialNeeded);
+  }
 
   // 実際にプリントコマンドを送信
   sendCommand("set", {

@@ -109,8 +109,12 @@ export function restoreUnifiedStorage() {
   if (saved) {
     try {
       const data = JSON.parse(saved);
-      if (data.appSettings) monitorData.appSettings = data.appSettings;
-      if (data.machines)    monitorData.machines    = data.machines;
+      if (data.appSettings)    monitorData.appSettings    = data.appSettings;
+      if (data.machines)       monitorData.machines       = data.machines;
+      if (Array.isArray(data.filamentSpools))
+        monitorData.filamentSpools = data.filamentSpools;
+      if ("currentSpoolId" in data)
+        monitorData.currentSpoolId = data.currentSpoolId;
       _lastSavedJson = saved;
       console.debug("[restoreUnifiedStorage] 統一キーから復元しました");
     } catch (e) {

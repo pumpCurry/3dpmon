@@ -84,7 +84,9 @@ export function setCurrentHostname(host) {
  *     cameraToggle: boolean,
  *     notificationSettings: Record<string, any>
  *   },
- *   machines: Record<string, MachineData>
+ *   machines: Record<string, MachineData>,
+ *   filamentSpools: Array<Object>,
+ *   currentSpoolId: string|null
  * }}
  */
 export const monitorData = {
@@ -104,6 +106,8 @@ export const monitorData = {
       historyData: []
     }
   },
+  filamentSpools: [],
+  currentSpoolId: null,
   temporaryBuffer: []
 };
 

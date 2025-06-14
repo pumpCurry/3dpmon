@@ -805,6 +805,11 @@ input:checked + .slider:before {
   font-size: 1.2em;
 }
 
+/* Spool list */
+#spool-list { list-style:none; padding-left:0; }
+#spool-list li { margin:2px 0; }
+#spool-list button { margin-left:4px; }
+
 /* stage preview extras */
 .stage-wing {
   position: absolute;
