@@ -142,8 +142,16 @@ function initSpoolUI() {
   if (!listEl || !addBtn) return;
 
   /**
-   * 現在選択中のスプール情報をプレビューに反映します。
+
+   * 現在選択中のスプール情報をプレビューに反映する。
+   *
    * @param {Object} sp - スプールデータ
+   * @param {string} [sp.color] - プレビュー用のフィラメント色文字列
+   * @param {number} [sp.totalLengthMm] - スプール全体の長さ [mm]
+   * @param {number} [sp.filamentDiameter] - フィラメント径 [mm]
+   * @param {string} [sp.name] - スプール名
+   * @param {string} [sp.material] - 材質名
+   * @param {number} [sp.remainingLengthMm] - 残り長さ [mm]
    * @returns {void}
    */
   function updatePreview(sp) {
@@ -153,8 +161,8 @@ function initSpoolUI() {
     if (sp.color) fp.setOption("filamentColor", sp.color);
     if (typeof sp.totalLengthMm === "number")
       fp.setOption("filamentTotalLength", sp.totalLengthMm);
-    if (typeof sp.diameterMm === "number")
-      fp.setOption("filamentDiameter", sp.diameterMm);
+    if (typeof sp.filamentDiameter === "number")
+      fp.setOption("filamentDiameter", sp.filamentDiameter);
     if (sp.name) {
       fp.setOption("reelName", sp.name);
       fp.setOption("showReelName", true);
