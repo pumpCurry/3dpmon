@@ -58,6 +58,7 @@ function saveXYPreviewState() {
  */
 function initXYPreview() {
   const container = document.getElementById("xy-stage");
+  container.style.userSelect = "none";
   const gridCount = 7;
   const width = container.clientWidth;
   const height = container.clientHeight;
@@ -151,6 +152,17 @@ function initXYPreview() {
   currentCircle.style.borderRadius = "50%";
   container.appendChild(currentCircle);
 
+  // XYZ軸の棒
+  const axisX = document.createElement("div");
+  axisX.className = "axis x-axis";
+  container.appendChild(axisX);
+  const axisY = document.createElement("div");
+  axisY.className = "axis y-axis";
+  container.appendChild(axisY);
+  const axisZ = document.createElement("div");
+  axisZ.className = "axis z-axis";
+  container.appendChild(axisZ);
+
   // ドラッグ回転
   let dragging = false, lastX = 0, lastY = 0;
   container.style.cursor = "grab";
@@ -158,22 +170,25 @@ function initXYPreview() {
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
-    stageRotZ += dx * 0.5;
-    stageRotX -= dy * 0.5;
+    stageRotZ = (stageRotZ + dx * 0.5 + 360) % 360;
+    stageRotX = (stageRotX - dy * 0.5 + 360) % 360;
     lastX = e.clientX;
     lastY = e.clientY;
     applyStageTransform();
   };
   container.addEventListener("mousedown", e => {
+    e.preventDefault();
     dragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
     container.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
   });
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mouseup", () => {
     dragging = false;
     container.style.cursor = "grab";
+    document.body.style.userSelect = "";
   });
 
   applyStageTransform();
@@ -244,6 +259,8 @@ function updateZPreview(z) {
 function applyStageTransform() {
   const container = document.getElementById("xy-stage");
   if (container) {
+    stageRotX = (stageRotX + 360) % 360;
+    stageRotZ = (stageRotZ + 360) % 360;
     container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
   }
 }
