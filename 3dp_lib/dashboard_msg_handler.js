@@ -83,6 +83,10 @@ export function handleMessage(data) {
       // fetchStoredData() will give us latestStoredData which contains this data
       printManager.refreshHistory(fetchStoredData, baseUrl);
     }
+    if (Array.isArray(data.elapseVideoList)) {
+      const baseUrl = `http://${getDeviceIp()}`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl);
+    }
 
 
     // restoreAggregatorState() のあとでキー初期化 → 以降は必ず storedData[key] が存在
