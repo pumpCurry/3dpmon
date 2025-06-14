@@ -286,33 +286,53 @@ function setCameraView() {
 
 // --- 新しい固定アングル ---
 function setFlatView() {
+  stopZSpin();
   stageRotX = 0;
   stageRotZ = 0;
   applyStageTransform();
 }
 
 function setTilt45View() {
+  stopZSpin();
   stageRotX = 45;
   stageRotZ = 0;
   applyStageTransform();
 }
 
 function setObliqueView() {
+  stopZSpin();
   stageRotX = 65;
   stageRotZ = 72.5;
   applyStageTransform();
 }
 
 let spinTimer = null;
-function toggleZSpin() {
+function updateSpinButton(active) {
+  const btn = document.getElementById("btn-stage-spin");
+  if (!btn) return;
+  if (active) {
+    btn.classList.add("stage-spin-active");
+  } else {
+    btn.classList.remove("stage-spin-active");
+  }
+}
+
+function stopZSpin() {
   if (spinTimer) {
     clearInterval(spinTimer);
     spinTimer = null;
+    updateSpinButton(false);
+  }
+}
+function toggleZSpin() {
+  if (spinTimer) {
+    stopZSpin();
   } else {
     spinTimer = setInterval(() => {
       stageRotZ = (stageRotZ + 2) % 360;
       applyStageTransform();
     }, 100);
+    updateSpinButton(true);
   }
 }
 
@@ -328,5 +348,6 @@ export {
   setFlatView,
   setTilt45View,
   setObliqueView,
-  toggleZSpin
+  toggleZSpin,
+  stopZSpin
 };
