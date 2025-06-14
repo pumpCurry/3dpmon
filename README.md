@@ -3,6 +3,11 @@
 Browser-based monitor for Clarity K1 series 3D printers.
 開発中の3Dプリンタ監視ダッシュボードです。
 
+The dashboard includes a filament spool manager. Each spool can store its
+name, color, material and weight. Length and weight fields accept either
+mm/m or g/kg and automatically convert between units. Manufacturers or
+custom materials can be registered on the fly from the overlay dialog.
+
 ## Quick Start / 使い方
 1. ダウンロードしたファイルを任意のフォルダに配置します
 2. Windows 例:
