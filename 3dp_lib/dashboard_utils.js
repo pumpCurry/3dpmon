@@ -19,7 +19,7 @@ import { showAlert } from "./dashboard_notification_manager.js";
 /**
  * 秒数を「時間 分 秒 (総秒数)」形式に変換します。
  * @param {number} seconds - 秒数
- * @return {string} フォーマットされた文字列 (例: "   2時間 03分 15秒 (   7395秒 )")
+ * @returns {string} フォーマットされた文字列 (例: "   2時間 03分 15秒 (   7395秒 )")
  */
 function formatDuration(seconds) {
   const s = parseInt(seconds, 10);
@@ -32,7 +32,7 @@ function formatDuration(seconds) {
 /**
  * 秒数を簡易形式に変換します。(例: "1時間23分45秒")
  * @param {number} seconds
- * @return {string}
+ * @returns {string}
  */
 function formatDurationSimple(seconds) {
   const s = parseInt(seconds, 10);
@@ -69,7 +69,7 @@ function getEstimatedEndTime(startEpoch, remainingSec) {
 /**
  * 指定された Date オブジェクトから予想終了時刻の文字列を生成します。
  * @param {Date} date
- * @return {string} 例: "7月20日 14時53分10秒ごろ"
+ * @returns {string} 例: "7月20日 14時53分10秒ごろ"
  */
 function formatExpectedEndTime(date) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}時${date.getMinutes()}分${date.getSeconds()}秒ごろ`;
@@ -78,7 +78,7 @@ function formatExpectedEndTime(date) {
 /**
  * 真偽値や0/1を "0:OFF" / "1:ON" のように整形します。
  * @param {*} value
- * @return {string}
+ * @returns {string}
  */
 function formatBinary(value) {
   if (value === 0 || value === "0" || value === false) return "0:OFF";
@@ -88,7 +88,7 @@ function formatBinary(value) {
 
 /**
  * 現在のISO8601形式タイムスタンプを返します。
- * @return {string}
+ * @returns {string}
  */
 function getCurrentTimestamp() {
   const d = new Date();
@@ -109,7 +109,7 @@ function getCurrentTimestamp() {
  * curPosition 文字列から { x, y, z } を抽出します。
  * 例："X:12.34 Y:56.78 Z:90.12"
  * @param {string} curPosStr
- * @return {{x:number, y:number, z:number}|null}
+ * @returns {{x:number, y:number, z:number}|null}
  */
 function parseCurPosition(curPosStr) {
   const regex = /X:\s*([\d.-]+)\s+Y:\s*([\d.-]+)\s+Z:\s*([\d.-]+)/i;
@@ -127,7 +127,8 @@ function parseCurPosition(curPosStr) {
 /**
  * 一時的にボタンにチェックマークを表示する (コピー成功時のUI演出など)
  * @param {HTMLElement} button
- */
+ * @returns {void}
+*/
 function showTempCheckMark(button) {
   const originalText = button.dataset.original || button.innerText;
   button.innerText = "✅ " + originalText;
@@ -162,16 +163,11 @@ function fallbackCopyTextToClipboard(text) {
 }
 
 /**
- * ログ配列 (logsAll, logsErrorなど) から、指定件数 or 全件をコピー
+ * ログ配列 (logsAll, logsError など) から、指定件数または全件をクリップボードにコピーします。
  * @param {Array<{ timestamp: string, msg: string }>} logArray - コピー元ログ配列
- * @param {number|null} lastN - 最後N件のみコピー(nullの場合は全件)
- * @param {HTMLElement} buttonEl - ボタン要素 (showTempCheckMark用)
- */
-/**
- * ログ配列 (logsAll, logsErrorなど) から、指定件数 or 全件をコピー
- * @param {Array<{ timestamp: string, msg: string }>} logArray - コピー元ログ配列
- * @param {number|null} lastN - 最後N件のみコピー(nullの場合は全件)
- * @param {HTMLElement} buttonEl - ボタン要素 (showTempCheckMark用)
+ * @param {number|null} lastN - 最後 N 件のみコピー (null の場合は全件)
+ * @param {HTMLElement} buttonEl - ボタン要素 (showTempCheckMark 用)
+ * @returns {void}
  */
 function copyLogsToClipboard(logArray, lastN, buttonEl) {
   // 対象ログをスライス
@@ -238,6 +234,7 @@ function copyLogsToClipboard(logArray, lastN, buttonEl) {
 
 /**
  * 現在の機器の storedData を JSON 形式でクリップボードにコピーします。
+ * @returns {void}
  */
 function copyStoredDataToClipboard() {
   // プレースホルダーの場合は何もしない（ログ出力付き）
@@ -281,6 +278,7 @@ function copyStoredDataToClipboard() {
  * Clipboard API が使えない場合のフォールバック処理
  * @param {string} text - コピー対象の文字列
  * @param {HTMLElement} btn - チェックマーク表示用ボタン要素
+ * @returns {void}
  */
 function tryFallback(text, btn) {
   if (fallbackCopyTextToClipboard(text)) {
