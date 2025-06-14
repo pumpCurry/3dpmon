@@ -800,3 +800,8 @@ input:checked + .slider:before {
   z-index: 3000;
   font-size: 1.2em;
 }
+/* Spool list */
+#spool-list { list-style:none; padding-left:0; }
+#spool-list li { margin:2px 0; }
+#spool-list button { margin-left:4px; }
+

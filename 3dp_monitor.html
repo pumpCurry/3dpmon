@@ -753,6 +753,15 @@
 
 
     </div>
+    <div id="spool-settings-panel">
+      <details id="spool-panel" style="margin-top:10px;">
+        <summary style="cursor:pointer; font-weight:bold;">フィラメントスプール</summary>
+        <div style="padding:8px; font-size:0.9em;">
+          <ul id="spool-list"></ul>
+          <button id="spool-add-btn" style="font-size:12px;">追加</button>
+        </div>
+      </details>
+    </div>
 <!-- 既存の設定カードの直後に追加 -->
     <div id="command-palette-panel-container">
       <!-- ─────────────── ストレージ同期パネル ─────────────── -->
@@ -1105,6 +1114,7 @@
 
   <!-- スクリプト読み込み -->
   <script type="module" src="3dp_lib/3dp_dashboard_main.js"></script>
+  <script type="module" src="3dp_lib/dashboard_spool_ui.js"></script>
 
 </body>
 </html>
