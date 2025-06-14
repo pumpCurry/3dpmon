@@ -37,7 +37,7 @@ import {
   flushNotificationLogsToDom,
   pushLog
 } from "./dashboard_log_util.js";
-import { updateConnectionUI, fetchStoredData, sendCommand, getDeviceIp } from "./dashboard_connection.js";
+import { updateConnectionUI } from "./dashboard_connection.js";
 import {
   startCameraStream,
   stopCameraStream
@@ -218,14 +218,7 @@ export function initializeDashboard({
   const historyBtn = document.getElementById("history-refresh-btn");
   if (historyBtn) {
     historyBtn.addEventListener("click", () => {
-      const ip = getDeviceIp();
-      // IP が取れない（未接続・まだデータ受信前など）はアラート
-      if (!ip) {
-        showAlert("プリンタに接続されていません。先に接続してください。", "warn");
-        return;
-      }
-      const baseUrl = `http://${ip}:80`;
-      printManager.refreshHistory(fetchStoredData, baseUrl);
+      document.getElementById("btn-history-list")?.click();
     });
   }
 
