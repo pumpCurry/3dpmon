@@ -134,17 +134,23 @@
             </div>
           </div>
         </div>
-        <div style="margin-top: 5px;">
-          <strong>レイヤー数:</strong>
-          <span data-field="layer">
-            <span class="value">----</span><span class="unit"></span>
-          </span>
-          /
-          <span data-field="TotalLayer">
-            <span class="value">----</span><span class="unit"></span>
-          </span>
+          <div style="margin-top: 5px;">
+            <strong>レイヤー数:</strong>
+            <span data-field="layer">
+              <span class="value">----</span><span class="unit"></span>
+            </span>
+            /
+            <span data-field="TotalLayer">
+              <span class="value">----</span><span class="unit"></span>
+            </span>
+          </div>
+
+          <!-- フィラメントプレビュー -->
+          <div class="card" id="filament-preview-card" style="margin-top:10px;">
+            <h2 class="card-title">フィラメント</h2>
+            <div id="filament-preview"></div>
+          </div>
         </div>
-      </div>
 
       <!-- 中央：状態情報 -->
       <div class="info-wrapper">
@@ -701,6 +707,7 @@
     </div>
 
   </div>
+
 
   <div id="settings-card" class="card">
     <h2  class="card-title">設定</h2>

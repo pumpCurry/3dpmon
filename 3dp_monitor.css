@@ -242,6 +242,8 @@ body {
   border-right: 4px solid #111144;
   border-bottom: 4px solid #222;
   box-sizing: border-box;
+  perspective: 400px;
+  perspective-origin: center;
 }
 .stage {
   position: absolute;
@@ -255,6 +257,8 @@ body {
   border-right: 2px solid #666;
   border-bottom: 2px solid #666;
   box-sizing: border-box;
+  transform-style: preserve-3d;
+  transition: transform 0.2s;
 }
 
 #z-preview-container {
@@ -800,8 +804,36 @@ input:checked + .slider:before {
   z-index: 3000;
   font-size: 1.2em;
 }
+
 /* Spool list */
 #spool-list { list-style:none; padding-left:0; }
 #spool-list li { margin:2px 0; }
 #spool-list button { margin-left:4px; }
 
+/* stage preview extras */
+.stage-wing {
+  position: absolute;
+  bottom: 0;
+  width: 40px;
+  height: 30px;
+  background: #555;
+  clip-path: polygon(0 100%, 100% 100%, 50% 0);
+}
+.stage-wing.left {
+  left: -30px;
+  transform: rotateY(180deg);
+}
+.stage-wing.right {
+  right: -30px;
+}
+.stage-tab {
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 15px;
+  background: #555;
+  border-radius: 4px 4px 0 0;
+  border: 1px solid #333;
+}

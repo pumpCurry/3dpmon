@@ -22,7 +22,10 @@ import {
   monitorData,
   setStoredData
 } from "./dashboard_data.js";
-import { restoreXYPreviewState, initXYPreview } from "./dashboard_preview.js";
+import {
+  restoreXYPreviewState,
+  initXYPreview
+} from "./dashboard_stage_preview.js";
 import {
   initLogAutoScroll,
   initLogRenderer,
@@ -40,6 +43,7 @@ import {
   updateTemperatureGraphFromStoredData
 } from "./dashboard_chart.js";
 import { FileManager } from "./dashboard_filemanager.js";
+import { createFilamentPreview } from "./dashboard_filament_view.js";
 import * as printManager from "./dashboard_printManager.js";
 import {
   copyLogsToClipboard,
@@ -49,6 +53,8 @@ import { notificationManager } from "./dashboard_notification_manager.js";
 import { persistAggregatorState,stopAggregatorTimer } from "./dashboard_aggregator.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { initSendRawJson, initTestRawJson } from "./dashboard_send_command.js";
+
+let filamentPreview = null;
 /**
  * @fileoverview
  * ダッシュボードを初期化します。
@@ -83,6 +89,22 @@ export function initializeDashboard({
   // (3) プレビュー復元＆初期化
   restoreXYPreviewState();
   initXYPreview();
+  const fpMount = document.getElementById("filament-preview");
+  if (fpMount) {
+    const machine = monitorData.machines[currentHostname] || {};
+    const opts = {
+      filamentDiameter:      machine.settings?.filamentDiameterMm ?? 1.75,
+      filamentTotalLength:   machine.settings?.filamentTotalLengthMm ?? 330000,
+      filamentCurrentLength: machine.settings?.filamentRemainingMm ?? 0,
+      filamentColor:         machine.settings?.filamentColor ?? "#22C55E",
+      reelOuterDiameter:     200,
+      reelThickness:         68,
+      reelWindingInnerDiameter: 95,
+      reelCenterHoleDiameter: 54
+    };
+    filamentPreview = createFilamentPreview(fpMount, opts);
+    window.filamentPreview = filamentPreview;
+  }
 
   // (4) ログ描画・自動スクロール設定
   const logBox = document.getElementById("log");
