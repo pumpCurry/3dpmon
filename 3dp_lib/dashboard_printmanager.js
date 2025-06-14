@@ -521,8 +521,14 @@ export function updateHistoryList(
 
 /**
  * 動画リストをマージし履歴に適用する。
- * @param {Array<Object>} videoArray
- * @param {string} baseUrl
+ *
+ * - 動画マップまたは履歴が更新された場合、`renderHistoryTable()` を呼び出し
+ *   UI を即時更新する。
+ * - 動画マップに変更があった場合はログに "完了" が表示される。
+ *
+ * @param {Array<Object>} videoArray - 新規取得した動画情報の配列
+ * @param {string} baseUrl           - サーバーのベース URL
+ * @returns {void}
  */
 export function updateVideoList(videoArray, baseUrl) {
   if (!Array.isArray(videoArray) || !videoArray.length) return;
@@ -552,14 +558,16 @@ export function updateVideoList(videoArray, baseUrl) {
   });
   if (changed) {
     saveHistory(jobs);
+  }
+  if (updated || changed) {
     const raw = jobsToRaw(jobs);
     renderHistoryTable(raw, baseUrl);
   }
   pushLog(
-    `[updateVideoList] 保存データとマージ ${changed ? "完了" : "変更なし"}`,
+    `[updateVideoList] 保存データとマージ ${updated || changed ? "完了" : "変更なし"}`,
     "info"
   );
-  if (changed) {
+  if (updated || changed) {
     pushLog("[updateVideoList] UI へ反映しました", "info");
   }
 }
