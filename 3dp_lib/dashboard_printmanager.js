@@ -445,6 +445,7 @@ export function updateHistoryList(
   currentContainerId = "print-current-container"
 ) {
   if (!Array.isArray(rawArray)) return;
+  pushLog("[updateHistoryList] マージ処理を開始", "info");
   const newJobs = parseRawHistoryList(rawArray, baseUrl);
 
   const machine = monitorData.machines[currentHostname];
@@ -466,6 +467,7 @@ export function updateHistoryList(
     }
   }
 
+  let merged = false;
   const oldJobs = loadHistory();
   const mergedMap = new Map();
   newJobs.forEach(j => mergedMap.set(j.id, j));
@@ -473,10 +475,14 @@ export function updateHistoryList(
     const cur = mergedMap.get(j.id);
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
-        if (cur[k] == null && v != null) cur[k] = v;
+        if (cur[k] == null && v != null) {
+          cur[k] = v;
+          merged = true;
+        }
       });
     } else {
       mergedMap.set(j.id, j);
+      merged = true;
     }
   });
   const jobs = Array.from(mergedMap.values())
@@ -488,6 +494,10 @@ export function updateHistoryList(
     if (videoMap[j.id]) j.videoUrl = videoMap[j.id];
   });
   saveHistory(jobs);
+  pushLog(
+    `[updateHistoryList] 保存データとマージ ${merged ? "完了" : "変更なし"}`,
+    "info"
+  );
 
   const prev = loadCurrent();
   if (jobs[0]?.id !== prev?.id) {
@@ -503,6 +513,7 @@ export function updateHistoryList(
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
   renderHistoryTable(mergedRaw, baseUrl);
+  pushLog("[updateHistoryList] UI へ反映しました", "info");
 }
 
 /**
@@ -512,6 +523,7 @@ export function updateHistoryList(
  */
 export function updateVideoList(videoArray, baseUrl) {
   if (!Array.isArray(videoArray) || !videoArray.length) return;
+  pushLog("[updateVideoList] マージ処理を開始", "info");
   const map = { ...loadVideos() };
   let updated = false;
   videoArray.forEach(v => {
@@ -537,6 +549,13 @@ export function updateVideoList(videoArray, baseUrl) {
     saveHistory(jobs);
     const raw = jobsToRaw(jobs);
     renderHistoryTable(raw, baseUrl);
+  }
+  pushLog(
+    `[updateVideoList] 保存データとマージ ${changed ? "完了" : "変更なし"}`,
+    "info"
+  );
+  if (changed) {
+    pushLog("[updateVideoList] UI へ反映しました", "info");
   }
 }
 
@@ -963,6 +982,7 @@ function parseFileInfo(text, baseUrl) {
 /** --- 3) ファイル一覧描画 --- */
 export function renderFileList(info, baseUrl) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
+  pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info");
   const arr = parseFileInfo(info.fileInfo, baseUrl);
 
   // 総数表示
@@ -1015,6 +1035,7 @@ export function renderFileList(info, baseUrl) {
       sortTable("#file-list-table", th.dataset.key);
     });
   });
+  pushLog("[renderFileList] UI へ反映しました", "info");
 }
 
 /** --- 4) 汎用ソート関数 --- */
