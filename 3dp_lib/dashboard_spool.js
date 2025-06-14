@@ -32,6 +32,13 @@ export function addSpool(data) {
   const spool = {
     id: genId(),
     name: data.name || "",
+    color: data.color || "",
+    material: data.material || "",
+    printTempMin: data.printTempMin == null ? null : Number(data.printTempMin),
+    printTempMax: data.printTempMax == null ? null : Number(data.printTempMax),
+    bedTempMin:   data.bedTempMin   == null ? null : Number(data.bedTempMin),
+    bedTempMax:   data.bedTempMax   == null ? null : Number(data.bedTempMax),
+    density:      data.density      == null ? null : Number(data.density),
     reelSubName: data.reelSubName || "",
     materialName: data.materialName || data.material || "",
     materialSubName: data.materialSubName || "",

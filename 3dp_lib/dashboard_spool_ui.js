@@ -9,7 +9,9 @@ import {
   updateSpool,
   deleteSpool
 } from "./dashboard_spool.js";
+import { showInputDialog } from "./dashboard_ui_confirm.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
+import { MATERIAL_SPECS } from "./material_specs.js";
 
 let styleInjected = false;
 function injectStyles() {
