@@ -349,7 +349,27 @@ export function processData(data) {
   Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true));
   // (2.7.3) 進捗100%以上で履歴登録
   if (Number(data.printProgress ?? 0) >= 100) {
-    machine.historyData.push(data);
+    const entry = { ...data };
+    const extraKeys = [
+      "preparationTime",
+      "firstLayerCheckTime",
+      "pauseTime",
+      "completionElapsedTime",
+      "actualStartTime",
+      "initialLeftTime",
+      "initialLeftAt",
+      "predictedFinishEpoch",
+      "estimatedRemainingTime",
+      "estimatedCompletionTime"
+    ];
+    extraKeys.forEach(k => {
+      const v = machine.storedData[k]?.rawValue;
+      if (v !== undefined) entry[k] = v;
+    });
+    ["filamentId", "filamentColor", "filamentType"].forEach(k => {
+      if (data[k] != null) entry[k] = data[k];
+    });
+    machine.historyData.push(entry);
   }
 
   // 次回比較用に保存
