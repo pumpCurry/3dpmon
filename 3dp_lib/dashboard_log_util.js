@@ -214,7 +214,7 @@ export function initLogRenderer(containerEl) {
       const errBox = document.getElementById("notification-history");
       if (errBox) {
         const clone = p.cloneNode(true);
-        clone.className = "notification-entry";
+        clone.className = `notification-entry log-${entry.level}`;
         errBox.appendChild(clone);
       }
     }
@@ -300,7 +300,7 @@ function writeLogsToContainer(logs, container, className) {
   container.innerHTML = "";
   logs.forEach(e => {
     const p = document.createElement("p");
-    p.className = className;
+    p.className = `${className} log-${e.level}`;
     p.textContent = `[${e.timestamp}] ${e.msg}`;
     container.appendChild(p);
   });
@@ -321,11 +321,16 @@ export function flushNormalLogsToDom() {
  * 通知ログを再描画
  */
 export function flushNotificationLogsToDom() {
+  const logs = logManager.getNotifications();
   writeLogsToContainer(
-    logManager.getNotifications(),
+    logs,
     document.getElementById("notification-history"),
     "notification-entry"
   );
+  if (logs.length) {
+    const tsField = document.querySelector('[data-field="lastNotificationTimestamp"] .value');
+    if (tsField) tsField.textContent = logs[logs.length - 1].timestamp;
+  }
 }
 
 /* ============================================================================
@@ -371,4 +376,6 @@ export function pushLog(msg, level = "info", notify = false) {
  */
 export function pushNotificationLog(msg, level = "info") {
   pushLog(msg, level, true);
+  const tsField = document.querySelector('[data-field="lastNotificationTimestamp"] .value');
+  if (tsField) tsField.textContent = getCurrentTimestamp();
 }

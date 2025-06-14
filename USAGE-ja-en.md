@@ -81,10 +81,13 @@ settings.
   a command palette for frequently used commands.
 
 ## Filament Spool Management
-- Register each spool's total length, color and optional weight.
-- Choose the active spool from the list in the Print History card.
-- Remaining length is updated automatically after each job.
-- A 3D preview visualizes the spool and warns when filament runs out.
+- Use the **Add** button in the Settings card to register a spool. A dialog
+  asks for the spool name, total length and the current remaining length.
+- Old spool data is converted automatically when upgrading to a new version.
+- You can specify `manufacturerName` or `materialName` when calling
+  `addSpool()` to track vendors or custom materials.
+- Remaining length is updated automatically after each job and the 3D preview
+  warns when filament runs out.
   ```html
   <div id="filament-preview"></div>
   <script src="3dp_lib/dashboard_filament_view.js"></script>
@@ -95,7 +98,9 @@ settings.
         filamentDiameter: 1.75,
         filamentTotalLength: 330000,
         filamentCurrentLength: 120000,
-        filamentColor: '#22C55E'
+        filamentColor: '#22C55E',
+        manufacturerName: 'ACME',
+        materialName: 'PLA'
       }
     );
   </script>
@@ -132,7 +137,32 @@ settings.
 - **設定カード** – ストレージ設定や通知設定、コマンドパレットなどをまとめたエリアです。
 
 ## フィラメントスプール管理
-- スプールの総長さや色、重量を登録し管理できます。
-- 印刷履歴カードのスプール一覧から使用中のリールを選択します。
+- 設定カードの **追加** ボタンからスプールを登録します。ダイアログでは
+  スプール名、総長さ、現在の残り長さを入力します。
+- 旧データは起動時に自動で新形式へ変換されます。
+- `dashboard_spool.js` の `addSpool()` に `manufacturerName` や
+  `materialName` を指定すると、メーカー名や素材を管理できます。
 - 印刷完了後は残量が自動更新され、3D プレビューで確認できます。
 - `createFilamentPreview` 関数を使えば独自ページにも埋め込めます。
+  登録ダイアログでは以下の項目を入力できます:
+  - スプール名・サブ名
+  - メーカー名 (任意)
+  - 材料名と色名
+  - 巻き長さと重量 (m/g は自動変換)
+  - HEX カラーコード
+
+  例: フィラメント登録時のオーバーレイ
+
+  ```
+  +-----------------------------+
+  | Name        [Generic PLA ]  |
+  | Sub Name    [Orange ]       |
+  | Manufacturer[ACME]          |
+  | Material    [PLA ] (+)      |
+  | Length      [1.0] kg = 330m |
+  | Color (#)   [#f97316]       |
+  +-----------------------------+
+  ```
+
+  新しいメーカー名やカスタム素材を追加したい場合は、入力欄右側の [+] ボタンから
+  直接登録できます。次回以降はプルダウンから選択可能です。
