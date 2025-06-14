@@ -211,6 +211,19 @@ export function initializeDashboard({
     setTimeout(startCameraStream(), 1500);
   }
 
+  // (12.5) 保存済みの履歴と現在印刷を表示
+  const savedJobs = printManager.loadHistory();
+  if (savedJobs.length) {
+    const baseUrl = monitorData.appSettings.wsDest
+      ? `http://${monitorData.appSettings.wsDest}:80`
+      : "";
+    const raw = printManager.jobsToRaw(savedJobs);
+    printManager.renderHistoryTable(raw, baseUrl);
+  }
+  printManager.renderPrintCurrent(
+    document.getElementById("print-current-container")
+  );
+
   // (13) ファイルマネージャ初期化
   FileManager.init();
 
