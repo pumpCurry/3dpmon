@@ -34,6 +34,11 @@ export function addSpool(data) {
     name: data.name || "",
     color: data.color || "",
     material: data.material || "",
+    printTempMin: data.printTempMin == null ? null : Number(data.printTempMin),
+    printTempMax: data.printTempMax == null ? null : Number(data.printTempMax),
+    bedTempMin:   data.bedTempMin   == null ? null : Number(data.bedTempMin),
+    bedTempMax:   data.bedTempMax   == null ? null : Number(data.bedTempMax),
+    density:      data.density      == null ? null : Number(data.density),
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
     deleted: false

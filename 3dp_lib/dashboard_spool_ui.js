@@ -8,6 +8,8 @@ import {
   updateSpool,
   deleteSpool
 } from "./dashboard_spool.js";
+import { showInputDialog } from "./dashboard_ui_confirm.js";
+import { MATERIAL_SPECS } from "./material_specs.js";
 
 document.addEventListener("DOMContentLoaded", initSpoolUI);
 
@@ -54,12 +56,35 @@ function initSpoolUI() {
     });
   }
 
-  addBtn.addEventListener("click", () => {
-    const name = prompt("スプール名");
+  addBtn.addEventListener("click", async () => {
+    const name = await showInputDialog({ title: "スプール名" });
     if (!name) return;
-    const total = parseFloat(prompt("総長(mm)", "10000")) || 0;
-    const remain = parseFloat(prompt("残り長(mm)", String(total))) || 0;
-    addSpool({ name, totalLengthMm: total, remainingLengthMm: remain });
+    const material = await showInputDialog({ title: "素材", defaultValue: "PLA" });
+    if (material == null) return;
+    const spec = MATERIAL_SPECS[material.toUpperCase()];
+    const pMin = await showInputDialog({ title: "ノズル温度min", defaultValue: spec?.printTemp[0] ?? "" });
+    if (pMin == null) return;
+    const pMax = await showInputDialog({ title: "ノズル温度max", defaultValue: spec?.printTemp[1] ?? "" });
+    if (pMax == null) return;
+    const bMin = await showInputDialog({ title: "ベッド温度min", defaultValue: spec?.bedTemp[0] ?? "" });
+    if (bMin == null) return;
+    const bMax = await showInputDialog({ title: "ベッド温度max", defaultValue: spec?.bedTemp[1] ?? "" });
+    if (bMax == null) return;
+    const dens = await showInputDialog({ title: "密度(g/cm³)", defaultValue: spec?.density ?? "" });
+    if (dens == null) return;
+    const total = parseFloat(await showInputDialog({ title: "総長(mm)", defaultValue: "10000" })) || 0;
+    const remain = parseFloat(await showInputDialog({ title: "残り長(mm)", defaultValue: String(total) })) || 0;
+    addSpool({
+      name,
+      material,
+      printTempMin: parseFloat(pMin) || null,
+      printTempMax: parseFloat(pMax) || null,
+      bedTempMin:   parseFloat(bMin) || null,
+      bedTempMax:   parseFloat(bMax) || null,
+      density:      parseFloat(dens) || null,
+      totalLengthMm: total,
+      remainingLengthMm: remain
+    });
     render();
   });
 
