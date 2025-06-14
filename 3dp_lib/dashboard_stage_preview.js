@@ -19,6 +19,8 @@ let lastXYPosition = { x: 0, y: 0 };
 // 回転状態
 let stageRotX = 0;
 let stageRotZ = 0;
+const STAGE_ROT_X_MIN = 0;
+const STAGE_ROT_X_MAX = 70;
 
 /**
  * XYプレビューをlocalStorageから復元
@@ -175,7 +177,8 @@ function initXYPreview() {
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     stageRotZ = (stageRotZ + dx * 0.5 + 360) % 360;
-    stageRotX = (stageRotX - dy * 0.5 + 360) % 360;
+    const newX = stageRotX - dy * 0.5;
+    stageRotX = Math.min(Math.max(newX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     lastX = e.clientX;
     lastY = e.clientY;
     applyStageTransform();
@@ -263,7 +266,7 @@ function updateZPreview(z) {
 function applyStageTransform() {
   const container = document.getElementById("xy-stage");
   if (container) {
-    stageRotX = (stageRotX + 360) % 360;
+    stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     stageRotZ = (stageRotZ + 360) % 360;
     container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
   }
