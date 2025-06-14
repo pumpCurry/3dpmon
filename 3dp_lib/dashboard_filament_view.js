@@ -56,6 +56,7 @@
 
            showOverlayLength:          false,
            showOverlayPercent:         false,
+           showOverlayBar:             false,
            enableDrag:                 true,
            enableClick:                false,
            onClick:                    null,
@@ -126,6 +127,25 @@
     font-size:0.85em; font-weight:bold;
     pointer-events:none; z-index:14;
   }
+
+  /* 進捗バー */
+  .dfv-overlay-bar {
+    position:absolute;
+    bottom:0;
+    left:0;
+    width:0;
+    height:4px;
+    background:#00FFFF;
+    transition:width 0.3s, background 0.3s;
+    pointer-events:none;
+  }
+
+  /* スライダー + ボタンラッパー */
+  .dfv-controls {
+    margin-top:4px;
+    display:flex;
+    align-items:center;
+  }
 `;
   const style = document.createElement('style');
   style.id = ID;
@@ -173,6 +193,7 @@
  *
  * @property {boolean} [showOverlayLength]           図上オーバーレイに残長表示
  * @property {boolean} [showOverlayPercent]          図上オーバーレイに残％表示
+ * @property {boolean} [showOverlayBar]              図上オーバーレイに進捗バー表示
  * @property {boolean} [showOverlayWeight]           図上オーバーレイに重量表示
  * @property {boolean} [showOverlayLengthOnly]       図上オーバーレイに長さのみ表示
  *
@@ -349,6 +370,7 @@ export function createFilamentPreview(mount, opts) {
     showAutoRotateButton: true,
     showOverlayLength: false,
     showOverlayPercent: false,
+    showOverlayBar: false,
     enableDrag: true,
     enableClick: false,
     onClick: null,
@@ -366,6 +388,9 @@ export function createFilamentPreview(mount, opts) {
     showManufacturerName: false,
 
   }, opts);
+
+  // オーバーレイ下部の進捗バー表示
+  o.showOverlayBar = !!o.showOverlayBar;
 
   /* --- ルート要素 -------------------------------------------------- */
   mount.classList.add('dfv-card');
@@ -416,6 +441,7 @@ export function createFilamentPreview(mount, opts) {
   const overlay             = div('dfv-overlay');
   const overlayLength       = div('dfv-overlay-length');
   const overlayPercent      = div('dfv-overlay-percent');
+  const overlayBar          = div('dfv-overlay-bar');
   const overlayName         = div('dfv-overlay-name');
   const overlaySubName      = div('dfv-overlay-subname');
   const overlayMaterial     = div('dfv-overlay-material');
@@ -429,6 +455,7 @@ export function createFilamentPreview(mount, opts) {
   overlay.appendChild(overlayMaterial);
   overlay.appendChild(overlayColorCode);
   overlay.appendChild(overlayPercent);
+  overlay.appendChild(overlayBar);
   root.appendChild(overlay);
 
   // マテリアルタグ
@@ -573,7 +600,9 @@ export function createFilamentPreview(mount, opts) {
     slider.classList.add('dfv-slider-disabled');
   }
 
-  mount.appendChild(slider);
+  const controlsDiv = div('dfv-controls');
+  root.appendChild(controlsDiv);
+  controlsDiv.appendChild(slider);
 
   // ───────────── ビュー初期化ボタン ─────────────
   let btnReset;
@@ -581,7 +610,7 @@ export function createFilamentPreview(mount, opts) {
     btnReset = document.createElement('button');
     btnReset.textContent = '↩︎';
     btnReset.className = 'dfv-btn';
-    mount.appendChild(btnReset);
+    controlsDiv.appendChild(btnReset);
 
     btnReset.addEventListener('click', () => {
       // 自動回転を解除
@@ -618,7 +647,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    mount.appendChild(btnProfile);
+    controlsDiv.appendChild(btnProfile);
   }
   let btnSide;
   if (o.showSideViewButton) {
@@ -640,7 +669,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    mount.appendChild(btnSide);
+    controlsDiv.appendChild(btnSide);
   }
 
   let btnFront;
@@ -663,7 +692,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    mount.appendChild(btnFront);
+    controlsDiv.appendChild(btnFront);
   }
 
   // --- Y軸自動回転トグルボタン --- 
@@ -673,7 +702,7 @@ export function createFilamentPreview(mount, opts) {
     btnAuto.textContent = '⟲';
     btnAuto.className = 'dfv-btn';
     btnAuto.title = 'Toggle auto-rotate';
-    mount.appendChild(btnAuto);
+    controlsDiv.appendChild(btnAuto);
     btnAuto.addEventListener('click', () => {
       if (autoRotate) {
         cancelAnimationFrame(autoRotateId);
@@ -972,6 +1001,19 @@ export function createFilamentPreview(mount, opts) {
         `<span class="dfv-overlay-percent-dot">.</span>` +
         `<span class="dfv-overlay-percent-frac">${fracPart}</span>` +
         `<span class="dfv-overlay-percent-sign">%</span>`;
+    }
+
+    // ----- オーバーレイ進捗バー更新 -----
+    const pct = isPresent ? currentLen / o.filamentTotalLength : 0;
+    overlayBar.style.display = o.showOverlayBar ? 'block' : 'none';
+    if (o.showOverlayBar) {
+      overlayBar.style.width = `${(pct*100).toFixed(2)}%`;
+      const fs = parseFloat(getComputedStyle(overlayPercent).fontSize);
+      overlayBar.style.height = `${fs * 0.6}px`;
+      // 滑らかに色が変わるよう、HSLの色相 180°→0° にマッピング
+      // 180°=水色, 120°=緑, 60°=黄, 30°=オレンジ, 0°=赤
+      const hue = pct * 180;
+      overlayBar.style.background = `hsl(${hue},100%,50%)`;
     }
 
 
