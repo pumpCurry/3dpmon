@@ -326,7 +326,7 @@ function div(cls) {
  *   setState:(s:Partial<FilamentOptions>)=>void,
  *   resetRotation:()=>void
  * }} */
-function createFilamentPreview(mount, opts) {
+export function createFilamentPreview(mount, opts) {
   /* --- デフォルト値適用 -------------------------------------------- */
   const o = Object.assign({
     reelBodyColor: '#D1D5DB',
