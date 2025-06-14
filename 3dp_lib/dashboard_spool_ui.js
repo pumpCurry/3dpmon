@@ -3,6 +3,7 @@
 import {
   getSpools,
   getCurrentSpoolId,
+  getSpoolById,
   setCurrentSpoolId,
   addSpool,
   updateSpool,
@@ -114,6 +115,33 @@ function initSpoolUI() {
   const addBtn = document.getElementById("spool-add-btn");
   if (!listEl || !addBtn) return;
 
+  /**
+   * 現在選択中のスプール情報をプレビューに反映
+   * @param {Object} sp スプールデータ
+   */
+  function updatePreview(sp) {
+    const fp = window.filamentPreview;
+    if (!fp || !sp) return;
+
+    if (sp.color) fp.setOption("filamentColor", sp.color);
+    if (typeof sp.totalLengthMm === "number")
+      fp.setOption("filamentTotalLength", sp.totalLengthMm);
+    if (typeof sp.diameterMm === "number")
+      fp.setOption("filamentDiameter", sp.diameterMm);
+    if (sp.name) {
+      fp.setOption("reelName", sp.name);
+      fp.setOption("showReelName", true);
+    }
+    if (sp.material) {
+      fp.setOption("materialName", sp.material);
+      fp.setOption("showMaterialName", true);
+    } else {
+      fp.setOption("showMaterialName", false);
+    }
+    if (typeof sp.remainingLengthMm === "number")
+      fp.setRemainingLength(sp.remainingLengthMm);
+  }
+
   function render() {
     const spools = getSpools();
     listEl.innerHTML = "";
@@ -127,6 +155,7 @@ function initSpoolUI() {
       sel.textContent = "選択";
       sel.addEventListener("click", () => {
         setCurrentSpoolId(sp.id);
+        updatePreview(sp);
         render();
       });
       const edit = document.createElement("button");
