@@ -78,6 +78,17 @@ function initXYPreview() {
   const rightTab = document.createElement("div");
   rightTab.className = "stage-tab right";
   container.appendChild(rightTab);
+
+  // XYZ軸の棒
+  const axisX = document.createElement("div");
+  axisX.className = "axis x-axis";
+  container.appendChild(axisX);
+  const axisY = document.createElement("div");
+  axisY.className = "axis y-axis";
+  container.appendChild(axisY);
+  const axisZ = document.createElement("div");
+  axisZ.className = "axis z-axis";
+  container.appendChild(axisZ);
   
   for (let i = 1; i <= gridCount; i++) {
     // 横線
@@ -155,17 +166,6 @@ function initXYPreview() {
   currentCircle.style.border = "2px solid red";
   currentCircle.style.borderRadius = "50%";
   container.appendChild(currentCircle);
-
-  // XYZ軸の棒
-  const axisX = document.createElement("div");
-  axisX.className = "axis x-axis";
-  container.appendChild(axisX);
-  const axisY = document.createElement("div");
-  axisY.className = "axis y-axis";
-  container.appendChild(axisY);
-  const axisZ = document.createElement("div");
-  axisZ.className = "axis z-axis";
-  container.appendChild(axisZ);
 
   // ドラッグ回転
   let dragging = false, lastX = 0, lastY = 0;
