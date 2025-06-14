@@ -68,6 +68,10 @@ export function showAlert(message, level = "info", persistent = false) {
     return;
   }
 
+  import("./dashboard_log_util.js").then(({ pushNotificationLog }) =>
+    pushNotificationLog(message, lvl)
+  );
+
   // アラート本体
   const alertEl = document.createElement("div");
   alertEl.className = `notification-alert ${lvl} enter`;
@@ -196,7 +200,7 @@ export class NotificationManager {
 
     // 1) ログ出力
     import("./dashboard_log_util.js")
-      .then(({ pushLog }) => pushLog(text, def.level));
+      .then(({ pushNotificationLog }) => pushNotificationLog(text, def.level));
 
     // 2) 固定アラート
     showAlert(text, def.level, def.level === "error");
@@ -359,8 +363,8 @@ export class NotificationManager {
 
       // ログ出力
       import("./dashboard_log_util.js")
-        .then(({ pushLog }) => {
-          pushLog("通知設定を保存しました", "info");
+        .then(({ pushNotificationLog }) => {
+          pushNotificationLog("通知設定を保存しました", "info");
           // 成功アラートを表示
           showAlert("通知設定を保存しました", "success");
         })

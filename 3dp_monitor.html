@@ -567,7 +567,7 @@
       <div class="log-card-header">
         <div class="tabs">
           <button id="tab-received" class="active">受信ログ</button>
-          <button id="tab-error">エラーログ</button>
+          <button id="tab-notification">通知ログ</button>
         </div>
         <div id="log-controls" class="log-controls">
           <button id="copy-all-button" data-original="全てコピー" style="font-size:12px;">全てコピー</button>
@@ -580,24 +580,24 @@
             <span class="value">====-==-==T--:--:--.------Z</span><span class="unit"></span>
           </span>
         </div>
-        <div id="last-error-timestamp" class="log-timestamp hidden" style="font-size:12px;">
-          最新エラー日時:
-          <span data-field="lastErrorTimestamp" class="old">
+        <div id="last-notification-timestamp" class="log-timestamp hidden" style="font-size:12px;">
+          最新通知日時:
+          <span data-field="lastNotificationTimestamp" class="old">
             <span class="value">====-==-==T--:--:--.------Z</span><span class="unit"></span>
           </span>
         </div>
-        <div id="error-controls" class="log-controls hidden">
-          <button id="copy-all-error-button" data-original="全エラーコピー" style="font-size:12px;">全エラーコピー</button>
-          <button id="copy-last-50-error-button" data-original="最後50行エラーコピー" style="font-size:12px;">最後50行エラーコピー</button>
-          <button id="clear-error-logs-button" data-original="エラー全消去" style="font-size:12px;">エラー全消去</button>
+        <div id="notification-controls" class="log-controls hidden">
+          <button id="copy-all-notification-button" data-original="全通知コピー" style="font-size:12px;">全通知コピー</button>
+          <button id="copy-last-50-notification-button" data-original="最後50行通知コピー" style="font-size:12px;">最後50行通知コピー</button>
+          <button id="clear-notification-logs-button" data-original="通知全消去" style="font-size:12px;">通知全消去</button>
         </div>
       </div>
 
       <!-- ログ表示エリア -->
       <div id="log" class="log-box"></div>
 
-      <!-- エラー表示エリア (hidden 初期表示) -->
-      <div id="error-history" class="log-box hidden"></div>
+      <!-- 通知表示エリア (hidden 初期表示) -->
+      <div id="notification-history" class="log-box hidden"></div>
     </div>
   </div>
 
