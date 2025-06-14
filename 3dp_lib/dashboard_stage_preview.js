@@ -63,6 +63,22 @@ function initXYPreview() {
   const width = container.clientWidth;
   const height = container.clientHeight;
 
+  // 左右の羽
+  const leftWing = document.createElement("div");
+  leftWing.className = "stage-wing left";
+  container.appendChild(leftWing);
+  const rightWing = document.createElement("div");
+  rightWing.className = "stage-wing right";
+  container.appendChild(rightWing);
+  
+  // 下のつまみ（左右それぞれ）
+  const leftTab = document.createElement("div");
+  leftTab.className = "stage-tab left";
+  container.appendChild(leftTab);
+  const rightTab = document.createElement("div");
+  rightTab.className = "stage-tab right";
+  container.appendChild(rightTab);
+  
   for (let i = 1; i <= gridCount; i++) {
     // 横線
     const hLine = document.createElement("div");
@@ -106,21 +122,6 @@ function initXYPreview() {
   label0.style.left = "4px";
   label0.style.bottom = "4px";
   container.appendChild(label0);
-
-  // 左右の羽
-  const leftWing = document.createElement("div");
-  leftWing.className = "stage-wing left";
-  container.appendChild(leftWing);
-  const rightWing = document.createElement("div");
-  rightWing.className = "stage-wing right";
-  container.appendChild(rightWing);
-  // 下のつまみ（左右それぞれ）
-  const leftTab = document.createElement("div");
-  leftTab.className = "stage-tab left";
-  container.appendChild(leftTab);
-  const rightTab = document.createElement("div");
-  rightTab.className = "stage-tab right";
-  container.appendChild(rightTab);
 
   // 履歴用ドット生成
   for (let i = 0; i < maxDots; i++) {
