@@ -67,6 +67,9 @@ function makeThumbUrl(baseUrl, rawFilename) {
  *   finishTime?:string|null,
  *   materialUsedMm:number,
  *   thumbUrl:string,
+ *   startway?:number,
+ *   size?:number,
+ *   filemd5?:string,
  *   preparationTime?:number,
  *   firstLayerCheckTime?:number,
  *   pauseTime?:number,
@@ -74,6 +77,9 @@ function makeThumbUrl(baseUrl, rawFilename) {
  *   filamentColor?:string,
  *   filamentType?:string
  * }}
+ * @description
+ * 受信した生データ `raw` をHTML描画用オブジェクトに整形します。
+ * サムネイルURL生成や開始方式などの追加情報もここで抽出します。
  */
 export function parseRawHistoryEntry(raw, baseUrl) {
   const id             = raw.id;
@@ -90,6 +96,10 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   // raw.filename に基づくサムネイル生成
   const thumbUrl       = makeThumbUrl(baseUrl, raw.filename);
 
+  const startway       = raw.startway;
+  const size           = raw.size;
+  const filemd5        = raw.filemd5;
+
   const preparationTime     = raw.preparationTime;
   const firstLayerCheckTime = raw.firstLayerCheckTime;
   const pauseTime           = raw.pauseTime;
@@ -104,6 +114,9 @@ export function parseRawHistoryEntry(raw, baseUrl) {
     finishTime,
     materialUsedMm,
     thumbUrl,
+    startway,
+    size,
+    filemd5,
     preparationTime,
     firstLayerCheckTime,
     pauseTime,
@@ -196,22 +209,37 @@ export function saveVideos(map) {
  *
  * @param {Array<Object>} jobs - loadHistory() で取得した履歴配列
  * @returns {Array<Object>} テーブル描画用のオブジェクト配列
+ * @description
+ * `jobs` 配列に含まれる各要素を表示用に整形し、
+ * `renderHistoryTable()` が要求するフィールドを備えた
+ * オブジェクト配列へ変換します。具体的には以下のプロパティを持ちます:
+ * - `id`               : 履歴エントリ ID
+ * - `filename`         : ファイル名
+ * - `startway`         : 開始方式 (数値)
+ * - `size`             : ファイルサイズ
+ * - `ctime`            : 作成時刻(UNIX秒)
+ * - `starttime`        : 開始時刻(UNIX秒)
+ * - `usagetime`        : 使用時間(秒)
+ * - `usagematerial`    : 使用フィラメント量(mm)
+ * - `printfinish`      : 成功フラグ(1/0)
+ * - `filemd5`          : ファイルMD5ハッシュ
+ * - その他 `videoUrl` など追加情報
  */
 export function jobsToRaw(jobs) {
-  return jobs.map(job => {
-    const startEpoch = job.startTime ? Date.parse(job.startTime) / 1000 : 0;
-    const finishEpoch = job.finishTime ? Date.parse(job.finishTime) / 1000 : 0;
-    return {
-      id:            job.id,
-      filename:      job.filename,
-      startway:      null,
-      size:          0,
-      ctime:         startEpoch,
-      starttime:     startEpoch,
-      usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
-      usagematerial: job.materialUsedMm,
-      printfinish:   finishEpoch ? 1 : 0,
-      filemd5:       "",
+    return jobs.map(job => {
+      const startEpoch = job.startTime ? Date.parse(job.startTime) / 1000 : 0;
+      const finishEpoch = job.finishTime ? Date.parse(job.finishTime) / 1000 : 0;
+      return {
+        id:            job.id,
+        filename:      job.filename,
+        startway:      job.startway ?? null,
+        size:          job.size ?? 0,
+        ctime:         startEpoch,
+        starttime:     startEpoch,
+        usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
+        usagematerial: job.materialUsedMm,
+        printfinish:   finishEpoch ? 1 : 0,
+        filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
       ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
