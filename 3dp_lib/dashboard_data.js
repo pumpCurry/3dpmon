@@ -24,8 +24,6 @@
  * @property {Object.<string,StoredDatum>} storedData  表示・UI 用データ
  * @property {Object}                runtimeData  揮発性データ（heartbeat など）
  * @property {Array<Object>}         historyData  印刷履歴
- * @property {{current:Object|null, history:Array<Object>, videos:Object}} printStore
- *   履歴や動画を保持するストア
  */
 
 /**
@@ -70,12 +68,7 @@ export function setCurrentHostname(host) {
     monitorData.machines[host] = {
       storedData: {},   // 監視データ（加工前の値や変換値など）
       runtimeData: {},  // 現在の温度・状態など、常に上書きされる値
-      historyData: [],  // 印刷履歴などの配列データ
-      printStore: {     // 履歴や動画の永続保存先
-        current: null,
-        history: [],
-        videos: {}
-      }
+      historyData: []   // 印刷履歴などの配列データ
     };
   }
 }
@@ -110,12 +103,7 @@ export const monitorData = {
     [PLACEHOLDER_HOSTNAME]: {
       storedData: {},
       runtimeData: {},
-      historyData: [],
-      printStore: {
-        current: null,
-        history: [],
-        videos: {}
-      }
+      historyData: []
     }
   },
   filamentSpools: [],
