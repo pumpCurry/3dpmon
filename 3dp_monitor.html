@@ -72,18 +72,15 @@
   </template>
 
   <!-- ===============================================================
-       監視カード（カメラ＋印刷状態・制御/温度/照明）
+       機器監視カード
   =============================================================== -->
-  <div class="card camera-print-card">
-
+  <div class="card camera-card">
     <h2 class="card-title">
-      監視
+      機器監視
     </h2>
     <label style="font-size:12px; margin-left:10px; display:inline-block;">
       <input type="checkbox" id="camera-toggle-title"> カメラON/OFF
     </label>
-
-    <!-- カメラエリア: ver.1.3で初期class="off"にしてNO SIGNAL表示可能 -->
     <div class="camera-wrapper">
       <img id="camera-feed" class="off" alt="カメラ映像">
       <div class="no-signal">- NO SIGNAL -</div>
@@ -95,61 +92,73 @@
         <button id="camera-cancel-button" class="camera-cancel-btn hidden">接続キャンセル</button>
       </div>
     </div>
+  </div>
 
-    <!-- プレビュー・状態・温度グラフの行 (1.125~1.3で継承) -->
+  <!-- ===============================================================
+       機器状況モニタ(情報印刷状態・制御/温度/照明)
+  =============================================================== -->
+  <div class="card equip-status-card">
+
+    <!-- 1:ヘッドプレビュー -->
     <div class="row monitor-row">
+
       <!-- 左側：XY/Zプレビュー領域 -->
       <div class="card preview-wrapper">
-        <div class="preview-header">
-          <h2 class="card-title">ヘッド位置プレビュー</h2>
+        <!-- 白い囲み内にタイトル・プレビュー・レイヤー数をまとめる -->
+        <div class="preview-content">
+
+          <div class="preview-header">
+            <h2 class="card-title">ヘッド位置プレビュー</h2>
+          </div>
+
+          <div class="preview-body">
+            <div class="chamber-container">
+              <div class="chamber" id="xy-chamber">
+                <div class="stage" id="xy-stage"></div>
+              </div>
+              <div class="xy-value-extra">
+                X:
+                <span data-field="positionX">
+                  <span class="value">---.--</span><span class="unit"></span>
+                </span>,
+                Y:
+                <span data-field="positionY">
+                  <span class="value">---.--</span><span class="unit"></span>
+                </span>
+              </div>
+              <div class="stage-rotate-buttons">
+                <button id="btn-stage-flat">⊞</button>
+                <button id="btn-stage-45">⏢</button>
+                <button id="btn-stage-65-72">⪩</button>
+                <button id="btn-stage-spin">⟲</button>
+              </div>
+            </div>
+            <div class="z-container">
+              <div id="z-preview-container">
+                <div class="z-label-top">0</div>
+                <div class="z-label-bottom">300</div>
+                <div id="z-preview"></div>
+                <div id="z-value"></div>
+              </div>
+              <div class="z-value-extra">
+                Z:
+                <span data-field="positionZ">
+                  <span class="value">---.--</span><span class="unit"></span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="preview-footer">
+            <div class="print-status-table">
+                          <strong>レイヤー数:</strong>
+                          <span data-field="layer"><div><span class="value">----</span></span>&nbsp; / &nbsp;<span data-field="TotalLayer"><span class="value">----</span></span></div>
+            </div>
+          </div>
+
         </div>
-        <div class="preview-body">
-          <div class="chamber-container">
-            <div class="chamber" id="xy-chamber">
-              <div class="stage" id="xy-stage"></div>
-            </div>
-            <div class="xy-value-extra">
-              X:
-              <span data-field="positionX">
-                <span class="value">---.--</span><span class="unit"></span>
-              </span>,
-              Y:
-              <span data-field="positionY">
-                <span class="value">---.--</span><span class="unit"></span>
-              </span>
-            </div>
-            <div class="stage-rotate-buttons">
-              <button id="btn-stage-flat">⊞</button>
-              <button id="btn-stage-45">⏢</button>
-              <button id="btn-stage-65-72">⪩</button>
-              <button id="btn-stage-spin">⟲</button>
-            </div>
-          </div>
-          <div class="z-container">
-            <div id="z-preview-container">
-              <div class="z-label-top">0</div>
-              <div class="z-label-bottom">300</div>
-              <div id="z-preview"></div>
-              <div id="z-value"></div>
-            </div>
-            <div class="z-value-extra">
-              Z:
-              <span data-field="positionZ">
-                <span class="value">---.--</span><span class="unit"></span>
-              </span>
-            </div>
-          </div>
-        </div>
-          <div style="margin-top: 5px;">
-            <strong>レイヤー数:</strong>
-            <span data-field="layer">
-              <span class="value">----</span><span class="unit"></span>
-            </span>
-            /
-            <span data-field="TotalLayer">
-              <span class="value">----</span><span class="unit"></span>
-            </span>
-          </div>
+
+
 
           <!-- フィラメントプレビュー -->
           <div class="card" id="filament-preview-card" style="margin-top:10px;">
@@ -310,7 +319,7 @@
                   </span>
                 </div>
                 <div class="control-row">
-                  <input type="range" id="nozzleTempSlider" data-field="targetNozzleTemp" min="0" max="0" step="1" />
+                  <input type="range" id="nozzleTempSlider" data-field="targetNozzleTemp" min="0" max="0" step="1"/>
                   <input type="number" id="nozzleTempInput" data-field="targetNozzleTemp" min="0" max="0" style="width:4em" />
                 </div>
               </div>

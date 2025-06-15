@@ -97,14 +97,20 @@ export function initializeDashboard({
   if (fpMount) {
     const machine = monitorData.machines[currentHostname] || {};
     const opts = {
-      filamentDiameter:      machine.settings?.filamentDiameterMm ?? 1.75,
-      filamentTotalLength:   machine.settings?.filamentTotalLengthMm ?? 330000,
-      filamentCurrentLength: machine.settings?.filamentRemainingMm ?? 0,
-      filamentColor:         machine.settings?.filamentColor ?? "#22C55E",
-      reelOuterDiameter:     200,
-      reelThickness:         68,
+      filamentDiameter:         machine.settings?.filamentDiameterMm ?? 1.75,
+      filamentTotalLength:      machine.settings?.filamentTotalLengthMm ?? 330000,
+      filamentCurrentLength:    machine.settings?.filamentRemainingMm ?? 0,
+      filamentColor:            machine.settings?.filamentColor ?? "#22C55E",
+      reelOuterDiameter:        200,
+      reelThickness:            68,
       reelWindingInnerDiameter: 95,
-      reelCenterHoleDiameter: 54
+      reelCenterHoleDiameter:   54,
+      widthPx:                  264,
+      heightPx:                 264,
+      showSlider:               false,
+      isFilamentPresent:          true,
+      showUsedUpIndicator:        true,
+      blinkingLightColor:         '#0EA5E9',
     };
     filamentPreview = createFilamentPreview(fpMount, opts);
     window.filamentPreview = filamentPreview;

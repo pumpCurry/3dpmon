@@ -335,6 +335,91 @@ body {
   font-weight: bold;
 }
 
+.stage .grid-line { position: absolute; background-color: #777777; }
+.stage .grid-line.center { background-color: #999999; }
+.stage .grid-line.vertical { width: 1px; height: 100%; }
+.stage .grid-line.vertical.center { width: 2px; }
+.stage .grid-line.horizontal { height: 1px; width: 100%; }
+.stage .grid-line.horizontal.center { height: 2px; }
+.stage .xy-label {
+  position: absolute;
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.z-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: top;
+}
+.z-label-top { position: absolute; top: 0; width: 100%; font-size: 10px; }
+.z-label-bottom { position: absolute; bottom: 0; width: 100%; font-size: 10px; }
+.xy-value-extra {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  color: #333;
+  background-color: #fafafa;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.z-value-extra {
+  font-size: 12px;
+  margin-top: 4px;
+  font-weight: bold;
+}
+
+/* ──────────────────────────────────────────
+   ヘッドプレビュー枠内コンテンツ
+────────────────────────────────────────── */
+
+.preview-header { font-weight: bold; }
+
+.preview-wrapper .preview-content {
+  width: 286px;
+  background-color: #fff;
+  padding: 6px;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+
+
+/* プレビュー本体の幅固定 */
+.preview-wrapper .preview-body {
+  width: 270px;
+  margin: 0 auto;                  /* 中央寄せ */
+  overflow: hidden;                /* はみ出し防止 */
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+
+/* レイヤー数表示 */
+.preview-wrapper .preview-footer {
+  margin-top: 6px;
+}
+
+.preview-wrapper .preview-footer .print-status-table {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin-bottom: 8px;
+  font-size: 0.9em;
+  align-items: center;
+}
+.preview-wrapper .preview-footer .print-status-table strong {
+  text-align: right;
+  white-space: nowrap;
+  align-items: center;
+}
+
+
+/* ──────────────────────────────────────────
+   共通ユーティリティ
+────────────────────────────────────────── */
+
 /* 共通ユーティリティ */
 .hidden {
   display: none !important;
@@ -387,19 +472,37 @@ body {
   gap: 10px;
   flex-wrap: wrap;
 }
-.col1 { flex: 1; min-width: 360px; }
-.col2 { flex: 1; min-width: 320px; font-family: "Arial Narrow", Arial, sans-serif; }
+.col1 { flex: 1; min-width: 300px; width:320px; max-width:320px;  font-family: "Arial Narrow", Arial, sans-serif; }
+.col2 { flex: 1; min-width: 320px; width:330px; max-width:330px;   font-family: "Arial Narrow", Arial, sans-serif; }
+
 .print-status-table {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 2px 10px;
   margin-bottom: 8px;
   font-size: 0.9em;
+  align-items: center;
+  vertical-align: baseline;
 }
 .print-status-table strong {
   text-align: right;
   white-space: nowrap;
+  align-items: center;
+  vertical-align: baseline;
+
 }
+
+#nozzleTempSlider,
+#bedTempSlider,
+#modelFanSlider,
+#auxiliaryFanSlider,
+#caseFanSlider,
+#feedrateSlider,
+#flowrateSlider {
+  width: 100px;
+}
+
+
 .control-temp-area { font-size: 0.9em; }
 .control-temp-area .temp-row {
   display: flex;
@@ -468,46 +571,7 @@ input:checked + .slider:before {
   transform: translateX(18px);
 }
 
-/* ---------------------------------------------------------------
-   プレビューエリア
---------------------------------------------------------------- */
-.preview-header { margin-bottom: 6px; font-weight: bold; }
-.stage .grid-line { position: absolute; background-color: #777777; }
-.stage .grid-line.center { background-color: #999999; }
-.stage .grid-line.vertical { width: 1px; height: 100%; }
-.stage .grid-line.vertical.center { width: 2px; }
-.stage .grid-line.horizontal { height: 1px; width: 100%; }
-.stage .grid-line.horizontal.center { height: 2px; }
-.stage .xy-label {
-  position: absolute;
-  color: #ffffff;
-  font-weight: bold;
-  font-size: 12px;
-}
 
-.z-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-.z-label-top { position: absolute; top: 0; width: 100%; font-size: 10px; }
-.z-label-bottom { position: absolute; bottom: 0; width: 100%; font-size: 10px; }
-.xy-value-extra {
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: bold;
-  color: #333;
-  background-color: #fafafa;
-  padding: 2px 4px;
-  border-radius: 4px;
-  display: inline-block;
-}
-.z-value-extra {
-  font-size: 12px;
-  margin-top: 4px;
-  font-weight: bold;
-}
 
 /* ---------------------------------------------------------------
    機器情報＆ログエリア
