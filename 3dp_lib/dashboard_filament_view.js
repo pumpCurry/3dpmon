@@ -469,8 +469,8 @@ export function createFilamentPreview(mount, opts) {
   overlay.appendChild(overlaySubName);
   overlay.appendChild(overlayMaterial);
   overlay.appendChild(overlayColorCode);
-  overlay.appendChild(overlayPercent);
   overlay.appendChild(overlayBar);
+  overlay.appendChild(overlayPercent);
   root.appendChild(overlay);
 
   // マテリアルタグ
@@ -1067,12 +1067,13 @@ export function createFilamentPreview(mount, opts) {
     overlayBar.style.display = o.showOverlayBar ? 'block' : 'none';
     if (o.showOverlayBar) {
       overlayBar.style.width = `${(pct*100).toFixed(2)}%`;
+      overlayBar.style.opacity = '60%';
       const fs = parseFloat(getComputedStyle(overlayPercent).fontSize);
       overlayBar.style.height = `${fs * 0.6}px`;
       // 滑らかに色が変わるよう、HSLの色相 180°→0° にマッピング
       // 180°=水色, 120°=緑, 60°=黄, 30°=オレンジ, 0°=赤
       const hue = pct * 180;
-      overlayBar.style.background = `hsl(${hue},100%,50%)`;
+      overlayBar.style.background = `hsl(${hue},80%,50%)`;
     }
 
 
@@ -1131,11 +1132,16 @@ export function createFilamentPreview(mount, opts) {
         dragging = false; scene.style.cursor = 'grab';
       });
     })();
+
   } else if (o.enableClick && typeof o.onClick === 'function') {
     scene.style.cursor = 'pointer';
-    scene.addEventListener('click', o.onClick);
+    root.style.cursor = 'pointer';
+    scene.addEventListener('click', e => { e.stopPropagation(); o.onClick(e); });
+    root.addEventListener('click', e => {
+      if (e.target.closest('.dfv-controls') || e.target.closest('.dfv-info')) return;
+      o.onClick(e);
+    });
   }
-
 
   /* --- スライダー --- */
   slider.addEventListener('input', ()=>{
