@@ -503,7 +503,10 @@
     <!-- 右側：温度グラフ -->
     <div class="graph-wrapper">
       <div class="card" id="temp-graph-card">
-        <h2 class="card-title">温度グラフ (過去15分)</h2>
+        <div style="display:flex; align-items:center;">
+          <h2 class="card-title">温度グラフ (過去15分)</h2>
+          <button id="temp-graph-reset-button" style="font-size:12px; margin-left:4px;">リセット</button>
+        </div>
         <div style="position: relative; width: 100%; height: 300px;">
           <canvas id="temp-graph-canvas" style="width:100%; height:300px;"></canvas>
         </div>
