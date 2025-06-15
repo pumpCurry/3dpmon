@@ -3,10 +3,8 @@
  * プリント履歴データの保存と表示を担当する。
  */
 
-import { currentHostname } from "./dashboard_data.js";
-
 const containerId = 'filemanager-history';
-const STORAGE_KEY_PREFIX = '3dp-filemanager-history-';
+const STORAGE_KEY = '3dp-filemanager-history';
 const MAX_HISTORY = 150;
 
 /**
@@ -16,9 +14,6 @@ const MAX_HISTORY = 150;
  * @property {number} starttime      開始時刻の UNIX タイムスタンプ（秒）
  * @property {number} [usagematerial] 使用量（mm）
  * @property {string} [thumbnail]    サムネイル URL
- * @property {string} hostname       ホスト名
- * @property {string} ip             IP アドレス
- * @property {number} updatedEpoch   情報更新時刻(秒)
  */
 
 /**
@@ -34,14 +29,10 @@ const MAX_HISTORY = 150;
  * @param {HistoryEntry[]} historyList - 整形済み履歴エントリ配列
  * @param {VideoEntry[]}   videoList   - 関連動画エントリ配列
  */
-function _storageKey() {
-  return `${STORAGE_KEY_PREFIX}${currentHostname || 'default'}`;
-}
-
 function _saveHistoryData(historyList, videoList) {
   const data = { historyList, elapseVideoList: videoList };
   try {
-    localStorage.setItem(_storageKey(), JSON.stringify(data));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch (e) {
     console.warn('[FileManager] saveHistoryData failed:', e);
   }
@@ -57,7 +48,7 @@ function _saveHistoryData(historyList, videoList) {
  * }}
  */
 function _loadHistoryData() {
-  const raw = localStorage.getItem(_storageKey());
+  const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return { historyList: [], elapseVideoList: [] };
   try {
     const data = JSON.parse(raw);

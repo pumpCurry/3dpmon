@@ -110,10 +110,6 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   const filamentColor       = raw.filamentColor;
   const filamentType        = raw.filamentType;
 
-  const hostname            = currentHostname || "";
-  const ip                  = getDeviceIp();
-  const updatedEpoch        = Math.floor(Date.now() / 1000);
-
   return {
     id,
     rawFilename,
@@ -130,10 +126,7 @@ export function parseRawHistoryEntry(raw, baseUrl) {
     pauseTime,
     filamentId,
     filamentColor,
-    filamentType,
-    hostname,
-    ip,
-    updatedEpoch
+    filamentType
   };
 }
 
