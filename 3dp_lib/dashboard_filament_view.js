@@ -616,7 +616,7 @@ export function createFilamentPreview(mount, opts) {
   }
 
   const controlsDiv = div('dfv-controls');
-  root.appendChild(controlsDiv);
+  mount.appendChild(controlsDiv);
   controlsDiv.appendChild(slider);
   // ───────── ボタン群のラッパー ─────────
   const btnWrapper = div('dfv-btn-wrapper');
