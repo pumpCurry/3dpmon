@@ -62,6 +62,7 @@ function makeThumbUrl(baseUrl, rawFilename) {
  * @param {string} baseUrl       - サムネイル取得用ベース URL
  * @returns {{
  *   id:number,
+ *   rawFilename:string,
  *   filename:string,
  *   startTime:string,
  *   finishTime?:string|null,
@@ -84,6 +85,8 @@ function makeThumbUrl(baseUrl, rawFilename) {
 export function parseRawHistoryEntry(raw, baseUrl) {
   const id             = raw.id;
   const filename       = raw.filename?.split("/").pop() || "(不明)";
+  // フルパスも保持しておくことでコマンド送信時に利用できるようにする
+  const rawFilename    = raw.filename;
   const startSec       = raw.starttime || 0;
   const useTimeSec     = raw.usagetime || 0;
   const startTime      = new Date(startSec * 1000).toISOString();
@@ -109,6 +112,7 @@ export function parseRawHistoryEntry(raw, baseUrl) {
 
   return {
     id,
+    rawFilename,
     filename,
     startTime,
     finishTime,
@@ -223,6 +227,7 @@ export function saveVideos(map) {
  * - `usagematerial`    : 使用フィラメント量(mm)
  * - `printfinish`      : 成功フラグ(1/0)
  * - `filemd5`          : ファイルMD5ハッシュ
+ * - `rawFilename`      : フルパス(存在すれば)
  * - その他 `videoUrl` など追加情報
  */
 export function jobsToRaw(jobs) {
@@ -232,6 +237,7 @@ export function jobsToRaw(jobs) {
       return {
         id:            job.id,
         filename:      job.filename,
+        ...(job.rawFilename !== undefined && { rawFilename: job.rawFilename }),
         startway:      job.startway ?? null,
         size:          job.size ?? 0,
         ctime:         startEpoch,
@@ -737,8 +743,9 @@ async function handlePrintClick(raw, thumbUrl) {
   }
 
   // 実際にプリントコマンドを送信
+  const target = raw.rawFilename ?? raw.filename;
   sendCommand("set", {
-    opGcodeFile: `printprt:${raw.filename}`
+    opGcodeFile: `printprt:${target}`
   });
 }
 
@@ -763,8 +770,9 @@ async function handleDeleteClick(raw) {
   });
   if (!ok) return;
 
+  const target = raw.rawFilename ?? raw.filename;
   sendCommand("set", {
-    opGcodeFile: `deleteprt:${raw.filename}`
+    opGcodeFile: `deleteprt:${target}`
   });
 }
 
@@ -801,9 +809,10 @@ async function handleRenameClick(raw) {
   if (!ok) return;
 
   // 元ディレクトリを維持してフルパスを組み立て
-  const dir = raw.filename.slice(0, raw.filename.lastIndexOf("/"));
+  const target = raw.rawFilename ?? raw.filename;
+  const dir = target.slice(0, target.lastIndexOf("/"));
   sendCommand("set", {
-    opGcodeFile: `renameprt:${raw.filename}:${dir}/${newName}`
+    opGcodeFile: `renameprt:${target}:${dir}/${newName}`
   });
 }
 
