@@ -799,7 +799,8 @@ input:checked + .slider:before {
 #file-list-table td[data-key="number"],
 #file-list-table td[data-key="layer"],
 #file-list-table td[data-key="size"],
-#file-list-table td[data-key="expect"] {
+#file-list-table td[data-key="expect"],
+#file-list-table td[data-key="prints"] {
   text-align: right;
 }
 

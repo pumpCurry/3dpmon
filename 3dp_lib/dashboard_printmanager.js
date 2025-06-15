@@ -1025,6 +1025,31 @@ export function initHistoryTabs() {
   });
 }
 
+/**
+ * 印刷履歴からファイル単位の統計情報を生成する。
+ * 完了済みの履歴のみを対象とし、印刷回数と総使用時間を集計する。
+ *
+ * @returns {Map<string, {md5: string, count: number, totalSec: number}>}
+ *          キー: rawFilename または basename
+ */
+function buildHistoryStats() {
+  const map = new Map();
+  const history = loadHistory();
+  history.forEach(job => {
+    if (!job.finishTime) return; // 未完了は除外
+    const key = job.rawFilename || job.filename;
+    const start = job.startTime ? Date.parse(job.startTime) : 0;
+    const finish = job.finishTime ? Date.parse(job.finishTime) : 0;
+    const sec = finish && start ? (finish - start) / 1000 : 0;
+    const entry = map.get(key) || { md5: job.filemd5 || "", count: 0, totalSec: 0 };
+    if (!entry.md5 && job.filemd5) entry.md5 = job.filemd5;
+    entry.count++;
+    entry.totalSec += sec;
+    map.set(key, entry);
+  });
+  return map;
+}
+
 /** --- 2) fileInfo テキストをパースして配列に --- */
 function parseFileInfo(text, baseUrl) {
   // 各ファイル情報は「;」区切り
@@ -1045,7 +1070,9 @@ function parseFileInfo(text, baseUrl) {
       // --- 履歴(raw) と同じインターフェース ---
       filename:     fullPath,                    // raw.filename
       usagetime:    0,                           // ファイル一覧では不明なので 0 or 適宜
-      usagematerial: Number(expect) || 0         // raw.usagematerial 相当
+      usagematerial: Number(expect) || 0,        // raw.usagematerial 相当
+      filemd5:      "",
+      printCount:   0
     };
   });
 }
@@ -1055,6 +1082,17 @@ export function renderFileList(info, baseUrl) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
   pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info");
   const arr = parseFileInfo(info.fileInfo, baseUrl);
+
+  // 履歴から印刷回数と実使用時間を取得
+  const stats = buildHistoryStats();
+  arr.forEach(item => {
+    const st = stats.get(item.filename);
+    if (st) {
+      item.filemd5 = st.md5;
+      item.printCount = st.count;
+      if (st.count > 0) item.usagetime = Math.round(st.totalSec / st.count);
+    }
+  });
 
   // 総数表示
   document.getElementById("file-list-total").textContent = info.totalNum;
@@ -1084,6 +1122,8 @@ export function renderFileList(info, baseUrl) {
       <td data-key="size">${item.size.toLocaleString()}</td>
       <td data-key="mtime">${item.mtime.toLocaleString()}</td>
       <td data-key="expect">${item.expect.toLocaleString()}</td>
+      <td data-key="prints">${item.printCount}</td>
+      <td data-key="md5">${item.filemd5}</td>
     `;
     tbody.appendChild(tr);
 
