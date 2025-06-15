@@ -12,7 +12,7 @@
 
 "use strict";
 
-import { monitorData, currentHostname } from "./dashboard_data.js";
+import { monitorData, currentHostname, ensureMachineData } from "./dashboard_data.js";
 import { logManager } from "./dashboard_log_util.js";
 
 let _enableStorageLog = false;
@@ -147,6 +147,9 @@ export function restoreUnifiedStorage() {
     monitorData.appSettings.autoConnect = (ac === null ? true : ac === "true");
     console.debug("[restoreUnifiedStorage] レガシーキーから復元しました");
   }
+
+  // 保存データに欠損がある場合に備え、各機器データを正規化する
+  Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
 }
 
 /**
@@ -282,7 +285,11 @@ export function estimateLocalStorageUsageBytes() {
  * @returns {Object|null} ジョブオブジェクト、未設定時は null
  */
 export function loadPrintCurrent() {
-  return monitorData.appSettings.printManager?.current || null;
+  const host = currentHostname;
+  if (!host) return null;
+  ensureMachineData(host);
+  const machine = monitorData.machines[host];
+  return machine.printStore.current || null;
 }
 
 /**
@@ -291,8 +298,10 @@ export function loadPrintCurrent() {
  * @param {Object|null} job - 保存するジョブオブジェクト（null 許容）
  */
 export function savePrintCurrent(job) {
-  monitorData.appSettings.printManager ??= {};
-  monitorData.appSettings.printManager.current = job;
+  const host = currentHostname;
+  if (!host) return;
+  ensureMachineData(host);
+  monitorData.machines[host].printStore.current = job;
   saveUnifiedStorage();
 }
 
@@ -302,7 +311,10 @@ export function savePrintCurrent(job) {
  * @returns {Array<Object>} 履歴配列
  */
 export function loadPrintHistory() {
-  return monitorData.appSettings.printManager?.history || [];
+  const host = currentHostname;
+  if (!host) return [];
+  ensureMachineData(host);
+  return monitorData.machines[host].printStore.history;
 }
 
 /**
@@ -311,8 +323,10 @@ export function loadPrintHistory() {
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
 export function savePrintHistory(history) {
-  monitorData.appSettings.printManager ??= {};
-  monitorData.appSettings.printManager.history =
+  const host = currentHostname;
+  if (!host) return;
+  ensureMachineData(host);
+  monitorData.machines[host].printStore.history =
     history.slice(0, MAX_HISTORY);
   saveUnifiedStorage();
 }
@@ -323,7 +337,10 @@ export function savePrintHistory(history) {
  * @returns {Record<string, string>} id をキーとした動画 URL マップ
  */
 export function loadPrintVideos() {
-  const map = monitorData.appSettings.printManager?.videos || {};
+  const host = currentHostname;
+  if (!host) return {};
+  ensureMachineData(host);
+  const map = monitorData.machines[host].printStore.videos;
   // デバッグ用: 現在保持している動画マップ件数をログに残す
   pushLog(`[loadPrintVideos] マップ読込件数: ${Object.keys(map).length}`);
   console.debug("[loadPrintVideos] map", map);
@@ -336,8 +353,10 @@ export function loadPrintVideos() {
  * @param {Record<string, string>} map - id をキーとした動画 URL マップ
  */
 export function savePrintVideos(map) {
-  monitorData.appSettings.printManager ??= {};
-  monitorData.appSettings.printManager.videos = map;
+  const host = currentHostname;
+  if (!host) return;
+  ensureMachineData(host);
+  monitorData.machines[host].printStore.videos = map;
   // デバッグ用: 保存する動画マップの件数をログに記録
   pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);
   console.debug("[savePrintVideos] map", map);
