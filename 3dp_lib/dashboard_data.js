@@ -24,6 +24,8 @@
  * @property {Object.<string,StoredDatum>} storedData  表示・UI 用データ
  * @property {Object}                runtimeData  揮発性データ（heartbeat など）
  * @property {Array<Object>}         historyData  印刷履歴
+ * @property {{current:Object|null, history:Array<Object>, videos:Object}} printStore
+ *   履歴や動画を保持するストア
  */
 
 /**
@@ -54,6 +56,46 @@ export const PLACEHOLDER_HOSTNAME = "_$_NO_MACHINE_$_";
 export let currentHostname = null;
 
 /**
+ * createEmptyMachineData:
+ * 新規の MachineData オブジェクトを生成して返します。
+ *
+ * @returns {MachineData} 初期化済みのオブジェクト
+ */
+export function createEmptyMachineData() {
+  return {
+    storedData: {},
+    runtimeData: {},
+    historyData: [],
+    printStore: { current: null, history: [], videos: {} }
+  };
+}
+
+/**
+ * ensureMachineData:
+ * 既存 MachineData の欠落フィールドを補完します。
+ *
+ * @param {string} host - ホスト名
+ * @returns {void}
+ */
+export function ensureMachineData(host) {
+  const machine = monitorData.machines[host];
+  if (!machine) {
+    monitorData.machines[host] = createEmptyMachineData();
+    return;
+  }
+  machine.storedData  ??= {};
+  machine.runtimeData ??= {};
+  machine.historyData ??= [];
+  if (!machine.printStore) {
+    machine.printStore = { current: null, history: [], videos: {} };
+  } else {
+    machine.printStore.current  ??= null;
+    machine.printStore.history ??= [];
+    machine.printStore.videos  ??= {};
+  }
+}
+
+/**
  * setCurrentHostname:
  * 指定されたホスト名を現在の監視対象として設定し、
  * monitorData.machines に当該ホスト用のデータ構造がなければ初期化します。
@@ -62,14 +104,26 @@ export let currentHostname = null;
  */
 export function setCurrentHostname(host) {
   currentHostname = host;
+  ensureMachineData(host);
 
-  // 対象ホストのデータ構造が未初期化なら、空の構造で初期化する
-  if (!monitorData.machines[host]) {
-    monitorData.machines[host] = {
-      storedData: {},   // 監視データ（加工前の値や変換値など）
-      runtimeData: {},  // 現在の温度・状態など、常に上書きされる値
-      historyData: []   // 印刷履歴などの配列データ
-    };
+  // 旧バージョンの printManager データを新ストアへ移行する
+  // プレースホルダ状態のまま移行するとコンタミネーションを招くため
+  // 実際のホストが設定されたときだけ処理を行う
+  if (host !== PLACEHOLDER_HOSTNAME) {
+    const pm = monitorData.appSettings.printManager;
+    if (pm && monitorData.machines[host]) {
+      const store = monitorData.machines[host].printStore;
+      if (pm.current != null && store.current == null) {
+        store.current = pm.current;
+      }
+      if (Array.isArray(pm.history) && store.history.length === 0) {
+        store.history = pm.history;
+      }
+      if (pm.videos && Object.keys(store.videos).length === 0) {
+        store.videos = pm.videos;
+      }
+      delete monitorData.appSettings.printManager;
+    }
   }
 }
 
@@ -103,7 +157,12 @@ export const monitorData = {
     [PLACEHOLDER_HOSTNAME]: {
       storedData: {},
       runtimeData: {},
-      historyData: []
+      historyData: [],
+      printStore: {
+        current: null,
+        history: [],
+        videos: {}
+      }
     }
   },
   filamentSpools: [],
