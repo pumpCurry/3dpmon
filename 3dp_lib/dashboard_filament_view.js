@@ -616,10 +616,21 @@ export function createFilamentPreview(mount, opts) {
   }
 
   const controlsDiv = div('dfv-controls');
+
+  controlsDiv.style.display = 'flex';
+  controlsDiv.style.flexDirection = 'column';
+  controlsDiv.style.alignItems    = 'flex-start';
+  controlsDiv.style.gap = '4px';
+
   mount.appendChild(controlsDiv);
   controlsDiv.appendChild(slider);
   // ───────── ボタン群のラッパー ─────────
   const btnWrapper = div('dfv-btn-wrapper');
+  btnWrapper.style.display        = 'flex';
+  btnWrapper.style.flexWrap       = 'wrap';
+  btnWrapper.style.width          = '100%';
+  btnWrapper.style.justifyContent = 'flex-start';
+  btnWrapper.style.gap            = '4px';
   controlsDiv.appendChild(btnWrapper);
 
   // ───────────── ビュー初期化ボタン ─────────────
@@ -741,6 +752,14 @@ export function createFilamentPreview(mount, opts) {
 
   // ───────────── 購入ボタン＆価格表示 ─────────────
   if (o.showPurchaseButton && o.purchaseLink) {
+    const btnBuyWrapper = div('dfv-btn-Buy-wrapper');
+    btnBuyWrapper.style.marginTop     = '4px';
+    btnBuyWrapper.style.display       = 'flex';
+    btnBuyWrapper.style.flexDirection = 'row';
+    btnBuyWrapper.style.alignItems    = 'center';
+    btnBuyWrapper.style.gap           = '4px';
+    mount.appendChild(btnBuyWrapper);
+
     const btnBuy = document.createElement('button');
     btnBuy.textContent = '🛒';
     btnBuy.className = 'dfv-btn dfv-purchase-btn';
@@ -748,16 +767,16 @@ export function createFilamentPreview(mount, opts) {
     btnBuy.addEventListener('click', () => {
       window.open(o.purchaseLink, '_blank');
     });
-    btnWrapper.appendChild(btnBuy);
+    btnBuyWrapper.appendChild(btnBuy);
 
     const priceSpan = div('dfv-price');
     priceSpan.textContent = `${o.currencySymbol}${o.price.toLocaleString()}`;
-    btnWrapper.appendChild(priceSpan);
+    btnBuyWrapper.appendChild(priceSpan);
 
     if (o.priceCheckDate) {
       const dateSpan = div('dfv-price-date');
       dateSpan.textContent = o.priceCheckDate;
-      btnWrapper.appendChild(dateSpan);
+      btnBuyWrapper.appendChild(dateSpan);
     }
   }
 
