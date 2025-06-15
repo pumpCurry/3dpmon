@@ -132,7 +132,13 @@ export class AudioManager {
     this._updateButtons();
   }
 
-_testMusic() {
+  /**
+   * サイレント WAV を再生して音楽再生機能の可否をテストします。
+   *
+   * @private
+   * @returns {Promise<boolean>} 再生成功で true、失敗で false
+   */
+  _testMusic() {
   return new Promise((resolve) => {
     // 44 バイトだけの超短 WAV（サイレント）
     const silentWav =

@@ -52,16 +52,42 @@ export function setCurrentSpoolId(id) {
   saveUnifiedStorage();
 }
 
+/**
+ * 新しいスプール（フィラメントリール）情報を追加する
+ *
+ * @param {Object} data 追加するスプール情報オブジェクト
+ * @returns {Object} 登録されたスプールオブジェクト
+ */
 export function addSpool(data) {
+  // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const spool = {
     id: genId(),
     name: data.name || "",
     color: data.color || "",
     material: data.material || "",
+    printTempMin: data.printTempMin == null ? null : Number(data.printTempMin),
+    printTempMax: data.printTempMax == null ? null : Number(data.printTempMax),
+    bedTempMin:   data.bedTempMin   == null ? null : Number(data.bedTempMin),
+    bedTempMax:   data.bedTempMax   == null ? null : Number(data.bedTempMax),
+    density:      data.density      == null ? null : Number(data.density),
+    reelSubName: data.reelSubName || "",
+    materialName: data.materialName || data.material || "",
+    materialSubName: data.materialSubName || "",
+    filamentDiameter: Number(data.filamentDiameter) || 1.75,
+    filamentColor: data.filamentColor || data.color || "#22C55E",
+    reelOuterDiameter: Number(data.reelOuterDiameter) || 200,
+    reelThickness: Number(data.reelThickness) || 68,
+    reelWindingInnerDiameter: Number(data.reelWindingInnerDiameter) || 95,
+    reelCenterHoleDiameter: Number(data.reelCenterHoleDiameter) || 54,
+    reelBodyColor: data.reelBodyColor || "#A1A1AA",
+    reelFlangeTransparency: data.reelFlangeTransparency ?? 0.4,
+    manufacturerName: data.manufacturerName || "",
+    purchasePrice: Number(data.purchasePrice) || 0,
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
     weightGram: Number(data.weightGram) || 0,
     deleted: false
+
   };
   monitorData.filamentSpools.push(spool);
   saveUnifiedStorage();

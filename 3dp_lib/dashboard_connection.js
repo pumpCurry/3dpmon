@@ -10,7 +10,11 @@
 
 "use strict";
 
-import { monitorData } from "./dashboard_data.js";
+import {
+  monitorData,
+  currentHostname,
+  PLACEHOLDER_HOSTNAME
+} from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
 import { handleMessage } from "./dashboard_msg_handler.js";
@@ -192,6 +196,9 @@ function handleSocketMessage(event) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error");
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
   }
+  // 現在のホスト名が有効かどうか判定
+  const hostReady = currentHostname &&
+                    currentHostname !== PLACEHOLDER_HOSTNAME;
   // 共通ベース URL
   const ip = getDeviceIp();
   const baseUrl = `http://${ip}`;
@@ -200,9 +207,15 @@ function handleSocketMessage(event) {
   try {
     // 印刷履歴の再取得・保存・レンダリング は各モジュールで行われています
     // （dashboard_printManager.js 側で実装）
-    if (Array.isArray(data.historyList)) {
-      const baseUrl = `http://${getDeviceIp()}:80`;
-      printManager.refreshHistory(fetchStoredData, baseUrl);
+    if (hostReady && Array.isArray(data.historyList)) {
+      pushLog("historyList を受信しました", "info");
+      const baseUrl80 = `http://${getDeviceIp()}:80`;
+      printManager.updateHistoryList(data.historyList, baseUrl80);
+    }
+    if (hostReady && Array.isArray(data.elapseVideoList)) {
+      pushLog("elapseVideoList を受信しました", "info");
+      const baseUrl80 = `http://${getDeviceIp()}:80`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl80);
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
@@ -214,6 +227,7 @@ function handleSocketMessage(event) {
     // 印刷履歴の再取得・保存・レンダリング は各モジュールで行われています
     // （dashboard_printManager.js 側で実装）
     if (data.retGcodeFileInfo) {
+      pushLog("retGcodeFileInfo を受信しました", "info");
       printManager.renderFileList(data.retGcodeFileInfo, baseUrl);
     }
   } catch (e) {
@@ -397,6 +411,7 @@ export function disconnectWs() {
 
 /**
  * connect ボタンにクリック時の WebSocket 接続処理をバインドします
+ * @returns {void}
  */
 export function setupConnectButton() {
   const btn = document.getElementById("connect-button");
@@ -408,8 +423,8 @@ export function setupConnectButton() {
 /**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
  * @param {string} method - コマンド名
- * @param {object} params - パラメータ
- * @returns {Promise<object>} サーバー result フィールド
+ * @param {Object} params - パラメータ
+ * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendCommand(method, params = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {

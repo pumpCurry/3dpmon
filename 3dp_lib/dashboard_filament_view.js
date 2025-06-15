@@ -56,6 +56,7 @@
 
            showOverlayLength:          false,
            showOverlayPercent:         false,
+           showOverlayBar:             false,
            enableDrag:                 true,
            enableClick:                false,
            onClick:                    null,
@@ -100,6 +101,11 @@
   @keyframes dfv-blink-light { 0%,100%{opacity:1;transform:scale(1);}50%{opacity:.3;transform:scale(.8);} }
   .dfv-blink-slash { animation: dfv-blink-slash 0.5s infinite alternate ease-in-out; }
   @keyframes dfv-blink-slash { from{opacity:1;} to{opacity:.3;} }
+  /* ─────────── ボタン群ラッパー ─────────── */
+  .dfv-btn-wrapper { margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
+  .dfv-purchase-btn { font-size:1.2em; }
+  .dfv-price { font-weight:bold; margin-left:4px; align-self:center; }
+  .dfv-price-date { font-size:0.8em; color:#666; margin-left:4px; align-self:center; }
 
   /* オーバーレイ */
   .dfv-overlay { position:absolute; top:6px; left:6px; bottom:6px; right:6px; pointer-events:none; z-index:12; }
@@ -125,6 +131,25 @@
     padding:4px 8px; border-radius:4px;
     font-size:0.85em; font-weight:bold;
     pointer-events:none; z-index:14;
+  }
+
+  /* 進捗バー */
+  .dfv-overlay-bar {
+    position:absolute;
+    bottom:0;
+    left:0;
+    width:0;
+    height:4px;
+    background:#00FFFF;
+    transition:width 0.3s, background 0.3s;
+    pointer-events:none;
+  }
+
+  /* スライダー + ボタンラッパー */
+  .dfv-controls {
+    margin-top:4px;
+    display:flex;
+    align-items:center;
   }
 `;
   const style = document.createElement('style');
@@ -173,6 +198,7 @@
  *
  * @property {boolean} [showOverlayLength]           図上オーバーレイに残長表示
  * @property {boolean} [showOverlayPercent]          図上オーバーレイに残％表示
+ * @property {boolean} [showOverlayBar]              図上オーバーレイに進捗バー表示
  * @property {boolean} [showOverlayWeight]           図上オーバーレイに重量表示
  * @property {boolean} [showOverlayLengthOnly]       図上オーバーレイに長さのみ表示
  *
@@ -189,7 +215,12 @@
  * @property {boolean} [showInfoPercent]             情報欄に残％表示
  * @property {boolean} [showInfoLayers]              情報欄に残レイヤー数表示
  * @property {boolean} [showRotationInfo]            情報欄に回転角度表示
- */
+ * @property {string}  [purchaseLink]                購入先URL
+ * @property {number}  [price]                       価格
+ * @property {string}  [currencySymbol]              通貨記号（例: '¥', '$')
+ * @property {string}  [priceCheckDate]              価格確認日（YYYY-MM-DD）
+ * @property {boolean} [showPurchaseButton]          購入ボタン表示
+*/
 
 /* --------------------------------------------------------------------- */
 /*  2.  ユーティリティ                                                   */
@@ -349,6 +380,7 @@ export function createFilamentPreview(mount, opts) {
     showAutoRotateButton: true,
     showOverlayLength: false,
     showOverlayPercent: false,
+    showOverlayBar: false,
     enableDrag: true,
     enableClick: false,
     onClick: null,
@@ -364,8 +396,16 @@ export function createFilamentPreview(mount, opts) {
     showMaterialColorCode: false,
     manufacturerName: '',
     showManufacturerName: false,
+    purchaseLink:        '',       // 購入先URL
+    price:               0,        // 価格
+    currencySymbol:      '¥',      // 通貨記号
+    priceCheckDate:      '',       // 価格確認日
+    showPurchaseButton:  false,    // 購入ボタン表示
 
   }, opts);
+
+  // オーバーレイ下部の進捗バー表示
+  o.showOverlayBar = !!o.showOverlayBar;
 
   /* --- ルート要素 -------------------------------------------------- */
   mount.classList.add('dfv-card');
@@ -416,6 +456,7 @@ export function createFilamentPreview(mount, opts) {
   const overlay             = div('dfv-overlay');
   const overlayLength       = div('dfv-overlay-length');
   const overlayPercent      = div('dfv-overlay-percent');
+  const overlayBar          = div('dfv-overlay-bar');
   const overlayName         = div('dfv-overlay-name');
   const overlaySubName      = div('dfv-overlay-subname');
   const overlayMaterial     = div('dfv-overlay-material');
@@ -429,6 +470,7 @@ export function createFilamentPreview(mount, opts) {
   overlay.appendChild(overlayMaterial);
   overlay.appendChild(overlayColorCode);
   overlay.appendChild(overlayPercent);
+  overlay.appendChild(overlayBar);
   root.appendChild(overlay);
 
   // マテリアルタグ
@@ -573,7 +615,12 @@ export function createFilamentPreview(mount, opts) {
     slider.classList.add('dfv-slider-disabled');
   }
 
-  mount.appendChild(slider);
+  const controlsDiv = div('dfv-controls');
+  root.appendChild(controlsDiv);
+  controlsDiv.appendChild(slider);
+  // ───────── ボタン群のラッパー ─────────
+  const btnWrapper = div('dfv-btn-wrapper');
+  controlsDiv.appendChild(btnWrapper);
 
   // ───────────── ビュー初期化ボタン ─────────────
   let btnReset;
@@ -581,7 +628,7 @@ export function createFilamentPreview(mount, opts) {
     btnReset = document.createElement('button');
     btnReset.textContent = '↩︎';
     btnReset.className = 'dfv-btn';
-    mount.appendChild(btnReset);
+    btnWrapper.appendChild(btnReset);
 
     btnReset.addEventListener('click', () => {
       // 自動回転を解除
@@ -618,7 +665,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    mount.appendChild(btnProfile);
+    btnWrapper.appendChild(btnProfile);
   }
   let btnSide;
   if (o.showSideViewButton) {
@@ -640,7 +687,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    mount.appendChild(btnSide);
+    btnWrapper.appendChild(btnSide);
   }
 
   let btnFront;
@@ -663,7 +710,7 @@ export function createFilamentPreview(mount, opts) {
       rotZ = -50;
       redraw();
     });
-    mount.appendChild(btnFront);
+    btnWrapper.appendChild(btnFront);
   }
 
   // --- Y軸自動回転トグルボタン --- 
@@ -673,7 +720,7 @@ export function createFilamentPreview(mount, opts) {
     btnAuto.textContent = '⟲';
     btnAuto.className = 'dfv-btn';
     btnAuto.title = 'Toggle auto-rotate';
-    mount.appendChild(btnAuto);
+    btnWrapper.appendChild(btnAuto);
     btnAuto.addEventListener('click', () => {
       if (autoRotate) {
         cancelAnimationFrame(autoRotateId);
@@ -690,6 +737,28 @@ export function createFilamentPreview(mount, opts) {
         })();
       }
     });
+  }
+
+  // ───────────── 購入ボタン＆価格表示 ─────────────
+  if (o.showPurchaseButton && o.purchaseLink) {
+    const btnBuy = document.createElement('button');
+    btnBuy.textContent = '🛒';
+    btnBuy.className = 'dfv-btn dfv-purchase-btn';
+    btnBuy.title = '購入ページを開く';
+    btnBuy.addEventListener('click', () => {
+      window.open(o.purchaseLink, '_blank');
+    });
+    btnWrapper.appendChild(btnBuy);
+
+    const priceSpan = div('dfv-price');
+    priceSpan.textContent = `${o.currencySymbol}${o.price.toLocaleString()}`;
+    btnWrapper.appendChild(priceSpan);
+
+    if (o.priceCheckDate) {
+      const dateSpan = div('dfv-price-date');
+      dateSpan.textContent = o.priceCheckDate;
+      btnWrapper.appendChild(dateSpan);
+    }
   }
 
   /* --- 情報表示用コンテナ ---------------------------------------- */
@@ -972,6 +1041,19 @@ export function createFilamentPreview(mount, opts) {
         `<span class="dfv-overlay-percent-dot">.</span>` +
         `<span class="dfv-overlay-percent-frac">${fracPart}</span>` +
         `<span class="dfv-overlay-percent-sign">%</span>`;
+    }
+
+    // ----- オーバーレイ進捗バー更新 -----
+    const pct = isPresent ? currentLen / o.filamentTotalLength : 0;
+    overlayBar.style.display = o.showOverlayBar ? 'block' : 'none';
+    if (o.showOverlayBar) {
+      overlayBar.style.width = `${(pct*100).toFixed(2)}%`;
+      const fs = parseFloat(getComputedStyle(overlayPercent).fontSize);
+      overlayBar.style.height = `${fs * 0.6}px`;
+      // 滑らかに色が変わるよう、HSLの色相 180°→0° にマッピング
+      // 180°=水色, 120°=緑, 60°=黄, 30°=オレンジ, 0°=赤
+      const hue = pct * 180;
+      overlayBar.style.background = `hsl(${hue},100%,50%)`;
     }
 
 

@@ -18,6 +18,24 @@ import { logManager } from "./dashboard_log_util.js";
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
 
+function applySpoolDefaults(sp) {
+  sp.filamentDiameter ??= 1.75;
+  sp.filamentColor ??= "#22C55E";
+  sp.reelOuterDiameter ??= 200;
+  sp.reelThickness ??= 68;
+  sp.reelWindingInnerDiameter ??= 95;
+  sp.reelCenterHoleDiameter ??= 54;
+  sp.reelBodyColor ??= "#A1A1AA";
+  sp.reelFlangeTransparency ??= 0.4;
+  sp.manufacturerName ??= "";
+  sp.materialName ??= sp.material ?? "";
+  sp.materialSubName ??= "";
+  sp.purchasePrice ??= 0;
+  sp.density ??= 0;
+  sp.reelSubName ??= "";
+  return sp;
+}
+
 /**
  * ローカルストレージ保存時のデバッグログを有効／無効化する。
  *
@@ -44,7 +62,7 @@ function pushLog(msg, isErr = false) {
 /** localStorage へ保存するキー名 */
 const STORAGE_KEY = "3dp-monitor_1.400";
 /** 印刷履歴の最大保持件数 */
-const MAX_HISTORY = 50;
+const MAX_HISTORY = 150;
 
 /**
  * monitorData 全体を JSON にシリアライズし、localStorage に保存する。
@@ -112,7 +130,7 @@ export function restoreUnifiedStorage() {
       if (data.appSettings)    monitorData.appSettings    = data.appSettings;
       if (data.machines)       monitorData.machines       = data.machines;
       if (Array.isArray(data.filamentSpools))
-        monitorData.filamentSpools = data.filamentSpools;
+        monitorData.filamentSpools = data.filamentSpools.map(sp => applySpoolDefaults(sp));
       if ("currentSpoolId" in data)
         monitorData.currentSpoolId = data.currentSpoolId;
       _lastSavedJson = saved;
@@ -296,5 +314,32 @@ export function savePrintHistory(history) {
   monitorData.appSettings.printManager ??= {};
   monitorData.appSettings.printManager.history =
     history.slice(0, MAX_HISTORY);
+  saveUnifiedStorage();
+}
+
+/**
+ * 印刷動画マップを取得する。
+ * 取得と同時に件数をログへ出力し、デバッグ用に現在の内容をコンソールへ表示します。
+ * @returns {Record<string, string>} id をキーとした動画 URL マップ
+ */
+export function loadPrintVideos() {
+  const map = monitorData.appSettings.printManager?.videos || {};
+  // デバッグ用: 現在保持している動画マップ件数をログに残す
+  pushLog(`[loadPrintVideos] マップ読込件数: ${Object.keys(map).length}`);
+  console.debug("[loadPrintVideos] map", map);
+  return map;
+}
+
+/**
+ * 印刷動画マップを保存する。
+ * 保存件数をログに出力し、保存内容もコンソールへ出力して調査を容易にします。
+ * @param {Record<string, string>} map - id をキーとした動画 URL マップ
+ */
+export function savePrintVideos(map) {
+  monitorData.appSettings.printManager ??= {};
+  monitorData.appSettings.printManager.videos = map;
+  // デバッグ用: 保存する動画マップの件数をログに記録
+  pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);
+  console.debug("[savePrintVideos] map", map);
   saveUnifiedStorage();
 }

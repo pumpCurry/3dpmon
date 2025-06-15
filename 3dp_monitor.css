@@ -485,12 +485,33 @@ input:checked + .slider:before {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 5px;
+  margin-bottom: 0;
 }
-.tabs button {
-  margin-right: 5px;
+.log-card .tabs {
+  display: flex;
+  border-bottom: 1px solid #ccc;
+}
+.log-card .tabs button {
+  margin-right: 2px;
   font-size: 12px;
-  padding: 2px 4px;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-bottom: none;
+  background: #eee;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.log-card .tabs button.active {
+  background: #fff;
+  font-weight: bold;
+}
+.log-card .tab-content {
+  border: 1px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+}
+.log-card .log-box {
+  border: none;
 }
 .log-controls button {
   font-size: 12px;
@@ -560,8 +581,6 @@ input:checked + .slider:before {
 #notification-history .notification-entry {
   font-family: Consolas, monospace;
   font-size: 90%;
-  padding: 3px;
-  border-bottom: 1px solid #ccc;
 }
 
 /* ---------------------------------------------------------------
@@ -597,10 +616,8 @@ input:checked + .slider:before {
 .initial-log { background: #eef; }
 .state-log { background-color: #dfd; }
 .notification-entry {
-  background-color: #ffe9e9;
-  padding: 4px 8px;
-  margin-bottom: 4px;
-  border-radius: 3px;
+  margin: 0;
+  padding: 2px 0;
 }
 
 
@@ -703,8 +720,30 @@ input:checked + .slider:before {
 }
 
 /* 2-tab panels */
-.print-history-card .tabs button.active { background:#444; color:#fff; }
-.print-history-card .tabs button { cursor:pointer; }
+.print-history-card .tabs {
+  display: flex;
+  border-bottom: 1px solid #ccc;
+}
+.print-history-card .tabs button {
+  margin-right: 2px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-bottom: none;
+  background: #eee;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.print-history-card .tabs button.active {
+  background: #fff;
+  font-weight: bold;
+}
+.print-history-card .tab-content {
+  border: 1px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  padding: 0.5rem;
+}
 
 
 /* -------------------------------
@@ -815,29 +854,32 @@ input:checked + .slider:before {
 .stage-wing {
   position: absolute;
   bottom: 0;
-  width: 40px;
-  height: 30px;
+  width: 35px;
+  height: 20px;
   background: #555;
   clip-path: polygon(0 100%, 100% 100%, 50% 0);
+  border: 1px solid #666;
+  z-index: -1;
 }
 .stage-wing.left {
-  left: -30px;
+  left: -20px;
   transform: rotateY(180deg);
 }
 .stage-wing.right {
-  right: -30px;
+  right: -20px;
 }
 .stage-tab {
   position: absolute;
   bottom: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 40px;
+  width: 20px;
   height: 15px;
   background: #555;
   border-radius: 4px 4px 0 0;
-  border: 1px solid #333;
+  border: 1px solid #666;
+  z-index: -1;
 }
+.stage-tab.left { left: 10%; transform: translateX(0%); }
+.stage-tab.right { right: 10%; transform: translateX(0%); }
 
 /* XYZ axis indicators */
 .axis {
@@ -849,19 +891,25 @@ input:checked + .slider:before {
 }
 .x-axis {
   width: 40px;
-  height: 2px;
+  height: 3px;
   background: red;
 }
 .y-axis {
-  width: 2px;
+  width: 3px;
   height: 40px;
   background: green;
 }
 .z-axis {
   width: 40px;
-  height: 2px;
-  background: blue;
-  transform: rotateX(90deg);
+  height: 3px;
+  background: #4ea3ff;
+  transform: rotateX(-90deg) rotateZ(-90deg) translateZ(2px);
+}
+.z-axis-cross {
+  width: 40px;
+  height: 3px;
+  background: #4ea3ff;
+  transform: rotateX(90deg) rotateY(90deg) rotateZ(90deg);
 }
 
 /* stage rotation control buttons */
@@ -875,4 +923,41 @@ input:checked + .slider:before {
 }
 .stage-rotate-buttons button:last-child {
   margin-right: 0;
+}
+.stage-rotate-buttons .stage-spin-active {
+  background: #e5e7eb;
+  border: 2px solid #888;
+}
+
+/* ---------- Video Overlay ---------- */
+.video-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4000;
+}
+.video-box {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  width: 90%;
+  max-width: 480px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.video-box video {
+  width: 100%;
+  height: auto;
+}
+.video-progress {
+  width: 100%;
+  margin-top: 8px;
+}
+.video-buttons button {
+  margin: 4px;
 }

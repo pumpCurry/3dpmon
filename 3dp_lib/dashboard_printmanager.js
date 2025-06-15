@@ -19,7 +19,9 @@ import {
   loadPrintCurrent,
   savePrintCurrent,
   loadPrintHistory,
-  savePrintHistory
+  savePrintHistory,
+  loadPrintVideos,
+  savePrintVideos
 } from "./dashboard_storage.js";
 
 import { formatEpochToDateTime } from "./dashboard_utils.js";
@@ -28,6 +30,7 @@ import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
 import { getCurrentSpool, useFilament } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
+import { showVideoOverlay } from "./dashboard_video_player.js";
 
 /** 履歴の最大件数 */
 export const MAX_HISTORY = 150;
@@ -59,11 +62,15 @@ function makeThumbUrl(baseUrl, rawFilename) {
  * @param {string} baseUrl       - サムネイル取得用ベース URL
  * @returns {{
  *   id:number,
+ *   rawFilename:string,
  *   filename:string,
  *   startTime:string,
  *   finishTime?:string|null,
  *   materialUsedMm:number,
  *   thumbUrl:string,
+ *   startway?:number,
+ *   size?:number,
+ *   filemd5?:string,
  *   preparationTime?:number,
  *   firstLayerCheckTime?:number,
  *   pauseTime?:number,
@@ -71,10 +78,15 @@ function makeThumbUrl(baseUrl, rawFilename) {
  *   filamentColor?:string,
  *   filamentType?:string
  * }}
+ * @description
+ * 受信した生データ `raw` をHTML描画用オブジェクトに整形します。
+ * サムネイルURL生成や開始方式などの追加情報もここで抽出します。
  */
 export function parseRawHistoryEntry(raw, baseUrl) {
   const id             = raw.id;
   const filename       = raw.filename?.split("/").pop() || "(不明)";
+  // フルパスも保持しておくことでコマンド送信時に利用できるようにする
+  const rawFilename    = raw.filename;
   const startSec       = raw.starttime || 0;
   const useTimeSec     = raw.usagetime || 0;
   const startTime      = new Date(startSec * 1000).toISOString();
@@ -87,6 +99,10 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   // raw.filename に基づくサムネイル生成
   const thumbUrl       = makeThumbUrl(baseUrl, raw.filename);
 
+  const startway       = raw.startway;
+  const size           = raw.size;
+  const filemd5        = raw.filemd5;
+
   const preparationTime     = raw.preparationTime;
   const firstLayerCheckTime = raw.firstLayerCheckTime;
   const pauseTime           = raw.pauseTime;
@@ -96,11 +112,15 @@ export function parseRawHistoryEntry(raw, baseUrl) {
 
   return {
     id,
+    rawFilename,
     filename,
     startTime,
     finishTime,
     materialUsedMm,
     thumbUrl,
+    startway,
+    size,
+    filemd5,
     preparationTime,
     firstLayerCheckTime,
     pauseTime,
@@ -173,26 +193,60 @@ export function saveHistory(jobs) {
 }
 
 /**
+ * 保存済みの動画マップを取得する。
+ * @returns {Record<string, string>}
+ */
+export function loadVideos() {
+  return loadPrintVideos();
+}
+
+/**
+ * 動画マップを保存する。
+ * @param {Record<string, string>} map
+ */
+export function saveVideos(map) {
+  savePrintVideos(map);
+}
+
+/**
  * 保存済みジョブ配列を履歴テーブル用の簡易 raw 形式に変換します。
  *
  * @param {Array<Object>} jobs - loadHistory() で取得した履歴配列
  * @returns {Array<Object>} テーブル描画用のオブジェクト配列
+ * @description
+ * `jobs` 配列に含まれる各要素を表示用に整形し、
+ * `renderHistoryTable()` が要求するフィールドを備えた
+ * オブジェクト配列へ変換します。具体的には以下のプロパティを持ちます:
+ * - `id`               : 履歴エントリ ID
+ * - `filename`         : ファイル名
+ * - `startway`         : 開始方式 (数値)
+ * - `size`             : ファイルサイズ
+ * - `ctime`            : 作成時刻(UNIX秒)
+ * - `starttime`        : 開始時刻(UNIX秒)
+ * - `usagetime`        : 使用時間(秒)
+ * - `usagematerial`    : 使用フィラメント量(mm)
+ * - `printfinish`      : 成功フラグ(1/0)
+ * - `filemd5`          : ファイルMD5ハッシュ
+ * - `rawFilename`      : フルパス(存在すれば)
+ * - その他 `videoUrl` など追加情報
  */
 export function jobsToRaw(jobs) {
-  return jobs.map(job => {
-    const startEpoch = job.startTime ? Date.parse(job.startTime) / 1000 : 0;
-    const finishEpoch = job.finishTime ? Date.parse(job.finishTime) / 1000 : 0;
-    return {
-      id:            job.id,
-      filename:      job.filename,
-      startway:      null,
-      size:          0,
-      ctime:         startEpoch,
-      starttime:     startEpoch,
-      usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
-      usagematerial: job.materialUsedMm,
-      printfinish:   finishEpoch ? 1 : 0,
-      filemd5:       "",
+    return jobs.map(job => {
+      const startEpoch = job.startTime ? Date.parse(job.startTime) / 1000 : 0;
+      const finishEpoch = job.finishTime ? Date.parse(job.finishTime) / 1000 : 0;
+      return {
+        id:            job.id,
+        filename:      job.filename,
+        ...(job.rawFilename !== undefined && { rawFilename: job.rawFilename }),
+        startway:      job.startway ?? null,
+        size:          job.size ?? 0,
+        ctime:         startEpoch,
+        starttime:     startEpoch,
+        usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
+        usagematerial: job.materialUsedMm,
+        printfinish:   finishEpoch ? 1 : 0,
+        filemd5:       job.filemd5 ?? "",
+      ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
       ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
       ...(job.pauseTime             !== undefined && { pauseTime:             job.pauseTime }),
@@ -387,6 +441,12 @@ export async function refreshHistory(
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
+
+  const videoMap = loadVideos();
+  jobs.forEach(j => {
+    const info = videoMap[j.id];
+    if (info && info.videoUrl) j.videoUrl = info.videoUrl;
+  });
   saveHistory(jobs);
 
   // 現在印刷中ジョブの更新があれば再描画
@@ -407,6 +467,152 @@ export async function refreshHistory(
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
   renderHistoryTable(mergedRaw, baseUrl);
+}
+
+/**
+ * 履歴リストをマージして保存し、UI を更新する。
+ *
+ * 受信した `rawArray` を内部モデルに変換し、既に保存されている履歴と
+ * 一時バッファの内容を統合した上で `saveHistory()` を実行する。保存後は
+ * `jobsToRaw()` で簡易形式へ変換し、`renderHistoryTable()` によって
+ * ダッシュボードの表へ反映する。これにより表示内容は常にマージ済みの
+ * 最新状態となる。
+ *
+ * @param {Array<Object>} rawArray - プリンタから受信した生履歴データ配列
+ * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
+ * @param {string} [currentContainerId="print-current-container"]
+ *          現在ジョブ表示用コンテナの要素 ID
+ * @returns {void}
+ */
+export function updateHistoryList(
+  rawArray,
+  baseUrl,
+  currentContainerId = "print-current-container"
+) {
+  if (!Array.isArray(rawArray)) return;
+  pushLog("[updateHistoryList] マージ処理を開始", "info");
+  const newJobs = parseRawHistoryList(rawArray, baseUrl);
+
+  const machine = monitorData.machines[currentHostname];
+  const buf = machine ? machine.historyData : [];
+  const appliedIdx = new Set();
+  if (buf && buf.length) {
+    const bufMap = new Map(buf.map((b, i) => [b.id, { data: b, idx: i }]));
+    newJobs.forEach(job => {
+      const found = bufMap.get(job.id);
+      if (!found) return;
+      Object.entries(found.data).forEach(([k, v]) => {
+        if (k === "id") return;
+        if (v != null && job[k] == null) job[k] = v;
+      });
+      appliedIdx.add(found.idx);
+    });
+    if (machine) {
+      machine.historyData = buf.filter((_, i) => !appliedIdx.has(i));
+    }
+  }
+
+  let merged = false;
+  const oldJobs = loadHistory();
+  const mergedMap = new Map();
+  newJobs.forEach(j => mergedMap.set(j.id, j));
+  oldJobs.forEach(j => {
+    const cur = mergedMap.get(j.id);
+    if (cur) {
+      Object.entries(j).forEach(([k, v]) => {
+        if (cur[k] == null && v != null) {
+          cur[k] = v;
+          merged = true;
+        }
+      });
+    } else {
+      mergedMap.set(j.id, j);
+      merged = true;
+    }
+  });
+  const jobs = Array.from(mergedMap.values())
+    .sort((a, b) => b.id - a.id)
+    .slice(0, MAX_HISTORY);
+
+  const videoMap = loadVideos();
+  jobs.forEach(j => {
+    const info = videoMap[j.id];
+    if (info && info.videoUrl) j.videoUrl = info.videoUrl;
+  });
+  saveHistory(jobs);
+  pushLog(
+    `[updateHistoryList] 保存データとマージ ${merged ? "完了" : "変更なし"}`,
+    "info"
+  );
+
+  const prev = loadCurrent();
+  if (jobs[0]?.id !== prev?.id) {
+    saveCurrent(jobs[0]);
+    renderPrintCurrent(document.getElementById(currentContainerId));
+  }
+
+  // ここから UI 更新処理。保存済みジョブ配列を簡易 raw 形式に変換し、
+  // 統合された履歴としてテーブルへ描画する
+  const raw = jobsToRaw(jobs);
+  renderHistoryTable(raw, baseUrl);
+  pushLog("[updateHistoryList] UI へ反映しました", "info");
+}
+
+/**
+ * 動画リストをマージし履歴に適用する。
+ *
+ * - 動画マップまたは履歴が更新された場合、`renderHistoryTable()` を呼び出し
+ *   UI を即時更新する。
+ * - 動画マップに変更があった場合はログに "完了" が表示される。
+ *
+ * @param {Array<Object>} videoArray - 新規取得した動画情報の配列
+ * @param {string} baseUrl           - サーバーのベース URL
+ * @returns {void}
+ */
+export function updateVideoList(videoArray, baseUrl) {
+  if (!Array.isArray(videoArray) || !videoArray.length) return;
+  pushLog("[updateVideoList] マージ処理を開始", "info");
+  const map = { ...loadVideos() };
+  let updated = false;
+  videoArray.forEach(v => {
+    if (!v.id) return;
+    const url = `${baseUrl}/downloads/video/${v.id}.mp4`;
+    const entry = { ...v, videoUrl: url };
+    const cur = map[v.id];
+    if (!cur || JSON.stringify(cur) !== JSON.stringify(entry)) {
+      map[v.id] = entry;
+      updated = true;
+    }
+  });
+  if (updated) {
+    // 新しい動画情報が存在するため保存処理を実行
+    pushLog("[updateVideoList] saveVideos() を呼び出します", "info");
+    saveVideos(map);
+  }
+
+  const jobs = loadHistory();
+  let changed = false;
+  jobs.forEach(job => {
+    const info = map[job.id];
+    if (info && info.videoUrl && job.videoUrl !== info.videoUrl) {
+      job.videoUrl = info.videoUrl;
+      changed = true;
+    }
+  });
+  if (changed) {
+    saveHistory(jobs);
+  }
+  if (updated || changed) {
+    const raw = jobsToRaw(jobs);
+    renderHistoryTable(raw, baseUrl);
+  }
+  pushLog(
+    `[updateVideoList] 保存データとマージ ${updated || changed ? "完了" : "変更なし"}`,
+    "info"
+  );
+  if (updated || changed) {
+    pushLog("[updateVideoList] UI へ反映しました", "info");
+  }
 }
 
 /**
@@ -449,6 +655,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
         : "—";
     const finish    = raw.printfinish ? "✔︎" : "";
     const md5       = raw.filemd5 || "—";
+    const videoLink = raw.videoUrl
+      ? `<button class="video-link" data-url="${raw.videoUrl}">📹</button>`
+      : "";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -475,6 +684,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td>${umaterial}</td>
       <td>${finish}</td>
       <td>${md5}</td>
+      <td>${videoLink}</td>
     `;
     tbody.appendChild(tr);
 
@@ -488,11 +698,14 @@ export function renderHistoryTable(rawArray, baseUrl) {
     tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
       handleDeleteClick(raw);
     });
+    tr.querySelector(".video-link")?.addEventListener("click", () => {
+      showVideoOverlay(raw.videoUrl);
+    });
   });
 
   // ソート用リスナ追加
   document.querySelectorAll("#print-history-table th").forEach(th => {
-    th.addEventListener("click", () => sortTable("#print-history-table", th.dataset.key));
+    th.onclick = () => sortTable("#print-history-table", th.dataset.key);
   });
 
 }
@@ -534,8 +747,9 @@ async function handlePrintClick(raw, thumbUrl) {
   }
 
   // 実際にプリントコマンドを送信
+  const target = raw.rawFilename ?? raw.filename;
   sendCommand("set", {
-    opGcodeFile: `printprt:${raw.filename}`
+    opGcodeFile: `printprt:${target}`
   });
 }
 
@@ -560,8 +774,9 @@ async function handleDeleteClick(raw) {
   });
   if (!ok) return;
 
+  const target = raw.rawFilename ?? raw.filename;
   sendCommand("set", {
-    opGcodeFile: `deleteprt:${raw.filename}`
+    opGcodeFile: `deleteprt:${target}`
   });
 }
 
@@ -598,9 +813,10 @@ async function handleRenameClick(raw) {
   if (!ok) return;
 
   // 元ディレクトリを維持してフルパスを組み立て
-  const dir = raw.filename.slice(0, raw.filename.lastIndexOf("/"));
+  const target = raw.rawFilename ?? raw.filename;
+  const dir = target.slice(0, target.lastIndexOf("/"));
   sendCommand("set", {
-    opGcodeFile: `renameprt:${raw.filename}:${dir}/${newName}`
+    opGcodeFile: `renameprt:${target}:${dir}/${newName}`
   });
 }
 
@@ -830,6 +1046,7 @@ function parseFileInfo(text, baseUrl) {
 /** --- 3) ファイル一覧描画 --- */
 export function renderFileList(info, baseUrl) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
+  pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info");
   const arr = parseFileInfo(info.fileInfo, baseUrl);
 
   // 総数表示
@@ -882,6 +1099,7 @@ export function renderFileList(info, baseUrl) {
       sortTable("#file-list-table", th.dataset.key);
     });
   });
+  pushLog("[renderFileList] UI へ反映しました", "info");
 }
 
 /** --- 4) 汎用ソート関数 --- */

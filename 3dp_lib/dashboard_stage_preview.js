@@ -19,9 +19,19 @@ let lastXYPosition = { x: 0, y: 0 };
 // 回転状態
 let stageRotX = 0;
 let stageRotZ = 0;
+const STAGE_ROT_X_MIN = 0;
+const STAGE_ROT_X_MAX = 70;
+
+// XYプレビューのスケール関連定数
+// ステージサイズ（mm）および表示倍率を定数化
+const STAGE_SIZE_MM = 300;
+const STAGE_SCALE = 0.5;
 
 /**
- * XYプレビューをlocalStorageから復元
+ * localStorage から保存済みの XY プレビュー情報を読み込み、
+ * 各種履歴データを復元する。
+ *
+ * @returns {void}
  */
 function restoreXYPreviewState() {
   try {
@@ -38,7 +48,9 @@ function restoreXYPreviewState() {
 }
 
 /**
- * XYプレビュー状態をlocalStorageへ保存
+ * 現在の XY プレビュー履歴情報を localStorage へ保存する。
+ *
+ * @returns {void}
  */
 function saveXYPreviewState() {
   const obj = {
@@ -54,7 +66,33 @@ function saveXYPreviewState() {
 }
 
 /**
- * XYプレビューの初期化(背景格子, ラベル, ドット生成)
+ * 保存済みの XY 履歴を画面上のドットへ展開し、
+ * 表示状態を復元する。
+ *
+ * @returns {void}
+ */
+function restoreXYHistoryDots() {
+  const stagePx = STAGE_SIZE_MM * STAGE_SCALE;
+  xyDots.forEach(dot => {
+    dot.style.display = "none";
+  });
+  xyHistory.forEach((pos, idx) => {
+    if (idx >= xyDots.length) return;
+    const screenX = stagePx - (pos.x * STAGE_SCALE);
+    const screenY = pos.y * STAGE_SCALE;
+    const dot = xyDots[idx];
+    dot.style.right = (screenX - 1.5) + "px";
+    dot.style.bottom = (screenY - 1.5) + "px";
+    dot.style.display = "block";
+  });
+  xyUpdateCount = xyHistoryIndex + 1;
+}
+
+/**
+ * XY ステージの背景格子やラベル、履歴表示用ドットなど
+ * 初期描画を行う。
+ *
+ * @returns {void}
  */
 function initXYPreview() {
   const container = document.getElementById("xy-stage");
@@ -63,6 +101,36 @@ function initXYPreview() {
   const width = container.clientWidth;
   const height = container.clientHeight;
 
+  // 左右の羽
+  const leftWing = document.createElement("div");
+  leftWing.className = "stage-wing left";
+  container.appendChild(leftWing);
+  const rightWing = document.createElement("div");
+  rightWing.className = "stage-wing right";
+  container.appendChild(rightWing);
+  
+  // 下のつまみ（左右それぞれ）
+  const leftTab = document.createElement("div");
+  leftTab.className = "stage-tab left";
+  container.appendChild(leftTab);
+  const rightTab = document.createElement("div");
+  rightTab.className = "stage-tab right";
+  container.appendChild(rightTab);
+
+  // XYZ軸の棒
+  const axisX = document.createElement("div");
+  axisX.className = "axis x-axis";
+  container.appendChild(axisX);
+  const axisY = document.createElement("div");
+  axisY.className = "axis y-axis";
+  container.appendChild(axisY);
+  const axisZ = document.createElement("div");
+  axisZ.className = "axis z-axis";
+  container.appendChild(axisZ);
+  const axisZCross = document.createElement("div");
+  axisZCross.className = "axis z-axis-cross";
+  container.appendChild(axisZCross);
+  
   for (let i = 1; i <= gridCount; i++) {
     // 横線
     const hLine = document.createElement("div");
@@ -107,18 +175,6 @@ function initXYPreview() {
   label0.style.bottom = "4px";
   container.appendChild(label0);
 
-  // 左右の羽
-  const leftWing = document.createElement("div");
-  leftWing.className = "stage-wing left";
-  container.appendChild(leftWing);
-  const rightWing = document.createElement("div");
-  rightWing.className = "stage-wing right";
-  container.appendChild(rightWing);
-  // 下のつまみ
-  const tab = document.createElement("div");
-  tab.className = "stage-tab";
-  container.appendChild(tab);
-
   // 履歴用ドット生成
   for (let i = 0; i < maxDots; i++) {
     const dot = document.createElement("div");
@@ -152,17 +208,6 @@ function initXYPreview() {
   currentCircle.style.borderRadius = "50%";
   container.appendChild(currentCircle);
 
-  // XYZ軸の棒
-  const axisX = document.createElement("div");
-  axisX.className = "axis x-axis";
-  container.appendChild(axisX);
-  const axisY = document.createElement("div");
-  axisY.className = "axis y-axis";
-  container.appendChild(axisY);
-  const axisZ = document.createElement("div");
-  axisZ.className = "axis z-axis";
-  container.appendChild(axisZ);
-
   // ドラッグ回転
   let dragging = false, lastX = 0, lastY = 0;
   container.style.cursor = "grab";
@@ -170,8 +215,10 @@ function initXYPreview() {
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
-    stageRotZ = (stageRotZ + dx * 0.5 + 360) % 360;
-    stageRotX = (stageRotX - dy * 0.5 + 360) % 360;
+    // マウス移動量に応じてZ軸回転値を更新（右ドラッグで右回転）
+    stageRotZ -= dx * 0.5;
+    const newX = stageRotX - dy * 0.5;
+    stageRotX = Math.min(Math.max(newX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     lastX = e.clientX;
     lastY = e.clientY;
     applyStageTransform();
@@ -192,27 +239,27 @@ function initXYPreview() {
   });
 
   applyStageTransform();
+  restoreXYHistoryDots();
 
   xyInitialized = true;
-  xyUpdateCount = 0;
 }
 
 /**
- * XYプレビューを更新する(即時呼び出し)
- * @param {number} x
- * @param {number} y
+ * 渡された X,Y 座標を元に XY プレビューの現在位置および
+ * 履歴ドットを更新する。
+ *
+ * @param {number} x - X 座標値(mm)
+ * @param {number} y - Y 座標値(mm)
+ * @returns {void}
  */
 function updateXYPreview(x, y) {
   if (!xyInitialized) {
     initXYPreview();
   }
   // スケール定義
-  const STAGE_SIZE_MM = 300;
-  const SCALE = 0.5;
-
-  const stagePx = STAGE_SIZE_MM * SCALE;
-  const screenX = stagePx - (x * SCALE);
-  const screenY = y * SCALE;
+  const stagePx = STAGE_SIZE_MM * STAGE_SCALE;
+  const screenX = stagePx - (x * STAGE_SCALE);
+  const screenY = y * STAGE_SCALE;
 
   const currentDot = document.getElementById("xy-current-dot");
   const currentCircle = document.getElementById("xy-current-circle");
@@ -238,8 +285,10 @@ function updateXYPreview(x, y) {
 }
 
 /**
- * Zプレビュー更新(即時呼び出し)
- * @param {number} z
+ * Z 軸の進捗バーおよび数値表示を更新する。
+ *
+ * @param {number} z - Z 座標値(mm)
+ * @returns {void}
  */
 function updateZPreview(z) {
   const scale = 0.5;
@@ -256,21 +305,37 @@ function updateZPreview(z) {
   }
 }
 
+/**
+ * 現在保持している回転値を DOM に反映させ、
+ * ステージの傾きと回転を更新する。
+ *
+ * @returns {void}
+ */
 function applyStageTransform() {
   const container = document.getElementById("xy-stage");
   if (container) {
-    stageRotX = (stageRotX + 360) % 360;
-    stageRotZ = (stageRotZ + 360) % 360;
-    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
+    stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
+    const rotZ = ((stageRotZ % 360) + 360) % 360;
+    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${rotZ}deg)`;
   }
 }
 
+/**
+ * ステージを真上から見た角度にリセットする。
+ *
+ * @returns {void}
+ */
 function setTopView() {
   stageRotX = 0;
   stageRotZ = 0;
   applyStageTransform();
 }
 
+/**
+ * カメラ視点からの角度に設定する。
+ *
+ * @returns {void}
+ */
 function setCameraView() {
   stageRotX = 50;
   stageRotZ = 50;
@@ -278,34 +343,88 @@ function setCameraView() {
 }
 
 // --- 新しい固定アングル ---
+/**
+ * ステージを完全な俯瞰状態にし、Z スピンも停止する。
+ *
+ * @returns {void}
+ */
 function setFlatView() {
+  stopZSpin();
   stageRotX = 0;
   stageRotZ = 0;
   applyStageTransform();
 }
 
+/**
+ * 45 度の傾きを持つ斜め視点に設定する。
+ * Z スピンは停止される。
+ *
+ * @returns {void}
+ */
 function setTilt45View() {
+  stopZSpin();
   stageRotX = 45;
   stageRotZ = 0;
   applyStageTransform();
 }
 
+/**
+ * 斜め上から見下ろす視点に設定する。
+ * Z スピンは停止される。
+ *
+ * @returns {void}
+ */
 function setObliqueView() {
+  stopZSpin();
   stageRotX = 65;
   stageRotZ = 72.5;
   applyStageTransform();
 }
 
 let spinTimer = null;
-function toggleZSpin() {
+/**
+ * スピンボタンの状態を切り替える。
+ *
+ * @param {boolean} active - ボタンをアクティブ表示にするかどうか
+ * @returns {void}
+ */
+function updateSpinButton(active) {
+  const btn = document.getElementById("btn-stage-spin");
+  if (!btn) return;
+  if (active) {
+    btn.classList.add("stage-spin-active");
+  } else {
+    btn.classList.remove("stage-spin-active");
+  }
+}
+
+/**
+ * Z スピンを停止し、タイマーをクリアする。
+ *
+ * @returns {void}
+ */
+function stopZSpin() {
   if (spinTimer) {
     clearInterval(spinTimer);
     spinTimer = null;
+    updateSpinButton(false);
+  }
+}
+/**
+ * Z スピンの開始と停止をトグルする。
+ *
+ * @returns {void}
+ */
+function toggleZSpin() {
+  if (spinTimer) {
+    stopZSpin();
   } else {
     spinTimer = setInterval(() => {
-      stageRotZ = (stageRotZ + 2) % 360;
+      // 連続回転させるため値を増加させ続ける
+      stageRotZ += 2;
       applyStageTransform();
     }, 100);
+    updateSpinButton(true);
   }
 }
 
@@ -321,5 +440,6 @@ export {
   setFlatView,
   setTilt45View,
   setObliqueView,
-  toggleZSpin
+  toggleZSpin,
+  stopZSpin
 };
