@@ -925,6 +925,21 @@ export function setupUploadUI() {
     }
   }
 
+  /**
+   * ファイル一覧を取得してアップロード成否を確認する
+   * @param {string} fname - アップロードしたファイル名
+   * @returns {Promise<boolean>} 最新ファイル名が一致すれば true
+   */
+  async function verifyUploadSuccess(fname) {
+    try {
+      await sendCommand("get", { reqGcodeFile: 1 });
+    } catch (e) {
+      console.warn("verifyUploadSuccess: sendCommand failed", e);
+    }
+    const first = document.querySelector('#file-list-table tbody tr:first-child td[data-key="filename"]');
+    return first?.textContent.trim() === fname;
+  }
+
   function uploadFile(file) {
     btn.disabled = true;
     showProgress();
@@ -964,10 +979,24 @@ export function setupUploadUI() {
     const handleError = async () => {
       hideProgress();
       btn.disabled = false;
+      const detail = `status=${xhr.status} readyState=${xhr.readyState}`;
+      // -- ファイル一覧を再取得し、最新がアップロードしたファイルなら成功扱い --
+      const uploaded = await verifyUploadSuccess(file.name);
+      if (uploaded) {
+        await showConfirmDialog({
+          level: "success",
+          title: "アップロード完了",
+          message: `${file.name} をアップロードしました (応答なし)`,
+          confirmText: "OK"
+        });
+        currentFile = null;
+        input.value = "";
+        return;
+      }
       await showConfirmDialog({
         level: "error",
         title: "アップロード失敗",
-        message: "ネットワークエラー",
+        message: `ネットワークエラー (${detail})`,
         confirmText: "OK"
       });
     };
