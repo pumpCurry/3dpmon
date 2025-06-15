@@ -319,20 +319,27 @@ export function savePrintHistory(history) {
 
 /**
  * 印刷動画マップを取得する。
- *
+ * 取得と同時に件数をログへ出力し、デバッグ用に現在の内容をコンソールへ表示します。
  * @returns {Record<string, string>} id をキーとした動画 URL マップ
  */
 export function loadPrintVideos() {
-  return monitorData.appSettings.printManager?.videos || {};
+  const map = monitorData.appSettings.printManager?.videos || {};
+  // デバッグ用: 現在保持している動画マップ件数をログに残す
+  pushLog(`[loadPrintVideos] マップ読込件数: ${Object.keys(map).length}`);
+  console.debug("[loadPrintVideos] map", map);
+  return map;
 }
 
 /**
  * 印刷動画マップを保存する。
- *
+ * 保存件数をログに出力し、保存内容もコンソールへ出力して調査を容易にします。
  * @param {Record<string, string>} map - id をキーとした動画 URL マップ
  */
 export function savePrintVideos(map) {
   monitorData.appSettings.printManager ??= {};
   monitorData.appSettings.printManager.videos = map;
+  // デバッグ用: 保存する動画マップの件数をログに記録
+  pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);
+  console.debug("[savePrintVideos] map", map);
   saveUnifiedStorage();
 }

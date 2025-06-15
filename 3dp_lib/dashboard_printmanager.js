@@ -578,7 +578,11 @@ export function updateVideoList(videoArray, baseUrl) {
       updated = true;
     }
   });
-  if (updated) saveVideos(map);
+  if (updated) {
+    // 新しい動画情報が存在するため保存処理を実行
+    pushLog("[updateVideoList] saveVideos() を呼び出します", "info");
+    saveVideos(map);
+  }
 
   const jobs = loadHistory();
   let changed = false;
