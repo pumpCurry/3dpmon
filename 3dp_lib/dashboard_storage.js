@@ -282,7 +282,9 @@ export function estimateLocalStorageUsageBytes() {
  * @returns {Object|null} ジョブオブジェクト、未設定時は null
  */
 export function loadPrintCurrent() {
-  return monitorData.appSettings.printManager?.current || null;
+  const host = currentHostname;
+  const machine = host ? monitorData.machines[host] : null;
+  return machine?.printStore.current || null;
 }
 
 /**
@@ -291,8 +293,11 @@ export function loadPrintCurrent() {
  * @param {Object|null} job - 保存するジョブオブジェクト（null 許容）
  */
 export function savePrintCurrent(job) {
-  monitorData.appSettings.printManager ??= {};
-  monitorData.appSettings.printManager.current = job;
+  const host = currentHostname;
+  if (!host) return;
+  const machine = monitorData.machines[host];
+  if (!machine) return;
+  machine.printStore.current = job;
   saveUnifiedStorage();
 }
 
@@ -302,7 +307,9 @@ export function savePrintCurrent(job) {
  * @returns {Array<Object>} 履歴配列
  */
 export function loadPrintHistory() {
-  return monitorData.appSettings.printManager?.history || [];
+  const host = currentHostname;
+  const machine = host ? monitorData.machines[host] : null;
+  return machine?.printStore.history || [];
 }
 
 /**
@@ -311,9 +318,11 @@ export function loadPrintHistory() {
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
 export function savePrintHistory(history) {
-  monitorData.appSettings.printManager ??= {};
-  monitorData.appSettings.printManager.history =
-    history.slice(0, MAX_HISTORY);
+  const host = currentHostname;
+  if (!host) return;
+  const machine = monitorData.machines[host];
+  if (!machine) return;
+  machine.printStore.history = history.slice(0, MAX_HISTORY);
   saveUnifiedStorage();
 }
 
@@ -323,7 +332,9 @@ export function savePrintHistory(history) {
  * @returns {Record<string, string>} id をキーとした動画 URL マップ
  */
 export function loadPrintVideos() {
-  const map = monitorData.appSettings.printManager?.videos || {};
+  const host = currentHostname;
+  const machine = host ? monitorData.machines[host] : null;
+  const map = machine?.printStore.videos || {};
   // デバッグ用: 現在保持している動画マップ件数をログに残す
   pushLog(`[loadPrintVideos] マップ読込件数: ${Object.keys(map).length}`);
   console.debug("[loadPrintVideos] map", map);
@@ -336,8 +347,11 @@ export function loadPrintVideos() {
  * @param {Record<string, string>} map - id をキーとした動画 URL マップ
  */
 export function savePrintVideos(map) {
-  monitorData.appSettings.printManager ??= {};
-  monitorData.appSettings.printManager.videos = map;
+  const host = currentHostname;
+  if (!host) return;
+  const machine = monitorData.machines[host];
+  if (!machine) return;
+  machine.printStore.videos = map;
   // デバッグ用: 保存する動画マップの件数をログに記録
   pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);
   console.debug("[savePrintVideos] map", map);
