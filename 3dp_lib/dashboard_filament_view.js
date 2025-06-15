@@ -190,6 +190,8 @@
  *
  * @property {boolean} [disableInteraction]          スライダー/ドラッグ操作禁止
  *
+ * @property {boolean} [showSlider]                  スライダー表示
+ *
  * @property {boolean} [showResetButton]             リセット↺ボタン表示
  * @property {boolean} [showProfileViewButton]       斜め上❍ボタン表示
  * @property {boolean} [showSideViewButton]          真横⦿ボタン表示
@@ -373,6 +375,7 @@ export function createFilamentPreview(mount, opts) {
     initialRotY: 35,
     initialRotZ: -50,
     disableInteraction: false,
+    showSlider: true,
     showResetButton: true,
     showProfileViewButton: true,
     showSideViewButton: true,
@@ -602,17 +605,20 @@ export function createFilamentPreview(mount, opts) {
   scene.appendChild(flangeFront);
 
   /* --- UI (slider & reset) --------------------------------------- */
-  const slider = document.createElement('input');
-  slider.type  = 'range';
-  slider.min   = '0';
-  slider.max   = String(o.filamentTotalLength);
-  slider.value = String(currentLen);
-  slider.className = 'dfv-slider';
-  slider.style.width = o.widthPx + 'px';
+  let slider = null;
+  if (o.showSlider) {
+    slider = document.createElement('input');
+    slider.type  = 'range';
+    slider.min   = '0';
+    slider.max   = String(o.filamentTotalLength);
+    slider.value = String(currentLen);
+    slider.className = 'dfv-slider';
+    slider.style.width = o.widthPx + 'px';
 
-  if (o.disableInteraction) {
-    slider.disabled = true;
-    slider.classList.add('dfv-slider-disabled');
+    if (o.disableInteraction) {
+      slider.disabled = true;
+      slider.classList.add('dfv-slider-disabled');
+    }
   }
 
   const controlsDiv = div('dfv-controls');
@@ -623,7 +629,7 @@ export function createFilamentPreview(mount, opts) {
   controlsDiv.style.gap = '4px';
 
   mount.appendChild(controlsDiv);
-  controlsDiv.appendChild(slider);
+  if (slider) controlsDiv.appendChild(slider);
   // ───────── ボタン群のラッパー ─────────
   const btnWrapper = div('dfv-btn-wrapper');
   btnWrapper.style.display        = 'flex';
@@ -1144,10 +1150,12 @@ export function createFilamentPreview(mount, opts) {
   }
 
   /* --- スライダー --- */
-  slider.addEventListener('input', ()=>{
-    currentLen = Number(slider.value);
-    redraw();
-  });
+  if (slider) {
+    slider.addEventListener('input', ()=>{
+      currentLen = Number(slider.value);
+      redraw();
+    });
+  }
 
   /* --- リセット --- */
   btnReset.addEventListener('click', () => {
@@ -1167,7 +1175,7 @@ export function createFilamentPreview(mount, opts) {
     /** 残量(mm) を更新 */
     setRemainingLength(mm){
       currentLen = Math.max(0, Math.min(o.filamentTotalLength, mm));
-      slider.value = String(currentLen);
+      if (slider) slider.value = String(currentLen);
       redraw();
     },
     /** 任意オプションを書き換え */
