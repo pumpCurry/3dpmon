@@ -44,7 +44,8 @@ import {
 } from "./dashboard_camera_ctrl.js";
 import {
   initTemperatureGraph,
-  updateTemperatureGraphFromStoredData
+  updateTemperatureGraphFromStoredData,
+  resetTemperatureGraphView
 } from "./dashboard_chart.js";
 import { FileManager } from "./dashboard_filemanager.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
@@ -197,6 +198,10 @@ export function initializeDashboard({
   updateTemperatureGraphFromStoredData(
     monitorData.machines[currentHostname].storedData
   );
+
+  // (10.5) 温度グラフのズームリセットボタン
+  document.getElementById("temp-graph-reset-button")
+    ?.addEventListener("click", resetTemperatureGraphView);
 
   // (11) ページロード時の自動接続
   // 起動時は接続先が設定されているときだけ AutoConnect

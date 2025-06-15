@@ -150,6 +150,20 @@ export function resetTemperatureGraph() {
   isFirstRender = true;
 }
 
+/**
+ * 温度グラフのズームおよびパン表示のみを初期状態へ戻します。
+ * データ内容は保持したまま、Chart.js Zoom プラグインが有効であれば
+ * resetZoom() を実行してスケールをリセットします。
+ *
+ * @returns {void}
+ */
+export function resetTemperatureGraphView() {
+  if (tempChart) {
+    // resetZoom が存在する場合のみ呼び出し
+    tempChart.resetZoom?.();
+  }
+}
+
 // ==============================
 // グラフ更新処理
 // ==============================
