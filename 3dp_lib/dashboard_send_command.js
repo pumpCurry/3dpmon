@@ -284,10 +284,14 @@ export function initializeCommandPalette() {
 function initializeFanControls() {
   // ── トグルのみ 0/1 を送る
   const toggles = [
-    { id: "modelFanToggle2",    param: "fan" },           // モデルファン
-    { id: "backFanToggle2",     param: "fanCase" },       // ケースファン
-    { id: "sideFanToggle2",     param: "fanAuxiliary" },  // 側面ファン
-    { id: "ledToggle2",         param: "lightSw" }        // LED照明
+    { id: "modelFanToggle2",    param: "fan" },            // モデルファン
+    { id: "backFanToggle2",     param: "fanCase" },        // ケースファン
+    { id: "sideFanToggle2",     param: "fanAuxiliary" },   // 側面ファン
+    { id: "ledToggle2",         param: "lightSw" },        // LED照明
+    { id: "aiSwToggle",         param: "aiSw" },           // 印刷前自動調整
+    { id: "aiDetectionToggle",  param: "aiDetection" },    // 異常出力検知
+    { id: "aiFirstFloorToggle", param: "aiFirstFloor" },   // 初層出力確認
+    { id: "aiPausePrintToggle", param: "aiPausePrint" }    // 異常時一時停止
   ];
   toggles.forEach(({ id, param }) => {
     const el = document.getElementById(id);

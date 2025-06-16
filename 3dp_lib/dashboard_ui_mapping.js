@@ -221,6 +221,10 @@ export const dashboardMapping = {
   fanAuxiliary:          { elementKey: "fanAuxiliary",         process: v => ({ value: utils.formatBinary(v), unit: "" }) },
   fanCase:               { elementKey: "fanCase",              process: v => ({ value: utils.formatBinary(v), unit: "" }) },
   lightSw:               { elementKey: "lightSw",              process: v => ({ value: utils.formatBinary(v), unit: "" }) },
+  aiSw:                  { elementKey: "aiSw",                 process: v => ({ value: utils.formatBinary(v), unit: "" }) },
+  aiDetection:           { elementKey: "aiDetection",          process: v => ({ value: utils.formatBinary(v), unit: "" }) },
+  aiFirstFloor:          { elementKey: "aiFirstFloor",         process: v => ({ value: utils.formatBinary(v), unit: "" }) },
+  aiPausePrint:          { elementKey: "aiPausePrint",         process: v => ({ value: utils.formatBinary(v), unit: "" }) },
 
   // --- FAN 風量強度 % ---
   modelFanPct:           { elementKey: "modelFanPct",          process: v => ({ value: parseInt(v,10), unit: "%" }) },
