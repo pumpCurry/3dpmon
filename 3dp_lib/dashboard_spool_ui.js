@@ -29,21 +29,41 @@ function injectStyles() {
 .spool-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;
   box-shadow:0 2px 12px rgba(0,0,0,0.4); padding:16px;
-  display:flex; flex-direction:column; gap:8px;
-}
-.spool-dialog h3 { margin:0; font-size:1.2em; }
-.spool-dialog label { font-size:14px; display:flex; flex-direction:column; }
-.spool-dialog input { padding:6px; font-size:14px; }
-.spool-dialog-buttons { display:flex; justify-content:flex-end; gap:8px; }
-.spool-dialog-buttons button { padding:6px 12px; font-size:14px; }
-`;
-  const style = document.createElement("style");
-  style.textContent = css;
-  document.head.appendChild(style);
-}
+          <label>直径(mm)<input id="sd-diameter" type="number" step="0.01" value="1.75"></label>
+          <label>総長(mm)<input id="sd-total" type="number" step="0.1"></label>
+          <label>総重量(g)<input id="sd-weight" type="number" step="0.1"></label>
+          <label>残り長(mm)<input id="sd-remain" type="number" step="0.1"></label>
+      const matSel     = dialog.querySelector("#sd-material");
+      const diaIn      = dialog.querySelector("#sd-diameter");
+      const totalIn    = dialog.querySelector("#sd-total");
+      const weightIn   = dialog.querySelector("#sd-weight");
+      const remainIn   = dialog.querySelector("#sd-remain");
 
-function showSpoolDialog({ title = "", spool = {} }) {
-  injectStyles();
+      nameInput.value = sp.name || "";
+      matSel.value    = sp.material || "PLA";
+      diaIn.value     = sp.diameterMm ?? 1.75;
+      totalIn.value   = sp.totalLengthMm ?? "";
+      weightIn.value  = sp.weightGram ?? "";
+      remainIn.value  = sp.remainingLengthMm ?? sp.totalLengthMm ?? "";
+      function dia(){ return parseFloat(diaIn.value) || 1.75; }
+
+      let prevTotal = totalIn.value;
+        const w = Math.round(weightFromLength(len, dens(), dia()));
+        if (remainIn.value === prevTotal || remainIn.value === "") {
+          remainIn.value = totalIn.value;
+        }
+        prevTotal = totalIn.value;
+        const len = Math.round(lengthFromWeight(w, dens(), dia()));
+        if (remainIn.value === prevTotal || remainIn.value === "") {
+          remainIn.value = totalIn.value;
+        }
+        prevTotal = totalIn.value;
+      diaIn.addEventListener("input", () => {
+        if (document.activeElement === weightIn) updateLength();
+        else updateWeight();
+      });
+          diameterMm: Number(diaIn.value) || 1.75,
+      if (sp.diameterMm && sp.diameterMm !== 1.75) txt += `, ø${sp.diameterMm}mm`;
   return new Promise(resolve => {
     const overlay = document.createElement("div");
     overlay.className = "spool-dialog-overlay";

@@ -11,17 +11,19 @@ export const MATERIAL_DENSITY = {
   TPU: 1.20
 };
 
+export const DEFAULT_DIAMETER_MM = 1.75;
+
 export function getMaterialDensity(mat) {
   return MATERIAL_DENSITY[mat] || MATERIAL_DENSITY.PLA;
 }
 
-export function lengthFromWeight(weightGram, density, diameterMm = 1.75) {
+export function lengthFromWeight(weightGram, density, diameterMm = DEFAULT_DIAMETER_MM) {
   const d = density || MATERIAL_DENSITY.PLA;
   const area = Math.PI * (diameterMm / 2) ** 2; // mm^2
   return (weightGram * 1000) / (area * d); // mm
 }
 
-export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
+export function weightFromLength(lengthMm, density, diameterMm = DEFAULT_DIAMETER_MM) {
   const d = density || MATERIAL_DENSITY.PLA;
   const area = Math.PI * (diameterMm / 2) ** 2; // mm^2
   return (area * lengthMm * d) / 1000; // g
@@ -52,6 +54,7 @@ export function setCurrentSpoolId(id) {
   saveUnifiedStorage();
 }
 
+    diameterMm: Number(data.diameterMm) || DEFAULT_DIAMETER_MM,
 /**
  * 新しいスプール（フィラメントリール）情報を追加する
  *
