@@ -537,6 +537,19 @@ body {
   gap: 5px;
   margin-top: 5px;
 }
+.ai-row {
+  /* ---------------------------------------------------------------
+     AI機能のスイッチ検知などを表示する行
+     必ず4列で表示するようグリッドレイアウトを採用
+  --------------------------------------------------------------- */
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+.ai-row .fan-item {
+  /* グリッド上ではflex設定を無効にするため
+     最小宽をリセットし、列内に一定空間で組まれるよう作る */
+  min-width: 0;
+}
 .fan-item {
   background-color: #eee;
   padding: 5px;
@@ -549,6 +562,12 @@ body {
   display: block;
   font-weight: bold;
   margin-bottom: 3px;
+}
+.feature-name nobr {
+  /* フィーチャ名を一約結合に表示するため
+     途中での押し押しな改行を禁止し、
+     <wbr>で指定した場所でのみ改行を許可する */
+  white-space: nowrap;
 }
 .switch {
   position: relative;
