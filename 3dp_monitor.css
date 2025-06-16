@@ -67,11 +67,13 @@ body {
   padding: 6px;
   box-sizing: border-box;
   min-width: 200px;
+  order: 0; /* 状態欄は1行表示を優先 */
 }
 
 .graph-wrapper {
   flex: 1 1 340px;
   max-width: 700px;
+  order: 1; /* 幅不足時はグラフを先に折り返す */
 }
 
 /* フィラメントプレビューヘッダ */
@@ -472,8 +474,20 @@ body {
   gap: 10px;
   flex-wrap: wrap;
 }
-.col1 { flex: 1; min-width: 300px; width:320px; max-width:320px;  font-family: "Arial Narrow", Arial, sans-serif; }
-.col2 { flex: 1; min-width: 320px; width:330px; max-width:330px;   font-family: "Arial Narrow", Arial, sans-serif; }
+.col1 {
+  flex: 1 0 320px; /* 縮小させず幅を確保 */
+  min-width: 300px;
+  width: 320px;
+  max-width: 320px;
+  font-family: "Arial Narrow", Arial, sans-serif;
+}
+.col2 {
+  flex: 1 0 330px; /* 縮小させず幅を確保 */
+  min-width: 320px;
+  width: 330px;
+  max-width: 330px;
+  font-family: "Arial Narrow", Arial, sans-serif;
+}
 
 .print-status-table {
   display: grid;
