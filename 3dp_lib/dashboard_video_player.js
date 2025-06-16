@@ -1,3 +1,21 @@
+/**
+ * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 動画オーバーレイプレーヤー
+ * dashboard_video_player.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_video_player
+ *
+ * 【機能内容サマリ】
+ * - 動画ダウンロードとオーバーレイ再生UI
+ *
+ * 【公開関数一覧】
+ * - {@link showVideoOverlay}：動画を取得して再生
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
+ */
+
 "use strict";
 
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";

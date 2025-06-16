@@ -1,16 +1,26 @@
 /**
  * @fileoverview
- * dashboard_chart.js (ver.1.324)
+ * 3Dプリンタ監視ツール 3dpmon 用 グラフ描画モジュール
+ * dashboard_chart.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_chart
  *
- * Chart.js を用いた温度グラフ描画モジュール。
- * - グラフ描画を初期化し、storedData からの温度データを時間軸上に描画
- * - 外部指定設定（timeWindow, decimation, throttle）に対応
- * - Zoom プラグイン前提でスケーリング/パン操作可
- * - スロットリングされた再描画、データ再初期化処理を含む
+ * 【機能内容サマリ】
+ * - Chart.js を用いた温度グラフ描画
+ * - データ点の間引きやスロットリング更新に対応
+ * - Zoom プラグインによる拡大・パン操作
  *
- * ※ Chart.js および Zoom プラグインは HTML 側で明示的に読み込む必要があります。
- *   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
- *   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+ * 【公開関数一覧】
+ * - {@link initTemperatureGraph}：グラフ初期化
+ * - {@link resetTemperatureGraph}：グラフデータリセット
+ * - {@link resetTemperatureGraphView}：表示範囲リセット
+ * - {@link updateTemperatureGraphFromStoredData}：データ更新
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
+ *
+ * ※ Chart.js および Zoom プラグインは HTML 側で読み込んでください。
  */
 
 "use strict";

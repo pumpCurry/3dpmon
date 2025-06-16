@@ -1,11 +1,30 @@
 /**
  * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 接続管理モジュール
  * dashboard_connection.js
- * - WebSocket 接続と再接続ロジックを担当
- * - Exponential Backoff による再接続制御
- * - heartbeat 管理（30秒おき）
- * - aggregatorUpdate の定期実行開始
- * - UI 更新のトリガー
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_connection
+ *
+ * 【機能内容サマリ】
+ * - WebSocket 接続と再接続処理
+ * - Heartbeat 管理と定期更新トリガー
+ * - UI 更新通知および aggregator 起動
+ *
+ * 【公開関数一覧】
+ * - {@link fetchStoredData}：サーバーからデータ取得
+ * - {@link getDeviceIp}：接続先 IP 取得
+ * - {@link connectWs}：WebSocket 接続開始
+ * - {@link startHeartbeat}：ハートビート開始
+ * - {@link stopHeartbeat}：ハートビート停止
+ * - {@link disconnectWs}：接続解除
+ * - {@link setupConnectButton}：接続ボタン初期化
+ * - {@link sendCommand}：任意コマンド送信
+ * - {@link updateConnectionUI}：UI 状態更新
+ * - {@link simulateReceivedJson}：受信データシミュレート
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

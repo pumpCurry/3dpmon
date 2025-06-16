@@ -1,13 +1,26 @@
 /**
  * @fileoverview
- * dashboard_aggregator.js (Ver.1.331)
- * - 印刷ワークフローの集計（準備時間・セルフテスト時間・一時停止時間・完了後経過時間）
- * - 実印刷開始時刻 & 予想残り時間／予想終了時刻 の計算
- * - ingestData(): ビジネスロジック集中、A～E の通知発火
- * - aggregateTimersAndPredictions(): タイマー集計＆予測
- * - aggregatorUpdate(): UI 更新と永続化
- * - restoreAggregatorState(), persistAggregatorState(): 状態の永続化／復元
- * - restartAggregatorTimer(), stopAggregatorTimer(): 集約ループの制御
+ * 3Dプリンタ監視ツール 3dpmon 用 集計管理モジュール
+ * dashboard_aggregator.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_aggregator
+ *
+ * 【機能内容サマリ】
+ * - 印刷ワークフローの各種タイマーを集計
+ * - 実印刷開始時刻や終了予測を計算
+ * - 状態更新時に UI 反映と通知を発火
+ *
+ * 【公開関数一覧】
+ * - {@link ingestData}：受信データの集約処理
+ * - {@link aggregatorUpdate}：UI 更新と永続化
+ * - {@link restoreAggregatorState}：状態の復元
+ * - {@link persistAggregatorState}：状態の保存
+ * - {@link restartAggregatorTimer}：集約ループ再開
+ * - {@link stopAggregatorTimer}：集約ループ停止
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

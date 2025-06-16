@@ -1,10 +1,23 @@
 /**
  * @fileoverview
- * dashboard_send_command.js (ver.1.337)
- * - Creality K シリーズの主要 WebSocket メソッド用ボタンバインド
- * - ボタン → method/getParams/inputIds/confirm オプションをマッピング
- * - 入力検証で disabled 制御
- * - 確認ダイアログ（showConfirmDialog）を必要に応じて表示
+ * 3Dプリンタ監視ツール 3dpmon 用 コマンド送信UIモジュール
+ * dashboard_send_command.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_send_command
+ *
+ * 【機能内容サマリ】
+ * - WebSocket メソッドをボタンに紐付け
+ * - 入力検証や確認ダイアログを介した安全な送信
+ *
+ * 【公開関数一覧】
+ * - {@link initializeCommandPalette}：主要ボタン設定
+ * - {@link initializeRateControls}：レート変更UI初期化
+ * - {@link initSendRawJson}：任意JSON送信用UI
+ * - {@link initTestRawJson}：テストデータ送信用UI
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

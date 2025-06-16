@@ -1,13 +1,26 @@
 /**
  * @fileoverview
- * Domain model and in‑memory data operations for 3Dプリンタ監視ダッシュボード (v1.322)
+ * 3Dプリンタ監視ツール 3dpmon 用 データモデルモジュール
+ * dashboard_data.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_data
  *
- * - アプリケーション全体の状態 (monitorData)
- * - currentHostname の管理
- * - storedData / runtimeData への純粋な読み書きユーティリティ
+ * 【機能内容サマリ】
+ * - monitorData を中心としたアプリケーション状態管理
+ * - currentHostname の保持
+ * - storedData/runtimeData への読み書きユーティリティ
  *
- * このモジュールは他のすべてのモジュールから参照されますが、
- * 自身は他モジュールを import しません（循環参照回避）。
+ * 【公開関数一覧】
+ * - {@link createEmptyMachineData}：空データ生成
+ * - {@link ensureMachineData}：ホスト別データ初期化
+ * - {@link setCurrentHostname}：現在ホスト設定
+ * - {@link getCurrentMachine}：現在ホストのデータ取得
+ * - {@link setStoredData}：storedData に値格納
+ * - {@link getDisplayValue}：表示用値取得
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

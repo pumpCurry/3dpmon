@@ -1,13 +1,29 @@
 /**
  * @fileoverview
- * dashboard_log_util.js (ver.1.336)
+ * 3Dプリンタ監視ツール 3dpmon 用 ログ管理モジュール
+ * dashboard_log_util.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_log_util
  *
- * 汎用ログ管理モジュール。
- * - LogManager: 全ログ・通知ログの保持とイベント通知（メモリ上限付き）。
- * - initLogAutoScroll: ログビューに対する自動スクロール支援（rAFスロットリング）。
- * - initLogRenderer: 差分レンダリングによるログ行追加／クリア機能。
- * - flushNormalLogsToDom / flushNotificationLogsToDom: 一括描画機能。
- * - pushLog: ログ追加ユーティリティ（レベル管理＋メモリ制限）。
+ * 【機能内容サマリ】
+ * - LogManager によるログと通知ログの保持
+ * - 自動スクロールと差分描画支援
+ * - ログ追加ユーティリティを提供
+ *
+ * 【公開関数一覧】
+ * - {@link getMaxLogLines}：最大保持件数取得
+ * - {@link LogManager}：ログ管理クラス
+ * - {@link logManager}：共有インスタンス
+ * - {@link initLogAutoScroll}：自動スクロール設定
+ * - {@link initLogRenderer}：レンダラー初期化
+ * - {@link flushNormalLogsToDom}：通常ログ描画
+ * - {@link flushNotificationLogsToDom}：通知ログ描画
+ * - {@link pushLog}：ログ追加
+ * - {@link pushNotificationLog}：通知レベルログ追加
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  *
  * 長期稼働でもブラウザクラッシュを防ぐため、最新 MAX_LOG_LINES 件のみ保持します。
  */

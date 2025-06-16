@@ -1,7 +1,20 @@
 /**
  * @fileoverview
- * デフォルト通知マップ定義
- * @version 1.1
+ * 3Dプリンタ監視ツール 3dpmon 用 通知デフォルト定義モジュール
+ * dashboard_notification_defaults.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_notification_defaults
+ *
+ * 【機能内容サマリ】
+ * - 通知タイプごとの既定設定を定義
+ *
+ * 【公開関数一覧】
+ * - {@link DEFAULT_SOUND}：既定サウンドファイル名
+ * - {@link defaultNotificationMap}：通知設定マップ
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

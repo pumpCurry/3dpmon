@@ -1,3 +1,33 @@
+/**
+ * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 フィラメントスプール管理モジュール
+ * dashboard_spool.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_spool
+ *
+ * 【機能内容サマリ】
+ * - 材料密度変換やスプール一覧の管理
+ * - 使用量更新・現在スプール設定
+ *
+ * 【公開関数一覧】
+ * - {@link getMaterialDensity}：密度取得
+ * - {@link lengthFromWeight}：重量→長さ変換
+ * - {@link weightFromLength}：長さ→重量変換
+ * - {@link getSpools}：スプール一覧取得
+ * - {@link getSpoolById}：ID指定取得
+ * - {@link getCurrentSpoolId}：現在ID取得
+ * - {@link getCurrentSpool}：現在スプール取得
+ * - {@link setCurrentSpoolId}：現在ID設定
+ * - {@link addSpool}：スプール追加
+ * - {@link updateSpool}：スプール更新
+ * - {@link deleteSpool}：スプール削除
+ * - {@link useFilament}：使用量反映
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
+ */
+
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";

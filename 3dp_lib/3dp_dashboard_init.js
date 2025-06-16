@@ -1,10 +1,23 @@
 /**
  * @fileoverview
- * dashboard_storage.js (v1.331)
+ * 3Dプリンタ監視ツール 3dpmon 用 ダッシュボード初期化処理 モジュール
+ * 3dp_dashboard_init.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module 3dp_dashboard_init
  *
- * - initializeDashboard(): ダッシュボード初期化
- * - restorePrintResume(): 印刷再開用データ復元
- * - persistPrintResume(): 印刷再開用データ永続化
+ * 【機能内容サマリ】
+ * - ダッシュボード全体の初期化
+ * - 印刷再開用データの復元と永続化
+ *
+ * 【公開関数一覧】
+ * - {@link initializeDashboard}：ダッシュボードを初期化
+ * - {@link restorePrintResume}：印刷再開用データを復元
+ * - {@link persistPrintResume}：印刷再開用データを保存
+ * - {@link initializeAutoSave}：自動保存タイマーを開始
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

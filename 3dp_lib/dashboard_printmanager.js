@@ -1,17 +1,28 @@
 /**
  * @fileoverview
- * 印刷履歴および現在の印刷ジョブの管理モジュール (v1.328 改訂版)
- *
- * - 機能構成:
- *   - parseRawHistoryList(): 生履歴から内部モデルを構築
- *   - load/save: localStorage との永続化
- *   - render: HTMLへの反映（containerID指定により柔軟な描画が可能）
- *   - refreshHistory: 外部データ(fetchStoredData)を元に再描画
- *
- * - Template処理と分離の準備:
- *   - renderTemplates オブジェクトにHTML生成処理をまとめ、将来的に外部ファイル化に備える構成とした。
- *
+ * 3Dプリンタ監視ツール 3dpmon 用 印刷履歴管理モジュール
+ * dashboard_printmanager.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
  * @module dashboard_printManager
+ *
+ * 【機能内容サマリ】
+ * - 印刷履歴および現在ジョブの保存・描画
+ * - Template 処理を分離した柔軟なUI生成
+ *
+ * 【公開関数一覧】
+ * - {@link parseRawHistoryEntry}：履歴エントリ解析
+ * - {@link parseRawHistoryList}：履歴リスト解析
+ * - {@link loadCurrent}：現在ジョブ読み込み
+ * - {@link saveCurrent}：現在ジョブ保存
+ * - {@link loadHistory}：履歴読み込み
+ * - {@link saveHistory}：履歴保存
+ * - {@link loadVideos}：動画一覧読み込み
+ * - {@link saveVideos}：動画一覧保存
+ * - {@link jobsToRaw}：内部モデル→生データ変換
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 "use strict";
 

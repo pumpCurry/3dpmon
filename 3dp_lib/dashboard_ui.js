@@ -1,18 +1,24 @@
 /**
  * @fileoverview
- * DOM 操作と表示更新を担当するモジュール (v1.322)
- *
- * 本モジュールでは以下の機能を提供します：
- * - `updateDataField()` による data-field 属性付き DOM 要素の値更新
- * - `.new` → `.old` クラス変換による更新マーク管理 (`clearNewClasses`)
- * - `monitorData` から DOM へ値反映 (`updateStoredDataToDOM`)
- *
- * 関連モジュール:
- * - `dashboard_data.js`: storedData, currentHostname などの状態管理
- * - `dashboard_ui_mapping.js`: dashboardMapping による DOM要素キーおよび表示変換処理
- * - `dashboard_log_util.js`: ログ更新処理（本モジュールでは扱わない）
- *
+ * 3Dプリンタ監視ツール 3dpmon 用 UI 更新モジュール
+ * dashboard_ui.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
  * @module dashboard_ui
+ *
+ * 【機能内容サマリ】
+ * - data-field に基づく DOM 更新
+ * - 更新マーク管理と storedData のDOM反映
+ * - 主要UIイベントハンドリング
+ *
+ * 【公開関数一覧】
+ * - {@link updateDataField}：データフィールド更新
+ * - {@link clearNewClasses}：更新マーク除去
+ * - {@link updateStoredDataToDOM}：storedData反映
+ * - {@link initUIEventHandlers}：UIイベント初期化
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

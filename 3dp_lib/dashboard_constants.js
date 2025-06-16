@@ -1,7 +1,20 @@
 /**
- * @module dashboard_constants
  * @fileoverview
- * ログおよび通知のレベル定義を集約するモジュール。
+ * 3Dプリンタ監視ツール 3dpmon 用 定数定義モジュール
+ * dashboard_constants.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_constants
+ *
+ * 【機能内容サマリ】
+ * - ログ/通知レベルの定数を集約
+ *
+ * 【公開関数一覧】
+ * - {@link LEVELS}：使用可能レベル配列
+ * - {@link ERROR_LEVELS}：エラーレベル集合
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 /**

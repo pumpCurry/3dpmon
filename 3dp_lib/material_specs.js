@@ -1,3 +1,21 @@
+/**
+ * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 材料仕様データ
+ * material_specs.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module material_specs
+ *
+ * 【機能内容サマリ】
+ * - フィラメント種別ごとの推奨温度と密度を定義
+ *
+ * 【公開関数一覧】
+ * - {@link MATERIAL_SPECS}：仕様データ定数
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
+ */
+
 "use strict";
 
 export const MATERIAL_SPECS = {
