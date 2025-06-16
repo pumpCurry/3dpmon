@@ -1,10 +1,24 @@
 /**
  * @fileoverview
- * dashboard_camera_ctrl.js (v1.338)
- * - <img> タグによるカメラ映像ストリーム開始／停止
- * - UI状態管理 (disconnected, connecting, retrying, connected)
- * - Exponential Backoff による再接続制御
- * - ERR_CONNECTION_REFUSED 検出で配信サービス停止とみなし、一度だけエラーメッセージ表示＆リトライ中止
+ * 3Dプリンタ監視ツール 3dpmon 用 カメラ制御モジュール
+ * dashboard_camera_ctrl.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_camera_ctrl
+ *
+ * 【機能内容サマリ】
+ * - <img> タグによる映像ストリームの開始／停止
+ * - 接続状態に応じた UI 更新
+ * - Exponential Backoff による再接続
+ * - 配信サービス停止時は一度だけエラー通知
+ *
+ * 【公開関数一覧】
+ * - {@link startCameraStream}：カメラストリーム開始
+ * - {@link stopCameraStream}：カメラストリーム停止
+ * - {@link handleCameraError}：接続エラー処理
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

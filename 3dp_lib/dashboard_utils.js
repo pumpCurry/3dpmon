@@ -1,14 +1,21 @@
 /**
  * @fileoverview
- * dashboard_utils.js (ver.1.324)
+ * 3Dプリンタ監視ツール 3dpmon 用 汎用ユーティリティ群
+ * dashboard_utils.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_utils
  *
- * - ログコピー機能や時間フォーマットなどの汎用ユーティリティ関数を定義
- * - 微修正:
- *   • formatExpectedEndTime にゼロ埋めを追加
- *   • Clipboard API と execCommand のフォールバックを統一した copyTextToClipboard を追加
- *   • 未使用の getEstimatedEndTime を削除
- *   • parseCurPosition の正規表現を強化
- * -   checkUpdatedFields を追加してエクスポート
+ * 【機能内容サマリ】
+ * - ログコピーや時間フォーマットなど多目的関数
+ * - Clipboard API のフォールバックを含む
+ * - 座標解析や更新チェック等を提供
+ *
+ * 【公開関数一覧】
+ * - {@link formatDuration} ほか複数をエクスポート
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

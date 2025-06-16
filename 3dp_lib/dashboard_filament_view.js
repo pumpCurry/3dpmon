@@ -1,15 +1,28 @@
-/* -----------------------------------------------------------------------
-   dashboard_filament_view.js  (2025-06)
-   Stand-Alone Filament Reel Preview
-   © pumpCurry – MIT License
-   -----------------------------------------------------------------------
-   ------
-   使い方
-   ------
-     <!-- HTML 側 -->
-     <div id="filament-preview"></div>
+/**
+ * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 フィラメントプレビュー モジュール
+ * dashboard_filament_view.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_filament_view
+ *
+ * 【機能内容サマリ】
+ * - スプールの残量を視覚的に表示するスタンドアロンビュー
+ * - ダイアログからスプール設定を変更
+ *
+ * 【公開関数一覧】
+ * - {@link createFilamentPreview}：プレビューを生成
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
+ *
+ * ------
+ * 使い方
+ * ------
+ *   <!-- HTML 側 -->
+ *   <div id="filament-preview"></div>
 
-     <!-- 読み込み -->
+ *   <!-- 読み込み -->
      <script src="dashboard_filament_view.js"></script>
      <script>
        const preview = createFilamentPreview(

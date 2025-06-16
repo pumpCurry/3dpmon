@@ -1,11 +1,23 @@
 /**
  * @fileoverview
- * dashboard_msg_handler.js (ver.1.331 → ver.1.332)
- * - WebSocket 経由で受信した JSON データを解釈し、UI 更新や内部状態反映を行う
- * - 各種タイマー（準備時間／セルフテスト時間／一時停止時間／完了後経過時間）を
- *   厳密にリセット・再開
- * - 通知マネージャ呼び出しで必ずログ出力、設定に応じてトースト／サウンド／読み上げを制御
- * - handleMessage, processData, processError を提供
+ * 3Dプリンタ監視ツール 3dpmon 用 メッセージ処理モジュール
+ * dashboard_msg_handler.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_msg_handler
+ *
+ * 【機能内容サマリ】
+ * - WebSocket 受信データの解釈とUI更新
+ * - 各種タイマーのリセット／再開
+ * - 通知マネージャを介したログ／トースト／サウンド制御
+ *
+ * 【公開関数一覧】
+ * - {@link handleMessage}：生JSONを処理
+ * - {@link processData}：データ部処理
+ * - {@link processError}：エラー処理
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 "use strict";
 

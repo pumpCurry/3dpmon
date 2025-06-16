@@ -1,9 +1,20 @@
 /**
- * dashboard_stage_preview.js (ver.1.129 / 1.3β)
- * XYプレビューやZプレビューを担当する処理
+ * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 ステージプレビュー モジュール
+ * dashboard_stage_preview.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_stage_preview
  *
- * - 1.125のコードを継承し、特に大幅な変更はなし
- * - XY履歴を localStorage に保存し、再読み込み時に復元
+ * 【機能内容サマリ】
+ * - XY/Z プレビューの表示と履歴管理
+ * - ローカルストレージに履歴保存し再読み込み
+ *
+ * 【公開関数一覧】
+ * - {@link restoreXYPreviewState} など複数を一括エクスポート
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 const maxDots = 128;

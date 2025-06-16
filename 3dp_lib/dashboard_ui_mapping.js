@@ -1,14 +1,23 @@
 /**
  * @fileoverview
- * dashboard_ui_mapping.js (ver.1.324)
- * 
- * ダッシュボード上に表示するフィールド名（storedDataのキー）に対して、
- * - DOM上の要素キー（elementKey）
- * - 値変換関数（process）
- * を定義するマッピングテーブル。
+ * 3Dプリンタ監視ツール 3dpmon 用 UI マッピング定義
+ * dashboard_ui_mapping.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_ui_mapping
  *
- * このファイルは UI 表示の制御ロジックを centralized に管理するものであり、
- * 表示に必要な単位付き文字列変換などを一元化している。
+ * 【機能内容サマリ】
+ * - storedDataのキーに対するDOM要素キーと変換関数を定義
+ * - 単位付き文字列変換を一元管理
+ *
+ * 【公開関数一覧】
+ * - {@link PRINT_STATE_MAP}：印刷状態→文字列マップ
+ * - {@link PRINT_STATE_CODE}：状態コード表
+ * - {@link PRINT_STATE_EVENT}：状態イベント表
+ * - {@link dashboardMapping}：フィールドマッピング
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

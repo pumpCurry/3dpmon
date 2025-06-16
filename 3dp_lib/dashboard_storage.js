@@ -1,13 +1,32 @@
 /**
  * @fileoverview
- * 永続化とマイグレーション機能を提供するモジュール。
- *
- * - monitorData の localStorage 保存／復元
- * - レガシーキーからのデータ移行
- * - 印刷履歴管理用 I/O（printManager）
- * - 使用容量推定・クォータチェック
- *
+ * 3Dプリンタ監視ツール 3dpmon 用 ストレージ管理モジュール
+ * dashboard_storage.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
  * @module dashboard_storage
+ *
+ * 【機能内容サマリ】
+ * - monitorData の保存・復元
+ * - レガシーキーからのデータ移行
+ * - 印刷履歴管理との I/O
+ * - クォータ計測と容量推定
+ *
+ * 【公開関数一覧】
+ * - {@link setStorageLogEnabled}：ログ出力有効化
+ * - {@link saveUnifiedStorage}：全データ保存
+ * - {@link restoreUnifiedStorage}：全データ復元
+ * - {@link restoreLegacyStoredData}：レガシーデータ読込
+ * - {@link cleanupLegacy}：レガシー削除
+ * - {@link estimateStorageQuota}：容量取得
+ * - {@link syncStorageNow}：即時同期
+ * - {@link testMaxLocalStorageQuota}：書き込みテスト
+ * - {@link estimateLocalStorageUsageBytes}：使用量推定
+ * - {@link loadPrintCurrent}：現ジョブ読込
+ * - {@link savePrintCurrent}：現ジョブ保存
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

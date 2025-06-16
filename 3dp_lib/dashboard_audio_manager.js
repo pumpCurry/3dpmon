@@ -1,14 +1,23 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール用 AudioManager モジュール
- *
- * - 初回操作 or タイムアウト後に無音MP3と無声Utteranceによる再生テストを実行
- * - 音楽と音声のテスト結果 (Tm/Tv) および許可フラグ (Am/Av) を保持
- * - ボタンUI（🎶 / 🗣）で状態切替と視覚フィードバックを提供
- * - テスト未完了、成功・拒否状態に応じたマークをCSSで描画（blue/red/green）
- * - 任意の音声ファイルを `play(src)` で再生可能（確認ログ付き）
- *
+ * 3Dプリンタ監視ツール 3dpmon 用 Audio 管理モジュール
+ * dashboard_audio_manager.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
  * @module dashboard_audio_manager
+ *
+ * 【機能内容サマリ】
+ * - 初回操作検知後に無音テストを実行
+ * - 音声再生・音声合成の許可状態を管理
+ * - UI ボタンから再生制御と状態表示
+ * - 任意音声ファイルの再生サポート
+ *
+ * 【公開関数一覧】
+ * - {@link AudioManager}：音声管理クラス
+ * - {@link audioManager}：共有インスタンス
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 
 "use strict";

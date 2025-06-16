@@ -1,8 +1,21 @@
 /**
  * @fileoverview
- * 確認モーダル & 入力モーダルダイアログを提供するユーティリティ
- * @version 1.339
+ * 3Dプリンタ監視ツール 3dpmon 用 モーダルUIユーティリティ
  * dashboard_ui_confirm.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_ui_confirm
+ *
+ * 【機能内容サマリ】
+ * - 確認ダイアログと入力ダイアログを提供
+ * - アイコン付きレベル表示
+ *
+ * 【公開関数一覧】
+ * - {@link showConfirmDialog}：確認モーダル
+ * - {@link showInputDialog}：入力モーダル
+ *
+ * @version 1.390.0
+ * @since   v1.390.0
  */
 "use strict";
 
