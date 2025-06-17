@@ -21,9 +21,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.206 (PR #92)
-* @since   1.390.197 (PR #88)
-*/
+ * @version 1.390.206 (PR #92)
+ * @since   1.390.197 (PR #88)
+ */
 "use strict";
 
 import {
@@ -48,6 +48,9 @@ export const MAX_HISTORY = 150;
 
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用）
 let _lastSavedJson = "";
+
+// 最新のファイル一覧データ（renderFileList 実行時に更新）
+let _fileList = [];
 
 /*
  * サムネイル URL を生成（メーカー仕様: downloads/humbnail/{basename}.png）
@@ -927,6 +930,19 @@ export function setupUploadUI() {
     return `data:image/png;base64,${b64}`;
   }
 
+  /**
+   * ファイル一覧データから同名ファイルの有無を判定するヘルパー。
+   *
+   * 画面要素は参照せず、最新描画時に保持した内部配列 `_fileList`
+   * を検索することで高速に重複を確認する。
+   *
+   * @param {string} fname - 確認するファイル名
+   * @returns {boolean} 同名が存在すれば true
+   */
+  function hasSameFile(fname) {
+    return _fileList.some(entry => entry.basename === fname);
+  }
+
   async function prepareAndConfirm(file) {
     currentFile = file;
     btn.disabled = true;
@@ -941,11 +957,14 @@ export function setupUploadUI() {
       }
       hideProgress();
       btn.disabled = false;
+      const exists = hasSameFile(file.name);
       const html = `
         <img src="${thumb}" style="width:100px; display:block; margin-bottom:8px">
-        <div><strong>${file.name}</strong> をアップロードしますか？</div>`;
+        <div>${exists
+          ? `同名のファイルがあります！上書きしてよろしいですか?<br><strong>${file.name}</strong>`
+          : `<strong>${file.name}</strong> をアップロードしますか？`}</div>`;
       const ok = await showConfirmDialog({
-        level: "info",
+        level: exists ? "warn" : "info",
         title: "ファイルアップロードの確認",
         html,
         confirmText: "アップロード",
@@ -1151,6 +1170,9 @@ export function renderFileList(info, baseUrl) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
   pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info");
   const arr = parseFileInfo(info.fileInfo, baseUrl);
+
+  // 最新の一覧をアップロード検証用に保持
+  _fileList = arr.slice();
 
   // 履歴から印刷回数と実使用時間を取得
   const stats = buildHistoryStats();
