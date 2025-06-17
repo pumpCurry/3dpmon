@@ -79,6 +79,9 @@ export function getCurrentSpool() {
 
 export function setCurrentSpoolId(id) {
   monitorData.currentSpoolId = id;
+  monitorData.filamentSpools.forEach(sp => {
+    sp.isActive = sp.id === id;
+  });
   saveUnifiedStorage();
 }
 
@@ -90,11 +93,16 @@ export function setCurrentSpoolId(id) {
  */
 export function addSpool(data) {
   // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
+  const id = genId();
   const spool = {
-    id: genId(),
+    id,
+    spoolId: id,
+    presetId: data.presetId || null,
     name: data.name || "",
     color: data.color || "",
+    colorName: data.colorName || "",
     material: data.material || "",
+    brand: data.brand || data.manufacturerName || "",
     printTempMin: data.printTempMin == null ? null : Number(data.printTempMin),
     printTempMax: data.printTempMax == null ? null : Number(data.printTempMax),
     bedTempMin:   data.bedTempMin   == null ? null : Number(data.bedTempMin),
@@ -111,11 +119,20 @@ export function addSpool(data) {
     reelCenterHoleDiameter: Number(data.reelCenterHoleDiameter) || 54,
     reelBodyColor: data.reelBodyColor || "#A1A1AA",
     reelFlangeTransparency: data.reelFlangeTransparency ?? 0.4,
-    manufacturerName: data.manufacturerName || "",
+    reelWindingForegroundColor:
+      data.reelWindingForegroundColor || "#71717A",
+    reelCenterHoleForegroundColor:
+      data.reelCenterHoleForegroundColor || "#F4F4F5",
+    manufacturerName: data.manufacturerName || data.brand || "",
     purchasePrice: Number(data.purchasePrice) || 0,
+    purchaseLink: data.purchaseLink || "",
+    priceCheckDate: data.priceCheckDate || "",
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
     weightGram: Number(data.weightGram) || 0,
+    startDate: data.startDate || new Date().toISOString(),
+    usedLengthLog: data.usedLengthLog || [],
+    isActive: false,
     deleted: false
 
   };
@@ -139,9 +156,50 @@ export function deleteSpool(id) {
   saveUnifiedStorage();
 }
 
-export function useFilament(lengthMm) {
+export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
+  s.usedLengthLog.push({ jobId, used: lengthMm });
   saveUnifiedStorage();
+}
+
+/**
+ * プリセットデータからスプールを新規作成する。
+ *
+ * @param {Object} preset - フィラメントプリセット
+ * @param {Object} [override] - 上書きするオプション
+ * @returns {Object} - 追加されたスプール
+ */
+export function addSpoolFromPreset(preset, override = {}) {
+  if (!preset) return null;
+  const data = {
+    presetId: preset.presetId,
+    name: `${preset.brand} ${preset.colorName}`,
+    color: preset.color,
+    colorName: preset.colorName,
+    material: preset.material,
+    brand: preset.brand,
+    filamentDiameter:
+      preset.filamentDiameter ?? preset.diameter,
+    reelOuterDiameter: preset.reelOuterDiameter,
+    reelThickness: preset.reelThickness,
+    reelWindingInnerDiameter: preset.reelWindingInnerDiameter,
+    reelCenterHoleDiameter: preset.reelCenterHoleDiameter,
+    reelBodyColor: preset.reelBodyColor,
+    reelFlangeTransparency: preset.reelFlangeTransparency,
+    reelWindingForegroundColor: preset.reelWindingForegroundColor,
+    reelCenterHoleForegroundColor: preset.reelCenterHoleForegroundColor,
+    totalLengthMm:
+      preset.filamentTotalLength ?? preset.defaultLength,
+    remainingLengthMm:
+      preset.filamentCurrentLength ??
+      (preset.filamentTotalLength ?? preset.defaultLength),
+    purchaseLink: preset.purchaseLink,
+    purchasePrice: preset.price,
+    priceCheckDate: preset.priceCheckDate,
+    ...override
+  };
+  const spool = addSpool(data);
+  return spool;
 }

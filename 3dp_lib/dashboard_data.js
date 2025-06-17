@@ -25,6 +25,9 @@
 
 "use strict";
 
+// プリセットフィラメント情報を取り込む
+import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+
 /**
  * @typedef {Object} StoredDatum
  * @property {*}     rawValue      元の生データ
@@ -179,6 +182,7 @@ export const monitorData = {
     }
   },
   filamentSpools: [],
+  filamentPresets: FILAMENT_PRESETS,
   currentSpoolId: null,
   temporaryBuffer: []
 };
