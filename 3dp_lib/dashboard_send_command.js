@@ -16,7 +16,7 @@
  * - {@link initSendRawJson}：任意JSON送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.213 (PR #95)
  * @since   1.390.193 (PR #86)
  */
 
@@ -433,18 +433,50 @@ function initializeTempControls() {
  *   - blur 時に範囲チェック ＆ スライダー同期 → サーバーへ送信
  */
 export function initializeRateControls() {
-  // 各制御に対応するスライダーID・入力欄ID・送信パラメータ名の設定
+  // 各制御に対応する要素IDと送信パラメータの設定
   const configs = [
-    // フィードレート（印刷速度）のパーセント設定
-    { sliderId: "feedrateSlider", inputId: "feedrateInput", param: "setFeedratePct" },
-    // フロー率（フィラメント供給量）のパーセント設定
-    { sliderId: "flowrateSlider",  inputId: "flowrateInput",  param: "curFlowratePct" }
+    {
+      sliderId:     "feedrateSlider",
+      inputId:      "feedrateInput",
+      sendBtnId:    "feedrateSendBtn",
+      presetClass:  "feedrate-preset",
+      param:        "setFeedratePct"
+    },
+    {
+      sliderId:     "flowrateSlider",
+      inputId:      "flowrateInput",
+      sendBtnId:    "flowrateSendBtn",
+      presetClass:  "flowrate-preset",
+      param:        "curFlowratePct"
+    }
   ];
 
-  configs.forEach(({ sliderId, inputId, param }) => {
+  configs.forEach(({ sliderId, inputId, sendBtnId, presetClass, param }) => {
     const slider = document.getElementById(sliderId);
     const input  = document.getElementById(inputId);
-    if (!slider || !input) return; // 要素が見つからなければ無視
+    const sendBtn = document.getElementById(sendBtnId);
+    const presets = document.querySelectorAll(`.${presetClass}`);
+    if (!slider || !input || !sendBtn) return; // 要素が見つからなければ無視
+
+    let lastSend = 0; // 直近送信タイムスタンプ
+
+    /**
+     * 入力値を検証して送信するヘルパー
+     *
+     * @private
+     * @param {number} [forceVal] - 強制的に送信する値（省略時は input の値）
+     */
+    const sendValue = (forceVal) => {
+      let v = forceVal != null ? forceVal : parseInt(input.value, 10);
+      if (isNaN(v)) {
+        v = Number(slider.min);
+      }
+      v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
+      slider.value = v;
+      input.value  = v;
+      sendCommand("set", { [param]: v });
+      lastSend = Date.now();
+    };
 
     // スライダーを動かしている間、数値入力欄にも反映
     slider.addEventListener("input", () => {
@@ -454,7 +486,7 @@ export function initializeRateControls() {
     // スライダーの操作完了後（change）にサーバに送信
     slider.addEventListener("change", () => {
       const v = Math.round(Number(slider.value));
-      sendCommand("set", { [param]: v });
+      sendValue(v);
     });
 
     // 数値入力欄で Enter を押すと blur で確定
@@ -466,18 +498,30 @@ export function initializeRateControls() {
 
     // blur 時に値を適正範囲内に丸め、スライダーと同期、そしてサーバへ送信
     input.addEventListener("blur", () => {
-      let v = parseInt(input.value, 10);
-      if (isNaN(v)) {
-        // 不正入力時はスライダーの最小値を採用
-        v = Number(slider.min);
+      sendValue();
+    });
+
+    // フォーカス復帰でクールダウン解除
+    input.addEventListener("focus", () => {
+      lastSend = 0;
+    });
+
+    // ⏎ ボタンクリックで送信（3秒クールダウン）
+    sendBtn.addEventListener("click", () => {
+      if (Date.now() - lastSend >= 3000) {
+        sendValue();
       }
-      // 範囲チェック：slider.min ≤ v ≤ slider.max
-      v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
-      // スライダーと入力欄を同期
-      slider.value = v;
-      input.value  = v;
-      // サーバに設定を送信
-      sendCommand("set", { [param]: v });
+    });
+
+    // プリセットボタン
+    presets.forEach(btn => {
+      const val = parseInt(btn.dataset.value, 10);
+      if (isNaN(val)) return;
+      btn.addEventListener("click", () => {
+        input.value  = String(val);
+        slider.value = String(val);
+        sendValue(val);
+      });
     });
   });
 }

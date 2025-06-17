@@ -565,6 +565,18 @@ body {
   text-align: center;
   min-width: 70px;
 }
+.quick-buttons {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  margin-left: 2px;
+}
+.quick-buttons button,
+.send-btn {
+  font-family: "Arial Narrow", "sun serif";
+  font-size: 12px;
+  margin-left: 2px;
+}
 .fan-lights-row {
   display: flex;
   flex-wrap: wrap;
