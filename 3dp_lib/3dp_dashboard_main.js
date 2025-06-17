@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - なし（エントリポイントとして即時実行）
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.203 (PR #90)
  * @since   1.390.193 (PR #86)
  */
 
@@ -37,6 +37,7 @@ import { audioManager } from "./dashboard_audio_manager.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 
 import { initUIEventHandlers } from "./dashboard_ui.js";
+import { initStorageUI } from "./dashboard_storage_ui.js";
 
 // ——— グローバル例外ハンドリング ———
 window.addEventListener("unhandledrejection", evt => {
@@ -86,5 +87,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   initUIEventHandlers();
+  initStorageUI();
 
 });
