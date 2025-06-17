@@ -21,9 +21,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.193 (PR #86)
- * @since   1.390.193 (PR #86)
- */
+* @version 1.390.197 (PR #88)
+* @since   1.390.197 (PR #88)
+*/
 "use strict";
 
 import {
@@ -82,6 +82,7 @@ function makeThumbUrl(baseUrl, rawFilename) {
  *   startway?:number,
  *   size?:number,
  *   filemd5?:string,
+ *   printfinish?:number,        // 成功フラグ(1/0)
  *   preparationTime?:number,
  *   firstLayerCheckTime?:number,
  *   pauseTime?:number,
@@ -104,6 +105,11 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
+  // raw.usagetime が 0 でも 1 を返す場合があるため、機器の報告値を優先
+  const printfinish    = raw.printfinish != null
+    ? Number(raw.printfinish)
+    // 値が存在しない場合のみ使用時間から推測
+    : (useTimeSec > 0 ? 1 : 0);
   // 材料使用量は小数第2位で切り上げ
   const materialUsedMm = Math.ceil((raw.usagematerial || 0) * 100) / 100;
 
@@ -131,6 +137,7 @@ export function parseRawHistoryEntry(raw, baseUrl) {
     filename,
     startTime,
     finishTime,
+    printfinish,
     materialUsedMm,
     thumbUrl,
     startway,
@@ -262,7 +269,7 @@ export function jobsToRaw(jobs) {
         starttime:     startEpoch,
         usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
         usagematerial: job.materialUsedMm,
-        printfinish:   finishEpoch ? 1 : 0,
+        printfinish:   job.printfinish ?? (finishEpoch ? 1 : 0),
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
