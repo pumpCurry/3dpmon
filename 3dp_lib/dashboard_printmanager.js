@@ -78,6 +78,7 @@ function makeThumbUrl(baseUrl, rawFilename) {
  *   startTime:string,
  *   finishTime?:string|null,
  *   materialUsedMm:number,
+ *   printfinish?:number,
  *   thumbUrl:string,
  *   startway?:number,
  *   size?:number,
@@ -104,6 +105,9 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
+  // 成否フラグは数値化して保持。未指定なら undefined
+  const printfinish    =
+    raw.printfinish !== undefined ? Number(raw.printfinish) : undefined;
   // 材料使用量は小数第2位で切り上げ
   const materialUsedMm = Math.ceil((raw.usagematerial || 0) * 100) / 100;
 
@@ -132,6 +136,7 @@ export function parseRawHistoryEntry(raw, baseUrl) {
     startTime,
     finishTime,
     materialUsedMm,
+    printfinish,
     thumbUrl,
     startway,
     size,
@@ -262,7 +267,7 @@ export function jobsToRaw(jobs) {
         starttime:     startEpoch,
         usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
         usagematerial: job.materialUsedMm,
-        printfinish:   finishEpoch ? 1 : 0,
+        printfinish:   job.printfinish ?? (finishEpoch ? 1 : 0),
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
