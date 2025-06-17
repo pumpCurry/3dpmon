@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.193 (PR #86)
- * @since   1.390.193 (PR #86)
- */
+ * @version 1.390.198 (PR #89)
+ * @since   1.390.198 (PR #89)
+*/
 
 "use strict";
 
@@ -68,7 +68,12 @@ function initStorageUI() {
   impBtn.textContent = "全データ Import";
   impBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
-  btnTest.after(expBtn, impBtn);
+  const allExpBtn = document.createElement("button");
+  allExpBtn.id = "storage-export-all-btn";
+  allExpBtn.textContent = "すべてのデータのエクスポート";
+  allExpBtn.style.cssText = "font-size:12px;margin-left:5px;";
+
+  btnTest.after(expBtn, impBtn, allExpBtn);
 
   /* ---------------- ボタン動作 ---------------- */
 
@@ -123,6 +128,9 @@ function initStorageUI() {
     });
     input.click();
   });
+
+  // すべてのデータをエクスポート
+  allExpBtn.addEventListener("click", exportAllStorageData);
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 
@@ -204,6 +212,37 @@ async function handleQuotaTest() {
     try { updateUsage(); } catch {}
   } finally {
     btnTest.disabled = false;
+  }
+}
+
+/**
+ * 現在の統合ストレージ内容をテキストファイルに保存する。
+ * - ファイル名は `3dpmon_export_YYYYMMDD-hhmmss.txt` 形式
+ * - 取得元は localStorage キー `3dp-monitor_1.400`
+ *
+ * @function exportAllStorageData
+ * @returns {void}
+ */
+function exportAllStorageData() {
+  try {
+    const json = localStorage.getItem("3dp-monitor_1.400") ?? "{}";
+    const now  = new Date();
+    const pad = (n) => n.toString().padStart(2, "0");
+    const stamp =
+      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const filename = `3dpmon_export_${stamp}.txt`;
+    const blob = new Blob([json], { type: "text/plain" });
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    panelToast("データをエクスポートしました");
+  } catch (e) {
+    console.error("[exportAllStorageData]", e);
+    panelToast("エクスポートに失敗しました", true);
   }
 }
 
