@@ -13,16 +13,16 @@
  * - {@link DEFAULT_SOUND}：既定サウンドファイル名
  * - {@link defaultNotificationMap}：通知設定マップ
  *
- * @version 1.390.193 (PR #86)
- * @since   1.390.193 (PR #86)
- */
+* @version 1.390.211 (PR #94)
+* @since   1.390.193 (PR #86)
+*/
 
 "use strict";
 
 /**
  * デフォルトで再生するサウンドファイル名
  */
-export const DEFAULT_SOUND = "notice.mp3";
+export const DEFAULT_SOUND = "3dp_lib/res/sound/notice.mp3";
 
 /**
  * 通知タイプごとの既定設定
