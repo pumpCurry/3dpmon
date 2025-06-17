@@ -16,7 +16,7 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.206 (PR #92)
  * @since   1.390.193 (PR #86)
  */
 
@@ -60,9 +60,11 @@ import {
   updateTemperatureGraphFromStoredData,
   resetTemperatureGraphView
 } from "./dashboard_chart.js";
+import { addSpoolFromPreset, setCurrentSpoolId, getCurrentSpool } from "./dashboard_spool.js";
+import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { FileManager } from "./dashboard_filemanager.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
-import * as printManager from "./dashboard_printManager.js";
+import * as printManager from "./dashboard_printmanager.js";
 import {
   copyLogsToClipboard,
   copyStoredDataToClipboard
@@ -98,6 +100,16 @@ export function initializeDashboard({
   restoreLegacyStoredData();
   cleanupLegacy();
   restoreUnifiedStorage();
+  if (!monitorData.filamentSpools.length) {
+    const preset = FILAMENT_PRESETS.find(
+      p => p.presetId === "preset-unknown-somename-somecolor"
+    );
+    if (preset) {
+      const sp = addSpoolFromPreset(preset);
+      setCurrentSpoolId(sp.id);
+      saveUnifiedStorage();
+    }
+  }
 
   // (2) ホスト未定義ならプレースホルダ設定
   if (!currentHostname) {
@@ -110,21 +122,51 @@ export function initializeDashboard({
   const fpMount = document.getElementById("filament-preview");
   if (fpMount) {
     const machine = monitorData.machines[currentHostname] || {};
+    const spool   = getCurrentSpool();
     const opts = {
-      filamentDiameter:         machine.settings?.filamentDiameterMm ?? 1.75,
-      filamentTotalLength:      machine.settings?.filamentTotalLengthMm ?? 330000,
-      filamentCurrentLength:    machine.settings?.filamentRemainingMm ?? 0,
-      filamentColor:            machine.settings?.filamentColor ?? "#22C55E",
-      reelOuterDiameter:        200,
-      reelThickness:            68,
-      reelWindingInnerDiameter: 95,
-      reelCenterHoleDiameter:   54,
+      filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
+      filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? 330000,
+      filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? 0,
+      filamentColor:            spool?.filamentColor ?? machine.settings?.filamentColor ?? "#22C55E",
+      reelOuterDiameter:        spool?.reelOuterDiameter ?? 200,
+      reelThickness:            spool?.reelThickness ?? 68,
+      reelWindingInnerDiameter: spool?.reelWindingInnerDiameter ?? 95,
+      reelCenterHoleDiameter:   spool?.reelCenterHoleDiameter ?? 54,
       widthPx:                  264,
       heightPx:                 264,
       showSlider:               false,
-      isFilamentPresent:          true,
-      showUsedUpIndicator:        true,
-      blinkingLightColor:         '#0EA5E9',
+      isFilamentPresent:        true,
+      showUsedUpIndicator:      true,
+      blinkingLightColor:       '#0EA5E9',
+      showInfoLength:           false,
+      showInfoPercent:          false,
+      showInfoLayers:           false,
+      showResetButton:          false,
+      showProfileViewButton:    true,
+      showSideViewButton:       true,
+      showFrontViewButton:      true,
+      showAutoRotateButton:     true,
+      enableDrag:               true,
+      enableClick:              false,
+      onClick:                  null,
+      disableInteraction:       true,
+      showOverlayLength:        true,
+      showOverlayPercent:       true,
+      showLengthKg:             false,
+      showReelName:             true,
+      showReelSubName:          true,
+      showMaterialName:         true,
+      showMaterialColorName:    true,
+      showMaterialColorCode:    true,
+      showManufacturerName:     true,
+      showOverlayBar:           true,
+      showPurchaseButton:       true,
+      reelName:                 spool?.name || '',
+      reelSubName:              spool?.reelSubName || '',
+      materialName:             spool?.materialName || spool?.material || '',
+      materialColorName:        spool?.colorName || '',
+      materialColorCode:        spool?.filamentColor || '',
+      manufacturerName:         spool?.manufacturerName || spool?.brand || ''
     };
     filamentPreview = createFilamentPreview(fpMount, opts);
     window.filamentPreview = filamentPreview;

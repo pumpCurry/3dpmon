@@ -21,7 +21,7 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.197 (PR #88)
+* @version 1.390.206 (PR #92)
 * @since   1.390.197 (PR #88)
 */
 "use strict";
@@ -39,7 +39,7 @@ import { formatEpochToDateTime } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
-import { getCurrentSpool, useFilament } from "./dashboard_spool.js";
+import { getCurrentSpool, useFilament, getSpoolById } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 
@@ -683,6 +683,22 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const videoLink = raw.videoUrl
       ? `<button class="video-link" data-url="${raw.videoUrl}">📹</button>`
       : "";
+    const spool      = getSpoolById(raw.filamentId) || null;
+    const matColors = {
+      PLA: '#FFEDD5',
+      'PLA+': '#FED7AA',
+      PETG: '#DBEAFE',
+      ABS: '#FECACA',
+      TPU: '#E9D5FF'
+    };
+    const matColor  = spool ? (matColors[spool.material] || '#EEE') : '#EEE';
+    const colorBox  = spool ? `<span class="filament-color-box" style="color:${spool.filamentColor};">■</span>` : '■';
+    const matTag    = spool ? `<span class="material-tag" style="background:${matColor};">${spool.material}</span>` : '';
+    const spoolText = spool
+      ? `${colorBox} ${matTag} ${spool.name}/${spool.colorName} <button class="spool-edit" data-id="${raw.id}">修正</button>`
+      : '(不明)';
+    const printCnt  = spool?.printCount ?? 0;
+    const remainLen = spool?.remainingLengthMm ?? 0;
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -710,6 +726,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td>${finish}</td>
       <td>${md5}</td>
       <td>${videoLink}</td>
+      <td>${spoolText}</td>
+      <td>${printCnt}</td>
+      <td>${remainLen}</td>
     `;
     tbody.appendChild(tr);
 
@@ -725,6 +744,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
     });
     tr.querySelector(".video-link")?.addEventListener("click", () => {
       showVideoOverlay(raw.videoUrl);
+    });
+    tr.querySelector(".spool-edit")?.addEventListener("click", () => {
+      alert("フィラメント情報の編集は未実装です");
     });
   });
 
