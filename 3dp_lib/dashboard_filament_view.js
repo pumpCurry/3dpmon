@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link createFilamentPreview}：プレビューを生成
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.209 (PR #93)
  * @since   1.390.193 (PR #86)
  *
  * ------
@@ -1171,12 +1171,14 @@ export function createFilamentPreview(mount, opts) {
   }
 
   /* --- リセット --- */
-  btnReset.addEventListener('click', () => {
-    rotX = o.initialRotX;
-    rotY = o.initialRotY;
-    rotZ = o.initialRotZ;
-    redraw();
-  });
+  if (btnReset) {
+    btnReset.addEventListener('click', () => {
+      rotX = o.initialRotX;
+      rotY = o.initialRotY;
+      rotZ = o.initialRotZ;
+      redraw();
+    });
+  }
 
   /* 初回描画 */
   redraw();
