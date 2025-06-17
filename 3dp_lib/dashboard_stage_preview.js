@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link restoreXYPreviewState} など複数を一括エクスポート
  *
- * @version 1.390.193 (PR #86)
- * @since   1.390.193 (PR #86)
- */
+ * @version 1.390.214 (PR #95)
+ * @since   1.390.214 (PR #95)
+*/
 
 const maxDots = 128;
 const xyDots = [];
@@ -34,9 +34,47 @@ const STAGE_ROT_X_MIN = 0;
 const STAGE_ROT_X_MAX = 70;
 
 // XYプレビューのスケール関連定数
-// ステージサイズ（mm）および表示倍率を定数化
-const STAGE_SIZE_MM = 300;
-const STAGE_SCALE = 0.5;
+// ステージサイズ(mm)・Z最大値(mm)はモデル毎に可変
+let stageSizeMm = 300;   // X/Y 最大長さ
+let stageZMaxMm = 300;   // Z 最大値
+const STAGE_SCALE = 0.5; // 画面上の倍率
+
+let currentModel = null;       // 設定済みモデル名
+let lastZPosition = 0;         // 最後に描画したZ値
+
+/**
+ * プリンタモデルに応じてステージサイズとZ軸上限を設定し、
+ * 既存プレビューを再描画する。
+ *
+ * @param {string} model - プリンタモデル名
+ * @returns {void}
+ */
+function setPrinterModel(model) {
+  if (currentModel === model) return;
+  currentModel = model;
+  if (model === "K1 Max") {
+    stageSizeMm = 300;
+    stageZMaxMm = 300;
+  } else if (["K1C", "K1A", "K1", "K1 SE"].includes(model)) {
+    stageSizeMm = 220;
+    stageZMaxMm = 250;
+  } else {
+    return; // 未対応モデルは変更なし
+  }
+  const stageElem = document.getElementById("xy-stage");
+  if (stageElem) {
+    const px = stageSizeMm * STAGE_SCALE;
+    stageElem.style.width = `${px}px`;
+    stageElem.style.height = `${px}px`;
+    stageElem.innerHTML = "";
+    xyDots.length = 0;
+    xyInitialized = false;
+  }
+  const labelBottom = document.querySelector("#z-preview-container .z-label-bottom");
+  if (labelBottom) labelBottom.textContent = String(stageZMaxMm);
+  updateXYPreview(lastXYPosition.x, lastXYPosition.y);
+  updateZPreview(lastZPosition);
+}
 
 /**
  * localStorage から保存済みの XY プレビュー情報を読み込み、
@@ -83,7 +121,7 @@ function saveXYPreviewState() {
  * @returns {void}
  */
 function restoreXYHistoryDots() {
-  const stagePx = STAGE_SIZE_MM * STAGE_SCALE;
+  const stagePx = stageSizeMm * STAGE_SCALE;
   xyDots.forEach(dot => {
     dot.style.display = "none";
   });
@@ -268,7 +306,7 @@ function updateXYPreview(x, y) {
     initXYPreview();
   }
   // スケール定義
-  const stagePx = STAGE_SIZE_MM * STAGE_SCALE;
+  const stagePx = stageSizeMm * STAGE_SCALE;
   const screenX = stagePx - (x * STAGE_SCALE);
   const screenY = y * STAGE_SCALE;
 
@@ -303,7 +341,7 @@ function updateXYPreview(x, y) {
  */
 function updateZPreview(z) {
   const scale = 0.5;
-  const clampedZ = Math.min(z, 350);
+  const clampedZ = Math.min(z, stageZMaxMm);
   const barHeight = clampedZ * scale;
   const barDiv = document.getElementById("z-preview");
   if (barDiv) {
@@ -314,6 +352,7 @@ function updateZPreview(z) {
   if (zValueElem) {
     zValueElem.textContent = z.toFixed(2);
   }
+  lastZPosition = z;
 }
 
 /**
@@ -445,6 +484,7 @@ export {
   initXYPreview,
   updateXYPreview,
   updateZPreview,
+  setPrinterModel,
   applyStageTransform,
   setTopView,
   setCameraView,
