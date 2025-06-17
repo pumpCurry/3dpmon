@@ -16,7 +16,7 @@
  * - {@link initSendRawJson}：任意JSON送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
- * @version 1.390.213 (PR #95)
+ * @version 1.390.218 (PR #97)
  * @since   1.390.193 (PR #86)
  */
 
@@ -353,27 +353,50 @@ function initializeFanControls() {
 function initializeTempControls() {
   const configs = [
     {
-      sliderId: "nozzleTempSlider",
-      inputId:  "nozzleTempInput",
-      maxField: "[data-field=\"maxNozzleTemp\"] .value",
+      sliderId:  "nozzleTempSlider",
+      inputId:   "nozzleTempInput",
+      sendBtnId: "nozzleTempSendBtn",
+      maxField:  "[data-field=\"maxNozzleTemp\"] .value",
       makePayload: v => ({ nozzleTempControl: v })
     },
     {
-      sliderId: "bedTempSlider",
-      inputId:  "bedTempInput",
-      maxField: "[data-field=\"maxBedTemp\"] .value",
+      sliderId:  "bedTempSlider",
+      inputId:   "bedTempInput",
+      sendBtnId: "bedTempSendBtn",
+      maxField:  "[data-field=\"maxBedTemp\"] .value",
       makePayload: v => ({ bedTempControl: { num: 0, val: v } })
     }
   ];
 
-  configs.forEach(({ sliderId, inputId, maxField, makePayload }) => {
-    const slider = document.getElementById(sliderId);
-    const input  = document.getElementById(inputId);
-    if (!slider || !input) return;
+  configs.forEach(({ sliderId, inputId, sendBtnId, maxField, makePayload }) => {
+    const slider  = document.getElementById(sliderId);
+    const input   = document.getElementById(inputId);
+    const sendBtn = document.getElementById(sendBtnId);
+    if (!slider || !input || !sendBtn) return;
 
     // 無限ループ防止用フラグ
     let fromSlider = false;
     let fromInput  = false;
+    // 直近送信タイムスタンプ
+    let lastSend = 0;
+
+    /**
+     * 入力値を検証して送信するヘルパー
+     *
+     * @private
+     * @param {number} [forceVal] - 強制的に送信する値（省略時は input の値）
+     */
+    const sendValue = (forceVal) => {
+      let v = forceVal != null ? forceVal : parseInt(input.value, 10);
+      if (isNaN(v)) {
+        v = Number(slider.min);
+      }
+      v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
+      slider.value = v;
+      input.value  = v;
+      sendCommand("set", makePayload(v));
+      lastSend = Date.now();
+    };
 
     // ① max を設定
     const maxText = document.querySelector(maxField)?.textContent;
@@ -393,7 +416,7 @@ function initializeTempControls() {
     // ③ スライダーを離した(change) → send
     slider.addEventListener("change", () => {
       const v = Math.round(+slider.value);
-      sendCommand("set", makePayload(v));
+      sendValue(v);
     });
 
     // ④ テキストで Enter → blur に飛ばす
@@ -405,14 +428,19 @@ function initializeTempControls() {
 
     // ⑤ テキスト blur → validate → スライダー反映＆send
     input.addEventListener("blur", () => {
-      let v = parseFloat(input.value);
-      if (isNaN(v)) v = 0;
-      v = Math.min(Math.max(v, +slider.min), +slider.max);
-      fromInput = true;
-      slider.value = v;
-      input.value  = v;
-      fromInput = false;
-      sendCommand("set", makePayload(Math.round(v)));
+      sendValue();
+    });
+
+    // フォーカス復帰でクールダウン解除
+    input.addEventListener("focus", () => {
+      lastSend = 0;
+    });
+
+    // ⏎ ボタンクリックで送信（3秒クールダウン）
+    sendBtn.addEventListener("click", () => {
+      if (Date.now() - lastSend >= 3000) {
+        sendValue();
+      }
     });
 
     // ⑥ （オプション）外部 updateStoredDataToDOM で温度変化が来たら
