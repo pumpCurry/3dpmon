@@ -17,9 +17,9 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.219 (PR #98)
+ * @version 1.390.221 (PR #99)
  * @since   1.390.193 (PR #86)
- */
+*/
 "use strict";
 
 import { currentHostname, monitorData } from "./dashboard_data.js";
@@ -375,9 +375,9 @@ export class NotificationManager {
     });
 
     // (D) 保存ボタン
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "保存";
-    saveBtn.addEventListener("click", () => {
+    const notifSaveBtn = document.createElement("button");
+    notifSaveBtn.textContent = "保存";
+    notifSaveBtn.addEventListener("click", () => {
       container.querySelectorAll(".notif-item").forEach((item, i) => {
         // input と select を順に取得し [checkbox, talk, sound, level] と4要素で分解
         const [chk, talk, snd, sel] = item.querySelectorAll("input,select");
@@ -401,7 +401,7 @@ export class NotificationManager {
           showAlert("通知設定の保存に失敗しました", "error", true);
         });
     });
-    container.appendChild(saveBtn);
+    container.appendChild(notifSaveBtn);
 
     // (E) 読み上げ設定フィールド
     const ttsFs = document.createElement("fieldset");
@@ -411,6 +411,10 @@ export class NotificationManager {
       <legend>読み上げ設定</legend>
       <label for="tts-voice-select">音声を選択：</label>
       <select id="tts-voice-select"></select>
+      <div style="margin:0.5em 0;">
+        <input type="text" id="tts-test-text" value="この速度と音声でお知らせします">
+        <button id="tts-test-btn">発声テスト</button>
+      </div>
       <div style="margin:0.5em 0;">
         <label for="tts-rate">速度：</label>
         <input type="range" id="tts-rate" min="0.5" max="3" step="0.1">
@@ -423,7 +427,9 @@ export class NotificationManager {
     const voiceSelect = ttsFs.querySelector("#tts-voice-select");
     const rateInput   = ttsFs.querySelector("#tts-rate");
     const rateValue   = ttsFs.querySelector("#tts-rate-value");
-    const saveBtn     = ttsFs.querySelector("#tts-save-btn");
+    const ttsSaveBtn  = ttsFs.querySelector("#tts-save-btn");
+    const testInput   = ttsFs.querySelector("#tts-test-text");
+    const testBtn     = ttsFs.querySelector("#tts-test-btn");
 
     /**
      * 利用可能な音声リストを `<select>` に反映します。
@@ -462,10 +468,21 @@ export class NotificationManager {
       rateValue.textContent = parseFloat(e.target.value).toFixed(1);
     });
 
-    saveBtn.addEventListener("click", () => {
+    ttsSaveBtn.addEventListener("click", () => {
       this.setTtsVoice(voiceSelect.value);
       this.setTtsRate(parseFloat(rateInput.value));
       showAlert("読み上げ設定を保存しました", "success");
+    });
+
+    testBtn.addEventListener("click", () => {
+      const utter = new SpeechSynthesisUtterance(testInput.value);
+      utter.rate = parseFloat(rateInput.value);
+      const voices = speechSynthesis
+        .getVoices()
+        .filter(v => v.lang === "ja-JP" && v.localService);
+      const voice = voices.find(v => v.name === voiceSelect.value) || voices[0];
+      if (voice) utter.voice = voice;
+      window.speechSynthesis.speak(utter);
     });
 
 
