@@ -24,8 +24,8 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";

@@ -22,8 +22,8 @@
  * - {@link pushLog}：ログ追加
  * - {@link pushNotificationLog}：通知レベルログ追加
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  *
  * 長期稼働でもブラウザクラッシュを防ぐため、最新 MAX_LOG_LINES 件のみ保持します。
  */

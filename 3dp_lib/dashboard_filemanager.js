@@ -12,8 +12,8 @@
  * 【公開関数一覧】
  * - {@link FileManager}：履歴ロード・保存のユーティリティ
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 import { currentHostname } from "./dashboard_data.js";

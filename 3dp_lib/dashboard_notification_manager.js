@@ -17,8 +17,8 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 "use strict";
 

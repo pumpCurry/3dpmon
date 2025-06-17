@@ -16,8 +16,8 @@
  * - {@link AudioManager}：音声管理クラス
  * - {@link audioManager}：共有インスタンス
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";
@@ -289,7 +289,7 @@ export class AudioManager {
    * - 状態に応じた CSS クラスと data-status の更新
    * - 音楽・音声それぞれに isXXXAllowed() チェックAPIを提供
    * 
-   * @version 1.0
+   * @version 1.390.193 (PR #86)
    * @module dashboard_audio_manager
    */
   

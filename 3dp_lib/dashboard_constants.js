@@ -13,8 +13,8 @@
  * - {@link LEVELS}：使用可能レベル配列
  * - {@link ERROR_LEVELS}：エラーレベル集合
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 /**

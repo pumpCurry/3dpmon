@@ -17,8 +17,8 @@
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";

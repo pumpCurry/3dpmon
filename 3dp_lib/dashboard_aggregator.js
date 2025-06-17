@@ -19,8 +19,8 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";

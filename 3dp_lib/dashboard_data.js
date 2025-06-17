@@ -19,8 +19,8 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";

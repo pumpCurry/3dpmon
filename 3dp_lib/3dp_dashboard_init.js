@@ -16,8 +16,8 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";
