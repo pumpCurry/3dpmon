@@ -12,8 +12,8 @@
  * 【公開関数一覧】
  * - {@link showVideoOverlay}：動画を取得して再生
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";

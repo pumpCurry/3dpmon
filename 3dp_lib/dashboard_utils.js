@@ -14,8 +14,8 @@
  * 【公開関数一覧】
  * - {@link formatDuration} ほか複数をエクスポート
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";

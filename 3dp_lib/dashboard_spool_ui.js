@@ -13,8 +13,8 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
- * @version 1.390.0
- * @since   v1.390.0
+ * @version 1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  */
 
 "use strict";
