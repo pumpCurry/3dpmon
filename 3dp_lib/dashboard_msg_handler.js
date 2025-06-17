@@ -16,9 +16,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
- * @version 1.390.193 (PR #86)
- * @since   1.390.193 (PR #86)
- */
+ * @version 1.390.214 (PR #95)
+ * @since   1.390.214 (PR #95)
+*/
 "use strict";
 
 import errorMap from "./3dp_errorcode.js";
@@ -40,7 +40,8 @@ import { handlePrintStateTransition } from "./dashboard_printstatus.js";
 import { parseCurPosition } from "./dashboard_utils.js";
 import {
   updateXYPreview,
-  updateZPreview
+  updateZPreview,
+  setPrinterModel
 } from "./dashboard_stage_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { ingestData, restoreAggregatorState, restartAggregatorTimer } from "./dashboard_aggregator.js";
@@ -380,6 +381,10 @@ export function processData(data) {
       updateZPreview(pos.z);
       machine.runtimeData.curPosition = data.curPosition;
     }
+  }
+  // (2.7.1b) プリンタモデルに基づくプレビュー設定
+  if (data.model) {
+    setPrinterModel(String(data.model));
   }
   // (2.7.2) その他フィールド一括反映
   Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true));
