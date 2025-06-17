@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.198 (PR #89)
+ * @version 1.390.203 (PR #90)
  * @since   1.390.198 (PR #89)
 */
 
@@ -46,9 +46,15 @@ function panelToast(msg, isErr = false) {
 /* ------------------------------------------------------------------ */
 /*  初期化                                                             */
 /* ------------------------------------------------------------------ */
-document.addEventListener("DOMContentLoaded", initStorageUI);
-
-function initStorageUI() {
+/**
+ * initStorageUI:
+ *   ストレージ関連 UI を初期化し、各ボタンのイベントを設定する。
+ *   Export/Import ボタン群は `#storage-panel` 要素の末尾へ追加する。
+ *
+ * @function initStorageUI
+ * @returns {void}
+ */
+export function initStorageUI() {
   // DOM キャッシュ
   const elPanel = document.getElementById("storage-panel");
   const elUsage = document.getElementById("storage-usage");
@@ -73,7 +79,12 @@ function initStorageUI() {
   allExpBtn.textContent = "すべてのデータのエクスポート";
   allExpBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
-  btnTest.after(expBtn, impBtn, allExpBtn);
+  // 既存パネル要素の末尾にボタン群用 div を追加
+  // この位置で追加することで HTML 側の末尾に配置される
+  const btnGroup = document.createElement("div");
+  btnGroup.style.cssText = "padding:8px;font-size:0.9em;";
+  btnGroup.append(expBtn, impBtn, allExpBtn);
+  elPanel?.appendChild(btnGroup);
 
   /* ---------------- ボタン動作 ---------------- */
 
