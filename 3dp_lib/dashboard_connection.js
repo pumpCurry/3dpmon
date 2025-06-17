@@ -23,7 +23,7 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.206 (PR #92)
  * @since   1.390.193 (PR #86)
  */
 
@@ -38,7 +38,7 @@ import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
 import { handleMessage } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
-import * as printManager from "./dashboard_printManager.js";
+import * as printManager from "./dashboard_printmanager.js";
 
 let ws = null;
 let heartbeatInterval = null;

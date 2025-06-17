@@ -24,9 +24,9 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.206 (PR #92)
  * @since   1.390.193 (PR #86)
- */
+*/
 
 "use strict";
 
@@ -130,6 +130,7 @@ export function addSpool(data) {
     totalLengthMm: Number(data.totalLengthMm) || 0,
     remainingLengthMm: Number(data.remainingLengthMm) || 0,
     weightGram: Number(data.weightGram) || 0,
+    printCount: Number(data.printCount) || 0,
     startDate: data.startDate || new Date().toISOString(),
     usedLengthLog: data.usedLengthLog || [],
     isActive: false,
@@ -160,6 +161,7 @@ export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
+  s.printCount = (s.printCount || 0) + 1;
   s.usedLengthLog.push({ jobId, used: lengthMm });
   saveUnifiedStorage();
 }
@@ -168,6 +170,7 @@ export function useFilament(lengthMm, jobId = "") {
  * プリセットデータからスプールを新規作成する。
  *
  * @param {Object} preset - フィラメントプリセット
+ *   - name プロパティが存在する場合はスプール名として使用
  * @param {Object} [override] - 上書きするオプション
  * @returns {Object} - 追加されたスプール
  */
@@ -175,7 +178,7 @@ export function addSpoolFromPreset(preset, override = {}) {
   if (!preset) return null;
   const data = {
     presetId: preset.presetId,
-    name: `${preset.brand} ${preset.colorName}`,
+    name: preset.name || `${preset.brand} ${preset.colorName}`,
     color: preset.color,
     colorName: preset.colorName,
     material: preset.material,

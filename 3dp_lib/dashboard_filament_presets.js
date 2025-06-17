@@ -12,7 +12,7 @@
  * 【公開関数一覧】
  * - {@link FILAMENT_PRESETS}: プリセットデータ配列
  *
- * @version 1.390.0
+ * @version 1.390.206 (PR #92)
  * @since   v1.390.0
  */
 
@@ -49,6 +49,30 @@ export const FILAMENT_PRESETS = [
   {
     presetId: "preset-cc3d-neon-green",
     brand: "CC3D",
+    material: "PLA+",
+    color: "#24F747",
+    colorName: "蛍光緑",
+    defaultLength: 336000,
+    diameter: 1.75,
+    filamentDiameter: 1.75,
+    filamentTotalLength: 336000,
+    filamentCurrentLength: 336000,
+    reelOuterDiameter: 195,
+    reelThickness: 58,
+    reelWindingInnerDiameter: 68,
+    reelCenterHoleDiameter: 54,
+    reelBodyColor: "#91919A",
+    reelFlangeTransparency: 0.4,
+    reelWindingForegroundColor: "#71717A",
+    reelCenterHoleForegroundColor: "#F4F4F5",
+    purchaseLink: "https://www.amazon.co.jp/dp/B09C7FKDQR",
+    price: 1699,
+    priceCheckDate: "2025-06-15"
+  },
+  {
+    presetId: "preset-unknown-somename-somecolor",
+    name: "(不明なフィラメント)",
+    brand: "(メーカー不明)",
     material: "PLA+",
     color: "#24F747",
     colorName: "蛍光緑",
