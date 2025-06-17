@@ -17,7 +17,7 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.219 (PR #98)
  * @since   1.390.193 (PR #86)
  */
 "use strict";
@@ -136,7 +136,7 @@ export class NotificationManager {
     this.muted      = false;
     this.useWebPush = true;
     this.map        = JSON.parse(JSON.stringify(defaultNotificationMap));
-    this.ttsVoice   = "female"; // "female" or "male"
+    this.ttsVoice   = ""; // Web Speech API voice name
     this.ttsRate    = 1.8;      // 0.5～3.0
 
     // 永続化済み設定を復元
@@ -199,6 +199,8 @@ export class NotificationManager {
   /**
    * 通知を発火します。
    * - ログ出力／固定アラート／TTS／効果音／WebPush
+   *
+   * @function notify
    * @param {string} type
    * @param {object} [payload]
    */
@@ -228,11 +230,20 @@ export class NotificationManager {
       utt.rate = this.ttsRate;
     
       // voice
-      const voices = speechSynthesis.getVoices();
-      // 名前に female/male が含まれるものを優先
-      const found = voices.find(v =>
-        this.ttsVoice === "female" ? /female/i.test(v.name) : /male/i.test(v.name)
-      ) || voices[0];
+      const voices = speechSynthesis
+        .getVoices()
+        .filter(v => v.lang === "ja-JP" && v.localService);
+
+      let found;
+      if (this.ttsVoice === "female" || this.ttsVoice === "male") {
+        // 旧設定との互換のため female/male も受け付ける
+        found = voices.find(v =>
+          this.ttsVoice === "female" ? /female/i.test(v.name) : /male/i.test(v.name)
+        );
+      } else if (this.ttsVoice) {
+        found = voices.find(v => v.name === this.ttsVoice);
+      }
+      if (!found) found = voices[0];
       if (found) utt.voice = found;
     
       window.speechSynthesis.speak(utt);
@@ -290,6 +301,8 @@ export class NotificationManager {
 
   /**
    * 通知設定編集UIを生成・バインドします。
+   *
+   * @function initSettingsUI
    * @param {HTMLElement} container - #notification-panel-body
    */
   initSettingsUI(container) {
@@ -396,8 +409,8 @@ export class NotificationManager {
     ttsFs.style.cssText = "margin-top:1em;padding:0.5em;border:1px solid #ccc;border-radius:4px;";
     ttsFs.innerHTML = `
       <legend>読み上げ設定</legend>
-      <label><input type="radio" name="tts-voice" value="female"> 女声</label>
-      <label style="margin-left:1em;"><input type="radio" name="tts-voice" value="male"> 男声</label>
+      <label for="tts-voice-select">音声を選択：</label>
+      <select id="tts-voice-select"></select>
       <div style="margin:0.5em 0;">
         <label for="tts-rate">速度：</label>
         <input type="range" id="tts-rate" min="0.5" max="3" step="0.1">
@@ -406,26 +419,54 @@ export class NotificationManager {
       <button id="tts-save-btn">読み上げ設定を保存</button>
     `;
     container.appendChild(ttsFs);
-    
-    // UI に現在値を反映
-    ttsFs.querySelector(`input[name="tts-voice"][value="${this.ttsVoice}"]`).checked = true;
-    const rateInput = ttsFs.querySelector("#tts-rate");
-    const rateValue = ttsFs.querySelector("#tts-rate-value");
+
+    const voiceSelect = ttsFs.querySelector("#tts-voice-select");
+    const rateInput   = ttsFs.querySelector("#tts-rate");
+    const rateValue   = ttsFs.querySelector("#tts-rate-value");
+    const saveBtn     = ttsFs.querySelector("#tts-save-btn");
+
+    /**
+     * 利用可能な音声リストを `<select>` に反映します。
+     * - ja-JP かつ localService=true の音声のみを対象とします。
+     *
+     * @function populateVoiceList
+     * @private
+     */
+    const populateVoiceList = () => {
+      const voices = speechSynthesis
+        .getVoices()
+        .filter(v => v.lang === "ja-JP" && v.localService);
+
+      voiceSelect.innerHTML = "";
+      voices.forEach(v => {
+        const opt = document.createElement("option");
+        opt.value = v.name;
+        opt.textContent = `${v.name} (${v.lang})`;
+        voiceSelect.appendChild(opt);
+      });
+
+      if (voices.some(v => v.name === this.ttsVoice)) {
+        voiceSelect.value = this.ttsVoice;
+      }
+    };
+
+    populateVoiceList();
+    if (speechSynthesis.onvoiceschanged !== undefined) {
+      speechSynthesis.onvoiceschanged = populateVoiceList;
+    }
+
     rateInput.value = this.ttsRate;
     rateValue.textContent = this.ttsRate.toFixed(1);
-    
-    // イベントバインド
+
     rateInput.addEventListener("input", e => {
       rateValue.textContent = parseFloat(e.target.value).toFixed(1);
     });
-    ttsFs.querySelector("#tts-save-btn")
-      .addEventListener("click", () => {
-        const voice = ttsFs.querySelector(`input[name="tts-voice"]:checked`).value;
-        const rate  = parseFloat(rateInput.value);
-        this.setTtsVoice(voice);
-        this.setTtsRate(rate);
-        showAlert("読み上げ設定を保存しました", "success");
-      });
+
+    saveBtn.addEventListener("click", () => {
+      this.setTtsVoice(voiceSelect.value);
+      this.setTtsRate(parseFloat(rateInput.value));
+      showAlert("読み上げ設定を保存しました", "success");
+    });
 
 
   }
