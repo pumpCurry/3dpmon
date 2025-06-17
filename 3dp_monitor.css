@@ -845,6 +845,10 @@ input:checked + .slider:before {
   text-align: right;
   font-weight: bold;
 }
+#tts-test-text {
+  width: 16em;
+  font-size: 0.9em;
+}
 
 
 /* ---------------------------------------------------------------
