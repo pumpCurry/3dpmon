@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.239 (PR #105)
+* @version 1.390.245 (PR #110)
 * @since   1.390.228 (PR #102)
 */
 "use strict";
@@ -22,6 +22,7 @@ import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, getSpools } from "./dashboard_spool.js";
 import { getInventory } from "./dashboard_filament_inventory.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 
 let styleInjected = false;
 
@@ -133,14 +134,110 @@ function createInventoryContent() {
 function createPresetContent() {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
+
+  const form = document.createElement("form");
+  form.style.cssText = "font-size:12px;margin-bottom:8px;";
+
+  const brandInput = document.createElement("input");
+  brandInput.placeholder = "ブランド";
+  brandInput.style.marginRight = "4px";
+
+  const matInput = document.createElement("input");
+  matInput.placeholder = "材質";
+  matInput.style.marginRight = "4px";
+
+  const colorNameInput = document.createElement("input");
+  colorNameInput.placeholder = "色名";
+  colorNameInput.style.marginRight = "4px";
+
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.style.marginRight = "4px";
+
+  const submitBtn = document.createElement("button");
+  submitBtn.textContent = "追加";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "キャンセル";
+  cancelBtn.type = "button";
+  cancelBtn.style.marginLeft = "4px";
+
+  form.append(brandInput, matInput, colorNameInput, colorInput, submitBtn, cancelBtn);
+  div.appendChild(form);
+
   const ul = document.createElement("ul");
   ul.style.fontSize = "12px";
-  FILAMENT_PRESETS.forEach(p => {
-    const li = document.createElement("li");
-    li.textContent = `${p.brand} ${p.colorName} (${p.material})`;
-    ul.appendChild(li);
-  });
   div.appendChild(ul);
+
+  let editIndex = -1;
+
+  function resetForm() {
+    brandInput.value = "";
+    matInput.value = "";
+    colorNameInput.value = "";
+    colorInput.value = "#000000";
+    submitBtn.textContent = "追加";
+    editIndex = -1;
+  }
+
+  function render() {
+    ul.innerHTML = "";
+    const list = monitorData.filamentPresets || FILAMENT_PRESETS;
+    list.forEach((p, idx) => {
+      const li = document.createElement("li");
+      li.textContent = `${p.brand} ${p.colorName} (${p.material})`;
+      const edit = document.createElement("button");
+      edit.textContent = "編集";
+      edit.style.marginLeft = "4px";
+      edit.addEventListener("click", () => {
+        brandInput.value = p.brand || "";
+        matInput.value = p.material || "";
+        colorNameInput.value = p.colorName || "";
+        colorInput.value = p.color || "#000000";
+        submitBtn.textContent = "保存";
+        editIndex = idx;
+      });
+      const del = document.createElement("button");
+      del.textContent = "削除";
+      del.style.marginLeft = "4px";
+      del.addEventListener("click", () => {
+        if (!confirm("削除しますか?")) return;
+        monitorData.filamentPresets.splice(idx, 1);
+        saveUnifiedStorage();
+        render();
+        resetForm();
+      });
+      li.append(edit, del);
+      ul.appendChild(li);
+    });
+  }
+
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    const p = {
+      presetId: editIndex >= 0 ? monitorData.filamentPresets[editIndex].presetId : `preset-${Date.now()}`,
+      brand: brandInput.value.trim(),
+      material: matInput.value.trim(),
+      color: colorInput.value,
+      colorName: colorNameInput.value.trim()
+    };
+    if (editIndex >= 0) {
+      monitorData.filamentPresets.splice(editIndex, 1, p);
+    } else {
+      monitorData.filamentPresets.push(p);
+    }
+    saveUnifiedStorage();
+    render();
+    resetForm();
+  });
+
+  cancelBtn.addEventListener("click", resetForm);
+
+  if (!monitorData.filamentPresets || !monitorData.filamentPresets.length) {
+    monitorData.filamentPresets = [...FILAMENT_PRESETS];
+  }
+  render();
+  resetForm();
   return div;
 }
 
