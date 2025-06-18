@@ -19,6 +19,8 @@ custom materials can be registered on the fly from the overlay dialog.
 初回接続方法や音声設定などの詳細な操作説明は
 [USAGE-ja-en.md](USAGE-ja-en.md) を参照してください。画面構成の詳細も同ガイドの
 "Dashboard Layout / 画面構成" セクションにまとめています。
+フィラメント管理機能の具体的な使い方は
+[FILAMENT-MANUAL-ja.md](FILAMENT-MANUAL-ja.md) も参照してください。
 
 ## Filament Registration
 フィラメントスプールは設定カードの「フィラメントスプール」セクションで
