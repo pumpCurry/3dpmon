@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.271 (PR #123)
- * @since   1.390.228 (PR #102)
- */
+* @version 1.390.275 (PR #125)
+* @since   1.390.228 (PR #102)
+*/
 
 "use strict";
 
@@ -90,8 +90,8 @@ function injectStyles() {
     .filament-manager-content .search-form{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
     .filament-manager-content .search-form select,
     .filament-manager-content .search-form input{padding:2px;font-size:12px;}
-    .registered-container{display:flex;gap:8px;}
-    .registered-preview{flex:0 0 120px;}
+    .registered-container{display:flex;gap:8px;align-items:flex-start;}
+    .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
     .registered-table th{cursor:pointer;}
     .edit-form label{display:block;margin:4px 0;font-size:12px;}
     .edit-form input,.edit-form select{width:100%;box-sizing:border-box;font-size:12px;padding:2px;}
