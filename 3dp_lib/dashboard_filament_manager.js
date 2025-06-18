@@ -13,14 +13,18 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.245 (PR #110)
+* @version 1.390.247 (PR #111)
 * @since   1.390.228 (PR #102)
 */
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, getSpools } from "./dashboard_spool.js";
-import { getInventory } from "./dashboard_filament_inventory.js";
+import {
+  getInventory,
+  setInventoryQuantity,
+  adjustInventory
+} from "./dashboard_filament_inventory.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 
@@ -45,6 +49,8 @@ function injectStyles() {
     .filament-manager-content{padding:8px;overflow-y:auto;max-height:60vh;}
     .filament-manager-content table{width:100%;border-collapse:collapse;}
     .filament-manager-content th,.filament-manager-content td{border:1px solid #ddd;padding:4px;font-size:12px;}
+    .filament-manager-content .inv-qty-input{width:60px;text-align:right;}
+    .filament-manager-content .inv-adjust{margin:0 2px;padding:0 4px;}
   `;
   const style = document.createElement("style");
   style.textContent = css;
@@ -103,6 +109,7 @@ function createCurrentSpoolContent() {
 
 /**
  * 在庫一覧タブを生成する。
+ * 在庫数を増減するボタンと入力欄を備え、直接数量変更が可能。
  *
  * @private
  * @returns {HTMLElement} DOM 要素
@@ -117,7 +124,39 @@ function createInventoryContent() {
   const tbody = document.createElement("tbody");
   getInventory().forEach(inv => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${inv.modelId}</td><td>${inv.quantity}</td><td>${inv.totalUsedNum}</td>`;
+
+    const idTd = document.createElement("td");
+    idTd.textContent = inv.modelId;
+
+    const qtyTd = document.createElement("td");
+    const minus = document.createElement("button");
+    minus.textContent = "-";
+    minus.className = "inv-adjust";
+    minus.addEventListener("click", () => {
+      qtyInput.value = adjustInventory(inv.modelId, -1).toString();
+    });
+
+    const qtyInput = document.createElement("input");
+    qtyInput.type = "number";
+    qtyInput.className = "inv-qty-input";
+    qtyInput.value = inv.quantity;
+    qtyInput.addEventListener("change", () => {
+      qtyInput.value = setInventoryQuantity(inv.modelId, qtyInput.value).toString();
+    });
+
+    const plus = document.createElement("button");
+    plus.textContent = "+";
+    plus.className = "inv-adjust";
+    plus.addEventListener("click", () => {
+      qtyInput.value = adjustInventory(inv.modelId, 1).toString();
+    });
+
+    qtyTd.append(minus, qtyInput, plus);
+
+    const usedTd = document.createElement("td");
+    usedTd.textContent = inv.totalUsedNum;
+
+    tr.append(idTd, qtyTd, usedTd);
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
