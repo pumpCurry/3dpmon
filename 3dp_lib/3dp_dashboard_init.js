@@ -16,9 +16,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.206 (PR #92)
+ * @version 1.390.224 (PR #100)
  * @since   1.390.193 (PR #86)
- */
+*/
 
 "use strict";
 
@@ -100,6 +100,8 @@ export function initializeDashboard({
   restoreLegacyStoredData();
   cleanupLegacy();
   restoreUnifiedStorage();
+  // 読み込んだストレージ内容を通知マネージャへ反映
+  notificationManager.loadSettings();
   if (!monitorData.filamentSpools.length) {
     const preset = FILAMENT_PRESETS.find(
       p => p.presetId === "preset-unknown-somename-somecolor"
