@@ -950,7 +950,7 @@ input:checked + .slider:before {
   z-index: 2;         /* 本文セルの上に */
 }
 
-.scrollable-body { max-height:15em; overflow:auto; }
+.scrollable-body { max-height:30em; overflow:auto; }
 
 /* -------------------------------
    印刷履歴テーブル用：ストライプ＆フォント
