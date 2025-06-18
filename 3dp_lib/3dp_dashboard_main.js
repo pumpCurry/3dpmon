@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - なし（エントリポイントとして即時実行）
  *
- * @version 1.390.229 (PR #103)
+ * @version 1.390.230 (PR #104)
  * @since   1.390.193 (PR #86)
  */
 
@@ -42,6 +42,7 @@ import { initStorageUI } from "./dashboard_storage_ui.js";
 // 副作用目的で読み込む
 import "./dashboard_spool_ui.js";
 import "./dashboard_filament_manager.js";
+import "./dashboard_filament_change.js";
 
 // ——— グローバル例外ハンドリング ———
 window.addEventListener("unhandledrejection", evt => {
