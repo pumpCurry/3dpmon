@@ -21,9 +21,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.206 (PR #92)
- * @since   1.390.197 (PR #88)
- */
+* @version 1.390.239 (PR #105)
+* @since   1.390.197 (PR #88)
+*/
 "use strict";
 
 import {
@@ -39,9 +39,15 @@ import { formatEpochToDateTime } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
-import { getCurrentSpool, useFilament, getSpoolById } from "./dashboard_spool.js";
+import {
+  getCurrentSpool,
+  useFilament,
+  getSpoolById,
+  updateSpool
+} from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
+import { showSpoolDialog } from "./dashboard_spool_ui.js";
 
 /** 履歴の最大件数 */
 export const MAX_HISTORY = 150;
@@ -748,8 +754,16 @@ export function renderHistoryTable(rawArray, baseUrl) {
     tr.querySelector(".video-link")?.addEventListener("click", () => {
       showVideoOverlay(raw.videoUrl);
     });
-    tr.querySelector(".spool-edit")?.addEventListener("click", () => {
-      alert("フィラメント情報の編集は未実装です");
+    tr.querySelector(".spool-edit")?.addEventListener("click", async () => {
+      const sp = getSpoolById(raw.filamentId);
+      if (!sp) {
+        alert("スプール情報が見つかりません");
+        return;
+      }
+      const res = await showSpoolDialog({ title: "スプール編集", spool: sp });
+      if (res) {
+        updateSpool(sp.id, res);
+      }
     });
   });
 

@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.228 (PR #102)
- * @since   1.390.228 (PR #102)
- */
+* @version 1.390.239 (PR #105)
+* @since   1.390.228 (PR #102)
+*/
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
@@ -144,6 +144,33 @@ function createPresetContent() {
   return div;
 }
 
+function createReportContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>日付</th><th>スプール数</th><th>消費量(mm)</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  const map = {};
+  (monitorData.usageHistory || []).forEach(u => {
+    const d = new Date(Number(u.startedAt || 0)).toISOString().slice(0, 10);
+    if (!map[d]) map[d] = { ids: new Set(), len: 0 };
+    map[d].ids.add(u.spoolId);
+    map[d].len += Number(u.usedLength || 0);
+  });
+  Object.entries(map)
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .forEach(([d, info]) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${d}</td><td>${info.ids.size}</td><td>${info.len.toLocaleString()}</td>`;
+      tbody.appendChild(tr);
+    });
+  table.appendChild(tbody);
+  div.appendChild(table);
+  return div;
+}
+
 /**
  * フィラメント管理モーダルを表示する。
  *
@@ -169,12 +196,13 @@ export function showFilamentManager() {
 
   const tabBar = document.createElement("div");
   tabBar.className = "filament-manager-tabs";
-  const tabs = ["使用記録簿", "現在のスプール", "在庫", "プリセット"];
+  const tabs = ["使用記録簿", "現在のスプール", "在庫", "プリセット", "集計レポート"];
   const contents = [
     createHistoryContent(),
     createCurrentSpoolContent(),
     createInventoryContent(),
-    createPresetContent()
+    createPresetContent(),
+    createReportContent()
   ];
   const contentWrap = document.createElement("div");
   modal.appendChild(tabBar);
