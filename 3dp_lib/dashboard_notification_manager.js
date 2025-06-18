@@ -17,7 +17,7 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.221 (PR #99)
+ * @version 1.390.224 (PR #100)
  * @since   1.390.193 (PR #86)
 */
 "use strict";
@@ -139,22 +139,31 @@ export class NotificationManager {
     this.ttsVoice   = ""; // Web Speech API voice name
     this.ttsRate    = 1.8;      // 0.5～3.0
 
-    // 永続化済み設定を復元
-    const saved = monitorData.appSettings[SETTINGS_KEY];
-    if (saved) {
-      this.enabled    = saved.enabled    ?? this.enabled;
-      this.volume     = saved.volume     ?? this.volume;
-      this.muted      = saved.muted      ?? this.muted;
-      this.useWebPush = saved.useWebPush ?? this.useWebPush;
-      if (saved.map)      this.map      = JSON.parse(JSON.stringify(saved.map));
-      if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
-      if (saved.ttsRate)  this.ttsRate  = saved.ttsRate;
-    }
+    // 永続化済み設定をインスタンスに反映
+    this.loadSettings();
 
     // level プロパティがない場合は "info" を補填
     Object.values(this.map).forEach(cfg => {
       if (!cfg.level) cfg.level = "info";
     });
+  }
+
+  /**
+   * 永続化済み通知設定を読み込み、現在のインスタンスへ反映します。
+   *
+   * @function loadSettings
+   * @returns {void}
+   */
+  loadSettings() {
+    const saved = monitorData.appSettings[SETTINGS_KEY];
+    if (!saved) return;
+    this.enabled    = saved.enabled    ?? this.enabled;
+    this.volume     = saved.volume     ?? this.volume;
+    this.muted      = saved.muted      ?? this.muted;
+    this.useWebPush = saved.useWebPush ?? this.useWebPush;
+    if (saved.map)      this.map      = JSON.parse(JSON.stringify(saved.map));
+    if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
+    if (saved.ttsRate)  this.ttsRate  = saved.ttsRate;
   }
 
   /** @private 永続化ヘルパー */
