@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.260 (PR #118)
+ * @version 1.390.264 (PR #120)
  * @since   1.390.228 (PR #102)
  */
 "use strict";
@@ -32,7 +32,6 @@ import {
 } from "./dashboard_filament_inventory.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
-import { showSpoolDialog } from "./dashboard_spool_ui.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 
 let styleInjected = false;
@@ -64,6 +63,9 @@ function injectStyles() {
     .registered-container{display:flex;gap:8px;}
     .registered-preview{flex:0 0 120px;}
     .registered-table th{cursor:pointer;}
+    .edit-form label{display:block;margin:4px 0;font-size:12px;}
+    .edit-form input,.edit-form select{width:100%;box-sizing:border-box;font-size:12px;padding:2px;}
+    .edit-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}
   `;
   const style = document.createElement("style");
   style.textContent = css;
@@ -184,7 +186,8 @@ function createInventoryContent() {
  * @private
  * @returns {HTMLElement} DOM 要素
  */
-function createRegisteredContent() {
+function createRegisteredContent(openEditor) {
+
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
@@ -379,12 +382,8 @@ function createRegisteredContent() {
       const cmd = document.createElement("td");
       const edit = document.createElement("button");
       edit.textContent = "編集";
-      edit.addEventListener("click", async () => {
-        const res = await showSpoolDialog(sp);
-        if (res) {
-          updateSpool(sp.id, res);
-          render();
-        }
+      edit.addEventListener("click", () => {
+        openEditor(sp, render);
       });
       cmd.appendChild(edit);
       tr.appendChild(cmd);
@@ -433,17 +432,13 @@ function createRegisteredContent() {
     ev.preventDefault();
     render();
   });
-
-  addBtn.addEventListener("click", async () => {
-    const res = await showSpoolDialog();
-    if (res) {
-      addSpool(res);
-      render();
-    }
+  
+  addBtn.addEventListener("click", () => {
+    openEditor(null, render);
   });
 
   render();
-  return div;
+  return { el: div, render };
 }
 
 /**
@@ -560,6 +555,142 @@ function createPresetContent() {
   render();
   resetForm();
   return div;
+}
+
+/**
+ * スプール登録・編集タブを生成する。
+ * プレビューと入力フォームを備え、保存後に指定コールバックを実行する。
+ *
+ * @private
+ * @param {Function} onDone - 保存/キャンセル後に呼び出す処理
+ * @returns {{el:HTMLElement, setSpool:function(Object?, boolean=):void}} タブ要素と設定関数
+ */
+function createEditorContent(onDone) {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+
+  const wrap = document.createElement("div");
+  wrap.className = "registered-container";
+  const prevBox = document.createElement("div");
+  prevBox.className = "registered-preview";
+  wrap.appendChild(prevBox);
+
+  const form = document.createElement("form");
+  form.className = "edit-form";
+  wrap.appendChild(form);
+  div.appendChild(wrap);
+
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "名前";
+  const nameIn = document.createElement("input");
+  nameLabel.appendChild(nameIn);
+
+  const matLabel = document.createElement("label");
+  matLabel.textContent = "素材";
+  const matSel = document.createElement("select");
+  ["PLA", "PETG", "ABS", "TPU"].forEach(m => {
+    const o = document.createElement("option");
+    o.value = m; o.textContent = m; matSel.appendChild(o);
+  });
+  matLabel.appendChild(matSel);
+
+  const totLabel = document.createElement("label");
+  totLabel.textContent = "総長(mm)";
+  const totIn = document.createElement("input");
+  totIn.type = "number";
+  totLabel.appendChild(totIn);
+
+  const weightLabel = document.createElement("label");
+  weightLabel.textContent = "総重量(g)";
+  const weightIn = document.createElement("input");
+  weightIn.type = "number";
+  weightLabel.appendChild(weightIn);
+
+  const remainLabel = document.createElement("label");
+  remainLabel.textContent = "残り長(mm)";
+  const remainIn = document.createElement("input");
+  remainIn.type = "number";
+  remainLabel.appendChild(remainIn);
+
+  const noteLabel = document.createElement("label");
+  noteLabel.textContent = "メモ";
+  const noteIn = document.createElement("input");
+  noteLabel.appendChild(noteIn);
+
+  const favLabel = document.createElement("label");
+  const favIn = document.createElement("input");
+  favIn.type = "checkbox";
+  favLabel.appendChild(favIn);
+  favLabel.append(" お気に入り");
+
+  const btnBox = document.createElement("div");
+  btnBox.className = "edit-buttons";
+  const okBtn = document.createElement("button");
+  okBtn.textContent = "保存";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "戻る";
+  cancelBtn.type = "button";
+  btnBox.append(okBtn, cancelBtn);
+
+  form.append(nameLabel, matLabel, totLabel, weightLabel, remainLabel, noteLabel, favLabel, btnBox);
+
+  const preview = createFilamentPreview(prevBox, {
+    filamentDiameter: 1.75,
+    filamentTotalLength: 336000,
+    filamentCurrentLength: 336000,
+    filamentColor: "#22C55E",
+    widthPx: 120,
+    heightPx: 120,
+    showSlider: false,
+    disableInteraction: true,
+    showOverlayLength: true,
+    showOverlayPercent: true
+  });
+
+  let current = null;
+  let isNew = false;
+
+  function fillForm(sp) {
+    nameIn.value = sp.name || "";
+    matSel.value = sp.material || "PLA";
+    totIn.value = sp.totalLengthMm ?? "";
+    weightIn.value = sp.weightGram ?? "";
+    remainIn.value = sp.remainingLengthMm ?? sp.totalLengthMm ?? "";
+    noteIn.value = sp.note || "";
+    favIn.checked = !!sp.isFavorite;
+    preview.setState({
+      filamentDiameter: sp.filamentDiameter || 1.75,
+      filamentTotalLength: sp.totalLengthMm || 336000,
+      filamentCurrentLength: sp.remainingLengthMm || 336000,
+      filamentColor: sp.filamentColor || sp.color || "#22C55E"
+    });
+  }
+
+  okBtn.addEventListener("click", ev => {
+    ev.preventDefault();
+    const data = {
+      name: nameIn.value,
+      material: matSel.value,
+      totalLengthMm: Number(totIn.value) || 0,
+      weightGram: Number(weightIn.value) || 0,
+      remainingLengthMm: Number(remainIn.value) || 0,
+      isFavorite: favIn.checked,
+      note: noteIn.value
+    };
+    if (isNew) addSpool(data); else updateSpool(current.id, data);
+    onDone();
+  });
+
+  cancelBtn.addEventListener("click", () => onDone());
+
+  return {
+    el: div,
+    setSpool(sp = {}, fresh = false) {
+      current = sp;
+      isNew = fresh || !sp.id;
+      fillForm(sp);
+    }
+  };
 }
 
 /**
@@ -695,6 +826,7 @@ export function showFilamentManager() {
 
   const tabBar = document.createElement("div");
   tabBar.className = "filament-manager-tabs";
+  const REGISTERED_IDX = 3;
   const tabs = [
     "使用記録簿",
     "現在のスプール",
@@ -703,24 +835,44 @@ export function showFilamentManager() {
     "プリセット",
     "集計レポート"
   ];
+
+  let switchTab = () => {};
+
+  const editTab = createEditorContent(() => {
+    contents[REGISTERED_IDX].render();
+    switchTab(REGISTERED_IDX);
+  });
+
   const contents = [
     createHistoryContent(),
     createCurrentSpoolContent(),
     createInventoryContent(),
-    createRegisteredContent(),
+
+    null,
     createPresetContent(),
-    createReportContent()
+    createReportContent(),
+    editTab.el
   ];
+
+  const registered = createRegisteredContent((sp, refresh) => {
+    editTab.setSpool(sp || {}, !sp);
+    switchTab(contents.length - 1);
+    if (refresh) refresh();
+  });
+  contents[REGISTERED_IDX] = registered.el;
+
   const contentWrap = document.createElement("div");
   modal.appendChild(tabBar);
   modal.appendChild(contentWrap);
 
-  function switchTab(idx) {
+  switchTab = function (idx) {
     tabBar.querySelectorAll("button").forEach((b, i) => {
       b.classList.toggle("active", i === idx);
-      contents[i].style.display = i === idx ? "block" : "none";
     });
-  }
+    contents.forEach((c, i) => {
+      c.style.display = i === idx ? "block" : "none";
+    });
+  };
 
   tabs.forEach((name, i) => {
     const btn = document.createElement("button");

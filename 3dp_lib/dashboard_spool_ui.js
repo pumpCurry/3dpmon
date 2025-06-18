@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
- * @version 1.390.260 (PR #118)
-* @since   1.390.193 (PR #86)
-*/
+ * @version 1.390.264 (PR #120)
+ * @since   1.390.193 (PR #86)
+ */
 
 "use strict";
 
@@ -315,18 +315,6 @@ function initSpoolUI() {
         updatePreview(sp);
         render();
       });
-      const edit = document.createElement("button");
-      edit.textContent = "編集";
-      edit.addEventListener("click", async () => {
-        const res = await showSpoolDialog(sp);
-        if (res) { updateSpool(sp.id, res); render(); }
-/*
-        const result = await showSpoolDialog({ title: "スプール編集", spool: sp });
-        if (!result) return;
-        updateSpool(sp.id, result);
-        render();
-*/
-      });
       const del = document.createElement("button");
       del.textContent = "削除";
       del.addEventListener("click", () => {
@@ -335,23 +323,12 @@ function initSpoolUI() {
           render();
         }
       });
-      li.append(" ", sel, edit, del);
+      li.append(" ", sel, del);
       listEl.appendChild(li);
     });
   }
 
-    addBtn.addEventListener("click", async () => {
-      const res = await showSpoolDialog();
-      if (res) { addSpool(res); render(); }
-    });
-/*
-  addBtn.addEventListener("click", async () => {
-    const result = await showSpoolDialog({ title: "スプール追加" });
-    if (!result || !result.name) return;
-    addSpool(result);
-    render();
-  });
-*/
+    addBtn.style.display = "none";
 
   render();
 }
