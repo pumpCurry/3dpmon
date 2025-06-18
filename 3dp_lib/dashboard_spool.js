@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.243 (PR #109)
+ * @version 1.390.260 (PR #118)
  * @since   1.390.193 (PR #86)
 */
 
@@ -79,17 +79,32 @@ export function getCurrentSpool() {
 }
 
 export function setCurrentSpoolId(id) {
-  const prev = monitorData.currentSpoolId;
+  const prevId = monitorData.currentSpoolId;
+  if (prevId === id) return;
+  const prevSpool = getSpoolById(prevId);
+  const newSpool = getSpoolById(id);
+
   monitorData.currentSpoolId = id;
   monitorData.filamentSpools.forEach(sp => {
     sp.isActive = sp.id === id;
+    sp.isInUse = sp.id === id;
   });
-  saveUnifiedStorage();
-  if (prev !== id) {
-    const machine = monitorData.machines[currentHostname] || {};
-    const printId = machine.printStore?.current?.id ?? "";
-    logSpoolChange(getSpoolById(id), printId);
+  const machine = monitorData.machines[currentHostname] || {};
+  const printId = machine.printStore?.current?.id ?? "";
+
+  if (prevSpool) {
+    prevSpool.removedAt = Date.now();
+    prevSpool.isInUse = false;
+    prevSpool.currentPrintID = "";
   }
+  if (newSpool) {
+    newSpool.startLength = newSpool.remainingLengthMm;
+    newSpool.startPrintID = printId;
+    newSpool.startedAt = Date.now();
+    newSpool.currentPrintID = printId;
+  }
+  saveUnifiedStorage();
+  logSpoolChange(newSpool, printId);
 }
 
 /**
@@ -106,6 +121,7 @@ export function addSpool(data) {
     id,
     spoolId: id,
     presetId: data.presetId || null,
+    modelId: data.modelId || data.presetId || null,
     name: data.name || "",
     color: data.color || "",
     colorName: data.colorName || "",
@@ -140,10 +156,18 @@ export function addSpool(data) {
     weightGram: Number(data.weightGram) || 0,
     printCount: Number(data.printCount) || 0,
     startDate: data.startDate || new Date().toISOString(),
+    startLength: Number(data.startLength ?? data.remainingLengthMm) || 0,
+    startPrintID: data.startPrintID || "",
+    startedAt: data.startedAt || Date.now(),
+    currentPrintID: data.currentPrintID || "",
+    removedAt: data.removedAt || null,
+    note: data.note || "",
     usedLengthLog: data.usedLengthLog || [],
     isActive: false,
+    isInUse: false,
     isFavorite: data.isFavorite || false,
-    deleted: false
+    deleted: false,
+    isDeleted: false
 
   };
   monitorData.filamentSpools.push(spool);
@@ -162,6 +186,10 @@ export function deleteSpool(id) {
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
   s.deleted = true;
+  s.isDeleted = true;
+  s.isInUse = false;
+  s.isActive = false;
+  s.removedAt = Date.now();
   if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
   saveUnifiedStorage();
 }
@@ -180,8 +208,8 @@ function logSpoolChange(spool, printId = "") {
     usageId: Date.now(),
     spoolId: spool.id,
     startPrintID: printId,
-    startLength: spool.remainingLengthMm,
-    startedAt: Date.now()
+    startLength: spool.startLength,
+    startedAt: spool.startedAt
   });
   saveUnifiedStorage();
 }
@@ -212,6 +240,7 @@ export function useFilament(lengthMm, jobId = "") {
   if (!s) return;
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
   s.printCount = (s.printCount || 0) + 1;
+  s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
   logUsage(s, lengthMm, jobId);
 }
@@ -228,6 +257,7 @@ export function addSpoolFromPreset(preset, override = {}) {
   if (!preset) return null;
   const data = {
     presetId: preset.presetId,
+    modelId: preset.presetId,
     name: preset.name || `${preset.brand} ${preset.colorName}`,
     color: preset.color,
     colorName: preset.colorName,
@@ -251,6 +281,7 @@ export function addSpoolFromPreset(preset, override = {}) {
     purchaseLink: preset.purchaseLink,
     purchasePrice: preset.price,
     priceCheckDate: preset.priceCheckDate,
+    note: preset.note,
     ...override
   };
   const spool = addSpool(data);
