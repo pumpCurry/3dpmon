@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.264 (PR #120)
+* @version 1.390.270 (PR #122)
  * @since   1.390.228 (PR #102)
  */
 "use strict";
@@ -35,6 +35,35 @@ import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 
 let styleInjected = false;
+
+/**
+ * 新規登録時に使用するフィラメント設定のデフォルト値。
+ *
+ * @private
+ * @constant {Object}
+ */
+const DEFAULT_FILAMENT_DATA = {
+  filamentDiameter: 1.75,
+  filamentTotalLength: 336000,
+  filamentCurrentLength: 336000,
+  reelOuterDiameter: 195,
+  reelThickness: 58,
+  reelWindingInnerDiameter: 68,
+  reelCenterHoleDiameter: 54,
+  reelBodyColor: "#91919A",
+  reelFlangeTransparency: 0.4,
+  reelCenterHoleForegroundColor: "#F4F4F5",
+  manufacturerName: "",
+  reelName: "",
+  reelSubName: "",
+  filamentColor: "#22C55E",
+  materialName: "PLA",
+  materialColorName: "",
+  materialColorCode: "",
+  purchaseLink: "",
+  price: 0,
+  currencySymbol: "\u00A5"
+};
 
 /**
  * 必要な CSS を一度だけ注入する。
@@ -579,10 +608,149 @@ function createEditorContent(onDone) {
   wrap.appendChild(form);
   div.appendChild(wrap);
 
+  // ── スプール基本情報 ──────────────────────────────
+  const spoolField = document.createElement("fieldset");
+  const spoolLegend = document.createElement("legend");
+  spoolLegend.textContent = "スプール基本情報";
+  spoolField.appendChild(spoolLegend);
+
+  const diaLabel = document.createElement("label");
+  diaLabel.textContent = "フィラメント太さ";
+  const diaIn = document.createElement("input");
+  diaIn.type = "number";
+  diaIn.step = "0.01";
+  diaLabel.appendChild(diaIn);
+
+  const totLabel = document.createElement("label");
+  totLabel.textContent = "フィラメント長";
+  const totIn = document.createElement("input");
+  totIn.type = "number";
+  totLabel.appendChild(totIn);
+
+  const curLabel = document.createElement("label");
+  curLabel.textContent = "残量";
+  const curIn = document.createElement("input");
+  curIn.type = "number";
+  curIn.disabled = true;
+  curLabel.appendChild(curIn);
+
+  const odLabel = document.createElement("label");
+  odLabel.textContent = "リール外径";
+  const odIn = document.createElement("input");
+  odIn.type = "number";
+  odLabel.appendChild(odIn);
+
+  const thickLabel = document.createElement("label");
+  thickLabel.textContent = "リール厚";
+  const thickIn = document.createElement("input");
+  thickIn.type = "number";
+  thickLabel.appendChild(thickIn);
+
+  const idLabel = document.createElement("label");
+  idLabel.textContent = "巻き径";
+  const idIn = document.createElement("input");
+  idIn.type = "number";
+  idLabel.appendChild(idIn);
+
+  const holeLabel = document.createElement("label");
+  holeLabel.textContent = "中心穴径";
+  const holeIn = document.createElement("input");
+  holeIn.type = "number";
+  holeLabel.appendChild(holeIn);
+
+  const bodyColorLabel = document.createElement("label");
+  bodyColorLabel.textContent = "リール色";
+  const bodyColorIn = document.createElement("input");
+  bodyColorIn.type = "color";
+  bodyColorLabel.appendChild(bodyColorIn);
+
+  const transLabel = document.createElement("label");
+  transLabel.textContent = "フランジ透過";
+  const transIn = document.createElement("input");
+  transIn.type = "number";
+  transIn.step = "0.1";
+  transLabel.appendChild(transIn);
+
+  const holeColorLabel = document.createElement("label");
+  holeColorLabel.textContent = "中心穴色";
+  const holeColorIn = document.createElement("input");
+  holeColorIn.type = "color";
+  holeColorLabel.appendChild(holeColorIn);
+
+  totIn.addEventListener("input", () => {
+    curIn.value = totIn.value;
+  });
+
+  colorIn.addEventListener("input", () => {
+    preview.setOption("filamentColor", colorIn.value);
+  });
+
+  diaIn.addEventListener("input", () => {
+    preview.setOption("filamentDiameter", Number(diaIn.value));
+  });
+
+  [totIn, curIn, odIn, thickIn, idIn, holeIn].forEach(el => {
+    el.addEventListener("input", () => {
+      preview.setState({
+        filamentTotalLength: Number(totIn.value) || DEFAULT_FILAMENT_DATA.filamentTotalLength,
+        filamentCurrentLength: Number(curIn.value) || DEFAULT_FILAMENT_DATA.filamentCurrentLength,
+        reelOuterDiameter: Number(odIn.value) || DEFAULT_FILAMENT_DATA.reelOuterDiameter,
+        reelThickness: Number(thickIn.value) || DEFAULT_FILAMENT_DATA.reelThickness,
+        reelWindingInnerDiameter: Number(idIn.value) || DEFAULT_FILAMENT_DATA.reelWindingInnerDiameter,
+        reelCenterHoleDiameter: Number(holeIn.value) || DEFAULT_FILAMENT_DATA.reelCenterHoleDiameter
+      });
+    });
+  });
+
+  [bodyColorIn, transIn, holeColorIn].forEach(el => {
+    el.addEventListener("input", () => {
+      preview.setState({
+        reelBodyColor: bodyColorIn.value,
+        reelFlangeTransparency: Number(transIn.value) || DEFAULT_FILAMENT_DATA.reelFlangeTransparency,
+        reelCenterHoleForegroundColor: holeColorIn.value
+      });
+    });
+  });
+
+  spoolField.append(
+    diaLabel,
+    totLabel,
+    curLabel,
+    odLabel,
+    thickLabel,
+    idLabel,
+    holeLabel,
+    bodyColorLabel,
+    transLabel,
+    holeColorLabel
+  );
+
+  // ── フィラメント基本情報 ──────────────────────────
+  const filamentField = document.createElement("fieldset");
+  const filLegend = document.createElement("legend");
+  filLegend.textContent = "フィラメント基本情報";
+  filamentField.appendChild(filLegend);
+
+  const manuLabel = document.createElement("label");
+  manuLabel.textContent = "ブランド";
+  const manuIn = document.createElement("input");
+  manuLabel.appendChild(manuIn);
+
   const nameLabel = document.createElement("label");
-  nameLabel.textContent = "名前";
+  nameLabel.textContent = "名称";
   const nameIn = document.createElement("input");
   nameLabel.appendChild(nameIn);
+
+  const subLabel = document.createElement("label");
+  subLabel.textContent = "サブ名称";
+  const subIn = document.createElement("input");
+  subLabel.appendChild(subIn);
+
+  const colorLabel = document.createElement("label");
+  colorLabel.textContent = "色";
+  const colorIn = document.createElement("input");
+  colorIn.type = "color";
+  colorLabel.appendChild(colorIn);
 
   const matLabel = document.createElement("label");
   matLabel.textContent = "素材";
@@ -593,23 +761,32 @@ function createEditorContent(onDone) {
   });
   matLabel.appendChild(matSel);
 
-  const totLabel = document.createElement("label");
-  totLabel.textContent = "総長(mm)";
-  const totIn = document.createElement("input");
-  totIn.type = "number";
-  totLabel.appendChild(totIn);
+  const matColorLabel = document.createElement("label");
+  matColorLabel.textContent = "素材色名";
+  const matColorIn = document.createElement("input");
+  matColorLabel.appendChild(matColorIn);
 
-  const weightLabel = document.createElement("label");
-  weightLabel.textContent = "総重量(g)";
-  const weightIn = document.createElement("input");
-  weightIn.type = "number";
-  weightLabel.appendChild(weightIn);
+  const linkLabel = document.createElement("label");
+  linkLabel.textContent = "購入先";
+  const linkIn = document.createElement("input");
+  linkLabel.appendChild(linkIn);
 
-  const remainLabel = document.createElement("label");
-  remainLabel.textContent = "残り長(mm)";
-  const remainIn = document.createElement("input");
-  remainIn.type = "number";
-  remainLabel.appendChild(remainIn);
+  const priceLabel = document.createElement("label");
+  priceLabel.textContent = "値段";
+  const curSel = document.createElement("select");
+  ["\u00A5", "$"].forEach(s => {
+    const o = document.createElement("option");
+    o.value = s; o.textContent = s; curSel.appendChild(o);
+  });
+  const priceIn = document.createElement("input");
+  priceIn.type = "number";
+  priceLabel.append(curSel, priceIn);
+
+  const presetLabel = document.createElement("label");
+  presetLabel.textContent = "プリセットID";
+  const presetIn = document.createElement("input");
+  presetIn.disabled = true;
+  presetLabel.appendChild(presetIn);
 
   const noteLabel = document.createElement("label");
   noteLabel.textContent = "メモ";
@@ -622,6 +799,20 @@ function createEditorContent(onDone) {
   favLabel.appendChild(favIn);
   favLabel.append(" お気に入り");
 
+  filamentField.append(
+    manuLabel,
+    nameLabel,
+    subLabel,
+    colorLabel,
+    matLabel,
+    matColorLabel,
+    linkLabel,
+    priceLabel,
+    presetLabel,
+    noteLabel,
+    favLabel
+  );
+
   const btnBox = document.createElement("div");
   btnBox.className = "edit-buttons";
   const okBtn = document.createElement("button");
@@ -631,7 +822,7 @@ function createEditorContent(onDone) {
   cancelBtn.type = "button";
   btnBox.append(okBtn, cancelBtn);
 
-  form.append(nameLabel, matLabel, totLabel, weightLabel, remainLabel, noteLabel, favLabel, btnBox);
+  form.append(spoolField, filamentField, btnBox);
 
   const preview = createFilamentPreview(prevBox, {
     filamentDiameter: 1.75,
@@ -650,31 +841,78 @@ function createEditorContent(onDone) {
   let isNew = false;
 
   function fillForm(sp) {
-    nameIn.value = sp.name || "";
-    matSel.value = sp.material || "PLA";
-    totIn.value = sp.totalLengthMm ?? "";
-    weightIn.value = sp.weightGram ?? "";
-    remainIn.value = sp.remainingLengthMm ?? sp.totalLengthMm ?? "";
-    noteIn.value = sp.note || "";
-    favIn.checked = !!sp.isFavorite;
+    const d = { ...DEFAULT_FILAMENT_DATA, ...sp };
+    diaIn.value = d.filamentDiameter;
+    totIn.value = d.filamentTotalLength ?? d.totalLengthMm;
+    curIn.value = d.filamentCurrentLength ?? d.remainingLengthMm ?? totIn.value;
+    odIn.value = d.reelOuterDiameter;
+    thickIn.value = d.reelThickness;
+    idIn.value = d.reelWindingInnerDiameter;
+    holeIn.value = d.reelCenterHoleDiameter;
+    bodyColorIn.value = d.reelBodyColor;
+    transIn.value = d.reelFlangeTransparency;
+    holeColorIn.value = d.reelCenterHoleForegroundColor;
+
+    manuIn.value = d.manufacturerName || d.brand;
+    nameIn.value = d.reelName || d.name;
+    subIn.value = d.reelSubName || "";
+    colorIn.value = d.filamentColor || d.color;
+    matSel.value = d.materialName || d.material || "PLA";
+    matColorIn.value = d.materialColorName || d.colorName || "";
+    linkIn.value = d.purchaseLink || "";
+    curSel.value = d.currencySymbol;
+    priceIn.value = d.price || d.purchasePrice || 0;
+    presetIn.value = d.presetId || "";
+    noteIn.value = d.note || "";
+    favIn.checked = !!d.isFavorite;
+
     preview.setState({
-      filamentDiameter: sp.filamentDiameter || 1.75,
-      filamentTotalLength: sp.totalLengthMm || 336000,
-      filamentCurrentLength: sp.remainingLengthMm || 336000,
-      filamentColor: sp.filamentColor || sp.color || "#22C55E"
+      filamentDiameter: Number(diaIn.value) || DEFAULT_FILAMENT_DATA.filamentDiameter,
+      filamentTotalLength: Number(totIn.value) || DEFAULT_FILAMENT_DATA.filamentTotalLength,
+      filamentCurrentLength: Number(curIn.value) || DEFAULT_FILAMENT_DATA.filamentCurrentLength,
+      filamentColor: colorIn.value,
+      reelOuterDiameter: Number(odIn.value) || DEFAULT_FILAMENT_DATA.reelOuterDiameter,
+      reelThickness: Number(thickIn.value) || DEFAULT_FILAMENT_DATA.reelThickness,
+      reelWindingInnerDiameter: Number(idIn.value) || DEFAULT_FILAMENT_DATA.reelWindingInnerDiameter,
+      reelCenterHoleDiameter: Number(holeIn.value) || DEFAULT_FILAMENT_DATA.reelCenterHoleDiameter,
+      reelBodyColor: bodyColorIn.value,
+      reelFlangeTransparency: Number(transIn.value) || DEFAULT_FILAMENT_DATA.reelFlangeTransparency,
+      reelCenterHoleForegroundColor: holeColorIn.value,
+      reelName: nameIn.value,
+      reelSubName: subIn.value,
+      materialName: matSel.value,
+      materialColorName: matColorIn.value,
+      materialColorCode: colorIn.value,
+      manufacturerName: manuIn.value
     });
   }
 
   okBtn.addEventListener("click", ev => {
     ev.preventDefault();
     const data = {
-      name: nameIn.value,
-      material: matSel.value,
-      totalLengthMm: Number(totIn.value) || 0,
-      weightGram: Number(weightIn.value) || 0,
-      remainingLengthMm: Number(remainIn.value) || 0,
-      isFavorite: favIn.checked,
-      note: noteIn.value
+      filamentDiameter: Number(diaIn.value) || DEFAULT_FILAMENT_DATA.filamentDiameter,
+      filamentTotalLength: Number(totIn.value) || DEFAULT_FILAMENT_DATA.filamentTotalLength,
+      filamentCurrentLength: Number(curIn.value) || DEFAULT_FILAMENT_DATA.filamentCurrentLength,
+      reelOuterDiameter: Number(odIn.value) || DEFAULT_FILAMENT_DATA.reelOuterDiameter,
+      reelThickness: Number(thickIn.value) || DEFAULT_FILAMENT_DATA.reelThickness,
+      reelWindingInnerDiameter: Number(idIn.value) || DEFAULT_FILAMENT_DATA.reelWindingInnerDiameter,
+      reelCenterHoleDiameter: Number(holeIn.value) || DEFAULT_FILAMENT_DATA.reelCenterHoleDiameter,
+      reelBodyColor: bodyColorIn.value,
+      reelFlangeTransparency: Number(transIn.value) || DEFAULT_FILAMENT_DATA.reelFlangeTransparency,
+      reelCenterHoleForegroundColor: holeColorIn.value,
+      manufacturerName: manuIn.value,
+      reelName: nameIn.value,
+      reelSubName: subIn.value,
+      filamentColor: colorIn.value,
+      materialName: matSel.value,
+      materialColorName: matColorIn.value,
+      materialColorCode: colorIn.value,
+      purchaseLink: linkIn.value,
+      price: Number(priceIn.value) || 0,
+      currencySymbol: curSel.value,
+      presetId: presetIn.value || null,
+      note: noteIn.value,
+      isFavorite: favIn.checked
     };
     if (isNew) addSpool(data); else updateSpool(current.id, data);
     onDone();
