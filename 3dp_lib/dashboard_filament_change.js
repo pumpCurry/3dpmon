@@ -13,12 +13,13 @@
  * 【公開関数一覧】
  * - {@link showFilamentChangeDialog}：交換ダイアログ表示
  *
- * @version 1.390.230 (PR #104)
+ * @version 1.390.239 (PR #105)
  * @since   1.390.230 (PR #104)
- */
+*/
 "use strict";
 
 import { getSpools, setCurrentSpoolId } from "./dashboard_spool.js";
+import { consumeInventory } from "./dashboard_filament_inventory.js";
 
 let styleInjected = false;
 
@@ -116,6 +117,7 @@ export function showFilamentChangeDialog() {
       const spool = spools.find(s => s.id === id);
       if (spool) {
         setCurrentSpoolId(id);
+        if (spool.presetId) consumeInventory(spool.presetId, 1);
         updatePreview(spool);
       }
       overlay.remove();

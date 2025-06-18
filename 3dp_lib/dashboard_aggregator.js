@@ -19,9 +19,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.239 (PR #105)
  * @since   1.390.193 (PR #86)
- */
+*/
 
 "use strict";
 
@@ -34,6 +34,7 @@ import { notificationManager } from "./dashboard_notification_manager.js";
 import { formatDurationSimple } from "./dashboard_utils.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
+import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義
@@ -65,6 +66,8 @@ const TEMP_MILESTONES            = [0.8, 0.9, 0.95, 0.98, 1.0];
 const notifiedTempMilestones     = new Set();
 
 let prevMaterialStatus           = null;
+let currentMaterialStatus        = null;
+let filamentOutTimer             = null;
 
 // ---------------------------------------------------------------------------
 // ingestData: WebSocket 生データ受領時の集計＆通知発火
@@ -203,12 +206,23 @@ export function ingestData(data) {
   }
 
   // D. フィラメント切れ／交換 ------------------------------------------------
+  currentMaterialStatus = matStat;
   if (prevMaterialStatus !== null) {
     if (prevMaterialStatus === 0 && matStat === 1) {
       notificationManager.notify("filamentOut");
+      if (filamentOutTimer) clearTimeout(filamentOutTimer);
+      filamentOutTimer = setTimeout(() => {
+        if (currentMaterialStatus === 1) {
+          showFilamentChangeDialog();
+        }
+      }, 2000);
     }
     if (prevMaterialStatus === 1 && matStat === 0) {
       notificationManager.notify("filamentReplaced");
+      if (filamentOutTimer) {
+        clearTimeout(filamentOutTimer);
+        filamentOutTimer = null;
+      }
     }
   }
   prevMaterialStatus = matStat;

@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
-* @version 1.390.231 (PR #104)
+* @version 1.390.239 (PR #105)
 * @since   1.390.193 (PR #86)
 */
 
@@ -330,3 +330,5 @@ function initSpoolUI() {
 
   render();
 }
+
+export { showSpoolDialog };
