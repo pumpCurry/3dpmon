@@ -17,6 +17,9 @@
    ```
 5. ブラウザで `http://localhost:8000/3dp_monitor.html` を開きます。
 
+## ライセンス
+3dpmon は **修正 BSD License (3 条項 BSD ライセンス)** の下で公開されています。著作権は *5r4ce2* の **pumpCurry** が保有します。詳細は [https://542.jp/](https://542.jp/) を参照してください。連絡先は X(Twitter) の [@pcb](https://twitter.com/pcb) です。
+
 ---
 
 # 3dpmon
@@ -37,3 +40,6 @@ This is a browser-based dashboard for monitoring the Clarity series of 3D printe
    python -m http.server 8000
    ```
 5. Navigate to `http://localhost:8000/3dp_monitor.html` in your browser.
+
+## License
+3dpmon is distributed under the **Modified BSD License (3-clause BSD License)**. Copyright is held by **pumpCurry** of *5r4ce2*. For details, visit [https://542.jp/](https://542.jp/). You can reach out via X (Twitter) at [@pcb](https://twitter.com/pcb).
