@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
- * @version 1.390.193 (PR #86)
- * @since   1.390.193 (PR #86)
- */
+* @version 1.390.231 (PR #104)
+* @since   1.390.193 (PR #86)
+*/
 
 "use strict";
 
@@ -234,6 +234,8 @@ function initSpoolUI() {
         res(null);
       });
     });
+    
+  }
 
   /**
    * 現在選択中のスプール情報をプレビューに反映する。
