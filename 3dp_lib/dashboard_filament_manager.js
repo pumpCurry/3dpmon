@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.259 (PR #117)
+ * @version 1.390.260 (PR #118)
 * @since   1.390.228 (PR #102)
 */
 "use strict";
