@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - なし（エントリポイントとして即時実行）
  *
- * @version 1.390.203 (PR #90)
+ * @version 1.390.229 (PR #103)
  * @since   1.390.193 (PR #86)
  */
 
@@ -38,6 +38,10 @@ import { notificationManager } from "./dashboard_notification_manager.js";
 
 import { initUIEventHandlers } from "./dashboard_ui.js";
 import { initStorageUI } from "./dashboard_storage_ui.js";
+// 以下2モジュールは DOMContentLoaded 後の UI 初期化で使用するため
+// 副作用目的で読み込む
+import "./dashboard_spool_ui.js";
+import "./dashboard_filament_manager.js";
 
 // ——— グローバル例外ハンドリング ———
 window.addEventListener("unhandledrejection", evt => {
