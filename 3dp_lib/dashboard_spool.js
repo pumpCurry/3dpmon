@@ -24,13 +24,13 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.228 (PR #102)
+ * @version 1.390.243 (PR #109)
  * @since   1.390.193 (PR #86)
 */
 
 "use strict";
 
-import { monitorData } from "./dashboard_data.js";
+import { monitorData, currentHostname } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 
@@ -79,17 +79,24 @@ export function getCurrentSpool() {
 }
 
 export function setCurrentSpoolId(id) {
+  const prev = monitorData.currentSpoolId;
   monitorData.currentSpoolId = id;
   monitorData.filamentSpools.forEach(sp => {
     sp.isActive = sp.id === id;
   });
   saveUnifiedStorage();
+  if (prev !== id) {
+    const machine = monitorData.machines[currentHostname] || {};
+    const printId = machine.printStore?.current?.id ?? "";
+    logSpoolChange(getSpoolById(id), printId);
+  }
 }
 
 /**
  * 新しいスプール（フィラメントリール）情報を追加する
  *
  * @param {Object} data 追加するスプール情報オブジェクト
+ * @param {boolean} [data.isFavorite] お気に入りフラグ
  * @returns {Object} 登録されたスプールオブジェクト
  */
 export function addSpool(data) {
@@ -135,6 +142,7 @@ export function addSpool(data) {
     startDate: data.startDate || new Date().toISOString(),
     usedLengthLog: data.usedLengthLog || [],
     isActive: false,
+    isFavorite: data.isFavorite || false,
     deleted: false
 
   };
@@ -155,6 +163,26 @@ export function deleteSpool(id) {
   if (!s) return;
   s.deleted = true;
   if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
+  saveUnifiedStorage();
+}
+
+/**
+ * スプール交換履歴を記録する。
+ *
+ * @private
+ * @param {Object} spool - 対象スプール
+ * @param {string} [printId=""] - 交換時の印刷ジョブID
+ * @returns {void}
+ */
+function logSpoolChange(spool, printId = "") {
+  if (!spool) return;
+  monitorData.usageHistory.push({
+    usageId: Date.now(),
+    spoolId: spool.id,
+    startPrintID: printId,
+    startLength: spool.remainingLengthMm,
+    startedAt: Date.now()
+  });
   saveUnifiedStorage();
 }
 
