@@ -187,7 +187,6 @@ function createInventoryContent() {
  * @returns {HTMLElement} DOM 要素
  */
 function createRegisteredContent(openEditor) {
-
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
@@ -432,7 +431,7 @@ function createRegisteredContent(openEditor) {
     ev.preventDefault();
     render();
   });
-  
+
   addBtn.addEventListener("click", () => {
     openEditor(null, render);
   });
@@ -847,7 +846,6 @@ export function showFilamentManager() {
     createHistoryContent(),
     createCurrentSpoolContent(),
     createInventoryContent(),
-
     null,
     createPresetContent(),
     createReportContent(),

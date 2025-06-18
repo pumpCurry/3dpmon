@@ -16,7 +16,6 @@
  * @version 1.390.264 (PR #120)
  * @since   1.390.193 (PR #86)
  */
-
 "use strict";
 
 import {
