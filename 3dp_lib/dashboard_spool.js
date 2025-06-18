@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.206 (PR #92)
+ * @version 1.390.226 (PR #101)
  * @since   1.390.193 (PR #86)
 */
 
@@ -32,6 +32,7 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { consumeInventory } from "./dashboard_filament_inventory.js";
 
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
@@ -204,5 +205,8 @@ export function addSpoolFromPreset(preset, override = {}) {
     ...override
   };
   const spool = addSpool(data);
+  if (preset.presetId) {
+    consumeInventory(preset.presetId, 1);
+  }
   return spool;
 }

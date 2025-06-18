@@ -25,7 +25,7 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.226 (PR #101)
  * @since   1.390.193 (PR #86)
  */
 
@@ -150,6 +150,10 @@ export function restoreUnifiedStorage() {
       if (data.machines)       monitorData.machines       = data.machines;
       if (Array.isArray(data.filamentSpools))
         monitorData.filamentSpools = data.filamentSpools.map(sp => applySpoolDefaults(sp));
+      if (Array.isArray(data.usageHistory))
+        monitorData.usageHistory = data.usageHistory;
+      if (Array.isArray(data.filamentInventory))
+        monitorData.filamentInventory = data.filamentInventory;
       if ("currentSpoolId" in data)
         monitorData.currentSpoolId = data.currentSpoolId;
       _lastSavedJson = saved;

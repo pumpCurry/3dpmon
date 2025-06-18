@@ -19,9 +19,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.226 (PR #101)
  * @since   1.390.193 (PR #86)
- */
+*/
 
 "use strict";
 
@@ -156,6 +156,9 @@ export function setCurrentHostname(host) {
  *   },
  *   machines: Record<string, MachineData>,
  *   filamentSpools: Array<Object>,
+ *   filamentPresets: Array<Object>,
+ *   usageHistory: Array<Object>,
+ *   filamentInventory: Array<Object>,
  *   currentSpoolId: string|null
  * }}
  */
@@ -183,6 +186,8 @@ export const monitorData = {
   },
   filamentSpools: [],
   filamentPresets: FILAMENT_PRESETS,
+  usageHistory: [],
+  filamentInventory: [],
   currentSpoolId: null,
   temporaryBuffer: []
 };
