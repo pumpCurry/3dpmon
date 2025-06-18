@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
-* @version 1.390.257 (PR #112)
+* @version 1.390.264 (PR #120)
 * @since   1.390.193 (PR #86)
 */
 
@@ -97,6 +97,13 @@ function showSpoolDialog({ title = "", spool = {} }) {
     remainLabel.appendChild(remainInput);
     dlg.appendChild(remainLabel);
 
+    const noteLabel = document.createElement("label");
+    noteLabel.textContent = "メモ";
+    const noteInput = document.createElement("input");
+    noteInput.value = spool.note || "";
+    noteLabel.appendChild(noteInput);
+    dlg.appendChild(noteLabel);
+
     const favLabel = document.createElement("label");
     const favInput = document.createElement("input");
     favInput.type = "checkbox";
@@ -122,7 +129,8 @@ function showSpoolDialog({ title = "", spool = {} }) {
         name: nameInput.value.trim(),
         totalLengthMm: parseFloat(totalInput.value) || 0,
         remainingLengthMm: parseFloat(remainInput.value) || 0,
-        isFavorite: favInput.checked
+        isFavorite: favInput.checked,
+        note: noteInput.value.trim()
       });
     });
 
@@ -186,6 +194,7 @@ function initSpoolUI() {
           <label>総長(mm)<input id="sd-total" type="number"></label>
           <label>総重量(g)<input id="sd-weight" type="number"></label>
           <label>残り長(mm)<input id="sd-remain" type="number"></label>
+          <label>メモ<input id="sd-note"></label>
           <label><input id="sd-fav" type="checkbox">お気に入り</label>
         </div>
         <div class="spool-dialog-buttons">
@@ -199,6 +208,7 @@ function initSpoolUI() {
       const totalIn   = dialog.querySelector("#sd-total");
       const weightIn  = dialog.querySelector("#sd-weight");
       const remainIn  = dialog.querySelector("#sd-remain");
+      const noteIn    = dialog.querySelector("#sd-note");
       const favIn     = dialog.querySelector("#sd-fav");
 
       nameInput.value  = sp.name || "";
@@ -206,6 +216,7 @@ function initSpoolUI() {
       totalIn.value    = sp.totalLengthMm ?? "";
       weightIn.value   = sp.weightGram ?? "";
       remainIn.value   = sp.remainingLengthMm ?? sp.totalLengthMm ?? "";
+      noteIn.value     = sp.note || "";
       favIn.checked    = !!sp.isFavorite;
 
       function dens(){ return getMaterialDensity(matSel.value); }
@@ -236,7 +247,8 @@ function initSpoolUI() {
           totalLengthMm: Number(totalIn.value) || 0,
           weightGram: Number(weightIn.value) || 0,
           remainingLengthMm: Number(remainIn.value) || 0,
-          isFavorite: favIn.checked
+          isFavorite: favIn.checked,
+          note: noteIn.value
         };
         overlay.remove();
         res(result);
@@ -303,18 +315,6 @@ function initSpoolUI() {
         updatePreview(sp);
         render();
       });
-      const edit = document.createElement("button");
-      edit.textContent = "編集";
-      edit.addEventListener("click", async () => {
-        const res = await showSpoolDialog(sp);
-        if (res) { updateSpool(sp.id, res); render(); }
-/*
-        const result = await showSpoolDialog({ title: "スプール編集", spool: sp });
-        if (!result) return;
-        updateSpool(sp.id, result);
-        render();
-*/
-      });
       const del = document.createElement("button");
       del.textContent = "削除";
       del.addEventListener("click", () => {
@@ -323,23 +323,12 @@ function initSpoolUI() {
           render();
         }
       });
-      li.append(" ", sel, edit, del);
+      li.append(" ", sel, del);
       listEl.appendChild(li);
     });
   }
 
-    addBtn.addEventListener("click", async () => {
-      const res = await showSpoolDialog();
-      if (res) { addSpool(res); render(); }
-    });
-/*
-  addBtn.addEventListener("click", async () => {
-    const result = await showSpoolDialog({ title: "スプール追加" });
-    if (!result || !result.name) return;
-    addSpool(result);
-    render();
-  });
-*/
+    addBtn.style.display = "none";
 
   render();
 }
