@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.264 (PR #120)
-* @since   1.390.228 (PR #102)
-*/
+ * @version 1.390.264 (PR #120)
+ * @since   1.390.228 (PR #102)
+ */
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
@@ -187,6 +187,7 @@ function createInventoryContent() {
  * @returns {HTMLElement} DOM 要素
  */
 function createRegisteredContent(openEditor) {
+
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
@@ -431,7 +432,7 @@ function createRegisteredContent(openEditor) {
     ev.preventDefault();
     render();
   });
-
+  
   addBtn.addEventListener("click", () => {
     openEditor(null, render);
   });
@@ -846,6 +847,7 @@ export function showFilamentManager() {
     createHistoryContent(),
     createCurrentSpoolContent(),
     createInventoryContent(),
+
     null,
     createPresetContent(),
     createReportContent(),
