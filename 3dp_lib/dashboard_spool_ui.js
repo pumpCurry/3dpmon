@@ -13,10 +13,9 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
-* @version 1.390.264 (PR #120)
-* @since   1.390.193 (PR #86)
-*/
-
+ * @version 1.390.264 (PR #120)
+ * @since   1.390.193 (PR #86)
+ */
 "use strict";
 
 import {
