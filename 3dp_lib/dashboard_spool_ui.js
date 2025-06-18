@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
-* @version 1.390.239 (PR #105)
+* @version 1.390.257 (PR #112)
 * @since   1.390.193 (PR #86)
 */
 
@@ -97,6 +97,14 @@ function showSpoolDialog({ title = "", spool = {} }) {
     remainLabel.appendChild(remainInput);
     dlg.appendChild(remainLabel);
 
+    const favLabel = document.createElement("label");
+    const favInput = document.createElement("input");
+    favInput.type = "checkbox";
+    favInput.checked = !!spool.isFavorite;
+    favLabel.appendChild(favInput);
+    favLabel.append(" お気に入り");
+    dlg.appendChild(favLabel);
+
     const btns = document.createElement("div");
     btns.className = "spool-dialog-buttons";
     const btnOk = document.createElement("button");
@@ -113,7 +121,8 @@ function showSpoolDialog({ title = "", spool = {} }) {
       resolve({
         name: nameInput.value.trim(),
         totalLengthMm: parseFloat(totalInput.value) || 0,
-        remainingLengthMm: parseFloat(remainInput.value) || 0
+        remainingLengthMm: parseFloat(remainInput.value) || 0,
+        isFavorite: favInput.checked
       });
     });
 
@@ -177,6 +186,7 @@ function initSpoolUI() {
           <label>総長(mm)<input id="sd-total" type="number"></label>
           <label>総重量(g)<input id="sd-weight" type="number"></label>
           <label>残り長(mm)<input id="sd-remain" type="number"></label>
+          <label><input id="sd-fav" type="checkbox">お気に入り</label>
         </div>
         <div class="spool-dialog-buttons">
           <button id="sd-ok">OK</button>
@@ -189,12 +199,14 @@ function initSpoolUI() {
       const totalIn   = dialog.querySelector("#sd-total");
       const weightIn  = dialog.querySelector("#sd-weight");
       const remainIn  = dialog.querySelector("#sd-remain");
+      const favIn     = dialog.querySelector("#sd-fav");
 
       nameInput.value  = sp.name || "";
       matSel.value     = sp.material || "PLA";
       totalIn.value    = sp.totalLengthMm ?? "";
       weightIn.value   = sp.weightGram ?? "";
       remainIn.value   = sp.remainingLengthMm ?? sp.totalLengthMm ?? "";
+      favIn.checked    = !!sp.isFavorite;
 
       function dens(){ return getMaterialDensity(matSel.value); }
 
@@ -223,7 +235,8 @@ function initSpoolUI() {
           material: matSel.value,
           totalLengthMm: Number(totalIn.value) || 0,
           weightGram: Number(weightIn.value) || 0,
-          remainingLengthMm: Number(remainIn.value) || 0
+          remainingLengthMm: Number(remainIn.value) || 0,
+          isFavorite: favIn.checked
         };
         overlay.remove();
         res(result);
