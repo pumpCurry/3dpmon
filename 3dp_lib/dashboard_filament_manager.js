@@ -1,0 +1,211 @@
+/**
+ * @fileoverview
+ * 3Dプリンタ監視ツール 3dpmon 用 フィラメント管理モーダル モジュール
+ * dashboard_filament_manager.js
+ * (c) pumpCurry 2025
+ * -----------------------------------------------------------
+ * @module dashboard_filament_manager
+ *
+ * 【機能内容サマリ】
+ * - フィラメント管理ダイアログの表示
+ * - 使用記録/在庫/プリセットの一覧表示
+ *
+ * 【公開関数一覧】
+ * - {@link showFilamentManager}：管理モーダルを開く
+ *
+ * @version 1.390.228 (PR #102)
+ * @since   1.390.228 (PR #102)
+ */
+"use strict";
+
+import { monitorData } from "./dashboard_data.js";
+import { getCurrentSpool, getSpools } from "./dashboard_spool.js";
+import { getInventory } from "./dashboard_filament_inventory.js";
+import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+
+let styleInjected = false;
+
+/**
+ * 必要な CSS を一度だけ注入する。
+ *
+ * @private
+ * @returns {void}
+ */
+function injectStyles() {
+  if (styleInjected) return;
+  styleInjected = true;
+  const css = `
+    .filament-manager-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:3000;}
+    .filament-manager-modal{background:#fff;border-radius:8px;width:90%;max-width:640px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
+    .filament-manager-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;}
+    .filament-manager-tabs{display:flex;border-bottom:1px solid #ddd;}
+    .filament-manager-tabs button{flex:1;padding:6px;border:none;background:#f4f4f5;cursor:pointer;}
+    .filament-manager-tabs button.active{background:#fff;border-bottom:2px solid #38bdf8;}
+    .filament-manager-content{padding:8px;overflow-y:auto;max-height:60vh;}
+    .filament-manager-content table{width:100%;border-collapse:collapse;}
+    .filament-manager-content th,.filament-manager-content td{border:1px solid #ddd;padding:4px;font-size:12px;}
+  `;
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+/**
+ * 使用履歴タブの内容を生成する。
+ *
+ * @private
+ * @returns {HTMLElement} 生成された要素
+ */
+function createHistoryContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>ID</th><th>Spool</th><th>Used(mm)</th><th>Time</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  monitorData.usageHistory.forEach(u => {
+    const tr = document.createElement("tr");
+    const t = new Date(Number(u.startedAt || u.timestamp || 0));
+    tr.innerHTML = `<td>${u.usageId || ""}</td><td>${u.spoolId}</td><td>${u.usedLength || 0}</td><td>${t.toLocaleString()}</td>`;
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  div.appendChild(table);
+  return div;
+}
+
+/**
+ * 現在スプール表示タブを生成する。
+ *
+ * @private
+ * @returns {HTMLElement} DOM 要素
+ */
+function createCurrentSpoolContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+  const sp = getCurrentSpool();
+  if (!sp) {
+    div.textContent = "現在選択中のスプールがありません";
+    return div;
+  }
+  const ul = document.createElement("ul");
+  ul.style.fontSize = "12px";
+  ul.innerHTML = `
+    <li>名前: ${sp.name}</li>
+    <li>材質: ${sp.material}</li>
+    <li>残量: ${sp.remainingLengthMm} / ${sp.totalLengthMm} mm</li>
+  `;
+  div.appendChild(ul);
+  return div;
+}
+
+/**
+ * 在庫一覧タブを生成する。
+ *
+ * @private
+ * @returns {HTMLElement} DOM 要素
+ */
+function createInventoryContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>ID</th><th>数量</th><th>合計使用数</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  getInventory().forEach(inv => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${inv.modelId}</td><td>${inv.quantity}</td><td>${inv.totalUsedNum}</td>`;
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  div.appendChild(table);
+  return div;
+}
+
+/**
+ * プリセット一覧タブを生成する。
+ *
+ * @private
+ * @returns {HTMLElement} DOM 要素
+ */
+function createPresetContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+  const ul = document.createElement("ul");
+  ul.style.fontSize = "12px";
+  FILAMENT_PRESETS.forEach(p => {
+    const li = document.createElement("li");
+    li.textContent = `${p.brand} ${p.colorName} (${p.material})`;
+    ul.appendChild(li);
+  });
+  div.appendChild(ul);
+  return div;
+}
+
+/**
+ * フィラメント管理モーダルを表示する。
+ *
+ * @function showFilamentManager
+ * @returns {void}
+ */
+export function showFilamentManager() {
+  injectStyles();
+  const overlay = document.createElement("div");
+  overlay.className = "filament-manager-overlay";
+  const modal = document.createElement("div");
+  modal.className = "filament-manager-modal";
+  overlay.appendChild(modal);
+
+  const header = document.createElement("div");
+  header.className = "filament-manager-header";
+  header.innerHTML = '<span>フィラメント管理</span>';
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "×";
+  closeBtn.addEventListener("click", () => overlay.remove());
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+
+  const tabBar = document.createElement("div");
+  tabBar.className = "filament-manager-tabs";
+  const tabs = ["使用記録簿", "現在のスプール", "在庫", "プリセット"];
+  const contents = [
+    createHistoryContent(),
+    createCurrentSpoolContent(),
+    createInventoryContent(),
+    createPresetContent()
+  ];
+  const contentWrap = document.createElement("div");
+  modal.appendChild(tabBar);
+  modal.appendChild(contentWrap);
+
+  function switchTab(idx) {
+    tabBar.querySelectorAll("button").forEach((b, i) => {
+      b.classList.toggle("active", i === idx);
+      contents[i].style.display = i === idx ? "block" : "none";
+    });
+  }
+
+  tabs.forEach((name, i) => {
+    const btn = document.createElement("button");
+    btn.textContent = name;
+    if (i === 0) btn.classList.add("active");
+    btn.addEventListener("click", () => switchTab(i));
+    tabBar.appendChild(btn);
+  });
+
+  contents.forEach((c, i) => {
+    if (i !== 0) c.style.display = "none";
+    contentWrap.appendChild(c);
+  });
+
+  document.body.appendChild(overlay);
+}
+
+// DOM 読み込み後にボタンをバインド
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("filament-list-btn")?.addEventListener("click", () => {
+    showFilamentManager();
+  });
+});

@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.226 (PR #101)
+ * @version 1.390.228 (PR #102)
  * @since   1.390.193 (PR #86)
 */
 
@@ -158,13 +158,34 @@ export function deleteSpool(id) {
   saveUnifiedStorage();
 }
 
+/**
+ * スプール使用履歴を追加するヘルパー。
+ *
+ * @private
+ * @param {Object} spool - 対象スプール
+ * @param {number} lengthMm - 使用した長さ [mm]
+ * @param {string} jobId - 関連ジョブID
+ * @returns {void}
+ */
+function logUsage(spool, lengthMm, jobId) {
+  monitorData.usageHistory.push({
+    usageId: Date.now(),
+    spoolId: spool.id,
+    jobId,
+    startedAt: Date.now(),
+    usedLength: lengthMm,
+    currentLength: spool.remainingLengthMm
+  });
+  saveUnifiedStorage();
+}
+
 export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
   s.printCount = (s.printCount || 0) + 1;
   s.usedLengthLog.push({ jobId, used: lengthMm });
-  saveUnifiedStorage();
+  logUsage(s, lengthMm, jobId);
 }
 
 /**
