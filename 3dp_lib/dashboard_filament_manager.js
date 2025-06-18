@@ -13,9 +13,10 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.270 (PR #122)
+ * @version 1.390.271 (PR #123)
  * @since   1.390.228 (PR #102)
  */
+
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
@@ -681,10 +682,6 @@ function createEditorContent(onDone) {
     curIn.value = totIn.value;
   });
 
-  colorIn.addEventListener("input", () => {
-    preview.setOption("filamentColor", colorIn.value);
-  });
-
   diaIn.addEventListener("input", () => {
     preview.setOption("filamentDiameter", Number(diaIn.value));
   });
@@ -751,6 +748,11 @@ function createEditorContent(onDone) {
   const colorIn = document.createElement("input");
   colorIn.type = "color";
   colorLabel.appendChild(colorIn);
+
+  // 色変更時はプレビューに反映
+  colorIn.addEventListener("input", () => {
+    preview.setOption("filamentColor", colorIn.value);
+  });
 
   const matLabel = document.createElement("label");
   matLabel.textContent = "素材";
