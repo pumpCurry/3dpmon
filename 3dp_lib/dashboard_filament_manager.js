@@ -280,22 +280,69 @@ function createPresetContent() {
   return div;
 }
 
+/**
+ * 日付から週番号キー (YYYY-WW) を生成する。
+ *
+ * @private
+ * @param {Date} date - 変換対象の日付
+ * @returns {string} 週キー
+ */
+function formatWeekKey(date) {
+  const first = new Date(date.getFullYear(), 0, 1);
+  const days = Math.floor((date - first) / 86400000);
+  const week = Math.floor((days + first.getDay()) / 7) + 1;
+  return `${date.getFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/**
+ * 日付から月番号キー (YYYY-MM) を生成する。
+ *
+ * @private
+ * @param {Date} date - 変換対象の日付
+ * @returns {string} 月キー
+ */
+function formatMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * 集計レポートタブの内容を生成する。
+ * 日別集計テーブルに加え、週次・月次のグラフを表示する。
+ *
+ * @private
+ * @returns {HTMLElement} DOM 要素
+ */
 function createReportContent() {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
+
+  // ── 1) 日別集計テーブル ───────────────────────────────
   const table = document.createElement("table");
   const thead = document.createElement("thead");
   thead.innerHTML = "<tr><th>日付</th><th>スプール数</th><th>消費量(mm)</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
-  const map = {};
+
+  const dailyMap = {};
+  const weeklyMap = {};
+  const monthlyMap = {};
+
   (monitorData.usageHistory || []).forEach(u => {
-    const d = new Date(Number(u.startedAt || 0)).toISOString().slice(0, 10);
-    if (!map[d]) map[d] = { ids: new Set(), len: 0 };
-    map[d].ids.add(u.spoolId);
-    map[d].len += Number(u.usedLength || 0);
+    const dateObj = new Date(Number(u.startedAt || 0));
+    const dayKey = dateObj.toISOString().slice(0, 10);
+    if (!dailyMap[dayKey]) dailyMap[dayKey] = { ids: new Set(), len: 0 };
+    dailyMap[dayKey].ids.add(u.spoolId);
+    const used = Number(u.usedLength || 0);
+    dailyMap[dayKey].len += used;
+
+    const wKey = formatWeekKey(dateObj);
+    weeklyMap[wKey] = (weeklyMap[wKey] || 0) + used;
+
+    const mKey = formatMonthKey(dateObj);
+    monthlyMap[mKey] = (monthlyMap[mKey] || 0) + used;
   });
-  Object.entries(map)
+
+  Object.entries(dailyMap)
     .sort((a, b) => b[0].localeCompare(a[0]))
     .forEach(([d, info]) => {
       const tr = document.createElement("tr");
@@ -304,6 +351,40 @@ function createReportContent() {
     });
   table.appendChild(tbody);
   div.appendChild(table);
+
+  // ── 2) 週次・月次の消費量を Chart.js で表示 ─────────────────
+  const weekCanvas = document.createElement("canvas");
+  weekCanvas.style.maxHeight = "200px";
+  div.appendChild(weekCanvas);
+
+  const monthCanvas = document.createElement("canvas");
+  monthCanvas.style.maxHeight = "200px";
+  div.appendChild(monthCanvas);
+
+  if (typeof Chart !== "undefined") {
+    new Chart(weekCanvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: Object.keys(weeklyMap),
+        datasets: [
+          { label: "週次消費量(mm)", data: Object.values(weeklyMap) }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+
+    new Chart(monthCanvas.getContext("2d"), {
+      type: "pie",
+      data: {
+        labels: Object.keys(monthlyMap),
+        datasets: [
+          { label: "月次消費量(mm)", data: Object.values(monthlyMap) }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+  }
+
   return div;
 }
 
