@@ -51,7 +51,8 @@ The Registered Filament tab lists all spools that have been added so far and let
 └───┘ |.....|.......|....|....|.......|....|........|...|
 ```
 
-- Use **Add New** to register a spool.
+ - Use **Add New** to register a spool.
+ - Favorites and frequently used filaments are shown in carousels below this button.
 - **Search** filters the list by brand, material, name, color or a partial match.
   - Brand: `manufacturerName`
   - Material: `materialName`

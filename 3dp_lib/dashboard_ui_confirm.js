@@ -14,7 +14,7 @@
  * - {@link showConfirmDialog}：確認モーダル
  * - {@link showInputDialog}：入力モーダル
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.307 (PR #139)
  * @since   1.390.193 (PR #86)
  */
 "use strict";
@@ -38,7 +38,7 @@ function injectStyles() {
 .confirm-overlay {
   position: fixed; top:0; left:0; width:100vw; height:100vh;
   background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:2000;
+  align-items:center; justify-content:center; z-index:4100;
 }
 .confirm-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;
@@ -65,7 +65,7 @@ function injectStyles() {
 .input-dialog-overlay {
   position: fixed; top:0; left:0; width:100vw; height:100vh;
   background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:2000;
+  align-items:center; justify-content:center; z-index:4100;
 }
 .input-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;
