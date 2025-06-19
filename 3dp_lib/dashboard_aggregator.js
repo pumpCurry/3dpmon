@@ -19,7 +19,7 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.312 (PR #141)
+ * @version 1.390.313 (PR #141)
  * @since   1.390.193 (PR #86)
 */
 
@@ -566,10 +566,13 @@ export function aggregatorUpdate() {
       (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)
     ) {
       if (!isNaN(used)) {
-        remain = spool.currentJobStartLength - used;
-        spool.remainingLengthMm = Math.max(0, remain);
-        remain = spool.remainingLengthMm;
+        // 前回値との差分を求めて残量を更新
+        const prev = spool.lastUsedLengthMm ?? 0;
+        let diff = used - prev;
+        if (diff < 0) diff = 0;
+        spool.remainingLengthMm = Math.max(0, spool.remainingLengthMm - diff);
         spool.lastUsedLengthMm = used;
+        remain = spool.remainingLengthMm;
       } else if (spool.currentJobExpectedLength != null) {
         const frac = Math.min(Math.max(prog / 100, 0), 1);
         remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;

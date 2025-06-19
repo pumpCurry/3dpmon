@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.312 (PR #141)
+ * @version 1.390.313 (PR #141)
  * @since   1.390.193 (PR #86)
 */
 
@@ -272,8 +272,7 @@ export function useFilament(lengthMm, jobId = "") {
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = lengthMm;
   s.lastUsedLengthMm = 0;
-  // 残量を先に減算して保持
-  s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
+  // 残量更新は実際の使用量報告時に行うためここでは減算しない
   s.printCount = (s.printCount || 0) + 1;
   s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
