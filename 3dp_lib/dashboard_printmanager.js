@@ -21,7 +21,7 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.239 (PR #105)
+* @version 1.390.296 (PR #135)
 * @since   1.390.197 (PR #88)
 */
 "use strict";
@@ -306,8 +306,9 @@ function fmtISO(iso) {
 
 export const renderTemplates = {
  /**
-  * 現在印刷中 & 直前印刷用 大サムネイル表示テンプレート
-  * @param job
+  * 現在印刷中ジョブの大サムネイル表示テンプレート
+  *
+  * @param job - 表示対象ジョブ
   * @param {string} baseUrl 例: "http://192.168.54.151"
   */
   current(job, baseUrl) {
@@ -315,7 +316,6 @@ export const renderTemplates = {
     const ts = Date.now();
     // 大サムネイル URL
     const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
-    const prevUrl    = `${baseUrl}/downloads/original/temp_image.png?${ts}`;
     // フォールバック画像
     const fallback   = `${baseUrl}/downloads/defData/file_print_photo.png`;
     return `
@@ -330,18 +330,6 @@ export const renderTemplates = {
           <div class="filename"><strong>現在:</strong> ${job.filename}</div>
           <div class="times">開始: ${fmt(job.startTime)}</div>
           <div class="material-used">使用: ${job.materialUsedMm.toLocaleString()} mm</div>
-        </div>
-      </div>
-      <div class="prev-print" style="margin-top:1em;">
-        <img
-          class="print-job-thumb--large"
-          src="${prevUrl}"
-          onerror="this.onerror=null;this.src='${fallback}'"
-          alt="直前印刷"
-        />
-        <div class="print-job-info">
-           <div class="filename"><strong>直前:</strong> ${job.filename}</div>
-           <div class="times">完了: ${ job.finishTime ? fmt(job.finishTime) : "—" }</div>
         </div>
       </div>
     `;
