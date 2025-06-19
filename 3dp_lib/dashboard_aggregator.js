@@ -35,6 +35,7 @@ import { formatDurationSimple } from "./dashboard_utils.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
+import { getCurrentSpool } from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義
@@ -533,6 +534,27 @@ export function aggregatorUpdate() {
       });
     }
   }, storedData);
+
+  // --- フィラメント残量の動的計算 ---
+  const spool = getCurrentSpool();
+  if (spool) {
+    const st = Number(storedData.state?.rawValue || 0);
+    const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
+    let remain = spool.remainingLengthMm;
+    if (
+      spool.currentJobStartLength != null &&
+      spool.currentJobExpectedLength != null &&
+      (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)
+    ) {
+      const frac = Math.min(Math.max(prog / 100, 0), 1);
+      remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
+      if (remain < spool.remainingLengthMm) remain = spool.remainingLengthMm;
+    } else if (st !== PRINT_STATE_CODE.printStarted && st !== PRINT_STATE_CODE.printPaused) {
+      spool.currentJobStartLength = null;
+      spool.currentJobExpectedLength = null;
+    }
+    setStoredData("filamentRemainingMm", remain, true);
+  }
 
   updateStoredDataToDOM();
   persistAggregatorState();
