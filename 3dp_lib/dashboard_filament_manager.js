@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.282 (PR #127)
+* @version 1.390.283 (PR #128)
 * @since   1.390.228 (PR #102)
 */
 
@@ -289,7 +289,6 @@ function createRegisteredContent(openEditor) {
 
   let sortKey = "";
   let sortAsc = true;
-  let selectedTr = null;
   let selectedTr = null;
 
   function buildMaps() {
