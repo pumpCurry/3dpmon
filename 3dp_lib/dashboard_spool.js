@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.301 (PR #137)
+ * @version 1.390.313 (PR #140)
  * @since   1.390.193 (PR #86)
 */
 
@@ -259,6 +259,10 @@ function logUsage(spool, lengthMm, jobId) {
 export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
+  const machine = monitorData.machines[currentHostname];
+  if (machine?.printStore?.current) {
+    machine.printStore.current.filamentId = s.id;
+  }
   if (s.isPending) {
     logSpoolChange(s, jobId);
     s.isPending = false;
