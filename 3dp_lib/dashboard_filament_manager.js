@@ -79,12 +79,12 @@ function injectStyles() {
   styleInjected = true;
   const css = `
     .filament-manager-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:3000;}
-    .filament-manager-modal{background:#fff;border-radius:8px;width:90%;max-width:640px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
+    .filament-manager-modal{background:#fff;border-radius:8px;width:90%;max-width:740px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
     .filament-manager-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;}
     .filament-manager-tabs{display:flex;border-bottom:1px solid #ddd;}
     .filament-manager-tabs button{flex:1;padding:6px;border:none;background:#f4f4f5;cursor:pointer;}
     .filament-manager-tabs button.active{background:#fff;border-bottom:2px solid #38bdf8;}
-    .filament-manager-content{padding:8px;overflow-y:auto;max-height:60vh;}
+    .filament-manager-content{padding:8px;overflow-y:auto;max-height:70vh;}
     .filament-manager-content table{width:100%;border-collapse:collapse;}
     .filament-manager-content th,.filament-manager-content td{border:1px solid #ddd;padding:4px;font-size:12px;}
     .filament-manager-content .inv-qty-input{width:60px;text-align:right;}
@@ -148,6 +148,12 @@ function createCurrentSpoolContent() {
     div.textContent = "現在選択中のスプールがありません";
     return div;
   }
+  const wrap = document.createElement("div");
+  wrap.className = "registered-container";
+  const prevBox = document.createElement("div");
+  prevBox.className = "registered-preview";
+  wrap.appendChild(prevBox);
+
   const ul = document.createElement("ul");
   ul.style.fontSize = "12px";
   ul.innerHTML = `
@@ -155,7 +161,54 @@ function createCurrentSpoolContent() {
     <li>材質: ${sp.material}</li>
     <li>残量: ${sp.remainingLengthMm} / ${sp.totalLengthMm} mm</li>
   `;
-  div.appendChild(ul);
+  wrap.appendChild(ul);
+  div.appendChild(wrap);
+
+  createFilamentPreview(prevBox, {
+    filamentDiameter: sp.filamentDiameter,
+    filamentTotalLength: sp.totalLengthMm,
+    filamentCurrentLength: sp.remainingLengthMm,
+    filamentColor: sp.filamentColor || sp.color,
+    reelOuterDiameter: sp.reelOuterDiameter,
+    reelThickness: sp.reelThickness,
+    reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
+    reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
+    widthPx: 120,
+    heightPx: 120,
+    showSlider: false,
+    isFilamentPresent: true,
+    showUsedUpIndicator: true,
+    blinkingLightColor: "#0EA5E9",
+    showInfoLength: false,
+    showInfoPercent: false,
+    showInfoLayers: false,
+    showResetButton: false,
+    showProfileViewButton: true,
+    showSideViewButton: true,
+    showFrontViewButton: true,
+    showAutoRotateButton: true,
+    enableDrag: true,
+    enableClick: false,
+    onClick: null,
+    disableInteraction: true,
+    showOverlayLength: true,
+    showOverlayPercent: true,
+    showLengthKg: false,
+    showReelName: true,
+    showReelSubName: true,
+    showMaterialName: true,
+    showMaterialColorName: true,
+    showMaterialColorCode: true,
+    showManufacturerName: true,
+    showOverlayBar: true,
+    showPurchaseButton: true,
+    reelName: sp.name || "",
+    reelSubName: sp.reelSubName || "",
+    materialName: sp.materialName || sp.material || "",
+    materialColorName: sp.colorName || "",
+    materialColorCode: sp.filamentColor || sp.color || "",
+    manufacturerName: sp.manufacturerName || sp.brand || ""
+  });
   return div;
 }
 

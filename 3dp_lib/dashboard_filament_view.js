@@ -1211,9 +1211,23 @@ export function createFilamentPreview(mount, opts) {
      * @param {Partial<FilamentOptions>} s
      */
     setState(s){
-      if ('isFilamentPresent' in s) isPresent = !!s.isFilamentPresent;
-      if ('showUsedUpIndicator' in s) o.showUsedUpIndicator = !!s.showUsedUpIndicator;
-      if ('filamentCurrentLength' in s) currentLen = s.filamentCurrentLength;
+      if ('isFilamentPresent' in s) {
+        // フィラメント有無フラグは内部状態へ直接反映
+        isPresent = !!s.isFilamentPresent;
+      }
+      if ('filamentCurrentLength' in s) {
+        // 残量更新は専用変数へ格納
+        currentLen = s.filamentCurrentLength;
+      }
+      // 受け取ったプロパティをオプションへマージ
+      Object.entries(s).forEach(([k, v]) => {
+        if (k !== 'isFilamentPresent' && k !== 'filamentCurrentLength' && k in o) {
+          o[k] = v;
+        }
+      });
+      if ('showUsedUpIndicator' in s) {
+        o.showUsedUpIndicator = !!s.showUsedUpIndicator;
+      }
       redraw();
     },
 
