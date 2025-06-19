@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentChangeDialog}：交換ダイアログ表示
  *
- * @version 1.390.243 (PR #109)
+ * @version 1.390.293 (PR #133)
  * @since   1.390.230 (PR #104)
 */
 "use strict";
@@ -35,15 +35,20 @@ function injectStyles() {
   styleInjected = true;
   const css = `
   .fc-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:3000;}
-  .fc-dialog{background:#fff;border-radius:8px;width:90%;max-width:320px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
+  .fc-dialog{background:#fff;border-radius:8px;width:90%;max-width:740px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
   .fc-header{font-weight:bold;font-size:1.2em;padding:8px;border-bottom:1px solid #ddd;}
   .fc-body{padding:8px;}
   .fc-buttons{display:flex;justify-content:flex-end;padding:8px;border-top:1px solid #ddd;gap:8px;}
   .fc-buttons button{padding:6px 12px;font-size:14px;}
-  .fc-carousel{display:flex;overflow-x:auto;gap:6px;margin-bottom:8px;}
-  .fc-item{flex:0 0 auto;padding:4px 8px;border:1px solid #ddd;border-radius:4px;cursor:pointer;background:#f4f4f5;font-size:12px;}
-  .fc-dropdown{width:100%;box-sizing:border-box;font-size:14px;margin-bottom:8px;}
-  .fc-preview{font-size:12px;margin-top:4px;}
+  .fc-search{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
+  .fc-search select,.fc-search input{padding:2px;font-size:12px;}
+  .registered-container{display:flex;gap:8px;align-items:flex-start;}
+  .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
+  .registered-list{flex:1;overflow-y:auto;max-height:60vh;}
+  .registered-table{width:100%;border-collapse:collapse;font-size:12px;}
+  .registered-table th,.registered-table td{border:1px solid #ddd;padding:4px;}
+  .registered-table th{cursor:pointer;}
+  .registered-table tr.selected{background:#e0f2fe;}
   `;
   const style = document.createElement("style");
   style.textContent = css;
@@ -92,52 +97,94 @@ export function showFilamentChangeDialog() {
     dlg.innerHTML = `
       <div class="fc-header">フィラメント交換</div>
       <div class="fc-body">
-        <div id="fc-fav" class="fc-carousel"></div>
-        <div id="fc-recent" class="fc-carousel"></div>
-        <select id="fc-manufacturer" class="fc-dropdown"></select>
-        <select id="fc-filament" class="fc-dropdown"></select>
-        <div id="fc-preview" class="fc-preview"></div>
+        <form id="fc-search" class="fc-search">
+          <select id="fc-brand"></select>
+          <select id="fc-material"></select>
+          <select id="fc-color"></select>
+          <input id="fc-name" placeholder="名称">
+          <button id="fc-search-btn">検索</button>
+        </form>
+        <div class="registered-container">
+          <div id="fc-preview" class="registered-preview"></div>
+          <div class="registered-list">
+            <table class="registered-table">
+              <thead>
+                <tr><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>サブ名称</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
       </div>
       <div class="fc-buttons">
         <button id="fc-cancel">キャンセル</button>
-        <button id="fc-ok">このフィラメントに決定</button>
+        <button id="fc-ok" disabled>このフィラメントを選択</button>
       </div>
     `;
 
-    const favEl = dlg.querySelector("#fc-fav");
-    const recentEl = dlg.querySelector("#fc-recent");
-    const manuSel = dlg.querySelector("#fc-manufacturer");
-    const filSel = dlg.querySelector("#fc-filament");
+    const brandSel = dlg.querySelector("#fc-brand");
+    const matSel = dlg.querySelector("#fc-material");
+    const colorSel = dlg.querySelector("#fc-color");
+    const nameIn = dlg.querySelector("#fc-name");
+    const searchForm = dlg.querySelector("#fc-search");
+    const tableBody = dlg.querySelector(".registered-table tbody");
     const prevEl = dlg.querySelector("#fc-preview");
+    const okBtn = dlg.querySelector("#fc-ok");
 
     const spools = getSpools();
-    let selectedSpool = spools.find(s => s.isActive) || spools[0] || null;
+    let selectedSpool = spools.find(s => s.isActive) || null;
 
-    function renderManufacturerOptions() {
-      const makers = [...new Set(spools.map(sp => sp.manufacturerName || sp.brand))];
-      manuSel.innerHTML = '<option value="">メーカー選択</option>';
-      makers.forEach(m => {
+    function fillOptions(list) {
+      const brands = new Set();
+      const mats = new Set();
+      const colors = new Set();
+      list.forEach(sp => {
+        if (sp.manufacturerName) brands.add(sp.manufacturerName);
+        else if (sp.brand) brands.add(sp.brand);
+        if (sp.materialName) mats.add(sp.materialName);
+        else if (sp.material) mats.add(sp.material);
+        if (sp.colorName) colors.add(sp.colorName);
+      });
+      brandSel.innerHTML = '<option value="">ブランド</option>';
+      [...brands].forEach(b => {
+        const o = document.createElement('option');
+        o.value = b;
+        o.textContent = b;
+        brandSel.appendChild(o);
+      });
+      matSel.innerHTML = '<option value="">材質</option>';
+      [...mats].forEach(m => {
         const o = document.createElement('option');
         o.value = m;
-        o.textContent = m || '(不明)';
-        manuSel.appendChild(o);
+        o.textContent = m;
+        matSel.appendChild(o);
       });
-      if (selectedSpool) {
-        manuSel.value = selectedSpool.manufacturerName || selectedSpool.brand;
-      }
+      colorSel.innerHTML = '<option value="">色名</option>';
+      [...colors].forEach(c => {
+        const o = document.createElement('option');
+        o.value = c;
+        o.textContent = c;
+        colorSel.appendChild(o);
+      });
     }
 
-    function renderFilamentOptions() {
-      const maker = manuSel.value;
-      filSel.innerHTML = '';
-      spools.filter(sp => !maker || (sp.manufacturerName || sp.brand) === maker)
-        .forEach(sp => {
-          const o = document.createElement('option');
-          o.value = sp.id;
-          o.textContent = sp.name;
-          filSel.appendChild(o);
-        });
-      if (selectedSpool) filSel.value = selectedSpool.id;
+    function applyFilter(list) {
+      return list.filter(sp => {
+        if (brandSel.value) {
+          const b = sp.manufacturerName || sp.brand || '';
+          if (b !== brandSel.value) return false;
+        }
+        if (matSel.value) {
+          const m = sp.materialName || sp.material || '';
+          if (m !== matSel.value) return false;
+        }
+        if (colorSel.value && sp.colorName !== colorSel.value) return false;
+        if (nameIn.value) {
+          const n = `${sp.name || ''}${sp.reelName || ''}${sp.reelSubName || ''}`;
+          if (!n.includes(nameIn.value)) return false;
+        }
+        return true;
+      });
     }
 
     function updateInfo(sp) {
@@ -147,58 +194,35 @@ export function showFilamentChangeDialog() {
       updatePreview(sp);
     }
 
-    function setupCarousel(list, container) {
-      container.innerHTML = '';
+    function renderTable() {
+      const list = applyFilter(spools);
+      tableBody.innerHTML = '';
       list.forEach(sp => {
-        const d = document.createElement('div');
-        d.className = 'fc-item';
-        d.textContent = sp.name;
-        d.dataset.id = sp.id;
-        container.appendChild(d);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
+          `<td>${sp.materialName || sp.material || ''}</td>` +
+          `<td><span style='color:${sp.filamentColor || sp.color || '#000'}'>■</span>${sp.colorName || ''}</td>` +
+          `<td>${sp.name || sp.reelName || ''}</td>` +
+          `<td>${sp.reelSubName || ''}</td>`;
+        tr.addEventListener('click', () => {
+          tableBody.querySelector('tr.selected')?.classList.remove('selected');
+          tr.classList.add('selected');
+          selectedSpool = sp;
+          okBtn.disabled = false;
+          updateInfo(sp);
+        });
+        tableBody.appendChild(tr);
       });
     }
 
-    const favList = spools.filter(sp => sp.isFavorite);
-    const recentIds = [];
-    monitorData.usageHistory.slice(-16).reverse().forEach(u => {
-      if (!recentIds.includes(u.spoolId)) recentIds.push(u.spoolId);
-    });
-    const recentList = recentIds.map(id => spools.find(s => s.id === id)).filter(Boolean);
-
-    setupCarousel(favList, favEl);
-    setupCarousel(recentList, recentEl);
-
-    favEl.addEventListener('click', e => {
-      const id = e.target.dataset.id;
-      if (!id) return;
-      selectedSpool = spools.find(s => s.id === id);
-      renderManufacturerOptions();
-      renderFilamentOptions();
-      updateInfo(selectedSpool);
-    });
-    recentEl.addEventListener('click', e => {
-      const id = e.target.dataset.id;
-      if (!id) return;
-      selectedSpool = spools.find(s => s.id === id);
-      renderManufacturerOptions();
-      renderFilamentOptions();
-      updateInfo(selectedSpool);
-    });
-
-    manuSel.addEventListener('change', () => {
-      renderFilamentOptions();
-      selectedSpool = spools.find(s => s.id === filSel.value) || null;
-      updateInfo(selectedSpool);
-    });
-
-    filSel.addEventListener('change', () => {
-      selectedSpool = spools.find(s => s.id === filSel.value) || null;
-      updateInfo(selectedSpool);
-    });
-
-    renderManufacturerOptions();
-    renderFilamentOptions();
+    fillOptions(spools);
+    renderTable();
     if (selectedSpool) updateInfo(selectedSpool);
+
+    searchForm.addEventListener('submit', ev => {
+      ev.preventDefault();
+      renderTable();
+    });
 
     document.body.appendChild(overlay);
 

@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.290 (PR #132)
+ * @version 1.390.293 (PR #133)
  * @since   1.390.228 (PR #102)
 */
 
@@ -688,6 +688,7 @@ function createPresetContent(onUse, onChange) {
 
   let sortKey = "";
   let sortAsc = true;
+  let selectedTr = null;
 
   function buildUsageMap() {
     const map = {};
