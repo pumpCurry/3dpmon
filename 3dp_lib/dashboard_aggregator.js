@@ -19,7 +19,7 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.309 (PR #139)
+ * @version 1.390.313 (PR #140)
  * @since   1.390.193 (PR #86)
 */
 
@@ -558,6 +558,10 @@ export function aggregatorUpdate() {
       const jobId = job?.id ?? "";
       if (!isNaN(len) && len > 0 && spool.currentPrintID !== jobId) {
         // ここでフィラメント使用予定を登録し、残量計算を有効化する
+        const machine = monitorData.machines[currentHostname];
+        if (machine?.printStore?.current) {
+          machine.printStore.current.filamentId = spool.id;
+        }
         useFilament(len, jobId);
       }
     }
