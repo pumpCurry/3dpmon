@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.276 (PR #126)
+* @version 1.390.282 (PR #127)
 * @since   1.390.228 (PR #102)
 */
 
@@ -25,7 +25,8 @@ import {
   getSpools,
   addSpool,
   updateSpool,
-  addSpoolFromPreset
+  addSpoolFromPreset,
+  deleteSpool
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -91,6 +92,9 @@ function injectStyles() {
     .filament-manager-content .search-form{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
     .filament-manager-content .search-form select,
     .filament-manager-content .search-form input{padding:2px;font-size:12px;}
+    .filament-manager-content .search-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
+    .filament-manager-content .search-field legend{font-size:12px;}
+    .registered-table tr.selected{background:#e0f2fe;}
     .registered-container{display:flex;gap:8px;align-items:flex-start;}
     .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
     .registered-table th{cursor:pointer;}
@@ -132,8 +136,10 @@ function createHistoryContent() {
  * 現在スプール表示タブを生成する。
  *
  * @private
+ * @param {Function} onUse - 使用ボタン押下時に呼び出す処理
+ * @param {Function} onChange - 変更後に呼び出す処理
  * @returns {HTMLElement} DOM 要素
- */
+*/
 function createCurrentSpoolContent() {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
@@ -228,6 +234,12 @@ function createRegisteredContent(openEditor) {
 
   const form = document.createElement("form");
   form.className = "search-form";
+  const searchFs = document.createElement("fieldset");
+  searchFs.className = "search-field";
+  const searchLg = document.createElement("legend");
+  searchLg.textContent = "検索";
+  searchFs.appendChild(searchLg);
+  searchFs.appendChild(form);
   const brandSel = document.createElement("select");
   const matSel = document.createElement("select");
   const colorSel = document.createElement("select");
@@ -260,7 +272,7 @@ function createRegisteredContent(openEditor) {
   table.appendChild(tbody);
   wrap.appendChild(table);
 
-  div.append(addBtn, form, countSpan, wrap);
+  div.append(addBtn, searchFs, countSpan, wrap);
 
   const preview = createFilamentPreview(prevBox, {
     filamentDiameter: 1.75,
@@ -277,6 +289,8 @@ function createRegisteredContent(openEditor) {
 
   let sortKey = "";
   let sortAsc = true;
+  let selectedTr = null;
+  let selectedTr = null;
 
   function buildMaps() {
     const map = {};
@@ -418,6 +432,9 @@ function createRegisteredContent(openEditor) {
       cmd.appendChild(edit);
       tr.appendChild(cmd);
       tr.addEventListener("click", () => {
+        selectedTr?.classList.remove("selected");
+        selectedTr = tr;
+        tr.classList.add("selected");
         preview.setState({
           filamentDiameter: sp.filamentDiameter,
           filamentTotalLength: sp.totalLengthMm,
@@ -475,9 +492,11 @@ function createRegisteredContent(openEditor) {
  * プリセット一覧タブを生成する。
  *
  * @private
+ * @param {Function} onUse - プリセット使用時の処理
+ * @param {Function} onChange - 登録状態変更時の処理
  * @returns {HTMLElement} DOM 要素
  */
-function createPresetContent(onUse) {
+function createPresetContent(onUse, onChange) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
@@ -515,7 +534,7 @@ function createPresetContent(onUse) {
   table.appendChild(tbody);
   wrap.appendChild(table);
 
-  div.append(form, countSpan, wrap);
+  div.append(searchFs, countSpan, wrap);
 
   const preview = createFilamentPreview(prevBox, {
     filamentDiameter: 1.75,
@@ -663,16 +682,29 @@ function createPresetContent(onUse) {
       if (existsMap[p.presetId]) {
         btn.textContent = "登録済み";
         btn.disabled = true;
+        const quit = document.createElement("button");
+        quit.textContent = "やめる";
+        quit.addEventListener("click", () => {
+          const sp = getSpools().find(s => s.presetId === p.presetId && !s.deleted);
+          if (sp) deleteSpool(sp.id);
+          render();
+          onChange();
+        });
+        cmd.append(btn, quit);
       } else {
         btn.textContent = "使う";
         btn.addEventListener("click", () => {
           onUse(p);
           render();
+          onChange();
         });
+        cmd.appendChild(btn);
       }
-      cmd.appendChild(btn);
       tr.appendChild(cmd);
       tr.addEventListener("click", () => {
+        selectedTr?.classList.remove("selected");
+        selectedTr = tr;
+        tr.classList.add("selected");
         preview.setState({
           filamentDiameter: p.filamentDiameter ?? p.diameter,
           filamentTotalLength: p.filamentTotalLength ?? p.defaultLength,
@@ -1235,10 +1267,15 @@ export function showFilamentManager() {
     switchTab(contents.length - 1);
     if (refresh) refresh();
   });
-  const presetTab = createPresetContent(p => {
-    addSpoolFromPreset(p);
-    registered.render();
-  });
+  const presetTab = createPresetContent(
+    p => {
+      addSpoolFromPreset(p);
+      registered.render();
+    },
+    () => {
+      registered.render();
+    }
+  );
   contents[REGISTERED_IDX] = registered.el;
   contents[REGISTERED_IDX + 1] = presetTab.el;
 
