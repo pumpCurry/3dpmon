@@ -16,13 +16,15 @@
  * @version 1.390.309 (PR #139)
  * @since   1.390.193 (PR #86)
  *
- * ------
+ */
+
+/* ------
  * 使い方
  * ------
- *   <!-- HTML 側 -->
- *   <div id="filament-preview"></div>
+     <!-- HTML 側 -->
+     <div id="filament-preview"></div>
 
- *   <!-- 読み込み -->
+     <!-- 読み込み -->
      <script src="dashboard_filament_view.js"></script>
      <script>
        const preview = createFilamentPreview(
