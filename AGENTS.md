@@ -88,7 +88,7 @@
 ```js
 /**
  * @fileoverview
- *  @description 3Dプリンタ監視ツール 3dpmon 用 {モジュール内容} モジュール
+ * @description 3Dプリンタ監視ツール 3dpmon 用 {モジュール内容} モジュール
  * @file {ファイル名}.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
  * @author pumpCurry
@@ -110,6 +110,7 @@
  * - {todo内容}
  */
 ```
+- こまやかな使い方が先頭コメントに一緒に書いてある場合は、todoまででコメントを分割する。
 
 ### 2.1 プレースホルダ説明
 | プレースホルダ                  | 意味・記入例                                             |
