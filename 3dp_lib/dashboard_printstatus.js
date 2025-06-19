@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 印刷状態管理ユーティリティ
- * dashboard_printstatus.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 印刷状態管理ユーティリティ モジュール
+ * @file dashboard_printstatus.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_printstatus
- *
  * 【機能内容サマリ】
  * - 印刷ステート履歴を最大4件保持
  * - 特定のステート遷移で通知とログを出力
@@ -13,8 +13,12 @@
  * 【公開関数一覧】
  * - {@link handlePrintStateTransition}：状態遷移処理
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 const MAX_HISTORY_LENGTH = 4;

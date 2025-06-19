@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 UI マッピング定義
- * dashboard_ui_mapping.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 UI マッピング定義 モジュール
+ * @file dashboard_ui_mapping.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_ui_mapping
- *
  * 【機能内容サマリ】
  * - storedDataのキーに対するDOM要素キーと変換関数を定義
  * - 単位付き文字列変換を一元管理
@@ -16,8 +16,12 @@
  * - {@link PRINT_STATE_EVENT}：状態イベント表
  * - {@link dashboardMapping}：フィールドマッピング
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";

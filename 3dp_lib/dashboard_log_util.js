@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 ログ管理モジュール
- * dashboard_log_util.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 ログ管理 モジュール
+ * @file dashboard_log_util.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_log_util
- *
  * 【機能内容サマリ】
  * - LogManager によるログと通知ログの保持
  * - 自動スクロールと差分描画支援
@@ -22,10 +22,12 @@
  * - {@link pushLog}：ログ追加
  * - {@link pushNotificationLog}：通知レベルログ追加
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
- *
- * 長期稼働でもブラウザクラッシュを防ぐため、最新 MAX_LOG_LINES 件のみ保持します。
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";

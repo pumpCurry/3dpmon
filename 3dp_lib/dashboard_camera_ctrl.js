@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 カメラ制御モジュール
- * dashboard_camera_ctrl.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 カメラ制御 モジュール
+ * @file dashboard_camera_ctrl.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_camera_ctrl
- *
  * 【機能内容サマリ】
  * - <img> タグによる映像ストリームの開始／停止
  * - 接続状態に応じた UI 更新
@@ -17,8 +17,12 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";

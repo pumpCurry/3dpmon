@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 汎用ユーティリティ群
- * dashboard_utils.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 汎用ユーティリティ群 モジュール
+ * @file dashboard_utils.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_utils
- *
  * 【機能内容サマリ】
  * - ログコピーや時間フォーマットなど多目的関数
  * - Clipboard API のフォールバックを含む
@@ -14,8 +14,12 @@
  * 【公開関数一覧】
  * - {@link formatDuration} ほか複数をエクスポート
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";

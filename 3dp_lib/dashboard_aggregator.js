@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 集計管理モジュール
- * dashboard_aggregator.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 集計管理 モジュール
+ * @file dashboard_aggregator.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_aggregator
- *
  * 【機能内容サマリ】
  * - 印刷ワークフローの各種タイマーを集計
  * - 実印刷開始時刻や終了予測を計算
@@ -19,9 +19,13 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.313 (PR #140)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
-*/
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
+ */
 
 "use strict";
 

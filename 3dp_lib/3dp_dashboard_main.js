@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 エントリポイントモジュール
- * 3dp_dashboard_main.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 エントリポイント モジュール
+ * @file 3dp_dashboard_main.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module 3dp_dashboard_main
- *
  * 【機能内容サマリ】
  * - 各モジュールの読み込みと初期化
  * - 例外ハンドリングやデバッグオブジェクト設定
@@ -14,8 +14,12 @@
  * 【公開関数一覧】
  * - なし（エントリポイントとして即時実行）
  *
- * @version 1.390.230 (PR #104)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";

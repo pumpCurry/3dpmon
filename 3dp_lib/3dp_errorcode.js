@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 エラーコード定義モジュール
- * 3dp_errorcode.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 エラーコード定義 モジュール
+ * @file 3dp_errorcode.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module 3dp_errorcode
- *
  * 【機能内容サマリ】
  * - エラーコードと日本語メッセージのマッピングを提供
  * - 引数を与えてメッセージ文字列を生成
@@ -13,14 +13,12 @@
  * 【公開関数一覧】
  * - default export：エラーメッセージ関数のマップ
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
- *
- * 【使用方法】
- *  例）エラーコード 2240 で v = ["abc", "def", "ghi", 3, 4] の場合:
- *       import errorMap from "./3dp_errorcode.js";
- *       const msg = errorMap[2240](v);
- *       // msg に対応する日本語のエラーメッセージが取得できます。
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 export default {
   // -----------------------------------------------------------

@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 印刷履歴管理モジュール
- * dashboard_printmanager.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 印刷履歴管理 モジュール
+ * @file dashboard_printmanager.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_printManager
- *
  * 【機能内容サマリ】
  * - 印刷履歴および現在ジョブの保存・描画
  * - Template 処理を分離した柔軟なUI生成
@@ -21,9 +21,13 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.301 (PR #137)
+ * @version 1.390.315 (PR #143)
 * @since   1.390.197 (PR #88)
-*/
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
+ */
 "use strict";
 
 import {

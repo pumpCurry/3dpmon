@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 通知管理モジュール
- * dashboard_notification_manager.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 通知管理 モジュール
+ * @file dashboard_notification_manager.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_notification_manager
- *
  * 【機能内容サマリ】
  * - 通知設定の永続化とUI生成
  * - 画面上部アラート表示機能
@@ -17,9 +17,13 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.307 (PR #139)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
-*/
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
+ */
 "use strict";
 
 import { currentHostname, monitorData } from "./dashboard_data.js";

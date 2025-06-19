@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 Audio 管理モジュール
- * dashboard_audio_manager.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 Audio 管理 モジュール
+ * @file dashboard_audio_manager.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_audio_manager
- *
  * 【機能内容サマリ】
  * - 初回操作検知後に無音テストを実行
  * - 音声再生・音声合成の許可状態を管理
@@ -16,8 +16,12 @@
  * - {@link AudioManager}：音声管理クラス
  * - {@link audioManager}：共有インスタンス
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";

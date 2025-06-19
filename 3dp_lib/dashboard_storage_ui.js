@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 ストレージUIコントローラ
- * dashboard_storage_ui.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 ストレージUIコントローラ モジュール
+ * @file dashboard_storage_ui.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_storage_ui
- *
  * 【機能内容サマリ】
  * - ストレージ使用率表示と同期処理を管理
  * - クォータテストやエクスポート/インポート機能
@@ -14,9 +14,13 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.203 (PR #90)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.198 (PR #89)
-*/
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
+ */
 
 "use strict";
 

@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 メッセージ処理モジュール
- * dashboard_msg_handler.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 メッセージ処理 モジュール
+ * @file dashboard_msg_handler.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_msg_handler
- *
  * 【機能内容サマリ】
  * - WebSocket 受信データの解釈とUI更新
  * - 各種タイマーのリセット／再開
@@ -16,9 +16,13 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
- * @version 1.390.214 (PR #95)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.214 (PR #95)
-*/
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
+ */
 "use strict";
 
 import errorMap from "./3dp_errorcode.js";

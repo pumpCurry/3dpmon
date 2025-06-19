@@ -1,19 +1,23 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 ファイルマネージャ UI モジュール
- * dashboard_filemanager.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 ファイルマネージャ UI モジュール
+ * @file dashboard_filemanager.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_filemanager
- *
  * 【機能内容サマリ】
  * - 印刷履歴データの保存と表示を管理
  *
  * 【公開関数一覧】
  * - {@link FileManager}：履歴ロード・保存のユーティリティ
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 import { currentHostname } from "./dashboard_data.js";

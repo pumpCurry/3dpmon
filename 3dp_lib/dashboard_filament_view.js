@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 フィラメントプレビュー モジュール
- * dashboard_filament_view.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 フィラメントプレビュー モジュール
+ * @file dashboard_filament_view.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_filament_view
- *
  * 【機能内容サマリ】
  * - スプールの残量を視覚的に表示するスタンドアロンビュー
  * - ダイアログからスプール設定を変更
@@ -13,229 +13,13 @@
  * 【公開関数一覧】
  * - {@link createFilamentPreview}：プレビューを生成
  *
- * @version 1.390.309 (PR #139)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
- *
- * ------
- * 使い方
- * ------
- *   <!-- HTML 側 -->
- *   <div id="filament-preview"></div>
-
- *   <!-- 読み込み -->
-     <script src="dashboard_filament_view.js"></script>
-     <script>
-       const preview = createFilamentPreview(
-         document.getElementById('filament-preview'),
-         {
-           // ▼ 必須
-           filamentDiameter:           1.75,   // mm
-           filamentTotalLength:        330000, // mm
-           filamentCurrentLength:      120000, // mm (残量)
-           filamentColor:              '#22C55E',
-
-           reelOuterDiameter:          200,    // mm
-           reelThickness:              68,     // mm
-           reelWindingInnerDiameter:    95,    // mm
-           reelCenterHoleDiameter:      54,    // mm
-
-           // ▼ 任意
-           reelBodyColor:              '#A1A1AA',
-           reelFlangeTransparency:     0.4,
-           reelWindingForegroundColor: '#71717A',
-           reelCenterHoleForegroundColor:'#F4F4F5',
-
-           isFilamentPresent:          true,
-           showUsedUpIndicator:        true,
-           blinkingLightColor:         '#0EA5E9',
-
-           widthPx:                    300,
-           heightPx:                   300,
-           initialRotX:               -25,
-           initialRotY:                35,
-           initialRotZ:               -50,
-
-           showInfoLength:             true,
-           showInfoPercent:            true,
-           showInfoLayers:             true,
-
-           showResetButton:            true,
-           showProfileViewButton:      true,
-           showFrontViewButton:        true,
-           showSideViewButton:         true,
-           showAutoRotateButton:       true,
-
-           disableInteraction:         false
-
-           showOverlayLength:          false,
-           showOverlayPercent:         false,
-           showOverlayBar:             false,
-           enableDrag:                 true,
-           enableClick:                false,
-           onClick:                    null,
-           showLengthKg:               false,
-           reelName:                   '',
-           reelSubName:                '',
-
-           materialName:               '',
-           materialColorName:          '',
-           materialColorCode:          '',
-           showReelName:               false,
-           showReelSubName:            false,
-           showMaterialName:           false,
-           showMaterialColorName:      false,
-           showMaterialColorCode:      false,
-           manufacturerName:           '',
-           showManufacturerName:       false,
-         }
-       );
-
-       // 動的更新例
-       // preview.setRemainingLength(80000);
-       // preview.setState({ isFilamentPresent:false });
-       
-     </script>
-   ---------------------------------------------------------------------*/
-
-/* --------------------------------------------------------------------- */
-/*  0.  CSS インジェクション（重複挿入防止）                            */
-/* --------------------------------------------------------------------- */
-(function injectCSS() {
-  const ID = 'dfv-style';
-  if (document.getElementById(ID)) return;
-  const css = `
-  .dfv-root { position: relative; user-select: none; font-family: sans-serif; }
-  .dfv-scene { position:absolute; top:50%; left:50%; transform-style:preserve-3d; }
-  .dfv-card  { border:1px solid #ccc; border-radius:8px; padding:8px; display:inline-block; }
-  .dfv-slider { width:100%; margin-top:4px; }
-  .dfv-btn    { margin-left:4px; cursor:pointer; }
-  .dfv-btn-active { background:#e5e7eb; }
-  .dfv-blink-light { animation: dfv-blink-light 1.5s infinite ease-in-out; }
-  @keyframes dfv-blink-light { 0%,100%{opacity:1;transform:scale(1);}50%{opacity:.3;transform:scale(.8);} }
-  .dfv-blink-slash { animation: dfv-blink-slash 0.5s infinite alternate ease-in-out; }
-  @keyframes dfv-blink-slash { from{opacity:1;} to{opacity:.3;} }
-  /* ─────────── ボタン群ラッパー ─────────── */
-  .dfv-btn-wrapper { margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
-  .dfv-purchase-btn { font-size:1.2em; }
-  .dfv-price { font-weight:bold; margin-left:4px; align-self:center; }
-  .dfv-price-date { font-size:0.8em; color:#666; margin-left:4px; align-self:center; }
-
-  /* オーバーレイ */
-  .dfv-overlay { position:absolute; top:6px; left:6px; bottom:6px; right:6px; pointer-events:none; z-index:12; }
-  .dfv-overlay-length        { font-size:0.8em; font-weight:bold; color:#000; margin:2px 0; }
-  .dfv-overlay-percent       { font-size:2.8em; font-weight:bold; color:#000; position:absolute; bottom:10px; right:10px; font-family: monospace;}
-
-  .dfv-overlay-name          { font-size:1.5em; font-weight:bold; color:#000; margin:2px 0; }
-  .dfv-overlay-subname       { font-size:1.0em; font-weight:bold; color:#000; margin:2px 0; }
-  .dfv-overlay-material      { font-size:1.2em;                   color:#000; margin:2px 0; }
-  .dfv-overlay-colorcode     { font-size:1.0em;                   color:#000; margin:2px 0; }
-  .dfv-overlay-manufacturer  { font-size:1.2em; font-weight:bold; color:#000; margin:2px 0; }
-  
-  /* ％表示：各パーツを分けてスタイル可能に */
-  .dfv-overlay-percent { margin:2px; }
-  .dfv-overlay-percent-int   { font-size:1.5em; font-weight:bold; }
-  .dfv-overlay-percent-dot   { font-size:0.6em; font-weight:bold; }
-  .dfv-overlay-percent-frac  { font-size:1.2em; }
-  .dfv-overlay-percent-sign  { font-size:1.0em; }
-
-  /* マテリアルタグ */
-  .dfv-material-tag {
-    position:absolute; top:10px; right:10px;
-    padding:4px 8px; border-radius:4px;
-    font-size:0.85em; font-weight:bold;
-    pointer-events:none; z-index:14;
-  }
-
-  /* 進捗バー */
-  .dfv-overlay-bar {
-    position:absolute;
-    bottom:0;
-    left:0;
-    width:0;
-    height:4px;
-    background:#00FFFF;
-    transition:width 0.3s, background 0.3s;
-    pointer-events:none;
-  }
-
-  /* スライダー + ボタンラッパー */
-  .dfv-controls {
-    margin-top:4px;
-    display:flex;
-    align-items:center;
-  }
-`;
-  const style = document.createElement('style');
-  style.id = ID;
-  style.textContent = css;
-  document.head.appendChild(style);
-})();
-
-/* --------------------------------------------------------------------- */
-/*  1.  型定義 (JSDoc)                                                   */
-/* --------------------------------------------------------------------- */
-/**
- * @typedef {Object} FilamentOptions
- * @property {number} filamentDiameter               フィラメント径 [mm]
- * @property {number} filamentTotalLength            総フィラメント長さ [mm]
- * @property {number} filamentCurrentLength          現在のフィラメント長さ [mm]
- * @property {string} filamentColor                  フィラメント色（CSSカラー）
- *
- * @property {number} reelOuterDiameter              リール外径 [mm]
- * @property {number} reelThickness                  リール厚み [mm]
- * @property {number} reelWindingInnerDiameter       巻き内径 [mm]
- * @property {number} reelCenterHoleDiameter         中心穴径 [mm]
- *
- * @property {string} [reelBodyColor]                リール本体色（CSSカラー）
- * @property {number} [reelFlangeTransparency]       フランジ透過度 0–1
- * @property {string} [reelWindingForegroundColor]   巻き面色（CSSカラー）
- * @property {string} [reelCenterHoleForegroundColor]中心穴色（CSSカラー）
- *
- * @property {boolean} [isFilamentPresent]           フィラメント有無
- * @property {boolean} [showUsedUpIndicator]         完了インジケータ表示
- * @property {string}  [blinkingLightColor]          ライト色（CSSカラー）
- *
- * @property {number} [widthPx]                      描画幅 [px]（フォント・スライダー幅スケール基準）
- * @property {number} [heightPx]                     描画高 [px]
- * @property {number} [initialRotX]                  初期X回転角度 [deg]
- * @property {number} [initialRotY]                  初期Y回転角度 [deg]
- * @property {number} [initialRotZ]                  初期Z回転角度 [deg]
- *
- * @property {boolean} [disableInteraction]          スライダー/ドラッグ操作禁止
- *
- * @property {boolean} [showSlider]                  スライダー表示
- *
- * @property {boolean} [showResetButton]             リセット↺ボタン表示
- * @property {boolean} [showProfileViewButton]       斜め上❍ボタン表示
- * @property {boolean} [showSideViewButton]          真横⦿ボタン表示
- * @property {boolean} [showFrontViewButton]         正面⧦ボタン表示
- * @property {boolean} [showAutoRotateButton]        自動回転⟲ボタン表示
- *
- * @property {boolean} [showOverlayLength]           図上オーバーレイに残長表示
- * @property {boolean} [showOverlayPercent]          図上オーバーレイに残％表示
- * @property {boolean} [showOverlayBar]              図上オーバーレイに進捗バー表示
- * @property {boolean} [showOverlayWeight]           図上オーバーレイに重量表示
- * @property {boolean} [showOverlayLengthOnly]       図上オーバーレイに長さのみ表示
- *
- * @property {number}  [filamentWeightKg]            スプール全体重量 [kg]
- *
- * @property {boolean} [showMaterialTag]             右肩素材タグ表示
- * @property {string}  [materialName]                素材名タグテキスト
- * @property {string}  [materialColorCode]           素材タグ背景色（CSSカラー）
- * @property {string}  [materialTagTextColor]        素材タグ文字色（CSSカラー）
- * @property {string}  [manufacturerName]            フィラメントメーカー名テキスト
- * @property {boolean} [showManufacturerName]        フィラメントメーカー名表示
- *
- * @property {boolean} [showInfoLength]              情報欄に残長表示
- * @property {boolean} [showInfoPercent]             情報欄に残％表示
- * @property {boolean} [showInfoLayers]              情報欄に残レイヤー数表示
- * @property {boolean} [showRotationInfo]            情報欄に回転角度表示
- * @property {string}  [purchaseLink]                購入先URL
- * @property {number}  [price]                       価格
- * @property {string}  [currencySymbol]              通貨記号（例: '¥', '$')
- * @property {string}  [priceCheckDate]              価格確認日（YYYY-MM-DD）
- * @property {boolean} [showPurchaseButton]          購入ボタン表示
-*/
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
+ */
 
 /* --------------------------------------------------------------------- */
 /*  2.  ユーティリティ                                                   */

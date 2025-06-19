@@ -1,11 +1,11 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 UI 更新モジュール
- * dashboard_ui.js
- * (c) pumpCurry 2025
+ *  @description 3Dプリンタ監視ツール 3dpmon 用 UI 更新 モジュール
+ * @file dashboard_ui.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_ui
- *
  * 【機能内容サマリ】
  * - data-field に基づく DOM 更新
  * - 更新マーク管理と storedData のDOM反映
@@ -17,8 +17,12 @@
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.315 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:01:15
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 
 "use strict";
