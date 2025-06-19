@@ -13,8 +13,8 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.283 (PR #128)
-* @since   1.390.228 (PR #102)
+ * @version 1.390.285 (PR #129)
+ * @since   1.390.228 (PR #102)
 */
 
 "use strict";
@@ -501,6 +501,12 @@ function createPresetContent(onUse, onChange) {
 
   const form = document.createElement("form");
   form.className = "search-form";
+  const searchFs = document.createElement("fieldset");
+  searchFs.className = "search-field";
+  const searchLg = document.createElement("legend");
+  searchLg.textContent = "検索";
+  searchFs.appendChild(searchLg);
+  searchFs.appendChild(form);
   const brandSel = document.createElement("select");
   const matSel = document.createElement("select");
   const colorSel = document.createElement("select");
