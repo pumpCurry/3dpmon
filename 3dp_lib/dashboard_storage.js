@@ -25,9 +25,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.245 (PR #110)
+ * @version 1.390.299 (PR #136)
  * @since   1.390.193 (PR #86)
- */
+*/
 
 "use strict";
 
@@ -52,6 +52,7 @@ function applySpoolDefaults(sp) {
   sp.purchasePrice ??= 0;
   sp.density ??= 0;
   sp.reelSubName ??= "";
+  sp.isPending ??= false;
   return sp;
 }
 
