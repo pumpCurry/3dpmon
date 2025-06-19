@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.275 (PR #125)
+* @version 1.390.276 (PR #126)
 * @since   1.390.228 (PR #102)
 */
 
@@ -24,7 +24,8 @@ import {
   getCurrentSpool,
   getSpools,
   addSpool,
-  updateSpool
+  updateSpool,
+  addSpoolFromPreset
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -476,114 +477,251 @@ function createRegisteredContent(openEditor) {
  * @private
  * @returns {HTMLElement} DOM 要素
  */
-function createPresetContent() {
+function createPresetContent(onUse) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
   const form = document.createElement("form");
-  form.style.cssText = "font-size:12px;margin-bottom:8px;";
+  form.className = "search-form";
+  const brandSel = document.createElement("select");
+  const matSel = document.createElement("select");
+  const colorSel = document.createElement("select");
+  const nameIn = document.createElement("input");
+  nameIn.placeholder = "名称";
+  const searchBtn = document.createElement("button");
+  searchBtn.textContent = "検索";
+  form.append(brandSel, matSel, colorSel, nameIn, searchBtn);
 
-  const brandInput = document.createElement("input");
-  brandInput.placeholder = "ブランド";
-  brandInput.style.marginRight = "4px";
+  const countSpan = document.createElement("div");
+  countSpan.style.fontSize = "12px";
+  countSpan.style.margin = "4px 0";
 
-  const matInput = document.createElement("input");
-  matInput.placeholder = "材質";
-  matInput.style.marginRight = "4px";
+  const wrap = document.createElement("div");
+  wrap.className = "registered-container";
+  const prevBox = document.createElement("div");
+  prevBox.className = "registered-preview";
+  wrap.appendChild(prevBox);
 
-  const colorNameInput = document.createElement("input");
-  colorNameInput.placeholder = "色名";
-  colorNameInput.style.marginRight = "4px";
+  const table = document.createElement("table");
+  table.className = "registered-table";
+  const thead = document.createElement("thead");
+  thead.innerHTML =
+    "<tr><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
+    "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
+    "<th data-sort='reelSubName'>サブ名称</th>" +
+    "<th data-sort='count'>使用数</th><th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  table.appendChild(tbody);
+  wrap.appendChild(table);
 
-  const colorInput = document.createElement("input");
-  colorInput.type = "color";
-  colorInput.style.marginRight = "4px";
+  div.append(form, countSpan, wrap);
 
-  const submitBtn = document.createElement("button");
-  submitBtn.textContent = "追加";
+  const preview = createFilamentPreview(prevBox, {
+    filamentDiameter: 1.75,
+    filamentTotalLength: 336000,
+    filamentCurrentLength: 336000,
+    filamentColor: "#22C55E",
+    widthPx: 120,
+    heightPx: 120,
+    showSlider: false,
+    disableInteraction: true,
+    showOverlayLength: true,
+    showOverlayPercent: true
+  });
 
-  const cancelBtn = document.createElement("button");
-  cancelBtn.textContent = "キャンセル";
-  cancelBtn.type = "button";
-  cancelBtn.style.marginLeft = "4px";
+  let sortKey = "";
+  let sortAsc = true;
 
-  form.append(brandInput, matInput, colorNameInput, colorInput, submitBtn, cancelBtn);
-  div.appendChild(form);
-
-  const ul = document.createElement("ul");
-  ul.style.fontSize = "12px";
-  div.appendChild(ul);
-
-  let editIndex = -1;
-
-  function resetForm() {
-    brandInput.value = "";
-    matInput.value = "";
-    colorNameInput.value = "";
-    colorInput.value = "#000000";
-    submitBtn.textContent = "追加";
-    editIndex = -1;
+  function buildUsageMap() {
+    const map = {};
+    (monitorData.usageHistory || []).forEach(h => {
+      const sp = monitorData.filamentSpools.find(s => s.id === h.spoolId);
+      if (!sp || !sp.presetId) return;
+      const m = map[sp.presetId] || { count: 0, last: 0 };
+      m.count += 1;
+      const t = Number(h.startedAt || 0);
+      if (t > m.last) m.last = t;
+      map[sp.presetId] = m;
+    });
+    return map;
   }
 
-  function render() {
-    ul.innerHTML = "";
-    const list = monitorData.filamentPresets || FILAMENT_PRESETS;
-    list.forEach((p, idx) => {
-      const li = document.createElement("li");
-      li.textContent = `${p.brand} ${p.colorName} (${p.material})`;
-      const edit = document.createElement("button");
-      edit.textContent = "編集";
-      edit.style.marginLeft = "4px";
-      edit.addEventListener("click", () => {
-        brandInput.value = p.brand || "";
-        matInput.value = p.material || "";
-        colorNameInput.value = p.colorName || "";
-        colorInput.value = p.color || "#000000";
-        submitBtn.textContent = "保存";
-        editIndex = idx;
-      });
-      const del = document.createElement("button");
-      del.textContent = "削除";
-      del.style.marginLeft = "4px";
-      del.addEventListener("click", () => {
-        if (!confirm("削除しますか?")) return;
-        monitorData.filamentPresets.splice(idx, 1);
-        saveUnifiedStorage();
-        render();
-        resetForm();
-      });
-      li.append(edit, del);
-      ul.appendChild(li);
+  function buildExistsMap() {
+    const map = {};
+    getSpools().forEach(sp => {
+      if (sp.presetId && !sp.deleted) map[sp.presetId] = true;
+    });
+    return map;
+  }
+
+  function fillOptions(list) {
+    const brands = new Set();
+    const mats = new Set();
+    const colors = new Set();
+    list.forEach(p => {
+      if (p.brand) brands.add(p.brand);
+      if (p.material) mats.add(p.material);
+      if (p.colorName) colors.add(p.colorName);
+    });
+    brandSel.innerHTML = "<option value=''>ブランド</option>";
+    [...brands].forEach(b => {
+      const o = document.createElement("option");
+      o.value = b;
+      o.textContent = b;
+      brandSel.appendChild(o);
+    });
+    matSel.innerHTML = "<option value=''>材質</option>";
+    [...mats].forEach(m => {
+      const o = document.createElement("option");
+      o.value = m;
+      o.textContent = m;
+      matSel.appendChild(o);
+    });
+    colorSel.innerHTML = "<option value=''>色名</option>";
+    [...colors].forEach(c => {
+      const o = document.createElement("option");
+      o.value = c;
+      o.textContent = c;
+      colorSel.appendChild(o);
     });
   }
 
-  form.addEventListener("submit", ev => {
-    ev.preventDefault();
-    const p = {
-      presetId: editIndex >= 0 ? monitorData.filamentPresets[editIndex].presetId : `preset-${Date.now()}`,
-      brand: brandInput.value.trim(),
-      material: matInput.value.trim(),
-      color: colorInput.value,
-      colorName: colorNameInput.value.trim()
-    };
-    if (editIndex >= 0) {
-      monitorData.filamentPresets.splice(editIndex, 1, p);
+  function applyFilter(list) {
+    return list.filter(p => {
+      if (brandSel.value && p.brand !== brandSel.value) return false;
+      if (matSel.value && p.material !== matSel.value) return false;
+      if (colorSel.value && p.colorName !== colorSel.value) return false;
+      if (nameIn.value && !(p.name || "").includes(nameIn.value)) return false;
+      return true;
+    });
+  }
+
+  function sortList(list) {
+    if (!sortKey) return list;
+    return list.sort((a, b) => {
+      let va = "";
+      let vb = "";
+      switch (sortKey) {
+        case "brand":
+          va = a.brand || "";
+          vb = b.brand || "";
+          break;
+        case "material":
+          va = a.material || "";
+          vb = b.material || "";
+          break;
+        case "colorName":
+          va = a.colorName || "";
+          vb = b.colorName || "";
+          break;
+        case "name":
+          va = a.name || "";
+          vb = b.name || "";
+          break;
+        case "reelSubName":
+          va = a.reelSubName || "";
+          vb = b.reelSubName || "";
+          break;
+        case "count":
+          va = usageMap[a.presetId]?.count || 0;
+          vb = usageMap[b.presetId]?.count || 0;
+          break;
+        case "last":
+          va = usageMap[a.presetId]?.last || 0;
+          vb = usageMap[b.presetId]?.last || 0;
+          break;
+        default:
+          break;
+      }
+      if (va === vb) return 0;
+      const cmp = va > vb ? 1 : -1;
+      return sortAsc ? cmp : -cmp;
+    });
+  }
+
+  function render() {
+    const presets = monitorData.filamentPresets || FILAMENT_PRESETS;
+    usageMap = buildUsageMap();
+    existsMap = buildExistsMap();
+    fillOptions(presets);
+    const list = sortList(applyFilter(presets));
+    tbody.innerHTML = "";
+    list.forEach(p => {
+      const tr = document.createElement("tr");
+      const usage = usageMap[p.presetId]?.count || 0;
+      const last = usageMap[p.presetId]?.last
+        ? new Date(usageMap[p.presetId].last).toLocaleString()
+        : "";
+      tr.innerHTML = `<td>${p.brand || ""}</td><td>${p.material || ""}</td>`;
+      const colorCell = document.createElement("td");
+      colorCell.innerHTML = `<span style='color:${p.color}'>■</span>${p.colorName || ""}`;
+      tr.appendChild(colorCell);
+      tr.innerHTML += `<td>${p.name || ""}</td><td>${p.reelSubName || ""}</td><td>${usage}</td><td>${last}</td>`;
+      const cmd = document.createElement("td");
+      const btn = document.createElement("button");
+      if (existsMap[p.presetId]) {
+        btn.textContent = "登録済み";
+        btn.disabled = true;
+      } else {
+        btn.textContent = "使う";
+        btn.addEventListener("click", () => {
+          onUse(p);
+          render();
+        });
+      }
+      cmd.appendChild(btn);
+      tr.appendChild(cmd);
+      tr.addEventListener("click", () => {
+        preview.setState({
+          filamentDiameter: p.filamentDiameter ?? p.diameter,
+          filamentTotalLength: p.filamentTotalLength ?? p.defaultLength,
+          filamentCurrentLength:
+            p.filamentCurrentLength ?? (p.filamentTotalLength ?? p.defaultLength),
+          filamentColor: p.color,
+          reelOuterDiameter: p.reelOuterDiameter,
+          reelThickness: p.reelThickness,
+          reelWindingInnerDiameter: p.reelWindingInnerDiameter,
+          reelCenterHoleDiameter: p.reelCenterHoleDiameter,
+          reelBodyColor: p.reelBodyColor,
+          reelFlangeTransparency: p.reelFlangeTransparency,
+          reelWindingForegroundColor: p.reelWindingForegroundColor,
+          reelCenterHoleForegroundColor: p.reelCenterHoleForegroundColor,
+          reelName: p.name || "",
+          reelSubName: p.reelSubName || "",
+          materialName: p.material,
+          materialColorName: p.colorName,
+          materialColorCode: p.color,
+          manufacturerName: p.brand
+        });
+      });
+      tbody.appendChild(tr);
+    });
+    countSpan.textContent = `一覧：(${list.length}/${presets.length}件)`;
+  }
+
+  let usageMap = buildUsageMap();
+  let existsMap = buildExistsMap();
+
+  thead.addEventListener("click", ev => {
+    const th = ev.target.closest("th");
+    if (!th || !th.dataset.sort) return;
+    if (sortKey === th.dataset.sort) {
+      sortAsc = !sortAsc;
     } else {
-      monitorData.filamentPresets.push(p);
+      sortKey = th.dataset.sort;
+      sortAsc = true;
     }
-    saveUnifiedStorage();
     render();
-    resetForm();
   });
 
-  cancelBtn.addEventListener("click", resetForm);
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    render();
+  });
 
-  if (!monitorData.filamentPresets || !monitorData.filamentPresets.length) {
-    monitorData.filamentPresets = [...FILAMENT_PRESETS];
-  }
   render();
-  resetForm();
-  return div;
+  return { el: div, render };
 }
 
 /**
@@ -1087,7 +1225,7 @@ export function showFilamentManager() {
     createCurrentSpoolContent(),
     createInventoryContent(),
     null,
-    createPresetContent(),
+    null,
     createReportContent(),
     editTab.el
   ];
@@ -1097,7 +1235,12 @@ export function showFilamentManager() {
     switchTab(contents.length - 1);
     if (refresh) refresh();
   });
+  const presetTab = createPresetContent(p => {
+    addSpoolFromPreset(p);
+    registered.render();
+  });
   contents[REGISTERED_IDX] = registered.el;
+  contents[REGISTERED_IDX + 1] = presetTab.el;
 
   const contentWrap = document.createElement("div");
   modal.appendChild(tabBar);
