@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link createFilamentPreview}：プレビューを生成
  *
- * @version 1.390.209 (PR #93)
+ * @version 1.390.309 (PR #139)
  * @since   1.390.193 (PR #86)
  *
  * ------
@@ -1036,9 +1036,9 @@ export function createFilamentPreview(mount, opts) {
     /* ----- オーバーレイ情報更新 ----- */
     overlayLength.style.display  = o.showOverlayLength  ? 'block' : 'none';
     if (o.showOverlayLength) {
-      overlayLength.textContent = o.showLengthKg
-        ? `Length: ${(currentLen/1000).toFixed(1)}m / ${(o.filamentTotalLength/1000).toFixed(1)}m`
-        : `${(currentLen/1000).toFixed(1)}m`;
+      const cur = Math.round(currentLen).toLocaleString();
+      const tot = Math.round(o.filamentTotalLength).toLocaleString();
+      overlayLength.textContent = `${cur}mm / ${tot}mm`;
     }
 
     if (o.showLengthKg) {

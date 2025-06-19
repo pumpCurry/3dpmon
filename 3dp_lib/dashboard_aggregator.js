@@ -19,7 +19,7 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.303 (PR #138)
+ * @version 1.390.309 (PR #139)
  * @since   1.390.193 (PR #86)
 */
 
@@ -105,6 +105,7 @@ export function ingestData(data) {
   const { value: bedRaw                    } = getMergedValueWithSource("bedTemp0",        data);
   const { value: maxBedRaw                 } = getMergedValueWithSource("maxBedTemp",      data);
   const { value: matStatRaw                } = getMergedValueWithSource("materialStatus",  data);
+  const { value: matLenRaw                 } = getMergedValueWithSource("materialLength", data);
 
   // —— キー初期化 ——  
   // まだ storedData に存在しないフィールドは rawValue=null で準備
@@ -112,6 +113,7 @@ export function ingestData(data) {
   if (jobRaw === null)    setStoredData("printJobTime",     null, true);
   if (leftRaw === null)   setStoredData("printLeftTime",    null, true);
   if (selfRaw === null)   setStoredData("withSelfTest",     null, true);
+  if (matLenRaw === null) setStoredData("usedMaterialLength", null, true);
 
   // —— 型変換 ——  
   const prog    = Number(progRaw   ?? 0);
@@ -123,6 +125,9 @@ export function ingestData(data) {
   const bed     = parseFloat(bedRaw)     || NaN;
   const maxBed  = parseFloat(maxBedRaw)  || NaN;
   const matStat = Number(matStatRaw ?? 0);
+  const matLen  = Number(matLenRaw  ?? NaN);
+
+  if (!isNaN(matLen)) setStoredData("usedMaterialLength", matLen, true);
 
   // (0) 新しい PrintID 検出 → 全リセット
   if (id !== prevPrintID) {
@@ -540,6 +545,7 @@ export function aggregatorUpdate() {
   if (spool) {
     const st = Number(storedData.state?.rawValue || 0);
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
+    const used = Number(storedData.usedMaterialLength?.rawValue ?? NaN);
     let remain = spool.remainingLengthMm;
 
     // 外部から印刷が開始された場合、useFilament() 相当の初期化を行う
@@ -557,11 +563,14 @@ export function aggregatorUpdate() {
     }
     if (
       spool.currentJobStartLength != null &&
-      spool.currentJobExpectedLength != null &&
       (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)
     ) {
-      const frac = Math.min(Math.max(prog / 100, 0), 1);
-      remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
+      if (!isNaN(used)) {
+        remain = spool.currentJobStartLength - used;
+      } else if (spool.currentJobExpectedLength != null) {
+        const frac = Math.min(Math.max(prog / 100, 0), 1);
+        remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
+      }
       if (remain < spool.remainingLengthMm) remain = spool.remainingLengthMm;
     } else if (st !== PRINT_STATE_CODE.printStarted && st !== PRINT_STATE_CODE.printPaused) {
       spool.currentJobStartLength = null;
