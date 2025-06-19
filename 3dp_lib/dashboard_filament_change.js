@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentChangeDialog}：交換ダイアログ表示
  *
- * @version 1.390.293 (PR #133)
+ * @version 1.390.295 (PR #134)
  * @since   1.390.230 (PR #104)
 */
 "use strict";
@@ -21,6 +21,7 @@
 import { getSpools, setCurrentSpoolId } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
+import { createFilamentPreview } from "./dashboard_filament_view.js";
 
 let styleInjected = false;
 
@@ -42,6 +43,9 @@ function injectStyles() {
   .fc-buttons button{padding:6px 12px;font-size:14px;}
   .fc-search{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
   .fc-search select,.fc-search input{padding:2px;font-size:12px;}
+  .fc-search-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
+  .fc-search-field legend{font-size:12px;}
+  .fc-stock{font-size:12px;text-align:center;margin-top:4px;}
   .registered-container{display:flex;gap:8px;align-items:flex-start;}
   .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
   .registered-list{flex:1;overflow-y:auto;max-height:60vh;}
@@ -62,8 +66,8 @@ function injectStyles() {
  * @param {Object} sp - スプールデータ
  * @returns {void}
  */
-function updatePreview(sp) {
-  const fp = window.filamentPreview;
+function updatePreview(sp, preview = window.filamentPreview) {
+  const fp = preview;
   if (!fp || !sp) return;
   if (sp.filamentColor) fp.setOption("filamentColor", sp.filamentColor);
   else if (sp.color) fp.setOption("filamentColor", sp.color);
@@ -97,15 +101,21 @@ export function showFilamentChangeDialog() {
     dlg.innerHTML = `
       <div class="fc-header">フィラメント交換</div>
       <div class="fc-body">
-        <form id="fc-search" class="fc-search">
-          <select id="fc-brand"></select>
-          <select id="fc-material"></select>
-          <select id="fc-color"></select>
-          <input id="fc-name" placeholder="名称">
-          <button id="fc-search-btn">検索</button>
-        </form>
+        <fieldset class="fc-search-field">
+          <legend>検索</legend>
+          <form id="fc-search" class="fc-search">
+            <select id="fc-brand"></select>
+            <select id="fc-material"></select>
+            <select id="fc-color"></select>
+            <input id="fc-name" placeholder="名称">
+            <button id="fc-search-btn">検索</button>
+          </form>
+        </fieldset>
         <div class="registered-container">
-          <div id="fc-preview" class="registered-preview"></div>
+          <div class="registered-preview">
+            <div id="fc-preview"></div>
+            <div id="fc-stock" class="fc-stock"></div>
+          </div>
           <div class="registered-list">
             <table class="registered-table">
               <thead>
@@ -129,7 +139,54 @@ export function showFilamentChangeDialog() {
     const searchForm = dlg.querySelector("#fc-search");
     const tableBody = dlg.querySelector(".registered-table tbody");
     const prevEl = dlg.querySelector("#fc-preview");
+    const stockEl = dlg.querySelector("#fc-stock");
     const okBtn = dlg.querySelector("#fc-ok");
+
+    const dialogPreview = createFilamentPreview(prevEl, {
+      filamentDiameter: 1.75,
+      filamentTotalLength: 336000,
+      filamentCurrentLength: 336000,
+      filamentColor: "#22C55E",
+      reelOuterDiameter: 200,
+      reelThickness: 68,
+      reelWindingInnerDiameter: 95,
+      reelCenterHoleDiameter: 54,
+      widthPx: 120,
+      heightPx: 120,
+      showSlider: false,
+      isFilamentPresent: true,
+      showUsedUpIndicator: true,
+      blinkingLightColor: "#0EA5E9",
+      showInfoLength: false,
+      showInfoPercent: false,
+      showInfoLayers: false,
+      showResetButton: false,
+      showProfileViewButton: true,
+      showSideViewButton: true,
+      showFrontViewButton: true,
+      showAutoRotateButton: true,
+      enableDrag: true,
+      enableClick: false,
+      onClick: null,
+      disableInteraction: true,
+      showOverlayLength: true,
+      showOverlayPercent: true,
+      showLengthKg: false,
+      showReelName: true,
+      showReelSubName: true,
+      showMaterialName: true,
+      showMaterialColorName: true,
+      showMaterialColorCode: true,
+      showManufacturerName: true,
+      showOverlayBar: true,
+      showPurchaseButton: true,
+      reelName: "",
+      reelSubName: "",
+      materialName: "",
+      materialColorName: "",
+      materialColorCode: "",
+      manufacturerName: ""
+    });
 
     const spools = getSpools();
     let selectedSpool = spools.find(s => s.isActive) || null;
@@ -188,10 +245,10 @@ export function showFilamentChangeDialog() {
     }
 
     function updateInfo(sp) {
-      if (!sp) { prevEl.textContent = ''; return; }
+      if (!sp) { stockEl.textContent = ''; return; }
       const inv = sp.presetId ? getInventoryItem(sp.presetId) : null;
-      prevEl.textContent = inv ? `在庫: ${inv.quantity}` : '在庫: -';
-      updatePreview(sp);
+      stockEl.textContent = inv ? `在庫: ${inv.quantity}` : '在庫: -';
+      updatePreview(sp, dialogPreview);
     }
 
     function renderTable() {
