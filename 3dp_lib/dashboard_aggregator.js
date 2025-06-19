@@ -19,7 +19,7 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.239 (PR #105)
+ * @version 1.390.303 (PR #138)
  * @since   1.390.193 (PR #86)
 */
 
@@ -27,7 +27,7 @@
 
 import { monitorData, currentHostname, setStoredData } from "./dashboard_data.js";
 import { clearNewClasses, updateStoredDataToDOM } from "./dashboard_ui.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { saveUnifiedStorage, loadPrintCurrent } from "./dashboard_storage.js";
 import { updateTemperatureGraphFromStoredData } from "./dashboard_chart.js";
 import { checkUpdatedFields, formatDuration } from "./dashboard_utils.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
@@ -35,7 +35,7 @@ import { formatDurationSimple } from "./dashboard_utils.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
-import { getCurrentSpool } from "./dashboard_spool.js";
+import { getCurrentSpool, useFilament } from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義
@@ -541,6 +541,20 @@ export function aggregatorUpdate() {
     const st = Number(storedData.state?.rawValue || 0);
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
     let remain = spool.remainingLengthMm;
+
+    // 外部から印刷が開始された場合、useFilament() 相当の初期化を行う
+    if (
+      (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
+      spool.currentJobExpectedLength == null
+    ) {
+      const job = loadPrintCurrent();
+      const len = Number(job?.materialUsedMm ?? NaN);
+      const jobId = job?.id ?? "";
+      if (!isNaN(len) && len > 0 && spool.currentPrintID !== jobId) {
+        // ここでフィラメント使用予定を登録し、残量計算を有効化する
+        useFilament(len, jobId);
+      }
+    }
     if (
       spool.currentJobStartLength != null &&
       spool.currentJobExpectedLength != null &&
