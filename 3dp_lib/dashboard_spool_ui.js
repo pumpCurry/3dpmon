@@ -277,7 +277,8 @@ function initSpoolUI() {
     const fp = window.filamentPreview;
     if (!fp || !sp) return;
 
-    if (sp.color) fp.setOption("filamentColor", sp.color);
+    const col = sp.color || sp.filamentColor;
+    if (col) fp.setOption("filamentColor", col);
     if (typeof sp.totalLengthMm === "number")
       fp.setOption("filamentTotalLength", sp.totalLengthMm);
     if (typeof sp.filamentDiameter === "number")
