@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.301 (PR #137)
+ * @version 1.390.312 (PR #141)
  * @since   1.390.193 (PR #86)
 */
 
@@ -176,6 +176,11 @@ export function addSpool(data) {
      * @type {?number}
      */
     currentJobExpectedLength: data.currentJobExpectedLength ?? null,
+    /**
+     * 最後に取得した使用長さ [mm]
+     * @type {?number}
+     */
+    lastUsedLengthMm: data.lastUsedLengthMm ?? null,
     removedAt: data.removedAt || null,
     note: data.note || "",
     usedLengthLog: data.usedLengthLog || [],
@@ -266,6 +271,7 @@ export function useFilament(lengthMm, jobId = "") {
   // 現在の印刷ジョブ開始時点の残量と必要量を記録
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = lengthMm;
+  s.lastUsedLengthMm = 0;
   // 残量を先に減算して保持
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
   s.printCount = (s.printCount || 0) + 1;

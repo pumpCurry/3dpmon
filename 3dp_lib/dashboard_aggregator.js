@@ -19,7 +19,7 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.309 (PR #139)
+ * @version 1.390.312 (PR #141)
  * @since   1.390.193 (PR #86)
 */
 
@@ -567,14 +567,19 @@ export function aggregatorUpdate() {
     ) {
       if (!isNaN(used)) {
         remain = spool.currentJobStartLength - used;
+        spool.remainingLengthMm = Math.max(0, remain);
+        remain = spool.remainingLengthMm;
+        spool.lastUsedLengthMm = used;
       } else if (spool.currentJobExpectedLength != null) {
         const frac = Math.min(Math.max(prog / 100, 0), 1);
         remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
+        spool.remainingLengthMm = Math.max(0, remain);
+        remain = spool.remainingLengthMm;
       }
-      if (remain < spool.remainingLengthMm) remain = spool.remainingLengthMm;
     } else if (st !== PRINT_STATE_CODE.printStarted && st !== PRINT_STATE_CODE.printPaused) {
       spool.currentJobStartLength = null;
       spool.currentJobExpectedLength = null;
+      spool.lastUsedLengthMm = null;
     }
     setStoredData("filamentRemainingMm", remain, true);
   }
