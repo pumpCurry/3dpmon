@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.301 (PR #137)
+ * @version 1.390.307 (PR #139)
  * @since   1.390.228 (PR #102)
 */
 
@@ -37,6 +37,7 @@ import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showAlert } from "./dashboard_notification_manager.js";
+import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 let styleInjected = false;
 
@@ -103,6 +104,10 @@ function injectStyles() {
     .edit-form label{display:block;margin:4px 0;font-size:12px;}
     .edit-form input,.edit-form select{width:100%;box-sizing:border-box;font-size:12px;padding:2px;}
     .edit-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}
+    .carousel-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
+    .carousel-field legend{font-size:12px;}
+    .filament-carousel{display:flex;overflow-x:auto;gap:4px;padding:2px 0;}
+    .filament-carousel .carousel-item{flex:0 0 auto;}
   `;
   const style = document.createElement("style");
   style.textContent = css;
@@ -289,6 +294,24 @@ function createRegisteredContent(openEditor) {
   addBtn.style.fontSize = "12px";
   addBtn.style.marginBottom = "4px";
 
+  const favFs = document.createElement("fieldset");
+  favFs.className = "carousel-field";
+  const favLg = document.createElement("legend");
+  favLg.textContent = "お気に入り";
+  favFs.appendChild(favLg);
+  const favCarousel = document.createElement("div");
+  favCarousel.className = "filament-carousel";
+  favFs.appendChild(favCarousel);
+
+  const freqFs = document.createElement("fieldset");
+  freqFs.className = "carousel-field";
+  const freqLg = document.createElement("legend");
+  freqLg.textContent = "よく使うフィラメント";
+  freqFs.appendChild(freqLg);
+  const freqCarousel = document.createElement("div");
+  freqCarousel.className = "filament-carousel";
+  freqFs.appendChild(freqCarousel);
+
   const form = document.createElement("form");
   form.className = "search-form";
   const searchFs = document.createElement("fieldset");
@@ -333,7 +356,7 @@ function createRegisteredContent(openEditor) {
   listBox.appendChild(table);
   wrap.appendChild(listBox);
 
-  div.append(addBtn, searchFs, countSpan, wrap);
+  div.append(addBtn, favFs, freqFs, searchFs, countSpan, wrap);
 
   const preview = createFilamentPreview(prevBox, {
     filamentDiameter: 1.75,
@@ -495,9 +518,56 @@ function createRegisteredContent(openEditor) {
     });
   }
 
+  function updateCarousels(list) {
+    favCarousel.innerHTML = "";
+    freqCarousel.innerHTML = "";
+    const favs = list.filter(sp => sp.isFavorite);
+    const freq = list
+      .map(sp => ({ sp, c: usageMap[sp.id]?.count || 0 }))
+      .sort((a, b) => b.c - a.c)
+      .slice(0, 5)
+      .map(v => v.sp);
+    const addItem = (sp, box) => {
+      const item = document.createElement("div");
+      item.className = "carousel-item";
+      box.appendChild(item);
+      createFilamentPreview(item, {
+        filamentDiameter: sp.filamentDiameter,
+        filamentTotalLength: sp.totalLengthMm,
+        filamentCurrentLength: sp.remainingLengthMm,
+        filamentColor: sp.filamentColor || sp.color,
+        reelOuterDiameter: sp.reelOuterDiameter,
+        reelThickness: sp.reelThickness,
+        reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
+        reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
+        widthPx: 80,
+        heightPx: 80,
+        showSlider: false,
+        isFilamentPresent: true,
+        showUsedUpIndicator: true,
+        enableDrag: false,
+        enableClick: true,
+        onClick: () => openEditor(sp, render),
+        disableInteraction: true,
+        showOverlayLength: false,
+        showOverlayPercent: false,
+        showOverlayBar: false,
+        showProfileViewButton: false,
+        showSideViewButton: false,
+        showFrontViewButton: false,
+        showAutoRotateButton: false,
+        showReelName: true,
+        reelName: sp.name || ""
+      });
+    };
+    favs.forEach(sp => addItem(sp, favCarousel));
+    freq.forEach(sp => addItem(sp, freqCarousel));
+  }
+
   function render() {
     const spools = getSpools();
     usageMap = buildMaps();
+    updateCarousels(spools);
     fillOptions(spools);
     const list = sortList(applyFilter(spools));
     tbody.innerHTML = "";
@@ -1183,6 +1253,9 @@ function createEditorContent(onDone) {
 
   let current = null;
   let isNew = false;
+  let dirty = false;
+
+  form.addEventListener("input", () => { dirty = true; });
 
   function fillForm(sp) {
     const d = { ...DEFAULT_FILAMENT_DATA, ...sp };
@@ -1209,6 +1282,7 @@ function createEditorContent(onDone) {
     presetIn.value = d.presetId || "";
     noteIn.value = d.note || "";
     favIn.checked = !!d.isFavorite;
+    dirty = false;
 
     preview.setState({
       filamentDiameter: Number(diaIn.value) || DEFAULT_FILAMENT_DATA.filamentDiameter,
@@ -1260,10 +1334,23 @@ function createEditorContent(onDone) {
     };
     if (isNew) addSpool(data); else updateSpool(current.id, data);
     showAlert("フィラメントを保存しました", "success");
+    dirty = false;
     onDone();
   });
 
-  cancelBtn.addEventListener("click", () => onDone());
+  cancelBtn.addEventListener("click", async () => {
+    if (dirty) {
+      const ok = await showConfirmDialog({
+        level: "warn",
+        title: "確認",
+        message: "保存せずに戻りますか?",
+        confirmText: "はい",
+        cancelText: "いいえ"
+      });
+      if (!ok) return;
+    }
+    onDone();
+  });
 
   return {
     el: div,

@@ -17,7 +17,7 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.224 (PR #100)
+ * @version 1.390.307 (PR #139)
  * @since   1.390.193 (PR #86)
 */
 "use strict";
@@ -38,7 +38,7 @@ Object.assign(_alertContainer.style, {
   top:           "0",
   left:          "0",
   width:         "100%",
-  zIndex:        "1050",
+  zIndex:        "4050",
   opacity:       "0.75",
   pointerEvents: "none"
 });
