@@ -96,12 +96,16 @@ export function setCurrentSpoolId(id) {
     prevSpool.removedAt = Date.now();
     prevSpool.isInUse = false;
     prevSpool.currentPrintID = "";
+    prevSpool.currentJobStartLength = null;
+    prevSpool.currentJobExpectedLength = null;
   }
   if (newSpool) {
     newSpool.startLength = newSpool.remainingLengthMm;
     newSpool.startPrintID = printId;
     newSpool.startedAt = Date.now();
     newSpool.currentPrintID = printId;
+    newSpool.currentJobStartLength = null;
+    newSpool.currentJobExpectedLength = null;
   }
   saveUnifiedStorage();
   logSpoolChange(newSpool, printId);
@@ -160,6 +164,16 @@ export function addSpool(data) {
     startPrintID: data.startPrintID || "",
     startedAt: data.startedAt || Date.now(),
     currentPrintID: data.currentPrintID || "",
+    /**
+     * 現在印刷中ジョブ開始時の残量 [mm]
+     * @type {?number}
+     */
+    currentJobStartLength: data.currentJobStartLength ?? null,
+    /**
+     * 現在印刷中ジョブで消費予定の長さ [mm]
+     * @type {?number}
+     */
+    currentJobExpectedLength: data.currentJobExpectedLength ?? null,
     removedAt: data.removedAt || null,
     note: data.note || "",
     usedLengthLog: data.usedLengthLog || [],
@@ -238,6 +252,10 @@ function logUsage(spool, lengthMm, jobId) {
 export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
+  // 現在の印刷ジョブ開始時点の残量と必要量を記録
+  s.currentJobStartLength = s.remainingLengthMm;
+  s.currentJobExpectedLength = lengthMm;
+  // 残量を先に減算して保持
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
   s.printCount = (s.printCount || 0) + 1;
   s.currentPrintID = jobId;
