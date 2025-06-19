@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.285 (PR #129)
+ * @version 1.390.290 (PR #132)
  * @since   1.390.228 (PR #102)
 */
 
@@ -97,6 +97,7 @@ function injectStyles() {
     .registered-table tr.selected{background:#e0f2fe;}
     .registered-container{display:flex;gap:8px;align-items:flex-start;}
     .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
+    .registered-list{flex:1;overflow-y:auto;max-height:70vh;}
     .registered-table th{cursor:pointer;}
     .edit-form label{display:block;margin:4px 0;font-size:12px;}
     .edit-form input,.edit-form select{width:100%;box-sizing:border-box;font-size:12px;padding:2px;}
@@ -279,6 +280,8 @@ function createInventoryContent() {
 function createRegisteredContent(openEditor) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
+  div.style.overflowY = "visible";
+  div.style.maxHeight = "none";
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "新規登録";
@@ -312,6 +315,9 @@ function createRegisteredContent(openEditor) {
   prevBox.className = "registered-preview";
   wrap.appendChild(prevBox);
 
+  const listBox = document.createElement("div");
+  listBox.className = "registered-list";
+
   const table = document.createElement("table");
   table.className = "registered-table";
   const thead = document.createElement("thead");
@@ -323,7 +329,8 @@ function createRegisteredContent(openEditor) {
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
-  wrap.appendChild(table);
+  listBox.appendChild(table);
+  wrap.appendChild(listBox);
 
   div.append(addBtn, searchFs, countSpan, wrap);
 
@@ -584,6 +591,8 @@ function createRegisteredContent(openEditor) {
 function createPresetContent(onUse, onChange) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
+  div.style.overflowY = "visible";
+  div.style.maxHeight = "none";
 
   const form = document.createElement("form");
   form.className = "search-form";
@@ -612,6 +621,9 @@ function createPresetContent(onUse, onChange) {
   prevBox.className = "registered-preview";
   wrap.appendChild(prevBox);
 
+  const listBox = document.createElement("div");
+  listBox.className = "registered-list";
+
   const table = document.createElement("table");
   table.className = "registered-table";
   const thead = document.createElement("thead");
@@ -623,7 +635,8 @@ function createPresetContent(onUse, onChange) {
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
-  wrap.appendChild(table);
+  listBox.appendChild(table);
+  wrap.appendChild(listBox);
 
   div.append(searchFs, countSpan, wrap);
 
