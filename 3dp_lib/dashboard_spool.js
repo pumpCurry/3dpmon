@@ -24,7 +24,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.299 (PR #136)
+ * @version 1.390.301 (PR #137)
  * @since   1.390.193 (PR #86)
 */
 
@@ -154,6 +154,7 @@ export function addSpool(data) {
       data.reelCenterHoleForegroundColor || "#F4F4F5",
     manufacturerName: data.manufacturerName || data.brand || "",
     purchasePrice: Number(data.purchasePrice) || 0,
+    currencySymbol: data.currencySymbol || "\u00A5",
     purchaseLink: data.purchaseLink || "",
     priceCheckDate: data.priceCheckDate || "",
     totalLengthMm: Number(data.totalLengthMm) || 0,
@@ -308,6 +309,7 @@ export function addSpoolFromPreset(preset, override = {}) {
       (preset.filamentTotalLength ?? preset.defaultLength),
     purchaseLink: preset.purchaseLink,
     purchasePrice: preset.price,
+    currencySymbol: preset.currencySymbol || "\u00A5",
     priceCheckDate: preset.priceCheckDate,
     note: preset.note,
     ...override

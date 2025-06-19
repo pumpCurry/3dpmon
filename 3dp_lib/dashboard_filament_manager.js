@@ -13,7 +13,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.293 (PR #133)
+ * @version 1.390.301 (PR #137)
  * @since   1.390.228 (PR #102)
 */
 
@@ -36,6 +36,7 @@ import {
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
+import { showAlert } from "./dashboard_notification_manager.js";
 
 let styleInjected = false;
 
@@ -1203,8 +1204,8 @@ function createEditorContent(onDone) {
     matSel.value = d.materialName || d.material || "PLA";
     matColorIn.value = d.materialColorName || d.colorName || "";
     linkIn.value = d.purchaseLink || "";
-    curSel.value = d.currencySymbol;
-    priceIn.value = d.price || d.purchasePrice || 0;
+    curSel.value = d.currencySymbol || DEFAULT_FILAMENT_DATA.currencySymbol;
+    priceIn.value = d.purchasePrice || d.price || 0;
     presetIn.value = d.presetId || "";
     noteIn.value = d.note || "";
     favIn.checked = !!d.isFavorite;
@@ -1251,13 +1252,14 @@ function createEditorContent(onDone) {
       materialColorName: matColorIn.value,
       materialColorCode: colorIn.value,
       purchaseLink: linkIn.value,
-      price: Number(priceIn.value) || 0,
+      purchasePrice: Number(priceIn.value) || 0,
       currencySymbol: curSel.value,
       presetId: presetIn.value || null,
       note: noteIn.value,
       isFavorite: favIn.checked
     };
     if (isNew) addSpool(data); else updateSpool(current.id, data);
+    showAlert("フィラメントを保存しました", "success");
     onDone();
   });
 
