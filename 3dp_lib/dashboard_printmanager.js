@@ -21,7 +21,7 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.296 (PR #135)
+ * @version 1.390.301 (PR #137)
 * @since   1.390.197 (PR #88)
 */
 "use strict";
@@ -41,6 +41,7 @@ import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
 import {
   getCurrentSpool,
+  getCurrentSpoolId,
   useFilament,
   getSpoolById,
   updateSpool
@@ -48,6 +49,7 @@ import {
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog } from "./dashboard_spool_ui.js";
+import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 
 /** 履歴の最大件数 */
 export const MAX_HISTORY = 150;
@@ -463,6 +465,16 @@ export async function refreshHistory(
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
+
+  const state = Number(machine?.runtimeData?.state ?? 0);
+  const printing = [PRINT_STATE_CODE.printStarted, PRINT_STATE_CODE.printPaused].includes(state);
+  const curSpoolId = getCurrentSpoolId();
+  if (printing && curSpoolId && jobs[0] && !jobs[0].filamentId) {
+    jobs[0].filamentId = curSpoolId;
+    const sp = getSpoolById(curSpoolId);
+    if (sp && !sp.currentPrintID) sp.currentPrintID = jobs[0].id;
+    merged = true;
+  }
 
   const videoMap = loadVideos();
   jobs.forEach(j => {

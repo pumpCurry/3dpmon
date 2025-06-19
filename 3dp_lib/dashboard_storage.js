@@ -25,7 +25,7 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.299 (PR #136)
+ * @version 1.390.301 (PR #137)
  * @since   1.390.193 (PR #86)
 */
 
@@ -50,6 +50,7 @@ function applySpoolDefaults(sp) {
   sp.materialName ??= sp.material ?? "";
   sp.materialSubName ??= "";
   sp.purchasePrice ??= 0;
+  sp.currencySymbol ??= "\u00A5";
   sp.density ??= 0;
   sp.reelSubName ??= "";
   sp.isPending ??= false;
