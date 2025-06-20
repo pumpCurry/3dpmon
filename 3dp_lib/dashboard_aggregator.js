@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.332 (PR #150)
+ * @version 1.390.346 (PR #155)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 17:00:00
+ * @lastModified 2025-06-20 23:06:38
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,7 +40,11 @@ import { formatDurationSimple } from "./dashboard_utils.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
-import { getCurrentSpool, useFilament } from "./dashboard_spool.js";
+import {
+  getCurrentSpool,
+  reserveFilament,
+  finalizeFilamentUsage
+} from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義
@@ -110,8 +114,8 @@ export function ingestData(data) {
   const { value: bedRaw                    } = getMergedValueWithSource("bedTemp0",        data);
   const { value: maxBedRaw                 } = getMergedValueWithSource("maxBedTemp",      data);
   const { value: matStatRaw                } = getMergedValueWithSource("materialStatus",  data);
-  //const { value: matLenRaw                 } =
-  //  getMergedValueWithSource("materialLength", data, "usagematerial");
+  const { value: matLenRaw                 } =
+    getMergedValueWithSource("materialLength", data, "usagematerial");
 
   // —— キー初期化 ——  
   // まだ storedData に存在しないフィールドは rawValue=null で準備
@@ -119,7 +123,7 @@ export function ingestData(data) {
   if (jobRaw === null)    setStoredData("printJobTime",     null, true);
   if (leftRaw === null)   setStoredData("printLeftTime",    null, true);
   if (selfRaw === null)   setStoredData("withSelfTest",     null, true);
-  //if (matLenRaw === null) setStoredData("usedMaterialLength", null, true);
+  if (matLenRaw === null) setStoredData("usedMaterialLength", null, true);
 
   // —— 型変換 ——  
   const prog    = Number(progRaw   ?? 0);
@@ -554,7 +558,7 @@ export function aggregatorUpdate() {
     const used = Number(storedData.usedMaterialLength?.rawValue ?? NaN);
     let remain = spool.remainingLengthMm;
 
-    // 外部から印刷が開始された場合、useFilament() 相当の初期化を行う
+    // 外部から印刷が開始された場合、reserveFilament() 相当の初期化を行う
     if (
       (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
       spool.currentJobExpectedLength == null
@@ -568,7 +572,7 @@ export function aggregatorUpdate() {
         if (machine?.printStore?.current) {
           machine.printStore.current.filamentId = spool.id;
         }
-        useFilament(len, jobId);
+        reserveFilament(len, jobId);
       }
     }
     if (
@@ -581,10 +585,16 @@ export function aggregatorUpdate() {
         const frac = Math.min(Math.max(prog / 100, 0), 1);
         remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
       }
-      if (remain < spool.remainingLengthMm) remain = spool.remainingLengthMm;
-    } else if (st !== PRINT_STATE_CODE.printStarted && st !== PRINT_STATE_CODE.printPaused) {
-      spool.currentJobStartLength = null;
-      spool.currentJobExpectedLength = null;
+    } else if (
+      spool.currentJobStartLength != null &&
+      st !== PRINT_STATE_CODE.printStarted &&
+      st !== PRINT_STATE_CODE.printPaused
+    ) {
+      const finalUsed = !isNaN(used)
+        ? used
+        : spool.currentJobExpectedLength ?? 0;
+      finalizeFilamentUsage(finalUsed, spool.currentPrintID);
+      remain = spool.remainingLengthMm;
     }
     setStoredData("filamentRemainingMm", remain, true);
   }
