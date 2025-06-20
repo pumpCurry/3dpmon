@@ -24,10 +24,12 @@
  * - {@link updateSpool}：スプール更新
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
+ * - {@link reserveFilament}：使用量予約
+ * - {@link finalizeFilamentUsage}：使用量確定
  *
- * @version 1.390.325 (PR #146)
+ * @version 1.390.346 (PR #155)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 17:22:33
+ * @lastModified 2025-06-20 23:06:38
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -343,6 +345,59 @@ export function useFilament(lengthMm, jobId = "") {
   s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
   logUsage(s, lengthMm, jobId);
+}
+
+/**
+ * 現在の印刷ジョブに必要なフィラメント長を予約する。
+ * 残量は減算せず開始時の値を保持するのみで、実際の減算は完了時に行う。
+ *
+ * @function reserveFilament
+ * @param {number} lengthMm - 予定消費量 [mm]
+ * @param {string} [jobId=""] - 印刷ジョブID
+ * @returns {void}
+ */
+export function reserveFilament(lengthMm, jobId = "") {
+  const s = getCurrentSpool();
+  if (!s) return;
+  const machine = monitorData.machines[currentHostname];
+  if (machine?.printStore?.current) {
+    machine.printStore.current.filamentId = s.id;
+  }
+  if (s.isPending) {
+    logSpoolChange(s, jobId);
+    s.isPending = false;
+  }
+  s.currentJobStartLength = s.remainingLengthMm;
+  s.currentJobExpectedLength = lengthMm;
+  s.currentPrintID = jobId;
+  saveUnifiedStorage();
+}
+
+/**
+ * 実際に使用したフィラメント長を残量に反映して確定する。
+ * 予約時に記録した startLength から使用量を差し引き更新する。
+ *
+ * @function finalizeFilamentUsage
+ * @param {number} lengthMm - 実使用量 [mm]
+ * @param {string} [jobId=""] - 印刷ジョブID
+ * @returns {void}
+ */
+export function finalizeFilamentUsage(lengthMm, jobId = "") {
+  const s = getCurrentSpool();
+  if (!s || s.currentPrintID !== jobId) return;
+  const startLen = s.currentJobStartLength ?? s.remainingLengthMm;
+  const used = Number(lengthMm);
+  if (!isNaN(used)) {
+    s.remainingLengthMm = Math.max(0, startLen - used);
+  }
+  s.printCount = (s.printCount || 0) + 1;
+  s.currentJobStartLength = null;
+  s.currentJobExpectedLength = null;
+  s.currentPrintID = "";
+  s.usedLengthLog.push({ jobId, used: used });
+  logUsage(s, used, jobId);
+  updateStoredDataToDOM();
+  saveUnifiedStorage();
 }
 
 /**
