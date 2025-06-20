@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.346 (PR #155)
+ * @version 1.390.347 (PR #156)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 23:06:38
+ * @lastModified 2025-06-20 23:48:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -123,7 +123,12 @@ export function ingestData(data) {
   if (jobRaw === null)    setStoredData("printJobTime",     null, true);
   if (leftRaw === null)   setStoredData("printLeftTime",    null, true);
   if (selfRaw === null)   setStoredData("withSelfTest",     null, true);
-  if (matLenRaw === null) setStoredData("usedMaterialLength", null, true);
+  if (matLenRaw === null) {
+    const machine = monitorData.machines[currentHostname];
+    if (machine && !("usedMaterialLength" in machine.storedData)) {
+      setStoredData("usedMaterialLength", null, true);
+    }
+  }
 
   // —— 型変換 ——  
   const prog    = Number(progRaw   ?? 0);
