@@ -17,9 +17,9 @@
  * - {@link PRINT_STATE_EVENT}：状態イベント表
  * - {@link dashboardMapping}：フィールドマッピング
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.332 (PR #150)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 17:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -217,7 +217,7 @@ export const dashboardMapping = {
   completionElapsedTime: { elementKey: "completionElapsedTime",   process: v => v != null ? { value: utils.formatDuration(v), unit: "" } : NO_VAL },
 
   // --- 材料関連 ---
-  usedMaterialLength:    { elementKey: "materialLength",          process: v => ({ value: v.toLocaleString(), unit: "mm" }) },
+  usedMaterialLength:    { elementKey: "materialLength",          process: v => ({ value: String(v), unit: "mm" }) },
   materialDetect:        { elementKey: "materialDetect",          process: v => ({ value: utils.formatBinary(v), unit: "" }) },
   materialStatus:        { elementKey: "materialStatus",          process: v => mapValue(MATERIAL_STATUS_MAP, v) },
 
