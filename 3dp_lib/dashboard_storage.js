@@ -88,7 +88,7 @@ function pushLog(msg, isErr = false) {
 /** localStorage へ保存するキー名 */
 const STORAGE_KEY = "3dp-monitor_1.400";
 /** 印刷履歴の最大保持件数 */
-const MAX_HISTORY = 150;
+const MAX_HISTORY = 250;
 
 /**
  * monitorData 全体を JSON にシリアライズし、localStorage に保存する。
