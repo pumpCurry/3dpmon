@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 フィラメント在庫管理モジュール
- * dashboard_filament_inventory.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメント在庫管理モジュール
+ * @file dashboard_filament_inventory.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_filament_inventory
  *
@@ -17,8 +18,12 @@
  * - {@link adjustInventory}：在庫数増減
  * - {@link consumeInventory}：消費登録
  *
- * @version 1.390.226 (PR #101)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.226 (PR #101)
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 "use strict";

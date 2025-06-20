@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 フィラメント交換ダイアログ モジュール
- * dashboard_filament_change.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメント交換ダイアログ モジュール
+ * @file dashboard_filament_change.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_filament_change
  *
@@ -13,9 +14,13 @@
  * 【公開関数一覧】
  * - {@link showFilamentChangeDialog}：交換ダイアログ表示
  *
- * @version 1.390.295 (PR #134)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.230 (PR #104)
-*/
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
 "use strict";
 
 import { getSpools, setCurrentSpoolId } from "./dashboard_spool.js";

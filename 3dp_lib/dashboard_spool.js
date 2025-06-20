@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 フィラメントスプール管理モジュール
- * dashboard_spool.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメントスプール管理モジュール
+ * @file dashboard_spool.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_spool
  *
@@ -26,6 +27,10 @@
  *
  * @version 1.390.318 (PR #141)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
 */
 
 "use strict";

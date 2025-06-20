@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 動画オーバーレイプレーヤー
- * dashboard_video_player.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 動画オーバーレイプレーヤー
+ * @file dashboard_video_player.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_video_player
  *
@@ -12,8 +13,12 @@
  * 【公開関数一覧】
  * - {@link showVideoOverlay}：動画を取得して再生
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 "use strict";

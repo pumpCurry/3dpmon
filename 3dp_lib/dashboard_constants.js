@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 定数定義モジュール
- * dashboard_constants.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 定数定義モジュール
+ * @file dashboard_constants.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_constants
  *
@@ -13,8 +14,12 @@
  * - {@link LEVELS}：使用可能レベル配列
  * - {@link ERROR_LEVELS}：エラーレベル集合
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 /**

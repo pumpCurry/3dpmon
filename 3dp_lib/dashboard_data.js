@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 データモデルモジュール
- * dashboard_data.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 データモデルモジュール
+ * @file dashboard_data.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_data
  *
@@ -19,9 +20,13 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.226 (PR #101)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.193 (PR #86)
-*/
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
 
 "use strict";
 
