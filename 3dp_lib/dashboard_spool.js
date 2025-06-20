@@ -25,7 +25,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.322 (PR #144)
+ * @version 1.390.323 (PR #145)
  * @since   1.390.193 (PR #86)
  * @lastModified 2025-06-20 17:18:46
  * -----------------------------------------------------------
@@ -118,6 +118,8 @@ export function setCurrentSpoolId(id) {
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
     newSpool.isPending = true;
+    // UI に即座に残量を反映させるため storedData を更新
+    setStoredData("filamentRemainingMm", newSpool.remainingLengthMm, true);
     // ----- 印刷履歴更新処理 -----
     // 起動直後にスプール情報が欠落している場合、
     // 現在ジョブおよび履歴からフィラメントIDを補完する
