@@ -20,9 +20,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.336 (PR #153)
+ * @version 1.390.352 (PR #156)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 22:29:17
+ * @lastModified 2025-06-21 07:41:35
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -32,6 +32,7 @@
 
 // プリセットフィラメント情報を取り込む
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+import { pushLog } from "./dashboard_log_util.js";
 
 /**
  * @typedef {Object} StoredDatum
@@ -229,8 +230,20 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
   }
   if (isRaw) {
     // 生値更新時は常にフラグを上書きする
+    const prevRaw  = d.rawValue;
+    const prevFlag = d.isFromEquipVal;
     d.rawValue = value;
     d.isFromEquipVal = (isFromEquipVal !== undefined ? isFromEquipVal : false);
+    // isFromEquipVal が true から false に変わり、値も変化した場合はログ出力
+    if (
+      prevFlag === true &&
+      d.isFromEquipVal === false &&
+      prevRaw !== value
+    ) {
+      const msg = `[setStoredData] isFromEquipVal changed to false for key: ${key}`;
+      console.error(msg);
+      pushLog(msg, "error");
+    }
   } else {
     // computedValue 更新時は指定があればフラグ更新、無ければ保持
     d.computedValue = value;
