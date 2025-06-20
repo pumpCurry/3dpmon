@@ -27,9 +27,9 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  *
- * @version 1.390.346 (PR #155)
+ * @version 1.390.348 (PR #155)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 23:06:38
+ * @lastModified 2025-06-20 14:50:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -70,6 +70,14 @@ export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
   return (area * lengthMm * d) / 1000; // g
 }
 
+/**
+ * スプール識別用の一意な ID を生成する。
+ *
+ * 日時と乱数を組み合わせた文字列を返す。
+ *
+ * @private
+ * @returns {string} 生成した ID
+ */
 function genId() {
   return `spool_${Date.now()}_${Math.random().toString(16).slice(2,8)}`;
 }

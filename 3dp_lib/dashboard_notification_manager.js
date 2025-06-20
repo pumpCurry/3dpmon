@@ -18,9 +18,9 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.348 (PR #155)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 14:50:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -200,13 +200,29 @@ export class NotificationManager {
   }
 
   // 新規メソッド：TTS 設定の変更
-  setTtsVoice(voice) { 
-    this.ttsVoice = voice; 
-    this._persistSettings(); 
+
+  /**
+   * 読み上げに使用する Voice 名を設定する。
+   * 設定後は永続ストレージにも保存される。
+   *
+   * @param {string} voice - 利用する音声エンジン名
+   * @returns {void}
+   */
+  setTtsVoice(voice) {
+    this.ttsVoice = voice;
+    this._persistSettings();
   }
-  setTtsRate(rate) { 
-    this.ttsRate = rate; 
-    this._persistSettings(); 
+
+  /**
+   * 読み上げ速度を設定する。
+   * 設定値は 0.1〜10 の範囲で利用される。
+   *
+   * @param {number} rate - TTS の再生速度
+   * @returns {void}
+   */
+  setTtsRate(rate) {
+    this.ttsRate = rate;
+    this._persistSettings();
   }
 
 
@@ -279,6 +295,16 @@ export class NotificationManager {
 
   }
 
+  /**
+   * Web Push 通知を送出する。
+   *
+   * Notification API が利用可能かを確認し、
+   * 権限が無い場合は許可取得を試みる。
+   *
+   * @private
+   * @param {string} body - 通知本文
+   * @returns {void}
+   */
   _sendWebPush(body) {
     if (!("Notification" in window)) {
       showAlert(body, "error");
@@ -297,16 +323,36 @@ export class NotificationManager {
     }
   }
 
+  /**
+   * Web Push 通知用タイトルを生成する。
+   *
+   * ホスト名を含めた文字列を返すが、長すぎる場合は短縮版を返す。
+   *
+   * @private
+   * @returns {string} 生成したタイトル文字列
+   */
   _genTitle() {
     const host = currentHostname || "unknown";
     const long = `3Dプリンタ監視ツール:${host}`;
     return long.length <= 30 ? long : `3Dプリンタ:${host}`;
   }
 
+  /**
+   * 指定タイプの通知を即座にテスト送信する。
+   *
+   * @param {string} type - テストする通知タイプ
+   * @returns {void}
+   */
   testNotification(type) {
     this.notify(type, {});
   }
 
+  /**
+   * すべての通知タイプを順番にテスト送信する。
+   *
+   * @param {number} [interval=500] - 各通知の送信間隔(ms)
+   * @returns {void}
+   */
   testAllNotifications(interval = 500) {
     this.getTypes().forEach((type, idx) =>
       setTimeout(() => this.notify(type), idx * interval)
