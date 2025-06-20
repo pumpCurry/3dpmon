@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.330 (PR #149)
 * @since   1.390.197 (PR #88)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 17:29:21
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -477,7 +477,15 @@ export async function refreshHistory(
   if (printing && curSpoolId && jobs[0] && !jobs[0].filamentId) {
     jobs[0].filamentId = curSpoolId;
     const sp = getSpoolById(curSpoolId);
-    if (sp && !sp.currentPrintID) sp.currentPrintID = jobs[0].id;
+    if (sp) {
+      if (!jobs[0].filamentColor && (sp.filamentColor || sp.color)) {
+        jobs[0].filamentColor = sp.filamentColor || sp.color;
+      }
+      if (!jobs[0].filamentType && (sp.material || sp.materialName)) {
+        jobs[0].filamentType = sp.material || sp.materialName;
+      }
+      if (!sp.currentPrintID) sp.currentPrintID = jobs[0].id;
+    }
     merged = true;
   }
 
