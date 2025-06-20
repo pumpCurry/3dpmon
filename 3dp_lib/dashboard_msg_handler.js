@@ -391,8 +391,11 @@ export function processData(data) {
   if (data.model) {
     setPrinterModel(String(data.model));
   }
+
   // (2.7.2) その他フィールド一括反映
-  Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true));
+  // 重要：ここで得られた値のみ、setstoredDataの第4フラグ(機器から得られる情報)をフラグONとする
+  Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true, true));
+
   // (2.7.3) 進捗100%以上で履歴登録
   if (Number(data.printProgress ?? 0) >= 100) {
     const entry = { ...data };
