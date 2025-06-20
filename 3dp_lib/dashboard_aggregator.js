@@ -110,8 +110,8 @@ export function ingestData(data) {
   const { value: bedRaw                    } = getMergedValueWithSource("bedTemp0",        data);
   const { value: maxBedRaw                 } = getMergedValueWithSource("maxBedTemp",      data);
   const { value: matStatRaw                } = getMergedValueWithSource("materialStatus",  data);
-  const { value: matLenRaw                 } =
-    getMergedValueWithSource("materialLength", data, "usagematerial");
+  //const { value: matLenRaw                 } =
+  //  getMergedValueWithSource("materialLength", data, "usagematerial");
 
   // —— キー初期化 ——  
   // まだ storedData に存在しないフィールドは rawValue=null で準備
@@ -119,7 +119,7 @@ export function ingestData(data) {
   if (jobRaw === null)    setStoredData("printJobTime",     null, true);
   if (leftRaw === null)   setStoredData("printLeftTime",    null, true);
   if (selfRaw === null)   setStoredData("withSelfTest",     null, true);
-  if (matLenRaw === null) setStoredData("usedMaterialLength", null, true);
+  //if (matLenRaw === null) setStoredData("usedMaterialLength", null, true);
 
   // —— 型変換 ——  
   const prog    = Number(progRaw   ?? 0);
