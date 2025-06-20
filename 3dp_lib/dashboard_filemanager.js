@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link FileManager}：履歴ロード・保存のユーティリティ
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.348 (PR #155)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 14:50:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -46,16 +46,28 @@ const MAX_HISTORY = 150;
  */
 
 /**
- * 履歴データを localStorage に保存する（内部用）。
+ * localStorage 保存用のキー文字列を生成する。
+ *
+ * ホストごとに個別のキーを返すことで、複数ホストの履歴が混ざる
+ * ことを防ぐ。
  *
  * @private
- * @param {HistoryEntry[]} historyList - 整形済み履歴エントリ配列
- * @param {VideoEntry[]}   videoList   - 関連動画エントリ配列
+ * @returns {string} 生成した保存用キー
  */
 function _storageKey() {
   return `${STORAGE_KEY_PREFIX}${currentHostname || 'default'}`;
 }
 
+/**
+ * 履歴データと関連動画リストを localStorage に保存する。
+ *
+ * 保存処理は try-catch で保護し、失敗時は警告のみを出力する。
+ *
+ * @private
+ * @param {HistoryEntry[]} historyList - 整形済み履歴エントリ配列
+ * @param {VideoEntry[]}   videoList   - 関連動画エントリ配列
+ * @returns {void}
+ */
 function _saveHistoryData(historyList, videoList) {
   const data = { historyList, elapseVideoList: videoList };
   try {

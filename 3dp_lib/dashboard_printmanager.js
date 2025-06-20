@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.330 (PR #149)
+ * @version 1.390.348 (PR #155)
 * @since   1.390.197 (PR #88)
- * @lastModified 2025-06-20 17:29:21
+ * @lastModified 2025-06-20 14:50:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -925,6 +925,13 @@ export function setupUploadUI() {
 
   let currentFile = null;
 
+  /**
+   * アップロード進捗バーを更新する。
+   *
+   * @param {number} loaded - 読み込み済みバイト数
+   * @param {number} total  - 全体のバイト数
+   * @returns {void}
+   */
   function updateProgress(loaded, total) {
     if (!total) { percentEl.textContent = "0%"; return; }
     const pct = Math.floor((loaded / total) * 100);
@@ -933,9 +940,18 @@ export function setupUploadUI() {
     percentEl.textContent = `${pct}% (残り ${remainMb}MB)`;
   }
 
+  /** 進捗バーを表示する */
   function showProgress() { progress.classList.remove("hidden"); }
+  /** 進捗バーを非表示にする */
   function hideProgress() { progress.classList.add("hidden"); updateProgress(0,0); }
 
+  /**
+   * ファイルを読み込んで文字列として返す。
+   * 読み込み中は進捗イベントでバーを更新する。
+   *
+   * @param {File} file - 読み込むファイル
+   * @returns {Promise<string>} 読み込んだテキスト
+   */
   function readFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -948,6 +964,12 @@ export function setupUploadUI() {
     });
   }
 
+  /**
+   * G-code 文字列から埋め込みサムネイルを抽出する。
+   *
+   * @param {string} text - G-code 全文
+   * @returns {string|null} 抽出した data URI。無ければ null
+   */
   function extractThumb(text) {
     const lines = text.split(/\r?\n/);
     const s = lines.findIndex(l => /^\s*;\s*png begin/.test(l));
@@ -970,6 +992,14 @@ export function setupUploadUI() {
     return _fileList.some(entry => entry.basename === fname);
   }
 
+  /**
+   * 選択されたファイルを読み込み、アップロード確認ダイアログを表示する。
+   *
+   * 読み込み中は進捗バーを表示し、サムネイル抽出も行う。
+   *
+   * @param {File} file - ユーザーが選択した G-code ファイル
+   * @returns {Promise<void>} 処理完了時に解決
+   */
   async function prepareAndConfirm(file) {
     currentFile = file;
     btn.disabled = true;
@@ -1026,6 +1056,14 @@ export function setupUploadUI() {
     return first?.textContent.trim() === fname;
   }
 
+  /**
+   * 指定ファイルをプリンタへアップロードする。
+   *
+   * XHR を用いて POST 送信し、結果に応じてダイアログ表示を行う。
+   *
+   * @param {File} file - アップロードするファイル
+   * @returns {void}
+   */
   function uploadFile(file) {
     btn.disabled = true;
     showProgress();
