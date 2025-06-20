@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.323 (PR #145)
+ * @version 1.390.332 (PR #150)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 14:41:39
+ * @lastModified 2025-06-20 17:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -110,7 +110,8 @@ export function ingestData(data) {
   const { value: bedRaw                    } = getMergedValueWithSource("bedTemp0",        data);
   const { value: maxBedRaw                 } = getMergedValueWithSource("maxBedTemp",      data);
   const { value: matStatRaw                } = getMergedValueWithSource("materialStatus",  data);
-  const { value: matLenRaw                 } = getMergedValueWithSource("materialLength", data);
+  const { value: matLenRaw                 } =
+    getMergedValueWithSource("materialLength", data, "usagematerial");
 
   // —— キー初期化 ——  
   // まだ storedData に存在しないフィールドは rawValue=null で準備
