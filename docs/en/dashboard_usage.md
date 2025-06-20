@@ -67,6 +67,8 @@ settings.
   `addSpool()` to track vendors or custom materials.
 - Remaining length is updated automatically after each job and the 3D preview
   warns when filament runs out.
+- If a spool is selected before the job finishes and the history entry lacks
+  filament information, the selected spool is added automatically.
   ```html
   <div id="filament-preview"></div>
   <script src="3dp_lib/dashboard_filament_view.js"></script>
