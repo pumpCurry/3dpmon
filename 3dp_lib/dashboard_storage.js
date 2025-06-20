@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.341 (PR #154)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-21 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -145,6 +145,7 @@ function cleanUpLegacyStorage() {
  * localStorage から monitorData を復元する。
  * - 統一キー(STORAGE_KEY) があればそれを優先
  * - なければレガシーキーから移行を試みる
+ * - monitorData.machines 配下の storedData は保存時の isFromEquipVal を保持
  *
  * @returns {void}
  */
@@ -186,6 +187,7 @@ export function restoreUnifiedStorage() {
 
 /**
  * レガシー形式で保存された storedData を currentHostname の機器に復元する。
+ * 復元時に isFromEquipVal フラグが存在しない場合は true を設定する。
  *
  * @returns {void}
  */
@@ -200,9 +202,19 @@ export function restoreLegacyStoredData() {
     const obj     = JSON.parse(raw);
     const machine = monitorData.machines[currentHostname];
     for (const [key, val] of Object.entries(obj)) {
-      machine.storedData[key] = (val && val.rawValue !== undefined)
-        ? val
-        : { rawValue: val, computedValue: null, isNew: true };
+      if (val && val.rawValue !== undefined) {
+        machine.storedData[key] = val;
+        if (machine.storedData[key].isFromEquipVal === undefined) {
+          machine.storedData[key].isFromEquipVal = true;
+        }
+      } else {
+        machine.storedData[key] = {
+          rawValue: val,
+          computedValue: null,
+          isNew: true,
+          isFromEquipVal: true
+        };
+      }
     }
     console.debug("[restoreLegacyStoredData] storedData を復元しました");
     pushLog("旧 storedData を復元しました");
