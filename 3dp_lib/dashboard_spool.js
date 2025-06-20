@@ -35,9 +35,14 @@
 
 "use strict";
 
-import { monitorData, currentHostname, setStoredData } from "./dashboard_data.js";
+import {
+  monitorData,
+  currentHostname,
+  setStoredData
+} from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
+import { updateStoredDataToDOM } from "./dashboard_ui.js";
 
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
@@ -164,6 +169,13 @@ export function setCurrentSpoolId(id) {
       if (buf) buf.filamentId = newSpool.id;
     }
   }
+
+  // 現在スプールの残量を storedData に即時反映
+  if (newSpool) {
+    setStoredData("filamentRemainingMm", newSpool.remainingLengthMm, true);
+    updateStoredDataToDOM();
+  }
+
   saveUnifiedStorage();
 }
 
