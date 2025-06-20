@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.323 (PR #145)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 14:41:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -561,7 +561,7 @@ export function aggregatorUpdate() {
       const job = loadPrintCurrent();
       const len = Number(job?.materialUsedMm ?? NaN);
       const jobId = job?.id ?? "";
-      if (!isNaN(len) && len > 0 && spool.currentPrintID !== jobId) {
+      if (!isNaN(len) && len > 0 && (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId)) {
         // ここでフィラメント使用予定を登録し、残量計算を有効化する
         const machine = monitorData.machines[currentHostname];
         if (machine?.printStore?.current) {

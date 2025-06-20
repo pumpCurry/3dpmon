@@ -25,9 +25,9 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.318 (PR #141)
+ * @version 1.390.323 (PR #145)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 14:41:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -35,7 +35,7 @@
 
 "use strict";
 
-import { monitorData, currentHostname } from "./dashboard_data.js";
+import { monitorData, currentHostname, setStoredData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 
@@ -113,6 +113,8 @@ export function setCurrentSpoolId(id) {
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
     newSpool.isPending = true;
+    // UI に即座に残量を反映させるため storedData を更新
+    setStoredData("filamentRemainingMm", newSpool.remainingLengthMm, true);
     // ----- 印刷履歴更新処理 -----
     // 起動直後にスプール情報が欠落している場合、
     // 現在ジョブおよび履歴からフィラメントIDを補完する
