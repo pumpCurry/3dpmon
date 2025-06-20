@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link formatDuration} ほか複数をエクスポート
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.341 (PR #144)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 22:42:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -306,12 +306,18 @@ function tryFallback(text, btn) {
 
 
 /**
- * checkUpdatedFields:
- * 指定されたフィールド群のどれかが isNew === true の場合に callback を実行し、結果を返す。
- * @param {string[]} fieldNames
- * @param {Function} callback
- * @param {Object} dataStore
- * @returns {boolean}
+ * checkUpdatedFields
+ * ------------------
+ * dataStore 内の各フィールドに設定された `isNew` フラグを確認し、
+ * 指定された `fieldNames` のいずれかで `true` が見つかった場合に
+ * `callback` を実行します。
+ * 呼び出し元では、更新検知後の共通処理をまとめる目的で利用します。
+ *
+ * @function checkUpdatedFields
+ * @param {string[]} fieldNames - チェック対象となるフィールド名の配列
+ * @param {Function} callback - 更新が検出されたときに呼び出される処理
+ * @param {Object<string, {isNew:boolean}>} dataStore - 各フィールドの状態を保持するオブジェクト
+ * @returns {boolean} 更新ありで callback を実行した場合は true、未更新なら false
  */
 function checkUpdatedFields(fieldNames, callback, dataStore) {
   const updated = fieldNames.some(fname => dataStore?.[fname]?.isNew === true);
