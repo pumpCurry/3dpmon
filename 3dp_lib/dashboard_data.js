@@ -20,9 +20,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.336 (PR #153)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-20 22:29:17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -35,9 +35,10 @@ import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 
 /**
  * @typedef {Object} StoredDatum
- * @property {*}     rawValue      元の生データ
- * @property {*}     computedValue UI 用に変換されたデータ
- * @property {boolean} isNew        DOM 反映対象フラグ
+ * @property {*}     rawValue        元の生データ
+ * @property {*}     computedValue   UI 用に変換されたデータ
+ * @property {boolean} isNew          DOM 反映対象フラグ
+ * @property {boolean} isFromEquipVal 設備値に由来するフラグ
  */
 
 /**
@@ -211,22 +212,33 @@ export function getCurrentMachine() {
  * setStoredData:
  *  - currentHostname の storedData[key] に raw/computed を設定し、isNew フラグを立てる
  *
- * @param {string} key     - フィールド名
- * @param {*}      value   - 設定する値
- * @param {boolean} [isRaw=false] - true のとき rawValue、false のとき computedValue として扱う
- */
-export function setStoredData(key, value, isRaw = false) {
+ * @param {string}  key                - フィールド名
+ * @param {*}       value              - 設定する値
+ * @param {boolean} [isRaw=false]      - true のとき rawValue、false のとき computedValue として扱う
+ * @param {boolean} [isFromEquipVal]
+ *   - isRaw=true の場合は指定値を保存し、未指定時は false。isRaw=false の場合は未指定なら保持、指定時は書き換え
+*/
+export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
   const machine = getCurrentMachine();
   if (!machine) return;
   let d = machine.storedData[key];
   if (!d) {
-    d = { rawValue: null, computedValue: null, isNew: true };
+    // 新しくキーが作成された場合は isFromEquipVal を明示的に設定する
+    d = { rawValue: null, computedValue: null, isNew: true, isFromEquipVal: false };
     machine.storedData[key] = d;
   }
   if (isRaw) {
+    // 生値更新時は常にフラグを上書きする
     d.rawValue = value;
+    d.isFromEquipVal = (isFromEquipVal !== undefined ? isFromEquipVal : false);
   } else {
+    // computedValue 更新時は指定があればフラグ更新、無ければ保持
     d.computedValue = value;
+    if (isFromEquipVal !== undefined) {
+      d.isFromEquipVal = isFromEquipVal;
+    } else if (d.isFromEquipVal === undefined) {
+      d.isFromEquipVal = false;
+    }
   }
   d.isNew = true;
 }
