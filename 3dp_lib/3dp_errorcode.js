@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 エラーコード定義モジュール
- * 3dp_errorcode.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 エラーコード定義モジュール
+ * @file 3dp_errorcode.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module 3dp_errorcode
  *
@@ -13,9 +14,15 @@
  * 【公開関数一覧】
  * - default export：エラーメッセージ関数のマップ
  *
- * @version 1.390.193 (PR #86)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.193 (PR #86)
- *
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
+
+/**
  * 【使用方法】
  *  例）エラーコード 2240 で v = ["abc", "def", "ghi", 3, 4] の場合:
  *       import errorMap from "./3dp_errorcode.js";

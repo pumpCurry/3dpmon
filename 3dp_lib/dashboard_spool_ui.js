@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 スプールUIモジュール
- * dashboard_spool_ui.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 スプールUIモジュール
+ * @file dashboard_spool_ui.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_spool_ui
  *
@@ -13,8 +14,12 @@
  * 【公開関数一覧】
  * - なし（DOMContentLoaded で自動初期化）
  *
- * @version 1.390.264 (PR #120)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 "use strict";
 
