@@ -25,7 +25,7 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.318 (PR #141)
  * @since   1.390.193 (PR #86)
  * @lastModified 2025-06-19 22:38:18
  * -----------------------------------------------------------
@@ -113,6 +113,24 @@ export function setCurrentSpoolId(id) {
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
     newSpool.isPending = true;
+    // ----- 印刷履歴更新処理 -----
+    // 起動直後にスプール情報が欠落している場合、
+    // 現在ジョブおよび履歴からフィラメントIDを補完する
+    if (machine.printStore) {
+      const curJob = machine.printStore.current;
+      if (curJob && !curJob.filamentId && curJob.id === printId) {
+        curJob.filamentId = newSpool.id;
+      }
+      const hist = machine.printStore.history;
+      if (Array.isArray(hist)) {
+        const entry = hist.find(h => h.id === printId && !h.filamentId);
+        if (entry) entry.filamentId = newSpool.id;
+      }
+    }
+    if (Array.isArray(machine.historyData)) {
+      const buf = machine.historyData.find(h => h.id === printId && !h.filamentId);
+      if (buf) buf.filamentId = newSpool.id;
+    }
   }
   saveUnifiedStorage();
 }
