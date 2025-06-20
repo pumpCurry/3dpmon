@@ -25,9 +25,9 @@
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
  *
- * @version 1.390.323 (PR #145)
+ * @version 1.390.325 (PR #146)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 14:41:39
+ * @lastModified 2025-06-20 17:22:33
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -71,18 +71,48 @@ export function getSpools(includeDeleted = false) {
   return includeDeleted ? monitorData.filamentSpools : monitorData.filamentSpools.filter(s => !s.deleted);
 }
 
+/**
+ * 指定IDに一致するスプール情報を取得する。
+ * monitorData.filamentSpools から削除されていないエントリを検索し、
+ * 見つかった場合はそのオブジェクトを返す。データの変更は行わない。
+ *
+ * @function getSpoolById
+ * @param {string} id - 取得したいスプールのID
+ * @returns {Object|null} - スプールオブジェクト。存在しない場合は null
+ */
 export function getSpoolById(id) {
   return monitorData.filamentSpools.find(s => s.id === id && !s.deleted) || null;
 }
 
+/**
+ * 現在設定されているスプールIDを返す。
+ * monitorData.currentSpoolId を参照するだけで副作用はない。
+ * @function getCurrentSpoolId
+ * @returns {string|null} - 現在のスプールID。未設定時は null
+ */
 export function getCurrentSpoolId() {
   return monitorData.currentSpoolId;
 }
 
+/**
+ * 現在使用中のスプール情報を取得する。
+ * {@link getSpoolById} を利用する単純な参照で副作用はない。
+ * @function getCurrentSpool
+ * @returns {Object|null} - 現在のスプールオブジェクト。無い場合は null
+ */
 export function getCurrentSpool() {
   return getSpoolById(monitorData.currentSpoolId);
 }
 
+/**
+ * 現在使用するスプールIDを更新し状態を反映する。
+ * monitorData.currentSpoolId や対象スプールのフラグを変更し、
+ * 必要に応じて履歴情報や残量を更新する副作用がある。
+ *
+ * @function setCurrentSpoolId
+ * @param {string} id - 新しく設定するスプールID
+ * @returns {void}
+ */
 export function setCurrentSpoolId(id) {
   const prevId = monitorData.currentSpoolId;
   if (prevId === id) return;
