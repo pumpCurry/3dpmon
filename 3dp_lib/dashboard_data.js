@@ -20,9 +20,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.336 (PR #152)
+ * @version 1.390.336 (PR #153)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 22:23:16
+ * @lastModified 2025-06-20 22:29:17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -215,10 +215,10 @@ export function getCurrentMachine() {
  * @param {string}  key                - フィールド名
  * @param {*}       value              - 設定する値
  * @param {boolean} [isRaw=false]      - true のとき rawValue、false のとき computedValue として扱う
- * @param {boolean} [isFromEquipVal=false]
- *   - isRaw が true の場合のみフラグに反映。computedValue 更新時は既存値を保持
+ * @param {boolean} [isFromEquipVal]
+ *   - isRaw=true の場合は指定値を保存し、未指定時は false。isRaw=false の場合は未指定なら保持、指定時は書き換え
 */
-export function setStoredData(key, value, isRaw = false, isFromEquipVal = false) {
+export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
   const machine = getCurrentMachine();
   if (!machine) return;
   let d = machine.storedData[key];
@@ -228,13 +228,15 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal = false)
     machine.storedData[key] = d;
   }
   if (isRaw) {
-    // 生値更新時のみ isFromEquipVal を反映する
+    // 生値更新時は常にフラグを上書きする
     d.rawValue = value;
-    d.isFromEquipVal = isFromEquipVal;
+    d.isFromEquipVal = (isFromEquipVal !== undefined ? isFromEquipVal : false);
   } else {
-    // computedValue 更新時はフラグを変更しない
+    // computedValue 更新時は指定があればフラグ更新、無ければ保持
     d.computedValue = value;
-    if (d.isFromEquipVal === undefined) {
+    if (isFromEquipVal !== undefined) {
+      d.isFromEquipVal = isFromEquipVal;
+    } else if (d.isFromEquipVal === undefined) {
       d.isFromEquipVal = false;
     }
   }
