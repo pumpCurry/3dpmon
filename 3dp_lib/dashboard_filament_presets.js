@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 フィラメントプリセットデータモジュール
- * dashboard_filament_presets.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメントプリセットデータモジュール
+ * @file dashboard_filament_presets.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_filament_presets
  *
@@ -12,8 +13,12 @@
  * 【公開関数一覧】
  * - {@link FILAMENT_PRESETS}: プリセットデータ配列
  *
- * @version 1.390.206 (PR #92)
+ * @version 1.390.317 (PR #143)
  * @since   v1.390.0
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 "use strict";

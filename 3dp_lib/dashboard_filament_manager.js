@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 フィラメント管理モーダル モジュール
- * dashboard_filament_manager.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメント管理モーダル モジュール
+ * @file dashboard_filament_manager.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_filament_manager
  *
@@ -13,9 +14,13 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.307 (PR #139)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.228 (PR #102)
-*/
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
 
 "use strict";
 

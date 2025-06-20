@@ -1,8 +1,9 @@
 /**
  * @fileoverview
- * 3Dプリンタ監視ツール 3dpmon 用 ダッシュボード初期化処理 モジュール
- * 3dp_dashboard_init.js
- * (c) pumpCurry 2025
+ * @description 3Dプリンタ監視ツール 3dpmon 用 ダッシュボード初期化処理 モジュール
+ * @file 3dp_dashboard_init.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
  * -----------------------------------------------------------
  * @module 3dp_dashboard_init
  *
@@ -16,9 +17,13 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.224 (PR #100)
+ * @version 1.390.317 (PR #143)
  * @since   1.390.193 (PR #86)
-*/
+ * @lastModified 2025-06-19 22:38:18
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
 
 "use strict";
 
