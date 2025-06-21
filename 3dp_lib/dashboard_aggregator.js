@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.362 (PR #161)
+* @version 1.390.366 (PR #164)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-21 23:51:50
+* @lastModified 2025-06-22 05:18:34
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -569,10 +569,11 @@ export function aggregatorUpdate() {
 
   // --- フィラメント残量の動的計算 ---
   const spool = getCurrentSpool();
-  if (spool) {
+  // usedMaterialLength 受信時だけ残量計算を更新
+  if (spool && storedData.usedMaterialLength?.isNew) {
     const st   = Number(storedData.state?.rawValue || 0);
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
-    const used = Number(storedData.usedMaterialLength?.rawValue ?? NaN);
+    const used = Number(storedData.usedMaterialLength.rawValue);
     let est  = Number(storedData.materialLength?.rawValue ?? NaN);
     if (isNaN(est)) {
       est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
@@ -627,6 +628,9 @@ export function aggregatorUpdate() {
       finalizeFilamentUsage(finalUsed, spool.currentPrintID);
       remain = spool.remainingLengthMm;
     }
+
+    // 小数点以下2桁に丸めて保持
+    remain = Math.round(remain * 100) / 100;
     setStoredData("filamentRemainingMm", remain, true);
   }
 

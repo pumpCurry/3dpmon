@@ -17,9 +17,9 @@
  * - {@link PRINT_STATE_EVENT}：状態イベント表
  * - {@link dashboardMapping}：フィールドマッピング
  *
- * @version 1.390.332 (PR #150)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 17:00:00
+* @version 1.390.366 (PR #164)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 05:18:34
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -218,6 +218,7 @@ export const dashboardMapping = {
 
   // --- 材料関連 ---
   usedMaterialLength:    { elementKey: "materialLength",          process: v => ({ value: String(v), unit: "mm" }) },
+  filamentRemainingMm:  { elementKey: "filamentRemainingMm",    process: v => ({ value: String(v), unit: "mm" }) },
   materialDetect:        { elementKey: "materialDetect",          process: v => ({ value: utils.formatBinary(v), unit: "" }) },
   materialStatus:        { elementKey: "materialStatus",          process: v => mapValue(MATERIAL_STATUS_MAP, v) },
 
