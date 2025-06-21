@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.347 (PR #156)
+ * @version 1.390.357 (PR #159)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 23:48:30
+ * @lastModified 2025-06-21 10:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -558,9 +558,10 @@ export function aggregatorUpdate() {
   // --- フィラメント残量の動的計算 ---
   const spool = getCurrentSpool();
   if (spool) {
-    const st = Number(storedData.state?.rawValue || 0);
+    const st   = Number(storedData.state?.rawValue || 0);
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
     const used = Number(storedData.usedMaterialLength?.rawValue ?? NaN);
+    const est  = Number(storedData.materialLength?.rawValue ?? NaN);
     let remain = spool.remainingLengthMm;
 
     // 外部から印刷が開始された場合、reserveFilament() 相当の初期化を行う
@@ -569,8 +570,11 @@ export function aggregatorUpdate() {
       spool.currentJobExpectedLength == null
     ) {
       const job = loadPrintCurrent();
-      const len = Number(job?.materialUsedMm ?? NaN);
+      let len   = Number(job?.materialUsedMm ?? NaN);
       const jobId = job?.id ?? "";
+      if (isNaN(len) || len <= 0) {
+        len = est;
+      }
       if (!isNaN(len) && len > 0 && (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId)) {
         // ここでフィラメント使用予定を登録し、残量計算を有効化する
         const machine = monitorData.machines[currentHostname];
