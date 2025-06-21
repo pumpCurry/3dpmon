@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.348 (PR #155)
-* @since   1.390.197 (PR #88)
- * @lastModified 2025-06-20 14:50:39
+ * @version 1.390.363 (PR #160)
+ * @since   1.390.197 (PR #88)
+ * @lastModified 2025-06-21 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -294,6 +294,7 @@ export function jobsToRaw(jobs) {
       ...(job.filamentId            !== undefined && { filamentId:            job.filamentId }),
       ...(job.filamentColor         !== undefined && { filamentColor:         job.filamentColor }),
       ...(job.filamentType          !== undefined && { filamentType:          job.filamentType })
+      ,...(job.filamentInfo         !== undefined && { filamentInfo:         job.filamentInfo })
     };
   });
 }
@@ -705,7 +706,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const videoLink = raw.videoUrl
       ? `<button class="video-link" data-url="${raw.videoUrl}">📹</button>`
       : "";
-    const spool      = getSpoolById(raw.filamentId) || null;
+    const spoolInfos = Array.isArray(raw.filamentInfo)
+      ? raw.filamentInfo
+      : (raw.filamentId ? [{ spoolId: raw.filamentId }] : []);
     const matColors = {
       PLA: '#FFEDD5',
       'PLA+': '#FED7AA',
@@ -713,14 +716,26 @@ export function renderHistoryTable(rawArray, baseUrl) {
       ABS: '#FECACA',
       TPU: '#E9D5FF'
     };
-    const matColor  = spool ? (matColors[spool.material] || '#EEE') : '#EEE';
-    const colorBox  = spool ? `<span class="filament-color-box" style="color:${spool.filamentColor};">■</span>` : '■';
-    const matTag    = spool ? `<span class="material-tag" style="background:${matColor};">${spool.material}</span>` : '';
-    const spoolText = spool
-      ? `${colorBox} ${matTag} ${spool.name}/${spool.colorName} <button class="spool-edit" data-id="${raw.id}">修正</button>`
-      : '(不明)';
-    const printCnt  = spool?.printCount ?? 0;
-    const remainLen = spool?.remainingLengthMm ?? 0;
+    const spoolTexts = [];
+    const countTexts = [];
+    const remainTexts = [];
+    spoolInfos.forEach((info, idx) => {
+      const sp = getSpoolById(info.spoolId) || null;
+      const matColor = sp ? (matColors[sp.material] || '#EEE') : '#EEE';
+      const colorBox = sp ? `<span class="filament-color-box" style="color:${sp.filamentColor};">■</span>` : '■';
+      const matTag   = sp ? `<span class="material-tag" style="background:${matColor};">${sp.material}</span>` : '';
+      let text = sp ? `${colorBox} ${matTag} ${sp.name}/${sp.colorName}` : '(不明)';
+      if (idx === 0) {
+        const editId = info.spoolId || raw.filamentId;
+        if (editId) text += ` <button class="spool-edit" data-id="${editId}">修正</button>`;
+      }
+      spoolTexts.push(text);
+      countTexts.push(info.spoolCount ?? sp?.printCount ?? 0);
+      remainTexts.push(info.expectedRemain ?? sp?.remainingLengthMm ?? 0);
+    });
+    const spoolText = spoolTexts.join('<br>');
+    const printCnt  = countTexts.join('<br>');
+    const remainLen = remainTexts.join('<br>');
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -767,8 +782,9 @@ export function renderHistoryTable(rawArray, baseUrl) {
     tr.querySelector(".video-link")?.addEventListener("click", () => {
       showVideoOverlay(raw.videoUrl);
     });
-    tr.querySelector(".spool-edit")?.addEventListener("click", async () => {
-      const sp = getSpoolById(raw.filamentId);
+    tr.querySelector(".spool-edit")?.addEventListener("click", async ev => {
+      const sid = ev.currentTarget?.dataset.id;
+      const sp = sid ? getSpoolById(sid) : null;
       if (!sp) {
         alert("スプール情報が見つかりません");
         return;

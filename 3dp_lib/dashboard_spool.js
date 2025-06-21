@@ -27,9 +27,9 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  *
- * @version 1.390.348 (PR #155)
+ * @version 1.390.363 (PR #160)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 14:50:39
+ * @lastModified 2025-06-21 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -403,6 +403,19 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   s.currentJobExpectedLength = null;
   s.currentPrintID = "";
   s.usedLengthLog.push({ jobId, used: used });
+  // 現在のスプール情報を履歴に追加
+  const machine = monitorData.machines[currentHostname];
+  if (machine && Array.isArray(machine.historyData)) {
+    const entry = machine.historyData.find(h => h.id === jobId);
+    if (entry) {
+      entry.filamentInfo ??= [];
+      entry.filamentInfo.push({
+        spoolId: s.id,
+        spoolCount: s.printCount,
+        expectedRemain: s.remainingLengthMm
+      });
+    }
+  }
   logUsage(s, used, jobId);
   updateStoredDataToDOM();
   saveUnifiedStorage();
