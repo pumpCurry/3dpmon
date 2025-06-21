@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
- * @version 1.390.357 (PR #159)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-21 10:00:00
+* @version 1.390.362 (PR #161)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-21 23:51:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -114,8 +114,14 @@ export function ingestData(data) {
   const { value: bedRaw                    } = getMergedValueWithSource("bedTemp0",        data);
   const { value: maxBedRaw                 } = getMergedValueWithSource("maxBedTemp",      data);
   const { value: matStatRaw                } = getMergedValueWithSource("materialStatus",  data);
-  const { value: matLenRaw                 } =
-    getMergedValueWithSource("materialLength", data, "usagematerial");
+  // "usedMaterialLength" が送られてくる場合があるため、まずはこちらを優先的に取得し、
+  // なければ旧形式の "usagematerial" を参照する
+  let   { value: matLenRaw, source: matSrc } =
+    getMergedValueWithSource("materialLength", data, "usedMaterialLength");
+  if (matSrc === "none") {
+    ({ value: matLenRaw, source: matSrc } =
+      getMergedValueWithSource("materialLength", data, "usagematerial"));
+  }
 
   // —— キー初期化 ——  
   // まだ storedData に存在しないフィールドは rawValue=null で準備
@@ -142,7 +148,13 @@ export function ingestData(data) {
   const matStat = Number(matStatRaw ?? 0);
   const matLen  = Number(matLenRaw  ?? NaN);
 
-  if (!isNaN(matLen)) setStoredData("usedMaterialLength", matLen, true);
+  if (!isNaN(matLen)) {
+    // 実際に消費した長さとして usedMaterialLength に保存
+    // 第4引数はJSON受信時以外では使用しない
+    setStoredData("usedMaterialLength", matLen, true);
+    // 後続処理用の推定値として materialLengthFallback に保持
+    setStoredData("materialLengthFallback", matLen, true);
+  }
 
   // (0) 新しい PrintID 検出 → 全リセット
   if (id !== prevPrintID) {
@@ -561,7 +573,10 @@ export function aggregatorUpdate() {
     const st   = Number(storedData.state?.rawValue || 0);
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
     const used = Number(storedData.usedMaterialLength?.rawValue ?? NaN);
-    const est  = Number(storedData.materialLength?.rawValue ?? NaN);
+    let est  = Number(storedData.materialLength?.rawValue ?? NaN);
+    if (isNaN(est)) {
+      est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
+    }
     let remain = spool.remainingLengthMm;
 
     // 外部から印刷が開始された場合、reserveFilament() 相当の初期化を行う
@@ -575,7 +590,14 @@ export function aggregatorUpdate() {
       if (isNaN(len) || len <= 0) {
         len = est;
       }
-      if (!isNaN(len) && len > 0 && (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId)) {
+      if ((isNaN(len) || len <= 0) && storedData.fileName?.rawValue) {
+        len = guessExpectedLength(storedData.fileName.rawValue);
+      }
+      if (isNaN(len) || len < 0) {
+        // 予定使用量が取得できない場合は 0 とみなし、使用量のみを追跡する
+        len = 0;
+      }
+      if (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId) {
         // ここでフィラメント使用予定を登録し、残量計算を有効化する
         const machine = monitorData.machines[currentHostname];
         if (machine?.printStore?.current) {
@@ -612,6 +634,38 @@ export function aggregatorUpdate() {
   persistAggregatorState();
   saveUnifiedStorage();
 
+}
+
+// ---------------------------------------------------------------------------
+// guessExpectedLength: 履歴から予定使用量を推測
+// ---------------------------------------------------------------------------
+/**
+ * 過去の履歴や保存済みファイル情報から予定フィラメント長を推測する。
+ *
+ * @private
+ * @param {string} filePath - G-code ファイルのフルパスまたはファイル名
+ * @returns {number} 推定された使用長 [mm]。不明な場合は NaN
+ */
+function guessExpectedLength(filePath) {
+  const machine = monitorData.machines[currentHostname];
+  if (!machine) return NaN;
+  const base = filePath.split("/").pop();
+  // 1) printStore.history から検索
+  for (const job of machine.printStore?.history || []) {
+    if (job.rawFilename === filePath || job.filename === base) {
+      const v = Number(job.materialUsedMm);
+      if (!isNaN(v) && v > 0) return v;
+    }
+  }
+  // 2) machine.historyData から検索
+  for (const entry of machine.historyData || []) {
+    const fn = entry.filename || "";
+    if (fn === filePath || fn.split("/").pop() === base) {
+      const v = Number(entry.usedMaterialLength ?? entry.usagematerial ?? NaN);
+      if (!isNaN(v) && v > 0) return v;
+    }
+  }
+  return NaN;
 }
 
 // ---------------------------------------------------------------------------
