@@ -387,16 +387,16 @@ export function processData(data) {
       machine.runtimeData.curPosition = data.curPosition;
     }
   }
-  // (2.7.1b) プリンタモデルに基づくプレビュー設定
+  // (2.7.2) プリンタモデルに基づくプレビュー設定
   if (data.model) {
     setPrinterModel(String(data.model));
   }
 
-  // (2.7.2) その他フィールド一括反映
+  // (2.7.3) その他フィールド一括反映
   // 重要：ここで得られた値のみ、setstoredDataの第4フラグ(機器から得られる情報)をフラグONとする
   Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true, true));
 
-  // (2.7.3) 進捗100%以上で履歴登録
+  // (2.7.4) 進捗100%以上で履歴登録
   if (Number(data.printProgress ?? 0) >= 100) {
     const entry = { ...data };
     const extraKeys = [
