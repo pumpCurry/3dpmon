@@ -27,9 +27,9 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  *
- * @version 1.390.365 (PR #163)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 04:36:19
+* @version 1.390.371 (PR #167)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 05:35:58
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -388,6 +388,10 @@ export function reserveFilament(lengthMm, jobId = "") {
  * @param {number} lengthMm - 実使用量 [mm]
  * @param {string} [jobId=""] - 印刷ジョブID
  * @returns {void}
+ * @description
+ * 使用完了時点のスプール情報を履歴にスナップショットとして保存する。
+ * スプール名や色を後から変更しても当時の状態を保持するため、
+ * name/color/material などのメタ情報を同時に記録する。
  */
 export function finalizeFilamentUsage(lengthMm, jobId = "") {
   const s = getCurrentSpool();
@@ -410,6 +414,10 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
       entry.filamentInfo ??= [];
       entry.filamentInfo.push({
         spoolId: s.id,
+        spoolName: s.name,
+        colorName: s.colorName,
+        filamentColor: s.filamentColor,
+        material: s.material,
         spoolCount: s.printCount,
         expectedRemain: s.remainingLengthMm
       });
