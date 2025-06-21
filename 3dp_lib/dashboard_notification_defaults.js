@@ -14,9 +14,9 @@
  * - {@link DEFAULT_SOUND}：既定サウンドファイル名
  * - {@link defaultNotificationMap}：通知設定マップ
  *
-* @version 1.390.317 (PR #143)
+* @version 1.390.366 (PR #159)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-19 22:38:18
+* @lastModified 2025-06-22 05:21:50
 * -----------------------------------------------------------
 * @todo
 * - none
@@ -47,6 +47,33 @@ export const defaultNotificationMap = {
   timeLeft10:       { talk: "{hostname} 印刷終了まで残り10分です",                                 sound: DEFAULT_SOUND, enabled: true, level: "info"    },
   timeLeft5:        { talk: "{hostname} 印刷終了まで残り5分です",                                  sound: DEFAULT_SOUND, enabled: true, level: "info"    },
   timeLeft1:        { talk: "{hostname} 印刷終了まで残り1分です",                                  sound: DEFAULT_SOUND, enabled: true, level: "info"    },
+  // ──────────────────────────────────────────────────────────────────────────
+  // カメライベント
+  // ──────────────────────────────────────────────────────────────────────────
+  cameraConnectionStopped: {
+    talk: "カメラストリーム停止",
+    sound: DEFAULT_SOUND,
+    enabled: true,
+    level: "info"
+  },
+  cameraConnectionFailed: {
+    talk: "カメラ自動リトライ上限に達しました",
+    sound: DEFAULT_SOUND,
+    enabled: true,
+    level: "error"
+  },
+  cameraConnected: {
+    talk: "カメラ接続成功",
+    sound: DEFAULT_SOUND,
+    enabled: true,
+    level: "success"
+  },
+  cameraServiceStopped: {
+    talk: "機器側の動画配信サービスが異常停止しています",
+    sound: DEFAULT_SOUND,
+    enabled: true,
+    level: "error"
+  },
 
   // ──────────────────────────────────────────────────────────────────────────
   // 追加：ノズル／ベッドそれぞれの「上限温度に対する達成度」アラート
