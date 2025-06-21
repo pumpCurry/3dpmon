@@ -218,6 +218,8 @@ export function getCurrentMachine() {
  * @param {boolean} [isRaw=false]      - true のとき rawValue、false のとき computedValue として扱う
  * @param {boolean} [isFromEquipVal]
  *   - isRaw=true の場合は指定値を保存し、未指定時は false。isRaw=false の場合は未指定なら保持、指定時は書き換え
+ *   - isFromEquipValは、指定を禁止する(undefinedになるようにする)。
+ *     - 利用可能な条件は、起動時のリストアと、handleMessage内 2.7.3 のみ。
 */
 export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
   const machine = getCurrentMachine();
