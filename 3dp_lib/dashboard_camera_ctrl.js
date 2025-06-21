@@ -18,9 +18,9 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
- * @version 1.390.317 (PR #143)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+* @version 1.390.368 (PR #164)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 05:10:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -268,6 +268,7 @@ function _connectImgStream(host) {
       serviceStoppedNotified = true;
       updateCameraConnectionUI("disconnected");
       pushLog("機器側の動画配信サービスが異常停止しています", "error");
+      // サービス停止通知を即時に発火
       notificationManager.notify("cameraServiceStopped");
       return; // リトライ打ち切り
     }

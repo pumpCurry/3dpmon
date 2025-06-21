@@ -23,9 +23,9 @@
  * - {@link pushLog}：ログ追加
  * - {@link pushNotificationLog}：通知レベルログ追加
  *
- * @version 1.390.317 (PR #143)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+* @version 1.390.368 (PR #164)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 05:10:00
  * -----------------------------------------------------------
  * @todo
  * - none

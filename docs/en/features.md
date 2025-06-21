@@ -46,6 +46,7 @@ Manage localStorage data and import/export configuration.
 
 ### Notification Settings
 Enable sound effects and set thresholds.
+All notification messages, including the camera service stopped alert, can be customized.
 
 ### Filament Spool
 Register and edit filament spools.
