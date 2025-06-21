@@ -18,9 +18,9 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.348 (PR #155)
+ * @version 1.390.355 (PR #158)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 14:50:39
+ * @lastModified 2025-06-21 09:45:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -144,8 +144,8 @@ export class NotificationManager {
     this.ttsVoice   = ""; // Web Speech API voice name
     this.ttsRate    = 1.8;      // 0.5～3.0
 
-    // 永続化済み設定をインスタンスに反映
-    this.loadSettings();
+    // 永続化済み設定の読み込みは initializeDashboard() から
+    // 行うため、コンストラクタでは呼び出さない。
 
     // level プロパティがない場合は "info" を補填
     Object.values(this.map).forEach(cfg => {
