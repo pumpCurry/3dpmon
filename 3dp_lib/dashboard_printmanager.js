@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.363 (PR #160)
- * @since   1.390.197 (PR #88)
- * @lastModified 2025-06-21 15:00:00
+* @version 1.390.371 (PR #167)
+* @since   1.390.197 (PR #88)
+* @lastModified 2025-06-22 05:35:58
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -721,10 +721,14 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const remainTexts = [];
     spoolInfos.forEach((info, idx) => {
       const sp = getSpoolById(info.spoolId) || null;
-      const matColor = sp ? (matColors[sp.material] || '#EEE') : '#EEE';
-      const colorBox = sp ? `<span class="filament-color-box" style="color:${sp.filamentColor};">■</span>` : '■';
-      const matTag   = sp ? `<span class="material-tag" style="background:${matColor};">${sp.material}</span>` : '';
-      let text = sp ? `${colorBox} ${matTag} ${sp.name}/${sp.colorName}` : '(不明)';
+      const mat = info.material || sp?.material || '';
+      const matColor = mat ? (matColors[mat] || '#EEE') : '#EEE';
+      const color = info.filamentColor || sp?.filamentColor || '#000';
+      const colorBox = `<span class="filament-color-box" style="color:${color};">■</span>`;
+      const matTag   = mat ? `<span class="material-tag" style="background:${matColor};">${mat}</span>` : '';
+      const name = info.spoolName || sp?.name || '';
+      const colName = info.colorName || sp?.colorName || '';
+      let text = name || colName ? `${colorBox} ${matTag} ${name}/${colName}` : '(不明)';
       if (idx === 0) {
         const editId = info.spoolId || raw.filamentId;
         if (editId) text += ` <button class="spool-edit" data-id="${editId}">修正</button>`;
