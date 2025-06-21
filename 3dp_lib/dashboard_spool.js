@@ -27,9 +27,9 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  *
- * @version 1.390.363 (PR #160)
+ * @version 1.390.365 (PR #163)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-21 15:00:00
+ * @lastModified 2025-06-22 04:36:19
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -349,7 +349,6 @@ export function useFilament(lengthMm, jobId = "") {
   s.currentJobExpectedLength = lengthMm;
   // 残量を先に減算して保持
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
-  s.printCount = (s.printCount || 0) + 1;
   s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
   logUsage(s, lengthMm, jobId);
