@@ -27,9 +27,9 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  *
-* @version 1.390.371 (PR #167)
+* @version 1.390.376 (PR #167)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 05:35:58
+* @lastModified 2025-06-22 11:00:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -377,6 +377,24 @@ export function reserveFilament(lengthMm, jobId = "") {
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = lengthMm;
   s.currentPrintID = jobId;
+  // --- 印刷開始時点で履歴にスプール情報を記録 -------------------
+  if (machine && Array.isArray(machine.historyData)) {
+    const entry = machine.historyData.find(h => h.id === jobId);
+    if (entry) {
+      entry.filamentInfo ??= [];
+      if (!entry.filamentInfo.some(info => info.spoolId === s.id)) {
+        entry.filamentInfo.push({
+          spoolId: s.id,
+          spoolName: s.name,
+          colorName: s.colorName,
+          filamentColor: s.filamentColor,
+          material: s.material,
+          spoolCount: s.printCount,
+          expectedRemain: s.remainingLengthMm
+        });
+      }
+    }
+  }
   saveUnifiedStorage();
 }
 
