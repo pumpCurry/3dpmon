@@ -18,9 +18,9 @@
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.415 (PR #188)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-22 17:14:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -286,5 +286,37 @@ export function initUIEventHandlers() {
   initAutoScrollHandlers();
   initTabHandlers();
   initializeCommandPalette();
+  adjustPrintCurrentCardPosition();
+  window.addEventListener("resize", adjustPrintCurrentCardPosition);
+}
+
+/**
+ * 温度グラフと操作パネルの配置状況に応じて
+ * "現在の印刷" カードを移動させる。
+ *
+ * 温度グラフが操作パネルと同じ行に配置されている場合のみ
+ * グラフの直後へ挿入し、折り返している場合は
+ * 履歴カードの直前に戻す。
+ *
+ * @function adjustPrintCurrentCardPosition
+ * @private
+ * @returns {void}
+ */
+function adjustPrintCurrentCardPosition() {
+  const graph = document.querySelector(".graph-wrapper");
+  const info = document.querySelector(".info-wrapper");
+  const printCard = document.getElementById("print-current-card");
+  const historyCard = document.getElementById("print-history-card");
+  if (!graph || !info || !printCard || !historyCard) return;
+
+  const sameRow = Math.abs(graph.offsetTop - info.offsetTop) < 5;
+
+  if (sameRow) {
+    if (graph.nextSibling !== printCard) {
+      graph.parentNode.insertBefore(printCard, graph.nextSibling);
+    }
+  } else if (historyCard.parentNode && historyCard.previousSibling !== printCard) {
+    historyCard.parentNode.insertBefore(printCard, historyCard);
+  }
 }
 
