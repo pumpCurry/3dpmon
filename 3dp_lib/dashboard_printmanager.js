@@ -757,8 +757,8 @@ export function renderHistoryTable(rawArray, baseUrl) {
         <button class="cmd-rename">名前変更</button>
         <button class="cmd-delete">削除</button>
       </td>
-      <td>${index + 1}</td>
-      <td>${raw.id}</td>
+      <td data-key="number">${index + 1}</td>
+      <td data-key="id">${raw.id}</td>
       <td>
         <img
           src="${thumbUrl}"
@@ -769,20 +769,20 @@ export function renderHistoryTable(rawArray, baseUrl) {
       </td>
       <td>${name}</td>
       <td data-key="startway">${startwayLabel}</td>
-      <td>${size}</td>
-      <td>${ctime}</td>
-      <td>${stime}</td>
-      <td>${etime}</td>
+      <td data-key="size">${size}</td>
+      <td data-key="ctime">${ctime}</td>
+      <td data-key="starttime">${stime}</td>
+      <td data-key="endtime">${etime}</td>
       <td data-key="preptime" data-sec="${prepSec ?? ''}">${preptime}</td>
       <td data-key="checktime" data-sec="${checkSec ?? ''}">${checktime}</td>
       <td data-key="usagetime" data-sec="${utimeSec ?? ''}">${utime}</td>
-      <td>${umaterial}</td>
+      <td data-key="usagematerial">${umaterial}</td>
       <td>${finish}</td>
       <td>${md5}</td>
       <td>${videoLink}</td>
       <td>${spoolText}</td>
-      <td>${printCnt}</td>
-      <td>${remainLen}</td>
+      <td data-key="spoolcount">${printCnt}</td>
+      <td data-key="remain">${remainLen}</td>
     `;
     tbody.appendChild(tr);
 
