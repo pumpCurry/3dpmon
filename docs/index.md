@@ -6,13 +6,11 @@
 - [ダッシュボードの使い方](./ja/dashboard_usage.md)
 - [機能一覧](./ja/features.md)
 - [フィラメント管理ガイド](./ja/filament_manual.md)
-- [フォント生成ガイド](./ja/font_generation_guide.md)
 
 ### English
 - [Dashboard Usage](./en/dashboard_usage.md)
 - [Dashboard Features](./en/features.md)
 - [Filament Management Guide](./en/filament_manual.md)
-- [Font Generation Guide](./en/font_generation_guide.md)
 
 ## 機能サマリ / Feature Summary
 - [ブラウザベースで Clarity シリーズを監視](./ja/feature_browser_monitor.md) / [Monitor Clarity printers](./en/feature_browser_monitor.md)
