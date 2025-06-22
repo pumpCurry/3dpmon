@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.431 (PR #194)
+* @version 1.390.439 (PR #199)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-22 18:12:44
+* @lastModified 2025-06-22 18:59:29
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -481,13 +481,13 @@ export function processData(data) {
  * @returns {string} 日本語エラーメッセージ
  */
 export function processError({ errcode, key }) {
-  let msg = `エラー コード${errcode}, キー${key}:\n`;
+  let msg = `エラー コード${errcode}, キー${key}: `;
   msg += typeof errorMap[errcode] === "function"
       ? errorMap[errcode]([errcode])
       : `不明なコード:${errcode}`;
-  msg += "\n";
+  msg += " ";
   msg += typeof errorMap[key] === "function"
       ? errorMap[key]([key])
       : `不明なキー:${key}`;
-  return msg;
+  return msg.trim();
 }
