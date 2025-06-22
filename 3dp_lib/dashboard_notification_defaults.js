@@ -14,9 +14,9 @@
  * - {@link DEFAULT_SOUND}：既定サウンドファイル名
  * - {@link defaultNotificationMap}：通知設定マップ
  *
-* @version 1.390.366 (PR #159)
+* @version 1.390.414 (PR #183)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 05:21:50
+* @lastModified 2025-06-22 17:10:30
 * -----------------------------------------------------------
 * @todo
 * - none
@@ -40,7 +40,7 @@ export const defaultNotificationMap = {
   printCompleted:   { talk: "{hostname} で印刷が完了しました ({now})",                             sound: DEFAULT_SOUND, enabled: true, level: "success" },
   printFailed:      { talk: "{hostname} の印刷が失敗しました ({now})",                             sound: DEFAULT_SOUND, enabled: true, level: "error"   },
   printPaused:      { talk: "{hostname} の印刷が一時停止しました ({now})",                         sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
-  errorOccurred:    { talk: "{hostname} でエラー発生：コード${error_code}, キー${error_key}, メッセージ${error_msg} ({now})", sound: DEFAULT_SOUND, enabled: true, level: "error"   },
+  errorOccurred:    { talk: "{hostname} でエラー発生：コード{error_code}, キー{error_key}, メッセージ{error_msg} ({now})", sound: DEFAULT_SOUND, enabled: true, level: "error"   },
   errorResolved:    { talk: "{hostname} のエラーは解消しました ({now})",                           sound: DEFAULT_SOUND, enabled: true, level: "success" },
   filamentOut:      { talk: "{hostname} のフィラメントが切れました",                               sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   filamentReplaced: { talk: "{hostname} にフィラメントが補充されました",                         sound: DEFAULT_SOUND, enabled: true, level: "success" },
@@ -81,13 +81,13 @@ export const defaultNotificationMap = {
 
   // 80%
   tempNearNozzle80: {
-    talk: "警告：ノズル温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ノズル温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "warn"
   },
   tempNearBed80: {
-    talk: "警告：ベッド温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ベッド温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "warn"
@@ -95,13 +95,13 @@ export const defaultNotificationMap = {
 
   // 90%
   tempNearNozzle90: {
-    talk: "警告：ノズル温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ノズル温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "warn"
   },
   tempNearBed90: {
-    talk: "警告：ベッド温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ベッド温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "warn"
@@ -109,13 +109,13 @@ export const defaultNotificationMap = {
 
   // 95%
   tempNearNozzle95: {
-    talk: "警告：ノズル温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ノズル温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "warn"
   },
   tempNearBed95: {
-    talk: "警告：ベッド温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ベッド温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "warn"
@@ -123,13 +123,13 @@ export const defaultNotificationMap = {
 
   // 98%
   tempNearNozzle98: {
-    talk: "警告：ノズル温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ノズル温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "error"
   },
   tempNearBed98: {
-    talk: "警告：ベッド温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ベッド温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "error"
@@ -137,13 +137,13 @@ export const defaultNotificationMap = {
 
   // 100%
   tempNearNozzle100: {
-    talk: "警告：ノズル温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ノズル温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "error"
   },
   tempNearBed100: {
-    talk: "警告：ベッド温度が上限 ${maxTemp}℃ に対し ${ratio * 100}% の ${currentTemp}℃ に達しています",
+    talk: "警告：ベッド温度が上限 {maxTemp}℃ に対し {ratioPct}% の {currentTemp}℃ に達しています",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "error"

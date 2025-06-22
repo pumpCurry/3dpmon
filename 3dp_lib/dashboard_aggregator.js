@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.404 (PR #182)
+* @version 1.390.415 (PR #183)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 16:22:48
+* @lastModified 2025-06-22 17:10:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -225,7 +225,12 @@ export function ingestData(data) {
       const key = Math.round(r * 100);
       if (nozzle >= maxNozz * r && !notifiedTempMilestones.has(`nozzle${key}`)) {
         notifiedTempMilestones.add(`nozzle${key}`);
-        notificationManager.notify(`tempNearNozzle${key}`, { ratio: r, currentTemp: nozzle, maxTemp: maxNozz });
+        notificationManager.notify(`tempNearNozzle${key}`, {
+          ratio: r,
+          ratioPct: Math.round(r * 100),
+          currentTemp: nozzle,
+          maxTemp: maxNozz
+        });
       }
     });
   }
@@ -234,7 +239,12 @@ export function ingestData(data) {
       const key = Math.round(r * 100);
       if (bed >= maxBed * r && !notifiedTempMilestones.has(`bed${key}`)) {
         notifiedTempMilestones.add(`bed${key}`);
-        notificationManager.notify(`tempNearBed${key}`, { ratio: r, currentTemp: bed, maxTemp: maxBed });
+        notificationManager.notify(`tempNearBed${key}`, {
+          ratio: r,
+          ratioPct: Math.round(r * 100),
+          currentTemp: bed,
+          maxTemp: maxBed
+        });
       }
     });
   }
