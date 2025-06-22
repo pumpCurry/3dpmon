@@ -18,9 +18,9 @@
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
  *
- * @version 1.390.415 (PR #188)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 17:14:08
+* @version 1.390.417 (PR #189)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 17:20:17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -303,17 +303,19 @@ export function initUIEventHandlers() {
  * @returns {void}
  */
 function adjustPrintCurrentCardPosition() {
-  const graph = document.querySelector(".graph-wrapper");
+  const wrapper = document.getElementById("graph-current-wrapper");
+  const graph = wrapper ? wrapper.querySelector(".graph-wrapper") : null;
   const info = document.querySelector(".info-wrapper");
   const printCard = document.getElementById("print-current-card");
   const historyCard = document.getElementById("print-history-card");
-  if (!graph || !info || !printCard || !historyCard) return;
 
-  const sameRow = Math.abs(graph.offsetTop - info.offsetTop) < 5;
+  if (!wrapper || !graph || !info || !printCard || !historyCard) return;
+
+  const sameRow = Math.abs(wrapper.offsetTop - info.offsetTop) < 5;
 
   if (sameRow) {
-    if (graph.nextSibling !== printCard) {
-      graph.parentNode.insertBefore(printCard, graph.nextSibling);
+    if (printCard.parentNode !== wrapper) {
+      wrapper.appendChild(printCard);
     }
   } else if (historyCard.parentNode && historyCard.previousSibling !== printCard) {
     historyCard.parentNode.insertBefore(printCard, historyCard);
