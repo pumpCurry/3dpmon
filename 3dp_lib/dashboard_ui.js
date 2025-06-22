@@ -18,9 +18,9 @@
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
  *
- * @version 1.390.417 (PR #189)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 17:20:17
+* @version 1.390.432 (PR #195)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 18:16:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -302,23 +302,33 @@ export function initUIEventHandlers() {
  * @private
  * @returns {void}
  */
+let adjustTimer = null;
+let lastSameRow = null;
+
 function adjustPrintCurrentCardPosition() {
-  const wrapper = document.getElementById("graph-current-wrapper");
-  const graph = wrapper ? wrapper.querySelector(".graph-wrapper") : null;
-  const info = document.querySelector(".info-wrapper");
-  const printCard = document.getElementById("print-current-card");
-  const historyCard = document.getElementById("print-history-card");
-
-  if (!wrapper || !graph || !info || !printCard || !historyCard) return;
-
-  const sameRow = Math.abs(wrapper.offsetTop - info.offsetTop) < 5;
-
-  if (sameRow) {
-    if (printCard.parentNode !== wrapper) {
-      wrapper.appendChild(printCard);
-    }
-  } else if (historyCard.parentNode && historyCard.previousSibling !== printCard) {
-    historyCard.parentNode.insertBefore(printCard, historyCard);
+  if (adjustTimer) {
+    clearTimeout(adjustTimer);
   }
+  adjustTimer = setTimeout(() => {
+    const wrapper = document.getElementById("graph-current-wrapper");
+    const graph = wrapper ? wrapper.querySelector(".graph-wrapper") : null;
+    const info = document.querySelector(".info-wrapper");
+    const printCard = document.getElementById("print-current-card");
+    const historyCard = document.getElementById("print-history-card");
+
+    if (!wrapper || !graph || !info || !printCard || !historyCard) return;
+
+    const sameRow = Math.abs(wrapper.offsetTop - info.offsetTop) < 5;
+    if (sameRow === lastSameRow) return;
+    lastSameRow = sameRow;
+
+    if (sameRow) {
+      if (printCard.parentNode !== wrapper) {
+        wrapper.appendChild(printCard);
+      }
+    } else if (historyCard.parentNode && historyCard.previousSibling !== printCard) {
+      historyCard.parentNode.insertBefore(printCard, historyCard);
+    }
+  }, 100);
 }
 
