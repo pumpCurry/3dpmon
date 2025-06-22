@@ -18,9 +18,9 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.355 (PR #158)
+ * @version 1.390.387 (PR #170)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-21 09:45:10
+ * @lastModified 2025-06-22 11:47:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -166,9 +166,23 @@ export class NotificationManager {
     this.volume     = saved.volume     ?? this.volume;
     this.muted      = saved.muted      ?? this.muted;
     this.useWebPush = saved.useWebPush ?? this.useWebPush;
-    if (saved.map)      this.map      = JSON.parse(JSON.stringify(saved.map));
+    // デフォルトマップを基点に保存済み設定をマージすることで
+    // 新規追加された通知タイプを欠落なく補完する
+    const merged = JSON.parse(JSON.stringify(defaultNotificationMap));
+    if (saved.map) {
+      Object.entries(saved.map).forEach(([k, v]) => {
+        merged[k] = { ...(merged[k] || {}), ...v };
+      });
+    }
+    this.map = merged;
+
     if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
     if (saved.ttsRate)  this.ttsRate  = saved.ttsRate;
+
+    // level プロパティが欠けている場合は info を補填
+    Object.values(this.map).forEach(cfg => {
+      if (!cfg.level) cfg.level = "info";
+    });
   }
 
   /** @private 永続化ヘルパー */
