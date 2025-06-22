@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.386 (PR #174)
+ * @version 1.390.395 (PR #178)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 11:44:37
+ * @lastModified 2025-06-22 13:28:24
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -376,10 +376,26 @@ const persistKeys = [
  * @description
  *  localStorage に保存された印刷再開データを読み出し、
  *  storedData の computedValue として復元します。
+ *
+ * @param {number|null} currentPrintId -
+ *   現在進行中の印刷ID。null の場合は ID 照合を行わず復元します。
  */
-export function restorePrintResume() {
+export function restorePrintResume(currentPrintId = null) {
   const host = currentHostname;
   if (!host) return;
+
+  let savedId = null;
+  try {
+    const rawId = localStorage.getItem(`pd_${host}_prevPrintID`);
+    if (rawId != null) savedId = JSON.parse(rawId);
+  } catch (e) {
+    console.warn("restorePrintResume: prevPrintID パース失敗", e);
+  }
+
+  if (currentPrintId !== null && savedId !== null && currentPrintId !== savedId) {
+    console.debug("restorePrintResume: 印刷ID不一致のため復元をスキップ");
+    return;
+  }
 
   persistKeys.forEach(key => {
     const raw = localStorage.getItem(`pd_${host}_${key}`);

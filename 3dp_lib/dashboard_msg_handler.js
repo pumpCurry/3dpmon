@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.381 (PR #171)
+* @version 1.390.395 (PR #178)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-22 05:18:34
+* @lastModified 2025-06-22 13:28:24
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -140,7 +140,8 @@ export function handleMessage(data) {
     });
 
     restartAggregatorTimer();
-    restorePrintResume();
+    const curId = Number(data.printStartTime || 0) || null;
+    restorePrintResume(curId);
 
     // 保存済み履歴と現在印刷を表示
     const baseUrlStored = `http://${getDeviceIp()}:80`;
