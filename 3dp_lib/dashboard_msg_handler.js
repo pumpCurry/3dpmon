@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
- * @version 1.390.317 (PR #143)
- * @since   1.390.214 (PR #95)
- * @lastModified 2025-06-19 22:38:18
+* @version 1.390.381 (PR #171)
+* @since   1.390.214 (PR #95)
+* @lastModified 2025-06-22 05:18:34
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -130,9 +130,13 @@ export function handleMessage(data) {
       "actualStartTime","initialLeftTime","initialLeftAt",
       "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
     ];
+    const sd = monitorData.machines[currentHostname].storedData;
     initKeys.forEach(key => {
-      setStoredData(key, null, true);
-      setStoredData(key, null, false);
+      // 既に復元済みの値がある場合は保持し、存在しないキーのみ初期化する
+      if (!(key in sd)) {
+        setStoredData(key, null, true);
+        setStoredData(key, null, false);
+      }
     });
 
     restartAggregatorTimer();
