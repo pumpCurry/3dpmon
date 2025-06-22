@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.435 (PR #196)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 18:28:52
+* @version 1.390.441 (PR #200)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 19:59:49
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -37,7 +37,8 @@
 import {
   monitorData,
   currentHostname,
-  PLACEHOLDER_HOSTNAME
+  PLACEHOLDER_HOSTNAME,
+  setCurrentHostname
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
