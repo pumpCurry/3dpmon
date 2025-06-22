@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.371 (PR #167)
+* @version 1.390.378 (PR #168)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-22 05:35:58
+* @lastModified 2025-06-22 11:14:43
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,7 +40,7 @@ import {
   savePrintVideos
 } from "./dashboard_storage.js";
 
-import { formatEpochToDateTime } from "./dashboard_utils.js";
+import { formatEpochToDateTime, formatDuration } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
@@ -283,6 +283,7 @@ export function jobsToRaw(jobs) {
         size:          job.size ?? 0,
         ctime:         startEpoch,
         starttime:     startEpoch,
+        ...(finishEpoch && { endtime: finishEpoch }),
         usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
         usagematerial: job.materialUsedMm,
         printfinish:   job.printfinish ?? (finishEpoch ? 1 : 0),
@@ -696,10 +697,16 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const size      = raw.size != null ? raw.size.toLocaleString() : "—";
     const ctime     = raw.ctime ? fmt(raw.ctime) : "—";
     const stime     = raw.starttime ? fmt(raw.starttime) : "—";
-    const utime     = raw.usagetime != null ? raw.usagetime : "—";
+    const etime     = raw.endtime ? fmt(raw.endtime) : "—";
+    const utimeSec  = raw.usagetime != null ? Number(raw.usagetime) : null;
+    const utime     = utimeSec != null ? formatDuration(utimeSec) : "—";
+    const prepSec   = raw.preparationTime != null ? Number(raw.preparationTime) : null;
+    const preptime  = prepSec != null ? formatDuration(prepSec) : "—";
+    const checkSec  = raw.firstLayerCheckTime != null ? Number(raw.firstLayerCheckTime) : null;
+    const checktime = checkSec != null ? formatDuration(checkSec) : "—";
     const umaterial =
       raw.usagematerial != null
-        ? (Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()
+        ? `${(Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()} mm`
         : "—";
     const finish    = raw.printfinish ? "✔︎" : "";
     const md5       = raw.filemd5 || "—";
@@ -762,7 +769,10 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td>${size}</td>
       <td>${ctime}</td>
       <td>${stime}</td>
-      <td>${utime}</td>
+      <td>${etime}</td>
+      <td data-key="preptime" data-sec="${prepSec ?? ''}">${preptime}</td>
+      <td data-key="checktime" data-sec="${checkSec ?? ''}">${checktime}</td>
+      <td data-key="usagetime" data-sec="${utimeSec ?? ''}">${utime}</td>
       <td>${umaterial}</td>
       <td>${finish}</td>
       <td>${md5}</td>
@@ -1335,12 +1345,16 @@ function sortTable(selector, key) {
   table.dataset[ key + "_asc" ] = asc ? "1" : "";
 
   rows.sort((a, b) => {
-    const va = a.querySelector(`td[data-key="${key}"]`)?.textContent || "";
-    const vb = b.querySelector(`td[data-key="${key}"]`)?.textContent || "";
-    // 数値 or 文字列
-    const na = parseFloat(va.replace(/,/g,"")) || va;
-    const nb = parseFloat(vb.replace(/,/g,"")) || vb;
-    return asc ? (na > nb ? 1 : -1) : (na < nb ? 1 : -1);
+    const ta = a.querySelector(`td[data-key="${key}"]`);
+    const tb = b.querySelector(`td[data-key="${key}"]`);
+    const va = ta?.dataset.sec ?? ta?.textContent ?? "";
+    const vb = tb?.dataset.sec ?? tb?.textContent ?? "";
+    const na = parseFloat(String(va).replace(/,/g, ""));
+    const nb = parseFloat(String(vb).replace(/,/g, ""));
+    if (!isNaN(na) && !isNaN(nb)) {
+      return asc ? na - nb : nb - na;
+    }
+    return asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
   });
   rows.forEach(r => tbody.appendChild(r));
 }
