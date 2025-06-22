@@ -18,9 +18,9 @@
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
  *
-* @version 1.390.417 (PR #189)
-* @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 17:20:17
+ * @version 1.390.417 (PR #189)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-22 17:20:17
  * -----------------------------------------------------------
  * @todo
  * - none
