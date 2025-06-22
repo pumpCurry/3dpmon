@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.397 (PR #179)
+* @version 1.390.398 (PR #180)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-22 13:45:39
+* @lastModified 2025-06-22 15:56:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -50,7 +50,7 @@ import {
 } from "./dashboard_stage_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { ingestData, restoreAggregatorState, restartAggregatorTimer } from "./dashboard_aggregator.js";
-import { restorePrintResume } from "./3dp_dashboard_init.js";
+import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { getDeviceIp } from "./dashboard_connection.js";
 
@@ -68,6 +68,34 @@ let totalPauseSeconds = 0;
 let prevPrintState     = null;
 let prevPrintStartTime = null;
 let prevSelfTestPct    = null;
+
+/**
+ * persistHistoryTimers:
+ *   現在の印刷IDに対応する履歴エントリへタイマー情報をマージし、
+ *   永続化を即時実行します。F5リロードによる消失を防ぐ目的です。
+ *
+ * @private
+ * @param {number} printId - 印刷開始時刻を元にしたジョブID
+ * @returns {void}
+ */
+function persistHistoryTimers(printId) {
+  if (!printId) return;
+  const machine = monitorData.machines[currentHostname];
+  if (!machine) return;
+
+  let entry = machine.historyData.find(h => h.id === printId);
+  if (!entry) {
+    entry = { id: printId };
+    machine.historyData.push(entry);
+  }
+  ["preparationTime", "firstLayerCheckTime", "pauseTime"].forEach(key => {
+    const v = machine.storedData[key]?.rawValue;
+    if (v != null) entry[key] = v;
+  });
+  const baseUrl = `http://${getDeviceIp()}:80`;
+  printManager.updateHistoryList([entry], baseUrl);
+  persistPrintResume();
+}
 
 /**
  * handleMessage:
@@ -246,6 +274,7 @@ export function processData(data) {
     clearInterval(prepTimerId);
     const sec = Math.floor((tsPrepEnd - tsPrintStart)/1000);
     setStoredData("preparationTime", sec, true);
+    persistHistoryTimers(currStartTime);
   }
   // (2.3.3) 中断時リセット
   if (
@@ -302,6 +331,7 @@ export function processData(data) {
       Math.floor((tsCheckEnd - tsCheckStart)/1000),
       true
     );
+    persistHistoryTimers(currStartTime);
     notificationManager.notify("printFirstLayerCheckCompleted");
   }
   // (2.4.3) 新規印刷 or 再開でリセット
@@ -334,6 +364,7 @@ export function processData(data) {
     totalPauseSeconds += Math.floor((Date.now() - tsPauseStart)/1000);
     clearInterval(pauseTimerId);
     setStoredData("pauseTime", totalPauseSeconds, true);
+    persistHistoryTimers(currStartTime);
     tsPauseStart = null;
     notificationManager.notify("printResumed");
   }
@@ -427,6 +458,7 @@ export function processData(data) {
     machine.historyData.push(entry);
     const baseUrl = `http://${getDeviceIp()}:80`;
     printManager.updateHistoryList([entry], baseUrl);
+    persistPrintResume();
   }
 
   // 次回比較用に保存
