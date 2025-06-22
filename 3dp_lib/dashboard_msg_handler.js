@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.395 (PR #178)
+* @version 1.390.397 (PR #179)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-22 13:28:24
+* @lastModified 2025-06-22 13:45:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -404,6 +404,7 @@ export function processData(data) {
   // (2.7.4) 進捗100%以上で履歴登録
   if (Number(data.printProgress ?? 0) >= 100) {
     const entry = { ...data };
+    entry.id = Number(data.printStartTime || 0);
     const extraKeys = [
       "preparationTime",
       "firstLayerCheckTime",
@@ -424,6 +425,8 @@ export function processData(data) {
       if (data[k] != null) entry[k] = data[k];
     });
     machine.historyData.push(entry);
+    const baseUrl = `http://${getDeviceIp()}:80`;
+    printManager.updateHistoryList([entry], baseUrl);
   }
 
   // 次回比較用に保存
