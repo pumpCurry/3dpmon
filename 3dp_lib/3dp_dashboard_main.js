@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（エントリポイントとして即時実行）
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.435 (PR #196)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-22 18:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -77,6 +77,8 @@ document.addEventListener("DOMContentLoaded", () => {
     /** 切断ボタン押下時 */
     onDisconnect: () => {
       disconnectWs();
+      // IPアドレス再入力後に旧カメラストリームが残らないよう停止
+      stopCameraStream();
     },
     /** カメラエラー時 */
     onCameraError: () => {
