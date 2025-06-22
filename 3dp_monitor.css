@@ -975,6 +975,8 @@ input:checked + .slider:before {
 #print-history-table td[data-key="id"],
 #print-history-table td[data-key="size"],
 #print-history-table td[data-key="usagetime"],
+#print-history-table td[data-key="preptime"],
+#print-history-table td[data-key="checktime"],
 #print-history-table td[data-key="usagematerial"],
 #file-list-table td[data-key="number"],
 #file-list-table td[data-key="layer"],
