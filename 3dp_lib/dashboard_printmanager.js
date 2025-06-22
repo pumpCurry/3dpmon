@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.401 (PR #179)
-* @since   1.390.197 (PR #88)
-* @lastModified 2025-06-22 16:23:55
+ * @version 1.390.401 (PR #179)
+ * @since   1.390.197 (PR #88)
+ * @lastModified 2025-06-22 16:23:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -499,6 +499,39 @@ export async function refreshHistory(
           expectedRemain: sp.remainingLengthMm
         });
       }
+
+      if (!sp.currentPrintID) sp.currentPrintID = jobs[0].id;
+    }
+    merged = true;
+  }
+
+  const state = Number(machine?.runtimeData?.state ?? 0);
+  const printing = [PRINT_STATE_CODE.printStarted, PRINT_STATE_CODE.printPaused].includes(state);
+  const curSpoolId = getCurrentSpoolId();
+  if (printing && curSpoolId && jobs[0]) {
+    const sp = getSpoolById(curSpoolId);
+    if (sp) {
+      if (!jobs[0].filamentId) jobs[0].filamentId = curSpoolId;
+      if (!jobs[0].filamentColor && (sp.filamentColor || sp.color)) {
+        jobs[0].filamentColor = sp.filamentColor || sp.color;
+      }
+      if (!jobs[0].filamentType && (sp.material || sp.materialName)) {
+        jobs[0].filamentType = sp.material || sp.materialName;
+      }
+      // 履歴にスプール情報が存在しない場合は現在スプールを即時反映
+      jobs[0].filamentInfo ??= [];
+      if (!jobs[0].filamentInfo.some(info => info.spoolId === sp.id)) {
+        jobs[0].filamentInfo.push({
+          spoolId: sp.id,
+          spoolName: sp.name,
+          colorName: sp.colorName,
+          filamentColor: sp.filamentColor,
+          material: sp.material,
+          spoolCount: sp.printCount,
+          expectedRemain: sp.remainingLengthMm
+        });
+      }
+
       if (!sp.currentPrintID) sp.currentPrintID = jobs[0].id;
     }
     merged = true;
