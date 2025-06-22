@@ -18,9 +18,9 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
- * @version 1.390.387 (PR #170)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 11:47:23
+* @version 1.390.440 (PR #200)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-22 20:11:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -174,6 +174,15 @@ export class NotificationManager {
         merged[k] = { ...(merged[k] || {}), ...v };
       });
     }
+    // 改行を除去して単一行に統一
+    Object.values(merged).forEach(cfg => {
+      if (typeof cfg.talk === "string") {
+        cfg.talk = cfg.talk.replace(/[\r\n]+/g, " ");
+      }
+      if (typeof cfg.label === "string") {
+        cfg.label = cfg.label.replace(/[\r\n]+/g, " ");
+      }
+    });
     this.map = merged;
 
     if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
@@ -183,16 +192,29 @@ export class NotificationManager {
     Object.values(this.map).forEach(cfg => {
       if (!cfg.level) cfg.level = "info";
     });
+
+    // 旧データが改行を含んでいた場合は保存し直す
+    this._persistSettings();
   }
 
   /** @private 永続化ヘルパー */
   _persistSettings() {
+    const sanitized = JSON.parse(JSON.stringify(this.map));
+    Object.values(sanitized).forEach(cfg => {
+      if (typeof cfg.talk === "string") {
+        cfg.talk = cfg.talk.replace(/[\r\n]+/g, " ");
+      }
+      if (typeof cfg.label === "string") {
+        cfg.label = cfg.label.replace(/[\r\n]+/g, " ");
+      }
+    });
+
     monitorData.appSettings[SETTINGS_KEY] = {
       enabled:    this.enabled,
       volume:     this.volume,
       muted:      this.muted,
       useWebPush: this.useWebPush,
-      map:        this.map,
+      map:        sanitized,
       ttsVoice:   this.ttsVoice,
       ttsRate:    this.ttsRate
     };
@@ -257,7 +279,8 @@ export class NotificationManager {
     const now = new Date().toLocaleString();
     const ctx = { hostname: currentHostname || "unknown", now, ...payload };
     const text = (def.talk || def.label || "")
-      .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "");
+      .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
+      .replace(/[\r\n]+/g, " ");
 
     // 1) ログ出力
     import("./dashboard_log_util.js")
