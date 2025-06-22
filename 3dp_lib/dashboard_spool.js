@@ -1,5 +1,4 @@
-/**
- * @fileoverview
+/** 2025-06-22 13:06:00
  * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメントスプール管理モジュール
  * @file dashboard_spool.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
@@ -27,9 +26,9 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  *
-* @version 1.390.376 (PR #167)
+ * @version 1.390.391 (PR #176)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 11:00:09
+ * @lastModified 2025-06-22 13:06:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -379,20 +378,22 @@ export function reserveFilament(lengthMm, jobId = "") {
   s.currentPrintID = jobId;
   // --- 印刷開始時点で履歴にスプール情報を記録 -------------------
   if (machine && Array.isArray(machine.historyData)) {
-    const entry = machine.historyData.find(h => h.id === jobId);
-    if (entry) {
-      entry.filamentInfo ??= [];
-      if (!entry.filamentInfo.some(info => info.spoolId === s.id)) {
-        entry.filamentInfo.push({
-          spoolId: s.id,
-          spoolName: s.name,
-          colorName: s.colorName,
-          filamentColor: s.filamentColor,
-          material: s.material,
-          spoolCount: s.printCount,
-          expectedRemain: s.remainingLengthMm
-        });
-      }
+    let entry = machine.historyData.find(h => h.id === jobId);
+    if (!entry) {
+      entry = { id: jobId };
+      machine.historyData.push(entry);
+    }
+    entry.filamentInfo ??= [];
+    if (!entry.filamentInfo.some(info => info.spoolId === s.id)) {
+      entry.filamentInfo.push({
+        spoolId: s.id,
+        spoolName: s.name,
+        colorName: s.colorName,
+        filamentColor: s.filamentColor,
+        material: s.material,
+        spoolCount: s.printCount,
+        expectedRemain: s.remainingLengthMm
+      });
     }
   }
   saveUnifiedStorage();
@@ -427,19 +428,21 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   // 現在のスプール情報を履歴に追加
   const machine = monitorData.machines[currentHostname];
   if (machine && Array.isArray(machine.historyData)) {
-    const entry = machine.historyData.find(h => h.id === jobId);
-    if (entry) {
-      entry.filamentInfo ??= [];
-      entry.filamentInfo.push({
-        spoolId: s.id,
-        spoolName: s.name,
-        colorName: s.colorName,
-        filamentColor: s.filamentColor,
-        material: s.material,
-        spoolCount: s.printCount,
-        expectedRemain: s.remainingLengthMm
-      });
+    let entry = machine.historyData.find(h => h.id === jobId);
+    if (!entry) {
+      entry = { id: jobId };
+      machine.historyData.push(entry);
     }
+    entry.filamentInfo ??= [];
+    entry.filamentInfo.push({
+      spoolId: s.id,
+      spoolName: s.name,
+      colorName: s.colorName,
+      filamentColor: s.filamentColor,
+      material: s.material,
+      spoolCount: s.printCount,
+      expectedRemain: s.remainingLengthMm
+    });
   }
   logUsage(s, used, jobId);
   updateStoredDataToDOM();
