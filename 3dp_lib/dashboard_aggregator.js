@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.366 (PR #164)
+* @version 1.390.404 (PR #182)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 05:18:34
+* @lastModified 2025-06-22 16:22:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,7 +43,8 @@ import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 import {
   getCurrentSpool,
   reserveFilament,
-  finalizeFilamentUsage
+  finalizeFilamentUsage,
+  autoCorrectCurrentSpool
 } from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
@@ -569,6 +570,7 @@ export function aggregatorUpdate() {
 
   // --- フィラメント残量の動的計算 ---
   const spool = getCurrentSpool();
+  if (spool) autoCorrectCurrentSpool();
   // usedMaterialLength 受信時だけ残量計算を更新
   if (spool && storedData.usedMaterialLength?.isNew) {
     const st   = Number(storedData.state?.rawValue || 0);
