@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.400 (PR #178)
+ * @version 1.390.401 (PR #179)
  * @since   1.390.197 (PR #88)
- * @lastModified 2025-06-22 16:05:19
+ * @lastModified 2025-06-22 16:23:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -499,6 +499,7 @@ export async function refreshHistory(
           expectedRemain: sp.remainingLengthMm
         });
       }
+
       if (!sp.currentPrintID) sp.currentPrintID = jobs[0].id;
     }
     merged = true;
@@ -530,6 +531,7 @@ export async function refreshHistory(
           expectedRemain: sp.remainingLengthMm
         });
       }
+
       if (!sp.currentPrintID) sp.currentPrintID = jobs[0].id;
     }
     merged = true;
