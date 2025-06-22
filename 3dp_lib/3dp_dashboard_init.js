@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.386 (PR #174)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-22 11:44:37
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -451,15 +451,12 @@ function autoSaveAll() {
  * @returns {void}
  */
 export function initializeAutoSave() {
-  window.addEventListener("DOMContentLoaded", () => {
-    // ページを離脱するときにも保存
-    window.addEventListener("beforeunload", autoSaveAll);
+  // ページを離脱するときにも保存
+  window.addEventListener("beforeunload", autoSaveAll);
 
-    //aggrigatorを停止
-    stopAggregatorTimer();
+  //aggrigatorを停止
+  stopAggregatorTimer();
 
-    // 一定間隔で定期保存
-    setInterval(autoSaveAll, AUTO_SAVE_INTERVAL_MS);
-  });
-
+  // 一定間隔で定期保存
+  setInterval(autoSaveAll, AUTO_SAVE_INTERVAL_MS);
 }
