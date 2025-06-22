@@ -69,7 +69,7 @@ export const defaultNotificationMap = {
     level: "success"
   },
   cameraServiceStopped: {
-    talk: "機器側の動画配信サービスが異常停止しています",
+    talk: "警告：機器側の動画配信サービスが異常停止しています。復旧には機器の電源再投入が必要です",
     sound: DEFAULT_SOUND,
     enabled: true,
     level: "error"
