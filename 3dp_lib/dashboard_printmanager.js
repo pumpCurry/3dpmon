@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.378 (PR #168)
+* @version 1.390.381 (PR #169)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-22 11:14:43
+* @lastModified 2025-06-22 11:23:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -650,6 +650,9 @@ export function updateVideoList(videoArray, baseUrl) {
   });
   if (changed) {
     saveHistory(jobs);
+    // 動画マップが更新されていない場合でも
+    // 履歴に動画URLが追加されたタイミングで保存を保証する
+    if (!updated) saveVideos(map);
   }
   if (updated || changed) {
     const raw = jobsToRaw(jobs);
