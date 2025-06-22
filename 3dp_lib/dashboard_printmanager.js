@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.411 (PR #185)
+* @version 1.390.414 (PR #187)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-22 16:31:34
+* @lastModified 2025-06-22 16:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -58,6 +58,21 @@ import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 
 /** 履歴の最大件数 */
 export const MAX_HISTORY = 150;
+
+/**
+ * 履歴マージ時にゼロ値を無視したいフィールド一覧
+ *
+ * これらのタイマー値は機器から送信されないため、
+ * サーバー取得データが 0 を示していても未計測とみなし、
+ * 本モジュールが保持している値を優先する。
+ *
+ * @constant {Set<string>}
+ */
+const MERGE_IGNORE_ZERO_FIELDS = new Set([
+  "preparationTime",
+  "firstLayerCheckTime",
+  "pauseTime"
+]);
 
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用）
 let _lastSavedJson = "";
@@ -453,7 +468,8 @@ export async function refreshHistory(
       if (!found) return;
       Object.entries(found.data).forEach(([k, v]) => {
         if (k === "id") return;
-        if (v != null && (job[k] == null)) {
+        const isZero = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(job[k]) === 0;
+        if (v != null && (job[k] == null || isZero)) {
           job[k] = v;
         }
       });
@@ -567,7 +583,8 @@ export function updateHistoryList(
       if (!found) return;
       Object.entries(found.data).forEach(([k, v]) => {
         if (k === "id") return;
-        if (v != null && job[k] == null) job[k] = v;
+        const isZero = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(job[k]) === 0;
+        if (v != null && (job[k] == null || isZero)) job[k] = v;
       });
       appliedIdx.add(found.idx);
     });
@@ -584,7 +601,8 @@ export function updateHistoryList(
     const cur = mergedMap.get(j.id);
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
-        if (cur[k] == null && v != null) {
+        const isZero = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
+        if (v != null && (cur[k] == null || isZero)) {
           cur[k] = v;
           merged = true;
         }
