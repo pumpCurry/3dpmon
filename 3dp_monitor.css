@@ -1048,6 +1048,17 @@ input:checked + .slider:before {
   font-size: 1.2em;
 }
 
+.drop-overlay .drop-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 1.5em;
+  cursor: pointer;
+}
+
 /* Spool list */
 #spool-list { list-style:none; padding-left:0; }
 #spool-list li { margin:2px 0; }

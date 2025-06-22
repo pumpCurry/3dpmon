@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.414 (PR #187)
+* @version 1.390.448 (PR #204)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-22 16:45:00
+* @lastModified 2025-06-23 05:57:03
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -990,7 +990,8 @@ export function setupUploadUI() {
   const progress   = document.getElementById("gcode-upload-progress");
   const percentEl  = document.getElementById("gcode-upload-percent");
   const dropLayer  = document.getElementById("drop-overlay");
-  if (!btn || !input || !progress || !percentEl || !dropLayer) return;
+  const dropClose  = document.getElementById("drop-overlay-close");
+  if (!btn || !input || !progress || !percentEl || !dropLayer || !dropClose) return;
 
   let currentFile = null;
 
@@ -1013,6 +1014,11 @@ export function setupUploadUI() {
   function showProgress() { progress.classList.remove("hidden"); }
   /** 進捗バーを非表示にする */
   function hideProgress() { progress.classList.add("hidden"); updateProgress(0,0); }
+
+  /** ドロップオーバーレイを表示する */
+  function showDropLayer() { dropLayer.classList.remove("hidden"); }
+  /** ドロップオーバーレイを隠す */
+  function hideDropLayer() { dropLayer.classList.add("hidden"); }
 
   /**
    * ファイルを読み込んで文字列として返す。
@@ -1215,20 +1221,22 @@ export function setupUploadUI() {
 
   document.addEventListener("dragover", e => {
     e.preventDefault();
-    dropLayer.classList.remove("hidden");
+    showDropLayer();
   });
   document.addEventListener("dragleave", e => {
     if (e.target === document || e.target === dropLayer) {
-      dropLayer.classList.add("hidden");
+      hideDropLayer();
     }
   });
   document.addEventListener("drop", e => {
     e.preventDefault();
-    dropLayer.classList.add("hidden");
+    hideDropLayer();
     if (e.dataTransfer?.files?.length) {
       prepareAndConfirm(e.dataTransfer.files[0]);
     }
   });
+
+  dropClose.addEventListener("click", hideDropLayer);
 }
 
 /** --- 1) タブ切り替えの初期設定 --- */
