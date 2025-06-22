@@ -25,10 +25,11 @@
  * - {@link useFilament}：使用量反映
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
+ * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
- * @version 1.390.391 (PR #176)
-* @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 13:06:00
+ * @version 1.390.404 (PR #182)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2025-06-22 16:22:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -494,4 +495,61 @@ export function addSpoolFromPreset(preset, override = {}) {
     consumeInventory(preset.presetId, 1);
   }
   return spool;
+}
+
+/**
+ * 使用履歴から現在スプールの残量や印刷回数を補正する。
+ *
+ * @function autoCorrectCurrentSpool
+ * @returns {void}
+ * @description
+ * usageHistory を新しい順に探索し、現在のスプールに一致する
+ * 交換記録を見つけた場合、その後の使用量合計から残量を再計算
+ * する。途中で別スプールへの交換が記録されていれば補正は行わ
+ * ない。
+ */
+export function autoCorrectCurrentSpool() {
+  const spool = getCurrentSpool();
+  if (!spool) return;
+
+  const logs = monitorData.usageHistory;
+  if (!Array.isArray(logs) || logs.length === 0) return;
+
+  let startIdx = -1;
+  let change = null;
+  // 最新から過去に向かって交換記録を検索
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const e = logs[i];
+    if (e.startLength != null) {
+      if (e.spoolId === spool.id) {
+        change = e;
+        startIdx = i;
+        break;
+      }
+      // 他スプールへの交換が後にあれば補正不可
+      if (!change) return;
+    }
+  }
+  if (!change) return;
+
+  let total = 0;
+  let count = 0;
+  for (let i = startIdx + 1; i < logs.length; i++) {
+    const e = logs[i];
+    if (e.startLength != null) break; // 次の交換で終了
+    if (e.spoolId !== spool.id) continue;
+    const u = Number(e.usedLength);
+    if (!isNaN(u)) {
+      total += u;
+      count += 1;
+    }
+  }
+
+  const expected = Math.max(0, Number(change.startLength) - total);
+  const diff = Math.abs(expected - spool.remainingLengthMm);
+  if (diff > 0.1 || spool.printCount !== count) {
+    spool.remainingLengthMm = expected;
+    spool.printCount = count;
+    saveUnifiedStorage();
+  }
 }
