@@ -89,6 +89,11 @@ body {
   order: 1;            /* 幅不足時はグラフを先に折り返す */
 }
 
+/* 現在の印刷カードを行全体で表示 */
+#print-current-card {
+  flex: 0 0 100%;
+}
+
 /* フィラメントプレビューヘッダ */
 .filament-header {
   display: flex;
