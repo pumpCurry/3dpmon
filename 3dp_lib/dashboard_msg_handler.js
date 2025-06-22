@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.398 (PR #180)
+* @version 1.390.431 (PR #194)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-22 15:56:40
+* @lastModified 2025-06-22 18:12:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -251,7 +251,10 @@ export function processData(data) {
 
   // (2.3) 準備時間タイマー
   // (2.3.1) 新規印刷開始検出
+  const initialized = prevPrintState !== null && prevPrintStartTime !== null;
+
   if (
+    initialized &&
     st === PRINT_STATE_CODE.printStarted &&
     (prevPrintState !== st || currStartTime !== prevPrintStartTime)
   ) {
@@ -298,7 +301,7 @@ export function processData(data) {
     tsPauseStart = null;
   }
   // (2.3.5) 新規印刷開始で強制リセット
-  if (currStartTime !== prevPrintStartTime) {
+  if (initialized && currStartTime !== prevPrintStartTime) {
     resetPrep();
   }
 
@@ -336,7 +339,7 @@ export function processData(data) {
   }
   // (2.4.3) 新規印刷 or 再開でリセット
   if (
-    currStartTime !== prevPrintStartTime ||
+    (initialized && currStartTime !== prevPrintStartTime) ||
     st === PRINT_STATE_CODE.printStarted
   ) {
     resetCheck();
@@ -369,7 +372,7 @@ export function processData(data) {
     notificationManager.notify("printResumed");
   }
   // (2.5.3) 新規印刷開始でリセット
-  if (currStartTime !== prevPrintStartTime) {
+  if (initialized && currStartTime !== prevPrintStartTime) {
     resetPause();
   }
 
