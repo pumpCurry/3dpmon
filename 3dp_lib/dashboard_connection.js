@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.435 (PR #196)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-22 18:28:52
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -429,6 +429,11 @@ export function disconnectWs() {
   // 入力欄を再度書き換え可に
   // UIを切断状態に更新
   updateConnectionUI("disconnected");
+
+  // 切断時点で保持中のホスト名をリセットしておく
+  // これにより次回接続時、初回メッセージで新しい
+  // ホスト名が確実に設定され、履歴データの混在を防ぐ
+  setCurrentHostname(PLACEHOLDER_HOSTNAME);
 }
 
 /* ===================== DOM 更新ヘルパー ===================== */
