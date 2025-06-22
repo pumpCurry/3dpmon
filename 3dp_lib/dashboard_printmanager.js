@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.381 (PR #169)
+* @version 1.390.392 (PR #177)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-22 11:23:44
+* @lastModified 2025-06-22 13:18:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -707,6 +707,8 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const preptime  = prepSec != null ? formatDuration(prepSec) : "—";
     const checkSec  = raw.firstLayerCheckTime != null ? Number(raw.firstLayerCheckTime) : null;
     const checktime = checkSec != null ? formatDuration(checkSec) : "—";
+    const pauseSec  = raw.pauseTime != null ? Number(raw.pauseTime) : null;
+    const pausetime = pauseSec != null ? formatDuration(pauseSec) : "—";
     const umaterial =
       raw.usagematerial != null
         ? `${(Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()} mm`
@@ -775,6 +777,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td data-key="endtime">${etime}</td>
       <td data-key="preptime" data-sec="${prepSec ?? ''}">${preptime}</td>
       <td data-key="checktime" data-sec="${checkSec ?? ''}">${checktime}</td>
+      <td data-key="pausetime" data-sec="${pauseSec ?? ''}">${pausetime}</td>
       <td data-key="usagetime" data-sec="${utimeSec ?? ''}">${utime}</td>
       <td data-key="usagematerial">${umaterial}</td>
       <td>${finish}</td>
