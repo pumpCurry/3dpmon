@@ -15,3 +15,5 @@ This page details 3dpmon's remote control capabilities, file handling tools and 
 ## Notification Settings
 - Toggle notifications using the bell icon at the bottom right.
 - The Settings card lets you enable sound effects or voice announcements and configure alerts for abnormal temperatures.
+- Browser notifications or optional webhooks can alert you when a print completes or when filament runs low.
+- Thresholds for low filament warnings and webhook URLs can be set from the Settings card.

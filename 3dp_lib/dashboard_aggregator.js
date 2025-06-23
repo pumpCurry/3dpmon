@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.415 (PR #183)
+* @version 1.390.451 (PR #205)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 17:10:30
+* @lastModified 2025-06-23 18:52:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -79,6 +79,7 @@ const notifiedTempMilestones     = new Set();
 let prevMaterialStatus           = null;
 let currentMaterialStatus        = null;
 let filamentOutTimer             = null;
+let filamentLowWarned            = false;
 
 // ---------------------------------------------------------------------------
 // ingestData: WebSocket 生データ受領時の集計＆通知発火
@@ -644,6 +645,20 @@ export function aggregatorUpdate() {
     // 小数点以下2桁に丸めて保持
     remain = Math.round(remain * 100) / 100;
     setStoredData("filamentRemainingMm", remain, true);
+    const thr = notificationManager.getFilamentLowThreshold?.() ?? 0.1;
+    if (spool.totalLengthMm > 0) {
+      const ratio = remain / spool.totalLengthMm;
+      if (ratio <= thr && !filamentLowWarned) {
+        filamentLowWarned = true;
+        notificationManager.notify("filamentLow", {
+          remaining: remain,
+          thresholdPct: Math.round(thr * 100),
+          spoolName: spool.name
+        });
+      } else if (ratio > thr) {
+        filamentLowWarned = false;
+      }
+    }
   }
 
   updateStoredDataToDOM();

@@ -18,9 +18,9 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
-* @version 1.390.440 (PR #200)
+* @version 1.390.451 (PR #205)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 20:11:00
+* @lastModified 2025-06-23 18:52:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -143,6 +143,8 @@ export class NotificationManager {
     this.map        = JSON.parse(JSON.stringify(defaultNotificationMap));
     this.ttsVoice   = ""; // Web Speech API voice name
     this.ttsRate    = 1.8;      // 0.5～3.0
+    this.webhookUrls = [];
+    this.filamentLowThreshold = 0.1; // 残量10%を下回ったら通知
 
     // 永続化済み設定の読み込みは initializeDashboard() から
     // 行うため、コンストラクタでは呼び出さない。
@@ -187,6 +189,10 @@ export class NotificationManager {
 
     if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
     if (saved.ttsRate)  this.ttsRate  = saved.ttsRate;
+    if (Array.isArray(saved.webhookUrls)) this.webhookUrls = saved.webhookUrls;
+    if (typeof saved.filamentLowThreshold === "number") {
+      this.filamentLowThreshold = saved.filamentLowThreshold;
+    }
 
     // level プロパティが欠けている場合は info を補填
     Object.values(this.map).forEach(cfg => {
@@ -216,7 +222,9 @@ export class NotificationManager {
       useWebPush: this.useWebPush,
       map:        sanitized,
       ttsVoice:   this.ttsVoice,
-      ttsRate:    this.ttsRate
+      ttsRate:    this.ttsRate,
+      webhookUrls: this.webhookUrls,
+      filamentLowThreshold: this.filamentLowThreshold
     };
     saveUnifiedStorage();
   }
@@ -225,6 +233,41 @@ export class NotificationManager {
   mute(flag)          { this.muted      = !!flag; this._persistSettings(); }
   setVolume(v)        { this.volume     = Math.max(0, Math.min(1, v)); this._persistSettings(); }
   enableWebPush(flag) { this.useWebPush = !!flag; this._persistSettings(); }
+  /**
+   * Webhook URL リストを設定する。
+   * 入力値は空要素を除外して保存される。
+   *
+   * @param {string[]} list - URL の配列
+   * @returns {void}
+   */
+  setWebhookUrls(list) {
+    this.webhookUrls = Array.isArray(list) ? list.filter(u => u) : [];
+    this._persistSettings();
+  }
+  /**
+   * 現在登録されている Webhook URL を取得する。
+   *
+   * @returns {string[]} URL 配列
+   */
+  getWebhookUrls() { return [...this.webhookUrls]; }
+  /**
+   * フィラメント残量警告の閾値を設定する。
+   * 値は 0〜1 の範囲に丸められる。
+   *
+   * @param {number} v - 閾値(0〜1)
+   * @returns {void}
+   */
+  setFilamentLowThreshold(v) {
+    const val = Math.min(Math.max(v, 0), 1);
+    this.filamentLowThreshold = val;
+    this._persistSettings();
+  }
+  /**
+   * フィラメント残量警告の閾値を取得する。
+   *
+   * @returns {number} 閾値(0〜1)
+   */
+  getFilamentLowThreshold() { return this.filamentLowThreshold; }
 
   getNotificationMap() { return JSON.parse(JSON.stringify(this.map)); }
   getTypes()           { return Object.keys(this.map); }
@@ -330,6 +373,10 @@ export class NotificationManager {
       this._sendWebPush(text);
     }
 
+    if (this.webhookUrls.length > 0) {
+      this._sendWebHook(text);
+    }
+
   }
 
   /**
@@ -358,6 +405,27 @@ export class NotificationManager {
     } else {
       showAlert(body, "error");
     }
+  }
+
+  /**
+   * Webhook 経由で通知を送信する。
+   *
+   * @private
+   * @param {string} body - 通知本文
+   * @returns {void}
+   */
+  _sendWebHook(body) {
+    this.webhookUrls.forEach(url => {
+      try {
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: body })
+        });
+      } catch (e) {
+        console.error("[webhook]", e);
+      }
+    });
   }
 
   /**
@@ -500,7 +568,28 @@ export class NotificationManager {
     });
     container.appendChild(notifSaveBtn);
 
-    // (E) 読み上げ設定フィールド
+    // (E) 閾値・Webhook 設定フィールド
+    const extraFs = document.createElement("fieldset");
+    extraFs.className = "extra-settings";
+    extraFs.style.cssText = "margin-top:1em;padding:0.5em;border:1px solid #ccc;border-radius:4px;";
+    extraFs.innerHTML = `
+      <legend>追加設定</legend>
+      <label>フィラメント残量警告閾値(%)<input type="number" id="filament-threshold" min="1" max="50" step="1" value="${Math.round(this.filamentLowThreshold*100)}"></label>
+      <label style="display:block;margin-top:0.5em;">Webhook URLs (comma separated)
+        <textarea id="webhook-urls" rows="2" style="width:100%">${this.webhookUrls.join(",")}</textarea>
+      </label>
+      <button id="extra-save-btn">保存</button>
+    `;
+    container.appendChild(extraFs);
+    extraFs.querySelector("#extra-save-btn").addEventListener("click", () => {
+      const thr = parseFloat(extraFs.querySelector("#filament-threshold").value) / 100;
+      const urls = extraFs.querySelector("#webhook-urls").value.split(",").map(s => s.trim()).filter(s => s);
+      this.setFilamentLowThreshold(thr);
+      this.setWebhookUrls(urls);
+      showAlert("追加通知設定を保存しました", "success");
+    });
+
+    // (F) 読み上げ設定フィールド
     const ttsFs = document.createElement("fieldset");
     ttsFs.className = "tts-settings";
     ttsFs.style.cssText = "margin-top:1em;padding:0.5em;border:1px solid #ccc;border-radius:4px;";
