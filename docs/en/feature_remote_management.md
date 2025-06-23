@@ -17,3 +17,6 @@ This page details 3dpmon's remote control capabilities, file handling tools and 
 - The Settings card lets you enable sound effects or voice announcements and configure alerts for abnormal temperatures.
 - Browser notifications or optional webhooks can alert you when a print completes or when filament runs low.
 - Thresholds for low filament warnings and webhook URLs can be set from the Settings card.
+
+## Managing Multiple Printers
+Use the printer selector in the title bar to switch between printers. The adjacent list displays the connection state of each device.

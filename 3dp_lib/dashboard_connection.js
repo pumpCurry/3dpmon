@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.441 (PR #200)
-* @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 19:59:49
+* @version 1.390.451 (PR #205)
+* @since   1.390.451 (PR #205)
+* @lastModified 2025-06-23 18:57:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,39 +45,78 @@ import { aggregatorUpdate } from "./dashboard_aggregator.js";
 import { handleMessage } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
+import { showAlert } from "./dashboard_notification_manager.js";
 
-let ws = null;
-let heartbeatInterval = null;
-let reconnectAttempts = 0;
-let reconnectTimeout  = null;
-const MAX_RECONNECT   = 5;
-let userDisconnected  = false;
+// ---------------------------------------------------------------------------
+// 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
+// ---------------------------------------------------------------------------
 
-/** hostname 取得までの受信データを一時的に保持するバッファ */
-let temporaryBuffer = [];
+/** @type {Record<string, ConnectionState>} */
+const connectionMap = {};
 
-/** 最新の WS 受信データを格納 */
-let latestStoredData = null;
+/**
+ * @typedef {Object} ConnectionState
+ * @property {WebSocket|null} ws         - 接続ソケット
+ * @property {number|null}    hbInterval - ハートビート用タイマーID
+ * @property {number}         reconnect  - 再接続試行回数
+ * @property {number|null}    retryTimer - 再接続待機タイマーID
+ * @property {boolean}        userDisc   - ユーザー操作により切断されたか
+ * @property {Array<Object>}  buffer     - ホスト確定前に受信したデータ
+ * @property {Object|null}    latest     - 最新受信データ
+ * @property {string}         dest       - 接続先(IP:PORT)
+ * @property {"disconnected"|"connecting"|"connected"|"waiting"} state
+ *                                        - UI 表示用状態
+ */
+
+/** 再接続上限回数 */
+const MAX_RECONNECT = 5;
 
 let isAutoScrollEnabled = true;      // 現在「自動スクロール中」なら true
 let lastActiveTab = "received";      // "received" or "error"
 
 /**
+ * 指定ホストの接続状態オブジェクトを取得します。
+ * 存在しない場合は初期構造を生成して返します。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @returns {ConnectionState}
+ */
+function getState(host) {
+  if (!connectionMap[host]) {
+    connectionMap[host] = {
+      ws: null,
+      hbInterval: null,
+      reconnect: 0,
+      retryTimer: null,
+      userDisc: false,
+      buffer: [],
+      latest: null,
+      dest: "",
+      state: "disconnected"
+    };
+  }
+  return connectionMap[host];
+}
+
+/**
  * 最新の WebSocket 受信データを返します。
  * @returns {Promise<Object|null>}
  */
-export function fetchStoredData() {
-  return Promise.resolve(latestStoredData);
+export function fetchStoredData(host = currentHostname) {
+  const st = connectionMap[host];
+  return Promise.resolve(st?.latest ?? null);
 }
 
 /**
  * 現在設定されている monitorData.appSettings.wsDest から IP を抽出する。
  * @returns {string} IP アドレス文字列（失敗時は空文字）
  */
-export function getDeviceIp() {
-  const raw = monitorData.appSettings.wsDest || "";
-  const host = raw.split(":")[0];
-  return host || "";
+export function getDeviceIp(host = currentHostname) {
+  const st = connectionMap[host];
+  const raw = st?.dest || monitorData.appSettings.wsDest || "";
+  const h = raw.split(":")[0];
+  return h || "";
 }
 
 
@@ -104,40 +143,37 @@ export function getDeviceIp() {
  * @function
  * @returns {void}
  */
-export function connectWs() {
-  // もし直前にユーザー操作で切断された（disconnectWs()）フラグなら、
-  // 再接続試行カウントをクリアして userDisconnected を戻す
-  if (userDisconnected) {
-    reconnectAttempts = 0;
-    userDisconnected = false;
-  }
+export function connectWs(hostOrDest) {
+  const inputDest = document.getElementById("destination-input")?.value.trim();
+  let dest = hostOrDest || inputDest || monitorData.appSettings.wsDest || "";
+  if (!dest) return;
+  if (!dest.includes(":")) dest += ":9999";
+  const host = dest.split(":")[0];
+  const state = getState(host);
+  state.dest = dest;
 
-  // 再接続回数が上限を超えた場合、ログを出して処理終了
-  if (reconnectAttempts >= MAX_RECONNECT) {
+  if (state.userDisc) {
+    state.reconnect = 0;
+    state.userDisc = false;
+  }
+  if (state.reconnect >= MAX_RECONNECT) {
     pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error");
     return;
   }
 
-  // 回数加算 / UI を「接続中…」に切り替え
-  reconnectAttempts++;
-  updateConnectionUI("connecting", {attempt: reconnectAttempts, max: MAX_RECONNECT});
-  pushLog(`WS接続を試みます...(試行${reconnectAttempts}回目/${MAX_RECONNECT}回)`, "warn");
+  state.reconnect++;
+  state.state = "connecting";
+  updateConnectionUI("connecting", { attempt: state.reconnect, max: MAX_RECONNECT }, host);
+  updatePrinterListUI();
+  pushLog(`WS接続を試みます...(試行${state.reconnect}回目/${MAX_RECONNECT}回)`, "warn");
 
-  // 接続先の構築（ws:// または wss://）
-  // → ユーザー入力にポートがあればそのまま、なければ:9999を追加
-
-  const destInput = document.getElementById("destination-input")?.value.trim();
-  let dest = destInput || monitorData.appSettings.wsDest || "";
-
-  if (dest && !dest.includes(":")) {
-    dest += ":9999";
-  }
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
-  ws = new WebSocket(protocol + dest);
-  ws.onopen    = handleSocketOpen;
-  ws.onmessage = handleSocketMessage;
-  ws.onerror   = handleSocketError;
-  ws.onclose   = handleSocketClose;
+  const ws = new WebSocket(protocol + dest);
+  state.ws = ws;
+  ws.onopen    = () => handleSocketOpen(host);
+  ws.onmessage = evt => handleSocketMessage(evt, host);
+  ws.onerror   = err => handleSocketError(err, host);
+  ws.onclose   = () => handleSocketClose(host);
 }
 
 /**
@@ -146,19 +182,21 @@ export function connectWs() {
  * - reconnectAttempts をリセット
  * - UI を「接続済み」に切り替え
  */
-function handleSocketOpen() {
+function handleSocketOpen(host) {
   pushLog("WebSocket接続が確立しました。", "info");
-  reconnectAttempts = 0;
-  userDisconnected = false;
+  const st = getState(host);
+  st.reconnect = 0;
+  st.userDisc = false;
 
   // Heartbeat開始（30秒おき）
-  startHeartbeat(ws);
-  
-  // aggregatorUpdate タイマー開始（500ms間隔）
-  restartAggregatorTimer(500);    // 集計ループ開始
+  startHeartbeat(st.ws, 30_000, host);
 
-  // 成功したら input を再び隠し、ラベルを「接続済み」に書き換え
-  updateConnectionUI("connected");
+  if (host === currentHostname) {
+    restartAggregatorTimer(500);    // 集計ループ開始
+    updateConnectionUI("connected", {}, host);
+  }
+  st.state = "connected";
+  updatePrinterListUI();
 
   // 1秒ディレイしてから履歴一覧取得とファイル一覧取得を実施
   setTimeout(() => {
@@ -181,7 +219,7 @@ function handleSocketOpen() {
  *
  * @param {MessageEvent} event
  */
-function handleSocketMessage(event) {
+function handleSocketMessage(event, host) {
   // 1) --- 生データ "ok" はスキップ ---
   if (event.data === "ok") { 
     pushLog("受信: heart beat:" + event.data, "success");
@@ -215,17 +253,22 @@ function handleSocketMessage(event) {
 
 // 5.5) handleMessage(と内部でprocessData(data)の実施:起動後1度のみ)
   try {
-    latestStoredData = data;
-    handleMessage(data);
+    const st = getState(host);
+    st.latest = data;
+    if (host === currentHostname) {
+      handleMessage(data);
+    } else {
+      st.buffer.push(data);
+    }
   } catch (e) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error");
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
   }
   // 現在のホスト名が有効かどうか判定
-  const hostReady = currentHostname &&
+  const hostReady = host === currentHostname &&
                     currentHostname !== PLACEHOLDER_HOSTNAME;
   // 共通ベース URL
-  const ip = getDeviceIp();
+  const ip = getDeviceIp(host);
   const baseUrl = `http://${ip}`;
 
 // 6) 印刷履歴情報の保存・再描画
@@ -234,13 +277,13 @@ function handleSocketMessage(event) {
     // （dashboard_printManager.js 側で実装）
     if (hostReady && Array.isArray(data.historyList)) {
       pushLog("historyList を受信しました", "info");
-      const baseUrl80 = `http://${getDeviceIp()}:80`;
-      printManager.updateHistoryList(data.historyList, baseUrl80);
+      const baseUrl80 = `http://${getDeviceIp(host)}:80`;
+      printManager.updateHistoryList(data.historyList, baseUrl80, host);
     }
     if (hostReady && Array.isArray(data.elapseVideoList)) {
       pushLog("elapseVideoList を受信しました", "info");
-      const baseUrl80 = `http://${getDeviceIp()}:80`;
-      printManager.updateVideoList(data.elapseVideoList, baseUrl80);
+      const baseUrl80 = `http://${getDeviceIp(host)}:80`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl80, host);
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
@@ -273,7 +316,7 @@ function handleSocketMessage(event) {
  *
  * @param {Event} error - WebSocket エラーイベント
  */
-function handleSocketError(error) {
+function handleSocketError(error, host) {
   const msg = "WebSocketエラー: " + (error?.message || String(error));
   pushLog(msg, "error");
   console.error("[ws.onerror]", error);
@@ -289,43 +332,54 @@ function handleSocketError(error) {
  * - ユーザ切断 or 上限超えなら UI を切断状態へ
  * - それ以外は Exponential Backoff で再接続
  */
-function handleSocketClose() {
+function handleSocketClose(host) {
   pushLog("WebSocket接続が閉じられました。", "warn");
+  const st = getState(host);
 
   // Heartbeat停止...
-  stopHeartbeat();             // ハートビート停止
-  stopAggregatorTimer();       // 集計ループ停止
+  stopHeartbeat(host);             // ハートビート停止
+  if (host === currentHostname) {
+    stopAggregatorTimer();       // 集計ループ停止
+  }
 
   // 明示的にユーザが「切断」ボタンを押した場合
-  if (userDisconnected) {
-    userDisconnected  = false;
-    updateConnectionUI("disconnected");
+  if (st.userDisc) {
+    st.userDisc  = false;
+    st.state = "disconnected";
+    if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
+    updatePrinterListUI();
     pushLog("ユーザー操作により切断されました。", "info");
     return;
   }
 
   // 自動再接続が上限に達した場合
-  if (reconnectAttempts >= MAX_RECONNECT) {
-    updateConnectionUI("disconnected");
+  if (st.reconnect >= MAX_RECONNECT) {
+    if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
+    st.state = "disconnected";
+    updatePrinterListUI();
     pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error");
     return;
   }
 
   // 再接続待機 UI 表示＆ログ
   // if (!userDisconnected && reconnectAttempts < MAX_RECONNECT)
-  const delayMs = 2000 * Math.pow(2, reconnectAttempts - 1);
+  const delayMs = 2000 * Math.pow(2, st.reconnect - 1);
   const delaySec = Math.ceil(delayMs / 1000);
-  const nextAttempt = reconnectAttempts + 1;
+  const nextAttempt = st.reconnect + 1;
 
   // ① ログ出力
   pushLog(`Ws接続が切断されました。${delaySec}秒後に再試行します...（${nextAttempt}/${MAX_RECONNECT}）`, "warn");
 
   // ② 待機UIに切り替え
-  updateConnectionUI("waiting", {
-    attempt: nextAttempt,
-    max: MAX_RECONNECT,
-    wait: delaySec
-  });
+  if (host === currentHostname) {
+    updateConnectionUI("waiting", {
+      attempt: nextAttempt,
+      max: MAX_RECONNECT,
+      wait: delaySec
+    }, host);
+  }
+  st.state = "waiting";
+  updatePrinterListUI();
   
   // ③ カウントダウンタイマー開始
   let remaining = delaySec;
@@ -343,13 +397,13 @@ function handleSocketClose() {
   }, 1000);
 
   // ④ 既存タイマーがあればクリア
-  if (reconnectTimeout) clearTimeout(reconnectTimeout);
+  if (st.retryTimer) clearTimeout(st.retryTimer);
 
   // ⑤ 再接続本体
-  reconnectTimeout = setTimeout(() => {
+  st.retryTimer = setTimeout(() => {
     clearInterval(cdTimer);
-    reconnectTimeout = null;
-    connectWs();
+    st.retryTimer = null;
+    connectWs(st.dest);
   }, delayMs);
   return;
 }
@@ -367,21 +421,19 @@ function handleSocketClose() {
  * @param {number} [intervalMs=30000] - 送信間隔（ミリ秒）
  * @returns {void}
  */
-export function startHeartbeat(socket, intervalMs = 30_000) {
-  ws = socket;
-  // 既存タイマーをクリア
-  if (heartbeatInterval !== null) {
-    clearInterval(heartbeatInterval);
+export function startHeartbeat(socket, intervalMs = 30_000, host = currentHostname) {
+  const st = getState(host);
+  st.ws = socket;
+  if (st.hbInterval !== null) {
+    clearInterval(st.hbInterval);
   }
-
-  // 新規タイマーを設定
-  heartbeatInterval = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) {
+  st.hbInterval = setInterval(() => {
+    if (st.ws && st.ws.readyState === WebSocket.OPEN) {
       const payload = {
         ModeCode: "heart_beat",
         msg: new Date().toISOString()
       };
-      ws.send(JSON.stringify(payload));
+      st.ws.send(JSON.stringify(payload));
     }
   }, intervalMs);
 }
@@ -393,10 +445,11 @@ export function startHeartbeat(socket, intervalMs = 30_000) {
  *
  * @returns {void}
  */
-export function stopHeartbeat() {
-  if (heartbeatInterval !== null) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
+export function stopHeartbeat(host = currentHostname) {
+  const st = connectionMap[host];
+  if (st && st.hbInterval !== null) {
+    clearInterval(st.hbInterval);
+    st.hbInterval = null;
   }
 }
 
@@ -409,32 +462,36 @@ export function stopHeartbeat() {
  * @function
  * @returns {void}
  */
-export function disconnectWs() {
-  // 明示的切断フラグをセット（再接続を抑止するため）
-  userDisconnected = true;
+export function disconnectWs(host = currentHostname) {
+  const st = getState(host);
+  st.userDisc = true;
 
   // pending な自動再接続タイマーをキャンセル
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout);
-    reconnectTimeout = null;
+  if (st.retryTimer) {
+    clearTimeout(st.retryTimer);
+    st.retryTimer = null;
   }
 
   // 接続状態なら明示的に close を発行
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.close();
+  if (st.ws && st.ws.readyState === WebSocket.OPEN) {
+    st.ws.close();
   }
 
   // 再接続カウント初期化
-  reconnectAttempts = 0;
+  st.reconnect = 0;
 
   // 入力欄を再度書き換え可に
   // UIを切断状態に更新
-  updateConnectionUI("disconnected");
+  if (host === currentHostname) {
+    updateConnectionUI("disconnected", {}, host);
+  }
+  st.state = "disconnected";
+  updatePrinterListUI();
 
   // 切断時点で保持中のホスト名をリセットしておく
   // これにより次回接続時、初回メッセージで新しい
   // ホスト名が確実に設定され、履歴データの混在を防ぐ
-  setCurrentHostname(PLACEHOLDER_HOSTNAME);
+  if (host === currentHostname) setCurrentHostname(PLACEHOLDER_HOSTNAME);
 }
 
 /* ===================== DOM 更新ヘルパー ===================== */
@@ -451,13 +508,33 @@ export function setupConnectButton() {
 }
 
 /**
+ * プリンタ選択 UI を初期化します。
+ * セレクトボックスの変更に合わせて監視対象を切り替えます。
+ *
+ * @returns {void}
+ */
+export function setupPrinterUI() {
+  const sel = document.getElementById("printer-select");
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    const host = sel.value;
+    if (host) {
+      setCurrentHostname(host);
+      updateConnectionUI(connectionMap[host]?.state || "disconnected", {}, host);
+    }
+  });
+  updatePrinterListUI();
+}
+
+/**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
  * @param {string} method - コマンド名
  * @param {Object} params - パラメータ
  * @returns {Promise<Object>} サーバー result フィールド
  */
-export function sendCommand(method, params = {}) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+export function sendCommand(method, params = {}, host = currentHostname) {
+  const st = getState(host);
+  if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     showAlert("WebSocket が接続されていません", "error");
     return Promise.reject(new Error("WebSocket not connected"));
   }
@@ -472,7 +549,7 @@ export function sendCommand(method, params = {}) {
         return;
       }
       if (msg.id !== id) return;
-      ws.removeEventListener("message", onResp);
+      st.ws.removeEventListener("message", onResp);
       if (msg.error) {
         showAlert(`${method} エラー: ${msg.error.message}`, "error");
         reject(msg.error);
@@ -481,12 +558,12 @@ export function sendCommand(method, params = {}) {
         resolve(msg.result);
       }
     };
-    ws.addEventListener("message", onResp);
+    st.ws.addEventListener("message", onResp);
 
     // ── 送信ログ（紫色）
     const json = JSON.stringify(payload);
     pushLog(`送信: ${json}`, "send");
-    ws.send(json);
+    st.ws.send(json);
 
   });
 }
@@ -504,7 +581,7 @@ export function sendCommand(method, params = {}) {
  * @param {{attempt?: number, max?: number, wait?: number}} [opt={}]
  *   connecting/waiting 時に使用する { attempt, max, wait }
  */
-export function updateConnectionUI(state, opt = {}) {
+export function updateConnectionUI(state, opt = {}, host = currentHostname) {
   const ipInput       = document.getElementById("destination-input");
   const ipDisplay     = document.getElementById("destination-display");
   const statusEl      = document.getElementById("connection-status");
@@ -513,7 +590,8 @@ export function updateConnectionUI(state, opt = {}) {
   const muteTag       = document.getElementById("audio-muted-tag");
 
   // wsDest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
-  const rawDest  = monitorData.appSettings.wsDest || "";
+  const st = getState(host);
+  const rawDest  = st.dest || monitorData.appSettings.wsDest || "";
   const hostOnly = rawDest.split(":")[0] || "";
 
   // 入力欄を隠し・無効化
@@ -612,12 +690,38 @@ export function updateConnectionUI(state, opt = {}) {
     default:
       console.error(`updateConnectionUI: unknown state="${state}"`);
   }
+  updatePrinterListUI();
+}
+
+/**
+ * 接続中プリンタ一覧の UI を更新します。
+ * select 要素とステータス表示を再構築します。
+ *
+ * @private
+ * @returns {void}
+ */
+function updatePrinterListUI() {
+  const sel  = document.getElementById("printer-select");
+  const list = document.getElementById("printer-status-list");
+  if (!sel || !list) return;
+
+  const hosts = Object.keys(connectionMap);
+  sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
+  sel.value = currentHostname || "";
+
+  list.innerHTML = hosts
+    .map(h => {
+      const st = connectionMap[h];
+      const label = `${h} : ${st.state}`;
+      return `<div>${label}</div>`;
+    })
+    .join("");
 }
 
 /**
  * Debug helper: treat a raw JSON string as a received WebSocket message.
  * @param {string} jsonStr - JSON text to process
  */
-export function simulateReceivedJson(jsonStr) {
-  handleSocketMessage({ data: jsonStr });
+export function simulateReceivedJson(jsonStr, host = currentHostname) {
+  handleSocketMessage({ data: jsonStr }, host);
 }
