@@ -194,6 +194,12 @@ body {
 .notification-alert.error   { background-color: #dc3545; }
 .notification-alert.success { background-color: #28a745; }
 
+/* --- Multi printer UI --- */
+#printer-status-list div {
+  display: inline-block;
+  margin-left: 4px;
+}
+
 .notification-close {
   background: transparent;
   border: none;
