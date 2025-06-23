@@ -14,9 +14,9 @@
  * - {@link DEFAULT_SOUND}：既定サウンドファイル名
  * - {@link defaultNotificationMap}：通知設定マップ
  *
-* @version 1.390.414 (PR #183)
+* @version 1.390.451 (PR #205)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 17:10:30
+* @lastModified 2025-06-23 18:52:08
 * -----------------------------------------------------------
 * @todo
 * - none
@@ -44,6 +44,8 @@ export const defaultNotificationMap = {
   errorResolved:    { talk: "{hostname} のエラーは解消しました ({now})",                           sound: DEFAULT_SOUND, enabled: true, level: "success" },
   filamentOut:      { talk: "{hostname} のフィラメントが切れました",                               sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   filamentReplaced: { talk: "{hostname} にフィラメントが補充されました",                         sound: DEFAULT_SOUND, enabled: true, level: "success" },
+  filamentLow:      { talk: "{hostname} フィラメント残量が少なくなっています 残り{remaining}mm ({now})",
+                 sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   timeLeft10:       { talk: "{hostname} 印刷終了まで残り10分です",                                 sound: DEFAULT_SOUND, enabled: true, level: "info"    },
   timeLeft5:        { talk: "{hostname} 印刷終了まで残り5分です",                                  sound: DEFAULT_SOUND, enabled: true, level: "info"    },
   timeLeft1:        { talk: "{hostname} 印刷終了まで残り1分です",                                  sound: DEFAULT_SOUND, enabled: true, level: "info"    },
