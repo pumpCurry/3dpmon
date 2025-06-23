@@ -5,6 +5,7 @@
 ### 日本語
 - [ダッシュボードの使い方](./ja/dashboard_usage.md)
 - [機能一覧](./ja/features.md)
+- [開発マイルストーン](./ja/project_goals.md) / [Project Milestones](./en/project_goals.md)
 - [フィラメント管理ガイド](./ja/filament_manual.md)
 
 ### English

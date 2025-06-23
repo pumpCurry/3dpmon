@@ -20,12 +20,14 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.415 (PR #183)
+* @version 1.390.451 (PR #1)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 17:10:30
+ * @lastModified 2025-06-23 13:42:48
  * -----------------------------------------------------------
  * @todo
- * - none
+ * - マルチプリンタ監視の拡張
+ * - ジョブキュー管理機能
+ * - Slack等の通知連携
  */
 
 "use strict";

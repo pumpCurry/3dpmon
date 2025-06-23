@@ -1,4 +1,4 @@
-/** 2025-06-22 13:06:00
+/** 2025-06-23 13:42:48
  * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメントスプール管理モジュール
  * @file dashboard_spool.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
@@ -27,12 +27,14 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.420 (PR #189)
+* @version 1.390.451 (PR #1)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 17:22:21
+ * @lastModified 2025-06-23 13:42:48
  * -----------------------------------------------------------
  * @todo
- * - none
+ * - RFID/QRスプール自動認識機能の導入
+ * - 湿度等によるフィラメント状態監視
+ * - 自動スプール切り替え対応
 */
 
 "use strict";
