@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
- * @version 1.390.395 (PR #178)
+* @version 1.390.451 (PR #205)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-22 13:28:24
+* @lastModified 2025-06-23 18:57:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -56,6 +56,7 @@ import {
   pushLog
 } from "./dashboard_log_util.js";
 import { updateConnectionUI } from "./dashboard_connection.js";
+import { setupPrinterUI } from "./dashboard_connection.js";
 import {
   startCameraStream,
   stopCameraStream
@@ -338,6 +339,7 @@ export function initializeDashboard({
     stopCameraStream();
   });
   updateConnectionUI("disconnected");
+  setupPrinterUI();
 
   // (18) 時間計算用変数自動保存
   initializeAutoSave();

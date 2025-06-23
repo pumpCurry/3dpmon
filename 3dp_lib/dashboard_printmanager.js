@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.448 (PR #204)
+* @version 1.390.451 (PR #205)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-23 05:57:03
+* @lastModified 2025-06-23 18:57:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -125,7 +125,7 @@ function makeThumbUrl(baseUrl, rawFilename) {
  * 受信した生データ `raw` をHTML描画用オブジェクトに整形します。
  * サムネイルURL生成や開始方式などの追加情報もここで抽出します。
  */
-export function parseRawHistoryEntry(raw, baseUrl) {
+export function parseRawHistoryEntry(raw, baseUrl, host = currentHostname) {
   const id             = raw.id;
   const filename       = raw.filename?.split("/").pop() || "(不明)";
   // フルパスも保持しておくことでコマンド送信時に利用できるようにする
@@ -158,8 +158,8 @@ export function parseRawHistoryEntry(raw, baseUrl) {
   const filamentColor       = raw.filamentColor;
   const filamentType        = raw.filamentType;
 
-  const hostname            = currentHostname || "";
-  const ip                  = getDeviceIp();
+  const hostname            = host || "";
+  const ip                  = getDeviceIp(host);
   const updatedEpoch        = Math.floor(Date.now() / 1000);
 
   return {
@@ -192,10 +192,10 @@ export function parseRawHistoryEntry(raw, baseUrl) {
  * @param {string} baseUrl         - サムネイル取得用ベース URL
  * @returns {Array<ReturnType<typeof parseRawHistoryEntry>>}
  */
-export function parseRawHistoryList(rawArray, baseUrl) {
+export function parseRawHistoryList(rawArray, baseUrl, host = currentHostname) {
   return rawArray
     .filter(r => typeof r.filename === "string" && r.filename.length > 0)
-    .map(r => parseRawHistoryEntry(r, baseUrl))
+    .map(r => parseRawHistoryEntry(r, baseUrl, host))
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
 }
@@ -449,16 +449,17 @@ export async function refreshHistory(
   fetchStoredData,
   baseUrl,
   currentContainerId = "print-current-container",
-  historyContainerId = "print-history-list"
+  historyContainerId = "print-history-list",
+  host = currentHostname
 ) {
   // 生データ取得
-  const sd  = await fetchStoredData();
+  const sd  = await fetchStoredData(host);
   const raw = Array.isArray(sd.historyList) ? sd.historyList : [];
 
   // パース → 永続化（既存データとマージ）
-  const newJobs = parseRawHistoryList(raw, baseUrl);
+  const newJobs = parseRawHistoryList(raw, baseUrl, host);
   // --- monitorData の一時履歴データを取り込み ---
-  const machine = monitorData.machines[currentHostname];
+  const machine = monitorData.machines[host];
   const buf = machine ? machine.historyData : [];
   const appliedIdx = new Set();
   if (buf && buf.length) {
@@ -567,13 +568,14 @@ export async function refreshHistory(
 export function updateHistoryList(
   rawArray,
   baseUrl,
-  currentContainerId = "print-current-container"
+  currentContainerId = "print-current-container",
+  host = currentHostname
 ) {
   if (!Array.isArray(rawArray)) return;
   pushLog("[updateHistoryList] マージ処理を開始", "info");
-  const newJobs = parseRawHistoryList(rawArray, baseUrl);
+  const newJobs = parseRawHistoryList(rawArray, baseUrl, host);
 
-  const machine = monitorData.machines[currentHostname];
+  const machine = monitorData.machines[host];
   const buf = machine ? machine.historyData : [];
   const appliedIdx = new Set();
   if (buf && buf.length) {
@@ -651,7 +653,7 @@ export function updateHistoryList(
  * @param {string} baseUrl           - サーバーのベース URL
  * @returns {void}
  */
-export function updateVideoList(videoArray, baseUrl) {
+export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
   if (!Array.isArray(videoArray) || !videoArray.length) return;
   pushLog("[updateVideoList] マージ処理を開始", "info");
   const map = { ...loadVideos() };

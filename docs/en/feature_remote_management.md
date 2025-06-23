@@ -15,3 +15,6 @@ This page details 3dpmon's remote control capabilities, file handling tools and 
 ## Notification Settings
 - Toggle notifications using the bell icon at the bottom right.
 - The Settings card lets you enable sound effects or voice announcements and configure alerts for abnormal temperatures.
+
+## Managing Multiple Printers
+Use the printer selector in the title bar to switch between printers. The adjacent list displays the connection state of each device.
