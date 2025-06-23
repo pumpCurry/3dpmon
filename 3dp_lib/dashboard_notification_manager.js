@@ -18,12 +18,12 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
-* @version 1.390.440 (PR #200)
+* @version 1.390.451 (PR #1)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 20:11:00
- * -----------------------------------------------------------
+ * @lastModified 2025-06-23 13:42:48
  * @todo
- * - none
+ * - Slackなど外部通知連携の対応
+ * - ユーザー別の通知関連設定
 */
 "use strict";
 
