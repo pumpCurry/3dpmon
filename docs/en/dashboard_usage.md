@@ -15,6 +15,7 @@
    ```
    python -m http.server 8000
    ```
+   On Windows you can also double-click `start.bat` to run the same server.
 3. Open `http://localhost:8000/3dp_monitor.html` in your browser
 4. Enter your printer's IP address in the top right field and click "Connect"
 5. Use the dashboard to monitor and control the printer
