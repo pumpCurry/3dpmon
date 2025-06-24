@@ -1,6 +1,0 @@
-numpy
-pillow
-requests
-torch
-opencv-python
-websocket-client
