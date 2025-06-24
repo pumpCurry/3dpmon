@@ -15,6 +15,7 @@
    ```
    python -m http.server 8000
    ```
+   Windows の場合は同梱の `start.bat` をダブルクリックしても起動できます。
 5. ブラウザで `http://localhost:8000/3dp_monitor.html` を開きます。
 
 ## ライセンス
@@ -39,6 +40,7 @@ This is a browser-based dashboard for monitoring the Clarity series of 3D printe
    ```
    python -m http.server 8000
    ```
+   On Windows you can also run `start.bat` to launch the server.
 5. Navigate to `http://localhost:8000/3dp_monitor.html` in your browser.
 
 ## License
