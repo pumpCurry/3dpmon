@@ -6,6 +6,7 @@
 - [ダッシュボードの使い方](./ja/dashboard_usage.md)
 - [機能一覧](./ja/features.md)
 - [フィラメント管理ガイド](./ja/filament_manual.md)
+- [Windows 版セットアップガイド](./ja/windows_install.md)
 
 ### English
 - [Dashboard Usage](./en/dashboard_usage.md)
