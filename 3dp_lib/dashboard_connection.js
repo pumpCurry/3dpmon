@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.468 (PR #214)
+* @version 1.390.471 (PR #217)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-25 21:00:00
+* @lastModified 2025-06-25 22:10:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -173,6 +173,7 @@ export function connectWs(hostOrDest) {
   const state = getState(host);
   state.dest = dest;
 
+
   if (state.userDisc) {
     state.reconnect = 0;
     state.userDisc = false;
@@ -276,7 +277,9 @@ function handleSocketMessage(event, host) {
   try {
     const st = getState(host);
     st.latest = data;
-    if (host === currentHostname) {
+    // currentHostname が未確定 (PLACEHOLDER_HOSTNAME) の場合も
+    // 受信データから hostname を得るため handleMessage を実行する
+    if (host === currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
       handleMessage(data);
     } else {
       st.buffer.push(data);
