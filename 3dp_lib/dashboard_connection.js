@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.474 (PR #216)
-* @since   1.390.451 (PR #205)
-* @lastModified 2025-06-26 15:00:00
+ * @version 1.390.474 (PR #216)
+ * @since   1.390.451 (PR #205)
+ * @lastModified 2025-06-25 22:45:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -38,7 +38,8 @@ import {
   monitorData,
   currentHostname,
   PLACEHOLDER_HOSTNAME,
-  setCurrentHostname
+  setCurrentHostname,
+  setNotificationSuppressed
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
@@ -391,6 +392,8 @@ function handleSocketError(error, host) {
  */
 function handleSocketClose(host) {
   pushLog("WebSocket接続が閉じられました。", "warn");
+  // 切断直後は通知を抑制する
+  setNotificationSuppressed(true);
   const st = getState(host);
 
   // Heartbeat停止...
