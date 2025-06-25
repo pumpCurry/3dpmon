@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.468 (PR #214)
+* @version 1.390.469 (PR #215)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-25 21:00:00
+* @lastModified 2025-06-25 21:34:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -172,6 +172,11 @@ export function connectWs(hostOrDest) {
   const host = dest.split(":")[0];
   const state = getState(host);
   state.dest = dest;
+
+  // 接続試行時点で currentHostname を更新しておくことで
+  // 初回メッセージが到着する前でも UI 更新とコマンド送信を
+  // 安定して行えるようにする
+  setCurrentHostname(host);
 
   if (state.userDisc) {
     state.reconnect = 0;
