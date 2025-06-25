@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.451 (PR #205)
+* @version 1.390.468 (PR #214)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-23 18:57:23
+* @lastModified 2025-06-25 21:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -75,14 +75,35 @@ let isAutoScrollEnabled = true;      // 現在「自動スクロール中」な�
 let lastActiveTab = "received";      // "received" or "error"
 
 /**
+ * ダミー状態（未選択時に使用）
+ * @type {ConnectionState}
+ */
+const placeholderState = {
+  ws: null,
+  hbInterval: null,
+  reconnect: 0,
+  retryTimer: null,
+  userDisc: false,
+  buffer: [],
+  latest: null,
+  dest: "",
+  state: "disconnected"
+};
+
+/**
  * 指定ホストの接続状態オブジェクトを取得します。
  * 存在しない場合は初期構造を生成して返します。
+ * PLACEHOLDER_HOSTNAME のときはマップへ登録せず
+ * {@link placeholderState} を共有して返します。
  *
  * @private
  * @param {string} host - ホスト名
  * @returns {ConnectionState}
  */
 function getState(host) {
+  if (host === PLACEHOLDER_HOSTNAME) {
+    return placeholderState;
+  }
   if (!connectionMap[host]) {
     connectionMap[host] = {
       ws: null,
@@ -705,9 +726,9 @@ function updatePrinterListUI() {
   const list = document.getElementById("printer-status-list");
   if (!sel || !list) return;
 
-  const hosts = Object.keys(connectionMap);
+  const hosts = Object.keys(connectionMap).filter(h => h !== PLACEHOLDER_HOSTNAME);
   sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
-  sel.value = currentHostname || "";
+  sel.value = hosts.includes(currentHostname) ? currentHostname : "";
 
   list.innerHTML = hosts
     .map(h => {
