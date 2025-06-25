@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.451 (PR #205)
- * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-23 18:57:23
+* @version 1.390.462 (PR #211)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-25 20:25:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -282,7 +282,8 @@ export function initializeDashboard({
   
   // (12) ページロード時のカメラ起動
   if (monitorData.appSettings.cameraToggle && monitorData.appSettings.wsDest) {
-    setTimeout(startCameraStream(), 1500);
+    // startCameraStream は参照を渡し遅延実行させる
+    setTimeout(startCameraStream, 1500);
   }
 
   // (12.5) 保存済みの履歴と現在印刷を表示

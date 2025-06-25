@@ -18,9 +18,9 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
-* @version 1.390.366 (PR #159)
+* @version 1.390.462 (PR #211)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 05:21:50
+* @lastModified 2025-06-25 20:25:42
 * -----------------------------------------------------------
  * @todo
  * - none
@@ -257,6 +257,8 @@ function _connectImgStream(host) {
     updateCameraConnectionUI("connected");
     pushLog("カメラ接続成功", "success");
     notificationManager.notify("cameraConnected");
+    // MJPEG ストリームでは onload がフレーム毎に発火するため一度で解除
+    cameraImg.onload = null;
   };
 
   // 読み込みエラー
