@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.462 (PR #190)
+* @version 1.390.465 (PR #212)
 * @since   1.390.228 (PR #102)
 * @lastModified 2025-06-22 18:00:00
  * -----------------------------------------------------------
@@ -1848,14 +1848,15 @@ export function showFilamentManager(activeIdx = 0) {
   let switchTab = () => {};
 
   const editTab = createEditorContent(() => {
-    contents[REGISTERED_IDX].render();
+    registered.render();
     switchTab(REGISTERED_IDX);
   });
 
+  const usedTab = createUsedSpoolContent();
   const contents = [
     createHistoryContent(),
     createCurrentSpoolContent(),
-    createUsedSpoolContent(),
+    usedTab.el,
     createInventoryContent(),
     null,
     null,
