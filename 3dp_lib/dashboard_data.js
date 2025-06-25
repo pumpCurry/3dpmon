@@ -20,9 +20,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.352 (PR #156)
+ * @version 1.390.474 (PR #216)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-21 07:41:35
+ * @lastModified 2025-06-25 22:45:26
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -77,6 +77,26 @@ export const PLACEHOLDER_HOSTNAME = "_$_NO_MACHINE_$_";
  * @type {string|null}
  */
 export let currentHostname = null;
+
+/**
+ * 通知抑制状態フラグ
+ *
+ * true の間は NotificationManager.notify() による通知を抑制します。
+ * 接続処理中や機器未選択時に誤通知が発生するのを防止する目的で使用します。
+ * @type {boolean}
+ */
+export let notificationSuppressed = true;
+
+/**
+ * setNotificationSuppressed:
+ * 通知抑制状態を更新します。
+ *
+ * @param {boolean} flag - true で通知抑制、false で通知許可
+ * @returns {void}
+ */
+export function setNotificationSuppressed(flag) {
+  notificationSuppressed = flag;
+}
 
 /**
  * createEmptyMachineData:

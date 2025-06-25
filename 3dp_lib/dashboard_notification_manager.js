@@ -18,16 +18,20 @@
  * - {@link NotificationManager}：通知管理クラス
  * - {@link notificationManager}：共有インスタンス
  *
-* @version 1.390.451 (PR #205)
+* @version 1.390.474 (PR #216)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-23 18:52:08
+* @lastModified 2025-06-25 22:45:32
  * -----------------------------------------------------------
  * @todo
  * - none
 */
 "use strict";
 
-import { currentHostname, monitorData } from "./dashboard_data.js";
+import {
+  currentHostname,
+  monitorData,
+  notificationSuppressed
+} from "./dashboard_data.js";
 import { saveUnifiedStorage }           from "./dashboard_storage.js";
 import { audioManager }                 from "./dashboard_audio_manager.js";
 import { defaultNotificationMap }       from "./dashboard_notification_defaults.js";
@@ -312,9 +316,9 @@ export class NotificationManager {
    * @function notify
    * @param {string} type
    * @param {object} [payload]
-   */
+  */
   notify(type, payload = {}) {
-    if (!this.enabled) return;
+    if (!this.enabled || notificationSuppressed) return;
     const def = this.map[type];
     if (!def?.enabled) return;
 
