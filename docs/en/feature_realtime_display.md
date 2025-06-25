@@ -11,3 +11,6 @@ This section describes the real-time monitoring features in 3dpmon. By combining
 - Click the camera image in the monitor card to enlarge it.
 - Hover over the temperature graph to show the current value as a tooltip.
 - To reset the temperature history, open the Settings card and choose **Reset Graph**.
+
+## Troubleshooting
+- If the camera repeatedly reconnects and the browser becomes sluggish, an ad-block extension may be blocking the stream. Temporarily disable the extension or whitelist the site to confirm.
