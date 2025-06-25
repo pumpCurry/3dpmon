@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.439 (PR #199)
+* @version 1.390.474 (PR #216)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-22 18:59:29
+* @lastModified 2025-06-25 22:45:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -32,6 +32,7 @@ import {
   currentHostname,
   setCurrentHostname,
   PLACEHOLDER_HOSTNAME,
+  setNotificationSuppressed,
   setStoredData,
 } from "./dashboard_data.js";
 import {
@@ -110,6 +111,9 @@ export function handleMessage(data) {
   // (1a) 初回ホスト設定
   if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) && data.hostname) {
 
+    // 初期化中は通知を抑制する
+    setNotificationSuppressed(true);
+
     // --- ストレージ＆ホスト初期化 ---
     restoreUnifiedStorage();
     setCurrentHostname(data.hostname);
@@ -181,6 +185,9 @@ export function handleMessage(data) {
     printManager.renderPrintCurrent(
       document.getElementById("print-current-container")
     );
+
+    // 初期化完了、通知抑制を解除
+    setNotificationSuppressed(false);
 
   }
 
