@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.317 (PR #143)
- * @since   1.390.228 (PR #102)
- * @lastModified 2025-06-19 22:38:18
+* @version 1.390.462 (PR #190)
+* @since   1.390.228 (PR #102)
+* @lastModified 2025-06-22 18:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -27,11 +27,14 @@
 import { monitorData } from "./dashboard_data.js";
 import {
   getCurrentSpool,
+  getCurrentSpoolId,
   getSpools,
   addSpool,
   updateSpool,
   addSpoolFromPreset,
-  deleteSpool
+  deleteSpool,
+  setCurrentSpoolId,
+  restoreSpool
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -106,6 +109,7 @@ function injectStyles() {
     .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
     .registered-list{flex:1;overflow-y:auto;max-height:70vh;}
     .registered-table th{cursor:pointer;}
+    .deleted-row td{text-decoration:line-through;background:#eee;}
     .edit-form label{display:block;margin:4px 0;font-size:12px;}
     .edit-form input,.edit-form select{width:100%;box-sizing:border-box;font-size:12px;padding:2px;}
     .edit-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}
@@ -222,6 +226,336 @@ function createCurrentSpoolContent() {
     manufacturerName: sp.manufacturerName || sp.brand || ""
   });
   return div;
+}
+
+/**
+ * 取り外したスプール一覧タブを生成する。
+ *
+ * @private
+ * @returns {{el:HTMLElement, render:function():void}} タブ要素と描画関数
+ */
+function createUsedSpoolContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+  div.style.overflowY = "visible";
+  div.style.maxHeight = "none";
+
+  const form = document.createElement("form");
+  form.className = "search-form";
+  const searchFs = document.createElement("fieldset");
+  searchFs.className = "search-field";
+  const searchLg = document.createElement("legend");
+  searchLg.textContent = "検索";
+  searchFs.appendChild(searchLg);
+  searchFs.appendChild(form);
+  const brandSel = document.createElement("select");
+  const matSel = document.createElement("select");
+  const colorSel = document.createElement("select");
+  const remainSel = document.createElement("select");
+  remainSel.innerHTML = `
+    <option value="all">残量</option>
+    <option value="10">10%未満</option>
+    <option value="30">30%未満</option>
+    <option value="60">60%未満</option>
+  `;
+  const nameIn = document.createElement("input");
+  nameIn.placeholder = "名称";
+  const searchBtn = document.createElement("button");
+  searchBtn.textContent = "検索";
+  form.append(brandSel, matSel, colorSel, remainSel, nameIn, searchBtn);
+
+  const countSpan = document.createElement("div");
+  countSpan.style.fontSize = "12px";
+  countSpan.style.margin = "4px 0";
+
+  const wrap = document.createElement("div");
+  wrap.className = "registered-container";
+  const prevBox = document.createElement("div");
+  prevBox.className = "registered-preview";
+  wrap.appendChild(prevBox);
+
+  const listBox = document.createElement("div");
+  listBox.className = "registered-list";
+
+  const table = document.createElement("table");
+  table.className = "registered-table";
+  const thead = document.createElement("thead");
+  thead.innerHTML =
+    "<tr><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
+    "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
+    "<th data-sort='reelSubName'>サブ名称</th>" +
+    "<th data-sort='count'>リール使用数</th>" +
+    "<th data-sort='first'>使用開始日時</th>" +
+    "<th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  table.appendChild(tbody);
+  listBox.appendChild(table);
+  wrap.appendChild(listBox);
+
+  div.append(searchFs, countSpan, wrap);
+
+  const preview = createFilamentPreview(prevBox, {
+    filamentDiameter: 1.75,
+    filamentTotalLength: 336000,
+    filamentCurrentLength: 336000,
+    filamentColor: "#22C55E",
+    reelOuterDiameter: 200,
+    reelThickness: 68,
+    reelWindingInnerDiameter: 95,
+    reelCenterHoleDiameter: 54,
+    widthPx: 120,
+    heightPx: 120,
+    showSlider: false,
+    isFilamentPresent: true,
+    showUsedUpIndicator: true,
+    blinkingLightColor: "#0EA5E9",
+    showInfoLength: false,
+    showInfoPercent: false,
+    showInfoLayers: false,
+    showResetButton: false,
+    showProfileViewButton: true,
+    showSideViewButton: true,
+    showFrontViewButton: true,
+    showAutoRotateButton: true,
+    enableDrag: true,
+    enableClick: false,
+    onClick: null,
+    disableInteraction: true,
+    showOverlayLength: true,
+    showOverlayPercent: true,
+    showLengthKg: false,
+    showReelName: true,
+    showReelSubName: true,
+    showMaterialName: true,
+    showMaterialColorName: true,
+    showMaterialColorCode: true,
+    showManufacturerName: true,
+    showOverlayBar: true,
+    showPurchaseButton: true,
+    reelName: "",
+    reelSubName: "",
+    materialName: "",
+    materialColorName: "",
+    materialColorCode: "",
+    manufacturerName: ""
+  });
+
+  let sortKey = "";
+  let sortAsc = true;
+  let selectedTr = null;
+
+  function buildUsageMap() {
+    const map = {};
+    (monitorData.usageHistory || []).forEach(h => {
+      const m = map[h.spoolId] || { count: 0, first: 0, last: 0 };
+      const t = Number(h.startedAt || 0);
+      if (!m.first || t < m.first) m.first = t;
+      if (t > m.last) m.last = t;
+      if (h.usedLength != null) m.count += 1;
+      map[h.spoolId] = m;
+    });
+    return map;
+  }
+
+  function fillOptions(list) {
+    const brands = new Set();
+    const mats = new Set();
+    const colors = new Set();
+    list.forEach(sp => {
+      if (sp.manufacturerName) brands.add(sp.manufacturerName);
+      else if (sp.brand) brands.add(sp.brand);
+      if (sp.materialName) mats.add(sp.materialName);
+      else if (sp.material) mats.add(sp.material);
+      if (sp.colorName) colors.add(sp.colorName);
+    });
+    brandSel.innerHTML = "<option value=''>ブランド</option>";
+    [...brands].forEach(b => {
+      const o = document.createElement("option");
+      o.value = b;
+      o.textContent = b;
+      brandSel.appendChild(o);
+    });
+    matSel.innerHTML = "<option value=''>材質</option>";
+    [...mats].forEach(m => {
+      const o = document.createElement("option");
+      o.value = m;
+      o.textContent = m;
+      matSel.appendChild(o);
+    });
+    colorSel.innerHTML = "<option value=''>色名</option>";
+    [...colors].forEach(c => {
+      const o = document.createElement("option");
+      o.value = c;
+      o.textContent = c;
+      colorSel.appendChild(o);
+    });
+  }
+
+  function applyFilter(list) {
+    return list.filter(sp => {
+      if (brandSel.value) {
+        const b = sp.manufacturerName || sp.brand || "";
+        if (b !== brandSel.value) return false;
+      }
+      if (matSel.value) {
+        const m = sp.materialName || sp.material || "";
+        if (m !== matSel.value) return false;
+      }
+      if (colorSel.value && sp.colorName !== colorSel.value) return false;
+      if (remainSel.value !== "all") {
+        const perc = (sp.remainingLengthMm / sp.totalLengthMm) * 100;
+        if (perc >= Number(remainSel.value)) return false;
+      }
+      if (nameIn.value) {
+        const n = `${sp.name || ""}${sp.reelName || ""}${sp.reelSubName || ""}`;
+        if (!n.includes(nameIn.value)) return false;
+      }
+      return true;
+    });
+  }
+
+  function sortList(list) {
+    if (!sortKey) return list;
+    return list.sort((a, b) => {
+      let va = "";
+      let vb = "";
+      switch (sortKey) {
+        case "brand":
+          va = a.manufacturerName || a.brand || "";
+          vb = b.manufacturerName || b.brand || "";
+          break;
+        case "material":
+          va = a.materialName || a.material || "";
+          vb = b.materialName || b.material || "";
+          break;
+        case "colorName":
+          va = a.colorName || "";
+          vb = b.colorName || "";
+          break;
+        case "name":
+          va = a.name || a.reelName || "";
+          vb = b.name || b.reelName || "";
+          break;
+        case "reelSubName":
+          va = a.reelSubName || "";
+          vb = b.reelSubName || "";
+          break;
+        case "count":
+          va = usageMap[a.id]?.count || 0;
+          vb = usageMap[b.id]?.count || 0;
+          break;
+        case "first":
+          va = usageMap[a.id]?.first || 0;
+          vb = usageMap[b.id]?.first || 0;
+          break;
+        case "last":
+          va = usageMap[a.id]?.last || 0;
+          vb = usageMap[b.id]?.last || 0;
+          break;
+        default:
+          break;
+      }
+      if (va === vb) return 0;
+      const cmp = va > vb ? 1 : -1;
+      return sortAsc ? cmp : -cmp;
+    });
+  }
+
+  function render() {
+    const spools = getSpools(true).filter(sp => !sp.isInUse && sp.startedAt);
+    usageMap = buildUsageMap();
+    fillOptions(spools);
+    const list = sortList(applyFilter(spools));
+    tbody.innerHTML = "";
+    list.forEach(sp => {
+      const tr = document.createElement("tr");
+      if (sp.deleted) tr.classList.add("deleted-row");
+      const brand = sp.manufacturerName || sp.brand || "";
+      const mat = sp.materialName || sp.material || "";
+      const usage = usageMap[sp.id] || { count: 0, first: 0, last: 0 };
+      const first = usage.first ? new Date(usage.first).toLocaleString() : "";
+      const last = usage.last ? new Date(usage.last).toLocaleString() : "";
+      const colorCell = document.createElement("td");
+      colorCell.innerHTML = `<span style='color:${sp.filamentColor || sp.color || "#000"}'>■</span>${sp.colorName || ""}`;
+      tr.innerHTML = `<td>${brand}</td><td>${mat}</td>`;
+      tr.appendChild(colorCell);
+      tr.innerHTML += `<td>${sp.name || sp.reelName || ""}</td><td>${sp.reelSubName || ""}</td>` +
+        `<td>${usage.count}</td><td>${first}</td><td>${last}</td>`;
+      const cmd = document.createElement("td");
+      if (sp.id === getCurrentSpoolId()) {
+        cmd.textContent = "【現在使用中】";
+      } else if (sp.deleted) {
+        const resBtn = document.createElement("button");
+        resBtn.textContent = "廃棄取り消し";
+        resBtn.addEventListener("click", () => {
+          restoreSpool(sp.id);
+          render();
+        });
+        cmd.appendChild(resBtn);
+      } else {
+        const del = document.createElement("button");
+        del.textContent = "廃棄する";
+        del.addEventListener("click", () => {
+          deleteSpool(sp.id);
+          render();
+        });
+        const set = document.createElement("button");
+        set.textContent = "再セットする";
+        set.addEventListener("click", () => {
+          setCurrentSpoolId(sp.id);
+          render();
+        });
+        cmd.append(del, set);
+      }
+      tr.appendChild(cmd);
+      tr.addEventListener("click", () => {
+        selectedTr?.classList.remove("selected");
+        selectedTr = tr;
+        tr.classList.add("selected");
+        preview.setState({
+          filamentDiameter: sp.filamentDiameter,
+          filamentTotalLength: sp.totalLengthMm,
+          filamentCurrentLength: sp.remainingLengthMm,
+          filamentColor: sp.filamentColor || sp.color,
+          reelOuterDiameter: sp.reelOuterDiameter,
+          reelThickness: sp.reelThickness,
+          reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
+          reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
+          reelName: sp.name || "",
+          reelSubName: sp.reelSubName || "",
+          materialName: sp.materialName || sp.material || "",
+          materialColorName: sp.colorName || "",
+          materialColorCode: sp.filamentColor || sp.color || "",
+          manufacturerName: sp.manufacturerName || sp.brand || ""
+        });
+      });
+      tbody.appendChild(tr);
+    });
+    countSpan.textContent = `一覧：(${list.length}/${spools.length}件)`;
+  }
+
+  let usageMap = buildUsageMap();
+
+  thead.addEventListener("click", ev => {
+    const th = ev.target.closest("th");
+    if (!th || !th.dataset.sort) return;
+    if (sortKey === th.dataset.sort) {
+      sortAsc = !sortAsc;
+    } else {
+      sortKey = th.dataset.sort;
+      sortAsc = true;
+    }
+    render();
+  });
+
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    render();
+  });
+
+  render();
+  return { el: div, render };
 }
 
 /**
@@ -1481,7 +1815,7 @@ function createReportContent() {
  * @function showFilamentManager
  * @returns {void}
  */
-export function showFilamentManager() {
+export function showFilamentManager(activeIdx = 0) {
   injectStyles();
   const overlay = document.createElement("div");
   overlay.className = "filament-manager-overlay";
@@ -1500,10 +1834,11 @@ export function showFilamentManager() {
 
   const tabBar = document.createElement("div");
   tabBar.className = "filament-manager-tabs";
-  const REGISTERED_IDX = 3;
+  const REGISTERED_IDX = 4;
   const tabs = [
     "使用記録簿",
     "現在のスプール",
+    "使用済みスプール",
     "在庫",
     "登録済みフィラメント",
     "プリセット",
@@ -1520,6 +1855,7 @@ export function showFilamentManager() {
   const contents = [
     createHistoryContent(),
     createCurrentSpoolContent(),
+    createUsedSpoolContent(),
     createInventoryContent(),
     null,
     null,
@@ -1560,17 +1896,18 @@ export function showFilamentManager() {
   tabs.forEach((name, i) => {
     const btn = document.createElement("button");
     btn.textContent = name;
-    if (i === 0) btn.classList.add("active");
+    if (i === activeIdx) btn.classList.add("active");
     btn.addEventListener("click", () => switchTab(i));
     tabBar.appendChild(btn);
   });
 
   contents.forEach((c, i) => {
-    if (i !== 0) c.style.display = "none";
+    if (i !== activeIdx) c.style.display = "none";
     contentWrap.appendChild(c);
   });
 
   document.body.appendChild(overlay);
+  switchTab(activeIdx);
 }
 
 // DOM 読み込み後にボタンをバインド
