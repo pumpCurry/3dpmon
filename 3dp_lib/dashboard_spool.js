@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.420 (PR #189)
+* @version 1.390.462 (PR #190)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 17:22:21
+* @lastModified 2025-06-22 18:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -289,6 +289,21 @@ export function deleteSpool(id) {
   s.isActive = false;
   s.removedAt = Date.now();
   if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
+  saveUnifiedStorage();
+}
+
+/**
+ * 廃棄フラグを取り消してスプールを復活させる。
+ *
+ * @function restoreSpool
+ * @param {string} id - 復活させるスプールID
+ * @returns {void}
+ */
+export function restoreSpool(id) {
+  const s = monitorData.filamentSpools.find(sp => sp.id === id);
+  if (!s) return;
+  s.deleted = false;
+  s.isDeleted = false;
   saveUnifiedStorage();
 }
 
