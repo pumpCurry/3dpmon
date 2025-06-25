@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.471 (PR #217)
+* @version 1.390.474 (PR #216)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-25 22:10:00
+* @lastModified 2025-06-26 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -140,6 +140,34 @@ export function getDeviceIp(host = currentHostname) {
   return h || "";
 }
 
+/**
+ * updateConnectionHost:
+ * ---------------------
+ * IP 接続後に正式なホスト名が判明した際、接続情報のキーを
+ * 旧ホスト名から新ホスト名へ移動します。
+ *
+ * @param {string} oldHost - 接続時に使用したホスト名または IP
+ * @param {string} newHost - サーバーから得た正式ホスト名
+ * @returns {string} 実際に利用されるホスト名
+ */
+export function updateConnectionHost(oldHost, newHost) {
+  if (oldHost === newHost || newHost === PLACEHOLDER_HOSTNAME) {
+    return oldHost;
+  }
+  const state = connectionMap[oldHost];
+  if (!state) return newHost;
+  if (connectionMap[newHost]) return newHost;
+
+  connectionMap[newHost] = state;
+  delete connectionMap[oldHost];
+
+  if (currentHostname === newHost) {
+    updateConnectionUI(state.state, {}, newHost);
+  }
+  updatePrinterListUI();
+  return newHost;
+}
+
 
 /* ===================== WebSocket 接続・受信処理 ===================== */
 
@@ -242,6 +270,7 @@ function handleSocketOpen(host) {
  * @param {MessageEvent} event
  */
 function handleSocketMessage(event, host) {
+  let hostKey = host;
   // 1) --- 生データ "ok" はスキップ ---
   if (event.data === "ok") { 
     pushLog("受信: heart beat:" + event.data, "success");
@@ -275,12 +304,16 @@ function handleSocketMessage(event, host) {
 
 // 5.5) handleMessage(と内部でprocessData(data)の実施:起動後1度のみ)
   try {
-    const st = getState(host);
+    const st = getState(hostKey);
     st.latest = data;
     // currentHostname が未確定 (PLACEHOLDER_HOSTNAME) の場合も
     // 受信データから hostname を得るため handleMessage を実行する
-    if (host === currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
+    const before = currentHostname;
+    if (hostKey === currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
       handleMessage(data);
+      if (currentHostname !== before && currentHostname !== PLACEHOLDER_HOSTNAME) {
+        hostKey = updateConnectionHost(hostKey, currentHostname);
+      }
     } else {
       st.buffer.push(data);
     }
@@ -289,10 +322,10 @@ function handleSocketMessage(event, host) {
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
   }
   // 現在のホスト名が有効かどうか判定
-  const hostReady = host === currentHostname &&
+  const hostReady = hostKey === currentHostname &&
                     currentHostname !== PLACEHOLDER_HOSTNAME;
   // 共通ベース URL
-  const ip = getDeviceIp(host);
+  const ip = getDeviceIp(hostKey);
   const baseUrl = `http://${ip}`;
 
 // 6) 印刷履歴情報の保存・再描画
@@ -301,13 +334,13 @@ function handleSocketMessage(event, host) {
     // （dashboard_printManager.js 側で実装）
     if (hostReady && Array.isArray(data.historyList)) {
       pushLog("historyList を受信しました", "info");
-      const baseUrl80 = `http://${getDeviceIp(host)}:80`;
-      printManager.updateHistoryList(data.historyList, baseUrl80, host);
+      const baseUrl80 = `http://${getDeviceIp(hostKey)}:80`;
+      printManager.updateHistoryList(data.historyList, baseUrl80, hostKey);
     }
     if (hostReady && Array.isArray(data.elapseVideoList)) {
       pushLog("elapseVideoList を受信しました", "info");
-      const baseUrl80 = `http://${getDeviceIp(host)}:80`;
-      printManager.updateVideoList(data.elapseVideoList, baseUrl80, host);
+      const baseUrl80 = `http://${getDeviceIp(hostKey)}:80`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrl80, hostKey);
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
