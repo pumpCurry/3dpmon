@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.474 (PR #216)
+ * @version 1.390.480 (PR #219)
  * @since   1.390.451 (PR #205)
- * @lastModified 2025-06-25 22:45:32
+ * @lastModified 2025-06-26 21:15:24
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -167,6 +167,30 @@ export function updateConnectionHost(oldHost, newHost) {
   }
   updatePrinterListUI();
   return newHost;
+}
+
+/**
+ * flushBufferedMessages:
+ * ----------------------
+ * currentHostname 切り替え時に、保持していた未処理メッセージを
+ * 順に処理します。
+ *
+ * @private
+ * @param {string} host - バッファを処理するホスト名
+ * @returns {void}
+ */
+function flushBufferedMessages(host) {
+  const state = connectionMap[host];
+  if (!state || !Array.isArray(state.buffer)) return;
+  while (state.buffer.length > 0) {
+    const msgObj = state.buffer.shift();
+    try {
+      handleSocketMessage({ data: JSON.stringify(msgObj) }, host);
+    } catch (e) {
+      pushLog("バッファ処理中にエラー: " + e.message, "error");
+      console.error("[flushBufferedMessages]", e);
+    }
+  }
 }
 
 
@@ -581,6 +605,7 @@ export function setupPrinterUI() {
     if (host) {
       setCurrentHostname(host);
       updateConnectionUI(connectionMap[host]?.state || "disconnected", {}, host);
+      flushBufferedMessages(host);
     }
   });
   updatePrinterListUI();
