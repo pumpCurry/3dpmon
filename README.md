@@ -1,6 +1,6 @@
 # 3dpmon
 
-ブラウザから Clarity シリーズ 3D プリンタを監視するためのダッシュボードです。詳細な説明は [docs/index.md](docs/index.md) を参照してください。
+ブラウザから Clarity シリーズ 3D プリンタを監視するためのダッシュボードです。詳細な説明は [docs/index.md](docs/index.md) を参照してください。将来計画は [docs/future.md](docs/future.md) にまとめています。
 
 ## インストール
 1. このリポジトリをダウンロードします。
@@ -25,7 +25,7 @@
 
 # 3dpmon
 
-This is a browser-based dashboard for monitoring the Clarity series of 3D printers. For detailed documentation see [docs/index.md](docs/index.md).
+This is a browser-based dashboard for monitoring the Clarity series of 3D printers. For detailed documentation see [docs/index.md](docs/index.md). Information about upcoming features is available in [docs/future.md](docs/future.md).
 
 ## Installation
 1. Download this repository.

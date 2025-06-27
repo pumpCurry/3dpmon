@@ -18,3 +18,6 @@
 - [遠隔操作、ファイル管理、通知設定を搭載](./ja/feature_remote_management.md) / [Remote Control, File Management and Notifications](./en/feature_remote_management.md)
 - [フィラメントスプールの管理と在庫追跡が可能](./ja/feature_filament_management.md) / [Filament Spool Management and Inventory Tracking](./en/feature_filament_management.md)
 
+### 将来計画 / Future Plans
+- [複数接続ダッシュボード拡張計画](./future.md)
+
