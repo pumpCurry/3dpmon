@@ -15,11 +15,12 @@
  * - {@link initializeCommandPalette}：主要ボタン設定
  * - {@link initializeRateControls}：レート変更UI初期化
  * - {@link initSendRawJson}：任意JSON送信用UI
+ * - {@link initSendGcode}：G-code送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.488 (PR #222)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-06-27 23:37:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -27,7 +28,12 @@
 
 "use strict";
 
-import { getDeviceIp, sendCommand, simulateReceivedJson } from "./dashboard_connection.js";
+import {
+  getDeviceIp,
+  sendCommand,
+  sendGcodeCommand,
+  simulateReceivedJson
+} from "./dashboard_connection.js";
 import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
@@ -653,20 +659,133 @@ export function initSendRawJson() {
 }
 
 /**
+ * "G-code送信" ボタンの設定とハンドラ登録
+ */
+export function initSendGcode() {
+  const btn = document.getElementById("btn-send-gcode");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const ip = getDeviceIp();
+    if (!ip) {
+      await showConfirmDialog({
+        level: "error",
+        title: "接続エラー",
+        message: "接続先が未設定です。先に接続してください。",
+        confirmText: "OK",
+        cancelText: ""
+      });
+      return;
+    }
+
+    let gcode = await showInputDialog({
+      level: "info",
+      title: "G-code 入力",
+      message: "送信したい G-code を入力してください。",
+      placeholder: "M104 S200",
+      defaultValue: "",
+      submitOnEnter: true,
+      confirmText: "OK",
+      cancelText: "キャンセル"
+    });
+    if (gcode == null) return;
+
+    while (true) {
+      if (gcode.includes('"')) {
+        gcode = await showInputDialog({
+          level: "error",
+          title: "G-code 再入力",
+          message: "G-code に \" は使用できません。再入力してください。",
+          placeholder: "M104 S200",
+          defaultValue: gcode,
+          submitOnEnter: true,
+          confirmText: "OK",
+          cancelText: "キャンセル"
+        });
+        if (gcode == null) return;
+        continue;
+      }
+
+      const payload = {
+        id: `set_gcode_${Date.now()}`,
+        method: "set",
+        params: { gcodeCmd: gcode }
+      };
+      const ok = await showConfirmDialog({
+        level: "info",
+        title: "送信確認",
+        html: `<pre style="white-space:pre-wrap;">${JSON.stringify(payload)}</pre>`,
+        confirmText: "送信",
+        cancelText: "編集に戻る"
+      });
+      if (!ok) {
+        gcode = await showInputDialog({
+          level: "info",
+          title: "G-code 編集",
+          message: "送信する G-code を編集してください。",
+          placeholder: "M104 S200",
+          defaultValue: gcode,
+          submitOnEnter: true,
+          confirmText: "OK",
+          cancelText: "キャンセル"
+        });
+        if (gcode == null) return;
+        continue;
+      }
+
+      pushLog(`送信(G-code): ${gcode}`, "send");
+      try {
+        await sendGcodeCommand(gcode);
+      } catch {
+        // sendGcodeCommand 内でエラー表示済み
+      }
+      break;
+    }
+  });
+}
+
+/**
  * "JSONコマンドテスト" ボタンの設定とハンドラ登録
  * 指定テキストボックスの内容を受信メッセージとして処理します。
  */
 export function initTestRawJson() {
-  const btn   = document.getElementById("btn-test-raw-json");
-  const input = document.getElementById("cmd-test-json");
-  if (!btn || !input) return;
+  const btn = document.getElementById("btn-test-raw-json");
+  if (!btn) return;
 
-  btn.addEventListener("click", () => {
-    const raw = input.value.trim();
-    if (!raw) {
-      showAlert("JSON文字列を入力してください。", "warn");
-      return;
+  btn.addEventListener("click", async () => {
+    let jsonStr = await showInputDialog({
+      level: "info",
+      title: "JSONテスト入力",
+      message: "受信JSONとして扱う文字列を入力してください。",
+      multiline: true,
+      placeholder: "{\"id\":\"xxx\"}",
+      defaultValue: "",
+      submitOnCtrlEnter: true,
+      confirmText: "OK",
+      cancelText: "キャンセル"
+    });
+    if (jsonStr == null) return;
+
+    while (true) {
+      try {
+        JSON.parse(jsonStr);
+      } catch (e) {
+        jsonStr = await showInputDialog({
+          level: "error",
+          title: "JSON再入力",
+          message: `JSON 構文エラー: ${e.message}`,
+          multiline: true,
+          placeholder: "{\"id\":\"xxx\"}",
+          defaultValue: jsonStr,
+          submitOnCtrlEnter: true,
+          confirmText: "OK",
+          cancelText: "キャンセル"
+        });
+        if (jsonStr == null) return;
+        continue;
+      }
+      simulateReceivedJson(jsonStr);
+      break;
     }
-    simulateReceivedJson(raw);
   });
 }
