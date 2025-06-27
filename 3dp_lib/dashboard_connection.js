@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.480 (PR #219)
+ * @version 1.390.481 (PR #220)
  * @since   1.390.451 (PR #205)
- * @lastModified 2025-06-26 21:15:24
+ * @lastModified 2025-06-27 10:52:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -288,6 +288,8 @@ function handleSocketOpen(host) {
  * - "ok"（heartbeat 応答）はスキップ
  * - JSON にパースし、オブジェクト形式であれば handleMessage() に渡す
  * - 印刷履歴の再取得と保存・描画を行う
+ * - 現在のホストでなければメッセージをバッファリングし、
+ *   data.hostname があれば {@link updateConnectionHost} でホスト名を更新
  *
  * - "ok" は heartbeat 応答として無視
  * - JSON をパースして handleMessage() に渡す
@@ -329,7 +331,7 @@ function handleSocketMessage(event, host) {
 
 // 5.5) handleMessage(と内部でprocessData(data)の実施:起動後1度のみ)
   try {
-    const st = getState(hostKey);
+    let st = getState(hostKey);
     st.latest = data;
     // currentHostname が未確定 (PLACEHOLDER_HOSTNAME) の場合も
     // 受信データから hostname を得るため handleMessage を実行する
@@ -340,6 +342,13 @@ function handleSocketMessage(event, host) {
         hostKey = updateConnectionHost(hostKey, currentHostname);
       }
     } else {
+      if (data && typeof data.hostname === "string" && data.hostname) {
+        const newKey = updateConnectionHost(hostKey, data.hostname);
+        if (newKey !== hostKey) {
+          hostKey = newKey;
+          st = getState(hostKey);
+        }
+      }
       st.buffer.push(data);
     }
   } catch (e) {
