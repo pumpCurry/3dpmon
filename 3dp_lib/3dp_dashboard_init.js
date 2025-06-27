@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.462 (PR #211)
+* @version 1.390.488 (PR #222)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-25 20:25:42
+* @lastModified 2025-06-27 23:37:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -78,7 +78,11 @@ import {
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { persistAggregatorState,stopAggregatorTimer } from "./dashboard_aggregator.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { initSendRawJson, initTestRawJson } from "./dashboard_send_command.js";
+import {
+  initSendRawJson,
+  initSendGcode,
+  initTestRawJson
+} from "./dashboard_send_command.js";
 
 let filamentPreview = null;
 /**
@@ -347,6 +351,7 @@ export function initializeDashboard({
 
   // (19) JSONコマンド送信機能
   initSendRawJson();
+  initSendGcode();
   initTestRawJson();
 }
 

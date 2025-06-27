@@ -21,12 +21,13 @@
  * - {@link disconnectWs}：接続解除
  * - {@link setupConnectButton}：接続ボタン初期化
  * - {@link sendCommand}：任意コマンド送信
+ * - {@link sendGcodeCommand}：G-code 送信
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.486 (PR #221)
+ * @version 1.390.488 (PR #222)
  * @since   1.390.451 (PR #205)
- * @lastModified 2025-06-27 21:02:00
+ * @lastModified 2025-06-27 23:37:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -670,6 +671,57 @@ export function sendCommand(method, params = {}, host = currentHostname) {
     pushLog(`送信: ${json}`, "send");
     st.ws.send(json);
 
+  });
+}
+
+/**
+ * G-code コマンドを送信します。
+ *
+ * @param {string} gcode - 送信する G-code 文字列
+ * @param {string} [host=currentHostname] - 接続先ホスト名
+ * @returns {Promise<Object>} サーバー result フィールド
+ */
+export function sendGcodeCommand(gcode, host = currentHostname) {
+  const st = getState(host);
+  if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
+    const now = Date.now();
+    if (now - lastWsAlertTime > 1000) {
+      lastWsAlertTime = now;
+      const ts = new Date(now).toISOString();
+      const hostName = host === PLACEHOLDER_HOSTNAME ? "(placeholder)" : host;
+      const detail = st.ws ? `readyState=${st.ws.readyState}` : "ws=null";
+      const msg = `[${hostName}] WebSocket が接続されていません @ ${ts} (${detail})`;
+      showAlert(msg, "error");
+    }
+    return Promise.reject(new Error("WebSocket not connected"));
+  }
+
+  const id = `set_gcode_${Date.now()}`;
+  const payload = { id, method: "set", params: { gcodeCmd: gcode } };
+
+  return new Promise((resolve, reject) => {
+    const onResp = evt => {
+      let msg;
+      try {
+        msg = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
+      if (msg.id !== id) return;
+      st.ws.removeEventListener("message", onResp);
+      if (msg.error) {
+        showAlert(`set_gcode エラー: ${msg.error.message}`, "error");
+        reject(msg.error);
+      } else {
+        showAlert("set_gcode 成功", "success");
+        resolve(msg.result);
+      }
+    };
+    st.ws.addEventListener("message", onResp);
+
+    const json = JSON.stringify(payload);
+    pushLog(`送信: ${json}`, "send");
+    st.ws.send(json);
   });
 }
 
