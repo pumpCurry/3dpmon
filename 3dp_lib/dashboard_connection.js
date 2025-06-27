@@ -24,9 +24,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.481 (PR #220)
+ * @version 1.390.486 (PR #221)
  * @since   1.390.451 (PR #205)
- * @lastModified 2025-06-27 10:52:00
+ * @lastModified 2025-06-27 21:02:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -74,6 +74,7 @@ const MAX_RECONNECT = 5;
 
 let isAutoScrollEnabled = true;      // 現在「自動スクロール中」なら true
 let lastActiveTab = "received";      // "received" or "error"
+let lastWsAlertTime = 0;             // 最後に接続エラーを表示した時刻
 
 /**
  * ダミー状態（未選択時に使用）
@@ -272,6 +273,8 @@ function handleSocketOpen(host) {
   }
   st.state = "connected";
   updatePrinterListUI();
+  // 接続復帰後は通知抑制を解除
+  setNotificationSuppressed(false);
 
   // 1秒ディレイしてから履歴一覧取得とファイル一覧取得を実施
   setTimeout(() => {
@@ -629,7 +632,15 @@ export function setupPrinterUI() {
 export function sendCommand(method, params = {}, host = currentHostname) {
   const st = getState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
-    showAlert("WebSocket が接続されていません", "error");
+    const now = Date.now();
+    if (now - lastWsAlertTime > 1000) {
+      lastWsAlertTime = now;
+      const ts = new Date(now).toISOString();
+      const hostName = host === PLACEHOLDER_HOSTNAME ? "(placeholder)" : host;
+      const detail = st.ws ? `readyState=${st.ws.readyState}` : "ws=null";
+      const msg = `[${hostName}] WebSocket が接続されていません @ ${ts} (${detail})`;
+      showAlert(msg, "error");
+    }
     return Promise.reject(new Error("WebSocket not connected"));
   }
   const id = `${method}_${Date.now()}`;
