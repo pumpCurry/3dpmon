@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.474 (PR #216)
+* @version 1.390.481 (PR #220)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-25 22:45:32
+* @lastModified 2025-06-27 10:52:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -104,6 +104,7 @@ function persistHistoryTimers(printId) {
  *     - 初回受信で hostname を設定し、バッファをフラッシュ
  *     - 印刷再開情報を復元
  *     - 以降は processData() へ
+ *     - hostname が変化した場合は即座に現在ホストを更新
  *
  * @param {object} data 受信データ
  */
@@ -189,6 +190,11 @@ export function handleMessage(data) {
     // 初期化完了、通知抑制を解除
     setNotificationSuppressed(false);
 
+  }
+
+  // (1a-2) 既存ホスト名と異なる hostname を受信した場合は更新する
+  if (data.hostname && data.hostname !== currentHostname) {
+    setCurrentHostname(data.hostname);
   }
 
   // (1b) ホスト未設定時はバッファリング、設定後は直接処理
