@@ -12,7 +12,7 @@
  * 【公開クラス一覧】
  * - {@link BaseBar}：バーコンポーネント基底クラス
  *
- * @version 1.390.549 (PR #252)
+ * @version 1.390.553 (PR #253)
  * @since   1.390.549 (PR #252)
  * @lastModified 2025-06-28 20:00:00
  * -----------------------------------------------------------
@@ -32,6 +32,17 @@ export default class BaseBar {
     this.bus = bus;
     /** @type {HTMLElement|null} */
     this.el = null;
+  }
+
+  /**
+   * ドラッグハンドルを取得するスタブメソッド。
+   * 具体的なバー側でオーバーライドしてドラッグ領域を返す想定。
+   *
+   * @returns {HTMLElement|null} ドラッグ操作対象の要素
+   */
+  dragHandle() {
+    // 共通化のためのスタブ。デフォルトでは null を返す。
+    return null;
   }
 
   /**

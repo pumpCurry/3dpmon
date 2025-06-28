@@ -14,6 +14,7 @@
   @include no-scrollbar;
   flex: 1;
   mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 8px), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 8px), transparent);
 }
 
 .title-bar .tab {
@@ -22,7 +23,7 @@
   margin-right: 4px;
   background: var(--tab-color, #555);
   border: none;
-  color: white;
+  color: var(--tab-text-color, #fff);
   border-radius: 4px;
   cursor: pointer;
 }
