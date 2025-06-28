@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.498 (PR #226)
+ * @version 1.390.510 (PR #233)
  * @since   1.390.451 (PR #205)
- * @lastModified 2025-06-28 12:30:00
+ * @lastModified 2025-06-28 13:36:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -344,6 +344,7 @@ function handleSocketOpen(host) {
  * - 印刷履歴の再取得と保存・描画を行う
  * - 現在のホストでなければメッセージをバッファリングし、
  *   data.hostname があれば {@link updateConnectionHost} でホスト名を更新
+ * - ホスト名未確定時は data.hostname を優先的に処理
  *
  * - "ok" は heartbeat 応答として無視
  * - JSON をパースして handleMessage() に渡す
@@ -381,6 +382,13 @@ function handleSocketMessage(event, host) {
     pushLog("非オブジェクト形式のメッセージ: " + event.data, "warn");
     console.warn("[ws.onmessage] 非オブジェクト:", data);
     return;
+  }
+
+  // --- 5a) ホスト名未確定時は先に hostname を処理 ----------------------
+  if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) &&
+      data && typeof data.hostname === "string" && data.hostname) {
+    setCurrentHostname(data.hostname);
+    hostKey = updateConnectionHost(hostKey, data.hostname);
   }
 
 // 5.5) handleMessage(と内部でprocessData(data)の実施:起動後1度のみ)
