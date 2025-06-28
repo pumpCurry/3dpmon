@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.489 (PR #223)
+* @version 1.390.493 (PR #224)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-28 11:03:57
+* @lastModified 2025-06-28 11:37:02
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -58,14 +58,15 @@ const connectionMap = {};
 
 /**
  * @typedef {Object} ConnectionState
- * @property {WebSocket|null} ws         - 接続ソケット
- * @property {number|null}    hbInterval - ハートビート用タイマーID
- * @property {number}         reconnect  - 再接続試行回数
- * @property {number|null}    retryTimer - 再接続待機タイマーID
- * @property {boolean}        userDisc   - ユーザー操作により切断されたか
- * @property {Array<Object>}  buffer     - ホスト確定前に受信したデータ
- * @property {Object|null}    latest     - 最新受信データ
- * @property {string}         dest       - 接続先(IP:PORT)
+ * @property {WebSocket|null} ws            - 接続ソケット
+ * @property {number|null}    hbInterval    - ハートビート用タイマーID
+ * @property {number}         reconnect     - 再接続試行回数
+ * @property {number|null}    retryTimer    - 再接続待機タイマーID
+ * @property {number|null}    fetchTimer    - ホスト確定待ちポーリングID
+ * @property {boolean}        userDisc      - ユーザー操作により切断されたか
+ * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
+ * @property {Object|null}    latest        - 最新受信データ
+ * @property {string}         dest          - 接続先(IP:PORT)
  * @property {"disconnected"|"connecting"|"connected"|"waiting"} state
  *                                        - UI 表示用状態
  */
@@ -86,6 +87,7 @@ const placeholderState = {
   hbInterval: null,
   reconnect: 0,
   retryTimer: null,
+  fetchTimer: null,
   userDisc: false,
   buffer: [],
   latest: null,
@@ -113,6 +115,7 @@ function getState(host) {
       hbInterval: null,
       reconnect: 0,
       retryTimer: null,
+      fetchTimer: null,
       userDisc: false,
       buffer: [],
       latest: null,
@@ -268,6 +271,7 @@ export function connectWs(hostOrDest) {
  * - heartbeat と aggregatorUpdate の定期実行を開始
  * - reconnectAttempts をリセット
  * - UI を「接続済み」に切り替え
+ * - ホスト名確定を待ってから履歴/ファイル取得
  */
 function handleSocketOpen(host) {
   pushLog("WebSocket接続が確立しました。", "info");
@@ -287,11 +291,26 @@ function handleSocketOpen(host) {
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
 
-  // 1秒ディレイしてから履歴一覧取得とファイル一覧取得を実施
-  setTimeout(() => {
-    document.getElementById("btn-history-list")?.click();
-    document.getElementById("btn-file-list")?.click();
-  }, 1000);
+  // ホスト名が確定するまでポーリングし、確定後に履歴とファイル一覧を取得
+  if (st.fetchTimer !== null) {
+    clearInterval(st.fetchTimer);
+  }
+  st.fetchTimer = setInterval(() => {
+    // 接続が閉じられた場合はタイマー破棄
+    if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
+      clearInterval(st.fetchTimer);
+      st.fetchTimer = null;
+      return;
+    }
+    const validHost =
+      currentHostname !== PLACEHOLDER_HOSTNAME && currentHostname !== host;
+    if (validHost) {
+      document.getElementById("btn-history-list")?.click();
+      document.getElementById("btn-file-list")?.click();
+      clearInterval(st.fetchTimer);
+      st.fetchTimer = null;
+    }
+  }, 500);
 
 };
 
@@ -434,14 +453,21 @@ function handleSocketError(error, host) {
  * 自動再接続処理を実施する。
  * WebSocket が close したときのハンドラ。
  * - heartbeat/aggregator タイマーをクリア
+ * - 進行中のホスト名待ちポーリングを解除
  * - ユーザ切断 or 上限超えなら UI を切断状態へ
  * - それ以外は Exponential Backoff で再接続
  */
 function handleSocketClose(host) {
   pushLog("WebSocket接続が閉じられました。", "warn");
-  // 切断直後は通知を抑制する
+ // 切断直後は通知を抑制する
   setNotificationSuppressed(true);
   const st = getState(host);
+
+  // ホスト名待ちポーリングが残っていれば解除
+  if (st.fetchTimer !== null) {
+    clearInterval(st.fetchTimer);
+    st.fetchTimer = null;
+  }
 
   // Heartbeat停止...
   stopHeartbeat(host);             // ハートビート停止
