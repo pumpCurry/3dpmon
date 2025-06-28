@@ -46,5 +46,12 @@ This is a browser-based dashboard for monitoring the Clarity series of 3D printe
    On Windows you can also run `start.bat` to launch the server.
 5. Navigate to `http://localhost:8000/3dp_monitor.html` in your browser.
 
+## Development (v2 skeleton)
+To try the new Vite-based dashboard:
+1. Install Node packages: `npm install`
+2. In one terminal run `npm run mock` to start a local echo server.
+3. In another terminal run `npm run dev` and open `http://localhost:5173`.
+The console should display echoed JSON via the new ConnectionManager.
+
 ## License
 3dpmon is distributed under the **Modified BSD License (3-clause BSD License)**. Copyright is held by **pumpCurry** of *5r4ce2*. For details, visit [https://542.jp/](https://542.jp/). You can reach out via X (Twitter) at [@pcb](https://twitter.com/pcb).

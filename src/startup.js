@@ -12,9 +12,9 @@
  * 【公開関数一覧】
  * - {@link main}：起動処理を実行
  *
- * @version 1.390.534 (PR #244)
- * @since   1.390.534 (PR #244)
- * @lastModified 2025-06-28 19:21:40
+* @version 1.390.536 (PR #245)
+* @since   1.390.536 (PR #245)
+* @lastModified 2025-06-28 19:30:39
  * -----------------------------------------------------------
  * @todo
  * - AuthGate と App モジュールの統合
@@ -22,6 +22,9 @@
  */
 
 /* eslint-env browser */
+import { bus } from '@core/EventBus.js';
+import { ConnectionManager } from '@core/ConnectionManager.js';
+
 console.log('[startup] bootstrap v2 skeleton');
 
 /**
@@ -34,6 +37,14 @@ console.log('[startup] bootstrap v2 skeleton');
 async function main() {
   const root = document.querySelector('#app-root');
   root.textContent = 'Hello, 3dpmon v2 skeleton!';
+
+  const cm = new ConnectionManager(bus);
+  const id = await cm.add({ ip: '127.0.0.1', wsPort: 9999 });
+  cm.connect(id);
+
+  bus.on('cm:message', ({ id: cid, data }) => {
+    console.log('[cm]', cid, data);
+  });
 }
 
 main();
