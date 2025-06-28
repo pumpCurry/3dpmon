@@ -1,0 +1,23 @@
+/* 基本トークンのみ (追加は後工程) */
+:root {
+  --color-bg: #0e0e0e;
+  --color-text: #fafafa;
+  --card-bg: #1a1a1a;
+  --border-radius: 8px;
+}
+
+/* デフォルトで簡易リセット */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
