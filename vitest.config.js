@@ -6,11 +6,13 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['tests/**/*.test.js'],
+    setupFiles: ['tests/setup.js'],
     coverage: { reporter: ['text', 'lcov'] }
   },
   resolve: {
     alias: {
-      '@core': path.resolve(__dirname, 'src/core')
+      '@core': path.resolve(__dirname, 'src/core'),
+      '@shared': path.resolve(__dirname, 'src/shared')
     }
   }
 });
