@@ -12,9 +12,9 @@
  * 【公開関数一覧】
  * - なし（Vitest スイート）
  *
- * @version 1.390.540 (PR #247)
+ * @version 1.390.546 (PR #250)
  * @since   1.390.540 (PR #247)
- * @lastModified 2025-06-28 19:55:55
+ * @lastModified 2025-06-28 11:40:57
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -29,7 +29,7 @@ vi.mock('ws', async () => ({
 }));
 
 describe('ConnectionManager', () => {
-  it('opens, echoes and closes', async () => {
+  it('opens / echoes / closes', async () => {
     const cm = new ConnectionManager(bus);
     const id = await cm.add({ ip: '127.0.0.1', wsPort: 9999 });
     const openP = new Promise((r) => bus.on('cm:open', r));
