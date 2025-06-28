@@ -18,9 +18,9 @@
  * - {@link initSendGcode}：G-code送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
-* @version 1.390.489 (PR #223)
+* @version 1.390.517 (PR #237)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 11:03:57
+* @lastModified 2025-06-28 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -34,7 +34,7 @@ import {
   sendGcodeCommand,
   simulateReceivedJson
 } from "./dashboard_connection.js";
-import { currentHostname } from "./dashboard_data.js";
+import { currentHostname, getDisplayValue } from "./dashboard_data.js";
 import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
@@ -787,6 +787,41 @@ export function initTestRawJson() {
       }
       simulateReceivedJson(jsonStr);
       break;
+    }
+  });
+}
+
+/**
+ * "一時停止時 原点復帰" ボタンの設定とハンドラ登録
+ *
+ * @function initPauseHome
+ * @returns {void}
+ */
+export function initPauseHome() {
+  const btn = document.getElementById("btn-pause-home");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const model = getDisplayValue("model")?.value;
+    if (model !== "K1 Max") {
+      showAlert("K1 Max 以外では使用できません", "error");
+      return;
+    }
+
+    const ok = await showConfirmDialog({
+      level: "warn",
+      title: "印刷一時停止時の原点復帰と座標修正の実行",
+      message: "印刷一時停止時に原点を再検出し、印刷待機位置に戻すを実行します。\n印刷一時停止時以外に実行しないでください。実施してよろしいですか?",
+      confirmText: "原点復帰の実行",
+      cancelText: "キャンセル"
+    });
+    if (!ok) return;
+
+    try {
+      await sendGcodeCommand("G28 X Y", currentHostname);
+      await sendGcodeCommand("G0 X296.50 Y153.00 F6000", currentHostname);
+    } catch {
+      // sendGcodeCommand 内でエラー表示済み
     }
   });
 }
