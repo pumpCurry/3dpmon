@@ -11,8 +11,8 @@
  * 【公開クラス一覧】
  * - {@link CameraCard}：カメラプレビューカード
  *
- * @version 1.390.554 (PR #254)
- * @since   1.390.554 (PR #254)
+ * @version 1.390.557 (PR #255)
+ * @since   1.390.557 (PR #255)
  * @lastModified 2025-06-28 12:39:10
  * -----------------------------------------------------------
  * @todo
@@ -43,6 +43,10 @@ export default class CameraCard extends BaseCard {
     this._errors = 0;
     /** @type {HTMLVideoElement|null} */
     this.video = null;
+    /** @type {number} */
+    this._retryCount = 0;
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    this._timer = null;
   }
 
   /**
@@ -74,9 +78,46 @@ export default class CameraCard extends BaseCard {
     this.video = document.createElement('video');
     this.video.autoplay = true;
     this.video.src = this.streamUrl;
+    this.video.setAttribute('aria-label', 'Printer camera stream');
     this.video.addEventListener('error', () => this.#handleError());
     this.video.addEventListener('stalled', () => this.#handleError());
     this.el.appendChild(this.video);
+
+    const menu = document.createElement('div');
+    menu.className = 'camera-menu';
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0.5';
+    slider.max = '2';
+    slider.step = '0.1';
+    slider.value = String(this.scaleValue);
+    slider.addEventListener('input', () => {
+      this.scale(parseFloat(slider.value));
+    });
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'retry-btn';
+    retryBtn.textContent = '⟳';
+    const spin = document.createElement('div');
+    spin.className = 'spinner hidden';
+    retryBtn.appendChild(spin);
+    retryBtn.addEventListener('click', () => {
+      retryBtn.disabled = true;
+      spin.classList.remove('hidden');
+      this._retryCount = 0;
+      this.retry().finally(() => {
+        retryBtn.disabled = false;
+        spin.classList.add('hidden');
+      });
+    });
+    menu.appendChild(slider);
+    menu.appendChild(retryBtn);
+    this.el.appendChild(menu);
+
+    this.video.addEventListener('loadeddata', () => {
+      this._retryCount = 0;
+      retryBtn.disabled = false;
+      spin.classList.add('hidden');
+    });
 
     super.mount(root);
   }
@@ -91,6 +132,7 @@ export default class CameraCard extends BaseCard {
     if (streamUrl && this.video) {
       this.streamUrl = streamUrl;
       this.video.src = streamUrl;
+      this._retryCount = 0;
     }
   }
 
@@ -103,6 +145,10 @@ export default class CameraCard extends BaseCard {
     if (this.video) {
       this.video.src = '';
       this.video = null;
+    }
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
     }
     super.destroy();
   }
@@ -128,8 +174,14 @@ export default class CameraCard extends BaseCard {
    * @returns {void}
    */
   retry() {
-    if (this.video) {
-      this.video.src = this.streamUrl;
-    }
+    const delay = Math.min(1000 * 2 ** this._retryCount, 60000);
+    if (this._timer) clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      if (this.video) {
+        this.video.src = this.streamUrl;
+      }
+    }, delay);
+    this._retryCount += 1;
+    return delay;
   }
 }
