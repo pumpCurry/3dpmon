@@ -1,6 +1,8 @@
 # 3dpmon
 
-ブラウザから Clarity シリーズ 3D プリンタを監視するためのダッシュボードです。詳細な説明は [docs/index.md](docs/index.md) を参照してください。将来計画は [docs/future.md](docs/future.md) にまとめています。
+ブラウザから CREALITY K1シリーズ 3D プリンタを監視するためのダッシュボードです。詳細な説明は [docs/index.md](docs/index.md) を参照してください。将来計画は [docs/future.md](docs/future.md) にまとめています。
+現時点ではK1 Max複数台を制御することを目標としています。
+対応機種はK1C / K1 Max で動作確認をしています。
 
 ## インストール
 1. このリポジトリをダウンロードします。
