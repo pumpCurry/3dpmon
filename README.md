@@ -61,6 +61,9 @@ Unit tests are executed with [Vitest](https://vitest.dev/).
 
 See [docs/develop/tests.md](docs/develop/tests.md) for coverage goals and additional details.
 
+## Codex Task Execution
+To run this project within OpenAI Codex tasks, set the setup script path to `run/codex/setup.sh` and enable internet access only for that step. Required environment variables are `NODE_ENV=ci` and `CI=true`. Details are described in [docs/develop/codex_setup.md](docs/develop/codex_setup.md).
+
 
 ## License
 3dpmon is distributed under the **Modified BSD License (3-clause BSD License)**. Copyright is held by **pumpCurry** of *5r4ce2*. For details, visit [https://542.jp/](https://542.jp/). You can reach out via X (Twitter) at [@pcb](https://twitter.com/pcb).

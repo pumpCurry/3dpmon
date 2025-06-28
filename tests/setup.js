@@ -24,3 +24,8 @@
 vi.mock('ws', async () => ({
   default: (await import('./__mocks__/ws.js')).default
 }));
+
+// ConnectionManager がグローバルの WebSocket を利用するため、
+// テスト環境ではグローバルへモックを設定する
+import WebSocketMock from './__mocks__/ws.js';
+globalThis.WebSocket = WebSocketMock;
