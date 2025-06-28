@@ -1,0 +1,8 @@
+// mixins.scss - 共通SCSSミックスイン
+
+@mixin no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
