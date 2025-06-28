@@ -13,7 +13,7 @@
  * 【公開クラス一覧】
  * - {@link ConnectionManager}：接続管理クラス
  *
-* @version 1.390.536 (PR #245)
+* @version 1.390.553 (PR #253)
 * @since   1.390.536 (PR #245)
 * @lastModified 2025-06-28 19:30:39
  * -----------------------------------------------------------
@@ -36,6 +36,7 @@ export class ConnectionManager {
   constructor(bus) {
     /** @type {Object} */
     this.bus = bus;
+    // TODO: tab:add / tab:remove を監視し動的に接続リストを更新する
   }
 
   /**

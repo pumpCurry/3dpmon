@@ -4,6 +4,7 @@
 - 現時点ではK1 Max複数台を制御することを目標としています。
   - 対応機種はK1C / K1 Max で動作確認をしています。
   - ほかの機種にも対応可能であれば対応させたいので、ご協力くださるかたどうかよろしくお願いいたします。
+  - TitleBar コンポーネントの仕様は [docs/develop/titlebar.md](docs/develop/titlebar.md) にまとめています。
 
 The console should display echoed JSON via the new ConnectionManager.
 ## インストール

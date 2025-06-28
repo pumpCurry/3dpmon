@@ -13,7 +13,7 @@
  * 【公開クラス一覧】
  * - {@link TitleBar}：タイトルバー UI クラス
  *
- * @version 1.390.549 (PR #252)
+ * @version 1.390.553 (PR #253)
  * @since   1.390.531 (PR #1)
  * @lastModified 2025-06-28 20:00:00
  * -----------------------------------------------------------
@@ -55,16 +55,38 @@ export default class TitleBar extends BaseBar {
     const menu = document.createElement('button');
     menu.className = 'hamburger';
     menu.textContent = '≡';
+    // グローバルメニュー呼び出しまでの暫定実装
+    menu.addEventListener('click', () => {
+      this.bus.emit('menu:global');
+    });
     this.el.appendChild(menu);
 
     this.nav = document.createElement('nav');
     this.nav.className = 'tabs';
+    this.nav.setAttribute('role', 'tablist');
     this.el.appendChild(this.nav);
 
     this.nav.addEventListener('click', (e) => {
       const t = e.target;
       if (t instanceof HTMLElement && t.classList.contains('tab')) {
         this.activate(t.dataset.id);
+      }
+    });
+
+    this.nav.addEventListener('keydown', (e) => {
+      const tabs = Array.from(this.nav.querySelectorAll('.tab'));
+      const idx = tabs.findIndex((b) => b.dataset.id === this.activeId);
+      if (idx === -1) return;
+      if (e.key === 'ArrowRight') {
+        const next = tabs[(idx + 1) % tabs.length];
+        this.activate(next.dataset.id);
+        next.focus();
+      } else if (e.key === 'ArrowLeft') {
+        const prev = tabs[(idx - 1 + tabs.length) % tabs.length];
+        this.activate(prev.dataset.id);
+        prev.focus();
+      } else if (e.key === 'Enter') {
+        this.bus.emit('tab:select', this.activeId);
       }
     });
 
@@ -93,6 +115,7 @@ export default class TitleBar extends BaseBar {
   addTab(meta) {
     this.tabs.push(meta);
     this.#renderTabs();
+    this.bus.emit('tab:add', meta.id);
   }
 
   /**
@@ -105,6 +128,7 @@ export default class TitleBar extends BaseBar {
     this.tabs = this.tabs.filter((t) => t.id !== id);
     if (this.activeId === id) this.activeId = this.tabs[0]?.id ?? null;
     this.#renderTabs();
+    this.bus.emit('tab:remove', id);
   }
 
   /**
@@ -133,6 +157,9 @@ export default class TitleBar extends BaseBar {
       btn.className = 'tab';
       btn.dataset.id = t.id;
       btn.textContent = t.label;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('tabindex', t.id === this.activeId ? '0' : '-1');
+      btn.setAttribute('aria-selected', t.id === this.activeId ? 'true' : 'false');
       if (t.color) btn.style.setProperty('--tab-color', t.color);
       if (t.id === this.activeId) btn.classList.add('active');
       this.nav.appendChild(btn);
@@ -149,6 +176,8 @@ export default class TitleBar extends BaseBar {
     if (!this.nav) return;
     this.nav.querySelectorAll('.tab').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.id === this.activeId);
+      btn.setAttribute('aria-selected', btn.dataset.id === this.activeId ? 'true' : 'false');
+      btn.setAttribute('tabindex', btn.dataset.id === this.activeId ? '0' : '-1');
     });
   }
 }
