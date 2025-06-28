@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.488 (PR #222)
+* @version 1.390.511 (PR #234)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-27 23:37:32
+* @lastModified 2025-06-28 14:26:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -284,11 +284,8 @@ export function initializeDashboard({
     showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります","warn");
   }
   
-  // (12) ページロード時のカメラ起動
-  if (monitorData.appSettings.cameraToggle && monitorData.appSettings.wsDest) {
-    // startCameraStream は参照を渡し遅延実行させる
-    setTimeout(startCameraStream, 1500);
-  }
+  // (12) ページロード時のカメラ起動は廃止
+  // WebSocket 接続確立時に自動開始されるためここでは実行しない
 
   // (12.5) 保存済みの履歴と現在印刷を表示
   const savedJobs = printManager.loadHistory();
