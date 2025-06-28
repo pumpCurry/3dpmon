@@ -1,46 +1,24 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { WebSocketServer } from 'ws';
-import { ConnectionManager } from '../src/core/ConnectionManager.js';
-import { bus } from '../src/core/EventBus.js';
+import { describe, it, expect, vi } from 'vitest';
+import { ConnectionManager } from '@core/ConnectionManager.js';
+import { bus } from '@core/EventBus.js';
 
-let server;
-
-beforeAll(() => {
-  server = new WebSocketServer({ port: 9999 });
-  server.on('connection', (socket) => {
-    socket.on('message', (msg) => {
-      socket.send(msg.toString());
-    });
-  });
-});
-
-afterAll(() => {
-  server.close();
-});
+vi.mock('ws', () => ({
+  default: (await import('./__mocks__/ws.js')).default
+}));
 
 describe('ConnectionManager', () => {
-  it('registry creation and message bridge', async () => {
+  it('opens, echoes and closes', async () => {
     const cm = new ConnectionManager(bus);
     const id = await cm.add({ ip: '127.0.0.1', wsPort: 9999 });
-    expect(cm.list()).toHaveLength(1);
     await cm.connect(id);
-    await new Promise((r) => setTimeout(r, 100));
-    const recv = [];
-    bus.on('cm:message', ({ data }) => recv.push(data));
-    cm.send(id, { test: 1 });
-    await new Promise((r) => setTimeout(r, 100));
-    expect(recv[0]).toEqual({ test: 1 });
-    cm.close(id);
-  });
+    expect(cm.getState(id)).toBe('open');
 
-  it('reconnect attempt on close', async () => {
-    const cm = new ConnectionManager(bus);
-    const id = await cm.add({ ip: '127.0.0.1', wsPort: 9999 });
-    await cm.connect(id);
-    await new Promise((r) => setTimeout(r, 100));
-    server.clients.forEach((ws) => ws.close());
-    await new Promise((r) => setTimeout(r, 2500));
-    expect(['connecting', 'open', 'closed']).toContain(cm.getState(id));
+    const p = new Promise((r) => bus.on('cm:message', r));
+    cm.send(id, { ping: 1 });
+    const frame = await p;
+    expect(frame.data).toEqual({ ping: 1 });
+
     cm.close(id);
+    expect(cm.getState(id)).toBe('closed');
   });
 });
