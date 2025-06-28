@@ -17,13 +17,19 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.481 (PR #220)
+ * @version 1.390.490 (PR #223)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-27 10:52:00
+* @lastModified 2025-06-28 10:54:50
  * -----------------------------------------------------------
- * @todo
- * - none
+* @todo
+* - none
 */
+/** -----------------------------------------------------------
+ * 改修履歴
+ * | 日付 (JST)       | PR   | 概要                       |
+ * |------------------|------|----------------------------|
+ * | 2025-06-28       | #223 | タイマー処理ロジック改修   |
+ * ----------------------------------------------------------- */
 "use strict";
 
 import errorMap from "./3dp_errorcode.js";
@@ -61,6 +67,7 @@ let tsPrintStart      = null;
 let tsPrepEnd         = null;
 let tsCheckStart      = null;
 let tsCheckEnd        = null;
+let totalCheckSeconds = 0;
 let tsPauseStart      = null;
 let tsCompletion      = null;
 let totalPauseSeconds = 0;
@@ -207,20 +214,47 @@ export function handleMessage(data) {
 
 /**
  * processData:
- * (2) 各種イベント処理
- *     2.1) heartbeat
- *     2.2) エラー
- *     2.3) 準備時間タイマー
- *     2.4) セルフテスト確認時間タイマー
- *     2.5) 一時停止時間タイマー
- *     2.6) 完了後経過時間タイマー
- *     2.7) 状態遷移通知・プレビュー更新・その他フィールド反映
+ *   WebSocket から受信した JSON データを解析し、各種タイマー管理と
+ *   UI 更新、履歴登録、通知発火を行う中心関数。
  *
- * @param {object} data 受信データ
+ * 【詳細説明】
+ * - heartbeat のみのデータを簡易更新
+ * - エラー通知とログの出力
+ * - 準備／セルフテスト／一時停止／完了経過 各タイマーの更新
+ * - 進捗情報やプレビューの反映
+ *
+ * @function processData
+ * @param {object} data - WebSocket 受信データオブジェクト
+ * @returns {void}
  */
 export function processData(data) {
   const machine = monitorData.machines[currentHostname];
   if (!machine) return;
+
+  // ---- 完了後経過タイマーの復元処理 ------------------------------------
+  if (tsCompletion === null) {
+    const storedPrev = Number(machine.storedData.prevPrintID?.rawValue ?? NaN);
+    if (!isNaN(storedPrev)) {
+      prevPrintStartTime = storedPrev;
+    }
+    const last = machine.historyData[machine.historyData.length - 1];
+    if (
+      last &&
+      prevPrintStartTime !== null &&
+      Number(last.id) === Number(prevPrintStartTime) &&
+      last.finishTime
+    ) {
+      const fin = Date.parse(last.finishTime);
+      if (!isNaN(fin)) {
+        tsCompletion = fin;
+        setStoredData(
+          "completionElapsedTime",
+          Math.floor((Date.now() - fin) / 1000),
+          true
+        );
+      }
+    }
+  }
 
   // (2.1) heartbeat のみ処理
   if (data.ModeCode === "heart_beat") {
@@ -250,6 +284,7 @@ export function processData(data) {
   const currStartTime = Number(data.printStartTime   || 0);
   const currJobTime   = Number(data.printJobTime     || 0);
   const currSelfPct   = Number(data.withSelfTest      || 0);
+  const device        = Number(data.deviceState      || 0);
 
   // タイマー全クリアユーティリティ
   const clearAllTimers = () => {
@@ -258,7 +293,7 @@ export function processData(data) {
   };
   // 個別リセット
   const resetPrep       = () => { clearInterval(prepTimerId);    tsPrintStart = tsPrepEnd = null;           setStoredData("preparationTime",       null, true); };
-  const resetCheck      = () => { clearInterval(checkTimerId);      tsCheckStart=tsCheckEnd=null; setStoredData("firstLayerCheckTime", null, true); };
+  const resetCheck      = () => { clearInterval(checkTimerId);      tsCheckStart=tsCheckEnd=null; totalCheckSeconds=0; setStoredData("firstLayerCheckTime", null, true); };
   const resetPause      = () => { clearInterval(pauseTimerId);      tsPauseStart=null; totalPauseSeconds=0;  setStoredData("pauseTime",             null, true); };
   const resetCompletion = () => { clearInterval(completionTimer);  tsCompletion=null;         setStoredData("completionElapsedTime", null, true); };
 
@@ -321,49 +356,50 @@ export function processData(data) {
   // (2.4) セルフテスト確認時間タイマー
   // (2.4.1) 開始判定
   if (
-    tsPrepEnd && !tsCheckStart &&
+    tsPrepEnd &&
     st === PRINT_STATE_CODE.printPaused &&
-    currSelfPct > 0 && currSelfPct < 100
+    currSelfPct >= 1 && currSelfPct <= 99 &&
+    !tsCheckStart
   ) {
     console.debug(">>> (2.4.1) セルフテストタイマー開始");
     tsCheckStart = Date.now();
-    setStoredData("firstLayerCheckTime", 0, true);
     checkTimerId = setInterval(() => {
-      setStoredData(
-        "firstLayerCheckTime",
-        Math.floor((Date.now() - tsCheckStart)/1000),
-        true
-      );
+      const elapsed = totalCheckSeconds + Math.floor((Date.now() - tsCheckStart)/1000);
+      setStoredData("firstLayerCheckTime", elapsed, true);
     }, 1000);
     notificationManager.notify("printFirstLayerCheckStarted");
   }
   // (2.4.2) 完了判定
-  if (tsCheckStart && !tsCheckEnd && currSelfPct === 100) {
+  if (
+    tsCheckStart &&
+    (currSelfPct <= 0 || currSelfPct >= 100 || st !== PRINT_STATE_CODE.printPaused)
+  ) {
     console.debug(">>> (2.4.2) セルフテストタイマー停止");
-    tsCheckEnd = Date.now();
+    totalCheckSeconds += Math.floor((Date.now() - tsCheckStart)/1000);
     clearInterval(checkTimerId);
-    setStoredData(
-      "firstLayerCheckTime",
-      Math.floor((tsCheckEnd - tsCheckStart)/1000),
-      true
-    );
+    setStoredData("firstLayerCheckTime", totalCheckSeconds, true);
     persistHistoryTimers(currStartTime);
-    notificationManager.notify("printFirstLayerCheckCompleted");
+    tsCheckStart = null;
+    tsCheckEnd = Date.now();
+    if (currSelfPct >= 100) {
+      notificationManager.notify("printFirstLayerCheckCompleted");
+    }
   }
   // (2.4.3) 新規印刷 or 再開でリセット
-  if (
-    (initialized && currStartTime !== prevPrintStartTime) ||
-    st === PRINT_STATE_CODE.printStarted
-  ) {
+  if (initialized && currStartTime !== prevPrintStartTime) {
     resetCheck();
   }
 
   // (2.5) 一時停止時間タイマー
   // (2.5.1) 停止開始
-  if (st === PRINT_STATE_CODE.printPaused && !tsPauseStart) {
+  if (
+    tsPrepEnd &&
+    st === PRINT_STATE_CODE.printPaused &&
+    (currSelfPct === 0 || currSelfPct === 100) &&
+    !tsPauseStart
+  ) {
     console.debug(">>> (2.5.1) 一時停止タイマー開始");
     tsPauseStart = Date.now();
-    setStoredData("pauseTime", 0, true);
     pauseTimerId = setInterval(() => {
       const elapsed = totalPauseSeconds + Math.floor((Date.now() - tsPauseStart)/1000);
       setStoredData("pauseTime", elapsed, true);
@@ -373,8 +409,7 @@ export function processData(data) {
   // (2.5.2) 停止解除
   if (
     tsPauseStart &&
-    st !== PRINT_STATE_CODE.printPaused &&
-    !(currSelfPct > 0 && currSelfPct < 100)
+    (st !== PRINT_STATE_CODE.printPaused || (currSelfPct !== 0 && currSelfPct !== 100))
   ) {
     console.debug(">>> (2.5.2) 一時停止タイマー停止");
     totalPauseSeconds += Math.floor((Date.now() - tsPauseStart)/1000);
@@ -396,7 +431,11 @@ export function processData(data) {
   ]);
 
   // (2.6.1) 完了 or 失敗 → 開始
-  if (DONE.has(st) && !tsCompletion) {
+  if (
+    device === PRINT_STATE_CODE.printIdle &&
+    DONE.has(st) &&
+    !tsCompletion
+  ) {
     console.debug(">>> (2.6.1) 完了後経過タイマー開始");
     tsCompletion = Date.now();
     setStoredData("completionElapsedTime", 0, true);
@@ -412,7 +451,11 @@ export function processData(data) {
     notificationManager.notify(evt);
   }
   // (2.6.2) Idle or 再開でリセット
-  if (tsCompletion && !DONE.has(st)) {
+  if (
+    tsCompletion &&
+    (st === PRINT_STATE_CODE.printStarted ||
+     (prevPrintState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
+  ) {
     console.debug(">>> (2.6.2) 完了後経過タイマーリセット");
     resetCompletion();
   }
