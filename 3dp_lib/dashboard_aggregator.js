@@ -20,13 +20,19 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.451 (PR #205)
+* @version 1.390.490 (PR #223)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-23 18:52:08
+* @lastModified 2025-06-28 10:56:11
  * -----------------------------------------------------------
  * @todo
  * - none
  */
+/** -----------------------------------------------------------
+ * 改修履歴
+ * | 日付 (JST)       | PR   | 概要                       |
+ * |------------------|------|----------------------------|
+ * | 2025-06-28       | #223 | タイマー処理ロジック改修   |
+ * ----------------------------------------------------------- */
 
 "use strict";
 
@@ -315,16 +321,41 @@ export function ingestData(data) {
 /**
  * aggregateTimersAndPredictions: タイマー集計＆予測
  *
+ * 【詳細説明】
  * - getMergedValueWithSource で data と storedData をマージ取得
- * - PrintID 切替／一時停止→再開 のリセット処理を追加
- * - 準備時間／セルフテスト時間／一時停止時間／完了後経過時間 は
- *   formatDuration() で「hh:mm:ss(秒)」表記
- * - 予想終了時刻など epoch 値は formatEpochToDateTime() で日付文字列化
- * - rawValue=true （内部計算用）と rawValue=false（表示用 computedValue）を両方セット
+ * - PrintID 切替や一時停止の再開処理を反映
+ * - 各種タイマー値を算出し storedData へ保存
+ * - 予想終了時刻等の計算結果も合わせて反映する
+ *
+ * @function aggregateTimersAndPredictions
+ * @param {object} data - 最新の受信データ
+ * @returns {void}
  */
 function aggregateTimersAndPredictions(data) {
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
+
+  // ---- 完了後経過タイマーの復元処理 ------------------------------
+  if (tsCompleteStart === null) {
+    const machine = monitorData.machines[currentHostname];
+    const last = machine?.historyData?.[machine.historyData.length - 1];
+    if (
+      last &&
+      prevPrintID !== null &&
+      Number(last.id) === Number(prevPrintID) &&
+      last.finishTime
+    ) {
+      const fin = Date.parse(last.finishTime);
+      if (!isNaN(fin)) {
+        tsCompleteStart = fin;
+        setStoredData(
+          "completionElapsedTime",
+          Math.floor((nowMs - fin) / 1000),
+          true
+        );
+      }
+    }
+  }
 
   // ── 1) data と storedData のマージ取得 ────────────────────────────────
   const { value: idRaw   } = getMergedValueWithSource("printStartTime", data);
@@ -384,65 +415,60 @@ function aggregateTimersAndPredictions(data) {
   }
 
   // 4-2. ファーストレイヤー確認時間
-  if (st === PRINT_STATE_CODE.printStarted && job >= 1 && selfPct > 0 && selfPct < 100) {
+  if (
+    actualStartEpoch !== null &&
+    st === PRINT_STATE_CODE.printPaused &&
+    selfPct >= 1 && selfPct <= 99
+  ) {
     if (!tsCheckStart) tsCheckStart = nowMs;
     const sec = totalCheckSec + Math.floor((nowMs - tsCheckStart) / 1000);
     setStoredData("firstLayerCheckTime", sec, true);
-  } else if (tsCheckStart) {
+  } else if (
+    tsCheckStart &&
+    (st !== PRINT_STATE_CODE.printPaused || selfPct <= 0 || selfPct >= 100)
+  ) {
     totalCheckSec += Math.floor((nowMs - tsCheckStart) / 1000);
     tsCheckStart   = null;
     setStoredData("firstLayerCheckTime", totalCheckSec, true);
   }
 
   // 4-3. 一時停止時間
-  if (st === PRINT_STATE_CODE.printPaused) {
+  if (
+    actualStartEpoch !== null &&
+    st === PRINT_STATE_CODE.printPaused &&
+    (selfPct === 0 || selfPct === 100)
+  ) {
     if (!tsPauseStart) tsPauseStart = nowMs;
     const sec = totalPauseSec + Math.floor((nowMs - tsPauseStart) / 1000);
     setStoredData("pauseTime", sec, true);
     setStoredData("pauseTime", { value: formatDuration(sec), unit: "" }, false);
-  } else if (tsPauseStart) {
+  } else if (
+    tsPauseStart &&
+    (st !== PRINT_STATE_CODE.printPaused || (selfPct !== 0 && selfPct !== 100))
+  ) {
     totalPauseSec += Math.floor((nowMs - tsPauseStart) / 1000);
     tsPauseStart   = null;
     setStoredData("pauseTime", totalPauseSec, true);
   }
 
   // 4-4. 完了後経過時間
-  //   - 通常の完了状態(printDone/printFailed)で開始
-  //   - 機器側が Idle (deviceState=0) でも printFinishTime が取得できる場合は
-  //     その時刻から計測
-  //   - Idle かつ printFinishTime も取得できない場合は現在時刻から計測
-  //   - それ以外の状態に遷移したらリセット
   const doneStates = new Set([
     PRINT_STATE_CODE.printDone,
     PRINT_STATE_CODE.printFailed
   ]);
   const isIdle = device === PRINT_STATE_CODE.printIdle;
-  if (doneStates.has(st)) {
-    // 印刷完了状態: printFinishTime があればその時刻から、なければ現在時刻から開始
-    if (!tsCompleteStart) {
-      tsCompleteStart = finish ? finish * 1000 : nowMs;
-      setStoredData("completionElapsedTime", 0, true);
-    }
-    const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
-    setStoredData("completionElapsedTime", sec, true);
-  } else if (isIdle && finish > 0) {
-    // Idle 状態で終了時刻のみ取得できたケース
-    if (!tsCompleteStart) {
-      tsCompleteStart = finish * 1000;
-    }
-    const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
-    setStoredData("completionElapsedTime", sec, true);
-  } else if (isIdle && finish === 0) {
-    // Idle かつ終了時刻すら無い場合は今から計測
+  if (isIdle && doneStates.has(st)) {
     if (!tsCompleteStart) {
       tsCompleteStart = nowMs;
       setStoredData("completionElapsedTime", 0, true);
-    } else {
-      const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
-      setStoredData("completionElapsedTime", sec, true);
     }
-  } else if (tsCompleteStart) {
-    // その他の状態に遷移したらリセット
+    const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
+    setStoredData("completionElapsedTime", sec, true);
+  } else if (
+    tsCompleteStart &&
+    (st === PRINT_STATE_CODE.printStarted ||
+     (prevState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
+  ) {
     tsCompleteStart = null;
     setStoredData("completionElapsedTime", null, true);
   }
