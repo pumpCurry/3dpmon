@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.451 (PR #205)
+* @version 1.390.489 (PR #223)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-23 18:57:23
+* @lastModified 2025-06-28 11:03:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -896,9 +896,11 @@ async function handlePrintClick(raw, thumbUrl) {
 
   // 実際にプリントコマンドを送信
   const target = raw.rawFilename ?? raw.filename;
-  sendCommand("set", {
-    opGcodeFile: `printprt:${target}`
-  });
+  sendCommand(
+    "set",
+    { opGcodeFile: `printprt:${target}` },
+    currentHostname
+  );
 }
 
 /**
@@ -923,9 +925,11 @@ async function handleDeleteClick(raw) {
   if (!ok) return;
 
   const target = raw.rawFilename ?? raw.filename;
-  sendCommand("set", {
-    opGcodeFile: `deleteprt:${target}`
-  });
+  sendCommand(
+    "set",
+    { opGcodeFile: `deleteprt:${target}` },
+    currentHostname
+  );
 }
 
 /**
@@ -963,9 +967,11 @@ async function handleRenameClick(raw) {
   // 元ディレクトリを維持してフルパスを組み立て
   const target = raw.rawFilename ?? raw.filename;
   const dir = target.slice(0, target.lastIndexOf("/"));
-  sendCommand("set", {
-    opGcodeFile: `renameprt:${target}:${dir}/${newName}`
-  });
+  sendCommand(
+    "set",
+    { opGcodeFile: `renameprt:${target}:${dir}/${newName}` },
+    currentHostname
+  );
 }
 
 /**
@@ -1125,7 +1131,7 @@ export function setupUploadUI() {
    */
   async function verifyUploadSuccess(fname) {
     try {
-      await sendCommand("get", { reqGcodeFile: 1 });
+      await sendCommand("get", { reqGcodeFile: 1 }, currentHostname);
     } catch (e) {
       console.warn("verifyUploadSuccess: sendCommand failed", e);
     }

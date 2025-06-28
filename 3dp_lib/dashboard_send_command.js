@@ -18,9 +18,9 @@
  * - {@link initSendGcode}：G-code送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
- * @version 1.390.488 (PR #222)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-27 23:37:32
+* @version 1.390.489 (PR #223)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-28 11:03:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -34,6 +34,7 @@ import {
   sendGcodeCommand,
   simulateReceivedJson
 } from "./dashboard_connection.js";
+import { currentHostname } from "./dashboard_data.js";
 import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
@@ -290,7 +291,7 @@ export function initializeCommandPalette() {
         if (!ok) return;
       }
       console.debug("▶ sendCommand", method, params);
-      sendCommand(method, params);
+      sendCommand(method, params, currentHostname);
     });
   });
   
@@ -322,7 +323,7 @@ function initializeFanControls() {
     if (!el) return;
     el.addEventListener("change", () => {
       const v = el.checked ? 1 : 0;
-      sendCommand("set", { [param]: v });
+      sendCommand("set", { [param]: v }, currentHostname);
     });
   });
 
@@ -349,7 +350,7 @@ function initializeFanControls() {
       // 0–255 に丸め
       const s = Math.round(pct * 255 / 100);
       const cmd = `M106 P${p} S${s}`;
-      sendCommand("set", { gcodeCmd: cmd });
+      sendCommand("set", { gcodeCmd: cmd }, currentHostname);
     });
   });
 }
@@ -405,7 +406,7 @@ function initializeTempControls() {
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", makePayload(v));
+      sendCommand("set", makePayload(v), currentHostname);
       lastSend = Date.now();
     };
 
@@ -513,7 +514,7 @@ export function initializeRateControls() {
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", { [param]: v });
+      sendCommand("set", { [param]: v }, currentHostname);
       lastSend = Date.now();
     };
 
@@ -646,7 +647,7 @@ export function initSendRawJson() {
       pushLog(`送信(Raw JSON): ${jsonStr}`, "send");
       if (cmd.method) {
         try {
-          await sendCommand(cmd.method, cmd.params ?? {});
+          await sendCommand(cmd.method, cmd.params ?? {}, currentHostname);
         } catch {
           // sendCommand 内でエラー表示済み
         }
@@ -735,7 +736,7 @@ export function initSendGcode() {
 
       pushLog(`送信(G-code): ${gcode}`, "send");
       try {
-        await sendGcodeCommand(gcode);
+        await sendGcodeCommand(gcode, currentHostname);
       } catch {
         // sendGcodeCommand 内でエラー表示済み
       }

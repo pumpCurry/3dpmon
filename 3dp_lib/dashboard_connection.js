@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.488 (PR #222)
- * @since   1.390.451 (PR #205)
- * @lastModified 2025-06-27 23:37:32
+* @version 1.390.489 (PR #223)
+* @since   1.390.451 (PR #205)
+* @lastModified 2025-06-28 11:03:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -164,6 +164,14 @@ export function updateConnectionHost(oldHost, newHost) {
   connectionMap[newHost] = state;
   delete connectionMap[oldHost];
 
+  // イベントハンドラ内で参照しているホストを新ホストへ更新
+  if (state.ws instanceof WebSocket) {
+    state.ws.onopen    = () => handleSocketOpen(newHost);
+    state.ws.onmessage = evt => handleSocketMessage(evt, newHost);
+    state.ws.onerror   = err => handleSocketError(err, newHost);
+    state.ws.onclose   = () => handleSocketClose(newHost);
+  }
+
   if (currentHostname === newHost) {
     updateConnectionUI(state.state, {}, newHost);
   }
@@ -225,6 +233,8 @@ export function connectWs(hostOrDest) {
   if (!dest) return;
   if (!dest.includes(":")) dest += ":9999";
   const host = dest.split(":")[0];
+  // 接続開始直後から currentHostname を最新に保つ
+  setCurrentHostname(host);
   const state = getState(host);
   state.dest = dest;
 
