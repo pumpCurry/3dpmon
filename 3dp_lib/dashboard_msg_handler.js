@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.496 (PR #225)
+* @version 1.390.526 (PR #241)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-28 12:00:48
+* @lastModified 2025-06-28 16:40:44
  * -----------------------------------------------------------
 * @todo
 * - none
@@ -56,7 +56,12 @@ import {
   setPrinterModel
 } from "./dashboard_stage_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
-import { ingestData, restoreAggregatorState, restartAggregatorTimer } from "./dashboard_aggregator.js";
+import {
+  ingestData,
+  restoreAggregatorState,
+  restartAggregatorTimer,
+  persistAggregatorState
+} from "./dashboard_aggregator.js";
 import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { getDeviceIp } from "./dashboard_connection.js";
@@ -80,7 +85,9 @@ let prevSelfTestPct    = null;
 /**
  * persistHistoryTimers:
  *   現在の印刷IDに対応する履歴エントリへタイマー情報をマージし、
- *   永続化を即時実行します。F5リロードによる消失を防ぐ目的です。
+ *   永続化を即時実行します。F5 リロードによる消失を防ぐ目的です。
+ *   aggregator の内部状態も保存するため、次回復元時にタイマー進捗を
+ *   失わないようにします。
  *
  * @private
  * @param {number} printId - 印刷開始時刻を元にしたジョブID
@@ -103,6 +110,7 @@ function persistHistoryTimers(printId) {
   const baseUrl = `http://${getDeviceIp()}:80`;
   printManager.updateHistoryList([entry], baseUrl);
   persistPrintResume();
+  persistAggregatorState();
 }
 
 /**
@@ -301,7 +309,13 @@ export function processData(data) {
       .forEach(id => clearInterval(id));
   };
   // 個別リセット
-  const resetPrep       = () => { clearInterval(prepTimerId);    tsPrintStart = tsPrepEnd = null;           setStoredData("preparationTime",       null, true); };
+  const resetPrep       = () => {
+    clearInterval(prepTimerId);
+    tsPrintStart = tsPrepEnd = null;
+    setStoredData("preparationTime",       null, true);
+    persistPrintResume();
+    persistAggregatorState();
+  };
   const resetCheck      = () => { clearInterval(checkTimerId);      tsCheckStart=tsCheckEnd=null; totalCheckSeconds=0; setStoredData("firstLayerCheckTime", null, true); };
   const resetPause      = () => { clearInterval(pauseTimerId);      tsPauseStart=null; totalPauseSeconds=0;  setStoredData("pauseTime",             null, true); };
   const resetCompletion = () => { clearInterval(completionTimer);  tsCompletion=null;         setStoredData("completionElapsedTime", null, true); };
@@ -322,6 +336,9 @@ export function processData(data) {
     pushLog("印刷開始", "info");
     notificationManager.notify("printStarted");
     setStoredData("preparationTime", 0, true);
+    // 直ちに保存してリロード時の損失を防ぐ
+    persistPrintResume();
+    persistAggregatorState();
     prepTimerId = setInterval(() => {
       const sec = Math.floor((Date.now() - tsPrintStart)/1000);
       setStoredData("preparationTime", sec, true);
