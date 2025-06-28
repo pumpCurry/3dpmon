@@ -18,9 +18,9 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
-* @version 1.390.462 (PR #211)
+* @version 1.390.497 (PR #227)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-25 20:25:42
+* @lastModified 2025-06-28 12:11:00
 * -----------------------------------------------------------
  * @todo
  * - none
@@ -44,6 +44,10 @@ let cameraRetryTimeout      = null;  // setTimeout ID
 let cameraCountdownTimer    = null;  // setInterval ID
 let userRequestedDisconnect = false; // ユーザによる停止フラグ
 let serviceStoppedNotified  = false; // サービス停止通知済みフラグ
+// MJPEG ストリームでは <img> 要素の onload がフレーム到着毎に発火する。
+// ブラウザ実装によって初回接続時に複数回呼び出されるケースがあるため、
+// 同一接続で成功ログを重複出力しないようフラグで制御する。
+let cameraSuccessLogged     = false; // 接続成功ログ出力済みフラグ
 
 /**
  * updateCameraConnectionUI
@@ -151,6 +155,7 @@ export function startCameraStream() {
   const host = monitorData.appSettings.wsDest?.split(":")[0];
   userRequestedDisconnect = false;
   serviceStoppedNotified  = false; // 毎起動時に通知フラグクリア
+  cameraSuccessLogged     = false; // 成功ログは毎回リセット
 
   // OFF or ホスト未設定 なら即停止
   if (!host || !monitorData.appSettings.cameraToggle) {
@@ -169,6 +174,7 @@ export function startCameraStream() {
   cameraAttempts = 0;
   clearTimeout(cameraRetryTimeout);
   clearInterval(cameraCountdownTimer);
+  cameraSuccessLogged = false; // 切断時は成功フラグもクリア
 
   // 実作業は内部関数へ
   _connectImgStream(host);
@@ -226,6 +232,7 @@ export function handleCameraError() {
  */
 function _connectImgStream(host) {
   if (userRequestedDisconnect) return;
+  cameraSuccessLogged = false; // まずは未接続状態とする
 
   // リトライ上限チェック
   if (cameraAttempts >= CAMERA_MAX_RETRY) {
@@ -252,12 +259,14 @@ function _connectImgStream(host) {
 
   // 読み込み成功
   cameraImg.onload = () => {
-    if (userRequestedDisconnect) return;
+    if (userRequestedDisconnect || cameraSuccessLogged) return;
     cameraAttempts = 0;
+    cameraSuccessLogged = true; // 初回のみ処理
     updateCameraConnectionUI("connected");
     pushLog("カメラ接続成功", "success");
     notificationManager.notify("cameraConnected");
-    // MJPEG ストリームでは onload がフレーム毎に発火するため一度で解除
+    // MJPEG ではフレーム毎に onload が発火するブラウザがあるため
+    // 一度実行したらハンドラを解除して重複ログを防ぐ
     cameraImg.onload = null;
   };
 
