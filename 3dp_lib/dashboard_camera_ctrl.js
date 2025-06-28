@@ -18,9 +18,9 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
- * @version 1.390.506 (PR #231)
+ * @version 1.390.508 (PR #232)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 13:14:35
+* @lastModified 2025-06-28 13:25:09
 * -----------------------------------------------------------
  * @todo
  * - none
@@ -42,8 +42,6 @@ let cameraImg               = null;  // <img id="camera-feed">
 let cameraAttempts          = 0;     // 現在のリトライ試行回数
 let cameraRetryTimeout      = null;  // setTimeout ID
 let cameraCountdownTimer    = null;  // setInterval ID
-let cameraFrameCheckTimer   = null;  // フレーム監視タイマーID
-let lastFrameTime           = 0;     // 最終フレーム受信時刻
 let firstConnected          = false; // 初回接続完了フラグ
 let userRequestedDisconnect = false; // ユーザによる停止フラグ
 let serviceStoppedNotified  = false; // サービス停止通知済みフラグ
@@ -66,10 +64,6 @@ function _cancelCameraTimers() {
   cameraRetryTimeout = null;
   clearInterval(cameraCountdownTimer);
   cameraCountdownTimer = null;
-  if (cameraFrameCheckTimer) {
-    clearInterval(cameraFrameCheckTimer);
-    cameraFrameCheckTimer = null;
-  }
 }
 
 /**
@@ -178,12 +172,7 @@ export function startCameraStream() {
   const host = monitorData.appSettings.wsDest?.split(":")[0];
   userRequestedDisconnect = false;
   serviceStoppedNotified  = false; // 毎起動時に通知フラグクリア
-  lastFrameTime           = Date.now();
   firstConnected          = false;
-  if (cameraFrameCheckTimer) {
-    clearInterval(cameraFrameCheckTimer);
-    cameraFrameCheckTimer = null;
-  }
 
   // OFF or ホスト未設定 なら即停止
   if (!host || !monitorData.appSettings.cameraToggle) {
@@ -281,15 +270,10 @@ function _connectImgStream(host) {
   // 既存タイマークリア
   clearTimeout(cameraRetryTimeout);
   clearInterval(cameraCountdownTimer);
-  if (cameraFrameCheckTimer) {
-    clearInterval(cameraFrameCheckTimer);
-    cameraFrameCheckTimer = null;
-  }
 
   // 読み込み成功 (フレーム受信)
   cameraImg.onload = () => {
     if (userRequestedDisconnect) return;
-    lastFrameTime = Date.now();
 
     // 待機中のリトライタイマーがあればキャンセルする
     if (cameraRetryTimeout) {
@@ -364,12 +348,5 @@ function _connectImgStream(host) {
   cameraImg.src = url;
   cameraImg.classList.remove("off");
 
-  // フレーム監視タイマー
-  cameraFrameCheckTimer = setInterval(() => {
-    if (userRequestedDisconnect) return;
-    const diff = Date.now() - lastFrameTime;
-    if (diff > 15000 && typeof cameraImg.onerror === "function") {
-      cameraImg.onerror();
-    }
-  }, 15000);
+  // フレーム監視タイマーは廃止
 }
