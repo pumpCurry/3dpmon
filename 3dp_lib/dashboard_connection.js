@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.493 (PR #224)
+* @version 1.390.498 (PR #226)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-28 11:37:02
+* @lastModified 2025-06-28 12:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -162,12 +162,29 @@ export function updateConnectionHost(oldHost, newHost) {
   }
   const state = connectionMap[oldHost];
   if (!state) return newHost;
-  if (connectionMap[newHost]) return newHost;
+
+  const target = connectionMap[newHost];
+  if (target) {
+    Object.assign(target, state);
+    delete connectionMap[oldHost];
+
+    if (target.ws instanceof WebSocket) {
+      target.ws.onopen    = () => handleSocketOpen(newHost);
+      target.ws.onmessage = evt => handleSocketMessage(evt, newHost);
+      target.ws.onerror   = err => handleSocketError(err, newHost);
+      target.ws.onclose   = () => handleSocketClose(newHost);
+    }
+
+    if (currentHostname === newHost) {
+      updateConnectionUI(target.state, {}, newHost);
+    }
+    updatePrinterListUI();
+    return newHost;
+  }
 
   connectionMap[newHost] = state;
   delete connectionMap[oldHost];
 
-  // イベントハンドラ内で参照しているホストを新ホストへ更新
   if (state.ws instanceof WebSocket) {
     state.ws.onopen    = () => handleSocketOpen(newHost);
     state.ws.onmessage = evt => handleSocketMessage(evt, newHost);
