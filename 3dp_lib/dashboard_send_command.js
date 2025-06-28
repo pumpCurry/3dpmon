@@ -18,9 +18,9 @@
  * - {@link initSendGcode}：G-code送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
-* @version 1.390.517 (PR #237)
+* @version 1.390.520 (PR #238)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 15:00:00
+* @lastModified 2025-06-28 16:01:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -803,8 +803,8 @@ export function initPauseHome() {
 
   btn.addEventListener("click", async () => {
     const model = getDisplayValue("model")?.value;
-    if (model !== "K1 Max") {
-      showAlert("K1 Max 以外では使用できません", "error");
+    if (model !== "K1 Max" && model !== "K1") {
+      showAlert("K1/K1 Max 以外では使用できません", "error");
       return;
     }
 
@@ -818,8 +818,17 @@ export function initPauseHome() {
     if (!ok) return;
 
     try {
-      await sendGcodeCommand("G28 X Y", currentHostname);
-      await sendGcodeCommand("G0 X296.50 Y153.00 F6000", currentHostname);
+      if (model === "K1 Max") {
+        await sendGcodeCommand(
+          "G28 X Y\nG0 X296.50 Y153.00 F6000\n",
+          currentHostname
+        );
+      } else if (model === "K1") {
+        await sendGcodeCommand(
+          "G28 X Y\nG0 X75.5 Y75.5 F6000\n",
+          currentHostname
+        );
+      }
     } catch {
       // sendGcodeCommand 内でエラー表示済み
     }
