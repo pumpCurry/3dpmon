@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.514 (PR #235)
+* @version 1.390.516 (PR #236)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-28 14:34:55
+* @lastModified 2025-06-28 14:54:54
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -66,6 +66,8 @@ const connectionMap = {};
  * @property {number|null}    fetchTimer    - ホスト確定待ちポーリングID
  * @property {number|null}    hostReadyAt   - ホスト名確定時刻(Unix ms)
  * @property {boolean}        historyReceived - 履歴取得済みフラグ
+ * @property {boolean}        fileReqSent   - ファイル一覧要求済みか
+ * @property {boolean}        historyReqSent - 履歴要求済みか
  * @property {boolean}        userDisc      - ユーザー操作により切断されたか
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
@@ -93,6 +95,8 @@ const placeholderState = {
   fetchTimer: null,
   hostReadyAt: null,
   historyReceived: false,
+  fileReqSent: false,
+  historyReqSent: false,
   userDisc: false,
   buffer: [],
   latest: null,
@@ -123,6 +127,8 @@ function getState(host) {
       fetchTimer: null,
       hostReadyAt: null,
       historyReceived: false,
+      fileReqSent: false,
+      historyReqSent: false,
       userDisc: false,
       buffer: [],
       latest: null,
@@ -320,9 +326,11 @@ function handleSocketOpen(host) {
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
 
-  // ホスト名確定後 1.5 秒待ってから履歴とファイル一覧を取得するタイマー
+  // ホスト名確定後に履歴/ファイル一覧を遅延取得するタイマー
   st.historyReceived = false;
   st.hostReadyAt = null;
+  st.fileReqSent = false;
+  st.historyReqSent = false;
   if (st.fetchTimer !== null) {
     clearInterval(st.fetchTimer);
   }
@@ -336,19 +344,38 @@ function handleSocketOpen(host) {
     }
     const hostReady =
       currentHostname !== PLACEHOLDER_HOSTNAME && currentHostname !== host;
-    if (hostReady) {
-      if (st.hostReadyAt === null) {
-        // ホスト名確定直後のタイムスタンプを記録
-        st.hostReadyAt = Date.now();
-      } else if (Date.now() - st.hostReadyAt >= 1500) {
-        if (!st.historyReceived) {
-          document.getElementById("btn-history-list")?.click();
-        }
-        document.getElementById("btn-file-list")?.click();
-        clearInterval(st.fetchTimer);
-        st.fetchTimer = null;
-        st.hostReadyAt = null;
+    if (!hostReady) {
+      return;
+    }
+
+    if (st.hostReadyAt === null) {
+      // ホスト名確定直後のタイムスタンプを記録
+      st.hostReadyAt = Date.now();
+      st.fileReqSent = false;
+      st.historyReqSent = false;
+      return;
+    }
+
+    const elapsed = Date.now() - st.hostReadyAt;
+
+    if (!st.fileReqSent && elapsed >= 2500) {
+      document.getElementById("btn-file-list")?.click();
+      st.fileReqSent = true;
+    }
+
+    if (!st.historyReqSent && elapsed >= 7500) {
+      if (!st.historyReceived) {
+        document.getElementById("btn-history-list")?.click();
       }
+      st.historyReqSent = true;
+    }
+
+    if (st.fileReqSent && st.historyReqSent) {
+      clearInterval(st.fetchTimer);
+      st.fetchTimer = null;
+      st.hostReadyAt = null;
+      st.fileReqSent = false;
+      st.historyReqSent = false;
     }
   }, 100);
 
@@ -520,6 +547,8 @@ function handleSocketClose(host) {
   }
   st.hostReadyAt = null;
   st.historyReceived = false;
+  st.fileReqSent = false;
+  st.historyReqSent = false;
 
   // Heartbeat停止...
   stopHeartbeat(host);             // ハートビート停止
