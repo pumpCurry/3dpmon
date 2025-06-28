@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.489 (PR #223)
+* @version 1.390.523 (PR #225)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-28 11:03:57
+* @lastModified 2025-06-28 16:25:04
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -71,7 +71,9 @@ export const MAX_HISTORY = 150;
 const MERGE_IGNORE_ZERO_FIELDS = new Set([
   "preparationTime",
   "firstLayerCheckTime",
-  "pauseTime"
+  "pauseTime",
+  // 使用フィラメント量は印刷途中では 0 になるため保持値を優先
+  "materialUsedMm"
 ]);
 
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用）
@@ -396,9 +398,10 @@ export const renderTemplates = {
 
 /**
  * 現在印刷中ジョブを指定コンテナに描画
- * @param {HTMLElement} containerEl
+ * @param {HTMLElement|null} containerEl - 描画先要素。null の場合は処理しません
  */
 export function renderPrintCurrent(containerEl) {
+  if (!containerEl) return;
   containerEl.innerHTML = "";
   const job = loadCurrent();
   const ip = getDeviceIp();
@@ -416,9 +419,10 @@ export function renderPrintCurrent(containerEl) {
 
 /**
  * 印刷履歴リストを指定コンテナ（ul または div）に描画
- * @param {HTMLElement} containerEl
+ * @param {HTMLElement|null} containerEl - 描画先要素。null なら何もしません
  */
 export function renderPrintHistory(containerEl) {
+  if (!containerEl) return;
   const jobs = loadHistory();
   const ip = getDeviceIp();
   const baseUrl = `http://${ip}`;
