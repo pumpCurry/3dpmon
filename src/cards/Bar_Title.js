@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link TitleBar}：タイトルバー UI クラス
  *
- * @version 1.390.553 (PR #253)
+* @version 1.390.554 (PR #254)
  * @since   1.390.531 (PR #1)
- * @lastModified 2025-06-28 20:00:00
+* @lastModified 2025-06-28 12:39:10
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -158,6 +158,7 @@ export default class TitleBar extends BaseBar {
       btn.dataset.id = t.id;
       btn.textContent = t.label;
       btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-controls', `panel-${t.id}`);
       btn.setAttribute('tabindex', t.id === this.activeId ? '0' : '-1');
       btn.setAttribute('aria-selected', t.id === this.activeId ? 'true' : 'false');
       if (t.color) btn.style.setProperty('--tab-color', t.color);

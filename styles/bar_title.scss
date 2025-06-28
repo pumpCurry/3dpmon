@@ -26,6 +26,7 @@
   color: var(--tab-text-color, #fff);
   border-radius: 4px;
   cursor: pointer;
+  mix-blend-mode: multiply;
 }
 
 .title-bar .tab.active {
