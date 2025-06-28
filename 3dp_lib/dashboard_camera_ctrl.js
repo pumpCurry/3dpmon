@@ -18,9 +18,9 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
-* @version 1.390.497 (PR #225)
+* @version 1.390.503 (PR #229)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 12:49:36
+* @lastModified 2025-06-28 13:05:00
 * -----------------------------------------------------------
  * @todo
  * - none
@@ -271,12 +271,29 @@ function _connectImgStream(host) {
   cameraImg.onload = () => {
     if (userRequestedDisconnect) return;
     lastFrameTime = Date.now();
+
+    // 待機中のリトライタイマーがあればキャンセルする
+    if (cameraRetryTimeout) {
+      clearTimeout(cameraRetryTimeout);
+      cameraRetryTimeout = null;
+    }
+    if (cameraCountdownTimer) {
+      clearInterval(cameraCountdownTimer);
+      cameraCountdownTimer = null;
+    }
+
+    // 接続成立時の共通処理
     if (!firstConnected) {
       cameraAttempts = 0;
       firstConnected = true;
       updateCameraConnectionUI("connected");
       pushLog("カメラ接続成功", "success");
       notificationManager.notify("cameraConnected");
+    } else if (cameraAttempts > 0) {
+      // 再接続が成功した場合は UI を更新してリトライ回数をリセット
+      cameraAttempts = 0;
+      updateCameraConnectionUI("connected");
+      pushLog("カメラ再接続成功", "info");
     }
   };
 
