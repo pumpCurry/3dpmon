@@ -18,9 +18,9 @@
  * - {@link initSendGcode}：G-code送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
-* @version 1.390.520 (PR #238)
+* @version 1.390.524 (PR #240)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 16:01:20
+* @lastModified 2025-06-28 16:40:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -829,6 +829,38 @@ export function initPauseHome() {
           currentHostname
         );
       }
+    } catch {
+      // sendGcodeCommand 内でエラー表示済み
+    }
+  });
+}
+
+/**
+ * "XYロック解除" ボタンの設定とハンドラ登録
+ *
+ * @function initXYUnlock
+ * @returns {void}
+ */
+export function initXYUnlock() {
+  const btn = document.getElementById("btn-xy-unlock");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const ok = await showConfirmDialog({
+      level: "warn",
+      title: "XY軸ステッピングモーターロックの解除",
+      message:
+        "ヘッドを手で動かせないとき、ステッピングモーターでのXY軸ロックを解除します。\n" +
+        "印刷一時停止時以外に実行しないでください。\n" +
+        "再びロックする必要がある際は、原点復帰ボタンを押すとロックできます。\n" +
+        "実施してよろしいですか?",
+      confirmText: "XY軸ロック解除の実行",
+      cancelText: "キャンセル"
+    });
+    if (!ok) return;
+
+    try {
+      await sendGcodeCommand("M84", currentHostname);
     } catch {
       // sendGcodeCommand 内でエラー表示済み
     }

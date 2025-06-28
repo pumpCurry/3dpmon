@@ -5,6 +5,8 @@ This page details 3dpmon's remote control capabilities, file handling tools and 
 ## Remote Control
 - Use the **Operation Panel** to adjust nozzle or bed temperatures and toggle fans or the LED light.
 - Pause, stop or reset a print job even while it is running.
+- When the head cannot be moved by hand during pause, use
+  the **XY Unlock** button to release the stepper lock.
 - Frequently used commands are available from the **Command Palette** for one-click access.
 
 ## File Management

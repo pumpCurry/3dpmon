@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.517 (PR #237)
+* @version 1.390.524 (PR #240)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 15:00:00
+* @lastModified 2025-06-28 16:40:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -82,7 +82,8 @@ import {
   initSendRawJson,
   initSendGcode,
   initTestRawJson,
-  initPauseHome
+  initPauseHome,
+  initXYUnlock
 } from "./dashboard_send_command.js";
 
 let filamentPreview = null;
@@ -352,6 +353,7 @@ export function initializeDashboard({
   initSendGcode();
   initTestRawJson();
   initPauseHome();
+  initXYUnlock();
 }
 
 // ────────────── 印刷再開データの復元／永続化 ──────────────
