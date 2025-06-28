@@ -18,9 +18,9 @@
  * - {@link stopCameraStream}：カメラストリーム停止
  * - {@link handleCameraError}：接続エラー処理
  *
-* @version 1.390.503 (PR #229)
+ * @version 1.390.506 (PR #231)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 13:05:00
+* @lastModified 2025-06-28 13:14:35
 * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,6 +47,30 @@ let lastFrameTime           = 0;     // 最終フレーム受信時刻
 let firstConnected          = false; // 初回接続完了フラグ
 let userRequestedDisconnect = false; // ユーザによる停止フラグ
 let serviceStoppedNotified  = false; // サービス停止通知済みフラグ
+
+/**
+ * _cancelCameraTimers
+ * -------------------
+ * カメラ接続に関連するタイマーとハンドラをすべて解除します。
+ * リトライ上限到達時や手動停止時に利用されます。
+ *
+ * @private
+ * @returns {void}
+ */
+function _cancelCameraTimers() {
+  if (cameraImg) {
+    cameraImg.onload = null;
+    cameraImg.onerror = null;
+  }
+  clearTimeout(cameraRetryTimeout);
+  cameraRetryTimeout = null;
+  clearInterval(cameraCountdownTimer);
+  cameraCountdownTimer = null;
+  if (cameraFrameCheckTimer) {
+    clearInterval(cameraFrameCheckTimer);
+    cameraFrameCheckTimer = null;
+  }
+}
 
 /**
  * updateCameraConnectionUI
@@ -196,19 +220,12 @@ export function stopCameraStream() {
   if (cameraImg) {
     cameraImg.src = "";
     cameraImg.classList.add("off");
-    cameraImg.onload  = null;
-    cameraImg.onerror = null;
   }
   userRequestedDisconnect = true;
 
   // リトライカウンタ＆タイマー初期化
   cameraAttempts = 0;
-  clearTimeout(cameraRetryTimeout);
-  clearInterval(cameraCountdownTimer);
-  if (cameraFrameCheckTimer) {
-    clearInterval(cameraFrameCheckTimer);
-    cameraFrameCheckTimer = null;
-  }
+  _cancelCameraTimers();
 
   // すぐに NO SIGNAL
   updateCameraConnectionUI("disconnected");
@@ -242,6 +259,8 @@ function _connectImgStream(host) {
 
   // リトライ上限チェック
   if (cameraAttempts >= CAMERA_MAX_RETRY) {
+    userRequestedDisconnect = true;
+    _cancelCameraTimers();
     updateCameraConnectionUI("disconnected");
     pushLog(`カメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました`, "error");
     notificationManager.notify("cameraConnectionFailed");
