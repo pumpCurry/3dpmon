@@ -20,9 +20,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
- * @version 1.390.474 (PR #216)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-25 22:45:26
+* @version 1.390.496 (PR #225)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-06-28 12:00:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -107,7 +107,7 @@ export function setNotificationSuppressed(flag) {
 export function createEmptyMachineData() {
   return {
     storedData: {},
-    runtimeData: {},
+    runtimeData: { lastError: null },
     historyData: [],
     printStore: { current: null, history: [], videos: {} }
   };
@@ -127,7 +127,10 @@ export function ensureMachineData(host) {
     return;
   }
   machine.storedData  ??= {};
-  machine.runtimeData ??= {};
+  machine.runtimeData ??= { lastError: null };
+  if (!('lastError' in machine.runtimeData)) {
+    machine.runtimeData.lastError = null;
+  }
   machine.historyData ??= [];
   if (!machine.printStore) {
     machine.printStore = { current: null, history: [], videos: {} };

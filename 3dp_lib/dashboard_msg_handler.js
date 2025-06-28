@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
- * @version 1.390.490 (PR #223)
+* @version 1.390.496 (PR #225)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-28 10:54:50
+* @lastModified 2025-06-28 12:00:48
  * -----------------------------------------------------------
 * @todo
 * - none
@@ -230,6 +230,10 @@ export function handleMessage(data) {
 export function processData(data) {
   const machine = monitorData.machines[currentHostname];
   if (!machine) return;
+  machine.runtimeData ??= { lastError: null };
+  if (!('lastError' in machine.runtimeData)) {
+    machine.runtimeData.lastError = null;
+  }
 
   // ---- 完了後経過タイマーの復元処理 ------------------------------------
   if (tsCompletion === null) {
@@ -265,17 +269,22 @@ export function processData(data) {
   // (2.2) エラー処理：常にログ出力 → 通知は設定に応じて
   if (data.err) {
     const { errcode, key } = data.err;
-    if (errcode === 0 && key === 0) {
-      pushLog("エラーが解消しました。", "info");
-      notificationManager.notify("errorResolved");
-    } else {
-      const msg = processError(data.err);
-      pushLog(msg, "error");
-      notificationManager.notify("errorOccurred", {
-        error_code: errcode,
-        error_key:  key,
-        error_msg:  msg,
-      });
+    const prev = machine.runtimeData.lastError;
+    const isSame = prev && prev.errcode === errcode && prev.key === key;
+    machine.runtimeData.lastError = { errcode, key };
+    if (!isSame) {
+      if (errcode === 0 && key === 0) {
+        pushLog("エラーが解消しました。", "info");
+        notificationManager.notify("errorResolved");
+      } else {
+        const msg = processError(data.err);
+        pushLog(msg, "error");
+        notificationManager.notify("errorOccurred", {
+          error_code: errcode,
+          error_key:  key,
+          error_msg:  msg,
+        });
+      }
     }
   }
 
