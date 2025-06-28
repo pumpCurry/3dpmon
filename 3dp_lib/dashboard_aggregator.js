@@ -1,5 +1,5 @@
 /**
- * @fileoverview
+ 2025-06-28 16:59:41
  * @description 3Dプリンタ監視ツール 3dpmon 用 集計管理モジュール
  * @file dashboard_aggregator.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.490 (PR #223)
+* @version 1.390.526 (PR #226)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 10:56:11
+* @lastModified 2025-06-28 16:59:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -403,7 +403,12 @@ function aggregateTimersAndPredictions(data) {
   // ── 4) タイマー集計／表示用セット ─────────────────────────────────
   // 4-1. 印刷前準備時間
   if (st === PRINT_STATE_CODE.printStarted && job === 0 && selfPct > 0 && selfPct < 100) {
-    if (!tsPrepStart) tsPrepStart = nowMs;
+    if (!tsPrepStart) {
+      // ----- 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
+      // printStartTime(id) が取得できていればそこからの経過秒を算出する
+      // まだ得られていない場合は現在時刻から計測を開始する
+      tsPrepStart = id ? id * 1000 : nowMs;
+    }
     const sec = totalPrepSec + Math.floor((nowMs - tsPrepStart) / 1000);
     // internal
     setStoredData("preparationTime", sec, true);
