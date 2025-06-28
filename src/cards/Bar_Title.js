@@ -1,34 +1,154 @@
 /**
  * @fileoverview
- * @description 3Dプリンタ監視ツール 3dpmon 用 Bar_Title コンポーネント
+ * @description 3Dプリンタ監視ツール 3dpmon 用 TitleBar コンポーネント
  * @file Bar_Title.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
- * @author pumpCurry
  * -----------------------------------------------------------
  * @module cards/Bar_Title
  *
  * 【機能内容サマリ】
- * - Bar_Title コンポーネントのひな形
+ * - 最上位バーとして接続タブを表示
+ * - タブ選択時に EventBus へ通知
  *
  * 【公開クラス一覧】
- * - {@link Bar_Title}：UI コンポーネントクラス
+ * - {@link TitleBar}：タイトルバー UI クラス
  *
- * @version 1.390.531 (PR #1)
+ * @version 1.390.549 (PR #252)
  * @since   1.390.531 (PR #1)
- * @lastModified 2025-06-28 09:54:02
+ * @lastModified 2025-06-28 20:00:00
  * -----------------------------------------------------------
  * @todo
- * - 実装詳細を追加
+ * - なし
  */
 
+import BaseBar from './BaseBar.js';
+
 /**
- * Bar_Title コンポーネントクラス
+ * タイトルバーを表すクラス。
  */
-export class Bar_Title {
+export default class TitleBar extends BaseBar {
+  /** @type {string} */
+  static id = 'TTLB';
+
   /**
-   * コンストラクタ
+   * @param {Object} bus - EventBus インスタンス
    */
-  constructor() {
-    // TODO: プロパティ初期化
+  constructor(bus) {
+    super(bus);
+    /** @type {Array<{id:string,label:string,color?:string,icon?:string}>} */
+    this.tabs = [];
+    /** @type {string|null} */
+    this.activeId = null;
+  }
+
+  /**
+   * DOM 要素を生成し mount する。
+   *
+   * @param {HTMLElement} root - ルート要素
+   * @override
+   * @returns {void}
+   */
+  mount(root) {
+    this.el = document.createElement('div');
+    this.el.className = 'title-bar';
+
+    const menu = document.createElement('button');
+    menu.className = 'hamburger';
+    menu.textContent = '≡';
+    this.el.appendChild(menu);
+
+    this.nav = document.createElement('nav');
+    this.nav.className = 'tabs';
+    this.el.appendChild(this.nav);
+
+    this.nav.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t instanceof HTMLElement && t.classList.contains('tab')) {
+        this.activate(t.dataset.id);
+      }
+    });
+
+    super.mount(root);
+    this.#renderTabs();
+  }
+
+  /**
+   * タブ一覧を設定し再描画する。
+   *
+   * @param {Array<{id:string,label:string,color?:string,icon?:string}>} tabs - タブ情報配列
+   * @returns {void}
+   */
+  setTabs(tabs) {
+    this.tabs = [...tabs];
+    this.activeId = tabs[0]?.id ?? null;
+    this.#renderTabs();
+  }
+
+  /**
+   * 新しいタブを追加して描画する。
+   *
+   * @param {{id:string,label:string,color?:string,icon?:string}} meta - タブ情報
+   * @returns {void}
+   */
+  addTab(meta) {
+    this.tabs.push(meta);
+    this.#renderTabs();
+  }
+
+  /**
+   * 指定 ID のタブを削除する。
+   *
+   * @param {string} id - タブ ID
+   * @returns {void}
+   */
+  removeTab(id) {
+    this.tabs = this.tabs.filter((t) => t.id !== id);
+    if (this.activeId === id) this.activeId = this.tabs[0]?.id ?? null;
+    this.#renderTabs();
+  }
+
+  /**
+   * タブをアクティブ表示し選択イベントを発火する。
+   *
+   * @param {string} id - タブ ID
+   * @returns {void}
+   */
+  activate(id) {
+    this.activeId = id;
+    this.#updateActive();
+    this.bus.emit('tab:select', id);
+  }
+
+  /**
+   * DOM 上のタブ群を再構築する内部メソッド。
+   *
+   * @private
+   * @returns {void}
+   */
+  #renderTabs() {
+    if (!this.nav) return;
+    this.nav.textContent = '';
+    this.tabs.forEach((t) => {
+      const btn = document.createElement('button');
+      btn.className = 'tab';
+      btn.dataset.id = t.id;
+      btn.textContent = t.label;
+      if (t.color) btn.style.setProperty('--tab-color', t.color);
+      if (t.id === this.activeId) btn.classList.add('active');
+      this.nav.appendChild(btn);
+    });
+  }
+
+  /**
+   * アクティブ状態だけを更新する。
+   *
+   * @private
+   * @returns {void}
+   */
+  #updateActive() {
+    if (!this.nav) return;
+    this.nav.querySelectorAll('.tab').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.id === this.activeId);
+    });
   }
 }

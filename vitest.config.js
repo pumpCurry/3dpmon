@@ -12,7 +12,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@core': path.resolve(__dirname, 'src/core'),
-      '@shared': path.resolve(__dirname, 'src/shared')
+      '@shared': path.resolve(__dirname, 'src/shared'),
+      '@cards': path.resolve(__dirname, 'src/cards')
     }
   }
 });

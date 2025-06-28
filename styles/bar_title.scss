@@ -1,0 +1,32 @@
+@use '../src/shared/mixins' as *;
+
+.title-bar {
+  display: flex;
+  align-items: center;
+  background: var(--card-bg);
+  padding: 0 8px;
+  height: 40px;
+}
+
+.title-bar .tabs {
+  display: flex;
+  overflow-x: auto;
+  @include no-scrollbar;
+  flex: 1;
+  mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 8px), transparent);
+}
+
+.title-bar .tab {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  margin-right: 4px;
+  background: var(--tab-color, #555);
+  border: none;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.title-bar .tab.active {
+  outline: 2px solid white;
+}
