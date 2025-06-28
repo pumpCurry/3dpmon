@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.511 (PR #234)
+* @version 1.390.514 (PR #235)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-28 14:26:00
+* @lastModified 2025-06-28 14:34:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -64,6 +64,8 @@ const connectionMap = {};
  * @property {number}         reconnect     - 再接続試行回数
  * @property {number|null}    retryTimer    - 再接続待機タイマーID
  * @property {number|null}    fetchTimer    - ホスト確定待ちポーリングID
+ * @property {number|null}    hostReadyAt   - ホスト名確定時刻(Unix ms)
+ * @property {boolean}        historyReceived - 履歴取得済みフラグ
  * @property {boolean}        userDisc      - ユーザー操作により切断されたか
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
@@ -89,6 +91,8 @@ const placeholderState = {
   reconnect: 0,
   retryTimer: null,
   fetchTimer: null,
+  hostReadyAt: null,
+  historyReceived: false,
   userDisc: false,
   buffer: [],
   latest: null,
@@ -117,6 +121,8 @@ function getState(host) {
       reconnect: 0,
       retryTimer: null,
       fetchTimer: null,
+      hostReadyAt: null,
+      historyReceived: false,
       userDisc: false,
       buffer: [],
       latest: null,
@@ -258,6 +264,8 @@ export function connectWs(hostOrDest) {
   setCurrentHostname(host);
   const state = getState(host);
   state.dest = dest;
+  state.historyReceived = false;
+  state.hostReadyAt = null;
 
 
   if (state.userDisc) {
@@ -312,7 +320,9 @@ function handleSocketOpen(host) {
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
 
-  // ホスト名が確定するまでポーリングし、確定後に履歴とファイル一覧を取得
+  // ホスト名確定後 1.5 秒待ってから履歴とファイル一覧を取得するタイマー
+  st.historyReceived = false;
+  st.hostReadyAt = null;
   if (st.fetchTimer !== null) {
     clearInterval(st.fetchTimer);
   }
@@ -321,17 +331,26 @@ function handleSocketOpen(host) {
     if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
       clearInterval(st.fetchTimer);
       st.fetchTimer = null;
+      st.hostReadyAt = null;
       return;
     }
-    const validHost =
+    const hostReady =
       currentHostname !== PLACEHOLDER_HOSTNAME && currentHostname !== host;
-    if (validHost) {
-      document.getElementById("btn-history-list")?.click();
-      document.getElementById("btn-file-list")?.click();
-      clearInterval(st.fetchTimer);
-      st.fetchTimer = null;
+    if (hostReady) {
+      if (st.hostReadyAt === null) {
+        // ホスト名確定直後のタイムスタンプを記録
+        st.hostReadyAt = Date.now();
+      } else if (Date.now() - st.hostReadyAt >= 1500) {
+        if (!st.historyReceived) {
+          document.getElementById("btn-history-list")?.click();
+        }
+        document.getElementById("btn-file-list")?.click();
+        clearInterval(st.fetchTimer);
+        st.fetchTimer = null;
+        st.hostReadyAt = null;
+      }
     }
-  }, 500);
+  }, 100);
 
 };
 
@@ -432,6 +451,8 @@ function handleSocketMessage(event, host) {
       pushLog("historyList を受信しました", "info");
       const baseUrl80 = `http://${getDeviceIp(hostKey)}:80`;
       printManager.updateHistoryList(data.historyList, baseUrl80, hostKey);
+      const s = getState(hostKey);
+      s.historyReceived = true;
     }
     if (hostReady && Array.isArray(data.elapseVideoList)) {
       pushLog("elapseVideoList を受信しました", "info");
@@ -497,6 +518,8 @@ function handleSocketClose(host) {
     clearInterval(st.fetchTimer);
     st.fetchTimer = null;
   }
+  st.hostReadyAt = null;
+  st.historyReceived = false;
 
   // Heartbeat停止...
   stopHeartbeat(host);             // ハートビート停止
