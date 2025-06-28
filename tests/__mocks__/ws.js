@@ -28,6 +28,17 @@ export default class WebSocketMock {
   }
 
   /**
+   * addEventListener の簡易実装。対応する onXXX ハンドラへ登録する。
+   *
+   * @param {string} evt - イベント名
+   * @param {Function} fn - ハンドラ
+   * @returns {void}
+   */
+  addEventListener(evt, fn) {
+    this[`on${evt}`] = fn;
+  }
+
+  /**
    * メッセージ送信をエコーとして扱い、即時 onmessage を発火する。
    *
    * @param {string} msg - 送信フレーム
