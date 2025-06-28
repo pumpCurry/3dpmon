@@ -9,9 +9,9 @@
  * 【機能内容サマリ】
  * - TitleBar のクリック動作とイベント発火を検証
  *
- * @version 1.390.553 (PR #253)
+* @version 1.390.554 (PR #254)
  * @since   1.390.549 (PR #252)
- * @lastModified 2025-06-28 20:00:00
+* @lastModified 2025-06-28 12:39:10
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -60,5 +60,15 @@ describe('TitleBar', () => {
     tabs[0].focus();
     tabs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     expect(tabs[1].classList.contains('active')).toBe(true);
+  });
+
+  it('toggles aria-selected on activate', () => {
+    const bar = new TitleBar(bus);
+    bar.mount(document.body);
+    bar.setTabs([{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }]);
+    const tabs = document.querySelectorAll('.tab');
+    bar.activate('b');
+    expect(tabs[1].getAttribute('aria-selected')).toBe('true');
+    expect(tabs[0].getAttribute('aria-selected')).toBe('false');
   });
 });
