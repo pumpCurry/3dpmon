@@ -5,6 +5,7 @@
   - 対応機種はK1C / K1 Max で動作確認をしています。
   - ほかの機種にも対応可能であれば対応させたいので、ご協力くださるかたどうかよろしくお願いいたします。
 
+The console should display echoed JSON via the new ConnectionManager.
 ## インストール
 1. このリポジトリをダウンロードします。
    - **Git**: `git clone https://github.com/pumpCurry/3dpmon.git`
@@ -52,6 +53,14 @@ To try the new Vite-based dashboard:
 2. In one terminal run `npm run mock` to start a local echo server.
 3. In another terminal run `npm run dev` and open `http://localhost:5173`.
 The console should display echoed JSON via the new ConnectionManager.
+## Run tests
+Unit tests are executed with [Vitest](https://vitest.dev/).
+
+1. Install Node packages: `npm install`
+2. Run `npm test`
+
+See [docs/develop/tests.md](docs/develop/tests.md) for coverage goals and additional details.
+
 
 ## License
 3dpmon is distributed under the **Modified BSD License (3-clause BSD License)**. Copyright is held by **pumpCurry** of *5r4ce2*. For details, visit [https://542.jp/](https://542.jp/). You can reach out via X (Twitter) at [@pcb](https://twitter.com/pcb).
