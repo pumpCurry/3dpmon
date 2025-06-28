@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.493 (PR #224)
+* @version 1.390.497 (PR #225)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-06-28 11:37:02
+* @lastModified 2025-06-28 12:49:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -48,6 +48,7 @@ import { handleMessage } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
+import { startCameraStream } from "./dashboard_camera_ctrl.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -288,6 +289,9 @@ function handleSocketOpen(host) {
   }
   st.state = "connected";
   updatePrinterListUI();
+  if (monitorData.appSettings.cameraToggle) {
+    startCameraStream();
+  }
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
 
