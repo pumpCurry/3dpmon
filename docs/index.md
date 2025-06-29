@@ -6,6 +6,7 @@
 - [ダッシュボードの使い方](./ja/dashboard_usage.md)
 - [機能一覧](./ja/features.md)
 - [フィラメント管理ガイド](./ja/filament_manual.md)
+- [開発ドキュメント索引](./develop/README.md)
 
 ### English
 - [Dashboard Usage](./en/dashboard_usage.md)
