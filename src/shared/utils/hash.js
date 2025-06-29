@@ -12,9 +12,9 @@
  * 【公開関数一覧】
  * - {@link sha1Hex}：SHA-1 ハッシュ文字列を生成
  *
-* @version 1.390.537 (PR #246)
+* @version 1.390.571 (PR #263)
 * @since   1.390.537 (PR #246)
-* @lastModified 2025-06-28 19:47:19
+* @lastModified 2025-06-29 21:24:38
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -27,8 +27,10 @@
  * @param {string} str - ハッシュ化する文字列
  * @returns {string} SHA-1 ハッシュの16進表現
  */
-import { createHash } from 'node:crypto';
+import { sha1 } from 'js-sha1';
 
 export function sha1Hex(str) {
-  return createHash('sha1').update(str).digest('hex');
+  // js-sha1 はブラウザと Node 両方で動作する軽量実装
+  // 文字列から SHA-1 ダイジェストを生成し16進表現のまま返す
+  return sha1(str);
 }
