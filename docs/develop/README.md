@@ -15,6 +15,7 @@
 | `step5_headpreview_plan.md` | HeadPreviewCard 分離計画 |
 | `step6_tempgraph_plan.md` | TempGraphCard 分離計画 |
 | `step7_e2e_plan.md` | E2E テスト計画 |
+| `debug_blank_screen.md` | 画面が真っ白になる場合の確認手順 |
 | `camera.md` | CameraCard API ガイド |
 | `headpreview.md` | HeadPreviewCard API ガイド |
 | `side_menu.md` | SideMenu バーガイド |
