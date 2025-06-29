@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "bench:head": "node bench/headpreview.bench.js"
   },
   "engines": {
     "node": ">=18"
@@ -21,6 +22,7 @@
     "sinon": "^17.0.1",
     "vite": "^6.0.0",
     "vitest": "^1.6.0",
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "nanobench": "^3.0.0"
   }
 }
