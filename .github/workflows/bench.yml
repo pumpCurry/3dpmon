@@ -6,9 +6,11 @@ on:
 jobs:
   headpreview:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+      - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
           node-version: 18
@@ -16,9 +18,11 @@ jobs:
       - run: npm run bench:head
   tempgraph:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+      - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
           node-version: 18
