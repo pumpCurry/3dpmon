@@ -9,8 +9,8 @@
  * 【機能内容サマリ】
  * - CameraCard の mount と retry を検証
  *
- * @version 1.390.554 (PR #254)
- * @since   1.390.554 (PR #254)
+ * @version 1.390.557 (PR #255)
+ * @since   1.390.557 (PR #255)
  * @lastModified 2025-06-28 12:39:10
  */
 
@@ -37,5 +37,17 @@ describe('CameraCard', () => {
     card.update({ streamUrl: 'two.mp4' });
     card.retry();
     expect(document.querySelector('video').src).toMatch('two.mp4');
+  });
+
+  it('retry uses exponential delay', () => {
+    const card = new CameraCard(bus);
+    card.init({ streamUrl: 'one.mp4' });
+    card.mount(document.body);
+    const spy = vi.spyOn(globalThis, 'setTimeout');
+    card.retry();
+    expect(spy).toHaveBeenLastCalledWith(expect.any(Function), 1000);
+    card.retry();
+    expect(spy).toHaveBeenLastCalledWith(expect.any(Function), 2000);
+    spy.mockRestore();
   });
 });
