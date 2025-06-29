@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: while sleep 300; do echo "keep-alive"; done &
@@ -15,11 +16,17 @@ jobs:
         with:
           node-version: 18
       - run: npm ci
-      - run: npm run bench:head
+      - name: bench headpreview
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npm run bench:head
+          kill $KEEP_PID
   tempgraph:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: while sleep 300; do echo "keep-alive"; done &
@@ -27,4 +34,9 @@ jobs:
         with:
           node-version: 18
       - run: npm ci
-      - run: npm run bench:temp
+      - name: bench tempgraph
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npm run bench:temp
+          kill $KEEP_PID
