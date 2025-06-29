@@ -3,28 +3,46 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 18
       - run: npm ci
-      - run: npm test
+      - name: run unit tests
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npm test
+          kill $KEEP_PID
   test-temp:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 18
       - run: npm ci
-      - run: npx vitest run tests/tempbuffer.test.js
+      - name: run tempbuffer tests
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npx vitest run tests/tempbuffer.test.js
+          kill $KEEP_PID
   test-sidemenu:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 18
       - run: npm ci
-      - run: npx vitest run tests/sidemenu.test.js
+      - name: run sidemenu tests
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npx vitest run tests/sidemenu.test.js
+          kill $KEEP_PID

@@ -7,20 +7,32 @@ jobs:
   headpreview:
     runs-on: ubuntu-latest
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 18
       - run: npm ci
-      - run: npm run bench:head
+      - name: bench headpreview
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npm run bench:head
+          kill $KEEP_PID
   tempgraph:
     runs-on: ubuntu-latest
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 18
       - run: npm ci
-      - run: npm run bench:temp
+      - name: bench tempgraph
+        run: |
+          while sleep 300; do echo "."; done &
+          KEEP_PID=$!
+          npm run bench:temp
+          kill $KEEP_PID
