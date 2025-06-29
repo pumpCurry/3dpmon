@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "vitest --ui",
-    "bench:head": "node bench/headpreview.bench.js"
+    "bench:head": "node bench/headpreview.bench.js",
+    "bench:temp": "node bench/tempgraph.bench.js"
   },
   "engines": {
     "node": ">=18"
@@ -18,11 +19,11 @@
   "devDependencies": {
     "@vitest/ui": "^1.6.0",
     "happy-dom": "^18.0.1",
+    "nanobench": "^3.0.0",
     "sass": "^1.80.0",
     "sinon": "^17.0.1",
     "vite": "^6.0.0",
     "vitest": "^1.6.0",
-    "ws": "^8.17.0",
-    "nanobench": "^3.0.0"
+    "ws": "^8.17.0"
   }
 }
