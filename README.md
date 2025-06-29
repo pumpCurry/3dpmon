@@ -62,6 +62,11 @@ Unit tests are executed with [Vitest](https://vitest.dev/).
 
 See [docs/develop/tests.md](docs/develop/tests.md) for coverage goals and additional details.
 
+## Keyboard Shortcuts
+HeadPreviewCard supports the following keys:
+- **Space**: reset zoom to 1.0
+- **?**: show help dialog
+
 ## Codex Task Execution
 To run this project within OpenAI Codex tasks, set the setup script path to `run/codex/setup.sh` and enable internet access only for that step. Required environment variables are `NODE_ENV=ci` and `CI=true`. Details are described in [docs/develop/codex_setup.md](docs/develop/codex_setup.md).
 

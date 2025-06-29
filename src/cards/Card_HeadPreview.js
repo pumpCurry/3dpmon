@@ -13,16 +13,16 @@
  * 【公開クラス一覧】
  * - {@link HeadPreviewCard}：ヘッド位置プレビューカード
  *
- * @version 1.390.560 (PR #257)
- * @since   1.390.560 (PR #257)
- * @lastModified 2025-06-29 12:14:44
+ * @version 1.390.561 (PR #258)
+ * @since   1.390.561 (PR #258)
+ * @lastModified 2025-06-29 12:34:24
  * -----------------------------------------------------------
  * @todo
  * - Three.js 対応
  */
 
 import BaseCard from './BaseCard.js';
-import { ModelAdapter } from '@shared/ModelAdapter.js';
+import { ModelAdapter } from '../shared/ModelAdapter.js';
 
 /**
  * ヘッド位置プレビューカードクラス。
@@ -48,6 +48,8 @@ export default class HeadPreviewCard extends BaseCard {
     this.ctx = null;
     /** @type {number} */
     this._anim = 0;
+    /** @type {((()=>void)|null)} */
+    this.onFrame = null;
     /** @private */
     this._onPos = (p) => this.update({ position: p });
     /** @private */
@@ -83,6 +85,14 @@ export default class HeadPreviewCard extends BaseCard {
     this.el = document.createElement('div');
     this.el.className = 'headpreview-card';
     this.el.dataset.cardId = HeadPreviewCard.id;
+    this.el.setAttribute('tabindex', '0');
+    this.el.setAttribute('role', 'img');
+    this.el.setAttribute('aria-label', this.#label());
+    this.el.setAttribute('aria-keyshortcuts', 'Space,?');
+    this.el.addEventListener('keydown', (e) => {
+      if (e.key === ' ') this.resetZoom();
+      if (e.key === '?') this.showHelp();
+    });
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = this.bed.w;
@@ -110,8 +120,8 @@ export default class HeadPreviewCard extends BaseCard {
       return;
     }
     this.position = position;
-    if (this.canvas) {
-      this.canvas.setAttribute('aria-label', this.#label());
+    if (this.el) {
+      this.el.setAttribute('aria-label', this.#label());
     }
   }
 
@@ -127,6 +137,27 @@ export default class HeadPreviewCard extends BaseCard {
     super.destroy();
   }
 
+  /**
+   * カード倍率をリセットする。
+   *
+   * @function resetZoom
+   * @returns {void}
+   */
+  resetZoom() {
+    this.scale(1);
+  }
+
+  /**
+   * ショートカットガイドを表示する。
+   *
+   * @function showHelp
+   * @returns {void}
+   */
+  showHelp() {
+    // 実装簡略化のため alert で一覧を提示する
+    alert('Space: reset zoom\n?: show this help');
+  }
+
   /** @private */
   #loop() {
     this._anim = requestAnimationFrame(() => this.#loop());
@@ -136,6 +167,7 @@ export default class HeadPreviewCard extends BaseCard {
   /** @private */
   #draw() {
     if (!this.ctx || !this.canvas) return;
+    if (this.onFrame) this.onFrame();
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.strokeStyle = '#666';
