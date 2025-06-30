@@ -12,37 +12,24 @@
  * 【公開関数一覧】
  * - {@link sha1Hex}：SHA-1 ハッシュ文字列を生成
  *
-* @version 1.390.578 (PR #267)
+* @version 1.390.595 (PR #275)
 * @since   1.390.537 (PR #246)
-* @lastModified 2025-06-30 10:14:14
+* @lastModified 2025-06-30 22:50:19
  * -----------------------------------------------------------
  * @todo
  * - なし
  * @function sha1Hex
  */
 
-/**
- * Web Crypto API または Node.js の crypto モジュールを利用して SHA-1
- * ハッシュを計算する。ブラウザ環境では `crypto.subtle.digest` を使用し、
- * それが利用できない場合は Node.js の `createHash` で代替する。
- *
- * @async
- * @param {string} str - ハッシュ化する文字列
- * @returns {Promise<string>} SHA-1 ハッシュの16進表現
- */
-export async function sha1Hex(str) {
-  // ブラウザまたは Node 両方で利用可能な Web Crypto API が存在する場合は
-  // そちらを優先して利用する。Node.js v20 以降では安定版である。
-  if (globalThis.crypto && globalThis.crypto.subtle) {
-    const data = new TextEncoder().encode(str);
-    const digest = await globalThis.crypto.subtle.digest('SHA-1', data);
-    return Array.from(new Uint8Array(digest))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
+import { sha1 } from 'js-sha1';
 
-  // 上記 API が無い環境、主に Node.js < v20 を想定。
-  // この場合は動的 import で `node:crypto` を読み込み、createHash を利用する。
-  const { createHash } = await import('node:crypto');
-  return createHash('sha1').update(str).digest('hex');
+/**
+ * 文字列を SHA-1 ハッシュ化して16進文字列を返す。
+ * js-sha1 はブラウザでも Node.js でも動作する軽量実装である。
+ *
+ * @param {string} str - ハッシュ化する文字列
+ * @returns {string} SHA-1 ハッシュの16進表現
+ */
+export function sha1Hex(str) {
+  return sha1(str);
 }
