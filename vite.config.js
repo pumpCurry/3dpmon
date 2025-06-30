@@ -29,9 +29,12 @@ export default defineConfig({
     preprocessorOptions: {
       scss: {
         additionalData: (content, filename) => {
+          const rel = path
+            .relative(path.dirname(filename), path.resolve(__dirname, 'styles/root.scss'))
+            .replace(/\\/g, '/');
           return filename.endsWith('styles/root.scss')
             ? content
-            : `@use 'styles/root';\n${content}`;
+            : `@use '${rel}';\n${content}`;
         }
       }
     }
