@@ -12,17 +12,17 @@
  * 【公開クラス一覧】
  * - {@link App}：アプリケーションメインクラス
  *
-* @version 1.390.563 (PR #259)
+* @version 1.390.576 (PR #260)
 * @since   1.390.531 (PR #1)
-* @lastModified 2025-06-29 13:09:40
+* @lastModified 2025-06-30 12:00:00
  * -----------------------------------------------------------
  * @todo
- * - ConnectionManager の実装
- * - DashboardManager の実装
+* - ConnectionManager の高度化
+* - DashboardManager のカード連携
  */
 
-import TitleBar from '@cards/Bar_Title.js';
-import SideMenu from '@cards/Bar_SideMenu.js';
+import { ConnectionManager } from './ConnectionManager.js';
+import DashboardManager from './DashboardManager.js';
 import { bus } from './EventBus.js';
 
 /**
@@ -35,19 +35,10 @@ export class App {
   constructor(rootSelector) {
     /** @type {HTMLElement|null} */
     this.root = document.querySelector(rootSelector);
+    this.cm = new ConnectionManager(bus);
+    this.db = new DashboardManager(bus, this.cm);
     if (this.root) {
-      this.titleBar = new TitleBar(bus);
-      this.titleBar.mount(this.root);
-      this.titleBar.setTabs([
-        { id: 'd1', label: 'Dummy1', color: '#f66' },
-        { id: 'd2', label: 'Dummy2', color: '#6f6' },
-        { id: 'd3', label: 'Dummy3', color: '#66f' }
-      ]);
-
-      this.sideMenu = new SideMenu(bus);
-      this.sideMenu.mount(this.root);
-      bus.on('menu:global', () => this.sideMenu.open());
-      bus.on('menu:close', () => this.sideMenu.close());
+      this.db.render(this.root);
     }
   }
 }

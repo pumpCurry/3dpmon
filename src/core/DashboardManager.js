@@ -1,0 +1,73 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 ダッシュボード管理クラス
+ * @file DashboardManager.js
+ * -----------------------------------------------------------
+ * @module core/DashboardManager
+ *
+ * 【機能内容サマリ】
+ * - タイトルバーとサイドメニューを生成しカード領域を描画
+ *
+ * 【公開クラス一覧】
+ * - {@link DashboardManager}：ダッシュボード統括クラス
+ *
+ * @version 1.390.576 (PR #260)
+ * @since   1.390.576 (PR #260)
+ * @lastModified 2025-06-30 12:00:00
+ * -----------------------------------------------------------
+ * @todo
+ * - カード動的ロードと配置永続化
+ */
+
+import TitleBar from '@cards/Bar_Title.js';
+import SideMenu from '@cards/Bar_SideMenu.js';
+
+/**
+ * ダッシュボード全体を管理するクラス。
+ */
+export default class DashboardManager {
+  /**
+   * @param {Object} bus - EventBus インスタンス
+   * @param {Object} cm - ConnectionManager インスタンス
+   */
+  constructor(bus, cm) {
+    /** @type {Object} */
+    this.bus = bus;
+    /** @type {Object} */
+    this.cm = cm;
+    /** @type {HTMLElement|null} */
+    this.root = null;
+    /** @type {HTMLElement|null} */
+    this.main = null;
+    /** @type {TitleBar|null} */
+    this.titleBar = null;
+    /** @type {SideMenu|null} */
+    this.sideMenu = null;
+  }
+
+  /**
+   * ルート要素へダッシュボードを描画する。
+   *
+   * @param {HTMLElement} root - 描画先ルート要素
+   * @returns {void}
+   */
+  render(root) {
+    this.root = root;
+    if (!this.root) return;
+
+    this.titleBar = new TitleBar(this.bus);
+    this.titleBar.mount(this.root);
+    this.titleBar.setTabs([
+      { id: 'd1', label: 'Dummy1', color: '#f66' }
+    ]);
+
+    this.sideMenu = new SideMenu(this.bus);
+    this.sideMenu.mount(this.root);
+    this.bus.on('menu:global', () => this.sideMenu && this.sideMenu.open());
+    this.bus.on('menu:close', () => this.sideMenu && this.sideMenu.close());
+
+    this.main = document.createElement('main');
+    this.main.className = 'dashboard-main';
+    this.root.appendChild(this.main);
+  }
+}
