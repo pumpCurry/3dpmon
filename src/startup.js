@@ -8,9 +8,9 @@
  * 【機能内容サマリ】
  * - アプリ初期化処理を呼び出すエントリポイント
  *
-* @version 1.390.580 (PR #268)
+* @version 1.390.582 (PR #269)
 * @since   1.390.536 (PR #245)
-* @lastModified 2025-07-01 00:00:00
+* @lastModified 2025-06-30 13:41:06
  * -----------------------------------------------------------
  * @todo
  * - AuthGate と App モジュールの統合
@@ -18,6 +18,8 @@
  */
 
 /* eslint-env browser */
+// SCSS トークンおよび各カードのスタイルを取り込む
+import '../styles/root.scss';
 import { bus } from './core/EventBus.js';
 
 console.log('[startup] bootstrap v2 skeleton');
