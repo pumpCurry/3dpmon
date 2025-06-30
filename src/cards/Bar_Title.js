@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link TitleBar}：タイトルバー UI クラス
  *
-* @version 1.390.554 (PR #254)
+ * @version 1.390.600 (PR #277)
  * @since   1.390.531 (PR #1)
-* @lastModified 2025-06-28 12:39:10
+ * @lastModified 2025-07-01 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -66,6 +66,16 @@ export default class TitleBar extends BaseBar {
       li.appendChild(btn);
       list.appendChild(li);
     });
+    const connLi = document.createElement('li');
+    const connBtn = document.createElement('button');
+    connBtn.textContent = 'Connections';
+    connBtn.addEventListener('click', () => {
+      import('../dialogs/ConnManagerModal.js').then(({ default: Dlg }) => {
+        new Dlg(this.bus).open();
+      });
+    });
+    connLi.appendChild(connBtn);
+    list.appendChild(connLi);
     menu.addEventListener('click', () => {
       list.classList.toggle('show');
     });
@@ -212,8 +222,10 @@ export default class TitleBar extends BaseBar {
   #updateThemeMenu(list) {
     const currentId = getTheme();
     list.querySelectorAll('button').forEach((btn) => {
-      btn.textContent = `${btn.dataset.id.charAt(0).toUpperCase()}${btn.dataset.id.slice(1)}` +
-        (btn.dataset.id === currentId ? ' ✓' : '');
+      if (btn.dataset.id) {
+        btn.textContent = `${btn.dataset.id.charAt(0).toUpperCase()}${btn.dataset.id.slice(1)}` +
+          (btn.dataset.id === currentId ? ' ✓' : '');
+      }
     });
   }
 }
