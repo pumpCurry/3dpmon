@@ -8,9 +8,9 @@
  * 【機能内容サマリ】
  * - アプリ初期化処理を呼び出すエントリポイント
  *
-* @version 1.390.576 (PR #260)
+* @version 1.390.580 (PR #268)
 * @since   1.390.536 (PR #245)
-* @lastModified 2025-06-30 12:00:00
+* @lastModified 2025-07-01 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - AuthGate と App モジュールの統合
@@ -18,7 +18,7 @@
  */
 
 /* eslint-env browser */
-import { App } from './core/App.js';
+import { bus } from './core/EventBus.js';
 
 console.log('[startup] bootstrap v2 skeleton');
 
@@ -29,7 +29,15 @@ console.log('[startup] bootstrap v2 skeleton');
  * @returns {Promise<void>} 処理完了を示す Promise
  */
 async function main() {
-  new App('#app-root');
+  const root = document.querySelector('#app-root');
+  const { default: SplashScreen } = await import('./splash/SplashScreen.js');
+  const splash = new SplashScreen(bus);
+  splash.mount(root);
+  bus.on('auth:ok', async () => {
+    splash.destroy();
+    const { App } = await import('./core/App.js');
+    new App('#app-root');
+  });
 }
 
 main();
