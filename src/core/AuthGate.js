@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link initAuth}：認証処理の初期化
  *
- * @version 1.390.531 (PR #1)
+ * @version 1.390.580 (PR #268)
  * @since   1.390.531 (PR #1)
- * @lastModified 2025-06-28 09:54:02
+ * @lastModified 2025-07-01 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - PIN 認証画面の実装
@@ -31,5 +31,27 @@
  */
 export async function initAuth() {
   // TODO: 実際の認証ロジックを実装
+  return true;
+}
+
+/**
+ * パスワードが設定されているか返すスタブ。
+ *
+ * @async
+ * @returns {Promise<boolean>} 常に false を解決する Promise
+ */
+export async function hasPassword() {
+  return false;
+}
+
+/**
+ * パスワードを検証するスタブ実装。
+ *
+ * @async
+ * @param {string} pwd - 入力されたパスワード
+ * @returns {Promise<boolean>} 常に true を解決する Promise
+ */
+export async function validate(pwd) {
+  void pwd;
   return true;
 }
