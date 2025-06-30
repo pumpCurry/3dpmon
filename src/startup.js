@@ -20,6 +20,7 @@
 /* eslint-env browser */
 // SCSS トークンおよび各カードのスタイルを取り込む
 import '../styles/root.scss';
+import { initTheme } from './core/ThemeManager.js';
 import { bus } from './core/EventBus.js';
 
 console.log('[startup] bootstrap v2 skeleton');
@@ -31,6 +32,7 @@ console.log('[startup] bootstrap v2 skeleton');
  * @returns {Promise<void>} 処理完了を示す Promise
  */
 async function main() {
+  initTheme();
   const root = document.querySelector('#app-root');
   const { default: SplashScreen } = await import('./splash/SplashScreen.js');
   const splash = new SplashScreen(bus);

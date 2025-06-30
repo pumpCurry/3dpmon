@@ -1,13 +1,14 @@
 /* 基本トークンのみ (追加は後工程) */
+@use "themes" as *;
 @use "bar_title";
 @use "card_camera";
 @use "card_headpreview";
 @use "splash";
 
 :root {
-  --color-bg: #0e0e0e;
-  --color-text: #fafafa;
-  --card-bg: #1a1a1a;
+  --color-bg: #ffffff;
+  --color-text: #1b1b1b;
+  --card-bg: #f2f2f2;
   --card-border: #c0c0c0;
   --border-radius: 8px;
 }

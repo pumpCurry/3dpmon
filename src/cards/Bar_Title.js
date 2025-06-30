@@ -22,6 +22,7 @@
  */
 
 import BaseBar from './BaseBar.js';
+import { setTheme, getTheme, THEMES } from '../core/ThemeManager.js';
 
 /**
  * タイトルバーを表すクラス。
@@ -55,11 +56,30 @@ export default class TitleBar extends BaseBar {
     const menu = document.createElement('button');
     menu.className = 'hamburger';
     menu.textContent = '≡';
-    // グローバルメニュー呼び出しまでの暫定実装
+    const list = document.createElement('ul');
+    list.className = 'theme-menu';
+    THEMES.forEach((id) => {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.dataset.id = id;
+      btn.textContent = `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
     menu.addEventListener('click', () => {
-      this.bus.emit('menu:global');
+      list.classList.toggle('show');
+    });
+    list.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t instanceof HTMLElement && t.dataset.id) {
+        setTheme(t.dataset.id);
+        this.#updateThemeMenu(list);
+        list.classList.remove('show');
+      }
     });
     this.el.appendChild(menu);
+    this.el.appendChild(list);
+    this.#updateThemeMenu(list);
 
     this.nav = document.createElement('nav');
     this.nav.className = 'tabs';
@@ -179,6 +199,21 @@ export default class TitleBar extends BaseBar {
       btn.classList.toggle('active', btn.dataset.id === this.activeId);
       btn.setAttribute('aria-selected', btn.dataset.id === this.activeId ? 'true' : 'false');
       btn.setAttribute('tabindex', btn.dataset.id === this.activeId ? '0' : '-1');
+    });
+  }
+
+  /**
+   * テーマメニューのチェックマークを更新する。
+   *
+   * @private
+   * @param {HTMLUListElement} list - テーマメニュー要素
+   * @returns {void}
+   */
+  #updateThemeMenu(list) {
+    const currentId = getTheme();
+    list.querySelectorAll('button').forEach((btn) => {
+      btn.textContent = `${btn.dataset.id.charAt(0).toUpperCase()}${btn.dataset.id.slice(1)}` +
+        (btn.dataset.id === currentId ? ' ✓' : '');
     });
   }
 }
