@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link ConnManagerModal}：接続設定モーダルクラス
  *
- * @version 1.390.600 (PR #277)
+ * @version 1.390.602 (PR #278)
  * @since   1.390.600 (PR #277)
- * @lastModified 2025-07-01 12:00:00
+ * @lastModified 2025-07-01 08:38:00
  * -----------------------------------------------------------
  * @todo
  * - 編集機能の強化
@@ -22,6 +22,11 @@
 /* eslint-env browser */
 
 export default class ConnManagerModal {
+  /** @type {RegExp} */
+  static ipRe = /^(25[0-5]|2[0-4]\d|1?\d{1,2})(\.(25[0-5]|2[0-4]\d|1?\d{1,2})){3}$/;
+
+  /** @type {RegExp} */
+  static portRe = /^(6553[0-5]|655[0-2]\d|65[0-4]\d{2}|6[0-4]\d{3}|[1-5]?\d{0,4})$/;
   /**
    * @param {Object} bus - EventBus インスタンス
    */
@@ -44,26 +49,22 @@ export default class ConnManagerModal {
     this.dialog.setAttribute('aria-modal', 'true');
     this.dialog.innerHTML = `
       <form method="dialog">
-        <label>IP <input name="ip" required></label>
-        <label>WS <input name="ws" type="number" required></label>
-        <label>Cam <input name="cam" type="number"></label>
-        <button type="submit">Save</button>
-        <button type="button" data-close>Close</button>
+        <div class="conn-row">
+          <input name="ip" placeholder="IP" required>
+          <input name="ws" placeholder="WS" type="number" required>
+          <input name="cam" placeholder="Cam" type="number">
+          <button type="submit">Save</button>
+          <button type="button" data-close>×</button>
+        </div>
       </form>
       <table><tbody></tbody></table>
     `;
-    this.dialog.querySelector('[data-close]').addEventListener('click', () => this.close());
-    this.dialog.querySelector('form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const form = /** @type {HTMLFormElement} */ (e.target);
-      const ip = form.ip.value.trim();
-      const ws = form.ws.value.trim();
-      const cam = form.cam.value.trim();
-      if (ConnManagerModal.validate(ip, ws, cam)) {
-        this.bus.emit('conn:add', { ip, wsPort: Number(ws), camPort: Number(cam) });
-        this.close();
-      } else {
-        form.reportValidity();
+    this.dialog.querySelector('[data-close]')?.addEventListener('click', () => this.close());
+    this.dialog.querySelector('form')?.addEventListener('submit', (e) => this.#onSave(e));
+    this.dialog.addEventListener('click', (e) => {
+      const btn = (e.target instanceof HTMLElement) && e.target.closest('button[data-id]');
+      if (btn) {
+        this.#onDelete(btn.dataset.id);
       }
     });
     document.body.appendChild(this.dialog);
@@ -95,9 +96,49 @@ export default class ConnManagerModal {
     tbody.textContent = '';
     list.forEach((c) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${c.ip}</td><td>${c.wsPort}</td>`;
+      tr.innerHTML = `
+        <td>${c.ip}</td>
+        <td>${c.wsPort}</td>
+        <td><button type="button" data-id="${c.id}">Del</button></td>`;
       tbody.appendChild(tr);
     });
+  }
+
+  /**
+   * フォーム送信時の処理を行う。
+   *
+   * @private
+   * @param {SubmitEvent} e - submit イベント
+   * @returns {void}
+   */
+  #onSave(e) {
+    e.preventDefault();
+    const form = /** @type {HTMLFormElement} */ (e.target);
+    const ip = form.ip.value.trim();
+    const ws = form.ws.value.trim();
+    const cam = form.cam.value.trim();
+    const ipValid = ConnManagerModal.ipRe.test(ip);
+    const wsValid = ConnManagerModal.portRe.test(ws);
+    const camValid = cam === '' || ConnManagerModal.portRe.test(cam);
+    form.ip.classList.toggle('invalid', !ipValid);
+    form.ws.classList.toggle('invalid', !wsValid);
+    form.cam.classList.toggle('invalid', !camValid);
+    if (ipValid && wsValid && camValid) {
+      this.bus.emit('conn:add', { ip, wsPort: Number(ws), camPort: cam ? Number(cam) : undefined });
+      this.close();
+    }
+  }
+
+  /**
+   * 削除ボタン押下時に発火する処理。
+   *
+   * @private
+   * @param {string} id - 接続 ID
+   * @returns {void}
+   */
+  #onDelete(id) {
+    this.bus.emit('conn:remove', { id });
+    this.#renderList();
   }
 
   /**
@@ -109,8 +150,9 @@ export default class ConnManagerModal {
    * @returns {boolean} 検証結果
    */
   static validate(ip, ws, cam) {
-    const ipOk = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip);
-    const portOk = (p) => /^\d+$/.test(p) && Number(p) > 0 && Number(p) < 65536;
-    return ipOk && portOk(ws) && (cam === '' || portOk(cam));
+    const ipOk = ConnManagerModal.ipRe.test(ip);
+    const portOk = ConnManagerModal.portRe.test(ws);
+    const camOk = cam === '' || ConnManagerModal.portRe.test(cam);
+    return ipOk && portOk && camOk;
   }
 }
