@@ -9,10 +9,10 @@
  * 【機能内容サマリ】
  * - Vite の基本ビルド設定を提供する
  *
- * @version 1.390.534 (PR #244)
- * @since   1.390.534 (PR #244)
- * @lastModified 2025-06-28 19:21:40
- */
+* @version 1.390.587 (PR #272)
+* @since   1.390.534 (PR #244)
+* @lastModified 2025-06-30 06:29:30
+*/
 
 import { defineConfig } from 'vite';
 import path from 'node:path';
@@ -27,14 +27,21 @@ export default defineConfig({
   },
   css: {
     preprocessorOptions: {
-      scss: { additionalData: `@use 'styles/root';` }
+      scss: {
+        additionalData: (content, filename) => {
+          return filename.endsWith('styles/root.scss')
+            ? content
+            : `@use 'styles/root';\n${content}`;
+        }
+      }
     }
   },
   resolve: {
     alias: {
       '@core': path.resolve(__dirname, 'src/core'),
       '@cards': path.resolve(__dirname, 'src/cards'),
-      '@shared': path.resolve(__dirname, 'src/shared')
+      '@shared': path.resolve(__dirname, 'src/shared'),
+      'styles': path.resolve(__dirname, 'styles')
     }
   },
   server: {
