@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link DashboardManager}：ダッシュボード統括クラス
  *
- * @version 1.390.576 (PR #260)
+ * @version 1.390.600 (PR #277)
  * @since   1.390.576 (PR #260)
- * @lastModified 2025-06-30 12:00:00
+ * @lastModified 2025-07-01 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - カード動的ロードと配置永続化
@@ -65,6 +65,14 @@ export default class DashboardManager {
     this.sideMenu.mount(this.root);
     this.bus.on('menu:global', () => this.sideMenu && this.sideMenu.open());
     this.bus.on('menu:close', () => this.sideMenu && this.sideMenu.close());
+    this.bus.on('conn:add', (meta) => {
+      if (this.titleBar) {
+        this.titleBar.addTab({ id: meta.id, label: meta.ip, color: meta.color, icon: meta.icon });
+      }
+    });
+    this.bus.on('conn:remove', ({ id }) => {
+      this.titleBar && this.titleBar.removeTab(id);
+    });
 
     this.main = document.createElement('main');
     this.main.className = 'dashboard-main';

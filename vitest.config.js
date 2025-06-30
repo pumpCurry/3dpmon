@@ -13,7 +13,8 @@ export default defineConfig({
     alias: {
       '@core': path.resolve(__dirname, 'src/core'),
       '@shared': path.resolve(__dirname, 'src/shared'),
-      '@cards': path.resolve(__dirname, 'src/cards')
+      '@cards': path.resolve(__dirname, 'src/cards'),
+      '@dialogs': path.resolve(__dirname, 'src/dialogs')
     }
   }
 });

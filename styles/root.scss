@@ -4,6 +4,7 @@
 @use "card_camera";
 @use "card_headpreview";
 @use "splash";
+@use "conn_manager";
 
 :root {
   --color-bg: #ffffff;

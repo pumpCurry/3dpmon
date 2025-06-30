@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link ConnectionManager}：接続管理クラス
  *
-* @version 1.390.553 (PR #253)
-* @since   1.390.536 (PR #245)
-* @lastModified 2025-06-28 19:30:39
+ * @version 1.390.600 (PR #277)
+ * @since   1.390.536 (PR #245)
+ * @lastModified 2025-07-01 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - DashboardManager 連携
@@ -36,7 +36,15 @@ export class ConnectionManager {
   constructor(bus) {
     /** @type {Object} */
     this.bus = bus;
-    // TODO: tab:add / tab:remove を監視し動的に接続リストを更新する
+    this.bus.on('conn:add', async (meta) => {
+      const id = await this.add(meta);
+      this.saveAll();
+      this.bus.emit('conn:added', { id, ...meta });
+    });
+    this.bus.on('conn:remove', ({ id }) => {
+      this.#registry.delete(id);
+      this.saveAll();
+    });
   }
 
   /**
@@ -136,6 +144,36 @@ export class ConnectionManager {
    */
   list() {
     return [...this.#registry.entries()].map(([id, { meta, state }]) => ({ id, ...meta, state }));
+  }
+
+  /**
+   * localStorage から保存済み設定を読み込む。
+   * @returns {Promise<void>} 読み込み完了
+   */
+  async loadStored() {
+    const json = window.localStorage.getItem('connections');
+    if (!json) return;
+    try {
+      const arr = JSON.parse(json);
+      for (const meta of arr) {
+        const id = await this.add(meta);
+        this.bus.emit('conn:added', { id, ...meta });
+      }
+    } catch (e) {
+      console.error('[cm] loadStored', e);
+    }
+  }
+
+  /**
+   * 登録済み設定を localStorage へ保存する。
+   * @returns {void}
+   */
+  saveAll() {
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      const arr = this.list().map(({ state, ...meta }) => meta);
+      window.localStorage.setItem('connections', JSON.stringify(arr));
+    }, 500);
   }
 
   /**

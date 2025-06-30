@@ -9,13 +9,13 @@
  * 【機能内容サマリ】
  * - テーマ適用と保存機能を検証
  *
- * @version 1.390.597 (PR #276)
- * @since   1.390.597 (PR #276)
+ * @version 1.390.600 (PR #277)
+ * @since   1.390.600 (PR #277)
  * @lastModified 2025-07-01 12:00:00
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { setTheme, getTheme, initTheme, store } from '@core/ThemeManager.js';
+import { setTheme, getTheme, initTheme, store, ensureContrast } from '@core/ThemeManager.js';
 
 describe('ThemeManager', () => {
   beforeEach(() => {
@@ -34,5 +34,10 @@ describe('ThemeManager', () => {
     initTheme();
     expect(getTheme()).toBe('dark');
     expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('ensureContrast selects readable text color', () => {
+    const text = ensureContrast('#ffa500');
+    expect(['#ffffff', '#000000']).toContain(text);
   });
 });

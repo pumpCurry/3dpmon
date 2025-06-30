@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link App}：アプリケーションメインクラス
  *
-* @version 1.390.576 (PR #260)
+* @version 1.390.600 (PR #277)
 * @since   1.390.531 (PR #1)
-* @lastModified 2025-06-30 12:00:00
+* @lastModified 2025-07-01 12:00:00
  * -----------------------------------------------------------
  * @todo
 * - ConnectionManager の高度化
@@ -36,6 +36,7 @@ export class App {
     /** @type {HTMLElement|null} */
     this.root = document.querySelector(rootSelector);
     this.cm = new ConnectionManager(bus);
+    this.cm.loadStored();
     this.db = new DashboardManager(bus, this.cm);
     if (this.root) {
       this.db.render(this.root);
