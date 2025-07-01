@@ -23,3 +23,18 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
 }
+
+body {
+  padding-top: 48px;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius);
+  box-shadow: 0 1px 4px #0006;
+}
+
+.card.dragging {
+  outline: 2px solid #40a9ff;
+}

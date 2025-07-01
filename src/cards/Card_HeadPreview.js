@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link HeadPreviewCard}：ヘッド位置プレビューカード
  *
- * @version 1.390.561 (PR #258)
+ * @version 1.390.615 (PR #285)
  * @since   1.390.561 (PR #258)
- * @lastModified 2025-06-29 12:34:24
+ * @lastModified 2025-07-01 06:19:39
  * -----------------------------------------------------------
  * @todo
  * - Three.js 対応
@@ -83,7 +83,7 @@ export default class HeadPreviewCard extends BaseCard {
    */
   mount(root) {
     this.el = document.createElement('div');
-    this.el.className = 'headpreview-card';
+    this.el.className = 'card headpreview-card';
     this.el.dataset.cardId = HeadPreviewCard.id;
     this.el.setAttribute('tabindex', '0');
     this.el.setAttribute('role', 'img');
