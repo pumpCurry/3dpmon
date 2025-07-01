@@ -53,8 +53,8 @@ export default class ConnManagerModal {
           <input name="ip" placeholder="IP" required>
           <input name="ws" placeholder="WS" type="number" required>
           <input name="cam" placeholder="Cam" type="number">
-          <button type="submit">Save</button>
-          <button type="button" data-close>×</button>
+          <button type="submit" tabindex="1">Save</button>
+          <button type="button" data-close tabindex="3">×</button>
         </div>
       </form>
       <table><tbody></tbody></table>
@@ -70,6 +70,8 @@ export default class ConnManagerModal {
     document.body.appendChild(this.dialog);
     this.#renderList();
     this.dialog.showModal();
+    const ipBox = this.dialog.querySelector('input[name="ip"]');
+    ipBox?.focus();
   }
 
   /**
@@ -99,7 +101,7 @@ export default class ConnManagerModal {
       tr.innerHTML = `
         <td>${c.ip}</td>
         <td>${c.wsPort}</td>
-        <td><button type="button" data-id="${c.id}">Del</button></td>`;
+        <td><button type="button" data-id="${c.id}" tabindex="2">Del</button></td>`;
       tbody.appendChild(tr);
     });
   }
