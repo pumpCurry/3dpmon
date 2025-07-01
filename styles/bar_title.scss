@@ -1,11 +1,17 @@
 @use '../src/shared/mixins' as *;
 
 .title-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
   display: flex;
   align-items: center;
   background: var(--card-bg);
   padding: 0 8px;
-  height: 40px;
+  box-shadow: 0 2px 4px #0003;
+  z-index: var(--z-title);
 }
 
 .title-bar .tabs {

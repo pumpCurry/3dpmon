@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link CameraCard}：カメラプレビューカード
  *
- * @version 1.390.557 (PR #255)
+ * @version 1.390.615 (PR #285)
  * @since   1.390.557 (PR #255)
- * @lastModified 2025-06-28 12:39:10
+ * @lastModified 2025-07-01 06:19:39
  * -----------------------------------------------------------
  * @todo
  * - WebSocket 連携
@@ -69,7 +69,7 @@ export default class CameraCard extends BaseCard {
    */
   mount(root) {
     this.el = document.createElement('div');
-    this.el.className = 'camera-card';
+    this.el.className = 'card camera-card';
     this.el.dataset.cardId = CameraCard.id;
     this.el.style.minWidth = `${this.minSize[0]}px`;
     this.el.style.minHeight = `${this.minSize[1]}px`;
