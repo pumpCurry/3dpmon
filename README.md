@@ -62,6 +62,11 @@ Unit tests are executed with [Vitest](https://vitest.dev/).
 
 See [docs/develop/tests.md](docs/develop/tests.md) for coverage goals and additional details.
 
+### Troubleshooting
+If `npm run dev` fails with `EACCES: permission denied, rename` on Dropbox or
+other network drives, run `scripts/clear-vite.sh` to reset Vite's cache.
+
+
 ## Keyboard Shortcuts
 HeadPreviewCard supports the following keys:
 - **Space**: reset zoom to 1.0

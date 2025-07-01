@@ -1,18 +1,11 @@
 /* 基本トークンのみ (追加は後工程) */
+@use "_tokens" as *;
 @use "themes" as *;
 @use "bar_title";
 @use "card_camera";
 @use "card_headpreview";
 @use "splash";
 @use "conn_manager";
-
-:root {
-  --color-bg: #ffffff;
-  --color-text: #1b1b1b;
-  --card-bg: #f2f2f2;
-  --card-border: #c0c0c0;
-  --border-radius: 8px;
-}
 
 
 /* デフォルトで簡易リセット */
