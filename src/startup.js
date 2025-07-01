@@ -22,6 +22,7 @@
 import '../styles/root.scss';
 import { initTheme } from './core/ThemeManager.js';
 import { bus } from './core/EventBus.js';
+window.bus = bus;
 
 console.log('[startup] bootstrap v2 skeleton');
 

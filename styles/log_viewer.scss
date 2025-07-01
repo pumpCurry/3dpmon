@@ -1,0 +1,8 @@
+dialog.log-viewer {
+  width: 600px;
+  height: 400px;
+  pre {
+    overflow: auto;
+    height: calc(100% - 32px);
+  }
+}
