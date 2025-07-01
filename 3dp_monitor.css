@@ -1195,3 +1195,20 @@ input:checked + .slider:before {
   text-shadow: 0 0 2px #fff;
   font-weight: bold;
 }
+
+/* 操作パネル - 停止・一時停止・再開ボタンの配色 */
+#btn-stop-print,
+#btn-stop-print-cmd {
+  background-color: red;       /* 停止ボタンは赤 */
+  color: white;                /* 文字色は白 */
+}
+
+#btn-pause-print,
+#btn-pause-print-cmd {
+  background-color: #f8b500;   /* 山吹色 */
+}
+
+#btn-resume-print,
+#btn-resume-print-cmd {
+  background-color: #d5f5cf;   /* 薄黄緑 */
+}
