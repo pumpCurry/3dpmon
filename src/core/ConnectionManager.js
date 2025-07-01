@@ -78,6 +78,7 @@ export class ConnectionManager {
       entry.state = 'open';
       entry.retry = 0;
       this.bus.emit('cm:open', { id: connectionId });
+      this.bus.emit('log:add', `[WS] ${entry.meta.ip} connected`);
     });
 
     ws.addEventListener('message', (evt) => {
@@ -91,11 +92,13 @@ export class ConnectionManager {
 
     ws.addEventListener('error', (e) => {
       this.bus.emit('cm:error', { id: connectionId, error: e });
+      this.bus.emit('log:add', `[Error] ${entry.meta.ip} ${e.message}`);
     });
 
     ws.addEventListener('close', () => {
       entry.state = 'closed';
       this.bus.emit('cm:close', { id: connectionId });
+      this.bus.emit('log:add', `[WS] ${entry.meta.ip} disconnected`);
       this.#scheduleReconnect(connectionId);
     });
   }
@@ -188,6 +191,7 @@ export class ConnectionManager {
     if (!entry) return;
     entry.retry = Math.min(entry.retry + 1, 6);
     const delay = Math.min(60000, 1000 * 2 ** entry.retry);
+    this.bus.emit('log:add', `[WS] retry in ${delay}ms`);
     setTimeout(() => {
       this.connect(connectionId);
     }, delay);

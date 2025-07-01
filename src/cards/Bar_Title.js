@@ -22,7 +22,7 @@
  */
 
 import BaseBar from './BaseBar.js';
-import { setTheme, getTheme, THEMES } from '../core/ThemeManager.js';
+
 
 /**
  * タイトルバーを表すクラス。
@@ -56,40 +56,10 @@ export default class TitleBar extends BaseBar {
     const menu = document.createElement('button');
     menu.className = 'hamburger';
     menu.textContent = '≡';
-    const list = document.createElement('ul');
-    list.className = 'theme-menu';
-    THEMES.forEach((id) => {
-      const li = document.createElement('li');
-      const btn = document.createElement('button');
-      btn.dataset.id = id;
-      btn.textContent = `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
-      li.appendChild(btn);
-      list.appendChild(li);
-    });
-    const connLi = document.createElement('li');
-    const connBtn = document.createElement('button');
-    connBtn.textContent = 'Connections';
-    connBtn.addEventListener('click', () => {
-      import('../dialogs/ConnManagerModal.js').then(({ default: Dlg }) => {
-        new Dlg(this.bus).open();
-      });
-    });
-    connLi.appendChild(connBtn);
-    list.appendChild(connLi);
     menu.addEventListener('click', () => {
-      list.classList.toggle('show');
-    });
-    list.addEventListener('click', (e) => {
-      const t = e.target;
-      if (t instanceof HTMLElement && t.dataset.id) {
-        setTheme(t.dataset.id);
-        this.#updateThemeMenu(list);
-        list.classList.remove('show');
-      }
+      this.bus.emit('menu:global');
     });
     this.el.appendChild(menu);
-    this.el.appendChild(list);
-    this.#updateThemeMenu(list);
 
     this.nav = document.createElement('nav');
     this.nav.className = 'tabs';
@@ -219,13 +189,4 @@ export default class TitleBar extends BaseBar {
    * @param {HTMLUListElement} list - テーマメニュー要素
    * @returns {void}
    */
-  #updateThemeMenu(list) {
-    const currentId = getTheme();
-    list.querySelectorAll('button').forEach((btn) => {
-      if (btn.dataset.id) {
-        btn.textContent = `${btn.dataset.id.charAt(0).toUpperCase()}${btn.dataset.id.slice(1)}` +
-          (btn.dataset.id === currentId ? ' ✓' : '');
-      }
-    });
-  }
 }

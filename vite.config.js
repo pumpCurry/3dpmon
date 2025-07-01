@@ -48,6 +48,7 @@ export default defineConfig({
     alias: {
       '@core': path.resolve(__dirname, 'src/core'),
       '@cards': path.resolve(__dirname, 'src/cards'),
+      '@bars': path.resolve(__dirname, 'src/bars'),
       '@shared': path.resolve(__dirname, 'src/shared'),
       '@dialogs': path.resolve(__dirname, 'src/dialogs'),
       styles: path.resolve(__dirname, 'styles')

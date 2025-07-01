@@ -24,6 +24,7 @@
 import { ConnectionManager } from './ConnectionManager.js';
 import DashboardManager from './DashboardManager.js';
 import { bus } from './EventBus.js';
+import logger from '../shared/logger.js';
 
 /**
  * アプリケーションメインクラス。
@@ -37,6 +38,7 @@ export class App {
     this.root = document.querySelector(rootSelector);
     this.cm = new ConnectionManager(bus);
     this.cm.loadStored();
+    logger.listen(bus);
     this.db = new DashboardManager(bus, this.cm);
     if (this.root) {
       this.db.render(this.root);

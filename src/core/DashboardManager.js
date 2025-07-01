@@ -21,6 +21,7 @@
 
 import TitleBar from '@cards/Bar_Title.js';
 import SideMenu from '@cards/Bar_SideMenu.js';
+import SideBar from '@bars/Bar_Side.js';
 
 /**
  * ダッシュボード全体を管理するクラス。
@@ -43,6 +44,8 @@ export default class DashboardManager {
     this.titleBar = null;
     /** @type {SideMenu|null} */
     this.sideMenu = null;
+    /** @type {SideBar|null} */
+    this.sideBar = null;
   }
 
   /**
@@ -63,8 +66,21 @@ export default class DashboardManager {
 
     this.sideMenu = new SideMenu(this.bus);
     this.sideMenu.mount(this.root);
+    this.sideBar = new SideBar(this.bus);
+    this.sideBar.mount(this.root);
     this.bus.on('menu:global', () => this.sideMenu && this.sideMenu.open());
     this.bus.on('menu:close', () => this.sideMenu && this.sideMenu.close());
+    this.bus.on('sidebar:conn', () => {
+      import('../dialogs/ConnManagerModal.js').then(({ default: Dlg }) => new Dlg(this.bus).open());
+    });
+    this.bus.on('sidebar:logs', () => {
+      import('../dialogs/LogViewerModal.js').then(({ default: Dlg }) => new Dlg(this.bus).open());
+    });
+    this.bus.on('sidebar:theme', async () => {
+      const { setTheme, getTheme, THEMES } = await import('./ThemeManager.js');
+      const idx = THEMES.indexOf(getTheme());
+      setTheme(THEMES[(idx + 1) % THEMES.length]);
+    });
     this.bus.on('conn:add', (meta) => {
       if (this.titleBar) {
         this.titleBar.addTab({ id: meta.id, label: meta.ip, color: meta.color, icon: meta.icon });
