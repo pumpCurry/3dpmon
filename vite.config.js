@@ -9,9 +9,9 @@
  * 【機能内容サマリ】
  * - Vite の基本ビルド設定を提供する
  *
- * @version 1.390.534 (PR #244)
- * @since   1.390.534 (PR #244)
- * @lastModified 2025-06-30 19:07:40
+ * @version 1.390.613 (PR #284)
+ * @since   1.390.613 (PR #284)
+ * @lastModified 2025-07-02 09:00:00
  */
 
 import { defineConfig } from 'vite';
@@ -31,15 +31,15 @@ export default defineConfig({
       scss: {
         /**
          * 自動で tokens を差し込む
-         * ただし styles/root.scss 自身には挿入しない (無限ループ回避)
+         * ただし styles/_tokens.scss 自身には挿入しない (無限ループ回避)
          */
         additionalData(source, filename) {
           // Windows パスは \ 区切りになるので path.normalize で統一
           const normalized = path.normalize(filename);
-          if (normalized.endsWith(path.normalize('styles/root.scss'))) {
+          if (normalized.endsWith(path.normalize('styles/_tokens.scss'))) {
             return source; // そのまま返す
           }
-          return `@use 'styles/root' as *;\n${source}`;
+          return `@use 'styles/_tokens' as *;\n${source}`;
         },
       },
     },
@@ -49,7 +49,8 @@ export default defineConfig({
       '@core': path.resolve(__dirname, 'src/core'),
       '@cards': path.resolve(__dirname, 'src/cards'),
       '@shared': path.resolve(__dirname, 'src/shared'),
-      '@dialogs': path.resolve(__dirname, 'src/dialogs')
+      '@dialogs': path.resolve(__dirname, 'src/dialogs'),
+      styles: path.resolve(__dirname, 'styles')
     }
   },
   server: {

@@ -4,6 +4,7 @@
   "description": "3dpmon multi-printer dashboard (v2 skeleton)",
   "type": "module",
   "scripts": {
+    "predev": "bash scripts/clear-vite.sh",
     "dev": "vite --force",
     "mock": "node src/core/mock-printer.ws.js",
     "build": "vite build",
@@ -11,7 +12,8 @@
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "bench:head": "node bench/headpreview.bench.js",
-    "bench:temp": "node bench/tempgraph.bench.js"
+    "bench:temp": "node bench/tempgraph.bench.js",
+    "clean": "rimraf node_modules/.vite"
   },
   "engines": {
     "node": ">=18"

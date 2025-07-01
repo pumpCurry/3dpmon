@@ -14,10 +14,12 @@ This document helps verify the front-end rendering pipeline when the browser onl
 
 1. **Startup pipeline**
    - After `npm run dev`, check the terminal output:
-     ```
-     VITE vX.Y.Z  ready in N ms
-     ➜  Local: http://localhost:5173/
-     ```
+    ```
+    VITE vX.Y.Z  ready in N ms
+    ➜  Local: http://localhost:5173/
+    ```
+    If an `EACCES: permission denied, rename` error occurs, run
+    `scripts/clear-vite.sh` to reset the cache on Dropbox or network drives.
 2. **`startup.js` invocation**
    ```js
    // src/startup.js
