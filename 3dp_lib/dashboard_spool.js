@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.462 (PR #190)
+* @version 1.390.620 (PR #287)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 18:00:00
+* @lastModified 2025-07-02 15:50:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,6 +45,8 @@ import {
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
+import { updateHistoryList } from "./dashboard_printmanager.js";
+import { getDeviceIp } from "./dashboard_connection.js";
 
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
@@ -371,6 +373,8 @@ export function useFilament(lengthMm, jobId = "") {
 /**
  * 現在の印刷ジョブに必要なフィラメント長を予約する。
  * 残量は減算せず開始時の値を保持するのみで、実際の減算は完了時に行う。
+ * 履歴バッファへスプール情報を追記後、{@link updateHistoryList} を利用して
+ * 永続化と画面反映を行う。
  *
  * @function reserveFilament
  * @param {number} lengthMm - 予定消費量 [mm]
@@ -392,8 +396,9 @@ export function reserveFilament(lengthMm, jobId = "") {
   s.currentJobExpectedLength = lengthMm;
   s.currentPrintID = jobId;
   // --- 印刷開始時点で履歴にスプール情報を記録 -------------------
+  let entry = null;
   if (machine && Array.isArray(machine.historyData)) {
-    let entry = machine.historyData.find(h => h.id === jobId);
+    entry = machine.historyData.find(h => h.id === jobId);
     if (!entry) {
       entry = { id: jobId };
       machine.historyData.push(entry);
@@ -412,6 +417,10 @@ export function reserveFilament(lengthMm, jobId = "") {
     }
   }
   saveUnifiedStorage();
+  if (entry) {
+    const baseUrl = `http://${getDeviceIp()}:80`;
+    updateHistoryList([entry], baseUrl);
+  }
 }
 
 /**
@@ -426,6 +435,7 @@ export function reserveFilament(lengthMm, jobId = "") {
  * 使用完了時点のスプール情報を履歴にスナップショットとして保存する。
  * スプール名や色を後から変更しても当時の状態を保持するため、
  * name/color/material などのメタ情報を同時に記録する。
+ * 履歴更新後は {@link updateHistoryList} を介して永続化し UI へ即時反映する。
  */
 export function finalizeFilamentUsage(lengthMm, jobId = "") {
   const s = getCurrentSpool();
@@ -442,8 +452,9 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   s.usedLengthLog.push({ jobId, used: used });
   // 現在のスプール情報を履歴に追加
   const machine = monitorData.machines[currentHostname];
+  let entry = null;
   if (machine && Array.isArray(machine.historyData)) {
-    let entry = machine.historyData.find(h => h.id === jobId);
+    entry = machine.historyData.find(h => h.id === jobId);
     if (!entry) {
       entry = { id: jobId };
       machine.historyData.push(entry);
@@ -462,6 +473,10 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   logUsage(s, used, jobId);
   updateStoredDataToDOM();
   saveUnifiedStorage();
+  if (entry) {
+    const baseUrl = `http://${getDeviceIp()}:80`;
+    updateHistoryList([entry], baseUrl);
+  }
 }
 
 /**
