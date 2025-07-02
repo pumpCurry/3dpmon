@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.620 (PR #287)
+* @version 1.390.629 (PR #291)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-02 15:50:48
+* @lastModified 2025-07-02 16:10:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -124,7 +124,8 @@ export function getCurrentSpool() {
 /**
  * 現在使用するスプールIDを更新し状態を反映する。
  * monitorData.currentSpoolId や対象スプールのフラグを変更し、
- * 必要に応じて履歴情報や残量を更新する副作用がある。
+ * 必要に応じて履歴情報や残量を更新する副作用がある。履歴補完時は
+ * {@link updateHistoryList} を呼び出して保存と UI 更新も行う。
  *
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
@@ -178,7 +179,12 @@ export function setCurrentSpoolId(id) {
     }
     if (Array.isArray(machine.historyData)) {
       const buf = machine.historyData.find(h => h.id === printId && !h.filamentId);
-      if (buf) buf.filamentId = newSpool.id;
+      if (buf) {
+        buf.filamentId = newSpool.id;
+        // 履歴バッファに補完したフィラメントIDを画面へ即反映する
+        const baseUrl = `http://${getDeviceIp()}:80`;
+        updateHistoryList([buf], baseUrl);
+      }
     }
   }
 
