@@ -14,7 +14,7 @@ jobs:
       - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - name: bench headpreview
         run: |
@@ -32,7 +32,7 @@ jobs:
       - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - name: bench tempgraph
         run: |

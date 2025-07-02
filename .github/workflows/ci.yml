@@ -9,7 +9,7 @@ jobs:
       - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - name: run unit tests
         run: |
@@ -25,7 +25,7 @@ jobs:
       - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - name: run tempbuffer tests
         run: |
@@ -41,7 +41,7 @@ jobs:
       - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - name: run sidemenu tests
         run: |

@@ -32,7 +32,7 @@
 | **/docs**       | 仕様書類          | README, future.md, ADR, Mermaid 図                                   |
 
 > **ビルドツール候補** : **Vite**（ESM, HMR, Code-Splitting, SCSS ネイティブ）
-> Node 18+、package.json に "type":"module" を宣言。
+> Node 20+、package.json に "type":"module" を宣言。
 
 ---
 
