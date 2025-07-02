@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link HeadPreviewCard}：ヘッド位置プレビューカード
  *
- * @version 1.390.615 (PR #285)
+ * @version 1.390.632 (PR #293)
  * @since   1.390.561 (PR #258)
- * @lastModified 2025-07-01 06:19:39
+ * @lastModified 2025-07-02 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - Three.js 対応
@@ -32,10 +32,13 @@ export default class HeadPreviewCard extends BaseCard {
   static id = 'HDPV';
 
   /**
-   * @param {Object} bus - EventBus インスタンス
+   * @param {{deviceId:string,bus:Object,initialState?:Object}} cfg - 設定
    */
-  constructor(bus) {
-    super(bus);
+  constructor(cfg) {
+    super(cfg.bus);
+    /** @type {string} */
+    this.id = cfg.deviceId;
+    if (cfg.initialState) this.init(cfg.initialState);
     /** @type {{x:number,y:number,z:number}} */
     this.position = { x: 0, y: 0, z: 0 };
     /** @type {string} */
@@ -102,11 +105,19 @@ export default class HeadPreviewCard extends BaseCard {
     this.el.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d');
 
-    this.bus.on('head:updatePos', this._onPos);
-    this.bus.on('head:setModel', this._onModel);
-
     this.#loop();
     super.mount(root);
+  }
+
+  /**
+   * Bus イベント購読を開始する。
+   *
+   * @override
+   * @returns {void}
+   */
+  connected() {
+    this.bus.on(`printer:${this.id}:gcode-pos`, this._onPos);
+    this.bus.on(`printer:${this.id}:model`, this._onModel);
   }
 
   /**
@@ -132,8 +143,8 @@ export default class HeadPreviewCard extends BaseCard {
    */
   destroy() {
     cancelAnimationFrame(this._anim);
-    this.bus.off('head:updatePos', this._onPos);
-    this.bus.off('head:setModel', this._onModel);
+    this.bus.off(`printer:${this.id}:gcode-pos`, this._onPos);
+    this.bus.off(`printer:${this.id}:model`, this._onModel);
     super.destroy();
   }
 

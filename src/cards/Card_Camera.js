@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link CameraCard}：カメラプレビューカード
  *
- * @version 1.390.615 (PR #285)
+ * @version 1.390.632 (PR #293)
  * @since   1.390.557 (PR #255)
- * @lastModified 2025-07-01 06:19:39
+ * @lastModified 2025-07-02 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - WebSocket 連携
@@ -27,12 +27,17 @@ import BaseCard from './BaseCard.js';
 export default class CameraCard extends BaseCard {
   /** @type {string} */
   static id = 'CAMV';
+  /** @private */
+  #onCamera;
 
   /**
-   * @param {Object} bus - EventBus インスタンス
+   * @param {{deviceId:string,bus:Object,initialState?:Object}} cfg - 設定
    */
-  constructor(bus) {
-    super(bus);
+  constructor(cfg) {
+    super(cfg.bus);
+    /** @type {string} */
+    this.id = cfg.deviceId;
+    if (cfg.initialState) this.init(cfg.initialState);
     /** @type {string} */
     this.streamUrl = '';
     /** @type {[number, number]} */
@@ -47,6 +52,10 @@ export default class CameraCard extends BaseCard {
     this._retryCount = 0;
     /** @type {ReturnType<typeof setTimeout>|null} */
     this._timer = null;
+    /** @private */
+    this.#onCamera = (p) => {
+      if (p && p.frameUrl) this.update({ streamUrl: p.frameUrl });
+    };
   }
 
   /**
@@ -123,6 +132,16 @@ export default class CameraCard extends BaseCard {
   }
 
   /**
+   * Bus イベント購読を開始する。
+   *
+   * @override
+   * @returns {void}
+   */
+  connected() {
+    this.bus.on(`printer:${this.id}:camera`, this.#onCamera);
+  }
+
+  /**
    * ストリーム URL を更新する。
    *
    * @param {{streamUrl:string}} param0 - 新URL
@@ -142,6 +161,7 @@ export default class CameraCard extends BaseCard {
    * @returns {void}
    */
   destroy() {
+    this.bus.off(`printer:${this.id}:camera`, this.#onCamera);
     if (this.video) {
       this.video.src = '';
       this.video = null;

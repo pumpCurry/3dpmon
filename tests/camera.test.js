@@ -24,14 +24,25 @@ describe('CameraCard', () => {
   });
 
   it('mounts video element', () => {
-    const card = new CameraCard(bus);
+    const card = new CameraCard({ deviceId: 'p1', bus });
+    card.connected();
     card.init({ streamUrl: 'test.mp4' });
     card.mount(document.body);
     expect(document.querySelector('video')).toBeTruthy();
   });
 
+  it('updates src on bus event', () => {
+    const card = new CameraCard({ deviceId: 'p1', bus });
+    card.connected();
+    card.init({ streamUrl: 'test.mp4' });
+    card.mount(document.body);
+    bus.emit('printer:p1:camera', { frameUrl: 'foo.jpg' });
+    expect(document.querySelector('video').src).toMatch('foo.jpg');
+  });
+
   it('retry resets source', () => {
-    const card = new CameraCard(bus);
+    const card = new CameraCard({ deviceId: 'p1', bus });
+    card.connected();
     card.init({ streamUrl: 'one.mp4' });
     card.mount(document.body);
     card.update({ streamUrl: 'two.mp4' });
@@ -40,7 +51,8 @@ describe('CameraCard', () => {
   });
 
   it('retry uses exponential delay', () => {
-    const card = new CameraCard(bus);
+    const card = new CameraCard({ deviceId: 'p1', bus });
+    card.connected();
     card.init({ streamUrl: 'one.mp4' });
     card.mount(document.body);
     const spy = vi.spyOn(globalThis, 'setTimeout');

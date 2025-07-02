@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link Card_TempGraph}：UI コンポーネントクラス
  *
- * @version 1.390.563 (PR #259)
+ * @version 1.390.632 (PR #293)
  * @since   1.390.563 (PR #259)
- * @lastModified 2025-06-29 13:09:40
+ * @lastModified 2025-07-02 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - ズーム機能の高度化
@@ -29,9 +29,14 @@ import { TempRingBuffer } from '../shared/TempRingBuffer.js';
 export default class Card_TempGraph extends BaseCard {
   /** @type {string} */
   static id = 'TEMP';
+  /** @private */
+  #onTemp;
 
-  constructor(bus) {
-    super(bus);
+  constructor(cfg) {
+    super(cfg.bus);
+    /** @type {string} */
+    this.id = cfg.deviceId;
+    if (cfg.initialState) this.init(cfg.initialState);
     /** @type {TempRingBuffer} */
     this.buffer = new TempRingBuffer();
     /** @type {HTMLCanvasElement|null} */
@@ -44,6 +49,8 @@ export default class Card_TempGraph extends BaseCard {
     this.tooltip = null;
     /** @type {boolean} */
     this.showFan = true;
+    /** @private */
+    this.#onTemp = (d) => this.update(d);
   }
 
   /**
@@ -79,6 +86,16 @@ export default class Card_TempGraph extends BaseCard {
     super.mount(root);
     this.ctx = this.canvas.getContext('2d');
     this.#loop();
+  }
+
+  /**
+   * Bus イベント購読を開始する。
+   *
+   * @override
+   * @returns {void}
+   */
+  connected() {
+    this.bus.on(`printer:${this.id}:temps`, this.#onTemp);
   }
 
   /**
@@ -170,6 +187,7 @@ export default class Card_TempGraph extends BaseCard {
    * @returns {void}
    */
   destroy() {
+    this.bus.off(`printer:${this.id}:temps`, this.#onTemp);
     cancelAnimationFrame(this.frame);
     super.destroy();
   }
