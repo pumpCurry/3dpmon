@@ -16,7 +16,7 @@
     "clean": "rimraf node_modules/.vite"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "devDependencies": {
     "@vitest/ui": "^1.6.0",

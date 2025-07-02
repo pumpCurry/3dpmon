@@ -11,7 +11,7 @@
 | Vite 開発サーバーが `/src/startup.js` をエントリに **空白画面**（`#app-root` のみ）を表示する | |
 | すべてのディレクトリ／基本ファイルが **Git 管理** 下に生成される | |
 | `npm run dev` / `npm run build` がエラーなく完走する | |
-| Node 18+ 環境でクロスプラットフォーム（Win/Mac/Linux）動作を確認 | |
+| Node 20+ 環境でクロスプラットフォーム（Win/Mac/Linux）動作を確認 | |
 
 ---
 
