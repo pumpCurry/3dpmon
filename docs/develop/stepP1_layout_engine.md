@@ -23,7 +23,7 @@ rev 1.0 2025-07-03 初版（ChatGPT 出力）
 
 ## LayoutStore API
 - `getAll()` / `get(id)` / `save(layout)` / `delete(id)`
-- `generateId()` は nanoid を使用
+- `generateId()` は nanoid/non-secure を使用
 
 ## テスト設計
 - unit: 保存で件数増、削除で減
