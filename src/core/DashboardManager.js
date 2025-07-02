@@ -22,6 +22,9 @@
 import TitleBar from '@cards/Bar_Title.js';
 import SideMenu from '@cards/Bar_SideMenu.js';
 import SideBar from '@bars/Bar_Side.js';
+import LayoutStore from './LayoutStore.js';
+import CardContainer from './CardContainer.js';
+import DeviceFilterBar from '../widgets/DeviceFilterBar.js';
 
 /**
  * ダッシュボード全体を管理するクラス。
@@ -36,6 +39,9 @@ export default class DashboardManager {
     this.bus = bus;
     /** @type {Object} */
     this.cm = cm;
+    /** @type {LayoutStore} */
+    this.store = new LayoutStore();
+    this.store.current = { id: 'default', name: 'Default', updated: 0, grid: [], filter: 'ALL' };
     /** @type {HTMLElement|null} */
     this.root = null;
     /** @type {HTMLElement|null} */
@@ -46,6 +52,10 @@ export default class DashboardManager {
     this.sideMenu = null;
     /** @type {SideBar|null} */
     this.sideBar = null;
+    /** @type {CardContainer|null} */
+    this.container = null;
+    /** @type {DeviceFilterBar|null} */
+    this.filterBar = null;
   }
 
   /**
@@ -93,5 +103,10 @@ export default class DashboardManager {
     this.main = document.createElement('main');
     this.main.className = 'dashboard-main';
     this.root.appendChild(this.main);
+
+    this.container = new CardContainer(this.bus, this.store);
+    this.container.mount(this.main);
+    this.filterBar = new DeviceFilterBar(this.store, this.bus);
+    this.filterBar.mount(this.root);
   }
 }
