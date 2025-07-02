@@ -12,15 +12,15 @@
  * 【公開クラス一覧】
  * - {@link LayoutStore}：レイアウト永続化クラス
  *
- * @version 1.390.635 (PR #295)
+ * @version 1.390.637 (PR #296)
  * @since   1.390.635 (PR #295)
- * @lastModified 2025-07-03 00:00:00
+ * @lastModified 2025-07-02 21:44:27
  * -----------------------------------------------------------
  * @todo
  * - なし
  */
 
-import { nanoid } from 'nanoid';
+import { nanoid } from 'nanoid/non-secure';
 
 /**
  * レイアウト永続化を担当するストアクラス。

@@ -32,4 +32,12 @@ describe('LayoutStore', () => {
     store.delete('1');
     expect(store.getAll().length).toBe(0);
   });
+
+  it('generateId returns unique ids', () => {
+    const ids = new Set();
+    for (let i = 0; i < 5; i++) {
+      ids.add(store.generateId());
+    }
+    expect(ids.size).toBe(5);
+  });
 });
