@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentChangeDialog}：交換ダイアログ表示
  *
- * @version 1.390.462 (PR #190)
+ * @version 1.390.630 (PR #292)
  * @since   1.390.230 (PR #104)
- * @lastModified 2025-06-22 18:00:00
+ * @lastModified 2025-07-02 16:26:34
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -30,6 +30,7 @@ import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 
 let styleInjected = false;
+let filamentChangeDialogOpen = false;
 
 /**
  * ダイアログ用CSSを一度だけ注入する。
@@ -328,12 +329,17 @@ export function showPresetOpenDialog() {
 
 /**
  * フィラメント交換ダイアログを表示する。
+ * 既にダイアログが開いている場合は再表示しない。
  *
  * @function showFilamentChangeDialog
  * @returns {Promise<boolean>} true:交換実行 / false:キャンセル
  */
 export function showFilamentChangeDialog() {
   injectStyles();
+  if (filamentChangeDialogOpen) {
+    return Promise.resolve(false);
+  }
+  filamentChangeDialogOpen = true;
   return new Promise(resolve => {
     const overlay = document.createElement("div");
     overlay.className = "fc-overlay";
@@ -528,9 +534,14 @@ export function showFilamentChangeDialog() {
 
     document.body.appendChild(overlay);
 
-    dlg.querySelector("#fc-cancel").addEventListener("click", () => {
+    const closeDialog = result => {
       overlay.remove();
-      resolve(false);
+      filamentChangeDialogOpen = false;
+      resolve(result);
+    };
+
+    dlg.querySelector("#fc-cancel").addEventListener("click", () => {
+      closeDialog(false);
     });
 
     dlg.querySelector("#fc-ok").addEventListener("click", () => {
@@ -539,20 +550,16 @@ export function showFilamentChangeDialog() {
         if (selectedSpool.presetId) consumeInventory(selectedSpool.presetId, 1);
         updatePreview(selectedSpool);
       }
-      overlay.remove();
-      resolve(true);
+      closeDialog(true);
     });
 
     dlg.querySelector("#fc-used").addEventListener("click", () => {
-      overlay.remove();
+      closeDialog(false);
       showFilamentManager(2);
-      resolve(false);
     });
 
     dlg.querySelector("#fc-new").addEventListener("click", async () => {
-      overlay.remove();
-      const r = await showPresetOpenDialog();
-      resolve(r);
+      closeDialog(await showPresetOpenDialog());
     });
   });
 }
