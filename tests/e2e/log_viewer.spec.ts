@@ -8,9 +8,9 @@
  * 【機能内容サマリ】
  * - サイドバーから Logs ダイアログが開きログが表示されるか検証
  *
- * @version 1.390.618 (PR #286)
+ * @version 1.390.620 (PR #287)
  * @since   1.390.618 (PR #286)
- * @lastModified 2025-07-02 09:09:00
+ * @lastModified 2025-07-01 18:43:23
  */
 
 import { test, expect } from '@playwright/test';
@@ -22,4 +22,6 @@ test('open logs and append entry', async ({ page }) => {
   await expect(dlg).toBeVisible();
   await page.evaluate(() => window.bus.emit('log:add', '[Error] foo'));
   await expect(dlg.locator('pre')).toHaveText(/foo/);
+  await page.keyboard.press('Escape');
+  await expect(dlg).not.toBeVisible();
 });

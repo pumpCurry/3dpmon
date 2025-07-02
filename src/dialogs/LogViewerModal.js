@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link LogViewerModal}：ログ表示モーダルクラス
  *
- * @version 1.390.618 (PR #286)
+ * @version 1.390.620 (PR #287)
  * @since   1.390.618 (PR #286)
- * @lastModified 2025-07-02 09:09:00
+ * @lastModified 2025-07-01 18:43:23
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -64,6 +64,9 @@ export default class LogViewerModal {
         this.filter = btn.dataset.f || 'All';
         this.#render();
       });
+    });
+    this.dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.close();
     });
     document.body.appendChild(this.dialog);
     this.bus.on('log:add', this._onAdd);

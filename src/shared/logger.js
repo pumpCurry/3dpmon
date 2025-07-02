@@ -7,7 +7,7 @@
  *
  * 【機能内容サマリ】
  * - イベントバスからのログを保持
- * - 種別フィルタと最大200件のバッファを提供
+ * - 種別フィルタと最大1000件のバッファを提供
  *
  * 【公開定数一覧】
  * - {@link buffer}：ログ配列
@@ -15,9 +15,9 @@
  * - {@link push}：手動ログ追加
  * - {@link filter}：種別で抽出
  *
- * @version 1.390.618 (PR #286)
+ * @version 1.390.620 (PR #287)
  * @since   1.390.618 (PR #286)
- * @lastModified 2025-07-02 09:09:00
+ * @lastModified 2025-07-01 18:43:23
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -28,14 +28,14 @@ export const buffer = [];
 
 /**
  * バッファへメッセージを追加する。
- * 最大200件を保持する。
+ * 最大1000件を保持する。
  *
  * @param {string} str - 追加するログ
  * @returns {void}
  */
 export function push(str) {
   buffer.push(str);
-  if (buffer.length > 200) buffer.shift();
+  if (buffer.length > 1000) buffer.shift();
 }
 
 /**
