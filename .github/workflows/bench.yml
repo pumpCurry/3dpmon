@@ -1,17 +1,15 @@
 name: bench
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
-  headpreview:
+  bench:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -40,3 +38,4 @@ jobs:
           KEEP_PID=$!
           npm run bench:temp
           kill $KEEP_PID
+

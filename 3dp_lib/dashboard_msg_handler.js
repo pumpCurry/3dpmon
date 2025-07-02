@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.526 (PR #241)
+* @version 1.390.620 (PR #287)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-06-28 16:40:44
+* @lastModified 2025-07-02 15:14:20
  * -----------------------------------------------------------
 * @todo
 * - none
@@ -431,6 +431,7 @@ export function processData(data) {
       setStoredData("pauseTime", elapsed, true);
     }, 1000);
     notificationManager.notify("printPaused");
+    persistHistoryTimers(currStartTime);
   }
   // (2.5.2) 停止解除
   if (
@@ -475,6 +476,7 @@ export function processData(data) {
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
     notificationManager.notify(evt);
+    persistHistoryTimers(currStartTime);
   }
   // (2.6.2) Idle or 再開でリセット
   if (
