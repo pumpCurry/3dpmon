@@ -29,3 +29,7 @@ rev 1.0 2025-07-xx 初版（ChatGPT 出力）
 - Vitest を用い、各カードの DOM 更新を検証。
 - Playwright によりダッシュボードを起動し、Bus へイベント送信して UI が更新されるか確認。
 
+### P0-R1 追加修正
+- `Card_TempGraph.destroy()` が `bus.off('printer:id:temps')` を呼ぶよう修正。
+- リスナー解除をテストで確認。
+
