@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link Card_CurrentPrint}：UI コンポーネントクラス
  *
- * @version 1.390.531 (PR #1)
+ * @version 1.390.632 (PR #293)
  * @since   1.390.531 (PR #1)
- * @lastModified 2025-06-28 09:54:02
+ * @lastModified 2025-07-02 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - 実装詳細を追加
@@ -24,11 +24,29 @@
 /**
  * Card_CurrentPrint コンポーネントクラス
  */
-export class Card_CurrentPrint {
+import BaseCard from './BaseCard.js';
+
+export class Card_CurrentPrint extends BaseCard {
+  /** @type {string} */
+  static id = 'CURP';
+
   /**
-   * コンストラクタ
+   * @param {{deviceId:string,bus:Object,initialState?:Object}} cfg - 設定
    */
-  constructor() {
-    // TODO: プロパティ初期化
+  constructor(cfg) {
+    super(cfg.bus);
+    /** @type {string} */
+    this.id = cfg.deviceId;
+  }
+
+  /** @override */
+  connected() {
+    this.bus.on(`printer:${this.id}:current`, () => {});
+  }
+
+  /** @override */
+  destroy() {
+    this.bus.off(`printer:${this.id}:current`, () => {});
+    super.destroy();
   }
 }

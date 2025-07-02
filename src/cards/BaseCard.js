@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link BaseCard}：カード基底クラス
  *
- * @version 1.390.554 (PR #254)
+ * @version 1.390.632 (PR #293)
  * @since   1.390.554 (PR #254)
- * @lastModified 2025-06-28 12:39:10
+ * @lastModified 2025-07-02 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -70,6 +70,15 @@ export default class BaseCard {
       this.el.style.top = `${y}px`;
       this.el.style.position = 'absolute';
     }
+  }
+
+  /**
+   * EventBus への購読を行う。各カードでオーバーライドする想定。
+   *
+   * @returns {void}
+   */
+  connected() {
+    // サブクラスで必要な購読処理を実装する
   }
 
   /**

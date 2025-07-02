@@ -23,7 +23,8 @@ describe('HeadPreviewCard', () => {
   });
 
   it('mounts canvas element', () => {
-    const card = new HeadPreviewCard(bus);
+    const card = new HeadPreviewCard({ deviceId: 'p1', bus });
+    card.connected();
     card.init({ position: { x: 0, y: 0, z: 0 }, model: 'K1' });
     card.mount(document.body);
     expect(document.querySelector('canvas')).toBeTruthy();
@@ -31,7 +32,8 @@ describe('HeadPreviewCard', () => {
   });
 
   it('update draws new position', () => {
-    const card = new HeadPreviewCard(bus);
+    const card = new HeadPreviewCard({ deviceId: 'p1', bus });
+    card.connected();
     card.init({ position: { x: 0, y: 0, z: 0 }, model: 'K1' });
     card.mount(document.body);
     card.update({ position: { x: 10, y: 10, z: 0 } });
@@ -39,8 +41,19 @@ describe('HeadPreviewCard', () => {
     card.destroy();
   });
 
+  it('reacts to bus events', () => {
+    const card = new HeadPreviewCard({ deviceId: 'p1', bus });
+    card.connected();
+    card.init({ position: { x: 0, y: 0, z: 0 }, model: 'K1' });
+    card.mount(document.body);
+    bus.emit('printer:p1:gcode-pos', { x: 5, y: 5, z: 1 });
+    expect(card.el.getAttribute('aria-label')).toMatch('5');
+    card.destroy();
+  });
+
   it('has keyboard attributes', () => {
-    const card = new HeadPreviewCard(bus);
+    const card = new HeadPreviewCard({ deviceId: 'p1', bus });
+    card.connected();
     card.init({ position: { x: 0, y: 0, z: 0 }, model: 'K1' });
     card.mount(document.body);
     expect(card.el.getAttribute('tabindex')).toBe('0');
