@@ -1,5 +1,5 @@
 /**
- * @fileoverview
+ 2025-07-03 12:00:00
  * @description 3Dプリンタ監視ツール 3dpmon 用 Card_CurrentPrint コンポーネント
  * @file Card_CurrentPrint.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link Card_CurrentPrint}：UI コンポーネントクラス
  *
- * @version 1.390.632 (PR #293)
+ * @version 1.390.637 (PR #296)
  * @since   1.390.531 (PR #1)
- * @lastModified 2025-07-02 12:00:00
+ * @lastModified 2025-07-03 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - 実装詳細を追加
@@ -37,16 +37,18 @@ export class Card_CurrentPrint extends BaseCard {
     super(cfg.bus);
     /** @type {string} */
     this.id = cfg.deviceId;
+    /** @private */
+    this._onCurrent = () => {};
   }
 
   /** @override */
   connected() {
-    this.bus.on(`printer:${this.id}:current`, () => {});
+    this.bus.on(`printer:${this.id}:current`, this._onCurrent);
   }
 
   /** @override */
   destroy() {
-    this.bus.off(`printer:${this.id}:current`, () => {});
+    this.bus.off(`printer:${this.id}:current`, this._onCurrent);
     super.destroy();
   }
 }

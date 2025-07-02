@@ -1,6 +1,7 @@
 # P-0 — カード純粋コンポーネント化
 
 rev 1.0 2025-07-xx 初版（ChatGPT 出力）
+rev 1.1 2025-07-03 Card_Status などの unsubscribe 修正
 
 ## ゴール
 1. すべてのカードクラスが `new Card_X({ deviceId, bus, initialState })` で生成可能。
@@ -32,4 +33,7 @@ rev 1.0 2025-07-xx 初版（ChatGPT 出力）
 ### P0-R1 追加修正
 - `Card_TempGraph.destroy()` が `bus.off('printer:id:temps')` を呼ぶよう修正。
 - リスナー解除をテストで確認。
+
+### P0-R2 追加修正
+- Card_Status / Card_ControlPanel / Card_CurrentPrint が同一関数で解除し漏れないよう修正。
 

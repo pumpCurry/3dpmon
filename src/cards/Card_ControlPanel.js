@@ -1,5 +1,5 @@
 /**
- * @fileoverview
+ 2025-07-03 12:00:00
  * @description 3Dプリンタ監視ツール 3dpmon 用 Card_ControlPanel コンポーネント
  * @file Card_ControlPanel.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
@@ -13,9 +13,9 @@
  * 【公開クラス一覧】
  * - {@link Card_ControlPanel}：UI コンポーネントクラス
  *
- * @version 1.390.632 (PR #293)
+ * @version 1.390.637 (PR #296)
  * @since   1.390.531 (PR #1)
- * @lastModified 2025-07-02 12:00:00
+ * @lastModified 2025-07-03 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - 実装詳細を追加
@@ -37,16 +37,18 @@ export class Card_ControlPanel extends BaseCard {
     super(cfg.bus);
     /** @type {string} */
     this.id = cfg.deviceId;
+    /** @private */
+    this._onControl = () => {};
   }
 
   /** @override */
   connected() {
-    this.bus.on(`printer:${this.id}:control`, () => {});
+    this.bus.on(`printer:${this.id}:control`, this._onControl);
   }
 
   /** @override */
   destroy() {
-    this.bus.off(`printer:${this.id}:control`, () => {});
+    this.bus.off(`printer:${this.id}:control`, this._onControl);
     super.destroy();
   }
 }
