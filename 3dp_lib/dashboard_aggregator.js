@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.526 (PR #226)
+* @version 1.390.620 (PR #287)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 16:59:41
+* @lastModified 2025-07-02 15:14:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -402,7 +402,13 @@ function aggregateTimersAndPredictions(data) {
 
   // ── 4) タイマー集計／表示用セット ─────────────────────────────────
   // 4-1. 印刷前準備時間
-  if (st === PRINT_STATE_CODE.printStarted && job === 0 && selfPct > 0 && selfPct < 100) {
+  if (
+    st === PRINT_STATE_CODE.printStarted &&
+    job === 0 &&
+    selfPct >= 0 && selfPct <= 9 &&
+    !tsCheckStart &&
+    !tsPauseStart
+  ) {
     if (!tsPrepStart) {
       // ----- 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
       // printStartTime(id) が取得できていればそこからの経過秒を算出する
@@ -412,7 +418,6 @@ function aggregateTimersAndPredictions(data) {
     const sec = totalPrepSec + Math.floor((nowMs - tsPrepStart) / 1000);
     // internal
     setStoredData("preparationTime", sec, true);
-    // display
   } else if (tsPrepStart) {
     totalPrepSec += Math.floor((nowMs - tsPrepStart) / 1000);
     tsPrepStart   = null;
@@ -421,16 +426,28 @@ function aggregateTimersAndPredictions(data) {
 
   // 4-2. ファーストレイヤー確認時間
   if (
+    tsPrepStart === null &&
+    tsPauseStart === null &&
     actualStartEpoch !== null &&
-    st === PRINT_STATE_CODE.printPaused &&
-    selfPct >= 1 && selfPct <= 99
+    (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused || st === 3) &&
+    selfPct >= 30 && selfPct <= 39
   ) {
     if (!tsCheckStart) tsCheckStart = nowMs;
     const sec = totalCheckSec + Math.floor((nowMs - tsCheckStart) / 1000);
     setStoredData("firstLayerCheckTime", sec, true);
   } else if (
     tsCheckStart &&
-    (st !== PRINT_STATE_CODE.printPaused || selfPct <= 0 || selfPct >= 100)
+    (
+      (
+        st !== PRINT_STATE_CODE.printStarted &&
+        st !== PRINT_STATE_CODE.printPaused &&
+        st !== 3
+      ) ||
+      selfPct < 30 ||
+      selfPct > 39 ||
+      tsPrepStart !== null ||
+      tsPauseStart !== null
+    )
   ) {
     totalCheckSec += Math.floor((nowMs - tsCheckStart) / 1000);
     tsCheckStart   = null;
@@ -439,9 +456,15 @@ function aggregateTimersAndPredictions(data) {
 
   // 4-3. 一時停止時間
   if (
-    actualStartEpoch !== null &&
-    st === PRINT_STATE_CODE.printPaused &&
-    (selfPct === 0 || selfPct === 100)
+    tsPrepStart === null &&
+    tsCheckStart === null &&
+    (st === PRINT_STATE_CODE.printPaused || st === 3) &&
+    job >= 1 &&
+    (
+      selfPct === 0 ||
+      (selfPct >= 10 && selfPct <= 29) ||
+      (selfPct >= 40 && selfPct <= 100)
+    )
   ) {
     if (!tsPauseStart) tsPauseStart = nowMs;
     const sec = totalPauseSec + Math.floor((nowMs - tsPauseStart) / 1000);
@@ -449,7 +472,17 @@ function aggregateTimersAndPredictions(data) {
     setStoredData("pauseTime", { value: formatDuration(sec), unit: "" }, false);
   } else if (
     tsPauseStart &&
-    (st !== PRINT_STATE_CODE.printPaused || (selfPct !== 0 && selfPct !== 100))
+    (
+      (st !== PRINT_STATE_CODE.printPaused && st !== 3) ||
+      job < 1 ||
+      (
+        selfPct !== 0 &&
+        !(selfPct >= 10 && selfPct <= 29) &&
+        !(selfPct >= 40 && selfPct <= 100)
+      ) ||
+      tsPrepStart !== null ||
+      tsCheckStart !== null
+    )
   ) {
     totalPauseSec += Math.floor((nowMs - tsPauseStart) / 1000);
     tsPauseStart   = null;
