@@ -23,4 +23,12 @@ describe('Card_TempGraph', () => {
     card.destroy();
     spy.mockRestore();
   });
+
+  it('unsubscribes on destroy', () => {
+    const card = new Card_TempGraph({ deviceId: 'p1', bus });
+    card.connected();
+    const before = bus.count('printer:p1:temps');
+    card.destroy();
+    expect(bus.count('printer:p1:temps')).toBe(before - 1);
+  });
 });

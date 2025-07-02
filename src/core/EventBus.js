@@ -12,9 +12,9 @@
  * 【公開定数一覧】
  * - {@link bus}：シングルトンのイベントバス
  *
-* @version 1.390.536 (PR #245)
-* @since   1.390.536 (PR #245)
-* @lastModified 2025-06-28 19:30:39
+ * @version 1.390.635 (PR #295)
+ * @since   1.390.536 (PR #245)
+ * @lastModified 2025-07-03 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -62,6 +62,15 @@ export const bus = (() => {
      */
     emit(evt, data) {
       (map.get(evt) ?? []).forEach(f => f(data));
+    },
+    /**
+     * 登録されているリスナー数を取得する。
+     *
+     * @param {string} evt - イベント名
+     * @returns {number} - 登録数
+     */
+    count(evt) {
+      return (map.get(evt) ?? []).length;
     }
   };
 })();
