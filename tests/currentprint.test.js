@@ -10,17 +10,16 @@
  * - Card_CurrentPrint のイベント購読を検証
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Card_CurrentPrint } from '@cards/Card_CurrentPrint.js';
 import { bus } from '@core/EventBus.js';
 
 describe('Card_CurrentPrint', () => {
-  it('subscribes on connected', () => {
-    const spy = vi.spyOn(bus, 'on');
+  it('subscribes and unsubscribes correctly', () => {
     const card = new Card_CurrentPrint({ deviceId: 'p1', bus });
     card.connected();
-    expect(spy).toHaveBeenCalledWith('printer:p1:current', expect.any(Function));
+    expect(bus.count('printer:p1:current')).toBe(1);
     card.destroy();
-    spy.mockRestore();
+    expect(bus.count('printer:p1:current')).toBe(0);
   });
 });

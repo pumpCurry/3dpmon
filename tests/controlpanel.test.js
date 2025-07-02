@@ -10,17 +10,16 @@
  * - Card_ControlPanel のイベント購読を検証
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Card_ControlPanel } from '@cards/Card_ControlPanel.js';
 import { bus } from '@core/EventBus.js';
 
 describe('Card_ControlPanel', () => {
-  it('subscribes on connected', () => {
-    const spy = vi.spyOn(bus, 'on');
+  it('subscribes and unsubscribes correctly', () => {
     const card = new Card_ControlPanel({ deviceId: 'p1', bus });
     card.connected();
-    expect(spy).toHaveBeenCalledWith('printer:p1:control', expect.any(Function));
+    expect(bus.count('printer:p1:control')).toBe(1);
     card.destroy();
-    spy.mockRestore();
+    expect(bus.count('printer:p1:control')).toBe(0);
   });
 });
