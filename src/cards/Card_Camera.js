@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link CameraCard}：カメラプレビューカード
  *
- * @version 1.390.632 (PR #293)
- * @since   1.390.557 (PR #255)
- * @lastModified 2025-07-02 12:00:00
+* @version 1.390.649 (PR #301)
+* @since   1.390.557 (PR #255)
+* @lastModified 2025-07-03 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - WebSocket 連携
@@ -52,6 +52,8 @@ export default class CameraCard extends BaseCard {
     this._retryCount = 0;
     /** @type {ReturnType<typeof setTimeout>|null} */
     this._timer = null;
+    /** @type {ReturnType<typeof setInterval>|null} */
+    this._snapInterval = null;
     /** @private */
     this.#onCamera = (p) => {
       if (p && p.frameUrl) this.update({ streamUrl: p.frameUrl });
@@ -128,6 +130,18 @@ export default class CameraCard extends BaseCard {
       spin.classList.add('hidden');
     });
 
+    // snapshot emit every 1s
+    this._snapInterval = setInterval(() => {
+      if (!this.video) return;
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = 48;
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(this.video, 0, 0, 64, 48);
+        this.bus.emit('card:snapshot', { id: this.id, dataUrl: c.toDataURL('image/png') });
+      }
+    }, 1000);
+
     super.mount(root);
   }
 
@@ -169,6 +183,10 @@ export default class CameraCard extends BaseCard {
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
+    }
+    if (this._snapInterval) {
+      clearInterval(this._snapInterval);
+      this._snapInterval = null;
     }
     super.destroy();
   }

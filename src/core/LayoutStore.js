@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link LayoutStore}：レイアウト永続化クラス
  *
- * @version 1.390.637 (PR #296)
- * @since   1.390.635 (PR #295)
- * @lastModified 2025-07-02 21:44:27
+* @version 1.390.649 (PR #301)
+* @since   1.390.635 (PR #295)
+* @lastModified 2025-07-03 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -74,6 +74,15 @@ export class LayoutStore {
   delete(id) {
     const list = this.getAll().filter(l => l.id !== id);
     localStorage.setItem(this.#key, JSON.stringify(list));
+  }
+
+  /**
+   * 現在のレイアウトを取得する。
+   *
+   * @returns {import('../types').Layout|undefined} - レイアウト
+   */
+  getCurrentLayout() {
+    return this.current;
   }
 
   /**

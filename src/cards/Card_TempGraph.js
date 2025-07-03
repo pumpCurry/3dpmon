@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link Card_TempGraph}：UI コンポーネントクラス
  *
- * @version 1.390.632 (PR #293)
- * @since   1.390.563 (PR #259)
- * @lastModified 2025-07-02 12:00:00
+* @version 1.390.649 (PR #301)
+* @since   1.390.563 (PR #259)
+* @lastModified 2025-07-03 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - ズーム機能の高度化
@@ -49,6 +49,8 @@ export default class Card_TempGraph extends BaseCard {
     this.tooltip = null;
     /** @type {boolean} */
     this.showFan = true;
+    /** @type {ReturnType<typeof setInterval>|null} */
+    this._snapInterval = null;
     /** @private */
     this.#onTemp = (d) => this.update(d);
   }
@@ -86,6 +88,16 @@ export default class Card_TempGraph extends BaseCard {
     super.mount(root);
     this.ctx = this.canvas.getContext('2d');
     this.#loop();
+    this._snapInterval = setInterval(() => {
+      if (!this.canvas) return;
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = 48;
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(this.canvas, 0, 0, 64, 48);
+        this.bus.emit('card:snapshot', { id: this.id, dataUrl: c.toDataURL('image/png') });
+      }
+    }, 5000);
   }
 
   /**
@@ -189,6 +201,10 @@ export default class Card_TempGraph extends BaseCard {
   destroy() {
     this.bus.off(`printer:${this.id}:temps`, this.#onTemp);
     cancelAnimationFrame(this.frame);
+    if (this._snapInterval) {
+      clearInterval(this._snapInterval);
+      this._snapInterval = null;
+    }
     super.destroy();
   }
 }
