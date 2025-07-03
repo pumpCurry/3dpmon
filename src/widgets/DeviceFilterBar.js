@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link DeviceFilterBar}: デバイスフィルタバークラス
  *
- * @version 1.390.642 (PR #299)
+ * @version 1.390.647 (PR #300)
  * @since   1.390.640 (PR #298)
- * @lastModified 2025-07-03 12:39:33
+ * @lastModified 2025-07-03 06:15:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -65,6 +65,7 @@ export default class DeviceFilterBar extends BaseBar {
     this.bus.on('conn:added', (meta) => {
       this.devices.push({ id: meta.id, label: meta.ip, color: meta.color });
       this.#render();
+      this.#validateFilter();
     });
     this.bus.on('conn:remove', ({ id }) => {
       this.devices = this.devices.filter((d) => d.id !== id);
@@ -74,12 +75,15 @@ export default class DeviceFilterBar extends BaseBar {
         this.bus.emit('filter:change', 'ALL');
       }
       this.#render();
+      this.#validateFilter();
     });
     this.bus.on('layout:switch', ({ layout }) => {
       this.store.current = layout;
       this.#highlight();
+      this.#validateFilter();
     });
     this.#render();
+    this.#validateFilter();
   }
 
   /** @private */
@@ -122,5 +126,21 @@ export default class DeviceFilterBar extends BaseBar {
       b.classList.toggle('active', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+  }
+
+  /**
+   * 現在のフィルタ ID が存在しない場合 'ALL' に戻す。
+   *
+   * @private
+   * @returns {void}
+   */
+  #validateFilter() {
+    const cur = this.store.current.filter;
+    if (cur !== 'ALL' && !this.devices.some((d) => d.id === cur)) {
+      this.store.current.filter = 'ALL';
+      this.store.save(this.store.current);
+      this.bus.emit('filter:change', 'ALL');
+      this.#highlight();
+    }
   }
 }
