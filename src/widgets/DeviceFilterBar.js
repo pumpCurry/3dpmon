@@ -11,9 +11,9 @@
  * 【公開クラス一覧】
  * - {@link DeviceFilterBar}: デバイスフィルタバークラス
  *
- * @version 1.390.640 (PR #298)
+ * @version 1.390.642 (PR #299)
  * @since   1.390.640 (PR #298)
- * @lastModified 2025-07-03 13:40:00
+ * @lastModified 2025-07-03 12:39:33
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -42,6 +42,15 @@ export default class DeviceFilterBar extends BaseBar {
     this.el = document.createElement('div');
     this.el.className = 'device-filter-bar';
     this.el.setAttribute('role', 'toolbar');
+    // キーボードからの操作に対応するため keydown イベントで Space/Enter を監視する
+    this.el.addEventListener('keydown', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (e.code === 'Space' || e.code === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        b.click();
+      }
+    });
     this.el.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (b) {
@@ -59,6 +68,11 @@ export default class DeviceFilterBar extends BaseBar {
     });
     this.bus.on('conn:remove', ({ id }) => {
       this.devices = this.devices.filter((d) => d.id !== id);
+      if (this.store.current.filter === id) {
+        this.store.current.filter = 'ALL';
+        this.store.save(this.store.current);
+        this.bus.emit('filter:change', 'ALL');
+      }
       this.#render();
     });
     this.bus.on('layout:switch', ({ layout }) => {
@@ -93,6 +107,8 @@ export default class DeviceFilterBar extends BaseBar {
     b.className = 'chip';
     b.dataset.id = id;
     b.textContent = label;
+    // 初期状態では非アクティブなので aria-pressed="false" を設定
+    b.setAttribute('aria-pressed', 'false');
     if (color) b.style.borderColor = color;
     return b;
   }
@@ -102,7 +118,9 @@ export default class DeviceFilterBar extends BaseBar {
     if (!this.el) return;
     const active = this.store.current?.filter || 'ALL';
     this.el.querySelectorAll('.chip').forEach((b) => {
-      b.classList.toggle('active', b.dataset.id === active);
+      const on = b.dataset.id === active;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
   }
 }
