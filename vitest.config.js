@@ -16,6 +16,7 @@ export default defineConfig({
       '@cards': path.resolve(__dirname, 'src/cards'),
       '@bars': path.resolve(__dirname, 'src/bars'),
       '@dialogs': path.resolve(__dirname, 'src/dialogs')
+      , '@widgets': path.resolve(__dirname, 'src/widgets')
     }
   }
 });

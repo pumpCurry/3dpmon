@@ -9,6 +9,7 @@
 @use "bar_side";
 @use "log_viewer";
 @use "device_filter";
+@use "minimap";
 
 
 /* デフォルトで簡易リセット */
@@ -39,5 +40,9 @@ body {
 }
 
 .card.dragging {
+  outline: 2px solid #40a9ff;
+}
+
+.card.highlight {
   outline: 2px solid #40a9ff;
 }
