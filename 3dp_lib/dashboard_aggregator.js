@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.620 (PR #287)
+* @version 1.390.651 (PR #302)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-02 15:14:20
+* @lastModified 2025-07-04 09:50:37
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -890,12 +890,21 @@ export function restartAggregatorTimer() {
 /**
  * stopAggregatorTimer:
  *   - 集約ループを停止
+ *   - 停止直前に {@link aggregatorUpdate} を実行し最終状態を保存
  */
 export function stopAggregatorTimer() {
   if (aggregatorTimer !== null) {
     clearInterval(aggregatorTimer);
     aggregatorTimer = null;
     console.debug("aggregatorUpdate タイマー停止");
+
+    try {
+      aggregatorUpdate();
+    } catch (e) {
+      console.error("aggregatorUpdate エラー:", e);
+    }
+
+    persistAggregatorState();
   }
 }
 

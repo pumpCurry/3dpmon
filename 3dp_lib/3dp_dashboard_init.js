@@ -17,9 +17,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.524 (PR #240)
+* @version 1.390.651 (PR #302)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 16:40:44
+* @lastModified 2025-07-04 09:50:37
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -76,7 +76,11 @@ import {
   copyStoredDataToClipboard
 } from "./dashboard_utils.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
-import { persistAggregatorState,stopAggregatorTimer } from "./dashboard_aggregator.js";
+import {
+  persistAggregatorState,
+  stopAggregatorTimer,
+  aggregatorUpdate
+} from "./dashboard_aggregator.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import {
   initSendRawJson,
@@ -455,10 +459,18 @@ const AUTO_SAVE_INTERVAL_MS = 3 * 60 * 1000; // 3分
  *   - 印刷再開用データを localStorage に保存
  *   - 統一ストレージ（dashboard_storage）を保存
  *   - aggregator の内部状態を localStorage に保存
+ *   - 保存前に {@link aggregatorUpdate} を実行しタイマー値を確定
  *
  * @returns {void}
  */
 function autoSaveAll() {
+  try {
+    // 現在のタイマー値を確定させてから保存処理を実行
+    aggregatorUpdate();
+  } catch (e) {
+    console.warn("autoSaveAll: aggregatorUpdate 実行中にエラーが発生しました", e);
+  }
+
   try {
     persistPrintResume();
     saveUnifiedStorage();
