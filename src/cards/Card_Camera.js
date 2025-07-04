@@ -11,7 +11,7 @@
  * 【公開クラス一覧】
  * - {@link CameraCard}：カメラプレビューカード
  *
-* @version 1.390.649 (PR #301)
+* @version 1.390.657 (PR #304)
 * @since   1.390.557 (PR #255)
 * @lastModified 2025-07-03 15:00:00
  * -----------------------------------------------------------
@@ -164,7 +164,8 @@ export default class CameraCard extends BaseCard {
   update({ streamUrl }) {
     if (streamUrl && this.video) {
       this.streamUrl = streamUrl;
-      this.video.src = streamUrl;
+      const url = streamUrl + (streamUrl.includes('?') ? '&t=' : '?t=') + Date.now();
+      this.video.src = url;
       this._retryCount = 0;
     }
   }
