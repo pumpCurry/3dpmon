@@ -13,21 +13,22 @@
  * 【公開クラス一覧】
  * - {@link ConnectionManager}：接続管理クラス
  *
- * @version 1.390.600 (PR #277)
- * @since   1.390.536 (PR #245)
- * @lastModified 2025-07-01 12:00:00
+* @version 1.390.657 (PR #304)
+* @since   1.390.536 (PR #245)
+* @lastModified 2025-07-04 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - DashboardManager 連携
  */
 
 import { sha1Hex } from '@shared/utils/hash.js';
+import WSClient from './WSClient.js';
 
 /**
  * WebSocket 接続を管理するクラス。
  */
 export class ConnectionManager {
-  /** @type {Map<string, {socket: WebSocket|null, meta: Object, state: string, retry: number}>} */
+  /** @type {Map<string, {client: WSClient|null, meta: Object, state: string, retry: number}>} */
   #registry = new Map();
 
   /**
@@ -42,6 +43,10 @@ export class ConnectionManager {
       this.bus.emit('conn:added', { id, ...meta });
     });
     this.bus.on('conn:remove', ({ id }) => {
+      const entry = this.#registry.get(id);
+      if (entry && entry.client) {
+        entry.client.destroy();
+      }
       this.#registry.delete(id);
       this.saveAll();
     });
@@ -55,7 +60,7 @@ export class ConnectionManager {
    */
   async add(config) {
     const id = await sha1Hex(`${config.ip}:${config.wsPort}`);
-    this.#registry.set(id, { socket: null, meta: { ...config }, state: 'closed', retry: 0 });
+    this.#registry.set(id, { client: null, meta: { ...config }, state: 'closed', retry: 0, manual: false });
     return id;
   }
 
@@ -71,36 +76,35 @@ export class ConnectionManager {
 
     entry.state = 'connecting';
     const url = `ws://${entry.meta.ip}:${entry.meta.wsPort}`;
-    const ws = new WebSocket(url);
-    entry.socket = ws;
+    const client = new WSClient(url, connectionId);
+    entry.client = client;
 
-    ws.addEventListener('open', () => {
+    client.addEventListener('open', () => {
       entry.state = 'open';
       entry.retry = 0;
       this.bus.emit('cm:open', { id: connectionId });
       this.bus.emit('log:add', `[WS] ${entry.meta.ip} connected`);
     });
 
-    ws.addEventListener('message', (evt) => {
-      try {
-        const data = JSON.parse(evt.data);
-        this.bus.emit('cm:message', { id: connectionId, data });
-      } catch (e) {
-        console.error('[cm] parse error', e);
-      }
+    client.addEventListener('message', (e) => {
+      this.bus.emit('cm:message', { id: connectionId, data: e.detail });
     });
 
-    ws.addEventListener('error', (e) => {
-      this.bus.emit('cm:error', { id: connectionId, error: e });
-      this.bus.emit('log:add', `[Error] ${entry.meta.ip} ${e.message}`);
+    client.addEventListener('error', (e) => {
+      this.bus.emit('cm:error', { id: connectionId, error: e.detail });
     });
 
-    ws.addEventListener('close', () => {
+    client.addEventListener('close', () => {
       entry.state = 'closed';
       this.bus.emit('cm:close', { id: connectionId });
       this.bus.emit('log:add', `[WS] ${entry.meta.ip} disconnected`);
-      this.#scheduleReconnect(connectionId);
+      if (!entry.manual) {
+        this.#scheduleReconnect(connectionId);
+      }
+      entry.manual = false;
     });
+
+    client.connect();
   }
 
   /**
@@ -112,8 +116,8 @@ export class ConnectionManager {
    */
   send(connectionId, json) {
     const entry = this.#registry.get(connectionId);
-    if (entry && entry.socket && entry.state === 'open') {
-      entry.socket.send(JSON.stringify(json));
+    if (entry && entry.client && entry.state === 'open') {
+      entry.client.send(json);
     }
   }
 
@@ -125,8 +129,11 @@ export class ConnectionManager {
    */
   close(connectionId) {
     const entry = this.#registry.get(connectionId);
-    if (entry && entry.socket) {
-      entry.socket.close();
+    if (entry && entry.client) {
+      entry.manual = true;
+      entry.client.destroy();
+      entry.state = 'closed';
+      this.bus.emit('cm:close', { id: connectionId });
     }
   }
 
@@ -189,6 +196,10 @@ export class ConnectionManager {
   #scheduleReconnect(connectionId) {
     const entry = this.#registry.get(connectionId);
     if (!entry) return;
+    if (entry.client) {
+      entry.client.destroy();
+      entry.client = null;
+    }
     entry.retry = Math.min(entry.retry + 1, 6);
     const delay = Math.min(60000, 1000 * 2 ** entry.retry);
     this.bus.emit('log:add', `[WS] retry in ${delay}ms`);
