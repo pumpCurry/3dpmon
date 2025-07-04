@@ -40,4 +40,13 @@ describe('LayoutStore', () => {
     }
     expect(ids.size).toBe(5);
   });
+
+  it('importJson adds numbered names on conflict', () => {
+    const exist = { id: '1', name: 'foo', updated: 0, grid: [] };
+    store.save(exist);
+    store.importJson([{ id: 'x', name: 'foo', updated: 1, grid: [] }]);
+    const all = store.getAll();
+    expect(all.length).toBe(2);
+    expect(all[1].name).toBe('foo (2)');
+  });
 });

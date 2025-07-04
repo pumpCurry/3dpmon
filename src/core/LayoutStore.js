@@ -12,9 +12,9 @@
  * 【公開クラス一覧】
  * - {@link LayoutStore}：レイアウト永続化クラス
  *
-* @version 1.390.649 (PR #301)
+* @version 1.390.653 (PR #303)
 * @since   1.390.635 (PR #295)
-* @lastModified 2025-07-03 15:00:00
+* @lastModified 2025-07-04 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -74,6 +74,31 @@ export class LayoutStore {
   delete(id) {
     const list = this.getAll().filter(l => l.id !== id);
     localStorage.setItem(this.#key, JSON.stringify(list));
+  }
+
+  /**
+   * JSON 配列からレイアウトをインポートする。既存と同名の場合は末尾に
+   * " (n)" を付与して追加入力する。
+   *
+   * @param {Array<import('../types').Layout>} layouts - 取り込み対象レイアウト
+   *   配列
+   * @returns {number} 追加した件数
+   */
+  importJson(layouts) {
+    const list = this.getAll();
+    let added = 0;
+    for (const lt of layouts) {
+      const base = lt.name;
+      let name = base;
+      let n = 2;
+      while (list.some(l => l.name === name)) {
+        name = `${base} (${n++})`;
+      }
+      list.push({ ...lt, id: this.generateId(), name });
+      added += 1;
+    }
+    localStorage.setItem(this.#key, JSON.stringify(list));
+    return added;
   }
 
   /**
