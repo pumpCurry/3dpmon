@@ -87,7 +87,21 @@ function updatePreview(sp, preview = window.filamentPreview) {
   } else {
     fp.setOption("showMaterialName", false);
   }
-  if (typeof sp.remainingLengthMm === "number") fp.setRemainingLength(sp.remainingLengthMm);
+  if (typeof sp.remainingLengthMm === "number") {
+    fp.setRemainingLength(sp.remainingLengthMm);
+  }
+  if (sp.colorName) {
+    fp.setOption("materialColorName", sp.colorName);
+    fp.setOption("showMaterialColorName", true);
+  } else {
+    fp.setOption("showMaterialColorName", false);
+  }
+  if (sp.filamentColor || sp.color) {
+    fp.setOption("materialColorCode", sp.filamentColor || sp.color);
+    fp.setOption("showMaterialColorCode", true);
+  } else {
+    fp.setOption("showMaterialColorCode", false);
+  }
 }
 
 /**
