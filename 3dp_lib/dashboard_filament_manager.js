@@ -71,7 +71,7 @@ const DEFAULT_FILAMENT_DATA = {
   reelSubName: "",
   filamentColor: "#22C55E",
   materialName: "PLA",
-  materialColorName: "",
+  colorName: "",
   materialColorCode: "",
   purchaseLink: "",
   price: 0,
@@ -1614,7 +1614,7 @@ function createEditorContent(onDone) {
     subIn.value = d.reelSubName || "";
     colorIn.value = d.filamentColor || d.color;
     matSel.value = d.materialName || d.material || "PLA";
-    matColorIn.value = d.materialColorName || d.colorName || "";
+    matColorIn.value = d.colorName || d.materialColorName || "";
     linkIn.value = d.purchaseLink || "";
     curSel.value = d.currencySymbol || DEFAULT_FILAMENT_DATA.currencySymbol;
     priceIn.value = d.purchasePrice || d.price || 0;
@@ -1638,7 +1638,7 @@ function createEditorContent(onDone) {
       reelName: nameIn.value,
       reelSubName: subIn.value,
       materialName: matSel.value,
-      materialColorName: matColorIn.value,
+      colorName: matColorIn.value,
       materialColorCode: colorIn.value,
       manufacturerName: manuIn.value
     });
@@ -1662,7 +1662,7 @@ function createEditorContent(onDone) {
       reelSubName: subIn.value,
       filamentColor: colorIn.value,
       materialName: matSel.value,
-      materialColorName: matColorIn.value,
+      colorName: matColorIn.value,
       materialColorCode: colorIn.value,
       purchaseLink: linkIn.value,
       purchasePrice: Number(priceIn.value) || 0,
