@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.651 (PR #302)
+* @version 1.390.658 (PR #306)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-04 09:50:37
+* @lastModified 2025-07-08 19:34:58
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -694,6 +694,9 @@ export function aggregatorUpdate() {
         const frac = Math.min(Math.max(prog / 100, 0), 1);
         remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
       }
+      // 印刷途中にページを更新しても残量が巻き戻らないよう、
+      // 計算値をスプールオブジェクトへ反映しておく
+      spool.remainingLengthMm = Math.max(0, remain);
     } else if (
       spool.currentJobStartLength != null &&
       st !== PRINT_STATE_CODE.printStarted &&
