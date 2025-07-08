@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.658 (PR #306)
+* @version 1.390.665 (PR #309)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-08 19:34:58
+* @lastModified 2025-07-08 22:52:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -299,6 +299,31 @@ export function ingestData(data) {
 
   // G. タイマー集計＆予測フェーズへ ------------------------------------------------
   aggregateTimersAndPredictions(data);
+
+  // --- 印刷完了時のフィラメント使用量確定処理 -----------------------------
+  const st_agg = Number(data.state);
+  const prog_agg = Number(data.printProgress ?? 0);
+  const prevPrintState_agg = Number(
+    monitorData.machines[currentHostname]?.runtimeData?.state ?? 0
+  );
+  // 直前まで印刷中もしくは一時停止中で、現在の状態が完了・失敗・アイドル
+  // かつ進捗率が100%以上なら finalizeFilamentUsage を実行する
+  if (
+    (prevPrintState_agg === PRINT_STATE_CODE.printStarted ||
+      prevPrintState_agg === PRINT_STATE_CODE.printPaused) &&
+    (st_agg === PRINT_STATE_CODE.printDone ||
+      st_agg === PRINT_STATE_CODE.printFailed ||
+      st_agg === PRINT_STATE_CODE.printIdle) &&
+    prog_agg >= 100
+  ) {
+    const usedMaterial_agg = Number(
+      data.usedMaterialLength ?? data.usagematerial ?? NaN
+    );
+    const jobId_agg = Number(data.printStartTime || 0);
+    if (!isNaN(usedMaterial_agg) && jobId_agg > 0) {
+      finalizeFilamentUsage(usedMaterial_agg, jobId_agg);
+    }
+  }
 
 /*  // H. エラー検知
   // ① 生データ中に errorCode があれば拾う
