@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.620 (PR #287)
+* @version 1.390.661 (PR #307)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-02 15:14:20
+* @lastModified 2025-07-08 21:51:49
  * -----------------------------------------------------------
 * @todo
 * - none
@@ -325,7 +325,6 @@ export function processData(data) {
   const initialized = prevPrintState !== null && prevPrintStartTime !== null;
 
   if (
-    initialized &&
     st === PRINT_STATE_CODE.printStarted &&
     (prevPrintState !== st || currStartTime !== prevPrintStartTime)
   ) {
@@ -384,7 +383,7 @@ export function processData(data) {
   if (
     tsPrepEnd &&
     st === PRINT_STATE_CODE.printPaused &&
-    currSelfPct >= 1 && currSelfPct <= 99 &&
+    currSelfPct >= 30 && currSelfPct <= 39 &&
     !tsCheckStart
   ) {
     console.debug(">>> (2.4.1) セルフテストタイマー開始");
@@ -398,7 +397,7 @@ export function processData(data) {
   // (2.4.2) 完了判定
   if (
     tsCheckStart &&
-    (currSelfPct <= 0 || currSelfPct >= 100 || st !== PRINT_STATE_CODE.printPaused)
+    (currSelfPct < 30 || currSelfPct > 39 || st !== PRINT_STATE_CODE.printPaused)
   ) {
     console.debug(">>> (2.4.2) セルフテストタイマー停止");
     totalCheckSeconds += Math.floor((Date.now() - tsCheckStart)/1000);
