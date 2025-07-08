@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.523 (PR #225)
+* @version 1.390.665 (PR #309)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-06-28 16:25:04
+* @lastModified 2025-07-08 22:52:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -607,8 +607,16 @@ export function updateHistoryList(
     const cur = mergedMap.get(j.id);
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
-        const isZero = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
-        if (v != null && (cur[k] == null || isZero)) {
+        const isZeroInCur = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
+        const isOldJobFinishedAndValid =
+          MERGE_IGNORE_ZERO_FIELDS.has(k) && j.printfinish === 1 && v != null && v !== 0;
+
+        if (
+          v != null &&
+          (cur[k] == null ||
+            isZeroInCur ||
+            (cur.printfinish !== 1 && isOldJobFinishedAndValid))
+        ) {
           cur[k] = v;
           merged = true;
         }
