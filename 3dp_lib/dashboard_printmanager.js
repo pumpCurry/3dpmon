@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.665 (PR #309)
+* @version 1.390.671 (PR #311)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-07-08 22:52:00
+* @lastModified 2025-07-09 15:57:45
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -133,8 +133,10 @@ export function parseRawHistoryEntry(raw, baseUrl, host = currentHostname) {
   // フルパスも保持しておくことでコマンド送信時に利用できるようにする
   const rawFilename    = raw.filename;
   const startSec       = raw.starttime || 0;
+  const actualStartSec = raw.actualStartTime != null ? Number(raw.actualStartTime) : null;
   const useTimeSec     = raw.usagetime || 0;
   const startTime      = new Date(startSec * 1000).toISOString();
+  const actualStartTime = actualStartSec != null ? new Date(actualStartSec * 1000).toISOString() : null;
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
@@ -169,6 +171,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host = currentHostname) {
     rawFilename,
     filename,
     startTime,
+    actualStartTime,
     finishTime,
     printfinish,
     materialUsedMm,
@@ -300,6 +303,7 @@ export function jobsToRaw(jobs) {
         size:          job.size ?? 0,
         ctime:         startEpoch,
         starttime:     startEpoch,
+        ...(job.actualStartTime !== undefined && { actualStartTime: Date.parse(job.actualStartTime) / 1000 }),
         ...(finishEpoch && { endtime: finishEpoch }),
         usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
         usagematerial: job.materialUsedMm,
@@ -747,6 +751,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const size      = raw.size != null ? raw.size.toLocaleString() : "—";
     const ctime     = raw.ctime ? fmt(raw.ctime) : "—";
     const stime     = raw.starttime ? fmt(raw.starttime) : "—";
+    const astime    = raw.actualStartTime ? fmt(raw.actualStartTime) : "—";
     const etime     = raw.endtime ? fmt(raw.endtime) : "—";
     const utimeSec  = raw.usagetime != null ? Number(raw.usagetime) : null;
     const utime     = utimeSec != null ? formatDuration(utimeSec) : "—";
@@ -821,6 +826,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td data-key="size">${size}</td>
       <td data-key="ctime">${ctime}</td>
       <td data-key="starttime">${stime}</td>
+      <td data-key="actualstart">${astime}</td>
       <td data-key="endtime">${etime}</td>
       <td data-key="preptime" data-sec="${prepSec ?? ''}">${preptime}</td>
       <td data-key="checktime" data-sec="${checkSec ?? ''}">${checktime}</td>
