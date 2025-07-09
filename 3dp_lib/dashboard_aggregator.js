@@ -20,9 +20,9 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  *
-* @version 1.390.665 (PR #309)
+* @version 1.390.671 (PR #311)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-08 22:52:00
+* @lastModified 2025-07-09 15:57:45
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -283,6 +283,20 @@ export function ingestData(data) {
     // ジョブタイムが増え始めた瞬間を actualStartEpoch の元に
     actualStartEpoch = nowSec - jobTime;
     setStoredData("actualStartTime", actualStartEpoch, true);
+
+    // ----- 印刷前準備時間の確定 -----
+    if (tsPrepStart !== null) {
+      const diff = Math.floor((actualStartEpoch * 1000 - tsPrepStart) / 1000);
+      if (diff > 0) totalPrepSec += diff;
+      tsPrepStart = null;
+      setStoredData("preparationTime", totalPrepSec, true);
+    } else if (totalPrepSec === 0 && id) {
+      const diff = Math.floor(actualStartEpoch - id);
+      if (diff > 0) {
+        totalPrepSec = diff;
+        setStoredData("preparationTime", totalPrepSec, true);
+      }
+    }
 
   }
 
