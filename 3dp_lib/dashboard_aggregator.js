@@ -22,9 +22,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.704 (PR #325)
-* @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:11:44
+ * @version 1.390.705 (PR #326)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2025-07-10 23:28:25
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -390,9 +390,13 @@ export function ingestData(data) {
     const usedMaterial_agg = Number(
       data.usedMaterialLength ?? data.usagematerial ?? NaN
     );
-    const jobId_agg = Number(data.printStartTime || 0);
-    if (!isNaN(usedMaterial_agg) && jobId_agg > 0) {
-      finalizeFilamentUsage(usedMaterial_agg, jobId_agg);
+    const spool = getCurrentSpool();
+    const jobId_agg = spool?.currentPrintID || String(data.printStartTime || "");
+    if (jobId_agg) {
+      const length = !isNaN(usedMaterial_agg)
+        ? usedMaterial_agg
+        : spool?.currentJobExpectedLength ?? 0;
+      finalizeFilamentUsage(length, jobId_agg);
     }
   }
 
