@@ -20,10 +20,11 @@
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
+ * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.697 (PR #322)
+* @version 1.390.702 (PR #324)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-10 21:30:00
+* @lastModified 2025-07-10 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -984,6 +985,17 @@ export function stopAggregatorTimer() {
 
     persistAggregatorState();
   }
+}
+
+/**
+ * getCurrentPrintID:
+ *   集約モジュールが保持する現在の印刷IDを返します。
+ *   初期化前や未検出時は `null` を返します。
+ *
+ * @returns {number|null} 現在の印刷ID
+ */
+export function getCurrentPrintID() {
+  return prevPrintID;
 }
 
 /**
