@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link restoreXYPreviewState} など複数を一括エクスポート
  *
- * @version 1.390.317 (PR #143)
- * @since   1.390.214 (PR #95)
- * @lastModified 2025-06-19 22:38:18
+* @version 1.390.678 (PR #313)
+* @since   1.390.214 (PR #95)
+* @lastModified 2025-07-10 07:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -67,14 +67,13 @@ function setPrinterModel(model) {
     return; // 未対応モデルは変更なし
   }
   const stageElem = document.getElementById("xy-stage");
-  if (stageElem) {
-    const px = stageSizeMm * STAGE_SCALE;
-    stageElem.style.width = `${px}px`;
-    stageElem.style.height = `${px}px`;
-    stageElem.innerHTML = "";
-    xyDots.length = 0;
-    xyInitialized = false;
-  }
+  if (!stageElem) return; // テスト環境などでDOMが無い場合
+  const px = stageSizeMm * STAGE_SCALE;
+  stageElem.style.width = `${px}px`;
+  stageElem.style.height = `${px}px`;
+  stageElem.innerHTML = "";
+  xyDots.length = 0;
+  xyInitialized = false;
   const labelBottom = document.querySelector("#z-preview-container .z-label-bottom");
   if (labelBottom) labelBottom.textContent = String(stageZMaxMm);
   updateXYPreview(lastXYPosition.x, lastXYPosition.y);
@@ -150,6 +149,7 @@ function restoreXYHistoryDots() {
  */
 function initXYPreview() {
   const container = document.getElementById("xy-stage");
+  if (!container) return; // DOM が存在しなければ何もしない
   container.style.userSelect = "none";
   const gridCount = 7;
   const width = container.clientWidth;

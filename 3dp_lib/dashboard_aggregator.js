@@ -19,10 +19,11 @@
  * - {@link persistAggregatorState}：状態の保存
  * - {@link restartAggregatorTimer}：集約ループ再開
  * - {@link stopAggregatorTimer}：集約ループ停止
+ * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  *
-* @version 1.390.671 (PR #311)
+* @version 1.390.678 (PR #313)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-09 15:57:45
+* @lastModified 2025-07-10 07:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -59,6 +60,20 @@ import {
 
 /** aggregatorUpdate 用タイマー ID */
 let aggregatorTimer = null;
+
+/** 履歴永続化用フック */
+let historyPersistFunc = null;
+
+/**
+ * setHistoryPersistFunc:
+ *   履歴永続化関数を登録します。
+ *   dashboard_msg_handler からセットされます。
+ *
+ * @param {(printId:number)=>void} fn - 永続化関数
+ */
+export function setHistoryPersistFunc(fn) {
+  historyPersistFunc = typeof fn === "function" ? fn : null;
+}
 
 // タイマー計測用
 let tsPrepStart       = null, totalPrepSec       = 0;
@@ -283,6 +298,14 @@ export function ingestData(data) {
     // ジョブタイムが増え始めた瞬間を actualStartEpoch の元に
     actualStartEpoch = nowSec - jobTime;
     setStoredData("actualStartTime", actualStartEpoch, true);
+
+    if (historyPersistFunc && id) {
+      try {
+        historyPersistFunc(id);
+      } catch (e) {
+        console.error("historyPersistFunc error", e);
+      }
+    }
 
     // ----- 印刷前準備時間の確定 -----
     if (tsPrepStart !== null) {
