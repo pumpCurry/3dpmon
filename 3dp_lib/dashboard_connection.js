@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.681 (PR #312)
+* @version 1.390.683 (PR #314)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-07-10 07:33:39
+* @lastModified 2025-07-10 15:54:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -49,6 +49,7 @@ import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggrega
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { startCameraStream } from "./dashboard_camera_ctrl.js";
+import { getCurrentTimestamp } from "./dashboard_utils.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
