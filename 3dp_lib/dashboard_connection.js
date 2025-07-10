@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.682 (PR #314)
-* @since   1.390.451 (PR #205)
-* @lastModified 2025-07-10 14:46:14
+ * @version 1.390.683 (PR #314)
+ * @since   1.390.451 (PR #205)
+ * @lastModified 2025-07-10 15:54:39
  * -----------------------------------------------------------
  * @todo
  * - none
