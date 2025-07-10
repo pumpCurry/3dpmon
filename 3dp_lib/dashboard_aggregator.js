@@ -24,7 +24,7 @@
  *
  * @version 1.390.705 (PR #326)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:28:25
+ * @lastModified 2025-07-10 23:48:59
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -747,9 +747,18 @@ export function aggregatorUpdate() {
   // --- フィラメント残量の動的計算 ---
   const spool = getCurrentSpool();
   if (spool) autoCorrectCurrentSpool();
-  // usedMaterialLength 受信時だけ残量計算を更新
-  if (spool && storedData.usedMaterialLength?.isNew) {
-    const st   = Number(storedData.state?.rawValue || 0);
+  const st   = Number(storedData.state?.rawValue || 0);
+  // usedMaterialLength 受信時、または復元直後に currentJobStartLength が未設定の
+  // 状態で印刷が進行中の場合に残量計算を開始
+  if (
+    spool &&
+    (storedData.usedMaterialLength?.isNew ||
+      (spool.currentJobStartLength == null &&
+        (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)))
+  ) {
+    if (spool.currentJobStartLength == null) {
+      spool.currentJobStartLength = spool.remainingLengthMm;
+    }
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
     const used = Number(storedData.usedMaterialLength.rawValue);
     let est  = Number(storedData.materialLength?.rawValue ?? NaN);
@@ -926,6 +935,16 @@ export function restoreAggregatorState() {
     if (k === "prevPrintID")      field = "prevPrintID";
     setStoredData(field, v, true);
   });
+
+  // 復元後に actualStartTime が存在し印刷ID も分かっている場合は
+  // 履歴に反映して UI を即時更新する
+  if (historyPersistFunc && prevPrintID && actualStartEpoch != null) {
+    try {
+      historyPersistFunc(prevPrintID);
+    } catch (e) {
+      console.error("historyPersistFunc error", e);
+    }
+  }
 }
 
 /**
