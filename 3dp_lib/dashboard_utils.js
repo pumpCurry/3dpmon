@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link formatDuration} ほか複数をエクスポート
  *
- * @version 1.390.341 (PR #144)
+* @version 1.390.681 (PR #312)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 22:42:15
+ * @lastModified 2025-07-10 07:33:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -99,12 +99,19 @@ function formatBinary(value) {
 }
 
 /**
- * 現在のISO8601形式タイムスタンプを返します。
- * @returns {string}
+ * 現在のローカルタイムゾーン付き ISO8601 形式タイムスタンプを返します。
+ * 例: `2025-07-20T12:34:56.789+0900`
+ *
+ * @returns {string} ローカルタイムゾーン表記の ISO8601 文字列
  */
 function getCurrentTimestamp() {
   const d = new Date();
   const pad = (num, size) => ("000000" + num).slice(-size);
+  const offsetMin = d.getTimezoneOffset();
+  const sign = offsetMin <= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMin);
+  const offHour = pad(Math.floor(abs / 60), 2);
+  const offMin = pad(abs % 60, 2);
   return (
     d.getFullYear() + "-" +
     pad(d.getMonth() + 1, 2) + "-" +
@@ -113,7 +120,7 @@ function getCurrentTimestamp() {
     pad(d.getMinutes(), 2) + ":" +
     pad(d.getSeconds(), 2) + "." +
     pad(d.getMilliseconds(), 3) +
-    "Z"
+    sign + offHour + offMin
   );
 }
 

@@ -17,13 +17,14 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.678 (PR #313)
-* @since   1.390.214 (PR #95)
-* @lastModified 2025-07-10 07:45:00
+ * @version 1.390.678 (PR #313)
+ * @since   1.390.214 (PR #95)
+ * @lastModified 2025-07-10 07:45:00
  * -----------------------------------------------------------
-* @todo
-* - none
-*/
+ * @todo
+ * - none
+ */
+
 /** -----------------------------------------------------------
  * 改修履歴
  * | 日付 (JST)       | PR   | 概要                       |
@@ -49,7 +50,7 @@ import {
 import { pushLog } from "./dashboard_log_util.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { handlePrintStateTransition } from "./dashboard_printstatus.js";
-import { parseCurPosition } from "./dashboard_utils.js";
+import { parseCurPosition, getCurrentTimestamp } from "./dashboard_utils.js";
 import {
   updateXYPreview,
   updateZPreview,
@@ -279,7 +280,7 @@ export function processData(data) {
 
   // (2.1) heartbeat のみ処理
   if (data.ModeCode === "heart_beat") {
-    machine.runtimeData.lastHeartbeat = new Date().toISOString();
+    machine.runtimeData.lastHeartbeat = getCurrentTimestamp();
     return;
   }
 

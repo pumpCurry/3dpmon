@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.341 (PR #154)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-21 00:00:00
+* @version 1.390.681 (PR #312)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-07-10 07:33:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -38,6 +38,7 @@
 
 import { monitorData, currentHostname, ensureMachineData } from "./dashboard_data.js";
 import { logManager } from "./dashboard_log_util.js";
+import { getCurrentTimestamp } from "./dashboard_utils.js";
 
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
@@ -79,7 +80,7 @@ export function setStorageLogEnabled(flag) {
  */
 function pushLog(msg, isErr = false) {
   logManager.add({
-    timestamp: new Date().toISOString(),
+    timestamp: getCurrentTimestamp(),
     level:     isErr ? "error" : "info",
     msg
   });
@@ -105,11 +106,11 @@ export function saveUnifiedStorage() {
     _lastSavedJson = json;
     if (_enableStorageLog) {
       console.debug("[saveUnifiedStorage] monitorData を保存しました");
-      logManager.add({ timestamp:new Date().toISOString(), level:"info", msg:"[saveUnifiedStorage] 設定と履歴を保存しました" });
+      logManager.add({ timestamp:getCurrentTimestamp(), level:"info", msg:"[saveUnifiedStorage] 設定と履歴を保存しました" });
     }
   } catch (e) {
     console.warn("[saveUnifiedStorage] 保存に失敗しました:", e);
-    logManager.add({ timestamp:new Date().toISOString(), level:"error", msg:`[saveUnifiedStorage] エラー: ${e.message}` });
+    logManager.add({ timestamp:getCurrentTimestamp(), level:"error", msg:`[saveUnifiedStorage] エラー: ${e.message}` });
   }
 }
 
