@@ -25,9 +25,9 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
-* @version 1.390.651 (PR #302)
+* @version 1.390.681 (PR #312)
 * @since   1.390.451 (PR #205)
-* @lastModified 2025-07-04 09:50:37
+* @lastModified 2025-07-10 07:33:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -406,7 +406,7 @@ function handleSocketMessage(event, host) {
   }
 
 // --- 2) タイムスタンプ更新 (lastLogTimestamp に現在時刻を反映) ---
-  const now = new Date().toISOString();
+  const now = getCurrentTimestamp();
   const tsField = document.querySelector('[data-field="lastLogTimestamp"] .value');
   if (tsField) tsField.textContent = now;
 
@@ -645,7 +645,7 @@ export function startHeartbeat(socket, intervalMs = 30_000, host = currentHostna
     if (st.ws && st.ws.readyState === WebSocket.OPEN) {
       const payload = {
         ModeCode: "heart_beat",
-        msg: new Date().toISOString()
+        msg: getCurrentTimestamp()
       };
       st.ws.send(JSON.stringify(payload));
     }
@@ -753,7 +753,7 @@ export function sendCommand(method, params = {}, host = currentHostname) {
     const now = Date.now();
     if (now - lastWsAlertTime > 1000) {
       lastWsAlertTime = now;
-      const ts = new Date(now).toISOString();
+      const ts = getCurrentTimestamp();
       const hostName = host === PLACEHOLDER_HOSTNAME ? "(placeholder)" : host;
       const detail = st.ws ? `readyState=${st.ws.readyState}` : "ws=null";
       const msg = `[${hostName}] WebSocket が接続されていません @ ${ts} (${detail})`;
@@ -804,7 +804,7 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
     const now = Date.now();
     if (now - lastWsAlertTime > 1000) {
       lastWsAlertTime = now;
-      const ts = new Date(now).toISOString();
+      const ts = getCurrentTimestamp();
       const hostName = host === PLACEHOLDER_HOSTNAME ? "(placeholder)" : host;
       const detail = st.ws ? `readyState=${st.ws.readyState}` : "ws=null";
       const msg = `[${hostName}] WebSocket が接続されていません @ ${ts} (${detail})`;
