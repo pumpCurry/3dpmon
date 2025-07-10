@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.629 (PR #291)
+* @version 1.390.687 (PR #313)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-02 16:10:00
+* @lastModified 2025-07-10 17:35:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -374,6 +374,8 @@ export function useFilament(lengthMm, jobId = "") {
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
   s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
+  // ページリロード直後でも残量が巻き戻らないよう即座に保存
+  saveUnifiedStorage();
 }
 
 /**
