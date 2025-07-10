@@ -390,9 +390,13 @@ export function ingestData(data) {
     const usedMaterial_agg = Number(
       data.usedMaterialLength ?? data.usagematerial ?? NaN
     );
-    const jobId_agg = Number(data.printStartTime || 0);
-    if (!isNaN(usedMaterial_agg) && jobId_agg > 0) {
-      finalizeFilamentUsage(usedMaterial_agg, jobId_agg);
+    const spool = getCurrentSpool();
+    const jobId_agg = spool?.currentPrintID || String(data.printStartTime || "");
+    if (jobId_agg) {
+      const length = !isNaN(usedMaterial_agg)
+        ? usedMaterial_agg
+        : spool?.currentJobExpectedLength ?? 0;
+      finalizeFilamentUsage(length, jobId_agg);
     }
   }
 
