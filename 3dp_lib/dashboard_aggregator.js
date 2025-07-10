@@ -22,9 +22,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.705 (PR #326)
+ * @version 1.390.711 (PR #328)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:48:59
+ * @lastModified 2025-07-11 07:28:24
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -667,7 +667,8 @@ export function aggregatorUpdate() {
   // --- ここでタイマー／予測用フィールド群が揃っているか確認 ---
   const needed = ["preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
                   "actualStartTime","initialLeftTime","initialLeftAt",
-                  "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"];
+                  "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime",
+                  "expectedEndTime"];
   needed.forEach(key => {
     if (!(key in storedData)) { //キーが無い場合
       // rawValueを「未定義(null)」で作っておく
@@ -739,6 +740,25 @@ export function aggregatorUpdate() {
       setStoredData("printFinishTime", e, true);
       setStoredData("printFinishTime", {
         value: new Date(e*1000).toLocaleString(),
+        unit: ""
+      });
+    }
+  }, storedData);
+
+  // expectedEndTime 更新
+  checkUpdatedFields(["printFinishTime","estimatedCompletionTime"], () => {
+    const fin = parseInt(storedData.printFinishTime?.rawValue, 10);
+    let epoch = null;
+    if (!isNaN(fin) && fin > 0) {
+      epoch = fin;
+    } else {
+      const est = parseInt(storedData.estimatedCompletionTime?.rawValue, 10);
+      if (!isNaN(est) && est > 0) epoch = est;
+    }
+    setStoredData("expectedEndTime", epoch, true);
+    if (epoch !== null) {
+      setStoredData("expectedEndTime", {
+        value: new Date(epoch * 1000).toLocaleString(),
         unit: ""
       });
     }
