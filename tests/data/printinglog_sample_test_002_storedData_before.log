@@ -1,0 +1,2581 @@
+{
+  "tsPrepStart": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "totalPrepSec": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "tsCheckStart": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "totalCheckSec": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "tsPauseStart": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "totalPauseSec": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "tsCompleteStart": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "actualStartEpoch": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "initialLeftSec": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "initialLeftEpoch": {
+    "rawValue": null,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "prevPrintID": {
+    "rawValue": 1750622600,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "preparationTime": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "---",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "firstLayerCheckTime": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "---",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "pauseTime": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "---",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "completionElapsedTime": {
+    "rawValue": 11,
+    "computedValue": {
+      "value": "   0時間 00分 10秒 (    10 秒)",
+      "unit": ""
+    },
+    "isNew": true,
+    "isFromEquipVal": false
+  },
+  "actualStartTime": {
+    "rawValue": 1752144712.538,
+    "computedValue": {
+      "value": "2025/07/10 19:51:52",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "initialLeftTime": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "   0時間 00分 00秒 (     0 秒)",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "initialLeftAt": {
+    "rawValue": 1752144712.538,
+    "computedValue": {
+      "value": "2025/07/10 19:51:52",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "predictedFinishEpoch": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "---",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "estimatedRemainingTime": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "---",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "estimatedCompletionTime": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "---",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "positionX": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "296.50",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "positionY": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "147.22",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "positionZ": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "300.15",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "TotalLayer": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "accelToDecelLimits": {
+    "rawValue": 6000,
+    "computedValue": {
+      "value": "6000",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "accelerationLimits": {
+    "rawValue": 12000,
+    "computedValue": {
+      "value": "12000",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "aiDetection": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:ON",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "aiFirstFloor": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:ON",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "aiPausePrint": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:ON",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "aiSw": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:ON",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "autoLevelResult": {
+    "rawValue": "36:-0.37",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "autohome": {
+    "rawValue": "X:0 Y:0 Z:0",
+    "computedValue": {
+      "value": "X:0 Y:0 Z:0",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "auxiliaryFanPct": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": 0,
+      "unit": "%"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "bedTemp0": {
+    "rawValue": "39.940000",
+    "computedValue": {
+      "value": "39.94",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "bedTemp1": {
+    "rawValue": "0.000000",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "bedTemp2": {
+    "rawValue": "0.000000",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "bedTempAutoPid": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "boxTemp": {
+    "rawValue": 26,
+    "computedValue": {
+      "value": "26.0",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "caseFanPct": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": 0,
+      "unit": "%"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "connect": {
+    "rawValue": 1,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "cornerVelocityLimits": {
+    "rawValue": 5,
+    "computedValue": {
+      "value": "5",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "curFeedratePct": {
+    "rawValue": 100,
+    "computedValue": {
+      "value": 100,
+      "unit": "%"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "curFlowratePct": {
+    "rawValue": 100,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "curPosition": {
+    "rawValue": "X:296.50 Y:147.22 Z:300.15",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "dProgress": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "deviceState": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0:停止中",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "enableSelfTest": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:常時実施",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "err": {
+    "rawValue": {
+      "errcode": 210,
+      "key": 506
+    },
+    "computedValue": {
+      "value": "コード210, キー506",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "fan": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0:OFF",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "fanAuxiliary": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0:OFF",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "fanCase": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0:OFF",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "hostname": {
+    "rawValue": "K1Max-03FA",
+    "computedValue": {
+      "value": "K1Max-03FA",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "layer": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "lightSw": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:ON",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "materialDetect": {
+    "rawValue": 1,
+    "computedValue": {
+      "value": "1:ON",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "materialStatus": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0:材料OK",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "maxBedTemp": {
+    "rawValue": 100,
+    "computedValue": {
+      "value": "100.00",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "maxNozzleTemp": {
+    "rawValue": 300,
+    "computedValue": {
+      "value": "300.00",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "model": {
+    "rawValue": "K1 Max",
+    "computedValue": {
+      "value": "K1 Max",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "modelFanPct": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": 0,
+      "unit": "%"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "modelVersion": {
+    "rawValue": "printer hw ver:;printer sw ver:;DWIN hw ver:CR4CU220812S11;DWIN sw ver:1.3.3.46;",
+    "computedValue": {
+      "value": "printer hw ver:;printer sw ver:;DWIN hw ver:CR4CU220812S11;DWIN sw ver:1.3.3.46;",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "nozzleMoveSnapshot": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "nozzleTemp": {
+    "rawValue": "33.550000",
+    "computedValue": {
+      "value": "33.55",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "nozzleTempAutoPid": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "powerLoss": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "pressureAdvance": {
+    "rawValue": "0.044000",
+    "computedValue": {
+      "value": "0.044000",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printFileName": {
+    "rawValue": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printId": {
+    "rawValue": "",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printJobTime": {
+    "rawValue": 287,
+    "computedValue": {
+      "value": "   0時間 04分 47秒 (   287 秒)",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printLeftTime": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "   0時間 00分 00秒 (     0 秒)",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printProgress": {
+    "rawValue": 100,
+    "computedValue": {
+      "value": 100,
+      "unit": "%"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printStartTime": {
+    "rawValue": 1752143433,
+    "computedValue": {
+      "value": "2025/07/10 19:30:33",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "realTimeFlow": {
+    "rawValue": "0.190000",
+    "computedValue": {
+      "value": "0.190000",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "realTimeSpeed": {
+    "rawValue": "16.670000",
+    "computedValue": {
+      "value": "16.670000",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "repoPlrStatus": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "smoothTime": {
+    "rawValue": "0.040000",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "state": {
+    "rawValue": 2,
+    "computedValue": {
+      "value": "2:正常終了",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "targetBedTemp0": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0.00",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "targetBedTemp1": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "targetBedTemp2": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "targetNozzleTemp": {
+    "rawValue": 0,
+    "computedValue": {
+      "value": "0.00",
+      "unit": "℃"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "tfCard": {
+    "rawValue": 1,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "upgradeStatus": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "usedMaterialLength": {
+    "rawValue": 562,
+    "computedValue": {
+      "value": "562",
+      "unit": "mm"
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "velocityLimits": {
+    "rawValue": 800,
+    "computedValue": {
+      "value": "800",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "video": {
+    "rawValue": 1,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "video1": {
+    "rawValue": 0,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "videoElapse": {
+    "rawValue": 1,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "videoElapseFrame": {
+    "rawValue": 15,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "videoElapseInterval": {
+    "rawValue": 1,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "withSelfTest": {
+    "rawValue": 100,
+    "computedValue": {
+      "value": "100:完了",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "printState": {
+    "rawValue": 2,
+    "computedValue": {
+      "value": "2:正常終了",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "nozzleDiff": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "+33.55 ℃",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "bedDiff": {
+    "rawValue": null,
+    "computedValue": {
+      "value": "+39.94 ℃",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "printFinishTime": {
+    "rawValue": 1752144999,
+    "computedValue": {
+      "value": "2025/07/10 19:56:39",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "filamentRemainingMm": {
+    "rawValue": 133723,
+    "computedValue": {
+      "value": "133723",
+      "unit": "mm"
+    },
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "totalJob": {
+    "rawValue": 50,
+    "computedValue": {
+      "value": "50",
+      "unit": "個"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "totalUsageTime": {
+    "rawValue": 165550,
+    "computedValue": {
+      "value": "  45時間 59分 10秒 (165550 秒)",
+      "unit": ""
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "totalUsageMaterial": {
+    "rawValue": 442940,
+    "computedValue": {
+      "value": "442,940",
+      "unit": "mm"
+    },
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "historyList": {
+    "rawValue": [
+      {
+        "id": 1752143433,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1752143433,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161900006002,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752143433.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1752099297,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1752099297,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.96730999497,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752099297.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1752093854,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1752093854,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161900006002,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752093854.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1752053741,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1752053741,
+        "startway": 11,
+        "usagetime": 12941,
+        "usagematerial": 33355.96730999401,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752053741.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1752031072,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1752031072,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.967309999134,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752031072.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1752014658,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1752014658,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.967309999134,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752014658.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1752012707,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1752012707,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161899999308,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752012707.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1752011256,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1752011256,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161899999308,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1752011256.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1751976310,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1751976310,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.967309999134,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751976310.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1751930771,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1751930771,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.96730999918,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751930771.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1751917073,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1751917073,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.967310003165,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751917073.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1751887974,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1751887974,
+        "startway": 1,
+        "usagetime": 12941,
+        "usagematerial": 33355.96731000287,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751887974.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1751850517,
+        "filename": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "size": 3808407,
+        "ctime": 1751850493,
+        "starttime": 1751850517,
+        "startway": 11,
+        "usagetime": 12941,
+        "usagematerial": 33355.96730999994,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751850517.png",
+        "filemd5": "dc532937647793a7cc98ee1018283364"
+      },
+      {
+        "id": 1751840960,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751840960,
+        "startway": 1,
+        "usagetime": 1202,
+        "usagematerial": 3179.789110000018,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751840960.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751840098,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1751840098,
+        "startway": 1,
+        "usagetime": 292,
+        "usagematerial": 559.4161900000145,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751840098.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1751838670,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1751838670,
+        "startway": 1,
+        "usagetime": 292,
+        "usagematerial": 559.4161900000145,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751838670.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1751825754,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751825754,
+        "startway": 11,
+        "usagetime": 1202,
+        "usagematerial": 3179.7891100000115,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751825754.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751825122,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751825122,
+        "startway": 1,
+        "usagetime": 194,
+        "usagematerial": 372.29061,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751825122.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751823209,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751823209,
+        "startway": 1,
+        "usagetime": 1202,
+        "usagematerial": 3179.7891099999947,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751823209.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751822315,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751822315,
+        "startway": 1,
+        "usagetime": 308,
+        "usagematerial": 407.12282000000096,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751822315.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751821240,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751821240,
+        "startway": 1,
+        "usagetime": 421,
+        "usagematerial": 1057.600410000001,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751821240.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751820764,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751820764,
+        "startway": 11,
+        "usagetime": 153,
+        "usagematerial": 257.5707699999999,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751820764.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751819424,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751819424,
+        "startway": 1,
+        "usagetime": 145,
+        "usagematerial": 238.49989999999963,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751819424.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751818814,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "size": 1439920,
+        "ctime": 1751818110,
+        "starttime": 1751818814,
+        "startway": 1,
+        "usagetime": 114,
+        "usagematerial": 156.88065999999995,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751818814.png",
+        "filemd5": "7e94dd53bf398c3a853a6e0fddd92801"
+      },
+      {
+        "id": 1751818112,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate02ab.gcode",
+        "size": 5319320,
+        "ctime": 1751767046,
+        "starttime": 1751818112,
+        "startway": 11,
+        "usagetime": 0,
+        "usagematerial": 0,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751818112.png",
+        "filemd5": "af9367616d64fe45b904fcb4b9217e1d"
+      },
+      {
+        "id": 1751767055,
+        "filename": "/usr/data/printer_data/gcodes/20250706_meishitate02ab.gcode",
+        "size": 5319320,
+        "ctime": 1751767046,
+        "starttime": 1751767055,
+        "startway": 11,
+        "usagetime": 7461,
+        "usagematerial": 22965.16365000012,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751767055.png",
+        "filemd5": "af9367616d64fe45b904fcb4b9217e1d"
+      },
+      {
+        "id": 1751489103,
+        "filename": "/usr/data/printer_data/gcodes/SLv02-H01Sx3.gcode",
+        "size": 12215520,
+        "ctime": 1751439512,
+        "starttime": 1751489103,
+        "startway": 1,
+        "usagetime": 9381,
+        "usagematerial": 31637.192940000074,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751489103.png",
+        "filemd5": "e4d787f325d8060c0d832d3631b97b90"
+      },
+      {
+        "id": 1751451975,
+        "filename": "/usr/data/printer_data/gcodes/SLv02-H01Sx3.gcode",
+        "size": 12215520,
+        "ctime": 1751439512,
+        "starttime": 1751451975,
+        "startway": 1,
+        "usagetime": 0,
+        "usagematerial": 0,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751451975.png",
+        "filemd5": "e4d787f325d8060c0d832d3631b97b90"
+      },
+      {
+        "id": 1751439512,
+        "filename": "/usr/data/printer_data/gcodes/SLv02-H01Sx3.gcode",
+        "size": 12215520,
+        "ctime": 1751439512,
+        "starttime": 1751439512,
+        "startway": 9,
+        "usagetime": 11407,
+        "usagematerial": 41732.51393999998,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751439512.png",
+        "filemd5": "e4d787f325d8060c0d832d3631b97b90"
+      },
+      {
+        "id": 1751098842,
+        "filename": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "size": 3587317,
+        "ctime": 1748684434,
+        "starttime": 1751098842,
+        "startway": 1,
+        "usagetime": 1310,
+        "usagematerial": 2949.9729000000007,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751098842.png",
+        "filemd5": "d49c172b014a9d98a7c7ce3407cfa1c0"
+      },
+      {
+        "id": 1751096830,
+        "filename": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "size": 3587317,
+        "ctime": 1748684434,
+        "starttime": 1751096830,
+        "startway": 1,
+        "usagetime": 1182,
+        "usagematerial": 1389.337059999987,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751096830.png",
+        "filemd5": "d49c172b014a9d98a7c7ce3407cfa1c0"
+      },
+      {
+        "id": 1751094541,
+        "filename": "/usr/data/printer_data/gcodes/K1Max_Silicone_Nozzle_Cleaner_.gcode",
+        "size": 834423,
+        "ctime": 1747641482,
+        "starttime": 1751094541,
+        "startway": 11,
+        "usagetime": 687,
+        "usagematerial": 999.6439099999916,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751094541.png",
+        "filemd5": "40d825fdd1d5401e09c8d10b66339496"
+      },
+      {
+        "id": 1751091002,
+        "filename": "/usr/data/printer_data/gcodes/K1Max_Silicone_Nozzle_Cleaner_.gcode",
+        "size": 834423,
+        "ctime": 1747641482,
+        "starttime": 1751091002,
+        "startway": 11,
+        "usagetime": 408,
+        "usagematerial": 727.6654800000197,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1751091002.png",
+        "filemd5": "40d825fdd1d5401e09c8d10b66339496"
+      },
+      {
+        "id": 1750622600,
+        "filename": "/usr/data/printer_data/gcodes/20250622_k1max_footparts02b.gcode",
+        "size": 1661634,
+        "ctime": 1750622594,
+        "starttime": 1750622600,
+        "startway": 11,
+        "usagetime": 1474,
+        "usagematerial": 4212.456479999999,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750622600.png",
+        "filemd5": "ac44eb4cbc65c11b27022c53df3e0248"
+      },
+      {
+        "id": 1750603621,
+        "filename": "/usr/data/printer_data/gcodes/20250622_k1max_footparts.gcode",
+        "size": 2055930,
+        "ctime": 1750600891,
+        "starttime": 1750603621,
+        "startway": 1,
+        "usagetime": 1094,
+        "usagematerial": 3043.2045100000014,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750603621.png",
+        "filemd5": "4e7bdabc84a678901c8f1dc1277a788b"
+      },
+      {
+        "id": 1750601801,
+        "filename": "/usr/data/printer_data/gcodes/20250622_k1max_footparts.gcode",
+        "size": 2055930,
+        "ctime": 1750600891,
+        "starttime": 1750601801,
+        "startway": 1,
+        "usagetime": 1094,
+        "usagematerial": 3043.2045100000114,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750601801.png",
+        "filemd5": "4e7bdabc84a678901c8f1dc1277a788b"
+      },
+      {
+        "id": 1750600903,
+        "filename": "/usr/data/printer_data/gcodes/20250622_k1max_footparts.gcode",
+        "size": 2055930,
+        "ctime": 1750600891,
+        "starttime": 1750600903,
+        "startway": 11,
+        "usagetime": 109,
+        "usagematerial": 192.5372099999995,
+        "printfinish": 0,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750600903.png",
+        "filemd5": "4e7bdabc84a678901c8f1dc1277a788b"
+      },
+      {
+        "id": 1750585677,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750585677,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000136,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750585677.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750583830,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750583830,
+        "startway": 1,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000136,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750583830.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750581942,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750581942,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000126,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750581942.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750580532,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750580532,
+        "startway": 1,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000017,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750580532.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750579109,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750579109,
+        "startway": 1,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000017,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750579109.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750575554,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750575554,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000017,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750575554.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750566892,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750566892,
+        "startway": 11,
+        "usagetime": 287,
+        "usagematerial": 562.4161900000004,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750566892.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750566123,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750566123,
+        "startway": 1,
+        "usagetime": 287,
+        "usagematerial": 562.4161899999988,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750566123.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750565412,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750565412,
+        "startway": 1,
+        "usagetime": 287,
+        "usagematerial": 562.4161899999991,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750565412.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750564759,
+        "filename": "/usr/data/printer_data/gcodes/20250622_kamidana_hook1.gcode",
+        "size": 248710,
+        "ctime": 1750564740,
+        "starttime": 1750564759,
+        "startway": 11,
+        "usagetime": 288,
+        "usagematerial": 562.4161899999996,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750564759.png",
+        "filemd5": "c898d61f097580389c880dc7c7a5de5f"
+      },
+      {
+        "id": 1750560223,
+        "filename": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "size": 3587317,
+        "ctime": 1748684434,
+        "starttime": 1750560223,
+        "startway": 11,
+        "usagetime": 1310,
+        "usagematerial": 2949.972899999877,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750560223.png",
+        "filemd5": "d49c172b014a9d98a7c7ce3407cfa1c0"
+      },
+      {
+        "id": 1750557078,
+        "filename": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "size": 3587317,
+        "ctime": 1748684434,
+        "starttime": 1750557078,
+        "startway": 1,
+        "usagetime": 1310,
+        "usagematerial": 2949.972899999877,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750557078.png",
+        "filemd5": "d49c172b014a9d98a7c7ce3407cfa1c0"
+      },
+      {
+        "id": 1750544626,
+        "filename": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "size": 3587317,
+        "ctime": 1748684434,
+        "starttime": 1750544626,
+        "startway": 11,
+        "usagetime": 1310,
+        "usagematerial": 2949.972899999877,
+        "printfinish": 1,
+        "thumbnail": "/usr/data//creality/userdata/history/humbnail/1750544626.png",
+        "filemd5": "d49c172b014a9d98a7c7ce3407cfa1c0"
+      }
+    ],
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "retGcodeFileInfo": {
+    "rawValue": {
+      "totalNum": 75,
+      "fileInfo": "/usr/data/printer_data/gcodes:printtest002.gcode:198493:0.300000:1752144977:252:/tmp/creality/local_gcode/humbnail/printtest002.png;/usr/data/printer_data/gcodes:KanbanS_AB_K1MAX20250707.gcode:3808407:0.300000:1751850493:33337:/tmp/creality/local_gcode/humbnail/KanbanS_AB_K1MAX20250707.png;/usr/data/printer_data/gcodes:20250706_meishitate03B_x1.gcode:1439920:0.300000:1751818110:3161:/tmp/creality/local_gcode/humbnail/20250706_meishitate03B_x1.png;/usr/data/printer_data/gcodes:20250706_meishitate02ab.gcode:5319320:0.300000:1751767046:22946:/tmp/creality/local_gcode/humbnail/20250706_meishitate02ab.png;/usr/data/printer_data/gcodes:SLv02-H01Sx3.gcode:12215520:0.300000:1751439512:75747:/tmp/creality/local_gcode/humbnail/SLv02-H01Sx3.png;/usr/data/printer_data/gcodes:20250622_k1max_footparts02b.gcode:1661634:0.300000:1750622594:4193:/tmp/creality/local_gcode/humbnail/20250622_k1max_footparts02b.png;/usr/data/printer_data/gcodes:20250622_k1max_footparts.gcode:2055930:0.300000:1750600891:3024:/tmp/creality/local_gcode/humbnail/20250622_k1max_footparts.png;/usr/data/printer_data/gcodes:20250622_kamidana_hook1.gcode:248710:0.300000:1750564740:543:/tmp/creality/local_gcode/humbnail/20250622_kamidana_hook1.png;/usr/data/printer_data/gcodes:raelle120.gcode:30583309:0.900000:1749977419:12383:/tmp/creality/local_gcode/humbnail/raelle120.png;/usr/data/printer_data/gcodes:msgsign01b__x1.gcode:8349150:0.300000:1749387915:19378:/tmp/creality/local_gcode/humbnail/msgsign01b__x1.png;/usr/data/printer_data/gcodes:msgsign01.gcode:8507692:0.300000:1749375583:19378:/tmp/creality/local_gcode/humbnail/msgsign01.png;/usr/data/printer_data/gcodes:monitorholder02b_x2.gcode:10360759:0.300000:1749325920:53168:/tmp/creality/local_gcode/humbnail/monitorholder02b_x2.png;/usr/data/printer_data/gcodes:monitorholder02b.gcode:5257699:0.300000:1749315981:27108:/tmp/creality/local_gcode/humbnail/monitorholder02b.png;/usr/data/printer_data/gcodes:monitorholder__02.gcode:5582819:0.300000:1749309320:27031:/tmp/creality/local_gcode/humbnail/monitorholder__02.png;/usr/data/printer_data/gcodes:monitorholder__01.gcode:1827634:0.300000:1749302556:23257:/tmp/creality/local_gcode/humbnail/monitorholder__01.png;/usr/data/printer_data/gcodes:20250526_19light_holder01bx2.gcode:1556158:0.300000:1749244537:7978:/tmp/creality/local_gcode/humbnail/20250526_19light_holder01bx2.png;/usr/data/printer_data/gcodes:20250526_19light_holder01x2.gcode:1710543:0.300000:1749208627:8027:/tmp/creality/local_gcode/humbnail/20250526_19light_holder01x2.png;/usr/data/printer_data/gcodes:20250605_wire_hook01.gcode:11819597:0.300000:1749052338:13820:/tmp/creality/local_gcode/humbnail/20250605_wire_hook01.png;/usr/data/printer_data/gcodes:raelle200___2.gcode:37952543:0.600000:1748864378:42678:/tmp/creality/local_gcode/humbnail/raelle200___2.png;/usr/data/printer_data/gcodes:raelle200_2.gcode:37782645:0.600000:1748863694:42151:/tmp/creality/local_gcode/humbnail/raelle200_2.png;/usr/data/printer_data/gcodes:raelle200__1.gcode:30752117:0.600000:1748835062:37751:/tmp/creality/local_gcode/humbnail/raelle200__1.png;/usr/data/printer_data/gcodes:raelle100_1.gcode:8869501:0.200000:1748818014:0:/tmp/creality/local_gcode/humbnail/raelle100_1.png;/usr/data/printer_data/gcodes:raelle100.gcode:8852985:0.300000:1748812286:5132:/tmp/creality/local_gcode/humbnail/raelle100.png;/usr/data/printer_data/gcodes:850f0ad536f59786b7be2b2e462587ae.gcode:23375313:0.300000:1748794624:23040:/tmp/creality/local_gcode/humbnail/850f0ad536f59786b7be2b2e462587ae.png;/usr/data/printer_data/gcodes:20250531_SL-P270NLE0_3.gcode:2094309:0.300000:1748794057:5778:/tmp/creality/local_gcode/humbnail/20250531_SL-P270NLE0_3.png;/usr/data/printer_data/gcodes:20250530_1925_wire_rack_converter3x1.gcode:3772927:0.300000:1748780798:3274:/tmp/creality/local_gcode/humbnail/20250530_1925_wire_rack_converter3x1.png;/usr/data/printer_data/gcodes:20250530_1925_wire_rack_converter2x1.gcode:3926943:0.300000:1748687014:3434:/tmp/creality/local_gcode/humbnail/20250530_1925_wire_rack_converter2x1.png;/usr/data/printer_data/gcodes:20250530_1925_wire_rack_converterx1.gcode:3587317:0.300000:1748684434:2931:/tmp/creality/local_gcode/humbnail/20250530_1925_wire_rack_converterx1.png;/usr/data/printer_data/gcodes:20250530_19_wire_rack_braket_x3.gcode:8852026:0.300000:1748674059:5817:/tmp/creality/local_gcode/humbnail/20250530_19_wire_rack_braket_x3.png;/usr/data/printer_data/gcodes:20250530_19_wire_rack_braketx1.gcode:2968681:0.300000:1748672377:1946:/tmp/creality/local_gcode/humbnail/20250530_19_wire_rack_braketx1.png;/usr/data/printer_data/gcodes:20250530_wire_rack_braketx1.gcode:3824862:0.300000:1748668176:3987:/tmp/creality/local_gcode/humbnail/20250530_wire_rack_braketx1.png;/usr/data/printer_data/gcodes:20250530_wire_rack_braketx2.gcode:7617531:0.300000:1748668166:7983:/tmp/creality/local_gcode/humbnail/20250530_wire_rack_braketx2.png;/usr/data/printer_data/gcodes:20250529_SL-P270NLE0_3.gcode:6789418:0.300000:1748615447:39926:/tmp/creality/local_gcode/humbnail/20250529_SL-P270NLE0_3.png;/usr/data/printer_data/gcodes:cDRUM07_F1D2.gcode:23447490:0.300000:1748527654:59578:/tmp/creality/local_gcode/humbnail/cDRUM07_F1D2.png;/usr/data/printer_data/gcodes:cDRUM07_F1D0.gcode:2734256:0.300000:1748527478:12789:/tmp/creality/local_gcode/humbnail/cDRUM07_F1D0.png;/usr/data/printer_data/gcodes:20250529_SL-P270NLE0_1_3.gcode:8695590:0.300000:1748526553:45242:/tmp/creality/local_gcode/humbnail/20250529_SL-P270NLE0_1_3.png;/usr/data/printer_data/gcodes:20250529_SL-P270NLE0_2.gcode:14749001:0.200000:1748475280:0:/tmp/creality/local_gcode/humbnail/20250529_SL-P270NLE0_2.png;/usr/data/printer_data/gcodes:20250527_light_holder04x6.gcode:4533463:0.300000:1748324431:23215:/tmp/creality/local_gcode/humbnail/20250527_light_holder04x6.png;/usr/data/printer_data/gcodes:20250527_light_holder04x2.gcode:1515475:0.200000:1748324170:0:/tmp/creality/local_gcode/humbnail/20250527_light_holder04x2.png;/usr/data/printer_data/gcodes:20250526_light_holder03x2.gcode:2289320:0.200000:1748319277:0:/tmp/creality/local_gcode/humbnail/20250526_light_holder03x2.png;/usr/data/printer_data/gcodes:20250526_light_holder03x1.gcode:1163470:0.200000:1748306004:0:/tmp/creality/local_gcode/humbnail/20250526_light_holder03x1.png;/usr/data/printer_data/gcodes:20250526_wire_rack_test02.gcode:1158876:0.200000:1748274011:0:/tmp/creality/local_gcode/humbnail/20250526_wire_rack_test02.png;/usr/data/printer_data/gcodes:20250526_wire_rack_test01.gcode:225328:0.300000:1748270776:639:/tmp/creality/local_gcode/humbnail/20250526_wire_rack_test01.png;/usr/data/printer_data/gcodes:20250525_wire_rack_tana01_c2.gcode:5200758:0.300000:1748262986:15138:/tmp/creality/local_gcode/humbnail/20250525_wire_rack_tana01_c2.png;/usr/data/printer_data/gcodes:20250525_wire_rack_tool_holder03hx2.gcode:11357671:0.300000:1748168208:20117:/tmp/creality/local_gcode/humbnail/20250525_wire_rack_tool_holder03hx2.png;/usr/data/printer_data/gcodes:20250525_SL-P270NLE0_2-3_b.gcode:7129330:0.300000:1748136202:47246:/tmp/creality/local_gcode/humbnail/20250525_SL-P270NLE0_2-3_b.png;/usr/data/printer_data/gcodes:20250524_wire_rack_tool_holder03g.gcode:10900435:0.300000:1748134732:10646:/tmp/creality/local_gcode/humbnail/20250524_wire_rack_tool_holder03g.png;/usr/data/printer_data/gcodes:20250525_SL-P270NLE0_1.gcode:11040178:0.300000:1748100218:106228:/tmp/creality/local_gcode/humbnail/20250525_SL-P270NLE0_1.png;/usr/data/printer_data/gcodes:20250524_wire_rack_braket.gcode:5538963:0.300000:1748075801:4498:/tmp/creality/local_gcode/humbnail/20250524_wire_rack_braket.png;/usr/data/printer_data/gcodes:20250524_wire_rack_tool_holder03b.gcode:3474313:0.300000:1748060972:5606:/tmp/creality/local_gcode/humbnail/20250524_wire_rack_tool_holder03b.png;/usr/data/printer_data/gcodes:20250524_SL-P270NLE0_2x2.gcode:1955476:0.900000:1748032915:22743:/tmp/creality/local_gcode/humbnail/20250524_SL-P270NLE0_2x2.png;/usr/data/printer_data/gcodes:20250523_SL-P270NLE0_2.gcode:923820:0.300000:1747950796:8704:/tmp/creality/local_gcode/humbnail/20250523_SL-P270NLE0_2.png;/usr/data/printer_data/gcodes:20250521_SL-P270NLE0_2_3_x2.gcode:15045700:0.300000:1747870719:82178:/tmp/creality/local_gcode/humbnail/20250521_SL-P270NLE0_2_3_x2.png;/usr/data/printer_data/gcodes:20250521_SL-P270NLE0_2_3.gcode:7575642:0.300000:1747870695:40905:/tmp/creality/local_gcode/humbnail/20250521_SL-P270NLE0_2_3.png;/usr/data/printer_data/gcodes:20250521_SL-P270NLE0_1.gcode:16643926:0.300000:1747870671:104632:/tmp/creality/local_gcode/humbnail/20250521_SL-P270NLE0_1.png;/usr/data/printer_data/gcodes:V2_K1_MAX_DOOR_PANEL_GAP_PLUG.gcode:1638263:0.300000:1747651287:11675:/tmp/creality/local_gcode/humbnail/V2_K1_MAX_DOOR_PANEL_GAP_PLUG.png;/usr/data/printer_data/gcodes:wire_rack_filament_holder_arm_03.gcode:29715900:0.300000:1747505049:28043:/tmp/creality/local_gcode/humbnail/wire_rack_filament_holder_arm_03.png;/usr/data/printer_data/gcodes:wire_rack_filament_holder_03.gcode:6753059:0.300000:1747489931:15876:/tmp/creality/local_gcode/humbnail/wire_rack_filament_holder_03.png;/usr/data/printer_data/gcodes:wire_rack_adapter03.gcode:939563:0.300000:1747483498:4826:/tmp/creality/local_gcode/humbnail/wire_rack_adapter03.png;/usr/data/printer_data/gcodes:wire_rack_adapter02.gcode:900563:0.300000:1747476355:3735:/tmp/creality/local_gcode/humbnail/wire_rack_adapter02.png;/usr/data/printer_data/gcodes:20250516_k1max_clock_holder3.gcode:5740302:0.300000:1747429603:15952:/tmp/creality/local_gcode/humbnail/20250516_k1max_clock_holder3.png;/usr/data/printer_data/gcodes:wire_rack_adapter01.gcode:979306:0.300000:1747418266:2036:/tmp/creality/local_gcode/humbnail/wire_rack_adapter01.png;/usr/data/printer_data/gcodes:cDRUM07_F1D1.gcode:13008230:0.300000:1747384960:36117:/tmp/creality/local_gcode/humbnail/cDRUM07_F1D1.png;/usr/data/printer_data/gcodes:SLv2_S27END_E0_x4.gcode:7704661:0.300000:1747280485:42628:/tmp/creality/local_gcode/humbnail/SLv2_S27END_E0_x4.png;/usr/data/printer_data/gcodes:SLv2_P135NLE0_1.gcode:23481917:0.300000:1747224876:148702:/tmp/creality/local_gcode/humbnail/SLv2_P135NLE0_1.png;/usr/data/printer_data/gcodes:SLv2_C306-45E0_x2.gcode:39891586:0.300000:1747178421:142276:/tmp/creality/local_gcode/humbnail/SLv2_C306-45E0_x2.png;/usr/data/printer_data/gcodes:K1Max_Silicone_Nozzle_Cleaner_.gcode:834423:0.300000:1747641482:980:/tmp/creality/local_gcode/humbnail/K1Max_Silicone_Nozzle_Cleaner_.png;/usr/data/printer_data/gcodes:K1-Max-cable-chain-guide-V05_2.gcode:656732:0.300000:1747172279:5892:/tmp/creality/local_gcode/humbnail/K1-Max-cable-chain-guide-V05_2.png;/usr/data/printer_data/gcodes:K1-Max-cable-chain-guide-V05.gcode:4601051:0.300000:1747149937:6514:/tmp/creality/local_gcode/humbnail/K1-Max-cable-chain-guide-V05.png;/usr/data/printer_data/gcodes:k1max_unko_test_50%.gcode:9005669:0.300000:1747141039:5139:/tmp/creality/local_gcode/humbnail/k1max_unko_test_50%.png;/usr/data/printer_data/gcodes:CRtestcube_Hyper PLA_26m51s.gcode:2180875:0.200000:1583082470:3788:/tmp/creality/local_gcode/humbnail/CRtestcube_Hyper PLA_26m51s.png;/usr/data/printer_data/gcodes:K1 MAX Side Spool Holder-K1 Max_0.4_Hyper PLA_43m.gcode:1676726:0.000000:1583082471:10597:/tmp/creality/local_gcode/humbnail/K1 MAX Side Spool Holder-K1 Max_0.4_Hyper PLA_43m.png;/usr/data/printer_data/gcodes:scraper-K1 Max_0.4_Hyper PLA_28m.gcode:2557664:0.000000:1583082472:3047:/tmp/creality/local_gcode/humbnail/scraper-K1 Max_0.4_Hyper PLA_28m.png;/usr/data/printer_data/gcodes:3DBenchy_Hyper PLA_16m42s .gcode:2266022:0.250000:1583082470:3656:/tmp/creality/local_gcode/humbnail/3DBenchy_Hyper PLA_16m42s .png;/usr/data/printer_data/gcodes:Spool_holder_Hyper PLA_1H49m.gcode:8991226:0.200000:1583082471:33095:/tmp/creality/local_gcode/humbnail/Spool_holder_Hyper PLA_1H49m.png;"
+    },
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "materialLengthFallback": {
+    "rawValue": 562,
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": false
+  },
+  "current_object": {
+    "rawValue": "",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "excluded_objects": {
+    "rawValue": "",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "objects": {
+    "rawValue": "",
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "probedMatrix": {
+    "rawValue": {
+      "num": 36,
+      "val": [
+        {
+          "x": "5.000000",
+          "y": "5.000000",
+          "z": "0.456646"
+        },
+        {
+          "x": "63.000000",
+          "y": "5.000000",
+          "z": "0.303552"
+        },
+        {
+          "x": "121.000000",
+          "y": "5.000000",
+          "z": "0.266490"
+        },
+        {
+          "x": "179.000000",
+          "y": "5.000000",
+          "z": "0.356052"
+        },
+        {
+          "x": "237.000000",
+          "y": "5.000000",
+          "z": "0.613365"
+        },
+        {
+          "x": "295.000000",
+          "y": "5.000000",
+          "z": "1.152458"
+        },
+        {
+          "x": "5.000000",
+          "y": "63.000000",
+          "z": "0.327146"
+        },
+        {
+          "x": "63.000000",
+          "y": "63.000000",
+          "z": "0.180052"
+        },
+        {
+          "x": "121.000000",
+          "y": "63.000000",
+          "z": "0.139615"
+        },
+        {
+          "x": "179.000000",
+          "y": "63.000000",
+          "z": "0.207606"
+        },
+        {
+          "x": "237.000000",
+          "y": "63.000000",
+          "z": "0.414333"
+        },
+        {
+          "x": "295.000000",
+          "y": "63.000000",
+          "z": "0.806146"
+        },
+        {
+          "x": "5.000000",
+          "y": "121.000000",
+          "z": "0.281390"
+        },
+        {
+          "x": "63.000000",
+          "y": "121.000000",
+          "z": "0.107583"
+        },
+        {
+          "x": "121.000000",
+          "y": "121.000000",
+          "z": "0.096333"
+        },
+        {
+          "x": "179.000000",
+          "y": "121.000000",
+          "z": "0.124052"
+        },
+        {
+          "x": "237.000000",
+          "y": "121.000000",
+          "z": "0.308754"
+        },
+        {
+          "x": "295.000000",
+          "y": "121.000000",
+          "z": "0.604833"
+        },
+        {
+          "x": "5.000000",
+          "y": "179.000000",
+          "z": "0.223646"
+        },
+        {
+          "x": "63.000000",
+          "y": "179.000000",
+          "z": "0.122365"
+        },
+        {
+          "x": "121.000000",
+          "y": "179.000000",
+          "z": "0.053313"
+        },
+        {
+          "x": "179.000000",
+          "y": "179.000000",
+          "z": "0.086302"
+        },
+        {
+          "x": "237.000000",
+          "y": "179.000000",
+          "z": "0.221115"
+        },
+        {
+          "x": "295.000000",
+          "y": "179.000000",
+          "z": "0.494990"
+        },
+        {
+          "x": "5.000000",
+          "y": "237.000000",
+          "z": "0.159311"
+        },
+        {
+          "x": "63.000000",
+          "y": "237.000000",
+          "z": "0.041856"
+        },
+        {
+          "x": "121.000000",
+          "y": "237.000000",
+          "z": "-0.005479"
+        },
+        {
+          "x": "179.000000",
+          "y": "237.000000",
+          "z": "0.012777"
+        },
+        {
+          "x": "237.000000",
+          "y": "237.000000",
+          "z": "0.127396"
+        },
+        {
+          "x": "295.000000",
+          "y": "237.000000",
+          "z": "0.391305"
+        },
+        {
+          "x": "5.000000",
+          "y": "295.000000",
+          "z": "-0.055948"
+        },
+        {
+          "x": "63.000000",
+          "y": "295.000000",
+          "z": "-0.182667"
+        },
+        {
+          "x": "121.000000",
+          "y": "295.000000",
+          "z": "-0.212354"
+        },
+        {
+          "x": "179.000000",
+          "y": "295.000000",
+          "z": "-0.154718"
+        },
+        {
+          "x": "237.000000",
+          "y": "295.000000",
+          "z": "-0.000073"
+        },
+        {
+          "x": "295.000000",
+          "y": "295.000000",
+          "z": "0.280865"
+        }
+      ]
+    },
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  },
+  "elapseVideoList": {
+    "rawValue": [
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1752099297,
+        "video": "/usr/data//creality/userdata/delay_image/video/1752099297.mp4",
+        "size": 2366436,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1752099297.png",
+        "starttime": 1752099297,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1752099297.mp4",
+        "printId": "686ee9e297fb0b32d55af430",
+        "upload": 1,
+        "videoid": "00a00aca5d3171f0b04c5114c0db0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1752053741,
+        "video": "/usr/data//creality/userdata/delay_image/video/1752053741.mp4",
+        "size": 2047370,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1752053741.png",
+        "starttime": 1752053741,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1752053741.mp4",
+        "printId": "686e37ef97fb0b32d554ccee",
+        "upload": 1,
+        "videoid": "4059f6725cc771f0b04b5114c0db0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1752031072,
+        "video": "/usr/data//creality/userdata/delay_image/video/1752031072.mp4",
+        "size": 2215188,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1752031072.png",
+        "starttime": 1752031072,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1752031072.mp4",
+        "printId": "686ddf6197fb0b32d552c9ba",
+        "upload": 1,
+        "videoid": "f0eb0abf5c9271f0bc5e87c7361c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1752014658,
+        "video": "/usr/data//creality/userdata/delay_image/video/1752014658.mp4",
+        "size": 2349275,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1752014658.png",
+        "starttime": 1752014658,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1752014658.mp4",
+        "printId": "686d9f437e1047767c41af16",
+        "upload": 1,
+        "videoid": "20ee1c835c6c71f0bff04177d0d10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1751976310,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751976310.mp4",
+        "size": 2100113,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751976310.png",
+        "starttime": 1751976310,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1751976310.mp4",
+        "printId": "686d097797fb0b32d54b7eca",
+        "upload": 1,
+        "videoid": "608a2c645c1371f0bfae4177d1c10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1751930771,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751930771.mp4",
+        "size": 2248208,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751930771.png",
+        "starttime": 1751930771,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1751930771.mp4",
+        "printId": "686c57947e1047767c1b64f5",
+        "upload": 1,
+        "videoid": "908ecf155ba971f086702680f9ea0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1751917073,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751917073.mp4",
+        "size": 2360723,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751917073.png",
+        "starttime": 1751917073,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1751917073.mp4",
+        "printId": "686c221297fb0b32d5437eb3",
+        "upload": 1,
+        "videoid": "3086e37f5b8971f0bfae87c6371c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1751887974,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751887974.mp4",
+        "size": 2036376,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751887974.png",
+        "starttime": 1751887974,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1751887974.mp4",
+        "printId": "686bb0677e1047767c190715",
+        "upload": 1,
+        "videoid": "906fc7555b4571f0bfab87c6371c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/KanbanS_AB_K1MAX20250707.gcode",
+        "id": 1751850517,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751850517.mp4",
+        "size": 2246501,
+        "duration": 3,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751850517.png",
+        "starttime": 1751850517,
+        "printtime": 12941,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "KanbanS_AB_K1MAX20250707.gcode",
+        "videoname": "1751850517.mp4",
+        "printId": "686b1e1697fb0b32d53bc2db",
+        "upload": 1,
+        "videoid": "2004783c5aee71f0bffa97c6360c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "id": 1751840960,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751840960.mp4",
+        "size": 2713512,
+        "duration": 4,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751840960.png",
+        "starttime": 1751840960,
+        "printtime": 1202,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250706_meishitate03B_x1.gcode",
+        "videoname": "1751840960.mp4",
+        "printId": "686af8c197fb0b32d53abb26",
+        "upload": 1,
+        "videoid": "e037e55d5abc71f0800187c7371d0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "id": 1751825754,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751825754.mp4",
+        "size": 2855064,
+        "duration": 4,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751825754.png",
+        "starttime": 1751825754,
+        "printtime": 1202,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250706_meishitate03B_x1.gcode",
+        "videoname": "1751825754.mp4",
+        "printId": "686abd5b97fb0b32d538911a",
+        "upload": 1,
+        "videoid": "20f3b4245a9971f0a09636a5e8aa0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250706_meishitate03B_x1.gcode",
+        "id": 1751823209,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751823209.mp4",
+        "size": 2579664,
+        "duration": 4,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751823209.png",
+        "starttime": 1751823209,
+        "printtime": 1202,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250706_meishitate03B_x1.gcode",
+        "videoname": "1751823209.mp4",
+        "printId": "686ab36a97fb0b32d538280b",
+        "upload": 1,
+        "videoid": "7057bd315a9371f0866c2680f9ea0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250706_meishitate02ab.gcode",
+        "id": 1751767055,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751767055.mp4",
+        "size": 15831731,
+        "duration": 25,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751767055.png",
+        "starttime": 1751767055,
+        "printtime": 7461,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250706_meishitate02ab.gcode",
+        "videoname": "1751767055.mp4",
+        "printId": "6869d81097fb0b32d531f776",
+        "upload": 1,
+        "videoid": "a034a7f55a1e71f0bfeb4177d0d10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1751098842,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751098842.mp4",
+        "size": 7755889,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751098842.png",
+        "starttime": 1751098842,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1751098842.mp4",
+        "printId": "685fa5db97fb0b32d5e1ac53",
+        "upload": 1,
+        "videoid": "a03f9fe853fc71f0bfe497c6360c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1751096830,
+        "video": "/usr/data//creality/userdata/delay_image/video/1751096830.mp4",
+        "size": 2844064,
+        "duration": 4,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1751096830.png",
+        "starttime": 1751096830,
+        "printtime": 1182,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1751096830.mp4",
+        "printId": "685f9dff97fb0b32d5e17b03",
+        "upload": 1,
+        "videoid": "b011df9353f871f09b924177d1c00102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250622_k1max_footparts02b.gcode",
+        "id": 1750622600,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750622600.mp4",
+        "size": 2550675,
+        "duration": 4,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750622600.png",
+        "starttime": 1750622600,
+        "printtime": 1474,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250622_k1max_footparts02b.gcode",
+        "videoname": "1750622600.mp4",
+        "printId": "68586189073141230458c58c",
+        "upload": 1,
+        "videoid": "50af7eba4fa871f0bf8d4177d1c10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250622_k1max_footparts.gcode",
+        "id": 1750603621,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750603621.mp4",
+        "size": 5091137,
+        "duration": 8,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750603621.png",
+        "starttime": 1750603621,
+        "printtime": 1094,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250622_k1max_footparts.gcode",
+        "videoname": "1750603621.mp4",
+        "printId": "68581766073141230455b516",
+        "upload": 1,
+        "videoid": "b0f8ac744f7b71f0bfca5014c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250622_k1max_footparts.gcode",
+        "id": 1750601801,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750601801.mp4",
+        "size": 4914972,
+        "duration": 7,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750601801.png",
+        "starttime": 1750601801,
+        "printtime": 1094,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250622_k1max_footparts.gcode",
+        "videoname": "1750601801.mp4",
+        "printId": "6858104a07314123045571c6",
+        "upload": 1,
+        "videoid": "8089ce1e4f7771f0a07436a5e8aa0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750519413,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750519413.mp4",
+        "size": 7717402,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750519413.png",
+        "starttime": 1750519413,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750519413.mp4",
+        "printId": "6856ce7707314123044bde23",
+        "upload": 1,
+        "videoid": "30ad3c7f4eb771f0bf8987c6371c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750516306,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750516306.mp4",
+        "size": 7357192,
+        "duration": 11,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750516306.png",
+        "starttime": 1750516306,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750516306.mp4",
+        "printId": "6856c25307314123044b6dd7",
+        "upload": 1,
+        "videoid": "a0ac4b3f4eb071f0bfca5014c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750512796,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750512796.mp4",
+        "size": 7551962,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750512796.png",
+        "starttime": 1750512796,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750512796.mp4",
+        "printId": "6856b49d07314123044aefb7",
+        "upload": 1,
+        "videoid": "903774174ea871f0bfd44177d0d10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750509733,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750509733.mp4",
+        "size": 7671745,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750509733.png",
+        "starttime": 1750509733,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750509733.mp4",
+        "printId": "6856a8a607314123044a889a",
+        "upload": 1,
+        "videoid": "106e0d064ea171f0bfdb87c7371d0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750468137,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750468137.mp4",
+        "size": 7335274,
+        "duration": 11,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750468137.png",
+        "starttime": 1750468137,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750468137.mp4",
+        "printId": "6856062afaa642eac1b8d67d",
+        "upload": 1,
+        "videoid": "606cd4244e4071f0bf8987c6371c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750460374,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750460374.mp4",
+        "size": 7327907,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750460374.png",
+        "starttime": 1750460374,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750460374.mp4",
+        "printId": "6855e7d7073141230445a6fd",
+        "upload": 1,
+        "videoid": "10cee7204e2e71f084725114c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750428958,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750428958.mp4",
+        "size": 7590065,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750428958.png",
+        "starttime": 1750428958,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750428958.mp4",
+        "printId": "68556d1f073141230440dc3c",
+        "upload": 1,
+        "videoid": "80ca7dea4de471f0800186c6360c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750418575,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750418575.mp4",
+        "size": 7706770,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750418575.png",
+        "starttime": 1750418575,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750418575.mp4",
+        "printId": "6855449007314123043f9d37",
+        "upload": 1,
+        "videoid": "0057bcb24dcc71f0800186c6360c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750370457,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750370457.mp4",
+        "size": 7391271,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750370457.png",
+        "starttime": 1750370457,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750370457.mp4",
+        "printId": "6854889afaa642eac1b46427",
+        "upload": 1,
+        "videoid": "d0ecf3c64d5c71f084705114c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750332012,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750332012.mp4",
+        "size": 7499390,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750332012.png",
+        "starttime": 1750332012,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "videoid": "1750332012",
+        "upload": 0,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750332012.mp4",
+        "printId": "6853f26d0731412304344902"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750329759,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750329759.mp4",
+        "size": 7701106,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750329759.png",
+        "starttime": 1750329759,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750329759.mp4",
+        "printId": "6853e9a0073141230433f8a8",
+        "upload": 1,
+        "videoid": "f06ea0e14cfd71f0bfd887c7371d0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750327386,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750327386.mp4",
+        "size": 7356379,
+        "duration": 11,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750327386.png",
+        "starttime": 1750327386,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750327386.mp4",
+        "printId": "6853e05c073141230433ab39",
+        "upload": 1,
+        "videoid": "30415e624cf871f09b7f4177d1c00102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250530_1925_wire_rack_converterx1.gcode",
+        "id": 1750296021,
+        "video": "/usr/data//creality/userdata/delay_image/video/1750296021.mp4",
+        "size": 7383868,
+        "duration": 12,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1750296021.png",
+        "starttime": 1750296021,
+        "printtime": 1310,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250530_1925_wire_rack_converterx1.gcode",
+        "videoname": "1750296021.mp4",
+        "printId": "685365d70589abc629f40098",
+        "upload": 1,
+        "videoid": "e05da0744caf71f0bf854177d1c10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/raelle120.gcode",
+        "id": 1749978345,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749978345.mp4",
+        "size": 29034847,
+        "duration": 47,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749978345.png",
+        "starttime": 1749978345,
+        "printtime": 8104,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "raelle120.gcode",
+        "videoname": "1749978345.mp4",
+        "printId": "684e8ceb0731412304058855",
+        "upload": 1,
+        "videoid": "b0048ef049db71f080055014c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/msgsign01b__x1.gcode",
+        "id": 1749820267,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749820267.mp4",
+        "size": 22071520,
+        "duration": 35,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749820267.png",
+        "starttime": 1749820267,
+        "printtime": 6093,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "msgsign01b__x1.gcode",
+        "videoname": "1749820267.mp4",
+        "printId": "684c236c0731412304f2ce15",
+        "upload": 1,
+        "videoid": "a0f04140486771f0bfb42680f9ea0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/raelle200___2.gcode",
+        "id": 1749469736,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749469736.mp4",
+        "size": 41289591,
+        "duration": 66,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749469736.png",
+        "starttime": 1749469736,
+        "printtime": 18490,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "raelle200___2.gcode",
+        "videoname": "1749469736.mp4",
+        "printId": "6846ca2a484aeb342b5fdd2b",
+        "upload": 1,
+        "videoid": "d0207fbe455371f08d514177d1c10102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/raelle200___2.gcode",
+        "id": 1749426363,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749426363.mp4",
+        "size": 41380102,
+        "duration": 66,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749426363.png",
+        "starttime": 1749426363,
+        "printtime": 18490,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "raelle200___2.gcode",
+        "videoname": "1749426363.mp4",
+        "printId": "684620bdab2744d8c15c213a",
+        "upload": 1,
+        "videoid": "a03c0ee044ee71f0bfae5014c1da0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/msgsign01b__x1.gcode",
+        "id": 1749405666,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749405666.mp4",
+        "size": 22155685,
+        "duration": 35,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749405666.png",
+        "starttime": 1749405666,
+        "printtime": 6093,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "msgsign01b__x1.gcode",
+        "videoname": "1749405666.mp4",
+        "printId": "6845cfe3a317339c9aa05739",
+        "upload": 1,
+        "videoid": "702961e144a171f0bfbc5114c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/msgsign01b__x1.gcode",
+        "id": 1749394398,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749394398.mp4",
+        "size": 22191756,
+        "duration": 35,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749394398.png",
+        "starttime": 1749394398,
+        "printtime": 6093,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "msgsign01b__x1.gcode",
+        "videoname": "1749394398.mp4",
+        "printId": "6845a3e0a317339c9a9e7179",
+        "upload": 1,
+        "videoid": "70be595a448771f0bfe987c7361c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/msgsign01b__x1.gcode",
+        "id": 1749387944,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749387944.mp4",
+        "size": 22181638,
+        "duration": 35,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749387944.png",
+        "starttime": 1749387944,
+        "printtime": 6093,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "msgsign01b__x1.gcode",
+        "videoname": "1749387944.mp4",
+        "printId": "68458aa9a317339c9a9d7828",
+        "upload": 1,
+        "videoid": "30f8e14b447871f0bff54177d1c00102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/msgsign01.gcode",
+        "id": 1749379622,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749379622.mp4",
+        "size": 22220007,
+        "duration": 35,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749379622.png",
+        "starttime": 1749379622,
+        "printtime": 6089,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "msgsign01.gcode",
+        "videoname": "1749379622.mp4",
+        "printId": "68456a27a317339c9a9c6763",
+        "upload": 1,
+        "videoid": "705547e9446471f0bfe987c7361c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/msgsign01.gcode",
+        "id": 1749375590,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749375590.mp4",
+        "size": 6045175,
+        "duration": 9,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749375590.png",
+        "starttime": 1749375590,
+        "printtime": 2335,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "msgsign01.gcode",
+        "videoname": "1749375590.mp4",
+        "printId": "68455a68ab2744d8c1594b09",
+        "upload": 1,
+        "videoid": "f0bc9a0b445371f0bf3436a5e8aa0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/monitorholder02b_x2.gcode",
+        "id": 1749325924,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749325924.mp4",
+        "size": 19668436,
+        "duration": 32,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749325924.png",
+        "starttime": 1749325924,
+        "printtime": 16205,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "monitorholder02b_x2.gcode",
+        "videoname": "1749325924.mp4",
+        "printId": "68449865a317339c9a96adb1",
+        "upload": 1,
+        "videoid": "30400e7e43ff71f0800387c7371d0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/monitorholder02b.gcode",
+        "id": 1749318082,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749318082.mp4",
+        "size": 15993241,
+        "duration": 25,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749318082.png",
+        "starttime": 1749318082,
+        "printtime": 6607,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "monitorholder02b.gcode",
+        "videoname": "1749318082.mp4",
+        "printId": "684479c4a317339c9a9572aa",
+        "upload": 1,
+        "videoid": "60de8fcf43d671f0bff54177d1c00102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/monitorholder02b.gcode",
+        "id": 1749315986,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749315986.mp4",
+        "size": 4027461,
+        "duration": 6,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749315986.png",
+        "starttime": 1749315986,
+        "printtime": 1765,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "videoid": "1749315986",
+        "upload": 0,
+        "gcodename": "monitorholder02b.gcode",
+        "videoname": "1749315986.mp4",
+        "printId": "68447193ab2744d8c156abc7"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/monitorholder__02.gcode",
+        "id": 1749309327,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749309327.mp4",
+        "size": 14065867,
+        "duration": 22,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749309327.png",
+        "starttime": 1749309327,
+        "printtime": 5828,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "monitorholder__02.gcode",
+        "videoname": "1749309327.mp4",
+        "printId": "68445790a317339c9a9404bb",
+        "upload": 1,
+        "videoid": "40868da643c071f0bf3436a5e8aa0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/monitorholder__01.gcode",
+        "id": 1749307199,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749307199.mp4",
+        "size": 4927159,
+        "duration": 8,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749307199.png",
+        "starttime": 1749307199,
+        "printtime": 1779,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "monitorholder__01.gcode",
+        "videoname": "1749307199.mp4",
+        "printId": "68444f40a317339c9a93b0e9",
+        "upload": 1,
+        "videoid": "b0d6603a43b271f08f155114c0db0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/monitorholder__01.gcode",
+        "id": 1749302561,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749302561.mp4",
+        "size": 12114607,
+        "duration": 19,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749302561.png",
+        "starttime": 1749302561,
+        "printtime": 4181,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "monitorholder__01.gcode",
+        "videoname": "1749302561.mp4",
+        "printId": "68443d22ab2744d8c155e0f5",
+        "upload": 1,
+        "videoid": "50d19f1a43ad71f0bfbb5114c1ca0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250526_19light_holder01bx2.gcode",
+        "id": 1749250599,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749250599.mp4",
+        "size": 4108165,
+        "duration": 6,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749250599.png",
+        "starttime": 1749250599,
+        "printtime": 3744,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250526_19light_holder01bx2.gcode",
+        "videoname": "1749250599.mp4",
+        "printId": "68437228a317339c9a784fbf",
+        "upload": 1,
+        "videoid": "70629719433371f0bfe587c7361c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250526_19light_holder01bx2.gcode",
+        "id": 1749244543,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749244543.mp4",
+        "size": 3728398,
+        "duration": 6,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749244543.png",
+        "starttime": 1749244543,
+        "printtime": 3744,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250526_19light_holder01bx2.gcode",
+        "videoname": "1749244543.mp4",
+        "printId": "68435a7fa317339c9a73531a",
+        "upload": 1,
+        "videoid": "906f8586432871f0bfab5014c1da0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250526_19light_holder01x2.gcode",
+        "id": 1749208640,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749208640.mp4",
+        "size": 3751415,
+        "duration": 6,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749208640.png",
+        "starttime": 1749208640,
+        "printtime": 3786,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250526_19light_holder01x2.gcode",
+        "videoname": "1749208640.mp4",
+        "printId": "6842ce41a317339c9a6e3c97",
+        "upload": 1,
+        "videoid": "206acfa442d171f0958397c6360c0102"
+      },
+      {
+        "name": "/usr/data/printer_data/gcodes/20250605_wire_hook01.gcode",
+        "id": 1749068114,
+        "video": "/usr/data//creality/userdata/delay_image/video/1749068114.mp4",
+        "size": 5908268,
+        "duration": 9,
+        "cover": "/usr/data//creality/userdata/delay_image/cover/1749068114.png",
+        "starttime": 1749068114,
+        "printtime": 3950,
+        "location": 0,
+        "interval": 1,
+        "render": 15,
+        "gcodename": "20250605_wire_hook01.gcode",
+        "videoname": "1749068114.mp4",
+        "printId": "6840a9523c2412793a5df0a3",
+        "upload": 1,
+        "videoid": "d0041cb5418a71f0bfa35014c1da0102"
+      }
+    ],
+    "computedValue": null,
+    "isNew": false,
+    "isFromEquipVal": true
+  }
+}
