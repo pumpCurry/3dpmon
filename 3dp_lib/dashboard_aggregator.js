@@ -21,9 +21,9 @@
  * - {@link stopAggregatorTimer}：集約ループ停止
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  *
-* @version 1.390.696 (PR #321)
+* @version 1.390.697 (PR #322)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-10 21:05:00
+* @lastModified 2025-07-10 21:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -195,6 +195,16 @@ export function ingestData(data) {
       setStoredData(f, null, true);
       setStoredData(f, null, false);
     });
+    // 新しいジョブIDを検出した際、現在スプールにもIDを反映する
+    const spool = getCurrentSpool();
+    if (spool && spool.currentPrintID !== String(id)) {
+      if (spool.currentJobExpectedLength == null) {
+        // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
+        reserveFilament(0, String(id));
+      } else {
+        spool.currentPrintID = String(id);
+      }
+    }
     prevPrintID = id;
   }
 
