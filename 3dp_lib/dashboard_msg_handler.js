@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
- * @version 1.390.690 (PR #320)
- * @since   1.390.214 (PR #95)
- * @lastModified 2025-07-10 20:08:16
+* @version 1.390.696 (PR #321)
+* @since   1.390.214 (PR #95)
+* @lastModified 2025-07-10 21:05:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -63,6 +63,7 @@ import {
   restartAggregatorTimer,
   persistAggregatorState,
   setHistoryPersistFunc,
+  aggregatorUpdate,
 } from "./dashboard_aggregator.js";
 import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
@@ -118,6 +119,12 @@ function persistHistoryTimers(printId) {
   printManager.updateHistoryList([entry], baseUrl);
   persistPrintResume();
   persistAggregatorState();
+  // 値を保存したら即座に画面へ反映する
+  try {
+    aggregatorUpdate();
+  } catch (e) {
+    console.error("aggregatorUpdate error", e);
+  }
 }
 
 // aggregator へ履歴永続化フックを登録

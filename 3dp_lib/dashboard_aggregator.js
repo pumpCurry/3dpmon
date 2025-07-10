@@ -21,9 +21,9 @@
  * - {@link stopAggregatorTimer}：集約ループ停止
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  *
-* @version 1.390.678 (PR #313)
+* @version 1.390.696 (PR #321)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-10 07:45:00
+* @lastModified 2025-07-10 21:05:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -148,7 +148,8 @@ export function ingestData(data) {
 
   // —— キー初期化 ——  
   // まだ storedData に存在しないフィールドは rawValue=null で準備
-  if (srcId === "none")  setStoredData("printStartTime",  null, true);
+  // printStartTime が未送信の場合は値を保持し、明示的な null のみクリアする
+  if (srcId === "data-null") setStoredData("printStartTime",  null, true);
   if (jobRaw === null)    setStoredData("printJobTime",     null, true);
   if (leftRaw === null)   setStoredData("printLeftTime",    null, true);
   if (selfRaw === null)   setStoredData("withSelfTest",     null, true);
@@ -180,7 +181,8 @@ export function ingestData(data) {
   }
 
   // (0) 新しい PrintID 検出 → 全リセット
-  if (id !== prevPrintID) {
+  const validId = Number.isFinite(id) && id > 0;
+  if (validId && id !== prevPrintID) {
     tsPrepStart = tsCheckStart = tsPauseStart = tsCompleteStart = null;
     totalPrepSec = totalCheckSec = totalPauseSec = 0;
     actualStartEpoch = initialLeftSec = initialLeftEpoch = null;
@@ -439,14 +441,15 @@ function aggregateTimersAndPredictions(data) {
   const finish  = Number(finishRaw) || 0;
 
   // ── 2) PrintID 切替検出 → 各種リセット ────────────────────────────────────
-  if (prevPrintID !== null && id !== prevPrintID) {
+  const validId_ap = Number.isFinite(id) && id > 0;
+  if (prevPrintID !== null && validId_ap && id !== prevPrintID) {
     {
       tsPrepStart   = tsCheckStart   = tsPauseStart   = tsCompleteStart   = null;
       totalPrepSec  = totalCheckSec  = totalPauseSec                      = 0;
       prevPrintID   = id;
     }
   }
-  else if (prevPrintID === null) {
+  else if (prevPrintID === null && validId_ap) {
     // 初回読み込み時だけは prevPrintID をセットして、次回以降の切替検出に備える
     prevPrintID = id;
   }
