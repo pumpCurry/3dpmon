@@ -22,9 +22,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.705 (PR #326)
+ * @version 1.390.711 (PR #327)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:48:59
+ * @lastModified 2025-07-10 23:53:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -184,26 +184,7 @@ export function ingestData(data) {
   // (0) 新しい PrintID 検出 → 全リセット
   const validId = Number.isFinite(id) && id > 0;
   if (validId && id !== prevPrintID) {
-    if (prevPrintID === null && actualStartEpoch !== null) {
-      // printJobTime から開始済みのジョブに ID が後から届いた場合
-      const spool = getCurrentSpool();
-      if (spool && spool.currentPrintID !== String(id)) {
-        if (spool.currentJobExpectedLength == null) {
-          // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
-          reserveFilament(0, String(id));
-        } else {
-          spool.currentPrintID = String(id);
-        }
-      }
-      prevPrintID = id;
-      if (historyPersistFunc) {
-        try {
-          historyPersistFunc(id);
-        } catch (e) {
-          console.error("historyPersistFunc error", e);
-        }
-      }
-    } else {
+    if (actualStartEpoch === null) {
       tsPrepStart = tsCheckStart = tsPauseStart = tsCompleteStart = null;
       totalPrepSec = totalCheckSec = totalPauseSec = 0;
       actualStartEpoch = initialLeftSec = initialLeftEpoch = null;
@@ -216,17 +197,24 @@ export function ingestData(data) {
         setStoredData(f, null, true);
         setStoredData(f, null, false);
       });
-      // 新しいジョブIDを検出した際、現在スプールにもIDを反映する
-      const spool = getCurrentSpool();
-      if (spool && spool.currentPrintID !== String(id)) {
-        if (spool.currentJobExpectedLength == null) {
-          // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
-          reserveFilament(0, String(id));
-        } else {
-          spool.currentPrintID = String(id);
-        }
+    }
+
+    const spool = getCurrentSpool();
+    if (spool && spool.currentPrintID !== String(id)) {
+      if (spool.currentJobExpectedLength == null) {
+        // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
+        reserveFilament(0, String(id));
+      } else {
+        spool.currentPrintID = String(id);
       }
-      prevPrintID = id;
+    }
+    prevPrintID = id;
+    if (historyPersistFunc) {
+      try {
+        historyPersistFunc(id);
+      } catch (e) {
+        console.error("historyPersistFunc error", e);
+      }
     }
   }
 
