@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
- * @version 1.390.678 (PR #313)
+ * @version 1.390.690 (PR #320)
  * @since   1.390.214 (PR #95)
- * @lastModified 2025-07-10 07:45:00
+ * @lastModified 2025-07-10 20:08:16
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -322,13 +322,27 @@ export function processData(data) {
   const resetPrep       = () => {
     clearInterval(prepTimerId);
     tsPrintStart = tsPrepEnd = null;
-    setStoredData("preparationTime",       null, true);
+    // 値の消失を防ぐため storedData は保持したままにする
     persistPrintResume();
     persistAggregatorState();
   };
-  const resetCheck      = () => { clearInterval(checkTimerId);      tsCheckStart=tsCheckEnd=null; totalCheckSeconds=0; setStoredData("firstLayerCheckTime", null, true); };
-  const resetPause      = () => { clearInterval(pauseTimerId);      tsPauseStart=null; totalPauseSeconds=0;  setStoredData("pauseTime",             null, true); };
-  const resetCompletion = () => { clearInterval(completionTimer);  tsCompletion=null;         setStoredData("completionElapsedTime", null, true); };
+  const resetCheck      = () => {
+    clearInterval(checkTimerId);
+    tsCheckStart = tsCheckEnd = null;
+    totalCheckSeconds = 0;
+    // storedData の値は aggregator 側で管理する
+  };
+  const resetPause      = () => {
+    clearInterval(pauseTimerId);
+    tsPauseStart = null;
+    totalPauseSeconds = 0;
+    // storedData の値は保持し、新しい印刷時に aggregator がクリア
+  };
+  const resetCompletion = () => {
+    clearInterval(completionTimer);
+    tsCompletion = null;
+    // 完了後経過時間は次の印刷開始まで保持
+  };
 
   // (2.3) 準備時間タイマー
   // (2.3.1) 新規印刷開始検出
