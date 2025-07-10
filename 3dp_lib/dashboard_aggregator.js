@@ -22,9 +22,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.705 (PR #326)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:48:59
+* @version 1.390.710 (PR #328)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-07-11 22:19:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -196,6 +196,16 @@ export function ingestData(data) {
         }
       }
       prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
       if (historyPersistFunc) {
         try {
           historyPersistFunc(id);
@@ -227,6 +237,16 @@ export function ingestData(data) {
         }
       }
       prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
     }
   }
 
