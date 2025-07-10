@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.696 (PR #321)
+* @version 1.390.700 (PR #323)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-10 21:05:00
+* @lastModified 2025-07-10 22:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -520,7 +520,6 @@ export function processData(data) {
 
   // (2.7) 状態遷移通知・プレビュー更新・その他フィールド反映・履歴登録
   const prevState = machine.runtimeData.state;
-  machine.runtimeData.state = String(st);
   handlePrintStateTransition(
     Number(prevState),
     st,
@@ -585,6 +584,10 @@ export function processData(data) {
 
   // (2.8) 集約ロジックへ渡す
   ingestData(data);
+
+  // runtimeData.state は ingestData 後に更新することで
+  // aggregator 側が前回状態を正しく参照できるようにする
+  machine.runtimeData.state = String(st);
 }
 
 /**
