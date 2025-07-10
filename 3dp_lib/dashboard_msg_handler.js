@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.700 (PR #323)
+* @version 1.390.702 (PR #324)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-10 22:00:00
+* @lastModified 2025-07-10 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -64,6 +64,7 @@ import {
   persistAggregatorState,
   setHistoryPersistFunc,
   aggregatorUpdate,
+  getCurrentPrintID,
 } from "./dashboard_aggregator.js";
 import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
@@ -315,7 +316,9 @@ export function processData(data) {
 
   // 数値化／前回値取得
   const st            = Number(data.state);
-  const currStartTime = Number(data.printStartTime   || 0);
+  const currStartTime = Number(
+    data.printStartTime ?? getCurrentPrintID() ?? 0
+  );
   const currJobTime   = Number(data.printJobTime     || 0);
   const currSelfPct   = Number(data.withSelfTest      || 0);
   const device        = Number(data.deviceState      || 0);
