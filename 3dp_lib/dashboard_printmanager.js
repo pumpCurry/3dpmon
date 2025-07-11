@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.671 (PR #311)
+* @version 1.390.725 (PR #334)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-07-09 15:57:45
+* @lastModified 2025-07-11 11:15:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -87,10 +87,12 @@ let _fileList = [];
  * @param {string} baseUrl    サーバーのベース URL (例: "http://192.168.1.5")
  * @param {number} id         履歴エントリの ID
  * @param {string} filemd5    ファイルの MD5 ハッシュ
- * @param {string} rawFilename   履歴エントリの filename フルパス
+ * @param {string} rawFilename   履歴エントリの filename フルパス。
+ *   未定義時は空文字列を返す
  * @returns {string}
  */
 function makeThumbUrl(baseUrl, rawFilename) {
+  if (!rawFilename) return "";
   // パスからファイル名部分だけ取り出し (例: ".../foo.gcode" → "foo.gcode")
   const fname = rawFilename.split("/").pop() || "";
   // 拡張子を取り除く (例: "foo.gcode" → "foo")
@@ -196,10 +198,16 @@ export function parseRawHistoryEntry(raw, baseUrl, host = currentHostname) {
  * @param {Array<Object>} rawArray - 元データ配列
  * @param {string} baseUrl         - サムネイル取得用ベース URL
  * @returns {Array<ReturnType<typeof parseRawHistoryEntry>>}
+ * @description
+ *  `filename` を持たない履歴エントリでも `filamentInfo` が存在する場合は
+ *  フィルタを通過させ、スプール情報のみの更新を反映できるようにする。
  */
 export function parseRawHistoryList(rawArray, baseUrl, host = currentHostname) {
   return rawArray
-    .filter(r => typeof r.filename === "string" && r.filename.length > 0)
+    .filter(r =>
+      (typeof r.filename === "string" && r.filename.length > 0) ||
+      (Array.isArray(r.filamentInfo) && r.filamentInfo.length > 0)
+    )
     .map(r => parseRawHistoryEntry(r, baseUrl, host))
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_HISTORY);
