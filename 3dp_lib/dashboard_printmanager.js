@@ -471,9 +471,9 @@ export async function refreshHistory(
   const buf = machine ? machine.historyData : [];
   const appliedIdx = new Set();
   if (buf && buf.length) {
-    const bufMap = new Map(buf.map((b, i) => [b.id, { data: b, idx: i }]));
+    const bufMap = new Map(buf.map((b, i) => [String(b.id), { data: b, idx: i }]));
     newJobs.forEach(job => {
-      const found = bufMap.get(job.id);
+      const found = bufMap.get(String(job.id));
       if (!found) return;
       Object.entries(found.data).forEach(([k, v]) => {
         if (k === "id") return;
@@ -490,12 +490,12 @@ export async function refreshHistory(
   }
   const oldJobs = loadHistory();
   const mergedMap = new Map();
-  newJobs.forEach(j => mergedMap.set(j.id, j));
+  newJobs.forEach(j => mergedMap.set(String(j.id), j));
   oldJobs.forEach(j => {
-    if (!mergedMap.has(j.id)) mergedMap.set(j.id, j);
+    if (!mergedMap.has(String(j.id))) mergedMap.set(String(j.id), j);
   });
   const jobs = Array.from(mergedMap.values())
-    .sort((a, b) => b.id - a.id)
+    .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_HISTORY);
 
 
@@ -587,9 +587,9 @@ export function updateHistoryList(
   const buf = machine ? machine.historyData : [];
   const appliedIdx = new Set();
   if (buf && buf.length) {
-    const bufMap = new Map(buf.map((b, i) => [b.id, { data: b, idx: i }]));
+    const bufMap = new Map(buf.map((b, i) => [String(b.id), { data: b, idx: i }]));
     newJobs.forEach(job => {
-      const found = bufMap.get(job.id);
+      const found = bufMap.get(String(job.id));
       if (!found) return;
       Object.entries(found.data).forEach(([k, v]) => {
         if (k === "id") return;
@@ -606,9 +606,9 @@ export function updateHistoryList(
   let merged = false;
   const oldJobs = loadHistory();
   const mergedMap = new Map();
-  newJobs.forEach(j => mergedMap.set(j.id, j));
+  newJobs.forEach(j => mergedMap.set(String(j.id), j));
   oldJobs.forEach(j => {
-    const cur = mergedMap.get(j.id);
+    const cur = mergedMap.get(String(j.id));
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
         const isZeroInCur = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
@@ -626,12 +626,12 @@ export function updateHistoryList(
         }
       });
     } else {
-      mergedMap.set(j.id, j);
+      mergedMap.set(String(j.id), j);
       merged = true;
     }
   });
   const jobs = Array.from(mergedMap.values())
-    .sort((a, b) => b.id - a.id)
+    .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_HISTORY);
 
   const videoMap = loadVideos();
