@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link formatDuration} ほか複数をエクスポート
  *
-* @version 1.390.681 (PR #312)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 07:33:39
+* @version 1.390.729 (PR #336)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-07-12 08:22:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -55,13 +55,24 @@ function formatDurationSimple(seconds) {
 }
 
 /**
- * 与えられたUNIX時間（秒）を "YYYY/MM/DD hh:mm:ss" に整形して返す
- * @param {number} epochSec - UNIXエポック秒
+ * 与えられた UNIX 時間または ISO 文字列を
+ * "YYYY/MM/DD hh:mm:ss" 形式に整形して返します。
+ *
+ * @param {number|string} epochSec - UNIX エポック秒または ISO 文字列
  * @returns {string} フォーマット済み日時 or "----"
  */
 function formatEpochToDateTime(epochSec) {
-  if (!epochSec || epochSec <= 0) return "----";
-  const dt = new Date(epochSec * 1000);
+  if (epochSec == null) return "----";
+
+  let sec = Number(epochSec);
+
+  if (!Number.isFinite(sec) || sec <= 0) {
+    const parsed = Date.parse(String(epochSec));
+    if (Number.isNaN(parsed)) return "----";
+    sec = Math.floor(parsed / 1000);
+  }
+
+  const dt = new Date(sec * 1000);
   const pad = (n) => n.toString().padStart(2, '0');
   return `${dt.getFullYear()}/${pad(dt.getMonth() + 1)}/${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 }
