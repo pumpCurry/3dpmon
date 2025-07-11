@@ -24,7 +24,7 @@
  *
  * @version 1.390.711 (PR #328)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-11 07:28:24
+ * @lastModified 2025-07-11 09:25:51
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -196,6 +196,16 @@ export function ingestData(data) {
         }
       }
       prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
       if (historyPersistFunc) {
         try {
           historyPersistFunc(id);
@@ -227,6 +237,16 @@ export function ingestData(data) {
         }
       }
       prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
     }
   }
 
@@ -745,23 +765,19 @@ export function aggregatorUpdate() {
     }
   }, storedData);
 
-  // expectedEndTime 更新
-  checkUpdatedFields(["printFinishTime","estimatedCompletionTime"], () => {
+  // expectedEndTime update
+  checkUpdatedFields([
+    "printFinishTime",
+    "predictedFinishEpoch"
+  ], () => {
     const fin = parseInt(storedData.printFinishTime?.rawValue, 10);
-    let epoch = null;
-    if (!isNaN(fin) && fin > 0) {
-      epoch = fin;
-    } else {
-      const est = parseInt(storedData.estimatedCompletionTime?.rawValue, 10);
-      if (!isNaN(est) && est > 0) epoch = est;
-    }
-    setStoredData("expectedEndTime", epoch, true);
-    if (epoch !== null) {
-      setStoredData("expectedEndTime", {
-        value: new Date(epoch * 1000).toLocaleString(),
-        unit: ""
-      });
-    }
+    const pred = parseInt(storedData.predictedFinishEpoch?.rawValue, 10);
+    const val = (!isNaN(fin) && fin > 0)
+      ? fin
+      : (!isNaN(pred) && pred > 0)
+        ? pred
+        : null;
+    setStoredData("expectedEndTime", val, true);
   }, storedData);
 
   // --- フィラメント残量の動的計算 ---

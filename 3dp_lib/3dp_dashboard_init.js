@@ -384,6 +384,15 @@ const persistKeys = [
   "prevPrintID"
 ];
 
+// 印刷再開用に保存したいスプール関連キー
+const spoolKeys = [
+  "currentSpoolId",
+  "currentPrintID",
+  "currentJobStartLength",
+  "currentJobExpectedLength",
+  "remainingLengthMm"
+];
+
 /**
  * @function restorePrintResume
  * @description
@@ -425,6 +434,34 @@ export function restorePrintResume(currentPrintId = null) {
       console.warn(`restorePrintResume: '${key}' の JSON パースに失敗しました`, e);
     }
   });
+
+  const spool = getCurrentSpool();
+  if (spool) {
+    spoolKeys.forEach(k => {
+      const raw = localStorage.getItem(`pd_${host}_${k}`);
+      if (raw == null) return;
+      try {
+        const val = JSON.parse(raw);
+        switch (k) {
+          case 'currentSpoolId':
+            setCurrentSpoolId(val);
+            break;
+          case 'currentPrintID':
+            spool.currentPrintID = val;
+            break;
+          case 'currentJobStartLength':
+            spool.currentJobStartLength = val;
+            break;
+          case 'currentJobExpectedLength':
+            spool.currentJobExpectedLength = val;
+            break;
+          case 'remainingLengthMm':
+            spool.remainingLengthMm = val;
+            break;
+        }
+      } catch {}
+    });
+  }
 }
 
 /**
@@ -448,6 +485,34 @@ export function persistPrintResume() {
       localStorage.removeItem(`pd_${host}_${key}`);
     }
   });
+
+  const spool = getCurrentSpool();
+  if (spool) {
+    spoolKeys.forEach(k => {
+      const val = (() => {
+        switch (k) {
+          case 'currentSpoolId':
+            return monitorData.currentSpoolId;
+          case 'currentPrintID':
+            return spool.currentPrintID;
+          case 'currentJobStartLength':
+            return spool.currentJobStartLength;
+          case 'currentJobExpectedLength':
+            return spool.currentJobExpectedLength;
+          case 'remainingLengthMm':
+            return spool.remainingLengthMm;
+          default:
+            return null;
+        }
+      })();
+      const key = `pd_${host}_${k}`;
+      if (val != null) {
+        localStorage.setItem(key, JSON.stringify(val));
+      } else {
+        localStorage.removeItem(key);
+      }
+    });
+  }
 }
 
  

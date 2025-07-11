@@ -1,23 +1,17 @@
 // @vitest-environment happy-dom
 /**
  * @fileoverview
- * @description 3dpmon log playback test for expected end time
+ * @description ensure expectedEndTime field reflects final print finish time
  * @file expected_end_time.test.js
  * -----------------------------------------------------------
  * @module tests/expected_end_time
  *
  * 【機能内容サマリ】
- * - Log device playback verifies expectedEndTime update
- *
- * 【公開関数一覧】
- * - なし (Vitest suite)
+ * - log 002 replay via log_device verifies expectedEndTime
  *
  * @version 1.390.711 (PR #328)
  * @since   1.390.711 (PR #328)
- * @lastModified 2025-07-11 07:28:24
- * -----------------------------------------------------------
- * @todo
- * - none
+ * @lastModified 2025-07-11 09:25:51
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -31,8 +25,9 @@ import * as stagePreview from '../3dp_lib/dashboard_stage_preview.js';
 // テスト本体
 // ---------------------------------------------------------------------------
 
-describe('expected end time update', () => {
-  it('updates expectedEndTime after finish', () => {
+describe('expectedEndTime calculation', () => {
+  it('updates expectedEndTime using log device for log 002', () => {
+
     vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.spyOn(stagePreview, 'updateXYPreview').mockImplementation(() => {});
     vi.spyOn(stagePreview, 'updateZPreview').mockImplementation(() => {});
@@ -40,22 +35,17 @@ describe('expected end time update', () => {
     setCurrentHostname('K1');
     monitorData.machines['K1'] = createEmptyMachineData();
 
-    const device = createLogDevice('002', 0);
-    let now = 0;
-    let result;
-
-    do {
-      result = device.get(now);
-      for (const frame of result.json) {
-        processData(frame);
-        aggregatorUpdate();
-      }
-      now += 1;
-    } while (!result.is_finished);
-
+    const dev = createLogDevice('002', 0, 0, true);
+    const result = dev.get(999999);
+    for (const frame of result.json) {
+      processData(frame);
+      aggregatorUpdate();
+    }
     aggregatorUpdate();
-    const sd = monitorData.machines['K1'].storedData;
-    expect(sd.expectedEndTime.rawValue).toBe(sd.printFinishTime.rawValue);
+
+    const stored = monitorData.machines['K1'].storedData;
+    expect(parseInt(stored.expectedEndTime.rawValue, 10))
+      .toBe(parseInt(stored.printFinishTime.rawValue, 10));
   });
 });
 
