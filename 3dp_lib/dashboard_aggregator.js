@@ -22,9 +22,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.705 (PR #326)
+ * @version 1.390.711 (PR #328)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:48:59
+ * @lastModified 2025-07-11 09:25:51
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -742,6 +742,21 @@ export function aggregatorUpdate() {
         unit: ""
       });
     }
+  }, storedData);
+
+  // expectedEndTime update
+  checkUpdatedFields([
+    "printFinishTime",
+    "predictedFinishEpoch"
+  ], () => {
+    const fin = parseInt(storedData.printFinishTime?.rawValue, 10);
+    const pred = parseInt(storedData.predictedFinishEpoch?.rawValue, 10);
+    const val = (!isNaN(fin) && fin > 0)
+      ? fin
+      : (!isNaN(pred) && pred > 0)
+        ? pred
+        : null;
+    setStoredData("expectedEndTime", val, true);
   }, storedData);
 
   // --- フィラメント残量の動的計算 ---
