@@ -18,11 +18,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { createLogDevice } from './utils/log_device.js';
 import { monitorData, setCurrentHostname, createEmptyMachineData } from '../3dp_lib/dashboard_data.js';
 import { processData } from '../3dp_lib/dashboard_msg_handler.js';
-import * as stagePreview from '../3dp_lib/dashboard_stage_preview.js';
 import { aggregatorUpdate } from '../3dp_lib/dashboard_aggregator.js';
+import * as stagePreview from '../3dp_lib/dashboard_stage_preview.js';
+
+// ---------------------------------------------------------------------------
+// テスト本体
+// ---------------------------------------------------------------------------
 
 describe('expectedEndTime calculation', () => {
   it('updates expectedEndTime using log device for log 002', () => {
+
     vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.spyOn(stagePreview, 'updateXYPreview').mockImplementation(() => {});
     vi.spyOn(stagePreview, 'updateZPreview').mockImplementation(() => {});
@@ -43,3 +48,4 @@ describe('expectedEndTime calculation', () => {
       .toBe(parseInt(stored.printFinishTime.rawValue, 10));
   });
 });
+

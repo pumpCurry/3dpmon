@@ -687,7 +687,8 @@ export function aggregatorUpdate() {
   // --- ここでタイマー／予測用フィールド群が揃っているか確認 ---
   const needed = ["preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
                   "actualStartTime","initialLeftTime","initialLeftAt",
-                  "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"];
+                  "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime",
+                  "expectedEndTime"];
   needed.forEach(key => {
     if (!(key in storedData)) { //キーが無い場合
       // rawValueを「未定義(null)」で作っておく
