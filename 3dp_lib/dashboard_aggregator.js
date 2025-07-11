@@ -22,20 +22,13 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.711 (PR #327)
+ * @version 1.390.711 (PR #328)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-10 23:53:00
+ * @lastModified 2025-07-11 09:25:51
  * -----------------------------------------------------------
  * @todo
  * - none
  */
-/** -----------------------------------------------------------
- * 改修履歴
- * | 日付 (JST)       | PR   | 概要                       |
- * |------------------|------|----------------------------|
- * | 2025-06-28       | #223 | タイマー処理ロジック改修   |
- * ----------------------------------------------------------- */
-
 "use strict";
 
 import { monitorData, currentHostname, setStoredData } from "./dashboard_data.js";
@@ -184,7 +177,38 @@ export function ingestData(data) {
   // (0) 新しい PrintID 検出 → 全リセット
   const validId = Number.isFinite(id) && id > 0;
   if (validId && id !== prevPrintID) {
-    if (actualStartEpoch === null) {
+
+    if (prevPrintID === null && actualStartEpoch !== null) {
+      // printJobTime から開始済みのジョブに ID が後から届いた場合
+      const spool = getCurrentSpool();
+      if (spool && spool.currentPrintID !== String(id)) {
+        if (spool.currentJobExpectedLength == null) {
+          // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
+          reserveFilament(0, String(id));
+        } else {
+          spool.currentPrintID = String(id);
+        }
+      }
+      prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
+      if (historyPersistFunc) {
+        try {
+          historyPersistFunc(id);
+        } catch (e) {
+          console.error("historyPersistFunc error", e);
+        }
+      }
+    } else {
+
       tsPrepStart = tsCheckStart = tsPauseStart = tsCompleteStart = null;
       totalPrepSec = totalCheckSec = totalPauseSec = 0;
       actualStartEpoch = initialLeftSec = initialLeftEpoch = null;
@@ -215,6 +239,19 @@ export function ingestData(data) {
       } catch (e) {
         console.error("historyPersistFunc error", e);
       }
+
+      prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
+
     }
   }
 
@@ -655,7 +692,8 @@ export function aggregatorUpdate() {
   // --- ここでタイマー／予測用フィールド群が揃っているか確認 ---
   const needed = ["preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
                   "actualStartTime","initialLeftTime","initialLeftAt",
-                  "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"];
+                  "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime",
+                  "expectedEndTime"];
   needed.forEach(key => {
     if (!(key in storedData)) { //キーが無い場合
       // rawValueを「未定義(null)」で作っておく
@@ -730,6 +768,21 @@ export function aggregatorUpdate() {
         unit: ""
       });
     }
+  }, storedData);
+
+  // expectedEndTime update
+  checkUpdatedFields([
+    "printFinishTime",
+    "predictedFinishEpoch"
+  ], () => {
+    const fin = parseInt(storedData.printFinishTime?.rawValue, 10);
+    const pred = parseInt(storedData.predictedFinishEpoch?.rawValue, 10);
+    const val = (!isNaN(fin) && fin > 0)
+      ? fin
+      : (!isNaN(pred) && pred > 0)
+        ? pred
+        : null;
+    setStoredData("expectedEndTime", val, true);
   }, storedData);
 
   // --- フィラメント残量の動的計算 ---
