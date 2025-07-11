@@ -196,6 +196,16 @@ export function ingestData(data) {
         }
       }
       prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
       if (historyPersistFunc) {
         try {
           historyPersistFunc(id);
@@ -227,6 +237,16 @@ export function ingestData(data) {
         }
       }
       prevPrintID = id;
+      // ---- 通知状態のリセット ----------------------------------------------
+      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
+      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
+      // なるため、各種 Set と直近の値をリセットする
+      notifiedProgressMilestones.clear();
+      notifiedTimeThresholds.clear();
+      notifiedTempMilestones.clear();
+      prevProgress = 0;
+      lastProgressTimestamp = nowMs;
+      prevRemainingSec = null;
     }
   }
 
