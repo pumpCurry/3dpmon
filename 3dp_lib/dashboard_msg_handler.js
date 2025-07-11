@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.702 (PR #324)
+* @version 1.390.728 (PR #335)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-10 22:30:00
+* @lastModified 2025-07-11 20:49:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -117,7 +117,12 @@ function persistHistoryTimers(printId) {
     if (v != null) entry[key] = v;
   });
   const baseUrl = `http://${getDeviceIp()}:80`;
-  printManager.updateHistoryList([entry], baseUrl);
+  if (
+    entry.filename ||
+    (Array.isArray(entry.filamentInfo) && entry.filamentInfo.length > 0)
+  ) {
+    printManager.updateHistoryList([entry], baseUrl);
+  }
   persistPrintResume();
   persistAggregatorState();
   // 値を保存したら即座に画面へ反映する
