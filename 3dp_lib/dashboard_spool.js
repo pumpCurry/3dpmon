@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.687 (PR #313)
+* @version 1.390.731 (PR #337)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-10 17:35:30
+* @lastModified 2025-07-11 23:50:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -569,6 +569,10 @@ export function autoCorrectCurrentSpool() {
   }
   if (!change) return;
 
+  // 履歴から取得した開始残量が数値でなければ補正不能と判断
+  const startLen = Number(change.startLength);
+  if (!Number.isFinite(startLen)) return;
+
   let total = 0;
   let count = 0;
   for (let i = startIdx + 1; i < logs.length; i++) {
@@ -582,9 +586,11 @@ export function autoCorrectCurrentSpool() {
     }
   }
 
-  const expected = Math.max(0, Number(change.startLength) - total);
+  // 計算された残量が有限値でなければ補正しない
+  const expected = Math.max(0, startLen - total);
+  if (!Number.isFinite(expected)) return;
   const diff = Math.abs(expected - spool.remainingLengthMm);
-  if (diff > 0.1 || spool.printCount !== count) {
+  if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
     spool.remainingLengthMm = expected;
     spool.printCount = count;
     saveUnifiedStorage();

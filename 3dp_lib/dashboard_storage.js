@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.681 (PR #312)
+* @version 1.390.731 (PR #337)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-10 07:33:39
+* @lastModified 2025-07-11 23:50:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,6 +60,14 @@ function applySpoolDefaults(sp) {
   sp.density ??= 0;
   sp.reelSubName ??= "";
   sp.isPending ??= false;
+  // 数値項目の正規化: NaN または null の場合は 0 をセット
+  if (sp.remainingLengthMm != null) {
+    const rem = Number(sp.remainingLengthMm);
+    sp.remainingLengthMm = Number.isFinite(rem) ? rem : 0;
+  }
+  if (sp.startLength == null || !Number.isFinite(Number(sp.startLength))) {
+    sp.startLength = sp.remainingLengthMm ?? 0;
+  }
   return sp;
 }
 
