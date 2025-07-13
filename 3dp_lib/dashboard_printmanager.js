@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.725 (PR #334)
+* @version 1.390.734 (PR #338)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-07-11 11:15:00
+* @lastModified 2025-07-13 10:27:27
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -351,6 +351,7 @@ export const renderTemplates = {
   */
   current(job, baseUrl) {
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
+    const name = job.filename || '(名称不明)';
     const ts = Date.now();
     // 大サムネイル URL
     const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
@@ -365,7 +366,7 @@ export const renderTemplates = {
           alt="現在印刷中"
         />
         <div class="print-job-info">
-          <div class="filename"><strong>現在:</strong> ${job.filename}</div>
+          <div class="filename"><strong>現在:</strong> ${name}</div>
           <div class="times">開始: ${fmt(job.startTime)}</div>
           <div class="material-used">使用: ${job.materialUsedMm.toLocaleString()} mm</div>
         </div>
