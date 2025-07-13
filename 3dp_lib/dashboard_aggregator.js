@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.739 (PR #340)
+ * @version 1.390.738 (PR #340)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-13 03:12:56
+ * @lastModified 2025-07-13 11:50:27
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -356,6 +356,18 @@ export function ingestData(data) {
     // ジョブタイムが増え始めた瞬間を actualStartEpoch の元に
     actualStartEpoch = nowSec - jobTime;
     setStoredData("actualStartTime", actualStartEpoch, true);
+
+    // ---- 新規印刷スタート時の通知状態リセット ------------------------------
+    // printStartTime がまだ届いていないケースでも、jobTime が進み始めた
+    // 時点で前回ジョブの残り時間通知などを初期化する。これにより長時間
+    // ジョブを中断後に短時間ジョブを開始した際、残りn分通知が一斉発火
+    // してしまう問題を防ぐ。
+    notifiedProgressMilestones.clear();
+    notifiedTimeThresholds.clear();
+    notifiedTempMilestones.clear();
+    prevProgress = 0;
+    lastProgressTimestamp = nowMs;
+    prevRemainingSec = null;
 
     if (historyPersistFunc && id) {
       try {
