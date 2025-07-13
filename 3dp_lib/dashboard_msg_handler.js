@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.736 (PR #339)
+* @version 1.390.737 (PR #340)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-13 10:38:58
+* @lastModified 2025-07-13 11:05:00
  * -----------------------------------------------------------
  * @todo
  * - none
