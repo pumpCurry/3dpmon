@@ -1,5 +1,4 @@
-/**
- 2025-07-10 23:11:44
+/** 2025-07-13 03:12:56
  * @description 3Dプリンタ監視ツール 3dpmon 用 集計管理モジュール
  * @file dashboard_aggregator.js
  * @copyright (c) pumpCurry 2025 / 5r4ce2
@@ -23,7 +22,7 @@
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
  * @version 1.390.738 (PR #340)
-* @since   1.390.193 (PR #86)
+ * @since   1.390.193 (PR #86)
  * @lastModified 2025-07-13 11:50:27
  * -----------------------------------------------------------
  * @todo
@@ -472,6 +471,9 @@ function aggregateTimersAndPredictions(data) {
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
 
+  const machine = monitorData.machines[currentHostname];
+  const storedData = machine?.storedData || {};
+
   // ---- 完了後経過タイマーの復元処理 ------------------------------
   if (tsCompleteStart === null) {
     const machine = monitorData.machines[currentHostname];
@@ -650,33 +652,39 @@ function aggregateTimersAndPredictions(data) {
   }
 
   // ── 5) 予想残り時間／予想終了時刻 ────────────────────────────────
-  if (doneStates.has(st)) {
-    // 印刷終了または失敗時は予測値をリセット
-    setStoredData("predictedFinishEpoch",    null, true);
-    setStoredData("estimatedRemainingTime",  null, true);
-    setStoredData("estimatedCompletionTime", null, true);
-  }
-  else if (actualStartEpoch !== null && progPct > 0) {
-    const elapsed  = (nowSec - actualStartEpoch) - (totalCheckSec + totalPauseSec);
-    const totalEst = elapsed / progPct;
-    const remSec   = totalEst - elapsed;
-    const finishE  = nowSec + remSec;
-    // raw epoch
-    setStoredData("predictedFinishEpoch",    Math.floor(finishE), true);
-    // display datetime
-    setStoredData("estimatedRemainingTime",  Math.floor(remSec),   true);
-    setStoredData("estimatedCompletionTime", Math.floor(finishE), true);
-  }
-  // フォールバック：初回残り時間ベース
-  else if (
-    actualStartEpoch   !== null &&
-    initialLeftSec     !== null &&
-    initialLeftEpoch   !== null
-  ) {
-    setStoredData("predictedFinishEpoch",    initialLeftEpoch, true);
-    setStoredData("estimatedRemainingTime",  initialLeftSec,   true);
-    setStoredData("estimatedCompletionTime", initialLeftEpoch, true);
-  }
+  checkUpdatedFields([
+    "printProgress",
+    "state",
+    "printStartTime",
+    "printLeftTime"
+  ], () => {
+    if (doneStates.has(st)) {
+      // 印刷終了または失敗時は予測値をリセット
+      setStoredData("predictedFinishEpoch",    null, true);
+      setStoredData("estimatedRemainingTime",  null, true);
+      setStoredData("estimatedCompletionTime", null, true);
+    } else if (actualStartEpoch !== null && progPct > 0) {
+      const elapsed  = (nowSec - actualStartEpoch) - (totalCheckSec + totalPauseSec);
+      const totalEst = elapsed / progPct;
+      const remSec   = totalEst - elapsed;
+      const finishE  = nowSec + remSec;
+      // raw epoch
+      setStoredData("predictedFinishEpoch",    Math.floor(finishE), true);
+      // display datetime
+      setStoredData("estimatedRemainingTime",  Math.floor(remSec),   true);
+      setStoredData("estimatedCompletionTime", Math.floor(finishE), true);
+    }
+    // フォールバック：初回残り時間ベース
+    else if (
+      actualStartEpoch   !== null &&
+      initialLeftSec     !== null &&
+      initialLeftEpoch   !== null
+    ) {
+      setStoredData("predictedFinishEpoch",    initialLeftEpoch, true);
+      setStoredData("estimatedRemainingTime",  initialLeftSec,   true);
+      setStoredData("estimatedCompletionTime", initialLeftEpoch, true);
+    }
+  }, storedData);
 
   // ── 6) 状態永続化 ─────────────────────────────────────────────
   persistAggregatorState();
