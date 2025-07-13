@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.728 (PR #335)
+* @version 1.390.737 (PR #340)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-11 20:49:00
+* @lastModified 2025-07-13 11:05:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -555,6 +555,35 @@ export function processData(data) {
   // (2.7.3) その他フィールド一括反映
   // 重要：ここで得られた値のみ、setstoredDataの第4フラグ(機器から得られる情報)をフラグONとする
   Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true, true));
+
+  // --- 新しい印刷情報が後から届いた場合の現在ジョブ更新処理 ----------------
+  // fileName または printStartTime が受信された際、printManager が保持する
+  // 現在印刷中ジョブ情報を更新して UI へ即反映させる。印刷開始直後に情報が
+  // 遅延して届くケースで、ファイル名や開始時刻が不明のまま表示され続ける
+  // 問題を解消する目的で追加。
+  if (data.fileName || data.printStartTime) {
+    const curJob = printManager.loadCurrent() || {};
+    let changed = false;
+    if (data.fileName) {
+      curJob.filename = String(data.fileName).split("/").pop();
+      curJob.rawFilename = String(data.fileName);
+      changed = true;
+    }
+    if (data.printStartTime) {
+      const start = Number(data.printStartTime);
+      if (!isNaN(start) && start > 0) {
+        curJob.id = start;
+        curJob.startTime = new Date(start * 1000).toISOString();
+        changed = true;
+      }
+    }
+    if (changed) {
+      printManager.saveCurrent(curJob);
+      printManager.renderPrintCurrent(
+        document.getElementById("print-current-container")
+      );
+    }
+  }
 
   // (2.7.4) 進捗100%以上で履歴登録
   if (Number(data.printProgress ?? 0) >= 100) {
