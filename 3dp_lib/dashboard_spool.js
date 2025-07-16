@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.731 (PR #337)
+* @version 1.390.746 (PR #343)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-11 23:50:08
+* @lastModified 2025-07-16 11:28:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -146,6 +146,12 @@ export function setCurrentSpoolId(id) {
   const printId = machine.printStore?.current?.id ?? "";
 
   if (prevSpool) {
+    if (Array.isArray(prevSpool.printIdRanges) && prevSpool.printIdRanges.length) {
+      const r = prevSpool.printIdRanges[prevSpool.printIdRanges.length - 1];
+      if (r && r.endPrintID == null) {
+        r.endPrintID = printId || prevSpool.currentPrintID || "";
+      }
+    }
     prevSpool.removedAt = Date.now();
     prevSpool.isInUse = false;
     prevSpool.isPending = false;
@@ -264,6 +270,11 @@ export function addSpool(data) {
     removedAt: data.removedAt || null,
     note: data.note || "",
     usedLengthLog: data.usedLengthLog || [],
+    /**
+     * スプールを装着してから取り外すまでの印刷ID範囲配列
+     * @type {Array<{startPrintID:string,endPrintID:?string}>}
+     */
+    printIdRanges: data.printIdRanges || [],
     isActive: false,
     isInUse: false,
     /**
@@ -291,6 +302,12 @@ export function updateSpool(id, patch) {
 export function deleteSpool(id) {
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
+  if (Array.isArray(s.printIdRanges) && s.printIdRanges.length) {
+    const machine = monitorData.machines[currentHostname] || {};
+    const pid = machine.printStore?.current?.id ?? "";
+    const r = s.printIdRanges[s.printIdRanges.length - 1];
+    if (r && r.endPrintID == null) r.endPrintID = pid || s.currentPrintID || "";
+  }
   s.deleted = true;
   s.isDeleted = true;
   s.isInUse = false;
@@ -325,6 +342,8 @@ export function restoreSpool(id) {
  */
 function logSpoolChange(spool, printId = "") {
   if (!spool) return;
+  spool.printIdRanges ??= [];
+  spool.printIdRanges.push({ startPrintID: String(printId), endPrintID: null });
   monitorData.usageHistory.push({
     usageId: Date.now(),
     spoolId: spool.id,
