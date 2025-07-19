@@ -141,6 +141,30 @@ function getState(host) {
 }
 
 /**
+ * resolveActiveState:
+ * --------------------
+ * 指定ホスト名から実際の接続状態オブジェクトを取得します。
+ * 大文字小文字の違いにより {@link getState} で取得できない場合に備え、
+ * connectionMap を走査して一致するホストを検索します。
+ *
+ * @private
+ * @param {string} host - 検索対象のホスト名
+ * @returns {ConnectionState} 接続状態オブジェクト
+ */
+function resolveActiveState(host) {
+  let st = getState(host);
+  if (!st.ws) {
+    const alt = Object.keys(connectionMap).find(
+      (k) => k.toLowerCase() === host.toLowerCase()
+    );
+    if (alt) {
+      st = connectionMap[alt];
+    }
+  }
+  return st;
+}
+
+/**
  * 最新の WebSocket 受信データを返します。
  * @returns {Promise<Object|null>}
  */
@@ -749,7 +773,7 @@ export function setupPrinterUI() {
  * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendCommand(method, params = {}, host = currentHostname) {
-  const st = getState(host);
+  const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     const now = Date.now();
     if (now - lastWsAlertTime > 1000) {
@@ -800,7 +824,7 @@ export function sendCommand(method, params = {}, host = currentHostname) {
  * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendGcodeCommand(gcode, host = currentHostname) {
-  const st = getState(host);
+  const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     const now = Date.now();
     if (now - lastWsAlertTime > 1000) {
