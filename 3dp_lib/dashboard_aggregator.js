@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
- * @version 1.390.738 (PR #340)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-13 11:50:27
+* @version 1.390.753 (PR #348)
+* @since   1.390.193 (PR #86)
+* @lastModified 2025-07-19 22:42:05
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -871,7 +871,8 @@ export function aggregatorUpdate() {
     } else if (
       spool.currentJobStartLength != null &&
       st !== PRINT_STATE_CODE.printStarted &&
-      st !== PRINT_STATE_CODE.printPaused
+      st !== PRINT_STATE_CODE.printPaused &&
+      prog >= 100
     ) {
       const finalUsed = !isNaN(used)
         ? used
