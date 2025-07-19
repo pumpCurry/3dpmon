@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link restoreXYPreviewState} など複数を一括エクスポート
  *
-* @version 1.390.678 (PR #313)
+* @version 1.390.748 (PR #345)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-10 07:45:00
+* @lastModified 2025-07-19 19:51:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -131,6 +131,9 @@ function restoreXYHistoryDots() {
   });
   xyHistory.forEach((pos, idx) => {
     if (idx >= xyDots.length) return;
+    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
+      return;
+    }
     const screenX = stagePx - (pos.x * STAGE_SCALE);
     const screenY = pos.y * STAGE_SCALE;
     const dot = xyDots[idx];
