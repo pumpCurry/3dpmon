@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.734 (PR #338)
+* @version 1.390.751 (PR #347)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-07-13 10:27:27
+* @lastModified 2025-07-19 11:01:37
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -368,7 +368,7 @@ export const renderTemplates = {
         <div class="print-job-info">
           <div class="filename"><strong>現在:</strong> ${name}</div>
           <div class="times">開始: ${fmt(job.startTime)}</div>
-          <div class="material-used">使用: ${job.materialUsedMm.toLocaleString()} mm</div>
+          <div class="material-used">使用: ${job.materialUsedMm != null ? job.materialUsedMm.toLocaleString() : "—"} mm</div>
         </div>
       </div>
     `;
@@ -396,9 +396,9 @@ export const renderTemplates = {
           開始: ${fmt(job.startTime)}
           ${job.finishTime ? `<br>完了: ${fmt(job.finishTime)}` : ""}
         </div>
-        <div class="material-used">
-          使用: ${job.materialUsedMm.toLocaleString()} mm
-        </div>
+          <div class="material-used">
+            使用: ${job.materialUsedMm != null ? job.materialUsedMm.toLocaleString() : "—"} mm
+          </div>
       </div>
     `;
   }
