@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.731 (PR #337)
+* @version 1.390.756 (PR #344)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-11 23:50:08
+* @lastModified 2025-07-21 16:37:31
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,6 +60,15 @@ function applySpoolDefaults(sp) {
   sp.density ??= 0;
   sp.reelSubName ??= "";
   sp.isPending ??= false;
+  if (!Number.isFinite(Number(sp.serialNo)) || Number(sp.serialNo) <= 0) {
+    monitorData.spoolSerialCounter += 1;
+    sp.serialNo = monitorData.spoolSerialCounter;
+  } else {
+    sp.serialNo = Number(sp.serialNo);
+    if (sp.serialNo > monitorData.spoolSerialCounter) {
+      monitorData.spoolSerialCounter = sp.serialNo;
+    }
+  }
   // 数値項目の正規化: NaN または null の場合は 0 をセット
   if (sp.remainingLengthMm != null) {
     const rem = Number(sp.remainingLengthMm);
@@ -175,6 +184,15 @@ export function restoreUnifiedStorage() {
         monitorData.filamentPresets = data.filamentPresets;
       if ("currentSpoolId" in data)
         monitorData.currentSpoolId = data.currentSpoolId;
+      if ("spoolSerialCounter" in data)
+        monitorData.spoolSerialCounter = Number(data.spoolSerialCounter) || 0;
+      const maxSerial = monitorData.filamentSpools.reduce(
+        (m, s) => Math.max(m, Number(s.serialNo) || 0),
+        0
+      );
+      if (monitorData.spoolSerialCounter < maxSerial) {
+        monitorData.spoolSerialCounter = maxSerial;
+      }
       _lastSavedJson = saved;
       console.debug("[restoreUnifiedStorage] 統一キーから復元しました");
     } catch (e) {
