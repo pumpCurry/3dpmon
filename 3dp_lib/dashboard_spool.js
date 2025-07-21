@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.746 (PR #343)
+* @version 1.390.756 (PR #344)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-16 11:28:50
+* @lastModified 2025-07-21 16:37:31
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -213,9 +213,11 @@ export function setCurrentSpoolId(id) {
 export function addSpool(data) {
   // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const id = genId();
+  const serialNo = ++monitorData.spoolSerialCounter;
   const spool = {
     id,
     spoolId: id,
+    serialNo,
     presetId: data.presetId || null,
     modelId: data.modelId || data.presetId || null,
     name: data.name || "",
@@ -347,6 +349,7 @@ function logSpoolChange(spool, printId = "") {
   monitorData.usageHistory.push({
     usageId: Date.now(),
     spoolId: spool.id,
+    spoolSerial: spool.serialNo,
     startPrintID: printId,
     startLength: spool.startLength,
     startedAt: spool.startedAt
@@ -367,6 +370,7 @@ function logUsage(spool, lengthMm, jobId) {
   monitorData.usageHistory.push({
     usageId: Date.now(),
     spoolId: spool.id,
+    spoolSerial: spool.serialNo,
     jobId,
     startedAt: Date.now(),
     usedLength: lengthMm,
@@ -434,6 +438,7 @@ export function reserveFilament(lengthMm, jobId = "") {
     if (!entry.filamentInfo.some(info => info.spoolId === s.id)) {
       entry.filamentInfo.push({
         spoolId: s.id,
+        serialNo: s.serialNo,
         spoolName: s.name,
         colorName: s.colorName,
         filamentColor: s.filamentColor,
@@ -489,6 +494,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
     entry.filamentInfo ??= [];
     entry.filamentInfo.push({
       spoolId: s.id,
+      serialNo: s.serialNo,
       spoolName: s.name,
       colorName: s.colorName,
       filamentColor: s.filamentColor,

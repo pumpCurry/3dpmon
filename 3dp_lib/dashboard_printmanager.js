@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.751 (PR #347)
+* @version 1.390.756 (PR #344)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-07-19 11:01:37
+* @lastModified 2025-07-21 16:37:31
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -526,6 +526,7 @@ export async function refreshHistory(
       if (!jobs[0].filamentInfo.some(info => info.spoolId === sp.id)) {
         jobs[0].filamentInfo.push({
           spoolId: sp.id,
+          serialNo: sp.serialNo,
           spoolName: sp.name,
           colorName: sp.colorName,
           filamentColor: sp.filamentColor,
@@ -792,6 +793,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const spoolTexts = [];
     const countTexts = [];
     const remainTexts = [];
+    const changeTexts = [];
     spoolInfos.forEach((info, idx) => {
       const sp = getSpoolById(info.spoolId) || null;
       const mat = info.material || sp?.material || '';
@@ -809,10 +811,13 @@ export function renderHistoryTable(rawArray, baseUrl) {
       spoolTexts.push(text);
       countTexts.push(info.spoolCount ?? sp?.printCount ?? 0);
       remainTexts.push(info.expectedRemain ?? sp?.remainingLengthMm ?? 0);
+      const serial = info.serialNo ?? sp?.serialNo ?? '';
+      changeTexts.push(`🔄️ ${serial}`);
     });
     const spoolText = spoolTexts.join('<br>');
     const printCnt  = countTexts.join('<br>');
     const remainLen = remainTexts.join('<br>');
+    const changeText = changeTexts.join('<br>');
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -846,6 +851,7 @@ export function renderHistoryTable(rawArray, baseUrl) {
       <td>${md5}</td>
       <td>${videoLink}</td>
       <td>${spoolText}</td>
+      <td data-key="spoolchange">${changeText}</td>
       <td data-key="spoolcount">${printCnt}</td>
       <td data-key="remain">${remainLen}</td>
     `;

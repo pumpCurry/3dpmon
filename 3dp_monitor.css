@@ -1002,6 +1002,7 @@ input:checked + .slider:before {
 #print-history-table td[data-key="pausetime"],
 #print-history-table td[data-key="usagetime"],
 #print-history-table td[data-key="usagematerial"],
+#print-history-table td[data-key="spoolchange"],
 #print-history-table td[data-key="spoolcount"],
 #print-history-table td[data-key="remain"],
 #file-list-table td[data-key="number"],

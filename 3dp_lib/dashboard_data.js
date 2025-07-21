@@ -20,9 +20,9 @@
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
  *
-* @version 1.390.496 (PR #225)
+* @version 1.390.756 (PR #344)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-28 12:00:48
+* @lastModified 2025-07-21 16:37:31
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -189,7 +189,8 @@ export function setCurrentHostname(host) {
  *   filamentPresets: Array<Object>,
  *   usageHistory: Array<Object>,
  *   filamentInventory: Array<Object>,
- *   currentSpoolId: string|null
+ *   currentSpoolId: string|null,
+ *   spoolSerialCounter: number
  * }}
  */
 export const monitorData = {
@@ -219,6 +220,11 @@ export const monitorData = {
   usageHistory: [],
   filamentInventory: [],
   currentSpoolId: null,
+  /**
+   * スプール通し番号の採番用カウンタ
+   * @type {number}
+   */
+  spoolSerialCounter: 0,
   temporaryBuffer: []
 };
 
