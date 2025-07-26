@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.465 (PR #212)
+* @version 1.390.758 (PR #345)
 * @since   1.390.228 (PR #102)
 * @lastModified 2025-06-22 18:00:00
  * -----------------------------------------------------------
@@ -34,7 +34,9 @@ import {
   addSpoolFromPreset,
   deleteSpool,
   setCurrentSpoolId,
-  restoreSpool
+  restoreSpool,
+  rescanSpools,
+  undoLastRescan
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -146,6 +148,18 @@ function createHistoryContent() {
   table.appendChild(tbody);
   div.appendChild(table);
   return div;
+}
+
+/**
+ * フィラメント情報の再探査を実行する。
+ * 取得処理は未実装のため空配列で置き換える。
+ *
+ * @private
+ * @returns {void}
+ */
+function performRescan() {
+  const scanned = [];
+  rescanSpools(scanned);
 }
 
 /**
@@ -1830,6 +1844,21 @@ export function showFilamentManager(activeIdx = 0) {
   closeBtn.textContent = "×";
   closeBtn.addEventListener("click", () => overlay.remove());
   header.appendChild(closeBtn);
+  const rescanBtn = document.createElement("button");
+  rescanBtn.textContent = "Rescan";
+  rescanBtn.addEventListener("click", () => {
+    if (confirm("再探査を実行しますか?")) {
+      performRescan();
+      registered.render();
+    }
+  });
+  header.appendChild(rescanBtn);
+  const undoBtn = document.createElement("button");
+  undoBtn.textContent = "Undo";
+  undoBtn.addEventListener("click", () => {
+    if (undoLastRescan()) registered.render();
+  });
+  header.appendChild(undoBtn);
   modal.appendChild(header);
 
   const tabBar = document.createElement("div");

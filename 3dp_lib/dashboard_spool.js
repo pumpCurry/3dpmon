@@ -26,8 +26,10 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
+ * - {@link rescanSpools}：フィラメント再探査実行
+ * - {@link undoLastRescan}：直前の再探査を取り消し
  *
-* @version 1.390.756 (PR #344)
+* @version 1.390.758 (PR #345)
 * @since   1.390.193 (PR #86)
 * @lastModified 2025-07-21 16:37:31
  * -----------------------------------------------------------
@@ -47,6 +49,9 @@ import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList } from "./dashboard_printmanager.js";
 import { getDeviceIp } from "./dashboard_connection.js";
+
+/** 前回再探査時のスプール一覧バックアップ */
+let _spoolBackup = null;
 
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
@@ -620,4 +625,36 @@ export function autoCorrectCurrentSpool() {
     spool.printCount = count;
     saveUnifiedStorage();
   }
+}
+
+/**
+ * 再探査によるスプール一覧更新を実行する。
+ * 実際の探査処理は未実装で、外部から取得したリストを渡す。
+ *
+ * @function rescanSpools
+ * @param {Array<Object>} newList - 新たに検出されたスプール配列
+ * @returns {void}
+ */
+export function rescanSpools(newList) {
+  _spoolBackup = JSON.parse(JSON.stringify(monitorData.filamentSpools));
+  monitorData.filamentSpools = newList.map(sp => ({ ...sp }));
+  monitorData.currentSpoolId = newList[0]?.id || null;
+  saveUnifiedStorage();
+}
+
+/**
+ * 直前の再探査で失われたスプール一覧を復元する。
+ * 復元後はバックアップを破棄する。
+ *
+ * @function undoLastRescan
+ * @returns {boolean} 復元に成功したかどうか
+ */
+export function undoLastRescan() {
+  if (!_spoolBackup) return false;
+  monitorData.filamentSpools = JSON.parse(JSON.stringify(_spoolBackup));
+  const active = monitorData.filamentSpools.find(s => s.isActive);
+  monitorData.currentSpoolId = active ? active.id : null;
+  _spoolBackup = null;
+  saveUnifiedStorage();
+  return true;
 }
