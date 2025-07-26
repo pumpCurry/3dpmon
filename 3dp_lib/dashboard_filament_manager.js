@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.465 (PR #212)
+* @version 1.390.759 (PR #351)
 * @since   1.390.228 (PR #102)
-* @lastModified 2025-06-22 18:00:00
+* @lastModified 2025-07-26 04:06:34
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -34,7 +34,9 @@ import {
   addSpoolFromPreset,
   deleteSpool,
   setCurrentSpoolId,
-  restoreSpool
+  restoreSpool,
+  rescanSpoolUsage,
+  undoSpoolRescan
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -294,6 +296,21 @@ function createUsedSpoolContent() {
   wrap.appendChild(listBox);
 
   div.append(searchFs, countSpan, wrap);
+  const rescanBtn = document.createElement("button");
+  rescanBtn.textContent = "残量再計算";
+  rescanBtn.style.marginRight = "4px";
+  rescanBtn.addEventListener("click", ev => {
+    ev.preventDefault();
+    rescanSpoolUsage();
+    render();
+  });
+  const undoBtn = document.createElement("button");
+  undoBtn.textContent = "UNDO";
+  undoBtn.addEventListener("click", ev => {
+    ev.preventDefault();
+    if (undoSpoolRescan()) render();
+  });
+  div.append(rescanBtn, undoBtn);
 
   const preview = createFilamentPreview(prevBox, {
     filamentDiameter: 1.75,
