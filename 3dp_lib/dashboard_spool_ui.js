@@ -12,11 +12,12 @@
  * - 材料入力の計算補助
  *
  * 【公開関数一覧】
- * - なし（DOMContentLoaded で自動初期化）
+ * - {@link showSpoolDialog}：スプール編集ダイアログ
+ * - {@link showSpoolSelectDialog}：スプール選択ダイアログ
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.758 (PR #350)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2025-07-05 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -150,6 +151,61 @@ function showSpoolDialog({ title = "", spool = {} }) {
     });
 
     function cleanup() { overlay.remove(); }
+  });
+}
+
+/**
+ * スプール選択ダイアログを表示する。
+ *
+ * @function showSpoolSelectDialog
+ * @param {Object} [opts]
+ * @param {string} [opts.title=""] - ダイアログタイトル
+ * @param {Array<Object>} [opts.spools=getSpools()] - 選択候補のスプール一覧
+ * @returns {Promise<Object|null>} 選択されたスプール、キャンセル時は null
+ */
+function showSpoolSelectDialog({ title = "", spools = getSpools() } = {}) {
+  injectStyles();
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.className = "spool-dialog-overlay";
+    const dlg = document.createElement("div");
+    dlg.className = "spool-dialog";
+    overlay.appendChild(dlg);
+
+    const h3 = document.createElement("h3");
+    h3.textContent = title;
+    dlg.appendChild(h3);
+
+    const select = document.createElement("select");
+    spools.forEach(sp => {
+      const opt = document.createElement("option");
+      opt.value = sp.id;
+      opt.textContent = `${sp.name} (${sp.remainingLengthMm}/${sp.totalLengthMm} mm)`;
+      select.appendChild(opt);
+    });
+    dlg.appendChild(select);
+
+    const btns = document.createElement("div");
+    btns.className = "spool-dialog-buttons";
+    const btnOk = document.createElement("button");
+    btnOk.textContent = "OK";
+    const btnCancel = document.createElement("button");
+    btnCancel.textContent = "キャンセル";
+    btns.append(btnOk, btnCancel);
+    dlg.appendChild(btns);
+
+    document.body.appendChild(overlay);
+
+    btnOk.addEventListener("click", () => {
+      const id = select.value;
+      const sp = spools.find(s => String(s.id) === String(id)) || null;
+      overlay.remove();
+      resolve(sp);
+    });
+    btnCancel.addEventListener("click", () => {
+      overlay.remove();
+      resolve(null);
+    });
   });
 }
 
@@ -351,4 +407,4 @@ function initSpoolUI() {
   render();
 }
 
-export { showSpoolDialog };
+export { showSpoolDialog, showSpoolSelectDialog };

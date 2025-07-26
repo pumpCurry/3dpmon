@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.756 (PR #344)
-* @since   1.390.197 (PR #88)
-* @lastModified 2025-07-21 16:37:31
+ * @version 1.390.758 (PR #350)
+ * @since   1.390.197 (PR #88)
+ * @lastModified 2025-07-05 15:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -53,7 +53,7 @@ import {
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
-import { showSpoolDialog } from "./dashboard_spool_ui.js";
+import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 
 /** 履歴の最大件数 */
@@ -794,6 +794,11 @@ export function renderHistoryTable(rawArray, baseUrl) {
     const countTexts = [];
     const remainTexts = [];
     const changeTexts = [];
+    if (spoolInfos.length === 0) {
+      spoolTexts.push(
+        `<button class="spool-assign" data-id="${raw.id}">スプール指定</button>`
+      );
+    }
     spoolInfos.forEach((info, idx) => {
       const sp = getSpoolById(info.spoolId) || null;
       const mat = info.material || sp?.material || '';
@@ -881,6 +886,23 @@ export function renderHistoryTable(rawArray, baseUrl) {
       if (res) {
         updateSpool(sp.id, res);
       }
+    });
+    tr.querySelector(".spool-assign")?.addEventListener("click", async () => {
+      const sp = await showSpoolSelectDialog({ title: "スプール指定" });
+      if (!sp) return;
+      raw.filamentInfo = [
+        {
+          spoolId: sp.id,
+          serialNo: sp.serialNo,
+          spoolName: sp.name,
+          colorName: sp.colorName,
+          filamentColor: sp.filamentColor,
+          material: sp.material,
+          spoolCount: sp.printCount,
+          expectedRemain: sp.remainingLengthMm
+        }
+      ];
+      updateHistoryList([raw], baseUrl);
     });
   });
 
