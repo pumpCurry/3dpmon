@@ -26,10 +26,12 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
- *
-* @version 1.390.756 (PR #344)
+ * - {@link rescanSpoolUsage}：履歴再解析による残量再計算
+ * - {@link undoSpoolRescan}：再解析の取り消し
+*
+* @version 1.390.759 (PR #351)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-21 16:37:31
+* @lastModified 2025-07-26 04:06:34
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,6 +49,13 @@ import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList } from "./dashboard_printmanager.js";
 import { getDeviceIp } from "./dashboard_connection.js";
+
+/**
+ * rescanSpoolUsage/undoSpoolRescan 用の保存スタック
+ * @private
+ * @type {Array<Array<Object>>}
+ */
+const _undoSpoolRescan = [];
 
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
@@ -620,4 +629,70 @@ export function autoCorrectCurrentSpool() {
     spool.printCount = count;
     saveUnifiedStorage();
   }
+}
+
+/**
+ * usageHistory 全体を走査して各スプールの残量を再計算する。
+ *
+ * 非破壊的に再計算を行うため、処理前のスプール配列を
+ * 内部スタックに保存する。undo 用に {@link undoSpoolRescan}
+ * と対で使用する。
+ *
+ * @function rescanSpoolUsage
+ * @returns {void}
+ */
+export function rescanSpoolUsage() {
+  const backup = JSON.parse(JSON.stringify(monitorData.filamentSpools));
+  _undoSpoolRescan.push(backup);
+
+  const spoolMap = new Map();
+  monitorData.filamentSpools.forEach(sp => {
+    spoolMap.set(sp.id, sp);
+    sp.printCount = 0;
+    const first = monitorData.usageHistory.find(
+      h => h.spoolId === sp.id && h.startLength != null
+    );
+    if (first) sp.remainingLengthMm = Number(first.startLength) || sp.remainingLengthMm;
+  });
+
+  const logs = monitorData.usageHistory.slice().sort((a, b) => {
+    const ta = Number(a.startedAt || a.usageId);
+    const tb = Number(b.startedAt || b.usageId);
+    return ta - tb;
+  });
+  logs.forEach(l => {
+    const sp = spoolMap.get(l.spoolId);
+    if (!sp) return;
+    if (l.startLength != null) {
+      const v = Number(l.startLength);
+      if (!isNaN(v)) {
+        sp.remainingLengthMm = v;
+        sp.printCount = 0;
+      }
+    } else if (l.usedLength != null) {
+      const u = Number(l.usedLength);
+      if (!isNaN(u)) {
+        sp.remainingLengthMm = Math.max(0, sp.remainingLengthMm - u);
+        sp.printCount += 1;
+      }
+    }
+  });
+
+  saveUnifiedStorage();
+}
+
+/**
+ * {@link rescanSpoolUsage} で保存した状態を復元する。
+ *
+ * スタックが空の場合は何もしない。
+ *
+ * @function undoSpoolRescan
+ * @returns {boolean} 復元に成功したか
+ */
+export function undoSpoolRescan() {
+  const prev = _undoSpoolRescan.pop();
+  if (!prev) return false;
+  monitorData.filamentSpools = JSON.parse(JSON.stringify(prev));
+  saveUnifiedStorage();
+  return true;
 }
