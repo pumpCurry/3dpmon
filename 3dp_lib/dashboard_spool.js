@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.760 (PR #351)
+* @version 1.390.761 (PR #351)
 * @since   1.390.193 (PR #86)
- * @lastModified 2025-07-28 13:46:07
+* @lastModified 2025-07-28 17:30:59
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -381,6 +381,28 @@ function logUsage(spool, lengthMm, jobId) {
   saveUnifiedStorage();
 }
 
+/**
+ * 印刷中の途中経過をスナップショットとして履歴に追加する。
+ *
+ * @function addUsageSnapshot
+ * @param {Object} spool - 対象スプール
+ * @param {string} jobId - 印刷ジョブID
+ * @param {number} remainMm - スナップショット時点の残量 [mm]
+ * @returns {void}
+ */
+export function addUsageSnapshot(spool, jobId, remainMm) {
+  monitorData.usageHistory.push({
+    usageId: Date.now(),
+    spoolId: spool.id,
+    spoolSerial: spool.serialNo,
+    jobId,
+    startedAt: Date.now(),
+    currentLength: remainMm,
+    isSnapshot: true
+  });
+  saveUnifiedStorage();
+}
+
 export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
@@ -511,6 +533,25 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   if (entry) {
     const baseUrl = `http://${getDeviceIp()}:80`;
     updateHistoryList([entry], baseUrl);
+  }
+  cleanupUsageSnapshots(jobId);
+}
+
+/**
+ * 指定ジョブのスナップショット履歴を削除する。
+ *
+ * @function cleanupUsageSnapshots
+ * @param {string} jobId - 対象ジョブID
+ * @returns {void}
+ */
+export function cleanupUsageSnapshots(jobId) {
+  if (!jobId) return;
+  const before = monitorData.usageHistory.length;
+  monitorData.usageHistory = monitorData.usageHistory.filter(
+    e => !(e.jobId === jobId && e.isSnapshot)
+  );
+  if (before !== monitorData.usageHistory.length) {
+    saveUnifiedStorage();
   }
 }
 

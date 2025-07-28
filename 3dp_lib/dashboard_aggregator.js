@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.760 (PR #351)
+* @version 1.390.761 (PR #351)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-28 13:46:07
+* @lastModified 2025-07-28 17:30:59
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -44,7 +44,8 @@ import {
   getCurrentSpool,
   reserveFilament,
   finalizeFilamentUsage,
-  autoCorrectCurrentSpool
+  autoCorrectCurrentSpool,
+  addUsageSnapshot
 } from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,11 @@ let prevMaterialStatus           = null;
 let currentMaterialStatus        = null;
 let filamentOutTimer             = null;
 let filamentLowWarned            = false;
+
+/** スナップショット記録間隔 [秒] */
+const USAGE_SNAPSHOT_INTERVAL = 30;
+let lastUsageSnapshotSec = 0;
+let snapshotPrintId = null;
 
 // ---------------------------------------------------------------------------
 // ingestData: WebSocket 生データ受領時の集計＆通知発火
@@ -699,6 +705,7 @@ function aggregateTimersAndPredictions(data) {
  *   - 差分主導で再計算／表示更新
  *   - 温度グラフ更新
  *   - 永続化
+ *   - 一定間隔で残量スナップショットを記録
  */
 export function aggregatorUpdate() {
 
@@ -887,6 +894,24 @@ export function aggregatorUpdate() {
     // 小数点以下2桁に丸めて保持
     remain = Math.round(remain * 100) / 100;
     setStoredData("filamentRemainingMm", remain, true);
+
+    if (spool.currentPrintID) {
+      if (snapshotPrintId !== spool.currentPrintID) {
+        snapshotPrintId = spool.currentPrintID;
+        lastUsageSnapshotSec = 0;
+      }
+      if (
+        (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
+        (!lastUsageSnapshotSec || Date.now() / 1000 - lastUsageSnapshotSec >= USAGE_SNAPSHOT_INTERVAL)
+      ) {
+        addUsageSnapshot(spool, spool.currentPrintID, remain);
+        lastUsageSnapshotSec = Date.now() / 1000;
+      }
+    } else {
+      snapshotPrintId = null;
+      lastUsageSnapshotSec = 0;
+    }
+
     const thr = notificationManager.getFilamentLowThreshold?.() ?? 0.1;
     if (spool.totalLengthMm > 0) {
       const ratio = remain / spool.totalLengthMm;
