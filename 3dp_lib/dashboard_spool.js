@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.756 (PR #344)
+* @version 1.390.760 (PR #351)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-21 16:37:31
+ * @lastModified 2025-07-28 13:46:07
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -149,7 +149,7 @@ export function setCurrentSpoolId(id) {
     if (Array.isArray(prevSpool.printIdRanges) && prevSpool.printIdRanges.length) {
       const r = prevSpool.printIdRanges[prevSpool.printIdRanges.length - 1];
       if (r && r.endPrintID == null) {
-        r.endPrintID = printId || prevSpool.currentPrintID || "";
+        r.endPrintID = String(printId || prevSpool.currentPrintID || "");
       }
     }
     prevSpool.removedAt = Date.now();
@@ -308,7 +308,9 @@ export function deleteSpool(id) {
     const machine = monitorData.machines[currentHostname] || {};
     const pid = machine.printStore?.current?.id ?? "";
     const r = s.printIdRanges[s.printIdRanges.length - 1];
-    if (r && r.endPrintID == null) r.endPrintID = pid || s.currentPrintID || "";
+    if (r && r.endPrintID == null) {
+      r.endPrintID = String(pid || s.currentPrintID || "");
+    }
   }
   s.deleted = true;
   s.isDeleted = true;
