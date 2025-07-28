@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.761 (PR #351)
+* @version 1.390.764 (PR #352)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-28 17:30:59
+* @lastModified 2025-07-28 22:48:26
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -126,6 +126,9 @@ export function getCurrentSpool() {
  * monitorData.currentSpoolId や対象スプールのフラグを変更し、
  * 必要に応じて履歴情報や残量を更新する副作用がある。履歴補完時は
  * {@link updateHistoryList} を呼び出して保存と UI 更新も行う。
+ * さらに前スプールで印刷途中だった場合は、その時点までの使用量を
+ * {@link finalizeFilamentUsage} で確定し、新スプールへ残りの予定
+ * 長さを {@link reserveFilament} で引き継ぐ。
  *
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
@@ -137,13 +140,23 @@ export function setCurrentSpoolId(id) {
   const prevSpool = getSpoolById(prevId);
   const newSpool = getSpoolById(id);
 
+  const machine = monitorData.machines[currentHostname] || {};
+  const printId = machine.printStore?.current?.id ?? "";
+
+  let remaining = 0;
+  if (prevSpool && prevSpool.currentJobStartLength != null) {
+    const used = prevSpool.currentJobStartLength - prevSpool.remainingLengthMm;
+    const expected = prevSpool.currentJobExpectedLength ?? used;
+    remaining = Math.max(0, expected - used);
+    finalizeFilamentUsage(used, prevSpool.currentPrintID);
+  }
+
   monitorData.currentSpoolId = id;
   monitorData.filamentSpools.forEach(sp => {
     sp.isActive = sp.id === id;
     sp.isInUse = sp.id === id;
   });
-  const machine = monitorData.machines[currentHostname] || {};
-  const printId = machine.printStore?.current?.id ?? "";
+
 
   if (prevSpool) {
     if (Array.isArray(prevSpool.printIdRanges) && prevSpool.printIdRanges.length) {
@@ -167,6 +180,10 @@ export function setCurrentSpoolId(id) {
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
     newSpool.isPending = true;
+    if (remaining > 0) {
+      // 継続ジョブの残り分を新しいスプールに予約
+      reserveFilament(remaining, printId);
+    }
     // UI に即座に残量を反映させるため storedData を更新
     setStoredData("filamentRemainingMm", newSpool.remainingLengthMm, true);
     // ----- 印刷履歴更新処理 -----
