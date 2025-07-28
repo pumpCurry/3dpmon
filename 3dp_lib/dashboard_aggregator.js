@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.753 (PR #348)
+* @version 1.390.760 (PR #351)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-19 22:42:05
+* @lastModified 2025-07-28 13:46:07
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -413,25 +413,25 @@ export function ingestData(data) {
   const prevPrintState_agg = Number(
     monitorData.machines[currentHostname]?.runtimeData?.state ?? 0
   );
-  // 直前まで印刷中もしくは一時停止中で、現在の状態が完了・失敗・アイドル
-  // かつ進捗率が100%以上なら finalizeFilamentUsage を実行する
+  // 直前まで印刷中もしくは一時停止中で、現在の状態が完了・失敗・アイドルに
+  // 遷移した場合は使用フィラメント量を確定する。進捗率が100%未満でも処理
+  // を行い、キャンセルや電源断による中断を検出する。
   if (
     (prevPrintState_agg === PRINT_STATE_CODE.printStarted ||
       prevPrintState_agg === PRINT_STATE_CODE.printPaused) &&
     (st_agg === PRINT_STATE_CODE.printDone ||
       st_agg === PRINT_STATE_CODE.printFailed ||
-      st_agg === PRINT_STATE_CODE.printIdle) &&
-    prog_agg >= 100
+      st_agg === PRINT_STATE_CODE.printIdle)
   ) {
-    const usedMaterial_agg = Number(
+    let length = Number(
       data.usedMaterialLength ?? data.usagematerial ?? NaN
     );
     const spool = getCurrentSpool();
     const jobId_agg = spool?.currentPrintID || String(data.printStartTime || "");
     if (jobId_agg) {
-      const length = !isNaN(usedMaterial_agg)
-        ? usedMaterial_agg
-        : spool?.currentJobExpectedLength ?? 0;
+      if (isNaN(length) || length <= 0) {
+        length = spool?.currentJobExpectedLength ?? 0;
+      }
       finalizeFilamentUsage(length, jobId_agg);
     }
   }
@@ -870,9 +870,12 @@ export function aggregatorUpdate() {
       spool.remainingLengthMm = Math.max(0, remain);
     } else if (
       spool.currentJobStartLength != null &&
+      (Number(monitorData.machines[currentHostname]?.runtimeData?.state) ===
+        PRINT_STATE_CODE.printStarted ||
+        Number(monitorData.machines[currentHostname]?.runtimeData?.state) ===
+          PRINT_STATE_CODE.printPaused) &&
       st !== PRINT_STATE_CODE.printStarted &&
-      st !== PRINT_STATE_CODE.printPaused &&
-      prog >= 100
+      st !== PRINT_STATE_CODE.printPaused
     ) {
       const finalUsed = !isNaN(used)
         ? used
