@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.758 (PR #350)
- * @since   1.390.197 (PR #88)
- * @lastModified 2025-07-05 15:00:00
+* @version 1.390.767 (PR #353)
+* @since   1.390.197 (PR #88)
+* @lastModified 2025-08-07 22:24:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -37,7 +37,8 @@ import {
   loadPrintHistory,
   savePrintHistory,
   loadPrintVideos,
-  savePrintVideos
+  savePrintVideos,
+  MAX_PRINT_HISTORY
 } from "./dashboard_storage.js";
 
 import { formatEpochToDateTime, formatDuration } from "./dashboard_utils.js";
@@ -55,9 +56,6 @@ import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connectio
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
-
-/** 履歴の最大件数 */
-export const MAX_HISTORY = 150;
 
 /**
  * 履歴マージ時にゼロ値を無視したいフィールド一覧
@@ -210,7 +208,7 @@ export function parseRawHistoryList(rawArray, baseUrl, host = currentHostname) {
     )
     .map(r => parseRawHistoryEntry(r, baseUrl, host))
     .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_HISTORY);
+    .slice(0, MAX_PRINT_HISTORY);
 }
 
 // ---------------------- ストレージ操作 ----------------------
@@ -505,7 +503,7 @@ export async function refreshHistory(
   });
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => Number(b.id) - Number(a.id))
-    .slice(0, MAX_HISTORY);
+    .slice(0, MAX_PRINT_HISTORY);
 
 
   const state = Number(machine?.runtimeData?.state ?? 0);
@@ -564,7 +562,7 @@ export async function refreshHistory(
   });
   const mergedRaw = Array.from(rawMap.values())
     .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_HISTORY);
+    .slice(0, MAX_PRINT_HISTORY);
   renderHistoryTable(mergedRaw, baseUrl);
 }
 
@@ -642,7 +640,7 @@ export function updateHistoryList(
   });
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => Number(b.id) - Number(a.id))
-    .slice(0, MAX_HISTORY);
+    .slice(0, MAX_PRINT_HISTORY);
 
   const videoMap = loadVideos();
   jobs.forEach(j => {
