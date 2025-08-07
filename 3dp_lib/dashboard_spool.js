@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.764 (PR #352)
-* @since   1.390.193 (PR #86)
-* @lastModified 2025-07-28 22:48:26
+ * @version 1.390.767 (PR #353)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2025-08-07 22:24:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -42,7 +42,7 @@ import {
   currentHostname,
   setStoredData
 } from "./dashboard_data.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList } from "./dashboard_printmanager.js";
@@ -373,6 +373,7 @@ function logSpoolChange(spool, printId = "") {
     startLength: spool.startLength,
     startedAt: spool.startedAt
   });
+  trimUsageHistory();
   saveUnifiedStorage();
 }
 
@@ -395,6 +396,7 @@ function logUsage(spool, lengthMm, jobId) {
     usedLength: lengthMm,
     currentLength: spool.remainingLengthMm
   });
+  trimUsageHistory();
   saveUnifiedStorage();
 }
 
@@ -417,6 +419,7 @@ export function addUsageSnapshot(spool, jobId, remainMm) {
     currentLength: remainMm,
     isSnapshot: true
   });
+  trimUsageHistory();
   saveUnifiedStorage();
 }
 

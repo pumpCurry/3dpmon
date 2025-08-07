@@ -13,29 +13,19 @@
  * 【公開関数一覧】
  * - {@link FileManager}：履歴ロード・保存のユーティリティ
  *
- * @version 1.390.766 (PR #353)
+ * @version 1.390.767 (PR #353)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-08-07 22:07:09
+ * @lastModified 2025-08-07 22:24:00
  * -----------------------------------------------------------
  * @todo
  * - none
  */
 
 import { currentHostname } from "./dashboard_data.js";
+import { MAX_PRINT_HISTORY } from "./dashboard_storage.js";
 
 const containerId = 'filemanager-history';
 const STORAGE_KEY_PREFIX = '3dp-filemanager-history-';
-/**
- * 履歴保存の最大件数
- *
- * ファイルマネージャが localStorage に保持する履歴数の上限。
- * 従来は 150 件であったが、より長期間の履歴を確認できるよう
- * 1500 件まで保存できるようにする。
- *
- * @constant {number}
- */
-const MAX_HISTORY = 1500;
-
 /**
  * @typedef {Object} HistoryEntry
  * @property {number} id             ジョブID
@@ -142,7 +132,7 @@ export const FileManager = {
     });
     const mergedHistory = Array.from(histMap.values())
       .sort((a, b) => b.id - a.id)
-      .slice(0, MAX_HISTORY);
+      .slice(0, MAX_PRINT_HISTORY);
 
     const videoMap = new Map(stored.elapseVideoList.map(v => [v.id, v]));
     videos.forEach(v => {

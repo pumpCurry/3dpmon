@@ -26,13 +26,13 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.766 (PR #353)
+* @version 1.390.767 (PR #353)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-08-07 22:07:09
+* @lastModified 2025-08-07 22:24:00
  * -----------------------------------------------------------
  * @todo
  * - none
-*/
+ */
 
 "use strict";
 
@@ -114,7 +114,28 @@ const STORAGE_KEY = "3dp-monitor_1.400";
  *
  * @constant {number}
  */
-const MAX_HISTORY = 1500;
+export const MAX_PRINT_HISTORY = 1500;
+
+/**
+ * フィラメント使用履歴の最大保持件数
+ *
+ * 1 印刷で最大 2 リールまで使用する想定のため、
+ * 4500 件を上限として保持する。
+ *
+ * @constant {number}
+ */
+export const MAX_USAGE_HISTORY = 4500;
+
+/**
+ * フィラメント使用履歴配列が上限を超えた場合に古い記録を削除する。
+ *
+ * @returns {void}
+ */
+export function trimUsageHistory() {
+  if (monitorData.usageHistory.length > MAX_USAGE_HISTORY) {
+    monitorData.usageHistory = monitorData.usageHistory.slice(-MAX_USAGE_HISTORY);
+  }
+}
 
 /**
  * monitorData 全体を JSON にシリアライズし、localStorage に保存する。
@@ -186,6 +207,7 @@ export function restoreUnifiedStorage() {
         monitorData.filamentSpools = data.filamentSpools.map(sp => applySpoolDefaults(sp));
       if (Array.isArray(data.usageHistory))
         monitorData.usageHistory = data.usageHistory;
+      trimUsageHistory();
       if (Array.isArray(data.filamentInventory))
         monitorData.filamentInventory = data.filamentInventory;
       if (Array.isArray(data.filamentPresets))
@@ -406,7 +428,7 @@ export function savePrintHistory(history) {
   if (!host) return;
   ensureMachineData(host);
   monitorData.machines[host].printStore.history =
-    history.slice(0, MAX_HISTORY);
+    history.slice(0, MAX_PRINT_HISTORY);
   saveUnifiedStorage();
 }
 
