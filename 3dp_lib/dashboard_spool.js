@@ -23,13 +23,14 @@
  * - {@link updateSpool}：スプール更新
  * - {@link deleteSpool}：スプール削除
  * - {@link useFilament}：使用量反映
+ * - {@link beginExternalPrint}：外部開始印刷初期化
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
- * @version 1.390.771 (PR #354)
+* @version 1.390.773 (PR #355)
 * @since   1.390.193 (PR #86)
- * @lastModified 2025-08-07 22:56:40
+* @lastModified 2025-08-07 23:08:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -454,6 +455,41 @@ export function useFilament(lengthMm, jobId = "") {
   updateStoredDataToDOM();
   s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
+  // ページリロード直後でも残量が巻き戻らないよう即座に保存
+  saveUnifiedStorage();
+}
+
+/**
+ * 外部で開始された印刷ジョブのフィラメント使用量を初期化する。
+ * {@link useFilament} と同等の処理を行うが、呼び出し元から対象スプールを受け取る。
+ *
+ * @function beginExternalPrint
+ * @param {Object} spool - 対象スプール
+ * @param {number} lengthMm - 予定消費量 [mm]
+ * @param {string} [jobId=""] - 印刷ジョブID
+ * @returns {void}
+ */
+export function beginExternalPrint(spool, lengthMm, jobId = "") {
+  if (!spool) return;
+  const machine = monitorData.machines[currentHostname];
+  if (machine?.printStore?.current) {
+    machine.printStore.current.filamentId = spool.id;
+  }
+  if (spool.isPending) {
+    // スプール交換直後の初回使用であれば履歴に交換記録を追加
+    logSpoolChange(spool, jobId);
+    spool.isPending = false;
+  }
+  // 現在の印刷ジョブ開始時点の残量と必要量を記録
+  spool.currentJobStartLength = spool.remainingLengthMm;
+  spool.currentJobExpectedLength = lengthMm;
+  // 残量を先に減算して保持
+  spool.remainingLengthMm = Math.max(0, spool.remainingLengthMm - lengthMm);
+  // DOM 表示とストレージに新しい残量を即時反映
+  setStoredData("filamentRemainingMm", spool.remainingLengthMm, true);
+  updateStoredDataToDOM();
+  spool.currentPrintID = jobId;
+  spool.usedLengthLog.push({ jobId, used: lengthMm });
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
   saveUnifiedStorage();
 }
