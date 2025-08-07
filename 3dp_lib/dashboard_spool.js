@@ -27,9 +27,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
- * @version 1.390.767 (PR #353)
- * @since   1.390.193 (PR #86)
- * @lastModified 2025-08-07 22:24:00
+ * @version 1.390.771 (PR #354)
+* @since   1.390.193 (PR #86)
+ * @lastModified 2025-08-07 22:56:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -423,6 +423,15 @@ export function addUsageSnapshot(spool, jobId, remainMm) {
   saveUnifiedStorage();
 }
 
+/**
+ * 予約済みフィラメント長を即時消費として反映し、残量を更新する。
+ * ページリロード時に残量が復元されるようストレージと DOM を同期させる。
+ *
+ * @function useFilament
+ * @param {number} lengthMm - 使用したフィラメント長 [mm]
+ * @param {string} [jobId=""] - 印刷ジョブID
+ * @returns {void}
+ */
 export function useFilament(lengthMm, jobId = "") {
   const s = getCurrentSpool();
   if (!s) return;
@@ -431,6 +440,7 @@ export function useFilament(lengthMm, jobId = "") {
     machine.printStore.current.filamentId = s.id;
   }
   if (s.isPending) {
+    // スプール交換直後の初回使用であれば履歴に交換記録を追加
     logSpoolChange(s, jobId);
     s.isPending = false;
   }
@@ -439,6 +449,9 @@ export function useFilament(lengthMm, jobId = "") {
   s.currentJobExpectedLength = lengthMm;
   // 残量を先に減算して保持
   s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
+  // DOM 表示とストレージに新しい残量を即時反映
+  setStoredData("filamentRemainingMm", s.remainingLengthMm, true);
+  updateStoredDataToDOM();
   s.currentPrintID = jobId;
   s.usedLengthLog.push({ jobId, used: lengthMm });
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
@@ -448,8 +461,8 @@ export function useFilament(lengthMm, jobId = "") {
 /**
  * 現在の印刷ジョブに必要なフィラメント長を予約する。
  * 残量は減算せず開始時の値を保持するのみで、実際の減算は完了時に行う。
- * 履歴バッファへスプール情報を追記後、{@link updateHistoryList} を利用して
- * 永続化と画面反映を行う。
+ * 履歴バッファへスプール情報を追記しつつ、現在の残量をストレージと DOM に
+ * 同期させ {@link updateHistoryList} を利用して永続化と画面反映を行う。
  *
  * @function reserveFilament
  * @param {number} lengthMm - 予定消費量 [mm]
@@ -470,6 +483,9 @@ export function reserveFilament(lengthMm, jobId = "") {
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = lengthMm;
   s.currentPrintID = jobId;
+  // DOM 表示とストレージに現在残量を即座に反映
+  setStoredData("filamentRemainingMm", s.remainingLengthMm, true);
+  updateStoredDataToDOM();
   // --- 印刷開始時点で履歴にスプール情報を記録 -------------------
   let entry = null;
   if (machine && Array.isArray(machine.historyData)) {
