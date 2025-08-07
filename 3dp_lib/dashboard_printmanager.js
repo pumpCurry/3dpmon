@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.758 (PR #350)
+ * @version 1.390.766 (PR #353)
  * @since   1.390.197 (PR #88)
- * @lastModified 2025-07-05 15:00:00
+ * @lastModified 2025-08-07 22:07:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -56,8 +56,17 @@ import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 
-/** 履歴の最大件数 */
-export const MAX_HISTORY = 150;
+/**
+ * 印刷履歴の最大保持件数
+ *
+ * 監視対象プリンタから取得した印刷履歴を保持する際の
+ * 上限件数を定義する。既定値の 150 件では過去の履歴が
+ * 早期に削除されるため、より多く参照できるよう 1500 件
+ * まで保持するよう拡張する。
+ *
+ * @constant {number}
+ */
+export const MAX_HISTORY = 1500;
 
 /**
  * 履歴マージ時にゼロ値を無視したいフィールド一覧

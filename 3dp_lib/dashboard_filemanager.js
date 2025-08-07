@@ -13,9 +13,9 @@
  * 【公開関数一覧】
  * - {@link FileManager}：履歴ロード・保存のユーティリティ
  *
- * @version 1.390.348 (PR #155)
+ * @version 1.390.766 (PR #353)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-20 14:50:39
+ * @lastModified 2025-08-07 22:07:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -25,7 +25,16 @@ import { currentHostname } from "./dashboard_data.js";
 
 const containerId = 'filemanager-history';
 const STORAGE_KEY_PREFIX = '3dp-filemanager-history-';
-const MAX_HISTORY = 150;
+/**
+ * 履歴保存の最大件数
+ *
+ * ファイルマネージャが localStorage に保持する履歴数の上限。
+ * 従来は 150 件であったが、より長期間の履歴を確認できるよう
+ * 1500 件まで保存できるようにする。
+ *
+ * @constant {number}
+ */
+const MAX_HISTORY = 1500;
 
 /**
  * @typedef {Object} HistoryEntry

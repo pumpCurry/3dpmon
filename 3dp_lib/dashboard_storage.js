@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.756 (PR #344)
+* @version 1.390.766 (PR #353)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-21 16:37:31
+* @lastModified 2025-08-07 22:07:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -105,8 +105,16 @@ function pushLog(msg, isErr = false) {
 
 /** localStorage へ保存するキー名 */
 const STORAGE_KEY = "3dp-monitor_1.400";
-/** 印刷履歴の最大保持件数 */
-const MAX_HISTORY = 250;
+/**
+ * 印刷履歴の最大保持件数
+ *
+ * localStorage に保存する印刷履歴配列の上限を定める。
+ * これまでは 250 件までの保持であったが、過去の履歴を
+ * より多く参照できるよう 1500 件まで保存できるようにする。
+ *
+ * @constant {number}
+ */
+const MAX_HISTORY = 1500;
 
 /**
  * monitorData 全体を JSON にシリアライズし、localStorage に保存する。
