@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.765 (PR #352)
+* @version 1.390.774 (PR #355)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-08-07 22:42:03
+* @lastModified 2025-08-07 23:11:03
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,7 +45,8 @@ import {
   reserveFilament,
   finalizeFilamentUsage,
   autoCorrectCurrentSpool,
-  addUsageSnapshot
+  addUsageSnapshot,
+  beginExternalPrint
 } from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
@@ -77,6 +78,7 @@ let tsCompleteStart   = null;
 let actualStartEpoch  = null;
 let initialLeftSec    = null, initialLeftEpoch = null;
 let prevPrintID       = null;
+let lastPrintState    = PRINT_STATE_CODE.printIdle;
 
 // 通知履歴 A～E 用
 const PROGRESS_MILESTONES        = [50, 80, 90, 95, 98];
@@ -862,6 +864,28 @@ export function aggregatorUpdate() {
   const spool = getCurrentSpool();
   if (spool) autoCorrectCurrentSpool();
   const st   = Number(storedData.state?.rawValue || 0);
+
+  // アイドル状態から印刷開始へ遷移し、useFilament() が未実行の場合の初期化
+  if (
+    spool &&
+    lastPrintState === PRINT_STATE_CODE.printIdle &&
+    st === PRINT_STATE_CODE.printStarted &&
+    spool.currentJobStartLength == null
+  ) {
+    let est = Number(storedData.materialLength?.rawValue ?? NaN);
+    if (isNaN(est)) {
+      est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
+    }
+    const job = loadPrintCurrent();
+    const jobId = job?.id ?? "";
+    if ((isNaN(est) || est <= 0) && storedData.fileName?.rawValue) {
+      est = guessExpectedLength(storedData.fileName.rawValue);
+    }
+    beginExternalPrint(spool, isNaN(est) ? 0 : est, jobId);
+    accumulatedUsedMaterial = 0;
+    prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
+    prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
+  }
   // usedMaterialLength 受信時、または復元直後に currentJobStartLength が未設定の
   // 状態で印刷が進行中の場合に残量計算を開始
   if (
@@ -906,7 +930,7 @@ export function aggregatorUpdate() {
           machine.printStore.current.filamentId = spool.id;
         }
         if (!isNaN(len) && len > 0) {
-          reserveFilament(len, jobId);
+          beginExternalPrint(spool, len, jobId);
         } else {
           // 予定使用量が不明の場合は予約を遅延させる
           spool.currentPrintID = jobId;
@@ -997,11 +1021,12 @@ export function aggregatorUpdate() {
     }
   }
 
-  updateStoredDataToDOM();
-  persistAggregatorState();
-  saveUnifiedStorage();
+    updateStoredDataToDOM();
+    lastPrintState = st;
+    persistAggregatorState();
+    saveUnifiedStorage();
 
-}
+  }
 
 // ---------------------------------------------------------------------------
 // guessExpectedLength: 履歴から予定使用量を推測
