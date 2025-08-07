@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.761 (PR #351)
+* @version 1.390.765 (PR #352)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-28 17:30:59
+* @lastModified 2025-08-07 22:42:03
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -100,6 +100,16 @@ let filamentLowWarned            = false;
 const USAGE_SNAPSHOT_INTERVAL = 30;
 let lastUsageSnapshotSec = 0;
 let snapshotPrintId = null;
+
+// ---------------------------------------------------------------------------
+// フィラメント使用量の追跡用変数
+// ---------------------------------------------------------------------------
+/** 前回受信した usedMaterialLength [mm] を保持 */
+let prevUsedMaterialLength = null;
+/** 前回処理した進捗率 [%]。進捗から使用量を推定する際に利用 */
+let prevUsageProgress = 0;
+/** セッション中に累積した実使用フィラメント長 [mm] */
+let accumulatedUsedMaterial = 0;
 
 // ---------------------------------------------------------------------------
 // ingestData: WebSocket 生データ受領時の集計＆通知発火
@@ -182,6 +192,10 @@ export function ingestData(data) {
   // (0) 新しい PrintID 検出 → 全リセット
   const validId = Number.isFinite(id) && id > 0;
   if (validId && id !== prevPrintID) {
+    // 新しいジョブ開始時点でフィラメント使用量関連の変数を初期化
+    accumulatedUsedMaterial = !isNaN(matLen) ? matLen : 0;
+    prevUsedMaterialLength = !isNaN(matLen) ? matLen : null;
+    prevUsageProgress = prog;
 
     if (prevPrintID === null && actualStartEpoch !== null) {
       // printJobTime から開始済みのジョブに ID が後から届いた場合
@@ -429,16 +443,48 @@ export function ingestData(data) {
       st_agg === PRINT_STATE_CODE.printFailed ||
       st_agg === PRINT_STATE_CODE.printIdle)
   ) {
-    let length = Number(
-      data.usedMaterialLength ?? data.usagematerial ?? NaN
-    );
+    // 状態遷移を検知したら、直近の使用量を積算した上で確定する
     const spool = getCurrentSpool();
+    if (!isNaN(Number(data.usedMaterialLength))) {
+      const cur = Number(data.usedMaterialLength);
+      if (prevUsedMaterialLength != null) {
+        const d = cur - prevUsedMaterialLength;
+        if (d > 0) accumulatedUsedMaterial += d;
+      } else {
+        // これが初回値の場合はそのまま累積値とする
+        accumulatedUsedMaterial += cur;
+      }
+      prevUsedMaterialLength = cur;
+      prevUsageProgress = prog_agg;
+    } else {
+      let est = spool?.currentJobExpectedLength ?? NaN;
+      if ((isNaN(est) || est <= 0) && data.fileName) {
+        est = guessExpectedLength(String(data.fileName));
+      }
+      const diffProg = prog_agg - prevUsageProgress;
+      if (!isNaN(est) && diffProg > 0) {
+        accumulatedUsedMaterial += (est * diffProg) / 100;
+      }
+      prevUsageProgress = prog_agg;
+    }
+    let length = accumulatedUsedMaterial;
     const jobId_agg = spool?.currentPrintID || String(data.printStartTime || "");
     if (jobId_agg) {
-      if (isNaN(length) || length <= 0) {
-        length = spool?.currentJobExpectedLength ?? 0;
+      if (length <= 0) {
+        // usedMaterialLength が得られない場合は進捗とファイル情報から推定
+        let est = spool?.currentJobExpectedLength ?? NaN;
+        if ((isNaN(est) || est <= 0) && data.fileName) {
+          est = guessExpectedLength(String(data.fileName));
+        }
+        if (!isNaN(est) && prog_agg > 0) {
+          length = (est * prog_agg) / 100;
+        }
       }
       finalizeFilamentUsage(length, jobId_agg);
+      saveUnifiedStorage();
+      accumulatedUsedMaterial = 0;
+      prevUsedMaterialLength = null;
+      prevUsageProgress = 0;
     }
   }
 
@@ -825,7 +871,11 @@ export function aggregatorUpdate() {
         (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)))
   ) {
     if (spool.currentJobStartLength == null) {
+      // 印刷開始直後にスプール残量を記録し、使用量カウンタを初期化
       spool.currentJobStartLength = spool.remainingLengthMm;
+      accumulatedUsedMaterial = 0;
+      prevUsedMaterialLength = Number(storedData.usedMaterialLength.rawValue);
+      prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
     }
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
     const used = Number(storedData.usedMaterialLength.rawValue);
@@ -849,29 +899,46 @@ export function aggregatorUpdate() {
       if ((isNaN(len) || len <= 0) && storedData.fileName?.rawValue) {
         len = guessExpectedLength(storedData.fileName.rawValue);
       }
-      if (isNaN(len) || len < 0) {
-        // 予定使用量が取得できない場合は 0 とみなし、使用量のみを追跡する
-        len = 0;
-      }
       if (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId) {
-        // ここでフィラメント使用予定を登録し、残量計算を有効化する
+        // フィラメントIDのみ先に確定し、使用量が判明してから予約する
         const machine = monitorData.machines[currentHostname];
         if (machine?.printStore?.current) {
           machine.printStore.current.filamentId = spool.id;
         }
-        reserveFilament(len, jobId);
+        if (!isNaN(len) && len > 0) {
+          reserveFilament(len, jobId);
+        } else {
+          // 予定使用量が不明の場合は予約を遅延させる
+          spool.currentPrintID = jobId;
+        }
       }
     }
     if (
       spool.currentJobStartLength != null &&
       (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)
     ) {
+      // 実際に使用した長さをデルタで積算
+      let delta = 0;
       if (!isNaN(used)) {
-        remain = spool.currentJobStartLength - used;
-      } else if (spool.currentJobExpectedLength != null) {
-        const frac = Math.min(Math.max(prog / 100, 0), 1);
-        remain = spool.currentJobStartLength - spool.currentJobExpectedLength * frac;
+        if (prevUsedMaterialLength != null) {
+          delta = used - prevUsedMaterialLength;
+          if (delta < 0) delta = 0; // マイナス値は無視
+        } else {
+          // 初回受信時はそのまま累積値として扱う
+          delta = used;
+        }
+        prevUsedMaterialLength = used;
+        // usedMaterialLength が得られた場合でも進捗基準を同期しておく
+        prevUsageProgress = prog;
+      } else if (!isNaN(est)) {
+        const diffProg = prog - prevUsageProgress;
+        if (diffProg > 0) {
+          delta = (est * diffProg) / 100;
+        }
+        prevUsageProgress = prog;
       }
+      accumulatedUsedMaterial += delta;
+      remain = spool.currentJobStartLength - accumulatedUsedMaterial;
       // 印刷途中にページを更新しても残量が巻き戻らないよう、
       // 計算値をスプールオブジェクトへ反映しておく
       spool.remainingLengthMm = Math.max(0, remain);
@@ -884,10 +951,12 @@ export function aggregatorUpdate() {
       st !== PRINT_STATE_CODE.printStarted &&
       st !== PRINT_STATE_CODE.printPaused
     ) {
-      const finalUsed = !isNaN(used)
-        ? used
-        : spool.currentJobExpectedLength ?? 0;
-      finalizeFilamentUsage(finalUsed, spool.currentPrintID);
+      // 状態が完了・失敗等へ遷移した場合は累積使用量で確定
+      finalizeFilamentUsage(accumulatedUsedMaterial, spool.currentPrintID);
+      saveUnifiedStorage();
+      accumulatedUsedMaterial = 0;
+      prevUsedMaterialLength = null;
+      prevUsageProgress = 0;
       remain = spool.remainingLengthMm;
     }
 
