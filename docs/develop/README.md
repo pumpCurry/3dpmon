@@ -21,5 +21,7 @@
 | `side_menu.md` | SideMenu バーガイド |
 | `titlebar.md` | TitleBar コンポーネントガイド |
 | `temp_graph.md` | 温度グラフ表示の仕様 |
+| `orig_patch_workflow.md` | オリジナルリポジトリへパッチを戻す手順 |
+| `pr_history.md` | PR 履歴一覧 |
 
 その他の `*_review.md` は各ステップのレビュー結果を記録したものです。
