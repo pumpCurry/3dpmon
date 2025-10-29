@@ -11,7 +11,7 @@ The console should display echoed JSON via the new ConnectionManager.
 1. このリポジトリをダウンロードします。
    - **Git**: `git clone https://github.com/pumpCurry/3dpmon.git`
    - **ZIP**: GitHub の **Code → Download ZIP** から取得します。
-2. Python 3 をインストールします。
+2. Python 3 をインストールすると運用が楽です(簡易httpサーバを動かすためだけに使います)
    - **Windows**: Microsoft Store の [Python 3.13](https://apps.microsoft.com/detail/9pnrbtzxmb4z)
    - **Linux**: 多くのディストリビューションでは `python3` パッケージが利用可能です。
    - **macOS**: 付属の Python 3 を使用するか [python.org](https://www.python.org/) から入手します。
