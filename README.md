@@ -62,6 +62,17 @@ Unit tests are executed with [Vitest](https://vitest.dev/).
 
 See [docs/develop/tests.md](docs/develop/tests.md) for coverage goals and additional details.
 
+## Font Inspector
+`scripts/font_inspector.js` can enumerate glyphs in any TrueType or OpenType font.
+
+Run the following to list all designed characters:
+
+```bash
+node scripts/font_inspector.js --target_font <font-file> --dump_exist_designed_all_char
+```
+
+Use `--dump_registed_all_char` to output every registered Unicode code point.
+
 ### Troubleshooting
 If `npm run dev` fails with `EACCES: permission denied, rename` on Dropbox or
 other network drives, run `scripts/clear-vite.sh` to reset Vite's cache.

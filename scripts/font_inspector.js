@@ -15,9 +15,9 @@
  * - {@link dumpRegisteredAllChar}: 登録済みの全 Unicode 文字を出力
  * - {@link dumpExistDesignedAllChar}: デザインが存在する文字だけを出力
  *
- * @version 1.390.744 (PR #342)
+ * @version 1.390.746 (PR #343)
  * @since   1.390.744 (PR #342)
- * @lastModified  2025-07-14 11:20:18
+ * @lastModified  2025-07-14 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -35,7 +35,7 @@ import opentype from 'opentype.js';
 export function dumpRegisteredAllChar(fontPath) {
   const font = opentype.loadSync(fontPath);
   const chars = [];
-  for (const glyph of font.glyphs.glyphs) {
+  for (const glyph of Object.values(font.glyphs.glyphs)) {
     if (glyph.unicode !== undefined) {
       chars.push(String.fromCodePoint(glyph.unicode));
     }
@@ -56,7 +56,7 @@ export function dumpRegisteredAllChar(fontPath) {
 export function dumpExistDesignedAllChar(fontPath) {
   const font = opentype.loadSync(fontPath);
   const chars = [];
-  for (const glyph of font.glyphs.glyphs) {
+  for (const glyph of Object.values(font.glyphs.glyphs)) {
     if (glyph.unicode === undefined) {
       continue;
     }
