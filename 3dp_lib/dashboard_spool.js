@@ -28,9 +28,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.773 (PR #355)
+* @version 1.390.775 (PR #356)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-08-07 23:08:22
+* @lastModified 2026-01-26 18:26:52
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -142,7 +142,7 @@ export function setCurrentSpoolId(id) {
   const newSpool = getSpoolById(id);
 
   const machine = monitorData.machines[currentHostname] || {};
-  const printId = machine.printStore?.current?.id ?? "";
+  const printId = String(machine.printStore?.current?.id ?? "");
 
   let remaining = 0;
   if (prevSpool && prevSpool.currentJobStartLength != null) {
@@ -440,9 +440,10 @@ export function useFilament(lengthMm, jobId = "") {
   if (machine?.printStore?.current) {
     machine.printStore.current.filamentId = s.id;
   }
+  const normalizedJobId = String(jobId ?? "");
   if (s.isPending) {
     // スプール交換直後の初回使用であれば履歴に交換記録を追加
-    logSpoolChange(s, jobId);
+    logSpoolChange(s, normalizedJobId);
     s.isPending = false;
   }
   // 現在の印刷ジョブ開始時点の残量と必要量を記録
@@ -453,8 +454,8 @@ export function useFilament(lengthMm, jobId = "") {
   // DOM 表示とストレージに新しい残量を即時反映
   setStoredData("filamentRemainingMm", s.remainingLengthMm, true);
   updateStoredDataToDOM();
-  s.currentPrintID = jobId;
-  s.usedLengthLog.push({ jobId, used: lengthMm });
+  s.currentPrintID = normalizedJobId;
+  s.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
   saveUnifiedStorage();
 }
@@ -475,9 +476,10 @@ export function beginExternalPrint(spool, lengthMm, jobId = "") {
   if (machine?.printStore?.current) {
     machine.printStore.current.filamentId = spool.id;
   }
+  const normalizedJobId = String(jobId ?? "");
   if (spool.isPending) {
     // スプール交換直後の初回使用であれば履歴に交換記録を追加
-    logSpoolChange(spool, jobId);
+    logSpoolChange(spool, normalizedJobId);
     spool.isPending = false;
   }
   // 現在の印刷ジョブ開始時点の残量と必要量を記録
@@ -488,8 +490,8 @@ export function beginExternalPrint(spool, lengthMm, jobId = "") {
   // DOM 表示とストレージに新しい残量を即時反映
   setStoredData("filamentRemainingMm", spool.remainingLengthMm, true);
   updateStoredDataToDOM();
-  spool.currentPrintID = jobId;
-  spool.usedLengthLog.push({ jobId, used: lengthMm });
+  spool.currentPrintID = normalizedJobId;
+  spool.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
   saveUnifiedStorage();
 }
@@ -512,22 +514,23 @@ export function reserveFilament(lengthMm, jobId = "") {
   if (machine?.printStore?.current) {
     machine.printStore.current.filamentId = s.id;
   }
+  const normalizedJobId = String(jobId ?? "");
   if (s.isPending) {
-    logSpoolChange(s, jobId);
+    logSpoolChange(s, normalizedJobId);
     s.isPending = false;
   }
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = lengthMm;
-  s.currentPrintID = jobId;
+  s.currentPrintID = normalizedJobId;
   // DOM 表示とストレージに現在残量を即座に反映
   setStoredData("filamentRemainingMm", s.remainingLengthMm, true);
   updateStoredDataToDOM();
   // --- 印刷開始時点で履歴にスプール情報を記録 -------------------
   let entry = null;
   if (machine && Array.isArray(machine.historyData)) {
-    entry = machine.historyData.find(h => h.id === jobId);
+    entry = machine.historyData.find(h => h.id === normalizedJobId);
     if (!entry) {
-      entry = { id: jobId };
+      entry = { id: normalizedJobId };
       machine.historyData.push(entry);
     }
     entry.filamentInfo ??= [];
@@ -567,7 +570,9 @@ export function reserveFilament(lengthMm, jobId = "") {
  */
 export function finalizeFilamentUsage(lengthMm, jobId = "") {
   const s = getCurrentSpool();
-  if (!s || s.currentPrintID !== jobId) return;
+  if (!s) return;
+  const normalizedJobId = String(jobId ?? "");
+  if (s.currentPrintID && s.currentPrintID !== normalizedJobId) return;
   const startLen = s.currentJobStartLength ?? s.remainingLengthMm;
   const used = Number(lengthMm);
   if (!isNaN(used)) {
@@ -577,14 +582,14 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   s.currentJobStartLength = null;
   s.currentJobExpectedLength = null;
   s.currentPrintID = "";
-  s.usedLengthLog.push({ jobId, used: used });
+  s.usedLengthLog.push({ jobId: normalizedJobId, used: used });
   // 現在のスプール情報を履歴に追加
   const machine = monitorData.machines[currentHostname];
   let entry = null;
   if (machine && Array.isArray(machine.historyData)) {
-    entry = machine.historyData.find(h => h.id === jobId);
+    entry = machine.historyData.find(h => h.id === normalizedJobId);
     if (!entry) {
-      entry = { id: jobId };
+      entry = { id: normalizedJobId };
       machine.historyData.push(entry);
     }
     entry.filamentInfo ??= [];
@@ -599,7 +604,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
       expectedRemain: s.remainingLengthMm
     });
   }
-  logUsage(s, used, jobId);
+  logUsage(s, used, normalizedJobId);
   updateStoredDataToDOM();
   saveUnifiedStorage();
   if (entry) {

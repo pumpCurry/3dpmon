@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.774 (PR #355)
+* @version 1.390.775 (PR #356)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-08-07 23:11:03
+* @lastModified 2026-01-26 18:26:52
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -864,6 +864,9 @@ export function aggregatorUpdate() {
   const spool = getCurrentSpool();
   if (spool) autoCorrectCurrentSpool();
   const st   = Number(storedData.state?.rawValue || 0);
+  const isPrinting =
+    st === PRINT_STATE_CODE.printStarted ||
+    st === PRINT_STATE_CODE.printPaused;
 
   // アイドル状態から印刷開始へ遷移し、useFilament() が未実行の場合の初期化
   if (
@@ -888,21 +891,17 @@ export function aggregatorUpdate() {
   }
   // usedMaterialLength 受信時、または復元直後に currentJobStartLength が未設定の
   // 状態で印刷が進行中の場合に残量計算を開始
-  if (
-    spool &&
-    (storedData.usedMaterialLength?.isNew ||
-      (spool.currentJobStartLength == null &&
-        (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)))
-  ) {
+  // usedMaterialLength が送られてこない場合でも印刷中は残量計算と保存を継続する
+  if (spool && (isPrinting || spool.currentJobStartLength != null)) {
     if (spool.currentJobStartLength == null) {
       // 印刷開始直後にスプール残量を記録し、使用量カウンタを初期化
       spool.currentJobStartLength = spool.remainingLengthMm;
       accumulatedUsedMaterial = 0;
-      prevUsedMaterialLength = Number(storedData.usedMaterialLength.rawValue);
+      prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
       prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
     }
     const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
-    const used = Number(storedData.usedMaterialLength.rawValue);
+    const used = Number(storedData.usedMaterialLength?.rawValue);
     let est  = Number(storedData.materialLength?.rawValue ?? NaN);
     if (isNaN(est)) {
       est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
@@ -937,10 +936,7 @@ export function aggregatorUpdate() {
         }
       }
     }
-    if (
-      spool.currentJobStartLength != null &&
-      (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused)
-    ) {
+    if (spool.currentJobStartLength != null && isPrinting) {
       // 実際に使用した長さをデルタで積算
       let delta = 0;
       if (!isNaN(used)) {
