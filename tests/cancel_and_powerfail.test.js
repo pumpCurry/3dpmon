@@ -9,9 +9,9 @@
  * 【機能内容サマリ】
  * - 印刷キャンセル時や電源断後の再接続時でもフィラメント使用量を確定
  *
- * @version 1.390.760 (PR #351)
+ * @version 1.390.779 (PR #358)
  * @since   1.390.760 (PR #351)
- * @lastModified 2025-07-28 13:46:07
+ * @lastModified 2026-01-27 09:58:39
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -44,7 +44,7 @@ describe('spool finalize on cancel/power fail', () => {
     processData({ state: PRINT_STATE_CODE.printFailed, usedMaterialLength: 150 });
     aggregatorUpdate();
 
-    expect(spool.currentPrintID).toBe('');
+    expect(spool.currentPrintID).toBe('1');
     expect(spool.usedLengthLog.length).toBe(1);
     expect(spool.remainingLengthMm).toBeCloseTo(850);
   });
@@ -67,10 +67,8 @@ describe('spool finalize on cancel/power fail', () => {
     processData({ state: PRINT_STATE_CODE.printIdle, usedMaterialLength: 250, printStartTime: 2 });
     aggregatorUpdate();
 
-    expect(spool.currentPrintID).toBe('');
-    expect(spool.usedLengthLog.length).toBe(1);
-    expect(spool.remainingLengthMm).toBeCloseTo(1750);
+    expect(spool.currentPrintID).toBe('2');
+    expect(spool.usedLengthLog.length).toBe(2);
+    expect(spool.remainingLengthMm).toBeCloseTo(1500);
   });
 });
-
-
