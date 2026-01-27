@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.775 (PR #356)
+* @version 1.390.777 (PR #357)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-01-26 18:26:52
+* @lastModified 2026-01-26 20:58:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -447,6 +447,17 @@ export function ingestData(data) {
   ) {
     // 状態遷移を検知したら、直近の使用量を積算した上で確定する
     const spool = getCurrentSpool();
+    // ジョブIDが未確定の場合は、利用可能な情報から補完して確定処理に備える
+    if (spool && !spool.currentPrintID) {
+      const machine = monitorData.machines[currentHostname];
+      const resolvedJobId = resolveFilamentJobId(
+        machine?.storedData,
+        machine?.printStore?.current ?? null
+      );
+      if (resolvedJobId) {
+        spool.currentPrintID = resolvedJobId;
+      }
+    }
     if (!isNaN(Number(data.usedMaterialLength))) {
       const cur = Number(data.usedMaterialLength);
       if (prevUsedMaterialLength != null) {
@@ -867,6 +878,16 @@ export function aggregatorUpdate() {
   const isPrinting =
     st === PRINT_STATE_CODE.printStarted ||
     st === PRINT_STATE_CODE.printPaused;
+  // フィラメント残量計算に入る前に、未確定のジョブIDを補完して紐付け漏れを防ぐ
+  if (spool && !spool.currentPrintID) {
+    const resolvedJobId = resolveFilamentJobId(
+      storedData,
+      machine?.printStore?.current ?? null
+    );
+    if (resolvedJobId) {
+      spool.currentPrintID = resolvedJobId;
+    }
+  }
 
   // アイドル状態から印刷開始へ遷移し、useFilament() が未実行の場合の初期化
   if (
@@ -1265,4 +1286,50 @@ function getMergedValueWithSource(key, data, dataFieldName = key) {
 
   // 3) どちらにも値がない
   return { value: null, source: "none" };
+}
+
+// ---------------------------------------------------------------------------
+// resolveFilamentJobId: フィラメント残量計算用のジョブID推定
+// ---------------------------------------------------------------------------
+/**
+ * resolveFilamentJobId:
+ *   フィラメント残量計算の紐付けに使うジョブIDを、複数ソースから優先順位付きで推定する。
+ *
+ * 【詳細説明】
+ * - 1) printStore.current.id を最優先で採用する
+ * - 2) storedData.printStartTime.rawValue から開始時刻IDを採用する
+ * - 3) 直前の印刷ID (prevPrintID) を最後のフォールバックとして採用する
+ * - いずれかで解決できた場合は、解決元とIDを console.debug で出力する
+ * - 引数が未定義でも落ちないようにオプショナルチェーンで安全に参照する
+ *
+ * @function resolveFilamentJobId
+ * @param {object} storedData - 現在の storedData オブジェクト
+ * @param {object|null} job - printStore.current のジョブ情報
+ * @returns {string} 推定されたジョブID。未解決の場合は空文字列
+ */
+function resolveFilamentJobId(storedData, job) {
+  // 1) printStore.current.id を優先して解決する
+  const jobId = job?.id ?? "";
+  if (jobId !== "" && jobId != null) {
+    const resolved = String(jobId);
+    console.debug("resolveFilamentJobId: printStore.current.id", resolved);
+    return resolved;
+  }
+
+  // 2) storedData.printStartTime.rawValue を開始時刻IDとして利用する
+  const storedId = storedData?.printStartTime?.rawValue ?? "";
+  if (storedId !== "" && storedId != null) {
+    const resolved = String(storedId);
+    console.debug("resolveFilamentJobId: storedData.printStartTime", resolved);
+    return resolved;
+  }
+
+  // 3) 直前のID (prevPrintID) を最後のフォールバックとして利用する
+  if (typeof prevPrintID !== "undefined" && prevPrintID != null) {
+    const resolved = String(prevPrintID);
+    console.debug("resolveFilamentJobId: prevPrintID", resolved);
+    return resolved;
+  }
+
+  return "";
 }
