@@ -28,9 +28,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.775 (PR #356)
+* @version 1.390.781 (PR #358)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-01-26 18:26:52
+* @lastModified 2026-01-29 08:01:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -575,14 +575,29 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   if (s.currentPrintID && s.currentPrintID !== normalizedJobId) return;
   const startLen = s.currentJobStartLength ?? s.remainingLengthMm;
   const used = Number(lengthMm);
-  if (!isNaN(used)) {
-    s.remainingLengthMm = Math.max(0, startLen - used);
+  const expectedLength = Number(s.currentJobExpectedLength ?? NaN);
+  let resolvedUsed = used;
+  if (
+    (isNaN(resolvedUsed) || resolvedUsed <= 0) &&
+    !isNaN(expectedLength) &&
+    expectedLength > 0
+  ) {
+    // 使用量が0または不明なのに予定使用量がある場合は、
+    // 予定使用量をフォールバックとして採用し、ログを残す
+    console.warn(
+      "finalizeFilamentUsage: used length was empty. fallback to expected length.",
+      { used: resolvedUsed, expectedLength, jobId: normalizedJobId }
+    );
+    resolvedUsed = expectedLength;
+  }
+  if (!isNaN(resolvedUsed)) {
+    s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
   }
   s.printCount = (s.printCount || 0) + 1;
   s.currentJobStartLength = null;
   s.currentJobExpectedLength = null;
   s.currentPrintID = "";
-  s.usedLengthLog.push({ jobId: normalizedJobId, used: used });
+  s.usedLengthLog.push({ jobId: normalizedJobId, used: resolvedUsed });
   // 現在のスプール情報を履歴に追加
   const machine = monitorData.machines[currentHostname];
   let entry = null;
@@ -604,7 +619,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
       expectedRemain: s.remainingLengthMm
     });
   }
-  logUsage(s, used, normalizedJobId);
+  logUsage(s, resolvedUsed, normalizedJobId);
   updateStoredDataToDOM();
   saveUnifiedStorage();
   if (entry) {
