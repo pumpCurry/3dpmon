@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.777 (PR #357)
+* @version 1.390.781 (PR #358)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-01-26 20:58:50
+* @lastModified 2026-01-29 08:01:39
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -474,10 +474,12 @@ export function ingestData(data) {
       if ((isNaN(est) || est <= 0) && data.fileName) {
         est = guessExpectedLength(String(data.fileName));
       }
-      const diffProg = prog_agg - prevUsageProgress;
-      if (!isNaN(est) && diffProg > 0) {
-        accumulatedUsedMaterial += (est * diffProg) / 100;
+      if (!isNaN(est) && est > 0) {
+        // 進捗率ベースの推定は常に絶対値で算出し、
+        // 推定値が途中で判明した場合でも正しい使用量に補正する
+        accumulatedUsedMaterial = (est * prog_agg) / 100;
       }
+      // 進捗の基準値は常に最新を保持しておく
       prevUsageProgress = prog_agg;
     }
     let length = accumulatedUsedMaterial;
@@ -971,11 +973,11 @@ export function aggregatorUpdate() {
         prevUsedMaterialLength = used;
         // usedMaterialLength が得られた場合でも進捗基準を同期しておく
         prevUsageProgress = prog;
-      } else if (!isNaN(est)) {
-        const diffProg = prog - prevUsageProgress;
-        if (diffProg > 0) {
-          delta = (est * diffProg) / 100;
-        }
+      } else if (!isNaN(est) && est > 0) {
+        // 推定値が途中で判明しても正しい値に補正できるよう、
+        // 差分ではなく絶対値で使用量を算出する
+        accumulatedUsedMaterial = (est * prog) / 100;
+        delta = 0;
         prevUsageProgress = prog;
       }
       accumulatedUsedMaterial += delta;
@@ -993,6 +995,15 @@ export function aggregatorUpdate() {
       st !== PRINT_STATE_CODE.printPaused
     ) {
       // 状態が完了・失敗等へ遷移した場合は累積使用量で確定
+      if (spool && !spool.currentPrintID) {
+        const resolvedJobId = resolveFilamentJobId(
+          storedData,
+          machine?.printStore?.current ?? null
+        );
+        if (resolvedJobId) {
+          spool.currentPrintID = resolvedJobId;
+        }
+      }
       finalizeFilamentUsage(accumulatedUsedMaterial, spool.currentPrintID);
       saveUnifiedStorage();
       accumulatedUsedMaterial = 0;
@@ -1096,7 +1107,10 @@ export function restoreAggregatorState() {
     "tsCompleteStart",
     "actualStartEpoch",
     "initialLeftSec","initialLeftEpoch",
-    "prevPrintID"
+    "prevPrintID",
+    "accumulatedUsedMaterial",
+    "prevUsedMaterialLength",
+    "prevUsageProgress"
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
@@ -1123,6 +1137,9 @@ export function restoreAggregatorState() {
       case "initialLeftSec":   initialLeftSec   = v; break;
       case "initialLeftEpoch": initialLeftEpoch = v; break;
       case "prevPrintID":      prevPrintID      = v; break;
+      case "accumulatedUsedMaterial": accumulatedUsedMaterial = v; break;
+      case "prevUsedMaterialLength": prevUsedMaterialLength = v; break;
+      case "prevUsageProgress": prevUsageProgress = v; break;
     }
     // storedData にも復元
     let field = k;
@@ -1166,7 +1183,10 @@ export function persistAggregatorState() {
     tsCompleteStart,
     actualStartEpoch,
     initialLeftSec, initialLeftEpoch,
-    prevPrintID
+    prevPrintID,
+    accumulatedUsedMaterial,
+    prevUsedMaterialLength,
+    prevUsageProgress
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;
