@@ -229,15 +229,24 @@ export function updateStoredDataToDOM() {
     d.isNew = false;
   }
 }
-/** ログ／通知ボックス・タブ ボタンの参照 */
-const tabReceived  = document.getElementById("tab-received");
-const tabNotification = document.getElementById("tab-notification");
-const receivedBox  = document.getElementById("log");
-const notifBox     = document.getElementById("notification-history");
+/** p1-/p2- 接頭辞付きIDにフォールバックして要素を取得するヘルパー */
+function _getEl(id) {
+  return document.getElementById("p1-" + id) ||
+         document.getElementById("p2-" + id) ||
+         document.getElementById(id);
+}
 
-// タイムスタンプ表示エリア
-const tsReceivedEl = document.getElementById("last-log-timestamp");
-const tsErrorEl    = document.getElementById("last-notification-timestamp");
+/** ログ／通知ボックス・タブ ボタンの参照（DOMContentLoaded 後に取得） */
+let tabReceived, tabNotification, receivedBox, notifBox, tsReceivedEl, tsErrorEl;
+
+function _resolveLogEls() {
+  tabReceived    = _getEl("tab-received");
+  tabNotification = _getEl("tab-notification");
+  receivedBox    = _getEl("log");
+  notifBox       = _getEl("notification-history");
+  tsReceivedEl   = _getEl("last-log-timestamp");
+  tsErrorEl      = _getEl("last-notification-timestamp");
+}
 
 /** 自動スクロール状態と最後にアクティブだったタブ */
 let isAutoScrollEnabled = true;
@@ -286,6 +295,7 @@ function initTabHandlers() {
  * 外部から一度だけ呼び出すイニシャライザ
  */
 export function initUIEventHandlers() {
+  _resolveLogEls();
   initAutoScrollHandlers();
   initTabHandlers();
   initializeCommandPalette();
@@ -313,11 +323,11 @@ function adjustPrintCurrentCardPosition() {
     clearTimeout(adjustTimer);
   }
   adjustTimer = setTimeout(() => {
-    const wrapper = document.getElementById("graph-current-wrapper");
+    const wrapper = _getEl("graph-current-wrapper");
     const graph = wrapper ? wrapper.querySelector(".graph-wrapper") : null;
     const info = document.querySelector(".info-wrapper");
-    const printCard = document.getElementById("print-current-card");
-    const historyCard = document.getElementById("print-history-card");
+    const printCard = _getEl("print-current-card");
+    const historyCard = _getEl("print-history-card");
 
     if (!wrapper || !graph || !info || !printCard || !historyCard) return;
 
