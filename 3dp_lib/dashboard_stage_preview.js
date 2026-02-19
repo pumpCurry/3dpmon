@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link restoreXYPreviewState} など複数を一括エクスポート
  *
-* @version 1.390.748 (PR #345)
+* @version 1.400.749 (PR #303)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-19 19:51:00
+* @lastModified 2025-07-04 10:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -54,7 +54,7 @@ let lastZPosition = 0;         // 最後に描画したZ値
  * @param {string} model - プリンタモデル名
  * @returns {void}
  */
-function setPrinterModel(model) {
+function setPrinterModel(model, paneIndex = 1) {
   if (currentModel === model) return;
   currentModel = model;
   if (model === "K1 Max") {
@@ -66,18 +66,21 @@ function setPrinterModel(model) {
   } else {
     return; // 未対応モデルは変更なし
   }
-  const stageElem = document.getElementById("xy-stage");
-  if (!stageElem) return; // テスト環境などでDOMが無い場合
+  const stageElem = document.getElementById(`p${paneIndex}-xy-stage`) ||
+                    document.getElementById("xy-stage");
+  if (!stageElem) return;
   const px = stageSizeMm * STAGE_SCALE;
   stageElem.style.width = `${px}px`;
   stageElem.style.height = `${px}px`;
   stageElem.innerHTML = "";
   xyDots.length = 0;
   xyInitialized = false;
-  const labelBottom = document.querySelector("#z-preview-container .z-label-bottom");
+  const paneEl = document.getElementById(`pane-${paneIndex}`) || document.body;
+  const labelBottom = paneEl.querySelector(`#p${paneIndex}-z-preview-container .z-label-bottom`) ||
+                      paneEl.querySelector(".z-label-bottom");
   if (labelBottom) labelBottom.textContent = String(stageZMaxMm);
-  updateXYPreview(lastXYPosition.x, lastXYPosition.y);
-  updateZPreview(lastZPosition);
+  updateXYPreview(lastXYPosition.x, lastXYPosition.y, paneIndex);
+  updateZPreview(lastZPosition, paneIndex);
 }
 
 /**
@@ -148,10 +151,12 @@ function restoreXYHistoryDots() {
  * XY ステージの背景格子やラベル、履歴表示用ドットなど
  * 初期描画を行う。
  *
+ * @param {number} [paneIndex=1] - ペイン番号 (1 または 2)
  * @returns {void}
  */
-function initXYPreview() {
-  const container = document.getElementById("xy-stage");
+function initXYPreview(paneIndex = 1) {
+  const container = document.getElementById(`p${paneIndex}-xy-stage`) ||
+                    document.getElementById("xy-stage");
   if (!container) return; // DOM が存在しなければ何もしない
   container.style.userSelect = "none";
   const gridCount = 7;
@@ -309,17 +314,20 @@ function initXYPreview() {
  * @param {number} y - Y 座標値(mm)
  * @returns {void}
  */
-function updateXYPreview(x, y) {
+function updateXYPreview(x, y, paneIndex = 1) {
   if (!xyInitialized) {
-    initXYPreview();
+    initXYPreview(paneIndex);
   }
   // スケール定義
   const stagePx = stageSizeMm * STAGE_SCALE;
   const screenX = stagePx - (x * STAGE_SCALE);
   const screenY = y * STAGE_SCALE;
 
-  const currentDot = document.getElementById("xy-current-dot");
-  const currentCircle = document.getElementById("xy-current-circle");
+  const paneEl = document.getElementById(`pane-${paneIndex}`) || document.body;
+  const currentDot = paneEl.querySelector(`#p${paneIndex}-xy-current-dot`) ||
+                     document.getElementById("xy-current-dot");
+  const currentCircle = paneEl.querySelector(`#p${paneIndex}-xy-current-circle`) ||
+                        document.getElementById("xy-current-circle");
 
   currentDot.style.right = (screenX - 2.5) + "px";
   currentDot.style.bottom = (screenY - 2.5) + "px";
@@ -347,16 +355,18 @@ function updateXYPreview(x, y) {
  * @param {number} z - Z 座標値(mm)
  * @returns {void}
  */
-function updateZPreview(z) {
+function updateZPreview(z, paneIndex = 1) {
   const scale = 0.5;
   const clampedZ = Math.min(z, stageZMaxMm);
   const barHeight = clampedZ * scale;
-  const barDiv = document.getElementById("z-preview");
+  const barDiv = document.getElementById(`p${paneIndex}-z-preview`) ||
+                 document.getElementById("z-preview");
   if (barDiv) {
     barDiv.style.height = barHeight + "px";
     barDiv.style.backgroundColor = (z < 0) ? "magenta" : "";
   }
-  const zValueElem = document.getElementById("z-value");
+  const zValueElem = document.getElementById(`p${paneIndex}-z-value`) ||
+                     document.getElementById("z-value");
   if (zValueElem) {
     zValueElem.textContent = z.toFixed(2);
   }
@@ -369,8 +379,9 @@ function updateZPreview(z) {
  *
  * @returns {void}
  */
-function applyStageTransform() {
-  const container = document.getElementById("xy-stage");
+function applyStageTransform(paneIndex = 1) {
+  const container = document.getElementById(`p${paneIndex}-xy-stage`) ||
+                    document.getElementById("xy-stage");
   if (container) {
     stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     const rotZ = ((stageRotZ % 360) + 360) % 360;

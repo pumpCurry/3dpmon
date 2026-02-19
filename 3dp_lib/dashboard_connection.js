@@ -25,7 +25,7 @@
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
  *
- * @version 1.390.683 (PR #314)
+ * @version 1.400.684 (PR #303)
  * @since   1.390.451 (PR #205)
  * @lastModified 2025-07-10 15:54:39
  * -----------------------------------------------------------
@@ -286,7 +286,7 @@ function flushBufferedMessages(host) {
  * @returns {void}
  */
 export function connectWs(hostOrDest) {
-  const inputDest = document.getElementById("destination-input")?.value.trim();
+  const inputDest = (document.getElementById("p1-destination-input") || document.getElementById("destination-input"))?.value.trim();
   let dest = hostOrDest || inputDest || monitorData.appSettings.wsDest || "";
   if (!dest) return;
   if (!dest.includes(":")) dest += ":9999";
@@ -345,8 +345,10 @@ function handleSocketOpen(host) {
   }
   st.state = "connected";
   updatePrinterListUI();
-  if (monitorData.appSettings.cameraToggle) {
-    startCameraStream();
+  // connections[] から接続先ホストに対応する autoCamera フラグを参照
+  const _connForHost = (monitorData.appSettings.connections || []).find(c => c.ip === host);
+  if (_connForHost?.autoCamera ?? monitorData.appSettings.cameraToggle) {
+    startCameraStream(host);
   }
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
@@ -384,13 +386,13 @@ function handleSocketOpen(host) {
     const elapsed = Date.now() - st.hostReadyAt;
 
     if (!st.fileReqSent && elapsed >= 2500) {
-      document.getElementById("btn-file-list")?.click();
+      (document.getElementById("p1-btn-file-list") || document.getElementById("btn-file-list"))?.click();
       st.fileReqSent = true;
     }
 
     if (!st.historyReqSent && elapsed >= 7500) {
       if (!st.historyReceived) {
-        document.getElementById("btn-history-list")?.click();
+        (document.getElementById("p1-btn-history-list") || document.getElementById("btn-history-list"))?.click();
       }
       st.historyReqSent = true;
     }
@@ -740,7 +742,7 @@ export function disconnectWs(host = currentHostname) {
  * @returns {void}
  */
 export function setupConnectButton() {
-  const btn = document.getElementById("connect-button");
+  const btn = document.getElementById("p1-connect-button") || document.getElementById("connect-button");
   if (btn) {
     btn.addEventListener("click", connectWs);
   }
@@ -752,8 +754,8 @@ export function setupConnectButton() {
  *
  * @returns {void}
  */
-export function setupPrinterUI() {
-  const sel = document.getElementById("printer-select");
+export function setupPrinterUI(paneIndex = 1) {
+  const sel = document.getElementById(`p${paneIndex}-printer-select`) || document.getElementById("printer-select");
   if (!sel) return;
   sel.addEventListener("change", () => {
     const host = sel.value;
@@ -880,13 +882,13 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
  * @param {{attempt?: number, max?: number, wait?: number}} [opt={}]
  *   connecting/waiting 時に使用する { attempt, max, wait }
  */
-export function updateConnectionUI(state, opt = {}, host = currentHostname) {
-  const ipInput       = document.getElementById("destination-input");
-  const ipDisplay     = document.getElementById("destination-display");
-  const statusEl      = document.getElementById("connection-status");
-  const btnConnect    = document.getElementById("connect-button");
-  const btnDisconnect = document.getElementById("disconnect-button");
-  const muteTag       = document.getElementById("audio-muted-tag");
+export function updateConnectionUI(state, opt = {}, host = currentHostname, paneIndex = 1) {
+  const ipInput       = document.getElementById(`p${paneIndex}-destination-input`)    || document.getElementById("destination-input");
+  const ipDisplay     = document.getElementById(`p${paneIndex}-destination-display`)  || document.getElementById("destination-display");
+  const statusEl      = document.getElementById(`p${paneIndex}-connection-status`)    || document.getElementById("connection-status");
+  const btnConnect    = document.getElementById(`p${paneIndex}-connect-button`)       || document.getElementById("connect-button");
+  const btnDisconnect = document.getElementById(`p${paneIndex}-disconnect-button`)    || document.getElementById("disconnect-button");
+  const muteTag       = document.getElementById(`p${paneIndex}-audio-muted-tag`)      || document.getElementById("audio-muted-tag");
 
   // wsDest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
   const st = getState(host);
@@ -1000,21 +1002,24 @@ export function updateConnectionUI(state, opt = {}, host = currentHostname) {
  * @returns {void}
  */
 function updatePrinterListUI() {
-  const sel  = document.getElementById("printer-select");
-  const list = document.getElementById("printer-status-list");
-  if (!sel || !list) return;
-
   const hosts = Object.keys(connectionMap).filter(h => h !== PLACEHOLDER_HOSTNAME);
-  sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
-  sel.value = hosts.includes(currentHostname) ? currentHostname : "";
+  const listHtml = hosts.map(h => {
+    const st = connectionMap[h];
+    return `<div>${h} : ${st.state}</div>`;
+  }).join("");
+  const optionsHtml = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
 
-  list.innerHTML = hosts
-    .map(h => {
-      const st = connectionMap[h];
-      const label = `${h} : ${st.state}`;
-      return `<div>${label}</div>`;
-    })
-    .join("");
+  for (const pane of [1, 2]) {
+    const sel  = document.getElementById(`p${pane}-printer-select`) || (pane === 1 ? document.getElementById("printer-select") : null);
+    const list = document.getElementById(`p${pane}-printer-status-list`) || (pane === 1 ? document.getElementById("printer-status-list") : null);
+    if (sel) {
+      sel.innerHTML = optionsHtml;
+      sel.value = hosts.includes(currentHostname) ? currentHostname : "";
+    }
+    if (list) {
+      list.innerHTML = listHtml;
+    }
+  }
 }
 
 /**

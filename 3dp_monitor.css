@@ -1,6 +1,6 @@
-/* 
+/*
   3dp_monitor.css
-  Version1.339
+  Version1.340 - 複数プリンタ対応・マルチペインUI
 */
 
 /* ---------------------------------------------------------------
@@ -11,6 +11,7 @@ body {
   background-color: #f4f4f4;
   margin: 0;
   padding: 10px;
+  padding-top: 58px; /* グローバルメニューバー(48px) + 余白 */
 }
 .card {
   background: #fff;
@@ -1212,4 +1213,483 @@ input:checked + .slider:before {
 #btn-resume-print,
 #btn-resume-print-cmd {
   background-color: #d5f5cf;   /* 薄黄緑 */
+}
+
+/* ================================================================
+   マルチペイン対応スタイル (Version 1.340)
+================================================================ */
+
+/* ---------------------------------------------------------------
+   グローバルメニューバー
+--------------------------------------------------------------- */
+#global-menu-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: #222;
+  color: #fff;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 12px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+.gmb-left {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.gmb-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+#gmb-menu-btn {
+  background: none;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 12px;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+#gmb-menu-btn:hover {
+  background: #444;
+}
+#gmb-dropdown {
+  position: absolute;
+  top: 38px;
+  left: 0;
+  background: #2c2c2c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  z-index: 2100;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+#gmb-dropdown.hidden {
+  display: none !important;
+}
+#gmb-dropdown button {
+  padding: 10px 20px;
+  color: #fff;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+}
+#gmb-dropdown button:hover {
+  background: #3a3a3a;
+}
+
+/* ---------------------------------------------------------------
+   ダッシュボードルート
+--------------------------------------------------------------- */
+#dashboard-root {
+  box-sizing: border-box;
+}
+/* 1ペインモード */
+#dashboard-root.layout-preset1 #pane-2 {
+  display: none;
+}
+/* 2ペインモード */
+#dashboard-root.layout-preset2 {
+  display: flex;
+  gap: 0;
+  align-items: flex-start;
+}
+#dashboard-root.layout-preset2 .printer-pane {
+  flex: 0 0 50%;
+  width: 50%;
+  min-width: 0;
+  overflow-x: hidden;
+  border-right: 3px solid #bbb;
+  box-sizing: border-box;
+}
+#dashboard-root.layout-preset2 .printer-pane:last-child {
+  border-right: none;
+}
+
+/* ---------------------------------------------------------------
+   プリンタペイン
+--------------------------------------------------------------- */
+.printer-pane {
+  /* CSS変数のデフォルト値（プリンタカラー） */
+  --printer-color: #444444;
+  --printer-color-light: #44444422;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ペインヘッダー */
+.pane-header {
+  background: #ddd;
+  border-bottom: 1px solid #bbb;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.pane-printer-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.pane-printer-label {
+  color: #555;
+  white-space: nowrap;
+}
+.pane-printer-select {
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  background: #fff;
+  min-width: 120px;
+}
+
+/* ペイン内のタイトルバー: プリンタカラーで左ボーダー */
+.printer-pane .title-bar {
+  border-left: 5px solid var(--printer-color, #444);
+}
+
+/* ペイン内のカードタイトル: プリンタカラーで背景 */
+.printer-pane .card-title {
+  background-color: var(--printer-color, #444);
+}
+
+/* ペイン内のカード: うっすらプリンタカラーのグラデーション */
+.printer-pane .card {
+  background: linear-gradient(
+    135deg,
+    #ffffff 90%,
+    var(--printer-color-light, #eeeeee) 100%
+  );
+}
+
+/* ---------------------------------------------------------------
+   960px対応レイアウト（固定幅の解消）
+--------------------------------------------------------------- */
+/* プレビューラッパー */
+.printer-pane .preview-wrapper {
+  flex: 0 0 260px;
+  max-width: 260px;
+}
+.printer-pane .preview-body {
+  width: auto;
+  max-width: 248px; /* 260px - padding */
+}
+/* 情報ラッパー */
+.printer-pane .info-wrapper {
+  flex: 1 1 360px;
+  min-width: 0;
+  max-width: none;
+}
+/* col1/col2（状態・操作） */
+.printer-pane .col1,
+.printer-pane .col2 {
+  flex: 1 1 170px;
+  width: auto;
+  max-width: none;
+  min-width: 160px;
+}
+/* グラフラッパー */
+.printer-pane .graph-current-wrapper {
+  flex: 1 0 260px;
+  min-width: 260px;
+}
+
+/* ---------------------------------------------------------------
+   縦積みレイアウト（ペイン幅 ≒ 960px 以下）
+--------------------------------------------------------------- */
+/* 2ペインモード時はペイン自体が約960pxになるため常時適用 */
+#dashboard-root.layout-preset2 .printer-pane .monitor-row {
+  flex-direction: column;
+}
+#dashboard-root.layout-preset2 .printer-pane .preview-wrapper,
+#dashboard-root.layout-preset2 .printer-pane .info-wrapper,
+#dashboard-root.layout-preset2 .printer-pane .graph-current-wrapper {
+  flex: none;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+#dashboard-root.layout-preset2 .printer-pane .preview-body {
+  width: auto;
+  max-width: 100%;
+}
+#dashboard-root.layout-preset2 .printer-pane .status-control-row {
+  flex-wrap: wrap;
+}
+#dashboard-root.layout-preset2 .printer-pane .col1,
+#dashboard-root.layout-preset2 .printer-pane .col2 {
+  flex: 1 1 min(100%, 300px);
+  min-width: 200px;
+}
+#dashboard-root.layout-preset2 .printer-pane .row {
+  flex-wrap: wrap;
+}
+#dashboard-root.layout-preset2 .printer-pane .info-card,
+#dashboard-root.layout-preset2 .printer-pane .log-card {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* 1ペインモードでもブラウザ幅 ≤ 980px なら縦積み */
+@media (max-width: 980px) {
+  #dashboard-root.layout-preset1 .printer-pane .monitor-row {
+    flex-direction: column;
+  }
+  #dashboard-root.layout-preset1 .printer-pane .preview-wrapper,
+  #dashboard-root.layout-preset1 .printer-pane .info-wrapper,
+  #dashboard-root.layout-preset1 .printer-pane .graph-current-wrapper {
+    flex: none;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+  #dashboard-root.layout-preset1 .printer-pane .row {
+    flex-wrap: wrap;
+  }
+}
+
+/* ---------------------------------------------------------------
+   接続設定モーダル
+--------------------------------------------------------------- */
+dialog.conn-settings-dialog {
+  width: min(860px, 95vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+}
+dialog.conn-settings-dialog::backdrop {
+  background: rgba(0,0,0,0.5);
+}
+.conn-settings-header {
+  background: #333;
+  color: #fff;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: bold;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.conn-settings-body {
+  padding: 12px;
+}
+.conn-entry {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #fafafa;
+  position: relative;
+}
+.conn-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.conn-indicator {
+  font-size: 16px;
+  line-height: 1;
+}
+.conn-name-input {
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  width: 130px;
+}
+.conn-color-input {
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.conn-auto-label {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.conn-addr-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.conn-addr-row label {
+  font-size: 12px;
+  color: #555;
+}
+.conn-ip-input {
+  width: 130px;
+  padding: 3px 5px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.conn-port-input {
+  width: 60px;
+  padding: 3px 5px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.conn-entry input[readonly],
+.conn-entry input:disabled {
+  background: #eee;
+  color: #888;
+  cursor: not-allowed;
+}
+.conn-entry-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.conn-entry-actions button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  background: #fff;
+}
+.conn-entry-actions .btn-connect {
+  background: #4a9eff;
+  color: #fff;
+  border-color: #3a8ede;
+}
+.conn-entry-actions .btn-disconnect {
+  background: #e05050;
+  color: #fff;
+  border-color: #c04040;
+}
+.conn-entry-actions .btn-delete {
+  background: #f5f5f5;
+  color: #c00;
+  border-color: #ddd;
+}
+.conn-settings-add-row {
+  text-align: center;
+  padding: 8px;
+}
+.conn-settings-add-btn {
+  font-size: 13px;
+  padding: 6px 18px;
+  border-radius: 4px;
+  border: 1px dashed #aaa;
+  background: #f5f5f5;
+  cursor: pointer;
+}
+.conn-settings-add-btn:hover {
+  background: #e8e8e8;
+}
+.conn-readonly-note {
+  font-size: 11px;
+  color: #888;
+  display: block;
+  margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------
+   ダッシュボード選択モーダル
+--------------------------------------------------------------- */
+dialog.layout-select-dialog {
+  width: min(500px, 90vw);
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+}
+dialog.layout-select-dialog::backdrop {
+  background: rgba(0,0,0,0.5);
+}
+.layout-select-header {
+  background: #333;
+  color: #fff;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: bold;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.layout-select-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.layout-option-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 2px solid #ddd;
+  border-radius: 6px;
+  background: #fafafa;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.layout-option-btn:hover {
+  border-color: #4a9eff;
+  background: #f0f6ff;
+}
+.layout-option-btn.active {
+  border-color: #4a9eff;
+  background: #e8f2ff;
+}
+.layout-option-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.layout-option-text {
+  flex: 1;
+}
+.layout-option-title {
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+.layout-option-desc {
+  font-size: 11px;
+  color: #777;
+}
+.dialog-close-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.dialog-close-btn:hover {
+  opacity: 0.7;
 }
