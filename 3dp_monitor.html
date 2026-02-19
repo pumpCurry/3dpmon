@@ -75,21 +75,14 @@
       <span id="p1-audio-muted-tag" style="display:none; cursor:pointer; font-size:12px; margin-left:4px;">
         🔇:ミュート中
       </span>
-      <!-- 接続先入力 -->
-      <input id="p1-destination-input" type="text" placeholder="IP アドレス">
-      <span id="p1-destination-display">----</span>
+      <!-- 接続先表示（updateConnectionUI が更新） -->
+      <span id="p1-destination-display" style="font-size:12px;">----</span>
 
       <!-- プリンタ選択 -->
       <select id="p1-printer-select" style="font-size:12px;"></select>
 
       <!-- 接続状態一覧 -->
       <div id="p1-printer-status-list" style="font-size:12px;"></div>
-
-      <!-- 自動接続(ON/OFF) -->
-      <label style="font-size:12px;">
-        <input type="checkbox" id="p1-auto-connect-toggle">
-        自動接続
-      </label>
 
       <!-- 接続ボタン / 切断ボタン -->
       <button id="p1-connect-button" style="font-size:12px;" class="hidden">接続</button>
@@ -105,9 +98,6 @@
     <h2 class="card-title">
       機器監視
     </h2>
-    <label style="font-size:12px; margin-left:10px; display:inline-block;">
-      <input type="checkbox" id="p1-camera-toggle-title"> カメラON/OFF
-    </label>
     <div class="camera-wrapper">
       <img id="p1-camera-feed" class="off" alt="カメラ映像">
       <div class="no-signal">- NO SIGNAL -</div>
@@ -1343,21 +1333,14 @@
       <span id="p2-audio-muted-tag" style="display:none; cursor:pointer; font-size:12px; margin-left:4px;">
         🔇:ミュート中
       </span>
-      <!-- 接続先入力 -->
-      <input id="p2-destination-input" type="text" placeholder="IP アドレス">
-      <span id="p2-destination-display">----</span>
+      <!-- 接続先表示（updateConnectionUI が更新） -->
+      <span id="p2-destination-display" style="font-size:12px;">----</span>
 
       <!-- プリンタ選択 -->
       <select id="p2-printer-select" style="font-size:12px;"></select>
 
       <!-- 接続状態一覧 -->
       <div id="p2-printer-status-list" style="font-size:12px;"></div>
-
-      <!-- 自動接続(ON/OFF) -->
-      <label style="font-size:12px;">
-        <input type="checkbox" id="p2-auto-connect-toggle">
-        自動接続
-      </label>
 
       <!-- 接続ボタン / 切断ボタン -->
       <button id="p2-connect-button" style="font-size:12px;" class="hidden">接続</button>
@@ -1373,9 +1356,6 @@
     <h2 class="card-title">
       機器監視
     </h2>
-    <label style="font-size:12px; margin-left:10px; display:inline-block;">
-      <input type="checkbox" id="p2-camera-toggle-title"> カメラON/OFF
-    </label>
     <div class="camera-wrapper">
       <img id="p2-camera-feed" class="off" alt="カメラ映像">
       <div class="no-signal">- NO SIGNAL -</div>

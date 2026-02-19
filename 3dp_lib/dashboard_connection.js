@@ -345,8 +345,10 @@ function handleSocketOpen(host) {
   }
   st.state = "connected";
   updatePrinterListUI();
-  if (monitorData.appSettings.cameraToggle) {
-    startCameraStream();
+  // connections[] から接続先ホストに対応する autoCamera フラグを参照
+  const _connForHost = (monitorData.appSettings.connections || []).find(c => c.ip === host);
+  if (_connForHost?.autoCamera ?? monitorData.appSettings.cameraToggle) {
+    startCameraStream(host);
   }
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);

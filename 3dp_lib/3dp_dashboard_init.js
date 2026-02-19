@@ -222,33 +222,9 @@ export function initializeDashboard({
   initLogRenderer(logBox);
 
   // (5) 接続／切断ボタンバインド
-  const ipInput    = getPaneEl("destination-input",   paneIndex);
-  const acb        = getPaneEl("auto-connect-toggle", paneIndex);
-  const camToggle  = getPaneEl("camera-toggle-title", paneIndex);
-  const btnConnect = getPaneEl("connect-button",      paneIndex);
-  const btnDisc    = getPaneEl("disconnect-button",   paneIndex);
-
-  // ここで monitorData.appSettings から UI に反映
-  if (ipInput)   ipInput.value     = monitorData.appSettings.wsDest     || "";
-  if (acb)       acb.checked       = monitorData.appSettings.autoConnect;
-  if (camToggle) camToggle.checked = monitorData.appSettings.cameraToggle;
-
-  // 接続ボタンクリック → IPチェック→保存→接続
-  btnConnect?.addEventListener("click", () => {
-    const ip = ipInput?.value.trim();
-    if (!ip) {
-      showAlert("接続先のIPアドレスを設定し、接続を押してください", "warn");
-      return;
-    }
-    // 設定に反映して永続化
-    monitorData.appSettings.wsDest = ip;
-    saveUnifiedStorage();
-
-    onConnect();  // connectWs() を呼び出す
-  });
-
-  // 切断
-  btnDisc?.addEventListener("click", onDisconnect);
+  // destination-input / auto-connect-toggle / camera-toggle は接続設定モーダルに移行済み
+  // connect-button / disconnect-button は updateConnectionUI() が表示制御するため残存するが
+  // クリックイベントは setupConnectButton() 経由で dashboard_connection.js が登録する
 
   // (6) ログコピー・クリア操作
   getPaneEl("copy-all-notification-button",  paneIndex)
@@ -266,26 +242,6 @@ export function initializeDashboard({
     ?.addEventListener("click", e => copyLogsToClipboard(logManager.getAll(), 50, e.currentTarget));
   getPaneEl("copy-storeddata-button", paneIndex)
     ?.addEventListener("click", copyStoredDataToClipboard);
-
-  // (7) カメラトグル制御
-  if (camToggle) {
-    camToggle.addEventListener("change", () => {
-      monitorData.appSettings.cameraToggle = camToggle.checked;
-      saveUnifiedStorage();
-      if (camToggle.checked) startCameraStream(undefined, paneIndex);
-      else                    stopCameraStream(undefined, paneIndex);
-    });
-  }
-
-  // (8) 自動接続トグル
-  if (acb) {
-    acb.addEventListener("change", () => {
-      monitorData.appSettings.autoConnect = acb.checked;
-      saveUnifiedStorage();
-      pushLog(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-      showAlert(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-    });
-  }
 
   // (9) 通知設定パネル初期化
   const notifBody = getPaneEl("notification-panel-body", paneIndex);
@@ -305,14 +261,8 @@ export function initializeDashboard({
   getPaneEl("temp-graph-reset-button", paneIndex)
     ?.addEventListener("click", () => resetTemperatureGraphView(canvasEl));
 
-  // (11) ページロード時の自動接続（ペイン1のみ）
-  if (paneIndex === 1) {
-    if (monitorData.appSettings.autoConnect && monitorData.appSettings.wsDest) {
-      setTimeout(onConnect, 1500);
-    } else {
-      showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります", "warn");
-    }
-  }
+  // (11) ページロード時の自動接続は 3dp_dashboard_main.js の _autoConnectAll() が担当
+  // connections[] の autoConnect フラグを見て接続する（wsDest ベースの旧ロジックは廃止）
 
   // (12) ページロード時のカメラ起動は廃止
   // WebSocket 接続確立時に自動開始されるためここでは実行しない

@@ -142,6 +142,9 @@ export class ConnSettingsModal {
           <label class="conn-auto-label">
             <input type="checkbox" class="conn-auto" ${conn.autoConnect ? "checked" : ""}> 自動接続
           </label>
+          <label class="conn-auto-label">
+            <input type="checkbox" class="conn-cam-auto" ${conn.autoCamera ? "checked" : ""}> 接続時カメラON
+          </label>
         </div>
         <div class="conn-addr-row">
           <label>IP <input type="text"   class="conn-ip"  value="${this.#esc(conn.ip)}"     placeholder="192.168.1.x" aria-label="IPアドレス"></label>
@@ -178,12 +181,13 @@ export class ConnSettingsModal {
    * @private
    */
   #saveEntry(div, id) {
-    const name     = div.querySelector(".conn-name")?.value.trim() || "";
-    const color    = div.querySelector(".conn-color")?.value || "#4a9eff";
-    const ip       = div.querySelector(".conn-ip")?.value.trim() || "";
-    const wsPort   = parseInt(div.querySelector(".conn-ws")?.value || "9999", 10);
-    const camPort  = parseInt(div.querySelector(".conn-cam")?.value || "0", 10) || undefined;
-    const auto     = div.querySelector(".conn-auto")?.checked ?? false;
+    const name      = div.querySelector(".conn-name")?.value.trim() || "";
+    const color     = div.querySelector(".conn-color")?.value || "#4a9eff";
+    const ip        = div.querySelector(".conn-ip")?.value.trim() || "";
+    const wsPort    = parseInt(div.querySelector(".conn-ws")?.value || "9999", 10);
+    const camPort   = parseInt(div.querySelector(".conn-cam")?.value || "0", 10) || undefined;
+    const auto      = div.querySelector(".conn-auto")?.checked ?? false;
+    const autoCamera = div.querySelector(".conn-cam-auto")?.checked ?? false;
 
     // 入力検証
     if (ip && !IP_RE.test(ip)) {
@@ -198,7 +202,7 @@ export class ConnSettingsModal {
     const connections = monitorData.appSettings.connections;
     const idx = connections.findIndex(c => c.id === id);
     if (idx !== -1) {
-      connections[idx] = { ...connections[idx], name, color, ip, wsPort, camPort, autoConnect: auto };
+      connections[idx] = { ...connections[idx], name, color, ip, wsPort, camPort, autoConnect: auto, autoCamera };
     }
     saveUnifiedStorage();
     this.#render();
@@ -234,7 +238,8 @@ export class ConnSettingsModal {
       ip:          "",
       wsPort:      9999,
       camPort:     undefined,
-      autoConnect: false
+      autoConnect: false,
+      autoCamera:  false
     };
     if (!monitorData.appSettings.connections) {
       monitorData.appSettings.connections = [];
