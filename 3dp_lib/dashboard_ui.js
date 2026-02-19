@@ -116,7 +116,10 @@ export function updateStoredDataToDOM() {
     if (Array.isArray(map.domProps)) {
       map.domProps.forEach(({ id, prop }) => {
         try {
-          const el = document.getElementById(id);
+          // ID が p1-/p2- 接頭辞付きに変更されているためフォールバック検索
+          const el = document.getElementById("p1-" + id) ||
+                     document.getElementById("p2-" + id) ||
+                     document.getElementById(id);
           if (!el) {
             throw new Error(`element not found`);
           }

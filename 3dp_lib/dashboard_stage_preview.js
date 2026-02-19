@@ -76,7 +76,7 @@ function setPrinterModel(model, paneIndex = 1) {
   xyDots.length = 0;
   xyInitialized = false;
   const paneEl = document.getElementById(`pane-${paneIndex}`) || document.body;
-  const labelBottom = paneEl.querySelector("#p${paneIndex}-z-preview-container .z-label-bottom") ||
+  const labelBottom = paneEl.querySelector(`#p${paneIndex}-z-preview-container .z-label-bottom`) ||
                       paneEl.querySelector(".z-label-bottom");
   if (labelBottom) labelBottom.textContent = String(stageZMaxMm);
   updateXYPreview(lastXYPosition.x, lastXYPosition.y, paneIndex);

@@ -89,10 +89,11 @@ function _initGlobalMenuBar() {
     dropdown?.classList.toggle("hidden");
   });
 
-  // ドロップダウン外クリックで閉じる
+  // ドロップダウン外クリックで閉じる（menuBtn自身のクリックはtoggleで処理するため除外）
   document.addEventListener("click", (e) => {
     if (dropdown && !dropdown.classList.contains("hidden")) {
-      if (!dropdown.contains(/** @type {Node} */(e.target)) && e.target !== menuBtn) {
+      const target = /** @type {Node} */(e.target);
+      if (!dropdown.contains(target) && !menuBtn?.contains(target)) {
         dropdown.classList.add("hidden");
       }
     }

@@ -1301,18 +1301,20 @@ export function setupUploadUI() {
 }
 
 /** --- 1) タブ切り替えの初期設定 --- */
-export function initHistoryTabs() {
-  const btnH = document.getElementById("tab-print-history");
-  const btnF = document.getElementById("tab-file-list");
-  const pH = document.getElementById("panel-print-history-tab");
-  const pF = document.getElementById("panel-file-list");
+export function initHistoryTabs(paneIndex = 1) {
+  const prefix = `p${paneIndex}-`;
+  const btnH = document.getElementById(`${prefix}tab-print-history`);
+  const btnF = document.getElementById(`${prefix}tab-file-list`);
+  const pH = document.getElementById(`${prefix}panel-print-history-tab`);
+  const pF = document.getElementById(`${prefix}panel-file-list`);
+  if (!btnH || !btnF) return;
   btnH.addEventListener("click", () => {
     btnH.classList.add("active"); btnF.classList.remove("active");
-    pH.classList.remove("hidden"); pF.classList.add("hidden");
+    pH?.classList.remove("hidden"); pF?.classList.add("hidden");
   });
   btnF.addEventListener("click", () => {
     btnF.classList.add("active"); btnH.classList.remove("active");
-    pF.classList.remove("hidden"); pH.classList.add("hidden");
+    pF?.classList.remove("hidden"); pH?.classList.add("hidden");
   });
 }
 

@@ -357,7 +357,7 @@ export function initializeDashboard({
   aliasClick("btn-history-list-cmd",  "btn-history-list");
   aliasClick("btn-file-list-cmd",     "btn-file-list");
 
-  printManager.initHistoryTabs();
+  printManager.initHistoryTabs(paneIndex);
 
   // (15) ファイルアップロード初期化
   printManager.setupUploadUI();
