@@ -199,9 +199,25 @@ export const monitorData = {
     logMaxLines: 1000,
     logLevel: "info",
     autoConnect: true,
-    wsDest: "",          // 接続先 IP:PORT
+    wsDest: "",          // 接続先 IP:PORT (後方互換用、connections[]に移行済み)
     cameraToggle: false,  // カメラ ON/OFF
-    notificationSettings: {}
+    notificationSettings: {},
+    /**
+     * 複数プリンタ接続設定リスト
+     * @type {Array<{id:string, name:string, color:string, ip:string, wsPort:number, camPort?:number, autoConnect:boolean}>}
+     */
+    connections: [],
+    /**
+     * アクティブなダッシュボードレイアウト
+     * "preset1" = 1ペイン, "preset2" = 2ペイン
+     * @type {"preset1"|"preset2"}
+     */
+    activeLayout: "preset1",
+    /**
+     * ペイン番号 → 接続設定ID のマッピング
+     * @type {Object.<number, string|null>}
+     */
+    paneAssignment: { 1: null, 2: null }
   },
   machines: {
     [PLACEHOLDER_HOSTNAME]: {

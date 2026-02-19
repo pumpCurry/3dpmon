@@ -16,10 +16,11 @@
  * - {@link restorePrintResume}：印刷再開用データを復元
  * - {@link persistPrintResume}：印刷再開用データを保存
  * - {@link initializeAutoSave}：自動保存タイマーを開始
+ * - {@link getPaneEl}：ペインスコープ付き要素取得ヘルパー
  *
-* @version 1.390.651 (PR #302)
+* @version 1.400.652 (PR #303)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-04 09:50:37
+* @lastModified 2025-07-04 10:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -91,8 +92,23 @@ import {
 } from "./dashboard_send_command.js";
 
 let filamentPreview = null;
+
+// ---------------------------------------------------------------------------
+// getPaneEl: ペインスコープ付き要素取得ヘルパー
+// ---------------------------------------------------------------------------
 /**
- * @fileoverview
+ * ペインインデックスに応じた要素を取得します。
+ * ID を `p${paneIndex}-${id}` に変換して getElementById を呼びます。
+ *
+ * @param {string} id            - 接頭辞なしの元 ID
+ * @param {number} [paneIndex=1] - ペイン番号 (1 または 2)
+ * @returns {HTMLElement|null}
+ */
+export function getPaneEl(id, paneIndex = 1) {
+  return document.getElementById(`p${paneIndex}-${id}`);
+}
+
+/**
  * ダッシュボードを初期化します。
  *
  * @param {object} hooks
@@ -103,6 +119,7 @@ let filamentPreview = null;
  *                                                        接続状態変化時に呼び出す
  * @param {(data: any) => void} hooks.onMessage            メッセージ受信時に呼び出す
  * @param {object} hooks.notificationManager               通知マネージャ
+ * @param {number} [hooks.paneIndex=1]                     ペイン番号 (1 or 2)
  */
 export function initializeDashboard({
   onConnect,
@@ -110,34 +127,37 @@ export function initializeDashboard({
   onCameraError,
   onConnectionStateChange,
   onMessage,
-  notificationManager
+  notificationManager,
+  paneIndex = 1
 }) {
-  // (1) ストレージ復元／マイグレーション
-  restoreLegacyStoredData();
-  cleanupLegacy();
-  restoreUnifiedStorage();
-  // 読み込んだストレージ内容を通知マネージャへ反映
-  notificationManager.loadSettings();
-  if (!monitorData.filamentSpools.length) {
-    const preset = FILAMENT_PRESETS.find(
-      p => p.presetId === "preset-unknown-somename-somecolor"
-    );
-    if (preset) {
-      const sp = addSpoolFromPreset(preset);
-      setCurrentSpoolId(sp.id);
-      saveUnifiedStorage();
+  // (1) ストレージ復元／マイグレーション（ペイン1のみ実行）
+  if (paneIndex === 1) {
+    restoreLegacyStoredData();
+    cleanupLegacy();
+    restoreUnifiedStorage();
+    // 読み込んだストレージ内容を通知マネージャへ反映
+    notificationManager.loadSettings();
+    if (!monitorData.filamentSpools.length) {
+      const preset = FILAMENT_PRESETS.find(
+        p => p.presetId === "preset-unknown-somename-somecolor"
+      );
+      if (preset) {
+        const sp = addSpoolFromPreset(preset);
+        setCurrentSpoolId(sp.id);
+        saveUnifiedStorage();
+      }
     }
-  }
 
-  // (2) ホスト未定義ならプレースホルダ設定
-  if (!currentHostname) {
-    setCurrentHostname(PLACEHOLDER_HOSTNAME);
+    // (2) ホスト未定義ならプレースホルダ設定
+    if (!currentHostname) {
+      setCurrentHostname(PLACEHOLDER_HOSTNAME);
+    }
   }
 
   // (3) プレビュー復元＆初期化
   restoreXYPreviewState();
-  initXYPreview();
-  const fpMount = document.getElementById("filament-preview");
+  initXYPreview(paneIndex);
+  const fpMount = getPaneEl("filament-preview", paneIndex);
   if (fpMount) {
     const machine = monitorData.machines[currentHostname] || {};
     const spool   = getCurrentSpool();
@@ -191,33 +211,31 @@ export function initializeDashboard({
   }
 
   // ステージ回転ボタン
-  document.getElementById("btn-stage-flat")?.addEventListener("click", setFlatView);
-  document.getElementById("btn-stage-45")?.addEventListener("click", setTilt45View);
-  document.getElementById("btn-stage-65-72")?.addEventListener("click", setObliqueView);
-  document.getElementById("btn-stage-spin")?.addEventListener("click", toggleZSpin);
+  getPaneEl("btn-stage-flat",  paneIndex)?.addEventListener("click", setFlatView);
+  getPaneEl("btn-stage-45",    paneIndex)?.addEventListener("click", setTilt45View);
+  getPaneEl("btn-stage-65-72", paneIndex)?.addEventListener("click", setObliqueView);
+  getPaneEl("btn-stage-spin",  paneIndex)?.addEventListener("click", toggleZSpin);
 
   // (4) ログ描画・自動スクロール設定
-  const logBox = document.getElementById("log");
+  const logBox = getPaneEl("log", paneIndex);
   initLogAutoScroll(logBox);
   initLogRenderer(logBox);
 
   // (5) 接続／切断ボタンバインド
-  const ipInput    = document.getElementById("destination-input");
-  const acb        = document.getElementById("auto-connect-toggle");
-  const camToggle  = document.getElementById("camera-toggle-title");
-  const btnConnect = document.getElementById("connect-button");
-  const btnDisc    = document.getElementById("disconnect-button");
-
+  const ipInput    = getPaneEl("destination-input",   paneIndex);
+  const acb        = getPaneEl("auto-connect-toggle", paneIndex);
+  const camToggle  = getPaneEl("camera-toggle-title", paneIndex);
+  const btnConnect = getPaneEl("connect-button",      paneIndex);
+  const btnDisc    = getPaneEl("disconnect-button",   paneIndex);
 
   // ここで monitorData.appSettings から UI に反映
-  ipInput.value     = monitorData.appSettings.wsDest        || "";
-  acb.checked       = monitorData.appSettings.autoConnect;
-  camToggle.checked = monitorData.appSettings.cameraToggle;
-
+  if (ipInput)   ipInput.value     = monitorData.appSettings.wsDest     || "";
+  if (acb)       acb.checked       = monitorData.appSettings.autoConnect;
+  if (camToggle) camToggle.checked = monitorData.appSettings.cameraToggle;
 
   // 接続ボタンクリック → IPチェック→保存→接続
   btnConnect?.addEventListener("click", () => {
-    const ip = ipInput.value.trim();
+    const ip = ipInput?.value.trim();
     if (!ip) {
       showAlert("接続先のIPアドレスを設定し、接続を押してください", "warn");
       return;
@@ -233,139 +251,150 @@ export function initializeDashboard({
   btnDisc?.addEventListener("click", onDisconnect);
 
   // (6) ログコピー・クリア操作
-  document.getElementById("copy-all-notification-button")
+  getPaneEl("copy-all-notification-button",  paneIndex)
     ?.addEventListener("click", e => copyLogsToClipboard(logManager.getNotifications(), null, e.currentTarget));
-  document.getElementById("copy-last-50-notification-button")
+  getPaneEl("copy-last-50-notification-button", paneIndex)
     ?.addEventListener("click", e => copyLogsToClipboard(logManager.getNotifications(), 50, e.currentTarget));
-  document.getElementById("clear-notification-logs-button")
+  getPaneEl("clear-notification-logs-button", paneIndex)
     ?.addEventListener("click", () => {
       logManager.clear();
       flushNotificationLogsToDom();
     });
-  document.getElementById("copy-all-button")
+  getPaneEl("copy-all-button",  paneIndex)
     ?.addEventListener("click", e => copyLogsToClipboard(logManager.getAll(), null, e.currentTarget));
-  document.getElementById("copy-last-50-button")
+  getPaneEl("copy-last-50-button", paneIndex)
     ?.addEventListener("click", e => copyLogsToClipboard(logManager.getAll(), 50, e.currentTarget));
-  document.getElementById("copy-storeddata-button")
+  getPaneEl("copy-storeddata-button", paneIndex)
     ?.addEventListener("click", copyStoredDataToClipboard);
 
   // (7) カメラトグル制御
-  camToggle.addEventListener("change", () => {
-    monitorData.appSettings.cameraToggle = camToggle.checked;
-    saveUnifiedStorage();
-    if (camToggle.checked) startCameraStream();
-    else                    stopCameraStream();
-  });
+  if (camToggle) {
+    camToggle.addEventListener("change", () => {
+      monitorData.appSettings.cameraToggle = camToggle.checked;
+      saveUnifiedStorage();
+      if (camToggle.checked) startCameraStream(undefined, paneIndex);
+      else                    stopCameraStream(undefined, paneIndex);
+    });
+  }
 
   // (8) 自動接続トグル
-  acb.addEventListener("change", () => {
-    monitorData.appSettings.autoConnect = acb.checked;
-    saveUnifiedStorage();
-    pushLog(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-    showAlert (`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-  });
-
+  if (acb) {
+    acb.addEventListener("change", () => {
+      monitorData.appSettings.autoConnect = acb.checked;
+      saveUnifiedStorage();
+      pushLog(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
+      showAlert(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
+    });
+  }
 
   // (9) 通知設定パネル初期化
-  const notifBody = document.getElementById("notification-panel-body");
+  const notifBody = getPaneEl("notification-panel-body", paneIndex);
   if (notifBody && notificationManager && typeof notificationManager.initSettingsUI === "function") {
     notificationManager.initSettingsUI(notifBody);
   }
 
   // (10) 温度グラフ初期化＆過去データ読み込み
-  initTemperatureGraph();
+  const canvasEl = getPaneEl("temp-graph-canvas", paneIndex);
+  initTemperatureGraph({}, canvasEl);
   updateTemperatureGraphFromStoredData(
-    monitorData.machines[currentHostname].storedData
+    monitorData.machines[currentHostname].storedData,
+    canvasEl
   );
 
   // (10.5) 温度グラフのズームリセットボタン
-  document.getElementById("temp-graph-reset-button")
-    ?.addEventListener("click", resetTemperatureGraphView);
+  getPaneEl("temp-graph-reset-button", paneIndex)
+    ?.addEventListener("click", () => resetTemperatureGraphView(canvasEl));
 
-  // (11) ページロード時の自動接続
-  // 起動時は接続先が設定されているときだけ AutoConnect
-  if (monitorData.appSettings.autoConnect && monitorData.appSettings.wsDest) {
-    setTimeout(onConnect, 1500);
-  } else {
-    showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります","warn");
+  // (11) ページロード時の自動接続（ペイン1のみ）
+  if (paneIndex === 1) {
+    if (monitorData.appSettings.autoConnect && monitorData.appSettings.wsDest) {
+      setTimeout(onConnect, 1500);
+    } else {
+      showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります", "warn");
+    }
   }
-  
+
   // (12) ページロード時のカメラ起動は廃止
   // WebSocket 接続確立時に自動開始されるためここでは実行しない
 
   // (12.5) 保存済みの履歴と現在印刷を表示
-  const savedJobs = printManager.loadHistory();
-  if (savedJobs.length) {
-    const baseUrl = monitorData.appSettings.wsDest
-      ? `http://${monitorData.appSettings.wsDest}:80`
-      : "";
-    const raw = printManager.jobsToRaw(savedJobs);
-    printManager.renderHistoryTable(raw, baseUrl);
+  if (paneIndex === 1) {
+    const savedJobs = printManager.loadHistory();
+    if (savedJobs.length) {
+      const baseUrl = monitorData.appSettings.wsDest
+        ? `http://${monitorData.appSettings.wsDest}:80`
+        : "";
+      const raw = printManager.jobsToRaw(savedJobs);
+      printManager.renderHistoryTable(raw, baseUrl);
+    }
   }
   printManager.renderPrintCurrent(
-    document.getElementById("print-current-container")
+    getPaneEl("print-current-container", paneIndex)
   );
 
-  // (13) ファイルマネージャ初期化
-  FileManager.init();
+  // (13) ファイルマネージャ初期化（ペイン1のみ）
+  if (paneIndex === 1) {
+    FileManager.init();
+  }
 
   // (14) 印刷履歴手動リフレッシュ
-  const historyBtn = document.getElementById("history-refresh-btn");
+  const historyBtn = getPaneEl("history-refresh-btn", paneIndex);
   if (historyBtn) {
     historyBtn.addEventListener("click", () => {
-      document.getElementById("btn-history-list")?.click();
+      getPaneEl("btn-history-list", paneIndex)?.click();
     });
   }
 
   // (14.5) コマンドパレット側ボタン → 上部クイックボタンの代理クリック
   const aliasClick = (src, dest) => {
-    const s = document.getElementById(src);
-    const d = document.getElementById(dest);
+    const s = getPaneEl(src,  paneIndex);
+    const d = getPaneEl(dest, paneIndex);
     if (s && d) s.addEventListener("click", () => d.click());
   };
-  aliasClick("btn-stop-print-cmd",   "btn-stop-print");
-  aliasClick("btn-pause-print-cmd",  "btn-pause-print");
-  aliasClick("btn-resume-print-cmd", "btn-resume-print");
-  aliasClick("btn-history-list-cmd","btn-history-list");
-  aliasClick("btn-file-list-cmd",  "btn-file-list");
+  aliasClick("btn-stop-print-cmd",    "btn-stop-print");
+  aliasClick("btn-pause-print-cmd",   "btn-pause-print");
+  aliasClick("btn-resume-print-cmd",  "btn-resume-print");
+  aliasClick("btn-history-list-cmd",  "btn-history-list");
+  aliasClick("btn-file-list-cmd",     "btn-file-list");
 
   printManager.initHistoryTabs();
 
   // (15) ファイルアップロード初期化
   printManager.setupUploadUI();
 
-  // (16) 通知コンテナ初期化（notificationManager 用）
-  if (!document.querySelector(".notification-container")) {
+  // (16) 通知コンテナ確認
+  if (!getPaneEl("notification-container", paneIndex)) {
     const container = document.createElement("div");
     container.className = "notification-container";
+    container.id = `p${paneIndex}-notification-container`;
     document.body.appendChild(container);
   }
 
   // (17) 初期状態（切断）の UI 表示を整える
-  const cancelBtn = document.getElementById("camera-cancel-button");
+  const cancelBtn = getPaneEl("camera-cancel-button", paneIndex);
   cancelBtn?.addEventListener("click", () => {
-    stopCameraStream();
+    stopCameraStream(undefined, paneIndex);
   });
-  updateConnectionUI("disconnected");
-  setupPrinterUI();
+  updateConnectionUI("disconnected", {}, undefined, paneIndex);
+  setupPrinterUI(paneIndex);
 
-  // (18) 時間計算用変数自動保存
-  initializeAutoSave();
+  // (18) 時間計算用変数自動保存（ペイン1のみ）
+  if (paneIndex === 1) {
+    initializeAutoSave();
+  }
 
   // (19) JSONコマンド送信機能
-  initSendRawJson();
-  initSendGcode();
-  initTestRawJson();
-  initPauseHome();
-  initXYUnlock();
+  initSendRawJson(paneIndex);
+  initSendGcode(paneIndex);
+  initTestRawJson(paneIndex);
+  initPauseHome(paneIndex);
+  initXYUnlock(paneIndex);
 }
 
 // ────────────── 印刷再開データの復元／永続化 ──────────────
 
 /**
  * @constant {string[]}
- * @description
- * restorePrintResume / persistPrintResume の両関数で使うキー一覧
  */
 
 // 印刷再開用に保存したいキー
@@ -421,15 +450,11 @@ export function restorePrintResume(currentPrintId = null) {
 
   persistKeys.forEach(key => {
     const raw = localStorage.getItem(`pd_${host}_${key}`);
-    if (raw == null) return;  // データなし
+    if (raw == null) return;
 
     try {
-      // JSON パースして storedData にセット（rawValue／computedValue 両方に流し込む）
       const value = JSON.parse(raw);
-
-      // 第3引数 true を渡すことで rawValue にもセットします
       setStoredData(key, value, true);
-
     } catch (e) {
       console.warn(`restorePrintResume: '${key}' の JSON パースに失敗しました`, e);
     }
@@ -481,7 +506,6 @@ export function persistPrintResume() {
     if (entry?.rawValue != null) {
       localStorage.setItem(storageKey, JSON.stringify(entry.rawValue));
     } else {
-      // 該当データがない場合はキーを消しておく
       localStorage.removeItem(`pd_${host}_${key}`);
     }
   });
@@ -515,22 +539,15 @@ export function persistPrintResume() {
   }
 }
 
- 
+
 /** 自動保存間隔（ミリ秒） */
 const AUTO_SAVE_INTERVAL_MS = 3 * 60 * 1000; // 3分
 
 /**
- * autoSaveAll:
- *   - 印刷再開用データを localStorage に保存
- *   - 統一ストレージ（dashboard_storage）を保存
- *   - aggregator の内部状態を localStorage に保存
- *   - 保存前に {@link aggregatorUpdate} を実行しタイマー値を確定
- *
- * @returns {void}
+ * autoSaveAll
  */
 function autoSaveAll() {
   try {
-    // 現在のタイマー値を確定させてから保存処理を実行
     aggregatorUpdate();
   } catch (e) {
     console.warn("autoSaveAll: aggregatorUpdate 実行中にエラーが発生しました", e);
@@ -546,19 +563,10 @@ function autoSaveAll() {
 }
 
 /**
- * initializeAutoSave:
- *   - DOMContentLoaded 後に一度だけ beforeunload イベントへ autoSaveAll を登録
- *   - 定期的な autoSaveAll をセット
- *
- * @returns {void}
+ * initializeAutoSave
  */
 export function initializeAutoSave() {
-  // ページを離脱するときにも保存
   window.addEventListener("beforeunload", autoSaveAll);
-
-  //aggrigatorを停止
   stopAggregatorTimer();
-
-  // 一定間隔で定期保存
   setInterval(autoSaveAll, AUTO_SAVE_INTERVAL_MS);
 }
