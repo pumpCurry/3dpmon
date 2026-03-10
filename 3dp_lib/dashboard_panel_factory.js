@@ -187,15 +187,16 @@ const PANEL_TYPES = [
     perHost: true
   },
   {
-    id: "settings",
-    label: "設定",
-    templateId: "panel-tpl-settings",
+    id: "file-list",
+    label: "ファイル一覧",
+    templateId: "panel-tpl-file-list",
     defaultW: 12,
-    defaultH: 4,
+    defaultH: 5,
     minW: 3,
     minH: 2,
     perHost: true
-  }
+  },
+  /* settings パネルは接続設定モーダルに統合済み */
 ];
 
 /* ─── GridStack インスタンス ─── */
@@ -599,6 +600,9 @@ export function restoreLayout() {
 
     /* レイアウトデータからパネルを再生成 */
     for (const item of layout) {
+      /* 旧 "settings" パネルは接続モーダルに統合済み → スキップ */
+      if (item.panelType === "settings") continue;
+
       /* 旧 "control" パネルを新しい分割パネルに移行 */
       if (item.panelType === "control") {
         if (!item.host || validHosts.has(item.host)) {
@@ -614,6 +618,32 @@ export function restoreLayout() {
           _deferLayout(item.host, { panelType: "control-temp", x: item.x, y: item.y + 3, w: item.w, h: Math.max(item.h - 3, 3) });
         }
         continue;
+      }
+
+      /* 旧 "history" パネルの場合、file-list パネルが存在しなければ追加 */
+      if (item.panelType === "history") {
+        const hasFileList = layout.some(
+          l => l.panelType === "file-list" && l.host === item.host
+        );
+        if (!hasFileList) {
+          /* 履歴パネルの直下にファイル一覧パネルを挿入 */
+          const fileListItem = {
+            panelType: "file-list",
+            host: item.host,
+            x: item.x,
+            y: item.y + (item.h || 5),
+            w: item.w,
+            h: item.h || 5
+          };
+          if (item.host && !validHosts.has(item.host)) {
+            _deferLayout(item.host, fileListItem);
+          } else {
+            addPanel(fileListItem.panelType, fileListItem.host, {
+              x: fileListItem.x, y: fileListItem.y,
+              w: fileListItem.w, h: fileListItem.h
+            });
+          }
+        }
       }
 
       if (item.host && !validHosts.has(item.host)) {
@@ -859,19 +889,23 @@ export function ensureHostPanels(hostname) {
     }
   }
 
+  /* 旧シングルHTML配置を模した初期レイアウト
+     上段: カメラ＋ヘッドプレビュー＋ステータス
+     中段左: 温度グラフ  中段右: フィラメント＋操作系＋機器情報
+     下段: 現在の印刷→ログ→印刷履歴→ファイル一覧 */
   const defaultPanels = [
-    { type: "camera",        x: 0,  y: 0,  w: 4,  h: 5 },
-    { type: "head-preview",  x: 4,  y: 0,  w: 3,  h: 5 },
-    { type: "filament",      x: 7,  y: 0,  w: 2,  h: 5 },
-    { type: "status",        x: 9,  y: 0,  w: 3,  h: 5 },
-    { type: "temp-graph",    x: 0,  y: 5,  w: 6,  h: 4 },
-    { type: "control-cmd",   x: 6,  y: 5,  w: 3,  h: 3 },
-    { type: "control-temp",  x: 6,  y: 8,  w: 6,  h: 5 },
-    { type: "machine-info",  x: 9,  y: 5,  w: 3,  h: 3 },
-    { type: "log",           x: 0,  y: 13, w: 12, h: 4 },
-    { type: "current-print", x: 0,  y: 17, w: 12, h: 3 },
-    { type: "history",       x: 0,  y: 20, w: 12, h: 5 },
-    { type: "settings",      x: 0,  y: 25, w: 12, h: 4 }
+    { type: "camera",        x: 0,  y: 0,  w: 4,  h: 6 },
+    { type: "head-preview",  x: 4,  y: 0,  w: 4,  h: 6 },
+    { type: "status",        x: 8,  y: 0,  w: 4,  h: 6 },
+    { type: "temp-graph",    x: 0,  y: 6,  w: 6,  h: 5 },
+    { type: "filament",      x: 6,  y: 6,  w: 3,  h: 5 },
+    { type: "control-cmd",   x: 9,  y: 6,  w: 3,  h: 3 },
+    { type: "machine-info",  x: 9,  y: 9,  w: 3,  h: 2 },
+    { type: "control-temp",  x: 0,  y: 11, w: 12, h: 3 },
+    { type: "current-print", x: 0,  y: 14, w: 12, h: 3 },
+    { type: "log",           x: 0,  y: 17, w: 12, h: 4 },
+    { type: "history",       x: 0,  y: 21, w: 12, h: 5 },
+    { type: "file-list",     x: 0,  y: 26, w: 12, h: 5 }
   ];
   for (const p of defaultPanels) {
     if (addPanel(p.type, hostname, { x: p.x, y: p.y + maxY, w: p.w, h: p.h })) count++;

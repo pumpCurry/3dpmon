@@ -43,20 +43,20 @@ body {
 
 
 .preview-wrapper {
+  background-color: #f8f8f8;
+  padding: 4px;
+  box-sizing: border-box;
+  /* 旧固定レイアウト用: パネルモードでは panel-body が管理 */
   flex: 0 0 310px;
   max-width: 310px;
-  background-color: #f8f8f8;
-  padding: 6px;
-  box-sizing: border-box;
 }
 
 .preview-body {
-  width: 300px;
   display: flex;
   background-color: #fff;
-  padding: 6px;
+  padding: 4px;
   border-radius: 3px;
-  gap: 6px;
+  gap: 4px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.15);
 }
 
@@ -98,12 +98,73 @@ body {
   order: 0;
 }
 
+/* 温度グラフパネル構造 */
+.temp-graph-panel-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+.temp-graph-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+.temp-graph-area canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+.temp-graph-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 4px;
+}
+
+/* 旧レイアウト互換: 非パネル時の最低高さ */
+.graph-wrapper .temp-graph-area {
+  min-height: 300px;
+}
+
 /* 現在の印刷カードを行全体で表示 */
-#print-current-card {
+.print-current-card {
   flex: 0 0 100%;
 }
 
-/* フィラメントプレビューヘッダ */
+/* フィラメントプレビュー（パネルモード対応） */
+.filament-panel-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+.filament-preview-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: visible;
+}
+.filament-panel-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 4px;
+}
+/* パネルモード: panel-body 内の filament wrapper をフル展開 */
+.panel-body .filament-panel-wrapper {
+  width: 100%;
+  height: 100%;
+}
+/* パネルモード: dfv-card の固定サイズを解除 */
+.panel-body .dfv-card {
+  border: none;
+  padding: 0;
+  display: inline-block;
+}
+/* 旧レイアウト互換用（非パネル時） */
 .filament-header {
   display: flex;
   justify-content: space-between;
@@ -316,10 +377,16 @@ body {
    ヘッドプレビューエリア
 --------------------------------------------------------------- */
 
+.chamber-container {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .chamber {
   position: relative;
-  width: 190px;
-  height: 190px;
+  width: 100%;
+  aspect-ratio: 1 / 1;
   background-color: #222;
   border-top: 4px solid #111144;
   border-left: 4px solid #111144;
@@ -332,10 +399,10 @@ body {
 }
 .stage {
   position: absolute;
-  width: 150px;
-  height: 150px;
-  bottom: 15px;
-  right: 15px;
+  width: 79%;       /* 150/190 */
+  height: 79%;
+  bottom: 8%;
+  right: 8%;
   background-color: #555;
   border-top: 2px solid darkgoldenrod;
   border-left: 2px solid #666;
@@ -346,23 +413,24 @@ body {
   transition: transform 0.2s;
 }
 
-#z-preview-container {
-  width: 70px;
-  height: 190px;
+.z-preview-container {
+  width: 100%;
+  aspect-ratio: 70 / 190;
   border: 1px solid #aaa;
   position: relative;
   text-align: center;
+  box-sizing: border-box;
 }
-#z-preview {
+.z-preview-bar {
   position: absolute;
-  top: 25px;
-  left: 10px;
-  width: 50px;
+  top: 13%;       /* 25/190 */
+  left: 14%;      /* 10/70 */
+  width: 72%;     /* 50/70 */
   background: rgba(255, 0, 0, 0.6);
   border-top: 1px solid black;
   border-bottom: 3px solid red;
 }
-#z-value {
+.z-value-display {
   position: absolute;
   top: 50%;
   left: 0;
@@ -384,10 +452,12 @@ body {
 }
 
 .z-container {
+  flex: 0 0 26%;   /* 70 / (190+70+gap) ≈ 26% */
+  min-width: 40px;
+  max-width: 80px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: top;
 }
 .z-label-top { position: absolute; top: 0; width: 100%; font-size: 10px; }
 .z-label-bottom { position: absolute; bottom: 0; width: 100%; font-size: 10px; }
@@ -408,46 +478,63 @@ body {
 }
 
 /* ──────────────────────────────────────────
-   ヘッドプレビュー枠内コンテンツ
+   ヘッドプレビュー枠内コンテンツ（パネルモード対応）
 ────────────────────────────────────────── */
 
-.preview-header { font-weight: bold; }
-
-.preview-wrapper .preview-content {
-  width: 286px;
-  background-color: #fff;
-  padding: 6px;
-  border-radius: 3px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+/* パネルモード: panel-body 内では幅制限を解除し、パネルサイズに追従 */
+.panel-body .preview-wrapper {
+  flex: unset;
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
 }
 
+.panel-body .preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 
-/* プレビュー本体の幅固定 */
-.preview-wrapper .preview-body {
-  width: 270px;
-  margin: 0 auto;                  /* 中央寄せ */
-  overflow: hidden;                /* はみ出し防止 */
-  border: 2px solid rgba(0, 0, 0, 0.1);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+/* パネルモード: XYチャンバーを高さ基準で正方形維持 */
+.panel-body .chamber-container {
+  align-items: center;
+  overflow: hidden;
+}
+.panel-body .chamber {
+  flex: 1;
+  min-height: 0;
+  width: auto;          /* width:100% を解除 — 高さから aspect-ratio で算出 */
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+}
+
+/* パネルモード: Z位置グラフをチャンバーに合わせて拡縮 */
+.panel-body .z-container {
+  flex: 0 0 auto;
+  max-width: none;
+  min-width: 40px;
+  overflow: visible;
+}
+.panel-body .z-preview-container {
+  flex: 1;
+  min-height: 0;
+  height: auto;         /* aspect-ratio を解除し、チャンバーと同じ高さに追随 */
+  aspect-ratio: unset;
 }
 
 /* レイヤー数表示 */
-.preview-wrapper .preview-footer {
-  margin-top: 6px;
-}
-
-.preview-wrapper .preview-footer .print-status-table {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 10px;
-  margin-bottom: 8px;
-  font-size: 0.9em;
-  align-items: center;
-}
-.preview-wrapper .preview-footer .print-status-table strong {
-  text-align: right;
+.preview-footer {
+  padding: 2px 4px;
+  font-size: 12px;
   white-space: nowrap;
-  align-items: center;
+  text-align: center;
+}
+.preview-footer .layer-sep {
+  margin: 0 2px;
+  color: #999;
 }
 
 
@@ -581,8 +668,26 @@ body {
   padding: 5px;
   border-radius: 3px;
   flex: 1;
-  text-align: center;
   min-width: 70px;
+}
+.temp-title {
+  font-weight: bold;
+  text-align: center;
+}
+.temp-item {
+  display: flex;
+  align-items: baseline;
+}
+.temp-label {
+  flex: 0 0 auto;
+  text-align: right;
+  min-width: 2.5em;
+  margin-right: 2px;
+}
+.temp-val {
+  flex: 1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .quick-buttons {
   display: flex;
@@ -951,14 +1056,14 @@ input:checked + .slider:before {
 ------------------------------- */
 /* 固定ヘッダー・スクロール本体 */
 .fixed-header {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
   table-layout: auto;   /* 固定幅ではなく auto に */
 }
 
 .fixed-header th, .fixed-header td {
   padding: 4px;
-  border: 1px solid #ccc;
   box-sizing: border-box;
 }
 
@@ -975,41 +1080,39 @@ input:checked + .slider:before {
    印刷履歴テーブル用：ストライプ＆フォント
 ------------------------------- */
 /* フォント設定 */
-#print-history-table, #print-history-table th, #print-history-table td,
-#file-list-table, #file-list-table th, #file-list-table td {
+.history-table, .history-table th, .history-table td,
+.filelist-table, .filelist-table th, .filelist-table td {
   font-family: "Arial Narrow", "Yu Gothic UI", "Helvetica Neue", Helvetica, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Meiryo UI", Meiryo, sans-serif;
 }
 
 /* 奇数偶数行 */
-#print-history-table tbody tr:nth-child(odd),
-#file-list-table tbody tr:nth-child(odd) {
+.history-table tbody tr:nth-child(odd),
+.filelist-table tbody tr:nth-child(odd) {
   background: #fafafa;
 }
-#print-history-table tbody tr:nth-child(even),
-#file-list-table tbody tr:nth-child(even) {
+.history-table tbody tr:nth-child(even),
+.filelist-table tbody tr:nth-child(even) {
   background: #fff;
 }
 
-/* 右揃えカラム */
-#print-history-table td[data-key="number"],
-#print-history-table td[data-key="id"],
-#print-history-table td[data-key="size"],
-#print-history-table td[data-key="ctime"],
-#print-history-table td[data-key="starttime"],
-#print-history-table td[data-key="endtime"],
-#print-history-table td[data-key="preptime"],
-#print-history-table td[data-key="checktime"],
-#print-history-table td[data-key="pausetime"],
-#print-history-table td[data-key="usagetime"],
-#print-history-table td[data-key="usagematerial"],
-#print-history-table td[data-key="spoolchange"],
-#print-history-table td[data-key="spoolcount"],
-#print-history-table td[data-key="remain"],
-#file-list-table td[data-key="number"],
-#file-list-table td[data-key="layer"],
-#file-list-table td[data-key="size"],
-#file-list-table td[data-key="expect"],
-#file-list-table td[data-key="prints"] {
+/* 右揃えカラム（th + td 両方） */
+.history-table :is(th,td)[data-key="size"],
+.history-table :is(th,td)[data-key="ctime"],
+.history-table :is(th,td)[data-key="starttime"],
+.history-table :is(th,td)[data-key="endtime"],
+.history-table :is(th,td)[data-key="preptime"],
+.history-table :is(th,td)[data-key="checktime"],
+.history-table :is(th,td)[data-key="pausetime"],
+.history-table :is(th,td)[data-key="usagetime"],
+.history-table :is(th,td)[data-key="usagematerial"],
+.history-table :is(th,td)[data-key="spoolchange"],
+.history-table :is(th,td)[data-key="spoolcount"],
+.history-table :is(th,td)[data-key="remain"],
+.filelist-table :is(th,td)[data-key="layer"],
+.filelist-table :is(th,td)[data-key="size"],
+.filelist-table :is(th,td)[data-key="mtime"],
+.filelist-table :is(th,td)[data-key="expect"],
+.filelist-table :is(th,td)[data-key="prints"] {
   text-align: right;
 }
 
@@ -1199,17 +1302,20 @@ input:checked + .slider:before {
 
 /* 操作パネル - 停止・一時停止・再開ボタンの配色 */
 #btn-stop-print,
-#btn-stop-print-cmd {
+#btn-stop-print-cmd,
+.btn-stop {
   background-color: red;       /* 停止ボタンは赤 */
   color: white;                /* 文字色は白 */
 }
 
 #btn-pause-print,
-#btn-pause-print-cmd {
+#btn-pause-print-cmd,
+.btn-pause {
   background-color: #f8b500;   /* 山吹色 */
 }
 
 #btn-resume-print,
-#btn-resume-print-cmd {
+#btn-resume-print-cmd,
+.btn-resume {
   background-color: #d5f5cf;   /* 薄黄緑 */
 }

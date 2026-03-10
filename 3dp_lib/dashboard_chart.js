@@ -18,7 +18,7 @@
  * - {@link resetTemperatureGraph}：グラフデータリセット
  * - {@link resetTemperatureGraphView}：表示範囲リセット
  * - {@link updateTemperatureGraphFromStoredData}：データ更新
- * - {@link switchChartHost}：ホスト切替（後方互換、内部的にはno-op化）
+ * - {@link switchChartHost}：指定ホストのチャート状態を確保
  *
  * @version 1.390.788 (PR #366)
  * @since   1.390.193 (PR #86)
@@ -223,14 +223,14 @@ export function resetTemperatureGraph(hostname) {
 }
 
 /**
- * マシン切替時のホスト登録（後方互換）。
- * per-host Chart インスタンス方式では特別な処理不要。
+ * 指定ホストのチャート状態を確保する。
+ * per-host Chart インスタンス方式では各ホストが独立しているため、
+ * 状態オブジェクトの初期化のみを行う。
  *
  * @param {string} hostname - ホスト名
  */
 export function switchChartHost(hostname) {
-  /* per-host Chart 方式ではデータスワップ不要。
-     ホスト状態が未作成なら作成だけ行う。 */
+  /* ホスト状態が未作成なら作成だけ行う */
   if (hostname) _getHostState(hostname);
 }
 

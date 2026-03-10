@@ -76,24 +76,18 @@ export function initStorageUI() {
   /* ----- Export / Import ボタンを動的に挿入 ----- */
   const expBtn = document.createElement("button");
   expBtn.id = "storage-export-btn";
-  expBtn.textContent = "全データ Export";
+  expBtn.textContent = "全データ Export (v2.00)";
   expBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
   const impBtn = document.createElement("button");
   impBtn.id = "storage-import-btn";
-  impBtn.textContent = "全データ Import";
+  impBtn.textContent = "全データ Import (v1.40/v2.00)";
   impBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
-  const allExpBtn = document.createElement("button");
-  allExpBtn.id = "storage-export-all-btn";
-  allExpBtn.textContent = "すべてのデータのエクスポート";
-  allExpBtn.style.cssText = "font-size:12px;margin-left:5px;";
-
   // 既存パネル要素の末尾にボタン群用 div を追加
-  // この位置で追加することで HTML 側の末尾に配置される
   const btnGroup = document.createElement("div");
   btnGroup.style.cssText = "padding:8px;font-size:0.9em;";
-  btnGroup.append(expBtn, impBtn, allExpBtn);
+  btnGroup.append(expBtn, impBtn);
   elPanel?.appendChild(btnGroup);
 
   /* ---------------- ボタン動作 ---------------- */
@@ -107,52 +101,11 @@ export function initStorageUI() {
   // クォータテスト
   btnTest?.addEventListener("click", handleQuotaTest);
 
-  // Export（IndexedDB 優先、フォールバック localStorage）
-  expBtn.addEventListener("click", async () => {
-    try {
-      const data = await exportAllData();
-      const json = JSON.stringify(data);
-      const blob = new Blob([json], { type: "application/json" });
-      const url  = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "3dp-monitor_backup.json";
-      a.click();
-      URL.revokeObjectURL(url);
-      panelToast("エクスポート用 JSON を生成しました");
-    } catch (e) {
-      console.error("[storage‑export]", e);
-      panelToast("エクスポートに失敗しました", true);
-    }
-  });
+  // Export
+  expBtn.addEventListener("click", () => doExport(panelToast));
 
-  // Import（IndexedDB 優先、フォールバック localStorage）
-  impBtn.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.addEventListener("change", (ev) => {
-      const file = ev.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const parsed = JSON.parse(reader.result);         // 妥当性チェック
-          await importAllData(parsed);
-          panelToast("インポート完了。ページを再読み込みします。");
-          setTimeout(() => location.reload(), 800);
-        } catch (e) {
-          console.error("[storage‑import]", e);
-          panelToast("インポート失敗: 不正な JSON", true);
-        }
-      };
-      reader.readAsText(file);
-    });
-    input.click();
-  });
-
-  // すべてのデータをエクスポート
-  allExpBtn.addEventListener("click", exportAllStorageData);
+  // Import
+  impBtn.addEventListener("click", () => doImport(panelToast));
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 
@@ -242,36 +195,141 @@ async function handleQuotaTest() {
   }
 }
 
+/** タイムスタンプ文字列を生成する内部ヘルパー */
+function _makeTimestamp() {
+  const now = new Date();
+  const pad = (n) => n.toString().padStart(2, "0");
+  return (
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  );
+}
+
 /**
- * 現在の統合ストレージ内容をテキストファイルに保存する。
- * - ファイル名は `3dpmon_export_YYYYMMDD-hhmmss.txt` 形式
- * - IndexedDB 優先、フォールバック localStorage
+ * v2.00 形式で全データをエクスポートする。
+ * ファイル名は `3dpmon_export_YYYYMMDD-hhmmss.json` 形式。
  *
- * @function exportAllStorageData
+ * @param {Function} toast - トースト表示関数
  * @returns {Promise<void>}
  */
-async function exportAllStorageData() {
+async function doExport(toast) {
   try {
     const data = await exportAllData();
-    const json = JSON.stringify(data);
-    const now  = new Date();
-    const pad = (n) => n.toString().padStart(2, "0");
-    const stamp =
-      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const filename = `3dpmon_export_${stamp}.txt`;
-    const blob = new Blob([json], { type: "text/plain" });
-    const url  = URL.createObjectURL(blob);
+    data._exportVersion = "2.00";
+    data._exportDate = new Date().toISOString();
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename;
+    a.download = `3dpmon_export_${_makeTimestamp()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    panelToast("データをエクスポートしました");
+    toast("v2.00 形式でエクスポートしました");
   } catch (e) {
-    console.error("[exportAllStorageData]", e);
-    panelToast("エクスポートに失敗しました", true);
+    console.error("[doExport]", e);
+    toast("エクスポートに失敗しました", true);
   }
+}
+
+/**
+ * v1.40 形式のデータを v2.00 形式に変換する。
+ * v1.40: フラットな monitorData（storedData, printStore 等がトップレベル）
+ * v2.00: shared キー群 + machines: { hostname: {...} }
+ *
+ * @param {Object} data - v1.40 形式データ
+ * @returns {Object} v2.00 形式データ
+ */
+function _convertV140toV200(data) {
+  const SHARED_KEYS = [
+    "appSettings", "filamentSpools", "usageHistory",
+    "filamentPresets", "filamentInventory",
+    "currentSpoolId", "spoolSerialCounter"
+  ];
+  const result = {};
+  for (const key of SHARED_KEYS) {
+    if (key in data) result[key] = data[key];
+  }
+  if (data.machines && typeof data.machines === "object") {
+    /* v1.40 でも machines が存在する場合（混在形式） */
+    result.machines = data.machines;
+  } else {
+    /* v1.40 フラット形式: storedData/printStore 等をデフォルトホストに格納 */
+    const hostData = {};
+    const HOST_KEYS = ["storedData", "printStore", "fileList"];
+    for (const key of HOST_KEYS) {
+      if (key in data) hostData[key] = data[key];
+    }
+    /* storedData から hostname を取得し、ホスト名として使用 */
+    let hostname = "imported";
+    if (hostData.storedData?.hostname?.rawValue) {
+      hostname = hostData.storedData.hostname.rawValue;
+    }
+    if (Object.keys(hostData).length > 0) {
+      result.machines = { [hostname]: hostData };
+    }
+  }
+  result._exportVersion = "2.00";
+  result._convertedFrom = "1.40";
+  return result;
+}
+
+/**
+ * エクスポートデータのバージョンを判定する。
+ *
+ * @param {Object} data - パース済み JSON データ
+ * @returns {"2.00"|"1.40"} バージョン文字列
+ */
+function _detectExportVersion(data) {
+  if (data._exportVersion === "2.00") return "2.00";
+  if (data.machines && typeof data.machines === "object") {
+    /* machines キーがあり、各値がオブジェクトなら v2.00 相当 */
+    const vals = Object.values(data.machines);
+    if (vals.length > 0 && typeof vals[0] === "object") return "2.00";
+  }
+  return "1.40";
+}
+
+/**
+ * 全データをインポートする。v1.40 / v2.00 自動判定。
+ * - `.json` および `.txt` ファイルを受け付ける
+ * - v1.40 データは自動で v2.00 に変換してからインポート
+ *
+ * @param {Function} toast - トースト表示関数
+ * @returns {void}
+ */
+function doImport(toast) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,.txt";
+  input.addEventListener("change", (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const version = _detectExportVersion(parsed);
+        let importData = parsed;
+        if (version === "1.40") {
+          importData = _convertV140toV200(parsed);
+          console.info("[doImport] v1.40 → v2.00 変換を実施しました");
+        }
+        /* メタデータキーを除去してからインポート */
+        delete importData._exportVersion;
+        delete importData._exportDate;
+        delete importData._convertedFrom;
+        await importAllData(importData);
+        toast(`インポート完了 (${version} 形式)。ページを再読み込みします。`);
+        setTimeout(() => location.reload(), 800);
+      } catch (e) {
+        console.error("[doImport]", e);
+        toast("インポート失敗: 不正な JSON", true);
+      }
+    };
+    reader.readAsText(file);
+  });
+  input.click();
 }
 
 /** バイト数を “X.XX MiB” に変換 */
@@ -327,22 +385,18 @@ export function initStorageUIInPanel(body) {
     }
   };
 
-  /* Export / Import ボタンを動的に挿入 */
+  /* Export / Import ボタンを動的に挿入（v2.00 統一） */
   const expBtn = document.createElement("button");
-  expBtn.textContent = "全データ Export";
+  expBtn.textContent = "全データ Export (v2.00)";
   expBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
   const impBtn = document.createElement("button");
-  impBtn.textContent = "全データ Import";
+  impBtn.textContent = "全データ Import (v1.40/v2.00)";
   impBtn.style.cssText = "font-size:12px;margin-left:5px;";
-
-  const allExpBtn = document.createElement("button");
-  allExpBtn.textContent = "すべてのデータのエクスポート";
-  allExpBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
   const btnGroup = document.createElement("div");
   btnGroup.style.cssText = "padding:8px;font-size:0.9em;";
-  btnGroup.append(expBtn, impBtn, allExpBtn);
+  btnGroup.append(expBtn, impBtn);
   if (elPanel) elPanel.appendChild(btnGroup);
 
   /* ボタンイベント */
@@ -369,70 +423,8 @@ export function initStorageUIInPanel(body) {
     });
   }
 
-  expBtn.addEventListener("click", async () => {
-    try {
-      const data = await exportAllData();
-      const json = JSON.stringify(data);
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "3dp-monitor_backup.json";
-      a.click();
-      URL.revokeObjectURL(url);
-      toast("エクスポート用 JSON を生成しました");
-    } catch (e) {
-      console.error("[storage-export]", e);
-      toast("エクスポートに失敗しました", true);
-    }
-  });
-
-  impBtn.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.addEventListener("change", (ev) => {
-      const file = ev.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const parsed = JSON.parse(reader.result);
-          await importAllData(parsed);
-          toast("インポート完了。ページを再読み込みします。");
-          setTimeout(() => location.reload(), 800);
-        } catch (e) {
-          console.error("[storage-import]", e);
-          toast("インポート失敗: 不正な JSON", true);
-        }
-      };
-      reader.readAsText(file);
-    });
-    input.click();
-  });
-
-  allExpBtn.addEventListener("click", async () => {
-    try {
-      const data = await exportAllData();
-      const json = JSON.stringify(data);
-      const now = new Date();
-      const pad = (n) => n.toString().padStart(2, "0");
-      const stamp =
-        `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-        `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-      const blob = new Blob([json], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `3dpmon_export_${stamp}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast("データをエクスポートしました");
-    } catch (e) {
-      console.error("[exportAllStorageData]", e);
-      toast("エクスポートに失敗しました", true);
-    }
-  });
+  expBtn.addEventListener("click", () => doExport(toast));
+  impBtn.addEventListener("click", () => doImport(toast));
 
   /* 全ストレージ削除ボタン */
   if (btnClear) {

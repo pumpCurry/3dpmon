@@ -21,7 +21,6 @@
  * - none
  */
 
-import { currentHostname } from "./dashboard_data.js";
 import { MAX_PRINT_HISTORY } from "./dashboard_storage.js";
 
 const containerId = 'filemanager-history';
@@ -53,8 +52,8 @@ const STORAGE_KEY_PREFIX = '3dp-filemanager-history-';
  * @private
  * @returns {string} 生成した保存用キー
  */
-function _storageKey() {
-  return `${STORAGE_KEY_PREFIX}${currentHostname || 'default'}`;
+function _storageKey(hostname) {
+  return `${STORAGE_KEY_PREFIX}${hostname || 'default'}`;
 }
 
 /**
@@ -67,10 +66,10 @@ function _storageKey() {
  * @param {VideoEntry[]}   videoList   - 関連動画エントリ配列
  * @returns {void}
  */
-function _saveHistoryData(historyList, videoList) {
+function _saveHistoryData(historyList, videoList, hostname) {
   const data = { historyList, elapseVideoList: videoList };
   try {
-    localStorage.setItem(_storageKey(), JSON.stringify(data));
+    localStorage.setItem(_storageKey(hostname), JSON.stringify(data));
   } catch (e) {
     console.warn('[FileManager] saveHistoryData failed:', e);
   }
@@ -85,8 +84,8 @@ function _saveHistoryData(historyList, videoList) {
  *   elapseVideoList: VideoEntry[]
  * }}
  */
-function _loadHistoryData() {
-  const raw = localStorage.getItem(_storageKey());
+function _loadHistoryData(hostname) {
+  const raw = localStorage.getItem(_storageKey(hostname));
   if (!raw) return { historyList: [], elapseVideoList: [] };
   try {
     const data = JSON.parse(raw);
@@ -121,10 +120,10 @@ export const FileManager = {
    *   - 生データの動画リスト配列
    * @returns {void}
    */
-  saveFromPrinterData({ historyList, elapseVideoList }) {
+  saveFromPrinterData({ historyList, elapseVideoList }, hostname) {
     const history = historyList?.rawValue || [];
     const videos  = elapseVideoList?.rawValue || [];
-    const stored = _loadHistoryData();
+    const stored = _loadHistoryData(hostname);
 
     const histMap = new Map(stored.historyList.map(h => [h.id, h]));
     history.forEach(h => {
@@ -140,8 +139,8 @@ export const FileManager = {
     });
     const mergedVideos = Array.from(videoMap.values());
 
-    _saveHistoryData(mergedHistory, mergedVideos);
-    this.render();
+    _saveHistoryData(mergedHistory, mergedVideos, hostname);
+    this.render(hostname);
   },
 
   /**
@@ -149,8 +148,8 @@ export const FileManager = {
    *
    * @returns {void}
    */
-  render() {
-    const { historyList, elapseVideoList } = _loadHistoryData();
+  render(hostname) {
+    const { historyList, elapseVideoList } = _loadHistoryData(hostname);
     const container = document.getElementById(containerId);
     if (!container) return;
     container.innerHTML = '';

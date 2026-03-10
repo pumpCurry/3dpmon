@@ -306,6 +306,7 @@ body.panel-mode {
   display: none;
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 3500;
   background: rgba(0,0,0,0.5);
   z-index: 9500;
   justify-content: center;
@@ -398,6 +399,207 @@ body.panel-mode {
 }
 
 /* ---------------------------------------------------------------
+   通知設定サブモーダル
+--------------------------------------------------------------- */
+.notif-modal-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 5100;
+  justify-content: center;
+  align-items: center;
+}
+.notif-modal-overlay.open {
+  display: flex;
+}
+.notif-modal {
+  background: #fff;
+  border-radius: 8px;
+  width: min(95vw, 900px);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.notif-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: #3070a0;
+  color: #fff;
+  border-radius: 8px 8px 0 0;
+  font-weight: bold;
+}
+.notif-modal-close {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+}
+.notif-modal-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+  font-size: 13px;
+}
+
+/* 通知設定マスター行 */
+.notif-master-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 6px 0;
+}
+.notif-master-row button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  background: #f5f5f5;
+}
+.notif-master-row button:hover { background: #e0e0e0; }
+
+/* カテゴリ見出し */
+.notif-category {
+  margin: 10px 0 4px;
+  padding: 4px 8px;
+  background: #e8f0f8;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.notif-category::before {
+  content: "▼ ";
+  font-size: 10px;
+}
+.notif-category.collapsed::before {
+  content: "▶ ";
+}
+
+/* 通知設定テーブル */
+.notif-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.notif-table th {
+  background: #f0f0f0;
+  padding: 4px 6px;
+  text-align: left;
+  font-weight: bold;
+  border-bottom: 2px solid #ccc;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.notif-table td {
+  padding: 3px 4px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+.notif-table tr:hover td {
+  background: #f8f8ff;
+}
+/* 列幅: ON | タイプ | レベル | 読み上げテキスト | サウンド | テスト */
+.notif-table .col-on    { width: 32px; text-align: center; }
+.notif-table .col-type  { width: 160px; }
+.notif-table .col-level { width: 70px; }
+.notif-table .col-talk  { /* flex残り */ }
+.notif-table .col-sound { width: 120px; }
+.notif-table .col-test  { width: 50px; text-align: center; }
+
+.notif-table input[type="text"] {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+.notif-table select {
+  width: 100%;
+  padding: 2px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.notif-table button {
+  padding: 2px 6px;
+  font-size: 11px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  cursor: pointer;
+  background: #f5f5f5;
+}
+.notif-table button:hover { background: #e0e0e0; }
+
+/* 追加設定フィールドセット */
+.notif-extra-fieldset {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.notif-extra-fieldset legend {
+  font-weight: bold;
+  font-size: 12px;
+}
+.notif-extra-fieldset label {
+  display: block;
+  margin: 4px 0;
+  font-size: 12px;
+}
+.notif-extra-fieldset input,
+.notif-extra-fieldset textarea,
+.notif-extra-fieldset select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.notif-extra-fieldset button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  background: #4090d0;
+  color: #fff;
+  margin-top: 8px;
+}
+.notif-extra-fieldset button:hover { background: #3080c0; }
+
+/* 保存ボタン行 */
+.notif-save-row {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #ddd;
+}
+.notif-save-row button {
+  padding: 6px 20px;
+  font-size: 13px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.notif-save-row .btn-save {
+  background: #4090d0;
+  color: #fff;
+  border-color: #3080c0;
+}
+.notif-save-row .btn-save:hover { background: #3080c0; }
+
+/* ---------------------------------------------------------------
    通知コンテナ（トップバーの下に表示）
 --------------------------------------------------------------- */
 body.panel-mode .notification-container {
@@ -406,21 +608,71 @@ body.panel-mode .notification-container {
 }
 
 /* ---------------------------------------------------------------
-   ヘッドプレビュー: GridStack ドラッグとの競合を防止
+   温度グラフ: GridStack パネル内レイアウト
 --------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="temp-graph"] .panel-body {
+  overflow: hidden;
+  padding: 2px;
+}
+.panel-body .temp-graph-panel-wrapper {
+  width: 100%;
+  height: 100%;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------
+   ヘッドプレビュー: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="head-preview"] .panel-body {
+  overflow: hidden;
+  padding: 2px;
+}
 .panel-body .preview-wrapper {
   touch-action: none;
 }
-.panel-body .preview-wrapper .chamber-outer {
+.panel-body .preview-wrapper .stage {
   cursor: grab;
 }
-.panel-body .preview-wrapper .chamber-outer:active {
+.panel-body .preview-wrapper .stage:active {
   cursor: grabbing;
 }
 
 /* ---------------------------------------------------------------
-   操作パネル分割時の内部スタイル調整
+   フィラメントプレビュー: GridStack パネル内レイアウト
 --------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="filament"] .panel-body {
+  overflow: hidden;
+  padding: 2px;
+}
+.panel-body .filament-panel-wrapper {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+.panel-body .filament-preview-area {
+  touch-action: none;
+}
+
+/* ---------------------------------------------------------------
+   操作ボタンパネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="control-cmd"] .panel-body {
+  overflow: auto;
+  padding: 4px;
+}
+/* col2 の固定幅制約を解除してパネル幅に追随 */
+.panel-body .col2 {
+  flex: unset;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.panel-body .col2 .card-title {
+  display: none;
+}
+/* ボタン群: 折り返し + コンパクト配置 */
 .control-cmd-panel .cmd-group {
   display: flex;
   flex-wrap: wrap;
@@ -430,6 +682,236 @@ body.panel-mode .notification-container {
 .control-cmd-panel .cmd-group button {
   font-size: 12px;
   padding: 4px 8px;
+}
+
+/* ---------------------------------------------------------------
+   温度・ファン制御パネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="control-temp"] .panel-body {
+  overflow: auto;
+  padding: 4px;
+}
+/* 横長パネル時: 温度+FAN を左、LED/材料/AI/速度 を右に2カラム配置 */
+.control-temp-panel .control-temp-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.control-temp-panel .control-temp-col {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+/* 温度行: パネル幅に合わせて折り返し */
+.control-temp-panel .temp-row {
+  flex-wrap: wrap;
+}
+.control-temp-panel .temp-box {
+  min-width: 90px;
+}
+/* スライダー: 固定100pxを解除しコンテナ幅に追随 */
+.control-temp-panel input[type="range"] {
+  width: 100%;
+  min-width: 60px;
+  max-width: 140px;
+}
+/* 制御行: 折り返し対応 */
+.control-temp-panel .control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+/* ファン・照明行: パネル幅に合わせて折り返し */
+.control-temp-panel .fan-lights-row {
+  flex-wrap: wrap;
+}
+.control-temp-panel .fan-item {
+  min-width: 60px;
+}
+/* AI行: パネル幅が狭い場合に自動列数 */
+.control-temp-panel .ai-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+}
+/* 印刷速度・フロー率: 折り返し */
+.control-temp-panel .quick-buttons {
+  flex-wrap: wrap;
+}
+
+/* ---------------------------------------------------------------
+   ログパネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="log"] .panel-body {
+  overflow: hidden;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+/* ログカードの装飾を解除しパネル全体に展開 */
+.panel-body .log-card {
+  flex: unset;
+  width: 100%;
+  min-width: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.panel-body .log-card .card-title {
+  display: none;
+}
+/* ヘッダー: 縮まないよう固定 */
+.panel-body .log-card-header {
+  flex-shrink: 0;
+}
+/* タブコンテンツ: 残りの高さを埋める */
+.panel-body .log-card .tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* ログボックス: max-height 固定を解除しパネル高さに追随 */
+.panel-body .log-box {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------
+   状態パネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="status"] .panel-body {
+  overflow: auto;
+  padding: 4px;
+}
+/* col1 の固定幅制約を解除してパネル幅に追随 */
+.panel-body .col1 {
+  flex: unset;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+/* カード装飾を解除 */
+.panel-body .col1 .card-title {
+  display: none;
+}
+
+/* ---------------------------------------------------------------
+   機器情報パネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="machine-info"] .panel-body {
+  overflow: auto;
+  padding: 4px;
+}
+/* info-card の固定幅制約を解除 */
+.panel-body .info-card {
+  flex: unset;
+  width: 100%;
+  min-width: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.panel-body .info-card .card-title {
+  display: none;
+}
+
+/* ---------------------------------------------------------------
+   現在の印刷パネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="current-print"] .panel-body {
+  overflow: hidden;
+  padding: 4px;
+}
+.panel-body .print-current-card {
+  flex: unset;
+  width: 100%;
+  height: 100%;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.panel-body .print-current-card .card-title {
+  display: none;
+}
+/* コンテナもパネル全体に広がる */
+.panel-body #print-current-container,
+.panel-body [id$="__print-current-container"] {
+  height: 100%;
+}
+
+/* ── 現在の印刷: レスポンシブレイアウト ── */
+.current-print {
+  display: flex;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+}
+/* サムネイルラッパー: パネル短辺に合わせて拡縮 */
+.cp-thumb-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+}
+.cp-thumb {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #f5f5f5;
+}
+/* 情報欄 */
+.cp-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  font-size: 13px;
+  overflow: hidden;
+}
+.cp-filename {
+  font-weight: bold;
+  font-size: 14px;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.cp-row {
+  margin-bottom: 2px;
+  color: #444;
+}
+.cp-label {
+  color: #888;
+  font-size: 12px;
+}
+/* 横長パネル（デフォルト）: 画像を左、テキストを右 */
+.panel-wrapper[data-panel-type="current-print"] .current-print {
+  flex-direction: row;
+}
+.panel-wrapper[data-panel-type="current-print"] .cp-thumb-wrap {
+  height: 100%;
+  width: auto;
+}
+/* 縦長パネル: panel-body に .cp-portrait が付与された場合 */
+.panel-wrapper[data-panel-type="current-print"] .cp-portrait .current-print {
+  flex-direction: column;
+}
+.panel-wrapper[data-panel-type="current-print"] .cp-portrait .cp-thumb-wrap {
+  height: auto;
+  width: 100%;
+  max-height: 60%;
+}
+.panel-wrapper[data-panel-type="current-print"] .cp-portrait .cp-info {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* ---------------------------------------------------------------
@@ -574,4 +1056,270 @@ body.panel-mode .notification-container {
 .panel-header-toggle input:checked + .toggle-slider::before {
   transform: translateX(16px);
   background: #fff;
+}
+
+/* ---------------------------------------------------------------
+   印刷履歴パネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="history"] .panel-body {
+  overflow: hidden;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+}
+.panel-body .history-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.panel-body .history-panel-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.panel-body .history-toolbar {
+  flex-shrink: 0;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.panel-body .history-panel .scrollable-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+/* 履歴パネル内のカード装飾を解除 */
+.panel-body .print-history-card {
+  box-shadow: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------
+   ファイル一覧パネル: GridStack パネル内レイアウト
+--------------------------------------------------------------- */
+.panel-wrapper[data-panel-type="file-list"] .panel-body {
+  overflow: hidden;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+}
+.panel-body .file-list-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.panel-body .file-list-panel-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.panel-body .file-list-toolbar {
+  flex-shrink: 0;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.panel-body .file-list-toolbar .upload-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.panel-body .file-list-toolbar .upload-group label {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.panel-body .file-list-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.panel-body .file-list-panel .scrollable-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+/* ファイル一覧カード装飾解除 */
+.panel-body .file-list-card {
+  box-shadow: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------
+   共通: ソート可能テーブルヘッダー
+--------------------------------------------------------------- */
+.sortable-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 14px;
+}
+.sortable-table th.sortable:hover {
+  background: #e8e8e8;
+}
+/* ソートインジケータ（疑似要素） */
+.sortable-table th.sortable::after {
+  content: "⇅";
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  opacity: 0.3;
+}
+.sortable-table th.sort-asc::after {
+  content: "▲";
+  opacity: 0.8;
+  color: #2060a0;
+}
+.sortable-table th.sort-desc::after {
+  content: "▼";
+  opacity: 0.8;
+  color: #2060a0;
+}
+
+/* ---------------------------------------------------------------
+   共通: アイコンボタン（コマンド列）
+--------------------------------------------------------------- */
+.icon-btn {
+  background: transparent;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  padding: 1px 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.2;
+  transition: background 0.15s;
+}
+.icon-btn:hover {
+  background: #e8e8e8;
+}
+.col-cmd {
+  white-space: nowrap;
+}
+.col-cmd .cmd-print { color: #2a2; }
+.col-cmd .cmd-rename { color: #666; }
+.col-cmd .cmd-delete { color: #c44; }
+.col-cmd .cmd-delete:hover { background: #fdd; }
+
+/* ---------------------------------------------------------------
+   印刷履歴テーブル: グループ化多段行
+--------------------------------------------------------------- */
+.sortable-table {
+  font-size: 12px;
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+.sortable-table th {
+  background: #f0f0f0;
+  padding: 4px 6px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: bold;
+  border-bottom: 2px solid #ccc;
+  white-space: nowrap;
+}
+.sortable-table td {
+  padding: 3px 5px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+  font-size: 12px;
+}
+.sortable-table tr:hover td {
+  background: #f8f8ff;
+}
+/* 狭いカラム */
+.th-narrow { width: 40px; text-align: center; }
+.th-cmd { width: 70px; }
+.th-thumb { width: 50px; }
+.col-num { text-align: center; font-size: 11px; color: #888; }
+.col-num .sub-id { font-size: 10px; color: #aaa; }
+
+/* ファイル情報セル: 多段 */
+.col-file .file-name {
+  font-weight: bold;
+  word-break: break-all;
+}
+.col-file .file-meta {
+  font-size: 11px;
+  color: #888;
+}
+
+/* 時間セル: 多段 */
+.col-time .time-range {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.col-time .time-duration {
+  font-weight: bold;
+}
+.col-time .time-detail {
+  font-size: 10px;
+  color: #888;
+}
+
+/* 結果セル */
+.col-result .result-ok { color: #2a2; font-weight: bold; }
+.col-result .result-ng { color: #c44; }
+
+/* フィラメントセル */
+.col-spool .spool-line {
+  font-size: 11px;
+}
+.col-spool .spool-meta {
+  font-size: 10px;
+  color: #888;
+}
+.col-spool .material-tag {
+  font-size: 10px;
+  padding: 0 3px;
+  border-radius: 2px;
+  margin: 0 2px;
+}
+.col-spool .filament-color-box {
+  font-size: 12px;
+}
+
+/* その他セル */
+.col-extra {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.col-extra .md5-short {
+  font-size: 10px;
+  color: #aaa;
+  font-family: monospace;
+}
+
+/* 小ボタン */
+.btn-xs {
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid #ccc;
+  border-radius: 2px;
+  background: #f8f8f8;
+  cursor: pointer;
+}
+.btn-xs:hover {
+  background: #e8e8e8;
+}
+.btn-sm {
+  font-size: 12px;
+  padding: 2px 8px;
 }

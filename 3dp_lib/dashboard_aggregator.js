@@ -30,7 +30,7 @@
  */
 "use strict";
 
-import { monitorData, currentHostname, setStoredData, setStoredDataForHost } from "./dashboard_data.js";
+import { monitorData, setStoredData, setStoredDataForHost } from "./dashboard_data.js";
 import { clearNewClasses, updateStoredDataToDOM } from "./dashboard_ui.js";
 import { saveUnifiedStorage, loadPrintCurrent } from "./dashboard_storage.js";
 import { updateTemperatureGraphFromStoredData, switchChartHost } from "./dashboard_chart.js";
@@ -155,11 +155,12 @@ function _createHostState() {
 /**
  * 指定ホストの AggregatorHostState を返す（無ければ作成）。
  * @private
- * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @param {string} hostname - ホスト名
  * @returns {AggregatorHostState}
  */
 function _getState(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
+  if (!host) { return _createHostState(); }
   if (!_hostStates.has(host)) _hostStates.set(host, _createHostState());
   return _hostStates.get(host);
 }
@@ -204,11 +205,11 @@ function _resetNotificationState(s, nowMs) {
 /**
  * @private
  * @param {string} key - storedData のキー
- * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @param {string} hostname - ホスト名
  * @returns {*} rawValue の値、未設定時は null
  */
 function _readRaw(key, hostname) {
-  const machine = monitorData.machines[hostname || currentHostname];
+  const machine = monitorData.machines[hostname];
   return machine?.storedData?.[key]?.rawValue ?? null;
 }
 
@@ -231,7 +232,8 @@ function _readRaw(key, hostname) {
  * @param {object} data  - WebSocket で受信した生データ（互換性のため保持、内部では storedData から直接読み取り）
  */
 export function ingestData(data, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
+  if (!host) return;
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
 
@@ -343,26 +345,26 @@ export function ingestData(data, hostname) {
 
   // A. プリント進捗通知 ------------------------------------------------------
   if (prog !== s.prevProgress) {
-    notificationManager.notify("printProgressUpdated", { previous: s.prevProgress, current: prog });
+    notificationManager.notify("printProgressUpdated", { hostname: host, previous: s.prevProgress, current: prog });
     s.lastProgressTimestamp = nowMs;
   }
   PROGRESS_MILESTONES.forEach(ms => {
     if (prog >= ms && !s.notifiedProgressMilestones.has(ms)) {
       s.notifiedProgressMilestones.add(ms);
-      notificationManager.notify("printProgressMilestone", { milestone: ms });
+      notificationManager.notify("printProgressMilestone", { hostname: host, milestone: ms });
     }
   });
   // 長時間停滞検知 (10分)
   if (prog === s.prevProgress && nowMs - s.lastProgressTimestamp > 10 * 60 * 1000) {
     notificationManager.notify("printProgressStalled", {
-      progress: prog,
+      hostname: host, progress: prog,
       stalledFor: formatDurationSimple((nowMs - s.lastProgressTimestamp) / 1000)
     });
     s.lastProgressTimestamp = nowMs;
   }
   // 完了通知
   if (s.prevProgress < 100 && prog >= 100) {
-    notificationManager.notify("printProgressComplete");
+    notificationManager.notify("printProgressComplete", { hostname: host });
   }
   s.prevProgress = prog;
 
@@ -376,7 +378,7 @@ export function ingestData(data, hostname) {
         if (s.prevRemainingSec > thr && left <= thr && !s.notifiedTimeThresholds.has(mins)) {
           s.notifiedTimeThresholds.add(mins);
           notificationManager.notify(`timeLeft${mins}`, {
-            thresholdMin: mins,
+            hostname: host, thresholdMin: mins,
             remainingSec: left,
             remainingPretty: formatDurationSimple(left)
           });
@@ -393,7 +395,7 @@ export function ingestData(data, hostname) {
       if (nozzle >= maxNozz * r && !s.notifiedTempMilestones.has(`nozzle${key}`)) {
         s.notifiedTempMilestones.add(`nozzle${key}`);
         notificationManager.notify(`tempNearNozzle${key}`, {
-          ratio: r,
+          hostname: host, ratio: r,
           ratioPct: Math.round(r * 100),
           currentTemp: nozzle,
           maxTemp: maxNozz
@@ -407,7 +409,7 @@ export function ingestData(data, hostname) {
       if (bed >= maxBed * r && !s.notifiedTempMilestones.has(`bed${key}`)) {
         s.notifiedTempMilestones.add(`bed${key}`);
         notificationManager.notify(`tempNearBed${key}`, {
-          ratio: r,
+          hostname: host, ratio: r,
           ratioPct: Math.round(r * 100),
           currentTemp: bed,
           maxTemp: maxBed
@@ -420,16 +422,16 @@ export function ingestData(data, hostname) {
   s.currentMaterialStatus = matStat;
   if (s.prevMaterialStatus !== null) {
     if (s.prevMaterialStatus === 0 && matStat === 1) {
-      notificationManager.notify("filamentOut");
+      notificationManager.notify("filamentOut", { hostname: host });
       if (s.filamentOutTimer) clearTimeout(s.filamentOutTimer);
       s.filamentOutTimer = setTimeout(() => {
         if (s.currentMaterialStatus === 1) {
-          showFilamentChangeDialog();
+          showFilamentChangeDialog(host);
         }
       }, 2000);
     }
     if (s.prevMaterialStatus === 1 && matStat === 0) {
-      notificationManager.notify("filamentReplaced");
+      notificationManager.notify("filamentReplaced", { hostname: host });
       if (s.filamentOutTimer) {
         clearTimeout(s.filamentOutTimer);
         s.filamentOutTimer = null;
@@ -606,7 +608,8 @@ export function ingestData(data, hostname) {
  * @returns {void}
  */
 function aggregateTimersAndPredictions(vals, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
+  if (!host) return;
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
   const s = _getState(host);
@@ -1099,7 +1102,7 @@ export function aggregatorUpdate() {
         if (ratio <= thr && !s.filamentLowWarned) {
           s.filamentLowWarned = true;
           notificationManager.notify("filamentLow", {
-            remaining: remain,
+            hostname: host, remaining: remain,
             thresholdPct: Math.round(thr * 100),
             spoolName: spool.name
           });
@@ -1131,7 +1134,7 @@ export function aggregatorUpdate() {
  * @returns {number} 推定された使用長 [mm]。不明な場合は NaN
  */
 function guessExpectedLength(filePath, hostname) {
-  const machine = monitorData.machines[hostname || currentHostname];
+  const machine = monitorData.machines[hostname];
   if (!machine) return NaN;
   const base = filePath.split("/").pop();
   // 1) printStore.history から検索
@@ -1161,7 +1164,7 @@ function guessExpectedLength(filePath, hostname) {
  *   内部タイマー変数と storedData を復元します。
  */
 export function restoreAggregatorState(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
   const s = _getState(host);
   const prefix = `aggr_${host}_`;
@@ -1219,7 +1222,7 @@ export function restoreAggregatorState(hostname) {
  *   現在の集約状態を localStorage に保存します。
  */
 export function persistAggregatorState(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) {
     console.warn("persistAggregatorState: ホスト未設定");
     return;
@@ -1313,7 +1316,7 @@ export function stopAggregatorTimer() {
  * @returns {number|null} 現在の印刷ID
  */
 export function getCurrentPrintID(hostname) {
-  const s = _getState(hostname || currentHostname);
+  const s = _getState(hostname);
   return s.prevPrintID;
 }
 
@@ -1347,7 +1350,7 @@ function getMergedValueWithSource(key, data, dataFieldName = key, hostname) {
   }
 
   // 2) storedData の rawValue を取得
-  const host = hostname || currentHostname;
+  const host = hostname;
   const machine = monitorData.machines[host];
   const entry = machine?.storedData?.[key];
   if (entry) {

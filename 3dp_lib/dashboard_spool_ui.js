@@ -335,7 +335,7 @@ function initSpoolUI() {
    * @returns {void}
    */
   function updatePreview(sp) {
-    const fp = window.filamentPreview;
+    const fp = window._filamentPreviews?.values().next().value || window.filamentPreview;
     if (!fp || !sp) return;
 
     const col = sp.color || sp.filamentColor;

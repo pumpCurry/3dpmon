@@ -110,7 +110,7 @@ function updatePreview(sp, preview = window.filamentPreview) {
  * @function showPresetOpenDialog
  * @returns {Promise<boolean>} true:セット実行 / false:キャンセル
  */
-export function showPresetOpenDialog() {
+export function showPresetOpenDialog(hostname) {
   injectStyles();
   return new Promise(resolve => {
     const overlay = document.createElement("div");
@@ -333,8 +333,9 @@ export function showPresetOpenDialog() {
     dlg.querySelector('#fc-ok').addEventListener('click', () => {
       if (!selectedPreset) { overlay.remove(); resolve(false); return; }
       const sp = addSpoolFromPreset(selectedPreset);
-      setCurrentSpoolId(sp.id);
-      updatePreview(sp);
+      setCurrentSpoolId(sp.id, hostname);
+      const hostPreview = window._filamentPreviews?.get(hostname);
+      updatePreview(sp, hostPreview);
       overlay.remove();
       resolve(true);
     });
@@ -348,7 +349,7 @@ export function showPresetOpenDialog() {
  * @function showFilamentChangeDialog
  * @returns {Promise<boolean>} true:交換実行 / false:キャンセル
  */
-export function showFilamentChangeDialog() {
+export function showFilamentChangeDialog(hostname) {
   injectStyles();
   if (filamentChangeDialogOpen) {
     return Promise.resolve(false);
@@ -560,20 +561,21 @@ export function showFilamentChangeDialog() {
 
     dlg.querySelector("#fc-ok").addEventListener("click", () => {
       if (selectedSpool) {
-        setCurrentSpoolId(selectedSpool.id);
+        setCurrentSpoolId(selectedSpool.id, hostname);
         if (selectedSpool.presetId) consumeInventory(selectedSpool.presetId, 1);
-        updatePreview(selectedSpool);
+        const hostPreview = window._filamentPreviews?.get(hostname);
+        updatePreview(selectedSpool, hostPreview);
       }
       closeDialog(true);
     });
 
     dlg.querySelector("#fc-used").addEventListener("click", () => {
       closeDialog(false);
-      showFilamentManager(2);
+      showFilamentManager(2, hostname);
     });
 
     dlg.querySelector("#fc-new").addEventListener("click", async () => {
-      closeDialog(await showPresetOpenDialog());
+      closeDialog(await showPresetOpenDialog(hostname));
     });
   });
 }

@@ -394,7 +394,7 @@ export function restorePrintResume(currentPrintId = null) {
         const val = JSON.parse(raw);
         switch (k) {
           case 'currentSpoolId':
-            setCurrentSpoolId(val);
+            setCurrentSpoolId(val, host);
             break;
           case 'currentPrintID':
             spool.currentPrintID = val;

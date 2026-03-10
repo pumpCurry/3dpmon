@@ -35,7 +35,7 @@ import {
   sendGcodeCommand,
   simulateReceivedJson
 } from "./dashboard_connection.js";
-import { currentHostname, getDisplayValue } from "./dashboard_data.js";
+import { getDisplayValue } from "./dashboard_data.js";
 import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
@@ -298,7 +298,7 @@ export function initializeCommandPalette(root, hostname) {
         if (!ok) return;
       }
       console.debug("▶ sendCommand", method, params);
-      sendCommand(method, params, host || currentHostname);
+      sendCommand(method, params, host);
     });
   });
 
@@ -333,7 +333,7 @@ function _initializeFanControls(root, host) {
     if (!el) return;
     el.addEventListener("change", () => {
       const v = el.checked ? 1 : 0;
-      sendCommand("set", { [param]: v }, host || currentHostname);
+      sendCommand("set", { [param]: v }, host);
     });
   });
 
@@ -355,7 +355,7 @@ function _initializeFanControls(root, host) {
       const pct = Number(slider.value);
       const s = Math.round(pct * 255 / 100);
       const cmd = `M106 P${p} S${s}`;
-      sendCommand("set", { gcodeCmd: cmd }, host || currentHostname);
+      sendCommand("set", { gcodeCmd: cmd }, host);
     });
   });
 }
@@ -404,7 +404,7 @@ function _initializeTempControls(root, host) {
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", makePayload(v), host || currentHostname);
+      sendCommand("set", makePayload(v), host);
       lastSend = Date.now();
     };
 
@@ -479,7 +479,7 @@ function _initializeRateControls(root, host) {
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", { [param]: v }, host || currentHostname);
+      sendCommand("set", { [param]: v }, host);
       lastSend = Date.now();
     };
 
@@ -529,7 +529,7 @@ export function initSendRawJson(root, hostname) {
   const host = hostname || null;
 
   btn.addEventListener("click", async () => {
-    const ip = getDeviceIp(host || currentHostname);
+    const ip = getDeviceIp(host);
     if (!ip) {
       showAlert("接続先が未設定です。先に接続してください。", "error");
       return;
@@ -597,7 +597,7 @@ export function initSendRawJson(root, hostname) {
       pushLog(`送信(Raw JSON): ${jsonStr}`, "send");
       if (cmd.method) {
         try {
-          await sendCommand(cmd.method, cmd.params ?? {}, host || currentHostname);
+          await sendCommand(cmd.method, cmd.params ?? {}, host);
         } catch {
           // sendCommand 内でエラー表示済み
         }
@@ -622,7 +622,7 @@ export function initSendGcode(root, hostname) {
   const host = hostname || null;
 
   btn.addEventListener("click", async () => {
-    const ip = getDeviceIp(host || currentHostname);
+    const ip = getDeviceIp(host);
     if (!ip) {
       await showConfirmDialog({
         level: "error",
@@ -691,7 +691,7 @@ export function initSendGcode(root, hostname) {
 
       pushLog(`送信(G-code): ${gcode}`, "send");
       try {
-        await sendGcodeCommand(gcode, host || currentHostname);
+        await sendGcodeCommand(gcode, host);
       } catch {
         // sendGcodeCommand 内でエラー表示済み
       }
@@ -762,7 +762,7 @@ export function initPauseHome(root, hostname) {
   const host = hostname || null;
 
   btn.addEventListener("click", async () => {
-    const model = getDisplayValue("model", host || currentHostname)?.value;
+    const model = getDisplayValue("model", host)?.value;
     const validModels = ["K1 Max", "K1", "K1C", "K1A"];
     if (!validModels.includes(model)) {
       showAlert("K1/K1C/K1A/K1 Max 以外では使用できません", "error");
@@ -782,12 +782,12 @@ export function initPauseHome(root, hostname) {
       if (model === "K1 Max") {
         await sendGcodeCommand(
           "G28 X Y\nG0 X296.50 Y153.00 F6000\n",
-          host || currentHostname
+          host
         );
       } else if (["K1", "K1C", "K1A"].includes(model)) {
         await sendGcodeCommand(
           "G28 X Y\nG0 X219.00 Y113.50 F6000\n",
-          host || currentHostname
+          host
         );
       }
     } catch {
@@ -823,7 +823,7 @@ export function initXYUnlock(root, hostname) {
     if (!ok) return;
 
     try {
-      await sendGcodeCommand("M84", host || currentHostname);
+      await sendGcodeCommand("M84", host);
     } catch {
       // sendGcodeCommand 内でエラー表示済み
     }

@@ -89,7 +89,7 @@ function injectStyles() {
   styleInjected = true;
   const css = `
     .filament-manager-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:3000;}
-    .filament-manager-modal{background:#fff;border-radius:8px;width:90%;max-width:740px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
+    .filament-manager-modal{background:#fff;border-radius:8px;width:90%;max-width:740px;max-height:90vh;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;overflow:hidden;}
     .filament-manager-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;}
     .filament-manager-tabs{display:flex;border-bottom:1px solid #ddd;}
     .filament-manager-tabs button{flex:1;padding:6px;border:none;background:#f4f4f5;cursor:pointer;}
@@ -234,11 +234,9 @@ function createCurrentSpoolContent() {
  * @private
  * @returns {{el:HTMLElement, render:function():void}} タブ要素と描画関数
  */
-function createUsedSpoolContent() {
+function createUsedSpoolContent(hostname) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
-  div.style.overflowY = "visible";
-  div.style.maxHeight = "none";
 
   const form = document.createElement("form");
   form.className = "search-form";
@@ -497,13 +495,13 @@ function createUsedSpoolContent() {
         const del = document.createElement("button");
         del.textContent = "廃棄する";
         del.addEventListener("click", () => {
-          deleteSpool(sp.id);
+          deleteSpool(sp.id, hostname);
           render();
         });
         const set = document.createElement("button");
         set.textContent = "再セットする";
         set.addEventListener("click", () => {
-          setCurrentSpoolId(sp.id);
+          setCurrentSpoolId(sp.id, hostname);
           render();
         });
         cmd.append(del, set);
@@ -625,8 +623,6 @@ function createInventoryContent() {
 function createRegisteredContent(openEditor) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
-  div.style.overflowY = "visible";
-  div.style.maxHeight = "none";
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "新規登録";
@@ -998,11 +994,9 @@ function createRegisteredContent(openEditor) {
  * @param {Function} onChange - 登録状態変更時の処理
  * @returns {HTMLElement} DOM 要素
  */
-function createPresetContent(onUse, onChange) {
+function createPresetContent(onUse, onChange, hostname) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
-  div.style.overflowY = "visible";
-  div.style.maxHeight = "none";
 
   const form = document.createElement("form");
   form.className = "search-form";
@@ -1234,7 +1228,7 @@ function createPresetContent(onUse, onChange) {
         quit.textContent = "やめる";
         quit.addEventListener("click", () => {
           const sp = getSpools().find(s => s.presetId === p.presetId && !s.deleted);
-          if (sp) deleteSpool(sp.id);
+          if (sp) deleteSpool(sp.id, hostname);
           render();
           onChange();
         });
@@ -1815,7 +1809,7 @@ function createReportContent() {
  * @function showFilamentManager
  * @returns {void}
  */
-export function showFilamentManager(activeIdx = 0) {
+export function showFilamentManager(activeIdx = 0, hostname) {
   injectStyles();
   const overlay = document.createElement("div");
   overlay.className = "filament-manager-overlay";
@@ -1852,7 +1846,7 @@ export function showFilamentManager(activeIdx = 0) {
     switchTab(REGISTERED_IDX);
   });
 
-  const usedTab = createUsedSpoolContent();
+  const usedTab = createUsedSpoolContent(hostname);
   const contents = [
     createHistoryContent(),
     createCurrentSpoolContent(),
@@ -1876,7 +1870,8 @@ export function showFilamentManager(activeIdx = 0) {
     },
     () => {
       registered.render();
-    }
+    },
+    hostname
   );
   contents[REGISTERED_IDX] = registered.el;
   contents[REGISTERED_IDX + 1] = presetTab.el;

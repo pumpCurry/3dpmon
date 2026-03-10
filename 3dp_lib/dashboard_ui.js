@@ -31,7 +31,7 @@
 
 "use strict";
 
-import { monitorData, currentHostname, PLACEHOLDER_HOSTNAME, scopedById } from "./dashboard_data.js";
+import { monitorData, PLACEHOLDER_HOSTNAME, scopedById } from "./dashboard_data.js";
 import { getDisplayValue, setStoredData, consumeDirtyKeysForHost, getHostsWithDirtyKeys } from "./dashboard_data.js";
 import { dashboardMapping } from "./dashboard_ui_mapping.js";         // フィールド別定義と処理
 import { initializeCommandPalette } from "./dashboard_send_command.js";
@@ -66,12 +66,12 @@ function _cacheKey(hostname, fieldName) {
  * パネル生成時（addPanel）に呼び出す。
  *
  * @param {HTMLElement} root - スキャン対象のルート要素
- * @param {string} [hostname] - このパネルが属するホスト名（省略時は currentHostname）
+ * @param {string} [hostname] - このパネルが属するホスト名
  * @returns {void}
  */
 export function registerFieldElements(root, hostname) {
   if (!root) return;
-  const host = hostname || currentHostname || "";
+  const host = hostname || "";
   root.querySelectorAll("[data-field]").forEach(el => {
     const field = el.getAttribute("data-field");
     if (!field) return;
@@ -97,7 +97,7 @@ export function unregisterFieldElements(root, hostname) {
   root.querySelectorAll("[data-field]").forEach(el => {
     const field = el.getAttribute("data-field");
     if (!field) return;
-    const host = hostname || el._boundHost || currentHostname || "";
+    const host = hostname || el._boundHost || "";
     const ck = _cacheKey(host, field);
     const set = _fieldCache.get(ck);
     if (set) {
@@ -146,10 +146,10 @@ const _newElements = new Set();
  *
  * @param {string} fieldName - 反映対象フィールド名（data-field属性に一致）
  * @param {{value:string, unit:string}|string|null} [data] - 表示値オブジェクト（省略時は getDisplayValue にフォールバック）
- * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
+ * @param {string} [hostname] - 対象ホスト名
  */
 export function updateDataField(fieldName, data = undefined, hostname) {
-  const host = hostname || currentHostname || "";
+  const host = hostname || "";
   const displayData = data ?? getDisplayValue(fieldName, host);
   const elements = _getFieldElements(host, fieldName);
 
@@ -257,14 +257,14 @@ export function updateStoredDataToDOM() {
 
       /* フィラメントプレビュー描画更新
        * ※ 残量計算自体は aggregator の per-host ループ内で全ホスト分実行済み。
-       *   ここでは描画ウィジェットが1つしかないため、アクティブホストのみ反映する。
-       *   ホスト切替時は markAllKeysDirty → isNew=true で再描画される。
+       *   ここでは per-host Map からホストのインスタンスを取得して反映する。
+       *   markAllKeysDirty → isNew=true で必要なフィールドのみ再描画される。
        *   data-field 要素が存在しないパネル構成でも到達するよう、
        *   DOM ノード取得より前に配置する。
        */
       /* フィラメントプレビュー: per-host Map から該当ホストのインスタンスを取得 */
       {
-        const fp = window._filamentPreviews?.get(host) || window.filamentPreview;
+        const fp = window._filamentPreviews?.get(host);
         if (fp) {
           if (key === "filamentRemainingMm") {
             const val = Number(d.rawValue);

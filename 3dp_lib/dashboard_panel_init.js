@@ -45,6 +45,7 @@ import {
   initXYPreview,
   registerPreviewPanel,
   replayPreviewState,
+  destroyPreviewPanel,
   setPrinterModel,
   setFlatView,
   setTilt45View,
@@ -55,8 +56,8 @@ import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
-import { initStorageUIInPanel } from "./dashboard_storage_ui.js";
-import { monitorData, currentHostname } from "./dashboard_data.js";
+/* initStorageUIInPanel は設定パネル統合により不要 */
+import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool } from "./dashboard_spool.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
@@ -217,7 +218,7 @@ function _updateNoSignalInfo(body, hostname) {
   const ipEl = body.querySelector("[id$='camera-no-signal-ip']") || body.querySelector(".no-signal-ip");
   const displayHost = (hostname && hostname !== "shared")
     ? hostname
-    : (currentHostname || "");
+    : "";
   const ip = getDeviceIp(displayHost) || monitorData.appSettings.wsDest?.split(":")[0] || "";
   if (hostEl) hostEl.textContent = displayHost || "";
   if (ipEl) ipEl.textContent = ip ? `(${ip})` : "";
@@ -232,9 +233,11 @@ function initHeadPreviewPanel(body, hostname) {
   /* パネル本体をプレビューモジュールに登録（per-host DOM参照） */
   registerPreviewPanel(body, hostname);
 
+  /* localStorage から位置・モデル・回転状態を復元 */
+  restoreXYPreviewState(hostname);
+
   const xyStage = body.querySelector("#xy-stage");
   if (xyStage) {
-    restoreXYPreviewState(hostname);
     initXYPreview(body, hostname);
   }
 
@@ -264,10 +267,12 @@ function initFilamentPanel(body, hostname) {
   if (!container) return;
 
   // フィラメントプレビューを生成（per-host・スプール情報反映）
+  /** @type {ReturnType<typeof createFilamentPreview>|null} */
+  let preview = null;
   try {
     const machine = monitorData.machines[hostname] || {};
     const spool = getCurrentSpool();
-    const preview = createFilamentPreview(container, {
+    preview = createFilamentPreview(container, {
       filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
       filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? 330000,
       filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? 0,
@@ -320,11 +325,30 @@ function initFilamentPanel(body, hostname) {
     console.warn("[panel-init] filament preview 生成エラー:", e);
   }
 
+  // パネルリサイズ時にプレビューを拡縮
+  if (preview) {
+    const area = body.querySelector(".filament-preview-area");
+    if (area) {
+      const ro = new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width > 0 && height > 0) preview.resize(width, height);
+        }
+      });
+      ro.observe(area);
+      // 初回サイズ適用
+      requestAnimationFrame(() => {
+        const rect = area.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) preview.resize(rect.width, rect.height);
+      });
+    }
+  }
+
   // 交換・一覧ボタンのバインド
   const changeBtn = body.querySelector("#filament-change-btn");
   if (changeBtn) {
     changeBtn.addEventListener("click", () => {
-      try { showFilamentChangeDialog(); } catch (e) {
+      try { showFilamentChangeDialog(hostname); } catch (e) {
         console.warn("[panel-init] filament change dialog エラー:", e);
       }
     });
@@ -332,7 +356,7 @@ function initFilamentPanel(body, hostname) {
   const listBtn = body.querySelector("#filament-list-btn");
   if (listBtn) {
     listBtn.addEventListener("click", () => {
-      try { showFilamentManager(); } catch (e) {
+      try { showFilamentManager(0, hostname); } catch (e) {
         console.warn("[panel-init] filament manager エラー:", e);
       }
     });
@@ -466,7 +490,7 @@ function initLogPanel(body, hostname) {
   const copyStoredData = body.querySelector("#copy-storeddata-button");
   if (copyStoredData) {
     copyStoredData.addEventListener("click", () => {
-      const hn = hostname === "shared" ? currentHostname : hostname;
+      const hn = hostname === "shared" ? "" : hostname;
       const machine = monitorData.machines[hn];
       if (machine?.storedData) {
         navigator.clipboard.writeText(JSON.stringify(machine.storedData, null, 2)).catch(() => {});
@@ -517,6 +541,7 @@ function initLogPanel(body, hostname) {
 
 /**
  * 現在の印刷パネルの初期化
+ * パネルサイズに応じて横長/縦長レイアウトを切り替える。
  * @param {HTMLElement} body - パネル本体要素
  * @param {string} hostname - ホスト名
  */
@@ -525,42 +550,30 @@ function initCurrentPrintPanel(body, hostname) {
   if (container) {
     printManager.renderPrintCurrent(container, hostname);
   }
+
+  // パネルリサイズ時にコンテナに横長/縦長クラスを付与
+  // （renderPrintCurrent で innerHTML が再生成されても維持される）
+  const ro = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const { width, height } = entry.contentRect;
+      const portrait = height > width || (width > 600 && height > width * 0.35);
+      body.classList.toggle("cp-portrait", portrait);
+    }
+  });
+  ro.observe(body);
 }
 
 /**
- * 印刷履歴パネルの初期化
+ * 印刷履歴パネルの初期化（独立パネル、タブなし）
  * @param {HTMLElement} body - パネル本体要素
  * @param {string} hostname - ホスト名
  */
 function initHistoryPanel(body, hostname) {
-  // タブ切り替え（履歴/ファイル一覧）
-  // HTML上のID: #tab-print-history, #tab-file-list
-  // ペインID: #panel-print-history-tab, #panel-file-list
-  const tabHistory = body.querySelector("#tab-print-history");
-  const tabFile    = body.querySelector("#tab-file-list");
-  const paneHistory = body.querySelector("#panel-print-history-tab");
-  const paneFile    = body.querySelector("#panel-file-list");
-
-  if (tabHistory && tabFile && paneHistory && paneFile) {
-    tabHistory.addEventListener("click", () => {
-      tabHistory.classList.add("active");
-      tabFile.classList.remove("active");
-      paneHistory.classList.remove("hidden");
-      paneFile.classList.add("hidden");
-    });
-    tabFile.addEventListener("click", () => {
-      tabFile.classList.add("active");
-      tabHistory.classList.remove("active");
-      paneFile.classList.remove("hidden");
-      paneHistory.classList.add("hidden");
-    });
-  }
-
   // 履歴再読み込みボタン
   const refreshBtn = body.querySelector("#history-refresh-btn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
-      sendCommand("get", { reqHistory: 1 }, hostname || currentHostname);
+      sendCommand("get", { reqHistory: 1 }, hostname);
     });
   }
 
@@ -575,6 +588,20 @@ function initHistoryPanel(body, hostname) {
     }
   } catch (e) {
     console.warn("[panel-init] history render エラー:", e);
+  }
+}
+
+/**
+ * ファイル一覧パネルの初期化（独立パネル）
+ * @param {HTMLElement} body - パネル本体要素
+ * @param {string} hostname - ホスト名
+ */
+function initFileListPanel(body, hostname) {
+  // アップロードUIの初期化
+  try {
+    printManager.setupUploadUI(body, hostname);
+  } catch (e) {
+    console.warn("[panel-init] upload UI 初期化エラー:", e);
   }
 
   // キャッシュ済みファイル一覧を表示（パネル生成前にデータ受信済みの場合）
@@ -599,18 +626,7 @@ function initMachineInfoPanel(body, hostname) {
   // data-field 属性による自動バインディングのため、特別な初期化は不要
 }
 
-/**
- * 設定パネルの初期化（ストレージUI・通知設定のバインド）
- * @param {HTMLElement} body - パネル本体要素
- * @param {string} hostname - ホスト名
- */
-function initSettingsPanel(body, hostname) {
-  try {
-    initStorageUIInPanel(body);
-  } catch (e) {
-    console.warn("[panel-init] settings panel 初期化エラー:", e);
-  }
-}
+/* initSettingsPanel は接続設定モーダルに統合済みのため削除 */
 
 // ==============================
 // 一括登録
@@ -633,7 +649,8 @@ export function registerAllPanelInits() {
   registerPanelInit("log", initLogPanel);
   registerPanelInit("current-print", initCurrentPrintPanel);
   registerPanelInit("history", initHistoryPanel);
-  registerPanelInit("settings", initSettingsPanel);
+  registerPanelInit("file-list", initFileListPanel);
+  /* settings パネルは接続設定モーダルに統合済み */
 
   // 破棄関数
   registerPanelDestroy("camera", (body) => {
@@ -651,6 +668,9 @@ export function registerAllPanelInits() {
         img.src = "";
       }
     }
+  });
+  registerPanelDestroy("head-preview", (body, hostname) => {
+    destroyPreviewPanel(hostname);
   });
   registerPanelDestroy("temp-graph", (body, hostname) => {
     resetTemperatureGraph(hostname);

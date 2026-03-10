@@ -72,11 +72,17 @@ import { pushLog } from "./dashboard_log_util.js";
 export const PLACEHOLDER_HOSTNAME = "_$_NO_MACHINE_$_";
 
 /**
- * 現在監視中の機器ホスト名
+ * 最初に接続したホスト名（デフォルトパラメータの初期値として使用）。
+ * マルチプリンタ環境では全ホストが並行動作するため、
+ * 「アクティブホスト」や「表示中ホスト」の概念はない。
+ * パネルは各ホストに紐付いており、表示切替は存在しない。
+ * この変数は後方互換のために残しているが、新規コードでは
+ * 必ず hostname 引数を明示的に渡すこと。
  * - null の場合: 未設定または初期化前
  * - PLACEHOLDER_HOSTNAME の場合: 強制的な「未選択」状態
- * - 通常は実際のホスト名文字列を保持する
+ * - 通常は最初に接続された実際のホスト名文字列を保持する
  * @type {string|null}
+ * @deprecated 新規コードでは hostname パラメータを明示的に使用すること
  */
 export let currentHostname = null;
 
@@ -238,6 +244,7 @@ export const monitorData = {
 /**
  * getCurrentMachine:
  *  - currentHostname に対応する MachineData を返す
+ * @deprecated setStoredDataForHost / getMachineByHost を使用すること
  * @returns {MachineData|null}
  */
 export function getCurrentMachine() {
@@ -265,9 +272,15 @@ export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquip
     machine.storedData[key] = d;
   }
   if (isRaw) {
+    const newFlag = (isFromEquipVal !== undefined ? isFromEquipVal : false);
+    // 値と isFromEquipVal が同一なら dirty マークをスキップ（不要な再描画を抑制）
+    if (d.rawValue === value && d.isFromEquipVal === newFlag && !d.isNew) return;
     d.rawValue = value;
-    d.isFromEquipVal = (isFromEquipVal !== undefined ? isFromEquipVal : false);
+    d.isFromEquipVal = newFlag;
   } else {
+    // computedValue が同一なら dirty マークをスキップ
+    const newFlag = isFromEquipVal !== undefined ? isFromEquipVal : d.isFromEquipVal;
+    if (d.computedValue === value && d.isFromEquipVal === newFlag && !d.isNew) return;
     d.computedValue = value;
     if (isFromEquipVal !== undefined) d.isFromEquipVal = isFromEquipVal;
   }
@@ -279,6 +292,7 @@ export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquip
  * setStoredData:
  *  - currentHostname の storedData[key] に raw/computed を設定し、isNew フラグを立てる
  *
+ * @deprecated setStoredDataForHost(host, key, value) を使用すること
  * @param {string}  key                - フィールド名
  * @param {*}       value              - 設定する値
  * @param {boolean} [isRaw=false]      - true のとき rawValue、false のとき computedValue として扱う
@@ -288,6 +302,7 @@ export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquip
  *     - 利用可能な条件は、起動時のリストアと、handleMessage内 2.7.3 のみ。
 */
 export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
+  console.warn("[setStoredData] deprecated: use setStoredDataForHost(host, key, value) instead");
   const machine = getCurrentMachine();
   if (!machine) return;
   let d = machine.storedData[key];
@@ -300,12 +315,15 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
     // 生値更新時は常にフラグを上書きする
     const prevRaw  = d.rawValue;
     const prevFlag = d.isFromEquipVal;
+    const newFlag  = (isFromEquipVal !== undefined ? isFromEquipVal : false);
+    // 値と isFromEquipVal が同一なら dirty マークをスキップ（不要な再描画を抑制）
+    if (prevRaw === value && prevFlag === newFlag && !d.isNew) return;
     d.rawValue = value;
-    d.isFromEquipVal = (isFromEquipVal !== undefined ? isFromEquipVal : false);
+    d.isFromEquipVal = newFlag;
     // isFromEquipVal が true から false に変わり、値も変化した場合はログ出力
     if (
       prevFlag === true &&
-      d.isFromEquipVal === false &&
+      newFlag === false &&
       prevRaw !== value
     ) {
       const msg = `[setStoredData] isFromEquipVal changed to false for key: ${key}`;
@@ -314,6 +332,8 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
     }
   } else {
     // computedValue 更新時は指定があればフラグ更新、無ければ保持
+    const newFlag = isFromEquipVal !== undefined ? isFromEquipVal : d.isFromEquipVal;
+    if (d.computedValue === value && d.isFromEquipVal === newFlag && !d.isNew) return;
     d.computedValue = value;
     if (isFromEquipVal !== undefined) {
       d.isFromEquipVal = isFromEquipVal;
@@ -330,7 +350,7 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
  *  - storedData[fieldName] から {value,unit} 形式の表示用オブジェクトを生成
  *
  * @param {string} fieldName
- * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
+ * @param {string} [hostname] - 対象ホスト名
  * @returns {{value:string,unit:string}|null}
  */
 export function getDisplayValue(fieldName, hostname) {
@@ -352,11 +372,11 @@ export function getDisplayValue(fieldName, hostname) {
  * まずスコープ付きIDで検索し、見つからなければ元のIDにフォールバックする。
  *
  * @param {string} id - 元の要素ID
- * @param {string} [hostname] - ホスト名（省略時は currentHostname を使用）
+ * @param {string} hostname - ホスト名
  * @returns {HTMLElement|null}
  */
 export function scopedById(id, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (host) {
     const prefix = host.replace(/[^a-zA-Z0-9_-]/g, "_");
     const el = document.getElementById(`${prefix}__${id}`);
@@ -437,15 +457,15 @@ export function consumeDirtyKeys() {
 
 /**
  * markAllKeysDirty:
- * 指定ホスト（省略時は currentHostname）の storedData 全キーを
- * そのホストの変更キューに追加する。ホスト切替時に全フィールドの DOM 再描画を
- * トリガーするために使用する。
+ * 指定ホストの storedData 全キーを
+ * そのホストの変更キューに追加する。パネル生成後やデータ再読み込み時に
+ * 全フィールドの DOM 再描画をトリガーするために使用する。
  *
- * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
+ * @param {string} hostname - 対象ホスト名
  * @returns {void}
  */
 export function markAllKeysDirty(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
   const machine = monitorData.machines[host];
   if (!machine) return;

@@ -422,7 +422,7 @@ export class AudioManager {
    * @param {number} [options.rate=1.0] - 話速（0.1〜10.0）
    * @param {number} [options.pitch=1.0] - 音の高さ（0.0〜2.0）
    * @param {string} [options.lang="ja-JP"] - 言語コード（例: "ja-JP", "en-US"）
-   * @param {boolean} [options.cancelPrevious=true] - 前回の読み上げを中断するか（将来、機器ごと切替予定）
+   * @param {boolean} [options.cancelPrevious=true] - 前回の読み上げを中断するか
    * @returns {Promise<void>} 読み上げ完了まで待機できる Promise（失敗時は reject）
    */
   speak(text, options = {}) {

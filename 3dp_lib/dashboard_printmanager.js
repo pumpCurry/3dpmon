@@ -44,7 +44,7 @@ import {
 import { formatEpochToDateTime, formatDuration } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
-import { monitorData, currentHostname, scopedById } from "./dashboard_data.js"; // filament残量取得用
+import { monitorData, scopedById } from "./dashboard_data.js"; // filament残量取得用
 import {
   getCurrentSpool,
   getCurrentSpoolId,
@@ -127,7 +127,7 @@ function makeThumbUrl(baseUrl, rawFilename) {
  * 受信した生データ `raw` をHTML描画用オブジェクトに整形します。
  * サムネイルURL生成や開始方式などの追加情報もここで抽出します。
  */
-export function parseRawHistoryEntry(raw, baseUrl, host = currentHostname) {
+export function parseRawHistoryEntry(raw, baseUrl, host) {
   const id             = raw.id;
   const filename       = raw.filename?.split("/").pop() || "(不明)";
   // フルパスも保持しておくことでコマンド送信時に利用できるようにする
@@ -200,7 +200,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host = currentHostname) {
  *  `filename` を持たない履歴エントリでも `filamentInfo` が存在する場合は
  *  フィルタを通過させ、スプール情報のみの更新を反映できるようにする。
  */
-export function parseRawHistoryList(rawArray, baseUrl, host = currentHostname) {
+export function parseRawHistoryList(rawArray, baseUrl, host) {
   return rawArray
     .filter(r =>
       (typeof r.filename === "string" && r.filename.length > 0) ||
@@ -215,7 +215,7 @@ export function parseRawHistoryList(rawArray, baseUrl, host = currentHostname) {
 
 /**
  * 現在印刷中ジョブをロード
- * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @param {string} hostname - ホスト名
  * @returns {Object|null}
  */
 export function loadCurrent(hostname) {
@@ -225,7 +225,7 @@ export function loadCurrent(hostname) {
 /**
  * 現在印刷中ジョブを保存
  * @param {Object|null} job
- * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @param {string} hostname - ホスト名
  */
 export function saveCurrent(job, hostname) {
   savePrintCurrent(job, hostname);
@@ -233,7 +233,7 @@ export function saveCurrent(job, hostname) {
 
 /**
  * 履歴一覧をロード
- * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @param {string} hostname - ホスト名
  * @returns {Array<Object>}
  */
 export function loadHistory(hostname) {
@@ -252,7 +252,8 @@ export function loadHistory(hostname) {
  * @returns {void}
  */
 export function saveHistory(jobs, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
+  if (!host) return;
   const json = JSON.stringify(jobs);
   if (json === _lastSavedJsonMap.get(host)) {
     // 変更なしならスキップ
@@ -359,18 +360,25 @@ export const renderTemplates = {
     const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
     // フォールバック画像
     const fallback   = `${baseUrl}/downloads/defData/file_print_photo.png`;
+    const finishHtml = job.finishTime
+      ? `<div class="cp-row"><span class="cp-label">終了:</span> ${fmt(job.finishTime)}</div>` : "";
+    const materialVal = job.materialUsedMm != null
+      ? job.materialUsedMm.toLocaleString() + " mm" : "—";
     return `
       <div class="current-print">
-        <img
-          class="print-job-thumb--large"
-          src="${currentUrl}"
-          onerror="this.onerror=null;this.src='${fallback}'"
-          alt="現在印刷中"
-        />
-        <div class="print-job-info">
-          <div class="filename"><strong>現在:</strong> ${name}</div>
-          <div class="times">開始: ${fmt(job.startTime)}</div>
-          <div class="material-used">使用: ${job.materialUsedMm != null ? job.materialUsedMm.toLocaleString() : "—"} mm</div>
+        <div class="cp-thumb-wrap">
+          <img
+            class="cp-thumb"
+            src="${currentUrl}"
+            onerror="this.onerror=null;this.src='${fallback}'"
+            alt="現在印刷中"
+          />
+        </div>
+        <div class="cp-info">
+          <div class="cp-filename">${name}</div>
+          <div class="cp-row"><span class="cp-label">開始:</span> ${fmt(job.startTime)}</div>
+          ${finishHtml}
+          <div class="cp-row"><span class="cp-label">使用:</span> ${materialVal}</div>
         </div>
       </div>
     `;
@@ -414,7 +422,7 @@ export const renderTemplates = {
 /**
  * 現在印刷中ジョブを指定コンテナに描画
  * @param {HTMLElement|null} containerEl - 描画先要素。null の場合は処理しません
- * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @param {string} hostname - ホスト名
  */
 export function renderPrintCurrent(containerEl, hostname) {
   if (!containerEl) return;
@@ -470,7 +478,7 @@ export async function refreshHistory(
   baseUrl,
   currentContainerId = "print-current-container",
   historyContainerId = "print-history-list",
-  host = currentHostname
+  host
 ) {
   // 生データ取得
   const sd  = await fetchStoredData(host);
@@ -590,7 +598,7 @@ export function updateHistoryList(
   rawArray,
   baseUrl,
   currentContainerId = "print-current-container",
-  host = currentHostname
+  host
 ) {
   if (!Array.isArray(rawArray)) return;
   pushLog("[updateHistoryList] マージ処理を開始", "info");
@@ -682,7 +690,7 @@ export function updateHistoryList(
  * @param {string} baseUrl           - サーバーのベース URL
  * @returns {void}
  */
-export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
+export function updateVideoList(videoArray, baseUrl, host) {
   if (!Array.isArray(videoArray) || !videoArray.length) return;
   pushLog("[updateVideoList] マージ処理を開始", "info");
   const map = { ...loadVideos(host) };
@@ -734,20 +742,23 @@ export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
 /**
  * rawArray の各エントリを HTML テーブルに描画し、
  * 操作ボタンにイベントをバインドします。
+ * グループ化された多段行レイアウトで表示する。
  *
  * @param {Array<Object>} rawArray - プリンタから受信した生履歴データ配列
  * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
+ * @param {string} hostname        - ホスト名
  */
 export function renderHistoryTable(rawArray, baseUrl, hostname) {
   const table = scopedById("print-history-table", hostname);
   const tbody = table?.querySelector("tbody");
+  /** @param {string} iso - 日時文字列 @returns {string} YYYY/MM/DD HH:MM:SS */
   const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
   const startwayMap = {
     1:  "機器操作経由",
     11: "外部操作経由",
     9:  "クラウド経由"
   };
-  
+
   if (!tbody) return;
 
   tbody.innerHTML = "";
@@ -757,124 +768,119 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const thumbUrl = makeThumbUrl(baseUrl, raw.filename);
     const fallback = `${baseUrl}/downloads/defData/file_icon.png`;
 
-    // テーブル行を作成
+    // データ整形
     const startwayLabel =
       raw.startway !== undefined
         ? (startwayMap[raw.startway] || raw.startway)
         : "—";
     const size      = raw.size != null ? raw.size.toLocaleString() : "—";
-    const ctime     = raw.ctime ? fmt(raw.ctime) : "—";
-    const stime     = raw.starttime ? fmt(raw.starttime) : "—";
-    const astime    = raw.actualStartTime ? fmt(raw.actualStartTime) : "—";
-    const etime     = raw.endtime ? fmt(raw.endtime) : "—";
+    const stime     = fmt(raw.starttime);
+    const etime     = fmt(raw.endtime);
     const utimeSec  = raw.usagetime != null ? Number(raw.usagetime) : null;
     const utime     = utimeSec != null ? formatDuration(utimeSec) : "—";
     const prepSec   = raw.preparationTime != null ? Number(raw.preparationTime) : null;
-    const preptime  = prepSec != null ? formatDuration(prepSec) : "—";
+    const preptime  = prepSec != null ? formatDuration(prepSec) : "";
     const checkSec  = raw.firstLayerCheckTime != null ? Number(raw.firstLayerCheckTime) : null;
-    const checktime = checkSec != null ? formatDuration(checkSec) : "—";
+    const checktime = checkSec != null ? formatDuration(checkSec) : "";
     const pauseSec  = raw.pauseTime != null ? Number(raw.pauseTime) : null;
-    const pausetime = pauseSec != null ? formatDuration(pauseSec) : "—";
+    const pausetime = pauseSec != null ? formatDuration(pauseSec) : "";
     const umaterial =
       raw.usagematerial != null
-        ? `${(Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()} mm`
+        ? (Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()
         : "—";
-    const finish    = raw.printfinish ? "✔︎" : "";
-    const md5       = raw.filemd5 || "—";
+    const finish    = raw.printfinish ? "✔" : "✗";
+    const finishCls = raw.printfinish ? "result-ok" : "result-ng";
+    const md5short  = raw.filemd5 ? raw.filemd5.substring(0, 8) : "";
     const videoLink = raw.videoUrl
-      ? `<button class="video-link" data-url="${raw.videoUrl}">📹</button>`
+      ? `<button class="video-link icon-btn" data-url="${raw.videoUrl}" title="動画">📹</button>`
       : "";
+
+    // 時間詳細行（準備・確認・停止があれば表示）
+    const timeDetails = [];
+    if (preptime) timeDetails.push(`準備${preptime}`);
+    if (checktime) timeDetails.push(`確認${checktime}`);
+    if (pausetime) timeDetails.push(`停止${pausetime}`);
+    const timeDetailHtml = timeDetails.length
+      ? `<div class="time-detail">${timeDetails.join(" ")}</div>`
+      : "";
+
+    // フィラメント情報
     const spoolInfos = Array.isArray(raw.filamentInfo)
       ? raw.filamentInfo
       : (raw.filamentId ? [{ spoolId: raw.filamentId }] : []);
     const matColors = {
-      PLA: '#FFEDD5',
-      'PLA+': '#FED7AA',
-      PETG: '#DBEAFE',
-      ABS: '#FECACA',
-      TPU: '#E9D5FF'
+      PLA: '#FFEDD5', 'PLA+': '#FED7AA', PETG: '#DBEAFE',
+      ABS: '#FECACA', TPU: '#E9D5FF'
     };
-    const spoolTexts = [];
-    const countTexts = [];
-    const remainTexts = [];
-    const changeTexts = [];
+    let spoolHtml = "";
     if (spoolInfos.length === 0) {
-      spoolTexts.push(
-        `<button class="spool-assign" data-id="${raw.id}">スプール指定</button>`
-      );
+      spoolHtml = `<button class="spool-assign btn-xs" data-id="${raw.id}">指定</button>`;
+    } else {
+      const parts = [];
+      spoolInfos.forEach((info, idx) => {
+        const sp = getSpoolById(info.spoolId) || null;
+        const mat = info.material || sp?.material || '';
+        const matColor = mat ? (matColors[mat] || '#EEE') : '#EEE';
+        const color = info.filamentColor || sp?.filamentColor || '#000';
+        const colorBox = `<span class="filament-color-box" style="color:${color};">■</span>`;
+        const matTag   = mat ? `<span class="material-tag" style="background:${matColor};">${mat}</span>` : '';
+        const spName = info.spoolName || sp?.name || '';
+        const colName = info.colorName || sp?.colorName || '';
+        let text = spName || colName ? `${colorBox}${matTag} ${spName}/${colName}` : '(不明)';
+        if (idx === 0) {
+          const editId = info.spoolId || raw.filamentId;
+          if (editId) text += ` <button class="spool-edit icon-btn" data-id="${editId}" title="修正">✏</button>`;
+        }
+        const cnt = info.spoolCount ?? sp?.printCount ?? 0;
+        const rem = info.expectedRemain ?? sp?.remainingLengthMm ?? 0;
+        parts.push(`<div class="spool-line">${text}</div>`);
+        parts.push(`<div class="spool-meta">残:${rem} 回:${cnt}</div>`);
+      });
+      spoolHtml = parts.join("");
     }
-    spoolInfos.forEach((info, idx) => {
-      const sp = getSpoolById(info.spoolId) || null;
-      const mat = info.material || sp?.material || '';
-      const matColor = mat ? (matColors[mat] || '#EEE') : '#EEE';
-      const color = info.filamentColor || sp?.filamentColor || '#000';
-      const colorBox = `<span class="filament-color-box" style="color:${color};">■</span>`;
-      const matTag   = mat ? `<span class="material-tag" style="background:${matColor};">${mat}</span>` : '';
-      const name = info.spoolName || sp?.name || '';
-      const colName = info.colorName || sp?.colorName || '';
-      let text = name || colName ? `${colorBox} ${matTag} ${name}/${colName}` : '(不明)';
-      if (idx === 0) {
-        const editId = info.spoolId || raw.filamentId;
-        if (editId) text += ` <button class="spool-edit" data-id="${editId}">修正</button>`;
-      }
-      spoolTexts.push(text);
-      countTexts.push(info.spoolCount ?? sp?.printCount ?? 0);
-      remainTexts.push(info.expectedRemain ?? sp?.remainingLengthMm ?? 0);
-      const serial = info.serialNo ?? sp?.serialNo ?? '';
-      changeTexts.push(`🔄️ ${serial}`);
-    });
-    const spoolText = spoolTexts.join('<br>');
-    const printCnt  = countTexts.join('<br>');
-    const remainLen = remainTexts.join('<br>');
-    const changeText = changeTexts.join('<br>');
+
     const tr = document.createElement("tr");
+    tr.className = "history-row";
     tr.innerHTML = `
-      <td>
-        <button class="cmd-print">印刷</button>
-        <button class="cmd-rename">名前変更</button>
-        <button class="cmd-delete">削除</button>
+      <td class="col-cmd">
+        <button class="cmd-print icon-btn" title="印刷">▶</button>
+        <button class="cmd-rename icon-btn" title="名前変更">✏</button>
+        <button class="cmd-delete icon-btn" title="削除">🗑</button>
       </td>
-      <td data-key="number">${index + 1}</td>
-      <td data-key="id">${raw.id}</td>
-      <td>
-        <img
-          src="${thumbUrl}"
-          alt="${name}"
-          style="width:50px"
-          onerror="this.onerror=null;this.src='${fallback}'"
-        />
+      <td data-key="number" class="col-num">${index + 1}<div class="sub-id">${raw.id}</div></td>
+      <td class="col-thumb">
+        <img src="${thumbUrl}" alt="${name}" style="width:40px"
+          onerror="this.onerror=null;this.src='${fallback}'" />
       </td>
-      <td>${name}</td>
+      <td data-key="filename" class="col-file">
+        <div class="file-name" title="${name}">${name}</div>
+      </td>
       <td data-key="startway">${startwayLabel}</td>
       <td data-key="size">${size}</td>
-      <td data-key="ctime">${ctime}</td>
-      <td data-key="starttime">${stime}</td>
-      <td data-key="actualstart">${astime}</td>
-      <td data-key="endtime">${etime}</td>
-      <td data-key="preptime" data-sec="${prepSec ?? ''}">${preptime}</td>
-      <td data-key="checktime" data-sec="${checkSec ?? ''}">${checktime}</td>
-      <td data-key="pausetime" data-sec="${pauseSec ?? ''}">${pausetime}</td>
-      <td data-key="usagetime" data-sec="${utimeSec ?? ''}">${utime}</td>
+      <td data-key="starttime" class="col-time" data-sec="${utimeSec ?? ''}">
+        <div class="time-range">${stime} → ${etime}</div>
+        <div class="time-duration">⏱ ${utime}</div>
+        ${timeDetailHtml}
+      </td>
+      <td data-key="printfinish" class="col-finish"><span class="${finishCls}">${finish}</span></td>
       <td data-key="usagematerial">${umaterial}</td>
-      <td>${finish}</td>
-      <td>${md5}</td>
-      <td>${videoLink}</td>
-      <td>${spoolText}</td>
-      <td data-key="spoolchange">${changeText}</td>
-      <td data-key="spoolcount">${printCnt}</td>
-      <td data-key="remain">${remainLen}</td>
+      <td data-key="spool" class="col-spool">${spoolHtml}</td>
+      <td data-key="filemd5" class="col-extra">
+        ${videoLink}
+        <span class="md5-short" title="${raw.filemd5 || ''}">${md5short}</span>
+      </td>
     `;
     tbody.appendChild(tr);
 
-    // ボタンごとにクリックハンドラを登録
+    // イベントハンドラ登録
     tr.querySelector(".cmd-print")?.addEventListener("click", () => {
-      handlePrintClick(raw, thumbUrl);
+      handlePrintClick(raw, thumbUrl, hostname);
     });
     tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
-      handleRenameClick(raw);
+      handleRenameClick(raw, hostname);
     });
     tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
-      handleDeleteClick(raw);
+      handleDeleteClick(raw, hostname);
     });
     tr.querySelector(".video-link")?.addEventListener("click", () => {
       showVideoOverlay(raw.videoUrl);
@@ -910,11 +916,9 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     });
   });
 
-  // ソート用リスナ追加（テーブル内のthのみ対象）
+  // ソート用リスナ追加 + ソートインジケータ
   if (table) {
-    table.querySelectorAll("th").forEach(th => {
-      th.onclick = () => sortTable("print-history-table", th.dataset.key, hostname);
-    });
+    _bindSortHeaders(table, "print-history-table", hostname);
   }
 
 }
@@ -926,7 +930,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
  * @param {Object} raw     - 行データ
  * @param {string} thumbUrl - サムネイル画像の URL
  */
-async function handlePrintClick(raw, thumbUrl) {
+async function handlePrintClick(raw, thumbUrl, hostname) {
   const usedSec        = raw.usagetime;
   const expectedFinish = new Date(Date.now() + usedSec * 1000).toLocaleString();
   const materialNeeded = Math.ceil(raw.usagematerial * 100) / 100;
@@ -960,7 +964,7 @@ async function handlePrintClick(raw, thumbUrl) {
   sendCommand(
     "set",
     { opGcodeFile: `printprt:${target}` },
-    currentHostname
+    hostname
   );
 }
 
@@ -970,7 +974,7 @@ async function handlePrintClick(raw, thumbUrl) {
  *
  * @param {Object} raw - 行データ
  */
-async function handleDeleteClick(raw) {
+async function handleDeleteClick(raw, hostname) {
   const name = raw.filename.split("/").pop();
 
   const html = `削除すると元に戻せません。本当によろしいですか? <br>ファイル: ${name}`;
@@ -989,7 +993,7 @@ async function handleDeleteClick(raw) {
   sendCommand(
     "set",
     { opGcodeFile: `deleteprt:${target}` },
-    currentHostname
+    hostname
   );
 }
 
@@ -999,7 +1003,7 @@ async function handleDeleteClick(raw) {
  *
  * @param {Object} raw - 行データ
  */
-async function handleRenameClick(raw) {
+async function handleRenameClick(raw, hostname) {
   const oldName = raw.filename.split("/").pop();
 
   const newName = await showInputDialog({
@@ -1031,7 +1035,7 @@ async function handleRenameClick(raw) {
   sendCommand(
     "set",
     { opGcodeFile: `renameprt:${target}:${dir}/${newName}` },
-    currentHostname
+    hostname
   );
 }
 
@@ -1052,15 +1056,21 @@ async function extractThumbnailFromFile(file) {
   return `data:image/png;base64,${b64}`;
 }
 
-/** アップロード UI の初期化 */
-export function setupUploadUI() {
-  const btn        = document.getElementById("gcode-upload-btn");
-  const input      = document.getElementById("gcode-upload-input");
-  const progress   = document.getElementById("gcode-upload-progress");
-  const percentEl  = document.getElementById("gcode-upload-percent");
+/**
+ * アップロード UI の初期化
+ * @param {HTMLElement} [root] - パネル本体要素（省略時は document 全体）
+ * @param {string} [hostname] - ホスト名
+ */
+export function setupUploadUI(root, hostname) {
+  const ctx = root || document;
+  const btn        = ctx.querySelector("#gcode-upload-btn") || document.getElementById("gcode-upload-btn");
+  const input      = ctx.querySelector("#gcode-upload-input") || document.getElementById("gcode-upload-input");
+  const progress   = ctx.querySelector("#gcode-upload-progress") || document.getElementById("gcode-upload-progress");
+  const percentEl  = ctx.querySelector("#gcode-upload-percent") || document.getElementById("gcode-upload-percent");
   const dropLayer  = document.getElementById("drop-overlay");
   const dropClose  = document.getElementById("drop-overlay-close");
-  if (!btn || !input || !progress || !percentEl || !dropLayer || !dropClose) return;
+  if (!btn || !input || !progress || !percentEl) return;
+  /* ドロップオーバーレイが無い場合でもボタンアップロードは動作可能 */
 
   let currentFile = null;
 
@@ -1085,9 +1095,9 @@ export function setupUploadUI() {
   function hideProgress() { progress.classList.add("hidden"); updateProgress(0,0); }
 
   /** ドロップオーバーレイを表示する */
-  function showDropLayer() { dropLayer.classList.remove("hidden"); }
+  function showDropLayer() { dropLayer?.classList.remove("hidden"); }
   /** ドロップオーバーレイを隠す */
-  function hideDropLayer() { dropLayer.classList.add("hidden"); }
+  function hideDropLayer() { dropLayer?.classList.add("hidden"); }
 
   /**
    * ファイルを読み込んで文字列として返す。
@@ -1192,7 +1202,7 @@ export function setupUploadUI() {
    */
   async function verifyUploadSuccess(fname) {
     try {
-      await sendCommand("get", { reqGcodeFile: 1 }, currentHostname);
+      await sendCommand("get", { reqGcodeFile: 1 }, hostname);
     } catch (e) {
       console.warn("verifyUploadSuccess: sendCommand failed", e);
     }
@@ -1306,7 +1316,7 @@ export function setupUploadUI() {
     }
   });
 
-  dropClose.addEventListener("click", hideDropLayer);
+  if (dropClose) dropClose.addEventListener("click", hideDropLayer);
 }
 
 /** --- 1) タブ切り替えの初期設定 --- */
@@ -1411,14 +1421,21 @@ export function renderFileList(info, baseUrl, hostname) {
 
   arr.forEach(item => {
     const tr = document.createElement("tr");
+    tr.className = "file-row";
+    const md5short = item.filemd5 ? item.filemd5.substring(0, 8) : "";
+    // 更新日時を YYYY/MM/DD HH:MM:SS 形式にフォーマット
+    const d = item.mtime;
+    const mtimeStr = d instanceof Date && !isNaN(d)
+      ? `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`
+      : "—";
     tr.innerHTML = `
-      <td>
-        <button class="cmd-print">印刷</button>
-        <button class="cmd-rename">名前変更</button>
-        <button class="cmd-delete">削除</button>
+      <td class="col-cmd">
+        <button class="cmd-print icon-btn" title="印刷">▶</button>
+        <button class="cmd-rename icon-btn" title="名前変更">✏</button>
+        <button class="cmd-delete icon-btn" title="削除">🗑</button>
       </td>
-      <td data-key="number">${item.number}</td>
-      <td data-key="thumb">
+      <td data-key="number" class="col-num">${item.number}</td>
+      <td class="col-thumb">
         <img
           src="${item.thumbUrl}"
           alt="${item.basename}"
@@ -1429,18 +1446,17 @@ export function renderFileList(info, baseUrl, hostname) {
       <td data-key="filename">${item.basename}</td>
       <td data-key="layer">${item.layer.toLocaleString()}</td>
       <td data-key="size">${item.size.toLocaleString()}</td>
-      <td data-key="mtime">${item.mtime.toLocaleString()}</td>
+      <td data-key="mtime">${mtimeStr}</td>
       <td data-key="expect">${item.expect.toLocaleString()}</td>
       <td data-key="prints">${item.printCount}</td>
-      <td data-key="md5">${item.filemd5}</td>
+      <td data-key="md5" class="col-md5" title="${item.filemd5 || ''}">${md5short}</td>
     `;
     tbody.appendChild(tr);
 
-    // 印刷ボタン：raw オブジェクトと thumbUrl を渡す
+    // イベントハンドラ
     tr.querySelector(".cmd-print")?.addEventListener("click", () => {
       handlePrintClick(item, item.thumbUrl);
     });
-    // 名前変更／削除：raw.filename（フルパス）や usagetime/usagematerial が item に含まれる
     tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
       handleRenameClick(item);
     });
@@ -1449,22 +1465,36 @@ export function renderFileList(info, baseUrl, hostname) {
     });
   });
 
-  // --- ソート機能登録（テーブル内のthのみ対象） ---
+  // ソート用リスナ + インジケータ
   if (fileTable) {
-    fileTable.querySelectorAll("th").forEach(th => {
-      th.addEventListener("click", () => {
-        sortTable("file-list-table", th.dataset.key, hostname);
-      });
-    });
+    _bindSortHeaders(fileTable, "file-list-table", hostname);
   }
   pushLog("[renderFileList] UI へ反映しました", "info");
 }
 
-/** --- 4) 汎用ソート関数 --- */
+/**
+ * テーブルヘッダーにソートイベントとインジケータをバインドする。
+ * @param {HTMLElement} table - テーブル要素
+ * @param {string} tableId - テーブルID（sortTable用）
+ * @param {string} hostname - ホスト名
+ */
+function _bindSortHeaders(table, tableId, hostname) {
+  table.querySelectorAll("th[data-key]").forEach(th => {
+    /* 重複バインド防止: 既にバインド済みなら何もしない */
+    if (th._sortBound) return;
+    th._sortBound = true;
+    th.classList.add("sortable");
+    th.addEventListener("click", () => {
+      sortTable(tableId, th.dataset.key, hostname);
+    });
+  });
+}
+
+/** --- 4) 汎用ソート関数（ソートインジケータ付き） --- */
 function sortTable(tableId, key, hostname) {
   /* パネルシステムではIDがスコープされるため scopedById を優先使用 */
   const table = scopedById(tableId, hostname);
-  if (!table) return;
+  if (!table || !key) return;
   const tbody = table.querySelector("tbody");
   const rows = Array.from(tbody.querySelectorAll("tr"));
   // 昇順<->降順トグル
@@ -1484,4 +1514,12 @@ function sortTable(tableId, key, hostname) {
     return asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
   });
   rows.forEach(r => tbody.appendChild(r));
+
+  // ソートインジケータ更新
+  table.querySelectorAll("th[data-key]").forEach(th => {
+    th.classList.remove("sort-asc", "sort-desc");
+    if (th.dataset.key === key) {
+      th.classList.add(asc ? "sort-asc" : "sort-desc");
+    }
+  });
 }

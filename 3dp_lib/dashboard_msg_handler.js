@@ -160,7 +160,8 @@ function _getMsgState(hostname) {
  */
 function persistHistoryTimers(printId, hostname) {
   if (!printId) return;
-  const host = hostname || currentHostname;
+  const host = hostname;
+  if (!host) return;
   const machine = monitorData.machines[host];
   if (!machine) return;
 
@@ -293,9 +294,9 @@ export function handleMessage(data) {
 
   }
 
-  // (1a-2) currentHostname は初回ホストのまま固定。
-  // マルチプリンタ環境ではホスト切替の概念がないため、
-  // 受信メッセージごとに currentHostname を変更しない。
+  // (1a-2) currentHostname は最初に接続したホストのまま固定（後方互換用）。
+  // 全ホストが並行動作しており、受信メッセージごとに currentHostname を変更しない。
+  // 各メッセージは data.hostname で正しいホストに振り分けられる。
 
   // (1b) ホスト未設定時はバッファリング、設定後は直接処理
   if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
@@ -321,7 +322,8 @@ export function handleMessage(data) {
  * @returns {void}
  */
 export function processData(data, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
+  if (!host) return;
   const machine = monitorData.machines[host];
   if (!machine) return;
   machine.runtimeData ??= { lastError: null };
@@ -395,12 +397,12 @@ export function processData(data, hostname) {
     if (!isSame) {
       if (errcode === 0 && key === 0) {
         pushLog("エラーが解消しました。", "info");
-        notificationManager.notify("errorResolved");
+        notificationManager.notify("errorResolved", { hostname: host });
       } else {
         const msg = processError(data.err);
         pushLog(msg, "error");
         notificationManager.notify("errorOccurred", {
-          error_code: errcode,
+          hostname: host, error_code: errcode,
           error_key:  key,
           error_msg:  msg,
         });
@@ -461,7 +463,7 @@ export function processData(data, hostname) {
     ms.tsPrintStart = Date.now();
     ms.totalPauseSeconds = 0;
     pushLog("印刷開始", "info");
-    notificationManager.notify("printStarted");
+    notificationManager.notify("printStarted", { hostname: host });
     _set("preparationTime", 0, true);
     // 直ちに保存してリロード時の損失を防ぐ
     persistPrintResume();
@@ -520,7 +522,7 @@ export function processData(data, hostname) {
       const elapsed = ms.totalCheckSeconds + Math.floor((Date.now() - ms.tsCheckStart)/1000);
       _set("firstLayerCheckTime", elapsed, true);
     }, 1000);
-    notificationManager.notify("printFirstLayerCheckStarted");
+    notificationManager.notify("printFirstLayerCheckStarted", { hostname: host });
   }
   // (2.4.2) 完了判定
   if (
@@ -535,7 +537,7 @@ export function processData(data, hostname) {
     ms.tsCheckStart = null;
     ms.tsCheckEnd = Date.now();
     if (currSelfPct >= 100) {
-      notificationManager.notify("printFirstLayerCheckCompleted");
+      notificationManager.notify("printFirstLayerCheckCompleted", { hostname: host });
     }
   }
   // (2.4.3) 新規印刷 or 再開でリセット
@@ -557,7 +559,7 @@ export function processData(data, hostname) {
       const elapsed = ms.totalPauseSeconds + Math.floor((Date.now() - ms.tsPauseStart)/1000);
       _set("pauseTime", elapsed, true);
     }, 1000);
-    notificationManager.notify("printPaused");
+    notificationManager.notify("printPaused", { hostname: host });
     persistHistoryTimers(currStartTime, host);
   }
   // (2.5.2) 停止解除
@@ -571,7 +573,7 @@ export function processData(data, hostname) {
     _set("pauseTime", ms.totalPauseSeconds, true);
     persistHistoryTimers(currStartTime, host);
     ms.tsPauseStart = null;
-    notificationManager.notify("printResumed");
+    notificationManager.notify("printResumed", { hostname: host });
   }
   // (2.5.3) 新規印刷開始でリセット
   if (initialized && currStartTime !== ms.prevPrintStartTime) {
@@ -602,7 +604,7 @@ export function processData(data, hostname) {
       );
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
-    notificationManager.notify(evt);
+    notificationManager.notify(evt, { hostname: host });
     persistHistoryTimers(currStartTime, host);
   }
   // (2.6.2) Idle or 再開でリセット
@@ -621,7 +623,7 @@ export function processData(data, hostname) {
     Number(prevState),
     st,
     pushLog,
-    evt => notificationManager.notify(evt)
+    evt => notificationManager.notify(evt, { hostname: host })
   );
 
   // (2.7.1) プレビュー X/Y/Z

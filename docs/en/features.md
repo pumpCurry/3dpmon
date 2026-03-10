@@ -57,8 +57,9 @@ Holds storage options, notification toggles, filament spool management
 and a command palette for additional commands.
 
 ### Storage Settings
-Manage localStorage data, import/export configuration and clear cached
-history information.
+Data is stored in IndexedDB (preferred) with a localStorage fallback.
+Full data export in v2.00 format and import supporting both v1.40 and
+v2.00 formats are available.
 
 ### Notification Settings
 Enable sound effects or voice announcements and configure warning
@@ -66,7 +67,8 @@ thresholds for abnormal temperatures.
 
 ### Filament Spool
 Register, edit or delete filament spools. Remaining length is tracked
-automatically and low inventory warnings are displayed.
+automatically and low inventory warnings are displayed. In multi-printer
+setups, spool consumption is correctly attributed to each device.
 
 ### Command Palette
 Lists quick commands such as auto home, bed leveling, firmware upgrade,

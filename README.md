@@ -1,12 +1,10 @@
 # 3dpmon
 
-- ブラウザから CREALITY K1シリーズ 3D プリンタを監視するためのダッシュボードです。詳細な説明は [docs/index.md](docs/index.md) を参照してください。将来計画は [docs/future.md](docs/future.md) にまとめています。
-- 現時点ではK1 Max複数台を制御することを目標としています。
-  - 対応機種はK1C / K1 Max で動作確認をしています。
+- ブラウザから CREALITY K1シリーズ 3D プリンタを **複数台同時に** 監視するためのダッシュボードです。詳細な説明は [docs/index.md](docs/index.md) を参照してください。将来計画は [docs/future.md](docs/future.md) にまとめています。
+- K1 Max 複数台の並行監視・制御に対応しています。
+  - 対応機種は K1C / K1 Max で動作確認をしています。
   - ほかの機種にも対応可能であれば対応させたいので、ご協力くださるかたどうかよろしくお願いいたします。
-  - TitleBar コンポーネントの仕様は [docs/develop/titlebar.md](docs/develop/titlebar.md) にまとめています。
-
-The console should display echoed JSON via the new ConnectionManager.
+- v2.1 で **マルチプリンタ並行監視**、**パネルシステム（GridStack）**、**v2.00 統一エクスポート/インポート** に対応しました。変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 ## インストール
 1. このリポジトリをダウンロードします。
    - **Git**: `git clone https://github.com/pumpCurry/3dpmon.git`
@@ -30,7 +28,7 @@ The console should display echoed JSON via the new ConnectionManager.
 
 # 3dpmon
 
-This is a browser-based dashboard for monitoring the Clarity series of 3D printers. For detailed documentation see [docs/index.md](docs/index.md). Information about upcoming features is available in [docs/future.md](docs/future.md).
+This is a browser-based dashboard for monitoring **multiple** CREALITY K1-series 3D printers simultaneously. For detailed documentation see [docs/index.md](docs/index.md). Information about upcoming features is available in [docs/future.md](docs/future.md). See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ## Installation
 1. Download this repository.
@@ -48,32 +46,10 @@ This is a browser-based dashboard for monitoring the Clarity series of 3D printe
    On Windows you can also run `start.bat` to launch the server.
 5. Navigate to `http://localhost:8000/3dp_monitor.html` in your browser.
 
-## Development (v2 skeleton)
-To try the new Vite-based dashboard:
-1. Install Node packages: `npm install`
-2. In one terminal run `npm run mock` to start a local echo server.
-3. In another terminal run `npm run dev` and open `http://localhost:5173`.
-The console should display echoed JSON via the new ConnectionManager.
-## Run tests
-Unit tests are executed with [Vitest](https://vitest.dev/).
-
-1. Install Node packages: `npm install`
-2. Run `npm test`
-
-See [docs/develop/tests.md](docs/develop/tests.md) for coverage goals and additional details.
-
-### Troubleshooting
-If `npm run dev` fails with `EACCES: permission denied, rename` on Dropbox or
-other network drives, run `scripts/clear-vite.sh` to reset Vite's cache.
-
-
-## Keyboard Shortcuts
-HeadPreviewCard supports the following keys:
-- **Space**: reset zoom to 1.0
-- **?**: show help dialog
-
-## Codex Task Execution
-To run this project within OpenAI Codex tasks, set the setup script path to `run/codex/setup.sh` and enable internet access only for that step. Required environment variables are `NODE_ENV=ci` and `CI=true`. Details are described in [docs/develop/codex_setup.md](docs/develop/codex_setup.md).
+## Electron モード
+Electron パッケージでの起動にも対応しています。
+1. `npm install`
+2. `npm run electron` (または `start.bat`)
 
 
 ## License

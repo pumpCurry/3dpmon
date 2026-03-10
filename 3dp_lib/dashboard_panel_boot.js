@@ -31,6 +31,7 @@ import { initPanelMenu } from "./dashboard_panel_menu.js";
 import { registerAllPanelInits } from "./dashboard_panel_init.js";
 import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
 import { monitorData } from "./dashboard_data.js";
+import { notificationManager } from "./dashboard_notification_manager.js";
 
 /**
  * パネルシステムモードが有効かどうか。
@@ -174,17 +175,12 @@ function _convertCardsToTemplates() {
       templateId: "panel-tpl-current-print",
       keepOriginal: false
     },
-    {
-      /* #settings-card は #print-history-card の中にネストされているため、
-         先に抽出しないと親ごと除去されてしまう */
-      selector: "#settings-card",
-      templateId: "panel-tpl-settings",
-      keepOriginal: false
-    },
+    /* settings-card は接続設定モーダルに統合済みのため、テンプレート抽出不要 */
     {
       selector: "#print-history-card",
       templateId: "panel-tpl-history",
-      keepOriginal: false
+      keepOriginal: false,
+      splitHistory: true
     }
   ];
 
@@ -220,6 +216,40 @@ function _convertCardsToTemplates() {
       if (tempArea) tempWrapper.appendChild(tempArea.cloneNode(true));
       tplTemp.content.appendChild(tempWrapper);
       document.body.appendChild(tplTemp);
+
+      originalEl.remove();
+      continue;
+    }
+
+    if (mapping.splitHistory) {
+      /* 印刷履歴を2つの独立パネルに分割:
+         - history: 印刷履歴テーブル
+         - file-list: ファイル一覧テーブル + アップロード */
+      const clone = originalEl.cloneNode(true);
+
+      /* テンプレート1: 印刷履歴 */
+      const tplHistory = document.createElement("template");
+      tplHistory.id = "panel-tpl-history";
+      const histSection = clone.querySelector("#panel-print-history-section");
+      if (histSection) {
+        const histWrapper = document.createElement("div");
+        histWrapper.className = "print-history-card history-panel";
+        histWrapper.appendChild(histSection.cloneNode(true));
+        tplHistory.content.appendChild(histWrapper);
+      }
+      document.body.appendChild(tplHistory);
+
+      /* テンプレート2: ファイル一覧 */
+      const tplFileList = document.createElement("template");
+      tplFileList.id = "panel-tpl-file-list";
+      const fileSection = clone.querySelector("#panel-file-list-section");
+      if (fileSection) {
+        const fileWrapper = document.createElement("div");
+        fileWrapper.className = "file-list-card file-list-panel";
+        fileWrapper.appendChild(fileSection.cloneNode(true));
+        tplFileList.content.appendChild(fileWrapper);
+      }
+      document.body.appendChild(tplFileList);
 
       originalEl.remove();
       continue;
@@ -341,6 +371,30 @@ function _initTopMenuBar() {
       /* 入力欄をクリア */
       const modalIpEl = document.getElementById("conn-modal-ip");
       if (modalIpEl) modalIpEl.value = "";
+    });
+  }
+
+  /* ── 通知設定サブモーダル ── */
+  const notifBtn     = document.getElementById("conn-modal-notif-btn");
+  const notifOverlay = document.getElementById("notif-modal-overlay");
+  const notifClose   = document.getElementById("notif-modal-close");
+  const notifBody    = document.getElementById("notif-modal-body");
+
+  if (notifBtn && notifOverlay) {
+    /** @private 通知モーダルを初期化して開く */
+    notifBtn.addEventListener("click", () => {
+      notificationManager.initModalUI(notifBody);
+      notifOverlay.classList.add("open");
+    });
+  }
+  if (notifClose) {
+    notifClose.addEventListener("click", () => {
+      notifOverlay.classList.remove("open");
+    });
+  }
+  if (notifOverlay) {
+    notifOverlay.addEventListener("click", e => {
+      if (e.target === notifOverlay) notifOverlay.classList.remove("open");
     });
   }
 }

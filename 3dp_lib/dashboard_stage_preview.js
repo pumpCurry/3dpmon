@@ -30,8 +30,6 @@ let stageRotX = 0;
 let stageRotZ = 0;
 const STAGE_ROT_X_MIN = 0;
 const STAGE_ROT_X_MAX = 70;
-const STAGE_SCALE = 0.5;
-
 // ---------------------------------------------------------------------------
 // per-host プレビュー状態
 // ---------------------------------------------------------------------------
@@ -127,9 +125,7 @@ function setPrinterModel(model, hostname) {
 
   const stageElem = _findInPanel(s, "xy-stage");
   if (!stageElem) return;
-  const px = s.stageSizeMm * STAGE_SCALE;
-  stageElem.style.width = `${px}px`;
-  stageElem.style.height = `${px}px`;
+  // ステージサイズは CSS の 79% で自動追従するため、明示的な px 指定は不要
   stageElem.innerHTML = "";
   s.xyDots.length = 0;
   s.xyInitialized = false;
@@ -139,7 +135,8 @@ function setPrinterModel(model, hostname) {
     : null;
   if (labelBottom) labelBottom.textContent = String(s.stageZMaxMm);
 
-  updateXYPreview(s.lastXYPosition.x, s.lastXYPosition.y, hostname);
+  // XY プレビューを再初期化して座標を復元
+  initXYPreview(s.panelBody, hostname);
   updateZPreview(s.lastZPosition, hostname);
 }
 
@@ -159,6 +156,12 @@ function restoreXYPreviewState(hostname) {
       s.xyHistory = obj.xyHistory || [];
       s.xyHistoryIndex = obj.xyHistoryIndex || 0;
       s.lastXYPosition = obj.lastXYPosition || { x: 0, y: 0 };
+      if (typeof obj.lastZPosition === "number") s.lastZPosition = obj.lastZPosition;
+      if (typeof obj.stageRotX === "number") stageRotX = obj.stageRotX;
+      if (typeof obj.stageRotZ === "number") stageRotZ = obj.stageRotZ;
+      if (obj.currentModel) s.currentModel = obj.currentModel;
+      if (typeof obj.stageSizeMm === "number") s.stageSizeMm = obj.stageSizeMm;
+      if (typeof obj.stageZMaxMm === "number") s.stageZMaxMm = obj.stageZMaxMm;
     }
   } catch (e) {
     console.warn("XYプレビュー復元エラー:", e);
@@ -176,7 +179,13 @@ function saveXYPreviewState(hostname) {
   const obj = {
     xyHistory: s.xyHistory,
     xyHistoryIndex: s.xyHistoryIndex,
-    lastXYPosition: s.lastXYPosition
+    lastXYPosition: s.lastXYPosition,
+    lastZPosition: s.lastZPosition,
+    stageRotX,
+    stageRotZ,
+    currentModel: s.currentModel,
+    stageSizeMm: s.stageSizeMm,
+    stageZMaxMm: s.stageZMaxMm
   };
   try {
     localStorage.setItem(storageKey, JSON.stringify(obj));
@@ -191,16 +200,15 @@ function saveXYPreviewState(hostname) {
  * @param {PreviewHostState} s
  */
 function _restoreXYHistoryDots(s) {
-  const stagePx = s.stageSizeMm * STAGE_SCALE;
   s.xyDots.forEach(dot => { dot.style.display = "none"; });
   s.xyHistory.forEach((pos, idx) => {
     if (idx >= s.xyDots.length) return;
     if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") return;
-    const screenX = stagePx - (pos.x * STAGE_SCALE);
-    const screenY = pos.y * STAGE_SCALE;
+    const pctX = (pos.x / s.stageSizeMm) * 100;
+    const pctY = (pos.y / s.stageSizeMm) * 100;
     const dot = s.xyDots[idx];
-    dot.style.right = (screenX - 1.5) + "px";
-    dot.style.bottom = (screenY - 1.5) + "px";
+    dot.style.right = `calc(${pctX}% - 1.5px)`;
+    dot.style.bottom = `calc(${pctY}% - 1.5px)`;
     dot.style.display = "block";
   });
   s.xyUpdateCount = s.xyHistoryIndex + 1;
@@ -220,8 +228,6 @@ function initXYPreview(panelBody, hostname) {
   if (!container) return;
   container.style.userSelect = "none";
   const gridCount = 7;
-  const width = container.clientWidth;
-  const height = container.clientHeight;
 
   // 左右の羽
   const leftWing = document.createElement("div");
@@ -246,23 +252,27 @@ function initXYPreview(panelBody, hostname) {
     container.appendChild(el);
   });
 
+  // グリッド線（％指定でリサイズに追従）
   for (let i = 1; i <= gridCount; i++) {
+    const pct = (i / (gridCount + 1) * 100).toFixed(2);
+    const isCenter = i === Math.ceil(gridCount / 2);
+
     const hLine = document.createElement("div");
     hLine.style.position = "absolute";
     hLine.style.left = "0";
     hLine.style.width = "100%";
-    hLine.style.height = (i === Math.ceil(gridCount / 2)) ? "2px" : "1px";
-    hLine.style.backgroundColor = (i === Math.ceil(gridCount / 2)) ? "#999" : "#777";
-    hLine.style.top = (i * height / (gridCount + 1)) + "px";
+    hLine.style.height = isCenter ? "2px" : "1px";
+    hLine.style.backgroundColor = isCenter ? "#999" : "#777";
+    hLine.style.top = pct + "%";
     container.appendChild(hLine);
 
     const vLine = document.createElement("div");
     vLine.style.position = "absolute";
     vLine.style.top = "0";
     vLine.style.height = "100%";
-    vLine.style.width = (i === Math.ceil(gridCount / 2)) ? "2px" : "1px";
-    vLine.style.backgroundColor = (i === Math.ceil(gridCount / 2)) ? "#999" : "#777";
-    vLine.style.left = (i * width / (gridCount + 1)) + "px";
+    vLine.style.width = isCenter ? "2px" : "1px";
+    vLine.style.backgroundColor = isCenter ? "#999" : "#777";
+    vLine.style.left = pct + "%";
     container.appendChild(vLine);
   }
 
@@ -368,24 +378,24 @@ function updateXYPreview(x, y, hostname) {
   const s = _getPreviewState(hostname);
   if (!s.xyInitialized) return;
 
-  const stagePx = s.stageSizeMm * STAGE_SCALE;
-  const screenX = stagePx - (x * STAGE_SCALE);
-  const screenY = y * STAGE_SCALE;
+  // mm → ステージサイズに対する％に変換
+  const pctX = (x / s.stageSizeMm) * 100;
+  const pctY = (y / s.stageSizeMm) * 100;
 
   const currentDot = _findInPanel(s, "xy-current-dot");
   const currentCircle = _findInPanel(s, "xy-current-circle");
   if (!currentDot || !currentCircle) return;
 
-  currentDot.style.right = (screenX - 2.5) + "px";
-  currentDot.style.bottom = (screenY - 2.5) + "px";
-  currentCircle.style.right = (screenX - 5) + "px";
-  currentCircle.style.bottom = (screenY - 5) + "px";
+  currentDot.style.right = `calc(${pctX}% - 2.5px)`;
+  currentDot.style.bottom = `calc(${pctY}% - 2.5px)`;
+  currentCircle.style.right = `calc(${pctX}% - 5px)`;
+  currentCircle.style.bottom = `calc(${pctY}% - 5px)`;
 
   const index = s.xyUpdateCount % maxDots;
   const dot = s.xyDots[index];
   if (!dot) return;
-  dot.style.right = (screenX - 1.5) + "px";
-  dot.style.bottom = (screenY - 1.5) + "px";
+  dot.style.right = `calc(${pctX}% - 1.5px)`;
+  dot.style.bottom = `calc(${pctY}% - 1.5px)`;
   dot.style.display = "block";
 
   s.xyUpdateCount++;
@@ -404,19 +414,25 @@ function updateXYPreview(x, y, hostname) {
  */
 function updateZPreview(z, hostname) {
   const s = _getPreviewState(hostname);
-  const scale = 0.5;
   const clampedZ = Math.min(z, s.stageZMaxMm);
-  const barHeight = clampedZ * scale;
+  // コンテナ高さの87%を使用可能領域とし（上部13%はラベル領域）、
+  // Z最大値に対する比率でバーの高さを％指定する
+  const barPct = s.stageZMaxMm > 0
+    ? (clampedZ / s.stageZMaxMm) * 87
+    : 0;
   const barDiv = _findInPanel(s, "z-preview");
   if (barDiv) {
-    barDiv.style.height = barHeight + "px";
+    barDiv.style.height = barPct + "%";
     barDiv.style.backgroundColor = (z < 0) ? "magenta" : "";
   }
   const zValueElem = _findInPanel(s, "z-value");
   if (zValueElem) {
     zValueElem.textContent = z.toFixed(2);
   }
-  s.lastZPosition = z;
+  if (s.lastZPosition !== z) {
+    s.lastZPosition = z;
+    saveXYPreviewState(hostname);
+  }
 }
 
 /**
@@ -428,9 +444,28 @@ function _applyStageTransform(s) {
   const container = _findInPanel(s, "xy-stage");
   if (container) {
     stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
-    const rotZ = ((stageRotZ % 360) + 360) % 360;
-    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${rotZ}deg)`;
+    // stageRotZ を -180〜+540 の範囲に正規化し、累積による巨大値を防止
+    stageRotZ = ((stageRotZ % 360) + 360) % 360;
+    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
   }
+}
+
+/**
+ * stageRotZ を最短経路でターゲット角度へ設定する。
+ * CSS transition による逆回転を防止するため、現在値との差分が
+ * ±180° 以内になるよう調整してから代入する。
+ * @private
+ * @param {number} targetZ - 目標Z回転角度（度）
+ */
+function _setRotZSmooth(targetZ) {
+  // 現在値を 0〜360 に正規化
+  const cur = ((stageRotZ % 360) + 360) % 360;
+  const tgt = ((targetZ % 360) + 360) % 360;
+  let diff = tgt - cur;
+  // 最短経路: 差分を -180〜+180 に収める
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  stageRotZ = cur + diff;
 }
 
 /**
@@ -444,34 +479,34 @@ function applyStageTransform() {
 
 function setTopView() {
   stageRotX = 0;
-  stageRotZ = 0;
+  _setRotZSmooth(0);
   applyStageTransform();
 }
 
 function setCameraView() {
   stageRotX = 50;
-  stageRotZ = 50;
+  _setRotZSmooth(50);
   applyStageTransform();
 }
 
 function setFlatView() {
   stopZSpin();
   stageRotX = 0;
-  stageRotZ = 0;
+  _setRotZSmooth(0);
   applyStageTransform();
 }
 
 function setTilt45View() {
   stopZSpin();
   stageRotX = 45;
-  stageRotZ = 0;
+  _setRotZSmooth(0);
   applyStageTransform();
 }
 
 function setObliqueView() {
   stopZSpin();
   stageRotX = 65;
-  stageRotZ = 72.5;
+  _setRotZSmooth(72.5);
   applyStageTransform();
 }
 
@@ -522,13 +557,7 @@ function replayPreviewState(hostname) {
   const labelBottom = s.panelBody.querySelector(".z-label-bottom");
   if (labelBottom) labelBottom.textContent = String(s.stageZMaxMm);
 
-  // XY ステージサイズをモデルに合わせる（ドットは initXYPreview で復元済み）
-  const stageElem = _findInPanel(s, "xy-stage");
-  if (stageElem && s.currentModel) {
-    const px = s.stageSizeMm * STAGE_SCALE;
-    stageElem.style.width = `${px}px`;
-    stageElem.style.height = `${px}px`;
-  }
+  // ステージサイズは CSS の % 指定で自動追従するため、明示的な px 設定は不要
 
   // キャッシュされた位置を再描画
   if (s.xyInitialized) {
@@ -540,12 +569,30 @@ function replayPreviewState(hostname) {
 }
 
 /**
- * ホスト切替（後方互換）。
- * per-host パネル方式では特別な処理不要。
- * @param {string} hostname
+ * 指定ホストのプレビュー状態を確保する。
+ * per-host パネル方式では各パネルが独立しているため、
+ * 状態オブジェクトの初期化のみを行う。
+ * @param {string} hostname - ホスト名
  */
 function switchPreviewHost(hostname) {
   if (hostname) _getPreviewState(hostname);
+}
+
+/**
+ * パネル破棄時に DOM 参照と初期化フラグをリセットする。
+ * 状態データ（位置、履歴）は保持し、再度開いた時に復元可能にする。
+ *
+ * @param {string} hostname - ホスト名
+ */
+function destroyPreviewPanel(hostname) {
+  const s = _previewHostStates.get(hostname);
+  if (!s) return;
+  // 最終状態を保存
+  saveXYPreviewState(hostname);
+  // DOM 参照をクリア
+  s.panelBody = null;
+  s.xyDots = [];
+  s.xyInitialized = false;
 }
 
 export {
@@ -557,6 +604,7 @@ export {
   setPrinterModel,
   registerPreviewPanel,
   replayPreviewState,
+  destroyPreviewPanel,
   applyStageTransform,
   setTopView,
   setCameraView,

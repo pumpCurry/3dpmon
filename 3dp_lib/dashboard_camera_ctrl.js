@@ -32,7 +32,7 @@
 
 "use strict";
 
-import { monitorData, currentHostname } from "./dashboard_data.js";
+import { monitorData } from "./dashboard_data.js";
 import { getDeviceIp, getDeviceDest } from "./dashboard_connection.js";
 import { pushLog }                  from "./dashboard_log_util.js";
 import { notificationManager }      from "./dashboard_notification_manager.js";
@@ -88,6 +88,7 @@ export function registerCameraPanel(hostname, img, body, toggle) {
   if (prev) _cancelTimers(prev);
 
   cameraRegistry.set(hostname, {
+    hostname,
     img,
     body,
     toggle,
@@ -122,11 +123,11 @@ export function unregisterCameraPanel(hostname) {
  * レジストリに登録済みのパネルが無い場合は何もしない。
  *
  * @function startCameraStream
- * @param {string} [hostname] - ホスト名。省略時は currentHostname を使用
+ * @param {string} [hostname] - ホスト名
  * @returns {void}
  */
 export function startCameraStream(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
 
   const entry = cameraRegistry.get(host);
@@ -171,11 +172,11 @@ export function startCameraStream(hostname) {
  * ユーザ操作による停止であることをフラグで記録し、自動リトライを防止する。
  *
  * @function stopCameraStream
- * @param {string} [hostname] - ホスト名。省略時は currentHostname を使用
+ * @param {string} [hostname] - ホスト名
  * @returns {void}
  */
 export function stopCameraStream(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
 
   const entry = cameraRegistry.get(host);
@@ -185,7 +186,7 @@ export function stopCameraStream(hostname) {
   _stopEntry(entry);
   _updateUI(entry, "disconnected");
   pushLog(`カメラストリーム停止 (${host})`, "info");
-  notificationManager.notify("cameraConnectionStopped");
+  notificationManager.notify("cameraConnectionStopped", { hostname: host });
 }
 
 /**
@@ -208,8 +209,9 @@ export function stopAllCameraStreams() {
  * @function handleCameraError
  * @returns {void}
  */
-export function handleCameraError() {
-  const entry = cameraRegistry.get(currentHostname);
+export function handleCameraError(hostname) {
+  if (!hostname) return;
+  const entry = cameraRegistry.get(hostname);
   if (entry) _updateUI(entry, "disconnected");
   pushLog("カメラ映像の読み込みエラー", "error");
 }
@@ -289,7 +291,7 @@ function _connectStream(entry, host) {
     _cancelTimers(entry);
     _updateUI(entry, "disconnected");
     pushLog(`カメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました`, "error");
-    notificationManager.notify("cameraConnectionFailed");
+    notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
     return;
   }
 
@@ -318,7 +320,7 @@ function _connectStream(entry, host) {
       entry.firstConnected = true;
       _updateUI(entry, "connected");
       pushLog("カメラ接続成功", "success");
-      notificationManager.notify("cameraConnected");
+      notificationManager.notify("cameraConnected", { hostname: entry.hostname });
     } else if (entry.attempts > 0) {
       entry.attempts = 0;
       _updateUI(entry, "connected");
@@ -335,7 +337,7 @@ function _connectStream(entry, host) {
       entry.serviceNotified = true;
       _updateUI(entry, "disconnected");
       pushLog("機器側の動画配信サービスが異常停止しています", "error");
-      notificationManager.notify("cameraServiceStopped");
+      notificationManager.notify("cameraServiceStopped", { hostname: entry.hostname });
       return;
     }
 

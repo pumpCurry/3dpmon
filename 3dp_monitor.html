@@ -87,6 +87,57 @@
         <hr style="margin:12px 0 8px;">
         <label>接続先一覧</label>
         <div id="conn-modal-printer-list" style="margin-top:4px; font-size:13px;"></div>
+
+        <!-- 通知設定ボタン -->
+        <hr style="margin:12px 0 8px;">
+        <button class="primary" id="conn-modal-notif-btn" style="width:100%;">通知設定を開く</button>
+
+        <!-- ストレージ設定 -->
+        <hr style="margin:12px 0 8px;">
+        <details id="storage-panel" style="font-size:12px;">
+          <summary style="cursor:pointer; font-weight:bold; font-size:13px;">ストレージ設定</summary>
+          <div style="padding:6px 0;">
+            <div>使用量: <span id="storage-usage">-- / -- (--%)</span></div>
+            <div>最終同期: <span id="storage-last-sync">----</span></div>
+            <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:4px;">
+              <button id="storage-save-btn" style="font-size:11px;">保存</button>
+              <button id="storage-quota-test-btn" style="font-size:11px;">クォータテスト</button>
+              <button id="clear-storage-button" class="danger" style="font-size:11px;">全ストレージ削除</button>
+            </div>
+            <div id="storage-error" style="color:red; display:none; margin-top:4px;">⚠ 容量取得エラー</div>
+            <div style="margin-top:6px;">
+              <label for="setting-log-max-lines" style="font-size:12px;"><strong>ログ最大行数:</strong></label>
+              <input type="number" id="setting-log-max-lines"
+                min="100" step="100" value="1000"
+                style="width:5em; font-size:11px;" />
+            </div>
+            <!-- 確認ダイアログ（全ストレージ削除用） -->
+            <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
+              <div class="confirm-modal-box">
+                <p>全ストレージを本当に削除しますか？</p>
+                <div class="btn-group">
+                  <button id="confirm-delete-ok" class="danger" style="font-size:11px;">削除する</button>
+                  <button id="confirm-delete-cancel" style="font-size:11px;">キャンセル</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===============================================================
+       通知設定サブモーダル
+  =============================================================== -->
+  <div class="notif-modal-overlay" id="notif-modal-overlay">
+    <div class="notif-modal">
+      <div class="notif-modal-header">
+        <span>通知設定</span>
+        <button class="notif-modal-close" id="notif-modal-close">×</button>
+      </div>
+      <div class="notif-modal-body" id="notif-modal-body">
+        <!-- 動的生成される通知設定テーブル -->
       </div>
     </div>
   </div>
@@ -190,78 +241,67 @@
 
       <!-- 左側：XY/Zプレビュー領域 -->
       <div class="card preview-wrapper">
-        <!-- 白い囲み内にタイトル・プレビュー・レイヤー数をまとめる -->
-        <div class="preview-content">
-
-          <div class="preview-header">
-            <h2 class="card-title">ヘッド位置プレビュー</h2>
-          </div>
-
-          <div class="preview-body">
-            <div class="chamber-container">
-              <div class="chamber" id="xy-chamber">
-                <div class="stage" id="xy-stage"></div>
-              </div>
-              <div class="xy-value-extra">
-                X:
-                <span data-field="positionX">
-                  <span class="value">---.--</span><span class="unit"></span>
-                </span>,
-                Y:
-                <span data-field="positionY">
-                  <span class="value">---.--</span><span class="unit"></span>
-                </span>
-              </div>
-              <div class="stage-rotate-buttons">
-                <button id="btn-stage-flat">⊞</button>
-                <button id="btn-stage-45">⏢</button>
-                <button id="btn-stage-65-72">⪩</button>
-                <button id="btn-stage-spin">⟲</button>
-              </div>
+        <!-- タイトルはパネルヘッダーに表示されるため省略 -->
+        <div class="preview-body">
+          <div class="chamber-container">
+            <div class="chamber" id="xy-chamber">
+              <div class="stage" id="xy-stage"></div>
             </div>
-            <div class="z-container">
-              <div id="z-preview-container">
-                <div class="z-label-top">0</div>
-                <div class="z-label-bottom">300</div>
-                <div id="z-preview"></div>
-                <div id="z-value"></div>
-              </div>
-              <div class="z-value-extra">
-                Z:
-                <span data-field="positionZ">
-                  <span class="value">---.--</span><span class="unit"></span>
-                </span>
-              </div>
+            <div class="xy-value-extra">
+              X:
+              <span data-field="positionX">
+                <span class="value">---.--</span><span class="unit"></span>
+              </span>,
+              Y:
+              <span data-field="positionY">
+                <span class="value">---.--</span><span class="unit"></span>
+              </span>
+            </div>
+            <div class="stage-rotate-buttons">
+              <button id="btn-stage-flat">⊞</button>
+              <button id="btn-stage-45">⏢</button>
+              <button id="btn-stage-65-72">⪩</button>
+              <button id="btn-stage-spin">⟲</button>
             </div>
           </div>
-
-          <div class="preview-footer">
-            <div class="print-status-table">
-                          <strong>レイヤー数:</strong>
-                          <span data-field="layer"><div><span class="value">----</span></span>&nbsp; / &nbsp;<span data-field="TotalLayer"><span class="value">----</span></span></div>
+          <div class="z-container">
+            <div id="z-preview-container" class="z-preview-container">
+              <div class="z-label-top">0</div>
+              <div class="z-label-bottom">300</div>
+              <div id="z-preview" class="z-preview-bar"></div>
+              <div id="z-value" class="z-value-display"></div>
+            </div>
+            <div class="z-value-extra">
+              Z:
+              <span data-field="positionZ">
+                <span class="value">---.--</span><span class="unit"></span>
+              </span>
             </div>
           </div>
-
         </div>
+        <div class="preview-footer">
+          <strong>レイヤー:</strong>
+          <span data-field="layer"><span class="value">----</span></span>
+          <span class="layer-sep">/</span>
+          <span data-field="TotalLayer"><span class="value">----</span></span>
         </div>
+      </div>
 
       <!-- フィラメントプレビュー（独立パネル用） -->
-      <div class="card" id="filament-preview-card" style="margin-top:10px;">
-        <div class="filament-header">
-          <h2 class="card-title">フィラメント</h2>
-          <div class="filament-actions">
-            <button id="filament-change-btn" class="btn" style="font-size:12px;">交換</button>
-            <button id="filament-list-btn" class="btn" style="font-size:12px;">一覧</button>
-          </div>
+      <!-- タイトルはパネルヘッダーに表示されるため省略 -->
+      <div class="card filament-panel-wrapper" id="filament-preview-card">
+        <div class="filament-preview-area" id="filament-preview"></div>
+        <div class="filament-panel-footer">
+          <button id="filament-change-btn" class="btn" style="font-size:12px;">交換</button>
+          <button id="filament-list-btn" class="btn" style="font-size:12px;">一覧</button>
         </div>
-        <div id="filament-preview"></div>
       </div>
 
       <!-- 中央：状態情報 -->
       <div class="card info-wrapper">
         <div class="status-control-row">
           <div class="col1">
-            <h2 class="card-title">状態</h2>
+            <!-- タイトルはパネルヘッダーに表示されるため省略 -->
             <div class="print-status-table">
               <strong>エラー状況:</strong>
               <span data-field="errorStatus">
@@ -365,11 +405,11 @@
 
 
           <div class="col2">
-          <h2 class="card-title">操作パネル</h2>
+          <!-- タイトルはパネルヘッダーに表示されるため省略 -->
           <div class="cmd-group">
-            <button id="btn-stop-print">停止</button>
-            <button id="btn-pause-print">一時停止</button>
-            <button id="btn-resume-print">再開</button>
+            <button id="btn-stop-print" class="btn-stop">停止</button>
+            <button id="btn-pause-print" class="btn-pause">一時停止</button>
+            <button id="btn-resume-print" class="btn-resume">再開</button>
             <button id="btn-ack-error">エラー了承</button>
             <button id="btn-pause-home">一時停止時<br>原点復帰</button>
             <button id="btn-xy-unlock">XYロック解除</button>
@@ -384,26 +424,27 @@
             <button id="btn-test-raw-json">JSONコマンドテスト</button>
           </div>
           <div class="control-temp-area">
+            <div class="control-temp-col control-temp-left">
             <div class="temp-row" style="margin-top:5px;">
               <div class="temp-box">
-                <div style="font-weight:bold;">ノズル温度</div>
-                <div>上限:
-                  <span data-field="maxNozzleTemp">
+                <div class="temp-title">ノズル温度</div>
+                <div class="temp-item"><span class="temp-label">上限:</span>
+                  <span class="temp-val" data-field="maxNozzleTemp">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
-                <div>目標:
-                  <span data-field="targetNozzleTemp">
+                <div class="temp-item"><span class="temp-label">目標:</span>
+                  <span class="temp-val" data-field="targetNozzleTemp">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
-                <div>現在:
-                  <span data-field="nozzleTemp">
+                <div class="temp-item"><span class="temp-label">現在:</span>
+                  <span class="temp-val" data-field="nozzleTemp">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
-                <div>差:
-                  <span data-field="nozzleDiff">
+                <div class="temp-item"><span class="temp-label">差:</span>
+                  <span class="temp-val" data-field="nozzleDiff">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
@@ -415,24 +456,24 @@
                 </div>
 
               <div class="temp-box">
-                <div style="font-weight:bold;">ベッド温度</div>
-                <div>上限:
-                  <span data-field="maxBedTemp">
+                <div class="temp-title">ベッド温度</div>
+                <div class="temp-item"><span class="temp-label">上限:</span>
+                  <span class="temp-val" data-field="maxBedTemp">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
-                <div>目標:
-                  <span data-field="targetBedTemp0">
+                <div class="temp-item"><span class="temp-label">目標:</span>
+                  <span class="temp-val" data-field="targetBedTemp0">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
-                <div>現在:
-                  <span data-field="bedTemp0">
+                <div class="temp-item"><span class="temp-label">現在:</span>
+                  <span class="temp-val" data-field="bedTemp0">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
-                <div>差:
-                  <span data-field="bedDiff">
+                <div class="temp-item"><span class="temp-label">差:</span>
+                  <span class="temp-val" data-field="bedDiff">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
@@ -444,11 +485,11 @@
                 </div>
 
               <div class="temp-box">
-                <div style="font-weight:bold;">箱内温度</div>
-                <div>&nbsp;<span><br /></span></div>
-                <div>&nbsp;<span><br /></span></div>
-                <div>現在:
-                  <span data-field="boxTemp">
+                <div class="temp-title">箱内温度</div>
+                <div class="temp-item">&nbsp;</div>
+                <div class="temp-item">&nbsp;</div>
+                <div class="temp-item"><span class="temp-label">現在:</span>
+                  <span class="temp-val" data-field="boxTemp">
                     <span class="value">--</span><span class="unit"></span>
                   </span>
                 </div>
@@ -509,6 +550,8 @@
                 </div>
               </div>
             </div>
+            </div>
+            <div class="control-temp-col control-temp-right">
             <div class="fan-lights-row">
               <div class="fan-item">
                 <strong>LED照明</strong>
@@ -651,6 +694,7 @@
                 </div>
               </div>
             </div>
+            </div>
 
           </div>
         </div>
@@ -660,13 +704,13 @@
     <!-- 右側：温度グラフ -->
     <div id="graph-current-wrapper" class="graph-current-wrapper">
       <div class="graph-wrapper">
-        <div class="card" id="temp-graph-card">
-          <div style="display:flex; align-items:center;">
-            <h2 class="card-title">温度グラフ (過去15分)</h2>
-            <button id="temp-graph-reset-button" style="font-size:12px; margin-left:4px;">リセット</button>
+        <div class="card temp-graph-panel-wrapper" id="temp-graph-card">
+          <!-- タイトルはパネルヘッダーに表示されるため省略 -->
+          <div class="temp-graph-area">
+            <canvas id="temp-graph-canvas"></canvas>
           </div>
-          <div style="position: relative; width: 100%; height: 300px;">
-            <canvas id="temp-graph-canvas" style="width:100%; height:300px;"></canvas>
+          <div class="temp-graph-footer">
+            <button id="temp-graph-reset-button" class="btn" style="font-size:12px;">リセット</button>
           </div>
         </div>
       </div>
@@ -679,7 +723,7 @@
   =============================================================== -->
   <div class="row">
     <div class="card info-card">
-      <h2 class="card-title">機器情報</h2>
+      <!-- タイトルはパネルヘッダーに表示されるため省略 -->
       <div class="equip-info-table">
         <strong>加速度制限:</strong>
           <span data-field="accelerationLimits">
@@ -741,7 +785,7 @@
     </div>
 
     <div class="card log-card">
-      <h2 class="card-title">ログ</h2>
+      <!-- タイトルはパネルヘッダーに表示されるため省略 -->
       <div class="log-card-header">
         <div class="tabs">
           <button id="tab-received" class="active">受信ログ</button>
@@ -784,172 +828,83 @@
 
   <!-- ──────────────── 印刷状況カード群 ──────────────── -->
   <!-- ① 現在の印刷カード -->
-  <div class="card" id="print-current-card">
-    <h2 class="card-title">現在の印刷</h2>
+  <div class="card print-current-card" id="print-current-card">
+    <!-- タイトルはパネルヘッダーに表示されるため省略 -->
     <div id="print-current-container" style="font-size:0.9em;">
       <!-- JavaScript で renderPrintCurrent が埋めます -->
     </div>
   </div>
 
-  <!-- ② 印刷履歴カード -->
+  <!-- ② 印刷履歴パネル（独立パネル） -->
   <div class="card print-history-card" id="print-history-card">
 
-    <div class="card-header">
-      <div class="tabs">
-        <button id="tab-print-history" class="active">印刷履歴</button>
-        <button id="tab-file-list">ファイル一覧</button>
+    <!-- ─── 印刷履歴セクション ─── -->
+    <div id="panel-print-history-section" class="history-panel-content">
+      <div class="history-toolbar">
+        <button id="history-refresh-btn" class="btn btn-sm" aria-label="履歴を更新">再読み込み</button>
       </div>
-    </div>
-
-    <div class="tab-content">
-      <!-- ─── 印刷履歴タブ ─── -->
-      <div id="panel-print-history-tab">
-  
-      <h2 class="card-title">印刷履歴</h2>
-      <div style="font-size:0.9em;">
-        <div>
-          <strong>総ジョブ数:</strong>
-          <span data-field="totalJob"><span class="value">----</span><span class="unit"></span>
-        </div>
-        <div>
-          <strong>総稼働時間:</strong>
-          <span data-field="totalUsageTime"><span class="value">----</span><span class="unit"></span>
-        </div>
-        <div>
-          <strong>総材料量:</strong>
-          <span data-field="totalUsageMaterial"><span class="value">----</span><span class="unit"></span>
-        </div>
-      </div>
-      <button id="history-refresh-btn" class="btn" aria-label="履歴を更新">再読み込み</button>
-  
-      <!-- 暫定配置 ファイル一覧に本来ならあるべき -->
-      <div class="cmd-group">
-        <label>アップロード GCode:</label>
-        <input type="file" id="gcode-upload-input" accept=".gcode" />
-        <button id="gcode-upload-btn">アップロード</button>
-        <span id="gcode-upload-progress" class="upload-progress hidden">
-          <span class="spinner"></span>
-          <span id="gcode-upload-percent">0%</span>
-        </span>
-      </div>
-      <!-- /暫定配置 -->
       <div id="print-history-body" class="scrollable-body">
-        <table id="print-history-table" class="fixed-header" border="1" style="border-collapse: collapse; width:100%;">
+        <table id="print-history-table" class="fixed-header sortable-table history-table">
           <thead>
             <tr>
-                <th data-key="command">ｺﾏﾝﾄﾞ</th>
-                <th data-key="number">#</th>
-                <th data-key="id">ID</th>
-                <th data-key="thumbnail">ｻﾑﾈｲﾙ</th>
+                <th class="th-cmd"></th>
+                <th data-key="number" class="th-narrow" title="#">#</th>
+                <th class="th-thumb"></th>
                 <th data-key="filename">ファイル名</th>
                 <th data-key="startway">開始方式</th>
                 <th data-key="size">サイズ</th>
-                <th data-key="ctime">作成時間</th>
-                <th data-key="starttime">開始時間</th>
-                <th data-key="actualstart">実印刷開始</th>
-                <th data-key="endtime">終了時間</th>
-                <th data-key="preptime">印刷前準備</th>
-                <th data-key="checktime">印刷中確認</th>
-                <th data-key="pausetime">一時停止</th>
-                <th data-key="usagetime">使用時間</th>
-                <th data-key="usagematerial">使用量（mm）</th>
-                <th data-key="printfinish">is成功?</th>
-                <th data-key="filemd5">ファイルMD5</th>
-                <th data-key="video">動画</th>
-                <th data-key="spool">フィラメント情報</th>
-                <th data-key="spoolchange">交換</th>
-                <th data-key="spoolcount">同一リール印刷数</th>
-                <th data-key="remain">想定残量</th>
+                <th data-key="starttime">時間</th>
+                <th data-key="printfinish" class="th-narrow">成否</th>
+                <th data-key="usagematerial">使用量(mm)</th>
+                <th data-key="spool">フィラメント</th>
+                <th data-key="filemd5">MD5</th>
             </tr>
           </thead>
           <tbody>
-          <tr><td colspan='22'>データ読み込み待ち</td></tr>
+          <tr><td colspan='11'>データ読み込み待ち</td></tr>
           </tbody>
         </table>
       </div>
-      </div>
+    </div>
 
-      <!-- ─── ファイル一覧タブ ─── -->
-      <div id="panel-file-list" class="hidden">
-      <div>総ファイル数: <span id="file-list-total">0</span></div>
+    <!-- ─── ファイル一覧セクション（splitHistory で分離） ─── -->
+    <div id="panel-file-list-section" class="file-list-panel-content">
+      <div class="file-list-toolbar">
+        <div class="cmd-group upload-group">
+          <label>GCode:</label>
+          <input type="file" id="gcode-upload-input" accept=".gcode" />
+          <button id="gcode-upload-btn" class="btn btn-sm">アップロード</button>
+          <span id="gcode-upload-progress" class="upload-progress hidden">
+            <span class="spinner"></span>
+            <span id="gcode-upload-percent">0%</span>
+          </span>
+        </div>
+        <span class="file-list-count">総数: <span id="file-list-total">0</span></span>
+      </div>
       <div class="filelist-container scrollable-body">
-        <table id="file-list-table" class="fixed-header" style="width:100%; table-layout:auto;">
+        <table id="file-list-table" class="fixed-header sortable-table filelist-table">
           <thead>
             <tr>
-              <th data-key="command">ｺﾏﾝﾄﾞ</th>
-              <th data-key="number">#</th>
-              <th data-key="thumb">ｻﾑﾈｲﾙ</th>
-              <th data-key="filename">ファイル名</th>
-              <th data-key="layer">積層厚さ(mm)</th>
-              <th data-key="size">サイズ(バイト)</th>
-              <th data-key="mtime">更新日時</th>
-              <th data-key="expect">予定使用量(mm)</th>
-              <th data-key="prints">印刷回数</th>
-              <th data-key="md5">MD5</th>
+              <th class="th-cmd"></th>
+              <th data-key="number" class="th-narrow" title="#">#</th>
+              <th class="th-thumb"></th>
+              <th data-key="filename" title="ファイル名">ファイル名</th>
+              <th data-key="layer" class="th-narrow" title="積層厚さ(mm)">積層</th>
+              <th data-key="size" title="サイズ(バイト)">サイズ</th>
+              <th data-key="mtime" title="更新日時">更新日時</th>
+              <th data-key="expect" title="予定使用量(mm)">予定量(mm)</th>
+              <th data-key="prints" class="th-narrow" title="印刷回数">回数</th>
+              <th data-key="md5" class="th-narrow" title="MD5">MD5</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
-      </div>
-
     </div>
 
 
-  <div id="settings-card" class="card">
-    <h2  class="card-title">設定</h2>
-    <div id="storage-panel-container">
-      <!-- ─────────────── ストレージ同期パネル ─────────────── -->
-      <details id="storage-panel" style="margin-top:10px;">
-        <summary style="cursor:pointer; font-weight:bold;">ストレージ設定</summary>
-        <div style="padding:8px; font-size:0.9em;">
-          <div>使用量: <span id="storage-usage">-- / -- (--%)</span></div>
-          <div>最終同期: <span id="storage-last-sync">----</span></div>
-          <button id="storage-save-btn" style="font-size:12px; margin-top:5px;">保存</button>
-          <button id="storage-quota-test-btn" style="font-size:12px; margin-top:5px;">クォータテスト</button>
-          <button id="clear-storage-button" class="btn btn-danger btn-sm ms-2">全ストレージ削除</button>
-          <div id="storage-error" style="color:red; display:none; margin-top:5px;">⚠ 容量取得エラー</div>
-        </div>
-        <div class="cmd-group">
-          <label for="setting-log-max-lines"><strong>ログ最大行数:</strong></label>
-          <input type="number" id="setting-log-max-lines"
-            min="100"
-            step="100"
-            value="1000"
-            style="width:6em;" />
-        </div>
-
-
-        <!-- 確認ダイアログ -->
-        <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
-          <div class="confirm-modal-box">
-            <p>全ストレージを本当に削除しますか？</p>
-            <div class="btn-group">
-              <button id="confirm-delete-ok" class="btn btn-danger btn-sm">削除する</button>
-              <button id="confirm-delete-cancel" class="btn btn-secondary btn-sm">キャンセル</button>
-            </div>
-          </div>
-        </div>
-      </details>
-    </div>
-
-    <div id="notification-settings-panel">
-      <!-- ───────────── 通知設定パネル ───────────── -->
-      <details id="notification-panel" style="margin-top:10px;">
-        <summary style="cursor:pointer; font-weight:bold;">通知設定</summary>
-        <fieldset class="notification-panel-field" style="margin-top:1em; padding:0.5em; border:1px solid #ccc; border-radius:4px;">
-          <legend style="font-weight:bold;">メッセージ内容設定</legend>
-          <div id="notification-panel-body" style="padding:8px; font-size:0.9em;">
-            <!-- 各通知タイプの切り替えUIはここに動的追加 -->
-          </div>
-        </fieldset>
-      </details>
-
-
-    </div>
-    <!-- フィラメントスプール設定は削除済み（パネルシステム移行に伴い不要） -->
-    <!-- コマンドパレットは操作パネル(.col2)に統合済み。設定カードからは削除。 -->
-  </div>
+  <!-- 設定カードは接続設定モーダルに統合済み -->
+  </div><!-- /print-history-card -->
 
   <!-- ドラッグ&ドロップ用オーバーレイ -->
   <div id="drop-overlay" class="drop-overlay hidden">

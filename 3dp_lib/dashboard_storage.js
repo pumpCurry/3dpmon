@@ -532,7 +532,7 @@ export function estimateLocalStorageUsageBytes() {
  * @returns {Object|null} ジョブオブジェクト、未設定時は null
  */
 export function loadPrintCurrent(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return null;
   ensureMachineData(host);
   const machine = monitorData.machines[host];
@@ -545,7 +545,7 @@ export function loadPrintCurrent(hostname) {
  * @param {Object|null} job - 保存するジョブオブジェクト（null 許容）
  */
 export function savePrintCurrent(job, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
   ensureMachineData(host);
   monitorData.machines[host].printStore.current = job;
@@ -558,7 +558,7 @@ export function savePrintCurrent(job, hostname) {
  * @returns {Array<Object>} 履歴配列
  */
 export function loadPrintHistory(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return [];
   ensureMachineData(host);
   return monitorData.machines[host].printStore.history;
@@ -570,7 +570,7 @@ export function loadPrintHistory(hostname) {
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
 export function savePrintHistory(history, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
   ensureMachineData(host);
   monitorData.machines[host].printStore.history =
@@ -584,7 +584,7 @@ export function savePrintHistory(history, hostname) {
  * @returns {Record<string, string>} id をキーとした動画 URL マップ
  */
 export function loadPrintVideos(hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return {};
   ensureMachineData(host);
   const map = monitorData.machines[host].printStore.videos;
@@ -600,7 +600,7 @@ export function loadPrintVideos(hostname) {
  * @param {Record<string, string>} map - id をキーとした動画 URL マップ
  */
 export function savePrintVideos(map, hostname) {
-  const host = hostname || currentHostname;
+  const host = hostname;
   if (!host) return;
   ensureMachineData(host);
   // 上限超過時は古いエントリから削除

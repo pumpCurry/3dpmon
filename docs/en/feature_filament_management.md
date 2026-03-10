@@ -11,6 +11,11 @@ This document introduces the filament management features in 3dpmon that help yo
 - Inventory counts decrease automatically when you swap spools, saving manual work.
 - Alerts warn you when inventory is low, and you can open a purchase link if available.
 
+## Multi-Printer Support
+- Filament swap operations are correctly routed to the panel of the target device.
+- Spool lists, presets and inventory are shared globally so any reel can be selected from any device.
+- Consumption history is recorded per device to prevent data contamination.
+
 ## Tips
 - Modify `dashboard_spool.js` if you want to maintain a custom spool database.
 - Use the reporting feature to see daily or monthly filament usage in graph form.

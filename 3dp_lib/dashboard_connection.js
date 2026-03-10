@@ -58,8 +58,8 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
-import { switchPreviewHost } from "./dashboard_stage_preview.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -302,7 +302,7 @@ function resolveActiveState(host) {
  * 最新の WebSocket 受信データを返します。
  * @returns {Promise<Object|null>}
  */
-export function fetchStoredData(host = currentHostname) {
+export function fetchStoredData(host) {
   const st = connectionMap[host];
   return Promise.resolve(st?.latest ?? null);
 }
@@ -311,10 +311,10 @@ export function fetchStoredData(host = currentHostname) {
  * 指定ホストの接続先 IP アドレスを返す。
  *
  * @function getDeviceIp
- * @param {string} [host=currentHostname] - ホスト名
+ * @param {string} host - ホスト名
  * @returns {string} IP アドレス文字列（失敗時は空文字）
  */
-export function getDeviceIp(host = currentHostname) {
+export function getDeviceIp(host) {
   const st = connectionMap[host];
   const raw = st?.dest || monitorData.appSettings.wsDest || "";
   return raw.split(":")[0] || "";
@@ -325,10 +325,10 @@ export function getDeviceIp(host = currentHostname) {
  * WebSocket ポートが機器ごとに異なる場合に dest 全体を取得するために使用する。
  *
  * @function getDeviceDest
- * @param {string} [host=currentHostname] - ホスト名
+ * @param {string} host - ホスト名
  * @returns {string} "IP:PORT" 形式（失敗時は空文字）
  */
-export function getDeviceDest(host = currentHostname) {
+export function getDeviceDest(host) {
   const st = connectionMap[host];
   return st?.dest || monitorData.appSettings.wsDest || "";
 }
@@ -956,7 +956,7 @@ function handleSocketClose(host) {
  * @param {number} [intervalMs=30000] - 送信間隔（ミリ秒）
  * @returns {void}
  */
-export function startHeartbeat(socket, intervalMs = 30_000, host = currentHostname) {
+export function startHeartbeat(socket, intervalMs = 30_000, host) {
   const st = getState(host);
   st.ws = socket;
   if (st.hbInterval !== null) {
@@ -980,7 +980,7 @@ export function startHeartbeat(socket, intervalMs = 30_000, host = currentHostna
  *
  * @returns {void}
  */
-export function stopHeartbeat(host = currentHostname) {
+export function stopHeartbeat(host) {
   const st = connectionMap[host];
   if (st && st.hbInterval !== null) {
     clearInterval(st.hbInterval);
@@ -997,7 +997,7 @@ export function stopHeartbeat(host = currentHostname) {
  * @function
  * @returns {void}
  */
-export function disconnectWs(host = currentHostname) {
+export function disconnectWs(host) {
   const st = getState(host);
   st.userDisc = true;
 
@@ -1023,16 +1023,9 @@ export function disconnectWs(host = currentHostname) {
 
   // 入力欄を再度書き換え可に
   // UIを切断状態に更新
-  if (host === currentHostname) {
-    updateConnectionUI("disconnected", {}, host);
-  }
+  updateConnectionUI("disconnected", {}, host);
   st.state = "disconnected";
   updatePrinterListUI();
-
-  // 切断時点で保持中のホスト名をリセットしておく
-  // これにより次回接続時、初回メッセージで新しい
-  // ホスト名が確実に設定され、履歴データの混在を防ぐ
-  if (host === currentHostname) setCurrentHostname(PLACEHOLDER_HOSTNAME);
 }
 
 /* ===================== DOM 更新ヘルパー ===================== */
@@ -1050,20 +1043,13 @@ export function setupConnectButton() {
 
 /**
  * プリンタ選択 UI を初期化します。
- * セレクトボックスの変更に合わせて監視対象を切り替えます。
+ * セレクトボックスの変更に合わせて対象ホストのデータ再読み込みを行います。
  *
  * @returns {void}
  */
 export function setupPrinterUI() {
   const sel = document.getElementById("printer-select");
   if (!sel) return;
-  sel.addEventListener("change", () => {
-    const host = sel.value;
-    if (host && host !== currentHostname) {
-      switchActiveHost(host);
-    }
-  });
-
   // 追加接続ボタンの初期化
   const addBtn = document.getElementById("add-printer-button");
   if (addBtn) {
@@ -1086,7 +1072,7 @@ export function setupPrinterUI() {
  * @param {Object} params - パラメータ
  * @returns {Promise<Object>} サーバー result フィールド
  */
-export function sendCommand(method, params = {}, host = currentHostname) {
+export function sendCommand(method, params = {}, host) {
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     const now = Date.now();
@@ -1154,7 +1140,7 @@ export function sendCommand(method, params = {}, host = currentHostname) {
  * @param {string} [host=currentHostname] - 接続先ホスト名
  * @returns {Promise<Object>} サーバー result フィールド
  */
-export function sendGcodeCommand(gcode, host = currentHostname) {
+export function sendGcodeCommand(gcode, host) {
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     const now = Date.now();
@@ -1228,10 +1214,9 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
  * @param {{attempt?: number, max?: number, wait?: number}} [opt={}]
  *   connecting/waiting 時に使用する { attempt, max, wait }
  */
-export function updateConnectionUI(state, opt = {}, host = currentHostname) {
-  // 非アクティブホストの場合はプリンタ一覧のみ更新し、
-  // 画面上部のステータス表示は変更しない
-  if (host !== currentHostname) {
+export function updateConnectionUI(state, opt = {}, host) {
+  // ホスト指定が無い場合はプリンタ一覧のみ更新
+  if (!host) {
     updatePrinterListUI();
     return;
   }
@@ -1378,12 +1363,11 @@ export function updatePrinterListUI() {
 
   // ── プリンタ情報をビルド（共通データ） ──
   /**
-   * @type {Array<{host:string, stateIcon:string, line1:string, line2:string, isActive:boolean, state:string}>}
+   * @type {Array<{host:string, stateIcon:string, line1:string, line2:string, state:string}>}
    */
   const printerInfos = hosts.map(h => {
     const st = connectionMap[h];
     const machine = monitorData.machines[h];
-    const isActive = h === currentHostname;
 
     // 接続状態アイコン
     const stateIcon = st.state === "connected" ? "\u2705"
@@ -1394,7 +1378,6 @@ export function updatePrinterListUI() {
     // 基本情報
     let line1 = `${stateIcon} ${h}`;
     line1 += ` [${st.dest}]`;
-    if (isActive) line1 += " \u25C0 active";
 
     // データ情報
     let line2 = "";
@@ -1418,16 +1401,13 @@ export function updatePrinterListUI() {
       line2 = "\u30C7\u30FC\u30BF\u672A\u53D7\u4FE1";
     }
 
-    return { host: h, stateIcon, line1, line2, isActive, state: st.state };
+    return { host: h, stateIcon, line1, line2, state: st.state };
   });
 
   // ── 従来のサイドバーステータスリスト更新 ──
   if (list) {
     list.innerHTML = printerInfos.map(info => {
-      const bg = info.isActive ? "#e0f0ff" : "#f8f8f8";
-      const fw = info.isActive ? "bold" : "normal";
-      const border = info.isActive ? "2px solid #4090d0" : "1px solid #ddd";
-      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; font-weight:${fw}; background:${bg}; border:${border}; padding:3px 6px; margin:2px 0; border-radius:4px; font-size:11px;">
+      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:#f8f8f8; border:1px solid #ddd; padding:3px 6px; margin:2px 0; border-radius:4px; font-size:11px;">
         <div>${info.line1}</div>
         <div style="color:#666; font-size:10px; margin-left:20px;">${info.line2}</div>
       </div>`;
@@ -1448,7 +1428,7 @@ export function updatePrinterListUI() {
   }
   if (topList) {
     topList.innerHTML = printerInfos.map(info => {
-      const bg = info.isActive ? "#4090d0" : (info.state === "connected" ? "#555" : "#777");
+      const bg = info.state === "connected" ? "#555" : "#777";
       return `<span class="printer-item" data-host="${info.host}" style="cursor:pointer; background:${bg}; color:#fff; padding:1px 6px; border-radius:3px; white-space:nowrap;">${info.stateIcon} ${info.host}</span>`;
     }).join("");
     _bindHostSwitchClicks(topList);
@@ -1458,14 +1438,12 @@ export function updatePrinterListUI() {
   if (connList) {
     // 接続中プリンタの表示
     let listHtml = printerInfos.map(info => {
-      const bg = info.isActive ? "#e0f0ff" : "#f8f8f8";
-      const border = info.isActive ? "2px solid #4090d0" : "1px solid #ddd";
       const st = connectionMap[info.host];
       const dest = st?.dest || info.host;
       const tgt = _findConnectionTarget(dest);
       const color = tgt?.color || "#444444";
-      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:${bg}; border:${border}; padding:4px 8px; margin:4px 0; border-radius:4px;">
-        <div style="display:flex; align-items:center; font-weight:${info.isActive ? "bold" : "normal"};">
+      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:#f8f8f8; border:1px solid #ddd; padding:4px 8px; margin:4px 0; border-radius:4px;">
+        <div style="display:flex; align-items:center;">
           <input type="color" class="conn-target-color" data-dest="${dest}" value="${color}" title="パネルバー色" style="width:22px; height:18px; border:none; padding:0; cursor:pointer; flex-shrink:0;">
           <span style="flex:1; margin-left:6px;">${info.line1}</span>
           <button class="conn-target-delete" data-dest="${dest}" data-host="${info.host}" title="切断・削除">✕</button>
@@ -1495,12 +1473,24 @@ export function updatePrinterListUI() {
     connList.innerHTML = listHtml;
     _bindHostSwitchClicks(connList);
 
-    // 削除ボタンのイベント設定
+    // 削除ボタンのイベント設定（確認ダイアログ付き）
     connList.querySelectorAll(".conn-target-delete").forEach(btn => {
-      btn.addEventListener("click", (e) => {
+      btn.addEventListener("click", async (e) => {
         e.stopPropagation();
         const dest = btn.dataset.dest;
         const host = btn.dataset.host;
+        const displayName = host || dest;
+
+        /* 確認ダイアログ */
+        const ok = await showConfirmDialog({
+          level: "warn",
+          title: "接続先の削除",
+          html: `<strong>${displayName}</strong> (${dest}) を削除しますか？<br>接続中の場合は切断され、パネルも削除されます。`,
+          confirmText: "削除する",
+          cancelText: "キャンセル"
+        });
+        if (!ok) return;
+
         const ip = dest.split(":")[0];
 
         /* 接続先設定から削除（保存済みホスト名を取得） */
@@ -1589,21 +1579,15 @@ export function updatePrinterListUI() {
 }
 
 /**
- * ホスト切替クリックハンドラを指定コンテナ内の .printer-item に登録する。
+ * プリンタ一覧のクリックハンドラを登録する。
+ * クリック時に対象ホストのデータ再読み込み・UI再描画を行う。
  *
  * @private
  * @param {HTMLElement} container - クリックイベントをバインドするコンテナ要素
  * @returns {void}
  */
 function _bindHostSwitchClicks(container) {
-  container.querySelectorAll(".printer-item").forEach(el => {
-    el.addEventListener("click", () => {
-      const host = el.dataset.host;
-      if (host && host !== currentHostname) {
-        switchActiveHost(host);
-      }
-    });
-  });
+  // パネルモードでは各パネルが独立しておりホスト切替は不要
 }
 
 /**
@@ -1678,56 +1662,10 @@ export function getConnectionMap() {
 }
 
 /**
- * switchActiveHost:
- * アクティブホストを切り替える。
- * 切替先のホストが connectionMap に存在し、接続済みであることを前提とする。
- * - currentHostname を更新
- * - aggregator タイマーを再起動
- * - storedData の isNew フラグを全て立てて UI を即座に更新
- * - プリンタリスト UI を更新
- *
- * 注: データ処理（aggregator, msg_handler）は全ホスト並行で動作するため、
- * この関数は表示対象の切替のみを行う。データ収集には影響しない。
- *
- * @function switchActiveHost
- * @param {string} host - 切替先ホスト名
- * @returns {void}
- */
-export function switchActiveHost(host) {
-  if (!connectionMap[host]) {
-    console.warn(`switchActiveHost: ホスト ${host} は connectionMap に存在しません`);
-    return;
-  }
-  setCurrentHostname(host);
-
-  // storedData の全フィールドの isNew フラグを立てて変更キューに追加し、UI を即更新可能にする
-  markAllKeysDirty(host);
-
-  // プレビュー表示をホスト切替
-  switchPreviewHost(host);
-
-  // aggregator タイマーを再起動して、新ホストのデータで UI を更新
-  restartAggregatorTimer(100);
-
-  // カメラストリームを新ホストに切り替え
-  if (monitorData.appSettings.cameraToggle) {
-    startCameraStream(host);
-  }
-
-  // 切替先ホストの履歴/ファイル一覧を即座に再取得する
-  // （初回接続時にしか飛んでこないデータのため、切替時に明示的に要求する）
-  // リトライ付き: 6秒タイムアウト × 最大3回
-  _fetchWithRetry(host);
-
-  updatePrinterListUI();
-  pushLog(`アクティブホストを ${host} に切り替えました`, "info");
-}
-
-/**
  * _fetchWithRetry:
- * reqHistory → reqGcodeFileInfo の順でリクエストを送出する。
+ * reqHistory → reqGcodeFile の順でリクエストを送出する。
  * 各リクエストは 6秒タイムアウト × 最大3回リトライ。
- * 接続直後のみならず switchActiveHost からも呼ばれる。
+ * 接続直後に呼ばれる。
  *
  * @private
  * @param {string} host - ホスト名
@@ -1812,6 +1750,6 @@ export function getConnectionState(host) {
  * Debug helper: treat a raw JSON string as a received WebSocket message.
  * @param {string} jsonStr - JSON text to process
  */
-export function simulateReceivedJson(jsonStr, host = currentHostname) {
+export function simulateReceivedJson(jsonStr, host) {
   handleSocketMessage({ data: jsonStr }, host);
 }

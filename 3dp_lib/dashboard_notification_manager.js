@@ -28,7 +28,6 @@
 "use strict";
 
 import {
-  currentHostname,
   monitorData,
   notificationSuppressed
 } from "./dashboard_data.js";
@@ -145,8 +144,10 @@ export class NotificationManager {
     this.muted      = false;
     this.useWebPush = true;
     this.map        = JSON.parse(JSON.stringify(defaultNotificationMap));
-    this.ttsVoice   = ""; // Web Speech API voice name
-    this.ttsRate    = 1.8;      // 0.5～3.0
+    this.ttsVoice   = ""; // デフォルト TTS 音声名（ホスト個別設定がない場合に使用）
+    this.ttsRate    = 1.8;      // デフォルト TTS 速度 0.5～3.0
+    /** @type {Map<string, {voice: string, rate: number}>} ホスト別 TTS 設定 */
+    this._hostTts   = new Map();
     this.webhookUrls = [];
     this.filamentLowThreshold = 0.1; // 残量10%を下回ったら通知
 
@@ -193,6 +194,13 @@ export class NotificationManager {
 
     if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
     if (saved.ttsRate)  this.ttsRate  = saved.ttsRate;
+    // per-host TTS 設定の復元
+    if (saved.hostTts && typeof saved.hostTts === "object") {
+      this._hostTts.clear();
+      for (const [host, cfg] of Object.entries(saved.hostTts)) {
+        this._hostTts.set(host, { voice: cfg.voice || "", rate: cfg.rate ?? this.ttsRate });
+      }
+    }
     if (Array.isArray(saved.webhookUrls)) this.webhookUrls = saved.webhookUrls;
     if (typeof saved.filamentLowThreshold === "number") {
       this.filamentLowThreshold = saved.filamentLowThreshold;
@@ -219,6 +227,12 @@ export class NotificationManager {
       }
     });
 
+    // per-host TTS を永続化用オブジェクトに変換
+    const hostTtsObj = {};
+    for (const [host, cfg] of this._hostTts) {
+      hostTtsObj[host] = { voice: cfg.voice, rate: cfg.rate };
+    }
+
     monitorData.appSettings[SETTINGS_KEY] = {
       enabled:    this.enabled,
       volume:     this.volume,
@@ -227,6 +241,7 @@ export class NotificationManager {
       map:        sanitized,
       ttsVoice:   this.ttsVoice,
       ttsRate:    this.ttsRate,
+      hostTts:    hostTtsObj,
       webhookUrls: this.webhookUrls,
       filamentLowThreshold: this.filamentLowThreshold
     };
@@ -285,8 +300,8 @@ export class NotificationManager {
   // 新規メソッド：TTS 設定の変更
 
   /**
-   * 読み上げに使用する Voice 名を設定する。
-   * 設定後は永続ストレージにも保存される。
+   * デフォルトの読み上げ音声名を設定する。
+   * ホスト個別設定がない場合に使用される。
    *
    * @param {string} voice - 利用する音声エンジン名
    * @returns {void}
@@ -297,8 +312,8 @@ export class NotificationManager {
   }
 
   /**
-   * 読み上げ速度を設定する。
-   * 設定値は 0.1〜10 の範囲で利用される。
+   * デフォルトの読み上げ速度を設定する。
+   * ホスト個別設定がない場合に使用される。
    *
    * @param {number} rate - TTS の再生速度
    * @returns {void}
@@ -308,14 +323,41 @@ export class NotificationManager {
     this._persistSettings();
   }
 
+  /**
+   * ホスト別 TTS 設定を取得する。
+   * 個別設定がなければデフォルト値を返す。
+   *
+   * @param {string} hostname - ホスト名
+   * @returns {{voice: string, rate: number}} TTS 設定
+   */
+  getHostTts(hostname) {
+    const h = this._hostTts.get(hostname);
+    return {
+      voice: h?.voice ?? this.ttsVoice,
+      rate:  h?.rate  ?? this.ttsRate
+    };
+  }
+
+  /**
+   * ホスト別 TTS 設定を保存する。
+   *
+   * @param {string} hostname - ホスト名
+   * @param {string} voice - 音声名
+   * @param {number} rate - 速度
+   */
+  setHostTts(hostname, voice, rate) {
+    this._hostTts.set(hostname, { voice, rate });
+    this._persistSettings();
+  }
 
   /**
    * 通知を発火します。
    * - ログ出力／固定アラート／TTS／効果音／WebPush
+   * - TTS 設定はホスト別に適用される（機器ごとに音声を変更可能）
    *
    * @function notify
-   * @param {string} type
-   * @param {object} [payload]
+   * @param {string} type - 通知タイプ
+   * @param {object} [payload] - マクロ展開用データ（hostname を含むこと）
   */
   notify(type, payload = {}) {
     if (!this.enabled || notificationSuppressed) return;
@@ -324,7 +366,12 @@ export class NotificationManager {
 
     // マクロ展開
     const now = new Date().toLocaleString();
-    const ctx = { hostname: currentHostname || "unknown", now, ...payload };
+    const hostname = payload.hostname || "unknown";
+    const machine = monitorData.machines[hostname];
+    const displayName = machine?.storedData?.hostname?.rawValue
+                     || machine?.storedData?.model?.rawValue
+                     || hostname;
+    const ctx = { hostname: displayName, now, ...payload };
     const text = (def.talk || def.label || "")
       .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
       .replace(/[\r\n]+/g, " ");
@@ -336,30 +383,32 @@ export class NotificationManager {
     // 2) 固定アラート
     showAlert(text, def.level, def.level === "error");
 
-    // 3) TTS
+    // 3) TTS（ホスト別設定を適用）
     if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
+      const hostTts = this.getHostTts(hostname);
       const utt = new SpeechSynthesisUtterance(text);
-    
-      // rate
-      utt.rate = this.ttsRate;
-    
-      // voice
+
+      // rate（ホスト別）
+      utt.rate = hostTts.rate;
+
+      // voice（ホスト別）
       const voices = speechSynthesis
         .getVoices()
         .filter(v => v.lang === "ja-JP" && v.localService);
 
       let found;
-      if (this.ttsVoice === "female" || this.ttsVoice === "male") {
+      const voiceName = hostTts.voice;
+      if (voiceName === "female" || voiceName === "male") {
         // 旧設定との互換のため female/male も受け付ける
         found = voices.find(v =>
-          this.ttsVoice === "female" ? /female/i.test(v.name) : /male/i.test(v.name)
+          voiceName === "female" ? /female/i.test(v.name) : /male/i.test(v.name)
         );
-      } else if (this.ttsVoice) {
-        found = voices.find(v => v.name === this.ttsVoice);
+      } else if (voiceName) {
+        found = voices.find(v => v.name === voiceName);
       }
       if (!found) found = voices[0];
       if (found) utt.voice = found;
-    
+
       window.speechSynthesis.speak(utt);
     }
 
@@ -441,9 +490,7 @@ export class NotificationManager {
    * @returns {string} 生成したタイトル文字列
    */
   _genTitle() {
-    const host = currentHostname || "unknown";
-    const long = `3Dプリンタ監視ツール:${host}`;
-    return long.length <= 30 ? long : `3Dプリンタ:${host}`;
+    return "3Dプリンタ監視ツール";
   }
 
   /**
@@ -469,219 +516,438 @@ export class NotificationManager {
   }
 
   /**
-   * 通知設定編集UIを生成・バインドします。
+   * カテゴリ別通知タイプ定義
+   * @private
+   * @type {Array<{label: string, types: string[]}>}
+   */
+  static _CATEGORIES = [
+    {
+      label: "印刷イベント",
+      types: [
+        "printStarted", "printCompleted", "printFailed", "printPaused",
+        "errorOccurred", "errorResolved",
+        "filamentOut", "filamentReplaced", "filamentLow",
+        "timeLeft10", "timeLeft5", "timeLeft1"
+      ]
+    },
+    {
+      label: "カメラ",
+      types: [
+        "cameraConnected", "cameraConnectionStopped",
+        "cameraConnectionFailed", "cameraServiceStopped"
+      ]
+    },
+    {
+      label: "温度アラート",
+      types: [
+        "tempNearNozzle80", "tempNearBed80",
+        "tempNearNozzle90", "tempNearBed90",
+        "tempNearNozzle95", "tempNearBed95",
+        "tempNearNozzle98", "tempNearBed98",
+        "tempNearNozzle100", "tempNearBed100"
+      ]
+    }
+  ];
+
+  /**
+   * タイプ名の日本語表示マップ
+   * @private
+   * @type {Object<string,string>}
+   */
+  static _TYPE_LABELS = {
+    printStarted:     "印刷開始",
+    printCompleted:   "印刷完了",
+    printFailed:      "印刷失敗",
+    printPaused:      "一時停止",
+    errorOccurred:    "エラー発生",
+    errorResolved:    "エラー解消",
+    filamentOut:      "フィラメント切れ",
+    filamentReplaced: "フィラメント補充",
+    filamentLow:      "フィラメント残量低",
+    timeLeft10:       "残り10分",
+    timeLeft5:        "残り5分",
+    timeLeft1:        "残り1分",
+    cameraConnected:          "カメラ接続",
+    cameraConnectionStopped:  "カメラ停止",
+    cameraConnectionFailed:   "カメラ失敗",
+    cameraServiceStopped:     "配信サービス停止",
+    tempNearNozzle80:  "ノズル80%",
+    tempNearBed80:     "ベッド80%",
+    tempNearNozzle90:  "ノズル90%",
+    tempNearBed90:     "ベッド90%",
+    tempNearNozzle95:  "ノズル95%",
+    tempNearBed95:     "ベッド95%",
+    tempNearNozzle98:  "ノズル98%",
+    tempNearBed98:     "ベッド98%",
+    tempNearNozzle100: "ノズル100%",
+    tempNearBed100:    "ベッド100%"
+  };
+
+  /**
+   * 通知設定モーダル用テーブルUIを生成・バインドします。
+   * カテゴリ別折り畳みテーブル形式で表示します。
+   *
+   * @function initModalUI
+   * @param {HTMLElement} container - #notif-modal-body
+   */
+  initModalUI(container) {
+    container.innerHTML = "";
+
+    /* ── (A) マスター行: 全体 ON/OFF + 全テスト ── */
+    const masterRow = document.createElement("div");
+    masterRow.className = "notif-master-row";
+    const masterChk = document.createElement("input");
+    masterChk.type = "checkbox";
+    masterChk.checked = this.enabled;
+    masterChk.id = "notif-master-enable";
+    masterChk.addEventListener("change", e => this.enable(e.target.checked));
+    const masterLbl = document.createElement("label");
+    masterLbl.htmlFor = "notif-master-enable";
+    masterLbl.textContent = " 通知全体を有効";
+    const testAllBtn = document.createElement("button");
+    testAllBtn.textContent = "全通知テスト";
+    testAllBtn.addEventListener("click", () => this.testAllNotifications());
+    masterRow.append(masterChk, masterLbl, testAllBtn);
+    container.appendChild(masterRow);
+
+    /* ── (B) カテゴリ別テーブル ── */
+    const levels = LEVELS;
+    const allTypes = this.getTypes();
+
+    for (const cat of NotificationManager._CATEGORIES) {
+      // カテゴリ見出し（クリックで折り畳み）
+      const catHeader = document.createElement("div");
+      catHeader.className = "notif-category";
+      catHeader.textContent = cat.label;
+
+      const tableWrap = document.createElement("div");
+
+      catHeader.addEventListener("click", () => {
+        catHeader.classList.toggle("collapsed");
+        tableWrap.style.display = catHeader.classList.contains("collapsed") ? "none" : "";
+      });
+
+      // テーブル生成
+      const table = document.createElement("table");
+      table.className = "notif-table";
+
+      // ヘッダー
+      const thead = document.createElement("thead");
+      thead.innerHTML = `<tr>
+        <th class="col-on">ON</th>
+        <th class="col-type">タイプ</th>
+        <th class="col-level">レベル</th>
+        <th class="col-talk">読み上げテキスト</th>
+        <th class="col-sound">サウンド</th>
+        <th class="col-test">テスト</th>
+      </tr>`;
+      table.appendChild(thead);
+
+      // ボディ
+      const tbody = document.createElement("tbody");
+      for (const type of cat.types) {
+        const cfg = this.map[type] || {};
+        const tr = document.createElement("tr");
+        tr.dataset.notifType = type;
+
+        // ON/OFF
+        const tdOn = document.createElement("td");
+        tdOn.className = "col-on";
+        const chk = document.createElement("input");
+        chk.type = "checkbox";
+        chk.checked = !!cfg.enabled;
+        chk.dataset.role = "enabled";
+        tdOn.appendChild(chk);
+        tr.appendChild(tdOn);
+
+        // タイプ名
+        const tdType = document.createElement("td");
+        tdType.className = "col-type";
+        const typeLabel = NotificationManager._TYPE_LABELS[type] || type;
+        tdType.textContent = typeLabel;
+        tdType.title = type;
+        tr.appendChild(tdType);
+
+        // レベル
+        const tdLevel = document.createElement("td");
+        tdLevel.className = "col-level";
+        const sel = document.createElement("select");
+        sel.dataset.role = "level";
+        for (const lv of levels) {
+          const o = document.createElement("option");
+          o.value = lv;
+          o.textContent = lv;
+          if (cfg.level === lv) o.selected = true;
+          sel.appendChild(o);
+        }
+        tdLevel.appendChild(sel);
+        tr.appendChild(tdLevel);
+
+        // 読み上げテキスト
+        const tdTalk = document.createElement("td");
+        tdTalk.className = "col-talk";
+        const talkInput = document.createElement("input");
+        talkInput.type = "text";
+        talkInput.value = cfg.talk || "";
+        talkInput.placeholder = "読み上げテキスト";
+        talkInput.dataset.role = "talk";
+        tdTalk.appendChild(talkInput);
+        tr.appendChild(tdTalk);
+
+        // サウンド
+        const tdSound = document.createElement("td");
+        tdSound.className = "col-sound";
+        const sndInput = document.createElement("input");
+        sndInput.type = "text";
+        sndInput.value = cfg.sound || "";
+        sndInput.placeholder = "音ファイル名";
+        sndInput.dataset.role = "sound";
+        tdSound.appendChild(sndInput);
+        tr.appendChild(tdSound);
+
+        // テストボタン
+        const tdTest = document.createElement("td");
+        tdTest.className = "col-test";
+        const testBtn = document.createElement("button");
+        testBtn.textContent = "▶";
+        testBtn.title = `${typeLabel} をテスト`;
+        testBtn.addEventListener("click", () => this.testNotification(type));
+        tdTest.appendChild(testBtn);
+        tr.appendChild(tdTest);
+
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      tableWrap.appendChild(table);
+
+      container.appendChild(catHeader);
+      container.appendChild(tableWrap);
+    }
+
+    /* ── (C) 追加設定: 閾値・Webhook ── */
+    const extraFs = document.createElement("fieldset");
+    extraFs.className = "notif-extra-fieldset";
+    extraFs.innerHTML = `
+      <legend>追加設定</legend>
+      <label>フィラメント残量警告閾値(%)
+        <input type="number" data-role="filament-threshold" min="1" max="50" step="1"
+               value="${Math.round(this.filamentLowThreshold * 100)}" style="width:5em;">
+      </label>
+      <label>Webhook URLs (カンマ区切り)
+        <textarea data-role="webhook-urls" rows="2" style="width:100%">${this.webhookUrls.join(",")}</textarea>
+      </label>
+    `;
+    container.appendChild(extraFs);
+
+    /* ── (D) 読み上げ設定（機器別） ── */
+    const ttsFs = document.createElement("fieldset");
+    ttsFs.className = "notif-extra-fieldset";
+    const ttsLegend = document.createElement("legend");
+    ttsLegend.textContent = "読み上げ設定（機器別）";
+    ttsFs.appendChild(ttsLegend);
+
+    // 接続済みホスト一覧を取得（＋デフォルト行）
+    const hostKeys = Object.keys(monitorData.machines || {}).filter(h => h !== "_$_NO_MACHINE_$_");
+    const ttsEntries = [{ key: "__default__", label: "デフォルト（全機器共通）" }];
+    for (const h of hostKeys) {
+      const machine = monitorData.machines[h];
+      const machineLabel = machine?.storedData?.hostname?.rawValue || machine?.storedData?.model?.rawValue || h;
+      ttsEntries.push({ key: h, label: machineLabel });
+    }
+
+    // 各ホスト用 TTS 行を生成
+    const ttsTable = document.createElement("table");
+    ttsTable.className = "notif-table";
+    ttsTable.style.marginTop = "6px";
+    const ttsThead = document.createElement("thead");
+    ttsThead.innerHTML = `<tr>
+      <th style="width:160px;">機器</th>
+      <th style="width:200px;">音声</th>
+      <th>速度</th>
+      <th style="width:50px;">テスト</th>
+    </tr>`;
+    ttsTable.appendChild(ttsThead);
+
+    const ttsTbody = document.createElement("tbody");
+    /** @type {Array<{key:string, voiceSelect:HTMLSelectElement, rateInput:HTMLInputElement}>} */
+    const ttsRows = [];
+
+    for (const entry of ttsEntries) {
+      const isDefault = entry.key === "__default__";
+      const hostTts = isDefault
+        ? { voice: this.ttsVoice, rate: this.ttsRate }
+        : this.getHostTts(entry.key);
+
+      const tr = document.createElement("tr");
+      tr.dataset.ttsHost = entry.key;
+
+      // 機器名
+      const tdHost = document.createElement("td");
+      tdHost.textContent = entry.label;
+      tdHost.style.fontSize = "12px";
+      if (isDefault) tdHost.style.fontWeight = "bold";
+      tr.appendChild(tdHost);
+
+      // 音声セレクト
+      const tdVoice = document.createElement("td");
+      const voiceSel = document.createElement("select");
+      voiceSel.dataset.role = "host-tts-voice";
+      voiceSel.style.width = "100%";
+      tdVoice.appendChild(voiceSel);
+      tr.appendChild(tdVoice);
+
+      // 速度
+      const tdRate = document.createElement("td");
+      tdRate.style.whiteSpace = "nowrap";
+      const rateIn = document.createElement("input");
+      rateIn.type = "range";
+      rateIn.min = "0.5";
+      rateIn.max = "3";
+      rateIn.step = "0.1";
+      rateIn.value = hostTts.rate;
+      rateIn.dataset.role = "host-tts-rate";
+      rateIn.style.width = "80px";
+      const rateSpan = document.createElement("span");
+      rateSpan.textContent = hostTts.rate.toFixed(1);
+      rateSpan.style.fontSize = "11px";
+      rateSpan.style.marginLeft = "4px";
+      rateIn.addEventListener("input", () => {
+        rateSpan.textContent = parseFloat(rateIn.value).toFixed(1);
+      });
+      tdRate.append(rateIn, rateSpan);
+      tr.appendChild(tdRate);
+
+      // テストボタン
+      const tdTest = document.createElement("td");
+      tdTest.style.textAlign = "center";
+      const testBtn = document.createElement("button");
+      testBtn.textContent = "▶";
+      testBtn.title = `${entry.label} の音声テスト`;
+      testBtn.addEventListener("click", () => {
+        const utter = new SpeechSynthesisUtterance("この速度と音声でお知らせします");
+        utter.rate = parseFloat(rateIn.value);
+        const voices = speechSynthesis.getVoices().filter(v => v.lang === "ja-JP" && v.localService);
+        const voice = voices.find(v => v.name === voiceSel.value) || voices[0];
+        if (voice) utter.voice = voice;
+        window.speechSynthesis.speak(utter);
+      });
+      tdTest.appendChild(testBtn);
+      tr.appendChild(tdTest);
+
+      ttsTbody.appendChild(tr);
+      ttsRows.push({ key: entry.key, voiceSelect: voiceSel, rateInput: rateIn, hostTts });
+    }
+    ttsTable.appendChild(ttsTbody);
+    ttsFs.appendChild(ttsTable);
+    container.appendChild(ttsFs);
+
+    // 音声リスト生成（全行共有）
+    /** @private 音声リストを全セレクトに反映 */
+    const populateAllVoiceLists = () => {
+      const voices = speechSynthesis
+        .getVoices()
+        .filter(v => v.lang === "ja-JP" && v.localService);
+      for (const row of ttsRows) {
+        row.voiceSelect.innerHTML = "";
+        voices.forEach(v => {
+          const opt = document.createElement("option");
+          opt.value = v.name;
+          opt.textContent = v.name;
+          row.voiceSelect.appendChild(opt);
+        });
+        if (voices.some(v => v.name === row.hostTts.voice)) {
+          row.voiceSelect.value = row.hostTts.voice;
+        }
+      }
+    };
+    populateAllVoiceLists();
+    if (speechSynthesis.onvoiceschanged !== undefined) {
+      speechSynthesis.onvoiceschanged = populateAllVoiceLists;
+    }
+
+    /* ── (E) 保存ボタン行 ── */
+    const saveRow = document.createElement("div");
+    saveRow.className = "notif-save-row";
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "btn-save";
+    saveBtn.textContent = "すべて保存";
+    saveBtn.addEventListener("click", () => this._saveModalSettings(container, ttsRows));
+    saveRow.appendChild(saveBtn);
+    container.appendChild(saveRow);
+  }
+
+  /**
+   * モーダル内の全設定を保存します。
+   *
+   * @private
+   * @param {HTMLElement} container - モーダルボディ要素
+   * @param {Array<{key:string, voiceSelect:HTMLSelectElement, rateInput:HTMLInputElement}>} ttsRows - TTS行データ
+   */
+  _saveModalSettings(container, ttsRows) {
+    // 各通知タイプの設定を保存
+    const rows = container.querySelectorAll("tr[data-notif-type]");
+    rows.forEach(tr => {
+      const type = tr.dataset.notifType;
+      this.updateNotification(type, {
+        enabled: tr.querySelector('[data-role="enabled"]').checked,
+        talk:    tr.querySelector('[data-role="talk"]').value,
+        sound:   tr.querySelector('[data-role="sound"]').value,
+        level:   tr.querySelector('[data-role="level"]').value
+      });
+    });
+
+    // 閾値・Webhook
+    const thrEl = container.querySelector('[data-role="filament-threshold"]');
+    if (thrEl) {
+      this.setFilamentLowThreshold(parseFloat(thrEl.value) / 100);
+    }
+    const urlsEl = container.querySelector('[data-role="webhook-urls"]');
+    if (urlsEl) {
+      this.setWebhookUrls(urlsEl.value.split(",").map(s => s.trim()).filter(s => s));
+    }
+
+    // per-host TTS 設定を保存
+    for (const row of ttsRows) {
+      const voice = row.voiceSelect.value;
+      const rate  = parseFloat(row.rateInput.value);
+      if (row.key === "__default__") {
+        this.ttsVoice = voice;
+        this.ttsRate  = rate;
+      } else {
+        this._hostTts.set(row.key, { voice, rate });
+      }
+    }
+    this._persistSettings();
+
+    // ログ + アラート
+    import("./dashboard_log_util.js")
+      .then(({ pushNotificationLog }) => {
+        pushNotificationLog("通知設定を保存しました", "info");
+        showAlert("通知設定を保存しました", "success");
+      })
+      .catch(() => {
+        showAlert("通知設定の保存に失敗しました", "error", true);
+      });
+  }
+
+  /**
+   * 通知設定編集UIを生成・バインドします。（旧パネル版 — 互換用）
    *
    * @function initSettingsUI
    * @param {HTMLElement} container - #notification-panel-body
+   * @deprecated initModalUI を使用してください
    */
   initSettingsUI(container) {
-    container.innerHTML = "";
-
-    // (A) 通知全体 ON/OFF
-    const master = document.createElement("label");
-    master.innerHTML = `<input type="checkbox" ${this.enabled ? "checked" : ""}> 通知全体を有効`;
-    master.querySelector("input")
-          .addEventListener("change", e => this.enable(e.target.checked));
-    container.append(master, document.createElement("hr"));
-
-    // (B) 全通知テスト
-    const btnAll = document.createElement("button");
-    btnAll.textContent = "全通知テスト";
-    btnAll.addEventListener("click", () => this.testAllNotifications());
-    container.appendChild(btnAll);
-
-    // (C) 各タイプ設定UI
-    const types  = this.getTypes();
-    const levels = LEVELS;
-    types.forEach(type => {
-      const cfg = this.map[type] || {};
-      const item = document.createElement("div");
-      item.className = "notif-item";
-
-      // Enable checkbox
-      const chk = document.createElement("input");
-      chk.type    = "checkbox";
-      chk.checked = !!cfg.enabled;
-      item.appendChild(chk);
-
-      // Label
-      const lbl = document.createElement("label");
-      lbl.textContent = ` ${type}`;
-      item.appendChild(lbl);
-
-      // Test button
-      const test = document.createElement("button");
-      test.textContent = "テスト";
-      test.addEventListener("click", () => this.testNotification(type));
-      item.appendChild(test);
-
-      // Talk text input
-      const talk = document.createElement("input");
-      talk.type        = "text";
-      talk.value       = cfg.talk || "";
-      talk.placeholder = "読み上げテキスト";
-      item.appendChild(talk);
-
-      // Sound filename input
-      const snd = document.createElement("input");
-      snd.type        = "text";
-      snd.value       = cfg.sound || "";
-      snd.placeholder = "音ファイル名";
-      item.appendChild(snd);
-
-      // Level select
-      const sel = document.createElement("select");
-      levels.forEach(lv => {
-        const o = document.createElement("option");
-        o.value       = lv;
-        o.textContent = lv;
-        if (cfg.level === lv) o.selected = true;
-        sel.appendChild(o);
-      });
-      item.appendChild(sel);
-
-      container.appendChild(item);
-    });
-
-    // (D) 保存ボタン
-    const notifSaveBtn = document.createElement("button");
-    notifSaveBtn.textContent = "保存";
-    notifSaveBtn.addEventListener("click", () => {
-      container.querySelectorAll(".notif-item").forEach((item, i) => {
-        // input と select を順に取得し [checkbox, talk, sound, level] と4要素で分解
-        const [chk, talk, snd, sel] = item.querySelectorAll("input,select");
-        this.updateNotification(types[i], {
-          enabled: chk.checked,
-          talk:    talk.value,
-          sound:   snd.value,
-          level:   sel.value
-        });
-      });
-
-      // ログ出力
-      import("./dashboard_log_util.js")
-        .then(({ pushNotificationLog }) => {
-          pushNotificationLog("通知設定を保存しました", "info");
-          // 成功アラートを表示
-          showAlert("通知設定を保存しました", "success");
-        })
-        .catch(() => {
-          // 万一の失敗時はエラーアラートを表示
-          showAlert("通知設定の保存に失敗しました", "error", true);
-        });
-    });
-    container.appendChild(notifSaveBtn);
-
-    // (E) 閾値・Webhook 設定フィールド
-    const extraFs = document.createElement("fieldset");
-    extraFs.className = "extra-settings";
-    extraFs.style.cssText = "margin-top:1em;padding:0.5em;border:1px solid #ccc;border-radius:4px;";
-    extraFs.innerHTML = `
-      <legend>追加設定</legend>
-      <label>フィラメント残量警告閾値(%)<input type="number" id="filament-threshold" min="1" max="50" step="1" value="${Math.round(this.filamentLowThreshold*100)}"></label>
-      <label style="display:block;margin-top:0.5em;">Webhook URLs (comma separated)
-        <textarea id="webhook-urls" rows="2" style="width:100%">${this.webhookUrls.join(",")}</textarea>
-      </label>
-      <button id="extra-save-btn">保存</button>
-    `;
-    container.appendChild(extraFs);
-    extraFs.querySelector("#extra-save-btn").addEventListener("click", () => {
-      const thr = parseFloat(extraFs.querySelector("#filament-threshold").value) / 100;
-      const urls = extraFs.querySelector("#webhook-urls").value.split(",").map(s => s.trim()).filter(s => s);
-      this.setFilamentLowThreshold(thr);
-      this.setWebhookUrls(urls);
-      showAlert("追加通知設定を保存しました", "success");
-    });
-
-    // (F) 読み上げ設定フィールド
-    const ttsFs = document.createElement("fieldset");
-    ttsFs.className = "tts-settings";
-    ttsFs.style.cssText = "margin-top:1em;padding:0.5em;border:1px solid #ccc;border-radius:4px;";
-    ttsFs.innerHTML = `
-      <legend>読み上げ設定</legend>
-      <label for="tts-voice-select">音声を選択：</label>
-      <select id="tts-voice-select"></select>
-      <div style="margin:0.5em 0;">
-        <input type="text" id="tts-test-text" value="この速度と音声でお知らせします">
-        <button id="tts-test-btn">発声テスト</button>
-      </div>
-      <div style="margin:0.5em 0;">
-        <label for="tts-rate">速度：</label>
-        <input type="range" id="tts-rate" min="0.5" max="3" step="0.1">
-        <span id="tts-rate-value"></span>
-      </div>
-      <button id="tts-save-btn">読み上げ設定を保存</button>
-    `;
-    container.appendChild(ttsFs);
-
-    const voiceSelect = ttsFs.querySelector("#tts-voice-select");
-    const rateInput   = ttsFs.querySelector("#tts-rate");
-    const rateValue   = ttsFs.querySelector("#tts-rate-value");
-    const ttsSaveBtn  = ttsFs.querySelector("#tts-save-btn");
-    const testInput   = ttsFs.querySelector("#tts-test-text");
-    const testBtn     = ttsFs.querySelector("#tts-test-btn");
-
-    /**
-     * 利用可能な音声リストを `<select>` に反映します。
-     * - ja-JP かつ localService=true の音声のみを対象とします。
-     *
-     * @function populateVoiceList
-     * @private
-     */
-    const populateVoiceList = () => {
-      const voices = speechSynthesis
-        .getVoices()
-        .filter(v => v.lang === "ja-JP" && v.localService);
-
-      voiceSelect.innerHTML = "";
-      voices.forEach(v => {
-        const opt = document.createElement("option");
-        opt.value = v.name;
-        opt.textContent = `${v.name} (${v.lang})`;
-        voiceSelect.appendChild(opt);
-      });
-
-      if (voices.some(v => v.name === this.ttsVoice)) {
-        voiceSelect.value = this.ttsVoice;
-      }
-    };
-
-    populateVoiceList();
-    if (speechSynthesis.onvoiceschanged !== undefined) {
-      speechSynthesis.onvoiceschanged = populateVoiceList;
-    }
-
-    rateInput.value = this.ttsRate;
-    rateValue.textContent = this.ttsRate.toFixed(1);
-
-    rateInput.addEventListener("input", e => {
-      rateValue.textContent = parseFloat(e.target.value).toFixed(1);
-    });
-
-    ttsSaveBtn.addEventListener("click", () => {
-      this.setTtsVoice(voiceSelect.value);
-      this.setTtsRate(parseFloat(rateInput.value));
-      showAlert("読み上げ設定を保存しました", "success");
-    });
-
-    testBtn.addEventListener("click", () => {
-      const utter = new SpeechSynthesisUtterance(testInput.value);
-      utter.rate = parseFloat(rateInput.value);
-      const voices = speechSynthesis
-        .getVoices()
-        .filter(v => v.lang === "ja-JP" && v.localService);
-      const voice = voices.find(v => v.name === voiceSelect.value) || voices[0];
-      if (voice) utter.voice = voice;
-      window.speechSynthesis.speak(utter);
-    });
-
-
+    // 旧UIは接続モーダルに移行済み。互換のため initModalUI に委譲
+    this.initModalUI(container);
   }
 }
 
 
 
 /* ------------------------------------------------------------------
- * シングルトンとしてエクスポート
+ * 共有インスタンスとしてエクスポート。
+ * 通知設定（読み上げテキスト、サウンド等）は per-host 化対象。
+ * TTS 音声・速度は per-host で管理される（機器ごとに声を変更可能）。
  * ------------------------------------------------------------------ */
 export const notificationManager = new NotificationManager();

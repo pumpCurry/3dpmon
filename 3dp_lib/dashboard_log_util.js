@@ -37,7 +37,7 @@
 
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { LEVELS } from "./dashboard_constants.js";
-import { monitorData, scopedById, currentHostname } from "./dashboard_data.js";
+import { monitorData, scopedById } from "./dashboard_data.js";
 
 /** 最大保持ログ行数 */
 // const MAX_LOG_LINES = 1000; // monitorDataからもってくることになりました
@@ -389,7 +389,7 @@ export function pushLog(msg, level = "info", notify = false, hostname) {
     level,
     msg: safeMessage,
     notify,
-    hostname: hostname || currentHostname || undefined
+    hostname: hostname || undefined
   };
   logManager.add(entry);
 }

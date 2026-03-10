@@ -428,6 +428,13 @@ export function createFilamentPreview(mount, opts) {
 
   /* --- ルート要素 -------------------------------------------------- */
   mount.classList.add('dfv-card');
+  // スケール用の内部ラッパー（resize API で transform: scale を適用する対象）
+  // position: absolute でレイアウトフローから外し、スケール後にクリップされないようにする
+  const scaleWrapper = document.createElement('div');
+  scaleWrapper.className = 'dfv-scale-wrapper';
+  scaleWrapper.style.cssText = 'position:absolute; top:0; left:50%; transform:translateX(-50%);';
+  mount.appendChild(scaleWrapper);
+
   const root = div('dfv-root');
   root.style.width  = o.widthPx  + 'px';
   root.style.height = o.heightPx + 'px';
@@ -435,7 +442,7 @@ export function createFilamentPreview(mount, opts) {
   root.style.fontSize = (16 * scale) + 'px';
   root.style.perspective = (Math.max(o.widthPx, o.heightPx) * 2) + 'px';
   root.classList.add('root');
-  mount.appendChild(root);
+  scaleWrapper.appendChild(root);
 
   /* --- 内部状態 ---------------------------------------------------- */
   let rotX = o.initialRotX;
@@ -445,6 +452,22 @@ export function createFilamentPreview(mount, opts) {
   let isPresent  = o.isFilamentPresent;
   let autoRotate   = false;
   let autoRotateId = null;
+
+  /**
+   * 回転軸の現在値を最短経路でターゲット角度へ設定する。
+   * CSS transition や視覚的ジャンプを防止するため、差分を ±180° 以内に収める。
+   * @param {number} current - 現在の角度（正規化済み 0〜360）
+   * @param {number} target  - 目標角度
+   * @returns {number} 最短経路で到達する角度値
+   */
+  function _smoothAngle(current, target) {
+    const cur = ((current % 360) + 360) % 360;
+    const tgt = ((target  % 360) + 360) % 360;
+    let diff = tgt - cur;
+    if (diff >  180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return cur + diff;
+  }
 
   /* --- 数式用定数 -------------------------------------------------- */
   const d  = o.filamentDiameter;
@@ -644,7 +667,7 @@ export function createFilamentPreview(mount, opts) {
   controlsDiv.style.alignItems    = 'flex-start';
   controlsDiv.style.gap = '4px';
 
-  mount.appendChild(controlsDiv);
+  scaleWrapper.appendChild(controlsDiv);
   if (slider) controlsDiv.appendChild(slider);
   // ───────── ボタン群のラッパー ─────────
   const btnWrapper = div('dfv-btn-wrapper');
@@ -671,7 +694,7 @@ export function createFilamentPreview(mount, opts) {
         btnAuto.classList.remove('dfv-btn-active');
       }
       rotX = o.initialRotX;
-      rotY = o.initialRotY;
+      rotY = _smoothAngle(rotY, o.initialRotY);
       rotZ = o.initialRotZ;
       redraw();
     });
@@ -694,7 +717,7 @@ export function createFilamentPreview(mount, opts) {
       }
 
       rotX = -25;
-      rotY =  35;
+      rotY = _smoothAngle(rotY, 35);
       rotZ = -50;
       redraw();
     });
@@ -716,7 +739,7 @@ export function createFilamentPreview(mount, opts) {
       }
 
       rotX =   0;
-      rotY =   0;
+      rotY = _smoothAngle(rotY, 0);
       rotZ = -50;
       redraw();
     });
@@ -739,7 +762,7 @@ export function createFilamentPreview(mount, opts) {
       }
 
       rotX = -42;
-      rotY =  90;
+      rotY = _smoothAngle(rotY, 90);
       rotZ = -50;
       redraw();
     });
@@ -780,7 +803,7 @@ export function createFilamentPreview(mount, opts) {
     btnBuyWrapper.style.flexDirection = 'row';
     btnBuyWrapper.style.alignItems    = 'center';
     btnBuyWrapper.style.gap           = '4px';
-    mount.appendChild(btnBuyWrapper);
+    scaleWrapper.appendChild(btnBuyWrapper);
 
     const btnBuy = document.createElement('button');
     btnBuy.textContent = '🛒';
@@ -821,7 +844,7 @@ export function createFilamentPreview(mount, opts) {
   infoContainer.appendChild(infoLayers);
   infoContainer.appendChild(infoRot);
 
-  mount.appendChild(infoContainer);
+  scaleWrapper.appendChild(infoContainer);
 
 
 
@@ -1023,17 +1046,14 @@ export function createFilamentPreview(mount, opts) {
     }
 
     /* ----- 3D 回転 ---- */
-    //let rotZval = rotZ;
-
-    /* ----- 3D 回転 ---- */
-    // rotY を [0,360) に正規化
-    const y360 = ((rotY % 360) + 360) % 360;
+    // rotY を [0,360) に正規化し、累積による巨大値を防止
+    rotY = ((rotY % 360) + 360) % 360;
     // autoRotate 時は、正面(0–180)ならそのまま、背面(180–360)なら Z を反転
     const rotZval = autoRotate
-      ? (y360 < 180 ? rotZ : -rotZ)
+      ? (rotY < 180 ? rotZ : -rotZ)
       : rotZ;
 
-    scene.style.transform = 
+    scene.style.transform =
       `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZval}deg)`;
 
     /* ----- オーバーレイ情報更新 ----- */
@@ -1177,7 +1197,7 @@ export function createFilamentPreview(mount, opts) {
   if (btnReset) {
     btnReset.addEventListener('click', () => {
       rotX = o.initialRotX;
-      rotY = o.initialRotY;
+      rotY = _smoothAngle(rotY, o.initialRotY);
       rotZ = o.initialRotZ;
       redraw();
     });
@@ -1237,9 +1257,27 @@ export function createFilamentPreview(mount, opts) {
     /** 回転リセット */
     resetRotation(){
       rotX = o.initialRotX;
-      rotY = o.initialRotY;
+      rotY = _smoothAngle(rotY, o.initialRotY);
       rotZ = o.initialRotZ;
       redraw();
+    },
+
+    /**
+     * パネルサイズに合わせて CSS transform scale で拡縮する。
+     * 内部の px ベース描画はそのまま維持し、scaleWrapper をスケーリングする。
+     * root の perspective との干渉を回避するため独立ラッパーを使用。
+     * @param {number} containerW - コンテナ幅 [px]
+     * @param {number} containerH - コンテナ高さ [px]
+     */
+    resize(containerW, containerH) {
+      // スケール計算前に一時的にリセットして実コンテンツサイズを取得
+      scaleWrapper.style.transform = 'translateX(-50%)';
+      // offsetWidth/Height は position:absolute でも正確に取得可能
+      const contentW = scaleWrapper.offsetWidth  || o.widthPx;
+      const contentH = scaleWrapper.offsetHeight || o.heightPx;
+      const s = Math.min(containerW / contentW, containerH / contentH, 1.5);
+      scaleWrapper.style.transformOrigin = 'top center';
+      scaleWrapper.style.transform = `translateX(-50%) scale(${s})`;
     }
   };
 }
