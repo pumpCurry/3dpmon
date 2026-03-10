@@ -290,10 +290,6 @@ export function initializeCommandPalette(root) {
   COMMAND_MAPPINGS.forEach(({ buttonId, method, getParams, inputIds, confirm }) => {
     const btn = _findById(buttonId);
     if (!btn) {
-      /* パネルモードでは各パネルがボタンの一部のみ含むため、未検出は想定内 */
-      if (!_cmdRoot) {
-        console.warn(`initializeCommandPalette: ボタン要素 '${buttonId}' が見つかりません`);
-      }
       return;
     }
     // バリデーション関数

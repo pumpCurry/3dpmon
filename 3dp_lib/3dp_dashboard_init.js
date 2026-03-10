@@ -112,7 +112,12 @@ export function initializeDashboard({
   onMessage,
   notificationManager
 }) {
-  // (1) ストレージ復元／マイグレーション
+  // (1) ホスト未定義ならプレースホルダ設定（ストレージ復元より先に必要）
+  if (!currentHostname) {
+    setCurrentHostname(PLACEHOLDER_HOSTNAME);
+  }
+
+  // (2) ストレージ復元／マイグレーション
   restoreLegacyStoredData();
   cleanupLegacy();
   restoreUnifiedStorage();
@@ -127,11 +132,6 @@ export function initializeDashboard({
       setCurrentSpoolId(sp.id);
       saveUnifiedStorage();
     }
-  }
-
-  // (2) ホスト未定義ならプレースホルダ設定
-  if (!currentHostname) {
-    setCurrentHostname(PLACEHOLDER_HOSTNAME);
   }
 
   // (3) プレビュー復元＆初期化
