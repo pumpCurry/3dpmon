@@ -20,14 +20,17 @@
  * - {@link stopHeartbeat}：ハートビート停止
  * - {@link disconnectWs}：接続解除
  * - {@link setupConnectButton}：接続ボタン初期化
- * - {@link sendCommand}：任意コマンド送信
- * - {@link sendGcodeCommand}：G-code 送信
+ * - {@link sendCommand}：任意コマンド送信（タイムアウト付き）
+ * - {@link sendGcodeCommand}：G-code 送信（タイムアウト付き）
  * - {@link updateConnectionUI}：UI 状態更新
  * - {@link simulateReceivedJson}：受信データシミュレート
+ * - {@link cleanupConnection}：接続情報の完全破棄
+ * - {@link getConnectionMap}：接続中ホスト一覧取得
+ * - {@link getConnectionState}：指定ホストの接続状態取得
  *
- * @version 1.390.683 (PR #314)
+ * @version 1.390.783 (PR #366)
  * @since   1.390.451 (PR #205)
- * @lastModified 2025-07-10 15:54:39
+ * @lastModified 2026-03-11 01:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,7 +43,10 @@ import {
   currentHostname,
   PLACEHOLDER_HOSTNAME,
   setCurrentHostname,
-  setNotificationSuppressed
+  setNotificationSuppressed,
+  setStoredDataForHost,
+  ensureMachineData,
+  markAllKeysDirty
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
@@ -48,8 +54,11 @@ import { handleMessage } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { startCameraStream } from "./dashboard_camera_ctrl.js";
+import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
+import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
+import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -80,9 +89,124 @@ const connectionMap = {};
 /** 再接続上限回数 */
 const MAX_RECONNECT = 5;
 
+/* ─── 接続先リスト永続化ヘルパー ─── */
+
+/**
+ * 接続先を connectionTargets リストに追加し永続化する。
+ * 同一 dest（IP:PORT 完全一致）の重複は登録しない。
+ * 機器ごとにポートが異なる場合があるため、IP のみでの照合は行わない。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式の接続先
+ */
+function _addConnectionTarget(dest) {
+  if (!dest) return;
+  const targets = monitorData.appSettings.connectionTargets ??= [];
+  /* 同一 dest（IP:PORT）の重複を防ぐ */
+  if (targets.some(t => t.dest === dest)) return;
+  targets.push({ dest, color: "", label: "", hostname: "" });
+  saveUnifiedStorage();
+}
+
+/**
+ * 接続先設定にホスト名を紐づける。
+ * ホスト名解決後に呼び出してラベル表示等に利用する。
+ *
+ * @private
+ * @param {string} dest     - "IP:PORT" 形式
+ * @param {string} hostname - 解決されたホスト名
+ */
+function _setConnectionTargetHostname(dest, hostname) {
+  const t = _findConnectionTarget(dest);
+  if (t && t.hostname !== hostname) {
+    t.hostname = hostname;
+    saveUnifiedStorage();
+  }
+}
+
+/**
+ * 接続先設定を dest（IP:PORT）で検索して返す。
+ * dest 完全一致 → ホスト名一致 の優先順で検索する。
+ *
+ * @private
+ * @param {string} destOrHost - "IP:PORT" 形式の接続先、またはホスト名
+ * @returns {object|null} connectionTargets 内のエントリ、または null
+ */
+function _findConnectionTarget(destOrHost) {
+  if (!destOrHost) return null;
+  const targets = monitorData.appSettings.connectionTargets || [];
+  /* dest 完全一致（IP:PORT）を優先 */
+  const exact = targets.find(t => t.dest === destOrHost);
+  if (exact) return exact;
+  /* ホスト名での検索（connectWs からの逆引き用） */
+  return targets.find(t => t.hostname === destOrHost) || null;
+}
+
+/**
+ * 接続先を connectionTargets リストから削除し永続化する。
+ * dest（IP:PORT）完全一致で検索する。
+ * 削除前に保存されていたホスト名を返す（クリーンアップ用）。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式の接続先
+ * @returns {string} 削除されたエントリに紐づくホスト名（未設定時は空文字）
+ */
+function _removeConnectionTarget(dest) {
+  if (!dest) return "";
+  const targets = monitorData.appSettings.connectionTargets;
+  if (!targets) return "";
+  const idx = targets.findIndex(t => t.dest === dest);
+  if (idx >= 0) {
+    const removed = targets.splice(idx, 1)[0];
+    saveUnifiedStorage();
+    return removed.hostname || "";
+  }
+  return "";
+}
+
+/**
+ * 全保存済み接続先に自動接続する。
+ * 起動時に呼び出す。wsDest（メイン）と connectionTargets の両方をカバーする。
+ *
+ * @function connectAllSavedTargets
+ * @returns {void}
+ */
+export function connectAllSavedTargets() {
+  const connected = new Set();
+
+  /* wsDest が connectionTargets に未登録なら移行する（後方互換） */
+  const main = monitorData.appSettings.wsDest;
+  if (main) {
+    _addConnectionTarget(main);
+  }
+
+  /* connectionTargets を唯一の接続先リストとして使用 */
+  const targets = monitorData.appSettings.connectionTargets || [];
+  for (const t of targets) {
+    const ip = t.dest.split(":")[0];
+    if (!connected.has(ip)) {
+      connected.add(ip);
+      connectWs(t.dest);
+    }
+  }
+}
+
+/** sendCommand 応答待ちタイムアウト（ミリ秒） */
+const SEND_COMMAND_TIMEOUT_MS = 15_000;
+
+/** ホスト確定前メッセージバッファの上限 */
+const MAX_BUFFER_SIZE = 100;
+
 let isAutoScrollEnabled = true;      // 現在「自動スクロール中」なら true
 let lastActiveTab = "received";      // "received" or "error"
 let lastWsAlertTime = 0;             // 最後に接続エラーを表示した時刻
+
+/**
+ * 各ホストのカウントダウンタイマーID を保持するマップ。
+ * 再接続待機中のカウントダウン表示タイマーの競合を防止する。
+ * @type {Record<string, number|null>}
+ */
+const countdownTimers = {};
 
 /**
  * ダミー状態（未選択時に使用）
@@ -174,14 +298,29 @@ export function fetchStoredData(host = currentHostname) {
 }
 
 /**
- * 現在設定されている monitorData.appSettings.wsDest から IP を抽出する。
+ * 指定ホストの接続先 IP アドレスを返す。
+ *
+ * @function getDeviceIp
+ * @param {string} [host=currentHostname] - ホスト名
  * @returns {string} IP アドレス文字列（失敗時は空文字）
  */
 export function getDeviceIp(host = currentHostname) {
   const st = connectionMap[host];
   const raw = st?.dest || monitorData.appSettings.wsDest || "";
-  const h = raw.split(":")[0];
-  return h || "";
+  return raw.split(":")[0] || "";
+}
+
+/**
+ * 指定ホストの接続先 "IP:PORT" を返す。
+ * WebSocket ポートが機器ごとに異なる場合に dest 全体を取得するために使用する。
+ *
+ * @function getDeviceDest
+ * @param {string} [host=currentHostname] - ホスト名
+ * @returns {string} "IP:PORT" 形式（失敗時は空文字）
+ */
+export function getDeviceDest(host = currentHostname) {
+  const st = connectionMap[host];
+  return st?.dest || monitorData.appSettings.wsDest || "";
 }
 
 /**
@@ -195,11 +334,25 @@ export function getDeviceIp(host = currentHostname) {
  * @returns {string} 実際に利用されるホスト名
  */
 export function updateConnectionHost(oldHost, newHost) {
-  if (oldHost === newHost || newHost === PLACEHOLDER_HOSTNAME) {
+  if (newHost === PLACEHOLDER_HOSTNAME) {
+    return oldHost;
+  }
+  if (oldHost === newHost) {
+    /* キーは同一でもパネルが未生成の可能性があるため確保する */
+    _syncPanelsForHost(newHost);
     return oldHost;
   }
   const state = connectionMap[oldHost];
   if (!state) return newHost;
+
+  /* 接続先設定にホスト名を紐づける */
+  const dest = state.dest || oldHost;
+  _setConnectionTargetHostname(dest, newHost);
+
+  /* ★ HEAD版と同じく、updateConnectionHost では machines を触らない。
+     machines のホスト名キー移行は handleMessage → setCurrentHostname で
+     自然に行われる。machines[IP] は孤立するが害はなく、
+     明示的な削除操作時にのみ _cleanupMachineKeys で除去する。 */
 
   const target = connectionMap[newHost];
   if (target) {
@@ -217,6 +370,7 @@ export function updateConnectionHost(oldHost, newHost) {
       updateConnectionUI(target.state, {}, newHost);
     }
     updatePrinterListUI();
+    _syncPanelsForHost(newHost, oldHost);
     return newHost;
   }
 
@@ -234,6 +388,7 @@ export function updateConnectionHost(oldHost, newHost) {
     updateConnectionUI(state.state, {}, newHost);
   }
   updatePrinterListUI();
+  _syncPanelsForHost(newHost, oldHost);
   return newHost;
 }
 
@@ -262,6 +417,80 @@ function flushBufferedMessages(host) {
 }
 
 
+/**
+ * _cleanupMachineKeys:
+ * --------------------
+ * 指定された全キーに対して monitorData.machines の **IP キー** エントリのみ削除する。
+ * ホスト名キー（非IPキー）は削除しない。
+ * IP が変わっても同一ホスト名であればデータを引き継げるようにするため。
+ *
+ * ユーザによる明示的な接続先削除時にのみ呼び出す。
+ *
+ * @private
+ * @param {string[]} keys - 削除対象のキー配列（IP アドレスのみ渡すこと）
+ * @returns {void}
+ */
+function _cleanupMachineKeys(keys) {
+  const IP_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+  for (const key of keys) {
+    if (!key || key === PLACEHOLDER_HOSTNAME) continue;
+    /* ホスト名キーを誤って消さないよう、IP 形式のみ対象とする */
+    if (!IP_RE.test(key)) continue;
+    if (monitorData.machines[key]) {
+      delete monitorData.machines[key];
+    }
+  }
+}
+
+/**
+ * getHttpPort:
+ * -------------
+ * 指定ホストの HTTP ポートを返す。
+ * connectionTarget に httpPort が設定されていればそれを使い、
+ * なければ appSettings.httpPort のデフォルト（80）を返す。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @returns {number} HTTP ポート番号
+ */
+export function getHttpPort(host) {
+  const st = connectionMap[host];
+  const dest = st?.dest || "";
+  const tgt = _findConnectionTarget(dest) || _findConnectionTarget(host);
+  return tgt?.httpPort || monitorData.appSettings.httpPort || 80;
+}
+
+/**
+ * _syncPanelsForHost:
+ * -------------------
+ * ホスト名確定時にパネルを同期する。
+ * - oldHost が指定された場合: IP→ホスト名のパネルID移行を行う
+ * - 接続ホストが1台目の場合: "shared" パネルをそのホストに移行
+ * - 2台目以降の場合: そのホスト用のデフォルトパネルセットを生成
+ *
+ * @private
+ * @param {string} hostname - 確定したホスト名
+ * @param {string} [oldHost] - 旧ホスト名（IP→ホスト名移行時に指定）
+ * @returns {void}
+ */
+function _syncPanelsForHost(hostname, oldHost) {
+  if (!hostname || hostname === "shared" || hostname === PLACEHOLDER_HOSTNAME) return;
+
+  /* IP→ホスト名移行: 旧IPベースのパネルを新ホスト名に移行する */
+  if (oldHost && oldHost !== hostname) {
+    renamePanelsHost(oldHost, hostname);
+  }
+
+  /* shared パネルの移行を試みる（起動時に shared で生成されている場合） */
+  const migrated = migratePanelsToHost(hostname);
+
+  /* 移行対象がなかった場合（初回起動でパネル未生成 or 2台目以降）
+     → このホスト用パネルを自動生成する */
+  if (migrated === 0) {
+    ensureHostPanels(hostname);
+  }
+}
+
 /* ===================== WebSocket 接続・受信処理 ===================== */
 
 /**
@@ -286,18 +515,42 @@ function flushBufferedMessages(host) {
  * @returns {void}
  */
 export function connectWs(hostOrDest) {
-  const inputDest = document.getElementById("destination-input")?.value.trim();
-  let dest = hostOrDest || inputDest || monitorData.appSettings.wsDest || "";
+  let dest = hostOrDest || "";
   if (!dest) return;
   if (!dest.includes(":")) dest += ":9999";
-  const host = dest.split(":")[0];
-  // 接続開始直後から currentHostname を最新に保つ
-  setCurrentHostname(host);
+  const ip = dest.split(":")[0];
+
+  /* 再接続時に正しいホスト名キーを使うため、connectionTargets に保存済みの
+     ホスト名を参照する。ホスト名が未確定（初回接続等）の場合は IP をキーにする。
+     これにより、再接続時に connectionMap に IP キーの孤立エントリが生まれる問題を防ぐ。 */
+  const target = _findConnectionTarget(dest);
+  const host = (target?.hostname) || ip;
+
+  // 初回接続 or まだ PLACEHOLDER の場合のみ currentHostname を切り替える。
+  // 2台目以降の追加接続では currentHostname を変更しない（既存接続のデータ処理を維持）。
+  //
+  // ★ ホスト名未知（初回IP接続で target.hostname が空）の場合は
+  //    setCurrentHostname を呼ばない。handleMessage() の初期化ブロック
+  //    (restoreUnifiedStorage / restartAggregatorTimer 等) は
+  //    currentHostname が null/PLACEHOLDER の状態でのみ実行されるため、
+  //    ここで IP を設定してしまうと初期化パスがスキップされる。
+  //    WS 応答の data.hostname を受信した時点で handleMessage() 内で
+  //    setCurrentHostname(hostname) が呼ばれ初期化が実行される。
+  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
+    if (target?.hostname) {
+      // ホスト名が既知（再接続）→ 即座に設定
+      setCurrentHostname(host);
+    }
+    // 後方互換: wsDest にメイン接続先を保持
+    monitorData.appSettings.wsDest = dest;
+  }
   const state = getState(host);
   state.dest = dest;
   state.historyReceived = false;
   state.hostReadyAt = null;
 
+  /* 接続先を永続リストに保存 */
+  _addConnectionTarget(dest);
 
   if (state.userDisc) {
     state.reconnect = 0;
@@ -345,13 +598,22 @@ function handleSocketOpen(host) {
   }
   st.state = "connected";
   updatePrinterListUI();
+
+  /* ホスト名が既知の場合（再接続等）はパネルを確保する。
+     未知（IP接続の初回）の場合は handleSocketMessage での
+     hostname 解決後に _syncPanelsForHost が呼ばれる。 */
+  const knownTarget = _findConnectionTarget(st.dest || host);
+  if (knownTarget?.hostname && knownTarget.hostname === host) {
+    _syncPanelsForHost(host);
+  }
+
   if (monitorData.appSettings.cameraToggle) {
-    startCameraStream();
+    startCameraStream(host);
   }
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
 
-  // ホスト名確定後に履歴/ファイル一覧を遅延取得するタイマー
+  // ホスト名確定後に履歴/ファイル一覧を遅延取得する
   st.historyReceived = false;
   st.hostReadyAt = null;
   st.fileReqSent = false;
@@ -367,8 +629,17 @@ function handleSocketOpen(host) {
       st.hostReadyAt = null;
       return;
     }
-    const hostReady =
-      currentHostname !== PLACEHOLDER_HOSTNAME && currentHostname !== host;
+    // ホスト名確定判定: connectionMap 内で正式名に変わったか確認
+    // IP接続→正式名解決のパターンと、正式名で直接接続のパターン両方に対応
+    const actualHost = Object.keys(connectionMap).find(
+      k => connectionMap[k] === st
+    );
+
+    // ホスト名解決済み判定:
+    // - actualHost が存在し PLACEHOLDER でない
+    // - 接続先 host と同じ（正式名で接続された場合）、
+    //   または host と異なる（IP→正式名に変わった場合）
+    const hostReady = actualHost && actualHost !== PLACEHOLDER_HOSTNAME;
     if (!hostReady) {
       return;
     }
@@ -383,14 +654,18 @@ function handleSocketOpen(host) {
 
     const elapsed = Date.now() - st.hostReadyAt;
 
+    // ファイル一覧を要求（actualHost 宛にコマンド送信）
     if (!st.fileReqSent && elapsed >= 2500) {
-      document.getElementById("btn-file-list")?.click();
+      sendCommand("get", { reqGcodeFileInfo: 1 }, actualHost)
+        .catch(e => console.debug(`[fetchTimer] fileInfo 要求失敗: ${e.message}`));
       st.fileReqSent = true;
     }
 
-    if (!st.historyReqSent && elapsed >= 7500) {
+    // 印刷履歴を要求
+    if (!st.historyReqSent && elapsed >= 5000) {
       if (!st.historyReceived) {
-        document.getElementById("btn-history-list")?.click();
+        sendCommand("get", { reqHistory: 1 }, actualHost)
+          .catch(e => console.debug(`[fetchTimer] history 要求失敗: ${e.message}`));
       }
       st.historyReqSent = true;
     }
@@ -399,12 +674,10 @@ function handleSocketOpen(host) {
       clearInterval(st.fetchTimer);
       st.fetchTimer = null;
       st.hostReadyAt = null;
-      st.fileReqSent = false;
-      st.historyReqSent = false;
     }
-  }, 100);
+  }, 500);
 
-};
+}
 
 
 /**
@@ -448,17 +721,22 @@ function handleSocketMessage(event, host) {
     return;
   }
 
-// 5) パース失敗 → 異常データとしてトラップ
-  if (typeof data !== "object" && data === null) {
+// 5) パース結果が null またはオブジェクト以外 → 異常データとしてトラップ
+  if (data === null || typeof data !== "object") {
     pushLog("非オブジェクト形式のメッセージ: " + event.data, "warn");
     console.warn("[ws.onmessage] 非オブジェクト:", data);
     return;
   }
 
-  // --- 5a) ホスト名未確定時は先に hostname を処理 ----------------------
+  // --- 5a) ホスト名未確定時は先に connectionMap のキーを解決 --------
+  // ★ setCurrentHostname はここでは呼ばない。
+  //    handleMessage() の初期化ブロック (line 151) が
+  //    currentHostname === null/PLACEHOLDER を条件としているため、
+  //    ここで設定すると初期化（restoreUnifiedStorage/restartAggregatorTimer等）
+  //    がスキップされてしまう。
+  //    setCurrentHostname は handleMessage() 内で呼ばれる。
   if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) &&
       data && typeof data.hostname === "string" && data.hostname) {
-    setCurrentHostname(data.hostname);
     hostKey = updateConnectionHost(hostKey, data.hostname);
   }
 
@@ -469,12 +747,13 @@ function handleSocketMessage(event, host) {
     // currentHostname が未確定 (PLACEHOLDER_HOSTNAME) の場合も
     // 受信データから hostname を得るため handleMessage を実行する
     const before = currentHostname;
-    if (hostKey === currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
+    if (hostKey === currentHostname || currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) {
       handleMessage(data);
       if (currentHostname !== before && currentHostname !== PLACEHOLDER_HOSTNAME) {
         hostKey = updateConnectionHost(hostKey, currentHostname);
       }
     } else {
+      // 非アクティブホストのデータ処理
       if (data && typeof data.hostname === "string" && data.hostname) {
         const newKey = updateConnectionHost(hostKey, data.hostname);
         if (newKey !== hostKey) {
@@ -482,7 +761,34 @@ function handleSocketMessage(event, host) {
           st = getState(hostKey);
         }
       }
-      st.buffer.push(data);
+
+      /* ホスト名解決後に、このホストが実はアクティブホストだと判明した場合
+         （例: ホスト名変更後の再接続で connectionTargets のホスト名が古い場合）
+         handleMessage を実行して UI 更新パスに乗せる */
+      if (hostKey === currentHostname) {
+        handleMessage(data);
+      } else {
+        // 非アクティブホストでも storedData にデータを蓄積する。
+        // タイマーやUI更新はスキップし、生データのみ保持する。
+        // これによりホスト切替時に即座にデータを表示できる。
+        const resolvedHost = data?.hostname || hostKey;
+        ensureMachineData(resolvedHost);
+        if (data && typeof data === "object") {
+          for (const [k, v] of Object.entries(data)) {
+            // 配列・オブジェクト系の大きなデータはスキップ
+            if (k === "historyList" || k === "elapseVideoList" || k === "retGcodeFileInfo") continue;
+            setStoredDataForHost(resolvedHost, k, v);
+          }
+        }
+        // heartbeat のみの応答は runtimeData に記録
+        if (data?.ModeCode === "heart_beat") {
+          const machine = monitorData.machines[resolvedHost];
+          if (machine) {
+            machine.runtimeData ??= {};
+            machine.runtimeData.lastHeartbeat = getCurrentTimestamp();
+          }
+        }
+      }
     }
   } catch (e) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error");
@@ -491,8 +797,9 @@ function handleSocketMessage(event, host) {
   // 現在のホスト名が有効かどうか判定
   const hostReady = hostKey === currentHostname &&
                     currentHostname !== PLACEHOLDER_HOSTNAME;
-  // 共通ベース URL
+  // 共通ベース URL（HTTP ポートは per-host または appSettings のデフォルト）
   const ip = getDeviceIp(hostKey);
+  const httpPort = getHttpPort(hostKey);
   const baseUrl = `http://${ip}`;
 
 // 6) 印刷履歴情報の保存・再描画
@@ -501,15 +808,15 @@ function handleSocketMessage(event, host) {
     // （dashboard_printManager.js 側で実装）
     if (hostReady && Array.isArray(data.historyList)) {
       pushLog("historyList を受信しました", "info");
-      const baseUrl80 = `http://${getDeviceIp(hostKey)}:80`;
-      printManager.updateHistoryList(data.historyList, baseUrl80, hostKey);
+      const baseUrlHttp = `http://${ip}:${httpPort}`;
+      printManager.updateHistoryList(data.historyList, baseUrlHttp, hostKey);
       const s = getState(hostKey);
       s.historyReceived = true;
     }
     if (hostReady && Array.isArray(data.elapseVideoList)) {
       pushLog("elapseVideoList を受信しました", "info");
-      const baseUrl80 = `http://${getDeviceIp(hostKey)}:80`;
-      printManager.updateVideoList(data.elapseVideoList, baseUrl80, hostKey);
+      const baseUrlHttp = `http://${ip}:${httpPort}`;
+      printManager.updateVideoList(data.elapseVideoList, baseUrlHttp, hostKey);
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
@@ -585,6 +892,7 @@ function handleSocketClose(host) {
   if (st.userDisc) {
     st.userDisc  = false;
     st.state = "disconnected";
+    stopCameraStream(host);
     if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
     updatePrinterListUI();
     pushLog("ユーザー操作により切断されました。", "info");
@@ -593,6 +901,7 @@ function handleSocketClose(host) {
 
   // 自動再接続が上限に達した場合
   if (st.reconnect >= MAX_RECONNECT) {
+    stopCameraStream(host);
     if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
     st.state = "disconnected";
     updatePrinterListUI();
@@ -620,9 +929,15 @@ function handleSocketClose(host) {
   st.state = "waiting";
   updatePrinterListUI();
   
-  // ③ カウントダウンタイマー開始
+  // ③ 既存カウントダウンタイマーがあればクリア（競合防止）
+  if (countdownTimers[host]) {
+    clearInterval(countdownTimers[host]);
+    countdownTimers[host] = null;
+  }
+
+  // ④ カウントダウンタイマー開始
   let remaining = delaySec;
-  const cdTimer = setInterval(() => {
+  countdownTimers[host] = setInterval(() => {
     remaining--;
     if (remaining > 0) {
       updateConnectionUI("waiting", {
@@ -631,16 +946,20 @@ function handleSocketClose(host) {
         wait: remaining
       });
     } else {
-      clearInterval(cdTimer);
+      clearInterval(countdownTimers[host]);
+      countdownTimers[host] = null;
     }
   }, 1000);
 
-  // ④ 既存タイマーがあればクリア
+  // ⑤ 既存再接続タイマーがあればクリア
   if (st.retryTimer) clearTimeout(st.retryTimer);
 
-  // ⑤ 再接続本体
+  // ⑥ 再接続本体
   st.retryTimer = setTimeout(() => {
-    clearInterval(cdTimer);
+    if (countdownTimers[host]) {
+      clearInterval(countdownTimers[host]);
+      countdownTimers[host] = null;
+    }
     st.retryTimer = null;
     connectWs(st.dest);
   }, delayMs);
@@ -711,6 +1030,12 @@ export function disconnectWs(host = currentHostname) {
     st.retryTimer = null;
   }
 
+  // カウントダウンタイマーもキャンセル
+  if (countdownTimers[host]) {
+    clearInterval(countdownTimers[host]);
+    countdownTimers[host] = null;
+  }
+
   // 接続状態なら明示的に close を発行
   if (st.ws && st.ws.readyState === WebSocket.OPEN) {
     st.ws.close();
@@ -757,12 +1082,24 @@ export function setupPrinterUI() {
   if (!sel) return;
   sel.addEventListener("change", () => {
     const host = sel.value;
-    if (host) {
-      setCurrentHostname(host);
-      updateConnectionUI(connectionMap[host]?.state || "disconnected", {}, host);
-      flushBufferedMessages(host);
+    if (host && host !== currentHostname) {
+      switchActiveHost(host);
     }
   });
+
+  // 追加接続ボタンの初期化
+  const addBtn = document.getElementById("add-printer-button");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      const input = document.getElementById("add-printer-input");
+      const dest = input?.value.trim();
+      if (dest) {
+        connectWs(dest);
+        input.value = "";
+      }
+    });
+  }
+
   updatePrinterListUI();
 }
 
@@ -789,6 +1126,9 @@ export function sendCommand(method, params = {}, host = currentHostname) {
   const id = `${method}_${Date.now()}`;
   const payload = { id, method, params };
   return new Promise((resolve, reject) => {
+    /** タイムアウト用タイマーID */
+    let timeoutId = null;
+
     const onResp = evt => {
       let msg;
       try {
@@ -797,7 +1137,12 @@ export function sendCommand(method, params = {}, host = currentHostname) {
         return;
       }
       if (msg.id !== id) return;
+      // 応答を受信したらリスナーとタイムアウトを両方解除
       st.ws.removeEventListener("message", onResp);
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       if (msg.error) {
         showAlert(`${method} エラー: ${msg.error.message}`, "error");
         reject(msg.error);
@@ -807,6 +1152,15 @@ export function sendCommand(method, params = {}, host = currentHostname) {
       }
     };
     st.ws.addEventListener("message", onResp);
+
+    // タイムアウトによるリスナーリーク防止
+    timeoutId = setTimeout(() => {
+      st.ws.removeEventListener("message", onResp);
+      timeoutId = null;
+      const errMsg = `${method} 応答タイムアウト (${SEND_COMMAND_TIMEOUT_MS / 1000}秒)`;
+      pushLog(errMsg, "warn");
+      reject(new Error(errMsg));
+    }, SEND_COMMAND_TIMEOUT_MS);
 
     // ── 送信ログ（紫色）
     const json = JSON.stringify(payload);
@@ -842,6 +1196,9 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
   const payload = { id, method: "set", params: { gcodeCmd: gcode } };
 
   return new Promise((resolve, reject) => {
+    /** タイムアウト用タイマーID */
+    let timeoutId = null;
+
     const onResp = evt => {
       let msg;
       try {
@@ -850,7 +1207,12 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
         return;
       }
       if (msg.id !== id) return;
+      // 応答を受信したらリスナーとタイムアウトを両方解除
       st.ws.removeEventListener("message", onResp);
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       if (msg.error) {
         showAlert(`set_gcode エラー: ${msg.error.message}`, "error");
         reject(msg.error);
@@ -860,6 +1222,15 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
       }
     };
     st.ws.addEventListener("message", onResp);
+
+    // タイムアウトによるリスナーリーク防止
+    timeoutId = setTimeout(() => {
+      st.ws.removeEventListener("message", onResp);
+      timeoutId = null;
+      const errMsg = `set_gcode 応答タイムアウト (${SEND_COMMAND_TIMEOUT_MS / 1000}秒)`;
+      pushLog(errMsg, "warn");
+      reject(new Error(errMsg));
+    }, SEND_COMMAND_TIMEOUT_MS);
 
     const json = JSON.stringify(payload);
     pushLog(`送信: ${json}`, "send");
@@ -881,6 +1252,13 @@ export function sendGcodeCommand(gcode, host = currentHostname) {
  *   connecting/waiting 時に使用する { attempt, max, wait }
  */
 export function updateConnectionUI(state, opt = {}, host = currentHostname) {
+  // 非アクティブホストの場合はプリンタ一覧のみ更新し、
+  // 画面上部のステータス表示は変更しない
+  if (host !== currentHostname) {
+    updatePrinterListUI();
+    return;
+  }
+
   const ipInput       = document.getElementById("destination-input");
   const ipDisplay     = document.getElementById("destination-display");
   const statusEl      = document.getElementById("connection-status");
@@ -994,27 +1372,392 @@ export function updateConnectionUI(state, opt = {}, host = currentHostname) {
 
 /**
  * 接続中プリンタ一覧の UI を更新します。
- * select 要素とステータス表示を再構築します。
+ * select 要素、トップメニューバー、接続モーダル内リストを再構築します。
+ * 保存済み（未接続）の接続先も表示します。
  *
- * @private
+ * @function updatePrinterListUI
  * @returns {void}
  */
-function updatePrinterListUI() {
+/** プリンタ一覧の定期更新タイマー ID */
+let _printerListTimer = null;
+
+export function updatePrinterListUI() {
   const sel  = document.getElementById("printer-select");
   const list = document.getElementById("printer-status-list");
-  if (!sel || !list) return;
+
+  /* トップメニューバー用要素（パネルモード） */
+  const topDot   = document.getElementById("top-status-dot");
+  const topLabel = document.getElementById("top-conn-label");
+  const topList  = document.getElementById("top-printer-list");
+  const connList = document.getElementById("conn-modal-printer-list");
 
   const hosts = Object.keys(connectionMap).filter(h => h !== PLACEHOLDER_HOSTNAME);
-  sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
-  sel.value = hosts.includes(currentHostname) ? currentHostname : "";
 
-  list.innerHTML = hosts
-    .map(h => {
-      const st = connectionMap[h];
-      const label = `${h} : ${st.state}`;
-      return `<div>${label}</div>`;
-    })
-    .join("");
+  // セレクトボックス更新（従来UI）
+  if (sel) {
+    sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
+    sel.value = hosts.includes(currentHostname) ? currentHostname : "";
+  }
+
+  // ── プリンタ情報をビルド（共通データ） ──
+  /**
+   * @type {Array<{host:string, stateIcon:string, line1:string, line2:string, isActive:boolean, state:string}>}
+   */
+  const printerInfos = hosts.map(h => {
+    const st = connectionMap[h];
+    const machine = monitorData.machines[h];
+    const isActive = h === currentHostname;
+
+    // 接続状態アイコン
+    const stateIcon = st.state === "connected" ? "\u2705"
+                    : st.state === "connecting" ? "\u23F3"
+                    : st.state === "waiting" ? "\u{1F504}"
+                    : "\u274C";
+
+    // 基本情報
+    let line1 = `${stateIcon} ${h}`;
+    line1 += ` [${st.dest}]`;
+    if (isActive) line1 += " \u25C0 active";
+
+    // データ情報
+    let line2 = "";
+    if (machine?.storedData) {
+      const sd = machine.storedData;
+      const model = sd.model?.rawValue || "";
+      const nozzle = sd.nozzleTemp?.rawValue;
+      const bed = sd.bedTemp0?.rawValue;
+      const box = sd.boxTemp?.rawValue;
+      const printState = sd.state?.rawValue;
+      const progress = sd.printProgress?.rawValue;
+      const hostname = sd.hostname?.rawValue || "";
+
+      if (hostname && hostname !== h) line2 += `(${hostname}) `;
+      if (model) line2 += `${model} `;
+      if (nozzle != null) line2 += `N:${parseFloat(nozzle).toFixed(1)}\u2103 `;
+      if (bed != null) line2 += `B:${parseFloat(bed).toFixed(1)}\u2103 `;
+      if (box != null) line2 += `Box:${parseFloat(box).toFixed(0)}\u2103 `;
+      if (Number(printState) === 1 && progress != null) line2 += `${progress}%`;
+    } else {
+      line2 = "\u30C7\u30FC\u30BF\u672A\u53D7\u4FE1";
+    }
+
+    return { host: h, stateIcon, line1, line2, isActive, state: st.state };
+  });
+
+  // ── 従来のサイドバーステータスリスト更新 ──
+  if (list) {
+    list.innerHTML = printerInfos.map(info => {
+      const bg = info.isActive ? "#e0f0ff" : "#f8f8f8";
+      const fw = info.isActive ? "bold" : "normal";
+      const border = info.isActive ? "2px solid #4090d0" : "1px solid #ddd";
+      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; font-weight:${fw}; background:${bg}; border:${border}; padding:3px 6px; margin:2px 0; border-radius:4px; font-size:11px;">
+        <div>${info.line1}</div>
+        <div style="color:#666; font-size:10px; margin-left:20px;">${info.line2}</div>
+      </div>`;
+    }).join("");
+
+    _bindHostSwitchClicks(list);
+  }
+
+  // ── トップメニューバー更新（パネルモード） ──
+  if (topDot) {
+    const anyConnected = printerInfos.some(i => i.state === "connected");
+    const anyConnecting = printerInfos.some(i => i.state === "connecting" || i.state === "waiting");
+    topDot.className = "status-dot " + (anyConnected ? "connected" : anyConnecting ? "connecting" : "disconnected");
+  }
+  if (topLabel) {
+    const connCount = printerInfos.filter(i => i.state === "connected").length;
+    topLabel.textContent = connCount > 0 ? `${connCount}\u53F0\u63A5\u7D9A\u4E2D` : "\u672A\u63A5\u7D9A";
+  }
+  if (topList) {
+    topList.innerHTML = printerInfos.map(info => {
+      const bg = info.isActive ? "#4090d0" : (info.state === "connected" ? "#555" : "#777");
+      return `<span class="printer-item" data-host="${info.host}" style="cursor:pointer; background:${bg}; color:#fff; padding:1px 6px; border-radius:3px; white-space:nowrap;">${info.stateIcon} ${info.host}</span>`;
+    }).join("");
+    _bindHostSwitchClicks(topList);
+  }
+
+  // ── 接続モーダル内のプリンタリスト更新 ──
+  if (connList) {
+    // 接続中プリンタの表示
+    let listHtml = printerInfos.map(info => {
+      const bg = info.isActive ? "#e0f0ff" : "#f8f8f8";
+      const border = info.isActive ? "2px solid #4090d0" : "1px solid #ddd";
+      const st = connectionMap[info.host];
+      const dest = st?.dest || info.host;
+      const tgt = _findConnectionTarget(dest);
+      const color = tgt?.color || "#444444";
+      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:${bg}; border:${border}; padding:4px 8px; margin:4px 0; border-radius:4px;">
+        <div style="display:flex; align-items:center; font-weight:${info.isActive ? "bold" : "normal"};">
+          <input type="color" class="conn-target-color" data-dest="${dest}" value="${color}" title="パネルバー色" style="width:22px; height:18px; border:none; padding:0; cursor:pointer; flex-shrink:0;">
+          <span style="flex:1; margin-left:6px;">${info.line1}</span>
+          <button class="conn-target-delete" data-dest="${dest}" data-host="${info.host}" title="切断・削除">✕</button>
+        </div>
+        <div style="color:#666; font-size:11px; margin-left:28px;">${info.line2}</div>
+      </div>`;
+    }).join("");
+
+    // 保存済みだが未接続の接続先も表示（dest = IP:PORT 単位で照合）
+    const connectedDests = new Set(hosts.map(h => connectionMap[h]?.dest || h));
+    const savedTargets = monitorData.appSettings.connectionTargets || [];
+    for (const t of savedTargets) {
+      if (!connectedDests.has(t.dest)) {
+        const savedColor = t.color || "#444444";
+        const savedLabel = t.hostname ? ` (${t.hostname})` : "";
+        listHtml += `<div style="background:#f0f0f0; border:1px solid #ddd; padding:4px 8px; margin:4px 0; border-radius:4px;">
+          <div style="display:flex; align-items:center; color:#888;">
+            <input type="color" class="conn-target-color" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色" style="width:22px; height:18px; border:none; padding:0; cursor:pointer; flex-shrink:0;">
+            <span style="flex:1; margin-left:6px;">\u2B1C ${t.dest}${savedLabel} (\u672A\u63A5\u7D9A)</span>
+            <button class="conn-target-reconnect" data-dest="${t.dest}" title="再接続" style="background:#4090d0; color:#fff; border:none; font-size:11px; padding:1px 6px; border-radius:3px; cursor:pointer; margin-right:4px;">\u63A5\u7D9A</button>
+            <button class="conn-target-delete" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除">\u2715</button>
+          </div>
+        </div>`;
+      }
+    }
+
+    connList.innerHTML = listHtml;
+    _bindHostSwitchClicks(connList);
+
+    // 削除ボタンのイベント設定
+    connList.querySelectorAll(".conn-target-delete").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const dest = btn.dataset.dest;
+        const host = btn.dataset.host;
+        const ip = dest.split(":")[0];
+
+        /* 接続先設定から削除（保存済みホスト名を取得） */
+        const savedHostname = _removeConnectionTarget(dest);
+
+        /* 接続中ホストの切断・パネル削除
+           connectionMap のキーは hostname（解決済み）または IP（未解決）。
+           host（data-host 属性）が設定されていればそれを使い、
+           なければ savedHostname → IP の順で試す。 */
+        const connKey = host || savedHostname || ip;
+        if (connKey && connKey !== PLACEHOLDER_HOSTNAME) {
+          disconnectWs(connKey);
+          removePanelsForHost(connKey);
+          cleanupConnection(connKey);
+        }
+        /* IP でも接続中の場合（ホスト名未解決のまま切断された場合） */
+        if (ip !== connKey) {
+          disconnectWs(ip);
+          removePanelsForHost(ip);
+          cleanupConnection(ip);
+        }
+
+        /* machines のホスト名キーは削除しない。
+           IP が変わっても同一ホスト名なら履歴データを引き継ぐため。
+           IP キーの孤立エントリのみ除去する（害はないが不要データ）。 */
+        _cleanupMachineKeys([ip]);
+
+        // wsDest も同一IPなら除去
+        if (monitorData.appSettings.wsDest?.split(":")[0] === ip) {
+          monitorData.appSettings.wsDest = "";
+        }
+        saveUnifiedStorage();
+        updatePrinterListUI();
+      });
+    });
+
+    // 再接続ボタンのイベント設定
+    connList.querySelectorAll(".conn-target-reconnect").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        connectWs(btn.dataset.dest);
+      });
+    });
+
+    // 色変更イベント設定
+    connList.querySelectorAll(".conn-target-color").forEach(picker => {
+      picker.addEventListener("input", (e) => {
+        e.stopPropagation();
+        const dest = picker.dataset.dest;
+        const tgt = _findConnectionTarget(dest);
+        if (tgt) {
+          tgt.color = picker.value;
+          saveUnifiedStorage();
+          updateAllPanelHeaders();
+        }
+      });
+    });
+  }
+
+  // パネルメニューのホスト一覧を同期（同一 dest の重複を排除）
+  // dest（IP:PORT）単位でキーを管理し、ホスト名解決済みのキーを優先する
+  const destToHost = new Map();
+  for (const h of hosts) {
+    const fullDest = connectionMap[h]?.dest || h;
+    const prev = destToHost.get(fullDest);
+    if (!prev || (/^\d+\.\d+\.\d+\.\d+/.test(prev) && !/^\d+\.\d+\.\d+\.\d+/.test(h))) {
+      destToHost.set(fullDest, h);
+    }
+  }
+  updatePanelMenuHosts([...new Set(destToHost.values())]);
+
+  // 接続中のプリンタがある場合、定期的にリスト表示を更新する（温度等の変化を反映）
+  if (hosts.some(h => connectionMap[h]?.state === "connected") && !_printerListTimer) {
+    _printerListTimer = setInterval(() => {
+      const connectedHosts = Object.keys(connectionMap).filter(
+        h => h !== PLACEHOLDER_HOSTNAME && connectionMap[h]?.state === "connected"
+      );
+      if (connectedHosts.length === 0) {
+        clearInterval(_printerListTimer);
+        _printerListTimer = null;
+        return;
+      }
+      updatePrinterListUI();
+    }, 3000);
+  }
+}
+
+/**
+ * ホスト切替クリックハンドラを指定コンテナ内の .printer-item に登録する。
+ *
+ * @private
+ * @param {HTMLElement} container - クリックイベントをバインドするコンテナ要素
+ * @returns {void}
+ */
+function _bindHostSwitchClicks(container) {
+  container.querySelectorAll(".printer-item").forEach(el => {
+    el.addEventListener("click", () => {
+      const host = el.dataset.host;
+      if (host && host !== currentHostname) {
+        switchActiveHost(host);
+      }
+    });
+  });
+}
+
+/**
+ * cleanupConnection:
+ * 指定ホストの接続情報を完全に破棄する。
+ * WebSocket を閉じ、全タイマーを停止し、connectionMap からエントリを削除する。
+ * プリンタの永久切断時やメモリ節約のために使用。
+ *
+ * @function cleanupConnection
+ * @param {string} host - 破棄するホスト名
+ * @returns {boolean} クリーンアップ実行した場合 true
+ */
+export function cleanupConnection(host) {
+  const st = connectionMap[host];
+  if (!st) return false;
+
+  // WebSocket を閉じる
+  if (st.ws) {
+    try {
+      // onclose ハンドラが再接続を試みないよう userDisc を設定
+      st.userDisc = true;
+      if (st.ws.readyState === WebSocket.OPEN ||
+          st.ws.readyState === WebSocket.CONNECTING) {
+        st.ws.close();
+      }
+    } catch (e) {
+      console.warn(`cleanupConnection: WebSocket close エラー (${host})`, e);
+    }
+    st.ws = null;
+  }
+
+  // 全タイマーを停止
+  if (st.hbInterval !== null) {
+    clearInterval(st.hbInterval);
+    st.hbInterval = null;
+  }
+  if (st.fetchTimer !== null) {
+    clearInterval(st.fetchTimer);
+    st.fetchTimer = null;
+  }
+  if (st.retryTimer !== null) {
+    clearTimeout(st.retryTimer);
+    st.retryTimer = null;
+  }
+  if (countdownTimers[host]) {
+    clearInterval(countdownTimers[host]);
+    delete countdownTimers[host];
+  }
+
+  // バッファクリア
+  st.buffer.length = 0;
+  st.latest = null;
+
+  // connectionMap から削除
+  delete connectionMap[host];
+  updatePrinterListUI();
+
+  pushLog(`接続情報をクリーンアップしました: ${host}`, "info");
+  return true;
+}
+
+/**
+ * getConnectionMap:
+ * 接続中ホスト名の一覧を返す。
+ * パネルメニューなど外部モジュールからの参照用。
+ *
+ * @function getConnectionMap
+ * @returns {string[]} 接続中ホスト名の配列
+ */
+export function getConnectionMap() {
+  return Object.keys(connectionMap).filter(h => h !== PLACEHOLDER_HOSTNAME);
+}
+
+/**
+ * switchActiveHost:
+ * アクティブホストを切り替える。
+ * 切替先のホストが connectionMap に存在し、接続済みであることを前提とする。
+ * - currentHostname を更新
+ * - aggregator タイマーを再起動
+ * - storedData の isNew フラグを全て立てて UI を即座に更新
+ * - プリンタリスト UI を更新
+ *
+ * @function switchActiveHost
+ * @param {string} host - 切替先ホスト名
+ * @returns {void}
+ */
+export function switchActiveHost(host) {
+  if (!connectionMap[host]) {
+    console.warn(`switchActiveHost: ホスト ${host} は connectionMap に存在しません`);
+    return;
+  }
+  setCurrentHostname(host);
+
+  // storedData の全フィールドの isNew フラグを立てて変更キューに追加し、UI を即更新可能にする
+  markAllKeysDirty(host);
+
+  // aggregator タイマーを再起動して、新ホストのデータで UI を更新
+  restartAggregatorTimer(100);
+
+  // カメラストリームを新ホストに切り替え
+  if (monitorData.appSettings.cameraToggle) {
+    startCameraStream(host);
+  }
+
+  // 切替先ホストの履歴/ファイル一覧を即座に再取得する
+  // （初回接続時にしか飛んでこないデータのため、切替時に明示的に要求する）
+  const st = connectionMap[host];
+  if (st?.ws?.readyState === WebSocket.OPEN) {
+    setTimeout(() => {
+      sendCommand("get", { reqGcodeFileInfo: 1 }, host);
+    }, 500);
+    setTimeout(() => {
+      sendCommand("get", { reqHistory: 1 }, host);
+    }, 1500);
+  }
+
+  updatePrinterListUI();
+  pushLog(`アクティブホストを ${host} に切り替えました`, "info");
+}
+
+/**
+ * getConnectionState:
+ * 指定ホストの接続状態文字列を返す。
+ *
+ * @function getConnectionState
+ * @param {string} host - ホスト名
+ * @returns {"disconnected"|"connecting"|"connected"|"waiting"} 接続状態
+ */
+export function getConnectionState(host) {
+  const st = connectionMap[host];
+  return st?.state || "disconnected";
 }
 
 /**

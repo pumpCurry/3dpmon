@@ -44,7 +44,7 @@ import {
 import { formatEpochToDateTime, formatDuration } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
-import { monitorData, currentHostname } from "./dashboard_data.js"; // filament残量取得用
+import { monitorData, currentHostname, scopedById } from "./dashboard_data.js"; // filament残量取得用
 import {
   getCurrentSpool,
   getCurrentSpoolId,
@@ -550,7 +550,7 @@ export async function refreshHistory(
   const prev = loadCurrent();
   if (jobs[0]?.id !== prev?.id) {
     saveCurrent(jobs[0]);
-    renderPrintCurrent(document.getElementById(currentContainerId));
+    renderPrintCurrent(scopedById(currentContainerId));
   }
 
   // --- テーブル描画 ---
@@ -656,7 +656,7 @@ export function updateHistoryList(
   const prev = loadCurrent();
   if (jobs[0]?.id !== prev?.id) {
     saveCurrent(jobs[0]);
-    renderPrintCurrent(document.getElementById(currentContainerId));
+    renderPrintCurrent(scopedById(currentContainerId));
   }
 
   // ここから UI 更新処理。保存済みジョブ配列を簡易 raw 形式に変換し、
@@ -734,7 +734,8 @@ export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
  * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
  */
 export function renderHistoryTable(rawArray, baseUrl) {
-  const tbody = document.querySelector("#print-history-table tbody");
+  const table = scopedById("print-history-table");
+  const tbody = table?.querySelector("tbody");
   const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
   const startwayMap = {
     1:  "機器操作経由",
@@ -1188,7 +1189,8 @@ export function setupUploadUI() {
     } catch (e) {
       console.warn("verifyUploadSuccess: sendCommand failed", e);
     }
-    const first = document.querySelector('#file-list-table tbody tr:first-child td[data-key="filename"]');
+    const ftbl = scopedById("file-list-table");
+    const first = ftbl?.querySelector('tbody tr:first-child td[data-key="filename"]');
     return first?.textContent.trim() === fname;
   }
 
@@ -1306,6 +1308,7 @@ export function initHistoryTabs() {
   const btnF = document.getElementById("tab-file-list");
   const pH = document.getElementById("panel-print-history-tab");
   const pF = document.getElementById("panel-file-list");
+  if (!btnH || !btnF || !pH || !pF) return;
   btnH.addEventListener("click", () => {
     btnH.classList.add("active"); btnF.classList.remove("active");
     pH.classList.remove("hidden"); pF.classList.add("hidden");
@@ -1389,10 +1392,12 @@ export function renderFileList(info, baseUrl) {
   });
 
   // 総数表示
-  document.getElementById("file-list-total").textContent = info.totalNum;
+  const totalEl = scopedById("file-list-total");
+  if (totalEl) totalEl.textContent = info.totalNum;
 
-  const tbody = document.querySelector("#file-list-table tbody");
-  tbody.innerHTML = "";
+  const fileTable = scopedById("file-list-table");
+  const tbody = fileTable?.querySelector("tbody");
+  if (!tbody) return;
 
   arr.forEach(item => {
     const tr = document.createElement("tr");
@@ -1445,7 +1450,10 @@ export function renderFileList(info, baseUrl) {
 
 /** --- 4) 汎用ソート関数 --- */
 function sortTable(selector, key) {
-  const table = document.querySelector(selector);
+  /* パネルシステムではIDがスコープされるため scopedById を優先使用 */
+  const id = selector.startsWith("#") ? selector.slice(1) : null;
+  const table = id ? scopedById(id) : document.querySelector(selector);
+  if (!table) return;
   const tbody = table.querySelector("tbody");
   const rows = Array.from(tbody.querySelectorAll("tr"));
   // 昇順<->降順トグル

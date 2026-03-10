@@ -180,14 +180,19 @@ async function updateUsage() {
     const { usage, quota } = await estimateStorageQuota();
     const pct  = ((usage / quota) * 100).toFixed(1);
     const elUsage = document.getElementById("storage-usage");
-    elUsage.textContent =
-      `${formatBytes(usage)} / ${formatBytes(quota)}  (${pct}%)`;
-    elUsage.title = `クォータ: ${quota} bytes`;
-    document.getElementById("storage-error").hidden = true;
+    if (elUsage) {
+      elUsage.textContent =
+        `${formatBytes(usage)} / ${formatBytes(quota)}  (${pct}%)`;
+      elUsage.title = `クォータ: ${quota} bytes`;
+    }
+    const elErrOk = document.getElementById("storage-error");
+    if (elErrOk) elErrOk.hidden = true;
   } catch {
     const elErr = document.getElementById("storage-error");
-    elErr.hidden = false;
-    elErr.textContent = "⚠︎ 容量取得エラー";
+    if (elErr) {
+      elErr.hidden = false;
+      elErr.textContent = "⚠︎ 容量取得エラー";
+    }
   }
 }
 

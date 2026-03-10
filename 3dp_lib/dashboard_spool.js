@@ -47,7 +47,7 @@ import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList } from "./dashboard_printmanager.js";
-import { getDeviceIp } from "./dashboard_connection.js";
+import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
@@ -206,7 +206,7 @@ export function setCurrentSpoolId(id) {
       if (buf) {
         buf.filamentId = newSpool.id;
         // 履歴バッファに補完したフィラメントIDを画面へ即反映する
-        const baseUrl = `http://${getDeviceIp()}:80`;
+        const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
         updateHistoryList([buf], baseUrl);
       }
     }
@@ -549,7 +549,7 @@ export function reserveFilament(lengthMm, jobId = "") {
   }
   saveUnifiedStorage();
   if (entry) {
-    const baseUrl = `http://${getDeviceIp()}:80`;
+    const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
     updateHistoryList([entry], baseUrl);
   }
 }
@@ -623,7 +623,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "") {
   updateStoredDataToDOM();
   saveUnifiedStorage();
   if (entry) {
-    const baseUrl = `http://${getDeviceIp()}:80`;
+    const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
     updateHistoryList([entry], baseUrl);
   }
   cleanupUsageSnapshots(jobId);

@@ -201,7 +201,11 @@ export function restoreUnifiedStorage() {
   if (saved) {
     try {
       const data = JSON.parse(saved);
-      if (data.appSettings)    monitorData.appSettings    = data.appSettings;
+      /* appSettings は上書きではなくマージする。
+         保存データに存在しない新フィールドのデフォルト値を保持するため。 */
+      if (data.appSettings) {
+        Object.assign(monitorData.appSettings, data.appSettings);
+      }
       if (data.machines)       monitorData.machines       = data.machines;
       if (Array.isArray(data.filamentSpools))
         monitorData.filamentSpools = data.filamentSpools.map(sp => applySpoolDefaults(sp));

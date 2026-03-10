@@ -249,6 +249,7 @@
  * @returns {string}
  */
 function hexToRgba(hex, alpha = 1) {
+  if (!hex || typeof hex !== "string") hex = "#C8C8C8";
   const r = parseInt(hex.slice(1, 3), 16) || 200;
   const g = parseInt(hex.slice(3, 5), 16) || 200;
   const b = parseInt(hex.slice(5, 7), 16) || 200;

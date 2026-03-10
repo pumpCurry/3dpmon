@@ -1,0 +1,350 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 パネルブートストラップ モジュール
+ * @file dashboard_panel_boot.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_panel_boot
+ *
+ * 【機能内容サマリ】
+ * - GridStack パネルシステムの起動処理
+ * - 既存 HTML 構造からパネルテンプレートを抽出
+ * - 初回起動時のデフォルトレイアウトを構築
+ * - 2回目以降は保存済みレイアウトを復元
+ *
+ * 【公開関数一覧】
+ * - {@link bootPanelSystem}：パネルシステムを起動
+ *
+ * @version 1.390.783 (PR #366)
+ * @since   1.390.783 (PR #366)
+ * @lastModified 2026-03-10 21:00:00
+ * -----------------------------------------------------------
+ * @todo
+ * - テンプレート抽出の自動化改善
+ */
+
+"use strict";
+
+import { initGridStack, restoreLayout, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
+import { initPanelMenu } from "./dashboard_panel_menu.js";
+import { registerAllPanelInits } from "./dashboard_panel_init.js";
+import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
+import { monitorData } from "./dashboard_data.js";
+
+/**
+ * パネルシステムモードが有効かどうか。
+ * true の場合、既存の固定レイアウトを非表示にし GridStack で管理する。
+ * false の場合、従来通りの固定レイアウトで動作する。
+ *
+ * @constant {boolean}
+ */
+const PANEL_MODE_ENABLED = true;
+
+/**
+ * パネルシステムを起動する。
+ *
+ * 【詳細説明】
+ * - パネルモードが有効な場合:
+ *   1. 既存のカード要素を非表示にする
+ *   2. GridStack コンテナを DOM に挿入
+ *   3. パネルテンプレートを既存カード要素から生成
+ *   4. 保存済みレイアウトの復元、またはデフォルトレイアウトの構築
+ *   5. パネル追加メニューを初期化
+ * - パネルモードが無効な場合:
+ *   何もしない（従来の固定レイアウトがそのまま使われる）
+ *
+ * @function bootPanelSystem
+ * @returns {boolean} パネルシステムが起動した場合 true
+ */
+export function bootPanelSystem() {
+  if (!PANEL_MODE_ENABLED) {
+    console.info("bootPanelSystem: パネルモード無効、従来レイアウトで動作");
+    return false;
+  }
+
+  /* (0) パネル初期化関数レジストリを登録 */
+  registerAllPanelInits();
+
+  /* (0b) 従来タイトルバーを非表示にし、トップメニューバーに置き換え */
+  const titleBar = document.querySelector(".title-bar");
+  if (titleBar) titleBar.style.display = "none";
+
+  /* (1) 既存カード要素をテンプレート化 */
+  _convertCardsToTemplates();
+
+  /* (2) GridStack コンテナを DOM に挿入 */
+  const gridContainer = document.createElement("div");
+  gridContainer.className = "grid-stack";
+  gridContainer.id = "panel-grid";
+
+  /* トップメニューバーの直後に挿入 */
+  const topMenuBar = document.getElementById("top-menu-bar");
+  if (topMenuBar && topMenuBar.nextSibling) {
+    topMenuBar.parentNode.insertBefore(gridContainer, topMenuBar.nextSibling);
+  } else if (titleBar && titleBar.nextSibling) {
+    titleBar.parentNode.insertBefore(gridContainer, titleBar.nextSibling);
+  } else {
+    document.body.appendChild(gridContainer);
+  }
+
+  /* (3) GridStack を初期化 */
+  initGridStack("#panel-grid");
+
+  /* (4) レイアウト復元
+   *    保存済みレイアウトがあれば復元する。
+   *    無い場合（初回起動等）はパネルを生成しない。
+   *    接続先が確定した時点で _syncPanelsForHost() → ensureHostPanels()
+   *    によってそのホスト用のパネルが自動生成される。 */
+  restoreLayout();
+
+  /* (5) パネルメニュー初期化 */
+  initPanelMenu();
+
+  /* (6) トップメニューバー・接続モーダルのイベントバインド */
+  _initTopMenuBar();
+
+  console.info("bootPanelSystem: パネルシステム起動完了");
+  return true;
+}
+
+/* ─── 内部ヘルパー ─── */
+
+/**
+ * 既存 HTML のカード要素を <template> に変換する。
+ *
+ * 【詳細説明】
+ * - 各カード要素を非表示にし、対応する <template> を body 末尾に追加
+ * - 元のDOMは hidden にして残す（data-field バインディングの参照元として）
+ * - テンプレートIDは PANEL_TYPES の templateId に一致させる
+ *
+ * @private
+ * @function _convertCardsToTemplates
+ * @returns {void}
+ */
+function _convertCardsToTemplates() {
+  /**
+   * カードセレクタとテンプレートIDの対応表
+   * @type {Array<{selector: string, templateId: string, keepOriginal: boolean}>}
+   */
+  const cardMappings = [
+    {
+      selector: ".camera-card",
+      templateId: "panel-tpl-camera",
+      keepOriginal: false
+    },
+    {
+      selector: ".preview-wrapper",
+      templateId: "panel-tpl-head-preview",
+      keepOriginal: false
+    },
+    {
+      selector: ".info-wrapper .col1",
+      templateId: "panel-tpl-status",
+      keepOriginal: false
+    },
+    {
+      selector: ".info-wrapper .col2",
+      templateId: "panel-tpl-control-cmd",
+      keepOriginal: false,
+      splitControl: true
+    },
+    {
+      selector: "#filament-preview-card",
+      templateId: "panel-tpl-filament",
+      keepOriginal: false
+    },
+    {
+      selector: "#temp-graph-card",
+      templateId: "panel-tpl-temp-graph",
+      keepOriginal: false
+    },
+    {
+      selector: ".info-card",
+      templateId: "panel-tpl-machine-info",
+      keepOriginal: false
+    },
+    {
+      selector: ".log-card",
+      templateId: "panel-tpl-log",
+      keepOriginal: false
+    },
+    {
+      selector: "#print-current-card",
+      templateId: "panel-tpl-current-print",
+      keepOriginal: false
+    },
+    {
+      /* #settings-card は #print-history-card の中にネストされているため、
+         先に抽出しないと親ごと除去されてしまう */
+      selector: "#settings-card",
+      templateId: "panel-tpl-settings",
+      keepOriginal: false
+    },
+    {
+      selector: "#print-history-card",
+      templateId: "panel-tpl-history",
+      keepOriginal: false
+    }
+  ];
+
+  for (const mapping of cardMappings) {
+    const originalEl = document.querySelector(mapping.selector);
+    if (!originalEl) {
+      console.warn(`_convertCardsToTemplates: 要素が見つかりません: ${mapping.selector}`);
+      continue;
+    }
+
+    if (mapping.splitControl) {
+      /* 操作パネルを2つに分割:
+         - control-cmd: ボタンのみ（cmd-group 要素群）
+         - control-temp: 温度・ファン制御（.control-temp-area） */
+      const clone = originalEl.cloneNode(true);
+
+      /* テンプレート1: 操作ボタン */
+      const tplCmd = document.createElement("template");
+      tplCmd.id = "panel-tpl-control-cmd";
+      const cmdWrapper = document.createElement("div");
+      cmdWrapper.className = "col2 control-cmd-panel";
+      const cmdGroups = clone.querySelectorAll(".cmd-group");
+      cmdGroups.forEach(g => cmdWrapper.appendChild(g.cloneNode(true)));
+      tplCmd.content.appendChild(cmdWrapper);
+      document.body.appendChild(tplCmd);
+
+      /* テンプレート2: 温度・ファン制御 */
+      const tplTemp = document.createElement("template");
+      tplTemp.id = "panel-tpl-control-temp";
+      const tempWrapper = document.createElement("div");
+      tempWrapper.className = "col2 control-temp-panel";
+      const tempArea = clone.querySelector(".control-temp-area");
+      if (tempArea) tempWrapper.appendChild(tempArea.cloneNode(true));
+      tplTemp.content.appendChild(tempWrapper);
+      document.body.appendChild(tplTemp);
+
+      originalEl.remove();
+      continue;
+    }
+
+    /* テンプレートを生成 */
+    const tpl = document.createElement("template");
+    tpl.id = mapping.templateId;
+
+    /* 元の要素の内容をテンプレートに複製 */
+    tpl.content.appendChild(originalEl.cloneNode(true));
+
+    /* テンプレートを body 末尾に追加 */
+    document.body.appendChild(tpl);
+
+    /* テンプレートに複製済みなので元の要素をDOMから除去する。
+       display:none で残すと data-field の重複マッチが発生するため削除する。 */
+    originalEl.remove();
+  }
+
+  /* 空になった親コンテナもDOMから除去する */
+  const emptyContainers = [
+    ".equip-status-card",
+    ".monitor-row",
+    "#graph-current-wrapper"
+  ];
+  for (const sel of emptyContainers) {
+    const el = document.querySelector(sel);
+    if (el) el.remove();
+  }
+}
+
+/**
+ * トップメニューバーと接続設定モーダルのイベントハンドラを設定する。
+ *
+ * @private
+ * @function _initTopMenuBar
+ * @returns {void}
+ */
+function _initTopMenuBar() {
+  /* 接続設定ボタン → モーダル開閉 */
+  const connBtn = document.getElementById("top-conn-btn");
+  const overlay = document.getElementById("conn-modal-overlay");
+  const closeBtn = document.getElementById("conn-modal-close");
+
+  if (connBtn && overlay) {
+    connBtn.addEventListener("click", () => {
+      /* モーダル表示前にプリンタリストを最新化
+         （保存済み未接続の接続先も正しく表示するため） */
+      updatePrinterListUI();
+
+      overlay.classList.add("open");
+      /* 各設定をモーダルに同期 */
+      const modalAuto = document.getElementById("conn-modal-auto-connect");
+      if (modalAuto) modalAuto.checked = monitorData.appSettings.autoConnect;
+
+      const modalHostTag = document.getElementById("conn-modal-show-host-tag");
+      if (modalHostTag) modalHostTag.checked = monitorData.appSettings.showHostTag !== false;
+
+      const camPort = document.getElementById("conn-modal-camera-port");
+      if (camPort) camPort.value = monitorData.appSettings.cameraPort || 8080;
+
+      /* 入力欄をクリア */
+      const modalIp = document.getElementById("conn-modal-ip");
+      if (modalIp) modalIp.value = "";
+    });
+  }
+  /* モーダルを閉じる際に設定を保存・反映 */
+  const _closeModal = () => {
+    if (!overlay) return;
+    overlay.classList.remove("open");
+    _syncModalSettings();
+  };
+  if (closeBtn) closeBtn.addEventListener("click", _closeModal);
+  if (overlay) {
+    overlay.addEventListener("click", e => {
+      if (e.target === overlay) _closeModal();
+    });
+  }
+
+  /**
+   * モーダル内の設定値を monitorData に同期し、パネルヘッダーを更新する。
+   * @private
+   */
+  function _syncModalSettings() {
+    const modalAuto = document.getElementById("conn-modal-auto-connect");
+    if (modalAuto) monitorData.appSettings.autoConnect = modalAuto.checked;
+
+    const modalHostTag = document.getElementById("conn-modal-show-host-tag");
+    if (modalHostTag) {
+      const prev = monitorData.appSettings.showHostTag;
+      monitorData.appSettings.showHostTag = modalHostTag.checked;
+      if (prev !== modalHostTag.checked) updateAllPanelHeaders();
+    }
+
+    const camPort = document.getElementById("conn-modal-camera-port");
+    if (camPort && camPort.value) {
+      monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || 8080;
+    }
+  }
+
+  /* モーダル内の「接続追加」ボタン（統一パス） */
+  const modalConnect = document.getElementById("conn-modal-connect");
+  if (modalConnect) {
+    modalConnect.addEventListener("click", () => {
+      const ip = document.getElementById("conn-modal-ip")?.value.trim();
+      if (!ip) return;
+
+      /* 設定を同期 */
+      _syncModalSettings();
+
+      /* connectWs は内部で _addConnectionTarget を呼んで永続化する。
+         wsDest は後方互換のためメイン接続先として保持する。 */
+      if (!monitorData.appSettings.wsDest) {
+        monitorData.appSettings.wsDest = ip;
+      }
+      connectWs(ip);
+
+      /* 入力欄をクリア */
+      const modalIpEl = document.getElementById("conn-modal-ip");
+      if (modalIpEl) modalIpEl.value = "";
+    });
+  }
+}
+
+/* _buildDefaultLayout は廃止。
+ * 初回起動時はパネルを生成せず、接続確立時に
+ * ensureHostPanels() がホスト名付きで自動生成する。 */

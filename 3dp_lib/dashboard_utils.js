@@ -160,6 +160,7 @@ function parseCurPosition(curPosStr) {
  * @returns {void}
 */
 function showTempCheckMark(button) {
+  if (!button) return;
   const originalText = button.dataset.original || button.innerText;
   button.innerText = "✅ " + originalText;
   setTimeout(() => {

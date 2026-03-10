@@ -55,7 +55,7 @@ import {
   flushNotificationLogsToDom,
   pushLog
 } from "./dashboard_log_util.js";
-import { updateConnectionUI } from "./dashboard_connection.js";
+import { updateConnectionUI, connectAllSavedTargets } from "./dashboard_connection.js";
 import { setupPrinterUI } from "./dashboard_connection.js";
 import {
   startCameraStream,
@@ -210,14 +210,14 @@ export function initializeDashboard({
 
 
   // ここで monitorData.appSettings から UI に反映
-  ipInput.value     = monitorData.appSettings.wsDest        || "";
-  acb.checked       = monitorData.appSettings.autoConnect;
-  camToggle.checked = monitorData.appSettings.cameraToggle;
+  if (ipInput) ipInput.value = monitorData.appSettings.wsDest || "";
+  if (acb) acb.checked = monitorData.appSettings.autoConnect;
+  if (camToggle) camToggle.checked = monitorData.appSettings.cameraToggle;
 
 
   // 接続ボタンクリック → IPチェック→保存→接続
   btnConnect?.addEventListener("click", () => {
-    const ip = ipInput.value.trim();
+    const ip = ipInput?.value?.trim() || "";
     if (!ip) {
       showAlert("接続先のIPアドレスを設定し、接続を押してください", "warn");
       return;
@@ -250,20 +250,24 @@ export function initializeDashboard({
     ?.addEventListener("click", copyStoredDataToClipboard);
 
   // (7) カメラトグル制御
-  camToggle.addEventListener("change", () => {
-    monitorData.appSettings.cameraToggle = camToggle.checked;
-    saveUnifiedStorage();
-    if (camToggle.checked) startCameraStream();
-    else                    stopCameraStream();
-  });
+  if (camToggle) {
+    camToggle.addEventListener("change", () => {
+      monitorData.appSettings.cameraToggle = camToggle.checked;
+      saveUnifiedStorage();
+      if (camToggle.checked) startCameraStream();
+      else                    stopCameraStream();
+    });
+  }
 
   // (8) 自動接続トグル
-  acb.addEventListener("change", () => {
-    monitorData.appSettings.autoConnect = acb.checked;
-    saveUnifiedStorage();
-    pushLog(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-    showAlert (`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-  });
+  if (acb) {
+    acb.addEventListener("change", () => {
+      monitorData.appSettings.autoConnect = acb.checked;
+      saveUnifiedStorage();
+      pushLog(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
+      showAlert (`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
+    });
+  }
 
 
   // (9) 通知設定パネル初期化
@@ -274,18 +278,24 @@ export function initializeDashboard({
 
   // (10) 温度グラフ初期化＆過去データ読み込み
   initTemperatureGraph();
-  updateTemperatureGraphFromStoredData(
-    monitorData.machines[currentHostname].storedData
-  );
+  if (currentHostname && monitorData.machines[currentHostname]) {
+    updateTemperatureGraphFromStoredData(
+      monitorData.machines[currentHostname].storedData
+    );
+  }
 
   // (10.5) 温度グラフのズームリセットボタン
   document.getElementById("temp-graph-reset-button")
     ?.addEventListener("click", resetTemperatureGraphView);
 
   // (11) ページロード時の自動接続
-  // 起動時は接続先が設定されているときだけ AutoConnect
-  if (monitorData.appSettings.autoConnect && monitorData.appSettings.wsDest) {
-    setTimeout(onConnect, 1500);
+  // 保存済みの全接続先（wsDest + connectionTargets）に自動接続
+  const hasTargets = monitorData.appSettings.wsDest
+    || (monitorData.appSettings.connectionTargets?.length > 0);
+  if (monitorData.appSettings.autoConnect && hasTargets) {
+    setTimeout(() => {
+      connectAllSavedTargets();
+    }, 1500);
   } else {
     showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります","warn");
   }
@@ -296,9 +306,9 @@ export function initializeDashboard({
   // (12.5) 保存済みの履歴と現在印刷を表示
   const savedJobs = printManager.loadHistory();
   if (savedJobs.length) {
-    const baseUrl = monitorData.appSettings.wsDest
-      ? `http://${monitorData.appSettings.wsDest}:80`
-      : "";
+    const wsIp = monitorData.appSettings.wsDest?.split(":")[0];
+    const httpPort = monitorData.appSettings.httpPort || 80;
+    const baseUrl = wsIp ? `http://${wsIp}:${httpPort}` : "";
     const raw = printManager.jobsToRaw(savedJobs);
     printManager.renderHistoryTable(raw, baseUrl);
   }

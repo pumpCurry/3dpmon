@@ -37,7 +37,7 @@
 
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { LEVELS } from "./dashboard_constants.js";
-import { monitorData } from "./dashboard_data.js";
+import { monitorData, scopedById } from "./dashboard_data.js";
 
 /** 最大保持ログ行数 */
 // const MAX_LOG_LINES = 1000; // monitorDataからもってくることになりました
@@ -153,6 +153,7 @@ export const logManager = new LogManager();
  * @returns {Function} destroy - 登録リスナー解除用クリーンアップ関数
  */
 export function initLogAutoScroll(containerEl) {
+  if (!containerEl) return;
   let scheduled = false;
   const SCROLL_THRESHOLD_PX = 50;
 
@@ -232,7 +233,7 @@ export function initLogRenderer(containerEl) {
 
     // 通知ログなら notification-history にも複製追加
     if (entry.notify) {
-      const errBox = document.getElementById("notification-history");
+      const errBox = scopedById("notification-history");
       if (errBox) {
         const clone = p.cloneNode(true);
         clone.className = `notification-entry log-${entry.level}`;
@@ -253,7 +254,7 @@ export function initLogRenderer(containerEl) {
 
     // 行数制限を超えた分だけ古い通知ログを削除
     if (entry.notify) {
-      const errBox = document.getElementById("notification-history");
+      const errBox = scopedById("notification-history");
       if (errBox) {
         const errLines = errBox.querySelectorAll("p.notification-entry");
         if (errLines.length > max) {
@@ -277,7 +278,7 @@ export function initLogRenderer(containerEl) {
   */
   function clearLogs() {
     containerEl.innerHTML = "";
-    const errBox = document.getElementById("notification-history");
+    const errBox = scopedById("notification-history");
     if (errBox) errBox.innerHTML = "";
   }
 
@@ -333,7 +334,7 @@ function writeLogsToContainer(logs, container, className) {
 export function flushNormalLogsToDom() {
   writeLogsToContainer(
     logManager.getAll().filter(e => ["info", "normal"].includes(e.level)),
-    document.getElementById("log"),
+    scopedById("log"),
     "log-line"
   );
 }
@@ -345,7 +346,7 @@ export function flushNotificationLogsToDom() {
   const logs = logManager.getNotifications();
   writeLogsToContainer(
     logs,
-    document.getElementById("notification-history"),
+    scopedById("notification-history"),
     "notification-entry"
   );
   if (logs.length) {

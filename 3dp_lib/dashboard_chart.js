@@ -18,9 +18,9 @@
  * - {@link resetTemperatureGraphView}：表示範囲リセット
  * - {@link updateTemperatureGraphFromStoredData}：データ更新
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.783 (PR #366)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2026-03-10 22:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -163,6 +163,22 @@ export function resetTemperatureGraph() {
   }
 
   isFirstRender = true;
+}
+
+/**
+ * マシン切替時にグラフデータをリセットする。
+ * 現在のマシンのホスト名を記録し、異なるマシンに切替わった場合は
+ * 自動的にグラフをクリアして新しいマシンのデータを表示可能にする。
+ *
+ * @param {string} hostname - 切替先のマシンホスト名
+ * @returns {void}
+ */
+let _currentChartHost = null;
+export function switchChartHost(hostname) {
+  if (_currentChartHost !== null && _currentChartHost !== hostname) {
+    resetTemperatureGraph();
+  }
+  _currentChartHost = hostname;
 }
 
 /**

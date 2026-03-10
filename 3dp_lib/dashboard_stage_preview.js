@@ -27,6 +27,13 @@ const xyDots = [];
 let xyUpdateCount = 0;
 let xyInitialized = false;
 
+/** パネルシステム対応: スコープ付きID検索（dashboard_data.js がグローバルに公開） */
+function _getElementById(id) {
+  return (typeof window.scopedById === "function")
+    ? window.scopedById(id)
+    : _getElementById(id);
+}
+
 // XYプレビュー履歴用
 let xyHistory = [];       // { x, y }の履歴を保持
 let xyHistoryIndex = 0;   // xyDotsに割り当てるインデックス
@@ -66,7 +73,7 @@ function setPrinterModel(model) {
   } else {
     return; // 未対応モデルは変更なし
   }
-  const stageElem = document.getElementById("xy-stage");
+  const stageElem = _getElementById("xy-stage");
   if (!stageElem) return; // テスト環境などでDOMが無い場合
   const px = stageSizeMm * STAGE_SCALE;
   stageElem.style.width = `${px}px`;
@@ -151,7 +158,7 @@ function restoreXYHistoryDots() {
  * @returns {void}
  */
 function initXYPreview() {
-  const container = document.getElementById("xy-stage");
+  const container = _getElementById("xy-stage");
   if (!container) return; // DOM が存在しなければ何もしない
   container.style.userSelect = "none";
   const gridCount = 7;
@@ -318,9 +325,10 @@ function updateXYPreview(x, y) {
   const screenX = stagePx - (x * STAGE_SCALE);
   const screenY = y * STAGE_SCALE;
 
-  const currentDot = document.getElementById("xy-current-dot");
-  const currentCircle = document.getElementById("xy-current-circle");
+  const currentDot = _getElementById("xy-current-dot");
+  const currentCircle = _getElementById("xy-current-circle");
 
+  if (!currentDot || !currentCircle) return;
   currentDot.style.right = (screenX - 2.5) + "px";
   currentDot.style.bottom = (screenY - 2.5) + "px";
   currentCircle.style.right = (screenX - 5) + "px";
@@ -329,6 +337,7 @@ function updateXYPreview(x, y) {
   // 履歴用ドット
   const index = xyUpdateCount % maxDots;
   const dot = xyDots[index];
+  if (!dot) return;
   dot.style.right = (screenX - 1.5) + "px";
   dot.style.bottom = (screenY - 1.5) + "px";
   dot.style.display = "block";
@@ -351,12 +360,12 @@ function updateZPreview(z) {
   const scale = 0.5;
   const clampedZ = Math.min(z, stageZMaxMm);
   const barHeight = clampedZ * scale;
-  const barDiv = document.getElementById("z-preview");
+  const barDiv = _getElementById("z-preview");
   if (barDiv) {
     barDiv.style.height = barHeight + "px";
     barDiv.style.backgroundColor = (z < 0) ? "magenta" : "";
   }
-  const zValueElem = document.getElementById("z-value");
+  const zValueElem = _getElementById("z-value");
   if (zValueElem) {
     zValueElem.textContent = z.toFixed(2);
   }
@@ -370,7 +379,7 @@ function updateZPreview(z) {
  * @returns {void}
  */
 function applyStageTransform() {
-  const container = document.getElementById("xy-stage");
+  const container = _getElementById("xy-stage");
   if (container) {
     stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     const rotZ = ((stageRotZ % 360) + 360) % 360;
@@ -447,7 +456,7 @@ let spinTimer = null;
  * @returns {void}
  */
 function updateSpinButton(active) {
-  const btn = document.getElementById("btn-stage-spin");
+  const btn = _getElementById("btn-stage-spin");
   if (!btn) return;
   if (active) {
     btn.classList.add("stage-spin-active");

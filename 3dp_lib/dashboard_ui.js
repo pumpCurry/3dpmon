@@ -11,16 +11,19 @@
  * - data-field に基づく DOM 更新
  * - 更新マーク管理と storedData のDOM反映
  * - 主要UIイベントハンドリング
+ * - data-field 要素キャッシュによる高速 DOM 検索
  *
  * 【公開関数一覧】
  * - {@link updateDataField}：データフィールド更新
  * - {@link clearNewClasses}：更新マーク除去
  * - {@link updateStoredDataToDOM}：storedData反映
  * - {@link initUIEventHandlers}：UIイベント初期化
+ * - {@link registerFieldElements}：data-field 要素をキャッシュに登録
+ * - {@link unregisterFieldElements}：data-field 要素をキャッシュから除去
  *
-* @version 1.390.432 (PR #195)
+* @version 1.390.784 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 18:16:32
+* @lastModified 2026-03-10 23:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -28,10 +31,96 @@
 
 "use strict";
 
-import { monitorData, currentHostname, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
-import { getDisplayValue, setStoredData } from "./dashboard_data.js"; // 表示用値取得・更新用
+import { monitorData, currentHostname, PLACEHOLDER_HOSTNAME, scopedById } from "./dashboard_data.js";
+import { getDisplayValue, setStoredData, consumeDirtyKeys } from "./dashboard_data.js";
 import { dashboardMapping } from "./dashboard_ui_mapping.js";         // フィールド別定義と処理
 import { initializeCommandPalette } from "./dashboard_send_command.js";
+
+/* ─── B: data-field 要素キャッシュ ─── */
+
+/**
+ * data-field 属性値をキーとし、対応する DOM 要素の Set を保持するキャッシュ。
+ * パネル追加時に registerFieldElements() で登録し、
+ * パネル削除時に unregisterFieldElements() で除去する。
+ * updateStoredDataToDOM / updateDataField で querySelectorAll の代わりに使用。
+ *
+ * @type {Map<string, Set<Element>>}
+ * @private
+ */
+const _fieldCache = new Map();
+
+/**
+ * registerFieldElements:
+ * 指定ルート要素配下の全 [data-field] 要素をキャッシュに登録する。
+ * パネル生成時（addPanel）に呼び出す。
+ *
+ * @param {HTMLElement} root - スキャン対象のルート要素
+ * @returns {void}
+ */
+export function registerFieldElements(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-field]").forEach(el => {
+    const key = el.getAttribute("data-field");
+    if (!key) return;
+    if (!_fieldCache.has(key)) _fieldCache.set(key, new Set());
+    _fieldCache.get(key).add(el);
+  });
+}
+
+/**
+ * unregisterFieldElements:
+ * 指定ルート要素配下の全 [data-field] 要素をキャッシュから除去する。
+ * パネル削除時（removePanel）に呼び出す。
+ *
+ * @param {HTMLElement} root - スキャン対象のルート要素
+ * @returns {void}
+ */
+export function unregisterFieldElements(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-field]").forEach(el => {
+    const key = el.getAttribute("data-field");
+    if (!key) return;
+    const set = _fieldCache.get(key);
+    if (set) {
+      set.delete(el);
+      if (set.size === 0) _fieldCache.delete(key);
+    }
+  });
+}
+
+/**
+ * キャッシュから data-field 要素を取得する。
+ * キャッシュにヒットしない場合は querySelectorAll にフォールバックし、結果をキャッシュする。
+ *
+ * @private
+ * @param {string} fieldName - data-field 属性値
+ * @returns {Set<Element>|NodeList} 対応する要素群
+ */
+function _getFieldElements(fieldName) {
+  if (_fieldCache.has(fieldName)) {
+    return _fieldCache.get(fieldName);
+  }
+  /* キャッシュミス: DOMから検索してキャッシュに登録（パネル外の要素にも対応） */
+  const nodes = document.querySelectorAll(`[data-field="${fieldName}"]`);
+  if (nodes.length > 0) {
+    const set = new Set(nodes);
+    _fieldCache.set(fieldName, set);
+    return set;
+  }
+  return nodes; /* 空NodeList */
+}
+
+/* ─── D: 更新マーク追跡セット ─── */
+
+/**
+ * `.new` クラスが付与された要素を追跡するセット。
+ * clearNewClasses() でページ全体を querySelectorAll(".new") するかわりに
+ * このセットだけを走査する。
+ *
+ * @type {Set<Element>}
+ * @private
+ */
+const _newElements = new Set();
 
 /**
  * updateDataField:
@@ -46,7 +135,7 @@ import { initializeCommandPalette } from "./dashboard_send_command.js";
  */
 export function updateDataField(fieldName, data = undefined) {
   const displayData = data ?? getDisplayValue(fieldName);
-  const elements = document.querySelectorAll(`[data-field="${fieldName}"]`);
+  const elements = _getFieldElements(fieldName);
 
   elements.forEach(el => {
     const valueEl = el.querySelector(".value");
@@ -67,6 +156,7 @@ export function updateDataField(fieldName, data = undefined) {
 
     el.classList.remove("old");
     el.classList.add("new");
+    _newElements.add(el);
   });
 }
 
@@ -79,17 +169,19 @@ export function updateDataField(fieldName, data = undefined) {
  * @returns {void}
  */
 export function clearNewClasses() {
-  document.querySelectorAll(".new").forEach(el => {
+  _newElements.forEach(el => {
     el.classList.remove("new");
     el.classList.add("old");
   });
+  _newElements.clear();
 }
 
 /**
  * updateStoredDataToDOM:
- * 現在の機器（currentHostname）の storedData のうち、isNew フラグが立っている項目に対し、
- * 対応する DOM 要素（data-field）を更新する。
- * 
+ * 変更キュー（consumeDirtyKeys）から変更のあったキーだけを取得し、
+ * 対応する DOM 要素を更新する。要素キャッシュ（_fieldCache）を用いて
+ * querySelectorAll の繰り返し実行を回避する。
+ *
  * - checkbox要素、.value/.unitを持つ要素、その他のtextContent要素を識別して更新
  * - dashboardMapping に process がある場合は computedValue を再生成
  * - getDisplayValue() により value/unit を取得
@@ -105,18 +197,22 @@ export function updateStoredDataToDOM() {
   if (!machine) return;
   const storedData = machine.storedData;
 
-  for (const key in storedData) {
+  /* A: 変更キューから変更キーだけを取得（全キー走査を回避） */
+  const dirtyKeys = consumeDirtyKeys();
+
+  for (const key of dirtyKeys) {
     const d = storedData[key];
     if (!d?.isNew) continue; // isNew が false ならスキップ
 
     // ① mapping を取得
     const map = dashboardMapping[key] || {};
 
-    // 横展開が必要な場合の処理（rawValueを特定の要素に代入させる
+    // 横展開が必要な場合の処理（rawValueを特定の要素に代入させる）
     if (Array.isArray(map.domProps)) {
       map.domProps.forEach(({ id, prop }) => {
         try {
-          const el = document.getElementById(id);
+          /* パネルシステムではIDが hostname__ プレフィックス付きにスコープされる */
+          const el = scopedById(id);
           if (!el) {
             throw new Error(`element not found`);
           }
@@ -135,7 +231,11 @@ export function updateStoredDataToDOM() {
 
     // --- ① DOMキー決定 & computedValue 再生成 ---
     const elementKey = dashboardMapping[key]?.elementKey || key;
-    if (typeof dashboardMapping[key]?.process === "function") {
+    /* rawValue が null の場合は process を実行しない。
+       nozzleDiff / bedDiff 等、aggregator が computedValue のみ直接設定する
+       フィールドでは rawValue が常に null であり、process(null) で
+       "null" 文字列に上書きされてしまうのを防ぐ。 */
+    if (d.rawValue != null && typeof dashboardMapping[key]?.process === "function") {
       try {
         d.computedValue = dashboardMapping[key].process(d.rawValue);
       } catch (e) {
@@ -150,9 +250,13 @@ export function updateStoredDataToDOM() {
       unit: ""
     };
 
-    // --- ③ data-field 属性に対応する DOM 要素群の取得 ---
-    const nodes = document.querySelectorAll(`[data-field="${elementKey}"]`);
-    if (!nodes.length) {
+    // --- ③ data-field 属性に対応する DOM 要素群の取得（B: キャッシュ使用） ---
+    const nodes = _getFieldElements(elementKey);
+    if (!nodes || (nodes.size ?? nodes.length) === 0) {
+      // デバッグ: data-field 要素が見つからないキーを出力
+      if (d.isFromEquipVal) {
+        console.debug(`[updateStoredDataToDOM] data-field="${elementKey}" 要素なし (key="${key}", raw=${JSON.stringify(d.rawValue)?.slice(0,50)})`);
+      }
       d.isNew = false;
       continue;
     }
@@ -203,9 +307,10 @@ export function updateStoredDataToDOM() {
         el.textContent = `${value}${unit}`;
       }
 
-      // ---- クラスで更新表示（.new → .old 切替）----
-      el.classList.toggle("new",  d.isNew);
-      el.classList.toggle("old", !d.isNew);
+      // ---- D: クラスで更新表示（.new → .old 切替）+ 追跡 ----
+      el.classList.remove("old");
+      el.classList.add("new");
+      _newElements.add(el);
     });
 
     if (window.filamentPreview) {
@@ -226,15 +331,11 @@ export function updateStoredDataToDOM() {
     d.isNew = false;
   }
 }
-/** ログ／通知ボックス・タブ ボタンの参照 */
-const tabReceived  = document.getElementById("tab-received");
-const tabNotification = document.getElementById("tab-notification");
-const receivedBox  = document.getElementById("log");
-const notifBox     = document.getElementById("notification-history");
-
-// タイムスタンプ表示エリア
-const tsReceivedEl = document.getElementById("last-log-timestamp");
-const tsErrorEl    = document.getElementById("last-notification-timestamp");
+/**
+ * ログ／通知ボックス・タブ ボタンの参照（遅延取得）。
+ * bootPanelSystem() が元DOM要素を除去しGridStackパネルに再配置するため、
+ * モジュールロード時に取得すると参照が失効する。使用時に都度取得する。
+ */
 
 /** 自動スクロール状態と最後にアクティブだったタブ */
 let isAutoScrollEnabled = true;
@@ -242,7 +343,10 @@ let lastActiveTab       = "received";
 
 /** (A) 自動スクロール ON/OFF の検知 */
 function initAutoScrollHandlers() {
+  const receivedBox = document.getElementById("log");
+  const notifBox    = document.getElementById("notification-history");
   [receivedBox, notifBox].forEach(box => {
+    if (!box) return;
     box.addEventListener("scroll", () => {
       const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 5;
       isAutoScrollEnabled = atBottom;
@@ -252,15 +356,24 @@ function initAutoScrollHandlers() {
 
 /** (B) タブ切り替え時の表示切り替え＋スクロール復帰 */
 function initTabHandlers() {
+  const tabReceived     = document.getElementById("tab-received");
+  const tabNotification = document.getElementById("tab-notification");
+  const receivedBox     = document.getElementById("log");
+  const notifBox        = document.getElementById("notification-history");
+  const tsReceivedEl    = document.getElementById("last-log-timestamp");
+  const tsErrorEl       = document.getElementById("last-notification-timestamp");
+
+  if (!tabReceived || !tabNotification) return;
+
   tabReceived.addEventListener("click", () => {
     lastActiveTab = "received";
     tabReceived.classList.add("active");
     tabNotification.classList.remove("active");
-    receivedBox.classList.remove("hidden");
-    tsReceivedEl.classList.remove("hidden");
-    notifBox.classList.add("hidden");
-    tsErrorEl.classList.add("hidden");
-    if (isAutoScrollEnabled) {
+    if (receivedBox) receivedBox.classList.remove("hidden");
+    if (tsReceivedEl) tsReceivedEl.classList.remove("hidden");
+    if (notifBox) notifBox.classList.add("hidden");
+    if (tsErrorEl) tsErrorEl.classList.add("hidden");
+    if (isAutoScrollEnabled && receivedBox) {
       receivedBox.scrollTop = receivedBox.scrollHeight;
     }
   });
@@ -269,11 +382,11 @@ function initTabHandlers() {
     lastActiveTab = "notification";
     tabNotification.classList.add("active");
     tabReceived.classList.remove("active");
-    receivedBox.classList.add("hidden");
-    tsReceivedEl.classList.add("hidden");
-    notifBox.classList.remove("hidden");
-    tsErrorEl.classList.remove("hidden");
-    if (isAutoScrollEnabled) {
+    if (receivedBox) receivedBox.classList.add("hidden");
+    if (tsReceivedEl) tsReceivedEl.classList.add("hidden");
+    if (notifBox) notifBox.classList.remove("hidden");
+    if (tsErrorEl) tsErrorEl.classList.remove("hidden");
+    if (isAutoScrollEnabled && notifBox) {
       notifBox.scrollTop = notifBox.scrollHeight;
     }
   });

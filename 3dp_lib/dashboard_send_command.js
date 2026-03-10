@@ -39,6 +39,28 @@ import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
 
+/**
+ * コマンドパレットのルート要素。
+ * パネルシステムではIDがホスト名でスコープされるため、
+ * document.getElementById ではなくルート要素内で検索する。
+ * @type {HTMLElement|null}
+ */
+let _cmdRoot = null;
+
+/**
+ * スコープ対応の要素検索。
+ * _cmdRoot 内を querySelector で探し、見つからなければ document から探す。
+ * @param {string} id - 検索する要素ID（スコープ前の素のID）
+ * @returns {HTMLElement|null}
+ */
+function _findById(id) {
+  if (_cmdRoot) {
+    /* パネル内: スコープ済みID → 末尾が __id のパターンで検索 */
+    const el = _cmdRoot.querySelector(`[id$="__${id}"]`) || _cmdRoot.querySelector(`#${id}`);
+    if (el) return el;
+  }
+  return document.getElementById(id);
+}
 
 /**
  * 各コマンドボタンの設定マッピング
@@ -61,7 +83,7 @@ const COMMAND_MAPPINGS = [
     method:   "print",
     inputIds: ["cmd-print-filepath"],
     getParams: () => {
-      const el = document.getElementById("cmd-print-filepath");
+      const el = _findById("cmd-print-filepath");
       const path = el?.value.trim();
       return path ? { file: path } : null;
     }
@@ -146,7 +168,7 @@ const COMMAND_MAPPINGS = [
     method:   "runGcode",
     inputIds: ["cmd-gcode-cmd"],
     getParams: () => {
-      const el = document.getElementById("cmd-gcode-cmd");
+      const el = _findById("cmd-gcode-cmd");
       const cmd = el?.value.trim();
       return cmd ? { cmd } : null;
     },
@@ -163,7 +185,7 @@ const COMMAND_MAPPINGS = [
     method:   "deleteFile",
     inputIds: ["cmd-delete-path"],
     getParams: () => {
-      const el = document.getElementById("cmd-delete-path");
+      const el = _findById("cmd-delete-path");
       const path = el?.value.trim();
       return path ? { path } : null;
     },
@@ -180,8 +202,8 @@ const COMMAND_MAPPINGS = [
     method:   "uploadFile",
     inputIds: ["cmd-upload-path","cmd-upload-data"],
     getParams: () => {
-      const pathEl = document.getElementById("cmd-upload-path");
-      const dataEl = document.getElementById("cmd-upload-data");
+      const pathEl = _findById("cmd-upload-path");
+      const dataEl = _findById("cmd-upload-data");
       const path = pathEl?.value.trim();
       const data = dataEl?.value;
       return path && data ? { path, data } : null;
@@ -214,7 +236,7 @@ const COMMAND_MAPPINGS = [
     method:   "set",
     inputIds: ["cmd-led-state"],
     getParams: () => {
-      const el = document.getElementById("cmd-led-state");
+      const el = _findById("cmd-led-state");
       return el ? { lightSw: el.value === "true" ? 1 : 0 } : null;
     }
   },
@@ -223,7 +245,7 @@ const COMMAND_MAPPINGS = [
     method:   "set",
     inputIds: ["cmd-nozzle-temp"],
     getParams: () => {
-      const el = document.getElementById("cmd-nozzle-temp");
+      const el = _findById("cmd-nozzle-temp");
       const v = parseFloat(el?.value);
       return !isNaN(v) ? { targetNozzleTemp: v } : null;
     }
@@ -233,7 +255,7 @@ const COMMAND_MAPPINGS = [
     method:   "set",
     inputIds: ["cmd-bed-temp"],
     getParams: () => {
-      const el = document.getElementById("cmd-bed-temp");
+      const el = _findById("cmd-bed-temp");
       const v = parseFloat(el?.value);
       return !isNaN(v) ? { targetBedTemp0: v } : null;
     }
@@ -243,7 +265,7 @@ const COMMAND_MAPPINGS = [
     method:   "set",
     inputIds: ["cmd-fan-model-state"],
     getParams: () => {
-      const el = document.getElementById("cmd-fan-model-state");
+      const el = _findById("cmd-fan-model-state");
       return el ? { fan: el.value === "true" ? 1 : 0 } : null;
     }
   },
@@ -252,7 +274,7 @@ const COMMAND_MAPPINGS = [
     method:   "set",
     inputIds: ["cmd-fan-aux-state"],
     getParams: () => {
-      const el = document.getElementById("cmd-fan-aux-state");
+      const el = _findById("cmd-fan-aux-state");
       return el ? { fanAuxiliary: el.value === "true" ? 1 : 0 } : null;
     }
   }
@@ -263,18 +285,22 @@ const COMMAND_MAPPINGS = [
  * - getParams() の戻り値が null のときはボタンを disabled
  * - 確認が必要な場合は showConfirmDialog を介して実行
  */
-export function initializeCommandPalette() {
+export function initializeCommandPalette(root) {
+  _cmdRoot = root || null;
   COMMAND_MAPPINGS.forEach(({ buttonId, method, getParams, inputIds, confirm }) => {
-    const btn = document.getElementById(buttonId);
+    const btn = _findById(buttonId);
     if (!btn) {
-      console.warn(`initializeCommandPalette: ボタン要素 '${buttonId}' が見つかりません`);
+      /* パネルモードでは各パネルがボタンの一部のみ含むため、未検出は想定内 */
+      if (!_cmdRoot) {
+        console.warn(`initializeCommandPalette: ボタン要素 '${buttonId}' が見つかりません`);
+      }
       return;
     }
     // バリデーション関数
     const validate = () => { btn.disabled = getParams() === null; };
     validate();
     (inputIds || []).forEach(id => {
-      const el = document.getElementById(id);
+      const el = _findById(id);
       if (el) el.addEventListener("input", validate);
     });
 

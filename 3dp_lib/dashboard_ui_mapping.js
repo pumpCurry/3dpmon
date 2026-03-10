@@ -17,9 +17,9 @@
  * - {@link PRINT_STATE_EVENT}：状態イベント表
  * - {@link dashboardMapping}：フィールドマッピング
  *
-* @version 1.390.366 (PR #164)
+* @version 1.390.783 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-06-22 05:18:34
+* @lastModified 2026-03-10 22:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -258,6 +258,20 @@ export const dashboardMapping = {
   totalUsageTime:        { elementKey: "totalUsageTime",       process: v => (v=== null) ? NO_VAL :({ value: utils.formatDuration(v), unit: "" }) },
   totalUsageMaterial:    { elementKey: "totalUsageMaterial",   process: v => ({ value: v.toLocaleString(), unit: "mm" }) },
 
+  // --- 流量 ---
+  curFlowratePct:        { elementKey: "curFlowratePct",       process: v => ({ value: parseInt(v,10), unit: "%" }) },
+
+  // --- レイヤー ---
+  layer:                 { elementKey: "layer",                process: NO_PROCESSING },
+  TotalLayer:            { elementKey: "TotalLayer",           process: NO_PROCESSING },
+
+  // --- 温度差分（aggregator で算出） ---
+  nozzleDiff:            { elementKey: "nozzleDiff",           process: NO_PROCESSING },
+  bedDiff:               { elementKey: "bedDiff",              process: NO_PROCESSING },
+
+  // --- ファイル名（タイトルバー用エイリアス） ---
+  printFileName:         { elementKey: "printFileName",        process: NO_PROCESSING },
+
   // --- その他パラメータ ---
   accelerationLimits:    { elementKey: "accelerationLimits",   process: NO_PROCESSING },
   velocityLimits:        { elementKey: "velocityLimits",       process: NO_PROCESSING },
@@ -269,6 +283,29 @@ export const dashboardMapping = {
   realTimeSpeed:         { elementKey: "realTimeSpeed",        process: NO_PROCESSING },
   sysConnection:         { elementKey: "sysConnection",        process: NO_PROCESSING },
   model:                 { elementKey: "model",                process: NO_PROCESSING },
-  modelVersion:          { elementKey: "modelVersion",         process: NO_PROCESSING }
+  modelVersion:          { elementKey: "modelVersion",         process: NO_PROCESSING },
+
+  // --- 追加パラメータ（実機68フィールドから追加） ---
+  dProgress:             { elementKey: "dProgress",            process: v => ({ value: parseFloat(v).toFixed(1), unit: "%" }) },
+  powerLoss:             { elementKey: "powerLoss",            process: v => ({ value: utils.formatBinary(v), unit: "" }) },
+  upgradeStatus:         { elementKey: "upgradeStatus",        process: NO_PROCESSING },
+  connect:               { elementKey: "connect",              process: NO_PROCESSING },
+  tfCard:                { elementKey: "tfCard",               process: v => ({ value: utils.formatBinary(v), unit: "" }) },
+  repoPlrStatus:         { elementKey: "repoPlrStatus",        process: NO_PROCESSING },
+  printId:               { elementKey: "printId",              process: NO_PROCESSING },
+  bedTemp1:              { elementKey: "bedTemp1",             process: v => ({ value: parseFloat(v).toFixed(2), unit: "℃" }) },
+  bedTemp2:              { elementKey: "bedTemp2",             process: v => ({ value: parseFloat(v).toFixed(2), unit: "℃" }) },
+  targetBedTemp1:        { elementKey: "targetBedTemp1",       process: v => ({ value: parseFloat(v).toFixed(2), unit: "℃" }) },
+  targetBedTemp2:        { elementKey: "targetBedTemp2",       process: v => ({ value: parseFloat(v).toFixed(2), unit: "℃" }) },
+  smoothTime:            { elementKey: "smoothTime",           process: NO_PROCESSING },
+  autoLevelResult:       { elementKey: "autoLevelResult",      process: NO_PROCESSING },
+  nozzleTempAutoPid:     { elementKey: "nozzleTempAutoPid",    process: NO_PROCESSING },
+  bedTempAutoPid:        { elementKey: "bedTempAutoPid",       process: NO_PROCESSING },
+  nozzleMoveSnapshot:    { elementKey: "nozzleMoveSnapshot",   process: NO_PROCESSING },
+  video:                 { elementKey: "video",                process: NO_PROCESSING },
+  video1:                { elementKey: "video1",               process: NO_PROCESSING },
+  videoElapse:           { elementKey: "videoElapse",           process: NO_PROCESSING },
+  videoElapseFrame:      { elementKey: "videoElapseFrame",      process: NO_PROCESSING },
+  videoElapseInterval:   { elementKey: "videoElapseInterval",   process: NO_PROCESSING }
 
 };

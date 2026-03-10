@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.781 (PR #358)
+* @version 1.390.784 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-01-29 08:01:39
+* @lastModified 2026-03-10 23:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,7 +33,7 @@
 import { monitorData, currentHostname, setStoredData } from "./dashboard_data.js";
 import { clearNewClasses, updateStoredDataToDOM } from "./dashboard_ui.js";
 import { saveUnifiedStorage, loadPrintCurrent } from "./dashboard_storage.js";
-import { updateTemperatureGraphFromStoredData } from "./dashboard_chart.js";
+import { updateTemperatureGraphFromStoredData, switchChartHost } from "./dashboard_chart.js";
 import { checkUpdatedFields, formatDuration } from "./dashboard_utils.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { formatDurationSimple } from "./dashboard_utils.js";
@@ -114,64 +114,89 @@ let prevUsageProgress = 0;
 let accumulatedUsedMaterial = 0;
 
 // ---------------------------------------------------------------------------
+// _resetNotificationState: 通知状態リセット（共通化）
+// ---------------------------------------------------------------------------
+/**
+ * 新しい印刷ジョブ開始時に、進捗・残り時間・温度関連の通知履歴を初期化する。
+ * 前ジョブで一度発火した閾値を再度通知できるようにする。
+ *
+ * @private
+ * @param {number} nowMs - 現在時刻（ミリ秒）
+ * @returns {void}
+ */
+function _resetNotificationState(nowMs) {
+  notifiedProgressMilestones.clear();
+  notifiedTimeThresholds.clear();
+  notifiedTempMilestones.clear();
+  prevProgress = 0;
+  lastProgressTimestamp = nowMs;
+  prevRemainingSec = null;
+}
+
+// ---------------------------------------------------------------------------
+// _readRaw: storedData の rawValue を安全に読み取る
+// ---------------------------------------------------------------------------
+/**
+ * processData の (2.7.3) で全フィールドが storedData に格納済みであることを前提に、
+ * storedData から rawValue を直接読み取る。getMergedValueWithSource の代替として
+ * 使用し、data オブジェクトの二重走査を回避する。
+ *
+ * @private
+ * @param {string} key - storedData のキー
+ * @returns {*} rawValue の値、未設定時は null
+ */
+function _readRaw(key) {
+  const machine = monitorData.machines[currentHostname];
+  return machine?.storedData?.[key]?.rawValue ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // ingestData: WebSocket 生データ受領時の集計＆通知発火
 // ---------------------------------------------------------------------------
 /**
  * ingestData:
- *   - WebSocket 受信データ (`data`) と既存 storedData をマージしつつ、
- *     A. 進捗関連通知
- *     B. 残り時間閾値通知
- *     C. 温度近接アラート
- *     D. フィラメント切れ／交換
- *     E. 実印刷開始時刻 を逆算 
- *     F. 初回残り時間 を逆算
- *     G. タイマー集計＆予測フェーズへ aggregateTimersAndPredictions() 呼び出し
+ *   processData の (2.7.3) で storedData に格納済みの値を読み取り、
+ *   通知判定・タイマー逆算・フィラメント管理を行う。
  *
- * @param {object} data  - WebSocket で受信した生データ
+ *   A. 進捗関連通知
+ *   B. 残り時間閾値通知
+ *   C. 温度近接アラート
+ *   D. フィラメント切れ／交換
+ *   E. 実印刷開始時刻 を逆算
+ *   F. 初回残り時間 を逆算
+ *   G. タイマー集計＆予測フェーズへ aggregateTimersAndPredictions() 呼び出し
  *
- *   - WebSocket で受信した生データオブジェクト。  
- *     各フィールドは undefined, null, 数値, 文字列など多様。
+ * @param {object} data  - WebSocket で受信した生データ（互換性のため保持、内部では storedData から直接読み取り）
  */
 export function ingestData(data) {
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
 
-  // —— 値のマージ ——  
-  // data に明示的なプロパティがあればそちらを優先、null は data 側 null と判定
-  const { value: id,      source: srcId      } = getMergedValueWithSource("printStartTime", data);
-  const { value: progRaw                   } = getMergedValueWithSource("printProgress",   data);
-  const { value: jobRaw                    } = getMergedValueWithSource("printJobTime",    data);
-  const { value: leftRaw                   } = getMergedValueWithSource("printLeftTime",   data);
-  const { value: selfRaw                   } = getMergedValueWithSource("withSelfTest",    data);
-  const { value: nozzleRaw                 } = getMergedValueWithSource("nozzleTemp",      data);
-  const { value: maxNozzRaw                } = getMergedValueWithSource("maxNozzleTemp",   data);
-  const { value: bedRaw                    } = getMergedValueWithSource("bedTemp0",        data);
-  const { value: maxBedRaw                 } = getMergedValueWithSource("maxBedTemp",      data);
-  const { value: matStatRaw                } = getMergedValueWithSource("materialStatus",  data);
-  // "usedMaterialLength" が送られてくる場合があるため、まずはこちらを優先的に取得し、
-  // なければ旧形式の "usagematerial" を参照する
-  let   { value: matLenRaw, source: matSrc } =
-    getMergedValueWithSource("materialLength", data, "usedMaterialLength");
-  if (matSrc === "none") {
-    ({ value: matLenRaw, source: matSrc } =
-      getMergedValueWithSource("materialLength", data, "usagematerial"));
+  const machine = monitorData.machines[currentHostname];
+  if (!machine) return;
+  const storedData = machine.storedData;
+
+  // —— storedData から一括読み取り ——
+  // processData (2.7.3) で data→storedData への格納が完了しているため、
+  // storedData.rawValue を直接参照する（getMergedValueWithSource の二重走査を回避）
+  const id       = _readRaw("printStartTime");
+  const progRaw  = _readRaw("printProgress");
+  const jobRaw   = _readRaw("printJobTime");
+  const leftRaw  = _readRaw("printLeftTime");
+  const selfRaw  = _readRaw("withSelfTest");
+  const nozzleRaw = _readRaw("nozzleTemp");
+  const maxNozzRaw = _readRaw("maxNozzleTemp");
+  const bedRaw   = _readRaw("bedTemp0");
+  const maxBedRaw = _readRaw("maxBedTemp");
+  const matStatRaw = _readRaw("materialStatus");
+  // usedMaterialLength → materialLength エイリアス処理
+  // usedMaterialLength を優先、なければ旧形式 usagematerial、最後に materialLength
+  let matLenRaw = _readRaw("usedMaterialLength");
+  if (matLenRaw == null) {
+    matLenRaw = _readRaw("usagematerial") ?? _readRaw("materialLength") ?? null;
   }
 
-  // —— キー初期化 ——  
-  // まだ storedData に存在しないフィールドは rawValue=null で準備
-  // printStartTime が未送信の場合は値を保持し、明示的な null のみクリアする
-  if (srcId === "data-null") setStoredData("printStartTime",  null, true);
-  if (jobRaw === null)    setStoredData("printJobTime",     null, true);
-  if (leftRaw === null)   setStoredData("printLeftTime",    null, true);
-  if (selfRaw === null)   setStoredData("withSelfTest",     null, true);
-  if (matLenRaw === null) {
-    const machine = monitorData.machines[currentHostname];
-    if (machine && !("usedMaterialLength" in machine.storedData)) {
-      setStoredData("usedMaterialLength", null, true);
-    }
-  }
-
-  // —— 型変換 ——  
+  // —— 型変換 ——
   const prog    = Number(progRaw   ?? 0);
   const jobTime = Number(jobRaw    ?? 0);
   const left    = Number(leftRaw   ?? NaN);
@@ -184,10 +209,7 @@ export function ingestData(data) {
   const matLen  = Number(matLenRaw  ?? NaN);
 
   if (!isNaN(matLen)) {
-    // 実際に消費した長さとして usedMaterialLength に保存
-    // 第4引数はJSON受信時以外では使用しない
     setStoredData("usedMaterialLength", matLen, true);
-    // 後続処理用の推定値として materialLengthFallback に保持
     setStoredData("materialLengthFallback", matLen, true);
   }
 
@@ -204,23 +226,13 @@ export function ingestData(data) {
       const spool = getCurrentSpool();
       if (spool && spool.currentPrintID !== String(id)) {
         if (spool.currentJobExpectedLength == null) {
-          // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
           reserveFilament(0, String(id));
         } else {
           spool.currentPrintID = String(id);
         }
       }
       prevPrintID = id;
-      // ---- 通知状態のリセット ----------------------------------------------
-      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
-      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
-      // なるため、各種 Set と直近の値をリセットする
-      notifiedProgressMilestones.clear();
-      notifiedTimeThresholds.clear();
-      notifiedTempMilestones.clear();
-      prevProgress = 0;
-      lastProgressTimestamp = nowMs;
-      prevRemainingSec = null;
+      _resetNotificationState(nowMs);
       if (historyPersistFunc) {
         try {
           historyPersistFunc(id);
@@ -238,7 +250,6 @@ export function ingestData(data) {
         "actualStartTime","initialLeftTime","initialLeftAt",
         "estimatedRemainingTime","estimatedCompletionTime"
       ].forEach(f => {
-        // rawValue, computedValue 両方クリア
         setStoredData(f, null, true);
         setStoredData(f, null, false);
       });
@@ -247,7 +258,6 @@ export function ingestData(data) {
     const spool = getCurrentSpool();
     if (spool && spool.currentPrintID !== String(id)) {
       if (spool.currentJobExpectedLength == null) {
-        // 予定使用量が未登録の場合は 0 で仮登録してIDのみ確定
         reserveFilament(0, String(id));
       } else {
         spool.currentPrintID = String(id);
@@ -260,20 +270,8 @@ export function ingestData(data) {
       } catch (e) {
         console.error("historyPersistFunc error", e);
       }
-
-      prevPrintID = id;
-      // ---- 通知状態のリセット ----------------------------------------------
-      // 新しい印刷ジョブ開始時点で、進捗・残り時間・温度関連の通知履歴を
-      // 初期化しないと、前ジョブで一度発火した閾値を再度通知できなく
-      // なるため、各種 Set と直近の値をリセットする
-      notifiedProgressMilestones.clear();
-      notifiedTimeThresholds.clear();
-      notifiedTempMilestones.clear();
-      prevProgress = 0;
-      lastProgressTimestamp = nowMs;
-      prevRemainingSec = null;
-
     }
+    _resetNotificationState(nowMs);
   }
 
   // A. プリント進捗通知 ------------------------------------------------------
@@ -381,15 +379,8 @@ export function ingestData(data) {
 
     // ---- 新規印刷スタート時の通知状態リセット ------------------------------
     // printStartTime がまだ届いていないケースでも、jobTime が進み始めた
-    // 時点で前回ジョブの残り時間通知などを初期化する。これにより長時間
-    // ジョブを中断後に短時間ジョブを開始した際、残りn分通知が一斉発火
-    // してしまう問題を防ぐ。
-    notifiedProgressMilestones.clear();
-    notifiedTimeThresholds.clear();
-    notifiedTempMilestones.clear();
-    prevProgress = 0;
-    lastProgressTimestamp = nowMs;
-    prevRemainingSec = null;
+    // 時点で前回ジョブの残り時間通知などを初期化する。
+    _resetNotificationState(nowMs);
 
     if (historyPersistFunc && id) {
       try {
@@ -427,13 +418,21 @@ export function ingestData(data) {
   }
 
   // G. タイマー集計＆予測フェーズへ ------------------------------------------------
-  aggregateTimersAndPredictions(data);
+  // ingestData で抽出済みの数値を渡し、aggregateTimersAndPredictions での
+  // getMergedValueWithSource 再呼び出し（二重抽出）を回避する
+  aggregateTimersAndPredictions({
+    id, st: Number(_readRaw("state") ?? 0),
+    jobTime, selfPct, prog, left,
+    device: Number(_readRaw("deviceState") ?? 0),
+    finish: Number(_readRaw("printFinishTime") ?? 0),
+  });
 
   // --- 印刷完了時のフィラメント使用量確定処理 -----------------------------
-  const st_agg = Number(data.state);
-  const prog_agg = Number(data.printProgress ?? 0);
+  // ingestData 冒頭で抽出済みの値を再利用（data オブジェクトへの再アクセスを回避）
+  const st_agg = Number(_readRaw("state") ?? 0);
+  const prog_agg = prog;
   const prevPrintState_agg = Number(
-    monitorData.machines[currentHostname]?.runtimeData?.state ?? 0
+    machine?.runtimeData?.state ?? 0
   );
   // 直前まで印刷中もしくは一時停止中で、現在の状態が完了・失敗・アイドルに
   // 遷移した場合は使用フィラメント量を確定する。進捗率が100%未満でも処理
@@ -449,47 +448,44 @@ export function ingestData(data) {
     const spool = getCurrentSpool();
     // ジョブIDが未確定の場合は、利用可能な情報から補完して確定処理に備える
     if (spool && !spool.currentPrintID) {
-      const machine = monitorData.machines[currentHostname];
       const resolvedJobId = resolveFilamentJobId(
-        machine?.storedData,
+        storedData,
         machine?.printStore?.current ?? null
       );
       if (resolvedJobId) {
         spool.currentPrintID = resolvedJobId;
       }
     }
-    if (!isNaN(Number(data.usedMaterialLength))) {
-      const cur = Number(data.usedMaterialLength);
+    const usedMatRaw = _readRaw("usedMaterialLength");
+    if (!isNaN(Number(usedMatRaw))) {
+      const cur = Number(usedMatRaw);
       if (prevUsedMaterialLength != null) {
         const d = cur - prevUsedMaterialLength;
         if (d > 0) accumulatedUsedMaterial += d;
       } else {
-        // これが初回値の場合はそのまま累積値とする
         accumulatedUsedMaterial += cur;
       }
       prevUsedMaterialLength = cur;
       prevUsageProgress = prog_agg;
     } else {
       let est = spool?.currentJobExpectedLength ?? NaN;
-      if ((isNaN(est) || est <= 0) && data.fileName) {
-        est = guessExpectedLength(String(data.fileName));
+      const fileNameRaw = _readRaw("fileName");
+      if ((isNaN(est) || est <= 0) && fileNameRaw) {
+        est = guessExpectedLength(String(fileNameRaw));
       }
       if (!isNaN(est) && est > 0) {
-        // 進捗率ベースの推定は常に絶対値で算出し、
-        // 推定値が途中で判明した場合でも正しい使用量に補正する
         accumulatedUsedMaterial = (est * prog_agg) / 100;
       }
-      // 進捗の基準値は常に最新を保持しておく
       prevUsageProgress = prog_agg;
     }
     let length = accumulatedUsedMaterial;
-    const jobId_agg = spool?.currentPrintID || String(data.printStartTime || "");
+    const jobId_agg = spool?.currentPrintID || String(id || "");
     if (jobId_agg) {
       if (length <= 0) {
-        // usedMaterialLength が得られない場合は進捗とファイル情報から推定
         let est = spool?.currentJobExpectedLength ?? NaN;
-        if ((isNaN(est) || est <= 0) && data.fileName) {
-          est = guessExpectedLength(String(data.fileName));
+        const fileNameRaw = _readRaw("fileName");
+        if ((isNaN(est) || est <= 0) && fileNameRaw) {
+          est = guessExpectedLength(String(fileNameRaw));
         }
         if (!isNaN(est) && prog_agg > 0) {
           length = (est * prog_agg) / 100;
@@ -525,25 +521,36 @@ export function ingestData(data) {
  * aggregateTimersAndPredictions: タイマー集計＆予測
  *
  * 【詳細説明】
- * - getMergedValueWithSource で data と storedData をマージ取得
+ * - ingestData で抽出済みの数値を受け取る（getMergedValueWithSource の二重呼び出しを回避）
  * - PrintID 切替や一時停止の再開処理を反映
  * - 各種タイマー値を算出し storedData へ保存
  * - 予想終了時刻等の計算結果も合わせて反映する
  *
  * @function aggregateTimersAndPredictions
- * @param {object} data - 最新の受信データ
+ * @param {object} vals - ingestData で抽出済みの数値オブジェクト
+ * @param {number|null} vals.id      - printStartTime
+ * @param {number}      vals.st      - state
+ * @param {number}      vals.jobTime - printJobTime
+ * @param {number}      vals.selfPct - withSelfTest
+ * @param {number}      vals.prog    - printProgress (0-100)
+ * @param {number}      vals.left    - printLeftTime (秒)
+ * @param {number}      vals.device  - deviceState
+ * @param {number}      vals.finish  - printFinishTime
  * @returns {void}
  */
-function aggregateTimersAndPredictions(data) {
+function aggregateTimersAndPredictions(vals) {
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
 
   const machine = monitorData.machines[currentHostname];
   const storedData = machine?.storedData || {};
 
+  // ── ingestData から受け取った数値を展開 ────────────────────────────────
+  const { id, st, jobTime: job, selfPct, prog, left, device, finish } = vals;
+  const progPct = prog / 100;
+
   // ---- 完了後経過タイマーの復元処理 ------------------------------
   if (tsCompleteStart === null) {
-    const machine = monitorData.machines[currentHostname];
     const last = machine?.historyData?.[machine.historyData.length - 1];
     if (
       last &&
@@ -563,37 +570,19 @@ function aggregateTimersAndPredictions(data) {
     }
   }
 
-  // ── 1) data と storedData のマージ取得 ────────────────────────────────
-  const { value: idRaw   } = getMergedValueWithSource("printStartTime", data);
-  const { value: stRaw   } = getMergedValueWithSource("state",          data);
-  const { value: jobRaw  } = getMergedValueWithSource("printJobTime",   data);
-  const { value: selfRaw } = getMergedValueWithSource("withSelfTest",   data);
-  const { value: progRaw } = getMergedValueWithSource("printProgress",  data);
-  const { value: leftRaw } = getMergedValueWithSource("printLeftTime",  data);
-  const { value: deviceRaw } = getMergedValueWithSource("deviceState", data);
-  const { value: finishRaw } = getMergedValueWithSource("printFinishTime", data);
-
-  const id      = Number(idRaw)   || null;
-  const st      = Number(stRaw)   || 0;
-  const job     = Number(jobRaw)  || 0;
-  const selfPct = Number(selfRaw) || 0;
-  const progPct = (Number(progRaw) || 0) / 100;
-  const left    = Number(leftRaw) || 0;
-  const device  = Number(deviceRaw) || 0;
-  const finish  = Number(finishRaw) || 0;
-
   // ── 2) PrintID 切替検出 → 各種リセット ────────────────────────────────────
-  const validId_ap = Number.isFinite(id) && id > 0;
-  if (prevPrintID !== null && validId_ap && id !== prevPrintID) {
+  const numId = Number(id) || null;
+  const validId_ap = Number.isFinite(numId) && numId > 0;
+  if (prevPrintID !== null && validId_ap && numId !== prevPrintID) {
     {
       tsPrepStart   = tsCheckStart   = tsPauseStart   = tsCompleteStart   = null;
       totalPrepSec  = totalCheckSec  = totalPauseSec                      = 0;
-      prevPrintID   = id;
+      prevPrintID   = numId;
     }
   }
   else if (prevPrintID === null && validId_ap) {
     // 初回読み込み時だけは prevPrintID をセットして、次回以降の切替検出に備える
-    prevPrintID = id;
+    prevPrintID = numId;
   }
 
   // ── 3) 一時停止→再開 のシフト補正 ─────────────────────────────────
@@ -620,7 +609,7 @@ function aggregateTimersAndPredictions(data) {
       // ----- 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
       // printStartTime(id) が取得できていればそこからの経過秒を算出する
       // まだ得られていない場合は現在時刻から計測を開始する
-      tsPrepStart = id ? id * 1000 : nowMs;
+      tsPrepStart = numId ? numId * 1000 : nowMs;
     }
     const sec = totalPrepSec + Math.floor((nowMs - tsPrepStart) / 1000);
     // internal
@@ -814,13 +803,15 @@ export function aggregatorUpdate() {
     }
   }, storedData);
 
-  // fileName 表示抽出
+  // fileName 表示抽出（タイトルバー用 printFileName も同期更新）
   checkUpdatedFields(["fileName"], () => {
     const raw = storedData.fileName?.rawValue;
     if (raw) {
       const name = String(raw).split("/").pop();
       setStoredData("fileName", raw, true);
       setStoredData("fileName", { value: name, unit: "" });
+      setStoredData("printFileName", name, true);
+      setStoredData("printFileName", { value: name, unit: "" });
     }
   }, storedData);
 
@@ -842,6 +833,8 @@ export function aggregatorUpdate() {
     }
   }, storedData);
 
+  // マシン切替時はグラフデータをリセットしてから更新
+  switchChartHost(currentHostname);
   updateTemperatureGraphFromStoredData(storedData);
 
   // printFinishTime 再計算
@@ -1049,6 +1042,7 @@ export function aggregatorUpdate() {
     }
   }
 
+    console.debug("[aggregatorUpdate] updateStoredDataToDOM 呼び出し");
     updateStoredDataToDOM();
     lastPrintState = st;
     persistAggregatorState();

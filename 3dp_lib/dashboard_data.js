@@ -19,10 +19,12 @@
  * - {@link getCurrentMachine}：現在ホストのデータ取得
  * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
+ * - {@link consumeDirtyKeys}：変更キュー消費
+ * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.756 (PR #344)
+* @version 1.390.783 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-21 16:37:31
+* @lastModified 2026-03-10 23:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -199,8 +201,12 @@ export const monitorData = {
     logMaxLines: 1000,
     logLevel: "info",
     autoConnect: true,
-    wsDest: "",          // 接続先 IP:PORT
+    wsDest: "",          // 接続先 IP:PORT（メイン、後方互換）
+    connectionTargets: [],  // 複数接続先リスト [{dest, color?, label?}]
+    showHostTag: true,      // パネルヘッダーにホスト名を表示する
     cameraToggle: false,  // カメラ ON/OFF
+    cameraPort: 8080,     // カメラストリームポート（デフォルト。per-host は connectionTargets.cameraPort）
+    httpPort: 80,         // HTTP ポート（デフォルト。印刷履歴・ファイル取得用）
     notificationSettings: {}
   },
   machines: {
@@ -236,6 +242,31 @@ export const monitorData = {
  */
 export function getCurrentMachine() {
   return currentHostname ? monitorData.machines[currentHostname] : null;
+}
+
+/**
+ * setStoredDataForHost:
+ *  - 指定ホストの storedData[key] に rawValue を直接設定する。
+ *  - currentHostname 以外のホストのデータを蓄積する目的で使用する。
+ *  - タイマーやUIは更新せず、データのみ保存する。
+ *
+ * @param {string} host  - 対象ホスト名
+ * @param {string} key   - フィールド名
+ * @param {*}      value - 設定する値
+ * @returns {void}
+ */
+export function setStoredDataForHost(host, key, value) {
+  ensureMachineData(host);
+  const machine = monitorData.machines[host];
+  if (!machine) return;
+  let d = machine.storedData[key];
+  if (!d) {
+    d = { rawValue: null, computedValue: null, isNew: true, isFromEquipVal: true };
+    machine.storedData[key] = d;
+  }
+  d.rawValue = value;
+  d.isNew = true;
+  d.isFromEquipVal = true;
 }
 
 /**
@@ -285,6 +316,7 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
     }
   }
   d.isNew = true;
+  _dirtyKeys.add(key);
 }
 
 /**
@@ -303,6 +335,73 @@ export function getDisplayValue(fieldName) {
     return { value: String(d.computedValue.value), unit: d.computedValue.unit || "" };
   }
   return { value: String(d.rawValue ?? ""), unit: "" };
+}
+
+/**
+ * パネルシステムでスコープ付きIDの要素を検索する。
+ * パネル内の要素IDは `{hostname}__originalId` 形式にプレフィックス変換されるため、
+ * まずスコープ付きIDで検索し、見つからなければ元のIDにフォールバックする。
+ *
+ * @param {string} id - 元の要素ID
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname を使用）
+ * @returns {HTMLElement|null}
+ */
+export function scopedById(id, hostname) {
+  const host = hostname || currentHostname;
+  if (host) {
+    const prefix = host.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const el = document.getElementById(`${prefix}__${id}`);
+    if (el) return el;
+  }
+  return document.getElementById(id);
+}
+
+/* 非モジュールスクリプト（dashboard_stage_preview.js 等）からも使えるようグローバルに公開 */
+window.scopedById = scopedById;
+
+/* ─── 変更キュー（A: Dirty Key Queue） ─── */
+
+/**
+ * setStoredData で変更されたキーを蓄積するセット。
+ * aggregator サイクルごとに consumeDirtyKeys() で消費し、
+ * 変更のあったキーだけを DOM に反映することで全キー走査を回避する。
+ *
+ * @type {Set<string>}
+ * @private
+ */
+const _dirtyKeys = new Set();
+
+/**
+ * consumeDirtyKeys:
+ * 蓄積された変更キーを配列として返し、内部セットをクリアする。
+ * aggregator の updateStoredDataToDOM() から呼ばれる。
+ *
+ * @returns {string[]} 変更があったキーの配列
+ */
+export function consumeDirtyKeys() {
+  const keys = [..._dirtyKeys];
+  _dirtyKeys.clear();
+  return keys;
+}
+
+/**
+ * markAllKeysDirty:
+ * 指定ホスト（省略時は currentHostname）の storedData 全キーを
+ * 変更キューに追加する。ホスト切替時に全フィールドの DOM 再描画を
+ * トリガーするために使用する。
+ *
+ * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
+ * @returns {void}
+ */
+export function markAllKeysDirty(hostname) {
+  const host = hostname || currentHostname;
+  if (!host) return;
+  const machine = monitorData.machines[host];
+  if (!machine) return;
+  for (const key in machine.storedData) {
+    machine.storedData[key].isNew = true;
+    _dirtyKeys.add(key);
+  }
 }
 
 

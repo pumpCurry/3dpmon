@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.737 (PR #340)
+* @version 1.390.784 (PR #366)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-13 11:05:00
+* @lastModified 2026-03-10 23:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,6 +41,7 @@ import {
   PLACEHOLDER_HOSTNAME,
   setNotificationSuppressed,
   setStoredData,
+  scopedById,
 } from "./dashboard_data.js";
 import {
   restoreUnifiedStorage,
@@ -68,7 +69,28 @@ import {
 } from "./dashboard_aggregator.js";
 import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
-import { getDeviceIp } from "./dashboard_connection.js";
+import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
+
+/**
+ * WS受信データのうち storedData に格納すべきでないキーのセット。
+ * - 配列型フィールド（printManager で別途処理）
+ * - 内部プロトコルフィールド
+ * - 別途パース・分解して格納済みのフィールド
+ *
+ * @constant {Set<string>}
+ * @private
+ */
+const _WS_SKIP_KEYS = new Set([
+  "hostname",         // ホスト識別用、storedData 不要
+  "ModeCode",         // プロトコル種別（heart_beat 等）
+  "err",              // 2.2 でエラー処理済み
+  "historyList",      // 配列、printManager で処理
+  "elapseVideoList",  // 配列、printManager で処理
+  "curPosition",      // 2.7.1 で positionX/Y/Z に分解済み
+  "gcodeFileList",    // 配列、printManager で処理
+  "reqGcodeFileInfo", // リクエストフラグ、データではない
+  "reqHistory",       // リクエストフラグ、データではない
+]);
 
 /** タイマーID／タイムスタンプ／累積値 */
 let prepTimerId, checkTimerId, pauseTimerId, completionTimer;
@@ -116,7 +138,7 @@ function persistHistoryTimers(printId) {
     const v = machine.storedData[key]?.rawValue;
     if (v != null) entry[key] = v;
   });
-  const baseUrl = `http://${getDeviceIp()}:80`;
+  const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
   if (
     entry.filename ||
     (Array.isArray(entry.filamentInfo) && entry.filamentInfo.length > 0)
@@ -215,14 +237,14 @@ export function handleMessage(data) {
     restorePrintResume(curId);
 
     // 保存済み履歴と現在印刷を表示
-    const baseUrlStored = `http://${getDeviceIp()}:80`;
+    const baseUrlStored = `http://${getDeviceIp()}:${getHttpPort()}`;
     const jobs = printManager.loadHistory();
     if (jobs.length) {
       const raw = printManager.jobsToRaw(jobs);
       printManager.renderHistoryTable(raw, baseUrlStored);
     }
     printManager.renderPrintCurrent(
-      document.getElementById("print-current-container")
+      scopedById("print-current-container")
     );
 
     // 初期化完了、通知抑制を解除
@@ -553,8 +575,16 @@ export function processData(data) {
   }
 
   // (2.7.3) その他フィールド一括反映
-  // 重要：ここで得られた値のみ、setstoredDataの第4フラグ(機器から得られる情報)をフラグONとする
-  Object.entries(data).forEach(([k, v]) => setStoredData(k, v, true, true));
+  // 重要：ここで得られた値のみ、setStoredDataの第4フラグ(機器から得られる情報)をフラグONとする
+  // _WS_SKIP_KEYS に含まれるキー（配列データ・内部プロトコル・パース済みフィールド）は
+  // storedData に格納せず、dirty key への追加も回避する
+  for (const [k, v] of Object.entries(data)) {
+    if (_WS_SKIP_KEYS.has(k)) continue;
+    // 配列・オブジェクト型（err以外）はスカラー値ではないため storedData に格納しない
+    if (v !== null && typeof v === "object" && !Array.isArray(v) && k !== "err") continue;
+    if (Array.isArray(v)) continue;
+    setStoredData(k, v, true, true);
+  }
 
   // --- 新しい印刷情報が後から届いた場合の現在ジョブ更新処理 ----------------
   // fileName または printStartTime が受信された際、printManager が保持する
@@ -580,12 +610,12 @@ export function processData(data) {
     if (changed) {
       printManager.saveCurrent(curJob);
       printManager.renderPrintCurrent(
-        document.getElementById("print-current-container")
+        scopedById("print-current-container")
       );
     }
   }
 
-  // (2.7.4) 進捗100%以上で履歴登録
+  // (2.7.4) 進捗100%以上で履歴登録（重複防止付き）
   if (Number(data.printProgress ?? 0) >= 100) {
     const entry = { ...data };
     entry.id = Number(data.printStartTime || 0);
@@ -608,10 +638,13 @@ export function processData(data) {
     ["filamentId", "filamentColor", "filamentType"].forEach(k => {
       if (data[k] != null) entry[k] = data[k];
     });
-    machine.historyData.push(entry);
-    const baseUrl = `http://${getDeviceIp()}:80`;
-    printManager.updateHistoryList([entry], baseUrl);
-    persistPrintResume();
+    // 同一ジョブIDの重複登録を防止する
+    if (!machine.historyData.find(h => h.id === entry.id)) {
+      machine.historyData.push(entry);
+      const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
+      printManager.updateHistoryList([entry], baseUrl);
+      persistPrintResume();
+    }
   }
 
   // 次回比較用に保存
