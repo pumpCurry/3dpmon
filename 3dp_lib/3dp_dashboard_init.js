@@ -41,14 +41,7 @@ import {
   monitorData,
   setStoredData
 } from "./dashboard_data.js";
-import {
-  restoreXYPreviewState,
-  initXYPreview,
-  setFlatView,
-  setTilt45View,
-  setObliqueView,
-  toggleZSpin
-} from "./dashboard_stage_preview.js";
+// XYプレビュー・ステージ回転はパネルシステム (dashboard_panel_init.js) で初期化
 import {
   initLogAutoScroll,
   initLogRenderer,
@@ -70,7 +63,7 @@ import {
 import { addSpoolFromPreset, setCurrentSpoolId, getCurrentSpool } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { FileManager } from "./dashboard_filemanager.js";
-import { createFilamentPreview } from "./dashboard_filament_view.js";
+// フィラメントプレビューはパネルシステム (dashboard_panel_init.js) で初期化
 import * as printManager from "./dashboard_printmanager.js";
 import {
   copyLogsToClipboard,
@@ -91,7 +84,6 @@ import {
   initXYUnlock
 } from "./dashboard_send_command.js";
 
-let filamentPreview = null;
 /**
  * @fileoverview
  * ダッシュボードを初期化します。
@@ -137,66 +129,11 @@ export async function initializeDashboard({
   }
 
   // (3) プレビュー復元＆初期化
-  restoreXYPreviewState();
-  initXYPreview();
-  const fpMount = document.getElementById("filament-preview");
-  if (fpMount) {
-    const machine = monitorData.machines[currentHostname] || {};
-    const spool   = getCurrentSpool();
-    const opts = {
-      filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
-      filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? 330000,
-      filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? 0,
-      filamentColor:            spool?.filamentColor ?? machine.settings?.filamentColor ?? "#22C55E",
-      reelOuterDiameter:        spool?.reelOuterDiameter ?? 200,
-      reelThickness:            spool?.reelThickness ?? 68,
-      reelWindingInnerDiameter: spool?.reelWindingInnerDiameter ?? 95,
-      reelCenterHoleDiameter:   spool?.reelCenterHoleDiameter ?? 54,
-      widthPx:                  264,
-      heightPx:                 264,
-      showSlider:               false,
-      isFilamentPresent:        true,
-      showUsedUpIndicator:      true,
-      blinkingLightColor:       '#0EA5E9',
-      showInfoLength:           false,
-      showInfoPercent:          false,
-      showInfoLayers:           false,
-      showResetButton:          false,
-      showProfileViewButton:    true,
-      showSideViewButton:       true,
-      showFrontViewButton:      true,
-      showAutoRotateButton:     true,
-      enableDrag:               true,
-      enableClick:              false,
-      onClick:                  null,
-      disableInteraction:       true,
-      showOverlayLength:        true,
-      showOverlayPercent:       true,
-      showLengthKg:             false,
-      showReelName:             true,
-      showReelSubName:          true,
-      showMaterialName:         true,
-      showMaterialColorName:    true,
-      showMaterialColorCode:    true,
-      showManufacturerName:     true,
-      showOverlayBar:           true,
-      showPurchaseButton:       true,
-      reelName:                 spool?.name || '',
-      reelSubName:              spool?.reelSubName || '',
-      materialName:             spool?.materialName || spool?.material || '',
-      materialColorName:        spool?.colorName || '',
-      materialColorCode:        spool?.filamentColor || '',
-      manufacturerName:         spool?.manufacturerName || spool?.brand || ''
-    };
-    filamentPreview = createFilamentPreview(fpMount, opts);
-    window.filamentPreview = filamentPreview;
-  }
-
-  // ステージ回転ボタン
-  document.getElementById("btn-stage-flat")?.addEventListener("click", setFlatView);
-  document.getElementById("btn-stage-45")?.addEventListener("click", setTilt45View);
-  document.getElementById("btn-stage-65-72")?.addEventListener("click", setObliqueView);
-  document.getElementById("btn-stage-spin")?.addEventListener("click", toggleZSpin);
+  // ※ XYプレビュー・フィラメントプレビュー・ステージ回転ボタンは
+  //   パネルシステムの initHeadPreviewPanel / initFilamentPanel で
+  //   per-host 実行されるため、ここでは呼ばない。
+  //   ここで呼ぶと "_default" 状態が作成され per-host 状態と競合し、
+  //   また DOM 要素がテンプレート化後に失われ初期化が無効になる。
 
   // (4) ログ描画・自動スクロール設定
   const logBox = document.getElementById("log");

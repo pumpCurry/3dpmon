@@ -55,6 +55,7 @@ import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData, currentHostname } from "./dashboard_data.js";
+import { getCurrentSpool } from "./dashboard_spool.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
@@ -256,17 +257,54 @@ function initFilamentPanel(body, hostname) {
   const container = body.querySelector("#filament-preview");
   if (!container) return;
 
-  // フィラメントプレビューを生成（per-host）
+  // フィラメントプレビューを生成（per-host・スプール情報反映）
   try {
+    const machine = monitorData.machines[hostname] || {};
+    const spool = getCurrentSpool();
     const preview = createFilamentPreview(container, {
-      filamentDiameter: 1.75,
-      filamentTotalLength: 330000,
-      filamentCurrentLength: 330000,
-      filamentColor: "#00cc66",
-      reelOuterDiameter: 200,
-      reelThickness: 68,
-      reelWindingInnerDiameter: 95,
-      reelCenterHoleDiameter: 54,
+      filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
+      filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? 330000,
+      filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? 0,
+      filamentColor:            spool?.filamentColor ?? machine.settings?.filamentColor ?? "#22C55E",
+      reelOuterDiameter:        spool?.reelOuterDiameter ?? 200,
+      reelThickness:            spool?.reelThickness ?? 68,
+      reelWindingInnerDiameter: spool?.reelWindingInnerDiameter ?? 95,
+      reelCenterHoleDiameter:   spool?.reelCenterHoleDiameter ?? 54,
+      widthPx:                  264,
+      heightPx:                 264,
+      showSlider:               false,
+      isFilamentPresent:        true,
+      showUsedUpIndicator:      true,
+      blinkingLightColor:       "#0EA5E9",
+      showInfoLength:           false,
+      showInfoPercent:          false,
+      showInfoLayers:           false,
+      showResetButton:          false,
+      showProfileViewButton:    true,
+      showSideViewButton:       true,
+      showFrontViewButton:      true,
+      showAutoRotateButton:     true,
+      enableDrag:               true,
+      enableClick:              false,
+      onClick:                  null,
+      disableInteraction:       true,
+      showOverlayLength:        true,
+      showOverlayPercent:       true,
+      showLengthKg:             false,
+      showReelName:             true,
+      showReelSubName:          true,
+      showMaterialName:         true,
+      showMaterialColorName:    true,
+      showMaterialColorCode:    true,
+      showManufacturerName:     true,
+      showOverlayBar:           true,
+      showPurchaseButton:       true,
+      reelName:                 spool?.name || "",
+      reelSubName:              spool?.reelSubName || "",
+      materialName:             spool?.materialName || spool?.material || "",
+      materialColorName:        spool?.colorName || "",
+      materialColorCode:        spool?.filamentColor || "",
+      manufacturerName:         spool?.manufacturerName || spool?.brand || "",
     });
     /* per-host Map + 後方互換 window.filamentPreview */
     if (!window._filamentPreviews) window._filamentPreviews = new Map();

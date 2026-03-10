@@ -1379,7 +1379,7 @@ function parseFileInfo(text, baseUrl) {
 }
 
 /** --- 3) ファイル一覧描画 --- */
-export function renderFileList(info, baseUrl) {
+export function renderFileList(info, baseUrl, hostname) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
   pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info");
   const arr = parseFileInfo(info.fileInfo, baseUrl);
@@ -1399,12 +1399,15 @@ export function renderFileList(info, baseUrl) {
   });
 
   // 総数表示
-  const totalEl = scopedById("file-list-total");
+  const totalEl = scopedById("file-list-total", hostname);
   if (totalEl) totalEl.textContent = info.totalNum;
 
-  const fileTable = scopedById("file-list-table");
+  const fileTable = scopedById("file-list-table", hostname);
   const tbody = fileTable?.querySelector("tbody");
   if (!tbody) return;
+
+  // 前回の行をクリアしてから再描画
+  tbody.innerHTML = "";
 
   arr.forEach(item => {
     const tr = document.createElement("tr");
@@ -1450,7 +1453,7 @@ export function renderFileList(info, baseUrl) {
   if (fileTable) {
     fileTable.querySelectorAll("th").forEach(th => {
       th.addEventListener("click", () => {
-        sortTable("file-list-table", th.dataset.key);
+        sortTable("file-list-table", th.dataset.key, hostname);
       });
     });
   }

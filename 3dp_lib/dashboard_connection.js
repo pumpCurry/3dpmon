@@ -803,11 +803,10 @@ function handleSocketMessage(event, host) {
 
 // 7) ファイル一覧の保存・再描画
   try {
-    // 印刷履歴の再取得・保存・レンダリング は各モジュールで行われています
-    // （dashboard_printManager.js 側で実装）
-    if (data.retGcodeFileInfo) {
-      pushLog("retGcodeFileInfo を受信しました", "info");
-      printManager.renderFileList(data.retGcodeFileInfo, baseUrl);
+    if (hostReady && data.retGcodeFileInfo) {
+      pushLog("retGcodeFileInfo を受信しました", "info", false, hostKey);
+      const baseUrlHttp = `http://${ip}:${httpPort}`;
+      printManager.renderFileList(data.retGcodeFileInfo, baseUrlHttp, hostKey);
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
