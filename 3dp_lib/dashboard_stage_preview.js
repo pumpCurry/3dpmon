@@ -14,45 +14,124 @@
  * 【公開関数一覧】
  * - {@link restoreXYPreviewState} など複数を一括エクスポート
  *
-* @version 1.390.748 (PR #345)
+* @version 1.390.784 (PR #366)
 * @since   1.390.214 (PR #95)
-* @lastModified 2025-07-19 19:51:00
+* @lastModified 2026-03-10 23:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
 */
 
 const maxDots = 128;
-const xyDots = [];
-let xyUpdateCount = 0;
-let xyInitialized = false;
 
 /** パネルシステム対応: スコープ付きID検索（dashboard_data.js がグローバルに公開） */
 function _getElementById(id) {
   return (typeof window.scopedById === "function")
     ? window.scopedById(id)
-    : _getElementById(id);
+    : document.getElementById(id);
 }
 
-// XYプレビュー履歴用
-let xyHistory = [];       // { x, y }の履歴を保持
-let xyHistoryIndex = 0;   // xyDotsに割り当てるインデックス
-let lastXYPosition = { x: 0, y: 0 };
-
-// 回転状態
+// 回転状態（ビュー共有）
 let stageRotX = 0;
 let stageRotZ = 0;
 const STAGE_ROT_X_MIN = 0;
 const STAGE_ROT_X_MAX = 70;
-
-// XYプレビューのスケール関連定数
-// ステージサイズ(mm)・Z最大値(mm)はモデル毎に可変
-let stageSizeMm = 300;   // X/Y 最大長さ
-let stageZMaxMm = 300;   // Z 最大値
 const STAGE_SCALE = 0.5; // 画面上の倍率
 
-let currentModel = null;       // 設定済みモデル名
-let lastZPosition = 0;         // 最後に描画したZ値
+// ---------------------------------------------------------------------------
+// per-host プレビュー状態
+// ---------------------------------------------------------------------------
+
+/**
+ * @typedef {Object} PreviewHostState
+ * @property {Array}  xyDots           DOM ドット要素配列
+ * @property {number} xyUpdateCount    更新カウンタ
+ * @property {boolean} xyInitialized   初期化済みフラグ
+ * @property {Array}  xyHistory        XY 座標履歴
+ * @property {number} xyHistoryIndex   現在の履歴インデックス
+ * @property {{x:number,y:number}} lastXYPosition  最終XY座標
+ * @property {number} lastZPosition    最終Z座標
+ * @property {string|null} currentModel プリンタモデル名
+ * @property {number} stageSizeMm      ステージサイズ(mm)
+ * @property {number} stageZMaxMm      Z最大値(mm)
+ */
+
+/** @type {Map<string, PreviewHostState>} */
+const _previewHostStates = new Map();
+
+/** 現在アクティブなホスト名 */
+let _activePreviewHost = null;
+
+/**
+ * per-host 状態を取得（なければ作成）
+ * @private
+ * @param {string} [hostname]
+ * @returns {PreviewHostState}
+ */
+function _getPreviewState(hostname) {
+  const host = hostname || _activePreviewHost || "_default";
+  if (!_previewHostStates.has(host)) {
+    _previewHostStates.set(host, {
+      xyDots: [],
+      xyUpdateCount: 0,
+      xyInitialized: false,
+      xyHistory: [],
+      xyHistoryIndex: 0,
+      lastXYPosition: { x: 0, y: 0 },
+      lastZPosition: 0,
+      currentModel: null,
+      stageSizeMm: 300,
+      stageZMaxMm: 300
+    });
+  }
+  return _previewHostStates.get(host);
+}
+
+// 後方互換：モジュールスコープ参照（アクティブホストのデータ）
+let xyDots, xyUpdateCount, xyInitialized, xyHistory, xyHistoryIndex, lastXYPosition;
+let stageSizeMm, stageZMaxMm, currentModel, lastZPosition;
+// デフォルト値で初期化
+(function _initDefaults() {
+  const s = _getPreviewState("_default");
+  xyDots = s.xyDots;
+  xyUpdateCount = s.xyUpdateCount;
+  xyInitialized = s.xyInitialized;
+  xyHistory = s.xyHistory;
+  xyHistoryIndex = s.xyHistoryIndex;
+  lastXYPosition = s.lastXYPosition;
+  lastZPosition = s.lastZPosition;
+  currentModel = s.currentModel;
+  stageSizeMm = s.stageSizeMm;
+  stageZMaxMm = s.stageZMaxMm;
+})();
+
+/**
+ * アクティブホストを切替え、モジュールスコープ変数を同期する。
+ * @param {string} hostname
+ */
+function _syncPreviewHost(hostname) {
+  if (!hostname) return;
+  // 現在の値を保存
+  if (_activePreviewHost) {
+    const prev = _getPreviewState(_activePreviewHost);
+    prev.xyUpdateCount = xyUpdateCount;
+    prev.xyInitialized = xyInitialized;
+    prev.xyHistoryIndex = xyHistoryIndex;
+    prev.lastZPosition = lastZPosition;
+  }
+  _activePreviewHost = hostname;
+  const s = _getPreviewState(hostname);
+  xyDots = s.xyDots;
+  xyUpdateCount = s.xyUpdateCount;
+  xyInitialized = s.xyInitialized;
+  xyHistory = s.xyHistory;
+  xyHistoryIndex = s.xyHistoryIndex;
+  lastXYPosition = s.lastXYPosition;
+  lastZPosition = s.lastZPosition;
+  currentModel = s.currentModel;
+  stageSizeMm = s.stageSizeMm;
+  stageZMaxMm = s.stageZMaxMm;
+}
 
 /**
  * プリンタモデルに応じてステージサイズとZ軸上限を設定し、
@@ -61,9 +140,14 @@ let lastZPosition = 0;         // 最後に描画したZ値
  * @param {string} model - プリンタモデル名
  * @returns {void}
  */
-function setPrinterModel(model) {
+function setPrinterModel(model, hostname) {
+  if (hostname) _syncPreviewHost(hostname);
   if (currentModel === model) return;
   currentModel = model;
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.currentModel = model;
+  }
   if (model === "K1 Max") {
     stageSizeMm = 300;
     stageZMaxMm = 300;
@@ -73,6 +157,11 @@ function setPrinterModel(model) {
   } else {
     return; // 未対応モデルは変更なし
   }
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.stageSizeMm = stageSizeMm;
+    s.stageZMaxMm = stageZMaxMm;
+  }
   const stageElem = _getElementById("xy-stage");
   if (!stageElem) return; // テスト環境などでDOMが無い場合
   const px = stageSizeMm * STAGE_SCALE;
@@ -81,6 +170,11 @@ function setPrinterModel(model) {
   stageElem.innerHTML = "";
   xyDots.length = 0;
   xyInitialized = false;
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.xyDots = xyDots;
+    s.xyInitialized = false;
+  }
   const labelBottom = document.querySelector("#z-preview-container .z-label-bottom");
   if (labelBottom) labelBottom.textContent = String(stageZMaxMm);
   updateXYPreview(lastXYPosition.x, lastXYPosition.y);
@@ -93,14 +187,26 @@ function setPrinterModel(model) {
  *
  * @returns {void}
  */
-function restoreXYPreviewState() {
+function restoreXYPreviewState(hostname) {
+  if (hostname) _syncPreviewHost(hostname);
+  const storageKey = _activePreviewHost
+    ? `xyPreviewState_${_activePreviewHost}`
+    : "xyPreviewState";
   try {
-    const saved = localStorage.getItem("xyPreviewState");
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       const obj = JSON.parse(saved);
       xyHistory = obj.xyHistory || [];
       xyHistoryIndex = obj.xyHistoryIndex || 0;
       lastXYPosition = obj.lastXYPosition || { x: 0, y: 0 };
+
+      // per-host 状態を同期
+      if (_activePreviewHost) {
+        const s = _getPreviewState(_activePreviewHost);
+        s.xyHistory = xyHistory;
+        s.xyHistoryIndex = xyHistoryIndex;
+        s.lastXYPosition = lastXYPosition;
+      }
     }
   } catch (e) {
     console.warn("XYプレビュー復元エラー:", e);
@@ -112,14 +218,18 @@ function restoreXYPreviewState() {
  *
  * @returns {void}
  */
-function saveXYPreviewState() {
+function saveXYPreviewState(hostname) {
+  if (hostname) _syncPreviewHost(hostname);
+  const storageKey = _activePreviewHost
+    ? `xyPreviewState_${_activePreviewHost}`
+    : "xyPreviewState";
   const obj = {
     xyHistory,
     xyHistoryIndex,
     lastXYPosition
   };
   try {
-    localStorage.setItem("xyPreviewState", JSON.stringify(obj));
+    localStorage.setItem(storageKey, JSON.stringify(obj));
   } catch (e) {
     console.warn("XYプレビュー保存エラー:", e);
   }
@@ -149,6 +259,12 @@ function restoreXYHistoryDots() {
     dot.style.display = "block";
   });
   xyUpdateCount = xyHistoryIndex + 1;
+
+  // per-host 状態を同期
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.xyUpdateCount = xyUpdateCount;
+  }
 }
 
 /**
@@ -306,6 +422,14 @@ function initXYPreview() {
   restoreXYHistoryDots();
 
   xyInitialized = true;
+
+  // per-host 状態を同期
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.xyDots = xyDots;
+    s.xyInitialized = true;
+    s.xyUpdateCount = xyUpdateCount;
+  }
 }
 
 /**
@@ -316,7 +440,8 @@ function initXYPreview() {
  * @param {number} y - Y 座標値(mm)
  * @returns {void}
  */
-function updateXYPreview(x, y) {
+function updateXYPreview(x, y, hostname) {
+  if (hostname) _syncPreviewHost(hostname);
   if (!xyInitialized) {
     initXYPreview();
   }
@@ -347,6 +472,15 @@ function updateXYPreview(x, y) {
   xyHistoryIndex = index;
   xyHistory[index] = { x, y };
   lastXYPosition = { x, y };
+
+  // per-host 状態を同期
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.xyUpdateCount = xyUpdateCount;
+    s.xyHistoryIndex = xyHistoryIndex;
+    s.lastXYPosition = lastXYPosition;
+  }
+
   saveXYPreviewState();
 }
 
@@ -356,7 +490,8 @@ function updateXYPreview(x, y) {
  * @param {number} z - Z 座標値(mm)
  * @returns {void}
  */
-function updateZPreview(z) {
+function updateZPreview(z, hostname) {
+  if (hostname) _syncPreviewHost(hostname);
   const scale = 0.5;
   const clampedZ = Math.min(z, stageZMaxMm);
   const barHeight = clampedZ * scale;
@@ -370,6 +505,12 @@ function updateZPreview(z) {
     zValueElem.textContent = z.toFixed(2);
   }
   lastZPosition = z;
+
+  // per-host 状態を同期
+  if (_activePreviewHost) {
+    const s = _getPreviewState(_activePreviewHost);
+    s.lastZPosition = lastZPosition;
+  }
 }
 
 /**
@@ -509,5 +650,6 @@ export {
   setTilt45View,
   setObliqueView,
   toggleZSpin,
-  stopZSpin
+  stopZSpin,
+  _syncPreviewHost as switchPreviewHost
 };

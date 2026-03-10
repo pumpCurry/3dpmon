@@ -21,16 +21,16 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.784 (PR #366)
+* @version 1.390.785 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-10 23:30:00
+* @lastModified 2026-03-11 01:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
  */
 "use strict";
 
-import { monitorData, currentHostname, setStoredData } from "./dashboard_data.js";
+import { monitorData, currentHostname, setStoredData, setStoredDataForHost } from "./dashboard_data.js";
 import { clearNewClasses, updateStoredDataToDOM } from "./dashboard_ui.js";
 import { saveUnifiedStorage, loadPrintCurrent } from "./dashboard_storage.js";
 import { updateTemperatureGraphFromStoredData, switchChartHost } from "./dashboard_chart.js";
@@ -50,7 +50,7 @@ import {
 } from "./dashboard_spool.js";
 
 // ---------------------------------------------------------------------------
-// 状態変数／タイムスタンプ定義
+// 状態変数／タイムスタンプ定義（per-host 管理）
 // ---------------------------------------------------------------------------
 
 /** aggregatorUpdate 用タイマー ID */
@@ -70,48 +70,99 @@ export function setHistoryPersistFunc(fn) {
   historyPersistFunc = typeof fn === "function" ? fn : null;
 }
 
-// タイマー計測用
-let tsPrepStart       = null, totalPrepSec       = 0;
-let tsCheckStart      = null, totalCheckSec      = 0;
-let tsPauseStart      = null, totalPauseSec      = 0;
-let tsCompleteStart   = null;
-let actualStartEpoch  = null;
-let initialLeftSec    = null, initialLeftEpoch = null;
-let prevPrintID       = null;
-let lastPrintState    = PRINT_STATE_CODE.printIdle;
-
-// 通知履歴 A～E 用
-const PROGRESS_MILESTONES        = [50, 80, 90, 95, 98];
-let prevProgress                 = 0;
-let lastProgressTimestamp        = Date.now();
-const notifiedProgressMilestones = new Set();
-
-const TIME_THRESHOLDS            = [10, 5, 3, 1];
-let prevRemainingSec             = null;
-const notifiedTimeThresholds     = new Set();
-
-const TEMP_MILESTONES            = [0.8, 0.9, 0.95, 0.98, 1.0];
-const notifiedTempMilestones     = new Set();
-
-let prevMaterialStatus           = null;
-let currentMaterialStatus        = null;
-let filamentOutTimer             = null;
-let filamentLowWarned            = false;
-
+// 通知閾値定数（全ホスト共通）
+const PROGRESS_MILESTONES    = [50, 80, 90, 95, 98];
+const TIME_THRESHOLDS        = [10, 5, 3, 1];
+const TEMP_MILESTONES        = [0.8, 0.9, 0.95, 0.98, 1.0];
 /** スナップショット記録間隔 [秒] */
 const USAGE_SNAPSHOT_INTERVAL = 30;
-let lastUsageSnapshotSec = 0;
-let snapshotPrintId = null;
 
 // ---------------------------------------------------------------------------
-// フィラメント使用量の追跡用変数
+// per-host 状態オブジェクト
 // ---------------------------------------------------------------------------
-/** 前回受信した usedMaterialLength [mm] を保持 */
-let prevUsedMaterialLength = null;
-/** 前回処理した進捗率 [%]。進捗から使用量を推定する際に利用 */
-let prevUsageProgress = 0;
-/** セッション中に累積した実使用フィラメント長 [mm] */
-let accumulatedUsedMaterial = 0;
+
+/**
+ * @typedef {Object} AggregatorHostState
+ * @property {number|null} tsPrepStart       準備開始タイムスタンプ
+ * @property {number}      totalPrepSec      準備時間累計 [秒]
+ * @property {number|null} tsCheckStart      自己テスト開始タイムスタンプ
+ * @property {number}      totalCheckSec     自己テスト時間累計 [秒]
+ * @property {number|null} tsPauseStart      一時停止開始タイムスタンプ
+ * @property {number}      totalPauseSec     一時停止時間累計 [秒]
+ * @property {number|null} tsCompleteStart   完了開始タイムスタンプ
+ * @property {number|null} actualStartEpoch  実印刷開始エポック
+ * @property {number|null} initialLeftSec    初回残り時間 [秒]
+ * @property {number|null} initialLeftEpoch  初回残り時間取得エポック
+ * @property {number|null} prevPrintID       前回印刷ID
+ * @property {number}      lastPrintState    最後の印刷状態コード
+ * @property {number}      prevProgress      前回進捗率
+ * @property {number}      lastProgressTimestamp  最終進捗タイムスタンプ
+ * @property {Set<number>} notifiedProgressMilestones  通知済み進捗マイルストーン
+ * @property {number|null} prevRemainingSec  前回残り時間
+ * @property {Set<number>} notifiedTimeThresholds  通知済み残り時間閾値
+ * @property {Set<number>} notifiedTempMilestones  通知済み温度マイルストーン
+ * @property {number|null} prevMaterialStatus  前回フィラメント状態
+ * @property {number|null} currentMaterialStatus  現在フィラメント状態
+ * @property {number|null} filamentOutTimer  フィラメント切れタイマーID
+ * @property {boolean}     filamentLowWarned  フィラメント残量警告済み
+ * @property {number}      lastUsageSnapshotSec  最終スナップショット時刻
+ * @property {string|null} snapshotPrintId  スナップショット対象印刷ID
+ * @property {number|null} prevUsedMaterialLength  前回フィラメント使用長
+ * @property {number}      prevUsageProgress  前回使用量進捗
+ * @property {number}      accumulatedUsedMaterial  累積フィラメント使用量
+ */
+
+/**
+ * ホスト別に集約状態を保持する Map。
+ * @type {Map<string, AggregatorHostState>}
+ * @private
+ */
+const _hostStates = new Map();
+
+/**
+ * 空の AggregatorHostState を生成する。
+ * @private
+ * @returns {AggregatorHostState}
+ */
+function _createHostState() {
+  return {
+    tsPrepStart: null, totalPrepSec: 0,
+    tsCheckStart: null, totalCheckSec: 0,
+    tsPauseStart: null, totalPauseSec: 0,
+    tsCompleteStart: null,
+    actualStartEpoch: null,
+    initialLeftSec: null, initialLeftEpoch: null,
+    prevPrintID: null,
+    lastPrintState: PRINT_STATE_CODE.printIdle,
+    prevProgress: 0,
+    lastProgressTimestamp: Date.now(),
+    notifiedProgressMilestones: new Set(),
+    prevRemainingSec: null,
+    notifiedTimeThresholds: new Set(),
+    notifiedTempMilestones: new Set(),
+    prevMaterialStatus: null,
+    currentMaterialStatus: null,
+    filamentOutTimer: null,
+    filamentLowWarned: false,
+    lastUsageSnapshotSec: 0,
+    snapshotPrintId: null,
+    prevUsedMaterialLength: null,
+    prevUsageProgress: 0,
+    accumulatedUsedMaterial: 0
+  };
+}
+
+/**
+ * 指定ホストの AggregatorHostState を返す（無ければ作成）。
+ * @private
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @returns {AggregatorHostState}
+ */
+function _getState(hostname) {
+  const host = hostname || currentHostname;
+  if (!_hostStates.has(host)) _hostStates.set(host, _createHostState());
+  return _hostStates.get(host);
+}
 
 // ---------------------------------------------------------------------------
 // _resetNotificationState: 通知状態リセット（共通化）
@@ -124,13 +175,18 @@ let accumulatedUsedMaterial = 0;
  * @param {number} nowMs - 現在時刻（ミリ秒）
  * @returns {void}
  */
-function _resetNotificationState(nowMs) {
-  notifiedProgressMilestones.clear();
-  notifiedTimeThresholds.clear();
-  notifiedTempMilestones.clear();
-  prevProgress = 0;
-  lastProgressTimestamp = nowMs;
-  prevRemainingSec = null;
+/**
+ * @private
+ * @param {AggregatorHostState} s - ホスト状態
+ * @param {number} nowMs - 現在時刻（ミリ秒）
+ */
+function _resetNotificationState(s, nowMs) {
+  s.notifiedProgressMilestones.clear();
+  s.notifiedTimeThresholds.clear();
+  s.notifiedTempMilestones.clear();
+  s.prevProgress = 0;
+  s.lastProgressTimestamp = nowMs;
+  s.prevRemainingSec = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,8 +201,14 @@ function _resetNotificationState(nowMs) {
  * @param {string} key - storedData のキー
  * @returns {*} rawValue の値、未設定時は null
  */
-function _readRaw(key) {
-  const machine = monitorData.machines[currentHostname];
+/**
+ * @private
+ * @param {string} key - storedData のキー
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname）
+ * @returns {*} rawValue の値、未設定時は null
+ */
+function _readRaw(key, hostname) {
+  const machine = monitorData.machines[hostname || currentHostname];
   return machine?.storedData?.[key]?.rawValue ?? null;
 }
 
@@ -168,32 +230,37 @@ function _readRaw(key) {
  *
  * @param {object} data  - WebSocket で受信した生データ（互換性のため保持、内部では storedData から直接読み取り）
  */
-export function ingestData(data) {
+export function ingestData(data, hostname) {
+  const host = hostname || currentHostname;
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
 
-  const machine = monitorData.machines[currentHostname];
+  const machine = monitorData.machines[host];
   if (!machine) return;
   const storedData = machine.storedData;
+  const s = _getState(host);
+
+  /** ホスト指定の setStoredData ラッパー */
+  const _set = (key, value, isRaw = false) => setStoredDataForHost(host, key, value, isRaw);
 
   // —— storedData から一括読み取り ——
   // processData (2.7.3) で data→storedData への格納が完了しているため、
   // storedData.rawValue を直接参照する（getMergedValueWithSource の二重走査を回避）
-  const id       = _readRaw("printStartTime");
-  const progRaw  = _readRaw("printProgress");
-  const jobRaw   = _readRaw("printJobTime");
-  const leftRaw  = _readRaw("printLeftTime");
-  const selfRaw  = _readRaw("withSelfTest");
-  const nozzleRaw = _readRaw("nozzleTemp");
-  const maxNozzRaw = _readRaw("maxNozzleTemp");
-  const bedRaw   = _readRaw("bedTemp0");
-  const maxBedRaw = _readRaw("maxBedTemp");
-  const matStatRaw = _readRaw("materialStatus");
+  const id       = _readRaw("printStartTime", host);
+  const progRaw  = _readRaw("printProgress", host);
+  const jobRaw   = _readRaw("printJobTime", host);
+  const leftRaw  = _readRaw("printLeftTime", host);
+  const selfRaw  = _readRaw("withSelfTest", host);
+  const nozzleRaw = _readRaw("nozzleTemp", host);
+  const maxNozzRaw = _readRaw("maxNozzleTemp", host);
+  const bedRaw   = _readRaw("bedTemp0", host);
+  const maxBedRaw = _readRaw("maxBedTemp", host);
+  const matStatRaw = _readRaw("materialStatus", host);
   // usedMaterialLength → materialLength エイリアス処理
   // usedMaterialLength を優先、なければ旧形式 usagematerial、最後に materialLength
-  let matLenRaw = _readRaw("usedMaterialLength");
+  let matLenRaw = _readRaw("usedMaterialLength", host);
   if (matLenRaw == null) {
-    matLenRaw = _readRaw("usagematerial") ?? _readRaw("materialLength") ?? null;
+    matLenRaw = _readRaw("usagematerial", host) ?? _readRaw("materialLength", host) ?? null;
   }
 
   // —— 型変換 ——
@@ -209,19 +276,19 @@ export function ingestData(data) {
   const matLen  = Number(matLenRaw  ?? NaN);
 
   if (!isNaN(matLen)) {
-    setStoredData("usedMaterialLength", matLen, true);
-    setStoredData("materialLengthFallback", matLen, true);
+    _set("usedMaterialLength", matLen, true);
+    _set("materialLengthFallback", matLen, true);
   }
 
   // (0) 新しい PrintID 検出 → 全リセット
   const validId = Number.isFinite(id) && id > 0;
-  if (validId && id !== prevPrintID) {
+  if (validId && id !== s.prevPrintID) {
     // 新しいジョブ開始時点でフィラメント使用量関連の変数を初期化
-    accumulatedUsedMaterial = !isNaN(matLen) ? matLen : 0;
-    prevUsedMaterialLength = !isNaN(matLen) ? matLen : null;
-    prevUsageProgress = prog;
+    s.accumulatedUsedMaterial = !isNaN(matLen) ? matLen : 0;
+    s.prevUsedMaterialLength = !isNaN(matLen) ? matLen : null;
+    s.prevUsageProgress = prog;
 
-    if (prevPrintID === null && actualStartEpoch !== null) {
+    if (s.prevPrintID === null && s.actualStartEpoch !== null) {
       // printJobTime から開始済みのジョブに ID が後から届いた場合
       const spool = getCurrentSpool();
       if (spool && spool.currentPrintID !== String(id)) {
@@ -231,8 +298,8 @@ export function ingestData(data) {
           spool.currentPrintID = String(id);
         }
       }
-      prevPrintID = id;
-      _resetNotificationState(nowMs);
+      s.prevPrintID = id;
+      _resetNotificationState(s, nowMs);
       if (historyPersistFunc) {
         try {
           historyPersistFunc(id);
@@ -242,16 +309,16 @@ export function ingestData(data) {
       }
     } else {
 
-      tsPrepStart = tsCheckStart = tsPauseStart = tsCompleteStart = null;
-      totalPrepSec = totalCheckSec = totalPauseSec = 0;
-      actualStartEpoch = initialLeftSec = initialLeftEpoch = null;
+      s.tsPrepStart = s.tsCheckStart = s.tsPauseStart = s.tsCompleteStart = null;
+      s.totalPrepSec = s.totalCheckSec = s.totalPauseSec = 0;
+      s.actualStartEpoch = s.initialLeftSec = s.initialLeftEpoch = null;
       [
         "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
         "actualStartTime","initialLeftTime","initialLeftAt",
         "estimatedRemainingTime","estimatedCompletionTime"
       ].forEach(f => {
-        setStoredData(f, null, true);
-        setStoredData(f, null, false);
+        _set(f, null, true);
+        _set(f, null, false);
       });
     }
 
@@ -263,7 +330,7 @@ export function ingestData(data) {
         spool.currentPrintID = String(id);
       }
     }
-    prevPrintID = id;
+    s.prevPrintID = id;
     if (historyPersistFunc) {
       try {
         historyPersistFunc(id);
@@ -271,43 +338,43 @@ export function ingestData(data) {
         console.error("historyPersistFunc error", e);
       }
     }
-    _resetNotificationState(nowMs);
+    _resetNotificationState(s, nowMs);
   }
 
   // A. プリント進捗通知 ------------------------------------------------------
-  if (prog !== prevProgress) {
-    notificationManager.notify("printProgressUpdated", { previous: prevProgress, current: prog });
-    lastProgressTimestamp = nowMs;
+  if (prog !== s.prevProgress) {
+    notificationManager.notify("printProgressUpdated", { previous: s.prevProgress, current: prog });
+    s.lastProgressTimestamp = nowMs;
   }
   PROGRESS_MILESTONES.forEach(ms => {
-    if (prog >= ms && !notifiedProgressMilestones.has(ms)) {
-      notifiedProgressMilestones.add(ms);
+    if (prog >= ms && !s.notifiedProgressMilestones.has(ms)) {
+      s.notifiedProgressMilestones.add(ms);
       notificationManager.notify("printProgressMilestone", { milestone: ms });
     }
   });
   // 長時間停滞検知 (10分)
-  if (prog === prevProgress && nowMs - lastProgressTimestamp > 10 * 60 * 1000) {
+  if (prog === s.prevProgress && nowMs - s.lastProgressTimestamp > 10 * 60 * 1000) {
     notificationManager.notify("printProgressStalled", {
       progress: prog,
-      stalledFor: formatDurationSimple((nowMs - lastProgressTimestamp) / 1000)
+      stalledFor: formatDurationSimple((nowMs - s.lastProgressTimestamp) / 1000)
     });
-    lastProgressTimestamp = nowMs;
+    s.lastProgressTimestamp = nowMs;
   }
   // 完了通知
-  if (prevProgress < 100 && prog >= 100) {
+  if (s.prevProgress < 100 && prog >= 100) {
     notificationManager.notify("printProgressComplete");
   }
-  prevProgress = prog;
+  s.prevProgress = prog;
 
   // B. 残り時間閾値通知 ------------------------------------------------------
   if (!isNaN(left)) {
-    if (prevRemainingSec === null) {
-      prevRemainingSec = left;
+    if (s.prevRemainingSec === null) {
+      s.prevRemainingSec = left;
     } else {
       TIME_THRESHOLDS.forEach(mins => {
         const thr = mins * 60;
-        if (prevRemainingSec > thr && left <= thr && !notifiedTimeThresholds.has(mins)) {
-          notifiedTimeThresholds.add(mins);
+        if (s.prevRemainingSec > thr && left <= thr && !s.notifiedTimeThresholds.has(mins)) {
+          s.notifiedTimeThresholds.add(mins);
           notificationManager.notify(`timeLeft${mins}`, {
             thresholdMin: mins,
             remainingSec: left,
@@ -315,7 +382,7 @@ export function ingestData(data) {
           });
         }
       });
-      prevRemainingSec = left;
+      s.prevRemainingSec = left;
     }
   }
 
@@ -323,8 +390,8 @@ export function ingestData(data) {
   if (!isNaN(nozzle) && !isNaN(maxNozz) && maxNozz > 0) {
     TEMP_MILESTONES.forEach(r => {
       const key = Math.round(r * 100);
-      if (nozzle >= maxNozz * r && !notifiedTempMilestones.has(`nozzle${key}`)) {
-        notifiedTempMilestones.add(`nozzle${key}`);
+      if (nozzle >= maxNozz * r && !s.notifiedTempMilestones.has(`nozzle${key}`)) {
+        s.notifiedTempMilestones.add(`nozzle${key}`);
         notificationManager.notify(`tempNearNozzle${key}`, {
           ratio: r,
           ratioPct: Math.round(r * 100),
@@ -337,8 +404,8 @@ export function ingestData(data) {
   if (!isNaN(bed) && !isNaN(maxBed) && maxBed > 0) {
     TEMP_MILESTONES.forEach(r => {
       const key = Math.round(r * 100);
-      if (bed >= maxBed * r && !notifiedTempMilestones.has(`bed${key}`)) {
-        notifiedTempMilestones.add(`bed${key}`);
+      if (bed >= maxBed * r && !s.notifiedTempMilestones.has(`bed${key}`)) {
+        s.notifiedTempMilestones.add(`bed${key}`);
         notificationManager.notify(`tempNearBed${key}`, {
           ratio: r,
           ratioPct: Math.round(r * 100),
@@ -350,37 +417,37 @@ export function ingestData(data) {
   }
 
   // D. フィラメント切れ／交換 ------------------------------------------------
-  currentMaterialStatus = matStat;
-  if (prevMaterialStatus !== null) {
-    if (prevMaterialStatus === 0 && matStat === 1) {
+  s.currentMaterialStatus = matStat;
+  if (s.prevMaterialStatus !== null) {
+    if (s.prevMaterialStatus === 0 && matStat === 1) {
       notificationManager.notify("filamentOut");
-      if (filamentOutTimer) clearTimeout(filamentOutTimer);
-      filamentOutTimer = setTimeout(() => {
-        if (currentMaterialStatus === 1) {
+      if (s.filamentOutTimer) clearTimeout(s.filamentOutTimer);
+      s.filamentOutTimer = setTimeout(() => {
+        if (s.currentMaterialStatus === 1) {
           showFilamentChangeDialog();
         }
       }, 2000);
     }
-    if (prevMaterialStatus === 1 && matStat === 0) {
+    if (s.prevMaterialStatus === 1 && matStat === 0) {
       notificationManager.notify("filamentReplaced");
-      if (filamentOutTimer) {
-        clearTimeout(filamentOutTimer);
-        filamentOutTimer = null;
+      if (s.filamentOutTimer) {
+        clearTimeout(s.filamentOutTimer);
+        s.filamentOutTimer = null;
       }
     }
   }
-  prevMaterialStatus = matStat;
+  s.prevMaterialStatus = matStat;
 
   // E. —— 実印刷開始時刻 を必ず逆算 ------------------------------------------------
-  if (actualStartEpoch === null && jobTime >= 1) {
-    // ジョブタイムが増え始めた瞬間を actualStartEpoch の元に
-    actualStartEpoch = nowSec - jobTime;
-    setStoredData("actualStartTime", actualStartEpoch, true);
+  if (s.actualStartEpoch === null && jobTime >= 1) {
+    // ジョブタイムが増え始めた瞬間を s.actualStartEpoch の元に
+    s.actualStartEpoch = nowSec - jobTime;
+    _set("actualStartTime", s.actualStartEpoch, true);
 
     // ---- 新規印刷スタート時の通知状態リセット ------------------------------
     // printStartTime がまだ届いていないケースでも、jobTime が進み始めた
     // 時点で前回ジョブの残り時間通知などを初期化する。
-    _resetNotificationState(nowMs);
+    _resetNotificationState(s, nowMs);
 
     if (historyPersistFunc && id) {
       try {
@@ -391,29 +458,29 @@ export function ingestData(data) {
     }
 
     // ----- 印刷前準備時間の確定 -----
-    if (tsPrepStart !== null) {
-      const diff = Math.floor((actualStartEpoch * 1000 - tsPrepStart) / 1000);
-      if (diff > 0) totalPrepSec += diff;
-      tsPrepStart = null;
-      setStoredData("preparationTime", totalPrepSec, true);
-    } else if (totalPrepSec === 0 && id) {
-      const diff = Math.floor(actualStartEpoch - id);
+    if (s.tsPrepStart !== null) {
+      const diff = Math.floor((s.actualStartEpoch * 1000 - s.tsPrepStart) / 1000);
+      if (diff > 0) s.totalPrepSec += diff;
+      s.tsPrepStart = null;
+      _set("preparationTime", s.totalPrepSec, true);
+    } else if (s.totalPrepSec === 0 && id) {
+      const diff = Math.floor(s.actualStartEpoch - id);
       if (diff > 0) {
-        totalPrepSec = diff;
-        setStoredData("preparationTime", totalPrepSec, true);
+        s.totalPrepSec = diff;
+        _set("preparationTime", s.totalPrepSec, true);
       }
     }
 
   }
 
   // F. —— 初回残り時間 を必ず逆算 ------------------------------------------------
-  if (initialLeftSec === null && left >= 0 && actualStartEpoch !== null) {
-    initialLeftSec   = left;
-    initialLeftEpoch = actualStartEpoch + left;
+  if (s.initialLeftSec === null && left >= 0 && s.actualStartEpoch !== null) {
+    s.initialLeftSec   = left;
+    s.initialLeftEpoch = s.actualStartEpoch + left;
 
     // rawValue に秒数／エポックをセット
-    setStoredData("initialLeftTime", initialLeftSec, true);
-    setStoredData("initialLeftAt",   initialLeftEpoch, true);
+    _set("initialLeftTime", s.initialLeftSec, true);
+    _set("initialLeftAt",   s.initialLeftEpoch, true);
 
   }
 
@@ -421,15 +488,15 @@ export function ingestData(data) {
   // ingestData で抽出済みの数値を渡し、aggregateTimersAndPredictions での
   // getMergedValueWithSource 再呼び出し（二重抽出）を回避する
   aggregateTimersAndPredictions({
-    id, st: Number(_readRaw("state") ?? 0),
+    id, st: Number(_readRaw("state", host) ?? 0),
     jobTime, selfPct, prog, left,
-    device: Number(_readRaw("deviceState") ?? 0),
-    finish: Number(_readRaw("printFinishTime") ?? 0),
-  });
+    device: Number(_readRaw("deviceState", host) ?? 0),
+    finish: Number(_readRaw("printFinishTime", host) ?? 0),
+  }, host);
 
   // --- 印刷完了時のフィラメント使用量確定処理 -----------------------------
   // ingestData 冒頭で抽出済みの値を再利用（data オブジェクトへの再アクセスを回避）
-  const st_agg = Number(_readRaw("state") ?? 0);
+  const st_agg = Number(_readRaw("state", host) ?? 0);
   const prog_agg = prog;
   const prevPrintState_agg = Number(
     machine?.runtimeData?.state ?? 0
@@ -456,34 +523,34 @@ export function ingestData(data) {
         spool.currentPrintID = resolvedJobId;
       }
     }
-    const usedMatRaw = _readRaw("usedMaterialLength");
+    const usedMatRaw = _readRaw("usedMaterialLength", host);
     if (!isNaN(Number(usedMatRaw))) {
       const cur = Number(usedMatRaw);
-      if (prevUsedMaterialLength != null) {
-        const d = cur - prevUsedMaterialLength;
-        if (d > 0) accumulatedUsedMaterial += d;
+      if (s.prevUsedMaterialLength != null) {
+        const d = cur - s.prevUsedMaterialLength;
+        if (d > 0) s.accumulatedUsedMaterial += d;
       } else {
-        accumulatedUsedMaterial += cur;
+        s.accumulatedUsedMaterial += cur;
       }
-      prevUsedMaterialLength = cur;
-      prevUsageProgress = prog_agg;
+      s.prevUsedMaterialLength = cur;
+      s.prevUsageProgress = prog_agg;
     } else {
       let est = spool?.currentJobExpectedLength ?? NaN;
-      const fileNameRaw = _readRaw("fileName");
+      const fileNameRaw = _readRaw("fileName", host);
       if ((isNaN(est) || est <= 0) && fileNameRaw) {
         est = guessExpectedLength(String(fileNameRaw));
       }
       if (!isNaN(est) && est > 0) {
-        accumulatedUsedMaterial = (est * prog_agg) / 100;
+        s.accumulatedUsedMaterial = (est * prog_agg) / 100;
       }
-      prevUsageProgress = prog_agg;
+      s.prevUsageProgress = prog_agg;
     }
-    let length = accumulatedUsedMaterial;
+    let length = s.accumulatedUsedMaterial;
     const jobId_agg = spool?.currentPrintID || String(id || "");
     if (jobId_agg) {
       if (length <= 0) {
         let est = spool?.currentJobExpectedLength ?? NaN;
-        const fileNameRaw = _readRaw("fileName");
+        const fileNameRaw = _readRaw("fileName", host);
         if ((isNaN(est) || est <= 0) && fileNameRaw) {
           est = guessExpectedLength(String(fileNameRaw));
         }
@@ -493,9 +560,9 @@ export function ingestData(data) {
       }
       finalizeFilamentUsage(length, jobId_agg);
       saveUnifiedStorage();
-      accumulatedUsedMaterial = 0;
-      prevUsedMaterialLength = null;
-      prevUsageProgress = 0;
+      s.accumulatedUsedMaterial = 0;
+      s.prevUsedMaterialLength = null;
+      s.prevUsageProgress = 0;
     }
   }
 
@@ -538,30 +605,35 @@ export function ingestData(data) {
  * @param {number}      vals.finish  - printFinishTime
  * @returns {void}
  */
-function aggregateTimersAndPredictions(vals) {
+function aggregateTimersAndPredictions(vals, hostname) {
+  const host = hostname || currentHostname;
   const nowMs  = Date.now();
   const nowSec = nowMs / 1000;
+  const s = _getState(host);
 
-  const machine = monitorData.machines[currentHostname];
+  const machine = monitorData.machines[host];
   const storedData = machine?.storedData || {};
+
+  /** ホスト指定の setStoredData ラッパー */
+  const _set = (key, value, isRaw = false) => setStoredDataForHost(host, key, value, isRaw);
 
   // ── ingestData から受け取った数値を展開 ────────────────────────────────
   const { id, st, jobTime: job, selfPct, prog, left, device, finish } = vals;
   const progPct = prog / 100;
 
   // ---- 完了後経過タイマーの復元処理 ------------------------------
-  if (tsCompleteStart === null) {
+  if (s.tsCompleteStart === null) {
     const last = machine?.historyData?.[machine.historyData.length - 1];
     if (
       last &&
-      prevPrintID !== null &&
-      Number(last.id) === Number(prevPrintID) &&
+      s.prevPrintID !== null &&
+      Number(last.id) === Number(s.prevPrintID) &&
       last.finishTime
     ) {
       const fin = Date.parse(last.finishTime);
       if (!isNaN(fin)) {
-        tsCompleteStart = fin;
-        setStoredData(
+        s.tsCompleteStart = fin;
+        _set(
           "completionElapsedTime",
           Math.floor((nowMs - fin) / 1000),
           true
@@ -573,27 +645,27 @@ function aggregateTimersAndPredictions(vals) {
   // ── 2) PrintID 切替検出 → 各種リセット ────────────────────────────────────
   const numId = Number(id) || null;
   const validId_ap = Number.isFinite(numId) && numId > 0;
-  if (prevPrintID !== null && validId_ap && numId !== prevPrintID) {
+  if (s.prevPrintID !== null && validId_ap && numId !== s.prevPrintID) {
     {
-      tsPrepStart   = tsCheckStart   = tsPauseStart   = tsCompleteStart   = null;
-      totalPrepSec  = totalCheckSec  = totalPauseSec                      = 0;
-      prevPrintID   = numId;
+      s.tsPrepStart   = s.tsCheckStart   = s.tsPauseStart   = s.tsCompleteStart   = null;
+      s.totalPrepSec  = s.totalCheckSec  = s.totalPauseSec                      = 0;
+      s.prevPrintID   = numId;
     }
   }
-  else if (prevPrintID === null && validId_ap) {
-    // 初回読み込み時だけは prevPrintID をセットして、次回以降の切替検出に備える
-    prevPrintID = numId;
+  else if (s.prevPrintID === null && validId_ap) {
+    // 初回読み込み時だけは s.prevPrintID をセットして、次回以降の切替検出に備える
+    s.prevPrintID = numId;
   }
 
   // ── 3) 一時停止→再開 のシフト補正 ─────────────────────────────────
-  const prevState = Number(monitorData.machines[currentHostname].runtimeData.state) || 0;
+  const prevState = Number(monitorData.machines[host]?.runtimeData?.state) || 0;
   if (
     prevState === PRINT_STATE_CODE.printPaused &&
     st        === PRINT_STATE_CODE.printStarted &&
-    tsPauseStart
+    s.tsPauseStart
   ) {
-    totalPauseSec += Math.floor((nowMs - tsPauseStart) / 1000);
-    tsPauseStart   = null;
+    s.totalPauseSec += Math.floor((nowMs - s.tsPauseStart) / 1000);
+    s.tsPauseStart   = null;
   }
 
   // ── 4) タイマー集計／表示用セット ─────────────────────────────────
@@ -602,37 +674,37 @@ function aggregateTimersAndPredictions(vals) {
     st === PRINT_STATE_CODE.printStarted &&
     job === 0 &&
     selfPct >= 0 && selfPct <= 9 &&
-    !tsCheckStart &&
-    !tsPauseStart
+    !s.tsCheckStart &&
+    !s.tsPauseStart
   ) {
-    if (!tsPrepStart) {
+    if (!s.tsPrepStart) {
       // ----- 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
       // printStartTime(id) が取得できていればそこからの経過秒を算出する
       // まだ得られていない場合は現在時刻から計測を開始する
-      tsPrepStart = numId ? numId * 1000 : nowMs;
+      s.tsPrepStart = numId ? numId * 1000 : nowMs;
     }
-    const sec = totalPrepSec + Math.floor((nowMs - tsPrepStart) / 1000);
+    const sec = s.totalPrepSec + Math.floor((nowMs - s.tsPrepStart) / 1000);
     // internal
-    setStoredData("preparationTime", sec, true);
-  } else if (tsPrepStart) {
-    totalPrepSec += Math.floor((nowMs - tsPrepStart) / 1000);
-    tsPrepStart   = null;
-    setStoredData("preparationTime", totalPrepSec, true);
+    _set("preparationTime", sec, true);
+  } else if (s.tsPrepStart) {
+    s.totalPrepSec += Math.floor((nowMs - s.tsPrepStart) / 1000);
+    s.tsPrepStart   = null;
+    _set("preparationTime", s.totalPrepSec, true);
   }
 
   // 4-2. ファーストレイヤー確認時間
   if (
-    tsPrepStart === null &&
-    tsPauseStart === null &&
-    actualStartEpoch !== null &&
+    s.tsPrepStart === null &&
+    s.tsPauseStart === null &&
+    s.actualStartEpoch !== null &&
     (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused || st === 3) &&
     selfPct >= 30 && selfPct <= 39
   ) {
-    if (!tsCheckStart) tsCheckStart = nowMs;
-    const sec = totalCheckSec + Math.floor((nowMs - tsCheckStart) / 1000);
-    setStoredData("firstLayerCheckTime", sec, true);
+    if (!s.tsCheckStart) s.tsCheckStart = nowMs;
+    const sec = s.totalCheckSec + Math.floor((nowMs - s.tsCheckStart) / 1000);
+    _set("firstLayerCheckTime", sec, true);
   } else if (
-    tsCheckStart &&
+    s.tsCheckStart &&
     (
       (
         st !== PRINT_STATE_CODE.printStarted &&
@@ -641,19 +713,19 @@ function aggregateTimersAndPredictions(vals) {
       ) ||
       selfPct < 30 ||
       selfPct > 39 ||
-      tsPrepStart !== null ||
-      tsPauseStart !== null
+      s.tsPrepStart !== null ||
+      s.tsPauseStart !== null
     )
   ) {
-    totalCheckSec += Math.floor((nowMs - tsCheckStart) / 1000);
-    tsCheckStart   = null;
-    setStoredData("firstLayerCheckTime", totalCheckSec, true);
+    s.totalCheckSec += Math.floor((nowMs - s.tsCheckStart) / 1000);
+    s.tsCheckStart   = null;
+    _set("firstLayerCheckTime", s.totalCheckSec, true);
   }
 
   // 4-3. 一時停止時間
   if (
-    tsPrepStart === null &&
-    tsCheckStart === null &&
+    s.tsPrepStart === null &&
+    s.tsCheckStart === null &&
     (st === PRINT_STATE_CODE.printPaused || st === 3) &&
     job >= 1 &&
     (
@@ -662,12 +734,12 @@ function aggregateTimersAndPredictions(vals) {
       (selfPct >= 40 && selfPct <= 100)
     )
   ) {
-    if (!tsPauseStart) tsPauseStart = nowMs;
-    const sec = totalPauseSec + Math.floor((nowMs - tsPauseStart) / 1000);
-    setStoredData("pauseTime", sec, true);
-    setStoredData("pauseTime", { value: formatDuration(sec), unit: "" }, false);
+    if (!s.tsPauseStart) s.tsPauseStart = nowMs;
+    const sec = s.totalPauseSec + Math.floor((nowMs - s.tsPauseStart) / 1000);
+    _set("pauseTime", sec, true);
+    _set("pauseTime", { value: formatDuration(sec), unit: "" }, false);
   } else if (
-    tsPauseStart &&
+    s.tsPauseStart &&
     (
       (st !== PRINT_STATE_CODE.printPaused && st !== 3) ||
       job < 1 ||
@@ -676,13 +748,13 @@ function aggregateTimersAndPredictions(vals) {
         !(selfPct >= 10 && selfPct <= 29) &&
         !(selfPct >= 40 && selfPct <= 100)
       ) ||
-      tsPrepStart !== null ||
-      tsCheckStart !== null
+      s.tsPrepStart !== null ||
+      s.tsCheckStart !== null
     )
   ) {
-    totalPauseSec += Math.floor((nowMs - tsPauseStart) / 1000);
-    tsPauseStart   = null;
-    setStoredData("pauseTime", totalPauseSec, true);
+    s.totalPauseSec += Math.floor((nowMs - s.tsPauseStart) / 1000);
+    s.tsPauseStart   = null;
+    _set("pauseTime", s.totalPauseSec, true);
   }
 
   // 4-4. 完了後経過時間
@@ -692,19 +764,19 @@ function aggregateTimersAndPredictions(vals) {
   ]);
   const isIdle = device === PRINT_STATE_CODE.printIdle;
   if (isIdle && doneStates.has(st)) {
-    if (!tsCompleteStart) {
-      tsCompleteStart = nowMs;
-      setStoredData("completionElapsedTime", 0, true);
+    if (!s.tsCompleteStart) {
+      s.tsCompleteStart = nowMs;
+      _set("completionElapsedTime", 0, true);
     }
-    const sec = Math.floor((nowMs - tsCompleteStart) / 1000);
-    setStoredData("completionElapsedTime", sec, true);
+    const sec = Math.floor((nowMs - s.tsCompleteStart) / 1000);
+    _set("completionElapsedTime", sec, true);
   } else if (
-    tsCompleteStart &&
+    s.tsCompleteStart &&
     (st === PRINT_STATE_CODE.printStarted ||
      (prevState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
   ) {
-    tsCompleteStart = null;
-    setStoredData("completionElapsedTime", null, true);
+    s.tsCompleteStart = null;
+    _set("completionElapsedTime", null, true);
   }
 
   // ── 5) 予想残り時間／予想終了時刻 ────────────────────────────────
@@ -716,34 +788,34 @@ function aggregateTimersAndPredictions(vals) {
   ], () => {
     if (doneStates.has(st)) {
       // 印刷終了または失敗時は予測値をリセット
-      setStoredData("predictedFinishEpoch",    null, true);
-      setStoredData("estimatedRemainingTime",  null, true);
-      setStoredData("estimatedCompletionTime", null, true);
-    } else if (actualStartEpoch !== null && progPct > 0) {
-      const elapsed  = (nowSec - actualStartEpoch) - (totalCheckSec + totalPauseSec);
+      _set("predictedFinishEpoch",    null, true);
+      _set("estimatedRemainingTime",  null, true);
+      _set("estimatedCompletionTime", null, true);
+    } else if (s.actualStartEpoch !== null && progPct > 0) {
+      const elapsed  = (nowSec - s.actualStartEpoch) - (s.totalCheckSec + s.totalPauseSec);
       const totalEst = elapsed / progPct;
       const remSec   = totalEst - elapsed;
       const finishE  = nowSec + remSec;
       // raw epoch
-      setStoredData("predictedFinishEpoch",    Math.floor(finishE), true);
+      _set("predictedFinishEpoch",    Math.floor(finishE), true);
       // display datetime
-      setStoredData("estimatedRemainingTime",  Math.floor(remSec),   true);
-      setStoredData("estimatedCompletionTime", Math.floor(finishE), true);
+      _set("estimatedRemainingTime",  Math.floor(remSec),   true);
+      _set("estimatedCompletionTime", Math.floor(finishE), true);
     }
     // フォールバック：初回残り時間ベース
     else if (
-      actualStartEpoch   !== null &&
-      initialLeftSec     !== null &&
-      initialLeftEpoch   !== null
+      s.actualStartEpoch   !== null &&
+      s.initialLeftSec     !== null &&
+      s.initialLeftEpoch   !== null
     ) {
-      setStoredData("predictedFinishEpoch",    initialLeftEpoch, true);
-      setStoredData("estimatedRemainingTime",  initialLeftSec,   true);
-      setStoredData("estimatedCompletionTime", initialLeftEpoch, true);
+      _set("predictedFinishEpoch",    s.initialLeftEpoch, true);
+      _set("estimatedRemainingTime",  s.initialLeftSec,   true);
+      _set("estimatedCompletionTime", s.initialLeftEpoch, true);
     }
   }, storedData);
 
   // ── 6) 状態永続化 ─────────────────────────────────────────────
-  persistAggregatorState();
+  persistAggregatorState(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -759,294 +831,292 @@ function aggregateTimersAndPredictions(vals) {
  */
 export function aggregatorUpdate() {
 
-  //まだ機器選定されてない場合はスキップ
-  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) return;
-  
-  const machine = monitorData.machines[currentHostname];
-  if (!machine) return;
-  const storedData = machine.storedData;
+  // 接続中の全ホストを対象にする（PLACEHOLDER は除外）
+  const hosts = Object.keys(monitorData.machines).filter(
+    h => h && h !== PLACEHOLDER_HOSTNAME
+  );
+  if (hosts.length === 0) return;
 
   // --- ここでタイマー／予測用フィールド群が揃っているか確認 ---
   const needed = ["preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
                   "actualStartTime","initialLeftTime","initialLeftAt",
                   "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime",
                   "expectedEndTime"];
-  needed.forEach(key => {
-    if (!(key in storedData)) { //キーが無い場合
-      // rawValueを「未定義(null)」で作っておく
-      setStoredData(key, null, true);
+
+  for (const host of hosts) {
+    const machine = monitorData.machines[host];
+    if (!machine) continue;
+    const storedData = machine.storedData;
+    const s = _getState(host);
+
+    /** ホスト指定の setStoredData ラッパー */
+    const _set = (key, value, isRaw = false) => setStoredDataForHost(host, key, value, isRaw);
+
+    needed.forEach(key => {
+      if (!(key in storedData)) {
+        // rawValueを「未定義(null)」で作っておく
+        setStoredDataForHost(host, key, null);
+      }
+    });
+
+    const allReady = needed.every(key => key in storedData);
+    if (!allReady) continue;
+
+    // state→printState
+    checkUpdatedFields(["state"], () => {
+      const raw = storedData.state?.rawValue;
+      if (raw !== undefined) {
+        _set("printState", raw, true);
+        _set("printState", { value: String(raw), unit: "" });
+      }
+    }, storedData);
+
+    // fileName 表示抽出（タイトルバー用 printFileName も同期更新）
+    checkUpdatedFields(["fileName"], () => {
+      const raw = storedData.fileName?.rawValue;
+      if (raw) {
+        const name = String(raw).split("/").pop();
+        _set("fileName", raw, true);
+        _set("fileName", { value: name, unit: "" });
+        _set("printFileName", name, true);
+        _set("printFileName", { value: name, unit: "" });
+      }
+    }, storedData);
+
+    // nozzleDiff / bedDiff
+    checkUpdatedFields(["nozzleTemp","targetNozzleTemp"], () => {
+      const c = parseFloat(storedData.nozzleTemp?.rawValue||0);
+      const t = parseFloat(storedData.targetNozzleTemp?.rawValue||0);
+      if (!isNaN(c)&&!isNaN(t)) {
+        const d = (c - t).toFixed(2);
+        _set("nozzleDiff",{ value:`${d>0?"+":""}${d} ℃`, unit:"" });
+      }
+    }, storedData);
+    checkUpdatedFields(["bedTemp0","targetBedTemp0"], () => {
+      const c = parseFloat(storedData.bedTemp0?.rawValue||0);
+      const t = parseFloat(storedData.targetBedTemp0?.rawValue||0);
+      if (!isNaN(c)&&!isNaN(t)) {
+        const d = (c - t).toFixed(2);
+        _set("bedDiff",{ value:`${d>0?"+":""}${d} ℃`, unit:"" });
+      }
+    }, storedData);
+
+    // マシン切替時はグラフデータをリセットしてから更新
+    switchChartHost(host);
+    updateTemperatureGraphFromStoredData(storedData, host);
+
+    // printFinishTime 再計算
+    checkUpdatedFields(["printStartTime","printLeftTime"], () => {
+      const sv = parseInt(storedData.printStartTime?.rawValue,10)||0;
+      const l = parseInt(storedData.printLeftTime?.rawValue,10);
+      if (sv>0 && !isNaN(l)&&l>=0) {
+        const e = Math.floor(Date.now()/1000) + l;
+        _set("printFinishTime", e, true);
+        _set("printFinishTime", {
+          value: new Date(e*1000).toLocaleString(),
+          unit: ""
+        });
+      }
+    }, storedData);
+
+    // expectedEndTime update
+    checkUpdatedFields([
+      "printFinishTime",
+      "predictedFinishEpoch"
+    ], () => {
+      const fin = parseInt(storedData.printFinishTime?.rawValue, 10);
+      const pred = parseInt(storedData.predictedFinishEpoch?.rawValue, 10);
+      const val = (!isNaN(fin) && fin > 0)
+        ? fin
+        : (!isNaN(pred) && pred > 0)
+          ? pred
+          : null;
+      _set("expectedEndTime", val, true);
+    }, storedData);
+
+    // --- フィラメント残量の動的計算 ---
+    const spool = getCurrentSpool();
+    if (spool) autoCorrectCurrentSpool();
+    const st   = Number(storedData.state?.rawValue || 0);
+    const isPrinting =
+      st === PRINT_STATE_CODE.printStarted ||
+      st === PRINT_STATE_CODE.printPaused;
+    // フィラメント残量計算に入る前に、未確定のジョブIDを補完して紐付け漏れを防ぐ
+    if (spool && !spool.currentPrintID) {
+      const resolvedJobId = resolveFilamentJobId(
+        storedData,
+        machine?.printStore?.current ?? null
+      );
+      if (resolvedJobId) {
+        spool.currentPrintID = resolvedJobId;
+      }
     }
-  });
 
-  //const allReady = needed.every(key =>
-  //  storedData[key] && storedData[key].rawValue !== null && storedData[key].rawValue !== undefined
-  //);
-  // 必要なキーがすべて storedData に定義されていればOK （rawValue の中身は問わない）
-  const allReady = needed.every(key => key in storedData);
-
-
-  if (!allReady) {
-    // まだ必要な値が揃っていないので UI 更新をスキップ
-    return;
-  }
-
-  // init完了しているので以下を実行できる状態：
-
-  clearNewClasses();
-
-  // state→printState
-  checkUpdatedFields(["state"], () => {
-    const raw = storedData.state?.rawValue;
-    if (raw !== undefined) {
-      setStoredData("printState", raw, true);
-      setStoredData("printState", { value: String(raw), unit: "" });
-    }
-  }, storedData);
-
-  // fileName 表示抽出（タイトルバー用 printFileName も同期更新）
-  checkUpdatedFields(["fileName"], () => {
-    const raw = storedData.fileName?.rawValue;
-    if (raw) {
-      const name = String(raw).split("/").pop();
-      setStoredData("fileName", raw, true);
-      setStoredData("fileName", { value: name, unit: "" });
-      setStoredData("printFileName", name, true);
-      setStoredData("printFileName", { value: name, unit: "" });
-    }
-  }, storedData);
-
-  // nozzleDiff / bedDiff
-  checkUpdatedFields(["nozzleTemp","targetNozzleTemp"], () => {
-    const c = parseFloat(storedData.nozzleTemp?.rawValue||0);
-    const t = parseFloat(storedData.targetNozzleTemp?.rawValue||0);
-    if (!isNaN(c)&&!isNaN(t)) {
-      const d = (c - t).toFixed(2);
-      setStoredData("nozzleDiff",{ value:`${d>0?"+":""}${d} ℃`, unit:"" });
-    }
-  }, storedData);
-  checkUpdatedFields(["bedTemp0","targetBedTemp0"], () => {
-    const c = parseFloat(storedData.bedTemp0?.rawValue||0);
-    const t = parseFloat(storedData.targetBedTemp0?.rawValue||0);
-    if (!isNaN(c)&&!isNaN(t)) {
-      const d = (c - t).toFixed(2);
-      setStoredData("bedDiff",{ value:`${d>0?"+":""}${d} ℃`, unit:"" });
-    }
-  }, storedData);
-
-  // マシン切替時はグラフデータをリセットしてから更新
-  switchChartHost(currentHostname);
-  updateTemperatureGraphFromStoredData(storedData);
-
-  // printFinishTime 再計算
-  checkUpdatedFields(["printStartTime","printLeftTime"], () => {
-    const s = parseInt(storedData.printStartTime?.rawValue,10)||0;
-    const l = parseInt(storedData.printLeftTime?.rawValue,10);
-    if (s>0 && !isNaN(l)&&l>=0) {
-      const e = Math.floor(Date.now()/1000) + l;
-      setStoredData("printFinishTime", e, true);
-      setStoredData("printFinishTime", {
-        value: new Date(e*1000).toLocaleString(),
-        unit: ""
-      });
-    }
-  }, storedData);
-
-  // expectedEndTime update
-  checkUpdatedFields([
-    "printFinishTime",
-    "predictedFinishEpoch"
-  ], () => {
-    const fin = parseInt(storedData.printFinishTime?.rawValue, 10);
-    const pred = parseInt(storedData.predictedFinishEpoch?.rawValue, 10);
-    const val = (!isNaN(fin) && fin > 0)
-      ? fin
-      : (!isNaN(pred) && pred > 0)
-        ? pred
-        : null;
-    setStoredData("expectedEndTime", val, true);
-  }, storedData);
-
-  // --- フィラメント残量の動的計算 ---
-  const spool = getCurrentSpool();
-  if (spool) autoCorrectCurrentSpool();
-  const st   = Number(storedData.state?.rawValue || 0);
-  const isPrinting =
-    st === PRINT_STATE_CODE.printStarted ||
-    st === PRINT_STATE_CODE.printPaused;
-  // フィラメント残量計算に入る前に、未確定のジョブIDを補完して紐付け漏れを防ぐ
-  if (spool && !spool.currentPrintID) {
-    const resolvedJobId = resolveFilamentJobId(
-      storedData,
-      machine?.printStore?.current ?? null
-    );
-    if (resolvedJobId) {
-      spool.currentPrintID = resolvedJobId;
-    }
-  }
-
-  // アイドル状態から印刷開始へ遷移し、useFilament() が未実行の場合の初期化
-  if (
-    spool &&
-    lastPrintState === PRINT_STATE_CODE.printIdle &&
-    st === PRINT_STATE_CODE.printStarted &&
-    spool.currentJobStartLength == null
-  ) {
-    let est = Number(storedData.materialLength?.rawValue ?? NaN);
-    if (isNaN(est)) {
-      est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
-    }
-    const job = loadPrintCurrent();
-    const jobId = job?.id ?? "";
-    if ((isNaN(est) || est <= 0) && storedData.fileName?.rawValue) {
-      est = guessExpectedLength(storedData.fileName.rawValue);
-    }
-    beginExternalPrint(spool, isNaN(est) ? 0 : est, jobId);
-    accumulatedUsedMaterial = 0;
-    prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
-    prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
-  }
-  // usedMaterialLength 受信時、または復元直後に currentJobStartLength が未設定の
-  // 状態で印刷が進行中の場合に残量計算を開始
-  // usedMaterialLength が送られてこない場合でも印刷中は残量計算と保存を継続する
-  if (spool && (isPrinting || spool.currentJobStartLength != null)) {
-    if (spool.currentJobStartLength == null) {
-      // 印刷開始直後にスプール残量を記録し、使用量カウンタを初期化
-      spool.currentJobStartLength = spool.remainingLengthMm;
-      accumulatedUsedMaterial = 0;
-      prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
-      prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
-    }
-    const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
-    const used = Number(storedData.usedMaterialLength?.rawValue);
-    let est  = Number(storedData.materialLength?.rawValue ?? NaN);
-    if (isNaN(est)) {
-      est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
-    }
-    let remain = spool.remainingLengthMm;
-
-    // 外部から印刷が開始された場合、reserveFilament() 相当の初期化を行う
+    // アイドル状態から印刷開始へ遷移し、useFilament() が未実行の場合の初期化
     if (
-      (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
-      spool.currentJobExpectedLength == null
+      spool &&
+      s.lastPrintState === PRINT_STATE_CODE.printIdle &&
+      st === PRINT_STATE_CODE.printStarted &&
+      spool.currentJobStartLength == null
     ) {
+      let est = Number(storedData.materialLength?.rawValue ?? NaN);
+      if (isNaN(est)) {
+        est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
+      }
       const job = loadPrintCurrent();
-      let len   = Number(job?.materialUsedMm ?? NaN);
       const jobId = job?.id ?? "";
-      if (isNaN(len) || len <= 0) {
-        len = est;
+      if ((isNaN(est) || est <= 0) && storedData.fileName?.rawValue) {
+        est = guessExpectedLength(storedData.fileName.rawValue, host);
       }
-      if ((isNaN(len) || len <= 0) && storedData.fileName?.rawValue) {
-        len = guessExpectedLength(storedData.fileName.rawValue);
-      }
-      if (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId) {
-        // フィラメントIDのみ先に確定し、使用量が判明してから予約する
-        const machine = monitorData.machines[currentHostname];
-        if (machine?.printStore?.current) {
-          machine.printStore.current.filamentId = spool.id;
-        }
-        if (!isNaN(len) && len > 0) {
-          beginExternalPrint(spool, len, jobId);
-        } else {
-          // 予定使用量が不明の場合は予約を遅延させる
-          spool.currentPrintID = jobId;
-        }
-      }
+      beginExternalPrint(spool, isNaN(est) ? 0 : est, jobId);
+      s.accumulatedUsedMaterial = 0;
+      s.prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
+      s.prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
     }
-    if (spool.currentJobStartLength != null && isPrinting) {
-      // 実際に使用した長さをデルタで積算
-      let delta = 0;
-      if (!isNaN(used)) {
-        if (prevUsedMaterialLength != null) {
-          delta = used - prevUsedMaterialLength;
-          if (delta < 0) delta = 0; // マイナス値は無視
-        } else {
-          // 初回受信時はそのまま累積値として扱う
-          delta = used;
-        }
-        prevUsedMaterialLength = used;
-        // usedMaterialLength が得られた場合でも進捗基準を同期しておく
-        prevUsageProgress = prog;
-      } else if (!isNaN(est) && est > 0) {
-        // 推定値が途中で判明しても正しい値に補正できるよう、
-        // 差分ではなく絶対値で使用量を算出する
-        accumulatedUsedMaterial = (est * prog) / 100;
-        delta = 0;
-        prevUsageProgress = prog;
+    // usedMaterialLength 受信時、または復元直後に currentJobStartLength が未設定の
+    // 状態で印刷が進行中の場合に残量計算を開始
+    // usedMaterialLength が送られてこない場合でも印刷中は残量計算と保存を継続する
+    if (spool && (isPrinting || spool.currentJobStartLength != null)) {
+      if (spool.currentJobStartLength == null) {
+        // 印刷開始直後にスプール残量を記録し、使用量カウンタを初期化
+        spool.currentJobStartLength = spool.remainingLengthMm;
+        s.accumulatedUsedMaterial = 0;
+        s.prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
+        s.prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
       }
-      accumulatedUsedMaterial += delta;
-      remain = spool.currentJobStartLength - accumulatedUsedMaterial;
-      // 印刷途中にページを更新しても残量が巻き戻らないよう、
-      // 計算値をスプールオブジェクトへ反映しておく
-      spool.remainingLengthMm = Math.max(0, remain);
-    } else if (
-      spool.currentJobStartLength != null &&
-      (Number(monitorData.machines[currentHostname]?.runtimeData?.state) ===
-        PRINT_STATE_CODE.printStarted ||
-        Number(monitorData.machines[currentHostname]?.runtimeData?.state) ===
-          PRINT_STATE_CODE.printPaused) &&
-      st !== PRINT_STATE_CODE.printStarted &&
-      st !== PRINT_STATE_CODE.printPaused
-    ) {
-      // 状態が完了・失敗等へ遷移した場合は累積使用量で確定
-      if (spool && !spool.currentPrintID) {
-        const resolvedJobId = resolveFilamentJobId(
-          storedData,
-          machine?.printStore?.current ?? null
-        );
-        if (resolvedJobId) {
-          spool.currentPrintID = resolvedJobId;
-        }
+      const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
+      const used = Number(storedData.usedMaterialLength?.rawValue);
+      let est  = Number(storedData.materialLength?.rawValue ?? NaN);
+      if (isNaN(est)) {
+        est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
       }
-      finalizeFilamentUsage(accumulatedUsedMaterial, spool.currentPrintID);
-      saveUnifiedStorage();
-      accumulatedUsedMaterial = 0;
-      prevUsedMaterialLength = null;
-      prevUsageProgress = 0;
-      remain = spool.remainingLengthMm;
-    }
+      let remain = spool.remainingLengthMm;
 
-    // 小数点以下2桁に丸めて保持
-    remain = Math.round(remain * 100) / 100;
-    setStoredData("filamentRemainingMm", remain, true);
-
-    if (spool.currentPrintID) {
-      if (snapshotPrintId !== spool.currentPrintID) {
-        snapshotPrintId = spool.currentPrintID;
-        lastUsageSnapshotSec = 0;
-      }
+      // 外部から印刷が開始された場合、reserveFilament() 相当の初期化を行う
       if (
         (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
-        (!lastUsageSnapshotSec || Date.now() / 1000 - lastUsageSnapshotSec >= USAGE_SNAPSHOT_INTERVAL)
+        spool.currentJobExpectedLength == null
       ) {
-        addUsageSnapshot(spool, spool.currentPrintID, remain);
-        lastUsageSnapshotSec = Date.now() / 1000;
+        const job = loadPrintCurrent();
+        let len   = Number(job?.materialUsedMm ?? NaN);
+        const jobId = job?.id ?? "";
+        if (isNaN(len) || len <= 0) {
+          len = est;
+        }
+        if ((isNaN(len) || len <= 0) && storedData.fileName?.rawValue) {
+          len = guessExpectedLength(storedData.fileName.rawValue, host);
+        }
+        if (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId) {
+          // フィラメントIDのみ先に確定し、使用量が判明してから予約する
+          if (machine?.printStore?.current) {
+            machine.printStore.current.filamentId = spool.id;
+          }
+          if (!isNaN(len) && len > 0) {
+            beginExternalPrint(spool, len, jobId);
+          } else {
+            // 予定使用量が不明の場合は予約を遅延させる
+            spool.currentPrintID = jobId;
+          }
+        }
       }
-    } else {
-      snapshotPrintId = null;
-      lastUsageSnapshotSec = 0;
+      if (spool.currentJobStartLength != null && isPrinting) {
+        // 実際に使用した長さをデルタで積算
+        let delta = 0;
+        if (!isNaN(used)) {
+          if (s.prevUsedMaterialLength != null) {
+            delta = used - s.prevUsedMaterialLength;
+            if (delta < 0) delta = 0; // マイナス値は無視
+          } else {
+            // 初回受信時はそのまま累積値として扱う
+            delta = used;
+          }
+          s.prevUsedMaterialLength = used;
+          // usedMaterialLength が得られた場合でも進捗基準を同期しておく
+          s.prevUsageProgress = prog;
+        } else if (!isNaN(est) && est > 0) {
+          // 推定値が途中で判明しても正しい値に補正できるよう、
+          // 差分ではなく絶対値で使用量を算出する
+          s.accumulatedUsedMaterial = (est * prog) / 100;
+          delta = 0;
+          s.prevUsageProgress = prog;
+        }
+        s.accumulatedUsedMaterial += delta;
+        remain = spool.currentJobStartLength - s.accumulatedUsedMaterial;
+        // 印刷途中にページを更新しても残量が巻き戻らないよう、
+        // 計算値をスプールオブジェクトへ反映しておく
+        spool.remainingLengthMm = Math.max(0, remain);
+      } else if (
+        spool.currentJobStartLength != null &&
+        (Number(machine?.runtimeData?.state) ===
+          PRINT_STATE_CODE.printStarted ||
+          Number(machine?.runtimeData?.state) ===
+            PRINT_STATE_CODE.printPaused) &&
+        st !== PRINT_STATE_CODE.printStarted &&
+        st !== PRINT_STATE_CODE.printPaused
+      ) {
+        // 状態が完了・失敗等へ遷移した場合は累積使用量で確定
+        if (spool && !spool.currentPrintID) {
+          const resolvedJobId = resolveFilamentJobId(
+            storedData,
+            machine?.printStore?.current ?? null
+          );
+          if (resolvedJobId) {
+            spool.currentPrintID = resolvedJobId;
+          }
+        }
+        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID);
+        saveUnifiedStorage();
+        s.accumulatedUsedMaterial = 0;
+        s.prevUsedMaterialLength = null;
+        s.prevUsageProgress = 0;
+        remain = spool.remainingLengthMm;
+      }
+
+      // 小数点以下2桁に丸めて保持
+      remain = Math.round(remain * 100) / 100;
+      _set("filamentRemainingMm", remain, true);
+
+      if (spool.currentPrintID) {
+        if (s.snapshotPrintId !== spool.currentPrintID) {
+          s.snapshotPrintId = spool.currentPrintID;
+          s.lastUsageSnapshotSec = 0;
+        }
+        if (
+          (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
+          (!s.lastUsageSnapshotSec || Date.now() / 1000 - s.lastUsageSnapshotSec >= USAGE_SNAPSHOT_INTERVAL)
+        ) {
+          addUsageSnapshot(spool, spool.currentPrintID, remain);
+          s.lastUsageSnapshotSec = Date.now() / 1000;
+        }
+      } else {
+        s.snapshotPrintId = null;
+        s.lastUsageSnapshotSec = 0;
+      }
+
+      const thr = notificationManager.getFilamentLowThreshold?.() ?? 0.1;
+      if (spool.totalLengthMm > 0) {
+        const ratio = remain / spool.totalLengthMm;
+        if (ratio <= thr && !s.filamentLowWarned) {
+          s.filamentLowWarned = true;
+          notificationManager.notify("filamentLow", {
+            remaining: remain,
+            thresholdPct: Math.round(thr * 100),
+            spoolName: spool.name
+          });
+        } else if (ratio > thr) {
+          s.filamentLowWarned = false;
+        }
+      }
     }
 
-    const thr = notificationManager.getFilamentLowThreshold?.() ?? 0.1;
-    if (spool.totalLengthMm > 0) {
-      const ratio = remain / spool.totalLengthMm;
-      if (ratio <= thr && !filamentLowWarned) {
-        filamentLowWarned = true;
-        notificationManager.notify("filamentLow", {
-          remaining: remain,
-          thresholdPct: Math.round(thr * 100),
-          spoolName: spool.name
-        });
-      } else if (ratio > thr) {
-        filamentLowWarned = false;
-      }
-    }
-  }
+    s.lastPrintState = st;
+    persistAggregatorState(host);
+  } // end for hosts
 
-    console.debug("[aggregatorUpdate] updateStoredDataToDOM 呼び出し");
-    updateStoredDataToDOM();
-    lastPrintState = st;
-    persistAggregatorState();
-    saveUnifiedStorage();
+  clearNewClasses();
+  console.debug("[aggregatorUpdate] updateStoredDataToDOM 呼び出し");
+  updateStoredDataToDOM();
+  saveUnifiedStorage();
 
   }
 
@@ -1060,8 +1130,8 @@ export function aggregatorUpdate() {
  * @param {string} filePath - G-code ファイルのフルパスまたはファイル名
  * @returns {number} 推定された使用長 [mm]。不明な場合は NaN
  */
-function guessExpectedLength(filePath) {
-  const machine = monitorData.machines[currentHostname];
+function guessExpectedLength(filePath, hostname) {
+  const machine = monitorData.machines[hostname || currentHostname];
   if (!machine) return NaN;
   const base = filePath.split("/").pop();
   // 1) printStore.history から検索
@@ -1090,9 +1160,10 @@ function guessExpectedLength(filePath) {
  *   localStorage に保存された集約状態を読み出し、
  *   内部タイマー変数と storedData を復元します。
  */
-export function restoreAggregatorState() {
-  const host = currentHostname;
+export function restoreAggregatorState(hostname) {
+  const host = hostname || currentHostname;
   if (!host) return;
+  const s = _getState(host);
   const prefix = `aggr_${host}_`;
   const keys = [
     "tsPrepStart", "totalPrepSec",
@@ -1108,9 +1179,8 @@ export function restoreAggregatorState() {
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
-    // rawValue と computedValue 両方クリア
-    setStoredData(k, null, true);
-    setStoredData(k, null, false);
+    setStoredDataForHost(host, k, null, true);
+    setStoredDataForHost(host, k, null, false);
   });
   // localStorage から読み出し
   keys.forEach(k => {
@@ -1118,23 +1188,8 @@ export function restoreAggregatorState() {
     if (raw == null) return;
     let v;
     try { v = JSON.parse(raw); } catch { return; }
-    // 内部変数にセット
-    switch (k) {
-      case "tsPrepStart":      tsPrepStart      = v; break;
-      case "totalPrepSec":     totalPrepSec     = v; break;
-      case "tsCheckStart":     tsCheckStart     = v; break;
-      case "totalCheckSec":    totalCheckSec    = v; break;
-      case "tsPauseStart":     tsPauseStart     = v; break;
-      case "totalPauseSec":    totalPauseSec    = v; break;
-      case "tsCompleteStart":  tsCompleteStart  = v; break;
-      case "actualStartEpoch": actualStartEpoch = v; break;
-      case "initialLeftSec":   initialLeftSec   = v; break;
-      case "initialLeftEpoch": initialLeftEpoch = v; break;
-      case "prevPrintID":      prevPrintID      = v; break;
-      case "accumulatedUsedMaterial": accumulatedUsedMaterial = v; break;
-      case "prevUsedMaterialLength": prevUsedMaterialLength = v; break;
-      case "prevUsageProgress": prevUsageProgress = v; break;
-    }
+    // per-host 状態オブジェクトにセット
+    if (k in s) s[k] = v;
     // storedData にも復元
     let field = k;
     if (k === "totalPrepSec")      field = "preparationTime";
@@ -1145,14 +1200,14 @@ export function restoreAggregatorState() {
     if (k === "initialLeftSec")    field = "initialLeftTime";
     if (k === "initialLeftEpoch")  field = "initialLeftAt";
     if (k === "prevPrintID")      field = "prevPrintID";
-    setStoredData(field, v, true);
+    setStoredDataForHost(host, field, v, true);
   });
 
   // 復元後に actualStartTime が存在し印刷ID も分かっている場合は
   // 履歴に反映して UI を即時更新する
-  if (historyPersistFunc && prevPrintID && actualStartEpoch != null) {
+  if (historyPersistFunc && s.prevPrintID && s.actualStartEpoch != null) {
     try {
-      historyPersistFunc(prevPrintID);
+      historyPersistFunc(s.prevPrintID);
     } catch (e) {
       console.error("historyPersistFunc error", e);
     }
@@ -1163,24 +1218,25 @@ export function restoreAggregatorState() {
  * persistAggregatorState:
  *   現在の集約状態を localStorage に保存します。
  */
-export function persistAggregatorState() {
-  const host = currentHostname;
+export function persistAggregatorState(hostname) {
+  const host = hostname || currentHostname;
   if (!host) {
     console.warn("persistAggregatorState: ホスト未設定");
     return;
   }
+  const s = _getState(host);
   const prefix = `aggr_${host}_`;
   const toSave = {
-    tsPrepStart, totalPrepSec,
-    tsCheckStart, totalCheckSec,
-    tsPauseStart, totalPauseSec,
-    tsCompleteStart,
-    actualStartEpoch,
-    initialLeftSec, initialLeftEpoch,
-    prevPrintID,
-    accumulatedUsedMaterial,
-    prevUsedMaterialLength,
-    prevUsageProgress
+    tsPrepStart: s.tsPrepStart, totalPrepSec: s.totalPrepSec,
+    tsCheckStart: s.tsCheckStart, totalCheckSec: s.totalCheckSec,
+    tsPauseStart: s.tsPauseStart, totalPauseSec: s.totalPauseSec,
+    tsCompleteStart: s.tsCompleteStart,
+    actualStartEpoch: s.actualStartEpoch,
+    initialLeftSec: s.initialLeftSec, initialLeftEpoch: s.initialLeftEpoch,
+    prevPrintID: s.prevPrintID,
+    accumulatedUsedMaterial: s.accumulatedUsedMaterial,
+    prevUsedMaterialLength: s.prevUsedMaterialLength,
+    prevUsageProgress: s.prevUsageProgress
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;
@@ -1242,7 +1298,10 @@ export function stopAggregatorTimer() {
       console.error("aggregatorUpdate エラー:", e);
     }
 
-    persistAggregatorState();
+    // 全ホストの状態を保存
+    for (const [host] of _hostStates) {
+      persistAggregatorState(host);
+    }
   }
 }
 
@@ -1253,8 +1312,9 @@ export function stopAggregatorTimer() {
  *
  * @returns {number|null} 現在の印刷ID
  */
-export function getCurrentPrintID() {
-  return prevPrintID;
+export function getCurrentPrintID(hostname) {
+  const s = _getState(hostname || currentHostname);
+  return s.prevPrintID;
 }
 
 /**
@@ -1286,7 +1346,7 @@ function getMergedValueWithSource(key, data, dataFieldName = key) {
     // ここでは data[dataFieldName] が undefined（未送信扱い）なのでフォールバック
   }
 
-  // 2) storedData の rawValue を取得
+  // 2) storedData の rawValue を取得（hostname 指定不要：currentHostname で十分）
   const machine = monitorData.machines[currentHostname];
   const entry = machine?.storedData?.[key];
   if (entry) {

@@ -60,10 +60,29 @@ let isFirstRender = true;
 const DATASET_KEYS = ["nozzleCurrent", "nozzleTarget", "bedCurrent", "bedTarget", "boxCurrent"];
 const FIELD_KEYS   = ["nozzleTemp", "targetNozzleTemp", "bedTemp0", "targetBedTemp0", "boxTemp"];
 
-/** 一時キューと本体格納用データ */
-const pointQueue = {};
-const tempData   = {};
-// DATASET_KEYS の数だけ初期化
+/** per-host データバッファ Map<hostname, { pointQueue, tempData }> */
+const _hostChartData = new Map();
+
+/**
+ * 指定ホストのチャートデータバッファを取得（なければ作成）。
+ * @private
+ * @param {string} hostname
+ * @returns {{ pointQueue: Object, tempData: Object }}
+ */
+function _getChartData(hostname) {
+  if (!_hostChartData.has(hostname)) {
+    const pq = {};
+    const td = {};
+    DATASET_KEYS.forEach(key => { pq[key] = []; td[key] = []; });
+    _hostChartData.set(hostname, { pointQueue: pq, tempData: td });
+  }
+  return _hostChartData.get(hostname);
+}
+
+/** 後方互換：現在表示中ホストのデータ参照用 */
+let pointQueue = {};
+let tempData   = {};
+// 初期化
 DATASET_KEYS.forEach(key => {
   pointQueue[key] = [];
   tempData[key]   = [];
@@ -150,7 +169,16 @@ export function initTemperatureGraph(userConfig = {}) {
  * グラフをクリアし、全データと状態をリセットします。
  * Chart.js Zoom プラグインが使用されている場合はズーム範囲もリセットします。
  */
-export function resetTemperatureGraph() {
+export function resetTemperatureGraph(hostname) {
+  const host = hostname || _currentChartHost;
+  if (host) {
+    const hd = _getChartData(host);
+    DATASET_KEYS.forEach(key => {
+      hd.tempData[key].length = 0;
+      hd.pointQueue[key].length = 0;
+    });
+  }
+
   DATASET_KEYS.forEach(key => {
     tempData[key].length = 0;
     pointQueue[key].length = 0;
@@ -158,7 +186,7 @@ export function resetTemperatureGraph() {
 
   if (tempChart) {
     tempChart.data.datasets.forEach(ds => (ds.data = []));
-    tempChart.resetZoom?.();  // Zoom プラグインを使っている場合はズームをリセット
+    tempChart.resetZoom?.();
     tempChart.update();
   }
 
@@ -175,10 +203,32 @@ export function resetTemperatureGraph() {
  */
 let _currentChartHost = null;
 export function switchChartHost(hostname) {
-  if (_currentChartHost !== null && _currentChartHost !== hostname) {
-    resetTemperatureGraph();
+  if (_currentChartHost === hostname) return;
+
+  // 現在のホストのデータを保存
+  if (_currentChartHost) {
+    const prev = _getChartData(_currentChartHost);
+    DATASET_KEYS.forEach(key => {
+      prev.tempData[key] = tempData[key];
+      prev.pointQueue[key] = pointQueue[key];
+    });
   }
+
   _currentChartHost = hostname;
+
+  // 新しいホストのデータを復元
+  const next = _getChartData(hostname);
+  tempData = next.tempData;
+  pointQueue = next.pointQueue;
+
+  // Chart.js のデータセットを新ホストのデータに差し替え
+  if (tempChart) {
+    DATASET_KEYS.forEach((key, idx) => {
+      tempChart.data.datasets[idx].data = tempData[key];
+    });
+    tempChart.update();
+  }
+  isFirstRender = true;
 }
 
 /**
@@ -237,28 +287,39 @@ function scheduleChartUpdate() {
  *   温度データを含む storedData（各フィールドに rawValue を持つオブジェクト）のマップ
  * @returns {void}
  */
-export function updateTemperatureGraphFromStoredData(dataStore) {
-  if (!tempChart) return;
+export function updateTemperatureGraphFromStoredData(dataStore, hostname) {
   const now = Date.now();
 
   // データ取得関数：NaN や null を 0 扱いにする
   const getVal = key => parseFloat(dataStore[key]?.rawValue ?? 0) || 0;
 
+  // 対象ホストのデータバッファを取得
+  const host = hostname || _currentChartHost;
+  const hd = host ? _getChartData(host) : { pointQueue, tempData };
+
   // 1) 現在時刻付きのデータ点をキューに追加
-  pointQueue.nozzleCurrent.push({ t: now, y: getVal("nozzleTemp") });
-  pointQueue.nozzleTarget.push({ t: now, y: getVal("targetNozzleTemp") });
-  pointQueue.bedCurrent.push({ t: now, y: getVal("bedTemp0") });
-  pointQueue.bedTarget.push({ t: now, y: getVal("targetBedTemp0") });
-  pointQueue.boxCurrent.push({ t: now, y: getVal("boxTemp") });
+  hd.pointQueue.nozzleCurrent.push({ t: now, y: getVal("nozzleTemp") });
+  hd.pointQueue.nozzleTarget.push({ t: now, y: getVal("targetNozzleTemp") });
+  hd.pointQueue.bedCurrent.push({ t: now, y: getVal("bedTemp0") });
+  hd.pointQueue.bedTarget.push({ t: now, y: getVal("targetBedTemp0") });
+  hd.pointQueue.boxCurrent.push({ t: now, y: getVal("boxTemp") });
 
   // 2) キューから本体に移し、過去の点を除去
   DATASET_KEYS.forEach((key, idx) => {
-    tempData[key].push(...pointQueue[key]);
-    tempData[key] = filterOldData(tempData[key], now);
-    tempChart.data.datasets[idx].data = tempData[key];
-    pointQueue[key].length = 0;
+    hd.tempData[key].push(...hd.pointQueue[key]);
+    hd.tempData[key] = filterOldData(hd.tempData[key], now);
+    hd.pointQueue[key].length = 0;
   });
 
-  // 3) Chartの再描画（スロットル付き）
-  scheduleChartUpdate();
+  // 3) 現在表示中のホストの場合のみ Chart.js を更新
+  if (!tempChart) return;
+  if (host === _currentChartHost || !_currentChartHost) {
+    // モジュールスコープの参照も同期
+    tempData = hd.tempData;
+    pointQueue = hd.pointQueue;
+    DATASET_KEYS.forEach((key, idx) => {
+      tempChart.data.datasets[idx].data = tempData[key];
+    });
+    scheduleChartUpdate();
+  }
 }

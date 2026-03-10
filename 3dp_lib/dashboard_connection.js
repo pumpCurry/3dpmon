@@ -58,6 +58,7 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
+import { switchPreviewHost } from "./dashboard_stage_preview.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 
 // ---------------------------------------------------------------------------
@@ -1722,6 +1723,9 @@ export function switchActiveHost(host) {
 
   // storedData の全フィールドの isNew フラグを立てて変更キューに追加し、UI を即更新可能にする
   markAllKeysDirty(host);
+
+  // プレビュー表示をホスト切替
+  switchPreviewHost(host);
 
   // aggregator タイマーを再起動して、新ホストのデータで UI を更新
   restartAggregatorTimer(100);

@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.784 (PR #366)
+* @version 1.390.785 (PR #366)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-03-10 23:30:00
+* @lastModified 2026-03-11 01:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,7 +40,7 @@ import {
   setCurrentHostname,
   PLACEHOLDER_HOSTNAME,
   setNotificationSuppressed,
-  setStoredData,
+  setStoredDataForHost,
   scopedById,
 } from "./dashboard_data.js";
 import {
@@ -92,21 +92,57 @@ const _WS_SKIP_KEYS = new Set([
   "reqHistory",       // リクエストフラグ、データではない
 ]);
 
-/** タイマーID／タイムスタンプ／累積値 */
-let prepTimerId, checkTimerId, pauseTimerId, completionTimer;
-let tsPrintStart      = null;
-let tsPrepEnd         = null;
-let tsCheckStart      = null;
-let tsCheckEnd        = null;
-let totalCheckSeconds = 0;
-let tsPauseStart      = null;
-let tsCompletion      = null;
-let totalPauseSeconds = 0;
+// ---------------------------------------------------------------------------
+// per-host メッセージハンドラ状態
+// ---------------------------------------------------------------------------
 
-/** 前回状態（比較用） */
-let prevPrintState     = null;
-let prevPrintStartTime = null;
-let prevSelfTestPct    = null;
+/**
+ * @typedef {Object} MsgHandlerHostState
+ * @property {number|null} prepTimerId        準備タイマーID
+ * @property {number|null} checkTimerId       セルフテストタイマーID
+ * @property {number|null} pauseTimerId       一時停止タイマーID
+ * @property {number|null} completionTimer    完了後タイマーID
+ * @property {number|null} tsPrintStart       印刷開始タイムスタンプ
+ * @property {number|null} tsPrepEnd          準備完了タイムスタンプ
+ * @property {number|null} tsCheckStart       セルフテスト開始タイムスタンプ
+ * @property {number|null} tsCheckEnd         セルフテスト完了タイムスタンプ
+ * @property {number}      totalCheckSeconds  セルフテスト時間累計
+ * @property {number|null} tsPauseStart       一時停止開始タイムスタンプ
+ * @property {number|null} tsCompletion       完了タイムスタンプ
+ * @property {number}      totalPauseSeconds  一時停止時間累計
+ * @property {number|null} prevPrintState     前回印刷状態
+ * @property {number|null} prevPrintStartTime 前回印刷開始時刻
+ * @property {number|null} prevSelfTestPct    前回セルフテスト進捗
+ */
+
+/** @type {Map<string, MsgHandlerHostState>} */
+const _msgHostStates = new Map();
+
+/**
+ * 空の MsgHandlerHostState を生成する。
+ * @private
+ * @returns {MsgHandlerHostState}
+ */
+function _createMsgHostState() {
+  return {
+    prepTimerId: null, checkTimerId: null, pauseTimerId: null, completionTimer: null,
+    tsPrintStart: null, tsPrepEnd: null,
+    tsCheckStart: null, tsCheckEnd: null, totalCheckSeconds: 0,
+    tsPauseStart: null, tsCompletion: null, totalPauseSeconds: 0,
+    prevPrintState: null, prevPrintStartTime: null, prevSelfTestPct: null
+  };
+}
+
+/**
+ * 指定ホストの MsgHandlerHostState を返す（無ければ作成）。
+ * @private
+ * @param {string} hostname
+ * @returns {MsgHandlerHostState}
+ */
+function _getMsgState(hostname) {
+  if (!_msgHostStates.has(hostname)) _msgHostStates.set(hostname, _createMsgHostState());
+  return _msgHostStates.get(hostname);
+}
 
 /**
  * persistHistoryTimers:
@@ -119,9 +155,10 @@ let prevSelfTestPct    = null;
  * @param {number} printId - 印刷開始時刻を元にしたジョブID
  * @returns {void}
  */
-function persistHistoryTimers(printId) {
+function persistHistoryTimers(printId, hostname) {
   if (!printId) return;
-  const machine = monitorData.machines[currentHostname];
+  const host = hostname || currentHostname;
+  const machine = monitorData.machines[host];
   if (!machine) return;
 
   let entry = machine.historyData.find(h => h.id === printId);
@@ -146,7 +183,7 @@ function persistHistoryTimers(printId) {
     printManager.updateHistoryList([entry], baseUrl);
   }
   persistPrintResume();
-  persistAggregatorState();
+  persistAggregatorState(host);
   // 値を保存したら即座に画面へ反映する
   try {
     aggregatorUpdate();
@@ -223,12 +260,13 @@ export function handleMessage(data) {
       "actualStartTime","initialLeftTime","initialLeftAt",
       "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
     ];
-    const sd = monitorData.machines[currentHostname].storedData;
+    const initHost = data.hostname || currentHostname;
+    const sd = monitorData.machines[initHost]?.storedData || {};
     initKeys.forEach(key => {
       // 既に復元済みの値がある場合は保持し、存在しないキーのみ初期化する
       if (!(key in sd)) {
-        setStoredData(key, null, true);
-        setStoredData(key, null, false);
+        setStoredDataForHost(initHost, key, null, true);
+        setStoredDataForHost(initHost, key, null, false);
       }
     });
 
@@ -280,31 +318,40 @@ export function handleMessage(data) {
  * @param {object} data - WebSocket 受信データオブジェクト
  * @returns {void}
  */
-export function processData(data) {
-  const machine = monitorData.machines[currentHostname];
+export function processData(data, hostname) {
+  const host = hostname || currentHostname;
+  const machine = monitorData.machines[host];
   if (!machine) return;
   machine.runtimeData ??= { lastError: null };
   if (!('lastError' in machine.runtimeData)) {
     machine.runtimeData.lastError = null;
   }
 
+  const ms = _getMsgState(host);
+
+  /** ホスト指定の setStoredData ラッパー */
+  const _set = (key, value, isRaw = false, isFromEquipVal) => {
+    setStoredDataForHost(host, key, value, isRaw, isFromEquipVal);
+  };
+
   // ---- 完了後経過タイマーの復元処理 ------------------------------------
-  if (tsCompletion === null) {
+  if (ms.tsCompletion === null) {
     const storedPrev = Number(machine.storedData.prevPrintID?.rawValue ?? NaN);
     if (!isNaN(storedPrev)) {
-      prevPrintStartTime = storedPrev;
+      ms.prevPrintStartTime = storedPrev;
     }
     const last = machine.historyData[machine.historyData.length - 1];
     if (
       last &&
-      prevPrintStartTime !== null &&
-      Number(last.id) === Number(prevPrintStartTime) &&
+      ms.prevPrintStartTime !== null &&
+      Number(last.id) === Number(ms.prevPrintStartTime) &&
       last.finishTime
     ) {
       const fin = Date.parse(last.finishTime);
       if (!isNaN(fin)) {
-        tsCompletion = fin;
-        setStoredData(
+        ms.tsCompletion = fin;
+        setStoredDataForHost(
+          host,
           "completionElapsedTime",
           Math.floor((Date.now() - fin) / 1000),
           true
@@ -344,7 +391,7 @@ export function processData(data) {
   // 数値化／前回値取得
   const st            = Number(data.state);
   const currStartTime = Number(
-    data.printStartTime ?? getCurrentPrintID() ?? 0
+    data.printStartTime ?? getCurrentPrintID(host) ?? 0
   );
   const currJobTime   = Number(data.printJobTime     || 0);
   const currSelfPct   = Number(data.withSelfTest      || 0);
@@ -352,70 +399,70 @@ export function processData(data) {
 
   // タイマー全クリアユーティリティ
   const clearAllTimers = () => {
-    [prepTimerId, checkTimerId, pauseTimerId, completionTimer]
+    [ms.prepTimerId, ms.checkTimerId, ms.pauseTimerId, ms.completionTimer]
       .forEach(id => clearInterval(id));
   };
   // 個別リセット
   const resetPrep       = () => {
-    clearInterval(prepTimerId);
-    tsPrintStart = tsPrepEnd = null;
+    clearInterval(ms.prepTimerId);
+    ms.tsPrintStart = ms.tsPrepEnd = null;
     // 値の消失を防ぐため storedData は保持したままにする
     persistPrintResume();
-    persistAggregatorState();
+    persistAggregatorState(host);
   };
   const resetCheck      = () => {
-    clearInterval(checkTimerId);
-    tsCheckStart = tsCheckEnd = null;
-    totalCheckSeconds = 0;
+    clearInterval(ms.checkTimerId);
+    ms.tsCheckStart = ms.tsCheckEnd = null;
+    ms.totalCheckSeconds = 0;
     // storedData の値は aggregator 側で管理する
   };
   const resetPause      = () => {
-    clearInterval(pauseTimerId);
-    tsPauseStart = null;
-    totalPauseSeconds = 0;
+    clearInterval(ms.pauseTimerId);
+    ms.tsPauseStart = null;
+    ms.totalPauseSeconds = 0;
     // storedData の値は保持し、新しい印刷時に aggregator がクリア
   };
   const resetCompletion = () => {
-    clearInterval(completionTimer);
-    tsCompletion = null;
+    clearInterval(ms.completionTimer);
+    ms.tsCompletion = null;
     // 完了後経過時間は次の印刷開始まで保持
   };
 
   // (2.3) 準備時間タイマー
   // (2.3.1) 新規印刷開始検出
-  const initialized = prevPrintState !== null && prevPrintStartTime !== null;
+  const initialized = ms.prevPrintState !== null && ms.prevPrintStartTime !== null;
 
   if (
     st === PRINT_STATE_CODE.printStarted &&
-    (prevPrintState !== st || currStartTime !== prevPrintStartTime)
+    (ms.prevPrintState !== st || currStartTime !== ms.prevPrintStartTime)
   ) {
     console.debug(">>> (2.3.1) 印刷開始：準備タイマー起動");
     clearAllTimers();
-    tsPrintStart = Date.now();
-    totalPauseSeconds = 0;
+    ms.tsPrintStart = Date.now();
+    ms.totalPauseSeconds = 0;
     pushLog("印刷開始", "info");
     notificationManager.notify("printStarted");
-    setStoredData("preparationTime", 0, true);
+    _set("preparationTime", 0, true);
     // 直ちに保存してリロード時の損失を防ぐ
     persistPrintResume();
-    persistAggregatorState();
-    prepTimerId = setInterval(() => {
-      const sec = Math.floor((Date.now() - tsPrintStart)/1000);
-      setStoredData("preparationTime", sec, true);
+    persistAggregatorState(host);
+    ms.prepTimerId = setInterval(() => {
+      const sec = Math.floor((Date.now() - ms.tsPrintStart)/1000);
+      _set("preparationTime", sec, true);
     }, 1000);
   }
   // (2.3.2) 準備完了判定
-  if (tsPrintStart && !tsPrepEnd && currJobTime >= 1) {
+  if (ms.tsPrintStart && !ms.tsPrepEnd && currJobTime >= 1) {
     console.debug(">>> (2.3.2) 準備完了：準備タイマー停止");
-    tsPrepEnd = Date.now();
-    clearInterval(prepTimerId);
-    const sec = Math.floor((tsPrepEnd - tsPrintStart)/1000);
-    setStoredData("preparationTime", sec, true);
-    persistHistoryTimers(currStartTime);
+    ms.tsPrepEnd = Date.now();
+    clearInterval(ms.prepTimerId);
+    const sec = Math.floor((ms.tsPrepEnd - ms.tsPrintStart)/1000);
+    _set("preparationTime", sec, true);
+    persistHistoryTimers(currStartTime, host);
   }
   // (2.3.3) 中断時リセット
   if (
-    tsPrintStart && currJobTime < 1 &&
+    ms.tsPrintStart && currJobTime < 1 &&
     [PRINT_STATE_CODE.printDone, PRINT_STATE_CODE.printFailed].includes(st)
   ) {
     console.debug(">>> (2.3.3) 準備中断：リセット");
@@ -423,91 +470,91 @@ export function processData(data) {
   }
   // (2.3.4) 一時停止→再開でシフト調整
   if (
-    tsPrintStart && !tsPrepEnd &&
-    prevPrintState === PRINT_STATE_CODE.printPaused &&
+    ms.tsPrintStart && !ms.tsPrepEnd &&
+    ms.prevPrintState === PRINT_STATE_CODE.printPaused &&
     st === PRINT_STATE_CODE.printStarted &&
-    tsPauseStart
+    ms.tsPauseStart
   ) {
     console.debug(">>> (2.3.4) 一時停止後に準備継続");
-    clearInterval(pauseTimerId);
-    const pausedSec = Math.floor((Date.now() - tsPauseStart)/1000);
-    tsPrintStart += pausedSec * 1000;
-    tsPauseStart = null;
+    clearInterval(ms.pauseTimerId);
+    const pausedSec = Math.floor((Date.now() - ms.tsPauseStart)/1000);
+    ms.tsPrintStart += pausedSec * 1000;
+    ms.tsPauseStart = null;
   }
   // (2.3.5) 新規印刷開始で強制リセット
-  if (initialized && currStartTime !== prevPrintStartTime) {
+  if (initialized && currStartTime !== ms.prevPrintStartTime) {
     resetPrep();
   }
 
   // (2.4) セルフテスト確認時間タイマー
   // (2.4.1) 開始判定
   if (
-    tsPrepEnd &&
+    ms.tsPrepEnd &&
     st === PRINT_STATE_CODE.printPaused &&
     currSelfPct >= 30 && currSelfPct <= 39 &&
-    !tsCheckStart
+    !ms.tsCheckStart
   ) {
     console.debug(">>> (2.4.1) セルフテストタイマー開始");
-    tsCheckStart = Date.now();
-    checkTimerId = setInterval(() => {
-      const elapsed = totalCheckSeconds + Math.floor((Date.now() - tsCheckStart)/1000);
-      setStoredData("firstLayerCheckTime", elapsed, true);
+    ms.tsCheckStart = Date.now();
+    ms.checkTimerId = setInterval(() => {
+      const elapsed = ms.totalCheckSeconds + Math.floor((Date.now() - ms.tsCheckStart)/1000);
+      _set("firstLayerCheckTime", elapsed, true);
     }, 1000);
     notificationManager.notify("printFirstLayerCheckStarted");
   }
   // (2.4.2) 完了判定
   if (
-    tsCheckStart &&
+    ms.tsCheckStart &&
     (currSelfPct < 30 || currSelfPct > 39 || st !== PRINT_STATE_CODE.printPaused)
   ) {
     console.debug(">>> (2.4.2) セルフテストタイマー停止");
-    totalCheckSeconds += Math.floor((Date.now() - tsCheckStart)/1000);
-    clearInterval(checkTimerId);
-    setStoredData("firstLayerCheckTime", totalCheckSeconds, true);
-    persistHistoryTimers(currStartTime);
-    tsCheckStart = null;
-    tsCheckEnd = Date.now();
+    ms.totalCheckSeconds += Math.floor((Date.now() - ms.tsCheckStart)/1000);
+    clearInterval(ms.checkTimerId);
+    _set("firstLayerCheckTime", ms.totalCheckSeconds, true);
+    persistHistoryTimers(currStartTime, host);
+    ms.tsCheckStart = null;
+    ms.tsCheckEnd = Date.now();
     if (currSelfPct >= 100) {
       notificationManager.notify("printFirstLayerCheckCompleted");
     }
   }
   // (2.4.3) 新規印刷 or 再開でリセット
-  if (initialized && currStartTime !== prevPrintStartTime) {
+  if (initialized && currStartTime !== ms.prevPrintStartTime) {
     resetCheck();
   }
 
   // (2.5) 一時停止時間タイマー
   // (2.5.1) 停止開始
   if (
-    tsPrepEnd &&
+    ms.tsPrepEnd &&
     st === PRINT_STATE_CODE.printPaused &&
     (currSelfPct === 0 || currSelfPct === 100) &&
-    !tsPauseStart
+    !ms.tsPauseStart
   ) {
     console.debug(">>> (2.5.1) 一時停止タイマー開始");
-    tsPauseStart = Date.now();
-    pauseTimerId = setInterval(() => {
-      const elapsed = totalPauseSeconds + Math.floor((Date.now() - tsPauseStart)/1000);
-      setStoredData("pauseTime", elapsed, true);
+    ms.tsPauseStart = Date.now();
+    ms.pauseTimerId = setInterval(() => {
+      const elapsed = ms.totalPauseSeconds + Math.floor((Date.now() - ms.tsPauseStart)/1000);
+      _set("pauseTime", elapsed, true);
     }, 1000);
     notificationManager.notify("printPaused");
-    persistHistoryTimers(currStartTime);
+    persistHistoryTimers(currStartTime, host);
   }
   // (2.5.2) 停止解除
   if (
-    tsPauseStart &&
+    ms.tsPauseStart &&
     (st !== PRINT_STATE_CODE.printPaused || (currSelfPct !== 0 && currSelfPct !== 100))
   ) {
     console.debug(">>> (2.5.2) 一時停止タイマー停止");
-    totalPauseSeconds += Math.floor((Date.now() - tsPauseStart)/1000);
-    clearInterval(pauseTimerId);
-    setStoredData("pauseTime", totalPauseSeconds, true);
-    persistHistoryTimers(currStartTime);
-    tsPauseStart = null;
+    ms.totalPauseSeconds += Math.floor((Date.now() - ms.tsPauseStart)/1000);
+    clearInterval(ms.pauseTimerId);
+    _set("pauseTime", ms.totalPauseSeconds, true);
+    persistHistoryTimers(currStartTime, host);
+    ms.tsPauseStart = null;
     notificationManager.notify("printResumed");
   }
   // (2.5.3) 新規印刷開始でリセット
-  if (initialized && currStartTime !== prevPrintStartTime) {
+  if (initialized && currStartTime !== ms.prevPrintStartTime) {
     resetPause();
   }
 
@@ -521,28 +568,28 @@ export function processData(data) {
   if (
     device === PRINT_STATE_CODE.printIdle &&
     DONE.has(st) &&
-    !tsCompletion
+    !ms.tsCompletion
   ) {
     console.debug(">>> (2.6.1) 完了後経過タイマー開始");
-    tsCompletion = Date.now();
-    setStoredData("completionElapsedTime", 0, true);
+    ms.tsCompletion = Date.now();
+    _set("completionElapsedTime", 0, true);
 
-    completionTimer = setInterval(() => {
-      setStoredData(
+    ms.completionTimer = setInterval(() => {
+      _set(
         "completionElapsedTime",
-        Math.floor((Date.now() - tsCompletion)/1000),
+        Math.floor((Date.now() - ms.tsCompletion)/1000),
         true
       );
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
     notificationManager.notify(evt);
-    persistHistoryTimers(currStartTime);
+    persistHistoryTimers(currStartTime, host);
   }
   // (2.6.2) Idle or 再開でリセット
   if (
-    tsCompletion &&
+    ms.tsCompletion &&
     (st === PRINT_STATE_CODE.printStarted ||
-     (prevPrintState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
+     (ms.prevPrintState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
   ) {
     console.debug(">>> (2.6.2) 完了後経過タイマーリセット");
     resetCompletion();
@@ -561,17 +608,17 @@ export function processData(data) {
   if (data.curPosition) {
     const pos = parseCurPosition(data.curPosition);
     if (pos) {
-      setStoredData("positionX", { value: pos.x.toFixed(2), unit: "" });
-      setStoredData("positionY", { value: pos.y.toFixed(2), unit: "" });
-      setStoredData("positionZ", { value: pos.z.toFixed(2), unit: "" });
-      updateXYPreview(pos.x, pos.y);
-      updateZPreview(pos.z);
+      _set("positionX", { value: pos.x.toFixed(2), unit: "" });
+      _set("positionY", { value: pos.y.toFixed(2), unit: "" });
+      _set("positionZ", { value: pos.z.toFixed(2), unit: "" });
+      updateXYPreview(pos.x, pos.y, host);
+      updateZPreview(pos.z, host);
       machine.runtimeData.curPosition = data.curPosition;
     }
   }
   // (2.7.2) プリンタモデルに基づくプレビュー設定
   if (data.model) {
-    setPrinterModel(String(data.model));
+    setPrinterModel(String(data.model), host);
   }
 
   // (2.7.3) その他フィールド一括反映
@@ -583,7 +630,7 @@ export function processData(data) {
     // 配列・オブジェクト型（err以外）はスカラー値ではないため storedData に格納しない
     if (v !== null && typeof v === "object" && !Array.isArray(v) && k !== "err") continue;
     if (Array.isArray(v)) continue;
-    setStoredData(k, v, true, true);
+    _set(k, v, true, true);
   }
 
   // --- 新しい印刷情報が後から届いた場合の現在ジョブ更新処理 ----------------
@@ -648,12 +695,12 @@ export function processData(data) {
   }
 
   // 次回比較用に保存
-  prevPrintState     = st;
-  prevPrintStartTime = currStartTime;
-  prevSelfTestPct    = currSelfPct;
+  ms.prevPrintState     = st;
+  ms.prevPrintStartTime = currStartTime;
+  ms.prevSelfTestPct    = currSelfPct;
 
   // (2.8) 集約ロジックへ渡す
-  ingestData(data);
+  ingestData(data, host);
 
   // runtimeData.state は ingestData 後に更新することで
   // aggregator 側が前回状態を正しく参照できるようにする

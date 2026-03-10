@@ -255,18 +255,23 @@ export function getCurrentMachine() {
  * @param {*}      value - 設定する値
  * @returns {void}
  */
-export function setStoredDataForHost(host, key, value) {
+export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquipVal) {
   ensureMachineData(host);
   const machine = monitorData.machines[host];
   if (!machine) return;
   let d = machine.storedData[key];
   if (!d) {
-    d = { rawValue: null, computedValue: null, isNew: true, isFromEquipVal: true };
+    d = { rawValue: null, computedValue: null, isNew: true, isFromEquipVal: false };
     machine.storedData[key] = d;
   }
-  d.rawValue = value;
+  if (isRaw) {
+    d.rawValue = value;
+    d.isFromEquipVal = (isFromEquipVal !== undefined ? isFromEquipVal : false);
+  } else {
+    d.computedValue = value;
+    if (isFromEquipVal !== undefined) d.isFromEquipVal = isFromEquipVal;
+  }
   d.isNew = true;
-  d.isFromEquipVal = true;
   _getDirtySet(host).add(key);
 }
 

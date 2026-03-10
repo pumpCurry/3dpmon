@@ -48,6 +48,13 @@ import { pushLog } from "./dashboard_log_util.js";
 let _cmdRoot = null;
 
 /**
+ * コマンド送信先のホスト名。
+ * パネル初期化時に設定され、全コマンド送信で使用される。
+ * @type {string|null}
+ */
+let _cmdHostname = null;
+
+/**
  * スコープ対応の要素検索。
  * _cmdRoot 内を querySelector で探し、見つからなければ document から探す。
  * @param {string} id - 検索する要素ID（スコープ前の素のID）
@@ -285,8 +292,9 @@ const COMMAND_MAPPINGS = [
  * - getParams() の戻り値が null のときはボタンを disabled
  * - 確認が必要な場合は showConfirmDialog を介して実行
  */
-export function initializeCommandPalette(root) {
+export function initializeCommandPalette(root, hostname) {
   _cmdRoot = root || null;
+  _cmdHostname = hostname || null;
   COMMAND_MAPPINGS.forEach(({ buttonId, method, getParams, inputIds, confirm }) => {
     const btn = _findById(buttonId);
     if (!btn) {
@@ -313,7 +321,7 @@ export function initializeCommandPalette(root) {
         if (!ok) return;
       }
       console.debug("▶ sendCommand", method, params);
-      sendCommand(method, params, currentHostname);
+      sendCommand(method, params, _cmdHostname || currentHostname);
     });
   });
   
@@ -345,7 +353,7 @@ function initializeFanControls() {
     if (!el) return;
     el.addEventListener("change", () => {
       const v = el.checked ? 1 : 0;
-      sendCommand("set", { [param]: v }, currentHostname);
+      sendCommand("set", { [param]: v }, _cmdHostname || currentHostname);
     });
   });
 
@@ -372,7 +380,7 @@ function initializeFanControls() {
       // 0–255 に丸め
       const s = Math.round(pct * 255 / 100);
       const cmd = `M106 P${p} S${s}`;
-      sendCommand("set", { gcodeCmd: cmd }, currentHostname);
+      sendCommand("set", { gcodeCmd: cmd }, _cmdHostname || currentHostname);
     });
   });
 }
@@ -428,7 +436,7 @@ function initializeTempControls() {
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", makePayload(v), currentHostname);
+      sendCommand("set", makePayload(v), _cmdHostname || currentHostname);
       lastSend = Date.now();
     };
 
@@ -536,7 +544,7 @@ export function initializeRateControls() {
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", { [param]: v }, currentHostname);
+      sendCommand("set", { [param]: v }, _cmdHostname || currentHostname);
       lastSend = Date.now();
     };
 
@@ -669,7 +677,7 @@ export function initSendRawJson() {
       pushLog(`送信(Raw JSON): ${jsonStr}`, "send");
       if (cmd.method) {
         try {
-          await sendCommand(cmd.method, cmd.params ?? {}, currentHostname);
+          await sendCommand(cmd.method, cmd.params ?? {}, _cmdHostname || currentHostname);
         } catch {
           // sendCommand 内でエラー表示済み
         }
@@ -758,7 +766,7 @@ export function initSendGcode() {
 
       pushLog(`送信(G-code): ${gcode}`, "send");
       try {
-        await sendGcodeCommand(gcode, currentHostname);
+        await sendGcodeCommand(gcode, _cmdHostname || currentHostname);
       } catch {
         // sendGcodeCommand 内でエラー表示済み
       }
@@ -844,12 +852,12 @@ export function initPauseHome() {
       if (model === "K1 Max") {
         await sendGcodeCommand(
           "G28 X Y\nG0 X296.50 Y153.00 F6000\n",
-          currentHostname
+          _cmdHostname || currentHostname
         );
       } else if (["K1", "K1C", "K1A"].includes(model)) {
         await sendGcodeCommand(
           "G28 X Y\nG0 X219.00 Y113.50 F6000\n",
-          currentHostname
+          _cmdHostname || currentHostname
         );
       }
     } catch {
@@ -883,7 +891,7 @@ export function initXYUnlock() {
     if (!ok) return;
 
     try {
-      await sendGcodeCommand("M84", currentHostname);
+      await sendGcodeCommand("M84", _cmdHostname || currentHostname);
     } catch {
       // sendGcodeCommand 内でエラー表示済み
     }
