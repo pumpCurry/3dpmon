@@ -78,6 +78,7 @@ const connectionMap = {};
  * @property {number|null}    hostReadyAt   - ホスト名確定時刻(Unix ms)
  * @property {boolean}        historyReceived - 履歴取得済みフラグ
  * @property {boolean}        fileReqSent   - ファイル一覧要求済みか
+ * @property {boolean}        fileInfoReceived - ファイル一覧応答受信済みか
  * @property {boolean}        historyReqSent - 履歴要求済みか
  * @property {boolean}        userDisc      - ユーザー操作により切断されたか
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
@@ -222,6 +223,7 @@ const placeholderState = {
   hostReadyAt: null,
   historyReceived: false,
   fileReqSent: false,
+  fileInfoReceived: false,
   historyReqSent: false,
   userDisc: false,
   buffer: [],
@@ -254,6 +256,7 @@ function getState(host) {
       hostReadyAt: null,
       historyReceived: false,
       fileReqSent: false,
+      fileInfoReceived: false,
       historyReqSent: false,
       userDisc: false,
       buffer: [],
@@ -627,6 +630,7 @@ function handleSocketOpen(host) {
   st.historyReceived = false;
   st.hostReadyAt = null;
   st.fileReqSent = false;
+  st.fileInfoReceived = false;
   st.historyReqSent = false;
   if (st.fetchTimer !== null) {
     clearInterval(st.fetchTimer);
@@ -658,6 +662,7 @@ function handleSocketOpen(host) {
       // ホスト名確定直後のタイムスタンプを記録
       st.hostReadyAt = Date.now();
       st.fileReqSent = false;
+      st.fileInfoReceived = false;
       st.historyReqSent = false;
       return;
     }
@@ -672,12 +677,18 @@ function handleSocketOpen(host) {
     }
 
     // 印刷履歴を要求
-    if (!st.historyReqSent && elapsed >= 5000) {
-      if (!st.historyReceived) {
-        sendCommand("get", { reqHistory: 1 }, actualHost)
-          .catch(e => console.debug(`[fetchTimer] history 要求失敗: ${e.message}`));
+    // ★ reqGcodeFileInfo の応答受信後、または送出後 15秒経過後に送る
+    //   K1 ファームウェアはリクエストをシリアル処理するため、
+    //   fileInfo 応答完了前に reqHistory を送ると前の応答が破棄される
+    if (!st.historyReqSent && st.fileReqSent) {
+      const fileReqWait = elapsed - 2500; // fileReq 送出からの経過時間
+      if (st.fileInfoReceived || fileReqWait >= 15000) {
+        if (!st.historyReceived) {
+          sendCommand("get", { reqHistory: 1 }, actualHost)
+            .catch(e => console.debug(`[fetchTimer] history 要求失敗: ${e.message}`));
+        }
+        st.historyReqSent = true;
       }
-      st.historyReqSent = true;
     }
 
     if (st.fileReqSent && st.historyReqSent) {
@@ -818,6 +829,8 @@ function handleSocketMessage(event, host) {
       const machine = monitorData.machines[hostKey];
       if (machine) machine._cachedFileInfo = data.retGcodeFileInfo;
       printManager.renderFileList(data.retGcodeFileInfo, baseUrlHttp, hostKey);
+      /* ファイル一覧受信完了フラグ → reqHistory 送出を許可する */
+      st.fileInfoReceived = true;
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
@@ -868,6 +881,7 @@ function handleSocketClose(host) {
   st.hostReadyAt = null;
   st.historyReceived = false;
   st.fileReqSent = false;
+  st.fileInfoReceived = false;
   st.historyReqSent = false;
 
   // Heartbeat停止...
@@ -1732,14 +1746,28 @@ export function switchActiveHost(host) {
 
   // 切替先ホストの履歴/ファイル一覧を即座に再取得する
   // （初回接続時にしか飛んでこないデータのため、切替時に明示的に要求する）
-  const st = connectionMap[host];
-  if (st?.ws?.readyState === WebSocket.OPEN) {
+  // ★ シーケンシャル送出: reqGcodeFileInfo の応答を待ってから reqHistory を送る
+  //   K1 ファームウェアは並行リクエストで前の応答を破棄するため
+  const stSwitch = connectionMap[host];
+  if (stSwitch?.ws?.readyState === WebSocket.OPEN) {
+    stSwitch.fileInfoReceived = false;
     setTimeout(() => {
-      sendCommand("get", { reqGcodeFileInfo: 1 }, host);
+      sendCommand("get", { reqGcodeFileInfo: 1 }, host)
+        .catch(() => {});
+      // fileInfo 応答受信（fileInfoReceived フラグ）を待ってから reqHistory を送出
+      const waitForFileInfo = setInterval(() => {
+        if (stSwitch.fileInfoReceived || !stSwitch.ws || stSwitch.ws.readyState !== WebSocket.OPEN) {
+          clearInterval(waitForFileInfo);
+          if (stSwitch.ws?.readyState === WebSocket.OPEN) {
+            sendCommand("get", { reqHistory: 1 }, host)
+              .catch(() => {});
+          }
+          return;
+        }
+      }, 500);
+      // 最大 15秒でタイムアウト
+      setTimeout(() => clearInterval(waitForFileInfo), 15000);
     }, 500);
-    setTimeout(() => {
-      sendCommand("get", { reqHistory: 1 }, host);
-    }, 1500);
   }
 
   updatePrinterListUI();
