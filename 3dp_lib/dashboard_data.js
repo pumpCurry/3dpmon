@@ -267,6 +267,7 @@ export function setStoredDataForHost(host, key, value) {
   d.rawValue = value;
   d.isNew = true;
   d.isFromEquipVal = true;
+  _getDirtySet(host).add(key);
 }
 
 /**
@@ -316,7 +317,7 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
     }
   }
   d.isNew = true;
-  _dirtyKeys.add(key);
+  if (currentHostname) _getDirtySet(currentHostname).add(key);
 }
 
 /**
@@ -324,10 +325,13 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
  *  - storedData[fieldName] から {value,unit} 形式の表示用オブジェクトを生成
  *
  * @param {string} fieldName
+ * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
  * @returns {{value:string,unit:string}|null}
  */
-export function getDisplayValue(fieldName) {
-  const machine = getCurrentMachine();
+export function getDisplayValue(fieldName, hostname) {
+  const machine = hostname
+    ? monitorData.machines[hostname]
+    : getCurrentMachine();
   if (!machine) return null;
   const d = machine.storedData[fieldName];
   if (!d) return null;
@@ -359,35 +363,77 @@ export function scopedById(id, hostname) {
 /* 非モジュールスクリプト（dashboard_stage_preview.js 等）からも使えるようグローバルに公開 */
 window.scopedById = scopedById;
 
-/* ─── 変更キュー（A: Dirty Key Queue） ─── */
+/* ─── 変更キュー（A: Dirty Key Queue — per-host） ─── */
 
 /**
- * setStoredData で変更されたキーを蓄積するセット。
- * aggregator サイクルごとに consumeDirtyKeys() で消費し、
- * 変更のあったキーだけを DOM に反映することで全キー走査を回避する。
+ * ホストごとに変更されたキーを蓄積する Map。
+ * setStoredData / setStoredDataForHost で変更が入ったキーを
+ * ホスト別に記録し、updateStoredDataToDOM で各ホストの
+ * パネルだけを正確に更新する。
  *
- * @type {Set<string>}
+ * @type {Map<string, Set<string>>}
  * @private
  */
-const _dirtyKeys = new Set();
+const _dirtyKeysMap = new Map();
+
+/**
+ * _getDirtySet:
+ * 指定ホスト用の dirty Set を返す（無ければ作成）。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @returns {Set<string>}
+ */
+function _getDirtySet(host) {
+  if (!_dirtyKeysMap.has(host)) _dirtyKeysMap.set(host, new Set());
+  return _dirtyKeysMap.get(host);
+}
+
+/**
+ * consumeDirtyKeysForHost:
+ * 指定ホストの変更キーを配列として返し、そのホストのセットをクリアする。
+ *
+ * @param {string} host - 対象ホスト名
+ * @returns {string[]} 変更があったキーの配列
+ */
+export function consumeDirtyKeysForHost(host) {
+  const set = _dirtyKeysMap.get(host);
+  if (!set || set.size === 0) return [];
+  const keys = [...set];
+  set.clear();
+  return keys;
+}
+
+/**
+ * getHostsWithDirtyKeys:
+ * dirty key を持つ全ホスト名を返す。
+ * updateStoredDataToDOM で全ホストを巡回する際に使用する。
+ *
+ * @returns {string[]} dirty key を持つホスト名の配列
+ */
+export function getHostsWithDirtyKeys() {
+  const hosts = [];
+  for (const [host, set] of _dirtyKeysMap) {
+    if (set.size > 0) hosts.push(host);
+  }
+  return hosts;
+}
 
 /**
  * consumeDirtyKeys:
- * 蓄積された変更キーを配列として返し、内部セットをクリアする。
- * aggregator の updateStoredDataToDOM() から呼ばれる。
- *
- * @returns {string[]} 変更があったキーの配列
+ * 後方互換用。currentHostname の変更キーを消費する。
+ * @deprecated consumeDirtyKeysForHost を使用すること
+ * @returns {string[]}
  */
 export function consumeDirtyKeys() {
-  const keys = [..._dirtyKeys];
-  _dirtyKeys.clear();
-  return keys;
+  if (!currentHostname) return [];
+  return consumeDirtyKeysForHost(currentHostname);
 }
 
 /**
  * markAllKeysDirty:
  * 指定ホスト（省略時は currentHostname）の storedData 全キーを
- * 変更キューに追加する。ホスト切替時に全フィールドの DOM 再描画を
+ * そのホストの変更キューに追加する。ホスト切替時に全フィールドの DOM 再描画を
  * トリガーするために使用する。
  *
  * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
@@ -398,9 +444,10 @@ export function markAllKeysDirty(hostname) {
   if (!host) return;
   const machine = monitorData.machines[host];
   if (!machine) return;
+  const dirtySet = _getDirtySet(host);
   for (const key in machine.storedData) {
     machine.storedData[key].isNew = true;
-    _dirtyKeys.add(key);
+    dirtySet.add(key);
   }
 }
 

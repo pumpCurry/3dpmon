@@ -423,8 +423,8 @@ export function addPanel(typeId, hostname, posOverride = null) {
     _scopeElementIds(body, hostname);
   }
 
-  /* data-field 要素をキャッシュに登録（B: 要素キャッシュ） */
-  registerFieldElements(body);
+  /* data-field 要素をキャッシュに登録（B: 要素キャッシュ、per-host） */
+  registerFieldElements(body, hostname);
 
   return panelId;
 }
@@ -445,8 +445,8 @@ export function removePanel(panelId) {
   /* パネル破棄前のクリーンアップ（タイマー停止等） */
   const body = entry.element.querySelector(".panel-body");
   if (body) {
-    /* data-field 要素をキャッシュから除去（B: 要素キャッシュ） */
-    unregisterFieldElements(body);
+    /* data-field 要素をキャッシュから除去（B: 要素キャッシュ、per-host） */
+    unregisterFieldElements(body, entry.host);
     destroyPanel(entry.type, body, entry.host);
   }
 
@@ -477,8 +477,8 @@ export function removePanelsForHost(hostname) {
     /* パネル破棄前のクリーンアップ（タイマー停止等） */
     const body = entry.element?.querySelector(".panel-body");
     if (body) {
-      /* data-field 要素をキャッシュから除去（B: 要素キャッシュ） */
-      unregisterFieldElements(body);
+      /* data-field 要素をキャッシュから除去（B: 要素キャッシュ、per-host） */
+      unregisterFieldElements(body, entry.host);
       destroyPanel(entry.type, body, entry.host);
     }
     grid.removeWidget(entry.widget);
@@ -559,7 +559,7 @@ export function restoreLayout() {
     /* 既存パネルをすべて削除（data-field キャッシュも解除） */
     for (const [, entry] of activePanels) {
       const body = entry.element?.querySelector(".panel-body");
-      if (body) unregisterFieldElements(body);
+      if (body) unregisterFieldElements(body, entry.host);
     }
     grid.removeAll();
     activePanels.clear();

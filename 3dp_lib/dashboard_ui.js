@@ -32,17 +32,17 @@
 "use strict";
 
 import { monitorData, currentHostname, PLACEHOLDER_HOSTNAME, scopedById } from "./dashboard_data.js";
-import { getDisplayValue, setStoredData, consumeDirtyKeys } from "./dashboard_data.js";
+import { getDisplayValue, setStoredData, consumeDirtyKeysForHost, getHostsWithDirtyKeys } from "./dashboard_data.js";
 import { dashboardMapping } from "./dashboard_ui_mapping.js";         // フィールド別定義と処理
 import { initializeCommandPalette } from "./dashboard_send_command.js";
 
-/* ─── B: data-field 要素キャッシュ ─── */
+/* ─── B: data-field 要素キャッシュ（per-host） ─── */
 
 /**
- * data-field 属性値をキーとし、対応する DOM 要素の Set を保持するキャッシュ。
- * パネル追加時に registerFieldElements() で登録し、
- * パネル削除時に unregisterFieldElements() で除去する。
- * updateStoredDataToDOM / updateDataField で querySelectorAll の代わりに使用。
+ * ホスト名とフィールド名の複合キー ("hostname\0fieldName") で
+ * DOM 要素の Set を保持するキャッシュ。
+ * パネル追加時に registerFieldElements(root, hostname) で登録し、
+ * パネル削除時に unregisterFieldElements(root, hostname) で除去する。
  *
  * @type {Map<string, Set<Element>>}
  * @private
@@ -50,20 +50,36 @@ import { initializeCommandPalette } from "./dashboard_send_command.js";
 const _fieldCache = new Map();
 
 /**
+ * 複合キャッシュキーを生成する。
+ * @private
+ * @param {string} hostname - ホスト名
+ * @param {string} fieldName - data-field 属性値
+ * @returns {string}
+ */
+function _cacheKey(hostname, fieldName) {
+  return hostname + "\0" + fieldName;
+}
+
+/**
  * registerFieldElements:
  * 指定ルート要素配下の全 [data-field] 要素をキャッシュに登録する。
  * パネル生成時（addPanel）に呼び出す。
  *
  * @param {HTMLElement} root - スキャン対象のルート要素
+ * @param {string} [hostname] - このパネルが属するホスト名（省略時は currentHostname）
  * @returns {void}
  */
-export function registerFieldElements(root) {
+export function registerFieldElements(root, hostname) {
   if (!root) return;
+  const host = hostname || currentHostname || "";
   root.querySelectorAll("[data-field]").forEach(el => {
-    const key = el.getAttribute("data-field");
-    if (!key) return;
-    if (!_fieldCache.has(key)) _fieldCache.set(key, new Set());
-    _fieldCache.get(key).add(el);
+    const field = el.getAttribute("data-field");
+    if (!field) return;
+    const ck = _cacheKey(host, field);
+    if (!_fieldCache.has(ck)) _fieldCache.set(ck, new Set());
+    _fieldCache.get(ck).add(el);
+    /* 要素自体にもホスト名を記録（逆引き用） */
+    el._boundHost = host;
   });
 }
 
@@ -73,42 +89,43 @@ export function registerFieldElements(root) {
  * パネル削除時（removePanel）に呼び出す。
  *
  * @param {HTMLElement} root - スキャン対象のルート要素
+ * @param {string} [hostname] - このパネルが属するホスト名（省略時は要素の _boundHost）
  * @returns {void}
  */
-export function unregisterFieldElements(root) {
+export function unregisterFieldElements(root, hostname) {
   if (!root) return;
   root.querySelectorAll("[data-field]").forEach(el => {
-    const key = el.getAttribute("data-field");
-    if (!key) return;
-    const set = _fieldCache.get(key);
+    const field = el.getAttribute("data-field");
+    if (!field) return;
+    const host = hostname || el._boundHost || currentHostname || "";
+    const ck = _cacheKey(host, field);
+    const set = _fieldCache.get(ck);
     if (set) {
       set.delete(el);
-      if (set.size === 0) _fieldCache.delete(key);
+      if (set.size === 0) _fieldCache.delete(ck);
     }
   });
 }
 
 /**
- * キャッシュから data-field 要素を取得する。
- * キャッシュにヒットしない場合は querySelectorAll にフォールバックし、結果をキャッシュする。
+ * 指定ホストの data-field 要素を取得する。
  *
  * @private
+ * @param {string} hostname - ホスト名
  * @param {string} fieldName - data-field 属性値
- * @returns {Set<Element>|NodeList} 対応する要素群
+ * @returns {Set<Element>} 対応する要素群（空Setの場合あり）
  */
-function _getFieldElements(fieldName) {
-  if (_fieldCache.has(fieldName)) {
-    return _fieldCache.get(fieldName);
+function _getFieldElements(hostname, fieldName) {
+  const ck = _cacheKey(hostname, fieldName);
+  if (_fieldCache.has(ck)) {
+    return _fieldCache.get(ck);
   }
-  /* キャッシュミス: DOMから検索してキャッシュに登録（パネル外の要素にも対応） */
-  const nodes = document.querySelectorAll(`[data-field="${fieldName}"]`);
-  if (nodes.length > 0) {
-    const set = new Set(nodes);
-    _fieldCache.set(fieldName, set);
-    return set;
-  }
-  return nodes; /* 空NodeList */
+  /* キャッシュミス: 空Set を返す（パネルが無いホストの要素は存在しない） */
+  return _emptySet;
 }
+
+/** @private 空の Set 定数（毎回生成を避ける） */
+const _emptySet = new Set();
 
 /* ─── D: 更新マーク追跡セット ─── */
 
@@ -125,17 +142,16 @@ const _newElements = new Set();
 /**
  * updateDataField:
  * 指定された `fieldName` を持つ DOM 要素群に対し、データを反映し `.new` クラスを付与する。
- * 
- * 対象となる DOM 要素は `[data-field="fieldName"]` セレクタで取得される。
- * 内部に `.value` / `.unit` クラスを持つ場合はそれぞれ分離して反映、
- * 持たない場合は全体にテキストとして文字列を反映する。
+ * hostname を指定することで特定ホストのパネル要素のみを更新できる。
  *
  * @param {string} fieldName - 反映対象フィールド名（data-field属性に一致）
  * @param {{value:string, unit:string}|string|null} [data] - 表示値オブジェクト（省略時は getDisplayValue にフォールバック）
+ * @param {string} [hostname] - 対象ホスト名（省略時は currentHostname）
  */
-export function updateDataField(fieldName, data = undefined) {
-  const displayData = data ?? getDisplayValue(fieldName);
-  const elements = _getFieldElements(fieldName);
+export function updateDataField(fieldName, data = undefined, hostname) {
+  const host = hostname || currentHostname || "";
+  const displayData = data ?? getDisplayValue(fieldName, host);
+  const elements = _getFieldElements(host, fieldName);
 
   elements.forEach(el => {
     const valueEl = el.querySelector(".value");
@@ -178,157 +194,138 @@ export function clearNewClasses() {
 
 /**
  * updateStoredDataToDOM:
- * 変更キュー（consumeDirtyKeys）から変更のあったキーだけを取得し、
- * 対応する DOM 要素を更新する。要素キャッシュ（_fieldCache）を用いて
- * querySelectorAll の繰り返し実行を回避する。
+ * 全接続ホストの変更キューを巡回し、各ホストのパネル要素だけを正確に更新する。
+ * ホストごとに consumeDirtyKeysForHost() で変更キーを取得し、
+ * _getFieldElements(hostname, fieldName) でそのホストのパネル要素のみに反映する。
  *
  * - checkbox要素、.value/.unitを持つ要素、その他のtextContent要素を識別して更新
  * - dashboardMapping に process がある場合は computedValue を再生成
- * - getDisplayValue() により value/unit を取得
+ * - getDisplayValue(key, hostname) により value/unit を取得
  * - 複数DOM要素がある場合にもすべて反映
  */
 export function updateStoredDataToDOM() {
-  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
-    console.warn("updateStoredDataToDOM: currentHostname is not set");
-    return;
-  }
+  /* dirty key を持つ全ホストを巡回（並列表示対応） */
+  const dirtyHosts = getHostsWithDirtyKeys();
+  if (dirtyHosts.length === 0) return;
 
-  const machine = monitorData.machines[currentHostname];
-  if (!machine) return;
-  const storedData = machine.storedData;
+  for (const host of dirtyHosts) {
+    if (host === PLACEHOLDER_HOSTNAME) continue;
+    const machine = monitorData.machines[host];
+    if (!machine) continue;
+    const storedData = machine.storedData;
+    const dirtyKeys = consumeDirtyKeysForHost(host);
 
-  /* A: 変更キューから変更キーだけを取得（全キー走査を回避） */
-  const dirtyKeys = consumeDirtyKeys();
+    for (const key of dirtyKeys) {
+      const d = storedData[key];
+      if (!d?.isNew) continue;
 
-  for (const key of dirtyKeys) {
-    const d = storedData[key];
-    if (!d?.isNew) continue; // isNew が false ならスキップ
+      const map = dashboardMapping[key] || {};
 
-    // ① mapping を取得
-    const map = dashboardMapping[key] || {};
-
-    // 横展開が必要な場合の処理（rawValueを特定の要素に代入させる）
-    if (Array.isArray(map.domProps)) {
-      map.domProps.forEach(({ id, prop }) => {
-        try {
-          /* パネルシステムではIDが hostname__ プレフィックス付きにスコープされる */
-          const el = scopedById(id);
-          if (!el) {
-            throw new Error(`element not found`);
+      /* domProps 横展開（スコープ付きID で検索） */
+      if (Array.isArray(map.domProps)) {
+        map.domProps.forEach(({ id, prop }) => {
+          try {
+            const el = scopedById(id, host);
+            if (!el) throw new Error(`element not found`);
+            if (!(prop in el)) throw new Error(`property "${prop}" does not exist on element`);
+            el[prop] = d.rawValue;
+          } catch (err) {
+            console.warn(
+              `[updateStoredDataToDOM] domProps update skipped for id="${id}", prop="${prop}":`,
+              err.message
+            );
           }
-          if (!(prop in el)) {
-            throw new Error(`property "${prop}" does not exist on element`);
-          }
-          el[prop] = d.rawValue;
-        } catch (err) {
-          console.warn(
-            `[updateStoredDataToDOM] domProps update skipped for id="${id}", prop="${prop}":`,
-            err.message
-          );
-        }
-      });
-    }
-
-    // --- ① DOMキー決定 & computedValue 再生成 ---
-    const elementKey = dashboardMapping[key]?.elementKey || key;
-    /* rawValue が null の場合は process を実行しない。
-       nozzleDiff / bedDiff 等、aggregator が computedValue のみ直接設定する
-       フィールドでは rawValue が常に null であり、process(null) で
-       "null" 文字列に上書きされてしまうのを防ぐ。 */
-    if (d.rawValue != null && typeof dashboardMapping[key]?.process === "function") {
-      try {
-        d.computedValue = dashboardMapping[key].process(d.rawValue);
-      } catch (e) {
-        console.warn(`[updateStoredDataToDOM] process() failed for "${key}"`, e);
-        d.computedValue = null;
-      }
-    }
-
-    // --- ② 表示用データ取得（value/unitの取得） ---
-    const { value, unit } = getDisplayValue(key) || {
-      value: String(d.rawValue ?? ""),
-      unit: ""
-    };
-
-    // --- ③ data-field 属性に対応する DOM 要素群の取得（B: キャッシュ使用） ---
-    const nodes = _getFieldElements(elementKey);
-    if (!nodes || (nodes.size ?? nodes.length) === 0) {
-      // デバッグ: data-field 要素が見つからないキーを出力
-      if (d.isFromEquipVal) {
-        console.debug(`[updateStoredDataToDOM] data-field="${elementKey}" 要素なし (key="${key}", raw=${JSON.stringify(d.rawValue)?.slice(0,50)})`);
-      }
-      d.isNew = false;
-      continue;
-    }
-
-    // --- ④ 各要素への反映 ---
-    nodes.forEach(el => {
-      const tag = el.tagName;
-      const type = el.type?.toLowerCase?.();
-
-      // ---- checkbox 更新処理 ----
-      if (tag === "INPUT" && type === "checkbox") {
-        const raw = d.rawValue;
-        const isOn = typeof raw === "boolean"
-          ? raw
-          : typeof raw === "number"
-            ? raw >= 1
-            : String(raw).trim().toLowerCase() === "true" || String(raw).trim() === "1";
-        el.checked = isOn;
-      }
-      // ---- range スライダー更新処理 ----
-      else if (tag === "INPUT" && (type === "range"||type === "number")) {
-        // 既に getDisplayValue() で加工した表示用 value を使う
-        const num = parseFloat(value);
-        if (!isNaN(num)) {
-          el.value = num;
-        }
-      }
-      // ---- textbox 更新処理 ----
-      else if (tag === "INPUT" && type === "text") {
-        el.value = value;
-      }
-      // ---- .value / .unit を持つ表示要素への反映 ----
-      else if (el.querySelector(".value") || el.querySelector(".unit")) {
-
-        // 変数に格納してからチェック
-        const valueEl = el.querySelector(".value");
-        if (valueEl) {
-          valueEl.textContent = value;
-        }
-        const unitEl = el.querySelector(".unit");
-        if (unitEl) {
-          unitEl.textContent = unit;
-        }
-      }
-
-      // ---- その他 textContent にまとめて出力 ----
-      else {
-        el.textContent = `${value}${unit}`;
-      }
-
-      // ---- D: クラスで更新表示（.new → .old 切替）+ 追跡 ----
-      el.classList.remove("old");
-      el.classList.add("new");
-      _newElements.add(el);
-    });
-
-    if (window.filamentPreview) {
-      if (key === "filamentRemainingMm") {
-        const val = Number(d.rawValue);
-        if (!isNaN(val)) window.filamentPreview.setRemainingLength(val);
-      }
-      if (key === "materialStatus") {
-        const present = Number(d.rawValue) === 0;
-        window.filamentPreview.setState({
-          isFilamentPresent: present,
-          showUsedUpIndicator: !present
         });
       }
-    }
 
-    // --- ⑤ isNew フラグリセット ---
-    d.isNew = false;
+      /* DOMキー決定 & computedValue 再生成 */
+      const elementKey = dashboardMapping[key]?.elementKey || key;
+      if (d.rawValue != null && typeof dashboardMapping[key]?.process === "function") {
+        try {
+          d.computedValue = dashboardMapping[key].process(d.rawValue);
+        } catch (e) {
+          console.warn(`[updateStoredDataToDOM] process() failed for "${key}"`, e);
+          d.computedValue = null;
+        }
+      }
+
+      /* 表示用データ取得（ホスト指定） */
+      const { value, unit } = getDisplayValue(key, host) || {
+        value: String(d.rawValue ?? ""),
+        unit: ""
+      };
+
+      /* data-field 属性に対応する DOM 要素群の取得（per-host キャッシュ） */
+      const nodes = _getFieldElements(host, elementKey);
+      if (nodes.size === 0) {
+        if (d.isFromEquipVal) {
+          console.debug(`[updateStoredDataToDOM] data-field="${elementKey}" 要素なし (host="${host}", key="${key}")`);
+        }
+        d.isNew = false;
+        continue;
+      }
+
+      /* 各要素への反映 */
+      nodes.forEach(el => {
+        _applyValueToElement(el, d, value, unit);
+        el.classList.remove("old");
+        el.classList.add("new");
+        _newElements.add(el);
+      });
+
+      /* フィラメントプレビュー更新（TODO: per-host化予定） */
+      if (host === currentHostname && window.filamentPreview) {
+        if (key === "filamentRemainingMm") {
+          const val = Number(d.rawValue);
+          if (!isNaN(val)) window.filamentPreview.setRemainingLength(val);
+        }
+        if (key === "materialStatus") {
+          const present = Number(d.rawValue) === 0;
+          window.filamentPreview.setState({
+            isFilamentPresent: present,
+            showUsedUpIndicator: !present
+          });
+        }
+      }
+
+      d.isNew = false;
+    }
+  }
+}
+
+/**
+ * 要素の種別に応じて値を反映する内部ヘルパー。
+ *
+ * @private
+ * @param {HTMLElement} el - 対象要素
+ * @param {StoredDatum} d - storedData エントリ
+ * @param {string} value - 表示用値
+ * @param {string} unit - 表示用単位
+ */
+function _applyValueToElement(el, d, value, unit) {
+  const tag = el.tagName;
+  const type = el.type?.toLowerCase?.();
+
+  if (tag === "INPUT" && type === "checkbox") {
+    const raw = d.rawValue;
+    const isOn = typeof raw === "boolean"
+      ? raw
+      : typeof raw === "number"
+        ? raw >= 1
+        : String(raw).trim().toLowerCase() === "true" || String(raw).trim() === "1";
+    el.checked = isOn;
+  } else if (tag === "INPUT" && (type === "range" || type === "number")) {
+    const num = parseFloat(value);
+    if (!isNaN(num)) el.value = num;
+  } else if (tag === "INPUT" && type === "text") {
+    el.value = value;
+  } else if (el.querySelector(".value") || el.querySelector(".unit")) {
+    const valueEl = el.querySelector(".value");
+    if (valueEl) valueEl.textContent = value;
+    const unitEl = el.querySelector(".unit");
+    if (unitEl) unitEl.textContent = unit;
+  } else {
+    el.textContent = `${value}${unit}`;
   }
 }
 /**
