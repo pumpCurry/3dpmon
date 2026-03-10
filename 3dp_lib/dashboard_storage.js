@@ -531,8 +531,8 @@ export function estimateLocalStorageUsageBytes() {
  *
  * @returns {Object|null} ジョブオブジェクト、未設定時は null
  */
-export function loadPrintCurrent() {
-  const host = currentHostname;
+export function loadPrintCurrent(hostname) {
+  const host = hostname || currentHostname;
   if (!host) return null;
   ensureMachineData(host);
   const machine = monitorData.machines[host];
@@ -544,8 +544,8 @@ export function loadPrintCurrent() {
  *
  * @param {Object|null} job - 保存するジョブオブジェクト（null 許容）
  */
-export function savePrintCurrent(job) {
-  const host = currentHostname;
+export function savePrintCurrent(job, hostname) {
+  const host = hostname || currentHostname;
   if (!host) return;
   ensureMachineData(host);
   monitorData.machines[host].printStore.current = job;
@@ -557,8 +557,8 @@ export function savePrintCurrent(job) {
  *
  * @returns {Array<Object>} 履歴配列
  */
-export function loadPrintHistory() {
-  const host = currentHostname;
+export function loadPrintHistory(hostname) {
+  const host = hostname || currentHostname;
   if (!host) return [];
   ensureMachineData(host);
   return monitorData.machines[host].printStore.history;
@@ -569,8 +569,8 @@ export function loadPrintHistory() {
  *
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
-export function savePrintHistory(history) {
-  const host = currentHostname;
+export function savePrintHistory(history, hostname) {
+  const host = hostname || currentHostname;
   if (!host) return;
   ensureMachineData(host);
   monitorData.machines[host].printStore.history =
@@ -583,8 +583,8 @@ export function savePrintHistory(history) {
  * 取得と同時に件数をログへ出力し、デバッグ用に現在の内容をコンソールへ表示します。
  * @returns {Record<string, string>} id をキーとした動画 URL マップ
  */
-export function loadPrintVideos() {
-  const host = currentHostname;
+export function loadPrintVideos(hostname) {
+  const host = hostname || currentHostname;
   if (!host) return {};
   ensureMachineData(host);
   const map = monitorData.machines[host].printStore.videos;
@@ -599,8 +599,8 @@ export function loadPrintVideos() {
  * 保存件数をログに出力し、保存内容もコンソールへ出力して調査を容易にします。
  * @param {Record<string, string>} map - id をキーとした動画 URL マップ
  */
-export function savePrintVideos(map) {
-  const host = currentHostname;
+export function savePrintVideos(map, hostname) {
+  const host = hostname || currentHostname;
   if (!host) return;
   ensureMachineData(host);
   // 上限超過時は古いエントリから削除

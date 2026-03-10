@@ -963,7 +963,7 @@ export function aggregatorUpdate() {
       if (isNaN(est)) {
         est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
       }
-      const job = loadPrintCurrent();
+      const job = loadPrintCurrent(host);
       const jobId = job?.id ?? "";
       if ((isNaN(est) || est <= 0) && storedData.fileName?.rawValue) {
         est = guessExpectedLength(storedData.fileName.rawValue, host);
@@ -997,7 +997,7 @@ export function aggregatorUpdate() {
         (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
         spool.currentJobExpectedLength == null
       ) {
-        const job = loadPrintCurrent();
+        const job = loadPrintCurrent(host);
         let len   = Number(job?.materialUsedMm ?? NaN);
         const jobId = job?.id ?? "";
         if (isNaN(len) || len <= 0) {

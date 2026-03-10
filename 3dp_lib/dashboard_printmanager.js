@@ -74,8 +74,8 @@ const MERGE_IGNORE_ZERO_FIELDS = new Set([
   "materialUsedMm"
 ]);
 
-// 最後に保存した JSON 文字列のキャッシュ（差分チェック用）
-let _lastSavedJson = "";
+// 最後に保存した JSON 文字列のキャッシュ（差分チェック用、per-host）
+const _lastSavedJsonMap = new Map();
 
 // 最新のファイル一覧データ（renderFileList 実行時に更新）
 let _fileList = [];
@@ -215,26 +215,29 @@ export function parseRawHistoryList(rawArray, baseUrl, host = currentHostname) {
 
 /**
  * 現在印刷中ジョブをロード
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname）
  * @returns {Object|null}
  */
-export function loadCurrent() {
-  return loadPrintCurrent();
+export function loadCurrent(hostname) {
+  return loadPrintCurrent(hostname);
 }
 
 /**
  * 現在印刷中ジョブを保存
  * @param {Object|null} job
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname）
  */
-export function saveCurrent(job) {
-  savePrintCurrent(job);
+export function saveCurrent(job, hostname) {
+  savePrintCurrent(job, hostname);
 }
 
 /**
  * 履歴一覧をロード
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname）
  * @returns {Array<Object>}
  */
-export function loadHistory() {
-  return loadPrintHistory();
+export function loadHistory(hostname) {
+  return loadPrintHistory(hostname);
 }
 
 /**
@@ -248,14 +251,15 @@ export function loadHistory() {
  * @param {Array<Object>} jobs - parseRawHistoryList により構成された履歴モデル配列
  * @returns {void}
  */
-export function saveHistory(jobs) {
+export function saveHistory(jobs, hostname) {
+  const host = hostname || currentHostname;
   const json = JSON.stringify(jobs);
-  if (json === _lastSavedJson) {
+  if (json === _lastSavedJsonMap.get(host)) {
     // 変更なしならスキップ
     return;
   }
-  _lastSavedJson = json;
-  savePrintHistory(jobs);
+  _lastSavedJsonMap.set(host, json);
+  savePrintHistory(jobs, host);
   pushLog("[saveHistory] 印刷履歴を保存しました", "info");
 }
 
@@ -263,16 +267,16 @@ export function saveHistory(jobs) {
  * 保存済みの動画マップを取得する。
  * @returns {Record<string, string>}
  */
-export function loadVideos() {
-  return loadPrintVideos();
+export function loadVideos(hostname) {
+  return loadPrintVideos(hostname);
 }
 
 /**
  * 動画マップを保存する。
  * @param {Record<string, string>} map
  */
-export function saveVideos(map) {
-  savePrintVideos(map);
+export function saveVideos(map, hostname) {
+  savePrintVideos(map, hostname);
 }
 
 /**
@@ -410,12 +414,13 @@ export const renderTemplates = {
 /**
  * 現在印刷中ジョブを指定コンテナに描画
  * @param {HTMLElement|null} containerEl - 描画先要素。null の場合は処理しません
+ * @param {string} [hostname] - ホスト名（省略時は currentHostname）
  */
-export function renderPrintCurrent(containerEl) {
+export function renderPrintCurrent(containerEl, hostname) {
   if (!containerEl) return;
   containerEl.innerHTML = "";
-  const job = loadCurrent();
-  const ip = getDeviceIp();
+  const job = loadCurrent(hostname);
+  const ip = getDeviceIp(hostname);
   const baseUrl = `http://${ip}`;
 
 
@@ -432,10 +437,10 @@ export function renderPrintCurrent(containerEl) {
  * 印刷履歴リストを指定コンテナ（ul または div）に描画
  * @param {HTMLElement|null} containerEl - 描画先要素。null なら何もしません
  */
-export function renderPrintHistory(containerEl) {
+export function renderPrintHistory(containerEl, hostname) {
   if (!containerEl) return;
-  const jobs = loadHistory();
-  const ip = getDeviceIp();
+  const jobs = loadHistory(hostname);
+  const ip = getDeviceIp(hostname);
   const baseUrl = `http://${ip}`;
 
   containerEl.innerHTML = "";
@@ -495,7 +500,7 @@ export async function refreshHistory(
       machine.historyData = buf.filter((_, i) => !appliedIdx.has(i));
     }
   }
-  const oldJobs = loadHistory();
+  const oldJobs = loadHistory(host);
   const mergedMap = new Map();
   newJobs.forEach(j => mergedMap.set(String(j.id), j));
   oldJobs.forEach(j => {
@@ -539,18 +544,18 @@ export async function refreshHistory(
     merged = true;
   }
 
-  const videoMap = loadVideos();
+  const videoMap = loadVideos(host);
   jobs.forEach(j => {
     const info = videoMap[j.id];
     if (info && info.videoUrl) j.videoUrl = info.videoUrl;
   });
-  saveHistory(jobs);
+  saveHistory(jobs, host);
 
   // 現在印刷中ジョブの更新があれば再描画
-  const prev = loadCurrent();
+  const prev = loadCurrent(host);
   if (jobs[0]?.id !== prev?.id) {
-    saveCurrent(jobs[0]);
-    renderPrintCurrent(scopedById(currentContainerId));
+    saveCurrent(jobs[0], host);
+    renderPrintCurrent(scopedById(currentContainerId, host), host);
   }
 
   // --- テーブル描画 ---
@@ -612,7 +617,7 @@ export function updateHistoryList(
   }
 
   let merged = false;
-  const oldJobs = loadHistory();
+  const oldJobs = loadHistory(host);
   const mergedMap = new Map();
   newJobs.forEach(j => mergedMap.set(String(j.id), j));
   oldJobs.forEach(j => {
@@ -642,21 +647,21 @@ export function updateHistoryList(
     .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_PRINT_HISTORY);
 
-  const videoMap = loadVideos();
+  const videoMap = loadVideos(host);
   jobs.forEach(j => {
     const info = videoMap[j.id];
     if (info && info.videoUrl) j.videoUrl = info.videoUrl;
   });
-  saveHistory(jobs);
+  saveHistory(jobs, host);
   pushLog(
     `[updateHistoryList] 保存データとマージ ${merged ? "完了" : "変更なし"}`,
     "info"
   );
 
-  const prev = loadCurrent();
+  const prev = loadCurrent(host);
   if (jobs[0]?.id !== prev?.id) {
-    saveCurrent(jobs[0]);
-    renderPrintCurrent(scopedById(currentContainerId));
+    saveCurrent(jobs[0], host);
+    renderPrintCurrent(scopedById(currentContainerId, host), host);
   }
 
   // ここから UI 更新処理。保存済みジョブ配列を簡易 raw 形式に変換し、
@@ -680,7 +685,7 @@ export function updateHistoryList(
 export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
   if (!Array.isArray(videoArray) || !videoArray.length) return;
   pushLog("[updateVideoList] マージ処理を開始", "info");
-  const map = { ...loadVideos() };
+  const map = { ...loadVideos(host) };
   let updated = false;
   videoArray.forEach(v => {
     if (!v.id) return;
@@ -695,10 +700,10 @@ export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
   if (updated) {
     // 新しい動画情報が存在するため保存処理を実行
     pushLog("[updateVideoList] saveVideos() を呼び出します", "info");
-    saveVideos(map);
+    saveVideos(map, host);
   }
 
-  const jobs = loadHistory();
+  const jobs = loadHistory(host);
   let changed = false;
   jobs.forEach(job => {
     const info = map[job.id];
@@ -708,10 +713,10 @@ export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
     }
   });
   if (changed) {
-    saveHistory(jobs);
+    saveHistory(jobs, host);
     // 動画マップが更新されていない場合でも
     // 履歴に動画URLが追加されたタイミングで保存を保証する
-    if (!updated) saveVideos(map);
+    if (!updated) saveVideos(map, host);
   }
   if (updated || changed) {
     const raw = jobsToRaw(jobs);

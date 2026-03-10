@@ -305,8 +305,9 @@ export async function initializeDashboard({
   // (12) ページロード時のカメラ起動は廃止
   // WebSocket 接続確立時に自動開始されるためここでは実行しない
 
-  // (12.5) 保存済みの履歴と現在印刷を表示
-  const savedJobs = printManager.loadHistory();
+  // (12.5) 保存済みの履歴と現在印刷を表示（初期ホスト）
+  const initHost = currentHostname;
+  const savedJobs = printManager.loadHistory(initHost);
   if (savedJobs.length) {
     const wsIp = monitorData.appSettings.wsDest?.split(":")[0];
     const httpPort = monitorData.appSettings.httpPort || 80;
@@ -315,7 +316,7 @@ export async function initializeDashboard({
     printManager.renderHistoryTable(raw, baseUrl);
   }
   printManager.renderPrintCurrent(
-    document.getElementById("print-current-container")
+    document.getElementById("print-current-container"), initHost
   );
 
   // (13) ファイルマネージャ初期化

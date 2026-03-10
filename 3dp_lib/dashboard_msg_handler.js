@@ -274,15 +274,15 @@ export function handleMessage(data) {
     const curId = Number(data.printStartTime || 0) || null;
     restorePrintResume(curId);
 
-    // 保存済み履歴と現在印刷を表示
-    const baseUrlStored = `http://${getDeviceIp()}:${getHttpPort()}`;
-    const jobs = printManager.loadHistory();
+    // 保存済み履歴と現在印刷を表示（initHost は上で定義済み）
+    const baseUrlStored = `http://${getDeviceIp(initHost)}:${getHttpPort(initHost)}`;
+    const jobs = printManager.loadHistory(initHost);
     if (jobs.length) {
       const raw = printManager.jobsToRaw(jobs);
       printManager.renderHistoryTable(raw, baseUrlStored);
     }
     printManager.renderPrintCurrent(
-      scopedById("print-current-container")
+      scopedById("print-current-container", initHost), initHost
     );
 
     // 初期化完了、通知抑制を解除
@@ -639,7 +639,7 @@ export function processData(data, hostname) {
   // 遅延して届くケースで、ファイル名や開始時刻が不明のまま表示され続ける
   // 問題を解消する目的で追加。
   if (data.fileName || data.printStartTime) {
-    const curJob = printManager.loadCurrent() || {};
+    const curJob = printManager.loadCurrent(host) || {};
     let changed = false;
     if (data.fileName) {
       curJob.filename = String(data.fileName).split("/").pop();
@@ -655,9 +655,9 @@ export function processData(data, hostname) {
       }
     }
     if (changed) {
-      printManager.saveCurrent(curJob);
+      printManager.saveCurrent(curJob, host);
       printManager.renderPrintCurrent(
-        scopedById("print-current-container")
+        scopedById("print-current-container", host), host
       );
     }
   }

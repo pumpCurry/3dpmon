@@ -466,7 +466,7 @@ function initLogPanel(body, hostname) {
 function initCurrentPrintPanel(body, hostname) {
   const container = body.querySelector("#print-current-container");
   if (container) {
-    printManager.renderPrintCurrent(container);
+    printManager.renderPrintCurrent(container, hostname);
   }
 }
 
@@ -509,7 +509,7 @@ function initHistoryPanel(body, hostname) {
 
   // 保存済み履歴を表示
   try {
-    const jobs = printManager.loadHistory();
+    const jobs = printManager.loadHistory(hostname);
     if (jobs.length) {
       const ip = getDeviceIp(hostname);
       const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
