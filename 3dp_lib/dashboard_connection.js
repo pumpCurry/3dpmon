@@ -78,8 +78,10 @@ const connectionMap = {};
  * @property {number|null}    hostReadyAt   - ホスト名確定時刻(Unix ms)
  * @property {boolean}        historyReceived - 履歴取得済みフラグ
  * @property {boolean}        fileReqSent   - ファイル一覧要求済みか
+ * @property {number}         fileReqRetry  - ファイル一覧リトライ回数
  * @property {boolean}        fileInfoReceived - ファイル一覧応答受信済みか
  * @property {boolean}        historyReqSent - 履歴要求済みか
+ * @property {number}         historyReqRetry - 履歴リトライ回数
  * @property {boolean}        userDisc      - ユーザー操作により切断されたか
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
@@ -223,8 +225,10 @@ const placeholderState = {
   hostReadyAt: null,
   historyReceived: false,
   fileReqSent: false,
+  fileReqRetry: 0,
   fileInfoReceived: false,
   historyReqSent: false,
+  historyReqRetry: 0,
   userDisc: false,
   buffer: [],
   latest: null,
@@ -256,8 +260,10 @@ function getState(host) {
       hostReadyAt: null,
       historyReceived: false,
       fileReqSent: false,
+      fileReqRetry: 0,
       fileInfoReceived: false,
       historyReqSent: false,
+      historyReqRetry: 0,
       userDisc: false,
       buffer: [],
       latest: null,
@@ -626,71 +632,35 @@ function handleSocketOpen(host) {
   // 接続復帰後は通知抑制を解除
   setNotificationSuppressed(false);
 
-  // ホスト名確定後に履歴/ファイル一覧を遅延取得する
+  // ホスト名確定後に履歴/ファイル一覧を遅延取得する（リトライ付き）
   st.historyReceived = false;
   st.hostReadyAt = null;
   st.fileReqSent = false;
+  st.fileReqRetry = 0;
   st.fileInfoReceived = false;
   st.historyReqSent = false;
+  st.historyReqRetry = 0;
   if (st.fetchTimer !== null) {
     clearInterval(st.fetchTimer);
   }
+
+  // ホスト名解決を待ってから _fetchWithRetry を起動するポーリング
   st.fetchTimer = setInterval(() => {
-    // 接続が閉じられた場合はタイマー破棄
     if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
       clearInterval(st.fetchTimer);
       st.fetchTimer = null;
-      st.hostReadyAt = null;
       return;
     }
-    // ホスト名確定判定: connectionMap 内で正式名に変わったか確認
-    // IP接続→正式名解決のパターンと、正式名で直接接続のパターン両方に対応
     const actualHost = Object.keys(connectionMap).find(
       k => connectionMap[k] === st
     );
-
-    // ホスト名解決済み判定:
-    // - actualHost が存在し PLACEHOLDER でない
-    // - 接続先 host と同じ（正式名で接続された場合）、
-    //   または host と異なる（IP→正式名に変わった場合）
     const hostReady = actualHost && actualHost !== PLACEHOLDER_HOSTNAME;
-    if (!hostReady) {
-      return;
-    }
+    if (!hostReady) return;
 
-    if (st.hostReadyAt === null) {
-      // ホスト名確定直後のタイムスタンプを記録
-      st.hostReadyAt = Date.now();
-      st.fileReqSent = false;
-      st.fileInfoReceived = false;
-      st.historyReqSent = false;
-      return;
-    }
-
-    const elapsed = Date.now() - st.hostReadyAt;
-
-    // 印刷履歴を先に要求（K1 FW は reqHistory を先に処理しないと
-    // reqGcodeFileInfo が応答しない場合がある）
-    if (!st.historyReqSent && elapsed >= 2500) {
-      if (!st.historyReceived) {
-        sendCommand("get", { reqHistory: 1 }, actualHost)
-          .catch(e => console.debug(`[fetchTimer] history 要求失敗: ${e.message}`));
-      }
-      st.historyReqSent = true;
-    }
-
-    // ファイル一覧を要求（reqHistory の後に送出）
-    if (!st.fileReqSent && elapsed >= 5000) {
-      sendCommand("get", { reqGcodeFileInfo: 1 }, actualHost)
-        .catch(e => console.debug(`[fetchTimer] fileInfo 要求失敗: ${e.message}`));
-      st.fileReqSent = true;
-    }
-
-    if (st.fileReqSent && st.historyReqSent) {
-      clearInterval(st.fetchTimer);
-      st.fetchTimer = null;
-      st.hostReadyAt = null;
-    }
+    // ホスト名確定 → ポーリング停止してリトライ付き取得を開始
+    clearInterval(st.fetchTimer);
+    st.fetchTimer = null;
+    _fetchWithRetry(actualHost);
   }, 500);
 
 }
@@ -876,8 +846,12 @@ function handleSocketClose(host) {
   st.hostReadyAt = null;
   st.historyReceived = false;
   st.fileReqSent = false;
+  st.fileReqRetry = 0;
   st.fileInfoReceived = false;
   st.historyReqSent = false;
+  st.historyReqRetry = 0;
+  st._historyReqAt = null;
+  st._fileReqAt = null;
 
   // Heartbeat停止...
   stopHeartbeat(host);             // ハートビート停止
@@ -1741,23 +1715,83 @@ export function switchActiveHost(host) {
 
   // 切替先ホストの履歴/ファイル一覧を即座に再取得する
   // （初回接続時にしか飛んでこないデータのため、切替時に明示的に要求する）
-  // ★ シーケンシャル送出: reqGcodeFileInfo の応答を待ってから reqHistory を送る
-  //   K1 ファームウェアは並行リクエストで前の応答を破棄するため
-  const stSwitch = connectionMap[host];
-  if (stSwitch?.ws?.readyState === WebSocket.OPEN) {
-    // reqHistory を先に送り、その後 reqGcodeFileInfo を送る
-    setTimeout(() => {
-      sendCommand("get", { reqHistory: 1 }, host)
-        .catch(() => {});
-    }, 500);
-    setTimeout(() => {
-      sendCommand("get", { reqGcodeFileInfo: 1 }, host)
-        .catch(() => {});
-    }, 1500);
-  }
+  // リトライ付き: 6秒タイムアウト × 最大3回
+  _fetchWithRetry(host);
 
   updatePrinterListUI();
   pushLog(`アクティブホストを ${host} に切り替えました`, "info");
+}
+
+/**
+ * _fetchWithRetry:
+ * reqHistory → reqGcodeFileInfo の順でリクエストを送出する。
+ * 各リクエストは 6秒タイムアウト × 最大3回リトライ。
+ * 接続直後のみならず switchActiveHost からも呼ばれる。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ */
+function _fetchWithRetry(host) {
+  const st = connectionMap[host];
+  if (!st?.ws || st.ws.readyState !== WebSocket.OPEN) return;
+
+  const MAX_RETRY = 3;
+  const TIMEOUT = 6000;
+
+  st.historyReceived = false;
+  st.historyReqRetry = 0;
+  st.fileInfoReceived = false;
+  st.fileReqRetry = 0;
+
+  /**
+   * 1つのリクエストを送出し、応答フラグを監視してリトライする。
+   * @param {string} label - ログ表示名
+   * @param {Object} params - sendCommand に渡すパラメータ
+   * @param {() => boolean} isDone - 応答受信済み判定
+   * @param {() => number} getRetry - 現在のリトライ回数取得
+   * @param {(n: number) => void} setRetry - リトライ回数セット
+   * @returns {Promise<boolean>} 受信できたら true
+   */
+  function attempt(label, params, isDone, getRetry, setRetry) {
+    return new Promise((resolve) => {
+      function tryOnce() {
+        if (isDone()) { resolve(true); return; }
+        if (!st.ws || st.ws.readyState !== WebSocket.OPEN) { resolve(false); return; }
+        const retry = getRetry();
+        if (retry >= MAX_RETRY) {
+          pushLog(`[fetchRetry] ${label} ${MAX_RETRY}回リトライ後も応答なし`, "warn");
+          resolve(false);
+          return;
+        }
+        setRetry(retry + 1);
+        pushLog(`[fetchRetry] ${label} 送出 (${retry + 1}/${MAX_RETRY})`, "info");
+        sendCommand("get", params, host).catch(() => {});
+        // TIMEOUT 後に応答チェック
+        setTimeout(() => {
+          if (isDone()) { resolve(true); return; }
+          pushLog(`[fetchRetry] ${label} タイムアウト (${getRetry()}/${MAX_RETRY})`, "warn");
+          tryOnce();
+        }, TIMEOUT);
+      }
+      tryOnce();
+    });
+  }
+
+  // reqHistory → reqGcodeFileInfo の順に送出（500ms 遅延後に開始）
+  setTimeout(async () => {
+    await attempt(
+      "reqHistory", { reqHistory: 1 },
+      () => st.historyReceived,
+      () => st.historyReqRetry,
+      (n) => { st.historyReqRetry = n; }
+    );
+    await attempt(
+      "reqGcodeFileInfo", { reqGcodeFileInfo: 1 },
+      () => st.fileInfoReceived,
+      () => st.fileReqRetry,
+      (n) => { st.fileReqRetry = n; }
+    );
+  }, 500);
 }
 
 /**
