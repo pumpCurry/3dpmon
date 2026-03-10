@@ -255,6 +255,27 @@ export function updateStoredDataToDOM() {
         unit: ""
       };
 
+      /* フィラメントプレビュー描画更新
+       * ※ 残量計算自体は aggregator の per-host ループ内で全ホスト分実行済み。
+       *   ここでは描画ウィジェットが1つしかないため、アクティブホストのみ反映する。
+       *   ホスト切替時は markAllKeysDirty → isNew=true で再描画される。
+       *   data-field 要素が存在しないパネル構成でも到達するよう、
+       *   DOM ノード取得より前に配置する。
+       */
+      if (host === currentHostname && window.filamentPreview) {
+        if (key === "filamentRemainingMm") {
+          const val = Number(d.rawValue);
+          if (!isNaN(val)) window.filamentPreview.setRemainingLength(val);
+        }
+        if (key === "materialStatus") {
+          const present = Number(d.rawValue) === 0;
+          window.filamentPreview.setState({
+            isFilamentPresent: present,
+            showUsedUpIndicator: !present
+          });
+        }
+      }
+
       /* data-field 属性に対応する DOM 要素群の取得（per-host キャッシュ） */
       const nodes = _getFieldElements(host, elementKey);
       if (nodes.size === 0) {
@@ -272,21 +293,6 @@ export function updateStoredDataToDOM() {
         el.classList.add("new");
         _newElements.add(el);
       });
-
-      /* フィラメントプレビュー更新（TODO: per-host化予定） */
-      if (host === currentHostname && window.filamentPreview) {
-        if (key === "filamentRemainingMm") {
-          const val = Number(d.rawValue);
-          if (!isNaN(val)) window.filamentPreview.setRemainingLength(val);
-        }
-        if (key === "materialStatus") {
-          const present = Number(d.rawValue) === 0;
-          window.filamentPreview.setState({
-            isFilamentPresent: present,
-            showUsedUpIndicator: !present
-          });
-        }
-      }
 
       d.isNew = false;
     }
