@@ -669,26 +669,21 @@ function handleSocketOpen(host) {
 
     const elapsed = Date.now() - st.hostReadyAt;
 
-    // ファイル一覧を要求（actualHost 宛にコマンド送信）
-    if (!st.fileReqSent && elapsed >= 2500) {
+    // 印刷履歴を先に要求（K1 FW は reqHistory を先に処理しないと
+    // reqGcodeFileInfo が応答しない場合がある）
+    if (!st.historyReqSent && elapsed >= 2500) {
+      if (!st.historyReceived) {
+        sendCommand("get", { reqHistory: 1 }, actualHost)
+          .catch(e => console.debug(`[fetchTimer] history 要求失敗: ${e.message}`));
+      }
+      st.historyReqSent = true;
+    }
+
+    // ファイル一覧を要求（reqHistory の後に送出）
+    if (!st.fileReqSent && elapsed >= 5000) {
       sendCommand("get", { reqGcodeFileInfo: 1 }, actualHost)
         .catch(e => console.debug(`[fetchTimer] fileInfo 要求失敗: ${e.message}`));
       st.fileReqSent = true;
-    }
-
-    // 印刷履歴を要求
-    // ★ reqGcodeFileInfo の応答受信後、または送出後 15秒経過後に送る
-    //   K1 ファームウェアはリクエストをシリアル処理するため、
-    //   fileInfo 応答完了前に reqHistory を送ると前の応答が破棄される
-    if (!st.historyReqSent && st.fileReqSent) {
-      const fileReqWait = elapsed - 2500; // fileReq 送出からの経過時間
-      if (st.fileInfoReceived || fileReqWait >= 15000) {
-        if (!st.historyReceived) {
-          sendCommand("get", { reqHistory: 1 }, actualHost)
-            .catch(e => console.debug(`[fetchTimer] history 要求失敗: ${e.message}`));
-        }
-        st.historyReqSent = true;
-      }
     }
 
     if (st.fileReqSent && st.historyReqSent) {
@@ -1750,24 +1745,15 @@ export function switchActiveHost(host) {
   //   K1 ファームウェアは並行リクエストで前の応答を破棄するため
   const stSwitch = connectionMap[host];
   if (stSwitch?.ws?.readyState === WebSocket.OPEN) {
-    stSwitch.fileInfoReceived = false;
+    // reqHistory を先に送り、その後 reqGcodeFileInfo を送る
+    setTimeout(() => {
+      sendCommand("get", { reqHistory: 1 }, host)
+        .catch(() => {});
+    }, 500);
     setTimeout(() => {
       sendCommand("get", { reqGcodeFileInfo: 1 }, host)
         .catch(() => {});
-      // fileInfo 応答受信（fileInfoReceived フラグ）を待ってから reqHistory を送出
-      const waitForFileInfo = setInterval(() => {
-        if (stSwitch.fileInfoReceived || !stSwitch.ws || stSwitch.ws.readyState !== WebSocket.OPEN) {
-          clearInterval(waitForFileInfo);
-          if (stSwitch.ws?.readyState === WebSocket.OPEN) {
-            sendCommand("get", { reqHistory: 1 }, host)
-              .catch(() => {});
-          }
-          return;
-        }
-      }, 500);
-      // 最大 15秒でタイムアウト
-      setTimeout(() => clearInterval(waitForFileInfo), 15000);
-    }, 500);
+    }, 1500);
   }
 
   updatePrinterListUI();
