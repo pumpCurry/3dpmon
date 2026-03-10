@@ -1787,7 +1787,7 @@ function _fetchWithRetry(host) {
       (n) => { st.historyReqRetry = n; }
     );
     await attempt(
-      "reqGcodeFileInfo", { reqGcodeFileInfo: 1 },
+      "reqGcodeFile", { reqGcodeFile: 1 },
       () => st.fileInfoReceived,
       () => st.fileReqRetry,
       (n) => { st.fileReqRetry = n; }
