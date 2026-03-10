@@ -293,7 +293,7 @@ export function ingestData(data, hostname) {
       const spool = getCurrentSpool();
       if (spool && spool.currentPrintID !== String(id)) {
         if (spool.currentJobExpectedLength == null) {
-          reserveFilament(0, String(id));
+          reserveFilament(0, String(id), host);
         } else {
           spool.currentPrintID = String(id);
         }
@@ -325,7 +325,7 @@ export function ingestData(data, hostname) {
     const spool = getCurrentSpool();
     if (spool && spool.currentPrintID !== String(id)) {
       if (spool.currentJobExpectedLength == null) {
-        reserveFilament(0, String(id));
+        reserveFilament(0, String(id), host);
       } else {
         spool.currentPrintID = String(id);
       }
@@ -558,7 +558,7 @@ export function ingestData(data, hostname) {
           length = (est * prog_agg) / 100;
         }
       }
-      finalizeFilamentUsage(length, jobId_agg);
+      finalizeFilamentUsage(length, jobId_agg, host);
       saveUnifiedStorage();
       s.accumulatedUsedMaterial = 0;
       s.prevUsedMaterialLength = null;
@@ -968,7 +968,7 @@ export function aggregatorUpdate() {
       if ((isNaN(est) || est <= 0) && storedData.fileName?.rawValue) {
         est = guessExpectedLength(storedData.fileName.rawValue, host);
       }
-      beginExternalPrint(spool, isNaN(est) ? 0 : est, jobId);
+      beginExternalPrint(spool, isNaN(est) ? 0 : est, jobId, host);
       s.accumulatedUsedMaterial = 0;
       s.prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
       s.prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
@@ -1012,7 +1012,7 @@ export function aggregatorUpdate() {
             machine.printStore.current.filamentId = spool.id;
           }
           if (!isNaN(len) && len > 0) {
-            beginExternalPrint(spool, len, jobId);
+            beginExternalPrint(spool, len, jobId, host);
           } else {
             // 予定使用量が不明の場合は予約を遅延させる
             spool.currentPrintID = jobId;
@@ -1064,7 +1064,7 @@ export function aggregatorUpdate() {
             spool.currentPrintID = resolvedJobId;
           }
         }
-        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID);
+        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host);
         saveUnifiedStorage();
         s.accumulatedUsedMaterial = 0;
         s.prevUsedMaterialLength = null;
@@ -1333,7 +1333,7 @@ export function getCurrentPrintID(hostname) {
  *       - `"stored"`: storedData に生の値があった  
  *       - `"none"`: どちらにも値がなかった
  */
-function getMergedValueWithSource(key, data, dataFieldName = key) {
+function getMergedValueWithSource(key, data, dataFieldName = key, hostname) {
   // 1) data 側の判定
   if (Object.prototype.hasOwnProperty.call(data, dataFieldName)) {
     if (data[dataFieldName] === null) {
@@ -1346,8 +1346,9 @@ function getMergedValueWithSource(key, data, dataFieldName = key) {
     // ここでは data[dataFieldName] が undefined（未送信扱い）なのでフォールバック
   }
 
-  // 2) storedData の rawValue を取得（hostname 指定不要：currentHostname で十分）
-  const machine = monitorData.machines[currentHostname];
+  // 2) storedData の rawValue を取得
+  const host = hostname || currentHostname;
+  const machine = monitorData.machines[host];
   const entry = machine?.storedData?.[key];
   if (entry) {
     if (entry.rawValue === null) {
