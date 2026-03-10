@@ -548,7 +548,7 @@ function autoSaveAll() {
 
   try {
     persistPrintResume();
-    saveUnifiedStorage();
+    saveUnifiedStorage(true);   // 即時書き込み（スロットリングバイパス）
     persistAggregatorState();
   } catch (e) {
     console.warn("autoSaveAll: データ永続化中にエラーが発生しました", e);

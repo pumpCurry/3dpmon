@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.767 (PR #353)
+* @version 1.390.786 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-08-07 22:24:00
+* @lastModified 2026-03-11 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -42,6 +42,17 @@ import { getCurrentTimestamp } from "./dashboard_utils.js";
 
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
+
+/** 書き込みスロットリング用 */
+let _saveTimer     = null;
+let _savePending   = false;
+const SAVE_THROTTLE_MS = 2000;
+
+/**
+ * 印刷動画マップの最大保持件数
+ * @constant {number}
+ */
+const MAX_VIDEOS = 500;
 
 function applySpoolDefaults(sp) {
   sp.filamentDiameter ??= 1.75;
@@ -139,12 +150,34 @@ export function trimUsageHistory() {
 
 /**
  * monitorData 全体を JSON にシリアライズし、localStorage に保存する。
+ * - スロットリングにより最短 {@link SAVE_THROTTLE_MS} 間隔で書き込む
  * - 前回と同一データなら保存をスキップして不要な I/O を回避
  * - デバッグログを残すオプションあり
  *
+ * @param {boolean} [immediate=false] - true なら即時書き込み（アプリ終了時等）
  * @returns {void}
  */
-export function saveUnifiedStorage() {
+export function saveUnifiedStorage(immediate = false) {
+  if (immediate) {
+    _flushStorage();
+    return;
+  }
+  // スロットリング: タイマー実行中はフラグだけ立てて次回に委ねる
+  _savePending = true;
+  if (_saveTimer !== null) return;
+  _flushStorage();
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    if (_savePending) _flushStorage();
+  }, SAVE_THROTTLE_MS);
+}
+
+/**
+ * 実際の localStorage 書き込みを行う内部関数。
+ * @private
+ */
+function _flushStorage() {
+  _savePending = false;
   try {
     const json = JSON.stringify(monitorData);
     if (json === _lastSavedJson) return;
@@ -331,7 +364,7 @@ export async function estimateStorageQuota() {
  */
 export function syncStorageNow() {
   const when = Date.now();
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   window.dispatchEvent(new CustomEvent("storage:sync", { detail: { when } }));
 }
 
@@ -461,6 +494,13 @@ export function savePrintVideos(map) {
   const host = currentHostname;
   if (!host) return;
   ensureMachineData(host);
+  // 上限超過時は古いエントリから削除
+  const keys = Object.keys(map);
+  if (keys.length > MAX_VIDEOS) {
+    const excess = keys.slice(0, keys.length - MAX_VIDEOS);
+    excess.forEach(k => delete map[k]);
+    pushLog(`[savePrintVideos] 上限超過のため ${excess.length} 件を削除`);
+  }
   monitorData.machines[host].printStore.videos = map;
   // デバッグ用: 保存する動画マップの件数をログに記録
   pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);

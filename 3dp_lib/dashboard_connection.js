@@ -593,8 +593,9 @@ function handleSocketOpen(host) {
   // Heartbeat開始（30秒おき）
   startHeartbeat(st.ws, 30_000, host);
 
+  // 接続中ホストが1台でもあれば集計ループを維持
+  restartAggregatorTimer(500);
   if (host === currentHostname) {
-    restartAggregatorTimer(500);    // 集計ループ開始
     updateConnectionUI("connected", {}, host);
   }
   st.state = "connected";
@@ -885,8 +886,13 @@ function handleSocketClose(host) {
 
   // Heartbeat停止...
   stopHeartbeat(host);             // ハートビート停止
-  if (host === currentHostname) {
-    stopAggregatorTimer();       // 集計ループ停止
+
+  // 接続中ホストが0になった場合のみ集計ループ停止
+  const remainingConnected = Object.values(connectionMap).some(
+    s => s && s.ws && s.ws.readyState === WebSocket.OPEN && s !== getState(host)
+  );
+  if (!remainingConnected) {
+    stopAggregatorTimer();
   }
 
   // 明示的にユーザが「切断」ボタンを押した場合
@@ -1709,6 +1715,9 @@ export function getConnectionMap() {
  * - aggregator タイマーを再起動
  * - storedData の isNew フラグを全て立てて UI を即座に更新
  * - プリンタリスト UI を更新
+ *
+ * 注: データ処理（aggregator, msg_handler）は全ホスト並行で動作するため、
+ * この関数は表示対象の切替のみを行う。データ収集には影響しない。
  *
  * @function switchActiveHost
  * @param {string} host - 切替先ホスト名
