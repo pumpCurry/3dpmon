@@ -795,7 +795,8 @@ function handleSocketMessage(event, host) {
       if (machine) machine._cachedFileInfo = data.retGcodeFileInfo;
       printManager.renderFileList(data.retGcodeFileInfo, baseUrlHttp, hostKey);
       /* ファイル一覧受信完了フラグ → reqHistory 送出を許可する */
-      st.fileInfoReceived = true;
+      const stFile = getState(hostKey);
+      stFile.fileInfoReceived = true;
     }
   } catch (e) {
     pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
