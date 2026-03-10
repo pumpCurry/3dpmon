@@ -508,6 +508,38 @@ function toggleZSpin() {
 }
 
 /**
+ * パネル生成後にキャッシュ済みの状態を DOM へ反映する。
+ * processData が先に到着しパネル未生成時に保存された位置情報・モデル情報を
+ * 改めて描画するために使用する。
+ *
+ * @param {string} hostname - ホスト名
+ */
+function replayPreviewState(hostname) {
+  const s = _getPreviewState(hostname);
+  if (!s.panelBody) return;
+
+  // Z ラベル更新（setPrinterModel が panelBody 未設定時に実行できなかった分）
+  const labelBottom = s.panelBody.querySelector(".z-label-bottom");
+  if (labelBottom) labelBottom.textContent = String(s.stageZMaxMm);
+
+  // XY ステージサイズをモデルに合わせる（ドットは initXYPreview で復元済み）
+  const stageElem = _findInPanel(s, "xy-stage");
+  if (stageElem && s.currentModel) {
+    const px = s.stageSizeMm * STAGE_SCALE;
+    stageElem.style.width = `${px}px`;
+    stageElem.style.height = `${px}px`;
+  }
+
+  // キャッシュされた位置を再描画
+  if (s.xyInitialized) {
+    if (s.lastXYPosition.x !== 0 || s.lastXYPosition.y !== 0) {
+      updateXYPreview(s.lastXYPosition.x, s.lastXYPosition.y, hostname);
+    }
+  }
+  updateZPreview(s.lastZPosition, hostname);
+}
+
+/**
  * ホスト切替（後方互換）。
  * per-host パネル方式では特別な処理不要。
  * @param {string} hostname
@@ -524,6 +556,7 @@ export {
   updateZPreview,
   setPrinterModel,
   registerPreviewPanel,
+  replayPreviewState,
   applyStageTransform,
   setTopView,
   setCameraView,

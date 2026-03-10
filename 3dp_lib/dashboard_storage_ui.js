@@ -62,6 +62,9 @@ function panelToast(msg, isErr = false) {
  * @returns {void}
  */
 export function initStorageUI() {
+  /* 注: この関数は DOMContentLoaded 時に呼ばれるが、
+     パネルシステム起動後は要素がテンプレートに移動するため、
+     パネル再生成時は initStorageUIInPanel() を使用する。 */
   // DOM キャッシュ
   const elPanel = document.getElementById("storage-panel");
   const elUsage = document.getElementById("storage-usage");
@@ -274,4 +277,200 @@ async function exportAllStorageData() {
 /** バイト数を “X.XX MiB” に変換 */
 function formatBytes(b) {
   return (b / 1024 / 1024).toFixed(2) + " MiB";
+}
+
+/**
+ * initStorageUIInPanel:
+ *   パネルシステムから呼ばれるスコープ付きストレージUI初期化。
+ *   テンプレートからクローンされたパネル本体内の要素にバインドする。
+ *
+ * @function initStorageUIInPanel
+ * @param {HTMLElement} body - パネル本体要素（.panel-body）
+ * @returns {void}
+ */
+export function initStorageUIInPanel(body) {
+  if (!body) return;
+
+  /** パネル内要素を検索するヘルパー（スコープ付きID対応） */
+  const find = (id) =>
+    body.querySelector(`[id$="__${id}"]`) || body.querySelector(`#${id}`);
+
+  const elPanel = find("storage-panel");
+  const elUsage = find("storage-usage");
+  const elErr   = find("storage-error");
+  const btnSave = find("storage-save-btn");
+  const btnTest = find("storage-quota-test-btn");
+  const btnClear = find("clear-storage-button");
+
+  /** パネル内トースト */
+  const toast = (msg, isErr = false) => {
+    const note = document.createElement("div");
+    note.style.cssText =
+      `margin-top:4px;font-size:12px;color:${isErr ? "#c00" : "#064"};`;
+    note.textContent = msg;
+    (elPanel || body).appendChild(note);
+    setTimeout(() => note.remove(), 3000);
+  };
+
+  /** 使用量更新 */
+  const refreshUsage = async () => {
+    try {
+      const { usage, quota } = await estimateStorageQuota();
+      const pct = ((usage / quota) * 100).toFixed(1);
+      if (elUsage) {
+        elUsage.textContent =
+          `${formatBytes(usage)} / ${formatBytes(quota)}  (${pct}%)`;
+      }
+      if (elErr) elErr.hidden = true;
+    } catch {
+      if (elErr) { elErr.hidden = false; elErr.textContent = "容量取得エラー"; }
+    }
+  };
+
+  /* Export / Import ボタンを動的に挿入 */
+  const expBtn = document.createElement("button");
+  expBtn.textContent = "全データ Export";
+  expBtn.style.cssText = "font-size:12px;margin-left:5px;";
+
+  const impBtn = document.createElement("button");
+  impBtn.textContent = "全データ Import";
+  impBtn.style.cssText = "font-size:12px;margin-left:5px;";
+
+  const allExpBtn = document.createElement("button");
+  allExpBtn.textContent = "すべてのデータのエクスポート";
+  allExpBtn.style.cssText = "font-size:12px;margin-left:5px;";
+
+  const btnGroup = document.createElement("div");
+  btnGroup.style.cssText = "padding:8px;font-size:0.9em;";
+  btnGroup.append(expBtn, impBtn, allExpBtn);
+  if (elPanel) elPanel.appendChild(btnGroup);
+
+  /* ボタンイベント */
+  if (btnSave) {
+    btnSave.addEventListener("click", () => {
+      syncStorageNow();
+      toast("保存しました");
+    });
+  }
+
+  if (btnTest) {
+    btnTest.addEventListener("click", async () => {
+      btnTest.disabled = true;
+      try {
+        const writable = await testMaxLocalStorageQuota();
+        toast(`残容量テスト結果: 追加で ${formatBytes(writable)} 書込可能でした`);
+        refreshUsage();
+      } catch (e) {
+        console.error("[quota-test]", e);
+        toast("クォータテスト中にエラーが発生しました", true);
+      } finally {
+        btnTest.disabled = false;
+      }
+    });
+  }
+
+  expBtn.addEventListener("click", async () => {
+    try {
+      const data = await exportAllData();
+      const json = JSON.stringify(data);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "3dp-monitor_backup.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("エクスポート用 JSON を生成しました");
+    } catch (e) {
+      console.error("[storage-export]", e);
+      toast("エクスポートに失敗しました", true);
+    }
+  });
+
+  impBtn.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.addEventListener("change", (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const parsed = JSON.parse(reader.result);
+          await importAllData(parsed);
+          toast("インポート完了。ページを再読み込みします。");
+          setTimeout(() => location.reload(), 800);
+        } catch (e) {
+          console.error("[storage-import]", e);
+          toast("インポート失敗: 不正な JSON", true);
+        }
+      };
+      reader.readAsText(file);
+    });
+    input.click();
+  });
+
+  allExpBtn.addEventListener("click", async () => {
+    try {
+      const data = await exportAllData();
+      const json = JSON.stringify(data);
+      const now = new Date();
+      const pad = (n) => n.toString().padStart(2, "0");
+      const stamp =
+        `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+        `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const blob = new Blob([json], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `3dpmon_export_${stamp}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("データをエクスポートしました");
+    } catch (e) {
+      console.error("[exportAllStorageData]", e);
+      toast("エクスポートに失敗しました", true);
+    }
+  });
+
+  /* 全ストレージ削除ボタン */
+  if (btnClear) {
+    const confirmModal = find("confirm-delete-modal");
+    const confirmOk = find("confirm-delete-ok");
+    const confirmCancel = find("confirm-delete-cancel");
+
+    btnClear.addEventListener("click", () => {
+      if (confirmModal) confirmModal.style.display = "";
+    });
+    if (confirmCancel) {
+      confirmCancel.addEventListener("click", () => {
+        if (confirmModal) confirmModal.style.display = "none";
+      });
+    }
+    if (confirmOk) {
+      confirmOk.addEventListener("click", () => {
+        localStorage.clear();
+        if (confirmModal) confirmModal.style.display = "none";
+        toast("全ストレージを削除しました。ページを再読み込みします。");
+        setTimeout(() => location.reload(), 800);
+      });
+    }
+  }
+
+  /* パネル開閉で使用量ライブ更新 */
+  let panelLiveTimer = null;
+  if (elPanel) {
+    elPanel.addEventListener("toggle", () => {
+      if (elPanel.open) {
+        if (!panelLiveTimer) panelLiveTimer = setInterval(refreshUsage, 2000);
+      } else {
+        clearInterval(panelLiveTimer);
+        panelLiveTimer = null;
+      }
+    });
+  }
+
+  /* 初期表示 */
+  refreshUsage();
 }

@@ -490,6 +490,14 @@ function _syncPanelsForHost(hostname, oldHost) {
   if (migrated === 0) {
     ensureHostPanels(hostname);
   }
+
+  /* パネル生成後、processData がパネル生成前に到着済みのデータを
+     新しい DOM に反映するため、全キーを dirty にマークして
+     次回の aggregatorUpdate で再描画されるようにする */
+  markAllKeysDirty(hostname);
+
+  /* aggregator を即座に実行し、キャッシュ済みデータを描画する */
+  restartAggregatorTimer(100);
 }
 
 /* ===================== WebSocket 接続・受信処理 ===================== */
@@ -806,6 +814,9 @@ function handleSocketMessage(event, host) {
     if (hostReady && data.retGcodeFileInfo) {
       pushLog("retGcodeFileInfo を受信しました", "info", false, hostKey);
       const baseUrlHttp = `http://${ip}:${httpPort}`;
+      /* キャッシュ: パネル未生成時でも後から initHistoryPanel で描画可能にする */
+      const machine = monitorData.machines[hostKey];
+      if (machine) machine._cachedFileInfo = data.retGcodeFileInfo;
       printManager.renderFileList(data.retGcodeFileInfo, baseUrlHttp, hostKey);
     }
   } catch (e) {

@@ -44,6 +44,7 @@ import {
   restoreXYPreviewState,
   initXYPreview,
   registerPreviewPanel,
+  replayPreviewState,
   setPrinterModel,
   setFlatView,
   setTilt45View,
@@ -54,6 +55,7 @@ import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
+import { initStorageUIInPanel } from "./dashboard_storage_ui.js";
 import { monitorData, currentHostname } from "./dashboard_data.js";
 import { getCurrentSpool } from "./dashboard_spool.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
@@ -235,6 +237,10 @@ function initHeadPreviewPanel(body, hostname) {
     restoreXYPreviewState(hostname);
     initXYPreview(body, hostname);
   }
+
+  /* processData がパネル生成前に到着済みの場合、
+     キャッシュされた位置・モデル情報を DOM に反映する */
+  replayPreviewState(hostname);
 
   // 回転ボタンのバインド
   const btnFlat = body.querySelector("#btn-stage-flat");
@@ -570,6 +576,18 @@ function initHistoryPanel(body, hostname) {
   } catch (e) {
     console.warn("[panel-init] history render エラー:", e);
   }
+
+  // キャッシュ済みファイル一覧を表示（パネル生成前にデータ受信済みの場合）
+  try {
+    const machine = monitorData.machines[hostname];
+    if (machine?._cachedFileInfo) {
+      const ip = getDeviceIp(hostname);
+      const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+      printManager.renderFileList(machine._cachedFileInfo, baseUrl, hostname);
+    }
+  } catch (e) {
+    console.warn("[panel-init] file list render エラー:", e);
+  }
 }
 
 /**
@@ -579,6 +597,19 @@ function initHistoryPanel(body, hostname) {
  */
 function initMachineInfoPanel(body, hostname) {
   // data-field 属性による自動バインディングのため、特別な初期化は不要
+}
+
+/**
+ * 設定パネルの初期化（ストレージUI・通知設定のバインド）
+ * @param {HTMLElement} body - パネル本体要素
+ * @param {string} hostname - ホスト名
+ */
+function initSettingsPanel(body, hostname) {
+  try {
+    initStorageUIInPanel(body);
+  } catch (e) {
+    console.warn("[panel-init] settings panel 初期化エラー:", e);
+  }
 }
 
 // ==============================
@@ -602,6 +633,7 @@ export function registerAllPanelInits() {
   registerPanelInit("log", initLogPanel);
   registerPanelInit("current-print", initCurrentPrintPanel);
   registerPanelInit("history", initHistoryPanel);
+  registerPanelInit("settings", initSettingsPanel);
 
   // 破棄関数
   registerPanelDestroy("camera", (body) => {
