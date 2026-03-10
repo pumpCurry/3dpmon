@@ -214,6 +214,32 @@ let grid = null;
  */
 const activePanels = new Map();
 
+/**
+ * restoreLayout でホスト未解決のためスキップされたレイアウト情報。
+ * 接続時に ensureHostPanels から参照し、保存済みレイアウトを復元する。
+ * @type {Map<string, Array<{panelType: string, x: number, y: number, w: number, h: number}>>}
+ */
+const _deferredLayouts = new Map();
+
+/**
+ * レイアウト復元保留リストにエントリを追加する。
+ * @private
+ * @param {string} hostname - ホスト名
+ * @param {{panelType: string, x: number, y: number, w: number, h: number}} item
+ */
+function _deferLayout(hostname, item) {
+  if (!_deferredLayouts.has(hostname)) {
+    _deferredLayouts.set(hostname, []);
+  }
+  _deferredLayouts.get(hostname).push({
+    panelType: item.panelType,
+    x: item.x,
+    y: item.y,
+    w: item.w,
+    h: item.h
+  });
+}
+
 /* ─── パネルIDユーティリティ ─── */
 
 /**
@@ -536,10 +562,10 @@ export function restoreLayout() {
     const layout = JSON.parse(raw);
     if (!Array.isArray(layout) || layout.length === 0) return false;
 
-    /* 接続先として有効なホスト一覧を構築（保存済み接続先に含まれるかチェック用）
-       connectionTargets のIPとホスト名、および wsDest のみを対象とする。
-       machines の全キーは含めない（削除済み接続先のパネルが復元されるのを防ぐ）。
-       "shared" は有効ホストに含めない（shared パネルは廃止）。 */
+    /* 接続先として有効なホスト一覧を構築
+       connectionTargets のIPとホスト名、wsDest、および machines キーを含める。
+       machines キーは前回接続時のホスト名を保持しているため、
+       リロード直後でまだ接続していない状態でもレイアウト復元に必要。 */
     const validHosts = new Set();
     const targets = monitorData.appSettings.connectionTargets || [];
     for (const t of targets) {
@@ -550,6 +576,12 @@ export function restoreLayout() {
     if (monitorData.appSettings.wsDest) {
       validHosts.add(monitorData.appSettings.wsDest.split(":")[0]);
       validHosts.add(monitorData.appSettings.wsDest);
+    }
+    /* machines にあるホスト名（前回接続時に解決済み）も有効とする */
+    for (const machineHost of Object.keys(monitorData.machines || {})) {
+      if (machineHost && machineHost !== "shared" && machineHost !== "__placeholder__") {
+        validHosts.add(machineHost);
+      }
     }
 
     /* 接続先が無い場合はレイアウト復元をスキップ
@@ -563,21 +595,31 @@ export function restoreLayout() {
     }
     grid.removeAll();
     activePanels.clear();
+    _deferredLayouts.clear();
 
-    /* レイアウトデータからパネルを再生成（有効なホストのパネルのみ） */
+    /* レイアウトデータからパネルを再生成 */
     for (const item of layout) {
-      if (item.host && !validHosts.has(item.host)) {
-        console.info(`restoreLayout: ホスト "${item.host}" は接続先に存在しないためスキップ`);
-        continue;
-      }
       /* 旧 "control" パネルを新しい分割パネルに移行 */
       if (item.panelType === "control") {
-        addPanel("control-cmd", item.host, {
-          x: item.x, y: item.y, w: Math.min(item.w, 3), h: Math.min(item.h, 3)
-        });
-        addPanel("control-temp", item.host, {
-          x: item.x, y: item.y + 3, w: item.w, h: Math.max(item.h - 3, 3)
-        });
+        if (!item.host || validHosts.has(item.host)) {
+          addPanel("control-cmd", item.host, {
+            x: item.x, y: item.y, w: Math.min(item.w, 3), h: Math.min(item.h, 3)
+          });
+          addPanel("control-temp", item.host, {
+            x: item.x, y: item.y + 3, w: item.w, h: Math.max(item.h - 3, 3)
+          });
+        } else {
+          /* control → 分割して保留 */
+          _deferLayout(item.host, { panelType: "control-cmd", x: item.x, y: item.y, w: Math.min(item.w, 3), h: Math.min(item.h, 3) });
+          _deferLayout(item.host, { panelType: "control-temp", x: item.x, y: item.y + 3, w: item.w, h: Math.max(item.h - 3, 3) });
+        }
+        continue;
+      }
+
+      if (item.host && !validHosts.has(item.host)) {
+        /* ホストが未解決 → 接続時に復元できるよう保留 */
+        _deferLayout(item.host, item);
+        console.info(`restoreLayout: ホスト "${item.host}" は未解決のため保留（接続時に復元）`);
         continue;
       }
       addPanel(item.panelType, item.host, {
@@ -788,35 +830,51 @@ export function ensureHostPanels(hostname) {
     if (entry.host === hostname) return 0;
   }
 
+  /* 保留レイアウトがあればそこから復元 */
+  if (_deferredLayouts.has(hostname)) {
+    const deferred = _deferredLayouts.get(hostname);
+    _deferredLayouts.delete(hostname);
+    let count = 0;
+    for (const item of deferred) {
+      if (addPanel(item.panelType, hostname, { x: item.x, y: item.y, w: item.w, h: item.h })) count++;
+    }
+    if (count > 0) {
+      saveLayout();
+      return count;
+    }
+  }
+
+  /* 保留レイアウトがない場合はデフォルトパネルセットを生成 */
   let count = 0;
 
-  if (activePanels.size === 0) {
-    /* グリッドが空 → 初回接続: フルセットを生成 */
-    const defaultPanels = [
-      { type: "camera",        x: 0,  y: 0,  w: 4,  h: 5 },
-      { type: "head-preview",  x: 4,  y: 0,  w: 3,  h: 5 },
-      { type: "filament",      x: 7,  y: 0,  w: 2,  h: 5 },
-      { type: "status",        x: 9,  y: 0,  w: 3,  h: 5 },
-      { type: "temp-graph",    x: 0,  y: 5,  w: 6,  h: 4 },
-      { type: "control-cmd",   x: 6,  y: 5,  w: 3,  h: 3 },
-      { type: "control-temp",  x: 6,  y: 8,  w: 6,  h: 5 },
-      { type: "machine-info",  x: 9,  y: 5,  w: 3,  h: 3 },
-      { type: "log",           x: 0,  y: 13, w: 12, h: 4 },
-      { type: "current-print", x: 0,  y: 17, w: 12, h: 3 },
-      { type: "history",       x: 0,  y: 20, w: 12, h: 5 },
-      { type: "settings",      x: 0,  y: 25, w: 12, h: 4 }
-    ];
-    for (const p of defaultPanels) {
-      if (addPanel(p.type, hostname, { x: p.x, y: p.y, w: p.w, h: p.h })) count++;
+  /* 既存パネルの最大Y座標を計算（2台目以降の配置開始位置） */
+  let maxY = 0;
+  if (activePanels.size > 0) {
+    for (const [, entry] of activePanels) {
+      const node = entry.widget?.gridstackNode;
+      if (node) {
+        const bottom = (node.y || 0) + (node.h || 0);
+        if (bottom > maxY) maxY = bottom;
+      }
     }
-  } else {
-    /* 他ホストのパネルが既に存在 → 主要パネルのみ追加 */
-    const essentialTypes = [
-      "status", "camera", "temp-graph", "current-print"
-    ];
-    for (const typeId of essentialTypes) {
-      if (addPanel(typeId, hostname)) count++;
-    }
+  }
+
+  const defaultPanels = [
+    { type: "camera",        x: 0,  y: 0,  w: 4,  h: 5 },
+    { type: "head-preview",  x: 4,  y: 0,  w: 3,  h: 5 },
+    { type: "filament",      x: 7,  y: 0,  w: 2,  h: 5 },
+    { type: "status",        x: 9,  y: 0,  w: 3,  h: 5 },
+    { type: "temp-graph",    x: 0,  y: 5,  w: 6,  h: 4 },
+    { type: "control-cmd",   x: 6,  y: 5,  w: 3,  h: 3 },
+    { type: "control-temp",  x: 6,  y: 8,  w: 6,  h: 5 },
+    { type: "machine-info",  x: 9,  y: 5,  w: 3,  h: 3 },
+    { type: "log",           x: 0,  y: 13, w: 12, h: 4 },
+    { type: "current-print", x: 0,  y: 17, w: 12, h: 3 },
+    { type: "history",       x: 0,  y: 20, w: 12, h: 5 },
+    { type: "settings",      x: 0,  y: 25, w: 12, h: 4 }
+  ];
+  for (const p of defaultPanels) {
+    if (addPanel(p.type, hostname, { x: p.x, y: p.y + maxY, w: p.w, h: p.h })) count++;
   }
 
   if (count > 0) saveLayout();
