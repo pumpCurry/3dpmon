@@ -43,6 +43,7 @@ import {
 import {
   restoreXYPreviewState,
   initXYPreview,
+  registerPreviewPanel,
   setPrinterModel,
   setFlatView,
   setTilt45View,
@@ -217,10 +218,13 @@ function _updateNoSignalInfo(body, hostname) {
  * @param {string} hostname - ホスト名
  */
 function initHeadPreviewPanel(body, hostname) {
+  /* パネル本体をプレビューモジュールに登録（per-host DOM参照） */
+  registerPreviewPanel(body, hostname);
+
   const xyStage = body.querySelector("#xy-stage");
   if (xyStage) {
-    restoreXYPreviewState();
-    initXYPreview();
+    restoreXYPreviewState(hostname);
+    initXYPreview(body, hostname);
   }
 
   // 回転ボタンのバインド
@@ -233,8 +237,6 @@ function initHeadPreviewPanel(body, hostname) {
   if (btn45) btn45.addEventListener("click", setTilt45View);
   if (btnOblique) btnOblique.addEventListener("click", setObliqueView);
   if (btnSpin) btnSpin.addEventListener("click", toggleZSpin);
-
-  // Z プレビューは既に HTML 内にあるためそのまま使用可能
 }
 
 /**
@@ -246,7 +248,7 @@ function initFilamentPanel(body, hostname) {
   const container = body.querySelector("#filament-preview");
   if (!container) return;
 
-  // フィラメントプレビューを生成
+  // フィラメントプレビューを生成（per-host）
   try {
     const preview = createFilamentPreview(container, {
       filamentDiameter: 1.75,
@@ -258,6 +260,9 @@ function initFilamentPanel(body, hostname) {
       reelWindingInnerDiameter: 95,
       reelCenterHoleDiameter: 54,
     });
+    /* per-host Map + 後方互換 window.filamentPreview */
+    if (!window._filamentPreviews) window._filamentPreviews = new Map();
+    window._filamentPreviews.set(hostname, preview);
     window.filamentPreview = preview;
   } catch (e) {
     console.warn("[panel-init] filament preview 生成エラー:", e);
@@ -291,15 +296,15 @@ function initTempGraphPanel(body, hostname) {
   const canvas = body.querySelector("#temp-graph-canvas");
   if (!canvas) return;
 
-  // Chart.js の再初期化（クローンされた canvas に対して）
-  resetTemperatureGraph();
-  initTemperatureGraph();
+  // Chart.js の初期化（per-host インスタンス）
+  resetTemperatureGraph(hostname);
+  initTemperatureGraph(body, hostname);
 
   // リセットボタン
   const resetBtn = body.querySelector("#temp-graph-reset-button");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
-      resetTemperatureGraph();
+      resetTemperatureGraph(hostname);
     });
   }
 }
@@ -353,7 +358,7 @@ function initLogPanel(body, hostname) {
 
   if (logBox) {
     initLogAutoScroll(logBox);
-    initLogRenderer(logBox);
+    initLogRenderer(logBox, notifBox);
   }
 
   // タブ切り替え
@@ -564,7 +569,7 @@ export function registerAllPanelInits() {
       }
     }
   });
-  registerPanelDestroy("temp-graph", (body) => {
-    resetTemperatureGraph();
+  registerPanelDestroy("temp-graph", (body, hostname) => {
+    resetTemperatureGraph(hostname);
   });
 }

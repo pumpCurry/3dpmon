@@ -205,11 +205,14 @@ export function initLogAutoScroll(containerEl) {
  * @param {HTMLElement} containerEl - ログを表示するコンテナ要素
  * @returns {Function} イベントハンドラを解除するクリーンアップ関数
  */
-export function initLogRenderer(containerEl) {
+export function initLogRenderer(containerEl, notifContainerEl) {
   if (!containerEl) return () => {};
 
   // 自動スクロール許容のしきい値(px)
   const SCROLL_THRESHOLD = 50;
+
+  /** 通知履歴コンテナ（パネル内から渡される or グローバル検索） */
+  const notifBox = notifContainerEl || scopedById("notification-history");
 
   /**
    * ログエントリを表示コンテナに追加し、
@@ -221,7 +224,7 @@ export function initLogRenderer(containerEl) {
    */
   function appendLog(entry) {
     // スクロール位置が最下部付近かを判定
-    const atBottom = 
+    const atBottom =
       containerEl.scrollHeight <= containerEl.clientHeight ||
       containerEl.scrollHeight - (containerEl.scrollTop + containerEl.clientHeight) < SCROLL_THRESHOLD;
 
@@ -232,15 +235,11 @@ export function initLogRenderer(containerEl) {
     containerEl.appendChild(p);
 
     // 通知ログなら notification-history にも複製追加
-    if (entry.notify) {
-      const errBox = scopedById("notification-history");
-      if (errBox) {
-        const clone = p.cloneNode(true);
-        clone.className = `notification-entry log-${entry.level}`;
-        errBox.appendChild(clone);
-      }
+    if (entry.notify && notifBox) {
+      const clone = p.cloneNode(true);
+      clone.className = `notification-entry log-${entry.level}`;
+      notifBox.appendChild(clone);
     }
-
 
     // 行数制限を超えた分だけ古い通常ログを削除
     const max = getMaxLogLines();
@@ -253,19 +252,15 @@ export function initLogRenderer(containerEl) {
     }
 
     // 行数制限を超えた分だけ古い通知ログを削除
-    if (entry.notify) {
-      const errBox = scopedById("notification-history");
-      if (errBox) {
-        const errLines = errBox.querySelectorAll("p.notification-entry");
-        if (errLines.length > max) {
-          const removeErrCount = errLines.length - max;
-          for (let i = 0; i < removeErrCount; i++) {
-            errBox.removeChild(errLines[i]);
-          }
+    if (entry.notify && notifBox) {
+      const errLines = notifBox.querySelectorAll("p.notification-entry");
+      if (errLines.length > max) {
+        const removeErrCount = errLines.length - max;
+        for (let i = 0; i < removeErrCount; i++) {
+          notifBox.removeChild(errLines[i]);
         }
       }
     }
-
 
     // 自動スクロール
     if (atBottom) {
@@ -278,8 +273,7 @@ export function initLogRenderer(containerEl) {
   */
   function clearLogs() {
     containerEl.innerHTML = "";
-    const errBox = scopedById("notification-history");
-    if (errBox) errBox.innerHTML = "";
+    if (notifBox) notifBox.innerHTML = "";
   }
 
   /**

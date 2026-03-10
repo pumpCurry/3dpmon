@@ -11,16 +11,18 @@
  * - Chart.js を用いた温度グラフ描画
  * - データ点の間引きやスロットリング更新に対応
  * - Zoom プラグインによる拡大・パン操作
+ * - マルチプリンタ対応: per-host Chart.js インスタンス管理
  *
  * 【公開関数一覧】
- * - {@link initTemperatureGraph}：グラフ初期化
+ * - {@link initTemperatureGraph}：グラフ初期化（パネル本体＋ホスト名を受け取る）
  * - {@link resetTemperatureGraph}：グラフデータリセット
  * - {@link resetTemperatureGraphView}：表示範囲リセット
  * - {@link updateTemperatureGraphFromStoredData}：データ更新
+ * - {@link switchChartHost}：ホスト切替（後方互換、内部的にはno-op化）
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.788 (PR #366)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-03-10 22:00:00
+ * @lastModified 2026-03-11 02:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,61 +49,70 @@ const DEFAULT_CONFIG = {
 };
 
 // ==============================
-// 内部状態管理
+// 内部状態管理（per-host）
 // ==============================
-
-let tempChart = null;
-let config = { ...DEFAULT_CONFIG };
-let lastUpdate = 0;
-let updateQueued = false;
-let isFirstRender = true;
 
 /** 取得対象キー群（サーバーから渡される storedData のキーに合わせる） */
 const DATASET_KEYS = ["nozzleCurrent", "nozzleTarget", "bedCurrent", "bedTarget", "boxCurrent"];
 const FIELD_KEYS   = ["nozzleTemp", "targetNozzleTemp", "bedTemp0", "targetBedTemp0", "boxTemp"];
 
-/** per-host データバッファ Map<hostname, { pointQueue, tempData }> */
-const _hostChartData = new Map();
+/**
+ * @typedef {Object} HostChartState
+ * @property {Chart|null} chart       - Chart.js インスタンス
+ * @property {Object}     tempData    - データセット別時系列データ
+ * @property {Object}     pointQueue  - キューバッファ
+ * @property {number}     lastUpdate  - 最終更新タイムスタンプ
+ * @property {boolean}    updateQueued - 更新キュー済みフラグ
+ * @property {boolean}    isFirstRender - 初回描画フラグ
+ * @property {Object}     config      - 構成パラメータ
+ */
+
+/** @type {Map<string, HostChartState>} */
+const _hostCharts = new Map();
 
 /**
- * 指定ホストのチャートデータバッファを取得（なければ作成）。
+ * 指定ホストのチャート状態を取得（なければ作成）。
  * @private
  * @param {string} hostname
- * @returns {{ pointQueue: Object, tempData: Object }}
+ * @returns {HostChartState}
  */
-function _getChartData(hostname) {
-  if (!_hostChartData.has(hostname)) {
+function _getHostState(hostname) {
+  if (!_hostCharts.has(hostname)) {
     const pq = {};
     const td = {};
     DATASET_KEYS.forEach(key => { pq[key] = []; td[key] = []; });
-    _hostChartData.set(hostname, { pointQueue: pq, tempData: td });
+    _hostCharts.set(hostname, {
+      chart: null,
+      tempData: td,
+      pointQueue: pq,
+      lastUpdate: 0,
+      updateQueued: false,
+      isFirstRender: true,
+      config: { ...DEFAULT_CONFIG }
+    });
   }
-  return _hostChartData.get(hostname);
+  return _hostCharts.get(hostname);
 }
-
-/** 後方互換：現在表示中ホストのデータ参照用 */
-let pointQueue = {};
-let tempData   = {};
-// 初期化
-DATASET_KEYS.forEach(key => {
-  pointQueue[key] = [];
-  tempData[key]   = [];
-});
 
 // ==============================
 // 初期化・リセット
 // ==============================
 
 /**
- * グラフの初期化処理
- * Chart.js による描画設定を行い、Canvasが存在しない場合は処理しない。
+ * グラフの初期化処理。
+ * パネル本体内の canvas を検索し、Chart.js インスタンスを per-host で作成する。
  *
- * @param {object} userConfig - オプション指定 { timeWindowMs, decimationSamples, throttleIntervalMs }
+ * @param {HTMLElement} [panelBody] - パネル本体要素（省略時は document から検索）
+ * @param {string} [hostname]      - ホスト名
+ * @param {object} [userConfig={}] - オプション指定
  */
-export function initTemperatureGraph(userConfig = {}) {
-  config = { ...DEFAULT_CONFIG, ...userConfig };
+export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
+  const cfg = { ...DEFAULT_CONFIG, ...userConfig };
 
-  const canvas = document.getElementById("temp-graph-canvas");
+  /* canvas をパネル内から検索 */
+  const canvas = panelBody
+    ? panelBody.querySelector("#temp-graph-canvas") || panelBody.querySelector("canvas")
+    : document.getElementById("temp-graph-canvas");
   if (!canvas) {
     console.warn("initTemperatureGraph: canvas 要素が見つかりません");
     return;
@@ -113,15 +124,26 @@ export function initTemperatureGraph(userConfig = {}) {
     return;
   }
 
-  tempChart = new Chart(ctx, {
+  /* ホスト状態を取得し config を設定 */
+  const host = hostname || "_default";
+  const hs = _getHostState(host);
+  hs.config = cfg;
+
+  /* 既存チャートがあれば破棄 */
+  if (hs.chart) {
+    hs.chart.destroy();
+    hs.chart = null;
+  }
+
+  hs.chart = new Chart(ctx, {
     type: "line",
     data: {
       datasets: [
-        { label: "ノズル温度 (現在)", data: tempData.nozzleCurrent, fill: false, borderWidth: 2 },
-        { label: "ノズル温度 (目標)", data: tempData.nozzleTarget,  fill: false, borderWidth: 2 },
-        { label: "ベッド温度 (現在)", data: tempData.bedCurrent,    fill: false, borderWidth: 2 },
-        { label: "ベッド温度 (目標)", data: tempData.bedTarget,     fill: false, borderWidth: 2 },
-        { label: "箱内温度 (現在)",   data: tempData.boxCurrent,     fill: false, borderWidth: 2 }
+        { label: "ノズル温度 (現在)", data: hs.tempData.nozzleCurrent, fill: false, borderWidth: 2 },
+        { label: "ノズル温度 (目標)", data: hs.tempData.nozzleTarget,  fill: false, borderWidth: 2 },
+        { label: "ベッド温度 (現在)", data: hs.tempData.bedCurrent,    fill: false, borderWidth: 2 },
+        { label: "ベッド温度 (目標)", data: hs.tempData.bedTarget,     fill: false, borderWidth: 2 },
+        { label: "箱内温度 (現在)",   data: hs.tempData.boxCurrent,     fill: false, borderWidth: 2 }
       ]
     },
     options: {
@@ -142,7 +164,7 @@ export function initTemperatureGraph(userConfig = {}) {
       decimation: {
         enabled: true,
         algorithm: "lttb",
-        samples: config.decimationSamples
+        samples: cfg.decimationSamples
       },
       scales: {
         x: {
@@ -166,82 +188,65 @@ export function initTemperatureGraph(userConfig = {}) {
 }
 
 /**
- * グラフをクリアし、全データと状態をリセットします。
- * Chart.js Zoom プラグインが使用されている場合はズーム範囲もリセットします。
+ * グラフをクリアし、全データと状態をリセットする。
+ *
+ * @param {string} [hostname] - 対象ホスト名（省略時は全ホスト）
  */
 export function resetTemperatureGraph(hostname) {
-  const host = hostname || _currentChartHost;
-  if (host) {
-    const hd = _getChartData(host);
+  if (hostname) {
+    const hs = _getHostState(hostname);
     DATASET_KEYS.forEach(key => {
-      hd.tempData[key].length = 0;
-      hd.pointQueue[key].length = 0;
+      hs.tempData[key].length = 0;
+      hs.pointQueue[key].length = 0;
     });
+    if (hs.chart) {
+      hs.chart.data.datasets.forEach(ds => (ds.data = []));
+      hs.chart.resetZoom?.();
+      hs.chart.update();
+    }
+    hs.isFirstRender = true;
+  } else {
+    /* 全ホストをリセット */
+    for (const [, hs] of _hostCharts) {
+      DATASET_KEYS.forEach(key => {
+        hs.tempData[key].length = 0;
+        hs.pointQueue[key].length = 0;
+      });
+      if (hs.chart) {
+        hs.chart.data.datasets.forEach(ds => (ds.data = []));
+        hs.chart.resetZoom?.();
+        hs.chart.update();
+      }
+      hs.isFirstRender = true;
+    }
   }
-
-  DATASET_KEYS.forEach(key => {
-    tempData[key].length = 0;
-    pointQueue[key].length = 0;
-  });
-
-  if (tempChart) {
-    tempChart.data.datasets.forEach(ds => (ds.data = []));
-    tempChart.resetZoom?.();
-    tempChart.update();
-  }
-
-  isFirstRender = true;
 }
 
 /**
- * マシン切替時にグラフデータをリセットする。
- * 現在のマシンのホスト名を記録し、異なるマシンに切替わった場合は
- * 自動的にグラフをクリアして新しいマシンのデータを表示可能にする。
+ * マシン切替時のホスト登録（後方互換）。
+ * per-host Chart インスタンス方式では特別な処理不要。
  *
- * @param {string} hostname - 切替先のマシンホスト名
- * @returns {void}
+ * @param {string} hostname - ホスト名
  */
-let _currentChartHost = null;
 export function switchChartHost(hostname) {
-  if (_currentChartHost === hostname) return;
-
-  // 現在のホストのデータを保存
-  if (_currentChartHost) {
-    const prev = _getChartData(_currentChartHost);
-    DATASET_KEYS.forEach(key => {
-      prev.tempData[key] = tempData[key];
-      prev.pointQueue[key] = pointQueue[key];
-    });
-  }
-
-  _currentChartHost = hostname;
-
-  // 新しいホストのデータを復元
-  const next = _getChartData(hostname);
-  tempData = next.tempData;
-  pointQueue = next.pointQueue;
-
-  // Chart.js のデータセットを新ホストのデータに差し替え
-  if (tempChart) {
-    DATASET_KEYS.forEach((key, idx) => {
-      tempChart.data.datasets[idx].data = tempData[key];
-    });
-    tempChart.update();
-  }
-  isFirstRender = true;
+  /* per-host Chart 方式ではデータスワップ不要。
+     ホスト状態が未作成なら作成だけ行う。 */
+  if (hostname) _getHostState(hostname);
 }
 
 /**
- * 温度グラフのズームおよびパン表示のみを初期状態へ戻します。
- * データ内容は保持したまま、Chart.js Zoom プラグインが有効であれば
- * resetZoom() を実行してスケールをリセットします。
+ * 温度グラフのズームおよびパン表示のみを初期状態へ戻す。
  *
- * @returns {void}
+ * @param {string} [hostname] - 対象ホスト名（省略時は全ホスト）
  */
-export function resetTemperatureGraphView() {
-  if (tempChart) {
-    // resetZoom が存在する場合のみ呼び出し
-    tempChart.resetZoom?.();
+export function resetTemperatureGraphView(hostname) {
+  if (hostname) {
+    const hs = _hostCharts.get(hostname);
+    hs?.chart?.resetZoom?.();
+  } else {
+    for (const [, hs] of _hostCharts) {
+      hs.chart?.resetZoom?.();
+    }
   }
 }
 
@@ -253,73 +258,67 @@ export function resetTemperatureGraphView() {
  * 古いデータ点を削除して表示対象時間枠を制限する
  * @param {Array<{t:number,y:number}>} arr
  * @param {number} now - 現在時刻(ms)
+ * @param {number} timeWindowMs - 表示範囲(ms)
  * @returns {Array} - フィルタ済み配列
  */
-function filterOldData(arr, now) {
-  return arr.filter(pt => pt.t >= now - config.timeWindowMs);
+function filterOldData(arr, now, timeWindowMs) {
+  return arr.filter(pt => pt.t >= now - timeWindowMs);
 }
 
 /**
  * Chart.jsの更新を間引き制御（スロットリング）して呼び出す
+ * @private
+ * @param {HostChartState} hs - ホスト状態
  */
-function scheduleChartUpdate() {
+function scheduleChartUpdate(hs) {
   const now = Date.now();
 
-  if (now - lastUpdate >= config.throttleIntervalMs) {
-    tempChart.update(isFirstRender ? undefined : "none");
-    lastUpdate = now;
-    isFirstRender = false;
-  } else if (!updateQueued) {
-    updateQueued = true;
+  if (now - hs.lastUpdate >= hs.config.throttleIntervalMs) {
+    hs.chart.update(hs.isFirstRender ? undefined : "none");
+    hs.lastUpdate = now;
+    hs.isFirstRender = false;
+  } else if (!hs.updateQueued) {
+    hs.updateQueued = true;
     setTimeout(() => {
-      tempChart.update("none");
-      lastUpdate = Date.now();
-      updateQueued = false;
-    }, config.throttleIntervalMs - (now - lastUpdate));
+      hs.chart.update("none");
+      hs.lastUpdate = Date.now();
+      hs.updateQueued = false;
+    }, hs.config.throttleIntervalMs - (now - hs.lastUpdate));
   }
 }
 
 /**
  * storedData オブジェクトから最新温度データを抽出し、
- * 時系列グラフに反映する（キュー → 本体転送 → Chart.js 更新）。
+ * 時系列グラフに反映する。
  *
- * @param {Record<string, {rawValue: number|string, computedValue?: any, isNew?: boolean}>} dataStore
- *   温度データを含む storedData（各フィールドに rawValue を持つオブジェクト）のマップ
- * @returns {void}
+ * @param {Record<string, {rawValue: number|string}>} dataStore - storedData
+ * @param {string} [hostname] - ホスト名
  */
 export function updateTemperatureGraphFromStoredData(dataStore, hostname) {
   const now = Date.now();
+  const host = hostname || "_default";
+  const hs = _getHostState(host);
 
-  // データ取得関数：NaN や null を 0 扱いにする
   const getVal = key => parseFloat(dataStore[key]?.rawValue ?? 0) || 0;
 
-  // 対象ホストのデータバッファを取得
-  const host = hostname || _currentChartHost;
-  const hd = host ? _getChartData(host) : { pointQueue, tempData };
+  /* 1) データ点をキューに追加 */
+  hs.pointQueue.nozzleCurrent.push({ t: now, y: getVal("nozzleTemp") });
+  hs.pointQueue.nozzleTarget.push({ t: now, y: getVal("targetNozzleTemp") });
+  hs.pointQueue.bedCurrent.push({ t: now, y: getVal("bedTemp0") });
+  hs.pointQueue.bedTarget.push({ t: now, y: getVal("targetBedTemp0") });
+  hs.pointQueue.boxCurrent.push({ t: now, y: getVal("boxTemp") });
 
-  // 1) 現在時刻付きのデータ点をキューに追加
-  hd.pointQueue.nozzleCurrent.push({ t: now, y: getVal("nozzleTemp") });
-  hd.pointQueue.nozzleTarget.push({ t: now, y: getVal("targetNozzleTemp") });
-  hd.pointQueue.bedCurrent.push({ t: now, y: getVal("bedTemp0") });
-  hd.pointQueue.bedTarget.push({ t: now, y: getVal("targetBedTemp0") });
-  hd.pointQueue.boxCurrent.push({ t: now, y: getVal("boxTemp") });
-
-  // 2) キューから本体に移し、過去の点を除去
-  DATASET_KEYS.forEach((key, idx) => {
-    hd.tempData[key].push(...hd.pointQueue[key]);
-    hd.tempData[key] = filterOldData(hd.tempData[key], now);
-    hd.pointQueue[key].length = 0;
+  /* 2) キューから本体に移し、古い点を除去 */
+  DATASET_KEYS.forEach(key => {
+    hs.tempData[key].push(...hs.pointQueue[key]);
+    hs.tempData[key] = filterOldData(hs.tempData[key], now, hs.config.timeWindowMs);
+    hs.pointQueue[key].length = 0;
   });
 
-  // 3) 現在表示中のホストの場合のみ Chart.js を更新
-  if (!tempChart) return;
-  if (host === _currentChartHost || !_currentChartHost) {
-    // モジュールスコープの参照も同期
-    tempData = hd.tempData;
-    pointQueue = hd.pointQueue;
-    DATASET_KEYS.forEach((key, idx) => {
-      tempChart.data.datasets[idx].data = tempData[key];
-    });
-    scheduleChartUpdate();
-  }
+  /* 3) Chart.js がある場合のみ描画更新 */
+  if (!hs.chart) return;
+  DATASET_KEYS.forEach((key, idx) => {
+    hs.chart.data.datasets[idx].data = hs.tempData[key];
+  });
+  scheduleChartUpdate(hs);
 }

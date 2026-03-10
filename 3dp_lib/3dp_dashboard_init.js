@@ -28,6 +28,7 @@
 "use strict";
 
 import {
+  initStorage,
   restoreUnifiedStorage,
   restoreLegacyStoredData,
   cleanupLegacy,
@@ -104,7 +105,7 @@ let filamentPreview = null;
  * @param {(data: any) => void} hooks.onMessage            メッセージ受信時に呼び出す
  * @param {object} hooks.notificationManager               通知マネージャ
  */
-export function initializeDashboard({
+export async function initializeDashboard({
   onConnect,
   onDisconnect,
   onCameraError,
@@ -118,6 +119,7 @@ export function initializeDashboard({
   }
 
   // (2) ストレージ復元／マイグレーション
+  await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
   restoreLegacyStoredData();
   cleanupLegacy();
   restoreUnifiedStorage();

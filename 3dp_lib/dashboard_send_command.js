@@ -10,6 +10,7 @@
  * 【機能内容サマリ】
  * - WebSocket メソッドをボタンに紐付け
  * - 入力検証や確認ダイアログを介した安全な送信
+ * - マルチプリンタ対応: パネル単位の状態管理（モジュールシングルトン排除）
  *
  * 【公開関数一覧】
  * - {@link initializeCommandPalette}：主要ボタン設定
@@ -18,9 +19,9 @@
  * - {@link initSendGcode}：G-code送信用UI
  * - {@link initTestRawJson}：テストデータ送信用UI
  *
-* @version 1.390.605 (PR #282)
-* @since   1.390.193 (PR #86)
-* @lastModified 2025-07-01 13:11:32
+ * @version 1.390.788 (PR #366)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-03-11 02:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,271 +41,251 @@ import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
 
 /**
- * コマンドパレットのルート要素。
- * パネルシステムではIDがホスト名でスコープされるため、
- * document.getElementById ではなくルート要素内で検索する。
- * @type {HTMLElement|null}
+ * パネルルート内の要素を検索するヘルパーを生成する。
+ * @private
+ * @param {HTMLElement|null} root - パネル本体要素
+ * @returns {(id: string) => HTMLElement|null}
  */
-let _cmdRoot = null;
-
-/**
- * コマンド送信先のホスト名。
- * パネル初期化時に設定され、全コマンド送信で使用される。
- * @type {string|null}
- */
-let _cmdHostname = null;
-
-/**
- * スコープ対応の要素検索。
- * _cmdRoot 内を querySelector で探し、見つからなければ document から探す。
- * @param {string} id - 検索する要素ID（スコープ前の素のID）
- * @returns {HTMLElement|null}
- */
-function _findById(id) {
-  if (_cmdRoot) {
-    /* パネル内: スコープ済みID → 末尾が __id のパターンで検索 */
-    const el = _cmdRoot.querySelector(`[id$="__${id}"]`) || _cmdRoot.querySelector(`#${id}`);
-    if (el) return el;
-  }
-  return document.getElementById(id);
+function _makeFinder(root) {
+  return (id) => {
+    if (root) {
+      const el = root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`);
+      if (el) return el;
+    }
+    return document.getElementById(id);
+  };
 }
 
 /**
- * 各コマンドボタンの設定マッピング
- * @type {Array<{
- *   buttonId: string,
- *   method: string,
- *   getParams: () => object|null,
- *   inputIds?: string[],
- *   confirm?: import("./dashboard_ui_confirm.js").ConfirmOptions|((params: any)=>import("./dashboard_ui_confirm.js").ConfirmOptions)
- * }>}
- */
-const COMMAND_MAPPINGS = [
-  {
-    buttonId: "btn-get-status",
-    method:   "get",
-    getParams: () => ["nozzleTemp", "bedTemp0"]
-  },
-  {
-    buttonId: "btn-print-file",
-    method:   "print",
-    inputIds: ["cmd-print-filepath"],
-    getParams: () => {
-      const el = _findById("cmd-print-filepath");
-      const path = el?.value.trim();
-      return path ? { file: path } : null;
-    }
-  },
-  {
-    buttonId: "btn-stop-print", //☆OK
-    method:   "set",
-    getParams: () => ({ stop: 1 }),
-    confirm: {
-      level: "warn",
-      title: "印刷停止(stop)の確認",
-      message: "途中再開できません。本当に停止しますか？",
-      confirmText: "停止(stop)",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-pause-print", //☆OK
-    method:   "set",
-    getParams: () => ({ pause: 1 }),
-    confirm: {
-      level: "warn",
-      title: "印刷一時停止(pause)の確認",
-      message: "一時停止後は再開指示が必要です。本当に一時停止しますか？",
-      confirmText: "一時停止(pause)",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-resume-print", //☆OK
-    method:   "set",
-    getParams: () => ({ pause: 0 }),
-    confirm: {
-      level: "warn",
-      title: "印刷再開(resume)の確認",
-      message: "印刷中・停止中には実施不可です。本当に再開しますか？",
-      confirmText: "再開(resume)",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-history-list", // ☆OK
-    method:   "get",
-    getParams: () => ({ reqHistory: 1 })
-  },
-  {
-    buttonId: "btn-file-list", // ☆OK
-    method:   "get",
-    getParams: () => ({ reqGcodeFile: 1 })
-  },
-  {
-    buttonId: "btn-autohome",
-    method:   "autoHome",
-    getParams: () => ({}),
-    confirm: {
-      level: "warn",
-      title: "ホーム復帰(autoHome)の確認",
-      message: "印刷中には実施できません。本当に実行しますか？",
-      confirmText: "ホーム復帰(autoHome)",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-ack-error",
-    method:   "set",
-    getParams: () => ({ cleanErr: 1 })
-  },
-  {
-    buttonId: "btn-autolevel",
-    method:   "autoLevel",
-    getParams: () => ({}),
-    confirm: {
-      level: "warn",
-      title: "ベッドレベリング(autoLevel)の確認",
-      message: "印刷中には実施できません。本当に実行しますか？",
-      confirmText: "ベッドレベリング(autoLevel)",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-run-gcode",
-    method:   "runGcode",
-    inputIds: ["cmd-gcode-cmd"],
-    getParams: () => {
-      const el = _findById("cmd-gcode-cmd");
-      const cmd = el?.value.trim();
-      return cmd ? { cmd } : null;
-    },
-    confirm: params => ({
-      level: "warn",
-      title: "Gコード実行(runGcode)の確認",
-      message: `G-code を実行します: "${params.cmd}"。よろしいですか？`,
-      confirmText: "実行",
-      cancelText:  "キャンセル"
-    })
-  },
-  {
-    buttonId: "btn-delete-file",
-    method:   "deleteFile",
-    inputIds: ["cmd-delete-path"],
-    getParams: () => {
-      const el = _findById("cmd-delete-path");
-      const path = el?.value.trim();
-      return path ? { path } : null;
-    },
-    confirm: {
-      level: "error",
-      title: "ファイル削除の警告",
-      message: "削除すると復元できません。本当に削除しますか？",
-      confirmText: "削除",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-upload-file",
-    method:   "uploadFile",
-    inputIds: ["cmd-upload-path","cmd-upload-data"],
-    getParams: () => {
-      const pathEl = _findById("cmd-upload-path");
-      const dataEl = _findById("cmd-upload-data");
-      const path = pathEl?.value.trim();
-      const data = dataEl?.value;
-      return path && data ? { path, data } : null;
-    }
-  },
-  {
-    buttonId: "btn-elapse-video-list",
-    method:   "elapseVideoList",
-    getParams: () => ({})
-  },
-  {
-    buttonId: "btn-upgrade-firmware",
-    method:   "upgradeFirmware",
-    getParams: () => ({})
-  },
-  {
-    buttonId: "btn-factory-reset",
-    method:   "factoryReset",
-    getParams: () => ({}),
-    confirm: {
-      level: "error",
-      title: "工場リセットの警告",
-      message: "全設定が初期化されます。本当に実行しますか？",
-      confirmText: "リセット",
-      cancelText:  "キャンセル"
-    }
-  },
-  {
-    buttonId: "btn-set-led",
-    method:   "set",
-    inputIds: ["cmd-led-state"],
-    getParams: () => {
-      const el = _findById("cmd-led-state");
-      return el ? { lightSw: el.value === "true" ? 1 : 0 } : null;
-    }
-  },
-  {
-    buttonId: "btn-set-nozzle-temp",
-    method:   "set",
-    inputIds: ["cmd-nozzle-temp"],
-    getParams: () => {
-      const el = _findById("cmd-nozzle-temp");
-      const v = parseFloat(el?.value);
-      return !isNaN(v) ? { targetNozzleTemp: v } : null;
-    }
-  },
-  {
-    buttonId: "btn-set-bed-temp",
-    method:   "set",
-    inputIds: ["cmd-bed-temp"],
-    getParams: () => {
-      const el = _findById("cmd-bed-temp");
-      const v = parseFloat(el?.value);
-      return !isNaN(v) ? { targetBedTemp0: v } : null;
-    }
-  },
-  {
-    buttonId: "btn-set-model-fan",
-    method:   "set",
-    inputIds: ["cmd-fan-model-state"],
-    getParams: () => {
-      const el = _findById("cmd-fan-model-state");
-      return el ? { fan: el.value === "true" ? 1 : 0 } : null;
-    }
-  },
-  {
-    buttonId: "btn-set-aux-fan",
-    method:   "set",
-    inputIds: ["cmd-fan-aux-state"],
-    getParams: () => {
-      const el = _findById("cmd-fan-aux-state");
-      return el ? { fanAuxiliary: el.value === "true" ? 1 : 0 } : null;
-    }
-  }
-];
-
-/**
- * コマンドパレットの全ボタンにイベントをバインドします。
- * - getParams() の戻り値が null のときはボタンを disabled
- * - 確認が必要な場合は showConfirmDialog を介して実行
+ * コマンドパレットの全ボタンにイベントをバインドする。
+ * パネル単位で呼び出され、root と hostname はクロージャで保持される。
+ *
+ * @param {HTMLElement} root - パネル本体要素
+ * @param {string} hostname  - 送信先ホスト名
  */
 export function initializeCommandPalette(root, hostname) {
-  _cmdRoot = root || null;
-  _cmdHostname = hostname || null;
-  COMMAND_MAPPINGS.forEach(({ buttonId, method, getParams, inputIds, confirm }) => {
-    const btn = _findById(buttonId);
-    if (!btn) {
-      return;
+  const findById = _makeFinder(root);
+  const host = hostname || null;
+
+  /**
+   * 各コマンドボタンの設定マッピング
+   */
+  const COMMAND_MAPPINGS = [
+    {
+      buttonId: "btn-get-status",
+      method:   "get",
+      getParams: () => ["nozzleTemp", "bedTemp0"]
+    },
+    {
+      buttonId: "btn-print-file",
+      method:   "print",
+      inputIds: ["cmd-print-filepath"],
+      getParams: () => {
+        const el = findById("cmd-print-filepath");
+        const path = el?.value.trim();
+        return path ? { file: path } : null;
+      }
+    },
+    {
+      buttonId: "btn-stop-print",
+      method:   "set",
+      getParams: () => ({ stop: 1 }),
+      confirm: {
+        level: "warn",
+        title: "印刷停止(stop)の確認",
+        message: "途中再開できません。本当に停止しますか？",
+        confirmText: "停止(stop)",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-pause-print",
+      method:   "set",
+      getParams: () => ({ pause: 1 }),
+      confirm: {
+        level: "warn",
+        title: "印刷一時停止(pause)の確認",
+        message: "一時停止後は再開指示が必要です。本当に一時停止しますか？",
+        confirmText: "一時停止(pause)",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-resume-print",
+      method:   "set",
+      getParams: () => ({ pause: 0 }),
+      confirm: {
+        level: "warn",
+        title: "印刷再開(resume)の確認",
+        message: "印刷中・停止中には実施不可です。本当に再開しますか？",
+        confirmText: "再開(resume)",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-history-list",
+      method:   "get",
+      getParams: () => ({ reqHistory: 1 })
+    },
+    {
+      buttonId: "btn-file-list",
+      method:   "get",
+      getParams: () => ({ reqGcodeFile: 1 })
+    },
+    {
+      buttonId: "btn-autohome",
+      method:   "autoHome",
+      getParams: () => ({}),
+      confirm: {
+        level: "warn",
+        title: "ホーム復帰(autoHome)の確認",
+        message: "印刷中には実施できません。本当に実行しますか？",
+        confirmText: "ホーム復帰(autoHome)",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-ack-error",
+      method:   "set",
+      getParams: () => ({ cleanErr: 1 })
+    },
+    {
+      buttonId: "btn-autolevel",
+      method:   "autoLevel",
+      getParams: () => ({}),
+      confirm: {
+        level: "warn",
+        title: "ベッドレベリング(autoLevel)の確認",
+        message: "印刷中には実施できません。本当に実行しますか？",
+        confirmText: "ベッドレベリング(autoLevel)",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-run-gcode",
+      method:   "runGcode",
+      inputIds: ["cmd-gcode-cmd"],
+      getParams: () => {
+        const el = findById("cmd-gcode-cmd");
+        const cmd = el?.value.trim();
+        return cmd ? { cmd } : null;
+      },
+      confirm: params => ({
+        level: "warn",
+        title: "Gコード実行(runGcode)の確認",
+        message: `G-code を実行します: "${params.cmd}"。よろしいですか？`,
+        confirmText: "実行",
+        cancelText:  "キャンセル"
+      })
+    },
+    {
+      buttonId: "btn-delete-file",
+      method:   "deleteFile",
+      inputIds: ["cmd-delete-path"],
+      getParams: () => {
+        const el = findById("cmd-delete-path");
+        const path = el?.value.trim();
+        return path ? { path } : null;
+      },
+      confirm: {
+        level: "error",
+        title: "ファイル削除の警告",
+        message: "削除すると復元できません。本当に削除しますか？",
+        confirmText: "削除",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-upload-file",
+      method:   "uploadFile",
+      inputIds: ["cmd-upload-path","cmd-upload-data"],
+      getParams: () => {
+        const pathEl = findById("cmd-upload-path");
+        const dataEl = findById("cmd-upload-data");
+        const path = pathEl?.value.trim();
+        const data = dataEl?.value;
+        return path && data ? { path, data } : null;
+      }
+    },
+    {
+      buttonId: "btn-elapse-video-list",
+      method:   "elapseVideoList",
+      getParams: () => ({})
+    },
+    {
+      buttonId: "btn-upgrade-firmware",
+      method:   "upgradeFirmware",
+      getParams: () => ({})
+    },
+    {
+      buttonId: "btn-factory-reset",
+      method:   "factoryReset",
+      getParams: () => ({}),
+      confirm: {
+        level: "error",
+        title: "工場リセットの警告",
+        message: "全設定が初期化されます。本当に実行しますか？",
+        confirmText: "リセット",
+        cancelText:  "キャンセル"
+      }
+    },
+    {
+      buttonId: "btn-set-led",
+      method:   "set",
+      inputIds: ["cmd-led-state"],
+      getParams: () => {
+        const el = findById("cmd-led-state");
+        return el ? { lightSw: el.value === "true" ? 1 : 0 } : null;
+      }
+    },
+    {
+      buttonId: "btn-set-nozzle-temp",
+      method:   "set",
+      inputIds: ["cmd-nozzle-temp"],
+      getParams: () => {
+        const el = findById("cmd-nozzle-temp");
+        const v = parseFloat(el?.value);
+        return !isNaN(v) ? { targetNozzleTemp: v } : null;
+      }
+    },
+    {
+      buttonId: "btn-set-bed-temp",
+      method:   "set",
+      inputIds: ["cmd-bed-temp"],
+      getParams: () => {
+        const el = findById("cmd-bed-temp");
+        const v = parseFloat(el?.value);
+        return !isNaN(v) ? { targetBedTemp0: v } : null;
+      }
+    },
+    {
+      buttonId: "btn-set-model-fan",
+      method:   "set",
+      inputIds: ["cmd-fan-model-state"],
+      getParams: () => {
+        const el = findById("cmd-fan-model-state");
+        return el ? { fan: el.value === "true" ? 1 : 0 } : null;
+      }
+    },
+    {
+      buttonId: "btn-set-aux-fan",
+      method:   "set",
+      inputIds: ["cmd-fan-aux-state"],
+      getParams: () => {
+        const el = findById("cmd-fan-aux-state");
+        return el ? { fanAuxiliary: el.value === "true" ? 1 : 0 } : null;
+      }
     }
-    // バリデーション関数
+  ];
+
+  COMMAND_MAPPINGS.forEach(({ buttonId, method, getParams, inputIds, confirm }) => {
+    const btn = findById(buttonId);
+    if (!btn) return;
+
     const validate = () => { btn.disabled = getParams() === null; };
     validate();
     (inputIds || []).forEach(id => {
-      const el = _findById(id);
+      const el = findById(id);
       if (el) el.addEventListener("input", validate);
     });
 
@@ -314,85 +295,85 @@ export function initializeCommandPalette(root, hostname) {
         showAlert(`パラメータ未入力または不正です [${buttonId}]`, "error");
         return;
       }
-      // 確認ダイアログ
       if (confirm) {
         const opts = typeof confirm === "function" ? confirm(params) : confirm;
         const ok = await showConfirmDialog(opts);
         if (!ok) return;
       }
       console.debug("▶ sendCommand", method, params);
-      sendCommand(method, params, _cmdHostname || currentHostname);
+      sendCommand(method, params, host || currentHostname);
     });
   });
-  
-  initializeFanControls();
-  initializeTempControls();
-  initializeRateControls();
+
+  _initializeFanControls(root, host);
+  _initializeTempControls(root, host);
+  _initializeRateControls(root, host);
 }
 
 /**
- * ファン／LED トグル & スライダー制御を初期化します
+ * ファン／LED トグル & スライダー制御を初期化する。
+ * パネルルート内の要素を検索する。
  *
- * • トグル（change）→ {"method":"set","params":{param:0|1}}
- * • スライダー（mouseup）→ {"method":"set","params":{"gcodeCmd":"M106 P<p> S<s>"}} 
+ * @private
+ * @param {HTMLElement} root - パネル本体要素
+ * @param {string|null} host - ホスト名
  */
-function initializeFanControls() {
-  // ── トグルのみ 0/1 を送る
+function _initializeFanControls(root, host) {
+  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : document.getElementById(id);
+
   const toggles = [
-    { id: "modelFanToggle2",    param: "fan" },            // モデルファン
-    { id: "backFanToggle2",     param: "fanCase" },        // ケースファン
-    { id: "sideFanToggle2",     param: "fanAuxiliary" },   // 側面ファン
-    { id: "ledToggle2",         param: "lightSw" },        // LED照明
-    { id: "aiSwToggle",         param: "aiSw" },           // 印刷前自動調整
-    { id: "aiDetectionToggle",  param: "aiDetection" },    // 異常出力検知
-    { id: "aiFirstFloorToggle", param: "aiFirstFloor" },   // 初層出力確認
-    { id: "aiPausePrintToggle", param: "aiPausePrint" }    // 異常時一時停止
+    { id: "modelFanToggle2",    param: "fan" },
+    { id: "backFanToggle2",     param: "fanCase" },
+    { id: "sideFanToggle2",     param: "fanAuxiliary" },
+    { id: "ledToggle2",         param: "lightSw" },
+    { id: "aiSwToggle",         param: "aiSw" },
+    { id: "aiDetectionToggle",  param: "aiDetection" },
+    { id: "aiFirstFloorToggle", param: "aiFirstFloor" },
+    { id: "aiPausePrintToggle", param: "aiPausePrint" }
   ];
   toggles.forEach(({ id, param }) => {
-    const el = document.getElementById(id);
+    const el = find(id);
     if (!el) return;
     el.addEventListener("change", () => {
       const v = el.checked ? 1 : 0;
-      sendCommand("set", { [param]: v }, _cmdHostname || currentHostname);
+      sendCommand("set", { [param]: v }, host || currentHostname);
     });
   });
 
-  // ── スライダーで 0–100% 指定 → G-code M106 P<p> S<s> 送信
-  //    P: ファン番号 (0=モデル,1=ケース,2=側面)
   const sliders = [
     { id: "modelFanSlider",      p: 0, displayId: "modelFanSliderValue" },
     { id: "caseFanSlider",       p: 1, displayId: "caseFanSliderValue" },
     { id: "auxiliaryFanSlider",  p: 2, displayId: "auxiliaryFanSliderValue" }
   ];
   sliders.forEach(({ id, p, displayId }) => {
-    const slider = document.getElementById(id);
-    const display = document.getElementById(displayId);
+    const slider = find(id);
+    const display = find(displayId);
     if (!slider || !display) return;
-    // input 中は％表示だけ更新
     slider.addEventListener("input", () => {
       const v = slider.value;
       const span = display.querySelector(".value");
       if (span) span.textContent = v;
     });
-    // マウスアップ（＝ドラッグ終了）で実際に送信
     slider.addEventListener("mouseup", () => {
       const pct = Number(slider.value);
-      // 0–255 に丸め
       const s = Math.round(pct * 255 / 100);
       const cmd = `M106 P${p} S${s}`;
-      sendCommand("set", { gcodeCmd: cmd }, _cmdHostname || currentHostname);
+      sendCommand("set", { gcodeCmd: cmd }, host || currentHostname);
     });
   });
 }
 
 /**
- * ノズル／ベッド温度コントロールの初期化
+ * ノズル／ベッド温度コントロールの初期化。
+ * パネルルート内の要素を検索する。
  *
- * - スライダーは 0–max（max は DOM の data-field="maxXXX" から取得）
- * - テキストボックスは同じ範囲、Enter or blur で送信
- * - 双方向同期で無限ループを防止
+ * @private
+ * @param {HTMLElement} root - パネル本体要素
+ * @param {string|null} host - ホスト名
  */
-function initializeTempControls() {
+function _initializeTempControls(root, host) {
+  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : document.getElementById(id);
+
   const configs = [
     {
       sliderId:  "nozzleTempSlider",
@@ -411,99 +392,64 @@ function initializeTempControls() {
   ];
 
   configs.forEach(({ sliderId, inputId, sendBtnId, maxField, makePayload }) => {
-    const slider  = document.getElementById(sliderId);
-    const input   = document.getElementById(inputId);
-    const sendBtn = document.getElementById(sendBtnId);
+    const slider  = find(sliderId);
+    const input   = find(inputId);
+    const sendBtn = find(sendBtnId);
     if (!slider || !input || !sendBtn) return;
 
-    // 無限ループ防止用フラグ
     let fromSlider = false;
     let fromInput  = false;
-    // 直近送信タイムスタンプ
     let lastSend = 0;
 
-    /**
-     * 入力値を検証して送信するヘルパー
-     *
-     * @private
-     * @param {number} [forceVal] - 強制的に送信する値（省略時は input の値）
-     */
     const sendValue = (forceVal) => {
       let v = forceVal != null ? forceVal : parseInt(input.value, 10);
-      if (isNaN(v)) {
-        v = Number(slider.min);
-      }
+      if (isNaN(v)) v = Number(slider.min);
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", makePayload(v), _cmdHostname || currentHostname);
+      sendCommand("set", makePayload(v), host || currentHostname);
       lastSend = Date.now();
     };
 
-    // ① max を設定
-    const maxText = document.querySelector(maxField)?.textContent;
+    const maxEl = root ? root.querySelector(maxField) : document.querySelector(maxField);
+    const maxText = maxEl?.textContent;
     const maxVal  = parseFloat(maxText);
     if (!isNaN(maxVal)) {
       slider.max = maxVal;
       input.max  = maxVal;
     }
 
-    // ② スライダー操作 → テキストに反映
     slider.addEventListener("input", () => {
       fromSlider = true;
       input.value = slider.value;
       fromSlider = false;
     });
-
-    // ③ スライダーを離した(change) → send
     slider.addEventListener("change", () => {
-      const v = Math.round(+slider.value);
-      sendValue(v);
+      sendValue(Math.round(+slider.value));
     });
-
-    // ④ テキストで Enter → blur に飛ばす
     input.addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        input.blur();
-      }
+      if (e.key === "Enter") input.blur();
     });
-
-    // ⑤ テキスト blur → validate → スライダー反映＆send
-    input.addEventListener("blur", () => {
-      sendValue();
-    });
-
-    // フォーカス復帰でクールダウン解除
-    input.addEventListener("focus", () => {
-      lastSend = 0;
-    });
-
-    // ⏎ ボタンクリックで送信（3秒クールダウン）
+    input.addEventListener("blur", () => sendValue());
+    input.addEventListener("focus", () => { lastSend = 0; });
     sendBtn.addEventListener("click", () => {
-      if (Date.now() - lastSend >= 3000) {
-        sendValue();
-      }
+      if (Date.now() - lastSend >= 3000) sendValue();
     });
-
-    // ⑥ （オプション）外部 updateStoredDataToDOM で温度変化が来たら
-    //     双方向同期をキープするため、ここでテキスト＋スライダーを更新しても OK
-    //     （fromSlider/fromInput で send を防いでいるので無限ループしません）
   });
 }
 
 /**
- * @function initializeRateControls
- * @description
- *   印刷速度（フィードレート）とフィラメントフロー率のスライダーおよび数値入力を初期化し、
- *   ユーザー操作に応じてサーバーへ設定を送信します。
+ * レート制御の初期化。
+ * パネルルート内の要素を検索する。
  *
- *   - スライダー操作中（input イベント）に隣接する数値入力欄をリアルタイム更新
- *   - スライダー操作完了（change イベント）でサーバーへ送信
- *   - 数値入力欄で Enter キー押下 → blur で確定
- *   - blur 時に範囲チェック ＆ スライダー同期 → サーバーへ送信
+ * @private
+ * @param {HTMLElement} root - パネル本体要素
+ * @param {string|null} host - ホスト名
  */
-export function initializeRateControls() {
-  // 各制御に対応する要素IDと送信パラメータの設定
+function _initializeRateControls(root, host) {
+  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : document.getElementById(id);
+  const findAll = (cls) => root ? root.querySelectorAll(`.${cls}`) : document.querySelectorAll(`.${cls}`);
+
   const configs = [
     {
       sliderId:     "feedrateSlider",
@@ -522,68 +468,33 @@ export function initializeRateControls() {
   ];
 
   configs.forEach(({ sliderId, inputId, sendBtnId, presetClass, param }) => {
-    const slider = document.getElementById(sliderId);
-    const input  = document.getElementById(inputId);
-    const sendBtn = document.getElementById(sendBtnId);
-    const presets = document.querySelectorAll(`.${presetClass}`);
-    if (!slider || !input || !sendBtn) return; // 要素が見つからなければ無視
+    const slider  = find(sliderId);
+    const input   = find(inputId);
+    const sendBtn = find(sendBtnId);
+    const presets = findAll(presetClass);
+    if (!slider || !input || !sendBtn) return;
 
-    let lastSend = 0; // 直近送信タイムスタンプ
+    let lastSend = 0;
 
-    /**
-     * 入力値を検証して送信するヘルパー
-     *
-     * @private
-     * @param {number} [forceVal] - 強制的に送信する値（省略時は input の値）
-     */
     const sendValue = (forceVal) => {
       let v = forceVal != null ? forceVal : parseInt(input.value, 10);
-      if (isNaN(v)) {
-        v = Number(slider.min);
-      }
+      if (isNaN(v)) v = Number(slider.min);
       v = Math.min(Math.max(v, Number(slider.min)), Number(slider.max));
       slider.value = v;
       input.value  = v;
-      sendCommand("set", { [param]: v }, _cmdHostname || currentHostname);
+      sendCommand("set", { [param]: v }, host || currentHostname);
       lastSend = Date.now();
     };
 
-    // スライダーを動かしている間、数値入力欄にも反映
-    slider.addEventListener("input", () => {
-      input.value = slider.value;
-    });
-
-    // スライダーの操作完了後（change）にサーバに送信
-    slider.addEventListener("change", () => {
-      const v = Math.round(Number(slider.value));
-      sendValue(v);
-    });
-
-    // 数値入力欄で Enter を押すと blur で確定
-    input.addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        input.blur();
-      }
-    });
-
-    // blur 時に値を適正範囲内に丸め、スライダーと同期、そしてサーバへ送信
-    input.addEventListener("blur", () => {
-      sendValue();
-    });
-
-    // フォーカス復帰でクールダウン解除
-    input.addEventListener("focus", () => {
-      lastSend = 0;
-    });
-
-    // ⏎ ボタンクリックで送信（3秒クールダウン）
+    slider.addEventListener("input", () => { input.value = slider.value; });
+    slider.addEventListener("change", () => { sendValue(Math.round(Number(slider.value))); });
+    input.addEventListener("keydown", e => { if (e.key === "Enter") input.blur(); });
+    input.addEventListener("blur", () => sendValue());
+    input.addEventListener("focus", () => { lastSend = 0; });
     sendBtn.addEventListener("click", () => {
-      if (Date.now() - lastSend >= 3000) {
-        sendValue();
-      }
+      if (Date.now() - lastSend >= 3000) sendValue();
     });
 
-    // プリセットボタン
     presets.forEach(btn => {
       const val = parseInt(btn.dataset.value, 10);
       if (isNaN(val)) return;
@@ -597,6 +508,18 @@ export function initializeRateControls() {
 }
 
 /**
+ * 後方互換のエクスポート。
+ * パネルシステムでは initializeCommandPalette 内で自動呼び出しされるため、
+ * 外部から直接呼ぶ必要はない。
+ *
+ * @param {HTMLElement} [root] - パネル本体要素
+ * @param {string} [hostname] - ホスト名
+ */
+export function initializeRateControls(root, hostname) {
+  _initializeRateControls(root || null, hostname || null);
+}
+
+/**
  * 「JSON送信」ボタンの設定とハンドラ登録
  */
 export function initSendRawJson() {
@@ -604,14 +527,12 @@ export function initSendRawJson() {
   if (!btn) return;
 
   btn.addEventListener("click", async () => {
-    // 1) 接続先チェック
     const ip = getDeviceIp();
     if (!ip) {
       showAlert("接続先が未設定です。先に接続してください。", "error");
       return;
     }
 
-    // 2) JSON入力ダイアログ（Ctrl+Enterで確定）
     let jsonStr = await showInputDialog({
       level:             "info",
       title:             "Raw JSON コマンド入力",
@@ -623,9 +544,8 @@ export function initSendRawJson() {
       confirmText:       "OK",
       cancelText:        "キャンセル"
     });
-    if (jsonStr == null) return;  // キャンセル
+    if (jsonStr == null) return;
 
-    // 3) 構文チェック→エラーなら再入力
     while (true) {
       let cmd;
       try {
@@ -648,7 +568,6 @@ export function initSendRawJson() {
         continue;
       }
 
-      // 4) 確認ダイアログ
       const ok = await showConfirmDialog({
         level:       "info",
         title:       "送信確認",
@@ -673,11 +592,10 @@ export function initSendRawJson() {
         continue;
       }
 
-      // 5) 送信＆ログ出力
       pushLog(`送信(Raw JSON): ${jsonStr}`, "send");
       if (cmd.method) {
         try {
-          await sendCommand(cmd.method, cmd.params ?? {}, _cmdHostname || currentHostname);
+          await sendCommand(cmd.method, cmd.params ?? {}, currentHostname);
         } catch {
           // sendCommand 内でエラー表示済み
         }
@@ -766,7 +684,7 @@ export function initSendGcode() {
 
       pushLog(`送信(G-code): ${gcode}`, "send");
       try {
-        await sendGcodeCommand(gcode, _cmdHostname || currentHostname);
+        await sendGcodeCommand(gcode, currentHostname);
       } catch {
         // sendGcodeCommand 内でエラー表示済み
       }
@@ -777,7 +695,6 @@ export function initSendGcode() {
 
 /**
  * "JSONコマンドテスト" ボタンの設定とハンドラ登録
- * 指定テキストボックスの内容を受信メッセージとして処理します。
  */
 export function initTestRawJson() {
   const btn = document.getElementById("btn-test-raw-json");
@@ -823,9 +740,6 @@ export function initTestRawJson() {
 
 /**
  * "一時停止時 原点復帰" ボタンの設定とハンドラ登録
- *
- * @function initPauseHome
- * @returns {void}
  */
 export function initPauseHome() {
   const btn = document.getElementById("btn-pause-home");
@@ -852,12 +766,12 @@ export function initPauseHome() {
       if (model === "K1 Max") {
         await sendGcodeCommand(
           "G28 X Y\nG0 X296.50 Y153.00 F6000\n",
-          _cmdHostname || currentHostname
+          currentHostname
         );
       } else if (["K1", "K1C", "K1A"].includes(model)) {
         await sendGcodeCommand(
           "G28 X Y\nG0 X219.00 Y113.50 F6000\n",
-          _cmdHostname || currentHostname
+          currentHostname
         );
       }
     } catch {
@@ -868,9 +782,6 @@ export function initPauseHome() {
 
 /**
  * "XYロック解除" ボタンの設定とハンドラ登録
- *
- * @function initXYUnlock
- * @returns {void}
  */
 export function initXYUnlock() {
   const btn = document.getElementById("btn-xy-unlock");
@@ -891,7 +802,7 @@ export function initXYUnlock() {
     if (!ok) return;
 
     try {
-      await sendGcodeCommand("M84", _cmdHostname || currentHostname);
+      await sendGcodeCommand("M84", currentHostname);
     } catch {
       // sendGcodeCommand 内でエラー表示済み
     }

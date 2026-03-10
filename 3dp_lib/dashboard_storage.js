@@ -36,9 +36,19 @@
 
 "use strict";
 
-import { monitorData, currentHostname, ensureMachineData } from "./dashboard_data.js";
+import { monitorData, currentHostname, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
+import {
+  initIdb,
+  isIdbAvailable,
+  getIdbCache,
+  queueSharedWrite,
+  queueMachineWrite,
+  flushIdb,
+  exportAllIdb,
+  importAllIdb
+} from "./dashboard_storage_idb.js";
 
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
@@ -53,6 +63,57 @@ const SAVE_THROTTLE_MS = 2000;
  * @constant {number}
  */
 const MAX_VIDEOS = 500;
+
+/** IndexedDB 初期化済みフラグ */
+let _idbInitialized = false;
+
+/**
+ * ストレージバックエンドを初期化する。
+ * IndexedDB を開き、既存データをキャッシュへ読み込む。
+ * localStorage からの自動マイグレーションも行う。
+ * アプリ起動時に restoreUnifiedStorage() より前に呼ぶこと。
+ *
+ * @returns {Promise<void>}
+ */
+export async function initStorage() {
+  await initIdb();
+  _idbInitialized = isIdbAvailable();
+  if (_idbInitialized) {
+    console.info("[initStorage] IndexedDB バックエンド有効");
+  } else {
+    console.info("[initStorage] localStorage フォールバック");
+  }
+}
+
+/**
+ * IndexedDB からの全データエクスポート（UI 用）。
+ * monitorData 互換の JSON オブジェクトを返す。
+ *
+ * @returns {Promise<Object>}
+ */
+export async function exportAllData() {
+  if (_idbInitialized) {
+    return exportAllIdb();
+  }
+  // フォールバック: localStorage
+  const raw = localStorage.getItem(STORAGE_KEY);
+  return raw ? JSON.parse(raw) : {};
+}
+
+/**
+ * JSON オブジェクトから全データをインポートする（UI 用）。
+ *
+ * @param {Object} data - インポートするデータ
+ * @returns {Promise<void>}
+ */
+export async function importAllData(data) {
+  if (_idbInitialized) {
+    await importAllIdb(data);
+    return;
+  }
+  // フォールバック: localStorage
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
 
 function applySpoolDefaults(sp) {
   sp.filamentDiameter ??= 1.75;
@@ -173,19 +234,42 @@ export function saveUnifiedStorage(immediate = false) {
 }
 
 /**
- * 実際の localStorage 書き込みを行う内部関数。
+ * 実際のストレージ書き込みを行う内部関数。
+ * IndexedDB が有効な場合はキューに追加し、無効な場合は localStorage へ書き込む。
  * @private
  */
 function _flushStorage() {
   _savePending = false;
   try {
-    const json = JSON.stringify(monitorData);
-    if (json === _lastSavedJson) return;
-    localStorage.setItem(STORAGE_KEY, json);
-    _lastSavedJson = json;
-    if (_enableStorageLog) {
-      console.debug("[saveUnifiedStorage] monitorData を保存しました");
-      logManager.add({ timestamp:getCurrentTimestamp(), level:"info", msg:"[saveUnifiedStorage] 設定と履歴を保存しました" });
+    if (_idbInitialized) {
+      // IndexedDB: shared データをキューに追加
+      queueSharedWrite("appSettings",        monitorData.appSettings);
+      queueSharedWrite("filamentSpools",     monitorData.filamentSpools);
+      queueSharedWrite("usageHistory",       monitorData.usageHistory);
+      queueSharedWrite("filamentPresets",    monitorData.filamentPresets);
+      queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
+      queueSharedWrite("currentSpoolId",     monitorData.currentSpoolId);
+      queueSharedWrite("spoolSerialCounter", monitorData.spoolSerialCounter);
+
+      // machines データをキューに追加（per-host 独立書き込み）
+      for (const [host, machine] of Object.entries(monitorData.machines)) {
+        if (host === PLACEHOLDER_HOSTNAME) continue;
+        queueMachineWrite(host, machine);
+      }
+
+      if (_enableStorageLog) {
+        console.debug("[saveUnifiedStorage] IndexedDB キューに追加しました");
+      }
+    } else {
+      // フォールバック: localStorage
+      const json = JSON.stringify(monitorData);
+      if (json === _lastSavedJson) return;
+      localStorage.setItem(STORAGE_KEY, json);
+      _lastSavedJson = json;
+
+      if (_enableStorageLog) {
+        console.debug("[saveUnifiedStorage] localStorage に保存しました");
+      }
     }
   } catch (e) {
     console.warn("[saveUnifiedStorage] 保存に失敗しました:", e);
@@ -230,38 +314,23 @@ function cleanUpLegacyStorage() {
  * @returns {void}
  */
 export function restoreUnifiedStorage() {
+  // IndexedDB キャッシュがあればそこから復元
+  const idbCache = getIdbCache();
+  if (idbCache) {
+    _restoreFromData(idbCache.shared, idbCache.machines);
+    console.debug("[restoreUnifiedStorage] IndexedDB から復元しました");
+    Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
+    return;
+  }
+
+  // フォールバック: localStorage
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
     try {
       const data = JSON.parse(saved);
-      /* appSettings は上書きではなくマージする。
-         保存データに存在しない新フィールドのデフォルト値を保持するため。 */
-      if (data.appSettings) {
-        Object.assign(monitorData.appSettings, data.appSettings);
-      }
-      if (data.machines)       monitorData.machines       = data.machines;
-      if (Array.isArray(data.filamentSpools))
-        monitorData.filamentSpools = data.filamentSpools.map(sp => applySpoolDefaults(sp));
-      if (Array.isArray(data.usageHistory))
-        monitorData.usageHistory = data.usageHistory;
-      trimUsageHistory();
-      if (Array.isArray(data.filamentInventory))
-        monitorData.filamentInventory = data.filamentInventory;
-      if (Array.isArray(data.filamentPresets))
-        monitorData.filamentPresets = data.filamentPresets;
-      if ("currentSpoolId" in data)
-        monitorData.currentSpoolId = data.currentSpoolId;
-      if ("spoolSerialCounter" in data)
-        monitorData.spoolSerialCounter = Number(data.spoolSerialCounter) || 0;
-      const maxSerial = monitorData.filamentSpools.reduce(
-        (m, s) => Math.max(m, Number(s.serialNo) || 0),
-        0
-      );
-      if (monitorData.spoolSerialCounter < maxSerial) {
-        monitorData.spoolSerialCounter = maxSerial;
-      }
+      _restoreFromData(data, data.machines);
       _lastSavedJson = saved;
-      console.debug("[restoreUnifiedStorage] 統一キーから復元しました");
+      console.debug("[restoreUnifiedStorage] localStorage から復元しました");
     } catch (e) {
       console.error("[restoreUnifiedStorage] パースエラー:", e);
       pushLog("[restoreUnifiedStorage] 復元中にパースエラー発生", true);
@@ -275,8 +344,48 @@ export function restoreUnifiedStorage() {
     console.debug("[restoreUnifiedStorage] レガシーキーから復元しました");
   }
 
-  // 保存データに欠損がある場合に備え、各機器データを正規化する
   Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
+}
+
+/**
+ * データソースから monitorData を復元する内部ヘルパー。
+ * IndexedDB と localStorage の両方から使用される。
+ *
+ * @private
+ * @param {Object} shared - shared データ（appSettings, filamentSpools 等）
+ * @param {Object} [machines] - per-host マシンデータ
+ */
+function _restoreFromData(shared, machines) {
+  if (shared?.appSettings || shared?.appSettings === null) {
+    Object.assign(monitorData.appSettings, shared.appSettings);
+  }
+  if (machines) monitorData.machines = machines;
+  if (Array.isArray(shared?.filamentSpools)) {
+    monitorData.filamentSpools = shared.filamentSpools.map(sp => applySpoolDefaults(sp));
+  }
+  if (Array.isArray(shared?.usageHistory)) {
+    monitorData.usageHistory = shared.usageHistory;
+  }
+  trimUsageHistory();
+  if (Array.isArray(shared?.filamentInventory)) {
+    monitorData.filamentInventory = shared.filamentInventory;
+  }
+  if (Array.isArray(shared?.filamentPresets)) {
+    monitorData.filamentPresets = shared.filamentPresets;
+  }
+  if (shared && "currentSpoolId" in shared) {
+    monitorData.currentSpoolId = shared.currentSpoolId;
+  }
+  if (shared && "spoolSerialCounter" in shared) {
+    monitorData.spoolSerialCounter = Number(shared.spoolSerialCounter) || 0;
+  }
+  const maxSerial = monitorData.filamentSpools.reduce(
+    (m, s) => Math.max(m, Number(s.serialNo) || 0),
+    0
+  );
+  if (monitorData.spoolSerialCounter < maxSerial) {
+    monitorData.spoolSerialCounter = maxSerial;
+  }
 }
 
 /**

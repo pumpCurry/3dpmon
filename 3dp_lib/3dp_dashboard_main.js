@@ -67,8 +67,8 @@ window.notificationManager = notificationManager;
  * - WebSocket 接続／切断ボタンへの connectWs()/disconnectWs() バインド
  * - notificationManager・audioManager のテスト・設定バインド
  */
-document.addEventListener("DOMContentLoaded", () => {
-  initializeDashboard({
+document.addEventListener("DOMContentLoaded", async () => {
+  await initializeDashboard({
     /** 接続ボタン押下時 */
     onConnect: () => {
       disconnectWs();

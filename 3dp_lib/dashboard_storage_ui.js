@@ -29,7 +29,9 @@ import {
   estimateStorageQuota,
   estimateLocalStorageUsageBytes,
   syncStorageNow,
-  testMaxLocalStorageQuota
+  testMaxLocalStorageQuota,
+  exportAllData,
+  importAllData
 } from "./dashboard_storage.js";
 
 let liveTimer = null;
@@ -102,10 +104,11 @@ export function initStorageUI() {
   // クォータテスト
   btnTest?.addEventListener("click", handleQuotaTest);
 
-  // Export
-  expBtn.addEventListener("click", () => {
+  // Export（IndexedDB 優先、フォールバック localStorage）
+  expBtn.addEventListener("click", async () => {
     try {
-      const json = localStorage.getItem("3dp-monitor_1.400") ?? "{}";
+      const data = await exportAllData();
+      const json = JSON.stringify(data);
       const blob = new Blob([json], { type: "application/json" });
       const url  = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -120,7 +123,7 @@ export function initStorageUI() {
     }
   });
 
-  // Import
+  // Import（IndexedDB 優先、フォールバック localStorage）
   impBtn.addEventListener("click", () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -129,10 +132,10 @@ export function initStorageUI() {
       const file = ev.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         try {
-          JSON.parse(reader.result);                        // 妥当性チェック
-          localStorage.setItem("3dp-monitor_1.400", reader.result);
+          const parsed = JSON.parse(reader.result);         // 妥当性チェック
+          await importAllData(parsed);
           panelToast("インポート完了。ページを再読み込みします。");
           setTimeout(() => location.reload(), 800);
         } catch (e) {
@@ -239,14 +242,15 @@ async function handleQuotaTest() {
 /**
  * 現在の統合ストレージ内容をテキストファイルに保存する。
  * - ファイル名は `3dpmon_export_YYYYMMDD-hhmmss.txt` 形式
- * - 取得元は localStorage キー `3dp-monitor_1.400`
+ * - IndexedDB 優先、フォールバック localStorage
  *
  * @function exportAllStorageData
- * @returns {void}
+ * @returns {Promise<void>}
  */
-function exportAllStorageData() {
+async function exportAllStorageData() {
   try {
-    const json = localStorage.getItem("3dp-monitor_1.400") ?? "{}";
+    const data = await exportAllData();
+    const json = JSON.stringify(data);
     const now  = new Date();
     const pad = (n) => n.toString().padStart(2, "0");
     const stamp =

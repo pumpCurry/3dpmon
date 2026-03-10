@@ -262,17 +262,21 @@ export function updateStoredDataToDOM() {
        *   data-field 要素が存在しないパネル構成でも到達するよう、
        *   DOM ノード取得より前に配置する。
        */
-      if (host === currentHostname && window.filamentPreview) {
-        if (key === "filamentRemainingMm") {
-          const val = Number(d.rawValue);
-          if (!isNaN(val)) window.filamentPreview.setRemainingLength(val);
-        }
-        if (key === "materialStatus") {
-          const present = Number(d.rawValue) === 0;
-          window.filamentPreview.setState({
-            isFilamentPresent: present,
-            showUsedUpIndicator: !present
-          });
+      /* フィラメントプレビュー: per-host Map から該当ホストのインスタンスを取得 */
+      {
+        const fp = window._filamentPreviews?.get(host) || window.filamentPreview;
+        if (fp) {
+          if (key === "filamentRemainingMm") {
+            const val = Number(d.rawValue);
+            if (!isNaN(val)) fp.setRemainingLength(val);
+          }
+          if (key === "materialStatus") {
+            const present = Number(d.rawValue) === 0;
+            fp.setState({
+              isFilamentPresent: present,
+              showUsedUpIndicator: !present
+            });
+          }
         }
       }
 
