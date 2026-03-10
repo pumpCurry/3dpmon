@@ -57,7 +57,15 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData, currentHostname } from "./dashboard_data.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
-import { initializeCommandPalette, initializeRateControls } from "./dashboard_send_command.js";
+import {
+  initializeCommandPalette,
+  initializeRateControls,
+  initSendRawJson,
+  initSendGcode,
+  initTestRawJson,
+  initPauseHome,
+  initXYUnlock
+} from "./dashboard_send_command.js";
 
 // ==============================
 // レジストリ
@@ -328,6 +336,11 @@ function initStatusPanel(body, hostname) {
 function initControlCmdPanel(body, hostname) {
   try {
     initializeCommandPalette(body, hostname);
+    initSendRawJson(body, hostname);
+    initSendGcode(body, hostname);
+    initTestRawJson(body, hostname);
+    initPauseHome(body, hostname);
+    initXYUnlock(body, hostname);
   } catch (e) {
     console.warn("[panel-init] command palette 初期化エラー:", e);
   }

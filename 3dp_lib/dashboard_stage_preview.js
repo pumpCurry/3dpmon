@@ -88,11 +88,9 @@ function _getPreviewState(hostname) {
  * @returns {HTMLElement|null}
  */
 function _findInPanel(state, id) {
-  if (state.panelBody) {
-    return state.panelBody.querySelector(`[id$="__${id}"]`)
-        || state.panelBody.querySelector(`#${id}`);
-  }
-  return document.getElementById(id);
+  if (!state.panelBody) return null;
+  return state.panelBody.querySelector(`[id$="__${id}"]`)
+      || state.panelBody.querySelector(`#${id}`);
 }
 
 /**
@@ -138,7 +136,7 @@ function setPrinterModel(model, hostname) {
 
   const labelBottom = s.panelBody
     ? s.panelBody.querySelector(".z-label-bottom")
-    : document.querySelector("#z-preview-container .z-label-bottom");
+    : null;
   if (labelBottom) labelBottom.textContent = String(s.stageZMaxMm);
 
   updateXYPreview(s.lastXYPosition.x, s.lastXYPosition.y, hostname);

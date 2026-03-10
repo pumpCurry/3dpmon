@@ -48,11 +48,8 @@ import { pushLog } from "./dashboard_log_util.js";
  */
 function _makeFinder(root) {
   return (id) => {
-    if (root) {
-      const el = root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`);
-      if (el) return el;
-    }
-    return document.getElementById(id);
+    if (!root) return null;
+    return root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`);
   };
 }
 
@@ -319,7 +316,7 @@ export function initializeCommandPalette(root, hostname) {
  * @param {string|null} host - ホスト名
  */
 function _initializeFanControls(root, host) {
-  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : document.getElementById(id);
+  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : null;
 
   const toggles = [
     { id: "modelFanToggle2",    param: "fan" },
@@ -372,7 +369,7 @@ function _initializeFanControls(root, host) {
  * @param {string|null} host - ホスト名
  */
 function _initializeTempControls(root, host) {
-  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : document.getElementById(id);
+  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : null;
 
   const configs = [
     {
@@ -411,7 +408,7 @@ function _initializeTempControls(root, host) {
       lastSend = Date.now();
     };
 
-    const maxEl = root ? root.querySelector(maxField) : document.querySelector(maxField);
+    const maxEl = root ? root.querySelector(maxField) : null;
     const maxText = maxEl?.textContent;
     const maxVal  = parseFloat(maxText);
     if (!isNaN(maxVal)) {
@@ -447,8 +444,8 @@ function _initializeTempControls(root, host) {
  * @param {string|null} host - ホスト名
  */
 function _initializeRateControls(root, host) {
-  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : document.getElementById(id);
-  const findAll = (cls) => root ? root.querySelectorAll(`.${cls}`) : document.querySelectorAll(`.${cls}`);
+  const find = (id) => root ? (root.querySelector(`[id$="__${id}"]`) || root.querySelector(`#${id}`)) : null;
+  const findAll = (cls) => root ? root.querySelectorAll(`.${cls}`) : [];
 
   const configs = [
     {
@@ -521,13 +518,18 @@ export function initializeRateControls(root, hostname) {
 
 /**
  * 「JSON送信」ボタンの設定とハンドラ登録
+ * @param {HTMLElement} [root] - パネル本体要素
+ * @param {string} [hostname] - ホスト名
  */
-export function initSendRawJson() {
-  const btn = document.getElementById("btn-send-raw-json");
+export function initSendRawJson(root, hostname) {
+  const btn = root
+    ? (root.querySelector(`[id$="__btn-send-raw-json"]`) || root.querySelector("#btn-send-raw-json"))
+    : document.getElementById("btn-send-raw-json");
   if (!btn) return;
+  const host = hostname || null;
 
   btn.addEventListener("click", async () => {
-    const ip = getDeviceIp();
+    const ip = getDeviceIp(host || currentHostname);
     if (!ip) {
       showAlert("接続先が未設定です。先に接続してください。", "error");
       return;
@@ -595,7 +597,7 @@ export function initSendRawJson() {
       pushLog(`送信(Raw JSON): ${jsonStr}`, "send");
       if (cmd.method) {
         try {
-          await sendCommand(cmd.method, cmd.params ?? {}, currentHostname);
+          await sendCommand(cmd.method, cmd.params ?? {}, host || currentHostname);
         } catch {
           // sendCommand 内でエラー表示済み
         }
@@ -609,13 +611,18 @@ export function initSendRawJson() {
 
 /**
  * "G-code送信" ボタンの設定とハンドラ登録
+ * @param {HTMLElement} [root] - パネル本体要素
+ * @param {string} [hostname] - ホスト名
  */
-export function initSendGcode() {
-  const btn = document.getElementById("btn-send-gcode");
+export function initSendGcode(root, hostname) {
+  const btn = root
+    ? (root.querySelector(`[id$="__btn-send-gcode"]`) || root.querySelector("#btn-send-gcode"))
+    : document.getElementById("btn-send-gcode");
   if (!btn) return;
+  const host = hostname || null;
 
   btn.addEventListener("click", async () => {
-    const ip = getDeviceIp();
+    const ip = getDeviceIp(host || currentHostname);
     if (!ip) {
       await showConfirmDialog({
         level: "error",
@@ -684,7 +691,7 @@ export function initSendGcode() {
 
       pushLog(`送信(G-code): ${gcode}`, "send");
       try {
-        await sendGcodeCommand(gcode, currentHostname);
+        await sendGcodeCommand(gcode, host || currentHostname);
       } catch {
         // sendGcodeCommand 内でエラー表示済み
       }
@@ -695,9 +702,13 @@ export function initSendGcode() {
 
 /**
  * "JSONコマンドテスト" ボタンの設定とハンドラ登録
+ * @param {HTMLElement} [root] - パネル本体要素
+ * @param {string} [hostname] - ホスト名
  */
-export function initTestRawJson() {
-  const btn = document.getElementById("btn-test-raw-json");
+export function initTestRawJson(root, hostname) {
+  const btn = root
+    ? (root.querySelector(`[id$="__btn-test-raw-json"]`) || root.querySelector("#btn-test-raw-json"))
+    : document.getElementById("btn-test-raw-json");
   if (!btn) return;
 
   btn.addEventListener("click", async () => {
@@ -740,13 +751,18 @@ export function initTestRawJson() {
 
 /**
  * "一時停止時 原点復帰" ボタンの設定とハンドラ登録
+ * @param {HTMLElement} [root] - パネル本体要素
+ * @param {string} [hostname] - ホスト名
  */
-export function initPauseHome() {
-  const btn = document.getElementById("btn-pause-home");
+export function initPauseHome(root, hostname) {
+  const btn = root
+    ? (root.querySelector(`[id$="__btn-pause-home"]`) || root.querySelector("#btn-pause-home"))
+    : document.getElementById("btn-pause-home");
   if (!btn) return;
+  const host = hostname || null;
 
   btn.addEventListener("click", async () => {
-    const model = getDisplayValue("model")?.value;
+    const model = getDisplayValue("model", host || currentHostname)?.value;
     const validModels = ["K1 Max", "K1", "K1C", "K1A"];
     if (!validModels.includes(model)) {
       showAlert("K1/K1C/K1A/K1 Max 以外では使用できません", "error");
@@ -766,12 +782,12 @@ export function initPauseHome() {
       if (model === "K1 Max") {
         await sendGcodeCommand(
           "G28 X Y\nG0 X296.50 Y153.00 F6000\n",
-          currentHostname
+          host || currentHostname
         );
       } else if (["K1", "K1C", "K1A"].includes(model)) {
         await sendGcodeCommand(
           "G28 X Y\nG0 X219.00 Y113.50 F6000\n",
-          currentHostname
+          host || currentHostname
         );
       }
     } catch {
@@ -782,10 +798,15 @@ export function initPauseHome() {
 
 /**
  * "XYロック解除" ボタンの設定とハンドラ登録
+ * @param {HTMLElement} [root] - パネル本体要素
+ * @param {string} [hostname] - ホスト名
  */
-export function initXYUnlock() {
-  const btn = document.getElementById("btn-xy-unlock");
+export function initXYUnlock(root, hostname) {
+  const btn = root
+    ? (root.querySelector(`[id$="__btn-xy-unlock"]`) || root.querySelector("#btn-xy-unlock"))
+    : document.getElementById("btn-xy-unlock");
   if (!btn) return;
+  const host = hostname || null;
 
   btn.addEventListener("click", async () => {
     const ok = await showConfirmDialog({
@@ -802,7 +823,7 @@ export function initXYUnlock() {
     if (!ok) return;
 
     try {
-      await sendGcodeCommand("M84", currentHostname);
+      await sendGcodeCommand("M84", host || currentHostname);
     } catch {
       // sendGcodeCommand 内でエラー表示済み
     }

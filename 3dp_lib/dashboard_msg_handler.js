@@ -226,6 +226,7 @@ export function handleMessage(data) {
     // このタイミングでまとめてマージするため一時配列へ収集
     const bufHistory = [];
     const bufVideos  = [];
+    const initHost = data.hostname || currentHostname;
     monitorData.temporaryBuffer.forEach(d => {
       if (Array.isArray(d.historyList)) {
         bufHistory.push(...d.historyList);
@@ -233,7 +234,7 @@ export function handleMessage(data) {
       if (Array.isArray(d.elapseVideoList)) {
         bufVideos.push(...d.elapseVideoList);
       }
-      processData(d); // 既存データ処理も実行
+      processData(d, d.hostname || initHost); // per-host で処理
     });
     monitorData.temporaryBuffer = [];
 
@@ -263,7 +264,6 @@ export function handleMessage(data) {
       "actualStartTime","initialLeftTime","initialLeftAt",
       "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
     ];
-    const initHost = data.hostname || currentHostname;
     const sd = monitorData.machines[initHost]?.storedData || {};
     initKeys.forEach(key => {
       // 既に復元済みの値がある場合は保持し、存在しないキーのみ初期化する
@@ -293,16 +293,15 @@ export function handleMessage(data) {
 
   }
 
-  // (1a-2) 既存ホスト名と異なる hostname を受信した場合は更新する
-  if (data.hostname && data.hostname !== currentHostname) {
-    setCurrentHostname(data.hostname);
-  }
+  // (1a-2) currentHostname は初回ホストのまま固定。
+  // マルチプリンタ環境ではホスト切替の概念がないため、
+  // 受信メッセージごとに currentHostname を変更しない。
 
   // (1b) ホスト未設定時はバッファリング、設定後は直接処理
   if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
     monitorData.temporaryBuffer.push(data);
   } else {
-    processData(data);
+    processData(data, data.hostname || currentHostname);
   }
 }
 
