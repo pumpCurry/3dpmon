@@ -313,7 +313,7 @@ export async function initializeDashboard({
     const httpPort = monitorData.appSettings.httpPort || 80;
     const baseUrl = wsIp ? `http://${wsIp}:${httpPort}` : "";
     const raw = printManager.jobsToRaw(savedJobs);
-    printManager.renderHistoryTable(raw, baseUrl);
+    printManager.renderHistoryTable(raw, baseUrl, initHost);
   }
   printManager.renderPrintCurrent(
     document.getElementById("print-current-container"), initHost

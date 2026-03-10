@@ -50,7 +50,7 @@ import {
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
-import { handleMessage } from "./dashboard_msg_handler.js";
+import { handleMessage, processData } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
@@ -742,63 +742,39 @@ function handleSocketMessage(event, host) {
     hostKey = updateConnectionHost(hostKey, data.hostname);
   }
 
-// 5.5) handleMessage(と内部でprocessData(data)の実施:起動後1度のみ)
+// 5.5) 全ホストのメッセージを handleMessage → processData で完全処理する
   try {
     let st = getState(hostKey);
     st.latest = data;
-    // currentHostname が未確定 (PLACEHOLDER_HOSTNAME) の場合も
-    // 受信データから hostname を得るため handleMessage を実行する
+
+    // ホスト名を解決（受信データの hostname フィールドで connectionMap キーを更新）
+    if (data && typeof data.hostname === "string" && data.hostname) {
+      const newKey = updateConnectionHost(hostKey, data.hostname);
+      if (newKey !== hostKey) {
+        hostKey = newKey;
+        st = getState(hostKey);
+      }
+    }
+
+    // 初回ホスト（currentHostname 未設定）は handleMessage で全体初期化
     const before = currentHostname;
-    if (hostKey === currentHostname || currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) {
+    if (currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) {
       handleMessage(data);
       if (currentHostname !== before && currentHostname !== PLACEHOLDER_HOSTNAME) {
         hostKey = updateConnectionHost(hostKey, currentHostname);
       }
     } else {
-      // 非アクティブホストのデータ処理
-      if (data && typeof data.hostname === "string" && data.hostname) {
-        const newKey = updateConnectionHost(hostKey, data.hostname);
-        if (newKey !== hostKey) {
-          hostKey = newKey;
-          st = getState(hostKey);
-        }
-      }
-
-      /* ホスト名解決後に、このホストが実はアクティブホストだと判明した場合
-         （例: ホスト名変更後の再接続で connectionTargets のホスト名が古い場合）
-         handleMessage を実行して UI 更新パスに乗せる */
-      if (hostKey === currentHostname) {
-        handleMessage(data);
-      } else {
-        // 非アクティブホストでも storedData にデータを蓄積する。
-        // タイマーやUI更新はスキップし、生データのみ保持する。
-        // これによりホスト切替時に即座にデータを表示できる。
-        const resolvedHost = data?.hostname || hostKey;
-        ensureMachineData(resolvedHost);
-        if (data && typeof data === "object") {
-          for (const [k, v] of Object.entries(data)) {
-            // 配列・オブジェクト系の大きなデータはスキップ
-            if (k === "historyList" || k === "elapseVideoList" || k === "retGcodeFileInfo") continue;
-            setStoredDataForHost(resolvedHost, k, v);
-          }
-        }
-        // heartbeat のみの応答は runtimeData に記録
-        if (data?.ModeCode === "heart_beat") {
-          const machine = monitorData.machines[resolvedHost];
-          if (machine) {
-            machine.runtimeData ??= {};
-            machine.runtimeData.lastHeartbeat = getCurrentTimestamp();
-          }
-        }
-      }
+      // 2台目以降は ensureMachineData + processData で per-host 処理
+      const resolvedHost = data?.hostname || hostKey;
+      ensureMachineData(resolvedHost);
+      processData(data, resolvedHost);
     }
   } catch (e) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error");
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
   }
-  // 現在のホスト名が有効かどうか判定
-  const hostReady = hostKey === currentHostname &&
-                    currentHostname !== PLACEHOLDER_HOSTNAME;
+  // ホスト名が有効かどうか判定（PLACEHOLDER でないこと）
+  const hostReady = hostKey && hostKey !== PLACEHOLDER_HOSTNAME;
   // 共通ベース URL（HTTP ポートは per-host または appSettings のデフォルト）
   const ip = getDeviceIp(hostKey);
   const httpPort = getHttpPort(hostKey);
@@ -809,14 +785,14 @@ function handleSocketMessage(event, host) {
     // 印刷履歴の再取得・保存・レンダリング は各モジュールで行われています
     // （dashboard_printManager.js 側で実装）
     if (hostReady && Array.isArray(data.historyList)) {
-      pushLog("historyList を受信しました", "info");
+      pushLog("historyList を受信しました", "info", false, hostKey);
       const baseUrlHttp = `http://${ip}:${httpPort}`;
-      printManager.updateHistoryList(data.historyList, baseUrlHttp, hostKey);
+      printManager.updateHistoryList(data.historyList, baseUrlHttp, "print-current-container", hostKey);
       const s = getState(hostKey);
       s.historyReceived = true;
     }
     if (hostReady && Array.isArray(data.elapseVideoList)) {
-      pushLog("elapseVideoList を受信しました", "info");
+      pushLog("elapseVideoList を受信しました", "info", false, hostKey);
       const baseUrlHttp = `http://${ip}:${httpPort}`;
       printManager.updateVideoList(data.elapseVideoList, baseUrlHttp, hostKey);
     }

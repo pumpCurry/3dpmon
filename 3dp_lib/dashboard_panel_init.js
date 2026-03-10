@@ -358,7 +358,7 @@ function initLogPanel(body, hostname) {
 
   if (logBox) {
     initLogAutoScroll(logBox);
-    initLogRenderer(logBox, notifBox);
+    initLogRenderer(logBox, notifBox, hostname);
   }
 
   // タブ切り替え
@@ -514,7 +514,7 @@ function initHistoryPanel(body, hostname) {
       const ip = getDeviceIp(hostname);
       const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
       const raw = printManager.jobsToRaw(jobs);
-      printManager.renderHistoryTable(raw, baseUrl);
+      printManager.renderHistoryTable(raw, baseUrl, hostname);
     }
   } catch (e) {
     console.warn("[panel-init] history render エラー:", e);

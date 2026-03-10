@@ -118,6 +118,9 @@ const _WS_SKIP_KEYS = new Set([
 /** @type {Map<string, MsgHandlerHostState>} */
 const _msgHostStates = new Map();
 
+/** 初期化済みホスト名セット（processData で per-host 初期化を1回だけ実行） */
+const _initializedHosts = new Set();
+
 /**
  * 空の MsgHandlerHostState を生成する。
  * @private
@@ -175,12 +178,12 @@ function persistHistoryTimers(printId, hostname) {
     const v = machine.storedData[key]?.rawValue;
     if (v != null) entry[key] = v;
   });
-  const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
+  const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
   if (
     entry.filename ||
     (Array.isArray(entry.filamentInfo) && entry.filamentInfo.length > 0)
   ) {
-    printManager.updateHistoryList([entry], baseUrl);
+    printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
   }
   persistPrintResume();
   persistAggregatorState(host);
@@ -245,12 +248,12 @@ export function handleMessage(data) {
       bufVideos.push(...data.elapseVideoList);
     }
 
-    const baseUrl = `http://${getDeviceIp()}`;
+    const baseUrl = `http://${getDeviceIp(initHost)}`;
     if (bufHistory.length) {
-      printManager.updateHistoryList(bufHistory, baseUrl);
+      printManager.updateHistoryList(bufHistory, baseUrl, "print-current-container", initHost);
     }
     if (bufVideos.length) {
-      printManager.updateVideoList(bufVideos, baseUrl);
+      printManager.updateVideoList(bufVideos, baseUrl, initHost);
     }
 
 
@@ -279,7 +282,7 @@ export function handleMessage(data) {
     const jobs = printManager.loadHistory(initHost);
     if (jobs.length) {
       const raw = printManager.jobsToRaw(jobs);
-      printManager.renderHistoryTable(raw, baseUrlStored);
+      printManager.renderHistoryTable(raw, baseUrlStored, initHost);
     }
     printManager.renderPrintCurrent(
       scopedById("print-current-container", initHost), initHost
@@ -325,6 +328,24 @@ export function processData(data, hostname) {
   machine.runtimeData ??= { lastError: null };
   if (!('lastError' in machine.runtimeData)) {
     machine.runtimeData.lastError = null;
+  }
+
+  // per-host 初期化（各ホスト初回のみ）: storedData キーの事前作成
+  if (!_initializedHosts.has(host)) {
+    _initializedHosts.add(host);
+    const initKeys = [
+      "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
+      "actualStartTime","initialLeftTime","initialLeftAt",
+      "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
+    ];
+    const sd = machine.storedData || {};
+    initKeys.forEach(key => {
+      if (!(key in sd)) {
+        setStoredDataForHost(host, key, null, true);
+        setStoredDataForHost(host, key, null, false);
+      }
+    });
+    restartAggregatorTimer();
   }
 
   const ms = _getMsgState(host);
@@ -688,8 +709,8 @@ export function processData(data, hostname) {
     // 同一ジョブIDの重複登録を防止する
     if (!machine.historyData.find(h => h.id === entry.id)) {
       machine.historyData.push(entry);
-      const baseUrl = `http://${getDeviceIp()}:${getHttpPort()}`;
-      printManager.updateHistoryList([entry], baseUrl);
+      const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+      printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
       persistPrintResume();
     }
   }

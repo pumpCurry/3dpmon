@@ -568,7 +568,7 @@ export async function refreshHistory(
   const mergedRaw = Array.from(rawMap.values())
     .sort((a, b) => b.id - a.id)
     .slice(0, MAX_PRINT_HISTORY);
-  renderHistoryTable(mergedRaw, baseUrl);
+  renderHistoryTable(mergedRaw, baseUrl, host);
 }
 
 /**
@@ -667,7 +667,7 @@ export function updateHistoryList(
   // ここから UI 更新処理。保存済みジョブ配列を簡易 raw 形式に変換し、
   // 統合された履歴としてテーブルへ描画する
   const raw = jobsToRaw(jobs);
-  renderHistoryTable(raw, baseUrl);
+  renderHistoryTable(raw, baseUrl, host);
   pushLog("[updateHistoryList] UI へ反映しました", "info");
 }
 
@@ -720,7 +720,7 @@ export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
   }
   if (updated || changed) {
     const raw = jobsToRaw(jobs);
-    renderHistoryTable(raw, baseUrl);
+    renderHistoryTable(raw, baseUrl, host);
   }
   pushLog(
     `[updateVideoList] 保存データとマージ ${updated || changed ? "完了" : "変更なし"}`,
@@ -738,8 +738,8 @@ export function updateVideoList(videoArray, baseUrl, host = currentHostname) {
  * @param {Array<Object>} rawArray - プリンタから受信した生履歴データ配列
  * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
  */
-export function renderHistoryTable(rawArray, baseUrl) {
-  const table = scopedById("print-history-table");
+export function renderHistoryTable(rawArray, baseUrl, hostname) {
+  const table = scopedById("print-history-table", hostname);
   const tbody = table?.querySelector("tbody");
   const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
   const startwayMap = {
@@ -906,14 +906,16 @@ export function renderHistoryTable(rawArray, baseUrl) {
           expectedRemain: sp.remainingLengthMm
         }
       ];
-      updateHistoryList([raw], baseUrl);
+      updateHistoryList([raw], baseUrl, "print-current-container", hostname);
     });
   });
 
-  // ソート用リスナ追加
-  document.querySelectorAll("#print-history-table th").forEach(th => {
-    th.onclick = () => sortTable("#print-history-table", th.dataset.key);
-  });
+  // ソート用リスナ追加（テーブル内のthのみ対象）
+  if (table) {
+    table.querySelectorAll("th").forEach(th => {
+      th.onclick = () => sortTable("print-history-table", th.dataset.key, hostname);
+    });
+  }
 
 }
 
@@ -1444,20 +1446,21 @@ export function renderFileList(info, baseUrl) {
     });
   });
 
-  // --- ソート機能登録 ---
-  document.querySelectorAll("#file-list-table th").forEach(th => {
-    th.addEventListener("click", () => {
-      sortTable("#file-list-table", th.dataset.key);
+  // --- ソート機能登録（テーブル内のthのみ対象） ---
+  if (fileTable) {
+    fileTable.querySelectorAll("th").forEach(th => {
+      th.addEventListener("click", () => {
+        sortTable("file-list-table", th.dataset.key);
+      });
     });
-  });
+  }
   pushLog("[renderFileList] UI へ反映しました", "info");
 }
 
 /** --- 4) 汎用ソート関数 --- */
-function sortTable(selector, key) {
+function sortTable(tableId, key, hostname) {
   /* パネルシステムではIDがスコープされるため scopedById を優先使用 */
-  const id = selector.startsWith("#") ? selector.slice(1) : null;
-  const table = id ? scopedById(id) : document.querySelector(selector);
+  const table = scopedById(tableId, hostname);
   if (!table) return;
   const tbody = table.querySelector("tbody");
   const rows = Array.from(tbody.querySelectorAll("tr"));

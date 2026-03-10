@@ -209,7 +209,7 @@ export function setCurrentSpoolId(id, hostname) {
         buf.filamentId = newSpool.id;
         // 履歴バッファに補完したフィラメントIDを画面へ即反映する
         const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
-        updateHistoryList([buf], baseUrl);
+        updateHistoryList([buf], baseUrl, "print-current-container", host);
       }
     }
   }
@@ -556,7 +556,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
   saveUnifiedStorage();
   if (entry) {
     const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
-    updateHistoryList([entry], baseUrl);
+    updateHistoryList([entry], baseUrl, "print-current-container", host);
   }
 }
 
@@ -631,7 +631,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
   saveUnifiedStorage();
   if (entry) {
     const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
-    updateHistoryList([entry], baseUrl);
+    updateHistoryList([entry], baseUrl, "print-current-container", host);
   }
   cleanupUsageSnapshots(jobId);
 }

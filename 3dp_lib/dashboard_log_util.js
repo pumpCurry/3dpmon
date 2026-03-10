@@ -37,7 +37,7 @@
 
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { LEVELS } from "./dashboard_constants.js";
-import { monitorData, scopedById } from "./dashboard_data.js";
+import { monitorData, scopedById, currentHostname } from "./dashboard_data.js";
 
 /** 最大保持ログ行数 */
 // const MAX_LOG_LINES = 1000; // monitorDataからもってくることになりました
@@ -75,6 +75,7 @@ export function getMaxLogLines() {
  * @property {string} timestamp - ISO8601形式などのログ時刻文字列
  * @property {string} level     - ログレベル (LEVELS に含まれる文字列)
  * @property {string} msg       - ログメッセージ本文
+ * @property {string} [hostname] - ログ発生元ホスト名（省略時はグローバル）
  */
 
 /**
@@ -205,11 +206,14 @@ export function initLogAutoScroll(containerEl) {
  * @param {HTMLElement} containerEl - ログを表示するコンテナ要素
  * @returns {Function} イベントハンドラを解除するクリーンアップ関数
  */
-export function initLogRenderer(containerEl, notifContainerEl) {
+export function initLogRenderer(containerEl, notifContainerEl, targetHostname) {
   if (!containerEl) return () => {};
 
   // 自動スクロール許容のしきい値(px)
   const SCROLL_THRESHOLD = 50;
+
+  /** このレンダラーが対象とするホスト名（未指定時は全ログ表示） */
+  const filterHost = targetHostname || null;
 
   /** 通知履歴コンテナ（パネル内から渡される or グローバル検索） */
   const notifBox = notifContainerEl || scopedById("notification-history");
@@ -220,7 +224,7 @@ export function initLogRenderer(containerEl, notifContainerEl) {
    * 行数オーバーした古いものを削除、
    * 自動スクロールを制御します。
    *
-   * @param {{ level: string, timestamp: string, msg: string }} entry
+   * @param {{ level: string, timestamp: string, msg: string, hostname?: string }} entry
    */
   function appendLog(entry) {
     // スクロール位置が最下部付近かを判定
@@ -283,6 +287,8 @@ export function initLogRenderer(containerEl, notifContainerEl) {
    * @param {CustomEvent} ev - ev.detail にログエントリが入っています
    */
   function onAdded(ev) {
+    // ホストフィルタ: 対象ホストのログのみ表示
+    if (filterHost && ev.detail.hostname && ev.detail.hostname !== filterHost) return;
     containerEl.querySelectorAll("p.new")
       .forEach(el => el.classList.replace("new", "old"));
     appendLog(ev.detail);
@@ -292,8 +298,10 @@ export function initLogRenderer(containerEl, notifContainerEl) {
   window.addEventListener("log:added", onAdded);
   window.addEventListener("log:cleared", clearLogs);
 
-  // 起動時にメモリ上の既存ログを一括描画
-  logManager.getAll().forEach(appendLog);
+  // 起動時にメモリ上の既存ログを一括描画（ホストフィルタ適用）
+  logManager.getAll()
+    .filter(e => !filterHost || !e.hostname || e.hostname === filterHost)
+    .forEach(appendLog);
 
   // クリーンアップ関数を返す
   return () => {
@@ -358,7 +366,7 @@ export function flushNotificationLogsToDom() {
  * @param {string|number|Object} msg - ログ内容
  * @param {string} [level="info"]    - ログレベル (LEVELS から選択)
  */
-export function pushLog(msg, level = "info", notify = false) {
+export function pushLog(msg, level = "info", notify = false, hostname) {
   let safeMessage;
   if (msg == null || msg === "") {
     safeMessage = "(空メッセージ)";
@@ -380,7 +388,8 @@ export function pushLog(msg, level = "info", notify = false) {
     timestamp: getCurrentTimestamp(),
     level,
     msg: safeMessage,
-    notify
+    notify,
+    hostname: hostname || currentHostname || undefined
   };
   logManager.add(entry);
 }
