@@ -55,6 +55,7 @@ import {
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
+import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { getCurrentPrintID } from "./dashboard_aggregator.js";
 
@@ -162,6 +163,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const filamentId          = raw.filamentId;
   const filamentColor       = raw.filamentColor;
   const filamentType        = raw.filamentType;
+  const filamentInfo        = raw.filamentInfo;
 
   const hostname            = host || "";
   const ip                  = getDeviceIp(host);
@@ -186,6 +188,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     filamentId,
     filamentColor,
     filamentType,
+    filamentInfo,
     hostname,
     ip,
     updatedEpoch
@@ -933,32 +936,77 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     });
     tr.querySelector(".spool-edit")?.addEventListener("click", async ev => {
       const sid = ev.currentTarget?.dataset.id;
-      const sp = sid ? getSpoolById(sid) : null;
-      if (!sp) {
-        alert("スプール情報が見つかりません");
-        return;
+      const materialUsedMm = raw.usagematerial || 0;
+      const result = await showHistoryFilamentDialog({
+        hostname, materialUsedMm, currentSpoolId: sid, jobId: String(raw.id)
+      });
+      if (!result) return;
+      const { spool: newSp } = result;
+      // 同一スプール選択時はスキップ
+      if (sid && newSp.id === sid) return;
+      // 旧スプールに使用量を復元
+      if (sid && materialUsedMm > 0) {
+        const oldSp = getSpoolById(sid);
+        if (oldSp) {
+          updateSpool(oldSp.id, {
+            remainingLengthMm: oldSp.remainingLengthMm + materialUsedMm
+          });
+        }
       }
-      const res = await showSpoolDialog({ title: "スプール編集", spool: sp });
-      if (res) {
-        updateSpool(sp.id, res);
+      // 新スプールから使用量を差し引く
+      if (materialUsedMm > 0) {
+        const freshSp = getSpoolById(newSp.id);
+        const remain = freshSp ? freshSp.remainingLengthMm : newSp.remainingLengthMm;
+        updateSpool(newSp.id, {
+          remainingLengthMm: Math.max(0, remain - materialUsedMm)
+        });
       }
+      const updatedSp = getSpoolById(newSp.id) || newSp;
+      raw.filamentInfo = [{
+        spoolId: updatedSp.id, serialNo: updatedSp.serialNo,
+        spoolName: updatedSp.name, colorName: updatedSp.colorName,
+        filamentColor: updatedSp.filamentColor, material: updatedSp.material,
+        spoolCount: updatedSp.printCount,
+        expectedRemain: updatedSp.remainingLengthMm
+      }];
+      raw.filamentId = updatedSp.id;
+      raw.filamentColor = updatedSp.filamentColor;
+      raw.filamentType = updatedSp.material;
+      updateHistoryList([raw], baseUrl, "print-current-container", hostname);
+      // パネルのフィラメントプレビューを更新
+      const hostPreview = window._filamentPreviews?.get(hostname);
+      if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
     });
     tr.querySelector(".spool-assign")?.addEventListener("click", async () => {
-      const sp = await showSpoolSelectDialog({ title: "スプール指定" });
-      if (!sp) return;
-      raw.filamentInfo = [
-        {
-          spoolId: sp.id,
-          serialNo: sp.serialNo,
-          spoolName: sp.name,
-          colorName: sp.colorName,
-          filamentColor: sp.filamentColor,
-          material: sp.material,
-          spoolCount: sp.printCount,
-          expectedRemain: sp.remainingLengthMm
-        }
-      ];
+      const materialUsedMm = raw.usagematerial || 0;
+      const result = await showHistoryFilamentDialog({
+        hostname, materialUsedMm, currentSpoolId: null, jobId: String(raw.id)
+      });
+      if (!result) return;
+      const { spool: newSp } = result;
+      // 新スプールから使用量を差し引く
+      if (materialUsedMm > 0) {
+        const freshSp = getSpoolById(newSp.id);
+        const remain = freshSp ? freshSp.remainingLengthMm : newSp.remainingLengthMm;
+        updateSpool(newSp.id, {
+          remainingLengthMm: Math.max(0, remain - materialUsedMm)
+        });
+      }
+      const updatedSp = getSpoolById(newSp.id) || newSp;
+      raw.filamentInfo = [{
+        spoolId: updatedSp.id, serialNo: updatedSp.serialNo,
+        spoolName: updatedSp.name, colorName: updatedSp.colorName,
+        filamentColor: updatedSp.filamentColor, material: updatedSp.material,
+        spoolCount: updatedSp.printCount,
+        expectedRemain: updatedSp.remainingLengthMm
+      }];
+      raw.filamentId = updatedSp.id;
+      raw.filamentColor = updatedSp.filamentColor;
+      raw.filamentType = updatedSp.material;
       updateHistoryList([raw], baseUrl, "print-current-container", hostname);
+      // パネルのフィラメントプレビューを更新
+      const hostPreview = window._filamentPreviews?.get(hostname);
+      if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
     });
   });
 

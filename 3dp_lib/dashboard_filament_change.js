@@ -23,7 +23,7 @@
  */
 "use strict";
 
-import { getSpools, setCurrentSpoolId, addSpoolFromPreset } from "./dashboard_spool.js";
+import { getSpools, getSpoolById, setCurrentSpoolId, addSpoolFromPreset } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
@@ -73,7 +73,7 @@ function injectStyles() {
  * @param {Object} sp - スプールデータ
  * @returns {void}
  */
-function updatePreview(sp, preview = window.filamentPreview) {
+export function updatePreview(sp, preview = window.filamentPreview) {
   const fp = preview;
   if (!fp || !sp) return;
   if (sp.filamentColor) fp.setOption("filamentColor", sp.filamentColor);
@@ -576,6 +576,372 @@ export function showFilamentChangeDialog(hostname) {
 
     dlg.querySelector("#fc-new").addEventListener("click", async () => {
       closeDialog(await showPresetOpenDialog(hostname));
+    });
+  });
+}
+
+/**
+ * 履歴用: プリセットから新品スプールを作成するダイアログ。
+ * `showPresetOpenDialog` と同じUIだが `setCurrentSpoolId` を呼ばない。
+ *
+ * @private
+ * @param {string} hostname - ホスト名
+ * @returns {Promise<{spool:Object, isNew:boolean}|false>}
+ */
+function showPresetOpenDialogForHistory(hostname) {
+  injectStyles();
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.className = "fc-overlay";
+    const dlg = document.createElement("div");
+    dlg.className = "fc-dialog";
+    overlay.appendChild(dlg);
+
+    dlg.innerHTML = `
+      <div class="fc-header">新品フィラメントを開封して指定</div>
+      <div class="fc-body">
+        <fieldset class="fc-search-field">
+          <legend>検索</legend>
+          <form id="fc-search" class="fc-search">
+            <select id="fc-brand"></select>
+            <select id="fc-material"></select>
+            <select id="fc-color"></select>
+            <input id="fc-name" placeholder="名称">
+            <button id="fc-search-btn">検索</button>
+          </form>
+        </fieldset>
+        <div class="registered-container">
+          <div class="registered-preview">
+            <div id="fc-preview"></div>
+            <div id="fc-stock" class="fc-stock"></div>
+          </div>
+          <div class="registered-list">
+            <table class="registered-table">
+              <thead>
+                <tr><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>サブ名称</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="fc-buttons">
+        <button id="fc-cancel">キャンセル</button>
+        <button id="fc-ok" disabled>このフィラメントを選択</button>
+      </div>
+    `;
+
+    const brandSel = dlg.querySelector("#fc-brand");
+    const matSel = dlg.querySelector("#fc-material");
+    const colorSel = dlg.querySelector("#fc-color");
+    const nameIn = dlg.querySelector("#fc-name");
+    const searchForm = dlg.querySelector("#fc-search");
+    const tableBody = dlg.querySelector(".registered-table tbody");
+    const prevEl = dlg.querySelector("#fc-preview");
+    const stockEl = dlg.querySelector("#fc-stock");
+    const okBtn = dlg.querySelector("#fc-ok");
+
+    const preview = createFilamentPreview(prevEl, {
+      filamentDiameter: 1.75, filamentTotalLength: 336000,
+      filamentCurrentLength: 336000, filamentColor: "#22C55E",
+      reelOuterDiameter: 200, reelThickness: 68,
+      reelWindingInnerDiameter: 95, reelCenterHoleDiameter: 54,
+      widthPx: 120, heightPx: 120, showSlider: false,
+      isFilamentPresent: true, showUsedUpIndicator: true,
+      disableInteraction: true, showOverlayLength: true,
+      showOverlayPercent: true, showOverlayBar: true,
+      showReelName: true, showReelSubName: true,
+      showMaterialName: true, showMaterialColorName: true,
+      showMaterialColorCode: true, showManufacturerName: true,
+      showPurchaseButton: true,
+      reelName: "", reelSubName: "", materialName: "",
+      materialColorName: "", materialColorCode: "", manufacturerName: ""
+    });
+
+    const presets = monitorData.filamentPresets || [];
+    let selectedPreset = null;
+
+    function fillOptions(list) {
+      const brands = new Set(), mats = new Set(), colors = new Set();
+      list.forEach(p => {
+        if (p.brand) brands.add(p.brand);
+        if (p.material) mats.add(p.material);
+        if (p.colorName) colors.add(p.colorName);
+      });
+      brandSel.innerHTML = '<option value="">ブランド</option>';
+      [...brands].forEach(b => { const o = document.createElement('option'); o.value = b; o.textContent = b; brandSel.appendChild(o); });
+      matSel.innerHTML = '<option value="">材質</option>';
+      [...mats].forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; matSel.appendChild(o); });
+      colorSel.innerHTML = '<option value="">色名</option>';
+      [...colors].forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; colorSel.appendChild(o); });
+    }
+
+    function applyFilter(list) {
+      return list.filter(p => {
+        if (brandSel.value && p.brand !== brandSel.value) return false;
+        if (matSel.value && p.material !== matSel.value) return false;
+        if (colorSel.value && p.colorName !== colorSel.value) return false;
+        if (nameIn.value && !(p.name || '').includes(nameIn.value)) return false;
+        return true;
+      });
+    }
+
+    function renderTable() {
+      const list = applyFilter(presets);
+      tableBody.innerHTML = '';
+      list.forEach(p => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${p.brand || ''}</td><td>${p.material || ''}</td>` +
+          `<td><span style='color:${p.color}'>■</span>${p.colorName || ''}</td>` +
+          `<td>${p.name || ''}</td><td>${p.reelSubName || ''}</td>`;
+        tr.addEventListener('click', () => {
+          tableBody.querySelector('tr.selected')?.classList.remove('selected');
+          tr.classList.add('selected');
+          selectedPreset = p;
+          okBtn.disabled = false;
+          if (!p) { stockEl.textContent = ''; return; }
+          const inv = getInventoryItem(p.presetId);
+          stockEl.textContent = inv ? `在庫: ${inv.quantity}` : '';
+          preview.setState({
+            filamentDiameter: p.filamentDiameter ?? p.diameter,
+            filamentTotalLength: p.filamentTotalLength ?? p.defaultLength,
+            filamentCurrentLength: p.filamentCurrentLength ?? (p.filamentTotalLength ?? p.defaultLength),
+            filamentColor: p.color,
+            reelOuterDiameter: p.reelOuterDiameter, reelThickness: p.reelThickness,
+            reelWindingInnerDiameter: p.reelWindingInnerDiameter,
+            reelCenterHoleDiameter: p.reelCenterHoleDiameter,
+            reelName: p.name || '', reelSubName: p.reelSubName || '',
+            materialName: p.material, materialColorName: p.colorName,
+            materialColorCode: p.color, manufacturerName: p.brand
+          });
+        });
+        tableBody.appendChild(tr);
+      });
+    }
+
+    fillOptions(presets);
+    renderTable();
+    document.body.appendChild(overlay);
+    searchForm.addEventListener('submit', ev => { ev.preventDefault(); renderTable(); });
+
+    dlg.querySelector('#fc-cancel').addEventListener('click', () => {
+      overlay.remove(); resolve(false);
+    });
+    dlg.querySelector('#fc-ok').addEventListener('click', () => {
+      if (!selectedPreset) { overlay.remove(); resolve(false); return; }
+      const sp = addSpoolFromPreset(selectedPreset);
+      // 機器装着しない（setCurrentSpoolId を呼ばない）
+      overlay.remove();
+      resolve({ spool: sp, isNew: true });
+    });
+  });
+}
+
+/**
+ * 印刷履歴用フィラメント指定/修正ダイアログ。
+ * 機器への装着（setCurrentSpoolId）は行わず、選択されたスプール情報を返す。
+ *
+ * @function showHistoryFilamentDialog
+ * @param {Object} opts
+ * @param {string} opts.hostname         - ホスト名
+ * @param {number} opts.materialUsedMm   - この印刷で使用したフィラメント量(mm)
+ * @param {string|null} opts.currentSpoolId - 現在指定中のスプールID（修正モード）
+ * @param {string} opts.jobId            - ジョブID
+ * @returns {Promise<{spool:Object, isNew:boolean}|false>}
+ */
+export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, currentSpoolId = null, jobId = "" }) {
+  injectStyles();
+  if (filamentChangeDialogOpen) return Promise.resolve(false);
+  filamentChangeDialogOpen = true;
+
+  const isEdit = !!currentSpoolId;
+  const currentSpool = isEdit ? getSpoolById(currentSpoolId) : null;
+
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.className = "fc-overlay";
+    const dlg = document.createElement("div");
+    dlg.className = "fc-dialog";
+    overlay.appendChild(dlg);
+
+    /* 現在の指定情報（修正モード時） */
+    let currentInfoHtml = "";
+    if (isEdit && currentSpool) {
+      const cColor = currentSpool.filamentColor || currentSpool.color || "#000";
+      const cName = currentSpool.name || currentSpool.reelName || "(不明)";
+      const cMat = currentSpool.material || currentSpool.materialName || "";
+      const cRemain = currentSpool.remainingLengthMm ?? 0;
+      currentInfoHtml = `
+        <fieldset class="fc-search-field" style="margin-bottom:6px;background:#fef3c7;">
+          <legend>現在の指定</legend>
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;">
+            <span style="color:${cColor};font-size:18px;">■</span>
+            <span><b>${cName}</b> ${cMat}</span>
+            <span>残: ${Math.round(cRemain).toLocaleString()} mm</span>
+            <span>使用量: ${Math.round(materialUsedMm).toLocaleString()} mm</span>
+          </div>
+        </fieldset>
+      `;
+    }
+
+    dlg.innerHTML = `
+      <div class="fc-header">${isEdit ? "フィラメント修正" : "フィラメント指定"}</div>
+      <div class="fc-body">
+        ${currentInfoHtml}
+        <fieldset class="fc-search-field">
+          <legend>検索</legend>
+          <form id="fc-search" class="fc-search">
+            <select id="fc-brand"></select>
+            <select id="fc-material"></select>
+            <select id="fc-color"></select>
+            <input id="fc-name" placeholder="名称">
+            <button id="fc-search-btn">検索</button>
+          </form>
+        </fieldset>
+        <div class="registered-container">
+          <div class="registered-preview">
+            <div id="fc-preview"></div>
+            <div id="fc-stock" class="fc-stock"></div>
+          </div>
+          <div class="registered-list">
+            <table class="registered-table">
+              <thead>
+                <tr><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>サブ名称</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="fc-buttons">
+        <button id="fc-cancel">キャンセル</button>
+        <button id="fc-used">過去取り外したスプールから選択</button>
+        <button id="fc-new">新品を開封</button>
+        <button id="fc-ok" disabled>このフィラメントを選択</button>
+      </div>
+    `;
+
+    const brandSel = dlg.querySelector("#fc-brand");
+    const matSel = dlg.querySelector("#fc-material");
+    const colorSel = dlg.querySelector("#fc-color");
+    const nameIn = dlg.querySelector("#fc-name");
+    const searchForm = dlg.querySelector("#fc-search");
+    const tableBody = dlg.querySelector(".registered-table tbody");
+    const prevEl = dlg.querySelector("#fc-preview");
+    const stockEl = dlg.querySelector("#fc-stock");
+    const okBtn = dlg.querySelector("#fc-ok");
+
+    const dialogPreview = createFilamentPreview(prevEl, {
+      filamentDiameter: 1.75, filamentTotalLength: 336000,
+      filamentCurrentLength: 336000, filamentColor: "#22C55E",
+      reelOuterDiameter: 200, reelThickness: 68,
+      reelWindingInnerDiameter: 95, reelCenterHoleDiameter: 54,
+      widthPx: 120, heightPx: 120, showSlider: false,
+      isFilamentPresent: true, showUsedUpIndicator: true,
+      disableInteraction: true, showOverlayLength: true,
+      showOverlayPercent: true, showOverlayBar: true,
+      showReelName: true, showReelSubName: true,
+      showMaterialName: true, showMaterialColorName: true,
+      showMaterialColorCode: true, showManufacturerName: true,
+      showPurchaseButton: true,
+      reelName: "", reelSubName: "", materialName: "",
+      materialColorName: "", materialColorCode: "", manufacturerName: ""
+    });
+
+    const spools = getSpools();
+    let selectedSpool = null;
+
+    function fillOptions(list) {
+      const brands = new Set(), mats = new Set(), colors = new Set();
+      list.forEach(sp => {
+        if (sp.manufacturerName) brands.add(sp.manufacturerName);
+        else if (sp.brand) brands.add(sp.brand);
+        if (sp.materialName) mats.add(sp.materialName);
+        else if (sp.material) mats.add(sp.material);
+        if (sp.colorName) colors.add(sp.colorName);
+      });
+      brandSel.innerHTML = '<option value="">ブランド</option>';
+      [...brands].forEach(b => { const o = document.createElement('option'); o.value = b; o.textContent = b; brandSel.appendChild(o); });
+      matSel.innerHTML = '<option value="">材質</option>';
+      [...mats].forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; matSel.appendChild(o); });
+      colorSel.innerHTML = '<option value="">色名</option>';
+      [...colors].forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; colorSel.appendChild(o); });
+    }
+
+    function applyFilter(list) {
+      return list.filter(sp => {
+        if (brandSel.value) {
+          const b = sp.manufacturerName || sp.brand || '';
+          if (b !== brandSel.value) return false;
+        }
+        if (matSel.value) {
+          const m = sp.materialName || sp.material || '';
+          if (m !== matSel.value) return false;
+        }
+        if (colorSel.value && sp.colorName !== colorSel.value) return false;
+        if (nameIn.value) {
+          const n = `${sp.name || ''}${sp.reelName || ''}${sp.reelSubName || ''}`;
+          if (!n.includes(nameIn.value)) return false;
+        }
+        return true;
+      });
+    }
+
+    function updateInfo(sp) {
+      if (!sp) { stockEl.textContent = ''; return; }
+      const inv = sp.presetId ? getInventoryItem(sp.presetId) : null;
+      stockEl.textContent = inv ? `在庫: ${inv.quantity}` : '';
+      updatePreview(sp, dialogPreview);
+    }
+
+    function renderTable() {
+      const list = applyFilter(spools);
+      tableBody.innerHTML = '';
+      list.forEach(sp => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
+          `<td>${sp.materialName || sp.material || ''}</td>` +
+          `<td><span style='color:${sp.filamentColor || sp.color || '#000'}'>■</span>${sp.colorName || ''}</td>` +
+          `<td>${sp.name || sp.reelName || ''}</td>` +
+          `<td>${sp.reelSubName || ''}</td>`;
+        tr.addEventListener('click', () => {
+          tableBody.querySelector('tr.selected')?.classList.remove('selected');
+          tr.classList.add('selected');
+          selectedSpool = sp;
+          okBtn.disabled = false;
+          updateInfo(sp);
+        });
+        tableBody.appendChild(tr);
+      });
+    }
+
+    fillOptions(spools);
+    renderTable();
+    if (selectedSpool) updateInfo(selectedSpool);
+    document.body.appendChild(overlay);
+    searchForm.addEventListener('submit', ev => { ev.preventDefault(); renderTable(); });
+
+    const closeDialog = result => {
+      overlay.remove();
+      filamentChangeDialogOpen = false;
+      resolve(result);
+    };
+
+    dlg.querySelector("#fc-cancel").addEventListener("click", () => closeDialog(false));
+
+    dlg.querySelector("#fc-ok").addEventListener("click", () => {
+      if (!selectedSpool) return;
+      // 機器装着しない（setCurrentSpoolId を呼ばない）
+      closeDialog({ spool: selectedSpool, isNew: false });
+    });
+
+    dlg.querySelector("#fc-used").addEventListener("click", () => {
+      closeDialog(false);
+      showFilamentManager(2, hostname);
+    });
+
+    dlg.querySelector("#fc-new").addEventListener("click", async () => {
+      closeDialog(await showPresetOpenDialogForHistory(hostname));
     });
   });
 }
