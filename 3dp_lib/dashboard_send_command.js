@@ -594,7 +594,7 @@ export function initSendRawJson(root, hostname) {
         continue;
       }
 
-      pushLog(`送信(Raw JSON): ${jsonStr}`, "send");
+      pushLog(`送信(Raw JSON): ${jsonStr}`, "send", false, host);
       if (cmd.method) {
         try {
           await sendCommand(cmd.method, cmd.params ?? {}, host);
@@ -689,7 +689,7 @@ export function initSendGcode(root, hostname) {
         continue;
       }
 
-      pushLog(`送信(G-code): ${gcode}`, "send");
+      pushLog(`送信(G-code): ${gcode}`, "send", false, host);
       try {
         await sendGcodeCommand(gcode, host);
       } catch {

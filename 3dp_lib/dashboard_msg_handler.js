@@ -396,11 +396,11 @@ export function processData(data, hostname) {
     machine.runtimeData.lastError = { errcode, key };
     if (!isSame) {
       if (errcode === 0 && key === 0) {
-        pushLog("エラーが解消しました。", "info");
+        pushLog("エラーが解消しました。", "info", false, host);
         notificationManager.notify("errorResolved", { hostname: host });
       } else {
         const msg = processError(data.err);
-        pushLog(msg, "error");
+        pushLog(msg, "error", false, host);
         notificationManager.notify("errorOccurred", {
           hostname: host, error_code: errcode,
           error_key:  key,
@@ -462,7 +462,7 @@ export function processData(data, hostname) {
     clearAllTimers();
     ms.tsPrintStart = Date.now();
     ms.totalPauseSeconds = 0;
-    pushLog("印刷開始", "info");
+    pushLog("印刷開始", "info", false, host);
     notificationManager.notify("printStarted", { hostname: host });
     _set("preparationTime", 0, true);
     // 直ちに保存してリロード時の損失を防ぐ
@@ -622,7 +622,7 @@ export function processData(data, hostname) {
   handlePrintStateTransition(
     Number(prevState),
     st,
-    pushLog,
+    (msg, level) => pushLog(msg, level, false, host),
     evt => notificationManager.notify(evt, { hostname: host })
   );
 

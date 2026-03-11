@@ -185,7 +185,7 @@ export function stopCameraStream(hostname) {
   entry.userStopped = true;
   _stopEntry(entry);
   _updateUI(entry, "disconnected");
-  pushLog(`カメラストリーム停止 (${host})`, "info");
+  pushLog(`カメラストリーム停止 (${host})`, "info", false, host);
   notificationManager.notify("cameraConnectionStopped", { hostname: host });
 }
 
@@ -213,7 +213,7 @@ export function handleCameraError(hostname) {
   if (!hostname) return;
   const entry = cameraRegistry.get(hostname);
   if (entry) _updateUI(entry, "disconnected");
-  pushLog("カメラ映像の読み込みエラー", "error");
+  pushLog("カメラ映像の読み込みエラー", "error", false, hostname);
 }
 
 /* ─── 内部ヘルパー ─── */
@@ -290,7 +290,7 @@ function _connectStream(entry, host) {
     entry.userStopped = true;
     _cancelTimers(entry);
     _updateUI(entry, "disconnected");
-    pushLog(`カメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました`, "error");
+    pushLog(`カメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました`, "error", false, entry.hostname);
     notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
     return;
   }
@@ -300,7 +300,7 @@ function _connectStream(entry, host) {
     attempt: entry.attempts,
     max: CAMERA_MAX_RETRY
   });
-  pushLog(`カメラストリーム接続試行 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "info");
+  pushLog(`カメラストリーム接続試行 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "info", false, entry.hostname);
 
   const delayMs = DEFAULT_RETRY_DELAY * Math.pow(2, entry.attempts - 1);
   const waitSec = Math.ceil(delayMs / 1000);
@@ -319,12 +319,12 @@ function _connectStream(entry, host) {
       entry.attempts = 0;
       entry.firstConnected = true;
       _updateUI(entry, "connected");
-      pushLog("カメラ接続成功", "success");
+      pushLog("カメラ接続成功", "success", false, entry.hostname);
       notificationManager.notify("cameraConnected", { hostname: entry.hostname });
     } else if (entry.attempts > 0) {
       entry.attempts = 0;
       _updateUI(entry, "connected");
-      pushLog("カメラ再接続成功", "info");
+      pushLog("カメラ再接続成功", "info", false, entry.hostname);
     }
   };
 
@@ -336,7 +336,7 @@ function _connectStream(entry, host) {
     if (!entry.serviceNotified && await _isServiceDown(host, port)) {
       entry.serviceNotified = true;
       _updateUI(entry, "disconnected");
-      pushLog("機器側の動画配信サービスが異常停止しています", "error");
+      pushLog("機器側の動画配信サービスが異常停止しています", "error", false, entry.hostname);
       notificationManager.notify("cameraServiceStopped", { hostname: entry.hostname });
       return;
     }
@@ -347,7 +347,7 @@ function _connectStream(entry, host) {
       max: CAMERA_MAX_RETRY,
       wait: waitSec
     });
-    pushLog(`カメラ切断検知 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "warn");
+    pushLog(`カメラ切断検知 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "warn", false, entry.hostname);
 
     /* カウントダウン表示 */
     let remaining = waitSec;

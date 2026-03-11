@@ -261,7 +261,7 @@ export function saveHistory(jobs, hostname) {
   }
   _lastSavedJsonMap.set(host, json);
   savePrintHistory(jobs, host);
-  pushLog("[saveHistory] 印刷履歴を保存しました", "info");
+  pushLog("[saveHistory] 印刷履歴を保存しました", "info", false, hostname);
 }
 
 /**
@@ -601,7 +601,7 @@ export function updateHistoryList(
   host
 ) {
   if (!Array.isArray(rawArray)) return;
-  pushLog("[updateHistoryList] マージ処理を開始", "info");
+  pushLog("[updateHistoryList] マージ処理を開始", "info", false, host);
   const newJobs = parseRawHistoryList(rawArray, baseUrl, host);
 
   const machine = monitorData.machines[host];
@@ -663,7 +663,7 @@ export function updateHistoryList(
   saveHistory(jobs, host);
   pushLog(
     `[updateHistoryList] 保存データとマージ ${merged ? "完了" : "変更なし"}`,
-    "info"
+    "info", false, host
   );
 
   const prev = loadCurrent(host);
@@ -676,7 +676,7 @@ export function updateHistoryList(
   // 統合された履歴としてテーブルへ描画する
   const raw = jobsToRaw(jobs);
   renderHistoryTable(raw, baseUrl, host);
-  pushLog("[updateHistoryList] UI へ反映しました", "info");
+  pushLog("[updateHistoryList] UI へ反映しました", "info", false, host);
 }
 
 /**
@@ -692,7 +692,7 @@ export function updateHistoryList(
  */
 export function updateVideoList(videoArray, baseUrl, host) {
   if (!Array.isArray(videoArray) || !videoArray.length) return;
-  pushLog("[updateVideoList] マージ処理を開始", "info");
+  pushLog("[updateVideoList] マージ処理を開始", "info", false, host);
   const map = { ...loadVideos(host) };
   let updated = false;
   videoArray.forEach(v => {
@@ -707,7 +707,7 @@ export function updateVideoList(videoArray, baseUrl, host) {
   });
   if (updated) {
     // 新しい動画情報が存在するため保存処理を実行
-    pushLog("[updateVideoList] saveVideos() を呼び出します", "info");
+    pushLog("[updateVideoList] saveVideos() を呼び出します", "info", false, host);
     saveVideos(map, host);
   }
 
@@ -732,10 +732,10 @@ export function updateVideoList(videoArray, baseUrl, host) {
   }
   pushLog(
     `[updateVideoList] 保存データとマージ ${updated || changed ? "完了" : "変更なし"}`,
-    "info"
+    "info", false, host
   );
   if (updated || changed) {
-    pushLog("[updateVideoList] UI へ反映しました", "info");
+    pushLog("[updateVideoList] UI へ反映しました", "info", false, host);
   }
 }
 
@@ -1391,7 +1391,7 @@ function parseFileInfo(text, baseUrl) {
 /** --- 3) ファイル一覧描画 --- */
 export function renderFileList(info, baseUrl, hostname) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
-  pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info");
+  pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info", false, hostname);
   const arr = parseFileInfo(info.fileInfo, baseUrl);
 
   // 最新の一覧をアップロード検証用に保持
@@ -1469,7 +1469,7 @@ export function renderFileList(info, baseUrl, hostname) {
   if (fileTable) {
     _bindSortHeaders(fileTable, "file-list-table", hostname);
   }
-  pushLog("[renderFileList] UI へ反映しました", "info");
+  pushLog("[renderFileList] UI へ反映しました", "info", false, hostname);
 }
 
 /**

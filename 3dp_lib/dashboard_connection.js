@@ -420,7 +420,7 @@ function flushBufferedMessages(host) {
     try {
       handleSocketMessage({ data: JSON.stringify(msgObj) }, host);
     } catch (e) {
-      pushLog("バッファ処理中にエラー: " + e.message, "error");
+      pushLog("バッファ処理中にエラー: " + e.message, "error", false, host);
       console.error("[flushBufferedMessages]", e);
     }
   }
@@ -575,7 +575,7 @@ export function connectWs(hostOrDest) {
     state.userDisc = false;
   }
   if (state.reconnect >= MAX_RECONNECT) {
-    pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error");
+    pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error", false, host);
     return;
   }
 
@@ -583,7 +583,7 @@ export function connectWs(hostOrDest) {
   state.state = "connecting";
   updateConnectionUI("connecting", { attempt: state.reconnect, max: MAX_RECONNECT }, host);
   updatePrinterListUI();
-  pushLog(`WS接続を試みます...(試行${state.reconnect}回目/${MAX_RECONNECT}回)`, "warn");
+  pushLog(`WS接続を試みます...(試行${state.reconnect}回目/${MAX_RECONNECT}回)`, "warn", false, host);
 
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(protocol + dest);
@@ -602,7 +602,7 @@ export function connectWs(hostOrDest) {
  * - ホスト名確定を待ってから履歴/ファイル取得
  */
 function handleSocketOpen(host) {
-  pushLog("WebSocket接続が確立しました。", "info");
+  pushLog("WebSocket接続が確立しました。", "info", false, host);
   const st = getState(host);
   st.reconnect = 0;
   st.userDisc = false;
@@ -684,8 +684,8 @@ function handleSocketOpen(host) {
 function handleSocketMessage(event, host) {
   let hostKey = host;
   // 1) --- 生データ "ok" はスキップ ---
-  if (event.data === "ok") { 
-    pushLog("受信: heart beat:" + event.data, "success");
+  if (event.data === "ok") {
+    pushLog("受信: heart beat:" + event.data, "success", false, hostKey);
     return;
   }
 
@@ -695,21 +695,21 @@ function handleSocketMessage(event, host) {
   if (tsField) tsField.textContent = now;
 
 // --- 3) ログ出力 (受信した JSON 生データ) ---
-  pushLog("受信: " + event.data, "normal");
+  pushLog("受信: " + event.data, "normal", false, hostKey);
 
 // --- 4) JSON パース ---
   let data;
   try {
     data = JSON.parse(event.data);
   } catch (e) {
-    pushLog("JSONパースエラー: " + event.data, "error");
+    pushLog("JSONパースエラー: " + event.data, "error", false, hostKey);
     console.warn("[ws.onmessage] JSON.parse 失敗:", event.data, e);
     return;
   }
 
 // 5) パース結果が null またはオブジェクト以外 → 異常データとしてトラップ
   if (data === null || typeof data !== "object") {
-    pushLog("非オブジェクト形式のメッセージ: " + event.data, "warn");
+    pushLog("非オブジェクト形式のメッセージ: " + event.data, "warn", false, hostKey);
     console.warn("[ws.onmessage] 非オブジェクト:", data);
     return;
   }
@@ -754,7 +754,7 @@ function handleSocketMessage(event, host) {
       processData(data, resolvedHost);
     }
   } catch (e) {
-    pushLog("handleMessage処理中にエラーが発生: " + e.message, "error");
+    pushLog("handleMessage処理中にエラーが発生: " + e.message, "error", false, hostKey);
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
   }
   // ホスト名が有効かどうか判定（PLACEHOLDER でないこと）
@@ -781,7 +781,7 @@ function handleSocketMessage(event, host) {
       printManager.updateVideoList(data.elapseVideoList, baseUrlHttp, hostKey);
     }
   } catch (e) {
-    pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
+    pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error", false, hostKey);
     console.error("[ws.onmessage] 印刷履歴処理エラー:", e);
   }
 
@@ -799,7 +799,7 @@ function handleSocketMessage(event, host) {
       stFile.fileInfoReceived = true;
     }
   } catch (e) {
-    pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error");
+    pushLog("印刷履歴処理中にエラーが発生: " + e.message, "error", false, hostKey);
     console.error("[ws.onmessage] 印刷履歴処理エラー:", e);
   }
 
@@ -818,7 +818,7 @@ function handleSocketMessage(event, host) {
  */
 function handleSocketError(error, host) {
   const msg = "WebSocketエラー: " + (error?.message || String(error));
-  pushLog(msg, "error");
+  pushLog(msg, "error", false, host);
   console.error("[ws.onerror]", error);
 };
 
@@ -834,7 +834,7 @@ function handleSocketError(error, host) {
  * - それ以外は Exponential Backoff で再接続
  */
 function handleSocketClose(host) {
-  pushLog("WebSocket接続が閉じられました。", "warn");
+  pushLog("WebSocket接続が閉じられました。", "warn", false, host);
  // 切断直後は通知を抑制する
   setNotificationSuppressed(true);
   const st = getState(host);
@@ -872,7 +872,7 @@ function handleSocketClose(host) {
     stopCameraStream(host);
     if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
     updatePrinterListUI();
-    pushLog("ユーザー操作により切断されました。", "info");
+    pushLog("ユーザー操作により切断されました。", "info", false, host);
     return;
   }
 
@@ -882,7 +882,7 @@ function handleSocketClose(host) {
     if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
     st.state = "disconnected";
     updatePrinterListUI();
-    pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error");
+    pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error", false, host);
     return;
   }
 
@@ -893,7 +893,7 @@ function handleSocketClose(host) {
   const nextAttempt = st.reconnect + 1;
 
   // ① ログ出力
-  pushLog(`Ws接続が切断されました。${delaySec}秒後に再試行します...（${nextAttempt}/${MAX_RECONNECT}）`, "warn");
+  pushLog(`Ws接続が切断されました。${delaySec}秒後に再試行します...（${nextAttempt}/${MAX_RECONNECT}）`, "warn", false, host);
 
   // ② 待機UIに切り替え
   if (host === currentHostname) {
@@ -1121,13 +1121,13 @@ export function sendCommand(method, params = {}, host) {
       st.ws.removeEventListener("message", onResp);
       timeoutId = null;
       const errMsg = `${method} 応答タイムアウト (${SEND_COMMAND_TIMEOUT_MS / 1000}秒)`;
-      pushLog(errMsg, "warn");
+      pushLog(errMsg, "warn", false, host);
       reject(new Error(errMsg));
     }, SEND_COMMAND_TIMEOUT_MS);
 
     // ── 送信ログ（紫色）
     const json = JSON.stringify(payload);
-    pushLog(`送信: ${json}`, "send");
+    pushLog(`送信: ${json}`, "send", false, host);
     st.ws.send(json);
 
   });
@@ -1191,12 +1191,12 @@ export function sendGcodeCommand(gcode, host) {
       st.ws.removeEventListener("message", onResp);
       timeoutId = null;
       const errMsg = `set_gcode 応答タイムアウト (${SEND_COMMAND_TIMEOUT_MS / 1000}秒)`;
-      pushLog(errMsg, "warn");
+      pushLog(errMsg, "warn", false, host);
       reject(new Error(errMsg));
     }, SEND_COMMAND_TIMEOUT_MS);
 
     const json = JSON.stringify(payload);
-    pushLog(`送信: ${json}`, "send");
+    pushLog(`送信: ${json}`, "send", false, host);
     st.ws.send(json);
   });
 }
@@ -1645,7 +1645,7 @@ export function cleanupConnection(host) {
   delete connectionMap[host];
   updatePrinterListUI();
 
-  pushLog(`接続情報をクリーンアップしました: ${host}`, "info");
+  pushLog(`接続情報をクリーンアップしました: ${host}`, "info", false, host);
   return true;
 }
 
@@ -1698,17 +1698,17 @@ function _fetchWithRetry(host) {
         if (!st.ws || st.ws.readyState !== WebSocket.OPEN) { resolve(false); return; }
         const retry = getRetry();
         if (retry >= MAX_RETRY) {
-          pushLog(`[fetchRetry] ${label} ${MAX_RETRY}回リトライ後も応答なし`, "warn");
+          pushLog(`[fetchRetry] ${label} ${MAX_RETRY}回リトライ後も応答なし`, "warn", false, host);
           resolve(false);
           return;
         }
         setRetry(retry + 1);
-        pushLog(`[fetchRetry] ${label} 送出 (${retry + 1}/${MAX_RETRY})`, "info");
+        pushLog(`[fetchRetry] ${label} 送出 (${retry + 1}/${MAX_RETRY})`, "info", false, host);
         sendCommand("get", params, host).catch(() => {});
         // TIMEOUT 後に応答チェック
         setTimeout(() => {
           if (isDone()) { resolve(true); return; }
-          pushLog(`[fetchRetry] ${label} タイムアウト (${getRetry()}/${MAX_RETRY})`, "warn");
+          pushLog(`[fetchRetry] ${label} タイムアウト (${getRetry()}/${MAX_RETRY})`, "warn", false, host);
           tryOnce();
         }, TIMEOUT);
       }

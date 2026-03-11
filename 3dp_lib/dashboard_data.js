@@ -328,7 +328,7 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
     ) {
       const msg = `[setStoredData] isFromEquipVal changed to false for key: ${key}`;
       console.error(msg);
-      pushLog(msg, "error");
+      pushLog(msg, "error", false, host);
     }
   } else {
     // computedValue 更新時は指定があればフラグ更新、無ければ保持
