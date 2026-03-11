@@ -728,9 +728,20 @@ export function processData(data, hostname) {
       const v = machine.storedData[k]?.rawValue;
       if (v !== undefined) entry[k] = v;
     });
-    ["filamentId", "filamentColor", "filamentType"].forEach(k => {
-      if (data[k] != null) entry[k] = data[k];
-    });
+    // フィラメント情報: 保存済み履歴の交換後データを優先し、なければ受信データを使用
+    const savedJobs = printManager.loadHistory(host);
+    const savedJob = savedJobs.find(j => String(j.id) === String(entry.id));
+    if (savedJob?.filamentInfo?.length) {
+      // 交換後のフィラメント情報が保存済み → それを維持
+      entry.filamentInfo = savedJob.filamentInfo;
+      entry.filamentId    = savedJob.filamentId;
+      entry.filamentColor = savedJob.filamentColor;
+      entry.filamentType  = savedJob.filamentType;
+    } else {
+      ["filamentId", "filamentColor", "filamentType"].forEach(k => {
+        if (data[k] != null) entry[k] = data[k];
+      });
+    }
     // 同一ジョブIDの重複登録を防止する
     if (!machine.historyData.find(h => h.id === entry.id)) {
       machine.historyData.push(entry);

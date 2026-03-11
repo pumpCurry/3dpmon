@@ -641,6 +641,11 @@ export function updateHistoryList(
     }
   }
 
+  /** フィラメント関連キー: 保存済み（ユーザ操作・交換反映済み）を常に優先 */
+  const FILAMENT_KEYS = new Set([
+    "filamentId", "filamentColor", "filamentType", "filamentInfo"
+  ]);
+
   let merged = false;
   const oldJobs = loadHistory(host);
   const mergedMap = new Map();
@@ -649,6 +654,12 @@ export function updateHistoryList(
     const cur = mergedMap.get(String(j.id));
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
+        // フィラメント関連: 保存済みの値を常に優先（交換反映を失わない）
+        if (FILAMENT_KEYS.has(k) && v != null) {
+          cur[k] = v;
+          merged = true;
+          return;
+        }
         const isZeroInCur = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
         const isOldJobFinishedAndValid =
           MERGE_IGNORE_ZERO_FIELDS.has(k) && j.printfinish === 1 && v != null && v !== 0;
