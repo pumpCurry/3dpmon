@@ -579,10 +579,20 @@ export async function refreshHistory(
   });
   saveHistory(jobs, host);
 
-  // 現在印刷中ジョブの更新があれば再描画
+  // 現在印刷中ジョブの更新: 新IDなら置換、同一IDでもマージして最新データを反映
   const prev = loadCurrent(host);
-  if (jobs[0]?.id !== prev?.id) {
-    saveCurrent(jobs[0], host);
+  if (jobs[0]) {
+    if (jobs[0].id !== prev?.id) {
+      saveCurrent(jobs[0], host);
+    } else {
+      const merged = { ...jobs[0] };
+      if (prev) {
+        Object.entries(prev).forEach(([k, v]) => {
+          if (v != null && merged[k] == null) merged[k] = v;
+        });
+      }
+      saveCurrent(merged, host);
+    }
     renderPrintCurrent(scopedById(currentContainerId, host), host);
   }
 
@@ -697,9 +707,23 @@ export function updateHistoryList(
     "info", false, host
   );
 
+  // historyList の先頭行は現在の印刷ジョブ。printStartTime/printFileName が
+  // 先に到着して saveCurrent 済みでも、historyList には usagematerial / usagetime /
+  // thumbnail 等のより完全な情報が含まれるため、同一IDでもマージして更新する。
   const prev = loadCurrent(host);
-  if (jobs[0]?.id !== prev?.id) {
-    saveCurrent(jobs[0], host);
+  if (jobs[0]) {
+    if (jobs[0].id !== prev?.id) {
+      saveCurrent(jobs[0], host);
+    } else {
+      // 同一ID: historyList の完全データと既存データをマージ
+      const mergedCur = { ...jobs[0] };
+      if (prev) {
+        Object.entries(prev).forEach(([k, v]) => {
+          if (v != null && mergedCur[k] == null) mergedCur[k] = v;
+        });
+      }
+      saveCurrent(mergedCur, host);
+    }
     renderPrintCurrent(scopedById(currentContainerId, host), host);
   }
 

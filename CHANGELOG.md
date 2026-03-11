@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.1.003 (2026-03-11)
+
+### 現在の印刷パネル ファイル名取得不具合修正
+- WS デバイスは `printFileName` キーでファイル名を送信するが、msg_handler が存在しない `data.fileName` を参照していたため、印刷開始時にファイル名が取得できなかった
+- `data.printFileName || data.fileName` に修正（3箇所）し、storedData フォールバックも `printFileName` を優先するよう変更
+- 接続直後や新規印刷開始時に「(名称不明)」が表示される問題を根本解消
+
+### 現在の印刷パネル historyList マージ修正
+- `updateHistoryList` / `refreshHistory` で、historyList の先頭行（現在の印刷）が既存の current ジョブと同一IDの場合にデータ更新をスキップしていた
+- 同一IDでも historyList のより完全なデータ（filename / thumbnail / usagematerial / usagetime 等）をマージして saveCurrent + renderPrintCurrent を実行するよう修正
+- 印刷開始直後に機器から送信される historyList の情報が現在の印刷パネルに即座に反映されるようになった
+
+### フィラメント100%復帰修正
+- 印刷途中でフィラメント交換後、100%到達時に元のフィラメント情報に戻る問題を修正
+- `parseRawHistoryEntry` で `filamentInfo` フィールドが欠落していた問題を修正
+- `updateHistoryList` のマージ処理で `FILAMENT_KEYS` 保護を追加（保存済み交換データを常に優先）
+
+### 履歴フィラメント指定・修正ダイアログ
+- 印刷履歴の「指定」「✏修正」ボタンを統合フィラメントダイアログに置換
+- 過去取り外したスプールからの選択、新品開封からの指定に対応（機器装着なし）
+- スプール変更時に旧スプールへの使用量復元・新スプールからの差し引きを自動計算
+- 操作後のフィラメントプレビュー即時更新を追加
+
 ## v2.1.002 (2026-03-11)
 
 ### 受信ログ コンタミネーション修正

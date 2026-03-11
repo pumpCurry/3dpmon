@@ -466,17 +466,19 @@ export function processData(data, hostname) {
     notificationManager.notify("printStarted", { hostname: host });
     _set("preparationTime", 0, true);
 
-    // 現在ジョブを即座に保存（fileName が同一メッセージに含まれていれば反映）
+    // 現在ジョブを即座に保存（printFileName/fileName が同一メッセージに含まれていれば反映）
     {
       const curJob = printManager.loadCurrent(host) || {};
       curJob.id = currStartTime;
       curJob.startTime = new Date(currStartTime * 1000).toISOString();
-      if (data.fileName) {
-        curJob.filename = String(data.fileName).split("/").pop();
-        curJob.rawFilename = String(data.fileName);
+      const wsFileName = data.printFileName || data.fileName;
+      if (wsFileName) {
+        curJob.filename = String(wsFileName).split("/").pop();
+        curJob.rawFilename = String(wsFileName);
       } else if (!curJob.filename) {
-        // storedData に既にファイル名があればそれを使う
-        const fn = machine.storedData.fileName?.rawValue;
+        // storedData に既にファイル名があればそれを使う（WS キーは printFileName）
+        const fn = machine.storedData.printFileName?.rawValue
+          ?? machine.storedData.fileName?.rawValue;
         if (fn) {
           curJob.filename = String(fn).split("/").pop();
           curJob.rawFilename = String(fn);
@@ -680,16 +682,16 @@ export function processData(data, hostname) {
   }
 
   // --- 新しい印刷情報が後から届いた場合の現在ジョブ更新処理 ----------------
-  // fileName または printStartTime が受信された際、printManager が保持する
-  // 現在印刷中ジョブ情報を更新して UI へ即反映させる。印刷開始直後に情報が
-  // 遅延して届くケースで、ファイル名や開始時刻が不明のまま表示され続ける
-  // 問題を解消する目的で追加。
-  if (data.fileName || data.printStartTime) {
+  // printFileName / fileName / printStartTime が受信された際、printManager が
+  // 保持する現在印刷中ジョブ情報を更新して UI へ即反映させる。
+  // WS デバイスは printFileName キーでファイル名を送信する。
+  const wsFileName = data.printFileName || data.fileName;
+  if (wsFileName || data.printStartTime) {
     const curJob = printManager.loadCurrent(host) || {};
     let changed = false;
-    if (data.fileName) {
-      curJob.filename = String(data.fileName).split("/").pop();
-      curJob.rawFilename = String(data.fileName);
+    if (wsFileName) {
+      curJob.filename = String(wsFileName).split("/").pop();
+      curJob.rawFilename = String(wsFileName);
       changed = true;
     }
     if (data.printStartTime) {
