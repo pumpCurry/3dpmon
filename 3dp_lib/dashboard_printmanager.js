@@ -56,6 +56,7 @@ import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connectio
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
+import { getCurrentPrintID } from "./dashboard_aggregator.js";
 
 /**
  * 履歴マージ時にゼロ値を無視したいフィールド一覧
@@ -431,13 +432,29 @@ export function renderPrintCurrent(containerEl, hostname) {
   const ip = getDeviceIp(hostname);
   const baseUrl = `http://${ip}`;
 
-
   if (!job) {
     containerEl.innerHTML = "<p>現在印刷中のジョブはありません。</p>";
     return;
-  } else {
-    containerEl.innerHTML = renderTemplates.current(job, baseUrl);
   }
+
+  /* 印刷中であれば storedData からリアルタイム使用量を取得 */
+  const machine = monitorData.machines[hostname];
+  const printState = Number(machine?.runtimeData?.state ?? -1);
+  if (
+    (printState === PRINT_STATE_CODE.printStarted ||
+     printState === PRINT_STATE_CODE.printPaused) &&
+    machine?.storedData
+  ) {
+    const sd = machine.storedData;
+    const liveLen = sd.usedMaterialLength?.rawValue
+      ?? sd.usagematerial?.rawValue
+      ?? sd.materialLength?.rawValue;
+    if (liveLen != null) {
+      job.materialUsedMm = Math.ceil(Number(liveLen) * 100) / 100;
+    }
+  }
+
+  containerEl.innerHTML = renderTemplates.current(job, baseUrl);
 }
 
 
@@ -761,6 +778,13 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
 
   if (!tbody) return;
 
+  /* 現在印刷中のジョブ判定用 */
+  const curPrintId = getCurrentPrintID(hostname);
+  const machine    = monitorData.machines[hostname];
+  const printState = Number(machine?.runtimeData?.state ?? -1);
+  const isActive   = (st) =>
+    st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused;
+
   tbody.innerHTML = "";
 
   rawArray.forEach((raw, index) => {
@@ -788,8 +812,19 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       raw.usagematerial != null
         ? (Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()
         : "—";
-    const finish    = raw.printfinish ? "✔" : "✗";
-    const finishCls = raw.printfinish ? "result-ok" : "result-ng";
+    /* 成否表示: 印刷中/一時停止中のジョブは ▶/⏸ で表示 */
+    const isCurrentJob = curPrintId && String(raw.id) === String(curPrintId) && isActive(printState);
+    let finish, finishCls;
+    if (isCurrentJob) {
+      finish    = printState === PRINT_STATE_CODE.printPaused ? "⏸" : "▶";
+      finishCls = "result-active";
+    } else if (raw.printfinish) {
+      finish    = "✔";
+      finishCls = "result-ok";
+    } else {
+      finish    = "✗";
+      finishCls = "result-ng";
+    }
     const md5short  = raw.filemd5 ? raw.filemd5.substring(0, 8) : "";
     const videoLink = raw.videoUrl
       ? `<button class="video-link icon-btn" data-url="${raw.videoUrl}" title="動画">📹</button>`

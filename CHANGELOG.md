@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.1.002 (2026-03-11)
+
+### 受信ログ コンタミネーション修正
+- 全モジュールの `pushLog` 呼び出しに hostname パラメータを追加（計44箇所）
+- 対象: connection / msg_handler / camera_ctrl / printmanager / data / send_command
+- パネルごとのログ表示が正しくホスト単位でフィルタリングされるようになった
+
+### 印刷履歴 成否表示の改善
+- 印刷中のジョブに ▶（印刷中）/ ⏸（一時停止中）アイコンを表示（青色）
+- 印刷終了後は従来通り ✔（成功）/ ✗（失敗）に切り替わる
+- CSS クラス `result-active` を追加、`.col-finish` セレクタ整合性を修正
+
+### 現在の印刷パネル 情報欠落修正
+- 印刷開始検出時に `saveCurrent` を即座に呼び出し、ファイル名を storedData から取得
+- 印刷中のフィラメント使用量を storedData のリアルタイム値（`usedMaterialLength`）から表示
+- 印刷名が「(名称不明)」、使用量が「0 mm」になる問題を解消
+
+### 通知・ログ修正
+- 通知バナー生成時のログ二重出力を修正
+- テスト再生時のログレベルを info に統一
+- 起動時の `persistAggregatorState: ホスト未設定` 警告を修正
+- `initTemperatureGraph` の canvas 未検出ログを debug レベルに変更
+
 ## v2.1 (2026-03-11)
 
 ### マルチプリンタ並行監視

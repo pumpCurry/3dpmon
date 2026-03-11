@@ -1275,8 +1275,9 @@ body.panel-mode .notification-container {
 }
 
 /* 結果セル */
-.col-result .result-ok { color: #2a2; font-weight: bold; }
-.col-result .result-ng { color: #c44; }
+.col-result .result-ok, .col-finish .result-ok { color: #2a2; font-weight: bold; }
+.col-result .result-ng, .col-finish .result-ng { color: #c44; }
+.col-finish .result-active { color: #28f; font-weight: bold; }
 
 /* フィラメントセル */
 .col-spool .spool-line {

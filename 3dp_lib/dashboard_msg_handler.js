@@ -465,6 +465,30 @@ export function processData(data, hostname) {
     pushLog("印刷開始", "info", false, host);
     notificationManager.notify("printStarted", { hostname: host });
     _set("preparationTime", 0, true);
+
+    // 現在ジョブを即座に保存（fileName が同一メッセージに含まれていれば反映）
+    {
+      const curJob = printManager.loadCurrent(host) || {};
+      curJob.id = currStartTime;
+      curJob.startTime = new Date(currStartTime * 1000).toISOString();
+      if (data.fileName) {
+        curJob.filename = String(data.fileName).split("/").pop();
+        curJob.rawFilename = String(data.fileName);
+      } else if (!curJob.filename) {
+        // storedData に既にファイル名があればそれを使う
+        const fn = machine.storedData.fileName?.rawValue;
+        if (fn) {
+          curJob.filename = String(fn).split("/").pop();
+          curJob.rawFilename = String(fn);
+        }
+      }
+      curJob.printfinish = 0;
+      printManager.saveCurrent(curJob, host);
+      printManager.renderPrintCurrent(
+        scopedById("print-current-container", host), host
+      );
+    }
+
     // 直ちに保存してリロード時の損失を防ぐ
     persistPrintResume();
     persistAggregatorState(host);
