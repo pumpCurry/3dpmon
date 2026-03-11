@@ -489,7 +489,11 @@ function autoSaveAll() {
   try {
     persistPrintResume();
     saveUnifiedStorage(true);   // 即時書き込み（スロットリングバイパス）
-    persistAggregatorState();
+    /* 全接続ホストの aggregator 状態を保存 */
+    for (const host of Object.keys(monitorData.machines)) {
+      if (host === PLACEHOLDER_HOSTNAME) continue;
+      persistAggregatorState(host);
+    }
   } catch (e) {
     console.warn("autoSaveAll: データ永続化中にエラーが発生しました", e);
   }

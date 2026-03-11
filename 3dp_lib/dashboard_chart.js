@@ -114,7 +114,7 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
     ? panelBody.querySelector("#temp-graph-canvas") || panelBody.querySelector("canvas")
     : document.getElementById("temp-graph-canvas");
   if (!canvas) {
-    console.warn("initTemperatureGraph: canvas 要素が見つかりません");
+    console.debug("initTemperatureGraph: canvas 要素が見つかりません（パネルシステムでは正常）");
     return;
   }
 
