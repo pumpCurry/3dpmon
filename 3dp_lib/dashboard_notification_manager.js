@@ -376,11 +376,7 @@ export class NotificationManager {
       .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
       .replace(/[\r\n]+/g, " ");
 
-    // 1) ログ出力
-    import("./dashboard_log_util.js")
-      .then(({ pushNotificationLog }) => pushNotificationLog(text, def.level));
-
-    // 2) 固定アラート
+    // 1) 固定アラート（showAlert 内でログ出力も行われる）
     showAlert(text, def.level, def.level === "error");
 
     // 3) TTS（ホスト別設定を適用）
@@ -500,7 +496,13 @@ export class NotificationManager {
    * @returns {void}
    */
   testNotification(type) {
-    this.notify(type, {});
+    const def = this.map[type];
+    if (!def) return;
+    /* テスト送信時はログレベルを info に抑制し、テスト表記を付与 */
+    const origLevel = def.level;
+    def.level = "info";
+    this.notify(type, { _test: true });
+    def.level = origLevel;
   }
 
   /**
@@ -511,7 +513,7 @@ export class NotificationManager {
    */
   testAllNotifications(interval = 500) {
     this.getTypes().forEach((type, idx) =>
-      setTimeout(() => this.notify(type), idx * interval)
+      setTimeout(() => this.testNotification(type), idx * interval)
     );
   }
 
