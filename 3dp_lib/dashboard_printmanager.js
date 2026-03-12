@@ -1590,9 +1590,9 @@ export function initHistoryTabs() {
  * @returns {Map<string, {md5: string, count: number, totalSec: number}>}
  *          キー: rawFilename または basename
  */
-function buildHistoryStats() {
+function buildHistoryStats(hostname) {
   const map = new Map();
-  const history = loadHistory();
+  const history = loadHistory(hostname);
   history.forEach(job => {
     if (!job.finishTime) return; // 未完了は除外
     const key = job.rawFilename || job.filename;
@@ -1645,7 +1645,7 @@ export function renderFileList(info, baseUrl, hostname) {
   _fileListMap.set(hostname, arr.slice());
 
   // 履歴から印刷回数と実使用時間を取得
-  const stats = buildHistoryStats();
+  const stats = buildHistoryStats(hostname);
   arr.forEach(item => {
     const st = stats.get(item.filename);
     if (st) {
