@@ -456,6 +456,6 @@ function _updateUI(entry, state, opt = {}) {
 
   /* トグルスイッチの状態をカメラ設定に同期 */
   if (entry.toggle) {
-    entry.toggle.checked = !!(monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle);
+    entry.toggle.checked = !!(monitorData.hostCameraToggle[entry.hostname] ?? monitorData.appSettings.cameraToggle);
   }
 }
