@@ -44,10 +44,11 @@ import {
 import { formatEpochToDateTime, formatDuration } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
-import { monitorData, scopedById } from "./dashboard_data.js"; // filament残量取得用
+import { monitorData, scopedById, setStoredDataForHost } from "./dashboard_data.js";
 import {
   getCurrentSpool,
   getCurrentSpoolId,
+  setCurrentSpoolId,
   useFilament,
   getSpoolById,
   updateSpool
@@ -58,6 +59,54 @@ import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js"
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { getCurrentPrintID } from "./dashboard_aggregator.js";
+
+/**
+ * 履歴エントリのスプール変更が現在印刷中ジョブに対するものか判定し、
+ * 該当する場合は機器装着スプールとフィラメントプレビューも連動更新する。
+ *
+ * @private
+ * @param {Object} raw - 変更対象の履歴 raw オブジェクト
+ * @param {Object} updatedSp - 新しいスプールオブジェクト
+ * @param {string} hostname - ホスト名
+ */
+function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
+  const machine = monitorData.machines[hostname];
+  if (!machine) return;
+  const st = Number(machine.runtimeData?.state ?? 0);
+  const isPrinting =
+    st === PRINT_STATE_CODE.printStarted ||
+    st === PRINT_STATE_CODE.printPaused;
+  if (!isPrinting) return;
+
+  // 現在印刷中のジョブIDと一致するか確認
+  const curJob = loadCurrent(hostname);
+  if (!curJob || String(curJob.id) !== String(raw.id)) return;
+
+  // 既に同じスプールが装着済みなら何もしない
+  if (getCurrentSpoolId() === updatedSp.id) return;
+
+  // 装着スプールを変更（setCurrentSpoolId は旧スプールの精算も行うが、
+  // 呼び出し元で既に残量調整済みのため、グローバルポインタの切替のみ必要）
+  // ただし setCurrentSpoolId は精算・予約を内部で行うため直接使用せず、
+  // グローバル状態のみ更新する
+  const oldId = monitorData.currentSpoolId;
+  monitorData.currentSpoolId = updatedSp.id;
+  monitorData.filamentSpools.forEach(sp => {
+    sp.isActive = sp.id === updatedSp.id;
+    sp.isInUse  = sp.id === updatedSp.id;
+  });
+  // aggregator の追跡を新スプールに切り替え
+  if (updatedSp.currentJobStartLength == null) {
+    updatedSp.currentJobStartLength = updatedSp.remainingLengthMm;
+  }
+  updatedSp.currentPrintID = String(curJob.id);
+  // storedData を更新してフィラメントプレビューを連動
+  setStoredDataForHost(hostname, "filamentRemainingMm", updatedSp.remainingLengthMm, true);
+  pushLog(
+    `[renderHistoryTable] 現在印刷ジョブのスプール変更を検出: ${oldId} → ${updatedSp.id}`,
+    "info", false, hostname
+  );
+}
 
 /**
  * 履歴マージ時にゼロ値を無視したいフィールド一覧
@@ -528,11 +577,22 @@ export async function refreshHistory(
       machine.historyData = buf.filter((_, i) => !appliedIdx.has(i));
     }
   }
+  const FILAMENT_KEYS_R = new Set([
+    "filamentId", "filamentColor", "filamentType", "filamentInfo"
+  ]);
   const oldJobs = loadHistory(host);
   const mergedMap = new Map();
   newJobs.forEach(j => mergedMap.set(String(j.id), j));
   oldJobs.forEach(j => {
-    if (!mergedMap.has(String(j.id))) mergedMap.set(String(j.id), j);
+    const cur = mergedMap.get(String(j.id));
+    if (cur) {
+      // 保存済みフィラメント情報を保護（ユーザー指定を失わない）
+      Object.entries(j).forEach(([k, v]) => {
+        if (FILAMENT_KEYS_R.has(k) && v != null) cur[k] = v;
+      });
+    } else {
+      mergedMap.set(String(j.id), j);
+    }
   });
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => Number(b.id) - Number(a.id))
@@ -1004,6 +1064,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       raw.filamentColor = updatedSp.filamentColor;
       raw.filamentType = updatedSp.material;
       updateHistoryList([raw], baseUrl, "print-current-container", hostname, { forceFilament: true });
+      // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
+      _linkCurrentPrintSpool(raw, updatedSp, hostname);
       // パネルのフィラメントプレビューを更新
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
@@ -1035,6 +1097,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       raw.filamentColor = updatedSp.filamentColor;
       raw.filamentType = updatedSp.material;
       updateHistoryList([raw], baseUrl, "print-current-container", hostname, { forceFilament: true });
+      // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
+      _linkCurrentPrintSpool(raw, updatedSp, hostname);
       // パネルのフィラメントプレビューを更新
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
