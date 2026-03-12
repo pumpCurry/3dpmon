@@ -271,7 +271,7 @@ function initFilamentPanel(body, hostname) {
   let preview = null;
   try {
     const machine = monitorData.machines[hostname] || {};
-    const spool = getCurrentSpool();
+    const spool = getCurrentSpool(hostname);
     preview = createFilamentPreview(container, {
       filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
       filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? 330000,

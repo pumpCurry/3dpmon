@@ -108,7 +108,7 @@
   const css = `
   .dfv-root { position: relative; user-select: none; font-family: sans-serif; }
   .dfv-scene { position:absolute; top:50%; left:50%; transform-style:preserve-3d; }
-  .dfv-card  { border:1px solid #ccc; border-radius:8px; padding:8px; display:inline-block; }
+  .dfv-card  { border:1px solid #ccc; border-radius:8px; padding:8px; display:inline-block; position:relative; }
   .dfv-slider { width:100%; margin-top:4px; }
   .dfv-btn    { margin-left:4px; cursor:pointer; }
   .dfv-btn-active { background:#e5e7eb; }

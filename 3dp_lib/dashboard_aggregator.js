@@ -292,7 +292,7 @@ export function ingestData(data, hostname) {
 
     if (s.prevPrintID === null && s.actualStartEpoch !== null) {
       // printJobTime から開始済みのジョブに ID が後から届いた場合
-      const spool = getCurrentSpool();
+      const spool = getCurrentSpool(host);
       if (spool && spool.currentPrintID !== String(id)) {
         if (spool.currentJobExpectedLength == null) {
           reserveFilament(0, String(id), host);
@@ -324,7 +324,7 @@ export function ingestData(data, hostname) {
       });
     }
 
-    const spool = getCurrentSpool();
+    const spool = getCurrentSpool(host);
     if (spool && spool.currentPrintID !== String(id)) {
       if (spool.currentJobExpectedLength == null) {
         reserveFilament(0, String(id), host);
@@ -514,7 +514,7 @@ export function ingestData(data, hostname) {
       st_agg === PRINT_STATE_CODE.printIdle)
   ) {
     // 状態遷移を検知したら、直近の使用量を積算した上で確定する
-    const spool = getCurrentSpool();
+    const spool = getCurrentSpool(host);
     // ジョブIDが未確定の場合は、利用可能な情報から補完して確定処理に備える
     if (spool && !spool.currentPrintID) {
       const resolvedJobId = resolveFilamentJobId(
@@ -939,7 +939,7 @@ export function aggregatorUpdate() {
     }, storedData);
 
     // --- フィラメント残量の動的計算 ---
-    const spool = getCurrentSpool();
+    const spool = getCurrentSpool(host);
     if (spool) autoCorrectCurrentSpool();
     const st   = Number(storedData.state?.rawValue || 0);
     const isPrinting =

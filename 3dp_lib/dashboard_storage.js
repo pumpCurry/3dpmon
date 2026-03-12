@@ -249,6 +249,7 @@ function _flushStorage() {
       queueSharedWrite("filamentPresets",    monitorData.filamentPresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
       queueSharedWrite("currentSpoolId",     monitorData.currentSpoolId);
+      queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("spoolSerialCounter", monitorData.spoolSerialCounter);
 
       // machines データをキューに追加（per-host 独立書き込み）
@@ -375,6 +376,20 @@ function _restoreFromData(shared, machines) {
   }
   if (shared && "currentSpoolId" in shared) {
     monitorData.currentSpoolId = shared.currentSpoolId;
+  }
+  // per-host スプールマップの復元（レガシー移行対応）
+  if (shared?.hostSpoolMap && typeof shared.hostSpoolMap === "object") {
+    monitorData.hostSpoolMap = shared.hostSpoolMap;
+  } else if (shared && "currentSpoolId" in shared && shared.currentSpoolId) {
+    // レガシー移行: グローバル currentSpoolId からスプールの hostname を使って推定
+    const spool = monitorData.filamentSpools.find(
+      s => s.id === shared.currentSpoolId && !s.deleted
+    );
+    if (spool && spool.hostname) {
+      monitorData.hostSpoolMap = { [spool.hostname]: shared.currentSpoolId };
+    } else {
+      monitorData.hostSpoolMap = {};
+    }
   }
   if (shared && "spoolSerialCounter" in shared) {
     monitorData.spoolSerialCounter = Number(shared.spoolSerialCounter) || 0;

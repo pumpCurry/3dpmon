@@ -49,6 +49,74 @@ import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList } from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 
+/**
+ * スプールのライフサイクル状態定数
+ * @enum {string}
+ */
+export const SPOOL_STATE = {
+  /** 登録済み・未装着（開封直後、まだプリンタに装着されていない） */
+  INVENTORY:  "inventory",
+  /** プリンタに装着中 */
+  MOUNTED:    "mounted",
+  /** 取り外して保管中（残量あり、再利用可能） */
+  STORED:     "stored",
+  /** 残量ゼロ近く（使い切り） */
+  EXHAUSTED:  "exhausted",
+  /** 廃棄済み（ソフトデリート） */
+  DISCARDED:  "discarded"
+};
+
+/** 使い切り判定の閾値 [mm]（約 0.3g PLA 相当） */
+const EXHAUSTED_THRESHOLD_MM = 100;
+
+/**
+ * スプールオブジェクトの現在のライフサイクル状態を返す。
+ * 既存のブーリアンフラグ群から状態を導出する。
+ *
+ * @param {Object} spool - スプールオブジェクト
+ * @returns {string} SPOOL_STATE の値
+ */
+export function getSpoolState(spool) {
+  if (!spool) return SPOOL_STATE.INVENTORY;
+  if (spool.deleted || spool.isDeleted) return SPOOL_STATE.DISCARDED;
+  if (spool.isActive) return SPOOL_STATE.MOUNTED;
+  if (spool.removedAt) {
+    return (spool.remainingLengthMm ?? 0) <= EXHAUSTED_THRESHOLD_MM
+      ? SPOOL_STATE.EXHAUSTED
+      : SPOOL_STATE.STORED;
+  }
+  return SPOOL_STATE.INVENTORY;
+}
+
+/**
+ * スプールの状態に対応する日本語ラベルを返す。
+ *
+ * @param {string} state - SPOOL_STATE の値
+ * @returns {string} 日本語ラベル
+ */
+export function getSpoolStateLabel(state) {
+  switch (state) {
+    case SPOOL_STATE.INVENTORY:  return "未使用";
+    case SPOOL_STATE.MOUNTED:    return "装着中";
+    case SPOOL_STATE.STORED:     return "保管中";
+    case SPOOL_STATE.EXHAUSTED:  return "使い切り";
+    case SPOOL_STATE.DISCARDED:  return "廃棄済";
+    default: return "不明";
+  }
+}
+
+/**
+ * スプールの人間可読な表示IDを返す。
+ * serialNo をゼロパディングして `#001` 形式にフォーマットする。
+ *
+ * @param {Object} spool - スプールオブジェクト
+ * @returns {string} 表示用ID（例: "#001"）
+ */
+export function formatSpoolDisplayId(spool) {
+  if (!spool) return "#???";
+  return `#${String(spool.serialNo || 0).padStart(3, "0")}`;
+}
+
 // Material density [g/cm^3]
 export const MATERIAL_DENSITY = {
   PLA: 1.24,
@@ -104,22 +172,31 @@ export function getSpoolById(id) {
 
 /**
  * 現在設定されているスプールIDを返す。
- * monitorData.currentSpoolId を参照するだけで副作用はない。
+ * hostname が指定された場合は per-host マップから取得する。
+ * 未指定の場合はレガシー互換で monitorData.currentSpoolId を返す。
+ *
  * @function getCurrentSpoolId
+ * @param {string} [hostname] - 対象ホスト名
  * @returns {string|null} - 現在のスプールID。未設定時は null
  */
-export function getCurrentSpoolId() {
+export function getCurrentSpoolId(hostname) {
+  if (hostname && monitorData.hostSpoolMap[hostname] !== undefined) {
+    return monitorData.hostSpoolMap[hostname];
+  }
+  // レガシー互換: hostSpoolMap に未登録の場合はグローバル値を返す
   return monitorData.currentSpoolId;
 }
 
 /**
  * 現在使用中のスプール情報を取得する。
- * {@link getSpoolById} を利用する単純な参照で副作用はない。
+ * hostname が指定された場合は per-host マップから取得する。
+ *
  * @function getCurrentSpool
+ * @param {string} [hostname] - 対象ホスト名
  * @returns {Object|null} - 現在のスプールオブジェクト。無い場合は null
  */
-export function getCurrentSpool() {
-  return getSpoolById(monitorData.currentSpoolId);
+export function getCurrentSpool(hostname) {
+  return getSpoolById(getCurrentSpoolId(hostname));
 }
 
 /**
@@ -133,14 +210,27 @@ export function getCurrentSpool() {
  *
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
- * @returns {void}
+ * @param {string} [hostname] - 対象ホスト名
+ * @returns {boolean} 設定成功時 true、既に他ホストに装着済みの場合 false
  */
 export function setCurrentSpoolId(id, hostname) {
   const host = hostname;
-  const prevId = monitorData.currentSpoolId;
-  if (prevId === id) return;
+  const prevId = getCurrentSpoolId(host);
+  if (prevId === id) return true;
   const prevSpool = getSpoolById(prevId);
   const newSpool = getSpoolById(id);
+
+  // 同じスプールが別ホストに既に装着されていないかチェック
+  if (id && host && newSpool) {
+    for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
+      if (spId === id && h !== host) {
+        const m = monitorData.machines[h] || {};
+        const displayName = m.storedData?.hostname?.rawValue || h;
+        console.warn(`setCurrentSpoolId: spool ${id} is already mounted on ${displayName}`);
+        return false;
+      }
+    }
+  }
 
   // per-host 操作: hostname が無い場合はグローバル設定のみ
   const machine = host ? (monitorData.machines[host] || {}) : {};
@@ -154,11 +244,31 @@ export function setCurrentSpoolId(id, hostname) {
     finalizeFilamentUsage(used, prevSpool.currentPrintID, host);
   }
 
+  // per-host マップとレガシーグローバル値の両方を更新
   monitorData.currentSpoolId = id;
-  monitorData.filamentSpools.forEach(sp => {
-    sp.isActive = sp.id === id;
-    sp.isInUse = sp.id === id;
-  });
+  if (host) {
+    monitorData.hostSpoolMap[host] = id;
+  }
+  // 該当ホストのスプールのみ isActive を更新（他ホストに装着中のスプールには触れない）
+  if (host) {
+    // 旧スプールの isActive をオフ
+    if (prevSpool) {
+      prevSpool.isActive = false;
+      prevSpool.isInUse = false;
+    }
+    // 新スプールの isActive をオン
+    if (newSpool) {
+      newSpool.isActive = true;
+      newSpool.isInUse = true;
+      newSpool.hostname = host;
+    }
+  } else {
+    // レガシー: hostname なしの場合は全スプールを走査（後方互換）
+    monitorData.filamentSpools.forEach(sp => {
+      sp.isActive = sp.id === id;
+      sp.isInUse = sp.id === id;
+    });
+  }
 
 
   if (prevSpool) {
@@ -169,6 +279,7 @@ export function setCurrentSpoolId(id, hostname) {
       }
     }
     prevSpool.removedAt = Date.now();
+    prevSpool.hostname = null;
     prevSpool.isInUse = false;
     prevSpool.isPending = false;
     prevSpool.currentPrintID = "";
@@ -223,6 +334,7 @@ export function setCurrentSpoolId(id, hostname) {
   }
 
   saveUnifiedStorage();
+  return true;
 }
 
 /**
@@ -341,6 +453,10 @@ export function deleteSpool(id, hostname) {
   s.isActive = false;
   s.removedAt = Date.now();
   if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
+  // per-host マップからも削除
+  for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
+    if (spId === id) monitorData.hostSpoolMap[h] = null;
+  }
   saveUnifiedStorage();
 }
 
@@ -441,7 +557,7 @@ export function addUsageSnapshot(spool, jobId, remainMm) {
 export function useFilament(lengthMm, jobId = "", hostname) {
   const host = hostname;
   if (!host) return;
-  const s = getCurrentSpool();
+  const s = getCurrentSpool(host);
   if (!s) return;
   const machine = monitorData.machines[host];
   if (machine?.printStore?.current) {
@@ -519,7 +635,7 @@ export function beginExternalPrint(spool, lengthMm, jobId = "", hostname) {
 export function reserveFilament(lengthMm, jobId = "", hostname) {
   const host = hostname;
   if (!host) return;
-  const s = getCurrentSpool();
+  const s = getCurrentSpool(host);
   if (!s) return;
   const machine = monitorData.machines[host];
   if (machine?.printStore?.current) {
@@ -582,7 +698,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
 export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
   const host = hostname;
   if (!host) return;
-  const s = getCurrentSpool();
+  const s = getCurrentSpool(host);
   if (!s) return;
   const normalizedJobId = String(jobId ?? "");
   if (s.currentPrintID && s.currentPrintID !== normalizedJobId) return;
@@ -718,8 +834,8 @@ export function addSpoolFromPreset(preset, override = {}) {
  * する。途中で別スプールへの交換が記録されていれば補正は行わ
  * ない。
  */
-export function autoCorrectCurrentSpool() {
-  const spool = getCurrentSpool();
+export function autoCorrectCurrentSpool(hostname) {
+  const spool = getCurrentSpool(hostname);
   if (!spool) return;
 
   const logs = monitorData.usageHistory;

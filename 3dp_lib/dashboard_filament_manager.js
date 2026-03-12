@@ -9,14 +9,18 @@
  *
  * 【機能内容サマリ】
  * - フィラメント管理ダイアログの表示
- * - 使用記録/在庫/プリセットの一覧表示
+ * - ダッシュボード（装着中/保管中スプール概要）
+ * - 在庫・プリセット統合管理
+ * - スプール一覧（状態バッジ・フィルタ付き）
+ * - 使用履歴（種別フィルタ付き）
+ * - 集計レポート
  *
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.465 (PR #212)
+* @version 1.390.790 (PR #367)
 * @since   1.390.228 (PR #102)
-* @lastModified 2025-06-22 18:00:00
+* @lastModified 2026-03-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -24,7 +28,7 @@
 
 "use strict";
 
-import { monitorData } from "./dashboard_data.js";
+import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import {
   getCurrentSpool,
   getCurrentSpoolId,
@@ -34,7 +38,11 @@ import {
   addSpoolFromPreset,
   deleteSpool,
   setCurrentSpoolId,
-  restoreSpool
+  restoreSpool,
+  getSpoolState,
+  getSpoolStateLabel,
+  formatSpoolDisplayId,
+  SPOOL_STATE
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -46,6 +54,7 @@ import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
+import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 
 let styleInjected = false;
 
@@ -79,6 +88,59 @@ const DEFAULT_FILAMENT_DATA = {
 };
 
 /**
+ * プレビュー表示の共通デフォルトオプション。
+ * 各所で copy-paste されていた設定を一元化する。
+ *
+ * @private
+ * @constant {Object}
+ */
+const DEFAULT_PREVIEW_OPTIONS = {
+  filamentDiameter: 1.75,
+  filamentTotalLength: 336000,
+  filamentCurrentLength: 336000,
+  filamentColor: "#22C55E",
+  reelOuterDiameter: 200,
+  reelThickness: 68,
+  reelWindingInnerDiameter: 95,
+  reelCenterHoleDiameter: 54,
+  widthPx: 120,
+  heightPx: 120,
+  showSlider: false,
+  isFilamentPresent: true,
+  showUsedUpIndicator: true,
+  blinkingLightColor: "#0EA5E9",
+  showInfoLength: false,
+  showInfoPercent: false,
+  showInfoLayers: false,
+  showResetButton: false,
+  showProfileViewButton: true,
+  showSideViewButton: true,
+  showFrontViewButton: true,
+  showAutoRotateButton: true,
+  enableDrag: true,
+  enableClick: false,
+  onClick: null,
+  disableInteraction: true,
+  showOverlayLength: true,
+  showOverlayPercent: true,
+  showLengthKg: false,
+  showReelName: true,
+  showReelSubName: true,
+  showMaterialName: true,
+  showMaterialColorName: true,
+  showMaterialColorCode: true,
+  showManufacturerName: true,
+  showOverlayBar: true,
+  showPurchaseButton: true,
+  reelName: "",
+  reelSubName: "",
+  materialName: "",
+  materialColorName: "",
+  materialColorCode: "",
+  manufacturerName: ""
+};
+
+/**
  * 必要な CSS を一度だけ注入する。
  *
  * @private
@@ -89,12 +151,12 @@ function injectStyles() {
   styleInjected = true;
   const css = `
     .filament-manager-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:3000;}
-    .filament-manager-modal{background:#fff;border-radius:8px;width:90%;max-width:740px;max-height:90vh;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;overflow:hidden;}
-    .filament-manager-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;}
-    .filament-manager-tabs{display:flex;border-bottom:1px solid #ddd;}
-    .filament-manager-tabs button{flex:1;padding:6px;border:none;background:#f4f4f5;cursor:pointer;}
+    .filament-manager-modal{background:#fff;border-radius:8px;width:92%;max-width:960px;height:85vh;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;overflow:hidden;}
+    .filament-manager-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;flex-shrink:0;}
+    .filament-manager-tabs{display:flex;border-bottom:1px solid #ddd;flex-shrink:0;}
+    .filament-manager-tabs button{flex:1;padding:6px;border:none;background:#f4f4f5;cursor:pointer;font-size:12px;white-space:nowrap;}
     .filament-manager-tabs button.active{background:#fff;border-bottom:2px solid #38bdf8;}
-    .filament-manager-content{padding:8px;overflow-y:auto;max-height:70vh;}
+    .filament-manager-content{padding:8px;overflow-y:auto;flex:1;min-height:0;}
     .filament-manager-content table{width:100%;border-collapse:collapse;}
     .filament-manager-content th,.filament-manager-content td{border:1px solid #ddd;padding:4px;font-size:12px;}
     .filament-manager-content .inv-qty-input{width:60px;text-align:right;}
@@ -105,9 +167,9 @@ function injectStyles() {
     .filament-manager-content .search-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
     .filament-manager-content .search-field legend{font-size:12px;}
     .registered-table tr.selected{background:#e0f2fe;}
-    .registered-container{display:flex;gap:8px;align-items:flex-start;}
-    .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
-    .registered-list{flex:1;overflow-y:auto;max-height:70vh;}
+    .registered-container{display:flex;gap:8px;align-items:flex-start;flex:1;min-height:0;overflow:hidden;}
+    .registered-preview{flex:0 0 140px;min-width:140px;min-height:140px;position:relative;overflow:hidden;}
+    .registered-list{flex:1;overflow-y:auto;min-height:0;}
     .registered-table th{cursor:pointer;}
     .deleted-row td{text-decoration:line-through;background:#eee;}
     .edit-form label{display:block;margin:4px 0;font-size:12px;}
@@ -115,8 +177,28 @@ function injectStyles() {
     .edit-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}
     .carousel-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
     .carousel-field legend{font-size:12px;}
-    .filament-carousel{display:flex;overflow-x:auto;gap:4px;padding:2px 0;}
-    .filament-carousel .carousel-item{flex:0 0 auto;}
+    .filament-carousel{display:flex;overflow-x:auto;gap:8px;padding:4px 0;min-height:100px;}
+    .filament-carousel .carousel-item{flex:0 0 auto;position:relative;min-width:90px;min-height:90px;overflow:hidden;}
+    .spool-state-badge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:bold;line-height:1.4;}
+    .spool-state-mounted{background:#dcfce7;color:#166534;}
+    .spool-state-stored{background:#f3f4f6;color:#4b5563;}
+    .spool-state-exhausted{background:#fef3c7;color:#92400e;}
+    .spool-state-discarded{background:#fee2e2;color:#991b1b;text-decoration:line-through;}
+    .spool-state-inventory{background:#dbeafe;color:#1e40af;}
+    .remain-bar{display:inline-block;width:60px;height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;vertical-align:middle;margin-right:4px;}
+    .remain-bar-fill{height:100%;border-radius:5px;}
+    .dashboard-host-section{border:1px solid #ddd;border-radius:6px;padding:8px;margin-bottom:8px;}
+    .dashboard-host-title{font-weight:bold;font-size:13px;margin-bottom:4px;}
+    .stored-carousel{display:flex;overflow-x:auto;gap:8px;padding:4px 0;min-height:90px;}
+    .stored-carousel .stored-item{flex:0 0 auto;border:1px solid #ddd;border-radius:6px;padding:6px;text-align:center;font-size:11px;cursor:pointer;position:relative;min-width:80px;min-height:80px;overflow:hidden;}
+    .stored-carousel .stored-item:hover{background:#f0f9ff;}
+    .dashboard-summary{display:flex;gap:12px;margin-bottom:8px;font-size:12px;}
+    .dashboard-summary span{padding:2px 8px;border-radius:4px;background:#f4f4f5;}
+    .state-filter-bar{display:flex;gap:4px;margin-bottom:6px;}
+    .state-filter-bar button{padding:2px 8px;border:1px solid #ccc;border-radius:4px;background:#f4f4f5;cursor:pointer;font-size:11px;}
+    .state-filter-bar button.active{background:#38bdf8;color:#fff;border-color:#38bdf8;}
+    .filament-manager-content button{white-space:nowrap;}
+    .filament-manager-content td button{margin:1px;padding:1px 4px;font-size:11px;}
   `;
   const style = document.createElement("style");
   style.textContent = css;
@@ -124,63 +206,14 @@ function injectStyles() {
 }
 
 /**
- * 使用履歴タブの内容を生成する。
+ * スプールオブジェクトからプレビューに渡すオプションのオーバーライドを生成する。
  *
  * @private
- * @returns {HTMLElement} 生成された要素
+ * @param {Object} sp - スプールオブジェクト
+ * @returns {Object} プレビューオプションのオーバーライド
  */
-function createHistoryContent() {
-  const div = document.createElement("div");
-  div.className = "filament-manager-content";
-  const table = document.createElement("table");
-  const thead = document.createElement("thead");
-  thead.innerHTML = "<tr><th>ID</th><th>Spool</th><th>Used(mm)</th><th>Time</th></tr>";
-  table.appendChild(thead);
-  const tbody = document.createElement("tbody");
-  monitorData.usageHistory.forEach(u => {
-    const tr = document.createElement("tr");
-    const t = new Date(Number(u.startedAt || u.timestamp || 0));
-    tr.innerHTML = `<td>${u.usageId || ""}</td><td>${u.spoolId}</td><td>${u.usedLength || 0}</td><td>${t.toLocaleString()}</td>`;
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  div.appendChild(table);
-  return div;
-}
-
-/**
- * 現在スプール表示タブを生成する。
- *
- * @private
- * @param {Function} onUse - 使用ボタン押下時に呼び出す処理
- * @param {Function} onChange - 変更後に呼び出す処理
- * @returns {HTMLElement} DOM 要素
-*/
-function createCurrentSpoolContent() {
-  const div = document.createElement("div");
-  div.className = "filament-manager-content";
-  const sp = getCurrentSpool();
-  if (!sp) {
-    div.textContent = "現在選択中のスプールがありません";
-    return div;
-  }
-  const wrap = document.createElement("div");
-  wrap.className = "registered-container";
-  const prevBox = document.createElement("div");
-  prevBox.className = "registered-preview";
-  wrap.appendChild(prevBox);
-
-  const ul = document.createElement("ul");
-  ul.style.fontSize = "12px";
-  ul.innerHTML = `
-    <li>名前: ${sp.name}</li>
-    <li>材質: ${sp.material}</li>
-    <li>残量: ${sp.remainingLengthMm} / ${sp.totalLengthMm} mm</li>
-  `;
-  wrap.appendChild(ul);
-  div.appendChild(wrap);
-
-  createFilamentPreview(prevBox, {
+function spoolToPreviewOverrides(sp) {
+  return {
     filamentDiameter: sp.filamentDiameter,
     filamentTotalLength: sp.totalLengthMm,
     filamentCurrentLength: sp.remainingLengthMm,
@@ -189,55 +222,313 @@ function createCurrentSpoolContent() {
     reelThickness: sp.reelThickness,
     reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
     reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
-    widthPx: 120,
-    heightPx: 120,
-    showSlider: false,
-    isFilamentPresent: true,
-    showUsedUpIndicator: true,
-    blinkingLightColor: "#0EA5E9",
-    showInfoLength: false,
-    showInfoPercent: false,
-    showInfoLayers: false,
-    showResetButton: false,
-    showProfileViewButton: true,
-    showSideViewButton: true,
-    showFrontViewButton: true,
-    showAutoRotateButton: true,
-    enableDrag: true,
-    enableClick: false,
-    onClick: null,
-    disableInteraction: true,
-    showOverlayLength: true,
-    showOverlayPercent: true,
-    showLengthKg: false,
-    showReelName: true,
-    showReelSubName: true,
-    showMaterialName: true,
-    showMaterialColorName: true,
-    showMaterialColorCode: true,
-    showManufacturerName: true,
-    showOverlayBar: true,
-    showPurchaseButton: true,
+    reelBodyColor: sp.reelBodyColor,
+    reelFlangeTransparency: sp.reelFlangeTransparency,
+    reelWindingForegroundColor: sp.reelWindingForegroundColor,
+    reelCenterHoleForegroundColor: sp.reelCenterHoleForegroundColor,
     reelName: sp.name || "",
     reelSubName: sp.reelSubName || "",
     materialName: sp.materialName || sp.material || "",
     materialColorName: sp.colorName || "",
     materialColorCode: sp.filamentColor || sp.color || "",
     manufacturerName: sp.manufacturerName || sp.brand || ""
-  });
-  return div;
+  };
 }
 
 /**
- * 取り外したスプール一覧タブを生成する。
+ * 残量バー HTML を生成する。
  *
  * @private
- * @returns {{el:HTMLElement, render:function():void}} タブ要素と描画関数
+ * @param {number} remaining - 残量 [mm]
+ * @param {number} total - 全量 [mm]
+ * @param {string} [color="#22C55E"] - バー色
+ * @returns {string} HTML 文字列
  */
-function createUsedSpoolContent(hostname) {
+function renderRemainBar(remaining, total, color) {
+  const pct = total > 0 ? Math.min(100, (remaining / total) * 100) : 0;
+  const barColor = color || "#22C55E";
+  return `<span class="remain-bar"><span class="remain-bar-fill" style="width:${pct.toFixed(1)}%;background:${barColor}"></span></span>${pct.toFixed(0)}%`;
+}
+
+/**
+ * 状態バッジ HTML を生成する。
+ *
+ * @private
+ * @param {string} state - SPOOL_STATE の値
+ * @returns {string} HTML 文字列
+ */
+function renderStateBadge(state) {
+  const label = getSpoolStateLabel(state);
+  return `<span class="spool-state-badge spool-state-${state}">${label}</span>`;
+}
+
+/**
+ * 接続中の全ホスト名リストを取得する（PLACEHOLDER を除外）。
+ *
+ * @private
+ * @returns {string[]} ホスト名配列
+ */
+function getActiveHosts() {
+  return Object.keys(monitorData.machines).filter(h => h !== PLACEHOLDER_HOSTNAME);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Tab 0: ダッシュボード
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ダッシュボードタブの内容を生成する。
+ * 各ホストの装着中スプールと保管中スプールのカルーセルを表示する。
+ *
+ * @private
+ * @param {string} hostname - 現在のホスト名
+ * @param {Function} switchTab - タブ切り替え関数
+ * @returns {HTMLElement} DOM 要素
+ */
+function createDashboardContent(hostname, switchTab) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
+  /** 内部描画 */
+  function render() {
+    div.innerHTML = "";
+
+    const hosts = getActiveHosts();
+    const allSpools = getSpools(true);
+
+    // サマリ集計
+    let mountedCount = 0;
+    let storedCount = 0;
+    let discardedCount = 0;
+    allSpools.forEach(sp => {
+      const st = getSpoolState(sp);
+      if (st === SPOOL_STATE.MOUNTED) mountedCount++;
+      else if (st === SPOOL_STATE.STORED) storedCount++;
+      else if (st === SPOOL_STATE.DISCARDED) discardedCount++;
+    });
+
+    // サマリ行
+    const summary = document.createElement("div");
+    summary.className = "dashboard-summary";
+    summary.innerHTML =
+      `<span>装着中: ${mountedCount}</span>` +
+      `<span>保管中: ${storedCount}</span>` +
+      `<span>廃棄済: ${discardedCount}</span>`;
+    div.appendChild(summary);
+
+    // per-host セクション
+    if (hosts.length === 0) {
+      const noHost = document.createElement("div");
+      noHost.style.fontSize = "12px";
+      noHost.textContent = "接続中のプリンタがありません";
+      div.appendChild(noHost);
+    }
+
+    hosts.forEach(host => {
+      const section = document.createElement("div");
+      section.className = "dashboard-host-section";
+
+      const title = document.createElement("div");
+      title.className = "dashboard-host-title";
+      const machine = monitorData.machines[host] || {};
+      const displayName = machine.storedData?.hostname?.rawValue || machine.storedData?.model?.rawValue || host;
+      title.textContent = displayName;
+      section.appendChild(title);
+
+      const spoolId = getCurrentSpoolId(host);
+      const spool = spoolId ? allSpools.find(s => s.id === spoolId && !s.deleted) : null;
+
+      if (spool) {
+        // 装着中スプールの表示
+        const mountedWrap = document.createElement("div");
+        mountedWrap.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;";
+
+        const prevBox = document.createElement("div");
+        prevBox.style.cssText = "flex:0 0 100px;min-width:100px;min-height:100px;position:relative;";
+        mountedWrap.appendChild(prevBox);
+
+        createFilamentPreview(prevBox, {
+          ...DEFAULT_PREVIEW_OPTIONS,
+          ...spoolToPreviewOverrides(spool),
+          widthPx: 100,
+          heightPx: 100
+        });
+
+        const infoBox = document.createElement("div");
+        infoBox.style.cssText = "flex:1;font-size:12px;";
+        const pct = spool.totalLengthMm > 0
+          ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0)
+          : 0;
+        const colorSwatch = `<span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${spool.filamentColor || spool.color || "#ccc"};vertical-align:middle;margin-right:4px;border:1px solid #aaa;"></span>`;
+        infoBox.innerHTML =
+          `<div><strong>${formatSpoolDisplayId(spool)}</strong> ${spool.name || ""}</div>` +
+          `<div>${colorSwatch}${spool.colorName || ""} / ${spool.materialName || spool.material || ""}</div>` +
+          `<div>${renderRemainBar(spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>`;
+
+        const btnWrap = document.createElement("div");
+        btnWrap.style.cssText = "margin-top:4px;display:flex;gap:4px;";
+        const changeBtn = document.createElement("button");
+        changeBtn.textContent = "交換";
+        changeBtn.style.fontSize = "11px";
+        changeBtn.addEventListener("click", () => {
+          showFilamentChangeDialog(host);
+        });
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "取り外す";
+        removeBtn.style.fontSize = "11px";
+        removeBtn.addEventListener("click", async () => {
+          const ok = await showConfirmDialog({
+            level: "warn",
+            title: "確認",
+            message: `${formatSpoolDisplayId(spool)} を取り外しますか?`,
+            confirmText: "取り外す",
+            cancelText: "キャンセル"
+          });
+          if (!ok) return;
+          setCurrentSpoolId(null, host);
+          render();
+        });
+        btnWrap.append(changeBtn, removeBtn);
+        infoBox.appendChild(btnWrap);
+        mountedWrap.appendChild(infoBox);
+        section.appendChild(mountedWrap);
+      } else {
+        // 未装着
+        const empty = document.createElement("div");
+        empty.style.cssText = "font-size:12px;color:#888;margin-bottom:4px;";
+        empty.textContent = "スプール未装着";
+        const mountBtn = document.createElement("button");
+        mountBtn.textContent = "装着";
+        mountBtn.style.fontSize = "11px";
+        mountBtn.addEventListener("click", () => {
+          // スプール一覧タブへ切り替え
+          switchTab(2);
+        });
+        empty.appendChild(document.createTextNode(" "));
+        empty.appendChild(mountBtn);
+        section.appendChild(empty);
+      }
+
+      div.appendChild(section);
+    });
+
+    // 保管中スプール カルーセル
+    const storedSpools = allSpools.filter(sp => {
+      const st = getSpoolState(sp);
+      return st === SPOOL_STATE.STORED || st === SPOOL_STATE.INVENTORY;
+    });
+
+    if (storedSpools.length > 0) {
+      const storedFs = document.createElement("fieldset");
+      storedFs.className = "carousel-field";
+      const storedLg = document.createElement("legend");
+      storedLg.textContent = "保管中スプール";
+      storedFs.appendChild(storedLg);
+
+      const carousel = document.createElement("div");
+      carousel.className = "stored-carousel";
+
+      storedSpools.forEach(sp => {
+        const item = document.createElement("div");
+        item.className = "stored-item";
+
+        const prevMount = document.createElement("div");
+        prevMount.style.cssText = "position:relative;min-width:60px;min-height:60px;";
+        item.appendChild(prevMount);
+        createFilamentPreview(prevMount, {
+          ...DEFAULT_PREVIEW_OPTIONS,
+          ...spoolToPreviewOverrides(sp),
+          widthPx: 60,
+          heightPx: 60,
+          showOverlayLength: false,
+          showOverlayPercent: false,
+          showOverlayBar: false,
+          showProfileViewButton: false,
+          showSideViewButton: false,
+          showFrontViewButton: false,
+          showAutoRotateButton: false,
+          showPurchaseButton: false,
+          enableDrag: false
+        });
+
+        const pct = sp.totalLengthMm > 0
+          ? ((sp.remainingLengthMm / sp.totalLengthMm) * 100).toFixed(0)
+          : 0;
+        const label = document.createElement("div");
+        label.innerHTML = `${formatSpoolDisplayId(sp)}<br>${pct}%`;
+        item.appendChild(label);
+
+        // 装着ボタン
+        if (hosts.length > 0) {
+          const mountBtn = document.createElement("button");
+          mountBtn.textContent = "装着";
+          mountBtn.style.fontSize = "10px";
+          mountBtn.addEventListener("click", () => {
+            if (hosts.length === 1) {
+              if (!setCurrentSpoolId(sp.id, hosts[0])) {
+                showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+                return;
+              }
+              render();
+            } else {
+              // 複数ホストの場合、ホスト選択ドロップダウンを表示
+              const sel = document.createElement("select");
+              sel.style.fontSize = "10px";
+              hosts.forEach(h => {
+                const m = monitorData.machines[h] || {};
+                const name = m.storedData?.hostname?.rawValue || h;
+                const o = document.createElement("option");
+                o.value = h;
+                o.textContent = name;
+                sel.appendChild(o);
+              });
+              const okBtn = document.createElement("button");
+              okBtn.textContent = "OK";
+              okBtn.style.fontSize = "10px";
+              okBtn.addEventListener("click", () => {
+                if (!setCurrentSpoolId(sp.id, sel.value)) {
+                  showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+                  return;
+                }
+                render();
+              });
+              item.append(sel, okBtn);
+            }
+          });
+          item.appendChild(mountBtn);
+        }
+
+        carousel.appendChild(item);
+      });
+
+      storedFs.appendChild(carousel);
+      div.appendChild(storedFs);
+    }
+  }
+
+  render();
+  return { el: div, render };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Tab 1: 在庫・プリセット（統合）
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 在庫・プリセット統合タブを生成する。
+ * プリセット一覧に在庫数カラムを追加し、開封登録・装着操作を行える。
+ *
+ * @private
+ * @param {string} hostname - 現在のホスト名
+ * @param {Function} switchTab - タブ切り替え関数
+ * @param {Function} onRegisteredRefresh - 登録済みタブの再描画関数
+ * @returns {{el:HTMLElement, render:function():void}} タブ要素と描画関数
+ */
+function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+
+  // 検索フォーム
   const form = document.createElement("form");
   form.className = "search-form";
   const searchFs = document.createElement("fieldset");
@@ -249,18 +540,11 @@ function createUsedSpoolContent(hostname) {
   const brandSel = document.createElement("select");
   const matSel = document.createElement("select");
   const colorSel = document.createElement("select");
-  const remainSel = document.createElement("select");
-  remainSel.innerHTML = `
-    <option value="all">残量</option>
-    <option value="10">10%未満</option>
-    <option value="30">30%未満</option>
-    <option value="60">60%未満</option>
-  `;
   const nameIn = document.createElement("input");
   nameIn.placeholder = "名称";
   const searchBtn = document.createElement("button");
   searchBtn.textContent = "検索";
-  form.append(brandSel, matSel, colorSel, remainSel, nameIn, searchBtn);
+  form.append(brandSel, matSel, colorSel, nameIn, searchBtn);
 
   const countSpan = document.createElement("div");
   countSpan.style.fontSize = "12px";
@@ -279,12 +563,9 @@ function createUsedSpoolContent(hostname) {
   table.className = "registered-table";
   const thead = document.createElement("thead");
   thead.innerHTML =
-    "<tr><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
+    "<tr><th>色見本</th><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
     "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
-    "<th data-sort='reelSubName'>サブ名称</th>" +
-    "<th data-sort='count'>リール使用数</th>" +
-    "<th data-sort='first'>使用開始日時</th>" +
-    "<th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
+    "<th data-sort='qty'>在庫(±)</th><th data-sort='count'>累計使用数</th><th>コマンド</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
@@ -293,65 +574,32 @@ function createUsedSpoolContent(hostname) {
 
   div.append(searchFs, countSpan, wrap);
 
-  const preview = createFilamentPreview(prevBox, {
-    filamentDiameter: 1.75,
-    filamentTotalLength: 336000,
-    filamentCurrentLength: 336000,
-    filamentColor: "#22C55E",
-    reelOuterDiameter: 200,
-    reelThickness: 68,
-    reelWindingInnerDiameter: 95,
-    reelCenterHoleDiameter: 54,
-    widthPx: 120,
-    heightPx: 120,
-    showSlider: false,
-    isFilamentPresent: true,
-    showUsedUpIndicator: true,
-    blinkingLightColor: "#0EA5E9",
-    showInfoLength: false,
-    showInfoPercent: false,
-    showInfoLayers: false,
-    showResetButton: false,
-    showProfileViewButton: true,
-    showSideViewButton: true,
-    showFrontViewButton: true,
-    showAutoRotateButton: true,
-    enableDrag: true,
-    enableClick: false,
-    onClick: null,
-    disableInteraction: true,
-    showOverlayLength: true,
-    showOverlayPercent: true,
-    showLengthKg: false,
-    showReelName: true,
-    showReelSubName: true,
-    showMaterialName: true,
-    showMaterialColorName: true,
-    showMaterialColorCode: true,
-    showManufacturerName: true,
-    showOverlayBar: true,
-    showPurchaseButton: true,
-    reelName: "",
-    reelSubName: "",
-    materialName: "",
-    materialColorName: "",
-    materialColorCode: "",
-    manufacturerName: ""
-  });
+  const preview = createFilamentPreview(prevBox, { ...DEFAULT_PREVIEW_OPTIONS });
 
   let sortKey = "";
   let sortAsc = true;
   let selectedTr = null;
 
+  /** プリセットからスプール使用数を集計する */
   function buildUsageMap() {
     const map = {};
     (monitorData.usageHistory || []).forEach(h => {
-      const m = map[h.spoolId] || { count: 0, first: 0, last: 0 };
+      const sp = monitorData.filamentSpools.find(s => s.id === h.spoolId);
+      if (!sp || !sp.presetId) return;
+      const m = map[sp.presetId] || { count: 0, last: 0 };
+      m.count += 1;
       const t = Number(h.startedAt || 0);
-      if (!m.first || t < m.first) m.first = t;
       if (t > m.last) m.last = t;
-      if (h.usedLength != null) m.count += 1;
-      map[h.spoolId] = m;
+      map[sp.presetId] = m;
+    });
+    return map;
+  }
+
+  /** 在庫データをモデルIDでマップ化 */
+  function buildInvMap() {
+    const map = {};
+    getInventory().forEach(inv => {
+      map[inv.modelId] = inv;
     });
     return map;
   }
@@ -360,55 +608,34 @@ function createUsedSpoolContent(hostname) {
     const brands = new Set();
     const mats = new Set();
     const colors = new Set();
-    list.forEach(sp => {
-      if (sp.manufacturerName) brands.add(sp.manufacturerName);
-      else if (sp.brand) brands.add(sp.brand);
-      if (sp.materialName) mats.add(sp.materialName);
-      else if (sp.material) mats.add(sp.material);
-      if (sp.colorName) colors.add(sp.colorName);
+    list.forEach(p => {
+      if (p.brand) brands.add(p.brand);
+      if (p.material) mats.add(p.material);
+      if (p.colorName) colors.add(p.colorName);
     });
     brandSel.innerHTML = "<option value=''>ブランド</option>";
     [...brands].forEach(b => {
       const o = document.createElement("option");
-      o.value = b;
-      o.textContent = b;
-      brandSel.appendChild(o);
+      o.value = b; o.textContent = b; brandSel.appendChild(o);
     });
     matSel.innerHTML = "<option value=''>材質</option>";
     [...mats].forEach(m => {
       const o = document.createElement("option");
-      o.value = m;
-      o.textContent = m;
-      matSel.appendChild(o);
+      o.value = m; o.textContent = m; matSel.appendChild(o);
     });
     colorSel.innerHTML = "<option value=''>色名</option>";
     [...colors].forEach(c => {
       const o = document.createElement("option");
-      o.value = c;
-      o.textContent = c;
-      colorSel.appendChild(o);
+      o.value = c; o.textContent = c; colorSel.appendChild(o);
     });
   }
 
   function applyFilter(list) {
-    return list.filter(sp => {
-      if (brandSel.value) {
-        const b = sp.manufacturerName || sp.brand || "";
-        if (b !== brandSel.value) return false;
-      }
-      if (matSel.value) {
-        const m = sp.materialName || sp.material || "";
-        if (m !== matSel.value) return false;
-      }
-      if (colorSel.value && sp.colorName !== colorSel.value) return false;
-      if (remainSel.value !== "all") {
-        const perc = (sp.remainingLengthMm / sp.totalLengthMm) * 100;
-        if (perc >= Number(remainSel.value)) return false;
-      }
-      if (nameIn.value) {
-        const n = `${sp.name || ""}${sp.reelName || ""}${sp.reelSubName || ""}`;
-        if (!n.includes(nameIn.value)) return false;
-      }
+    return list.filter(p => {
+      if (brandSel.value && p.brand !== brandSel.value) return false;
+      if (matSel.value && p.material !== matSel.value) return false;
+      if (colorSel.value && p.colorName !== colorSel.value) return false;
+      if (nameIn.value && !(p.name || "").includes(nameIn.value)) return false;
       return true;
     });
   }
@@ -419,40 +646,19 @@ function createUsedSpoolContent(hostname) {
       let va = "";
       let vb = "";
       switch (sortKey) {
-        case "brand":
-          va = a.manufacturerName || a.brand || "";
-          vb = b.manufacturerName || b.brand || "";
-          break;
-        case "material":
-          va = a.materialName || a.material || "";
-          vb = b.materialName || b.material || "";
-          break;
-        case "colorName":
-          va = a.colorName || "";
-          vb = b.colorName || "";
-          break;
-        case "name":
-          va = a.name || a.reelName || "";
-          vb = b.name || b.reelName || "";
-          break;
-        case "reelSubName":
-          va = a.reelSubName || "";
-          vb = b.reelSubName || "";
+        case "brand": va = a.brand || ""; vb = b.brand || ""; break;
+        case "material": va = a.material || ""; vb = b.material || ""; break;
+        case "colorName": va = a.colorName || ""; vb = b.colorName || ""; break;
+        case "name": va = a.name || ""; vb = b.name || ""; break;
+        case "qty":
+          va = invMap[a.presetId]?.quantity || 0;
+          vb = invMap[b.presetId]?.quantity || 0;
           break;
         case "count":
-          va = usageMap[a.id]?.count || 0;
-          vb = usageMap[b.id]?.count || 0;
+          va = usageMap[a.presetId]?.count || 0;
+          vb = usageMap[b.presetId]?.count || 0;
           break;
-        case "first":
-          va = usageMap[a.id]?.first || 0;
-          vb = usageMap[b.id]?.first || 0;
-          break;
-        case "last":
-          va = usageMap[a.id]?.last || 0;
-          vb = usageMap[b.id]?.last || 0;
-          break;
-        default:
-          break;
+        default: break;
       }
       if (va === vb) return 0;
       const cmp = va > vb ? 1 : -1;
@@ -460,80 +666,167 @@ function createUsedSpoolContent(hostname) {
     });
   }
 
+  let usageMap = buildUsageMap();
+  let invMap = buildInvMap();
+
   function render() {
-    const spools = getSpools(true).filter(sp => !sp.isInUse && sp.startedAt);
+    const presets = monitorData.filamentPresets || FILAMENT_PRESETS;
     usageMap = buildUsageMap();
-    fillOptions(spools);
-    const list = sortList(applyFilter(spools));
+    invMap = buildInvMap();
+    fillOptions(presets);
+    const list = sortList(applyFilter(presets));
     tbody.innerHTML = "";
-    list.forEach(sp => {
+    const hosts = getActiveHosts();
+
+    list.forEach(p => {
       const tr = document.createElement("tr");
-      if (sp.deleted) tr.classList.add("deleted-row");
-      const brand = sp.manufacturerName || sp.brand || "";
-      const mat = sp.materialName || sp.material || "";
-      const usage = usageMap[sp.id] || { count: 0, first: 0, last: 0 };
-      const first = usage.first ? new Date(usage.first).toLocaleString() : "";
-      const last = usage.last ? new Date(usage.last).toLocaleString() : "";
-      const colorCell = document.createElement("td");
-      colorCell.innerHTML = `<span style='color:${sp.filamentColor || sp.color || "#000"}'>■</span>${sp.colorName || ""}`;
-      tr.innerHTML = `<td>${brand}</td><td>${mat}</td>`;
-      tr.appendChild(colorCell);
-      tr.innerHTML += `<td>${sp.name || sp.reelName || ""}</td><td>${sp.reelSubName || ""}</td>` +
-        `<td>${usage.count}</td><td>${first}</td><td>${last}</td>`;
+      const usage = usageMap[p.presetId]?.count || 0;
+      const inv = invMap[p.presetId];
+      const qty = inv ? inv.quantity : 0;
+
+      // 色見本
+      const colorTd = document.createElement("td");
+      colorTd.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:${p.color || "#ccc"};border:1px solid #aaa;vertical-align:middle;"></span>`;
+      tr.appendChild(colorTd);
+
+      // ブランド・材質
+      const brandTd = document.createElement("td");
+      brandTd.textContent = p.brand || "";
+      tr.appendChild(brandTd);
+      const matTd = document.createElement("td");
+      matTd.textContent = p.material || "";
+      tr.appendChild(matTd);
+
+      // 色名
+      const cnTd = document.createElement("td");
+      cnTd.textContent = p.colorName || "";
+      tr.appendChild(cnTd);
+
+      // 名称
+      const nameTd = document.createElement("td");
+      nameTd.textContent = p.name || "";
+      tr.appendChild(nameTd);
+
+      // 在庫(±)
+      const qtyTd = document.createElement("td");
+      const minus = document.createElement("button");
+      minus.textContent = "-";
+      minus.className = "inv-adjust";
+      const qtySpan = document.createElement("span");
+      qtySpan.textContent = String(qty);
+      qtySpan.style.margin = "0 4px";
+      const plus = document.createElement("button");
+      plus.textContent = "+";
+      plus.className = "inv-adjust";
+      minus.addEventListener("click", ev => {
+        ev.stopPropagation();
+        const newQty = adjustInventory(p.presetId, -1);
+        qtySpan.textContent = String(newQty);
+      });
+      plus.addEventListener("click", ev => {
+        ev.stopPropagation();
+        const newQty = adjustInventory(p.presetId, 1);
+        qtySpan.textContent = String(newQty);
+      });
+      qtyTd.append(minus, qtySpan, plus);
+      tr.appendChild(qtyTd);
+
+      // 累計使用数
+      const usageTd = document.createElement("td");
+      usageTd.textContent = String(usage);
+      tr.appendChild(usageTd);
+
+      // コマンド
       const cmd = document.createElement("td");
-      if (sp.id === getCurrentSpoolId()) {
-        cmd.textContent = "【現在使用中】";
-      } else if (sp.deleted) {
-        const resBtn = document.createElement("button");
-        resBtn.textContent = "廃棄取り消し";
-        resBtn.addEventListener("click", () => {
-          restoreSpool(sp.id);
+      const regBtn = document.createElement("button");
+      regBtn.textContent = "開封して登録";
+      regBtn.style.fontSize = "11px";
+      regBtn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        addSpoolFromPreset(p);
+        if (onRegisteredRefresh) onRegisteredRefresh();
+        render();
+        showAlert("スプールを登録しました", "success");
+      });
+      cmd.appendChild(regBtn);
+
+      const mountBtn = document.createElement("button");
+      mountBtn.textContent = "開封して装着";
+      mountBtn.style.fontSize = "11px";
+      mountBtn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        const sp = addSpoolFromPreset(p);
+        if (!sp) return;
+        if (hosts.length === 1) {
+          if (!setCurrentSpoolId(sp.id, hosts[0])) {
+            showAlert("装着に失敗しました", "warn");
+            return;
+          }
+          if (onRegisteredRefresh) onRegisteredRefresh();
           render();
-        });
-        cmd.appendChild(resBtn);
-      } else {
-        const del = document.createElement("button");
-        del.textContent = "廃棄する";
-        del.addEventListener("click", () => {
-          deleteSpool(sp.id, hostname);
+          showAlert("スプールを装着しました", "success");
+        } else if (hosts.length > 1) {
+          // ホスト選択ドロップダウン
+          const sel = document.createElement("select");
+          sel.style.fontSize = "10px";
+          hosts.forEach(h => {
+            const m = monitorData.machines[h] || {};
+            const name = m.storedData?.hostname?.rawValue || h;
+            const o = document.createElement("option");
+            o.value = h; o.textContent = name; sel.appendChild(o);
+          });
+          const okBtn = document.createElement("button");
+          okBtn.textContent = "OK";
+          okBtn.style.fontSize = "10px";
+          okBtn.addEventListener("click", () => {
+            if (!setCurrentSpoolId(sp.id, sel.value)) {
+              showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+              return;
+            }
+            if (onRegisteredRefresh) onRegisteredRefresh();
+            render();
+            showAlert("スプールを装着しました", "success");
+          });
+          cmd.append(document.createElement("br"), sel, okBtn);
+        } else {
+          if (onRegisteredRefresh) onRegisteredRefresh();
           render();
-        });
-        const set = document.createElement("button");
-        set.textContent = "再セットする";
-        set.addEventListener("click", () => {
-          setCurrentSpoolId(sp.id, hostname);
-          render();
-        });
-        cmd.append(del, set);
-      }
+          showAlert("スプールを登録しました（装着先が見つかりません）", "info");
+        }
+      });
+      cmd.appendChild(mountBtn);
       tr.appendChild(cmd);
+
+      // 行クリックでプレビュー更新
       tr.addEventListener("click", () => {
         selectedTr?.classList.remove("selected");
         selectedTr = tr;
         tr.classList.add("selected");
         preview.setState({
-          filamentDiameter: sp.filamentDiameter,
-          filamentTotalLength: sp.totalLengthMm,
-          filamentCurrentLength: sp.remainingLengthMm,
-          filamentColor: sp.filamentColor || sp.color,
-          reelOuterDiameter: sp.reelOuterDiameter,
-          reelThickness: sp.reelThickness,
-          reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
-          reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
-          reelName: sp.name || "",
-          reelSubName: sp.reelSubName || "",
-          materialName: sp.materialName || sp.material || "",
-          materialColorName: sp.colorName || "",
-          materialColorCode: sp.filamentColor || sp.color || "",
-          manufacturerName: sp.manufacturerName || sp.brand || ""
+          filamentDiameter: p.filamentDiameter ?? p.diameter,
+          filamentTotalLength: p.filamentTotalLength ?? p.defaultLength,
+          filamentCurrentLength: p.filamentCurrentLength ?? (p.filamentTotalLength ?? p.defaultLength),
+          filamentColor: p.color,
+          reelOuterDiameter: p.reelOuterDiameter,
+          reelThickness: p.reelThickness,
+          reelWindingInnerDiameter: p.reelWindingInnerDiameter,
+          reelCenterHoleDiameter: p.reelCenterHoleDiameter,
+          reelBodyColor: p.reelBodyColor,
+          reelFlangeTransparency: p.reelFlangeTransparency,
+          reelWindingForegroundColor: p.reelWindingForegroundColor,
+          reelCenterHoleForegroundColor: p.reelCenterHoleForegroundColor,
+          reelName: p.name || "",
+          reelSubName: p.reelSubName || "",
+          materialName: p.material,
+          materialColorName: p.colorName,
+          materialColorCode: p.color,
+          manufacturerName: p.brand
         });
       });
       tbody.appendChild(tr);
     });
-    countSpan.textContent = `一覧：(${list.length}/${spools.length}件)`;
+    countSpan.textContent = `一覧：(${list.length}/${presets.length}件)`;
   }
-
-  let usageMap = buildUsageMap();
 
   thead.addEventListener("click", ev => {
     const th = ev.target.closest("th");
@@ -556,71 +849,20 @@ function createUsedSpoolContent(hostname) {
   return { el: div, render };
 }
 
-/**
- * 在庫一覧タブを生成する。
- * 在庫数を増減するボタンと入力欄を備え、直接数量変更が可能。
- *
- * @private
- * @returns {HTMLElement} DOM 要素
- */
-function createInventoryContent() {
-  const div = document.createElement("div");
-  div.className = "filament-manager-content";
-  const table = document.createElement("table");
-  const thead = document.createElement("thead");
-  thead.innerHTML = "<tr><th>ID</th><th>数量</th><th>合計使用数</th></tr>";
-  table.appendChild(thead);
-  const tbody = document.createElement("tbody");
-  getInventory().forEach(inv => {
-    const tr = document.createElement("tr");
-
-    const idTd = document.createElement("td");
-    idTd.textContent = inv.modelId;
-
-    const qtyTd = document.createElement("td");
-    const minus = document.createElement("button");
-    minus.textContent = "-";
-    minus.className = "inv-adjust";
-    minus.addEventListener("click", () => {
-      qtyInput.value = adjustInventory(inv.modelId, -1).toString();
-    });
-
-    const qtyInput = document.createElement("input");
-    qtyInput.type = "number";
-    qtyInput.className = "inv-qty-input";
-    qtyInput.value = inv.quantity;
-    qtyInput.addEventListener("change", () => {
-      qtyInput.value = setInventoryQuantity(inv.modelId, qtyInput.value).toString();
-    });
-
-    const plus = document.createElement("button");
-    plus.textContent = "+";
-    plus.className = "inv-adjust";
-    plus.addEventListener("click", () => {
-      qtyInput.value = adjustInventory(inv.modelId, 1).toString();
-    });
-
-    qtyTd.append(minus, qtyInput, plus);
-
-    const usedTd = document.createElement("td");
-    usedTd.textContent = inv.totalUsedNum;
-
-    tr.append(idTd, qtyTd, usedTd);
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  div.appendChild(table);
-  return div;
-}
+// ═══════════════════════════════════════════════════════════════
+// Tab 2: スプール一覧（強化版）
+// ═══════════════════════════════════════════════════════════════
 
 /**
- * 登録済みフィラメント一覧タブを生成する。
- * 検索フォームと一覧テーブルを備え、編集・追加操作が可能。
+ * スプール一覧タブを生成する。
+ * 全スプール（廃棄済み含む）を状態バッジ・残量バー付きで一覧表示する。
  *
  * @private
- * @returns {HTMLElement} DOM 要素
+ * @param {Function} openEditor - エディタ起動関数
+ * @param {string} hostname - 現在のホスト名
+ * @returns {{el:HTMLElement, render:function():void}} タブ要素と描画関数
  */
-function createRegisteredContent(openEditor) {
+function createRegisteredContent(openEditor, hostname) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
@@ -628,6 +870,32 @@ function createRegisteredContent(openEditor) {
   addBtn.textContent = "新規登録";
   addBtn.style.fontSize = "12px";
   addBtn.style.marginBottom = "4px";
+
+  // 状態フィルタバー
+  const filterBar = document.createElement("div");
+  filterBar.className = "state-filter-bar";
+  const filterStates = [
+    { key: "all", label: "全て" },
+    { key: SPOOL_STATE.MOUNTED, label: "装着中" },
+    { key: SPOOL_STATE.STORED, label: "保管中" },
+    { key: SPOOL_STATE.INVENTORY, label: "未使用" },
+    { key: SPOOL_STATE.EXHAUSTED, label: "使い切り" },
+    { key: SPOOL_STATE.DISCARDED, label: "廃棄済" }
+  ];
+  let activeFilter = "all";
+  filterStates.forEach(fs => {
+    const btn = document.createElement("button");
+    btn.textContent = fs.label;
+    btn.dataset.filter = fs.key;
+    if (fs.key === "all") btn.classList.add("active");
+    btn.addEventListener("click", () => {
+      activeFilter = fs.key;
+      filterBar.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      render();
+    });
+    filterBar.appendChild(btn);
+  });
 
   const favFs = document.createElement("fieldset");
   favFs.className = "carousel-field";
@@ -681,9 +949,11 @@ function createRegisteredContent(openEditor) {
   table.className = "registered-table";
   const thead = document.createElement("thead");
   thead.innerHTML =
-    "<tr><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
+    "<tr><th data-sort='serial'>ID</th><th>状態</th>" +
+    "<th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
     "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
     "<th data-sort='reelSubName'>サブ名称</th>" +
+    "<th>装着先</th><th>残量</th>" +
     "<th data-sort='count'>使用数</th><th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
@@ -691,53 +961,9 @@ function createRegisteredContent(openEditor) {
   listBox.appendChild(table);
   wrap.appendChild(listBox);
 
-  div.append(addBtn, favFs, freqFs, searchFs, countSpan, wrap);
+  div.append(addBtn, filterBar, favFs, freqFs, searchFs, countSpan, wrap);
 
-  const preview = createFilamentPreview(prevBox, {
-    filamentDiameter: 1.75,
-    filamentTotalLength: 336000,
-    filamentCurrentLength: 336000,
-    filamentColor: "#22C55E",
-    reelOuterDiameter: 200,
-    reelThickness: 68,
-    reelWindingInnerDiameter: 95,
-    reelCenterHoleDiameter: 54,
-    widthPx: 120,
-    heightPx: 120,
-    showSlider: false,
-    isFilamentPresent: true,
-    showUsedUpIndicator: true,
-    blinkingLightColor: "#0EA5E9",
-    showInfoLength: false,
-    showInfoPercent: false,
-    showInfoLayers: false,
-    showResetButton: false,
-    showProfileViewButton: true,
-    showSideViewButton: true,
-    showFrontViewButton: true,
-    showAutoRotateButton: true,
-    enableDrag: true,
-    enableClick: false,
-    onClick: null,
-    disableInteraction: true,
-    showOverlayLength: true,
-    showOverlayPercent: true,
-    showLengthKg: false,
-    showReelName: true,
-    showReelSubName: true,
-    showMaterialName: true,
-    showMaterialColorName: true,
-    showMaterialColorCode: true,
-    showManufacturerName: true,
-    showOverlayBar: true,
-    showPurchaseButton: true,
-    reelName: "",
-    reelSubName: "",
-    materialName: "",
-    materialColorName: "",
-    materialColorCode: "",
-    manufacturerName: ""
-  });
+  const preview = createFilamentPreview(prevBox, { ...DEFAULT_PREVIEW_OPTIONS });
 
   let sortKey = "";
   let sortAsc = true;
@@ -769,28 +995,27 @@ function createRegisteredContent(openEditor) {
     brandSel.innerHTML = "<option value=''>ブランド</option>";
     [...brands].forEach(b => {
       const o = document.createElement("option");
-      o.value = b;
-      o.textContent = b;
-      brandSel.appendChild(o);
+      o.value = b; o.textContent = b; brandSel.appendChild(o);
     });
     matSel.innerHTML = "<option value=''>材質</option>";
     [...mats].forEach(m => {
       const o = document.createElement("option");
-      o.value = m;
-      o.textContent = m;
-      matSel.appendChild(o);
+      o.value = m; o.textContent = m; matSel.appendChild(o);
     });
     colorSel.innerHTML = "<option value=''>色名</option>";
     [...colors].forEach(c => {
       const o = document.createElement("option");
-      o.value = c;
-      o.textContent = c;
-      colorSel.appendChild(o);
+      o.value = c; o.textContent = c; colorSel.appendChild(o);
     });
   }
 
   function applyFilter(spools) {
     return spools.filter(sp => {
+      // 状態フィルタ
+      if (activeFilter !== "all") {
+        const st = getSpoolState(sp);
+        if (st !== activeFilter) return false;
+      }
       if (brandSel.value) {
         const b = sp.manufacturerName || sp.brand || "";
         if (b !== brandSel.value) return false;
@@ -816,6 +1041,10 @@ function createRegisteredContent(openEditor) {
       let va = "";
       let vb = "";
       switch (sortKey) {
+        case "serial":
+          va = a.serialNo || 0;
+          vb = b.serialNo || 0;
+          break;
         case "brand":
           va = a.manufacturerName || a.brand || "";
           vb = b.manufacturerName || b.brand || "";
@@ -856,8 +1085,9 @@ function createRegisteredContent(openEditor) {
   function updateCarousels(list) {
     favCarousel.innerHTML = "";
     freqCarousel.innerHTML = "";
-    const favs = list.filter(sp => sp.isFavorite);
-    const freq = list
+    const nonDeleted = list.filter(sp => !sp.deleted);
+    const favs = nonDeleted.filter(sp => sp.isFavorite);
+    const freq = nonDeleted
       .map(sp => ({ sp, c: usageMap[sp.id]?.count || 0 }))
       .sort((a, b) => b.c - a.c)
       .slice(0, 5)
@@ -867,23 +1097,11 @@ function createRegisteredContent(openEditor) {
       item.className = "carousel-item";
       box.appendChild(item);
       createFilamentPreview(item, {
-        filamentDiameter: sp.filamentDiameter,
-        filamentTotalLength: sp.totalLengthMm,
-        filamentCurrentLength: sp.remainingLengthMm,
-        filamentColor: sp.filamentColor || sp.color,
-        reelOuterDiameter: sp.reelOuterDiameter,
-        reelThickness: sp.reelThickness,
-        reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
-        reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
+        ...DEFAULT_PREVIEW_OPTIONS,
+        ...spoolToPreviewOverrides(sp),
         widthPx: 80,
         heightPx: 80,
         showSlider: false,
-        isFilamentPresent: true,
-        showUsedUpIndicator: true,
-        enableDrag: false,
-        enableClick: true,
-        onClick: () => openEditor(sp, render),
-        disableInteraction: true,
         showOverlayLength: false,
         showOverlayPercent: false,
         showOverlayBar: false,
@@ -891,8 +1109,10 @@ function createRegisteredContent(openEditor) {
         showSideViewButton: false,
         showFrontViewButton: false,
         showAutoRotateButton: false,
-        showReelName: true,
-        reelName: sp.name || ""
+        enableDrag: false,
+        enableClick: true,
+        onClick: () => openEditor(sp, render),
+        showPurchaseButton: false
       });
     };
     favs.forEach(sp => addItem(sp, favCarousel));
@@ -900,59 +1120,199 @@ function createRegisteredContent(openEditor) {
   }
 
   function render() {
-    const spools = getSpools();
+    // 全スプール取得（廃棄済み含む）
+    const spools = getSpools(true);
     usageMap = buildMaps();
     updateCarousels(spools);
     fillOptions(spools);
     const list = sortList(applyFilter(spools));
+    const hosts = getActiveHosts();
     tbody.innerHTML = "";
     list.forEach(sp => {
       const tr = document.createElement("tr");
+      if (sp.deleted) tr.classList.add("deleted-row");
+
+      const state = getSpoolState(sp);
       const brand = sp.manufacturerName || sp.brand || "";
       const mat = sp.materialName || sp.material || "";
-      const colorCell = document.createElement("td");
-      colorCell.innerHTML = `<span style='color:${sp.filamentColor || sp.color || "#000"}'>■</span>${sp.colorName || ""}`;
-      const name = sp.name || sp.reelName || "";
-      const sub = sp.reelSubName || "";
       const usage = usageMap[sp.id]?.count || 0;
       const last = usageMap[sp.id]?.last
         ? new Date(usageMap[sp.id].last).toLocaleString()
         : "";
-      tr.innerHTML = `<td>${brand}</td><td>${mat}</td>`;
+
+      // #NNN ID
+      const idTd = document.createElement("td");
+      idTd.textContent = formatSpoolDisplayId(sp);
+      tr.appendChild(idTd);
+
+      // 状態バッジ
+      const stateTd = document.createElement("td");
+      stateTd.innerHTML = renderStateBadge(state);
+      tr.appendChild(stateTd);
+
+      // ブランド
+      const brandTd = document.createElement("td");
+      brandTd.textContent = brand;
+      tr.appendChild(brandTd);
+
+      // 材質
+      const matTd = document.createElement("td");
+      matTd.textContent = mat;
+      tr.appendChild(matTd);
+
+      // 色名
+      const colorCell = document.createElement("td");
+      colorCell.innerHTML = `<span style='color:${sp.filamentColor || sp.color || "#000"}'>&#9632;</span>${sp.colorName || ""}`;
       tr.appendChild(colorCell);
-      tr.innerHTML += `<td>${name}</td><td>${sub}</td><td>${usage}</td><td>${last}</td>`;
+
+      // 名称
+      const nameTd = document.createElement("td");
+      nameTd.textContent = sp.name || sp.reelName || "";
+      tr.appendChild(nameTd);
+
+      // サブ名称
+      const subTd = document.createElement("td");
+      subTd.textContent = sp.reelSubName || "";
+      tr.appendChild(subTd);
+
+      // 装着先
+      const hostTd = document.createElement("td");
+      hostTd.textContent = sp.hostname || "--";
+      tr.appendChild(hostTd);
+
+      // 残量バー
+      const remainTd = document.createElement("td");
+      remainTd.innerHTML = renderRemainBar(
+        sp.remainingLengthMm || 0,
+        sp.totalLengthMm || 0,
+        sp.filamentColor || sp.color
+      );
+      tr.appendChild(remainTd);
+
+      // 使用数
+      const usageTd = document.createElement("td");
+      usageTd.textContent = String(usage);
+      tr.appendChild(usageTd);
+
+      // 最終利用日時
+      const lastTd = document.createElement("td");
+      lastTd.textContent = last;
+      tr.appendChild(lastTd);
+
+      // コマンド
       const cmd = document.createElement("td");
-      const edit = document.createElement("button");
-      edit.textContent = "編集";
-      edit.addEventListener("click", () => {
-        openEditor(sp, render);
-      });
-      cmd.appendChild(edit);
+      switch (state) {
+        case SPOOL_STATE.MOUNTED: {
+          const editBtn = document.createElement("button");
+          editBtn.textContent = "編集";
+          editBtn.style.fontSize = "11px";
+          editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "取り外す";
+          removeBtn.style.fontSize = "11px";
+          removeBtn.addEventListener("click", ev => {
+            ev.stopPropagation();
+            setCurrentSpoolId(null, sp.hostname || hostname);
+            render();
+          });
+          cmd.append(editBtn, removeBtn);
+          break;
+        }
+        case SPOOL_STATE.STORED:
+        case SPOOL_STATE.INVENTORY: {
+          const mountBtn = document.createElement("button");
+          mountBtn.textContent = "装着";
+          mountBtn.style.fontSize = "11px";
+          mountBtn.addEventListener("click", ev => {
+            ev.stopPropagation();
+            if (hosts.length === 1) {
+              if (!setCurrentSpoolId(sp.id, hosts[0])) {
+                showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+                return;
+              }
+              render();
+            } else if (hosts.length > 1) {
+              const sel = document.createElement("select");
+              sel.style.fontSize = "10px";
+              hosts.forEach(h => {
+                const m = monitorData.machines[h] || {};
+                const name = m.storedData?.hostname?.rawValue || h;
+                const o = document.createElement("option");
+                o.value = h; o.textContent = name; sel.appendChild(o);
+              });
+              const okBtn = document.createElement("button");
+              okBtn.textContent = "OK";
+              okBtn.style.fontSize = "10px";
+              okBtn.addEventListener("click", () => {
+                if (!setCurrentSpoolId(sp.id, sel.value)) {
+                  showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+                  return;
+                }
+                render();
+              });
+              cmd.append(sel, okBtn);
+            }
+          });
+          const editBtn = document.createElement("button");
+          editBtn.textContent = "編集";
+          editBtn.style.fontSize = "11px";
+          editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
+          const delBtn = document.createElement("button");
+          delBtn.textContent = "廃棄";
+          delBtn.style.fontSize = "11px";
+          delBtn.addEventListener("click", ev => {
+            ev.stopPropagation();
+            deleteSpool(sp.id, hostname);
+            render();
+          });
+          cmd.append(mountBtn, editBtn, delBtn);
+          break;
+        }
+        case SPOOL_STATE.EXHAUSTED: {
+          const editBtn = document.createElement("button");
+          editBtn.textContent = "編集";
+          editBtn.style.fontSize = "11px";
+          editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
+          const delBtn = document.createElement("button");
+          delBtn.textContent = "廃棄";
+          delBtn.style.fontSize = "11px";
+          delBtn.addEventListener("click", ev => {
+            ev.stopPropagation();
+            deleteSpool(sp.id, hostname);
+            render();
+          });
+          cmd.append(editBtn, delBtn);
+          break;
+        }
+        case SPOOL_STATE.DISCARDED: {
+          const resBtn = document.createElement("button");
+          resBtn.textContent = "復活";
+          resBtn.style.fontSize = "11px";
+          resBtn.addEventListener("click", ev => {
+            ev.stopPropagation();
+            restoreSpool(sp.id);
+            render();
+          });
+          cmd.appendChild(resBtn);
+          break;
+        }
+        default: {
+          const editBtn = document.createElement("button");
+          editBtn.textContent = "編集";
+          editBtn.style.fontSize = "11px";
+          editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
+          cmd.appendChild(editBtn);
+          break;
+        }
+      }
       tr.appendChild(cmd);
+
+      // 行クリックでプレビュー更新
       tr.addEventListener("click", () => {
         selectedTr?.classList.remove("selected");
         selectedTr = tr;
         tr.classList.add("selected");
-        preview.setState({
-          filamentDiameter: sp.filamentDiameter,
-          filamentTotalLength: sp.totalLengthMm,
-          filamentCurrentLength: sp.remainingLengthMm,
-          filamentColor: sp.filamentColor || sp.color,
-          reelOuterDiameter: sp.reelOuterDiameter,
-          reelThickness: sp.reelThickness,
-          reelWindingInnerDiameter: sp.reelWindingInnerDiameter,
-          reelCenterHoleDiameter: sp.reelCenterHoleDiameter,
-          reelBodyColor: sp.reelBodyColor,
-          reelFlangeTransparency: sp.reelFlangeTransparency,
-          reelWindingForegroundColor: sp.reelWindingForegroundColor,
-          reelCenterHoleForegroundColor: sp.reelCenterHoleForegroundColor,
-          reelName: sp.name || "",
-          reelSubName: sp.reelSubName || "",
-          materialName: sp.materialName || sp.material || "",
-          materialColorName: sp.colorName || "",
-          materialColorCode: sp.filamentColor || sp.color || "",
-          manufacturerName: sp.manufacturerName || sp.brand || ""
-        });
+        preview.setState(spoolToPreviewOverrides(sp));
       });
       tbody.appendChild(tr);
     });
@@ -986,317 +1346,265 @@ function createRegisteredContent(openEditor) {
   return { el: div, render };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Tab 3: 使用履歴（強化版）
+// ═══════════════════════════════════════════════════════════════
+
 /**
- * プリセット一覧タブを生成する。
+ * 使用履歴タブの内容を生成する。
+ * 種別フィルタ付きで、人間可読なスプール情報・ジョブ情報を表示する。
  *
  * @private
- * @param {Function} onUse - プリセット使用時の処理
- * @param {Function} onChange - 登録状態変更時の処理
- * @returns {HTMLElement} DOM 要素
+ * @returns {HTMLElement} 生成された要素
  */
-function createPresetContent(onUse, onChange, hostname) {
+function createHistoryContent() {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
-  const form = document.createElement("form");
-  form.className = "search-form";
-  const searchFs = document.createElement("fieldset");
-  searchFs.className = "search-field";
-  const searchLg = document.createElement("legend");
-  searchLg.textContent = "検索";
-  searchFs.appendChild(searchLg);
-  searchFs.appendChild(form);
-  const brandSel = document.createElement("select");
-  const matSel = document.createElement("select");
-  const colorSel = document.createElement("select");
-  const nameIn = document.createElement("input");
-  nameIn.placeholder = "名称";
-  const searchBtn = document.createElement("button");
-  searchBtn.textContent = "検索";
-  form.append(brandSel, matSel, colorSel, nameIn, searchBtn);
-
-  const countSpan = document.createElement("div");
-  countSpan.style.fontSize = "12px";
-  countSpan.style.margin = "4px 0";
-
-  const wrap = document.createElement("div");
-  wrap.className = "registered-container";
-  const prevBox = document.createElement("div");
-  prevBox.className = "registered-preview";
-  wrap.appendChild(prevBox);
-
-  const listBox = document.createElement("div");
-  listBox.className = "registered-list";
+  // 種別フィルタ
+  const filterBar = document.createElement("div");
+  filterBar.className = "state-filter-bar";
+  const typeFilters = [
+    { key: "all", label: "全て" },
+    { key: "consume", label: "消費" },
+    { key: "mount", label: "装着" },
+    { key: "snapshot", label: "スナップショット" }
+  ];
+  let activeType = "all";
+  typeFilters.forEach(tf => {
+    const btn = document.createElement("button");
+    btn.textContent = tf.label;
+    if (tf.key === "all") btn.classList.add("active");
+    btn.addEventListener("click", () => {
+      activeType = tf.key;
+      filterBar.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      renderTable();
+    });
+    filterBar.appendChild(btn);
+  });
+  div.appendChild(filterBar);
 
   const table = document.createElement("table");
-  table.className = "registered-table";
   const thead = document.createElement("thead");
-  thead.innerHTML =
-    "<tr><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
-    "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
-    "<th data-sort='reelSubName'>サブ名称</th>" +
-    "<th data-sort='count'>使用数</th><th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
+  thead.innerHTML = "<tr><th>日時</th><th>スプール</th><th>印刷ジョブ</th><th>使用量(mm)</th><th>残量(mm)</th><th>種別</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
-  listBox.appendChild(table);
-  wrap.appendChild(listBox);
+  div.appendChild(table);
 
-  div.append(searchFs, countSpan, wrap);
-
-  const preview = createFilamentPreview(prevBox, {
-    filamentDiameter: 1.75,
-    filamentTotalLength: 336000,
-    filamentCurrentLength: 336000,
-    filamentColor: "#22C55E",
-    reelOuterDiameter: 200,
-    reelThickness: 68,
-    reelWindingInnerDiameter: 95,
-    reelCenterHoleDiameter: 54,
-    widthPx: 120,
-    heightPx: 120,
-    showSlider: false,
-    isFilamentPresent: true,
-    showUsedUpIndicator: true,
-    blinkingLightColor: "#0EA5E9",
-    showInfoLength: false,
-    showInfoPercent: false,
-    showInfoLayers: false,
-    showResetButton: false,
-    showProfileViewButton: true,
-    showSideViewButton: true,
-    showFrontViewButton: true,
-    showAutoRotateButton: true,
-    enableDrag: true,
-    enableClick: false,
-    onClick: null,
-    disableInteraction: true,
-    showOverlayLength: true,
-    showOverlayPercent: true,
-    showLengthKg: false,
-    showReelName: true,
-    showReelSubName: true,
-    showMaterialName: true,
-    showMaterialColorName: true,
-    showMaterialColorCode: true,
-    showManufacturerName: true,
-    showOverlayBar: true,
-    showPurchaseButton: true,
-    reelName: "",
-    reelSubName: "",
-    materialName: "",
-    materialColorName: "",
-    materialColorCode: "",
-    manufacturerName: ""
-  });
-
-  let sortKey = "";
-  let sortAsc = true;
-  let selectedTr = null;
-
-  function buildUsageMap() {
-    const map = {};
-    (monitorData.usageHistory || []).forEach(h => {
-      const sp = monitorData.filamentSpools.find(s => s.id === h.spoolId);
-      if (!sp || !sp.presetId) return;
-      const m = map[sp.presetId] || { count: 0, last: 0 };
-      m.count += 1;
-      const t = Number(h.startedAt || 0);
-      if (t > m.last) m.last = t;
-      map[sp.presetId] = m;
-    });
-    return map;
+  /** スプールIDからスプール情報を取得（削除済み含む） */
+  function findSpool(id) {
+    return monitorData.filamentSpools.find(s => s.id === id) || null;
   }
 
-  function buildExistsMap() {
-    const map = {};
-    getSpools().forEach(sp => {
-      if (sp.presetId && !sp.deleted) map[sp.presetId] = true;
-    });
-    return map;
+  /** 使用履歴レコードの種別を判定する */
+  function getRecordType(u) {
+    if (u.isSnapshot) return "snapshot";
+    if (u.usedLength != null) return "consume";
+    if (u.startLength != null) return "mount";
+    return "unknown";
   }
 
-  function fillOptions(list) {
-    const brands = new Set();
-    const mats = new Set();
-    const colors = new Set();
-    list.forEach(p => {
-      if (p.brand) brands.add(p.brand);
-      if (p.material) mats.add(p.material);
-      if (p.colorName) colors.add(p.colorName);
-    });
-    brandSel.innerHTML = "<option value=''>ブランド</option>";
-    [...brands].forEach(b => {
-      const o = document.createElement("option");
-      o.value = b;
-      o.textContent = b;
-      brandSel.appendChild(o);
-    });
-    matSel.innerHTML = "<option value=''>材質</option>";
-    [...mats].forEach(m => {
-      const o = document.createElement("option");
-      o.value = m;
-      o.textContent = m;
-      matSel.appendChild(o);
-    });
-    colorSel.innerHTML = "<option value=''>色名</option>";
-    [...colors].forEach(c => {
-      const o = document.createElement("option");
-      o.value = c;
-      o.textContent = c;
-      colorSel.appendChild(o);
-    });
+  /** 種別の日本語ラベルを返す */
+  function getTypeLabel(type) {
+    switch (type) {
+      case "snapshot": return "スナップショット";
+      case "consume": return "消費";
+      case "mount": return "装着";
+      default: return "不明";
+    }
   }
 
-  function applyFilter(list) {
-    return list.filter(p => {
-      if (brandSel.value && p.brand !== brandSel.value) return false;
-      if (matSel.value && p.material !== matSel.value) return false;
-      if (colorSel.value && p.colorName !== colorSel.value) return false;
-      if (nameIn.value && !(p.name || "").includes(nameIn.value)) return false;
-      return true;
-    });
-  }
-
-  function sortList(list) {
-    if (!sortKey) return list;
-    return list.sort((a, b) => {
-      let va = "";
-      let vb = "";
-      switch (sortKey) {
-        case "brand":
-          va = a.brand || "";
-          vb = b.brand || "";
-          break;
-        case "material":
-          va = a.material || "";
-          vb = b.material || "";
-          break;
-        case "colorName":
-          va = a.colorName || "";
-          vb = b.colorName || "";
-          break;
-        case "name":
-          va = a.name || "";
-          vb = b.name || "";
-          break;
-        case "reelSubName":
-          va = a.reelSubName || "";
-          vb = b.reelSubName || "";
-          break;
-        case "count":
-          va = usageMap[a.presetId]?.count || 0;
-          vb = usageMap[b.presetId]?.count || 0;
-          break;
-        case "last":
-          va = usageMap[a.presetId]?.last || 0;
-          vb = usageMap[b.presetId]?.last || 0;
-          break;
-        default:
-          break;
+  /** 印刷ジョブIDからジョブ名を解決する */
+  function resolveJobName(jobId) {
+    if (!jobId) return "";
+    // 各ホストの historyData からジョブ名を探す
+    for (const host of Object.keys(monitorData.machines)) {
+      const machine = monitorData.machines[host];
+      if (!machine || !Array.isArray(machine.historyData)) continue;
+      const entry = machine.historyData.find(h => h.id === jobId);
+      if (entry) {
+        return entry.name || entry.filename || jobId;
       }
-      if (va === vb) return 0;
-      const cmp = va > vb ? 1 : -1;
-      return sortAsc ? cmp : -cmp;
-    });
+    }
+    return jobId;
   }
 
-  function render() {
-    const presets = monitorData.filamentPresets || FILAMENT_PRESETS;
-    usageMap = buildUsageMap();
-    existsMap = buildExistsMap();
-    fillOptions(presets);
-    const list = sortList(applyFilter(presets));
+  function renderTable() {
     tbody.innerHTML = "";
-    list.forEach(p => {
+    const history = [...(monitorData.usageHistory || [])].reverse();
+
+    history.forEach(u => {
+      const type = getRecordType(u);
+
+      // 種別フィルタ
+      if (activeType !== "all" && type !== activeType) return;
+
       const tr = document.createElement("tr");
-      const usage = usageMap[p.presetId]?.count || 0;
-      const last = usageMap[p.presetId]?.last
-        ? new Date(usageMap[p.presetId].last).toLocaleString()
-        : "";
-      tr.innerHTML = `<td>${p.brand || ""}</td><td>${p.material || ""}</td>`;
-      const colorCell = document.createElement("td");
-      colorCell.innerHTML = `<span style='color:${p.color}'>■</span>${p.colorName || ""}`;
-      tr.appendChild(colorCell);
-      tr.innerHTML += `<td>${p.name || ""}</td><td>${p.reelSubName || ""}</td><td>${usage}</td><td>${last}</td>`;
-      const cmd = document.createElement("td");
-      const btn = document.createElement("button");
-      if (existsMap[p.presetId]) {
-        btn.textContent = "登録済み";
-        btn.disabled = true;
-        const quit = document.createElement("button");
-        quit.textContent = "やめる";
-        quit.addEventListener("click", () => {
-          const sp = getSpools().find(s => s.presetId === p.presetId && !s.deleted);
-          if (sp) deleteSpool(sp.id, hostname);
-          render();
-          onChange();
-        });
-        cmd.append(btn, quit);
+
+      // 日時
+      const timeTd = document.createElement("td");
+      const t = new Date(Number(u.startedAt || u.timestamp || 0));
+      timeTd.textContent = t.toLocaleString();
+      tr.appendChild(timeTd);
+
+      // スプール情報
+      const spoolTd = document.createElement("td");
+      const sp = findSpool(u.spoolId);
+      if (sp) {
+        const colorSwatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sp.filamentColor || sp.color || "#ccc"};vertical-align:middle;margin-right:3px;border:1px solid #aaa;"></span>`;
+        spoolTd.innerHTML = `${formatSpoolDisplayId(sp)} ${colorSwatch}${sp.name || ""}`;
       } else {
-        btn.textContent = "使う";
-        btn.addEventListener("click", () => {
-          onUse(p);
-          render();
-          onChange();
-        });
-        cmd.appendChild(btn);
+        spoolTd.textContent = u.spoolId || "";
       }
-      tr.appendChild(cmd);
-      tr.addEventListener("click", () => {
-        selectedTr?.classList.remove("selected");
-        selectedTr = tr;
-        tr.classList.add("selected");
-        preview.setState({
-          filamentDiameter: p.filamentDiameter ?? p.diameter,
-          filamentTotalLength: p.filamentTotalLength ?? p.defaultLength,
-          filamentCurrentLength:
-            p.filamentCurrentLength ?? (p.filamentTotalLength ?? p.defaultLength),
-          filamentColor: p.color,
-          reelOuterDiameter: p.reelOuterDiameter,
-          reelThickness: p.reelThickness,
-          reelWindingInnerDiameter: p.reelWindingInnerDiameter,
-          reelCenterHoleDiameter: p.reelCenterHoleDiameter,
-          reelBodyColor: p.reelBodyColor,
-          reelFlangeTransparency: p.reelFlangeTransparency,
-          reelWindingForegroundColor: p.reelWindingForegroundColor,
-          reelCenterHoleForegroundColor: p.reelCenterHoleForegroundColor,
-          reelName: p.name || "",
-          reelSubName: p.reelSubName || "",
-          materialName: p.material,
-          materialColorName: p.colorName,
-          materialColorCode: p.color,
-          manufacturerName: p.brand
-        });
-      });
+      tr.appendChild(spoolTd);
+
+      // 印刷ジョブ
+      const jobTd = document.createElement("td");
+      const rawJobId = u.jobId || u.startPrintID || "";
+      jobTd.textContent = resolveJobName(rawJobId);
+      jobTd.title = rawJobId; // ホバーで内部IDを表示
+      tr.appendChild(jobTd);
+
+      // 使用量
+      const usedTd = document.createElement("td");
+      usedTd.textContent = u.usedLength != null ? Number(u.usedLength).toLocaleString() : "--";
+      tr.appendChild(usedTd);
+
+      // 残量
+      const remainTd = document.createElement("td");
+      remainTd.textContent = u.currentLength != null ? Number(u.currentLength).toLocaleString() : (u.startLength != null ? Number(u.startLength).toLocaleString() : "--");
+      tr.appendChild(remainTd);
+
+      // 種別
+      const typeTd = document.createElement("td");
+      typeTd.textContent = getTypeLabel(type);
+      tr.appendChild(typeTd);
+
       tbody.appendChild(tr);
     });
-    countSpan.textContent = `一覧：(${list.length}/${presets.length}件)`;
   }
 
-  let usageMap = buildUsageMap();
-  let existsMap = buildExistsMap();
-
-  thead.addEventListener("click", ev => {
-    const th = ev.target.closest("th");
-    if (!th || !th.dataset.sort) return;
-    if (sortKey === th.dataset.sort) {
-      sortAsc = !sortAsc;
-    } else {
-      sortKey = th.dataset.sort;
-      sortAsc = true;
-    }
-    render();
-  });
-
-  form.addEventListener("submit", ev => {
-    ev.preventDefault();
-    render();
-  });
-
-  render();
-  return { el: div, render };
+  renderTable();
+  return div;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Tab 4: 集計レポート（既存維持）
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 日付から週番号キー (YYYY-WW) を生成する。
+ *
+ * @private
+ * @param {Date} date - 変換対象の日付
+ * @returns {string} 週キー
+ */
+function formatWeekKey(date) {
+  const first = new Date(date.getFullYear(), 0, 1);
+  const days = Math.floor((date - first) / 86400000);
+  const week = Math.floor((days + first.getDay()) / 7) + 1;
+  return `${date.getFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/**
+ * 日付から月番号キー (YYYY-MM) を生成する。
+ *
+ * @private
+ * @param {Date} date - 変換対象の日付
+ * @returns {string} 月キー
+ */
+function formatMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * 集計レポートタブの内容を生成する。
+ * 日別集計テーブルに加え、週次・月次のグラフを表示する。
+ *
+ * @private
+ * @returns {HTMLElement} DOM 要素
+ */
+function createReportContent() {
+  const div = document.createElement("div");
+  div.className = "filament-manager-content";
+
+  // ── 1) 日別集計テーブル ───────────────────────────────
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>日付</th><th>スプール数</th><th>消費量(mm)</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+
+  const dailyMap = {};
+  const weeklyMap = {};
+  const monthlyMap = {};
+
+  (monitorData.usageHistory || []).forEach(u => {
+    const dateObj = new Date(Number(u.startedAt || 0));
+    const dayKey = dateObj.toISOString().slice(0, 10);
+    if (!dailyMap[dayKey]) dailyMap[dayKey] = { ids: new Set(), len: 0 };
+    dailyMap[dayKey].ids.add(u.spoolId);
+    const used = Number(u.usedLength || 0);
+    dailyMap[dayKey].len += used;
+
+    const wKey = formatWeekKey(dateObj);
+    weeklyMap[wKey] = (weeklyMap[wKey] || 0) + used;
+
+    const mKey = formatMonthKey(dateObj);
+    monthlyMap[mKey] = (monthlyMap[mKey] || 0) + used;
+  });
+
+  Object.entries(dailyMap)
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .forEach(([d, info]) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${d}</td><td>${info.ids.size}</td><td>${info.len.toLocaleString()}</td>`;
+      tbody.appendChild(tr);
+    });
+  table.appendChild(tbody);
+  div.appendChild(table);
+
+  // ── 2) 週次・月次の消費量を Chart.js で表示 ─────────────────
+  const weekCanvas = document.createElement("canvas");
+  weekCanvas.style.maxHeight = "200px";
+  div.appendChild(weekCanvas);
+
+  const monthCanvas = document.createElement("canvas");
+  monthCanvas.style.maxHeight = "200px";
+  div.appendChild(monthCanvas);
+
+  if (typeof Chart !== "undefined") {
+    new Chart(weekCanvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: Object.keys(weeklyMap),
+        datasets: [
+          { label: "週次消費量(mm)", data: Object.values(weeklyMap) }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+
+    new Chart(monthCanvas.getContext("2d"), {
+      type: "pie",
+      data: {
+        labels: Object.keys(monthlyMap),
+        datasets: [
+          { label: "月次消費量(mm)", data: Object.values(monthlyMap) }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+  }
+
+  return div;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// エディタ（非表示タブ、既存維持）
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * スプール登録・編集タブを生成する。
@@ -1538,51 +1846,7 @@ function createEditorContent(onDone) {
 
   form.append(spoolField, filamentField, btnBox);
 
-  const preview = createFilamentPreview(prevBox, {
-    filamentDiameter: 1.75,
-    filamentTotalLength: 336000,
-    filamentCurrentLength: 336000,
-    filamentColor: "#22C55E",
-    reelOuterDiameter: 200,
-    reelThickness: 68,
-    reelWindingInnerDiameter: 95,
-    reelCenterHoleDiameter: 54,
-    widthPx: 120,
-    heightPx: 120,
-    showSlider: false,
-    isFilamentPresent: true,
-    showUsedUpIndicator: true,
-    blinkingLightColor: "#0EA5E9",
-    showInfoLength: false,
-    showInfoPercent: false,
-    showInfoLayers: false,
-    showResetButton: false,
-    showProfileViewButton: true,
-    showSideViewButton: true,
-    showFrontViewButton: true,
-    showAutoRotateButton: true,
-    enableDrag: true,
-    enableClick: false,
-    onClick: null,
-    disableInteraction: true,
-    showOverlayLength: true,
-    showOverlayPercent: true,
-    showLengthKg: false,
-    showReelName: true,
-    showReelSubName: true,
-    showMaterialName: true,
-    showMaterialColorName: true,
-    showMaterialColorCode: true,
-    showManufacturerName: true,
-    showOverlayBar: true,
-    showPurchaseButton: true,
-    reelName: "",
-    reelSubName: "",
-    materialName: "",
-    materialColorName: "",
-    materialColorCode: "",
-    manufacturerName: ""
-  });
+  const preview = createFilamentPreview(prevBox, { ...DEFAULT_PREVIEW_OPTIONS });
 
   let current = null;
   let isNew = false;
@@ -1695,118 +1959,16 @@ function createEditorContent(onDone) {
   };
 }
 
-/**
- * 日付から週番号キー (YYYY-WW) を生成する。
- *
- * @private
- * @param {Date} date - 変換対象の日付
- * @returns {string} 週キー
- */
-function formatWeekKey(date) {
-  const first = new Date(date.getFullYear(), 0, 1);
-  const days = Math.floor((date - first) / 86400000);
-  const week = Math.floor((days + first.getDay()) / 7) + 1;
-  return `${date.getFullYear()}-W${String(week).padStart(2, "0")}`;
-}
-
-/**
- * 日付から月番号キー (YYYY-MM) を生成する。
- *
- * @private
- * @param {Date} date - 変換対象の日付
- * @returns {string} 月キー
- */
-function formatMonthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-/**
- * 集計レポートタブの内容を生成する。
- * 日別集計テーブルに加え、週次・月次のグラフを表示する。
- *
- * @private
- * @returns {HTMLElement} DOM 要素
- */
-function createReportContent() {
-  const div = document.createElement("div");
-  div.className = "filament-manager-content";
-
-  // ── 1) 日別集計テーブル ───────────────────────────────
-  const table = document.createElement("table");
-  const thead = document.createElement("thead");
-  thead.innerHTML = "<tr><th>日付</th><th>スプール数</th><th>消費量(mm)</th></tr>";
-  table.appendChild(thead);
-  const tbody = document.createElement("tbody");
-
-  const dailyMap = {};
-  const weeklyMap = {};
-  const monthlyMap = {};
-
-  (monitorData.usageHistory || []).forEach(u => {
-    const dateObj = new Date(Number(u.startedAt || 0));
-    const dayKey = dateObj.toISOString().slice(0, 10);
-    if (!dailyMap[dayKey]) dailyMap[dayKey] = { ids: new Set(), len: 0 };
-    dailyMap[dayKey].ids.add(u.spoolId);
-    const used = Number(u.usedLength || 0);
-    dailyMap[dayKey].len += used;
-
-    const wKey = formatWeekKey(dateObj);
-    weeklyMap[wKey] = (weeklyMap[wKey] || 0) + used;
-
-    const mKey = formatMonthKey(dateObj);
-    monthlyMap[mKey] = (monthlyMap[mKey] || 0) + used;
-  });
-
-  Object.entries(dailyMap)
-    .sort((a, b) => b[0].localeCompare(a[0]))
-    .forEach(([d, info]) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${d}</td><td>${info.ids.size}</td><td>${info.len.toLocaleString()}</td>`;
-      tbody.appendChild(tr);
-    });
-  table.appendChild(tbody);
-  div.appendChild(table);
-
-  // ── 2) 週次・月次の消費量を Chart.js で表示 ─────────────────
-  const weekCanvas = document.createElement("canvas");
-  weekCanvas.style.maxHeight = "200px";
-  div.appendChild(weekCanvas);
-
-  const monthCanvas = document.createElement("canvas");
-  monthCanvas.style.maxHeight = "200px";
-  div.appendChild(monthCanvas);
-
-  if (typeof Chart !== "undefined") {
-    new Chart(weekCanvas.getContext("2d"), {
-      type: "bar",
-      data: {
-        labels: Object.keys(weeklyMap),
-        datasets: [
-          { label: "週次消費量(mm)", data: Object.values(weeklyMap) }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
-    });
-
-    new Chart(monthCanvas.getContext("2d"), {
-      type: "pie",
-      data: {
-        labels: Object.keys(monthlyMap),
-        datasets: [
-          { label: "月次消費量(mm)", data: Object.values(monthlyMap) }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
-    });
-  }
-
-  return div;
-}
+// ═══════════════════════════════════════════════════════════════
+// メインモーダル
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * フィラメント管理モーダルを表示する。
  *
  * @function showFilamentManager
+ * @param {number} [activeIdx=0] - 初期表示タブインデックス
+ * @param {string} [hostname] - 対象ホスト名
  * @returns {void}
  */
 export function showFilamentManager(activeIdx = 0, hostname) {
@@ -1821,62 +1983,62 @@ export function showFilamentManager(activeIdx = 0, hostname) {
   header.className = "filament-manager-header";
   header.innerHTML = '<span>フィラメント管理</span>';
   const closeBtn = document.createElement("button");
-  closeBtn.textContent = "×";
+  closeBtn.textContent = "\u00D7";
   closeBtn.addEventListener("click", () => overlay.remove());
   header.appendChild(closeBtn);
   modal.appendChild(header);
 
   const tabBar = document.createElement("div");
   tabBar.className = "filament-manager-tabs";
-  const REGISTERED_IDX = 4;
+
+  const SPOOL_LIST_IDX = 2;
   const tabs = [
-    "使用記録簿",
-    "現在のスプール",
-    "使用済みスプール",
-    "在庫",
-    "登録済みフィラメント",
-    "プリセット",
+    "ダッシュボード",
+    "在庫・プリセット",
+    "スプール一覧",
+    "使用履歴",
     "集計レポート"
   ];
 
   let switchTab = () => {};
 
+  // エディタ（非表示タブ、index 5）
   const editTab = createEditorContent(() => {
     registered.render();
-    switchTab(REGISTERED_IDX);
+    switchTab(SPOOL_LIST_IDX);
   });
 
-  const usedTab = createUsedSpoolContent(hostname);
+  // ダッシュボード（Tab 0）
+  const dashboardTab = createDashboardContent(hostname, idx => switchTab(idx));
+
+  // 使用履歴（Tab 3）
+  const historyEl = createHistoryContent();
+
+  // contents 配列：0=ダッシュボード, 1=在庫プリセット, 2=スプール一覧, 3=使用履歴, 4=レポート, 5=エディタ(非表示)
   const contents = [
-    createHistoryContent(),
-    createCurrentSpoolContent(),
-    usedTab.el,
-    createInventoryContent(),
-    null,
-    null,
+    dashboardTab.el,
+    null, // 在庫プリセット（後で設定）
+    null, // スプール一覧（後で設定）
+    historyEl,
     createReportContent(),
     editTab.el
   ];
 
+  // スプール一覧（Tab 2）
   const registered = createRegisteredContent((sp, refresh) => {
     editTab.setSpool(sp || {}, !sp);
-    switchTab(contents.length - 1);
+    switchTab(contents.length - 1); // エディタタブへ
     if (refresh) refresh();
-  });
-  const presetTab = createPresetContent(
-    p => {
-      addSpoolFromPreset(p);
-      registered.render();
-    },
-    () => {
-      registered.render();
-    },
-    hostname
-  );
-  contents[REGISTERED_IDX] = registered.el;
-  contents[REGISTERED_IDX + 1] = presetTab.el;
+  }, hostname);
+
+  // 在庫・プリセット（Tab 1）
+  const invPresetTab = createInventoryPresetContent(hostname, idx => switchTab(idx), () => registered.render());
+
+  contents[1] = invPresetTab.el;
+  contents[SPOOL_LIST_IDX] = registered.el;
 
   const contentWrap = document.createElement("div");
+  contentWrap.style.cssText = "display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;";
   modal.appendChild(tabBar);
   modal.appendChild(contentWrap);
 
@@ -1885,10 +2047,19 @@ export function showFilamentManager(activeIdx = 0, hostname) {
       b.classList.toggle("active", i === idx);
     });
     contents.forEach((c, i) => {
-      c.style.display = i === idx ? "block" : "none";
+      if (!c) return;
+      if (i === idx) {
+        c.style.display = "flex";
+        c.style.flexDirection = "column";
+      } else {
+        c.style.display = "none";
+      }
     });
+    // ダッシュボードタブに切り替えた場合は再描画
+    if (idx === 0) dashboardTab.render();
   };
 
+  // 可視タブボタンの生成（エディタタブは非表示）
   tabs.forEach((name, i) => {
     const btn = document.createElement("button");
     btn.textContent = name;
@@ -1898,6 +2069,7 @@ export function showFilamentManager(activeIdx = 0, hostname) {
   });
 
   contents.forEach((c, i) => {
+    if (!c) return;
     if (i !== activeIdx) c.style.display = "none";
     contentWrap.appendChild(c);
   });

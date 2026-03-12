@@ -385,7 +385,7 @@ export function restorePrintResume(currentPrintId = null) {
     }
   });
 
-  const spool = getCurrentSpool();
+  const spool = getCurrentSpool(host);
   if (spool) {
     spoolKeys.forEach(k => {
       const raw = localStorage.getItem(`pd_${host}_${k}`);
@@ -436,7 +436,7 @@ export function persistPrintResume() {
     }
   });
 
-  const spool = getCurrentSpool();
+  const spool = getCurrentSpool(host);
   if (spool) {
     spoolKeys.forEach(k => {
       const val = (() => {

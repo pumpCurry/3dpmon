@@ -23,11 +23,12 @@
  */
 "use strict";
 
-import { getSpools, getSpoolById, setCurrentSpoolId, addSpoolFromPreset } from "./dashboard_spool.js";
+import { getSpools, getSpoolById, setCurrentSpoolId, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
+import { showAlert } from "./dashboard_notification_manager.js";
 
 let styleInjected = false;
 let filamentChangeDialogOpen = false;
@@ -333,7 +334,12 @@ export function showPresetOpenDialog(hostname) {
     dlg.querySelector('#fc-ok').addEventListener('click', () => {
       if (!selectedPreset) { overlay.remove(); resolve(false); return; }
       const sp = addSpoolFromPreset(selectedPreset);
-      setCurrentSpoolId(sp.id, hostname);
+      if (!setCurrentSpoolId(sp.id, hostname)) {
+        showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+        overlay.remove();
+        resolve(false);
+        return;
+      }
       const hostPreview = window._filamentPreviews?.get(hostname);
       updatePreview(sp, hostPreview);
       overlay.remove();
@@ -383,7 +389,7 @@ export function showFilamentChangeDialog(hostname) {
           <div class="registered-list">
             <table class="registered-table">
               <thead>
-                <tr><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>サブ名称</th></tr>
+                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>残量</th></tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -522,11 +528,15 @@ export function showFilamentChangeDialog(hostname) {
       tableBody.innerHTML = '';
       list.forEach(sp => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
+        const pct = sp.totalLengthMm > 0
+          ? Math.round((sp.remainingLengthMm / sp.totalLengthMm) * 100)
+          : 0;
+        tr.innerHTML = `<td>${formatSpoolDisplayId(sp)}</td>` +
+          `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
           `<td>${sp.materialName || sp.material || ''}</td>` +
           `<td><span style='color:${sp.filamentColor || sp.color || '#000'}'>■</span>${sp.colorName || ''}</td>` +
           `<td>${sp.name || sp.reelName || ''}</td>` +
-          `<td>${sp.reelSubName || ''}</td>`;
+          `<td>${pct}%</td>`;
         tr.addEventListener('click', () => {
           tableBody.querySelector('tr.selected')?.classList.remove('selected');
           tr.classList.add('selected');
@@ -561,8 +571,12 @@ export function showFilamentChangeDialog(hostname) {
 
     dlg.querySelector("#fc-ok").addEventListener("click", () => {
       if (selectedSpool) {
-        setCurrentSpoolId(selectedSpool.id, hostname);
-        if (selectedSpool.presetId) consumeInventory(selectedSpool.presetId, 1);
+        if (!setCurrentSpoolId(selectedSpool.id, hostname)) {
+          showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+          return;
+        }
+        // 在庫消費は addSpoolFromPreset() 内で行われるため、ここでは不要
+        // （既存スプール選択時に二重消費していたバグを修正）
         const hostPreview = window._filamentPreviews?.get(hostname);
         updatePreview(selectedSpool, hostPreview);
       }
@@ -771,12 +785,13 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
       const cName = currentSpool.name || currentSpool.reelName || "(不明)";
       const cMat = currentSpool.material || currentSpool.materialName || "";
       const cRemain = currentSpool.remainingLengthMm ?? 0;
+      const cDispId = formatSpoolDisplayId(currentSpool);
       currentInfoHtml = `
         <fieldset class="fc-search-field" style="margin-bottom:6px;background:#fef3c7;">
           <legend>現在の指定</legend>
           <div style="display:flex;align-items:center;gap:8px;font-size:13px;">
             <span style="color:${cColor};font-size:18px;">■</span>
-            <span><b>${cName}</b> ${cMat}</span>
+            <span><b>${cDispId} ${cName}</b> ${cMat}</span>
             <span>残: ${Math.round(cRemain).toLocaleString()} mm</span>
             <span>使用量: ${Math.round(materialUsedMm).toLocaleString()} mm</span>
           </div>
@@ -806,7 +821,7 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
           <div class="registered-list">
             <table class="registered-table">
               <thead>
-                <tr><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>サブ名称</th></tr>
+                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>残量</th></tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -901,11 +916,15 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
       tableBody.innerHTML = '';
       list.forEach(sp => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
+        const pct = sp.totalLengthMm > 0
+          ? Math.round((sp.remainingLengthMm / sp.totalLengthMm) * 100)
+          : 0;
+        tr.innerHTML = `<td>${formatSpoolDisplayId(sp)}</td>` +
+          `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
           `<td>${sp.materialName || sp.material || ''}</td>` +
           `<td><span style='color:${sp.filamentColor || sp.color || '#000'}'>■</span>${sp.colorName || ''}</td>` +
           `<td>${sp.name || sp.reelName || ''}</td>` +
-          `<td>${sp.reelSubName || ''}</td>`;
+          `<td>${pct}%</td>`;
         tr.addEventListener('click', () => {
           tableBody.querySelector('tr.selected')?.classList.remove('selected');
           tr.classList.add('selected');

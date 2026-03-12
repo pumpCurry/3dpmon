@@ -83,7 +83,7 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
   if (!curJob || String(curJob.id) !== String(raw.id)) return;
 
   // 既に同じスプールが装着済みなら何もしない
-  if (getCurrentSpoolId() === updatedSp.id) return;
+  if (getCurrentSpoolId(hostname) === updatedSp.id) return;
 
   // 装着スプールを変更（setCurrentSpoolId は旧スプールの精算も行うが、
   // 呼び出し元で既に残量調整済みのため、グローバルポインタの切替のみ必要）
@@ -586,9 +586,15 @@ export async function refreshHistory(
   oldJobs.forEach(j => {
     const cur = mergedMap.get(String(j.id));
     if (cur) {
-      // 保存済みフィラメント情報を保護（ユーザー指定を失わない）
+      // フィラメント関連: newJobs（bufバッファ経由）に値がある場合は
+      // ユーザー操作結果なのでそちらを優先。ない場合のみ旧データで補完。
       Object.entries(j).forEach(([k, v]) => {
-        if (FILAMENT_KEYS_R.has(k) && v != null) cur[k] = v;
+        if (FILAMENT_KEYS_R.has(k)) {
+          if (cur[k] == null && v != null) cur[k] = v;
+          return;
+        }
+        const isZero = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
+        if (v != null && (cur[k] == null || isZero)) cur[k] = v;
       });
     } else {
       mergedMap.set(String(j.id), j);
@@ -598,10 +604,10 @@ export async function refreshHistory(
     .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_PRINT_HISTORY);
 
-
+  let merged = false;
   const state = Number(machine?.runtimeData?.state ?? 0);
   const printing = [PRINT_STATE_CODE.printStarted, PRINT_STATE_CODE.printPaused].includes(state);
-  const curSpoolId = getCurrentSpoolId();
+  const curSpoolId = getCurrentSpoolId(host);
   if (printing && curSpoolId && jobs[0]) {
     const sp = getSpoolById(curSpoolId);
     if (sp) {
@@ -719,11 +725,10 @@ export function updateHistoryList(
     }
   }
 
-  /** フィラメント関連キー: 保存済み（ユーザ操作・交換反映済み）を常に優先 */
+  /** フィラメント関連キー */
   const FILAMENT_KEYS = new Set([
     "filamentId", "filamentColor", "filamentType", "filamentInfo"
   ]);
-  const forceFilament = !!opts.forceFilament;
 
   let merged = false;
   const oldJobs = loadHistory(host);
@@ -733,11 +738,14 @@ export function updateHistoryList(
     const cur = mergedMap.get(String(j.id));
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
-        // フィラメント関連: forceFilament 時は新しい値（ユーザ操作）を優先、
-        // それ以外は保存済みの値を優先（サーバーデータで交換反映を失わない）
-        if (FILAMENT_KEYS.has(k) && v != null && !forceFilament) {
-          cur[k] = v;
-          merged = true;
+        // フィラメント関連:
+        //   newJobs（historyData バッファ経由）に値がある場合はユーザー操作結果
+        //   なのでそちらを優先する。newJobs に値がない場合のみ旧データで補完。
+        if (FILAMENT_KEYS.has(k)) {
+          if (cur[k] == null && v != null) {
+            cur[k] = v;
+            merged = true;
+          }
           return;
         }
         const isZeroInCur = MERGE_IGNORE_ZERO_FIELDS.has(k) && Number(cur[k]) === 0;
@@ -1123,7 +1131,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   const usedSec        = raw.usagetime;
   const expectedFinish = new Date(Date.now() + usedSec * 1000).toLocaleString();
   const materialNeeded = Math.ceil(raw.usagematerial * 100) / 100;
-  const spool          = getCurrentSpool();
+  const spool          = getCurrentSpool(hostname);
   const remaining      = spool?.remainingLengthMm ?? 0;
   const afterRemaining = Math.max(0, remaining - materialNeeded).toLocaleString();
 

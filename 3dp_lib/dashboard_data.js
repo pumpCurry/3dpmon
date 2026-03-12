@@ -198,6 +198,7 @@ export function setCurrentHostname(host) {
  *   usageHistory: Array<Object>,
  *   filamentInventory: Array<Object>,
  *   currentSpoolId: string|null,
+ *   hostSpoolMap: Object.<string, string|null>,
  *   spoolSerialCounter: number
  * }}
  */
@@ -232,6 +233,13 @@ export const monitorData = {
   usageHistory: [],
   filamentInventory: [],
   currentSpoolId: null,
+  /**
+   * ホストごとの装着スプールIDマップ。
+   * キーはホスト名、値はスプールID。
+   * per-host で異なるスプールを装着できるようにする。
+   * @type {Object.<string, string|null>}
+   */
+  hostSpoolMap: {},
   /**
    * スプール通し番号の採番用カウンタ
    * @type {number}
