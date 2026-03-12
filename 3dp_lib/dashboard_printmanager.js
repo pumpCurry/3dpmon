@@ -622,13 +622,18 @@ export async function refreshHistory(
  * @param {string} baseUrl         - サムネイル取得用のサーバーベース URL
  * @param {string} [currentContainerId="print-current-container"]
  *          現在ジョブ表示用コンテナの要素 ID
+ * @param {string} [host] - ホスト名
+ * @param {Object} [opts] - オプション
+ * @param {boolean} [opts.forceFilament=false] - true の場合、新しいフィラメント値で
+ *   保存済みの値を上書きする（ユーザー操作による指定・修正時に使用）
  * @returns {void}
  */
 export function updateHistoryList(
   rawArray,
   baseUrl,
   currentContainerId = "print-current-container",
-  host
+  host,
+  opts = {}
 ) {
   if (!Array.isArray(rawArray)) return;
   pushLog("[updateHistoryList] マージ処理を開始", "info", false, host);
@@ -658,6 +663,7 @@ export function updateHistoryList(
   const FILAMENT_KEYS = new Set([
     "filamentId", "filamentColor", "filamentType", "filamentInfo"
   ]);
+  const forceFilament = !!opts.forceFilament;
 
   let merged = false;
   const oldJobs = loadHistory(host);
@@ -667,8 +673,9 @@ export function updateHistoryList(
     const cur = mergedMap.get(String(j.id));
     if (cur) {
       Object.entries(j).forEach(([k, v]) => {
-        // フィラメント関連: 保存済みの値を常に優先（交換反映を失わない）
-        if (FILAMENT_KEYS.has(k) && v != null) {
+        // フィラメント関連: forceFilament 時は新しい値（ユーザ操作）を優先、
+        // それ以外は保存済みの値を優先（サーバーデータで交換反映を失わない）
+        if (FILAMENT_KEYS.has(k) && v != null && !forceFilament) {
           cur[k] = v;
           merged = true;
           return;
@@ -996,7 +1003,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       raw.filamentId = updatedSp.id;
       raw.filamentColor = updatedSp.filamentColor;
       raw.filamentType = updatedSp.material;
-      updateHistoryList([raw], baseUrl, "print-current-container", hostname);
+      updateHistoryList([raw], baseUrl, "print-current-container", hostname, { forceFilament: true });
       // パネルのフィラメントプレビューを更新
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
@@ -1027,7 +1034,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       raw.filamentId = updatedSp.id;
       raw.filamentColor = updatedSp.filamentColor;
       raw.filamentType = updatedSp.material;
-      updateHistoryList([raw], baseUrl, "print-current-container", hostname);
+      updateHistoryList([raw], baseUrl, "print-current-container", hostname, { forceFilament: true });
       // パネルのフィラメントプレビューを更新
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);

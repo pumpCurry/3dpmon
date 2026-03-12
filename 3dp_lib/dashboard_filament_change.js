@@ -850,6 +850,7 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
 
     const spools = getSpools();
     let selectedSpool = null;
+    let showRemovedOnly = false;
 
     function fillOptions(list) {
       const brands = new Set(), mats = new Set(), colors = new Set();
@@ -895,7 +896,8 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
     }
 
     function renderTable() {
-      const list = applyFilter(spools);
+      let list = applyFilter(spools);
+      if (showRemovedOnly) list = list.filter(sp => sp.removedAt);
       tableBody.innerHTML = '';
       list.forEach(sp => {
         const tr = document.createElement('tr');
@@ -935,9 +937,14 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
       closeDialog({ spool: selectedSpool, isNew: false });
     });
 
-    dlg.querySelector("#fc-used").addEventListener("click", () => {
-      closeDialog(false);
-      showFilamentManager(2, hostname);
+    // 取り外し済みスプールの表示切替（ダイアログ内フィルタ）
+    const usedBtn = dlg.querySelector("#fc-used");
+    usedBtn.addEventListener("click", () => {
+      showRemovedOnly = !showRemovedOnly;
+      usedBtn.textContent = showRemovedOnly ? "全スプールを表示" : "過去取り外したスプールから選択";
+      selectedSpool = null;
+      okBtn.disabled = true;
+      renderTable();
     });
 
     dlg.querySelector("#fc-new").addEventListener("click", async () => {

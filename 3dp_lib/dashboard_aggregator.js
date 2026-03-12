@@ -874,9 +874,10 @@ export function aggregatorUpdate() {
       }
     }, storedData);
 
-    // fileName 表示抽出（タイトルバー用 printFileName も同期更新）
-    checkUpdatedFields(["fileName"], () => {
-      const raw = storedData.fileName?.rawValue;
+    // fileName / printFileName 表示抽出（タイトルバー用 printFileName も同期更新）
+    // WS デバイスは printFileName キーでファイル名を送信するため両方を監視する
+    checkUpdatedFields(["fileName", "printFileName"], () => {
+      const raw = storedData.printFileName?.rawValue || storedData.fileName?.rawValue;
       if (raw) {
         const name = String(raw).split("/").pop();
         _set("fileName", raw, true);
@@ -968,8 +969,9 @@ export function aggregatorUpdate() {
       }
       const job = loadPrintCurrent(host);
       const jobId = job?.id ?? "";
-      if ((isNaN(est) || est <= 0) && storedData.fileName?.rawValue) {
-        est = guessExpectedLength(storedData.fileName.rawValue, host);
+      const fnForGuess = storedData.printFileName?.rawValue || storedData.fileName?.rawValue;
+      if ((isNaN(est) || est <= 0) && fnForGuess) {
+        est = guessExpectedLength(fnForGuess, host);
       }
       beginExternalPrint(spool, isNaN(est) ? 0 : est, jobId, host);
       s.accumulatedUsedMaterial = 0;
@@ -1006,8 +1008,9 @@ export function aggregatorUpdate() {
         if (isNaN(len) || len <= 0) {
           len = est;
         }
-        if ((isNaN(len) || len <= 0) && storedData.fileName?.rawValue) {
-          len = guessExpectedLength(storedData.fileName.rawValue, host);
+        const fnForLen = storedData.printFileName?.rawValue || storedData.fileName?.rawValue;
+        if ((isNaN(len) || len <= 0) && fnForLen) {
+          len = guessExpectedLength(fnForLen, host);
         }
         if (spool.currentJobExpectedLength == null || spool.currentPrintID !== jobId) {
           // フィラメントIDのみ先に確定し、使用量が判明してから予約する
