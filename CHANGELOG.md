@@ -1,5 +1,51 @@
 # Changelog
 
+## v2.1.004 (2026-03-12)
+
+### マルチプリンタ データ分離監査・修正
+
+per-host 化（v2.1）後に残存していた暗黙的なグローバルフォールバックを全面監査し、プリンタ間のデータ漏洩・合流を根絶した。
+
+- **スプール装着の per-host 完全化**: `getCurrentSpoolId()` がグローバル `currentSpoolId` にフォールバックしていた問題を修正。`hostSpoolMap` に未登録のホストは `null` を返すよう変更
+- **カメラ ON/OFF の per-host 化**: グローバル `cameraToggle` を `hostCameraToggle` (per-host Map) に分離。パネル初期化・カメラ制御・パネルメニュー・ストレージ永続化の全経路を対応
+- **印刷ステート遷移履歴の per-host 化**: モジュールレベル `stateHistory` 配列を `_stateHistoryMap` (per-host Map) に移行。異なるプリンタの遷移パターンが混合する問題を解消
+- **3Dプレビュー回転状態の per-host 化**: `stageRotX` / `stageRotZ` / `spinTimer` を `PreviewHostState` オブジェクトに移行。ビュー関数が全ホスト状態をイテレーションするよう変更
+- **ファイルリストの per-host 化**: `_fileList` シングルトンを `_fileListMap` (per-host Map) に移行
+- **温度グラフの hostname ガード追加**: hostname 未指定での `initTemperatureGraph` / `updateTemperatureGraphFromStoredData` 呼び出しを早期 return に変更
+- **フィラメントダッシュボードのホストフィルタリング**: `getActiveHosts()` が `getConnectionState() === "connected"` で接続中ホストのみ返すよう修正。ストレージに残存する未接続ホストの表示を防止
+- **フィラメント管理/交換モーダルのプレビューオーバーフロー修正**: `.dfv-card` / `.dfv-controls` / `.dfv-scale-wrapper` の CSS 競合を `!important` + `position:relative` で解決
+
+### レガシーコード整理・最小サポートバージョン宣言
+
+- **v1.25/v1.29 レガシーキー移行の廃止**: `wsDestV1p125` / `cameraToggleV1p129` / `autoConnectV1p129` からの直接移行コードを削除
+- **最小サポート移行元バージョンを v1.40 に明記**: `STORAGE_KEY` / `restoreUnifiedStorage` / `cleanUpLegacyStorage` のドキュメントを更新
+- **`restoreLegacyStoredData` リファクタ**: `storedDataV1p125` からの移行は非公式互換として維持。`PLACEHOLDER_HOSTNAME` ガード追加、型チェック強化、`??=` 採用
+- **`cleanUpLegacyStorage` 縮小**: 削除対象を `storedDataV1p125` のみに限定
+
+### デッドコード削除
+
+- **`setStoredData()`**: deprecated 関数を削除（呼び出し元はコメントアウト済みコードのみ）
+- **`getCurrentMachine()`**: deprecated 関数を削除（アクティブな呼び出し元ゼロ）
+- **`consumeDirtyKeys()`**: deprecated 関数を削除（アクティブな呼び出し元ゼロ）
+- **`_bindHostSwitchClicks()`**: NOP 関数と3箇所の呼び出しを削除
+- **未使用 import 除去**: `dashboard_aggregator.js` / `dashboard_spool.js` から `setStoredData` import を削除
+- **`getDisplayValue` の `getCurrentMachine` フォールバック除去**: hostname 未指定時は `null` を返すよう変更
+
+### 対象ファイル (10ファイル)
+
+| ファイル | 変更内容 |
+|----------|----------|
+| `dashboard_data.js` | deprecated 関数3件削除、`getDisplayValue` 修正 |
+| `dashboard_storage.js` | v125/v129 移行廃止、v140+宣言、リファクタ |
+| `dashboard_connection.js` | `_bindHostSwitchClicks` 削除 |
+| `dashboard_aggregator.js` | `setStoredData` import 除去、`historyPersistFunc`/`guessExpectedLength`/`autoCorrectCurrentSpool` per-host 化 |
+| `dashboard_spool.js` | `setStoredData` import 除去、`getCurrentSpoolId` フォールバック除去 |
+| `dashboard_printmanager.js` | `_fileListMap` per-host 化、`useFilament` hostname 引数追加 |
+| `dashboard_chart.js` | hostname 未指定ガード追加 |
+| `dashboard_stage_preview.js` | 回転状態・スピンタイマー per-host 化 |
+| `dashboard_printstatus.js` | `_stateHistoryMap` per-host 化 |
+| `dashboard_panel_init.js` / `dashboard_camera_ctrl.js` / `dashboard_panel_menu.js` | `hostCameraToggle` per-host 化 |
+
 ## v2.1.003 (2026-03-11)
 
 ### 現在の印刷パネル ファイル名取得不具合修正

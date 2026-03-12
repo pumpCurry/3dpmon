@@ -271,7 +271,7 @@ function _renderMenuBody() {
   body.querySelectorAll(".camera-stream-toggle").forEach(cb => {
     cb.addEventListener("change", () => {
       const host = cb.dataset.host;
-      monitorData.appSettings.cameraToggle = cb.checked;
+      monitorData.hostCameraToggle[host] = cb.checked;
       if (cb.checked) {
         startCameraStream(host);
       } else {
@@ -303,7 +303,7 @@ function _renderPanelToggle(pt, host, panelId) {
 
   /* カメラパネルには映像接続サブコントロールを追加 */
   if (pt.id === "camera") {
-    const camOn = !!monitorData.appSettings.cameraToggle;
+    const camOn = !!(monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle);
     html += `<div class="panel-sub-control">`;
     html += `<label class="camera-sub-label">`;
     html += `<input type="checkbox" class="camera-stream-toggle" data-host="${host}" ${camOn ? "checked" : ""}>`;

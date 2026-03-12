@@ -649,7 +649,8 @@ export function processData(data, hostname) {
     Number(prevState),
     st,
     (msg, level) => pushLog(msg, level, false, host),
-    evt => notificationManager.notify(evt, { hostname: host })
+    evt => notificationManager.notify(evt, { hostname: host }),
+    host
   );
 
   // (2.7.1) プレビュー X/Y/Z

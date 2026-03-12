@@ -28,9 +28,9 @@
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  *
-* @version 1.390.785 (PR #366)
+* @version 1.390.787 (PR #367)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-10 23:30:00
+* @lastModified 2026-03-12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,7 +40,6 @@
 
 import {
   monitorData,
-  setStoredData,
   setStoredDataForHost
 } from "./dashboard_data.js";
 import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
@@ -172,8 +171,8 @@ export function getSpoolById(id) {
 
 /**
  * 現在設定されているスプールIDを返す。
- * hostname が指定された場合は per-host マップから取得する。
- * 未指定の場合はレガシー互換で monitorData.currentSpoolId を返す。
+ * per-host マップ（hostSpoolMap）から取得する。
+ * hostname 未指定時は null を返す。
  *
  * @function getCurrentSpoolId
  * @param {string} [hostname] - 対象ホスト名
@@ -183,8 +182,7 @@ export function getCurrentSpoolId(hostname) {
   if (hostname && monitorData.hostSpoolMap[hostname] !== undefined) {
     return monitorData.hostSpoolMap[hostname];
   }
-  // レガシー互換: hostSpoolMap に未登録の場合はグローバル値を返す
-  return monitorData.currentSpoolId;
+  return null;
 }
 
 /**
@@ -452,11 +450,11 @@ export function deleteSpool(id, hostname) {
   s.isInUse = false;
   s.isActive = false;
   s.removedAt = Date.now();
-  if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
-  // per-host マップからも削除
+  // per-host マップから削除（レガシーグローバル値も同期）
   for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
     if (spId === id) monitorData.hostSpoolMap[h] = null;
   }
+  if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
   saveUnifiedStorage();
 }
 

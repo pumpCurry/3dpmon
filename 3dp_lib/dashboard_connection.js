@@ -28,9 +28,9 @@
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.787 (PR #367)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-03-11 01:00:00
+ * @lastModified 2026-03-12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -621,7 +621,7 @@ function handleSocketOpen(host) {
     _syncPanelsForHost(host);
   }
 
-  if (monitorData.appSettings.cameraToggle) {
+  if (monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle) {
     startCameraStream(host);
   }
   // 接続復帰後は通知抑制を解除
@@ -1033,30 +1033,6 @@ export function setupConnectButton() {
   }
 }
 
-/**
- * プリンタ選択 UI を初期化します。
- * セレクトボックスの変更に合わせて対象ホストのデータ再読み込みを行います。
- *
- * @returns {void}
- */
-export function setupPrinterUI() {
-  const sel = document.getElementById("printer-select");
-  if (!sel) return;
-  // 追加接続ボタンの初期化
-  const addBtn = document.getElementById("add-printer-button");
-  if (addBtn) {
-    addBtn.addEventListener("click", () => {
-      const input = document.getElementById("add-printer-input");
-      const dest = input?.value.trim();
-      if (dest) {
-        connectWs(dest);
-        input.value = "";
-      }
-    });
-  }
-
-  updatePrinterListUI();
-}
 
 /**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
@@ -1412,7 +1388,6 @@ export function updatePrinterListUI() {
       </div>`;
     }).join("");
 
-    _bindHostSwitchClicks(list);
   }
 
   // ── トップメニューバー更新（パネルモード） ──
@@ -1430,7 +1405,6 @@ export function updatePrinterListUI() {
       const bg = info.state === "connected" ? "#555" : "#777";
       return `<span class="printer-item" data-host="${info.host}" style="cursor:pointer; background:${bg}; color:#fff; padding:1px 6px; border-radius:3px; white-space:nowrap;">${info.stateIcon} ${info.host}</span>`;
     }).join("");
-    _bindHostSwitchClicks(topList);
   }
 
   // ── 接続モーダル内のプリンタリスト更新 ──
@@ -1470,7 +1444,6 @@ export function updatePrinterListUI() {
     }
 
     connList.innerHTML = listHtml;
-    _bindHostSwitchClicks(connList);
 
     // 削除ボタンのイベント設定（確認ダイアログ付き）
     connList.querySelectorAll(".conn-target-delete").forEach(btn => {
@@ -1575,18 +1548,6 @@ export function updatePrinterListUI() {
       updatePrinterListUI();
     }, 3000);
   }
-}
-
-/**
- * プリンタ一覧のクリックハンドラを登録する。
- * クリック時に対象ホストのデータ再読み込み・UI再描画を行う。
- *
- * @private
- * @param {HTMLElement} container - クリックイベントをバインドするコンテナ要素
- * @returns {void}
- */
-function _bindHostSwitchClicks(container) {
-  // パネルモードでは各パネルが独立しておりホスト切替は不要
 }
 
 /**

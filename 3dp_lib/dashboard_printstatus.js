@@ -43,25 +43,39 @@ const transitionMessages = {
   "1→5→0→1": "一時停止後、停止してから印刷を再開しました。"
 };
 
-// 内部履歴管理（外部からは触れないようスコープ限定）
-let stateHistory = [];
+// 内部履歴管理（per-host Map）
+const _stateHistoryMap = new Map();
 
 /**
- * ステート履歴をクリアする
+ * 指定ホストのステート履歴を取得（なければ作成）
+ * @param {string} hostname
+ * @returns {number[]}
  */
-function resetStateHistory() {
-  stateHistory.length = 0;
+function _getHistory(hostname) {
+  const key = hostname || "_unknown";
+  if (!_stateHistoryMap.has(key)) _stateHistoryMap.set(key, []);
+  return _stateHistoryMap.get(key);
+}
+
+/**
+ * 指定ホストのステート履歴をクリアする
+ * @param {string} hostname
+ */
+function resetStateHistory(hostname) {
+  _getHistory(hostname).length = 0;
 }
 
 /**
  * ステート遷移イベントを処理し、ログ・通知を行う
- * 
+ *
  * @param {number|string} prev - 直前の状態コード
  * @param {number|string} curr - 現在の状態コード
  * @param {function} pushLog - ログ出力関数（テキスト, isError）
  * @param {function} playNotification - 通知音再生関数（テキスト）
+ * @param {string} [hostname] - 対象ホスト名
  */
-export function handlePrintStateTransition(prev, curr, pushLog, playNotification) {
+export function handlePrintStateTransition(prev, curr, pushLog, playNotification, hostname) {
+  const stateHistory = _getHistory(hostname);
   stateHistory.push(curr);
   if (stateHistory.length > MAX_HISTORY_LENGTH) stateHistory.shift();
 
@@ -74,7 +88,7 @@ export function handlePrintStateTransition(prev, curr, pushLog, playNotification
     const msg = transitionMessages[comboPattern];
     pushLog(msg, "info");
     playNotification(msg);
-    resetStateHistory();
+    resetStateHistory(hostname);
     return;
   }
 
@@ -83,7 +97,7 @@ export function handlePrintStateTransition(prev, curr, pushLog, playNotification
     const msg = transitionMessages[directPattern];
     pushLog(msg, "info");
     playNotification(msg);
-    resetStateHistory();
+    resetStateHistory(hostname);
     return;
   }
 
@@ -92,7 +106,7 @@ export function handlePrintStateTransition(prev, curr, pushLog, playNotification
     const msg = transitionMessages[currentAlone];
     pushLog(msg, "info");
     playNotification(msg);
-    resetStateHistory();
+    resetStateHistory(hostname);
     return;
   }
 }

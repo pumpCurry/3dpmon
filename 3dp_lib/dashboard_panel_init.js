@@ -174,9 +174,9 @@ function initCameraPanel(body, hostname) {
 
   /* トグルスイッチのイベント */
   if (toggle) {
-    toggle.checked = !!monitorData.appSettings.cameraToggle;
+    toggle.checked = !!(monitorData.hostCameraToggle[hostname] ?? monitorData.appSettings.cameraToggle);
     toggle.addEventListener("change", () => {
-      monitorData.appSettings.cameraToggle = toggle.checked;
+      monitorData.hostCameraToggle[hostname] = toggle.checked;
       if (toggle.checked) {
         startCameraStream(hostname);
       } else {
@@ -189,7 +189,7 @@ function initCameraPanel(body, hostname) {
   _updateNoSignalInfo(body, hostname);
 
   /* パネル表示復元時: カメラONならストリーム開始 */
-  if (monitorData.appSettings.cameraToggle) {
+  if (monitorData.hostCameraToggle[hostname] ?? monitorData.appSettings.cameraToggle) {
     startCameraStream(hostname);
   }
 
@@ -198,7 +198,7 @@ function initCameraPanel(body, hostname) {
                     body.querySelector(".camera-cancel-btn");
   if (cancelBtn) {
     cancelBtn.addEventListener("click", () => {
-      monitorData.appSettings.cameraToggle = false;
+      monitorData.hostCameraToggle[hostname] = false;
       stopCameraStream(hostname);
     });
   }

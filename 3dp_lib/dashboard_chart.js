@@ -125,7 +125,11 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
   }
 
   /* ホスト状態を取得し config を設定 */
-  const host = hostname || "_default";
+  if (!hostname) {
+    console.warn("initTemperatureGraph: hostname が未指定のため初期化をスキップ");
+    return;
+  }
+  const host = hostname;
   const hs = _getHostState(host);
   hs.config = cfg;
 
@@ -296,7 +300,8 @@ function scheduleChartUpdate(hs) {
  */
 export function updateTemperatureGraphFromStoredData(dataStore, hostname) {
   const now = Date.now();
-  const host = hostname || "_default";
+  if (!hostname) return;
+  const host = hostname;
   const hs = _getHostState(host);
 
   const getVal = key => parseFloat(dataStore[key]?.rawValue ?? 0) || 0;

@@ -186,8 +186,8 @@ const MERGE_IGNORE_ZERO_FIELDS = new Set([
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用、per-host）
 const _lastSavedJsonMap = new Map();
 
-// 最新のファイル一覧データ（renderFileList 実行時に更新）
-let _fileList = [];
+// 最新のファイル一覧データ（renderFileList 実行時に更新、per-host）
+const _fileListMap = new Map();
 
 /*
  * サムネイル URL を生成（メーカー仕様: downloads/humbnail/{basename}.png）
@@ -1203,7 +1203,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   if (!ok) return;
 
   if (spool) {
-    useFilament(materialNeeded);
+    useFilament(materialNeeded, "", hostname);
   }
 
   // 実際にプリントコマンドを送信
@@ -1390,7 +1390,7 @@ export function setupUploadUI(root, hostname) {
    * @returns {boolean} 同名が存在すれば true
    */
   function hasSameFile(fname) {
-    return _fileList.some(entry => entry.basename === fname);
+    return (_fileListMap.get(hostname) || []).some(entry => entry.basename === fname);
   }
 
   /**
@@ -1642,7 +1642,7 @@ export function renderFileList(info, baseUrl, hostname) {
   const arr = parseFileInfo(info.fileInfo, baseUrl);
 
   // 最新の一覧をアップロード検証用に保持
-  _fileList = arr.slice();
+  _fileListMap.set(hostname, arr.slice());
 
   // 履歴から印刷回数と実使用時間を取得
   const stats = buildHistoryStats();

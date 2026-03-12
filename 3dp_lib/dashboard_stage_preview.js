@@ -25,9 +25,7 @@
 
 const maxDots = 128;
 
-// 回転状態（全パネル共有 — 画面に表示できるのは操作中1パネルだけ）
-let stageRotX = 0;
-let stageRotZ = 0;
+// 回転状態・スピンタイマーは per-host（_previewHostStates 内で管理）
 const STAGE_ROT_X_MIN = 0;
 const STAGE_ROT_X_MAX = 70;
 // ---------------------------------------------------------------------------
@@ -59,7 +57,7 @@ const _previewHostStates = new Map();
  * @returns {PreviewHostState}
  */
 function _getPreviewState(hostname) {
-  const host = hostname || "_default";
+  const host = hostname || "_noop";
   if (!_previewHostStates.has(host)) {
     _previewHostStates.set(host, {
       xyDots: [],
@@ -72,7 +70,10 @@ function _getPreviewState(hostname) {
       currentModel: null,
       stageSizeMm: 300,
       stageZMaxMm: 300,
-      panelBody: null
+      panelBody: null,
+      stageRotX: 0,
+      stageRotZ: 0,
+      spinTimer: null
     });
   }
   return _previewHostStates.get(host);
@@ -157,8 +158,8 @@ function restoreXYPreviewState(hostname) {
       s.xyHistoryIndex = obj.xyHistoryIndex || 0;
       s.lastXYPosition = obj.lastXYPosition || { x: 0, y: 0 };
       if (typeof obj.lastZPosition === "number") s.lastZPosition = obj.lastZPosition;
-      if (typeof obj.stageRotX === "number") stageRotX = obj.stageRotX;
-      if (typeof obj.stageRotZ === "number") stageRotZ = obj.stageRotZ;
+      if (typeof obj.stageRotX === "number") s.stageRotX = obj.stageRotX;
+      if (typeof obj.stageRotZ === "number") s.stageRotZ = obj.stageRotZ;
       if (obj.currentModel) s.currentModel = obj.currentModel;
       if (typeof obj.stageSizeMm === "number") s.stageSizeMm = obj.stageSizeMm;
       if (typeof obj.stageZMaxMm === "number") s.stageZMaxMm = obj.stageZMaxMm;
@@ -181,8 +182,8 @@ function saveXYPreviewState(hostname) {
     xyHistoryIndex: s.xyHistoryIndex,
     lastXYPosition: s.lastXYPosition,
     lastZPosition: s.lastZPosition,
-    stageRotX,
-    stageRotZ,
+    stageRotX: s.stageRotX,
+    stageRotZ: s.stageRotZ,
     currentModel: s.currentModel,
     stageSizeMm: s.stageSizeMm,
     stageZMaxMm: s.stageZMaxMm
@@ -339,9 +340,9 @@ function initXYPreview(panelBody, hostname) {
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
-    stageRotZ -= dx * 0.5;
-    const newX = stageRotX - dy * 0.5;
-    stageRotX = Math.min(Math.max(newX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
+    s.stageRotZ -= dx * 0.5;
+    const newX = s.stageRotX - dy * 0.5;
+    s.stageRotX = Math.min(Math.max(newX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     lastX = e.clientX;
     lastY = e.clientY;
     _applyStageTransform(s);
@@ -443,10 +444,10 @@ function updateZPreview(z, hostname) {
 function _applyStageTransform(s) {
   const container = _findInPanel(s, "xy-stage");
   if (container) {
-    stageRotX = Math.min(Math.max(stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
+    s.stageRotX = Math.min(Math.max(s.stageRotX, STAGE_ROT_X_MIN), STAGE_ROT_X_MAX);
     // stageRotZ を -180〜+540 の範囲に正規化し、累積による巨大値を防止
-    stageRotZ = ((stageRotZ % 360) + 360) % 360;
-    container.style.transform = `rotateX(${stageRotX}deg) rotateZ(${stageRotZ}deg)`;
+    s.stageRotZ = ((s.stageRotZ % 360) + 360) % 360;
+    container.style.transform = `rotateX(${s.stageRotX}deg) rotateZ(${s.stageRotZ}deg)`;
   }
 }
 
@@ -455,17 +456,16 @@ function _applyStageTransform(s) {
  * CSS transition による逆回転を防止するため、現在値との差分が
  * ±180° 以内になるよう調整してから代入する。
  * @private
+ * @param {PreviewHostState} s - 対象ホスト状態
  * @param {number} targetZ - 目標Z回転角度（度）
  */
-function _setRotZSmooth(targetZ) {
-  // 現在値を 0〜360 に正規化
-  const cur = ((stageRotZ % 360) + 360) % 360;
+function _setRotZSmooth(s, targetZ) {
+  const cur = ((s.stageRotZ % 360) + 360) % 360;
   const tgt = ((targetZ % 360) + 360) % 360;
   let diff = tgt - cur;
-  // 最短経路: 差分を -180〜+180 に収める
   if (diff > 180) diff -= 360;
   if (diff < -180) diff += 360;
-  stageRotZ = cur + diff;
+  s.stageRotZ = cur + diff;
 }
 
 /**
@@ -478,39 +478,47 @@ function applyStageTransform() {
 }
 
 function setTopView() {
-  stageRotX = 0;
-  _setRotZSmooth(0);
-  applyStageTransform();
+  for (const [, s] of _previewHostStates) {
+    s.stageRotX = 0;
+    _setRotZSmooth(s, 0);
+    _applyStageTransform(s);
+  }
 }
 
 function setCameraView() {
-  stageRotX = 50;
-  _setRotZSmooth(50);
-  applyStageTransform();
+  for (const [, s] of _previewHostStates) {
+    s.stageRotX = 50;
+    _setRotZSmooth(s, 50);
+    _applyStageTransform(s);
+  }
 }
 
 function setFlatView() {
   stopZSpin();
-  stageRotX = 0;
-  _setRotZSmooth(0);
-  applyStageTransform();
+  for (const [, s] of _previewHostStates) {
+    s.stageRotX = 0;
+    _setRotZSmooth(s, 0);
+    _applyStageTransform(s);
+  }
 }
 
 function setTilt45View() {
   stopZSpin();
-  stageRotX = 45;
-  _setRotZSmooth(0);
-  applyStageTransform();
+  for (const [, s] of _previewHostStates) {
+    s.stageRotX = 45;
+    _setRotZSmooth(s, 0);
+    _applyStageTransform(s);
+  }
 }
 
 function setObliqueView() {
   stopZSpin();
-  stageRotX = 65;
-  _setRotZSmooth(72.5);
-  applyStageTransform();
+  for (const [, s] of _previewHostStates) {
+    s.stageRotX = 65;
+    _setRotZSmooth(s, 72.5);
+    _applyStageTransform(s);
+  }
 }
-
-let spinTimer = null;
 
 function updateSpinButton(active) {
   /* 全パネルのスピンボタンを更新 */
@@ -523,21 +531,27 @@ function updateSpinButton(active) {
 }
 
 function stopZSpin() {
-  if (spinTimer) {
-    clearInterval(spinTimer);
-    spinTimer = null;
-    updateSpinButton(false);
+  for (const [, s] of _previewHostStates) {
+    if (s.spinTimer) {
+      clearInterval(s.spinTimer);
+      s.spinTimer = null;
+    }
   }
+  updateSpinButton(false);
 }
 
 function toggleZSpin() {
-  if (spinTimer) {
+  // いずれかのホストでスピン中なら全停止
+  const anySpinning = [..._previewHostStates.values()].some(s => s.spinTimer);
+  if (anySpinning) {
     stopZSpin();
   } else {
-    spinTimer = setInterval(() => {
-      stageRotZ += 2;
-      applyStageTransform();
-    }, 100);
+    for (const [, s] of _previewHostStates) {
+      s.spinTimer = setInterval(() => {
+        s.stageRotZ += 2;
+        _applyStageTransform(s);
+      }, 100);
+    }
     updateSpinButton(true);
   }
 }

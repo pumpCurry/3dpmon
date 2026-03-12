@@ -21,16 +21,16 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.785 (PR #366)
+* @version 1.390.787 (PR #367)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-11 01:00:00
+* @lastModified 2026-03-12
  * -----------------------------------------------------------
  * @todo
  * - none
  */
 "use strict";
 
-import { monitorData, setStoredData, setStoredDataForHost } from "./dashboard_data.js";
+import { monitorData, setStoredDataForHost } from "./dashboard_data.js";
 import { clearNewClasses, updateStoredDataToDOM } from "./dashboard_ui.js";
 import { saveUnifiedStorage, loadPrintCurrent } from "./dashboard_storage.js";
 import { updateTemperatureGraphFromStoredData, switchChartHost } from "./dashboard_chart.js";
@@ -304,7 +304,7 @@ export function ingestData(data, hostname) {
       _resetNotificationState(s, nowMs);
       if (historyPersistFunc) {
         try {
-          historyPersistFunc(id);
+          historyPersistFunc(id, host);
         } catch (e) {
           console.error("historyPersistFunc error", e);
         }
@@ -335,7 +335,7 @@ export function ingestData(data, hostname) {
     s.prevPrintID = id;
     if (historyPersistFunc) {
       try {
-        historyPersistFunc(id);
+        historyPersistFunc(id, host);
       } catch (e) {
         console.error("historyPersistFunc error", e);
       }
@@ -453,7 +453,7 @@ export function ingestData(data, hostname) {
 
     if (historyPersistFunc && id) {
       try {
-        historyPersistFunc(id);
+        historyPersistFunc(id, host);
       } catch (e) {
         console.error("historyPersistFunc error", e);
       }
@@ -540,7 +540,7 @@ export function ingestData(data, hostname) {
       let est = spool?.currentJobExpectedLength ?? NaN;
       const fileNameRaw = _readRaw("fileName", host);
       if ((isNaN(est) || est <= 0) && fileNameRaw) {
-        est = guessExpectedLength(String(fileNameRaw));
+        est = guessExpectedLength(String(fileNameRaw), host);
       }
       if (!isNaN(est) && est > 0) {
         s.accumulatedUsedMaterial = (est * prog_agg) / 100;
@@ -554,7 +554,7 @@ export function ingestData(data, hostname) {
         let est = spool?.currentJobExpectedLength ?? NaN;
         const fileNameRaw = _readRaw("fileName", host);
         if ((isNaN(est) || est <= 0) && fileNameRaw) {
-          est = guessExpectedLength(String(fileNameRaw));
+          est = guessExpectedLength(String(fileNameRaw), host);
         }
         if (!isNaN(est) && prog_agg > 0) {
           length = (est * prog_agg) / 100;
@@ -940,7 +940,7 @@ export function aggregatorUpdate() {
 
     // --- フィラメント残量の動的計算 ---
     const spool = getCurrentSpool(host);
-    if (spool) autoCorrectCurrentSpool();
+    if (spool) autoCorrectCurrentSpool(host);
     const st   = Number(storedData.state?.rawValue || 0);
     const isPrinting =
       st === PRINT_STATE_CODE.printStarted ||

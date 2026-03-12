@@ -9,7 +9,7 @@
  *
  * 【機能内容サマリ】
  * - monitorData の保存・復元
- * - レガシーキーからのデータ移行
+ * - レガシーキーからのデータ移行（最小サポート移行元: v1.40）
  * - 印刷履歴管理との I/O
  * - クォータ計測と容量推定
  *
@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.786 (PR #366)
+* @version 1.390.787 (PR #367)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-11 00:00:00
+* @lastModified 2026-03-12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -175,7 +175,12 @@ function pushLog(msg, isErr = false) {
   });
 }
 
-/** localStorage へ保存するキー名 */
+/**
+ * localStorage へ保存するキー名。
+ * v1.40 以降の統一ストレージキー。
+ * ※ v1.25/v1.29 の個別キーからの移行は廃止済み。
+ *   最小サポート移行元バージョン: v1.40
+ */
 const STORAGE_KEY = "3dp-monitor_1.400";
 /**
  * 印刷履歴の最大保持件数
@@ -250,6 +255,7 @@ function _flushStorage() {
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
       queueSharedWrite("currentSpoolId",     monitorData.currentSpoolId);
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
+      queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
       queueSharedWrite("spoolSerialCounter", monitorData.spoolSerialCounter);
 
       // machines データをキューに追加（per-host 独立書き込み）
@@ -280,16 +286,16 @@ function _flushStorage() {
 
 
 /**
- * 古い（レガシー）localStorage キーを一括削除する。
- * 将来の廃止対応として一度のみ行う用途。
+ * pre-v1.40 のレガシー localStorage キーを一括削除する。
+ * v1.40 以降のデータ移行が完了した後に呼び出す。
+ *
+ * ※ v1.25/v1.29 の個別キー（wsDestV1p125, cameraToggleV1p129, autoConnectV1p129）は
+ *   v1.40 統一キーへの移行時点で既に吸収済みのため、ここでは扱わない。
  *
  * @returns {number} 削除したキー数
  */
 function cleanUpLegacyStorage() {
   const legacyKeys = [
-    "wsDestV1p125",
-    "cameraToggleV1p129",
-    "autoConnectV1p129",
     "storedDataV1p125"
   ];
   let removed = 0;
@@ -337,12 +343,9 @@ export function restoreUnifiedStorage() {
       pushLog("[restoreUnifiedStorage] 復元中にパースエラー発生", true);
     }
   } else {
-    // 統一キーなし → レガシーキーからマイグレーション
-    monitorData.appSettings.wsDest       = localStorage.getItem("wsDestV1p125") || "";
-    monitorData.appSettings.cameraToggle = localStorage.getItem("cameraToggleV1p129") === "true";
-    const ac = localStorage.getItem("autoConnectV1p129");
-    monitorData.appSettings.autoConnect = (ac === null ? true : ac === "true");
-    console.debug("[restoreUnifiedStorage] レガシーキーから復元しました");
+    // v1.40 (STORAGE_KEY = "3dp-monitor_1.400") 以降のデータのみ公式サポート。
+    // v1.25/v1.29 の個別キー移行は廃止済み。
+    console.debug("[restoreUnifiedStorage] 保存データなし。初回起動として扱います");
   }
 
   Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
@@ -391,6 +394,10 @@ function _restoreFromData(shared, machines) {
       monitorData.hostSpoolMap = {};
     }
   }
+  // per-host カメラトグルの復元
+  if (shared?.hostCameraToggle && typeof shared.hostCameraToggle === "object") {
+    monitorData.hostCameraToggle = shared.hostCameraToggle;
+  }
   if (shared && "spoolSerialCounter" in shared) {
     monitorData.spoolSerialCounter = Number(shared.spoolSerialCounter) || 0;
   }
@@ -404,27 +411,34 @@ function _restoreFromData(shared, machines) {
 }
 
 /**
- * レガシー形式で保存された storedData を currentHostname の機器に復元する。
+ * レガシー形式（storedDataV1p125）で保存された storedData を指定ホストに復元する。
+ * v1.40 以降では公式サポート対象外だが、互換性のため移行処理は維持する。
  * 復元時に isFromEquipVal フラグが存在しない場合は true を設定する。
  *
  * @returns {void}
  */
 export function restoreLegacyStoredData() {
-  if (!currentHostname || !monitorData.machines[currentHostname]) {
-    console.warn("[restoreLegacyStoredData] currentHostname 未設定のためスキップ");
+  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
+    console.warn("[restoreLegacyStoredData] 有効なホスト名が未設定のためスキップ");
+    return;
+  }
+  const machine = monitorData.machines[currentHostname];
+  if (!machine) {
+    console.warn("[restoreLegacyStoredData] ホストのマシンデータが存在しないためスキップ");
     return;
   }
   const raw = localStorage.getItem("storedDataV1p125");
   if (!raw) return;
   try {
-    const obj     = JSON.parse(raw);
-    const machine = monitorData.machines[currentHostname];
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") {
+      console.warn("[restoreLegacyStoredData] パースデータが不正です");
+      return;
+    }
     for (const [key, val] of Object.entries(obj)) {
-      if (val && val.rawValue !== undefined) {
+      if (val != null && typeof val === "object" && "rawValue" in val) {
         machine.storedData[key] = val;
-        if (machine.storedData[key].isFromEquipVal === undefined) {
-          machine.storedData[key].isFromEquipVal = true;
-        }
+        machine.storedData[key].isFromEquipVal ??= true;
       } else {
         machine.storedData[key] = {
           rawValue: val,
@@ -435,7 +449,7 @@ export function restoreLegacyStoredData() {
       }
     }
     console.debug("[restoreLegacyStoredData] storedData を復元しました");
-    pushLog("旧 storedData を復元しました");
+    pushLog("旧 storedData を復元しました（非公式互換移行）");
   } catch (e) {
     console.warn("[restoreLegacyStoredData] パースエラー:", e);
     pushLog("旧 storedData の読み込みに失敗しました", true);

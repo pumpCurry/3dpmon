@@ -55,7 +55,10 @@ function injectStyles() {
   .fc-search-field legend{font-size:12px;}
   .fc-stock{font-size:12px;text-align:center;margin-top:4px;}
   .registered-container{display:flex;gap:8px;align-items:flex-start;}
-  .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;}
+  .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;overflow:hidden;}
+  .fc-dialog .dfv-card{border:none;padding:0;display:block;position:relative;overflow:hidden;}
+  .fc-dialog .dfv-controls{display:none !important;}
+  .fc-dialog .dfv-scale-wrapper{position:relative !important;left:0 !important;transform:none !important;}
   .registered-list{flex:1;overflow-y:auto;max-height:60vh;}
   .registered-table{width:100%;border-collapse:collapse;font-size:12px;}
   .registered-table th,.registered-table td{border:1px solid #ddd;padding:4px;}
@@ -135,7 +138,7 @@ export function showPresetOpenDialog(hostname) {
         </fieldset>
         <div class="registered-container">
           <div class="registered-preview">
-            <div id="fc-preview"></div>
+            <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
           <div class="registered-list">
@@ -383,7 +386,7 @@ export function showFilamentChangeDialog(hostname) {
         </fieldset>
         <div class="registered-container">
           <div class="registered-preview">
-            <div id="fc-preview"></div>
+            <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
           <div class="registered-list">
@@ -628,7 +631,7 @@ function showPresetOpenDialogForHistory(hostname) {
         </fieldset>
         <div class="registered-container">
           <div class="registered-preview">
-            <div id="fc-preview"></div>
+            <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
           <div class="registered-list">
@@ -817,7 +820,7 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
         </fieldset>
         <div class="registered-container">
           <div class="registered-preview">
-            <div id="fc-preview"></div>
+            <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
           <div class="registered-list">

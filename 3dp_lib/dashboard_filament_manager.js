@@ -29,6 +29,7 @@
 "use strict";
 
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
+import { getConnectionState } from "./dashboard_connection.js";
 import {
   getCurrentSpool,
   getCurrentSpoolId,
@@ -169,6 +170,9 @@ function injectStyles() {
     .registered-table tr.selected{background:#e0f2fe;}
     .registered-container{display:flex;gap:8px;align-items:flex-start;flex:1;min-height:0;overflow:hidden;}
     .registered-preview{flex:0 0 140px;min-width:140px;min-height:140px;position:relative;overflow:hidden;}
+    .filament-manager-modal .dfv-card{border:none;padding:0;display:block;position:relative;overflow:hidden;}
+    .filament-manager-modal .dfv-controls{display:none !important;}
+    .filament-manager-modal .dfv-scale-wrapper{position:relative !important;left:0 !important;transform:none !important;}
     .registered-list{flex:1;overflow-y:auto;min-height:0;}
     .registered-table th{cursor:pointer;}
     .deleted-row td{text-decoration:line-through;background:#eee;}
@@ -178,7 +182,7 @@ function injectStyles() {
     .carousel-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
     .carousel-field legend{font-size:12px;}
     .filament-carousel{display:flex;overflow-x:auto;gap:8px;padding:4px 0;min-height:100px;}
-    .filament-carousel .carousel-item{flex:0 0 auto;position:relative;min-width:90px;min-height:90px;overflow:hidden;}
+    .filament-carousel .carousel-item{flex:0 0 auto;position:relative;width:80px;height:80px;min-width:80px;min-height:80px;overflow:hidden;}
     .spool-state-badge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:bold;line-height:1.4;}
     .spool-state-mounted{background:#dcfce7;color:#166534;}
     .spool-state-stored{background:#f3f4f6;color:#4b5563;}
@@ -190,7 +194,7 @@ function injectStyles() {
     .dashboard-host-section{border:1px solid #ddd;border-radius:6px;padding:8px;margin-bottom:8px;}
     .dashboard-host-title{font-weight:bold;font-size:13px;margin-bottom:4px;}
     .stored-carousel{display:flex;overflow-x:auto;gap:8px;padding:4px 0;min-height:90px;}
-    .stored-carousel .stored-item{flex:0 0 auto;border:1px solid #ddd;border-radius:6px;padding:6px;text-align:center;font-size:11px;cursor:pointer;position:relative;min-width:80px;min-height:80px;overflow:hidden;}
+    .stored-carousel .stored-item{flex:0 0 auto;border:1px solid #ddd;border-radius:6px;padding:6px;text-align:center;font-size:11px;cursor:pointer;position:relative;min-width:70px;overflow:hidden;}
     .stored-carousel .stored-item:hover{background:#f0f9ff;}
     .dashboard-summary{display:flex;gap:12px;margin-bottom:8px;font-size:12px;}
     .dashboard-summary span{padding:2px 8px;border-radius:4px;background:#f4f4f5;}
@@ -269,7 +273,9 @@ function renderStateBadge(state) {
  * @returns {string[]} ホスト名配列
  */
 function getActiveHosts() {
-  return Object.keys(monitorData.machines).filter(h => h !== PLACEHOLDER_HOSTNAME);
+  return Object.keys(monitorData.machines).filter(h =>
+    h !== PLACEHOLDER_HOSTNAME && getConnectionState(h) === "connected"
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -344,7 +350,7 @@ function createDashboardContent(hostname, switchTab) {
         mountedWrap.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;";
 
         const prevBox = document.createElement("div");
-        prevBox.style.cssText = "flex:0 0 100px;min-width:100px;min-height:100px;position:relative;";
+        prevBox.style.cssText = "flex:0 0 100px;width:100px;height:100px;position:relative;overflow:hidden;";
         mountedWrap.appendChild(prevBox);
 
         createFilamentPreview(prevBox, {
@@ -433,7 +439,7 @@ function createDashboardContent(hostname, switchTab) {
         item.className = "stored-item";
 
         const prevMount = document.createElement("div");
-        prevMount.style.cssText = "position:relative;min-width:60px;min-height:60px;";
+        prevMount.style.cssText = "position:relative;width:60px;height:60px;overflow:hidden;";
         item.appendChild(prevMount);
         createFilamentPreview(prevMount, {
           ...DEFAULT_PREVIEW_OPTIONS,

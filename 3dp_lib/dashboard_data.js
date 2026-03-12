@@ -16,15 +16,12 @@
  * - {@link createEmptyMachineData}：空データ生成
  * - {@link ensureMachineData}：ホスト別データ初期化
  * - {@link setCurrentHostname}：現在ホスト設定
- * - {@link getCurrentMachine}：現在ホストのデータ取得
- * - {@link setStoredData}：storedData に値格納
  * - {@link getDisplayValue}：表示用値取得
- * - {@link consumeDirtyKeys}：変更キュー消費
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.783 (PR #366)
+* @version 1.390.787 (PR #367)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-10 23:00:00
+* @lastModified 2026-03-12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -34,7 +31,7 @@
 
 // プリセットフィラメント情報を取り込む
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
-import { pushLog } from "./dashboard_log_util.js";
+
 
 /**
  * @typedef {Object} StoredDatum
@@ -241,6 +238,11 @@ export const monitorData = {
    */
   hostSpoolMap: {},
   /**
+   * ホストごとのカメラON/OFF状態
+   * @type {Object.<string, boolean>}
+   */
+  hostCameraToggle: {},
+  /**
    * スプール通し番号の採番用カウンタ
    * @type {number}
    */
@@ -249,15 +251,6 @@ export const monitorData = {
 };
 
 
-/**
- * getCurrentMachine:
- *  - currentHostname に対応する MachineData を返す
- * @deprecated setStoredDataForHost / getMachineByHost を使用すること
- * @returns {MachineData|null}
- */
-export function getCurrentMachine() {
-  return currentHostname ? monitorData.machines[currentHostname] : null;
-}
 
 /**
  * setStoredDataForHost:
@@ -296,62 +289,6 @@ export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquip
   _getDirtySet(host).add(key);
 }
 
-/**
- * setStoredData:
- *  - currentHostname の storedData[key] に raw/computed を設定し、isNew フラグを立てる
- *
- * @deprecated setStoredDataForHost(host, key, value) を使用すること
- * @param {string}  key                - フィールド名
- * @param {*}       value              - 設定する値
- * @param {boolean} [isRaw=false]      - true のとき rawValue、false のとき computedValue として扱う
- * @param {boolean} [isFromEquipVal]
- *   - isRaw=true の場合は指定値を保存し、未指定時は false。isRaw=false の場合は未指定なら保持、指定時は書き換え
- *   - isFromEquipValは、指定を禁止する(undefinedになるようにする)。
- *     - 利用可能な条件は、起動時のリストアと、handleMessage内 2.7.3 のみ。
-*/
-export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
-  console.warn("[setStoredData] deprecated: use setStoredDataForHost(host, key, value) instead");
-  const machine = getCurrentMachine();
-  if (!machine) return;
-  let d = machine.storedData[key];
-  if (!d) {
-    // 新しくキーが作成された場合は isFromEquipVal を明示的に設定する
-    d = { rawValue: null, computedValue: null, isNew: true, isFromEquipVal: false };
-    machine.storedData[key] = d;
-  }
-  if (isRaw) {
-    // 生値更新時は常にフラグを上書きする
-    const prevRaw  = d.rawValue;
-    const prevFlag = d.isFromEquipVal;
-    const newFlag  = (isFromEquipVal !== undefined ? isFromEquipVal : false);
-    // 値と isFromEquipVal が同一なら dirty マークをスキップ（不要な再描画を抑制）
-    if (prevRaw === value && prevFlag === newFlag && !d.isNew) return;
-    d.rawValue = value;
-    d.isFromEquipVal = newFlag;
-    // isFromEquipVal が true から false に変わり、値も変化した場合はログ出力
-    if (
-      prevFlag === true &&
-      newFlag === false &&
-      prevRaw !== value
-    ) {
-      const msg = `[setStoredData] isFromEquipVal changed to false for key: ${key}`;
-      console.error(msg);
-      pushLog(msg, "error", false, host);
-    }
-  } else {
-    // computedValue 更新時は指定があればフラグ更新、無ければ保持
-    const newFlag = isFromEquipVal !== undefined ? isFromEquipVal : d.isFromEquipVal;
-    if (d.computedValue === value && d.isFromEquipVal === newFlag && !d.isNew) return;
-    d.computedValue = value;
-    if (isFromEquipVal !== undefined) {
-      d.isFromEquipVal = isFromEquipVal;
-    } else if (d.isFromEquipVal === undefined) {
-      d.isFromEquipVal = false;
-    }
-  }
-  d.isNew = true;
-  if (currentHostname) _getDirtySet(currentHostname).add(key);
-}
 
 /**
  * getDisplayValue:
@@ -362,9 +299,8 @@ export function setStoredData(key, value, isRaw = false, isFromEquipVal) {
  * @returns {{value:string,unit:string}|null}
  */
 export function getDisplayValue(fieldName, hostname) {
-  const machine = hostname
-    ? monitorData.machines[hostname]
-    : getCurrentMachine();
+  if (!hostname) return null;
+  const machine = monitorData.machines[hostname];
   if (!machine) return null;
   const d = machine.storedData[fieldName];
   if (!d) return null;
@@ -400,7 +336,7 @@ window.scopedById = scopedById;
 
 /**
  * ホストごとに変更されたキーを蓄積する Map。
- * setStoredData / setStoredDataForHost で変更が入ったキーを
+ * setStoredDataForHost で変更が入ったキーを
  * ホスト別に記録し、updateStoredDataToDOM で各ホストの
  * パネルだけを正確に更新する。
  *
@@ -452,16 +388,6 @@ export function getHostsWithDirtyKeys() {
   return hosts;
 }
 
-/**
- * consumeDirtyKeys:
- * 後方互換用。currentHostname の変更キーを消費する。
- * @deprecated consumeDirtyKeysForHost を使用すること
- * @returns {string[]}
- */
-export function consumeDirtyKeys() {
-  if (!currentHostname) return [];
-  return consumeDirtyKeysForHost(currentHostname);
-}
 
 /**
  * markAllKeysDirty:

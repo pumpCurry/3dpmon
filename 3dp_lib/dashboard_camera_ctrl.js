@@ -140,8 +140,8 @@ export function startCameraStream(hostname) {
   entry.serviceNotified = false;
   entry.firstConnected = false;
 
-  /* cameraToggle が OFF ならストリームを開始せず切断表示にする */
-  if (!monitorData.appSettings.cameraToggle) {
+  /* per-host カメラトグルが OFF ならストリームを開始せず切断表示にする */
+  if (!(monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle)) {
     _updateUI(entry, "disconnected");
     return;
   }
@@ -456,6 +456,6 @@ function _updateUI(entry, state, opt = {}) {
 
   /* トグルスイッチの状態をカメラ設定に同期 */
   if (entry.toggle) {
-    entry.toggle.checked = !!monitorData.appSettings.cameraToggle;
+    entry.toggle.checked = !!(monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle);
   }
 }

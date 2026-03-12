@@ -25,7 +25,7 @@
 
 "use strict";
 
-import { monitorData, currentHostname, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
+/* monitorData / currentHostname は panel_init 側で per-host 処理済みのため不要 */
 import { showAlert } from "./dashboard_notification_manager.js";
 
 /**
@@ -263,66 +263,6 @@ function copyLogsToClipboard(logArray, lastN, buttonEl) {
 }
 
 
-/**
- * 現在の機器の storedData を JSON 形式でクリップボードにコピーします。
- * @returns {void}
- */
-function copyStoredDataToClipboard() {
-  // プレースホルダーの場合は何もしない（ログ出力付き）
-  if (currentHostname === PLACEHOLDER_HOSTNAME) {
-    console.warn(`[copyStoredDataToClipboard] 未選択状態（${PLACEHOLDER_HOSTNAME}）のため中断`);
-    showAlert( "機器が未選択状態で storedData が存在しません。コピーできません","warn", false);
-    return;
-  }
-
-  const dataStore = monitorData.machines[currentHostname]?.storedData;
-  const btn = document.getElementById("copy-storeddata-button");
-
-  if (!dataStore || Object.keys(dataStore).length === 0) {
-    console.warn(`[copyStoredDataToClipboard] "${currentHostname}" に storedData が存在しません`);
-    showAlert( `${currentHostname}" に storedData が存在しません。コピーできません`,"warn", false);
-    return;
-  }
-
-  const jsonStr = JSON.stringify(dataStore, null, 2);
-
-  // Clipboard API 対応チェック + コピー処理
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(jsonStr)
-      .then(() => {
-        showTempCheckMark(btn);
-        showAlert("storedData をクリップボードにコピーしました","success", false);
-        console.log("[copyStoredDataToClipboard] コピー成功");
-      })
-      .catch((err) => {
-        console.warn("[copyStoredDataToClipboard] Clipboard API に失敗:", err);
-        tryFallback(jsonStr, btn);
-      });
-  } else {
-    console.warn("[copyStoredDataToClipboard] Clipboard API 非対応。fallback 使用");
-
-    tryFallback(jsonStr, btn);
-  }
-}
-
-/**
- * Clipboard API が使えない場合のフォールバック処理
- * @param {string} text - コピー対象の文字列
- * @param {HTMLElement} btn - チェックマーク表示用ボタン要素
- * @returns {void}
- */
-function tryFallback(text, btn) {
-  if (fallbackCopyTextToClipboard(text)) {
-    showTempCheckMark(btn);
-    showAlert("storedData をクリップボードにコピーしました (fallback)","success", false);
-    console.log("[copyStoredDataToClipboard] fallback によるコピー成功");
-  } else {
-    showAlert("コピーに失敗しました","warn", true);
-    console.error("[copyStoredDataToClipboard] fallback でもコピーに失敗しました");
-  }
-}
-
-
 
 /**
  * checkUpdatedFields
@@ -356,6 +296,5 @@ export {
   showTempCheckMark,
   fallbackCopyTextToClipboard,
   copyLogsToClipboard,
-  copyStoredDataToClipboard,
   checkUpdatedFields
 };
