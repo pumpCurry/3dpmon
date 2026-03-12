@@ -23,7 +23,7 @@
  */
 "use strict";
 
-import { getSpools, getSpoolById, setCurrentSpoolId, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel } from "./dashboard_spool.js";
+import { getSpools, getSpoolById, setCurrentSpoolId, getCurrentSpoolId, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
@@ -461,7 +461,9 @@ export function showFilamentChangeDialog(hostname) {
     });
 
     const spools = getSpools();
-    let selectedSpool = spools.find(s => s.isActive) || null;
+    // hostname に装着中のスプールを初期選択（グローバル isActive ではなく per-host で判定）
+    const curId = hostname ? getCurrentSpoolId(hostname) : null;
+    let selectedSpool = (curId ? spools.find(s => s.id === curId) : null) || null;
 
     function fillOptions(list) {
       const brands = new Set();
@@ -972,9 +974,10 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
   });
 }
 
-// ボタンと紐付け
+// ボタンと紐付け（レガシー: 接続中の最初のホストをフォールバック使用）
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("filament-change-btn")?.addEventListener("click", () => {
-    showFilamentChangeDialog();
+    const hosts = Object.keys(monitorData.machines).filter(h => h !== "PLACEHOLDER");
+    showFilamentChangeDialog(hosts[0] || "");
   });
 });

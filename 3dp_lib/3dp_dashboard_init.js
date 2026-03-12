@@ -60,7 +60,7 @@ import {
   updateTemperatureGraphFromStoredData,
   resetTemperatureGraphView
 } from "./dashboard_chart.js";
-import { addSpoolFromPreset, setCurrentSpoolId, getCurrentSpool } from "./dashboard_spool.js";
+import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { FileManager } from "./dashboard_filemanager.js";
 // フィラメントプレビューはパネルシステム (dashboard_panel_init.js) で初期化
@@ -122,8 +122,8 @@ export async function initializeDashboard({
       p => p.presetId === "preset-unknown-somename-somecolor"
     );
     if (preset) {
-      const sp = addSpoolFromPreset(preset);
-      setCurrentSpoolId(sp.id);
+      // 初回起動時はホストが未確定なので登録のみ（装着はしない）
+      addSpoolFromPreset(preset);
       saveUnifiedStorage();
     }
   }
@@ -442,7 +442,7 @@ export function persistPrintResume() {
       const val = (() => {
         switch (k) {
           case 'currentSpoolId':
-            return monitorData.currentSpoolId;
+            return getCurrentSpoolId(host);
           case 'currentPrintID':
             return spool.currentPrintID;
           case 'currentJobStartLength':

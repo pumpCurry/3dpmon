@@ -36,6 +36,7 @@ import {
   lengthFromWeight,
   weightFromLength
 } from "./dashboard_spool.js";
+import { monitorData } from "./dashboard_data.js";
 import { showInputDialog } from "./dashboard_ui_confirm.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { MATERIAL_SPECS } from "./material_specs.js";
@@ -374,18 +375,25 @@ function initSpoolUI() {
   function render() {
     const spools = getSpools();
     listEl.innerHTML = "";
+    // 接続中のホストリストを取得
+    const hosts = Object.keys(monitorData.machines).filter(h => h !== "PLACEHOLDER");
     spools.forEach(sp => {
       const li = document.createElement("li");
       let txt = `${sp.name} (${sp.remainingLengthMm}/${sp.totalLengthMm} mm`;
       if (sp.weightGram) txt += `, ${sp.weightGram}g`;
       li.textContent = txt + ")";
-      if (sp.id === getCurrentSpoolId()) {
+      // いずれかのホストに装着中なら太字
+      const mountedHost = hosts.find(h => getCurrentSpoolId(h) === sp.id);
+      if (mountedHost) {
         li.style.fontWeight = "bold";
       }
       const sel = document.createElement("button");
       sel.textContent = "選択";
       sel.addEventListener("click", () => {
-        setCurrentSpoolId(sp.id);
+        // 装着先: sp.hostname があればそのホスト、なければ最初の接続ホスト
+        const targetHost = sp.hostname || hosts[0];
+        if (!targetHost) return;
+        setCurrentSpoolId(sp.id, targetHost);
         updatePreview(sp);
         render();
       });

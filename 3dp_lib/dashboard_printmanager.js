@@ -86,15 +86,20 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
   if (getCurrentSpoolId(hostname) === updatedSp.id) return;
 
   // 装着スプールを変更（setCurrentSpoolId は旧スプールの精算も行うが、
-  // 呼び出し元で既に残量調整済みのため、グローバルポインタの切替のみ必要）
-  // ただし setCurrentSpoolId は精算・予約を内部で行うため直接使用せず、
-  // グローバル状態のみ更新する
-  const oldId = monitorData.currentSpoolId;
+  // 呼び出し元で既に残量調整済みのため、per-host ポインタの切替のみ必要）
+  const oldId = getCurrentSpoolId(hostname);
+  // per-host マップを更新（グローバル値はレガシー互換で維持）
+  monitorData.hostSpoolMap[hostname] = updatedSp.id;
   monitorData.currentSpoolId = updatedSp.id;
-  monitorData.filamentSpools.forEach(sp => {
-    sp.isActive = sp.id === updatedSp.id;
-    sp.isInUse  = sp.id === updatedSp.id;
-  });
+  // 該当ホストのスプールのみ isActive を切り替え（他ホスト装着分には触れない）
+  const oldSpool = getSpoolById(oldId);
+  if (oldSpool && oldSpool.hostname === hostname) {
+    oldSpool.isActive = false;
+    oldSpool.isInUse = false;
+  }
+  updatedSp.isActive = true;
+  updatedSp.isInUse = true;
+  updatedSp.hostname = hostname;
   // aggregator の追跡を新スプールに切り替え
   if (updatedSp.currentJobStartLength == null) {
     updatedSp.currentJobStartLength = updatedSp.remainingLengthMm;
@@ -106,6 +111,59 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
     `[renderHistoryTable] 現在印刷ジョブのスプール変更を検出: ${oldId} → ${updatedSp.id}`,
     "info", false, hostname
   );
+}
+
+/**
+ * パース済み履歴 raw オブジェクトにフィラメント情報を書き込む。
+ * updateHistoryList の再パースを回避し、filename/printfinish の破壊を防ぐ。
+ *
+ * @private
+ * @param {Object} raw - パース済み履歴エントリ
+ * @param {Object} sp - スプールオブジェクト
+ * @returns {void}
+ */
+function _applyFilamentToRaw(raw, sp) {
+  raw.filamentInfo = [{
+    spoolId: sp.id, serialNo: sp.serialNo,
+    spoolName: sp.name, colorName: sp.colorName,
+    filamentColor: sp.filamentColor, material: sp.material,
+    spoolCount: sp.printCount,
+    expectedRemain: sp.remainingLengthMm
+  }];
+  raw.filamentId = sp.id;
+  raw.filamentColor = sp.filamentColor;
+  raw.filamentType = sp.material;
+}
+
+/**
+ * 保存済み履歴にフィラメント情報をパッチし永続化する。
+ * updateHistoryList を通さないことで、再パースによるデータ破壊を防ぐ。
+ *
+ * @private
+ * @param {Object} raw - パース済み履歴エントリ（filamentInfo 等がセット済み）
+ * @param {string} hostname - ホスト名
+ * @returns {void}
+ */
+function _patchHistoryFilament(raw, hostname) {
+  const jobs = loadHistory(hostname);
+  const job = jobs.find(j => String(j.id) === String(raw.id));
+  if (job) {
+    job.filamentInfo = raw.filamentInfo;
+    job.filamentId = raw.filamentId;
+    job.filamentColor = raw.filamentColor;
+    job.filamentType = raw.filamentType;
+    saveHistory(jobs, hostname);
+  }
+  // current にも反映
+  const cur = loadCurrent(hostname);
+  if (cur && String(cur.id) === String(raw.id)) {
+    cur.filamentInfo = raw.filamentInfo;
+    cur.filamentId = raw.filamentId;
+    cur.filamentColor = raw.filamentColor;
+    cur.filamentType = raw.filamentType;
+    saveCurrent(cur, hostname);
+    renderPrintCurrent(scopedById("print-current-container", hostname), hostname);
+  }
 }
 
 /**
@@ -1061,22 +1119,18 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         });
       }
       const updatedSp = getSpoolById(newSp.id) || newSp;
-      raw.filamentInfo = [{
-        spoolId: updatedSp.id, serialNo: updatedSp.serialNo,
-        spoolName: updatedSp.name, colorName: updatedSp.colorName,
-        filamentColor: updatedSp.filamentColor, material: updatedSp.material,
-        spoolCount: updatedSp.printCount,
-        expectedRemain: updatedSp.remainingLengthMm
-      }];
-      raw.filamentId = updatedSp.id;
-      raw.filamentColor = updatedSp.filamentColor;
-      raw.filamentType = updatedSp.material;
-      updateHistoryList([raw], baseUrl, "print-current-container", hostname, { forceFilament: true });
+      // パース済み raw にフィラメント情報を直接セット（再パースを避ける）
+      _applyFilamentToRaw(raw, updatedSp);
+      // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
+      _patchHistoryFilament(raw, hostname);
       // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
       _linkCurrentPrintSpool(raw, updatedSp, hostname);
       // パネルのフィラメントプレビューを更新
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
+      // UI 再描画
+      const allJobs = loadHistory(hostname);
+      renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
     });
     tr.querySelector(".spool-assign")?.addEventListener("click", async () => {
       const materialUsedMm = raw.usagematerial || 0;
@@ -1094,22 +1148,18 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         });
       }
       const updatedSp = getSpoolById(newSp.id) || newSp;
-      raw.filamentInfo = [{
-        spoolId: updatedSp.id, serialNo: updatedSp.serialNo,
-        spoolName: updatedSp.name, colorName: updatedSp.colorName,
-        filamentColor: updatedSp.filamentColor, material: updatedSp.material,
-        spoolCount: updatedSp.printCount,
-        expectedRemain: updatedSp.remainingLengthMm
-      }];
-      raw.filamentId = updatedSp.id;
-      raw.filamentColor = updatedSp.filamentColor;
-      raw.filamentType = updatedSp.material;
-      updateHistoryList([raw], baseUrl, "print-current-container", hostname, { forceFilament: true });
+      // パース済み raw にフィラメント情報を直接セット
+      _applyFilamentToRaw(raw, updatedSp);
+      // 保存済み履歴を直接更新
+      _patchHistoryFilament(raw, hostname);
       // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
       _linkCurrentPrintSpool(raw, updatedSp, hostname);
       // パネルのフィラメントプレビューを更新
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
+      // UI 再描画
+      const allJobs = loadHistory(hostname);
+      renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
     });
   });
 
