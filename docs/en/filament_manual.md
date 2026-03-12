@@ -1,29 +1,69 @@
 # Filament Management Guide
 
-This guide explains the upcoming filament features: usage log, inventory and presets. These tools help track spool changes and remaining stock.
+This guide explains the filament management features: spool tracking,
+usage log, inventory, presets and per-host spool mounting. These tools
+help track spool changes, remaining stock and per-printer consumption.
 
 ## 1. Overview
-- **Usage Log**: Records which spool was used for each print.
+- **Spool Tracking**: Register spools with material, color, length and manufacturer. Remaining length updates automatically after each print.
+- **Usage Log**: Records which spool was used for each print, attributed to the specific printer.
 - **Inventory**: Tracks the number of unused spools by material and updates the count automatically when switching spools.
 - **Presets**: Stores commonly used filament types for quick selection and stock management.
+- **Per-Host Mounting**: Each printer tracks its currently mounted spool independently via `hostSpoolMap`.
 
 ## 2. Data Structure
+
 The data is stored as follows:
 ```javascript
 monitorData = {
   filamentSpools: [ /* per-spool status */ ],
   usageHistory: [ /* job history */ ],
   filamentPresets: [ /* preset definitions */ ],
-  filamentInventory: [ /* available stock */ ]
+  filamentInventory: [ /* available stock */ ],
+  hostSpoolMap: { /* per-host spool assignments */ }
 };
 ```
-- **filamentSpools** keep spool IDs, colors, materials and remaining length along with a flag for the active spool.
-- **usageHistory** lists when and how each spool was consumed.
-- **filamentPresets** hold frequently used filament settings.
-- **filamentInventory** counts unused spools by material.
+
+### Global Data (Shared Across All Printers)
+
+The following collections are **global** and shared across all connected
+printers:
+
+- **filamentSpools** -- All registered spool definitions. Each entry
+  contains the spool ID, color, material, dimensions, remaining length
+  and metadata.
+- **usageHistory** -- A log of when and how each spool was consumed,
+  including which printer used it.
+- **filamentPresets** -- Frequently used filament settings for quick
+  registration.
+- **filamentInventory** -- Counts of unused spools grouped by material.
+
+### Per-Host Data
+
+- **hostSpoolMap** -- Maps each printer hostname to its currently
+  mounted spool ID. This allows different printers to have different
+  spools loaded simultaneously.
+
+```javascript
+// Example hostSpoolMap
+monitorData.hostSpoolMap = {
+  "192.168.54.151:9999": "1709234567890",  // K1Max-4A1B has spool A
+  "192.168.54.152:9999": "1709234599999"   // K1Max-03FA has spool B
+};
+```
+
+When a print job finishes, the filament consumption is deducted from
+the spool assigned to that specific printer in `hostSpoolMap`, ensuring
+accurate per-host usage tracking.
 
 ## 3. Operation
-New spools can be registered from the **Add** button. Enter the name, length and current remaining amount. Old data is converted automatically on startup. When calling `addSpool()` you may specify `manufacturerName` or `materialName` to track the vendor or custom material. The remaining length updates after every job and a preview warns when running out.
+
+New spools can be registered from the **Add** button in the filament
+panel. Enter the name, length and current remaining amount. Old data is
+converted automatically on startup. When calling `addSpool()` you may
+specify `manufacturerName` or `materialName` to track the vendor or
+custom material. The remaining length updates after every job and a
+preview warns when running out.
 
 The registration dialog accepts:
 - Spool name and sub name
@@ -32,7 +72,32 @@ The registration dialog accepts:
 - Length and weight (automatic m/g conversion)
 - HEX color code
 
-New manufacturers or custom materials can be added via the [+] button next to the field and will appear in future drop-downs.
+New manufacturers or custom materials can be added via the [+] button
+next to the field and will appear in future drop-downs.
+
+### Mounting a Spool on a Printer
+
+To mount a spool on a specific printer:
+1. Open the filament panel for the target printer.
+2. Select a spool from the registered list.
+3. Click **Mount** or select the spool. The `hostSpoolMap` entry for
+   that printer is updated.
+
+Each printer can have a different spool mounted. When a print job
+completes, the system looks up the mounted spool for that printer
+via `hostSpoolMap` and deducts the consumed filament length.
+
+### Per-Host Usage Tracking
+
+Filament consumption is tracked per printer:
+- The `useFilament()`, `reserveFilament()` and `finalizeFilamentUsage()`
+  functions accept a `hostname` argument to identify which printer is
+  consuming filament.
+- Usage history entries include the printer hostname, allowing you to
+  see which printer consumed which spool.
+- If a spool is selected before the job finishes and the history entry
+  lacks filament information, the mounted spool for that printer is
+  added automatically.
 
 ### Registered Filament Tab
 
@@ -41,14 +106,14 @@ The Registered Filament tab lists all spools that have been added so far and let
 ```
 [Add New]
 
-┏Search: ━━━━━━━━━━━━━━━━━━━┓
-┃[Brand▼][Material▼][Color▼][Name][🔍 Search]┃
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-┌───┐ List: (nnn of nnn)
-│Prev│ |Brand|Material|Color|Name|Sub Name|Uses|Last Used|Cmd|
-│    │ |.....|.......|....|....|.......|....|........|...|
-│    │ |.....|.......|....|....|.......|....|........|...|
-└───┘ |.....|.......|....|....|.......|....|........|...|
++--Search: --------------------+
+|[Brand v][Material v][Color v][Name][Search]|
++------------------------------+
++---+ List: (nnn of nnn)
+|Prev| |Brand|Material|Color|Name|Sub Name|Uses|Last Used|Cmd|
+|    | |.....|.......|....|....|.......|....|........|...|
+|    | |.....|.......|....|....|.......|....|........|...|
++---+ |.....|.......|....|....|.......|....|........|...|
 ```
 
  - Use **Add New** to register a spool.
@@ -57,7 +122,7 @@ The Registered Filament tab lists all spools that have been added so far and let
   - Brand: `manufacturerName`
   - Material: `materialName`
   - Name: `reelName/reelSubName`
-  - Color: `{■}{filamentColor}{materialColorName}` (`■` uses `filamentColor` as font color)
+  - Color: displays the color swatch using `filamentColor` as font color
   - The name field accepts partial matches.
 - Click the search icon to apply the filters.
 - A 3D preview appears on the left of the list.
@@ -65,7 +130,7 @@ The Registered Filament tab lists all spools that have been added so far and let
   - **ID**: Filament ID (epoch)
   - **Brand**: `manufacturerName`
   - **Material**: `materialName`
-  - **Color**: `{■}{filamentColor}{materialColorName}`
+  - **Color**: swatch with `filamentColor` and `materialColorName`
   - **Name**: `reelName`
   - **Sub Name**: `reelSubName`
   - **Uses**: Number of times the filament ID was used (from history)
