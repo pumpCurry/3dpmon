@@ -72,7 +72,7 @@ function resetStateHistory(hostname) {
  * @param {number|string} curr - 現在の状態コード
  * @param {function} pushLog - ログ出力関数（テキスト, isError）
  * @param {function} playNotification - 通知音再生関数（テキスト）
- * @param {string} [hostname] - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名
  */
 export function handlePrintStateTransition(prev, curr, pushLog, playNotification, hostname) {
   const stateHistory = _getHistory(hostname);

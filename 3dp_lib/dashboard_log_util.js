@@ -216,7 +216,7 @@ export function initLogRenderer(containerEl, notifContainerEl, targetHostname) {
   const filterHost = targetHostname || null;
 
   /** 通知履歴コンテナ（パネル内から渡される or グローバル検索） */
-  const notifBox = notifContainerEl || scopedById("notification-history");
+  const notifBox = notifContainerEl || scopedById("notification-history", filterHost);
 
   /**
    * ログエントリを表示コンテナに追加し、

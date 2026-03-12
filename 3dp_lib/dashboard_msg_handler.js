@@ -240,7 +240,7 @@ export function handleMessage(data) {
     monitorData.temporaryBuffer = [];
 
     // 印刷再開用データの復元
-    restoreAggregatorState();
+    restoreAggregatorState(initHost);
 
     // ── (1.a) 直接受信した履歴データも含めてマージ処理 ──
     if (Array.isArray(data.historyList)) {

@@ -295,7 +295,7 @@ export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquip
  *  - storedData[fieldName] から {value,unit} 形式の表示用オブジェクトを生成
  *
  * @param {string} fieldName
- * @param {string} [hostname] - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名
  * @returns {{value:string,unit:string}|null}
  */
 export function getDisplayValue(fieldName, hostname) {

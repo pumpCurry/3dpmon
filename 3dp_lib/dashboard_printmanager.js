@@ -1306,7 +1306,7 @@ async function extractThumbnailFromFile(file) {
 /**
  * アップロード UI の初期化
  * @param {HTMLElement} [root] - パネル本体要素（省略時は document 全体）
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function setupUploadUI(root, hostname) {
   const ctx = root || document;
@@ -1410,7 +1410,7 @@ export function setupUploadUI(root, hostname) {
       updateProgress(file.size, file.size);
       let thumb = extractThumb(text);
       if (!thumb) {
-        const ip = getDeviceIp();
+        const ip = getDeviceIp(hostname);
         thumb = `http://${ip}/downloads/defData/file_icon.png`;
       }
       hideProgress();
@@ -1453,7 +1453,7 @@ export function setupUploadUI(root, hostname) {
     } catch (e) {
       console.warn("verifyUploadSuccess: sendCommand failed", e);
     }
-    const ftbl = scopedById("file-list-table");
+    const ftbl = scopedById("file-list-table", hostname);
     const first = ftbl?.querySelector('tbody tr:first-child td[data-key="filename"]');
     return first?.textContent.trim() === fname;
   }
@@ -1471,7 +1471,7 @@ export function setupUploadUI(root, hostname) {
     showProgress();
     updateProgress(0, file.size);
 
-    const ip  = getDeviceIp();
+    const ip  = getDeviceIp(hostname);
     const url = `http://${ip}/upload/${encodeURIComponent(file.name)}`;
     const form = new FormData();
     form.append("file", file, file.name);

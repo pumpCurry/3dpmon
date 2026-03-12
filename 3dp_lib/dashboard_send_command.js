@@ -510,7 +510,7 @@ function _initializeRateControls(root, host) {
  * 外部から直接呼ぶ必要はない。
  *
  * @param {HTMLElement} [root] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function initializeRateControls(root, hostname) {
   _initializeRateControls(root || null, hostname || null);
@@ -519,7 +519,7 @@ export function initializeRateControls(root, hostname) {
 /**
  * 「JSON送信」ボタンの設定とハンドラ登録
  * @param {HTMLElement} [root] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function initSendRawJson(root, hostname) {
   const btn = root
@@ -612,7 +612,7 @@ export function initSendRawJson(root, hostname) {
 /**
  * "G-code送信" ボタンの設定とハンドラ登録
  * @param {HTMLElement} [root] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function initSendGcode(root, hostname) {
   const btn = root
@@ -703,7 +703,7 @@ export function initSendGcode(root, hostname) {
 /**
  * "JSONコマンドテスト" ボタンの設定とハンドラ登録
  * @param {HTMLElement} [root] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function initTestRawJson(root, hostname) {
   const btn = root
@@ -752,7 +752,7 @@ export function initTestRawJson(root, hostname) {
 /**
  * "一時停止時 原点復帰" ボタンの設定とハンドラ登録
  * @param {HTMLElement} [root] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function initPauseHome(root, hostname) {
   const btn = root
@@ -799,7 +799,7 @@ export function initPauseHome(root, hostname) {
 /**
  * "XYロック解除" ボタンの設定とハンドラ登録
  * @param {HTMLElement} [root] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function initXYUnlock(root, hostname) {
   const btn = root

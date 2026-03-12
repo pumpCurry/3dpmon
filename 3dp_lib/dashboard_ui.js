@@ -62,7 +62,7 @@ function _cacheKey(hostname, fieldName) {
  * パネル生成時（addPanel）に呼び出す。
  *
  * @param {HTMLElement} root - スキャン対象のルート要素
- * @param {string} [hostname] - このパネルが属するホスト名
+ * @param {string} hostname - このパネルが属するホスト名
  * @returns {void}
  */
 export function registerFieldElements(root, hostname) {
@@ -85,7 +85,7 @@ export function registerFieldElements(root, hostname) {
  * パネル削除時（removePanel）に呼び出す。
  *
  * @param {HTMLElement} root - スキャン対象のルート要素
- * @param {string} [hostname] - このパネルが属するホスト名（省略時は要素の _boundHost）
+ * @param {string} hostname - このパネルが属するホスト名（省略時は要素の _boundHost にフォールバック）
  * @returns {void}
  */
 export function unregisterFieldElements(root, hostname) {

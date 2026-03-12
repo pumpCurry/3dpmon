@@ -519,7 +519,8 @@ export function ingestData(data, hostname) {
     if (spool && !spool.currentPrintID) {
       const resolvedJobId = resolveFilamentJobId(
         storedData,
-        machine?.printStore?.current ?? null
+        machine?.printStore?.current ?? null,
+        s.prevPrintID
       );
       if (resolvedJobId) {
         spool.currentPrintID = resolvedJobId;
@@ -949,7 +950,8 @@ export function aggregatorUpdate() {
     if (spool && !spool.currentPrintID) {
       const resolvedJobId = resolveFilamentJobId(
         storedData,
-        machine?.printStore?.current ?? null
+        machine?.printStore?.current ?? null,
+        s.prevPrintID
       );
       if (resolvedJobId) {
         spool.currentPrintID = resolvedJobId;
@@ -1064,7 +1066,8 @@ export function aggregatorUpdate() {
         if (spool && !spool.currentPrintID) {
           const resolvedJobId = resolveFilamentJobId(
             storedData,
-            machine?.printStore?.current ?? null
+            machine?.printStore?.current ?? null,
+            s.prevPrintID
           );
           if (resolvedJobId) {
             spool.currentPrintID = resolvedJobId;
@@ -1386,9 +1389,10 @@ function getMergedValueWithSource(key, data, dataFieldName = key, hostname) {
  * @function resolveFilamentJobId
  * @param {object} storedData - 現在の storedData オブジェクト
  * @param {object|null} job - printStore.current のジョブ情報
+ * @param {string|null} prevPrintID - 直前の印刷ID（per-host state から取得）
  * @returns {string} 推定されたジョブID。未解決の場合は空文字列
  */
-function resolveFilamentJobId(storedData, job) {
+function resolveFilamentJobId(storedData, job, prevPrintID) {
   // 1) printStore.current.id を優先して解決する
   const jobId = job?.id ?? "";
   if (jobId !== "" && jobId != null) {

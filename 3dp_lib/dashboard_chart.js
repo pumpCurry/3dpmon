@@ -103,7 +103,7 @@ function _getHostState(hostname) {
  * パネル本体内の canvas を検索し、Chart.js インスタンスを per-host で作成する。
  *
  * @param {HTMLElement} [panelBody] - パネル本体要素（省略時は document から検索）
- * @param {string} [hostname]      - ホスト名
+ * @param {string} hostname        - ホスト名
  * @param {object} [userConfig={}] - オプション指定
  */
 export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
@@ -194,9 +194,10 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
 /**
  * グラフをクリアし、全データと状態をリセットする。
  *
- * @param {string} [hostname] - 対象ホスト名（省略時は全ホスト）
+ * @param {string} hostname - 対象ホスト名
  */
 export function resetTemperatureGraph(hostname) {
+  if (!hostname) return;
   if (hostname) {
     const hs = _getHostState(hostname);
     DATASET_KEYS.forEach(key => {
@@ -241,9 +242,10 @@ export function switchChartHost(hostname) {
 /**
  * 温度グラフのズームおよびパン表示のみを初期状態へ戻す。
  *
- * @param {string} [hostname] - 対象ホスト名（省略時は全ホスト）
+ * @param {string} hostname - 対象ホスト名
  */
 export function resetTemperatureGraphView(hostname) {
+  if (!hostname) return;
   if (hostname) {
     const hs = _hostCharts.get(hostname);
     hs?.chart?.resetZoom?.();
@@ -296,7 +298,7 @@ function scheduleChartUpdate(hs) {
  * 時系列グラフに反映する。
  *
  * @param {Record<string, {rawValue: number|string}>} dataStore - storedData
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 export function updateTemperatureGraphFromStoredData(dataStore, hostname) {
   const now = Date.now();

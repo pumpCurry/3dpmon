@@ -175,7 +175,7 @@ export function getSpoolById(id) {
  * hostname 未指定時は null を返す。
  *
  * @function getCurrentSpoolId
- * @param {string} [hostname] - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名
  * @returns {string|null} - 現在のスプールID。未設定時は null
  */
 export function getCurrentSpoolId(hostname) {
@@ -190,7 +190,7 @@ export function getCurrentSpoolId(hostname) {
  * hostname が指定された場合は per-host マップから取得する。
  *
  * @function getCurrentSpool
- * @param {string} [hostname] - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名
  * @returns {Object|null} - 現在のスプールオブジェクト。無い場合は null
  */
 export function getCurrentSpool(hostname) {
@@ -208,7 +208,7 @@ export function getCurrentSpool(hostname) {
  *
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
- * @param {string} [hostname] - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名
  * @returns {boolean} 設定成功時 true、既に他ホストに装着済みの場合 false
  */
 export function setCurrentSpoolId(id, hostname) {

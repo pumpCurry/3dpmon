@@ -123,7 +123,7 @@ export function unregisterCameraPanel(hostname) {
  * レジストリに登録済みのパネルが無い場合は何もしない。
  *
  * @function startCameraStream
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  * @returns {void}
  */
 export function startCameraStream(hostname) {
@@ -172,7 +172,7 @@ export function startCameraStream(hostname) {
  * ユーザ操作による停止であることをフラグで記録し、自動リトライを防止する。
  *
  * @function stopCameraStream
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  * @returns {void}
  */
 export function stopCameraStream(hostname) {

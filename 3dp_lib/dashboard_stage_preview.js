@@ -107,7 +107,7 @@ function registerPreviewPanel(panelBody, hostname) {
  * 既存プレビューを再描画する。
  *
  * @param {string} model - プリンタモデル名
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 function setPrinterModel(model, hostname) {
   const s = _getPreviewState(hostname);
@@ -145,7 +145,7 @@ function setPrinterModel(model, hostname) {
  * localStorage から保存済みの XY プレビュー情報を読み込み、
  * 各種履歴データを復元する。
  *
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 function restoreXYPreviewState(hostname) {
   const s = _getPreviewState(hostname);
@@ -172,7 +172,7 @@ function restoreXYPreviewState(hostname) {
 /**
  * 現在の XY プレビュー履歴情報を localStorage へ保存する。
  *
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 function saveXYPreviewState(hostname) {
   const s = _getPreviewState(hostname);
@@ -219,7 +219,7 @@ function _restoreXYHistoryDots(s) {
  * XY ステージの背景格子やラベル、履歴表示用ドットなど初期描画を行う。
  *
  * @param {HTMLElement} [panelBody] - パネル本体要素
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 function initXYPreview(panelBody, hostname) {
   const s = _getPreviewState(hostname);
@@ -373,7 +373,7 @@ function initXYPreview(panelBody, hostname) {
  *
  * @param {number} x - X 座標値(mm)
  * @param {number} y - Y 座標値(mm)
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 function updateXYPreview(x, y, hostname) {
   const s = _getPreviewState(hostname);
@@ -411,7 +411,7 @@ function updateXYPreview(x, y, hostname) {
  * Z 軸の進捗バーおよび数値表示を更新する。
  *
  * @param {number} z - Z 座標値(mm)
- * @param {string} [hostname] - ホスト名
+ * @param {string} hostname - ホスト名
  */
 function updateZPreview(z, hostname) {
   const s = _getPreviewState(hostname);
