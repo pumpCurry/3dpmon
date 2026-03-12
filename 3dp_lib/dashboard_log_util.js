@@ -18,8 +18,6 @@
  * - {@link logManager}：共有インスタンス
  * - {@link initLogAutoScroll}：自動スクロール設定
  * - {@link initLogRenderer}：レンダラー初期化
- * - {@link flushNormalLogsToDom}：通常ログ描画
- * - {@link flushNotificationLogsToDom}：通知ログ描画
  * - {@link pushLog}：ログ追加
  * - {@link pushNotificationLog}：通知レベルログ追加
  *
@@ -310,52 +308,6 @@ export function initLogRenderer(containerEl, notifContainerEl, targetHostname) {
   };
 }
 
-/* ============================================================================
- * Function: flushNormalLogsToDom / flushNotificationLogsToDom
- * ============================================================================ */
-/**
- * 指定ログ配列を一括描画する共通処理
- * @param {LogEntry[]} logs
- * @param {HTMLElement} container
- * @param {string} className
- */
-function writeLogsToContainer(logs, container, className) {
-  if (!container) return;
-  container.innerHTML = "";
-  logs.forEach(e => {
-    const p = document.createElement("p");
-    p.className = `${className} log-${e.level}`;
-    p.textContent = `[${e.timestamp}] ${e.msg}`;
-    container.appendChild(p);
-  });
-}
-
-/**
- * 通常/情報ログを再描画
- */
-export function flushNormalLogsToDom() {
-  writeLogsToContainer(
-    logManager.getAll().filter(e => ["info", "normal"].includes(e.level)),
-    scopedById("log"),
-    "log-line"
-  );
-}
-
-/**
- * 通知ログを再描画
- */
-export function flushNotificationLogsToDom() {
-  const logs = logManager.getNotifications();
-  writeLogsToContainer(
-    logs,
-    scopedById("notification-history"),
-    "notification-entry"
-  );
-  if (logs.length) {
-    const tsField = document.querySelector('[data-field="lastNotificationTimestamp"] .value');
-    if (tsField) tsField.textContent = logs[logs.length - 1].timestamp;
-  }
-}
 
 /* ============================================================================
  * Function: pushLog

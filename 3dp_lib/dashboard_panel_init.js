@@ -251,10 +251,10 @@ function initHeadPreviewPanel(body, hostname) {
   const btnOblique = body.querySelector("#btn-stage-65-72");
   const btnSpin = body.querySelector("#btn-stage-spin");
 
-  if (btnFlat) btnFlat.addEventListener("click", setFlatView);
-  if (btn45) btn45.addEventListener("click", setTilt45View);
-  if (btnOblique) btnOblique.addEventListener("click", setObliqueView);
-  if (btnSpin) btnSpin.addEventListener("click", toggleZSpin);
+  if (btnFlat) btnFlat.addEventListener("click", () => setFlatView(hostname));
+  if (btn45) btn45.addEventListener("click", () => setTilt45View(hostname));
+  if (btnOblique) btnOblique.addEventListener("click", () => setObliqueView(hostname));
+  if (btnSpin) btnSpin.addEventListener("click", () => toggleZSpin(hostname));
 }
 
 /**

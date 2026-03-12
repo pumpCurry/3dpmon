@@ -1,5 +1,55 @@
 # Changelog
 
+## v2.1.005 (2026-03-12)
+
+### per-host hostname 渡し漏れ修正（第3次監査）
+
+per-host 化後に残存していた hostname 未渡し・任意引数を全面修正し、全モジュールで hostname を必須化した。
+
+#### バグ修正
+- **`resolveFilamentJobId`**: `prevPrintID` を参照するが引数に無かった問題を修正（第3引数に追加、3箇所の呼び出し元を更新）
+- **`restoreAggregatorState`**: `handleMessage` 内で `initHost` を渡さず呼んでいた問題を修正
+- **アップロード処理の hostname 未渡し**: `getDeviceIp()` ×2箇所、`scopedById("file-list-table")` で hostname 省略 → 誤ったプリンタへの送信・DOM 取得失敗の可能性
+- **通知ログ `scopedById`**: `initLogRenderer` の fallback で `scopedById("notification-history")` に hostname 未渡し
+
+#### 3Dプレビュー回転ボタンの per-host 化
+- `setFlatView` / `setTilt45View` / `setObliqueView` / `toggleZSpin` / `stopZSpin` / `applyStageTransform` / `setTopView` / `setCameraView` が全ホスト一括操作だった問題を修正
+- 各関数に `hostname` パラメータを追加し、対象ホストのみ操作するよう変更
+- ボタンイベントバインドをクロージャ化してパネルの hostname をキャプチャ
+- `destroyPreviewPanel` でスピンタイマー停止を追加（タイマーリーク防止）
+
+#### JSDoc hostname 必須化（12ファイル）
+- `dashboard_spool.js`: `getCurrentSpoolId`, `getCurrentSpool`, `setCurrentSpoolId`
+- `dashboard_chart.js`: `initTemperatureGraph`, `resetTemperatureGraph`, `updateTemperatureGraphFromStoredData`, `resetTemperatureGraphView`
+- `dashboard_stage_preview.js`: `setPrinterModel`, `restoreXYPreviewState`, `saveXYPreviewState`, `initXYPreview`, `updateXYPreview`, `updateZPreview` + 回転関数8件
+- `dashboard_camera_ctrl.js`: `startCameraStream`, `stopCameraStream`
+- `dashboard_printstatus.js`: `handlePrintStateTransition`
+- `dashboard_data.js`: `getDisplayValue`
+- `dashboard_ui.js`: `registerFieldElements`, `unregisterFieldElements`
+- `dashboard_printmanager.js`: `setupUploadUI`
+- `dashboard_send_command.js`: `initializeRateControls`, `initSendRawJson`, `initSendGcode`, `initTestRawJson`, `initPauseHome`, `initXYUnlock`
+
+#### デッドコード削除
+- **`flushNormalLogsToDom` / `flushNotificationLogsToDom` / `writeLogsToContainer`**: 呼び出し元ゼロのデッドコードを削除（`dashboard_log_util.js`）
+
+### 対象ファイル (15ファイル)
+
+| ファイル | 変更内容 |
+|----------|----------|
+| `dashboard_aggregator.js` | `resolveFilamentJobId` に `prevPrintID` 第3引数追加、3呼び出し元更新 |
+| `dashboard_msg_handler.js` | `restoreAggregatorState(initHost)` hostname 渡し |
+| `dashboard_printmanager.js` | `getDeviceIp(hostname)` ×2、`scopedById` hostname 渡し、JSDoc 必須化 |
+| `dashboard_log_util.js` | `scopedById` hostname 渡し、デッドコード3関数削除 |
+| `dashboard_stage_preview.js` | 回転関数8件 per-host 化、`destroyPreviewPanel` スピン停止追加 |
+| `dashboard_panel_init.js` | ボタンバインドをクロージャ化 |
+| `dashboard_spool.js` | JSDoc hostname 必須化 |
+| `dashboard_chart.js` | JSDoc hostname 必須化、`resetTemperatureGraph`/`resetTemperatureGraphView` ガード追加 |
+| `dashboard_camera_ctrl.js` | JSDoc hostname 必須化 |
+| `dashboard_printstatus.js` | JSDoc hostname 必須化 |
+| `dashboard_data.js` | JSDoc hostname 必須化 |
+| `dashboard_ui.js` | JSDoc hostname 必須化 |
+| `dashboard_send_command.js` | JSDoc hostname 必須化 |
+
 ## v2.1.004 (2026-03-12)
 
 ### マルチプリンタ データ分離監査・修正

@@ -469,90 +469,121 @@ function _setRotZSmooth(s, targetZ) {
 }
 
 /**
- * 全パネルにステージ回転を適用する。
+ * 指定ホストのステージ回転を適用する。
+ * @param {string} hostname - ホスト名
  */
-function applyStageTransform() {
-  for (const [, s] of _previewHostStates) {
-    _applyStageTransform(s);
-  }
+function applyStageTransform(hostname) {
+  if (!hostname) return;
+  const s = _getPreviewState(hostname);
+  _applyStageTransform(s);
 }
 
-function setTopView() {
-  for (const [, s] of _previewHostStates) {
-    s.stageRotX = 0;
-    _setRotZSmooth(s, 0);
-    _applyStageTransform(s);
-  }
+/**
+ * トップビュー（真上）に切り替える。
+ * @param {string} hostname - ホスト名
+ */
+function setTopView(hostname) {
+  if (!hostname) return;
+  const s = _getPreviewState(hostname);
+  s.stageRotX = 0;
+  _setRotZSmooth(s, 0);
+  _applyStageTransform(s);
 }
 
-function setCameraView() {
-  for (const [, s] of _previewHostStates) {
-    s.stageRotX = 50;
-    _setRotZSmooth(s, 50);
-    _applyStageTransform(s);
-  }
+/**
+ * カメラビュー（斜め50°）に切り替える。
+ * @param {string} hostname - ホスト名
+ */
+function setCameraView(hostname) {
+  if (!hostname) return;
+  const s = _getPreviewState(hostname);
+  s.stageRotX = 50;
+  _setRotZSmooth(s, 50);
+  _applyStageTransform(s);
 }
 
-function setFlatView() {
-  stopZSpin();
-  for (const [, s] of _previewHostStates) {
-    s.stageRotX = 0;
-    _setRotZSmooth(s, 0);
-    _applyStageTransform(s);
-  }
+/**
+ * フラットビュー（真上・スピン停止）に切り替える。
+ * @param {string} hostname - ホスト名
+ */
+function setFlatView(hostname) {
+  if (!hostname) return;
+  stopZSpin(hostname);
+  const s = _getPreviewState(hostname);
+  s.stageRotX = 0;
+  _setRotZSmooth(s, 0);
+  _applyStageTransform(s);
 }
 
-function setTilt45View() {
-  stopZSpin();
-  for (const [, s] of _previewHostStates) {
-    s.stageRotX = 45;
-    _setRotZSmooth(s, 0);
-    _applyStageTransform(s);
-  }
+/**
+ * 45° 傾斜ビューに切り替える。
+ * @param {string} hostname - ホスト名
+ */
+function setTilt45View(hostname) {
+  if (!hostname) return;
+  stopZSpin(hostname);
+  const s = _getPreviewState(hostname);
+  s.stageRotX = 45;
+  _setRotZSmooth(s, 0);
+  _applyStageTransform(s);
 }
 
-function setObliqueView() {
-  stopZSpin();
-  for (const [, s] of _previewHostStates) {
-    s.stageRotX = 65;
-    _setRotZSmooth(s, 72.5);
-    _applyStageTransform(s);
-  }
+/**
+ * 斜め俯瞰ビュー（65°/72.5°）に切り替える。
+ * @param {string} hostname - ホスト名
+ */
+function setObliqueView(hostname) {
+  if (!hostname) return;
+  stopZSpin(hostname);
+  const s = _getPreviewState(hostname);
+  s.stageRotX = 65;
+  _setRotZSmooth(s, 72.5);
+  _applyStageTransform(s);
 }
 
-function updateSpinButton(active) {
-  /* 全パネルのスピンボタンを更新 */
-  for (const [, s] of _previewHostStates) {
-    const btn = _findInPanel(s, "btn-stage-spin");
-    if (!btn) continue;
-    if (active) btn.classList.add("stage-spin-active");
-    else        btn.classList.remove("stage-spin-active");
-  }
+/**
+ * 指定ホストのスピンボタン表示を更新する。
+ * @param {string} hostname - ホスト名
+ * @param {boolean} active - スピン中かどうか
+ */
+function updateSpinButton(hostname, active) {
+  if (!hostname) return;
+  const s = _getPreviewState(hostname);
+  const btn = _findInPanel(s, "btn-stage-spin");
+  if (!btn) return;
+  if (active) btn.classList.add("stage-spin-active");
+  else        btn.classList.remove("stage-spin-active");
 }
 
-function stopZSpin() {
-  for (const [, s] of _previewHostStates) {
-    if (s.spinTimer) {
-      clearInterval(s.spinTimer);
-      s.spinTimer = null;
-    }
+/**
+ * 指定ホストのZ軸スピンを停止する。
+ * @param {string} hostname - ホスト名
+ */
+function stopZSpin(hostname) {
+  if (!hostname) return;
+  const s = _getPreviewState(hostname);
+  if (s.spinTimer) {
+    clearInterval(s.spinTimer);
+    s.spinTimer = null;
   }
-  updateSpinButton(false);
+  updateSpinButton(hostname, false);
 }
 
-function toggleZSpin() {
-  // いずれかのホストでスピン中なら全停止
-  const anySpinning = [..._previewHostStates.values()].some(s => s.spinTimer);
-  if (anySpinning) {
-    stopZSpin();
+/**
+ * 指定ホストのZ軸スピンをトグルする。
+ * @param {string} hostname - ホスト名
+ */
+function toggleZSpin(hostname) {
+  if (!hostname) return;
+  const s = _getPreviewState(hostname);
+  if (s.spinTimer) {
+    stopZSpin(hostname);
   } else {
-    for (const [, s] of _previewHostStates) {
-      s.spinTimer = setInterval(() => {
-        s.stageRotZ += 2;
-        _applyStageTransform(s);
-      }, 100);
-    }
-    updateSpinButton(true);
+    s.spinTimer = setInterval(() => {
+      s.stageRotZ += 2;
+      _applyStageTransform(s);
+    }, 100);
+    updateSpinButton(hostname, true);
   }
 }
 
@@ -601,6 +632,8 @@ function switchPreviewHost(hostname) {
 function destroyPreviewPanel(hostname) {
   const s = _previewHostStates.get(hostname);
   if (!s) return;
+  // スピンタイマーを停止
+  stopZSpin(hostname);
   // 最終状態を保存
   saveXYPreviewState(hostname);
   // DOM 参照をクリア
