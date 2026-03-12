@@ -2078,9 +2078,3 @@ export function showFilamentManager(activeIdx = 0, hostname) {
   switchTab(activeIdx);
 }
 
-// DOM 読み込み後にボタンをバインド
-document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("filament-list-btn")?.addEventListener("click", () => {
-    showFilamentManager();
-  });
-});

@@ -26,22 +26,10 @@
 "use strict";
 
 // ——— 依存モジュールのインポート ———
-import {
-  connectWs,
-  disconnectWs,
-  updateConnectionUI
-} from "./dashboard_connection.js";
-import { handleMessage } from "./dashboard_msg_handler.js";
-import {
-  startCameraStream,
-  stopCameraStream,
-  handleCameraError
-} from "./dashboard_camera_ctrl.js";
 import { initializeDashboard } from "./3dp_dashboard_init.js";
 import { audioManager } from "./dashboard_audio_manager.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 
-import { initUIEventHandlers } from "./dashboard_ui.js";
 import { initStorageUI } from "./dashboard_storage_ui.js";
 // 以下2モジュールは DOMContentLoaded 後の UI 初期化で使用するため
 // 副作用目的で読み込む
@@ -61,44 +49,17 @@ window.notificationManager = notificationManager;
 /**
  * ページ読み込み完了後のエントリポイント。
  * initializeDashboard() 内で以下を行います:
- * - 各種 UI（ボタン・トグル・ログ・グラフ・プレビュー等）のバインド
  * - ストレージ復元／クリーンアップ
- * - 自動接続・カメラ起動・ファイルマネージャなどの初期化
- * - WebSocket 接続／切断ボタンへの connectWs()/disconnectWs() バインド
- * - notificationManager・audioManager のテスト・設定バインド
+ * - 自動接続のセットアップ
+ * - 自動保存タイマーの登録
+ *
+ * UI要素のバインド（ボタン・トグル・ログ・グラフ・プレビュー等）は
+ * パネルシステム (dashboard_panel_factory / dashboard_panel_boot) が
+ * per-host で実行します。
  */
 document.addEventListener("DOMContentLoaded", async () => {
-  await initializeDashboard({
-    /** 接続ボタン押下時 */
-    onConnect: () => {
-      disconnectWs();
-      connectWs();
-    },
-    /** 切断ボタン押下時 */
-    onDisconnect: () => {
-      disconnectWs();
-      // IPアドレス再入力後に旧カメラストリームが残らないよう停止
-      stopCameraStream();
-    },
-    /** カメラエラー時 */
-    onCameraError: () => {
-      handleCameraError();
-    },
-    /** WebSocket 接続状態が変化したとき */
-    onConnectionStateChange: connected => {
-      updateConnectionUI("connected");
-    },
-    /** 受信メッセージを処理するとき */
-    onMessage: data => {
-      handleMessage(data);
-    },
-    /** オーディオ管理 */
-    audioManager,
-    /** 通知管理 */
-    notificationManager
-  });
+  await initializeDashboard();
 
-  initUIEventHandlers();
   initStorageUI();
 
 });

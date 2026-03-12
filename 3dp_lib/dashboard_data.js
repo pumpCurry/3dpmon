@@ -9,7 +9,7 @@
  *
  * 【機能内容サマリ】
  * - monitorData を中心としたアプリケーション状態管理
- * - currentHostname の保持
+ * - currentHostname の保持（後方互換用、@deprecated）
  * - storedData/runtimeData への読み書きユーティリティ
  *
  * 【公開関数一覧】
@@ -262,7 +262,7 @@ export function getCurrentMachine() {
 /**
  * setStoredDataForHost:
  *  - 指定ホストの storedData[key] に rawValue を直接設定する。
- *  - currentHostname 以外のホストのデータを蓄積する目的で使用する。
+ *  - 全ホストのデータ蓄積に使用する（per-host 対応済みの標準API）。
  *  - タイマーやUIは更新せず、データのみ保存する。
  *
  * @param {string} host  - 対象ホスト名

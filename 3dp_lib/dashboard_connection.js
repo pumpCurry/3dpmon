@@ -376,9 +376,7 @@ export function updateConnectionHost(oldHost, newHost) {
       target.ws.onclose   = () => handleSocketClose(newHost);
     }
 
-    if (currentHostname === newHost) {
-      updateConnectionUI(target.state, {}, newHost);
-    }
+    updateConnectionUI(target.state, {}, newHost);
     updatePrinterListUI();
     _syncPanelsForHost(newHost, oldHost);
     return newHost;
@@ -394,9 +392,7 @@ export function updateConnectionHost(oldHost, newHost) {
     state.ws.onclose   = () => handleSocketClose(newHost);
   }
 
-  if (currentHostname === newHost) {
-    updateConnectionUI(state.state, {}, newHost);
-  }
+  updateConnectionUI(state.state, {}, newHost);
   updatePrinterListUI();
   _syncPanelsForHost(newHost, oldHost);
   return newHost;
@@ -405,7 +401,7 @@ export function updateConnectionHost(oldHost, newHost) {
 /**
  * flushBufferedMessages:
  * ----------------------
- * currentHostname 切り替え時に、保持していた未処理メッセージを
+ * 指定ホストの接続確立後に、保持していた未処理メッセージを
  * 順に処理します。
  *
  * @private
@@ -520,7 +516,8 @@ function _syncPanelsForHost(hostname, oldHost) {
  * 
  * 接続先は 再接続の場合
  * 3dp_dashboard_init.jsのinitializeDashboard (5) にて`monitorData.appSettings.wsDest` が
- * destination-inputテキストボックスに反映されたうえでポート `:9999` を追加したもの。
+ * 接続先入力欄（レガシー: destination-input / Electron: conn-modal-ip）に
+ * 反映されたうえでポート `:9999` を追加したもの。
  * プロトコルは HTTPS環境では wss://、それ以外では ws:// が使用される。
  *
  * イベントハンドラ:
@@ -612,9 +609,7 @@ function handleSocketOpen(host) {
 
   // 接続中ホストが1台でもあれば集計ループを維持
   restartAggregatorTimer(500);
-  if (host === currentHostname) {
-    updateConnectionUI("connected", {}, host);
-  }
+  updateConnectionUI("connected", {}, host);
   st.state = "connected";
   updatePrinterListUI();
 
@@ -870,7 +865,7 @@ function handleSocketClose(host) {
     st.userDisc  = false;
     st.state = "disconnected";
     stopCameraStream(host);
-    if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
+    updateConnectionUI("disconnected", {}, host);
     updatePrinterListUI();
     pushLog("ユーザー操作により切断されました。", "info", false, host);
     return;
@@ -879,7 +874,7 @@ function handleSocketClose(host) {
   // 自動再接続が上限に達した場合
   if (st.reconnect >= MAX_RECONNECT) {
     stopCameraStream(host);
-    if (host === currentHostname) updateConnectionUI("disconnected", {}, host);
+    updateConnectionUI("disconnected", {}, host);
     st.state = "disconnected";
     updatePrinterListUI();
     pushLog(`自動接続リトライが上限(${MAX_RECONNECT})に達しました。`, "error", false, host);
@@ -887,7 +882,6 @@ function handleSocketClose(host) {
   }
 
   // 再接続待機 UI 表示＆ログ
-  // if (!userDisconnected && reconnectAttempts < MAX_RECONNECT)
   const delayMs = 2000 * Math.pow(2, st.reconnect - 1);
   const delaySec = Math.ceil(delayMs / 1000);
   const nextAttempt = st.reconnect + 1;
@@ -896,13 +890,11 @@ function handleSocketClose(host) {
   pushLog(`Ws接続が切断されました。${delaySec}秒後に再試行します...（${nextAttempt}/${MAX_RECONNECT}）`, "warn", false, host);
 
   // ② 待機UIに切り替え
-  if (host === currentHostname) {
-    updateConnectionUI("waiting", {
-      attempt: nextAttempt,
-      max: MAX_RECONNECT,
-      wait: delaySec
-    }, host);
-  }
+  updateConnectionUI("waiting", {
+    attempt: nextAttempt,
+    max: MAX_RECONNECT,
+    wait: delaySec
+  }, host);
   st.state = "waiting";
   updatePrinterListUI();
   
@@ -921,7 +913,7 @@ function handleSocketClose(host) {
         attempt: nextAttempt,
         max: MAX_RECONNECT,
         wait: remaining
-      });
+      }, host);
     } else {
       clearInterval(countdownTimers[host]);
       countdownTimers[host] = null;
@@ -1137,7 +1129,7 @@ export function sendCommand(method, params = {}, host) {
  * G-code コマンドを送信します。
  *
  * @param {string} gcode - 送信する G-code 文字列
- * @param {string} [host=currentHostname] - 接続先ホスト名
+ * @param {string} [host] - 接続先ホスト名（省略時は最初の接続済みホスト）
  * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendGcodeCommand(gcode, host) {
@@ -1202,17 +1194,23 @@ export function sendGcodeCommand(gcode, host) {
 }
 
 /**
- * @fileoverview
  * 接続 UI の表示状態を一元管理します。
  * - "connecting": 接続試行中 → 「接続中…(n/m)」
  * - "waiting":    再接続待機中 → 「接続中…(n/m) リトライ待ち(あと x 秒)」
  * - "connected":  接続済み     → ホスト名表示・切断ボタン
  * - "disconnected":切断中     → 入力欄再表示・接続ボタン
  *
+ * NOTE: この関数はレガシー接続 UI 要素（3dp_monitor.html 内の
+ * destination-input, destination-display, connection-status,
+ * connect-button, disconnect-button, audio-muted-tag）を対象とする。
+ * Electron パネルシステムでは接続モーダル（conn-modal-*）が使われるため、
+ * これらの要素は存在しない場合がある。各要素アクセスにはnullガードを適用。
+ *
  * @param {"connecting"|"waiting"|"connected"|"disconnected"} state
  *   接続状態を指定
  * @param {{attempt?: number, max?: number, wait?: number}} [opt={}]
  *   connecting/waiting 時に使用する { attempt, max, wait }
+ * @param {string} [host] - 対象ホスト名
  */
 export function updateConnectionUI(state, opt = {}, host) {
   // ホスト指定が無い場合はプリンタ一覧のみ更新
@@ -1221,6 +1219,7 @@ export function updateConnectionUI(state, opt = {}, host) {
     return;
   }
 
+  /* レガシー接続 UI 要素（Electron モードでは存在しない場合がある） */
   const ipInput       = document.getElementById("destination-input");
   const ipDisplay     = document.getElementById("destination-display");
   const statusEl      = document.getElementById("connection-status");

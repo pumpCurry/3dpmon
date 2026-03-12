@@ -74,7 +74,7 @@ function injectStyles() {
  * @param {Object} sp - スプールデータ
  * @returns {void}
  */
-export function updatePreview(sp, preview = window.filamentPreview) {
+export function updatePreview(sp, preview = null) {
   const fp = preview;
   if (!fp || !sp) return;
   if (sp.filamentColor) fp.setOption("filamentColor", sp.filamentColor);
@@ -461,7 +461,7 @@ export function showFilamentChangeDialog(hostname) {
     });
 
     const spools = getSpools();
-    // hostname に装着中のスプールを初期選択（グローバル isActive ではなく per-host で判定）
+    // hostname に装着中のスプールを初期選択（per-host で判定）
     const curId = hostname ? getCurrentSpoolId(hostname) : null;
     let selectedSpool = (curId ? spools.find(s => s.id === curId) : null) || null;
 
@@ -974,10 +974,3 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
   });
 }
 
-// ボタンと紐付け（レガシー: 接続中の最初のホストをフォールバック使用）
-document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("filament-change-btn")?.addEventListener("click", () => {
-    const hosts = Object.keys(monitorData.machines).filter(h => h !== "PLACEHOLDER");
-    showFilamentChangeDialog(hosts[0] || "");
-  });
-});

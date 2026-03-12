@@ -8,18 +8,23 @@
  * @module 3dp_dashboard_init
  *
  * 【機能内容サマリ】
- * - ダッシュボード全体の初期化
- * - 印刷再開用データの復元と永続化
+ * - ストレージ復元・マイグレーション・デフォルトスプール作成
+ * - 自動接続・自動保存のセットアップ
+ * - 印刷再開用データの復元と永続化（per-host）
+ *
+ * ※ UI要素のバインド・温度グラフ・コマンド送信・ファイルマネージャ等の
+ *   初期化はパネルシステム (dashboard_panel_factory / dashboard_panel_boot) が
+ *   per-host で実行するため、このモジュールでは行わない。
  *
  * 【公開関数一覧】
  * - {@link initializeDashboard}：ダッシュボードを初期化
- * - {@link restorePrintResume}：印刷再開用データを復元
- * - {@link persistPrintResume}：印刷再開用データを保存
+ * - {@link restorePrintResume}：印刷再開用データを復元（per-host）
+ * - {@link persistPrintResume}：印刷再開用データを保存（per-host）
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.651 (PR #302)
+* @version 1.390.652 (PR #366)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-04 09:50:37
+* @lastModified 2026-03-12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -39,72 +44,27 @@ import {
   PLACEHOLDER_HOSTNAME,
   currentHostname,
   monitorData,
-  setStoredData
+  setStoredDataForHost
 } from "./dashboard_data.js";
-// XYプレビュー・ステージ回転はパネルシステム (dashboard_panel_init.js) で初期化
-import {
-  initLogAutoScroll,
-  initLogRenderer,
-  logManager,
-  flushNotificationLogsToDom,
-  pushLog
-} from "./dashboard_log_util.js";
-import { updateConnectionUI, connectAllSavedTargets } from "./dashboard_connection.js";
-import { setupPrinterUI } from "./dashboard_connection.js";
-import {
-  startCameraStream,
-  stopCameraStream
-} from "./dashboard_camera_ctrl.js";
-import {
-  initTemperatureGraph,
-  updateTemperatureGraphFromStoredData,
-  resetTemperatureGraphView
-} from "./dashboard_chart.js";
-import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId } from "./dashboard_spool.js";
+import { connectAllSavedTargets } from "./dashboard_connection.js";
+import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId, setCurrentSpoolId } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
-import { FileManager } from "./dashboard_filemanager.js";
-// フィラメントプレビューはパネルシステム (dashboard_panel_init.js) で初期化
-import * as printManager from "./dashboard_printmanager.js";
-import {
-  copyLogsToClipboard,
-  copyStoredDataToClipboard
-} from "./dashboard_utils.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
+import { showAlert } from "./dashboard_notification_manager.js";
 import {
   persistAggregatorState,
   stopAggregatorTimer,
   aggregatorUpdate
 } from "./dashboard_aggregator.js";
-import { showAlert } from "./dashboard_notification_manager.js";
-import {
-  initSendRawJson,
-  initSendGcode,
-  initTestRawJson,
-  initPauseHome,
-  initXYUnlock
-} from "./dashboard_send_command.js";
 
 /**
- * @fileoverview
  * ダッシュボードを初期化します。
  *
- * @param {object} hooks
- * @param {() => void} hooks.onConnect                     接続開始時に呼び出す
- * @param {() => void} hooks.onDisconnect                  切断時に呼び出す
- * @param {() => void} hooks.onCameraError                 カメラエラー時に呼び出す
- * @param {(connected: boolean) => void} hooks.onConnectionStateChange
- *                                                        接続状態変化時に呼び出す
- * @param {(data: any) => void} hooks.onMessage            メッセージ受信時に呼び出す
- * @param {object} hooks.notificationManager               通知マネージャ
+ * ストレージの復元・デフォルトスプール作成・自動接続・自動保存を行います。
+ * UI要素のバインドやグラフ初期化はパネルシステムが per-host で担当するため、
+ * ここでは実行しません。
  */
-export async function initializeDashboard({
-  onConnect,
-  onDisconnect,
-  onCameraError,
-  onConnectionStateChange,
-  onMessage,
-  notificationManager
-}) {
+export async function initializeDashboard() {
   // (1) ホスト未定義ならプレースホルダ設定（ストレージ復元より先に必要）
   if (!currentHostname) {
     setCurrentHostname(PLACEHOLDER_HOSTNAME);
@@ -128,106 +88,14 @@ export async function initializeDashboard({
     }
   }
 
-  // (3) プレビュー復元＆初期化
-  // ※ XYプレビュー・フィラメントプレビュー・ステージ回転ボタンは
-  //   パネルシステムの initHeadPreviewPanel / initFilamentPanel で
-  //   per-host 実行されるため、ここでは呼ばない。
-  //   ここで呼ぶと "_default" 状態が作成され per-host 状態と競合し、
-  //   また DOM 要素がテンプレート化後に失われ初期化が無効になる。
-
-  // (4) ログ描画・自動スクロール設定
-  const logBox = document.getElementById("log");
-  initLogAutoScroll(logBox);
-  initLogRenderer(logBox);
-
-  // (5) 接続／切断ボタンバインド
-  const ipInput    = document.getElementById("destination-input");
-  const acb        = document.getElementById("auto-connect-toggle");
-  const camToggle  = document.getElementById("camera-toggle-title");
-  const btnConnect = document.getElementById("connect-button");
-  const btnDisc    = document.getElementById("disconnect-button");
-
-
-  // ここで monitorData.appSettings から UI に反映
-  if (ipInput) ipInput.value = monitorData.appSettings.wsDest || "";
-  if (acb) acb.checked = monitorData.appSettings.autoConnect;
-  if (camToggle) camToggle.checked = monitorData.appSettings.cameraToggle;
-
-
-  // 接続ボタンクリック → IPチェック→保存→接続
-  btnConnect?.addEventListener("click", () => {
-    const ip = ipInput?.value?.trim() || "";
-    if (!ip) {
-      showAlert("接続先のIPアドレスを設定し、接続を押してください", "warn");
-      return;
-    }
-    // 設定に反映して永続化
-    monitorData.appSettings.wsDest = ip;
-    saveUnifiedStorage();
-
-    onConnect();  // connectWs() を呼び出す
-  });
-
-  // 切断
-  btnDisc?.addEventListener("click", onDisconnect);
-
-  // (6) ログコピー・クリア操作
-  document.getElementById("copy-all-notification-button")
-    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getNotifications(), null, e.currentTarget));
-  document.getElementById("copy-last-50-notification-button")
-    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getNotifications(), 50, e.currentTarget));
-  document.getElementById("clear-notification-logs-button")
-    ?.addEventListener("click", () => {
-      logManager.clear();
-      flushNotificationLogsToDom();
-    });
-  document.getElementById("copy-all-button")
-    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getAll(), null, e.currentTarget));
-  document.getElementById("copy-last-50-button")
-    ?.addEventListener("click", e => copyLogsToClipboard(logManager.getAll(), 50, e.currentTarget));
-  document.getElementById("copy-storeddata-button")
-    ?.addEventListener("click", copyStoredDataToClipboard);
-
-  // (7) カメラトグル制御
-  if (camToggle) {
-    camToggle.addEventListener("change", () => {
-      monitorData.appSettings.cameraToggle = camToggle.checked;
-      saveUnifiedStorage();
-      if (camToggle.checked) startCameraStream();
-      else                    stopCameraStream();
-    });
+  // (3) 通知コンテナ初期化（notificationManager 用）
+  if (!document.querySelector(".notification-container")) {
+    const container = document.createElement("div");
+    container.className = "notification-container";
+    document.body.appendChild(container);
   }
 
-  // (8) 自動接続トグル
-  if (acb) {
-    acb.addEventListener("change", () => {
-      monitorData.appSettings.autoConnect = acb.checked;
-      saveUnifiedStorage();
-      pushLog(`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-      showAlert (`自動接続を ${acb.checked ? "ON" : "OFF"} にしました`, "info");
-    });
-  }
-
-
-  // (9) 通知設定パネル初期化
-  const notifBody = document.getElementById("notification-panel-body");
-  if (notifBody && notificationManager && typeof notificationManager.initSettingsUI === "function") {
-    notificationManager.initSettingsUI(notifBody);
-  }
-
-  // (10) 温度グラフ初期化＆過去データ読み込み
-  initTemperatureGraph();
-  if (currentHostname && monitorData.machines[currentHostname]) {
-    updateTemperatureGraphFromStoredData(
-      monitorData.machines[currentHostname].storedData
-    );
-  }
-
-  // (10.5) 温度グラフのズームリセットボタン
-  document.getElementById("temp-graph-reset-button")
-    ?.addEventListener("click", resetTemperatureGraphView);
-
-  // (11) ページロード時の自動接続
+  // (4) ページロード時の自動接続
   // 保存済みの全接続先（wsDest + connectionTargets）に自動接続
   const hasTargets = monitorData.appSettings.wsDest
     || (monitorData.appSettings.connectionTargets?.length > 0);
@@ -238,76 +106,9 @@ export async function initializeDashboard({
   } else {
     showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります","warn");
   }
-  
-  // (12) ページロード時のカメラ起動は廃止
-  // WebSocket 接続確立時に自動開始されるためここでは実行しない
 
-  // (12.5) 保存済みの履歴と現在印刷を表示（初期ホスト）
-  const initHost = currentHostname;
-  const savedJobs = printManager.loadHistory(initHost);
-  if (savedJobs.length) {
-    const wsIp = monitorData.appSettings.wsDest?.split(":")[0];
-    const httpPort = monitorData.appSettings.httpPort || 80;
-    const baseUrl = wsIp ? `http://${wsIp}:${httpPort}` : "";
-    const raw = printManager.jobsToRaw(savedJobs);
-    printManager.renderHistoryTable(raw, baseUrl, initHost);
-  }
-  printManager.renderPrintCurrent(
-    document.getElementById("print-current-container"), initHost
-  );
-
-  // (13) ファイルマネージャ初期化
-  FileManager.init();
-
-  // (14) 印刷履歴手動リフレッシュ
-  const historyBtn = document.getElementById("history-refresh-btn");
-  if (historyBtn) {
-    historyBtn.addEventListener("click", () => {
-      document.getElementById("btn-history-list")?.click();
-    });
-  }
-
-  // (14.5) コマンドパレット側ボタン → 上部クイックボタンの代理クリック
-  const aliasClick = (src, dest) => {
-    const s = document.getElementById(src);
-    const d = document.getElementById(dest);
-    if (s && d) s.addEventListener("click", () => d.click());
-  };
-  aliasClick("btn-stop-print-cmd",   "btn-stop-print");
-  aliasClick("btn-pause-print-cmd",  "btn-pause-print");
-  aliasClick("btn-resume-print-cmd", "btn-resume-print");
-  aliasClick("btn-history-list-cmd","btn-history-list");
-  aliasClick("btn-file-list-cmd",  "btn-file-list");
-
-  printManager.initHistoryTabs();
-
-  // (15) ファイルアップロード初期化
-  printManager.setupUploadUI();
-
-  // (16) 通知コンテナ初期化（notificationManager 用）
-  if (!document.querySelector(".notification-container")) {
-    const container = document.createElement("div");
-    container.className = "notification-container";
-    document.body.appendChild(container);
-  }
-
-  // (17) 初期状態（切断）の UI 表示を整える
-  const cancelBtn = document.getElementById("camera-cancel-button");
-  cancelBtn?.addEventListener("click", () => {
-    stopCameraStream();
-  });
-  updateConnectionUI("disconnected");
-  setupPrinterUI();
-
-  // (18) 時間計算用変数自動保存
+  // (5) 自動保存タイマー＆beforeunload 登録
   initializeAutoSave();
-
-  // (19) JSONコマンド送信機能
-  initSendRawJson();
-  initSendGcode();
-  initTestRawJson();
-  initPauseHome();
-  initXYUnlock();
 }
 
 // ────────────── 印刷再開データの復元／永続化 ──────────────
@@ -349,16 +150,16 @@ const spoolKeys = [
  *  localStorage に保存された印刷再開データを読み出し、
  *  storedData の computedValue として復元します。
  *
+ * @param {string} hostname - 対象ホスト名
  * @param {number|null} currentPrintId -
  *   現在進行中の印刷ID。null の場合は ID 照合を行わず復元します。
  */
-export function restorePrintResume(currentPrintId = null) {
-  const host = currentHostname;
-  if (!host) return;
+export function restorePrintResume(hostname, currentPrintId = null) {
+  if (!hostname) return;
 
   let savedId = null;
   try {
-    const rawId = localStorage.getItem(`pd_${host}_prevPrintID`);
+    const rawId = localStorage.getItem(`pd_${hostname}_prevPrintID`);
     if (rawId != null) savedId = JSON.parse(rawId);
   } catch (e) {
     console.warn("restorePrintResume: prevPrintID パース失敗", e);
@@ -370,31 +171,31 @@ export function restorePrintResume(currentPrintId = null) {
   }
 
   persistKeys.forEach(key => {
-    const raw = localStorage.getItem(`pd_${host}_${key}`);
+    const raw = localStorage.getItem(`pd_${hostname}_${key}`);
     if (raw == null) return;  // データなし
 
     try {
       // JSON パースして storedData にセット（rawValue／computedValue 両方に流し込む）
       const value = JSON.parse(raw);
 
-      // 第3引数 true を渡すことで rawValue にもセットします
-      setStoredData(key, value, true);
+      // 第4引数 true を渡すことで rawValue にもセットします
+      setStoredDataForHost(hostname, key, value, true);
 
     } catch (e) {
       console.warn(`restorePrintResume: '${key}' の JSON パースに失敗しました`, e);
     }
   });
 
-  const spool = getCurrentSpool(host);
+  const spool = getCurrentSpool(hostname);
   if (spool) {
     spoolKeys.forEach(k => {
-      const raw = localStorage.getItem(`pd_${host}_${k}`);
+      const raw = localStorage.getItem(`pd_${hostname}_${k}`);
       if (raw == null) return;
       try {
         const val = JSON.parse(raw);
         switch (k) {
           case 'currentSpoolId':
-            setCurrentSpoolId(val, host);
+            setCurrentSpoolId(val, hostname);
             break;
           case 'currentPrintID':
             spool.currentPrintID = val;
@@ -419,30 +220,31 @@ export function restorePrintResume(currentPrintId = null) {
  * @description
  *  現在の storedData から印刷再開データを抽出し、
  *  localStorage に個別保存または削除します。
+ *
+ * @param {string} hostname - 対象ホスト名
  */
-export function persistPrintResume() {
-  const host = currentHostname;
-  if (!host || !monitorData.machines[host]) return;
+export function persistPrintResume(hostname) {
+  if (!hostname || !monitorData.machines[hostname]) return;
 
-  const machineSD = monitorData.machines[host].storedData;
+  const machineSD = monitorData.machines[hostname].storedData;
   persistKeys.forEach(key => {
     const entry = machineSD[key];
-    const storageKey = `pd_${host}_${key}`;
+    const storageKey = `pd_${hostname}_${key}`;
     if (entry?.rawValue != null) {
       localStorage.setItem(storageKey, JSON.stringify(entry.rawValue));
     } else {
       // 該当データがない場合はキーを消しておく
-      localStorage.removeItem(`pd_${host}_${key}`);
+      localStorage.removeItem(`pd_${hostname}_${key}`);
     }
   });
 
-  const spool = getCurrentSpool(host);
+  const spool = getCurrentSpool(hostname);
   if (spool) {
     spoolKeys.forEach(k => {
       const val = (() => {
         switch (k) {
           case 'currentSpoolId':
-            return getCurrentSpoolId(host);
+            return getCurrentSpoolId(hostname);
           case 'currentPrintID':
             return spool.currentPrintID;
           case 'currentJobStartLength':
@@ -455,7 +257,7 @@ export function persistPrintResume() {
             return null;
         }
       })();
-      const key = `pd_${host}_${k}`;
+      const key = `pd_${hostname}_${k}`;
       if (val != null) {
         localStorage.setItem(key, JSON.stringify(val));
       } else {
@@ -465,13 +267,13 @@ export function persistPrintResume() {
   }
 }
 
- 
+
 /** 自動保存間隔（ミリ秒） */
 const AUTO_SAVE_INTERVAL_MS = 3 * 60 * 1000; // 3分
 
 /**
  * autoSaveAll:
- *   - 印刷再開用データを localStorage に保存
+ *   - 全接続ホストの印刷再開用データを localStorage に保存
  *   - 統一ストレージ（dashboard_storage）を保存
  *   - aggregator の内部状態を localStorage に保存
  *   - 保存前に {@link aggregatorUpdate} を実行しタイマー値を確定
@@ -487,13 +289,13 @@ function autoSaveAll() {
   }
 
   try {
-    persistPrintResume();
-    saveUnifiedStorage(true);   // 即時書き込み（スロットリングバイパス）
-    /* 全接続ホストの aggregator 状態を保存 */
+    /* 全接続ホストの印刷再開データと aggregator 状態を保存 */
     for (const host of Object.keys(monitorData.machines)) {
       if (host === PLACEHOLDER_HOSTNAME) continue;
+      persistPrintResume(host);
       persistAggregatorState(host);
     }
+    saveUnifiedStorage(true);   // 即時書き込み（スロットリングバイパス）
   } catch (e) {
     console.warn("autoSaveAll: データ永続化中にエラーが発生しました", e);
   }

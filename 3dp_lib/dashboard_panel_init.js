@@ -317,10 +317,9 @@ function initFilamentPanel(body, hostname) {
       materialColorCode:        spool?.filamentColor || "",
       manufacturerName:         spool?.manufacturerName || spool?.brand || "",
     });
-    /* per-host Map + 後方互換 window.filamentPreview */
+    /* per-host Map で管理（グローバル window.filamentPreview は廃止） */
     if (!window._filamentPreviews) window._filamentPreviews = new Map();
     window._filamentPreviews.set(hostname, preview);
-    window.filamentPreview = preview;
   } catch (e) {
     console.warn("[panel-init] filament preview 生成エラー:", e);
   }

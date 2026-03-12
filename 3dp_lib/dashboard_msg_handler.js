@@ -186,7 +186,7 @@ function persistHistoryTimers(printId, hostname) {
   ) {
     printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
   }
-  persistPrintResume();
+  persistPrintResume(host);
   persistAggregatorState(host);
   // 値を保存したら即座に画面へ反映する
   try {
@@ -276,7 +276,7 @@ export function handleMessage(data) {
 
     restartAggregatorTimer();
     const curId = Number(data.printStartTime || 0) || null;
-    restorePrintResume(curId);
+    restorePrintResume(initHost, curId);
 
     // 保存済み履歴と現在印刷を表示（initHost は上で定義済み）
     const baseUrlStored = `http://${getDeviceIp(initHost)}:${getHttpPort(initHost)}`;
@@ -429,7 +429,7 @@ export function processData(data, hostname) {
     clearInterval(ms.prepTimerId);
     ms.tsPrintStart = ms.tsPrepEnd = null;
     // 値の消失を防ぐため storedData は保持したままにする
-    persistPrintResume();
+    persistPrintResume(host);
     persistAggregatorState(host);
   };
   const resetCheck      = () => {
@@ -492,7 +492,7 @@ export function processData(data, hostname) {
     }
 
     // 直ちに保存してリロード時の損失を防ぐ
-    persistPrintResume();
+    persistPrintResume(host);
     persistAggregatorState(host);
     ms.prepTimerId = setInterval(() => {
       const sec = Math.floor((Date.now() - ms.tsPrintStart)/1000);
@@ -749,7 +749,7 @@ export function processData(data, hostname) {
       machine.historyData.push(entry);
       const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
       printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
-      persistPrintResume();
+      persistPrintResume(host);
     }
   }
 
