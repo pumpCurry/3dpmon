@@ -182,6 +182,74 @@ export function formatFilamentAmount(mm, spool = null) {
 }
 
 /**
+ * スプール1つについての消費パターンと予測分析を返す。
+ *
+ * usedLengthLog・printCount・purchasePrice から
+ * コスト効率・消費ペース・枯渇予測を算出する。
+ *
+ * @function buildSpoolAnalytics
+ * @param {string} spoolId - スプール ID
+ * @returns {Object|null} 分析結果。スプール未発見時は null
+ */
+export function buildSpoolAnalytics(spoolId) {
+  const spool = getSpoolById(spoolId);
+  if (!spool) return null;
+
+  const totalMm = spool.totalLengthMm || 0;
+  const remainMm = spool.remainingLengthMm || 0;
+  const consumedMm = Math.max(0, totalMm - remainMm);
+  const consumedPct = totalMm > 0 ? (consumedMm / totalMm) * 100 : 0;
+  const printCount = spool.printCount || 0;
+  const avgPerPrint = printCount > 0 ? consumedMm / printCount : 0;
+
+  // コスト計算
+  const price = spool.purchasePrice || 0;
+  const costPerPrint = printCount > 0 && price > 0 ? price / printCount : 0;
+  const remainingCost = totalMm > 0 && price > 0 ? price * (remainMm / totalMm) : 0;
+  const currency = spool.currencySymbol || "¥";
+
+  // 使用期間
+  const startedAt = spool.startedAt || 0;
+  const now = Date.now();
+  const daysActive = startedAt > 0 ? Math.max(1, (now - startedAt) / (1000 * 60 * 60 * 24)) : 0;
+  const printsPerDay = daysActive > 0 ? printCount / daysActive : 0;
+
+  // 枯渇予測
+  const mmPerDay = daysActive > 0 ? consumedMm / daysActive : 0;
+  const estimatedRemainingPrints = avgPerPrint > 0 ? Math.floor(remainMm / avgPerPrint) : null;
+  const estimatedRemainingDays = mmPerDay > 0 ? Math.round(remainMm / mmPerDay) : null;
+
+  // 消費推移（usedLengthLog からジョブごとの消費を取得）
+  const log = Array.isArray(spool.usedLengthLog) ? spool.usedLengthLog : [];
+
+  // 重量換算
+  const density = spool.density || getMaterialDensity(spool.material || spool.materialName);
+  const diameter = spool.filamentDiameter || 1.75;
+  const remainGram = weightFromLength(remainMm, density, diameter);
+  const consumedGram = weightFromLength(consumedMm, density, diameter);
+
+  return {
+    // 基本
+    totalMm, remainMm, consumedMm, consumedPct,
+    remainGram: Number(remainGram.toFixed(0)),
+    consumedGram: Number(consumedGram.toFixed(0)),
+    printCount, avgPerPrint,
+    // コスト
+    price, currency, costPerPrint, remainingCost,
+    // ペース
+    daysActive: Number(daysActive.toFixed(1)),
+    printsPerDay: Number(printsPerDay.toFixed(2)),
+    mmPerDay: Number(mmPerDay.toFixed(0)),
+    // 予測
+    estimatedRemainingPrints,
+    estimatedRemainingDays,
+    // 消費ログ
+    usedLengthLog: log,
+    material: spool.materialName || spool.material || ""
+  };
+}
+
+/**
  * スプール識別用の一意な ID を生成する。
  *
  * 日時と乱数を組み合わせた文字列を返す。

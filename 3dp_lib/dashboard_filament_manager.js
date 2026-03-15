@@ -43,6 +43,9 @@ import {
   getSpoolState,
   getSpoolStateLabel,
   formatSpoolDisplayId,
+  formatFilamentAmount,
+  buildSpoolAnalytics,
+  getSpoolById,
   SPOOL_STATE
 } from "./dashboard_spool.js";
 import {
@@ -366,10 +369,24 @@ function createDashboardContent(hostname, switchTab) {
           ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0)
           : 0;
         const colorSwatch = `<span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${spool.filamentColor || spool.color || "#ccc"};vertical-align:middle;margin-right:4px;border:1px solid #aaa;"></span>`;
+        // 残量を人間可読フォーマットで表示
+        const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+        // 枯渇予測
+        const analytics = buildSpoolAnalytics(spool.id);
+        let predLine = "";
+        if (analytics) {
+          const parts = [];
+          if (analytics.estimatedRemainingPrints != null) parts.push(`あと約${analytics.estimatedRemainingPrints}回`);
+          if (analytics.estimatedRemainingDays != null) parts.push(`約${analytics.estimatedRemainingDays}日`);
+          if (analytics.remainingCost > 0) parts.push(`${analytics.currency}${Math.round(analytics.remainingCost).toLocaleString()}残`);
+          if (parts.length > 0) predLine = `<div style="font-size:11px;color:#64748b;margin-top:2px">${parts.join(" / ")}</div>`;
+        }
         infoBox.innerHTML =
           `<div><strong>${formatSpoolDisplayId(spool)}</strong> ${spool.name || ""}</div>` +
           `<div>${colorSwatch}${spool.colorName || ""} / ${spool.materialName || spool.material || ""}</div>` +
-          `<div>${renderRemainBar(spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>`;
+          `<div style="margin:2px 0">${remainFmt.display} (${pct}%)</div>` +
+          `<div>${renderRemainBar(spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
+          predLine;
 
         const btnWrap = document.createElement("div");
         btnWrap.style.cssText = "margin-top:4px;display:flex;gap:4px;";
@@ -1536,24 +1553,37 @@ function createReportContent() {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
 
-  // ── 1) 日別集計テーブル ───────────────────────────────
-  const table = document.createElement("table");
-  const thead = document.createElement("thead");
-  thead.innerHTML = "<tr><th>日付</th><th>スプール数</th><th>消費量(mm)</th></tr>";
-  table.appendChild(thead);
-  const tbody = document.createElement("tbody");
-
+  // ── データ集計 ───────────────────────────────
   const dailyMap = {};
   const weeklyMap = {};
   const monthlyMap = {};
+  const materialMap = {};     // 素材別消費量
+  const materialCostMap = {}; // 素材別コスト
+  let totalMm = 0, totalCost = 0, totalPrints = 0;
 
   (monitorData.usageHistory || []).forEach(u => {
+    const used = Number(u.usedLength || 0);
+    if (used <= 0) return;
+    totalMm += used;
+
     const dateObj = new Date(Number(u.startedAt || 0));
     const dayKey = dateObj.toISOString().slice(0, 10);
-    if (!dailyMap[dayKey]) dailyMap[dayKey] = { ids: new Set(), len: 0 };
+    if (!dailyMap[dayKey]) dailyMap[dayKey] = { ids: new Set(), len: 0, cost: 0 };
     dailyMap[dayKey].ids.add(u.spoolId);
-    const used = Number(u.usedLength || 0);
     dailyMap[dayKey].len += used;
+
+    // スプール情報でコスト・素材を集計
+    const spool = getSpoolById(u.spoolId);
+    const mat = spool?.materialName || spool?.material || "不明";
+    materialMap[mat] = (materialMap[mat] || 0) + used;
+
+    let entryCost = 0;
+    if (spool?.purchasePrice > 0 && spool?.totalLengthMm > 0) {
+      entryCost = (used / spool.totalLengthMm) * spool.purchasePrice;
+      dailyMap[dayKey].cost += entryCost;
+      totalCost += entryCost;
+      materialCostMap[mat] = (materialCostMap[mat] || 0) + entryCost;
+    }
 
     const wKey = formatWeekKey(dateObj);
     weeklyMap[wKey] = (weeklyMap[wKey] || 0) + used;
@@ -1562,17 +1592,103 @@ function createReportContent() {
     monthlyMap[mKey] = (monthlyMap[mKey] || 0) + used;
   });
 
+  // 印刷回数（消費エントリ数）
+  totalPrints = (monitorData.usageHistory || []).filter(u => Number(u.usedLength || 0) > 0).length;
+
+  const currency = getSpools(false).find(s => s.currencySymbol)?.currencySymbol || "¥";
+
+  // ── 0) サマリカード ─────────────────────────────────
+  const summaryDiv = document.createElement("div");
+  summaryDiv.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px";
+  const summaryItems = [
+    { label: "総消費量", value: formatFilamentAmount(totalMm).display },
+    { label: "推定総コスト", value: `${currency}${Math.round(totalCost).toLocaleString()}` },
+    { label: "消費記録数", value: `${totalPrints}回` },
+    { label: "素材種類", value: `${Object.keys(materialMap).length}種` }
+  ];
+  for (const item of summaryItems) {
+    const card = document.createElement("div");
+    card.style.cssText = "background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;text-align:center";
+    card.innerHTML = `<div style="font-size:0.8em;color:#64748b">${item.label}</div><div style="font-size:1.2em;font-weight:bold">${item.value}</div>`;
+    summaryDiv.appendChild(card);
+  }
+  div.appendChild(summaryDiv);
+
+  // ── 1) 素材別内訳 ─────────────────────────────────
+  if (Object.keys(materialMap).length > 0) {
+    const matFs = document.createElement("fieldset");
+    matFs.style.cssText = "margin-bottom:12px;border:1px solid #e2e8f0;border-radius:6px;padding:8px";
+    matFs.innerHTML = "<legend style='font-weight:bold'>素材別内訳</legend>";
+    const matTable = document.createElement("table");
+    matTable.style.width = "100%";
+    matTable.innerHTML = `<thead><tr><th>素材</th><th style="text-align:right">消費量</th><th style="text-align:right">比率</th><th style="text-align:right">推定コスト</th></tr></thead>`;
+    const matTbody = document.createElement("tbody");
+    Object.entries(materialMap)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([mat, mm]) => {
+        const pct = totalMm > 0 ? ((mm / totalMm) * 100).toFixed(1) : "0";
+        const cost = materialCostMap[mat] || 0;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${mat}</td><td style="text-align:right">${formatFilamentAmount(mm).display}</td><td style="text-align:right">${pct}%</td><td style="text-align:right">${currency}${Math.round(cost).toLocaleString()}</td>`;
+        matTbody.appendChild(tr);
+      });
+    matTable.appendChild(matTbody);
+    matFs.appendChild(matTable);
+    div.appendChild(matFs);
+  }
+
+  // ── 2) スプール枯渇予測 ─────────────────────────────
+  const activeSpools = getSpools(false).filter(s => {
+    const st = getSpoolState(s);
+    return st === SPOOL_STATE.MOUNTED || st === SPOOL_STATE.STORED;
+  });
+  if (activeSpools.length > 0) {
+    const predFs = document.createElement("fieldset");
+    predFs.style.cssText = "margin-bottom:12px;border:1px solid #e2e8f0;border-radius:6px;padding:8px";
+    predFs.innerHTML = "<legend style='font-weight:bold'>スプール消費予測</legend>";
+    const predTable = document.createElement("table");
+    predTable.style.width = "100%";
+    predTable.innerHTML = `<thead><tr><th>スプール</th><th>素材</th><th style="text-align:right">残量</th><th style="text-align:right">残印刷数</th><th style="text-align:right">残日数</th><th style="text-align:right">コスト残</th></tr></thead>`;
+    const predTbody = document.createElement("tbody");
+    for (const sp of activeSpools) {
+      const a = buildSpoolAnalytics(sp.id);
+      if (!a) continue;
+      const remainFmt = formatFilamentAmount(a.remainMm, sp);
+      const remainPct = a.totalMm > 0 ? ((a.remainMm / a.totalMm) * 100).toFixed(0) : "?";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${formatSpoolDisplayId(sp)} ${sp.name || ""}</td>` +
+        `<td>${a.material}</td>` +
+        `<td style="text-align:right">${remainFmt.display} (${remainPct}%)</td>` +
+        `<td style="text-align:right">${a.estimatedRemainingPrints != null ? `約${a.estimatedRemainingPrints}回` : "—"}</td>` +
+        `<td style="text-align:right">${a.estimatedRemainingDays != null ? `約${a.estimatedRemainingDays}日` : "—"}</td>` +
+        `<td style="text-align:right">${a.price > 0 ? `${a.currency}${Math.round(a.remainingCost).toLocaleString()}` : "—"}</td>`;
+      predTbody.appendChild(tr);
+    }
+    predTable.appendChild(predTbody);
+    predFs.appendChild(predTable);
+    div.appendChild(predFs);
+  }
+
+  // ── 3) 日別集計テーブル ───────────────────────────────
+  const table = document.createElement("table");
+  table.style.width = "100%";
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>日付</th><th style='text-align:right'>スプール数</th><th style='text-align:right'>消費量</th><th style='text-align:right'>推定コスト</th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+
   Object.entries(dailyMap)
     .sort((a, b) => b[0].localeCompare(a[0]))
     .forEach(([d, info]) => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${d}</td><td>${info.ids.size}</td><td>${info.len.toLocaleString()}</td>`;
+      const fmtLen = formatFilamentAmount(info.len);
+      tr.innerHTML = `<td>${d}</td><td style="text-align:right">${info.ids.size}</td><td style="text-align:right">${fmtLen.display}</td><td style="text-align:right">${info.cost > 0 ? `${currency}${Math.round(info.cost).toLocaleString()}` : "—"}</td>`;
       tbody.appendChild(tr);
     });
   table.appendChild(tbody);
   div.appendChild(table);
 
-  // ── 2) 週次・月次の消費量を Chart.js で表示 ─────────────────
+  // ── 4) 週次・月次チャート ─────────────────
   const weekCanvas = document.createElement("canvas");
   weekCanvas.style.maxHeight = "200px";
   div.appendChild(weekCanvas);
@@ -1582,24 +1698,47 @@ function createReportContent() {
   div.appendChild(monthCanvas);
 
   if (typeof Chart !== "undefined") {
-    new Chart(weekCanvas.getContext("2d"), {
-      type: "bar",
-      data: {
-        labels: Object.keys(weeklyMap),
-        datasets: [
-          { label: "週次消費量(mm)", data: Object.values(weeklyMap) }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
+    // 素材別の週次消費データを構築
+    const weekKeys = Object.keys(weeklyMap).sort();
+    const matColors = { PLA: "#f97316", PETG: "#3b82f6", ABS: "#ef4444", TPU: "#a855f7" };
+    const matKeys = Object.keys(materialMap);
+
+    // 週次: 素材別スタック棒グラフ
+    const weeklyMatData = {};
+    (monitorData.usageHistory || []).forEach(u => {
+      const used = Number(u.usedLength || 0);
+      if (used <= 0) return;
+      const wKey = formatWeekKey(new Date(Number(u.startedAt || 0)));
+      const spool = getSpoolById(u.spoolId);
+      const mat = spool?.materialName || spool?.material || "不明";
+      if (!weeklyMatData[mat]) weeklyMatData[mat] = {};
+      weeklyMatData[mat][wKey] = (weeklyMatData[mat][wKey] || 0) + used;
     });
 
+    const weekDatasets = matKeys.map((mat, i) => ({
+      label: mat,
+      data: weekKeys.map(w => (weeklyMatData[mat]?.[w] || 0) / 1000),
+      backgroundColor: matColors[mat] || `hsl(${i * 60}, 60%, 55%)`
+    }));
+
+    new Chart(weekCanvas.getContext("2d"), {
+      type: "bar",
+      data: { labels: weekKeys, datasets: weekDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { stacked: true }, y: { stacked: true, title: { display: true, text: "消費量 (m)" } } }
+      }
+    });
+
+    // 月次: 素材別円グラフ
     new Chart(monthCanvas.getContext("2d"), {
       type: "pie",
       data: {
-        labels: Object.keys(monthlyMap),
-        datasets: [
-          { label: "月次消費量(mm)", data: Object.values(monthlyMap) }
-        ]
+        labels: matKeys.map(m => `${m} ${formatFilamentAmount(materialMap[m]).m}m`),
+        datasets: [{
+          data: matKeys.map(m => materialMap[m]),
+          backgroundColor: matKeys.map((m, i) => matColors[m] || `hsl(${i * 60}, 60%, 55%)`)
+        }]
       },
       options: { responsive: true, maintainAspectRatio: false }
     });
