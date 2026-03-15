@@ -1017,6 +1017,10 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const checktime = checkSec != null ? formatDuration(checkSec) : "";
     const pauseSec  = raw.pauseTime != null ? Number(raw.pauseTime) : null;
     const pausetime = pauseSec != null ? formatDuration(pauseSec) : "";
+    // フィラメント情報（umaterial 算出前に必要）
+    const spoolInfos = Array.isArray(raw.filamentInfo)
+      ? raw.filamentInfo
+      : (raw.filamentId ? [{ spoolId: raw.filamentId }] : []);
     // フィラメント消費量: スプール情報があれば g/¥ 換算も表示
     const spoolForFmt = spoolInfos.length > 0
       ? (getSpoolById(spoolInfos[0].spoolId) || null) : null;
@@ -1051,10 +1055,6 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       ? `<div class="time-detail">${timeDetails.join(" ")}</div>`
       : "";
 
-    // フィラメント情報
-    const spoolInfos = Array.isArray(raw.filamentInfo)
-      ? raw.filamentInfo
-      : (raw.filamentId ? [{ spoolId: raw.filamentId }] : []);
     const matColors = {
       PLA: '#FFEDD5', 'PLA+': '#FED7AA', PETG: '#DBEAFE',
       ABS: '#FECACA', TPU: '#E9D5FF'
