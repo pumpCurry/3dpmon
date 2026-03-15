@@ -229,7 +229,20 @@ function _createMsgHostState() {
  * @returns {MsgHandlerHostState}
  */
 function _getMsgState(hostname) {
-  if (!_msgHostStates.has(hostname)) _msgHostStates.set(hostname, _createMsgHostState());
+  if (!_msgHostStates.has(hostname)) {
+    const ms = _createMsgHostState();
+    // localStorage からリロード前の状態を復元（通知再発火防止）
+    try {
+      const p = `msg_${hostname}_`;
+      const st = localStorage.getItem(p + "prevPrintState");
+      const tm = localStorage.getItem(p + "prevPrintStartTime");
+      const sp = localStorage.getItem(p + "prevSelfTestPct");
+      if (st != null) ms.prevPrintState = JSON.parse(st);
+      if (tm != null) ms.prevPrintStartTime = JSON.parse(tm);
+      if (sp != null) ms.prevSelfTestPct = JSON.parse(sp);
+    } catch { /* 復元失敗は無視 */ }
+    _msgHostStates.set(hostname, ms);
+  }
   return _msgHostStates.get(hostname);
 }
 
@@ -853,10 +866,16 @@ export function processData(data, hostname) {
     }
   }
 
-  // 次回比較用に保存
+  // 次回比較用に保存（リロード時の再通知防止のため localStorage にも永続化）
   ms.prevPrintState     = st;
   ms.prevPrintStartTime = currStartTime;
   ms.prevSelfTestPct    = currSelfPct;
+  try {
+    const msPrefix = `msg_${host}_`;
+    localStorage.setItem(msPrefix + "prevPrintState", JSON.stringify(st));
+    localStorage.setItem(msPrefix + "prevPrintStartTime", JSON.stringify(currStartTime));
+    localStorage.setItem(msPrefix + "prevSelfTestPct", JSON.stringify(currSelfPct));
+  } catch { /* ストレージ書き込みエラーは無視 */ }
 
   // (2.8) 集約ロジックへ渡す
   ingestData(data, host);

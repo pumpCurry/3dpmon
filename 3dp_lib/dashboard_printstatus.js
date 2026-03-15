@@ -75,6 +75,9 @@ function resetStateHistory(hostname) {
  * @param {string} hostname - 対象ホスト名
  */
 export function handlePrintStateTransition(prev, curr, pushLog, playNotification, hostname) {
+  // リロード直後は prev が undefined/NaN → 状態変化として扱わない
+  if (prev == null || isNaN(Number(prev))) return;
+  if (Number(prev) === Number(curr)) return; // 同一状態は遷移ではない
   const stateHistory = _getHistory(hostname);
   stateHistory.push(curr);
   if (stateHistory.length > MAX_HISTORY_LENGTH) stateHistory.shift();
