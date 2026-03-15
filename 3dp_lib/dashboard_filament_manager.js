@@ -1330,12 +1330,13 @@ function createRegisteredContent(openEditor, hostname) {
       }
       tr.appendChild(cmd);
 
-      // 行クリックでプレビュー更新
+      // 行クリックでプレビュー更新 + 詳細ドリルダウン表示
       tr.addEventListener("click", () => {
         selectedTr?.classList.remove("selected");
         selectedTr = tr;
         tr.classList.add("selected");
         preview.setState(spoolToPreviewOverrides(sp));
+        renderDrilldown(sp);
       });
       tbody.appendChild(tr);
     });
@@ -1364,6 +1365,126 @@ function createRegisteredContent(openEditor, hostname) {
   addBtn.addEventListener("click", () => {
     openEditor(null, render);
   });
+
+  // ── スプール詳細ドリルダウンパネル ──
+  const drilldown = document.createElement("div");
+  drilldown.className = "spool-drilldown";
+  drilldown.style.cssText = "display:none;margin-top:12px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#fafbfc";
+  div.appendChild(drilldown);
+
+  /**
+   * スプール詳細ドリルダウンを描画する。
+   * @param {Object} sp - スプールオブジェクト
+   */
+  function renderDrilldown(sp) {
+    drilldown.style.display = "";
+    drilldown.innerHTML = "";
+
+    const analytics = buildSpoolAnalytics(sp.id);
+    if (!analytics) {
+      drilldown.innerHTML = "<p>分析データがありません</p>";
+      return;
+    }
+
+    // ヘッダー
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px";
+    const colorSwatch = `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${sp.filamentColor || sp.color || "#ccc"};vertical-align:middle;margin-right:6px;border:1px solid #aaa"></span>`;
+    hdr.innerHTML = `<h3 style="margin:0;font-size:1.1em">${colorSwatch}${formatSpoolDisplayId(sp)} ${sp.name || ""} <small style="color:#64748b">${analytics.material}</small></h3>`;
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "×";
+    closeBtn.style.cssText = "border:none;background:none;font-size:18px;cursor:pointer;color:#94a3b8";
+    closeBtn.addEventListener("click", () => { drilldown.style.display = "none"; });
+    hdr.appendChild(closeBtn);
+    drilldown.appendChild(hdr);
+
+    // サマリカード
+    const remainFmt = formatFilamentAmount(analytics.remainMm, sp);
+    const consumedFmt = formatFilamentAmount(analytics.consumedMm, sp);
+    const cards = document.createElement("div");
+    cards.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-bottom:10px";
+    const cardItems = [
+      { label: "残量", value: `${remainFmt.display}`, sub: `${analytics.consumedPct > 0 ? (100 - analytics.consumedPct).toFixed(0) : "?"}%` },
+      { label: "消費済", value: consumedFmt.display, sub: `${analytics.consumedPct.toFixed(0)}%` },
+      { label: "印刷回数", value: `${analytics.printCount}回`, sub: `平均 ${formatFilamentAmount(analytics.avgPerPrint).m}m/回` },
+      { label: "使用期間", value: `${analytics.daysActive}日`, sub: `${analytics.printsPerDay}回/日` },
+    ];
+    if (analytics.estimatedRemainingPrints != null) {
+      cardItems.push({ label: "残印刷予測", value: `約${analytics.estimatedRemainingPrints}回`, sub: `約${analytics.estimatedRemainingDays}日` });
+    }
+    if (analytics.price > 0) {
+      cardItems.push({ label: "コスト", value: `${analytics.currency}${Math.round(analytics.costPerPrint)}/回`, sub: `残${analytics.currency}${Math.round(analytics.remainingCost).toLocaleString()}` });
+    }
+    for (const c of cardItems) {
+      const card = document.createElement("div");
+      card.style.cssText = "background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:6px;text-align:center";
+      card.innerHTML = `<div style="font-size:0.75em;color:#64748b">${c.label}</div><div style="font-weight:bold">${c.value}</div>${c.sub ? `<div style="font-size:0.75em;color:#94a3b8">${c.sub}</div>` : ""}`;
+      cards.appendChild(card);
+    }
+    drilldown.appendChild(cards);
+
+    // 消費推移グラフ (4-1: usedLengthLog の可視化)
+    if (analytics.usedLengthLog.length > 0) {
+      const chartFs = document.createElement("fieldset");
+      chartFs.style.cssText = "border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-bottom:8px";
+      chartFs.innerHTML = "<legend style='font-weight:bold;font-size:0.9em'>消費推移 (ジョブ別)</legend>";
+      const canvas = document.createElement("canvas");
+      canvas.style.maxHeight = "150px";
+      chartFs.appendChild(canvas);
+      drilldown.appendChild(chartFs);
+
+      if (typeof Chart !== "undefined") {
+        const log = analytics.usedLengthLog;
+        // 累積残量を逆算
+        let remaining = analytics.totalMm;
+        const cumulativeData = [];
+        for (let i = 0; i < log.length; i++) {
+          remaining -= (log[i].used || 0);
+          cumulativeData.push(Math.max(0, remaining) / 1000); // m 単位
+        }
+        new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: {
+            labels: log.map((_, i) => `#${i + 1}`),
+            datasets: [{
+              label: "残量 (m)",
+              data: cumulativeData,
+              borderColor: sp.filamentColor || "#3b82f6",
+              backgroundColor: (sp.filamentColor || "#3b82f6") + "20",
+              fill: true,
+              tension: 0.3
+            }]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { y: { min: 0, title: { display: true, text: "残量 (m)" } } },
+            plugins: { legend: { display: false } }
+          }
+        });
+      }
+    }
+
+    // 印刷実績テーブル (usedLengthLog → ジョブID参照)
+    if (analytics.usedLengthLog.length > 0) {
+      const histFs = document.createElement("fieldset");
+      histFs.style.cssText = "border:1px solid #e5e7eb;border-radius:6px;padding:8px";
+      histFs.innerHTML = "<legend style='font-weight:bold;font-size:0.9em'>消費ログ (直近20件)</legend>";
+      const htable = document.createElement("table");
+      htable.style.cssText = "width:100%;font-size:0.85em";
+      htable.innerHTML = "<thead><tr><th>#</th><th>ジョブID</th><th style='text-align:right'>消費量</th></tr></thead>";
+      const htbody = document.createElement("tbody");
+      const recentLog = analytics.usedLengthLog.slice(-20).reverse();
+      recentLog.forEach((entry, i) => {
+        const fmtUsed = formatFilamentAmount(entry.used, sp);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${analytics.usedLengthLog.length - i}</td><td style="font-family:monospace;font-size:0.85em">${entry.jobId || "—"}</td><td style="text-align:right">${fmtUsed.display}</td>`;
+        htbody.appendChild(tr);
+      });
+      htable.appendChild(htbody);
+      histFs.appendChild(htable);
+      drilldown.appendChild(histFs);
+    }
+  }
 
   render();
   return { el: div, render };

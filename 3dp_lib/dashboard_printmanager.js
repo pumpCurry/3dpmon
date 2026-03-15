@@ -1210,6 +1210,137 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     _bindSortHeaders(table, "print-history-table", hostname);
   }
 
+  // ── ジョブ詳細ドリルダウン (5-1 + 4-3) ──
+  const tableParent = table?.parentElement;
+  if (tableParent) {
+    // 既存のドリルダウンがあれば再利用
+    let drilldown = tableParent.querySelector(".job-drilldown");
+    if (!drilldown) {
+      drilldown = document.createElement("div");
+      drilldown.className = "job-drilldown";
+      drilldown.style.cssText = "display:none;margin-top:8px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#fafbfc";
+      tableParent.appendChild(drilldown);
+    }
+
+    // 各行にクリックハンドラ追加
+    tbody?.querySelectorAll("tr.history-row").forEach((tr, idx) => {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", (ev) => {
+        // ボタン操作時はドリルダウンしない
+        if (ev.target.closest("button, select, input")) return;
+        const raw = rawArray[idx];
+        if (!raw) return;
+        _renderJobDrilldown(drilldown, raw, baseUrl, hostname);
+      });
+    });
+  }
+
+}
+
+/**
+ * ジョブ詳細ドリルダウンを描画する。(Stage 5-1 + 4-3)
+ *
+ * 時間内訳・素材消費・スプール変動・同一ファイル実績・
+ * プリンタ間比較を統合表示する。
+ *
+ * @private
+ * @param {HTMLElement} container - 描画先
+ * @param {Object} raw - 履歴行データ
+ * @param {string} baseUrl - サムネイルベースURL
+ * @param {string} hostname - ホスト名
+ */
+function _renderJobDrilldown(container, raw, baseUrl, hostname) {
+  container.style.display = "";
+  container.innerHTML = "";
+
+  const filename = (raw.rawFilename || raw.filename || "").split("/").pop();
+  const spool = raw.filamentId ? getSpoolById(raw.filamentId) : null;
+  const materialFmt = raw.usagematerial > 0 ? formatFilamentAmount(raw.usagematerial, spool) : null;
+
+  // ヘッダー
+  const hdr = document.createElement("div");
+  hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px";
+  const thumbUrl = makeThumbUrl(baseUrl, raw.rawFilename || raw.filename);
+  hdr.innerHTML = `<div style="display:flex;gap:8px;align-items:center"><img src="${thumbUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:4px" onerror="this.style.display='none'"><div><strong>${filename}</strong><br><span style="color:#64748b;font-size:0.85em">${raw.printfinish === 1 ? "✔ 成功" : raw.printfinish === 0 ? "✗ 失敗" : "— 不明"}</span></div></div>`;
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "×";
+  closeBtn.style.cssText = "border:none;background:none;font-size:18px;cursor:pointer;color:#94a3b8";
+  closeBtn.addEventListener("click", () => { container.style.display = "none"; });
+  hdr.appendChild(closeBtn);
+  container.appendChild(hdr);
+
+  // カード群
+  const cards = document.createElement("div");
+  cards.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;margin-bottom:10px";
+
+  // 時間内訳
+  const startSec = raw.starttime ? Number(raw.starttime) : 0;
+  const usageSec = Number(raw.usagetime || 0);
+  const prepSec = Number(raw.preparationTime || 0);
+  const checkSec = Number(raw.firstLayerCheckTime || 0);
+  const pauseSec = Number(raw.pauseTime || 0);
+  const actualPrintSec = Math.max(0, usageSec - prepSec - checkSec - pauseSec);
+
+  const addCard = (label, value, sub) => {
+    const card = document.createElement("div");
+    card.style.cssText = "background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:6px;text-align:center";
+    card.innerHTML = `<div style="font-size:0.75em;color:#64748b">${label}</div><div style="font-weight:bold">${value}</div>${sub ? `<div style="font-size:0.75em;color:#94a3b8">${sub}</div>` : ""}`;
+    cards.appendChild(card);
+  };
+
+  if (usageSec > 0) addCard("合計時間", formatDuration(usageSec), "");
+  if (actualPrintSec > 0) addCard("実印刷", formatDuration(actualPrintSec), "");
+  if (prepSec > 0) addCard("準備", formatDuration(prepSec), "");
+  if (pauseSec > 0) addCard("停止", formatDuration(pauseSec), "");
+  if (materialFmt) addCard("消費量", materialFmt.display, "");
+
+  // スプール変動
+  if (spool && Array.isArray(raw.filamentInfo) && raw.filamentInfo.length >= 2) {
+    const before = raw.filamentInfo[0]?.expectedRemain;
+    const after = raw.filamentInfo[raw.filamentInfo.length - 1]?.expectedRemain;
+    if (before != null && after != null) {
+      const bFmt = formatFilamentAmount(before, spool);
+      const aFmt = formatFilamentAmount(after, spool);
+      addCard("スプール変動", `${bFmt.m}m → ${aFmt.m}m`, `${formatSpoolDisplayId(spool)}`);
+    }
+  } else if (spool) {
+    addCard("スプール", formatSpoolDisplayId(spool), spool.name || "");
+  }
+
+  container.appendChild(cards);
+
+  // 同一ファイル実績 + プリンタ間比較 (4-3)
+  const insight = buildFileInsight(raw.rawFilename || raw.filename, hostname);
+  if (insight && insight.printCount > 1) {
+    const compFs = document.createElement("fieldset");
+    compFs.style.cssText = "border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-bottom:8px";
+    const rate = (insight.successRate * 100).toFixed(0);
+    const avgFmt = formatFilamentAmount(insight.avgMaterialMm, spool);
+    compFs.innerHTML = `<legend style="font-weight:bold;font-size:0.9em">このファイルの実績 (${hostname})</legend>` +
+      `<div>印刷${insight.printCount}回 / 成功率 ${rate}% / 平均時間 ${formatDuration(insight.avgDurationSec)} / 平均消費 ${avgFmt.display}</div>`;
+
+    // 他ホストでの実績があれば比較表示 (4-3)
+    const otherHosts = Object.keys(monitorData.machines).filter(
+      h => h !== hostname && h !== "_$_NO_MACHINE_$_"
+    );
+    for (const otherHost of otherHosts) {
+      const otherInsight = buildFileInsight(raw.rawFilename || raw.filename, otherHost);
+      if (otherInsight && otherInsight.printCount > 0) {
+        const oRate = (otherInsight.successRate * 100).toFixed(0);
+        const oFmt = formatFilamentAmount(otherInsight.avgMaterialMm, spool);
+        const timeDiff = insight.avgDurationSec > 0
+          ? (((otherInsight.avgDurationSec - insight.avgDurationSec) / insight.avgDurationSec) * 100).toFixed(0) : "?";
+        const matDiff = insight.avgMaterialMm > 0
+          ? (((otherInsight.avgMaterialMm - insight.avgMaterialMm) / insight.avgMaterialMm) * 100).toFixed(0) : "?";
+        const displayName = monitorData.machines[otherHost]?.storedData?.hostname?.rawValue || otherHost;
+        compFs.innerHTML += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #f0f0f0">` +
+          `<strong>${displayName}:</strong> ${otherInsight.printCount}回 / 成功率 ${oRate}% / ` +
+          `平均時間 ${formatDuration(otherInsight.avgDurationSec)} (${timeDiff > 0 ? "+" : ""}${timeDiff}%) / ` +
+          `平均消費 ${oFmt.display} (${matDiff > 0 ? "+" : ""}${matDiff}%)</div>`;
+      }
+    }
+    container.appendChild(compFs);
+  }
 }
 
 /**
