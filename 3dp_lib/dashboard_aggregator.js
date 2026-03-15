@@ -1243,13 +1243,31 @@ export function restoreAggregatorState(hostname) {
     "prevPrintID",
     "accumulatedUsedMaterial",
     "prevUsedMaterialLength",
-    "prevUsageProgress"
+    "prevUsageProgress",
+    "prevProgress",
+    "lastPrintState"
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
     setStoredDataForHost(host, k, null, true);
     setStoredDataForHost(host, k, null, false);
   });
+  // 通知済みマイルストーン・フラグの復元
+  const setKeys = ["notifiedProgressMilestones", "notifiedTimeThresholds", "notifiedTempMilestones"];
+  for (const sk of setKeys) {
+    const raw = localStorage.getItem(prefix + sk);
+    if (raw != null) {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) s[sk] = new Set(arr);
+      } catch { /* ignore */ }
+    }
+  }
+  const flwRaw = localStorage.getItem(prefix + "filamentLowWarned");
+  if (flwRaw != null) {
+    try { s.filamentLowWarned = JSON.parse(flwRaw) === true; } catch { /* ignore */ }
+  }
+
   // localStorage から読み出し
   keys.forEach(k => {
     const raw = localStorage.getItem(prefix + k);
@@ -1304,7 +1322,14 @@ export function persistAggregatorState(hostname) {
     prevPrintID: s.prevPrintID,
     accumulatedUsedMaterial: s.accumulatedUsedMaterial,
     prevUsedMaterialLength: s.prevUsedMaterialLength,
-    prevUsageProgress: s.prevUsageProgress
+    prevUsageProgress: s.prevUsageProgress,
+    prevProgress: s.prevProgress,
+    lastPrintState: s.lastPrintState,
+    // 通知済みマイルストーン（リロードで再通知を防止）
+    notifiedProgressMilestones: [...s.notifiedProgressMilestones],
+    notifiedTimeThresholds: [...s.notifiedTimeThresholds],
+    notifiedTempMilestones: [...s.notifiedTempMilestones],
+    filamentLowWarned: s.filamentLowWarned || false
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;
