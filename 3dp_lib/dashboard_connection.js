@@ -1415,10 +1415,12 @@ export function updatePrinterListUI() {
       const dest = st?.dest || info.host;
       const tgt = _findConnectionTarget(dest);
       const color = tgt?.color || "#444444";
+      const whEnabled = tgt?.webhookEnabled !== false;
       return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:#f8f8f8; border:1px solid #ddd; padding:4px 8px; margin:4px 0; border-radius:4px;">
         <div style="display:flex; align-items:center;">
           <input type="color" class="conn-target-color" data-dest="${dest}" value="${color}" title="パネルバー色" style="width:22px; height:18px; border:none; padding:0; cursor:pointer; flex-shrink:0;">
           <span style="flex:1; margin-left:6px;">${info.line1}</span>
+          <label title="Webhook 通知" style="margin:0 6px;font-size:11px;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""} style="margin-right:2px;">WH</label>
           <button class="conn-target-delete" data-dest="${dest}" data-host="${info.host}" title="切断・削除">✕</button>
         </div>
         <div style="color:#666; font-size:11px; margin-left:28px;">${info.line2}</div>
@@ -1504,6 +1506,19 @@ export function updatePrinterListUI() {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         connectWs(btn.dataset.dest);
+      });
+    });
+
+    // Webhook ON/OFF イベント設定
+    connList.querySelectorAll(".conn-target-webhook").forEach(chk => {
+      chk.addEventListener("change", (e) => {
+        e.stopPropagation();
+        const dest = chk.dataset.dest;
+        const tgt = _findConnectionTarget(dest);
+        if (tgt) {
+          tgt.webhookEnabled = chk.checked;
+          saveUnifiedStorage();
+        }
       });
     });
 

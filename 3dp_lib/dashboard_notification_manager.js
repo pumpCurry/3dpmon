@@ -371,7 +371,7 @@ export class NotificationManager {
     const displayName = machine?.storedData?.hostname?.rawValue
                      || machine?.storedData?.model?.rawValue
                      || hostname;
-    const ctx = { hostname: displayName, now, ...payload };
+    const ctx = { hostname: displayName, now, _rawHostname: hostname, ...payload };
     const text = (def.talk || def.label || "")
       .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
       .replace(/[\r\n]+/g, " ");
@@ -470,19 +470,28 @@ export class NotificationManager {
    * @returns {void}
    */
   _sendWebHook(body, type, ctx) {
+    // per-host webhook ON/OFF チェック
+    const rawHostname = ctx._rawHostname || ctx.hostname || "unknown";
+    if (!this._isWebhookEnabledForHost(rawHostname)) return;
+
+    const now = new Date();
     const payload = {
       // Slack/Discord 互換テキスト
       text: body,
       // 構造化データ
       event: type,
       hostname: ctx.hostname || "unknown",
-      timestamp: new Date().toISOString(),
+      // タイムスタンプ: UTC + epoch + ローカル + オフセット
+      timestamp: now.toISOString(),
+      timestamp_epoch: now.getTime(),
+      timestamp_local: now.toLocaleString(),
+      timezone_offset_min: now.getTimezoneOffset(),
       data: {}
     };
 
     // イベント種別に応じた構造化データを付与
     for (const key of Object.keys(ctx)) {
-      if (key === "hostname" || key === "now") continue;
+      if (key === "hostname" || key === "now" || key === "_rawHostname") continue;
       payload.data[key] = ctx[key];
     }
 
@@ -498,6 +507,64 @@ export class NotificationManager {
         console.error("[webhook]", e);
       }
     });
+  }
+
+  /**
+   * 指定ホストで Webhook が有効かどうかを判定する。
+   *
+   * connectionTargets に `webhookEnabled` フィールドがある場合はそれを参照。
+   * 未設定の場合はデフォルト有効（後方互換）。
+   *
+   * @private
+   * @param {string} hostname - 生のホスト名キー（IP:PORT または hostname）
+   * @returns {boolean}
+   */
+  _isWebhookEnabledForHost(hostname) {
+    const targets = monitorData.appSettings.connectionTargets || [];
+    const entry = targets.find(t => t.hostname === hostname || t.dest === hostname);
+    // 明示的に false が設定されている場合のみ無効。未設定はデフォルト有効
+    if (entry && entry.webhookEnabled === false) return false;
+    return true;
+  }
+
+  /**
+   * Webhook テスト送信を実行する。
+   *
+   * テスト用の構造化ペイロードを全 URL に送信し、
+   * 結果をコールバックで返す。
+   *
+   * @param {function} [onResult] - (url, ok, error) を受け取るコールバック
+   * @returns {Promise<void>}
+   */
+  async testWebhook(onResult) {
+    if (this.webhookUrls.length === 0) {
+      onResult?.("", false, "URL が設定されていません");
+      return;
+    }
+    const now = new Date();
+    const testPayload = {
+      text: "3dpmon Webhook テスト送信",
+      event: "webhookTest",
+      hostname: "3dpmon",
+      timestamp: now.toISOString(),
+      timestamp_epoch: now.getTime(),
+      timestamp_local: now.toLocaleString(),
+      timezone_offset_min: now.getTimezoneOffset(),
+      data: { message: "この通知はテスト送信です" }
+    };
+    const json = JSON.stringify(testPayload);
+    for (const url of this.webhookUrls) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: json
+        });
+        onResult?.(url, res.ok, res.ok ? null : `HTTP ${res.status}`);
+      } catch (e) {
+        onResult?.(url, false, e.message);
+      }
+    }
   }
 
   /**
@@ -761,7 +828,36 @@ export class NotificationManager {
       <label>Webhook URLs (カンマ区切り)
         <textarea data-role="webhook-urls" rows="2" style="width:100%">${this.webhookUrls.join(",")}</textarea>
       </label>
+      <div style="margin-top:6px">
+        <button type="button" data-role="webhook-test" class="btn btn-sm">Webhook テスト送信</button>
+        <span data-role="webhook-test-result" style="margin-left:8px;font-size:0.9em"></span>
+      </div>
     `;
+    // Webhook テストボタンのハンドラ
+    const testBtn = extraFs.querySelector('[data-role="webhook-test"]');
+    const testResult = extraFs.querySelector('[data-role="webhook-test-result"]');
+    if (testBtn) {
+      testBtn.addEventListener("click", async () => {
+        // テスト前に入力欄から最新の URL を反映
+        const urlsEl = extraFs.querySelector('[data-role="webhook-urls"]');
+        if (urlsEl) {
+          this.webhookUrls = urlsEl.value.split(",").map(s => s.trim()).filter(s => s);
+        }
+        testResult.textContent = "送信中…";
+        testResult.style.color = "";
+        await this.testWebhook((url, ok, err) => {
+          const short = url.length > 40 ? url.slice(0, 37) + "…" : url;
+          if (ok) {
+            testResult.textContent = `✔ ${short} — 送信成功`;
+            testResult.style.color = "#16a34a";
+          } else {
+            testResult.textContent = `✗ ${short} — ${err || "送信失敗"}`;
+            testResult.style.color = "#dc2626";
+          }
+        });
+      });
+    }
+
     container.appendChild(extraFs);
 
     /* ── (D) 読み上げ設定（機器別） ── */

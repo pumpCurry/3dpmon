@@ -631,7 +631,7 @@ export function processData(data, hostname) {
       );
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
-    // 完了/失敗通知に印刷結果の詳細を付与
+    // 完了/失敗通知に印刷結果の詳細を付与（表示用 + 生値）
     const notifPayload = { hostname: host };
     const sd = machine?.storedData;
     if (sd) {
@@ -640,13 +640,25 @@ export function processData(data, hostname) {
       if (usedMm > 0) {
         const fmt = formatFilamentAmount(usedMm, spool);
         notifPayload.materialUsed = fmt.display;
+        // 生値（単位分離）: 外部連携でスクリーニング不要にする
+        notifPayload.materialUsed_mm = usedMm;
+        if (fmt.g != null) notifPayload.materialUsed_g = Number(fmt.g);
+        if (fmt.cost != null) notifPayload.materialUsed_cost = Number(fmt.cost);
+        notifPayload.materialUsed_currency = fmt.currency;
       }
       if (spool) {
         const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
         const remainPct = spool.totalLengthMm > 0
-          ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0) + "%" : "";
+          ? Number(((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(1)) : null;
         notifPayload.spoolName = `${formatSpoolDisplayId(spool)} ${spool.name || ""}`.trim();
-        notifPayload.spoolRemain = `${remainFmt.display} (${remainPct})`;
+        notifPayload.spoolRemain = `${remainFmt.display}${remainPct != null ? ` (${remainPct.toFixed(0)}%)` : ""}`;
+        // 生値
+        notifPayload.spoolRemain_mm = spool.remainingLengthMm;
+        notifPayload.spoolRemain_pct = remainPct;
+        if (remainFmt.g != null) notifPayload.spoolRemain_g = Number(remainFmt.g);
+        notifPayload.spoolId = spool.id;
+        notifPayload.spoolSerial = spool.serialNo;
+        notifPayload.material = spool.materialName || spool.material || "";
       }
       const fname = sd.printFileName?.rawValue || sd.fileName?.rawValue;
       if (fname) notifPayload.filename = String(fname).split("/").pop();
