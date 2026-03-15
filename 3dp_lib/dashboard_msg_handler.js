@@ -73,6 +73,91 @@ import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 import { getCurrentSpool, formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 
 /**
+ * Webhook 通知用の共通ペイロードを構築する。
+ *
+ * storedData から印刷状況・スプール情報を取得し、
+ * 外部連携に必要な構造化フィールドを生成する。
+ *
+ * @private
+ * @param {string} host - ホスト名キー
+ * @param {object} [machine] - monitorData.machines[host]
+ * @param {object} [opts] - 追加オプション
+ * @param {boolean} [opts.includeSpool=false] - スプール情報を含めるか
+ * @param {boolean} [opts.includeMaterial=false] - 消費量情報を含めるか
+ * @param {boolean} [opts.includeLayer=false] - レイヤー情報を含めるか
+ * @param {boolean} [opts.includeProgress=false] - 進捗情報を含めるか
+ * @param {boolean} [opts.includeDuration=false] - 所要時間を含めるか
+ * @returns {object} notify() に渡すペイロードオブジェクト
+ */
+function _buildNotifyPayload(host, machine, opts = {}) {
+  const payload = { hostname: host };
+  const sd = machine?.storedData;
+  if (!sd) return payload;
+
+  // ファイル名（常に含める）
+  const fname = sd.printFileName?.rawValue || sd.fileName?.rawValue;
+  if (fname) payload.filename = String(fname).split("/").pop();
+
+  // スプール情報
+  if (opts.includeSpool) {
+    const spool = getCurrentSpool(host);
+    if (spool) {
+      const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+      const remainPct = spool.totalLengthMm > 0
+        ? Number(((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(1)) : null;
+      payload.spoolName = `${formatSpoolDisplayId(spool)} ${spool.name || ""}`.trim();
+      payload.spoolId = spool.id;
+      payload.spoolSerial = spool.serialNo;
+      payload.spoolRemain = `${remainFmt.display}${remainPct != null ? ` (${remainPct.toFixed(0)}%)` : ""}`;
+      payload.spoolRemain_mm = spool.remainingLengthMm;
+      payload.spoolRemain_pct = remainPct;
+      if (remainFmt.g != null) payload.spoolRemain_g = Number(remainFmt.g);
+      payload.material = spool.materialName || spool.material || "";
+    }
+  }
+
+  // 消費量情報
+  if (opts.includeMaterial) {
+    const usedMm = Number(sd.usedMaterialLength?.rawValue ?? sd.usagematerial?.rawValue ?? 0);
+    if (usedMm > 0) {
+      const spool = opts.includeSpool ? null : getCurrentSpool(host);
+      const fmt = formatFilamentAmount(usedMm, spool || getCurrentSpool(host));
+      payload.materialUsed = fmt.display;
+      payload.materialUsed_mm = usedMm;
+      if (fmt.g != null) payload.materialUsed_g = Number(fmt.g);
+      if (fmt.cost != null) payload.materialUsed_cost = Number(fmt.cost);
+      payload.materialUsed_currency = fmt.currency;
+    }
+  }
+
+  // レイヤー情報
+  if (opts.includeLayer) {
+    const layer = sd.layer?.rawValue;
+    const totalLayer = sd.TotalLayer?.rawValue;
+    if (layer != null) payload.layer = Number(layer);
+    if (totalLayer != null) payload.totalLayer = Number(totalLayer);
+  }
+
+  // 進捗情報
+  if (opts.includeProgress) {
+    const progress = sd.printProgress?.rawValue;
+    if (progress != null) payload.printProgress = Number(progress);
+  }
+
+  // 所要時間
+  if (opts.includeDuration) {
+    const startTimeRaw = sd.printStartTime?.rawValue;
+    if (startTimeRaw) {
+      const startEpoch = Number(startTimeRaw) * 1000;
+      payload.printStartTime_epoch = startEpoch;
+      payload.duration_sec = Math.floor((Date.now() - startEpoch) / 1000);
+    }
+  }
+
+  return payload;
+}
+
+/**
  * WS受信データのうち storedData に格納すべきでないキーのセット。
  * - 配列型フィールド（printManager で別途処理）
  * - 内部プロトコルフィールド
@@ -464,7 +549,9 @@ export function processData(data, hostname) {
     ms.tsPrintStart = Date.now();
     ms.totalPauseSeconds = 0;
     pushLog("印刷開始", "info", false, host);
-    notificationManager.notify("printStarted", { hostname: host });
+    notificationManager.notify("printStarted", _buildNotifyPayload(host, machine, {
+      includeSpool: true
+    }));
     _set("preparationTime", 0, true);
 
     // 現在ジョブを即座に保存（printFileName/fileName が同一メッセージに含まれていれば反映）
@@ -586,7 +673,9 @@ export function processData(data, hostname) {
       const elapsed = ms.totalPauseSeconds + Math.floor((Date.now() - ms.tsPauseStart)/1000);
       _set("pauseTime", elapsed, true);
     }, 1000);
-    notificationManager.notify("printPaused", { hostname: host });
+    notificationManager.notify("printPaused", _buildNotifyPayload(host, machine, {
+      includeProgress: true, includeLayer: true
+    }));
     persistHistoryTimers(currStartTime, host);
   }
   // (2.5.2) 停止解除
@@ -600,7 +689,9 @@ export function processData(data, hostname) {
     _set("pauseTime", ms.totalPauseSeconds, true);
     persistHistoryTimers(currStartTime, host);
     ms.tsPauseStart = null;
-    notificationManager.notify("printResumed", { hostname: host });
+    notificationManager.notify("printResumed", _buildNotifyPayload(host, machine, {
+      includeProgress: true, includeLayer: true
+    }));
   }
   // (2.5.3) 新規印刷開始でリセット
   if (initialized && currStartTime !== ms.prevPrintStartTime) {
@@ -634,38 +725,10 @@ export function processData(data, hostname) {
       }
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
-    // 完了/失敗通知に印刷結果の詳細を付与（表示用 + 生値）
-    const notifPayload = { hostname: host };
-    const sd = machine?.storedData;
-    if (sd) {
-      const usedMm = Number(sd.usedMaterialLength?.rawValue ?? sd.usagematerial?.rawValue ?? 0);
-      const spool = getCurrentSpool(host);
-      if (usedMm > 0) {
-        const fmt = formatFilamentAmount(usedMm, spool);
-        notifPayload.materialUsed = fmt.display;
-        // 生値（単位分離）: 外部連携でスクリーニング不要にする
-        notifPayload.materialUsed_mm = usedMm;
-        if (fmt.g != null) notifPayload.materialUsed_g = Number(fmt.g);
-        if (fmt.cost != null) notifPayload.materialUsed_cost = Number(fmt.cost);
-        notifPayload.materialUsed_currency = fmt.currency;
-      }
-      if (spool) {
-        const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
-        const remainPct = spool.totalLengthMm > 0
-          ? Number(((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(1)) : null;
-        notifPayload.spoolName = `${formatSpoolDisplayId(spool)} ${spool.name || ""}`.trim();
-        notifPayload.spoolRemain = `${remainFmt.display}${remainPct != null ? ` (${remainPct.toFixed(0)}%)` : ""}`;
-        // 生値
-        notifPayload.spoolRemain_mm = spool.remainingLengthMm;
-        notifPayload.spoolRemain_pct = remainPct;
-        if (remainFmt.g != null) notifPayload.spoolRemain_g = Number(remainFmt.g);
-        notifPayload.spoolId = spool.id;
-        notifPayload.spoolSerial = spool.serialNo;
-        notifPayload.material = spool.materialName || spool.material || "";
-      }
-      const fname = sd.printFileName?.rawValue || sd.fileName?.rawValue;
-      if (fname) notifPayload.filename = String(fname).split("/").pop();
-    }
+    const notifPayload = _buildNotifyPayload(host, machine, {
+      includeSpool: true, includeMaterial: true,
+      includeLayer: true, includeDuration: true
+    });
     notificationManager.notify(evt, notifPayload);
     persistHistoryTimers(currStartTime, host);
   }

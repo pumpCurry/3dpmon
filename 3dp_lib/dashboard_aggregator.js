@@ -71,7 +71,7 @@ export function setHistoryPersistFunc(fn) {
 }
 
 // 通知閾値定数（全ホスト共通）
-const PROGRESS_MILESTONES    = [50, 80, 90, 95, 98];
+const PROGRESS_MILESTONES    = [25, 50, 75, 80, 90, 95, 98];
 const TIME_THRESHOLDS        = [10, 5, 3, 1];
 const TEMP_MILESTONES        = [0.8, 0.9, 0.95, 0.98, 1.0];
 /** スナップショット記録間隔 [秒] */
@@ -351,7 +351,18 @@ export function ingestData(data, hostname) {
   PROGRESS_MILESTONES.forEach(ms => {
     if (prog >= ms && !s.notifiedProgressMilestones.has(ms)) {
       s.notifiedProgressMilestones.add(ms);
-      notificationManager.notify("printProgressMilestone", { hostname: host, milestone: ms });
+      const layer = Number(storedData.layer?.rawValue ?? 0);
+      const totalLayer = Number(storedData.TotalLayer?.rawValue ?? 0);
+      const remainSec = Number(storedData.printLeftTime?.rawValue ?? 0);
+      const estEnd = remainSec > 0 ? Date.now() + remainSec * 1000 : null;
+      const fname = storedData.printFileName?.rawValue || storedData.fileName?.rawValue;
+      notificationManager.notify("printProgressMilestone", {
+        hostname: host, milestone: ms,
+        filename: fname ? String(fname).split("/").pop() : "",
+        layer, totalLayer,
+        remainingSec: remainSec,
+        estimatedEndTime_epoch: estEnd
+      });
     }
   });
   // 長時間停滞検知 (10分)
