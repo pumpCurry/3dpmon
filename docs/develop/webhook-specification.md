@@ -146,6 +146,78 @@ Content-Type: application/json
 |-------|-------------|----------------|
 | `printRemovalReminder` | 印刷完了後30分経過 | — |
 
+### ステータス定期送信
+
+| event | 発火タイミング | data フィールド |
+|-------|-------------|----------------|
+| `statusSnapshot` | 設定間隔ごと (デフォルト 30秒) | `machines` (全プリンタの状態オブジェクト) |
+
+通知設定モーダルの「ステータス定期送信」チェックボックスで有効化。間隔は 5〜300秒で設定可能。
+イベント駆動の webhook と併用することで、ポーリング API の代替として機能する。
+
+**`statusSnapshot` のペイロード構造:**
+
+```json
+{
+  "text": "3dpmon ステータス (2台接続中)",
+  "event": "statusSnapshot",
+  "hostname": "3dpmon",
+  "timestamp": "2026-03-15T06:42:00.000Z",
+  "timestamp_epoch": 1773826920000,
+  "timestamp_local": "2026/3/15 15:42:00",
+  "timezone_offset_min": -540,
+  "data": {
+    "machines": {
+      "K1Max-4A1B": {
+        "state": 1,
+        "printProgress": 67,
+        "filename": "dragon_figurine_green.gcode",
+        "layer": 567,
+        "totalLayer": 847,
+        "remainingSec": 4200,
+        "nozzleTemp": 215,
+        "bedTemp": 60,
+        "spoolId": "spool_1710000000_abc123",
+        "spoolName": "#001 Emerald",
+        "spoolRemain_mm": 145000,
+        "spoolRemain_pct": 43.2,
+        "spoolRemain_g": 253,
+        "material": "PLA"
+      },
+      "K1Max-03FA": {
+        "state": 0,
+        "printProgress": 0,
+        "filename": "",
+        "layer": 0,
+        "totalLayer": 0,
+        "remainingSec": 0,
+        "nozzleTemp": 25,
+        "bedTemp": 22
+      }
+    }
+  }
+}
+```
+
+**`machines[hostname]` のフィールド:**
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `state` | number | 印刷状態コード (0=idle, 1=printing, 2=completed, 4=failed, 5=paused) |
+| `printProgress` | number | 進捗率 0-100 |
+| `filename` | string | 印刷中ファイル名 (basename)。未印刷時は空文字 |
+| `layer` | number | 現在レイヤー |
+| `totalLayer` | number | 総レイヤー数 |
+| `remainingSec` | number | 残り時間 (秒) |
+| `nozzleTemp` | number | ノズル温度 (℃) |
+| `bedTemp` | number | ベッド温度 (℃) |
+| `spoolId` | string | 装着中スプールの ID (未装着時は省略) |
+| `spoolName` | string | スプール表示名 (未装着時は省略) |
+| `spoolRemain_mm` | number | スプール残量 (mm) |
+| `spoolRemain_pct` | number | スプール残量 (%) |
+| `spoolRemain_g` | number | スプール残量 (g) |
+| `material` | string | 素材名 |
+
 ### テスト
 
 | event | 発火タイミング | data フィールド |
@@ -338,3 +410,4 @@ Webhook はイベント駆動のため取りこぼしがある。ポーリング
 |------|------|
 | 2026-03-15 | 初版: 構造化ペイロード、数値分離、タイムスタンプ強化、per-host ON/OFF、テスト送信 |
 | 2026-03-15 | v2: 全印刷イベントにコンテキスト情報を追加。`printStarted` に filename+スプール情報、`printCompleted/Failed` に duration_sec+layer+totalLayer+printStartTime_epoch、`printPaused/Resumed` に filename+printProgress+layer、`printProgressMilestone` イベント新設 (25/50/75/80/90/95/98%)、`tempOutOfRange` / `printRemovalReminder` イベント追加。旧仕様: `printStarted` は hostname のみだった、`printPaused/Resumed` は hostname のみだった、`printCompleted` に duration_sec/layer 情報なし |
+| 2026-03-15 | v3: `statusSnapshot` イベント新設。設定間隔 (5-300秒) で全プリンタの状態を定期プッシュ。ポーリング API の代替として機能。通知設定モーダルに ON/OFF + 間隔設定 UI 追加。旧仕様: ステータス定期送信機能なし（ポーリング API 未実装のため外部からの状態取得手段がなかった） |

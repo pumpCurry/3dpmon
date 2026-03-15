@@ -46,8 +46,11 @@ import {
   finalizeFilamentUsage,
   autoCorrectCurrentSpool,
   addUsageSnapshot,
-  beginExternalPrint
+  beginExternalPrint,
+  formatFilamentAmount,
+  formatSpoolDisplayId
 } from "./dashboard_spool.js";
+import { getConnectionState } from "./dashboard_connection.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -76,6 +79,10 @@ const TIME_THRESHOLDS        = [10, 5, 3, 1];
 const TEMP_MILESTONES        = [0.8, 0.9, 0.95, 0.98, 1.0];
 /** スナップショット記録間隔 [秒] */
 const USAGE_SNAPSHOT_INTERVAL = 30;
+/** ステータス Webhook 送信間隔 [秒] (デフォルト30秒) */
+const STATUS_SNAPSHOT_INTERVAL_SEC = 30;
+/** 最終ステータス Webhook 送信時刻 */
+let _lastStatusSnapshotEpoch = 0;
 
 // ---------------------------------------------------------------------------
 // per-host 状態オブジェクト
@@ -1171,6 +1178,9 @@ export function aggregatorUpdate() {
     persistAggregatorState(host);
   } // end for hosts
 
+  // ── ステータス Webhook 定期送信 ──
+  _pushStatusSnapshotIfDue();
+
   clearNewClasses();
   console.debug("[aggregatorUpdate] updateStoredDataToDOM 呼び出し");
   updateStoredDataToDOM();
@@ -1466,4 +1476,96 @@ function resolveFilamentJobId(storedData, job, prevPrintID) {
   }
 
   return "";
+}
+
+// ---------------------------------------------------------------------------
+// ステータス Webhook 定期送信
+// ---------------------------------------------------------------------------
+
+/**
+ * 接続中の全プリンタのステータスを Webhook で定期送信する。
+ *
+ * aggregatorUpdate() のループ末尾から呼び出される。
+ * STATUS_SNAPSHOT_INTERVAL_SEC ごとに1回、全プリンタの現在状態を
+ * `statusSnapshot` イベントとして Webhook に送信する。
+ *
+ * @private
+ */
+function _pushStatusSnapshotIfDue() {
+  // スナップショット送信が無効、または Webhook URL が未設定なら何もしない
+  if (!notificationManager.statusSnapshotEnabled) return;
+  if (!notificationManager.getWebhookUrls ||
+      notificationManager.getWebhookUrls().length === 0) return;
+
+  const intervalSec = notificationManager.statusSnapshotIntervalSec || STATUS_SNAPSHOT_INTERVAL_SEC;
+  const now = Date.now();
+  if (now - _lastStatusSnapshotEpoch < intervalSec * 1000) return;
+  _lastStatusSnapshotEpoch = now;
+
+  const machines = {};
+  let anyConnected = false;
+
+  for (const [host, machine] of Object.entries(monitorData.machines)) {
+    if (host === PLACEHOLDER_HOSTNAME) continue;
+    const connState = getConnectionState(host);
+    if (connState !== "connected") continue;
+    anyConnected = true;
+
+    const sd = machine.storedData || {};
+    const spool = getCurrentSpool(host);
+
+    const entry = {
+      state:         Number(sd.state?.rawValue ?? 0),
+      printProgress: Number(sd.printProgress?.rawValue ?? 0),
+      filename:      (sd.printFileName?.rawValue || sd.fileName?.rawValue || "").split("/").pop() || "",
+      layer:         Number(sd.layer?.rawValue ?? 0),
+      totalLayer:    Number(sd.TotalLayer?.rawValue ?? 0),
+      remainingSec:  Number(sd.printLeftTime?.rawValue ?? 0),
+      nozzleTemp:    Number(sd.nozzleTemp?.rawValue ?? 0),
+      bedTemp:       Number(sd.bedTemp0?.rawValue ?? 0),
+    };
+
+    if (spool) {
+      const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+      entry.spoolId       = spool.id;
+      entry.spoolName     = `${formatSpoolDisplayId(spool)} ${spool.name || ""}`.trim();
+      entry.spoolRemain_mm  = spool.remainingLengthMm;
+      entry.spoolRemain_pct = spool.totalLengthMm > 0
+        ? Number(((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(1)) : null;
+      if (remainFmt.g != null) entry.spoolRemain_g = Number(remainFmt.g);
+      entry.material = spool.materialName || spool.material || "";
+    }
+
+    // 表示名解決
+    const displayName = sd.hostname?.rawValue || sd.model?.rawValue || host;
+    machines[displayName] = entry;
+  }
+
+  if (!anyConnected) return;
+
+  // notify ではなく _sendWebHook を直接呼ぶ（通知UIに表示しない）
+  const nowDate = new Date();
+  const payload = {
+    text: `3dpmon ステータス (${Object.keys(machines).length}台接続中)`,
+    event: "statusSnapshot",
+    hostname: "3dpmon",
+    timestamp: nowDate.toISOString(),
+    timestamp_epoch: nowDate.getTime(),
+    timestamp_local: nowDate.toLocaleString(),
+    timezone_offset_min: nowDate.getTimezoneOffset(),
+    data: { machines }
+  };
+
+  const json = JSON.stringify(payload);
+  notificationManager.getWebhookUrls().forEach(url => {
+    try {
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: json
+      }).catch(e => console.warn("[statusSnapshot] fetch failed:", url, e.message));
+    } catch (e) {
+      console.error("[statusSnapshot]", e);
+    }
+  });
 }

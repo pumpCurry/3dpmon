@@ -150,6 +150,10 @@ export class NotificationManager {
     this._hostTts   = new Map();
     this.webhookUrls = [];
     this.filamentLowThreshold = 0.1; // 残量10%を下回ったら通知
+    /** ステータススナップショット Webhook 送信を有効にするか */
+    this.statusSnapshotEnabled = false;
+    /** ステータススナップショット送信間隔 [秒] */
+    this.statusSnapshotIntervalSec = 30;
 
     // 永続化済み設定の読み込みは initializeDashboard() から
     // 行うため、コンストラクタでは呼び出さない。
@@ -205,6 +209,12 @@ export class NotificationManager {
     if (typeof saved.filamentLowThreshold === "number") {
       this.filamentLowThreshold = saved.filamentLowThreshold;
     }
+    if (typeof saved.statusSnapshotEnabled === "boolean") {
+      this.statusSnapshotEnabled = saved.statusSnapshotEnabled;
+    }
+    if (typeof saved.statusSnapshotIntervalSec === "number" && saved.statusSnapshotIntervalSec >= 5) {
+      this.statusSnapshotIntervalSec = saved.statusSnapshotIntervalSec;
+    }
 
     // level プロパティが欠けている場合は info を補填
     Object.values(this.map).forEach(cfg => {
@@ -243,7 +253,9 @@ export class NotificationManager {
       ttsRate:    this.ttsRate,
       hostTts:    hostTtsObj,
       webhookUrls: this.webhookUrls,
-      filamentLowThreshold: this.filamentLowThreshold
+      filamentLowThreshold: this.filamentLowThreshold,
+      statusSnapshotEnabled: this.statusSnapshotEnabled,
+      statusSnapshotIntervalSec: this.statusSnapshotIntervalSec
     };
     saveUnifiedStorage();
   }
@@ -832,6 +844,17 @@ export class NotificationManager {
         <button type="button" data-role="webhook-test" class="btn btn-sm">Webhook テスト送信</button>
         <span data-role="webhook-test-result" style="margin-left:8px;font-size:0.9em"></span>
       </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid #ddd">
+        <label style="display:inline-flex;align-items:center;gap:4px">
+          <input type="checkbox" data-role="status-snapshot-enabled" ${this.statusSnapshotEnabled ? "checked" : ""}>
+          ステータス定期送信 (全プリンタ状態を Webhook で定期プッシュ)
+        </label>
+        <label style="margin-left:12px">
+          間隔(秒)
+          <input type="number" data-role="status-snapshot-interval" min="5" max="300" step="5"
+                 value="${this.statusSnapshotIntervalSec}" style="width:5em">
+        </label>
+      </div>
     `;
     // Webhook テストボタンのハンドラ
     const testBtn = extraFs.querySelector('[data-role="webhook-test"]');
@@ -1025,6 +1048,15 @@ export class NotificationManager {
     const urlsEl = container.querySelector('[data-role="webhook-urls"]');
     if (urlsEl) {
       this.setWebhookUrls(urlsEl.value.split(",").map(s => s.trim()).filter(s => s));
+    }
+
+    // ステータススナップショット設定を保存
+    const snapEnabledEl = container.querySelector('[data-role="status-snapshot-enabled"]');
+    if (snapEnabledEl) this.statusSnapshotEnabled = snapEnabledEl.checked;
+    const snapIntervalEl = container.querySelector('[data-role="status-snapshot-interval"]');
+    if (snapIntervalEl) {
+      const v = parseInt(snapIntervalEl.value, 10);
+      if (v >= 5) this.statusSnapshotIntervalSec = v;
     }
 
     // per-host TTS 設定を保存
