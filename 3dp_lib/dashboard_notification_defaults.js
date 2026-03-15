@@ -37,8 +37,8 @@ export const defaultNotificationMap = {
   // 既存の通知
   // ──────────────────────────────────────────────────────────────────────────
   printStarted:     { talk: "{hostname} で印刷を開始しました ({now})",                             sound: DEFAULT_SOUND, enabled: true, level: "info"    },
-  printCompleted:   { talk: "{hostname} で印刷が完了しました ({now})",                             sound: DEFAULT_SOUND, enabled: true, level: "success" },
-  printFailed:      { talk: "{hostname} の印刷が失敗しました ({now})",                             sound: DEFAULT_SOUND, enabled: true, level: "error"   },
+  printCompleted:   { talk: "{hostname} 印刷完了 {filename} 消費{materialUsed} スプール残{spoolRemain}",  sound: DEFAULT_SOUND, enabled: true, level: "success" },
+  printFailed:      { talk: "{hostname} 印刷失敗 {filename}",                                       sound: DEFAULT_SOUND, enabled: true, level: "error"   },
   printPaused:      { talk: "{hostname} の印刷が一時停止しました ({now})",                         sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   errorOccurred:    { talk: "{hostname} でエラー発生：コード{error_code}, キー{error_key}, メッセージ{error_msg} ({now})", sound: DEFAULT_SOUND, enabled: true, level: "error"   },
   errorResolved:    { talk: "{hostname} のエラーは解消しました ({now})",                           sound: DEFAULT_SOUND, enabled: true, level: "success" },

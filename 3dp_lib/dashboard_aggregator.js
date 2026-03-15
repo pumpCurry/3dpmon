@@ -1081,8 +1081,7 @@ export function aggregatorUpdate() {
         remain = spool.remainingLengthMm;
       }
 
-      // 小数点以下2桁に丸めて保持
-      remain = Math.round(remain * 100) / 100;
+      // 機器報告値の精度をそのまま保持（丸めない）
       _set("filamentRemainingMm", remain, true);
 
       if (spool.currentPrintID) {

@@ -423,7 +423,7 @@ export class NotificationManager {
     }
 
     if (this.webhookUrls.length > 0) {
-      this._sendWebHook(text);
+      this._sendWebHook(text, type, ctx);
     }
 
   }
@@ -459,18 +459,41 @@ export class NotificationManager {
   /**
    * Webhook 経由で通知を送信する。
    *
+   * 構造化されたペイロードを HTTP POST で送信する。
+   * Slack / Discord / LINE / IFTTT 等の外部サービスに転送可能。
+   * fetch はファイア・アンド・フォーゲット方式（レスポンスを待たない）。
+   *
    * @private
-   * @param {string} body - 通知本文
+   * @param {string} body - 展開済みテキスト
+   * @param {string} type - 通知イベントタイプ (例: "printCompleted")
+   * @param {object} ctx - マクロ展開済みコンテキスト
    * @returns {void}
    */
-  _sendWebHook(body) {
+  _sendWebHook(body, type, ctx) {
+    const payload = {
+      // Slack/Discord 互換テキスト
+      text: body,
+      // 構造化データ
+      event: type,
+      hostname: ctx.hostname || "unknown",
+      timestamp: new Date().toISOString(),
+      data: {}
+    };
+
+    // イベント種別に応じた構造化データを付与
+    for (const key of Object.keys(ctx)) {
+      if (key === "hostname" || key === "now") continue;
+      payload.data[key] = ctx[key];
+    }
+
+    const json = JSON.stringify(payload);
     this.webhookUrls.forEach(url => {
       try {
         fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: body })
-        });
+          body: json
+        }).catch(e => console.warn("[webhook] fetch failed:", url, e.message));
       } catch (e) {
         console.error("[webhook]", e);
       }

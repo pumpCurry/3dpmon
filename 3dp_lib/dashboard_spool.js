@@ -141,6 +141,47 @@ export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
 }
 
 /**
+ * フィラメント量 (mm) を人間可読な複数単位に変換する。
+ *
+ * spool が渡された場合はグラム・コスト換算も含む。
+ * 表示用フォーマットであり、元データの精度は保持する。
+ *
+ * @function formatFilamentAmount
+ * @param {number} mm - フィラメント量 (mm)
+ * @param {Object} [spool] - スプールオブジェクト (density, purchasePrice, totalLengthMm, material, filamentDiameter, currencySymbol)
+ * @returns {{ mm: number, m: string, g: string|null, cost: string|null, currency: string, display: string }}
+ */
+export function formatFilamentAmount(mm, spool = null) {
+  const val = Number(mm) || 0;
+  const m = (val / 1000).toFixed(1);
+
+  let g = null;
+  let cost = null;
+  let currency = "¥";
+
+  if (spool) {
+    const density = spool.density || getMaterialDensity(spool.material || spool.materialName);
+    const diameter = spool.filamentDiameter || 1.75;
+    const w = weightFromLength(val, density, diameter);
+    g = w.toFixed(0);
+    currency = spool.currencySymbol || "¥";
+
+    if (spool.purchasePrice > 0 && spool.totalLengthMm > 0) {
+      const ratio = val / spool.totalLengthMm;
+      cost = (spool.purchasePrice * ratio).toFixed(0);
+    }
+  }
+
+  // 表示文字列の組み立て
+  let display = `${m}m`;
+  if (g != null) {
+    display += cost != null ? ` (${g}g, ${currency}${cost})` : ` (${g}g)`;
+  }
+
+  return { mm: val, m, g, cost, currency, display };
+}
+
+/**
  * スプール識別用の一意な ID を生成する。
  *
  * 日時と乱数を組み合わせた文字列を返す。

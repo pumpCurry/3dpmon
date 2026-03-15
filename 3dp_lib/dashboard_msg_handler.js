@@ -70,6 +70,7 @@ import {
 import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
+import { getCurrentSpool, formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 
 /**
  * WS受信データのうち storedData に格納すべきでないキーのセット。
@@ -630,7 +631,27 @@ export function processData(data, hostname) {
       );
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
-    notificationManager.notify(evt, { hostname: host });
+    // 完了/失敗通知に印刷結果の詳細を付与
+    const notifPayload = { hostname: host };
+    const sd = machine?.storedData;
+    if (sd) {
+      const usedMm = Number(sd.usedMaterialLength?.rawValue ?? sd.usagematerial?.rawValue ?? 0);
+      const spool = getCurrentSpool(host);
+      if (usedMm > 0) {
+        const fmt = formatFilamentAmount(usedMm, spool);
+        notifPayload.materialUsed = fmt.display;
+      }
+      if (spool) {
+        const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+        const remainPct = spool.totalLengthMm > 0
+          ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0) + "%" : "";
+        notifPayload.spoolName = `${formatSpoolDisplayId(spool)} ${spool.name || ""}`.trim();
+        notifPayload.spoolRemain = `${remainFmt.display} (${remainPct})`;
+      }
+      const fname = sd.printFileName?.rawValue || sd.fileName?.rawValue;
+      if (fname) notifPayload.filename = String(fname).split("/").pop();
+    }
+    notificationManager.notify(evt, notifPayload);
     persistHistoryTimers(currStartTime, host);
   }
   // (2.6.2) Idle or 再開でリセット

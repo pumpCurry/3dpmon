@@ -51,7 +51,9 @@ import {
   setCurrentSpoolId,
   useFilament,
   getSpoolById,
-  updateSpool
+  updateSpool,
+  formatFilamentAmount,
+  formatSpoolDisplayId
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
@@ -254,8 +256,8 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     ? Number(raw.printfinish)
     // 値が存在しない場合のみ使用時間から推測
     : (useTimeSec > 0 ? 1 : 0);
-  // 材料使用量は小数第2位で切り上げ
-  const materialUsedMm = Math.ceil((raw.usagematerial || 0) * 100) / 100;
+  // 材料使用量: 機器報告値をそのまま保持（丸めない）
+  const materialUsedMm = Number(raw.usagematerial || 0);
 
   // raw.filename に基づくサムネイル生成
   const thumbUrl       = makeThumbUrl(baseUrl, raw.filename);
@@ -560,7 +562,7 @@ export function renderPrintCurrent(containerEl, hostname) {
       ?? sd.usagematerial?.rawValue
       ?? sd.materialLength?.rawValue;
     if (liveLen != null) {
-      job.materialUsedMm = Math.ceil(Number(liveLen) * 100) / 100;
+      job.materialUsedMm = Number(liveLen);
     }
   }
 
@@ -1172,32 +1174,91 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
 
 /**
  * 印刷実行ボタン押下時の処理。
- * 残フィラメント量を計算し、確認ダイアログを表示後、送信します。
  *
- * @param {Object} raw     - 行データ
+ * 過去の実績・スプール残量・コスト推定を含む確認ダイアログを表示し、
+ * フィラメント不足時には警告レベルで表示する。
+ *
+ * @param {Object} raw      - 行データ
  * @param {string} thumbUrl - サムネイル画像の URL
+ * @param {string} hostname - ホスト名
  */
 async function handlePrintClick(raw, thumbUrl, hostname) {
-  const usedSec        = raw.usagetime;
-  const expectedFinish = new Date(Date.now() + usedSec * 1000).toLocaleString();
-  const materialNeeded = Math.ceil(raw.usagematerial * 100) / 100;
+  const usedSec        = Number(raw.usagetime || 0);
+  const materialNeeded = Number(raw.usagematerial || 0);
   const spool          = getCurrentSpool(hostname);
   const remaining      = spool?.remainingLengthMm ?? 0;
-  const afterRemaining = Math.max(0, remaining - materialNeeded).toLocaleString();
+  const afterRemaining = Math.max(0, remaining - materialNeeded);
+  const isShort        = remaining > 0 && materialNeeded > remaining;
 
-  const html = `
-    <img src="${thumbUrl}" style="width:80px; float:left; margin:0 12px 12px 0">
-    <div><strong>${raw.filename.split("/").pop()}</strong></div>
-    <div>所要時間: ${usedSec}s → 完了見込: ${expectedFinish}</div>
-    <div>フィラメント: ${remaining} − ${materialNeeded} ＝ ${afterRemaining} mm</div>
-  `;
+  // フィラメント量を人間可読にフォーマット
+  const fmtNeed  = formatFilamentAmount(materialNeeded, spool);
+  const fmtRemain = formatFilamentAmount(remaining, spool);
+  const fmtAfter = formatFilamentAmount(afterRemaining, spool);
+
+  // ファイル別の過去実績
+  const insight = buildFileInsight(raw.filename || raw.rawFilename || "", hostname);
+  const filename = (raw.filename || "").split("/").pop();
+
+  // 所要時間（実績があれば実績ベース、なければ機器報告値）
+  const estSec = insight?.avgDurationSec > 0 ? insight.avgDurationSec : usedSec;
+  const expectedFinish = new Date(Date.now() + estSec * 1000).toLocaleString();
+
+  // --- ダイアログ HTML 構築 ---
+  let html = `<div style="display:flex;gap:12px;margin-bottom:8px">`;
+  html += `<img src="${thumbUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:4px">`;
+  html += `<div><strong style="font-size:1.1em">${filename}</strong></div></div>`;
+
+  // 過去実績セクション
+  if (insight && insight.printCount > 0) {
+    const avgDur = formatDuration(insight.avgDurationSec);
+    const rate = (insight.successRate * 100).toFixed(0);
+    const avgFmt = formatFilamentAmount(insight.avgMaterialMm, spool);
+    html += `<div style="margin:8px 0;padding:8px;background:#f0f9ff;border-radius:4px">`;
+    html += `<div style="font-weight:bold;margin-bottom:4px">過去の実績 (${insight.printCount}回 / 成功率 ${rate}%)</div>`;
+    html += `<div>平均所要: ${avgDur}</div>`;
+    html += `<div>平均消費: ${avgFmt.display}</div>`;
+    if (insight.lastPrintDate) {
+      const lastD = formatEpochToDateTime(insight.lastPrintDate);
+      const lastR = insight.lastResult === 1 ? "✔ 成功" : "✗ 失敗";
+      html += `<div>最終: ${lastD} ${lastR}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // スプール情報セクション
+  if (spool) {
+    const spoolLabel = `${formatSpoolDisplayId(spool)} ${spool.name || ""} ${spool.materialName || spool.material || ""}`;
+    const remainPct = spool.totalLengthMm > 0
+      ? ((remaining / spool.totalLengthMm) * 100).toFixed(0) : "?";
+    const afterPct = spool.totalLengthMm > 0
+      ? ((afterRemaining / spool.totalLengthMm) * 100).toFixed(0) : "?";
+
+    const bgColor = isShort ? "#fef2f2" : "#f0fdf4";
+    html += `<div style="margin:8px 0;padding:8px;background:${bgColor};border-radius:4px">`;
+    html += `<div style="font-weight:bold;margin-bottom:4px">スプール: ${spoolLabel}</div>`;
+    html += `<div>残量: ${fmtRemain.display} (${remainPct}%)</div>`;
+    html += `<div>印刷後予想: ${fmtAfter.display} (${afterPct}%)</div>`;
+    if (isShort) {
+      html += `<div style="color:#dc2626;font-weight:bold;margin-top:4px">⚠ フィラメントが不足する可能性があります</div>`;
+    } else {
+      html += `<div style="color:#16a34a;margin-top:4px">✓ 十分な残量があります</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // 予想完了セクション
+  const durLabel = insight?.avgDurationSec > 0 ? "実績ベース" : "機器見積";
+  html += `<div style="margin:8px 0">`;
+  html += `<div>必要量: ${fmtNeed.display}</div>`;
+  html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
+  html += `<div>予想完了: ${expectedFinish}</div>`;
+  html += `</div>`;
 
   const ok = await showConfirmDialog({
-    level:       "info",
+    level:       isShort ? "warnRed" : "info",
     title:       "印刷実行の確認",
-    // messageは 空,
-    html:        html,
-    confirmText: "印刷する",
+    html,
+    confirmText: isShort ? "不足の可能性あり — それでも印刷する" : "印刷する",
     cancelText:  "キャンセル"
   });
   if (!ok) return;
@@ -1606,6 +1667,62 @@ function buildHistoryStats(hostname) {
     map.set(key, entry);
   });
   return map;
+}
+
+/**
+ * ファイル別の印刷実績インサイトを生成する。
+ *
+ * 印刷回数・成功率・平均時間・平均消費量・コスト推定を返す。
+ * 印刷前ダイアログやファイル一覧の情報強化に使用する。
+ *
+ * @param {string} filename - ファイルパスまたは basename
+ * @param {string} hostname - ホスト名
+ * @returns {Object|null} インサイト情報。該当なしの場合 null
+ */
+function buildFileInsight(filename, hostname) {
+  const history = loadHistory(hostname);
+  const basename = filename.split("/").pop();
+
+  const matching = history.filter(j => {
+    const jName = (j.rawFilename || j.filename || "").split("/").pop();
+    return jName === basename;
+  });
+  if (matching.length === 0) return null;
+
+  let totalSec = 0, totalMaterial = 0;
+  let successCount = 0, failCount = 0;
+  let lastDate = null, lastResult = null;
+
+  for (const j of matching) {
+    const start = j.startTime ? Date.parse(j.startTime) : 0;
+    const finish = j.finishTime ? Date.parse(j.finishTime) : 0;
+    if (finish && start) totalSec += (finish - start) / 1000;
+    if (j.materialUsedMm > 0) totalMaterial += j.materialUsedMm;
+    if (j.printfinish === 1) successCount++;
+    else failCount++;
+
+    const ts = j.finishTime || j.startTime;
+    if (ts && (!lastDate || ts > lastDate)) {
+      lastDate = ts;
+      lastResult = j.printfinish;
+    }
+  }
+
+  const printCount = matching.length;
+  const avgDurationSec = printCount > 0 ? totalSec / printCount : 0;
+  const avgMaterialMm = printCount > 0 ? totalMaterial / printCount : 0;
+
+  return {
+    printCount,
+    successCount,
+    failCount,
+    successRate: printCount > 0 ? successCount / printCount : 0,
+    avgDurationSec,
+    avgMaterialMm,
+    lastPrintDate: lastDate,
+    lastResult,
+    md5: matching.find(j => j.filemd5)?.filemd5 || ""
+  };
 }
 
 /** --- 2) fileInfo テキストをパースして配列に --- */
