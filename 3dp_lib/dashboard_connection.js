@@ -624,8 +624,8 @@ function handleSocketOpen(host) {
   if (monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle) {
     startCameraStream(host);
   }
-  // 接続復帰後は通知抑制を解除
-  setNotificationSuppressed(false);
+  // 通知抑制は handleMessage の初期化完了後に解除する（ここでは解除しない）
+  // リロード直後に onopen → aggregatorUpdate の間に通知が爆発するのを防止
 
   // ホスト名確定後に履歴/ファイル一覧を遅延取得する（リトライ付き）
   st.historyReceived = false;

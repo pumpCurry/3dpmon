@@ -39,6 +39,7 @@ import {
   currentHostname,
   setCurrentHostname,
   PLACEHOLDER_HOSTNAME,
+  notificationSuppressed,
   setNotificationSuppressed,
   setStoredDataForHost,
   scopedById,
@@ -428,6 +429,12 @@ export function processData(data, hostname) {
   machine.runtimeData ??= { lastError: null };
   if (!('lastError' in machine.runtimeData)) {
     machine.runtimeData.lastError = null;
+  }
+
+  // 初回ホスト初期化完了後は通知抑制を解除
+  // (handleMessage の初期化パスを通らない2台目以降のホストにも対応)
+  if (_initializedHosts.has(host) && notificationSuppressed) {
+    setNotificationSuppressed(false);
   }
 
   // per-host 初期化（各ホスト初回のみ）: storedData キーの事前作成
