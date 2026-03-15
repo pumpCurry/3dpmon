@@ -241,6 +241,8 @@ function _getMsgState(hostname) {
       if (st != null) ms.prevPrintState = JSON.parse(st);
       if (tm != null) ms.prevPrintStartTime = JSON.parse(tm);
       if (sp != null) ms.prevSelfTestPct = JSON.parse(sp);
+      const rr = localStorage.getItem(p + "removalReminderSent");
+      if (rr === "true") ms._removalReminderSent = true;
     } catch { /* 復元失敗は無視 */ }
     _msgHostStates.set(hostname, ms);
   }
@@ -741,12 +743,14 @@ export function processData(data, hostname) {
     _set("completionElapsedTime", 0, true);
 
     ms._removalReminderSent = false;
+    try { localStorage.setItem(`msg_${host}_removalReminderSent`, "false"); } catch { /* ignore */ }
     ms.completionTimer = setInterval(() => {
       const elapsedSec = Math.floor((Date.now() - ms.tsCompletion) / 1000);
       _set("completionElapsedTime", elapsedSec, true);
       // 取り出し忘れリマインダー (30分経過で1回のみ通知)
       if (!ms._removalReminderSent && elapsedSec >= 1800) {
         ms._removalReminderSent = true;
+        try { localStorage.setItem(`msg_${host}_removalReminderSent`, "true"); } catch { /* ignore */ }
         notificationManager.notify("printRemovalReminder", { hostname: host });
       }
     }, 1000);

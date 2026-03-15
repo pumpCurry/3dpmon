@@ -81,8 +81,10 @@ const TEMP_MILESTONES        = [0.8, 0.9, 0.95, 0.98, 1.0];
 const USAGE_SNAPSHOT_INTERVAL = 30;
 /** ステータス Webhook 送信間隔 [秒] (デフォルト30秒) */
 const STATUS_SNAPSHOT_INTERVAL_SEC = 30;
-/** 最終ステータス Webhook 送信時刻 */
-let _lastStatusSnapshotEpoch = 0;
+/** 最終ステータス Webhook 送信時刻（リロード時に復元して重複送信を防止） */
+let _lastStatusSnapshotEpoch = (() => {
+  try { return Number(localStorage.getItem("aggr_lastStatusSnapshot") || 0); } catch { return 0; }
+})();
 
 // ---------------------------------------------------------------------------
 // per-host 状態オブジェクト
@@ -1245,7 +1247,9 @@ export function restoreAggregatorState(hostname) {
     "prevUsedMaterialLength",
     "prevUsageProgress",
     "prevProgress",
-    "lastPrintState"
+    "lastPrintState",
+    "lastProgressTimestamp",
+    "prevRemainingSec"
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
@@ -1325,6 +1329,8 @@ export function persistAggregatorState(hostname) {
     prevUsageProgress: s.prevUsageProgress,
     prevProgress: s.prevProgress,
     lastPrintState: s.lastPrintState,
+    lastProgressTimestamp: s.lastProgressTimestamp,
+    prevRemainingSec: s.prevRemainingSec,
     // 通知済みマイルストーン（リロードで再通知を防止）
     notifiedProgressMilestones: [...s.notifiedProgressMilestones],
     notifiedTimeThresholds: [...s.notifiedTimeThresholds],
@@ -1526,6 +1532,7 @@ function _pushStatusSnapshotIfDue() {
   const now = Date.now();
   if (now - _lastStatusSnapshotEpoch < intervalSec * 1000) return;
   _lastStatusSnapshotEpoch = now;
+  try { localStorage.setItem("aggr_lastStatusSnapshot", String(now)); } catch { /* ignore */ }
 
   const machines = {};
   let anyConnected = false;
