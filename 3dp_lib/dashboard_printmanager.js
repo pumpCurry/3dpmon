@@ -469,14 +469,48 @@ export const renderTemplates = {
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
     const name = job.filename || '(名称不明)';
     const ts = Date.now();
-    // 大サムネイル URL
     const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
-    // フォールバック画像
     const fallback   = `${baseUrl}/downloads/defData/file_print_photo.png`;
     const finishHtml = job.finishTime
       ? `<div class="cp-row"><span class="cp-label">終了:</span> ${fmt(job.finishTime)}</div>` : "";
-    const materialVal = job.materialUsedMm != null
-      ? job.materialUsedMm.toLocaleString() + " mm" : "—";
+
+    // フィラメント情報: スプール名・色・素材 + 消費量/残量
+    const spool = job.filamentId ? getSpoolById(job.filamentId) : null;
+    const materialFmt = job.materialUsedMm != null
+      ? formatFilamentAmount(job.materialUsedMm, spool) : null;
+    const materialVal = materialFmt ? materialFmt.display : "—";
+
+    // スプール情報行
+    let spoolHtml = "";
+    if (spool) {
+      const spLabel = formatSpoolDisplayId(spool);
+      const spName = spool.name || spool.colorName || "";
+      const mat = spool.materialName || spool.material || "";
+      const color = spool.filamentColor || "#000";
+      const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+      const remainPct = spool.totalLengthMm > 0
+        ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0) : "?";
+      spoolHtml = `
+        <div class="cp-row" style="margin-top:4px">
+          <span class="cp-label">スプール:</span>
+          <span class="filament-color-box" style="color:${color};">■</span>
+          ${spLabel} ${spName} ${mat}
+        </div>
+        <div class="cp-row"><span class="cp-label">残量:</span> ${remainFmt.display} (${remainPct}%)</div>
+      `;
+    }
+
+    // 時間内訳行
+    let timingHtml = "";
+    const prepSec = Number(job.preparationTime || 0);
+    const pauseSec = Number(job.pauseTime || 0);
+    if (prepSec > 0 || pauseSec > 0) {
+      const parts = [];
+      if (prepSec > 0) parts.push(`準備 ${formatDuration(prepSec)}`);
+      if (pauseSec > 0) parts.push(`停止 ${formatDuration(pauseSec)}`);
+      timingHtml = `<div class="cp-row" style="font-size:0.9em;color:#666"><span class="cp-label"></span>${parts.join(" / ")}</div>`;
+    }
+
     return `
       <div class="current-print">
         <div class="cp-thumb-wrap">
@@ -491,7 +525,9 @@ export const renderTemplates = {
           <div class="cp-filename">${name}</div>
           <div class="cp-row"><span class="cp-label">開始:</span> ${fmt(job.startTime)}</div>
           ${finishHtml}
-          <div class="cp-row"><span class="cp-label">使用:</span> ${materialVal}</div>
+          <div class="cp-row"><span class="cp-label">消費:</span> ${materialVal}</div>
+          ${spoolHtml}
+          ${timingHtml}
         </div>
       </div>
     `;
@@ -520,7 +556,7 @@ export const renderTemplates = {
           ${job.finishTime ? `<br>完了: ${fmt(job.finishTime)}` : ""}
         </div>
           <div class="material-used">
-            使用: ${job.materialUsedMm != null ? job.materialUsedMm.toLocaleString() : "—"} mm
+            消費: ${job.materialUsedMm != null ? formatFilamentAmount(job.materialUsedMm, job.filamentId ? getSpoolById(job.filamentId) : null).display : "—"}
           </div>
       </div>
     `;
@@ -981,9 +1017,12 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const checktime = checkSec != null ? formatDuration(checkSec) : "";
     const pauseSec  = raw.pauseTime != null ? Number(raw.pauseTime) : null;
     const pausetime = pauseSec != null ? formatDuration(pauseSec) : "";
+    // フィラメント消費量: スプール情報があれば g/¥ 換算も表示
+    const spoolForFmt = spoolInfos.length > 0
+      ? (getSpoolById(spoolInfos[0].spoolId) || null) : null;
     const umaterial =
       raw.usagematerial != null
-        ? (Math.ceil(raw.usagematerial * 100) / 100).toLocaleString()
+        ? formatFilamentAmount(raw.usagematerial, spoolForFmt).display
         : "—";
     /* 成否表示: 印刷中/一時停止中のジョブは ▶/⏸ で表示 */
     const isCurrentJob = curPrintId && String(raw.id) === String(curPrintId) && isActive(printState);
@@ -1040,9 +1079,10 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
           if (editId) text += ` <button class="spool-edit icon-btn" data-id="${editId}" title="修正">✏</button>`;
         }
         const cnt = info.spoolCount ?? sp?.printCount ?? 0;
-        const rem = info.expectedRemain ?? sp?.remainingLengthMm ?? 0;
+        const remMm = info.expectedRemain ?? sp?.remainingLengthMm ?? 0;
+        const remFmt = formatFilamentAmount(remMm, sp);
         parts.push(`<div class="spool-line">${text}</div>`);
-        parts.push(`<div class="spool-meta">残:${rem} 回:${cnt}</div>`);
+        parts.push(`<div class="spool-meta">残:${remFmt.display} 回:${cnt}</div>`);
       });
       spoolHtml = parts.join("");
     }
@@ -1792,6 +1832,24 @@ export function renderFileList(info, baseUrl, hostname) {
     const mtimeStr = d instanceof Date && !isNaN(d)
       ? `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`
       : "—";
+
+    // ファイル別実績
+    const insight = buildFileInsight(item.filename, hostname);
+    const expectFmt = formatFilamentAmount(item.expect, null);
+
+    // 実績列: "4/5" (成功/全体) or "0"
+    let printsLabel;
+    if (insight && insight.printCount > 0) {
+      printsLabel = `${insight.successCount}/${insight.printCount}`;
+    } else {
+      printsLabel = String(item.printCount || 0);
+    }
+
+    // 平均時間列
+    const avgTimeLabel = insight?.avgDurationSec > 0
+      ? formatDuration(insight.avgDurationSec)
+      : "—";
+
     tr.innerHTML = `
       <td class="col-cmd">
         <button class="cmd-print icon-btn" title="印刷">▶</button>
@@ -1811,21 +1869,22 @@ export function renderFileList(info, baseUrl, hostname) {
       <td data-key="layer">${item.layer.toLocaleString()}</td>
       <td data-key="size">${item.size.toLocaleString()}</td>
       <td data-key="mtime">${mtimeStr}</td>
-      <td data-key="expect">${item.expect.toLocaleString()}</td>
-      <td data-key="prints">${item.printCount}</td>
+      <td data-key="expect">${expectFmt.display}</td>
+      <td data-key="prints">${printsLabel}</td>
+      <td data-key="avgtime">${avgTimeLabel}</td>
       <td data-key="md5" class="col-md5" title="${item.filemd5 || ''}">${md5short}</td>
     `;
     tbody.appendChild(tr);
 
     // イベントハンドラ
     tr.querySelector(".cmd-print")?.addEventListener("click", () => {
-      handlePrintClick(item, item.thumbUrl);
+      handlePrintClick(item, item.thumbUrl, hostname);
     });
     tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
-      handleRenameClick(item);
+      handleRenameClick(item, hostname);
     });
     tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
-      handleDeleteClick(item);
+      handleDeleteClick(item, hostname);
     });
   });
 

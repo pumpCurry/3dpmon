@@ -1117,6 +1117,45 @@ export function aggregatorUpdate() {
       }
     }
 
+    // 温度範囲チェック: 印刷中にスプールの推奨温度範囲外なら警告
+    if (
+      (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
+      spool && !s._tempRangeWarned
+    ) {
+      const nozzle = Number(storedData.nozzleTemp?.rawValue ?? NaN);
+      const bed = Number(storedData.bedTemp0?.rawValue ?? NaN);
+      const warnings = [];
+      if (!isNaN(nozzle) && nozzle > 0) {
+        if (spool.printTempMin != null && nozzle < spool.printTempMin) {
+          warnings.push(`ノズル ${nozzle}℃ < 推奨下限 ${spool.printTempMin}℃`);
+        }
+        if (spool.printTempMax != null && nozzle > spool.printTempMax) {
+          warnings.push(`ノズル ${nozzle}℃ > 推奨上限 ${spool.printTempMax}℃`);
+        }
+      }
+      if (!isNaN(bed) && bed > 0) {
+        if (spool.bedTempMin != null && bed < spool.bedTempMin) {
+          warnings.push(`ベッド ${bed}℃ < 推奨下限 ${spool.bedTempMin}℃`);
+        }
+        if (spool.bedTempMax != null && bed > spool.bedTempMax) {
+          warnings.push(`ベッド ${bed}℃ > 推奨上限 ${spool.bedTempMax}℃`);
+        }
+      }
+      if (warnings.length > 0) {
+        s._tempRangeWarned = true;
+        notificationManager.notify("tempOutOfRange", {
+          hostname: host,
+          detail: warnings.join(", "),
+          spoolName: spool.name || "",
+          material: spool.materialName || spool.material || ""
+        });
+      }
+    }
+    // 印刷終了でリセット
+    if (st !== PRINT_STATE_CODE.printStarted && st !== PRINT_STATE_CODE.printPaused) {
+      s._tempRangeWarned = false;
+    }
+
     s.lastPrintState = st;
     persistAggregatorState(host);
   } // end for hosts

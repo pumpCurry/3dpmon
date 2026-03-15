@@ -623,12 +623,15 @@ export function processData(data, hostname) {
     ms.tsCompletion = Date.now();
     _set("completionElapsedTime", 0, true);
 
+    ms._removalReminderSent = false;
     ms.completionTimer = setInterval(() => {
-      _set(
-        "completionElapsedTime",
-        Math.floor((Date.now() - ms.tsCompletion)/1000),
-        true
-      );
+      const elapsedSec = Math.floor((Date.now() - ms.tsCompletion) / 1000);
+      _set("completionElapsedTime", elapsedSec, true);
+      // 取り出し忘れリマインダー (30分経過で1回のみ通知)
+      if (!ms._removalReminderSent && elapsedSec >= 1800) {
+        ms._removalReminderSent = true;
+        notificationManager.notify("printRemovalReminder", { hostname: host });
+      }
     }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
     // 完了/失敗通知に印刷結果の詳細を付与（表示用 + 生値）
