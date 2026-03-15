@@ -468,14 +468,20 @@ export function processData(data, hostname) {
     if (!isNaN(storedPrev)) {
       ms.prevPrintStartTime = storedPrev;
     }
-    const last = machine.historyData[machine.historyData.length - 1];
+    // historyData は揮発性のため、永続化された printStore.history も検索する
+    const historyData = machine.historyData || [];
+    const persistedHistory = machine.printStore?.history || [];
+    const last = historyData[historyData.length - 1]
+      || persistedHistory.find(j =>
+        ms.prevPrintStartTime !== null && Number(j.id) === Number(ms.prevPrintStartTime));
     if (
       last &&
       ms.prevPrintStartTime !== null &&
       Number(last.id) === Number(ms.prevPrintStartTime) &&
-      last.finishTime
+      (last.finishTime || last.endtime)
     ) {
-      const fin = Date.parse(last.finishTime);
+      const finStr = last.finishTime || (last.endtime ? new Date(Number(last.endtime) * 1000).toISOString() : null);
+      const fin = finStr ? Date.parse(finStr) : NaN;
       if (!isNaN(fin)) {
         ms.tsCompletion = fin;
         setStoredDataForHost(
