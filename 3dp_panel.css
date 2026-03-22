@@ -310,7 +310,6 @@ body.panel-mode {
   top: 0; left: 0; right: 0; bottom: 0;
   z-index: 3500;
   background: rgba(0,0,0,0.5);
-  z-index: 9500;
   justify-content: center;
   align-items: center;
 }
@@ -321,10 +320,16 @@ body.panel-mode {
 .conn-modal {
   background: #fff;
   border-radius: 8px;
-  width: 480px;
-  max-height: 80vh;
-  overflow-y: auto;
+  width: 640px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.conn-modal-body {
+  flex: 1;
+  overflow-y: auto;
 }
 
 .conn-modal-header {
@@ -344,10 +349,6 @@ body.panel-mode {
   color: #fff;
   font-size: 20px;
   cursor: pointer;
-}
-
-.conn-modal-body {
-  padding: 16px;
 }
 
 .conn-modal-body label {

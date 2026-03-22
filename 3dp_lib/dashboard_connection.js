@@ -1318,6 +1318,9 @@ export function updateConnectionUI(state, opt = {}, host) {
 /** プリンタ一覧の定期更新タイマー ID */
 let _printerListTimer = null;
 
+/** 接続先リストの再描画をブロックするフラグ (色ピッカー操作中等) */
+let _printerListUpdateBlocked = false;
+
 export function updatePrinterListUI() {
   const sel  = document.getElementById("printer-select");
   const list = document.getElementById("printer-status-list");
@@ -1408,7 +1411,8 @@ export function updatePrinterListUI() {
   }
 
   // ── 接続モーダル内のプリンタリスト更新 ──
-  if (connList) {
+  // 色ピッカーや編集ダイアログ操作中は再描画をスキップ（ピッカーが消える問題の回避）
+  if (connList && !_printerListUpdateBlocked) {
     // 接続中プリンタの表示
     let listHtml = printerInfos.map(info => {
       const st = connectionMap[info.host];
@@ -1416,14 +1420,17 @@ export function updatePrinterListUI() {
       const tgt = _findConnectionTarget(dest);
       const color = tgt?.color || "#444444";
       const whEnabled = tgt?.webhookEnabled !== false;
-      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:#f8f8f8; border:1px solid #ddd; padding:4px 8px; margin:4px 0; border-radius:4px;">
-        <div style="display:flex; align-items:center;">
-          <input type="color" class="conn-target-color" data-dest="${dest}" value="${color}" title="パネルバー色" style="width:22px; height:18px; border:none; padding:0; cursor:pointer; flex-shrink:0;">
-          <span style="flex:1; margin-left:6px;">${info.line1}</span>
-          <label title="Webhook 通知" style="margin:0 6px;font-size:11px;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""} style="margin-right:2px;">WH</label>
-          <button class="conn-target-delete" data-dest="${dest}" data-host="${info.host}" title="切断・削除">✕</button>
+      const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || 8080;
+      const httpPort = tgt?.httpPort || monitorData.appSettings.httpPort || 80;
+      return `<div class="printer-item" data-host="${info.host}" style="background:#f8f8f8; border:1px solid #ddd; padding:6px 10px; margin:4px 0; border-radius:6px;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <input type="color" class="conn-target-color" data-dest="${dest}" value="${color}" title="パネルバー色" style="width:24px; height:20px; border:1px solid #ccc; border-radius:3px; padding:0; cursor:pointer; flex-shrink:0;">
+          <span style="flex:1; font-size:13px;">${info.line1}</span>
+          <label title="Webhook 通知の ON/OFF" style="font-size:11px;white-space:nowrap;cursor:pointer;display:flex;align-items:center;gap:2px;color:#64748b;"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}>📡</label>
+          <button class="conn-target-edit" data-dest="${dest}" title="接続先設定を編集" style="background:#f0f4ff;border:1px solid #c0d0e0;font-size:11px;padding:2px 6px;border-radius:3px;cursor:pointer;">⚙</button>
+          <button class="conn-target-delete" data-dest="${dest}" data-host="${info.host}" title="切断・削除" style="background:#fef2f2;border:1px solid #fecaca;font-size:11px;padding:2px 6px;border-radius:3px;cursor:pointer;color:#dc2626;">✕</button>
         </div>
-        <div style="color:#666; font-size:11px; margin-left:28px;">${info.line2}</div>
+        <div style="color:#666; font-size:11px; margin-left:30px; margin-top:2px;">${info.line2} <span style="color:#94a3b8">cam:${cameraPort} http:${httpPort}</span></div>
       </div>`;
     }).join("");
 
@@ -1434,12 +1441,12 @@ export function updatePrinterListUI() {
       if (!connectedDests.has(t.dest)) {
         const savedColor = t.color || "#444444";
         const savedLabel = t.hostname ? ` (${t.hostname})` : "";
-        listHtml += `<div style="background:#f0f0f0; border:1px solid #ddd; padding:4px 8px; margin:4px 0; border-radius:4px;">
-          <div style="display:flex; align-items:center; color:#888;">
-            <input type="color" class="conn-target-color" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色" style="width:22px; height:18px; border:none; padding:0; cursor:pointer; flex-shrink:0;">
-            <span style="flex:1; margin-left:6px;">\u2B1C ${t.dest}${savedLabel} (\u672A\u63A5\u7D9A)</span>
-            <button class="conn-target-reconnect" data-dest="${t.dest}" title="再接続" style="background:#4090d0; color:#fff; border:none; font-size:11px; padding:1px 6px; border-radius:3px; cursor:pointer; margin-right:4px;">\u63A5\u7D9A</button>
-            <button class="conn-target-delete" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除">\u2715</button>
+        listHtml += `<div style="background:#f8f8f8; border:1px solid #e2e8f0; padding:6px 10px; margin:4px 0; border-radius:6px; opacity:0.7;">
+          <div style="display:flex; align-items:center; gap:6px; color:#64748b;">
+            <input type="color" class="conn-target-color" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色" style="width:24px; height:20px; border:1px solid #ccc; border-radius:3px; padding:0; cursor:pointer; flex-shrink:0;">
+            <span style="flex:1; font-size:13px;">⬜ ${t.dest}${savedLabel} (未接続)</span>
+            <button class="conn-target-reconnect" data-dest="${t.dest}" title="再接続" style="background:#3b82f6; color:#fff; border:none; font-size:11px; padding:3px 10px; border-radius:3px; cursor:pointer;">接続</button>
+            <button class="conn-target-delete" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除" style="background:#fef2f2;border:1px solid #fecaca;font-size:11px;padding:2px 6px;border-radius:3px;cursor:pointer;color:#dc2626;">✕</button>
           </div>
         </div>`;
       }
@@ -1509,6 +1516,45 @@ export function updatePrinterListUI() {
       });
     });
 
+    // 編集ボタン (⚙) のイベント設定
+    connList.querySelectorAll(".conn-target-edit").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const dest = btn.dataset.dest;
+        const tgt = _findConnectionTarget(dest);
+        if (!tgt) return;
+        const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || 8080;
+        const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
+        const currentLabel = tgt.label || tgt.hostname || "";
+
+        const result = await showConfirmDialog({
+          level: "info",
+          title: `接続先設定: ${dest}`,
+          html: `
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center;font-size:13px">
+              <label>表示名:</label>
+              <input type="text" id="edit-label" value="${currentLabel}" style="padding:4px;border:1px solid #ccc;border-radius:3px">
+              <label>カメラポート:</label>
+              <input type="number" id="edit-cam-port" value="${currentCam}" min="1" max="65535" style="padding:4px;border:1px solid #ccc;border-radius:3px;width:6em">
+              <label>HTTPポート:</label>
+              <input type="number" id="edit-http-port" value="${currentHttp}" min="1" max="65535" style="padding:4px;border:1px solid #ccc;border-radius:3px;width:6em">
+            </div>`,
+          confirmText: "保存",
+          cancelText: "キャンセル"
+        });
+        if (!result) return;
+        // showConfirmDialog から値を取得（DOM がまだ存在する場合）
+        const labelEl = document.getElementById("edit-label");
+        const camEl = document.getElementById("edit-cam-port");
+        const httpEl = document.getElementById("edit-http-port");
+        if (labelEl) tgt.label = labelEl.value;
+        if (camEl) tgt.cameraPort = parseInt(camEl.value, 10) || currentCam;
+        if (httpEl) tgt.httpPort = parseInt(httpEl.value, 10) || currentHttp;
+        saveUnifiedStorage();
+        updatePrinterListUI();
+      });
+    });
+
     // Webhook ON/OFF イベント設定
     connList.querySelectorAll(".conn-target-webhook").forEach(chk => {
       chk.addEventListener("change", (e) => {
@@ -1522,8 +1568,11 @@ export function updatePrinterListUI() {
       });
     });
 
-    // 色変更イベント設定
+    // 色変更イベント設定 (操作中は再描画をブロック)
     connList.querySelectorAll(".conn-target-color").forEach(picker => {
+      picker.addEventListener("focus", () => { _printerListUpdateBlocked = true; });
+      picker.addEventListener("blur", () => { _printerListUpdateBlocked = false; });
+      picker.addEventListener("click", (e) => { e.stopPropagation(); });
       picker.addEventListener("input", (e) => {
         e.stopPropagation();
         const dest = picker.dataset.dest;
