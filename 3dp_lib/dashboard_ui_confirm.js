@@ -43,7 +43,7 @@ function injectStyles() {
 .confirm-overlay {
   position: fixed; top:0; left:0; width:100vw; height:100vh;
   background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:4100;
+  align-items:center; justify-content:center; z-index:5000; /* 確認ダイアログ: 全モーダルの上 */
 }
 .confirm-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;
@@ -70,7 +70,7 @@ function injectStyles() {
 .input-dialog-overlay {
   position: fixed; top:0; left:0; width:100vw; height:100vh;
   background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:4100;
+  align-items:center; justify-content:center; z-index:5000; /* 確認ダイアログ: 全モーダルの上 */
 }
 .input-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;

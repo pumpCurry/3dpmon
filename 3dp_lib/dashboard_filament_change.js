@@ -62,7 +62,7 @@ function injectStyles() {
   .registered-list{flex:1;overflow-y:auto;max-height:60vh;}
   .registered-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}
   .registered-table th,.registered-table td{border-bottom:1px solid #eee;padding:4px 6px;}
-  .registered-table th{cursor:pointer;position:sticky;top:0;background:#f0f0f0;z-index:2;font-size:11px;font-weight:bold;white-space:nowrap;border-bottom:2px solid #ccc;user-select:none;}
+  .registered-table th{cursor:pointer;position:sticky;top:0;background:#f0f0f0;z-index:10;font-size:11px;font-weight:bold;white-space:nowrap;border-bottom:2px solid #ccc;user-select:none;}
   .registered-table th:hover{background:#e0e0e0;}
   .registered-table tr.selected{background:#e0f2fe;}
   `;
