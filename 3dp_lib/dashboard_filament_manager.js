@@ -580,15 +580,17 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
   wrap.appendChild(prevBox);
 
   const listBox = document.createElement("div");
-  listBox.className = "registered-list";
+  listBox.className = "registered-list scrollable-body";
+  listBox.style.maxHeight = "30em";
+  listBox.style.overflowY = "auto";
 
   const table = document.createElement("table");
-  table.className = "registered-table";
+  table.className = "registered-table fixed-header sortable-table";
   const thead = document.createElement("thead");
   thead.innerHTML =
     "<tr><th>色見本</th><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
     "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
-    "<th data-sort='qty'>在庫(±)</th><th data-sort='count'>累計使用数</th><th>コマンド</th></tr>";
+    "<th data-sort='qty' style='text-align:right'>在庫(±)</th><th data-sort='count' style='text-align:right'>累計使用数</th><th>コマンド</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
@@ -966,18 +968,20 @@ function createRegisteredContent(openEditor, hostname) {
   wrap.appendChild(prevBox);
 
   const listBox = document.createElement("div");
-  listBox.className = "registered-list";
+  listBox.className = "registered-list scrollable-body";
+  listBox.style.maxHeight = "30em";
+  listBox.style.overflowY = "auto";
 
   const table = document.createElement("table");
-  table.className = "registered-table";
+  table.className = "registered-table fixed-header sortable-table";
   const thead = document.createElement("thead");
   thead.innerHTML =
     "<tr><th data-sort='serial'>ID</th><th>状態</th>" +
     "<th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
     "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
     "<th data-sort='reelSubName'>サブ名称</th>" +
-    "<th>装着先</th><th>残量</th>" +
-    "<th data-sort='count'>使用数</th><th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
+    "<th>装着先</th><th style='text-align:right'>残量</th>" +
+    "<th data-sort='count' style='text-align:right'>使用数</th><th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
@@ -1529,13 +1533,19 @@ function createHistoryContent() {
   });
   div.appendChild(filterBar);
 
+  const scrollWrap = document.createElement("div");
+  scrollWrap.className = "scrollable-body";
+  scrollWrap.style.maxHeight = "30em";
+  scrollWrap.style.overflowY = "auto";
   const table = document.createElement("table");
+  table.className = "fixed-header sortable-table";
   const thead = document.createElement("thead");
-  thead.innerHTML = "<tr><th>日時</th><th>スプール</th><th>印刷ジョブ</th><th>使用量(mm)</th><th>残量(mm)</th><th>種別</th></tr>";
+  thead.innerHTML = "<tr><th>日時</th><th>スプール</th><th>印刷ジョブ</th><th style='text-align:right'>使用量</th><th style='text-align:right'>残量</th><th>種別</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
-  div.appendChild(table);
+  scrollWrap.appendChild(table);
+  div.appendChild(scrollWrap);
 
   /** スプールIDからスプール情報を取得（削除済み含む） */
   function findSpool(id) {
@@ -1613,12 +1623,15 @@ function createHistoryContent() {
 
       // 使用量
       const usedTd = document.createElement("td");
-      usedTd.textContent = u.usedLength != null ? Number(u.usedLength).toLocaleString() : "--";
+      usedTd.style.textAlign = "right";
+      usedTd.textContent = u.usedLength != null ? formatFilamentAmount(u.usedLength, sp).display : "--";
       tr.appendChild(usedTd);
 
       // 残量
       const remainTd = document.createElement("td");
-      remainTd.textContent = u.currentLength != null ? Number(u.currentLength).toLocaleString() : (u.startLength != null ? Number(u.startLength).toLocaleString() : "--");
+      remainTd.style.textAlign = "right";
+      const remVal = u.currentLength ?? u.startLength ?? null;
+      remainTd.textContent = remVal != null ? formatFilamentAmount(remVal, sp).display : "--";
       tr.appendChild(remainTd);
 
       // 種別

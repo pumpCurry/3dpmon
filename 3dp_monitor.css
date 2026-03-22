@@ -1087,12 +1087,17 @@ input:checked + .slider:before {
 
 /* 奇数偶数行 */
 .history-table tbody tr:nth-child(odd),
-.filelist-table tbody tr:nth-child(odd) {
+.filelist-table tbody tr:nth-child(odd),
+.sortable-table tbody tr:nth-child(odd) {
   background: #fafafa;
 }
 .history-table tbody tr:nth-child(even),
-.filelist-table tbody tr:nth-child(even) {
+.filelist-table tbody tr:nth-child(even),
+.sortable-table tbody tr:nth-child(even) {
   background: #fff;
+}
+.sortable-table tbody tr:hover {
+  background: #f0f4ff;
 }
 
 /* 右揃えカラム（th + td 両方） */

@@ -58,7 +58,8 @@ import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 /* initStorageUIInPanel は設定パネル統合により不要 */
 import { monitorData } from "./dashboard_data.js";
-import { getCurrentSpool } from "./dashboard_spool.js";
+import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
+import { showAlert } from "./dashboard_notification_manager.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
@@ -351,6 +352,31 @@ function initFilamentPanel(body, hostname) {
     changeBtn.addEventListener("click", () => {
       try { showFilamentChangeDialog(hostname); } catch (e) {
         console.warn("[panel-init] filament change dialog エラー:", e);
+      }
+    });
+  }
+  const removeBtn = body.querySelector("#filament-remove-btn");
+  if (removeBtn) {
+    removeBtn.addEventListener("click", async () => {
+      const spool = getCurrentSpool(hostname);
+      if (!spool) {
+        showAlert("スプールは装着されていません", "info");
+        return;
+      }
+      const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+      const ok = await showConfirmDialog({
+        level: "warn",
+        title: "スプール取り外し",
+        message: `${formatSpoolDisplayId(spool)} ${spool.name || ""} を取り外しますか？`,
+        confirmText: "取り外す",
+        cancelText: "キャンセル"
+      });
+      if (!ok) return;
+      setCurrentSpoolId(null, hostname);
+      // プレビューをリセット
+      const hostPreview = window._filamentPreviews?.get(hostname);
+      if (hostPreview) {
+        hostPreview.setState({ isFilamentPresent: false, filamentCurrentLength: spool.totalLengthMm || 330000 });
       }
     });
   }
