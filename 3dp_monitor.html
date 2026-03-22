@@ -89,30 +89,37 @@
         <div id="conn-modal-printer-list" style="font-size:13px;"></div>
       </div>
 
-      <!-- ストレージ設定パネル (非表示、ボタンで展開) -->
-      <div id="storage-panel" style="display:none;padding:10px 16px;border-top:1px solid #e2e8f0;font-size:12px;background:#fafbfc;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <strong>ストレージ設定</strong>
-          <button id="conn-modal-storage-close" style="border:none;background:none;font-size:16px;cursor:pointer;color:#94a3b8;">×</button>
+    </div>
+  </div>
+
+  <!-- ===============================================================
+       ストレージ設定サブモーダル
+  =============================================================== -->
+  <div class="notif-modal-overlay" id="storage-modal-overlay">
+    <div class="notif-modal" style="max-width:480px;">
+      <div class="notif-modal-header" style="background:#475569;">
+        <span>💾 ストレージ設定</span>
+        <button class="notif-modal-close" id="storage-modal-close">×</button>
+      </div>
+      <div class="notif-modal-body" style="padding:16px;font-size:13px;">
+        <div style="margin-bottom:8px;">使用量: <strong><span id="storage-usage">-- / -- (--%)</span></strong></div>
+        <div style="margin-bottom:12px;">最終同期: <span id="storage-last-sync">----</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+          <button id="storage-save-btn" style="font-size:12px;padding:4px 12px;">保存</button>
+          <button id="storage-quota-test-btn" style="font-size:12px;padding:4px 12px;">クォータテスト</button>
+          <button id="clear-storage-button" class="danger" style="font-size:12px;padding:4px 12px;">全ストレージ削除</button>
         </div>
-        <div>使用量: <span id="storage-usage">-- / -- (--%)</span></div>
-        <div>最終同期: <span id="storage-last-sync">----</span></div>
-        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">
-          <button id="storage-save-btn" style="font-size:11px;">保存</button>
-          <button id="storage-quota-test-btn" style="font-size:11px;">クォータテスト</button>
-          <button id="clear-storage-button" class="danger" style="font-size:11px;">全ストレージ削除</button>
-        </div>
-        <div id="storage-error" style="color:red;display:none;margin-top:4px;">⚠ 容量取得エラー</div>
-        <div style="margin-top:6px;">
-          <label for="setting-log-max-lines" style="font-size:12px;"><strong>ログ最大行数:</strong></label>
-          <input type="number" id="setting-log-max-lines" min="100" step="100" value="1000" style="width:5em;font-size:11px;" />
+        <div id="storage-error" style="color:red;display:none;margin-bottom:8px;">⚠ 容量取得エラー</div>
+        <div>
+          <label for="setting-log-max-lines"><strong>ログ最大行数:</strong></label>
+          <input type="number" id="setting-log-max-lines" min="100" step="100" value="1000" style="width:6em;font-size:12px;padding:3px;border:1px solid #ccc;border-radius:3px;margin-left:6px;" />
         </div>
         <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
           <div class="confirm-modal-box">
             <p>全ストレージを本当に削除しますか？</p>
             <div class="btn-group">
-              <button id="confirm-delete-ok" class="danger" style="font-size:11px;">削除する</button>
-              <button id="confirm-delete-cancel" style="font-size:11px;">キャンセル</button>
+              <button id="confirm-delete-ok" class="danger" style="font-size:12px;">削除する</button>
+              <button id="confirm-delete-cancel" style="font-size:12px;">キャンセル</button>
             </div>
           </div>
         </div>

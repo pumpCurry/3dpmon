@@ -398,18 +398,23 @@ function _initTopMenuBar() {
     });
   }
 
-  // ストレージパネルの展開/閉じる
+  // ストレージ設定サブモーダル
   const storageBtn = document.getElementById("conn-modal-storage-btn");
-  const storagePanel = document.getElementById("storage-panel");
-  const storageClose = document.getElementById("conn-modal-storage-close");
-  if (storageBtn && storagePanel) {
+  const storageOverlay = document.getElementById("storage-modal-overlay");
+  const storageClose = document.getElementById("storage-modal-close");
+  if (storageBtn && storageOverlay) {
     storageBtn.addEventListener("click", () => {
-      storagePanel.style.display = storagePanel.style.display === "none" ? "" : "none";
+      storageOverlay.classList.add("open");
     });
   }
-  if (storageClose && storagePanel) {
+  if (storageClose && storageOverlay) {
     storageClose.addEventListener("click", () => {
-      storagePanel.style.display = "none";
+      storageOverlay.classList.remove("open");
+    });
+  }
+  if (storageOverlay) {
+    storageOverlay.addEventListener("click", e => {
+      if (e.target === storageOverlay) storageOverlay.classList.remove("open");
     });
   }
 }
