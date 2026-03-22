@@ -1017,7 +1017,11 @@ body.panel-mode .notification-container {
   width: 100% !important;
   height: 100% !important;
   object-fit: contain !important;  /* cover ではなく contain: レターボックス */
-  display: block !important;       /* .off 時も非表示にしない（src="" で停止） */
+  display: block !important;
+}
+/* 未接続時 (.off): img を非表示にして壊れた画像マークを隠す */
+.panel-wrapper[data-panel-type="camera"] .camera-wrapper > img.off {
+  visibility: hidden !important;
 }
 
 /* NO SIGNAL: パネル中央に表示 */
