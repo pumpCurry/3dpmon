@@ -272,10 +272,12 @@ function initFilamentPanel(body, hostname) {
   try {
     const machine = monitorData.machines[hostname] || {};
     const spool = getCurrentSpool(hostname);
+    // スプール未装着の場合はデフォルト満タン表示（0% 表示を防止）
+    const defaultTotal = 330000;
     preview = createFilamentPreview(container, {
       filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
-      filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? 330000,
-      filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? 0,
+      filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? defaultTotal,
+      filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? defaultTotal,
       filamentColor:            spool?.filamentColor ?? machine.settings?.filamentColor ?? "#22C55E",
       reelOuterDiameter:        spool?.reelOuterDiameter ?? 200,
       reelThickness:            spool?.reelThickness ?? 68,
@@ -284,7 +286,7 @@ function initFilamentPanel(body, hostname) {
       widthPx:                  264,
       heightPx:                 264,
       showSlider:               false,
-      isFilamentPresent:        true,
+      isFilamentPresent:        !!spool,
       showUsedUpIndicator:      true,
       blinkingLightColor:       "#0EA5E9",
       showInfoLength:           false,
