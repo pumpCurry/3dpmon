@@ -348,8 +348,13 @@ function initFilamentPanel(body, hostname) {
 
   // 交換・一覧ボタンのバインド
   const changeBtn = body.querySelector("#filament-change-btn");
+  console.info("[filament-panel] changeBtn found:", !!changeBtn, "hostname:", hostname);
   if (changeBtn) {
+    // ボタンの視認性を診断
+    const rect = changeBtn.getBoundingClientRect();
+    console.info("[filament-panel] changeBtn rect:", JSON.stringify({w:rect.width, h:rect.height, x:rect.x, y:rect.y}));
     changeBtn.addEventListener("click", async () => {
+      console.info("[filament-panel] 交換ボタンがクリックされました hostname:", hostname);
       try {
         await showFilamentChangeDialog(hostname);
       } catch (e) {
