@@ -123,8 +123,11 @@ export function showPresetOpenDialog(hostname) {
     dlg.className = "fc-dialog";
     overlay.appendChild(dlg);
 
+    const presetMachineObj = monitorData.machines[hostname] || {};
+    const presetDisplayHost = presetMachineObj.storedData?.hostname?.rawValue
+                           || presetMachineObj.storedData?.model?.rawValue || hostname || "";
     dlg.innerHTML = `
-      <div class="fc-header">新品フィラメント選択</div>
+      <div class="fc-header">新品フィラメント選択 <span style="font-size:0.85em;color:#64748b;margin-left:8px">${presetDisplayHost}</span></div>
       <div class="fc-body">
         <fieldset class="fc-search-field">
           <legend>検索</legend>
@@ -141,8 +144,8 @@ export function showPresetOpenDialog(hostname) {
             <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
-          <div class="registered-list">
-            <table class="registered-table">
+          <div class="registered-list" style="max-height:50vh;overflow-y:auto">
+            <table class="registered-table fixed-header sortable-table">
               <thead>
                 <tr><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>サブ名称</th></tr>
               </thead>
@@ -371,8 +374,12 @@ export function showFilamentChangeDialog(hostname) {
     dlg.className = "fc-dialog";
     overlay.appendChild(dlg);
 
+    // 対象プリンタの表示名を取得
+    const machineObj = monitorData.machines[hostname] || {};
+    const displayHost = machineObj.storedData?.hostname?.rawValue
+                     || machineObj.storedData?.model?.rawValue || hostname || "";
     dlg.innerHTML = `
-      <div class="fc-header">フィラメント交換</div>
+      <div class="fc-header">フィラメント交換 <span style="font-size:0.85em;color:#64748b;margin-left:8px">${displayHost}</span></div>
       <div class="fc-body">
         <fieldset class="fc-search-field">
           <legend>検索</legend>
@@ -389,10 +396,10 @@ export function showFilamentChangeDialog(hostname) {
             <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
-          <div class="registered-list">
-            <table class="registered-table">
+          <div class="registered-list" style="max-height:50vh;overflow-y:auto">
+            <table class="registered-table fixed-header sortable-table">
               <thead>
-                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>残量</th></tr>
+                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>装着先</th><th style="text-align:right">残量</th></tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -536,13 +543,36 @@ export function showFilamentChangeDialog(hostname) {
         const pct = sp.totalLengthMm > 0
           ? Math.round((sp.remainingLengthMm / sp.totalLengthMm) * 100)
           : 0;
+        // 装着先の表示
+        const mountedOn = sp.hostname || null;
+        const isCurrent = mountedOn && mountedOn === hostname;
+        const isOtherHost = mountedOn && mountedOn !== hostname;
+        let mountLabel = "";
+        if (isCurrent) {
+          mountLabel = `<span style="color:#16a34a;font-weight:bold">◀ 現在</span>`;
+        } else if (isOtherHost) {
+          const otherName = monitorData.machines[mountedOn]?.storedData?.hostname?.rawValue || mountedOn;
+          mountLabel = `<span style="color:#94a3b8">${otherName}</span>`;
+        }
         tr.innerHTML = `<td>${formatSpoolDisplayId(sp)}</td>` +
           `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
           `<td>${sp.materialName || sp.material || ''}</td>` +
           `<td><span style='color:${sp.filamentColor || sp.color || '#000'}'>■</span>${sp.colorName || ''}</td>` +
           `<td>${sp.name || sp.reelName || ''}</td>` +
-          `<td>${pct}%</td>`;
+          `<td>${mountLabel}</td>` +
+          `<td style="text-align:right">${pct}%</td>`;
+        // 現在装着中をハイライト
+        if (isCurrent) tr.style.background = '#f0fdf4';
+        // 他機器装着済みをグレーアウト
+        if (isOtherHost) {
+          tr.style.opacity = '0.5';
+          tr.title = `このスプールは ${mountLabel} に装着中です`;
+        }
         tr.addEventListener('click', () => {
+          if (isOtherHost) {
+            showAlert("このスプールは別のプリンタに装着中です", "warn");
+            return;
+          }
           tableBody.querySelector('tr.selected')?.classList.remove('selected');
           tr.classList.add('selected');
           selectedSpool = sp;
@@ -580,10 +610,9 @@ export function showFilamentChangeDialog(hostname) {
           showAlert("このスプールは既に別のプリンタに装着されています", "warn");
           return;
         }
-        // 在庫消費は addSpoolFromPreset() 内で行われるため、ここでは不要
-        // （既存スプール選択時に二重消費していたバグを修正）
         const hostPreview = window._filamentPreviews?.get(hostname);
         updatePreview(selectedSpool, hostPreview);
+        showAlert(`${formatSpoolDisplayId(selectedSpool)} を ${displayHost} に装着しました`, "success");
       }
       closeDialog(true);
     });
@@ -823,10 +852,10 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
             <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
             <div id="fc-stock" class="fc-stock"></div>
           </div>
-          <div class="registered-list">
-            <table class="registered-table">
+          <div class="registered-list" style="max-height:50vh;overflow-y:auto">
+            <table class="registered-table fixed-header sortable-table">
               <thead>
-                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>残量</th></tr>
+                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th style="text-align:right">残量</th></tr>
               </thead>
               <tbody></tbody>
             </table>
