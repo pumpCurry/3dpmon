@@ -1080,7 +1080,8 @@ body.panel-mode .notification-container {
 .panel-body .history-panel-content {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;  /* flex 子要素のオーバーフロー許可 */
 }
 .panel-body .history-toolbar {
   flex-shrink: 0;
@@ -1123,7 +1124,8 @@ body.panel-mode .notification-container {
 .panel-body .file-list-panel-content {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;  /* flex 子要素のオーバーフロー許可 */
 }
 .panel-body .file-list-toolbar {
   flex-shrink: 0;
