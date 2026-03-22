@@ -322,7 +322,21 @@ export function getCurrentSpool(hostname) {
  */
 export function setCurrentSpoolId(id, hostname) {
   const host = hostname;
-  const prevId = getCurrentSpoolId(host);
+  let prevId = getCurrentSpoolId(host);
+
+  // hostname が空で hostSpoolMap にエントリがない場合、
+  // isActive なスプールから直接取得する (孤立スプールの取り外し用)
+  if (prevId == null && id == null) {
+    // 取り外し要求だが prevId が見つからない → isActive なスプールを探す
+    const orphan = monitorData.filamentSpools.find(s =>
+      s.isActive && (!s.hostname || s.hostname === host)
+    );
+    if (orphan) {
+      prevId = orphan.id;
+    } else {
+      return true; // 取り外すものがない
+    }
+  }
   if (prevId === id) return true;
   const prevSpool = getSpoolById(prevId);
   const newSpool = getSpoolById(id);
@@ -527,8 +541,8 @@ export function addSpool(data) {
     isPending: false,
     isFavorite: data.isFavorite || false,
     deleted: false,
-    isDeleted: false
-
+    isDeleted: false,
+    hostname: data.hostname || null
   };
   monitorData.filamentSpools.push(spool);
   saveUnifiedStorage();

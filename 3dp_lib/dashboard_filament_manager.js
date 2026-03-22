@@ -887,6 +887,37 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
  * @param {string} hostname - 現在のホスト名
  * @returns {{el:HTMLElement, render:function():void}} タブ要素と描画関数
  */
+/**
+ * フィラメントパネルのプレビューをスプール変更に同期する。
+ * @param {string} host - ホスト名
+ * @param {Object|null} spool - 新しいスプール (null で未装着)
+ */
+function _syncFilamentPreview(host, spool) {
+  const preview = window._filamentPreviews?.get(host);
+  if (!preview) return;
+  if (spool) {
+    preview.setState({
+      isFilamentPresent: true,
+      filamentCurrentLength: spool.remainingLengthMm || 0,
+      filamentTotalLength: spool.totalLengthMm || 330000,
+      filamentColor: spool.filamentColor || spool.color || "#22C55E",
+      reelName: spool.name || "",
+      reelSubName: spool.reelSubName || "",
+      materialName: spool.materialName || spool.material || "",
+      materialColorName: spool.colorName || "",
+      materialColorCode: spool.filamentColor || "",
+      manufacturerName: spool.manufacturerName || spool.brand || ""
+    });
+  } else {
+    preview.setState({
+      isFilamentPresent: false,
+      filamentCurrentLength: 330000,
+      reelName: "", reelSubName: "", materialName: "",
+      materialColorName: "", materialColorCode: "", manufacturerName: ""
+    });
+  }
+}
+
 function createRegisteredContent(openEditor, hostname) {
   const div = document.createElement("div");
   div.className = "filament-manager-content";
@@ -1239,7 +1270,18 @@ function createRegisteredContent(openEditor, hostname) {
           removeBtn.style.fontSize = "11px";
           removeBtn.addEventListener("click", ev => {
             ev.stopPropagation();
-            setCurrentSpoolId(null, sp.hostname || hostname);
+            const targetHost = sp.hostname || hostname;
+            const ok = setCurrentSpoolId(null, targetHost);
+            // setCurrentSpoolId が hostSpoolMap 不整合で取り外せなかった場合の安全弁
+            if (!ok || sp.isActive) {
+              sp.isActive = false;
+              sp.isInUse = false;
+              sp.hostname = null;
+              sp.removedAt = Date.now();
+              if (targetHost) monitorData.hostSpoolMap[targetHost] = null;
+            }
+            // フィラメントカードのプレビューを更新
+            _syncFilamentPreview(targetHost, null);
             render();
           });
           cmd.append(editBtn, removeBtn);
@@ -1257,6 +1299,7 @@ function createRegisteredContent(openEditor, hostname) {
                 showAlert("このスプールは既に別のプリンタに装着されています", "warn");
                 return;
               }
+              _syncFilamentPreview(hosts[0], sp);
               render();
             } else if (hosts.length > 1) {
               const sel = document.createElement("select");
