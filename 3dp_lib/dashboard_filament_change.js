@@ -436,55 +436,7 @@ export function showFilamentChangeDialog(hostname) {
     const nameIn = dlg.querySelector("#fc-name");
     const searchForm = dlg.querySelector("#fc-search");
     const tableBody = dlg.querySelector(".registered-table tbody");
-    const prevEl = dlg.querySelector("#fc-preview");
-    const stockEl = dlg.querySelector("#fc-stock");
     const okBtn = dlg.querySelector("#fc-ok");
-
-    const dialogPreview = createFilamentPreview(prevEl, {
-      filamentDiameter: 1.75,
-      filamentTotalLength: 336000,
-      filamentCurrentLength: 336000,
-      filamentColor: "#22C55E",
-      reelOuterDiameter: 200,
-      reelThickness: 68,
-      reelWindingInnerDiameter: 95,
-      reelCenterHoleDiameter: 54,
-      widthPx: 120,
-      heightPx: 120,
-      showSlider: false,
-      isFilamentPresent: true,
-      showUsedUpIndicator: true,
-      blinkingLightColor: "#0EA5E9",
-      showInfoLength: false,
-      showInfoPercent: false,
-      showInfoLayers: false,
-      showResetButton: false,
-      showProfileViewButton: true,
-      showSideViewButton: true,
-      showFrontViewButton: true,
-      showAutoRotateButton: true,
-      enableDrag: true,
-      enableClick: false,
-      onClick: null,
-      disableInteraction: true,
-      showOverlayLength: true,
-      showOverlayPercent: true,
-      showLengthKg: false,
-      showReelName: true,
-      showReelSubName: true,
-      showMaterialName: true,
-      showMaterialColorName: true,
-      showMaterialColorCode: true,
-      showManufacturerName: true,
-      showOverlayBar: true,
-      showPurchaseButton: true,
-      reelName: "",
-      reelSubName: "",
-      materialName: "",
-      materialColorName: "",
-      materialColorCode: "",
-      manufacturerName: ""
-    });
 
     const spools = getSpools();
     const presets = monitorData.filamentPresets || [];
@@ -547,12 +499,6 @@ export function showFilamentChangeDialog(hostname) {
       });
     }
 
-    function updateInfo(sp) {
-      if (!sp) { stockEl.textContent = ''; return; }
-      const inv = sp.presetId ? getInventoryItem(sp.presetId) : null;
-      stockEl.textContent = inv ? `在庫: ${inv.quantity}` : '在庫: -';
-      updatePreview(sp, dialogPreview);
-    }
 
     function renderTable() {
       tableBody.innerHTML = '';
@@ -600,7 +546,6 @@ export function showFilamentChangeDialog(hostname) {
             selectedSpool = sp;
             selectedPreset = null;
             okBtn.disabled = false;
-            updateInfo(sp);
           });
           tableBody.appendChild(tr);
         });
