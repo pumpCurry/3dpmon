@@ -349,9 +349,11 @@ function initFilamentPanel(body, hostname) {
   // 交換・一覧ボタンのバインド
   const changeBtn = body.querySelector("#filament-change-btn");
   if (changeBtn) {
-    changeBtn.addEventListener("click", () => {
-      try { showFilamentChangeDialog(hostname); } catch (e) {
-        console.warn("[panel-init] filament change dialog エラー:", e);
+    changeBtn.addEventListener("click", async () => {
+      try {
+        await showFilamentChangeDialog(hostname);
+      } catch (e) {
+        console.error("[panel-init] filament change dialog エラー:", e);
       }
     });
   }

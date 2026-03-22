@@ -368,6 +368,7 @@ export function showFilamentChangeDialog(hostname) {
   }
   filamentChangeDialogOpen = true;
   return new Promise(resolve => {
+   try {
     const overlay = document.createElement("div");
     overlay.className = "fc-overlay";
     const dlg = document.createElement("div");
@@ -669,6 +670,11 @@ export function showFilamentChangeDialog(hostname) {
         closeDialog(true);
       });
     }
+   } catch (e) {
+    console.error("[showFilamentChangeDialog] ダイアログ生成エラー:", e);
+    filamentChangeDialogOpen = false;
+    resolve(false);
+   }
   });
 }
 

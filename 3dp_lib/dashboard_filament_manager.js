@@ -393,8 +393,10 @@ function createDashboardContent(hostname, switchTab) {
         const changeBtn = document.createElement("button");
         changeBtn.textContent = "交換";
         changeBtn.style.fontSize = "11px";
-        changeBtn.addEventListener("click", () => {
-          showFilamentChangeDialog(host);
+        changeBtn.addEventListener("click", async () => {
+          try { await showFilamentChangeDialog(host); } catch (e) {
+            console.error("[filament-manager] 交換ダイアログエラー:", e);
+          }
         });
         const removeBtn = document.createElement("button");
         removeBtn.textContent = "取り外す";
