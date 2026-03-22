@@ -1059,9 +1059,13 @@ export function createFilamentPreview(mount, opts) {
     /* ----- オーバーレイ情報更新 ----- */
     overlayLength.style.display  = o.showOverlayLength  ? 'block' : 'none';
     if (o.showOverlayLength) {
-      const cur = Math.round(currentLen).toLocaleString();
-      const tot = Math.round(o.filamentTotalLength).toLocaleString();
-      overlayLength.textContent = `${cur}mm / ${tot}mm`;
+      if (!isPresent) {
+        overlayLength.textContent = "スプール未装着";
+      } else {
+        const cur = Math.round(currentLen).toLocaleString();
+        const tot = Math.round(o.filamentTotalLength).toLocaleString();
+        overlayLength.textContent = `${cur}mm / ${tot}mm`;
+      }
     }
 
     if (o.showLengthKg) {
@@ -1072,7 +1076,7 @@ export function createFilamentPreview(mount, opts) {
     // フィラメント名
     overlayName.style.display = o.showReelName ? 'block' : 'none';
     if (o.showReelName) {
-      overlayName.textContent   = o.reelName;
+      overlayName.textContent = isPresent ? o.reelName : "";
     }
 
     overlaySubName.style.display    = o.showReelSubName ? 'block' : 'none';
@@ -1094,14 +1098,20 @@ export function createFilamentPreview(mount, opts) {
     // 残量%
     overlayPercent.style.display = o.showOverlayPercent ? 'block' : 'none';
     if (o.showOverlayPercent) {
-      // 数値を整数部・小数点・小数部・％記号に分割
-      const pct = (currentLen / o.filamentTotalLength * 100).toFixed(2);
-      const [intPart, fracPart] = pct.split('.');
-      overlayPercent.innerHTML =
-        `<span class="dfv-overlay-percent-int">${intPart}</span>` +
-        `<span class="dfv-overlay-percent-dot">.</span>` +
-        `<span class="dfv-overlay-percent-frac">${fracPart}</span>` +
-        `<span class="dfv-overlay-percent-sign">%</span>`;
+      if (!isPresent) {
+        // 未装着時は「---」表示
+        overlayPercent.innerHTML =
+          `<span class="dfv-overlay-percent-int">---</span>`;
+      } else {
+        // 数値を整数部・小数点・小数部・％記号に分割
+        const pct = (currentLen / o.filamentTotalLength * 100).toFixed(2);
+        const [intPart, fracPart] = pct.split('.');
+        overlayPercent.innerHTML =
+          `<span class="dfv-overlay-percent-int">${intPart}</span>` +
+          `<span class="dfv-overlay-percent-dot">.</span>` +
+          `<span class="dfv-overlay-percent-frac">${fracPart}</span>` +
+          `<span class="dfv-overlay-percent-sign">%</span>`;
+      }
     }
 
     // ----- オーバーレイ進捗バー更新 -----
