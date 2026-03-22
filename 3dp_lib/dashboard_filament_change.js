@@ -23,7 +23,7 @@
  */
 "use strict";
 
-import { getSpools, getSpoolById, setCurrentSpoolId, getCurrentSpoolId, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel } from "./dashboard_spool.js";
+import { getSpools, getSpoolById, setCurrentSpoolId, getCurrentSpoolId, getCurrentSpool, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel, formatFilamentAmount } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
