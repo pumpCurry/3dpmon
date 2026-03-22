@@ -397,6 +397,21 @@ function _initTopMenuBar() {
       if (e.target === notifOverlay) notifOverlay.classList.remove("open");
     });
   }
+
+  // ストレージパネルの展開/閉じる
+  const storageBtn = document.getElementById("conn-modal-storage-btn");
+  const storagePanel = document.getElementById("storage-panel");
+  const storageClose = document.getElementById("conn-modal-storage-close");
+  if (storageBtn && storagePanel) {
+    storageBtn.addEventListener("click", () => {
+      storagePanel.style.display = storagePanel.style.display === "none" ? "" : "none";
+    });
+  }
+  if (storageClose && storagePanel) {
+    storageClose.addEventListener("click", () => {
+      storagePanel.style.display = "none";
+    });
+  }
 }
 
 /* _buildDefaultLayout は廃止。

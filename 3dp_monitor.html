@@ -61,68 +61,61 @@
         <span>接続設定</span>
         <button class="conn-modal-close" id="conn-modal-close">×</button>
       </div>
-      <div class="conn-modal-body">
-        <label for="conn-modal-ip">接続先を追加 (IP:ポート)</label>
-        <div class="btn-row">
-          <input type="text" id="conn-modal-ip" placeholder="192.168.54.151:9999" style="flex:1;">
+
+      <!-- 上部固定エリア: 接続追加 + オプション -->
+      <div class="conn-modal-toolbar">
+        <div class="btn-row" style="gap:6px;">
+          <input type="text" id="conn-modal-ip" placeholder="192.168.54.151:9999" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
           <button class="primary" id="conn-modal-connect">接続追加</button>
         </div>
-
-        <div class="btn-row" style="margin-top:8px; align-items:center; flex-wrap:wrap; gap:4px 12px;">
-          <label style="flex:0; white-space:nowrap;">
-            <input type="checkbox" id="conn-modal-auto-connect">
-            起動時に自動接続
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12px;">
+          <label style="white-space:nowrap;cursor:pointer;">
+            <input type="checkbox" id="conn-modal-auto-connect"> 自動接続
           </label>
-          <label style="flex:0; white-space:nowrap;">
-            <input type="checkbox" id="conn-modal-show-host-tag" checked>
-            パネルに機器名を表示
+          <label style="white-space:nowrap;cursor:pointer;">
+            <input type="checkbox" id="conn-modal-show-host-tag" checked> 機器名表示
           </label>
-          <label style="flex:0; white-space:nowrap; font-size:12px;">
-            カメラポート:
-            <input type="number" id="conn-modal-camera-port" min="1" max="65535" style="width:5em; font-size:12px;" placeholder="8080">
+          <label style="white-space:nowrap;">
+            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" style="width:5em;font-size:12px;padding:2px 4px;border:1px solid #ccc;border-radius:3px;" placeholder="8080">
           </label>
+          <span style="flex:1"></span>
+          <button id="conn-modal-notif-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">🔔 通知設定</button>
+          <button id="conn-modal-storage-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">💾 ストレージ</button>
         </div>
+      </div>
 
-        <!-- 接続済み・登録済みプリンタ一覧 -->
-        <hr style="margin:12px 0 8px;">
-        <label>接続先一覧</label>
-        <div id="conn-modal-printer-list" style="margin-top:4px; font-size:13px; max-height:35vh; overflow-y:auto;"></div>
+      <!-- スクロールエリア: 機器一覧のみ -->
+      <div class="conn-modal-body">
+        <div id="conn-modal-printer-list" style="font-size:13px;"></div>
+      </div>
 
-        <!-- 通知設定ボタン -->
-        <hr style="margin:12px 0 8px;">
-        <button class="primary" id="conn-modal-notif-btn" style="width:100%;">通知設定を開く</button>
-
-        <!-- ストレージ設定 -->
-        <hr style="margin:12px 0 8px;">
-        <details id="storage-panel" style="font-size:12px;">
-          <summary style="cursor:pointer; font-weight:bold; font-size:13px;">ストレージ設定</summary>
-          <div style="padding:6px 0;">
-            <div>使用量: <span id="storage-usage">-- / -- (--%)</span></div>
-            <div>最終同期: <span id="storage-last-sync">----</span></div>
-            <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:4px;">
-              <button id="storage-save-btn" style="font-size:11px;">保存</button>
-              <button id="storage-quota-test-btn" style="font-size:11px;">クォータテスト</button>
-              <button id="clear-storage-button" class="danger" style="font-size:11px;">全ストレージ削除</button>
-            </div>
-            <div id="storage-error" style="color:red; display:none; margin-top:4px;">⚠ 容量取得エラー</div>
-            <div style="margin-top:6px;">
-              <label for="setting-log-max-lines" style="font-size:12px;"><strong>ログ最大行数:</strong></label>
-              <input type="number" id="setting-log-max-lines"
-                min="100" step="100" value="1000"
-                style="width:5em; font-size:11px;" />
-            </div>
-            <!-- 確認ダイアログ（全ストレージ削除用） -->
-            <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
-              <div class="confirm-modal-box">
-                <p>全ストレージを本当に削除しますか？</p>
-                <div class="btn-group">
-                  <button id="confirm-delete-ok" class="danger" style="font-size:11px;">削除する</button>
-                  <button id="confirm-delete-cancel" style="font-size:11px;">キャンセル</button>
-                </div>
-              </div>
+      <!-- ストレージ設定パネル (非表示、ボタンで展開) -->
+      <div id="storage-panel" style="display:none;padding:10px 16px;border-top:1px solid #e2e8f0;font-size:12px;background:#fafbfc;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <strong>ストレージ設定</strong>
+          <button id="conn-modal-storage-close" style="border:none;background:none;font-size:16px;cursor:pointer;color:#94a3b8;">×</button>
+        </div>
+        <div>使用量: <span id="storage-usage">-- / -- (--%)</span></div>
+        <div>最終同期: <span id="storage-last-sync">----</span></div>
+        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">
+          <button id="storage-save-btn" style="font-size:11px;">保存</button>
+          <button id="storage-quota-test-btn" style="font-size:11px;">クォータテスト</button>
+          <button id="clear-storage-button" class="danger" style="font-size:11px;">全ストレージ削除</button>
+        </div>
+        <div id="storage-error" style="color:red;display:none;margin-top:4px;">⚠ 容量取得エラー</div>
+        <div style="margin-top:6px;">
+          <label for="setting-log-max-lines" style="font-size:12px;"><strong>ログ最大行数:</strong></label>
+          <input type="number" id="setting-log-max-lines" min="100" step="100" value="1000" style="width:5em;font-size:11px;" />
+        </div>
+        <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
+          <div class="confirm-modal-box">
+            <p>全ストレージを本当に削除しますか？</p>
+            <div class="btn-group">
+              <button id="confirm-delete-ok" class="danger" style="font-size:11px;">削除する</button>
+              <button id="confirm-delete-cancel" style="font-size:11px;">キャンセル</button>
             </div>
           </div>
-        </details>
+        </div>
       </div>
     </div>
   </div>
