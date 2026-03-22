@@ -232,7 +232,7 @@ body {
   flex-direction: column;
   gap: 0.5rem;
   pointer-events: none;     /* 背面の操作を邪魔しない */
-  z-index: 2000;
+  z-index: 9000;            /* 通知バナー: 全モーダル・ダイアログの上に表示 */
   margin-top: 1rem;
 }
 

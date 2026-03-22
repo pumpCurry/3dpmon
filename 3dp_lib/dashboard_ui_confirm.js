@@ -34,6 +34,15 @@ const LEVEL_CONFIG = {
 };
 
 let styleInjected = false;
+
+/**
+ * モーダル/ダイアログ用の動的 z-index カウンター。
+ * 新しいオーバーレイを生成するたびにインクリメントし、
+ * 常に最新のダイアログが最前面に表示される。
+ * ベース値 5000 から開始し、閉じたら戻す。
+ * @type {number}
+ */
+let _zIndexCounter = 5000;
 /** 最初の呼び出し時に必要な CSS を document.head に注入 */
 function injectStyles() {
   if (styleInjected) return;
@@ -43,7 +52,8 @@ function injectStyles() {
 .confirm-overlay {
   position: fixed; top:0; left:0; width:100vw; height:100vh;
   background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:5000; /* 確認ダイアログ: 全モーダルの上 */
+  align-items:center; justify-content:center;
+  /* z-index は生成時に動的設定 */
 }
 .confirm-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;
@@ -70,7 +80,8 @@ function injectStyles() {
 .input-dialog-overlay {
   position: fixed; top:0; left:0; width:100vw; height:100vh;
   background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:5000; /* 確認ダイアログ: 全モーダルの上 */
+  align-items:center; justify-content:center;
+  /* z-index は生成時に動的設定 */
 }
 .input-dialog {
   background:#fff; border-radius:8px; width:90%; max-width:400px;
@@ -141,9 +152,10 @@ export function showConfirmDialog({
   return new Promise(resolve => {
     const { icon, color } = LEVEL_CONFIG[level] || LEVEL_CONFIG.warn;
 
-    // オーバーレイ
+    // オーバーレイ（動的 z-index で常に最前面）
     const overlay = document.createElement("div");
     overlay.className = "confirm-overlay";
+    overlay.style.zIndex = String(++_zIndexCounter);
     document.body.appendChild(overlay);
 
     // ダイアログ
@@ -216,6 +228,7 @@ export function showConfirmDialog({
 
     function cleanup() {
       document.body.removeChild(overlay);
+      _zIndexCounter--;
     }
   });
 }
@@ -260,9 +273,10 @@ export function showInputDialog({
   return new Promise(resolve => {
     const { icon, color } = LEVEL_CONFIG[level] || LEVEL_CONFIG.info;
 
-    // オーバーレイ＋ダイアログ本体
+    // オーバーレイ＋ダイアログ本体（動的 z-index で常に最前面）
     const overlay = document.createElement("div");
     overlay.className = "input-dialog-overlay";
+    overlay.style.zIndex = String(++_zIndexCounter);
     document.body.appendChild(overlay);
     const dlg = document.createElement("div");
     dlg.className = "input-dialog";
@@ -342,6 +356,7 @@ export function showInputDialog({
     function finish(result) {
       document.removeEventListener("keydown", finish);
       overlay.remove();
+      _zIndexCounter--;
       resolve(result);
     }
   });
