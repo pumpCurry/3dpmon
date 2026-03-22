@@ -10,6 +10,8 @@
 .grid-stack {
   min-height: 600px;
   background: #e8e8e8;
+  /* DOM 更新時のスクロール位置巻き戻しを防止 */
+  overflow-anchor: none;
 }
 
 /* ---------------------------------------------------------------
