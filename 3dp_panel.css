@@ -669,9 +669,10 @@ body.panel-mode .notification-container {
 }
 .panel-body .filament-preview-area {
   touch-action: none;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 80px;
   overflow: hidden;
+  position: relative; /* 内部 absolute 要素の基準 */
 }
 .panel-body .filament-panel-footer {
   flex-shrink: 0;
@@ -679,6 +680,9 @@ body.panel-mode .notification-container {
   display: flex;
   gap: 4px;
   justify-content: center;
+  z-index: 10; /* プレビューのオーバーレイより上に */
+  position: relative;
+  background: #fff; /* プレビューが透けないように */
 }
 
 /* ---------------------------------------------------------------

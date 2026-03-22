@@ -781,7 +781,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
       const mountBtn = document.createElement("button");
       mountBtn.textContent = "開封して装着";
       mountBtn.style.fontSize = "11px";
-      mountBtn.addEventListener("click", ev => {
+      mountBtn.addEventListener("click", async (ev) => {
         ev.stopPropagation();
         const sp = addSpoolFromPreset(p);
         if (!sp) return;
@@ -790,32 +790,37 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
             showAlert("装着に失敗しました", "warn");
             return;
           }
+          _syncFilamentPreview(hosts[0], sp);
           if (onRegisteredRefresh) onRegisteredRefresh();
           render();
           showAlert("スプールを装着しました", "success");
         } else if (hosts.length > 1) {
-          // ホスト選択ドロップダウン
-          const sel = document.createElement("select");
-          sel.style.fontSize = "10px";
-          hosts.forEach(h => {
+          const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+          const hostOptions = hosts.map(h => {
             const m = monitorData.machines[h] || {};
-            const name = m.storedData?.hostname?.rawValue || h;
-            const o = document.createElement("option");
-            o.value = h; o.textContent = name; sel.appendChild(o);
+            return m.storedData?.hostname?.rawValue || h;
           });
-          const okBtn = document.createElement("button");
-          okBtn.textContent = "OK";
-          okBtn.style.fontSize = "10px";
-          okBtn.addEventListener("click", () => {
-            if (!setCurrentSpoolId(sp.id, sel.value)) {
-              showAlert("このスプールは既に別のプリンタに装着されています", "warn");
-              return;
-            }
-            if (onRegisteredRefresh) onRegisteredRefresh();
-            render();
-            showAlert("スプールを装着しました", "success");
+          const ok = await showConfirmDialog({
+            level: "info",
+            title: "装着先の選択",
+            html: `<div style="font-size:13px;margin-bottom:8px">${formatSpoolDisplayId(sp)} を装着するプリンタを選択</div>
+              <select id="mount-host-select" style="width:100%;padding:6px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+                ${hosts.map((h, i) => `<option value="${h}">${hostOptions[i]}</option>`).join("")}
+              </select>`,
+            confirmText: "装着",
+            cancelText: "キャンセル"
           });
-          cmd.append(document.createElement("br"), sel, okBtn);
+          if (!ok) return;
+          const selEl = document.getElementById("mount-host-select");
+          const targetHost = selEl?.value || hosts[0];
+          if (!setCurrentSpoolId(sp.id, targetHost)) {
+            showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+            return;
+          }
+          _syncFilamentPreview(targetHost, sp);
+          if (onRegisteredRefresh) onRegisteredRefresh();
+          render();
+          showAlert("スプールを装着しました", "success");
         } else {
           if (onRegisteredRefresh) onRegisteredRefresh();
           render();
@@ -1289,7 +1294,7 @@ function createRegisteredContent(openEditor, hostname) {
           const mountBtn = document.createElement("button");
           mountBtn.textContent = "装着";
           mountBtn.style.fontSize = "11px";
-          mountBtn.addEventListener("click", ev => {
+          mountBtn.addEventListener("click", async (ev) => {
             ev.stopPropagation();
             if (hosts.length === 1) {
               if (!setCurrentSpoolId(sp.id, hosts[0])) {
@@ -1297,27 +1302,35 @@ function createRegisteredContent(openEditor, hostname) {
                 return;
               }
               _syncFilamentPreview(hosts[0], sp);
+              showAlert("スプールを装着しました", "success");
               render();
             } else if (hosts.length > 1) {
-              const sel = document.createElement("select");
-              sel.style.fontSize = "10px";
-              hosts.forEach(h => {
+              // 確認ダイアログで装着先を選択（インライン追加ではなくダイアログで）
+              const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+              const hostOptions = hosts.map(h => {
                 const m = monitorData.machines[h] || {};
-                const name = m.storedData?.hostname?.rawValue || h;
-                const o = document.createElement("option");
-                o.value = h; o.textContent = name; sel.appendChild(o);
+                return m.storedData?.hostname?.rawValue || h;
               });
-              const okBtn = document.createElement("button");
-              okBtn.textContent = "OK";
-              okBtn.style.fontSize = "10px";
-              okBtn.addEventListener("click", () => {
-                if (!setCurrentSpoolId(sp.id, sel.value)) {
-                  showAlert("このスプールは既に別のプリンタに装着されています", "warn");
-                  return;
-                }
-                render();
+              const ok = await showConfirmDialog({
+                level: "info",
+                title: "装着先の選択",
+                html: `<div style="font-size:13px;margin-bottom:8px">${formatSpoolDisplayId(sp)} ${sp.name || ""} をどのプリンタに装着しますか？</div>
+                  <select id="mount-host-select" style="width:100%;padding:6px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+                    ${hosts.map((h, i) => `<option value="${h}">${hostOptions[i]}</option>`).join("")}
+                  </select>`,
+                confirmText: "装着",
+                cancelText: "キャンセル"
               });
-              cmd.append(sel, okBtn);
+              if (!ok) return;
+              const selEl = document.getElementById("mount-host-select");
+              const targetHost = selEl?.value || hosts[0];
+              if (!setCurrentSpoolId(sp.id, targetHost)) {
+                showAlert("このスプールは既に別のプリンタに装着されています", "warn");
+                return;
+              }
+              _syncFilamentPreview(targetHost, sp);
+              showAlert("スプールを装着しました", "success");
+              render();
             }
           });
           const editBtn = document.createElement("button");
