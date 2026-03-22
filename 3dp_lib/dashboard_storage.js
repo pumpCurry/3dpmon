@@ -52,6 +52,8 @@ import {
 
 let _enableStorageLog = false;
 let _lastSavedJson    = null;
+/** localStorage バックアップの最終書き出し時刻 */
+let _lastLsBackupEpoch = 0;
 
 /** 書き込みスロットリング用 */
 let _saveTimer     = null;
@@ -262,6 +264,18 @@ function _flushStorage() {
       for (const [host, machine] of Object.entries(monitorData.machines)) {
         if (host === PLACEHOLDER_HOSTNAME) continue;
         queueMachineWrite(host, machine);
+      }
+
+      // IndexedDB 障害時のリカバリ用に localStorage にもバックアップを定期書き出し
+      // (毎回ではなく60秒に1回、サイズ制限エラーも吸収)
+      const now = Date.now();
+      if (!_lastLsBackupEpoch || now - _lastLsBackupEpoch > 60000) {
+        _lastLsBackupEpoch = now;
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(monitorData));
+        } catch (e) {
+          console.warn("[saveUnifiedStorage] localStorage バックアップ失敗:", e.message);
+        }
       }
 
       if (_enableStorageLog) {

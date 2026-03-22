@@ -77,6 +77,21 @@ function createWindow() {
   });
 }
 
+/* ─── 多重起動防止 ─── */
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  // 既に別インスタンスが起動中 → 自身を終了し、既存ウィンドウをフォーカス
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    // 2つ目のインスタンスが起動を試みた → 既存ウィンドウを前面に
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 /* ─── アプリケーションライフサイクル ─── */
 
 app.whenReady().then(() => {
