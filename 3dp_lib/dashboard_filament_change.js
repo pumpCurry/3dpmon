@@ -416,13 +416,19 @@ export function showFilamentChangeDialog(hostname) {
             <button id="fc-search-btn">🔍</button>
           </form>
         </fieldset>
-        <div class="registered-list" style="max-height:45vh;overflow-y:auto">
-          <table class="registered-table fixed-header sortable-table">
-            <thead>
-              <tr id="fc-thead-row"></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div style="display:flex;gap:8px">
+          <div class="registered-list" style="flex:1;max-height:45vh;overflow-y:auto;min-width:0">
+            <table class="registered-table fixed-header sortable-table">
+              <thead>
+                <tr id="fc-thead-row"></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="fc-preview-panel" style="flex-shrink:0;width:160px;display:flex;flex-direction:column;align-items:center;gap:4px;">
+            <div id="fc-preview" style="width:150px;height:150px;position:relative;"></div>
+            <div id="fc-preview-info" style="font-size:11px;text-align:center;color:#64748b;"></div>
+          </div>
         </div>
       </div>
       <div class="fc-buttons">
@@ -438,6 +444,70 @@ export function showFilamentChangeDialog(hostname) {
     const searchForm = dlg.querySelector("#fc-search");
     const tableBody = dlg.querySelector(".registered-table tbody");
     const okBtn = dlg.querySelector("#fc-ok");
+    const previewEl = dlg.querySelector("#fc-preview");
+    const previewInfoEl = dlg.querySelector("#fc-preview-info");
+
+    // プレビュー生成
+    let dialogPreview = null;
+    try {
+      dialogPreview = createFilamentPreview(previewEl, {
+        filamentDiameter: 1.75,
+        filamentTotalLength: 336000,
+        filamentCurrentLength: 336000,
+        filamentColor: "#22C55E",
+        reelOuterDiameter: 200,
+        reelThickness: 68,
+        reelWindingInnerDiameter: 95,
+        reelCenterHoleDiameter: 54,
+        widthPx: 150, heightPx: 150,
+        showSlider: false,
+        isFilamentPresent: false,
+        showUsedUpIndicator: true,
+        showInfoLength: false, showInfoPercent: false, showInfoLayers: false,
+        showResetButton: false,
+        showProfileViewButton: false, showSideViewButton: false,
+        showFrontViewButton: false, showAutoRotateButton: true,
+        enableDrag: true, enableClick: false,
+        disableInteraction: true,
+        showOverlayLength: false, showOverlayPercent: true,
+        showOverlayBar: true,
+        showReelName: true, showReelSubName: false,
+        showMaterialName: false, showMaterialColorName: false,
+        showMaterialColorCode: false, showManufacturerName: true,
+        showPurchaseButton: false
+      });
+    } catch (e) {
+      console.warn("[fc] preview生成エラー:", e);
+    }
+
+    /** 選択したスプール/プリセットのプレビューを更新 */
+    function updatePreviewPanel(sp) {
+      if (!dialogPreview) return;
+      if (sp) {
+        const opts = {
+          isFilamentPresent: true,
+          filamentCurrentLength: sp.remainingLengthMm ?? sp.filamentCurrentLength ?? sp.defaultLength ?? 336000,
+          filamentTotalLength: sp.totalLengthMm ?? sp.filamentTotalLength ?? sp.defaultLength ?? 336000,
+          filamentColor: sp.filamentColor || sp.color || "#22C55E",
+          reelOuterDiameter: sp.reelOuterDiameter || 200,
+          reelThickness: sp.reelThickness || 68,
+          reelWindingInnerDiameter: sp.reelWindingInnerDiameter || 95,
+          reelCenterHoleDiameter: sp.reelCenterHoleDiameter || 54,
+          reelName: sp.name || sp.colorName || "",
+          manufacturerName: sp.manufacturerName || sp.brand || ""
+        };
+        if (sp.reelBodyColor) opts.reelBodyColor = sp.reelBodyColor;
+        if (sp.reelFlangeTransparency != null) opts.reelFlangeTransparency = sp.reelFlangeTransparency;
+        dialogPreview.setState(opts);
+        // 情報テキスト
+        const mat = sp.materialName || sp.material || "";
+        const color = sp.colorName || "";
+        previewInfoEl.textContent = `${mat} ${color}`;
+      } else {
+        dialogPreview.setState({ isFilamentPresent: false, reelName: "", manufacturerName: "" });
+        previewInfoEl.textContent = "";
+      }
+    }
 
     const spools = getSpools();
     const presets = monitorData.filamentPresets || [];
@@ -547,6 +617,7 @@ export function showFilamentChangeDialog(hostname) {
             selectedSpool = sp;
             selectedPreset = null;
             okBtn.disabled = false;
+            updatePreviewPanel(sp);
           });
           tableBody.appendChild(tr);
         });
@@ -579,6 +650,7 @@ export function showFilamentChangeDialog(hostname) {
             selectedPreset = p;
             selectedSpool = null;
             okBtn.disabled = false;
+            updatePreviewPanel(p);
           });
           tableBody.appendChild(tr);
         });
