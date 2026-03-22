@@ -1071,7 +1071,7 @@ input:checked + .slider:before {
   position: sticky;
   top: 0;
   background: #fff;   /* ヘッダー背景を白に */
-  z-index: 2;         /* 本文セルの上に */
+  z-index: 10;        /* 本文セルの上に確実に表示 */
 }
 
 .scrollable-body { max-height:30em; overflow:auto; }

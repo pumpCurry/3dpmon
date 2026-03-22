@@ -1204,7 +1204,7 @@ body.panel-mode .notification-container {
 .sortable-table th.sortable {
   cursor: pointer;
   user-select: none;
-  position: relative;
+  /* position: sticky は .sortable-table th で設定済み — relative に上書きしない */
   padding-right: 14px;
 }
 .sortable-table th.sortable:hover {
@@ -1275,7 +1275,7 @@ body.panel-mode .notification-container {
   /* ヘッダー固定: 3dp_monitor.css の .fixed-header th を上書きしないよう再宣言 */
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 10;
 }
 .sortable-table td {
   padding: 3px 5px;
