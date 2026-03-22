@@ -37,6 +37,18 @@ const path = require("path");
  */
 let mainWindow = null;
 
+/* ─── ポータブル版: ユーザーデータを exe と同じディレクトリに保存 ─── */
+// portable 版（NSIS portable や --portable フラグ）の場合、
+// %APPDATA% ではなく exe のあるディレクトリに userData を配置する。
+// これにより正規インストール版とデータが競合しない。
+if (process.env.PORTABLE_EXECUTABLE_DIR) {
+  const portableData = path.join(process.env.PORTABLE_EXECUTABLE_DIR, "3dpmon-data");
+  app.setPath("userData", portableData);
+} else if (process.argv.includes("--portable")) {
+  const portableData = path.join(path.dirname(process.execPath), "3dpmon-data");
+  app.setPath("userData", portableData);
+}
+
 /**
  * メインウィンドウを生成する。
  *
@@ -95,6 +107,19 @@ if (!gotTheLock) {
 /* ─── アプリケーションライフサイクル ─── */
 
 app.whenReady().then(() => {
+  // 壊れた GPU / コードキャッシュを起動時にクリーンアップ
+  // (多重起動やクラッシュで破損した場合のリカバリ)
+  const fs = require("fs");
+  const cacheDirs = ["GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "Code Cache"];
+  for (const dir of cacheDirs) {
+    const fullPath = path.join(app.getPath("userData"), dir);
+    try {
+      if (fs.existsSync(fullPath)) {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      }
+    } catch { /* キャッシュ削除失敗は無視 */ }
+  }
+
   createWindow();
 
   /* macOS: Dock アイコンクリック時にウィンドウ再生成 */
