@@ -378,39 +378,55 @@ export function showFilamentChangeDialog(hostname) {
     const machineObj = monitorData.machines[hostname] || {};
     const displayHost = machineObj.storedData?.hostname?.rawValue
                      || machineObj.storedData?.model?.rawValue || hostname || "";
+    // 現在装着中スプール情報バー
+    const curSpool = getCurrentSpool(hostname);
+    let currentBar = "";
+    if (curSpool) {
+      const curPct = curSpool.totalLengthMm > 0
+        ? Math.round((curSpool.remainingLengthMm / curSpool.totalLengthMm) * 100) : 0;
+      currentBar = `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;margin-bottom:8px;font-size:12px">
+          <span style="color:${curSpool.filamentColor || '#000'};font-size:16px">■</span>
+          <span><b>${formatSpoolDisplayId(curSpool)}</b> ${curSpool.name || ""}</span>
+          <span style="color:#64748b">${curSpool.materialName || curSpool.material || ""}</span>
+          <span style="color:#16a34a;font-weight:bold">${curPct}%</span>
+          <span style="flex:1"></span>
+          <button id="fc-remove" style="font-size:11px;padding:2px 8px;cursor:pointer">取り外す</button>
+        </div>`;
+    } else {
+      currentBar = `<div style="padding:6px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:8px;font-size:12px;color:#94a3b8">スプール未装着</div>`;
+    }
+
     dlg.innerHTML = `
       <div class="fc-header">フィラメント交換 <span style="font-size:0.85em;color:#64748b;margin-left:8px">${displayHost}</span></div>
       <div class="fc-body">
-        <fieldset class="fc-search-field">
-          <legend>検索</legend>
+        ${currentBar}
+        <div style="display:flex;gap:2px;margin-bottom:6px">
+          <button class="fc-tab-btn active" data-tab="stored" style="flex:1;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;border-radius:4px 4px 0 0;background:#fff;font-weight:bold">📦 保管中スプール</button>
+          <button class="fc-tab-btn" data-tab="preset" style="flex:1;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;border-radius:4px 4px 0 0;background:#f8fafc">🆕 新品を開封</button>
+          <button class="fc-tab-btn" data-tab="favorite" style="flex:1;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;border-radius:4px 4px 0 0;background:#f8fafc">⭐ お気に入り</button>
+        </div>
+        <fieldset class="fc-search-field" style="margin-bottom:4px">
           <form id="fc-search" class="fc-search">
             <select id="fc-brand"></select>
             <select id="fc-material"></select>
             <select id="fc-color"></select>
             <input id="fc-name" placeholder="名称">
-            <button id="fc-search-btn">検索</button>
+            <button id="fc-search-btn">🔍</button>
           </form>
         </fieldset>
-        <div class="registered-container">
-          <div class="registered-preview">
-            <div id="fc-preview" style="width:120px;height:120px;position:relative;"></div>
-            <div id="fc-stock" class="fc-stock"></div>
-          </div>
-          <div class="registered-list" style="max-height:50vh;overflow-y:auto">
-            <table class="registered-table fixed-header sortable-table">
-              <thead>
-                <tr><th>#</th><th>ブランド</th><th>材質</th><th>色名</th><th>名称</th><th>装着先</th><th style="text-align:right">残量</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
+        <div class="registered-list" style="max-height:45vh;overflow-y:auto">
+          <table class="registered-table fixed-header sortable-table">
+            <thead>
+              <tr id="fc-thead-row"></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
       <div class="fc-buttons">
         <button id="fc-cancel">キャンセル</button>
-        <button id="fc-used">過去取り外したスプールから選択</button>
-        <button id="fc-new">新品を開封</button>
-        <button id="fc-ok" disabled>このフィラメントを選択</button>
+        <button id="fc-ok" disabled>このフィラメントに交換</button>
       </div>
     `;
 
@@ -471,9 +487,12 @@ export function showFilamentChangeDialog(hostname) {
     });
 
     const spools = getSpools();
-    // hostname に装着中のスプールを初期選択（per-host で判定）
+    const presets = monitorData.filamentPresets || [];
     const curId = hostname ? getCurrentSpoolId(hostname) : null;
-    let selectedSpool = (curId ? spools.find(s => s.id === curId) : null) || null;
+    let selectedSpool = null;
+    let selectedPreset = null;
+    let activeTab = "stored"; // stored | preset | favorite
+    const theadRow = dlg.querySelector("#fc-thead-row");
 
     function fillOptions(list) {
       const brands = new Set();
@@ -536,56 +555,118 @@ export function showFilamentChangeDialog(hostname) {
     }
 
     function renderTable() {
-      const list = applyFilter(spools);
       tableBody.innerHTML = '';
-      list.forEach(sp => {
-        const tr = document.createElement('tr');
-        const pct = sp.totalLengthMm > 0
-          ? Math.round((sp.remainingLengthMm / sp.totalLengthMm) * 100)
-          : 0;
-        // 装着先の表示
-        const mountedOn = sp.hostname || null;
-        const isCurrent = mountedOn && mountedOn === hostname;
-        const isOtherHost = mountedOn && mountedOn !== hostname;
-        let mountLabel = "";
-        if (isCurrent) {
-          mountLabel = `<span style="color:#16a34a;font-weight:bold">◀ 現在</span>`;
-        } else if (isOtherHost) {
-          const otherName = monitorData.machines[mountedOn]?.storedData?.hostname?.rawValue || mountedOn;
-          mountLabel = `<span style="color:#94a3b8">${otherName}</span>`;
+      selectedSpool = null;
+      selectedPreset = null;
+      okBtn.disabled = true;
+
+      if (activeTab === "stored" || activeTab === "favorite") {
+        // スプール一覧表示
+        theadRow.innerHTML = "<th>スプール</th><th>素材</th><th style='text-align:right'>残量</th><th>状態</th>";
+        let list = applyFilter(spools);
+        if (activeTab === "stored") {
+          // 保管中 (取り外し済み + 在庫) — 装着中は除外 (現在の機器以外)
+          list = list.filter(sp => !sp.hostname || sp.hostname === hostname);
+        } else {
+          // お気に入り
+          list = list.filter(sp => sp.isFavorite);
         }
-        tr.innerHTML = `<td>${formatSpoolDisplayId(sp)}</td>` +
-          `<td>${sp.manufacturerName || sp.brand || ''}</td>` +
-          `<td>${sp.materialName || sp.material || ''}</td>` +
-          `<td><span style='color:${sp.filamentColor || sp.color || '#000'}'>■</span>${sp.colorName || ''}</td>` +
-          `<td>${sp.name || sp.reelName || ''}</td>` +
-          `<td>${mountLabel}</td>` +
-          `<td style="text-align:right">${pct}%</td>`;
-        // 現在装着中をハイライト
-        if (isCurrent) tr.style.background = '#f0fdf4';
-        // 他機器装着済みをグレーアウト
-        if (isOtherHost) {
-          tr.style.opacity = '0.5';
-          tr.title = `このスプールは ${mountLabel} に装着中です`;
-        }
-        tr.addEventListener('click', () => {
-          if (isOtherHost) {
-            showAlert("このスプールは別のプリンタに装着中です", "warn");
-            return;
+        list.forEach(sp => {
+          const tr = document.createElement('tr');
+          const pct = sp.totalLengthMm > 0
+            ? Math.round((sp.remainingLengthMm / sp.totalLengthMm) * 100) : 0;
+          const fmtRemain = formatFilamentAmount(sp.remainingLengthMm, sp);
+          const mountedOn = sp.hostname || null;
+          const isCurrent = mountedOn && mountedOn === hostname;
+          const isOtherHost = mountedOn && mountedOn !== hostname;
+          let stateLabel = "";
+          if (isCurrent) stateLabel = `<span style="color:#16a34a;font-weight:bold">◀ 装着中</span>`;
+          else if (isOtherHost) {
+            const otherName = monitorData.machines[mountedOn]?.storedData?.hostname?.rawValue || mountedOn;
+            stateLabel = `<span style="color:#94a3b8;font-size:11px">${otherName}</span>`;
           }
-          tableBody.querySelector('tr.selected')?.classList.remove('selected');
-          tr.classList.add('selected');
-          selectedSpool = sp;
-          okBtn.disabled = false;
-          updateInfo(sp);
+          tr.innerHTML =
+            `<td><span style="color:${sp.filamentColor || sp.color || '#000'};font-size:14px">■</span> <b>${formatSpoolDisplayId(sp)}</b> ${sp.name || ""}<div style="font-size:11px;color:#64748b">${sp.manufacturerName || sp.brand || ""}</div></td>` +
+            `<td>${sp.materialName || sp.material || ""}</td>` +
+            `<td style="text-align:right"><div>${pct}%</div><div style="font-size:11px;color:#64748b">${fmtRemain.display}</div></td>` +
+            `<td>${stateLabel}</td>`;
+          if (isCurrent) tr.style.background = '#f0fdf4';
+          if (isOtherHost) { tr.style.opacity = '0.5'; }
+          tr.style.cursor = isOtherHost ? 'not-allowed' : 'pointer';
+          tr.addEventListener('click', () => {
+            if (isOtherHost) { showAlert("このスプールは別のプリンタに装着中です", "warn"); return; }
+            tableBody.querySelector('tr.selected')?.classList.remove('selected');
+            tr.classList.add('selected');
+            selectedSpool = sp;
+            selectedPreset = null;
+            okBtn.disabled = false;
+            updateInfo(sp);
+          });
+          tableBody.appendChild(tr);
         });
-        tableBody.appendChild(tr);
-      });
+      } else {
+        // プリセット一覧 (新品開封)
+        theadRow.innerHTML = "<th>プリセット</th><th>素材</th><th style='text-align:right'>容量</th>";
+        let list = presets;
+        // 検索フィルタ適用
+        list = list.filter(p => {
+          if (brandSel.value && (p.brand || '') !== brandSel.value) return false;
+          if (matSel.value && (p.material || '') !== matSel.value) return false;
+          if (colorSel.value && (p.colorName || '') !== colorSel.value) return false;
+          if (nameIn.value) {
+            const n = `${p.name || ''}${p.brand || ''}${p.colorName || ''}`;
+            if (!n.toLowerCase().includes(nameIn.value.toLowerCase())) return false;
+          }
+          return true;
+        });
+        list.forEach(p => {
+          const tr = document.createElement('tr');
+          const lengthM = ((p.filamentTotalLength || p.defaultLength || 0) / 1000).toFixed(0);
+          tr.innerHTML =
+            `<td><span style="color:${p.color || '#000'};font-size:14px">■</span> <b>${p.colorName || ""}</b> ${p.name || ""}<div style="font-size:11px;color:#64748b">${p.brand || ""}</div></td>` +
+            `<td>${p.material || ""}</td>` +
+            `<td style="text-align:right">${lengthM}m <span style="font-size:11px;color:#64748b">(新品)</span></td>`;
+          tr.style.cursor = 'pointer';
+          tr.addEventListener('click', () => {
+            tableBody.querySelector('tr.selected')?.classList.remove('selected');
+            tr.classList.add('selected');
+            selectedPreset = p;
+            selectedSpool = null;
+            okBtn.disabled = false;
+          });
+          tableBody.appendChild(tr);
+        });
+      }
     }
+
+    // タブ切替
+    dlg.querySelectorAll(".fc-tab-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        dlg.querySelectorAll(".fc-tab-btn").forEach(b => {
+          b.classList.remove("active");
+          b.style.background = "#f8fafc";
+          b.style.fontWeight = "normal";
+        });
+        btn.classList.add("active");
+        btn.style.background = "#fff";
+        btn.style.fontWeight = "bold";
+        activeTab = btn.dataset.tab;
+        // タブ切替時に検索フィルタのオプションを再構築
+        if (activeTab === "preset") {
+          fillOptions(presets.map(p => ({
+            manufacturerName: p.brand, brand: p.brand,
+            materialName: p.material, material: p.material,
+            colorName: p.colorName
+          })));
+        } else {
+          fillOptions(spools);
+        }
+        renderTable();
+      });
+    });
 
     fillOptions(spools);
     renderTable();
-    if (selectedSpool) updateInfo(selectedSpool);
 
     searchForm.addEventListener('submit', ev => {
       ev.preventDefault();
@@ -605,26 +686,44 @@ export function showFilamentChangeDialog(hostname) {
     });
 
     dlg.querySelector("#fc-ok").addEventListener("click", () => {
-      if (selectedSpool) {
-        if (!setCurrentSpoolId(selectedSpool.id, hostname)) {
+      let mountSpool = selectedSpool;
+      // 新品開封の場合はプリセットからスプールを作成
+      if (!mountSpool && selectedPreset) {
+        mountSpool = addSpoolFromPreset(selectedPreset);
+        if (!mountSpool) {
+          showAlert("スプールの作成に失敗しました", "error");
+          return;
+        }
+      }
+      if (mountSpool) {
+        if (!setCurrentSpoolId(mountSpool.id, hostname)) {
           showAlert("このスプールは既に別のプリンタに装着されています", "warn");
           return;
         }
         const hostPreview = window._filamentPreviews?.get(hostname);
-        updatePreview(selectedSpool, hostPreview);
-        showAlert(`${formatSpoolDisplayId(selectedSpool)} を ${displayHost} に装着しました`, "success");
+        updatePreview(mountSpool, hostPreview);
+        showAlert(`${formatSpoolDisplayId(mountSpool)} を ${displayHost} に装着しました`, "success");
       }
       closeDialog(true);
     });
 
-    dlg.querySelector("#fc-used").addEventListener("click", () => {
-      closeDialog(false);
-      showFilamentManager(2, hostname);
-    });
-
-    dlg.querySelector("#fc-new").addEventListener("click", async () => {
-      closeDialog(await showPresetOpenDialog(hostname));
-    });
+    // 取り外しボタン (現在装着中バー内)
+    const removeBtn = dlg.querySelector("#fc-remove");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", () => {
+        setCurrentSpoolId(null, hostname);
+        const hostPreview = window._filamentPreviews?.get(hostname);
+        if (hostPreview) {
+          hostPreview.setState({
+            isFilamentPresent: false, filamentCurrentLength: 330000,
+            reelName: "", reelSubName: "", materialName: "",
+            materialColorName: "", materialColorCode: "", manufacturerName: ""
+          });
+        }
+        showAlert(`${displayHost} からスプールを取り外しました`, "info");
+        closeDialog(true);
+      });
+    }
   });
 }
 
