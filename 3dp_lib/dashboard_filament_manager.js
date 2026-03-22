@@ -400,10 +400,11 @@ function createDashboardContent(hostname, switchTab) {
         removeBtn.textContent = "取り外す";
         removeBtn.style.fontSize = "11px";
         removeBtn.addEventListener("click", async () => {
+          const hostDisplayName = monitorData.machines[host]?.storedData?.hostname?.rawValue || host;
           const ok = await showConfirmDialog({
             level: "warn",
-            title: "確認",
-            message: `${formatSpoolDisplayId(spool)} を取り外しますか?`,
+            title: "スプール取り外し",
+            message: `${hostDisplayName} から ${formatSpoolDisplayId(spool)} ${spool.name || ""} を取り外しますか?`,
             confirmText: "取り外す",
             cancelText: "キャンセル"
           });

@@ -1079,21 +1079,20 @@ export function createFilamentPreview(mount, opts) {
       overlayName.textContent = isPresent ? o.reelName : "";
     }
 
-    overlaySubName.style.display    = o.showReelSubName ? 'block' : 'none';
+    overlaySubName.style.display    = (o.showReelSubName && isPresent) ? 'block' : 'none';
     if (o.showReelSubName) {
-      overlaySubName.textContent    = o.reelSubName;
+      overlaySubName.textContent    = isPresent ? o.reelSubName : "";
     }
 
     // マテリアル名＋色名
     const matParts = [];
-   // if (o.showMaterialName)      matParts.push(o.materialName);
-    if (o.showMaterialColorName) matParts.push(o.materialColorName);
+    if (isPresent && o.showMaterialColorName) matParts.push(o.materialColorName);
     overlayMaterial.style.display = matParts.length ? 'block' : 'none';
     overlayMaterial.textContent   = matParts.join(' / ');
 
     // カラーコード
-    overlayColorCode.style.display = o.showMaterialColorCode ? 'block' : 'none';
-    overlayColorCode.textContent   = o.materialColorCode;
+    overlayColorCode.style.display = (o.showMaterialColorCode && isPresent) ? 'block' : 'none';
+    overlayColorCode.textContent   = isPresent ? o.materialColorCode : "";
 
     // 残量%
     overlayPercent.style.display = o.showOverlayPercent ? 'block' : 'none';
@@ -1131,9 +1130,9 @@ export function createFilamentPreview(mount, opts) {
 
 
     // フィラメントメーカー & リール名
-    overlayManufacturer.style.display = o.showManufacturerName ? 'block' : 'none';
+    overlayManufacturer.style.display = (o.showManufacturerName && isPresent) ? 'block' : 'none';
     overlayManufacturer.style.cssText = 'font-size:1.2em; font-weight:bold; color:#000; margin:2px 0;';
-    overlayManufacturer.textContent = o.manufacturerName || '';
+    overlayManufacturer.textContent = isPresent ? (o.manufacturerName || '') : '';
 
     // 素材種類タグ
     const bg=o.materialColorCode||o.reelWindingForegroundColor;

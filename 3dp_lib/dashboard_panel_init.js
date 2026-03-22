@@ -363,20 +363,29 @@ function initFilamentPanel(body, hostname) {
         showAlert("スプールは装着されていません", "info");
         return;
       }
+      const machineObj = monitorData.machines[hostname] || {};
+      const displayHost = machineObj.storedData?.hostname?.rawValue
+                       || machineObj.storedData?.model?.rawValue || hostname || "";
       const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
       const ok = await showConfirmDialog({
         level: "warn",
         title: "スプール取り外し",
-        message: `${formatSpoolDisplayId(spool)} ${spool.name || ""} を取り外しますか？`,
+        message: `${displayHost} から ${formatSpoolDisplayId(spool)} ${spool.name || ""} を取り外しますか？`,
         confirmText: "取り外す",
         cancelText: "キャンセル"
       });
       if (!ok) return;
       setCurrentSpoolId(null, hostname);
-      // プレビューをリセット
+      // プレビューを未装着状態にリセット（全オーバーレイ属性をクリア）
       const hostPreview = window._filamentPreviews?.get(hostname);
       if (hostPreview) {
-        hostPreview.setState({ isFilamentPresent: false, filamentCurrentLength: spool.totalLengthMm || 330000 });
+        hostPreview.setState({
+          isFilamentPresent: false,
+          filamentCurrentLength: spool.totalLengthMm || 330000,
+          reelName: "", reelSubName: "",
+          materialName: "", materialColorName: "",
+          materialColorCode: "", manufacturerName: ""
+        });
       }
     });
   }
