@@ -1375,6 +1375,18 @@ function createRegisteredContent(openEditor, hostname) {
           break;
         }
       }
+      // お気に入りトグルボタン（全状態共通）
+      const favBtn = document.createElement("button");
+      favBtn.textContent = sp.isFavorite ? "★" : "☆";
+      favBtn.title = sp.isFavorite ? "お気に入り解除" : "お気に入りに追加";
+      favBtn.style.cssText = "font-size:14px;border:none;background:none;cursor:pointer;padding:0 4px;color:" + (sp.isFavorite ? "#f59e0b" : "#94a3b8");
+      favBtn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        sp.isFavorite = !sp.isFavorite;
+        updateSpool(sp.id, { isFavorite: sp.isFavorite });
+        render();
+      });
+      cmd.prepend(favBtn);
       tr.appendChild(cmd);
 
       // 行クリックでプレビュー更新 + 詳細ドリルダウン表示

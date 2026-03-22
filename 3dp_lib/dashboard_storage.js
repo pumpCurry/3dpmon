@@ -37,6 +37,7 @@
 "use strict";
 
 import { monitorData, currentHostname, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
+import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import {
@@ -388,8 +389,15 @@ function _restoreFromData(shared, machines) {
   if (Array.isArray(shared?.filamentInventory)) {
     monitorData.filamentInventory = shared.filamentInventory;
   }
+  // プリセット: ストレージのユーザー編集済みデータとコード側の新規追加をマージ
   if (Array.isArray(shared?.filamentPresets)) {
-    monitorData.filamentPresets = shared.filamentPresets;
+    const storedIds = new Set(shared.filamentPresets.map(p => p.presetId));
+    // コード側にあってストレージにないプリセットを追加
+    const newPresets = FILAMENT_PRESETS.filter(p => !storedIds.has(p.presetId));
+    monitorData.filamentPresets = [...shared.filamentPresets, ...newPresets];
+    if (newPresets.length > 0) {
+      console.info(`[_restoreFromData] 新規プリセット ${newPresets.length} 件をマージ`);
+    }
   }
   if (shared && "currentSpoolId" in shared) {
     monitorData.currentSpoolId = shared.currentSpoolId;
