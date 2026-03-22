@@ -1238,6 +1238,10 @@ body.panel-mode .notification-container {
   font-weight: bold;
   border-bottom: 2px solid #ccc;
   white-space: nowrap;
+  /* ヘッダー固定: 3dp_monitor.css の .fixed-header th を上書きしないよう再宣言 */
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 .sortable-table td {
   padding: 3px 5px;

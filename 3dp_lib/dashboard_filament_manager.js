@@ -1010,8 +1010,7 @@ function createRegisteredContent(openEditor, hostname) {
     "<tr><th data-sort='serial'>ID</th><th>状態</th>" +
     "<th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
     "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
-    "<th data-sort='reelSubName'>サブ名称</th>" +
-    "<th>装着先</th><th style='text-align:right'>残量</th>" +
+    "<th style='text-align:right'>残量</th>" +
     "<th data-sort='count' style='text-align:right'>使用数</th><th data-sort='last'>最終利用日時</th><th>コマンド</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
@@ -1203,9 +1202,14 @@ function createRegisteredContent(openEditor, hostname) {
       idTd.textContent = formatSpoolDisplayId(sp);
       tr.appendChild(idTd);
 
-      // 状態バッジ
+      // 状態バッジ + 装着先統合
       const stateTd = document.createElement("td");
-      stateTd.innerHTML = renderStateBadge(state);
+      let stateHtml = renderStateBadge(state);
+      if (state === SPOOL_STATE.MOUNTED && sp.hostname) {
+        const mountName = monitorData.machines[sp.hostname]?.storedData?.hostname?.rawValue || sp.hostname;
+        stateHtml += `<div style="font-size:10px;color:#64748b;margin-top:1px">${mountName}</div>`;
+      }
+      stateTd.innerHTML = stateHtml;
       tr.appendChild(stateTd);
 
       // ブランド
@@ -1227,16 +1231,6 @@ function createRegisteredContent(openEditor, hostname) {
       const nameTd = document.createElement("td");
       nameTd.textContent = sp.name || sp.reelName || "";
       tr.appendChild(nameTd);
-
-      // サブ名称
-      const subTd = document.createElement("td");
-      subTd.textContent = sp.reelSubName || "";
-      tr.appendChild(subTd);
-
-      // 装着先
-      const hostTd = document.createElement("td");
-      hostTd.textContent = sp.hostname || "--";
-      tr.appendChild(hostTd);
 
       // 残量バー
       const remainTd = document.createElement("td");
@@ -1379,7 +1373,8 @@ function createRegisteredContent(openEditor, hostname) {
       const favBtn = document.createElement("button");
       favBtn.textContent = sp.isFavorite ? "★" : "☆";
       favBtn.title = sp.isFavorite ? "お気に入り解除" : "お気に入りに追加";
-      favBtn.style.cssText = "font-size:14px;border:none;background:none;cursor:pointer;padding:0 4px;color:" + (sp.isFavorite ? "#f59e0b" : "#94a3b8");
+      favBtn.className = "icon-btn";
+      favBtn.style.cssText = "font-size:14px;padding:2px 6px;cursor:pointer;color:" + (sp.isFavorite ? "#f59e0b" : "#94a3b8") + ";border-color:" + (sp.isFavorite ? "#f59e0b" : "#ddd");
       favBtn.addEventListener("click", ev => {
         ev.stopPropagation();
         sp.isFavorite = !sp.isFavorite;
