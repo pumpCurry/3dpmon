@@ -353,43 +353,57 @@ export function ingestData(data, hostname) {
   }
 
   // A. プリント進捗通知 ------------------------------------------------------
-  if (prog !== s.prevProgress) {
+  // 印刷中 (printStarted/printPaused) でない場合はマイルストーン通知をスキップ
+  // — 印刷終了後のアクセスで過去の進捗値に対して全マイルストーンが爆発するのを防止
+  const stateForNotif = Number(storedData.state?.rawValue ?? 0);
+  const isPrinting = stateForNotif === PRINT_STATE_CODE.printStarted
+                  || stateForNotif === PRINT_STATE_CODE.printPaused;
+
+  if (isPrinting && prog !== s.prevProgress) {
     notificationManager.notify("printProgressUpdated", { hostname: host, previous: s.prevProgress, current: prog });
     s.lastProgressTimestamp = nowMs;
   }
-  PROGRESS_MILESTONES.forEach(ms => {
-    if (prog >= ms && !s.notifiedProgressMilestones.has(ms)) {
-      s.notifiedProgressMilestones.add(ms);
-      const layer = Number(storedData.layer?.rawValue ?? 0);
-      const totalLayer = Number(storedData.TotalLayer?.rawValue ?? 0);
-      const remainSec = Number(storedData.printLeftTime?.rawValue ?? 0);
-      const estEnd = remainSec > 0 ? Date.now() + remainSec * 1000 : null;
-      const fname = storedData.printFileName?.rawValue || storedData.fileName?.rawValue;
-      notificationManager.notify("printProgressMilestone", {
-        hostname: host, milestone: ms,
-        filename: fname ? String(fname).split("/").pop() : "",
-        layer, totalLayer,
-        remainingSec: remainSec,
-        estimatedEndTime_epoch: estEnd
-      });
-    }
-  });
-  // 長時間停滞検知 (10分)
-  if (prog === s.prevProgress && nowMs - s.lastProgressTimestamp > 10 * 60 * 1000) {
+  if (isPrinting) {
+    PROGRESS_MILESTONES.forEach(ms => {
+      if (prog >= ms && !s.notifiedProgressMilestones.has(ms)) {
+        s.notifiedProgressMilestones.add(ms);
+        const layer = Number(storedData.layer?.rawValue ?? 0);
+        const totalLayer = Number(storedData.TotalLayer?.rawValue ?? 0);
+        const remainSec = Number(storedData.printLeftTime?.rawValue ?? 0);
+        const estEnd = remainSec > 0 ? Date.now() + remainSec * 1000 : null;
+        const fname = storedData.printFileName?.rawValue || storedData.fileName?.rawValue;
+        notificationManager.notify("printProgressMilestone", {
+          hostname: host, milestone: ms,
+          filename: fname ? String(fname).split("/").pop() : "",
+          layer, totalLayer,
+          remainingSec: remainSec,
+          estimatedEndTime_epoch: estEnd
+        });
+      }
+    });
+  } else if (prog > 0) {
+    // 印刷中でないが進捗値が残っている場合、マイルストーンを既通知扱いにする
+    // （次に印刷が始まったとき _resetNotificationState で正しくクリアされる）
+    PROGRESS_MILESTONES.forEach(ms => {
+      if (prog >= ms) s.notifiedProgressMilestones.add(ms);
+    });
+  }
+  // 長時間停滞検知 (10分) — 印刷中のみ
+  if (isPrinting && prog === s.prevProgress && nowMs - s.lastProgressTimestamp > 10 * 60 * 1000) {
     notificationManager.notify("printProgressStalled", {
       hostname: host, progress: prog,
       stalledFor: formatDurationSimple((nowMs - s.lastProgressTimestamp) / 1000)
     });
     s.lastProgressTimestamp = nowMs;
   }
-  // 完了通知
-  if (s.prevProgress < 100 && prog >= 100) {
+  // 完了通知 — 印刷中から完了に変化した場合のみ
+  if (isPrinting && s.prevProgress < 100 && prog >= 100) {
     notificationManager.notify("printProgressComplete", { hostname: host });
   }
   s.prevProgress = prog;
 
-  // B. 残り時間閾値通知 ------------------------------------------------------
-  if (!isNaN(left)) {
+  // B. 残り時間閾値通知 — 印刷中のみ -----------------------------------------
+  if (isPrinting && !isNaN(left)) {
     if (s.prevRemainingSec === null) {
       s.prevRemainingSec = left;
     } else {
@@ -408,8 +422,8 @@ export function ingestData(data, hostname) {
     }
   }
 
-  // C. 温度近接アラート ------------------------------------------------------
-  if (!isNaN(nozzle) && !isNaN(maxNozz) && maxNozz > 0) {
+  // C. 温度近接アラート — 印刷中のみ ------------------------------------------
+  if (isPrinting && !isNaN(nozzle) && !isNaN(maxNozz) && maxNozz > 0) {
     TEMP_MILESTONES.forEach(r => {
       const key = Math.round(r * 100);
       if (nozzle >= maxNozz * r && !s.notifiedTempMilestones.has(`nozzle${key}`)) {
@@ -423,7 +437,7 @@ export function ingestData(data, hostname) {
       }
     });
   }
-  if (!isNaN(bed) && !isNaN(maxBed) && maxBed > 0) {
+  if (isPrinting && !isNaN(bed) && !isNaN(maxBed) && maxBed > 0) {
     TEMP_MILESTONES.forEach(r => {
       const key = Math.round(r * 100);
       if (bed >= maxBed * r && !s.notifiedTempMilestones.has(`bed${key}`)) {
