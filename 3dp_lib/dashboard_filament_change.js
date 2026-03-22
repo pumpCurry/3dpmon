@@ -44,9 +44,9 @@ function injectStyles() {
   styleInjected = true;
   const css = `
   .fc-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:3000;}
-  .fc-dialog{background:#fff;border-radius:8px;width:90%;max-width:740px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
+  .fc-dialog{background:#fff;border-radius:8px;width:90%;max-width:800px;height:80vh;max-height:700px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
   .fc-header{font-weight:bold;font-size:1.2em;padding:8px;border-bottom:1px solid #ddd;}
-  .fc-body{padding:8px;}
+  .fc-body{padding:8px;flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
   .fc-buttons{display:flex;justify-content:flex-end;padding:8px;border-top:1px solid #ddd;gap:8px;}
   .fc-buttons button{padding:6px 12px;font-size:14px;}
   .fc-search{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
@@ -416,8 +416,8 @@ export function showFilamentChangeDialog(hostname) {
             <button id="fc-search-btn">🔍</button>
           </form>
         </fieldset>
-        <div style="display:flex;gap:8px">
-          <div class="registered-list" style="flex:1;max-height:45vh;overflow-y:auto;min-width:0">
+        <div style="display:flex;gap:8px;flex:1;min-height:0">
+          <div class="registered-list" style="flex:1;overflow-y:auto;min-width:0">
             <table class="registered-table fixed-header sortable-table">
               <thead>
                 <tr id="fc-thead-row"></tr>
