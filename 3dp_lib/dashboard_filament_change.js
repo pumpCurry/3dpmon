@@ -583,7 +583,7 @@ export function showFilamentChangeDialog(hostname) {
 
       if (activeTab === "stored" || activeTab === "favorite") {
         // スプール一覧表示
-        theadRow.innerHTML = "<th>スプール</th><th>素材</th><th style='text-align:right'>残量</th><th>状態</th>";
+        theadRow.innerHTML = "<th>フィラメント</th><th>素材</th><th style='text-align:right'>残量</th><th>状態</th>";
         let list = applyFilter(spools);
         if (activeTab === "stored") {
           // 保管中 (取り外し済み + 在庫) — 装着中は除外 (現在の機器以外)
@@ -630,7 +630,7 @@ export function showFilamentChangeDialog(hostname) {
         });
       } else {
         // プリセット一覧 (新品開封)
-        theadRow.innerHTML = "<th>プリセット</th><th>素材</th><th style='text-align:right'>容量</th>";
+        theadRow.innerHTML = "<th>フィラメント</th><th>素材</th><th style='text-align:right'>残量</th><th></th>";
         let list = presets;
         // 検索フィルタ適用
         list = list.filter(p => {
@@ -649,7 +649,8 @@ export function showFilamentChangeDialog(hostname) {
           tr.innerHTML =
             `<td><span style="color:${p.color || '#000'};font-size:14px">■</span> <b>${p.colorName || ""}</b> ${p.name || ""}<div style="font-size:11px;color:#64748b">${p.brand || ""}</div></td>` +
             `<td>${p.material || ""}</td>` +
-            `<td style="text-align:right">${lengthM}m <span style="font-size:11px;color:#64748b">(新品)</span></td>`;
+            `<td style="text-align:right">${lengthM}m</td>` +
+            `<td><span style="font-size:11px;color:#16a34a">🆕 新品</span></td>`;
           tr.style.cursor = 'pointer';
           if (prevSel && prevSel.presetId === p.presetId) tr.classList.add('selected');
           tr.addEventListener('click', () => {
