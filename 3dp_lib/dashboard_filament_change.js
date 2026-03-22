@@ -60,9 +60,10 @@ function injectStyles() {
   .fc-dialog .dfv-controls{display:none !important;}
   .fc-dialog .dfv-scale-wrapper{position:relative !important;left:0 !important;transform:none !important;}
   .registered-list{flex:1;overflow-y:auto;max-height:60vh;}
-  .registered-table{width:100%;border-collapse:collapse;font-size:12px;}
-  .registered-table th,.registered-table td{border:1px solid #ddd;padding:4px;}
-  .registered-table th{cursor:pointer;}
+  .registered-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}
+  .registered-table th,.registered-table td{border-bottom:1px solid #eee;padding:4px 6px;}
+  .registered-table th{cursor:pointer;position:sticky;top:0;background:#f0f0f0;z-index:2;font-size:11px;font-weight:bold;white-space:nowrap;border-bottom:2px solid #ccc;user-select:none;}
+  .registered-table th:hover{background:#e0e0e0;}
   .registered-table tr.selected{background:#e0f2fe;}
   `;
   const style = document.createElement("style");
@@ -691,6 +692,44 @@ export function showFilamentChangeDialog(hostname) {
         }
         renderTable();
       });
+    });
+
+    // ソート状態
+    let sortCol = null; // 0=フィラメント, 1=素材, 2=残量, 3=状態
+    let sortAsc = true;
+
+    /** テーブル行をソートする */
+    function sortRows() {
+      if (sortCol === null) return;
+      const rows = [...tableBody.querySelectorAll("tr")];
+      rows.sort((a, b) => {
+        const aCell = a.cells[sortCol]?.textContent?.trim() || "";
+        const bCell = b.cells[sortCol]?.textContent?.trim() || "";
+        // 残量列は数値ソート
+        if (sortCol === 2) {
+          const aNum = parseFloat(aCell) || 0;
+          const bNum = parseFloat(bCell) || 0;
+          return sortAsc ? aNum - bNum : bNum - aNum;
+        }
+        return sortAsc ? aCell.localeCompare(bCell) : bCell.localeCompare(aCell);
+      });
+      rows.forEach(r => tableBody.appendChild(r));
+    }
+
+    // ヘッダークリックでソート
+    theadRow.addEventListener("click", (ev) => {
+      const th = ev.target.closest("th");
+      if (!th) return;
+      const idx = [...theadRow.children].indexOf(th);
+      if (idx < 0) return;
+      if (sortCol === idx) { sortAsc = !sortAsc; }
+      else { sortCol = idx; sortAsc = true; }
+      // インジケータ更新
+      theadRow.querySelectorAll("th").forEach((h, i) => {
+        h.textContent = h.textContent.replace(/ [▲▼]$/, "");
+        if (i === sortCol) h.textContent += sortAsc ? " ▲" : " ▼";
+      });
+      sortRows();
     });
 
     fillOptions(spools);
