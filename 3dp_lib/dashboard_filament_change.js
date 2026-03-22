@@ -516,6 +516,8 @@ export function showFilamentChangeDialog(hostname) {
     let selectedPreset = null;
     let activeTab = "stored"; // stored | preset | favorite
     const theadRow = dlg.querySelector("#fc-thead-row");
+    // タブごとの選択状態を保持
+    const tabSelections = { stored: null, preset: null, favorite: null };
 
     function fillOptions(list) {
       const brands = new Set();
@@ -573,9 +575,11 @@ export function showFilamentChangeDialog(hostname) {
 
     function renderTable() {
       tableBody.innerHTML = '';
-      selectedSpool = null;
-      selectedPreset = null;
-      okBtn.disabled = true;
+      // タブの以前の選択をリストア
+      const prevSel = tabSelections[activeTab];
+      selectedSpool = (activeTab !== "preset" && prevSel) ? prevSel : null;
+      selectedPreset = (activeTab === "preset" && prevSel) ? prevSel : null;
+      okBtn.disabled = !prevSel;
 
       if (activeTab === "stored" || activeTab === "favorite") {
         // スプール一覧表示
@@ -609,6 +613,8 @@ export function showFilamentChangeDialog(hostname) {
             `<td>${stateLabel}</td>`;
           if (isCurrent) tr.style.background = '#f0fdf4';
           if (isOtherHost) { tr.style.opacity = '0.5'; }
+          // タブ切替時の選択リストア
+          if (prevSel && prevSel.id === sp.id) tr.classList.add('selected');
           tr.style.cursor = isOtherHost ? 'not-allowed' : 'pointer';
           tr.addEventListener('click', () => {
             if (isOtherHost) { showAlert("このスプールは別のプリンタに装着中です", "warn"); return; }
@@ -616,6 +622,7 @@ export function showFilamentChangeDialog(hostname) {
             tr.classList.add('selected');
             selectedSpool = sp;
             selectedPreset = null;
+            tabSelections[activeTab] = sp;
             okBtn.disabled = false;
             updatePreviewPanel(sp);
           });
@@ -644,11 +651,13 @@ export function showFilamentChangeDialog(hostname) {
             `<td>${p.material || ""}</td>` +
             `<td style="text-align:right">${lengthM}m <span style="font-size:11px;color:#64748b">(新品)</span></td>`;
           tr.style.cursor = 'pointer';
+          if (prevSel && prevSel.presetId === p.presetId) tr.classList.add('selected');
           tr.addEventListener('click', () => {
             tableBody.querySelector('tr.selected')?.classList.remove('selected');
             tr.classList.add('selected');
             selectedPreset = p;
             selectedSpool = null;
+            tabSelections[activeTab] = p;
             okBtn.disabled = false;
             updatePreviewPanel(p);
           });
@@ -718,8 +727,23 @@ export function showFilamentChangeDialog(hostname) {
           showAlert("このスプールは既に別のプリンタに装着されています", "warn");
           return;
         }
+        // フィラメントパネルのプレビューを即時反映
         const hostPreview = window._filamentPreviews?.get(hostname);
-        updatePreview(mountSpool, hostPreview);
+        if (hostPreview) {
+          const updatedSpool = getSpoolById(mountSpool.id) || mountSpool;
+          hostPreview.setState({
+            isFilamentPresent: true,
+            filamentCurrentLength: updatedSpool.remainingLengthMm || 0,
+            filamentTotalLength: updatedSpool.totalLengthMm || 330000,
+            filamentColor: updatedSpool.filamentColor || updatedSpool.color || "#22C55E",
+            reelName: updatedSpool.name || "",
+            reelSubName: updatedSpool.reelSubName || "",
+            materialName: updatedSpool.materialName || updatedSpool.material || "",
+            materialColorName: updatedSpool.colorName || "",
+            materialColorCode: updatedSpool.filamentColor || "",
+            manufacturerName: updatedSpool.manufacturerName || updatedSpool.brand || ""
+          });
+        }
         showAlert(`${formatSpoolDisplayId(mountSpool)} を ${displayHost} に装着しました`, "success");
       }
       closeDialog(true);
