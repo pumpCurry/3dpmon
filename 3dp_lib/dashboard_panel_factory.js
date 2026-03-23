@@ -546,14 +546,24 @@ export function saveLayout() {
  * @returns {boolean} 復元成功なら true
  */
 export function restoreLayout() {
-  if (!grid) return false;
+  if (!grid) {
+    console.warn("[restoreLayout] grid が未初期化");
+    return false;
+  }
 
   try {
     const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    if (!raw) return false;
+    if (!raw) {
+      console.info("[restoreLayout] レイアウトキー未検出:", LAYOUT_STORAGE_KEY);
+      return false;
+    }
 
     const layout = JSON.parse(raw);
-    if (!Array.isArray(layout) || layout.length === 0) return false;
+    if (!Array.isArray(layout) || layout.length === 0) {
+      console.info("[restoreLayout] レイアウトデータが空");
+      return false;
+    }
+    console.info("[restoreLayout] レイアウト復元開始:", layout.length, "パネル");
 
     /* 接続先として有効なホスト一覧を構築
        connectionTargets のIPとホスト名、wsDest、および machines キーを含める。
