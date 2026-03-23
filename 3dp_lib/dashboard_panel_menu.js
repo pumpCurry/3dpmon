@@ -28,7 +28,7 @@
 
 "use strict";
 
-import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries } from "./dashboard_panel_factory.js";
+import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries, getGrid, unlockAllPanels } from "./dashboard_panel_factory.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { monitorData } from "./dashboard_data.js";
 
@@ -180,7 +180,7 @@ function _renderMenuBody() {
 
   /* グリッド上のパネルが所属するホスト一覧を収集 */
   const activeHostsFromGrid = new Set();
-  for (const entry of activeEntries) {
+  for (const [, entry] of activeEntries) {
     activeHostsFromGrid.add(entry.host);
   }
 
@@ -249,7 +249,51 @@ function _renderMenuBody() {
     html += `</div>`;
   }
 
+  /* ─ パネルロック管理 ─ */
+  const entries = getActivePanelEntries();
+  if (entries.length > 0) {
+    html += `<div class="panel-menu-section">`;
+    html += `<h4>🔒 パネルロック</h4>`;
+    html += `<button class="panel-menu-unlock-all" style="font-size:11px;padding:3px 8px;margin-bottom:6px;cursor:pointer">全パネル解除</button>`;
+    for (const [panelId, entry] of entries) {
+      const isLocked = !!(entry.widget?.gridstackNode?.noMove);
+      const label = entry.element?.querySelector(".panel-title")?.textContent || entry.type;
+      const hostTag = entry.host && entry.host !== "shared" ? ` (${entry.host})` : "";
+      html += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:12px">
+        <button class="panel-lock-toggle" data-panel-id="${panelId}" style="border:1px solid #ddd;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:12px;background:${isLocked ? "#fef3c7" : "#fff"}">${isLocked ? "🔒" : "📌"}</button>
+        <span style="flex:1">${label}${hostTag}</span>
+        <span style="color:#94a3b8;font-size:11px">${isLocked ? "固定中" : ""}</span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
   body.innerHTML = html;
+
+  /* パネルロック管理のイベント設定 */
+  body.querySelector(".panel-menu-unlock-all")?.addEventListener("click", () => {
+    unlockAllPanels();
+    _renderMenuBody();
+  });
+  body.querySelectorAll(".panel-lock-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const panelId = btn.dataset.panelId;
+      const entry = getActivePanelEntries().find(([id]) => id === panelId);
+      if (!entry) return;
+      const [, info] = entry;
+      const grid = getGrid();
+      if (!grid) return;
+      const isLocked = !!(info.widget?.gridstackNode?.noMove);
+      grid.update(info.widget, { noMove: !isLocked, noResize: !isLocked });
+      info.element?.classList.toggle("panel-locked", !isLocked);
+      const headerBtn = info.element?.querySelector(".panel-lock-btn");
+      if (headerBtn) {
+        headerBtn.textContent = isLocked ? "📌" : "🔒";
+        headerBtn.title = isLocked ? "このパネルを固定" : "このパネルの固定を解除";
+      }
+      _renderMenuBody();
+    });
+  });
 
   /* パネル表示トグルのイベント設定 */
   body.querySelectorAll(".panel-toggle-btn").forEach(btn => {

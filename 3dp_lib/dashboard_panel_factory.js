@@ -752,11 +752,7 @@ export function isActivePanelId(panelId) {
  * @returns {Array<{panelId: string, type: string, host: string}>}
  */
 export function getActivePanelEntries() {
-  const entries = [];
-  for (const [panelId, entry] of activePanels) {
-    entries.push({ panelId, type: entry.type, host: entry.host });
-  }
-  return entries;
+  return [...activePanels.entries()];
 }
 
 /**
