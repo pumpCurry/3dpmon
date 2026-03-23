@@ -562,10 +562,6 @@ export function unlockAllPanels() {
   saveLayout();
 }
 
-  if (toRemove.length > 0) saveLayout();
-  return toRemove.length;
-}
-
 /**
  * 現在のレイアウトを localStorage に保存する。
  *
