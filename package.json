@@ -1,20 +1,67 @@
 {
   "name": "3dpmon",
-  "version": "2.0.0",
+  "version": "2.1.005",
   "description": "3Dプリンタ監視ダッシュボード - Electron版",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "start:http": "python -m http.server 8313"
+    "start:http": "python -m http.server 8313",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --win --dir",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint 3dp_lib/",
+    "lint:css": "stylelint \"*.css\"",
+    "format": "prettier --check \"3dp_lib/**/*.js\" \"*.css\""
   },
   "author": "pumpCurry",
-  "license": "MIT",
+  "license": "BSD-3-Clause",
+  "build": {
+    "appId": "jp.542.3dpmon",
+    "productName": "3dpmon",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "3dp_monitor.html",
+      "3dp_monitor.css",
+      "3dp_panel.css",
+      "3dp_lib/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!**/*.tmp.*",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": null
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
+    }
+  },
   "dependencies": {
     "gridstack": "^10.3.1"
   },
   "devDependencies": {
     "electron": "^33.0.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0",
+    "eslint-plugin-jsdoc": "^50.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "prettier": "^3.4.0",
+    "stylelint": "^16.0.0",
+    "stylelint-config-standard": "^37.0.0",
+    "vitest": "^3.0.0",
     "ws": "^8.19.0"
   }
 }

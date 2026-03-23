@@ -1,0 +1,42 @@
+{
+  "historyList": [
+    {
+      "id": 1711000000,
+      "filename": "/usr/data/gcode/part_a.gcode",
+      "startTime": 1711000000,
+      "endtime": 1711007200,
+      "printProgress": 100,
+      "filamentInfo": [
+        {
+          "color": "#FF0000",
+          "materialName": "PLA",
+          "weight": 45.5,
+          "length": 15000
+        }
+      ]
+    },
+    {
+      "id": 1711100000,
+      "filename": "/usr/data/gcode/part_b.gcode",
+      "startTime": 1711100000,
+      "endtime": 1711103600,
+      "printProgress": 100,
+      "filamentInfo": [
+        {
+          "color": "#0000FF",
+          "materialName": "PETG",
+          "weight": 30.2,
+          "length": 10000
+        }
+      ]
+    },
+    {
+      "id": 1711200000,
+      "filename": "/usr/data/gcode/part_c.gcode",
+      "startTime": 1711200000,
+      "endtime": 0,
+      "printProgress": 35,
+      "filamentInfo": []
+    }
+  ]
+}

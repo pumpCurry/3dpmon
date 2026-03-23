@@ -1,0 +1,22 @@
+{
+  "retGcodeFileInfo": {
+    "path": "/usr/data/gcode",
+    "files": [
+      {
+        "name": "model_a.gcode",
+        "size": 2048576,
+        "modified": 1711000000
+      },
+      {
+        "name": "model_b.gcode",
+        "size": 5242880,
+        "modified": 1711100000
+      },
+      {
+        "name": "large_print.gcode",
+        "size": 15728640,
+        "modified": 1711200000
+      }
+    ]
+  }
+}

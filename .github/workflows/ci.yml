@@ -3,49 +3,31 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - run: npm ci
-      - name: run unit tests
-        run: |
-          while sleep 300; do echo "."; done &
-          KEEP_PID=$!
-          npm test
-          kill $KEEP_PID
-  test-temp:
+      - name: unit tests
+        run: npm test
+
+  lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: while sleep 300; do echo "keep-alive"; done &
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - run: npm ci
-      - name: run tempbuffer tests
-        run: |
-          while sleep 300; do echo "."; done &
-          KEEP_PID=$!
-          npx vitest run tests/tempbuffer.test.js
-          kill $KEEP_PID
-  test-sidemenu:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - run: while sleep 300; do echo "keep-alive"; done &
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npm ci
-      - name: run sidemenu tests
-        run: |
-          while sleep 300; do echo "."; done &
-          KEEP_PID=$!
-          npx vitest run tests/sidemenu.test.js
-          kill $KEEP_PID
+      - name: ESLint
+        run: npm run lint
+        continue-on-error: true
+      - name: Stylelint
+        run: npm run lint:css
+        continue-on-error: true
+      - name: Prettier check
+        run: npm run format
+        continue-on-error: true
