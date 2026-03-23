@@ -698,8 +698,23 @@ body {
 .quick-buttons button,
 .send-btn {
   font-family: "Arial Narrow", "sun serif";
-  font-size: 12px;
+  font-size: 14px;
   margin-left: 2px;
+  padding: 6px 12px;
+  min-height: 32px;
+  min-width: 32px;
+  cursor: pointer;
+}
+/* 数値入力のステッパー (▲▼) をタッチ操作可能なサイズに */
+input[type="number"] {
+  min-height: 28px;
+  padding: 4px;
+}
+input[type="number"]::-webkit-inner-spin-button {
+  opacity: 1;
+  width: 20px;
+  height: 24px;
+  cursor: pointer;
 }
 .fan-lights-row {
   display: flex;

@@ -296,12 +296,12 @@ function _initTopMenuBar() {
     // 起動時にロック状態を復元
     if (monitorData.appSettings.layoutLocked) {
       toggleGlobalLock(true);
-      lockBtn.textContent = "🔒";
+      lockBtn.textContent = "🔒 固定中";
       lockBtn.title = "レイアウト解除";
     }
     lockBtn.addEventListener("click", () => {
       const locked = toggleGlobalLock();
-      lockBtn.textContent = locked ? "🔒" : "🔓";
+      lockBtn.textContent = locked ? "🔒 固定中" : "🔓 固定";
       lockBtn.title = locked ? "レイアウト解除" : "レイアウト固定";
     });
   }

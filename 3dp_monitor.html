@@ -47,8 +47,8 @@
       <div id="top-printer-list" style="display:flex; gap:4px; font-size:11px;"></div>
     </div>
     <div class="menu-section">
-      <button id="top-layout-lock" title="レイアウト固定/解除">🔓</button>
-      <button id="top-conn-btn" title="接続設定">接続設定</button>
+      <button id="top-layout-lock" title="レイアウト固定/解除">🔓 固定</button>
+      <button id="top-conn-btn" title="接続設定">⚙ 接続</button>
       <button id="panel-menu-toggle" title="パネル追加">+ パネル</button>
     </div>
   </div>
@@ -77,7 +77,7 @@
             <input type="checkbox" id="conn-modal-show-host-tag" checked> 機器名表示
           </label>
           <label style="white-space:nowrap;">
-            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" style="width:5em;font-size:12px;padding:2px 4px;border:1px solid #ccc;border-radius:3px;" placeholder="8080">
+            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" step="1" inputmode="numeric" style="width:5em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="8080">
           </label>
           <span style="flex:1"></span>
           <button id="conn-modal-notif-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">🔔 通知設定</button>
@@ -452,7 +452,7 @@
                 </div>
                 <div class="control-row">
                   <input type="range" id="nozzleTempSlider" data-field="targetNozzleTemp" min="0" max="0" step="1"/>
-                  <input type="number" id="nozzleTempInput" data-field="targetNozzleTemp" min="0" max="0" style="width:4em" />
+                  <input type="number" id="nozzleTempInput" data-field="targetNozzleTemp" min="0" max="0" step="5" inputmode="numeric" style="width:4em" />
                   <button id="nozzleTempSendBtn" class="send-btn">⏎</button>
                   </div>
                 </div>
@@ -481,7 +481,7 @@
                 </div>
                 <div class="control-row">
                   <input type="range"  id="bedTempSlider" data-field="targetBedTemp0" min="0" max="0" step="1" />
-                  <input type="number" id="bedTempInput"  data-field="targetBedTemp0" min="0" max="0" style="width:4em" />
+                  <input type="number" id="bedTempInput"  data-field="targetBedTemp0" min="0" max="0" step="5" inputmode="numeric" style="width:4em" />
                   <button id="bedTempSendBtn" class="send-btn">⏎</button>
                   </div>
                 </div>
@@ -655,7 +655,7 @@
                          id="feedrateInput"
                          data-field="curFeedratePct"
                          min="0" max="200"
-                         step="1"
+                         step="1" inputmode="numeric"
                          style="width:4em" />
                   <button id="feedrateSendBtn" class="send-btn">⏎</button>
                   <div class="quick-buttons">
@@ -684,8 +684,8 @@
                   <input type="number"
                          id="flowrateInput"
                          data-field="curFlowratePct"
-                         min="0" max="200"
-                         style="width:4em" />
+                         min="0" max="200" step="1"
+                         inputmode="numeric" style="width:4em" />
                   <button id="flowrateSendBtn" class="send-btn">⏎</button>
                   <div class="quick-buttons">
                     <button class="flowrate-preset" data-value="90">90%</button>
