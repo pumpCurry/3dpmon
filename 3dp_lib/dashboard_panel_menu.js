@@ -28,7 +28,7 @@
 
 "use strict";
 
-import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries, getGrid, unlockAllPanels } from "./dashboard_panel_factory.js";
+import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries, getGrid, unlockAllPanels, setPanelFontSize } from "./dashboard_panel_factory.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { monitorData } from "./dashboard_data.js";
 
@@ -315,6 +315,18 @@ function _renderMenuBody() {
     });
   });
 
+  /* フォントサイズスライダーのイベント設定 */
+  body.querySelectorAll(".panel-fontsize-range").forEach(slider => {
+    slider.addEventListener("input", (e) => {
+      e.stopPropagation();
+      const panelId = slider.dataset.panelId;
+      const size = slider.value + "px";
+      setPanelFontSize(panelId, size);
+      const valSpan = slider.parentElement?.querySelector(".panel-fontsize-val");
+      if (valSpan) valSpan.textContent = size;
+    });
+  });
+
   /* カメラ映像ON/OFFサブコントロールのイベント設定 */
   body.querySelectorAll(".camera-stream-toggle").forEach(cb => {
     cb.addEventListener("change", () => {
@@ -348,6 +360,7 @@ function _renderPanelToggle(pt, host, panelId, activeEntries = []) {
   const isLocked = panelEntry ? !!(panelEntry[1].widget?.gridstackNode?.noMove) : false;
 
   // 表示チェック + ロックを同一ボタン内に
+  let html = "";
   html += `<button class="panel-toggle-btn${active ? " active" : ""}" data-type="${pt.id}" data-host="${host}" data-panel-id="${panelId}" style="display:flex;align-items:center;width:100%">`;
   html += `<span class="panel-toggle-icon">${active ? "\u2611" : "\u2610"}</span>`;
   html += `<span style="flex:1;text-align:left;margin-left:4px">${pt.label}</span>`;
@@ -355,6 +368,15 @@ function _renderPanelToggle(pt, host, panelId, activeEntries = []) {
     html += `<span class="panel-row-lock" data-panel-id="${panelId}" style="border:1px solid ${isLocked ? "#f59e0b" : "#ddd"};border-radius:3px;padding:1px 5px;font-size:11px;background:${isLocked ? "#fef3c7" : "transparent"};margin-left:4px" title="${isLocked ? "固定解除" : "固定する"}">${isLocked ? "🔒" : "📌"}</span>`;
   }
   html += `</button>`;
+  // フォントサイズ調整 (状態・機器情報パネル向け)
+  if (active && (pt.id === "status" || pt.id === "machine-info")) {
+    const curSize = panelEntry?.[1]?.element?.style.fontSize || "13px";
+    html += `<div style="display:flex;align-items:center;gap:4px;padding:0 4px;font-size:11px;color:#64748b">`;
+    html += `<span>文字</span>`;
+    html += `<input type="range" class="panel-fontsize-range" data-panel-id="${panelId}" min="9" max="18" step="1" value="${parseInt(curSize) || 13}" style="flex:1;height:16px">`;
+    html += `<span class="panel-fontsize-val">${parseInt(curSize) || 13}px</span>`;
+    html += `</div>`;
+  }
 
   /* カメラパネルには映像接続サブコントロールを追加 */
   if (pt.id === "camera") {

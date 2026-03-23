@@ -476,6 +476,19 @@ export function isGlobalLocked() { return _globalLocked; }
 /**
  * 全パネルの個別ロックを解除する。
  */
+/**
+ * パネルのフォントサイズを設定する。
+ * @param {string} panelId
+ * @param {string} size - CSS font-size (例: "12px", "0.9em")
+ */
+export function setPanelFontSize(panelId, size) {
+  const entry = activePanels.get(panelId);
+  if (entry?.element) {
+    entry.element.style.fontSize = size;
+    saveLayout();
+  }
+}
+
 export function unlockAllPanels() {
   if (!grid) return;
   for (const [, entry] of activePanels) {
@@ -508,7 +521,8 @@ export function saveLayout() {
       y: node?.y ?? 0,
       w: node?.w ?? 4,
       h: node?.h ?? 4,
-      locked: !!(node?.noMove)
+      locked: !!(node?.noMove),
+      fontSize: panelWrapper?.style.fontSize || ""
     };
   });
 
@@ -630,6 +644,11 @@ export function restoreLayout() {
         w: item.w,
         h: item.h
       });
+      // フォントサイズの復元
+      if (item.fontSize && restoredPanelId) {
+        const entry = activePanels.get(restoredPanelId);
+        if (entry?.element) entry.element.style.fontSize = item.fontSize;
+      }
       // ロック状態の復元
       if (item.locked && restoredPanelId) {
         const entry = activePanels.get(restoredPanelId);

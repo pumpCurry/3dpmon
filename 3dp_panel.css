@@ -684,7 +684,7 @@ body.panel-mode .notification-container {
 .panel-body .filament-preview-area {
   touch-action: none;
   width: 100%;
-  height: calc(100% - 32px); /* フッター分を引く */
+  height: calc(100% - 28px); /* フッター最小高さ分を引く */
   overflow: hidden;
   position: relative;
 }
@@ -693,15 +693,21 @@ body.panel-mode .notification-container {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 32px;
-  padding: 4px 8px;
+  min-height: 28px;
+  padding: 2px 4px;
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 2px 4px;
   justify-content: center;
   align-items: center;
   z-index: 20;
-  background: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.95);
   border-top: 1px solid #e2e8f0;
+}
+.panel-body .filament-panel-footer .btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  min-height: 24px;
 }
 
 /* ---------------------------------------------------------------
@@ -836,6 +842,7 @@ body.panel-mode .notification-container {
 .panel-wrapper[data-panel-type="status"] .panel-body {
   overflow: auto;
   padding: 4px;
+  container-type: inline-size;
 }
 /* col1 の固定幅制約を解除してパネル幅に追随 */
 .panel-body .col1 {
@@ -843,6 +850,12 @@ body.panel-mode .notification-container {
   width: 100%;
   max-width: none;
   min-width: 0;
+}
+/* 横幅が広い場合: ステータス表を2列並び (ラベル+値 × 2) に */
+@container (min-width: 500px) {
+  .panel-body .print-status-table {
+    grid-template-columns: auto 1fr auto 1fr;
+  }
 }
 /* カード装飾を解除 */
 .panel-body .col1 .card-title {
@@ -855,6 +868,12 @@ body.panel-mode .notification-container {
 .panel-wrapper[data-panel-type="machine-info"] .panel-body {
   overflow: auto;
   padding: 4px;
+  container-type: inline-size;
+}
+@container (min-width: 500px) {
+  .panel-body .equip-info-table {
+    grid-template-columns: auto 1fr auto 1fr;
+  }
 }
 /* info-card の固定幅制約を解除 */
 .panel-body .info-card {
@@ -891,9 +910,8 @@ body.panel-mode .notification-container {
 .panel-body #print-current-container,
 .panel-body [id$="__print-current-container"] {
   height: 100%;
+  container-type: inline-size; /* @container クエリ用 */
 }
-
-/* ── 現在の印刷: レスポンシブレイアウト ── */
 .current-print {
   display: flex;
   gap: 8px;
@@ -908,6 +926,20 @@ body.panel-mode .notification-container {
   justify-content: center;
   min-width: 0;
   min-height: 0;
+}
+/* 縦長パネル時: 画像が上、テキストが下 */
+@container (max-width: 350px) {
+  .current-print {
+    flex-direction: column;
+  }
+  .cp-thumb-wrap {
+    width: 100%;
+    max-height: 50%;
+  }
+  .cp-thumb {
+    max-height: 100%;
+    width: auto;
+  }
 }
 .cp-thumb {
   max-width: 100%;
