@@ -243,6 +243,9 @@ function _getMsgState(hostname) {
       if (sp != null) ms.prevSelfTestPct = JSON.parse(sp);
       const rr = localStorage.getItem(p + "removalReminderSent");
       if (rr === "true") ms._removalReminderSent = true;
+      // 完了後経過タイムスタンプの復元
+      const tc = localStorage.getItem(p + "tsCompletion");
+      if (tc != null) ms.tsCompletion = Number(tc);
     } catch { /* 復元失敗は無視 */ }
     _msgHostStates.set(hostname, ms);
   }
@@ -465,6 +468,19 @@ export function processData(data, hostname) {
   };
 
   // ---- 完了後経過タイマーの復元処理 ------------------------------------
+  // localStorage から tsCompletion が復元済みなら、タイマーを再開
+  if (ms.tsCompletion != null && !ms.completionTimer) {
+    _set("completionElapsedTime", Math.floor((Date.now() - ms.tsCompletion) / 1000), true);
+    ms.completionTimer = setInterval(() => {
+      const elapsedSec = Math.floor((Date.now() - ms.tsCompletion) / 1000);
+      _set("completionElapsedTime", elapsedSec, true);
+      if (!ms._removalReminderSent && elapsedSec >= 1800) {
+        ms._removalReminderSent = true;
+        try { localStorage.setItem(`msg_${host}_removalReminderSent`, "true"); } catch { /* ignore */ }
+        notificationManager.notify("printRemovalReminder", { hostname: host });
+      }
+    }, 1000);
+  }
   if (ms.tsCompletion === null) {
     const storedPrev = Number(machine.storedData.prevPrintID?.rawValue ?? NaN);
     if (!isNaN(storedPrev)) {
@@ -561,7 +577,7 @@ export function processData(data, hostname) {
   const resetCompletion = () => {
     clearInterval(ms.completionTimer);
     ms.tsCompletion = null;
-    // 完了後経過時間は次の印刷開始まで保持
+    try { localStorage.removeItem(`msg_${host}_tsCompletion`); } catch { /* ignore */ }
   };
 
   // (2.3) 準備時間タイマー
@@ -741,6 +757,7 @@ export function processData(data, hostname) {
     console.debug(">>> (2.6.1) 完了後経過タイマー開始");
     ms.tsCompletion = Date.now();
     _set("completionElapsedTime", 0, true);
+    try { localStorage.setItem(`msg_${host}_tsCompletion`, String(ms.tsCompletion)); } catch { /* ignore */ }
 
     ms._removalReminderSent = false;
     try { localStorage.setItem(`msg_${host}_removalReminderSent`, "false"); } catch { /* ignore */ }
