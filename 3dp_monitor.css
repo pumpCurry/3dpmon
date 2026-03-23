@@ -400,7 +400,8 @@ body {
 .stage {
   position: absolute;
   width: 79%;       /* 150/190 */
-  height: 79%;
+  aspect-ratio: 1;  /* 正方形を維持（パネルが細くなっても潰れない） */
+  max-height: 79%;
   bottom: 8%;
   right: 8%;
   background-color: #555;
