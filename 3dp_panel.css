@@ -720,7 +720,8 @@ body.panel-mode .notification-container {
 .panel-wrapper[data-panel-type="filament"] .panel-body {
   overflow: hidden;
   padding: 0;
-  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 .panel-body .filament-panel-wrapper {
   background: transparent;
@@ -728,14 +729,14 @@ body.panel-mode .notification-container {
   border: none;
   padding: 0;
   margin: 0;
-  width: 100%;
+  display: flex;
+  flex-direction: column;
   height: 100%;
-  position: relative;
 }
 .panel-body .filament-preview-area {
   touch-action: none;
-  width: 100%;
-  height: calc(100% - 28px);
+  flex: 1;
+  min-height: 60px;
   overflow: hidden;
   position: relative;
 }
@@ -744,18 +745,13 @@ body.panel-mode .notification-container {
   display: none;
 }
 .panel-body .filament-panel-footer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  min-height: 28px;
-  padding: 2px 4px;
+  flex-shrink: 0;
+  padding: 3px 4px;
   display: flex;
   flex-wrap: wrap;
   gap: 2px 4px;
   justify-content: center;
   align-items: center;
-  z-index: 20;
   background: rgba(255,255,255,0.95);
   border-top: 1px solid #e2e8f0;
 }
