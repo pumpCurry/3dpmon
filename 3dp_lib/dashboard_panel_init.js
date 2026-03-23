@@ -401,12 +401,25 @@ function initFilamentPanel(body, hostname) {
   }
 
   // 回転ボタンをフッターに統合 (CSS で dfv-controls を非表示にした代わり)
+  // 操作ボタンと回転ボタンをそれぞれ nowrap グループに入れ、
+  // セパレータは折り返し時に自動的に非表示になる
   if (preview) {
     const footer = body.querySelector(".filament-panel-footer");
     if (footer) {
+      // 既存ボタンを操作グループで囲む
+      const cmdGroup = document.createElement("span");
+      cmdGroup.className = "fil-footer-group";
+      while (footer.firstChild) cmdGroup.appendChild(footer.firstChild);
+      footer.appendChild(cmdGroup);
+
+      // セパレータ（折り返し時に CSS で非表示）
       const sep = document.createElement("span");
-      sep.style.cssText = "width:1px;height:16px;background:#ddd;margin:0 2px";
+      sep.className = "fil-footer-sep";
       footer.appendChild(sep);
+
+      // 回転ボタングループ
+      const rotGroup = document.createElement("span");
+      rotGroup.className = "fil-footer-group";
       const rotBtns = [
         { label: "⟲", title: "自動回転", action: () => preview.toggleAutoRotate?.() },
         { label: "◐", title: "正面", action: () => preview.setFrontView?.() },
@@ -420,8 +433,9 @@ function initFilamentPanel(body, hostname) {
         btn.title = title;
         btn.style.cssText = "font-size:11px;padding:2px 5px;min-width:24px;min-height:24px";
         btn.addEventListener("click", action);
-        footer.appendChild(btn);
+        rotGroup.appendChild(btn);
       }
+      footer.appendChild(rotGroup);
     }
   }
 }
