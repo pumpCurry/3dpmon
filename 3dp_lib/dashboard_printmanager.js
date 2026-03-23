@@ -1710,6 +1710,8 @@ export function setupUploadUI(root, hostname) {
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
+    // タイムアウト: ファイルサイズに応じて動的設定 (最低5分, 10ms/KB)
+    xhr.timeout = Math.max(300000, Math.round(file.size / 1024 * 10));
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) updateProgress(e.loaded, e.total);
     };

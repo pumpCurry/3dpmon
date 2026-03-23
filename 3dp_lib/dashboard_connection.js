@@ -1728,7 +1728,15 @@ function _fetchWithRetry(host) {
         }
         setRetry(retry + 1);
         pushLog(`[fetchRetry] ${label} 送出 (${retry + 1}/${MAX_RETRY})`, "info", false, host);
-        sendCommand("get", params, host).catch(() => {});
+        // sendCommand ではなく直接 ws.send する。
+        // プリンタは get コマンドに対して id フィールドを含まない応答を返すため、
+        // sendCommand の id 照合タイムアウトが常に発火してしまう。
+        // 応答は _fetchWithRetry のフラグ (isDone) で別途監視する。
+        try {
+          st.ws.send(JSON.stringify({ method: "get", params }));
+        } catch (e) {
+          pushLog(`[fetchRetry] ${label} 送信エラー: ${e.message}`, "warn", false, host);
+        }
         // TIMEOUT 後に応答チェック
         setTimeout(() => {
           if (isDone()) { resolve(true); return; }
