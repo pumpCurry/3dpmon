@@ -26,7 +26,7 @@
 
 "use strict";
 
-import { initGridStack, restoreLayout, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
+import { initGridStack, restoreLayout, updateAllPanelHeaders, toggleGlobalLock, unlockAllPanels } from "./dashboard_panel_factory.js";
 import { initPanelMenu } from "./dashboard_panel_menu.js";
 import { registerAllPanelInits } from "./dashboard_panel_init.js";
 import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
@@ -290,6 +290,22 @@ function _convertCardsToTemplates() {
  * @returns {void}
  */
 function _initTopMenuBar() {
+  /* レイアウトロックボタン */
+  const lockBtn = document.getElementById("top-layout-lock");
+  if (lockBtn) {
+    // 起動時にロック状態を復元
+    if (monitorData.appSettings.layoutLocked) {
+      toggleGlobalLock(true);
+      lockBtn.textContent = "🔒";
+      lockBtn.title = "レイアウト解除";
+    }
+    lockBtn.addEventListener("click", () => {
+      const locked = toggleGlobalLock();
+      lockBtn.textContent = locked ? "🔒" : "🔓";
+      lockBtn.title = locked ? "レイアウト解除" : "レイアウト固定";
+    });
+  }
+
   /* 接続設定ボタン → モーダル開閉 */
   const connBtn = document.getElementById("top-conn-btn");
   const overlay = document.getElementById("conn-modal-overlay");

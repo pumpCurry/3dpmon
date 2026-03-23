@@ -188,6 +188,12 @@ const MERGE_IGNORE_ZERO_FIELDS = new Set([
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用、per-host）
 const _lastSavedJsonMap = new Map();
 
+/** ドキュメント全体のドロップハンドラが登録済みか */
+let _dropHandlerInstalled = false;
+/** ホスト別ドロップ処理コールバック */
+const _dropTargetCallbacks = new Map();
+
+
 // 最新のファイル一覧データ（renderFileList 実行時に更新、per-host）
 const _fileListMap = new Map();
 
@@ -1780,22 +1786,55 @@ export function setupUploadUI(root, hostname) {
     }
   });
 
-  document.addEventListener("dragover", e => {
-    e.preventDefault();
-    showDropLayer();
-  });
-  document.addEventListener("dragleave", e => {
-    if (e.target === document || e.target === dropLayer) {
+  // ドキュメント全体のドラッグ&ドロップは1度だけ登録
+  if (!_dropHandlerInstalled) {
+    _dropHandlerInstalled = true;
+    document.addEventListener("dragover", e => {
+      e.preventDefault();
+      showDropLayer();
+    });
+    document.addEventListener("dragleave", e => {
+      if (e.target === document || e.target === dropLayer) {
+        hideDropLayer();
+      }
+    });
+    document.addEventListener("drop", async (e) => {
+      e.preventDefault();
       hideDropLayer();
-    }
-  });
-  document.addEventListener("drop", e => {
-    e.preventDefault();
-    hideDropLayer();
-    if (e.dataTransfer?.files?.length) {
-      prepareAndConfirm(e.dataTransfer.files[0]);
-    }
-  });
+      if (!e.dataTransfer?.files?.length) return;
+      const file = e.dataTransfer.files[0];
+      // マルチプリンタの場合: アップロード先を選択
+      const hosts = Object.keys(monitorData.machines).filter(
+        h => h !== "_$_NO_MACHINE_$_" && monitorData.machines[h]?.storedData
+      );
+      if (hosts.length > 1) {
+        const hostOptions = hosts.map(h => {
+          const m = monitorData.machines[h];
+          return m.storedData?.hostname?.rawValue || h;
+        });
+        const ok = await showConfirmDialog({
+          level: "info",
+          title: "アップロード先の選択",
+          html: `<div style="margin-bottom:8px">${file.name} をどのプリンタにアップロードしますか？</div>
+            <select id="upload-host-select" style="width:100%;padding:6px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+              ${hosts.map((h, i) => `<option value="${h}">${hostOptions[i]}</option>`).join("")}
+            </select>`,
+          confirmText: "アップロード",
+          cancelText: "キャンセル"
+        });
+        if (!ok) return;
+        const selEl = document.getElementById("upload-host-select");
+        const targetHost = selEl?.value || hosts[0];
+        // 対象ホストの setupUploadUI のクロージャを呼ぶ
+        _dropTargetCallbacks.get(targetHost)?.(file);
+      } else {
+        // シングルプリンタ: そのまま処理
+        prepareAndConfirm(file);
+      }
+    });
+  }
+  // マルチプリンタ用: このホストの prepareAndConfirm をコールバックとして登録
+  _dropTargetCallbacks.set(hostname, prepareAndConfirm);
 
   if (dropClose) dropClose.addEventListener("click", hideDropLayer);
 }

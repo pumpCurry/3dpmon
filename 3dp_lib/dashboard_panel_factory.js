@@ -292,7 +292,7 @@ export function initGridStack(container) {
       handle: ".panel-header"
     },
     resizable: {
-      handles: "se, s"
+      handles: "se, s, e"
     },
     removable: false,
     acceptWidgets: true,
@@ -389,6 +389,7 @@ export function addPanel(typeId, hostname, posOverride = null) {
     <span class="panel-title">${typeDef.label}</span>
     ${cameraToggleHtml}
     <span class="panel-host-tag">${tagText}</span>
+    <button class="panel-lock-btn" title="このパネルを固定/解除">📌</button>
     <button class="panel-close-btn" title="パネルを閉じる">×</button>
   `;
   panelEl.appendChild(header);
@@ -429,6 +430,18 @@ export function addPanel(typeId, hostname, posOverride = null) {
   /* 閉じるボタンのイベント */
   header.querySelector(".panel-close-btn")?.addEventListener("click", () => {
     removePanel(panelId);
+  });
+
+  /* 個別ロックボタンのイベント */
+  header.querySelector(".panel-lock-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isLocked = widget.gridstackNode?.noMove;
+    grid.update(widget, { noMove: !isLocked, noResize: !isLocked });
+    const btn = header.querySelector(".panel-lock-btn");
+    btn.textContent = isLocked ? "📌" : "🔒";
+    btn.title = isLocked ? "このパネルを固定" : "このパネルの固定を解除";
+    panelEl.classList.toggle("panel-locked", !isLocked);
+    saveLayout();
   });
 
   /* 管理マップに登録 */
@@ -512,6 +525,41 @@ export function removePanelsForHost(hostname) {
     activePanels.delete(id);
   }
 
+/** グローバルレイアウトロック状態 */
+let _globalLocked = false;
+
+/**
+ * 全パネルのドラッグ・リサイズを一括ロック/解除する。
+ * @param {boolean} [lock] - true=ロック, false=解除, 省略=トグル
+ * @returns {boolean} 新しいロック状態
+ */
+export function toggleGlobalLock(lock) {
+  _globalLocked = lock ?? !_globalLocked;
+  if (!grid) return _globalLocked;
+  grid.enableMove(!_globalLocked);
+  grid.enableResize(!_globalLocked);
+  // appSettings に保存
+  monitorData.appSettings.layoutLocked = _globalLocked;
+  return _globalLocked;
+}
+
+/** 現在のグローバルロック状態を返す */
+export function isGlobalLocked() { return _globalLocked; }
+
+/**
+ * 全パネルの個別ロックを解除する。
+ */
+export function unlockAllPanels() {
+  if (!grid) return;
+  for (const [, entry] of activePanels) {
+    grid.update(entry.widget, { noMove: false, noResize: false });
+    entry.element?.classList.remove("panel-locked");
+    const lockBtn = entry.element?.querySelector(".panel-lock-btn");
+    if (lockBtn) { lockBtn.textContent = "📌"; lockBtn.title = "このパネルを固定"; }
+  }
+  saveLayout();
+}
+
   if (toRemove.length > 0) saveLayout();
   return toRemove.length;
 }
@@ -536,7 +584,8 @@ export function saveLayout() {
       x: node?.x ?? 0,
       y: node?.y ?? 0,
       w: node?.w ?? 4,
-      h: node?.h ?? 4
+      h: node?.h ?? 4,
+      locked: !!(node?.noMove)
     };
   });
 
@@ -652,12 +701,22 @@ export function restoreLayout() {
         console.info(`restoreLayout: ホスト "${item.host}" は未解決のため保留（接続時に復元）`);
         continue;
       }
-      addPanel(item.panelType, item.host, {
+      const restoredPanelId = addPanel(item.panelType, item.host, {
         x: item.x,
         y: item.y,
         w: item.w,
         h: item.h
       });
+      // ロック状態の復元
+      if (item.locked && restoredPanelId) {
+        const entry = activePanels.get(restoredPanelId);
+        if (entry?.widget) {
+          grid.update(entry.widget, { noMove: true, noResize: true });
+          entry.element?.classList.add("panel-locked");
+          const lockBtn = entry.element?.querySelector(".panel-lock-btn");
+          if (lockBtn) { lockBtn.textContent = "🔒"; lockBtn.title = "このパネルの固定を解除"; }
+        }
+      }
     }
 
     return true;
