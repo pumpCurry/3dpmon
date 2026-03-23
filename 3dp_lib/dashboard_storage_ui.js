@@ -31,7 +31,9 @@ import {
   syncStorageNow,
   testMaxLocalStorageQuota,
   exportAllData,
-  importAllData
+  importAllData,
+  importHistoryOnly,
+  saveUnifiedStorage
 } from "./dashboard_storage.js";
 
 let liveTimer = null;
@@ -81,13 +83,18 @@ export function initStorageUI() {
 
   const impBtn = document.createElement("button");
   impBtn.id = "storage-import-btn";
-  impBtn.textContent = "全データ Import (v1.40/v2.00)";
+  impBtn.textContent = "全データ Import (マージ)";
   impBtn.style.cssText = "font-size:12px;margin-left:5px;";
+
+  const impHistBtn = document.createElement("button");
+  impHistBtn.id = "storage-import-history-btn";
+  impHistBtn.textContent = "📋 印刷履歴のみ Import (名寄せ)";
+  impHistBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
   // 既存パネル要素の末尾にボタン群用 div を追加
   const btnGroup = document.createElement("div");
-  btnGroup.style.cssText = "padding:8px;font-size:0.9em;";
-  btnGroup.append(expBtn, impBtn);
+  btnGroup.style.cssText = "padding:8px;font-size:0.9em;display:flex;flex-wrap:wrap;gap:4px;";
+  btnGroup.append(expBtn, impBtn, impHistBtn);
   elPanel?.appendChild(btnGroup);
 
   /* ---------------- ボタン動作 ---------------- */
@@ -104,8 +111,11 @@ export function initStorageUI() {
   // Export
   expBtn.addEventListener("click", () => doExport(panelToast));
 
-  // Import
+  // Import (全データマージ)
   impBtn.addEventListener("click", () => doImport(panelToast));
+
+  // Import (印刷履歴のみ名寄せ)
+  impHistBtn.addEventListener("click", () => doImportHistoryOnly(panelToast));
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 
@@ -338,6 +348,52 @@ function doImport(toast) {
       } catch (e) {
         console.error("[doImport]", e);
         toast("インポート失敗: 不正な JSON", true);
+      }
+    };
+    reader.readAsText(file);
+  });
+  input.click();
+}
+
+
+/**
+ * 印刷履歴のみをインポートする（名寄せモード）。
+ * @param {Function} toast
+ */
+function doImportHistoryOnly(toast) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,.txt";
+  input.addEventListener("change", (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const version = _detectExportVersion(parsed);
+        let importData = parsed;
+        if (version === "1.40") {
+          importData = _convertV140toV200(parsed);
+        }
+        delete importData._exportVersion;
+        delete importData._exportDate;
+        delete importData._convertedFrom;
+
+        const stats = importHistoryOnly(importData);
+        saveUnifiedStorage(true);
+
+        const parts = [];
+        if (stats.added > 0) parts.push(`新規 ${stats.added}件`);
+        if (stats.enriched > 0) parts.push(`名寄せ補完 ${stats.enriched}件`);
+        if (stats.usageAdded > 0) parts.push(`使用実績 ${stats.usageAdded}件`);
+        if (stats.skippedHosts.length > 0) parts.push(`スキップ: ${stats.skippedHosts.join(", ")}`);
+        const summary = parts.length > 0 ? parts.join(", ") : "新規データなし";
+        toast(`履歴インポート完了 (${version}): ${summary}。ページを再読み込みします。`);
+        setTimeout(() => location.reload(), 1500);
+      } catch (e) {
+        console.error("[doImportHistoryOnly]", e);
+        toast("インポート失敗: " + e.message, true);
       }
     };
     reader.readAsText(file);

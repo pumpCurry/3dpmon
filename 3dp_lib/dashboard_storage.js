@@ -251,6 +251,136 @@ export async function importAllData(data) {
   return stats;
 }
 
+/**
+ * 印刷履歴のみをインポートする（名寄せモード）。
+ *
+ * 機器ごとの印刷履歴を ID 重複排除で追加し、
+ * 既存ジョブと同一ファイル (rawFilename or filename) の
+ * MD5・動画URL・フィラメント情報を名寄せで補完する。
+ * フィラメント使用実績 (usageHistory) は既存に同一 spoolId + jobId が
+ * なく、かつ消費量に矛盾がない場合のみ追加する。
+ *
+ * @param {Object} data - インポートするデータ (monitorData 互換)
+ * @returns {{ added: number, enriched: number, usageAdded: number, skippedHosts: string[] }}
+ */
+export function importHistoryOnly(data) {
+  const stats = { added: 0, enriched: 0, usageAdded: 0, skippedHosts: [] };
+  if (!data.machines || typeof data.machines !== "object") return stats;
+
+  for (const [host, machineData] of Object.entries(data.machines)) {
+    const history = machineData.printStore?.history;
+    if (!Array.isArray(history) || history.length === 0) continue;
+
+    // 既存ホストがなければ作成
+    if (!monitorData.machines[host]) {
+      monitorData.machines[host] = { storedData: {}, runtimeData: {}, historyData: [] };
+    }
+    const existing = monitorData.machines[host];
+    if (!existing.printStore) existing.printStore = {};
+    if (!Array.isArray(existing.printStore.history)) existing.printStore.history = [];
+
+    const existingJobIds = new Set(existing.printStore.history.map(j => j.id));
+
+    // ── ファイル名 → MD5/動画URL のマッピングを構築（名寄せ用）──
+    const fileToMeta = new Map();
+    for (const job of history) {
+      const fname = job.rawFilename || job.filename || "";
+      if (!fname) continue;
+      const entry = fileToMeta.get(fname) || {};
+      if (job.filemd5 && !entry.filemd5) entry.filemd5 = job.filemd5;
+      if (job.videoUrl && !entry.videoUrl) entry.videoUrl = job.videoUrl;
+      if (Array.isArray(job.filamentInfo) && job.filamentInfo.length > 0 && !entry.filamentInfo) {
+        entry.filamentInfo = job.filamentInfo;
+      }
+      if (job.filamentId && !entry.filamentId) entry.filamentId = job.filamentId;
+      if (job.filamentColor && !entry.filamentColor) entry.filamentColor = job.filamentColor;
+      if (job.filamentType && !entry.filamentType) entry.filamentType = job.filamentType;
+      fileToMeta.set(fname, entry);
+    }
+
+    // ── 新規ジョブの追加 ──
+    for (const job of history) {
+      if (!job.id) continue;
+      if (!existingJobIds.has(job.id)) {
+        existing.printStore.history.push(job);
+        existingJobIds.add(job.id);
+        stats.added++;
+      }
+    }
+
+    // ── 既存ジョブの名寄せ補完 ──
+    for (const existingJob of existing.printStore.history) {
+      const fname = existingJob.rawFilename || existingJob.filename || "";
+      if (!fname) continue;
+      const meta = fileToMeta.get(fname);
+      if (!meta) continue;
+
+      let enriched = false;
+      // MD5 補完
+      if (!existingJob.filemd5 && meta.filemd5) {
+        existingJob.filemd5 = meta.filemd5;
+        enriched = true;
+      }
+      // 動画URL 補完
+      if (!existingJob.videoUrl && meta.videoUrl) {
+        existingJob.videoUrl = meta.videoUrl;
+        enriched = true;
+      }
+      // フィラメント情報補完
+      if (!existingJob.filamentId && meta.filamentId) {
+        existingJob.filamentId = meta.filamentId;
+        enriched = true;
+      }
+      if (!existingJob.filamentColor && meta.filamentColor) {
+        existingJob.filamentColor = meta.filamentColor;
+        enriched = true;
+      }
+      if (!existingJob.filamentType && meta.filamentType) {
+        existingJob.filamentType = meta.filamentType;
+        enriched = true;
+      }
+      if ((!existingJob.filamentInfo || existingJob.filamentInfo.length === 0) && meta.filamentInfo) {
+        existingJob.filamentInfo = meta.filamentInfo;
+        enriched = true;
+      }
+      if (enriched) stats.enriched++;
+    }
+
+    // 履歴を時系列順にソート (starttime 降順 = 新しい順)
+    existing.printStore.history.sort((a, b) => {
+      const ta = Number(a.starttime || a.id || 0);
+      const tb = Number(b.starttime || b.id || 0);
+      return tb - ta;
+    });
+  }
+
+  // ── フィラメント使用実績 (usageHistory): 不整合チェック付きマージ ──
+  if (Array.isArray(data.usageHistory)) {
+    const existingIds = new Set(
+      (monitorData.usageHistory || []).map(u => u.usageId)
+    );
+    // 既存スプールIDセット (不整合チェック用)
+    const existingSpoolIds = new Set(
+      monitorData.filamentSpools.map(s => s.id)
+    );
+
+    for (const u of data.usageHistory) {
+      if (!u.usageId || existingIds.has(u.usageId)) continue;
+      // 不整合チェック: spoolId が既存スプールに存在するか
+      if (u.spoolId && !existingSpoolIds.has(u.spoolId)) continue;
+      monitorData.usageHistory.push(u);
+      existingIds.add(u.usageId);
+      stats.usageAdded++;
+    }
+    if (stats.usageAdded > 0) {
+      monitorData.usageHistory.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+      trimUsageHistory();
+    }
+  }
+
+  return stats;
+}
+
 function applySpoolDefaults(sp) {
   sp.filamentDiameter ??= 1.75;
   sp.filamentColor ??= "#22C55E";
