@@ -359,6 +359,17 @@ export function ingestData(data, hostname) {
   const isPrinting = stateForNotif === PRINT_STATE_CODE.printStarted
                   || stateForNotif === PRINT_STATE_CODE.printPaused;
 
+  // 初回起動で印刷途中に入った場合: 現在進捗までのマイルストーンを既通知扱いにする
+  // (prevProgress が 0 のまま = 復元されていない or 最初から)
+  if (isPrinting && s.prevProgress === 0 && prog > 0 && s.notifiedProgressMilestones.size === 0) {
+    PROGRESS_MILESTONES.forEach(ms => {
+      if (prog >= ms) s.notifiedProgressMilestones.add(ms);
+    });
+    s.prevProgress = prog;
+    // 残り時間閾値も現在値で初期化
+    if (!isNaN(left)) s.prevRemainingSec = left;
+  }
+
   if (isPrinting && prog !== s.prevProgress) {
     notificationManager.notify("printProgressUpdated", { hostname: host, previous: s.prevProgress, current: prog });
     s.lastProgressTimestamp = nowMs;
