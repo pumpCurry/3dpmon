@@ -300,5 +300,26 @@ function getFieldNodes(fieldName) { … }
 ## 9. コミット前のテスト実施ルール
 - 各ファイルが少なくとも構文エラーを起こさないことを保証せよ (MUST)
 - const/let等で宣言またはあらたな構造体やオブジェクトを定義した際、二重定義または定義漏れがないことを保証せよ (MUST)
+- `npx vitest run` で既存テストが全てパスすることを確認せよ (MUST)
 
+## 10. CSS/スタイリング規約 (Phase 1 導入)
+
+詳細は `docs/develop/css-design-guidelines.md` を参照。以下は必須遵守事項のみ抜粋。
+
+1. **デザイントークン必須 (MUST)**
+   - 色、フォントサイズ、z-index、ボーダー半径、シャドウは必ず `var(--token)` で参照
+   - `:root` に定義されたCSS Custom Propertiesのみ使用
+   - ハードコードのHex色 (`#fff`, `#3070a0` 等) のJS/CSS直書きは禁止
+
+2. **インラインスタイル制限 (MUST)**
+   - `el.style.cssText = "..."` や `el.style.color = "#xxx"` は禁止
+   - 許可されるのは: 動的計算値 (`width=${px}px`), ユーザー指定色 (`background:${userColor}`), 表示トグル (`display:none`), 3D描画座標のみ
+
+3. **CSSはファイルに記述 (MUST)**
+   - `injectStyles()` パターン（JS内にCSS文字列を書いて `<style>` 要素を注入）は禁止
+   - 新規CSSは `3dp_panel.css` の末尾に追加
+   - コンポーネントプレフィックスを使用: `fm-`, `fc-`, `pm-`, `conn-`, `panel-`, `notif-`
+
+4. **ダークテーマ互換 (SHOULD)**
+   - 新規トークンは `:root` ライト + `@media (prefers-color-scheme: dark)` + `.theme-dark` の3箇所に追加
 
