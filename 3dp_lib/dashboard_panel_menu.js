@@ -276,10 +276,11 @@ function _renderMenuBody() {
     });
   });
 
-  /* 個別ロックトグルのイベント設定 */
+  /* 個別ロックトグルのイベント設定 (親ボタンの表示トグルと分離) */
   body.querySelectorAll(".panel-row-lock").forEach(btn => {
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
+      e.preventDefault(); // 親ボタンの click 発火を防止
       const panelId = btn.dataset.panelId;
       const entry = getActivePanelEntries().find(([id]) => id === panelId);
       if (!entry) return;
@@ -346,16 +347,14 @@ function _renderPanelToggle(pt, host, panelId, activeEntries = []) {
   const panelEntry = activeEntries.find(([id]) => id === panelId);
   const isLocked = panelEntry ? !!(panelEntry[1].widget?.gridstackNode?.noMove) : false;
 
-  let html = `<div style="display:flex;align-items:center;gap:4px">`;
-  // 左端: 表示チェック
-  html += `<button class="panel-toggle-btn${active ? " active" : ""}" data-type="${pt.id}" data-host="${host}" data-panel-id="${panelId}" style="flex:1;text-align:left">`;
-  html += `<span class="panel-toggle-icon">${active ? "\u2611" : "\u2610"}</span> ${pt.label}`;
-  html += `</button>`;
-  // 右端: ロックボタン (アクティブな場合のみ)
+  // 表示チェック + ロックを同一ボタン内に
+  html += `<button class="panel-toggle-btn${active ? " active" : ""}" data-type="${pt.id}" data-host="${host}" data-panel-id="${panelId}" style="display:flex;align-items:center;width:100%">`;
+  html += `<span class="panel-toggle-icon">${active ? "\u2611" : "\u2610"}</span>`;
+  html += `<span style="flex:1;text-align:left;margin-left:4px">${pt.label}</span>`;
   if (active) {
-    html += `<button class="panel-row-lock" data-panel-id="${panelId}" style="border:1px solid ${isLocked ? "#f59e0b" : "#ddd"};border-radius:3px;padding:2px 6px;cursor:pointer;font-size:11px;background:${isLocked ? "#fef3c7" : "#fff"};min-width:28px" title="${isLocked ? "固定解除" : "固定する"}">${isLocked ? "🔒" : "📌"}</button>`;
+    html += `<span class="panel-row-lock" data-panel-id="${panelId}" style="border:1px solid ${isLocked ? "#f59e0b" : "#ddd"};border-radius:3px;padding:1px 5px;font-size:11px;background:${isLocked ? "#fef3c7" : "transparent"};margin-left:4px" title="${isLocked ? "固定解除" : "固定する"}">${isLocked ? "🔒" : "📌"}</span>`;
   }
-  html += `</div>`;
+  html += `</button>`;
 
   /* カメラパネルには映像接続サブコントロールを追加 */
   if (pt.id === "camera") {
