@@ -50,7 +50,7 @@ import { registerFieldElements, unregisterFieldElements } from "./dashboard_ui.j
  * レイアウト保存用の localStorage キー
  * @constant {string}
  */
-const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v3";
+const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v4";
 // v2 → v3 マイグレーション: cellHeight 80→40 に伴い h, y を2倍化
 (function migrateLayoutV2toV3() {
   const v2 = localStorage.getItem("3dpmon_panel_layout_v2");
@@ -65,6 +65,24 @@ const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v3";
     }));
     localStorage.setItem("3dpmon_panel_layout_v3", JSON.stringify(migrated));
     console.info("[layout] v2→v3 マイグレーション完了 (cellHeight 80→40)");
+  } catch { /* ignore */ }
+})();
+// v3 → v4 マイグレーション: column 12→24 に伴い x, w を2倍化
+(function migrateLayoutV3toV4() {
+  const v3 = localStorage.getItem("3dpmon_panel_layout_v3");
+  const v4 = localStorage.getItem("3dpmon_panel_layout_v4");
+  if (!v3) return;
+  if (v4) { try { if (JSON.parse(v4).length > 0) return; } catch { /* 壊れた v4 は再生成 */ } }
+  try {
+    const layout = JSON.parse(v3);
+    if (!Array.isArray(layout)) return;
+    const migrated = layout.map(item => ({
+      ...item,
+      x: Math.min((item.x || 0) * 2, 22),
+      w: Math.min((item.w || 4) * 2, 24)
+    }));
+    localStorage.setItem("3dpmon_panel_layout_v4", JSON.stringify(migrated));
+    console.info("[layout] v3→v4 マイグレーション完了 (column 12→24)");
   } catch { /* ignore */ }
 })();
 
@@ -91,21 +109,21 @@ const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v3";
  *
  * @constant {PanelTypeDef[]}
  */
-// 12列 x cellHeight=40px
-// defaultH/minH は旧 cellHeight=80 の2倍
+// 24列 x cellHeight=40px
+// defaultW/minW は旧12列の2倍, defaultH/minH は旧 cellHeight=80 の2倍
 const PANEL_TYPES = [
-  { id: "camera",        label: "カメラ",           templateId: "panel-tpl-camera",        defaultW: 4,  defaultH: 10, minW: 2, minH: 4,  perHost: true },
-  { id: "head-preview",  label: "ヘッド位置プレビュー", templateId: "panel-tpl-head-preview", defaultW: 3,  defaultH: 12, minW: 2, minH: 6,  perHost: true },
-  { id: "filament",      label: "フィラメント",      templateId: "panel-tpl-filament",      defaultW: 3,  defaultH: 8,  minW: 2, minH: 4,  perHost: true },
-  { id: "status",        label: "状態",             templateId: "panel-tpl-status",         defaultW: 4,  defaultH: 12, minW: 2, minH: 6,  perHost: true },
-  { id: "control-cmd",   label: "操作ボタン",        templateId: "panel-tpl-control-cmd",   defaultW: 3,  defaultH: 6,  minW: 2, minH: 4,  perHost: true },
-  { id: "control-temp",  label: "温度・ファン制御",   templateId: "panel-tpl-control-temp",  defaultW: 6,  defaultH: 12, minW: 3, minH: 6,  perHost: true },
-  { id: "temp-graph",    label: "温度グラフ",        templateId: "panel-tpl-temp-graph",    defaultW: 6,  defaultH: 8,  minW: 2, minH: 4,  perHost: true },
-  { id: "machine-info",  label: "機器情報",          templateId: "panel-tpl-machine-info",  defaultW: 4,  defaultH: 8,  minW: 2, minH: 4,  perHost: true },
-  { id: "log",           label: "ログ",             templateId: "panel-tpl-log",            defaultW: 8,  defaultH: 8,  minW: 2, minH: 4,  perHost: true },
-  { id: "current-print", label: "現在の印刷",        templateId: "panel-tpl-current-print", defaultW: 12, defaultH: 6,  minW: 3, minH: 4,  perHost: true },
-  { id: "history",       label: "印刷履歴",          templateId: "panel-tpl-history",       defaultW: 12, defaultH: 10, minW: 3, minH: 4,  perHost: true },
-  { id: "file-list",     label: "ファイル一覧",       templateId: "panel-tpl-file-list",    defaultW: 12, defaultH: 10, minW: 3, minH: 4,  perHost: true },
+  { id: "camera",        label: "カメラ",           templateId: "panel-tpl-camera",        defaultW: 8,  defaultH: 10, minW: 4, minH: 4,  perHost: true },
+  { id: "head-preview",  label: "ヘッド位置プレビュー", templateId: "panel-tpl-head-preview", defaultW: 6,  defaultH: 12, minW: 4, minH: 6,  perHost: true },
+  { id: "filament",      label: "フィラメント",      templateId: "panel-tpl-filament",      defaultW: 6,  defaultH: 8,  minW: 4, minH: 4,  perHost: true },
+  { id: "status",        label: "状態",             templateId: "panel-tpl-status",         defaultW: 8,  defaultH: 12, minW: 4, minH: 6,  perHost: true },
+  { id: "control-cmd",   label: "操作ボタン",        templateId: "panel-tpl-control-cmd",   defaultW: 6,  defaultH: 6,  minW: 4, minH: 4,  perHost: true },
+  { id: "control-temp",  label: "温度・ファン制御",   templateId: "panel-tpl-control-temp",  defaultW: 12, defaultH: 12, minW: 6, minH: 6,  perHost: true },
+  { id: "temp-graph",    label: "温度グラフ",        templateId: "panel-tpl-temp-graph",    defaultW: 12, defaultH: 8,  minW: 4, minH: 4,  perHost: true },
+  { id: "machine-info",  label: "機器情報",          templateId: "panel-tpl-machine-info",  defaultW: 8,  defaultH: 8,  minW: 4, minH: 4,  perHost: true },
+  { id: "log",           label: "ログ",             templateId: "panel-tpl-log",            defaultW: 16, defaultH: 8,  minW: 4, minH: 4,  perHost: true },
+  { id: "current-print", label: "現在の印刷",        templateId: "panel-tpl-current-print", defaultW: 24, defaultH: 6,  minW: 6, minH: 4,  perHost: true },
+  { id: "history",       label: "印刷履歴",          templateId: "panel-tpl-history",       defaultW: 24, defaultH: 10, minW: 6, minH: 4,  perHost: true },
+  { id: "file-list",     label: "ファイル一覧",       templateId: "panel-tpl-file-list",    defaultW: 24, defaultH: 10, minW: 6, minH: 4,  perHost: true },
 ];
 
 /* ─── GridStack インスタンス ─── */
@@ -193,7 +211,7 @@ export function initGridStack(container) {
 
   /* GridStack が CDN/npm からロード済みであることを前提とする */
   grid = GridStack.init({
-    column: 12,
+    column: 24,
     cellHeight: 40,
     float: true,
     animate: true,
