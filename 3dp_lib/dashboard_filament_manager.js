@@ -271,7 +271,7 @@ function createDashboardContent(hostname, switchTab) {
     // per-host セクション
     if (hosts.length === 0) {
       const noHost = document.createElement("div");
-      noHost.style.fontSize = "12px";
+      noHost.className = "fm-empty-msg";
       noHost.textContent = "接続中のプリンタがありません";
       div.appendChild(noHost);
     }
@@ -293,10 +293,10 @@ function createDashboardContent(hostname, switchTab) {
       if (spool) {
         // 装着中スプールの表示
         const mountedWrap = document.createElement("div");
-        mountedWrap.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;";
+        mountedWrap.className = "fm-mounted-wrap";
 
         const prevBox = document.createElement("div");
-        prevBox.style.cssText = "flex:0 0 100px;width:100px;height:100px;position:relative;overflow:hidden;";
+        prevBox.className = "fm-mounted-preview";
         mountedWrap.appendChild(prevBox);
 
         createFilamentPreview(prevBox, {
@@ -307,11 +307,11 @@ function createDashboardContent(hostname, switchTab) {
         });
 
         const infoBox = document.createElement("div");
-        infoBox.style.cssText = "flex:1;font-size:12px;";
+        infoBox.className = "fm-mounted-info";
         const pct = spool.totalLengthMm > 0
           ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0)
           : 0;
-        const colorSwatch = `<span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${spool.filamentColor || spool.color || "#ccc"};vertical-align:middle;margin-right:4px;border:1px solid #aaa;"></span>`;
+        const colorSwatch = `<span class="color-swatch color-swatch-md" style="background:${spool.filamentColor || spool.color || "#ccc"}"></span>`;
         // 残量を人間可読フォーマットで表示
         const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
         // 枯渇予測
@@ -322,7 +322,7 @@ function createDashboardContent(hostname, switchTab) {
           if (analytics.estimatedRemainingPrints != null) parts.push(`あと約${analytics.estimatedRemainingPrints}回`);
           if (analytics.estimatedRemainingDays != null) parts.push(`約${analytics.estimatedRemainingDays}日`);
           if (analytics.remainingCost > 0) parts.push(`${analytics.currency}${Math.round(analytics.remainingCost).toLocaleString()}残`);
-          if (parts.length > 0) predLine = `<div style="font-size:11px;color:#64748b;margin-top:2px">${parts.join(" / ")}</div>`;
+          if (parts.length > 0) predLine = `<div class="fm-spool-sub">${parts.join(" / ")}</div>`;
         }
         infoBox.innerHTML =
           `<div><strong>${formatSpoolDisplayId(spool)}</strong> ${spool.name || ""}</div>` +
@@ -332,10 +332,10 @@ function createDashboardContent(hostname, switchTab) {
           predLine;
 
         const btnWrap = document.createElement("div");
-        btnWrap.style.cssText = "margin-top:4px;display:flex;gap:4px;";
+        btnWrap.className = "fm-mounted-buttons";
         const changeBtn = document.createElement("button");
         changeBtn.textContent = "交換";
-        changeBtn.style.fontSize = "11px";
+        changeBtn.className = "btn-font-xs";
         changeBtn.addEventListener("click", async () => {
           try { await showFilamentChangeDialog(host); } catch (e) {
             console.error("[filament-manager] 交換ダイアログエラー:", e);
@@ -343,7 +343,7 @@ function createDashboardContent(hostname, switchTab) {
         });
         const removeBtn = document.createElement("button");
         removeBtn.textContent = "取り外す";
-        removeBtn.style.fontSize = "11px";
+        removeBtn.className = "btn-font-xs";
         removeBtn.addEventListener("click", async () => {
           const hostDisplayName = monitorData.machines[host]?.storedData?.hostname?.rawValue || host;
           const ok = await showConfirmDialog({
@@ -364,11 +364,11 @@ function createDashboardContent(hostname, switchTab) {
       } else {
         // 未装着
         const empty = document.createElement("div");
-        empty.style.cssText = "font-size:12px;color:#888;margin-bottom:4px;";
+        empty.className = "fm-empty-msg";
         empty.textContent = "スプール未装着";
         const mountBtn = document.createElement("button");
         mountBtn.textContent = "装着";
-        mountBtn.style.fontSize = "11px";
+        mountBtn.className = "btn-font-xs";
         mountBtn.addEventListener("click", () => {
           // スプール一覧タブへ切り替え
           switchTab(2);
@@ -402,7 +402,7 @@ function createDashboardContent(hostname, switchTab) {
         item.className = "stored-item";
 
         const prevMount = document.createElement("div");
-        prevMount.style.cssText = "position:relative;width:60px;height:60px;overflow:hidden;";
+        prevMount.className = "fm-carousel-preview";
         item.appendChild(prevMount);
         createFilamentPreview(prevMount, {
           ...DEFAULT_PREVIEW_OPTIONS,
@@ -431,7 +431,7 @@ function createDashboardContent(hostname, switchTab) {
         if (hosts.length > 0) {
           const mountBtn = document.createElement("button");
           mountBtn.textContent = "装着";
-          mountBtn.style.fontSize = "10px";
+          mountBtn.className = "btn-font-xs";
           mountBtn.addEventListener("click", () => {
             if (hosts.length === 1) {
               if (!setCurrentSpoolId(sp.id, hosts[0])) {
@@ -442,7 +442,7 @@ function createDashboardContent(hostname, switchTab) {
             } else {
               // 複数ホストの場合、ホスト選択ドロップダウンを表示
               const sel = document.createElement("select");
-              sel.style.fontSize = "10px";
+              sel.className = "btn-font-xs";
               hosts.forEach(h => {
                 const m = monitorData.machines[h] || {};
                 const name = m.storedData?.hostname?.rawValue || h;
@@ -453,7 +453,7 @@ function createDashboardContent(hostname, switchTab) {
               });
               const okBtn = document.createElement("button");
               okBtn.textContent = "OK";
-              okBtn.style.fontSize = "10px";
+              okBtn.className = "btn-font-xs";
               okBtn.addEventListener("click", () => {
                 if (!setCurrentSpoolId(sp.id, sel.value)) {
                   showAlert("このスプールは既に別のプリンタに装着されています", "warn");
@@ -516,8 +516,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
   form.append(brandSel, matSel, colorSel, nameIn, searchBtn);
 
   const countSpan = document.createElement("div");
-  countSpan.style.fontSize = "12px";
-  countSpan.style.margin = "4px 0";
+  countSpan.className = "fm-count";
 
   const wrap = document.createElement("div");
   wrap.className = "registered-container";
@@ -527,8 +526,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
 
   const listBox = document.createElement("div");
   listBox.className = "registered-list scrollable-body";
-  listBox.style.maxHeight = "30em";
-  listBox.style.overflowY = "auto";
+  listBox.className = "scroll-box";
 
   const table = document.createElement("table");
   table.className = "registered-table fixed-header sortable-table";
@@ -657,7 +655,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
 
       // 色見本
       const colorTd = document.createElement("td");
-      colorTd.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:${p.color || "#ccc"};border:1px solid #aaa;vertical-align:middle;"></span>`;
+      colorTd.innerHTML = `<span class="color-swatch color-swatch-xl" style="background:${p.color || "#ccc"}"></span>`;
       tr.appendChild(colorTd);
 
       // ブランド・材質
@@ -711,7 +709,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
       const cmd = document.createElement("td");
       const regBtn = document.createElement("button");
       regBtn.textContent = "開封して登録";
-      regBtn.style.fontSize = "11px";
+      regBtn.className = "btn-font-xs";
       regBtn.addEventListener("click", ev => {
         ev.stopPropagation();
         addSpoolFromPreset(p);
@@ -723,7 +721,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
 
       const mountBtn = document.createElement("button");
       mountBtn.textContent = "開封して装着";
-      mountBtn.style.fontSize = "11px";
+      mountBtn.className = "btn-font-xs";
       mountBtn.addEventListener("click", async (ev) => {
         ev.stopPropagation();
         const sp = addSpoolFromPreset(p);
@@ -746,8 +744,8 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
           const ok = await showConfirmDialog({
             level: "info",
             title: "装着先の選択",
-            html: `<div style="font-size:13px;margin-bottom:8px">${formatSpoolDisplayId(sp)} を装着するプリンタを選択</div>
-              <select id="mount-host-select" style="width:100%;padding:6px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+            html: `<div class="fm-host-prompt">${formatSpoolDisplayId(sp)} を装着するプリンタを選択</div>
+              <select id="mount-host-select" class="fm-host-select">
                 ${hosts.map((h, i) => `<option value="${h}">${hostOptions[i]}</option>`).join("")}
               </select>`,
             confirmText: "装着",
@@ -875,8 +873,7 @@ function createRegisteredContent(openEditor, hostname) {
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "新規登録";
-  addBtn.style.fontSize = "12px";
-  addBtn.style.marginBottom = "4px";
+  addBtn.className = "btn-font-sm";
 
   // 状態フィルタバー
   const filterBar = document.createElement("div");
@@ -940,8 +937,7 @@ function createRegisteredContent(openEditor, hostname) {
   form.append(brandSel, matSel, colorSel, nameIn, searchBtn);
 
   const countSpan = document.createElement("div");
-  countSpan.style.fontSize = "12px";
-  countSpan.style.margin = "4px 0";
+  countSpan.className = "fm-count";
 
   const wrap = document.createElement("div");
   wrap.className = "registered-container";
@@ -951,8 +947,7 @@ function createRegisteredContent(openEditor, hostname) {
 
   const listBox = document.createElement("div");
   listBox.className = "registered-list scrollable-body";
-  listBox.style.maxHeight = "30em";
-  listBox.style.overflowY = "auto";
+  listBox.className = "scroll-box";
 
   const table = document.createElement("table");
   table.className = "registered-table fixed-header sortable-table";
@@ -1208,11 +1203,11 @@ function createRegisteredContent(openEditor, hostname) {
         case SPOOL_STATE.MOUNTED: {
           const editBtn = document.createElement("button");
           editBtn.textContent = "編集";
-          editBtn.style.fontSize = "11px";
+          editBtn.className = "btn-font-xs";
           editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
           const removeBtn = document.createElement("button");
           removeBtn.textContent = "取り外す";
-          removeBtn.style.fontSize = "11px";
+          removeBtn.className = "btn-font-xs";
           removeBtn.addEventListener("click", ev => {
             ev.stopPropagation();
             const targetHost = sp.hostname || hostname;
@@ -1236,7 +1231,7 @@ function createRegisteredContent(openEditor, hostname) {
         case SPOOL_STATE.INVENTORY: {
           const mountBtn = document.createElement("button");
           mountBtn.textContent = "装着";
-          mountBtn.style.fontSize = "11px";
+          mountBtn.className = "btn-font-xs";
           mountBtn.addEventListener("click", async (ev) => {
             ev.stopPropagation();
             if (hosts.length === 1) {
@@ -1278,11 +1273,11 @@ function createRegisteredContent(openEditor, hostname) {
           });
           const editBtn = document.createElement("button");
           editBtn.textContent = "編集";
-          editBtn.style.fontSize = "11px";
+          editBtn.className = "btn-font-xs";
           editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
           const delBtn = document.createElement("button");
           delBtn.textContent = "廃棄";
-          delBtn.style.fontSize = "11px";
+          delBtn.className = "btn-font-xs";
           delBtn.addEventListener("click", ev => {
             ev.stopPropagation();
             deleteSpool(sp.id, hostname);
@@ -1294,11 +1289,11 @@ function createRegisteredContent(openEditor, hostname) {
         case SPOOL_STATE.EXHAUSTED: {
           const editBtn = document.createElement("button");
           editBtn.textContent = "編集";
-          editBtn.style.fontSize = "11px";
+          editBtn.className = "btn-font-xs";
           editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
           const delBtn = document.createElement("button");
           delBtn.textContent = "廃棄";
-          delBtn.style.fontSize = "11px";
+          delBtn.className = "btn-font-xs";
           delBtn.addEventListener("click", ev => {
             ev.stopPropagation();
             deleteSpool(sp.id, hostname);
@@ -1310,7 +1305,7 @@ function createRegisteredContent(openEditor, hostname) {
         case SPOOL_STATE.DISCARDED: {
           const resBtn = document.createElement("button");
           resBtn.textContent = "復活";
-          resBtn.style.fontSize = "11px";
+          resBtn.className = "btn-font-xs";
           resBtn.addEventListener("click", ev => {
             ev.stopPropagation();
             restoreSpool(sp.id);
@@ -1322,7 +1317,7 @@ function createRegisteredContent(openEditor, hostname) {
         default: {
           const editBtn = document.createElement("button");
           editBtn.textContent = "編集";
-          editBtn.style.fontSize = "11px";
+          editBtn.className = "btn-font-xs";
           editBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
           cmd.appendChild(editBtn);
           break;
@@ -1333,7 +1328,9 @@ function createRegisteredContent(openEditor, hostname) {
       favBtn.textContent = sp.isFavorite ? "★" : "☆";
       favBtn.title = sp.isFavorite ? "お気に入り解除" : "お気に入りに追加";
       favBtn.className = "icon-btn";
-      favBtn.style.cssText = "font-size:14px;padding:2px 6px;cursor:pointer;color:" + (sp.isFavorite ? "#f59e0b" : "#94a3b8") + ";border-color:" + (sp.isFavorite ? "#f59e0b" : "#ddd");
+      favBtn.className = "fm-fav-btn";
+      favBtn.style.color = sp.isFavorite ? "#f59e0b" : "#94a3b8";
+      favBtn.style.borderColor = sp.isFavorite ? "#f59e0b" : "#ddd";
       favBtn.addEventListener("click", ev => {
         ev.stopPropagation();
         sp.isFavorite = !sp.isFavorite;
@@ -1382,7 +1379,7 @@ function createRegisteredContent(openEditor, hostname) {
   // ── スプール詳細ドリルダウンパネル ──
   const drilldown = document.createElement("div");
   drilldown.className = "spool-drilldown";
-  drilldown.style.cssText = "display:none;margin-top:12px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#fafbfc";
+  drilldown.className = "drilldown-panel";
   div.appendChild(drilldown);
 
   /**
@@ -1401,12 +1398,12 @@ function createRegisteredContent(openEditor, hostname) {
 
     // ヘッダー
     const hdr = document.createElement("div");
-    hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px";
-    const colorSwatch = `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${sp.filamentColor || sp.color || "#ccc"};vertical-align:middle;margin-right:6px;border:1px solid #aaa"></span>`;
-    hdr.innerHTML = `<h3 style="margin:0;font-size:1.1em">${colorSwatch}${formatSpoolDisplayId(sp)} ${sp.name || ""} <small style="color:#64748b">${analytics.material}</small></h3>`;
+    hdr.className = "drilldown-header";
+    const colorSwatch = `<span class="color-swatch color-swatch-lg" style="background:${sp.filamentColor || sp.color || "#ccc"}"></span>`;
+    hdr.innerHTML = `<h3 style="margin:0;font-size:1.1em">${colorSwatch}${formatSpoolDisplayId(sp)} ${sp.name || ""} <small class="text-secondary-xs">${analytics.material}</small></h3>`;
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "×";
-    closeBtn.style.cssText = "border:none;background:none;font-size:18px;cursor:pointer;color:#94a3b8";
+    closeBtn.className = "drilldown-close";
     closeBtn.addEventListener("click", () => { drilldown.style.display = "none"; });
     hdr.appendChild(closeBtn);
     drilldown.appendChild(hdr);
@@ -1415,7 +1412,7 @@ function createRegisteredContent(openEditor, hostname) {
     const remainFmt = formatFilamentAmount(analytics.remainMm, sp);
     const consumedFmt = formatFilamentAmount(analytics.consumedMm, sp);
     const cards = document.createElement("div");
-    cards.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-bottom:10px";
+    cards.className = "stat-cards";
     const cardItems = [
       { label: "残量", value: `${remainFmt.display}`, sub: `${analytics.consumedPct > 0 ? (100 - analytics.consumedPct).toFixed(0) : "?"}%` },
       { label: "消費済", value: consumedFmt.display, sub: `${analytics.consumedPct.toFixed(0)}%` },
@@ -1430,8 +1427,8 @@ function createRegisteredContent(openEditor, hostname) {
     }
     for (const c of cardItems) {
       const card = document.createElement("div");
-      card.style.cssText = "background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:6px;text-align:center";
-      card.innerHTML = `<div style="font-size:0.75em;color:#64748b">${c.label}</div><div style="font-weight:bold">${c.value}</div>${c.sub ? `<div style="font-size:0.75em;color:#94a3b8">${c.sub}</div>` : ""}`;
+      card.className = "stat-card";
+      card.innerHTML = `<div class="stat-card-label">${c.label}</div><div class="stat-card-value">${c.value}</div>${c.sub ? `<div class="stat-card-sub">${c.sub}</div>` : ""}`;
       cards.appendChild(card);
     }
     drilldown.appendChild(cards);
@@ -1439,10 +1436,10 @@ function createRegisteredContent(openEditor, hostname) {
     // 消費推移グラフ (4-1: usedLengthLog の可視化)
     if (analytics.usedLengthLog.length > 0) {
       const chartFs = document.createElement("fieldset");
-      chartFs.style.cssText = "border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-bottom:8px";
+      chartFs.className = "analysis-fieldset";
       chartFs.innerHTML = "<legend style='font-weight:bold;font-size:0.9em'>消費推移 (ジョブ別)</legend>";
       const canvas = document.createElement("canvas");
-      canvas.style.maxHeight = "150px";
+      canvas.className = "chart-constrained";
       chartFs.appendChild(canvas);
       drilldown.appendChild(chartFs);
 
@@ -1480,7 +1477,7 @@ function createRegisteredContent(openEditor, hostname) {
     // 印刷実績テーブル (usedLengthLog → ジョブID参照)
     if (analytics.usedLengthLog.length > 0) {
       const histFs = document.createElement("fieldset");
-      histFs.style.cssText = "border:1px solid #e5e7eb;border-radius:6px;padding:8px";
+      histFs.className = "analysis-fieldset";
       histFs.innerHTML = "<legend style='font-weight:bold;font-size:0.9em'>消費ログ (直近20件)</legend>";
       const htable = document.createElement("table");
       htable.style.cssText = "width:100%;font-size:0.85em";
@@ -1544,8 +1541,7 @@ function createHistoryContent() {
 
   const scrollWrap = document.createElement("div");
   scrollWrap.className = "scrollable-body";
-  scrollWrap.style.maxHeight = "30em";
-  scrollWrap.style.overflowY = "auto";
+  scrollWrap.className = "scroll-box";
   const table = document.createElement("table");
   table.className = "fixed-header sortable-table";
   const thead = document.createElement("thead");
@@ -1616,7 +1612,7 @@ function createHistoryContent() {
       const spoolTd = document.createElement("td");
       const sp = findSpool(u.spoolId);
       if (sp) {
-        const colorSwatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sp.filamentColor || sp.color || "#ccc"};vertical-align:middle;margin-right:3px;border:1px solid #aaa;"></span>`;
+        const colorSwatch = `<span class="color-swatch color-swatch-sm" style="background:${sp.filamentColor || sp.color || "#ccc"}"></span>`;
         spoolTd.innerHTML = `${formatSpoolDisplayId(sp)} ${colorSwatch}${sp.name || ""}`;
       } else {
         spoolTd.textContent = u.spoolId || "";
@@ -1742,7 +1738,7 @@ function createReportContent() {
 
   // ── 0) サマリカード ─────────────────────────────────
   const summaryDiv = document.createElement("div");
-  summaryDiv.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px";
+  summaryDiv.className = "summary-grid";
   const summaryItems = [
     { label: "総消費量", value: formatFilamentAmount(totalMm).display },
     { label: "推定総コスト", value: `${currency}${Math.round(totalCost).toLocaleString()}` },
@@ -1751,8 +1747,8 @@ function createReportContent() {
   ];
   for (const item of summaryItems) {
     const card = document.createElement("div");
-    card.style.cssText = "background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;text-align:center";
-    card.innerHTML = `<div style="font-size:0.8em;color:#64748b">${item.label}</div><div style="font-size:1.2em;font-weight:bold">${item.value}</div>`;
+    card.className = "summary-card";
+    card.innerHTML = `<div class="summary-card-label">${item.label}</div><div class="summary-card-value">${item.value}</div>`;
     summaryDiv.appendChild(card);
   }
   div.appendChild(summaryDiv);
@@ -1760,7 +1756,7 @@ function createReportContent() {
   // ── 1) 素材別内訳 ─────────────────────────────────
   if (Object.keys(materialMap).length > 0) {
     const matFs = document.createElement("fieldset");
-    matFs.style.cssText = "margin-bottom:12px;border:1px solid #e2e8f0;border-radius:6px;padding:8px";
+    matFs.className = "analysis-fieldset";
     matFs.innerHTML = "<legend style='font-weight:bold'>素材別内訳</legend>";
     const matTable = document.createElement("table");
     matTable.style.width = "100%";
@@ -1787,7 +1783,7 @@ function createReportContent() {
   });
   if (activeSpools.length > 0) {
     const predFs = document.createElement("fieldset");
-    predFs.style.cssText = "margin-bottom:12px;border:1px solid #e2e8f0;border-radius:6px;padding:8px";
+    predFs.className = "analysis-fieldset";
     predFs.innerHTML = "<legend style='font-weight:bold'>スプール消費予測</legend>";
     const predTable = document.createElement("table");
     predTable.style.width = "100%";
@@ -1833,11 +1829,11 @@ function createReportContent() {
 
   // ── 4) 週次・月次チャート ─────────────────
   const weekCanvas = document.createElement("canvas");
-  weekCanvas.style.maxHeight = "200px";
+  weekCanvas.className = "chart-constrained-lg";
   div.appendChild(weekCanvas);
 
   const monthCanvas = document.createElement("canvas");
-  monthCanvas.style.maxHeight = "200px";
+  monthCanvas.className = "chart-constrained-lg";
   div.appendChild(monthCanvas);
 
   if (typeof Chart !== "undefined") {
@@ -2326,7 +2322,7 @@ export function showFilamentManager(activeIdx = 0, hostname) {
   contents[SPOOL_LIST_IDX] = registered.el;
 
   const contentWrap = document.createElement("div");
-  contentWrap.style.cssText = "display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;";
+  contentWrap.className = "fm-content-wrap";
   modal.appendChild(tabBar);
   modal.appendChild(contentWrap);
 
