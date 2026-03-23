@@ -351,7 +351,7 @@ function _initializeFanControls(root, host) {
       const span = display.querySelector(".value");
       if (span) span.textContent = v;
     });
-    slider.addEventListener("mouseup", () => {
+    slider.addEventListener("change", () => {
       const pct = Number(slider.value);
       const s = Math.round(pct * 255 / 100);
       const cmd = `M106 P${p} S${s}`;

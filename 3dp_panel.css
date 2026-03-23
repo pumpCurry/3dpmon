@@ -61,7 +61,9 @@
   color: #fff;
   font-size: 16px;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 4px 8px;
+  min-width: 32px;
+  min-height: 32px;
   line-height: 1;
   opacity: 0.7;
   transition: opacity 0.2s;
@@ -77,9 +79,10 @@
 .panel-locked .panel-header { cursor: default; }
 .panel-lock-btn {
   background: none; border: none; font-size: 12px;
-  cursor: pointer; padding: 0 2px; opacity: 0.6;
+  cursor: pointer; padding: 4px 6px; opacity: 0.6;
+  min-width: 32px; min-height: 32px; /* タッチターゲット確保 */
 }
-.panel-lock-btn:hover { opacity: 1; }
+.panel-lock-btn:hover, .panel-lock-btn:active { opacity: 1; }
 
 /* ---------------------------------------------------------------
    パネルボディ（コンテンツ領域）
@@ -1252,11 +1255,12 @@ body.panel-mode .notification-container {
   background: transparent;
   border: 1px solid #ddd;
   border-radius: 3px;
-  padding: 1px 4px;
+  padding: 4px 8px;
   cursor: pointer;
   font-size: 13px;
   line-height: 1.2;
   transition: background 0.15s;
+  min-height: 28px;
 }
 .icon-btn:hover {
   background: #e8e8e8;
@@ -1297,7 +1301,8 @@ body.panel-mode .notification-container {
   vertical-align: top;
   font-size: 12px;
 }
-.sortable-table tr:hover td {
+.sortable-table tr:hover td,
+.sortable-table tr:active td {
   background: #f8f8ff;
 }
 /* 狭いカラム */

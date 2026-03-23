@@ -1168,18 +1168,23 @@ export function createFilamentPreview(mount, opts) {
     (function attachDrag() {
       let dragging = false, lastX=0, lastY=0;
       scene.style.cursor = 'grab';
-      scene.addEventListener('mousedown', e => {
+      scene.style.touchAction = 'none'; // タッチスクロールを抑制
+      scene.addEventListener('pointerdown', e => {
         dragging = true; lastX = e.clientX; lastY = e.clientY;
         scene.style.cursor = 'grabbing';
+        scene.setPointerCapture(e.pointerId);
       });
-      window.addEventListener('mousemove', e => {
+      scene.addEventListener('pointermove', e => {
         if (!dragging) return;
         const dx = e.clientX - lastX, dy = e.clientY - lastY;
         rotY += dx * 0.5; rotX -= dy * 0.5;
         lastX = e.clientX; lastY = e.clientY;
         redraw();
       });
-      window.addEventListener('mouseup', () => {
+      scene.addEventListener('pointerup', () => {
+        dragging = false; scene.style.cursor = 'grab';
+      });
+      scene.addEventListener('pointercancel', () => {
         dragging = false; scene.style.cursor = 'grab';
       });
     })();

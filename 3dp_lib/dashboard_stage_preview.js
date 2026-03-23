@@ -333,10 +333,20 @@ function initXYPreview(panelBody, hostname) {
   currentCircle.style.borderRadius = "50%";
   container.appendChild(currentCircle);
 
-  // ドラッグ回転
+  // ドラッグ回転 (PointerEvents でマウス+タッチ両対応)
   let dragging = false, lastX = 0, lastY = 0;
   container.style.cursor = "grab";
-  const onMouseMove = e => {
+  container.style.touchAction = "none";
+  container.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    container.style.cursor = "grabbing";
+    container.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+  });
+  container.addEventListener("pointermove", e => {
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
@@ -346,17 +356,13 @@ function initXYPreview(panelBody, hostname) {
     lastX = e.clientX;
     lastY = e.clientY;
     _applyStageTransform(s);
-  };
-  container.addEventListener("mousedown", e => {
-    e.preventDefault();
-    dragging = true;
-    lastX = e.clientX;
-    lastY = e.clientY;
-    container.style.cursor = "grabbing";
-    document.body.style.userSelect = "none";
   });
-  window.addEventListener("mousemove", onMouseMove);
-  window.addEventListener("mouseup", () => {
+  container.addEventListener("pointerup", () => {
+    dragging = false;
+    container.style.cursor = "grab";
+    document.body.style.userSelect = "";
+  });
+  container.addEventListener("pointercancel", () => {
     dragging = false;
     container.style.cursor = "grab";
     document.body.style.userSelect = "";

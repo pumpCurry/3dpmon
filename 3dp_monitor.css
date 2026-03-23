@@ -1096,7 +1096,8 @@ input:checked + .slider:before {
 .sortable-table tbody tr:nth-child(even) {
   background: #fff;
 }
-.sortable-table tbody tr:hover {
+.sortable-table tbody tr:hover,
+.sortable-table tbody tr:active {
   background: #f0f4ff;
 }
 
