@@ -325,9 +325,16 @@ function doImport(toast) {
         delete importData._exportVersion;
         delete importData._exportDate;
         delete importData._convertedFrom;
-        await importAllData(importData);
-        toast(`インポート完了 (${version} 形式)。ページを再読み込みします。`);
-        setTimeout(() => location.reload(), 800);
+        const stats = await importAllData(importData);
+        const parts = [];
+        if (stats.spools > 0) parts.push(`スプール ${stats.spools}件`);
+        if (stats.history > 0) parts.push(`使用履歴 ${stats.history}件`);
+        if (stats.presets > 0) parts.push(`プリセット ${stats.presets}件`);
+        if (stats.inventory > 0) parts.push(`在庫 ${stats.inventory}件`);
+        if (stats.machines > 0) parts.push(`印刷履歴 ${stats.machines}件`);
+        const summary = parts.length > 0 ? parts.join(", ") : "新規データなし";
+        toast(`マージインポート完了 (${version} 形式): ${summary}。ページを再読み込みします。`);
+        setTimeout(() => location.reload(), 1500);
       } catch (e) {
         console.error("[doImport]", e);
         toast("インポート失敗: 不正な JSON", true);

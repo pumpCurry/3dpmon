@@ -104,18 +104,151 @@ export async function exportAllData() {
 }
 
 /**
- * JSON オブジェクトから全データをインポートする（UI 用）。
+ * JSON オブジェクトから全データをマージインポートする（UI 用）。
+ *
+ * 既存データを削除せず、インポートデータの新規分のみ追加する。
+ * 同一IDのデータが存在する場合は新しい方を採用する。
  *
  * @param {Object} data - インポートするデータ
- * @returns {Promise<void>}
+ * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number }}
+ *          各カテゴリの追加件数
  */
 export async function importAllData(data) {
-  if (_idbInitialized) {
-    await importAllIdb(data);
-    return;
+  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0 };
+
+  // ── スプール: id ベースでマージ ──
+  if (Array.isArray(data.filamentSpools)) {
+    const existingIds = new Set(monitorData.filamentSpools.map(s => s.id));
+    for (const sp of data.filamentSpools) {
+      if (!sp.id) continue;
+      if (existingIds.has(sp.id)) {
+        // 既存スプール: 新しい方で更新 (startedAt が大きい = 新しい)
+        const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
+        if (existing && (sp.startedAt || 0) > (existing.startedAt || 0)) {
+          Object.assign(existing, sp);
+          stats.spools++;
+        }
+      } else {
+        applySpoolDefaults(sp);
+        monitorData.filamentSpools.push(sp);
+        existingIds.add(sp.id);
+        stats.spools++;
+      }
+    }
   }
-  // フォールバック: localStorage
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+
+  // ── 使用履歴: usageId ベースで重複排除追加 ──
+  if (Array.isArray(data.usageHistory)) {
+    const existingIds = new Set(
+      (monitorData.usageHistory || []).map(u => u.usageId)
+    );
+    for (const u of data.usageHistory) {
+      if (u.usageId && !existingIds.has(u.usageId)) {
+        monitorData.usageHistory.push(u);
+        existingIds.add(u.usageId);
+        stats.history++;
+      }
+    }
+    // 時系列順にソート
+    monitorData.usageHistory.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    trimUsageHistory();
+  }
+
+  // ── プリセット: presetId ベースで新規のみ追加 (ユーザー編集版を保持) ──
+  if (Array.isArray(data.filamentPresets)) {
+    const existingIds = new Set(
+      (monitorData.filamentPresets || []).map(p => p.presetId)
+    );
+    for (const p of data.filamentPresets) {
+      if (p.presetId && !existingIds.has(p.presetId)) {
+        monitorData.filamentPresets.push(p);
+        existingIds.add(p.presetId);
+        stats.presets++;
+      }
+    }
+  }
+
+  // ── 在庫: modelId ベースでマージ ──
+  if (Array.isArray(data.filamentInventory)) {
+    const existingMap = new Map(
+      (monitorData.filamentInventory || []).map(inv => [inv.modelId, inv])
+    );
+    for (const inv of data.filamentInventory) {
+      if (!inv.modelId) continue;
+      if (existingMap.has(inv.modelId)) {
+        // 既存: quantity は大きい方を採用
+        const existing = existingMap.get(inv.modelId);
+        if ((inv.quantity || 0) > (existing.quantity || 0)) {
+          existing.quantity = inv.quantity;
+          stats.inventory++;
+        }
+      } else {
+        monitorData.filamentInventory.push(inv);
+        existingMap.set(inv.modelId, inv);
+        stats.inventory++;
+      }
+    }
+  }
+
+  // ── spoolSerialCounter: 大きい方を採用 ──
+  if (typeof data.spoolSerialCounter === "number" &&
+      data.spoolSerialCounter > monitorData.spoolSerialCounter) {
+    monitorData.spoolSerialCounter = data.spoolSerialCounter;
+  }
+
+  // ── hostSpoolMap: 既存を保持、新規ホストのみ追加 ──
+  if (data.hostSpoolMap && typeof data.hostSpoolMap === "object") {
+    for (const [host, spoolId] of Object.entries(data.hostSpoolMap)) {
+      if (!(host in monitorData.hostSpoolMap)) {
+        monitorData.hostSpoolMap[host] = spoolId;
+      }
+    }
+  }
+
+  // ── machines: 印刷履歴をマージ ──
+  if (data.machines && typeof data.machines === "object") {
+    for (const [host, machineData] of Object.entries(data.machines)) {
+      if (!monitorData.machines[host]) {
+        // 新規ホスト: そのまま追加
+        monitorData.machines[host] = machineData;
+        stats.machines++;
+      } else {
+        // 既存ホスト: printStore.history をマージ
+        const existing = monitorData.machines[host];
+        if (Array.isArray(machineData.printStore?.history)) {
+          if (!existing.printStore) existing.printStore = {};
+          if (!Array.isArray(existing.printStore.history)) existing.printStore.history = [];
+          const existingJobIds = new Set(existing.printStore.history.map(j => j.id));
+          for (const job of machineData.printStore.history) {
+            if (job.id && !existingJobIds.has(job.id)) {
+              existing.printStore.history.push(job);
+              existingJobIds.add(job.id);
+              stats.machines++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── appSettings: インポートでは上書きしない (既存設定を保持) ──
+  // 接続先だけはマージ (新規のみ追加)
+  if (Array.isArray(data.appSettings?.connectionTargets)) {
+    const existingDests = new Set(
+      (monitorData.appSettings.connectionTargets || []).map(t => t.dest)
+    );
+    for (const t of data.appSettings.connectionTargets) {
+      if (t.dest && !existingDests.has(t.dest)) {
+        monitorData.appSettings.connectionTargets.push(t);
+        existingDests.add(t.dest);
+      }
+    }
+  }
+
+  // ── 保存 ──
+  saveUnifiedStorage(true);
+
+  return stats;
 }
 
 function applySpoolDefaults(sp) {
