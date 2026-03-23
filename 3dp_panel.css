@@ -1702,6 +1702,137 @@ body.panel-mode .notification-container {
   background: var(--color-bg-hover);
 }
 .btn-sm {
-  font-size: 12px;
-  padding: 2px 8px;
+  font-size: var(--font-sm);
+  padding: 2px var(--space-2);
+}
+
+/* ---------------------------------------------------------------
+   フィラメント交換ダイアログ (旧 injectStyles from filament_change.js)
+--------------------------------------------------------------- */
+.fc-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: var(--color-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+}
+.fc-dialog {
+  background: var(--color-modal-bg);
+  border-radius: var(--radius-md);
+  width: 90%; max-width: 800px;
+  height: 80vh; max-height: 700px;
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+}
+.fc-header {
+  font-weight: bold;
+  font-size: 1.2em;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+.fc-body {
+  padding: var(--space-2);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.fc-buttons {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  gap: var(--space-2);
+}
+.fc-buttons button {
+  padding: 6px var(--space-3);
+  font-size: var(--font-base);
+}
+.fc-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+.fc-search select,
+.fc-search input {
+  padding: 2px;
+  font-size: var(--font-sm);
+}
+.fc-search-field {
+  border: 1px solid var(--color-input-border);
+  border-radius: 6px;
+  padding: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+.fc-search-field legend {
+  font-size: var(--font-sm);
+}
+.fc-stock {
+  font-size: var(--font-sm);
+  text-align: center;
+  margin-top: var(--space-1);
+}
+.registered-container {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+.registered-preview {
+  flex: 0 0 120px;
+  min-width: 120px;
+  min-height: 120px;
+  overflow: hidden;
+}
+.fc-dialog .dfv-card {
+  border: none;
+  padding: 0;
+  display: block;
+  position: relative;
+  overflow: hidden;
+}
+.fc-dialog .dfv-controls { display: none !important; }
+.fc-dialog .dfv-scale-wrapper {
+  position: relative !important;
+  left: 0 !important;
+  transform: none !important;
+}
+.registered-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+.registered-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-sm);
+}
+.registered-table th,
+.registered-table td {
+  border-bottom: 1px solid var(--color-border-light);
+  padding: var(--space-1) 6px;
+}
+.registered-table th {
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+  background: var(--color-table-header);
+  z-index: var(--z-sticky);
+  font-size: var(--font-xs);
+  font-weight: bold;
+  white-space: nowrap;
+  border-bottom: 2px solid var(--color-border-strong);
+  user-select: none;
+}
+.registered-table th:hover {
+  background: var(--color-bg-hover);
+}
+.registered-table tr.selected {
+  background: var(--color-table-selected);
 }

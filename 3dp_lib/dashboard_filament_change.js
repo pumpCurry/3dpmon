@@ -40,35 +40,8 @@ let filamentChangeDialogOpen = false;
  * @returns {void}
  */
 function injectStyles() {
-  if (styleInjected) return;
-  styleInjected = true;
-  const css = `
-  .fc-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:3000;}
-  .fc-dialog{background:#fff;border-radius:8px;width:90%;max-width:800px;height:80vh;max-height:700px;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;}
-  .fc-header{font-weight:bold;font-size:1.2em;padding:8px;border-bottom:1px solid #ddd;}
-  .fc-body{padding:8px;flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
-  .fc-buttons{display:flex;justify-content:flex-end;padding:8px;border-top:1px solid #ddd;gap:8px;}
-  .fc-buttons button{padding:6px 12px;font-size:14px;}
-  .fc-search{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
-  .fc-search select,.fc-search input{padding:2px;font-size:12px;}
-  .fc-search-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
-  .fc-search-field legend{font-size:12px;}
-  .fc-stock{font-size:12px;text-align:center;margin-top:4px;}
-  .registered-container{display:flex;gap:8px;align-items:flex-start;}
-  .registered-preview{flex:0 0 120px;min-width:120px;min-height:120px;overflow:hidden;}
-  .fc-dialog .dfv-card{border:none;padding:0;display:block;position:relative;overflow:hidden;}
-  .fc-dialog .dfv-controls{display:none !important;}
-  .fc-dialog .dfv-scale-wrapper{position:relative !important;left:0 !important;transform:none !important;}
-  .registered-list{flex:1;overflow-y:auto;max-height:60vh;}
-  .registered-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}
-  .registered-table th,.registered-table td{border-bottom:1px solid #eee;padding:4px 6px;}
-  .registered-table th{cursor:pointer;position:sticky;top:0;background:#f0f0f0;z-index:10;font-size:11px;font-weight:bold;white-space:nowrap;border-bottom:2px solid #ccc;user-select:none;}
-  .registered-table th:hover{background:#e0e0e0;}
-  .registered-table tr.selected{background:#e0f2fe;}
-  `;
-  const style = document.createElement("style");
-  style.textContent = css;
-  document.head.appendChild(style);
+  // CSS は 3dp_panel.css に移行済み（Phase 1-C）
+  // この関数は後方互換性のために残す
 }
 
 /**
