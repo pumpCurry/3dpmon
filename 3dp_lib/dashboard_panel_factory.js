@@ -68,9 +68,15 @@ const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v4";
   } catch { /* ignore */ }
 })();
 // v3 → v4 マイグレーション: column 12→24 に伴い x, w を2倍化
+// v4 が空配列の場合も再マイグレーション (前回の起動順序バグで空保存された場合)
 (function migrateLayoutV3toV4() {
   const v3 = localStorage.getItem("3dpmon_panel_layout_v3");
-  if (!v3 || localStorage.getItem("3dpmon_panel_layout_v4")) return;
+  const v4existing = localStorage.getItem("3dpmon_panel_layout_v4");
+  if (!v3) return;
+  // v4 が既に存在し、中身がある場合はスキップ
+  if (v4existing) {
+    try { if (JSON.parse(v4existing).length > 0) return; } catch { /* 壊れたv4は再生成 */ }
+  }
   try {
     const layout = JSON.parse(v3);
     if (!Array.isArray(layout)) return;
