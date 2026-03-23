@@ -1318,9 +1318,9 @@ export function updatePrinterListUI() {
   // ── 従来のサイドバーステータスリスト更新 ──
   if (list) {
     list.innerHTML = printerInfos.map(info => {
-      return `<div class="printer-item" data-host="${info.host}" style="cursor:pointer; background:#f8f8f8; border:1px solid #ddd; padding:3px 6px; margin:2px 0; border-radius:4px; font-size:11px;">
+      return `<div class="printer-item conn-item" data-host="${info.host}">
         <div>${info.line1}</div>
-        <div style="color:#666; font-size:10px; margin-left:20px;">${info.line2}</div>
+        <div class="conn-item-sub">${info.line2}</div>
       </div>`;
     }).join("");
 
@@ -1339,7 +1339,7 @@ export function updatePrinterListUI() {
   if (topList) {
     topList.innerHTML = printerInfos.map(info => {
       const bg = info.state === "connected" ? "#555" : "#777";
-      return `<span class="printer-item" data-host="${info.host}" style="cursor:pointer; background:${bg}; color:#fff; padding:1px 6px; border-radius:3px; white-space:nowrap;">${info.stateIcon} ${info.host}</span>`;
+      return `<span class="printer-item conn-chip" data-host="${info.host}" style="background:${bg}">${info.stateIcon} ${info.host}</span>`;
     }).join("");
   }
 
@@ -1355,15 +1355,15 @@ export function updatePrinterListUI() {
       const whEnabled = tgt?.webhookEnabled !== false;
       const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || 8080;
       const httpPort = tgt?.httpPort || monitorData.appSettings.httpPort || 80;
-      return `<div class="printer-item" data-host="${info.host}" style="background:#f8f8f8; border:1px solid #ddd; padding:6px 10px; margin:4px 0; border-radius:6px;">
-        <div style="display:flex; align-items:center; gap:6px;">
-          <input type="color" class="conn-target-color" data-dest="${dest}" value="${color}" title="パネルバー色" style="width:24px; height:20px; border:1px solid #ccc; border-radius:3px; padding:0; cursor:pointer; flex-shrink:0;">
-          <span style="flex:1; font-size:13px;">${info.line1}</span>
-          <label title="Webhook 通知の ON/OFF" style="font-size:11px;white-space:nowrap;cursor:pointer;display:flex;align-items:center;gap:2px;color:#64748b;"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}>📡</label>
-          <button class="conn-target-edit" data-dest="${dest}" title="接続先設定を編集" style="background:#f0f4ff;border:1px solid #c0d0e0;font-size:11px;padding:2px 6px;border-radius:3px;cursor:pointer;">⚙</button>
-          <button class="conn-target-delete" data-dest="${dest}" data-host="${info.host}" title="切断・削除" style="background:#fef2f2;border:1px solid #fecaca;font-size:11px;padding:2px 6px;border-radius:3px;cursor:pointer;color:#dc2626;">✕</button>
+      return `<div class="printer-item conn-detail-item" data-host="${info.host}">
+        <div class="conn-detail-row">
+          <input type="color" class="conn-target-color conn-color-picker" data-dest="${dest}" value="${color}" title="パネルバー色">
+          <span class="conn-detail-name">${info.line1}</span>
+          <label class="conn-webhook-label" title="Webhook 通知の ON/OFF"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}>📡</label>
+          <button class="conn-target-edit conn-edit-btn" data-dest="${dest}" title="接続先設定を編集">⚙</button>
+          <button class="conn-target-delete conn-delete-btn" data-dest="${dest}" data-host="${info.host}" title="切断・削除">✕</button>
         </div>
-        <div style="color:#666; font-size:11px; margin-left:30px; margin-top:2px;">${info.line2} <span style="color:#94a3b8">cam:${cameraPort} http:${httpPort}</span></div>
+        <div class="conn-detail-sub">${info.line2} <span class="conn-ports">cam:${cameraPort} http:${httpPort}</span></div>
       </div>`;
     }).join("");
 
@@ -1374,12 +1374,12 @@ export function updatePrinterListUI() {
       if (!connectedDests.has(t.dest)) {
         const savedColor = t.color || "#444444";
         const savedLabel = t.hostname ? ` (${t.hostname})` : "";
-        listHtml += `<div style="background:#f8f8f8; border:1px solid #e2e8f0; padding:6px 10px; margin:4px 0; border-radius:6px; opacity:0.7;">
-          <div style="display:flex; align-items:center; gap:6px; color:#64748b;">
-            <input type="color" class="conn-target-color" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色" style="width:24px; height:20px; border:1px solid #ccc; border-radius:3px; padding:0; cursor:pointer; flex-shrink:0;">
-            <span style="flex:1; font-size:13px;">⬜ ${t.dest}${savedLabel} (未接続)</span>
-            <button class="conn-target-reconnect" data-dest="${t.dest}" title="再接続" style="background:#3b82f6; color:#fff; border:none; font-size:11px; padding:3px 10px; border-radius:3px; cursor:pointer;">接続</button>
-            <button class="conn-target-delete" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除" style="background:#fef2f2;border:1px solid #fecaca;font-size:11px;padding:2px 6px;border-radius:3px;cursor:pointer;color:#dc2626;">✕</button>
+        listHtml += `<div class="conn-detail-item disconnected">
+          <div class="conn-detail-row">
+            <input type="color" class="conn-target-color conn-color-picker" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色">
+            <span class="conn-detail-name">⬜ ${t.dest}${savedLabel} (未接続)</span>
+            <button class="conn-target-reconnect conn-reconnect-btn" data-dest="${t.dest}" title="再接続">接続</button>
+            <button class="conn-target-delete conn-delete-btn" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除">✕</button>
           </div>
         </div>`;
       }
@@ -1464,13 +1464,13 @@ export function updatePrinterListUI() {
           level: "info",
           title: `接続先設定: ${dest}`,
           html: `
-            <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center;font-size:13px">
+            <div class="conn-edit-grid">
               <label>表示名:</label>
-              <input type="text" id="edit-label" value="${currentLabel}" style="padding:4px;border:1px solid #ccc;border-radius:3px">
+              <input type="text" id="edit-label" value="${currentLabel}">
               <label>カメラポート:</label>
-              <input type="number" id="edit-cam-port" value="${currentCam}" min="1" max="65535" style="padding:4px;border:1px solid #ccc;border-radius:3px;width:6em">
+              <input type="number" id="edit-cam-port" value="${currentCam}" min="1" max="65535">
               <label>HTTPポート:</label>
-              <input type="number" id="edit-http-port" value="${currentHttp}" min="1" max="65535" style="padding:4px;border:1px solid #ccc;border-radius:3px;width:6em">
+              <input type="number" id="edit-http-port" value="${currentHttp}" min="1" max="65535">
             </div>`,
           confirmText: "保存",
           cancelText: "キャンセル"

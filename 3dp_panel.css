@@ -2085,3 +2085,121 @@ body.panel-mode .notification-container {
   display: flex; justify-content: flex-end; gap: var(--space-2);
 }
 .spool-dialog-buttons button { padding: 6px var(--space-3); font-size: var(--font-base); }
+
+/* ---------------------------------------------------------------
+   接続設定モーダル: プリンタ一覧アイテム (Phase 1-D)
+--------------------------------------------------------------- */
+/* リスト表示（接続先リスト内のプリンタ行） */
+.conn-item {
+  cursor: pointer;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  padding: 3px 6px;
+  margin: 2px 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+}
+.conn-item-sub {
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  margin-left: 20px;
+}
+/* コンパクト表示（トップバー内の接続状態チップ） */
+.conn-chip {
+  cursor: pointer;
+  color: var(--color-text-inverse);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+/* 詳細編集ビュー */
+.conn-detail-item {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  margin: var(--space-1) 0;
+  border-radius: 6px;
+}
+.conn-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.conn-detail-name {
+  flex: 1;
+  font-size: var(--font-sm);
+}
+.conn-detail-sub {
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  margin-left: 30px;
+  margin-top: 2px;
+}
+.conn-detail-sub .conn-ports {
+  color: var(--color-text-muted);
+}
+.conn-color-picker {
+  width: 24px; height: 20px;
+  border: 1px solid var(--color-input-border);
+  border-radius: 3px;
+  padding: 0; cursor: pointer; flex-shrink: 0;
+}
+.conn-webhook-label {
+  font-size: var(--font-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--color-text-muted);
+}
+.conn-edit-btn {
+  background: var(--color-accent-light);
+  border: 1px solid var(--color-border);
+  font-size: var(--font-xs);
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.conn-delete-btn {
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-bg);
+  font-size: var(--font-xs);
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--color-danger-hover);
+}
+.conn-reconnect-btn {
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  border: none;
+  font-size: var(--font-xs);
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+/* 未接続アイテム */
+.conn-detail-item.disconnected {
+  opacity: 0.7;
+}
+.conn-detail-item.disconnected .conn-detail-row {
+  color: var(--color-text-muted);
+}
+/* 接続先編集グリッド */
+.conn-edit-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  align-items: center;
+  font-size: var(--font-sm);
+}
+.conn-edit-grid input[type="text"],
+.conn-edit-grid input[type="number"] {
+  padding: var(--space-1);
+  border: 1px solid var(--color-input-border);
+  border-radius: 3px;
+}
+.conn-edit-grid input[type="number"] {
+  width: 6em;
+}
