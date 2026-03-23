@@ -1224,7 +1224,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     if (!drilldown) {
       drilldown = document.createElement("div");
       drilldown.className = "job-drilldown";
-      drilldown.style.cssText = "display:none;margin-top:8px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#fafbfc";
+      drilldown.classList.add("pm-drilldown");
       tableParent.appendChild(drilldown);
     }
 
@@ -1265,19 +1265,19 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
 
   // ヘッダー
   const hdr = document.createElement("div");
-  hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px";
+  hdr.className = "pm-drilldown-header";
   const thumbUrl = makeThumbUrl(baseUrl, raw.rawFilename || raw.filename);
-  hdr.innerHTML = `<div style="display:flex;gap:8px;align-items:center"><img src="${thumbUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:4px" onerror="this.style.display='none'"><div><strong>${filename}</strong><br><span style="color:#64748b;font-size:0.85em">${raw.printfinish === 1 ? "✔ 成功" : raw.printfinish === 0 ? "✗ 失敗" : "— 不明"}</span></div></div>`;
+  hdr.innerHTML = `<div class="flex-row"><img src="${thumbUrl}" class="pm-thumb" onerror="this.style.display='none'"><div><strong>${filename}</strong><br><span class="text-secondary-xs">${raw.printfinish === 1 ? "✔ 成功" : raw.printfinish === 0 ? "✗ 失敗" : "— 不明"}</span></div></div>`;
   const closeBtn = document.createElement("button");
   closeBtn.textContent = "×";
-  closeBtn.style.cssText = "border:none;background:none;font-size:18px;cursor:pointer;color:#94a3b8";
+  closeBtn.className = "drilldown-close";
   closeBtn.addEventListener("click", () => { container.style.display = "none"; });
   hdr.appendChild(closeBtn);
   container.appendChild(hdr);
 
   // カード群
   const cards = document.createElement("div");
-  cards.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;margin-bottom:10px";
+  cards.className = "stat-cards";
 
   // 時間内訳
   const startSec = raw.starttime ? Number(raw.starttime) : 0;
@@ -1289,8 +1289,8 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
 
   const addCard = (label, value, sub) => {
     const card = document.createElement("div");
-    card.style.cssText = "background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:6px;text-align:center";
-    card.innerHTML = `<div style="font-size:0.75em;color:#64748b">${label}</div><div style="font-weight:bold">${value}</div>${sub ? `<div style="font-size:0.75em;color:#94a3b8">${sub}</div>` : ""}`;
+    card.className = "stat-card";
+    card.innerHTML = `<div class="stat-card-label">${label}</div><div class="stat-card-value">${value}</div>${sub ? `<div class="stat-card-sub">${sub}</div>` : ""}`;
     cards.appendChild(card);
   };
 
@@ -1319,7 +1319,7 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   const insight = buildFileInsight(raw.rawFilename || raw.filename, hostname);
   if (insight && insight.printCount > 1) {
     const compFs = document.createElement("fieldset");
-    compFs.style.cssText = "border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-bottom:8px";
+    compFs.className = "pm-compare-fieldset";
     const rate = (insight.successRate * 100).toFixed(0);
     const avgFmt = formatFilamentAmount(insight.avgMaterialMm, spool);
     compFs.innerHTML = `<legend style="font-weight:bold;font-size:0.9em">このファイルの実績 (${hostname})</legend>` +
