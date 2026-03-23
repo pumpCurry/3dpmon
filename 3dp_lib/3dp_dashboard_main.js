@@ -31,6 +31,7 @@ import { audioManager } from "./dashboard_audio_manager.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 
 import { initStorageUI } from "./dashboard_storage_ui.js";
+import { bootPanelSystem } from "./dashboard_panel_boot.js";
 // 以下2モジュールは DOMContentLoaded 後の UI 初期化で使用するため
 // 副作用目的で読み込む
 import "./dashboard_spool_ui.js";
@@ -62,9 +63,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // ストレージ復元完了後にパネルシステムを起動
   // (restoreLayout が connectionTargets を参照するため、先にストレージ復元が必要)
-  if (typeof window._bootPanelSystem === "function") {
-    window._bootPanelSystem();
-  }
+  bootPanelSystem();
 
   initStorageUI();
 });
