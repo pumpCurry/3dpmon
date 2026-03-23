@@ -74,11 +74,11 @@ const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v4";
   try {
     const layout = JSON.parse(v3);
     if (!Array.isArray(layout)) return;
-    const migrated = layout.map(item => ({
-      ...item,
-      x: (item.x || 0) * 2,
-      w: (item.w || 4) * 2
-    }));
+    const migrated = layout.map(item => {
+      const newX = (item.x || 0) * 2;
+      const newW = Math.min((item.w || 4) * 2, 24);
+      return { ...item, x: Math.min(newX, 24 - newW), w: newW };
+    });
     localStorage.setItem("3dpmon_panel_layout_v4", JSON.stringify(migrated));
     console.info("[layout] v3→v4 マイグレーション完了 (column 12→24)");
   } catch { /* ignore */ }
