@@ -524,6 +524,8 @@ export function removePanelsForHost(hostname) {
     grid.removeWidget(entry.widget);
     activePanels.delete(id);
   }
+  return toRemove.length;
+}
 
 /** グローバルレイアウトロック状態 */
 let _globalLocked = false;
