@@ -577,9 +577,15 @@ export function restoreLayout() {
       }
     }
 
-    /* 接続先が無い場合はレイアウト復元をスキップ
-       （次回接続時に ensureHostPanels で自動生成される） */
-    if (validHosts.size === 0) return false;
+    /* validHosts が空でもレイアウトデータ内のホスト名を有効とみなす
+       （レイアウトに保存されている = 過去に接続した実績がある） */
+    if (validHosts.size === 0) {
+      for (const item of layout) {
+        if (item.host && item.host !== "shared") validHosts.add(item.host);
+      }
+      if (validHosts.size === 0) return false;
+      console.info("[restoreLayout] connectionTargets/machines が空のため、レイアウトデータからホストを復元:", [...validHosts]);
+    }
 
     /* 既存パネルをすべて削除（data-field キャッシュも解除） */
     for (const [, entry] of activePanels) {
