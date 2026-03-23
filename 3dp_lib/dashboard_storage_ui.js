@@ -109,10 +109,16 @@ export function initStorageUI() {
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 
-  elPanel?.addEventListener("toggle", () => {
-    if (elPanel.open) startLiveUsage();
-    else               stopLiveUsage();
-  });
+  // サブモーダル開閉時に使用量を更新
+  // (旧 <details> の toggle イベントから MutationObserver に変更)
+  const storageOverlay = document.getElementById("storage-modal-overlay");
+  if (storageOverlay) {
+    const obs = new MutationObserver(() => {
+      if (storageOverlay.classList.contains("open")) { startLiveUsage(); updateUsage(); }
+      else stopLiveUsage();
+    });
+    obs.observe(storageOverlay, { attributes: true, attributeFilter: ["class"] });
+  }
 
   window.addEventListener("storage:sync", (ev) => {
     updateSyncTime(ev.detail.when);
