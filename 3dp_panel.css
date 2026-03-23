@@ -1836,3 +1836,252 @@ body.panel-mode .notification-container {
 .registered-table tr.selected {
   background: var(--color-table-selected);
 }
+
+/* ---------------------------------------------------------------
+   フィラメント管理モーダル (旧 injectStyles from filament_manager.js)
+--------------------------------------------------------------- */
+.filament-manager-overlay {
+  position: fixed; top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: var(--color-overlay);
+  display: flex; align-items: center; justify-content: center;
+  z-index: var(--z-modal);
+}
+.filament-manager-modal {
+  background: var(--color-modal-bg);
+  border-radius: var(--radius-md);
+  width: 92%; max-width: 960px; height: 85vh;
+  box-shadow: var(--shadow-modal);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.filament-manager-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.filament-manager-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.filament-manager-tabs button {
+  flex: 1; padding: 6px;
+  border: none; background: var(--color-bg-tertiary);
+  cursor: pointer; font-size: var(--font-sm); white-space: nowrap;
+}
+.filament-manager-tabs button.active {
+  background: var(--color-bg-primary);
+  border-bottom: 2px solid var(--color-accent);
+}
+.filament-manager-content {
+  padding: var(--space-2); overflow-y: auto;
+  flex: 1; min-height: 0;
+}
+.filament-manager-content table {
+  width: 100%; border-collapse: collapse;
+}
+.filament-manager-content th,
+.filament-manager-content td {
+  border: 1px solid var(--color-border);
+  padding: var(--space-1); font-size: var(--font-sm);
+}
+.filament-manager-content .inv-qty-input { width: 60px; text-align: right; }
+.filament-manager-content .inv-adjust { margin: 0 2px; padding: 0 var(--space-1); }
+.filament-manager-content .search-form {
+  display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-1);
+}
+.filament-manager-content .search-form select,
+.filament-manager-content .search-form input {
+  padding: 2px; font-size: var(--font-sm);
+}
+.filament-manager-content .search-field {
+  border: 1px solid var(--color-input-border);
+  border-radius: 6px; padding: var(--space-1); margin-bottom: var(--space-1);
+}
+.filament-manager-content .search-field legend { font-size: var(--font-sm); }
+.deleted-row td {
+  text-decoration: line-through; background: var(--color-bg-tertiary);
+}
+.edit-form label { display: block; margin: var(--space-1) 0; font-size: var(--font-sm); }
+.edit-form input, .edit-form select {
+  width: 100%; box-sizing: border-box; font-size: var(--font-sm); padding: 2px;
+}
+.edit-buttons {
+  display: flex; justify-content: flex-end;
+  gap: var(--space-2); margin-top: var(--space-2);
+}
+.carousel-field {
+  border: 1px solid var(--color-input-border);
+  border-radius: 6px; padding: var(--space-1); margin-bottom: var(--space-1);
+}
+.carousel-field legend { font-size: var(--font-sm); }
+.filament-carousel {
+  display: flex; overflow-x: auto;
+  gap: var(--space-2); padding: var(--space-1) 0; min-height: 100px;
+}
+.filament-carousel .carousel-item {
+  flex: 0 0 auto; position: relative;
+  width: 80px; height: 80px; min-width: 80px; min-height: 80px;
+  overflow: hidden;
+}
+/* --- スプール状態バッジ --- */
+.spool-state-badge {
+  display: inline-block; padding: 1px 6px;
+  border-radius: var(--radius-full); font-size: var(--font-xs);
+  font-weight: bold; line-height: 1.4;
+}
+.spool-state-mounted   { background: var(--color-badge-mounted);   color: #166534; }
+.spool-state-stored    { background: var(--color-badge-discarded); color: #4b5563; }
+.spool-state-exhausted { background: var(--color-badge-stored);    color: #92400e; }
+.spool-state-discarded { background: var(--color-badge-exhausted); color: #991b1b; text-decoration: line-through; }
+.spool-state-inventory { background: var(--color-badge-inventory); color: #1e40af; }
+/* --- 残量バー --- */
+.remain-bar {
+  display: inline-block; width: 60px; height: 10px;
+  background: var(--color-bg-tertiary); border-radius: 5px;
+  overflow: hidden; vertical-align: middle; margin-right: var(--space-1);
+}
+.remain-bar-fill { height: 100%; border-radius: 5px; }
+/* --- ダッシュボードタブ: ホストセクション --- */
+.dashboard-host-section {
+  border: 1px solid var(--color-border);
+  border-radius: 6px; padding: var(--space-2); margin-bottom: var(--space-2);
+}
+.dashboard-host-title {
+  font-weight: bold; font-size: var(--font-sm); margin-bottom: var(--space-1);
+}
+.stored-carousel {
+  display: flex; overflow-x: auto;
+  gap: var(--space-2); padding: var(--space-1) 0; min-height: 90px;
+}
+.stored-carousel .stored-item {
+  flex: 0 0 auto; border: 1px solid var(--color-border);
+  border-radius: 6px; padding: 6px; text-align: center;
+  font-size: var(--font-xs); cursor: pointer; position: relative;
+  min-width: 70px; overflow: hidden;
+}
+.stored-carousel .stored-item:hover { background: var(--color-table-hover); }
+.dashboard-summary {
+  display: flex; gap: var(--space-3); margin-bottom: var(--space-2);
+  font-size: var(--font-sm);
+}
+.dashboard-summary span {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm); background: var(--color-bg-tertiary);
+}
+/* --- 状態フィルタバー --- */
+.state-filter-bar {
+  display: flex; gap: var(--space-1); margin-bottom: 6px;
+}
+.state-filter-bar button {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-sm); background: var(--color-bg-tertiary);
+  cursor: pointer; font-size: var(--font-xs);
+}
+.state-filter-bar button.active {
+  background: var(--color-accent); color: var(--color-text-inverse);
+  border-color: var(--color-accent);
+}
+.filament-manager-content button { white-space: nowrap; }
+.filament-manager-content td button {
+  margin: 1px; padding: 1px var(--space-1); font-size: var(--font-xs);
+}
+
+/* ---------------------------------------------------------------
+   確認/入力ダイアログ (旧 injectStyles from ui_confirm.js)
+--------------------------------------------------------------- */
+.confirm-overlay {
+  position: fixed; top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: var(--color-overlay);
+  display: flex; align-items: center; justify-content: center;
+  /* z-index は生成時に動的設定 */
+}
+.confirm-dialog {
+  background: var(--color-modal-bg);
+  border-radius: var(--radius-md);
+  width: 90%; max-width: 400px;
+  box-shadow: var(--shadow-modal);
+  display: flex; flex-direction: column;
+}
+.confirm-header {
+  display: flex; align-items: center; padding: var(--space-4);
+}
+.confirm-icon  { font-size: var(--font-2xl); margin-right: var(--space-2); }
+.confirm-title { font-size: var(--font-xl); font-weight: bold; }
+.confirm-body  { padding: 0 var(--space-4) var(--space-4); font-size: var(--font-base); line-height: 1.5; }
+.confirm-buttons {
+  display: flex; border-top: 1px solid var(--color-border-light);
+}
+.confirm-button {
+  flex: 1; padding: var(--space-3) 0; font-size: var(--font-lg);
+  border: none; background: none; cursor: pointer;
+}
+.confirm-destructive { font-weight: bold; }
+.confirm-safe        { font-weight: normal; }
+/* --- 入力ダイアログ --- */
+.input-dialog-overlay {
+  position: fixed; top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: var(--color-overlay);
+  display: flex; align-items: center; justify-content: center;
+}
+.input-dialog {
+  background: var(--color-modal-bg);
+  border-radius: var(--radius-md);
+  width: 90%; max-width: 400px;
+  box-shadow: var(--shadow-modal);
+  display: flex; flex-direction: column;
+}
+.input-dialog-header {
+  display: flex; align-items: center; padding: var(--space-4);
+}
+.input-dialog-header .icon  { font-size: var(--font-2xl); margin-right: var(--space-2); }
+.input-dialog-header .title { font-size: var(--font-xl); font-weight: bold; }
+.input-dialog-body {
+  padding: 0 var(--space-4) var(--space-4);
+  font-size: var(--font-base); line-height: 1.5;
+}
+.input-dialog-body input,
+.input-dialog-body textarea {
+  width: 100%; box-sizing: border-box;
+  margin-top: var(--space-2); padding: var(--space-2);
+  font-size: var(--font-base); font-family: inherit;
+}
+.input-dialog-buttons {
+  display: flex; border-top: 1px solid var(--color-border-light);
+}
+.input-dialog-buttons .btn {
+  flex: 1; padding: var(--space-3) 0; font-size: var(--font-lg);
+  border: none; background: none; cursor: pointer;
+}
+.btn-primary   { font-weight: bold; }
+.btn-secondary { font-weight: normal; }
+
+/* ---------------------------------------------------------------
+   スプール編集ダイアログ (旧 injectStyles from spool_ui.js)
+--------------------------------------------------------------- */
+.spool-dialog-overlay {
+  position: fixed; top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: var(--color-overlay);
+  display: flex; align-items: center; justify-content: center;
+  z-index: var(--z-modal);
+}
+.spool-dialog {
+  background: var(--color-modal-bg);
+  border-radius: var(--radius-md);
+  width: 90%; max-width: 400px;
+  box-shadow: var(--shadow-modal);
+  padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-2);
+}
+.spool-dialog h3 { margin: 0; font-size: 1.2em; }
+.spool-dialog label { font-size: var(--font-base); display: flex; flex-direction: column; }
+.spool-dialog input { padding: 6px; font-size: var(--font-base); }
+.spool-dialog-buttons {
+  display: flex; justify-content: flex-end; gap: var(--space-2);
+}
+.spool-dialog-buttons button { padding: 6px var(--space-3); font-size: var(--font-base); }

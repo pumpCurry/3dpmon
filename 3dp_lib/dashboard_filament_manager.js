@@ -151,65 +151,8 @@ const DEFAULT_PREVIEW_OPTIONS = {
  * @returns {void}
  */
 function injectStyles() {
-  if (styleInjected) return;
-  styleInjected = true;
-  const css = `
-    .filament-manager-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:3000;}
-    .filament-manager-modal{background:#fff;border-radius:8px;width:92%;max-width:960px;height:85vh;box-shadow:0 2px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;overflow:hidden;}
-    .filament-manager-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #ddd;flex-shrink:0;}
-    .filament-manager-tabs{display:flex;border-bottom:1px solid #ddd;flex-shrink:0;}
-    .filament-manager-tabs button{flex:1;padding:6px;border:none;background:#f4f4f5;cursor:pointer;font-size:12px;white-space:nowrap;}
-    .filament-manager-tabs button.active{background:#fff;border-bottom:2px solid #38bdf8;}
-    .filament-manager-content{padding:8px;overflow-y:auto;flex:1;min-height:0;}
-    .filament-manager-content table{width:100%;border-collapse:collapse;}
-    .filament-manager-content th,.filament-manager-content td{border:1px solid #ddd;padding:4px;font-size:12px;}
-    .filament-manager-content .inv-qty-input{width:60px;text-align:right;}
-    .filament-manager-content .inv-adjust{margin:0 2px;padding:0 4px;}
-    .filament-manager-content .search-form{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
-    .filament-manager-content .search-form select,
-    .filament-manager-content .search-form input{padding:2px;font-size:12px;}
-    .filament-manager-content .search-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
-    .filament-manager-content .search-field legend{font-size:12px;}
-    .registered-table tr.selected{background:#e0f2fe;}
-    .registered-container{display:flex;gap:8px;align-items:flex-start;flex:1;min-height:0;overflow:hidden;}
-    .registered-preview{flex:0 0 140px;min-width:140px;min-height:140px;position:relative;overflow:hidden;}
-    .filament-manager-modal .dfv-card{border:none;padding:0;display:block;position:relative;overflow:hidden;}
-    .filament-manager-modal .dfv-controls{display:none !important;}
-    .filament-manager-modal .dfv-scale-wrapper{position:relative !important;left:0 !important;transform:none !important;}
-    .registered-list{flex:1;overflow-y:auto;min-height:0;}
-    .registered-table th{cursor:pointer;}
-    .deleted-row td{text-decoration:line-through;background:#eee;}
-    .edit-form label{display:block;margin:4px 0;font-size:12px;}
-    .edit-form input,.edit-form select{width:100%;box-sizing:border-box;font-size:12px;padding:2px;}
-    .edit-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}
-    .carousel-field{border:1px solid #ccc;border-radius:6px;padding:4px;margin-bottom:4px;}
-    .carousel-field legend{font-size:12px;}
-    .filament-carousel{display:flex;overflow-x:auto;gap:8px;padding:4px 0;min-height:100px;}
-    .filament-carousel .carousel-item{flex:0 0 auto;position:relative;width:80px;height:80px;min-width:80px;min-height:80px;overflow:hidden;}
-    .spool-state-badge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:bold;line-height:1.4;}
-    .spool-state-mounted{background:#dcfce7;color:#166534;}
-    .spool-state-stored{background:#f3f4f6;color:#4b5563;}
-    .spool-state-exhausted{background:#fef3c7;color:#92400e;}
-    .spool-state-discarded{background:#fee2e2;color:#991b1b;text-decoration:line-through;}
-    .spool-state-inventory{background:#dbeafe;color:#1e40af;}
-    .remain-bar{display:inline-block;width:60px;height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;vertical-align:middle;margin-right:4px;}
-    .remain-bar-fill{height:100%;border-radius:5px;}
-    .dashboard-host-section{border:1px solid #ddd;border-radius:6px;padding:8px;margin-bottom:8px;}
-    .dashboard-host-title{font-weight:bold;font-size:13px;margin-bottom:4px;}
-    .stored-carousel{display:flex;overflow-x:auto;gap:8px;padding:4px 0;min-height:90px;}
-    .stored-carousel .stored-item{flex:0 0 auto;border:1px solid #ddd;border-radius:6px;padding:6px;text-align:center;font-size:11px;cursor:pointer;position:relative;min-width:70px;overflow:hidden;}
-    .stored-carousel .stored-item:hover{background:#f0f9ff;}
-    .dashboard-summary{display:flex;gap:12px;margin-bottom:8px;font-size:12px;}
-    .dashboard-summary span{padding:2px 8px;border-radius:4px;background:#f4f4f5;}
-    .state-filter-bar{display:flex;gap:4px;margin-bottom:6px;}
-    .state-filter-bar button{padding:2px 8px;border:1px solid #ccc;border-radius:4px;background:#f4f4f5;cursor:pointer;font-size:11px;}
-    .state-filter-bar button.active{background:#38bdf8;color:#fff;border-color:#38bdf8;}
-    .filament-manager-content button{white-space:nowrap;}
-    .filament-manager-content td button{margin:1px;padding:1px 4px;font-size:11px;}
-  `;
-  const style = document.createElement("style");
-  style.textContent = css;
-  document.head.appendChild(style);
+  // CSS は 3dp_panel.css に移行済み（Phase 1-C）
+  // この関数は後方互換性のために残す
 }
 
 /**

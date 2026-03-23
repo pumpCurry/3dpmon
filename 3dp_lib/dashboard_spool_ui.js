@@ -28,28 +28,8 @@ import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 let styleInjected = false;
 function injectStyles() {
-  if (styleInjected) return;
-  styleInjected = true;
-  const css = `
-.spool-dialog-overlay {
-  position: fixed; top:0; left:0; width:100vw; height:100vh;
-  background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center; z-index:2000;
-}
-.spool-dialog {
-  background:#fff; border-radius:8px; width:90%; max-width:400px;
-  box-shadow:0 2px 12px rgba(0,0,0,0.4); padding:16px;
-  display:flex; flex-direction:column; gap:8px;
-}
-.spool-dialog h3 { margin:0; font-size:1.2em; }
-.spool-dialog label { font-size:14px; display:flex; flex-direction:column; }
-.spool-dialog input { padding:6px; font-size:14px; }
-.spool-dialog-buttons { display:flex; justify-content:flex-end; gap:8px; }
-.spool-dialog-buttons button { padding:6px 12px; font-size:14px; }
-`;
-  const style = document.createElement("style");
-  style.textContent = css;
-  document.head.appendChild(style);
+  // CSS は 3dp_panel.css に移行済み（Phase 1-C）
+  // この関数は後方互換性のために残す
 }
 
 function showSpoolDialog({ title = "", spool = {} }) {

@@ -45,76 +45,8 @@ let styleInjected = false;
 let _zIndexCounter = 5000;
 /** 最初の呼び出し時に必要な CSS を document.head に注入 */
 function injectStyles() {
-  if (styleInjected) return;
-  styleInjected = true;
-  const css = `
-/* ---------- Confirm Dialog ---------- */
-.confirm-overlay {
-  position: fixed; top:0; left:0; width:100vw; height:100vh;
-  background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center;
-  /* z-index は生成時に動的設定 */
-}
-.confirm-dialog {
-  background:#fff; border-radius:8px; width:90%; max-width:400px;
-  box-shadow:0 2px 12px rgba(0,0,0,0.4);
-  display:flex; flex-direction:column;
-}
-.confirm-header {
-  display:flex; align-items:center; padding:16px;
-}
-.confirm-icon { font-size:24px; margin-right:8px; }
-.confirm-title{ font-size:18px; font-weight:bold; }
-.confirm-body { padding:0 16px 16px; font-size:14px; line-height:1.5; }
-.confirm-buttons {
-  display:flex; border-top:1px solid #eee;
-}
-.confirm-button {
-  flex:1; padding:12px 0; font-size:16px;
-  border:none; background:none; cursor:pointer;
-}
-.confirm-destructive { font-weight:bold; }
-.confirm-safe      { font-weight:normal; }
-
-/* ---------- Input Dialog ---------- */
-.input-dialog-overlay {
-  position: fixed; top:0; left:0; width:100vw; height:100vh;
-  background: rgba(0,0,0,0.5); display:flex;
-  align-items:center; justify-content:center;
-  /* z-index は生成時に動的設定 */
-}
-.input-dialog {
-  background:#fff; border-radius:8px; width:90%; max-width:400px;
-  box-shadow:0 2px 12px rgba(0,0,0,0.4);
-  display:flex; flex-direction:column;
-}
-.input-dialog-header {
-  display:flex; align-items:center; padding:16px;
-}
-.input-dialog-header .icon { font-size:24px; margin-right:8px; }
-.input-dialog-header .title{ font-size:18px; font-weight:bold; }
-.input-dialog-body {
-  padding:0 16px 16px; font-size:14px; line-height:1.5;
-}
-.input-dialog-body input,
-.input-dialog-body textarea {
-  width:100%; box-sizing:border-box;
-  margin-top:8px; padding:8px; font-size:14px;
-  font-family: inherit;
-}
-.input-dialog-buttons {
-  display:flex; border-top:1px solid #eee;
-}
-.input-dialog-buttons .btn {
-  flex:1; padding:12px 0; font-size:16px;
-  border:none; background:none; cursor:pointer;
-}
-.btn-primary  { font-weight:bold; }
-.btn-secondary{ font-weight:normal; }
-`;
-  const style = document.createElement("style");
-  style.textContent = css;
-  document.head.appendChild(style);
+  // CSS は 3dp_panel.css に移行済み（Phase 1-C）
+  // この関数は後方互換性のために残す
 }
 
 
