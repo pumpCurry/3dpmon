@@ -671,22 +671,28 @@ function aggregateTimersAndPredictions(vals, hostname) {
   const progPct = prog / 100;
 
   // ---- 完了後経過タイマーの復元処理 ------------------------------
-  if (s.tsCompleteStart === null) {
-    const last = machine?.historyData?.[machine.historyData.length - 1];
+  // tsCompleteStart が永続化から復元済みなら、finishTime からの経過秒を即座に算出
+  if (s.tsCompleteStart != null) {
+    _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
+  } else {
+    // tsCompleteStart が null の場合、historyData または printStore.history から復元
+    const historyData = machine?.historyData || [];
+    const persistedHistory = machine?.printStore?.history || [];
+    const last = historyData[historyData.length - 1]
+      || (s.prevPrintID != null
+        ? persistedHistory.find(j => Number(j.id) === Number(s.prevPrintID))
+        : null);
     if (
       last &&
       s.prevPrintID !== null &&
       Number(last.id) === Number(s.prevPrintID) &&
-      last.finishTime
+      (last.finishTime || last.endtime)
     ) {
-      const fin = Date.parse(last.finishTime);
+      const finStr = last.finishTime || (last.endtime ? new Date(Number(last.endtime) * 1000).toISOString() : null);
+      const fin = finStr ? Date.parse(finStr) : NaN;
       if (!isNaN(fin)) {
         s.tsCompleteStart = fin;
-        _set(
-          "completionElapsedTime",
-          Math.floor((nowMs - fin) / 1000),
-          true
-        );
+        _set("completionElapsedTime", Math.floor((nowMs - fin) / 1000), true);
       }
     }
   }
@@ -1310,7 +1316,12 @@ export function restoreAggregatorState(hostname) {
     if (k === "totalPrepSec")      field = "preparationTime";
     if (k === "totalCheckSec")     field = "firstLayerCheckTime";
     if (k === "totalPauseSec")     field = "pauseTime";
-    if (k === "tsCompleteStart")   field = "completionElapsedTime";
+    if (k === "tsCompleteStart") {
+      // タイムスタンプから経過秒を算出して completionElapsedTime に設定
+      const elapsed = v ? Math.floor((Date.now() - v) / 1000) : null;
+      setStoredDataForHost(host, "completionElapsedTime", elapsed, true);
+      return;
+    }
     if (k === "actualStartEpoch")  field = "actualStartTime";
     if (k === "initialLeftSec")    field = "initialLeftTime";
     if (k === "initialLeftEpoch")  field = "initialLeftAt";
