@@ -1812,21 +1812,45 @@ export function setupUploadUI(root, hostname) {
           const m = monitorData.machines[h];
           return m.storedData?.hostname?.rawValue || h;
         });
+        const checkboxes = hosts.map((h, i) =>
+          `<label style="display:flex;align-items:center;gap:6px;padding:4px 0;cursor:pointer">
+            <input type="checkbox" class="upload-host-chk" value="${h}" checked>
+            <span>${hostOptions[i]}</span>
+          </label>`
+        ).join("");
+        // 全選択/解除のワイヤリングをダイアログ表示直後に実行
+        setTimeout(() => {
+          const allChk = document.getElementById("upload-host-all");
+          if (allChk) {
+            allChk.addEventListener("change", () => {
+              document.querySelectorAll(".upload-host-chk").forEach(c => { c.checked = allChk.checked; });
+            });
+          }
+        }, 0);
         const ok = await showConfirmDialog({
           level: "info",
           title: "アップロード先の選択",
-          html: `<div style="margin-bottom:8px">${file.name} をどのプリンタにアップロードしますか？</div>
-            <select id="upload-host-select" style="width:100%;padding:6px;font-size:13px;border:1px solid #ccc;border-radius:4px">
-              ${hosts.map((h, i) => `<option value="${h}">${hostOptions[i]}</option>`).join("")}
-            </select>`,
+          html: `<div style="margin-bottom:8px"><strong>${file.name}</strong> をアップロードするプリンタを選択してください</div>
+            <div style="margin-bottom:8px">
+              <label style="cursor:pointer;font-size:12px;color:#3b82f6">
+                <input type="checkbox" id="upload-host-all" checked> 全て選択/解除
+              </label>
+            </div>
+            <div id="upload-host-list" style="border:1px solid #e2e8f0;border-radius:4px;padding:6px;max-height:200px;overflow-y:auto">
+              ${checkboxes}
+            </div>`,
           confirmText: "アップロード",
           cancelText: "キャンセル"
         });
         if (!ok) return;
-        const selEl = document.getElementById("upload-host-select");
-        const targetHost = selEl?.value || hosts[0];
-        // 対象ホストの setupUploadUI のクロージャを呼ぶ
-        _dropTargetCallbacks.get(targetHost)?.(file);
+        // 選択されたホストを取得
+        const checkedEls = document.querySelectorAll(".upload-host-chk:checked");
+        const selectedHosts = [...checkedEls].map(el => el.value);
+        if (selectedHosts.length === 0) return;
+        // 選択された全ホストにアップロード
+        for (const targetHost of selectedHosts) {
+          _dropTargetCallbacks.get(targetHost)?.(file);
+        }
       } else {
         // シングルプリンタ: そのまま処理
         prepareAndConfirm(file);
