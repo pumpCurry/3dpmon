@@ -60,6 +60,11 @@ window.notificationManager = notificationManager;
 document.addEventListener("DOMContentLoaded", async () => {
   await initializeDashboard();
 
-  initStorageUI();
+  // ストレージ復元完了後にパネルシステムを起動
+  // (restoreLayout が connectionTargets を参照するため、先にストレージ復元が必要)
+  if (typeof window._bootPanelSystem === "function") {
+    window._bootPanelSystem();
+  }
 
+  initStorageUI();
 });

@@ -920,10 +920,9 @@
   <!-- パネルシステム起動（既存初期化の後に実行） -->
   <script type="module">
     import { bootPanelSystem } from "./3dp_lib/dashboard_panel_boot.js";
-    /* DOMContentLoaded で既存初期化が完了した後にパネルシステムを起動 */
-    window.addEventListener("load", () => {
-      bootPanelSystem();
-    });
+    /* bootPanelSystem は 3dp_dashboard_main.js から
+       initializeDashboard 完了後に呼び出される */
+    window._bootPanelSystem = bootPanelSystem;
   </script>
 
 </body>
