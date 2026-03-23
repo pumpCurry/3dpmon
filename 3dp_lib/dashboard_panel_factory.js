@@ -134,19 +134,20 @@ const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v5";
  * @constant {PanelTypeDef[]}
  */
 // 48列 x cellHeight=20px (旧12列x80px の4倍精度)
+// minW=4 → 画面の約8%まで縮小可能
 const PANEL_TYPES = [
-  { id: "camera",        label: "カメラ",           templateId: "panel-tpl-camera",        defaultW: 16, defaultH: 20, minW: 8, minH: 8,  perHost: true },
-  { id: "head-preview",  label: "ヘッド位置プレビュー", templateId: "panel-tpl-head-preview", defaultW: 12, defaultH: 24, minW: 8, minH: 12, perHost: true },
-  { id: "filament",      label: "フィラメント",      templateId: "panel-tpl-filament",      defaultW: 12, defaultH: 16, minW: 8, minH: 8,  perHost: true },
-  { id: "status",        label: "状態",             templateId: "panel-tpl-status",         defaultW: 16, defaultH: 24, minW: 8, minH: 12, perHost: true },
-  { id: "control-cmd",   label: "操作ボタン",        templateId: "panel-tpl-control-cmd",   defaultW: 12, defaultH: 12, minW: 8, minH: 8,  perHost: true },
-  { id: "control-temp",  label: "温度・ファン制御",   templateId: "panel-tpl-control-temp",  defaultW: 24, defaultH: 24, minW: 12,minH: 12, perHost: true },
-  { id: "temp-graph",    label: "温度グラフ",        templateId: "panel-tpl-temp-graph",    defaultW: 24, defaultH: 16, minW: 8, minH: 8,  perHost: true },
-  { id: "machine-info",  label: "機器情報",          templateId: "panel-tpl-machine-info",  defaultW: 16, defaultH: 16, minW: 8, minH: 8,  perHost: true },
-  { id: "log",           label: "ログ",             templateId: "panel-tpl-log",            defaultW: 32, defaultH: 16, minW: 8, minH: 8,  perHost: true },
-  { id: "current-print", label: "現在の印刷",        templateId: "panel-tpl-current-print", defaultW: 48, defaultH: 12, minW: 12,minH: 8,  perHost: true },
-  { id: "history",       label: "印刷履歴",          templateId: "panel-tpl-history",       defaultW: 48, defaultH: 20, minW: 12,minH: 8,  perHost: true },
-  { id: "file-list",     label: "ファイル一覧",       templateId: "panel-tpl-file-list",    defaultW: 48, defaultH: 20, minW: 12,minH: 8,  perHost: true },
+  { id: "camera",        label: "カメラ",           templateId: "panel-tpl-camera",        defaultW: 16, defaultH: 20, minW: 4, minH: 6,  perHost: true },
+  { id: "head-preview",  label: "ヘッド位置プレビュー", templateId: "panel-tpl-head-preview", defaultW: 12, defaultH: 24, minW: 4, minH: 8,  perHost: true },
+  { id: "filament",      label: "フィラメント",      templateId: "panel-tpl-filament",      defaultW: 12, defaultH: 16, minW: 4, minH: 6,  perHost: true },
+  { id: "status",        label: "状態",             templateId: "panel-tpl-status",         defaultW: 16, defaultH: 24, minW: 4, minH: 8,  perHost: true },
+  { id: "control-cmd",   label: "操作ボタン",        templateId: "panel-tpl-control-cmd",   defaultW: 12, defaultH: 12, minW: 4, minH: 6,  perHost: true },
+  { id: "control-temp",  label: "温度・ファン制御",   templateId: "panel-tpl-control-temp",  defaultW: 24, defaultH: 24, minW: 6, minH: 8,  perHost: true },
+  { id: "temp-graph",    label: "温度グラフ",        templateId: "panel-tpl-temp-graph",    defaultW: 24, defaultH: 16, minW: 4, minH: 6,  perHost: true },
+  { id: "machine-info",  label: "機器情報",          templateId: "panel-tpl-machine-info",  defaultW: 16, defaultH: 16, minW: 4, minH: 6,  perHost: true },
+  { id: "log",           label: "ログ",             templateId: "panel-tpl-log",            defaultW: 32, defaultH: 16, minW: 4, minH: 6,  perHost: true },
+  { id: "current-print", label: "現在の印刷",        templateId: "panel-tpl-current-print", defaultW: 48, defaultH: 12, minW: 6, minH: 6,  perHost: true },
+  { id: "history",       label: "印刷履歴",          templateId: "panel-tpl-history",       defaultW: 48, defaultH: 20, minW: 6, minH: 6,  perHost: true },
+  { id: "file-list",     label: "ファイル一覧",       templateId: "panel-tpl-file-list",    defaultW: 48, defaultH: 20, minW: 6, minH: 6,  perHost: true },
 ];
 
 /* ─── GridStack インスタンス ─── */
