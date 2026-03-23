@@ -225,15 +225,23 @@ function _renderMenuBody() {
 
   let html = "";
 
-  /* ─ ホスト別パネル ─ */
+  /* ─ ホスト別パネル（表示チェック + ロックを1行に統合）─ */
   for (const host of menuHosts) {
     const isConnected = connectedHosts.includes(host);
     const statusIcon = isConnected ? "\u2705" : "\u26AA";
+    // ホストに所属するアクティブパネルを取得
+    const hostPanelEntries = activeEntries.filter(([, e]) => e.host === host);
+    const hasLockedPanels = hostPanelEntries.some(([, e]) => e.widget?.gridstackNode?.noMove);
     html += `<div class="panel-menu-section">`;
-    html += `<h4>${statusIcon} ${host}</h4>`;
+    html += `<div style="display:flex;align-items:center;gap:6px">`;
+    html += `<h4 style="flex:1;margin:0">${statusIcon} ${host}</h4>`;
+    if (hasLockedPanels) {
+      html += `<button class="panel-menu-host-unlock" data-host="${host}" style="font-size:10px;padding:2px 6px;cursor:pointer;border:1px solid #ddd;border-radius:3px" title="この機器のパネルを全解除">🔓全解除</button>`;
+    }
+    html += `</div>`;
     for (const pt of perHostTypes) {
       const panelId = `${pt.id}:${host}`;
-      html += _renderPanelToggle(pt, host, panelId);
+      html += _renderPanelToggle(pt, host, panelId, activeEntries);
     }
     html += `</div>`;
   }
@@ -244,39 +252,34 @@ function _renderMenuBody() {
     html += `<h4>共通パネル</h4>`;
     for (const pt of sharedTypes) {
       const panelId = `${pt.id}:shared`;
-      html += _renderPanelToggle(pt, "shared", panelId);
-    }
-    html += `</div>`;
-  }
-
-  /* ─ パネルロック管理 ─ */
-  const entries = getActivePanelEntries();
-  if (entries.length > 0) {
-    html += `<div class="panel-menu-section">`;
-    html += `<h4>🔒 パネルロック</h4>`;
-    html += `<button class="panel-menu-unlock-all" style="font-size:11px;padding:3px 8px;margin-bottom:6px;cursor:pointer">全パネル解除</button>`;
-    for (const [panelId, entry] of entries) {
-      const isLocked = !!(entry.widget?.gridstackNode?.noMove);
-      const label = entry.element?.querySelector(".panel-title")?.textContent || entry.type;
-      const hostTag = entry.host && entry.host !== "shared" ? ` (${entry.host})` : "";
-      html += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:12px">
-        <button class="panel-lock-toggle" data-panel-id="${panelId}" style="border:1px solid #ddd;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:12px;background:${isLocked ? "#fef3c7" : "#fff"}">${isLocked ? "🔒" : "📌"}</button>
-        <span style="flex:1">${label}${hostTag}</span>
-        <span style="color:#94a3b8;font-size:11px">${isLocked ? "固定中" : ""}</span>
-      </div>`;
+      html += _renderPanelToggle(pt, "shared", panelId, activeEntries);
     }
     html += `</div>`;
   }
 
   body.innerHTML = html;
 
-  /* パネルロック管理のイベント設定 */
-  body.querySelector(".panel-menu-unlock-all")?.addEventListener("click", () => {
-    unlockAllPanels();
-    _renderMenuBody();
-  });
-  body.querySelectorAll(".panel-lock-toggle").forEach(btn => {
+  /* 機器別 全解除ボタンのイベント設定 */
+  body.querySelectorAll(".panel-menu-host-unlock").forEach(btn => {
     btn.addEventListener("click", () => {
+      const host = btn.dataset.host;
+      const grid = getGrid();
+      if (!grid) return;
+      for (const [, entry] of getActivePanelEntries()) {
+        if (entry.host !== host) continue;
+        grid.update(entry.widget, { noMove: false, noResize: false });
+        entry.element?.classList.remove("panel-locked");
+        const lockBtn = entry.element?.querySelector(".panel-lock-btn");
+        if (lockBtn) { lockBtn.textContent = "📌"; lockBtn.title = "このパネルを固定"; }
+      }
+      _renderMenuBody();
+    });
+  });
+
+  /* 個別ロックトグルのイベント設定 */
+  body.querySelectorAll(".panel-row-lock").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
       const panelId = btn.dataset.panelId;
       const entry = getActivePanelEntries().find(([id]) => id === panelId);
       if (!entry) return;
@@ -337,13 +340,22 @@ function _renderMenuBody() {
  * @param {string} panelId - パネルID（shared統合済みの正しいID）
  * @returns {string} HTML文字列
  */
-function _renderPanelToggle(pt, host, panelId) {
+function _renderPanelToggle(pt, host, panelId, activeEntries = []) {
   const active = isActivePanelId(panelId);
-  let html = "";
+  // このパネルのロック状態を取得
+  const panelEntry = activeEntries.find(([id]) => id === panelId);
+  const isLocked = panelEntry ? !!(panelEntry[1].widget?.gridstackNode?.noMove) : false;
 
-  html += `<button class="panel-toggle-btn${active ? " active" : ""}" data-type="${pt.id}" data-host="${host}" data-panel-id="${panelId}">`;
+  let html = `<div style="display:flex;align-items:center;gap:4px">`;
+  // 左端: 表示チェック
+  html += `<button class="panel-toggle-btn${active ? " active" : ""}" data-type="${pt.id}" data-host="${host}" data-panel-id="${panelId}" style="flex:1;text-align:left">`;
   html += `<span class="panel-toggle-icon">${active ? "\u2611" : "\u2610"}</span> ${pt.label}`;
   html += `</button>`;
+  // 右端: ロックボタン (アクティブな場合のみ)
+  if (active) {
+    html += `<button class="panel-row-lock" data-panel-id="${panelId}" style="border:1px solid ${isLocked ? "#f59e0b" : "#ddd"};border-radius:3px;padding:2px 6px;cursor:pointer;font-size:11px;background:${isLocked ? "#fef3c7" : "#fff"};min-width:28px" title="${isLocked ? "固定解除" : "固定する"}">${isLocked ? "🔒" : "📌"}</button>`;
+  }
+  html += `</div>`;
 
   /* カメラパネルには映像接続サブコントロールを追加 */
   if (pt.id === "camera") {
