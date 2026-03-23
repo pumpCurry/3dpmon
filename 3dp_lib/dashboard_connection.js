@@ -195,9 +195,6 @@ export function connectAllSavedTargets() {
   }
 }
 
-/** sendCommand 応答待ちタイムアウト（ミリ秒） */
-const SEND_COMMAND_TIMEOUT_MS = 15_000;
-
 /** ホスト確定前メッセージバッファの上限 */
 const MAX_BUFFER_SIZE = 100;
 
@@ -1054,51 +1051,21 @@ export function sendCommand(method, params = {}, host) {
     }
     return Promise.reject(new Error("WebSocket not connected"));
   }
+  // id はキャッシュバスティング用。機器は id を無視し、
+  // 応答に id を含めないため、id による応答照合は行わない。
   const id = `${method}_${Date.now()}`;
   const payload = { id, method, params };
-  return new Promise((resolve, reject) => {
-    /** タイムアウト用タイマーID */
-    let timeoutId = null;
-
-    const onResp = evt => {
-      let msg;
-      try {
-        msg = JSON.parse(evt.data);
-      } catch {
-        return;
-      }
-      if (msg.id !== id) return;
-      // 応答を受信したらリスナーとタイムアウトを両方解除
-      st.ws.removeEventListener("message", onResp);
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      if (msg.error) {
-        showAlert(`${method} エラー: ${msg.error.message}`, "error");
-        reject(msg.error);
-      } else {
-        showAlert(`${method} 成功`, "success");
-        resolve(msg.result);
-      }
-    };
-    st.ws.addEventListener("message", onResp);
-
-    // タイムアウトによるリスナーリーク防止
-    timeoutId = setTimeout(() => {
-      st.ws.removeEventListener("message", onResp);
-      timeoutId = null;
-      const errMsg = `${method} 応答タイムアウト (${SEND_COMMAND_TIMEOUT_MS / 1000}秒)`;
-      pushLog(errMsg, "warn", false, host);
-      reject(new Error(errMsg));
-    }, SEND_COMMAND_TIMEOUT_MS);
-
-    // ── 送信ログ（紫色）
-    const json = JSON.stringify(payload);
-    pushLog(`送信: ${json}`, "send", false, host);
+  const json = JSON.stringify(payload);
+  pushLog(`送信: ${json}`, "send", false, host);
+  try {
     st.ws.send(json);
-
-  });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  // 機器は WS データメッセージとして応答を返す。
+  // 応答の処理は handleMessage / processData で行われるため、
+  // sendCommand はファイア・アンド・フォーゲットで resolve する。
+  return Promise.resolve(null);
 }
 
 /**
@@ -1125,48 +1092,14 @@ export function sendGcodeCommand(gcode, host) {
 
   const id = `set_gcode_${Date.now()}`;
   const payload = { id, method: "set", params: { gcodeCmd: gcode } };
-
-  return new Promise((resolve, reject) => {
-    /** タイムアウト用タイマーID */
-    let timeoutId = null;
-
-    const onResp = evt => {
-      let msg;
-      try {
-        msg = JSON.parse(evt.data);
-      } catch {
-        return;
-      }
-      if (msg.id !== id) return;
-      // 応答を受信したらリスナーとタイムアウトを両方解除
-      st.ws.removeEventListener("message", onResp);
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      if (msg.error) {
-        showAlert(`set_gcode エラー: ${msg.error.message}`, "error");
-        reject(msg.error);
-      } else {
-        showAlert("set_gcode 成功", "success");
-        resolve(msg.result);
-      }
-    };
-    st.ws.addEventListener("message", onResp);
-
-    // タイムアウトによるリスナーリーク防止
-    timeoutId = setTimeout(() => {
-      st.ws.removeEventListener("message", onResp);
-      timeoutId = null;
-      const errMsg = `set_gcode 応答タイムアウト (${SEND_COMMAND_TIMEOUT_MS / 1000}秒)`;
-      pushLog(errMsg, "warn", false, host);
-      reject(new Error(errMsg));
-    }, SEND_COMMAND_TIMEOUT_MS);
-
-    const json = JSON.stringify(payload);
-    pushLog(`送信: ${json}`, "send", false, host);
+  const json = JSON.stringify(payload);
+  pushLog(`送信: ${json}`, "send", false, host);
+  try {
     st.ws.send(json);
-  });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  return Promise.resolve(null);
 }
 
 /**
