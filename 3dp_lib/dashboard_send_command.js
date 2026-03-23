@@ -35,7 +35,7 @@ import {
   sendGcodeCommand,
   simulateReceivedJson
 } from "./dashboard_connection.js";
-import { getDisplayValue } from "./dashboard_data.js";
+import { getDisplayValue, monitorData } from "./dashboard_data.js";
 import { showInputDialog, showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { pushLog } from "./dashboard_log_util.js";
@@ -535,9 +535,10 @@ export function initSendRawJson(root, hostname) {
       return;
     }
 
+    const displayName = monitorData.machines[host]?.storedData?.hostname?.rawValue || host || ip;
     let jsonStr = await showInputDialog({
       level:             "info",
-      title:             "Raw JSON コマンド入力",
+      title:             `Raw JSON コマンド入力 → ${displayName}`,
       message:           "送信したい JSON を入力してください。\n（Ctrl+Enter で送信）",
       multiline:         true,
       placeholder:       `{"method":"set","params":{}}`,
@@ -634,9 +635,10 @@ export function initSendGcode(root, hostname) {
       return;
     }
 
+    const gcDisplayName = monitorData.machines[host]?.storedData?.hostname?.rawValue || host || ip;
     let gcode = await showInputDialog({
       level: "info",
-      title: "G-code 入力",
+      title: `G-code 入力 → ${gcDisplayName}`,
       message: "送信したい G-code を入力してください。",
       placeholder: "M104 S200",
       defaultValue: "",
@@ -712,9 +714,11 @@ export function initTestRawJson(root, hostname) {
   if (!btn) return;
 
   btn.addEventListener("click", async () => {
+    const host = hostname || null;
+    const testDisplayName = monitorData.machines[host]?.storedData?.hostname?.rawValue || host || "(テスト)";
     let jsonStr = await showInputDialog({
       level: "info",
-      title: "JSONテスト入力",
+      title: `JSONテスト入力 → ${testDisplayName}`,
       message: "受信JSONとして扱う文字列を入力してください。",
       multiline: true,
       placeholder: "{\"id\":\"xxx\"}",

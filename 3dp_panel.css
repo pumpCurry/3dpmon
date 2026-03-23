@@ -735,9 +735,24 @@ body.panel-mode .notification-container {
 .panel-body .filament-preview-area {
   touch-action: none;
   width: 100%;
-  height: calc(100% - 28px); /* フッター最小高さ分を引く */
+  height: calc(100% - 28px);
   overflow: hidden;
   position: relative;
+}
+/* 回転ボタンをプレビュー領域の右上にオーバーレイ */
+.panel-body .filament-preview-area .dfv-controls {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 15;
+  margin: 0;
+  background: rgba(255,255,255,0.8);
+  border-radius: 4px;
+  padding: 2px;
+}
+.panel-body .filament-preview-area .dfv-btn-wrapper {
+  margin: 0;
+  gap: 2px;
 }
 .panel-body .filament-panel-footer {
   position: absolute;
@@ -787,7 +802,14 @@ body.panel-mode .notification-container {
 }
 .control-cmd-panel .cmd-group button {
   font-size: 12px;
-  padding: 4px 8px;
+  padding: 6px 10px;
+  min-height: 32px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+/* パネル内ではボタンの <br> を無視して1行に */
+.control-cmd-panel .cmd-group button br {
+  display: none;
 }
 
 /* ---------------------------------------------------------------
