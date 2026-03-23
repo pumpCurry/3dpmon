@@ -739,20 +739,9 @@ body.panel-mode .notification-container {
   overflow: hidden;
   position: relative;
 }
-/* 回転ボタンをプレビュー領域の右上にオーバーレイ */
+/* フィラメントプレビューの回転ボタン・スライダーを非表示 (フッターに統合) */
 .panel-body .filament-preview-area .dfv-controls {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  z-index: 15;
-  margin: 0;
-  background: rgba(255,255,255,0.8);
-  border-radius: 4px;
-  padding: 2px;
-}
-.panel-body .filament-preview-area .dfv-btn-wrapper {
-  margin: 0;
-  gap: 2px;
+  display: none;
 }
 .panel-body .filament-panel-footer {
   position: absolute;

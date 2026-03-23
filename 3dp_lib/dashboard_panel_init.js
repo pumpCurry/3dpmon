@@ -399,6 +399,31 @@ function initFilamentPanel(body, hostname) {
       }
     });
   }
+
+  // 回転ボタンをフッターに統合 (CSS で dfv-controls を非表示にした代わり)
+  if (preview) {
+    const footer = body.querySelector(".filament-panel-footer");
+    if (footer) {
+      const sep = document.createElement("span");
+      sep.style.cssText = "width:1px;height:16px;background:#ddd;margin:0 2px";
+      footer.appendChild(sep);
+      const rotBtns = [
+        { label: "⟲", title: "自動回転", action: () => preview.toggleAutoRotate?.() },
+        { label: "◐", title: "正面", action: () => preview.setFrontView?.() },
+        { label: "◑", title: "横", action: () => preview.setSideView?.() },
+        { label: "◉", title: "斜め", action: () => preview.setProfileView?.() },
+      ];
+      for (const { label, title, action } of rotBtns) {
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.textContent = label;
+        btn.title = title;
+        btn.style.cssText = "font-size:11px;padding:2px 5px;min-width:24px;min-height:24px";
+        btn.addEventListener("click", action);
+        footer.appendChild(btn);
+      }
+    }
+  }
 }
 
 /**
