@@ -99,7 +99,7 @@ export function showConfirmDialog({
     const header = document.createElement("div");
     header.className = "confirm-header";
     header.style.backgroundColor = color;
-    header.style.color = "#fff";
+    // color: var(--color-text-inverse) は .confirm-header クラスで定義済み
     header.innerHTML = `<span class="confirm-icon">${icon}</span>
                         <span class="confirm-title">${title}</span>`;
     dlg.appendChild(header);

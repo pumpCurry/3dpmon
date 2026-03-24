@@ -867,15 +867,15 @@ export class NotificationManager {
           this.webhookUrls = urlsEl.value.split(",").map(s => s.trim()).filter(s => s);
         }
         testResult.textContent = "送信中…";
-        testResult.style.color = "";
+        testResult.className = "";
         await this.testWebhook((url, ok, err) => {
           const short = url.length > 40 ? url.slice(0, 37) + "…" : url;
           if (ok) {
             testResult.textContent = `✔ ${short} — 送信成功`;
-            testResult.style.color = "#16a34a";
+            testResult.className = "text-success";
           } else {
             testResult.textContent = `✗ ${short} — ${err || "送信失敗"}`;
-            testResult.style.color = "#dc2626";
+            testResult.className = "text-danger";
           }
         });
       });

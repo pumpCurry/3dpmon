@@ -1839,6 +1839,26 @@ body.panel-mode .notification-container {
 .registered-table tr.selected {
   background: var(--color-table-selected);
 }
+/* タブボタン状態（交換ダイアログ） */
+.fc-tab-btn {
+  flex: 1;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--color-bg-secondary);
+  font-weight: normal;
+}
+.fc-tab-btn.active {
+  background: var(--color-bg-primary);
+  font-weight: bold;
+}
+/* 確認ダイアログ: ヘッダーテキスト色 */
+.confirm-header { color: var(--color-text-inverse); }
+/* テスト結果テキスト色 */
+.text-success { color: var(--color-success); }
+.text-danger  { color: var(--color-danger); }
 
 /* ---------------------------------------------------------------
    フィラメント管理モーダル (旧 injectStyles from filament_manager.js)

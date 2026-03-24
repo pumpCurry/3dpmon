@@ -646,12 +646,8 @@ export function showFilamentChangeDialog(hostname) {
       btn.addEventListener("click", () => {
         dlg.querySelectorAll(".fc-tab-btn").forEach(b => {
           b.classList.remove("active");
-          b.style.background = "#f8fafc";
-          b.style.fontWeight = "normal";
         });
         btn.classList.add("active");
-        btn.style.background = "#fff";
-        btn.style.fontWeight = "bold";
         activeTab = btn.dataset.tab;
         // タブ切替時に検索フィルタのオプションを再構築
         if (activeTab === "preset") {
