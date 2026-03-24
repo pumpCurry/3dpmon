@@ -53,7 +53,17 @@ import {
   setInventoryQuantity,
   adjustInventory
 } from "./dashboard_filament_inventory.js";
-import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+import {
+  FILAMENT_PRESETS,
+  getAllPresets,
+  addUserPreset,
+  updateUserPreset,
+  deleteUserPreset,
+  isHiddenPreset,
+  togglePresetVisibility,
+  exportUserPresets,
+  importUserPresets
+} from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showAlert } from "./dashboard_notification_manager.js";
@@ -534,14 +544,81 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
   thead.innerHTML =
     "<tr><th>色見本</th><th data-sort='brand'>ブランド</th><th data-sort='material'>材質</th>" +
     "<th data-sort='colorName'>色名</th><th data-sort='name'>名称</th>" +
-    "<th data-sort='qty' style='text-align:right'>在庫(±)</th><th data-sort='count' style='text-align:right'>累計使用数</th><th>コマンド</th></tr>";
+    "<th data-sort='qty' class='text-right'>在庫(±)</th><th data-sort='count' class='text-right'>累計使用数</th>" +
+    "<th>操作</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   table.appendChild(tbody);
   listBox.appendChild(table);
   wrap.appendChild(listBox);
 
-  div.append(searchFs, countSpan, wrap);
+  // ツールバー（カスタムプリセット管理）
+  const toolbar = document.createElement("div");
+  toolbar.className = "flex-row";
+  toolbar.style.marginBottom = "6px";
+  toolbar.style.gap = "4px";
+  toolbar.style.flexWrap = "wrap";
+
+  const addPresetBtn = document.createElement("button");
+  addPresetBtn.textContent = "＋ カスタムプリセット登録";
+  addPresetBtn.className = "btn-font-sm";
+  addPresetBtn.addEventListener("click", () => _showCustomPresetDialog(render));
+
+  const exportBtn = document.createElement("button");
+  exportBtn.textContent = "📤 エクスポート";
+  exportBtn.className = "btn-font-xs";
+  exportBtn.addEventListener("click", () => {
+    const json = exportUserPresets();
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `3dpmon-presets-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showAlert("カスタムプリセットをエクスポートしました", "success");
+  });
+
+  const importBtn = document.createElement("button");
+  importBtn.textContent = "📥 インポート";
+  importBtn.className = "btn-font-xs";
+  importBtn.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const result = importUserPresets(text, { merge: true });
+        if (result.success) {
+          saveUnifiedStorage();
+          render();
+          showAlert(`インポート完了: ${result.added}件追加, ${result.skipped}件スキップ`, "success");
+        } else {
+          showAlert(`インポート失敗: ${result.errors.join(", ")}`, "error");
+        }
+      } catch (e) {
+        showAlert(`ファイル読込エラー: ${e.message}`, "error");
+      }
+    });
+    input.click();
+  });
+
+  const showHiddenCb = document.createElement("input");
+  showHiddenCb.type = "checkbox";
+  showHiddenCb.id = "inv-show-hidden";
+  const showHiddenLabel = document.createElement("label");
+  showHiddenLabel.htmlFor = "inv-show-hidden";
+  showHiddenLabel.textContent = "非表示も含む";
+  showHiddenLabel.className = "text-muted-xs";
+  showHiddenLabel.style.cursor = "pointer";
+  showHiddenCb.addEventListener("change", () => render());
+
+  toolbar.append(addPresetBtn, exportBtn, importBtn, showHiddenCb, showHiddenLabel);
+
+  div.append(toolbar, searchFs, countSpan, wrap);
 
   const preview = createFilamentPreview(prevBox, { ...DEFAULT_PREVIEW_OPTIONS });
 
@@ -639,7 +716,8 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
   let invMap = buildInvMap();
 
   function render() {
-    const presets = monitorData.filamentPresets || FILAMENT_PRESETS;
+    const includeHidden = showHiddenCb.checked;
+    const presets = getAllPresets({ includeHidden });
     usageMap = buildUsageMap();
     invMap = buildInvMap();
     fillOptions(presets);
@@ -705,8 +783,68 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
       usageTd.textContent = String(usage);
       tr.appendChild(usageTd);
 
-      // コマンド
+      // 非表示状態の視覚表現
+      const hidden = isHiddenPreset(p.presetId);
+      if (hidden) {
+        tr.style.opacity = "0.5";
+      }
+
+      // ブランド列にカスタム/ビルトインアイコン
+      brandTd.textContent = `${p.isBuiltin ? "📦" : "🔧"} ${p.brand || ""}`;
+
+      // 操作列
       const cmd = document.createElement("td");
+      cmd.style.whiteSpace = "nowrap";
+
+      // 非表示トグルボタン
+      const hideBtn = document.createElement("button");
+      hideBtn.textContent = hidden ? "🚫" : "👁";
+      hideBtn.title = hidden ? "表示に戻す" : "非表示にする";
+      hideBtn.className = "btn-font-xs";
+      hideBtn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        togglePresetVisibility(p.presetId);
+        saveUnifiedStorage();
+        render();
+      });
+      cmd.appendChild(hideBtn);
+
+      // カスタムプリセットの編集・削除ボタン
+      if (!p.isBuiltin) {
+        const editPresetBtn = document.createElement("button");
+        editPresetBtn.textContent = "✏";
+        editPresetBtn.title = "プリセット編集";
+        editPresetBtn.className = "btn-font-xs";
+        editPresetBtn.addEventListener("click", ev => {
+          ev.stopPropagation();
+          _showCustomPresetDialog(render, p);
+        });
+        cmd.appendChild(editPresetBtn);
+
+        const delPresetBtn = document.createElement("button");
+        delPresetBtn.textContent = "🗑";
+        delPresetBtn.title = "プリセット削除";
+        delPresetBtn.className = "btn-font-xs";
+        delPresetBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          const ok = await showConfirmDialog({
+            level: "warnRed",
+            title: "プリセット削除",
+            message: `カスタムプリセット「${p.brand} ${p.colorName}」を削除しますか？\n関連する在庫データも削除されます。`,
+            confirmText: "削除",
+            cancelText: "キャンセル"
+          });
+          if (!ok) return;
+          deleteUserPreset(p.presetId);
+          saveUnifiedStorage();
+          render();
+          showAlert("プリセットを削除しました", "info");
+        });
+        cmd.appendChild(delPresetBtn);
+      }
+
+      cmd.appendChild(document.createTextNode(" "));
+
       const regBtn = document.createElement("button");
       regBtn.textContent = "開封して登録";
       regBtn.className = "btn-font-xs";
@@ -2360,5 +2498,133 @@ export function showFilamentManager(activeIdx = 0, hostname) {
 
   document.body.appendChild(overlay);
   switchTab(activeIdx);
+}
+
+/* ===================================================================
+   カスタムプリセット作成/編集ダイアログ
+   =================================================================== */
+
+/**
+ * カスタムプリセット作成・編集ダイアログを表示する。
+ * 新規作成時は existing = null、編集時は既存プリセットを渡す。
+ *
+ * @private
+ * @param {Function} onComplete - 完了時に呼ぶレンダリング関数
+ * @param {Object|null} [existing=null] - 編集対象の既存プリセット（新規時はnull）
+ */
+async function _showCustomPresetDialog(onComplete, existing = null) {
+  const isEdit = !!existing;
+  const title = isEdit ? "カスタムプリセット編集" : "カスタムプリセット登録";
+
+  // 素材ドロップダウンの選択肢を動的構築
+  const allMaterials = new Set();
+  getAllPresets({ includeHidden: true }).forEach(p => {
+    if (p.material) allMaterials.add(p.material);
+  });
+  // MATERIAL_DENSITY のキーも追加
+  const { MATERIAL_DENSITY } = await import("./dashboard_spool.js");
+  Object.keys(MATERIAL_DENSITY).forEach(k => allMaterials.add(k));
+  const materialOptions = [...allMaterials].sort()
+    .map(m => `<option value="${m}" ${existing?.material === m ? "selected" : ""}>${m}</option>`)
+    .join("");
+
+  const html = `
+    <div class="conn-edit-grid" style="grid-template-columns:auto 1fr;">
+      <label>ブランド名 *</label>
+      <input type="text" id="cp-brand" value="${existing?.brand || ""}" placeholder="例: eSUN, Polymaker">
+      <label>素材 *</label>
+      <div style="display:flex;gap:4px">
+        <select id="cp-material">${materialOptions}<option value="">-- 直接入力 --</option></select>
+        <input type="text" id="cp-material-custom" placeholder="カスタム素材名" style="flex:1">
+      </div>
+      <label>色 *</label>
+      <div style="display:flex;gap:4px;align-items:center">
+        <input type="color" id="cp-color" value="${existing?.color || "#22C55E"}">
+        <input type="text" id="cp-color-name" value="${existing?.colorName || ""}" placeholder="色名（例: ブラック）" style="flex:1">
+      </div>
+      <label>名称</label>
+      <input type="text" id="cp-name" value="${existing?.name || ""}" placeholder="製品名">
+      <label>全長 (mm)</label>
+      <input type="number" id="cp-length" value="${existing?.defaultLength || 330000}" min="1000">
+      <label>重量 (g) ※入力で全長を自動計算</label>
+      <input type="number" id="cp-weight" placeholder="1000" min="1">
+      <label>フィラメント径 (mm)</label>
+      <input type="number" id="cp-diameter" value="${existing?.diameter || 1.75}" step="0.01">
+      <label>購入リンク</label>
+      <input type="text" id="cp-link" value="${existing?.purchaseLink || ""}" placeholder="https://...">
+      <label>価格</label>
+      <div style="display:flex;gap:4px">
+        <select id="cp-currency"><option value="¥" ${(!existing?.currencySymbol || existing?.currencySymbol === "¥") ? "selected" : ""}>¥</option><option value="$" ${existing?.currencySymbol === "$" ? "selected" : ""}>$</option></select>
+        <input type="number" id="cp-price" value="${existing?.price || ""}" placeholder="1599" style="flex:1">
+      </div>
+    </div>`;
+
+  const result = await showConfirmDialog({
+    level: "info",
+    title,
+    html,
+    confirmText: isEdit ? "更新" : "登録",
+    cancelText: "キャンセル"
+  });
+
+  if (!result) return;
+
+  // フォーム値の取得
+  const brandVal = document.getElementById("cp-brand")?.value?.trim();
+  const matSelect = document.getElementById("cp-material")?.value;
+  const matCustom = document.getElementById("cp-material-custom")?.value?.trim();
+  const material = matCustom || matSelect || "";
+  const color = document.getElementById("cp-color")?.value || "#22C55E";
+  const colorName = document.getElementById("cp-color-name")?.value?.trim() || "";
+  const name = document.getElementById("cp-name")?.value?.trim() || "";
+  const diameter = parseFloat(document.getElementById("cp-diameter")?.value) || 1.75;
+  const lengthInput = parseInt(document.getElementById("cp-length")?.value) || 0;
+  const weightInput = parseFloat(document.getElementById("cp-weight")?.value) || 0;
+  const link = document.getElementById("cp-link")?.value?.trim() || "";
+  const currency = document.getElementById("cp-currency")?.value || "¥";
+  const price = parseFloat(document.getElementById("cp-price")?.value) || 0;
+
+  // 重量入力があれば全長を自動計算
+  const { getMaterialDensity, lengthFromWeight } = await import("./dashboard_spool.js");
+  let defaultLength = lengthInput;
+  if (weightInput > 0 && !lengthInput) {
+    const density = getMaterialDensity(material);
+    defaultLength = Math.round(lengthFromWeight(weightInput, density, diameter));
+  }
+
+  const data = {
+    brand: brandVal,
+    material,
+    color,
+    colorName,
+    name,
+    defaultLength,
+    diameter,
+    filamentDiameter: diameter,
+    filamentTotalLength: defaultLength,
+    filamentCurrentLength: defaultLength,
+    purchaseLink: link,
+    price,
+    currencySymbol: currency
+  };
+
+  if (isEdit) {
+    const res = updateUserPreset(existing.presetId, data);
+    if (!res.success) {
+      showAlert(`更新失敗: ${res.errors.join(", ")}`, "error");
+      return;
+    }
+    showAlert("プリセットを更新しました", "success");
+  } else {
+    const res = addUserPreset(data);
+    if (!res.success) {
+      showAlert(`登録失敗: ${res.errors.join(", ")}`, "error");
+      return;
+    }
+    showAlert(`プリセット「${brandVal} ${colorName}」を登録しました`, "success");
+  }
+
+  saveUnifiedStorage();
+  if (onComplete) onComplete();
 }
 
