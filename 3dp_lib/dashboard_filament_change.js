@@ -26,6 +26,7 @@
 import { getSpools, getSpoolById, setCurrentSpoolId, getCurrentSpoolId, getCurrentSpool, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel, formatFilamentAmount } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
+import { getAllPresets } from "./dashboard_filament_presets.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
@@ -190,7 +191,7 @@ export function showPresetOpenDialog(hostname) {
       manufacturerName: ""
     });
 
-    const presets = monitorData.filamentPresets || [];
+    const presets = getAllPresets();
     let selectedPreset = null;
 
     function buildUsageMap() {
@@ -484,7 +485,7 @@ export function showFilamentChangeDialog(hostname) {
     }
 
     const spools = getSpools();
-    const presets = monitorData.filamentPresets || [];
+    const presets = getAllPresets();
     const curId = hostname ? getCurrentSpoolId(hostname) : null;
     let selectedSpool = null;
     let selectedPreset = null;
@@ -861,7 +862,7 @@ function showPresetOpenDialogForHistory(hostname) {
       materialColorName: "", materialColorCode: "", manufacturerName: ""
     });
 
-    const presets = monitorData.filamentPresets || [];
+    const presets = getAllPresets();
     let selectedPreset = null;
 
     function fillOptions(list) {
