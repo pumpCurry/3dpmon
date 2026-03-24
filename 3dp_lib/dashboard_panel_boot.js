@@ -255,6 +255,16 @@ function _convertCardsToTemplates() {
       continue;
     }
 
+    /* 生産管理パネル: HTML由来ではなくJS動的生成 — 空テンプレートを登録 */
+    if (!document.getElementById("panel-tpl-production")) {
+      const tplProd = document.createElement("template");
+      tplProd.id = "panel-tpl-production";
+      const prodDiv = document.createElement("div");
+      prodDiv.className = "production-panel-root";
+      tplProd.content.appendChild(prodDiv);
+      document.body.appendChild(tplProd);
+    }
+
     /* テンプレートを生成 */
     const tpl = document.createElement("template");
     tpl.id = mapping.templateId;

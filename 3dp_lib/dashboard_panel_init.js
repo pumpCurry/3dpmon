@@ -62,6 +62,7 @@ import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dash
 import { showAlert } from "./dashboard_notification_manager.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
+import { buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual } from "./dashboard_production.js";
 import {
   initializeCommandPalette,
   initializeRateControls,
@@ -727,6 +728,7 @@ export function registerAllPanelInits() {
   registerPanelInit("current-print", initCurrentPrintPanel);
   registerPanelInit("history", initHistoryPanel);
   registerPanelInit("file-list", initFileListPanel);
+  registerPanelInit("production", initProductionPanel);
   /* settings パネルは接続設定モーダルに統合済み */
 
   // 破棄関数
@@ -752,4 +754,194 @@ export function registerAllPanelInits() {
   registerPanelDestroy("temp-graph", (body, hostname) => {
     resetTemperatureGraph(hostname);
   });
+  registerPanelDestroy("production", (body) => {
+    if (body._productionTimer) {
+      clearInterval(body._productionTimer);
+      body._productionTimer = null;
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   生産管理パネル (Phase 3)
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * 時間をHH:MM:SS形式にフォーマットする。
+ * @param {number} sec - 秒
+ * @returns {string}
+ */
+function _fmtTime(sec) {
+  if (!sec || sec <= 0) return "—";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+/**
+ * 生産管理パネルを初期化する。
+ * フリート全体の稼働率、日次レポート、予定vs実績を表示。
+ *
+ * @param {HTMLElement} body - パネル本体の DOM 要素
+ */
+function initProductionPanel(body) {
+  body.classList.add("production-panel");
+
+  function render() {
+    body.innerHTML = "";
+
+    const fleet = buildFleetSummary();
+    const daily = buildDailyProductionReport({ days: 7 });
+
+    // ── 1) フリートサマリーカード ───────────────────
+    const summaryRow = document.createElement("div");
+    summaryRow.className = "stat-cards";
+
+    [
+      { label: "接続台数", value: `${fleet.activeHosts}/${fleet.totalHosts}台`, sub: `${fleet.printingHosts}台印刷中` },
+      { label: "フリート稼働率", value: `${fleet.fleetUtilizationPct}%` },
+      { label: "本日の印刷数", value: `${fleet.totalPrintCount}回`, sub: `成功${fleet.totalSuccessCount} / 失敗${fleet.totalFailCount}` },
+      { label: "合計印刷時間", value: _fmtTime(fleet.totalPrintTimeMs / 1000) }
+    ].forEach(c => {
+      const card = document.createElement("div");
+      card.className = "stat-card";
+      card.innerHTML = `<div class="stat-card-label">${c.label}</div><div class="stat-card-value">${c.value}</div>${c.sub ? `<div class="stat-card-sub">${c.sub}</div>` : ""}`;
+      summaryRow.appendChild(card);
+    });
+    body.appendChild(summaryRow);
+
+    // ── 2) per-host 稼働率バー ─────────────────────
+    if (fleet.hosts.length > 0) {
+      const hostSection = document.createElement("div");
+      hostSection.className = "prod-host-section";
+
+      const hostTitle = document.createElement("div");
+      hostTitle.className = "prod-section-title";
+      hostTitle.textContent = "機器別稼働率 (24h)";
+      hostSection.appendChild(hostTitle);
+
+      for (const h of fleet.hosts) {
+        const row = document.createElement("div");
+        row.className = "prod-host-row";
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "prod-host-name";
+        nameSpan.textContent = h.displayName;
+
+        const barWrap = document.createElement("div");
+        barWrap.className = "prod-util-bar-wrap";
+        const bar = document.createElement("div");
+        bar.className = "prod-util-bar";
+        const fill = document.createElement("div");
+        fill.className = `prod-util-bar-fill${h.isPrinting ? " printing" : ""}`;
+        fill.style.width = `${h.utilizationPct}%`;
+        bar.appendChild(fill);
+        barWrap.appendChild(bar);
+
+        const pctLabel = document.createElement("span");
+        pctLabel.className = "prod-util-pct";
+        pctLabel.textContent = `${h.utilizationPct}%`;
+
+        const statusSpan = document.createElement("span");
+        statusSpan.className = `prod-host-status${h.isPrinting ? " active" : ""}`;
+        statusSpan.textContent = h.isPrinting
+          ? `🖨 ${h.currentJobProgress}%`
+          : `${h.printCount}回完了`;
+
+        row.append(nameSpan, barWrap, pctLabel, statusSpan);
+        hostSection.appendChild(row);
+      }
+      body.appendChild(hostSection);
+    }
+
+    // ── 3) 日次生産テーブル ──────────────────────────
+    if (daily.length > 0) {
+      const dailySection = document.createElement("div");
+      dailySection.className = "prod-daily-section";
+
+      const dailyTitle = document.createElement("div");
+      dailyTitle.className = "prod-section-title";
+      dailyTitle.textContent = "日次生産レポート (7日間)";
+      dailySection.appendChild(dailyTitle);
+
+      const table = document.createElement("table");
+      table.className = "registered-table prod-daily-table";
+      table.innerHTML = `<thead><tr>
+        <th>日付</th>
+        <th class="text-right">印刷数</th>
+        <th class="text-right">成功</th>
+        <th class="text-right">失敗</th>
+        <th class="text-right">合計時間</th>
+        <th class="text-right">消費量</th>
+      </tr></thead>`;
+      const tbody = document.createElement("tbody");
+      for (const day of daily) {
+        const tr = document.createElement("tr");
+        const filFmt = day.totalFilamentMm > 0 ? `${(day.totalFilamentMm / 1000).toFixed(1)}m` : "—";
+        tr.innerHTML =
+          `<td>${day.date}</td>` +
+          `<td class="text-right">${day.printCount}</td>` +
+          `<td class="text-right">${day.successCount}</td>` +
+          `<td class="text-right">${day.failCount > 0 ? `<span class="text-danger">${day.failCount}</span>` : "0"}</td>` +
+          `<td class="text-right">${_fmtTime(day.totalPrintTimeSec)}</td>` +
+          `<td class="text-right">${filFmt}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      dailySection.appendChild(table);
+      body.appendChild(dailySection);
+    }
+
+    // ── 4) 予定vs実績（最もよく印刷するファイルTop 10） ──
+    const allEstVsAct = [];
+    for (const h of fleet.hosts) {
+      const items = buildEstimateVsActual(h.hostname);
+      items.forEach(i => { i._host = h.displayName; });
+      allEstVsAct.push(...items);
+    }
+    // 印刷回数でソート、Top 10
+    allEstVsAct.sort((a, b) => b.printCount - a.printCount);
+    const top10 = allEstVsAct.slice(0, 10);
+
+    if (top10.length > 0) {
+      const evaSection = document.createElement("div");
+      evaSection.className = "prod-eva-section";
+
+      const evaTitle = document.createElement("div");
+      evaTitle.className = "prod-section-title";
+      evaTitle.textContent = "予定 vs 実績 (Top 10)";
+      evaSection.appendChild(evaTitle);
+
+      const evaTable = document.createElement("table");
+      evaTable.className = "registered-table prod-eva-table";
+      evaTable.innerHTML = `<thead><tr>
+        <th>ファイル</th>
+        <th class="text-right">回数</th>
+        <th class="text-right">見積</th>
+        <th class="text-right">実績平均</th>
+        <th class="text-right">差異</th>
+      </tr></thead>`;
+      const evaTbody = document.createElement("tbody");
+      for (const item of top10) {
+        const tr = document.createElement("tr");
+        const diffClass = item.diffPct > 10 ? "text-danger" :
+                          item.diffPct < -10 ? "text-success" : "";
+        const diffSign = item.diffPct > 0 ? "+" : "";
+        tr.innerHTML =
+          `<td title="${item.filename}">${item.filename.length > 30 ? item.filename.slice(0, 27) + "…" : item.filename}</td>` +
+          `<td class="text-right">${item.printCount}回</td>` +
+          `<td class="text-right">${item.estimatedSec > 0 ? _fmtTime(item.estimatedSec) : "—"}</td>` +
+          `<td class="text-right">${_fmtTime(item.actualAvgSec)}</td>` +
+          `<td class="text-right ${diffClass}">${item.estimatedSec > 0 ? `${diffSign}${item.diffPct}%` : "—"}</td>`;
+        evaTbody.appendChild(tr);
+      }
+      evaTable.appendChild(evaTbody);
+      evaSection.appendChild(evaTable);
+      body.appendChild(evaSection);
+    }
+  }
+
+  render();
+  // 30秒ごとに自動更新
+  body._productionTimer = setInterval(render, 30000);
 }

@@ -148,6 +148,7 @@ const PANEL_TYPES = [
   { id: "current-print", label: "現在の印刷",        templateId: "panel-tpl-current-print", defaultW: 48, defaultH: 12, minW: 6, minH: 6,  perHost: true },
   { id: "history",       label: "印刷履歴",          templateId: "panel-tpl-history",       defaultW: 48, defaultH: 20, minW: 6, minH: 6,  perHost: true },
   { id: "file-list",     label: "ファイル一覧",       templateId: "panel-tpl-file-list",    defaultW: 48, defaultH: 20, minW: 6, minH: 6,  perHost: true },
+  { id: "production",    label: "生産管理",          templateId: "panel-tpl-production",   defaultW: 48, defaultH: 24, minW: 8, minH: 10, perHost: false },
 ];
 
 /* ─── GridStack インスタンス ─── */

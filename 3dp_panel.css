@@ -2862,3 +2862,123 @@ body.panel-mode .notification-container {
   font-weight: bold;
   white-space: nowrap;
 }
+
+/* ===============================================================
+   生産管理パネル (Phase 3)
+   =============================================================== */
+.production-panel {
+  padding: var(--space-2, 8px);
+  overflow-y: auto;
+}
+/* サマリーカード共通 (フィラメント管理と共通) */
+.stat-cards {
+  display: flex;
+  gap: var(--space-2, 8px);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3, 12px);
+}
+.stat-card {
+  flex: 1;
+  min-width: 100px;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-bg-secondary, #f8fafc);
+  text-align: center;
+}
+.stat-card-label {
+  font-size: var(--font-xs, 10px);
+  color: var(--color-text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat-card-value {
+  font-size: var(--font-xl, 20px);
+  font-weight: bold;
+  color: var(--color-text-primary, #1a1a1a);
+  margin: var(--space-1, 4px) 0;
+}
+.stat-card-sub {
+  font-size: var(--font-xs, 10px);
+  color: var(--color-text-secondary, #4a5568);
+}
+/* セクションタイトル */
+.prod-section-title {
+  font-weight: bold;
+  font-size: var(--font-base, 14px);
+  margin-bottom: var(--space-2, 8px);
+  padding-bottom: var(--space-1, 4px);
+  border-bottom: 2px solid var(--color-border, #e2e8f0);
+}
+/* per-host 稼働率バー */
+.prod-host-section {
+  margin-bottom: var(--space-3, 12px);
+}
+.prod-host-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: var(--space-1, 4px) 0;
+}
+.prod-host-name {
+  width: 100px;
+  font-size: var(--font-sm, 12px);
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prod-util-bar-wrap {
+  flex: 1;
+}
+.prod-util-bar {
+  height: 16px;
+  background: var(--color-bg-tertiary, #e5e7eb);
+  border-radius: var(--radius-full, 9999px);
+  overflow: hidden;
+}
+.prod-util-bar-fill {
+  height: 100%;
+  background: var(--color-accent, #3b82f6);
+  border-radius: var(--radius-full, 9999px);
+  transition: width var(--transition-normal, 250ms ease);
+}
+.prod-util-bar-fill.printing {
+  background: var(--color-success, #22c55e);
+  animation: prod-pulse 2s ease-in-out infinite;
+}
+@keyframes prod-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+.prod-util-pct {
+  width: 40px;
+  text-align: right;
+  font-size: var(--font-sm, 12px);
+  font-weight: bold;
+}
+.prod-host-status {
+  width: 80px;
+  font-size: var(--font-xs, 10px);
+  color: var(--color-text-muted, #94a3b8);
+  text-align: right;
+}
+.prod-host-status.active {
+  color: var(--color-success, #22c55e);
+  font-weight: bold;
+}
+/* テーブル */
+.prod-daily-section,
+.prod-eva-section {
+  margin-bottom: var(--space-3, 12px);
+}
+/* テキスト色ヘルパー */
+.text-danger {
+  color: var(--color-danger, #ef4444);
+}
+.text-success {
+  color: var(--color-success, #22c55e);
+}
+.text-right {
+  text-align: right;
+}
