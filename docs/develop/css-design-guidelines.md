@@ -147,23 +147,66 @@ canvas.style.transform = `translate(${x}px, ${y}px)`;  // 3D描画
 以下のファイルは3D描画やキャンバス操作のため、`el.style.*` の使用が多数残る。
 これらはCSSクラス化の対象外とする。
 
-| ファイル | 残インラインスタイル数 | 理由 |
-|---------|---------------------|------|
-| `dashboard_filament_view.js` | ~99 | 3Dフィラメントプレビューのキャンバスリサイズ、transform、position |
-| `dashboard_stage_preview.js` | ~57 | ヘッド位置プレビューのキャンバス座標計算、スケール変換 |
-| `dashboard_filament_manager.js` | ~34 | テンプレート内の `text-align:right`、動的色、`display` トグル |
-| `dashboard_printmanager.js` | ~20 | テンプレート内の動的色、サムネイルスタイル |
+### 5.1 `dashboard_filament_view.js` — 疑似3Dフィラメントリール描画
+
+**描画方式**: DOM要素 + CSS 3D Transform（Canvas/SVGではない）
+
+44個のDOM要素を `transform-style:preserve-3d` + `rotateX/Y/Z` + `translateZ` で
+疑似3Dリール形状を構成。`redraw()` はドラッグ中に毎フレーム（~60fps）呼ばれる。
+
+| カテゴリ | 残スタイル数 | 許容理由 |
+|---------|-------------|---------|
+| 3D形状（position, width, height, transform, translateZ） | ~30 | フィラメント残量・リール寸法から毎フレーム計算 |
+| 動的色（filamentColor, reelBodyColor, blinkColor） | ~15 | ユーザー設定・スプールデータから動的決定 |
+| 表示トグル（display:none/block） | ~15 | オプションに応じた要素の出し入れ |
+| 動的不透明度（opacity: m.f, 0/1） | ~5 | フィラメント巻き残し量の連続値 |
+
+**ヘルパー関数**:
+- `styleCircle(diaPx, color, extra)` — 円形要素のcssTextを生成（直径・色・Z深度が全てランタイム値）
+- `ringCSS(dia)` — styleCircle のフィラメント色固定版
+
+**パフォーマンス上の注意**: `redraw()` 内の `style.cssText` 直書きは
+クラス名切替よりもブラウザのレイアウト再計算が最小化されるため、現行方式が最適。
+
+**抽出済み（外部CSS化完了）**:
+- 静的CSSルール 31件 + @keyframes 2件 → `3dp_panel.css`
+- 初期化時の固定レイアウト 15件 → CSSクラス化済み
+
+### 5.2 `dashboard_stage_preview.js` — ヘッド位置プレビュー
+
+| 残インラインスタイル数 | 理由 |
+|---------------------|------|
+| ~57 | ヘッド位置プレビューのキャンバス座標計算、スケール変換 |
+
+### 5.3 その他のファイル
+
+| ファイル | 残スタイル数 | 内訳 |
+|---------|-------------|------|
+| `dashboard_filament_manager.js` | ~34 | テンプレート内 `text-align:right`、動的色、`display` トグル |
+| `dashboard_filament_change.js` | ~18 | タブボタン色、装着バー色、テンプレート内テキスト色 |
+| `dashboard_printmanager.js` | ~20 | 動的色、サムネイル、テンプレートHTML |
+| `dashboard_notification_manager.js` | ~3 | テスト結果色、セパレータ |
 
 ---
 
-## 6. Phase 1 完了時の残タスク
+## 6. 残タスクと将来の改善
 
-### 将来のCSS改善
+### 6.1 未修正の規約違反（低優先）
 
-1. **`text-align: right` のクラス化**: テーブルヘッダーで `style="text-align:right"` が多用されている → `data-align="right"` 属性 + CSS `[data-align="right"] { text-align: right; }` に統一検討
-2. **filament_view/stage_preview のリファクタ**: 3D描画ロジック自体をCSS Transform主体に移行する場合に検討
+| 対象 | 箇所数 | 内容 |
+|------|--------|------|
+| `filament_change.js` テンプレート | 18 | タブボタン・装着バーのハードコード色 → CSSクラス化推奨 |
+| `printmanager.js` テンプレート | 7 | 警告色・背景色 → pm-insight-card 等のクラス利用推奨 |
+| `3dp_monitor.css` UIテーマ色 | 12 | `#555`,`#fdecea`,`#a71d2a`,`#4ea3ff` 等 → トークン化推奨 |
+| `3dp_monitor.css` 3D描画固有色 | 17 | chamber/stage/grid-line — 移行不要 |
+
+### 6.2 将来のCSS改善
+
+1. **`text-align: right` のクラス化**: テーブルヘッダーの `style="text-align:right"` → `[data-align="right"]` 属性ベースに統一
+2. **stage_preview のCSS抽出**: filament_view と同様に静的ルールを外部化
 3. **CSS Modules / Scoped Styles**: Electron アプリのため現時点では不要だが、Web版展開時に検討
 4. **テーマカスタマイズUI**: ユーザーがアクセントカラーやフォントサイズを設定パネルから変更できる仕組み
+5. **filament_change.js テンプレートの完全クラス化**: テンプレートリテラル内の `style=` を全てCSSクラスに移行
 
 ---
 
@@ -171,10 +214,10 @@ canvas.style.transform = `translate(${x}px, ${y}px)`;  // 3D描画
 
 | 指標 | 値 |
 |------|-----|
-| 定義トークン数 | 60+ (ライト) + 60+ (ダーク) |
-| CSS置換箇所（3dp_panel.css） | ~90色 + 35フォント + 15 z-index |
-| CSS置換箇所（3dp_monitor.css） | ~66色（95→29残、3D描画用） |
-| JS injectStyles抽出 | 4ファイル, 111 CSSルール |
-| JSインラインスタイル削減 | connection: 21→1, filament_manager: 85→34, printmanager: 6→~20 |
-| 新規CSSクラス定義 | ~80クラス |
+| 定義トークン数 | 65+ (ライト) + 65+ (ダーク) |
+| CSS置換箇所（3dp_panel.css） | ~95色 + 35フォント + 15 z-index |
+| CSS置換箇所（3dp_monitor.css） | ~66色（95→29残、うち17は3D描画固有） |
+| JS injectStyles抽出 | **5ファイル**, 142 CSSルール + 2 @keyframes |
+| JSインラインスタイル削減 | connection: 21→1, filament_manager: 85→34, filament_view: 99→~80, printmanager: 8件置換 |
+| 新規CSSクラス定義 | ~95クラス |
 | テスト | 123件 全グリーン維持 |
