@@ -192,6 +192,8 @@ export function setCurrentHostname(host) {
  *   machines: Record<string, MachineData>,
  *   filamentSpools: Array<Object>,
  *   filamentPresets: Array<Object>,
+ *   userPresets: Array<Object>,
+ *   hiddenPresets: Array<string>,
  *   usageHistory: Array<Object>,
  *   filamentInventory: Array<Object>,
  *   currentSpoolId: string|null,
@@ -227,6 +229,10 @@ export const monitorData = {
   },
   filamentSpools: [],
   filamentPresets: FILAMENT_PRESETS,
+  /** ユーザー定義プリセット（カスタムフィラメント銘柄） @type {Array<Object>} */
+  userPresets: [],
+  /** 非表示プリセットID一覧 @type {Array<string>} */
+  hiddenPresets: [],
   usageHistory: [],
   filamentInventory: [],
   currentSpoolId: null,

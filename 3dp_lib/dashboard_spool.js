@@ -116,16 +116,43 @@ export function formatSpoolDisplayId(spool) {
   return `#${String(spool.serialNo || 0).padStart(3, "0")}`;
 }
 
-// Material density [g/cm^3]
+/**
+ * 素材ごとの密度 [g/cm³]。
+ * 重量⇔長さ変換に使用。キーは大文字小文字区別なしで照合すべき。
+ * @type {Object.<string, number>}
+ */
 export const MATERIAL_DENSITY = {
   PLA: 1.24,
+  "PLA+": 1.24,
+  "PLA Silk": 1.24,
   PETG: 1.27,
+  "PETG-CF": 1.35,
   ABS: 1.04,
-  TPU: 1.20
+  ASA: 1.07,
+  TPU: 1.20,
+  PA: 1.14,
+  Nylon: 1.14,
+  PC: 1.20,
+  PVA: 1.19,
+  HIPS: 1.04
 };
 
+/**
+ * 素材名から密度を取得する。大文字小文字を区別せずに照合する。
+ * 一致しない場合は PLA の密度をフォールバック値として返す。
+ * @param {string} mat - 素材名
+ * @returns {number} 密度 [g/cm³]
+ */
 export function getMaterialDensity(mat) {
-  return MATERIAL_DENSITY[mat] || MATERIAL_DENSITY.PLA;
+  if (!mat) return MATERIAL_DENSITY.PLA;
+  // 完全一致
+  if (MATERIAL_DENSITY[mat] != null) return MATERIAL_DENSITY[mat];
+  // 大文字小文字非依存で検索
+  const upper = mat.toUpperCase();
+  for (const [key, val] of Object.entries(MATERIAL_DENSITY)) {
+    if (key.toUpperCase() === upper) return val;
+  }
+  return MATERIAL_DENSITY.PLA;
 }
 
 export function lengthFromWeight(weightGram, density, diameterMm = 1.75) {
@@ -188,6 +215,77 @@ export function formatFilamentAmount(mm, spool = null) {
  * コスト効率・消費ペース・枯渇予測を算出する。
  *
  * @function buildSpoolAnalytics
+ * @typedef {Object} WasteReport
+ * @property {number} totalWastedSpools - 廃棄スプール数
+ * @property {number} totalWastedLengthMm - 廃棄フィラメント長 [mm]
+ * @property {number} totalWastedWeightGram - 廃棄フィラメント重量 [g]
+ * @property {number} totalWastedCost - 廃棄推定損失額
+ * @property {Map<string, {length: number, weight: number, cost: number, count: number}>} wastedByMaterial
+ * @property {Array<{spool: Object, wastedLength: number, wastedCost: number}>} recentWasted
+ */
+
+/**
+ * 廃棄スプールの損失レポートを生成する。
+ * deleted===true かつ remainingLengthMm > 0 のスプールを対象に、
+ * 残量の長さ・重量・推定コストを集計する。
+ *
+ * @returns {WasteReport} 廃棄ロスレポート
+ */
+export function buildWasteReport() {
+  const allSpools = getSpools();
+  const wastedByMaterial = new Map();
+  const recentWasted = [];
+  let totalLen = 0;
+  let totalWeight = 0;
+  let totalCost = 0;
+  let count = 0;
+
+  for (const sp of allSpools) {
+    // 廃棄済みで残量がある（＝ロス発生）スプールのみ対象
+    if (!sp.deleted && !sp.isDeleted) continue;
+    const remain = sp.remainingLengthMm || 0;
+    if (remain <= 0) continue;
+
+    count++;
+    const density = getMaterialDensity(sp.materialName || sp.material);
+    const wGram = weightFromLength(remain, density, sp.filamentDiameter || 1.75);
+    // コストの按分: (残量/総量) × 購入額
+    const total = sp.totalLengthMm || 1;
+    const price = sp.purchasePrice || 0;
+    const wastedCost = total > 0 ? price * (remain / total) : 0;
+
+    totalLen += remain;
+    totalWeight += wGram;
+    totalCost += wastedCost;
+
+    // 素材別集計
+    const mat = sp.materialName || sp.material || "不明";
+    if (!wastedByMaterial.has(mat)) {
+      wastedByMaterial.set(mat, { length: 0, weight: 0, cost: 0, count: 0 });
+    }
+    const entry = wastedByMaterial.get(mat);
+    entry.length += remain;
+    entry.weight += wGram;
+    entry.cost += wastedCost;
+    entry.count++;
+
+    recentWasted.push({ spool: sp, wastedLength: remain, wastedCost });
+  }
+
+  // 直近の廃棄を降順（removedAt が新しい順）でソート
+  recentWasted.sort((a, b) => (b.spool.removedAt || 0) - (a.spool.removedAt || 0));
+
+  return {
+    totalWastedSpools: count,
+    totalWastedLengthMm: totalLen,
+    totalWastedWeightGram: totalWeight,
+    totalWastedCost: totalCost,
+    wastedByMaterial,
+    recentWasted
+  };
+}
+
+/**
  * @param {string} spoolId - スプール ID
  * @returns {Object|null} 分析結果。スプール未発見時は null
  */

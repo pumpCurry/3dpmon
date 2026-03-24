@@ -23,8 +23,16 @@
 
 "use strict";
 
+import { monitorData } from "./dashboard_data.js";
+
+/** プリセットエクスポートのフォーマットバージョン */
+const FORMAT_VERSION = 1;
+
+/** カスタムプリセット作成に必須のフィールド */
+const REQUIRED_FIELDS = ["brand", "material", "color", "colorName", "defaultLength"];
+
 /**
- * フィラメントプリセット情報の配列。
+ * フィラメントプリセット情報の配列（ビルトイン）。
  * @type {Array<Object>}
  */
 export const FILAMENT_PRESETS = [
@@ -647,4 +655,224 @@ export const FILAMENT_PRESETS = [
   { presetId: "preset-prinsfil-go-pla-silk-silver", brand: "PRINSFIL", name: "PRINSFIL GO PLA SILK", material: "PLA SILK", color: "#C0C0C0", colorName: "シルバー", defaultLength: 340000, diameter: 1.75, filamentDiameter: 1.75, filamentTotalLength: 340000, filamentCurrentLength: 340000, density: 1.24, printTempMin: 200, printTempMax: 230, bedTempMin: 50, bedTempMax: 60, reelOuterDiameter: 200, reelThickness: 65, reelWindingInnerDiameter: 95, reelCenterHoleDiameter: 54, reelBodyColor: "#E8E8E8", reelFlangeTransparency: 0.7, reelWindingForegroundColor: "#71717A", reelCenterHoleForegroundColor: "#F4F4F5", purchaseLink: "https://www.amazon.co.jp/dp/B0F9WNKWWH" },
   { presetId: "preset-prinsfil-go-pla-silk-copper", brand: "PRINSFIL", name: "PRINSFIL GO PLA SILK", material: "PLA SILK", color: "#B87333", colorName: "銅", defaultLength: 340000, diameter: 1.75, filamentDiameter: 1.75, filamentTotalLength: 340000, filamentCurrentLength: 340000, density: 1.24, printTempMin: 200, printTempMax: 230, bedTempMin: 50, bedTempMax: 60, reelOuterDiameter: 200, reelThickness: 65, reelWindingInnerDiameter: 95, reelCenterHoleDiameter: 54, reelBodyColor: "#E8E8E8", reelFlangeTransparency: 0.7, reelWindingForegroundColor: "#71717A", reelCenterHoleForegroundColor: "#F4F4F5", purchaseLink: "https://www.amazon.co.jp/dp/B0F9WMN5PX" }
 ];
+
+/* ===================================================================
+   カスタムプリセット管理 — ユーザー定義プリセットのCRUD + インポート/エクスポート
+   =================================================================== */
+
+/**
+ * ビルトイン + ユーザー定義の全プリセットを統合して返す。
+ * 非表示プリセットは含む（フィルタリングは呼び出し元で実施）。
+ *
+ * @param {{ includeHidden?: boolean }} [opts] - オプション
+ * @returns {Array<Object>} 統合プリセット配列
+ */
+export function getAllPresets(opts = {}) {
+  const builtin = FILAMENT_PRESETS.map(p => ({ ...p, isBuiltin: true, presetVersion: p.presetVersion || 1 }));
+  const user = (monitorData.userPresets || []).map(p => ({ ...p, isBuiltin: false }));
+  const all = [...builtin, ...user];
+  if (opts.includeHidden) return all;
+  const hidden = new Set(monitorData.hiddenPresets || []);
+  return all.filter(p => !hidden.has(p.presetId));
+}
+
+/**
+ * 指定プリセットIDが非表示かどうか判定する。
+ * @param {string} presetId - プリセットID
+ * @returns {boolean}
+ */
+export function isHiddenPreset(presetId) {
+  return (monitorData.hiddenPresets || []).includes(presetId);
+}
+
+/**
+ * プリセットの表示/非表示を切り替える。
+ * @param {string} presetId - 対象プリセットID
+ * @returns {boolean} 切替後の非表示状態
+ */
+export function togglePresetVisibility(presetId) {
+  if (!monitorData.hiddenPresets) monitorData.hiddenPresets = [];
+  const idx = monitorData.hiddenPresets.indexOf(presetId);
+  if (idx >= 0) {
+    monitorData.hiddenPresets.splice(idx, 1);
+    return false; // 表示に戻った
+  }
+  monitorData.hiddenPresets.push(presetId);
+  return true; // 非表示にした
+}
+
+/**
+ * カスタムプリセットのバリデーション。
+ * @private
+ * @param {Object} data - プリセットデータ
+ * @returns {{ valid: boolean, errors: string[] }}
+ */
+function _validatePreset(data) {
+  const errors = [];
+  for (const field of REQUIRED_FIELDS) {
+    if (!data[field] && data[field] !== 0) {
+      errors.push(`必須フィールド '${field}' が未設定です`);
+    }
+  }
+  if (data.defaultLength != null && data.defaultLength <= 0) {
+    errors.push("defaultLength は正の数である必要があります");
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * ユーザー定義プリセットを新規追加する。
+ * presetId は自動生成（user-{uuid}）。
+ *
+ * @param {Object} data - プリセットデータ（presetId不要）
+ * @returns {{ success: boolean, preset?: Object, errors?: string[] }}
+ */
+export function addUserPreset(data) {
+  const validation = _validatePreset(data);
+  if (!validation.valid) return { success: false, errors: validation.errors };
+
+  if (!monitorData.userPresets) monitorData.userPresets = [];
+
+  const preset = {
+    ...data,
+    presetId: `user-${crypto.randomUUID()}`,
+    isBuiltin: false,
+    presetVersion: 1,
+    source: "3dpmon-user",
+    createdAt: new Date().toISOString(),
+    // デフォルト値の補完
+    diameter: data.diameter || 1.75,
+    filamentDiameter: data.filamentDiameter || data.diameter || 1.75,
+    filamentTotalLength: data.filamentTotalLength || data.defaultLength,
+    filamentCurrentLength: data.filamentCurrentLength || data.defaultLength,
+    reelOuterDiameter: data.reelOuterDiameter || 200,
+    reelThickness: data.reelThickness || 65,
+    reelWindingInnerDiameter: data.reelWindingInnerDiameter || 95,
+    reelCenterHoleDiameter: data.reelCenterHoleDiameter || 54,
+    reelBodyColor: data.reelBodyColor || "#A1A1AA",
+    reelFlangeTransparency: data.reelFlangeTransparency ?? 0.4,
+    reelWindingForegroundColor: data.reelWindingForegroundColor || "#71717A",
+    reelCenterHoleForegroundColor: data.reelCenterHoleForegroundColor || "#F4F4F5"
+  };
+
+  monitorData.userPresets.push(preset);
+  return { success: true, preset };
+}
+
+/**
+ * 既存カスタムプリセットを更新する。
+ * ビルトインプリセットは更新不可。
+ *
+ * @param {string} presetId - 更新対象のプリセットID
+ * @param {Object} changes - 変更するフィールド
+ * @returns {{ success: boolean, errors?: string[] }}
+ */
+export function updateUserPreset(presetId, changes) {
+  if (!presetId.startsWith("user-")) {
+    return { success: false, errors: ["ビルトインプリセットは編集できません"] };
+  }
+  const arr = monitorData.userPresets || [];
+  const idx = arr.findIndex(p => p.presetId === presetId);
+  if (idx < 0) return { success: false, errors: ["プリセットが見つかりません"] };
+
+  const merged = { ...arr[idx], ...changes, presetId, isBuiltin: false };
+  const validation = _validatePreset(merged);
+  if (!validation.valid) return { success: false, errors: validation.errors };
+
+  arr[idx] = merged;
+  return { success: true };
+}
+
+/**
+ * カスタムプリセットを削除する。
+ * ビルトインプリセットは削除不可。
+ *
+ * @param {string} presetId - 削除対象のプリセットID
+ * @returns {{ success: boolean, errors?: string[] }}
+ */
+export function deleteUserPreset(presetId) {
+  if (!presetId.startsWith("user-")) {
+    return { success: false, errors: ["ビルトインプリセットは削除できません"] };
+  }
+  const arr = monitorData.userPresets || [];
+  const idx = arr.findIndex(p => p.presetId === presetId);
+  if (idx < 0) return { success: false, errors: ["プリセットが見つかりません"] };
+
+  arr.splice(idx, 1);
+  // 非表示リストからも除去
+  const hidIdx = (monitorData.hiddenPresets || []).indexOf(presetId);
+  if (hidIdx >= 0) monitorData.hiddenPresets.splice(hidIdx, 1);
+  return { success: true };
+}
+
+/**
+ * ユーザー定義プリセットをJSON文字列としてエクスポートする。
+ * フォーマットバージョンと由来情報を含む。
+ *
+ * @returns {string} JSON文字列
+ */
+export function exportUserPresets() {
+  return JSON.stringify({
+    formatVersion: FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    source: "3dpmon-user",
+    presets: monitorData.userPresets || []
+  }, null, 2);
+}
+
+/**
+ * JSON文字列からユーザー定義プリセットをインポートする。
+ * マージモード（デフォルト）ではID重複時に既存を優先し新規のみ追加。
+ *
+ * @param {string} jsonStr - JSON文字列
+ * @param {{ merge?: boolean }} [opts] - merge: true（デフォルト）で既存に追加、falseで全置換
+ * @returns {{ success: boolean, added: number, skipped: number, errors: string[] }}
+ */
+export function importUserPresets(jsonStr, opts = {}) {
+  const merge = opts.merge !== false;
+  const errors = [];
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (e) {
+    return { success: false, added: 0, skipped: 0, errors: ["JSONの解析に失敗しました: " + e.message] };
+  }
+
+  if (!parsed.presets || !Array.isArray(parsed.presets)) {
+    return { success: false, added: 0, skipped: 0, errors: ["presets配列が見つかりません"] };
+  }
+
+  if (!monitorData.userPresets) monitorData.userPresets = [];
+  const existingIds = new Set(monitorData.userPresets.map(p => p.presetId));
+  let added = 0;
+  let skipped = 0;
+
+  if (!merge) {
+    // 全置換モード
+    monitorData.userPresets = [];
+    existingIds.clear();
+  }
+
+  for (const p of parsed.presets) {
+    const validation = _validatePreset(p);
+    if (!validation.valid) {
+      errors.push(`プリセット "${p.colorName || p.presetId || "不明"}": ${validation.errors.join(", ")}`);
+      skipped++;
+      continue;
+    }
+    if (existingIds.has(p.presetId)) {
+      skipped++;
+      continue;
+    }
+    // presetId がなければ自動生成
+    if (!p.presetId) p.presetId = `user-${crypto.randomUUID()}`;
+    p.isBuiltin = false;
+    p.source = p.source || "3dpmon-user";
+    monitorData.userPresets.push(p);
+    existingIds.add(p.presetId);
+    added++;
+  }
+
+  return { success: true, added, skipped, errors };
+}
 

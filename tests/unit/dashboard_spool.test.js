@@ -180,8 +180,25 @@ describe('getMaterialDensity', () => {
     expect(getMaterialDensity('PETG')).toBe(1.27);
   });
 
+  it('拡張素材（Phase 2 追加）の密度を返す', () => {
+    expect(getMaterialDensity('PLA+')).toBe(1.24);
+    expect(getMaterialDensity('ASA')).toBe(1.07);
+    expect(getMaterialDensity('PA')).toBe(1.14);
+    expect(getMaterialDensity('Nylon')).toBe(1.14);
+    expect(getMaterialDensity('PC')).toBe(1.20);
+    expect(getMaterialDensity('PETG-CF')).toBe(1.35);
+    expect(getMaterialDensity('HIPS')).toBe(1.04);
+    expect(getMaterialDensity('PVA')).toBe(1.19);
+  });
+
+  it('大文字小文字非依存で照合', () => {
+    expect(getMaterialDensity('pla')).toBe(1.24);
+    expect(getMaterialDensity('petg')).toBe(1.27);
+    expect(getMaterialDensity('Asa')).toBe(1.07);
+  });
+
   it('未知素材 → PLA密度にフォールバック', () => {
-    expect(getMaterialDensity('Nylon')).toBe(1.24);
+    expect(getMaterialDensity('UnknownMaterial')).toBe(1.24);
     expect(getMaterialDensity(null)).toBe(1.24);
     expect(getMaterialDensity('')).toBe(1.24);
   });
