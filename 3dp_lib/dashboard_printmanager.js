@@ -192,6 +192,8 @@ const _lastSavedJsonMap = new Map();
 let _dropHandlerInstalled = false;
 /** ホスト別ドロップ処理コールバック */
 const _dropTargetCallbacks = new Map();
+/** D&Dアップロード時の選択済みホスト (cleanup前にキャプチャ) */
+let _lastSelectedUploadHosts = [];
 
 
 // 最新のファイル一覧データ（renderFileList 実行時に更新、per-host）
@@ -1818,13 +1820,22 @@ export function setupUploadUI(root, hostname) {
             <span>${hostOptions[i]}</span>
           </label>`
         ).join("");
-        // 全選択/解除のワイヤリングをダイアログ表示直後に実行
+        // ダイアログ表示直後にワイヤリング (DOM が存在する瞬間に実行)
         setTimeout(() => {
+          // 全選択/解除
           const allChk = document.getElementById("upload-host-all");
           if (allChk) {
             allChk.addEventListener("change", () => {
               document.querySelectorAll(".upload-host-chk").forEach(c => { c.checked = allChk.checked; });
             });
+          }
+          // confirm ボタンの click を先にキャプチャし、cleanup 前にチェック状態を保存
+          const confirmBtn = document.querySelector(".confirm-button.confirm-destructive");
+          if (confirmBtn) {
+            confirmBtn.addEventListener("click", () => {
+              const checked = document.querySelectorAll(".upload-host-chk:checked");
+              _lastSelectedUploadHosts = [...checked].map(el => el.value);
+            }, true); // capture phase で cleanup より先に実行
           }
         }, 0);
         const ok = await showConfirmDialog({
@@ -1843,12 +1854,10 @@ export function setupUploadUI(root, hostname) {
           cancelText: "キャンセル"
         });
         if (!ok) return;
-        // 選択されたホストを取得
-        const checkedEls = document.querySelectorAll(".upload-host-chk:checked");
-        const selectedHosts = [...checkedEls].map(el => el.value);
-        if (selectedHosts.length === 0) return;
         // 選択された全ホストにアップロード
-        for (const targetHost of selectedHosts) {
+        // (selectedUploadHosts は confirm ボタン押下時に取得済み)
+        if (_lastSelectedUploadHosts.length === 0) return;
+        for (const targetHost of _lastSelectedUploadHosts) {
           _dropTargetCallbacks.get(targetHost)?.(file);
         }
       } else {
