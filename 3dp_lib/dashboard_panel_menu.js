@@ -365,13 +365,14 @@ function _renderPanelToggle(pt, host, panelId, activeEntries = []) {
   html += `<span class="panel-toggle-icon">${active ? "\u2611" : "\u2610"}</span>`;
   html += `<span style="flex:1;text-align:left;margin-left:4px">${pt.label}</span>`;
   if (active) {
-    html += `<span class="panel-row-lock" data-panel-id="${panelId}" style="border:1px solid ${isLocked ? "#f59e0b" : "#ddd"};border-radius:3px;padding:1px 5px;font-size:11px;background:${isLocked ? "#fef3c7" : "transparent"};margin-left:4px" title="${isLocked ? "固定解除" : "固定する"}">${isLocked ? "🔒" : "📌"}</span>`;
+    html += `<span class="panel-row-lock${isLocked ? " locked" : ""}" data-panel-id="${panelId}" title="${isLocked ? "固定解除" : "固定する"}">${isLocked ? "🔒" : "📌"}</span>`;
   }
   html += `</button>`;
-  // フォントサイズ調整 (状態・機器情報パネル向け)
-  if (active && (pt.id === "status" || pt.id === "machine-info")) {
+  // フォントサイズ調整 (テキスト主体のパネル向け)
+  const fontSizePanels = ["status", "machine-info", "control-temp", "control-cmd", "log"];
+  if (active && fontSizePanels.includes(pt.id)) {
     const curSize = panelEntry?.[1]?.element?.style.fontSize || "13px";
-    html += `<div style="display:flex;align-items:center;gap:4px;padding:0 4px;font-size:11px;color:#64748b">`;
+    html += `<div style="display:flex;align-items:center;gap:4px;padding:0 4px;font-size:var(--font-xs, 11px);color:var(--color-text-muted, #64748b)">`;
     html += `<span>文字</span>`;
     html += `<input type="range" class="panel-fontsize-range" data-panel-id="${panelId}" min="9" max="18" step="1" value="${parseInt(curSize) || 13}" style="flex:1;height:16px">`;
     html += `<span class="panel-fontsize-val">${parseInt(curSize) || 13}px</span>`;

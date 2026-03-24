@@ -2675,3 +2675,20 @@ body.panel-mode .notification-container {
   margin-bottom: var(--space-2);
   color: var(--color-danger-text);
 }
+
+/* ---------------------------------------------------------------
+   パネルメニュー: ロックボタン (インラインスタイル排除)
+--------------------------------------------------------------- */
+.panel-row-lock {
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: var(--radius-sm, 3px);
+  padding: 1px 5px;
+  font-size: var(--font-xs, 11px);
+  background: transparent;
+  margin-left: var(--space-1, 4px);
+  cursor: pointer;
+}
+.panel-row-lock.locked {
+  border-color: var(--color-warning, #f59e0b);
+  background: var(--color-warning-bg, #fef3c7);
+}
