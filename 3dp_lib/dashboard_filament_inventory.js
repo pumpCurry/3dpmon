@@ -67,10 +67,13 @@ function ensureItem(modelId) {
       quantity: 0,
       isUnlimitedStock: false,
       lastUsedAt: null,
-      totalUsedNum: 0
+      totalUsedNum: 0,
+      minStockAlert: 1  // デフォルト閾値: 1（在庫1以下で警告）
     };
     monitorData.filamentInventory.push(item);
   }
+  // 既存アイテムに minStockAlert がなければ補完
+  if (item.minStockAlert == null) item.minStockAlert = 1;
   return item;
 }
 
@@ -112,6 +115,44 @@ export function adjustInventory(modelId, delta) {
  * @param {number} [amount=1] - 使用本数
  * @returns {number} 在庫更新後の数量
  */
+/**
+ * 在庫の最小閾値を設定する。
+ *
+ * @param {string} modelId - プリセットID
+ * @param {number} threshold - 閾値（この数以下で警告）
+ * @returns {number} 設定後の閾値
+ */
+export function setMinStockAlert(modelId, threshold) {
+  const item = ensureItem(modelId);
+  item.minStockAlert = Math.max(0, Number(threshold) || 0);
+  saveUnifiedStorage();
+  return item.minStockAlert;
+}
+
+/**
+ * 指定プリセットの在庫が閾値以下かどうか判定する。
+ *
+ * @param {string} modelId - プリセットID
+ * @returns {boolean} 閾値以下なら true
+ */
+export function isLowStock(modelId) {
+  const item = getInventoryItem(modelId);
+  if (!item) return false;
+  if (item.isUnlimitedStock) return false;
+  return item.quantity <= (item.minStockAlert ?? 1);
+}
+
+/**
+ * 在庫が閾値以下のプリセットID一覧を返す。
+ *
+ * @returns {Array<{modelId: string, quantity: number, minStockAlert: number}>}
+ */
+export function getLowStockPresets() {
+  return monitorData.filamentInventory
+    .filter(inv => !inv.isUnlimitedStock && inv.quantity <= (inv.minStockAlert ?? 1))
+    .map(inv => ({ modelId: inv.modelId, quantity: inv.quantity, minStockAlert: inv.minStockAlert ?? 1 }));
+}
+
 export function consumeInventory(modelId, amount = 1) {
   const item = ensureItem(modelId);
   const a = Number(amount) || 1;

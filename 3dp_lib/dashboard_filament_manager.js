@@ -51,7 +51,10 @@ import {
 import {
   getInventory,
   setInventoryQuantity,
-  adjustInventory
+  adjustInventory,
+  setMinStockAlert,
+  isLowStock,
+  getLowStockPresets
 } from "./dashboard_filament_inventory.js";
 import {
   FILAMENT_PRESETS,
@@ -269,13 +272,25 @@ function createDashboardContent(hostname, switchTab) {
       else if (st === SPOOL_STATE.DISCARDED) discardedCount++;
     });
 
+    // 在庫警告チェック
+    const lowStockItems = getLowStockPresets();
+    const outOfStock = lowStockItems.filter(i => i.quantity <= 0).length;
+    const lowStock = lowStockItems.length - outOfStock;
+
     // サマリ行
     const summary = document.createElement("div");
     summary.className = "dashboard-summary";
-    summary.innerHTML =
+    let summaryHtml =
       `<span>装着中: ${mountedCount}</span>` +
       `<span>保管中: ${storedCount}</span>` +
       `<span>廃棄済: ${discardedCount}</span>`;
+    if (outOfStock > 0) {
+      summaryHtml += `<span class="inv-alert-badge danger">🚨 在庫切れ: ${outOfStock}件</span>`;
+    }
+    if (lowStock > 0) {
+      summaryHtml += `<span class="inv-alert-badge warning">⚠ 在庫低下: ${lowStock}件</span>`;
+    }
+    summary.innerHTML = summaryHtml;
     div.appendChild(summary);
 
     // per-host セクション
@@ -730,6 +745,14 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
       const usage = usageMap[p.presetId]?.count || 0;
       const inv = invMap[p.presetId];
       const qty = inv ? inv.quantity : 0;
+      const threshold = inv?.minStockAlert ?? 1;
+
+      // 在庫警告スタイル
+      if (qty <= 0) {
+        tr.classList.add("inv-row-danger");
+      } else if (qty <= threshold) {
+        tr.classList.add("inv-row-warning");
+      }
 
       // 色見本
       const colorTd = document.createElement("td");

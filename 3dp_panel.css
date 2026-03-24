@@ -2625,3 +2625,53 @@ body.panel-mode .notification-container {
   from { opacity: 1; }
   to   { opacity: 0.3; }
 }
+
+/* ===============================================================
+   在庫アラート (Phase 2 Step 2)
+   =============================================================== */
+/* 在庫切れ（quantity <= 0） */
+.inv-row-danger {
+  background: var(--color-danger-bg) !important;
+}
+.inv-row-danger td {
+  color: var(--color-danger-text);
+}
+/* 在庫低下（0 < quantity <= minStockAlert） */
+.inv-row-warning {
+  background: var(--color-warning-bg) !important;
+}
+/* 在庫警告バッジ */
+.inv-alert-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--font-xs);
+  font-weight: bold;
+}
+.inv-alert-badge.danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+.inv-alert-badge.warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+/* ===============================================================
+   廃棄ロス (Phase 2 Step 3)
+   =============================================================== */
+.waste-section {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-bg);
+}
+.waste-section-title {
+  font-weight: bold;
+  font-size: var(--font-base);
+  margin-bottom: var(--space-2);
+  color: var(--color-danger-text);
+}
