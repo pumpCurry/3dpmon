@@ -2679,6 +2679,59 @@ body.panel-mode .notification-container {
 /* ---------------------------------------------------------------
    パネルメニュー: ロックボタン (インラインスタイル排除)
 --------------------------------------------------------------- */
+/* ---------------------------------------------------------------
+   アップロード確認ダイアログ
+--------------------------------------------------------------- */
+.pm-upload-confirm {
+  display: flex;
+  gap: var(--space-3, 12px);
+  align-items: flex-start;
+  margin-bottom: var(--space-3, 12px);
+}
+.pm-upload-thumb {
+  width: 100px;
+  border-radius: var(--radius-sm, 4px);
+  flex-shrink: 0;
+}
+.pm-upload-filename {
+  font-weight: bold;
+  font-size: var(--font-base, 14px);
+  word-break: break-all;
+}
+.pm-upload-size {
+  font-size: var(--font-sm, 12px);
+  color: var(--color-text-muted, #64748b);
+}
+.pm-upload-warn {
+  color: var(--color-warning-text, #d97706);
+  font-weight: bold;
+  margin-top: var(--space-1, 4px);
+}
+.pm-upload-host-section {
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 4px);
+  padding: var(--space-2, 8px);
+  margin-top: var(--space-2, 8px);
+}
+.pm-upload-host-header {
+  margin-bottom: var(--space-1, 4px);
+  font-size: var(--font-sm, 12px);
+}
+.pm-upload-host-list {
+  max-height: 150px;
+  overflow-y: auto;
+}
+.pm-upload-host-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 6px);
+  padding: var(--space-1, 4px) 0;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------
+   パネルメニュー: ロックボタン (インラインスタイル排除)
+--------------------------------------------------------------- */
 .panel-row-lock {
   border: 1px solid var(--color-border, #ddd);
   border-radius: var(--radius-sm, 3px);

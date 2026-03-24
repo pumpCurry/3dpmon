@@ -1805,69 +1805,102 @@ export function setupUploadUI(root, hostname) {
       hideDropLayer();
       if (!e.dataTransfer?.files?.length) return;
       const file = e.dataTransfer.files[0];
-      // マルチプリンタの場合: アップロード先を選択
-      const hosts = Object.keys(monitorData.machines).filter(
+
+      // ファイル読み込み + サムネイル抽出
+      showProgress();
+      let thumb;
+      try {
+        const text = await readFile(file);
+        updateProgress(file.size, file.size);
+        thumb = extractThumb(text);
+      } catch (err) {
+        hideProgress();
+        console.error("[D&D] ファイル読み込みエラー:", err);
+        return;
+      }
+      hideProgress();
+      if (!thumb) {
+        thumb = `http://${getDeviceIp(hostname)}/downloads/defData/file_icon.png`;
+      }
+
+      // 接続中プリンタ一覧
+      const allHosts = Object.keys(monitorData.machines).filter(
         h => h !== "_$_NO_MACHINE_$_" && monitorData.machines[h]?.storedData
       );
-      if (hosts.length > 1) {
-        const hostOptions = hosts.map(h => {
+
+      // ホスト選択UI (マルチプリンタ時のみ)
+      let hostSelectHtml = "";
+      if (allHosts.length > 1) {
+        const checkboxes = allHosts.map(h => {
           const m = monitorData.machines[h];
-          return m.storedData?.hostname?.rawValue || h;
-        });
-        const checkboxes = hosts.map((h, i) =>
-          `<label style="display:flex;align-items:center;gap:6px;padding:4px 0;cursor:pointer">
-            <input type="checkbox" class="upload-host-chk" value="${h}" checked>
-            <span>${hostOptions[i]}</span>
-          </label>`
-        ).join("");
-        // ダイアログ表示直後にワイヤリング (DOM が存在する瞬間に実行)
-        setTimeout(() => {
-          // 全選択/解除
-          const allChk = document.getElementById("upload-host-all");
-          if (allChk) {
-            allChk.addEventListener("change", () => {
-              document.querySelectorAll(".upload-host-chk").forEach(c => { c.checked = allChk.checked; });
-            });
-          }
-          // confirm ボタンの click を先にキャプチャし、cleanup 前にチェック状態を保存
-          const confirmBtn = document.querySelector(".confirm-button.confirm-destructive");
-          if (confirmBtn) {
-            confirmBtn.addEventListener("click", () => {
-              const checked = document.querySelectorAll(".upload-host-chk:checked");
-              _lastSelectedUploadHosts = [...checked].map(el => el.value);
-            }, true); // capture phase で cleanup より先に実行
-          }
-        }, 0);
-        const ok = await showConfirmDialog({
-          level: "info",
-          title: "アップロード先の選択",
-          html: `<div style="margin-bottom:8px"><strong>${file.name}</strong> をアップロードするプリンタを選択してください</div>
-            <div style="margin-bottom:8px">
-              <label style="cursor:pointer;font-size:12px;color:#3b82f6">
-                <input type="checkbox" id="upload-host-all" checked> 全て選択/解除
-              </label>
+          const name = m.storedData?.hostname?.rawValue || h;
+          return `<label class="pm-upload-host-label"><input type="checkbox" class="pm-upload-host-chk" value="${h}" checked> ${name}</label>`;
+        }).join("");
+        hostSelectHtml = `
+          <div class="pm-upload-host-section">
+            <div class="pm-upload-host-header"><label><input type="checkbox" id="pm-upload-host-all" checked> 全て選択/解除</label></div>
+            <div class="pm-upload-host-list">${checkboxes}</div>
+          </div>`;
+      }
+
+      // 重複チェック (いずれかのホストに同名ファイルがあるか)
+      const exists = allHosts.some(h => {
+        const list = _fileListMap.get(h) || [];
+        return list.some(entry => entry.basename === file.name);
+      });
+
+      // 1画面で サムネイル + ファイル情報 + 送信先選択 + 確認
+      // confirm ボタン押下時に cleanup 前にチェック状態をキャプチャ
+      setTimeout(() => {
+        const allChk = document.getElementById("pm-upload-host-all");
+        if (allChk) {
+          allChk.addEventListener("change", () => {
+            document.querySelectorAll(".pm-upload-host-chk").forEach(c => { c.checked = allChk.checked; });
+          });
+        }
+        const confirmBtn = document.querySelector(".confirm-button.confirm-destructive");
+        if (confirmBtn) {
+          confirmBtn.addEventListener("click", () => {
+            const checked = document.querySelectorAll(".pm-upload-host-chk:checked");
+            _lastSelectedUploadHosts = checked.length > 0
+              ? [...checked].map(el => el.value)
+              : [hostname]; // チェックボックスがない(シングル)場合はこのホスト
+          }, true);
+        }
+      }, 0);
+
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+      const ok = await showConfirmDialog({
+        level: exists ? "warn" : "info",
+        title: "ファイルアップロード",
+        html: `
+          <div class="pm-upload-confirm">
+            <img src="${thumb}" class="pm-upload-thumb" onerror="this.style.display='none'">
+            <div class="pm-upload-info">
+              <div class="pm-upload-filename">${file.name}</div>
+              <div class="pm-upload-size">${sizeMB} MB</div>
+              ${exists ? '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>' : ""}
             </div>
-            <div id="upload-host-list" style="border:1px solid #e2e8f0;border-radius:4px;padding:6px;max-height:200px;overflow-y:auto">
-              ${checkboxes}
-            </div>`,
-          confirmText: "アップロード",
-          cancelText: "キャンセル"
-        });
-        if (!ok) return;
-        // 選択された全ホストにアップロード
-        // (selectedUploadHosts は confirm ボタン押下時に取得済み)
+          </div>
+          ${hostSelectHtml}`,
+        confirmText: exists ? "上書きアップロード" : "アップロード",
+        cancelText: "キャンセル"
+      });
+      if (!ok) return;
+
+      // アップロード実行 (確認済みなので直接アップロード)
+      if (allHosts.length > 1) {
         if (_lastSelectedUploadHosts.length === 0) return;
         for (const targetHost of _lastSelectedUploadHosts) {
           _dropTargetCallbacks.get(targetHost)?.(file);
         }
       } else {
-        // シングルプリンタ: そのまま処理
-        prepareAndConfirm(file);
+        uploadFile(file);
       }
     });
   }
-  // マルチプリンタ用: このホストの prepareAndConfirm をコールバックとして登録
-  _dropTargetCallbacks.set(hostname, prepareAndConfirm);
+  // マルチプリンタ D&D 用: 確認済みファイルを直接アップロードするコールバック
+  _dropTargetCallbacks.set(hostname, uploadFile);
 
   if (dropClose) dropClose.addEventListener("click", hideDropLayer);
 }
