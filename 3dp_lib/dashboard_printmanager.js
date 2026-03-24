@@ -55,7 +55,7 @@ import {
   formatFilamentAmount,
   formatSpoolDisplayId
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getConnectionState } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -191,13 +191,37 @@ const _lastSavedJsonMap = new Map();
 /** ドキュメント全体のドロップハンドラが登録済みか */
 let _dropHandlerInstalled = false;
 /** ホスト別ドロップ処理コールバック */
-const _dropTargetCallbacks = new Map();
 /** D&Dアップロード時の選択済みホスト (cleanup前にキャプチャ) */
 let _lastSelectedUploadHosts = [];
 
 
 // 最新のファイル一覧データ（renderFileList 実行時に更新、per-host）
 const _fileListMap = new Map();
+
+/**
+ * GCode メタデータキャッシュ。
+ * アップロード時に抽出したメタデータをファイル名（basename）をキーに保持し、
+ * 印刷開始確認やファイル一覧の所要時間表示に使用する。
+ * localStorage に永続化し、リロード後もキャッシュを利用可能にする。
+ * @type {Map<string, {timeSec?:number, time?:string, filament?:string, filamentMm?:number, layers?:string, layerHeight?:string, material?:string, nozzleTemp?:string, bedTemp?:string}>}
+ */
+const _GCODE_META_STORAGE_KEY = "3dpmon_gcode_meta_cache";
+const _gcodeMetaCache = new Map();
+try {
+  const saved = localStorage.getItem(_GCODE_META_STORAGE_KEY);
+  if (saved) {
+    const obj = JSON.parse(saved);
+    for (const [k, v] of Object.entries(obj)) _gcodeMetaCache.set(k, v);
+  }
+} catch { /* 無視 */ }
+
+/** キャッシュを localStorage に保存する */
+function _saveGcodeMetaCache() {
+  try {
+    const obj = Object.fromEntries(_gcodeMetaCache);
+    localStorage.setItem(_GCODE_META_STORAGE_KEY, JSON.stringify(obj));
+  } catch { /* 無視 */ }
+}
 
 /*
  * サムネイル URL を生成（メーカー仕様: downloads/humbnail/{basename}.png）
@@ -1378,22 +1402,62 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   const insight = buildFileInsight(raw.filename || raw.rawFilename || "", hostname);
   const filename = (raw.filename || "").split("/").pop();
 
-  // 所要時間（実績があれば実績ベース、なければ機器報告値）
-  const estSec = insight?.avgDurationSec > 0 ? insight.avgDurationSec : usedSec;
-  const expectedFinish = new Date(Date.now() + estSec * 1000).toLocaleString();
+  // GCode メタデータ (アップロード時に抽出済み)
+  const gcMeta = raw._gcodeMeta || _gcodeMetaCache.get(filename) || {};
+
+  // 所要時間（実績 > GCode見積 > 機器報告値）
+  let estSec, durLabel;
+  if (insight?.avgDurationSec > 0) {
+    estSec = insight.avgDurationSec;
+    durLabel = "実績ベース";
+  } else if (gcMeta.timeSec > 0) {
+    estSec = gcMeta.timeSec;
+    durLabel = "GCode見積";
+  } else {
+    estSec = usedSec;
+    durLabel = "機器報告";
+  }
+  const expectedFinish = estSec > 0
+    ? new Date(Date.now() + estSec * 1000).toLocaleString()
+    : "—";
+
+  // --- 素材ミスマッチ検出 ---
+  const spoolMaterial = spool?.materialName || spool?.material || "";
+  const gcodeMaterial = gcMeta.material || "";
+  const materialMismatch = !!(spool && gcodeMaterial &&
+    spoolMaterial.toUpperCase() !== gcodeMaterial.toUpperCase());
 
   // --- ダイアログ HTML 構築 ---
-  let html = `<div style="display:flex;gap:12px;margin-bottom:8px">`;
-  html += `<img src="${thumbUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:4px">`;
-  html += `<div><strong style="font-size:1.1em">${filename}</strong></div></div>`;
+  let html = `<div class="pm-print-header">`;
+  html += `<img src="${thumbUrl}" class="pm-print-thumb">`;
+  html += `<div><strong class="pm-print-filename">${filename}</strong></div></div>`;
+
+  // スプール未装着警告
+  if (!spool) {
+    html += `<div class="pm-print-section pm-print-warn-section">`;
+    html += `<div class="pm-print-section-title">⚠ スプール未装着</div>`;
+    html += `<div>フィラメント管理でスプールを装着してから印刷することを推奨します。</div>`;
+    html += `<div>消費量の追跡・残量計算ができません。</div>`;
+    html += `</div>`;
+  }
+
+  // 素材ミスマッチ警告
+  if (materialMismatch) {
+    html += `<div class="pm-print-section pm-print-danger-section">`;
+    html += `<div class="pm-print-section-title">🚨 素材不一致</div>`;
+    html += `<div>GCode 指定: <strong>${gcodeMaterial}</strong></div>`;
+    html += `<div>装着スプール: <strong>${spoolMaterial}</strong></div>`;
+    html += `<div>素材が異なると印刷品質に重大な影響があります。</div>`;
+    html += `</div>`;
+  }
 
   // 過去実績セクション
   if (insight && insight.printCount > 0) {
     const avgDur = formatDuration(insight.avgDurationSec);
     const rate = (insight.successRate * 100).toFixed(0);
     const avgFmt = formatFilamentAmount(insight.avgMaterialMm, spool);
-    html += `<div style="margin:8px 0;padding:8px;background:#f0f9ff;border-radius:4px">`;
-    html += `<div style="font-weight:bold;margin-bottom:4px">過去の実績 (${insight.printCount}回 / 成功率 ${rate}%)</div>`;
+    html += `<div class="pm-print-section pm-print-info-section">`;
+    html += `<div class="pm-print-section-title">過去の実績 (${insight.printCount}回 / 成功率 ${rate}%)</div>`;
     html += `<div>平均所要: ${avgDur}</div>`;
     html += `<div>平均消費: ${avgFmt.display}</div>`;
     if (insight.lastPrintDate) {
@@ -1402,42 +1466,83 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
       html += `<div>最終: ${lastD} ${lastR}</div>`;
     }
     html += `</div>`;
+  } else if (Object.keys(gcMeta).length > 0) {
+    // 履歴なし — GCode メタデータから情報表示
+    html += `<div class="pm-print-section pm-print-neutral-section">`;
+    html += `<div class="pm-print-section-title">GCode 情報 (初回印刷)</div>`;
+    const items = [];
+    if (gcMeta.material)    items.push(`素材: ${gcMeta.material}`);
+    if (gcMeta.layers)      items.push(`${gcMeta.layers}層`);
+    if (gcMeta.layerHeight) items.push(`高さ ${gcMeta.layerHeight}mm`);
+    if (gcMeta.nozzleTemp)  items.push(`ノズル ${gcMeta.nozzleTemp}℃`);
+    if (gcMeta.bedTemp)     items.push(`ベッド ${gcMeta.bedTemp}℃`);
+    if (items.length > 0) html += `<div>${items.join("　")}</div>`;
+    html += `</div>`;
   }
 
-  // スプール情報セクション
+  // スプール情報セクション（残量バー付き）
   if (spool) {
-    const spoolLabel = `${formatSpoolDisplayId(spool)} ${spool.name || ""} ${spool.materialName || spool.material || ""}`;
+    const spoolLabel = `${formatSpoolDisplayId(spool)} ${spool.name || ""} ${spoolMaterial}`;
     const remainPct = spool.totalLengthMm > 0
       ? ((remaining / spool.totalLengthMm) * 100).toFixed(0) : "?";
     const afterPct = spool.totalLengthMm > 0
       ? ((afterRemaining / spool.totalLengthMm) * 100).toFixed(0) : "?";
+    const remainPctNum = parseFloat(remainPct) || 0;
+    const afterPctNum = parseFloat(afterPct) || 0;
 
-    const bgColor = isShort ? "#fef2f2" : "#f0fdf4";
-    html += `<div style="margin:8px 0;padding:8px;background:${bgColor};border-radius:4px">`;
-    html += `<div style="font-weight:bold;margin-bottom:4px">スプール: ${spoolLabel}</div>`;
+    const sectionClass = isShort ? "pm-print-danger-section" : "pm-print-success-section";
+    html += `<div class="pm-print-section ${sectionClass}">`;
+    html += `<div class="pm-print-section-title">スプール: ${spoolLabel}</div>`;
+
+    // 残量バー
+    html += `<div class="pm-print-remain-bar-wrap">`;
+    html += `<div class="pm-print-remain-bar">`;
+    html += `<div class="pm-print-remain-bar-fill" style="width:${remainPctNum}%;background:${spool.filamentColor || spool.color || "var(--color-accent)"}"></div>`;
+    if (!isShort) {
+      html += `<div class="pm-print-remain-bar-consume" style="width:${remainPctNum - afterPctNum}%;left:${afterPctNum}%"></div>`;
+    }
+    html += `</div>`;
+    html += `<span class="pm-print-remain-label">${remainPct}% → ${afterPct}%</span>`;
+    html += `</div>`;
+
     html += `<div>残量: ${fmtRemain.display} (${remainPct}%)</div>`;
     html += `<div>印刷後予想: ${fmtAfter.display} (${afterPct}%)</div>`;
     if (isShort) {
-      html += `<div style="color:#dc2626;font-weight:bold;margin-top:4px">⚠ フィラメントが不足する可能性があります</div>`;
+      html += `<div class="pm-print-alert-danger">⚠ フィラメントが不足する可能性があります</div>`;
     } else {
-      html += `<div style="color:#16a34a;margin-top:4px">✓ 十分な残量があります</div>`;
+      html += `<div class="pm-print-alert-success">✓ 十分な残量があります</div>`;
     }
     html += `</div>`;
   }
 
   // 予想完了セクション
-  const durLabel = insight?.avgDurationSec > 0 ? "実績ベース" : "機器見積";
   html += `<div style="margin:8px 0">`;
   html += `<div>必要量: ${fmtNeed.display}</div>`;
-  html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
-  html += `<div>予想完了: ${expectedFinish}</div>`;
+  if (estSec > 0) {
+    html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
+    html += `<div>予想完了: ${expectedFinish}</div>`;
+  }
   html += `</div>`;
 
+  // ダイアログレベルと確認ボタンを危険度に応じて変更
+  let dialogLevel = "info";
+  let confirmLabel = "印刷する";
+  if (materialMismatch) {
+    dialogLevel = "warnRed";
+    confirmLabel = "🚨 素材不一致 — それでも印刷する";
+  } else if (isShort) {
+    dialogLevel = "warnRed";
+    confirmLabel = "⚠ 不足の可能性あり — それでも印刷する";
+  } else if (!spool) {
+    dialogLevel = "warn";
+    confirmLabel = "スプール未装着のまま印刷する";
+  }
+
   const ok = await showConfirmDialog({
-    level:       isShort ? "warnRed" : "info",
+    level:       dialogLevel,
     title:       "印刷実行の確認",
     html,
-    confirmText: isShort ? "不足の可能性あり — それでも印刷する" : "印刷する",
+    confirmText: confirmLabel,
     cancelText:  "キャンセル"
   });
   if (!ok) return;
@@ -1541,6 +1646,71 @@ async function extractThumbnailFromFile(file) {
                    .map(l => l.replace(/^\s*;\s*/, ""))
                    .join("");
   return `data:image/png;base64,${b64}`;
+}
+
+/**
+ * GCode ファイルのコメント行からメタデータを抽出する。
+ *
+ * 対応フォーマット:
+ * - `;TIME:{sec}` — 印刷予想時間
+ * - `;Filament used:{m}m` — フィラメント使用量
+ * - `;Layer height: {mm}` — 積層ピッチ
+ * - `;LAYER_COUNT:{n}` — 総レイヤー数
+ * - `;Material name:{name}` — 素材名
+ * - `START_PRINT EXTRUDER_TEMP={n} BED_TEMP={n}` — 温度設定
+ *
+ * @private
+ * @param {string} text - GCode テキスト全体
+ * @returns {{ time?: string, filament?: string, layerHeight?: string, layers?: string, material?: string, nozzleTemp?: string, bedTemp?: string }}
+ */
+function _extractGcodeMeta(text) {
+  const meta = {};
+  // 先頭500行のみスキャン (メタデータはファイル先頭にある)
+  const lines = text.split(/\r?\n/, 500);
+  for (const line of lines) {
+    const l = line.trim();
+    // ;TIME:3600.00 or ;TIME:3600
+    if (!meta.time && /^;TIME:\s*(\d+(?:\.\d+)?)/.test(l)) {
+      const sec = parseFloat(RegExp.$1);
+      if (sec > 0) {
+        meta.timeSec = sec;
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        meta.time = h > 0 ? `${h}時間${m}分` : `${m}分`;
+      }
+    }
+    // ;Filament used: 12.345m or ;Filament used:12345mm
+    if (!meta.filament && /^;Filament used:\s*(.+)/i.test(l)) {
+      const raw = RegExp.$1.trim();
+      meta.filament = raw;
+      // mm 単位に正規化して保持
+      const mMatch = raw.match(/([\d.]+)\s*m(?:m)?/i);
+      if (mMatch) {
+        const val = parseFloat(mMatch[1]);
+        meta.filamentMm = raw.toLowerCase().includes("mm") ? val : val * 1000;
+      }
+    }
+    // ;Layer height: 0.2
+    if (!meta.layerHeight && /^;Layer height:\s*([\d.]+)/i.test(l)) {
+      meta.layerHeight = RegExp.$1;
+    }
+    // ;LAYER_COUNT:123
+    if (!meta.layers && /^;LAYER_COUNT:\s*(\d+)/i.test(l)) {
+      meta.layers = RegExp.$1;
+    }
+    // ;Material name:PLA
+    if (!meta.material && /^;Material name:\s*(.+)/i.test(l)) {
+      meta.material = RegExp.$1.trim();
+    }
+    // START_PRINT EXTRUDER_TEMP=215 BED_TEMP=60
+    if (!meta.nozzleTemp && /EXTRUDER_TEMP\s*=\s*(\d+)/i.test(l)) {
+      meta.nozzleTemp = RegExp.$1;
+    }
+    if (!meta.bedTemp && /BED_TEMP\s*=\s*(\d+)/i.test(l)) {
+      meta.bedTemp = RegExp.$1;
+    }
+  }
+  return meta;
 }
 
 /**
@@ -1649,6 +1819,12 @@ export function setupUploadUI(root, hostname) {
       const text = await readFile(file);
       updateProgress(file.size, file.size);
       let thumb = extractThumb(text);
+      // メタデータをキャッシュ（永続化）
+      const gcMeta = _extractGcodeMeta(text);
+      if (Object.keys(gcMeta).length > 0) {
+        _gcodeMetaCache.set(file.name, gcMeta);
+        _saveGcodeMetaCache();
+      }
       if (!thumb) {
         const ip = getDeviceIp(hostname);
         thumb = `http://${ip}/downloads/defData/file_icon.png`;
@@ -1683,95 +1859,117 @@ export function setupUploadUI(root, hostname) {
   }
 
   /**
-   * ファイル一覧を取得してアップロード成否を確認する
-   * @param {string} fname - アップロードしたファイル名
-   * @returns {Promise<boolean>} 最新ファイル名が一致すれば true
+   * ファイル一覧を取得してアップロード成否を確認する。
+   * 指定ホストのファイル一覧を再取得し、アップロードしたファイルが存在するか検証する。
+   *
+   * @param {string} fname      - アップロードしたファイル名
+   * @param {string} targetHost - 検証対象のホスト名
+   * @returns {Promise<boolean>} ファイルが見つかれば true
    */
-  async function verifyUploadSuccess(fname) {
+  async function verifyUploadSuccess(fname, targetHost) {
     try {
-      await sendCommand("get", { reqGcodeFile: 1 }, hostname);
+      await sendCommand("get", { reqGcodeFile: 1 }, targetHost);
+      // ファイル一覧更新まで少し待つ
+      await new Promise(r => setTimeout(r, 1500));
     } catch (e) {
       console.warn("verifyUploadSuccess: sendCommand failed", e);
     }
-    const ftbl = scopedById("file-list-table", hostname);
-    const first = ftbl?.querySelector('tbody tr:first-child td[data-key="filename"]');
-    return first?.textContent.trim() === fname;
+    // 内部配列から検索（DOM に依存しない）
+    const list = _fileListMap.get(targetHost) || [];
+    return list.some(entry => entry.basename === fname);
   }
 
   /**
-   * 指定ファイルをプリンタへアップロードする。
+   * 指定ファイルを指定ホストへアップロードする。
    *
-   * XHR を用いて POST 送信し、結果に応じてダイアログ表示を行う。
+   * XHR を用いて POST 送信し、結果を Promise で返す。
+   * K1 系プリンタは大きなファイルのアップロード後に接続を切断し
+   * status=0 を返すことがあるため、エラー時はファイル一覧で検証する。
    *
-   * @param {File} file - アップロードするファイル
-   * @returns {void}
+   * @param {File}   file       - アップロードするファイル
+   * @param {string} targetHost - アップロード先のホスト名
+   * @returns {Promise<{ok:boolean, host:string, name:string, detail:string}>}
    */
-  function uploadFile(file) {
-    btn.disabled = true;
-    showProgress();
-    updateProgress(0, file.size);
-
-    const ip  = getDeviceIp(hostname);
+  function _uploadToHost(file, targetHost) {
+    const ip  = getDeviceIp(targetHost);
     const url = `http://${ip}/upload/${encodeURIComponent(file.name)}`;
     const form = new FormData();
     form.append("file", file, file.name);
+    const displayName = monitorData.machines[targetHost]?.storedData?.hostname?.rawValue || targetHost;
 
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
-    // タイムアウト: ファイルサイズに応じて動的設定 (最低5分, 10ms/KB)
-    xhr.timeout = Math.max(300000, Math.round(file.size / 1024 * 10));
-    xhr.upload.onprogress = e => {
-      if (e.lengthComputable) updateProgress(e.loaded, e.total);
-    };
-    xhr.onload = async () => {
-      hideProgress();
-      btn.disabled = false;
-      if (xhr.status === 200) {
-        await showConfirmDialog({
-          level: "success",
-          title: "アップロード完了",
-          message: `${file.name} を正常にアップロードしました。`,
-          confirmText: "OK"
-        });
-        currentFile = null;
-        input.value = "";
-      } else {
-        await showConfirmDialog({
-          level: "error",
-          title: "アップロード失敗",
-          message: `エラー: ${xhr.status} ${xhr.statusText}`,
-          confirmText: "OK"
-        });
-      }
-    };
-    const handleError = async () => {
-      hideProgress();
-      btn.disabled = false;
-      const detail = `status=${xhr.status} readyState=${xhr.readyState}`;
-      // -- ファイル一覧を再取得し、最新がアップロードしたファイルなら成功扱い --
-      const uploaded = await verifyUploadSuccess(file.name);
-      if (uploaded) {
-        await showConfirmDialog({
-          level: "success",
-          title: "アップロード完了",
-          message: `${file.name} をアップロードしました (応答なし)`,
-          confirmText: "OK"
-        });
-        currentFile = null;
-        input.value = "";
-        return;
-      }
+    return new Promise(resolve => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      // タイムアウト: ファイルサイズに応じて動的設定 (最低5分, 10ms/KB)
+      xhr.timeout = Math.max(300000, Math.round(file.size / 1024 * 10));
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) updateProgress(e.loaded, e.total);
+      };
+
+      xhr.onload = async () => {
+        if (xhr.status === 200) {
+          resolve({ ok: true, host: displayName, name: file.name, detail: "" });
+        } else {
+          // status !== 200 でもファイル一覧で検証
+          const verified = await verifyUploadSuccess(file.name, targetHost);
+          if (verified) {
+            resolve({ ok: true, host: displayName, name: file.name, detail: "(検証済み)" });
+          } else {
+            resolve({ ok: false, host: displayName, name: file.name,
+              detail: `HTTP ${xhr.status} ${xhr.statusText}` });
+          }
+        }
+      };
+
+      const handleError = async () => {
+        const detail = `status=${xhr.status} readyState=${xhr.readyState}`;
+        // K1 はアップロード成功後に接続を切ることがある — ファイル一覧で検証
+        const verified = await verifyUploadSuccess(file.name, targetHost);
+        if (verified) {
+          resolve({ ok: true, host: displayName, name: file.name, detail: "(検証済み)" });
+        } else {
+          resolve({ ok: false, host: displayName, name: file.name,
+            detail: `ネットワークエラー (${detail})` });
+        }
+      };
+      xhr.onerror = handleError;
+      xhr.onabort = handleError;
+      xhr.ontimeout = handleError;
+      xhr.send(form);
+    });
+  }
+
+  /**
+   * 指定ファイルをプリンタへアップロードし、結果ダイアログを表示する。
+   * ボタン経由（シングルホスト）用のラッパー。
+   *
+   * @param {File} file - アップロードするファイル
+   * @returns {Promise<void>}
+   */
+  async function uploadFile(file) {
+    btn.disabled = true;
+    showProgress();
+    updateProgress(0, file.size);
+    const result = await _uploadToHost(file, hostname);
+    hideProgress();
+    btn.disabled = false;
+    if (result.ok) {
+      await showConfirmDialog({
+        level: "success",
+        title: "アップロード完了",
+        message: `${file.name} → ${result.host} ${result.detail}`,
+        confirmText: "OK"
+      });
+      currentFile = null;
+      input.value = "";
+    } else {
       await showConfirmDialog({
         level: "error",
         title: "アップロード失敗",
-        message: `ネットワークエラー (${detail})`,
+        message: `${result.host}: ${result.detail}`,
         confirmText: "OK"
       });
-    };
-    xhr.onerror = handleError;
-    xhr.onabort = handleError;
-    xhr.ontimeout = handleError;
-    xhr.send(form);
+    }
   }
 
   input.addEventListener("change", () => {
@@ -1806,13 +2004,20 @@ export function setupUploadUI(root, hostname) {
       if (!e.dataTransfer?.files?.length) return;
       const file = e.dataTransfer.files[0];
 
-      // ファイル読み込み + サムネイル抽出
+      // ファイル読み込み + サムネイル・メタデータ抽出
       showProgress();
       let thumb;
+      let gcMeta = {};
       try {
         const text = await readFile(file);
         updateProgress(file.size, file.size);
         thumb = extractThumb(text);
+        gcMeta = _extractGcodeMeta(text);
+        // メタデータをキャッシュ（ファイル一覧・印刷確認で再利用、永続化）
+        if (Object.keys(gcMeta).length > 0) {
+          _gcodeMetaCache.set(file.name, gcMeta);
+          _saveGcodeMetaCache();
+        }
       } catch (err) {
         hideProgress();
         console.error("[D&D] ファイル読み込みエラー:", err);
@@ -1823,10 +2028,18 @@ export function setupUploadUI(root, hostname) {
         thumb = `http://${getDeviceIp(hostname)}/downloads/defData/file_icon.png`;
       }
 
-      // 接続中プリンタ一覧
+      // 接続中プリンタ一覧（WebSocket が接続中のホストのみ）
       const allHosts = Object.keys(monitorData.machines).filter(
-        h => h !== "_$_NO_MACHINE_$_" && monitorData.machines[h]?.storedData
+        h => h !== "_$_NO_MACHINE_$_"
+          && monitorData.machines[h]?.storedData
+          && getConnectionState(h) === "connected"
       );
+
+      // 重複チェック (各ホストごとに同名ファイルの有無を判定)
+      const existsHosts = allHosts.filter(h =>
+        (_fileListMap.get(h) || []).some(entry => entry.basename === file.name)
+      );
+      const exists = existsHosts.length > 0;
 
       // ホスト選択UI (マルチプリンタ時のみ)
       let hostSelectHtml = "";
@@ -1834,7 +2047,8 @@ export function setupUploadUI(root, hostname) {
         const checkboxes = allHosts.map(h => {
           const m = monitorData.machines[h];
           const name = m.storedData?.hostname?.rawValue || h;
-          return `<label class="pm-upload-host-label"><input type="checkbox" class="pm-upload-host-chk" value="${h}" checked> ${name}</label>`;
+          const dup = existsHosts.includes(h) ? ' <span style="color:var(--color-warning,#e6a23c)">(上書き)</span>' : "";
+          return `<label class="pm-upload-host-label"><input type="checkbox" class="pm-upload-host-chk" value="${h}" checked> ${name}${dup}</label>`;
         }).join("");
         hostSelectHtml = `
           <div class="pm-upload-host-section">
@@ -1842,12 +2056,6 @@ export function setupUploadUI(root, hostname) {
             <div class="pm-upload-host-list">${checkboxes}</div>
           </div>`;
       }
-
-      // 重複チェック (いずれかのホストに同名ファイルがあるか)
-      const exists = allHosts.some(h => {
-        const list = _fileListMap.get(h) || [];
-        return list.some(entry => entry.basename === file.name);
-      });
 
       // 1画面で サムネイル + ファイル情報 + 送信先選択 + 確認
       // confirm ボタン押下時に cleanup 前にチェック状態をキャプチャ
@@ -1870,6 +2078,23 @@ export function setupUploadUI(root, hostname) {
       }, 0);
 
       const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+      // GCode メタデータ行を構築
+      let metaHtml = "";
+      const metaItems = [];
+      if (gcMeta.time) metaItems.push(`⏱ ${gcMeta.time}`);
+      if (gcMeta.filament) metaItems.push(`🧵 ${gcMeta.filament}`);
+      if (gcMeta.layers) metaItems.push(`📐 ${gcMeta.layers}層`);
+      if (gcMeta.layerHeight) metaItems.push(`高さ ${gcMeta.layerHeight}mm`);
+      if (gcMeta.material) metaItems.push(`素材 ${gcMeta.material}`);
+      if (gcMeta.nozzleTemp || gcMeta.bedTemp) {
+        const temps = [];
+        if (gcMeta.nozzleTemp) temps.push(`ノズル${gcMeta.nozzleTemp}℃`);
+        if (gcMeta.bedTemp) temps.push(`ベッド${gcMeta.bedTemp}℃`);
+        metaItems.push(`🌡 ${temps.join(" / ")}`);
+      }
+      if (metaItems.length > 0) {
+        metaHtml = `<div class="pm-upload-meta">${metaItems.join("　")}</div>`;
+      }
       const ok = await showConfirmDialog({
         level: exists ? "warn" : "info",
         title: "ファイルアップロード",
@@ -1879,6 +2104,7 @@ export function setupUploadUI(root, hostname) {
             <div class="pm-upload-info">
               <div class="pm-upload-filename">${file.name}</div>
               <div class="pm-upload-size">${sizeMB} MB</div>
+              ${metaHtml}
               ${exists ? '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>' : ""}
             </div>
           </div>
@@ -1889,18 +2115,39 @@ export function setupUploadUI(root, hostname) {
       if (!ok) return;
 
       // アップロード実行 (確認済みなので直接アップロード)
-      if (allHosts.length > 1) {
-        if (_lastSelectedUploadHosts.length === 0) return;
-        for (const targetHost of _lastSelectedUploadHosts) {
-          _dropTargetCallbacks.get(targetHost)?.(file);
-        }
-      } else {
-        uploadFile(file);
-      }
+      const targets = (allHosts.length > 1)
+        ? _lastSelectedUploadHosts
+        : [hostname];
+      if (targets.length === 0) return;
+
+      btn.disabled = true;
+      showProgress();
+      updateProgress(0, file.size);
+
+      // 全ホストへ並行アップロード
+      const results = await Promise.all(
+        targets.map(h => _uploadToHost(file, h))
+      );
+      hideProgress();
+      btn.disabled = false;
+
+      // 結果サマリー
+      const okList   = results.filter(r => r.ok);
+      const failList = results.filter(r => !r.ok);
+      const lines = [];
+      for (const r of okList)   lines.push(`✅ ${r.host} ${r.detail}`);
+      for (const r of failList) lines.push(`❌ ${r.host}: ${r.detail}`);
+
+      const allOk = failList.length === 0;
+      await showConfirmDialog({
+        level: allOk ? "success" : (okList.length > 0 ? "warn" : "error"),
+        title: allOk ? "アップロード完了" : "アップロード結果",
+        html: `<div style="margin-bottom:8px"><strong>${file.name}</strong></div>
+               <div style="white-space:pre-line;line-height:1.8">${lines.join("\n")}</div>`,
+        confirmText: "OK"
+      });
     });
   }
-  // マルチプリンタ D&D 用: 確認済みファイルを直接アップロードするコールバック
-  _dropTargetCallbacks.set(hostname, uploadFile);
 
   if (dropClose) dropClose.addEventListener("click", hideDropLayer);
 }
@@ -2048,6 +2295,13 @@ export function renderFileList(info, baseUrl, hostname) {
       item.printCount = st.count;
       if (st.count > 0) item.usagetime = Math.round(st.totalSec / st.count);
     }
+    // 履歴が無い場合、アップロード時に抽出した GCode メタデータをフォールバック
+    const cached = _gcodeMetaCache.get(item.basename);
+    if (cached) {
+      if (!item.usagetime && cached.timeSec)  item.usagetime = Math.round(cached.timeSec);
+      if (!item.layer && cached.layers)       item.layer = Number(cached.layers);
+      item._gcodeMeta = cached;  // handlePrintClick で参照可能にする
+    }
   });
 
   // 総数表示
@@ -2083,10 +2337,15 @@ export function renderFileList(info, baseUrl, hostname) {
       printsLabel = String(item.printCount || 0);
     }
 
-    // 平均時間列
-    const avgTimeLabel = insight?.avgDurationSec > 0
-      ? formatDuration(insight.avgDurationSec)
-      : "—";
+    // 平均時間列（実績 > GCodeメタ > "—"）
+    let avgTimeLabel;
+    if (insight?.avgDurationSec > 0) {
+      avgTimeLabel = formatDuration(insight.avgDurationSec);
+    } else if (item._gcodeMeta?.timeSec) {
+      avgTimeLabel = `≈${formatDuration(item._gcodeMeta.timeSec)}`;
+    } else {
+      avgTimeLabel = "—";
+    }
 
     tr.innerHTML = `
       <td class="col-cmd">

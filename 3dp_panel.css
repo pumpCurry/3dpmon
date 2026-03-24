@@ -2765,3 +2765,100 @@ body.panel-mode .notification-container {
   flex: 1;
   height: 16px;
 }
+
+/* ---------------------------------------------------------------
+   印刷確認ダイアログ (Phase 2: 印刷前チェックゲート)
+--------------------------------------------------------------- */
+.pm-print-header {
+  display: flex;
+  gap: var(--space-3, 12px);
+  margin-bottom: var(--space-2, 8px);
+}
+.pm-print-thumb {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: var(--radius-sm, 4px);
+}
+.pm-print-filename {
+  font-size: 1.1em;
+}
+.pm-print-section {
+  margin: var(--space-2, 8px) 0;
+  padding: var(--space-2, 8px);
+  border-radius: var(--radius-sm, 4px);
+}
+.pm-print-section-title {
+  font-weight: bold;
+  margin-bottom: var(--space-1, 4px);
+}
+/* 情報（過去実績） */
+.pm-print-info-section {
+  background: var(--color-info-bg, #f0f9ff);
+}
+/* 中立（GCode情報） */
+.pm-print-neutral-section {
+  background: var(--color-bg-secondary, #f5f5f5);
+}
+/* 成功（残量十分） */
+.pm-print-success-section {
+  background: var(--color-success-bg, #f0fdf4);
+}
+/* 危険（不足/素材不一致） */
+.pm-print-danger-section {
+  background: var(--color-danger-bg, #fef2f2);
+}
+/* 警告（スプール未装着） */
+.pm-print-warn-section {
+  background: var(--color-warning-bg, #fef3c7);
+}
+/* アラートテキスト */
+.pm-print-alert-danger {
+  color: var(--color-danger, #dc2626);
+  font-weight: bold;
+  margin-top: var(--space-1, 4px);
+}
+.pm-print-alert-success {
+  color: var(--color-success, #16a34a);
+  margin-top: var(--space-1, 4px);
+}
+/* 残量バー */
+.pm-print-remain-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-1, 4px);
+}
+.pm-print-remain-bar {
+  flex: 1;
+  height: 12px;
+  background: var(--color-bg-tertiary, #e5e7eb);
+  border-radius: var(--radius-full, 9999px);
+  position: relative;
+  overflow: hidden;
+}
+.pm-print-remain-bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: var(--radius-full, 9999px);
+  transition: width var(--transition-normal, 250ms ease);
+}
+.pm-print-remain-bar-consume {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(0, 0, 0, 0.15),
+    rgba(0, 0, 0, 0.15) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+.pm-print-remain-label {
+  font-size: var(--font-sm, 12px);
+  font-weight: bold;
+  white-space: nowrap;
+}
