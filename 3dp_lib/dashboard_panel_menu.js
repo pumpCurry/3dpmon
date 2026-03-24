@@ -372,9 +372,9 @@ function _renderPanelToggle(pt, host, panelId, activeEntries = []) {
   const fontSizePanels = ["status", "machine-info", "control-temp", "control-cmd", "log"];
   if (active && fontSizePanels.includes(pt.id)) {
     const curSize = panelEntry?.[1]?.element?.style.fontSize || "13px";
-    html += `<div style="display:flex;align-items:center;gap:4px;padding:0 4px;font-size:var(--font-xs, 11px);color:var(--color-text-muted, #64748b)">`;
+    html += `<div class="panel-fontsize-control">`;
     html += `<span>文字</span>`;
-    html += `<input type="range" class="panel-fontsize-range" data-panel-id="${panelId}" min="9" max="18" step="1" value="${parseInt(curSize) || 13}" style="flex:1;height:16px">`;
+    html += `<input type="range" class="panel-fontsize-range" data-panel-id="${panelId}" min="9" max="18" step="1" value="${parseInt(curSize) || 13}">`;
     html += `<span class="panel-fontsize-val">${parseInt(curSize) || 13}px</span>`;
     html += `</div>`;
   }

@@ -2677,9 +2677,6 @@ body.panel-mode .notification-container {
 }
 
 /* ---------------------------------------------------------------
-   パネルメニュー: ロックボタン (インラインスタイル排除)
---------------------------------------------------------------- */
-/* ---------------------------------------------------------------
    アップロード確認ダイアログ
 --------------------------------------------------------------- */
 .pm-upload-confirm {
@@ -2728,6 +2725,13 @@ body.panel-mode .notification-container {
   padding: var(--space-1, 4px) 0;
   cursor: pointer;
 }
+.pm-upload-meta {
+  font-size: var(--font-xs, 11px);
+  color: var(--color-text-secondary, #666);
+  margin-top: var(--space-1, 4px);
+  line-height: 1.6;
+  word-break: break-word;
+}
 
 /* ---------------------------------------------------------------
    パネルメニュー: ロックボタン (インラインスタイル排除)
@@ -2744,4 +2748,20 @@ body.panel-mode .notification-container {
 .panel-row-lock.locked {
   border-color: var(--color-warning, #f59e0b);
   background: var(--color-warning-bg, #fef3c7);
+}
+
+/* ---------------------------------------------------------------
+   パネルメニュー: フォントサイズコントロール
+--------------------------------------------------------------- */
+.panel-fontsize-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  padding: 0 var(--space-1, 4px);
+  font-size: var(--font-xs, 11px);
+  color: var(--color-text-muted, #64748b);
+}
+.panel-fontsize-range {
+  flex: 1;
+  height: 16px;
 }
