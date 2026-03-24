@@ -45,6 +45,7 @@ import {
   formatSpoolDisplayId,
   formatFilamentAmount,
   buildSpoolAnalytics,
+  buildWasteReport,
   getSpoolById,
   SPOOL_STATE
 } from "./dashboard_spool.js";
@@ -2042,6 +2043,86 @@ function createReportContent() {
       },
       options: { responsive: true, maintainAspectRatio: false }
     });
+  }
+
+  // ── 5) 廃棄ロスレポート ──────────────────────────────
+  const wasteReport = buildWasteReport();
+  if (wasteReport.totalWastedSpools > 0) {
+    const wasteFs = document.createElement("div");
+    wasteFs.className = "waste-section";
+
+    const wasteTitle = document.createElement("div");
+    wasteTitle.className = "waste-section-title";
+    wasteTitle.textContent = `🗑 廃棄ロス — ${wasteReport.totalWastedSpools}スプール`;
+    wasteFs.appendChild(wasteTitle);
+
+    // サマリーカード
+    const wasteCards = document.createElement("div");
+    wasteCards.className = "stat-cards";
+    const wasteFmtLen = formatFilamentAmount(wasteReport.totalWastedLengthMm);
+    const wasteWeight = Math.round(wasteReport.totalWastedWeightGram);
+    const wasteCost = Math.round(wasteReport.totalWastedCost);
+
+    [{
+      label: "廃棄スプール数", value: `${wasteReport.totalWastedSpools}本`
+    }, {
+      label: "廃棄フィラメント量", value: wasteFmtLen.display, sub: `${wasteWeight}g`
+    }, {
+      label: "推定損失額", value: `¥${wasteCost.toLocaleString()}`
+    }].forEach(c => {
+      const card = document.createElement("div");
+      card.className = "stat-card";
+      card.innerHTML = `<div class="stat-card-label">${c.label}</div><div class="stat-card-value">${c.value}</div>${c.sub ? `<div class="stat-card-sub">${c.sub}</div>` : ""}`;
+      wasteCards.appendChild(card);
+    });
+    wasteFs.appendChild(wasteCards);
+
+    // 素材別廃棄テーブル
+    if (wasteReport.wastedByMaterial.size > 0) {
+      const matWasteTable = document.createElement("table");
+      matWasteTable.style.width = "100%";
+      matWasteTable.innerHTML = `<thead><tr><th>素材</th><th class="text-right">スプール数</th><th class="text-right">廃棄量</th><th class="text-right">推定損失</th></tr></thead>`;
+      const matWasteTbody = document.createElement("tbody");
+      for (const [mat, data] of wasteReport.wastedByMaterial) {
+        const tr = document.createElement("tr");
+        const fmtLen = formatFilamentAmount(data.length);
+        tr.innerHTML = `<td>${mat}</td><td class="text-right">${data.count}本</td><td class="text-right">${fmtLen.display}</td><td class="text-right">¥${Math.round(data.cost).toLocaleString()}</td>`;
+        matWasteTbody.appendChild(tr);
+      }
+      matWasteTable.appendChild(matWasteTbody);
+      wasteFs.appendChild(matWasteTable);
+    }
+
+    // 直近の廃棄リスト（最大10件）
+    const recentWasted = wasteReport.recentWasted.slice(0, 10);
+    if (recentWasted.length > 0) {
+      const recentTitle = document.createElement("div");
+      recentTitle.style.fontWeight = "bold";
+      recentTitle.style.marginTop = "8px";
+      recentTitle.textContent = "直近の廃棄";
+      wasteFs.appendChild(recentTitle);
+
+      const recentTable = document.createElement("table");
+      recentTable.style.width = "100%";
+      recentTable.innerHTML = `<thead><tr><th>スプール</th><th>素材</th><th class="text-right">残量</th><th class="text-right">推定損失</th></tr></thead>`;
+      const recentTbody = document.createElement("tbody");
+      for (const item of recentWasted) {
+        const sp = item.spool;
+        const tr = document.createElement("tr");
+        const fmtRemain = formatFilamentAmount(item.wastedLength, sp);
+        const pct = sp.totalLengthMm > 0 ? ((item.wastedLength / sp.totalLengthMm) * 100).toFixed(0) : "?";
+        tr.innerHTML =
+          `<td>${formatSpoolDisplayId(sp)} ${sp.name || ""}</td>` +
+          `<td>${sp.materialName || sp.material || "不明"}</td>` +
+          `<td class="text-right">${fmtRemain.display} (${pct}%)</td>` +
+          `<td class="text-right">¥${Math.round(item.wastedCost).toLocaleString()}</td>`;
+        recentTbody.appendChild(tr);
+      }
+      recentTable.appendChild(recentTbody);
+      wasteFs.appendChild(recentTable);
+    }
+
+    div.appendChild(wasteFs);
   }
 
   return div;
