@@ -102,76 +102,8 @@
 /* --------------------------------------------------------------------- */
 /*  0.  CSS インジェクション（重複挿入防止）                            */
 /* --------------------------------------------------------------------- */
-(function injectCSS() {
-  const ID = 'dfv-style';
-  if (document.getElementById(ID)) return;
-  const css = `
-  .dfv-root { position: relative; user-select: none; font-family: sans-serif; }
-  .dfv-scene { position:absolute; top:50%; left:50%; transform-style:preserve-3d; }
-  .dfv-card  { border:1px solid #ccc; border-radius:8px; padding:8px; display:inline-block; position:relative; }
-  .dfv-slider { width:100%; margin-top:4px; }
-  .dfv-btn    { margin-left:4px; cursor:pointer; }
-  .dfv-btn-active { background:#e5e7eb; }
-  .dfv-blink-light { animation: dfv-blink-light 1.5s infinite ease-in-out; }
-  @keyframes dfv-blink-light { 0%,100%{opacity:1;transform:scale(1);}50%{opacity:.3;transform:scale(.8);} }
-  .dfv-blink-slash { animation: dfv-blink-slash 0.5s infinite alternate ease-in-out; }
-  @keyframes dfv-blink-slash { from{opacity:1;} to{opacity:.3;} }
-  /* ─────────── ボタン群ラッパー ─────────── */
-  .dfv-btn-wrapper { margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
-  .dfv-purchase-btn { font-size:1.2em; }
-  .dfv-price { font-weight:bold; margin-left:4px; align-self:center; }
-  .dfv-price-date { font-size:0.8em; color:#666; margin-left:4px; align-self:center; }
-
-  /* オーバーレイ */
-  .dfv-overlay { position:absolute; top:6px; left:6px; bottom:6px; right:6px; pointer-events:none; z-index:12; }
-  .dfv-overlay-length        { font-size:0.8em; font-weight:bold; color:#000; margin:2px 0; }
-  .dfv-overlay-percent       { font-size:2.8em; font-weight:bold; color:#000; position:absolute; bottom:10px; right:10px; font-family: monospace;}
-
-  .dfv-overlay-name          { font-size:1.5em; font-weight:bold; color:#000; margin:2px 0; }
-  .dfv-overlay-subname       { font-size:1.0em; font-weight:bold; color:#000; margin:2px 0; }
-  .dfv-overlay-material      { font-size:1.2em;                   color:#000; margin:2px 0; }
-  .dfv-overlay-colorcode     { font-size:1.0em;                   color:#000; margin:2px 0; }
-  .dfv-overlay-manufacturer  { font-size:1.2em; font-weight:bold; color:#000; margin:2px 0; }
-  
-  /* ％表示：各パーツを分けてスタイル可能に */
-  .dfv-overlay-percent { margin:2px; }
-  .dfv-overlay-percent-int   { font-size:1.5em; font-weight:bold; }
-  .dfv-overlay-percent-dot   { font-size:0.6em; font-weight:bold; }
-  .dfv-overlay-percent-frac  { font-size:1.2em; }
-  .dfv-overlay-percent-sign  { font-size:1.0em; }
-
-  /* マテリアルタグ */
-  .dfv-material-tag {
-    position:absolute; top:10px; right:10px;
-    padding:4px 8px; border-radius:4px;
-    font-size:0.85em; font-weight:bold;
-    pointer-events:none; z-index:14;
-  }
-
-  /* 進捗バー */
-  .dfv-overlay-bar {
-    position:absolute;
-    bottom:0;
-    left:0;
-    width:0;
-    height:4px;
-    background:#00FFFF;
-    transition:width 0.3s, background 0.3s;
-    pointer-events:none;
-  }
-
-  /* スライダー + ボタンラッパー */
-  .dfv-controls {
-    margin-top:4px;
-    display:flex;
-    align-items:center;
-  }
-`;
-  const style = document.createElement('style');
-  style.id = ID;
-  style.textContent = css;
-  document.head.appendChild(style);
-})();
+// CSS は 3dp_panel.css に移行済み（Phase 1 完了時）
+// 旧 IIFE injectCSS() は不要（.dfv-* クラスは外部CSSで定義）
 
 /* --------------------------------------------------------------------- */
 /*  1.  型定義 (JSDoc)                                                   */
@@ -432,7 +364,6 @@ export function createFilamentPreview(mount, opts) {
   // position: absolute でレイアウトフローから外し、スケール後にクリップされないようにする
   const scaleWrapper = document.createElement('div');
   scaleWrapper.className = 'dfv-scale-wrapper';
-  scaleWrapper.style.cssText = 'position:absolute; top:0; left:50%; transform:translateX(-50%);';
   mount.appendChild(scaleWrapper);
 
   const root = div('dfv-root');
@@ -661,21 +592,13 @@ export function createFilamentPreview(mount, opts) {
   }
 
   const controlsDiv = div('dfv-controls');
-
-  controlsDiv.style.display = 'flex';
-  controlsDiv.style.flexDirection = 'column';
-  controlsDiv.style.alignItems    = 'flex-start';
-  controlsDiv.style.gap = '4px';
+  // レイアウトは .dfv-controls クラスで定義済み
 
   scaleWrapper.appendChild(controlsDiv);
   if (slider) controlsDiv.appendChild(slider);
   // ───────── ボタン群のラッパー ─────────
   const btnWrapper = div('dfv-btn-wrapper');
-  btnWrapper.style.display        = 'flex';
-  btnWrapper.style.flexWrap       = 'wrap';
-  btnWrapper.style.width          = '100%';
-  btnWrapper.style.justifyContent = 'flex-start';
-  btnWrapper.style.gap            = '4px';
+  // レイアウトは .dfv-btn-wrapper クラスで定義済み
   controlsDiv.appendChild(btnWrapper);
 
   // ───────────── ビュー初期化ボタン ─────────────
@@ -797,12 +720,8 @@ export function createFilamentPreview(mount, opts) {
 
   // ───────────── 購入ボタン＆価格表示 ─────────────
   if (o.showPurchaseButton && o.purchaseLink) {
-    const btnBuyWrapper = div('dfv-btn-Buy-wrapper');
-    btnBuyWrapper.style.marginTop     = '4px';
-    btnBuyWrapper.style.display       = 'flex';
-    btnBuyWrapper.style.flexDirection = 'row';
-    btnBuyWrapper.style.alignItems    = 'center';
-    btnBuyWrapper.style.gap           = '4px';
+    const btnBuyWrapper = div('dfv-buy-wrapper');
+    // レイアウトは .dfv-buy-wrapper クラスで定義済み
     scaleWrapper.appendChild(btnBuyWrapper);
 
     const btnBuy = document.createElement('button');
@@ -827,7 +746,7 @@ export function createFilamentPreview(mount, opts) {
 
   /* --- 情報表示用コンテナ ---------------------------------------- */
   const infoContainer = div('dfv-info');
-  infoContainer.style.cssText = 'margin-top:4px;font-size:0.9em;';
+  // レイアウトは .dfv-info クラスで定義済み
   // テキスト要素を先に作成
   const infoLength  = document.createElement('div');
   const infoPercent = document.createElement('div');
