@@ -53,7 +53,8 @@ import {
   getSpoolById,
   updateSpool,
   formatFilamentAmount,
-  formatSpoolDisplayId
+  formatSpoolDisplayId,
+  buildFilamentRecommendations
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp, getConnectionState } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
@@ -197,6 +198,17 @@ let _lastSelectedUploadHosts = [];
 
 // 最新のファイル一覧データ（renderFileList 実行時に更新、per-host）
 const _fileListMap = new Map();
+
+/**
+ * 指定ホストのファイル一覧を返す。
+ * renderFileList で更新された最新データのスナップショット。
+ *
+ * @param {string} hostname - ホスト名
+ * @returns {Array<Object>} ファイルエントリ配列（空なら空配列）
+ */
+export function getFileList(hostname) {
+  return _fileListMap.get(hostname) || [];
+}
 
 /**
  * GCode メタデータキャッシュ。
@@ -1515,8 +1527,29 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
     html += `</div>`;
   }
 
+  // 残量不足時: このスプールの残量で印刷できるファイルの提案
+  if (isShort && spool) {
+    const recs = buildFilamentRecommendations(
+      remaining, spoolMaterial, hostname, { maxResults: 3 }
+    );
+    if (recs.length > 0) {
+      html += `<div class="pm-print-section pm-print-info-section">`;
+      html += `<div class="pm-print-section-title">💡 この残量で印刷できるファイル</div>`;
+      html += `<div class="rec-list">`;
+      for (const rec of recs) {
+        const fmtNeedRec = formatFilamentAmount(rec.materialNeeded, spool);
+        html += `<div class="rec-item">`;
+        html += `<span class="rec-filename">${rec.basename}</span>`;
+        html += `<span class="rec-detail">必要: ${fmtNeedRec.display}</span>`;
+        html += `<span class="rec-reason">${rec.reason}</span>`;
+        html += `</div>`;
+      }
+      html += `</div></div>`;
+    }
+  }
+
   // 予想完了セクション
-  html += `<div style="margin:8px 0">`;
+  html += `<div class="pm-print-section pm-print-neutral-section">`;
   html += `<div>必要量: ${fmtNeed.display}</div>`;
   if (estSec > 0) {
     html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
@@ -2204,7 +2237,7 @@ function buildHistoryStats(hostname) {
  * @param {string} hostname - ホスト名
  * @returns {Object|null} インサイト情報。該当なしの場合 null
  */
-function buildFileInsight(filename, hostname) {
+export function buildFileInsight(filename, hostname) {
   const history = loadHistory(hostname);
   const basename = filename.split("/").pop();
 

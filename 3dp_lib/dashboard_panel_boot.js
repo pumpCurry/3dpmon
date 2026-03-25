@@ -32,6 +32,8 @@ import { registerAllPanelInits } from "./dashboard_panel_init.js";
 import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
 import { monitorData } from "./dashboard_data.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
+import { registerPrintManagerAccessor } from "./dashboard_spool.js";
+import { getFileList, buildFileInsight } from "./dashboard_printmanager.js";
 
 /**
  * パネルシステムモードが有効かどうか。
@@ -66,6 +68,9 @@ export function bootPanelSystem() {
 
   /* (0) パネル初期化関数レジストリを登録 */
   registerAllPanelInits();
+
+  /* (0a) printmanager アクセサを spool.js に登録（循環参照回避） */
+  registerPrintManagerAccessor({ getFileList, buildFileInsight });
 
   /* (0b) 従来タイトルバーを非表示にし、トップメニューバーに置き換え */
   const titleBar = document.querySelector(".title-bar");

@@ -918,9 +918,24 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
   const host = hostname;
   if (!host) return;
   const s = getCurrentSpool(host);
-  if (!s) return;
+  if (!s) {
+    // スプール未設定 — transient フィールドのクリアだけは行えない（対象なし）
+    return;
+  }
   const normalizedJobId = String(jobId ?? "");
-  if (s.currentPrintID && s.currentPrintID !== normalizedJobId) return;
+  if (s.currentPrintID && s.currentPrintID !== normalizedJobId) {
+    // jobId 不一致 — 別のジョブの完了通知なので無視するが、
+    // transient フィールドが古いジョブのまま残留していたらクリアする
+    console.warn(
+      "finalizeFilamentUsage: jobId mismatch, clearing stale transient fields",
+      { stored: s.currentPrintID, received: normalizedJobId }
+    );
+    s.currentJobStartLength = null;
+    s.currentJobExpectedLength = null;
+    s.currentPrintID = "";
+    saveUnifiedStorage();
+    return;
+  }
   const startLen = s.currentJobStartLength ?? s.remainingLengthMm;
   const used = Number(lengthMm);
   const expectedLength = Number(s.currentJobExpectedLength ?? NaN);
@@ -1103,4 +1118,110 @@ export function autoCorrectCurrentSpool(hostname) {
     spool.printCount = count;
     saveUnifiedStorage();
   }
+}
+
+/* ===================================================================
+   残フィラメント活用提案 (Phase C)
+   =================================================================== */
+
+/**
+ * 指定した残量で印刷可能なファイルを提案する。
+ * ファイル一覧から必要量 ≤ remainingMm のものを抽出しスコアリング。
+ *
+ * @param {number} remainingMm - スプールの残フィラメント(mm)
+ * @param {string} material - スプールの素材名
+ * @param {string} hostname - 対象ホスト名
+ * @param {Object} [options] - オプション
+ * @param {number} [options.maxResults=5] - 最大結果数
+ * @returns {Array<{basename: string, materialNeeded: number, matchScore: number, reason: string}>}
+ */
+export function buildFilamentRecommendations(remainingMm, material, hostname, options = {}) {
+  const maxResults = options.maxResults || 5;
+  if (!remainingMm || remainingMm <= 0 || !hostname) return [];
+
+  // 動的 import を避けるため、getFileList/buildFileInsight は呼び出し側から渡す設計にしない。
+  // 代わりに printmanager からの export を使う（循環参照回避のため遅延import）。
+  let fileList, buildInsight;
+  try {
+    // eslint-disable-next-line no-eval
+    const pm = _pmAccessor;
+    fileList = pm?.getFileList?.(hostname) || [];
+    buildInsight = pm?.buildFileInsight;
+  } catch {
+    return [];
+  }
+
+  if (!fileList.length) return [];
+
+  const matUpper = (material || "").toUpperCase().trim();
+  const candidates = [];
+
+  for (const file of fileList) {
+    let materialNeeded = Number(file.usagematerial || file.expect || 0);
+
+    // 実績ベースの消費量が利用可能ならそちらを優先
+    if (buildInsight) {
+      const insight = buildInsight(file.filename || file.basename, hostname);
+      if (insight?.avgMaterialMm > 0) {
+        materialNeeded = insight.avgMaterialMm;
+      }
+    }
+
+    if (materialNeeded <= 0 || materialNeeded > remainingMm) continue;
+
+    // スコアリング
+    let score = 0;
+    const reasons = [];
+
+    // 素材一致ボーナス
+    // (GCodeメタから素材が分かる場合)
+    const fileMat = (file._gcodeMeta?.material || "").toUpperCase().trim();
+    if (fileMat && matUpper && fileMat === matUpper) {
+      score += 100;
+      reasons.push("素材一致");
+    }
+
+    // フィット率ボーナス（残量にぴったり使い切れるほど高い）
+    const fitRatio = materialNeeded / remainingMm;
+    score += Math.round(50 * fitRatio);
+    if (fitRatio > 0.7) reasons.push("残量を有効活用");
+
+    // 印刷頻度ボーナス
+    const printCount = file.printCount || 0;
+    if (printCount > 0) {
+      score += Math.min(30, printCount * 10);
+      reasons.push(`過去${printCount}回印刷`);
+    }
+
+    if (reasons.length === 0) reasons.push("印刷可能");
+
+    candidates.push({
+      basename: file.basename || (file.filename || "").split("/").pop(),
+      materialNeeded: Math.round(materialNeeded),
+      matchScore: score,
+      reason: reasons.join("・")
+    });
+  }
+
+  // スコア降順 → 必要量降順（残量をより使い切る方を優先）
+  candidates.sort((a, b) => b.matchScore - a.matchScore || b.materialNeeded - a.materialNeeded);
+  return candidates.slice(0, maxResults);
+}
+
+/**
+ * printmanager モジュールへのアクセサ（循環参照回避用）。
+ * boot 時に registerPrintManagerAccessor() で設定される。
+ * @private
+ * @type {Object|null}
+ */
+let _pmAccessor = null;
+
+/**
+ * printmanager のアクセサを登録する。
+ * 循環参照を回避するため、boot 時に呼び出す。
+ *
+ * @param {Object} accessor - {getFileList, buildFileInsight} を持つオブジェクト
+ */
+export function registerPrintManagerAccessor(accessor) {
+  _pmAccessor = accessor;
 }

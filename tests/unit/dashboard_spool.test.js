@@ -342,3 +342,72 @@ describe('SPOOL_STATE 定数', () => {
     expect(unique.size).toBe(states.length);
   });
 });
+
+// ── buildFilamentRecommendations テスト ──────────────────
+
+describe('buildFilamentRecommendations', () => {
+  let buildFilamentRecommendations, registerPrintManagerAccessor;
+
+  beforeEach(async () => {
+    const mod = await import('../../3dp_lib/dashboard_spool.js');
+    buildFilamentRecommendations = mod.buildFilamentRecommendations;
+    registerPrintManagerAccessor = mod.registerPrintManagerAccessor;
+  });
+
+  it('アクセサ未登録なら空配列を返す', () => {
+    registerPrintManagerAccessor(null);
+    const result = buildFilamentRecommendations(5000, 'PLA', 'host1');
+    expect(result).toEqual([]);
+  });
+
+  it('ファイルリストが空なら空配列を返す', () => {
+    registerPrintManagerAccessor({
+      getFileList: () => [],
+      buildFileInsight: () => null
+    });
+    const result = buildFilamentRecommendations(5000, 'PLA', 'host1');
+    expect(result).toEqual([]);
+  });
+
+  it('残量不足のファイルを除外する', () => {
+    registerPrintManagerAccessor({
+      getFileList: () => [
+        { basename: 'small.gcode', usagematerial: 3000 },
+        { basename: 'large.gcode', usagematerial: 10000 }
+      ],
+      buildFileInsight: () => null
+    });
+    const result = buildFilamentRecommendations(5000, 'PLA', 'host1');
+    expect(result).toHaveLength(1);
+    expect(result[0].basename).toBe('small.gcode');
+  });
+
+  it('maxResults で結果数を制限', () => {
+    registerPrintManagerAccessor({
+      getFileList: () => Array.from({ length: 10 }, (_, i) => ({
+        basename: `file${i}.gcode`, usagematerial: 1000
+      })),
+      buildFileInsight: () => null
+    });
+    const result = buildFilamentRecommendations(5000, 'PLA', 'host1', { maxResults: 3 });
+    expect(result).toHaveLength(3);
+  });
+
+  it('フィット率が高いファイルが上位に来る', () => {
+    registerPrintManagerAccessor({
+      getFileList: () => [
+        { basename: 'tight.gcode', usagematerial: 4500 },
+        { basename: 'loose.gcode', usagematerial: 1000 }
+      ],
+      buildFileInsight: () => null
+    });
+    const result = buildFilamentRecommendations(5000, 'PLA', 'host1');
+    expect(result[0].basename).toBe('tight.gcode');
+  });
+
+  it('残量0以下なら空配列を返す', () => {
+    registerPrintManagerAccessor({ getFileList: () => [{ basename: 'a.gcode', usagematerial: 100 }], buildFileInsight: () => null });
+    expect(buildFilamentRecommendations(0, 'PLA', 'host1')).toEqual([]);
+    expect(buildFilamentRecommendations(-100, 'PLA', 'host1')).toEqual([]);
+  });
+});
