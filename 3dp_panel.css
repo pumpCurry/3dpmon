@@ -232,6 +232,22 @@
 }
 
 /* ---------------------------------------------------------------
+   グローバル: フォーカスリング (Phase 4-B a11y)
+--------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--color-accent, #3b82f6);
+  outline-offset: 2px;
+}
+/* ボタンのフォーカスリング */
+button:focus-visible,
+.fc-tab-btn:focus-visible,
+.confirm-button:focus-visible {
+  outline: 2px solid var(--color-accent, #3b82f6);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+}
+
+/* ---------------------------------------------------------------
    GridStack コンテナ
 --------------------------------------------------------------- */
 .grid-stack {

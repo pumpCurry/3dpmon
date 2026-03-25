@@ -90,23 +90,29 @@ export function showConfirmDialog({
     overlay.style.zIndex = String(++_zIndexCounter);
     document.body.appendChild(overlay);
 
-    // ダイアログ
+    // ダイアログ（ARIA: alertdialog + labelledby + describedby）
     const dlg = document.createElement("div");
     dlg.className = "confirm-dialog";
+    dlg.setAttribute("role", "alertdialog");
+    dlg.setAttribute("aria-modal", "true");
+    const titleId = `confirm-title-${_zIndexCounter}`;
+    const bodyId = `confirm-body-${_zIndexCounter}`;
+    dlg.setAttribute("aria-labelledby", titleId);
+    dlg.setAttribute("aria-describedby", bodyId);
     overlay.appendChild(dlg);
 
     // ヘッダー
     const header = document.createElement("div");
     header.className = "confirm-header";
     header.style.backgroundColor = color;
-    // color: var(--color-text-inverse) は .confirm-header クラスで定義済み
-    header.innerHTML = `<span class="confirm-icon">${icon}</span>
-                        <span class="confirm-title">${title}</span>`;
+    header.innerHTML = `<span class="confirm-icon" aria-hidden="true">${icon}</span>
+                        <span class="confirm-title" id="${titleId}">${title}</span>`;
     dlg.appendChild(header);
 
     // 本文
     const body = document.createElement("div");
     body.className = "confirm-body";
+    body.id = bodyId;
     if (message) {
       const p = document.createElement("p");
       p.textContent = message;
@@ -159,9 +165,44 @@ export function showConfirmDialog({
     }
 
     function cleanup() {
+      document.removeEventListener("keydown", handleKeydown);
       document.body.removeChild(overlay);
       _zIndexCounter--;
     }
+
+    /**
+     * キーボードイベント: ESC で閉じる、Tab でフォーカストラップ
+     * @param {KeyboardEvent} e
+     */
+    function handleKeydown(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup();
+        resolve(cancelText ? false : true);
+        return;
+      }
+      // フォーカストラップ: Tab キーをダイアログ内に閉じ込める
+      if (e.key === "Tab") {
+        const focusable = dlg.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
+    }
+    document.addEventListener("keydown", handleKeydown);
+
+    // 初回フォーカス: 最初のボタンにフォーカスを設定
+    requestAnimationFrame(() => {
+      const firstBtn = dlg.querySelector("button");
+      if (firstBtn) firstBtn.focus();
+    });
   });
 }
 

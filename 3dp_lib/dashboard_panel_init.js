@@ -900,12 +900,12 @@ function initProductionPanel(body) {
         const table = document.createElement("table");
         table.className = "registered-table prod-daily-table";
         table.innerHTML = `<thead><tr>
-          <th>日付</th>
-          <th class="text-right">印刷数</th>
-          <th class="text-right">成功</th>
-          <th class="text-right">失敗</th>
-          <th class="text-right">合計時間</th>
-          <th class="text-right">消費量</th>
+          <th scope="col">日付</th>
+          <th scope="col" class="text-right">印刷数</th>
+          <th scope="col" class="text-right">成功</th>
+          <th scope="col" class="text-right">失敗</th>
+          <th scope="col" class="text-right">合計時間</th>
+          <th scope="col" class="text-right">消費量</th>
         </tr></thead><tbody></tbody>`;
         dailyContainer.append(dailyTitle, table);
       }
@@ -947,11 +947,11 @@ function initProductionPanel(body) {
         const evaTable = document.createElement("table");
         evaTable.className = "registered-table prod-eva-table";
         evaTable.innerHTML = `<thead><tr>
-          <th>ファイル</th>
-          <th class="text-right">回数</th>
-          <th class="text-right">見積</th>
-          <th class="text-right">実績平均</th>
-          <th class="text-right">差異</th>
+          <th scope="col">ファイル</th>
+          <th scope="col" class="text-right">回数</th>
+          <th scope="col" class="text-right">見積</th>
+          <th scope="col" class="text-right">実績平均</th>
+          <th scope="col" class="text-right">差異</th>
         </tr></thead><tbody></tbody>`;
         evaContainer.append(evaTitle, evaTable);
       }
