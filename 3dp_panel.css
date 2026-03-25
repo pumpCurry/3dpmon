@@ -2441,6 +2441,76 @@ body.panel-mode .notification-container {
   color: var(--color-text-muted);
   margin-bottom: var(--space-1);
 }
+
+/* ---------------------------------------------------------------
+   統一: 空状態 / ローディング / エラー状態 (Phase 4-A)
+--------------------------------------------------------------- */
+.state-empty,
+.state-loading,
+.state-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5, 24px) var(--space-4, 16px);
+  text-align: center;
+  min-height: 80px;
+}
+.state-icon {
+  font-size: 2em;
+  margin-bottom: var(--space-2, 8px);
+  line-height: 1;
+}
+.state-title {
+  font-size: var(--font-base, 14px);
+  font-weight: bold;
+  color: var(--color-text-primary, #1a1a1a);
+  margin-bottom: var(--space-1, 4px);
+}
+.state-message {
+  font-size: var(--font-sm, 12px);
+  color: var(--color-text-muted, #94a3b8);
+  max-width: 300px;
+}
+.state-action {
+  margin-top: var(--space-3, 12px);
+}
+/* 空状態: グレー系 */
+.state-empty .state-icon { color: var(--color-text-muted, #94a3b8); }
+/* ローディング: アクセント + 回転 */
+.state-loading .state-icon {
+  color: var(--color-accent, #3b82f6);
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+/* エラー: 赤系 */
+.state-error .state-icon { color: var(--color-danger, #ef4444); }
+.state-error .state-title { color: var(--color-danger, #ef4444); }
+/* スケルトンローディング */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-tertiary, #e5e7eb) 25%,
+    var(--color-bg-secondary, #f0f0f0) 50%,
+    var(--color-bg-tertiary, #e5e7eb) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm, 4px);
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-line {
+  height: 12px;
+  margin-bottom: var(--space-1, 4px);
+}
+.skeleton-line.w-75 { width: 75%; }
+.skeleton-line.w-50 { width: 50%; }
+.skeleton-line.w-25 { width: 25%; }
 /* 保管カルーセル内プレビュー */
 .fm-carousel-preview {
   position: relative;

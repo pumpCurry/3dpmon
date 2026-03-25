@@ -72,6 +72,7 @@ import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
+import { createEmptyState } from "./dashboard_ui_components.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
 
 let styleInjected = false;
@@ -296,10 +297,11 @@ function createDashboardContent(hostname, switchTab) {
 
     // per-host セクション
     if (hosts.length === 0) {
-      const noHost = document.createElement("div");
-      noHost.className = "fm-empty-msg";
-      noHost.textContent = "接続中のプリンタがありません";
-      div.appendChild(noHost);
+      div.appendChild(createEmptyState({
+        icon: "🖨️",
+        title: "プリンタ未接続",
+        message: "接続設定からプリンタを追加すると、フィラメント情報が表示されます"
+      }));
     }
 
     hosts.forEach(host => {
@@ -388,20 +390,14 @@ function createDashboardContent(hostname, switchTab) {
         mountedWrap.appendChild(infoBox);
         section.appendChild(mountedWrap);
       } else {
-        // 未装着
-        const empty = document.createElement("div");
-        empty.className = "fm-empty-msg";
-        empty.textContent = "スプール未装着";
-        const mountBtn = document.createElement("button");
-        mountBtn.textContent = "装着";
-        mountBtn.className = "btn-font-xs";
-        mountBtn.addEventListener("click", () => {
-          // スプール一覧タブへ切り替え
-          switchTab(2);
-        });
-        empty.appendChild(document.createTextNode(" "));
-        empty.appendChild(mountBtn);
-        section.appendChild(empty);
+        // 未装着 — 統一空状態コンポーネント
+        section.appendChild(createEmptyState({
+          icon: "🧵",
+          title: "スプール未装着",
+          message: "フィラメントを装着すると消費量を自動追跡します",
+          actionLabel: "スプール一覧を表示",
+          onAction: () => switchTab(2)
+        }));
       }
 
       div.appendChild(section);

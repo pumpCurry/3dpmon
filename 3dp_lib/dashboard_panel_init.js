@@ -63,6 +63,7 @@ import { showAlert } from "./dashboard_notification_manager.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual } from "./dashboard_production.js";
+import { createEmptyState } from "./dashboard_ui_components.js";
 import {
   initializeCommandPalette,
   initializeRateControls,
@@ -803,10 +804,12 @@ function initProductionPanel(body) {
   const evaContainer = document.createElement("div");
   evaContainer.className = "prod-eva-section";
 
-  // 空状態メッセージ
-  const emptyMsg = document.createElement("div");
-  emptyMsg.className = "fm-empty-msg";
-  emptyMsg.textContent = "接続中のプリンタがありません";
+  // 空状態メッセージ（統一コンポーネント）
+  const emptyMsg = createEmptyState({
+    icon: "🖨️",
+    title: "プリンタ未接続",
+    message: "接続設定からプリンタを追加してください"
+  });
   emptyMsg.style.display = "none";
 
   body.append(emptyMsg, summaryContainer, hostContainer, dailyContainer, evaContainer);
