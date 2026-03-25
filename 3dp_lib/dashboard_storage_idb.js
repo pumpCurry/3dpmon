@@ -54,8 +54,12 @@ const SHARED_KEYS = [
   "filamentSpools",
   "usageHistory",
   "filamentPresets",
+  "userPresets",
+  "hiddenPresets",
   "filamentInventory",
   "currentSpoolId",
+  "hostSpoolMap",
+  "hostCameraToggle",
   "spoolSerialCounter"
 ];
 

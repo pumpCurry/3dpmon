@@ -443,11 +443,61 @@ function pushLog(msg, isErr = false) {
 
 /**
  * localStorage へ保存するキー名。
- * v1.40 以降の統一ストレージキー。
+ * v1.40 以降の統一ストレージキー（レガシー、v2.1.007 で分割に移行）。
  * ※ v1.25/v1.29 の個別キーからの移行は廃止済み。
  *   最小サポート移行元バージョン: v1.40
  */
 const STORAGE_KEY = "3dp-monitor_1.400";
+
+/** per-host localStorage 分割キー: グローバルデータ用 */
+const LS_KEY_GLOBAL = "3dpmon-global";
+/** per-host localStorage 分割キー: ホスト別データの接頭辞 */
+const LS_KEY_HOST_PREFIX = "3dpmon-host-";
+
+/** localStorage 用に保存可能なグローバルフィールド名一覧 */
+const LS_GLOBAL_FIELDS = [
+  "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
+  "userPresets", "hiddenPresets", "filamentInventory", "currentSpoolId",
+  "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
+];
+
+/**
+ * ホスト名を localStorage キーに安全にエンコードする。
+ * "192.168.54.151:9999" → "192-168-54-151_9999"
+ *
+ * @param {string} host - ホスト名
+ * @returns {string} エンコード済みキー文字列
+ */
+function _encodeHostKey(host) {
+  return (host || "").replace(/\./g, "-").replace(/:/g, "_");
+}
+
+/**
+ * エンコード済みキーをホスト名にデコードする。
+ * "192-168-54-151_9999" → "192.168.54.151:9999"
+ *
+ * @param {string} encoded - エンコード済み文字列
+ * @returns {string} 元のホスト名
+ */
+function _decodeHostKey(encoded) {
+  return (encoded || "").replace(/_/g, ":").replace(/-/g, ".");
+}
+
+/**
+ * localStorage から per-host 分割キーをスキャンし、全ホスト名を返す。
+ *
+ * @returns {Set<string>} 発見されたホスト名のセット
+ */
+function _discoverHostKeysInLocalStorage() {
+  const hosts = new Set();
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(LS_KEY_HOST_PREFIX)) {
+      hosts.add(_decodeHostKey(key.substring(LS_KEY_HOST_PREFIX.length)));
+    }
+  }
+  return hosts;
+}
 /**
  * 印刷履歴の最大保持件数
  *
@@ -505,6 +555,53 @@ export function saveUnifiedStorage(immediate = false) {
 }
 
 /**
+ * monitorData を per-host 分割形式で localStorage に書き込む。
+ * グローバルデータは LS_KEY_GLOBAL に、per-host データは LS_KEY_HOST_PREFIX+hostname に書き込む。
+ * 前回書き込みと同一ならスキップする。
+ *
+ * @private
+ * @returns {void}
+ */
+function _writePerHostLocalStorage() {
+  // グローバルデータ
+  const globalData = {};
+  for (const field of LS_GLOBAL_FIELDS) {
+    if (field in monitorData) globalData[field] = monitorData[field];
+  }
+  const globalJson = JSON.stringify(globalData);
+  if (globalJson !== _lastSavedJson) {
+    localStorage.setItem(LS_KEY_GLOBAL, globalJson);
+    _lastSavedJson = globalJson;
+  }
+
+  // per-host データ
+  const activeHosts = new Set();
+  for (const [host, machine] of Object.entries(monitorData.machines)) {
+    if (host === PLACEHOLDER_HOSTNAME) continue;
+    activeHosts.add(host);
+    const hostKey = LS_KEY_HOST_PREFIX + _encodeHostKey(host);
+    const hostJson = JSON.stringify(machine);
+    // per-host のデデュープは簡易チェック（サイズ比較）
+    const prev = localStorage.getItem(hostKey);
+    if (prev && prev.length === hostJson.length && prev === hostJson) continue;
+    localStorage.setItem(hostKey, hostJson);
+  }
+
+  // 孤児ホストキーの削除（machines に存在しないホスト）
+  const storedHosts = _discoverHostKeysInLocalStorage();
+  for (const host of storedHosts) {
+    if (!activeHosts.has(host)) {
+      localStorage.removeItem(LS_KEY_HOST_PREFIX + _encodeHostKey(host));
+    }
+  }
+
+  // 旧統一キーが残っていれば削除（マイグレーション完了）
+  if (localStorage.getItem(STORAGE_KEY)) {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+}
+
+/**
  * 実際のストレージ書き込みを行う内部関数。
  * IndexedDB が有効な場合はキューに追加し、無効な場合は localStorage へ書き込む。
  * @private
@@ -532,11 +629,12 @@ function _flushStorage() {
 
       // IndexedDB 障害時のリカバリ用に localStorage にもバックアップを定期書き出し
       // (毎回ではなく60秒に1回、サイズ制限エラーも吸収)
+      // ★ per-host 分割形式で書き出す
       const now = Date.now();
       if (!_lastLsBackupEpoch || now - _lastLsBackupEpoch > 60000) {
         _lastLsBackupEpoch = now;
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(monitorData));
+          _writePerHostLocalStorage();
         } catch (e) {
           console.warn("[saveUnifiedStorage] localStorage バックアップ失敗:", e.message);
         }
@@ -546,14 +644,11 @@ function _flushStorage() {
         console.debug("[saveUnifiedStorage] IndexedDB キューに追加しました");
       }
     } else {
-      // フォールバック: localStorage
-      const json = JSON.stringify(monitorData);
-      if (json === _lastSavedJson) return;
-      localStorage.setItem(STORAGE_KEY, json);
-      _lastSavedJson = json;
+      // フォールバック: localStorage（per-host 分割形式）
+      _writePerHostLocalStorage();
 
       if (_enableStorageLog) {
-        console.debug("[saveUnifiedStorage] localStorage に保存しました");
+        console.debug("[saveUnifiedStorage] localStorage (per-host) に保存しました");
       }
     }
   } catch (e) {
@@ -608,22 +703,45 @@ export function restoreUnifiedStorage() {
     return;
   }
 
-  // フォールバック: localStorage
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
+  // フォールバック: localStorage（per-host 分割形式を優先）
+  const globalSaved = localStorage.getItem(LS_KEY_GLOBAL);
+  if (globalSaved) {
     try {
-      const data = JSON.parse(saved);
-      _restoreFromData(data, data.machines);
-      _lastSavedJson = saved;
-      console.debug("[restoreUnifiedStorage] localStorage から復元しました");
+      const shared = JSON.parse(globalSaved);
+      // per-host キーをスキャンして machines を構築
+      const machines = {};
+      const hostKeys = _discoverHostKeysInLocalStorage();
+      for (const host of hostKeys) {
+        const hostKey = LS_KEY_HOST_PREFIX + _encodeHostKey(host);
+        const hostData = localStorage.getItem(hostKey);
+        if (hostData) {
+          machines[host] = JSON.parse(hostData);
+        }
+      }
+      _restoreFromData(shared, machines);
+      _lastSavedJson = globalSaved;
+      console.debug(`[restoreUnifiedStorage] localStorage (per-host) から復元: ${hostKeys.size}ホスト`);
     } catch (e) {
-      console.error("[restoreUnifiedStorage] パースエラー:", e);
-      pushLog("[restoreUnifiedStorage] 復元中にパースエラー発生", true);
+      console.error("[restoreUnifiedStorage] per-host パースエラー:", e);
+      pushLog("[restoreUnifiedStorage] per-host 復元中にパースエラー発生", true);
     }
   } else {
-    // v1.40 (STORAGE_KEY = "3dp-monitor_1.400") 以降のデータのみ公式サポート。
-    // v1.25/v1.29 の個別キー移行は廃止済み。
-    console.debug("[restoreUnifiedStorage] 保存データなし。初回起動として扱います");
+    // レガシー: 旧統一キーからマイグレーション
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const data = JSON.parse(saved);
+        _restoreFromData(data, data.machines);
+        _lastSavedJson = null; // 分割形式と異なるので null にして次回書き込みを促す
+        console.debug("[restoreUnifiedStorage] localStorage (旧統一キー) から復元 → 分割形式にマイグレーション");
+        // マイグレーション: 次の _flushStorage() で分割キーが書き込まれ、旧キーが削除される
+      } catch (e) {
+        console.error("[restoreUnifiedStorage] パースエラー:", e);
+        pushLog("[restoreUnifiedStorage] 復元中にパースエラー発生", true);
+      }
+    } else {
+      console.debug("[restoreUnifiedStorage] 保存データなし。初回起動として扱います");
+    }
   }
 
   Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
