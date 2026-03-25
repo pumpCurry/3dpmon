@@ -1856,6 +1856,10 @@ function createReportContent() {
   const monthlyMap = {};
   const materialMap = {};     // 素材別消費量
   const materialCostMap = {}; // 素材別コスト
+  const colorMap = {};        // 色別消費量(mm)
+  const colorCostMap = {};    // 色別コスト
+  const colorHexMap = {};     // 色別 → hex カラーコード
+  const colorCountMap = {};   // 色別 → 印刷回数
   let totalMm = 0, totalCost = 0, totalPrints = 0;
 
   (monitorData.usageHistory || []).forEach(u => {
@@ -1880,6 +1884,17 @@ function createReportContent() {
       dailyMap[dayKey].cost += entryCost;
       totalCost += entryCost;
       materialCostMap[mat] = (materialCostMap[mat] || 0) + entryCost;
+    }
+
+    // 色別集計
+    const colorName = spool?.colorName || "不明";
+    colorMap[colorName] = (colorMap[colorName] || 0) + used;
+    colorCountMap[colorName] = (colorCountMap[colorName] || 0) + 1;
+    if (!colorHexMap[colorName]) {
+      colorHexMap[colorName] = spool?.filamentColor || spool?.color || "#94a3b8";
+    }
+    if (entryCost > 0) {
+      colorCostMap[colorName] = (colorCostMap[colorName] || 0) + entryCost;
     }
 
     const wKey = formatWeekKey(dateObj);
@@ -1932,6 +1947,68 @@ function createReportContent() {
     matTable.appendChild(matTbody);
     matFs.appendChild(matTable);
     div.appendChild(matFs);
+  }
+
+  // ── 1b) 色別内訳 ──────────────────────────────────────
+  const colorEntries = Object.entries(colorMap).sort((a, b) => b[1] - a[1]);
+  if (colorEntries.length > 0) {
+    const colorFs = document.createElement("fieldset");
+    colorFs.className = "analysis-fieldset";
+    colorFs.innerHTML = "<legend class='analysis-legend'>色別内訳</legend>";
+
+    const colorTable = document.createElement("table");
+    colorTable.className = "registered-table";
+    colorTable.innerHTML = `<thead><tr><th scope="col">色</th><th scope="col" class="text-right">印刷回数</th><th scope="col" class="text-right">消費量</th><th scope="col" class="text-right">比率</th><th scope="col" class="text-right">推定コスト</th></tr></thead>`;
+    const colorTbody = document.createElement("tbody");
+    colorEntries.forEach(([cn, mm]) => {
+      const pct = totalMm > 0 ? ((mm / totalMm) * 100).toFixed(1) : "0";
+      const cost = colorCostMap[cn] || 0;
+      const count = colorCountMap[cn] || 0;
+      const hex = colorHexMap[cn] || "#94a3b8";
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td><span class="color-report-swatch" style="background:${hex}"></span> ${cn}</td>` +
+        `<td class="text-right">${count}回</td>` +
+        `<td class="text-right">${formatFilamentAmount(mm).display}</td>` +
+        `<td class="text-right">${pct}%</td>` +
+        `<td class="text-right">${currency}${Math.round(cost).toLocaleString()}</td>`;
+      colorTbody.appendChild(tr);
+    });
+    colorTable.appendChild(colorTbody);
+    colorFs.appendChild(colorTable);
+
+    // ドーナツチャート（フィラメントの実際の色を使用）
+    if (typeof Chart !== "undefined" && colorEntries.length > 1) {
+      const colorCanvas = document.createElement("canvas");
+      colorCanvas.className = "chart-constrained";
+      colorFs.appendChild(colorCanvas);
+      new Chart(colorCanvas.getContext("2d"), {
+        type: "doughnut",
+        data: {
+          labels: colorEntries.map(([cn]) => cn),
+          datasets: [{
+            data: colorEntries.map(([, mm]) => Math.round(mm / 1000)),
+            backgroundColor: colorEntries.map(([cn]) => colorHexMap[cn] || "#94a3b8"),
+            borderWidth: 1,
+            borderColor: "var(--color-bg-primary, #fff)"
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `${ctx.label}: ${ctx.parsed}m (${colorCountMap[ctx.label] || 0}回)`
+              }
+            }
+          }
+        }
+      });
+    }
+
+    div.appendChild(colorFs);
   }
 
   // ── 2) スプール枯渇予測 ─────────────────────────────
