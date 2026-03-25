@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.1.007 (2026-03-25)
+
+### フィラメント管理拡張（Phase 5: A+B+C）
+
+#### Phase A: Per-Host ストレージ分離
+- localStorage 単一キー（~3.6MB/2台）→ per-host 分割キー形式に移行
+  - `3dpmon-global` + `3dpmon-host-{encoded-hostname}` の分割書き込み
+  - 自動マイグレーション: 旧統一キー検出 → 分割 → 旧キー削除
+  - 孤児ホストキーの自動クリーンアップ
+- IndexedDB SHARED_KEYS に `userPresets`, `hiddenPresets`, `hostSpoolMap`, `hostCameraToggle` の4キーを追加（データロス防止）
+
+#### Phase B: 色別印刷集計
+- Tab 4 集計レポートに「色別内訳」セクション追加
+  - 色見本 + 色名 / 印刷回数 / 消費量 / 比率 / コスト のテーブル
+  - Chart.js ドーナツチャート（フィラメントの実際の色を使用）
+
+#### Phase C: 残フィラメント活用提案
+- 新関数 `buildFilamentRecommendations()`: 残量で印刷可能なファイルをスコアリング
+  - 素材一致(+100) + フィット率(+50) + 頻度(+10) の3軸評価
+  - 循環参照回避のための accessor パターン（boot時に登録）
+- 印刷ダイアログ統合: 残量不足時に「💡 この残量で印刷できるファイル」を提案
+- `buildFileInsight`, `getFileList` を export 化
+
+#### テスト
+- 新規14件追加（storage 8 + recommendation 6）、合計151件全グリーン
+
+---
+
 ## v2.1.006 (2026-03-25)
 
 ### UI/UX品質改善（Phase 0-4）
