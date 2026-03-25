@@ -775,8 +775,10 @@ function _fmtTime(sec) {
   if (!sec || sec <= 0) return "—";
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
   if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 /**
@@ -788,16 +790,50 @@ function _fmtTime(sec) {
 function initProductionPanel(body) {
   body.classList.add("production-panel");
 
-  function render() {
-    body.innerHTML = "";
+  // 固定コンテナ（初回のみ作成、更新時は中身だけ差し替え）
+  const summaryContainer = document.createElement("div");
+  summaryContainer.className = "stat-cards";
 
+  const hostContainer = document.createElement("div");
+  hostContainer.className = "prod-host-section";
+
+  const dailyContainer = document.createElement("div");
+  dailyContainer.className = "prod-daily-section";
+
+  const evaContainer = document.createElement("div");
+  evaContainer.className = "prod-eva-section";
+
+  // 空状態メッセージ
+  const emptyMsg = document.createElement("div");
+  emptyMsg.className = "fm-empty-msg";
+  emptyMsg.textContent = "接続中のプリンタがありません";
+  emptyMsg.style.display = "none";
+
+  body.append(emptyMsg, summaryContainer, hostContainer, dailyContainer, evaContainer);
+
+  /**
+   * データ取得 → 各コンテナの中身を差し替え。
+   * スクロール位置・フォーカスを保持するため body.innerHTML は使わない。
+   */
+  function update() {
     const fleet = buildFleetSummary();
     const daily = buildDailyProductionReport({ days: 7 });
 
-    // ── 1) フリートサマリーカード ───────────────────
-    const summaryRow = document.createElement("div");
-    summaryRow.className = "stat-cards";
+    // 空状態チェック
+    if (fleet.totalHosts === 0) {
+      emptyMsg.style.display = "";
+      summaryContainer.style.display = "none";
+      hostContainer.style.display = "none";
+      dailyContainer.style.display = "none";
+      evaContainer.style.display = "none";
+      return;
+    }
+    emptyMsg.style.display = "none";
+    summaryContainer.style.display = "";
+    hostContainer.style.display = "";
 
+    // ── 1) フリートサマリーカード（中身だけ差し替え）──
+    summaryContainer.innerHTML = "";
     [
       { label: "接続台数", value: `${fleet.activeHosts}/${fleet.totalHosts}台`, sub: `${fleet.printingHosts}台印刷中` },
       { label: "フリート稼働率", value: `${fleet.fleetUtilizationPct}%` },
@@ -807,19 +843,16 @@ function initProductionPanel(body) {
       const card = document.createElement("div");
       card.className = "stat-card";
       card.innerHTML = `<div class="stat-card-label">${c.label}</div><div class="stat-card-value">${c.value}</div>${c.sub ? `<div class="stat-card-sub">${c.sub}</div>` : ""}`;
-      summaryRow.appendChild(card);
+      summaryContainer.appendChild(card);
     });
-    body.appendChild(summaryRow);
 
-    // ── 2) per-host 稼働率バー ─────────────────────
+    // ── 2) per-host 稼働率バー ──
+    hostContainer.innerHTML = "";
     if (fleet.hosts.length > 0) {
-      const hostSection = document.createElement("div");
-      hostSection.className = "prod-host-section";
-
       const hostTitle = document.createElement("div");
       hostTitle.className = "prod-section-title";
       hostTitle.textContent = "機器別稼働率 (24h)";
-      hostSection.appendChild(hostTitle);
+      hostContainer.appendChild(hostTitle);
 
       for (const h of fleet.hosts) {
         const row = document.createElement("div");
@@ -849,32 +882,32 @@ function initProductionPanel(body) {
           : `${h.printCount}回完了`;
 
         row.append(nameSpan, barWrap, pctLabel, statusSpan);
-        hostSection.appendChild(row);
+        hostContainer.appendChild(row);
       }
-      body.appendChild(hostSection);
     }
 
-    // ── 3) 日次生産テーブル ──────────────────────────
+    // ── 3) 日次生産テーブル（tbodyのみ差し替え）──
     if (daily.length > 0) {
-      const dailySection = document.createElement("div");
-      dailySection.className = "prod-daily-section";
-
-      const dailyTitle = document.createElement("div");
-      dailyTitle.className = "prod-section-title";
-      dailyTitle.textContent = "日次生産レポート (7日間)";
-      dailySection.appendChild(dailyTitle);
-
-      const table = document.createElement("table");
-      table.className = "registered-table prod-daily-table";
-      table.innerHTML = `<thead><tr>
-        <th>日付</th>
-        <th class="text-right">印刷数</th>
-        <th class="text-right">成功</th>
-        <th class="text-right">失敗</th>
-        <th class="text-right">合計時間</th>
-        <th class="text-right">消費量</th>
-      </tr></thead>`;
-      const tbody = document.createElement("tbody");
+      dailyContainer.style.display = "";
+      // 初回のみヘッダ構築
+      if (!dailyContainer.querySelector("table")) {
+        const dailyTitle = document.createElement("div");
+        dailyTitle.className = "prod-section-title";
+        dailyTitle.textContent = "日次生産レポート (7日間)";
+        const table = document.createElement("table");
+        table.className = "registered-table prod-daily-table";
+        table.innerHTML = `<thead><tr>
+          <th>日付</th>
+          <th class="text-right">印刷数</th>
+          <th class="text-right">成功</th>
+          <th class="text-right">失敗</th>
+          <th class="text-right">合計時間</th>
+          <th class="text-right">消費量</th>
+        </tr></thead><tbody></tbody>`;
+        dailyContainer.append(dailyTitle, table);
+      }
+      const tbody = dailyContainer.querySelector("tbody");
+      tbody.innerHTML = "";
       for (const day of daily) {
         const tr = document.createElement("tr");
         const filFmt = day.totalFilamentMm > 0 ? `${(day.totalFilamentMm / 1000).toFixed(1)}m` : "—";
@@ -887,41 +920,40 @@ function initProductionPanel(body) {
           `<td class="text-right">${filFmt}</td>`;
         tbody.appendChild(tr);
       }
-      table.appendChild(tbody);
-      dailySection.appendChild(table);
-      body.appendChild(dailySection);
+    } else {
+      dailyContainer.style.display = "none";
     }
 
-    // ── 4) 予定vs実績（最もよく印刷するファイルTop 10） ──
+    // ── 4) 予定vs実績（tbodyのみ差し替え）──
     const allEstVsAct = [];
     for (const h of fleet.hosts) {
       const items = buildEstimateVsActual(h.hostname);
       items.forEach(i => { i._host = h.displayName; });
       allEstVsAct.push(...items);
     }
-    // 印刷回数でソート、Top 10
     allEstVsAct.sort((a, b) => b.printCount - a.printCount);
     const top10 = allEstVsAct.slice(0, 10);
 
     if (top10.length > 0) {
-      const evaSection = document.createElement("div");
-      evaSection.className = "prod-eva-section";
-
-      const evaTitle = document.createElement("div");
-      evaTitle.className = "prod-section-title";
-      evaTitle.textContent = "予定 vs 実績 (Top 10)";
-      evaSection.appendChild(evaTitle);
-
-      const evaTable = document.createElement("table");
-      evaTable.className = "registered-table prod-eva-table";
-      evaTable.innerHTML = `<thead><tr>
-        <th>ファイル</th>
-        <th class="text-right">回数</th>
-        <th class="text-right">見積</th>
-        <th class="text-right">実績平均</th>
-        <th class="text-right">差異</th>
-      </tr></thead>`;
-      const evaTbody = document.createElement("tbody");
+      evaContainer.style.display = "";
+      // 初回のみヘッダ構築
+      if (!evaContainer.querySelector("table")) {
+        const evaTitle = document.createElement("div");
+        evaTitle.className = "prod-section-title";
+        evaTitle.textContent = "予定 vs 実績 (Top 10)";
+        const evaTable = document.createElement("table");
+        evaTable.className = "registered-table prod-eva-table";
+        evaTable.innerHTML = `<thead><tr>
+          <th>ファイル</th>
+          <th class="text-right">回数</th>
+          <th class="text-right">見積</th>
+          <th class="text-right">実績平均</th>
+          <th class="text-right">差異</th>
+        </tr></thead><tbody></tbody>`;
+        evaContainer.append(evaTitle, evaTable);
+      }
+      const evaTbody = evaContainer.querySelector("tbody");
+      evaTbody.innerHTML = "";
       for (const item of top10) {
         const tr = document.createElement("tr");
         const diffClass = item.diffPct > 10 ? "text-danger" :
@@ -935,13 +967,12 @@ function initProductionPanel(body) {
           `<td class="text-right ${diffClass}">${item.estimatedSec > 0 ? `${diffSign}${item.diffPct}%` : "—"}</td>`;
         evaTbody.appendChild(tr);
       }
-      evaTable.appendChild(evaTbody);
-      evaSection.appendChild(evaTable);
-      body.appendChild(evaSection);
+    } else {
+      evaContainer.style.display = "none";
     }
   }
 
-  render();
-  // 30秒ごとに自動更新
-  body._productionTimer = setInterval(render, 30000);
+  update();
+  // 30秒ごとに差分更新（スクロール位置を維持）
+  body._productionTimer = setInterval(update, 30000);
 }

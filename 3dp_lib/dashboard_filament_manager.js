@@ -810,7 +810,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
       // 非表示状態の視覚表現
       const hidden = isHiddenPreset(p.presetId);
       if (hidden) {
-        tr.style.opacity = "0.5";
+        tr.classList.add("inv-row-hidden");
       }
 
       // ブランド列にカスタム/ビルトインアイコン
@@ -2633,35 +2633,35 @@ async function _showCustomPresetDialog(onComplete, existing = null) {
     .join("");
 
   const html = `
-    <div class="conn-edit-grid" style="grid-template-columns:auto 1fr;">
-      <label>ブランド名 *</label>
-      <input type="text" id="cp-brand" value="${existing?.brand || ""}" placeholder="例: eSUN, Polymaker">
-      <label>素材 *</label>
-      <div style="display:flex;gap:4px">
-        <select id="cp-material">${materialOptions}<option value="">-- 直接入力 --</option></select>
-        <input type="text" id="cp-material-custom" placeholder="カスタム素材名" style="flex:1">
+    <form id="cp-form" class="conn-edit-grid cp-form-grid">
+      <label for="cp-brand">ブランド名 <span class="cp-required">*</span></label>
+      <input type="text" id="cp-brand" value="${existing?.brand || ""}" placeholder="例: eSUN, Polymaker" required>
+      <label for="cp-material">素材 <span class="cp-required">*</span></label>
+      <div class="cp-row">
+        <select id="cp-material" required>${materialOptions}<option value="">-- 直接入力 --</option></select>
+        <input type="text" id="cp-material-custom" placeholder="カスタム素材名" class="flex-1">
       </div>
-      <label>色 *</label>
-      <div style="display:flex;gap:4px;align-items:center">
+      <label for="cp-color-name">色 <span class="cp-required">*</span></label>
+      <div class="cp-row cp-row-center">
         <input type="color" id="cp-color" value="${existing?.color || "#22C55E"}">
-        <input type="text" id="cp-color-name" value="${existing?.colorName || ""}" placeholder="色名（例: ブラック）" style="flex:1">
+        <input type="text" id="cp-color-name" value="${existing?.colorName || ""}" placeholder="色名（例: ブラック）" class="flex-1" required>
       </div>
-      <label>名称</label>
+      <label for="cp-name">名称</label>
       <input type="text" id="cp-name" value="${existing?.name || ""}" placeholder="製品名">
-      <label>全長 (mm)</label>
+      <label for="cp-length">全長 (mm)</label>
       <input type="number" id="cp-length" value="${existing?.defaultLength || 330000}" min="1000">
-      <label>重量 (g) ※入力で全長を自動計算</label>
+      <label for="cp-weight">重量 (g) <span class="cp-hint">※入力で全長を自動計算</span></label>
       <input type="number" id="cp-weight" placeholder="1000" min="1">
-      <label>フィラメント径 (mm)</label>
+      <label for="cp-diameter">フィラメント径 (mm)</label>
       <input type="number" id="cp-diameter" value="${existing?.diameter || 1.75}" step="0.01">
-      <label>購入リンク</label>
-      <input type="text" id="cp-link" value="${existing?.purchaseLink || ""}" placeholder="https://...">
-      <label>価格</label>
-      <div style="display:flex;gap:4px">
+      <label for="cp-link">購入リンク</label>
+      <input type="url" id="cp-link" value="${existing?.purchaseLink || ""}" placeholder="https://...">
+      <label for="cp-price">価格</label>
+      <div class="cp-row">
         <select id="cp-currency"><option value="¥" ${(!existing?.currencySymbol || existing?.currencySymbol === "¥") ? "selected" : ""}>¥</option><option value="$" ${existing?.currencySymbol === "$" ? "selected" : ""}>$</option></select>
-        <input type="number" id="cp-price" value="${existing?.price || ""}" placeholder="1599" style="flex:1">
+        <input type="number" id="cp-price" value="${existing?.price || ""}" placeholder="1599" class="flex-1">
       </div>
-    </div>`;
+    </form>`;
 
   const result = await showConfirmDialog({
     level: "info",
@@ -2672,6 +2672,13 @@ async function _showCustomPresetDialog(onComplete, existing = null) {
   });
 
   if (!result) return;
+
+  // HTML5 フォームバリデーション
+  const formEl = document.getElementById("cp-form");
+  if (formEl && !formEl.checkValidity()) {
+    formEl.reportValidity();
+    return;
+  }
 
   // フォーム値の取得
   const brandVal = document.getElementById("cp-brand")?.value?.trim();

@@ -1425,7 +1425,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   const spoolMaterial = spool?.materialName || spool?.material || "";
   const gcodeMaterial = gcMeta.material || "";
   const materialMismatch = !!(spool && gcodeMaterial &&
-    spoolMaterial.toUpperCase() !== gcodeMaterial.toUpperCase());
+    spoolMaterial.trim().toUpperCase() !== gcodeMaterial.trim().toUpperCase());
 
   // --- ダイアログ HTML 構築 ---
   let html = `<div class="pm-print-header">`;

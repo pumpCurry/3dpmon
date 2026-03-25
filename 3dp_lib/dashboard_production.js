@@ -156,11 +156,24 @@ export function buildDailyProductionReport(options = {}) {
   const now = new Date();
   const dayMap = {};
 
+  /**
+   * ローカルタイムゾーンで YYYY-MM-DD を生成する。
+   * toISOString() はUTC基準で日付境界がずれるため使わない。
+   * @param {Date} d - 日付
+   * @returns {string} "YYYY-MM-DD"
+   */
+  function _localDateKey(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
   // 過去N日分の空データを初期化
   for (let d = 0; d < days; d++) {
     const date = new Date(now);
     date.setDate(date.getDate() - d);
-    const key = date.toISOString().slice(0, 10);
+    const key = _localDateKey(date);
     dayMap[key] = {
       date: key,
       printCount: 0,
@@ -179,7 +192,7 @@ export function buildDailyProductionReport(options = {}) {
     for (const entry of history) {
       const startSec = entry.startTime || 0;
       if (startSec === 0) continue;
-      const dateKey = new Date(startSec * 1000).toISOString().slice(0, 10);
+      const dateKey = _localDateKey(new Date(startSec * 1000));
       const day = dayMap[dateKey];
       if (!day) continue;
 
