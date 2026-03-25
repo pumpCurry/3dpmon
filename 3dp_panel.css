@@ -3180,3 +3180,94 @@ body.panel-mode .notification-container {
   margin-bottom: var(--space-3, 12px);
 }
 /* テキスト色ヘルパー — 共通定義は L1870-1871, L2262 に統合済み */
+
+/* ===============================================================
+   レスポンシブ対応 (Phase 4-C)
+   =============================================================== */
+/* テーブルの水平スクロール */
+.prod-daily-section,
+.prod-eva-section {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* モーダルダイアログのモバイル対応 */
+@media (max-width: 600px) {
+  .fc-dialog {
+    width: 98vw !important;
+    max-width: none !important;
+    height: 95vh !important;
+    max-height: none !important;
+  }
+  .confirm-dialog {
+    width: 95vw !important;
+    max-width: none !important;
+  }
+}
+/* 生産パネル: 小画面でバーレイアウト縦積み */
+@media (max-width: 480px) {
+  .prod-host-row {
+    flex-wrap: wrap;
+  }
+  .prod-host-name {
+    width: 100%;
+    margin-bottom: var(--space-1, 4px);
+  }
+  .prod-util-pct {
+    width: auto;
+  }
+  .prod-host-status {
+    width: auto;
+  }
+  /* stat-cardsを縦積み */
+  .stat-cards {
+    flex-direction: column;
+  }
+  .stat-card {
+    min-width: unset;
+  }
+}
+/* テーブルの文字サイズ縮小 */
+@media (max-width: 768px) {
+  .registered-table {
+    font-size: var(--font-xs, 10px);
+  }
+  .registered-table th,
+  .registered-table td {
+    padding: 2px 4px;
+  }
+}
+
+/* ===============================================================
+   色弱対応 (Phase 4-D)
+   =============================================================== */
+/* 在庫警告: 色だけでなくパターンも追加 */
+.inv-row-danger td:first-child::before {
+  content: "🚨 ";
+}
+.inv-row-warning td:first-child::before {
+  content: "⚠ ";
+}
+/* 印刷前チェック: 不足バーにハッチングパターン（既存）に加え、テキストマーカー */
+.pm-print-danger-section::before {
+  content: "⛔ ";
+  font-size: var(--font-lg, 16px);
+}
+.pm-print-warn-section::before {
+  content: "⚠️ ";
+  font-size: var(--font-lg, 16px);
+}
+/* 成功/失敗テキストに下線パターン追加 */
+.text-danger {
+  text-decoration: underline wavy;
+  text-underline-offset: 2px;
+}
+/* 稼働率バー: printing状態にハッチングパターン追加 */
+.prod-util-bar-fill.printing {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    rgba(255, 255, 255, 0.3) 4px,
+    rgba(255, 255, 255, 0.3) 8px
+  );
+}
