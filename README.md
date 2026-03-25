@@ -4,7 +4,7 @@
 - K1 Max 複数台の並行監視・制御に対応しています。
   - 対応機種は K1C / K1 Max で動作確認をしています。
   - ほかの機種にも対応可能であれば対応させたいので、ご協力くださるかたどうかよろしくお願いいたします。
-- v2.1.005 で **per-host hostname 渡し漏れの第3次監査** を実施しました。3Dプレビュー回転ボタンの per-host 化、`resolveFilamentJobId` / `restoreAggregatorState` / アップロード処理の hostname 未渡しバグ修正、12ファイルの JSDoc hostname 必須化、デッドコード削除を行いました。変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+- v2.1.006 で **UI/UX品質改善（Phase 0-4）** を実施しました。CI/CD基盤（vitest 137テスト + ESLint + Prettier）、CSSデザイントークン（ライト/ダーク60+変数）、カスタムフィラメントプリセット、在庫アラート、廃棄ロス可視化、印刷前安全ゲート（素材不一致/残量不足警告）、生産管理パネル（稼働率/日次レポート）、アクセシビリティ（ARIA/キーボード/色弱対応）を追加しました。変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 ## インストール
 1. このリポジトリをダウンロードします。
    - **Git**: `git clone https://github.com/pumpCurry/3dpmon.git`

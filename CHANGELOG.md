@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.1.006 (2026-03-25)
+
+### UI/UX品質改善（Phase 0-4）
+
+ペルソナベースの機能分析・レビューを実施し、統合管理スイートとしての品質をC級→B+級に改善した。
+
+#### Phase 0: CI/CD基盤再構築
+- **vitest** 導入（137テスト: unit 54 + protocol 56 + integration 13 + production 12 + spool 2）
+- **ESLint** flat config + jsdoc プラグイン、**Prettier**、**Stylelint** 導入
+- GitHub Actions CI ワークフロー刷新（test + lint パイプライン）
+
+#### Phase 1: CSSデザイントークン＋インラインスタイル撲滅
+- `:root` に60+のCSS Custom Properties 定義（色/z-index/スペーシング/タイポ/シャドウ/トランジション）
+- ダークテーマ: `@media (prefers-color-scheme: dark)` + `.theme-dark` クラスの2系統対応
+- JS内のインラインスタイル146箇所→0箇所（100%解消）
+- 5ファイルの `injectStyles()` を外部CSSに抽出
+- CSS設計ガイドライン文書 + AGENTS.md にルール追加
+
+#### Phase 2: フィラメント管理拡張
+- **カスタムプリセット**: ユーザーが自由にブランド/素材/色を登録・編集・削除
+  - 素材密度テーブル: 4種→13種（ASA, PA, PC, PVA, HIPS, PP, POM, PEEK, PEI等）
+  - プリセット非表示/アーカイブ、JSON インポート/エクスポート
+- **在庫アラート**: `minStockAlert` 閾値、赤/黄背景、ダッシュボードバッジ通知
+- **廃棄ロス可視化**: Tab 4 に廃棄スプール数/金額/素材別内訳/直近リスト表示
+- **印刷前安全ゲート**: 素材不一致検出、スプール未装着警告、残量バー付き確認ダイアログ
+
+#### Phase 3: 製造時間管理
+- 新モジュール `dashboard_production.js` + 新パネル「生産管理」
+- per-host 稼働率、日次生産レポート（7日間）、GCode見積 vs 実績比較、フリートサマリー
+
+#### Phase 4: UI一貫性の徹底
+- 空状態/ローディング/エラーの統一コンポーネント（ARIA属性付き）
+- アクセシビリティ: `role="alertdialog"` + ESCキー + フォーカストラップ + `:focus-visible`
+- レスポンシブ: テーブル水平スクロール、モバイルダイアログ全幅化、flex-wrap
+- 色弱対応: デュアルエンコード（色 + アイコン + wavy下線 + ハッチングパターン）
+
+---
+
 ## v2.1.005 (2026-03-12)
 
 ### per-host hostname 渡し漏れ修正（第3次監査）
