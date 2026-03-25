@@ -102,7 +102,7 @@ export function showPresetOpenDialog(hostname) {
     const presetDisplayHost = presetMachineObj.storedData?.hostname?.rawValue
                            || presetMachineObj.storedData?.model?.rawValue || hostname || "";
     dlg.innerHTML = `
-      <div class="fc-header">新品フィラメント選択 <span style="font-size:0.85em;color:#64748b;margin-left:8px">${presetDisplayHost}</span></div>
+      <div class="fc-header">新品フィラメント選択 <span class="fc-header-host">${presetDisplayHost}</span></div>
       <div class="fc-body">
         <fieldset class="fc-search-field">
           <legend>検索</legend>
@@ -361,26 +361,26 @@ export function showFilamentChangeDialog(hostname) {
       const curPct = curSpool.totalLengthMm > 0
         ? Math.round((curSpool.remainingLengthMm / curSpool.totalLengthMm) * 100) : 0;
       currentBar = `
-        <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;margin-bottom:8px;font-size:12px">
-          <span style="color:${curSpool.filamentColor || '#000'};font-size:16px">■</span>
+        <div class="fc-current-bar">
+          <span class="fc-color-swatch-lg" style="color:${curSpool.filamentColor || '#000'}">■</span>
           <span><b>${formatSpoolDisplayId(curSpool)}</b> ${curSpool.name || ""}</span>
-          <span style="color:#64748b">${curSpool.materialName || curSpool.material || ""}</span>
-          <span style="color:#16a34a;font-weight:bold">${curPct}%</span>
-          <span style="flex:1"></span>
-          <button id="fc-remove" style="font-size:11px;padding:2px 8px;cursor:pointer">取り外す</button>
+          <span class="fc-material-label">${curSpool.materialName || curSpool.material || ""}</span>
+          <span class="fc-pct-mounted">${curPct}%</span>
+          <span class="flex-1"></span>
+          <button id="fc-remove" class="btn-font-xs">取り外す</button>
         </div>`;
     } else {
-      currentBar = `<div style="padding:6px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:8px;font-size:12px;color:#94a3b8">スプール未装着</div>`;
+      currentBar = `<div class="fc-current-bar-empty">スプール未装着</div>`;
     }
 
     dlg.innerHTML = `
-      <div class="fc-header">フィラメント交換 <span style="font-size:0.85em;color:#64748b;margin-left:8px">${displayHost}</span></div>
+      <div class="fc-header">フィラメント交換 <span class="fc-header-host">${displayHost}</span></div>
       <div class="fc-body">
         ${currentBar}
-        <div style="display:flex;gap:2px;margin-bottom:6px">
-          <button class="fc-tab-btn active" data-tab="stored" style="flex:1;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;border-radius:4px 4px 0 0;background:#fff;font-weight:bold">📦 保管中スプール</button>
-          <button class="fc-tab-btn" data-tab="preset" style="flex:1;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;border-radius:4px 4px 0 0;background:#f8fafc">🆕 新品を開封</button>
-          <button class="fc-tab-btn" data-tab="favorite" style="flex:1;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;border-radius:4px 4px 0 0;background:#f8fafc">⭐ お気に入り</button>
+        <div class="fc-tab-row">
+          <button class="fc-tab-btn active" data-tab="stored">📦 保管中スプール</button>
+          <button class="fc-tab-btn" data-tab="preset">🆕 新品を開封</button>
+          <button class="fc-tab-btn" data-tab="favorite">⭐ お気に入り</button>
         </div>
         <fieldset class="fc-search-field" style="margin-bottom:4px">
           <form id="fc-search" class="fc-search">
@@ -402,7 +402,7 @@ export function showFilamentChangeDialog(hostname) {
           </div>
           <div id="fc-preview-panel" style="flex-shrink:0;width:160px;display:flex;flex-direction:column;align-items:center;gap:4px;">
             <div id="fc-preview" style="width:150px;height:150px;position:relative;"></div>
-            <div id="fc-preview-info" style="font-size:11px;text-align:center;color:#64748b;"></div>
+            <div id="fc-preview-info" class="fc-preview-info"></div>
           </div>
         </div>
       </div>
@@ -576,18 +576,18 @@ export function showFilamentChangeDialog(hostname) {
           const isCurrent = mountedOn && mountedOn === hostname;
           const isOtherHost = mountedOn && mountedOn !== hostname;
           let stateLabel = "";
-          if (isCurrent) stateLabel = `<span style="color:#16a34a;font-weight:bold">◀ 装着中</span>`;
+          if (isCurrent) stateLabel = `<span class="fc-state-mounted">◀ 装着中</span>`;
           else if (isOtherHost) {
             const otherName = monitorData.machines[mountedOn]?.storedData?.hostname?.rawValue || mountedOn;
-            stateLabel = `<span style="color:#94a3b8;font-size:11px">${otherName}</span>`;
+            stateLabel = `<span class="fc-state-other">${otherName}</span>`;
           }
           tr.innerHTML =
-            `<td><span style="color:${sp.filamentColor || sp.color || '#000'};font-size:14px">■</span> <b>${formatSpoolDisplayId(sp)}</b> ${sp.name || ""}<div style="font-size:11px;color:#64748b">${sp.manufacturerName || sp.brand || ""}</div></td>` +
+            `<td><span class="fc-color-swatch" style="color:${sp.filamentColor || sp.color || '#000'}">■</span> <b>${formatSpoolDisplayId(sp)}</b> ${sp.name || ""}<div class="fc-cell-sub">${sp.manufacturerName || sp.brand || ""}</div></td>` +
             `<td>${sp.materialName || sp.material || ""}</td>` +
-            `<td style="text-align:right"><div>${pct}%</div><div style="font-size:11px;color:#64748b">${fmtRemain.display}</div></td>` +
+            `<td class="fc-cell-right"><div>${pct}%</div><div class="fc-cell-sub">${fmtRemain.display}</div></td>` +
             `<td>${stateLabel}</td>`;
-          if (isCurrent) tr.style.background = '#f0fdf4';
-          if (isOtherHost) { tr.style.opacity = '0.5'; }
+          if (isCurrent) tr.classList.add("fc-row-current");
+          if (isOtherHost) tr.classList.add("fc-row-other");
           // タブ切替時の選択リストア
           if (prevSel && prevSel.id === sp.id) tr.classList.add('selected');
           tr.style.cursor = isOtherHost ? 'not-allowed' : 'pointer';
@@ -622,10 +622,10 @@ export function showFilamentChangeDialog(hostname) {
           const tr = document.createElement('tr');
           const lengthM = ((p.filamentTotalLength || p.defaultLength || 0) / 1000).toFixed(0);
           tr.innerHTML =
-            `<td><span style="color:${p.color || '#000'};font-size:14px">■</span> <b>${p.colorName || ""}</b> ${p.name || ""}<div style="font-size:11px;color:#64748b">${p.brand || ""}</div></td>` +
+            `<td><span class="fc-color-swatch" style="color:${p.color || '#000'}">■</span> <b>${p.colorName || ""}</b> ${p.name || ""}<div class="fc-cell-sub">${p.brand || ""}</div></td>` +
             `<td>${p.material || ""}</td>` +
-            `<td style="text-align:right">${lengthM}m</td>` +
-            `<td><span style="font-size:11px;color:#16a34a">🆕 新品</span></td>`;
+            `<td class="fc-cell-right">${lengthM}m</td>` +
+            `<td><span class="fc-state-new">🆕 新品</span></td>`;
           tr.style.cursor = 'pointer';
           if (prevSel && prevSel.presetId === p.presetId) tr.classList.add('selected');
           tr.addEventListener('click', () => {
@@ -977,10 +977,10 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
       const cRemain = currentSpool.remainingLengthMm ?? 0;
       const cDispId = formatSpoolDisplayId(currentSpool);
       currentInfoHtml = `
-        <fieldset class="fc-search-field" style="margin-bottom:6px;background:#fef3c7;">
+        <fieldset class="fc-search-field fc-search-field-highlight">
           <legend>現在の指定</legend>
-          <div style="display:flex;align-items:center;gap:8px;font-size:13px;">
-            <span style="color:${cColor};font-size:18px;">■</span>
+          <div class="fc-current-bar">
+            <span class="fc-color-swatch-lg" style="color:${cColor}">■</span>
             <span><b>${cDispId} ${cName}</b> ${cMat}</span>
             <span>残: ${Math.round(cRemain).toLocaleString()} mm</span>
             <span>使用量: ${Math.round(materialUsedMm).toLocaleString()} mm</span>

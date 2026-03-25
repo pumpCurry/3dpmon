@@ -1850,6 +1850,11 @@ body.panel-mode .notification-container {
   background: var(--color-table-selected);
 }
 /* タブボタン状態（交換ダイアログ） */
+.fc-tab-row {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 6px;
+}
 .fc-tab-btn {
   flex: 1;
   padding: var(--space-1) var(--space-2);
@@ -1864,6 +1869,81 @@ body.panel-mode .notification-container {
   background: var(--color-bg-primary);
   font-weight: bold;
 }
+
+/* --- fc テンプレート内 style= → CSS化 (本レビュー②) --- */
+.fc-header-host {
+  font-size: 0.85em;
+  color: var(--color-text-muted, #64748b);
+  margin-left: var(--space-2, 8px);
+}
+.fc-current-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: 6px 10px;
+  background: var(--color-success-bg, #f0fdf4);
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  margin-bottom: var(--space-2, 8px);
+  font-size: var(--font-sm, 12px);
+}
+.fc-current-bar-empty {
+  padding: 6px 10px;
+  background: var(--color-bg-secondary, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
+  margin-bottom: var(--space-2, 8px);
+  font-size: var(--font-sm, 12px);
+  color: var(--color-text-muted, #94a3b8);
+}
+.fc-color-swatch {
+  font-size: 14px;
+}
+.fc-color-swatch-lg {
+  font-size: 16px;
+}
+.fc-material-label {
+  color: var(--color-text-muted, #64748b);
+}
+.fc-pct-mounted {
+  color: var(--color-success, #16a34a);
+  font-weight: bold;
+}
+.fc-state-mounted {
+  color: var(--color-success, #16a34a);
+  font-weight: bold;
+}
+.fc-state-other {
+  color: var(--color-text-muted, #94a3b8);
+  font-size: var(--font-xs, 11px);
+}
+.fc-cell-sub {
+  font-size: var(--font-xs, 11px);
+  color: var(--color-text-muted, #64748b);
+}
+.fc-cell-right {
+  text-align: right;
+}
+.fc-state-new {
+  font-size: var(--font-xs, 11px);
+  color: var(--color-success, #16a34a);
+}
+.fc-preview-info {
+  font-size: var(--font-xs, 11px);
+  text-align: center;
+  color: var(--color-text-muted, #64748b);
+}
+.fc-search-field-highlight {
+  margin-bottom: 6px;
+  background: var(--color-warning-bg, #fef3c7);
+}
+.fc-row-current {
+  background: var(--color-success-bg, #f0fdf4);
+}
+.fc-row-other {
+  opacity: 0.5;
+}
+
 /* 確認ダイアログ: ヘッダーテキスト色 */
 .confirm-header { color: var(--color-text-inverse); }
 /* テスト結果テキスト色 */
