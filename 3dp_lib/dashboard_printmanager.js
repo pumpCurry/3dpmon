@@ -1398,16 +1398,8 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
  */
 async function handlePrintClick(raw, thumbUrl, hostname) {
   const usedSec        = Number(raw.usagetime || 0);
-  const materialNeeded = Number(raw.usagematerial || 0);
   const spool          = getCurrentSpool(hostname);
   const remaining      = spool?.remainingLengthMm ?? 0;
-  const afterRemaining = Math.max(0, remaining - materialNeeded);
-  const isShort        = remaining > 0 && materialNeeded > remaining;
-
-  // フィラメント量を人間可読にフォーマット
-  const fmtNeed  = formatFilamentAmount(materialNeeded, spool);
-  const fmtRemain = formatFilamentAmount(remaining, spool);
-  const fmtAfter = formatFilamentAmount(afterRemaining, spool);
 
   // ファイル別の過去実績
   const insight = buildFileInsight(raw.filename || raw.rawFilename || "", hostname);
@@ -1415,6 +1407,30 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
 
   // GCode メタデータ (アップロード時に抽出済み)
   const gcMeta = raw._gcodeMeta || _gcodeMetaCache.get(filename) || {};
+
+  // ★ 必要フィラメント量（正確な値を優先順で選択）
+  //   1. 成功印刷の実績平均 — 最も信頼性が高い
+  //   2. GCode メタデータの推定値 — アップロード時に解析済み
+  //   3. raw.usagematerial — 履歴の実消費量（失敗時は過少になるため最低優先）
+  let materialNeeded, materialSource;
+  if (insight?.avgMaterialMm > 0) {
+    materialNeeded = insight.avgMaterialMm;
+    materialSource = "実績ベース";
+  } else if (gcMeta.filamentMm > 0) {
+    materialNeeded = gcMeta.filamentMm;
+    materialSource = "GCode見積";
+  } else {
+    materialNeeded = Number(raw.usagematerial || 0);
+    materialSource = materialNeeded > 0 ? "機器報告" : "";
+  }
+
+  const afterRemaining = Math.max(0, remaining - materialNeeded);
+  const isShort        = remaining > 0 && materialNeeded > remaining;
+
+  // フィラメント量を人間可読にフォーマット
+  const fmtNeed  = formatFilamentAmount(materialNeeded, spool);
+  const fmtRemain = formatFilamentAmount(remaining, spool);
+  const fmtAfter = formatFilamentAmount(afterRemaining, spool);
 
   // 所要時間（実績 > GCode見積 > 機器報告値）
   let estSec, durLabel;
@@ -1549,7 +1565,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
 
   // 予想完了セクション
   html += `<div class="pm-print-section pm-print-neutral-section">`;
-  html += `<div>必要量: ${fmtNeed.display}</div>`;
+  html += `<div>必要量: ${fmtNeed.display}${materialSource ? ` (${materialSource})` : ""}</div>`;
   if (estSec > 0) {
     html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
     html += `<div>予想完了: ${expectedFinish}</div>`;
