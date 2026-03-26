@@ -1751,6 +1751,88 @@ function _extractGcodeMeta(text) {
  * @param {HTMLElement} [root] - パネル本体要素（省略時は document 全体）
  * @param {string} hostname - ホスト名
  */
+/**
+ * GCodeメタデータからHTMLメタ情報行を構築する。
+ *
+ * @private
+ * @param {Object} gcMeta - _extractGcodeMeta() の戻り値
+ * @returns {string} HTMLメタ情報（空の場合は空文字列）
+ */
+function _buildMetaHtml(gcMeta) {
+  if (!gcMeta || typeof gcMeta !== "object") return "";
+  const items = [];
+  if (gcMeta.time) items.push(`⏱ ${gcMeta.time}`);
+  if (gcMeta.filament) items.push(`🧵 ${gcMeta.filament}`);
+  if (gcMeta.layers) items.push(`📐 ${gcMeta.layers}層`);
+  if (gcMeta.layerHeight) items.push(`高さ ${gcMeta.layerHeight}mm`);
+  if (gcMeta.material) items.push(`素材 ${gcMeta.material}`);
+  if (gcMeta.nozzleTemp || gcMeta.bedTemp) {
+    const temps = [];
+    if (gcMeta.nozzleTemp) temps.push(`ノズル${gcMeta.nozzleTemp}℃`);
+    if (gcMeta.bedTemp) temps.push(`ベッド${gcMeta.bedTemp}℃`);
+    items.push(`🌡 ${temps.join(" / ")}`);
+  }
+  return items.length > 0 ? `<div class="pm-upload-meta">${items.join("　")}</div>` : "";
+}
+
+/**
+ * アップロード確認ダイアログを表示する共通関数。
+ * ボタンアップロード・D&Dアップロードの両方から呼ばれる。
+ *
+ * @private
+ * @param {Object} opts - オプション
+ * @param {string} opts.filename - ファイル名
+ * @param {number} opts.fileSize - ファイルサイズ(bytes)
+ * @param {string} opts.thumbUrl - サムネイルURL
+ * @param {Object} opts.gcMeta - GCodeメタデータ
+ * @param {boolean} opts.exists - 同名ファイルが存在するか
+ * @param {string} [opts.hostSelectHtml=""] - ホスト選択HTML（マルチプリンタ時）
+ * @param {Array<string>} [opts.existsHosts=[]] - 重複があるホスト名リスト
+ * @returns {Promise<boolean>} ユーザーが確認したら true
+ */
+async function _showUploadConfirmDialog(opts) {
+  const {
+    filename, fileSize, thumbUrl, gcMeta,
+    exists, hostSelectHtml = "", existsHosts = []
+  } = opts;
+  const sizeMB = (fileSize / 1024 / 1024).toFixed(1);
+  const metaHtml = _buildMetaHtml(gcMeta);
+
+  // 重複先の詳細情報
+  let warnHtml = "";
+  if (exists) {
+    if (existsHosts.length > 1) {
+      const names = existsHosts.map(h => {
+        const m = monitorData.machines[h];
+        return m?.storedData?.hostname?.rawValue || h;
+      }).join(", ");
+      warnHtml = `<div class="pm-upload-warn">⚠ ${existsHosts.length}台に同名ファイルが存在します（${names}）</div>`;
+    } else if (existsHosts.length === 1) {
+      warnHtml = '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>';
+    } else {
+      warnHtml = '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>';
+    }
+  }
+
+  return showConfirmDialog({
+    level: exists ? "warn" : "info",
+    title: "ファイルアップロード",
+    html: `
+      <div class="pm-upload-confirm">
+        <img src="${thumbUrl}" class="pm-upload-thumb" onerror="this.style.display='none'">
+        <div class="pm-upload-info">
+          <div class="pm-upload-filename">${filename}</div>
+          <div class="pm-upload-size">${sizeMB} MB</div>
+          ${metaHtml}
+          ${warnHtml}
+        </div>
+      </div>
+      ${hostSelectHtml}`,
+    confirmText: exists ? "上書きアップロード" : "アップロード",
+    cancelText: "キャンセル"
+  });
+}
+
 export function setupUploadUI(root, hostname) {
   const ctx = root || document;
   const btn        = ctx.querySelector("#gcode-upload-btn") || document.getElementById("gcode-upload-btn");
@@ -1865,41 +1947,12 @@ export function setupUploadUI(root, hostname) {
       hideProgress();
       btn.disabled = false;
       const exists = hasSameFile(file.name);
-      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-
-      // GCode メタデータ行を構築（D&D版と同等）
-      let metaHtml = "";
-      const metaItems = [];
-      if (gcMeta.time) metaItems.push(`⏱ ${gcMeta.time}`);
-      if (gcMeta.filament) metaItems.push(`🧵 ${gcMeta.filament}`);
-      if (gcMeta.layers) metaItems.push(`📐 ${gcMeta.layers}層`);
-      if (gcMeta.layerHeight) metaItems.push(`高さ ${gcMeta.layerHeight}mm`);
-      if (gcMeta.material) metaItems.push(`素材 ${gcMeta.material}`);
-      if (gcMeta.nozzleTemp || gcMeta.bedTemp) {
-        const temps = [];
-        if (gcMeta.nozzleTemp) temps.push(`ノズル${gcMeta.nozzleTemp}℃`);
-        if (gcMeta.bedTemp) temps.push(`ベッド${gcMeta.bedTemp}℃`);
-        metaItems.push(`🌡 ${temps.join(" / ")}`);
-      }
-      if (metaItems.length > 0) {
-        metaHtml = `<div class="pm-upload-meta">${metaItems.join("　")}</div>`;
-      }
-
-      const ok = await showConfirmDialog({
-        level: exists ? "warn" : "info",
-        title: "ファイルアップロード",
-        html: `
-          <div class="pm-upload-confirm">
-            <img src="${thumb}" class="pm-upload-thumb" onerror="this.style.display='none'">
-            <div class="pm-upload-info">
-              <div class="pm-upload-filename">${file.name}</div>
-              <div class="pm-upload-size">${sizeMB} MB</div>
-              ${metaHtml}
-              ${exists ? '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>' : ""}
-            </div>
-          </div>`,
-        confirmText: exists ? "上書きアップロード" : "アップロード",
-        cancelText: "キャンセル"
+      const ok = await _showUploadConfirmDialog({
+        filename: file.name,
+        fileSize: file.size,
+        thumbUrl: thumb,
+        gcMeta,
+        exists
       });
       if (ok) uploadFile(file);
     } catch (e) {
@@ -2134,40 +2187,14 @@ export function setupUploadUI(root, hostname) {
         }
       }, 0);
 
-      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-      // GCode メタデータ行を構築
-      let metaHtml = "";
-      const metaItems = [];
-      if (gcMeta.time) metaItems.push(`⏱ ${gcMeta.time}`);
-      if (gcMeta.filament) metaItems.push(`🧵 ${gcMeta.filament}`);
-      if (gcMeta.layers) metaItems.push(`📐 ${gcMeta.layers}層`);
-      if (gcMeta.layerHeight) metaItems.push(`高さ ${gcMeta.layerHeight}mm`);
-      if (gcMeta.material) metaItems.push(`素材 ${gcMeta.material}`);
-      if (gcMeta.nozzleTemp || gcMeta.bedTemp) {
-        const temps = [];
-        if (gcMeta.nozzleTemp) temps.push(`ノズル${gcMeta.nozzleTemp}℃`);
-        if (gcMeta.bedTemp) temps.push(`ベッド${gcMeta.bedTemp}℃`);
-        metaItems.push(`🌡 ${temps.join(" / ")}`);
-      }
-      if (metaItems.length > 0) {
-        metaHtml = `<div class="pm-upload-meta">${metaItems.join("　")}</div>`;
-      }
-      const ok = await showConfirmDialog({
-        level: exists ? "warn" : "info",
-        title: "ファイルアップロード",
-        html: `
-          <div class="pm-upload-confirm">
-            <img src="${thumb}" class="pm-upload-thumb" onerror="this.style.display='none'">
-            <div class="pm-upload-info">
-              <div class="pm-upload-filename">${file.name}</div>
-              <div class="pm-upload-size">${sizeMB} MB</div>
-              ${metaHtml}
-              ${exists ? '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>' : ""}
-            </div>
-          </div>
-          ${hostSelectHtml}`,
-        confirmText: exists ? "上書きアップロード" : "アップロード",
-        cancelText: "キャンセル"
+      const ok = await _showUploadConfirmDialog({
+        filename: file.name,
+        fileSize: file.size,
+        thumbUrl: thumb,
+        gcMeta,
+        exists,
+        hostSelectHtml,
+        existsHosts
       });
       if (!ok) return;
 
