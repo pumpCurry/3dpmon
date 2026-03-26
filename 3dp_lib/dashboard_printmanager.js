@@ -1795,38 +1795,50 @@ async function _showUploadConfirmDialog(opts) {
     exists, hostSelectHtml = "", existsHosts = []
   } = opts;
   const sizeMB = (fileSize / 1024 / 1024).toFixed(1);
-  const metaHtml = _buildMetaHtml(gcMeta);
 
-  // 重複先の詳細情報
-  let warnHtml = "";
+  // --- 印刷確認ダイアログと同じ .pm-print-* 構造を使用 ---
+
+  // ヘッダー: サムネイル + ファイル名
+  let html = `<div class="pm-print-header">`;
+  html += `<img src="${thumbUrl}" class="pm-print-thumb" onerror="this.style.display='none'">`;
+  html += `<div><strong class="pm-print-filename">${filename}</strong>`;
+  html += `<div class="pm-print-remain-label">${sizeMB} MB</div></div></div>`;
+
+  // GCode メタデータセクション
+  const metaHtml = _buildMetaHtml(gcMeta);
+  if (metaHtml) {
+    html += `<div class="pm-print-section pm-print-neutral-section">`;
+    html += `<div class="pm-print-section-title">📄 GCode 情報</div>`;
+    html += metaHtml;
+    html += `</div>`;
+  }
+
+  // 重複警告セクション
   if (exists) {
+    html += `<div class="pm-print-section pm-print-warn-section">`;
+    html += `<div class="pm-print-section-title">⚠ ファイル重複</div>`;
     if (existsHosts.length > 1) {
       const names = existsHosts.map(h => {
         const m = monitorData.machines[h];
         return m?.storedData?.hostname?.rawValue || h;
       }).join(", ");
-      warnHtml = `<div class="pm-upload-warn">⚠ ${existsHosts.length}台に同名ファイルが存在します（${names}）</div>`;
-    } else if (existsHosts.length === 1) {
-      warnHtml = '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>';
+      html += `<div>${existsHosts.length}台に同名ファイルが存在します</div>`;
+      html += `<div class="pm-print-remain-label">${names}</div>`;
     } else {
-      warnHtml = '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>';
+      html += `<div>同名のファイルが存在します（上書きされます）</div>`;
     }
+    html += `</div>`;
+  }
+
+  // 送信先セクション
+  if (hostSelectHtml) {
+    html += hostSelectHtml;
   }
 
   return showConfirmDialog({
     level: exists ? "warn" : "info",
     title: "ファイルアップロード",
-    html: `
-      <div class="pm-upload-confirm">
-        <img src="${thumbUrl}" class="pm-upload-thumb" onerror="this.style.display='none'">
-        <div class="pm-upload-info">
-          <div class="pm-upload-filename">${filename}</div>
-          <div class="pm-upload-size">${sizeMB} MB</div>
-          ${metaHtml}
-          ${warnHtml}
-        </div>
-      </div>
-      ${hostSelectHtml}`,
+    html,
     confirmText: exists ? "上書きアップロード" : "アップロード",
     cancelText: "キャンセル"
   });
