@@ -1978,9 +1978,18 @@ export function setupUploadUI(root, hostname) {
     );
     const exists = existsHosts.length > 0;
 
-    // ホスト選択UI（マルチプリンタ時のみ）
+    // 送信先セクション（1台でも表示、マルチ時はチェックボックス付き）
     let hostSelectHtml = "";
-    if (allHosts.length > 1) {
+    if (allHosts.length === 1) {
+      // シングルホスト: 変更不可で送信先を表示
+      const m = monitorData.machines[allHosts[0]];
+      const name = m?.storedData?.hostname?.rawValue || allHosts[0];
+      const dup = existsHosts.includes(allHosts[0]) ? ' <span class="pm-upload-dup-tag">(上書き)</span>' : "";
+      hostSelectHtml = `
+        <div class="pm-upload-host-section">
+          <div class="pm-upload-host-single">🖨 送信先: <strong>${name}</strong>${dup}</div>
+        </div>`;
+    } else if (allHosts.length > 1) {
       const checkboxes = allHosts.map(h => {
         const m = monitorData.machines[h];
         const name = m.storedData?.hostname?.rawValue || h;
