@@ -305,6 +305,13 @@ function _convertCardsToTemplates() {
  * @returns {void}
  */
 function _initTopMenuBar() {
+  /* トップバーフォントサイズ復元 */
+  const savedTopSize = monitorData.appSettings.topbarFontSize;
+  if (savedTopSize) {
+    const bar = document.getElementById("top-menu-bar");
+    if (bar) bar.style.fontSize = savedTopSize + "px";
+  }
+
   /* レイアウトロックボタン */
   const lockBtn = document.getElementById("top-layout-lock");
   if (lockBtn) {

@@ -31,6 +31,7 @@
 import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries, getGrid, unlockAllPanels, setPanelFontSize, getLayoutTemplates, applyLayoutTemplate } from "./dashboard_panel_factory.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { monitorData } from "./dashboard_data.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 
 /**
  * メニュー要素の参照
@@ -233,8 +234,7 @@ function _renderMenuBody() {
     html += `<button class="panel-menu-template-btn" data-template="${tpl.id}" title="${tpl.description}">${tpl.label}</button> `;
   }
   // トップバーフォントサイズ調整
-  const topbar = document.getElementById("top-menu-bar");
-  const curTopSize = topbar ? parseInt(getComputedStyle(topbar).fontSize) || 12 : 12;
+  const curTopSize = monitorData.appSettings.topbarFontSize || 12;
   html += `<div class="panel-fontsize-control" style="margin-top:6px">`;
   html += `<span>バー文字</span>`;
   html += `<input type="range" class="panel-fontsize-range" id="topbar-fontsize-range" min="9" max="16" step="1" value="${curTopSize}">`;
@@ -300,10 +300,13 @@ function _renderMenuBody() {
   const topbarVal = body.querySelector("#topbar-fontsize-val");
   if (topbarRange) {
     topbarRange.addEventListener("input", () => {
-      const size = topbarRange.value + "px";
+      const size = parseInt(topbarRange.value) || 12;
       const bar = document.getElementById("top-menu-bar");
-      if (bar) bar.style.fontSize = size;
-      if (topbarVal) topbarVal.textContent = size;
+      if (bar) bar.style.fontSize = size + "px";
+      if (topbarVal) topbarVal.textContent = size + "px";
+      // appSettings に保存
+      monitorData.appSettings.topbarFontSize = size;
+      saveUnifiedStorage();
     });
   }
 
