@@ -561,6 +561,90 @@ export function saveLayout() {
 }
 
 /**
+ * 現在のパネルレイアウトデータを取得する（エクスポート用）。
+ * saveLayout と同じ形式だが localStorage に書き込まず配列を返す。
+ *
+ * @returns {Array<Object>|null} レイアウト配列。グリッド未初期化時は localStorage から読込
+ */
+export function getCurrentLayoutData() {
+  if (grid) {
+    const items = grid.getGridItems();
+    return items.map(el => {
+      const node = el.gridstackNode;
+      const pw = el.querySelector("[data-panel-id]");
+      return {
+        panelId: pw?.dataset.panelId ?? node?.id ?? "",
+        panelType: pw?.dataset.panelType ?? "",
+        host: pw?.dataset.host ?? "",
+        x: node?.x ?? 0,
+        y: node?.y ?? 0,
+        w: node?.w ?? 4,
+        h: node?.h ?? 4,
+        locked: !!(node?.noMove),
+        fontSize: pw?.style.fontSize || ""
+      };
+    });
+  }
+  // グリッド未初期化: localStorage から読み込み
+  try {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+/**
+ * レイアウトデータをインポートして適用する。
+ * 現在のパネルを全削除し、インポートデータで再構築する。
+ *
+ * @param {Array<Object>} layoutData - エクスポート時の panelLayout 配列
+ * @param {Object} [options] - オプション
+ * @param {boolean} [options.remapHosts=false] - ホスト名を現在の接続ホストに再マッピングする
+ * @returns {number} 追加されたパネル数
+ */
+export function importLayoutData(layoutData, options = {}) {
+  if (!grid || !Array.isArray(layoutData) || layoutData.length === 0) return 0;
+
+  // 全パネル削除
+  const allItems = grid.getGridItems();
+  for (const el of allItems) {
+    grid.removeWidget(el);
+  }
+  activePanels.clear();
+
+  // ホスト名再マッピング（オプション）
+  let data = layoutData;
+  if (options.remapHosts) {
+    const currentHosts = Object.keys(monitorData.machines)
+      .filter(h => h !== PLACEHOLDER_HOSTNAME);
+    const importHosts = [...new Set(layoutData.filter(p => p.host && p.host !== "shared").map(p => p.host))];
+    if (importHosts.length > 0 && currentHosts.length > 0) {
+      const hostMap = {};
+      importHosts.forEach((h, i) => {
+        hostMap[h] = currentHosts[i % currentHosts.length];
+      });
+      data = layoutData.map(p => ({
+        ...p,
+        host: p.host === "shared" ? "shared" : (hostMap[p.host] || p.host)
+      }));
+    }
+  }
+
+  let count = 0;
+  for (const item of data) {
+    if (!item.panelType || !item.host) continue;
+    if (addPanel(item.panelType, item.host, {
+      x: item.x, y: item.y, w: item.w, h: item.h,
+      fontSize: item.fontSize || ""
+    })) {
+      count++;
+    }
+  }
+
+  if (count > 0) saveLayout();
+  return count;
+}
+
+/**
  * 保存済みレイアウトを復元する。
  *
  * @function restoreLayout

@@ -95,12 +95,34 @@ export async function initStorage() {
  * @returns {Promise<Object>}
  */
 export async function exportAllData() {
+  let data;
   if (_idbInitialized) {
-    return exportAllIdb();
+    data = await exportAllIdb();
+  } else {
+    // フォールバック: localStorage（per-host 分割形式対応）
+    const globalRaw = localStorage.getItem(LS_KEY_GLOBAL);
+    if (globalRaw) {
+      data = JSON.parse(globalRaw);
+      data.machines = {};
+      const hostKeys = _discoverHostKeysInLocalStorage();
+      for (const host of hostKeys) {
+        const hostRaw = localStorage.getItem(LS_KEY_HOST_PREFIX + _encodeHostKey(host));
+        if (hostRaw) data.machines[host] = JSON.parse(hostRaw);
+      }
+    } else {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      data = raw ? JSON.parse(raw) : {};
+    }
   }
-  // フォールバック: localStorage
-  const raw = localStorage.getItem(STORAGE_KEY);
-  return raw ? JSON.parse(raw) : {};
+
+  // パネルレイアウトをエクスポートデータに含める
+  try {
+    const { getCurrentLayoutData } = await import("./dashboard_panel_factory.js");
+    const layout = getCurrentLayoutData();
+    if (layout) data.panelLayout = layout;
+  } catch { /* パネルモジュール未初期化でも続行 */ }
+
+  return data;
 }
 
 /**
@@ -110,11 +132,11 @@ export async function exportAllData() {
  * 同一IDのデータが存在する場合は新しい方を採用する。
  *
  * @param {Object} data - インポートするデータ
- * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number }}
+ * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number, panels: number }}
  *          各カテゴリの追加件数
  */
 export async function importAllData(data) {
-  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0 };
+  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0, panels: 0 };
 
   // ── スプール: id ベースでマージ ──
   if (Array.isArray(data.filamentSpools)) {
@@ -242,6 +264,17 @@ export async function importAllData(data) {
         monitorData.appSettings.connectionTargets.push(t);
         existingDests.add(t.dest);
       }
+    }
+  }
+
+  // ── パネルレイアウト: panelLayout が含まれていれば適用 ──
+  if (Array.isArray(data.panelLayout) && data.panelLayout.length > 0) {
+    try {
+      const { importLayoutData } = await import("./dashboard_panel_factory.js");
+      stats.panels = importLayoutData(data.panelLayout, { remapHosts: false });
+    } catch {
+      // パネルモジュール未初期化（ブラウザ版等）ではスキップ
+      stats.panels = 0;
     }
   }
 

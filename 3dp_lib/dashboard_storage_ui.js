@@ -91,10 +91,15 @@ export function initStorageUI() {
   impHistBtn.textContent = "📋 印刷履歴のみ Import (名寄せ)";
   impHistBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
+  const impLayoutBtn = document.createElement("button");
+  impLayoutBtn.id = "storage-import-layout-btn";
+  impLayoutBtn.textContent = "📐 配置のみ Import";
+  impLayoutBtn.style.cssText = "font-size:12px;margin-left:5px;";
+
   // 既存パネル要素の末尾にボタン群用 div を追加
   const btnGroup = document.createElement("div");
   btnGroup.style.cssText = "padding:8px;font-size:0.9em;display:flex;flex-wrap:wrap;gap:4px;";
-  btnGroup.append(expBtn, impBtn, impHistBtn);
+  btnGroup.append(expBtn, impBtn, impHistBtn, impLayoutBtn);
   elPanel?.appendChild(btnGroup);
 
   /* ---------------- ボタン動作 ---------------- */
@@ -116,6 +121,9 @@ export function initStorageUI() {
 
   // Import (印刷履歴のみ名寄せ)
   impHistBtn.addEventListener("click", () => doImportHistoryOnly(panelToast));
+
+  // Import (配置のみ)
+  impLayoutBtn.addEventListener("click", () => doImportLayoutOnly(panelToast));
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 
@@ -534,4 +542,66 @@ export function initStorageUIInPanel(body) {
 
   /* 初期表示 */
   refreshUsage();
+}
+
+/**
+ * パネル配置のみをインポートする。
+ * エクスポートJSON内の panelLayout キーだけを読み取り、配置を復元する。
+ * ホスト名が異なる場合は現在の接続ホストに再マッピングするか選択可能。
+ *
+ * @param {Function} toast - トースト表示関数
+ */
+async function doImportLayoutOnly(toast) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json";
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        const layoutData = data.panelLayout;
+        if (!Array.isArray(layoutData) || layoutData.length === 0) {
+          toast("このファイルにはパネル配置データが含まれていません", true);
+          return;
+        }
+
+        // インポート元のホスト名一覧を表示して確認
+        const importHosts = [...new Set(layoutData.filter(p => p.host && p.host !== "shared").map(p => p.host))];
+        const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+
+        const ok = await showConfirmDialog({
+          level: "info",
+          title: "パネル配置のインポート",
+          html: `<div>配置データ: <strong>${layoutData.length}パネル</strong>（${importHosts.join(", ")}）</div>
+            <div style="margin-top:8px">
+              <label><input type="checkbox" id="layout-remap-hosts"> ホスト名を現在の接続先に再マッピング</label>
+            </div>
+            <div style="margin-top:4px;font-size:11px;color:var(--color-text-muted,#94a3b8)">
+              ※ 現在のパネル配置はすべて削除されます
+            </div>`,
+          confirmText: "配置を適用",
+          cancelText: "キャンセル"
+        });
+        if (!ok) return;
+
+        const remapHosts = !!document.getElementById("layout-remap-hosts")?.checked;
+        const { importLayoutData } = await import("./dashboard_panel_factory.js");
+        const count = importLayoutData(layoutData, { remapHosts });
+
+        if (count > 0) {
+          toast(`配置インポート完了: ${count}パネルを配置しました`);
+        } else {
+          toast("配置の復元に失敗しました（対応するパネルテンプレートがありません）", true);
+        }
+      } catch (e) {
+        console.error("[doImportLayoutOnly]", e);
+        toast("インポート失敗: " + e.message, true);
+      }
+    };
+    reader.readAsText(file);
+  });
+  input.click();
 }
