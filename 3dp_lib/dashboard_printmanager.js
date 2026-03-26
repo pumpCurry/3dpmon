@@ -2247,17 +2247,28 @@ export function buildFileInsight(filename, hostname) {
   });
   if (matching.length === 0) return null;
 
-  let totalSec = 0, totalMaterial = 0;
+  let successTotalSec = 0, successTotalMaterial = 0;
+  let failTotalSec = 0, failTotalMaterial = 0;
   let successCount = 0, failCount = 0;
   let lastDate = null, lastResult = null;
 
   for (const j of matching) {
     const start = j.startTime ? Date.parse(j.startTime) : 0;
     const finish = j.finishTime ? Date.parse(j.finishTime) : 0;
-    if (finish && start) totalSec += (finish - start) / 1000;
-    if (j.materialUsedMm > 0) totalMaterial += j.materialUsedMm;
-    if (j.printfinish === 1) successCount++;
-    else failCount++;
+    const sec = (finish && start) ? (finish - start) / 1000 : 0;
+    const mat = j.materialUsedMm > 0 ? j.materialUsedMm : 0;
+
+    if (j.printfinish === 1) {
+      // 成功印刷: 平均値算出の対象
+      successCount++;
+      successTotalSec += sec;
+      successTotalMaterial += mat;
+    } else {
+      // 失敗/中断: 平均値には含めない（参考値として保持）
+      failCount++;
+      failTotalSec += sec;
+      failTotalMaterial += mat;
+    }
 
     const ts = j.finishTime || j.startTime;
     if (ts && (!lastDate || ts > lastDate)) {
@@ -2267,16 +2278,19 @@ export function buildFileInsight(filename, hostname) {
   }
 
   const printCount = matching.length;
-  const avgDurationSec = printCount > 0 ? totalSec / printCount : 0;
-  const avgMaterialMm = printCount > 0 ? totalMaterial / printCount : 0;
+  // ★ 平均値は成功印刷のみで計算（失敗の過少/過大な値を排除）
+  const avgDurationSec = successCount > 0 ? successTotalSec / successCount : 0;
+  const avgMaterialMm = successCount > 0 ? successTotalMaterial / successCount : 0;
 
   return {
     printCount,
     successCount,
     failCount,
     successRate: printCount > 0 ? successCount / printCount : 0,
-    avgDurationSec,
-    avgMaterialMm,
+    avgDurationSec,     // 成功印刷のみの平均
+    avgMaterialMm,      // 成功印刷のみの平均
+    failAvgDurationSec: failCount > 0 ? failTotalSec / failCount : 0,
+    failAvgMaterialMm:  failCount > 0 ? failTotalMaterial / failCount : 0,
     lastPrintDate: lastDate,
     lastResult,
     md5: matching.find(j => j.filemd5)?.filemd5 || ""

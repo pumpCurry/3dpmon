@@ -821,21 +821,39 @@ export function beginExternalPrint(spool, lengthMm, jobId = "", hostname) {
     machine.printStore.current.filamentId = spool.id;
   }
   const normalizedJobId = String(jobId ?? "");
+
+  // ★ Bug A fix: リジューム検出 — 直前に完了した同一ジョブIDの場合、
+  // 残量の二重減算と usedLengthLog の重複追加を回避する
+  const isResume = spool.lastCompletedPrintID === normalizedJobId;
+  if (isResume) {
+    console.info("[beginExternalPrint] リジューム検出:", normalizedJobId);
+  }
+
   if (spool.isPending) {
     // スプール交換直後の初回使用であれば履歴に交換記録を追加
     logSpoolChange(spool, normalizedJobId);
     spool.isPending = false;
   }
-  // 現在の印刷ジョブ開始時点の残量と必要量を記録
-  spool.currentJobStartLength = spool.remainingLengthMm;
-  spool.currentJobExpectedLength = lengthMm;
-  // 残量を先に減算して保持
-  spool.remainingLengthMm = Math.max(0, spool.remainingLengthMm - lengthMm);
-  // DOM 表示とストレージに新しい残量を即時反映
-  setStoredDataForHost(host, "filamentRemainingMm", spool.remainingLengthMm, true);
-  updateStoredDataToDOM();
+
+  // リジューム時は残量を二重減算しない（前回の finalize で既に減算済み）
+  if (!isResume) {
+    // 現在の印刷ジョブ開始時点の残量と必要量を記録
+    spool.currentJobStartLength = spool.remainingLengthMm;
+    spool.currentJobExpectedLength = lengthMm;
+    // 残量を先に減算して保持
+    spool.remainingLengthMm = Math.max(0, spool.remainingLengthMm - lengthMm);
+    // DOM 表示とストレージに新しい残量を即時反映
+    setStoredDataForHost(host, "filamentRemainingMm", spool.remainingLengthMm, true);
+    updateStoredDataToDOM();
+    spool.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
+  } else {
+    // リジューム: 開始時残量を現在値で再設定（追加消費の基点）
+    spool.currentJobStartLength = spool.remainingLengthMm;
+    spool.currentJobExpectedLength = lengthMm;
+  }
+
   spool.currentPrintID = normalizedJobId;
-  spool.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
+  spool.lastCompletedPrintID = null; // リジューム検出フラグをクリア
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
   saveUnifiedStorage();
 }
@@ -959,6 +977,10 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
   s.printCount = (s.printCount || 0) + 1;
   s.currentJobStartLength = null;
   s.currentJobExpectedLength = null;
+  // ★ Bug A fix: currentPrintID を即クリアせず lastCompletedPrintID に保持。
+  // リジューム時に beginExternalPrint が同じ jobId で呼ばれた場合、
+  // スプール紐付けを継続できるようにする。
+  s.lastCompletedPrintID = normalizedJobId;
   s.currentPrintID = "";
   s.usedLengthLog.push({ jobId: normalizedJobId, used: resolvedUsed });
   // 現在のスプール情報を履歴に追加
