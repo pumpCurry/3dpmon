@@ -882,6 +882,168 @@ export function renamePanelsHost(oldHost, newHost) {
   return count;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   レイアウトテンプレート (Phase 5)
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * 1台用レイアウトテンプレート（48列フル幅）。
+ * 2台テンプレートを参考に、横幅を2倍に拡大した配置。
+ * @type {Array<{type:string, x:number, y:number, w:number, h:number, fontSize?:string}>}
+ */
+const LAYOUT_SINGLE = [
+  // 上段: カメラ(28) + 温度ファン制御(20)
+  { type: "camera",        x: 0,  y: 0,  w: 28, h: 18 },
+  { type: "control-temp",  x: 28, y: 0,  w: 20, h: 47, fontSize: "12px" },
+  // 中段左: フィラメント(14) + ステータス(14) / ヘッドプレビュー(14) + ステータス続き
+  { type: "filament",      x: 0,  y: 18, w: 14, h: 14 },
+  { type: "status",        x: 14, y: 18, w: 14, h: 29, fontSize: "12px" },
+  { type: "head-preview",  x: 0,  y: 32, w: 14, h: 15 },
+  // 中段右下: 現在の印刷(14) + 操作ボタン(14) + 機器情報(20)
+  { type: "current-print", x: 0,  y: 47, w: 14, h: 23 },
+  { type: "control-cmd",   x: 14, y: 47, w: 14, h: 23, fontSize: "12px" },
+  { type: "machine-info",  x: 28, y: 47, w: 20, h: 18, fontSize: "12px" },
+  // 下段: 温度グラフ → ログ → 履歴 → ファイル一覧（全幅48）
+  { type: "temp-graph",    x: 0,  y: 70, w: 48, h: 20 },
+  { type: "log",           x: 0,  y: 90, w: 48, h: 15, fontSize: "12px" },
+  { type: "history",       x: 0,  y: 105, w: 48, h: 20 },
+  { type: "file-list",     x: 0,  y: 125, w: 48, h: 20 }
+];
+
+/**
+ * マルチホスト用 per-host レイアウトテンプレート（24列幅、xOffset で左右配置）。
+ * ユーザーの実運用2台レイアウトをベースに定義。
+ * @type {Array<{type:string, x:number, y:number, w:number, h:number, fontSize?:string}>}
+ */
+const LAYOUT_MULTI_PER_HOST = [
+  // 上段: カメラ(14) + 温度ファン制御(10)
+  { type: "camera",        x: 0,  y: 0,  w: 14, h: 18 },
+  { type: "control-temp",  x: 14, y: 0,  w: 10, h: 47, fontSize: "12px" },
+  // 中段: フィラメント(7) + ステータス(7)
+  { type: "filament",      x: 0,  y: 18, w: 7,  h: 14 },
+  { type: "status",        x: 7,  y: 18, w: 7,  h: 29, fontSize: "12px" },
+  // ヘッドプレビュー
+  { type: "head-preview",  x: 0,  y: 32, w: 7,  h: 15 },
+  // 中段下: 現在の印刷(7) + 操作ボタン(7) + 機器情報(10)
+  { type: "current-print", x: 0,  y: 47, w: 7,  h: 23 },
+  { type: "control-cmd",   x: 7,  y: 47, w: 7,  h: 23, fontSize: "12px" },
+  { type: "machine-info",  x: 14, y: 47, w: 10, h: 18, fontSize: "12px" },
+  // 下段: 温度グラフ → ログ → 履歴 → ファイル一覧（24列幅）
+  { type: "temp-graph",    x: 0,  y: 70, w: 24, h: 20 },
+  { type: "log",           x: 0,  y: 90, w: 24, h: 15, fontSize: "12px" },
+  { type: "history",       x: 0,  y: 105, w: 24, h: 20 },
+  { type: "file-list",     x: 0,  y: 125, w: 24, h: 20 }
+];
+
+/**
+ * 現在の接続ホスト数を返す（PLACEHOLDER除外）。
+ * @returns {number}
+ */
+function _countActiveHosts() {
+  return Object.keys(monitorData.machines)
+    .filter(h => h !== PLACEHOLDER_HOSTNAME).length;
+}
+
+/**
+ * 指定ホストのインデックスを返す（接続順）。
+ * @param {string} hostname
+ * @returns {number} 0始まりのインデックス
+ */
+function _getHostIndex(hostname) {
+  const hosts = Object.keys(monitorData.machines)
+    .filter(h => h !== PLACEHOLDER_HOSTNAME);
+  const idx = hosts.indexOf(hostname);
+  return idx >= 0 ? idx : hosts.length;
+}
+
+/**
+ * ホスト数とインデックスに応じたレイアウトテンプレートを返す。
+ * - 1台: 48列フル幅テンプレート
+ * - 2台: 左右24列ずつ（xOffset = hostIndex * 24）
+ * - 3台以上: 24列で2列配置、溢れ分は縦に積む
+ *
+ * @param {number} hostCount - 接続ホスト数
+ * @param {number} hostIndex - このホストのインデックス
+ * @returns {Array<{type:string, x:number, y:number, w:number, h:number, fontSize?:string}>}
+ */
+function _getLayoutTemplate(hostCount, hostIndex) {
+  if (hostCount <= 1) {
+    return LAYOUT_SINGLE;
+  }
+
+  // マルチホスト: 24列幅で左右配置
+  // 2台: col0=left(0), col1=right(24)
+  // 3-4台: 2列×2行（col = index%2, row = floor(index/2)）
+  const col = hostIndex % 2;
+  const row = Math.floor(hostIndex / 2);
+  const xOffset = col * 24;
+  const yOffset = row * 145; // per-host テンプレートの総高さ ≈ 145
+
+  return LAYOUT_MULTI_PER_HOST.map(p => ({
+    ...p,
+    x: p.x + xOffset,
+    y: p.y + yOffset
+  }));
+}
+
+/**
+ * レイアウトテンプレート一覧を返す（メニュー表示用）。
+ * @returns {Array<{id:string, label:string, description:string}>}
+ */
+export function getLayoutTemplates() {
+  return [
+    { id: "single", label: "1台フル幅", description: "48列を1台で使用する標準レイアウト" },
+    { id: "dual",   label: "2台横並び", description: "左右24列ずつに2台を配置" },
+    { id: "quad",   label: "4台グリッド", description: "2×2グリッドで4台を配置" }
+  ];
+}
+
+/**
+ * 指定テンプレートで全ホストのレイアウトをリセットする。
+ *
+ * @param {string} templateId - テンプレートID（"single" | "dual" | "quad"）
+ * @returns {number} 追加されたパネル数
+ */
+export function applyLayoutTemplate(templateId) {
+  if (!grid) return 0;
+
+  // 全パネル削除
+  const allItems = grid.getGridItems();
+  for (const el of allItems) {
+    grid.removeWidget(el);
+  }
+  activePanels.clear();
+
+  // 全ホストにテンプレート適用
+  const hosts = Object.keys(monitorData.machines)
+    .filter(h => h !== PLACEHOLDER_HOSTNAME);
+  let totalCount = 0;
+
+  for (let i = 0; i < hosts.length; i++) {
+    let layout;
+    if (templateId === "single" && hosts.length === 1) {
+      layout = LAYOUT_SINGLE;
+    } else {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      layout = LAYOUT_MULTI_PER_HOST.map(p => ({
+        ...p,
+        x: p.x + col * 24,
+        y: p.y + row * 145
+      }));
+    }
+
+    for (const p of layout) {
+      if (addPanel(p.type, hosts[i], { x: p.x, y: p.y, w: p.w, h: p.h, fontSize: p.fontSize || "" })) {
+        totalCount++;
+      }
+    }
+  }
+
+  if (totalCount > 0) saveLayout();
+  return totalCount;
+}
+
 /**
  * 指定ホスト用のデフォルトパネルセットを生成する。
  * 接続確立後にそのホストのパネルが1つも無い場合に呼ばれる。
@@ -929,26 +1091,14 @@ export function ensureHostPanels(hostname) {
     }
   }
 
-  /* 旧シングルHTML配置を模した初期レイアウト
-     上段: カメラ＋ヘッドプレビュー＋ステータス
-     中段左: 温度グラフ  中段右: フィラメント＋操作系＋機器情報
-     下段: 現在の印刷→ログ→印刷履歴→ファイル一覧 */
-  const defaultPanels = [
-    { type: "camera",        x: 0,  y: 0,  w: 4,  h: 6 },
-    { type: "head-preview",  x: 4,  y: 0,  w: 4,  h: 6 },
-    { type: "status",        x: 8,  y: 0,  w: 4,  h: 6 },
-    { type: "temp-graph",    x: 0,  y: 6,  w: 6,  h: 5 },
-    { type: "filament",      x: 6,  y: 6,  w: 3,  h: 5 },
-    { type: "control-cmd",   x: 9,  y: 6,  w: 3,  h: 3 },
-    { type: "machine-info",  x: 9,  y: 9,  w: 3,  h: 2 },
-    { type: "control-temp",  x: 0,  y: 11, w: 12, h: 3 },
-    { type: "current-print", x: 0,  y: 14, w: 12, h: 3 },
-    { type: "log",           x: 0,  y: 17, w: 12, h: 4 },
-    { type: "history",       x: 0,  y: 21, w: 12, h: 5 },
-    { type: "file-list",     x: 0,  y: 26, w: 12, h: 5 }
-  ];
-  for (const p of defaultPanels) {
-    if (addPanel(p.type, hostname, { x: p.x, y: p.y + maxY, w: p.w, h: p.h })) count++;
+  /* 接続ホスト数に応じたテンプレートを選択。
+     1台: 48列フル幅、2台: 左右24列ずつ、3台以上: 左右24列で縦積み */
+  const hostCount = _countActiveHosts();
+  const hostIndex = _getHostIndex(hostname);
+  const layout = _getLayoutTemplate(hostCount, hostIndex);
+
+  for (const p of layout) {
+    if (addPanel(p.type, hostname, { x: p.x, y: p.y + maxY, w: p.w, h: p.h, fontSize: p.fontSize || "" })) count++;
   }
 
   if (count > 0) saveLayout();

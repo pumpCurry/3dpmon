@@ -28,7 +28,7 @@
 
 "use strict";
 
-import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries, getGrid, unlockAllPanels, setPanelFontSize } from "./dashboard_panel_factory.js";
+import { getPanelTypes, addPanel, removePanel, isActivePanelId, getActivePanelEntries, getGrid, unlockAllPanels, setPanelFontSize, getLayoutTemplates, applyLayoutTemplate } from "./dashboard_panel_factory.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { monitorData } from "./dashboard_data.js";
 
@@ -257,7 +257,36 @@ function _renderMenuBody() {
     html += `</div>`;
   }
 
+  // レイアウトテンプレートセクション
+  html += `<div class="panel-menu-section">`;
+  html += `<div class="panel-menu-section-title">📐 レイアウトテンプレート</div>`;
+  const templates = getLayoutTemplates();
+  for (const tpl of templates) {
+    html += `<button class="panel-menu-template-btn" data-template="${tpl.id}" title="${tpl.description}">${tpl.label}</button> `;
+  }
+  html += `</div>`;
+
   body.innerHTML = html;
+
+  /* テンプレート適用ボタンのイベント設定 */
+  body.querySelectorAll(".panel-menu-template-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const templateId = btn.dataset.template;
+      const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+      const ok = await showConfirmDialog({
+        level: "warn",
+        title: "レイアウトリセット",
+        message: `現在のパネル配置を全て削除し、「${btn.textContent}」テンプレートで再配置します。よろしいですか？`,
+        confirmText: "リセット",
+        cancelText: "キャンセル"
+      });
+      if (!ok) return;
+      const count = applyLayoutTemplate(templateId);
+      const { showAlert } = await import("./dashboard_notification_manager.js");
+      showAlert(`レイアウトをリセットしました（${count}パネル）`, "success");
+      _renderMenuBody();
+    });
+  });
 
   /* 機器別 全解除ボタンのイベント設定 */
   body.querySelectorAll(".panel-menu-host-unlock").forEach(btn => {

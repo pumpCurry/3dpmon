@@ -459,6 +459,26 @@ button:focus-visible,
   padding-bottom: 3px;
 }
 
+.panel-menu-section-title {
+  font-size: var(--font-sm);
+  font-weight: bold;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1, 4px);
+}
+.panel-menu-template-btn {
+  font-size: var(--font-xs, 10px);
+  padding: 3px 8px;
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-secondary, #f8fafc);
+  cursor: pointer;
+  margin-bottom: var(--space-1, 4px);
+}
+.panel-menu-template-btn:hover {
+  background: var(--color-accent-light, #dbeafe);
+  border-color: var(--color-accent, #3b82f6);
+}
+
 .panel-add-btn,
 .panel-toggle-btn {
   display: block;
