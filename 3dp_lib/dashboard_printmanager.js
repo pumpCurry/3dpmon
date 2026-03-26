@@ -2244,10 +2244,24 @@ function buildHistoryStats(hostname) {
     const start = job.startTime ? Date.parse(job.startTime) : 0;
     const finish = job.finishTime ? Date.parse(job.finishTime) : 0;
     const sec = finish && start ? (finish - start) / 1000 : 0;
-    const entry = map.get(key) || { md5: job.filemd5 || "", count: 0, totalSec: 0 };
+    const isSuccess = job.printfinish === 1;
+    const entry = map.get(key) || {
+      md5: job.filemd5 || "",
+      count: 0,           // 全印刷回数
+      successCount: 0,    // 成功印刷回数
+      totalSec: 0,        // 成功印刷の合計秒数（平均算出用）
+      failCount: 0        // 失敗印刷回数（参考表示用）
+    };
     if (!entry.md5 && job.filemd5) entry.md5 = job.filemd5;
     entry.count++;
-    entry.totalSec += sec;
+    if (isSuccess) {
+      // ★ 成功印刷のみを平均値の算出対象にする
+      //    失敗/中断は途中で止めた時間・量なので平均を汚染する
+      entry.successCount++;
+      entry.totalSec += sec;
+    } else {
+      entry.failCount++;
+    }
     map.set(key, entry);
   });
   return map;
@@ -2366,7 +2380,10 @@ export function renderFileList(info, baseUrl, hostname) {
     if (st) {
       item.filemd5 = st.md5;
       item.printCount = st.count;
-      if (st.count > 0) item.usagetime = Math.round(st.totalSec / st.count);
+      // ★ 成功印刷のみの平均時間を使用（失敗/中断の途中データを排除）
+      if (st.successCount > 0) {
+        item.usagetime = Math.round(st.totalSec / st.successCount);
+      }
     }
     // 履歴が無い場合、アップロード時に抽出した GCode メタデータをフォールバック
     const cached = _gcodeMetaCache.get(item.basename);
