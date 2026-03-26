@@ -191,8 +191,7 @@ const _lastSavedJsonMap = new Map();
 
 /** ドキュメント全体のドロップハンドラが登録済みか */
 let _dropHandlerInstalled = false;
-/** ホスト別ドロップ処理コールバック */
-/** D&Dアップロード時の選択済みホスト (cleanup前にキャプチャ) */
+/** アップロード確認ダイアログでの選択済みホスト（confirmボタン押下時にキャプチャ） */
 let _lastSelectedUploadHosts = [];
 
 
@@ -1926,35 +1925,28 @@ export function setupUploadUI(root, hostname) {
    * @param {File} file - ユーザーが選択した G-code ファイル
    * @returns {Promise<void>} 処理完了時に解決
    */
+  /**
+   * ファイル読み込み→確認ダイアログ→アップロードの共通フロー。
+   * ボタン・D&D の両方から呼ばれる。マルチプリンタ時はホスト選択UIも表示。
+   *
+   * @param {File} file - アップロード対象ファイル
+   * @returns {Promise<void>}
+   */
   async function prepareAndConfirm(file) {
     currentFile = file;
     btn.disabled = true;
     showProgress();
+    let thumb;
+    let gcMeta = {};
     try {
       const text = await readFile(file);
       updateProgress(file.size, file.size);
-      let thumb = extractThumb(text);
-      // メタデータをキャッシュ（永続化）
-      const gcMeta = _extractGcodeMeta(text);
+      thumb = extractThumb(text);
+      gcMeta = _extractGcodeMeta(text);
       if (Object.keys(gcMeta).length > 0) {
         _gcodeMetaCache.set(file.name, gcMeta);
         _saveGcodeMetaCache();
       }
-      if (!thumb) {
-        const ip = getDeviceIp(hostname);
-        thumb = `http://${ip}/downloads/defData/file_icon.png`;
-      }
-      hideProgress();
-      btn.disabled = false;
-      const exists = hasSameFile(file.name);
-      const ok = await _showUploadConfirmDialog({
-        filename: file.name,
-        fileSize: file.size,
-        thumbUrl: thumb,
-        gcMeta,
-        exists
-      });
-      if (ok) uploadFile(file);
     } catch (e) {
       hideProgress();
       btn.disabled = false;
@@ -1965,7 +1957,116 @@ export function setupUploadUI(root, hostname) {
         message: e.message,
         confirmText: "OK"
       });
+      return;
     }
+    hideProgress();
+    btn.disabled = false;
+    if (!thumb) {
+      thumb = `http://${getDeviceIp(hostname)}/downloads/defData/file_icon.png`;
+    }
+
+    // 接続中プリンタ一覧（D&D版と同じロジック）
+    const allHosts = Object.keys(monitorData.machines).filter(
+      h => h !== "_$_NO_MACHINE_$_"
+        && monitorData.machines[h]?.storedData
+        && getConnectionState(h) === "connected"
+    );
+
+    // 各ホストでの重複チェック
+    const existsHosts = allHosts.filter(h =>
+      (_fileListMap.get(h) || []).some(entry => entry.basename === file.name)
+    );
+    const exists = existsHosts.length > 0;
+
+    // ホスト選択UI（マルチプリンタ時のみ）
+    let hostSelectHtml = "";
+    if (allHosts.length > 1) {
+      const checkboxes = allHosts.map(h => {
+        const m = monitorData.machines[h];
+        const name = m.storedData?.hostname?.rawValue || h;
+        const dup = existsHosts.includes(h) ? ' <span class="pm-upload-dup-tag">(上書き)</span>' : "";
+        return `<label class="pm-upload-host-label"><input type="checkbox" class="pm-upload-host-chk" value="${h}" checked> ${name}${dup}</label>`;
+      }).join("");
+      hostSelectHtml = `
+        <div class="pm-upload-host-section">
+          <div class="pm-upload-host-header"><label><input type="checkbox" id="pm-upload-host-all" checked> 全て選択/解除</label></div>
+          <div class="pm-upload-host-list">${checkboxes}</div>
+        </div>`;
+    }
+
+    // ホスト選択チェックボックスのイベント設定（ダイアログ表示直後に登録）
+    setTimeout(() => {
+      const allChk = document.getElementById("pm-upload-host-all");
+      if (allChk) {
+        allChk.addEventListener("change", () => {
+          document.querySelectorAll(".pm-upload-host-chk").forEach(c => { c.checked = allChk.checked; });
+        });
+      }
+      const confirmBtn = document.querySelector(".confirm-button.confirm-destructive");
+      if (confirmBtn) {
+        confirmBtn.addEventListener("click", () => {
+          const checked = document.querySelectorAll(".pm-upload-host-chk:checked");
+          _lastSelectedUploadHosts = checked.length > 0
+            ? [...checked].map(el => el.value)
+            : [hostname];
+        }, true);
+      }
+    }, 0);
+
+    const ok = await _showUploadConfirmDialog({
+      filename: file.name,
+      fileSize: file.size,
+      thumbUrl: thumb,
+      gcMeta,
+      exists,
+      hostSelectHtml,
+      existsHosts
+    });
+    if (!ok) return;
+
+    // アップロード実行（マルチ/シングル統一）
+    const targets = (allHosts.length > 1)
+      ? (_lastSelectedUploadHosts.length > 0 ? _lastSelectedUploadHosts : [hostname])
+      : [hostname];
+
+    btn.disabled = true;
+    showProgress();
+    updateProgress(0, file.size);
+
+    // 全ホストへ並行アップロード + 結果サマリー
+    const results = await Promise.all(
+      targets.map(h => _uploadToHost(file, h))
+    );
+    hideProgress();
+    btn.disabled = false;
+
+    const okList = results.filter(r => r.ok);
+    const failList = results.filter(r => !r.ok);
+    if (results.length === 1) {
+      // シングルホスト: シンプルな結果表示
+      const r = results[0];
+      await showConfirmDialog({
+        level: r.ok ? "success" : "error",
+        title: r.ok ? "アップロード完了" : "アップロード失敗",
+        message: `${r.name} → ${r.host} ${r.detail}`,
+        confirmText: "OK"
+      });
+    } else {
+      // マルチホスト: 一括結果表示
+      const lines = [];
+      for (const r of okList)   lines.push(`✅ ${r.host} ${r.detail}`);
+      for (const r of failList) lines.push(`❌ ${r.host}: ${r.detail}`);
+      const allOk = failList.length === 0;
+      await showConfirmDialog({
+        level: allOk ? "success" : (okList.length > 0 ? "warn" : "error"),
+        title: allOk ? "アップロード完了" : "アップロード結果",
+        html: `<div class="pm-upload-filename">${file.name}</div>
+               <div class="pm-upload-meta">${lines.join("<br>")}</div>`,
+        confirmText: "OK"
+      });
+    }
+    currentFile = null;
+    input.value = "";
   }
 
   /**
@@ -2049,46 +2150,13 @@ export function setupUploadUI(root, hostname) {
     });
   }
 
-  /**
-   * 指定ファイルをプリンタへアップロードし、結果ダイアログを表示する。
-   * ボタン経由（シングルホスト）用のラッパー。
-   *
-   * @param {File} file - アップロードするファイル
-   * @returns {Promise<void>}
-   */
-  async function uploadFile(file) {
-    btn.disabled = true;
-    showProgress();
-    updateProgress(0, file.size);
-    const result = await _uploadToHost(file, hostname);
-    hideProgress();
-    btn.disabled = false;
-    if (result.ok) {
-      await showConfirmDialog({
-        level: "success",
-        title: "アップロード完了",
-        message: `${file.name} → ${result.host} ${result.detail}`,
-        confirmText: "OK"
-      });
-      currentFile = null;
-      input.value = "";
-    } else {
-      await showConfirmDialog({
-        level: "error",
-        title: "アップロード失敗",
-        message: `${result.host}: ${result.detail}`,
-        confirmText: "OK"
-      });
-    }
-  }
-
   input.addEventListener("change", () => {
     if (input.files?.length) prepareAndConfirm(input.files[0]);
   });
 
   btn.addEventListener("click", () => {
     if (currentFile) {
-      uploadFile(currentFile);
+      prepareAndConfirm(currentFile);
     } else if (input.files?.length) {
       prepareAndConfirm(input.files[0]);
     } else {
@@ -2114,122 +2182,8 @@ export function setupUploadUI(root, hostname) {
       if (!e.dataTransfer?.files?.length) return;
       const file = e.dataTransfer.files[0];
 
-      // ファイル読み込み + サムネイル・メタデータ抽出
-      showProgress();
-      let thumb;
-      let gcMeta = {};
-      try {
-        const text = await readFile(file);
-        updateProgress(file.size, file.size);
-        thumb = extractThumb(text);
-        gcMeta = _extractGcodeMeta(text);
-        // メタデータをキャッシュ（ファイル一覧・印刷確認で再利用、永続化）
-        if (Object.keys(gcMeta).length > 0) {
-          _gcodeMetaCache.set(file.name, gcMeta);
-          _saveGcodeMetaCache();
-        }
-      } catch (err) {
-        hideProgress();
-        console.error("[D&D] ファイル読み込みエラー:", err);
-        return;
-      }
-      hideProgress();
-      if (!thumb) {
-        thumb = `http://${getDeviceIp(hostname)}/downloads/defData/file_icon.png`;
-      }
-
-      // 接続中プリンタ一覧（WebSocket が接続中のホストのみ）
-      const allHosts = Object.keys(monitorData.machines).filter(
-        h => h !== "_$_NO_MACHINE_$_"
-          && monitorData.machines[h]?.storedData
-          && getConnectionState(h) === "connected"
-      );
-
-      // 重複チェック (各ホストごとに同名ファイルの有無を判定)
-      const existsHosts = allHosts.filter(h =>
-        (_fileListMap.get(h) || []).some(entry => entry.basename === file.name)
-      );
-      const exists = existsHosts.length > 0;
-
-      // ホスト選択UI (マルチプリンタ時のみ)
-      let hostSelectHtml = "";
-      if (allHosts.length > 1) {
-        const checkboxes = allHosts.map(h => {
-          const m = monitorData.machines[h];
-          const name = m.storedData?.hostname?.rawValue || h;
-          const dup = existsHosts.includes(h) ? ' <span style="color:var(--color-warning,#e6a23c)">(上書き)</span>' : "";
-          return `<label class="pm-upload-host-label"><input type="checkbox" class="pm-upload-host-chk" value="${h}" checked> ${name}${dup}</label>`;
-        }).join("");
-        hostSelectHtml = `
-          <div class="pm-upload-host-section">
-            <div class="pm-upload-host-header"><label><input type="checkbox" id="pm-upload-host-all" checked> 全て選択/解除</label></div>
-            <div class="pm-upload-host-list">${checkboxes}</div>
-          </div>`;
-      }
-
-      // 1画面で サムネイル + ファイル情報 + 送信先選択 + 確認
-      // confirm ボタン押下時に cleanup 前にチェック状態をキャプチャ
-      setTimeout(() => {
-        const allChk = document.getElementById("pm-upload-host-all");
-        if (allChk) {
-          allChk.addEventListener("change", () => {
-            document.querySelectorAll(".pm-upload-host-chk").forEach(c => { c.checked = allChk.checked; });
-          });
-        }
-        const confirmBtn = document.querySelector(".confirm-button.confirm-destructive");
-        if (confirmBtn) {
-          confirmBtn.addEventListener("click", () => {
-            const checked = document.querySelectorAll(".pm-upload-host-chk:checked");
-            _lastSelectedUploadHosts = checked.length > 0
-              ? [...checked].map(el => el.value)
-              : [hostname]; // チェックボックスがない(シングル)場合はこのホスト
-          }, true);
-        }
-      }, 0);
-
-      const ok = await _showUploadConfirmDialog({
-        filename: file.name,
-        fileSize: file.size,
-        thumbUrl: thumb,
-        gcMeta,
-        exists,
-        hostSelectHtml,
-        existsHosts
-      });
-      if (!ok) return;
-
-      // アップロード実行 (確認済みなので直接アップロード)
-      const targets = (allHosts.length > 1)
-        ? _lastSelectedUploadHosts
-        : [hostname];
-      if (targets.length === 0) return;
-
-      btn.disabled = true;
-      showProgress();
-      updateProgress(0, file.size);
-
-      // 全ホストへ並行アップロード
-      const results = await Promise.all(
-        targets.map(h => _uploadToHost(file, h))
-      );
-      hideProgress();
-      btn.disabled = false;
-
-      // 結果サマリー
-      const okList   = results.filter(r => r.ok);
-      const failList = results.filter(r => !r.ok);
-      const lines = [];
-      for (const r of okList)   lines.push(`✅ ${r.host} ${r.detail}`);
-      for (const r of failList) lines.push(`❌ ${r.host}: ${r.detail}`);
-
-      const allOk = failList.length === 0;
-      await showConfirmDialog({
-        level: allOk ? "success" : (okList.length > 0 ? "warn" : "error"),
-        title: allOk ? "アップロード完了" : "アップロード結果",
-        html: `<div style="margin-bottom:8px"><strong>${file.name}</strong></div>
-               <div style="white-space:pre-line;line-height:1.8">${lines.join("\n")}</div>`,
-        confirmText: "OK"
-      });
+      // D&D も共通の prepareAndConfirm フローを使う
+      prepareAndConfirm(file);
     });
   }
 
