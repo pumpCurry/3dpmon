@@ -179,7 +179,8 @@ export function buildDailyProductionReport(options = {}) {
       printCount: 0,
       successCount: 0,
       failCount: 0,
-      totalPrintTimeSec: 0,
+      totalPrintTimeSec: 0,    // 成功印刷の合計時間
+      failPrintTimeSec: 0,     // 失敗印刷の合計時間（参考値）
       totalFilamentMm: 0,
       byHost: {}
     };
@@ -202,9 +203,14 @@ export function buildDailyProductionReport(options = {}) {
       const isSuccess = entry.printProgress >= 100;
 
       day.printCount++;
-      if (isSuccess) day.successCount++;
-      else if ((entry.endtime || 0) > 0) day.failCount++;
-      day.totalPrintTimeSec += durationSec;
+      if (isSuccess) {
+        day.successCount++;
+        // ★ 成功印刷の時間のみを生産時間として計上
+        day.totalPrintTimeSec += durationSec;
+      } else if ((entry.endtime || 0) > 0) {
+        day.failCount++;
+        day.failPrintTimeSec += durationSec;
+      }
 
       if (Array.isArray(entry.filamentInfo)) {
         for (const fi of entry.filamentInfo) {
@@ -241,7 +247,7 @@ export function buildEstimateVsActual(hostname) {
   const machine = monitorData.machines[hostname];
   const history = machine?.historyList || [];
 
-  // ファイル名別に集計
+  // ファイル名別に集計（成功印刷のみで平均を算出）
   const fileMap = {};
   for (const entry of history) {
     const file = (entry.filename || "").split("/").pop();
@@ -250,12 +256,20 @@ export function buildEstimateVsActual(hostname) {
       ? (entry.endtime - (entry.startTime || 0))
       : 0;
     if (durationSec <= 0) continue;
+    const isSuccess = entry.printProgress >= 100;
 
     if (!fileMap[file]) {
-      fileMap[file] = { totalSec: 0, count: 0, estimatedSec: 0 };
+      fileMap[file] = {
+        successTotalSec: 0, successCount: 0,
+        totalCount: 0, estimatedSec: 0
+      };
     }
-    fileMap[file].totalSec += durationSec;
-    fileMap[file].count++;
+    fileMap[file].totalCount++;
+    if (isSuccess) {
+      // ★ 成功印刷のみが平均値の算出対象（失敗/中断の途中値を排除）
+      fileMap[file].successCount++;
+      fileMap[file].successTotalSec += durationSec;
+    }
 
     // GCode見積（usagetimeフィールド or メタデータキャッシュ）
     if (entry.usagetime > 0 && !fileMap[file].estimatedSec) {
@@ -265,10 +279,12 @@ export function buildEstimateVsActual(hostname) {
 
   const results = [];
   for (const [filename, data] of Object.entries(fileMap)) {
-    if (data.count === 0) continue;
-    const actualAvgSec = data.totalSec / data.count;
+    if (data.totalCount === 0) continue;
+    // 成功印刷がなければ平均は算出不能
+    const actualAvgSec = data.successCount > 0
+      ? data.successTotalSec / data.successCount : 0;
     const estimatedSec = data.estimatedSec || 0;
-    const diffPct = estimatedSec > 0
+    const diffPct = (estimatedSec > 0 && actualAvgSec > 0)
       ? ((actualAvgSec - estimatedSec) / estimatedSec) * 100
       : 0;
 
@@ -277,7 +293,8 @@ export function buildEstimateVsActual(hostname) {
       estimatedSec,
       actualAvgSec: Math.round(actualAvgSec),
       diffPct: parseFloat(diffPct.toFixed(1)),
-      printCount: data.count
+      printCount: data.totalCount,
+      successCount: data.successCount
     });
   }
 

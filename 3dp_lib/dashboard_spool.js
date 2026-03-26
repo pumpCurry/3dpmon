@@ -298,11 +298,20 @@ export function buildSpoolAnalytics(spoolId) {
   const consumedMm = Math.max(0, totalMm - remainMm);
   const consumedPct = totalMm > 0 ? (consumedMm / totalMm) * 100 : 0;
   const printCount = spool.printCount || 0;
-  const avgPerPrint = printCount > 0 ? consumedMm / printCount : 0;
 
-  // コスト計算
+  // ★ 成功印刷回数を usageHistory から算出（spool.printCount は成功+失敗の合計）
+  let successCount = 0;
+  (monitorData.usageHistory || []).forEach(u => {
+    if (u.spoolId === spoolId && u.type === "complete") successCount++;
+  });
+  // usageHistory がない場合は printCount をフォールバック
+  if (successCount === 0 && printCount > 0) successCount = printCount;
+
+  const avgPerPrint = successCount > 0 ? consumedMm / successCount : 0;
+
+  // コスト計算（成功印刷ベース）
   const price = spool.purchasePrice || 0;
-  const costPerPrint = printCount > 0 && price > 0 ? price / printCount : 0;
+  const costPerPrint = successCount > 0 && price > 0 ? price / successCount : 0;
   const remainingCost = totalMm > 0 && price > 0 ? price * (remainMm / totalMm) : 0;
   const currency = spool.currencySymbol || "¥";
 
@@ -310,9 +319,9 @@ export function buildSpoolAnalytics(spoolId) {
   const startedAt = spool.startedAt || 0;
   const now = Date.now();
   const daysActive = startedAt > 0 ? Math.max(1, (now - startedAt) / (1000 * 60 * 60 * 24)) : 0;
-  const printsPerDay = daysActive > 0 ? printCount / daysActive : 0;
+  const printsPerDay = daysActive > 0 ? successCount / daysActive : 0;
 
-  // 枯渇予測
+  // 枯渇予測（成功印刷ベース）
   const mmPerDay = daysActive > 0 ? consumedMm / daysActive : 0;
   const estimatedRemainingPrints = avgPerPrint > 0 ? Math.floor(remainMm / avgPerPrint) : null;
   const estimatedRemainingDays = mmPerDay > 0 ? Math.round(remainMm / mmPerDay) : null;
@@ -331,7 +340,7 @@ export function buildSpoolAnalytics(spoolId) {
     totalMm, remainMm, consumedMm, consumedPct,
     remainGram: Number(remainGram.toFixed(0)),
     consumedGram: Number(consumedGram.toFixed(0)),
-    printCount, avgPerPrint,
+    printCount, successCount, avgPerPrint,
     // コスト
     price, currency, costPerPrint, remainingCost,
     // ペース
