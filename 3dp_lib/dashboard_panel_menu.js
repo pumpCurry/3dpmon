@@ -246,10 +246,10 @@ function _renderMenuBody() {
     html += `</div>`;
   }
 
-  /* ─ 共通パネル（perHost=false） ─ */
+  /* ─ 全体パネル（perHost=false、全ホスト横断） ─ */
   if (sharedTypes.length > 0) {
     html += `<div class="panel-menu-section">`;
-    html += `<h4>共通パネル</h4>`;
+    html += `<h4>📊 全体パネル</h4>`;
     for (const pt of sharedTypes) {
       const panelId = `${pt.id}:shared`;
       html += _renderPanelToggle(pt, "shared", panelId, activeEntries);

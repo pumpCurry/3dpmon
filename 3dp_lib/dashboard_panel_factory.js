@@ -1021,8 +1021,15 @@ export function applyLayoutTemplate(templateId) {
 
   for (let i = 0; i < hosts.length; i++) {
     let layout;
-    if (templateId === "single" && hosts.length === 1) {
+    // 1台しかない場合: どのテンプレートを選んでもフル幅で配置
+    if (hosts.length === 1) {
       layout = LAYOUT_SINGLE;
+    } else if (templateId === "single") {
+      // "single" を複数台に適用: 各ホスト48列フル幅で縦積み
+      layout = LAYOUT_SINGLE.map(p => ({
+        ...p,
+        y: p.y + i * 145
+      }));
     } else {
       const col = i % 2;
       const row = Math.floor(i / 2);
