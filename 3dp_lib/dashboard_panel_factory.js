@@ -1108,18 +1108,30 @@ export function applyLayoutTemplate(templateId) {
   }
   activePanels.clear();
 
-  // 有効なホストのみにテンプレート適用:
-  // - PLACEHOLDER除外
-  // - storedData が存在する（データ受信実績がある）
-  // - storedData.hostname.rawValue が存在する（機器名が確定している）
-  //   ※ IP接続直後の空エントリ（dest: "192.168.54.151" と "192.168.54.151:9999" の二重登録）を除外
-  const hosts = Object.keys(monitorData.machines).filter(h => {
-    if (h === PLACEHOLDER_HOSTNAME) return false;
-    const sd = monitorData.machines[h]?.storedData;
-    if (!sd) return false;
-    // hostname rawValue が存在 = プリンタが自己申告済み
-    return !!(sd.hostname?.rawValue);
-  });
+  // 有効なホストのみにテンプレート適用
+  let hosts = _getValidHosts();
+
+  // ホストが0件の場合: connectionTargets の hostname からフォールバック取得
+  if (hosts.length === 0) {
+    const targets = monitorData.appSettings?.connectionTargets || [];
+    const fallbackHosts = targets
+      .map(t => t.hostname || "")
+      .filter(h => h && h !== PLACEHOLDER_HOSTNAME);
+    if (fallbackHosts.length > 0) {
+      // connectionTargets のホスト名で machines を確保
+      for (const h of fallbackHosts) {
+        if (!monitorData.machines[h]) {
+          monitorData.machines[h] = { storedData: { hostname: { rawValue: h } } };
+        }
+      }
+      hosts = fallbackHosts;
+    }
+  }
+
+  if (hosts.length === 0) {
+    console.warn("[applyLayoutTemplate] 有効なホストが見つかりません");
+    return 0;
+  }
   let totalCount = 0;
 
   for (let i = 0; i < hosts.length; i++) {
