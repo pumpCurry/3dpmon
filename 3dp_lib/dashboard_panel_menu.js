@@ -199,7 +199,7 @@ function _renderMenuBody() {
   }
   /* 2) グリッド上にあるが接続中でないホスト（切断済みパネルが残っている場合） */
   for (const h of activeHostsFromGrid) {
-    if (!seen.has(h)) {
+    if (h && h !== "shared" && !seen.has(h)) {
       menuHosts.push(h);
       seen.add(h);
     }
