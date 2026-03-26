@@ -613,6 +613,26 @@ button:focus-visible,
   background: var(--color-topbar-btn-hover);
 }
 
+/* オーディオトグルボタン */
+.top-audio-btn {
+  font-size: var(--font-base, 14px) !important;
+  padding: 2px 6px !important;
+  min-width: 28px;
+  text-align: center;
+  transition: opacity var(--transition-fast, 150ms ease);
+}
+.top-audio-btn.top-audio-off {
+  opacity: 0.4;
+}
+.top-audio-btn.top-audio-untested {
+  animation: top-audio-pulse 2s ease-in-out infinite;
+  border-color: var(--color-warning, #f59e0b) !important;
+}
+@keyframes top-audio-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .top-menu-bar .status-dot {
   width: 10px;
   height: 10px;

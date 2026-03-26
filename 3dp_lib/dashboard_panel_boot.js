@@ -448,6 +448,109 @@ function _initTopMenuBar() {
       if (e.target === storageOverlay) storageOverlay.classList.remove("open");
     });
   }
+
+  /* ─── オーディオ トグルボタン（トップバー） ─── */
+  const soundBtn = document.getElementById("top-sound-btn");
+  const ttsBtn = document.getElementById("top-tts-btn");
+
+  /**
+   * トップバーのオーディオボタン表示を更新する。
+   * AudioManager の状態を反映し、テスト未完了/失敗/有効/無効を視覚化。
+   */
+  function _updateTopAudioButtons() {
+    const am = window.audioManager;
+    if (!am) return;
+
+    if (soundBtn) {
+      if (!am.Tm && !am.c) {
+        // テスト未実行: タップ促し
+        soundBtn.textContent = "🔇";
+        soundBtn.title = "効果音: タップして有効化";
+        soundBtn.classList.add("top-audio-untested");
+        soundBtn.classList.remove("top-audio-off");
+      } else if (!am.Tm) {
+        // テスト失敗
+        soundBtn.textContent = "🔇";
+        soundBtn.title = "効果音: テスト失敗（タップで再テスト）";
+        soundBtn.classList.add("top-audio-off");
+        soundBtn.classList.remove("top-audio-untested");
+      } else if (am.Am) {
+        soundBtn.textContent = "🔊";
+        soundBtn.title = "効果音: ON（クリックでOFF）";
+        soundBtn.classList.remove("top-audio-off", "top-audio-untested");
+      } else {
+        soundBtn.textContent = "🔇";
+        soundBtn.title = "効果音: OFF（クリックでON）";
+        soundBtn.classList.add("top-audio-off");
+        soundBtn.classList.remove("top-audio-untested");
+      }
+    }
+
+    if (ttsBtn) {
+      if (!am.Tv && !am.c) {
+        ttsBtn.textContent = "🗣";
+        ttsBtn.title = "読み上げ: タップして有効化";
+        ttsBtn.classList.add("top-audio-untested");
+        ttsBtn.classList.remove("top-audio-off");
+      } else if (!am.Tv) {
+        ttsBtn.textContent = "🗣";
+        ttsBtn.title = "読み上げ: テスト失敗（タップで再テスト）";
+        ttsBtn.classList.add("top-audio-off");
+        ttsBtn.classList.remove("top-audio-untested");
+      } else if (am.Av) {
+        ttsBtn.textContent = "🗣";
+        ttsBtn.title = "読み上げ: ON（クリックでOFF）";
+        ttsBtn.classList.remove("top-audio-off", "top-audio-untested");
+      } else {
+        ttsBtn.textContent = "🗣";
+        ttsBtn.title = "読み上げ: OFF（クリックでON）";
+        ttsBtn.classList.add("top-audio-off");
+        ttsBtn.classList.remove("top-audio-untested");
+      }
+    }
+  }
+
+  if (soundBtn) {
+    soundBtn.addEventListener("click", () => {
+      const am = window.audioManager;
+      if (!am) return;
+      // テスト未通過: テスト実行（ユーザージェスチャー内なのでautoplay解除される）
+      if (!am.Tm) {
+        am._testMusic().then(() => {
+          am.c = true;
+          am._updateButtons();
+          _updateTopAudioButtons();
+        });
+      } else {
+        am.Am = !am.Am;
+        am._updateButtons();
+        _updateTopAudioButtons();
+      }
+    });
+  }
+
+  if (ttsBtn) {
+    ttsBtn.addEventListener("click", () => {
+      const am = window.audioManager;
+      if (!am) return;
+      if (!am.Tv) {
+        am._testVoice().then(() => {
+          am.c = true;
+          am._updateButtons();
+          _updateTopAudioButtons();
+        });
+      } else {
+        am.Av = !am.Av;
+        am._updateButtons();
+        _updateTopAudioButtons();
+      }
+    });
+  }
+
+  // 初回表示更新（AudioManager初期化後に実行されるため遅延）
+  setTimeout(_updateTopAudioButtons, 1000);
+  // AudioManagerのテスト完了後に再更新
+  setTimeout(_updateTopAudioButtons, 9000);
 }
 
 /* _buildDefaultLayout は廃止。
