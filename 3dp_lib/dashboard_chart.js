@@ -139,6 +139,10 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
     hs.chart = null;
   }
 
+  // ★ 初期値: マウス操作ロック（ズーム・パン無効）
+  // スクロール阻害を防止するためデフォルトOFF
+  const zoomLocked = true;
+
   hs.chart = new Chart(ctx, {
     type: "line",
     data: {
@@ -157,10 +161,10 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
       parsing: { xAxisKey: "t", yAxisKey: "y" },
       plugins: {
         zoom: {
-          pan: { enabled: true, mode: "x" },
+          pan: { enabled: !zoomLocked, mode: "x" },
           zoom: {
-            wheel: { enabled: true },
-            pinch: { enabled: true },
+            wheel: { enabled: !zoomLocked },
+            pinch: { enabled: !zoomLocked },
             mode: "x"
           }
         }
@@ -189,6 +193,33 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
       }
     }
   });
+}
+
+/**
+ * 温度グラフのマウス操作（ズーム・パン）のロックを切り替える。
+ * ロック中はホイールズーム・ピンチ・パンが無効になり、ページスクロールを阻害しない。
+ *
+ * @param {string} hostname - 対象ホスト名
+ * @param {boolean} [locked] - true=ロック、false=アンロック。省略時はトグル
+ * @returns {boolean} 切り替え後のロック状態
+ */
+export function toggleChartInteractionLock(hostname, locked) {
+  const hs = _hostStates.get(hostname);
+  if (!hs?.chart) return true;
+
+  const zoomOpts = hs.chart.options.plugins.zoom;
+  if (!zoomOpts) return true;
+
+  // 現在のロック状態を判定（pan.enabled === false → ロック中）
+  const wasLocked = !zoomOpts.pan.enabled;
+  const newLocked = locked !== undefined ? locked : !wasLocked;
+
+  zoomOpts.pan.enabled = !newLocked;
+  zoomOpts.zoom.wheel.enabled = !newLocked;
+  zoomOpts.zoom.pinch.enabled = !newLocked;
+  hs.chart.update("none");
+
+  return newLocked;
 }
 
 /**

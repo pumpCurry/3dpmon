@@ -29,22 +29,11 @@
       <span class="status-dot disconnected" id="top-status-dot"></span>
       <span id="top-conn-label" style="font-size:12px;">未接続</span>
     </div>
-    <div class="menu-section">
-      <span data-field="hostname" style="font-size:12px;">
-        <span class="value">----</span>
-      </span>
-      :
-      <span data-field="printState" style="font-size:12px;">
-        <span class="value">----</span>
-      </span>
-      <span data-field="printFileName" style="font-size:12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-        <span class="value"></span>
-      </span>
-    </div>
+    <!-- 旧シングルホスト時代のステータス表示は #top-printer-list に統合済み -->
     <div class="menu-spacer"></div>
     <div class="menu-section">
       <!-- 接続済みプリンタ一覧（コンパクト表示） -->
-      <div id="top-printer-list" style="display:flex; gap:4px; font-size:11px;"></div>
+      <div id="top-printer-list" class="top-printer-list"></div>
     </div>
     <div class="menu-section" id="top-audio-section">
       <button id="top-sound-btn" class="top-audio-btn" title="効果音 ON/OFF">🔊</button>

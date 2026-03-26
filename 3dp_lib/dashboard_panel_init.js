@@ -33,7 +33,7 @@
 
 "use strict";
 
-import { initTemperatureGraph, resetTemperatureGraph } from "./dashboard_chart.js";
+import { initTemperatureGraph, resetTemperatureGraph, toggleChartInteractionLock } from "./dashboard_chart.js";
 import {
   registerCameraPanel,
   unregisterCameraPanel,
@@ -461,6 +461,23 @@ function initTempGraphPanel(body, hostname) {
     resetBtn.addEventListener("click", () => {
       resetTemperatureGraph(hostname);
     });
+  }
+
+  // マウス操作ロックボタン（初期値: ロック=スクロール阻害防止）
+  const lockBtn = document.createElement("button");
+  lockBtn.className = "chart-interaction-lock locked";
+  lockBtn.textContent = "🔒 操作ロック中";
+  lockBtn.title = "グラフのズーム・パン操作を有効/無効にする";
+  lockBtn.addEventListener("click", () => {
+    const nowLocked = toggleChartInteractionLock(hostname);
+    lockBtn.textContent = nowLocked ? "🔒 操作ロック中" : "🔓 操作可能";
+    lockBtn.classList.toggle("locked", nowLocked);
+  });
+  // リセットボタンの隣に配置
+  if (resetBtn?.parentElement) {
+    resetBtn.parentElement.appendChild(lockBtn);
+  } else {
+    body.insertBefore(lockBtn, canvas);
   }
 }
 

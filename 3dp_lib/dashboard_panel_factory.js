@@ -1024,8 +1024,19 @@ const LAYOUT_MULTI_PER_HOST = [
  * @returns {number}
  */
 function _countActiveHosts() {
-  return Object.keys(monitorData.machines)
-    .filter(h => h !== PLACEHOLDER_HOSTNAME && monitorData.machines[h]?.storedData).length;
+  return _getValidHosts().length;
+}
+
+/**
+ * 有効なホスト一覧を返す（機器名確定済みのみ）。
+ * @returns {string[]}
+ */
+function _getValidHosts() {
+  return Object.keys(monitorData.machines).filter(h => {
+    if (h === PLACEHOLDER_HOSTNAME) return false;
+    const sd = monitorData.machines[h]?.storedData;
+    return !!(sd?.hostname?.rawValue);
+  });
 }
 
 /**
@@ -1034,8 +1045,7 @@ function _countActiveHosts() {
  * @returns {number} 0始まりのインデックス
  */
 function _getHostIndex(hostname) {
-  const hosts = Object.keys(monitorData.machines)
-    .filter(h => h !== PLACEHOLDER_HOSTNAME && monitorData.machines[h]?.storedData);
+  const hosts = _getValidHosts();
   const idx = hosts.indexOf(hostname);
   return idx >= 0 ? idx : hosts.length;
 }
@@ -1098,9 +1108,18 @@ export function applyLayoutTemplate(templateId) {
   }
   activePanels.clear();
 
-  // 接続中ホストのみにテンプレート適用（ストレージに残る切断済みホストは除外）
-  const hosts = Object.keys(monitorData.machines)
-    .filter(h => h !== PLACEHOLDER_HOSTNAME && monitorData.machines[h]?.storedData);
+  // 有効なホストのみにテンプレート適用:
+  // - PLACEHOLDER除外
+  // - storedData が存在する（データ受信実績がある）
+  // - storedData.hostname.rawValue が存在する（機器名が確定している）
+  //   ※ IP接続直後の空エントリ（dest: "192.168.54.151" と "192.168.54.151:9999" の二重登録）を除外
+  const hosts = Object.keys(monitorData.machines).filter(h => {
+    if (h === PLACEHOLDER_HOSTNAME) return false;
+    const sd = monitorData.machines[h]?.storedData;
+    if (!sd) return false;
+    // hostname rawValue が存在 = プリンタが自己申告済み
+    return !!(sd.hostname?.rawValue);
+  });
   let totalCount = 0;
 
   for (let i = 0; i < hosts.length; i++) {
