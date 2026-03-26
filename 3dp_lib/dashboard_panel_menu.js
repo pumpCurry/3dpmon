@@ -225,28 +225,24 @@ function _renderMenuBody() {
 
   let html = "";
 
-  /* ─ ホスト別パネル（表示チェック + ロックを1行に統合）─ */
-  for (const host of menuHosts) {
-    const isConnected = connectedHosts.includes(host);
-    const statusIcon = isConnected ? "\u2705" : "\u26AA";
-    // ホストに所属するアクティブパネルを取得
-    const hostPanelEntries = activeEntries.filter(([, e]) => e.host === host);
-    const hasLockedPanels = hostPanelEntries.some(([, e]) => e.widget?.gridstackNode?.noMove);
-    html += `<div class="panel-menu-section">`;
-    html += `<div style="display:flex;align-items:center;gap:6px">`;
-    html += `<h4 style="flex:1;margin:0">${statusIcon} ${host}</h4>`;
-    if (hasLockedPanels) {
-      html += `<button class="panel-menu-host-unlock" data-host="${host}" style="font-size:10px;padding:2px 6px;cursor:pointer;border:1px solid #ddd;border-radius:3px" title="この機器のパネルを全解除">🔓全解除</button>`;
-    }
-    html += `</div>`;
-    for (const pt of perHostTypes) {
-      const panelId = `${pt.id}:${host}`;
-      html += _renderPanelToggle(pt, host, panelId, activeEntries);
-    }
-    html += `</div>`;
+  /* ── ① レイアウト・全体設定（常に最上部に表示） ── */
+  html += `<div class="panel-menu-section">`;
+  html += `<div class="panel-menu-section-title">📐 レイアウト</div>`;
+  const templates = getLayoutTemplates();
+  for (const tpl of templates) {
+    html += `<button class="panel-menu-template-btn" data-template="${tpl.id}" title="${tpl.description}">${tpl.label}</button> `;
   }
+  // トップバーフォントサイズ調整
+  const topbar = document.getElementById("top-menu-bar");
+  const curTopSize = topbar ? parseInt(getComputedStyle(topbar).fontSize) || 12 : 12;
+  html += `<div class="panel-fontsize-control" style="margin-top:6px">`;
+  html += `<span>バー文字</span>`;
+  html += `<input type="range" class="panel-fontsize-range" id="topbar-fontsize-range" min="9" max="16" step="1" value="${curTopSize}">`;
+  html += `<span id="topbar-fontsize-val">${curTopSize}px</span>`;
+  html += `</div>`;
+  html += `</div>`;
 
-  /* ─ 全体パネル（perHost=false、全ホスト横断） ─ */
+  /* ── ② 全体パネル（perHost=false、全ホスト横断） ── */
   if (sharedTypes.length > 0) {
     html += `<div class="panel-menu-section">`;
     html += `<h4>📊 全体パネル</h4>`;
@@ -257,14 +253,25 @@ function _renderMenuBody() {
     html += `</div>`;
   }
 
-  // レイアウトテンプレートセクション
-  html += `<div class="panel-menu-section">`;
-  html += `<div class="panel-menu-section-title">📐 レイアウトテンプレート</div>`;
-  const templates = getLayoutTemplates();
-  for (const tpl of templates) {
-    html += `<button class="panel-menu-template-btn" data-template="${tpl.id}" title="${tpl.description}">${tpl.label}</button> `;
+  /* ── ③ ホスト別パネル（表示チェック + ロックを1行に統合）── */
+  for (const host of menuHosts) {
+    const isConnected = connectedHosts.includes(host);
+    const statusIcon = isConnected ? "\u2705" : "\u26AA";
+    const hostPanelEntries = activeEntries.filter(([, e]) => e.host === host);
+    const hasLockedPanels = hostPanelEntries.some(([, e]) => e.widget?.gridstackNode?.noMove);
+    html += `<div class="panel-menu-section">`;
+    html += `<div class="panel-menu-host-header">`;
+    html += `<h4>${statusIcon} ${host}</h4>`;
+    if (hasLockedPanels) {
+      html += `<button class="panel-menu-host-unlock" data-host="${host}" title="この機器のパネルを全解除">🔓全解除</button>`;
+    }
+    html += `</div>`;
+    for (const pt of perHostTypes) {
+      const panelId = `${pt.id}:${host}`;
+      html += _renderPanelToggle(pt, host, panelId, activeEntries);
+    }
+    html += `</div>`;
   }
-  html += `</div>`;
 
   body.innerHTML = html;
 
@@ -287,6 +294,18 @@ function _renderMenuBody() {
       _renderMenuBody();
     });
   });
+
+  /* トップバーフォントサイズ調整 */
+  const topbarRange = body.querySelector("#topbar-fontsize-range");
+  const topbarVal = body.querySelector("#topbar-fontsize-val");
+  if (topbarRange) {
+    topbarRange.addEventListener("input", () => {
+      const size = topbarRange.value + "px";
+      const bar = document.getElementById("top-menu-bar");
+      if (bar) bar.style.fontSize = size;
+      if (topbarVal) topbarVal.textContent = size;
+    });
+  }
 
   /* 機器別 全解除ボタンのイベント設定 */
   body.querySelectorAll(".panel-menu-host-unlock").forEach(btn => {

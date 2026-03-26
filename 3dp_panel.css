@@ -401,10 +401,10 @@ button:focus-visible,
 --------------------------------------------------------------- */
 .panel-menu {
   position: fixed;
-  top: 0;
+  top: 36px; /* トップバーの高さ分下にずらす */
   right: 0;
   width: 280px;
-  height: 100%;
+  height: calc(100% - 36px); /* トップバー分を差し引く */
   background: var(--color-bg-primary);
   box-shadow: var(--shadow-lg);
   z-index: var(--z-panel-menu);
@@ -459,6 +459,23 @@ button:focus-visible,
   padding-bottom: 3px;
 }
 
+.panel-menu-host-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 6px);
+}
+.panel-menu-host-header h4 {
+  flex: 1;
+  margin: 0;
+}
+.panel-menu-host-unlock {
+  font-size: var(--font-xs, 10px);
+  padding: 2px 6px;
+  cursor: pointer;
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: var(--radius-sm, 3px);
+  background: var(--color-bg-secondary, #f8fafc);
+}
 .panel-menu-section-title {
   font-size: var(--font-sm);
   font-weight: bold;
@@ -617,20 +634,47 @@ button:focus-visible,
 .top-audio-btn {
   font-size: var(--font-base, 14px) !important;
   padding: 2px 6px !important;
-  min-width: 28px;
+  min-width: 36px;
   text-align: center;
-  transition: opacity var(--transition-fast, 150ms ease);
+  position: relative;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 1px;
+}
+.top-audio-icon {
+  font-size: 1em;
+}
+.top-audio-indicator {
+  font-size: 0.7em;
+  font-weight: bold;
+  line-height: 1;
+}
+/* 状態別スタイル */
+.top-audio-btn.top-audio-on {
+  border-color: var(--color-success, #22c55e) !important;
+}
+.top-audio-indicator.top-audio-on {
+  color: var(--color-success, #22c55e);
 }
 .top-audio-btn.top-audio-off {
-  opacity: 0.4;
+  opacity: 0.5;
+}
+.top-audio-btn.top-audio-failed {
+  border-color: var(--color-danger, #ef4444) !important;
+}
+.top-audio-indicator.top-audio-failed {
+  color: var(--color-danger, #ef4444);
 }
 .top-audio-btn.top-audio-untested {
   animation: top-audio-pulse 2s ease-in-out infinite;
   border-color: var(--color-warning, #f59e0b) !important;
 }
+.top-audio-indicator.top-audio-untested {
+  color: var(--color-warning, #f59e0b);
+}
 @keyframes top-audio-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50% { opacity: 0.5; }
 }
 
 .top-menu-bar .status-dot {

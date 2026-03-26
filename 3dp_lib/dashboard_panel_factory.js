@@ -1025,7 +1025,7 @@ const LAYOUT_MULTI_PER_HOST = [
  */
 function _countActiveHosts() {
   return Object.keys(monitorData.machines)
-    .filter(h => h !== PLACEHOLDER_HOSTNAME).length;
+    .filter(h => h !== PLACEHOLDER_HOSTNAME && monitorData.machines[h]?.storedData).length;
 }
 
 /**
@@ -1035,7 +1035,7 @@ function _countActiveHosts() {
  */
 function _getHostIndex(hostname) {
   const hosts = Object.keys(monitorData.machines)
-    .filter(h => h !== PLACEHOLDER_HOSTNAME);
+    .filter(h => h !== PLACEHOLDER_HOSTNAME && monitorData.machines[h]?.storedData);
   const idx = hosts.indexOf(hostname);
   return idx >= 0 ? idx : hosts.length;
 }
@@ -1098,9 +1098,9 @@ export function applyLayoutTemplate(templateId) {
   }
   activePanels.clear();
 
-  // 全ホストにテンプレート適用
+  // 接続中ホストのみにテンプレート適用（ストレージに残る切断済みホストは除外）
   const hosts = Object.keys(monitorData.machines)
-    .filter(h => h !== PLACEHOLDER_HOSTNAME);
+    .filter(h => h !== PLACEHOLDER_HOSTNAME && monitorData.machines[h]?.storedData);
   let totalCount = 0;
 
   for (let i = 0; i < hosts.length; i++) {

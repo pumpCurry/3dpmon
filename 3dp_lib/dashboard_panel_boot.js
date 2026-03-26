@@ -461,52 +461,44 @@ function _initTopMenuBar() {
     const am = window.audioManager;
     if (!am) return;
 
+    // 効果音ボタン: 🔊 + 状態インジケータ（？／○）
     if (soundBtn) {
+      let icon, indicator, cls;
       if (!am.Tm && !am.c) {
-        // テスト未実行: タップ促し
-        soundBtn.textContent = "🔇";
+        icon = "🔊"; indicator = "？"; cls = "top-audio-untested";
         soundBtn.title = "効果音: タップして有効化";
-        soundBtn.classList.add("top-audio-untested");
-        soundBtn.classList.remove("top-audio-off");
       } else if (!am.Tm) {
-        // テスト失敗
-        soundBtn.textContent = "🔇";
+        icon = "🔇"; indicator = "／"; cls = "top-audio-failed";
         soundBtn.title = "効果音: テスト失敗（タップで再テスト）";
-        soundBtn.classList.add("top-audio-off");
-        soundBtn.classList.remove("top-audio-untested");
       } else if (am.Am) {
-        soundBtn.textContent = "🔊";
+        icon = "🔊"; indicator = "○"; cls = "top-audio-on";
         soundBtn.title = "効果音: ON（クリックでOFF）";
-        soundBtn.classList.remove("top-audio-off", "top-audio-untested");
       } else {
-        soundBtn.textContent = "🔇";
+        icon = "🔇"; indicator = ""; cls = "top-audio-off";
         soundBtn.title = "効果音: OFF（クリックでON）";
-        soundBtn.classList.add("top-audio-off");
-        soundBtn.classList.remove("top-audio-untested");
       }
+      soundBtn.innerHTML = `<span class="top-audio-icon">${icon}</span><span class="top-audio-indicator ${cls}">${indicator}</span>`;
+      soundBtn.className = `top-audio-btn ${cls}`;
     }
 
+    // 読み上げボタン: 🗣 + 状態インジケータ（？／○）
     if (ttsBtn) {
+      let icon, indicator, cls;
       if (!am.Tv && !am.c) {
-        ttsBtn.textContent = "🗣";
+        icon = "🗣"; indicator = "？"; cls = "top-audio-untested";
         ttsBtn.title = "読み上げ: タップして有効化";
-        ttsBtn.classList.add("top-audio-untested");
-        ttsBtn.classList.remove("top-audio-off");
       } else if (!am.Tv) {
-        ttsBtn.textContent = "🗣";
+        icon = "🗣"; indicator = "／"; cls = "top-audio-failed";
         ttsBtn.title = "読み上げ: テスト失敗（タップで再テスト）";
-        ttsBtn.classList.add("top-audio-off");
-        ttsBtn.classList.remove("top-audio-untested");
       } else if (am.Av) {
-        ttsBtn.textContent = "🗣";
+        icon = "🗣"; indicator = "○"; cls = "top-audio-on";
         ttsBtn.title = "読み上げ: ON（クリックでOFF）";
-        ttsBtn.classList.remove("top-audio-off", "top-audio-untested");
       } else {
-        ttsBtn.textContent = "🗣";
+        icon = "🗣"; indicator = ""; cls = "top-audio-off";
         ttsBtn.title = "読み上げ: OFF（クリックでON）";
-        ttsBtn.classList.add("top-audio-off");
-        ttsBtn.classList.remove("top-audio-untested");
       }
+      ttsBtn.innerHTML = `<span class="top-audio-icon">${icon}</span><span class="top-audio-indicator ${cls}">${indicator}</span>`;
+      ttsBtn.className = `top-audio-btn ${cls}`;
     }
   }
 
