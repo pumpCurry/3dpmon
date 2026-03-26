@@ -1865,16 +1865,40 @@ export function setupUploadUI(root, hostname) {
       hideProgress();
       btn.disabled = false;
       const exists = hasSameFile(file.name);
-      const html = `
-        <img src="${thumb}" style="width:100px; display:block; margin-bottom:8px">
-        <div>${exists
-          ? `同名のファイルがあります！上書きしてよろしいですか?<br><strong>${file.name}</strong>`
-          : `<strong>${file.name}</strong> をアップロードしますか？`}</div>`;
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+
+      // GCode メタデータ行を構築（D&D版と同等）
+      let metaHtml = "";
+      const metaItems = [];
+      if (gcMeta.time) metaItems.push(`⏱ ${gcMeta.time}`);
+      if (gcMeta.filament) metaItems.push(`🧵 ${gcMeta.filament}`);
+      if (gcMeta.layers) metaItems.push(`📐 ${gcMeta.layers}層`);
+      if (gcMeta.layerHeight) metaItems.push(`高さ ${gcMeta.layerHeight}mm`);
+      if (gcMeta.material) metaItems.push(`素材 ${gcMeta.material}`);
+      if (gcMeta.nozzleTemp || gcMeta.bedTemp) {
+        const temps = [];
+        if (gcMeta.nozzleTemp) temps.push(`ノズル${gcMeta.nozzleTemp}℃`);
+        if (gcMeta.bedTemp) temps.push(`ベッド${gcMeta.bedTemp}℃`);
+        metaItems.push(`🌡 ${temps.join(" / ")}`);
+      }
+      if (metaItems.length > 0) {
+        metaHtml = `<div class="pm-upload-meta">${metaItems.join("　")}</div>`;
+      }
+
       const ok = await showConfirmDialog({
         level: exists ? "warn" : "info",
-        title: "ファイルアップロードの確認",
-        html,
-        confirmText: "アップロード",
+        title: "ファイルアップロード",
+        html: `
+          <div class="pm-upload-confirm">
+            <img src="${thumb}" class="pm-upload-thumb" onerror="this.style.display='none'">
+            <div class="pm-upload-info">
+              <div class="pm-upload-filename">${file.name}</div>
+              <div class="pm-upload-size">${sizeMB} MB</div>
+              ${metaHtml}
+              ${exists ? '<div class="pm-upload-warn">⚠ 同名のファイルが存在します（上書き）</div>' : ""}
+            </div>
+          </div>`,
+        confirmText: exists ? "上書きアップロード" : "アップロード",
         cancelText: "キャンセル"
       });
       if (ok) uploadFile(file);
