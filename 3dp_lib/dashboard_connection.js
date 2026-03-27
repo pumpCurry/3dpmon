@@ -46,7 +46,8 @@ import {
   setNotificationSuppressed,
   setStoredDataForHost,
   ensureMachineData,
-  markAllKeysDirty
+  markAllKeysDirty,
+  scopedById
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate } from "./dashboard_aggregator.js";
@@ -683,7 +684,8 @@ function handleSocketMessage(event, host) {
 
 // --- 2) タイムスタンプ更新 (lastLogTimestamp に現在時刻を反映) ---
   const now = getCurrentTimestamp();
-  const tsField = document.querySelector('[data-field="lastLogTimestamp"] .value');
+  const tsEl = scopedById("last-log-timestamp", hostKey);
+  const tsField = tsEl?.querySelector(".value");
   if (tsField) tsField.textContent = now;
 
 // --- 3) ログ出力 (受信した JSON 生データ) ---
@@ -1047,7 +1049,7 @@ export function sendCommand(method, params = {}, host) {
       const hostName = host === PLACEHOLDER_HOSTNAME ? "(placeholder)" : host;
       const detail = st.ws ? `readyState=${st.ws.readyState}` : "ws=null";
       const msg = `[${hostName}] WebSocket が接続されていません @ ${ts} (${detail})`;
-      showAlert(msg, "error");
+      showAlert(msg, "error", false, host);
     }
     return Promise.reject(new Error("WebSocket not connected"));
   }
@@ -1085,7 +1087,7 @@ export function sendGcodeCommand(gcode, host) {
       const hostName = host === PLACEHOLDER_HOSTNAME ? "(placeholder)" : host;
       const detail = st.ws ? `readyState=${st.ws.readyState}` : "ws=null";
       const msg = `[${hostName}] WebSocket が接続されていません @ ${ts} (${detail})`;
-      showAlert(msg, "error");
+      showAlert(msg, "error", false, host);
     }
     return Promise.reject(new Error("WebSocket not connected"));
   }

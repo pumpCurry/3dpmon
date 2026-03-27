@@ -347,12 +347,16 @@ export function pushLog(msg, level = "info", notify = false, hostname) {
 }
 
 /**
- * 通知ログ専用のユーティリティ
+ * 通知ログ専用のユーティリティ。
+ * hostname を指定すると該当ホストの通知タイムスタンプのみ更新する。
+ *
  * @param {string|number|Object} msg
  * @param {string} [level="info"]
+ * @param {string} [hostname] - 対象ホスト名
  */
-export function pushNotificationLog(msg, level = "info") {
-  pushLog(msg, level, true);
-  const tsField = document.querySelector('[data-field="lastNotificationTimestamp"] .value');
+export function pushNotificationLog(msg, level = "info", hostname) {
+  pushLog(msg, level, true, hostname);
+  const tsEl = scopedById("last-notification-timestamp", hostname);
+  const tsField = tsEl?.querySelector(".value");
   if (tsField) tsField.textContent = getCurrentTimestamp();
 }

@@ -82,8 +82,9 @@ function _dismiss(el) {
  * @param {string} message                              - 表示メッセージ
  * @param {"info"|"warn"|"error"|"success"} [level="info"] - レベル（色）
  * @param {boolean} [persistent=false]                   - true のとき自動消去しない
+ * @param {string} [hostname]                            - 対象ホスト名（ログの分離に使用）
  */
-export function showAlert(message, level = "info", persistent = false) {
+export function showAlert(message, level = "info", persistent = false, hostname) {
   const lvl = _normalizeLevel(level);
   const container = document.querySelector(".notification-container");
   if (!container) {
@@ -92,7 +93,7 @@ export function showAlert(message, level = "info", persistent = false) {
   }
 
   import("./dashboard_log_util.js").then(({ pushNotificationLog }) =>
-    pushNotificationLog(message, lvl)
+    pushNotificationLog(message, lvl, hostname)
   );
 
   // アラート本体
@@ -389,7 +390,7 @@ export class NotificationManager {
       .replace(/[\r\n]+/g, " ");
 
     // 1) 固定アラート（showAlert 内でログ出力も行われる）
-    showAlert(text, def.level, def.level === "error");
+    showAlert(text, def.level, def.level === "error", hostname);
 
     // 3) TTS（ホスト別設定を適用）
     if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
