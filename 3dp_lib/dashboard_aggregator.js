@@ -673,11 +673,16 @@ function aggregateTimersAndPredictions(vals, hostname) {
   const progPct = prog / 100;
 
   // ---- 完了後経過タイマーの復元処理 ------------------------------
-  // tsCompleteStart が永続化から復元済みなら、finishTime からの経過秒を即座に算出
+  // ★ 有効なデバイス状態が届く前（device が undefined/null）は復元済み値を維持し、
+  //    リセット判定をスキップしてレースコンディションを防ぐ。
+  const _hasValidDeviceState = (device != null);
+
   if (s.tsCompleteStart != null) {
+    // tsCompleteStart が永続化から復元済みなら、現在時刻との差を即座に算出
     _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
-  } else {
-    // tsCompleteStart が null の場合、historyData または printStore.history から復元
+  } else if (_hasValidDeviceState) {
+    // tsCompleteStart が null で、かつ有効なデータが届いている場合のみ履歴から復元を試みる
+    // （接続前の undefined 状態で誤って null のまま確定させない）
     const historyData = machine?.historyData || [];
     const persistedHistory = machine?.printStore?.history || [];
     const last = historyData[historyData.length - 1]
@@ -815,25 +820,28 @@ function aggregateTimersAndPredictions(vals, hostname) {
   }
 
   // 4-4. 完了後経過時間
-  const doneStates = new Set([
-    PRINT_STATE_CODE.printDone,
-    PRINT_STATE_CODE.printFailed
-  ]);
-  const isIdle = device === PRINT_STATE_CODE.printIdle;
-  if (isIdle && doneStates.has(st)) {
-    if (!s.tsCompleteStart) {
-      s.tsCompleteStart = nowMs;
-      _set("completionElapsedTime", 0, true);
+  // ★ device が undefined（接続前）の場合は復元済み値を維持し、リセットしない
+  if (_hasValidDeviceState) {
+    const doneStates = new Set([
+      PRINT_STATE_CODE.printDone,
+      PRINT_STATE_CODE.printFailed
+    ]);
+    const isIdle = device === PRINT_STATE_CODE.printIdle;
+    if (isIdle && doneStates.has(st)) {
+      if (!s.tsCompleteStart) {
+        s.tsCompleteStart = nowMs;
+        _set("completionElapsedTime", 0, true);
+      }
+      const sec = Math.floor((nowMs - s.tsCompleteStart) / 1000);
+      _set("completionElapsedTime", sec, true);
+    } else if (
+      s.tsCompleteStart &&
+      (st === PRINT_STATE_CODE.printStarted ||
+       (prevState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
+    ) {
+      s.tsCompleteStart = null;
+      _set("completionElapsedTime", null, true);
     }
-    const sec = Math.floor((nowMs - s.tsCompleteStart) / 1000);
-    _set("completionElapsedTime", sec, true);
-  } else if (
-    s.tsCompleteStart &&
-    (st === PRINT_STATE_CODE.printStarted ||
-     (prevState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
-  ) {
-    s.tsCompleteStart = null;
-    _set("completionElapsedTime", null, true);
   }
 
   // ── 5) 予想残り時間／予想終了時刻 ────────────────────────────────

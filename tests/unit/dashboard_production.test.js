@@ -130,7 +130,10 @@ describe("buildDailyProductionReport", () => {
       }]
     };
     const result = buildDailyProductionReport({ days: 1 });
-    const today = result.find(d => d.date === new Date().toISOString().slice(0, 10));
+    // _localDateKey と同じロジック（ローカルタイムゾーン）
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+    const today = result.find(d => d.date === todayKey);
     expect(today).toBeDefined();
     expect(today.printCount).toBe(1);
     expect(today.successCount).toBe(1);
