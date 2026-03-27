@@ -105,10 +105,22 @@ export class AudioManager {
   }
 
   /**
-   * 初回ユーザー操作またはタイムアウト後にテストを起動
+   * 初回ユーザー操作またはタイムアウト後にテストを起動。
+   * Electron環境ではautoplay制限がないため即座にテスト実行。
    * @private
    */
   _startWaiting() {
+    // Electron環境検出: preload.js が window.electronAPI を設定している
+    const isElectron = !!(window.electronAPI || navigator.userAgent.includes("Electron"));
+    if (isElectron) {
+      // Electron: autoplayPolicy バイパス済み → 即座にテスト実行、オーバーレイ不要
+      this.c = true;
+      this._cleanupWaiting();
+      this._runTests();
+      return;
+    }
+
+    // ブラウザ: ユーザー操作を待つ
     const onFirst = () => {
       this.c = true;
       this._cleanupWaiting();

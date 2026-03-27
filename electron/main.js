@@ -72,7 +72,9 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       /* 既存コードとの互換性のため contextIsolation は有効のまま維持 */
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      /* Electron版: ユーザークリックなしで音声再生（TTS/効果音）を許可 */
+      autoplayPolicy: "no-user-gesture-required"
     }
   });
 
@@ -103,6 +105,9 @@ if (!gotTheLock) {
     }
   });
 }
+
+/* ─── Chromium フラグ: 音声自動再生を許可 ─── */
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 /* ─── アプリケーションライフサイクル ─── */
 
