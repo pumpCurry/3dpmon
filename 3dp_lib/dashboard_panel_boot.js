@@ -110,6 +110,13 @@ export function bootPanelSystem() {
   /* (6) トップメニューバー・接続モーダルのイベントバインド */
   _initTopMenuBar();
 
+  /* (7) スプラッシュ画面をフェードアウト */
+  const splash = document.getElementById("splash-screen");
+  if (splash) {
+    splash.classList.add("fade-out");
+    setTimeout(() => splash.remove(), 500);
+  }
+
   console.info("bootPanelSystem: パネルシステム起動完了");
   return true;
 }

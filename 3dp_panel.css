@@ -232,6 +232,60 @@
 }
 
 /* ---------------------------------------------------------------
+   FOUC防止: パネルモード時に旧レイアウトを初期非表示
+   ※ CSS はJS より先に適用されるため、旧UI のフラッシュを完全に防ぐ
+--------------------------------------------------------------- */
+body.panel-mode .title-bar,
+body.panel-mode .camera-card,
+body.panel-mode .preview-wrapper,
+body.panel-mode .info-wrapper,
+body.panel-mode #filament-preview-card,
+body.panel-mode #temp-graph-card,
+body.panel-mode .info-card,
+body.panel-mode .log-card,
+body.panel-mode #print-history-card {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------
+   ローディングスプラッシュ画面
+--------------------------------------------------------------- */
+.splash-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-page, #e8e8e8);
+  transition: opacity 0.4s ease;
+}
+.splash-screen.fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+.splash-logo {
+  font-size: var(--font-2xl, 24px);
+  font-weight: bold;
+  color: var(--color-text-primary, #1a1a1a);
+  margin-bottom: var(--space-3, 12px);
+}
+.splash-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--color-border, #e2e8f0);
+  border-top-color: var(--color-accent, #3b82f6);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: var(--space-3, 12px);
+}
+.splash-text {
+  font-size: var(--font-sm, 12px);
+  color: var(--color-text-muted, #94a3b8);
+}
+
+/* ---------------------------------------------------------------
    グローバル: フォーカスリング (Phase 4-B a11y)
 --------------------------------------------------------------- */
 :focus-visible {
