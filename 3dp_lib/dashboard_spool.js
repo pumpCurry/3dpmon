@@ -734,9 +734,10 @@ function logSpoolChange(spool, printId = "") {
  * @param {Object} spool - 対象スプール
  * @param {number} lengthMm - 使用した長さ [mm]
  * @param {string} jobId - 関連ジョブID
+ * @param {string} [type="complete"] - 使用種別 ("complete" | "fail" | "snapshot")
  * @returns {void}
  */
-function logUsage(spool, lengthMm, jobId) {
+function logUsage(spool, lengthMm, jobId, type = "complete") {
   monitorData.usageHistory.push({
     usageId: Date.now(),
     spoolId: spool.id,
@@ -744,7 +745,8 @@ function logUsage(spool, lengthMm, jobId) {
     jobId,
     startedAt: Date.now(),
     usedLength: lengthMm,
-    currentLength: spool.remainingLengthMm
+    currentLength: spool.remainingLengthMm,
+    type
   });
   trimUsageHistory();
   saveUnifiedStorage();
@@ -934,6 +936,8 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * @function finalizeFilamentUsage
  * @param {number} lengthMm - 実使用量 [mm]
  * @param {string} [jobId=""] - 印刷ジョブID
+ * @param {string} hostname - ホスト名
+ * @param {boolean} [isSuccess=true] - 印刷成功フラグ（false=失敗/キャンセル）
  * @returns {void}
  * @description
  * 使用完了時点のスプール情報を履歴にスナップショットとして保存する。
@@ -941,7 +945,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * name/color/material などのメタ情報を同時に記録する。
  * 履歴更新後は {@link updateHistoryList} を介して永続化し UI へ即時反映する。
  */
-export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
+export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true) {
   const host = hostname;
   if (!host) return;
   const s = getCurrentSpool(host);
@@ -983,7 +987,10 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
   if (!isNaN(resolvedUsed)) {
     s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
   }
-  s.printCount = (s.printCount || 0) + 1;
+  // 成功時のみ printCount をインクリメント（失敗/キャンセルは含めない）
+  if (isSuccess) {
+    s.printCount = (s.printCount || 0) + 1;
+  }
   s.currentJobStartLength = null;
   s.currentJobExpectedLength = null;
   // ★ Bug A fix: currentPrintID を即クリアせず lastCompletedPrintID に保持。
@@ -1013,7 +1020,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname) {
       expectedRemain: s.remainingLengthMm
     });
   }
-  logUsage(s, resolvedUsed, normalizedJobId);
+  logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
   updateStoredDataToDOM();
   saveUnifiedStorage();
   if (entry) {

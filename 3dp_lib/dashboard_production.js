@@ -222,7 +222,10 @@ export function buildDailyProductionReport(options = {}) {
         day.byHost[hostname] = { printCount: 0, printTimeSec: 0 };
       }
       day.byHost[hostname].printCount++;
-      day.byHost[hostname].printTimeSec += durationSec;
+      // 成功印刷の時間のみ計上（失敗分は byHost には含めない）
+      if (isSuccess) {
+        day.byHost[hostname].printTimeSec += durationSec;
+      }
     }
   }
 

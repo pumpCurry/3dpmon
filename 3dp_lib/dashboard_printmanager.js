@@ -1413,6 +1413,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   //   2. GCode メタデータの推定値 — アップロード時に解析済み
   //   3. raw.usagematerial — 履歴の実消費量（失敗時は過少になるため最低優先）
   let materialNeeded, materialSource;
+  let materialUnreliable = false; // 信頼性の低いデータフラグ
   if (insight?.avgMaterialMm > 0) {
     materialNeeded = insight.avgMaterialMm;
     materialSource = "実績ベース";
@@ -1422,6 +1423,11 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   } else {
     materialNeeded = Number(raw.usagematerial || 0);
     materialSource = materialNeeded > 0 ? "機器報告" : "";
+    // 失敗印刷の部分消費値しかない場合は信頼性が低い
+    if (materialNeeded > 0 && raw.printfinish !== 1) {
+      materialUnreliable = true;
+      materialSource = "⚠ 失敗時の部分値";
+    }
   }
 
   const afterRemaining = Math.max(0, remaining - materialNeeded);
@@ -1566,6 +1572,9 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   // 予想完了セクション
   html += `<div class="pm-print-section pm-print-neutral-section">`;
   html += `<div>必要量: ${fmtNeed.display}${materialSource ? ` (${materialSource})` : ""}</div>`;
+  if (materialUnreliable) {
+    html += `<div class="pm-print-alert-danger">⚠ 成功実績がないため、失敗時の部分消費値を使用しています。実際の必要量はこれより多い可能性があります。</div>`;
+  }
   if (estSec > 0) {
     html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
     html += `<div>予想完了: ${expectedFinish}</div>`;

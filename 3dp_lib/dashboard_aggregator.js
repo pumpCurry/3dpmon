@@ -606,7 +606,9 @@ export function ingestData(data, hostname) {
           length = (est * prog_agg) / 100;
         }
       }
-      finalizeFilamentUsage(length, jobId_agg, host);
+      // 印刷成功(printDone)のみ isSuccess=true、失敗/キャンセルは false
+      const isPrintSuccess = (st_agg === PRINT_STATE_CODE.printDone);
+      finalizeFilamentUsage(length, jobId_agg, host, isPrintSuccess);
       saveUnifiedStorage();
       s.accumulatedUsedMaterial = 0;
       s.prevUsedMaterialLength = null;
@@ -1009,13 +1011,22 @@ export function aggregatorUpdate() {
       }
     }
 
-    // アイドル状態から印刷開始へ遷移し、useFilament() が未実行の場合の初期化
+    // アイドル状態から印刷開始へ遷移した場合の初期化
     if (
       spool &&
       s.lastPrintState === PRINT_STATE_CODE.printIdle &&
-      st === PRINT_STATE_CODE.printStarted &&
-      spool.currentJobStartLength == null
+      st === PRINT_STATE_CODE.printStarted
     ) {
+      // 前回のジョブの transient フィールドが残留している場合はクリア
+      if (spool.currentJobStartLength != null) {
+        console.warn(
+          "[aggregator] idle→start: stale transient fields detected, clearing",
+          { host, staleJobId: spool.currentPrintID }
+        );
+        spool.currentJobStartLength = null;
+        spool.currentJobExpectedLength = null;
+        spool.currentPrintID = "";
+      }
       let est = Number(storedData.materialLength?.rawValue ?? NaN);
       if (isNaN(est)) {
         est = Number(storedData.materialLengthFallback?.rawValue ?? NaN);
@@ -1124,7 +1135,8 @@ export function aggregatorUpdate() {
             spool.currentPrintID = resolvedJobId;
           }
         }
-        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host);
+        const isSuccess2 = (st === PRINT_STATE_CODE.printDone);
+        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2);
         saveUnifiedStorage();
         s.accumulatedUsedMaterial = 0;
         s.prevUsedMaterialLength = null;
