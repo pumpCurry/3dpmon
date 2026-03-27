@@ -3,3 +3,5 @@
 *.scss text
 *.html text
 *.css text
+# バッチファイルはCP932/CRLFで保持（Windows実行に必須）
+*.bat binary
