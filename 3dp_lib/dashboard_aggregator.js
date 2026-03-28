@@ -199,8 +199,11 @@ function _updatePhaseTimer(s, tsKey, totalKey, field, isActive, hasValidDevice, 
     } else if (s[totalKey] > 0) {
       _set(field, s[totalKey], true);
     }
+  } else if (hasValidDevice && !s[tsKey] && s[totalKey] > 0) {
+    // 接続中、フェーズ停止済み、累積値あり → storedData に確定値を書き出す
+    // （restoreAggregatorState で復元された累積値が storedData に反映されるまでの橋渡し）
+    _set(field, s[totalKey], true);
   }
-  // hasValidDevice=true かつ !isActive かつ !s[tsKey] → 何もしない（既に停止済み）
 }
 
 /**
@@ -579,7 +582,7 @@ export function ingestData(data, hostname) {
   aggregateTimersAndPredictions({
     id, st: Number(_readRaw("state", host) ?? 0),
     jobTime, selfPct, prog, left,
-    device: Number(_readRaw("deviceState", host) ?? 0),
+    device: _readRaw("deviceState", host) != null ? Number(_readRaw("deviceState", host)) : null,
     finish: Number(_readRaw("printFinishTime", host) ?? 0),
   }, host);
 
@@ -719,11 +722,7 @@ function aggregateTimersAndPredictions(vals, hostname) {
   // restoreAggregatorState で復元された値を維持する。
   const _hasValidDeviceState = (device != null);
 
-  // completionElapsedTime: 接続前は復元値から経過秒を継続表示のみ
-  // ★ 正規のタイマーロジックはセクション 4-4 に一本化。ここでは復元値の表示のみ。
-  if (!_hasValidDeviceState && s.tsCompleteStart != null) {
-    _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
-  }
+  // completionElapsedTime: セクション 4-4 に完全一本化（ここでは何もしない）
 
   // ── 2) PrintID 切替検出 → 各種リセット ────────────────────────────────────
   const numId = Number(id) || null;
@@ -792,9 +791,9 @@ function aggregateTimersAndPredictions(vals, hostname) {
   _updatePhaseTimer(s, "tsCheckStart", "totalCheckSec", "firstLayerCheckTime",
     checkPhaseActive, _hasValidDeviceState, nowMs, _set);
 
-  // 4-3. 一時停止時間
+  // 4-3. 一時停止時間（完了後経過フェーズとも排他）
   const pausePhaseActive = _hasValidDeviceState && (
-    isPaused && !s.tsPrepStart && !s.tsCheckStart
+    isPaused && !s.tsPrepStart && !s.tsCheckStart && !s.tsCompleteStart
   );
   _updatePhaseTimer(s, "tsPauseStart", "totalPauseSec", "pauseTime",
     pausePhaseActive, _hasValidDeviceState, nowMs, _set);
@@ -1461,6 +1460,27 @@ export function stopAggregatorTimer() {
       persistAggregatorState(host);
     }
   }
+}
+
+/**
+ * teardownAggregatorHost:
+ *   指定ホストの集約状態を破棄する。
+ *   ホスト切断・削除時に呼び出し、保留タイマーをクリアしメモリリークを防ぐ。
+ *
+ * @param {string} hostname - 破棄するホスト名
+ */
+export function teardownAggregatorHost(hostname) {
+  const s = _hostStates.get(hostname);
+  if (!s) return;
+  // 保留中のフィラメント切れタイマーをクリア
+  if (s.filamentOutTimer) {
+    clearTimeout(s.filamentOutTimer);
+    s.filamentOutTimer = null;
+  }
+  // 状態を保存してから削除
+  persistAggregatorState(hostname);
+  _hostStates.delete(hostname);
+  console.debug(`[teardownAggregatorHost] ${hostname} の集約状態を破棄`);
 }
 
 /**
