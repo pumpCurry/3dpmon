@@ -911,7 +911,8 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
           });
           if (!ok) return;
           const selEl = document.getElementById("mount-host-select");
-          const targetHost = selEl?.value || hosts[0];
+          const targetHost = selEl?.value;
+          if (!targetHost) { showAlert("装着先が選択されていません", "warn"); return; }
           if (!setCurrentSpoolId(sp.id, targetHost)) {
             showAlert("このスプールは既に別のプリンタに装着されています", "warn");
             return;
@@ -1368,7 +1369,8 @@ function createRegisteredContent(openEditor, hostname) {
           removeBtn.className = "btn-font-xs";
           removeBtn.addEventListener("click", ev => {
             ev.stopPropagation();
-            const targetHost = sp.hostname || hostname;
+            const targetHost = sp.hostname;
+            if (!targetHost) { showAlert("スプールの装着先が不明です", "warn"); return; }
             const ok = setCurrentSpoolId(null, targetHost);
             // setCurrentSpoolId が hostSpoolMap 不整合で取り外せなかった場合の安全弁
             if (!ok || sp.isActive) {
@@ -1419,7 +1421,8 @@ function createRegisteredContent(openEditor, hostname) {
               });
               if (!ok) return;
               const selEl = document.getElementById("mount-host-select");
-              const targetHost = selEl?.value || hosts[0];
+              const targetHost = selEl?.value;
+          if (!targetHost) { showAlert("装着先が選択されていません", "warn"); return; }
               if (!setCurrentSpoolId(sp.id, targetHost)) {
                 showAlert("このスプールは既に別のプリンタに装着されています", "warn");
                 return;
