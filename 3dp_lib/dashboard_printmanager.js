@@ -1499,18 +1499,24 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
       html += `<div>最終: ${lastD} ${lastR}</div>`;
     }
     html += `</div>`;
-  } else if (Object.keys(gcMeta).length > 0) {
-    // 履歴なし — GCode メタデータから情報表示
-    html += `<div class="pm-print-section pm-print-neutral-section">`;
-    html += `<div class="pm-print-section-title">GCode 情報 (初回印刷)</div>`;
-    const items = [];
-    if (gcMeta.material)    items.push(`素材: ${gcMeta.material}`);
-    if (gcMeta.layers)      items.push(`${gcMeta.layers}層`);
-    if (gcMeta.layerHeight) items.push(`高さ ${gcMeta.layerHeight}mm`);
-    if (gcMeta.nozzleTemp)  items.push(`ノズル ${gcMeta.nozzleTemp}℃`);
-    if (gcMeta.bedTemp)     items.push(`ベッド ${gcMeta.bedTemp}℃`);
-    if (items.length > 0) html += `<div>${items.join("　")}</div>`;
-    html += `</div>`;
+  } else {
+    // 成功実績なし — GCodeメタ or 履歴filamentInfo からフォールバック表示
+    // 履歴の filamentInfo から素材情報を補完
+    let effectiveMeta = gcMeta;
+    if (Object.keys(effectiveMeta).length === 0 && Array.isArray(raw.filamentInfo) && raw.filamentInfo.length > 0) {
+      const fi = raw.filamentInfo[0];
+      effectiveMeta = {};
+      if (fi.materialName) effectiveMeta.material = fi.materialName;
+      if (fi.weight) effectiveMeta.filament = `${fi.weight}g`;
+      if (fi.length) effectiveMeta.filamentMm = fi.length;
+    }
+    const metaHtml = _buildMetaHtml(effectiveMeta);
+    if (metaHtml) {
+      html += `<div class="pm-print-section pm-print-neutral-section">`;
+      html += `<div class="pm-print-section-title">📄 GCode 情報</div>`;
+      html += metaHtml;
+      html += `</div>`;
+    }
   }
 
   // スプール情報セクション（残量バー付き）
