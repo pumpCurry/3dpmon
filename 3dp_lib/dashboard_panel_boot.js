@@ -72,9 +72,18 @@ export function bootPanelSystem() {
   /* (0a) printmanager アクセサを spool.js に登録（循環参照回避） */
   registerPrintManagerAccessor({ getFileList, buildFileInsight });
 
-  /* (0b) 従来タイトルバーを非表示にし、トップメニューバーに置き換え */
-  const titleBar = document.querySelector(".title-bar");
-  if (titleBar) titleBar.style.display = "none";
+  /* (0b) 旧レイアウトを即座に非表示にする
+     .legacy-card-source クラスを付与 → CSS で display:none
+     テンプレート変換後に remove() されるので、パネル内クローンには伝搬しない */
+  const legacySelectors = [
+    ".title-bar", ".camera-card", ".preview-wrapper", ".info-wrapper",
+    "#filament-preview-card", "#temp-graph-card", ".info-card", ".log-card",
+    "#print-history-card", "#print-current-card", ".equip-status-card"
+  ];
+  for (const sel of legacySelectors) {
+    const el = document.querySelector(sel);
+    if (el) el.classList.add("legacy-card-source");
+  }
 
   /* (1) 既存カード要素をテンプレート化 */
   _convertCardsToTemplates();
@@ -136,6 +145,16 @@ export function bootPanelSystem() {
  * @returns {void}
  */
 function _convertCardsToTemplates() {
+  /* 生産管理パネル: HTML由来ではなくJS動的生成 — 空テンプレートを登録 */
+  if (!document.getElementById("panel-tpl-production")) {
+    const tplProd = document.createElement("template");
+    tplProd.id = "panel-tpl-production";
+    const prodDiv = document.createElement("div");
+    prodDiv.className = "production-panel-root";
+    tplProd.content.appendChild(prodDiv);
+    document.body.appendChild(tplProd);
+  }
+
   /**
    * カードセレクタとテンプレートIDの対応表
    * @type {Array<{selector: string, templateId: string, keepOriginal: boolean}>}
@@ -197,6 +216,14 @@ function _convertCardsToTemplates() {
   ];
 
   for (const mapping of cardMappings) {
+    // ★ HTMLに <template> が既に定義されていればスキップ（テンプレート優先方式）
+    if (document.getElementById(mapping.templateId)) {
+      // 旧カード要素がDOMに残っていれば除去（重複防止）
+      const legacy = document.querySelector(mapping.selector);
+      if (legacy) legacy.remove();
+      continue;
+    }
+
     const originalEl = document.querySelector(mapping.selector);
     if (!originalEl) {
       console.warn(`_convertCardsToTemplates: 要素が見つかりません: ${mapping.selector}`);
@@ -265,16 +292,6 @@ function _convertCardsToTemplates() {
 
       originalEl.remove();
       continue;
-    }
-
-    /* 生産管理パネル: HTML由来ではなくJS動的生成 — 空テンプレートを登録 */
-    if (!document.getElementById("panel-tpl-production")) {
-      const tplProd = document.createElement("template");
-      tplProd.id = "panel-tpl-production";
-      const prodDiv = document.createElement("div");
-      prodDiv.className = "production-panel-root";
-      tplProd.content.appendChild(prodDiv);
-      document.body.appendChild(tplProd);
     }
 
     /* テンプレートを生成 */

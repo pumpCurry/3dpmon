@@ -234,17 +234,10 @@
 /* ---------------------------------------------------------------
    FOUC防止: パネルモード時に旧レイアウトを初期非表示
    ※ CSS はJS より先に適用されるため、旧UI のフラッシュを完全に防ぐ
-   ★ body 直下の要素のみを対象とし、GridStack パネル内のクローンには影響させない
+   ★ .legacy-card-source クラスは bootPanelSystem() の冒頭で全旧カードに付与される
+      テンプレート変換完了後に旧カードはDOMから除去されるため、パネル内には伝搬しない
 --------------------------------------------------------------- */
-body.panel-mode > .title-bar,
-body.panel-mode > .camera-card,
-body.panel-mode > .preview-wrapper,
-body.panel-mode > .info-wrapper,
-body.panel-mode > #filament-preview-card,
-body.panel-mode > #temp-graph-card,
-body.panel-mode > .info-card,
-body.panel-mode > .log-card,
-body.panel-mode > #print-history-card {
+.legacy-card-source {
   display: none !important;
 }
 
