@@ -2023,8 +2023,9 @@ export function setupUploadUI(root, hostname) {
       const name = m?.storedData?.hostname?.rawValue || allHosts[0];
       const dup = existsHosts.includes(allHosts[0]) ? ' <span class="pm-upload-dup-tag">(上書き)</span>' : "";
       hostSelectHtml = `
-        <div class="pm-upload-host-section">
-          <div class="pm-upload-host-single">🖨 送信先: <strong>${name}</strong>${dup}</div>
+        <div class="pm-print-section pm-print-neutral-section">
+          <div class="pm-print-section-title">🖨 送信先</div>
+          <div><strong>${name}</strong>${dup}</div>
         </div>`;
     } else if (allHosts.length > 1) {
       const checkboxes = allHosts.map(h => {
@@ -2034,7 +2035,8 @@ export function setupUploadUI(root, hostname) {
         return `<label class="pm-upload-host-label"><input type="checkbox" class="pm-upload-host-chk" value="${h}" checked> ${name}${dup}</label>`;
       }).join("");
       hostSelectHtml = `
-        <div class="pm-upload-host-section">
+        <div class="pm-print-section pm-print-neutral-section">
+          <div class="pm-print-section-title">🖨 送信先</div>
           <div class="pm-upload-host-header"><label><input type="checkbox" id="pm-upload-host-all" checked> 全て選択/解除</label></div>
           <div class="pm-upload-host-list">${checkboxes}</div>
         </div>`;
