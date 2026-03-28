@@ -740,13 +740,17 @@ function aggregateTimersAndPredictions(vals, hostname) {
   if (_hasValidDeviceState) {
 
   // 4-1. 印刷前準備時間
-  if (
+  // ★ actualStartEpoch が設定済み or 進捗>0 なら準備フェーズは完了済み
+  const prepPhaseActive = (
     st === PRINT_STATE_CODE.printStarted &&
     job === 0 &&
     selfPct >= 0 && selfPct <= 9 &&
     !s.tsCheckStart &&
-    !s.tsPauseStart
-  ) {
+    !s.tsPauseStart &&
+    s.actualStartEpoch === null &&
+    progPct <= 0
+  );
+  if (prepPhaseActive) {
     if (!s.tsPrepStart) {
       // 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
       s.tsPrepStart = numId ? numId * 1000 : nowMs;
@@ -790,35 +794,15 @@ function aggregateTimersAndPredictions(vals, hostname) {
   }
 
   // 4-3. 一時停止時間
-  if (
-    s.tsPrepStart === null &&
-    s.tsCheckStart === null &&
-    (st === PRINT_STATE_CODE.printPaused || st === 3) &&
-    job >= 1 &&
-    (
-      selfPct === 0 ||
-      (selfPct >= 10 && selfPct <= 29) ||
-      (selfPct >= 40 && selfPct <= 100)
-    )
-  ) {
+  // ★ st がpausedなら一時停止中。prep/check と排他（同時に計測しない）
+  //    selfPct やjob条件は不要: 一時停止はどのフェーズでも起こりうる
+  const isPaused = (st === PRINT_STATE_CODE.printPaused || st === 3);
+  if (isPaused && !s.tsPrepStart && !s.tsCheckStart) {
     if (!s.tsPauseStart) s.tsPauseStart = nowMs;
     const sec = s.totalPauseSec + Math.floor((nowMs - s.tsPauseStart) / 1000);
     _set("pauseTime", sec, true);
     _set("pauseTime", { value: formatDuration(sec), unit: "" }, false);
-  } else if (
-    s.tsPauseStart &&
-    (
-      (st !== PRINT_STATE_CODE.printPaused && st !== 3) ||
-      job < 1 ||
-      (
-        selfPct !== 0 &&
-        !(selfPct >= 10 && selfPct <= 29) &&
-        !(selfPct >= 40 && selfPct <= 100)
-      ) ||
-      s.tsPrepStart !== null ||
-      s.tsCheckStart !== null
-    )
-  ) {
+  } else if (s.tsPauseStart && !isPaused) {
     s.totalPauseSec += Math.floor((nowMs - s.tsPauseStart) / 1000);
     s.tsPauseStart   = null;
     _set("pauseTime", s.totalPauseSec, true);
@@ -853,19 +837,19 @@ function aggregateTimersAndPredictions(vals, hostname) {
     PRINT_STATE_CODE.printFailed
   ]);
   if (_hasValidDeviceState) {
+    // ★ 完了経過時間: device=idle かつ st=done/failed のときのみカウント
+    //    それ以外（印刷中、一時停止中、新規印刷開始）はリセット
     const isIdle = device === PRINT_STATE_CODE.printIdle;
-    if (isIdle && doneStates.has(st)) {
+    const isDone = doneStates.has(st);
+    if (isIdle && isDone) {
       if (!s.tsCompleteStart) {
         s.tsCompleteStart = nowMs;
         _set("completionElapsedTime", 0, true);
       }
       const sec = Math.floor((nowMs - s.tsCompleteStart) / 1000);
       _set("completionElapsedTime", sec, true);
-    } else if (
-      s.tsCompleteStart &&
-      (st === PRINT_STATE_CODE.printStarted ||
-       (prevState === PRINT_STATE_CODE.printPaused && st !== PRINT_STATE_CODE.printPaused))
-    ) {
+    } else if (s.tsCompleteStart && (!isIdle || !isDone)) {
+      // device が printing になった or st が done/failed でなくなった → リセット
       s.tsCompleteStart = null;
       _set("completionElapsedTime", null, true);
     }
