@@ -1844,19 +1844,19 @@ async function _showUploadConfirmDialog(opts) {
     html += `</div>`;
   }
 
-  // 重複警告セクション
+  // 重複警告セクション（per-host で詳細表示）
   if (exists) {
     html += `<div class="pm-print-section pm-print-warn-section">`;
     html += `<div class="pm-print-section-title">⚠ ファイル重複</div>`;
-    if (existsHosts.length > 1) {
-      const names = existsHosts.map(h => {
-        const m = monitorData.machines[h];
-        return m?.storedData?.hostname?.rawValue || h;
-      }).join(", ");
-      html += `<div>${existsHosts.length}台に同名ファイルが存在します</div>`;
-      html += `<div class="pm-print-remain-label">${names}</div>`;
+    const names = existsHosts.map(h => {
+      const m = monitorData.machines[h];
+      return m?.storedData?.hostname?.rawValue || h;
+    });
+    if (existsHosts.length === 1) {
+      html += `<div><strong>${names[0]}</strong> に同名ファイルが存在します（上書きされます）</div>`;
     } else {
-      html += `<div>同名のファイルが存在します（上書きされます）</div>`;
+      html += `<div>${existsHosts.length}台に同名ファイルが存在します（上書きされます）</div>`;
+      html += `<div class="pm-print-remain-label">${names.join(", ")}</div>`;
     }
     html += `</div>`;
   }
@@ -2015,7 +2015,18 @@ export function setupUploadUI(root, hostname) {
         && getConnectionState(h) === "connected"
     );
 
-    // 各ホストでの重複チェック
+    // ★ 接続中ホストが0台なら即エラー
+    if (allHosts.length === 0) {
+      showConfirmDialog({
+        level: "error",
+        title: "アップロード不可",
+        message: "接続中のプリンタがありません。接続設定を確認してください。",
+        confirmText: "OK"
+      });
+      return;
+    }
+
+    // 各ホストでの重複チェック（per-host で個別判定）
     const existsHosts = allHosts.filter(h =>
       (_fileListMap.get(h) || []).some(entry => entry.basename === file.name)
     );
@@ -2080,8 +2091,19 @@ export function setupUploadUI(root, hostname) {
 
     // アップロード実行（マルチ/シングル統一）
     const targets = (allHosts.length > 1)
-      ? (_lastSelectedUploadHosts.length > 0 ? _lastSelectedUploadHosts : [hostname])
-      : [hostname];
+      ? _lastSelectedUploadHosts
+      : allHosts;
+
+    // ★ 全チェックを外して確認した場合はキャンセル扱い
+    if (targets.length === 0) {
+      showConfirmDialog({
+        level: "warn",
+        title: "送信先未選択",
+        message: "アップロード先のプリンタが選択されていません。",
+        confirmText: "OK"
+      });
+      return;
+    }
 
     btn.disabled = true;
     showProgress();
