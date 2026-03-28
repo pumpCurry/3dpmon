@@ -41,7 +41,7 @@
 "use strict";
 
 import { initializePanel, destroyPanel } from "./dashboard_panel_init.js";
-import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
+import { monitorData, PLACEHOLDER_HOSTNAME, markAllKeysDirty } from "./dashboard_data.js";
 import { registerFieldElements, unregisterFieldElements } from "./dashboard_ui.js";
 
 /* ─── localStorage キー ─── */
@@ -418,6 +418,11 @@ export function addPanel(typeId, hostname, posOverride = null) {
   /* data-field 要素をキャッシュに登録（B: 要素キャッシュ、per-host） */
   registerFieldElements(body, hostname);
 
+  /* ★ パネル追加後に全キーをdirtyに → 次のaggregator周期でデータ反映 */
+  if (hostname && hostname !== PLACEHOLDER_HOSTNAME && hostname !== "shared") {
+    markAllKeysDirty(hostname);
+  }
+
   return panelId;
 }
 
@@ -640,7 +645,13 @@ export function importLayoutData(layoutData, options = {}) {
     }
   }
 
-  if (count > 0) saveLayout();
+  if (count > 0) {
+    saveLayout();
+    // ★ パネル生成後に全ホストの全キーをdirtyに → 即座にデータ反映
+    for (const host of Object.keys(monitorData.machines)) {
+      if (host !== PLACEHOLDER_HOSTNAME) markAllKeysDirty(host);
+    }
+  }
   return count;
 }
 
@@ -786,6 +797,11 @@ export function restoreLayout() {
           if (lockBtn) { lockBtn.textContent = "🔒"; lockBtn.title = "このパネルの固定を解除"; }
         }
       }
+    }
+
+    // ★ パネル生成後に全ホストの全キーをdirtyに → updateStoredDataToDOM で再描画
+    for (const host of Object.keys(monitorData.machines)) {
+      if (host !== PLACEHOLDER_HOSTNAME) markAllKeysDirty(host);
     }
 
     return true;
