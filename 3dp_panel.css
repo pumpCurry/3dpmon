@@ -234,16 +234,17 @@
 /* ---------------------------------------------------------------
    FOUC防止: パネルモード時に旧レイアウトを初期非表示
    ※ CSS はJS より先に適用されるため、旧UI のフラッシュを完全に防ぐ
+   ★ body 直下の要素のみを対象とし、GridStack パネル内のクローンには影響させない
 --------------------------------------------------------------- */
-body.panel-mode .title-bar,
-body.panel-mode .camera-card,
-body.panel-mode .preview-wrapper,
-body.panel-mode .info-wrapper,
-body.panel-mode #filament-preview-card,
-body.panel-mode #temp-graph-card,
-body.panel-mode .info-card,
-body.panel-mode .log-card,
-body.panel-mode #print-history-card {
+body.panel-mode > .title-bar,
+body.panel-mode > .camera-card,
+body.panel-mode > .preview-wrapper,
+body.panel-mode > .info-wrapper,
+body.panel-mode > #filament-preview-card,
+body.panel-mode > #temp-graph-card,
+body.panel-mode > .info-card,
+body.panel-mode > .log-card,
+body.panel-mode > #print-history-card {
   display: none !important;
 }
 
