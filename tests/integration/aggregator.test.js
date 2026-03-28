@@ -250,3 +250,125 @@ describe('createMockSpool ヘルパー', () => {
     expect(ids.size).toBe(100);
   });
 });
+
+// =============================================
+// フェーズタイマー _updatePhaseTimer パターンテスト
+// =============================================
+describe('フェーズタイマー状態遷移パターン', () => {
+  /**
+   * _updatePhaseTimer と同じロジックを再現するヘルパー。
+   * aggregator.js の内部関数を直接テストできないため、
+   * ロジックパターンの正しさを検証する。
+   */
+  function updatePhaseTimer(s, tsKey, totalKey, isActive, hasValidDevice, nowMs) {
+    const result = { set: null };
+    if (isActive) {
+      if (!s[tsKey]) s[tsKey] = nowMs;
+      result.set = s[totalKey] + Math.floor((nowMs - s[tsKey]) / 1000);
+    } else if (hasValidDevice && s[tsKey]) {
+      s[totalKey] += Math.floor((nowMs - s[tsKey]) / 1000);
+      s[tsKey] = null;
+      result.set = s[totalKey];
+    } else if (!hasValidDevice) {
+      if (s[tsKey]) {
+        result.set = s[totalKey] + Math.floor((nowMs - s[tsKey]) / 1000);
+      } else if (s[totalKey] > 0) {
+        result.set = s[totalKey];
+      }
+    }
+    return result;
+  }
+
+  it('フェーズ開始 → タイムスタンプ設定、経過秒を返す', () => {
+    const s = { ts: null, total: 0 };
+    const now = 1000000;
+    const r = updatePhaseTimer(s, "ts", "total", true, true, now);
+    expect(s.ts).toBe(now);
+    expect(r.set).toBe(0);
+  });
+
+  it('フェーズ継続 → 経過秒が増加', () => {
+    const start = 1000000;
+    const s = { ts: start, total: 0 };
+    const r = updatePhaseTimer(s, "ts", "total", true, true, start + 5000);
+    expect(r.set).toBe(5);
+    expect(s.ts).toBe(start); // タイムスタンプは変わらない
+  });
+
+  it('フェーズ終了（接続中）→ 累積確定、タイムスタンプnull', () => {
+    const start = 1000000;
+    const s = { ts: start, total: 10 };
+    const r = updatePhaseTimer(s, "ts", "total", false, true, start + 3000);
+    expect(s.ts).toBeNull();
+    expect(s.total).toBe(13); // 10 + 3
+    expect(r.set).toBe(13);
+  });
+
+  it('接続前（復元済みタイムスタンプ）→ 表示のみ、状態変更なし', () => {
+    const start = 1000000;
+    const s = { ts: start, total: 5 };
+    const r = updatePhaseTimer(s, "ts", "total", false, false, start + 2000);
+    expect(s.ts).toBe(start); // 変更なし
+    expect(s.total).toBe(5);  // 変更なし
+    expect(r.set).toBe(7);    // 表示値は 5 + 2
+  });
+
+  it('接続前（タイムスタンプなし、累積あり）→ 累積値を表示', () => {
+    const s = { ts: null, total: 42 };
+    const r = updatePhaseTimer(s, "ts", "total", false, false, 9999999);
+    expect(r.set).toBe(42);
+  });
+
+  it('接続前（タイムスタンプなし、累積なし）→ 何も設定しない', () => {
+    const s = { ts: null, total: 0 };
+    const r = updatePhaseTimer(s, "ts", "total", false, false, 9999999);
+    expect(r.set).toBeNull();
+  });
+
+  it('接続中、非アクティブ、タイムスタンプなし → 何もしない', () => {
+    const s = { ts: null, total: 20 };
+    const r = updatePhaseTimer(s, "ts", "total", false, true, 9999999);
+    expect(r.set).toBeNull(); // 既に停止済み、再設定不要
+    expect(s.total).toBe(20); // 変更なし
+  });
+
+  it('再起動シミュレーション: restore→接続前表示→接続後継続', () => {
+    // Step 1: 復元（tsPrepStart=past, totalPrepSec=10）
+    const restoreTime = 1000000;
+    const s = { ts: restoreTime - 5000, total: 10 };
+
+    // Step 2: 接続前 — 表示のみ
+    const r1 = updatePhaseTimer(s, "ts", "total", false, false, restoreTime);
+    expect(r1.set).toBe(15); // 10 + 5秒
+    expect(s.ts).toBe(restoreTime - 5000); // 状態変更なし
+
+    // Step 3: 接続後、フェーズがアクティブ
+    const r2 = updatePhaseTimer(s, "ts", "total", true, true, restoreTime + 2000);
+    expect(r2.set).toBe(17); // 10 + 7秒
+    expect(s.ts).toBe(restoreTime - 5000); // 既存タイムスタンプ維持
+
+    // Step 4: 接続後、フェーズ終了
+    const r3 = updatePhaseTimer(s, "ts", "total", false, true, restoreTime + 3000);
+    expect(s.ts).toBeNull();
+    expect(s.total).toBe(18); // 10 + 8秒 確定
+    expect(r3.set).toBe(18);
+  });
+
+  it('マルチホスト独立性: 2つの状態が干渉しない', () => {
+    const now = 1000000;
+    const s1 = { ts: now - 3000, total: 0 };
+    const s2 = { ts: now - 1000, total: 5 };
+
+    // host1: アクティブ
+    const r1 = updatePhaseTimer(s1, "ts", "total", true, true, now);
+    // host2: 終了
+    const r2 = updatePhaseTimer(s2, "ts", "total", false, true, now);
+
+    expect(r1.set).toBe(3);  // host1: 3秒
+    expect(r2.set).toBe(6);  // host2: 5 + 1秒
+    expect(s1.ts).toBe(now - 3000); // host1: 維持
+    expect(s2.ts).toBeNull();       // host2: クリア
+    expect(s1.total).toBe(0);       // host1: 未確定
+    expect(s2.total).toBe(6);       // host2: 確定
+  });
+});

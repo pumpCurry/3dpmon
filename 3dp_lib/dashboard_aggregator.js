@@ -162,6 +162,48 @@ function _createHostState() {
 }
 
 /**
+ * フェーズタイマーの統一更新ヘルパー。
+ * prep/check/pause の3タイマーは同一パターンで動作する:
+ *  - isActive=true → タイマー開始/継続、表示更新
+ *  - isActive=false かつ接続中 → タイマー停止、累積値確定
+ *  - 接続前 → 表示のみ更新（状態変更なし）
+ *
+ * @private
+ * @param {AggregatorHostState} s - per-host状態
+ * @param {string} tsKey    - タイムスタンプキー（例: "tsPrepStart"）
+ * @param {string} totalKey - 累積秒キー（例: "totalPrepSec"）
+ * @param {string} field    - storedData フィールド名（例: "preparationTime"）
+ * @param {boolean} isActive - このフェーズが現在アクティブか
+ * @param {boolean} hasValidDevice - 有効なデバイス状態があるか
+ * @param {number} nowMs - 現在時刻(ms)
+ * @param {Function} _set - storedData 設定関数
+ * @param {Function} [getInitialTs] - 初回タイムスタンプ生成関数（省略時は nowMs）
+ */
+function _updatePhaseTimer(s, tsKey, totalKey, field, isActive, hasValidDevice, nowMs, _set, getInitialTs) {
+  if (isActive) {
+    // フェーズ開始/継続
+    if (!s[tsKey]) {
+      s[tsKey] = getInitialTs ? getInitialTs() : nowMs;
+    }
+    const sec = s[totalKey] + Math.floor((nowMs - s[tsKey]) / 1000);
+    _set(field, sec, true);
+  } else if (hasValidDevice && s[tsKey]) {
+    // 接続中かつフェーズ終了 → 累積値を確定してタイムスタンプをクリア
+    s[totalKey] += Math.floor((nowMs - s[tsKey]) / 1000);
+    s[tsKey] = null;
+    _set(field, s[totalKey], true);
+  } else if (!hasValidDevice) {
+    // 接続前 → 復元値から表示のみ更新（状態変更なし）
+    if (s[tsKey]) {
+      _set(field, s[totalKey] + Math.floor((nowMs - s[tsKey]) / 1000), true);
+    } else if (s[totalKey] > 0) {
+      _set(field, s[totalKey], true);
+    }
+  }
+  // hasValidDevice=true かつ !isActive かつ !s[tsKey] → 何もしない（既に停止済み）
+}
+
+/**
  * 指定ホストの AggregatorHostState を返す（無ければ作成）。
  * @private
  * @param {string} hostname - ホスト名
@@ -713,125 +755,74 @@ function aggregateTimersAndPredictions(vals, hostname) {
     s.tsPauseStart   = null;
   }
 
-  // ── 4) タイマー集計／表示用セット ─────────────────────────────────
-  // ★ 全タイマー: device が undefined（接続前）の場合は復元値を維持し操作しない
-  //    復元済みの tsPrepStart/tsCheckStart/tsPauseStart がリセットされるのを防ぐ
-  if (_hasValidDeviceState) {
+  // ── 4) フェーズタイマー ─────────────────────────────────────────
+  //
+  // 【設計原則】
+  //  - 各タイマーは { tsXxxStart, totalXxxSec } のペアで管理
+  //  - tsXxxStart != null → フェーズ進行中（経過秒 = totalXxxSec + (now - tsXxxStart)）
+  //  - tsXxxStart == null → フェーズ停止中（表示値 = totalXxxSec）
+  //  - _hasValidDeviceState == false（接続前）→ 表示のみ更新、状態遷移しない
+  //  - 各フェーズは排他的: prep/check/pause は同時に1つだけ active
+  //
+  const isPaused = (st === PRINT_STATE_CODE.printPaused || st === 3);
+  const doneStates = new Set([PRINT_STATE_CODE.printDone, PRINT_STATE_CODE.printFailed]);
 
   // 4-1. 印刷前準備時間
-  // ★ actualStartEpoch が設定済み or 進捗>0 なら準備フェーズは完了済み
-  const prepPhaseActive = (
+  const prepPhaseActive = _hasValidDeviceState && (
     st === PRINT_STATE_CODE.printStarted &&
     job === 0 &&
     selfPct >= 0 && selfPct <= 9 &&
-    !s.tsCheckStart &&
-    !s.tsPauseStart &&
+    !s.tsCheckStart && !s.tsPauseStart &&
     s.actualStartEpoch === null &&
     progPct <= 0
   );
-  if (prepPhaseActive) {
-    if (!s.tsPrepStart) {
-      // 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
-      s.tsPrepStart = numId ? numId * 1000 : nowMs;
-    }
-    const sec = s.totalPrepSec + Math.floor((nowMs - s.tsPrepStart) / 1000);
-    _set("preparationTime", sec, true);
-  } else if (s.tsPrepStart) {
-    s.totalPrepSec += Math.floor((nowMs - s.tsPrepStart) / 1000);
-    s.tsPrepStart   = null;
-    _set("preparationTime", s.totalPrepSec, true);
-  }
+  _updatePhaseTimer(s, "tsPrepStart", "totalPrepSec", "preparationTime",
+    prepPhaseActive, _hasValidDeviceState, nowMs, _set,
+    () => numId ? numId * 1000 : nowMs  // 初回タイムスタンプ: 印刷開始時刻基準
+  );
 
   // 4-2. ファーストレイヤー確認時間
-  if (
+  const checkPhaseActive = _hasValidDeviceState && (
     s.tsPrepStart === null &&
     s.tsPauseStart === null &&
     s.actualStartEpoch !== null &&
-    (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused || st === 3) &&
+    (st === PRINT_STATE_CODE.printStarted || isPaused) &&
     selfPct >= 30 && selfPct <= 39
-  ) {
-    if (!s.tsCheckStart) s.tsCheckStart = nowMs;
-    const sec = s.totalCheckSec + Math.floor((nowMs - s.tsCheckStart) / 1000);
-    _set("firstLayerCheckTime", sec, true);
-  } else if (
-    s.tsCheckStart &&
-    (
-      (
-        st !== PRINT_STATE_CODE.printStarted &&
-        st !== PRINT_STATE_CODE.printPaused &&
-        st !== 3
-      ) ||
-      selfPct < 30 ||
-      selfPct > 39 ||
-      s.tsPrepStart !== null ||
-      s.tsPauseStart !== null
-    )
-  ) {
-    s.totalCheckSec += Math.floor((nowMs - s.tsCheckStart) / 1000);
-    s.tsCheckStart   = null;
-    _set("firstLayerCheckTime", s.totalCheckSec, true);
-  }
+  );
+  _updatePhaseTimer(s, "tsCheckStart", "totalCheckSec", "firstLayerCheckTime",
+    checkPhaseActive, _hasValidDeviceState, nowMs, _set);
 
   // 4-3. 一時停止時間
-  // ★ st がpausedなら一時停止中。prep/check と排他（同時に計測しない）
-  //    selfPct やjob条件は不要: 一時停止はどのフェーズでも起こりうる
-  const isPaused = (st === PRINT_STATE_CODE.printPaused || st === 3);
-  if (isPaused && !s.tsPrepStart && !s.tsCheckStart) {
-    if (!s.tsPauseStart) s.tsPauseStart = nowMs;
-    const sec = s.totalPauseSec + Math.floor((nowMs - s.tsPauseStart) / 1000);
-    _set("pauseTime", sec, true);
-    _set("pauseTime", { value: formatDuration(sec), unit: "" }, false);
-  } else if (s.tsPauseStart && !isPaused) {
-    s.totalPauseSec += Math.floor((nowMs - s.tsPauseStart) / 1000);
-    s.tsPauseStart   = null;
-    _set("pauseTime", s.totalPauseSec, true);
-  }
-
-  } else {
-    // ★ 接続前: 復元済みのタイマー値を使って表示のみ更新（リセットしない）
-    if (s.tsPrepStart) {
-      const sec = s.totalPrepSec + Math.floor((nowMs - s.tsPrepStart) / 1000);
-      _set("preparationTime", sec, true);
-    } else if (s.totalPrepSec > 0) {
-      _set("preparationTime", s.totalPrepSec, true);
-    }
-    if (s.tsCheckStart) {
-      const sec = s.totalCheckSec + Math.floor((nowMs - s.tsCheckStart) / 1000);
-      _set("firstLayerCheckTime", sec, true);
-    } else if (s.totalCheckSec > 0) {
-      _set("firstLayerCheckTime", s.totalCheckSec, true);
-    }
-    if (s.tsPauseStart) {
-      const sec = s.totalPauseSec + Math.floor((nowMs - s.tsPauseStart) / 1000);
-      _set("pauseTime", sec, true);
-    } else if (s.totalPauseSec > 0) {
-      _set("pauseTime", s.totalPauseSec, true);
-    }
+  const pausePhaseActive = _hasValidDeviceState && (
+    isPaused && !s.tsPrepStart && !s.tsCheckStart
+  );
+  _updatePhaseTimer(s, "tsPauseStart", "totalPauseSec", "pauseTime",
+    pausePhaseActive, _hasValidDeviceState, nowMs, _set);
+  // pauseTime は表示用フォーマットも設定
+  if (s.tsPauseStart || s.totalPauseSec > 0) {
+    const sec = s.tsPauseStart
+      ? s.totalPauseSec + Math.floor((nowMs - s.tsPauseStart) / 1000)
+      : s.totalPauseSec;
+    if (sec > 0) _set("pauseTime", { value: formatDuration(sec), unit: "" }, false);
   }
 
   // 4-4. 完了後経過時間
-  // ★ device が undefined（接続前）の場合は復元済み値を維持し、リセットしない
-  const doneStates = new Set([
-    PRINT_STATE_CODE.printDone,
-    PRINT_STATE_CODE.printFailed
-  ]);
-  if (_hasValidDeviceState) {
-    // ★ 完了経過時間: device=idle かつ st=done/failed のときのみカウント
-    //    それ以外（印刷中、一時停止中、新規印刷開始）はリセット
-    const isIdle = device === PRINT_STATE_CODE.printIdle;
-    const isDone = doneStates.has(st);
-    if (isIdle && isDone) {
-      if (!s.tsCompleteStart) {
-        s.tsCompleteStart = nowMs;
-        _set("completionElapsedTime", 0, true);
-      }
-      const sec = Math.floor((nowMs - s.tsCompleteStart) / 1000);
-      _set("completionElapsedTime", sec, true);
-    } else if (s.tsCompleteStart && (!isIdle || !isDone)) {
-      // device が printing になった or st が done/failed でなくなった → リセット
-      s.tsCompleteStart = null;
-      _set("completionElapsedTime", null, true);
+  const completePhaseActive = _hasValidDeviceState && (
+    device === PRINT_STATE_CODE.printIdle && doneStates.has(st)
+  );
+  if (completePhaseActive) {
+    if (!s.tsCompleteStart) {
+      s.tsCompleteStart = nowMs;
+      _set("completionElapsedTime", 0, true);
     }
+    _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
+  } else if (_hasValidDeviceState && s.tsCompleteStart) {
+    // 接続中かつフェーズ終了 → リセット
+    s.tsCompleteStart = null;
+    _set("completionElapsedTime", null, true);
+  } else if (!_hasValidDeviceState && s.tsCompleteStart) {
+    // 接続前 → 復元値から表示のみ
+    _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
   }
 
   // ── 5) 予想残り時間／予想終了時刻 ────────────────────────────────
