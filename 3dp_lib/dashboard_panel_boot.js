@@ -235,6 +235,7 @@ function _convertCardsToTemplates() {
          - control-cmd: ボタンのみ（cmd-group 要素群）
          - control-temp: 温度・ファン制御（.control-temp-area） */
       const clone = originalEl.cloneNode(true);
+      clone.classList.remove("legacy-card-source");
 
       /* テンプレート1: 操作ボタン */
       const tplCmd = document.createElement("template");
@@ -265,6 +266,7 @@ function _convertCardsToTemplates() {
          - history: 印刷履歴テーブル
          - file-list: ファイル一覧テーブル + アップロード */
       const clone = originalEl.cloneNode(true);
+      clone.classList.remove("legacy-card-source");
 
       /* テンプレート1: 印刷履歴 */
       const tplHistory = document.createElement("template");
@@ -298,8 +300,10 @@ function _convertCardsToTemplates() {
     const tpl = document.createElement("template");
     tpl.id = mapping.templateId;
 
-    /* 元の要素の内容をテンプレートに複製 */
-    tpl.content.appendChild(originalEl.cloneNode(true));
+    /* 元の要素の内容をテンプレートに複製（legacy-card-source マーカーを除去） */
+    const cloned = originalEl.cloneNode(true);
+    cloned.classList.remove("legacy-card-source");
+    tpl.content.appendChild(cloned);
 
     /* テンプレートを body 末尾に追加 */
     document.body.appendChild(tpl);
