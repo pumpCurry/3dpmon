@@ -720,8 +720,12 @@ function aggregateTimersAndPredictions(vals, hostname) {
   }
 
   // ── 3) 一時停止→再開 のシフト補正 ─────────────────────────────────
-  const prevState = Number(monitorData.machines[host]?.runtimeData?.state) || 0;
+  // ★ 接続前は状態遷移判定をスキップ（復元値を維持）
+  const prevState = _hasValidDeviceState
+    ? (Number(monitorData.machines[host]?.runtimeData?.state) || 0)
+    : 0;
   if (
+    _hasValidDeviceState &&
     prevState === PRINT_STATE_CODE.printPaused &&
     st        === PRINT_STATE_CODE.printStarted &&
     s.tsPauseStart
@@ -731,6 +735,10 @@ function aggregateTimersAndPredictions(vals, hostname) {
   }
 
   // ── 4) タイマー集計／表示用セット ─────────────────────────────────
+  // ★ 全タイマー: device が undefined（接続前）の場合は復元値を維持し操作しない
+  //    復元済みの tsPrepStart/tsCheckStart/tsPauseStart がリセットされるのを防ぐ
+  if (_hasValidDeviceState) {
+
   // 4-1. 印刷前準備時間
   if (
     st === PRINT_STATE_CODE.printStarted &&
@@ -740,13 +748,10 @@ function aggregateTimersAndPredictions(vals, hostname) {
     !s.tsPauseStart
   ) {
     if (!s.tsPrepStart) {
-      // ----- 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
-      // printStartTime(id) が取得できていればそこからの経過秒を算出する
-      // まだ得られていない場合は現在時刻から計測を開始する
+      // 再読み込み時にタイマーがリセットされないよう印刷開始時刻を基準に補正
       s.tsPrepStart = numId ? numId * 1000 : nowMs;
     }
     const sec = s.totalPrepSec + Math.floor((nowMs - s.tsPrepStart) / 1000);
-    // internal
     _set("preparationTime", sec, true);
   } else if (s.tsPrepStart) {
     s.totalPrepSec += Math.floor((nowMs - s.tsPrepStart) / 1000);
@@ -817,6 +822,28 @@ function aggregateTimersAndPredictions(vals, hostname) {
     s.totalPauseSec += Math.floor((nowMs - s.tsPauseStart) / 1000);
     s.tsPauseStart   = null;
     _set("pauseTime", s.totalPauseSec, true);
+  }
+
+  } else {
+    // ★ 接続前: 復元済みのタイマー値を使って表示のみ更新（リセットしない）
+    if (s.tsPrepStart) {
+      const sec = s.totalPrepSec + Math.floor((nowMs - s.tsPrepStart) / 1000);
+      _set("preparationTime", sec, true);
+    } else if (s.totalPrepSec > 0) {
+      _set("preparationTime", s.totalPrepSec, true);
+    }
+    if (s.tsCheckStart) {
+      const sec = s.totalCheckSec + Math.floor((nowMs - s.tsCheckStart) / 1000);
+      _set("firstLayerCheckTime", sec, true);
+    } else if (s.totalCheckSec > 0) {
+      _set("firstLayerCheckTime", s.totalCheckSec, true);
+    }
+    if (s.tsPauseStart) {
+      const sec = s.totalPauseSec + Math.floor((nowMs - s.tsPauseStart) / 1000);
+      _set("pauseTime", sec, true);
+    } else if (s.totalPauseSec > 0) {
+      _set("pauseTime", s.totalPauseSec, true);
+    }
   }
 
   // 4-4. 完了後経過時間
