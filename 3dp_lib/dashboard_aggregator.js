@@ -821,11 +821,11 @@ function aggregateTimersAndPredictions(vals, hostname) {
 
   // 4-4. 完了後経過時間
   // ★ device が undefined（接続前）の場合は復元済み値を維持し、リセットしない
+  const doneStates = new Set([
+    PRINT_STATE_CODE.printDone,
+    PRINT_STATE_CODE.printFailed
+  ]);
   if (_hasValidDeviceState) {
-    const doneStates = new Set([
-      PRINT_STATE_CODE.printDone,
-      PRINT_STATE_CODE.printFailed
-    ]);
     const isIdle = device === PRINT_STATE_CODE.printIdle;
     if (isIdle && doneStates.has(st)) {
       if (!s.tsCompleteStart) {
