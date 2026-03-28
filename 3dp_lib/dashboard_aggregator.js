@@ -672,36 +672,15 @@ function aggregateTimersAndPredictions(vals, hostname) {
   const { id, st, jobTime: job, selfPct, prog, left, device, finish } = vals;
   const progPct = prog / 100;
 
-  // ---- 完了後経過タイマーの復元処理 ------------------------------
-  // ★ 有効なデバイス状態が届く前（device が undefined/null）は復元済み値を維持し、
-  //    リセット判定をスキップしてレースコンディションを防ぐ。
+  // ---- デバイス状態の有効性判定 ----------------------------------------
+  // device が undefined/null（接続前）の場合は全タイマーの状態遷移をスキップし、
+  // restoreAggregatorState で復元された値を維持する。
   const _hasValidDeviceState = (device != null);
 
-  if (s.tsCompleteStart != null) {
-    // tsCompleteStart が永続化から復元済みなら、現在時刻との差を即座に算出
+  // completionElapsedTime: 接続前は復元値から経過秒を継続表示のみ
+  // ★ 正規のタイマーロジックはセクション 4-4 に一本化。ここでは復元値の表示のみ。
+  if (!_hasValidDeviceState && s.tsCompleteStart != null) {
     _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
-  } else if (_hasValidDeviceState) {
-    // tsCompleteStart が null で、かつ有効なデータが届いている場合のみ履歴から復元を試みる
-    // （接続前の undefined 状態で誤って null のまま確定させない）
-    const historyData = machine?.historyData || [];
-    const persistedHistory = machine?.printStore?.history || [];
-    const last = historyData[historyData.length - 1]
-      || (s.prevPrintID != null
-        ? persistedHistory.find(j => Number(j.id) === Number(s.prevPrintID))
-        : null);
-    if (
-      last &&
-      s.prevPrintID !== null &&
-      Number(last.id) === Number(s.prevPrintID) &&
-      (last.finishTime || last.endtime)
-    ) {
-      const finStr = last.finishTime || (last.endtime ? new Date(Number(last.endtime) * 1000).toISOString() : null);
-      const fin = finStr ? Date.parse(finStr) : NaN;
-      if (!isNaN(fin)) {
-        s.tsCompleteStart = fin;
-        _set("completionElapsedTime", Math.floor((nowMs - fin) / 1000), true);
-      }
-    }
   }
 
   // ── 2) PrintID 切替検出 → 各種リセット ────────────────────────────────────
@@ -1359,6 +1338,28 @@ export function restoreAggregatorState(hostname) {
     if (k === "prevPrintID")      field = "prevPrintID";
     setStoredDataForHost(host, field, v, true);
   });
+
+  // tsCompleteStart が localStorage に無かったが、履歴から復元可能な場合
+  // （クラッシュや強制終了で persist が走らなかったケース）
+  if (s.tsCompleteStart == null && s.prevPrintID != null) {
+    const machine = monitorData.machines[host];
+    const historyData = machine?.historyData || [];
+    const persistedHistory = machine?.printStore?.history || [];
+    const last = historyData[historyData.length - 1]
+      || persistedHistory.find(j => Number(j.id) === Number(s.prevPrintID));
+    if (
+      last &&
+      Number(last.id) === Number(s.prevPrintID) &&
+      (last.finishTime || last.endtime)
+    ) {
+      const finStr = last.finishTime || (last.endtime ? new Date(Number(last.endtime) * 1000).toISOString() : null);
+      const fin = finStr ? Date.parse(finStr) : NaN;
+      if (!isNaN(fin)) {
+        s.tsCompleteStart = fin;
+        setStoredDataForHost(host, "completionElapsedTime", Math.floor((Date.now() - fin) / 1000), true);
+      }
+    }
+  }
 
   // 復元後に actualStartTime が存在し印刷ID も分かっている場合は
   // 履歴に反映して UI を即時更新する
