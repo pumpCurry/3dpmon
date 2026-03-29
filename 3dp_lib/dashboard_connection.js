@@ -50,7 +50,7 @@ import {
   scopedById
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
-import { aggregatorUpdate } from "./dashboard_aggregator.js";
+import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
 import { handleMessage, processData } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
@@ -493,6 +493,11 @@ function _syncPanelsForHost(hostname, oldHost) {
   if (migrated === 0) {
     ensureHostPanels(hostname);
   }
+
+  /* ★ 接続確立時にaggregator状態を復元（全ホスト共通）
+     handleMessage の初回ブランチでは initHost のみ復元されるが、
+     2台目以降のホストはここで復元する。既に復元済みでも冪等。 */
+  restoreAggregatorState(hostname);
 
   /* パネル生成後、processData がパネル生成前に到着済みのデータを
      新しい DOM に反映するため、全キーを dirty にマークして
