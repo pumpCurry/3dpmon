@@ -88,8 +88,31 @@ export let currentHostname = null;
  *
  * true の間は NotificationManager.notify() による通知を抑制します。
  * 接続処理中や機器未選択時に誤通知が発生するのを防止する目的で使用します。
- * @type {boolean}
+ * ★ per-host Map に変更: 各ホスト独立に抑制/許可を管理する。
+ *   host2 の切断が host1 の通知を抑制しないようにする。
+ * @type {Map<string, boolean>}
  */
+const _notificationSuppressedMap = new Map();
+
+/**
+ * 指定ホストの通知が抑制されているかを返す。
+ * ホスト未登録の場合はグローバル起動中抑制として true を返す。
+ *
+ * @param {string} [hostname] - ホスト名（省略時は全ホスト対象でいずれかが非抑制なら false）
+ * @returns {boolean}
+ */
+export function isNotificationSuppressed(hostname) {
+  if (hostname) return _notificationSuppressedMap.get(hostname) ?? true;
+  // hostname 省略時: 全ホストが抑制されているかチェック
+  if (_notificationSuppressedMap.size === 0) return true;
+  for (const v of _notificationSuppressedMap.values()) {
+    if (!v) return false;
+  }
+  return true;
+}
+
+// 後方互換: 旧コードが notificationSuppressed を直接参照している箇所向け
+// ★ 新コードは isNotificationSuppressed(hostname) を使うこと
 export let notificationSuppressed = true;
 
 /**
@@ -97,10 +120,20 @@ export let notificationSuppressed = true;
  * 通知抑制状態を更新します。
  *
  * @param {boolean} flag - true で通知抑制、false で通知許可
+ * @param {string} [hostname] - ホスト名（省略時は全ホスト一括設定）
  * @returns {void}
  */
-export function setNotificationSuppressed(flag) {
-  notificationSuppressed = flag;
+export function setNotificationSuppressed(flag, hostname) {
+  if (hostname) {
+    _notificationSuppressedMap.set(hostname, flag);
+  } else {
+    // hostname 省略: 全ホスト一括（起動時の初期抑制用）
+    for (const h of Object.keys(monitorData.machines)) {
+      if (h !== PLACEHOLDER_HOSTNAME) _notificationSuppressedMap.set(h, flag);
+    }
+  }
+  // 後方互換用グローバルフラグも更新
+  notificationSuppressed = isNotificationSuppressed();
 }
 
 /**

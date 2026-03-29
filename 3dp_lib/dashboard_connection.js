@@ -51,6 +51,7 @@ import {
 } from "./dashboard_data.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
+import { restorePrintResume } from "./3dp_dashboard_init.js";
 import { handleMessage, processData } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
@@ -494,10 +495,14 @@ function _syncPanelsForHost(hostname, oldHost) {
     ensureHostPanels(hostname);
   }
 
-  /* ★ 接続確立時にaggregator状態を復元（全ホスト共通）
+  /* ★ 接続確立時に per-host 状態を復元（全ホスト共通）
      handleMessage の初回ブランチでは initHost のみ復元されるが、
      2台目以降のホストはここで復元する。既に復元済みでも冪等。 */
   restoreAggregatorState(hostname);
+
+  /* 印刷再開用データの復元（per-host） */
+  const curId = Number(monitorData.machines[hostname]?.storedData?.printStartTime?.rawValue || 0) || null;
+  restorePrintResume(hostname, curId);
 
   /* パネル生成後、processData がパネル生成前に到着済みのデータを
      新しい DOM に反映するため、全キーを dirty にマークして
@@ -834,8 +839,8 @@ function handleSocketError(error, host) {
  */
 function handleSocketClose(host) {
   pushLog("WebSocket接続が閉じられました。", "warn", false, host);
- // 切断直後は通知を抑制する
-  setNotificationSuppressed(true);
+ // 切断直後は該当ホストの通知を抑制する（他ホストには影響しない）
+  setNotificationSuppressed(true, host);
   const st = getState(host);
 
   // ホスト名待ちポーリングが残っていれば解除

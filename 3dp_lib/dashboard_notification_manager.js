@@ -29,7 +29,7 @@
 
 import {
   monitorData,
-  notificationSuppressed
+  isNotificationSuppressed
 } from "./dashboard_data.js";
 import { saveUnifiedStorage }           from "./dashboard_storage.js";
 import { audioManager }                 from "./dashboard_audio_manager.js";
@@ -373,7 +373,7 @@ export class NotificationManager {
    * @param {object} [payload] - マクロ展開用データ（hostname を含むこと）
   */
   notify(type, payload = {}) {
-    if (!this.enabled || notificationSuppressed) return;
+    if (!this.enabled || isNotificationSuppressed(payload?.hostname)) return;
     const def = this.map[type];
     if (!def?.enabled) return;
 

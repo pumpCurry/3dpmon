@@ -72,9 +72,9 @@ export async function initializeDashboard() {
 
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
-  restoreLegacyStoredData();
-  cleanupLegacy();
   restoreUnifiedStorage();
+  // ★ restoreLegacyStoredData / cleanupLegacy は handleMessage の初回ホスト確定後に実行
+  //    （PLACEHOLDER 状態で呼ぶとキーが消失するため）
   // 読み込んだストレージ内容を通知マネージャへ反映
   notificationManager.loadSettings();
   if (!monitorData.filamentSpools.length) {

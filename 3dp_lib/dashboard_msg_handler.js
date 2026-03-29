@@ -39,7 +39,7 @@ import {
   currentHostname,
   setCurrentHostname,
   PLACEHOLDER_HOSTNAME,
-  notificationSuppressed,
+  isNotificationSuppressed,
   setNotificationSuppressed,
   setStoredDataForHost,
   scopedById,
@@ -321,9 +321,12 @@ export function handleMessage(data) {
     // 初期化中は通知を抑制する
     setNotificationSuppressed(true);
 
-    // --- ストレージ＆ホスト初期化 ---
-    restoreUnifiedStorage();
+    // --- ホスト初期化 ---
+    // ★ restoreUnifiedStorage() は initializeDashboard() で既に実行済み。
+    //    ここで再度呼ぶと monitorData.machines が上書きされ、
+    //    先に接続した他ホストのランタイムデータが消失する。
     setCurrentHostname(data.hostname);
+    // レガシーデータ移行（v1.40以前 → v1.40+）: hostname 確定後に実行
     restoreLegacyStoredData();
     cleanupLegacy();
 
@@ -334,6 +337,12 @@ export function handleMessage(data) {
     const bufVideos  = [];
     const initHost = data.hostname || currentHostname;
     monitorData.temporaryBuffer.forEach(d => {
+      // ★ hostname 不明のバッファは initHost に帰属させるが、
+      //    別ホストのデータが混入している可能性をログで警告
+      const bufHost = d.hostname || initHost;
+      if (!d.hostname && d !== data) {
+        console.warn("[handleMessage] バッファデータに hostname なし → initHost に帰属:", initHost);
+      }
       if (Array.isArray(d.historyList)) {
         bufHistory.push(...d.historyList);
       }
@@ -394,8 +403,8 @@ export function handleMessage(data) {
       scopedById("print-current-container", initHost), initHost
     );
 
-    // 初期化完了、通知抑制を解除
-    setNotificationSuppressed(false);
+    // 初期化完了、このホストの通知抑制を解除
+    setNotificationSuppressed(false, initHost);
 
   }
 
@@ -436,10 +445,10 @@ export function processData(data, hostname) {
     machine.runtimeData.lastError = null;
   }
 
-  // 初回ホスト初期化完了後は通知抑制を解除
+  // 初回ホスト初期化完了後は該当ホストの通知抑制を解除
   // (handleMessage の初期化パスを通らない2台目以降のホストにも対応)
-  if (_initializedHosts.has(host) && notificationSuppressed) {
-    setNotificationSuppressed(false);
+  if (_initializedHosts.has(host) && isNotificationSuppressed(host)) {
+    setNotificationSuppressed(false, host);
   }
 
   // per-host 初期化（各ホスト初回のみ）: storedData キーの事前作成
