@@ -227,14 +227,40 @@ app.whenReady().then(async () => {
   // HTTP + WSリレーサーバを起動（子クライアントが接続可能に）
   try {
     httpServer = await startHttpServer(RELAY_PORT);
-    // WSリレーは Phase 6-2 で追加
-    // relayServer = require("./relay_server.js").startRelayServer(httpServer);
+    // WSリレーサーバ起動（子クライアント接続を受け付ける）
+    const { startRelayServer } = require("./relay_server.js");
+    relayServer = startRelayServer(httpServer, {
+      sendToRenderer: (channel, data) => {
+        if (mainWindow?.webContents) {
+          mainWindow.webContents.send(channel, data);
+        }
+      }
+    });
   } catch (e) {
     console.warn("[3dpmon] HTTPサーバ起動失敗、file://モードで動作:", e.message);
     httpServer = null;
   }
 
   createWindow();
+
+  /* ─── IPC ブリッジ: レンダラー ↔ リレーサーバ ─── */
+
+  // レンダラー → リレー: state delta 配信
+  ipcMain.on("relay-broadcast", (_, delta) => {
+    if (relayServer) relayServer.broadcastDelta(delta);
+  });
+
+  // レンダラー → リレー: 特定クライアントへのスナップショット送信
+  ipcMain.on("relay-send-snapshot", (_, { clientId, state }) => {
+    if (relayServer) relayServer.sendToClient(clientId, { type: "relay-snapshot", state });
+  });
+
+  // リレーサーバ情報の問い合わせ
+  ipcMain.handle("relay-get-config", () => ({
+    enabled: !!relayServer,
+    port: RELAY_PORT,
+    clients: relayServer?.getClients() || []
+  }));
 
   /* macOS: Dock アイコンクリック時にウィンドウ再生成 */
   app.on("activate", () => {

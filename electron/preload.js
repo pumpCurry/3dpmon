@@ -27,7 +27,7 @@
 
 "use strict";
 
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
 /**
  * レンダラープロセスに公開する API を定義する。
@@ -56,5 +56,52 @@ contextBridge.exposeInMainWorld("electronAPI", {
    * @function getPlatform
    * @returns {string} "win32" | "darwin" | "linux" 等
    */
-  getPlatform: () => process.platform
+  getPlatform: () => process.platform,
+
+  /* ─── リレーサーバ IPC API ─── */
+
+  /**
+   * state delta をリレーサーバに配信する。
+   * aggregator 周期ごとにレンダラーから呼び出す。
+   *
+   * @param {Object} delta - 差分データ
+   */
+  relayBroadcast: (delta) => ipcRenderer.send("relay-broadcast", delta),
+
+  /**
+   * 特定クライアントに state snapshot を送信する。
+   *
+   * @param {string} clientId - 対象クライアントID
+   * @param {Object} state - フルステートデータ
+   */
+  relaySendSnapshot: (clientId, state) => ipcRenderer.send("relay-send-snapshot", { clientId, state }),
+
+  /**
+   * リレーサーバ設定を取得する。
+   *
+   * @returns {Promise<{enabled: boolean, port: number, clients: Array}>}
+   */
+  relayGetConfig: () => ipcRenderer.invoke("relay-get-config"),
+
+  /**
+   * リレー経由のコマンドを受信するリスナーを登録する。
+   * 子（satellite）からのコマンドを親レンダラーが処理する。
+   *
+   * @param {Function} callback - (data: {target, method, params}) => void
+   */
+  onRelayCommand: (callback) => ipcRenderer.on("relay-command", (_, data) => callback(data)),
+
+  /**
+   * リレー経由のフィラメント操作を受信するリスナーを登録する。
+   *
+   * @param {Function} callback - (data: {action, data}) => void
+   */
+  onRelayFilament: (callback) => ipcRenderer.on("relay-filament", (_, data) => callback(data)),
+
+  /**
+   * リレー経由のスナップショット要求を受信するリスナーを登録する。
+   *
+   * @param {Function} callback - (data: {clientId}) => void
+   */
+  onRelayRequestSnapshot: (callback) => ipcRenderer.on("relay-request-snapshot", (_, data) => callback(data))
 });
