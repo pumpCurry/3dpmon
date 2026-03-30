@@ -538,6 +538,9 @@ function _syncPanelsForHost(hostname, oldHost) {
  * @returns {void}
  */
 export function connectWs(hostOrDest) {
+  // ★ リレー子モードではプリンタ直接接続をスキップ
+  if (window._3dpmonRelayChild) return;
+
   let dest = hostOrDest || "";
   if (!dest) return;
   if (!dest.includes(":")) dest += ":9999";
@@ -1050,6 +1053,11 @@ export function setupConnectButton() {
  * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendCommand(method, params = {}, host) {
+  // ★ リレー子モード: 親経由でコマンド送信
+  if (window._3dpmonRelayChild) {
+    import("./dashboard_client_sync.js").then(m => m.sendRelayCommand(method, params, host));
+    return;
+  }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     const now = Date.now();

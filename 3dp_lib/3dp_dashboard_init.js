@@ -95,16 +95,29 @@ export async function initializeDashboard() {
     document.body.appendChild(container);
   }
 
-  // (4) ページロード時の自動接続
-  // 保存済みの全接続先（wsDest + connectionTargets）に自動接続
-  const hasTargets = monitorData.appSettings.wsDest
-    || (monitorData.appSettings.connectionTargets?.length > 0);
-  if (monitorData.appSettings.autoConnect && hasTargets) {
-    setTimeout(() => {
-      connectAllSavedTargets();
-    }, 1500);
-  } else {
-    showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります","warn");
+  // (4) リレーモード検出 + ページロード時の自動接続
+  let isRelayChild = false;
+  try {
+    const { initClientSync } = await import("./dashboard_client_sync.js");
+    isRelayChild = initClientSync();
+    if (isRelayChild) {
+      window._3dpmonRelayChild = true; // グローバルフラグ（connectWs/sendCommand でチェック）
+    }
+  } catch (e) {
+    console.debug("[init] client_sync 読み込みスキップ:", e.message);
+  }
+
+  // 子モードでなければ通常のプリンタ直接接続
+  if (!isRelayChild) {
+    const hasTargets = monitorData.appSettings.wsDest
+      || (monitorData.appSettings.connectionTargets?.length > 0);
+    if (monitorData.appSettings.autoConnect && hasTargets) {
+      setTimeout(() => {
+        connectAllSavedTargets();
+      }, 1500);
+    } else {
+      showAlert("接続先欄に機器アドレスを入力して、接続を押すと監視がはじまります","warn");
+    }
   }
 
   // (5) 自動保存タイマー＆beforeunload 登録
