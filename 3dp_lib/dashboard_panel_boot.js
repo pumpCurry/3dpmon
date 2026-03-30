@@ -342,6 +342,15 @@ function _convertCardsToTemplates() {
  */
 function _initRelayBridgeIfParent() {
   if (!window.electronAPI?.relayBroadcast) return; // Electron親モードでない
+
+  // 親モードバッジ表示
+  const badge = document.getElementById("relay-mode-badge");
+  if (badge) {
+    badge.textContent = "★ PARENT";
+    badge.className = "relay-mode-badge parent";
+    badge.style.display = "";
+  }
+
   import("./dashboard_relay_bridge.js").then(({ initRelayBridge, relayBroadcastIfNeeded }) => {
     if (initRelayBridge()) {
       registerRelayCallback(relayBroadcastIfNeeded);

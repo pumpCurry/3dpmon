@@ -182,10 +182,12 @@ function _handleRelayMessage(msg) {
   switch (msg.type) {
     case "relay-init":
       _clientId = msg.clientId;
-      _relayMode = msg.mode; // サーバ側でモードが変更された場合に追従
+      _relayMode = msg.mode;
       console.info(`[client-sync] 初期化: clientId=${_clientId}, mode=${_relayMode}`);
-      // body にモードクラスを設定
+      // body にモードクラスを設定（readonly制御CSSが適用される）
       document.body.classList.add(`relay-${_relayMode}`);
+      // トップバーにモードバッジを表示
+      _showModeBadge(_relayMode);
       break;
 
     case "relay-snapshot":
@@ -301,6 +303,24 @@ export function sendRelayCommand(method, params, hostname) {
  * @param {Object} data - 操作データ
  * @returns {boolean} 送信成功なら true
  */
+/**
+ * トップバーにリレーモードバッジを表示する。
+ *
+ * @private
+ * @param {string} mode - "readonly" | "satellite"
+ */
+function _showModeBadge(mode) {
+  const badge = document.getElementById("relay-mode-badge");
+  if (!badge) return;
+  const labels = {
+    readonly: "👁 READONLY",
+    satellite: "🛰 SATELLITE"
+  };
+  badge.textContent = labels[mode] || mode;
+  badge.className = `relay-mode-badge ${mode}`;
+  badge.style.display = "";
+}
+
 export function sendRelayFilament(action, data) {
   if (_relayMode !== "satellite") return false;
   if (!_relayWs || _relayWs.readyState !== 1) return false;
