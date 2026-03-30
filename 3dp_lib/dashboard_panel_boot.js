@@ -33,6 +33,7 @@ import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
 import { monitorData } from "./dashboard_data.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { registerPrintManagerAccessor } from "./dashboard_spool.js";
+import { registerRelayCallback } from "./dashboard_aggregator.js";
 import { getFileList, buildFileInsight } from "./dashboard_printmanager.js";
 
 /**
@@ -119,7 +120,10 @@ export function bootPanelSystem() {
   /* (6) トップメニューバー・接続モーダルのイベントバインド */
   _initTopMenuBar();
 
-  /* (7) スプラッシュ画面をフェードアウト */
+  /* (7) リレーブリッジ初期化（Electron親モード時のみ） */
+  _initRelayBridgeIfParent();
+
+  /* (8) スプラッシュ画面をフェードアウト */
   const splash = document.getElementById("splash-screen");
   if (splash) {
     splash.classList.add("fade-out");
@@ -332,6 +336,19 @@ function _convertCardsToTemplates() {
  * @function _initTopMenuBar
  * @returns {void}
  */
+/**
+ * Electron 親モード時にリレーブリッジを初期化する。
+ * @private
+ */
+function _initRelayBridgeIfParent() {
+  if (!window.electronAPI?.relayBroadcast) return; // Electron親モードでない
+  import("./dashboard_relay_bridge.js").then(({ initRelayBridge, relayBroadcastIfNeeded }) => {
+    if (initRelayBridge()) {
+      registerRelayCallback(relayBroadcastIfNeeded);
+    }
+  }).catch(e => console.warn("[boot] リレーブリッジ読み込み失敗:", e));
+}
+
 function _initTopMenuBar() {
   /* トップバーフォントサイズ復元 */
   const savedTopSize = monitorData.appSettings.topbarFontSize;

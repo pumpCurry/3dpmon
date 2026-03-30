@@ -59,6 +59,19 @@ import { getConnectionState } from "./dashboard_connection.js";
 /** aggregatorUpdate 用タイマー ID */
 let aggregatorTimer = null;
 
+/** リレーブリッジ配信コールバック（Phase 6 で登録） */
+let _relayBroadcastCallback = null;
+
+/**
+ * リレーブリッジの配信コールバックを登録する。
+ * aggregatorUpdate の末尾で呼び出される。
+ *
+ * @param {Function} callback - 引数なしの関数
+ */
+export function registerRelayCallback(callback) {
+  _relayBroadcastCallback = typeof callback === "function" ? callback : null;
+}
+
 /** 履歴永続化用フック */
 let historyPersistFunc = null;
 
@@ -1218,6 +1231,9 @@ export function aggregatorUpdate() {
   console.debug("[aggregatorUpdate] updateStoredDataToDOM 呼び出し");
   updateStoredDataToDOM();
   saveUnifiedStorage();
+
+  // ★ リレーブリッジ: 子クライアントへのデータ配信（1000ms間隔）
+  _relayBroadcastCallback?.();
 
   }
 
