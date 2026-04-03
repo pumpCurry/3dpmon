@@ -170,8 +170,11 @@ export function ensureMachineData(host) {
     machine.runtimeData.lastError = null;
   }
   machine.historyData ??= [];
-  if (!machine.printStore) {
+  if (!machine.printStore || typeof machine.printStore !== "object") {
+    // ★ printStore が null/undefined/非オブジェクトの場合のみ初期化
+    // （削除ロジックで null にされた場合はここで復元）
     machine.printStore = { current: null, history: [], videos: {} };
+    console.debug(`[ensureMachineData] ${host}: printStore を初期化`);
   } else {
     machine.printStore.current  ??= null;
     machine.printStore.history ??= [];

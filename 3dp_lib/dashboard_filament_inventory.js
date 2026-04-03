@@ -88,7 +88,7 @@ function ensureItem(modelId) {
 export function setInventoryQuantity(modelId, quantity) {
   const item = ensureItem(modelId);
   item.quantity = Number(quantity) || 0;
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   return item.quantity;
 }
 
@@ -103,7 +103,7 @@ export function setInventoryQuantity(modelId, quantity) {
 export function adjustInventory(modelId, delta) {
   const item = ensureItem(modelId);
   item.quantity = (item.quantity || 0) + Number(delta);
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   return item.quantity;
 }
 
@@ -125,7 +125,7 @@ export function adjustInventory(modelId, delta) {
 export function setMinStockAlert(modelId, threshold) {
   const item = ensureItem(modelId);
   item.minStockAlert = Math.max(0, Number(threshold) || 0);
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   return item.minStockAlert;
 }
 
@@ -159,7 +159,7 @@ export function consumeInventory(modelId, amount = 1) {
   if (!item.isUnlimitedStock) item.quantity -= a;
   item.totalUsedNum = (item.totalUsedNum || 0) + a;
   item.lastUsedAt = Date.now().toString();
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   return item.quantity;
 }
 

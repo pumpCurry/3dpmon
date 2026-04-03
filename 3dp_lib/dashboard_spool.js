@@ -479,16 +479,12 @@ export function setCurrentSpoolId(id, hostname) {
   }
   // 該当ホストのスプールのみ isActive を更新（他ホストに装着中のスプールには触れない）
   if (host) {
-    // 旧スプールの isActive をオフ
+    // ★ アトミック更新: isActive/isInUse/hostname を一括変更
     if (prevSpool) {
-      prevSpool.isActive = false;
-      prevSpool.isInUse = false;
+      Object.assign(prevSpool, { isActive: false, isInUse: false });
     }
-    // 新スプールの isActive をオン
     if (newSpool) {
-      newSpool.isActive = true;
-      newSpool.isInUse = true;
-      newSpool.hostname = host;
+      Object.assign(newSpool, { isActive: true, isInUse: true, hostname: host });
     }
   } else {
     // レガシー: hostname なしの場合は全スプールを走査（後方互換）
@@ -561,7 +557,7 @@ export function setCurrentSpoolId(id, hostname) {
     updateStoredDataToDOM();
   }
 
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   return true;
 }
 
@@ -652,7 +648,7 @@ export function addSpool(data) {
     hostname: data.hostname || null
   };
   monitorData.filamentSpools.push(spool);
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   return spool;
 }
 
@@ -660,7 +656,7 @@ export function updateSpool(id, patch) {
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
   Object.assign(s, patch);
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 export function deleteSpool(id, hostname) {
@@ -686,7 +682,7 @@ export function deleteSpool(id, hostname) {
   }
   // レガシー互換: グローバル値もクリア（読み取り専用として残す）
   if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -701,7 +697,7 @@ export function restoreSpool(id) {
   if (!s) return;
   s.deleted = false;
   s.isDeleted = false;
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -725,7 +721,7 @@ function logSpoolChange(spool, printId = "") {
     startedAt: spool.startedAt
   });
   trimUsageHistory();
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -750,7 +746,7 @@ function logUsage(spool, lengthMm, jobId, type = "complete") {
     type
   });
   trimUsageHistory();
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -773,7 +769,7 @@ export function addUsageSnapshot(spool, jobId, remainMm) {
     isSnapshot: true
   });
   trimUsageHistory();
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -787,7 +783,18 @@ export function addUsageSnapshot(spool, jobId, remainMm) {
  */
 export function useFilament(lengthMm, jobId = "", hostname) {
   const host = hostname;
-  if (!host) return;
+  if (!host) { console.warn("[useFilament] hostname 未指定"); return; }
+  // ★ バリデーション: 非数値・負値・異常値を拒否
+  const amount = Number(lengthMm);
+  if (!Number.isFinite(amount) || amount < 0) {
+    console.warn(`[useFilament] 無効な消費量: ${lengthMm}`);
+    return;
+  }
+  if (amount > 1000000) {
+    // 1000m超は明らかに異常（最長スプールでも~400m）
+    console.warn(`[useFilament] 異常に大きい消費量: ${amount}mm — スキップ`);
+    return;
+  }
   const s = getCurrentSpool(host);
   if (!s) return;
   const machine = monitorData.machines[host];
@@ -802,16 +809,16 @@ export function useFilament(lengthMm, jobId = "", hostname) {
   }
   // 現在の印刷ジョブ開始時点の残量と必要量を記録
   s.currentJobStartLength = s.remainingLengthMm;
-  s.currentJobExpectedLength = lengthMm;
+  s.currentJobExpectedLength = amount;
   // 残量を先に減算して保持
-  s.remainingLengthMm = Math.max(0, s.remainingLengthMm - lengthMm);
+  s.remainingLengthMm = Math.max(0, s.remainingLengthMm - amount);
   // DOM 表示とストレージに新しい残量を即時反映
   setStoredDataForHost(host, "filamentRemainingMm", s.remainingLengthMm, true);
   updateStoredDataToDOM();
   s.currentPrintID = normalizedJobId;
-  s.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
+  s.usedLengthLog.push({ jobId: normalizedJobId, used: amount });
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -867,7 +874,7 @@ export function beginExternalPrint(spool, lengthMm, jobId = "", hostname) {
   spool.currentPrintID = normalizedJobId;
   spool.lastCompletedPrintID = null; // リジューム検出フラグをクリア
   // ページリロード直後でも残量が巻き戻らないよう即座に保存
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -923,7 +930,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
       });
     }
   }
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   if (entry) {
     const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
     updateHistoryList([entry], baseUrl, "print-current-container", host);
@@ -965,7 +972,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     s.currentJobStartLength = null;
     s.currentJobExpectedLength = null;
     s.currentPrintID = "";
-    saveUnifiedStorage();
+    saveUnifiedStorage(true);
     return;
   }
   const startLen = s.currentJobStartLength ?? s.remainingLengthMm;
@@ -1023,7 +1030,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   }
   logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
   updateStoredDataToDOM();
-  saveUnifiedStorage();
+  saveUnifiedStorage(true);
   if (entry) {
     const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
     updateHistoryList([entry], baseUrl, "print-current-container", host);
@@ -1045,7 +1052,7 @@ export function cleanupUsageSnapshots(jobId) {
     e => !(e.jobId === jobId && e.isSnapshot)
   );
   if (before !== monitorData.usageHistory.length) {
-    saveUnifiedStorage();
+    saveUnifiedStorage(true);
   }
 }
 
@@ -1155,7 +1162,7 @@ export function autoCorrectCurrentSpool(hostname) {
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
     spool.remainingLengthMm = expected;
     spool.printCount = count;
-    saveUnifiedStorage();
+    saveUnifiedStorage(true);
   }
 }
 

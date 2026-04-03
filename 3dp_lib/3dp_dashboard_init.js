@@ -223,7 +223,7 @@ export function restorePrintResume(hostname, currentPrintId = null) {
             spool.remainingLengthMm = val;
             break;
         }
-      } catch {}
+      } catch (e) { console.debug("[restorePrintResume] スプール復元エラー:", e.message); }
     });
   }
 }

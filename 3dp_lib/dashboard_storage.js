@@ -793,8 +793,23 @@ export function restoreUnifiedStorage() {
  * @param {Object} [machines] - per-host マシンデータ
  */
 function _restoreFromData(shared, machines) {
-  if (shared?.appSettings || shared?.appSettings === null) {
-    Object.assign(monitorData.appSettings, shared.appSettings);
+  if (shared?.appSettings && typeof shared.appSettings === "object") {
+    // ★ deep merge: connectionTargets等のネスト配列を保護
+    for (const [key, val] of Object.entries(shared.appSettings)) {
+      if (val === null || val === undefined) continue;
+      if (Array.isArray(val)) {
+        // 配列: 既存が空なら復元値を使用、既存があればそのまま
+        if (!monitorData.appSettings[key]?.length) {
+          monitorData.appSettings[key] = val;
+        }
+      } else if (typeof val === "object") {
+        // オブジェクト: 再帰マージ
+        monitorData.appSettings[key] = Object.assign(monitorData.appSettings[key] || {}, val);
+      } else {
+        // プリミティブ: 上書き
+        monitorData.appSettings[key] = val;
+      }
+    }
   }
 
   // ★ machines: 全置換ではなくマージ（既存ランタイムデータを保護）
