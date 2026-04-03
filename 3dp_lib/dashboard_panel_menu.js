@@ -383,6 +383,7 @@ function _renderMenuBody() {
     cb.addEventListener("change", () => {
       const host = cb.dataset.host;
       monitorData.hostCameraToggle[host] = cb.checked;
+      saveUnifiedStorage(true); // ★ カメラON/OFFを即時保存
       if (cb.checked) {
         startCameraStream(host);
       } else {

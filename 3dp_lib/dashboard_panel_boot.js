@@ -605,6 +605,8 @@ function _initTopMenuBar() {
 
   // 初回表示更新（AudioManager初期化後に実行されるため遅延）
   setTimeout(_updateTopAudioButtons, 1000);
+  // ★ AudioManager テスト完了時にも更新（Electronでは _runTests が非同期で完了する）
+  window.addEventListener("audio-test-complete", _updateTopAudioButtons);
   // AudioManagerのテスト完了後に再更新
   setTimeout(_updateTopAudioButtons, 9000);
 }

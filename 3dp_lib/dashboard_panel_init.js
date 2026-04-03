@@ -63,6 +63,7 @@ import { showAlert } from "./dashboard_notification_manager.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual } from "./dashboard_production.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
 import {
   initializeCommandPalette,
@@ -180,6 +181,7 @@ function initCameraPanel(body, hostname) {
     toggle.checked = !!(monitorData.hostCameraToggle[hostname] ?? monitorData.appSettings.cameraToggle);
     toggle.addEventListener("change", () => {
       monitorData.hostCameraToggle[hostname] = toggle.checked;
+      saveUnifiedStorage(true); // ★ カメラON/OFFを即時保存
       if (toggle.checked) {
         startCameraStream(hostname);
       } else {
@@ -202,6 +204,7 @@ function initCameraPanel(body, hostname) {
   if (cancelBtn) {
     cancelBtn.addEventListener("click", () => {
       monitorData.hostCameraToggle[hostname] = false;
+      saveUnifiedStorage(true); // ★ カメラOFF即時保存
       stopCameraStream(hostname);
     });
   }

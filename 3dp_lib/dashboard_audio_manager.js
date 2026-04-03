@@ -154,8 +154,20 @@ export class AudioManager {
   async _runTests() {
     console.log("[_runTest] テスト実施中");
     await this._testMusic();
+
+    // ★ speechSynthesis の音声リスト読み込みを待つ（起動直後は空の場合がある）
+    if ("speechSynthesis" in window && speechSynthesis.getVoices().length === 0) {
+      await new Promise(resolve => {
+        const onVoices = () => { resolve(); speechSynthesis.removeEventListener("voiceschanged", onVoices); };
+        speechSynthesis.addEventListener("voiceschanged", onVoices);
+        setTimeout(resolve, 2000); // 2秒待っても来なければ続行
+      });
+    }
+
     await this._testVoice();
     this._updateButtons();
+    // ★ テスト完了をカスタムイベントで通知（トップバーのボタン更新用）
+    window.dispatchEvent(new CustomEvent("audio-test-complete", { detail: { Tm: this.Tm, Tv: this.Tv, Am: this.Am, Av: this.Av } }));
   }
 
   /**
