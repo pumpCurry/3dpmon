@@ -197,6 +197,10 @@ function _findConnectionTarget(destOrHost) {
   /* dest 完全一致（IP:PORT）を優先 */
   const exact = targets.find(t => t.dest === destOrHost);
   if (exact) return exact;
+  /* ★ IP部分一致: "192.168.54.151:9999" で "192.168.54.151" エントリも見つける（またはその逆） */
+  const ip = destOrHost.split(":")[0];
+  const ipMatch = targets.find(t => t.dest.split(":")[0] === ip);
+  if (ipMatch) return ipMatch;
   /* ホスト名での検索（connectWs からの逆引き用） */
   return targets.find(t => t.hostname === destOrHost) || null;
 }
@@ -239,13 +243,37 @@ export function connectAllSavedTargets() {
     _addConnectionTarget(main);
   }
 
-  /* connectionTargets を唯一の接続先リストとして使用 */
+  /* ★ connectionTargets のクリーンアップ:
+     ポートなしエントリ（"192.168.54.151"）とポート付き（"192.168.54.151:9999"）が
+     両方存在する場合、ポートなしを除去（ポート付きが正しい dest） */
   const targets = monitorData.appSettings.connectionTargets || [];
+  const destSet = new Set(targets.map(t => t.dest));
+  const toRemove = [];
   for (const t of targets) {
-    const ip = t.dest.split(":")[0];
+    if (!t.dest.includes(":") || t.dest.split(":").length === 1) {
+      // ポートなし → ポート付きが存在すれば不要
+      const withPort = t.dest + ":9999";
+      if (destSet.has(withPort)) {
+        toRemove.push(t);
+      }
+    }
+  }
+  if (toRemove.length > 0) {
+    for (const t of toRemove) {
+      const idx = targets.indexOf(t);
+      if (idx >= 0) targets.splice(idx, 1);
+    }
+    console.info(`[connectAll] ポートなし重複エントリ ${toRemove.length}件を除去`);
+    saveUnifiedStorage(true);
+  }
+
+  /* connectionTargets を唯一の接続先リストとして使用 */
+  for (const t of targets) {
+    const dest = t.dest.includes(":") ? t.dest : t.dest + ":9999";
+    const ip = dest.split(":")[0];
     if (!connected.has(ip)) {
       connected.add(ip);
-      connectWs(t.dest);
+      connectWs(dest);
     }
   }
 }

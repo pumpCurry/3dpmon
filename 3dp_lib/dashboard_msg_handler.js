@@ -365,6 +365,11 @@ export function processData(data, hostname) {
     _initializedHosts.add(host);
     console.info(`[processData] per-host 初期化: ${host}`);
 
+    // ★ storedData.hostname を確実に設定（復元時に null の場合がある）
+    if (!machine.storedData?.hostname?.rawValue) {
+      setStoredDataForHost(host, "hostname", host, true);
+    }
+
     // storedData キーの事前作成
     const initKeys = [
       "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
