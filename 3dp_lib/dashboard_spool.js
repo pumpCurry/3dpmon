@@ -472,8 +472,8 @@ export function setCurrentSpoolId(id, hostname) {
     finalizeFilamentUsage(used, prevSpool.currentPrintID, host);
   }
 
-  // per-host マップとレガシーグローバル値の両方を更新
-  monitorData.currentSpoolId = id;
+  // per-host マップを更新（★ グローバル currentSpoolId は更新しない — マルチホスト不整合の原因）
+  // monitorData.currentSpoolId = id;  // @deprecated — hostSpoolMap が権威
   if (host) {
     monitorData.hostSpoolMap[host] = id;
   }
@@ -684,6 +684,7 @@ export function deleteSpool(id, hostname) {
   for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
     if (spId === id) monitorData.hostSpoolMap[h] = null;
   }
+  // レガシー互換: グローバル値もクリア（読み取り専用として残す）
   if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
   saveUnifiedStorage();
 }

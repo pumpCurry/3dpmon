@@ -172,16 +172,13 @@ function startHttpServer(port) {
  */
 function _migrateStoragePartition() {
   const userData = app.getPath("userData");
-  const newPartDir = path.join(userData, "Partitions", "3dpmon");
+  // ★ Electron の persist: パーティション名は "Partitions/persist_<name>" にマッピングされる
+  const newPartDir = path.join(userData, "Partitions", "persist_3dpmon");
 
-  // 既にマイグレーション済み（新パーティションにデータがある）ならスキップ
-  const newLsDir = path.join(newPartDir, "Local Storage");
-  if (fs.existsSync(newLsDir)) {
-    const files = fs.readdirSync(newLsDir).filter(f => !f.startsWith("."));
-    if (files.length > 0) {
-      console.log("[migration] 新パーティションにデータあり、マイグレーションスキップ");
-      return;
-    }
+  // センチネルファイルでマイグレーション済みかチェック
+  const sentinelPath = path.join(userData, ".storage-migrated");
+  if (fs.existsSync(sentinelPath)) {
+    return; // マイグレーション済み
   }
 
   // 旧ストレージのコピー元を探索（優先順）
@@ -224,6 +221,16 @@ function _migrateStoragePartition() {
       console.warn(`[migration] コピー失敗 (${subDir}):`, e.message);
     }
   }
+
+  // センチネルファイルを書き込み（次回以降スキップ）
+  try {
+    fs.writeFileSync(sentinelPath, JSON.stringify({
+      migratedAt: new Date().toISOString(),
+      copiedDirs: copied,
+      source: sourceDir,
+      destination: newPartDir
+    }));
+  } catch { /* センチネル書き込み失敗は致命的ではない */ }
 
   if (copied > 0) {
     console.log(`[migration] ストレージマイグレーション完了 (${copied}ディレクトリ)`);

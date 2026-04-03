@@ -225,8 +225,17 @@ export async function flushIdb() {
     await _txComplete(tx);
   } catch (e) {
     console.error("[flushIdb] IndexedDB 書き込み失敗:", e);
-    // フォールバック: localStorage に書き込み
-    _fallbackToLocalStorage();
+    // ★ キューを復元して次回フラッシュで再試行できるようにする
+    for (const [key, value] of sharedEntries) {
+      if (!_pendingShared.has(key)) _pendingShared.set(key, value);
+    }
+    for (const [hostname, data] of machineEntries) {
+      if (!_pendingMachines.has(hostname)) _pendingMachines.set(hostname, data);
+    }
+    // ★ IndexedDB を無効化して localStorage フォールバックに切り替え
+    _useIdb = false;
+    _db = null;
+    console.warn("[flushIdb] IndexedDB を無効化、以降 localStorage で動作");
   }
 }
 

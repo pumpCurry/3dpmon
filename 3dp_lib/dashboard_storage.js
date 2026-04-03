@@ -496,24 +496,28 @@ const LS_GLOBAL_FIELDS = [
 
 /**
  * ホスト名を localStorage キーに安全にエンコードする。
- * "192.168.54.151:9999" → "192-168-54-151_9999"
+ * encodeURIComponent でエスケープし、全ての特殊文字を安全に保存。
+ * ハイフンを含むホスト名（k1max-abcd.local:9999）でも可逆。
  *
  * @param {string} host - ホスト名
  * @returns {string} エンコード済みキー文字列
  */
 function _encodeHostKey(host) {
-  return (host || "").replace(/\./g, "-").replace(/:/g, "_");
+  return encodeURIComponent(host || "");
 }
 
 /**
  * エンコード済みキーをホスト名にデコードする。
- * "192-168-54-151_9999" → "192.168.54.151:9999"
  *
  * @param {string} encoded - エンコード済み文字列
  * @returns {string} 元のホスト名
  */
 function _decodeHostKey(encoded) {
-  return (encoded || "").replace(/_/g, ":").replace(/-/g, ".");
+  try {
+    return decodeURIComponent(encoded || "");
+  } catch {
+    return encoded || "";
+  }
 }
 
 /**
@@ -642,7 +646,7 @@ function _writePerHostLocalStorage() {
 function _flushStorage() {
   _savePending = false;
   try {
-    if (_idbInitialized) {
+    if (_idbInitialized && isIdbAvailable()) {
       // IndexedDB: shared データをキューに追加
       queueSharedWrite("appSettings",        monitorData.appSettings);
       queueSharedWrite("filamentSpools",     monitorData.filamentSpools);
@@ -828,9 +832,12 @@ function _restoreFromData(shared, machines) {
     for (const sp of shared.filamentSpools) {
       if (!sp.id) continue;
       if (existingIds.has(sp.id)) {
-        // 既存スプール: ランタイム変更がなければストレージ値で更新
+        // 既存スプール: ★ アクティブ（印刷中/装着中）ならランタイム状態を保護
         const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
-        if (existing) Object.assign(existing, applySpoolDefaults(sp));
+        if (existing && !existing.isActive && !existing.isInUse) {
+          Object.assign(existing, applySpoolDefaults(sp));
+        }
+        // else: ランタイム状態が権威 — ストレージ値で上書きしない
       } else {
         // 新規スプール: 追加
         monitorData.filamentSpools.push(applySpoolDefaults(sp));
@@ -843,10 +850,11 @@ function _restoreFromData(shared, machines) {
     if (monitorData.usageHistory.length === 0) {
       monitorData.usageHistory = shared.usageHistory;
     } else {
-      // 既存あり: 新しいエントリのみ追記（IDで重複排除）
-      const existingIds = new Set(monitorData.usageHistory.map(u => `${u.spoolId}_${u.startedAt}`));
+      // 既存あり: 新しいエントリのみ追記（usageId優先、fallbackでspoolId+startedAt）
+      const _usageKey = (u) => u.usageId || `${u.spoolId || ""}_${u.startedAt || ""}_${u.usedLength || 0}`;
+      const existingIds = new Set(monitorData.usageHistory.map(_usageKey));
       for (const entry of shared.usageHistory) {
-        const key = `${entry.spoolId}_${entry.startedAt}`;
+        const key = _usageKey(entry);
         if (!existingIds.has(key)) {
           monitorData.usageHistory.push(entry);
         }
