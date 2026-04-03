@@ -1143,25 +1143,41 @@ export function applyLayoutTemplate(templateId) {
   }
   activePanels.clear();
 
-  // 有効なホストのみにテンプレート適用
-  let hosts = _getValidHosts();
+  // ★ connectionTargets の全ホスト名を有効ホストとして使う
+  // （_getValidHosts は接続済みホストのみ返すが、テンプレート適用時は
+  //   未接続のホストも含めて全登録ホストにパネルを展開する必要がある）
+  const targets = monitorData.appSettings?.connectionTargets || [];
+  const allKnownHosts = targets
+    .map(t => t.hostname || "")
+    .filter(h => h && h !== PLACEHOLDER_HOSTNAME);
 
-  // ホストが0件の場合: connectionTargets の hostname からフォールバック取得
-  if (hosts.length === 0) {
-    const targets = monitorData.appSettings?.connectionTargets || [];
-    const fallbackHosts = targets
-      .map(t => t.hostname || "")
-      .filter(h => h && h !== PLACEHOLDER_HOSTNAME);
-    if (fallbackHosts.length > 0) {
-      // connectionTargets のホスト名で machines を確保
-      for (const h of fallbackHosts) {
-        if (!monitorData.machines[h]) {
-          monitorData.machines[h] = { storedData: { hostname: { rawValue: h } } };
-        }
-      }
-      hosts = fallbackHosts;
+  // connectionTargets に hostname がないエントリは dest の IP を使用
+  for (const t of targets) {
+    if (!t.hostname && t.dest) {
+      const ip = t.dest.split(":")[0];
+      if (ip && !allKnownHosts.includes(ip)) allKnownHosts.push(ip);
     }
   }
+
+  // machines に未登録のホストがあれば仮エントリを作成
+  for (const h of allKnownHosts) {
+    if (!monitorData.machines[h]) {
+      monitorData.machines[h] = { storedData: { hostname: { rawValue: h } } };
+    }
+    // storedData.hostname が未設定の場合も補完
+    const sd = monitorData.machines[h].storedData ??= {};
+    if (!sd.hostname?.rawValue) {
+      sd.hostname = { rawValue: h };
+    }
+  }
+
+  // _getValidHosts() で接続済みホストも追加（重複排除）
+  const validHosts = _getValidHosts();
+  for (const h of validHosts) {
+    if (!allKnownHosts.includes(h)) allKnownHosts.push(h);
+  }
+
+  let hosts = allKnownHosts;
 
   if (hosts.length === 0) {
     console.warn("[applyLayoutTemplate] 有効なホストが見つかりません");

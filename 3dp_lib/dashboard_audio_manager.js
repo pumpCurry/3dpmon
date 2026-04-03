@@ -272,29 +272,42 @@ export class AudioManager {
         console.warn("[_testVoice] speechSynthesis API 未対応");
         return resolve(false);
       }
-  
+
+      let resolved = false;
+      const done = (success) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        this.Tv = success;
+        resolve(success);
+      };
+
+      // ★ タイムアウト: 3秒以内に onend/onerror が来なければ成功と仮定
+      // （Electron では onend が発火しないことがある）
+      const timer = setTimeout(() => {
+        console.warn("[_testVoice] タイムアウト — 成功と仮定");
+        done(true);
+      }, 3000);
+
       const utter = new SpeechSynthesisUtterance("ー");
       utter.volume = 0.01;
-  
+
       utter.onend = () => {
-        this.Tv = true;
         console.log("[_testVoice] 発声成功（onend）");
-        resolve(true);
+        done(true);
       };
-  
+
       utter.onerror = (e) => {
-        this.Tv = false;
         console.error("[_testVoice] 発声エラー（onerror）:", e);
-        resolve(false);
+        done(false);
       };
-  
+
       try {
         speechSynthesis.speak(utter);
         console.debug("[_testVoice] speak() 呼び出し成功");
       } catch (err) {
-        this.Tv = false;
         console.error("[_testVoice] speak() 例外:", err);
-        resolve(false);
+        done(false);
       }
     });
   }
