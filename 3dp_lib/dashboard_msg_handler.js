@@ -451,9 +451,14 @@ export function processData(data, hostname) {
     setNotificationSuppressed(false, host);
   }
 
-  // per-host 初期化（各ホスト初回のみ）: storedData キーの事前作成
+  // per-host 初期化（各ホスト初回のみ）
+  // ★ 1台目は handleMessage() の初期化ブロックで処理されるが、
+  //    2台目以降はここが唯一の初期化パス。両方で同等の処理を実行する。
   if (!_initializedHosts.has(host)) {
     _initializedHosts.add(host);
+    console.info(`[processData] per-host 初期化: ${host}`);
+
+    // storedData キーの事前作成
     const initKeys = [
       "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
       "actualStartTime","initialLeftTime","initialLeftAt",
@@ -466,7 +471,42 @@ export function processData(data, hostname) {
         setStoredDataForHost(host, key, null, false);
       }
     });
+
+    // ★ aggregator 状態復元（タイマー値、completionElapsedTime 等）
+    restoreAggregatorState(host);
     restartAggregatorTimer();
+
+    // ★ 初回データに historyList/elapseVideoList があればマージ
+    const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+    if (Array.isArray(data.historyList) && data.historyList.length > 0) {
+      printManager.updateHistoryList(data.historyList, baseUrl, "print-current-container", host);
+    }
+    if (Array.isArray(data.elapseVideoList) && data.elapseVideoList.length > 0) {
+      printManager.updateVideoList(data.elapseVideoList, baseUrl, host);
+    }
+
+    // ★ 印刷再開状態の復元
+    const curId = Number(data.printStartTime || 0) || null;
+    restorePrintResume(host, curId);
+
+    // ★ 保存済み履歴の描画
+    try {
+      const allJobs = printManager.loadHistory(host);
+      if (allJobs.length > 0) {
+        const rawJobs = printManager.jobsToRaw(allJobs);
+        printManager.renderHistoryTable(rawJobs, baseUrl, host);
+      }
+      // 現在印刷パネルの描画
+      const curContainer = scopedById("print-current-container", host);
+      if (curContainer) {
+        printManager.renderPrintCurrent(curContainer, host);
+      }
+    } catch (e) {
+      console.debug(`[processData] 保存済み履歴描画スキップ (${host}):`, e.message);
+    }
+
+    // 初期化完了、このホストの通知抑制を解除
+    setNotificationSuppressed(false, host);
   }
 
   const ms = _getMsgState(host);
