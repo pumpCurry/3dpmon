@@ -31,3 +31,26 @@ jobs:
       - name: Prettier check
         run: npm run format
         continue-on-error: true
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Electron main.js syntax check
+        run: node -e "try{require('./electron/main.js')}catch(e){if(e instanceof SyntaxError){console.error(e);process.exit(1)}}"
+      - name: Electron preload.js syntax check
+        run: node -e "try{require('./electron/preload.js')}catch(e){if(e instanceof SyntaxError){console.error(e);process.exit(1)}}"
+      - name: Electron relay_server.js syntax check
+        run: node -e "try{require('./electron/relay_server.js')}catch(e){if(e instanceof SyntaxError){console.error(e);process.exit(1)}}"
+      - name: Electron arp_resolver.js load check
+        run: node -e "const m=require('./electron/arp_resolver.js');console.log('exports:',Object.keys(m).join(', '))"
+      - name: HTML title version check
+        run: |
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          grep -q "v${VERSION}" 3dp_monitor.html || (echo "FAIL: HTML title does not contain v${VERSION}" && exit 1)
+          echo "OK: HTML title contains v${VERSION}"
