@@ -358,10 +358,44 @@ export function updateConnectionHost(oldHost, newHost) {
   const dest = state.dest || oldHost;
   _setConnectionTargetHostname(dest, newHost);
 
-  /* ★ HEAD版と同じく、updateConnectionHost では machines を触らない。
-     machines のホスト名キー移行は handleMessage → setCurrentHostname で
-     自然に行われる。machines[IP] は孤立するが害はなく、
-     明示的な削除操作時にのみ _cleanupMachineKeys で除去する。 */
+  /* ★ machines のキー移行: IP → ホスト名
+     machines[IP] の内容を machines[hostname] にマージし、IPキーを削除する。
+     IPキーを残すと:
+     - ストレージに2重保存（データ肥大化）
+     - エクスポートに2重登場
+     - パネル復元時に不正なホストとして認識される可能性 */
+  if (monitorData.machines[oldHost] && oldHost !== newHost) {
+    const oldMachine = monitorData.machines[oldHost];
+    if (!monitorData.machines[newHost]) {
+      // ホスト名キーが存在しない → そのまま移動
+      monitorData.machines[newHost] = oldMachine;
+    } else {
+      // 既にホスト名キーがある（restore済み）→ storedData をマージ
+      const existing = monitorData.machines[newHost];
+      if (oldMachine.storedData) {
+        existing.storedData ??= {};
+        for (const [key, val] of Object.entries(oldMachine.storedData)) {
+          if (!(key in existing.storedData) || existing.storedData[key]?.rawValue == null) {
+            existing.storedData[key] = val;
+          }
+        }
+      }
+      // printStore: 既存が空ならIPキー側を引き継ぎ
+      if (oldMachine.printStore?.history?.length && !existing.printStore?.history?.length) {
+        existing.printStore = oldMachine.printStore;
+      }
+    }
+    delete monitorData.machines[oldHost];
+    // per-host localStorage キーも移行
+    try {
+      const { _encodeHostKey, LS_KEY_HOST_PREFIX } = { _encodeHostKey: encodeURIComponent, LS_KEY_HOST_PREFIX: "3dpmon-host-" };
+      const oldLsKey = LS_KEY_HOST_PREFIX + _encodeHostKey(oldHost);
+      if (localStorage.getItem(oldLsKey)) {
+        localStorage.removeItem(oldLsKey);
+      }
+    } catch { /* localStorage 操作失敗は無視 */ }
+    console.info(`[updateConnectionHost] machines キー移行: ${oldHost} → ${newHost}`);
+  }
 
   const target = connectionMap[newHost];
   if (target) {
