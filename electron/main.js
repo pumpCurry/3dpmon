@@ -98,13 +98,17 @@ function startHttpServer(port) {
       }
 
       // 静的ファイル配信
-      let filePath = path.join(root, req.url.split("?")[0]);
-      if (filePath.endsWith("/") || filePath === root) {
+      const urlPath = decodeURIComponent(req.url.split("?")[0]);
+      let filePath = path.join(root, urlPath);
+
+      // インデックスファイル: ルートまたはディレクトリアクセス時
+      if (urlPath === "/" || filePath === root || filePath === root + path.sep) {
         filePath = path.join(root, "3dp_monitor.html");
       }
 
-      // ディレクトリトラバーサル防止
-      if (!filePath.startsWith(root)) {
+      // ディレクトリトラバーサル防止（正規化後に再チェック）
+      filePath = path.resolve(filePath);
+      if (!filePath.startsWith(path.resolve(root))) {
         res.writeHead(403);
         res.end("Forbidden");
         return;
@@ -115,10 +119,11 @@ function startHttpServer(port) {
 
       fs.readFile(filePath, (err, data) => {
         if (err) {
-          if (err.code === "ENOENT") {
+          if (err.code === "ENOENT" || err.code === "EISDIR") {
             res.writeHead(404);
-            res.end("Not Found");
+            res.end("Not Found: " + urlPath);
           } else {
+            console.error(`[HTTP] 500 for ${urlPath}:`, err.code, err.message);
             res.writeHead(500);
             res.end("Internal Server Error");
           }
