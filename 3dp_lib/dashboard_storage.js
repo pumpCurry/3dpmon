@@ -228,10 +228,20 @@ export async function importAllData(data) {
   }
 
   // ── machines: 印刷履歴をマージ ──
+  // ★ PLACEHOLDER とIPキー（hostnameが解決済みなら不要）を除外
   if (data.machines && typeof data.machines === "object") {
+    const _isIpLike = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+    const importTargets = data.appSettings?.connectionTargets || [];
+    const resolvedHosts = new Set(importTargets.filter(t => t.hostname).map(t => t.hostname));
+    const resolvedIps = new Set(importTargets.filter(t => t.hostname).map(t => t.dest?.split(":")[0]));
+
     for (const [host, machineData] of Object.entries(data.machines)) {
+      // PLACEHOLDER は常にスキップ
+      if (host === PLACEHOLDER_HOSTNAME || host === "_$_NO_MACHINE_$_") continue;
+      // IPキーで同じIPのhostname解決済みエントリがあればスキップ
+      if (_isIpLike(host) && resolvedIps.has(host)) continue;
+
       if (!monitorData.machines[host]) {
-        // 新規ホスト: そのまま追加
         monitorData.machines[host] = machineData;
         stats.machines++;
       } else {
@@ -255,26 +265,36 @@ export async function importAllData(data) {
 
   // ── appSettings: インポートでは上書きしない (既存設定を保持) ──
   // 接続先だけはマージ (新規のみ追加)
+  // ★ ポートなしエントリ、hostname解決済みIPの重複を除外
   if (Array.isArray(data.appSettings?.connectionTargets)) {
     const existingDests = new Set(
       (monitorData.appSettings.connectionTargets || []).map(t => t.dest)
     );
+    const existingIps = new Set(
+      (monitorData.appSettings.connectionTargets || []).map(t => t.dest?.split(":")[0])
+    );
     for (const t of data.appSettings.connectionTargets) {
-      if (t.dest && !existingDests.has(t.dest)) {
-        monitorData.appSettings.connectionTargets.push(t);
-        existingDests.add(t.dest);
-      }
+      if (!t.dest) continue;
+      // ポートなしエントリはスキップ（ポート付きが既にあるか追加される）
+      if (!t.dest.includes(":")) continue;
+      // 同一 dest は重複スキップ
+      if (existingDests.has(t.dest)) continue;
+      // 同一 IP で既存エントリがあればスキップ（hostname違いのゴミ防止）
+      const ip = t.dest.split(":")[0];
+      if (existingIps.has(ip) && !t.hostname) continue;
+      monitorData.appSettings.connectionTargets.push(t);
+      existingDests.add(t.dest);
+      existingIps.add(ip);
     }
   }
 
-  // ── パネルレイアウト: panelLayout が含まれていれば適用 ──
+  // ── パネルレイアウト: panelLayout が含まれていれば appSettings に保存 ──
+  // ★ インポート時はレイアウトを直接適用しない（現在の配置を破壊しない）
+  //    appSettings.panelLayout に保存し、次回起動時に restoreLayout で使われる
   if (Array.isArray(data.panelLayout) && data.panelLayout.length > 0) {
-    try {
-      const { importLayoutData } = await import("./dashboard_panel_factory.js");
-      stats.panels = importLayoutData(data.panelLayout, { remapHosts: false });
-    } catch {
-      // パネルモジュール未初期化（ブラウザ版等）ではスキップ
-      stats.panels = 0;
+    if (!monitorData.appSettings.panelLayout || monitorData.appSettings.panelLayout.length === 0) {
+      monitorData.appSettings.panelLayout = data.panelLayout;
+      stats.panels = data.panelLayout.length;
     }
   }
 
