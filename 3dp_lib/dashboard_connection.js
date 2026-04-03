@@ -124,10 +124,29 @@ function _addConnectionTarget(dest) {
  */
 function _setConnectionTargetHostname(dest, hostname) {
   const t = _findConnectionTarget(dest);
-  if (t && t.hostname !== hostname) {
+  if (!t) return;
+  if (t.hostname === hostname) return; // 変更なし
+
+  if (t.hostname && t.hostname !== hostname) {
+    // ★ 既にホスト名が紐付いている dest で別のホスト名が返ってきた
+    // → IP再利用（DHCP）の可能性。旧ホスト名を保護し、新規エントリとして追加
+    console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
+    // 旧エントリのhostnameはそのまま残す（旧機器が復帰する可能性）
+    // 新エントリとして同じdestに新hostnameを追加（hostname違いの重複を許容）
+    const targets = monitorData.appSettings.connectionTargets ??= [];
+    const exists = targets.some(e => e.dest === dest && e.hostname === hostname);
+    if (!exists) {
+      targets.push({ dest, hostname, color: t.color || "", label: "" });
+    }
+    // 旧エントリのhostnameを更新（現在の接続先を反映）
     t.hostname = hostname;
     saveUnifiedStorage();
+    return;
   }
+
+  // 初回: ホスト名が空 → 設定
+  t.hostname = hostname;
+  saveUnifiedStorage();
 }
 
 /**
@@ -359,42 +378,46 @@ export function updateConnectionHost(oldHost, newHost) {
   _setConnectionTargetHostname(dest, newHost);
 
   /* ★ machines のキー移行: IP → ホスト名
-     machines[IP] の内容を machines[hostname] にマージし、IPキーを削除する。
-     IPキーを残すと:
-     - ストレージに2重保存（データ肥大化）
-     - エクスポートに2重登場
-     - パネル復元時に不正なホストとして認識される可能性 */
+     IP → ホスト名 の遷移（初回接続時）のみ移行する。
+     ホスト名 → ホスト名 の遷移（IP再利用で別機器が応答）は
+     移行せず、旧データを保護して新キーを新規作成する。 */
+  const _isIpLike = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
   if (monitorData.machines[oldHost] && oldHost !== newHost) {
-    const oldMachine = monitorData.machines[oldHost];
-    if (!monitorData.machines[newHost]) {
-      // ホスト名キーが存在しない → そのまま移動
-      monitorData.machines[newHost] = oldMachine;
-    } else {
-      // 既にホスト名キーがある（restore済み）→ storedData をマージ
-      const existing = monitorData.machines[newHost];
-      if (oldMachine.storedData) {
-        existing.storedData ??= {};
-        for (const [key, val] of Object.entries(oldMachine.storedData)) {
-          if (!(key in existing.storedData) || existing.storedData[key]?.rawValue == null) {
-            existing.storedData[key] = val;
+    if (_isIpLike(oldHost)) {
+      // IP → ホスト名: 正常な初回接続 → machines データを移行
+      const oldMachine = monitorData.machines[oldHost];
+      if (!monitorData.machines[newHost]) {
+        monitorData.machines[newHost] = oldMachine;
+      } else {
+        // 既にホスト名キーがある（restore済み）→ storedData をマージ
+        const existing = monitorData.machines[newHost];
+        if (oldMachine.storedData) {
+          existing.storedData ??= {};
+          for (const [key, val] of Object.entries(oldMachine.storedData)) {
+            if (!(key in existing.storedData) || existing.storedData[key]?.rawValue == null) {
+              existing.storedData[key] = val;
+            }
           }
         }
+        if (oldMachine.printStore?.history?.length && !existing.printStore?.history?.length) {
+          existing.printStore = oldMachine.printStore;
+        }
       }
-      // printStore: 既存が空ならIPキー側を引き継ぎ
-      if (oldMachine.printStore?.history?.length && !existing.printStore?.history?.length) {
-        existing.printStore = oldMachine.printStore;
+      delete monitorData.machines[oldHost];
+      try {
+        const lsKey = "3dpmon-host-" + encodeURIComponent(oldHost);
+        if (localStorage.getItem(lsKey)) localStorage.removeItem(lsKey);
+      } catch { /* ignore */ }
+      console.info(`[updateConnectionHost] machines IP→ホスト名移行: ${oldHost} → ${newHost}`);
+    } else {
+      // ホスト名 → ホスト名: IP再利用で別機器が応答した可能性
+      // ★ 旧ホスト名のデータは保護し、新ホスト名を新規作成する
+      console.warn(`[updateConnectionHost] ホスト名変更検出: ${oldHost} → ${newHost} (IP再利用の可能性 — 旧データ保護)`);
+      if (!monitorData.machines[newHost]) {
+        ensureMachineData(newHost);
       }
+      // 旧キーの machines データは削除しない（後で正しいIPで再接続される可能性がある）
     }
-    delete monitorData.machines[oldHost];
-    // per-host localStorage キーも移行
-    try {
-      const { _encodeHostKey, LS_KEY_HOST_PREFIX } = { _encodeHostKey: encodeURIComponent, LS_KEY_HOST_PREFIX: "3dpmon-host-" };
-      const oldLsKey = LS_KEY_HOST_PREFIX + _encodeHostKey(oldHost);
-      if (localStorage.getItem(oldLsKey)) {
-        localStorage.removeItem(oldLsKey);
-      }
-    } catch { /* localStorage 操作失敗は無視 */ }
-    console.info(`[updateConnectionHost] machines キー移行: ${oldHost} → ${newHost}`);
   }
 
   const target = connectionMap[newHost];
