@@ -141,12 +141,46 @@ function _setConnectionTargetHostname(dest, hostname) {
     // 旧エントリのhostnameを更新（現在の接続先を反映）
     t.hostname = hostname;
     saveUnifiedStorage();
+    // ★ MAC アドレスで機器変更を確認
+    _resolveAndSaveMac(dest, hostname);
     return;
   }
 
   // 初回: ホスト名が空 → 設定
   t.hostname = hostname;
   saveUnifiedStorage();
+  // ★ MAC アドレスを非同期で解決（Electron版のみ）
+  _resolveAndSaveMac(dest, hostname);
+}
+
+/**
+ * 接続先の MAC アドレスを ARP テーブルから解決して connectionTargets に保存する。
+ * Electron 環境でのみ動作（window.electronAPI.arpResolve が必要）。
+ * 非同期で実行し、UI をブロックしない。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式
+ * @param {string} hostname - 解決済みホスト名
+ */
+async function _resolveAndSaveMac(dest, hostname) {
+  if (!window.electronAPI?.arpResolve) return;
+  const ip = dest.split(":")[0];
+  try {
+    const mac = await window.electronAPI.arpResolve(ip);
+    if (!mac) return;
+    const t = _findConnectionTarget(dest);
+    if (t && t.macAddress !== mac) {
+      // MAC が変わった（= 別の機器がIPを再利用）場合に検出
+      if (t.macAddress && t.macAddress !== mac) {
+        console.warn(`[MAC] IP再利用検出: ${ip} の MAC が ${t.macAddress} → ${mac} に変化（${hostname}）`);
+      }
+      t.macAddress = mac;
+      saveUnifiedStorage(true);
+      console.info(`[MAC] ${hostname} (${ip}) → ${mac}`);
+    }
+  } catch (e) {
+    console.debug(`[MAC] ARP解決失敗 (${ip}):`, e.message);
+  }
 }
 
 /**

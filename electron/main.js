@@ -351,6 +351,18 @@ app.whenReady().then(async () => {
     clients: relayServer?.getClients() || []
   }));
 
+  /* ─── ARP 解決 IPC ─── */
+  const { resolveArp, scanArpTable, isCrealityDevice } = require("./arp_resolver.js");
+
+  // 単一 IP の MAC を解決
+  ipcMain.handle("arp-resolve", (_, ip) => resolveArp(ip));
+
+  // ARP テーブル全スキャン（Creality 機器の自動検出用）
+  ipcMain.handle("arp-scan", () => {
+    const all = scanArpTable();
+    return all.map(e => ({ ...e, isCreality: isCrealityDevice(e.mac) }));
+  });
+
   /* macOS: Dock アイコンクリック時にウィンドウ再生成 */
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

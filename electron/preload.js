@@ -103,5 +103,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
    *
    * @param {Function} callback - (data: {clientId}) => void
    */
-  onRelayRequestSnapshot: (callback) => ipcRenderer.on("relay-request-snapshot", (_, data) => callback(data))
+  onRelayRequestSnapshot: (callback) => ipcRenderer.on("relay-request-snapshot", (_, data) => callback(data)),
+
+  /* ─── ARP 解決 API ─── */
+
+  /**
+   * 指定 IP の MAC アドレスを ARP テーブルから取得する。
+   * @param {string} ip - 対象 IP アドレス
+   * @returns {Promise<string|null>} MAC アドレス（"fc:ee:28:01:4a:1b"）または null
+   */
+  arpResolve: (ip) => ipcRenderer.invoke("arp-resolve", ip),
+
+  /**
+   * ARP テーブル全スキャン。Creality 機器の自動検出に使用。
+   * @returns {Promise<Array<{ip:string, mac:string, isCreality:boolean}>>}
+   */
+  arpScan: () => ipcRenderer.invoke("arp-scan")
 });
