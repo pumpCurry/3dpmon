@@ -702,31 +702,28 @@ export function restoreLayout() {
        connectionTargets のIPとホスト名、wsDest、および machines キーを含める。
        machines キーは前回接続時のホスト名を保持しているため、
        リロード直後でまだ接続していない状態でもレイアウト復元に必要。 */
+    /* ★ 有効ホストの構築: 全ソースから網羅的に収集。
+       接続順序やタイミングに依存しない（1台目/2台目の差をなくす）。
+       レイアウトに保存されたホスト名を最優先で信頼する。 */
     const validHosts = new Set();
-    const targets = monitorData.appSettings.connectionTargets || [];
-    for (const t of targets) {
-      validHosts.add(t.dest.split(":")[0]);
-      validHosts.add(t.dest);
-      if (t.hostname) validHosts.add(t.hostname);
-    }
-    if (monitorData.appSettings.wsDest) {
-      validHosts.add(monitorData.appSettings.wsDest.split(":")[0]);
-      validHosts.add(monitorData.appSettings.wsDest);
-    }
-    /* machines にあるホスト名（前回接続時に解決済み）も有効とする */
-    for (const machineHost of Object.keys(monitorData.machines || {})) {
-      if (machineHost && machineHost !== "shared" && machineHost !== "__placeholder__") {
-        validHosts.add(machineHost);
-      }
-    }
 
-    /* ★ レイアウトデータ内のホスト名を常に有効とみなす
-       （レイアウトに保存されている = 過去に接続した実績がある。
-         partition移行やデータ消失で connectionTargets.hostname が
-         空になっても、レイアウトだけは localStorage に残っている） */
+    // 1) レイアウトデータ自体に含まれるホスト名（最も信頼できるソース）
     for (const item of layout) {
       if (item.host && item.host !== "shared") validHosts.add(item.host);
     }
+
+    // 2) connectionTargets のホスト名とIP
+    const targets = monitorData.appSettings.connectionTargets || [];
+    for (const t of targets) {
+      if (t.hostname) validHosts.add(t.hostname);
+      if (t.dest) validHosts.add(t.dest);
+    }
+
+    // 3) machines のキー（前回接続時のホスト名）
+    for (const h of Object.keys(monitorData.machines || {})) {
+      if (h && h !== PLACEHOLDER_HOSTNAME && h !== "shared") validHosts.add(h);
+    }
+
     if (validHosts.size === 0) {
       console.info("[restoreLayout] 有効なホストなし");
       return false;
@@ -1152,10 +1149,14 @@ export function applyLayoutTemplate(templateId) {
     .filter(h => h && h !== PLACEHOLDER_HOSTNAME);
 
   // connectionTargets に hostname がないエントリは dest の IP を使用
+  // ★ ただし同じIPで hostname 付きエントリが別にあればスキップ（IP重複防止）
+  const resolvedIps = new Set(targets.filter(t => t.hostname).map(t => t.dest.split(":")[0]));
   for (const t of targets) {
     if (!t.hostname && t.dest) {
       const ip = t.dest.split(":")[0];
-      if (ip && !allKnownHosts.includes(ip)) allKnownHosts.push(ip);
+      if (ip && !allKnownHosts.includes(ip) && !resolvedIps.has(ip)) {
+        allKnownHosts.push(ip);
+      }
     }
   }
 
