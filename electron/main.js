@@ -137,7 +137,7 @@ function startHttpServer(port) {
       });
     });
 
-    server.listen(port, "0.0.0.0", () => {
+    server.listen(port, "::", () => {  // ★ "::" = IPv4 + IPv6 デュアルスタック
       console.log(`[3dpmon] HTTP + WSリレーサーバ起動: http://0.0.0.0:${port}/`);
       resolve(server);
     });
