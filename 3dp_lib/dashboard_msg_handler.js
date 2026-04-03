@@ -36,9 +36,7 @@
 import errorMap from "./3dp_errorcode.js";
 import {
   monitorData,
-  currentHostname,
   ensureMachineData,
-  PLACEHOLDER_HOSTNAME,
   isNotificationSuppressed,
   setNotificationSuppressed,
   setStoredDataForHost,
@@ -312,54 +310,20 @@ setHistoryPersistFunc(persistHistoryTimers);
  *
  * @param {object} data 受信データ
  */
-export function handleMessage(data) {
-  // (1a) ★ 統一パス: 全ホスト共通の初期化は processData 内の per-host ブロックで実行。
-  // handleMessage は temporaryBuffer の排出のみ担当。
-  // currentHostname の設定と legacyStoredData の移行は handleSocketMessage で実行済み。
-
-  // バッファに溜まっていたデータを排出（hostname 判明後に処理）
-  // ★ hostname が判明しているデータのみ排出。hostname なしは残す。
-  //    複数機器が同時にバッファにいる場合、別機器のデータを誤帰属させない。
-  if (data.hostname && monitorData.temporaryBuffer.length > 0) {
-    const remaining = [];
-    for (const d of monitorData.temporaryBuffer) {
-      if (d.hostname) {
-        // hostname あり → 正しいホストで処理
-        ensureMachineData(d.hostname);
-        processData(d, d.hostname);
-      } else {
-        // hostname なし → まだ判明していないので残す
-        remaining.push(d);
-      }
-    }
-    // 古すぎるバッファエントリを破棄（30秒以上経過）
-    const now = Date.now();
-    monitorData.temporaryBuffer = remaining.filter(d => {
-      if (d._bufferedAt && now - d._bufferedAt > 30000) {
-        console.warn("[handleMessage] 30秒超のバッファエントリを破棄:", Object.keys(d).join(","));
-        return false;
-      }
-      return true;
-    });
-    if (monitorData.temporaryBuffer.length > 0) {
-      console.debug(`[handleMessage] バッファに hostname 未判明データ ${monitorData.temporaryBuffer.length}件 残存`);
-    }
-  }
-
-  // (1a-2) currentHostname は最初に接続したホストのまま固定（後方互換用）。
-  // 全ホストが並行動作しており、受信メッセージごとに currentHostname を変更しない。
-  // 各メッセージは data.hostname で正しいホストに振り分けられる。
-
-  // (1b) ★ 全ホスト統一: hostname があれば即処理。なければバッファ。
-  // ★ currentHostname フォールバックは使わない — 2台目のデータが1台目に書き込まれるリスク
-  const targetHost = data.hostname;
-  if (targetHost && targetHost !== PLACEHOLDER_HOSTNAME) {
-    processData(data, targetHost);
-  } else {
-    // ホスト名が完全に不明 → バッファリング（後続メッセージでhostnameが判明したら処理）
-    data._bufferedAt = Date.now();
-    monitorData.temporaryBuffer.push(data);
-    console.debug("[handleMessage] hostname なしのメッセージをバッファ:", Object.keys(data).join(","));
+/**
+ * @deprecated handleMessage は統一パス化により死にコード。
+ * handleSocketMessage → processData の直接呼び出しが全データを処理する。
+ * 互換性のため export は維持するが、内部は空実装。
+ * temporaryBuffer も不要（handleSocketMessage が hostKey で振り分け済み）。
+ *
+ * @param {object} _data 受信データ（未使用）
+ */
+export function handleMessage(_data) {
+  // ★ 統一パス化完了: handleSocketMessage → processData で全ホスト処理済み。
+  // この関数は呼び出されない。万一呼ばれた場合のためのフォールバック:
+  if (_data?.hostname) {
+    ensureMachineData(_data.hostname);
+    processData(_data, _data.hostname);
   }
 }
 
