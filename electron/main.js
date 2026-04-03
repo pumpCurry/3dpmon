@@ -161,57 +161,41 @@ function startHttpServer(port) {
  * @returns {void}
  */
 /**
- * 旧オリジン(file://)のストレージデータを新パーティション(persist:3dpmon)にコピーする。
- * Electron の localStorage/IndexedDB はユーザーデータディレクトリ配下に保存されるため、
- * ファイルシステムレベルでコピーする。
- *
- * 旧: userData/Default/Local Storage/  → 新: userData/Partitions/3dpmon/Local Storage/
- * 旧: userData/Default/IndexedDB/      → 新: userData/Partitions/3dpmon/IndexedDB/
+ * パーティション孤立データの救済。
+ * v2.1.008 で persist:3dpmon パーティションに保存されたデータを
+ * デフォルトパーティション（file:// オリジン）に復元する。
  *
  * @private
  */
 function _migrateStoragePartition() {
   const userData = app.getPath("userData");
-  // ★ Electron の persist: パーティション名は "Partitions/persist_<name>" にマッピングされる
-  const newPartDir = path.join(userData, "Partitions", "persist_3dpmon");
 
   // センチネルファイルでマイグレーション済みかチェック
-  const sentinelPath = path.join(userData, ".storage-migrated");
+  const sentinelPath = path.join(userData, ".storage-migrated-v2");
   if (fs.existsSync(sentinelPath)) {
-    return; // マイグレーション済み
-  }
-
-  // 旧ストレージのコピー元を探索（優先順）
-  const candidates = [
-    path.join(userData, "Default"),                    // Electron標準
-    path.join(userData, "Local Storage"),              // 直下にある場合
-    path.join(userData)                                // userDataそのもの
-  ];
-
-  let sourceDir = null;
-  for (const dir of candidates) {
-    const lsPath = path.join(dir, "Local Storage");
-    const idbPath = path.join(dir, "IndexedDB");
-    if (fs.existsSync(lsPath) || fs.existsSync(idbPath)) {
-      sourceDir = dir;
-      break;
-    }
-  }
-
-  if (!sourceDir) {
-    console.log("[migration] 旧ストレージが見つかりません（初回起動）");
     return;
   }
 
-  console.log(`[migration] 旧ストレージ発見: ${sourceDir} → ${newPartDir}`);
+  // 旧ストレージのコピー元を探索（優先順）
+  // ★ v2.1.008 で Partitions/3dpmon/ に孤立したデータを元に戻す
+  const partitionDir = path.join(userData, "Partitions", "3dpmon");
+  const defaultDir = userData; // file:// オリジンのデフォルト保存先
+
+  if (!fs.existsSync(partitionDir)) {
+    // パーティションデータなし → マイグレーション不要
+    try { fs.writeFileSync(sentinelPath, JSON.stringify({ migratedAt: new Date().toISOString(), reason: "no partition data" })); } catch {}
+    return;
+  }
+
+  console.log(`[migration] パーティション孤立データ救済: ${partitionDir} → ${defaultDir}`);
 
   // コピー対象ディレクトリ
   const targets = ["Local Storage", "IndexedDB", "Session Storage"];
   let copied = 0;
 
   for (const subDir of targets) {
-    const src = path.join(sourceDir, subDir);
-    const dst = path.join(newPartDir, subDir);
+    const src = path.join(partitionDir, subDir);
+    const dst = path.join(defaultDir, subDir);
     if (!fs.existsSync(src)) continue;
     try {
       fs.cpSync(src, dst, { recursive: true, force: false, errorOnExist: false });
@@ -252,20 +236,16 @@ function createWindow() {
       nodeIntegration: false,
       /* Electron版: ユーザークリックなしで音声再生（TTS/効果音）を許可 */
       autoplayPolicy: "no-user-gesture-required",
-      /* ★ ストレージパーティションを固定 — file:// と http://localhost の
-         オリジン変更でデータが消失しないよう、persist:3dpmon パーティションを使用。
-         これにより localStorage / IndexedDB が常に同じ場所に保存される。 */
-      partition: "persist:3dpmon"
+      /* ★ partition は指定しない — file:// オリジンのデフォルトパーティションを使用。
+         persist:3dpmon パーティションはオリジン不一致でデータ消失を引き起こすため廃止。 */
     }
   });
 
-  /* HTTP サーバ経由で読み込む（子クライアントと同一オリジンを共有）
-     サーバ未起動時は file:// にフォールバック */
-  if (httpServer) {
-    mainWindow.loadURL(`http://localhost:${RELAY_PORT}/3dp_monitor.html`);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "..", "3dp_monitor.html"));
-  }
+  /* ★ 親ウィンドウは常に file:// で読み込む。
+     http://localhost: だとオリジンが変わり、localStorage/IndexedDB が
+     別パーティションになってデータが消失する。
+     子クライアント用の HTTP サーバは別途 port 5313 で起動済み。 */
+  mainWindow.loadFile(path.join(__dirname, "..", "3dp_monitor.html"));
 
   /* 開発モード: DevTools 自動表示 */
   if (process.argv.includes("--dev")) {
