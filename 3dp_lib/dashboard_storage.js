@@ -816,7 +816,24 @@ function _restoreFromData(shared, machines) {
 
   // ★ machines: 全置換ではなくマージ（既存ランタイムデータを保護）
   if (machines && typeof machines === "object") {
+    // IP→ホスト名の重複除外: connectionTargets でホスト名が解決済みのIPキーをスキップ
+    const targets = shared?.appSettings?.connectionTargets
+      || monitorData.appSettings?.connectionTargets || [];
+    const ipToHostname = new Map();
+    for (const t of targets) {
+      if (t.hostname && t.dest) {
+        const ip = t.dest.split(":")[0];
+        ipToHostname.set(ip, t.hostname);
+      }
+    }
+    const hostnameKeys = new Set(Object.keys(machines));
     for (const [host, machineData] of Object.entries(machines)) {
+      // IPキーで、かつ同一プリンタのホスト名キーが存在する場合はスキップ
+      const resolvedHostname = ipToHostname.get(host);
+      if (resolvedHostname && hostnameKeys.has(resolvedHostname) && host !== resolvedHostname) {
+        console.debug(`[_restoreFromData] IPキー "${host}" はホスト名 "${resolvedHostname}" に統合済み — スキップ`);
+        continue;
+      }
       if (!monitorData.machines[host]) {
         // 新規ホスト: そのまま追加
         monitorData.machines[host] = machineData;
