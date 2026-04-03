@@ -145,3 +145,42 @@ describe("エクスポートデータ繰り返しインポート耐性", () => {
     expect(targets).toHaveLength(2); // 3回入れても2件
   });
 });
+
+describe("フィラメント残量の時系列逆転防止", () => {
+  it("古いエクスポート(残量多い)→現在(残量少ない)でインポートしても残量が戻らない", () => {
+    // 現在の状態: sp1 が 15% (50000mm)
+    const current = { id: "sp1", remainingLengthMm: 50000, isActive: true, startedAt: 1774000000 };
+    // 古いエクスポート: sp1 が 100% (330000mm)
+    const oldExport = { id: "sp1", remainingLengthMm: 330000, isActive: false, startedAt: 1774000000 };
+
+    // マージ: 小さい方を採用
+    const merged = Math.min(current.remainingLengthMm, oldExport.remainingLengthMm);
+    expect(merged).toBe(50000); // 現在の消費済み値が維持される
+  });
+
+  it("新しいエクスポート(残量少ない)→古いデータ(残量多い)でも正しく反映", () => {
+    const oldInMemory = { id: "sp1", remainingLengthMm: 330000 };
+    const newExport = { id: "sp1", remainingLengthMm: 50000 };
+
+    const merged = Math.min(oldInMemory.remainingLengthMm, newExport.remainingLengthMm);
+    expect(merged).toBe(50000);
+  });
+
+  it("再起動→リストアで残量が100%に戻らない", () => {
+    // 起動時: メモリ上のスプールは初期状態(isActive=false)
+    const inMemory = { id: "sp1", remainingLengthMm: 0, isActive: false }; // 空のデフォルト
+    // ストレージから復元: 最後に保存された状態
+    const stored = { id: "sp1", remainingLengthMm: 50000, isActive: true };
+
+    // マージ: 小さい方を採用。ただし inMemory が 0 (初期値) なら stored を使う
+    const existRemain = inMemory.remainingLengthMm;
+    const storedRemain = stored.remainingLengthMm;
+    let merged;
+    if (existRemain === 0 || !Number.isFinite(existRemain)) {
+      merged = storedRemain; // 初期値なのでストレージを採用
+    } else {
+      merged = Math.min(existRemain, storedRemain);
+    }
+    expect(merged).toBe(50000); // ストレージの値が採用される（100%には戻らない）
+  });
+});

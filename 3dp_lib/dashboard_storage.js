@@ -144,10 +144,24 @@ export async function importAllData(data) {
     for (const sp of data.filamentSpools) {
       if (!sp.id) continue;
       if (existingIds.has(sp.id)) {
-        // 既存スプール: 新しい方で更新 (startedAt が大きい = 新しい)
+        // 既存スプール: マージ（★ remainingLengthMm は小さい方=最新を採用）
         const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
-        if (existing && (sp.startedAt || 0) > (existing.startedAt || 0)) {
+        if (existing) {
+          const prevRemain = existing.remainingLengthMm;
+          const prevActive = existing.isActive;
+          const prevInUse = existing.isInUse;
+          const prevHostname = existing.hostname;
           Object.assign(existing, sp);
+          // ★ 残量は小さい方（より消費が進んだ方）を採用
+          if (Number.isFinite(prevRemain) && Number.isFinite(existing.remainingLengthMm)) {
+            existing.remainingLengthMm = Math.min(prevRemain, existing.remainingLengthMm);
+          } else if (Number.isFinite(prevRemain)) {
+            existing.remainingLengthMm = prevRemain;
+          }
+          // ★ 装着状態はランタイム値を優先
+          existing.isActive = prevActive || existing.isActive;
+          existing.isInUse = prevInUse || existing.isInUse;
+          existing.hostname = prevHostname || existing.hostname;
           stats.spools++;
         }
       } else {
@@ -886,12 +900,35 @@ function _restoreFromData(shared, machines) {
     for (const sp of shared.filamentSpools) {
       if (!sp.id) continue;
       if (existingIds.has(sp.id)) {
-        // 既存スプール: ★ アクティブ（印刷中/装着中）ならランタイム状態を保護
+        // 既存スプール: ストレージ値でマージ
         const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
-        if (existing && !existing.isActive && !existing.isInUse) {
-          Object.assign(existing, applySpoolDefaults(sp));
+        if (existing) {
+          const restored = applySpoolDefaults(sp);
+          // ★ remainingLengthMm: 両方に有効値がある場合は小さい方（=より消費が進んだ方）を採用
+          //    起動時にメモリが初期値(0 or undefined)の場合はストレージ値を採用
+          // ★ isActive/isInUse/hostname はランタイム値を優先（装着状態は復元値より信頼できる）
+          const existRemain = existing.remainingLengthMm;
+          const restoredRemain = restored.remainingLengthMm;
+          let mergedRemain;
+          if (!Number.isFinite(existRemain) || existRemain === 0) {
+            mergedRemain = restoredRemain; // メモリが初期値 → ストレージ値を採用
+          } else if (!Number.isFinite(restoredRemain)) {
+            mergedRemain = existRemain; // ストレージが未設定 → メモリ値を維持
+          } else {
+            mergedRemain = Math.min(existRemain, restoredRemain); // 両方有効 → 小さい方
+          }
+          const protectedFields = {
+            remainingLengthMm: mergedRemain,
+            isActive: existing.isActive || restored.isActive,
+            isInUse: existing.isInUse || restored.isInUse,
+            hostname: existing.hostname || restored.hostname
+          };
+          Object.assign(existing, restored, protectedFields);
+          // Infinity 防止（両方が未設定の場合）
+          if (!Number.isFinite(existing.remainingLengthMm)) {
+            existing.remainingLengthMm = restored.remainingLengthMm ?? 0;
+          }
         }
-        // else: ランタイム状態が権威 — ストレージ値で上書きしない
       } else {
         // 新規スプール: 追加
         monitorData.filamentSpools.push(applySpoolDefaults(sp));
