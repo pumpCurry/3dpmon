@@ -336,13 +336,14 @@ export function handleMessage(data) {
   // 各メッセージは data.hostname で正しいホストに振り分けられる。
 
   // (1b) ★ 全ホスト統一: hostname があれば即処理。なければバッファ。
-  // currentHostname による分岐を廃止（1台目特別扱いの排除）
-  const targetHost = data.hostname || currentHostname;
+  // ★ currentHostname フォールバックは使わない — 2台目のデータが1台目に書き込まれるリスク
+  const targetHost = data.hostname;
   if (targetHost && targetHost !== PLACEHOLDER_HOSTNAME) {
     processData(data, targetHost);
   } else {
     // ホスト名が完全に不明 → バッファリング（後続メッセージでhostnameが判明したら処理）
     monitorData.temporaryBuffer.push(data);
+    console.debug("[handleMessage] hostname なしのメッセージをバッファ:", Object.keys(data).join(","));
   }
 }
 
