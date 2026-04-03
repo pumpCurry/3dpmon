@@ -88,25 +88,9 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
   // 既に同じスプールが装着済みなら何もしない
   if (getCurrentSpoolId(hostname) === updatedSp.id) return;
 
-  // 装着スプールを変更（setCurrentSpoolId は旧スプールの精算も行うが、
-  // 呼び出し元で既に残量調整済みのため、per-host ポインタの切替のみ必要）
-  const oldId = getCurrentSpoolId(hostname);
-  // per-host マップを更新（グローバル値はレガシー互換で維持）
-  monitorData.hostSpoolMap[hostname] = updatedSp.id;
-  monitorData.currentSpoolId = updatedSp.id;
-  // 該当ホストのスプールのみ isActive を切り替え（他ホスト装着分には触れない）
-  const oldSpool = getSpoolById(oldId);
-  if (oldSpool && oldSpool.hostname === hostname) {
-    oldSpool.isActive = false;
-    oldSpool.isInUse = false;
-  }
-  updatedSp.isActive = true;
-  updatedSp.isInUse = true;
-  updatedSp.hostname = hostname;
-  // aggregator の追跡を新スプールに切り替え
-  if (updatedSp.currentJobStartLength == null) {
-    updatedSp.currentJobStartLength = updatedSp.remainingLengthMm;
-  }
+  // ★ setCurrentSpoolId を使い、旧スプール解除 + 新スプール装着を正規ルートで実行
+  // （直接 hostSpoolMap を操作すると isActive/hostname/removedAt 等の状態が不整合になる）
+  setCurrentSpoolId(updatedSp.id, hostname);
   updatedSp.currentPrintID = String(curJob.id);
   // storedData を更新してフィラメントプレビューを連動
   setStoredDataForHost(hostname, "filamentRemainingMm", updatedSp.remainingLengthMm, true);
@@ -472,7 +456,9 @@ export function jobsToRaw(jobs) {
         starttime:     startEpoch,
         ...(job.actualStartTime !== undefined && { actualStartTime: Date.parse(job.actualStartTime) / 1000 }),
         ...(finishEpoch && { endtime: finishEpoch }),
-        usagetime:     finishEpoch ? finishEpoch - startEpoch : 0,
+        usagetime:     (finishEpoch && startEpoch > 0)
+                         ? Math.max(0, finishEpoch - startEpoch)
+                         : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
         printfinish:   job.printfinish ?? (finishEpoch ? 1 : 0),
         filemd5:       job.filemd5 ?? "",
@@ -1116,7 +1102,15 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         const matTag   = mat ? `<span class="material-tag" style="background:${matColor};">${mat}</span>` : '';
         const spName = info.spoolName || sp?.name || '';
         const colName = info.colorName || sp?.colorName || '';
-        let text = spName || colName ? `${colorBox}${matTag} ${spName}/${colName}` : '(不明)';
+        let text;
+        if (spName || colName) {
+          text = `${colorBox}${matTag} ${spName}/${colName}`;
+        } else if (info.spoolId) {
+          // スプール削除済みだが ID は残っている
+          text = `${colorBox}${matTag} <span class="text-muted">(削除済み #${info.spoolId.toString().slice(-4)})</span>`;
+        } else {
+          text = '(不明)';
+        }
         if (idx === 0) {
           const editId = info.spoolId || raw.filamentId;
           if (editId) text += ` <button class="spool-edit icon-btn" data-id="${editId}" title="修正">✏</button>`;
@@ -1224,14 +1218,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       });
       if (!result) return;
       const { spool: newSp } = result;
-      // 新スプールから使用量を差し引く
-      if (materialUsedMm > 0) {
-        const freshSp = getSpoolById(newSp.id);
-        const remain = freshSp ? freshSp.remainingLengthMm : newSp.remainingLengthMm;
-        updateSpool(newSp.id, {
-          remainingLengthMm: Math.max(0, remain - materialUsedMm)
-        });
-      }
+      // ★ 「指定」は記録目的の紐付けのみ — 残量を差し引かない
+      // 過去の印刷で既に物理的に消費された量を再度差し引くと残量が不正になる
       const updatedSp = getSpoolById(newSp.id) || newSp;
       // パース済み raw にフィラメント情報を直接セット
       _applyFilamentToRaw(raw, updatedSp);
