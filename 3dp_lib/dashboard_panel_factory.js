@@ -42,6 +42,7 @@
 
 import { initializePanel, destroyPanel } from "./dashboard_panel_init.js";
 import { monitorData, PLACEHOLDER_HOSTNAME, markAllKeysDirty } from "./dashboard_data.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { registerFieldElements, unregisterFieldElements } from "./dashboard_ui.js";
 
 /* ─── localStorage キー ─── */
@@ -497,8 +498,9 @@ export function toggleGlobalLock(lock) {
   if (!grid) return _globalLocked;
   grid.enableMove(!_globalLocked);
   grid.enableResize(!_globalLocked);
-  // appSettings に保存
+  // appSettings に保存（★ 即時保存で再起動時に状態を維持）
   monitorData.appSettings.layoutLocked = _globalLocked;
+  saveUnifiedStorage(true);
   return _globalLocked;
 }
 

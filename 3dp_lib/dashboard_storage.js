@@ -652,6 +652,8 @@ function _flushStorage() {
       queueSharedWrite("filamentSpools",     monitorData.filamentSpools);
       queueSharedWrite("usageHistory",       monitorData.usageHistory);
       queueSharedWrite("filamentPresets",    monitorData.filamentPresets);
+      queueSharedWrite("userPresets",        monitorData.userPresets);
+      queueSharedWrite("hiddenPresets",      monitorData.hiddenPresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
       queueSharedWrite("currentSpoolId",     monitorData.currentSpoolId);
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
@@ -926,6 +928,14 @@ function _restoreFromData(shared, machines) {
       monitorData.hostSpoolMap[spool.hostname] = shared.currentSpoolId;
     }
     // ★ 全クリア（= {}）は行わない — 既存の装着情報を保護
+  }
+
+  // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）
+  if (Array.isArray(shared?.userPresets) && shared.userPresets.length > 0) {
+    monitorData.userPresets = shared.userPresets;
+  }
+  if (Array.isArray(shared?.hiddenPresets)) {
+    monitorData.hiddenPresets = shared.hiddenPresets;
   }
 
   // per-host カメラトグルの復元（マージ）

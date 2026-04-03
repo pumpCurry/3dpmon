@@ -31,6 +31,7 @@ import { initPanelMenu } from "./dashboard_panel_menu.js";
 import { registerAllPanelInits } from "./dashboard_panel_init.js";
 import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
 import { monitorData } from "./dashboard_data.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { registerPrintManagerAccessor } from "./dashboard_spool.js";
 import { registerRelayCallback } from "./dashboard_aggregator.js";
@@ -441,6 +442,8 @@ function _initTopMenuBar() {
     if (camPort && camPort.value) {
       monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || 8080;
     }
+    // ★ 設定変更を即時保存（保存漏れでリスタート時に設定消失するバグ修正）
+    saveUnifiedStorage(true);
   }
 
   /* モーダル内の「接続追加」ボタン（統一パス） */
