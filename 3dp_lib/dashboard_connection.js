@@ -164,7 +164,7 @@ function _setConnectionTargetHostname(dest, hostname) {
  */
 async function _resolveAndSaveMac(dest, hostname) {
   if (!window.electronAPI?.arpResolve) return;
-  const ip = dest.split(":")[0];
+  const ip = _extractIp(dest);
   try {
     const mac = await window.electronAPI.arpResolve(ip);
     if (!mac) return;
@@ -191,15 +191,37 @@ async function _resolveAndSaveMac(dest, hostname) {
  * @param {string} destOrHost - "IP:PORT" 形式の接続先、またはホスト名
  * @returns {object|null} connectionTargets 内のエントリ、または null
  */
+/**
+ * dest 文字列から IP 部分を抽出する。IPv4/IPv6 両対応。
+ * "192.168.54.151:9999" → "192.168.54.151"
+ * "[fe80::1]:9999"       → "fe80::1"
+ * "fe80::1"              → "fe80::1"
+ * "192.168.54.151"       → "192.168.54.151"
+ * @param {string} dest
+ * @returns {string}
+ */
+function _extractIp(dest) {
+  if (!dest) return "";
+  // IPv6 bracket notation: [addr]:port
+  const v6Match = dest.match(/^\[([^\]]+)\]/);
+  if (v6Match) return v6Match[1];
+  // IPv4 or hostname: addr:port — 最後のコロン以降がポート
+  const lastColon = dest.lastIndexOf(":");
+  // IPv6 without brackets (multiple colons): return as-is
+  if ((dest.match(/:/g) || []).length > 1) return dest;
+  // IPv4 or hostname:port
+  return lastColon > 0 ? dest.substring(0, lastColon) : dest;
+}
+
 function _findConnectionTarget(destOrHost) {
   if (!destOrHost) return null;
   const targets = monitorData.appSettings.connectionTargets || [];
   /* dest 完全一致（IP:PORT）を優先 */
   const exact = targets.find(t => t.dest === destOrHost);
   if (exact) return exact;
-  /* ★ IP部分一致: "192.168.54.151:9999" で "192.168.54.151" エントリも見つける（またはその逆） */
-  const ip = destOrHost.split(":")[0];
-  const ipMatch = targets.find(t => t.dest.split(":")[0] === ip);
+  /* ★ IP部分一致（IPv4/IPv6対応） */
+  const ip = _extractIp(destOrHost);
+  const ipMatch = targets.find(t => _extractIp(t.dest) === ip);
   if (ipMatch) return ipMatch;
   /* ホスト名での検索（connectWs からの逆引き用） */
   return targets.find(t => t.hostname === destOrHost) || null;
@@ -270,7 +292,7 @@ export function connectAllSavedTargets() {
   /* connectionTargets を唯一の接続先リストとして使用 */
   for (const t of targets) {
     const dest = t.dest.includes(":") ? t.dest : t.dest + ":9999";
-    const ip = dest.split(":")[0];
+    const ip = _extractIp(dest);
     if (!connected.has(ip)) {
       connected.add(ip);
       connectWs(dest);
@@ -397,7 +419,7 @@ export function fetchStoredData(host) {
 export function getDeviceIp(host) {
   const st = connectionMap[host];
   const raw = st?.dest || monitorData.appSettings.wsDest || "";
-  return raw.split(":")[0] || "";
+  return _extractIp(raw) || "";
 }
 
 /**
@@ -663,7 +685,7 @@ export function connectWs(hostOrDest) {
   let dest = hostOrDest || "";
   if (!dest) return;
   if (!dest.includes(":")) dest += ":9999";
-  const ip = dest.split(":")[0];
+  const ip = _extractIp(dest);
 
   /* 再接続時に正しいホスト名キーを使うため、connectionTargets に保存済みの
      ホスト名を参照する。ホスト名が未確定（初回接続等）の場合は IP をキーにする。
@@ -1272,7 +1294,7 @@ export function updateConnectionUI(state, opt = {}, host) {
   // wsDest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
   const st = getState(host);
   const rawDest  = st.dest || monitorData.appSettings.wsDest || "";
-  const hostOnly = rawDest.split(":")[0] || "";
+  const hostOnly = _extractIp(rawDest) || "";
 
   // 入力欄を隠し・無効化
   function hideInput() {
@@ -1538,7 +1560,7 @@ export function updatePrinterListUI() {
         });
         if (!ok) return;
 
-        const ip = dest.split(":")[0];
+        const ip = _extractIp(dest);
 
         /* 接続先設定から削除（保存済みホスト名を取得） */
         const savedHostname = _removeConnectionTarget(dest);
@@ -1566,7 +1588,7 @@ export function updatePrinterListUI() {
         _cleanupMachineKeys([ip]);
 
         // wsDest も同一IPなら除去
-        if (monitorData.appSettings.wsDest?.split(":")[0] === ip) {
+        if (_extractIp(monitorData.appSettings.wsDest || "") === ip) {
           monitorData.appSettings.wsDest = "";
         }
         saveUnifiedStorage();
