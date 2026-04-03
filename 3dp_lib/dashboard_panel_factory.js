@@ -1248,13 +1248,21 @@ export function ensureHostPanels(hostname) {
   }
 
   /* 接続ホスト数に応じたテンプレートを選択。
-     1台: 48列フル幅、2台: 左右24列ずつ、3台以上: 左右24列で縦積み */
+     1台: 48列フル幅、2台: 左右24列ずつ、3台以上: 左右24列で縦積み
+     ★ テンプレートの座標は _getLayoutTemplate 内で xOffset/yOffset 込みで算出済み。
+       maxY によるオフセットは「同列のホストが縦に重ならない」場合のフォールバック。
+       テンプレートが row を考慮済みなら maxY は不要。 */
   const hostCount = _countActiveHosts();
   const hostIndex = _getHostIndex(hostname);
   const layout = _getLayoutTemplate(hostCount, hostIndex);
 
+  // テンプレートが横並び配置（hostIndex >= 1, col != 0）の場合、
+  // maxY オフセットを適用しない（テンプレートの yOffset が正しい配置を指定済み）
+  const useMaxY = hostCount <= 1 || (hostIndex % 2 === 0 && hostIndex > 0);
+  const yBase = useMaxY ? maxY : 0;
+
   for (const p of layout) {
-    if (addPanel(p.type, hostname, { x: p.x, y: p.y + maxY, w: p.w, h: p.h, fontSize: p.fontSize || "" })) count++;
+    if (addPanel(p.type, hostname, { x: p.x, y: p.y + yBase, w: p.w, h: p.h, fontSize: p.fontSize || "" })) count++;
   }
 
   if (count > 0) saveLayout();
