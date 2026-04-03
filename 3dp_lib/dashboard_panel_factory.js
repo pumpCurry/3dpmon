@@ -565,6 +565,11 @@ export function saveLayout() {
   } catch (e) {
     console.warn("saveLayout: localStorage 保存に失敗しました", e);
   }
+
+  // ★ appSettings にも保存（IndexedDB/per-host localStorage 経由で永続化）
+  // partition 変更やオリジン変更で localStorage が消えても復元可能
+  monitorData.appSettings.panelLayout = layout;
+  saveUnifiedStorage(true);
 }
 
 /**
@@ -592,11 +597,16 @@ export function getCurrentLayoutData() {
       };
     });
   }
-  // グリッド未初期化: localStorage から読み込み
+  // グリッド未初期化: localStorage → appSettings の順で読み込み
   try {
     const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  // ★ appSettings にバックアップがあればそちらを使用
+  if (Array.isArray(monitorData.appSettings.panelLayout) && monitorData.appSettings.panelLayout.length > 0) {
+    return monitorData.appSettings.panelLayout;
+  }
+  return null;
 }
 
 /**
@@ -670,9 +680,14 @@ export function restoreLayout() {
   }
 
   try {
-    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    let raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    // ★ localStorage になければ appSettings から復元（partition 移行対策）
+    if (!raw && Array.isArray(monitorData.appSettings.panelLayout) && monitorData.appSettings.panelLayout.length > 0) {
+      raw = JSON.stringify(monitorData.appSettings.panelLayout);
+      console.info("[restoreLayout] appSettings からレイアウト復元");
+    }
     if (!raw) {
-      console.info("[restoreLayout] レイアウトキー未検出:", LAYOUT_STORAGE_KEY);
+      console.info("[restoreLayout] レイアウトデータなし");
       return false;
     }
 
@@ -705,14 +720,16 @@ export function restoreLayout() {
       }
     }
 
-    /* validHosts が空でもレイアウトデータ内のホスト名を有効とみなす
-       （レイアウトに保存されている = 過去に接続した実績がある） */
+    /* ★ レイアウトデータ内のホスト名を常に有効とみなす
+       （レイアウトに保存されている = 過去に接続した実績がある。
+         partition移行やデータ消失で connectionTargets.hostname が
+         空になっても、レイアウトだけは localStorage に残っている） */
+    for (const item of layout) {
+      if (item.host && item.host !== "shared") validHosts.add(item.host);
+    }
     if (validHosts.size === 0) {
-      for (const item of layout) {
-        if (item.host && item.host !== "shared") validHosts.add(item.host);
-      }
-      if (validHosts.size === 0) return false;
-      console.info("[restoreLayout] connectionTargets/machines が空のため、レイアウトデータからホストを復元:", [...validHosts]);
+      console.info("[restoreLayout] 有効なホストなし");
+      return false;
     }
 
     /* 既存パネルをすべて削除（data-field キャッシュも解除） */
