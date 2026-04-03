@@ -226,9 +226,10 @@ function _applySnapshot(state) {
     monitorData.appSettings.connectionTargets = state.appSettings.connectionTargets;
   }
 
-  // フィラメントデータ
+  // フィラメントデータ（★ 子クライアントはスナップショットで全置換して問題ない
+  //   — 子のローカル変更は親に送信済みのため、親の状態が正）
   if (state.filamentSpools) monitorData.filamentSpools = state.filamentSpools;
-  if (state.hostSpoolMap) monitorData.hostSpoolMap = state.hostSpoolMap;
+  if (state.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, state.hostSpoolMap);
 
   // per-host データ
   if (state.machines) {
@@ -263,10 +264,10 @@ function _applyDelta(msg) {
     }
   }
 
-  // 共有データ差分
+  // 共有データ差分（★ delta は親が権威なので全置換で正しい）
   if (msg.shared) {
     if (msg.shared.filamentSpools) monitorData.filamentSpools = msg.shared.filamentSpools;
-    if (msg.shared.hostSpoolMap) monitorData.hostSpoolMap = msg.shared.hostSpoolMap;
+    if (msg.shared.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, msg.shared.hostSpoolMap);
   }
 }
 

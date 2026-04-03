@@ -792,50 +792,129 @@ function _restoreFromData(shared, machines) {
   if (shared?.appSettings || shared?.appSettings === null) {
     Object.assign(monitorData.appSettings, shared.appSettings);
   }
-  if (machines) monitorData.machines = machines;
-  if (Array.isArray(shared?.filamentSpools)) {
-    monitorData.filamentSpools = shared.filamentSpools.map(sp => applySpoolDefaults(sp));
+
+  // ★ machines: 全置換ではなくマージ（既存ランタイムデータを保護）
+  if (machines && typeof machines === "object") {
+    for (const [host, machineData] of Object.entries(machines)) {
+      if (!monitorData.machines[host]) {
+        // 新規ホスト: そのまま追加
+        monitorData.machines[host] = machineData;
+      } else {
+        // 既存ホスト: storedData をマージ（ランタイムデータを保護）
+        const existing = monitorData.machines[host];
+        if (machineData.storedData) {
+          if (!existing.storedData) existing.storedData = {};
+          for (const [key, val] of Object.entries(machineData.storedData)) {
+            // 既存値がなければ復元値を適用
+            if (!(key in existing.storedData) || existing.storedData[key]?.rawValue == null) {
+              existing.storedData[key] = val;
+            }
+          }
+        }
+        // printStore, historyData: 既存が空なら復元値を適用
+        if (machineData.printStore && (!existing.printStore?.history?.length)) {
+          existing.printStore = machineData.printStore;
+        }
+        if (machineData.historyData?.length && !existing.historyData?.length) {
+          existing.historyData = machineData.historyData;
+        }
+      }
+    }
   }
+
+  // ★ filamentSpools: IDベースマージ（既存を優先、新規のみ追加）
+  if (Array.isArray(shared?.filamentSpools)) {
+    const existingIds = new Set(monitorData.filamentSpools.map(s => s.id));
+    for (const sp of shared.filamentSpools) {
+      if (!sp.id) continue;
+      if (existingIds.has(sp.id)) {
+        // 既存スプール: ランタイム変更がなければストレージ値で更新
+        const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
+        if (existing) Object.assign(existing, applySpoolDefaults(sp));
+      } else {
+        // 新規スプール: 追加
+        monitorData.filamentSpools.push(applySpoolDefaults(sp));
+      }
+    }
+  }
+
+  // ★ usageHistory: 既存が空の時のみ復元（ランタイム追加分を保護）
   if (Array.isArray(shared?.usageHistory)) {
-    monitorData.usageHistory = shared.usageHistory;
+    if (monitorData.usageHistory.length === 0) {
+      monitorData.usageHistory = shared.usageHistory;
+    } else {
+      // 既存あり: 新しいエントリのみ追記（IDで重複排除）
+      const existingIds = new Set(monitorData.usageHistory.map(u => `${u.spoolId}_${u.startedAt}`));
+      for (const entry of shared.usageHistory) {
+        const key = `${entry.spoolId}_${entry.startedAt}`;
+        if (!existingIds.has(key)) {
+          monitorData.usageHistory.push(entry);
+        }
+      }
+    }
   }
   trimUsageHistory();
+
+  // ★ filamentInventory: IDベースマージ
   if (Array.isArray(shared?.filamentInventory)) {
-    monitorData.filamentInventory = shared.filamentInventory;
+    if (monitorData.filamentInventory.length === 0) {
+      monitorData.filamentInventory = shared.filamentInventory;
+    } else {
+      const existingIds = new Set(monitorData.filamentInventory.map(i => i.modelId));
+      for (const inv of shared.filamentInventory) {
+        if (!inv.modelId) continue;
+        if (existingIds.has(inv.modelId)) {
+          const existing = monitorData.filamentInventory.find(i => i.modelId === inv.modelId);
+          if (existing) Object.assign(existing, inv);
+        } else {
+          monitorData.filamentInventory.push(inv);
+        }
+      }
+    }
   }
+
   // プリセット: ストレージのユーザー編集済みデータとコード側の新規追加をマージ
   if (Array.isArray(shared?.filamentPresets)) {
     const storedIds = new Set(shared.filamentPresets.map(p => p.presetId));
-    // コード側にあってストレージにないプリセットを追加
     const newPresets = FILAMENT_PRESETS.filter(p => !storedIds.has(p.presetId));
     monitorData.filamentPresets = [...shared.filamentPresets, ...newPresets];
     if (newPresets.length > 0) {
       console.info(`[_restoreFromData] 新規プリセット ${newPresets.length} 件をマージ`);
     }
   }
+
   if (shared && "currentSpoolId" in shared) {
     monitorData.currentSpoolId = shared.currentSpoolId;
   }
-  // per-host スプールマップの復元（レガシー移行対応）
+
+  // ★ hostSpoolMap: マージ（既存の装着情報を保護、全クリアしない）
   if (shared?.hostSpoolMap && typeof shared.hostSpoolMap === "object") {
-    monitorData.hostSpoolMap = shared.hostSpoolMap;
+    for (const [host, spoolId] of Object.entries(shared.hostSpoolMap)) {
+      if (spoolId && !monitorData.hostSpoolMap[host]) {
+        monitorData.hostSpoolMap[host] = spoolId;
+      }
+    }
   } else if (shared && "currentSpoolId" in shared && shared.currentSpoolId) {
     // レガシー移行: グローバル currentSpoolId からスプールの hostname を使って推定
     const spool = monitorData.filamentSpools.find(
       s => s.id === shared.currentSpoolId && !s.deleted
     );
-    if (spool && spool.hostname) {
-      monitorData.hostSpoolMap = { [spool.hostname]: shared.currentSpoolId };
-    } else {
-      monitorData.hostSpoolMap = {};
+    if (spool && spool.hostname && !monitorData.hostSpoolMap[spool.hostname]) {
+      monitorData.hostSpoolMap[spool.hostname] = shared.currentSpoolId;
     }
+    // ★ 全クリア（= {}）は行わない — 既存の装着情報を保護
   }
-  // per-host カメラトグルの復元
+
+  // per-host カメラトグルの復元（マージ）
   if (shared?.hostCameraToggle && typeof shared.hostCameraToggle === "object") {
-    monitorData.hostCameraToggle = shared.hostCameraToggle;
+    Object.assign(monitorData.hostCameraToggle, shared.hostCameraToggle);
   }
+
   if (shared && "spoolSerialCounter" in shared) {
-    monitorData.spoolSerialCounter = Number(shared.spoolSerialCounter) || 0;
+    const restored = Number(shared.spoolSerialCounter);
+    if (Number.isFinite(restored) && restored > monitorData.spoolSerialCounter) {
+      monitorData.spoolSerialCounter = restored;
+    }
   }
   const maxSerial = monitorData.filamentSpools.reduce(
     (m, s) => Math.max(m, Number(s.serialNo) || 0),
