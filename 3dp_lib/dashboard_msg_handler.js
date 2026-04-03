@@ -318,16 +318,31 @@ export function handleMessage(data) {
   // currentHostname の設定と legacyStoredData の移行は handleSocketMessage で実行済み。
 
   // バッファに溜まっていたデータを排出（hostname 判明後に処理）
+  // ★ hostname が判明しているデータのみ排出。hostname なしは残す。
+  //    複数機器が同時にバッファにいる場合、別機器のデータを誤帰属させない。
   if (data.hostname && monitorData.temporaryBuffer.length > 0) {
-    const drainHost = data.hostname;
-    const buf = monitorData.temporaryBuffer.splice(0);
-    for (const d of buf) {
-      const bufHost = d.hostname || drainHost;
-      if (!d.hostname) {
-        console.warn("[handleMessage] バッファデータに hostname なし → 帰属先:", drainHost);
+    const remaining = [];
+    for (const d of monitorData.temporaryBuffer) {
+      if (d.hostname) {
+        // hostname あり → 正しいホストで処理
+        ensureMachineData(d.hostname);
+        processData(d, d.hostname);
+      } else {
+        // hostname なし → まだ判明していないので残す
+        remaining.push(d);
       }
-      ensureMachineData(bufHost);
-      processData(d, bufHost);
+    }
+    // 古すぎるバッファエントリを破棄（30秒以上経過）
+    const now = Date.now();
+    monitorData.temporaryBuffer = remaining.filter(d => {
+      if (d._bufferedAt && now - d._bufferedAt > 30000) {
+        console.warn("[handleMessage] 30秒超のバッファエントリを破棄:", Object.keys(d).join(","));
+        return false;
+      }
+      return true;
+    });
+    if (monitorData.temporaryBuffer.length > 0) {
+      console.debug(`[handleMessage] バッファに hostname 未判明データ ${monitorData.temporaryBuffer.length}件 残存`);
     }
   }
 
@@ -342,6 +357,7 @@ export function handleMessage(data) {
     processData(data, targetHost);
   } else {
     // ホスト名が完全に不明 → バッファリング（後続メッセージでhostnameが判明したら処理）
+    data._bufferedAt = Date.now();
     monitorData.temporaryBuffer.push(data);
     console.debug("[handleMessage] hostname なしのメッセージをバッファ:", Object.keys(data).join(","));
   }
