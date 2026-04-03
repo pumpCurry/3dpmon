@@ -60,7 +60,7 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { saveUnifiedStorage, restoreLegacyStoredData, cleanupLegacy } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 // ---------------------------------------------------------------------------
@@ -596,14 +596,12 @@ export function connectWs(hostOrDest) {
   //    ここで IP を設定してしまうと初期化パスがスキップされる。
   //    WS 応答の data.hostname を受信した時点で handleMessage() 内で
   //    setCurrentHostname(hostname) が呼ばれ初期化が実行される。
-  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
-    if (target?.hostname) {
-      // ホスト名が既知（再接続）→ 即座に設定
-      setCurrentHostname(host);
-    }
-    // 後方互換: wsDest にメイン接続先を保持
-    monitorData.appSettings.wsDest = dest;
+  // ★ currentHostname 未設定なら最初の接続で設定（後方互換用のグローバル値）
+  if ((!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) && target?.hostname) {
+    setCurrentHostname(host);
   }
+  // 後方互換: wsDest にメイン接続先を保持（全ホスト共通で最後の接続先を記録）
+  monitorData.appSettings.wsDest = dest;
   const state = getState(host);
   state.dest = dest;
   state.historyReceived = false;
@@ -762,38 +760,34 @@ function handleSocketMessage(event, host) {
   //    ここで設定すると初期化（restoreUnifiedStorage/restartAggregatorTimer等）
   //    がスキップされてしまう。
   //    setCurrentHostname は handleMessage() 内で呼ばれる。
-  if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) &&
-      data && typeof data.hostname === "string" && data.hostname) {
-    hostKey = updateConnectionHost(hostKey, data.hostname);
-  }
-
-// 5.5) 全ホストのメッセージを handleMessage → processData で完全処理する
+// 5.5) ★ 全ホスト統一パス: 1台目も2台目も同じ処理
   try {
-    let st = getState(hostKey);
-    st.latest = data;
-
     // ホスト名を解決（受信データの hostname フィールドで connectionMap キーを更新）
     if (data && typeof data.hostname === "string" && data.hostname) {
       const newKey = updateConnectionHost(hostKey, data.hostname);
       if (newKey !== hostKey) {
         hostKey = newKey;
-        st = getState(hostKey);
       }
     }
 
-    // 初回ホスト（currentHostname 未設定）は handleMessage で全体初期化
-    const before = currentHostname;
-    if (currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) {
-      handleMessage(data);
-      if (currentHostname !== before && currentHostname !== PLACEHOLDER_HOSTNAME) {
-        hostKey = updateConnectionHost(hostKey, currentHostname);
-      }
-    } else {
-      // 2台目以降は ensureMachineData + processData で per-host 処理
-      const resolvedHost = data?.hostname || hostKey;
-      ensureMachineData(resolvedHost);
-      processData(data, resolvedHost);
+    let st = getState(hostKey);
+    st.latest = data;
+
+    // ★ currentHostname が未設定なら最初のホストで設定（1回だけ）
+    // これは後方互換用のグローバル値であり、per-host 処理には影響しない
+    if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) &&
+        data?.hostname) {
+      setCurrentHostname(data.hostname);
+      restoreLegacyStoredData();
+      cleanupLegacy();
     }
+
+    // ★ 全ホスト共通: ensureMachineData + processData
+    // processData 内の per-host 初期化ブロック (_initializedHosts) が
+    // 各ホストの初回のみ aggregator復元/履歴表示/印刷再開を実行する
+    const resolvedHost = data?.hostname || hostKey;
+    ensureMachineData(resolvedHost);
+    processData(data, resolvedHost);
   } catch (e) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error", false, hostKey);
     console.error("[ws.onmessage] handleMessage処理エラー:", e);

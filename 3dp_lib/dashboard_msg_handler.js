@@ -37,7 +37,7 @@ import errorMap from "./3dp_errorcode.js";
 import {
   monitorData,
   currentHostname,
-  setCurrentHostname,
+  ensureMachineData,
   PLACEHOLDER_HOSTNAME,
   isNotificationSuppressed,
   setNotificationSuppressed,
@@ -46,8 +46,6 @@ import {
 } from "./dashboard_data.js";
 import {
   restoreUnifiedStorage,
-  restoreLegacyStoredData,
-  cleanupLegacy,
 } from "./dashboard_storage.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
@@ -315,108 +313,36 @@ setHistoryPersistFunc(persistHistoryTimers);
  * @param {object} data 受信データ
  */
 export function handleMessage(data) {
-  // (1a) 初回ホスト設定
-  if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) && data.hostname) {
+  // (1a) ★ 統一パス: 全ホスト共通の初期化は processData 内の per-host ブロックで実行。
+  // handleMessage は temporaryBuffer の排出のみ担当。
+  // currentHostname の設定と legacyStoredData の移行は handleSocketMessage で実行済み。
 
-    // 初期化中は通知を抑制する
-    setNotificationSuppressed(true);
-
-    // --- ホスト初期化 ---
-    // ★ restoreUnifiedStorage() は initializeDashboard() で既に実行済み。
-    //    ここで再度呼ぶと monitorData.machines が上書きされ、
-    //    先に接続した他ホストのランタイムデータが消失する。
-    setCurrentHostname(data.hostname);
-    // レガシーデータ移行（v1.40以前 → v1.40+）: hostname 確定後に実行
-    restoreLegacyStoredData();
-    cleanupLegacy();
-
-    // 接続前に溜めていた分を一気に処理
-    // historyList / elapseVideoList を保持していた場合は
-    // このタイミングでまとめてマージするため一時配列へ収集
-    const bufHistory = [];
-    const bufVideos  = [];
-    const initHost = data.hostname || currentHostname;
-    monitorData.temporaryBuffer.forEach(d => {
-      // ★ hostname 不明のバッファは initHost に帰属させるが、
-      //    別ホストのデータが混入している可能性をログで警告
-      const bufHost = d.hostname || initHost;
-      if (!d.hostname && d !== data) {
-        console.warn("[handleMessage] バッファデータに hostname なし → initHost に帰属:", initHost);
+  // バッファに溜まっていたデータを排出（hostname 判明後に処理）
+  if (data.hostname && monitorData.temporaryBuffer.length > 0) {
+    const drainHost = data.hostname;
+    const buf = monitorData.temporaryBuffer.splice(0);
+    for (const d of buf) {
+      const bufHost = d.hostname || drainHost;
+      if (!d.hostname) {
+        console.warn("[handleMessage] バッファデータに hostname なし → 帰属先:", drainHost);
       }
-      if (Array.isArray(d.historyList)) {
-        bufHistory.push(...d.historyList);
-      }
-      if (Array.isArray(d.elapseVideoList)) {
-        bufVideos.push(...d.elapseVideoList);
-      }
-      processData(d, d.hostname || initHost); // per-host で処理
-    });
-    monitorData.temporaryBuffer = [];
-
-    // 印刷再開用データの復元
-    restoreAggregatorState(initHost);
-
-    // ── (1.a) 直接受信した履歴データも含めてマージ処理 ──
-    if (Array.isArray(data.historyList)) {
-      bufHistory.push(...data.historyList);
+      ensureMachineData(bufHost);
+      processData(d, bufHost);
     }
-    if (Array.isArray(data.elapseVideoList)) {
-      bufVideos.push(...data.elapseVideoList);
-    }
-
-    const baseUrl = `http://${getDeviceIp(initHost)}`;
-    if (bufHistory.length) {
-      printManager.updateHistoryList(bufHistory, baseUrl, "print-current-container", initHost);
-    }
-    if (bufVideos.length) {
-      printManager.updateVideoList(bufVideos, baseUrl, initHost);
-    }
-
-
-    // restoreAggregatorState() のあとでキー初期化 → 以降は必ず storedData[key] が存在
-    const initKeys = [
-      "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
-      "actualStartTime","initialLeftTime","initialLeftAt",
-      "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
-    ];
-    const sd = monitorData.machines[initHost]?.storedData || {};
-    initKeys.forEach(key => {
-      // 既に復元済みの値がある場合は保持し、存在しないキーのみ初期化する
-      if (!(key in sd)) {
-        setStoredDataForHost(initHost, key, null, true);
-        setStoredDataForHost(initHost, key, null, false);
-      }
-    });
-
-    restartAggregatorTimer();
-    const curId = Number(data.printStartTime || 0) || null;
-    restorePrintResume(initHost, curId);
-
-    // 保存済み履歴と現在印刷を表示（initHost は上で定義済み）
-    const baseUrlStored = `http://${getDeviceIp(initHost)}:${getHttpPort(initHost)}`;
-    const jobs = printManager.loadHistory(initHost);
-    if (jobs.length) {
-      const raw = printManager.jobsToRaw(jobs);
-      printManager.renderHistoryTable(raw, baseUrlStored, initHost);
-    }
-    printManager.renderPrintCurrent(
-      scopedById("print-current-container", initHost), initHost
-    );
-
-    // 初期化完了、このホストの通知抑制を解除
-    setNotificationSuppressed(false, initHost);
-
   }
 
   // (1a-2) currentHostname は最初に接続したホストのまま固定（後方互換用）。
   // 全ホストが並行動作しており、受信メッセージごとに currentHostname を変更しない。
   // 各メッセージは data.hostname で正しいホストに振り分けられる。
 
-  // (1b) ホスト未設定時はバッファリング、設定後は直接処理
-  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
-    monitorData.temporaryBuffer.push(data);
+  // (1b) ★ 全ホスト統一: hostname があれば即処理。なければバッファ。
+  // currentHostname による分岐を廃止（1台目特別扱いの排除）
+  const targetHost = data.hostname || currentHostname;
+  if (targetHost && targetHost !== PLACEHOLDER_HOSTNAME) {
+    processData(data, targetHost);
   } else {
-    processData(data, data.hostname || currentHostname);
+    // ホスト名が完全に不明 → バッファリング（後続メッセージでhostnameが判明したら処理）
+    monitorData.temporaryBuffer.push(data);
   }
 }
 
