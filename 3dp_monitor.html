@@ -918,12 +918,7 @@
 
   <!-- スクリプト読み込み -->
   <script type="module" src="3dp_lib/3dp_dashboard_main.js"></script>
-  <!-- パネルシステム起動（既存初期化の後に実行） -->
-  <script type="module">
-    import { bootPanelSystem } from "./3dp_lib/dashboard_panel_boot.js";
-    /* bootPanelSystem は 3dp_dashboard_main.js から直接インポートして呼び出す。
-       このスクリプトブロックは不要になったが、import を維持してモジュール登録を保証 */
-  </script>
+  <!-- パネルシステム起動は 3dp_dashboard_main.js 内で実行 -->
 
 </body>
 </html>
