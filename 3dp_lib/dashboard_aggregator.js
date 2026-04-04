@@ -306,6 +306,7 @@ export function ingestData(data, hostname) {
 
   const machine = monitorData.machines[host];
   if (!machine) return;
+  machine.storedData ??= {};
   const storedData = machine.storedData;
   const s = _getState(host);
 
@@ -902,8 +903,11 @@ export function aggregatorUpdate() {
                   "expectedEndTime"];
 
   for (const host of hosts) {
+   try {
     const machine = monitorData.machines[host];
     if (!machine) continue;
+    // ★ storedData が未初期化なら空オブジェクトを保証
+    machine.storedData ??= {};
     const storedData = machine.storedData;
     const s = _getState(host);
 
@@ -912,13 +916,12 @@ export function aggregatorUpdate() {
 
     needed.forEach(key => {
       if (!(key in storedData)) {
-        // rawValueを「未定義(null)」で作っておく
         setStoredDataForHost(host, key, null);
       }
     });
 
     const allReady = needed.every(key => key in storedData);
-    if (!allReady) continue;
+    if (!allReady) { console.warn(`[aggregatorUpdate] ${host}: needed keys 不足 → スキップ`); continue; }
 
     // state→printState
     checkUpdatedFields(["state"], () => {
@@ -1226,6 +1229,10 @@ export function aggregatorUpdate() {
 
     s.lastPrintState = st;
     persistAggregatorState(host);
+   } catch (hostErr) {
+    // ★ 1ホストのエラーが他ホストの処理を止めないようにする
+    console.error(`[aggregatorUpdate] ${host} でエラー:`, hostErr);
+   }
   } // end for hosts
 
   // ── ステータス Webhook 定期送信 ──
