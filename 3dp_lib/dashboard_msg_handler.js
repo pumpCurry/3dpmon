@@ -365,60 +365,67 @@ export function processData(data, hostname) {
     _initializedHosts.add(host);
     console.info(`[processData] per-host 初期化: ${host}`);
 
-    // ★ storedData.hostname を確実に設定（復元時に null の場合がある）
-    if (!machine.storedData?.hostname?.rawValue) {
-      setStoredDataForHost(host, "hostname", host, true);
-    }
-
-    // storedData キーの事前作成
-    const initKeys = [
-      "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
-      "actualStartTime","initialLeftTime","initialLeftAt",
-      "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
-    ];
-    const sd = machine.storedData || {};
-    initKeys.forEach(key => {
-      if (!(key in sd)) {
-        setStoredDataForHost(host, key, null, true);
-        setStoredDataForHost(host, key, null, false);
-      }
-    });
-
-    // ★ aggregator 状態復元（タイマー値、completionElapsedTime 等）
-    restoreAggregatorState(host);
-    restartAggregatorTimer();
-
-    // ★ 初回データに historyList/elapseVideoList があればマージ
-    const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
-    if (Array.isArray(data.historyList) && data.historyList.length > 0) {
-      printManager.updateHistoryList(data.historyList, baseUrl, "print-current-container", host);
-    }
-    if (Array.isArray(data.elapseVideoList) && data.elapseVideoList.length > 0) {
-      printManager.updateVideoList(data.elapseVideoList, baseUrl, host);
-    }
-
-    // ★ 印刷再開状態の復元
-    const curId = Number(data.printStartTime || 0) || null;
-    restorePrintResume(host, curId);
-
-    // ★ 保存済み履歴の描画
+    // ★ 初期化ブロック全体を try/catch で保護
+    //    ここで例外が出てもデータ書き込み（L784以降）は続行する
     try {
-      const allJobs = printManager.loadHistory(host);
-      if (allJobs.length > 0) {
-        const rawJobs = printManager.jobsToRaw(allJobs);
-        printManager.renderHistoryTable(rawJobs, baseUrl, host);
+      // storedData.hostname を確実に設定
+      if (!machine.storedData?.hostname?.rawValue) {
+        setStoredDataForHost(host, "hostname", host, true);
       }
-      // 現在印刷パネルの描画
-      const curContainer = scopedById("print-current-container", host);
-      if (curContainer) {
-        printManager.renderPrintCurrent(curContainer, host);
-      }
-    } catch (e) {
-      console.debug(`[processData] 保存済み履歴描画スキップ (${host}):`, e.message);
-    }
 
-    // 初期化完了、このホストの通知抑制を解除
-    setNotificationSuppressed(false, host);
+      // storedData キーの事前作成
+      const initKeys = [
+        "preparationTime","firstLayerCheckTime","pauseTime","completionElapsedTime",
+        "actualStartTime","initialLeftTime","initialLeftAt",
+        "predictedFinishEpoch","estimatedRemainingTime","estimatedCompletionTime"
+      ];
+      const sd = machine.storedData || {};
+      initKeys.forEach(key => {
+        if (!(key in sd)) {
+          setStoredDataForHost(host, key, null, true);
+          setStoredDataForHost(host, key, null, false);
+        }
+      });
+
+      // aggregator 状態復元
+      restoreAggregatorState(host);
+      restartAggregatorTimer();
+
+      // 初回データに historyList/elapseVideoList があればマージ
+      const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+      if (Array.isArray(data.historyList) && data.historyList.length > 0) {
+        printManager.updateHistoryList(data.historyList, baseUrl, "print-current-container", host);
+      }
+      if (Array.isArray(data.elapseVideoList) && data.elapseVideoList.length > 0) {
+        printManager.updateVideoList(data.elapseVideoList, baseUrl, host);
+      }
+
+      // 印刷再開状態の復元
+      const curId = Number(data.printStartTime || 0) || null;
+      restorePrintResume(host, curId);
+
+      // 保存済み履歴の描画
+      try {
+        const allJobs = printManager.loadHistory(host);
+        if (allJobs.length > 0) {
+          const rawJobs = printManager.jobsToRaw(allJobs);
+          printManager.renderHistoryTable(rawJobs, baseUrl, host);
+        }
+        const curContainer = scopedById("print-current-container", host);
+        if (curContainer) {
+          printManager.renderPrintCurrent(curContainer, host);
+        }
+      } catch (e) {
+        console.debug(`[processData] 保存済み履歴描画スキップ (${host}):`, e.message);
+      }
+
+      // 初期化完了、このホストの通知抑制を解除
+      setNotificationSuppressed(false, host);
+    } catch (e) {
+      console.error(`[processData] per-host 初期化エラー (${host}):`, e);
+      // ★ 初期化が失敗してもデータ書き込みは続行する
+      setNotificationSuppressed(false, host);
+    }
   }
 
   const ms = _getMsgState(host);

@@ -734,9 +734,23 @@ export function connectWs(hostOrDest) {
 
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(protocol + dest);
+  // ★ バイナリフレーム対応: K1が非UTF-8テキストフレームを送る場合にデコードエラーを防ぐ
+  ws.binaryType = "arraybuffer";
   state.ws = ws;
   ws.onopen    = () => handleSocketOpen(host);
-  ws.onmessage = evt => handleSocketMessage(evt, host);
+  ws.onmessage = evt => {
+    // ArrayBuffer の場合は TextDecoder で安全にデコード
+    if (evt.data instanceof ArrayBuffer) {
+      try {
+        const text = new TextDecoder("utf-8", { fatal: false }).decode(evt.data);
+        handleSocketMessage({ data: text }, host);
+      } catch (e) {
+        console.debug(`[ws] バイナリフレームのデコードスキップ (${host}):`, e.message);
+      }
+    } else {
+      handleSocketMessage(evt, host);
+    }
+  };
   ws.onerror   = err => handleSocketError(err, host);
   ws.onclose   = () => handleSocketClose(host);
 }
