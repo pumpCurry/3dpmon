@@ -460,7 +460,8 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
-        printfinish:   job.printfinish ?? (finishEpoch ? 1 : 0),
+        // ★ printfinish: 明示値優先。未設定で finishTime なし = 印刷中（null = 未確定）
+        printfinish:   job.printfinish ?? (finishEpoch ? 1 : null),
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
@@ -1063,9 +1064,13 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     if (isCurrentJob) {
       finish    = printState === PRINT_STATE_CODE.printPaused ? "⏸" : "▶";
       finishCls = "result-active";
-    } else if (raw.printfinish) {
+    } else if (raw.printfinish === 1) {
       finish    = "✔";
       finishCls = "result-ok";
+    } else if (raw.printfinish === null || raw.printfinish === undefined) {
+      // ★ 印刷中 or 成否未確定（再起動後で完了情報がまだない）
+      finish    = "▶";
+      finishCls = "result-active";
     } else {
       finish    = "✗";
       finishCls = "result-ng";

@@ -219,10 +219,14 @@ function _findConnectionTarget(destOrHost) {
   /* dest 完全一致（IP:PORT）を優先 */
   const exact = targets.find(t => t.dest === destOrHost);
   if (exact) return exact;
-  /* ★ IP部分一致（IPv4/IPv6対応） */
+  /* ★ IP部分一致: hostname 解決済みエントリを優先（ゴミエントリを避ける） */
   const ip = _extractIp(destOrHost);
-  const ipMatch = targets.find(t => _extractIp(t.dest) === ip);
-  if (ipMatch) return ipMatch;
+  const ipMatches = targets.filter(t => _extractIp(t.dest) === ip);
+  if (ipMatches.length > 0) {
+    // hostname があるエントリを優先
+    const withHostname = ipMatches.find(t => t.hostname);
+    return withHostname || ipMatches[0];
+  }
   /* ホスト名での検索（connectWs からの逆引き用） */
   return targets.find(t => t.hostname === destOrHost) || null;
 }
