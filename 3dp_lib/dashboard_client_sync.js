@@ -245,29 +245,25 @@ function _applySnapshot(state) {
 
   console.info(`[client-sync] スナップショット適用完了: ${Object.keys(state.machines || {}).length}ホスト`);
 
-  // ★ aggregator タイマー起動（子クライアントでも DOM 更新に必要）
-  try {
-    import("./dashboard_aggregator.js").then(({ restartAggregatorTimer }) => {
-      restartAggregatorTimer();
-    });
-  } catch { /* ignore */ }
+  // ★ aggregator タイマー起動 + パネル自動生成
+  // dynamic import のエラーを .catch() で確実に捕捉する
+  const hostnames = state.machines ? Object.keys(state.machines).filter(h => h !== PLACEHOLDER_HOSTNAME) : [];
 
-  // ★ パネル自動生成: レイアウトがない子クライアントでもデータを表示できるようにする
-  try {
-    import("./dashboard_panel_factory.js").then(({ ensureHostPanels, restoreLayout }) => {
-      // まずレイアウト復元を試行（親からの panelLayout が appSettings にあれば使う）
-      const restored = restoreLayout();
-      if (!restored && state.machines) {
-        // レイアウトなし → 各ホストにデフォルトパネルを生成
-        for (const hostname of Object.keys(state.machines)) {
-          if (hostname === PLACEHOLDER_HOSTNAME) continue;
-          ensureHostPanels(hostname);
-        }
+  import("./dashboard_aggregator.js").then(({ restartAggregatorTimer }) => {
+    restartAggregatorTimer();
+    console.info("[client-sync] aggregator タイマー起動");
+  }).catch(e => console.error("[client-sync] aggregator import 失敗:", e));
+
+  import("./dashboard_panel_factory.js").then(({ ensureHostPanels, restoreLayout }) => {
+    const restored = restoreLayout();
+    console.info(`[client-sync] restoreLayout: ${restored ? "成功" : "データなし"}`);
+    if (!restored) {
+      for (const hostname of hostnames) {
+        const count = ensureHostPanels(hostname);
+        console.info(`[client-sync] ensureHostPanels(${hostname}): ${count}パネル生成`);
       }
-    });
-  } catch (e) {
-    console.debug("[client-sync] パネル生成スキップ:", e.message);
-  }
+    }
+  }).catch(e => console.error("[client-sync] パネル生成失敗:", e));
 }
 
 /**
