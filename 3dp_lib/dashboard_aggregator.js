@@ -994,8 +994,12 @@ export function aggregatorUpdate() {
     }, storedData);
 
     // --- フィラメント残量の動的計算 ---
+    // ★ autoCorrectCurrentSpool は usageHistory 全件走査するため、10秒間隔に制限
     const spool = getCurrentSpool(host);
-    if (spool) autoCorrectCurrentSpool(host);
+    if (spool && (!s._lastAutoCorrect || nowMs - s._lastAutoCorrect > 10000)) {
+      s._lastAutoCorrect = nowMs;
+      autoCorrectCurrentSpool(host);
+    }
     const st   = Number(storedData.state?.rawValue || 0);
     const isPrinting =
       st === PRINT_STATE_CODE.printStarted ||

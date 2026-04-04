@@ -1162,7 +1162,8 @@ export function autoCorrectCurrentSpool(hostname) {
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
     spool.remainingLengthMm = expected;
     spool.printCount = count;
-    saveUnifiedStorage(true);
+    // ★ aggregator から毎500ms呼ばれるため即時保存は使わない（スロットリング）
+    saveUnifiedStorage();
   }
 }
 
