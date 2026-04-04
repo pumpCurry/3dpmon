@@ -1232,7 +1232,6 @@ export function aggregatorUpdate() {
   _pushStatusSnapshotIfDue();
 
   clearNewClasses();
-  console.debug("[aggregatorUpdate] updateStoredDataToDOM 呼び出し");
   updateStoredDataToDOM();
   saveUnifiedStorage();
 
