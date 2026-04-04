@@ -257,9 +257,11 @@ function _applySnapshot(state) {
   import("./dashboard_panel_factory.js").then(({ ensureHostPanels, restoreLayout }) => {
     const restored = restoreLayout();
     console.info(`[client-sync] restoreLayout: ${restored ? "成功" : "データなし"}`);
-    if (!restored) {
-      for (const hostname of hostnames) {
-        const count = ensureHostPanels(hostname);
+    // ★ restoreLayout 成功/失敗に関わらず、スナップショットの全ホストにパネルを保証
+    // （レイアウトが1台分しか保存されていなくても、2台目のパネルを自動生成）
+    for (const hostname of hostnames) {
+      const count = ensureHostPanels(hostname);
+      if (count > 0) {
         console.info(`[client-sync] ensureHostPanels(${hostname}): ${count}パネル生成`);
       }
     }
