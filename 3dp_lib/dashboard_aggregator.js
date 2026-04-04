@@ -999,8 +999,9 @@ export function aggregatorUpdate() {
     // --- フィラメント残量の動的計算 ---
     // ★ autoCorrectCurrentSpool は usageHistory 全件走査するため、10秒間隔に制限
     const spool = getCurrentSpool(host);
-    if (spool && (!s._lastAutoCorrect || nowMs - s._lastAutoCorrect > 10000)) {
-      s._lastAutoCorrect = nowMs;
+    const _now = Date.now();
+    if (spool && (!s._lastAutoCorrect || _now - s._lastAutoCorrect > 10000)) {
+      s._lastAutoCorrect = _now;
       autoCorrectCurrentSpool(host);
     }
     const st   = Number(storedData.state?.rawValue || 0);
