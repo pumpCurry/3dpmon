@@ -403,14 +403,17 @@ export function showFilamentChangeDialog(hostname) {
       currentBar = `<div class="fc-current-bar-empty">スプール未装着</div>`;
     }
 
+    // ★ デフォルトタブ: テンプレートリテラルの前に決定する必要がある
+    const activeTab_initial = _resolveDefaultTab(hostname);
+
     dlg.innerHTML = `
       <div class="fc-header">フィラメント交換 <span class="fc-header-host">${displayHost}</span></div>
       <div class="fc-body">
         ${currentBar}
         <div class="fc-tab-row">
-          <button class="fc-tab-btn${activeTab === "stored" ? " active" : ""}" data-tab="stored">📦 保管中スプール</button>
-          <button class="fc-tab-btn${activeTab === "preset" ? " active" : ""}" data-tab="preset">🆕 新品を開封</button>
-          <button class="fc-tab-btn${activeTab === "favorite" ? " active" : ""}" data-tab="favorite">⭐ お気に入り</button>
+          <button class="fc-tab-btn${activeTab_initial === "stored" ? " active" : ""}" data-tab="stored">📦 保管中スプール</button>
+          <button class="fc-tab-btn${activeTab_initial === "preset" ? " active" : ""}" data-tab="preset">🆕 新品を開封</button>
+          <button class="fc-tab-btn${activeTab_initial === "favorite" ? " active" : ""}" data-tab="favorite">⭐ お気に入り</button>
         </div>
         <fieldset class="fc-search-field" style="margin-bottom:4px">
           <form id="fc-search" class="fc-search">
@@ -519,8 +522,7 @@ export function showFilamentChangeDialog(hostname) {
     const curId = hostname ? getCurrentSpoolId(hostname) : null;
     let selectedSpool = null;
     let selectedPreset = null;
-    // ★ デフォルトタブ: 設定に応じて動的決定
-    let activeTab = _resolveDefaultTab(hostname);
+    let activeTab = activeTab_initial;
     const theadRow = dlg.querySelector("#fc-thead-row");
     // タブごとの選択状態を保持
     const tabSelections = { stored: null, preset: null, favorite: null };
