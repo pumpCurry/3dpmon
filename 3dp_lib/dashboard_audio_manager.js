@@ -58,6 +58,17 @@ export class AudioManager {
     /** @type {HTMLButtonElement|null} 音声トグルボタン */
     this.btnVoice = null;
 
+    // ★ ブラウザ子クライアントモードではオーディオUI不要
+    //    （http:// でアクセスかつ Electron でない = 子クライアント）
+    const isElectron = !!(window.electronAPI?.isElectron?.());
+    const isHttpAccess = window.location.protocol === "http:" || window.location.protocol === "https:";
+    if (!isElectron && isHttpAccess) {
+      this.c = true;
+      this.Tm = true;
+      this.Tv = true;
+      console.info("[AudioManager] ブラウザ子クライアント → オーディオUIスキップ");
+      return;
+    }
     this._setupOverlay();
     this._setupButtons();
     this._startWaiting();
