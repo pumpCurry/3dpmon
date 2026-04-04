@@ -56,6 +56,7 @@ const SHARED_KEYS = [
   "filamentPresets",
   "userPresets",
   "hiddenPresets",
+  "favoritePresets",
   "filamentInventory",
   "currentSpoolId",
   "hostSpoolMap",

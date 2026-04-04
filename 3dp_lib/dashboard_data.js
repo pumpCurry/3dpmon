@@ -269,6 +269,8 @@ export const monitorData = {
   userPresets: [],
   /** 非表示プリセットID一覧 @type {Array<string>} */
   hiddenPresets: [],
+  /** お気に入りプリセットID一覧 @type {Array<string>} */
+  favoritePresets: [],
   usageHistory: [],
   filamentInventory: [],
   currentSpoolId: null,

@@ -524,7 +524,7 @@ const LS_KEY_HOST_PREFIX = "3dpmon-host-";
 /** localStorage 用に保存可能なグローバルフィールド名一覧 */
 const LS_GLOBAL_FIELDS = [
   "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
-  "userPresets", "hiddenPresets", "filamentInventory", "currentSpoolId",
+  "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory", "currentSpoolId",
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
 
@@ -688,6 +688,7 @@ function _flushStorage() {
       queueSharedWrite("filamentPresets",    monitorData.filamentPresets);
       queueSharedWrite("userPresets",        monitorData.userPresets);
       queueSharedWrite("hiddenPresets",      monitorData.hiddenPresets);
+      queueSharedWrite("favoritePresets",    monitorData.favoritePresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
       queueSharedWrite("currentSpoolId",     monitorData.currentSpoolId);
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
@@ -1010,6 +1011,9 @@ function _restoreFromData(shared, machines) {
   }
   if (Array.isArray(shared?.hiddenPresets)) {
     monitorData.hiddenPresets = shared.hiddenPresets;
+  }
+  if (Array.isArray(shared?.favoritePresets)) {
+    monitorData.favoritePresets = shared.favoritePresets;
   }
 
   // per-host カメラトグルの復元（マージ）

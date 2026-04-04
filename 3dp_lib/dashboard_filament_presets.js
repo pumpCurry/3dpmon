@@ -702,6 +702,57 @@ export function togglePresetVisibility(presetId) {
 }
 
 /**
+ * ブランド単位で一括非表示/表示を切り替える。
+ * @param {string} brand - ブランド名
+ * @returns {boolean} 切替後の非表示状態（true=全非表示にした）
+ */
+export function toggleBrandVisibility(brand) {
+  if (!brand) return false;
+  const all = getAllPresets({ includeHidden: true });
+  const brandPresets = all.filter(p => (p.brand || "") === brand);
+  if (brandPresets.length === 0) return false;
+
+  if (!monitorData.hiddenPresets) monitorData.hiddenPresets = [];
+  const hiddenSet = new Set(monitorData.hiddenPresets);
+  const allHidden = brandPresets.every(p => hiddenSet.has(p.presetId));
+
+  if (allHidden) {
+    // 全非表示 → 全表示に戻す
+    for (const p of brandPresets) hiddenSet.delete(p.presetId);
+  } else {
+    // 一部表示 or 全表示 → 全非表示にする
+    for (const p of brandPresets) hiddenSet.add(p.presetId);
+  }
+  monitorData.hiddenPresets = [...hiddenSet];
+  return !allHidden;
+}
+
+/**
+ * プリセットのお気に入り状態を切り替える。
+ * @param {string} presetId - 対象プリセットID
+ * @returns {boolean} 切替後のお気に入り状態
+ */
+export function togglePresetFavorite(presetId) {
+  if (!monitorData.favoritePresets) monitorData.favoritePresets = [];
+  const idx = monitorData.favoritePresets.indexOf(presetId);
+  if (idx >= 0) {
+    monitorData.favoritePresets.splice(idx, 1);
+    return false;
+  }
+  monitorData.favoritePresets.push(presetId);
+  return true;
+}
+
+/**
+ * プリセットがお気に入りかどうか返す。
+ * @param {string} presetId
+ * @returns {boolean}
+ */
+export function isPresetFavorite(presetId) {
+  return (monitorData.favoritePresets || []).includes(presetId);
+}
+
+/**
  * カスタムプリセットのバリデーション。
  * @private
  * @param {Object} data - プリセットデータ

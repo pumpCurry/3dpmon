@@ -35,6 +35,36 @@ let styleInjected = false;
 let filamentChangeDialogOpen = false;
 
 /**
+ * 交換ダイアログのデフォルトタブを設定値から決定する。
+ * - "preset": 常に新品タブ
+ * - "remember": 前回使ったタブを復元
+ * - "auto" (デフォルト): 装着中スプールの残量%が閾値以下なら新品、それ以外は保管中
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {string} "stored" | "preset" | "favorite"
+ */
+function _resolveDefaultTab(hostname) {
+  const setting = monitorData.appSettings.filamentChangeDefaultTab || "auto";
+  if (setting === "preset") return "preset";
+  if (setting === "remember") {
+    try {
+      const last = localStorage.getItem("3dpmon_fc_last_tab");
+      if (last && ["stored", "preset", "favorite"].includes(last)) return last;
+    } catch { /* ignore */ }
+    return "preset"; // 記憶なし → 新品
+  }
+  // auto: 残量%で判定
+  const threshold = monitorData.appSettings.filamentChangeAutoThreshold ?? 25;
+  const spool = getCurrentSpool(hostname);
+  if (!spool) return "preset"; // 未装着 → 新品
+  const pct = spool.totalLengthMm > 0
+    ? (spool.remainingLengthMm / spool.totalLengthMm) * 100
+    : 0;
+  return pct <= threshold ? "preset" : "stored";
+}
+
+/**
  * ダイアログ用CSSを一度だけ注入する。
  *
  * @private
@@ -378,9 +408,9 @@ export function showFilamentChangeDialog(hostname) {
       <div class="fc-body">
         ${currentBar}
         <div class="fc-tab-row">
-          <button class="fc-tab-btn active" data-tab="stored">📦 保管中スプール</button>
-          <button class="fc-tab-btn" data-tab="preset">🆕 新品を開封</button>
-          <button class="fc-tab-btn" data-tab="favorite">⭐ お気に入り</button>
+          <button class="fc-tab-btn${activeTab === "stored" ? " active" : ""}" data-tab="stored">📦 保管中スプール</button>
+          <button class="fc-tab-btn${activeTab === "preset" ? " active" : ""}" data-tab="preset">🆕 新品を開封</button>
+          <button class="fc-tab-btn${activeTab === "favorite" ? " active" : ""}" data-tab="favorite">⭐ お気に入り</button>
         </div>
         <fieldset class="fc-search-field" style="margin-bottom:4px">
           <form id="fc-search" class="fc-search">
@@ -489,7 +519,8 @@ export function showFilamentChangeDialog(hostname) {
     const curId = hostname ? getCurrentSpoolId(hostname) : null;
     let selectedSpool = null;
     let selectedPreset = null;
-    let activeTab = "stored"; // stored | preset | favorite
+    // ★ デフォルトタブ: 設定に応じて動的決定
+    let activeTab = _resolveDefaultTab(hostname);
     const theadRow = dlg.querySelector("#fc-thead-row");
     // タブごとの選択状態を保持
     const tabSelections = { stored: null, preset: null, favorite: null };
@@ -650,6 +681,8 @@ export function showFilamentChangeDialog(hostname) {
         });
         btn.classList.add("active");
         activeTab = btn.dataset.tab;
+        // ★ タブ記憶（"remember" モード用）
+        try { localStorage.setItem("3dpmon_fc_last_tab", activeTab); } catch {}
         // タブ切替時に検索フィルタのオプションを再構築
         if (activeTab === "preset") {
           fillOptions(presets.map(p => ({
