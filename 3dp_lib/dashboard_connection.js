@@ -216,18 +216,15 @@ function _extractIp(dest) {
 function _findConnectionTarget(destOrHost) {
   if (!destOrHost) return null;
   const targets = monitorData.appSettings.connectionTargets || [];
-  /* dest 完全一致（IP:PORT）を優先 */
+  /* 1) dest 完全一致（"192.168.54.151:9999" === "192.168.54.151:9999"） */
   const exact = targets.find(t => t.dest === destOrHost);
   if (exact) return exact;
-  /* ★ IP部分一致: hostname 解決済みエントリを優先（ゴミエントリを避ける） */
-  const ip = _extractIp(destOrHost);
-  const ipMatches = targets.filter(t => _extractIp(t.dest) === ip);
-  if (ipMatches.length > 0) {
-    // hostname があるエントリを優先
-    const withHostname = ipMatches.find(t => t.hostname);
-    return withHostname || ipMatches[0];
+  /* 2) ポート補完で再検索（"192.168.54.151" → "192.168.54.151:9999"） */
+  if (!destOrHost.includes(":")) {
+    const withPort = targets.find(t => t.dest === destOrHost + ":9999");
+    if (withPort) return withPort;
   }
-  /* ホスト名での検索（connectWs からの逆引き用） */
+  /* 3) ホスト名での検索（connectWs からの逆引き用） */
   return targets.find(t => t.hostname === destOrHost) || null;
 }
 
