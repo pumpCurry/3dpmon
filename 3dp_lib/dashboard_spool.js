@@ -179,7 +179,11 @@ export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
  * @returns {{ mm: number, m: string, g: string|null, cost: string|null, currency: string, display: string }}
  */
 export function formatFilamentAmount(mm, spool = null) {
-  const val = Number(mm) || 0;
+  // ★ Step 14: undefined/NaN を 0 にマスクしない（追跡失敗を隠さない）
+  const val = Number(mm);
+  if (!Number.isFinite(val)) {
+    return { mm: null, m: "---", g: null, cost: null, currency: "", display: "---" };
+  }
   const m = (val / 1000).toFixed(1);
 
   let g = null;
@@ -517,7 +521,9 @@ export function setCurrentSpoolId(id, hostname) {
     newSpool.currentPrintID = printId;
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
-    newSpool.isPending = true;
+    // ★ Step 16: 交換記録を即座に保存（印刷前の再起動でも記録が残る）
+    logSpoolChange(newSpool, printId);
+    newSpool.isPending = false;  // 即座に記録済み（遅延実行を廃止）
     if (host && remaining > 0) {
       // 継続ジョブの残り分を新しいスプールに予約
       reserveFilament(remaining, printId, host);
@@ -992,11 +998,14 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     );
     resolvedUsed = expectedLength;
   }
-  if (!isNaN(resolvedUsed)) {
+  if (!isNaN(resolvedUsed) && resolvedUsed > 0) {
     s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
+  } else if (resolvedUsed === 0 || isNaN(resolvedUsed)) {
+    // ★ Step 5: 0消費は残量を変更しない（偽値による破壊を防止）
+    console.warn(`[finalizeFilamentUsage] resolvedUsed=${resolvedUsed} → 残量変更なし (${hostname})`);
   }
   // 成功時のみ printCount をインクリメント（失敗/キャンセルは含めない）
-  if (isSuccess) {
+  if (isSuccess && resolvedUsed > 0) {
     s.printCount = (s.printCount || 0) + 1;
   }
   s.currentJobStartLength = null;
@@ -1017,16 +1026,19 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       machine.historyData.push(entry);
     }
     entry.filamentInfo ??= [];
-    entry.filamentInfo.push({
-      spoolId: s.id,
-      serialNo: s.serialNo,
-      spoolName: s.name,
-      colorName: s.colorName,
-      filamentColor: s.filamentColor,
-      material: s.material,
-      spoolCount: s.printCount,
-      expectedRemain: s.remainingLengthMm
-    });
+    // ★ Step 12: 重複チェック（二重 finalize 防止）
+    if (!entry.filamentInfo.some(info => info.spoolId === s.id)) {
+      entry.filamentInfo.push({
+        spoolId: s.id,
+        serialNo: s.serialNo,
+        spoolName: s.name,
+        colorName: s.colorName,
+        filamentColor: s.filamentColor,
+        material: s.material,
+        spoolCount: s.printCount,
+        expectedRemain: s.remainingLengthMm
+      });
+    }
   }
   logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
   updateStoredDataToDOM();
@@ -1160,9 +1172,13 @@ export function autoCorrectCurrentSpool(hostname) {
   if (!Number.isFinite(expected)) return;
   const diff = Math.abs(expected - spool.remainingLengthMm);
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
-    spool.remainingLengthMm = expected;
+    // ★ 残量を増やす方向の補正は禁止（消費は不可逆）
+    if (expected <= spool.remainingLengthMm) {
+      spool.remainingLengthMm = expected;
+    } else {
+      console.debug(`[autoCorrect] ${hostname}: expected=${expected} > current=${spool.remainingLengthMm} → 増加補正をスキップ`);
+    }
     spool.printCount = count;
-    // ★ aggregator から毎500ms呼ばれるため即時保存は使わない（スロットリング）
     saveUnifiedStorage();
   }
 }
