@@ -1,6 +1,6 @@
 {
   "name": "3dpmon",
-  "version": "2.1.010",
+  "version": "2.1.009",
   "description": "3Dプリンタ監視ダッシュボード - Electron版",
   "main": "electron/main.js",
   "scripts": {

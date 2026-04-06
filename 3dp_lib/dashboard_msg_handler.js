@@ -845,25 +845,16 @@ export function processData(data, hostname) {
       const v = machine.storedData[k]?.rawValue;
       if (v !== undefined) entry[k] = v;
     });
-    // ★ Step 15: フィラメント情報の消失防止
-    // 保存済み履歴 → historyData の既存エントリ → 受信データ の優先順で復元
+    // フィラメント情報: 保存済み履歴の交換後データを優先し、なければ受信データを使用
     const savedJobs = printManager.loadHistory(host);
     const savedJob = savedJobs.find(j => String(j.id) === String(entry.id));
-    const existingEntry = machine.historyData.find(h => h.id === entry.id);
     if (savedJob?.filamentInfo?.length) {
-      // 1) printStore に保存済み → 最優先
+      // 交換後のフィラメント情報が保存済み → それを維持
       entry.filamentInfo = savedJob.filamentInfo;
       entry.filamentId    = savedJob.filamentId;
       entry.filamentColor = savedJob.filamentColor;
       entry.filamentType  = savedJob.filamentType;
-    } else if (existingEntry?.filamentInfo?.length) {
-      // 2) historyData に既存エントリがある → そちらを保護
-      entry.filamentInfo = existingEntry.filamentInfo;
-      entry.filamentId    = existingEntry.filamentId;
-      entry.filamentColor = existingEntry.filamentColor;
-      entry.filamentType  = existingEntry.filamentType;
     } else {
-      // 3) どちらにもない → 受信データから取得（機器データには通常含まれない）
       ["filamentId", "filamentColor", "filamentType"].forEach(k => {
         if (data[k] != null) entry[k] = data[k];
       });

@@ -2254,8 +2254,7 @@ function createEditorContent(onDone) {
   curLabel.textContent = "残量";
   const curIn = document.createElement("input");
   curIn.type = "number";
-  // ★ Step 8: 残量フィールドを編集可能にする（以前は disabled=true で編集不可だった）
-  curIn.disabled = false;
+  curIn.disabled = true;
   curLabel.appendChild(curIn);
 
   const odLabel = document.createElement("label");
@@ -2301,9 +2300,9 @@ function createEditorContent(onDone) {
   holeColorIn.type = "color";
   holeColorLabel.appendChild(holeColorIn);
 
-  // ★ Step 8: 全長変更で残量を自動リセットする挙動を削除
-  //   残量は独立したフィールド。全長変更は残量に影響しない。
-  //   （旧コード: curIn.value = totIn.value で残量を100%にリセットしていた）
+  totIn.addEventListener("input", () => {
+    curIn.value = totIn.value;
+  });
 
   diaIn.addEventListener("input", () => {
     preview.setOption("filamentDiameter", Number(diaIn.value));
@@ -2532,13 +2531,6 @@ function createEditorContent(onDone) {
       note: noteIn.value,
       isFavorite: favIn.checked
     };
-    // ★ Step 9: filamentCurrentLength → remainingLengthMm にマッピング
-    if (data.filamentCurrentLength != null) {
-      data.remainingLengthMm = data.filamentCurrentLength;
-    }
-    if (data.filamentTotalLength != null) {
-      data.totalLengthMm = data.filamentTotalLength;
-    }
     if (isNew) addSpool(data); else updateSpool(current.id, data);
     showAlert("フィラメントを保存しました", "success");
     dirty = false;
