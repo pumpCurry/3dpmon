@@ -1273,7 +1273,9 @@ export function restoreAggregatorState(hostname) {
   }
   const flwRaw = localStorage.getItem(prefix + "filamentLowWarned");
   if (flwRaw != null) {
-    try { s.filamentLowWarned = JSON.parse(flwRaw) === true; } catch { /* ignore */ }
+    try { s.filamentLowWarned = JSON.parse(flwRaw) === true; } catch (e) {
+      console.warn(`[restoreAggregatorState] ${host}: filamentLowWarned パース失敗:`, e.message);
+    }
   }
 
   // localStorage から読み出し
@@ -1281,7 +1283,10 @@ export function restoreAggregatorState(hostname) {
     const raw = localStorage.getItem(prefix + k);
     if (raw == null) return;
     let v;
-    try { v = JSON.parse(raw); } catch { return; }
+    try { v = JSON.parse(raw); } catch (e) {
+      console.warn(`[restoreAggregatorState] ${host}: ${k} パース失敗:`, e.message);
+      return; // 次のキーへ（forEach 内なので continue 相当）
+    }
     // per-host 状態オブジェクトにセット
     if (k in s) s[k] = v;
     // storedData にも復元

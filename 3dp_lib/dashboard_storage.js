@@ -474,10 +474,11 @@ function applySpoolDefaults(sp) {
       monitorData.spoolSerialCounter = sp.serialNo;
     }
   }
-  // 数値項目の正規化: NaN または null の場合は 0 をセット
-  if (sp.remainingLengthMm != null) {
-    const rem = Number(sp.remainingLengthMm);
-    sp.remainingLengthMm = Number.isFinite(rem) ? rem : 0;
+  // ★ Step 7: remainingLengthMm を保証（undefined/NaN → totalLengthMm フォールバック、0にはしない）
+  if (sp.remainingLengthMm == null || !Number.isFinite(Number(sp.remainingLengthMm))) {
+    sp.remainingLengthMm = Number(sp.totalLengthMm ?? sp.filamentTotalLength ?? 0) || 0;
+  } else {
+    sp.remainingLengthMm = Number(sp.remainingLengthMm);
   }
   if (sp.startLength == null || !Number.isFinite(Number(sp.startLength))) {
     sp.startLength = sp.remainingLengthMm ?? 0;
@@ -908,15 +909,25 @@ function _restoreFromData(shared, machines) {
           // ★ remainingLengthMm: 両方に有効値がある場合は小さい方（=より消費が進んだ方）を採用
           //    起動時にメモリが初期値(0 or undefined)の場合はストレージ値を採用
           // ★ isActive/isInUse/hostname はランタイム値を優先（装着状態は復元値より信頼できる）
+          // ★ Step 6: remainingLengthMm マージ — 有効値を厳密に判定
           const existRemain = existing.remainingLengthMm;
           const restoredRemain = restored.remainingLengthMm;
+          const existValid = Number.isFinite(existRemain) && existRemain >= 0;
+          const restoredValid = Number.isFinite(restoredRemain) && restoredRemain >= 0;
+
           let mergedRemain;
-          if (!Number.isFinite(existRemain) || existRemain === 0) {
-            mergedRemain = restoredRemain; // メモリが初期値 → ストレージ値を採用
-          } else if (!Number.isFinite(restoredRemain)) {
-            mergedRemain = existRemain; // ストレージが未設定 → メモリ値を維持
+          if (existValid && restoredValid) {
+            // 両方有効 → 小さい方（消費が進んだ方）を採用
+            mergedRemain = Math.min(existRemain, restoredRemain);
+          } else if (restoredValid) {
+            // メモリが未初期化 → ストレージ値を採用
+            mergedRemain = restoredRemain;
+          } else if (existValid) {
+            // ストレージが未設定 → メモリ値を維持
+            mergedRemain = existRemain;
           } else {
-            mergedRemain = Math.min(existRemain, restoredRemain); // 両方有効 → 小さい方
+            // 両方無効 → 全長をフォールバック（0にはしない）
+            mergedRemain = restored.totalLengthMm ?? restored.filamentTotalLength ?? 0;
           }
           const protectedFields = {
             remainingLengthMm: mergedRemain,
@@ -925,10 +936,6 @@ function _restoreFromData(shared, machines) {
             hostname: existing.hostname || restored.hostname
           };
           Object.assign(existing, restored, protectedFields);
-          // Infinity 防止（両方が未設定の場合）
-          if (!Number.isFinite(existing.remainingLengthMm)) {
-            existing.remainingLengthMm = restored.remainingLengthMm ?? 0;
-          }
         }
       } else {
         // 新規スプール: 追加

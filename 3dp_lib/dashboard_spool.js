@@ -179,7 +179,11 @@ export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
  * @returns {{ mm: number, m: string, g: string|null, cost: string|null, currency: string, display: string }}
  */
 export function formatFilamentAmount(mm, spool = null) {
-  const val = Number(mm) || 0;
+  // ★ Step 14: undefined/NaN を 0 にマスクしない（追跡失敗を隠さない）
+  const val = Number(mm);
+  if (!Number.isFinite(val)) {
+    return { mm: null, m: "---", g: null, cost: null, currency: "", display: "---" };
+  }
   const m = (val / 1000).toFixed(1);
 
   let g = null;
@@ -517,7 +521,9 @@ export function setCurrentSpoolId(id, hostname) {
     newSpool.currentPrintID = printId;
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
-    newSpool.isPending = true;
+    // ★ Step 16: 交換記録を即座に保存（印刷前の再起動でも記録が残る）
+    logSpoolChange(newSpool, printId);
+    newSpool.isPending = false;  // 即座に記録済み（遅延実行を廃止）
     if (host && remaining > 0) {
       // 継続ジョブの残り分を新しいスプールに予約
       reserveFilament(remaining, printId, host);
