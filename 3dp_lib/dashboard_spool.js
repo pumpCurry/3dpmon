@@ -179,7 +179,11 @@ export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
  * @returns {{ mm: number, m: string, g: string|null, cost: string|null, currency: string, display: string }}
  */
 export function formatFilamentAmount(mm, spool = null) {
-  const val = Number(mm) || 0;
+  // ★ B4: undefined/NaN を 0 にマスクしない（追跡失敗を隠さない）
+  const val = Number(mm);
+  if (!Number.isFinite(val)) {
+    return { mm: null, m: "---", g: null, cost: null, currency: "", display: "---" };
+  }
   const m = (val / 1000).toFixed(1);
 
   let g = null;
@@ -517,7 +521,10 @@ export function setCurrentSpoolId(id, hostname) {
     newSpool.currentPrintID = printId;
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
-    newSpool.isPending = true;
+    // ★ B5: 交換記録を即座に保存（印刷前の再起動でも記録が残る）
+    logSpoolChange(newSpool, printId);
+    newSpool.isPending = false;  // 即座に記録済み（遅延実行を廃止）
+    newSpool.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
     if (host && remaining > 0) {
       // 継続ジョブの残り分を新しいスプールに予約
       reserveFilament(remaining, printId, host);
@@ -807,17 +814,12 @@ export function useFilament(lengthMm, jobId = "", hostname) {
     logSpoolChange(s, normalizedJobId);
     s.isPending = false;
   }
-  // 現在の印刷ジョブ開始時点の残量と必要量を記録
+  // ★ 予約減算を廃止。基点のみ記録し、実際の減算は aggregatorUpdate の delta 追跡で行う。
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = amount;
-  // 残量を先に減算して保持
-  s.remainingLengthMm = Math.max(0, s.remainingLengthMm - amount);
-  // DOM 表示とストレージに新しい残量を即時反映
-  setStoredDataForHost(host, "filamentRemainingMm", s.remainingLengthMm, true);
-  updateStoredDataToDOM();
+  // remainingLengthMm は変更しない（aggregatorUpdate が delta で更新する）
   s.currentPrintID = normalizedJobId;
-  s.usedLengthLog.push({ jobId: normalizedJobId, used: amount });
-  // ページリロード直後でも残量が巻き戻らないよう即座に保存
+  // ページリロード直後でも基点が巻き戻らないよう即座に保存
   saveUnifiedStorage(true);
 }
 
@@ -854,22 +856,12 @@ export function beginExternalPrint(spool, lengthMm, jobId = "", hostname) {
     spool.isPending = false;
   }
 
-  // リジューム時は残量を二重減算しない（前回の finalize で既に減算済み）
-  if (!isResume) {
-    // 現在の印刷ジョブ開始時点の残量と必要量を記録
-    spool.currentJobStartLength = spool.remainingLengthMm;
-    spool.currentJobExpectedLength = lengthMm;
-    // 残量を先に減算して保持
-    spool.remainingLengthMm = Math.max(0, spool.remainingLengthMm - lengthMm);
-    // DOM 表示とストレージに新しい残量を即時反映
-    setStoredDataForHost(host, "filamentRemainingMm", spool.remainingLengthMm, true);
-    updateStoredDataToDOM();
-    spool.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
-  } else {
-    // リジューム: 開始時残量を現在値で再設定（追加消費の基点）
-    spool.currentJobStartLength = spool.remainingLengthMm;
-    spool.currentJobExpectedLength = lengthMm;
-  }
+  // ★ 予約減算を廃止。残量は「確定残量 - リアルタイム消費量」で表示する。
+  //   beginExternalPrint は基点を記録するのみ。実際の減算は aggregatorUpdate の
+  //   delta 追跡と finalizeFilamentUsage で行う。
+  spool.currentJobStartLength = spool.remainingLengthMm;
+  spool.currentJobExpectedLength = lengthMm;
+  // remainingLengthMm は変更しない（aggregatorUpdate が delta で更新する）
 
   spool.currentPrintID = normalizedJobId;
   spool.lastCompletedPrintID = null; // リジューム検出フラグをクリア
@@ -992,11 +984,15 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     );
     resolvedUsed = expectedLength;
   }
-  if (!isNaN(resolvedUsed)) {
+  // ★ B2: 0消費は残量を変更しない（二重finalize等による偽値での破壊を防止）
+  if (!isNaN(resolvedUsed) && resolvedUsed > 0) {
     s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
+    s.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
+  } else if (resolvedUsed === 0 || isNaN(resolvedUsed)) {
+    console.warn(`[finalizeFilamentUsage] resolvedUsed=${resolvedUsed} → 残量変更なし (${hostname})`);
   }
   // 成功時のみ printCount をインクリメント（失敗/キャンセルは含めない）
-  if (isSuccess) {
+  if (isSuccess && resolvedUsed > 0) {
     s.printCount = (s.printCount || 0) + 1;
   }
   s.currentJobStartLength = null;
@@ -1017,16 +1013,24 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       machine.historyData.push(entry);
     }
     entry.filamentInfo ??= [];
-    entry.filamentInfo.push({
-      spoolId: s.id,
-      serialNo: s.serialNo,
-      spoolName: s.name,
-      colorName: s.colorName,
-      filamentColor: s.filamentColor,
-      material: s.material,
-      spoolCount: s.printCount,
-      expectedRemain: s.remainingLengthMm
-    });
+    // ★ B3: 重複チェック — spoolId + expectedRemain の完全一致で判定
+    //   A→B→A交換でAの2回目が消失しないよう、残量も比較する
+    const isDuplicate = entry.filamentInfo.some(info =>
+      info.spoolId === s.id &&
+      Math.abs((info.expectedRemain ?? 0) - s.remainingLengthMm) < 0.1
+    );
+    if (!isDuplicate) {
+      entry.filamentInfo.push({
+        spoolId: s.id,
+        serialNo: s.serialNo,
+        spoolName: s.name,
+        colorName: s.colorName,
+        filamentColor: s.filamentColor,
+        material: s.material,
+        spoolCount: s.printCount,
+        expectedRemain: s.remainingLengthMm
+      });
+    }
   }
   logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
   updateStoredDataToDOM();
@@ -1160,9 +1164,17 @@ export function autoCorrectCurrentSpool(hostname) {
   if (!Number.isFinite(expected)) return;
   const diff = Math.abs(expected - spool.remainingLengthMm);
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
-    spool.remainingLengthMm = expected;
+    // ★ B1: 自動計算による残量増加は禁止（消費は不可逆）
+    if (expected <= spool.remainingLengthMm) {
+      spool.remainingLengthMm = expected;
+      spool.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
+    } else if (spool.remainingLengthMm === 0 && expected > 0) {
+      // バグで0になった可能性 — 自動修正はしないがログで通知
+      console.warn(`[autoCorrect] ${hostname}: 残量0だが履歴計算では${(expected / 1000).toFixed(1)}m。手動修正が必要な可能性`);
+    } else {
+      console.debug(`[autoCorrect] ${hostname}: expected=${expected} > current=${spool.remainingLengthMm} → 増加スキップ`);
+    }
     spool.printCount = count;
-    // ★ aggregator から毎500ms呼ばれるため即時保存は使わない（スロットリング）
     saveUnifiedStorage();
   }
 }

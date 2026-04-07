@@ -778,7 +778,7 @@ export function showFilamentChangeDialog(hostname) {
           const updatedSpool = getSpoolById(mountSpool.id) || mountSpool;
           hostPreview.setState({
             isFilamentPresent: true,
-            filamentCurrentLength: updatedSpool.remainingLengthMm || 0,
+            filamentCurrentLength: updatedSpool.remainingLengthMm ?? 0,  // ★ F1: || → ?? (0は0として保持)
             filamentTotalLength: updatedSpool.totalLengthMm || 330000,
             filamentColor: updatedSpool.filamentColor || updatedSpool.color || "#22C55E",
             reelName: updatedSpool.name || "",

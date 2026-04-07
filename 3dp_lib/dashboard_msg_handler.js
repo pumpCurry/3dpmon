@@ -845,16 +845,32 @@ export function processData(data, hostname) {
       const v = machine.storedData[k]?.rawValue;
       if (v !== undefined) entry[k] = v;
     });
-    // フィラメント情報: 保存済み履歴の交換後データを優先し、なければ受信データを使用
+    // ★ E1: フィラメント情報の消失防止 — 3段階フォールバック
+    // printStore → historyData既存エントリ → 受信データ の優先順で復元
     const savedJobs = printManager.loadHistory(host);
     const savedJob = savedJobs.find(j => String(j.id) === String(entry.id));
+    // historyData から最新の一致エントリを逆順検索
+    let existingEntry = null;
+    for (let i = machine.historyData.length - 1; i >= 0; i--) {
+      if (machine.historyData[i].id === entry.id) {
+        existingEntry = machine.historyData[i];
+        break;
+      }
+    }
     if (savedJob?.filamentInfo?.length) {
-      // 交換後のフィラメント情報が保存済み → それを維持
+      // 1) printStore に保存済み → 最優先
       entry.filamentInfo = savedJob.filamentInfo;
       entry.filamentId    = savedJob.filamentId;
       entry.filamentColor = savedJob.filamentColor;
       entry.filamentType  = savedJob.filamentType;
+    } else if (existingEntry?.filamentInfo?.length) {
+      // 2) historyData に既存エントリがある → そちらを保護
+      entry.filamentInfo = existingEntry.filamentInfo;
+      entry.filamentId    = existingEntry.filamentId;
+      entry.filamentColor = existingEntry.filamentColor;
+      entry.filamentType  = existingEntry.filamentType;
     } else {
+      // 3) どちらにもない → 受信データから取得
       ["filamentId", "filamentColor", "filamentType"].forEach(k => {
         if (data[k] != null) entry[k] = data[k];
       });
