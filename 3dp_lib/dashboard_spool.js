@@ -1135,11 +1135,40 @@ export function autoCorrectCurrentSpool(hostname) {
       break;
     }
   }
-  // usageHistory に startLength エントリがない場合、遡及補正は行わない。
-  // スプールオブジェクトの startLength は新品全長のままの場合があり、
-  // 全印刷の消費を加算すると大幅に過剰減算される。
-  // 次回のスプール交換時に正しい startLength が記録され、以降は遡及補正が有効になる。
-  if (!change) return;
+  // ★ フォールバック: usageHistory に startLength エントリがない場合、
+  //   spool.updatedAt を基準に、それ以降の完了印刷だけを遡及加算する。
+  //   起点は現在の remainingLengthMm（最後に保存された残量）。
+  const isFallback = !change;
+  if (isFallback) {
+    const updatedAt = Number(spool.updatedAt ?? 0);
+    if (!updatedAt) return;
+    const persistedHistory = loadHistory(hostname);
+    let fallbackTotal = 0;
+    let fallbackCount = 0;
+    for (const entry of persistedHistory) {
+      if (!entry.printfinish) continue;
+      const used = Number(entry.materialUsedMm ?? NaN);
+      if (!Number.isFinite(used) || used <= 0) continue;
+      // entry.id は epoch秒、updatedAt は epoch ms → 秒に変換して比較
+      const entryStartMs = Number(entry.id) * 1000;
+      if (!Number.isFinite(entryStartMs) || entryStartMs <= updatedAt) continue;
+      fallbackTotal += used;
+      fallbackCount += 1;
+      console.log(`[autoCorrect:fallback] ${hostname}: jobId=${entry.id} から ${used.toFixed(0)}mm を遡及加算 (updatedAt=${updatedAt})`);
+    }
+    if (fallbackTotal > 0) {
+      const expected = spool.remainingLengthMm - fallbackTotal;
+      if (expected < 0) {
+        console.warn(`[autoCorrect:fallback] ${hostname}: total(${fallbackTotal.toFixed(0)}) > remaining(${spool.remainingLengthMm.toFixed(0)}) → 変更なし`);
+        return;
+      }
+      spool.remainingLengthMm = expected;
+      spool.updatedAt = Date.now();
+      spool.printCount = (spool.printCount || 0) + fallbackCount;
+      saveUnifiedStorage();
+    }
+    return;
+  }
 
   // 履歴から取得した開始残量が数値でなければ補正不能と判断
   const startLen = Number(change.startLength);
