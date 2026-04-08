@@ -227,7 +227,7 @@ function createWindow() {
     height: 1000,
     minWidth: 800,
     minHeight: 600,
-    title: "3dpmon - 3Dプリンタ監視ダッシュボード",
+    title: `3dpmon - 3Dプリンタ監視ダッシュボード v${app.getVersion()}`,
     icon: path.join(__dirname, "..", "favicon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -311,6 +311,11 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+
+  /* ─── IPC: バージョン取得 ─── */
+  ipcMain.on("get-app-version", (event) => {
+    event.returnValue = app.getVersion();
+  });
 
   /* ─── IPC ブリッジ: レンダラー ↔ リレーサーバ ─── */
 

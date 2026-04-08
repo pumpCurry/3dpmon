@@ -45,7 +45,7 @@ import {
 import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
-import { updateHistoryList } from "./dashboard_printmanager.js";
+import { updateHistoryList, loadHistory } from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 
 /**
@@ -1122,58 +1122,97 @@ export function autoCorrectCurrentSpool(hostname) {
   const spool = getCurrentSpool(hostname);
   if (!spool) return;
 
-  const logs = monitorData.usageHistory;
-  if (!Array.isArray(logs) || logs.length === 0) return;
+  const logs = monitorData.usageHistory || [];
 
   let startIdx = -1;
   let change = null;
   // 最新から過去に向かって交換記録を検索
   for (let i = logs.length - 1; i >= 0; i--) {
     const e = logs[i];
-    if (e.startLength != null) {
-      if (e.spoolId === spool.id) {
-        change = e;
-        startIdx = i;
-        break;
-      }
-      // 他スプールへの交換が後にあれば補正不可
-      if (!change) return;
+    if (e.startLength != null && e.spoolId === spool.id) {
+      change = e;
+      startIdx = i;
+      break;
     }
   }
+  // usageHistory に startLength エントリがない場合、遡及補正は行わない。
+  // スプールオブジェクトの startLength は新品全長のままの場合があり、
+  // 全印刷の消費を加算すると大幅に過剰減算される。
+  // 次回のスプール交換時に正しい startLength が記録され、以降は遡及補正が有効になる。
   if (!change) return;
 
   // 履歴から取得した開始残量が数値でなければ補正不能と判断
   const startLen = Number(change.startLength);
   if (!Number.isFinite(startLen)) return;
 
+  // ★ 印刷IDベースの範囲判定
+  // startPrintID: スプール装着時の印刷epoch（下限）
+  // endPrintID: 次のスプール交換時の印刷epoch（上限）
+  const startPrintIdNum = Number(change.startPrintID ?? 0);
+  let endPrintIdNum = Infinity;
+  for (let i = startIdx + 1; i < logs.length; i++) {
+    if (logs[i].startLength != null) {
+      const nextId = Number(logs[i].startPrintID ?? 0);
+      if (Number.isFinite(nextId) && nextId > 0) {
+        endPrintIdNum = nextId;
+      }
+      break;
+    }
+  }
+
+  // usageHistory からアプリ記録済みの消費を積算
+  const recordedJobIds = new Set();
   let total = 0;
   let count = 0;
   for (let i = startIdx + 1; i < logs.length; i++) {
     const e = logs[i];
     if (e.startLength != null) break; // 次の交換で終了
     if (e.spoolId !== spool.id) continue;
+    if (e.isSnapshot) continue;
     const u = Number(e.usedLength);
-    if (!isNaN(u)) {
+    if (!isNaN(u) && u > 0) {
       total += u;
       count += 1;
+      if (e.jobId) recordedJobIds.add(String(e.jobId));
     }
   }
 
-  // 計算された残量が有限値でなければ補正しない
-  const expected = Math.max(0, startLen - total);
+  // ★ 遡及補正: プリンター報告履歴（printStore.history）から未記録の完了印刷を加算
+  // アプリOFF中の印刷はusageHistoryに記録されないが、プリンター履歴には残っている
+  const persistedHistory = loadHistory(hostname);
+  if (startPrintIdNum > 0) {
+    for (const entry of persistedHistory) {
+      const entryId = String(entry.id ?? "");
+      if (!entryId || recordedJobIds.has(entryId)) continue;
+      if (!entry.printfinish) continue;
+      const used = Number(entry.materialUsedMm ?? NaN);
+      if (!Number.isFinite(used) || used <= 0) continue;
+
+      const numId = Number(entry.id);
+      if (!Number.isFinite(numId) || numId <= 0) continue;
+      if (numId <= startPrintIdNum) continue;           // 装着前の印刷
+      if (endPrintIdNum < Infinity && numId > endPrintIdNum) continue;  // 取り外し後の印刷
+
+      total += used;
+      count += 1;
+      console.log(`[autoCorrect] ${hostname}: 未記録印刷 jobId=${entryId} から ${used.toFixed(0)}mm を遡及加算`);
+    }
+  }
+
+  // 計算された残量
+  const expected = startLen - total;
   if (!Number.isFinite(expected)) return;
+
+  // 異常検知: 消費合計が起点残量を超える場合は変更せず警告
+  if (total > startLen) {
+    console.warn(`[autoCorrect] ${hostname}: total(${total.toFixed(0)}) > startLen(${startLen.toFixed(0)}) → 残量変更なし`);
+    return;
+  }
+
   const diff = Math.abs(expected - spool.remainingLengthMm);
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
-    // ★ B1: 自動計算による残量増加は禁止（消費は不可逆）
-    if (expected <= spool.remainingLengthMm) {
-      spool.remainingLengthMm = expected;
-      spool.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
-    } else if (spool.remainingLengthMm === 0 && expected > 0) {
-      // バグで0になった可能性 — 自動修正はしないがログで通知
-      console.warn(`[autoCorrect] ${hostname}: 残量0だが履歴計算では${(expected / 1000).toFixed(1)}m。手動修正が必要な可能性`);
-    } else {
-      console.debug(`[autoCorrect] ${hostname}: expected=${expected} > current=${spool.remainingLengthMm} → 増加スキップ`);
-    }
+    spool.remainingLengthMm = expected;
+    spool.updatedAt = Date.now();
     spool.printCount = count;
     saveUnifiedStorage();
   }

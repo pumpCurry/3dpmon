@@ -310,6 +310,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     rawFilename,
     filename,
     startTime,
+    startTimeSec: startSec,  // ★ epoch秒（比較用に保持）
     actualStartTime,
     finishTime,
     printfinish,

@@ -948,7 +948,20 @@ export function aggregatorUpdate() {
       st === PRINT_STATE_CODE.printStarted ||
       st === PRINT_STATE_CODE.printPaused;
     // ★ A1: autoCorrect は印刷中は実行しない（リアルタイム追跡値を破壊するため）
-    //   isPrinting（状態コード）と currentPrintID（ジョブ紐付け）の両方で判定
+    //   印刷完了状態なのに currentPrintID が残留している場合（アプリOFF中に印刷完了）はクリアする
+    //   安全条件: state が完了系（printDone=2, printFailed=4）のときのみ。
+    //   printIdle=0 は準備フェーズ（加熱中）と同値のためクリア対象にしない。
+    //   printIdle かつ currentPrintID 残留 は、次回印刷開始時の idle→start 遷移（L980-1006）でクリアされる。
+    const isCompleted = st === PRINT_STATE_CODE.printDone
+                     || st === PRINT_STATE_CODE.printFailed;
+    if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
+      console.log(`[aggregatorUpdate] ${host}: state=${st}(完了) で currentPrintID=${spool.currentPrintID} が残留 → クリア`);
+      spool.currentJobStartLength = null;
+      spool.currentJobExpectedLength = null;
+      spool.lastCompletedPrintID = spool.currentPrintID;
+      spool.currentPrintID = "";
+      saveUnifiedStorage(true);
+    }
     if (spool
         && !isPrinting
         && !spool.currentPrintID
@@ -957,7 +970,8 @@ export function aggregatorUpdate() {
       autoCorrectCurrentSpool(host);
     }
     // フィラメント残量計算に入る前に、未確定のジョブIDを補完して紐付け漏れを防ぐ
-    if (spool && !spool.currentPrintID) {
+    // ただし印刷中でない場合は resolve しない（クリア済みの stale ID を書き戻す防止）
+    if (spool && !spool.currentPrintID && isPrinting) {
       const resolvedJobId = resolveFilamentJobId(
         storedData,
         machine?.printStore?.current ?? null,

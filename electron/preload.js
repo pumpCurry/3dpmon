@@ -51,6 +51,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   isElectron: () => true,
 
   /**
+   * package.json のバージョン文字列を返す。
+   * @returns {string} "2.1.010" 等
+   */
+  getVersion: () => ipcRenderer.sendSync("get-app-version"),
+
+  /**
    * OS プラットフォーム文字列を返す。
    *
    * @function getPlatform

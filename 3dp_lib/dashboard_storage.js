@@ -614,9 +614,22 @@ export const MAX_USAGE_HISTORY = 4500;
  * @returns {void}
  */
 export function trimUsageHistory() {
-  if (monitorData.usageHistory.length > MAX_USAGE_HISTORY) {
-    monitorData.usageHistory = monitorData.usageHistory.slice(-MAX_USAGE_HISTORY);
+  const logs = monitorData.usageHistory;
+  if (logs.length <= MAX_USAGE_HISTORY) return;
+
+  // 各スプールの最新の startLength エントリ（装着記録）を保護
+  // これが失われると autoCorrectCurrentSpool が残量を再計算できなくなる
+  const protectedIdx = new Set();
+  const seenSpools = new Set();
+  for (let i = logs.length - 1; i >= 0; i--) {
+    if (logs[i].startLength != null && !seenSpools.has(logs[i].spoolId)) {
+      protectedIdx.add(i);
+      seenSpools.add(logs[i].spoolId);
+    }
   }
+
+  const cutoff = logs.length - MAX_USAGE_HISTORY;
+  monitorData.usageHistory = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
 }
 
 /**
