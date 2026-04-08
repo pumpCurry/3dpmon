@@ -352,6 +352,61 @@ export class NotificationManager {
   }
 
   /**
+   * TTS で発声する。voices が未ロードの場合は遅延キューに保留。
+   * @private
+   * @param {string} text - 発声テキスト
+   * @param {string} hostname - ホスト名（voice/rate 設定の取得に使用）
+   */
+  _speakText(text, hostname) {
+    if (!("speechSynthesis" in window)) return;
+    const voices = speechSynthesis
+      .getVoices()
+      .filter(v => v.lang === "ja-JP" && v.localService);
+
+    if (voices.length === 0) {
+      // 起動直後など voices 未ロード → 遅延キューに保留
+      this._pendingUtterances ??= [];
+      this._pendingUtterances.push({ text, hostname });
+      this._ensureVoicesChangedListener();
+      return;
+    }
+
+    const hostTts = this.getHostTts(hostname);
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = hostTts.rate;
+
+    let found;
+    const voiceName = hostTts.voice;
+    if (voiceName === "female" || voiceName === "male") {
+      found = voices.find(v =>
+        voiceName === "female" ? /female/i.test(v.name) : /male/i.test(v.name)
+      );
+    } else if (voiceName) {
+      found = voices.find(v => v.name === voiceName);
+    }
+    if (!found) found = voices[0];
+    if (found) utt.voice = found;
+
+    window.speechSynthesis.speak(utt);
+  }
+
+  /**
+   * voiceschanged イベントを監視し、保留中の発声を再試行する。
+   * @private
+   */
+  _ensureVoicesChangedListener() {
+    if (this._voicesListenerAdded) return;
+    this._voicesListenerAdded = true;
+    speechSynthesis.addEventListener("voiceschanged", () => {
+      const pending = this._pendingUtterances || [];
+      this._pendingUtterances = [];
+      for (const { text, hostname } of pending) {
+        this._speakText(text, hostname);
+      }
+    }, { once: true });
+  }
+
+  /**
    * ホスト別 TTS 設定を保存する。
    *
    * @param {string} hostname - ホスト名
@@ -394,31 +449,7 @@ export class NotificationManager {
 
     // 3) TTS（ホスト別設定を適用）
     if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
-      const hostTts = this.getHostTts(hostname);
-      const utt = new SpeechSynthesisUtterance(text);
-
-      // rate（ホスト別）
-      utt.rate = hostTts.rate;
-
-      // voice（ホスト別）
-      const voices = speechSynthesis
-        .getVoices()
-        .filter(v => v.lang === "ja-JP" && v.localService);
-
-      let found;
-      const voiceName = hostTts.voice;
-      if (voiceName === "female" || voiceName === "male") {
-        // 旧設定との互換のため female/male も受け付ける
-        found = voices.find(v =>
-          voiceName === "female" ? /female/i.test(v.name) : /male/i.test(v.name)
-        );
-      } else if (voiceName) {
-        found = voices.find(v => v.name === voiceName);
-      }
-      if (!found) found = voices[0];
-      if (found) utt.voice = found;
-
-      window.speechSynthesis.speak(utt);
+      this._speakText(text, hostname);
     }
 
 

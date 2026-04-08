@@ -144,19 +144,29 @@ export async function importAllData(data) {
     for (const sp of data.filamentSpools) {
       if (!sp.id) continue;
       if (existingIds.has(sp.id)) {
-        // 既存スプール: マージ（★ remainingLengthMm は小さい方=最新を採用）
+        // ★ C3: 既存スプール — updatedAt 時系列判定でマージ（Math.min 廃止）
         const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
         if (existing) {
           const prevRemain = existing.remainingLengthMm;
+          const prevUpdatedAt = existing.updatedAt ?? 0;
           const prevActive = existing.isActive;
           const prevInUse = existing.isInUse;
           const prevHostname = existing.hostname;
           Object.assign(existing, sp);
-          // ★ 残量は小さい方（より消費が進んだ方）を採用
-          if (Number.isFinite(prevRemain) && Number.isFinite(existing.remainingLengthMm)) {
-            existing.remainingLengthMm = Math.min(prevRemain, existing.remainingLengthMm);
-          } else if (Number.isFinite(prevRemain)) {
+          // ★ remainingLengthMm は updatedAt で判定（新しい方が勝つ）
+          const importRemain = existing.remainingLengthMm;
+          const importTime = existing.updatedAt ?? 0;
+          const prevValid = Number.isFinite(prevRemain) && prevRemain > 0;
+          const importValid = Number.isFinite(importRemain) && importRemain > 0;
+          if (prevValid && importValid) {
+            if (prevUpdatedAt >= importTime) {
+              existing.remainingLengthMm = prevRemain;
+              existing.updatedAt = prevUpdatedAt;
+            }
+            // else: import の方が新しい → import 値を維持（Object.assign 済み）
+          } else if (prevValid) {
             existing.remainingLengthMm = prevRemain;
+            existing.updatedAt = prevUpdatedAt;
           }
           // ★ 装着状態はランタイム値を優先
           existing.isActive = prevActive || existing.isActive;
@@ -474,13 +484,21 @@ function applySpoolDefaults(sp) {
       monitorData.spoolSerialCounter = sp.serialNo;
     }
   }
-  // 数値項目の正規化: NaN または null の場合は 0 をセット
-  if (sp.remainingLengthMm != null) {
-    const rem = Number(sp.remainingLengthMm);
-    sp.remainingLengthMm = Number.isFinite(rem) ? rem : 0;
+  // ★ C4: remainingLengthMm の正規化（0にしない — null で「不明」を保持）
+  if (sp.remainingLengthMm == null || !Number.isFinite(Number(sp.remainingLengthMm))) {
+    const fallback = Number(sp.totalLengthMm ?? sp.filamentTotalLength ?? NaN);
+    sp.remainingLengthMm = Number.isFinite(fallback) ? fallback : null;
+  } else {
+    sp.remainingLengthMm = Number(sp.remainingLengthMm);
   }
   if (sp.startLength == null || !Number.isFinite(Number(sp.startLength))) {
     sp.startLength = sp.remainingLengthMm ?? 0;
+  }
+  // ★ C1: updatedAt タイムスタンプ（復元/インポート時の時系列判定に使用）
+  if (sp.updatedAt == null || !Number.isFinite(Number(sp.updatedAt))) {
+    sp.updatedAt = Date.now();
+  } else {
+    sp.updatedAt = Number(sp.updatedAt);
   }
   return sp;
 }
@@ -596,9 +614,22 @@ export const MAX_USAGE_HISTORY = 4500;
  * @returns {void}
  */
 export function trimUsageHistory() {
-  if (monitorData.usageHistory.length > MAX_USAGE_HISTORY) {
-    monitorData.usageHistory = monitorData.usageHistory.slice(-MAX_USAGE_HISTORY);
+  const logs = monitorData.usageHistory;
+  if (logs.length <= MAX_USAGE_HISTORY) return;
+
+  // 各スプールの最新の startLength エントリ（装着記録）を保護
+  // これが失われると autoCorrectCurrentSpool が残量を再計算できなくなる
+  const protectedIdx = new Set();
+  const seenSpools = new Set();
+  for (let i = logs.length - 1; i >= 0; i--) {
+    if (logs[i].startLength != null && !seenSpools.has(logs[i].spoolId)) {
+      protectedIdx.add(i);
+      seenSpools.add(logs[i].spoolId);
+    }
   }
+
+  const cutoff = logs.length - MAX_USAGE_HISTORY;
+  monitorData.usageHistory = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
 }
 
 /**
@@ -905,30 +936,44 @@ function _restoreFromData(shared, machines) {
         const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
         if (existing) {
           const restored = applySpoolDefaults(sp);
-          // ★ remainingLengthMm: 両方に有効値がある場合は小さい方（=より消費が進んだ方）を採用
-          //    起動時にメモリが初期値(0 or undefined)の場合はストレージ値を採用
-          // ★ isActive/isInUse/hostname はランタイム値を優先（装着状態は復元値より信頼できる）
+          // ★ C2: remainingLengthMm — updatedAt 時系列判定（Math.min 廃止）
           const existRemain = existing.remainingLengthMm;
           const restoredRemain = restored.remainingLengthMm;
+          const existValid = Number.isFinite(existRemain) && existRemain > 0;
+          const restoredValid = Number.isFinite(restoredRemain) && restoredRemain > 0;
+
           let mergedRemain;
-          if (!Number.isFinite(existRemain) || existRemain === 0) {
-            mergedRemain = restoredRemain; // メモリが初期値 → ストレージ値を採用
-          } else if (!Number.isFinite(restoredRemain)) {
-            mergedRemain = existRemain; // ストレージが未設定 → メモリ値を維持
+          if (existValid && restoredValid) {
+            // 両方有効 → updatedAt が新しい方を採用
+            const existTime = existing.updatedAt ?? 0;
+            const restoredTime = restored.updatedAt ?? 0;
+            if (restoredTime > existTime) {
+              mergedRemain = restoredRemain;
+            } else if (existTime > restoredTime) {
+              mergedRemain = existRemain;
+            } else {
+              // タイムスタンプ同一 → 小さい方（互換フォールバック）
+              mergedRemain = Math.min(existRemain, restoredRemain);
+            }
+            console.debug(`[restore] spool ${existing.id}: exist=${existRemain}(t=${existing.updatedAt}) restored=${restoredRemain}(t=${restored.updatedAt}) → ${mergedRemain}`);
+          } else if (restoredValid) {
+            mergedRemain = restoredRemain;
+          } else if (existValid) {
+            mergedRemain = existRemain;
           } else {
-            mergedRemain = Math.min(existRemain, restoredRemain); // 両方有効 → 小さい方
+            // 両方無効 → totalLengthMm フォールバック（0にしない）
+            mergedRemain = restored.totalLengthMm ?? restored.filamentTotalLength ?? null;
           }
+          // ★ isActive/isInUse/hostname はランタイム値を優先
+          const mergedUpdatedAt = Math.max(existing.updatedAt ?? 0, restored.updatedAt ?? 0);
           const protectedFields = {
             remainingLengthMm: mergedRemain,
+            updatedAt: mergedUpdatedAt,
             isActive: existing.isActive || restored.isActive,
             isInUse: existing.isInUse || restored.isInUse,
             hostname: existing.hostname || restored.hostname
           };
           Object.assign(existing, restored, protectedFields);
-          // Infinity 防止（両方が未設定の場合）
-          if (!Number.isFinite(existing.remainingLengthMm)) {
-            existing.remainingLengthMm = restored.remainingLengthMm ?? 0;
-          }
         }
       } else {
         // 新規スプール: 追加

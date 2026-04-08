@@ -1,5 +1,53 @@
 # Changelog
 
+## v2.1.010 (2026-04-08)
+
+### フィラメントデータ整合性の根本再設計 + 4バグ修正
+
+#### フィラメント遡及補正 (autoCorrectCurrentSpool)
+- アプリOFF中の印刷消費を `printStore.history` から遡及反映
+- epoch ID ベースの範囲判定（startPrintID〜endPrintID）で装着中の印刷のみ対象
+- `usageHistory` に startLength エントリがない場合の updatedAt フォールバック追加
+- 他スプールの startLength エントリで早期 return していたバグを修正
+- `trimUsageHistory` で各スプールの最新 startLength エントリを保護（FIFO 削除から除外）
+
+#### currentPrintID 残留問題
+- アプリOFF中に印刷完了しても currentPrintID がクリアされない問題を修正
+- aggregator: state=printDone/printFailed 時に currentPrintID をクリア
+- resolveFilamentJobId は isPrinting 時のみ実行（クリア済み stale ID の書き戻し防止）
+
+#### スプール未装着時のゴースト表示修正
+- スプール取外し時に `storedData.filamentRemainingMm` を null クリア
+- パネル初期化時、スプール未装着なら storedData にフォールバックしない
+- `_syncFilamentPreview` の未装着時 filamentCurrentLength を 0 に修正
+- `materialStatus`（機器フィラメントセンサー）より hostSpoolMap（アプリ管理状態）を優先
+  - hostSpoolMap なし → 「スプール未装着」表示（センサー値に関わらず）
+
+#### Bug #4: 印刷中ステータスアイコン ✗ + 偽失敗統計
+- `printfinish = 0` → `null` に修正（0 は else 条件で ✗ 表示になるバグ）
+- `buildFileInsight` で `printfinish == null`（進行中/不明）を統計対象外に
+- 印刷回数 = 成功 + 失敗のみ（進行中ジョブを除外）
+
+#### Bug #1: completionElapsedTime 振動
+- msg_handler の completionTimer setInterval を完全撤去（2 writer 問題の解消）
+- aggregator セクション 4-4 に一本化
+- 取り出し忘れリマインダー（30分通知）を aggregator に移設
+
+#### Bug #3: Relay propagation gap
+- `_applyDelta()` 後に `markAllKeysDirty()` を呼出
+- 親のリアルタイム変更が子クライアントの画面に反映されるように
+
+#### Bug #2: TTS 起動時発声失敗
+- `_speakText()` メソッドに抽出
+- `speechSynthesis.getVoices()` が空（起動直後）の場合は遅延キューに保留
+- `voiceschanged` イベントで再試行
+
+#### バージョン自動反映
+- タイトルバーに `package.json` のバージョンを自動表示
+- Electron IPC (`get-app-version`) + preload API 追加
+
+---
+
 ## v2.1.008 (2026-03-28)
 
 ### UI統合・品質改善・バグ修正（40+件）

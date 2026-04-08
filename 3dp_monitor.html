@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.1.009</title>
+  <title>3dpmon - 3Dプリンタ監視ダッシュボード</title>
   <!-- サイトアイコン -->
   <link rel="icon" href="favicon.ico">
 
@@ -919,6 +919,19 @@
   <!-- スクリプト読み込み -->
   <script type="module" src="3dp_lib/3dp_dashboard_main.js"></script>
   <!-- パネルシステム起動は 3dp_dashboard_main.js 内で実行 -->
+  <script>
+    // バージョンを document.title に自動反映
+    (function() {
+      var v = window.electronAPI?.getVersion?.();
+      if (v) {
+        document.title = "3dpmon - 3Dプリンタ監視ダッシュボード v" + v;
+      } else {
+        fetch("/api/relay-mode").then(function(r) { return r.json(); }).then(function(d) {
+          if (d.version) document.title = "3dpmon - 3Dプリンタ監視ダッシュボード v" + d.version;
+        }).catch(function() {});
+      }
+    })();
+  </script>
 
 </body>
 </html>

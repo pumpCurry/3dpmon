@@ -1019,7 +1019,8 @@ function _syncFilamentPreview(host, spool) {
   } else {
     preview.setState({
       isFilamentPresent: false,
-      filamentCurrentLength: 330000,
+      filamentCurrentLength: 0,
+      filamentTotalLength: 330000,
       reelName: "", reelSubName: "", materialName: "",
       materialColorName: "", materialColorCode: "", manufacturerName: ""
     });
@@ -2254,7 +2255,9 @@ function createEditorContent(onDone) {
   curLabel.textContent = "残量";
   const curIn = document.createElement("input");
   curIn.type = "number";
-  curIn.disabled = true;
+  // ★ D1: 残量フィールドを編集可能にする（ユーザー操作は信じるルール）
+  curIn.disabled = false;
+  curIn.min = 0;
   curLabel.appendChild(curIn);
 
   const odLabel = document.createElement("label");
@@ -2300,9 +2303,8 @@ function createEditorContent(onDone) {
   holeColorIn.type = "color";
   holeColorLabel.appendChild(holeColorIn);
 
-  totIn.addEventListener("input", () => {
-    curIn.value = totIn.value;
-  });
+  // ★ D1: 全長変更で残量を自動リセットする挙動を削除
+  //   残量は独立したフィールド。全長変更は残量に影響しない。
 
   diaIn.addEventListener("input", () => {
     preview.setOption("filamentDiameter", Number(diaIn.value));
@@ -2531,6 +2533,23 @@ function createEditorContent(onDone) {
       note: noteIn.value,
       isFavorite: favIn.checked
     };
+    // ★ D1: 残量バリデーション（0未満やtotal超過を防止）
+    if (data.filamentCurrentLength != null) {
+      const curVal = Number(data.filamentCurrentLength);
+      const totVal = Number(data.filamentTotalLength || 0);
+      if (!isNaN(curVal) && !isNaN(totVal)) {
+        data.filamentCurrentLength = Math.max(0, Math.min(curVal, totVal));
+      }
+    }
+    // ★ D2: フィールド名マッピング（remainingLengthMm が未設定の場合のみ）
+    if (data.filamentCurrentLength != null && data.remainingLengthMm == null) {
+      data.remainingLengthMm = data.filamentCurrentLength;
+    }
+    if (data.filamentTotalLength != null && data.totalLengthMm == null) {
+      data.totalLengthMm = data.filamentTotalLength;
+    }
+    // ★ C1: updatedAt 更新（ユーザー操作）
+    data.updatedAt = Date.now();
     if (isNew) addSpool(data); else updateSpool(current.id, data);
     showAlert("フィラメントを保存しました", "success");
     dirty = false;

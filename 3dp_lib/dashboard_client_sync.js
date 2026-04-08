@@ -283,6 +283,8 @@ function _applyDelta(msg) {
       for (const [key, rawValue] of Object.entries(changes)) {
         setStoredDataForHost(hostname, key, rawValue, true);
       }
+      // ★ デルタ適用後に dirty マークを設定し、子クライアントの画面を更新
+      markAllKeysDirty(hostname);
     }
   }
 

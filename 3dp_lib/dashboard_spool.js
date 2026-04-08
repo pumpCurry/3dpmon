@@ -45,7 +45,7 @@ import {
 import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
-import { updateHistoryList } from "./dashboard_printmanager.js";
+import { updateHistoryList, loadHistory } from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 
 /**
@@ -179,7 +179,11 @@ export function weightFromLength(lengthMm, density, diameterMm = 1.75) {
  * @returns {{ mm: number, m: string, g: string|null, cost: string|null, currency: string, display: string }}
  */
 export function formatFilamentAmount(mm, spool = null) {
-  const val = Number(mm) || 0;
+  // ★ B4: undefined/NaN を 0 にマスクしない（追跡失敗を隠さない）
+  const val = Number(mm);
+  if (!Number.isFinite(val)) {
+    return { mm: null, m: "---", g: null, cost: null, currency: "", display: "---" };
+  }
   const m = (val / 1000).toFixed(1);
 
   let g = null;
@@ -517,7 +521,10 @@ export function setCurrentSpoolId(id, hostname) {
     newSpool.currentPrintID = printId;
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
-    newSpool.isPending = true;
+    // ★ B5: 交換記録を即座に保存（印刷前の再起動でも記録が残る）
+    logSpoolChange(newSpool, printId);
+    newSpool.isPending = false;  // 即座に記録済み（遅延実行を廃止）
+    newSpool.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
     if (host && remaining > 0) {
       // 継続ジョブの残り分を新しいスプールに予約
       reserveFilament(remaining, printId, host);
@@ -552,8 +559,12 @@ export function setCurrentSpoolId(id, hostname) {
   }
 
   // 現在スプールの残量を storedData に即時反映
+  // スプール取外し時は null をセットしてゴースト表示を防止
   if (host && newSpool) {
     setStoredDataForHost(host, "filamentRemainingMm", newSpool.remainingLengthMm, true);
+    updateStoredDataToDOM();
+  } else if (host && !newSpool) {
+    setStoredDataForHost(host, "filamentRemainingMm", null, true);
     updateStoredDataToDOM();
   }
 
@@ -807,17 +818,12 @@ export function useFilament(lengthMm, jobId = "", hostname) {
     logSpoolChange(s, normalizedJobId);
     s.isPending = false;
   }
-  // 現在の印刷ジョブ開始時点の残量と必要量を記録
+  // ★ 予約減算を廃止。基点のみ記録し、実際の減算は aggregatorUpdate の delta 追跡で行う。
   s.currentJobStartLength = s.remainingLengthMm;
   s.currentJobExpectedLength = amount;
-  // 残量を先に減算して保持
-  s.remainingLengthMm = Math.max(0, s.remainingLengthMm - amount);
-  // DOM 表示とストレージに新しい残量を即時反映
-  setStoredDataForHost(host, "filamentRemainingMm", s.remainingLengthMm, true);
-  updateStoredDataToDOM();
+  // remainingLengthMm は変更しない（aggregatorUpdate が delta で更新する）
   s.currentPrintID = normalizedJobId;
-  s.usedLengthLog.push({ jobId: normalizedJobId, used: amount });
-  // ページリロード直後でも残量が巻き戻らないよう即座に保存
+  // ページリロード直後でも基点が巻き戻らないよう即座に保存
   saveUnifiedStorage(true);
 }
 
@@ -854,22 +860,12 @@ export function beginExternalPrint(spool, lengthMm, jobId = "", hostname) {
     spool.isPending = false;
   }
 
-  // リジューム時は残量を二重減算しない（前回の finalize で既に減算済み）
-  if (!isResume) {
-    // 現在の印刷ジョブ開始時点の残量と必要量を記録
-    spool.currentJobStartLength = spool.remainingLengthMm;
-    spool.currentJobExpectedLength = lengthMm;
-    // 残量を先に減算して保持
-    spool.remainingLengthMm = Math.max(0, spool.remainingLengthMm - lengthMm);
-    // DOM 表示とストレージに新しい残量を即時反映
-    setStoredDataForHost(host, "filamentRemainingMm", spool.remainingLengthMm, true);
-    updateStoredDataToDOM();
-    spool.usedLengthLog.push({ jobId: normalizedJobId, used: lengthMm });
-  } else {
-    // リジューム: 開始時残量を現在値で再設定（追加消費の基点）
-    spool.currentJobStartLength = spool.remainingLengthMm;
-    spool.currentJobExpectedLength = lengthMm;
-  }
+  // ★ 予約減算を廃止。残量は「確定残量 - リアルタイム消費量」で表示する。
+  //   beginExternalPrint は基点を記録するのみ。実際の減算は aggregatorUpdate の
+  //   delta 追跡と finalizeFilamentUsage で行う。
+  spool.currentJobStartLength = spool.remainingLengthMm;
+  spool.currentJobExpectedLength = lengthMm;
+  // remainingLengthMm は変更しない（aggregatorUpdate が delta で更新する）
 
   spool.currentPrintID = normalizedJobId;
   spool.lastCompletedPrintID = null; // リジューム検出フラグをクリア
@@ -992,11 +988,15 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     );
     resolvedUsed = expectedLength;
   }
-  if (!isNaN(resolvedUsed)) {
+  // ★ B2: 0消費は残量を変更しない（二重finalize等による偽値での破壊を防止）
+  if (!isNaN(resolvedUsed) && resolvedUsed > 0) {
     s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
+    s.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
+  } else if (resolvedUsed === 0 || isNaN(resolvedUsed)) {
+    console.warn(`[finalizeFilamentUsage] resolvedUsed=${resolvedUsed} → 残量変更なし (${hostname})`);
   }
   // 成功時のみ printCount をインクリメント（失敗/キャンセルは含めない）
-  if (isSuccess) {
+  if (isSuccess && resolvedUsed > 0) {
     s.printCount = (s.printCount || 0) + 1;
   }
   s.currentJobStartLength = null;
@@ -1017,16 +1017,24 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       machine.historyData.push(entry);
     }
     entry.filamentInfo ??= [];
-    entry.filamentInfo.push({
-      spoolId: s.id,
-      serialNo: s.serialNo,
-      spoolName: s.name,
-      colorName: s.colorName,
-      filamentColor: s.filamentColor,
-      material: s.material,
-      spoolCount: s.printCount,
-      expectedRemain: s.remainingLengthMm
-    });
+    // ★ B3: 重複チェック — spoolId + expectedRemain の完全一致で判定
+    //   A→B→A交換でAの2回目が消失しないよう、残量も比較する
+    const isDuplicate = entry.filamentInfo.some(info =>
+      info.spoolId === s.id &&
+      Math.abs((info.expectedRemain ?? 0) - s.remainingLengthMm) < 0.1
+    );
+    if (!isDuplicate) {
+      entry.filamentInfo.push({
+        spoolId: s.id,
+        serialNo: s.serialNo,
+        spoolName: s.name,
+        colorName: s.colorName,
+        filamentColor: s.filamentColor,
+        material: s.material,
+        spoolCount: s.printCount,
+        expectedRemain: s.remainingLengthMm
+      });
+    }
   }
   logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
   updateStoredDataToDOM();
@@ -1118,51 +1126,127 @@ export function autoCorrectCurrentSpool(hostname) {
   const spool = getCurrentSpool(hostname);
   if (!spool) return;
 
-  const logs = monitorData.usageHistory;
-  if (!Array.isArray(logs) || logs.length === 0) return;
+  const logs = monitorData.usageHistory || [];
 
   let startIdx = -1;
   let change = null;
   // 最新から過去に向かって交換記録を検索
   for (let i = logs.length - 1; i >= 0; i--) {
     const e = logs[i];
-    if (e.startLength != null) {
-      if (e.spoolId === spool.id) {
-        change = e;
-        startIdx = i;
-        break;
-      }
-      // 他スプールへの交換が後にあれば補正不可
-      if (!change) return;
+    if (e.startLength != null && e.spoolId === spool.id) {
+      change = e;
+      startIdx = i;
+      break;
     }
   }
-  if (!change) return;
+  // ★ フォールバック: usageHistory に startLength エントリがない場合、
+  //   spool.updatedAt を基準に、それ以降の完了印刷だけを遡及加算する。
+  //   起点は現在の remainingLengthMm（最後に保存された残量）。
+  const isFallback = !change;
+  if (isFallback) {
+    const updatedAt = Number(spool.updatedAt ?? 0);
+    if (!updatedAt) return;
+    const persistedHistory = loadHistory(hostname);
+    let fallbackTotal = 0;
+    let fallbackCount = 0;
+    for (const entry of persistedHistory) {
+      if (!entry.printfinish) continue;
+      const used = Number(entry.materialUsedMm ?? NaN);
+      if (!Number.isFinite(used) || used <= 0) continue;
+      // entry.id は epoch秒、updatedAt は epoch ms → 秒に変換して比較
+      const entryStartMs = Number(entry.id) * 1000;
+      if (!Number.isFinite(entryStartMs) || entryStartMs <= updatedAt) continue;
+      fallbackTotal += used;
+      fallbackCount += 1;
+      console.log(`[autoCorrect:fallback] ${hostname}: jobId=${entry.id} から ${used.toFixed(0)}mm を遡及加算 (updatedAt=${updatedAt})`);
+    }
+    if (fallbackTotal > 0) {
+      const expected = spool.remainingLengthMm - fallbackTotal;
+      if (expected < 0) {
+        console.warn(`[autoCorrect:fallback] ${hostname}: total(${fallbackTotal.toFixed(0)}) > remaining(${spool.remainingLengthMm.toFixed(0)}) → 変更なし`);
+        return;
+      }
+      spool.remainingLengthMm = expected;
+      spool.updatedAt = Date.now();
+      spool.printCount = (spool.printCount || 0) + fallbackCount;
+      saveUnifiedStorage();
+    }
+    return;
+  }
 
   // 履歴から取得した開始残量が数値でなければ補正不能と判断
   const startLen = Number(change.startLength);
   if (!Number.isFinite(startLen)) return;
 
+  // ★ 印刷IDベースの範囲判定
+  // startPrintID: スプール装着時の印刷epoch（下限）
+  // endPrintID: 次のスプール交換時の印刷epoch（上限）
+  const startPrintIdNum = Number(change.startPrintID ?? 0);
+  let endPrintIdNum = Infinity;
+  for (let i = startIdx + 1; i < logs.length; i++) {
+    if (logs[i].startLength != null) {
+      const nextId = Number(logs[i].startPrintID ?? 0);
+      if (Number.isFinite(nextId) && nextId > 0) {
+        endPrintIdNum = nextId;
+      }
+      break;
+    }
+  }
+
+  // usageHistory からアプリ記録済みの消費を積算
+  const recordedJobIds = new Set();
   let total = 0;
   let count = 0;
   for (let i = startIdx + 1; i < logs.length; i++) {
     const e = logs[i];
     if (e.startLength != null) break; // 次の交換で終了
     if (e.spoolId !== spool.id) continue;
+    if (e.isSnapshot) continue;
     const u = Number(e.usedLength);
-    if (!isNaN(u)) {
+    if (!isNaN(u) && u > 0) {
       total += u;
       count += 1;
+      if (e.jobId) recordedJobIds.add(String(e.jobId));
     }
   }
 
-  // 計算された残量が有限値でなければ補正しない
-  const expected = Math.max(0, startLen - total);
+  // ★ 遡及補正: プリンター報告履歴（printStore.history）から未記録の完了印刷を加算
+  // アプリOFF中の印刷はusageHistoryに記録されないが、プリンター履歴には残っている
+  const persistedHistory = loadHistory(hostname);
+  if (startPrintIdNum > 0) {
+    for (const entry of persistedHistory) {
+      const entryId = String(entry.id ?? "");
+      if (!entryId || recordedJobIds.has(entryId)) continue;
+      if (!entry.printfinish) continue;
+      const used = Number(entry.materialUsedMm ?? NaN);
+      if (!Number.isFinite(used) || used <= 0) continue;
+
+      const numId = Number(entry.id);
+      if (!Number.isFinite(numId) || numId <= 0) continue;
+      if (numId <= startPrintIdNum) continue;           // 装着前の印刷
+      if (endPrintIdNum < Infinity && numId > endPrintIdNum) continue;  // 取り外し後の印刷
+
+      total += used;
+      count += 1;
+      console.log(`[autoCorrect] ${hostname}: 未記録印刷 jobId=${entryId} から ${used.toFixed(0)}mm を遡及加算`);
+    }
+  }
+
+  // 計算された残量
+  const expected = startLen - total;
   if (!Number.isFinite(expected)) return;
+
+  // 異常検知: 消費合計が起点残量を超える場合は変更せず警告
+  if (total > startLen) {
+    console.warn(`[autoCorrect] ${hostname}: total(${total.toFixed(0)}) > startLen(${startLen.toFixed(0)}) → 残量変更なし`);
+    return;
+  }
+
   const diff = Math.abs(expected - spool.remainingLengthMm);
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
     spool.remainingLengthMm = expected;
+    spool.updatedAt = Date.now();
     spool.printCount = count;
-    // ★ aggregator から毎500ms呼ばれるため即時保存は使わない（スロットリング）
     saveUnifiedStorage();
   }
 }

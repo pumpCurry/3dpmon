@@ -282,8 +282,9 @@ function initFilamentPanel(body, hostname) {
     const defaultTotal = 330000;
     preview = createFilamentPreview(container, {
       filamentDiameter:         spool?.filamentDiameter ?? machine.settings?.filamentDiameterMm ?? 1.75,
-      filamentTotalLength:      spool?.totalLengthMm ?? machine.settings?.filamentTotalLengthMm ?? defaultTotal,
-      filamentCurrentLength:    spool?.remainingLengthMm ?? machine.settings?.filamentRemainingMm ?? defaultTotal,
+      // スプール未装着時は storedData にフォールバックしない（再起動・リロード・取外し後のゴースト表示防止）
+      filamentTotalLength:      spool ? (spool.totalLengthMm ?? defaultTotal) : defaultTotal,
+      filamentCurrentLength:    spool ? (spool.remainingLengthMm ?? defaultTotal) : 0,
       filamentColor:            spool?.filamentColor ?? machine.settings?.filamentColor ?? "#22C55E",
       reelOuterDiameter:        spool?.reelOuterDiameter ?? 200,
       reelThickness:            spool?.reelThickness ?? 68,
