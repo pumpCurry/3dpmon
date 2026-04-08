@@ -770,12 +770,20 @@ function aggregateTimersAndPredictions(vals, hostname) {
   if (completePhaseActive) {
     if (!s.tsCompleteStart) {
       s.tsCompleteStart = nowMs;
+      s._removalReminderSent = false;
       _set("completionElapsedTime", 0, true);
     }
-    _set("completionElapsedTime", Math.floor((nowMs - s.tsCompleteStart) / 1000), true);
+    const elapsedSec = Math.floor((nowMs - s.tsCompleteStart) / 1000);
+    _set("completionElapsedTime", elapsedSec, true);
+    // 取り出し忘れリマインダー (30分経過で1回のみ通知)
+    if (!s._removalReminderSent && elapsedSec >= 1800) {
+      s._removalReminderSent = true;
+      notificationManager.notify("printRemovalReminder", { hostname: host });
+    }
   } else if (_hasValidDeviceState && s.tsCompleteStart) {
     // 接続中かつフェーズ終了 → リセット
     s.tsCompleteStart = null;
+    s._removalReminderSent = false;
     _set("completionElapsedTime", null, true);
   } else if (!_hasValidDeviceState && s.tsCompleteStart) {
     // 接続前 → 復元値から表示のみ

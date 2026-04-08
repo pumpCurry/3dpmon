@@ -2352,6 +2352,9 @@ export function buildFileInsight(filename, hostname) {
       successCount++;
       successTotalSec += sec;
       successTotalMaterial += mat;
+    } else if (j.printfinish == null) {
+      // 進行中/不明（printfinish が null/undefined）: 統計対象外
+      continue;
     } else {
       // 失敗/中断: 平均値には含めない（参考値として保持）
       failCount++;
@@ -2366,7 +2369,8 @@ export function buildFileInsight(filename, hostname) {
     }
   }
 
-  const printCount = matching.length;
+  // ★ 進行中/不明（printfinish == null）を除外した確定済み印刷数
+  const printCount = successCount + failCount;
   // ★ 平均値は成功印刷のみで計算（失敗の過少/過大な値を排除）
   const avgDurationSec = successCount > 0 ? successTotalSec / successCount : 0;
   const avgMaterialMm = successCount > 0 ? successTotalMaterial / successCount : 0;

@@ -436,19 +436,9 @@ export function processData(data, hostname) {
   };
 
   // ---- 完了後経過タイマーの復元処理 ------------------------------------
-  // localStorage から tsCompletion が復元済みなら、タイマーを再開
-  if (ms.tsCompletion != null && !ms.completionTimer) {
-    _set("completionElapsedTime", Math.floor((Date.now() - ms.tsCompletion) / 1000), true);
-    ms.completionTimer = setInterval(() => {
-      const elapsedSec = Math.floor((Date.now() - ms.tsCompletion) / 1000);
-      _set("completionElapsedTime", elapsedSec, true);
-      if (!ms._removalReminderSent && elapsedSec >= 1800) {
-        ms._removalReminderSent = true;
-        try { localStorage.setItem(`msg_${host}_removalReminderSent`, "true"); } catch { /* ignore */ }
-        notificationManager.notify("printRemovalReminder", { hostname: host });
-      }
-    }, 1000);
-  }
+  // ★ completionElapsedTime は aggregator セクション4-4 に一本化。
+  //   ここでは tsCompletion の復元のみ行い、setInterval は起動しない。
+  //   リマインダーも aggregator 側で処理。
   if (ms.tsCompletion === null) {
     const storedPrev = Number(machine.storedData.prevPrintID?.rawValue ?? NaN);
     if (!isNaN(storedPrev)) {
@@ -584,7 +574,7 @@ export function processData(data, hostname) {
           curJob.rawFilename = String(fn);
         }
       }
-      curJob.printfinish = 0;
+      curJob.printfinish = null;  // null = 未確定/印刷中（0 だと ✗ 失敗表示になるバグ修正）
       printManager.saveCurrent(curJob, host);
       printManager.renderPrintCurrent(
         scopedById("print-current-container", host), host
@@ -723,22 +713,11 @@ export function processData(data, hostname) {
     !ms.tsCompletion
   ) {
     console.debug(">>> (2.6.1) 完了後経過タイマー開始");
+    // ★ completionElapsedTime の計算は dashboard_aggregator.js セクション4-4に一本化。
+    //   ここではタイムスタンプの保存のみ行い、setInterval による更新は廃止。
+    //   リマインダー通知も aggregator 側に移設。
     ms.tsCompletion = Date.now();
-    _set("completionElapsedTime", 0, true);
     try { localStorage.setItem(`msg_${host}_tsCompletion`, String(ms.tsCompletion)); } catch { /* ignore */ }
-
-    ms._removalReminderSent = false;
-    try { localStorage.setItem(`msg_${host}_removalReminderSent`, "false"); } catch { /* ignore */ }
-    ms.completionTimer = setInterval(() => {
-      const elapsedSec = Math.floor((Date.now() - ms.tsCompletion) / 1000);
-      _set("completionElapsedTime", elapsedSec, true);
-      // 取り出し忘れリマインダー (30分経過で1回のみ通知)
-      if (!ms._removalReminderSent && elapsedSec >= 1800) {
-        ms._removalReminderSent = true;
-        try { localStorage.setItem(`msg_${host}_removalReminderSent`, "true"); } catch { /* ignore */ }
-        notificationManager.notify("printRemovalReminder", { hostname: host });
-      }
-    }, 1000);
     const evt = st === PRINT_STATE_CODE.printDone ? "printCompleted" : "printFailed";
     const notifPayload = _buildNotifyPayload(host, machine, {
       includeSpool: true, includeMaterial: true,
