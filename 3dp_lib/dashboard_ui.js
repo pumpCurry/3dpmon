@@ -226,11 +226,18 @@ export function updateStoredDataToDOM() {
         const fp = window._filamentPreviews?.get(host);
         if (fp) {
           if (key === "filamentRemainingMm") {
-            const val = Number(d.rawValue);
-            if (!isNaN(val)) fp.setRemainingLength(val);
+            // スプール未装着時は storedData の残留値で表示を更新しない（ゴースト防止）
+            const hasSpool = !!monitorData.hostSpoolMap?.[host];
+            if (hasSpool) {
+              const val = Number(d.rawValue);
+              if (!isNaN(val)) fp.setRemainingLength(val);
+            }
           }
           if (key === "materialStatus") {
-            const present = Number(d.rawValue) === 0;
+            // アプリのスプール管理状態を優先（機器報告値より上位）
+            // hostSpoolMap に装着スプールがない場合は未装着として扱う
+            const hasSpool = !!monitorData.hostSpoolMap?.[host];
+            const present = hasSpool && Number(d.rawValue) === 0;
             fp.setState({
               isFilamentPresent: present,
               showUsedUpIndicator: !present
