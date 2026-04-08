@@ -1019,7 +1019,8 @@ function _syncFilamentPreview(host, spool) {
   } else {
     preview.setState({
       isFilamentPresent: false,
-      filamentCurrentLength: 330000,
+      filamentCurrentLength: 0,
+      filamentTotalLength: 330000,
       reelName: "", reelSubName: "", materialName: "",
       materialColorName: "", materialColorCode: "", manufacturerName: ""
     });

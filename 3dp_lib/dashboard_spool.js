@@ -559,8 +559,12 @@ export function setCurrentSpoolId(id, hostname) {
   }
 
   // 現在スプールの残量を storedData に即時反映
+  // スプール取外し時は null をセットしてゴースト表示を防止
   if (host && newSpool) {
     setStoredDataForHost(host, "filamentRemainingMm", newSpool.remainingLengthMm, true);
+    updateStoredDataToDOM();
+  } else if (host && !newSpool) {
+    setStoredDataForHost(host, "filamentRemainingMm", null, true);
     updateStoredDataToDOM();
   }
 
