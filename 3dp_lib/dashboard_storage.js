@@ -36,7 +36,7 @@
 
 "use strict";
 
-import { monitorData, currentHostname, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
+import { monitorData, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
@@ -242,11 +242,16 @@ export async function importAllData(data) {
     monitorData.spoolSerialCounter = data.spoolSerialCounter;
   }
 
-  // ── hostSpoolMap: 既存を保持、新規ホストのみ追加 ──
+  // ── hostSpoolMap: 既存を保持、新規ホストのみ追加（参照整合性チェック付き） ──
   if (data.hostSpoolMap && typeof data.hostSpoolMap === "object") {
+    const validIds = new Set(monitorData.filamentSpools.filter(s => !s.deleted && !s.isDeleted).map(s => s.id));
     for (const [host, spoolId] of Object.entries(data.hostSpoolMap)) {
       if (!(host in monitorData.hostSpoolMap)) {
-        monitorData.hostSpoolMap[host] = spoolId;
+        if (!spoolId || validIds.has(spoolId)) {
+          monitorData.hostSpoolMap[host] = spoolId;
+        } else {
+          console.warn(`[importAllData] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
+        }
       }
     }
   }
@@ -542,7 +547,8 @@ const LS_KEY_HOST_PREFIX = "3dpmon-host-";
 /** localStorage 用に保存可能なグローバルフィールド名一覧 */
 const LS_GLOBAL_FIELDS = [
   "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
-  "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory", "currentSpoolId",
+  "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
+  // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
 
@@ -721,7 +727,7 @@ function _flushStorage() {
       queueSharedWrite("hiddenPresets",      monitorData.hiddenPresets);
       queueSharedWrite("favoritePresets",    monitorData.favoritePresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
-      queueSharedWrite("currentSpoolId",     monitorData.currentSpoolId);
+      // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
       queueSharedWrite("spoolSerialCounter", monitorData.spoolSerialCounter);
@@ -1028,27 +1034,25 @@ function _restoreFromData(shared, machines) {
     }
   }
 
-  if (shared && "currentSpoolId" in shared) {
-    monitorData.currentSpoolId = shared.currentSpoolId;
-  }
+  // ★ currentSpoolId は廃止済み。復元しない。hostSpoolMap のみが権威。
 
   // ★ hostSpoolMap: マージ（既存の装着情報を保護、全クリアしない）
+  // ★ 参照整合性チェック: filamentSpools に存在するスプールのみ復元
   if (shared?.hostSpoolMap && typeof shared.hostSpoolMap === "object") {
+    const validSpoolIds = new Set(
+      monitorData.filamentSpools.filter(s => !s.deleted && !s.isDeleted).map(s => s.id)
+    );
     for (const [host, spoolId] of Object.entries(shared.hostSpoolMap)) {
       if (spoolId && !monitorData.hostSpoolMap[host]) {
-        monitorData.hostSpoolMap[host] = spoolId;
+        if (validSpoolIds.has(spoolId)) {
+          monitorData.hostSpoolMap[host] = spoolId;
+        } else {
+          console.warn(`[_restoreFromData] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
+        }
       }
     }
-  } else if (shared && "currentSpoolId" in shared && shared.currentSpoolId) {
-    // レガシー移行: グローバル currentSpoolId からスプールの hostname を使って推定
-    const spool = monitorData.filamentSpools.find(
-      s => s.id === shared.currentSpoolId && !s.deleted
-    );
-    if (spool && spool.hostname && !monitorData.hostSpoolMap[spool.hostname]) {
-      monitorData.hostSpoolMap[spool.hostname] = shared.currentSpoolId;
-    }
-    // ★ 全クリア（= {}）は行わない — 既存の装着情報を保護
   }
+  // ★ レガシー currentSpoolId → hostSpoolMap 移行は削除済み（マイグレーション完了）
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）
   if (Array.isArray(shared?.userPresets) && shared.userPresets.length > 0) {
@@ -1082,49 +1086,14 @@ function _restoreFromData(shared, machines) {
 }
 
 /**
- * レガシー形式（storedDataV1p125）で保存された storedData を指定ホストに復元する。
- * v1.40 以降では公式サポート対象外だが、互換性のため移行処理は維持する。
- * 復元時に isFromEquipVal フラグが存在しない場合は true を設定する。
- *
+ * ★★★ OBSOLETE — 廃止済み ★★★
+ * レガシー storedData の移行は v2.1.010 で完了済み。
+ * currentHostname に依存していたため、マルチホスト環境で安全に動作しない。
+ * @deprecated 完全廃止。
  * @returns {void}
  */
 export function restoreLegacyStoredData() {
-  if (!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) {
-    console.warn("[restoreLegacyStoredData] 有効なホスト名が未設定のためスキップ");
-    return;
-  }
-  const machine = monitorData.machines[currentHostname];
-  if (!machine) {
-    console.warn("[restoreLegacyStoredData] ホストのマシンデータが存在しないためスキップ");
-    return;
-  }
-  const raw = localStorage.getItem("storedDataV1p125");
-  if (!raw) return;
-  try {
-    const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== "object") {
-      console.warn("[restoreLegacyStoredData] パースデータが不正です");
-      return;
-    }
-    for (const [key, val] of Object.entries(obj)) {
-      if (val != null && typeof val === "object" && "rawValue" in val) {
-        machine.storedData[key] = val;
-        machine.storedData[key].isFromEquipVal ??= true;
-      } else {
-        machine.storedData[key] = {
-          rawValue: val,
-          computedValue: null,
-          isNew: true,
-          isFromEquipVal: true
-        };
-      }
-    }
-    console.debug("[restoreLegacyStoredData] storedData を復元しました");
-    pushLog("旧 storedData を復元しました（非公式互換移行）");
-  } catch (e) {
-    console.warn("[restoreLegacyStoredData] パースエラー:", e);
-    pushLog("旧 storedData の読み込みに失敗しました", true);
-  }
+  console.warn("[OBSOLETE] restoreLegacyStoredData は廃止されました");
 }
 
 /**

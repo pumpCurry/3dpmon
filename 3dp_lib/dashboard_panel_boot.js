@@ -457,10 +457,7 @@ function _initTopMenuBar() {
       _syncModalSettings();
 
       /* connectWs は内部で _addConnectionTarget を呼んで永続化する。
-         wsDest は後方互換のためメイン接続先として保持する。 */
-      if (!monitorData.appSettings.wsDest) {
-        monitorData.appSettings.wsDest = ip;
-      }
+         ★ wsDest は廃止済み。connectionTargets のみが権威。 */
       connectWs(ip);
 
       /* 入力欄をクリア */

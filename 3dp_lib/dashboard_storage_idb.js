@@ -58,7 +58,7 @@ const SHARED_KEYS = [
   "hiddenPresets",
   "favoritePresets",
   "filamentInventory",
-  "currentSpoolId",
+  // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",
   "spoolSerialCounter"

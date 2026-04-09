@@ -40,9 +40,7 @@
 
 import {
   monitorData,
-  currentHostname,
   PLACEHOLDER_HOSTNAME,
-  setCurrentHostname,
   setNotificationSuppressed,
   setStoredDataForHost,
   ensureMachineData,
@@ -60,7 +58,7 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
-import { saveUnifiedStorage, restoreLegacyStoredData, cleanupLegacy } from "./dashboard_storage.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 // ---------------------------------------------------------------------------
@@ -260,10 +258,12 @@ function _removeConnectionTarget(dest) {
 export function connectAllSavedTargets() {
   const connected = new Set();
 
-  /* wsDest が connectionTargets に未登録なら移行する（後方互換） */
+  /* wsDest → connectionTargets 最終マイグレーション（1回限り、以後 wsDest は空にする） */
   const main = monitorData.appSettings.wsDest;
   if (main) {
     _addConnectionTarget(main);
+    monitorData.appSettings.wsDest = "";  // ★ 移行完了、wsDest を永久クリア
+    console.info("[connectAllSavedTargets] wsDest → connectionTargets 移行完了、wsDest をクリア");
   }
 
   /* ★ connectionTargets のクリーンアップ:
@@ -419,7 +419,8 @@ export function fetchStoredData(host) {
  */
 export function getDeviceIp(host) {
   const st = connectionMap[host];
-  const raw = st?.dest || monitorData.appSettings.wsDest || "";
+  // ★ wsDest フォールバック廃止: 他ホストのIPに寄せられる事故を防止
+  const raw = st?.dest || "";
   return _extractIp(raw) || "";
 }
 
@@ -433,7 +434,8 @@ export function getDeviceIp(host) {
  */
 export function getDeviceDest(host) {
   const st = connectionMap[host];
-  return st?.dest || monitorData.appSettings.wsDest || "";
+  // ★ wsDest フォールバック廃止: 他ホストの接続先に寄せられる事故を防止
+  return st?.dest || "";
 }
 
 /**
@@ -694,22 +696,8 @@ export function connectWs(hostOrDest) {
   const target = _findConnectionTarget(dest);
   const host = (target?.hostname) || ip;
 
-  // 初回接続 or まだ PLACEHOLDER の場合のみ currentHostname を切り替える。
-  // 2台目以降の追加接続では currentHostname を変更しない（既存接続のデータ処理を維持）。
-  //
-  // ★ ホスト名未知（初回IP接続で target.hostname が空）の場合は
-  //    setCurrentHostname を呼ばない。handleMessage() の初期化ブロック
-  //    (restoreUnifiedStorage / restartAggregatorTimer 等) は
-  //    currentHostname が null/PLACEHOLDER の状態でのみ実行されるため、
-  //    ここで IP を設定してしまうと初期化パスがスキップされる。
-  //    WS 応答の data.hostname を受信した時点で handleMessage() 内で
-  //    setCurrentHostname(hostname) が呼ばれ初期化が実行される。
-  // ★ currentHostname 未設定なら最初の接続で設定（後方互換用のグローバル値）
-  if ((!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) && target?.hostname) {
-    setCurrentHostname(host);
-  }
-  // 後方互換: wsDest にメイン接続先を保持（全ホスト共通で最後の接続先を記録）
-  monitorData.appSettings.wsDest = dest;
+  // ★ currentHostname / wsDest / setCurrentHostname は全て廃止済み。
+  //   per-host 処理は processData 内の _initializedHosts で管理する。
   const state = getState(host);
   state.dest = dest;
   state.historyReceived = false;
@@ -880,8 +868,6 @@ function handleSocketMessage(event, host) {
   //    handleMessage() の初期化ブロック (line 151) が
   //    currentHostname === null/PLACEHOLDER を条件としているため、
   //    ここで設定すると初期化（restoreUnifiedStorage/restartAggregatorTimer等）
-  //    がスキップされてしまう。
-  //    setCurrentHostname は handleMessage() 内で呼ばれる。
 // 5.5) ★ 全ホスト統一パス: 1台目も2台目も同じ処理
   try {
     // ホスト名を解決（受信データの hostname フィールドで connectionMap キーを更新）
@@ -895,14 +881,8 @@ function handleSocketMessage(event, host) {
     let st = getState(hostKey);
     st.latest = data;
 
-    // ★ currentHostname が未設定なら最初のホストで設定（1回だけ）
-    // これは後方互換用のグローバル値であり、per-host 処理には影響しない
-    if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) &&
-        data?.hostname) {
-      setCurrentHostname(data.hostname);
-      restoreLegacyStoredData();
-      cleanupLegacy();
-    }
+    // ★ currentHostname / restoreLegacyStoredData / cleanupLegacy は廃止済み
+    //   per-host 処理は processData の _initializedHosts で管理
 
     // ★ 全ホスト共通: ensureMachineData + processData
     // processData 内の per-host 初期化ブロック (_initializedHosts) が
@@ -1306,9 +1286,9 @@ export function updateConnectionUI(state, opt = {}, host) {
   const btnDisconnect = document.getElementById("disconnect-button");
   const muteTag       = document.getElementById("audio-muted-tag");
 
-  // wsDest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
+  // per-host の dest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
   const st = getState(host);
-  const rawDest  = st.dest || monitorData.appSettings.wsDest || "";
+  const rawDest  = st.dest || "";
   const hostOnly = _extractIp(rawDest) || "";
 
   // 入力欄を隠し・無効化
@@ -1439,7 +1419,7 @@ export function updatePrinterListUI() {
   // セレクトボックス更新（従来UI）
   if (sel) {
     sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
-    sel.value = hosts.includes(currentHostname) ? currentHostname : "";
+    sel.value = hosts[0] || "";
   }
 
   // ── プリンタ情報をビルド（共通データ） ──
@@ -1609,10 +1589,7 @@ export function updatePrinterListUI() {
            IP キーの孤立エントリのみ除去する（害はないが不要データ）。 */
         _cleanupMachineKeys([ip]);
 
-        // wsDest も同一IPなら除去
-        if (_extractIp(monitorData.appSettings.wsDest || "") === ip) {
-          monitorData.appSettings.wsDest = "";
-        }
+        // ★ wsDest は廃止済み。connectionTargets のみが権威。
         saveUnifiedStorage();
         updatePrinterListUI();
       });

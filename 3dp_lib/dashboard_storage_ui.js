@@ -268,7 +268,7 @@ function _convertV140toV200(data) {
   const SHARED_KEYS = [
     "appSettings", "filamentSpools", "usageHistory",
     "filamentPresets", "filamentInventory",
-    "currentSpoolId", "spoolSerialCounter"
+    "hostSpoolMap", "spoolSerialCounter"
   ];
   const result = {};
   for (const key of SHARED_KEYS) {

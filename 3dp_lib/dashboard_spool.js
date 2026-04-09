@@ -399,7 +399,11 @@ export function getSpoolById(id) {
  * @returns {string|null} - 現在のスプールID。未設定時は null
  */
 export function getCurrentSpoolId(hostname) {
-  if (hostname && monitorData.hostSpoolMap[hostname] !== undefined) {
+  if (!hostname || hostname === "_$_NO_MACHINE_$_") {
+    console.error(`[IMPL_ERROR] getCurrentSpoolId: 異常な機器指定 hostname="${hostname}"`);
+    return null;
+  }
+  if (monitorData.hostSpoolMap[hostname] !== undefined) {
     return monitorData.hostSpoolMap[hostname];
   }
   return null;
@@ -432,6 +436,14 @@ export function getCurrentSpool(hostname) {
  * @returns {boolean} 設定成功時 true、既に他ホストに装着済みの場合 false
  */
 export function setCurrentSpoolId(id, hostname) {
+  // ★ hostname ガード: 空/undefined/PLACEHOLDER は即拒否（データ破壊防止）
+  if (!hostname || hostname === "_$_NO_MACHINE_$_") {
+    console.error(`[IMPL_ERROR] setCurrentSpoolId: 異常な機器指定 hostname="${hostname}", id="${id}"`);
+    import("./dashboard_notification_manager.js").then(m =>
+      m.showAlert(`プログラム実装エラー: setCurrentSpoolId に異常な機器指定がありました`, "error")
+    ).catch(() => {});
+    return false;
+  }
   const host = hostname;
   let prevId = getCurrentSpoolId(host);
 
@@ -476,26 +488,21 @@ export function setCurrentSpoolId(id, hostname) {
     finalizeFilamentUsage(used, prevSpool.currentPrintID, host);
   }
 
-  // per-host マップを更新（★ グローバル currentSpoolId は更新しない — マルチホスト不整合の原因）
-  // monitorData.currentSpoolId = id;  // @deprecated — hostSpoolMap が権威
-  if (host) {
-    monitorData.hostSpoolMap[host] = id;
+  // per-host マップを更新（hostSpoolMap が唯一の権威）
+  // ★ 存在チェック: id が truthy なら対応スプールが filamentSpools に存在することを確認
+  if (id && !newSpool) {
+    console.error(`[IMPL_ERROR] setCurrentSpoolId: スプール "${id}" が filamentSpools に存在しません。hostSpoolMap を汚染しません`);
+    return false;
   }
-  // 該当ホストのスプールのみ isActive を更新（他ホストに装着中のスプールには触れない）
-  if (host) {
-    // ★ アトミック更新: isActive/isInUse/hostname を一括変更
-    if (prevSpool) {
-      Object.assign(prevSpool, { isActive: false, isInUse: false });
-    }
-    if (newSpool) {
-      Object.assign(newSpool, { isActive: true, isInUse: true, hostname: host });
-    }
-  } else {
-    // レガシー: hostname なしの場合は全スプールを走査（後方互換）
-    monitorData.filamentSpools.forEach(sp => {
-      sp.isActive = sp.id === id;
-      sp.isInUse = sp.id === id;
-    });
+  monitorData.hostSpoolMap[host] = id;
+
+  // ★ アトミック更新: 対象ホストのスプールのみ isActive を更新
+  //   他ホストに装着中のスプールには絶対に触れない
+  if (prevSpool) {
+    Object.assign(prevSpool, { isActive: false, isInUse: false });
+  }
+  if (newSpool) {
+    Object.assign(newSpool, { isActive: true, isInUse: true, hostname: host });
   }
 
 
@@ -691,8 +698,7 @@ export function deleteSpool(id, hostname) {
   for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
     if (spId === id) monitorData.hostSpoolMap[h] = null;
   }
-  // レガシー互換: グローバル値もクリア（読み取り専用として残す）
-  if (monitorData.currentSpoolId === id) monitorData.currentSpoolId = null;
+  // ★ currentSpoolId は廃止済み。hostSpoolMap のみが権威。
   saveUnifiedStorage(true);
 }
 
@@ -1123,6 +1129,10 @@ export function addSpoolFromPreset(preset, override = {}) {
  * ない。
  */
 export function autoCorrectCurrentSpool(hostname) {
+  if (!hostname || hostname === "_$_NO_MACHINE_$_") {
+    console.error(`[IMPL_ERROR] autoCorrectCurrentSpool: 異常な機器指定 hostname="${hostname}"`);
+    return;
+  }
   const spool = getCurrentSpool(hostname);
   if (!spool) return;
 
@@ -1273,6 +1283,31 @@ export function autoCorrectCurrentSpool(hostname) {
  * @param {number} [options.maxResults=5] - 最大結果数
  * @returns {Array<{basename: string, materialNeeded: number, matchScore: number, reason: string}>}
  */
+/**
+ * hostSpoolMap の参照整合性を検証・修復する。
+ * 存在しない/削除済みスプールを指すエントリを null にクリアする。
+ * 起動時および saveUnifiedStorage 前に呼び出す。
+ *
+ * @returns {number} 修復されたエントリ数
+ */
+export function validateHostSpoolMap() {
+  let repaired = 0;
+  const spoolIds = new Set(
+    monitorData.filamentSpools.filter(s => !s.deleted && !s.isDeleted).map(s => s.id)
+  );
+  for (const [host, spoolId] of Object.entries(monitorData.hostSpoolMap)) {
+    if (spoolId && !spoolIds.has(spoolId)) {
+      console.warn(`[validateHostSpoolMap] ${host}: スプール "${spoolId}" が filamentSpools に存在しません → null にクリア`);
+      monitorData.hostSpoolMap[host] = null;
+      repaired++;
+    }
+  }
+  if (repaired > 0) {
+    console.warn(`[validateHostSpoolMap] ${repaired} 件の孤立エントリを修復しました`);
+  }
+  return repaired;
+}
+
 export function buildFilamentRecommendations(remainingMm, material, hostname, options = {}) {
   const maxResults = options.maxResults || 5;
   if (!remainingMm || remainingMm <= 0 || !hostname) return [];

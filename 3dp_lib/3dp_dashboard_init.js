@@ -40,9 +40,7 @@ import {
   saveUnifiedStorage
 } from "./dashboard_storage.js";
 import {
-  setCurrentHostname,
   PLACEHOLDER_HOSTNAME,
-  currentHostname,
   monitorData,
   setStoredDataForHost
 } from "./dashboard_data.js";
@@ -65,10 +63,7 @@ import {
  * ここでは実行しません。
  */
 export async function initializeDashboard() {
-  // (1) ホスト未定義ならプレースホルダ設定（ストレージ復元より先に必要）
-  if (!currentHostname) {
-    setCurrentHostname(PLACEHOLDER_HOSTNAME);
-  }
+  // (1) ★ currentHostname / PLACEHOLDER 設定は廃止済み。per-host 処理のみ使用。
 
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
@@ -114,8 +109,7 @@ export async function initializeDashboard() {
 
   // 子モードでなければ通常のプリンタ直接接続
   if (!isRelayChild) {
-    const hasTargets = monitorData.appSettings.wsDest
-      || (monitorData.appSettings.connectionTargets?.length > 0);
+    const hasTargets = (monitorData.appSettings.connectionTargets?.length > 0);
     if (monitorData.appSettings.autoConnect && hasTargets) {
       setTimeout(() => {
         connectAllSavedTargets();

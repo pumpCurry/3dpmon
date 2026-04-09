@@ -50,7 +50,8 @@ describe("buildHostUtilization", () => {
         startTime: start,
         endtime: end,
         printProgress: 100,
-        filamentInfo: [{ length: 5000, materialName: "PLA" }]
+        usagematerial: 5000,
+        filamentInfo: [{ materialName: "PLA" }]
       }]
     };
     const result = buildHostUtilization("host1");
@@ -126,7 +127,7 @@ describe("buildDailyProductionReport", () => {
         startTime: start,
         endtime: end,
         printProgress: 100,
-        filamentInfo: [{ length: 3000 }]
+        usagematerial: 3000
       }]
     };
     const result = buildDailyProductionReport({ days: 1 });
@@ -213,7 +214,7 @@ describe("buildFleetSummary", () => {
           startTime: epochSec(2),
           endtime: epochSec(1),
           printProgress: 100,
-          filamentInfo: [{ length: 1000 }]
+          usagematerial: 1000
         }]
       };
     }

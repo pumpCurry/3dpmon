@@ -225,7 +225,7 @@ function _updateNoSignalInfo(body, hostname) {
   const displayHost = (hostname && hostname !== "shared")
     ? hostname
     : "";
-  const ip = getDeviceIp(displayHost) || monitorData.appSettings.wsDest?.split(":")[0] || "";
+  const ip = getDeviceIp(displayHost) || "";
   if (hostEl) hostEl.textContent = displayHost || "";
   if (ipEl) ipEl.textContent = ip ? `(${ip})` : "";
 }

@@ -95,16 +95,16 @@ export function buildHostUtilization(hostname, options = {}) {
     if (duration > 0) {
       printTimeMs += duration;
       printCount++;
-      if (entry.printProgress >= 100) successCount++;
+      // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
+      const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
+      if (isSuccess) successCount++;
       else if (endMs > 0) failCount++;
     }
 
-    // フィラメント消費
-    if (Array.isArray(entry.filamentInfo)) {
-      for (const fi of entry.filamentInfo) {
-        totalFilamentMm += Number(fi.length || 0);
-      }
-    }
+    // フィラメント消費: デバイス報告値 (usagematerial) を使用
+    // ★ filamentInfo[].length は存在しないフィールドだったため修正
+    const usedMm = Number(entry.usagematerial || 0);
+    if (usedMm > 0) totalFilamentMm += usedMm;
   }
 
   const idleTimeMs = Math.max(0, periodMs - printTimeMs);
@@ -200,7 +200,8 @@ export function buildDailyProductionReport(options = {}) {
       const durationSec = (entry.endtime || 0) > 0
         ? (entry.endtime - startSec)
         : 0;
-      const isSuccess = entry.printProgress >= 100;
+      // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
+      const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
 
       day.printCount++;
       if (isSuccess) {
@@ -212,11 +213,10 @@ export function buildDailyProductionReport(options = {}) {
         day.failPrintTimeSec += durationSec;
       }
 
-      if (Array.isArray(entry.filamentInfo)) {
-        for (const fi of entry.filamentInfo) {
-          day.totalFilamentMm += Number(fi.length || 0);
-        }
-      }
+      // フィラメント消費: デバイス報告値 (usagematerial) を使用
+      // ★ filamentInfo[].length は存在しないフィールドだったため修正
+      const usedMm = Number(entry.usagematerial || 0);
+      if (usedMm > 0) day.totalFilamentMm += usedMm;
 
       if (!day.byHost[hostname]) {
         day.byHost[hostname] = { printCount: 0, printTimeSec: 0 };
@@ -259,7 +259,8 @@ export function buildEstimateVsActual(hostname) {
       ? (entry.endtime - (entry.startTime || 0))
       : 0;
     if (durationSec <= 0) continue;
-    const isSuccess = entry.printProgress >= 100;
+    // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
+    const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
 
     if (!fileMap[file]) {
       fileMap[file] = {
