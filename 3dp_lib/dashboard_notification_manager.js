@@ -364,9 +364,11 @@ export class NotificationManager {
       .filter(v => v.lang === "ja-JP" && v.localService);
 
     if (voices.length === 0) {
-      // 起動直後など voices 未ロード → 遅延キューに保留
+      // 起動直後など voices 未ロード → 遅延キューに保留（上限10件で溢れ防止）
       this._pendingUtterances ??= [];
-      this._pendingUtterances.push({ text, hostname });
+      if (this._pendingUtterances.length < 10) {
+        this._pendingUtterances.push({ text, hostname });
+      }
       this._ensureVoicesChangedListener();
       return;
     }

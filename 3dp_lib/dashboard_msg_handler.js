@@ -211,7 +211,8 @@ const _initializedHosts = new Set();
  */
 function _createMsgHostState() {
   return {
-    prepTimerId: null, checkTimerId: null, pauseTimerId: null, completionTimer: null,
+    prepTimerId: null, checkTimerId: null, pauseTimerId: null,
+    // completionTimer: 廃止 — completionElapsedTime は aggregator セクション4-4 に一本化
     tsPrintStart: null, tsPrepEnd: null,
     tsCheckStart: null, tsCheckEnd: null, totalCheckSeconds: 0,
     tsPauseStart: null, tsCompletion: null, totalPauseSeconds: 0,
@@ -509,7 +510,7 @@ export function processData(data, hostname) {
 
   // タイマー全クリアユーティリティ
   const clearAllTimers = () => {
-    [ms.prepTimerId, ms.checkTimerId, ms.pauseTimerId, ms.completionTimer]
+    [ms.prepTimerId, ms.checkTimerId, ms.pauseTimerId]
       .forEach(id => clearInterval(id));
   };
   // 個別リセット
@@ -533,7 +534,7 @@ export function processData(data, hostname) {
     // storedData の値は保持し、新しい印刷時に aggregator がクリア
   };
   const resetCompletion = () => {
-    clearInterval(ms.completionTimer);
+    // completionTimer は廃止（aggregator に一本化）。tsCompletion のクリアのみ
     ms.tsCompletion = null;
     try { localStorage.removeItem(`msg_${host}_tsCompletion`); } catch { /* ignore */ }
   };

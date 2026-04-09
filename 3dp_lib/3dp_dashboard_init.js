@@ -46,7 +46,7 @@ import {
   monitorData,
   setStoredDataForHost
 } from "./dashboard_data.js";
-import { connectAllSavedTargets } from "./dashboard_connection.js";
+import { connectAllSavedTargets, setupConnectButton, disconnectWs, getConnectionMap } from "./dashboard_connection.js";
 import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId, setCurrentSpoolId } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
@@ -105,6 +105,19 @@ export async function initializeDashboard() {
     }
   } catch (e) {
     console.debug("[init] client_sync 読み込みスキップ:", e.message);
+  }
+
+  // ★ 接続/切断ボタンのイベントリスナーを設定
+  setupConnectButton();
+  const btnDisc = document.getElementById("disconnect-button");
+  if (btnDisc) {
+    btnDisc.addEventListener("click", () => {
+      // 接続中の全ホストを切断
+      const map = getConnectionMap();
+      for (const host of map.keys()) {
+        disconnectWs(host);
+      }
+    });
   }
 
   // 子モードでなければ通常のプリンタ直接接続

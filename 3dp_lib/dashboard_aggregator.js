@@ -969,6 +969,9 @@ export function aggregatorUpdate() {
       spool.lastCompletedPrintID = spool.currentPrintID;
       spool.currentPrintID = "";
       saveUnifiedStorage(true);
+      // ★ クリア直後の同 tick で autoCorrect が走るのを抑制
+      //   finalizeFilamentUsage が完了するまで1サイクル待つ
+      s._lastAutoCorrect = _now;
     }
     if (spool
         && !isPrinting

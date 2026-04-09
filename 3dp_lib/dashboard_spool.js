@@ -1146,6 +1146,11 @@ export function autoCorrectCurrentSpool(hostname) {
   if (isFallback) {
     const updatedAt = Number(spool.updatedAt ?? 0);
     if (!updatedAt) return;
+    // ★ ライブ追跡済みジョブを重複カウントしないよう、usageHistory の jobId を収集
+    const trackedJobIds = new Set();
+    for (const e of logs) {
+      if (e.spoolId === spool.id && e.jobId) trackedJobIds.add(String(e.jobId));
+    }
     const persistedHistory = loadHistory(hostname);
     let fallbackTotal = 0;
     let fallbackCount = 0;
@@ -1156,6 +1161,8 @@ export function autoCorrectCurrentSpool(hostname) {
       // entry.id は epoch秒、updatedAt は epoch ms → 秒に変換して比較
       const entryStartMs = Number(entry.id) * 1000;
       if (!Number.isFinite(entryStartMs) || entryStartMs <= updatedAt) continue;
+      // ライブ追跡済みのジョブは除外（二重減算防止）
+      if (trackedJobIds.has(String(entry.id))) continue;
       fallbackTotal += used;
       fallbackCount += 1;
       console.log(`[autoCorrect:fallback] ${hostname}: jobId=${entry.id} から ${used.toFixed(0)}mm を遡及加算 (updatedAt=${updatedAt})`);

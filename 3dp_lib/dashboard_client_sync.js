@@ -281,10 +281,10 @@ function _applyDelta(msg) {
       if (hostname === PLACEHOLDER_HOSTNAME) continue;
       ensureMachineData(hostname);
       for (const [key, rawValue] of Object.entries(changes)) {
+        // setStoredDataForHost が変更キーを自動的に dirty 化するため
+        // markAllKeysDirty は不要（全キー dirty 化による性能低下を回避）
         setStoredDataForHost(hostname, key, rawValue, true);
       }
-      // ★ デルタ適用後に dirty マークを設定し、子クライアントの画面を更新
-      markAllKeysDirty(hostname);
     }
   }
 
