@@ -1167,8 +1167,8 @@ export function disconnectWs(host) {
     countdownTimers[host] = null;
   }
 
-  // 接続状態なら明示的に close を発行
-  if (st.ws && st.ws.readyState === WebSocket.OPEN) {
+  // 接続中 or 接続試行中なら明示的に close を発行
+  if (st.ws && (st.ws.readyState === WebSocket.OPEN || st.ws.readyState === WebSocket.CONNECTING)) {
     st.ws.close();
   }
 
@@ -1525,13 +1525,20 @@ export function updatePrinterListUI() {
       const whEnabled = tgt?.webhookEnabled !== false;
       const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || 8080;
       const httpPort = tgt?.httpPort || monitorData.appSettings.httpPort || 80;
+      const isConn = info.state === "connected";
+      const isTrying = info.state === "connecting" || info.state === "waiting";
+      // ▶ = 再接続、■ = 切断（接続中 or 接続試行中）
+      const toggleBtn = (isConn || isTrying)
+        ? `<button class="conn-target-disconnect conn-toggle-btn" data-dest="${dest}" data-host="${info.host}" title="切断（設定は保持）">■</button>`
+        : `<button class="conn-target-reconnect conn-toggle-btn" data-dest="${dest}" title="接続">▶</button>`;
       return `<div class="printer-item conn-detail-item" data-host="${info.host}">
         <div class="conn-detail-row">
           <input type="color" class="conn-target-color conn-color-picker" data-dest="${dest}" value="${color}" title="パネルバー色">
           <span class="conn-detail-name">${info.line1}</span>
+          ${toggleBtn}
           <label class="conn-webhook-label" title="Webhook 通知の ON/OFF"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}>📡</label>
           <button class="conn-target-edit conn-edit-btn" data-dest="${dest}" title="接続先設定を編集">⚙</button>
-          <button class="conn-target-delete conn-delete-btn" data-dest="${dest}" data-host="${info.host}" title="切断・削除">✕</button>
+          <button class="conn-target-delete conn-delete-btn" data-dest="${dest}" data-host="${info.host}" title="削除">✕</button>
         </div>
         <div class="conn-detail-sub">${info.line2} <span class="conn-ports">cam:${cameraPort} http:${httpPort}</span></div>
       </div>`;
@@ -1548,7 +1555,7 @@ export function updatePrinterListUI() {
           <div class="conn-detail-row">
             <input type="color" class="conn-target-color conn-color-picker" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色">
             <span class="conn-detail-name">⬜ ${t.dest}${savedLabel} (未接続)</span>
-            <button class="conn-target-reconnect conn-reconnect-btn" data-dest="${t.dest}" title="再接続">接続</button>
+            <button class="conn-target-reconnect conn-toggle-btn" data-dest="${t.dest}" title="接続">▶</button>
             <button class="conn-target-delete conn-delete-btn" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除">✕</button>
           </div>
         </div>`;
@@ -1611,11 +1618,32 @@ export function updatePrinterListUI() {
       });
     });
 
-    // 再接続ボタンのイベント設定
+    // ▶ 再接続ボタンのイベント設定
     connList.querySelectorAll(".conn-target-reconnect").forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         connectWs(btn.dataset.dest);
+      });
+    });
+
+    // ■ 切断ボタンのイベント設定（設定は保持、接続のみ切断）
+    connList.querySelectorAll(".conn-target-disconnect").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const host = btn.dataset.host;
+        const dest = btn.dataset.dest;
+        const connKey = host || dest;
+        if (!connKey || connKey === PLACEHOLDER_HOSTNAME) return;
+        try {
+          // 再接続タイマーもキャンセルして占有を防止
+          const st = getState(connKey);
+          if (st.retryTimer) { clearTimeout(st.retryTimer); st.retryTimer = null; }
+          st.userDisc = true;  // 自動再接続を抑制
+          disconnectWs(connKey);
+        } catch (err) {
+          console.warn("[conn-modal] 切断エラー:", err);
+        }
+        updatePrinterListUI();
       });
     });
 
