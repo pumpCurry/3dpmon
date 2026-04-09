@@ -46,7 +46,7 @@ import {
   monitorData,
   setStoredDataForHost
 } from "./dashboard_data.js";
-import { connectAllSavedTargets, setupConnectButton, disconnectWs, getConnectionMap } from "./dashboard_connection.js";
+import { connectAllSavedTargets } from "./dashboard_connection.js";
 import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId, setCurrentSpoolId } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
@@ -107,18 +107,10 @@ export async function initializeDashboard() {
     console.debug("[init] client_sync 読み込みスキップ:", e.message);
   }
 
-  // ★ 接続/切断ボタンのイベントリスナーを設定
-  setupConnectButton();
-  const btnDisc = document.getElementById("disconnect-button");
-  if (btnDisc) {
-    btnDisc.addEventListener("click", () => {
-      // 接続中の全ホストを切断
-      const map = getConnectionMap();
-      for (const host of map.keys()) {
-        disconnectWs(host);
-      }
-    });
-  }
+  // ★ 旧接続/切断ボタン (connect-button, disconnect-button) はシングルホスト時代の遺物。
+  //   マルチホスト環境では全台一括 ON/OFF しかできず危険なため、リスナーを設定しない。
+  //   per-host 接続トグルは接続設定モーダル内に実装予定。
+  //   → 詳細: docs/LEGACY_UI.md
 
   // 子モードでなければ通常のプリンタ直接接続
   if (!isRelayChild) {
