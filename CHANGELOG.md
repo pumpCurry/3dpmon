@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.1.011 (2026-04-09)
+
+### レビュー指摘修正 + 接続/切断トグルボタン復活
+
+#### データ整合性強化
+- autoCorrect fallback: ライブ追跡済みジョブを `trackedJobIds` で除外（二重減算防止）
+- autoCorrect: currentPrintID クリア直後の同 tick 実行を `_lastAutoCorrect` で抑制（printCount ずれ防止）
+
+#### 性能改善
+- relay delta 適用時の `markAllKeysDirty` を廃止（`setStoredDataForHost` の自動 dirty 化のみに変更、毎秒の全キー DOM 再評価を解消）
+
+#### 堅牢性向上
+- TTS 遅延キュー `_pendingUtterances` にサイズ上限10件を追加（voiceschanged 未発火環境での無限メモリ増加を防止）
+- completionTimer の dead code を撤去（dual-writer 再発トラップ除去）
+
+#### 接続/切断トグルボタン復活
+- `setupConnectButton()` を初期化時に呼出（未接続だったイベントリスナーを活性化）
+- disconnect ボタンにイベントリスナー追加（全接続ホストを切断）
+- 切断後にアプリ再起動なしで再接続が可能に
+
+---
+
 ## v2.1.010 (2026-04-08)
 
 ### フィラメントデータ整合性の根本再設計 + 4バグ修正
