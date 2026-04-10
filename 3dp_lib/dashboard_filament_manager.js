@@ -572,8 +572,9 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
   toolbar.style.flexWrap = "wrap";
 
   const addPresetBtn = document.createElement("button");
-  addPresetBtn.textContent = "＋ カスタムプリセット登録";
+  addPresetBtn.textContent = "＋ 他メーカーのフィラメントを追加";
   addPresetBtn.className = "btn-font-sm";
+  addPresetBtn.style.cssText = "background:#0ea5e9;color:#fff;border:none;border-radius:4px;padding:4px 12px;font-weight:bold;cursor:pointer;";
   addPresetBtn.addEventListener("click", () => _showCustomPresetDialog(render));
 
   const exportBtn = document.createElement("button");

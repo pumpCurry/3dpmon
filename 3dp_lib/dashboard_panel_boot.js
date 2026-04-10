@@ -150,14 +150,21 @@ export function bootPanelSystem() {
  * @returns {void}
  */
 function _convertCardsToTemplates() {
-  /* 生産管理パネル: HTML由来ではなくJS動的生成 — 空テンプレートを登録 */
-  if (!document.getElementById("panel-tpl-production")) {
-    const tplProd = document.createElement("template");
-    tplProd.id = "panel-tpl-production";
-    const prodDiv = document.createElement("div");
-    prodDiv.className = "production-panel-root";
-    tplProd.content.appendChild(prodDiv);
-    document.body.appendChild(tplProd);
+  /* JS動的生成パネル — 空テンプレートを登録 */
+  for (const [tplId, className] of [
+    ["panel-tpl-production", "production-panel-root"],
+    ["panel-tpl-job-cost", "stats-panel-root"],
+    ["panel-tpl-host-ranking", "stats-panel-root"],
+    ["panel-tpl-material-report", "stats-panel-root"]
+  ]) {
+    if (!document.getElementById(tplId)) {
+      const tpl = document.createElement("template");
+      tpl.id = tplId;
+      const div = document.createElement("div");
+      div.className = className;
+      tpl.content.appendChild(div);
+      document.body.appendChild(tpl);
+    }
   }
 
   /**

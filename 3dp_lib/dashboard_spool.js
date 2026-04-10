@@ -586,6 +586,19 @@ export function setCurrentSpoolId(id, hostname) {
  * @param {boolean} [data.isFavorite] お気に入りフラグ
  * @returns {Object} 登録されたスプールオブジェクト
  */
+/**
+ * スプールのコスト単価(円/mm)を算出する。
+ * purchasePrice と totalLengthMm が揃っている場合のみ計算。
+ * @param {Object} spool - スプールオブジェクト
+ * @returns {number} コスト単価（円/mm）。算出不能な場合は 0
+ */
+function _calcCostPerMm(spool) {
+  const price = Number(spool.purchasePrice);
+  const total = Number(spool.totalLengthMm);
+  if (price > 0 && total > 0) return price / total;
+  return 0;
+}
+
 export function addSpool(data) {
   // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const id = genId();
@@ -663,8 +676,11 @@ export function addSpool(data) {
     isFavorite: data.isFavorite || false,
     deleted: false,
     isDeleted: false,
-    hostname: data.hostname || null
+    hostname: data.hostname || null,
+    /** コスト単価(円/mm) — purchasePrice / totalLengthMm から自動算出 */
+    costPerMm: 0
   };
+  spool.costPerMm = _calcCostPerMm(spool);
   monitorData.filamentSpools.push(spool);
   saveUnifiedStorage(true);
   return spool;
@@ -674,6 +690,10 @@ export function updateSpool(id, patch) {
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
   Object.assign(s, patch);
+  // purchasePrice or totalLengthMm が変わった場合に costPerMm を再算出
+  if ("purchasePrice" in patch || "totalLengthMm" in patch) {
+    s.costPerMm = _calcCostPerMm(s);
+  }
   saveUnifiedStorage(true);
 }
 
@@ -1030,6 +1050,9 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       Math.abs((info.expectedRemain ?? 0) - s.remainingLengthMm) < 0.1
     );
     if (!isDuplicate) {
+      const costPerMm = s.costPerMm || _calcCostPerMm(s);
+      const materialCost = costPerMm > 0 && resolvedUsed > 0
+        ? Math.round(resolvedUsed * costPerMm * 100) / 100 : 0;
       entry.filamentInfo.push({
         spoolId: s.id,
         serialNo: s.serialNo,
@@ -1038,8 +1061,13 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
         filamentColor: s.filamentColor,
         material: s.material,
         spoolCount: s.printCount,
-        expectedRemain: s.remainingLengthMm
+        expectedRemain: s.remainingLengthMm,
+        usedMm: resolvedUsed,
+        materialCostYen: materialCost
       });
+      // ★ ジョブレコードにもコスト集計を書き込み（統計用）
+      entry.materialUsedMm = resolvedUsed;
+      entry.materialCostYen = (entry.materialCostYen || 0) + materialCost;
     }
   }
   logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
