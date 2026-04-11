@@ -317,13 +317,17 @@ export async function importAllData(data) {
     }
   }
 
-  // ── パネルレイアウト: panelLayout が含まれていれば appSettings に保存 ──
-  // ★ インポート時はレイアウトを直接適用しない（現在の配置を破壊しない）
-  //    appSettings.panelLayout に保存し、次回起動時に restoreLayout で使われる
+  // ── パネルレイアウト: panelLayout が含まれていれば appSettings + localStorage に保存 ──
+  // ★ 常にインポートデータのレイアウトを保存する（リロード後に restoreLayout で適用される）
+  //    既存レイアウトがあっても上書き — ユーザーが明示的にインポートしたデータを尊重
   if (Array.isArray(data.panelLayout) && data.panelLayout.length > 0) {
-    if (!monitorData.appSettings.panelLayout || monitorData.appSettings.panelLayout.length === 0) {
-      monitorData.appSettings.panelLayout = data.panelLayout;
-      stats.panels = data.panelLayout.length;
+    monitorData.appSettings.panelLayout = data.panelLayout;
+    stats.panels = data.panelLayout.length;
+    // ★ localStorage にも直接書き込む（restoreLayout が localStorage を優先するため）
+    try {
+      localStorage.setItem("3dpmon_panel_layout_v5", JSON.stringify(data.panelLayout));
+    } catch (e) {
+      console.warn("[importAllData] panelLayout の localStorage 保存に失敗:", e);
     }
   }
 
