@@ -715,11 +715,15 @@ export function restoreLayout() {
       if (item.host && item.host !== "shared") validHosts.add(item.host);
     }
 
-    // 2) connectionTargets のホスト名とIP
+    // 2) connectionTargets のホスト名とIP（★ dest は "IP:PORT" なのでIPのみ抽出）
     const targets = monitorData.appSettings.connectionTargets || [];
     for (const t of targets) {
       if (t.hostname) validHosts.add(t.hostname);
-      if (t.dest) validHosts.add(t.dest);
+      if (t.dest) {
+        // "IP:PORT" からIPのみ抽出して追加（パネルの host はポートなし）
+        const ip = t.dest.split(":")[0];
+        if (ip) validHosts.add(ip);
+      }
     }
 
     // 3) machines のキー（前回接続時のホスト名）

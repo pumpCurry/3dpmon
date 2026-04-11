@@ -1400,7 +1400,8 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   const filename = (raw.filename || "").split("/").pop();
 
   // GCode メタデータ (アップロード時に抽出済み)
-  const gcMeta = raw._gcodeMeta || _gcodeMetaCache.get(filename) || {};
+  // ★ per-host キャッシュ: ホスト名プレフィックス付きで取得（同名ファイルのメタデータ混在を防止）
+  const gcMeta = raw._gcodeMeta || _gcodeMetaCache.get(`${hostname}:${filename}`) || _gcodeMetaCache.get(filename) || {};
 
   // ★ 必要フィラメント量（正確な値を優先順で選択）
   //   1. 成功印刷の実績平均 — 最も信頼性が高い
@@ -1981,7 +1982,7 @@ export function setupUploadUI(root, hostname) {
       thumb = extractThumb(text);
       gcMeta = _extractGcodeMeta(text);
       if (Object.keys(gcMeta).length > 0) {
-        _gcodeMetaCache.set(file.name, gcMeta);
+        _gcodeMetaCache.set(`${hostname}:${file.name}`, gcMeta);
         _saveGcodeMetaCache();
       }
     } catch (e) {
@@ -2439,7 +2440,7 @@ export function renderFileList(info, baseUrl, hostname) {
       }
     }
     // 履歴が無い場合、アップロード時に抽出した GCode メタデータをフォールバック
-    const cached = _gcodeMetaCache.get(item.basename);
+    const cached = _gcodeMetaCache.get(`${hostname}:${item.basename}`) || _gcodeMetaCache.get(item.basename);
     if (cached) {
       if (!item.usagetime && cached.timeSec)  item.usagetime = Math.round(cached.timeSec);
       if (!item.layer && cached.layers)       item.layer = Number(cached.layers);

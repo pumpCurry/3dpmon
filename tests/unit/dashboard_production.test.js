@@ -125,8 +125,8 @@ describe("buildDailyProductionReport", () => {
   });
 
   it("今日の印刷をカウント", () => {
-    const start = epochSec(1);
-    const end = epochSec(0.5);
+    const start = epochSec(0.3);  // 18分前開始（日付境界問題を回避）
+    const end = epochSec(0.1);    // 6分前完了
     mockMonitorData.machines["host1"] = {
       historyList: [{
         startTime: start,
@@ -147,8 +147,8 @@ describe("buildDailyProductionReport", () => {
   });
 
   it("マルチホストを集計", () => {
-    const start = epochSec(1);
-    const end = epochSec(0.5);
+    const start = epochSec(0.3);
+    const end = epochSec(0.1);
     mockMonitorData.machines["host1"] = {
       historyList: [{
         startTime: start, endtime: end, printProgress: 100, filamentInfo: []

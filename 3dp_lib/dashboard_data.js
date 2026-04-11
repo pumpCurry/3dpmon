@@ -105,9 +105,10 @@ export function isNotificationSuppressed(hostname) {
   return true;
 }
 
-// 後方互換: 旧コードが notificationSuppressed を直接参照している箇所向け
-// ★ 新コードは isNotificationSuppressed(hostname) を使うこと
-export let notificationSuppressed = true;
+// ★ OBSOLETE: notificationSuppressed グローバル変数は廃止。
+//   isNotificationSuppressed(hostname) を使うこと。
+//   後方互換のため export は維持するが、参照しても正しい値にならない。
+export const notificationSuppressed = true;
 
 /**
  * setNotificationSuppressed:
@@ -126,8 +127,7 @@ export function setNotificationSuppressed(flag, hostname) {
       if (h !== PLACEHOLDER_HOSTNAME) _notificationSuppressedMap.set(h, flag);
     }
   }
-  // 後方互換用グローバルフラグも更新
-  notificationSuppressed = isNotificationSuppressed();
+  // ★ notificationSuppressed グローバルは廃止済み (const)。更新不要。
 }
 
 /**
@@ -267,7 +267,7 @@ export const monitorData = {
    * @type {number}
    */
   spoolSerialCounter: 0,
-  temporaryBuffer: []
+  // ★ temporaryBuffer は廃止済み（単一ホスト時代の遺物）。
 };
 
 

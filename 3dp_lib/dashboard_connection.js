@@ -121,33 +121,41 @@ function _addConnectionTarget(dest) {
  * @param {string} hostname - 解決されたホスト名
  */
 function _setConnectionTargetHostname(dest, hostname) {
+  const targets = monitorData.appSettings.connectionTargets ??= [];
   const t = _findConnectionTarget(dest);
   if (!t) return;
-  if (t.hostname === hostname) return; // 変更なし
+  if (t.hostname === hostname && t.dest === dest) return; // 変更なし
 
-  if (t.hostname && t.hostname !== hostname) {
-    // ★ 既にホスト名が紐付いている dest で別のホスト名が返ってきた
-    // → IP再利用（DHCP）の可能性。旧ホスト名を保護し、新規エントリとして追加
-    console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
-    // 旧エントリのhostnameはそのまま残す（旧機器が復帰する可能性）
-    // 新エントリとして同じdestに新hostnameを追加（hostname違いの重複を許容）
-    const targets = monitorData.appSettings.connectionTargets ??= [];
-    const exists = targets.some(e => e.dest === dest && e.hostname === hostname);
-    if (!exists) {
-      targets.push({ dest, hostname, color: t.color || "", label: "" });
+  // ★ DHCP対策: 同じ hostname を持つ旧エントリ（異なるdest）があれば統合
+  //   hostname は機器の安定ID。dest(IP:PORT) は DHCP で変わりうる。
+  //   旧IPのエントリを削除し、現在のIPに統合する。
+  const staleEntries = targets.filter(e =>
+    e !== t && e.hostname === hostname && e.dest !== dest
+  );
+  if (staleEntries.length > 0) {
+    for (const stale of staleEntries) {
+      const idx = targets.indexOf(stale);
+      if (idx >= 0) {
+        console.info(`[_setConnectionTargetHostname] DHCP統合: 旧エントリ dest="${stale.dest}" (hostname="${hostname}") を削除 → 現在の dest="${dest}" に統合`);
+        // 旧エントリの設定（色、ラベル等）を現在エントリに引き継ぎ
+        if (stale.color && !t.color) t.color = stale.color;
+        if (stale.label && !t.label) t.label = stale.label;
+        if (stale.cameraPort && !t.cameraPort) t.cameraPort = stale.cameraPort;
+        if (stale.httpPort && !t.httpPort) t.httpPort = stale.httpPort;
+        targets.splice(idx, 1);
+      }
     }
-    // 旧エントリのhostnameを更新（現在の接続先を反映）
-    t.hostname = hostname;
-    saveUnifiedStorage();
-    // ★ MAC アドレスで機器変更を確認
-    _resolveAndSaveMac(dest, hostname);
-    return;
   }
 
-  // 初回: ホスト名が空 → 設定
+  if (t.hostname && t.hostname !== hostname) {
+    // ★ 同じ dest(IP) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）
+    console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
+  }
+
+  // hostname を設定/更新
   t.hostname = hostname;
   saveUnifiedStorage();
-  // ★ MAC アドレスを非同期で解決（Electron版のみ）
+  // MAC アドレスを非同期で解決（Electron版のみ）
   _resolveAndSaveMac(dest, hostname);
 }
 
@@ -495,6 +503,41 @@ export function updateConnectionHost(oldHost, newHost) {
         const lsKey = "3dpmon-host-" + encodeURIComponent(oldHost);
         if (localStorage.getItem(lsKey)) localStorage.removeItem(lsKey);
       } catch { /* ignore */ }
+
+      // ★ hostSpoolMap の IP→ホスト名キー移行
+      if (monitorData.hostSpoolMap[oldHost] !== undefined) {
+        if (!monitorData.hostSpoolMap[newHost]) {
+          monitorData.hostSpoolMap[newHost] = monitorData.hostSpoolMap[oldHost];
+        }
+        delete monitorData.hostSpoolMap[oldHost];
+        console.info(`[updateConnectionHost] hostSpoolMap IP→ホスト名移行: ${oldHost} → ${newHost}`);
+      }
+
+      // ★ filamentSpools[].hostname の IP→ホスト名移行
+      for (const sp of monitorData.filamentSpools) {
+        if (sp.hostname === oldHost) {
+          sp.hostname = newHost;
+          console.info(`[updateConnectionHost] spool "${sp.id}" hostname IP→ホスト名移行: ${oldHost} → ${newHost}`);
+        }
+      }
+
+      // ★ pd_ localStorage キーの IP→ホスト名移行
+      try {
+        const pdPrefix = `pd_${oldHost}_`;
+        const pdNewPrefix = `pd_${newHost}_`;
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(pdPrefix)) {
+            const suffix = key.slice(pdPrefix.length);
+            const newKey = pdNewPrefix + suffix;
+            if (!localStorage.getItem(newKey)) {
+              localStorage.setItem(newKey, localStorage.getItem(key));
+            }
+            localStorage.removeItem(key);
+          }
+        }
+      } catch { /* ignore */ }
+
       console.info(`[updateConnectionHost] machines IP→ホスト名移行: ${oldHost} → ${newHost}`);
     } else {
       // ホスト名 → ホスト名: IP再利用で別機器が応答した可能性

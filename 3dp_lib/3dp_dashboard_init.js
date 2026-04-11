@@ -35,8 +35,6 @@
 import {
   initStorage,
   restoreUnifiedStorage,
-  restoreLegacyStoredData,
-  cleanupLegacy,
   saveUnifiedStorage
 } from "./dashboard_storage.js";
 import {
