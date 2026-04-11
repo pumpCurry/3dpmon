@@ -753,6 +753,7 @@ function logSpoolChange(spool, printId = "") {
     usageId: Date.now(),
     spoolId: spool.id,
     spoolSerial: spool.serialNo,
+    hostname: spool.hostname || null,  // ★ per-host 追跡用
     startPrintID: printId,
     startLength: spool.startLength,
     startedAt: spool.startedAt
@@ -776,6 +777,7 @@ function logUsage(spool, lengthMm, jobId, type = "complete") {
     usageId: Date.now(),
     spoolId: spool.id,
     spoolSerial: spool.serialNo,
+    hostname: spool.hostname || null,  // ★ per-host 追跡用
     jobId,
     startedAt: Date.now(),
     usedLength: lengthMm,
@@ -800,6 +802,7 @@ export function addUsageSnapshot(spool, jobId, remainMm) {
     usageId: Date.now(),
     spoolId: spool.id,
     spoolSerial: spool.serialNo,
+    hostname: spool.hostname || null,  // ★ per-host 追跡用
     jobId,
     startedAt: Date.now(),
     currentLength: remainMm,

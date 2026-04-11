@@ -445,6 +445,8 @@ function _initTopMenuBar() {
       if (prev !== modalHostTag.checked) updateAllPanelHeaders();
     }
 
+    // ★ カメラポートは全体デフォルト値。per-host は connectionTargets[].cameraPort で個別管理。
+    //   ここで設定した値は、connectionTargets に cameraPort が未設定のホストにのみ適用される。
     const camPort = document.getElementById("conn-modal-camera-port");
     if (camPort && camPort.value) {
       monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || 8080;

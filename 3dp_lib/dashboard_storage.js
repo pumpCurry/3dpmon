@@ -784,7 +784,17 @@ function _flushStorage() {
  */
 function cleanUpLegacyStorage() {
   const legacyKeys = [
-    "storedDataV1p125"
+    "storedDataV1p125",
+    // v1.25/v1.29 時代の個別キー
+    "wsDestV1p125",
+    "cameraToggleV1p129",
+    "autoConnectV1p129",
+    // 旧統一ストレージキー（per-host 分割形式に移行済み）
+    "3dp-monitor_1.400",
+    // 旧パネルレイアウトキー（v5 に移行済み）
+    "3dpmon_panel_layout_v2",
+    "3dpmon_panel_layout_v3",
+    "3dpmon_panel_layout_v4"
   ];
   let removed = 0;
   for (const key of legacyKeys) {

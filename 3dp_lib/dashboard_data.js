@@ -140,6 +140,8 @@ export function createEmptyMachineData() {
   return {
     storedData: {},
     runtimeData: { lastError: null },
+    /** @deprecated printStore.history が権威。historyData は中間バッファとしてのみ使用。
+     *  将来的に printStore.history に完全統合し、historyData は廃止予定。 */
     historyData: [],
     printStore: { current: null, history: [], videos: {} }
   };
