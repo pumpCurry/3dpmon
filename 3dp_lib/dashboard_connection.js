@@ -65,6 +65,15 @@ import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
 // ---------------------------------------------------------------------------
 
+/**
+ * デフォルトポート定数。
+ * ★ 一部ロットではポートが異なる機器が出荷されている。
+ *   per-host で connectionTargets[].httpPort / cameraPort で上書き可能。
+ *   ここの値はフォールバック用のデフォルトであり、絶対視しない。
+ */
+const DEFAULT_WS_PORT = 9999;
+const DEFAULT_CAMERA_PORT = 8080;
+
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
 
@@ -149,6 +158,9 @@ function _setConnectionTargetHostname(dest, hostname) {
 
   if (t.hostname && t.hostname !== hostname) {
     // ★ 同じ dest(IP) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）
+    // ★ 既知の制限: 同一 hostname の複数機器が存在する場合、区別不可能。
+    //   ARP で MAC アドレスが取得できれば _resolveAndSaveMac で検出されるが、
+    //   ブラウザ版や ARP 非対応環境ではコンタミネーションを完全には防げない。
     console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
   }
 
@@ -227,7 +239,7 @@ function _findConnectionTarget(destOrHost) {
   if (exact) return exact;
   /* 2) ポート補完で再検索（"192.168.54.151" → "192.168.54.151:9999"） */
   if (!destOrHost.includes(":")) {
-    const withPort = targets.find(t => t.dest === destOrHost + ":9999");
+    const withPort = targets.find(t => t.dest === destOrHost + ":" + DEFAULT_WS_PORT);
     if (withPort) return withPort;
   }
   /* 3) ホスト名での検索（connectWs からの逆引き用） */
@@ -283,7 +295,7 @@ export function connectAllSavedTargets() {
   for (const t of targets) {
     if (!t.dest.includes(":") || t.dest.split(":").length === 1) {
       // ポートなし → ポート付きが存在すれば不要
-      const withPort = t.dest + ":9999";
+      const withPort = t.dest + ":" + DEFAULT_WS_PORT;
       if (destSet.has(withPort)) {
         toRemove.push(t);
       }
@@ -300,7 +312,7 @@ export function connectAllSavedTargets() {
 
   /* connectionTargets を唯一の接続先リストとして使用 */
   for (const t of targets) {
-    const dest = t.dest.includes(":") ? t.dest : t.dest + ":9999";
+    const dest = t.dest.includes(":") ? t.dest : t.dest + ":" + DEFAULT_WS_PORT;
     const ip = _extractIp(dest);
     if (!connected.has(ip)) {
       connected.add(ip);
@@ -712,7 +724,7 @@ function _syncPanelsForHost(hostname, oldHost) {
  * 接続先は 再接続の場合
  * 3dp_dashboard_init.jsのinitializeDashboard (5) にて`monitorData.appSettings.wsDest` が
  * 接続先入力欄（レガシー: destination-input / Electron: conn-modal-ip）に
- * 反映されたうえでポート `:9999` を追加したもの。
+ * 反映されたうえでデフォルトポート (DEFAULT_WS_PORT) を追加したもの。
  * プロトコルは HTTPS環境では wss://、それ以外では ws:// が使用される。
  *
  * イベントハンドラ:
@@ -730,7 +742,7 @@ export function connectWs(hostOrDest) {
 
   let dest = hostOrDest || "";
   if (!dest) return;
-  if (!dest.includes(":")) dest += ":9999";
+  if (!dest.includes(":")) dest += ":" + DEFAULT_WS_PORT;
   const ip = _extractIp(dest);
 
   /* 再接続時に正しいホスト名キーを使うため、connectionTargets に保存済みの
@@ -1546,7 +1558,7 @@ export function updatePrinterListUI() {
       const tgt = _findConnectionTarget(dest);
       const color = tgt?.color || "#444444";
       const whEnabled = tgt?.webhookEnabled !== false;
-      const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || 8080;
+      const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
       const httpPort = tgt?.httpPort || monitorData.appSettings.httpPort || 80;
       const isConn = info.state === "connected";
       const isTrying = info.state === "connecting" || info.state === "waiting";
@@ -1674,7 +1686,7 @@ export function updatePrinterListUI() {
         const dest = btn.dataset.dest;
         const tgt = _findConnectionTarget(dest);
         if (!tgt) return;
-        const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || 8080;
+        const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
 
