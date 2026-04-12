@@ -50,7 +50,7 @@ import {
 import { pushLog } from "./dashboard_log_util.js";
 import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
 import { restorePrintResume } from "./3dp_dashboard_init.js";
-import { handleMessage, processData } from "./dashboard_msg_handler.js";
+import { processData } from "./dashboard_msg_handler.js";
 import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
