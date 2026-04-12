@@ -278,13 +278,7 @@ function _removeConnectionTarget(dest) {
 export function connectAllSavedTargets() {
   const connected = new Set();
 
-  /* wsDest → connectionTargets 最終マイグレーション（1回限り、以後 wsDest は空にする） */
-  const main = monitorData.appSettings.wsDest;
-  if (main) {
-    _addConnectionTarget(main);
-    monitorData.appSettings.wsDest = "";  // ★ 移行完了、wsDest を永久クリア
-    console.info("[connectAllSavedTargets] wsDest → connectionTargets 移行完了、wsDest をクリア");
-  }
+  // ★ wsDest マイグレーションは v2.2.0 で削除。v2.1.017 LTS が最終移行ポイント。
 
   /* ★ connectionTargets のクリーンアップ:
      ポートなしエントリ（"192.168.54.151"）とポート付き（"192.168.54.151:9999"）が
@@ -1223,13 +1217,7 @@ export function disconnectWs(host) {
  * connect ボタンにクリック時の WebSocket 接続処理をバインドします
  * @returns {void}
  */
-export function setupConnectButton() {
-  const btn = document.getElementById("connect-button");
-  if (btn) {
-    btn.addEventListener("click", connectWs);
-  }
-}
-
+// ★ setupConnectButton は v2.2.0 で完全削除済み（シングルホスト時代の遺物）
 
 /**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
