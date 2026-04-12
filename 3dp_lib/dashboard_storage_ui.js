@@ -268,7 +268,7 @@ function _convertV140toV200(data) {
   const SHARED_KEYS = [
     "appSettings", "filamentSpools", "usageHistory",
     "filamentPresets", "filamentInventory",
-    "currentSpoolId", "spoolSerialCounter"
+    "hostSpoolMap", "spoolSerialCounter"
   ];
   const result = {};
   for (const key of SHARED_KEYS) {
@@ -350,6 +350,7 @@ function doImport(toast) {
         if (stats.presets > 0) parts.push(`プリセット ${stats.presets}件`);
         if (stats.inventory > 0) parts.push(`在庫 ${stats.inventory}件`);
         if (stats.machines > 0) parts.push(`印刷履歴 ${stats.machines}件`);
+        if (stats.panels > 0) parts.push(`パネル配置 ${stats.panels}件`);
         const summary = parts.length > 0 ? parts.join(", ") : "新規データなし";
         toast(`マージインポート完了 (${version} 形式): ${summary}。ページを再読み込みします。`);
         setTimeout(() => location.reload(), 1500);

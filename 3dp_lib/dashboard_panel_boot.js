@@ -31,6 +31,9 @@ import { initPanelMenu } from "./dashboard_panel_menu.js";
 import { registerAllPanelInits } from "./dashboard_panel_init.js";
 import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
 import { monitorData } from "./dashboard_data.js";
+
+/** デフォルトカメラポート（一部ロットで異なる可能性あり。per-host で上書き可能） */
+const DEFAULT_CAMERA_PORT = 8080;
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { registerPrintManagerAccessor } from "./dashboard_spool.js";
@@ -150,14 +153,21 @@ export function bootPanelSystem() {
  * @returns {void}
  */
 function _convertCardsToTemplates() {
-  /* 生産管理パネル: HTML由来ではなくJS動的生成 — 空テンプレートを登録 */
-  if (!document.getElementById("panel-tpl-production")) {
-    const tplProd = document.createElement("template");
-    tplProd.id = "panel-tpl-production";
-    const prodDiv = document.createElement("div");
-    prodDiv.className = "production-panel-root";
-    tplProd.content.appendChild(prodDiv);
-    document.body.appendChild(tplProd);
+  /* JS動的生成パネル — 空テンプレートを登録 */
+  for (const [tplId, className] of [
+    ["panel-tpl-production", "production-panel-root"],
+    ["panel-tpl-job-cost", "stats-panel-root"],
+    ["panel-tpl-host-ranking", "stats-panel-root"],
+    ["panel-tpl-material-report", "stats-panel-root"]
+  ]) {
+    if (!document.getElementById(tplId)) {
+      const tpl = document.createElement("template");
+      tpl.id = tplId;
+      const div = document.createElement("div");
+      div.className = className;
+      tpl.content.appendChild(div);
+      document.body.appendChild(tpl);
+    }
   }
 
   /**
@@ -403,7 +413,7 @@ function _initTopMenuBar() {
       if (modalHostTag) modalHostTag.checked = monitorData.appSettings.showHostTag !== false;
 
       const camPort = document.getElementById("conn-modal-camera-port");
-      if (camPort) camPort.value = monitorData.appSettings.cameraPort || 8080;
+      if (camPort) camPort.value = monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
 
       /* 入力欄をクリア */
       const modalIp = document.getElementById("conn-modal-ip");
@@ -438,9 +448,11 @@ function _initTopMenuBar() {
       if (prev !== modalHostTag.checked) updateAllPanelHeaders();
     }
 
+    // ★ カメラポートは全体デフォルト値。per-host は connectionTargets[].cameraPort で個別管理。
+    //   ここで設定した値は、connectionTargets に cameraPort が未設定のホストにのみ適用される。
     const camPort = document.getElementById("conn-modal-camera-port");
     if (camPort && camPort.value) {
-      monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || 8080;
+      monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || DEFAULT_CAMERA_PORT;
     }
     // ★ 設定変更を即時保存（保存漏れでリスタート時に設定消失するバグ修正）
     saveUnifiedStorage(true);
@@ -457,10 +469,7 @@ function _initTopMenuBar() {
       _syncModalSettings();
 
       /* connectWs は内部で _addConnectionTarget を呼んで永続化する。
-         wsDest は後方互換のためメイン接続先として保持する。 */
-      if (!monitorData.appSettings.wsDest) {
-        monitorData.appSettings.wsDest = ip;
-      }
+         ★ wsDest は廃止済み。connectionTargets のみが権威。 */
       connectWs(ip);
 
       /* 入力欄をクリア */

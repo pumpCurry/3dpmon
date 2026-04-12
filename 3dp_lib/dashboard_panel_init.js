@@ -62,7 +62,11 @@ import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dash
 import { showAlert } from "./dashboard_notification_manager.js";
 import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
-import { buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual } from "./dashboard_production.js";
+import {
+  buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
+  buildJobCostReport, buildHostRanking, buildMaterialReport
+} from "./dashboard_production.js";
+import { weightFromLength } from "./dashboard_spool.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
 import {
@@ -225,7 +229,7 @@ function _updateNoSignalInfo(body, hostname) {
   const displayHost = (hostname && hostname !== "shared")
     ? hostname
     : "";
-  const ip = getDeviceIp(displayHost) || monitorData.appSettings.wsDest?.split(":")[0] || "";
+  const ip = getDeviceIp(displayHost) || "";
   if (hostEl) hostEl.textContent = displayHost || "";
   if (ipEl) ipEl.textContent = ip ? `(${ip})` : "";
 }
@@ -751,6 +755,9 @@ export function registerAllPanelInits() {
   registerPanelInit("history", initHistoryPanel);
   registerPanelInit("file-list", initFileListPanel);
   registerPanelInit("production", initProductionPanel);
+  registerPanelInit("job-cost", initJobCostPanel);
+  registerPanelInit("host-ranking", initHostRankingPanel);
+  registerPanelInit("material-report", initMaterialReportPanel);
   /* settings パネルは接続設定モーダルに統合済み */
 
   // 破棄関数
@@ -801,6 +808,197 @@ function _fmtTime(sec) {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+// ======================================================================
+//  統計パネル — Phase 3: 印刷物コスト / 機器ランキング / 素材消費
+// ======================================================================
+
+/**
+ * 印刷物コストパネル:
+ * ファイル名ごとの成功率・平均時間・コスト・1個あたり真のコストを表示。
+ */
+function initJobCostPanel(body) {
+  body.classList.add("stats-panel", "job-cost-panel");
+  const container = document.createElement("div");
+  container.className = "stats-panel-inner";
+  const emptyMsg = createEmptyState({ icon: "📊", title: "印刷データなし", message: "印刷履歴が蓄積されるとコスト分析が表示されます" });
+  emptyMsg.style.display = "none";
+  body.append(emptyMsg, container);
+
+  function update() {
+    const report = buildJobCostReport();
+    if (report.length === 0) {
+      emptyMsg.style.display = "";
+      container.style.display = "none";
+      return;
+    }
+    emptyMsg.style.display = "none";
+    container.style.display = "";
+    container.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.className = "prod-section-title";
+    title.textContent = "印刷物コスト分析";
+    container.appendChild(title);
+
+    const table = document.createElement("table");
+    table.className = "registered-table stats-cost-table";
+    table.innerHTML = `<thead><tr>
+      <th scope="col">ファイル名</th>
+      <th scope="col" class="text-right">回数</th>
+      <th scope="col" class="text-right">成功率</th>
+      <th scope="col" class="text-right">平均時間</th>
+      <th scope="col" class="text-right">平均コスト</th>
+      <th scope="col" class="text-right">1個あたり</th>
+      <th scope="col" class="text-right">失敗ロス</th>
+    </tr></thead><tbody></tbody>`;
+    container.appendChild(table);
+
+    const tbody = table.querySelector("tbody");
+    for (const job of report.slice(0, 30)) {
+      const tr = document.createElement("tr");
+      const rateClass = job.successRate >= 0.9 ? "text-success" : job.successRate < 0.7 ? "text-danger" : "";
+      const name = job.filename.length > 28 ? job.filename.slice(0, 25) + "…" : job.filename;
+      tr.innerHTML =
+        `<td title="${job.filename}">${name}</td>` +
+        `<td class="text-right">${job.printCount}</td>` +
+        `<td class="text-right ${rateClass}">${(job.successRate * 100).toFixed(0)}%</td>` +
+        `<td class="text-right">${job.avgTimeSec > 0 ? _fmtTime(job.avgTimeSec) : "—"}</td>` +
+        `<td class="text-right">${job.avgCostYen > 0 ? `¥${job.avgCostYen.toFixed(0)}` : "—"}</td>` +
+        `<td class="text-right">${job.costPerSuccess > 0 ? `¥${job.costPerSuccess.toFixed(0)}` : "—"}</td>` +
+        `<td class="text-right">${job.wastedCostYen > 0 ? `<span class="text-danger">¥${job.wastedCostYen.toFixed(0)}</span>` : "—"}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+
+  update();
+  // 60秒ごとに更新
+  const timer = setInterval(update, 60000);
+  body._statsCleanup = () => clearInterval(timer);
+}
+
+/**
+ * 機器ランキングパネル:
+ * 各プリンタの稼働率・成功率・コスト効率をランキング表示。
+ */
+function initHostRankingPanel(body) {
+  body.classList.add("stats-panel", "host-ranking-panel");
+  const container = document.createElement("div");
+  container.className = "stats-panel-inner";
+  const emptyMsg = createEmptyState({ icon: "🏆", title: "機器データなし", message: "プリンタを接続すると稼働ランキングが表示されます" });
+  emptyMsg.style.display = "none";
+  body.append(emptyMsg, container);
+
+  function update() {
+    const ranking = buildHostRanking();
+    if (ranking.length === 0) {
+      emptyMsg.style.display = "";
+      container.style.display = "none";
+      return;
+    }
+    emptyMsg.style.display = "none";
+    container.style.display = "";
+    container.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.className = "prod-section-title";
+    title.textContent = "機器ランキング";
+    container.appendChild(title);
+
+    for (const host of ranking) {
+      const card = document.createElement("div");
+      card.className = "stat-host-rank-card";
+      const rateClass = host.successRate >= 0.9 ? "text-success" : host.successRate < 0.7 ? "text-danger" : "";
+      const filamentM = (host.totalMaterialMm / 1000).toFixed(1);
+      card.innerHTML =
+        `<div class="rank-badge">#${host.rank}</div>` +
+        `<div class="rank-host-info">` +
+          `<div class="rank-host-name">${host.displayName}</div>` +
+          `<div class="rank-host-stats">` +
+            `<span>稼働率 <strong>${host.utilizationPct}%</strong></span>` +
+            `<span class="${rateClass}">成功率 <strong>${(host.successRate * 100).toFixed(0)}%</strong></span>` +
+            `<span>印刷 <strong>${host.totalPrintCount}回</strong></span>` +
+            `<span>消費 <strong>${filamentM}m</strong></span>` +
+            (host.totalCostYen > 0 ? `<span>コスト <strong>¥${host.totalCostYen.toFixed(0)}</strong></span>` : "") +
+            (host.costPerSuccessPrint > 0 ? `<span>1回あたり <strong>¥${host.costPerSuccessPrint.toFixed(0)}</strong></span>` : "") +
+          `</div>` +
+        `</div>` +
+        `<div class="rank-util-bar"><div class="rank-util-fill" style="width:${host.utilizationPct}%"></div></div>`;
+      container.appendChild(card);
+    }
+  }
+
+  update();
+  const timer = setInterval(update, 60000);
+  body._statsCleanup = () => clearInterval(timer);
+}
+
+/**
+ * 素材消費レポートパネル:
+ * プリセット別の消費量・コスト・月別推移を表示。
+ */
+function initMaterialReportPanel(body) {
+  body.classList.add("stats-panel", "material-report-panel");
+  const container = document.createElement("div");
+  container.className = "stats-panel-inner";
+  const emptyMsg = createEmptyState({ icon: "🎨", title: "素材データなし", message: "フィラメントを使用すると素材別レポートが表示されます" });
+  emptyMsg.style.display = "none";
+  body.append(emptyMsg, container);
+
+  function update() {
+    const report = buildMaterialReport();
+    if (report.length === 0) {
+      emptyMsg.style.display = "";
+      container.style.display = "none";
+      return;
+    }
+    emptyMsg.style.display = "none";
+    container.style.display = "";
+    container.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.className = "prod-section-title";
+    title.textContent = "素材消費レポート";
+    container.appendChild(title);
+
+    for (const mat of report) {
+      const card = document.createElement("div");
+      card.className = "stat-material-card";
+      const consumedM = (mat.totalConsumedMm / 1000).toFixed(1);
+      // 月別推移の簡易バー（直近6ヶ月）
+      const recentMonths = mat.monthlyTrend.slice(-6);
+      const maxMm = Math.max(...recentMonths.map(m => m.consumedMm), 1);
+      let trendHtml = "";
+      if (recentMonths.length > 0) {
+        trendHtml = `<div class="material-trend">` +
+          recentMonths.map(m => {
+            const pct = Math.round(m.consumedMm / maxMm * 100);
+            const label = m.month.slice(5); // "04" etc
+            return `<div class="trend-bar-col"><div class="trend-bar" style="height:${pct}%" title="${m.month}: ${(m.consumedMm/1000).toFixed(1)}m / ¥${m.costYen.toFixed(0)}"></div><div class="trend-label">${label}</div></div>`;
+          }).join("") +
+          `</div>`;
+      }
+
+      card.innerHTML =
+        `<div class="material-header">` +
+          `<span class="material-color-dot" style="background:${mat.filamentColor}"></span>` +
+          `<span class="material-name">${mat.brand} ${mat.material} ${mat.colorName}</span>` +
+        `</div>` +
+        `<div class="material-stats">` +
+          `<span>消費 <strong>${consumedM}m</strong></span>` +
+          `<span>スプール <strong>${mat.spoolCount}本</strong></span>` +
+          `<span>印刷 <strong>${mat.printCount}回</strong></span>` +
+          (mat.totalCostYen > 0 ? `<span>累計 <strong>¥${mat.totalCostYen.toFixed(0)}</strong></span>` : "") +
+        `</div>` +
+        trendHtml;
+      container.appendChild(card);
+    }
+  }
+
+  update();
+  const timer = setInterval(update, 60000);
+  body._statsCleanup = () => clearInterval(timer);
 }
 
 /**

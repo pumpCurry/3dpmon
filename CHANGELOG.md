@@ -1,5 +1,52 @@
 # Changelog
 
+## v2.1.017 LTS (2026-04-12)
+
+### レガシー単一機器コード完全駆除 + コスト分析エンジン + DHCP対策
+
+**★ このバージョンは LTS（長期サポート）リリースです。**
+v2.1.018 以降で単一機器時代のデータ構造サポート（v1.x/v2.0 旧フォーマット、storedDataV1p125、wsDestV1p125 等）を終了します。旧バージョンからのアップグレードは v2.1.017 経由で行ってください。
+
+#### レガシーコード完全駆除 (v2.1.014)
+- `currentHostname` を OBSOLETE 化（`const null` に固定、全 import/使用箇所を除去）
+- `currentSpoolId` を monitorData から削除（`hostSpoolMap` が唯一の権威）
+- `wsDest` の全フォールバック読み取りを除去（起動時の connectionTargets 移行のみ残存）
+- `setCurrentSpoolId` の全スプール走査レガシーパスを完全削除
+- `restoreLegacyStoredData` / `cleanupLegacy` を廃止
+- hostname ガード追加（空/undefined/PLACEHOLDER で呼ばれたら即拒否 + 通知）
+- `hostSpoolMap` 書き込み前のスプール存在チェック、`validateHostSpoolMap()` 新設
+- `client_sync.js` の filamentSpools 全置換をIDベースマージに変更
+- `filemanager.js` の hostname='default' フォールバックを throw に変更
+
+#### コスト分析エンジン (v2.1.015)
+- `costPerMm`（円/mm）をスプールに自動算出（addSpool/updateSpool）
+- `finalizeFilamentUsage` でジョブに `materialCostYen` を記録
+- `buildJobCostReport()`: ファイル名ごとの印刷物単価（成功率・失敗ロス・真の単価）
+- `buildHostRanking()`: 機器ランキング（稼働率×成功率でソート）
+- `buildMaterialReport()`: 素材別消費レポート（月別推移付き）
+- 統計パネル UI 3種（印刷物コスト / 機器ランキング / 素材消費レポート）
+- フィラメントマネージャー「＋ 他メーカーのフィラメントを追加」ボタン
+- `buildHostUtilization` / `buildDailyProductionReport` のフィラメント集計バグ修正
+- 成功判定を `printfinish=1` 優先に統一
+
+#### DHCP/IP遷移対策 (v2.1.016)
+- `_setConnectionTargetHostname`: DHCP統合（同hostname旧IPエントリを自動検出・統合）
+- `updateConnectionHost`: IP→ホスト名遷移時に hostSpoolMap / spool.hostname / pd_キー を同時移行
+- `filamentChangeDialogOpen` → per-host Set（他ホストをブロックしない）
+- `gcode_meta_cache` → per-host キー（同名ファイルのメタデータ混在防止）
+- `panelLayout` の `validHosts` に IP:PORT ではなく IP のみ追加
+
+#### 残レガシー対処 (v2.1.017)
+- `usageHistory` に `hostname` フィールド追加（per-host フィラメント消費分析対応）
+- `removalReminderSent` の保存/復元修正（リロード後の再発火防止）
+- 古い localStorage キーの一括掃除（v1.25/v1.29/v1.40/layout v2-v4）
+- ポート番号 `:9999` `:8080` のハードコード除去 → `DEFAULT_WS_PORT` / `DEFAULT_CAMERA_PORT` に定数化
+- `notificationSuppressed` グローバル let → const 廃止
+- `temporaryBuffer` 死んだ配列を削除
+- インポート時のパネル配置復元修正（localStorage + appSettings 両方に即時書き込み）
+
+---
+
 ## v2.1.012 (2026-04-09)
 
 ### per-host 接続/切断トグル + レビュー修正 + レガシーUI保護

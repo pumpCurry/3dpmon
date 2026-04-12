@@ -150,6 +150,9 @@ const PANEL_TYPES = [
   { id: "history",       label: "印刷履歴",          templateId: "panel-tpl-history",       defaultW: 48, defaultH: 20, minW: 6, minH: 6,  perHost: true },
   { id: "file-list",     label: "ファイル一覧",       templateId: "panel-tpl-file-list",    defaultW: 48, defaultH: 20, minW: 6, minH: 6,  perHost: true },
   { id: "production",    label: "生産管理",          templateId: "panel-tpl-production",   defaultW: 48, defaultH: 24, minW: 8, minH: 10, perHost: false },
+  { id: "job-cost",      label: "印刷物コスト",      templateId: "panel-tpl-job-cost",     defaultW: 48, defaultH: 20, minW: 8, minH: 8,  perHost: false },
+  { id: "host-ranking",  label: "機器ランキング",    templateId: "panel-tpl-host-ranking", defaultW: 32, defaultH: 16, minW: 6, minH: 8,  perHost: false },
+  { id: "material-report", label: "素材消費レポート",  templateId: "panel-tpl-material-report", defaultW: 32, defaultH: 20, minW: 6, minH: 8, perHost: false },
 ];
 
 /* ─── GridStack インスタンス ─── */
@@ -712,11 +715,15 @@ export function restoreLayout() {
       if (item.host && item.host !== "shared") validHosts.add(item.host);
     }
 
-    // 2) connectionTargets のホスト名とIP
+    // 2) connectionTargets のホスト名とIP（★ dest は "IP:PORT" なのでIPのみ抽出）
     const targets = monitorData.appSettings.connectionTargets || [];
     for (const t of targets) {
       if (t.hostname) validHosts.add(t.hostname);
-      if (t.dest) validHosts.add(t.dest);
+      if (t.dest) {
+        // "IP:PORT" からIPのみ抽出して追加（パネルの host はポートなし）
+        const ip = t.dest.split(":")[0];
+        if (ip) validHosts.add(ip);
+      }
     }
 
     // 3) machines のキー（前回接続時のホスト名）

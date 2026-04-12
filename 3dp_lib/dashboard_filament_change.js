@@ -32,7 +32,8 @@ import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 
 let styleInjected = false;
-let filamentChangeDialogOpen = false;
+/** per-host ダイアログ排他制御（グローバル単一ロックは廃止 — 他ホストをブロックしない） */
+const _filamentDialogOpenFor = new Set();
 
 /**
  * 交換ダイアログのデフォルトタブを設定値から決定する。
@@ -368,10 +369,10 @@ export function showPresetOpenDialog(hostname) {
  */
 export function showFilamentChangeDialog(hostname) {
   injectStyles();
-  if (filamentChangeDialogOpen) {
+  if (_filamentDialogOpenFor.has(hostname)) {
     return Promise.resolve(false);
   }
-  filamentChangeDialogOpen = true;
+  _filamentDialogOpenFor.add(hostname);
   return new Promise(resolve => {
    try {
     const overlay = document.createElement("div");
@@ -749,7 +750,7 @@ export function showFilamentChangeDialog(hostname) {
 
     const closeDialog = result => {
       overlay.remove();
-      filamentChangeDialogOpen = false;
+      _filamentDialogOpenFor.delete(hostname);
       resolve(result);
     };
 
@@ -813,7 +814,7 @@ export function showFilamentChangeDialog(hostname) {
     }
    } catch (e) {
     console.error("[showFilamentChangeDialog] ダイアログ生成エラー:", e);
-    filamentChangeDialogOpen = false;
+    _filamentDialogOpenFor.delete(hostname);
     resolve(false);
    }
   });
@@ -990,8 +991,8 @@ function showPresetOpenDialogForHistory(hostname) {
  */
 export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, currentSpoolId = null, jobId = "" }) {
   injectStyles();
-  if (filamentChangeDialogOpen) return Promise.resolve(false);
-  filamentChangeDialogOpen = true;
+  if (_filamentDialogOpenFor.has(hostname)) return Promise.resolve(false);
+  _filamentDialogOpenFor.add(hostname);
 
   const isEdit = !!currentSpoolId;
   const currentSpool = isEdit ? getSpoolById(currentSpoolId) : null;
@@ -1169,7 +1170,7 @@ export function showHistoryFilamentDialog({ hostname, materialUsedMm = 0, curren
 
     const closeDialog = result => {
       overlay.remove();
-      filamentChangeDialogOpen = false;
+      _filamentDialogOpenFor.delete(hostname);
       resolve(result);
     };
 

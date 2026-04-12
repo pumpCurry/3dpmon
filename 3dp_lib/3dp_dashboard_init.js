@@ -35,14 +35,10 @@
 import {
   initStorage,
   restoreUnifiedStorage,
-  restoreLegacyStoredData,
-  cleanupLegacy,
   saveUnifiedStorage
 } from "./dashboard_storage.js";
 import {
-  setCurrentHostname,
   PLACEHOLDER_HOSTNAME,
-  currentHostname,
   monitorData,
   setStoredDataForHost
 } from "./dashboard_data.js";
@@ -65,16 +61,16 @@ import {
  * ここでは実行しません。
  */
 export async function initializeDashboard() {
-  // (1) ホスト未定義ならプレースホルダ設定（ストレージ復元より先に必要）
-  if (!currentHostname) {
-    setCurrentHostname(PLACEHOLDER_HOSTNAME);
-  }
+  // (1) ★ currentHostname / PLACEHOLDER 設定は廃止済み。per-host 処理のみ使用。
 
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
   restoreUnifiedStorage();
-  // ★ restoreLegacyStoredData / cleanupLegacy は handleMessage の初回ホスト確定後に実行
-  //    （PLACEHOLDER 状態で呼ぶとキーが消失するため）
+  // ★ 旧バージョンの localStorage キーを掃除（v1.25/v1.29/v1.40/layout v2-v4）
+  try {
+    const { cleanupLegacy } = await import("./dashboard_storage.js");
+    cleanupLegacy();
+  } catch { /* ignore */ }
   // 読み込んだストレージ内容を通知マネージャへ反映
   notificationManager.loadSettings();
   if (!monitorData.filamentSpools.length) {
@@ -114,8 +110,7 @@ export async function initializeDashboard() {
 
   // 子モードでなければ通常のプリンタ直接接続
   if (!isRelayChild) {
-    const hasTargets = monitorData.appSettings.wsDest
-      || (monitorData.appSettings.connectionTargets?.length > 0);
+    const hasTargets = (monitorData.appSettings.connectionTargets?.length > 0);
     if (monitorData.appSettings.autoConnect && hasTargets) {
       setTimeout(() => {
         connectAllSavedTargets();

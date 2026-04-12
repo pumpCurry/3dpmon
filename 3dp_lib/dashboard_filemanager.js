@@ -53,7 +53,10 @@ const STORAGE_KEY_PREFIX = '3dp-filemanager-history-';
  * @returns {string} 生成した保存用キー
  */
 function _storageKey(hostname) {
-  return `${STORAGE_KEY_PREFIX}${hostname || 'default'}`;
+  if (!hostname) {
+    throw new Error("[IMPL_ERROR] _storageKey: hostname is required (was: " + hostname + ")");
+  }
+  return `${STORAGE_KEY_PREFIX}${hostname}`;
 }
 
 /**

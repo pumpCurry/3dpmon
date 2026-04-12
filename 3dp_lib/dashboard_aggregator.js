@@ -1314,6 +1314,10 @@ export function restoreAggregatorState(hostname) {
   if (flwRaw != null) {
     try { s.filamentLowWarned = JSON.parse(flwRaw) === true; } catch { /* ignore */ }
   }
+  const rrRaw = localStorage.getItem(prefix + "_removalReminderSent");
+  if (rrRaw != null) {
+    try { s._removalReminderSent = JSON.parse(rrRaw) === true; } catch { /* ignore */ }
+  }
 
   // ★ A3: スプールの currentPrintID を復元（ジョブID照合用）
   const pidRaw = localStorage.getItem(prefix + "spoolCurrentPrintID");
@@ -1411,7 +1415,8 @@ export function persistAggregatorState(hostname) {
     notifiedProgressMilestones: [...s.notifiedProgressMilestones],
     notifiedTimeThresholds: [...s.notifiedTimeThresholds],
     notifiedTempMilestones: [...s.notifiedTempMilestones],
-    filamentLowWarned: s.filamentLowWarned || false
+    filamentLowWarned: s.filamentLowWarned || false,
+    _removalReminderSent: s._removalReminderSent || false
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;

@@ -69,19 +69,13 @@ import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 export const PLACEHOLDER_HOSTNAME = "_$_NO_MACHINE_$_";
 
 /**
- * 最初に接続したホスト名（デフォルトパラメータの初期値として使用）。
- * マルチプリンタ環境では全ホストが並行動作するため、
- * 「アクティブホスト」や「表示中ホスト」の概念はない。
- * パネルは各ホストに紐付いており、表示切替は存在しない。
- * この変数は後方互換のために残しているが、新規コードでは
- * 必ず hostname 引数を明示的に渡すこと。
- * - null の場合: 未設定または初期化前
- * - PLACEHOLDER_HOSTNAME の場合: 強制的な「未選択」状態
- * - 通常は最初に接続された実際のホスト名文字列を保持する
- * @type {string|null}
- * @deprecated 新規コードでは hostname パラメータを明示的に使用すること
+ * ★★★ OBSOLETE — 使用禁止 ★★★
+ * マルチホスト環境ではグローバルな「現在のホスト」という概念が存在しない。
+ * この変数は常に null。全コードは per-host の hostname 引数を使用すること。
+ * @type {null}
+ * @deprecated 完全廃止。
  */
-export let currentHostname = null;
+export const currentHostname = null;
 
 /**
  * 通知抑制状態フラグ
@@ -111,9 +105,10 @@ export function isNotificationSuppressed(hostname) {
   return true;
 }
 
-// 後方互換: 旧コードが notificationSuppressed を直接参照している箇所向け
-// ★ 新コードは isNotificationSuppressed(hostname) を使うこと
-export let notificationSuppressed = true;
+// ★ OBSOLETE: notificationSuppressed グローバル変数は廃止。
+//   isNotificationSuppressed(hostname) を使うこと。
+//   後方互換のため export は維持するが、参照しても正しい値にならない。
+export const notificationSuppressed = true;
 
 /**
  * setNotificationSuppressed:
@@ -132,8 +127,7 @@ export function setNotificationSuppressed(flag, hostname) {
       if (h !== PLACEHOLDER_HOSTNAME) _notificationSuppressedMap.set(h, flag);
     }
   }
-  // 後方互換用グローバルフラグも更新
-  notificationSuppressed = isNotificationSuppressed();
+  // ★ notificationSuppressed グローバルは廃止済み (const)。更新不要。
 }
 
 /**
@@ -146,6 +140,8 @@ export function createEmptyMachineData() {
   return {
     storedData: {},
     runtimeData: { lastError: null },
+    /** @deprecated printStore.history が権威。historyData は中間バッファとしてのみ使用。
+     *  将来的に printStore.history に完全統合し、historyData は廃止予定。 */
     historyData: [],
     printStore: { current: null, history: [], videos: {} }
   };
@@ -183,34 +179,16 @@ export function ensureMachineData(host) {
 }
 
 /**
- * setCurrentHostname:
- * 指定されたホスト名を現在の監視対象として設定し、
- * monitorData.machines に当該ホスト用のデータ構造がなければ初期化します。
- *
- * @param {string} host - 設定する機器ホスト名（nullやPLACEHOLDER_HOSTNAME以外）
+ * ★★★ OBSOLETE — 使用禁止 ★★★
+ * この関数は廃止されました。呼び出された場合はコンソールに警告を出力します。
+ * 機器データの初期化は ensureMachineData(host) を直接使用してください。
+ * @deprecated 完全廃止。
  */
 export function setCurrentHostname(host) {
-  currentHostname = host;
-  ensureMachineData(host);
-
-  // 旧バージョンの printManager データを新ストアへ移行する
-  // プレースホルダ状態のまま移行するとコンタミネーションを招くため
-  // 実際のホストが設定されたときだけ処理を行う
-  if (host !== PLACEHOLDER_HOSTNAME) {
-    const pm = monitorData.appSettings.printManager;
-    if (pm && monitorData.machines[host]) {
-      const store = monitorData.machines[host].printStore;
-      if (pm.current != null && store.current == null) {
-        store.current = pm.current;
-      }
-      if (Array.isArray(pm.history) && store.history.length === 0) {
-        store.history = pm.history;
-      }
-      if (pm.videos && Object.keys(store.videos).length === 0) {
-        store.videos = pm.videos;
-      }
-      delete monitorData.appSettings.printManager;
-    }
+  console.error(`[OBSOLETE] setCurrentHostname("${host}") が呼ばれました。この関数は廃止済みです。ensureMachineData() を使用してください`);
+  // データ破壊を防ぐため何もしない。ensureMachineData だけは実行する（安全な操作）
+  if (host && host !== PLACEHOLDER_HOSTNAME) {
+    ensureMachineData(host);
   }
 }
 
@@ -243,7 +221,7 @@ export const monitorData = {
     logMaxLines: 1000,
     logLevel: "info",
     autoConnect: true,
-    wsDest: "",          // 接続先 IP:PORT（メイン、後方互換）
+    wsDest: "",          // ★ OBSOLETE: 起動時に connectionTargets へ移行後クリアされる。読み書き禁止。
     connectionTargets: [],  // 複数接続先リスト [{dest, color?, label?}]
     showHostTag: true,      // パネルヘッダーにホスト名を表示する
     cameraToggle: false,  // カメラ ON/OFF
@@ -273,7 +251,7 @@ export const monitorData = {
   favoritePresets: [],
   usageHistory: [],
   filamentInventory: [],
-  currentSpoolId: null,
+  // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。
    * キーはホスト名、値はスプールID。
@@ -291,7 +269,7 @@ export const monitorData = {
    * @type {number}
    */
   spoolSerialCounter: 0,
-  temporaryBuffer: []
+  // ★ temporaryBuffer は廃止済み（単一ホスト時代の遺物）。
 };
 
 

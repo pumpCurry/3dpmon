@@ -226,9 +226,28 @@ function _applySnapshot(state) {
     monitorData.appSettings.connectionTargets = state.appSettings.connectionTargets;
   }
 
-  // フィラメントデータ（★ 子クライアントはスナップショットで全置換して問題ない
-  //   — 子のローカル変更は親に送信済みのため、親の状態が正）
-  if (state.filamentSpools) monitorData.filamentSpools = state.filamentSpools;
+  // ★ フィラメントデータ: IDベースマージ（全置換は既存スプールを破壊するため禁止）
+  if (Array.isArray(state.filamentSpools) && state.filamentSpools.length > 0) {
+    const existingIds = new Set(monitorData.filamentSpools.map(s => s.id));
+    for (const sp of state.filamentSpools) {
+      if (!sp.id) continue;
+      if (existingIds.has(sp.id)) {
+        const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
+        if (existing) {
+          const prevActive = existing.isActive;
+          const prevInUse = existing.isInUse;
+          const prevHostname = existing.hostname;
+          Object.assign(existing, sp);
+          // ランタイム装着状態を保護
+          existing.isActive = prevActive || existing.isActive;
+          existing.isInUse = prevInUse || existing.isInUse;
+          existing.hostname = prevHostname || existing.hostname;
+        }
+      } else {
+        monitorData.filamentSpools.push(sp);
+      }
+    }
+  }
   if (state.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, state.hostSpoolMap);
 
   // per-host データ
@@ -288,9 +307,28 @@ function _applyDelta(msg) {
     }
   }
 
-  // 共有データ差分（★ delta は親が権威なので全置換で正しい）
+  // ★ 共有データ差分: IDベースマージ（全置換は既存データを破壊するため禁止）
   if (msg.shared) {
-    if (msg.shared.filamentSpools) monitorData.filamentSpools = msg.shared.filamentSpools;
+    if (Array.isArray(msg.shared.filamentSpools) && msg.shared.filamentSpools.length > 0) {
+      const existingIds = new Set(monitorData.filamentSpools.map(s => s.id));
+      for (const sp of msg.shared.filamentSpools) {
+        if (!sp.id) continue;
+        if (existingIds.has(sp.id)) {
+          const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
+          if (existing) {
+            const prevActive = existing.isActive;
+            const prevInUse = existing.isInUse;
+            const prevHostname = existing.hostname;
+            Object.assign(existing, sp);
+            existing.isActive = prevActive || existing.isActive;
+            existing.isInUse = prevInUse || existing.isInUse;
+            existing.hostname = prevHostname || existing.hostname;
+          }
+        } else {
+          monitorData.filamentSpools.push(sp);
+        }
+      }
+    }
     if (msg.shared.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, msg.shared.hostSpoolMap);
   }
 }

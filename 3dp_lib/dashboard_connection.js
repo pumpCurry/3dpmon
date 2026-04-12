@@ -40,9 +40,7 @@
 
 import {
   monitorData,
-  currentHostname,
   PLACEHOLDER_HOSTNAME,
-  setCurrentHostname,
   setNotificationSuppressed,
   setStoredDataForHost,
   ensureMachineData,
@@ -60,12 +58,21 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
-import { saveUnifiedStorage, restoreLegacyStoredData, cleanupLegacy } from "./dashboard_storage.js";
+import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
 // ---------------------------------------------------------------------------
+
+/**
+ * デフォルトポート定数。
+ * ★ 一部ロットではポートが異なる機器が出荷されている。
+ *   per-host で connectionTargets[].httpPort / cameraPort で上書き可能。
+ *   ここの値はフォールバック用のデフォルトであり、絶対視しない。
+ */
+const DEFAULT_WS_PORT = 9999;
+const DEFAULT_CAMERA_PORT = 8080;
 
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
@@ -123,33 +130,44 @@ function _addConnectionTarget(dest) {
  * @param {string} hostname - 解決されたホスト名
  */
 function _setConnectionTargetHostname(dest, hostname) {
+  const targets = monitorData.appSettings.connectionTargets ??= [];
   const t = _findConnectionTarget(dest);
   if (!t) return;
-  if (t.hostname === hostname) return; // 変更なし
+  if (t.hostname === hostname && t.dest === dest) return; // 変更なし
 
-  if (t.hostname && t.hostname !== hostname) {
-    // ★ 既にホスト名が紐付いている dest で別のホスト名が返ってきた
-    // → IP再利用（DHCP）の可能性。旧ホスト名を保護し、新規エントリとして追加
-    console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
-    // 旧エントリのhostnameはそのまま残す（旧機器が復帰する可能性）
-    // 新エントリとして同じdestに新hostnameを追加（hostname違いの重複を許容）
-    const targets = monitorData.appSettings.connectionTargets ??= [];
-    const exists = targets.some(e => e.dest === dest && e.hostname === hostname);
-    if (!exists) {
-      targets.push({ dest, hostname, color: t.color || "", label: "" });
+  // ★ DHCP対策: 同じ hostname を持つ旧エントリ（異なるdest）があれば統合
+  //   hostname は機器の安定ID。dest(IP:PORT) は DHCP で変わりうる。
+  //   旧IPのエントリを削除し、現在のIPに統合する。
+  const staleEntries = targets.filter(e =>
+    e !== t && e.hostname === hostname && e.dest !== dest
+  );
+  if (staleEntries.length > 0) {
+    for (const stale of staleEntries) {
+      const idx = targets.indexOf(stale);
+      if (idx >= 0) {
+        console.info(`[_setConnectionTargetHostname] DHCP統合: 旧エントリ dest="${stale.dest}" (hostname="${hostname}") を削除 → 現在の dest="${dest}" に統合`);
+        // 旧エントリの設定（色、ラベル等）を現在エントリに引き継ぎ
+        if (stale.color && !t.color) t.color = stale.color;
+        if (stale.label && !t.label) t.label = stale.label;
+        if (stale.cameraPort && !t.cameraPort) t.cameraPort = stale.cameraPort;
+        if (stale.httpPort && !t.httpPort) t.httpPort = stale.httpPort;
+        targets.splice(idx, 1);
+      }
     }
-    // 旧エントリのhostnameを更新（現在の接続先を反映）
-    t.hostname = hostname;
-    saveUnifiedStorage();
-    // ★ MAC アドレスで機器変更を確認
-    _resolveAndSaveMac(dest, hostname);
-    return;
   }
 
-  // 初回: ホスト名が空 → 設定
+  if (t.hostname && t.hostname !== hostname) {
+    // ★ 同じ dest(IP) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）
+    // ★ 既知の制限: 同一 hostname の複数機器が存在する場合、区別不可能。
+    //   ARP で MAC アドレスが取得できれば _resolveAndSaveMac で検出されるが、
+    //   ブラウザ版や ARP 非対応環境ではコンタミネーションを完全には防げない。
+    console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
+  }
+
+  // hostname を設定/更新
   t.hostname = hostname;
   saveUnifiedStorage();
-  // ★ MAC アドレスを非同期で解決（Electron版のみ）
+  // MAC アドレスを非同期で解決（Electron版のみ）
   _resolveAndSaveMac(dest, hostname);
 }
 
@@ -221,7 +239,7 @@ function _findConnectionTarget(destOrHost) {
   if (exact) return exact;
   /* 2) ポート補完で再検索（"192.168.54.151" → "192.168.54.151:9999"） */
   if (!destOrHost.includes(":")) {
-    const withPort = targets.find(t => t.dest === destOrHost + ":9999");
+    const withPort = targets.find(t => t.dest === destOrHost + ":" + DEFAULT_WS_PORT);
     if (withPort) return withPort;
   }
   /* 3) ホスト名での検索（connectWs からの逆引き用） */
@@ -260,10 +278,12 @@ function _removeConnectionTarget(dest) {
 export function connectAllSavedTargets() {
   const connected = new Set();
 
-  /* wsDest が connectionTargets に未登録なら移行する（後方互換） */
+  /* wsDest → connectionTargets 最終マイグレーション（1回限り、以後 wsDest は空にする） */
   const main = monitorData.appSettings.wsDest;
   if (main) {
     _addConnectionTarget(main);
+    monitorData.appSettings.wsDest = "";  // ★ 移行完了、wsDest を永久クリア
+    console.info("[connectAllSavedTargets] wsDest → connectionTargets 移行完了、wsDest をクリア");
   }
 
   /* ★ connectionTargets のクリーンアップ:
@@ -275,7 +295,7 @@ export function connectAllSavedTargets() {
   for (const t of targets) {
     if (!t.dest.includes(":") || t.dest.split(":").length === 1) {
       // ポートなし → ポート付きが存在すれば不要
-      const withPort = t.dest + ":9999";
+      const withPort = t.dest + ":" + DEFAULT_WS_PORT;
       if (destSet.has(withPort)) {
         toRemove.push(t);
       }
@@ -292,7 +312,7 @@ export function connectAllSavedTargets() {
 
   /* connectionTargets を唯一の接続先リストとして使用 */
   for (const t of targets) {
-    const dest = t.dest.includes(":") ? t.dest : t.dest + ":9999";
+    const dest = t.dest.includes(":") ? t.dest : t.dest + ":" + DEFAULT_WS_PORT;
     const ip = _extractIp(dest);
     if (!connected.has(ip)) {
       connected.add(ip);
@@ -419,7 +439,8 @@ export function fetchStoredData(host) {
  */
 export function getDeviceIp(host) {
   const st = connectionMap[host];
-  const raw = st?.dest || monitorData.appSettings.wsDest || "";
+  // ★ wsDest フォールバック廃止: 他ホストのIPに寄せられる事故を防止
+  const raw = st?.dest || "";
   return _extractIp(raw) || "";
 }
 
@@ -433,7 +454,8 @@ export function getDeviceIp(host) {
  */
 export function getDeviceDest(host) {
   const st = connectionMap[host];
-  return st?.dest || monitorData.appSettings.wsDest || "";
+  // ★ wsDest フォールバック廃止: 他ホストの接続先に寄せられる事故を防止
+  return st?.dest || "";
 }
 
 /**
@@ -493,6 +515,41 @@ export function updateConnectionHost(oldHost, newHost) {
         const lsKey = "3dpmon-host-" + encodeURIComponent(oldHost);
         if (localStorage.getItem(lsKey)) localStorage.removeItem(lsKey);
       } catch { /* ignore */ }
+
+      // ★ hostSpoolMap の IP→ホスト名キー移行
+      if (monitorData.hostSpoolMap[oldHost] !== undefined) {
+        if (!monitorData.hostSpoolMap[newHost]) {
+          monitorData.hostSpoolMap[newHost] = monitorData.hostSpoolMap[oldHost];
+        }
+        delete monitorData.hostSpoolMap[oldHost];
+        console.info(`[updateConnectionHost] hostSpoolMap IP→ホスト名移行: ${oldHost} → ${newHost}`);
+      }
+
+      // ★ filamentSpools[].hostname の IP→ホスト名移行
+      for (const sp of monitorData.filamentSpools) {
+        if (sp.hostname === oldHost) {
+          sp.hostname = newHost;
+          console.info(`[updateConnectionHost] spool "${sp.id}" hostname IP→ホスト名移行: ${oldHost} → ${newHost}`);
+        }
+      }
+
+      // ★ pd_ localStorage キーの IP→ホスト名移行
+      try {
+        const pdPrefix = `pd_${oldHost}_`;
+        const pdNewPrefix = `pd_${newHost}_`;
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(pdPrefix)) {
+            const suffix = key.slice(pdPrefix.length);
+            const newKey = pdNewPrefix + suffix;
+            if (!localStorage.getItem(newKey)) {
+              localStorage.setItem(newKey, localStorage.getItem(key));
+            }
+            localStorage.removeItem(key);
+          }
+        }
+      } catch { /* ignore */ }
+
       console.info(`[updateConnectionHost] machines IP→ホスト名移行: ${oldHost} → ${newHost}`);
     } else {
       // ホスト名 → ホスト名: IP再利用で別機器が応答した可能性
@@ -667,7 +724,7 @@ function _syncPanelsForHost(hostname, oldHost) {
  * 接続先は 再接続の場合
  * 3dp_dashboard_init.jsのinitializeDashboard (5) にて`monitorData.appSettings.wsDest` が
  * 接続先入力欄（レガシー: destination-input / Electron: conn-modal-ip）に
- * 反映されたうえでポート `:9999` を追加したもの。
+ * 反映されたうえでデフォルトポート (DEFAULT_WS_PORT) を追加したもの。
  * プロトコルは HTTPS環境では wss://、それ以外では ws:// が使用される。
  *
  * イベントハンドラ:
@@ -685,7 +742,7 @@ export function connectWs(hostOrDest) {
 
   let dest = hostOrDest || "";
   if (!dest) return;
-  if (!dest.includes(":")) dest += ":9999";
+  if (!dest.includes(":")) dest += ":" + DEFAULT_WS_PORT;
   const ip = _extractIp(dest);
 
   /* 再接続時に正しいホスト名キーを使うため、connectionTargets に保存済みの
@@ -694,22 +751,8 @@ export function connectWs(hostOrDest) {
   const target = _findConnectionTarget(dest);
   const host = (target?.hostname) || ip;
 
-  // 初回接続 or まだ PLACEHOLDER の場合のみ currentHostname を切り替える。
-  // 2台目以降の追加接続では currentHostname を変更しない（既存接続のデータ処理を維持）。
-  //
-  // ★ ホスト名未知（初回IP接続で target.hostname が空）の場合は
-  //    setCurrentHostname を呼ばない。handleMessage() の初期化ブロック
-  //    (restoreUnifiedStorage / restartAggregatorTimer 等) は
-  //    currentHostname が null/PLACEHOLDER の状態でのみ実行されるため、
-  //    ここで IP を設定してしまうと初期化パスがスキップされる。
-  //    WS 応答の data.hostname を受信した時点で handleMessage() 内で
-  //    setCurrentHostname(hostname) が呼ばれ初期化が実行される。
-  // ★ currentHostname 未設定なら最初の接続で設定（後方互換用のグローバル値）
-  if ((!currentHostname || currentHostname === PLACEHOLDER_HOSTNAME) && target?.hostname) {
-    setCurrentHostname(host);
-  }
-  // 後方互換: wsDest にメイン接続先を保持（全ホスト共通で最後の接続先を記録）
-  monitorData.appSettings.wsDest = dest;
+  // ★ currentHostname / wsDest / setCurrentHostname は全て廃止済み。
+  //   per-host 処理は processData 内の _initializedHosts で管理する。
   const state = getState(host);
   state.dest = dest;
   state.historyReceived = false;
@@ -880,8 +923,6 @@ function handleSocketMessage(event, host) {
   //    handleMessage() の初期化ブロック (line 151) が
   //    currentHostname === null/PLACEHOLDER を条件としているため、
   //    ここで設定すると初期化（restoreUnifiedStorage/restartAggregatorTimer等）
-  //    がスキップされてしまう。
-  //    setCurrentHostname は handleMessage() 内で呼ばれる。
 // 5.5) ★ 全ホスト統一パス: 1台目も2台目も同じ処理
   try {
     // ホスト名を解決（受信データの hostname フィールドで connectionMap キーを更新）
@@ -895,14 +936,8 @@ function handleSocketMessage(event, host) {
     let st = getState(hostKey);
     st.latest = data;
 
-    // ★ currentHostname が未設定なら最初のホストで設定（1回だけ）
-    // これは後方互換用のグローバル値であり、per-host 処理には影響しない
-    if ((currentHostname === null || currentHostname === PLACEHOLDER_HOSTNAME) &&
-        data?.hostname) {
-      setCurrentHostname(data.hostname);
-      restoreLegacyStoredData();
-      cleanupLegacy();
-    }
+    // ★ currentHostname / restoreLegacyStoredData / cleanupLegacy は廃止済み
+    //   per-host 処理は processData の _initializedHosts で管理
 
     // ★ 全ホスト共通: ensureMachineData + processData
     // processData 内の per-host 初期化ブロック (_initializedHosts) が
@@ -1306,9 +1341,9 @@ export function updateConnectionUI(state, opt = {}, host) {
   const btnDisconnect = document.getElementById("disconnect-button");
   const muteTag       = document.getElementById("audio-muted-tag");
 
-  // wsDest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
+  // per-host の dest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
   const st = getState(host);
-  const rawDest  = st.dest || monitorData.appSettings.wsDest || "";
+  const rawDest  = st.dest || "";
   const hostOnly = _extractIp(rawDest) || "";
 
   // 入力欄を隠し・無効化
@@ -1439,7 +1474,7 @@ export function updatePrinterListUI() {
   // セレクトボックス更新（従来UI）
   if (sel) {
     sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
-    sel.value = hosts.includes(currentHostname) ? currentHostname : "";
+    sel.value = hosts[0] || "";
   }
 
   // ── プリンタ情報をビルド（共通データ） ──
@@ -1523,7 +1558,7 @@ export function updatePrinterListUI() {
       const tgt = _findConnectionTarget(dest);
       const color = tgt?.color || "#444444";
       const whEnabled = tgt?.webhookEnabled !== false;
-      const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || 8080;
+      const cameraPort = tgt?.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
       const httpPort = tgt?.httpPort || monitorData.appSettings.httpPort || 80;
       const isConn = info.state === "connected";
       const isTrying = info.state === "connecting" || info.state === "waiting";
@@ -1609,10 +1644,7 @@ export function updatePrinterListUI() {
            IP キーの孤立エントリのみ除去する（害はないが不要データ）。 */
         _cleanupMachineKeys([ip]);
 
-        // wsDest も同一IPなら除去
-        if (_extractIp(monitorData.appSettings.wsDest || "") === ip) {
-          monitorData.appSettings.wsDest = "";
-        }
+        // ★ wsDest は廃止済み。connectionTargets のみが権威。
         saveUnifiedStorage();
         updatePrinterListUI();
       });
@@ -1654,7 +1686,7 @@ export function updatePrinterListUI() {
         const dest = btn.dataset.dest;
         const tgt = _findConnectionTarget(dest);
         if (!tgt) return;
-        const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || 8080;
+        const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
 

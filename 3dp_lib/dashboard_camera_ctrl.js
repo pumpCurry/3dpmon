@@ -148,7 +148,7 @@ export function startCameraStream(hostname) {
 
   /* デバイスIP解決 */
   const deviceIp = getDeviceIp(host);
-  const ip = deviceIp || monitorData.appSettings.wsDest?.split(":")[0];
+  const ip = deviceIp || "";
   if (!ip) {
     _updateUI(entry, "disconnected");
     return;

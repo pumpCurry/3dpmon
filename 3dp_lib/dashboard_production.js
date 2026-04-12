@@ -95,16 +95,16 @@ export function buildHostUtilization(hostname, options = {}) {
     if (duration > 0) {
       printTimeMs += duration;
       printCount++;
-      if (entry.printProgress >= 100) successCount++;
+      // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
+      const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
+      if (isSuccess) successCount++;
       else if (endMs > 0) failCount++;
     }
 
-    // フィラメント消費
-    if (Array.isArray(entry.filamentInfo)) {
-      for (const fi of entry.filamentInfo) {
-        totalFilamentMm += Number(fi.length || 0);
-      }
-    }
+    // フィラメント消費: デバイス報告値 (usagematerial) を使用
+    // ★ filamentInfo[].length は存在しないフィールドだったため修正
+    const usedMm = Number(entry.usagematerial || 0);
+    if (usedMm > 0) totalFilamentMm += usedMm;
   }
 
   const idleTimeMs = Math.max(0, periodMs - printTimeMs);
@@ -200,7 +200,8 @@ export function buildDailyProductionReport(options = {}) {
       const durationSec = (entry.endtime || 0) > 0
         ? (entry.endtime - startSec)
         : 0;
-      const isSuccess = entry.printProgress >= 100;
+      // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
+      const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
 
       day.printCount++;
       if (isSuccess) {
@@ -212,11 +213,10 @@ export function buildDailyProductionReport(options = {}) {
         day.failPrintTimeSec += durationSec;
       }
 
-      if (Array.isArray(entry.filamentInfo)) {
-        for (const fi of entry.filamentInfo) {
-          day.totalFilamentMm += Number(fi.length || 0);
-        }
-      }
+      // フィラメント消費: デバイス報告値 (usagematerial) を使用
+      // ★ filamentInfo[].length は存在しないフィールドだったため修正
+      const usedMm = Number(entry.usagematerial || 0);
+      if (usedMm > 0) day.totalFilamentMm += usedMm;
 
       if (!day.byHost[hostname]) {
         day.byHost[hostname] = { printCount: 0, printTimeSec: 0 };
@@ -259,7 +259,8 @@ export function buildEstimateVsActual(hostname) {
       ? (entry.endtime - (entry.startTime || 0))
       : 0;
     if (durationSec <= 0) continue;
-    const isSuccess = entry.printProgress >= 100;
+    // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
+    const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
 
     if (!fileMap[file]) {
       fileMap[file] = {
@@ -366,4 +367,253 @@ export function buildFleetSummary(options = {}) {
     totalFilamentMm,
     hosts
   };
+}
+
+// ======================================================================
+//  Phase 2: 高度な統計集計関数
+// ======================================================================
+
+/**
+ * 印刷物単価レポートを生成する。
+ * ファイル名ごとにコスト・成功率・平均時間を集計する。
+ *
+ * @param {string} [hostname] - ホスト名（省略時は全ホスト合算）
+ * @returns {Array<{
+ *   filename: string,
+ *   printCount: number,
+ *   successCount: number,
+ *   failCount: number,
+ *   successRate: number,
+ *   avgTimeSec: number,
+ *   avgMaterialMm: number,
+ *   avgCostYen: number,
+ *   totalCostYen: number,
+ *   wastedCostYen: number,
+ *   costPerSuccess: number
+ * }>}
+ */
+export function buildJobCostReport(hostname) {
+  const fileMap = {};
+
+  const hostnames = hostname
+    ? [hostname]
+    : Object.keys(monitorData.machines).filter(h => h !== "_$_NO_MACHINE_$_");
+
+  for (const host of hostnames) {
+    const machine = monitorData.machines[host];
+    const history = machine?.printStore?.history || [];
+
+    for (const job of history) {
+      const file = (job.filename || job.rawFilename || "").split("/").pop();
+      if (!file) continue;
+
+      if (!fileMap[file]) {
+        fileMap[file] = {
+          filename: file,
+          printCount: 0, successCount: 0, failCount: 0,
+          totalTimeSec: 0, totalMaterialMm: 0, totalCostYen: 0,
+          successTimeSec: 0, successMaterialMm: 0, successCostYen: 0,
+          wastedCostYen: 0
+        };
+      }
+      const f = fileMap[file];
+      f.printCount++;
+
+      const isSuccess = job.printfinish === 1;
+      const usedMm = Number(job.materialUsedMm || 0);
+      const cost = Number(job.materialCostYen || 0);
+      const durationSec = job.finishTime && job.startTime
+        ? (new Date(job.finishTime).getTime() - new Date(job.startTime).getTime()) / 1000
+        : 0;
+
+      f.totalMaterialMm += usedMm;
+      f.totalCostYen += cost;
+
+      if (isSuccess) {
+        f.successCount++;
+        f.successTimeSec += durationSec;
+        f.successMaterialMm += usedMm;
+        f.successCostYen += cost;
+      } else if (job.printfinish === 0 || job.printfinish === null) {
+        // 印刷中（未完了）はカウントしない
+      } else {
+        f.failCount++;
+        f.wastedCostYen += cost;
+      }
+    }
+  }
+
+  return Object.values(fileMap).map(f => ({
+    filename: f.filename,
+    printCount: f.printCount,
+    successCount: f.successCount,
+    failCount: f.failCount,
+    successRate: f.printCount > 0 ? parseFloat((f.successCount / f.printCount).toFixed(3)) : 0,
+    avgTimeSec: f.successCount > 0 ? Math.round(f.successTimeSec / f.successCount) : 0,
+    avgMaterialMm: f.successCount > 0 ? Math.round(f.successMaterialMm / f.successCount) : 0,
+    avgCostYen: f.successCount > 0 ? Math.round(f.successCostYen / f.successCount * 100) / 100 : 0,
+    totalCostYen: Math.round(f.totalCostYen * 100) / 100,
+    wastedCostYen: Math.round(f.wastedCostYen * 100) / 100,
+    // 1個あたり真のコスト = (成功コスト + 失敗コスト) / 成功数
+    costPerSuccess: f.successCount > 0
+      ? Math.round(f.totalCostYen / f.successCount * 100) / 100
+      : 0
+  })).sort((a, b) => b.printCount - a.printCount);
+}
+
+/**
+ * 機器ランキングを生成する。
+ * 稼働率・成功率・コスト効率で各ホストをランキングする。
+ *
+ * @param {Object} [options] - オプション
+ * @param {number} [options.periodMs=86400000] - 集計期間
+ * @returns {Array<{
+ *   hostname: string,
+ *   displayName: string,
+ *   utilizationPct: number,
+ *   successRate: number,
+ *   totalPrintCount: number,
+ *   totalMaterialMm: number,
+ *   totalCostYen: number,
+ *   costPerSuccessPrint: number,
+ *   rank: number
+ * }>}
+ */
+export function buildHostRanking(options = {}) {
+  const results = [];
+
+  for (const hostname of Object.keys(monitorData.machines)) {
+    if (hostname === "_$_NO_MACHINE_$_") continue;
+    const util = buildHostUtilization(hostname, options);
+    const machine = monitorData.machines[hostname];
+    const history = machine?.printStore?.history || [];
+
+    let totalCostYen = 0;
+    let successCostYen = 0;
+    let totalSuccessCount = 0;
+
+    for (const job of history) {
+      const cost = Number(job.materialCostYen || 0);
+      totalCostYen += cost;
+      if (job.printfinish === 1) {
+        successCostYen += cost;
+        totalSuccessCount++;
+      }
+    }
+
+    results.push({
+      hostname,
+      displayName: util.displayName,
+      utilizationPct: util.utilizationPct,
+      successRate: util.successRate,
+      totalPrintCount: util.printCount,
+      totalMaterialMm: util.totalFilamentMm,
+      totalCostYen: Math.round(totalCostYen * 100) / 100,
+      costPerSuccessPrint: totalSuccessCount > 0
+        ? Math.round(totalCostYen / totalSuccessCount * 100) / 100
+        : 0
+    });
+  }
+
+  // 総合スコア: 稼働率 × 成功率（高い方が上位）
+  results.sort((a, b) => {
+    const scoreA = a.utilizationPct * a.successRate;
+    const scoreB = b.utilizationPct * b.successRate;
+    return scoreB - scoreA;
+  });
+  results.forEach((r, i) => { r.rank = i + 1; });
+
+  return results;
+}
+
+/**
+ * 素材別消費レポートを生成する。
+ * プリセット（ブランド×素材×色）ごとの消費量・コスト・月別推移を集計する。
+ *
+ * @returns {Array<{
+ *   key: string,
+ *   brand: string,
+ *   material: string,
+ *   colorName: string,
+ *   filamentColor: string,
+ *   totalConsumedMm: number,
+ *   totalCostYen: number,
+ *   spoolCount: number,
+ *   printCount: number,
+ *   avgCostPerMm: number,
+ *   monthlyTrend: Array<{month: string, consumedMm: number, costYen: number}>
+ * }>}
+ */
+export function buildMaterialReport() {
+  const materialMap = {};
+
+  for (const spool of monitorData.filamentSpools) {
+    if (spool.deleted || spool.isDeleted) continue;
+
+    const key = `${spool.brand || "不明"}|${spool.material || "不明"}|${spool.colorName || "不明"}`;
+    if (!materialMap[key]) {
+      materialMap[key] = {
+        key,
+        brand: spool.brand || spool.manufacturerName || "不明",
+        material: spool.material || spool.materialName || "不明",
+        colorName: spool.colorName || "不明",
+        filamentColor: spool.filamentColor || spool.color || "#888",
+        totalConsumedMm: 0,
+        totalCostYen: 0,
+        spoolCount: 0,
+        printCount: 0,
+        monthlyBuckets: {}
+      };
+    }
+    const m = materialMap[key];
+    m.spoolCount++;
+
+    const consumed = Math.max(0, (spool.totalLengthMm || 0) - (spool.remainingLengthMm || 0));
+    const costPerMm = spool.costPerMm || (spool.purchasePrice && spool.totalLengthMm
+      ? spool.purchasePrice / spool.totalLengthMm : 0);
+    const cost = consumed * costPerMm;
+
+    m.totalConsumedMm += consumed;
+    m.totalCostYen += cost;
+    m.printCount += spool.printCount || 0;
+
+    // usedLengthLog から月別消費を集計
+    if (Array.isArray(spool.usedLengthLog)) {
+      for (const log of spool.usedLengthLog) {
+        const jobIdNum = Number(log.jobId);
+        if (!Number.isFinite(jobIdNum) || jobIdNum <= 0) continue;
+        // jobId は epoch 秒
+        const date = new Date(jobIdNum * 1000);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+        if (!m.monthlyBuckets[monthKey]) {
+          m.monthlyBuckets[monthKey] = { consumedMm: 0, costYen: 0 };
+        }
+        const used = Number(log.used) || 0;
+        m.monthlyBuckets[monthKey].consumedMm += used;
+        m.monthlyBuckets[monthKey].costYen += used * costPerMm;
+      }
+    }
+  }
+
+  return Object.values(materialMap).map(m => ({
+    key: m.key,
+    brand: m.brand,
+    material: m.material,
+    colorName: m.colorName,
+    filamentColor: m.filamentColor,
+    totalConsumedMm: Math.round(m.totalConsumedMm),
+    totalCostYen: Math.round(m.totalCostYen * 100) / 100,
+    spoolCount: m.spoolCount,
+    printCount: m.printCount,
+    avgCostPerMm: m.totalConsumedMm > 0
+      ? Math.round(m.totalCostYen / m.totalConsumedMm * 10000) / 10000
+      : 0,
+    monthlyTrend: Object.entries(m.monthlyBuckets)
+      .map(([month, data]) => ({
+        month,
+        consumedMm: Math.round(data.consumedMm),
+        costYen: Math.round(data.costYen * 100) / 100
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month))
+  })).sort((a, b) => b.totalConsumedMm - a.totalConsumedMm);
 }
