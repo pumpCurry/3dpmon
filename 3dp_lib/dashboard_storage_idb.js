@@ -42,8 +42,7 @@ const DB_VERSION = 1;
 const STORE_SHARED   = "shared";
 const STORE_MACHINES = "machines";
 
-/** localStorage からのマイグレーション元キー */
-const LS_KEY = "3dp-monitor_1.400";
+// ★ LS_KEY ("3dp-monitor_1.400") は v2.2.0 で削除。マイグレーション不要。
 
 /**
  * shared ストアに保存するキー一覧
@@ -120,17 +119,8 @@ export async function initIdb() {
       return;
     }
 
-    // IndexedDB にデータなし → localStorage からマイグレーション
-    const lsData = localStorage.getItem(LS_KEY);
-    if (lsData) {
-      const parsed = JSON.parse(lsData);
-      await importAllIdb(parsed);
-      _cache = {
-        shared:   await _readAll(STORE_SHARED),
-        machines: await _readAll(STORE_MACHINES)
-      };
-      console.info("[initIdb] localStorage → IndexedDB マイグレーション完了");
-    }
+    // ★ v2.2.0: 旧 localStorage → IndexedDB マイグレーションは削除。
+    //   v2.1.017 LTS が最終移行ポイント。
   } catch (e) {
     console.warn("[initIdb] IndexedDB 初期化失敗、localStorage にフォールバック:", e);
     _useIdb = false;

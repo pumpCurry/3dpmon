@@ -52,64 +52,8 @@ import { registerFieldElements, unregisterFieldElements } from "./dashboard_ui.j
  * @constant {string}
  */
 const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v5";
-// v2 → v3 マイグレーション: cellHeight 80→40 に伴い h, y を2倍化
-(function migrateLayoutV2toV3() {
-  const v2 = localStorage.getItem("3dpmon_panel_layout_v2");
-  if (!v2 || localStorage.getItem("3dpmon_panel_layout_v3")) return;
-  try {
-    const layout = JSON.parse(v2);
-    if (!Array.isArray(layout)) return;
-    const migrated = layout.map(item => ({
-      ...item,
-      y: (item.y || 0) * 2,
-      h: (item.h || 4) * 2
-    }));
-    localStorage.setItem("3dpmon_panel_layout_v3", JSON.stringify(migrated));
-    console.info("[layout] v2→v3 マイグレーション完了 (cellHeight 80→40)");
-  } catch { /* ignore */ }
-})();
-// v3 → v5 マイグレーション: 12列×40px → 48列×20px (x,w ×4, y,h ×2)
-(function migrateToV5() {
-  const v5 = localStorage.getItem("3dpmon_panel_layout_v5");
-  if (v5) { try { if (JSON.parse(v5).length > 0) return; } catch { /* 壊れた v5 は再生成 */ } }
-  // v4 (24列×40px) があればそこから (x,w ×2, y,h ×2)
-  const v4 = localStorage.getItem("3dpmon_panel_layout_v4");
-  if (v4) {
-    try {
-      const layout = JSON.parse(v4);
-      if (Array.isArray(layout) && layout.length > 0) {
-        const migrated = layout.map(item => ({
-          ...item,
-          x: Math.min((item.x || 0) * 2, 46),
-          w: Math.min((item.w || 8) * 2, 48),
-          y: (item.y || 0) * 2,
-          h: (item.h || 8) * 2
-        }));
-        localStorage.setItem("3dpmon_panel_layout_v5", JSON.stringify(migrated));
-        console.info("[layout] v4→v5 マイグレーション完了 (24列40px → 48列20px)");
-        return;
-      }
-    } catch { /* ignore */ }
-  }
-  // v3 (12列×40px) があればそこから (x,w ×4, y,h ×2)
-  const v3 = localStorage.getItem("3dpmon_panel_layout_v3");
-  if (v3) {
-    try {
-      const layout = JSON.parse(v3);
-      if (Array.isArray(layout) && layout.length > 0) {
-        const migrated = layout.map(item => ({
-          ...item,
-          x: Math.min((item.x || 0) * 4, 44),
-          w: Math.min((item.w || 4) * 4, 48),
-          y: (item.y || 0) * 2,
-          h: (item.h || 4) * 2
-        }));
-        localStorage.setItem("3dpmon_panel_layout_v5", JSON.stringify(migrated));
-        console.info("[layout] v3→v5 マイグレーション完了 (12列40px → 48列20px)");
-      }
-    } catch { /* ignore */ }
-  }
-})();
+// ★ v2.2.0: レイアウト v2→v3→v5 マイグレーションコードは削除。
+//   v2.1.017 LTS が最終移行ポイント。
 
 /* ─── パネル種別定義 ─── */
 

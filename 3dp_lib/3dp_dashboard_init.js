@@ -66,11 +66,7 @@ export async function initializeDashboard() {
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
   restoreUnifiedStorage();
-  // ★ 旧バージョンの localStorage キーを掃除（v1.25/v1.29/v1.40/layout v2-v4）
-  try {
-    const { cleanupLegacy } = await import("./dashboard_storage.js");
-    cleanupLegacy();
-  } catch { /* ignore */ }
+  // ★ v2.2.0: cleanupLegacy は削除済み。v2.1.017 で最終掃除完了。
   // 読み込んだストレージ内容を通知マネージャへ反映
   notificationManager.loadSettings();
   if (!monitorData.filamentSpools.length) {

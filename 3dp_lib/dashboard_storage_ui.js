@@ -256,63 +256,8 @@ async function doExport(toast) {
   }
 }
 
-/**
- * v1.40 形式のデータを v2.00 形式に変換する。
- * v1.40: フラットな monitorData（storedData, printStore 等がトップレベル）
- * v2.00: shared キー群 + machines: { hostname: {...} }
- *
- * @param {Object} data - v1.40 形式データ
- * @returns {Object} v2.00 形式データ
- */
-function _convertV140toV200(data) {
-  const SHARED_KEYS = [
-    "appSettings", "filamentSpools", "usageHistory",
-    "filamentPresets", "filamentInventory",
-    "hostSpoolMap", "spoolSerialCounter"
-  ];
-  const result = {};
-  for (const key of SHARED_KEYS) {
-    if (key in data) result[key] = data[key];
-  }
-  if (data.machines && typeof data.machines === "object") {
-    /* v1.40 でも machines が存在する場合（混在形式） */
-    result.machines = data.machines;
-  } else {
-    /* v1.40 フラット形式: storedData/printStore 等をデフォルトホストに格納 */
-    const hostData = {};
-    const HOST_KEYS = ["storedData", "printStore", "fileList"];
-    for (const key of HOST_KEYS) {
-      if (key in data) hostData[key] = data[key];
-    }
-    /* storedData から hostname を取得し、ホスト名として使用 */
-    let hostname = "imported";
-    if (hostData.storedData?.hostname?.rawValue) {
-      hostname = hostData.storedData.hostname.rawValue;
-    }
-    if (Object.keys(hostData).length > 0) {
-      result.machines = { [hostname]: hostData };
-    }
-  }
-  result._exportVersion = "2.00";
-  result._convertedFrom = "1.40";
-  return result;
-}
-
-/**
- * エクスポートデータのバージョンを判定する。
- *
- * @param {Object} data - パース済み JSON データ
- * @returns {"2.00"|"1.40"} バージョン文字列
- */
-function _detectExportVersion(data) {
-  if (data._exportVersion === "2.00") return "2.00";
-  if (data.machines && typeof data.machines === "object") {
-    /* machines キーがあり、各値がオブジェクトなら v2.00 相当 */
-    const vals = Object.values(data.machines);
-    if (vals.length > 0 && typeof vals[0] === "object") return "2.00";
-  }
-  return "1.40";
-}
+// ★ v2.2.0: _convertV140toV200 / _detectExportVersion は削除。
+//   v1.40 形式のインポートはサポート終了。v2.1.017 LTS が最終変換ポイント。
 
 /**
  * 全データをインポートする。v1.40 / v2.00 自動判定。
@@ -333,11 +278,11 @@ function doImport(toast) {
     reader.onload = async () => {
       try {
         const parsed = JSON.parse(reader.result);
-        const version = _detectExportVersion(parsed);
         let importData = parsed;
-        if (version === "1.40") {
-          importData = _convertV140toV200(parsed);
-          console.info("[doImport] v1.40 → v2.00 変換を実施しました");
+        // ★ v2.2.0: v1.40 形式はサポート終了
+        if (!importData.machines || typeof importData.machines !== "object") {
+          toast("v1.40 形式のデータはサポート終了しました。v2.1.017 で変換してください。", true);
+          return;
         }
         /* メタデータキーを除去してからインポート */
         delete importData._exportVersion;
@@ -380,10 +325,11 @@ function doImportHistoryOnly(toast) {
     reader.onload = async () => {
       try {
         const parsed = JSON.parse(reader.result);
-        const version = _detectExportVersion(parsed);
         let importData = parsed;
-        if (version === "1.40") {
-          importData = _convertV140toV200(parsed);
+        // ★ v2.2.0: v1.40 形式はサポート終了
+        if (!importData.machines || typeof importData.machines !== "object") {
+          toast("v1.40 形式のデータはサポート終了しました。v2.1.017 で変換してください。", true);
+          return;
         }
         delete importData._exportVersion;
         delete importData._exportDate;
@@ -469,7 +415,7 @@ export function initStorageUIInPanel(body) {
   expBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
   const impBtn = document.createElement("button");
-  impBtn.textContent = "全データ Import (v1.40/v2.00)";
+  impBtn.textContent = "全データ Import (v2.00+)";
   impBtn.style.cssText = "font-size:12px;margin-left:5px;";
 
   const btnGroup = document.createElement("div");

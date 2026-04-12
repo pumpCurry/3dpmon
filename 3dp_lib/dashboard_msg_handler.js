@@ -311,22 +311,8 @@ setHistoryPersistFunc(persistHistoryTimers);
  *
  * @param {object} data 受信データ
  */
-/**
- * @deprecated handleMessage は統一パス化により死にコード。
- * handleSocketMessage → processData の直接呼び出しが全データを処理する。
- * 互換性のため export は維持するが、内部は空実装。
- * temporaryBuffer も不要（handleSocketMessage が hostKey で振り分け済み）。
- *
- * @param {object} _data 受信データ（未使用）
- */
-export function handleMessage(_data) {
-  // ★ 統一パス化完了: handleSocketMessage → processData で全ホスト処理済み。
-  // この関数は呼び出されない。万一呼ばれた場合のためのフォールバック:
-  if (_data?.hostname) {
-    ensureMachineData(_data.hostname);
-    processData(_data, _data.hostname);
-  }
-}
+// ★ handleMessage は v2.2.0 で完全削除済み。
+// handleSocketMessage → processData が唯一のデータ処理パス。
 
 /**
  * processData:

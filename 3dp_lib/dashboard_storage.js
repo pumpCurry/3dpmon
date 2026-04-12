@@ -110,8 +110,8 @@ export async function exportAllData() {
         if (hostRaw) data.machines[host] = JSON.parse(hostRaw);
       }
     } else {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      data = raw ? JSON.parse(raw) : {};
+      // ★ v2.2.0: 旧 STORAGE_KEY フォールバックは削除
+      data = {};
     }
   }
 
@@ -121,6 +121,10 @@ export async function exportAllData() {
     const layout = getCurrentLayoutData();
     if (layout) data.panelLayout = layout;
   } catch { /* パネルモジュール未初期化でも続行 */ }
+
+  // ★ v2.2.0: エクスポートメタデータ
+  data._exportVersion = "2.20";
+  data._exportDate = new Date().toISOString();
 
   return data;
 }
@@ -541,7 +545,7 @@ function pushLog(msg, isErr = false) {
  * ※ v1.25/v1.29 の個別キーからの移行は廃止済み。
  *   最小サポート移行元バージョン: v1.40
  */
-const STORAGE_KEY = "3dp-monitor_1.400";
+// ★ STORAGE_KEY ("3dp-monitor_1.400") は v2.2.0 で削除。v2.1.017 LTS が最終移行ポイント。
 
 /** per-host localStorage 分割キー: グローバルデータ用 */
 const LS_KEY_GLOBAL = "3dpmon-global";
@@ -707,10 +711,7 @@ function _writePerHostLocalStorage() {
     }
   }
 
-  // 旧統一キーが残っていれば削除（マイグレーション完了）
-  if (localStorage.getItem(STORAGE_KEY)) {
-    localStorage.removeItem(STORAGE_KEY);
-  }
+  // ★ 旧統一キー STORAGE_KEY は v2.2.0 で削除済み。
 }
 
 /**
@@ -782,33 +783,7 @@ function _flushStorage() {
  *
  * @returns {number} 削除したキー数
  */
-function cleanUpLegacyStorage() {
-  const legacyKeys = [
-    "storedDataV1p125",
-    // v1.25/v1.29 時代の個別キー
-    "wsDestV1p125",
-    "cameraToggleV1p129",
-    "autoConnectV1p129",
-    // 旧統一ストレージキー（per-host 分割形式に移行済み）
-    "3dp-monitor_1.400",
-    // 旧パネルレイアウトキー（v5 に移行済み）
-    "3dpmon_panel_layout_v2",
-    "3dpmon_panel_layout_v3",
-    "3dpmon_panel_layout_v4"
-  ];
-  let removed = 0;
-  for (const key of legacyKeys) {
-    if (localStorage.getItem(key) !== null) {
-      localStorage.removeItem(key);
-      removed++;
-      pushLog(`旧ストレージキーを削除: ${key}`);
-    }
-  }
-  if (removed > 0) {
-    pushLog(`旧キー ${removed} 件を削除しました`);
-  }
-  return removed;
-}
+// ★ cleanUpLegacyStorage は v2.2.0 で削除。v2.1.017 で最終掃除済み。
 
 /**
  * localStorage から monitorData を復元する。
@@ -851,22 +826,9 @@ export function restoreUnifiedStorage() {
       pushLog("[restoreUnifiedStorage] per-host 復元中にパースエラー発生", true);
     }
   } else {
-    // レガシー: 旧統一キーからマイグレーション
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        _restoreFromData(data, data.machines);
-        _lastSavedJson = null; // 分割形式と異なるので null にして次回書き込みを促す
-        console.debug("[restoreUnifiedStorage] localStorage (旧統一キー) から復元 → 分割形式にマイグレーション");
-        // マイグレーション: 次の _flushStorage() で分割キーが書き込まれ、旧キーが削除される
-      } catch (e) {
-        console.error("[restoreUnifiedStorage] パースエラー:", e);
-        pushLog("[restoreUnifiedStorage] 復元中にパースエラー発生", true);
-      }
-    } else {
-      console.debug("[restoreUnifiedStorage] 保存データなし。初回起動として扱います");
-    }
+    // ★ v2.2.0: 旧統一キー(STORAGE_KEY)からのマイグレーションは削除。
+    //   v2.1.017 LTS が最終移行ポイント。
+    console.debug("[restoreUnifiedStorage] 保存データなし。初回起動として扱います");
   }
 
   Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
@@ -1099,29 +1061,14 @@ function _restoreFromData(shared, machines) {
   }
 }
 
-/**
- * ★★★ OBSOLETE — 廃止済み ★★★
- * レガシー storedData の移行は v2.1.010 で完了済み。
- * currentHostname に依存していたため、マルチホスト環境で安全に動作しない。
- * @deprecated 完全廃止。
- * @returns {void}
- */
-export function restoreLegacyStoredData() {
-  console.warn("[OBSOLETE] restoreLegacyStoredData は廃止されました");
-}
+// ★ restoreLegacyStoredData は v2.2.0 で完全削除済み。
 
 /**
  * cleanUpLegacyStorage() を実行し、その結果をカスタムイベントで通知する。
  *
  * @returns {number} 削除したレガシーキーの件数
  */
-export function cleanupLegacy() {
-  const count = cleanUpLegacyStorage();
-  window.dispatchEvent(new CustomEvent("storage:legacyCleaned", {
-    detail: { removed: count }
-  }));
-  return count;
-}
+// ★ cleanupLegacy は v2.2.0 で完全削除済み。
 
 /**
  * localStorage 使用量とクォータを推定する。

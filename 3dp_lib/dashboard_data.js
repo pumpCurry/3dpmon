@@ -68,14 +68,8 @@ import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
  */
 export const PLACEHOLDER_HOSTNAME = "_$_NO_MACHINE_$_";
 
-/**
- * ★★★ OBSOLETE — 使用禁止 ★★★
- * マルチホスト環境ではグローバルな「現在のホスト」という概念が存在しない。
- * この変数は常に null。全コードは per-host の hostname 引数を使用すること。
- * @type {null}
- * @deprecated 完全廃止。
- */
-export const currentHostname = null;
+// ★ currentHostname は v2.2.0 で完全削除済み。
+// マルチホスト環境ではグローバルな「現在のホスト」は存在しない。
 
 /**
  * 通知抑制状態フラグ
@@ -105,10 +99,8 @@ export function isNotificationSuppressed(hostname) {
   return true;
 }
 
-// ★ OBSOLETE: notificationSuppressed グローバル変数は廃止。
-//   isNotificationSuppressed(hostname) を使うこと。
-//   後方互換のため export は維持するが、参照しても正しい値にならない。
-export const notificationSuppressed = true;
+// ★ notificationSuppressed は v2.2.0 で完全削除済み。
+// isNotificationSuppressed(hostname) を使用すること。
 
 /**
  * setNotificationSuppressed:
@@ -127,7 +119,7 @@ export function setNotificationSuppressed(flag, hostname) {
       if (h !== PLACEHOLDER_HOSTNAME) _notificationSuppressedMap.set(h, flag);
     }
   }
-  // ★ notificationSuppressed グローバルは廃止済み (const)。更新不要。
+  // (v2.2.0: notificationSuppressed グローバルは削除済み)
 }
 
 /**
@@ -178,19 +170,8 @@ export function ensureMachineData(host) {
   }
 }
 
-/**
- * ★★★ OBSOLETE — 使用禁止 ★★★
- * この関数は廃止されました。呼び出された場合はコンソールに警告を出力します。
- * 機器データの初期化は ensureMachineData(host) を直接使用してください。
- * @deprecated 完全廃止。
- */
-export function setCurrentHostname(host) {
-  console.error(`[OBSOLETE] setCurrentHostname("${host}") が呼ばれました。この関数は廃止済みです。ensureMachineData() を使用してください`);
-  // データ破壊を防ぐため何もしない。ensureMachineData だけは実行する（安全な操作）
-  if (host && host !== PLACEHOLDER_HOSTNAME) {
-    ensureMachineData(host);
-  }
-}
+// ★ setCurrentHostname は v2.2.0 で完全削除済み。
+// ensureMachineData(host) を直接使用すること。
 
 /**
  * monitorData: 設定と機器データ全体を保持するグローバルオブジェクト
@@ -221,7 +202,7 @@ export const monitorData = {
     logMaxLines: 1000,
     logLevel: "info",
     autoConnect: true,
-    wsDest: "",          // ★ OBSOLETE: 起動時に connectionTargets へ移行後クリアされる。読み書き禁止。
+    // ★ wsDest は v2.2.0 で完全削除済み。connectionTargets が唯一の接続先リスト。
     connectionTargets: [],  // 複数接続先リスト [{dest, color?, label?}]
     showHostTag: true,      // パネルヘッダーにホスト名を表示する
     cameraToggle: false,  // カメラ ON/OFF
