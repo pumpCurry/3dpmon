@@ -10,6 +10,8 @@
     "build": "electron-builder --win",
     "build:dir": "electron-builder --win --dir",
     "test": "vitest run",
+    "test:e2e": "node tests/e2e/electron_boot.test.mjs",
+    "test:all": "vitest run && node tests/e2e/electron_boot.test.mjs",
     "test:watch": "vitest",
     "lint": "eslint 3dp_lib/",
     "lint:css": "stylelint \"*.css\"",

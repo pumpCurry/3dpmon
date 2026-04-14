@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.2.001 (2026-04-14)
+
+### 旧データ構造サポート完全終了 + E2Eテスト導入
+
+#### Breaking Change
+- v1.x / v2.0 旧フォーマットのインポートはサポート終了。旧バージョンからのアップグレードは [v2.1.017 LTS](https://github.com/pumpCurry/3dpmon/releases/tag/v2.1.017-LTS) 経由で行うこと。
+
+#### レガシーコード削除 (266行)
+- `STORAGE_KEY ("3dp-monitor_1.400")` と全フォールバック読み取り
+- `_convertV140toV200()` / `_detectExportVersion()` — v1.40→v2.00 変換
+- `cleanUpLegacyStorage()` / `cleanupLegacy()` / `restoreLegacyStoredData()`
+- レイアウト v2→v3→v5 マイグレーション IIFE
+- `wsDest` → `connectionTargets` マイグレーション
+- `currentHostname` / `setCurrentHostname()` / `notificationSuppressed`
+- `setupConnectButton()` / `handleMessage()` 旧エントリポイント
+- `LS_KEY` localStorage→IndexedDB マイグレーション
+
+#### テスト強化
+- Electron 起動テスト (`tests/e2e/electron_boot.test.mjs`) — 3件
+  - 起動しウィンドウが表示されること、モジュール import が全解決、削除済み export の残存検出
+- 実機スモークテスト (`tests/e2e/electron_smoke.test.mjs`) — 18件+2SKIP
+  - 2台(192.168.54.151/152)への TCP/WS/カメラ接続、hostname 解決、非コンタミネーション検証
+- レガシー駆除テスト (`tests/smoke/legacy_purge.test.js`) — 36件
+  - hostname ガード全パターン、hostSpoolMap 参照整合性、IP→hostname 遷移保護、
+    DHCP統合、costPerMm 算出、旧コード削除確認
+- 合計 257 件ユニットテスト + E2E テスト通過
+
+#### v2.2.0 起動不能バグ修正
+- `dashboard_connection.js` の `handleMessage` import 残存を除去
+  (v2.2.0 で export を削除したが import が残っていた)
+
+#### エクスポートバージョン
+- `_exportVersion` を `"2.20"` に更新
+
+---
+
 ## v2.1.017 LTS (2026-04-12)
 
 ### レガシー単一機器コード完全駆除 + コスト分析エンジン + DHCP対策
