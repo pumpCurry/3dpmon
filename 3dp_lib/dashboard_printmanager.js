@@ -1063,16 +1063,26 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const isCurrentJob = curPrintId && String(raw.id) === String(curPrintId) && isActive(printState);
     let finish, finishCls;
     if (isCurrentJob) {
+      // ★ aggregator が認識している現在の印刷ジョブ
       finish    = printState === PRINT_STATE_CODE.printPaused ? "⏸" : "▶";
       finishCls = "result-active";
     } else if (raw.printfinish === 1) {
       finish    = "✔";
       finishCls = "result-ok";
-    } else if (raw.printfinish === null || raw.printfinish === undefined) {
-      // ★ 印刷中 or 成否未確定（再起動後で完了情報がまだない）
-      finish    = "▶";
-      finishCls = "result-active";
+    } else if (raw.printfinish === null || raw.printfinish === undefined || raw.printfinish === 0) {
+      // ★ printfinish=null/undefined/0 は「印刷中 or 成否未確定」
+      //   0 は K1 Max が印刷中に返す値。失敗ではない。
+      //   endtime が未設定なら印刷中、設定済みなら中断/不明
+      if (!raw.endtime || raw.endtime === 0) {
+        finish    = "▶";
+        finishCls = "result-active";
+      } else {
+        // endtime はあるが printfinish が 0/null — 中断等の不明終了
+        finish    = "?";
+        finishCls = "result-unknown";
+      }
     } else {
+      // printfinish が -1 等 — 明示的な失敗
       finish    = "✗";
       finishCls = "result-ng";
     }
@@ -1131,7 +1141,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     }
 
     const tr = document.createElement("tr");
-    tr.className = "history-row";
+    const isPrinting = finishCls === "result-active";
+    tr.className = `history-row${isPrinting ? " history-row-printing" : ""}`;
     tr.innerHTML = `
       <td class="col-cmd">
         <button class="cmd-print icon-btn" title="印刷">▶</button>
@@ -1417,11 +1428,19 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
     materialSource = "GCode見積";
   } else {
     materialNeeded = Number(raw.usagematerial || 0);
-    materialSource = materialNeeded > 0 ? "機器報告" : "";
-    // 失敗印刷の部分消費値しかない場合は信頼性が低い
-    if (materialNeeded > 0 && raw.printfinish !== 1) {
-      materialUnreliable = true;
-      materialSource = "⚠ 失敗時の部分値";
+    if (materialNeeded > 0) {
+      // 過去の印刷実績（成功/失敗/途中）から消費量を推定
+      if (raw.printfinish === 1) {
+        materialSource = "機器報告";
+      } else if (insight?.totalCount > 0) {
+        // 印刷実績はあるが成功がない → 部分消費値
+        materialUnreliable = true;
+        materialSource = "⚠ 途中消費の参考値";
+      } else {
+        // 一度も印刷していない or 不明
+        materialUnreliable = true;
+        materialSource = "⚠ 参考値（実績なし）";
+      }
     }
   }
 
@@ -1574,7 +1593,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   html += `<div class="pm-print-section pm-print-neutral-section">`;
   html += `<div>必要量: ${fmtNeed.display}${materialSource ? ` (${materialSource})` : ""}</div>`;
   if (materialUnreliable) {
-    html += `<div class="pm-print-alert-danger">⚠ 成功実績がないため、失敗時の部分消費値を使用しています。実際の必要量はこれより多い可能性があります。</div>`;
+    html += `<div class="pm-print-alert-danger">⚠ この印刷物の成功実績がまだないため、参考値を表示しています。実際の必要量は異なる可能性があります。</div>`;
   }
   if (estSec > 0) {
     html += `<div>予想所要: ${formatDuration(estSec)} (${durLabel})</div>`;
