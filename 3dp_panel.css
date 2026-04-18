@@ -1827,7 +1827,6 @@ body.panel-mode .notification-container {
 .col-result .result-ok, .col-finish .result-ok { color: var(--color-success); font-weight: bold; }
 .col-result .result-ng, .col-finish .result-ng { color: var(--color-danger); }
 .col-finish .result-active { color: var(--color-info); font-weight: bold; }
-.col-finish .result-unknown { color: var(--color-text-muted, #94a3b8); }
 /* 印刷中の行を薄い黄色で強調 */
 .history-row-printing { background: rgba(250, 204, 21, 0.08) !important; }
 

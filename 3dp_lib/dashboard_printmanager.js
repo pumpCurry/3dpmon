@@ -1070,16 +1070,15 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       finish    = "✔";
       finishCls = "result-ok";
     } else if (raw.printfinish === null || raw.printfinish === undefined || raw.printfinish === 0) {
-      // ★ printfinish=null/undefined/0 は「印刷中 or 成否未確定」
-      //   0 は K1 Max が印刷中に返す値。失敗ではない。
-      //   endtime が未設定なら印刷中、設定済みなら中断/不明
+      // ★ printfinish=null/undefined/0 の判定:
+      //   endtime 未設定 → まだ印刷中（▶ 表示）
+      //   endtime あり → 印刷は終了したが成功していない = 失敗（✗ 表示）
       if (!raw.endtime || raw.endtime === 0) {
         finish    = "▶";
         finishCls = "result-active";
       } else {
-        // endtime はあるが printfinish が 0/null — 中断等の不明終了
-        finish    = "?";
-        finishCls = "result-unknown";
+        finish    = "✗";
+        finishCls = "result-ng";
       }
     } else {
       // printfinish が -1 等 — 明示的な失敗
