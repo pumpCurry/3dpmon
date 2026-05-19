@@ -31,6 +31,22 @@ const path = require("path");
 const http = require("http");
 const fs = require("fs");
 
+/**
+ * アプリケーションバージョンを package.json から確実に取得する。
+ * app.getVersion() は開発起動時 (electron .) に Electron 自身のバージョンを返すため、
+ * 常に package.json を直接参照する。
+ *
+ * @returns {string} package.json の version
+ */
+function getAppVersion() {
+  try {
+    return require("../package.json").version;
+  } catch {
+    return app.getVersion();  // フォールバック
+  }
+}
+const APP_VERSION = getAppVersion();
+
 /** リレーサーバポート（Go+3+D = 5313） */
 const RELAY_PORT = parseInt(process.env.RELAY_PORT || "5313", 10);
 
@@ -93,7 +109,7 @@ function startHttpServer(port) {
       // API エンドポイント
       if (req.url === "/api/relay-mode") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ mode: "parent", port, version: app.getVersion() }));
+        res.end(JSON.stringify({ mode: "parent", port, version: APP_VERSION }));
         return;
       }
 
@@ -364,7 +380,7 @@ function createWindow() {
     height: 1000,
     minWidth: 800,
     minHeight: 600,
-    title: `3dpmon - 3Dプリンタ監視ダッシュボード v${app.getVersion()}`,
+    title: `3dpmon - 3Dプリンタ監視ダッシュボード v${APP_VERSION}`,
     icon: (() => {
       const buildIcon = path.join(__dirname, "..", "build", "icon.ico");
       const favicon = path.join(__dirname, "..", "favicon.ico");
@@ -461,7 +477,7 @@ app.whenReady().then(async () => {
 
   /* ─── IPC: バージョン取得 ─── */
   ipcMain.on("get-app-version", (event) => {
-    event.returnValue = app.getVersion();
+    event.returnValue = APP_VERSION;
   });
 
   /* ─── IPC ブリッジ: レンダラー ↔ リレーサーバ ─── */
