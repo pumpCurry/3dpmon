@@ -52,6 +52,7 @@ import {
   stopAggregatorTimer,
   aggregatorUpdate
 } from "./dashboard_aggregator.js";
+import { initAboutDialogListener } from "./dashboard_about.js";
 
 /**
  * ダッシュボードを初期化します。
@@ -118,6 +119,9 @@ export async function initializeDashboard() {
 
   // (5) 自動保存タイマー＆beforeunload 登録
   initializeAutoSave();
+
+  // (6) About ダイアログリスナー初期化（Electron メニューからの IPC を受信）
+  try { initAboutDialogListener(); } catch (e) { console.debug("[init] about listener skipped:", e.message); }
 }
 
 // ────────────── 印刷再開データの復元／永続化 ──────────────

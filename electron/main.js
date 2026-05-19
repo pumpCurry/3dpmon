@@ -26,7 +26,7 @@
 
 "use strict";
 
-const { app, BrowserWindow, Menu, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require("electron");
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
@@ -211,14 +211,151 @@ function _migrateStoragePartition() {
     fs.writeFileSync(sentinelPath, JSON.stringify({
       migratedAt: new Date().toISOString(),
       copiedDirs: copied,
-      source: sourceDir,
-      destination: newPartDir
+      source: partitionDir,
+      destination: defaultDir
     }));
   } catch { /* センチネル書き込み失敗は致命的ではない */ }
 
   if (copied > 0) {
     console.log(`[migration] ストレージマイグレーション完了 (${copied}ディレクトリ)`);
   }
+}
+
+/**
+ * v2.2.1005: portable版 → NSIS版インストールユーザーデータ移行
+ * NSIS インストール版の初回起動時に、portable 版（3dpmon-data フォルダ）の
+ * データを取り込むかユーザーに確認するダイアログを表示する。
+ *
+ * @private
+ * @returns {Promise<void>}
+ */
+async function _migrateFromPortable() {
+  // portable 版で起動している場合はスキップ
+  if (process.env.PORTABLE_EXECUTABLE_DIR || process.argv.includes("--portable")) {
+    return;
+  }
+  const userData = app.getPath("userData");
+  const sentinelPath = path.join(userData, ".portable-migration-checked");
+  if (fs.existsSync(sentinelPath)) {
+    return;  // 既にチェック済み
+  }
+
+  // 既存のデータが %APPDATA%\3dpmon にある場合はスキップ（既に NSIS 版で使用中）
+  const localStorageDir = path.join(userData, "Local Storage");
+  if (fs.existsSync(localStorageDir)) {
+    try { fs.writeFileSync(sentinelPath, JSON.stringify({ checkedAt: new Date().toISOString(), result: "skipped (data exists)" })); } catch {}
+    return;
+  }
+
+  // ユーザーに portable データのインポートを尋ねる
+  const choice = await dialog.showMessageBox({
+    type: "question",
+    title: "3dpmon - 既存データの取り込み",
+    message: "以前ポータブル版（portable.exe）を使用していましたか？",
+    detail: "ポータブル版のフォルダ内にある「3dpmon-data」フォルダを選択すると、設定・印刷履歴・フィラメント情報を引き継げます。\n\n初回インストール（新規）の場合は「新規開始」を選択してください。",
+    buttons: ["既存データを選択して取り込む", "新規開始（取り込まない）"],
+    defaultId: 1,
+    cancelId: 1
+  });
+
+  if (choice.response === 0) {
+    const result = await dialog.showOpenDialog({
+      title: "ポータブル版データフォルダを選択（3dpmon-data フォルダ）",
+      properties: ["openDirectory"],
+      buttonLabel: "このフォルダを取り込む"
+    });
+    if (!result.canceled && result.filePaths.length > 0) {
+      const srcDir = result.filePaths[0];
+      // 妥当性チェック: Local Storage or IndexedDB が存在するか
+      const looksValid = fs.existsSync(path.join(srcDir, "Local Storage")) ||
+                         fs.existsSync(path.join(srcDir, "IndexedDB"));
+      if (!looksValid) {
+        await dialog.showMessageBox({
+          type: "warning",
+          title: "取り込み失敗",
+          message: "選択されたフォルダに 3dpmon のデータが見つかりませんでした。",
+          detail: `フォルダ内に「Local Storage」または「IndexedDB」サブフォルダが必要です。\n\n選択: ${srcDir}`
+        });
+      } else {
+        try {
+          fs.cpSync(srcDir, userData, { recursive: true, force: false, errorOnExist: false });
+          await dialog.showMessageBox({
+            type: "info",
+            title: "取り込み完了",
+            message: "ポータブル版のデータを取り込みました。",
+            detail: `保存先: ${userData}`
+          });
+        } catch (e) {
+          await dialog.showMessageBox({
+            type: "error",
+            title: "取り込み失敗",
+            message: "データのコピー中にエラーが発生しました。",
+            detail: e.message
+          });
+        }
+      }
+    }
+  }
+
+  // センチネル: 結果に関わらず一度だけ尋ねる
+  try { fs.writeFileSync(sentinelPath, JSON.stringify({ checkedAt: new Date().toISOString(), choice: choice.response })); } catch {}
+}
+
+/**
+ * アプリケーションメニューを構築する。
+ * トップバーに「ファイル / ヘルプ」メニューを表示する。
+ *
+ * @private
+ * @returns {void}
+ */
+function _buildAppMenu() {
+  const template = [
+    {
+      label: "ファイル",
+      submenu: [
+        { label: "リロード", accelerator: "CmdOrCtrl+R", role: "reload" },
+        { label: "強制リロード", accelerator: "CmdOrCtrl+Shift+R", role: "forceReload" },
+        { type: "separator" },
+        { label: "終了", accelerator: "Alt+F4", role: "quit" }
+      ]
+    },
+    {
+      label: "表示",
+      submenu: [
+        { label: "拡大", accelerator: "CmdOrCtrl+Plus", role: "zoomIn" },
+        { label: "縮小", accelerator: "CmdOrCtrl+-", role: "zoomOut" },
+        { label: "等倍", accelerator: "CmdOrCtrl+0", role: "resetZoom" },
+        { type: "separator" },
+        { label: "全画面切り替え", accelerator: "F11", role: "togglefullscreen" },
+        { type: "separator" },
+        { label: "開発者ツール", accelerator: "F12", role: "toggleDevTools" }
+      ]
+    },
+    {
+      label: "ヘルプ",
+      submenu: [
+        {
+          label: "GitHub リポジトリを開く",
+          click: () => shell.openExternal("https://github.com/pumpCurry/3dpmon")
+        },
+        {
+          label: "最新リリースを確認",
+          click: () => shell.openExternal("https://github.com/pumpCurry/3dpmon/releases")
+        },
+        { type: "separator" },
+        {
+          label: "3dpmon について...",
+          click: () => {
+            if (mainWindow?.webContents) {
+              mainWindow.webContents.send("show-about-dialog");
+            }
+          }
+        }
+      ]
+    }
+  ];
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 }
 
 function createWindow() {
@@ -228,7 +365,11 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: `3dpmon - 3Dプリンタ監視ダッシュボード v${app.getVersion()}`,
-    icon: path.join(__dirname, "..", "favicon.ico"),
+    icon: (() => {
+      const buildIcon = path.join(__dirname, "..", "build", "icon.ico");
+      const favicon = path.join(__dirname, "..", "favicon.ico");
+      return fs.existsSync(buildIcon) ? buildIcon : favicon;
+    })(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       /* 既存コードとの互換性のため contextIsolation は有効のまま維持 */
@@ -292,6 +433,12 @@ app.whenReady().then(async () => {
 
   // ★ ストレージマイグレーション: 旧オリジン(file://) → 新パーティション(persist:3dpmon)
   _migrateStoragePartition();
+
+  // ★ v2.2.1005: NSIS 初回起動時に portable 版データの取り込みを尋ねる
+  await _migrateFromPortable();
+
+  // ★ アプリケーションメニュー（ヘルプ → 3dpmon について）
+  _buildAppMenu();
 
   // HTTP + WSリレーサーバを起動（子クライアントが接続可能に）
   try {

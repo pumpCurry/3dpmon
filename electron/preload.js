@@ -124,5 +124,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
    * ARP テーブル全スキャン。Creality 機器の自動検出に使用。
    * @returns {Promise<Array<{ip:string, mac:string, isCreality:boolean}>>}
    */
-  arpScan: () => ipcRenderer.invoke("arp-scan")
+  arpScan: () => ipcRenderer.invoke("arp-scan"),
+
+  /* ─── About ダイアログ IPC ─── */
+
+  /**
+   * メインプロセスから About ダイアログ表示要求を受信する。
+   * @param {Function} callback - () => void
+   */
+  onShowAboutDialog: (callback) => ipcRenderer.on("show-about-dialog", () => callback())
 });

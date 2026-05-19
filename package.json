@@ -1,12 +1,14 @@
 {
   "name": "3dpmon",
-  "version": "2.2.004",
+  "version": "2.2.1005",
   "description": "3Dプリンタ監視ダッシュボード - Electron版",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
     "start:http": "python -m http.server 8313",
+    "sync-version": "node scripts/sync-version.js",
+    "prebuild": "node scripts/sync-version.js",
     "build": "electron-builder --win",
     "build:dir": "electron-builder --win --dir",
     "test": "vitest run",
@@ -22,15 +24,19 @@
   "build": {
     "appId": "jp.542.3dpmon",
     "productName": "3dpmon",
+    "copyright": "Copyright © 2025-2026 pumpCurry / 5r4ce2",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "3dp_monitor.html",
       "3dp_monitor.css",
       "3dp_panel.css",
+      "favicon.ico",
       "3dp_lib/**/*",
       "electron/**/*",
+      "build/icon-source.png",
       "node_modules/**/*",
       "!node_modules/electron/**",
       "!node_modules/electron-builder/**",
@@ -39,17 +45,32 @@
     ],
     "win": {
       "target": [
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
+        { "target": "nsis",     "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
       ],
-      "icon": null
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "3dpmon",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "language": "1041",
+      "multiLanguageInstaller": true,
+      "license": "build/license_ja.txt",
+      "include": "build/installer.nsh",
+      "artifactName": "${productName}-${version}-setup.${ext}",
+      "uninstallDisplayName": "${productName} ${version}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable.exe"
+      "artifactName": "${productName}-${version}-portable.${ext}",
+      "requestExecutionLevel": "user"
     }
   },
   "dependencies": {
