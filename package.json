@@ -1,6 +1,6 @@
 {
   "name": "3dpmon",
-  "version": "2.2.003",
+  "version": "2.2.004",
   "description": "3Dプリンタ監視ダッシュボード - Electron版",
   "main": "electron/main.js",
   "scripts": {
@@ -41,7 +41,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": null
@@ -55,12 +57,13 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^26.8.1",
     "eslint": "^9.0.0",
-    "@eslint/js": "^9.0.0",
-    "eslint-plugin-jsdoc": "^50.0.0",
     "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-jsdoc": "^50.0.0",
+    "jsdom": "^29.1.1",
     "prettier": "^3.4.0",
     "stylelint": "^16.0.0",
     "stylelint-config-standard": "^37.0.0",

@@ -44,6 +44,8 @@ const CAMERA_MAX_RETRY      = 5;
 const DEFAULT_RETRY_DELAY   = 2000;
 /** @constant {number} デフォルトのストリーム提供ポート */
 const DEFAULT_STREAM_PORT   = 8080;
+/** @constant {number} watchdog タイムアウト (ms) — onload/onerror が来なければ強制的に失敗扱い */
+const CAMERA_WATCHDOG_MS    = 10_000;
 
 // ─── ホスト別カメラ状態レジストリ ─────────────────────────────
 /**
@@ -55,9 +57,14 @@ const DEFAULT_STREAM_PORT   = 8080;
  * @property {HTMLImageElement} img       - パネル内の <img> 要素
  * @property {HTMLElement}      body      - パネル本体要素（.panel-body）
  * @property {HTMLInputElement|null} toggle - ヘッダー内のトグルスイッチ
+ * @property {string}   hostname          - ホスト名（ログ・通知用）
  * @property {number}   attempts          - リトライ試行回数
  * @property {number|null} retryTimeout   - setTimeout ID
  * @property {number|null} countdownTimer - setInterval ID
+ * @property {number|null} watchdogTimer  - setTimeout ID (img.src 後の応答監視)
+ * @property {number}   _generation       - stale 検出用 epoch カウンタ
+ *                                          各非同期コールバックはクロージャでこの値をキャプチャし
+ *                                          発火時に entry._generation と比較して stale なら return する
  * @property {boolean}  firstConnected    - 初回接続完了フラグ
  * @property {boolean}  userStopped       - ユーザによる明示停止フラグ
  * @property {boolean}  serviceNotified   - サービス停止通知済みフラグ
@@ -83,9 +90,21 @@ const cameraRegistry = new Map();
  * @returns {void}
  */
 export function registerCameraPanel(hostname, img, body, toggle) {
-  /* 既存エントリがあればタイマーをクリーンアップ */
+  /* 既存エントリの完全停止（順序重要） */
   const prev = cameraRegistry.get(hostname);
-  if (prev) _cancelTimers(prev);
+  if (prev) {
+    // 1. ハンドラ・タイマーを全クリア（src="" で onerror が発火するのを防ぐ）
+    _cancelTimers(prev);
+    // 2. generation インクリメントで suspend 中の async onerror を stale 化
+    prev._generation = (prev._generation || 0) + 1;
+    // 3. 旧 img の MJPEG TCP 接続を切断
+    if (prev.img) {
+      prev.img.src = "";
+      prev.img.classList.add("off");
+    }
+    // 4. リトライ抑制フラグ
+    prev.userStopped = true;
+  }
 
   cameraRegistry.set(hostname, {
     hostname,
@@ -95,6 +114,8 @@ export function registerCameraPanel(hostname, img, body, toggle) {
     attempts: 0,
     retryTimeout: null,
     countdownTimer: null,
+    watchdogTimer: null,
+    _generation: 0,
     firstConnected: false,
     userStopped: false,
     serviceNotified: false
@@ -112,6 +133,8 @@ export function registerCameraPanel(hostname, img, body, toggle) {
 export function unregisterCameraPanel(hostname) {
   const entry = cameraRegistry.get(hostname);
   if (!entry) return;
+  // suspend 中の async onerror を stale 化（orphan タイマー防止）
+  entry._generation = (entry._generation || 0) + 1;
   _stopEntry(entry);
   cameraRegistry.delete(hostname);
 }
@@ -135,6 +158,11 @@ export function startCameraStream(hostname) {
     /* レジストリ未登録（パネルが閉じている等）→ 何もしない */
     return;
   }
+
+  /* ★ 並行制御: 既存接続を完全停止してから新規開始
+     handleSocketOpen + initCameraPanel からの同時呼び出しを安全にする */
+  _cancelTimers(entry);
+  entry._generation++;  // 旧コールバックを全て stale にする
 
   entry.userStopped = false;
   entry.serviceNotified = false;
@@ -238,6 +266,22 @@ function _cancelTimers(entry) {
     clearInterval(entry.countdownTimer);
     entry.countdownTimer = null;
   }
+  if (entry.watchdogTimer != null) {
+    clearTimeout(entry.watchdogTimer);
+    entry.watchdogTimer = null;
+  }
+}
+
+/**
+ * watchdog タイマーのみクリア（onload/onerror 発火時の即時クリア用）。
+ * @private
+ * @param {CameraPanelEntry} entry
+ */
+function _clearWatchdog(entry) {
+  if (entry.watchdogTimer != null) {
+    clearTimeout(entry.watchdogTimer);
+    entry.watchdogTimer = null;
+  }
 }
 
 /**
@@ -309,8 +353,13 @@ function _connectStream(entry, host) {
 
   _cancelTimers(entry);
 
+  /* ★ このコールバックが有効な世代を記憶（stale 検出用） */
+  const gen = entry._generation;
+
   /* 読み込み成功 */
   entry.img.onload = () => {
+    _clearWatchdog(entry);
+    if (entry._generation !== gen) return;  // stale (re-register/start中)
     if (entry.userStopped) return;
 
     _cancelTimers(entry);
@@ -330,52 +379,102 @@ function _connectStream(entry, host) {
 
   /* 読み込みエラー */
   entry.img.onerror = async () => {
+    _clearWatchdog(entry);
+    if (entry._generation !== gen) return;  // stale (再入 or unregister 済み)
     if (entry.userStopped) return;
+
+    /* ★ 再入ガード: 自分の generation をインクリメントして
+        suspend 中に発火する2回目以降の onerror を stale 化 */
+    entry._generation++;
+    const myGen = entry._generation;
 
     /* サービス停止チェック */
     if (!entry.serviceNotified && await _isServiceDown(host, port)) {
+      if (entry._generation !== myGen) return;  // await 中に外部変更 → stale
       entry.serviceNotified = true;
+      _cancelTimers(entry);
       _updateUI(entry, "disconnected");
       pushLog("機器側の動画配信サービスが異常停止しています", "error", false, entry.hostname);
       notificationManager.notify("cameraServiceStopped", { hostname: entry.hostname });
       return;
     }
 
-    /* 通常の再試行ロジック */
-    _updateUI(entry, "retrying", {
-      attempt: entry.attempts + 1,
-      max: CAMERA_MAX_RETRY,
-      wait: waitSec
-    });
-    pushLog(`カメラ切断検知 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "warn", false, entry.hostname);
+    if (entry._generation !== myGen) return;  // await 後の stale チェック
 
-    /* カウントダウン表示 */
-    let remaining = waitSec;
-    entry.countdownTimer = setInterval(() => {
-      remaining--;
-      if (remaining > 0) {
-        _updateUI(entry, "retrying", {
-          attempt: entry.attempts + 1,
-          max: CAMERA_MAX_RETRY,
-          wait: remaining
-        });
-      } else {
-        clearInterval(entry.countdownTimer);
-        entry.countdownTimer = null;
-      }
-    }, 1000);
-
-    /* リトライスケジュール */
-    entry.retryTimeout = setTimeout(() => {
-      if (entry.userStopped) return;
-      entry.img.src = "";
-      _connectStream(entry, host);
-    }, delayMs);
+    /* リトライをスケジュール */
+    _scheduleRetry(entry, host, delayMs, waitSec);
   };
 
   /* ストリーム開始 */
   entry.img.src = url;
   entry.img.classList.remove("off");
+
+  /* ★ watchdog: onload/onerror が CAMERA_WATCHDOG_MS 以内に来なければ強制的に失敗扱い
+      MJPEG ストリームでサーバが TCP 接続を受け入れたが正常にデータを返さない場合、
+      onload/onerror がどちらも発火せず、ブラウザが CPU 100% で固まる問題への対策 */
+  entry.watchdogTimer = setTimeout(() => {
+    entry.watchdogTimer = null;
+    if (entry._generation !== gen) return;  // stale
+    if (entry.userStopped) return;
+
+    // ハンドラを null にしてから src="" で接続を強制終了
+    // （src="" による spurious onerror が onerror ロジックを再実行するのを防止）
+    entry.img.onload = null;
+    entry.img.onerror = null;
+    entry.img.src = "";
+    pushLog(
+      `カメラ watchdog タイムアウト (${CAMERA_WATCHDOG_MS}ms) — サーバ応答なし`,
+      "warn", false, entry.hostname
+    );
+    // 旧 generation のハンドラを stale 化してからリトライ
+    entry._generation++;
+    _scheduleRetry(entry, host, delayMs, waitSec);
+  }, CAMERA_WATCHDOG_MS);
+}
+
+/**
+ * リトライをスケジュールする（カウントダウン UI + setTimeout）。
+ * onerror と watchdog の両経路から共通利用。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry
+ * @param {string} host
+ * @param {number} delayMs
+ * @param {number} waitSec
+ */
+function _scheduleRetry(entry, host, delayMs, waitSec) {
+  if (entry.userStopped) return;
+
+  _updateUI(entry, "retrying", {
+    attempt: entry.attempts + 1,
+    max: CAMERA_MAX_RETRY,
+    wait: waitSec
+  });
+  pushLog(`カメラ切断検知 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "warn", false, entry.hostname);
+
+  /* カウントダウン表示 */
+  let remaining = waitSec;
+  entry.countdownTimer = setInterval(() => {
+    remaining--;
+    if (remaining > 0) {
+      _updateUI(entry, "retrying", {
+        attempt: entry.attempts + 1,
+        max: CAMERA_MAX_RETRY,
+        wait: remaining
+      });
+    } else {
+      clearInterval(entry.countdownTimer);
+      entry.countdownTimer = null;
+    }
+  }, 1000);
+
+  /* リトライ実行 */
+  entry.retryTimeout = setTimeout(() => {
+    entry.retryTimeout = null;
+    if (entry.userStopped) return;
+    if (entry.img) entry.img.src = "";
+    _connectStream(entry, host);
+  }, delayMs);
 }
 
 /**
