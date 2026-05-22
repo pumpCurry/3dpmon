@@ -696,7 +696,10 @@ function _writePerHostLocalStorage() {
     if (host === PLACEHOLDER_HOSTNAME) continue;
     activeHosts.add(host);
     const hostKey = LS_KEY_HOST_PREFIX + _encodeHostKey(host);
-    const hostJson = JSON.stringify(machine);
+    /* ★ runtimeData は揮発状態のため永続化から除外
+       (IndexedDB パスでは queueMachineWrite が除外済み、localStorage パスは未対応だった) */
+    const { runtimeData: _omit, ...serializableMachine } = machine;
+    const hostJson = JSON.stringify(serializableMachine);
     // per-host のデデュープは簡易チェック（サイズ比較）
     const prev = localStorage.getItem(hostKey);
     if (prev && prev.length === hostJson.length && prev === hostJson) continue;

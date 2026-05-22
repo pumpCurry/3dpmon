@@ -239,17 +239,23 @@ function _makeTimestamp() {
 async function doExport(toast) {
   try {
     const data = await exportAllData();
-    data._exportVersion = "2.00";
+    // ★ _exportVersion は exportAllData が "2.20" を設定済み。手動上書きしない
     data._exportDate = new Date().toISOString();
+    const exportVersion = data._exportVersion || "2.00";
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `3dpmon_export_${_makeTimestamp()}.json`;
+    /* ★ DOM に append してから click 必須(Chromium で安定動作)。
+       revokeObjectURL は遅延必須 — a.click() はダウンロード開始の合図のみで
+       Blob 読み取りは非同期。即時 revoke するとファイルが空・破損する */
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
-    toast("v2.00 形式でエクスポートしました");
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    toast(`${exportVersion} 形式でエクスポートしました`);
   } catch (e) {
     console.error("[doExport]", e);
     toast("エクスポートに失敗しました", true);
@@ -284,7 +290,8 @@ function doImport(toast) {
           toast("v1.40 形式のデータはサポート終了しました。v2.1.017 で変換してください。", true);
           return;
         }
-        /* メタデータキーを除去してからインポート */
+        /* ★ メタデータキーを除去する前に version を退避（toast メッセージ用） */
+        const version = importData._exportVersion || "v2.00";
         delete importData._exportVersion;
         delete importData._exportDate;
         delete importData._convertedFrom;
@@ -331,6 +338,8 @@ function doImportHistoryOnly(toast) {
           toast("v1.40 形式のデータはサポート終了しました。v2.1.017 で変換してください。", true);
           return;
         }
+        /* ★ メタデータキーを除去する前に version を退避（toast メッセージ用） */
+        const version = importData._exportVersion || "v2.00";
         delete importData._exportVersion;
         delete importData._exportDate;
         delete importData._convertedFrom;
