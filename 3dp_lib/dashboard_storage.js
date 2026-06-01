@@ -706,15 +706,43 @@ function _writePerHostLocalStorage() {
     localStorage.setItem(hostKey, hostJson);
   }
 
-  // 孤児ホストキーの削除（machines に存在しないホスト）
+  // 孤児ホストキーの掃除は「データを持たない空キーのみ」に限定する。
+  // ★ かつては machines に無いホストキーを無条件 removeItem しており、
+  //   一時的に machines から外れた(IP変化/mDNS障害/未復元タイミング等)機器の
+  //   印刷履歴・フィラメント履歴ごと消去する破壊的バグだった。
+  //   = 実質「現在アクティブな1ホスト群だけ生存、他は消去」という
+  //     優先ホスト・アンチパターン。データ損失は許容しない。
+  //   IP→ホスト名移行に伴う旧IPキー削除は updateConnectionHost が明示的に行う。
   const storedHosts = _discoverHostKeysInLocalStorage();
   for (const host of storedHosts) {
-    if (!activeHosts.has(host)) {
-      localStorage.removeItem(LS_KEY_HOST_PREFIX + _encodeHostKey(host));
-    }
+    if (activeHosts.has(host)) continue;
+    try {
+      const key = LS_KEY_HOST_PREFIX + _encodeHostKey(host);
+      const rawJson = localStorage.getItem(key);
+      if (!rawJson) continue;
+      const parsed = JSON.parse(rawJson);
+      // データを持つ孤児キーは決して自動削除しない（保持して手動削除に委ねる）
+      if (isEmptyHostShell(parsed)) {
+        localStorage.removeItem(key);  // 空シェルのみ掃除
+      }
+    } catch { /* パース不能なキーは触らない（安全側） */ }
   }
 
   // ★ 旧統一キー STORAGE_KEY は v2.2.0 で削除済み。
+}
+
+/**
+ * 保存済みホストデータが「掃除してよい空シェル」かを判定する純関数。
+ * 印刷履歴(printStore.history) も storedData も持たない場合のみ true。
+ * データを持つ孤児ホストキーの自動削除を防ぎ、データ損失を回避するために使う。
+ *
+ * @param {Object|null|undefined} parsed - localStorage から復元したホストデータ
+ * @returns {boolean} 空シェル（削除可）なら true
+ */
+export function isEmptyHostShell(parsed) {
+  const hasHistory = (parsed?.printStore?.history?.length || 0) > 0;
+  const hasStored  = parsed?.storedData && Object.keys(parsed.storedData).length > 0;
+  return !hasHistory && !hasStored;
 }
 
 /**

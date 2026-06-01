@@ -49,7 +49,8 @@ vi.mock('../../3dp_lib/dashboard_filament_change.js', () => ({
 vi.mock('../../3dp_lib/dashboard_ui_mapping.js', () => ({ PRINT_STATE_CODE: {} }));
 vi.mock('../../3dp_lib/dashboard_aggregator.js', () => ({ getCurrentPrintID: vi.fn() }));
 
-const { registerGcodeMetaForHosts } = await import('../../3dp_lib/dashboard_printmanager.js');
+const { registerGcodeMetaForHosts, resolveHistoryFinishStatus } =
+  await import('../../3dp_lib/dashboard_printmanager.js');
 
 describe('registerGcodeMetaForHosts — マルチホスト gcode メタ登録', () => {
   let cache;
@@ -118,5 +119,59 @@ describe('registerGcodeMetaForHosts — マルチホスト gcode メタ登録', 
     expect(cache.has('h1:x.gcode')).toBe(true);
     expect(cache.has('h2:x.gcode')).toBe(true);
     expect(cache.size).toBe(2);
+  });
+});
+
+describe('resolveHistoryFinishStatus — 印刷中は currentPrintID 一致のみ', () => {
+  it('現在の印刷ジョブ(isCurrentJob)のみ ▶ 印刷中表示', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: true, isPaused: false, printfinish: 0 });
+    expect(r.finish).toBe('▶');
+    expect(r.finishCls).toBe('result-active');
+  });
+
+  it('現在の印刷ジョブが一時停止中なら ⏸', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: true, isPaused: true, printfinish: null });
+    expect(r.finish).toBe('⏸');
+    expect(r.finishCls).toBe('result-active');
+  });
+
+  it('★回帰: 非カレントジョブは printfinish=0 でも決して印刷中にならない', () => {
+    // かつては endtime 未設定 + printfinish=0 で ▶ になり、再取得時に
+    // currentPrintID と無関係な複数行が「印刷中」になっていた
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: 0 });
+    expect(r.finish).toBe('✗');
+    expect(r.finishCls).toBe('result-ng');
+  });
+
+  it('★回帰: 非カレント + printfinish=null も印刷中にならない', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: null });
+    expect(r.finish).toBe('✗');
+  });
+
+  it('★回帰: 非カレント + printfinish=undefined も印刷中にならない', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: undefined });
+    expect(r.finish).toBe('✗');
+  });
+
+  it('printfinish=1 は成功 ✔（非カレント時）', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: 1 });
+    expect(r.finish).toBe('✔');
+    expect(r.finishCls).toBe('result-ok');
+  });
+
+  it('printfinish=-1(明示的失敗)は ✗', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: -1 });
+    expect(r.finish).toBe('✗');
+  });
+
+  it('複数の非カレント未完了ジョブは全て ✗（印刷中は1つも生まれない）', () => {
+    const jobs = [
+      { isCurrentJob: false, isPaused: false, printfinish: 0 },
+      { isCurrentJob: false, isPaused: false, printfinish: null },
+      { isCurrentJob: false, isPaused: false, printfinish: 0 },
+    ];
+    const results = jobs.map(resolveHistoryFinishStatus);
+    const activeCount = results.filter(r => r.finishCls === 'result-active').length;
+    expect(activeCount).toBe(0);  // 印刷中は0個
   });
 });

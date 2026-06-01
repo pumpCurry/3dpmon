@@ -1101,6 +1101,32 @@ export function updateVideoList(videoArray, baseUrl, host) {
 }
 
 /**
+ * 印刷履歴1行の成否アイコン/クラスを決定する純関数。
+ *
+ * ★ 重要不変条件: 「印刷中(▶/⏸)」は isCurrentJob（currentPrintID 一致 かつ
+ *   aggregator 状態が printStarted/printPaused）が真のときのみ。
+ *   currentPrintID と一致しないジョブは printfinish の値に関わらず決して
+ *   「印刷中」と表示しない（再取得時の複数印刷中コンタミネーション防止）。
+ *
+ * @param {Object}  params
+ * @param {boolean} params.isCurrentJob - 現在の印刷ジョブと一致し稼働中か
+ * @param {boolean} params.isPaused     - 一時停止中か
+ * @param {number|null|undefined} params.printfinish - 完了フラグ(1=成功)
+ * @returns {{finish: string, finishCls: string}}
+ */
+export function resolveHistoryFinishStatus({ isCurrentJob, isPaused, printfinish }) {
+  if (isCurrentJob) {
+    // 唯一の「印刷中」: 現在の印刷ジョブ
+    return { finish: isPaused ? "⏸" : "▶", finishCls: "result-active" };
+  }
+  if (printfinish === 1) {
+    return { finish: "✔", finishCls: "result-ok" };
+  }
+  // 非カレント かつ 成功でない → 失敗/中断として ✗
+  return { finish: "✗", finishCls: "result-ng" };
+}
+
+/**
  * rawArray の各エントリを HTML テーブルに描画し、
  * 操作ボタンにイベントをバインドします。
  * グループ化された多段行レイアウトで表示する。
@@ -1163,32 +1189,16 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       raw.usagematerial != null
         ? formatFilamentAmount(raw.usagematerial, spoolForFmt).display
         : "—";
-    /* 成否表示: 印刷中/一時停止中のジョブは ▶/⏸ で表示 */
+    /* 成否表示: 印刷中/一時停止中のジョブは ▶/⏸ で表示
+       ★ 「印刷中」は『現在印刷しているID(currentPrintID)と一致 かつ
+          aggregator 状態が printStarted/printPaused』のみで判定する。
+          1機器で同時に印刷中なのは最大1ジョブのため、印刷中行は最大1行。 */
     const isCurrentJob = curPrintId && String(raw.id) === String(curPrintId) && isActive(printState);
-    let finish, finishCls;
-    if (isCurrentJob) {
-      // ★ aggregator が認識している現在の印刷ジョブ
-      finish    = printState === PRINT_STATE_CODE.printPaused ? "⏸" : "▶";
-      finishCls = "result-active";
-    } else if (raw.printfinish === 1) {
-      finish    = "✔";
-      finishCls = "result-ok";
-    } else if (raw.printfinish === null || raw.printfinish === undefined || raw.printfinish === 0) {
-      // ★ printfinish=null/undefined/0 の判定:
-      //   endtime 未設定 → まだ印刷中（▶ 表示）
-      //   endtime あり → 印刷は終了したが成功していない = 失敗（✗ 表示）
-      if (!raw.endtime || raw.endtime === 0) {
-        finish    = "▶";
-        finishCls = "result-active";
-      } else {
-        finish    = "✗";
-        finishCls = "result-ng";
-      }
-    } else {
-      // printfinish が -1 等 — 明示的な失敗
-      finish    = "✗";
-      finishCls = "result-ng";
-    }
+    const { finish, finishCls } = resolveHistoryFinishStatus({
+      isCurrentJob,
+      isPaused: printState === PRINT_STATE_CODE.printPaused,
+      printfinish: raw.printfinish
+    });
     const md5short  = raw.filemd5 ? raw.filemd5.substring(0, 8) : "";
     const videoLink = raw.videoUrl
       ? `<button class="video-link icon-btn" data-url="${raw.videoUrl}" title="動画">📹</button>`
