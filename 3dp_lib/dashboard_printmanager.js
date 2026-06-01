@@ -218,6 +218,31 @@ function _saveGcodeMetaCache() {
   } catch { /* 無視 */ }
 }
 
+/**
+ * gcode メタデータを「アップロード先の全ホスト」のキャッシュへ登録する純関数。
+ *
+ * マルチホストアップロード時、平均時間(印刷予定秒数)が1番目の機器にしか
+ * 登録されないコンタミネーションバグを防ぐため、targets 全件へ
+ * `${host}:${filename}` キーで書き込む。
+ *
+ * @param {Map<string, object>} cache    - 書き込み先キャッシュ Map
+ * @param {string[]} targets             - アップロード先ホスト名の配列
+ * @param {string} filename              - ファイル名(basename)
+ * @param {object} meta                  - gcode メタデータ
+ * @returns {number} 書き込んだホスト数
+ */
+export function registerGcodeMetaForHosts(cache, targets, filename, meta) {
+  if (!cache || !Array.isArray(targets) || !filename) return 0;
+  if (!meta || Object.keys(meta).length === 0) return 0;
+  let count = 0;
+  for (const h of targets) {
+    if (!h) continue;
+    cache.set(`${h}:${filename}`, meta);
+    count++;
+  }
+  return count;
+}
+
 /*
  * サムネイル URL を生成（メーカー仕様: downloads/humbnail/{basename}.png）
  * @param {string} baseUrl    サーバーのベース URL (例: "http://192.168.1.5")
@@ -1999,10 +2024,9 @@ export function setupUploadUI(root, hostname) {
       updateProgress(file.size, file.size);
       thumb = extractThumb(text);
       gcMeta = _extractGcodeMeta(text);
-      if (Object.keys(gcMeta).length > 0) {
-        _gcodeMetaCache.set(`${hostname}:${file.name}`, gcMeta);
-        _saveGcodeMetaCache();
-      }
+      // ★ ここでは抽出のみ。キャッシュ書き込みはアップロード先(targets)確定後に
+      //   全ホストへ行う（後段参照）。単一ホストキーへの先行書き込みは
+      //   「平均時間が1番目の機器にしか登録されない」コンタミネーションの原因だった。
     } catch (e) {
       hideProgress();
       btn.disabled = false;
@@ -2116,6 +2140,13 @@ export function setupUploadUI(root, hostname) {
         confirmText: "OK"
       });
       return;
+    }
+
+    // ★ gcode メタ（印刷予定秒数など）を「アップロードする全ホスト」のキャッシュへ登録。
+    //   renderFileList は `${host}:${basename}` キーで平均時間を引くため、
+    //   全ターゲットに書かないと2番目以降の機器で平均時間が "—" になる。
+    if (registerGcodeMetaForHosts(_gcodeMetaCache, targets, file.name, gcMeta) > 0) {
+      _saveGcodeMetaCache();
     }
 
     btn.disabled = true;
