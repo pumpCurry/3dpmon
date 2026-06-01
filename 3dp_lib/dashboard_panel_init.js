@@ -777,6 +777,10 @@ export function registerAllPanelInits() {
       }
     }
   });
+  registerPanelDestroy("file-list", (body, hostname) => {
+    /* アップロード UI レジストリから解除し detached DOM 参照を残さない */
+    try { printManager.unregisterUploadPanel(hostname); } catch { /* 無視 */ }
+  });
   registerPanelDestroy("head-preview", (body, hostname) => {
     destroyPreviewPanel(hostname);
   });

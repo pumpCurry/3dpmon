@@ -1461,8 +1461,18 @@ export function updatePrinterListUI() {
 
   // セレクトボックス更新（従来UI）
   if (sel) {
+    // ★ 更新前の選択を保持し、リスト再構築後も同じホストを維持する。
+    //   かつては毎回 hosts[0] にリセットしており、UI リフレッシュのたびに
+    //   選択が最初のホストへ戻る「優先1ホスト」挙動だった。
+    const prevSelected = sel.value;
     sel.innerHTML = hosts.map(h => `<option value="${h}">${h}</option>`).join("");
-    sel.value = hosts[0] || "";
+    if (hosts.includes(prevSelected)) {
+      sel.value = prevSelected;
+    } else if (hosts.length > 0) {
+      sel.value = hosts[0];
+    } else {
+      sel.value = "";
+    }
   }
 
   // ── プリンタ情報をビルド（共通データ） ──

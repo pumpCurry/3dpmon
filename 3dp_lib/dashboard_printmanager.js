@@ -178,6 +178,85 @@ let _dropHandlerInstalled = false;
 /** アップロード確認ダイアログでの選択済みホスト（confirmボタン押下時にキャプチャ） */
 let _lastSelectedUploadHosts = [];
 
+/**
+ * D&D ドロップ時に呼ぶファイル処理関数（モジュールレベル参照）。
+ * 各 setupUploadUI 呼び出しで最新の prepareAndConfirm に更新される。
+ * ★ かつてはドキュメント drop ハンドラが「最初に初期化されたパネルの
+ *   クロージャ」を永続キャプチャしており、2番目以降のパネルにドロップしても
+ *   最初のホストの UI・hostname で処理されるコンタミネーション欠陥があった。
+ *   この参照を介すことで「どのパネルから登録されても等価な host 非依存処理」を呼ぶ。
+ * @type {((file: File) => void)|null}
+ */
+let _dropFileHandler = null;
+
+/**
+ * ホスト別アップロード UI レジストリ。
+ * 各パネルの進捗バー/ボタン要素を hostname キーで保持し、
+ * アップロード進捗を「対象ホスト自身のパネル」へ表示するために使う。
+ * これにより全機器が自分のパネルに進捗を表示し、特定パネルへの固定を排除する。
+ * @type {Map<string, {btn: HTMLElement|null, progress: HTMLElement|null, percentEl: HTMLElement|null}>}
+ */
+const _uploadPanelRegistry = new Map();
+
+/** 指定ホストのアップロード UI 参照を取得（無ければ null） */
+function _hostUploadUI(host) {
+  return _uploadPanelRegistry.get(host) || null;
+}
+
+/** 指定ホストのパネル進捗バーを表示する */
+function _showHostProgress(host) {
+  const ui = _hostUploadUI(host);
+  if (ui?.progress) ui.progress.classList.remove("hidden");
+}
+
+/** 指定ホストのパネル進捗を更新する */
+function _updateHostProgress(host, loaded, total) {
+  const ui = _hostUploadUI(host);
+  if (!ui?.percentEl) return;
+  if (!total) { ui.percentEl.textContent = "0%"; return; }
+  const pct = Math.floor((loaded / total) * 100);
+  const remainMb = ((total - loaded) / (1024 * 1024)).toFixed(1);
+  ui.percentEl.textContent = `${pct}% (残り ${remainMb}MB)`;
+}
+
+/** 指定ホストのパネル進捗バーを隠す */
+function _hideHostProgress(host) {
+  const ui = _hostUploadUI(host);
+  if (ui?.progress) { ui.progress.classList.add("hidden"); _updateHostProgress(host, 0, 0); }
+}
+
+/** 指定ホストのアップロードボタン有効/無効を設定する */
+function _setHostBtnDisabled(host, disabled) {
+  const ui = _hostUploadUI(host);
+  if (ui?.btn) ui.btn.disabled = disabled;
+}
+
+/** 複数ホストへ一括で進捗表示/非表示/ボタン制御 */
+function _showProgressForHosts(hosts)  { for (const h of hosts) _showHostProgress(h); }
+function _hideProgressForHosts(hosts)  { for (const h of hosts) _hideHostProgress(h); }
+function _setBtnDisabledForHosts(hosts, d) { for (const h of hosts) _setHostBtnDisabled(h, d); }
+
+/**
+ * ファイル一覧パネル破棄時に呼び、アップロード UI レジストリから解除する。
+ * 破棄済みパネルの detached DOM 参照が残らないようにする。
+ *
+ * @param {string} hostname - 解除するホスト名
+ * @returns {void}
+ */
+export function unregisterUploadPanel(hostname) {
+  if (hostname) _uploadPanelRegistry.delete(hostname);
+}
+
+/**
+ * 現在アップロード UI レジストリに登録済みのホスト名一覧を返す。
+ * （主にテスト・診断用。per-host 登録の検証に使う）
+ *
+ * @returns {string[]} 登録済みホスト名の配列
+ */
+export function getRegisteredUploadHosts() {
+  return Array.from(_uploadPanelRegistry.keys());
+}
+
 
 // 最新のファイル一覧データ（renderFileList 実行時に更新、per-host）
 const _fileListMap = new Map();
@@ -1924,27 +2003,19 @@ export function setupUploadUI(root, hostname) {
   if (!btn || !input || !progress || !percentEl) return;
   /* ドロップオーバーレイが無い場合でもボタンアップロードは動作可能 */
 
-  let currentFile = null;
-
-  /**
-   * アップロード進捗バーを更新する。
-   *
-   * @param {number} loaded - 読み込み済みバイト数
-   * @param {number} total  - 全体のバイト数
-   * @returns {void}
-   */
-  function updateProgress(loaded, total) {
-    if (!total) { percentEl.textContent = "0%"; return; }
-    const pct = Math.floor((loaded / total) * 100);
-    const remain = total - loaded;
-    const remainMb = (remain / (1024 * 1024)).toFixed(1);
-    percentEl.textContent = `${pct}% (残り ${remainMb}MB)`;
+  // ★ このパネルの進捗 UI 要素を per-host レジストリへ登録。
+  //   アップロード進捗は「対象ホスト自身のパネル」へ表示するため、
+  //   _uploadToHost などはこのレジストリを参照する（特定パネル固定の排除）。
+  if (hostname) {
+    _uploadPanelRegistry.set(hostname, { btn, progress, percentEl });
   }
 
-  /** 進捗バーを表示する */
-  function showProgress() { progress.classList.remove("hidden"); }
-  /** 進捗バーを非表示にする */
-  function hideProgress() { progress.classList.add("hidden"); updateProgress(0,0); }
+  let currentFile = null;
+
+  /* 進捗バー操作はモジュールレベルの per-host ヘルパー
+     (_showHostProgress / _updateHostProgress / _hideHostProgress) に一本化。
+     かつての panel-closure 版 (showProgress/hideProgress/updateProgress) は
+     「最初に初期化されたパネル固定」コンタミネーションの原因のため廃止。 */
 
   /** ドロップオーバーレイを表示する */
   function showDropLayer() { dropLayer?.classList.remove("hidden"); }
@@ -1958,11 +2029,11 @@ export function setupUploadUI(root, hostname) {
    * @param {File} file - 読み込むファイル
    * @returns {Promise<string>} 読み込んだテキスト
    */
-  function readFile(file) {
+  function readFile(file, onProgress) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onprogress = e => {
-        if (e.lengthComputable) updateProgress(e.loaded, e.total);
+        if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
       };
       reader.onerror = () => reject(new Error("read error"));
       reader.onload = () => resolve(reader.result);
@@ -2015,21 +2086,27 @@ export function setupUploadUI(root, hostname) {
    */
   async function prepareAndConfirm(file) {
     currentFile = file;
-    btn.disabled = true;
-    showProgress();
+    // ★ ローカルファイル読み込みフェーズの進捗は、登録済み全パネルに等しく表示する
+    //   （D&D には起点パネルが無いため特定パネル固定を避ける）。
+    const registeredHosts = Array.from(_uploadPanelRegistry.keys());
+    _setBtnDisabledForHosts(registeredHosts, true);
+    _showProgressForHosts(registeredHosts);
+    const onReadProgress = (loaded, total) => {
+      for (const h of registeredHosts) _updateHostProgress(h, loaded, total);
+    };
     let thumb;
     let gcMeta = {};
     try {
-      const text = await readFile(file);
-      updateProgress(file.size, file.size);
+      const text = await readFile(file, onReadProgress);
+      onReadProgress(file.size, file.size);
       thumb = extractThumb(text);
       gcMeta = _extractGcodeMeta(text);
       // ★ ここでは抽出のみ。キャッシュ書き込みはアップロード先(targets)確定後に
       //   全ホストへ行う（後段参照）。単一ホストキーへの先行書き込みは
       //   「平均時間が1番目の機器にしか登録されない」コンタミネーションの原因だった。
     } catch (e) {
-      hideProgress();
-      btn.disabled = false;
+      _hideProgressForHosts(registeredHosts);
+      _setBtnDisabledForHosts(registeredHosts, false);
       console.error(e);
       showConfirmDialog({
         level: "error",
@@ -2039,11 +2116,8 @@ export function setupUploadUI(root, hostname) {
       });
       return;
     }
-    hideProgress();
-    btn.disabled = false;
-    if (!thumb) {
-      thumb = `http://${getDeviceIp(hostname)}/downloads/defData/file_icon.png`;
-    }
+    _hideProgressForHosts(registeredHosts);
+    _setBtnDisabledForHosts(registeredHosts, false);
 
     // 接続中プリンタ一覧（D&D版と同じロジック）
     const allHosts = Object.keys(monitorData.machines).filter(
@@ -2051,6 +2125,13 @@ export function setupUploadUI(root, hostname) {
         && monitorData.machines[h]?.storedData
         && getConnectionState(h) === "connected"
     );
+
+    // ★ サムネイル欠落時のフォールバックアイコンは、接続中の任意ホストが配信する
+    //   静的画像（全機種で同一）を使う。特定 hostname への依存を排除するため
+    //   allHosts 確定後に解決する。allHosts が空なら直後のエラー分岐で抜ける。
+    if (!thumb && allHosts.length > 0) {
+      thumb = `http://${getDeviceIp(allHosts[0])}/downloads/defData/file_icon.png`;
+    }
 
     // ★ 接続中ホストが0台なら即エラー
     if (allHosts.length === 0) {
@@ -2108,9 +2189,10 @@ export function setupUploadUI(root, hostname) {
       if (confirmBtn) {
         confirmBtn.addEventListener("click", () => {
           const checked = document.querySelectorAll(".pm-upload-host-chk:checked");
-          _lastSelectedUploadHosts = checked.length > 0
-            ? [...checked].map(el => el.value)
-            : [hostname];
+          // ★ 1件も選択されていなければ空配列。直後の「送信先未選択」エラーで止める。
+          //   かつては [hostname]（最初のホスト）にフォールバックし、全解除しても
+          //   最初の機器にだけ送信されるコンタミネーション欠陥だった。
+          _lastSelectedUploadHosts = [...checked].map(el => el.value);
         }, true);
       }
     }, 0);
@@ -2149,16 +2231,19 @@ export function setupUploadUI(root, hostname) {
       _saveGcodeMetaCache();
     }
 
-    btn.disabled = true;
-    showProgress();
-    updateProgress(0, file.size);
+    // ★ 進捗は「アップロード先の各ホスト自身のパネル」へ表示する。
+    //   各 _uploadToHost が対象ホストの進捗を更新するため、全機器が平等に
+    //   自分のパネルで進捗を確認できる（特定パネルへの固定を排除）。
+    _setBtnDisabledForHosts(targets, true);
+    _showProgressForHosts(targets);
+    for (const h of targets) _updateHostProgress(h, 0, file.size);
 
     // 全ホストへ並行アップロード + 結果サマリー
     const results = await Promise.all(
       targets.map(h => _uploadToHost(file, h))
     );
-    hideProgress();
-    btn.disabled = false;
+    _hideProgressForHosts(targets);
+    _setBtnDisabledForHosts(targets, false);
 
     const okList = results.filter(r => r.ok);
     const failList = results.filter(r => !r.ok);
@@ -2233,8 +2318,9 @@ export function setupUploadUI(root, hostname) {
       xhr.open("POST", url);
       // タイムアウト: ファイルサイズに応じて動的設定 (最低5分, 10ms/KB)
       xhr.timeout = Math.max(300000, Math.round(file.size / 1024 * 10));
+      // ★ 進捗は対象ホスト自身のパネルへ反映（特定パネルへの固定を排除）
       xhr.upload.onprogress = e => {
-        if (e.lengthComputable) updateProgress(e.loaded, e.total);
+        if (e.lengthComputable) _updateHostProgress(targetHost, e.loaded, e.total);
       };
 
       xhr.onload = async () => {
@@ -2284,7 +2370,14 @@ export function setupUploadUI(root, hostname) {
     }
   });
 
-  // ドキュメント全体のドラッグ&ドロップは1度だけ登録
+  // ★ D&D ドロップ時のファイル処理関数をモジュールレベル参照へ登録（毎回上書き）。
+  //   prepareAndConfirm は進捗を per-host、送信先を allHosts 動的取得で扱う
+  //   host 非依存処理になっているため、どのパネルが登録したものでも等価。
+  //   かつてはドキュメント drop ハンドラが最初のパネルのクロージャを永続
+  //   キャプチャしており、最初のホストの UI・hostname で処理されていた。
+  _dropFileHandler = prepareAndConfirm;
+
+  // ドキュメント全体のドラッグ&ドロップは1度だけ登録（host 非依存）
   if (!_dropHandlerInstalled) {
     _dropHandlerInstalled = true;
     document.addEventListener("dragover", e => {
@@ -2302,8 +2395,8 @@ export function setupUploadUI(root, hostname) {
       if (!e.dataTransfer?.files?.length) return;
       const file = e.dataTransfer.files[0];
 
-      // D&D も共通の prepareAndConfirm フローを使う
-      prepareAndConfirm(file);
+      // ★ 最新の host 非依存ハンドラ経由で処理（最初のパネル固定を排除）
+      _dropFileHandler?.(file);
     });
   }
 
