@@ -100,9 +100,44 @@ export function initRelayBridge() {
     console.debug(`[relay-bridge] スナップショット送信: ${data.clientId}`);
   });
 
+  // 子クライアントからの操作モード昇格要求の PIN 検証（親側のみが PIN を保持）
+  window.electronAPI.onRelayPromoteRequest?.((data) => {
+    const result = verifyPromotePin(data.pin);
+    window.electronAPI.relayPromoteResponse(data.clientId, result.granted, result.reason);
+    console.info(`[relay-bridge] 昇格要求 ${data.clientId}: ${result.granted ? "許可" : "拒否(" + result.reason + ")"}`);
+  });
+
   _initialized = true;
   console.info("[relay-bridge] 親側リレーブリッジ初期化完了");
   return true;
+}
+
+/**
+ * 子クライアントの昇格 PIN を親の設定と照合する純関数。
+ *
+ * - 親に PIN 未設定（空）なら確認ダイアログのみで昇格許可（granted）。
+ * - PIN 設定済みなら、入力 PIN が一致したときのみ許可。
+ *   入力が空 → "pin-required"、不一致 → "pin-mismatch" を理由に拒否。
+ *
+ * @param {string} inputPin - 子が入力した PIN
+ * @param {string} [configuredPin] - 親の設定 PIN（省略時は appSettings から取得）
+ * @returns {{granted: boolean, reason: string}}
+ */
+export function verifyPromotePin(inputPin, configuredPin) {
+  const pin = String(
+    configuredPin != null ? configuredPin : (monitorData.appSettings.relayPromotePin || "")
+  ).trim();
+  if (!pin) {
+    return { granted: true, reason: "" };           // PIN 未設定 → 許可
+  }
+  const entered = String(inputPin == null ? "" : inputPin).trim();
+  if (!entered) {
+    return { granted: false, reason: "pin-required" };
+  }
+  if (entered === pin) {
+    return { granted: true, reason: "" };
+  }
+  return { granted: false, reason: "pin-mismatch" };
 }
 
 /**

@@ -32,6 +32,8 @@ vi.mock('../../3dp_lib/dashboard_ui.js', () => ({
 }));
 vi.mock('../../3dp_lib/dashboard_printmanager.js', () => ({
   updateHistoryList: vi.fn(),
+  loadHistory: vi.fn(() => []),
+  saveHistory: vi.fn(),
 }));
 vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
   getDeviceIp: vi.fn(),
@@ -45,9 +47,13 @@ import {
   getSpoolStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
+  formatUsageHtml,
+  usageHeaderLabel,
   weightFromLength,
   lengthFromWeight,
   getMaterialDensity,
+  buildOfflineFilamentInfo,
+  shouldLinkOfflineJob,
 } from '../../3dp_lib/dashboard_spool.js';
 
 // =============================================
@@ -319,6 +325,109 @@ describe('formatFilamentAmount', () => {
     const result = formatFilamentAmount(12340);
     expect(typeof result.display).toBe('string');
     expect(result.display.length).toBeGreaterThan(0);
+  });
+});
+
+// =============================================
+// formatUsageHtml（単位トグル + 2段表示）
+// =============================================
+describe('formatUsageHtml', () => {
+  const spool = { density: 1.24, filamentDiameter: 1.75, totalLengthMm: 336000, purchasePrice: 1699, currencySymbol: '¥' };
+
+  it('m単位: 距離を m 表示', () => {
+    const html = formatUsageHtml(22800, null, 'm');
+    expect(html).toContain('22.8m');
+    expect(html).toContain('usage-dist');
+  });
+
+  it('mm単位: 距離を mm 表示（整数）', () => {
+    const html = formatUsageHtml(22800, null, 'mm');
+    expect(html).toContain('22800mm');
+    expect(html).not.toContain('22.8m');
+  });
+
+  it('スプール付き: 距離と (g, ¥) が別 span（2段）', () => {
+    const html = formatUsageHtml(168000, spool, 'm');
+    expect(html).toContain('usage-dist');
+    expect(html).toContain('usage-sub');
+    expect(html).toMatch(/\(\d+g, ¥\d+\)/);
+  });
+
+  it('スプールなし: 2行目(usage-sub)は出さない', () => {
+    const html = formatUsageHtml(22800, null, 'm');
+    expect(html).not.toContain('usage-sub');
+  });
+
+  it('mm単位でもスプールの g/¥ は維持される', () => {
+    const html = formatUsageHtml(168000, spool, 'mm');
+    expect(html).toContain('168000mm');
+    expect(html).toContain('usage-sub');
+  });
+
+  it('非有限値(NaN/undefined)は --- 表示', () => {
+    // null は Number(null)=0 として 0 表示（formatFilamentAmount 既存仕様）
+    expect(formatUsageHtml(NaN, null, 'mm')).toContain('---');
+    expect(formatUsageHtml(undefined, null, 'm')).toContain('---');
+    expect(formatUsageHtml(null, null, 'm')).toContain('0');
+  });
+
+  it('単位省略時は m', () => {
+    expect(formatUsageHtml(5000)).toContain('5.0m');
+  });
+});
+
+// =============================================
+// usageHeaderLabel
+// =============================================
+describe('usageHeaderLabel', () => {
+  it('m単位ヘッダー', () => {
+    expect(usageHeaderLabel('使用量', 'm')).toBe('使用量(m)');
+    expect(usageHeaderLabel('予定量', 'm')).toBe('予定量(m)');
+  });
+  it('mm単位ヘッダー', () => {
+    expect(usageHeaderLabel('使用量', 'mm')).toBe('使用量(mm)');
+  });
+  it('単位省略時は m', () => {
+    expect(usageHeaderLabel('使用量')).toBe('使用量(m)');
+  });
+});
+
+// =============================================
+// オフライン完了印刷のフィラメント継続紐付け
+// =============================================
+describe('buildOfflineFilamentInfo', () => {
+  const spool = {
+    id: 'sp-1', serialNo: 12, name: 'PLA+ 黒', colorName: '黒',
+    filamentColor: '#000', material: 'PLA+', printCount: 5, remainingLengthMm: 100000,
+  };
+  it('現在スプールの情報を filamentInfo に写す', () => {
+    const fi = buildOfflineFilamentInfo(spool, 22800);
+    expect(fi.spoolId).toBe('sp-1');
+    expect(fi.material).toBe('PLA+');
+    expect(fi.usedMm).toBe(22800);
+    expect(fi.expectedRemain).toBe(100000);
+    expect(fi.isOfflineInferred).toBe(true);
+  });
+  it('usedMm 不正値は 0', () => {
+    expect(buildOfflineFilamentInfo(spool, undefined).usedMm).toBe(0);
+    expect(buildOfflineFilamentInfo(spool, NaN).usedMm).toBe(0);
+  });
+});
+
+describe('shouldLinkOfflineJob', () => {
+  it('★紐付けなしジョブ → 紐付け対象(true)', () => {
+    expect(shouldLinkOfflineJob({ id: 1 })).toBe(true);
+    expect(shouldLinkOfflineJob({ id: 1, filamentInfo: [] })).toBe(true);
+  });
+  it('既に filamentInfo を持つジョブは尊重(上書きしない)', () => {
+    expect(shouldLinkOfflineJob({ id: 1, filamentInfo: [{ spoolId: 'x' }] })).toBe(false);
+  });
+  it('既に filamentId を持つジョブは尊重', () => {
+    expect(shouldLinkOfflineJob({ id: 1, filamentId: 'x' })).toBe(false);
+  });
+  it('null/undefined は false', () => {
+    expect(shouldLinkOfflineJob(null)).toBe(false);
+    expect(shouldLinkOfflineJob(undefined)).toBe(false);
   });
 });
 

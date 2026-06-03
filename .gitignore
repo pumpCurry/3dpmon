@@ -1,9 +1,19 @@
 # Node / Vite
 node_modules/
 dist/
+dist_build/
 .cache/
 .vite/
 
 # IDE
 .idea/
 .vscode/
+
+# Claude Code worktrees / session
+.claude/
+
+# エディタ/リンタが生成する一時ファイル
+*.tmp.*
+
+# ローカル検証用スクリプト
+scripts/test_multi_ws*.js

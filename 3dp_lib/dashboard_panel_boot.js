@@ -415,6 +415,14 @@ function _initTopMenuBar() {
       const camPort = document.getElementById("conn-modal-camera-port");
       if (camPort) camPort.value = monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
 
+      /* ★ リレー操作昇格PIN: 親(Electron)モードのみ表示・編集可。
+         子クライアント(ブラウザ)からは参照も変更もできない。 */
+      const relayPinLabel = document.getElementById("conn-modal-relay-pin-label");
+      const relayPin = document.getElementById("conn-modal-relay-pin");
+      const isParent = !!(window.electronAPI?.isElectron?.());
+      if (relayPinLabel) relayPinLabel.style.display = isParent ? "" : "none";
+      if (relayPin && isParent) relayPin.value = monitorData.appSettings.relayPromotePin || "";
+
       /* 入力欄をクリア */
       const modalIp = document.getElementById("conn-modal-ip");
       if (modalIp) modalIp.value = "";
@@ -453,6 +461,12 @@ function _initTopMenuBar() {
     const camPort = document.getElementById("conn-modal-camera-port");
     if (camPort && camPort.value) {
       monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || DEFAULT_CAMERA_PORT;
+    }
+
+    // ★ リレー操作昇格PIN: 親モードのみ保存（子は要素が非表示で値も持たない）
+    const relayPin = document.getElementById("conn-modal-relay-pin");
+    if (relayPin && window.electronAPI?.isElectron?.()) {
+      monitorData.appSettings.relayPromotePin = String(relayPin.value || "").trim();
     }
     // ★ 設定変更を即時保存（保存漏れでリスタート時に設定消失するバグ修正）
     saveUnifiedStorage(true);

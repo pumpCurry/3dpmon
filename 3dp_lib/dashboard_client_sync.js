@@ -184,10 +184,27 @@ function _handleRelayMessage(msg) {
       _clientId = msg.clientId;
       _relayMode = msg.mode;
       console.info(`[client-sync] 初期化: clientId=${_clientId}, mode=${_relayMode}`);
-      // body にモードクラスを設定（readonly制御CSSが適用される）
-      document.body.classList.add(`relay-${_relayMode}`);
-      // トップバーにモードバッジを表示
-      _showModeBadge(_relayMode);
+      _updateRelayModeUI(_relayMode);
+      _setupPromoteButton();
+      break;
+
+    case "relay-promote-granted":
+      console.info("[client-sync] 操作モードへ昇格しました");
+      _relayMode = "satellite";
+      _updateRelayModeUI("satellite");
+      _notifyModeChange("operate");
+      break;
+
+    case "relay-promote-denied":
+      console.warn(`[client-sync] 昇格拒否: ${msg.reason}`);
+      _onPromoteDenied(msg.reason);
+      break;
+
+    case "relay-demote-granted":
+      console.info("[client-sync] 閲覧専用に戻りました");
+      _relayMode = "readonly";
+      _updateRelayModeUI("readonly");
+      _notifyModeChange("view");
       break;
 
     case "relay-snapshot":
@@ -367,6 +384,20 @@ export function sendRelayCommand(method, params, hostname) {
  * @returns {boolean} 送信成功なら true
  */
 /**
+ * リレーモードに応じてUI（body クラス・バッジ・昇格ボタン）を一括更新する。
+ *
+ * @private
+ * @param {string} mode - "readonly" | "satellite"
+ */
+function _updateRelayModeUI(mode) {
+  // body クラス: 旧モードを除去して現モードを設定（readonly制御CSSの切替）
+  document.body.classList.remove("relay-readonly", "relay-satellite");
+  document.body.classList.add(`relay-${mode}`);
+  _showModeBadge(mode);
+  _updatePromoteButton(mode);
+}
+
+/**
  * トップバーにリレーモードバッジを表示する。
  *
  * @private
@@ -382,6 +413,141 @@ function _showModeBadge(mode) {
   badge.textContent = labels[mode] || mode;
   badge.className = `relay-mode-badge ${mode}`;
   badge.style.display = "";
+}
+
+/**
+ * 昇格/降格ボタンのラベル・表示をモードに合わせて更新する。
+ *
+ * @private
+ * @param {string} mode - "readonly" | "satellite"
+ */
+function _updatePromoteButton(mode) {
+  const btn = document.getElementById("relay-promote-btn");
+  if (!btn) return;
+  if (mode === "readonly") {
+    btn.textContent = "🛰 操作モードへ昇格";
+    btn.title = "プリンタを直接操作できるモードに切り替えます";
+    btn.style.display = "";
+  } else if (mode === "satellite") {
+    btn.textContent = "👁 閲覧専用に戻す";
+    btn.title = "操作を無効化し閲覧専用に戻します";
+    btn.style.display = "";
+  } else {
+    btn.style.display = "none";
+  }
+}
+
+/** 昇格ボタンのリスナー登録済みフラグ */
+let _promoteBtnWired = false;
+
+/**
+ * 昇格/降格ボタンにクリックリスナーを登録する（1度だけ）。
+ *
+ * @private
+ */
+function _setupPromoteButton() {
+  if (_promoteBtnWired) return;
+  const btn = document.getElementById("relay-promote-btn");
+  if (!btn) return;
+  _promoteBtnWired = true;
+  btn.addEventListener("click", _onPromoteButtonClick);
+}
+
+/**
+ * 昇格/降格ボタンのクリック処理。
+ * readonly→確認ダイアログ→昇格要求、satellite→確認ダイアログ→降格要求。
+ *
+ * @private
+ */
+async function _onPromoteButtonClick() {
+  const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+  if (_relayMode === "readonly") {
+    const ok = await showConfirmDialog({
+      level: "warn",
+      title: "操作モードへ昇格",
+      message: "プリンタを直接操作できるようになります。昇格しますか？",
+      confirmText: "昇格する",
+      cancelText: "キャンセル"
+    });
+    if (!ok) return;
+    _sendPromoteRequest("");  // まず PIN なしで要求。親が必要と判定したら PIN を促す
+  } else if (_relayMode === "satellite") {
+    const ok = await showConfirmDialog({
+      level: "info",
+      title: "閲覧専用に戻す",
+      message: "操作を無効化し、閲覧専用モードに戻します。よろしいですか？",
+      confirmText: "戻す",
+      cancelText: "キャンセル"
+    });
+    if (!ok) return;
+    if (_relayWs && _relayWs.readyState === 1) {
+      _relayWs.send(JSON.stringify({ type: "relay-demote-request" }));
+    }
+  }
+}
+
+/**
+ * 昇格要求をサーバへ送信する。
+ *
+ * @private
+ * @param {string} pin - 入力PIN（不要なら空文字）
+ */
+function _sendPromoteRequest(pin) {
+  if (!_relayWs || _relayWs.readyState !== 1) {
+    console.warn("[client-sync] リレー未接続のため昇格要求を送れません");
+    return;
+  }
+  _relayWs.send(JSON.stringify({ type: "relay-promote-request", pin: pin || "" }));
+}
+
+/**
+ * 昇格拒否時の処理。PIN 要求/不一致なら PIN 入力ダイアログを出して再要求する。
+ *
+ * @private
+ * @param {string} reason - 拒否理由
+ */
+async function _onPromoteDenied(reason) {
+  const { showConfirmDialog, showInputDialog } = await import("./dashboard_ui_confirm.js");
+  if (reason === "pin-required" || reason === "pin-mismatch") {
+    const message = reason === "pin-mismatch"
+      ? "PINが一致しません。もう一度入力してください。"
+      : "操作モードへの昇格にはPINが必要です。親機で設定されたPINを入力してください。";
+    const pin = await showInputDialog({
+      level: "warn",
+      title: "昇格PINの入力",
+      message,
+      placeholder: "PIN",
+      confirmText: "認証",
+      cancelText: "キャンセル"
+    });
+    if (pin == null || String(pin).trim() === "") return;
+    _sendPromoteRequest(String(pin).trim());
+  } else {
+    await showConfirmDialog({
+      level: "error",
+      title: "昇格できません",
+      message: `操作モードへの昇格が拒否されました (${reason || "denied"})`,
+      confirmText: "OK"
+    });
+  }
+}
+
+/**
+ * モード変更をトースト等で通知する（任意UI）。
+ *
+ * @private
+ * @param {string} kind - "operate" | "view"
+ */
+function _notifyModeChange(kind) {
+  try {
+    const label = kind === "operate" ? "操作モードに切り替えました" : "閲覧専用に戻しました";
+    const el = document.getElementById("relay-mode-badge");
+    if (el) {
+      el.classList.add("relay-mode-flash");
+      setTimeout(() => el.classList.remove("relay-mode-flash"), 1200);
+    }
+    console.info(`[client-sync] ${label}`);
+  } catch { /* 通知失敗は無視 */ }
 }
 
 export function sendRelayFilament(action, data) {

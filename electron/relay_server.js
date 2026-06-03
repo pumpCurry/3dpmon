@@ -111,9 +111,33 @@ function startRelayServer(httpServer, options = {}) {
   return {
     broadcastDelta,
     sendToClient,
+    resolvePromote,
     getClientCount: () => _clients.size,
     getClients: () => [..._clients].map(c => ({ id: c.id, mode: c.mode, connectedAt: c.connectedAt }))
   };
+}
+
+/**
+ * 親レンダラーの PIN 検証結果を受けて、対象クライアントの昇格を確定/拒否する。
+ *
+ * @param {string} clientId - 対象クライアントID
+ * @param {boolean} granted - 昇格を許可するか
+ * @param {string} [reason] - 拒否理由（"pin-required" | "pin-mismatch" 等）
+ * @returns {void}
+ */
+function resolvePromote(clientId, granted, reason) {
+  for (const client of _clients) {
+    if (client.id !== clientId) continue;
+    if (granted) {
+      client.mode = "satellite";
+      _safeSend(client.ws, { type: "relay-promote-granted" });
+      console.log(`[relay] ${clientId} を satellite に昇格`);
+    } else {
+      _safeSend(client.ws, { type: "relay-promote-denied", reason: reason || "denied" });
+      console.log(`[relay] ${clientId} の昇格を拒否 (${reason || "denied"})`);
+    }
+    break;
+  }
 }
 
 /**
@@ -158,13 +182,37 @@ function sendToClient(clientId, data) {
  * @param {Object} msg - 受信メッセージ
  */
 function _handleClientMessage(client, msg) {
-  // readonly モードはコマンド送信不可
-  if (client.mode === "readonly" && msg.type !== "relay-ping") {
+  // readonly モードはコマンド送信不可。
+  // ただし昇格/降格リクエストと ping は readonly でも受け付ける。
+  const ALWAYS_ALLOWED = new Set([
+    "relay-ping", "relay-promote-request", "relay-demote-request"
+  ]);
+  if (client.mode === "readonly" && !ALWAYS_ALLOWED.has(msg.type)) {
     _safeSend(client.ws, { type: "relay-error", message: "Readonly mode: commands not allowed" });
     return;
   }
 
   switch (msg.type) {
+    case "relay-promote-request":
+      // ★ 操作モードへの昇格要求。PIN 検証は親レンダラー（appSettings 保持側）に委譲する。
+      //   子クライアントは PIN を参照できないため、入力 PIN を親へ送り検証させる。
+      if (_sendToRenderer) {
+        _sendToRenderer("relay-promote-request", {
+          clientId: client.id,
+          pin: typeof msg.pin === "string" ? msg.pin : ""
+        });
+      } else {
+        _safeSend(client.ws, { type: "relay-promote-denied", reason: "no-parent" });
+      }
+      break;
+
+    case "relay-demote-request":
+      // ★ 閲覧専用への降格はサーバ側で即時実行（PIN 不要）
+      client.mode = "readonly";
+      _safeSend(client.ws, { type: "relay-demote-granted" });
+      console.log(`[relay] ${client.id} を readonly に降格`);
+      break;
+
     case "relay-command":
       // プリンタコマンドの中継: 子 → 親レンダラー → プリンタ
       if (_sendToRenderer && msg.target && msg.method) {

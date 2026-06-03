@@ -492,6 +492,11 @@ app.whenReady().then(async () => {
     if (relayServer) relayServer.sendToClient(clientId, { type: "relay-snapshot", state });
   });
 
+  // レンダラー(親) → リレー: 昇格PIN検証結果を反映
+  ipcMain.on("relay-promote-response", (_, { clientId, granted, reason }) => {
+    if (relayServer) relayServer.resolvePromote(clientId, granted, reason);
+  });
+
   // リレーサーバ情報の問い合わせ
   ipcMain.handle("relay-get-config", () => ({
     enabled: !!relayServer,

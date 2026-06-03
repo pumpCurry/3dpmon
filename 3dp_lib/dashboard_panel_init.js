@@ -673,11 +673,20 @@ function initCurrentPrintPanel(body, hostname) {
  * @param {string} hostname - ホスト名
  */
 function initHistoryPanel(body, hostname) {
-  // 履歴再読み込みボタン
+  // 履歴再読み込みボタン（印刷履歴: reqHistory）
   const refreshBtn = body.querySelector("#history-refresh-btn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
       sendCommand("get", { reqHistory: 1 }, hostname);
+    });
+  }
+
+  // 使用量 単位トグル（m/mm、全パネル共通・即時保存）
+  const unitToggle = body.querySelector("#history-unit-toggle");
+  if (unitToggle) {
+    unitToggle.addEventListener("click", () => {
+      const next = printManager.getFilamentUnit() === "m" ? "mm" : "m";
+      printManager.setFilamentUnit(next);
     });
   }
 
@@ -693,6 +702,9 @@ function initHistoryPanel(body, hostname) {
   } catch (e) {
     console.warn("[panel-init] history render エラー:", e);
   }
+
+  // 現在の単位設定をこのパネルのヘッダー/ボタン/セルへ反映
+  try { printManager.applyFilamentUnitToUI(); } catch { /* 無視 */ }
 }
 
 /**
@@ -708,6 +720,23 @@ function initFileListPanel(body, hostname) {
     console.warn("[panel-init] upload UI 初期化エラー:", e);
   }
 
+  // ファイル一覧再読み込みボタン（ファイル一覧: reqGcodeFile）
+  const refreshBtn = body.querySelector("#filelist-refresh-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      sendCommand("get", { reqGcodeFile: 1 }, hostname);
+    });
+  }
+
+  // 予定量 単位トグル（m/mm、全パネル共通・即時保存）
+  const unitToggle = body.querySelector("#filelist-unit-toggle");
+  if (unitToggle) {
+    unitToggle.addEventListener("click", () => {
+      const next = printManager.getFilamentUnit() === "m" ? "mm" : "m";
+      printManager.setFilamentUnit(next);
+    });
+  }
+
   // キャッシュ済みファイル一覧を表示（パネル生成前にデータ受信済みの場合）
   try {
     const machine = monitorData.machines[hostname];
@@ -719,6 +748,9 @@ function initFileListPanel(body, hostname) {
   } catch (e) {
     console.warn("[panel-init] file list render エラー:", e);
   }
+
+  // 現在の単位設定をこのパネルのヘッダー/ボタン/セルへ反映
+  try { printManager.applyFilamentUnitToUI(); } catch { /* 無視 */ }
 }
 
 /**

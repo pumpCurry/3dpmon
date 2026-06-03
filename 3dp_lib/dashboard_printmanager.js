@@ -38,6 +38,7 @@ import {
   savePrintHistory,
   loadPrintVideos,
   savePrintVideos,
+  saveUnifiedStorage,
   MAX_PRINT_HISTORY
 } from "./dashboard_storage.js";
 
@@ -53,6 +54,8 @@ import {
   getSpoolById,
   updateSpool,
   formatFilamentAmount,
+  formatUsageHtml,
+  usageHeaderLabel,
   formatSpoolDisplayId,
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
@@ -62,6 +65,60 @@ import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js"
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { getCurrentPrintID } from "./dashboard_aggregator.js";
+
+/**
+ * 現在の使用量表示単位を返す。
+ * @returns {"m"|"mm"}
+ */
+export function getFilamentUnit() {
+  return monitorData.appSettings.filamentUnit === "mm" ? "mm" : "m";
+}
+
+/**
+ * 使用量表示単位(m/mm)を設定し、即時保存して開いている全パネルの
+ * ヘッダー・トグルボタン・使用量セルを再描画なしで更新する。
+ *
+ * @param {"m"|"mm"} unit - 設定する単位
+ * @returns {void}
+ */
+export function setFilamentUnit(unit) {
+  const u = unit === "mm" ? "mm" : "m";
+  monitorData.appSettings.filamentUnit = u;
+  saveUnifiedStorage(true);  // ★ 即時保存
+  applyFilamentUnitToUI(u);
+}
+
+/**
+ * 現在の単位設定を全 UI（ヘッダー・トグルボタン・使用量セル）へ反映する。
+ * DOM を直接更新するため再フェッチ不要。
+ *
+ * @param {"m"|"mm"} [unit] - 適用する単位（省略時は設定値）
+ * @returns {void}
+ */
+export function applyFilamentUnitToUI(unit) {
+  const u = unit || getFilamentUnit();
+
+  // 1) ヘッダーラベル（data-unit-base を持つ th）
+  document.querySelectorAll("th[data-unit-base]").forEach(th => {
+    th.textContent = usageHeaderLabel(th.getAttribute("data-unit-base"), u);
+  });
+
+  // 2) トグルボタンのラベル
+  document.querySelectorAll(".unit-toggle-btn").forEach(btn => {
+    btn.textContent = `単位: ${u}`;
+  });
+
+  // 3) 使用量セル（data-mm を持つ .usage-cell）を再計算
+  document.querySelectorAll(".usage-cell[data-mm]").forEach(td => {
+    const mmStr = td.getAttribute("data-mm");
+    if (mmStr === "" || mmStr == null) return;  // "—" 等はそのまま
+    const mm = Number(mmStr);
+    if (!Number.isFinite(mm)) return;
+    const spoolId = td.getAttribute("data-spool") || "";
+    const spool = spoolId ? (getSpoolById(spoolId) || null) : null;
+    td.innerHTML = formatUsageHtml(mm, spool, u);
+  });
+}
 
 /**
  * 履歴エントリのスプール変更が現在印刷中ジョブに対するものか判定し、
@@ -1185,9 +1242,11 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     // フィラメント消費量: スプール情報があれば g/¥ 換算も表示
     const spoolForFmt = spoolInfos.length > 0
       ? (getSpoolById(spoolInfos[0].spoolId) || null) : null;
+    // ★ 単位トグル(m/mm)に応じて距離を切替、距離と (g, ¥) を2段表示
+    const _unit = monitorData.appSettings.filamentUnit === "mm" ? "mm" : "m";
     const umaterial =
       raw.usagematerial != null
-        ? formatFilamentAmount(raw.usagematerial, spoolForFmt).display
+        ? formatUsageHtml(raw.usagematerial, spoolForFmt, _unit)
         : "—";
     /* 成否表示: 印刷中/一時停止中のジョブは ▶/⏸ で表示
        ★ 「印刷中」は『現在印刷しているID(currentPrintID)と一致 かつ
@@ -1278,7 +1337,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         ${timeDetailHtml}
       </td>
       <td data-key="printfinish" class="col-finish"><span class="${finishCls}">${finish}</span></td>
-      <td data-key="usagematerial">${umaterial}</td>
+      <td data-key="usagematerial" class="usage-cell" data-mm="${raw.usagematerial != null ? raw.usagematerial : ''}" data-spool="${spoolForFmt?.id || ''}">${umaterial}</td>
       <td data-key="spool" class="col-spool">${spoolHtml}</td>
       <td data-key="filemd5" class="col-extra">
         ${videoLink}
@@ -2623,7 +2682,9 @@ export function renderFileList(info, baseUrl, hostname) {
 
     // ファイル別実績
     const insight = buildFileInsight(item.filename, hostname);
-    const expectFmt = formatFilamentAmount(item.expect, null);
+    // ★ 単位トグル(m/mm)に応じて予定量を表示（ファイル一覧は g/¥ 換算なし）
+    const _unit = monitorData.appSettings.filamentUnit === "mm" ? "mm" : "m";
+    const expectHtml = formatUsageHtml(item.expect, null, _unit);
 
     // 実績列: "4/5" (成功/全体) or "0"
     let printsLabel;
@@ -2662,7 +2723,7 @@ export function renderFileList(info, baseUrl, hostname) {
       <td data-key="layer">${item.layer.toLocaleString()}</td>
       <td data-key="size">${item.size.toLocaleString()}</td>
       <td data-key="mtime">${mtimeStr}</td>
-      <td data-key="expect">${expectFmt.display}</td>
+      <td data-key="expect" class="usage-cell" data-mm="${item.expect != null ? item.expect : ''}">${expectHtml}</td>
       <td data-key="prints">${printsLabel}</td>
       <td data-key="avgtime">${avgTimeLabel}</td>
       <td data-key="md5" class="col-md5" title="${item.filemd5 || ''}">${md5short}</td>
