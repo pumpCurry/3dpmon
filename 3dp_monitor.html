@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <!-- ★ app-version: ビルド時に scripts/sync-version.js が package.json から自動更新する -->
-  <meta name="app-version" content="2.2.1010" />
-  <title>3dpmon - 3Dプリンタ監視ダッシュボード</title>
+  <meta name="app-version" content="2.2.1011" />
+  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1011</title>
   <!-- サイトアイコン -->
   <link rel="icon" href="favicon.ico">
 
@@ -36,6 +36,8 @@
     <div class="menu-section">
       <strong>3dpmon</strong>
       <span id="relay-mode-badge" class="relay-mode-badge" style="display:none"></span>
+      <!-- リレー子クライアント用: 操作モード昇格/閲覧専用降格トグル（親では非表示） -->
+      <button id="relay-promote-btn" class="relay-promote-btn" style="display:none"></button>
       <span class="status-dot disconnected" id="top-status-dot"></span>
       <span id="top-conn-label" style="font-size:12px;">未接続</span>
     </div>
@@ -81,6 +83,10 @@
           </label>
           <label style="white-space:nowrap;">
             カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" step="1" inputmode="numeric" style="width:5em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="8080">
+          </label>
+          <!-- リレー操作昇格PIN（親モードのみ表示。子クライアントからは参照・変更不可） -->
+          <label id="conn-modal-relay-pin-label" style="white-space:nowrap;display:none;" title="ビューモードの端末が操作モードへ昇格する際に要求するPIN。空欄なら確認のみで昇格可。">
+            操作昇格PIN: <input type="text" id="conn-modal-relay-pin" autocomplete="off" style="width:6em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="未設定">
           </label>
           <span style="flex:1"></span>
           <button id="conn-modal-notif-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">🔔 通知設定</button>
@@ -846,7 +852,9 @@
     <!-- ─── 印刷履歴セクション ─── -->
     <div id="panel-print-history-section" class="history-panel-content">
       <div class="history-toolbar">
-        <button id="history-refresh-btn" class="btn btn-sm" aria-label="履歴を更新">再読み込み</button>
+        <button id="history-refresh-btn" class="icon-btn" aria-label="履歴を再読み込み" title="印刷履歴を再読み込み">🔄</button>
+        <span class="toolbar-spacer"></span>
+        <button id="history-unit-toggle" class="btn btn-sm unit-toggle-btn" aria-label="使用量の単位を切替" title="使用量の単位 m / mm を切替">単位: m</button>
       </div>
       <div id="print-history-body" class="scrollable-body">
         <table id="print-history-table" class="fixed-header sortable-table history-table">
@@ -860,7 +868,7 @@
                 <th data-key="size">サイズ</th>
                 <th data-key="starttime">時間</th>
                 <th data-key="printfinish" class="th-narrow">成否</th>
-                <th data-key="usagematerial">使用量(mm)</th>
+                <th data-key="usagematerial" data-unit-base="使用量">使用量(m)</th>
                 <th data-key="spool">フィラメント</th>
                 <th data-key="filemd5">MD5</th>
             </tr>
@@ -885,6 +893,9 @@
           </span>
         </div>
         <span class="file-list-count">総数: <span id="file-list-total">0</span></span>
+        <button id="filelist-refresh-btn" class="icon-btn" aria-label="ファイル一覧を再読み込み" title="ファイル一覧を再読み込み">🔄</button>
+        <span class="toolbar-spacer"></span>
+        <button id="filelist-unit-toggle" class="btn btn-sm unit-toggle-btn" aria-label="予定量の単位を切替" title="予定量の単位 m / mm を切替">単位: m</button>
       </div>
       <div class="filelist-container scrollable-body">
         <table id="file-list-table" class="fixed-header sortable-table filelist-table">
@@ -897,7 +908,7 @@
               <th data-key="layer" class="th-narrow" title="積層厚さ(mm)">積層</th>
               <th data-key="size" title="サイズ(バイト)">サイズ</th>
               <th data-key="mtime" title="更新日時">更新日時</th>
-              <th data-key="expect" title="予定使用量">予定量</th>
+              <th data-key="expect" data-unit-base="予定量" title="予定使用量">予定量(m)</th>
               <th data-key="prints" class="th-narrow" title="印刷回数(成功/全)">実績</th>
               <th data-key="avgtime" class="th-narrow" title="平均所要時間">平均時間</th>
               <th data-key="md5" class="th-narrow" title="MD5">MD5</th>

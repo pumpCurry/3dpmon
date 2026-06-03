@@ -111,6 +111,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
    */
   onRelayRequestSnapshot: (callback) => ipcRenderer.on("relay-request-snapshot", (_, data) => callback(data)),
 
+  /**
+   * 子クライアントからの操作モード昇格要求を受信するリスナーを登録する（親側）。
+   * 親レンダラーが appSettings の PIN と照合して検証する。
+   *
+   * @param {Function} callback - (data: {clientId, pin}) => void
+   */
+  onRelayPromoteRequest: (callback) => ipcRenderer.on("relay-promote-request", (_, data) => callback(data)),
+
+  /**
+   * 昇格PIN検証結果をリレーサーバへ返す（親側）。
+   *
+   * @param {string} clientId - 対象クライアントID
+   * @param {boolean} granted - 許可するか
+   * @param {string} [reason] - 拒否理由
+   */
+  relayPromoteResponse: (clientId, granted, reason) =>
+    ipcRenderer.send("relay-promote-response", { clientId, granted, reason }),
+
   /* ─── ARP 解決 API ─── */
 
   /**

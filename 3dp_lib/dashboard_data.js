@@ -208,6 +208,8 @@ export const monitorData = {
     cameraToggle: false,  // カメラ ON/OFF
     cameraPort: 8080,     // カメラストリームポート（デフォルト。per-host は connectionTargets.cameraPort）
     httpPort: 80,         // HTTP ポート（デフォルト。印刷履歴・ファイル取得用）
+    relayPromotePin: "",  // リレー操作モード昇格PIN（空=確認のみ）。親でのみ設定・参照可
+    filamentUnit: "m",    // 使用量表示単位 "m" | "mm"（印刷履歴・ファイル一覧共通トグル）
     notificationSettings: {}
   },
   machines: {

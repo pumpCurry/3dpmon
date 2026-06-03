@@ -218,7 +218,7 @@ export const dashboardMapping = {
 
   // --- 材料関連 ---
   usedMaterialLength:    { elementKey: "materialLength",          process: v => ({ value: String(v), unit: "mm" }) },
-  filamentRemainingMm:  { elementKey: "filamentRemainingMm",    process: v => ({ value: String(v), unit: "mm" }) },
+  filamentRemainingMm:  { elementKey: "filamentRemainingMm",    process: v => ({ value: (Number.isFinite(parseFloat(v)) ? parseFloat(v).toFixed(1) : String(v)), unit: "mm" }) },
   materialDetect:        { elementKey: "materialDetect",          process: v => ({ value: utils.formatBinary(v), unit: "" }) },
   materialStatus:        { elementKey: "materialStatus",          process: v => mapValue(MATERIAL_STATUS_MAP, v) },
 

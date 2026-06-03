@@ -45,7 +45,7 @@ import {
 import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
-import { updateHistoryList, loadHistory } from "./dashboard_printmanager.js";
+import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 
 /**
@@ -210,6 +210,47 @@ export function formatFilamentAmount(mm, spool = null) {
   }
 
   return { mm: val, m, g, cost, currency, display };
+}
+
+/**
+ * 使用量を「距離」と「(重量, 費用)」の2段に分けた HTML を返す。
+ *
+ * - 単位トグル(unit)に応じて距離を m / mm 表示で切り替える。
+ * - スプールが渡され重量/費用が算出できる場合は2行目に括弧表示。
+ * - 右寄せ・改行は呼び出し側CSS(.usage-cell)で制御する。
+ *
+ * @function formatUsageHtml
+ * @param {number} mm - フィラメント量 (mm)
+ * @param {Object|null} spool - スプール（g/¥算出用、無ければ距離のみ）
+ * @param {string} [unit="m"] - "m" | "mm"
+ * @returns {string} 2段表示の HTML 文字列
+ */
+export function formatUsageHtml(mm, spool = null, unit = "m") {
+  const f = formatFilamentAmount(mm, spool);
+  if (f.mm == null) return `<span class="usage-dist">---</span>`;
+  const distance = unit === "mm"
+    ? `${Math.round(f.mm)}mm`
+    : `${f.m}m`;
+  let second = "";
+  if (f.g != null) {
+    second = f.cost != null ? `(${f.g}g, ${f.currency}${f.cost})` : `(${f.g}g)`;
+  }
+  const distHtml = `<span class="usage-dist">${distance}</span>`;
+  return second
+    ? `${distHtml}<span class="usage-sub">${second}</span>`
+    : distHtml;
+}
+
+/**
+ * 使用量カラムのヘッダーラベルを単位に応じて返す。
+ *
+ * @function usageHeaderLabel
+ * @param {string} base - ベース名（"使用量" / "予定量"）
+ * @param {string} [unit="m"] - "m" | "mm"
+ * @returns {string} 例 "使用量(m)" / "予定量(mm)"
+ */
+export function usageHeaderLabel(base, unit = "m") {
+  return `${base}(${unit === "mm" ? "mm" : "m"})`;
 }
 
 /**
@@ -1149,6 +1190,80 @@ export function addSpoolFromPreset(preset, override = {}) {
 }
 
 /**
+ * オフライン完了ジョブに付与する filamentInfo エントリを構築する純関数。
+ *
+ * @function buildOfflineFilamentInfo
+ * @param {Object} spool - 現在装着スプール
+ * @param {number} usedMm - そのジョブの消費量(mm)
+ * @returns {Object} filamentInfo エントリ（isOfflineInferred=true）
+ */
+export function buildOfflineFilamentInfo(spool, usedMm) {
+  return {
+    spoolId: spool.id,
+    serialNo: spool.serialNo,
+    spoolName: spool.name,
+    colorName: spool.colorName,
+    filamentColor: spool.filamentColor,
+    material: spool.material,
+    spoolCount: spool.printCount,
+    expectedRemain: spool.remainingLengthMm,
+    usedMm: Number(usedMm) || 0,
+    isOfflineInferred: true   // 3dpmon 停止中に完了→現在装着から推定したフラグ
+  };
+}
+
+/**
+ * 履歴ジョブにフィラメント継続紐付けを行うべきか判定する純関数。
+ * 既に filamentInfo を持つジョブは尊重し、上書きしない。
+ *
+ * @function shouldLinkOfflineJob
+ * @param {Object} job - 履歴ジョブ
+ * @returns {boolean} 紐付けすべきなら true
+ */
+export function shouldLinkOfflineJob(job) {
+  if (!job) return false;
+  if (Array.isArray(job.filamentInfo) && job.filamentInfo.length > 0) return false;
+  if (job.filamentId) return false;  // 既に紐付け済み
+  return true;
+}
+
+/**
+ * 指定ジョブID群（オフライン中に完了した印刷）に、現在装着スプールの
+ * filamentInfo を遡及的に紐付ける。フィラメント交換していなければ
+ * 現在のフィラメントで印刷が継続されたとみなす要望に対応。
+ *
+ * @private
+ * @param {string} hostname - ホスト名
+ * @param {Object} spool - 現在装着スプール
+ * @param {Set<string>} jobIds - 紐付け対象ジョブID（文字列）
+ * @returns {number} 紐付けたジョブ数
+ */
+function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
+  if (!spool || !jobIds || jobIds.size === 0) return 0;
+  let jobs;
+  try { jobs = loadHistory(hostname); } catch { return 0; }
+  if (!Array.isArray(jobs) || !jobs.length) return 0;
+  let linked = 0;
+  for (const job of jobs) {
+    if (!jobIds.has(String(job.id))) continue;
+    if (!shouldLinkOfflineJob(job)) continue;
+    const usedMm = Number(job.materialUsedMm ?? job.usagematerial ?? 0) || 0;
+    job.filamentInfo = [buildOfflineFilamentInfo(spool, usedMm)];
+    job.filamentId = spool.id;
+    linked++;
+  }
+  if (linked > 0) {
+    try {
+      saveHistory(jobs, hostname);
+      console.log(`[autoCorrect] ${hostname}: ${linked}件のオフライン完了印刷に現在フィラメント(${spool.id})を継続紐付け`);
+    } catch (e) {
+      console.warn("[autoCorrect] オフライン紐付けの saveHistory 失敗:", e);
+    }
+  }
+  return linked;
+}
+
+/**
  * 使用履歴から現在スプールの残量や印刷回数を補正する。
  *
  * @function autoCorrectCurrentSpool
@@ -1158,6 +1273,9 @@ export function addSpoolFromPreset(preset, override = {}) {
  * 交換記録を見つけた場合、その後の使用量合計から残量を再計算
  * する。途中で別スプールへの交換が記録されていれば補正は行わ
  * ない。
+ * ★ 3dpmon 停止中に完了した印刷は、フィラメント交換していなければ
+ *   現在装着スプールで継続印刷したとみなし、当該ジョブへ filamentInfo を
+ *   遡及紐付けする。残量は0までクランプ（0到達後もそのまま）。
  */
 export function autoCorrectCurrentSpool(hostname) {
   if (!hostname || hostname === "_$_NO_MACHINE_$_") {
@@ -1195,6 +1313,7 @@ export function autoCorrectCurrentSpool(hostname) {
     const persistedHistory = loadHistory(hostname);
     let fallbackTotal = 0;
     let fallbackCount = 0;
+    const fallbackJobIds = new Set();
     for (const entry of persistedHistory) {
       if (!entry.printfinish) continue;
       const used = Number(entry.materialUsedMm ?? NaN);
@@ -1206,17 +1325,20 @@ export function autoCorrectCurrentSpool(hostname) {
       if (trackedJobIds.has(String(entry.id))) continue;
       fallbackTotal += used;
       fallbackCount += 1;
+      fallbackJobIds.add(String(entry.id));
       console.log(`[autoCorrect:fallback] ${hostname}: jobId=${entry.id} から ${used.toFixed(0)}mm を遡及加算 (updatedAt=${updatedAt})`);
     }
     if (fallbackTotal > 0) {
-      const expected = spool.remainingLengthMm - fallbackTotal;
-      if (expected < 0) {
-        console.warn(`[autoCorrect:fallback] ${hostname}: total(${fallbackTotal.toFixed(0)}) > remaining(${spool.remainingLengthMm.toFixed(0)}) → 変更なし`);
-        return;
+      // ★ 残量は0までクランプ（消費が残量を超えても0で進行。ユーザー要望）
+      const raw = spool.remainingLengthMm - fallbackTotal;
+      if (raw < 0) {
+        console.warn(`[autoCorrect:fallback] ${hostname}: total(${fallbackTotal.toFixed(0)}) > remaining(${spool.remainingLengthMm.toFixed(0)}) → 残量0にクランプ`);
       }
-      spool.remainingLengthMm = expected;
+      spool.remainingLengthMm = Math.max(0, raw);
       spool.updatedAt = Date.now();
       spool.printCount = (spool.printCount || 0) + fallbackCount;
+      // ★ オフライン完了印刷へ現在フィラメントを継続紐付け
+      _linkOfflineJobsToSpool(hostname, spool, fallbackJobIds);
       saveUnifiedStorage();
     }
     return;
@@ -1261,6 +1383,7 @@ export function autoCorrectCurrentSpool(hostname) {
   // ★ 遡及補正: プリンター報告履歴（printStore.history）から未記録の完了印刷を加算
   // アプリOFF中の印刷はusageHistoryに記録されないが、プリンター履歴には残っている
   const persistedHistory = loadHistory(hostname);
+  const offlineJobIds = new Set();
   if (startPrintIdNum > 0) {
     for (const entry of persistedHistory) {
       const entryId = String(entry.id ?? "");
@@ -1276,19 +1399,20 @@ export function autoCorrectCurrentSpool(hostname) {
 
       total += used;
       count += 1;
+      offlineJobIds.add(entryId);
       console.log(`[autoCorrect] ${hostname}: 未記録印刷 jobId=${entryId} から ${used.toFixed(0)}mm を遡及加算`);
     }
   }
 
-  // 計算された残量
-  const expected = startLen - total;
-  if (!Number.isFinite(expected)) return;
-
-  // 異常検知: 消費合計が起点残量を超える場合は変更せず警告
+  // 計算された残量（消費が起点を超えても0までクランプ。ユーザー要望: 0到達後もそのまま進行）
+  if (!Number.isFinite(startLen - total)) return;
   if (total > startLen) {
-    console.warn(`[autoCorrect] ${hostname}: total(${total.toFixed(0)}) > startLen(${startLen.toFixed(0)}) → 残量変更なし`);
-    return;
+    console.warn(`[autoCorrect] ${hostname}: total(${total.toFixed(0)}) > startLen(${startLen.toFixed(0)}) → 残量0にクランプ`);
   }
+  const expected = Math.max(0, startLen - total);
+
+  // ★ オフライン完了印刷へ現在フィラメントを継続紐付け（残量変化の有無に関わらず実施）
+  _linkOfflineJobsToSpool(hostname, spool, offlineJobIds);
 
   const diff = Math.abs(expected - spool.remainingLengthMm);
   if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
