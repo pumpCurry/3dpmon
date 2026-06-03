@@ -22,6 +22,15 @@ const targets = [
     pattern: /<meta name="app-version" content="[^"]*"\s*\/?>/,
     replace: `<meta name="app-version" content="${VERSION}" />`,
     label: "HTML meta tag"
+  },
+  {
+    // ★ CI の「HTML title version check」が v${VERSION} を grep する。
+    //   静的タイトルにもバージョンを反映する（実行時に JS が再設定するが、
+    //   静的検証・初期表示のため v 付きで埋め込む）。
+    file: "3dp_monitor.html",
+    pattern: /<title>3dpmon - 3Dプリンタ監視ダッシュボード(?: v[\d.]+)?<\/title>/,
+    replace: `<title>3dpmon - 3Dプリンタ監視ダッシュボード v${VERSION}</title>`,
+    label: "HTML title"
   }
 ];
 
