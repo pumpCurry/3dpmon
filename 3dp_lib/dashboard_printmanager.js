@@ -59,7 +59,7 @@ import {
   formatSpoolDisplayId,
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp, getConnectionState } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getHttpPort, getConnectionState } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -377,6 +377,49 @@ export function registerGcodeMetaForHosts(cache, targets, filename, meta) {
     count++;
   }
   return count;
+}
+
+/**
+ * 指定ホストの保存済み印刷履歴（printStore.history）からテーブルを再描画する。
+ *
+ * リレー子（satellite/readonly）が親から履歴 delta を受信した後の再描画に使う。
+ * 通常モードの initHistoryPanel と同じ経路（loadHistory→jobsToRaw→renderHistoryTable）。
+ * パネル未生成・対象DOM不在でも安全（try/catch で吸収）。
+ *
+ * @param {string} hostname - ホスト名
+ * @returns {void}
+ */
+export function rerenderHistoryForHost(hostname) {
+  try {
+    const jobs = loadHistory(hostname);
+    if (!jobs.length) return;
+    const ip = getDeviceIp(hostname);
+    const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+    renderHistoryTable(jobsToRaw(jobs), baseUrl, hostname);
+  } catch (e) {
+    console.warn("[printmanager] rerenderHistoryForHost エラー:", e);
+  }
+}
+
+/**
+ * 指定ホストのキャッシュ済みファイル一覧（_cachedFileInfo）を再描画する。
+ *
+ * リレー子が親からファイル一覧 delta を受信した後の再描画に使う。
+ * 通常モードの initFileListPanel と同じ経路（renderFileList）。
+ *
+ * @param {string} hostname - ホスト名
+ * @returns {void}
+ */
+export function rerenderFileListForHost(hostname) {
+  try {
+    const machine = monitorData.machines[hostname];
+    if (!machine?._cachedFileInfo) return;
+    const ip = getDeviceIp(hostname);
+    const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+    renderFileList(machine._cachedFileInfo, baseUrl, hostname);
+  } catch (e) {
+    console.warn("[printmanager] rerenderFileListForHost エラー:", e);
+  }
 }
 
 /*

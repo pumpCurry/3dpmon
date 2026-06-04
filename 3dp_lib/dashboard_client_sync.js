@@ -229,6 +229,25 @@ function _handleRelayMessage(msg) {
 }
 
 /**
+ * 親から受信した printStore（印刷履歴・現在ジョブ）を monitorData に反映する。
+ * 子（satellite/readonly）はプリンタへ直接接続しないため、履歴はこの経路でのみ届く。
+ *
+ * @private
+ * @param {string} hostname - ホスト名
+ * @param {{history?:Array, current?:Object|null}} ps - 受信した printStore
+ */
+function _applyRelayPrintStore(hostname, ps) {
+  if (!ps) return;
+  ensureMachineData(hostname);
+  const machine = monitorData.machines[hostname];
+  if (!machine.printStore) machine.printStore = { current: null, history: [], videos: {} };
+  if (Array.isArray(ps.history)) machine.printStore.history = ps.history;
+  if (Object.prototype.hasOwnProperty.call(ps, "current")) {
+    machine.printStore.current = ps.current;
+  }
+}
+
+/**
  * フルスナップショットを monitorData に適用する。
  *
  * @private
@@ -279,6 +298,23 @@ function _applySnapshot(state) {
     }
   }
 
+  // ★ 印刷履歴・現在ジョブを適用（この後の ensureHostPanels で履歴パネルが自動描画する）
+  if (state.printStores) {
+    for (const [hostname, ps] of Object.entries(state.printStores)) {
+      if (hostname === PLACEHOLDER_HOSTNAME) continue;
+      _applyRelayPrintStore(hostname, ps);
+    }
+  }
+
+  // ★ ファイル一覧を適用（initFileListPanel が _cachedFileInfo を読んで描画する）
+  if (state.fileInfos) {
+    for (const [hostname, info] of Object.entries(state.fileInfos)) {
+      if (hostname === PLACEHOLDER_HOSTNAME) continue;
+      ensureMachineData(hostname);
+      monitorData.machines[hostname]._cachedFileInfo = info;
+    }
+  }
+
   console.info(`[client-sync] スナップショット適用完了: ${Object.keys(state.machines || {}).length}ホスト`);
 
   // ★ aggregator タイマー起動 + パネル自動生成
@@ -301,7 +337,15 @@ function _applySnapshot(state) {
         console.info(`[client-sync] ensureHostPanels(${hostname}): ${count}パネル生成`);
       }
     }
-  }).catch(e => console.error("[client-sync] パネル生成失敗:", e));
+    // ★ 再接続などで既存パネルがある場合に履歴/ファイル一覧を再描画する。
+    //   新規生成パネルは init 時に描画済みだが、再描画は冪等なので無害。
+    return import("./dashboard_printmanager.js").then(pm => {
+      for (const hostname of hostnames) {
+        pm.rerenderHistoryForHost(hostname);
+        pm.rerenderFileListForHost(hostname);
+      }
+    });
+  }).catch(e => console.error("[client-sync] パネル生成/履歴描画失敗:", e));
 }
 
 /**
@@ -347,6 +391,31 @@ function _applyDelta(msg) {
       }
     }
     if (msg.shared.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, msg.shared.hostSpoolMap);
+  }
+
+  // ★ 印刷履歴・現在ジョブの差分適用 + 履歴パネル再描画
+  if (msg.printStores) {
+    for (const [hostname, ps] of Object.entries(msg.printStores)) {
+      if (hostname === PLACEHOLDER_HOSTNAME) continue;
+      _applyRelayPrintStore(hostname, ps);
+    }
+    const hosts = Object.keys(msg.printStores).filter(h => h !== PLACEHOLDER_HOSTNAME);
+    import("./dashboard_printmanager.js").then(pm => {
+      for (const h of hosts) pm.rerenderHistoryForHost(h);
+    }).catch(e => console.error("[client-sync] 履歴delta描画失敗:", e));
+  }
+
+  // ★ ファイル一覧の差分適用 + ファイル一覧パネル再描画
+  if (msg.fileInfos) {
+    for (const [hostname, info] of Object.entries(msg.fileInfos)) {
+      if (hostname === PLACEHOLDER_HOSTNAME) continue;
+      ensureMachineData(hostname);
+      monitorData.machines[hostname]._cachedFileInfo = info;
+    }
+    const hosts = Object.keys(msg.fileInfos).filter(h => h !== PLACEHOLDER_HOSTNAME);
+    import("./dashboard_printmanager.js").then(pm => {
+      for (const h of hosts) pm.rerenderFileListForHost(h);
+    }).catch(e => console.error("[client-sync] ファイル一覧delta描画失敗:", e));
   }
 }
 

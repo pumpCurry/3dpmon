@@ -34,6 +34,12 @@ const _prevSnapshot = new Map();
 /** 前回ブロードキャストした共有データのハッシュ（簡易変更検出） */
 let _prevSharedHash = "";
 
+/** 前回ブロードキャスト時の各ホストの印刷履歴(printStore)ハッシュ */
+const _prevPrintHash = new Map();
+
+/** 前回ブロードキャスト時の各ホストのファイル一覧(_cachedFileInfo)ハッシュ */
+const _prevFileHash = new Map();
+
 /** ブロードキャスト間隔 (ms) — aggregator は 500ms、リレーは 1000ms */
 const BROADCAST_INTERVAL_MS = 1000;
 
@@ -168,6 +174,8 @@ export function relayBroadcastIfNeeded() {
  */
 function _buildDelta() {
   const machinesDelta = {};
+  const printStoresDelta = {};
+  const fileInfosDelta = {};
   let hasChanges = false;
 
   for (const [hostname, machine] of Object.entries(monitorData.machines)) {
@@ -191,6 +199,32 @@ function _buildDelta() {
       hasChanges = true;
     }
     _prevSnapshot.set(hostname, prev);
+
+    // 印刷履歴・現在ジョブの変更検出（印刷完了やスプール再割当てで変化）
+    // 子（satellite/readonly）はプリンタ直結しないため、ここで配信しないと履歴が空になる
+    const ps = machine.printStore;
+    if (ps) {
+      const psHash = _quickHash(ps.history, ps.current);
+      if (psHash !== _prevPrintHash.get(hostname)) {
+        _prevPrintHash.set(hostname, psHash);
+        printStoresDelta[hostname] = {
+          history: ps.history || [],
+          current: ps.current || null
+        };
+        hasChanges = true;
+      }
+    }
+
+    // ファイル一覧（_cachedFileInfo）の変更検出
+    const fi = machine._cachedFileInfo;
+    if (fi) {
+      const fiHash = _quickHash(fi);
+      if (fiHash !== _prevFileHash.get(hostname)) {
+        _prevFileHash.set(hostname, fiHash);
+        fileInfosDelta[hostname] = fi;
+        hasChanges = true;
+      }
+    }
   }
 
   // 共有データの変更検出（簡易ハッシュ）
@@ -207,7 +241,10 @@ function _buildDelta() {
 
   if (!hasChanges) return null;
 
-  return { machines: machinesDelta, shared: sharedDelta };
+  const delta = { machines: machinesDelta, shared: sharedDelta };
+  if (Object.keys(printStoresDelta).length > 0) delta.printStores = printStoresDelta;
+  if (Object.keys(fileInfosDelta).length > 0) delta.fileInfos = fileInfosDelta;
+  return delta;
 }
 
 /**
@@ -218,6 +255,8 @@ function _buildDelta() {
  */
 function _buildFullSnapshot() {
   const machines = {};
+  const printStores = {};
+  const fileInfos = {};
   for (const [hostname, machine] of Object.entries(monitorData.machines)) {
     if (hostname === PLACEHOLDER_HOSTNAME) continue;
     const sd = machine.storedData;
@@ -228,10 +267,25 @@ function _buildFullSnapshot() {
       fields[key] = field?.rawValue ?? null;
     }
     machines[hostname] = fields;
+
+    // 印刷履歴・現在ジョブ（子が履歴パネルを表示するために必要）
+    const ps = machine.printStore;
+    if (ps && (ps.history?.length || ps.current)) {
+      printStores[hostname] = {
+        history: ps.history || [],
+        current: ps.current || null
+      };
+    }
+    // ファイル一覧（_cachedFileInfo は揮発。接続時に取得した最新を渡す）
+    if (machine._cachedFileInfo) {
+      fileInfos[hostname] = machine._cachedFileInfo;
+    }
   }
 
   return {
     machines,
+    printStores,
+    fileInfos,
     filamentSpools: monitorData.filamentSpools,
     hostSpoolMap: monitorData.hostSpoolMap,
     appSettings: {

@@ -1,7 +1,12 @@
 /**
  * @fileoverview dashboard_production.js の単体テスト
+ *
+ * ★ v2.2.1012: 統計の参照元を「存在しない machine.historyList（生データ形式）」から
+ *    「machine.printStore.history（parseRawHistoryEntry 済みスキーマ）」へ修正したのに伴い、
+ *    テストデータも parse 後スキーマ（startTimeSec=epoch秒 / finishTime=ISO文字列 /
+ *    materialUsedMm / printfinish）へ全面的に更新した。
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // monitorData モック
 const mockMonitorData = {
@@ -30,6 +35,28 @@ function epochSec(hoursAgo) {
   return Math.floor((Date.now() - hoursAgo * 3600000) / 1000);
 }
 
+/** ヘルパー: エポック秒 → ISO文字列（parseRawHistoryEntry の finishTime 形式） */
+function isoFromEpoch(sec) {
+  return new Date(sec * 1000).toISOString();
+}
+
+/**
+ * ヘルパー: printStore.history 形式（parse後スキーマ）のエントリを生成する。
+ * @param {{startHoursAgo:number, endHoursAgo?:number, ok?:boolean,
+ *          materialMm?:number, filename?:string}} o
+ */
+function histEntry(o) {
+  const startSec = epochSec(o.startHoursAgo);
+  const entry = {
+    startTimeSec: startSec,
+    printfinish: o.ok === false ? 0 : 1
+  };
+  if (o.endHoursAgo != null) entry.finishTime = isoFromEpoch(epochSec(o.endHoursAgo));
+  if (o.materialMm != null) entry.materialUsedMm = o.materialMm;
+  if (o.filename != null) entry.filename = o.filename;
+  return entry;
+}
+
 describe("buildHostUtilization", () => {
   beforeEach(() => {
     mockMonitorData.machines = {};
@@ -38,7 +65,7 @@ describe("buildHostUtilization", () => {
   it("空の履歴で稼働率0%を返す", () => {
     mockMonitorData.machines["host1"] = {
       storedData: { hostname: { rawValue: "K1Max-1" } },
-      historyList: []
+      printStore: { history: [] }
     };
     const result = buildHostUtilization("host1");
     expect(result.utilizationPct).toBe(0);
@@ -47,17 +74,12 @@ describe("buildHostUtilization", () => {
   });
 
   it("成功した印刷の稼働率を正しく計算", () => {
-    const start = epochSec(2);  // 2時間前開始
-    const end = epochSec(1);    // 1時間前完了 → 1時間印刷
+    // 2時間前開始 → 1時間前完了 → 1時間印刷
     mockMonitorData.machines["host1"] = {
       storedData: { hostname: { rawValue: "K1Max-1" } },
-      historyList: [{
-        startTime: start,
-        endtime: end,
-        printProgress: 100,
-        usagematerial: 5000,
-        filamentInfo: [{ materialName: "PLA" }]
-      }]
+      printStore: {
+        history: [histEntry({ startHoursAgo: 2, endHoursAgo: 1, ok: true, materialMm: 5000 })]
+      }
     };
     const result = buildHostUtilization("host1");
     expect(result.printCount).toBe(1);
@@ -70,16 +92,11 @@ describe("buildHostUtilization", () => {
   });
 
   it("失敗した印刷をカウント", () => {
-    const start = epochSec(3);
-    const end = epochSec(2.5);
     mockMonitorData.machines["host1"] = {
       storedData: {},
-      historyList: [{
-        startTime: start,
-        endtime: end,
-        printProgress: 35,
-        filamentInfo: []
-      }]
+      printStore: {
+        history: [histEntry({ startHoursAgo: 3, endHoursAgo: 2.5, ok: false })]
+      }
     };
     const result = buildHostUtilization("host1");
     expect(result.printCount).toBe(1);
@@ -88,16 +105,11 @@ describe("buildHostUtilization", () => {
   });
 
   it("期間外の印刷を除外", () => {
-    const oldStart = epochSec(48); // 2日前
-    const oldEnd = epochSec(47);
     mockMonitorData.machines["host1"] = {
       storedData: {},
-      historyList: [{
-        startTime: oldStart,
-        endtime: oldEnd,
-        printProgress: 100,
-        filamentInfo: []
-      }]
+      printStore: {
+        history: [histEntry({ startHoursAgo: 48, endHoursAgo: 47, ok: true })] // 2日前
+      }
     };
     const result = buildHostUtilization("host1");
     expect(result.printCount).toBe(0);
@@ -125,15 +137,11 @@ describe("buildDailyProductionReport", () => {
   });
 
   it("今日の印刷をカウント", () => {
-    const start = epochSec(0.3);  // 18分前開始（日付境界問題を回避）
-    const end = epochSec(0.1);    // 6分前完了
+    // 18分前開始 / 6分前完了（日付境界問題を回避）
     mockMonitorData.machines["host1"] = {
-      historyList: [{
-        startTime: start,
-        endtime: end,
-        printProgress: 100,
-        usagematerial: 3000
-      }]
+      printStore: {
+        history: [histEntry({ startHoursAgo: 0.3, endHoursAgo: 0.1, ok: true, materialMm: 3000 })]
+      }
     };
     const result = buildDailyProductionReport({ days: 1 });
     // _localDateKey と同じロジック（ローカルタイムゾーン）
@@ -147,17 +155,11 @@ describe("buildDailyProductionReport", () => {
   });
 
   it("マルチホストを集計", () => {
-    const start = epochSec(0.3);
-    const end = epochSec(0.1);
     mockMonitorData.machines["host1"] = {
-      historyList: [{
-        startTime: start, endtime: end, printProgress: 100, filamentInfo: []
-      }]
+      printStore: { history: [histEntry({ startHoursAgo: 0.3, endHoursAgo: 0.1, ok: true })] }
     };
     mockMonitorData.machines["host2"] = {
-      historyList: [{
-        startTime: start, endtime: end, printProgress: 100, filamentInfo: []
-      }]
+      printStore: { history: [histEntry({ startHoursAgo: 0.3, endHoursAgo: 0.1, ok: true })] }
     };
     const result = buildDailyProductionReport({ days: 1 });
     const today = result[0];
@@ -170,25 +172,28 @@ describe("buildEstimateVsActual", () => {
   beforeEach(() => {
     mockMonitorData.machines = {};
   });
+  afterEach(() => {
+    // localStorage モックの後始末
+    if (Object.prototype.hasOwnProperty.call(globalThis, "localStorage")) {
+      delete globalThis.localStorage;
+    }
+  });
 
   it("予定vs実績の差分を計算", () => {
+    // GCode 見積時間は printmanager が localStorage に保存した gcode メタキャッシュから引く
+    globalThis.localStorage = {
+      getItem: (k) => k === "3dpmon_gcode_meta_cache"
+        ? JSON.stringify({ "host1:test.gcode": { timeSec: 3000 } })  // 見積: 3000秒
+        : null
+    };
     mockMonitorData.machines["host1"] = {
-      historyList: [
-        {
-          filename: "/data/gcode/test.gcode",
-          startTime: epochSec(2),
-          endtime: epochSec(1), // 実績: 3600秒
-          printProgress: 100,
-          usagetime: 3000 // 見積: 3000秒
-        },
-        {
-          filename: "/data/gcode/test.gcode",
-          startTime: epochSec(5),
-          endtime: epochSec(4), // 実績: 3600秒
-          printProgress: 100,
-          usagetime: 3000
-        }
-      ]
+      printStore: {
+        history: [
+          // 実績: 3600秒 ×2回
+          histEntry({ startHoursAgo: 2, endHoursAgo: 1, ok: true, filename: "/data/gcode/test.gcode" }),
+          histEntry({ startHoursAgo: 5, endHoursAgo: 4, ok: true, filename: "/data/gcode/test.gcode" })
+        ]
+      }
     };
     const result = buildEstimateVsActual("host1");
     expect(result).toHaveLength(1);
@@ -199,8 +204,22 @@ describe("buildEstimateVsActual", () => {
     expect(result[0].diffPct).toBe(20.0); // 20%超過
   });
 
+  it("見積データが無ければ実測のみ算出し見積は0", () => {
+    // localStorage 未設定 → 見積取得不可
+    mockMonitorData.machines["host1"] = {
+      printStore: {
+        history: [histEntry({ startHoursAgo: 2, endHoursAgo: 1, ok: true, filename: "x.gcode" })]
+      }
+    };
+    const result = buildEstimateVsActual("host1");
+    expect(result).toHaveLength(1);
+    expect(result[0].actualAvgSec).toBe(3600);
+    expect(result[0].estimatedSec).toBe(0);
+    expect(result[0].diffPct).toBe(0);
+  });
+
   it("空の履歴で空配列を返す", () => {
-    mockMonitorData.machines["host1"] = { historyList: [] };
+    mockMonitorData.machines["host1"] = { printStore: { history: [] } };
     const result = buildEstimateVsActual("host1");
     expect(result).toHaveLength(0);
   });
@@ -215,12 +234,9 @@ describe("buildFleetSummary", () => {
     for (let i = 1; i <= 6; i++) {
       mockMonitorData.machines[`host${i}`] = {
         storedData: { hostname: { rawValue: `Printer-${i}` } },
-        historyList: [{
-          startTime: epochSec(2),
-          endtime: epochSec(1),
-          printProgress: 100,
-          usagematerial: 1000
-        }]
+        printStore: {
+          history: [histEntry({ startHoursAgo: 2, endHoursAgo: 1, ok: true, materialMm: 1000 })]
+        }
       };
     }
     const result = buildFleetSummary();
@@ -238,11 +254,11 @@ describe("buildFleetSummary", () => {
   it("PLACEHOLDERホストを除外", () => {
     mockMonitorData.machines["_$_NO_MACHINE_$_"] = {
       storedData: {},
-      historyList: []
+      printStore: { history: [] }
     };
     mockMonitorData.machines["real-host"] = {
       storedData: { hostname: { rawValue: "Real" } },
-      historyList: []
+      printStore: { history: [] }
     };
     const result = buildFleetSummary();
     expect(result.totalHosts).toBe(1);
@@ -316,11 +332,26 @@ describe("buildJobCostReport", () => {
     expect(shared.printCount).toBe(2);
     expect(shared.totalCostYen).toBe(110);
   });
+
+  it("materialCostYen 未設定でも使用量×スプール単価でコスト算出", () => {
+    mockMonitorData.filamentSpools = [
+      { id: "sp1", costPerMm: 0.05 }   // 0.05円/mm
+    ];
+    mockMonitorData.machines["host1"] = {
+      printStore: { history: [
+        { filename: "c.gcode", printfinish: 1, materialUsedMm: 1000, filamentId: "sp1" } // 1000×0.05=50
+      ]}
+    };
+    const result = buildJobCostReport("host1");
+    const c = result.find(r => r.filename === "c.gcode");
+    expect(c.totalCostYen).toBe(50);
+  });
 });
 
 describe("buildHostRanking", () => {
   beforeEach(() => {
     mockMonitorData.machines = {};
+    mockMonitorData.filamentSpools = [];
   });
 
   it("空のホストで空配列を返す", () => {
@@ -328,45 +359,39 @@ describe("buildHostRanking", () => {
     expect(result).toHaveLength(0);
   });
 
-  it("稼働率×成功率でランキングする", () => {
-    // host1: 高稼働・高成功
+  it("累計成功数でランキングする", () => {
+    // host1: 成功印刷あり
     mockMonitorData.machines["host1"] = {
       storedData: { hostname: { rawValue: "Printer-1" } },
-      historyList: [{
-        startTime: epochSec(2), endtime: epochSec(1),
-        printProgress: 100, printfinish: 1, usagematerial: 2000
-      }],
-      printStore: { history: [
-        { printfinish: 1, materialCostYen: 100 }
-      ]}
+      printStore: {
+        history: [histEntry({ startHoursAgo: 2, endHoursAgo: 1, ok: true, materialMm: 2000 })]
+      }
     };
-    // host2: 低稼働（印刷なし）
+    // host2: 印刷実績なし
     mockMonitorData.machines["host2"] = {
       storedData: { hostname: { rawValue: "Printer-2" } },
-      historyList: [],
       printStore: { history: [] }
     };
     const result = buildHostRanking();
     expect(result).toHaveLength(2);
     expect(result[0].hostname).toBe("host1"); // host1がランク1
     expect(result[0].rank).toBe(1);
+    expect(result[0].totalPrintCount).toBe(1);
+    expect(result[0].totalMaterialMm).toBe(2000);
     expect(result[1].hostname).toBe("host2");
     expect(result[1].rank).toBe(2);
   });
 
-  it("コスト効率を計算する", () => {
+  it("コスト効率を計算する（materialCostYen 優先）", () => {
     mockMonitorData.machines["host1"] = {
       storedData: { hostname: { rawValue: "P1" } },
-      historyList: [{
-        startTime: epochSec(2), endtime: epochSec(1),
-        printProgress: 100, printfinish: 1, usagematerial: 1000
-      }],
       printStore: { history: [
         { printfinish: 1, materialCostYen: 80 },
         { printfinish: 1, materialCostYen: 120 }
       ]}
     };
     const result = buildHostRanking();
+    expect(result[0].totalPrintCount).toBe(2);
     expect(result[0].totalCostYen).toBe(200);
     expect(result[0].costPerSuccessPrint).toBe(100); // 200/2
   });
