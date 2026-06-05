@@ -43,6 +43,11 @@ import {
   setStoredDataForHost
 } from "./dashboard_data.js";
 import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
+import {
+  appendMountEvent,
+  appendUnmountEvent,
+  reconcileSpool
+} from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
@@ -463,6 +468,72 @@ export function getCurrentSpool(hostname) {
 }
 
 /**
+ * 指定ホストの最後に完了した印刷の printId（数値）を返す。
+ * mountHistory の区間下限/上限（sinceJobId/untilJobId）の確定に使う。
+ * 完了 = materialUsedMm > 0。printStore.history の id（=開始 epoch 秒）の最大値。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @returns {number} 最後に完了した printId（無ければ 0）
+ */
+function _latestCompletedPrintId(host) {
+  const machine = monitorData.machines?.[host];
+  const hist = machine?.printStore?.history;
+  if (!Array.isArray(hist)) return 0;
+  let max = 0;
+  for (const job of hist) {
+    if (!(Number(job?.materialUsedMm || 0) > 0)) continue;
+    const pid = Number(job?.id);
+    if (Number.isFinite(pid) && pid > max) max = pid;
+  }
+  return max;
+}
+
+/**
+ * 完了ジョブの消費量を信頼ソース printStore.history に upsert する（ADR-0004）。
+ *
+ * reconcile は printStore.history を権威とするため、finalize 完了時に
+ * 当該ジョブの materialUsedMm / filamentInfo / printfinish をここで確実に入れて
+ * 整合させる。既存エントリがあれば materialUsedMm / filamentInfo を補完し、
+ * 無ければ最小限のエントリを作成する。printStore.history が後で reqHistory で
+ * 上書き（id union マージ）されてもプリンタ報告値が優先されるため害は無い。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {string} jobId - 完了ジョブID（printId 文字列 = epoch 秒）
+ * @param {number} usedMm - 確定消費量(mm)
+ * @param {boolean} isSuccess - 成功フラグ
+ * @returns {void}
+ */
+function _upsertHistoryUsage(host, jobId, usedMm, isSuccess) {
+  const machine = monitorData.machines?.[host];
+  if (!machine) return;
+  if (!machine.printStore || typeof machine.printStore !== "object") {
+    machine.printStore = { current: null, history: [], videos: {} };
+  }
+  if (!Array.isArray(machine.printStore.history)) machine.printStore.history = [];
+  const hist = machine.printStore.history;
+  // printStore.history の id は数値（epoch 秒）。jobId 文字列を数値化して照合・格納。
+  const numId = Number(jobId);
+  const idVal = Number.isFinite(numId) ? numId : jobId;
+  let entry = hist.find(h => String(h.id) === String(jobId));
+  if (!entry) {
+    entry = { id: idVal };
+    hist.push(entry);
+  }
+  // materialUsedMm はプリンタ確定値を優先（既存があれば尊重し、未設定/0 のみ埋める）
+  if (!(Number(entry.materialUsedMm) > 0)) {
+    entry.materialUsedMm = usedMm;
+  }
+  if (entry.printfinish == null) entry.printfinish = isSuccess ? 1 : 0;
+  // ★ filamentInfo はここでは書かない。推定 usedMm を filamentInfo に固定すると
+  //   reqHistory マージ(FILAMENT_KEYS は null のみ補完)で上書きされず、
+  //   attributedUsed が推定値を使い続けてしまうため。単一スプールは materialUsedMm
+  //   （reqHistory でプリンタ確定値に置換される）で帰属し、複数スプールの
+  //   filamentInfo は finalizeFilamentUsage 本体の履歴記録が担う。
+}
+
+/**
  * 現在使用するスプールIDを更新し状態を反映する。
  * monitorData.currentSpoolId や対象スプールのフラグを変更し、
  * 必要に応じて履歴情報や残量を更新する副作用がある。履歴補完時は
@@ -547,12 +618,24 @@ export function setCurrentSpoolId(id, hostname) {
   }
 
 
+  // ★ ADR-0004: 単調増加 ts（同一 tick で mount/unmount を区別できるよう ts と evId を分ける）
+  const nowTs = Date.now();
+
   if (prevSpool) {
     if (Array.isArray(prevSpool.printIdRanges) && prevSpool.printIdRanges.length) {
       const r = prevSpool.printIdRanges[prevSpool.printIdRanges.length - 1];
       if (r && r.endPrintID == null) {
         r.endPrintID = String(printId || prevSpool.currentPrintID || "");
       }
+    }
+    // ★ ADR-0004: 取外しイベントを mountHistory に追記（区間上限＝最新完了 printId）
+    if (host) {
+      appendUnmountEvent({
+        host,
+        spoolId: prevSpool.id,
+        untilJobId: _latestCompletedPrintId(host),
+        ts: nowTs
+      });
     }
     prevSpool.removedAt = Date.now();
     prevSpool.hostname = null;
@@ -569,6 +652,18 @@ export function setCurrentSpoolId(id, hostname) {
     newSpool.currentPrintID = printId;
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
+    // ★ ADR-0004: 装着イベントを mountHistory に追記
+    //   anchorRemainingMm = 新スプールの現残量（繰越基点）
+    //   sinceJobId = そのホストの最新完了 printId（区間下限・排他）
+    if (host) {
+      appendMountEvent({
+        host,
+        spoolId: newSpool.id,
+        anchorRemainingMm: newSpool.remainingLengthMm,
+        sinceJobId: _latestCompletedPrintId(host),
+        ts: nowTs + 1
+      });
+    }
     // ★ B5: 交換記録を即座に保存（印刷前の再起動でも記録が残る）
     logSpoolChange(newSpool, printId);
     newSpool.isPending = false;  // 即座に記録済み（遅延実行を廃止）
@@ -1028,6 +1123,12 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     return;
   }
   const normalizedJobId = String(jobId ?? "");
+  // ★ ADR-0004: 多重 finalize ガード。既に確定済みの同一 jobId なら
+  //   残量・log・printCount を一切触らず即 return（二重減算の根を断つ）。
+  if (normalizedJobId && normalizedJobId === s.lastCompletedPrintID) {
+    console.debug(`[finalizeFilamentUsage] ${host}: jobId=${normalizedJobId} は確定済み → スキップ`);
+    return;
+  }
   if (s.currentPrintID && s.currentPrintID !== normalizedJobId) {
     // jobId 不一致 — 別のジョブの完了通知なので無視するが、
     // transient フィールドが古いジョブのまま残留していたらクリアする
@@ -1076,7 +1177,11 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   // スプール紐付けを継続できるようにする。
   s.lastCompletedPrintID = normalizedJobId;
   s.currentPrintID = "";
-  s.usedLengthLog.push({ jobId: normalizedJobId, used: resolvedUsed });
+  // ★ ADR-0004: usedLengthLog 重複防止（同一 jobId の再 push を弾く）
+  if (!Array.isArray(s.usedLengthLog)) s.usedLengthLog = [];
+  if (!s.usedLengthLog.some(l => String(l.jobId) === normalizedJobId)) {
+    s.usedLengthLog.push({ jobId: normalizedJobId, used: resolvedUsed });
+  }
   // 現在のスプール情報を履歴に追加
   const machine = monitorData.machines[host];
   let entry = null;
@@ -1115,6 +1220,21 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     }
   }
   logUsage(s, resolvedUsed, normalizedJobId, isSuccess ? "complete" : "fail");
+  // ★ ADR-0004: 完了確定値を信頼ソース printStore.history に反映してから reconcile する。
+  //   これが無いと「history にまだ当該ジョブが無い」タイミングで reconcile が
+  //   モードA(total-Σ)を計算し、確定したばかりの消費を取りこぼして残量を盛り戻してしまう。
+  //   reconcile は printStore.history を権威とするため、ここで確実に入れて整合させる。
+  //   失敗ジョブ(materialUsedMm<=0)は信頼ソースに完了として入れない（attributedUsed の対象外）。
+  if (resolvedUsed > 0) {
+    _upsertHistoryUsage(host, normalizedJobId, resolvedUsed, isSuccess);
+  }
+  // ★ 完了直後に信頼ソースから残量を冪等補正（finalize の startLen-used 値は暫定。reconcile が権威）。
+  //   currentPrintID は上で "" にクリア済みなので reconcile は走る。
+  try {
+    reconcileSpool(s.id, { ts: Date.now() });
+  } catch (e) {
+    console.warn(`[finalizeFilamentUsage] reconcileSpool 失敗 (${host}):`, e?.message || e);
+  }
   updateStoredDataToDOM();
   saveUnifiedStorage(true);
   if (entry) {
@@ -1264,18 +1384,20 @@ function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
 }
 
 /**
- * 使用履歴から現在スプールの残量や印刷回数を補正する。
+ * 現在スプールの残量・印刷回数を信頼ソースから補正する（ADR-0004）。
  *
  * @function autoCorrectCurrentSpool
+ * @param {string} hostname - 対象ホスト名
  * @returns {void}
  * @description
- * usageHistory を新しい順に探索し、現在のスプールに一致する
- * 交換記録を見つけた場合、その後の使用量合計から残量を再計算
- * する。途中で別スプールへの交換が記録されていれば補正は行わ
- * ない。
+ * v2.2.1012 で累積減算ベースの自前補正を撤去し、{@link reconcileSpool}
+ * （mountHistory + printStore.history からの冪等再計算）に委譲する。
+ * これにより二重減算が構造的に不能になる。
+ *
  * ★ 3dpmon 停止中に完了した印刷は、フィラメント交換していなければ
  *   現在装着スプールで継続印刷したとみなし、当該ジョブへ filamentInfo を
- *   遡及紐付けする。残量は0までクランプ（0到達後もそのまま）。
+ *   遡及紐付けする（reconcile の帰属計算の入力になる）。
+ * ★ 印刷中(currentPrintID あり)のスプールは reconcile しない（オシレーション回避）。
  */
 export function autoCorrectCurrentSpool(hostname) {
   if (!hostname || hostname === "_$_NO_MACHINE_$_") {
@@ -1284,141 +1406,41 @@ export function autoCorrectCurrentSpool(hostname) {
   }
   const spool = getCurrentSpool(hostname);
   if (!spool) return;
+  // ★ 印刷中スプールは触らない（二重防御。呼び出し側 aggregator でも !isPrinting で守る）
+  if (spool.currentPrintID) return;
 
-  const logs = monitorData.usageHistory || [];
-
-  let startIdx = -1;
-  let change = null;
-  // 最新から過去に向かって交換記録を検索
-  for (let i = logs.length - 1; i >= 0; i--) {
-    const e = logs[i];
-    if (e.startLength != null && e.spoolId === spool.id) {
-      change = e;
-      startIdx = i;
-      break;
-    }
-  }
-  // ★ フォールバック: usageHistory に startLength エントリがない場合、
-  //   spool.updatedAt を基準に、それ以降の完了印刷だけを遡及加算する。
-  //   起点は現在の remainingLengthMm（最後に保存された残量）。
-  const isFallback = !change;
-  if (isFallback) {
-    const updatedAt = Number(spool.updatedAt ?? 0);
-    if (!updatedAt) return;
-    // ★ ライブ追跡済みジョブを重複カウントしないよう、usageHistory の jobId を収集
-    const trackedJobIds = new Set();
-    for (const e of logs) {
-      if (e.spoolId === spool.id && e.jobId) trackedJobIds.add(String(e.jobId));
-    }
+  // ── オフライン完了印刷へ現在フィラメントを継続紐付け（filamentInfo を補完）──
+  //   この紐付けが reconcile の attributedUsed の入力になるため reconcile の前に行う。
+  const beforeRemain = Number(spool.remainingLengthMm);
+  try {
     const persistedHistory = loadHistory(hostname);
-    let fallbackTotal = 0;
-    let fallbackCount = 0;
-    const fallbackJobIds = new Set();
-    for (const entry of persistedHistory) {
-      if (!entry.printfinish) continue;
-      const used = Number(entry.materialUsedMm ?? NaN);
-      if (!Number.isFinite(used) || used <= 0) continue;
-      // entry.id は epoch秒、updatedAt は epoch ms → 秒に変換して比較
-      const entryStartMs = Number(entry.id) * 1000;
-      if (!Number.isFinite(entryStartMs) || entryStartMs <= updatedAt) continue;
-      // ライブ追跡済みのジョブは除外（二重減算防止）
-      if (trackedJobIds.has(String(entry.id))) continue;
-      fallbackTotal += used;
-      fallbackCount += 1;
-      fallbackJobIds.add(String(entry.id));
-      console.log(`[autoCorrect:fallback] ${hostname}: jobId=${entry.id} から ${used.toFixed(0)}mm を遡及加算 (updatedAt=${updatedAt})`);
-    }
-    if (fallbackTotal > 0) {
-      // ★ 残量は0までクランプ（消費が残量を超えても0で進行。ユーザー要望）
-      const raw = spool.remainingLengthMm - fallbackTotal;
-      if (raw < 0) {
-        console.warn(`[autoCorrect:fallback] ${hostname}: total(${fallbackTotal.toFixed(0)}) > remaining(${spool.remainingLengthMm.toFixed(0)}) → 残量0にクランプ`);
+    if (Array.isArray(persistedHistory) && persistedHistory.length) {
+      // 装着区間の下限（startPrintID/最新 mount の sinceJobId）以降の未紐付け完了印刷を対象
+      const sinceId = Number(spool.startPrintID) || 0;
+      const linkJobIds = new Set();
+      for (const entry of persistedHistory) {
+        if (!entry || !shouldLinkOfflineJob(entry)) continue;
+        if (!entry.printfinish) continue;
+        const used = Number(entry.materialUsedMm ?? NaN);
+        if (!Number.isFinite(used) || used <= 0) continue;
+        const numId = Number(entry.id);
+        if (!Number.isFinite(numId) || numId <= 0) continue;
+        // sinceId が確定している場合のみ下限で絞る（0=ブートストラップは全件対象）
+        if (sinceId > 0 && numId <= sinceId) continue;
+        linkJobIds.add(String(entry.id));
       }
-      spool.remainingLengthMm = Math.max(0, raw);
-      spool.updatedAt = Date.now();
-      spool.printCount = (spool.printCount || 0) + fallbackCount;
-      // ★ オフライン完了印刷へ現在フィラメントを継続紐付け
-      _linkOfflineJobsToSpool(hostname, spool, fallbackJobIds);
-      saveUnifiedStorage();
-    }
-    return;
-  }
-
-  // 履歴から取得した開始残量が数値でなければ補正不能と判断
-  const startLen = Number(change.startLength);
-  if (!Number.isFinite(startLen)) return;
-
-  // ★ 印刷IDベースの範囲判定
-  // startPrintID: スプール装着時の印刷epoch（下限）
-  // endPrintID: 次のスプール交換時の印刷epoch（上限）
-  const startPrintIdNum = Number(change.startPrintID ?? 0);
-  let endPrintIdNum = Infinity;
-  for (let i = startIdx + 1; i < logs.length; i++) {
-    if (logs[i].startLength != null) {
-      const nextId = Number(logs[i].startPrintID ?? 0);
-      if (Number.isFinite(nextId) && nextId > 0) {
-        endPrintIdNum = nextId;
+      if (linkJobIds.size > 0) {
+        _linkOfflineJobsToSpool(hostname, spool, linkJobIds);
       }
-      break;
     }
+  } catch (e) {
+    console.warn(`[autoCorrect] ${hostname}: オフライン紐付けに失敗:`, e?.message || e);
   }
 
-  // usageHistory からアプリ記録済みの消費を積算
-  const recordedJobIds = new Set();
-  let total = 0;
-  let count = 0;
-  for (let i = startIdx + 1; i < logs.length; i++) {
-    const e = logs[i];
-    if (e.startLength != null) break; // 次の交換で終了
-    if (e.spoolId !== spool.id) continue;
-    if (e.isSnapshot) continue;
-    const u = Number(e.usedLength);
-    if (!isNaN(u) && u > 0) {
-      total += u;
-      count += 1;
-      if (e.jobId) recordedJobIds.add(String(e.jobId));
-    }
-  }
-
-  // ★ 遡及補正: プリンター報告履歴（printStore.history）から未記録の完了印刷を加算
-  // アプリOFF中の印刷はusageHistoryに記録されないが、プリンター履歴には残っている
-  const persistedHistory = loadHistory(hostname);
-  const offlineJobIds = new Set();
-  if (startPrintIdNum > 0) {
-    for (const entry of persistedHistory) {
-      const entryId = String(entry.id ?? "");
-      if (!entryId || recordedJobIds.has(entryId)) continue;
-      if (!entry.printfinish) continue;
-      const used = Number(entry.materialUsedMm ?? NaN);
-      if (!Number.isFinite(used) || used <= 0) continue;
-
-      const numId = Number(entry.id);
-      if (!Number.isFinite(numId) || numId <= 0) continue;
-      if (numId <= startPrintIdNum) continue;           // 装着前の印刷
-      if (endPrintIdNum < Infinity && numId > endPrintIdNum) continue;  // 取り外し後の印刷
-
-      total += used;
-      count += 1;
-      offlineJobIds.add(entryId);
-      console.log(`[autoCorrect] ${hostname}: 未記録印刷 jobId=${entryId} から ${used.toFixed(0)}mm を遡及加算`);
-    }
-  }
-
-  // 計算された残量（消費が起点を超えても0までクランプ。ユーザー要望: 0到達後もそのまま進行）
-  if (!Number.isFinite(startLen - total)) return;
-  if (total > startLen) {
-    console.warn(`[autoCorrect] ${hostname}: total(${total.toFixed(0)}) > startLen(${startLen.toFixed(0)}) → 残量0にクランプ`);
-  }
-  const expected = Math.max(0, startLen - total);
-
-  // ★ オフライン完了印刷へ現在フィラメントを継続紐付け（残量変化の有無に関わらず実施）
-  _linkOfflineJobsToSpool(hostname, spool, offlineJobIds);
-
-  const diff = Math.abs(expected - spool.remainingLengthMm);
-  if (Number.isFinite(diff) && (diff > 0.1 || spool.printCount !== count)) {
-    spool.remainingLengthMm = expected;
-    spool.updatedAt = Date.now();
-    spool.printCount = count;
+  // ── 残量・printCount は信頼ソースから冪等に再計算（権威）──
+  const res = reconcileSpool(spool.id, { ts: Date.now() });
+  if (res && Math.abs((res.after ?? 0) - (beforeRemain || 0)) > 0.1) {
+    console.log(`[autoCorrect] ${hostname}: reconcile ${beforeRemain?.toFixed?.(0)} → ${res.after?.toFixed?.(0)} (mode=${res.mode}, verified=${res.verified})`);
     saveUnifiedStorage();
   }
 }

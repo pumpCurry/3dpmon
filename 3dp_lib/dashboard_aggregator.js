@@ -50,6 +50,7 @@ import {
   formatFilamentAmount,
   formatSpoolDisplayId
 } from "./dashboard_spool.js";
+import { reconcileSpool } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
 
 // ---------------------------------------------------------------------------
@@ -354,7 +355,10 @@ export function ingestData(data, hostname) {
   const validId = Number.isFinite(id) && id > 0;
   if (validId && id !== s.prevPrintID) {
     // 新しいジョブ開始時点でフィラメント使用量関連の変数を初期化
-    s.accumulatedUsedMaterial = !isNaN(matLen) ? matLen : 0;
+    // ★ ADR-0004: 累積は 0 から開始する（K1 の usedMaterialLength は印刷毎にリセットされ、
+    //   新 PrintID 検出時に matLen を初期累積へ入れると急減/過大計上の原因になる）。
+    //   prevUsedMaterialLength は matLen をデルタ基準として維持する。
+    s.accumulatedUsedMaterial = 0;
     s.prevUsedMaterialLength = !isNaN(matLen) ? matLen : null;
     s.prevUsageProgress = prog;
 
@@ -1131,6 +1135,10 @@ export function aggregatorUpdate() {
         }
         const isSuccess2 = (st === PRINT_STATE_CODE.printDone);
         finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2);
+        // ★ ADR-0004: 完了後に信頼ソースから残量を冪等補正（idle で権威補正）。
+        //   finalize 内でも reconcile するが、currentPrintID クリア後の確定状態で再度走らせる。
+        //   reconcile は印刷中スプールに触れないため二重防御として安全。冪等なので無害。
+        try { reconcileSpool(spool.id, { ts: _now }); } catch (e) { console.warn("[aggregator] reconcileSpool 失敗:", e?.message || e); }
         saveUnifiedStorage();
         s.accumulatedUsedMaterial = 0;
         s.prevUsedMaterialLength = null;

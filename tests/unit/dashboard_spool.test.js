@@ -54,7 +54,9 @@ import {
   getMaterialDensity,
   buildOfflineFilamentInfo,
   shouldLinkOfflineJob,
+  finalizeFilamentUsage,
 } from '../../3dp_lib/dashboard_spool.js';
+import { monitorData } from '../../3dp_lib/dashboard_data.js';
 
 // =============================================
 // getSpoolState
@@ -428,6 +430,53 @@ describe('shouldLinkOfflineJob', () => {
   it('null/undefined は false', () => {
     expect(shouldLinkOfflineJob(null)).toBe(false);
     expect(shouldLinkOfflineJob(undefined)).toBe(false);
+  });
+});
+
+// =============================================
+// finalizeFilamentUsage: 多重 finalize ガード（ADR-0004）
+// =============================================
+describe('finalizeFilamentUsage 多重 finalize ガード', () => {
+  beforeEach(() => {
+    // モック monitorData をセット（dashboard_data.js は vi.mock 済み）
+    monitorData.machines = {
+      h: { printStore: { current: null, history: [] }, historyData: [] }
+    };
+    monitorData.hostSpoolMap = { h: 'sp1' };
+    monitorData.filamentSpools = [{
+      id: 'sp1', serialNo: 1, name: 'PLA', colorName: '黒', filamentColor: '#000',
+      material: 'PLA', totalLengthMm: 100000, remainingLengthMm: 100000,
+      currentPrintID: '1001', currentJobStartLength: 100000, currentJobExpectedLength: 5000,
+      usedLengthLog: [], printCount: 0, costPerMm: 0
+    }];
+    monitorData.usageHistory = [];
+    monitorData.mountHistory = [];
+  });
+
+  it('同一 jobId で2回 finalize → 2回目は残量/usedLengthLog/printCount 不変', () => {
+    finalizeFilamentUsage(5000, '1001', 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    const remainAfter1 = sp.remainingLengthMm;
+    const logLenAfter1 = sp.usedLengthLog.length;
+    const countAfter1 = sp.printCount;
+
+    expect(remainAfter1).toBe(95000);      // 100000 - 5000
+    expect(logLenAfter1).toBe(1);
+    expect(countAfter1).toBe(1);
+    expect(sp.lastCompletedPrintID).toBe('1001');
+
+    // 2回目: 同一 jobId → ガードで即 return（何も変えない）
+    finalizeFilamentUsage(5000, '1001', 'h', true);
+    expect(sp.remainingLengthMm).toBe(remainAfter1); // 二重減算しない
+    expect(sp.usedLengthLog.length).toBe(logLenAfter1); // ログ重複しない
+    expect(sp.printCount).toBe(countAfter1); // printCount 増えない
+  });
+
+  it('usedLengthLog は同一 jobId を重複 push しない（多重防御）', () => {
+    // ガード前にログが既に1件ある状態を作り、jobId 衝突時に push されないことを確認
+    const sp = monitorData.filamentSpools[0];
+    finalizeFilamentUsage(5000, '1001', 'h', true);
+    expect(sp.usedLengthLog.filter(l => String(l.jobId) === '1001')).toHaveLength(1);
   });
 });
 

@@ -234,6 +234,15 @@ export const monitorData = {
   favoritePresets: [],
   usageHistory: [],
   filamentInventory: [],
+  /**
+   * フィラメント装着履歴（追記専用イベントログ。ADR-0004）。
+   * remainingLengthMm の権威。usageHistory のロールオーバーとは別ストアに置き、
+   * 装着/取外しイベントを保持する。MountEvent[]:
+   *   { evId, ts, type:"mount"|"unmount", host, spoolId,
+   *     anchorRemainingMm?, sinceJobId?(mount), untilJobId?(unmount) }
+   * @type {Array<Object>}
+   */
+  mountHistory: [],
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。
