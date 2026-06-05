@@ -90,6 +90,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   relayGetConfig: () => ipcRenderer.invoke("relay-get-config"),
 
   /**
+   * カメラパススルー用のホスト→エンドポイント マップをメインプロセスへ渡す。
+   * 子向け /relay-camera/{host}/snapshot.jpg の転送許可先になる。
+   *
+   * @param {Object<string, {ip: string, port: number}>} map - ホスト名→{ip, port}
+   */
+  setCameraEndpoints: (map) => ipcRenderer.send("set-camera-endpoints", map),
+
+  /**
    * リレー経由のコマンドを受信するリスナーを登録する。
    * 子（satellite）からのコマンドを親レンダラーが処理する。
    *

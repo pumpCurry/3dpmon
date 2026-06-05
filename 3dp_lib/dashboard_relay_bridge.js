@@ -46,6 +46,9 @@ const BROADCAST_INTERVAL_MS = 1000;
 /** 最終ブロードキャスト時刻 */
 let _lastBroadcastMs = 0;
 
+/** 前回送信したカメラエンドポイントマップのハッシュ（変更検出） */
+let _prevCameraEpHash = "";
+
 /**
  * 親側リレーブリッジを初期化する。
  * Electron 環境でのみ動作し、aggregator の post-update コールバックとして登録される。
@@ -113,6 +116,9 @@ export function initRelayBridge() {
     console.info(`[relay-bridge] 昇格要求 ${data.clientId}: ${result.granted ? "許可" : "拒否(" + result.reason + ")"}`);
   });
 
+  // カメラパススルー: 起動時に現在のエンドポイントマップを一度送る
+  _syncCameraEndpoints();
+
   _initialized = true;
   console.info("[relay-bridge] 親側リレーブリッジ初期化完了");
   return true;
@@ -147,6 +153,54 @@ export function verifyPromotePin(inputPin, configuredPin) {
 }
 
 /**
+ * connectionTargets からカメラパススルー用の
+ * `{ [hostname]: { ip, port } }` マップを構築する純関数。
+ *
+ * - ip は dest("IP:PORT") の先頭コロンより前を採用。
+ * - port は target.cameraPort → 既定 cameraPort → 8080 の優先順。
+ * - hostname が未解決（空）のターゲットはキーにできないためスキップする。
+ * - 同一 hostname が複数あれば後勝ち（DHCP統合後は基本1件）。
+ *
+ * @param {Array<{dest?: string, hostname?: string, cameraPort?: number}>} targets - 接続先リスト
+ * @param {number} [defaultCameraPort=8080] - 既定カメラポート（appSettings.cameraPort）
+ * @returns {Object<string, {ip: string, port: number}>}
+ */
+export function buildCameraEndpoints(targets, defaultCameraPort = 8080) {
+  const map = {};
+  if (!Array.isArray(targets)) return map;
+  for (const t of targets) {
+    const hostname = (t && t.hostname || "").trim();
+    if (!hostname) continue;                       // 未解決ホストはキーにできない
+    const dest = (t && t.dest || "").trim();
+    const ip = dest.split(":")[0].trim();
+    if (!ip) continue;                             // IP 不明は転送不可
+    const port = (t && t.cameraPort) || defaultCameraPort || 8080;
+    map[hostname] = { ip, port };
+  }
+  return map;
+}
+
+/**
+ * 現在の appSettings からカメラエンドポイントマップを構築し、
+ * 前回送信時から変化していれば（簡易ハッシュ比較）メインプロセスへ送る。
+ * 親(Electron)以外、または preload に setCameraEndpoints が無ければ何もしない。
+ *
+ * @private
+ * @returns {void}
+ */
+function _syncCameraEndpoints() {
+  if (!window.electronAPI?.setCameraEndpoints) return;
+  const map = buildCameraEndpoints(
+    monitorData.appSettings.connectionTargets || [],
+    monitorData.appSettings.cameraPort || 8080
+  );
+  const hash = _quickHash(map);
+  if (hash === _prevCameraEpHash) return;          // 変化なし
+  _prevCameraEpHash = hash;
+  window.electronAPI.setCameraEndpoints(map);
+}
+
+/**
  * aggregator 更新後に呼び出す。dirty keys を収集してリレーにブロードキャストする。
  * aggregatorUpdate の末尾から毎サイクル（500ms）呼ばれるが、
  * 実際のブロードキャストは BROADCAST_INTERVAL_MS（1000ms）に間引く。
@@ -159,6 +213,9 @@ export function relayBroadcastIfNeeded() {
   const now = Date.now();
   if (now - _lastBroadcastMs < BROADCAST_INTERVAL_MS) return;
   _lastBroadcastMs = now;
+
+  // カメラパススルー: 接続先（ホスト名解決/ポート変更）の変化を反映
+  _syncCameraEndpoints();
 
   const delta = _buildDelta();
   if (!delta) return; // 変更なし

@@ -55,6 +55,99 @@ let httpServer = null;
 /** リレーサーバモジュール */
 let relayServer = null;
 
+/* ─── カメラパススルー (リレー子向け snapshot プロキシ) ─── */
+
+/**
+ * ホスト名 → カメラエンドポイント のマップ。
+ * 親レンダラーが connectionTargets から構築し、set-camera-endpoints IPC で渡す。
+ * SSRF 対策: このマップに載っているホストのみ転送を許可する（任意IP転送禁止）。
+ *
+ * @type {Object<string, {ip: string, port: number}>}
+ */
+let _cameraEndpoints = {};
+
+/**
+ * ホスト別の最新スナップショットキャッシュ。
+ * 短時間(_CAM_CACHE_TTL_MS)に集中する複数子からの要求を1枚のフェッチでまかなう。
+ *
+ * @type {Map<string, {buf: Buffer, ts: number}>}
+ */
+const _camSnapCache = new Map();
+
+/**
+ * ホスト別の取得中 Promise（stampede 防止）。
+ * 同一ホストへの同時フェッチを1本に集約する。
+ *
+ * @type {Map<string, Promise<Buffer>>}
+ */
+const _camInflight = new Map();
+
+/** スナップショットキャッシュの有効期間 (ms) */
+const _CAM_CACHE_TTL_MS = 1200;
+/** プリンタへの snapshot 取得タイムアウト (ms) */
+const _CAM_FETCH_TIMEOUT_MS = 4000;
+/** スナップショット受理上限サイズ (bytes) — 暴走/誤転送防止 */
+const _CAM_MAX_BYTES = 3 * 1024 * 1024;
+
+/**
+ * プリンタカメラから単一スナップショット(JPEG)を1枚取得する。
+ * 既に取得中なら同じ Promise を共有する（stampede 防止）。
+ *
+ * @private
+ * @param {string} host - ホスト名（_cameraEndpoints のキー）
+ * @param {{ip: string, port: number}} ep - 解決済みエンドポイント
+ * @returns {Promise<Buffer>} JPEG バイト列（FFD8 で始まる）
+ */
+function _fetchCameraSnapshot(host, ep) {
+  const existing = _camInflight.get(host);
+  if (existing) return existing;
+
+  const p = new Promise((resolve, reject) => {
+    const port = ep.port || 8080;
+    const req = http.get(
+      { host: ep.ip, port, path: "/?action=snapshot", timeout: _CAM_FETCH_TIMEOUT_MS },
+      (resp) => {
+        if (resp.statusCode !== 200) {
+          resp.resume(); // ソケット解放
+          reject(new Error(`upstream status ${resp.statusCode}`));
+          return;
+        }
+        const chunks = [];
+        let total = 0;
+        resp.on("data", (chunk) => {
+          total += chunk.length;
+          if (total > _CAM_MAX_BYTES) {
+            req.destroy();
+            reject(new Error("snapshot too large"));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        resp.on("end", () => {
+          const buf = Buffer.concat(chunks);
+          // JPEG マジックナンバー(FFD8) チェック — MJPEG ストリーム等の誤受理を防ぐ
+          if (buf.length < 2 || buf[0] !== 0xFF || buf[1] !== 0xD8) {
+            reject(new Error("not a JPEG"));
+            return;
+          }
+          resolve(buf);
+        });
+        resp.on("error", reject);
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("snapshot timeout")));
+    req.on("error", reject);
+  });
+
+  _camInflight.set(host, p);
+  // 成否に関わらず in-flight を解除
+  p.then(
+    () => _camInflight.delete(host),
+    () => _camInflight.delete(host)
+  );
+  return p;
+}
+
 /**
  * メインウィンドウの参照を保持する。
  * GC によるウィンドウ破棄を防ぐためグローバルスコープに置く。
@@ -110,6 +203,55 @@ function startHttpServer(port) {
       if (req.url === "/api/relay-mode") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ mode: "parent", port, version: APP_VERSION }));
+        return;
+      }
+
+      // ─── リレー子向けカメラ snapshot プロキシ ───
+      // /relay-camera/{host}/snapshot.jpg → プリンタの /?action=snapshot を中継し
+      // 単一 JPEG を返す。子はプリンタに直接到達できないため親が代理取得する。
+      const camMatch = req.url.match(/^\/relay-camera\/(.+?)\/snapshot\.jpg/);
+      if (camMatch) {
+        const host = decodeURIComponent(camMatch[1]);
+        const ep = _cameraEndpoints[host];
+        if (!ep || !ep.ip) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Unknown camera host");
+          return;
+        }
+
+        const sendJpeg = (buf) => {
+          res.writeHead(200, {
+            "Content-Type": "image/jpeg",
+            "Content-Length": buf.length,
+            "Cache-Control": "no-store"
+          });
+          res.end(buf);
+        };
+
+        // キャッシュが新鮮ならそのまま返す（複数子の同時要求を吸収）
+        const cached = _camSnapCache.get(host);
+        if (cached && Date.now() - cached.ts < _CAM_CACHE_TTL_MS) {
+          sendJpeg(cached.buf);
+          return;
+        }
+
+        // プリンタから1枚取得（in-flight 集約）。失敗は 502。
+        _fetchCameraSnapshot(host, ep).then(
+          (buf) => {
+            _camSnapCache.set(host, { buf, ts: Date.now() });
+            sendJpeg(buf);
+          },
+          (err) => {
+            // 失敗時、わずかに古いキャッシュがあれば代替提示（連続コマ落ち緩和）
+            const stale = _camSnapCache.get(host);
+            if (stale) {
+              sendJpeg(stale.buf);
+              return;
+            }
+            res.writeHead(502, { "Content-Type": "text/plain" });
+            res.end("Camera fetch failed: " + (err && err.message ? err.message : "error"));
+          }
+        );
         return;
       }
 
@@ -503,6 +645,14 @@ app.whenReady().then(async () => {
     port: RELAY_PORT,
     clients: relayServer?.getClients() || []
   }));
+
+  // レンダラー(親) → カメラパススルー: ホスト→エンドポイント のマップを受け取る
+  // 子向け /relay-camera/{host}/snapshot.jpg の転送許可先（SSRF allowlist）になる
+  ipcMain.on("set-camera-endpoints", (_e, map) => {
+    if (map && typeof map === "object") {
+      _cameraEndpoints = map;
+    }
+  });
 
   /* ─── ARP 解決 IPC ─── */
   const { resolveArp, scanArpTable, isCrealityDevice } = require("./arp_resolver.js");
