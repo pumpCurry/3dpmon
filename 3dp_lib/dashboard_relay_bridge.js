@@ -40,8 +40,9 @@ const _prevPrintHash = new Map();
 /** 前回ブロードキャスト時の各ホストのファイル一覧(_cachedFileInfo)ハッシュ */
 const _prevFileHash = new Map();
 
-/** ブロードキャスト間隔 (ms) — aggregator は 500ms、リレーは 1000ms */
-const BROADCAST_INTERVAL_MS = 1000;
+/** ブロードキャスト間隔 (ms) — aggregator と同じ 500ms（子を 2回/秒で更新）。
+ *  差分は変化キーのみなので 1000ms→500ms でも転送量増は軽微。 */
+const BROADCAST_INTERVAL_MS = 500;
 
 /** 最終ブロードキャスト時刻 */
 let _lastBroadcastMs = 0;
@@ -203,7 +204,7 @@ function _syncCameraEndpoints() {
 /**
  * aggregator 更新後に呼び出す。dirty keys を収集してリレーにブロードキャストする。
  * aggregatorUpdate の末尾から毎サイクル（500ms）呼ばれるが、
- * 実際のブロードキャストは BROADCAST_INTERVAL_MS（1000ms）に間引く。
+ * 実際のブロードキャストは BROADCAST_INTERVAL_MS（500ms）に間引く。
  *
  * @returns {void}
  */
