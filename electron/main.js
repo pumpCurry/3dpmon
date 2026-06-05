@@ -58,11 +58,14 @@ let relayServer = null;
 /* ─── カメラパススルー (リレー子向け snapshot プロキシ) ─── */
 
 /**
- * ホスト名 → カメラエンドポイント のマップ。
+ * ホスト名 → カメラ／画像エンドポイント のマップ。
  * 親レンダラーが connectionTargets から構築し、set-camera-endpoints IPC で渡す。
  * SSRF 対策: このマップに載っているホストのみ転送を許可する（任意IP転送禁止）。
  *
- * @type {Object<string, {ip: string, port: number}>}
+ * - port    : カメラ snapshot/stream 用ポート（既定 8080）
+ * - httpPort : プリンタ HTTP 静的アセット用ポート（既定 80、画像パススルーで使用）
+ *
+ * @type {Object<string, {ip: string, port: number, httpPort?: number}>}
  */
 let _cameraEndpoints = {};
 
@@ -88,6 +91,13 @@ const _CAM_CACHE_TTL_MS = 1200;
 const _CAM_FETCH_TIMEOUT_MS = 4000;
 /** スナップショット受理上限サイズ (bytes) — 暴走/誤転送防止 */
 const _CAM_MAX_BYTES = 3 * 1024 * 1024;
+
+/* ─── 画像パススルー (リレー子向け 静的画像プロキシ) ─── */
+
+/** プリンタ画像取得タイムアウト (ms) */
+const _IMG_FETCH_TIMEOUT_MS = 5000;
+/** 画像受理上限サイズ (bytes) — サムネ/アイコン用途。暴走/誤転送防止 */
+const _IMG_MAX_BYTES = 10 * 1024 * 1024;
 
 /**
  * プリンタカメラから単一スナップショット(JPEG)を1枚取得する。
@@ -252,6 +262,92 @@ function startHttpServer(port) {
             res.end("Camera fetch failed: " + (err && err.message ? err.message : "error"));
           }
         );
+        return;
+      }
+
+      // ─── リレー子向け 画像パススルー プロキシ ───
+      // /relay-image/{host}/{path...} → プリンタの HTTP(:80) 静的アセットを中継。
+      // サムネ/アイコン等。子はプリンタに直接到達できないため親が代理取得する。
+      // SSRF/トラバーサル対策: host は _cameraEndpoints 限定、path は downloads/ 配下のみ許可。
+      const imgMatch = req.url.match(/^\/relay-image\/([^/]+)\/(.+)$/);
+      if (imgMatch) {
+        // クエリ文字列を分離（後で上流へ転送）。g2 はパス部分のみ。
+        const qIdx = imgMatch[2].indexOf("?");
+        const query = qIdx >= 0 ? imgMatch[2].slice(qIdx) : "";
+        const rawPath = qIdx >= 0 ? imgMatch[2].slice(0, qIdx) : imgMatch[2];
+        // 不正な %エンコードは 400（uncaught 例外でハンドラを落とさない）
+        let host, decodedPath;
+        try {
+          host = decodeURIComponent(imgMatch[1]);
+          decodedPath = decodeURIComponent(rawPath);
+        } catch {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Bad request");
+          return;
+        }
+
+        const ep = _cameraEndpoints[host];
+        if (!ep || !ep.ip) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Unknown image host");
+          return;
+        }
+
+        // トラバーサル対策: ".." を含むパスは拒否
+        if (decodedPath.includes("..")) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden path");
+          return;
+        }
+        // プリンタ静的アセット限定: downloads/ 配下のみ許可
+        if (!decodedPath.startsWith("downloads/")) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden path");
+          return;
+        }
+
+        const imgPort = ep.httpPort || 80;
+        // クエリは生のまま転送（rawPath はデコード済みだが downloads/ 配下に限定済み）
+        const upstreamPath = "/" + rawPath + query;
+        const ireq = http.get(
+          { host: ep.ip, port: imgPort, path: upstreamPath, timeout: _IMG_FETCH_TIMEOUT_MS },
+          (iresp) => {
+            const status = iresp.statusCode || 502;
+            if (status !== 200) {
+              iresp.resume(); // ソケット解放
+              res.writeHead(status, { "Content-Type": "text/plain" });
+              res.end("Upstream status " + status);
+              return;
+            }
+            const headers = {
+              // サムネ/アイコンは実質不変なのでブラウザにキャッシュさせる
+              "Cache-Control": "public, max-age=3600"
+            };
+            if (iresp.headers["content-type"]) {
+              headers["Content-Type"] = iresp.headers["content-type"];
+            }
+            res.writeHead(200, headers);
+            // サイズ上限を監視しつつストリーム返却
+            let total = 0;
+            iresp.on("data", (chunk) => {
+              total += chunk.length;
+              if (total > _IMG_MAX_BYTES) {
+                ireq.destroy();
+                res.destroy();
+              }
+            });
+            iresp.pipe(res);
+          }
+        );
+        ireq.on("timeout", () => ireq.destroy(new Error("image timeout")));
+        ireq.on("error", (err) => {
+          if (res.headersSent) {
+            res.destroy();
+            return;
+          }
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Image fetch failed: " + (err && err.message ? err.message : "error"));
+        });
         return;
       }
 

@@ -36,8 +36,7 @@ vi.mock('../../3dp_lib/dashboard_printmanager.js', () => ({
   saveHistory: vi.fn(),
 }));
 vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
-  getDeviceIp: vi.fn(),
-  getHttpPort: vi.fn(),
+  getDisplayBaseUrl: vi.fn(() => 'http://test:80'),
 }));
 
 import {

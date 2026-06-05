@@ -59,7 +59,7 @@ import {
   formatSpoolDisplayId,
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp, getHttpPort, getConnectionState } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -393,8 +393,7 @@ export function rerenderHistoryForHost(hostname) {
   try {
     const jobs = loadHistory(hostname);
     if (!jobs.length) return;
-    const ip = getDeviceIp(hostname);
-    const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+    const baseUrl = getDisplayBaseUrl(hostname);
     renderHistoryTable(jobsToRaw(jobs), baseUrl, hostname);
   } catch (e) {
     console.warn("[printmanager] rerenderHistoryForHost エラー:", e);
@@ -414,8 +413,7 @@ export function rerenderFileListForHost(hostname) {
   try {
     const machine = monitorData.machines[hostname];
     if (!machine?._cachedFileInfo) return;
-    const ip = getDeviceIp(hostname);
-    const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+    const baseUrl = getDisplayBaseUrl(hostname);
     renderFileList(machine._cachedFileInfo, baseUrl, hostname);
   } catch (e) {
     console.warn("[printmanager] rerenderFileListForHost エラー:", e);
@@ -812,8 +810,7 @@ export function renderPrintCurrent(containerEl, hostname) {
   if (!containerEl) return;
   containerEl.innerHTML = "";
   const job = loadCurrent(hostname);
-  const ip = getDeviceIp(hostname);
-  const baseUrl = `http://${ip}`;
+  const baseUrl = getDisplayBaseUrl(hostname);
 
   if (!job) {
     containerEl.innerHTML = "<p>現在印刷中のジョブはありません。</p>";
@@ -848,8 +845,7 @@ export function renderPrintCurrent(containerEl, hostname) {
 export function renderPrintHistory(containerEl, hostname) {
   if (!containerEl) return;
   const jobs = loadHistory(hostname);
-  const ip = getDeviceIp(hostname);
-  const baseUrl = `http://${ip}`;
+  const baseUrl = getDisplayBaseUrl(hostname);
 
   containerEl.innerHTML = "";
   if (!jobs.length) {
@@ -2242,7 +2238,7 @@ export function setupUploadUI(root, hostname) {
     //   静的画像（全機種で同一）を使う。特定 hostname への依存を排除するため
     //   allHosts 確定後に解決する。allHosts が空なら直後のエラー分岐で抜ける。
     if (!thumb && allHosts.length > 0) {
-      thumb = `http://${getDeviceIp(allHosts[0])}/downloads/defData/file_icon.png`;
+      thumb = `${getDisplayBaseUrl(allHosts[0])}/downloads/defData/file_icon.png`;
     }
 
     // ★ 接続中ホストが0台なら即エラー

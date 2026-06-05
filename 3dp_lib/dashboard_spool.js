@@ -51,7 +51,7 @@ import {
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
-import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
+import { getDisplayBaseUrl } from "./dashboard_connection.js";
 
 /**
  * スプールのライフサイクル状態定数
@@ -694,7 +694,7 @@ export function setCurrentSpoolId(id, hostname) {
         if (buf) {
           buf.filamentId = newSpool.id;
           // 履歴バッファに補完したフィラメントIDを画面へ即反映する
-          const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+          const baseUrl = getDisplayBaseUrl(host);
           updateHistoryList([buf], baseUrl, "print-current-container", host);
         }
       }
@@ -1093,7 +1093,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
   }
   saveUnifiedStorage(true);
   if (entry) {
-    const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+    const baseUrl = getDisplayBaseUrl(host);
     updateHistoryList([entry], baseUrl, "print-current-container", host);
   }
 }
@@ -1238,7 +1238,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   updateStoredDataToDOM();
   saveUnifiedStorage(true);
   if (entry) {
-    const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+    const baseUrl = getDisplayBaseUrl(host);
     updateHistoryList([entry], baseUrl, "print-current-container", host);
   }
   cleanupUsageSnapshots(jobId);

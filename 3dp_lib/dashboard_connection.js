@@ -659,6 +659,31 @@ export function getHttpPort(host) {
 }
 
 /**
+ * getDisplayBaseUrl:
+ * ------------------
+ * サムネ/アイコン等プリンタ画像を表示するためのベースURLを返す。
+ *
+ * - リレー子（satellite/readonly）: 子はプリンタへ直接到達できないため、
+ *   親(5313)の画像プロキシ `/relay-image/{host}` を指す相対URLを返す。
+ *   相対なので子→親 origin に届く。getDeviceIp は子では空を返すため、
+ *   このヘルパーを使わないと `http://:80/...` 等の壊れたURLになる。
+ * - 親/standalone: 従来どおり `http://{ip}:{httpPort}` の直URLを返す。
+ *
+ * 返り値は makeThumbUrl 等で `${baseUrl}/downloads/...` と連結される前提。
+ * 相対ベース（先頭"/"）でも文字列連結で正しいパスになる。
+ *
+ * @function getDisplayBaseUrl
+ * @param {string} host - ホスト名
+ * @returns {string} 表示用ベースURL（末尾スラッシュなし）
+ */
+export function getDisplayBaseUrl(host) {
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    return "/relay-image/" + encodeURIComponent(host);
+  }
+  return `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+}
+
+/**
  * _syncPanelsForHost:
  * -------------------
  * ホスト名確定時にパネルを同期する。

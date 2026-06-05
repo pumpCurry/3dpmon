@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getHttpPort, sendCommand } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -694,8 +694,7 @@ function initHistoryPanel(body, hostname) {
   try {
     const jobs = printManager.loadHistory(hostname);
     if (jobs.length) {
-      const ip = getDeviceIp(hostname);
-      const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+      const baseUrl = getDisplayBaseUrl(hostname);
       const raw = printManager.jobsToRaw(jobs);
       printManager.renderHistoryTable(raw, baseUrl, hostname);
     }
@@ -741,8 +740,7 @@ function initFileListPanel(body, hostname) {
   try {
     const machine = monitorData.machines[hostname];
     if (machine?._cachedFileInfo) {
-      const ip = getDeviceIp(hostname);
-      const baseUrl = `http://${ip}:${getHttpPort(hostname)}`;
+      const baseUrl = getDisplayBaseUrl(hostname);
       printManager.renderFileList(machine._cachedFileInfo, baseUrl, hostname);
     }
   } catch (e) {

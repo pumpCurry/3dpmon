@@ -23,7 +23,7 @@
 "use strict";
 
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
-import { sendCommand } from "./dashboard_connection.js";
+import { sendCommand, getHttpPort } from "./dashboard_connection.js";
 
 /** ブリッジ初期化済みフラグ */
 let _initialized = false;
@@ -182,9 +182,15 @@ export function buildCameraEndpoints(targets, defaultCameraPort = 8080) {
 }
 
 /**
- * 現在の appSettings からカメラエンドポイントマップを構築し、
+ * 現在の appSettings からカメラ／画像パススルー用エンドポイントマップを構築し、
  * 前回送信時から変化していれば（簡易ハッシュ比較）メインプロセスへ送る。
  * 親(Electron)以外、または preload に setCameraEndpoints が無ければ何もしない。
+ *
+ * - buildCameraEndpoints は純関数（{ip, port}）のまま保ち、
+ *   画像パススルー用の httpPort はここで host ごとに付与する。
+ * - httpPort は getHttpPort(hostname)（dashboard_connection.js）と一致させる。
+ *   これは親が自分の画像URL（http://ip:httpPort/downloads/...）で使うポートと同じ。
+ * - 変更検出ハッシュは httpPort 込みで取る（ポート変更時も再送される）。
  *
  * @private
  * @returns {void}
@@ -195,6 +201,10 @@ function _syncCameraEndpoints() {
     monitorData.appSettings.connectionTargets || [],
     monitorData.appSettings.cameraPort || 8080
   );
+  // 画像パススルー用 httpPort を host ごとに付与（builder は pure のまま）。
+  for (const hostname of Object.keys(map)) {
+    map[hostname].httpPort = getHttpPort(hostname);
+  }
   const hash = _quickHash(map);
   if (hash === _prevCameraEpHash) return;          // 変化なし
   _prevCameraEpHash = hash;
