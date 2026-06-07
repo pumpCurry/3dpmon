@@ -50,7 +50,7 @@ import {
   formatFilamentAmount,
   formatSpoolDisplayId
 } from "./dashboard_spool.js";
-import { reconcileSpool } from "./dashboard_filament_ledger.js";
+import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
 
 // ---------------------------------------------------------------------------
@@ -231,6 +231,37 @@ function _getState(hostname) {
   if (!host) { return _createHostState(); }
   if (!_hostStates.has(host)) _hostStates.set(host, _createHostState());
   return _hostStates.get(host);
+}
+
+/**
+ * ADR-0005 (B1/P4): スプール交換時にライブ使用量カウンタを文脈に応じて再ベースラインする。
+ *
+ * `setCurrentSpoolId`（dashboard_spool.js）から呼ばれる。aggregator private な per-host 状態の
+ * `accumulatedUsedMaterial`（積算）と `prevUsedMaterialLength`（次デルタの基線）を設定し直し、
+ * 「旧スプールの累積を引き継いだまま新スプール残量から減算→過大→0クランプで張り付く」(B1) を断つ。
+ * 新スプールの `currentJobStartLength` は呼び出し側（spool.js）が設定する（責務分離）。
+ * `prevUsageProgress` も基線に合わせてリセットする（推定フォールバック経路の整合）。
+ *
+ * @function rebaselineHostUsage
+ * @param {string} host - ホスト名
+ * @param {Object} [params]
+ * @param {number} [params.accumulated] - 新しい s.accumulatedUsedMaterial
+ * @param {number} [params.prevUsed] - 新しい s.prevUsedMaterialLength（次デルタの基線）
+ * @returns {void}
+ */
+export function rebaselineHostUsage(host, { accumulated, prevUsed } = {}) {
+  if (!host) return;
+  const s = _getState(host);
+  if (accumulated != null && Number.isFinite(Number(accumulated))) {
+    s.accumulatedUsedMaterial = Number(accumulated);
+  }
+  if (prevUsed != null && Number.isFinite(Number(prevUsed))) {
+    s.prevUsedMaterialLength = Number(prevUsed);
+  } else if (prevUsed === null) {
+    // 明示的な null は「基線未確定」（次回受信をベースラインにする＝A4 経路）
+    s.prevUsedMaterialLength = null;
+  }
+  s.prevUsageProgress = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +562,23 @@ export function ingestData(data, hostname) {
   if (s.prevMaterialStatus !== null) {
     if (s.prevMaterialStatus === 0 && matStat === 1) {
       notificationManager.notify("filamentOut", { hostname: host });
+      // ★ ADR-0005 P1: 切れイベントの状態文脈を per-host に記録（後の交換操作の遡及判定用）
+      try {
+        const _curSp = getCurrentSpool(host);
+        const _stNow = Number(storedData.state?.rawValue || 0);
+        const _total = Number(_curSp?.totalLengthMm);
+        recordFilamentEvent({
+          host,
+          ts: nowMs,
+          stateAtEvent: _stNow,
+          oldSpoolId: _curSp?.id ?? null,
+          oldRemainingMm: Number(_curSp?.remainingLengthMm),
+          oldRemainingPct: _curSp && _total > 0
+            ? (Number(_curSp.remainingLengthMm) / _total) * 100 : NaN,
+          runout: true,
+          inflightJobId: _curSp?.currentPrintID || (machine?.printStore?.current?.id ?? null)
+        });
+      } catch (e) { console.warn("[aggregator] recordFilamentEvent(runout) 失敗:", e?.message || e); }
       if (s.filamentOutTimer) clearTimeout(s.filamentOutTimer);
       s.filamentOutTimer = setTimeout(() => {
         if (s.currentMaterialStatus === 1) {
@@ -966,6 +1014,32 @@ export function aggregatorUpdate() {
     //   printIdle かつ currentPrintID 残留 は、次回印刷開始時の idle→start 遷移（L980-1006）でクリアされる。
     const isCompleted = st === PRINT_STATE_CODE.printDone
                      || st === PRINT_STATE_CODE.printFailed;
+
+    // ★ ADR-0005 P1: 印刷中→一時停止の遷移で状態文脈を記録（一時停止中の交換=分割の遡及判定用）。
+    if (spool
+        && st === PRINT_STATE_CODE.printPaused
+        && s.lastPrintState === PRINT_STATE_CODE.printStarted) {
+      try {
+        const _total = Number(spool.totalLengthMm);
+        recordFilamentEvent({
+          host,
+          ts: _now,
+          stateAtEvent: PRINT_STATE_CODE.printPaused,
+          oldSpoolId: spool.id,
+          oldRemainingMm: Number(spool.remainingLengthMm),
+          oldRemainingPct: _total > 0 ? (Number(spool.remainingLengthMm) / _total) * 100 : NaN,
+          runout: s.currentMaterialStatus === 1,
+          inflightJobId: spool.currentPrintID || (machine?.printStore?.current?.id ?? null)
+        });
+      } catch (e) { console.warn("[aggregator] recordFilamentEvent(pause) 失敗:", e?.message || e); }
+    }
+    // ★ ADR-0005: 印刷終了（done/fail/idle へ遷移）で未解決のイベント文脈を既定解決（次ジョブへ漏らさない）。
+    if ((s.lastPrintState === PRINT_STATE_CODE.printStarted || s.lastPrintState === PRINT_STATE_CODE.printPaused)
+        && (st === PRINT_STATE_CODE.printDone || st === PRINT_STATE_CODE.printFailed || st === PRINT_STATE_CODE.printIdle)) {
+      try { resolveFilamentEvent(host, "default-continue", { ts: _now }); }
+      catch (e) { console.warn("[aggregator] resolveFilamentEvent 失敗:", e?.message || e); }
+    }
+
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
       console.log(`[aggregatorUpdate] ${host}: state=${st}(完了) で currentPrintID=${spool.currentPrintID} が残留 → クリア`);
       spool.currentJobStartLength = null;

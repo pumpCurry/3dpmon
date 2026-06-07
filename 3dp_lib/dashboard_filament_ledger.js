@@ -14,17 +14,20 @@
  * - 純関数群（import は monitorData のみ）。Date.now()/Math.random は使わず時刻は引数で受ける。
  *
  * 【公開関数一覧】
- * - {@link appendMountEvent}：装着イベントを mountHistory に追記
- * - {@link appendUnmountEvent}：取外しイベントを mountHistory に追記
+ * - {@link appendMountEvent}：装着イベントを mountHistory に追記（evId 重複ガード）
+ * - {@link appendUnmountEvent}：取外しイベントを mountHistory に追記（evId 重複ガード）
  * - {@link attributedUsed}：ジョブが当該スプールに帰属させる消費量(mm)
  * - {@link getSpoolIntervals}：スプールの装着区間配列を構築
  * - {@link deriveSpoolRemaining}：信頼ソースから残量を冪等に導出
  * - {@link reconcileSpool}：導出値で spool.remainingLengthMm を補正（印刷中は触らない）
  * - {@link initLedgerAnchors}：装着中スプールにアンカー mount イベントを種付け（過去再計算しない）
+ * - {@link recordFilamentEvent}：切れ/一時停止イベントの状態文脈を per-host に記録（ADR-0005）
+ * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
+ * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 2.2.1012
+ * @version 2.2.1015
  * @since   2.2.1012
- * @lastModified 2026-06-05
+ * @lastModified 2026-06-07
  * -----------------------------------------------------------
  */
 
@@ -110,10 +113,15 @@ function _isCompleted(job) {
  */
 export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts } = {}) {
   const list = _getMountHistory();
+  // evId は内容ベースで一意かつ安定にする（同一 ts で複数ホストを種付けしても衝突せず、
+  // 再 import 時は同一イベントが同一 evId になり dedup が正しく効く）
+  const evId = `mount_${spoolId}_${ts}`;
+  // ★ ADR-0005 P7: evId 重複ガード。同一 evId（= 同一 spoolId/ts）の二重追記は
+  //   1件に畳む（同秒の二重発火を冪等化し、二重区間の発生を防ぐ）。
+  const dup = list.find(e => e && e.evId === evId);
+  if (dup) return dup;
   const ev = {
-    // evId は内容ベースで一意かつ安定にする（同一 ts で複数ホストを種付けしても衝突せず、
-    // 再 import 時は同一イベントが同一 evId になり dedup が正しく効く）
-    evId: `mount_${spoolId}_${ts}`,
+    evId,
     ts,
     type: "mount",
     host,
@@ -138,8 +146,12 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
  */
 export function appendUnmountEvent({ host, spoolId, untilJobId, ts } = {}) {
   const list = _getMountHistory();
+  const evId = `unmount_${spoolId}_${ts}`;
+  // ★ ADR-0005 P7: evId 重複ガード（mount と同じく同秒二重追記を畳む）
+  const dup = list.find(e => e && e.evId === evId);
+  if (dup) return dup;
   const ev = {
-    evId: `unmount_${spoolId}_${ts}`,
+    evId,
     ts,
     type: "unmount",
     host,
@@ -440,4 +452,112 @@ export function initLedgerAnchors({ nowMs } = {}) {
   }
 
   return { seeded, report };
+}
+
+// ===========================================================================
+// ADR-0005: 状態認識つき帰属のための「イベント文脈」純関数
+// ---------------------------------------------------------------------------
+// フィラメント切れ／一時停止の発生時に per-host で {state, ts, 旧残量, runout}
+// を記録し、後からの交換操作でも「発生時点の状態」に遡及して
+// 稼働中(=ジョブ全体→新)／一時停止(=分割) を判定できるようにする（R4/R5）。
+// monitorData にのみ依存し、ts は引数で受ける純関数（Date 不使用＝再現性）。
+// ===========================================================================
+
+/**
+ * filamentEventContext マップを取得する（無ければ初期化）。
+ *
+ * @private
+ * @returns {Object.<string, Object>} host -> イベント文脈
+ */
+function _getEventContextMap() {
+  if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
+    monitorData.filamentEventContext = {};
+  }
+  return monitorData.filamentEventContext;
+}
+
+/**
+ * フィラメント切れ／一時停止イベントを per-host に記録（upsert）する。
+ *
+ * - そのホストに未解決(open)の文脈があれば「更新」する（origin の evId/ts は保持＝R4）。
+ *   切れ(0→1)の後に一時停止へ遷移した場合などに、stateAtEvent を交換に近い状態へ更新する。
+ * - 未解決が無ければ新規作成。evId は `fctx_<host>_<ts>`（同一 ts の二重記録を冪等化）。
+ *
+ * @function recordFilamentEvent
+ * @param {Object} params
+ * @param {string} params.host - ホスト名
+ * @param {number} params.ts - イベント発生時刻 ms（origin。クリック時刻ではない＝R4）
+ * @param {number} [params.stateAtEvent] - 発生時の印刷状態コード（PRINT_STATE_CODE）
+ * @param {string} [params.oldSpoolId] - 発生時の装着スプールID
+ * @param {number} [params.oldRemainingMm] - 発生時の旧スプール残量(mm)
+ * @param {number} [params.oldRemainingPct] - 発生時の旧スプール残量(%)（<10% ゲート用・第2弾）
+ * @param {boolean} [params.runout] - 切れセンサー ON（matStat 0→1）由来か
+ * @param {number|string} [params.jobIdAtEvent] - 発生時のそのホストの最新完了 printId（Lc・区間境界）
+ * @param {number|string} [params.inflightJobId] - 発生時の進行中ジョブID（finalize 対象）
+ * @returns {?Object} 記録/更新した文脈オブジェクト（host 未指定なら null）
+ */
+export function recordFilamentEvent({
+  host, ts, stateAtEvent, oldSpoolId, oldRemainingMm, oldRemainingPct,
+  runout, jobIdAtEvent, inflightJobId
+} = {}) {
+  if (!host) return null;
+  const map = _getEventContextMap();
+  const open = map[host];
+  if (open && !open.resolved) {
+    // 未解決文脈を更新（origin の evId/ts は保持）。
+    if (stateAtEvent != null) open.stateAtEvent = Number(stateAtEvent);
+    if (runout) open.runout = true;
+    if (oldSpoolId != null) open.oldSpoolId = oldSpoolId;
+    if (Number.isFinite(oldRemainingMm)) open.oldRemainingMm = Number(oldRemainingMm);
+    if (Number.isFinite(oldRemainingPct)) open.oldRemainingPct = Number(oldRemainingPct);
+    if (jobIdAtEvent != null) open.jobIdAtEvent = jobIdAtEvent;
+    if (inflightJobId != null) open.inflightJobId = inflightJobId;
+    return open;
+  }
+  const ctx = {
+    evId: `fctx_${host}_${ts}`,
+    ts,
+    stateAtEvent: stateAtEvent != null ? Number(stateAtEvent) : null,
+    oldSpoolId: oldSpoolId ?? null,
+    oldRemainingMm: Number.isFinite(oldRemainingMm) ? Number(oldRemainingMm) : null,
+    oldRemainingPct: Number.isFinite(oldRemainingPct) ? Number(oldRemainingPct) : null,
+    runout: !!runout,
+    jobIdAtEvent: jobIdAtEvent ?? null,
+    inflightJobId: inflightJobId ?? null,
+    resolved: false,
+    resolution: null
+  };
+  map[host] = ctx;
+  return ctx;
+}
+
+/**
+ * 指定ホストの未解決(open)イベント文脈を返す。
+ *
+ * @function getOpenFilamentEvent
+ * @param {string} host - ホスト名
+ * @returns {?Object} 未解決文脈（無ければ null）
+ */
+export function getOpenFilamentEvent(host) {
+  const ctx = monitorData.filamentEventContext?.[host];
+  return ctx && !ctx.resolved ? ctx : null;
+}
+
+/**
+ * 指定ホストの未解決イベント文脈を解決済みにする。
+ *
+ * @function resolveFilamentEvent
+ * @param {string} host - ホスト名
+ * @param {string} resolution - 解決種別（"whole" | "split" | "default-continue" 等）
+ * @param {Object} [opts]
+ * @param {number} [opts.ts] - 解決時刻 ms（任意）
+ * @returns {?Object} 解決した文脈（未解決が無ければ null）
+ */
+export function resolveFilamentEvent(host, resolution, { ts } = {}) {
+  const ctx = monitorData.filamentEventContext?.[host];
+  if (!ctx || ctx.resolved) return null;
+  ctx.resolved = true;
+  ctx.resolution = resolution ?? "default-continue";
+  if (ts != null) ctx.resolvedAt = ts;
+  return ctx;
 }

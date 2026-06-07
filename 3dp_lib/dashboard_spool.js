@@ -46,12 +46,40 @@ import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import {
   appendMountEvent,
   appendUnmountEvent,
-  reconcileSpool
+  reconcileSpool,
+  getOpenFilamentEvent,
+  resolveFilamentEvent
 } from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
 import { getDisplayBaseUrl } from "./dashboard_connection.js";
+
+/**
+ * ADR-0005: 一時停止の印刷状態コード（dashboard_ui_mapping.js の
+ * PRINT_STATE_CODE.printPaused=5 と同値）。ui_mapping は notification_manager 等の
+ * 重い依存を持つため、循環/重依存 import を避けてここでローカル定義する。
+ * @private
+ */
+const _PRINT_PAUSED = 5;
+
+/**
+ * aggregator の rebaselineHostUsage アクセサ（循環参照回避用）。
+ * boot 時に {@link registerRebaselineHostUsage} で設定される。未設定時は no-op。
+ * @private
+ * @type {?Function}
+ */
+let _rebaselineHostUsage = null;
+
+/**
+ * aggregator の rebaselineHostUsage を登録する（boot 時、循環 import 回避）。
+ *
+ * @param {Function} fn - rebaselineHostUsage(host, {accumulated, prevUsed})
+ * @returns {void}
+ */
+export function registerRebaselineHostUsage(fn) {
+  _rebaselineHostUsage = fn;
+}
 
 /**
  * スプールのライフサイクル状態定数
@@ -534,13 +562,65 @@ function _upsertHistoryUsage(host, jobId, usedMm, isSuccess) {
 }
 
 /**
+ * ADR-0005: 分割（複数リール / 1ジョブ）の per-reel 消費を信頼ソース printStore.history に
+ * 反映する。当該リールの filamentInfo エントリ(usedMm)を spoolId 単位で upsert し、
+ * materialUsedMm を全リール usedMm の合計（ジョブ総消費）に更新する。
+ *
+ * 単一スプールジョブには使わない（materialUsedMm をプリンタ確定値に委ねる _upsertHistoryUsage の
+ * 方針を維持）。分割が成立したジョブにのみ呼び、derive が各リールを正しく帰属できるようにする。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {string|number} jobId - 対象ジョブID（printId）
+ * @param {Object} reelSpool - リールのスプールオブジェクト（id/メタ）
+ * @param {number} usedMm - 当該リールの消費量(mm)
+ * @returns {void}
+ */
+function _upsertSplitReel(host, jobId, reelSpool, usedMm) {
+  if (!host || !reelSpool) return;
+  const machine = monitorData.machines?.[host];
+  if (!machine?.printStore || typeof machine.printStore !== "object") return;
+  if (!Array.isArray(machine.printStore.history)) machine.printStore.history = [];
+  const hist = machine.printStore.history;
+  const idStr = String(jobId);
+  let entry = hist.find(h => String(h.id) === idStr);
+  if (!entry) {
+    const numId = Number(jobId);
+    entry = { id: Number.isFinite(numId) ? numId : jobId };
+    hist.push(entry);
+  }
+  entry.filamentInfo = Array.isArray(entry.filamentInfo) ? entry.filamentInfo : [];
+  const used = Math.max(0, Number(usedMm) || 0);
+  const existing = entry.filamentInfo.find(fi => fi && fi.spoolId === reelSpool.id);
+  if (existing) {
+    existing.usedMm = used;
+  } else {
+    entry.filamentInfo.push({
+      spoolId: reelSpool.id,
+      serialNo: reelSpool.serialNo,
+      spoolName: reelSpool.name,
+      colorName: reelSpool.colorName,
+      filamentColor: reelSpool.filamentColor,
+      material: reelSpool.material,
+      usedMm: used
+    });
+  }
+  // materialUsedMm = 全リール usedMm 合計（ジョブ総消費）
+  let total = 0;
+  for (const fi of entry.filamentInfo) total += Math.max(0, Number(fi?.usedMm) || 0);
+  if (total > 0) entry.materialUsedMm = total;
+  if (entry.printfinish == null) entry.printfinish = 1;
+}
+
+/**
  * 現在使用するスプールIDを更新し状態を反映する。
  * monitorData.currentSpoolId や対象スプールのフラグを変更し、
  * 必要に応じて履歴情報や残量を更新する副作用がある。履歴補完時は
  * {@link updateHistoryList} を呼び出して保存と UI 更新も行う。
- * さらに前スプールで印刷途中だった場合は、その時点までの使用量を
- * {@link finalizeFilamentUsage} で確定し、新スプールへ残りの予定
- * 長さを {@link reserveFilament} で引き継ぐ。
+ * さらに印刷途中の交換では ADR-0005 の状態認識つき帰属を行う:
+ * 稼働中(printing)=ジョブ全体を新スプールへ帰属（旧の当該ジョブ debit は計上しない）、
+ * 一時停止(paused)=分割（旧→切れ時点まで／新→再開後、{@link finalizeFilamentUsage} で旧を確定）。
+ * ライブ使用量は aggregator の rebaselineHostUsage で再ベースラインし、0張り付き(B1)を防ぐ。
  *
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
@@ -592,12 +672,45 @@ export function setCurrentSpoolId(id, hostname) {
   const machine = host ? (monitorData.machines[host] || {}) : {};
   const printId = String(machine.printStore?.current?.id ?? "");
 
-  let remaining = 0;
-  if (host && prevSpool && prevSpool.currentJobStartLength != null) {
-    const used = prevSpool.currentJobStartLength - prevSpool.remainingLengthMm;
-    const expected = prevSpool.currentJobExpectedLength ?? used;
-    remaining = Math.max(0, expected - used);
-    finalizeFilamentUsage(used, prevSpool.currentPrintID, host);
+  // ★ ADR-0005: 状態認識つき帰属。印刷途中のスプール交換のとき、発生時の状態で
+  //   「稼働中(printing) = ジョブ全体→新スプール（旧の当該ジョブ debit は計上しない＝B2是正）」/
+  //   「一時停止(paused) = 分割（旧→切れ時点まで, 新→再開後）」を決める。
+  const _midPrintSwap = !!(host && prevSpool && newSpool && prevSpool.currentJobStartLength != null);
+  // 発生時の状態文脈（aggregator が記録済み）を優先、無ければライブ状態にフォールバック（R5）。
+  const _ev = host ? getOpenFilamentEvent(host) : null;
+  const _liveState = Number(machine?.runtimeData?.state ?? machine?.storedData?.state?.rawValue ?? 0);
+  const _stateForAttr = (_ev && _ev.stateAtEvent != null) ? Number(_ev.stateAtEvent) : _liveState;
+  const _runoutConfirmed = !!(_ev && _ev.runout);
+  // 区間境界: Lc=最新完了 printId（厳密 > 境界の基点。進行中 printId は使わない）。
+  const _Lc = host ? _latestCompletedPrintId(host) : 0;
+  // 進行中ジョブ J（分割では旧 unmount until=J）。
+  const _J = Number(prevSpool?.currentPrintID || printId) || 0;
+  // ライブ使用量基線（プリンタの現ジョブ累積。未取得は consumed-so-far で近似）。
+  let _usedAtSwap = Number(machine?.storedData?.usedMaterialLength?.rawValue);
+  if (!Number.isFinite(_usedAtSwap) || _usedAtSwap < 0) {
+    _usedAtSwap = Math.max(0,
+      (Number(prevSpool?.currentJobStartLength) || 0) - (Number(prevSpool?.remainingLengthMm) || 0));
+  }
+  // 帰属モード決定。同秒衝突(Lc===J)は分割境界が潰れる → 安全側で whole に縮退。
+  let _mode = _stateForAttr === _PRINT_PAUSED ? "split" : "whole";
+  if (_midPrintSwap && _mode === "split" && _Lc > 0 && _Lc === _J) {
+    console.warn(`[setCurrentSpoolId] ${host}: Lc===J(${_J}) 同秒衝突のため分割を whole に縮退`);
+    _mode = "whole";
+  }
+
+  // 旧スプールの確定（分割のみ。稼働中=全体では旧を中途 finalize しない＝ジョブ全体を新へ帰属）。
+  let _Uold = 0;
+  if (_midPrintSwap && _mode === "split") {
+    const _startLen = Number(prevSpool.currentJobStartLength) || 0;
+    const _consumed = Math.max(0, _startLen - (Number(prevSpool.remainingLengthMm) || 0));
+    // 切れ確定なら旧スプールを 0 へ駆動（物理的に空）。それ以外は consumed-so-far。
+    _Uold = _runoutConfirmed ? _startLen : _consumed;
+    finalizeFilamentUsage(_Uold, prevSpool.currentPrintID, host);
+  } else if (host && prevSpool && !newSpool && prevSpool.currentJobStartLength != null) {
+    // 純粋な取り外し（mid-print だが新スプール無し）: 従来どおり中途確定（残量保全）。
+    const _used = Math.max(0,
+      (Number(prevSpool.currentJobStartLength) || 0) - (Number(prevSpool.remainingLengthMm) || 0));
+    finalizeFilamentUsage(_used, prevSpool.currentPrintID, host);
   }
 
   // per-host マップを更新（hostSpoolMap が唯一の権威）
@@ -628,12 +741,14 @@ export function setCurrentSpoolId(id, hostname) {
         r.endPrintID = String(printId || prevSpool.currentPrintID || "");
       }
     }
-    // ★ ADR-0004: 取外しイベントを mountHistory に追記（区間上限＝最新完了 printId）
+    // ★ ADR-0004/0005: 取外しイベントを mountHistory に追記。
+    //   分割(一時停止交換)では旧区間に進行中ジョブ J を含める（until=J）。
+    //   稼働中=全体/通常取り外しでは最新完了 Lc（J を除外）。
     if (host) {
       appendUnmountEvent({
         host,
         spoolId: prevSpool.id,
-        untilJobId: _latestCompletedPrintId(host),
+        untilJobId: (_midPrintSwap && _mode === "split") ? _J : _Lc,
         ts: nowTs
       });
     }
@@ -652,15 +767,18 @@ export function setCurrentSpoolId(id, hostname) {
     newSpool.currentPrintID = printId;
     newSpool.currentJobStartLength = null;
     newSpool.currentJobExpectedLength = null;
-    // ★ ADR-0004: 装着イベントを mountHistory に追記
-    //   anchorRemainingMm = 新スプールの現残量（繰越基点）
-    //   sinceJobId = そのホストの最新完了 printId（区間下限・排他）
+    // ★ ADR-0004/0005: 装着イベントを mountHistory に追記。
+    //   sinceJobId = Lc（最新完了 printId・厳密 > 境界）。進行中 J は Lc 区間に含まれる。
+    //   稼働中=全体では anchor に usedAtSwap を加算し live==authority を保つ
+    //   （J 全体が新スプールに帰属し、完了時 derive と一致）。それ以外は現残量。
     if (host) {
       appendMountEvent({
         host,
         spoolId: newSpool.id,
-        anchorRemainingMm: newSpool.remainingLengthMm,
-        sinceJobId: _latestCompletedPrintId(host),
+        anchorRemainingMm: (_midPrintSwap && _mode === "whole")
+          ? (Number(newSpool.remainingLengthMm) || 0) + _usedAtSwap
+          : newSpool.remainingLengthMm,
+        sinceJobId: _Lc,
         ts: nowTs + 1
       });
     }
@@ -668,9 +786,28 @@ export function setCurrentSpoolId(id, hostname) {
     logSpoolChange(newSpool, printId);
     newSpool.isPending = false;  // 即座に記録済み（遅延実行を廃止）
     newSpool.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
-    if (host && remaining > 0) {
-      // 継続ジョブの残り分を新しいスプールに予約
-      reserveFilament(remaining, printId, host);
+    if (_midPrintSwap) {
+      // ★ ADR-0005 P4 (B1): ライブ使用量カウンタを文脈に応じて再ベースライン（0張り付き解消）。
+      const _newRemain = Number(newSpool.remainingLengthMm) || 0;
+      newSpool.currentJobExpectedLength = null;
+      newSpool.currentPrintID = _J ? String(_J) : printId;
+      if (_mode === "whole") {
+        // 稼働中=全体: 新残量 + usedAtSwap を基点に accumulated=usedAtSwap（J 全体を新へ）。
+        newSpool.currentJobStartLength = _newRemain + _usedAtSwap;
+        _rebaselineHostUsage?.(host, { accumulated: _usedAtSwap, prevUsed: _usedAtSwap });
+      } else {
+        // 一時停止=分割: 新残量を基点に accumulated=0, prevUsed=usedAtResume（再開後のみ計上）。
+        newSpool.currentJobStartLength = _newRemain;
+        _rebaselineHostUsage?.(host, { accumulated: 0, prevUsed: _usedAtSwap });
+        // 進行中ジョブ J に旧リールの per-reel 消費(U_old)を信頼ソースへ反映（derive 分割帰属）。
+        if (_J) _upsertSplitReel(host, _J, prevSpool, _Uold);
+      }
+      // 旧スプールは印刷フラグ解除済み → 信頼ソースから残量を冪等補正
+      //   （whole: until=Lc で J 除外 → J前の値へ復元 / split: until=J で U_old 反映）。
+      if (prevSpool) {
+        try { reconcileSpool(prevSpool.id, { ts: nowTs }); }
+        catch (e) { console.warn(`[setCurrentSpoolId] reconcileSpool(prev) 失敗:`, e?.message || e); }
+      }
     }
     if (host) {
       // UI に即座に残量を反映させるため storedData を更新
@@ -709,6 +846,12 @@ export function setCurrentSpoolId(id, hostname) {
   } else if (host && !newSpool) {
     setStoredDataForHost(host, "filamentRemainingMm", null, true);
     updateStoredDataToDOM();
+  }
+
+  // ★ ADR-0005: 交換でイベント文脈を解決（mid-print swap はモード、その他は default-continue）。
+  if (host && _ev) {
+    try { resolveFilamentEvent(host, _midPrintSwap ? _mode : "default-continue", { ts: nowTs }); }
+    catch (e) { console.warn(`[setCurrentSpoolId] resolveFilamentEvent 失敗:`, e?.message || e); }
   }
 
   saveUnifiedStorage(true);
@@ -1227,6 +1370,15 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   //   失敗ジョブ(materialUsedMm<=0)は信頼ソースに完了として入れない（attributedUsed の対象外）。
   if (resolvedUsed > 0) {
     _upsertHistoryUsage(host, normalizedJobId, resolvedUsed, isSuccess);
+  }
+  // ★ ADR-0005: このジョブに別リールの filamentInfo が既にある（=分割／一時停止交換）なら、
+  //   当該リールの per-reel usedMm を printStore.history に反映してから reconcile する
+  //   （複数リールを各々正しく帰属。単一スプールジョブには触れず materialUsedMm 権威を維持）。
+  if (resolvedUsed > 0) {
+    const _entry = machine?.printStore?.history?.find(h => String(h.id) === normalizedJobId);
+    const _isSplit = Array.isArray(_entry?.filamentInfo)
+      && _entry.filamentInfo.some(fi => fi && fi.spoolId && fi.spoolId !== s.id);
+    if (_isSplit) _upsertSplitReel(host, normalizedJobId, s, resolvedUsed);
   }
   // ★ 完了直後に信頼ソースから残量を冪等補正（finalize の startLen-used 値は暫定。reconcile が権威）。
   //   currentPrintID は上で "" にクリア済みなので reconcile は走る。

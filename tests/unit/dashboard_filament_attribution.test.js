@@ -1,0 +1,219 @@
+/**
+ * @fileoverview ADR-0005 状態認識つきフィラメント帰属の結合テスト
+ *
+ * 実際の setCurrentSpoolId（dashboard_spool.js）＋実際の台帳（dashboard_filament_ledger.js）を
+ * 共有 monitorData 上で駆動し、稼働中=ジョブ全体／一時停止=分割、B1（0張り付き解消）の
+ * 再ベースライン、イベント文脈の解決、冪等性、マルチホスト対称を検証する。
+ *
+ * 重い DOM/ストレージ依存はモックする。aggregator の rebaselineHostUsage は
+ * registerRebaselineHostUsage でスパイを注入し、呼び出し引数を検証する。
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const mockMonitorData = {
+  machines: {},
+  filamentSpools: [],
+  usageHistory: [],
+  mountHistory: [],
+  hostSpoolMap: {},
+  filamentEventContext: {},
+};
+
+vi.mock('../../3dp_lib/dashboard_data.js', () => ({
+  monitorData: mockMonitorData,
+  setStoredDataForHost: vi.fn(),
+  PLACEHOLDER_HOSTNAME: '_$_NO_MACHINE_$_',
+}));
+vi.mock('../../3dp_lib/dashboard_storage.js', () => ({
+  saveUnifiedStorage: vi.fn(),
+  trimUsageHistory: vi.fn(),
+}));
+vi.mock('../../3dp_lib/dashboard_filament_inventory.js', () => ({ consumeInventory: vi.fn() }));
+vi.mock('../../3dp_lib/dashboard_ui.js', () => ({ updateStoredDataToDOM: vi.fn() }));
+vi.mock('../../3dp_lib/dashboard_printmanager.js', () => ({
+  updateHistoryList: vi.fn(),
+  loadHistory: vi.fn(() => []),
+  saveHistory: vi.fn(),
+}));
+vi.mock('../../3dp_lib/dashboard_connection.js', () => ({ getDisplayBaseUrl: vi.fn(() => 'http://t') }));
+
+const ledger = await import('../../3dp_lib/dashboard_filament_ledger.js');
+const {
+  setCurrentSpoolId,
+  registerRebaselineHostUsage,
+  finalizeFilamentUsage,
+} = await import('../../3dp_lib/dashboard_spool.js');
+
+let rebaselineSpy;
+
+function reset() {
+  mockMonitorData.machines = {};
+  mockMonitorData.filamentSpools = [];
+  mockMonitorData.usageHistory = [];
+  mockMonitorData.mountHistory = [];
+  mockMonitorData.hostSpoolMap = {};
+  mockMonitorData.filamentEventContext = {};
+  rebaselineSpy = vi.fn();
+  registerRebaselineHostUsage(rebaselineSpy);
+}
+
+function job(id, usedMm, extra = {}) {
+  return { id, materialUsedMm: usedMm, printfinish: extra.printfinish ?? (usedMm > 0 ? 1 : 0), ...extra };
+}
+
+function setupHost(host, { history = [], currentId = '', used = NaN, state = 1 } = {}) {
+  mockMonitorData.machines[host] = {
+    printStore: { current: currentId ? { id: currentId } : null, history },
+    storedData: {
+      usedMaterialLength: Number.isFinite(used) ? { rawValue: used } : undefined,
+      state: { rawValue: state },
+    },
+    runtimeData: { state },
+    historyData: [],
+  };
+}
+
+function addSpool(sp) { mockMonitorData.filamentSpools.push(sp); return sp; }
+function ev(type, spoolId) { return mockMonitorData.mountHistory.find(e => e.type === type && e.spoolId === spoolId); }
+function histJob(host, id) { return mockMonitorData.machines[host].printStore.history.find(h => String(h.id) === String(id)); }
+
+// =====================================================================
+// 1. 稼働中スプール交換 → ジョブ全体を新スプールへ（B2是正・B1解消）
+// =====================================================================
+describe('稼働中（printing）スプール交換 = ジョブ全体→新', () => {
+  beforeEach(reset);
+
+  it('旧の当該ジョブ debit は計上せず、新が J 全体を取得。0張り付きしない', () => {
+    setupHost('h', { history: [job(100, 5000), job(200, 6000)], currentId: '300', used: 8000, state: 1 });
+    const OLD = addSpool({
+      id: 'OLD', totalLengthMm: 330000, remainingLengthMm: 290000,
+      currentPrintID: '300', currentJobStartLength: 300000, isActive: true, hostname: 'h',
+    });
+    const NEW = addSpool({ id: 'NEW', totalLengthMm: 330000, remainingLengthMm: 330000 });
+    mockMonitorData.hostSpoolMap = { h: 'OLD' };
+    // OLD は印刷開始前から装着（since=200, anchor=300000）
+    ledger.appendMountEvent({ host: 'h', spoolId: 'OLD', anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+
+    expect(setCurrentSpoolId('NEW', 'h')).toBe(true);
+    expect(mockMonitorData.hostSpoolMap.h).toBe('NEW');
+
+    // 旧 unmount until=Lc=200（J=300 を除外）
+    expect(ev('unmount', 'OLD').untilJobId).toBe(200);
+    // 新 mount since=200, anchor=330000+8000=338000
+    expect(ev('mount', 'NEW').sinceJobId).toBe(200);
+    expect(ev('mount', 'NEW').anchorRemainingMm).toBe(338000);
+
+    // B1: ライブ基点 = remaining + usedAtSwap、rebaseline(accumulated=usedAtSwap)
+    expect(NEW.currentJobStartLength).toBe(338000);
+    expect(rebaselineSpy).toHaveBeenCalledWith('h', { accumulated: 8000, prevUsed: 8000 });
+    // → remain = 338000 - 8000 = 330000 > 0（旧累積を引き継がない＝0に張り付かない）
+
+    // 旧は J を除外して復元（live 290000 → 300000）
+    expect(OLD.remainingLengthMm).toBe(300000);
+    // 旧は当該ジョブを finalize していない
+    expect(OLD.lastCompletedPrintID).toBeUndefined();
+
+    // 完了シミュレート: J=300 プリンタ確定（単一スプール 40000）→ live==authority
+    mockMonitorData.machines.h.printStore.history.push(job(300, 40000));
+    expect(ledger.deriveSpoolRemaining('NEW').remainingMm).toBe(298000); // 338000-40000
+    expect(ledger.deriveSpoolRemaining('OLD').remainingMm).toBe(300000); // J除外維持
+  });
+
+  it('イベント文脈なし＋ライブ printing でも whole（フォールバック）', () => {
+    setupHost('h', { history: [job(200, 6000)], currentId: '300', used: 5000, state: 1 });
+    addSpool({ id: 'OLD', totalLengthMm: 330000, remainingLengthMm: 295000,
+      currentPrintID: '300', currentJobStartLength: 300000, isActive: true, hostname: 'h' });
+    addSpool({ id: 'NEW', totalLengthMm: 330000, remainingLengthMm: 330000 });
+    mockMonitorData.hostSpoolMap = { h: 'OLD' };
+    ledger.appendMountEvent({ host: 'h', spoolId: 'OLD', anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+
+    setCurrentSpoolId('NEW', 'h');
+    expect(ev('unmount', 'OLD').untilJobId).toBe(200);          // until=Lc（whole）
+    expect(ev('mount', 'NEW').anchorRemainingMm).toBe(335000);  // 330000+5000
+  });
+});
+
+// =====================================================================
+// 2. 一時停止中スプール交換 → 分割（旧→切れで0, 新→再開後）
+// =====================================================================
+describe('一時停止（paused）スプール交換 = 分割', () => {
+  beforeEach(reset);
+
+  it('旧 until=J・切れ確定で0、新は再開後のみ。完了で per-reel 帰属', () => {
+    setupHost('h', { history: [job(100, 5000), job(200, 6000)], currentId: '300', used: 15000, state: 5 });
+    const OLD = addSpool({
+      id: 'OLD', totalLengthMm: 330000, remainingLengthMm: 285000,
+      currentPrintID: '300', currentJobStartLength: 300000, isActive: true, hostname: 'h',
+    });
+    const NEW = addSpool({ id: 'NEW', totalLengthMm: 330000, remainingLengthMm: 330000 });
+    mockMonitorData.hostSpoolMap = { h: 'OLD' };
+    ledger.appendMountEvent({ host: 'h', spoolId: 'OLD', anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+    // aggregator が記録した一時停止イベント（runout 確定）
+    ledger.recordFilamentEvent({ host: 'h', ts: 50, stateAtEvent: 5, oldSpoolId: 'OLD', runout: true });
+
+    setCurrentSpoolId('NEW', 'h');
+
+    // mode=split: 旧 unmount until=J=300、新 mount since=200 anchor=330000（usedAtSwap 加算しない）
+    expect(ev('unmount', 'OLD').untilJobId).toBe(300);
+    expect(ev('mount', 'NEW').sinceJobId).toBe(200);
+    expect(ev('mount', 'NEW').anchorRemainingMm).toBe(330000);
+
+    // 旧は切れ確定 → 0 へ。printStore.history[300] に旧リール usedMm=300000
+    expect(OLD.remainingLengthMm).toBe(0);
+    expect(histJob('h', 300).filamentInfo.find(fi => fi.spoolId === 'OLD').usedMm).toBe(300000);
+
+    // B1（分割）: 新は accumulated=0, prevUsed=usedAtResume(15000)
+    expect(NEW.currentJobStartLength).toBe(330000);
+    expect(rebaselineSpy).toHaveBeenCalledWith('h', { accumulated: 0, prevUsed: 15000 });
+
+    // イベント解決（split）
+    expect(ledger.getOpenFilamentEvent('h')).toBeNull();
+    expect(mockMonitorData.filamentEventContext.h.resolution).toBe('split');
+
+    // 完了シミュレート: 新が 25000 消費 → finalize(NEW, 25000)
+    finalizeFilamentUsage(25000, '300', 'h');
+    expect(histJob('h', 300).filamentInfo.find(fi => fi.spoolId === 'NEW').usedMm).toBe(25000);
+    expect(ledger.deriveSpoolRemaining('NEW').remainingMm).toBe(305000); // 330000-25000
+    expect(ledger.deriveSpoolRemaining('OLD').remainingMm).toBe(0);      // 切れ維持
+  });
+});
+
+// =====================================================================
+// 3. 冪等性 / マルチホスト対称
+// =====================================================================
+describe('冪等性・マルチホスト', () => {
+  beforeEach(reset);
+
+  it('同一スプールへの再交換は早期 return（mount を二重追記しない）', () => {
+    setupHost('h', { history: [job(200, 6000)], currentId: '300', used: 4000, state: 1 });
+    addSpool({ id: 'OLD', totalLengthMm: 330000, remainingLengthMm: 296000,
+      currentPrintID: '300', currentJobStartLength: 300000, isActive: true, hostname: 'h' });
+    addSpool({ id: 'NEW', totalLengthMm: 330000, remainingLengthMm: 330000 });
+    mockMonitorData.hostSpoolMap = { h: 'OLD' };
+    ledger.appendMountEvent({ host: 'h', spoolId: 'OLD', anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+
+    setCurrentSpoolId('NEW', 'h');
+    setCurrentSpoolId('NEW', 'h'); // 2回目（prevId===id 早期 return）
+    const newMounts = mockMonitorData.mountHistory.filter(e => e.type === 'mount' && e.spoolId === 'NEW');
+    expect(newMounts).toHaveLength(1);
+  });
+
+  it('2ホストの交換が互いに干渉しない（mountHistory/文脈が host 独立）', () => {
+    for (const [h, oldId, newId] of [['h1', 'A1', 'B1'], ['h2', 'A2', 'B2']]) {
+      setupHost(h, { history: [job(200, 6000)], currentId: '300', used: 7000, state: 1 });
+      addSpool({ id: oldId, totalLengthMm: 330000, remainingLengthMm: 293000,
+        currentPrintID: '300', currentJobStartLength: 300000, isActive: true, hostname: h });
+      addSpool({ id: newId, totalLengthMm: 330000, remainingLengthMm: 330000 });
+      mockMonitorData.hostSpoolMap[h] = oldId;
+      ledger.appendMountEvent({ host: h, spoolId: oldId, anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+    }
+    setCurrentSpoolId('B1', 'h1');
+    setCurrentSpoolId('B2', 'h2');
+
+    expect(mockMonitorData.hostSpoolMap).toEqual({ h1: 'B1', h2: 'B2' });
+    expect(ev('mount', 'B1').host).toBe('h1');
+    expect(ev('mount', 'B2').host).toBe('h2');
+    expect(rebaselineSpy).toHaveBeenCalledWith('h1', { accumulated: 7000, prevUsed: 7000 });
+    expect(rebaselineSpy).toHaveBeenCalledWith('h2', { accumulated: 7000, prevUsed: 7000 });
+  });
+});

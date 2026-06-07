@@ -243,6 +243,13 @@ export const monitorData = {
    * @type {Array<Object>}
    */
   mountHistory: [],
+  /**
+   * ADR-0005: フィラメント切れ/一時停止イベントの状態文脈（per-host）。
+   * キーはホスト名、値は recordFilamentEvent が記録する文脈オブジェクト。
+   * 交換操作の遡及帰属（稼働中=ジョブ全体 / 一時停止=分割）判定に用いる。
+   * @type {Object.<string, Object>}
+   */
+  filamentEventContext: {},
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。

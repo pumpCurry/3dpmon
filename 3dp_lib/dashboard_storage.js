@@ -572,6 +572,8 @@ const LS_GLOBAL_FIELDS = [
   "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
   // ★ ADR-0004: フィラメント装着履歴
   "mountHistory",
+  // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
+  "filamentEventContext",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -781,6 +783,8 @@ function _flushStorage() {
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
       // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）
       queueSharedWrite("mountHistory",       monitorData.mountHistory);
+      // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
+      queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1122,6 +1126,19 @@ function _restoreFromData(shared, machines) {
     }
   }
   // ★ レガシー currentSpoolId → hostSpoolMap 移行は削除済み（マイグレーション完了）
+
+  // ★ ADR-0005: フィラメントイベント文脈（per-host）。既存（このセッションで記録済み）を
+  //   優先し、未保持のホストのみ保存値で補完（再起動を跨いだ遡及帰属判定を維持）。
+  if (shared?.filamentEventContext && typeof shared.filamentEventContext === "object") {
+    if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
+      monitorData.filamentEventContext = {};
+    }
+    for (const [host, ctx] of Object.entries(shared.filamentEventContext)) {
+      if (ctx && !monitorData.filamentEventContext[host]) {
+        monitorData.filamentEventContext[host] = ctx;
+      }
+    }
+  }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）
   if (Array.isArray(shared?.userPresets) && shared.userPresets.length > 0) {

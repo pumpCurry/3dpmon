@@ -15,7 +15,8 @@ const mockMonitorData = {
   filamentSpools: [],
   usageHistory: [],
   mountHistory: [],
-  hostSpoolMap: {}
+  hostSpoolMap: {},
+  filamentEventContext: {}
 };
 
 vi.doMock("../../3dp_lib/dashboard_data.js", () => ({
@@ -30,7 +31,10 @@ const {
   getSpoolIntervals,
   deriveSpoolRemaining,
   reconcileSpool,
-  initLedgerAnchors
+  initLedgerAnchors,
+  recordFilamentEvent,
+  getOpenFilamentEvent,
+  resolveFilamentEvent
 } = await import("../../3dp_lib/dashboard_filament_ledger.js");
 
 /**
@@ -65,6 +69,7 @@ function reset() {
   mockMonitorData.usageHistory = [];
   mockMonitorData.mountHistory = [];
   mockMonitorData.hostSpoolMap = {};
+  mockMonitorData.filamentEventContext = {};
 }
 
 // =====================================================================
@@ -514,5 +519,161 @@ describe("appendMountEvent / appendUnmountEvent", () => {
     const ids = mockMonitorData.mountHistory.map(e => e.evId);
     expect(ids).toEqual(["mount_spA_5000", "mount_spB_5000"]);
     expect(new Set(ids).size).toBe(2); // 衝突なし → dedup で片方が消えない
+  });
+});
+
+// =====================================================================
+// 14. ADR-0005 evId 重複ガード（同秒二重追記を畳む）
+// =====================================================================
+describe("ADR-0005 evId 重複ガード", () => {
+  beforeEach(reset);
+
+  it("同一 spoolId/ts の mount を2回追記しても1件（二重区間を防ぐ）", () => {
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100, sinceJobId: 0, ts: 1000 });
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 999, sinceJobId: 9, ts: 1000 });
+    const mounts = mockMonitorData.mountHistory.filter(e => e.type === "mount" && e.spoolId === "sp1");
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0].anchorRemainingMm).toBe(100); // 先勝ち（後続は無視）
+  });
+
+  it("unmount も同様に重複追記を畳む", () => {
+    appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 50, ts: 2000 });
+    appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 77, ts: 2000 });
+    const unmounts = mockMonitorData.mountHistory.filter(e => e.type === "unmount" && e.spoolId === "sp1");
+    expect(unmounts).toHaveLength(1);
+  });
+});
+
+// =====================================================================
+// 15. ADR-0005 イベント文脈（record / get / resolve / 冪等 / upsert）
+// =====================================================================
+describe("ADR-0005 イベント文脈", () => {
+  beforeEach(reset);
+
+  it("record → get で取得、resolve で未解決から外れる", () => {
+    recordFilamentEvent({ host: "h", ts: 100, stateAtEvent: 5, oldSpoolId: "OLD", runout: true });
+    const ev = getOpenFilamentEvent("h");
+    expect(ev).toBeTruthy();
+    expect(ev.stateAtEvent).toBe(5);
+    expect(ev.runout).toBe(true);
+    expect(ev.evId).toBe("fctx_h_100");
+
+    resolveFilamentEvent("h", "split", { ts: 200 });
+    expect(getOpenFilamentEvent("h")).toBeNull();
+    expect(mockMonitorData.filamentEventContext.h.resolution).toBe("split");
+    expect(mockMonitorData.filamentEventContext.h.resolvedAt).toBe(200);
+  });
+
+  it("同一ホストで再 record は origin(evId/ts) を保持して更新（切れ→一時停止の昇格）", () => {
+    // 切れ(0→1, printing) を記録 → その後 paused へ
+    recordFilamentEvent({ host: "h", ts: 100, stateAtEvent: 1, oldSpoolId: "OLD", runout: true });
+    recordFilamentEvent({ host: "h", ts: 250, stateAtEvent: 5 /* paused */ });
+    const ctxs = Object.values(mockMonitorData.filamentEventContext);
+    expect(ctxs).toHaveLength(1);            // 文脈は1件（重複生成しない）
+    const ev = getOpenFilamentEvent("h");
+    expect(ev.evId).toBe("fctx_h_100");      // origin ts/evId 保持（R4）
+    expect(ev.ts).toBe(100);
+    expect(ev.stateAtEvent).toBe(5);         // 交換に近い状態（paused）へ更新
+    expect(ev.runout).toBe(true);            // runout は維持
+  });
+
+  it("解決後に再 record すると新しい文脈で置き換わる", () => {
+    recordFilamentEvent({ host: "h", ts: 100, stateAtEvent: 5 });
+    resolveFilamentEvent("h", "split", { ts: 150 });
+    recordFilamentEvent({ host: "h", ts: 300, stateAtEvent: 1 });
+    const ev = getOpenFilamentEvent("h");
+    expect(ev.evId).toBe("fctx_h_300");
+    expect(ev.resolved).toBe(false);
+  });
+
+  it("文脈は monitorData に残る＝（再接続で in-memory が消えても）遡及判定を維持", () => {
+    recordFilamentEvent({ host: "h", ts: 100, stateAtEvent: 5, oldSpoolId: "OLD" });
+    // 再接続シミュレーション: monitorData 自体は保持される（aggregator の _hostStates のみ消える想定）
+    expect(getOpenFilamentEvent("h").stateAtEvent).toBe(5);
+  });
+});
+
+// =====================================================================
+// 16. ADR-0005 稼働中=全体 / 一時停止=分割 の derive 境界（純関数）
+// =====================================================================
+describe("ADR-0005 稼働中=全体 derive", () => {
+  beforeEach(reset);
+
+  it("旧は J を除外（until=Lc）、新は J 全体を計上（anchor=remaining+usedAtSwap）", () => {
+    // 完了 100,200。進行中 J=300。Lc=200。usedAtSwap=8000。
+    addSpool({ id: "OLD", totalLengthMm: 330000, remainingLengthMm: 290000 });
+    addSpool({ id: "NEW", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [job(100, 5000), job(200, 6000), job(300, 40000)]);
+    // OLD: 装着(since=200, anchor=300000) → 取外し(until=200, J除外)
+    appendMountEvent({ host: "h", spoolId: "OLD", anchorRemainingMm: 300000, sinceJobId: 200, ts: 10 });
+    appendUnmountEvent({ host: "h", spoolId: "OLD", untilJobId: 200, ts: 20 });
+    // NEW: 装着(since=200, anchor=330000+8000=338000, open)
+    appendMountEvent({ host: "h", spoolId: "NEW", anchorRemainingMm: 338000, sinceJobId: 200, ts: 21 });
+
+    const rOld = deriveSpoolRemaining("OLD");
+    expect(rOld.usedMm).toBe(0);          // J=300 は until=200 で除外
+    expect(rOld.remainingMm).toBe(300000); // J前の値へ復元（live 290000 ではない）
+
+    const rNew = deriveSpoolRemaining("NEW");
+    expect(rNew.usedMm).toBe(40000);       // J 全体
+    expect(rNew.remainingMm).toBe(298000); // 338000 - 40000（live==authority）
+  });
+});
+
+describe("ADR-0005 一時停止=分割 derive", () => {
+  beforeEach(reset);
+
+  it("両区間が J を跨ぐ。filamentInfo で per-reel 帰属（旧→0/切れ, 新→再開後）", () => {
+    addSpool({ id: "OLD", totalLengthMm: 330000, remainingLengthMm: 0 });
+    addSpool({ id: "NEW", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    // J=300 は分割: OLD 300000（切れで全部）, NEW 25000
+    setHistory("h", [
+      job(100, 5000), job(200, 6000),
+      job(300, 325000, { filamentInfo: [
+        { spoolId: "OLD", usedMm: 300000 },
+        { spoolId: "NEW", usedMm: 25000 }
+      ] })
+    ]);
+    // OLD: since=200, anchor=300000 → until=300（J を含める）
+    appendMountEvent({ host: "h", spoolId: "OLD", anchorRemainingMm: 300000, sinceJobId: 200, ts: 10 });
+    appendUnmountEvent({ host: "h", spoolId: "OLD", untilJobId: 300, ts: 20 });
+    // NEW: since=200, anchor=330000, open
+    appendMountEvent({ host: "h", spoolId: "NEW", anchorRemainingMm: 330000, sinceJobId: 200, ts: 21 });
+
+    const rOld = deriveSpoolRemaining("OLD");
+    expect(rOld.usedMm).toBe(300000);     // J の OLD 持ち分
+    expect(rOld.remainingMm).toBe(0);     // 切れ → 0
+
+    const rNew = deriveSpoolRemaining("NEW");
+    expect(rNew.usedMm).toBe(25000);      // J の NEW 持ち分
+    expect(rNew.remainingMm).toBe(305000); // 330000 - 25000
+  });
+
+  it("reconcile(OLD) を10回呼んでも 0 を維持（多重復元なし）", () => {
+    const old = addSpool({ id: "OLD", totalLengthMm: 330000, remainingLengthMm: 0 });
+    setHistory("h", [
+      job(200, 6000),
+      job(300, 300000, { filamentInfo: [{ spoolId: "OLD", usedMm: 300000 }] })
+    ]);
+    appendMountEvent({ host: "h", spoolId: "OLD", anchorRemainingMm: 300000, sinceJobId: 200, ts: 10 });
+    appendUnmountEvent({ host: "h", spoolId: "OLD", untilJobId: 300, ts: 20 });
+    for (let i = 0; i < 10; i++) reconcileSpool("OLD", { ts: 100 + i });
+    expect(old.remainingLengthMm).toBe(0);
+  });
+});
+
+// =====================================================================
+// 17. ADR-0005 境界トラップ：sinceJobId=J はそのジョブを取りこぼす（規則の文書化）
+// =====================================================================
+describe("ADR-0005 境界トラップ（since=J でジョブ消失）", () => {
+  beforeEach(reset);
+
+  it("新 mount since=J（進行中ID）にすると J が厳密 > 境界で除外され usedMm=0", () => {
+    addSpool({ id: "NEW", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [job(300, 40000)]);
+    // 誤: since=300（=J）。derive は pid>300 を要求 → J(300) は計上されない。
+    appendMountEvent({ host: "h", spoolId: "NEW", anchorRemainingMm: 330000, sinceJobId: 300, ts: 10 });
+    const r = deriveSpoolRemaining("NEW");
+    expect(r.usedMm).toBe(0); // ← 実装は Lc(=最新完了) を since にすることでこれを回避
   });
 });
