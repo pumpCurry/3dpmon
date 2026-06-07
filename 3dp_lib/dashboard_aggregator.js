@@ -286,12 +286,21 @@ function _resolveRunoutOnReplace(host, machine, nowMs) {
   // B3: 切れ復帰で該当ホストの交換ダイアログを自動クローズ（同一継続扱い）
   closeFilamentChangeDialog(host, "replaced");
   if (!ev) return; // 登録/キャンセルで既に解決済み → 何もしない
-  const gateHeld = runoutGateHeld(ev);
-  if (gateHeld) {
-    // #3: 高確度「使い切り→新リール」→ 同プリセット新品を inferred 推定投入（R1: 可逆・serial/在庫非消費）
+  // ★ F-B 対策: #3 自動投入は「印刷が実際に一時停止した切れ」に限定（短blip/誤動作を除外）。
+  const wasPaused = Number(ev.stateAtEvent) === PRINT_STATE_CODE.printPaused;
+  if (runoutGateHeld(ev) && wasPaused) {
+    // #3: 高確度（2信号成立＋一時停止）→ 同プリセット新品を inferred 推定投入（R1: 可逆・serial/在庫非消費）
     const oldSpool = getSpoolById(ev.oldSpoolId) || getCurrentSpool(host);
     if (oldSpool) {
       const inferred = addInferredSpool(oldSpool);
+      // ★ F-A 対策: 取消で旧を完全復元するためのスナップショット（zeroing 前の残量）
+      inferred._supersedes = {
+        spoolId: oldSpool.id,
+        host,
+        prevRemaining: Number.isFinite(Number(ev.oldRemainingMm))
+          ? Number(ev.oldRemainingMm) : (Number(oldSpool.remainingLengthMm) || 0),
+        printID: oldSpool.currentPrintID || (ev.inflightJobId != null ? String(ev.inflightJobId) : "")
+      };
       // 未解決(paused)文脈のまま setCurrentSpoolId → split で 旧→0/新→満 に装着
       setCurrentSpoolId(inferred.id, host);
       notificationManager.notify("inferredSpoolCreated", { hostname: host });
@@ -299,7 +308,7 @@ function _resolveRunoutOnReplace(host, machine, nowMs) {
     // setCurrentSpoolId が解決済みなら no-op。未解決なら inferred として解決。
     resolveFilamentEvent(host, "inferred", { ts: nowMs });
   } else {
-    // #4: ゲート不成立（旧残≥10% 等）→ 同一再セット
+    // #4 / F-B: ゲート不成立 or 非一時停止（blip）→ 同一再セット
     resolveFilamentEvent(host, "reseat", { ts: nowMs });
   }
 }

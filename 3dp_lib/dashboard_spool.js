@@ -48,7 +48,8 @@ import {
   appendUnmountEvent,
   reconcileSpool,
   getOpenFilamentEvent,
-  resolveFilamentEvent
+  resolveFilamentEvent,
+  deriveSpoolRemaining
 } from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
@@ -1048,6 +1049,79 @@ export function confirmInferredSpool(id, { consumePreset = true } = {}) {
   }
   saveUnifiedStorage(true);
   return s;
+}
+
+/**
+ * ADR-0005 P6 (F-A 完全可逆): inferred(推定)スプールを取り消し、superseded 旧スプールを
+ * 完全復元する。
+ *
+ * 「同一リール戻し」等で #3 推定が外れた場合に呼ぶ。#3 時に保存した残量スナップショット
+ * (`_supersedes`) から、#3 以降に inferred へ帰属した消費を差し引いた残量で旧スプールを
+ * 再装着し、inferred を削除する（残量を正しく巻き戻す）。スナップショットが無い inferred は
+ * 単純な取り外し＋削除にフォールバック。印刷継続中でも aggregator が old から追跡を続ける。
+ *
+ * @function revertInferredSpool
+ * @param {string} id - inferred スプールID
+ * @returns {?Object} 復元した旧スプール（復元対象が無ければ null）
+ */
+export function revertInferredSpool(id) {
+  const inferred = monitorData.filamentSpools.find(sp => sp.id === id);
+  if (!inferred) return null;
+  const sup = inferred._supersedes;
+  const host = sup?.host || inferred.hostname || null;
+  const nowTs = Date.now();
+
+  // #3 以降に inferred へ帰属した消費（= 物理的には同一リールの消費）を算出
+  let inferredUsed = 0;
+  try {
+    const d = deriveSpoolRemaining(id);
+    inferredUsed = Math.max(0, (Number(inferred.totalLengthMm) || 0) - (Number(d.remainingMm) || 0));
+  } catch (e) { /* noop */ }
+
+  // inferred を取り外し（mountHistory に unmount 追記）＋削除
+  if (host) {
+    appendUnmountEvent({ host, spoolId: inferred.id, untilJobId: _latestCompletedPrintId(host), ts: nowTs });
+  }
+  inferred.deleted = true; inferred.isDeleted = true;
+  inferred.isActive = false; inferred.isInUse = false;
+  inferred.currentPrintID = ""; inferred.currentJobStartLength = null;
+  inferred.hostname = null;
+
+  const old = sup?.spoolId ? monitorData.filamentSpools.find(sp => sp.id === sup.spoolId) : null;
+  if (!old || !host) {
+    // 復元対象なし → inferred を外すだけ
+    if (host && monitorData.hostSpoolMap[host] === id) monitorData.hostSpoolMap[host] = null;
+    if (host) {
+      setStoredDataForHost(host, "filamentRemainingMm", null, true);
+      updateStoredDataToDOM();
+    }
+    saveUnifiedStorage(true);
+    return null;
+  }
+
+  // 旧（実は同一リール）の残量 = スナップショット − inferred 期間の消費
+  const oldRestored = Math.max(0, (Number(sup.prevRemaining) || 0) - inferredUsed);
+  // 既存ジョブ（#3 の J まで）を除外する since（この時点を新基点に）
+  const sinceBase = Math.max(_latestCompletedPrintId(host), Number(sup.printID) || 0);
+
+  old.deleted = false; old.isDeleted = false;
+  old.isActive = true; old.isInUse = true; old.hostname = host; old.removedAt = null;
+  old.remainingLengthMm = oldRestored;
+  old.currentPrintID = "";
+  old.currentJobStartLength = null;
+  monitorData.hostSpoolMap[host] = old.id;
+  appendMountEvent({ host, spoolId: old.id, anchorRemainingMm: oldRestored, sinceJobId: sinceBase, ts: nowTs + 1 });
+
+  // ライブ使用量カウンタを再ベースライン（印刷継続中でも old から正しく追跡）
+  try {
+    const used = Number(monitorData.machines?.[host]?.storedData?.usedMaterialLength?.rawValue);
+    _rebaselineHostUsage?.(host, { accumulated: 0, prevUsed: Number.isFinite(used) ? used : null });
+  } catch (e) { /* noop */ }
+
+  setStoredDataForHost(host, "filamentRemainingMm", oldRestored, true);
+  updateStoredDataToDOM();
+  saveUnifiedStorage(true);
+  return old;
 }
 
 export function updateSpool(id, patch) {

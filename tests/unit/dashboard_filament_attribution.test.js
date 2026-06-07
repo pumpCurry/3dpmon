@@ -45,6 +45,7 @@ const {
   finalizeFilamentUsage,
   addInferredSpool,
   confirmInferredSpool,
+  revertInferredSpool,
 } = await import('../../3dp_lib/dashboard_spool.js');
 const { consumeInventory } = await import('../../3dp_lib/dashboard_filament_inventory.js');
 
@@ -301,5 +302,52 @@ describe('P6 inferred スプールのライフサイクル（R1）', () => {
     expect(mockMonitorData.hostSpoolMap.h).toBe('REAL');
     expect(inferred.deleted).toBe(true);   // phantom 破棄
     expect(inferred.isDeleted).toBe(true);
+  });
+});
+
+// =====================================================================
+// 5. P6 #3 完全可逆（revertInferredSpool, F-A: 同一リール戻し）
+// =====================================================================
+describe('P6 #3 完全可逆（revertInferredSpool）', () => {
+  beforeEach(reset);
+
+  // #3 のコア（aggregator _resolveRunoutOnReplace 相当）を再現して inferred 装着状態を作る
+  function setupInferredMounted() {
+    setupHost('h', { history: [job(200, 6000)], currentId: '300', used: 18000, state: 5 });
+    const OLD = addSpool({
+      id: 'OLD', totalLengthMm: 330000, remainingLengthMm: 23100, // ~7%
+      currentPrintID: '300', currentJobStartLength: 300000, isActive: true, hostname: 'h',
+    });
+    mockMonitorData.hostSpoolMap = { h: 'OLD' };
+    ledger.appendMountEvent({ host: 'h', spoolId: 'OLD', anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+    ledger.recordFilamentEvent({ host: 'h', ts: 50, stateAtEvent: 5, oldSpoolId: 'OLD', oldRemainingMm: 23100, oldRemainingPct: 7, runout: true });
+    const inferred = addInferredSpool(OLD);
+    inferred._supersedes = { spoolId: 'OLD', host: 'h', prevRemaining: 23100, printID: '300' };
+    setCurrentSpoolId(inferred.id, 'h'); // paused → split, OLD→0
+    return { OLD, inferred };
+  }
+
+  it('即取消（消費0）→ 旧を残量込みで復元（OLD→23100, inferred 削除）', () => {
+    const { OLD, inferred } = setupInferredMounted();
+    expect(OLD.remainingLengthMm).toBe(0);                  // #3 で 0 化
+    expect(mockMonitorData.hostSpoolMap.h).toBe(inferred.id);
+
+    const restored = revertInferredSpool(inferred.id);
+    expect(restored).toBe(OLD);
+    expect(mockMonitorData.hostSpoolMap.h).toBe('OLD');     // 旧を再装着
+    expect(OLD.isActive).toBe(true);
+    expect(OLD.remainingLengthMm).toBe(23100);             // prevRemaining − 0
+    expect(inferred.deleted).toBe(true);
+    expect(inferred.isDeleted).toBe(true);
+  });
+
+  it('inferred 期間に消費があれば旧から差し引いて復元', () => {
+    const { OLD, inferred } = setupInferredMounted();
+    // inferred で新ジョブ 301 を 10000 消費して完了（inferredUsed=10000）
+    mockMonitorData.machines.h.printStore.history.push(job(301, 10000));
+    expect(ledger.deriveSpoolRemaining(inferred.id).remainingMm).toBe(320000); // 330000-10000
+
+    const restored = revertInferredSpool(inferred.id);
+    expect(restored.remainingLengthMm).toBe(13100);        // 23100 − 10000
   });
 });

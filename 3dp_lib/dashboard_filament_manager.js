@@ -48,6 +48,7 @@ import {
   buildWasteReport,
   getSpoolById,
   confirmInferredSpool,
+  revertInferredSpool,
   SPOOL_STATE
 } from "./dashboard_spool.js";
 import {
@@ -1385,14 +1386,14 @@ function createRegisteredContent(openEditor, hostname) {
         const cancelBtn = document.createElement("button");
         cancelBtn.textContent = "取消";
         cancelBtn.className = "btn-font-xs";
-        cancelBtn.title = "推定を取り消す（在庫消費なし）";
+        cancelBtn.title = "推定を取り消して旧スプールを復元（在庫消費なし）";
         cancelBtn.addEventListener("click", ev => {
           ev.stopPropagation();
           const targetHost = sp.hostname;
-          if (targetHost) { try { setCurrentSpoolId(null, targetHost); } catch (e) { /* noop */ } }
-          deleteSpool(sp.id, targetHost);
-          _syncFilamentPreview(targetHost, null);
-          showAlert("推定スプールを取り消しました", "info");
+          // ★ ADR-0005 P6 (F-A): 旧スプールを #3 以降の消費を差し引いた残量で完全復元
+          const restored = revertInferredSpool(sp.id);
+          _syncFilamentPreview(targetHost, restored || null);
+          showAlert(restored ? "推定を取り消し、元のスプールを復元しました" : "推定スプールを取り消しました", "info");
           render();
         });
         cmd.append(confirmBtn, corrBtn, cancelBtn);
