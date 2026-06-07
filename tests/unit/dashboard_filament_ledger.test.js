@@ -34,7 +34,8 @@ const {
   initLedgerAnchors,
   recordFilamentEvent,
   getOpenFilamentEvent,
-  resolveFilamentEvent
+  resolveFilamentEvent,
+  runoutGateHeld
 } = await import("../../3dp_lib/dashboard_filament_ledger.js");
 
 /**
@@ -675,5 +676,33 @@ describe("ADR-0005 境界トラップ（since=J でジョブ消失）", () => {
     appendMountEvent({ host: "h", spoolId: "NEW", anchorRemainingMm: 330000, sinceJobId: 300, ts: 10 });
     const r = deriveSpoolRemaining("NEW");
     expect(r.usedMm).toBe(0); // ← 実装は Lc(=最新完了) を since にすることでこれを回避
+  });
+});
+
+// =====================================================================
+// 18. ADR-0005 P6 runoutGateHeld（2信号ゲート: センサーON ＋ 推定残<10%）
+// =====================================================================
+describe("ADR-0005 P6 runoutGateHeld（2信号ゲート）", () => {
+  it("runout かつ 残<10% → true（高確度: 使い切り→新リール）", () => {
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: 5 })).toBe(true);
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: 9.99 })).toBe(true);
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: 0 })).toBe(true);
+  });
+
+  it("runout だが 残≥10% → false（不一致＝詰まり/誤動作。同一再セット）", () => {
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: 10 })).toBe(false);
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: 35 })).toBe(false);
+  });
+
+  it("runout でない（センサー未ON）→ false", () => {
+    expect(runoutGateHeld({ runout: false, oldRemainingPct: 5 })).toBe(false);
+  });
+
+  it("oldRemainingPct 不明/欠落/null → false（推定信号なし）", () => {
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: null })).toBe(false);
+    expect(runoutGateHeld({ runout: true, oldRemainingPct: NaN })).toBe(false);
+    expect(runoutGateHeld({ runout: true })).toBe(false);
+    expect(runoutGateHeld(null)).toBe(false);
+    expect(runoutGateHeld(undefined)).toBe(false);
   });
 });

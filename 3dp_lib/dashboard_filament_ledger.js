@@ -561,3 +561,21 @@ export function resolveFilamentEvent(host, resolution, { ts } = {}) {
   if (ts != null) ctx.resolvedAt = ts;
   return ctx;
 }
+
+/**
+ * ADR-0005 P6: 2信号ゲート判定（センサーON ＋ 推定残<10%）。
+ *
+ * 両立時のみ高確度「使い切り→新リール」とみなす（片方のみは詰まり/誤動作の不一致）。
+ * 切れ復帰(#3 vs #4)・完了/オフライン(#6/#7)の分岐に用いる純関数。
+ *
+ * @function runoutGateHeld
+ * @param {?Object} ev - イベント文脈（getOpenFilamentEvent の戻り）
+ * @returns {boolean} ゲート成立なら true
+ */
+export function runoutGateHeld(ev) {
+  if (!ev || !ev.runout) return false;
+  const pct = ev.oldRemainingPct;
+  // null/undefined は「推定信号なし」（Number(null)=0 の誤判定を防ぐ）。NaN も除外。
+  if (pct == null || !Number.isFinite(Number(pct))) return false;
+  return Number(pct) < 10;
+}

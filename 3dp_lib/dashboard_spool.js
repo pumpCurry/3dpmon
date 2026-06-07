@@ -848,6 +848,13 @@ export function setCurrentSpoolId(id, hostname) {
     updateStoredDataToDOM();
   }
 
+  // ★ ADR-0005 P6: inferred(暫定推定)スプールを実スプールで置換したら推定 phantom を破棄
+  //   （ユーザーが正しいリールを登録＝推定が外れた。在庫汚染を残さない）。
+  if (prevSpool && prevSpool.inferred && newSpool && newSpool.id !== prevSpool.id) {
+    prevSpool.deleted = true;
+    prevSpool.isDeleted = true;
+  }
+
   // ★ ADR-0005: 交換でイベント文脈を解決（mid-print swap はモード、その他は default-continue）。
   if (host && _ev) {
     try { resolveFilamentEvent(host, _midPrintSwap ? _mode : "default-continue", { ts: nowTs }); }
@@ -863,6 +870,8 @@ export function setCurrentSpoolId(id, hostname) {
  *
  * @param {Object} data 追加するスプール情報オブジェクト
  * @param {boolean} [data.isFavorite] お気に入りフラグ
+ * @param {Object} [opts]
+ * @param {boolean} [opts.inferred=false] ADR-0005 P6: 暫定推定スプール（serialNo を採番せず inferred:true）
  * @returns {Object} 登録されたスプールオブジェクト
  */
 /**
@@ -878,10 +887,12 @@ function _calcCostPerMm(spool) {
   return 0;
 }
 
-export function addSpool(data) {
+export function addSpool(data, { inferred = false } = {}) {
   // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const id = genId();
-  const serialNo = ++monitorData.spoolSerialCounter;
+  // ★ ADR-0005 P6/R1: inferred(暫定推定)スプールは serialNo を採番しない
+  //   （不可逆な spoolSerialCounter を消費しない。確定時に confirmInferredSpool で採番）。
+  const serialNo = inferred ? null : ++monitorData.spoolSerialCounter;
   const spool = {
     id,
     spoolId: id,
@@ -957,12 +968,86 @@ export function addSpool(data) {
     isDeleted: false,
     hostname: data.hostname || null,
     /** コスト単価(円/mm) — purchasePrice / totalLengthMm から自動算出 */
-    costPerMm: 0
+    costPerMm: 0,
+    /** ADR-0005 P6: 暫定推定フラグ（true=未確定。serial/inventory 未消費・ユーザー確定待ち） */
+    inferred: !!inferred
   };
   spool.costPerMm = _calcCostPerMm(spool);
   monitorData.filamentSpools.push(spool);
   saveUnifiedStorage(true);
   return spool;
+}
+
+/**
+ * ADR-0005 P6: 暫定推定スプールを生成する（同プリセット・満タン仮定）。
+ *
+ * 一時停止中に旧スプールを使い切った高確度ケース（2信号一致）で、ユーザーが新リールを
+ * 登録しなかった場合に自動生成する。R1 厳守: `++spoolSerialCounter` も `consumeInventory` も
+ * **しない**（不可逆資源を消費しない）。`inferred:true` で生成し、確定は
+ * {@link confirmInferredSpool}、取消は {@link deleteSpool}。残量導出(ledger)は inferred に無依存。
+ *
+ * @function addInferredSpool
+ * @param {Object} source - 複製元（旧スプール等）。preset/material/color/geometry を引き継ぐ
+ * @returns {Object} 生成した inferred スプール
+ */
+export function addInferredSpool(source = {}) {
+  const total = Number(source.totalLengthMm) || 330000;
+  const data = {
+    presetId: source.presetId || null,
+    modelId: source.modelId || source.presetId || null,
+    name: source.name || "",
+    reelSubName: source.reelSubName || "",
+    color: source.color || "",
+    colorName: source.colorName || "",
+    filamentColor: source.filamentColor || source.color || "#22C55E",
+    material: source.material || "",
+    materialName: source.materialName || source.material || "",
+    materialSubName: source.materialSubName || "",
+    brand: source.brand || source.manufacturerName || "",
+    manufacturerName: source.manufacturerName || source.brand || "",
+    density: source.density ?? null,
+    printTempMin: source.printTempMin ?? null,
+    printTempMax: source.printTempMax ?? null,
+    bedTempMin: source.bedTempMin ?? null,
+    bedTempMax: source.bedTempMax ?? null,
+    filamentDiameter: source.filamentDiameter || 1.75,
+    reelOuterDiameter: source.reelOuterDiameter,
+    reelThickness: source.reelThickness,
+    reelWindingInnerDiameter: source.reelWindingInnerDiameter,
+    reelCenterHoleDiameter: source.reelCenterHoleDiameter,
+    reelBodyColor: source.reelBodyColor,
+    purchasePrice: Number(source.purchasePrice) || 0,
+    currencySymbol: source.currencySymbol || "¥",
+    // R2: 満タン仮定は推定値（ユーザー訂正可）
+    totalLengthMm: total,
+    remainingLengthMm: total
+  };
+  return addSpool(data, { inferred: true });
+}
+
+/**
+ * ADR-0005 P6: 暫定推定スプールを確定する（実スプール化）。
+ *
+ * `serialNo` を採番（`++spoolSerialCounter`）し `inferred` を解除。presetId があれば
+ * プリセット在庫を1消費する（任意）。非 inferred / 未発見は no-op。
+ *
+ * @function confirmInferredSpool
+ * @param {string} id - 対象スプールID
+ * @param {Object} [opts]
+ * @param {boolean} [opts.consumePreset=true] - presetId があれば在庫を1消費するか
+ * @returns {?Object} 確定後スプール（未発見/非inferred は null）
+ */
+export function confirmInferredSpool(id, { consumePreset = true } = {}) {
+  const s = monitorData.filamentSpools.find(sp => sp.id === id);
+  if (!s || !s.inferred) return null;
+  s.serialNo = ++monitorData.spoolSerialCounter;
+  s.inferred = false;
+  if (consumePreset && s.presetId) {
+    try { consumeInventory(s.presetId, 1); }
+    catch (e) { console.warn("[confirmInferredSpool] consumeInventory 失敗:", e?.message || e); }
+  }
+  saveUnifiedStorage(true);
+  return s;
 }
 
 export function updateSpool(id, patch) {

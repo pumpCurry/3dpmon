@@ -47,6 +47,7 @@ import {
   buildSpoolAnalytics,
   buildWasteReport,
   getSpoolById,
+  confirmInferredSpool,
   SPOOL_STATE
 } from "./dashboard_spool.js";
 import {
@@ -1312,6 +1313,10 @@ function createRegisteredContent(openEditor, hostname) {
       // 状態バッジ + 装着先統合
       const stateTd = document.createElement("td");
       let stateHtml = renderStateBadge(state);
+      // ★ ADR-0005 P6: 暫定推定スプールは「推定」バッジを前置（確認/訂正待ち）
+      if (sp.inferred) {
+        stateHtml = `<span class="spool-state-badge" style="background:#f59e0b;color:#fff" title="推定で自動投入。確認/訂正してください">推定</span> ` + stateHtml;
+      }
       if (state === SPOOL_STATE.MOUNTED && sp.hostname) {
         const mountName = monitorData.machines[sp.hostname]?.storedData?.hostname?.rawValue || sp.hostname;
         stateHtml += `<div style="font-size:10px;color:#64748b;margin-top:1px">${mountName}</div>`;
@@ -1360,6 +1365,38 @@ function createRegisteredContent(openEditor, hostname) {
 
       // コマンド
       const cmd = document.createElement("td");
+      if (sp.inferred) {
+        // ★ ADR-0005 P6: 暫定推定スプール — 確認/訂正/取消（在庫汚染を残さない・可逆）
+        const confirmBtn = document.createElement("button");
+        confirmBtn.textContent = "確認";
+        confirmBtn.className = "btn-font-xs";
+        confirmBtn.title = "この推定を確定（採番・在庫消費して実スプール化）";
+        confirmBtn.addEventListener("click", ev => {
+          ev.stopPropagation();
+          confirmInferredSpool(sp.id);
+          showAlert("推定スプールを確定しました", "success");
+          render();
+        });
+        const corrBtn = document.createElement("button");
+        corrBtn.textContent = "訂正";
+        corrBtn.className = "btn-font-xs";
+        corrBtn.title = "プリセット/残量を訂正";
+        corrBtn.addEventListener("click", ev => { ev.stopPropagation(); openEditor(sp, render); });
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "取消";
+        cancelBtn.className = "btn-font-xs";
+        cancelBtn.title = "推定を取り消す（在庫消費なし）";
+        cancelBtn.addEventListener("click", ev => {
+          ev.stopPropagation();
+          const targetHost = sp.hostname;
+          if (targetHost) { try { setCurrentSpoolId(null, targetHost); } catch (e) { /* noop */ } }
+          deleteSpool(sp.id, targetHost);
+          _syncFilamentPreview(targetHost, null);
+          showAlert("推定スプールを取り消しました", "info");
+          render();
+        });
+        cmd.append(confirmBtn, corrBtn, cancelBtn);
+      } else {
       switch (state) {
         case SPOOL_STATE.MOUNTED: {
           const editBtn = document.createElement("button");
@@ -1486,6 +1523,7 @@ function createRegisteredContent(openEditor, hostname) {
           break;
         }
       }
+      } // end if (sp.inferred) else
       // お気に入りトグルボタン（全状態共通）
       const favBtn = document.createElement("button");
       favBtn.textContent = sp.isFavorite ? "★" : "☆";

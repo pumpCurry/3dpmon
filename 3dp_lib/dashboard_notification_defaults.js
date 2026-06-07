@@ -47,6 +47,8 @@ export const defaultNotificationMap = {
   tempOutOfRange:   { talk: "{hostname} の温度が {material} の推奨範囲外です: {detail}",           sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   filamentOut:      { talk: "{hostname} のフィラメントが切れました",                               sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   filamentReplaced: { talk: "{hostname} にフィラメントが補充されました",                         sound: DEFAULT_SOUND, enabled: true, level: "success" },
+  inferredSpoolCreated: { talk: "{hostname} で新リールを推定投入しました。確認/訂正してください",   sound: DEFAULT_SOUND, enabled: true, level: "info"    },
+  offlineRunoutSuspect: { talk: "{hostname} で切れ/交換の可能性があります。残量を確認してください", sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   filamentLow:      { talk: "{hostname} フィラメント残量が少なくなっています 残り{remaining}mm ({now})",
                  sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   timeLeft10:       { talk: "{hostname} 印刷終了まで残り10分です",                                 sound: DEFAULT_SOUND, enabled: true, level: "info"    },

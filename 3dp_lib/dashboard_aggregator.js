@@ -39,7 +39,7 @@ import { notificationManager } from "./dashboard_notification_manager.js";
 import { formatDurationSimple } from "./dashboard_utils.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
-import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
+import { showFilamentChangeDialog, closeFilamentChangeDialog } from "./dashboard_filament_change.js";
 import {
   getCurrentSpool,
   reserveFilament,
@@ -48,9 +48,12 @@ import {
   addUsageSnapshot,
   beginExternalPrint,
   formatFilamentAmount,
-  formatSpoolDisplayId
+  formatSpoolDisplayId,
+  getSpoolById,
+  setCurrentSpoolId,
+  addInferredSpool
 } from "./dashboard_spool.js";
-import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent } from "./dashboard_filament_ledger.js";
+import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
 
 // ---------------------------------------------------------------------------
@@ -262,6 +265,77 @@ export function rebaselineHostUsage(host, { accumulated, prevUsed } = {}) {
     s.prevUsedMaterialLength = null;
   }
   s.prevUsageProgress = 0;
+}
+
+/**
+ * ADR-0005 P6: フィラメント切れ復帰(センサー 1→0)時の状態認識つき解決（#3/#4）。
+ *
+ * 未解決の runout 文脈を 2信号ゲート（センサーON＋旧残<10%）で判定する:
+ * - 既に登録/キャンセルで解決済み → ダイアログを閉じるだけ（B3）。
+ * - ゲート成立(#3) → 同プリセット新品を inferred で推定投入（分割 旧→0/新→満）＋通知。完全可逆。
+ * - ゲート不成立(#4) → 同一再セット（resolve "reseat"。詰まり/誤動作想定）。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {Object} machine - 機器オブジェクト
+ * @param {number} nowMs - 現在時刻 ms
+ * @returns {void}
+ */
+function _resolveRunoutOnReplace(host, machine, nowMs) {
+  const ev = getOpenFilamentEvent(host);
+  // B3: 切れ復帰で該当ホストの交換ダイアログを自動クローズ（同一継続扱い）
+  closeFilamentChangeDialog(host, "replaced");
+  if (!ev) return; // 登録/キャンセルで既に解決済み → 何もしない
+  const gateHeld = runoutGateHeld(ev);
+  if (gateHeld) {
+    // #3: 高確度「使い切り→新リール」→ 同プリセット新品を inferred 推定投入（R1: 可逆・serial/在庫非消費）
+    const oldSpool = getSpoolById(ev.oldSpoolId) || getCurrentSpool(host);
+    if (oldSpool) {
+      const inferred = addInferredSpool(oldSpool);
+      // 未解決(paused)文脈のまま setCurrentSpoolId → split で 旧→0/新→満 に装着
+      setCurrentSpoolId(inferred.id, host);
+      notificationManager.notify("inferredSpoolCreated", { hostname: host });
+    }
+    // setCurrentSpoolId が解決済みなら no-op。未解決なら inferred として解決。
+    resolveFilamentEvent(host, "inferred", { ts: nowMs });
+  } else {
+    // #4: ゲート不成立（旧残≥10% 等）→ 同一再セット
+    resolveFilamentEvent(host, "reseat", { ts: nowMs });
+  }
+}
+
+/**
+ * ADR-0005 P6 (#6/#7): runout 文脈が「当該ジョブ非アクティブ」になったら stale 解決する。
+ *
+ * 完了/別ジョブ遷移/オフライン跨ぎで未解決のまま残った切れ文脈を毎 tick 評価する:
+ * - 当該ジョブがまだ paused/printing 中 → 何もしない（recover/登録/タイムアウトに委ねる）。
+ * - 非アクティブ＋ゲート成立 → 旧 `_remainingVerified=false`＋通知（新リール使用の可能性。silent帰属しない）。
+ * - 非アクティブ＋ゲート不成立 → 既定継続。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {Object} machine - 機器オブジェクト
+ * @param {number} nowMs - 現在時刻 ms
+ * @returns {void}
+ */
+function _evaluateStaleRunout(host, machine, nowMs) {
+  const ev = getOpenFilamentEvent(host);
+  if (!ev || !ev.runout) return;
+  const curJobId = String(machine?.printStore?.current?.id ?? "");
+  const state = Number(machine?.runtimeData?.state ?? machine?.storedData?.state?.rawValue ?? 0);
+  const stillActive = !!curJobId && String(ev.inflightJobId ?? "") === curJobId
+    && (state === PRINT_STATE_CODE.printPaused || state === PRINT_STATE_CODE.printStarted);
+  if (stillActive) return; // 当該ジョブ進行中 → recover/登録/タイムアウトに委ねる
+  const gateHeld = runoutGateHeld(ev);
+  if (gateHeld) {
+    // #6/#7: ゲート成立の未解決切れが完了/オフライン跨ぎ → 検出＋フラグ＋通知（自動投入はしない）
+    const oldSp = getSpoolById(ev.oldSpoolId);
+    if (oldSp) oldSp._remainingVerified = false;
+    notificationManager.notify("offlineRunoutSuspect", { hostname: host });
+    resolveFilamentEvent(host, "offline-suspect", { ts: nowMs });
+  } else {
+    resolveFilamentEvent(host, "default-continue", { ts: nowMs });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -592,6 +666,10 @@ export function ingestData(data, hostname) {
         clearTimeout(s.filamentOutTimer);
         s.filamentOutTimer = null;
       }
+      // ★ ADR-0005 P6: 切れ復帰時の状態認識つき解決（#3 inferred / #4 reseat）。
+      //   未解決の runout 文脈があれば 2信号ゲートで判定。ダイアログ自動クローズ(B3)も内包。
+      try { _resolveRunoutOnReplace(host, machine, nowMs); }
+      catch (e) { console.warn("[aggregator] _resolveRunoutOnReplace 失敗:", e?.message || e); }
     }
   }
   s.prevMaterialStatus = matStat;
@@ -1033,12 +1111,11 @@ export function aggregatorUpdate() {
         });
       } catch (e) { console.warn("[aggregator] recordFilamentEvent(pause) 失敗:", e?.message || e); }
     }
-    // ★ ADR-0005: 印刷終了（done/fail/idle へ遷移）で未解決のイベント文脈を既定解決（次ジョブへ漏らさない）。
-    if ((s.lastPrintState === PRINT_STATE_CODE.printStarted || s.lastPrintState === PRINT_STATE_CODE.printPaused)
-        && (st === PRINT_STATE_CODE.printDone || st === PRINT_STATE_CODE.printFailed || st === PRINT_STATE_CODE.printIdle)) {
-      try { resolveFilamentEvent(host, "default-continue", { ts: _now }); }
-      catch (e) { console.warn("[aggregator] resolveFilamentEvent 失敗:", e?.message || e); }
-    }
+    // ★ ADR-0005 P6 (#6/#7): 未解決の切れ文脈が「当該ジョブ非アクティブ」になったら stale 解決
+    //   （完了/別ジョブ/オフライン跨ぎ。ゲート成立なら新リール使用の可能性として flag＋通知。
+    //   未解決のまま次ジョブへ漏らさない。ゲート不成立は既定継続）。
+    try { _evaluateStaleRunout(host, machine, _now); }
+    catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
 
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
       console.log(`[aggregatorUpdate] ${host}: state=${st}(完了) で currentPrintID=${spool.currentPrintID} が残留 → クリア`);

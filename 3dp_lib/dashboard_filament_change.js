@@ -30,10 +30,17 @@ import { getAllPresets } from "./dashboard_filament_presets.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
+import { resolveFilamentEvent } from "./dashboard_filament_ledger.js";
 
 let styleInjected = false;
 /** per-host ダイアログ排他制御（グローバル単一ロックは廃止 — 他ホストをブロックしない） */
 const _filamentDialogOpenFor = new Set();
+/**
+ * per-host ダイアログクローズハンドル（ADR-0005 P5）。
+ * 外部（aggregator の切れ復帰）から該当ホストのダイアログだけを安全に閉じるための
+ * closer 関数を host 名で保持する（querySelector で誤ホストを閉じない）。
+ */
+const _dialogClosers = new Map();
 
 /**
  * 交換ダイアログのデフォルトタブを設定値から決定する。
@@ -748,13 +755,24 @@ export function showFilamentChangeDialog(hostname) {
 
     document.body.appendChild(overlay);
 
+    let _neglectTimer = null;
     const closeDialog = result => {
+      if (_neglectTimer) { clearTimeout(_neglectTimer); _neglectTimer = null; }
+      _dialogClosers.delete(hostname);
       overlay.remove();
       _filamentDialogOpenFor.delete(hostname);
       resolve(result);
     };
+    // ★ ADR-0005 P5(B3): 外部（切れ復帰）から該当ホストのダイアログを閉じられるよう登録
+    _dialogClosers.set(hostname, closeDialog);
+    // ★ ADR-0005 P5(B5): 放置 60s でダイアログは閉じる（UI整理）が、切れ文脈は**解決しない**。
+    //   ユーザーが後でリールを交換すれば復帰(#3/#4)が、印刷が終われば job-end(#6/#7)が適切に解決する。
+    //   ここで premature に default-continue すると、戻ってきた交換を取りこぼすため閉じるだけにする。
+    _neglectTimer = setTimeout(() => { closeDialog(false); }, 60000);
 
     dlg.querySelector("#fc-cancel").addEventListener("click", () => {
+      // ★ ADR-0005 P5(B4): キャンセル = 同一スプール再セット（明示。切れ文脈を reseat 解決）
+      try { resolveFilamentEvent(hostname, "reseat"); } catch (e) { /* noop */ }
       closeDialog(false);
     });
 
@@ -815,9 +833,30 @@ export function showFilamentChangeDialog(hostname) {
    } catch (e) {
     console.error("[showFilamentChangeDialog] ダイアログ生成エラー:", e);
     _filamentDialogOpenFor.delete(hostname);
+    _dialogClosers.delete(hostname);
     resolve(false);
    }
   });
+}
+
+/**
+ * 指定ホストの交換ダイアログを外部から閉じる（ADR-0005 P5 B3）。
+ *
+ * フィラメント切れが復帰（センサー 1→0）した際などに、aggregator から該当ホストの
+ * ダイアログだけを閉じる（同一継続扱い）。該当ホストのダイアログが開いていなければ no-op。
+ * イベント文脈の解決は呼び出し側（aggregator のケース判定）が行う。
+ *
+ * @function closeFilamentChangeDialog
+ * @param {string} hostname - 対象ホスト名
+ * @param {string} [reason="auto"] - クローズ理由（ログ用）
+ * @returns {boolean} 閉じたら true、対象が無ければ false
+ */
+export function closeFilamentChangeDialog(hostname, reason = "auto") {
+  const closer = _dialogClosers.get(hostname);
+  if (!closer) return false;
+  console.debug(`[filament_change] auto-close dialog host=${hostname} reason=${reason}`);
+  closer(false);
+  return true;
 }
 
 /**
