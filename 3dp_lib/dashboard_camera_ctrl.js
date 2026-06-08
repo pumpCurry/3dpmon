@@ -145,6 +145,7 @@ export function registerCameraPanel(hostname, img, body, toggle) {
     countdownTimer: null,
     watchdogTimer: null,
     pollTimeout: null,
+    streamTarget: null,
     _generation: 0,
     firstConnected: false,
     userStopped: false,
@@ -338,9 +339,42 @@ function _clearWatchdog(entry) {
 function _stopEntry(entry) {
   _cancelTimers(entry);
   entry.attempts = 0;
+  entry.streamTarget = null;
   if (entry.img) {
     entry.img.src = "";
     entry.img.classList.add("off");
+  }
+}
+
+/**
+ * 同一の物理カメラ (ip:port) へ既にストリーム中の「別ホスト」エントリを停止する。
+ * IP 再利用やホスト名変更で connectionMap キーが二重化した際、同一機器へ
+ * MJPEG が重複接続するのを防ぐ（最後に開始したストリームを優先＝newest wins）。
+ * 別 IP（別機器）の正規ストリームには影響しない。
+ *
+ * @private
+ * @param {CameraPanelEntry} keepEntry - 維持するエントリ（停止対象から除外）
+ * @param {string} target - "ip:port"
+ * @returns {void}
+ */
+function _stopDuplicateTargetStreams(keepEntry, target) {
+  for (const [, other] of cameraRegistry) {
+    if (other === keepEntry) continue;
+    if (other.userStopped) continue;
+    if (other.streamTarget !== target) continue;
+    _cancelTimers(other);
+    other._generation = (other._generation || 0) + 1; // 旧 async コールバックを stale 化
+    other.userStopped = true;
+    other.streamTarget = null;
+    if (other.img) {
+      other.img.src = "";
+      other.img.classList.add("off");
+    }
+    _updateUI(other, "disconnected");
+    pushLog(
+      `同一カメラ(${target})への重複接続を検出 → 旧ホスト「${other.hostname}」のストリームを停止しました`,
+      "warn", false, other.hostname
+    );
   }
 }
 
@@ -448,6 +482,12 @@ function _connectStream(entry, host) {
     /* リトライをスケジュール */
     _scheduleRetry(entry, host, delayMs, waitSec);
   };
+
+  /* ★ 多重動画接続防止 (fix/camera-dedup):
+     同一物理カメラ(ip:port)へ既にストリーム中の別ホストを停止し、1機器=1 MJPEG に収束させる。
+     IP再利用/ホスト名変更で connectionMap キーが二重化しても重複接続を防ぐ。 */
+  entry.streamTarget = `${host}:${port}`;
+  _stopDuplicateTargetStreams(entry, entry.streamTarget);
 
   /* ストリーム開始 */
   entry.img.src = url;
