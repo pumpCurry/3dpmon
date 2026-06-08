@@ -39,7 +39,7 @@ import { notificationManager } from "./dashboard_notification_manager.js";
 import { formatDurationSimple } from "./dashboard_utils.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
-import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
+import { showFilamentChangeDialog, closeFilamentChangeDialog } from "./dashboard_filament_change.js";
 import {
   getCurrentSpool,
   reserveFilament,
@@ -48,8 +48,12 @@ import {
   addUsageSnapshot,
   beginExternalPrint,
   formatFilamentAmount,
-  formatSpoolDisplayId
+  formatSpoolDisplayId,
+  getSpoolById,
+  setCurrentSpoolId,
+  addInferredSpool
 } from "./dashboard_spool.js";
+import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
 
 // ---------------------------------------------------------------------------
@@ -232,6 +236,117 @@ function _getState(hostname) {
   return _hostStates.get(host);
 }
 
+/**
+ * ADR-0005 (B1/P4): スプール交換時にライブ使用量カウンタを文脈に応じて再ベースラインする。
+ *
+ * `setCurrentSpoolId`（dashboard_spool.js）から呼ばれる。aggregator private な per-host 状態の
+ * `accumulatedUsedMaterial`（積算）と `prevUsedMaterialLength`（次デルタの基線）を設定し直し、
+ * 「旧スプールの累積を引き継いだまま新スプール残量から減算→過大→0クランプで張り付く」(B1) を断つ。
+ * 新スプールの `currentJobStartLength` は呼び出し側（spool.js）が設定する（責務分離）。
+ * `prevUsageProgress` も基線に合わせてリセットする（推定フォールバック経路の整合）。
+ *
+ * @function rebaselineHostUsage
+ * @param {string} host - ホスト名
+ * @param {Object} [params]
+ * @param {number} [params.accumulated] - 新しい s.accumulatedUsedMaterial
+ * @param {number} [params.prevUsed] - 新しい s.prevUsedMaterialLength（次デルタの基線）
+ * @returns {void}
+ */
+export function rebaselineHostUsage(host, { accumulated, prevUsed } = {}) {
+  if (!host) return;
+  const s = _getState(host);
+  if (accumulated != null && Number.isFinite(Number(accumulated))) {
+    s.accumulatedUsedMaterial = Number(accumulated);
+  }
+  if (prevUsed != null && Number.isFinite(Number(prevUsed))) {
+    s.prevUsedMaterialLength = Number(prevUsed);
+  } else if (prevUsed === null) {
+    // 明示的な null は「基線未確定」（次回受信をベースラインにする＝A4 経路）
+    s.prevUsedMaterialLength = null;
+  }
+  s.prevUsageProgress = 0;
+}
+
+/**
+ * ADR-0005 P6: フィラメント切れ復帰(センサー 1→0)時の状態認識つき解決（#3/#4）。
+ *
+ * 未解決の runout 文脈を 2信号ゲート（センサーON＋旧残<10%）で判定する:
+ * - 既に登録/キャンセルで解決済み → ダイアログを閉じるだけ（B3）。
+ * - ゲート成立(#3) → 同プリセット新品を inferred で推定投入（分割 旧→0/新→満）＋通知。完全可逆。
+ * - ゲート不成立(#4) → 同一再セット（resolve "reseat"。詰まり/誤動作想定）。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {Object} machine - 機器オブジェクト
+ * @param {number} nowMs - 現在時刻 ms
+ * @returns {void}
+ */
+function _resolveRunoutOnReplace(host, machine, nowMs) {
+  const ev = getOpenFilamentEvent(host);
+  // B3: 切れ復帰で該当ホストの交換ダイアログを自動クローズ（同一継続扱い）
+  closeFilamentChangeDialog(host, "replaced");
+  if (!ev) return; // 登録/キャンセルで既に解決済み → 何もしない
+  // ★ F-B 対策: #3 自動投入は「印刷が実際に一時停止した切れ」に限定（短blip/誤動作を除外）。
+  const wasPaused = Number(ev.stateAtEvent) === PRINT_STATE_CODE.printPaused;
+  if (runoutGateHeld(ev) && wasPaused) {
+    // #3: 高確度（2信号成立＋一時停止）→ 同プリセット新品を inferred 推定投入（R1: 可逆・serial/在庫非消費）
+    const oldSpool = getSpoolById(ev.oldSpoolId) || getCurrentSpool(host);
+    if (oldSpool) {
+      const inferred = addInferredSpool(oldSpool);
+      // ★ F-A 対策: 取消で旧を完全復元するためのスナップショット（zeroing 前の残量）
+      inferred._supersedes = {
+        spoolId: oldSpool.id,
+        host,
+        prevRemaining: Number.isFinite(Number(ev.oldRemainingMm))
+          ? Number(ev.oldRemainingMm) : (Number(oldSpool.remainingLengthMm) || 0),
+        printID: oldSpool.currentPrintID || (ev.inflightJobId != null ? String(ev.inflightJobId) : "")
+      };
+      // 未解決(paused)文脈のまま setCurrentSpoolId → split で 旧→0/新→満 に装着
+      setCurrentSpoolId(inferred.id, host);
+      notificationManager.notify("inferredSpoolCreated", { hostname: host });
+    }
+    // setCurrentSpoolId が解決済みなら no-op。未解決なら inferred として解決。
+    resolveFilamentEvent(host, "inferred", { ts: nowMs });
+  } else {
+    // #4 / F-B: ゲート不成立 or 非一時停止（blip）→ 同一再セット
+    resolveFilamentEvent(host, "reseat", { ts: nowMs });
+  }
+}
+
+/**
+ * ADR-0005 P6 (#6/#7): runout 文脈が「当該ジョブ非アクティブ」になったら stale 解決する。
+ *
+ * 完了/別ジョブ遷移/オフライン跨ぎで未解決のまま残った切れ文脈を毎 tick 評価する:
+ * - 当該ジョブがまだ paused/printing 中 → 何もしない（recover/登録/タイムアウトに委ねる）。
+ * - 非アクティブ＋ゲート成立 → 旧 `_remainingVerified=false`＋通知（新リール使用の可能性。silent帰属しない）。
+ * - 非アクティブ＋ゲート不成立 → 既定継続。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {Object} machine - 機器オブジェクト
+ * @param {number} nowMs - 現在時刻 ms
+ * @returns {void}
+ */
+function _evaluateStaleRunout(host, machine, nowMs) {
+  const ev = getOpenFilamentEvent(host);
+  if (!ev || !ev.runout) return;
+  const curJobId = String(machine?.printStore?.current?.id ?? "");
+  const state = Number(machine?.runtimeData?.state ?? machine?.storedData?.state?.rawValue ?? 0);
+  const stillActive = !!curJobId && String(ev.inflightJobId ?? "") === curJobId
+    && (state === PRINT_STATE_CODE.printPaused || state === PRINT_STATE_CODE.printStarted);
+  if (stillActive) return; // 当該ジョブ進行中 → recover/登録/タイムアウトに委ねる
+  const gateHeld = runoutGateHeld(ev);
+  if (gateHeld) {
+    // #6/#7: ゲート成立の未解決切れが完了/オフライン跨ぎ → 検出＋フラグ＋通知（自動投入はしない）
+    const oldSp = getSpoolById(ev.oldSpoolId);
+    if (oldSp) oldSp._remainingVerified = false;
+    notificationManager.notify("offlineRunoutSuspect", { hostname: host });
+    resolveFilamentEvent(host, "offline-suspect", { ts: nowMs });
+  } else {
+    resolveFilamentEvent(host, "default-continue", { ts: nowMs });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // _resetNotificationState: 通知状態リセット（共通化）
 // ---------------------------------------------------------------------------
@@ -354,7 +469,10 @@ export function ingestData(data, hostname) {
   const validId = Number.isFinite(id) && id > 0;
   if (validId && id !== s.prevPrintID) {
     // 新しいジョブ開始時点でフィラメント使用量関連の変数を初期化
-    s.accumulatedUsedMaterial = !isNaN(matLen) ? matLen : 0;
+    // ★ ADR-0004: 累積は 0 から開始する（K1 の usedMaterialLength は印刷毎にリセットされ、
+    //   新 PrintID 検出時に matLen を初期累積へ入れると急減/過大計上の原因になる）。
+    //   prevUsedMaterialLength は matLen をデルタ基準として維持する。
+    s.accumulatedUsedMaterial = 0;
     s.prevUsedMaterialLength = !isNaN(matLen) ? matLen : null;
     s.prevUsageProgress = prog;
 
@@ -527,6 +645,23 @@ export function ingestData(data, hostname) {
   if (s.prevMaterialStatus !== null) {
     if (s.prevMaterialStatus === 0 && matStat === 1) {
       notificationManager.notify("filamentOut", { hostname: host });
+      // ★ ADR-0005 P1: 切れイベントの状態文脈を per-host に記録（後の交換操作の遡及判定用）
+      try {
+        const _curSp = getCurrentSpool(host);
+        const _stNow = Number(storedData.state?.rawValue || 0);
+        const _total = Number(_curSp?.totalLengthMm);
+        recordFilamentEvent({
+          host,
+          ts: nowMs,
+          stateAtEvent: _stNow,
+          oldSpoolId: _curSp?.id ?? null,
+          oldRemainingMm: Number(_curSp?.remainingLengthMm),
+          oldRemainingPct: _curSp && _total > 0
+            ? (Number(_curSp.remainingLengthMm) / _total) * 100 : NaN,
+          runout: true,
+          inflightJobId: _curSp?.currentPrintID || (machine?.printStore?.current?.id ?? null)
+        });
+      } catch (e) { console.warn("[aggregator] recordFilamentEvent(runout) 失敗:", e?.message || e); }
       if (s.filamentOutTimer) clearTimeout(s.filamentOutTimer);
       s.filamentOutTimer = setTimeout(() => {
         if (s.currentMaterialStatus === 1) {
@@ -540,6 +675,10 @@ export function ingestData(data, hostname) {
         clearTimeout(s.filamentOutTimer);
         s.filamentOutTimer = null;
       }
+      // ★ ADR-0005 P6: 切れ復帰時の状態認識つき解決（#3 inferred / #4 reseat）。
+      //   未解決の runout 文脈があれば 2信号ゲートで判定。ダイアログ自動クローズ(B3)も内包。
+      try { _resolveRunoutOnReplace(host, machine, nowMs); }
+      catch (e) { console.warn("[aggregator] _resolveRunoutOnReplace 失敗:", e?.message || e); }
     }
   }
   s.prevMaterialStatus = matStat;
@@ -962,6 +1101,31 @@ export function aggregatorUpdate() {
     //   printIdle かつ currentPrintID 残留 は、次回印刷開始時の idle→start 遷移（L980-1006）でクリアされる。
     const isCompleted = st === PRINT_STATE_CODE.printDone
                      || st === PRINT_STATE_CODE.printFailed;
+
+    // ★ ADR-0005 P1: 印刷中→一時停止の遷移で状態文脈を記録（一時停止中の交換=分割の遡及判定用）。
+    if (spool
+        && st === PRINT_STATE_CODE.printPaused
+        && s.lastPrintState === PRINT_STATE_CODE.printStarted) {
+      try {
+        const _total = Number(spool.totalLengthMm);
+        recordFilamentEvent({
+          host,
+          ts: _now,
+          stateAtEvent: PRINT_STATE_CODE.printPaused,
+          oldSpoolId: spool.id,
+          oldRemainingMm: Number(spool.remainingLengthMm),
+          oldRemainingPct: _total > 0 ? (Number(spool.remainingLengthMm) / _total) * 100 : NaN,
+          runout: s.currentMaterialStatus === 1,
+          inflightJobId: spool.currentPrintID || (machine?.printStore?.current?.id ?? null)
+        });
+      } catch (e) { console.warn("[aggregator] recordFilamentEvent(pause) 失敗:", e?.message || e); }
+    }
+    // ★ ADR-0005 P6 (#6/#7): 未解決の切れ文脈が「当該ジョブ非アクティブ」になったら stale 解決
+    //   （完了/別ジョブ/オフライン跨ぎ。ゲート成立なら新リール使用の可能性として flag＋通知。
+    //   未解決のまま次ジョブへ漏らさない。ゲート不成立は既定継続）。
+    try { _evaluateStaleRunout(host, machine, _now); }
+    catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
+
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
       console.log(`[aggregatorUpdate] ${host}: state=${st}(完了) で currentPrintID=${spool.currentPrintID} が残留 → クリア`);
       spool.currentJobStartLength = null;
@@ -1131,6 +1295,10 @@ export function aggregatorUpdate() {
         }
         const isSuccess2 = (st === PRINT_STATE_CODE.printDone);
         finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2);
+        // ★ ADR-0004: 完了後に信頼ソースから残量を冪等補正（idle で権威補正）。
+        //   finalize 内でも reconcile するが、currentPrintID クリア後の確定状態で再度走らせる。
+        //   reconcile は印刷中スプールに触れないため二重防御として安全。冪等なので無害。
+        try { reconcileSpool(spool.id, { ts: _now }); } catch (e) { console.warn("[aggregator] reconcileSpool 失敗:", e?.message || e); }
         saveUnifiedStorage();
         s.accumulatedUsedMaterial = 0;
         s.prevUsedMaterialLength = null;

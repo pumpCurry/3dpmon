@@ -40,6 +40,7 @@ import { monitorData, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboar
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
+import { initLedgerAnchors } from "./dashboard_filament_ledger.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -202,6 +203,19 @@ export async function importAllData(data) {
     // 時系列順にソート
     monitorData.usageHistory.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
     trimUsageHistory();
+  }
+
+  // ── ADR-0004 mountHistory: 装着履歴を evId ベースで重複排除追加 ──
+  if (Array.isArray(data.mountHistory)) {
+    if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
+    const existingIds = new Set(monitorData.mountHistory.map(e => e?.evId));
+    for (const ev of data.mountHistory) {
+      if (ev && ev.evId != null && !existingIds.has(ev.evId)) {
+        monitorData.mountHistory.push(ev);
+        existingIds.add(ev.evId);
+      }
+    }
+    monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
   }
 
   // ── プリセット: presetId ベースで新規のみ追加 (ユーザー編集版を保持) ──
@@ -556,6 +570,10 @@ const LS_KEY_HOST_PREFIX = "3dpmon-host-";
 const LS_GLOBAL_FIELDS = [
   "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
   "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
+  // ★ ADR-0004: フィラメント装着履歴
+  "mountHistory",
+  // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
+  "filamentEventContext",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -763,6 +781,10 @@ function _flushStorage() {
       queueSharedWrite("hiddenPresets",      monitorData.hiddenPresets);
       queueSharedWrite("favoritePresets",    monitorData.favoritePresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
+      // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）
+      queueSharedWrite("mountHistory",       monitorData.mountHistory);
+      // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
+      queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -831,6 +853,7 @@ export function restoreUnifiedStorage() {
     _restoreFromData(idbCache.shared, idbCache.machines);
     console.debug("[restoreUnifiedStorage] IndexedDB から復元しました");
     Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
+    _reconcileAfterRestore();
     return;
   }
 
@@ -863,6 +886,32 @@ export function restoreUnifiedStorage() {
   }
 
   Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
+  _reconcileAfterRestore();
+}
+
+/**
+ * 復元完了後にフィラメント残量レジャーのアンカーを初期化する（ADR-0004 是正版）。
+ *
+ * 過去を再計算せず、装着中スプール（hostSpoolMap 掲載）で mount イベント未種付けの
+ * ものに「現在値（または現在ジョブ開始時残量）」を基点とする mount イベントを1回だけ
+ * 種付けする。以後の残量は最新区間のアンカーから冪等に導出される。
+ * 取り外し済みスプールには触れない（残量を維持）。
+ * テスト容易性のため失敗してもアプリ起動は妨げない（時刻は呼び出し側の Date.now を渡す）。
+ *
+ * @private
+ * @returns {void}
+ */
+function _reconcileAfterRestore() {
+  try {
+    const report = initLedgerAnchors({ nowMs: Date.now() });
+    if (report && report.seeded > 0) {
+      console.info(
+        `[restoreUnifiedStorage] フィラメント残量アンカー種付け: ${report.seeded}件`
+      );
+    }
+  } catch (e) {
+    console.warn("[restoreUnifiedStorage] initLedgerAnchors 失敗:", e?.message || e);
+  }
 }
 
 /**
@@ -1013,6 +1062,23 @@ function _restoreFromData(shared, machines) {
   }
   trimUsageHistory();
 
+  // ★ ADR-0004 mountHistory: 装着履歴を evId ベースでマージ（追記専用ログ・全クリアしない）
+  if (Array.isArray(shared?.mountHistory)) {
+    if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
+    if (monitorData.mountHistory.length === 0) {
+      monitorData.mountHistory = shared.mountHistory.slice();
+    } else {
+      const existingIds = new Set(monitorData.mountHistory.map(e => e?.evId));
+      for (const ev of shared.mountHistory) {
+        if (ev && !existingIds.has(ev.evId)) {
+          monitorData.mountHistory.push(ev);
+          existingIds.add(ev.evId);
+        }
+      }
+    }
+    monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
+  }
+
   // ★ filamentInventory: IDベースマージ
   if (Array.isArray(shared?.filamentInventory)) {
     if (monitorData.filamentInventory.length === 0) {
@@ -1060,6 +1126,19 @@ function _restoreFromData(shared, machines) {
     }
   }
   // ★ レガシー currentSpoolId → hostSpoolMap 移行は削除済み（マイグレーション完了）
+
+  // ★ ADR-0005: フィラメントイベント文脈（per-host）。既存（このセッションで記録済み）を
+  //   優先し、未保持のホストのみ保存値で補完（再起動を跨いだ遡及帰属判定を維持）。
+  if (shared?.filamentEventContext && typeof shared.filamentEventContext === "object") {
+    if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
+      monitorData.filamentEventContext = {};
+    }
+    for (const [host, ctx] of Object.entries(shared.filamentEventContext)) {
+      if (ctx && !monitorData.filamentEventContext[host]) {
+        monitorData.filamentEventContext[host] = ctx;
+      }
+    }
+  }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）
   if (Array.isArray(shared?.userPresets) && shared.userPresets.length > 0) {

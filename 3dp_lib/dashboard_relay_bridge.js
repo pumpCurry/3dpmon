@@ -23,7 +23,7 @@
 "use strict";
 
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
-import { sendCommand } from "./dashboard_connection.js";
+import { sendCommand, getHttpPort } from "./dashboard_connection.js";
 
 /** ブリッジ初期化済みフラグ */
 let _initialized = false;
@@ -34,11 +34,21 @@ const _prevSnapshot = new Map();
 /** 前回ブロードキャストした共有データのハッシュ（簡易変更検出） */
 let _prevSharedHash = "";
 
-/** ブロードキャスト間隔 (ms) — aggregator は 500ms、リレーは 1000ms */
-const BROADCAST_INTERVAL_MS = 1000;
+/** 前回ブロードキャスト時の各ホストの印刷履歴(printStore)ハッシュ */
+const _prevPrintHash = new Map();
+
+/** 前回ブロードキャスト時の各ホストのファイル一覧(_cachedFileInfo)ハッシュ */
+const _prevFileHash = new Map();
+
+/** ブロードキャスト間隔 (ms) — aggregator と同じ 500ms（子を 2回/秒で更新）。
+ *  差分は変化キーのみなので 1000ms→500ms でも転送量増は軽微。 */
+const BROADCAST_INTERVAL_MS = 500;
 
 /** 最終ブロードキャスト時刻 */
 let _lastBroadcastMs = 0;
+
+/** 前回送信したカメラエンドポイントマップのハッシュ（変更検出） */
+let _prevCameraEpHash = "";
 
 /**
  * 親側リレーブリッジを初期化する。
@@ -107,6 +117,9 @@ export function initRelayBridge() {
     console.info(`[relay-bridge] 昇格要求 ${data.clientId}: ${result.granted ? "許可" : "拒否(" + result.reason + ")"}`);
   });
 
+  // カメラパススルー: 起動時に現在のエンドポイントマップを一度送る
+  _syncCameraEndpoints();
+
   _initialized = true;
   console.info("[relay-bridge] 親側リレーブリッジ初期化完了");
   return true;
@@ -141,9 +154,67 @@ export function verifyPromotePin(inputPin, configuredPin) {
 }
 
 /**
+ * connectionTargets からカメラパススルー用の
+ * `{ [hostname]: { ip, port } }` マップを構築する純関数。
+ *
+ * - ip は dest("IP:PORT") の先頭コロンより前を採用。
+ * - port は target.cameraPort → 既定 cameraPort → 8080 の優先順。
+ * - hostname が未解決（空）のターゲットはキーにできないためスキップする。
+ * - 同一 hostname が複数あれば後勝ち（DHCP統合後は基本1件）。
+ *
+ * @param {Array<{dest?: string, hostname?: string, cameraPort?: number}>} targets - 接続先リスト
+ * @param {number} [defaultCameraPort=8080] - 既定カメラポート（appSettings.cameraPort）
+ * @returns {Object<string, {ip: string, port: number}>}
+ */
+export function buildCameraEndpoints(targets, defaultCameraPort = 8080) {
+  const map = {};
+  if (!Array.isArray(targets)) return map;
+  for (const t of targets) {
+    const hostname = (t && t.hostname || "").trim();
+    if (!hostname) continue;                       // 未解決ホストはキーにできない
+    const dest = (t && t.dest || "").trim();
+    const ip = dest.split(":")[0].trim();
+    if (!ip) continue;                             // IP 不明は転送不可
+    const port = (t && t.cameraPort) || defaultCameraPort || 8080;
+    map[hostname] = { ip, port };
+  }
+  return map;
+}
+
+/**
+ * 現在の appSettings からカメラ／画像パススルー用エンドポイントマップを構築し、
+ * 前回送信時から変化していれば（簡易ハッシュ比較）メインプロセスへ送る。
+ * 親(Electron)以外、または preload に setCameraEndpoints が無ければ何もしない。
+ *
+ * - buildCameraEndpoints は純関数（{ip, port}）のまま保ち、
+ *   画像パススルー用の httpPort はここで host ごとに付与する。
+ * - httpPort は getHttpPort(hostname)（dashboard_connection.js）と一致させる。
+ *   これは親が自分の画像URL（http://ip:httpPort/downloads/...）で使うポートと同じ。
+ * - 変更検出ハッシュは httpPort 込みで取る（ポート変更時も再送される）。
+ *
+ * @private
+ * @returns {void}
+ */
+function _syncCameraEndpoints() {
+  if (!window.electronAPI?.setCameraEndpoints) return;
+  const map = buildCameraEndpoints(
+    monitorData.appSettings.connectionTargets || [],
+    monitorData.appSettings.cameraPort || 8080
+  );
+  // 画像パススルー用 httpPort を host ごとに付与（builder は pure のまま）。
+  for (const hostname of Object.keys(map)) {
+    map[hostname].httpPort = getHttpPort(hostname);
+  }
+  const hash = _quickHash(map);
+  if (hash === _prevCameraEpHash) return;          // 変化なし
+  _prevCameraEpHash = hash;
+  window.electronAPI.setCameraEndpoints(map);
+}
+
+/**
  * aggregator 更新後に呼び出す。dirty keys を収集してリレーにブロードキャストする。
  * aggregatorUpdate の末尾から毎サイクル（500ms）呼ばれるが、
- * 実際のブロードキャストは BROADCAST_INTERVAL_MS（1000ms）に間引く。
+ * 実際のブロードキャストは BROADCAST_INTERVAL_MS（500ms）に間引く。
  *
  * @returns {void}
  */
@@ -153,6 +224,9 @@ export function relayBroadcastIfNeeded() {
   const now = Date.now();
   if (now - _lastBroadcastMs < BROADCAST_INTERVAL_MS) return;
   _lastBroadcastMs = now;
+
+  // カメラパススルー: 接続先（ホスト名解決/ポート変更）の変化を反映
+  _syncCameraEndpoints();
 
   const delta = _buildDelta();
   if (!delta) return; // 変更なし
@@ -168,6 +242,8 @@ export function relayBroadcastIfNeeded() {
  */
 function _buildDelta() {
   const machinesDelta = {};
+  const printStoresDelta = {};
+  const fileInfosDelta = {};
   let hasChanges = false;
 
   for (const [hostname, machine] of Object.entries(monitorData.machines)) {
@@ -191,6 +267,32 @@ function _buildDelta() {
       hasChanges = true;
     }
     _prevSnapshot.set(hostname, prev);
+
+    // 印刷履歴・現在ジョブの変更検出（印刷完了やスプール再割当てで変化）
+    // 子（satellite/readonly）はプリンタ直結しないため、ここで配信しないと履歴が空になる
+    const ps = machine.printStore;
+    if (ps) {
+      const psHash = _quickHash(ps.history, ps.current);
+      if (psHash !== _prevPrintHash.get(hostname)) {
+        _prevPrintHash.set(hostname, psHash);
+        printStoresDelta[hostname] = {
+          history: ps.history || [],
+          current: ps.current || null
+        };
+        hasChanges = true;
+      }
+    }
+
+    // ファイル一覧（_cachedFileInfo）の変更検出
+    const fi = machine._cachedFileInfo;
+    if (fi) {
+      const fiHash = _quickHash(fi);
+      if (fiHash !== _prevFileHash.get(hostname)) {
+        _prevFileHash.set(hostname, fiHash);
+        fileInfosDelta[hostname] = fi;
+        hasChanges = true;
+      }
+    }
   }
 
   // 共有データの変更検出（簡易ハッシュ）
@@ -207,7 +309,10 @@ function _buildDelta() {
 
   if (!hasChanges) return null;
 
-  return { machines: machinesDelta, shared: sharedDelta };
+  const delta = { machines: machinesDelta, shared: sharedDelta };
+  if (Object.keys(printStoresDelta).length > 0) delta.printStores = printStoresDelta;
+  if (Object.keys(fileInfosDelta).length > 0) delta.fileInfos = fileInfosDelta;
+  return delta;
 }
 
 /**
@@ -218,6 +323,8 @@ function _buildDelta() {
  */
 function _buildFullSnapshot() {
   const machines = {};
+  const printStores = {};
+  const fileInfos = {};
   for (const [hostname, machine] of Object.entries(monitorData.machines)) {
     if (hostname === PLACEHOLDER_HOSTNAME) continue;
     const sd = machine.storedData;
@@ -228,10 +335,25 @@ function _buildFullSnapshot() {
       fields[key] = field?.rawValue ?? null;
     }
     machines[hostname] = fields;
+
+    // 印刷履歴・現在ジョブ（子が履歴パネルを表示するために必要）
+    const ps = machine.printStore;
+    if (ps && (ps.history?.length || ps.current)) {
+      printStores[hostname] = {
+        history: ps.history || [],
+        current: ps.current || null
+      };
+    }
+    // ファイル一覧（_cachedFileInfo は揮発。接続時に取得した最新を渡す）
+    if (machine._cachedFileInfo) {
+      fileInfos[hostname] = machine._cachedFileInfo;
+    }
   }
 
   return {
     machines,
+    printStores,
+    fileInfos,
     filamentSpools: monitorData.filamentSpools,
     hostSpoolMap: monitorData.hostSpoolMap,
     appSettings: {

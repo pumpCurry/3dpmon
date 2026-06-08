@@ -46,6 +46,34 @@ const DEFAULT_RETRY_DELAY   = 2000;
 const DEFAULT_STREAM_PORT   = 8080;
 /** @constant {number} watchdog タイムアウト (ms) — onload/onerror が来なければ強制的に失敗扱い */
 const CAMERA_WATCHDOG_MS    = 10_000;
+/** @constant {number} リレー子モードでの snapshot ポーリング間隔 既定 (ms) ≈ 0.4FPS */
+const RELAY_CAMERA_INTERVAL_MS = 2500;
+/** @constant {number} リレー子モードのポーリング間隔 下限 (ms) */
+const RELAY_CAMERA_MIN_INTERVAL_MS = 1000;
+
+/**
+ * 現在のレンダラーがリレー子（readonly/satellite）かどうかを返す。
+ * 子はプリンタへ直接到達できないため、親(5313)の snapshot プロキシ経由で取得する。
+ *
+ * @private
+ * @returns {boolean}
+ */
+function _isRelayChild() {
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+}
+
+/**
+ * リレー子モードでの snapshot ポーリング間隔を解決する。
+ * monitorData.appSettings.relayCameraIntervalMs で上書き可（下限あり）。
+ *
+ * @private
+ * @returns {number} ポーリング間隔 (ms)
+ */
+function _relayCameraIntervalMs() {
+  const v = Number(monitorData.appSettings?.relayCameraIntervalMs);
+  const ms = Number.isFinite(v) && v > 0 ? v : RELAY_CAMERA_INTERVAL_MS;
+  return Math.max(RELAY_CAMERA_MIN_INTERVAL_MS, ms);
+}
 
 // ─── ホスト別カメラ状態レジストリ ─────────────────────────────
 /**
@@ -62,6 +90,7 @@ const CAMERA_WATCHDOG_MS    = 10_000;
  * @property {number|null} retryTimeout   - setTimeout ID
  * @property {number|null} countdownTimer - setInterval ID
  * @property {number|null} watchdogTimer  - setTimeout ID (img.src 後の応答監視)
+ * @property {number|null} pollTimeout    - setTimeout ID (リレー子 snapshot ポーリング)
  * @property {number}   _generation       - stale 検出用 epoch カウンタ
  *                                          各非同期コールバックはクロージャでこの値をキャプチャし
  *                                          発火時に entry._generation と比較して stale なら return する
@@ -115,6 +144,8 @@ export function registerCameraPanel(hostname, img, body, toggle) {
     retryTimeout: null,
     countdownTimer: null,
     watchdogTimer: null,
+    pollTimeout: null,
+    streamTarget: null,
     _generation: 0,
     firstConnected: false,
     userStopped: false,
@@ -171,6 +202,16 @@ export function startCameraStream(hostname) {
   /* per-host カメラトグルが OFF ならストリームを開始せず切断表示にする */
   if (!(monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle)) {
     _updateUI(entry, "disconnected");
+    return;
+  }
+
+  /* ★ リレー子（readonly/satellite）はプリンタへ直接到達できない。
+     IP 解決をスキップし、親(5313)の snapshot プロキシを低FPSポーリングする。
+     URL は相対パス（= 親 origin）なので子→親へ届く。 */
+  if (_isRelayChild()) {
+    entry.attempts = 0;
+    _cancelTimers(entry);
+    _connectStreamRelay(entry, host);
     return;
   }
 
@@ -270,6 +311,10 @@ function _cancelTimers(entry) {
     clearTimeout(entry.watchdogTimer);
     entry.watchdogTimer = null;
   }
+  if (entry.pollTimeout != null) {
+    clearTimeout(entry.pollTimeout);
+    entry.pollTimeout = null;
+  }
 }
 
 /**
@@ -294,9 +339,42 @@ function _clearWatchdog(entry) {
 function _stopEntry(entry) {
   _cancelTimers(entry);
   entry.attempts = 0;
+  entry.streamTarget = null;
   if (entry.img) {
     entry.img.src = "";
     entry.img.classList.add("off");
+  }
+}
+
+/**
+ * 同一の物理カメラ (ip:port) へ既にストリーム中の「別ホスト」エントリを停止する。
+ * IP 再利用やホスト名変更で connectionMap キーが二重化した際、同一機器へ
+ * MJPEG が重複接続するのを防ぐ（最後に開始したストリームを優先＝newest wins）。
+ * 別 IP（別機器）の正規ストリームには影響しない。
+ *
+ * @private
+ * @param {CameraPanelEntry} keepEntry - 維持するエントリ（停止対象から除外）
+ * @param {string} target - "ip:port"
+ * @returns {void}
+ */
+function _stopDuplicateTargetStreams(keepEntry, target) {
+  for (const [, other] of cameraRegistry) {
+    if (other === keepEntry) continue;
+    if (other.userStopped) continue;
+    if (other.streamTarget !== target) continue;
+    _cancelTimers(other);
+    other._generation = (other._generation || 0) + 1; // 旧 async コールバックを stale 化
+    other.userStopped = true;
+    other.streamTarget = null;
+    if (other.img) {
+      other.img.src = "";
+      other.img.classList.add("off");
+    }
+    _updateUI(other, "disconnected");
+    pushLog(
+      `同一カメラ(${target})への重複接続を検出 → 旧ホスト「${other.hostname}」のストリームを停止しました`,
+      "warn", false, other.hostname
+    );
   }
 }
 
@@ -405,6 +483,12 @@ function _connectStream(entry, host) {
     _scheduleRetry(entry, host, delayMs, waitSec);
   };
 
+  /* ★ 多重動画接続防止 (fix/camera-dedup):
+     同一物理カメラ(ip:port)へ既にストリーム中の別ホストを停止し、1機器=1 MJPEG に収束させる。
+     IP再利用/ホスト名変更で connectionMap キーが二重化しても重複接続を防ぐ。 */
+  entry.streamTarget = `${host}:${port}`;
+  _stopDuplicateTargetStreams(entry, entry.streamTarget);
+
   /* ストリーム開始 */
   entry.img.src = url;
   entry.img.classList.remove("off");
@@ -430,6 +514,152 @@ function _connectStream(entry, host) {
     entry._generation++;
     _scheduleRetry(entry, host, delayMs, waitSec);
   }, CAMERA_WATCHDOG_MS);
+}
+
+/**
+ * リレー子モードの snapshot ポーリング接続。
+ * 親(5313)の `/relay-camera/{host}/snapshot.jpg` を1枚ずつ取得し、
+ * onload 後に RELAY_CAMERA_INTERVAL_MS 間隔で次フレームへ差し替える（≈0.4FPS）。
+ * 連続 MJPEG ではないため CPU/帯域負荷を抑えられる。
+ *
+ * generation / userStopped / リトライ(CAMERA_MAX_RETRY) / watchdog は
+ * 直結版（_connectStream）と同じ枠組みを踏襲する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry
+ * @param {string} host - プリンタホスト名（親 _cameraEndpoints のキーと一致）
+ * @returns {void}
+ */
+function _connectStreamRelay(entry, host) {
+  if (entry.userStopped) return;
+
+  /* リトライ上限チェック（直結版と同一仕様） */
+  if (entry.attempts >= CAMERA_MAX_RETRY) {
+    entry.userStopped = true;
+    _cancelTimers(entry);
+    _updateUI(entry, "disconnected");
+    pushLog(`カメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました`, "error", false, entry.hostname);
+    notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
+    return;
+  }
+
+  entry.attempts++;
+  if (!entry.firstConnected) {
+    _updateUI(entry, "connecting", { attempt: entry.attempts, max: CAMERA_MAX_RETRY });
+    pushLog(`カメラ(リレー)接続試行 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "info", false, entry.hostname);
+  }
+
+  const delayMs = DEFAULT_RETRY_DELAY * Math.pow(2, entry.attempts - 1);
+  const waitSec = Math.ceil(delayMs / 1000);
+  const url = `/relay-camera/${encodeURIComponent(host)}/snapshot.jpg`;
+
+  _cancelTimers(entry);
+
+  /* このコールバック群が有効な世代を記憶（stale 検出用） */
+  const gen = entry._generation;
+
+  /** 1フレーム分の取得を開始する（watchdog を都度張り直す） */
+  const loadOne = () => {
+    if (entry._generation !== gen || entry.userStopped) return;
+
+    entry.img.onload = () => {
+      _clearWatchdog(entry);
+      if (entry._generation !== gen || entry.userStopped) return;
+
+      /* 接続成功（初回 / 再接続）を一度だけ通知し attempts をリセット */
+      if (!entry.firstConnected) {
+        entry.firstConnected = true;
+        entry.attempts = 0;
+        _updateUI(entry, "connected");
+        pushLog("カメラ接続成功(リレー)", "success", false, entry.hostname);
+        notificationManager.notify("cameraConnected", { hostname: entry.hostname });
+      } else if (entry.attempts > 0) {
+        entry.attempts = 0;
+        _updateUI(entry, "connected");
+        pushLog("カメラ再接続成功(リレー)", "info", false, entry.hostname);
+      }
+
+      /* 次フレームを間隔をあけてスケジュール（連続MJPEGではなく1枚ずつ更新） */
+      entry.pollTimeout = setTimeout(() => {
+        entry.pollTimeout = null;
+        loadOne();
+      }, _relayCameraIntervalMs());
+    };
+
+    entry.img.onerror = () => {
+      _clearWatchdog(entry);
+      if (entry._generation !== gen || entry.userStopped) return;
+      /* 旧ハンドラを stale 化してからリトライ（再入ガード） */
+      entry._generation++;
+      _scheduleRelayRetry(entry, host, delayMs, waitSec);
+    };
+
+    /* キャッシュ回避のためクエリにタイムスタンプを付与（親側は no-store） */
+    entry.img.src = url + "?t=" + Date.now();
+    entry.img.classList.remove("off");
+
+    /* watchdog: onload/onerror がどちらも来ない場合の保険 */
+    entry.watchdogTimer = setTimeout(() => {
+      entry.watchdogTimer = null;
+      if (entry._generation !== gen || entry.userStopped) return;
+      entry.img.onload = null;
+      entry.img.onerror = null;
+      entry.img.src = "";
+      pushLog(
+        `カメラ(リレー) watchdog タイムアウト (${CAMERA_WATCHDOG_MS}ms) — 応答なし`,
+        "warn", false, entry.hostname
+      );
+      entry._generation++;
+      _scheduleRelayRetry(entry, host, delayMs, waitSec);
+    }, CAMERA_WATCHDOG_MS);
+  };
+
+  loadOne();
+}
+
+/**
+ * リレー子モードのリトライをスケジュールする（カウントダウン UI + setTimeout）。
+ * リトライ実行時は直結版ではなく _connectStreamRelay へ再入する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry
+ * @param {string} host
+ * @param {number} delayMs
+ * @param {number} waitSec
+ */
+function _scheduleRelayRetry(entry, host, delayMs, waitSec) {
+  if (entry.userStopped) return;
+
+  _updateUI(entry, "retrying", {
+    attempt: entry.attempts + 1,
+    max: CAMERA_MAX_RETRY,
+    wait: waitSec
+  });
+  pushLog(`カメラ(リレー)切断検知 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "warn", false, entry.hostname);
+
+  /* カウントダウン表示（直結版と同一） */
+  let remaining = waitSec;
+  entry.countdownTimer = setInterval(() => {
+    remaining--;
+    if (remaining > 0) {
+      _updateUI(entry, "retrying", {
+        attempt: entry.attempts + 1,
+        max: CAMERA_MAX_RETRY,
+        wait: remaining
+      });
+    } else {
+      clearInterval(entry.countdownTimer);
+      entry.countdownTimer = null;
+    }
+  }, 1000);
+
+  /* リトライ実行 → リレー版に再入 */
+  entry.retryTimeout = setTimeout(() => {
+    entry.retryTimeout = null;
+    if (entry.userStopped) return;
+    if (entry.img) entry.img.src = "";
+    _connectStreamRelay(entry, host);
+  }, delayMs);
 }
 
 /**

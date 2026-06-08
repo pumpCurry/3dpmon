@@ -59,7 +59,7 @@ import {
   formatSpoolDisplayId,
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp, getConnectionState } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -377,6 +377,47 @@ export function registerGcodeMetaForHosts(cache, targets, filename, meta) {
     count++;
   }
   return count;
+}
+
+/**
+ * 指定ホストの保存済み印刷履歴（printStore.history）からテーブルを再描画する。
+ *
+ * リレー子（satellite/readonly）が親から履歴 delta を受信した後の再描画に使う。
+ * 通常モードの initHistoryPanel と同じ経路（loadHistory→jobsToRaw→renderHistoryTable）。
+ * パネル未生成・対象DOM不在でも安全（try/catch で吸収）。
+ *
+ * @param {string} hostname - ホスト名
+ * @returns {void}
+ */
+export function rerenderHistoryForHost(hostname) {
+  try {
+    const jobs = loadHistory(hostname);
+    if (!jobs.length) return;
+    const baseUrl = getDisplayBaseUrl(hostname);
+    renderHistoryTable(jobsToRaw(jobs), baseUrl, hostname);
+  } catch (e) {
+    console.warn("[printmanager] rerenderHistoryForHost エラー:", e);
+  }
+}
+
+/**
+ * 指定ホストのキャッシュ済みファイル一覧（_cachedFileInfo）を再描画する。
+ *
+ * リレー子が親からファイル一覧 delta を受信した後の再描画に使う。
+ * 通常モードの initFileListPanel と同じ経路（renderFileList）。
+ *
+ * @param {string} hostname - ホスト名
+ * @returns {void}
+ */
+export function rerenderFileListForHost(hostname) {
+  try {
+    const machine = monitorData.machines[hostname];
+    if (!machine?._cachedFileInfo) return;
+    const baseUrl = getDisplayBaseUrl(hostname);
+    renderFileList(machine._cachedFileInfo, baseUrl, hostname);
+  } catch (e) {
+    console.warn("[printmanager] rerenderFileListForHost エラー:", e);
+  }
 }
 
 /*
@@ -769,8 +810,7 @@ export function renderPrintCurrent(containerEl, hostname) {
   if (!containerEl) return;
   containerEl.innerHTML = "";
   const job = loadCurrent(hostname);
-  const ip = getDeviceIp(hostname);
-  const baseUrl = `http://${ip}`;
+  const baseUrl = getDisplayBaseUrl(hostname);
 
   if (!job) {
     containerEl.innerHTML = "<p>現在印刷中のジョブはありません。</p>";
@@ -805,8 +845,7 @@ export function renderPrintCurrent(containerEl, hostname) {
 export function renderPrintHistory(containerEl, hostname) {
   if (!containerEl) return;
   const jobs = loadHistory(hostname);
-  const ip = getDeviceIp(hostname);
-  const baseUrl = `http://${ip}`;
+  const baseUrl = getDisplayBaseUrl(hostname);
 
   containerEl.innerHTML = "";
   if (!jobs.length) {
@@ -822,6 +861,49 @@ export function renderPrintHistory(containerEl, hostname) {
   }
 }
 
+
+/**
+ * ADR-0005: 履歴マージ用に filamentInfo を spoolId 単位で upsert する。
+ *
+ * 「配列まるごと null のときだけ補完」だと、分割（一時停止交換）で 1 ジョブに記録した
+ * 複数リールの per-reel usedMm が reqHistory パース結果（プリンタ由来・色のみ等）に
+ * 上書き／脱落してしまう。spoolId をキーに、未知リールは追加・欠落スカラーと usedMm は
+ * 補完する形でマージし、各リールの消費量を保持する。
+ *
+ * @private
+ * @param {Array<Object>|undefined} curArr - 取り込み先（newJobs 側）の filamentInfo
+ * @param {Array<Object>|undefined} incoming - 取り込み元（oldJobs=印刷履歴の権威）の filamentInfo
+ * @returns {Array<Object>|undefined} マージ後配列
+ */
+export function _mergeFilamentInfo(curArr, incoming) {
+  if (!Array.isArray(incoming) || incoming.length === 0) return curArr;
+  if (!Array.isArray(curArr) || curArr.length === 0) return incoming.slice();
+  const out = curArr.slice();
+  for (const inc of incoming) {
+    if (!inc) continue;
+    const sid = inc.spoolId;
+    if (sid == null) {
+      // spoolId 無し（色のみ等）: 既存に spoolId 無しエントリが無ければ追加（重複防止）。
+      if (!out.some(e => e && e.spoolId == null)) out.push(inc);
+      continue;
+    }
+    const existing = out.find(e => e && e.spoolId === sid);
+    if (!existing) {
+      out.push(inc);
+    } else {
+      // 欠落スカラーを補完。usedMm は新側が未設定/0 のときのみ旧（権威）で埋める。
+      for (const [kk, vv] of Object.entries(inc)) {
+        if (vv == null) continue;
+        if (kk === "usedMm") {
+          if (!(Number(existing.usedMm) > 0)) existing.usedMm = vv;
+        } else if (existing[kk] == null) {
+          existing[kk] = vv;
+        }
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * WebSocket から取得したデータを元に履歴を更新し再描画
@@ -877,6 +959,12 @@ export async function refreshHistory(
       // フィラメント関連: newJobs（bufバッファ経由）に値がある場合は
       // ユーザー操作結果なのでそちらを優先。ない場合のみ旧データで補完。
       Object.entries(j).forEach(([k, v]) => {
+        if (k === "filamentInfo") {
+          // ★ ADR-0005: filamentInfo は spoolId 単位で upsert（分割の複数リールと per-reel
+          //   usedMm が reqHistory 由来の色のみ filamentInfo に脱落しないよう保持）。
+          cur.filamentInfo = _mergeFilamentInfo(cur.filamentInfo, v);
+          return;
+        }
         if (FILAMENT_KEYS_R.has(k)) {
           if (cur[k] == null && v != null) cur[k] = v;
           return;
@@ -2199,7 +2287,7 @@ export function setupUploadUI(root, hostname) {
     //   静的画像（全機種で同一）を使う。特定 hostname への依存を排除するため
     //   allHosts 確定後に解決する。allHosts が空なら直後のエラー分岐で抜ける。
     if (!thumb && allHosts.length > 0) {
-      thumb = `http://${getDeviceIp(allHosts[0])}/downloads/defData/file_icon.png`;
+      thumb = `${getDisplayBaseUrl(allHosts[0])}/downloads/defData/file_icon.png`;
     }
 
     // ★ 接続中ホストが0台なら即エラー

@@ -57,6 +57,8 @@ const SHARED_KEYS = [
   "hiddenPresets",
   "favoritePresets",
   "filamentInventory",
+  // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）
+  "mountHistory",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",

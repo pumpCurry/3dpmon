@@ -1069,20 +1069,26 @@ function _getLayoutTemplate(hostCount, hostIndex) {
  */
 export function getLayoutTemplates() {
   return [
-    { id: "single", label: "1台フル幅", description: "48列を1台で使用する標準レイアウト" },
-    { id: "dual",   label: "2台横並び", description: "左右24列ずつに2台を配置" },
-    { id: "quad",   label: "4台グリッド", description: "2×2グリッドで4台を配置" }
+    { id: "single",   label: "1台フル幅",      description: "48列を1台で使用する標準レイアウト" },
+    { id: "dual",     label: "2台横並び",      description: "左右24列ずつに2台を配置（左:1台目 / 右:2台目）" },
+    { id: "dual-rev", label: "2台横並び(逆)",  description: "左右24列ずつに2台を配置（左:2台目 / 右:1台目）" },
+    { id: "quad",     label: "4台グリッド",    description: "2×2グリッドで4台を配置" }
   ];
 }
 
 /**
  * 指定テンプレートで全ホストのレイアウトをリセットする。
  *
- * @param {string} templateId - テンプレートID（"single" | "dual" | "quad"）
+ * @param {string} templateId - テンプレートID（"single" | "dual" | "dual-rev" | "quad"）
+ *   "dual-rev" は "dual" と同じ2列配置だが、各行ペアの左右列を入れ替える
+ *   （登録順 1台目→右列 / 2台目→左列）。ホスト自体の優劣はつけない。
  * @returns {number} 追加されたパネル数
  */
 export function applyLayoutTemplate(templateId) {
   if (!grid) return 0;
+
+  // dual-rev: 2列配置で左右の列割り当てだけを反転する
+  const isDualRev = (templateId === "dual-rev");
 
   // 全パネル削除
   const allItems = grid.getGridItems();
@@ -1148,7 +1154,9 @@ export function applyLayoutTemplate(templateId) {
     } else {
       // マルチホスト（24列幅）: 2列×N行グリッド配置
       // 1台でも24列幅で左寄せ（細長レイアウト）
-      const col = i % 2;
+      // dual-rev のときは各行ペアの左右列を反転（pairPos 0→右, 1→左）
+      const pairPos = i % 2;
+      const col = isDualRev ? (1 - pairPos) : pairPos;
       const row = Math.floor(i / 2);
       layout = LAYOUT_MULTI_PER_HOST.map(p => ({
         ...p,

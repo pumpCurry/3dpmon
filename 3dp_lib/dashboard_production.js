@@ -42,8 +42,88 @@ const PRINT_STATE = {
 };
 
 /**
+ * パース済み履歴エントリ（printStore.history）から統計用の正規化値を取り出す。
+ *
+ * printStore.history には parseRawHistoryEntry() の出力が入る:
+ *   startTime    : ISO文字列
+ *   startTimeSec : epoch秒（比較用）
+ *   finishTime   : ISO文字列|null
+ *   materialUsedMm : 使用フィラメント量(mm)
+ *   printfinish  : 1=成功 / 0=未完了・失敗
+ * （旧式の生データフィールド starttime/endtime/usagematerial ではない点に注意）
+ * 古い永続データに startTimeSec/finishTimeSec が無い場合は ISO 文字列から補う。
+ *
+ * @param {Object} entry - printStore.history のエントリ
+ * @returns {{startSec:number, finishSec:number, durationSec:number,
+ *            materialMm:number, isSuccess:boolean, isFinished:boolean}}
+ */
+function _normalizeHistoryEntry(entry) {
+  const startSec = Number(entry?.startTimeSec)
+    || (entry?.startTime ? Math.floor(Date.parse(entry.startTime) / 1000) : 0)
+    || 0;
+  const finishSec = Number(entry?.finishTimeSec)
+    || (entry?.finishTime ? Math.floor(Date.parse(entry.finishTime) / 1000) : 0)
+    || 0;
+  const durationSec = (finishSec > startSec) ? (finishSec - startSec) : 0;
+  const materialMm = Number(entry?.materialUsedMm || 0);
+  const isSuccess = entry?.printfinish === 1;
+  // 履歴に積まれた時点で完了済み。finishTime があれば確実に終了とみなす
+  const isFinished = finishSec > 0 || entry?.printfinish != null;
+  return { startSec, finishSec, durationSec, materialMm, isSuccess, isFinished };
+}
+
+/**
+ * スプール1本あたりの mm 単価（円/mm）を求める。
+ * @param {Object} spool - フィラメントスプール
+ * @returns {number} 円/mm（不明なら 0）
+ */
+function _spoolCostPerMm(spool) {
+  if (!spool) return 0;
+  if (spool.costPerMm > 0) return spool.costPerMm;
+  if (spool.purchasePrice > 0 && spool.totalLengthMm > 0) {
+    return spool.purchasePrice / spool.totalLengthMm;
+  }
+  return 0;
+}
+
+/**
+ * 印刷ジョブのフィラメントコスト（円）を求める。
+ * 履歴に materialCostYen があればそれを優先し、無ければ
+ * 使用量(mm) × スプール単価(円/mm) で算出する（スプール未特定なら 0）。
+ *
+ * @param {Object} job - printStore.history のエントリ
+ * @returns {number} コスト（円）
+ */
+function _jobCostYen(job) {
+  if (job?.materialCostYen != null) return Number(job.materialCostYen) || 0;
+  const mm = Number(job?.materialUsedMm || 0);
+  if (mm <= 0 || !job?.filamentId) return 0;
+  const spool = (monitorData.filamentSpools || []).find(s => s.id === job.filamentId);
+  return mm * _spoolCostPerMm(spool);
+}
+
+/**
+ * gcode メタキャッシュを読み込む（GCode 見積時間 timeSec の参照用）。
+ *
+ * printmanager がアップロード時に localStorage キー "3dpmon_gcode_meta_cache" へ
+ * `${host}:${basename}` をキーに保存している辞書をそのまま読む。
+ * printmanager を import するとテスト(node)環境で重い依存ツリーを巻き込むため、
+ * ここでは localStorage を直接参照し、無い環境では空辞書を返す。
+ *
+ * @returns {Object<string, {timeSec?:number}>} メタ辞書（取得不可なら {}）
+ */
+function _loadGcodeMetaCache() {
+  try {
+    const raw = localStorage.getItem("3dpmon_gcode_meta_cache");
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * 指定ホストの稼働率データを計算する。
- * historyList と storedData から稼働時間・アイドル時間・稼働率を算出。
+ * printStore.history と storedData から稼働時間・アイドル時間・稼働率を算出。
  *
  * @param {string} hostname - ホスト名
  * @param {Object} [options] - オプション
@@ -73,8 +153,8 @@ export function buildHostUtilization(hostname, options = {}) {
   const machine = monitorData.machines[hostname];
   const sd = machine?.storedData || {};
 
-  // historyList から期間内の印刷を抽出
-  const history = machine?.historyList || [];
+  // printStore.history（parseRawHistoryEntry 済み）から期間内の印刷を抽出
+  const history = machine?.printStore?.history || [];
   let printTimeMs = 0;
   let printCount = 0;
   let successCount = 0;
@@ -82,10 +162,11 @@ export function buildHostUtilization(hostname, options = {}) {
   let totalFilamentMm = 0;
 
   for (const entry of history) {
-    const startMs = (entry.startTime || 0) * 1000;
-    const endMs = (entry.endtime || 0) * 1000;
-    if (startMs === 0) continue;
-    // 期間内に重なる印刷のみ
+    const { startSec, finishSec, materialMm, isSuccess } = _normalizeHistoryEntry(entry);
+    if (startSec === 0) continue;
+    const startMs = startSec * 1000;
+    const endMs = finishSec * 1000;        // 終了時刻不明（印刷中等）は 0
+    // 期間に重なる印刷のみ（ウィンドウより前に終了 / 未来開始は除外）
     if (endMs > 0 && endMs < since) continue;
     if (startMs > now) continue;
 
@@ -95,16 +176,11 @@ export function buildHostUtilization(hostname, options = {}) {
     if (duration > 0) {
       printTimeMs += duration;
       printCount++;
-      // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
-      const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
       if (isSuccess) successCount++;
       else if (endMs > 0) failCount++;
+      // フィラメント消費は期間内に計上した印刷分のみ加算（期間スコープと整合）
+      if (materialMm > 0) totalFilamentMm += materialMm;
     }
-
-    // フィラメント消費: デバイス報告値 (usagematerial) を使用
-    // ★ filamentInfo[].length は存在しないフィールドだったため修正
-    const usedMm = Number(entry.usagematerial || 0);
-    if (usedMm > 0) totalFilamentMm += usedMm;
   }
 
   const idleTimeMs = Math.max(0, periodMs - printTimeMs);
@@ -137,7 +213,7 @@ export function buildHostUtilization(hostname, options = {}) {
 
 /**
  * 日次生産レポートを生成する。
- * 全ホストの historyList を日ごとに集約。
+ * 全ホストの printStore.history を日ごとに集約。
  *
  * @param {Object} [options] - オプション
  * @param {number} [options.days=7] - 過去何日分を集計するか
@@ -186,37 +262,28 @@ export function buildDailyProductionReport(options = {}) {
     };
   }
 
-  // 全ホストの履歴を走査
+  // 全ホストの履歴を走査（printStore.history が権威）
   for (const [hostname, machine] of Object.entries(monitorData.machines)) {
     if (hostname === "_$_NO_MACHINE_$_") continue;
-    const history = machine?.historyList || [];
+    const history = machine?.printStore?.history || [];
     for (const entry of history) {
-      const startSec = entry.startTime || 0;
+      const { startSec, durationSec, materialMm, isSuccess, isFinished } = _normalizeHistoryEntry(entry);
       if (startSec === 0) continue;
       const dateKey = _localDateKey(new Date(startSec * 1000));
       const day = dayMap[dateKey];
       if (!day) continue;
 
-      const durationSec = (entry.endtime || 0) > 0
-        ? (entry.endtime - startSec)
-        : 0;
-      // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
-      const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
-
       day.printCount++;
       if (isSuccess) {
         day.successCount++;
-        // ★ 成功印刷の時間のみを生産時間として計上
+        // 成功印刷の時間のみを生産時間として計上
         day.totalPrintTimeSec += durationSec;
-      } else if ((entry.endtime || 0) > 0) {
+      } else if (isFinished) {
         day.failCount++;
         day.failPrintTimeSec += durationSec;
       }
 
-      // フィラメント消費: デバイス報告値 (usagematerial) を使用
-      // ★ filamentInfo[].length は存在しないフィールドだったため修正
-      const usedMm = Number(entry.usagematerial || 0);
-      if (usedMm > 0) day.totalFilamentMm += usedMm;
+      if (materialMm > 0) day.totalFilamentMm += materialMm;
 
       if (!day.byHost[hostname]) {
         day.byHost[hostname] = { printCount: 0, printTimeSec: 0 };
@@ -248,19 +315,16 @@ export function buildDailyProductionReport(options = {}) {
  */
 export function buildEstimateVsActual(hostname) {
   const machine = monitorData.machines[hostname];
-  const history = machine?.historyList || [];
+  const history = machine?.printStore?.history || [];
+  // GCode 見積時間の参照元（localStorage の gcode メタキャッシュ）を1回だけ読む
+  const metaCache = _loadGcodeMetaCache();
 
-  // ファイル名別に集計（成功印刷のみで平均を算出）
+  // ファイル名別に集計（成功印刷のみで実測平均を算出）
   const fileMap = {};
   for (const entry of history) {
-    const file = (entry.filename || "").split("/").pop();
+    const file = (entry.filename || entry.rawFilename || "").split("/").pop();
     if (!file) continue;
-    const durationSec = (entry.endtime || 0) > 0
-      ? (entry.endtime - (entry.startTime || 0))
-      : 0;
-    if (durationSec <= 0) continue;
-    // ★ 成功判定: printfinish=1 を優先、なければ printProgress>=100 で判定
-    const isSuccess = entry.printfinish === 1 || entry.printProgress >= 100;
+    const { durationSec, isSuccess } = _normalizeHistoryEntry(entry);
 
     if (!fileMap[file]) {
       fileMap[file] = {
@@ -269,15 +333,16 @@ export function buildEstimateVsActual(hostname) {
       };
     }
     fileMap[file].totalCount++;
-    if (isSuccess) {
-      // ★ 成功印刷のみが平均値の算出対象（失敗/中断の途中値を排除）
+    if (isSuccess && durationSec > 0) {
+      // 成功印刷のみが平均値の算出対象（失敗/中断の途中値を排除）
       fileMap[file].successCount++;
       fileMap[file].successTotalSec += durationSec;
     }
 
-    // GCode見積（usagetimeフィールド or メタデータキャッシュ）
-    if (entry.usagetime > 0 && !fileMap[file].estimatedSec) {
-      fileMap[file].estimatedSec = entry.usagetime;
+    // GCode見積時間: アップロード時に記録した gcode メタキャッシュ(timeSec)から取得
+    if (!fileMap[file].estimatedSec) {
+      const meta = metaCache[`${hostname}:${file}`] || metaCache[file];
+      if (meta?.timeSec > 0) fileMap[file].estimatedSec = Number(meta.timeSec);
     }
   }
 
@@ -421,7 +486,7 @@ export function buildJobCostReport(hostname) {
 
       const isSuccess = job.printfinish === 1;
       const usedMm = Number(job.materialUsedMm || 0);
-      const cost = Number(job.materialCostYen || 0);
+      const cost = _jobCostYen(job);
       const durationSec = job.finishTime && job.startTime
         ? (new Date(job.finishTime).getTime() - new Date(job.startTime).getTime()) / 1000
         : 0;
@@ -463,7 +528,8 @@ export function buildJobCostReport(hostname) {
 
 /**
  * 機器ランキングを生成する。
- * 稼働率・成功率・コスト効率で各ホストをランキングする。
+ * 稼働率は直近期間（既定24h）の活動度、印刷回数・成功率・消費量・コストは
+ * 累計（全履歴）で集計し、累計成功数の多い順にランキングする。
  *
  * @param {Object} [options] - オプション
  * @param {number} [options.periodMs=86400000] - 集計期間
@@ -484,42 +550,46 @@ export function buildHostRanking(options = {}) {
 
   for (const hostname of Object.keys(monitorData.machines)) {
     if (hostname === "_$_NO_MACHINE_$_") continue;
+    // 稼働率（バー表示）は直近期間（既定24h）の活動指標として取得
     const util = buildHostUtilization(hostname, options);
     const machine = monitorData.machines[hostname];
     const history = machine?.printStore?.history || [];
 
+    // 印刷回数・成功率・消費量・コストは累計（全履歴）で集計する。
+    // 履歴エントリは全て完了済みジョブなので、開始時刻の有無に関わらず1件として数える。
+    let printCount = 0;
+    let successCount = 0;
+    let totalMaterialMm = 0;
     let totalCostYen = 0;
-    let successCostYen = 0;
-    let totalSuccessCount = 0;
-
     for (const job of history) {
-      const cost = Number(job.materialCostYen || 0);
-      totalCostYen += cost;
-      if (job.printfinish === 1) {
-        successCostYen += cost;
-        totalSuccessCount++;
-      }
+      const { materialMm, isSuccess } = _normalizeHistoryEntry(job);
+      printCount++;
+      if (isSuccess) successCount++;
+      if (materialMm > 0) totalMaterialMm += materialMm;
+      totalCostYen += _jobCostYen(job);
     }
+    const successRate = printCount > 0 ? successCount / printCount : 0;
 
     results.push({
       hostname,
       displayName: util.displayName,
-      utilizationPct: util.utilizationPct,
-      successRate: util.successRate,
-      totalPrintCount: util.printCount,
-      totalMaterialMm: util.totalFilamentMm,
+      utilizationPct: util.utilizationPct,             // 直近24hの活動度（バー用）
+      successRate: parseFloat(successRate.toFixed(3)), // 累計成功率
+      totalPrintCount: printCount,                     // 累計印刷回数
+      totalMaterialMm,                                 // 累計消費量(mm)
       totalCostYen: Math.round(totalCostYen * 100) / 100,
-      costPerSuccessPrint: totalSuccessCount > 0
-        ? Math.round(totalCostYen / totalSuccessCount * 100) / 100
+      costPerSuccessPrint: successCount > 0
+        ? Math.round(totalCostYen / successCount * 100) / 100
         : 0
     });
   }
 
-  // 総合スコア: 稼働率 × 成功率（高い方が上位）
+  // 総合スコア: 累計成功数（= 印刷回数 × 成功率）の多い機器を上位にする
   results.sort((a, b) => {
-    const scoreA = a.utilizationPct * a.successRate;
-    const scoreB = b.utilizationPct * b.successRate;
-    return scoreB - scoreA;
+    const scoreA = a.totalPrintCount * a.successRate;
+    const scoreB = b.totalPrintCount * b.successRate;
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    return b.totalPrintCount - a.totalPrintCount;
   });
   results.forEach((r, i) => { r.rank = i + 1; });
 

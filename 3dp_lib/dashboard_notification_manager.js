@@ -664,7 +664,7 @@ export class NotificationManager {
       types: [
         "printStarted", "printCompleted", "printFailed", "printPaused",
         "errorOccurred", "errorResolved",
-        "filamentOut", "filamentReplaced", "filamentLow",
+        "filamentOut", "filamentReplaced", "inferredSpoolCreated", "offlineRunoutSuspect", "filamentLow",
         "timeLeft10", "timeLeft5", "timeLeft1"
       ]
     },
@@ -701,6 +701,8 @@ export class NotificationManager {
     errorResolved:    "エラー解消",
     filamentOut:      "フィラメント切れ",
     filamentReplaced: "フィラメント補充",
+    inferredSpoolCreated: "推定リール投入",
+    offlineRunoutSuspect: "切れ/交換の疑い",
     filamentLow:      "フィラメント残量低",
     timeLeft10:       "残り10分",
     timeLeft5:        "残り5分",

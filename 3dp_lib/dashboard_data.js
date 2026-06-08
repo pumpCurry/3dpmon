@@ -234,6 +234,22 @@ export const monitorData = {
   favoritePresets: [],
   usageHistory: [],
   filamentInventory: [],
+  /**
+   * フィラメント装着履歴（追記専用イベントログ。ADR-0004）。
+   * remainingLengthMm の権威。usageHistory のロールオーバーとは別ストアに置き、
+   * 装着/取外しイベントを保持する。MountEvent[]:
+   *   { evId, ts, type:"mount"|"unmount", host, spoolId,
+   *     anchorRemainingMm?, sinceJobId?(mount), untilJobId?(unmount) }
+   * @type {Array<Object>}
+   */
+  mountHistory: [],
+  /**
+   * ADR-0005: フィラメント切れ/一時停止イベントの状態文脈（per-host）。
+   * キーはホスト名、値は recordFilamentEvent が記録する文脈オブジェクト。
+   * 交換操作の遡及帰属（稼働中=ジョブ全体 / 一時停止=分割）判定に用いる。
+   * @type {Object.<string, Object>}
+   */
+  filamentEventContext: {},
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。

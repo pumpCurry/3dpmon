@@ -659,6 +659,31 @@ export function getHttpPort(host) {
 }
 
 /**
+ * getDisplayBaseUrl:
+ * ------------------
+ * サムネ/アイコン等プリンタ画像を表示するためのベースURLを返す。
+ *
+ * - リレー子（satellite/readonly）: 子はプリンタへ直接到達できないため、
+ *   親(5313)の画像プロキシ `/relay-image/{host}` を指す相対URLを返す。
+ *   相対なので子→親 origin に届く。getDeviceIp は子では空を返すため、
+ *   このヘルパーを使わないと `http://:80/...` 等の壊れたURLになる。
+ * - 親/standalone: 従来どおり `http://{ip}:{httpPort}` の直URLを返す。
+ *
+ * 返り値は makeThumbUrl 等で `${baseUrl}/downloads/...` と連結される前提。
+ * 相対ベース（先頭"/"）でも文字列連結で正しいパスになる。
+ *
+ * @function getDisplayBaseUrl
+ * @param {string} host - ホスト名
+ * @returns {string} 表示用ベースURL（末尾スラッシュなし）
+ */
+export function getDisplayBaseUrl(host) {
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    return "/relay-image/" + encodeURIComponent(host);
+  }
+  return `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
+}
+
+/**
  * _syncPanelsForHost:
  * -------------------
  * ホスト名確定時にパネルを同期する。
@@ -769,6 +794,35 @@ export function connectWs(hostOrDest) {
   updateConnectionUI("connecting", { attempt: state.reconnect, max: MAX_RECONNECT }, host);
   updatePrinterListUI();
   pushLog(`WS接続を試みます...(試行${state.reconnect}回目/${MAX_RECONNECT}回)`, "warn", false, host);
+
+  /* ★ 多重接続防止 (fix/ws-duplicate-connection):
+     既存ソケットが残ったまま新規接続を張ると、同一機器に対して WebSocket が
+     重複し（onmessage が多重発火して CPU を多重計上）、リークが蓄積する。
+     初回接続では connectionMap のキーが IP→ホスト名へ移行する過程で、
+     IP キーとホスト名キーの双方に生ソケットが並存し得る（updateConnectionHost
+     は newHost キーが既存の場合のみ移行するため）。特定キーの state.ws だけを
+     見ると取りこぼすので、同一 dest を指す全エントリの生ソケットを閉じる。
+     旧ソケットの onclose は handleSocketClose 経由で自動再接続を誘発するため、
+     close() 前にハンドラを全無効化し、意図的クローズと自然切断を区別する。 */
+  let _closedStale = 0;
+  for (const key of Object.keys(connectionMap)) {
+    const stOld = connectionMap[key];
+    if (!stOld || !stOld.ws || stOld.dest !== dest) continue;
+    const rs = stOld.ws.readyState;
+    if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) {
+      try {
+        stOld.ws.onopen = stOld.ws.onmessage = stOld.ws.onerror = stOld.ws.onclose = null;
+        stOld.ws.close();
+        _closedStale++;
+      } catch (e) {
+        console.debug(`[ws] 旧ソケットのクローズに失敗 (${key}):`, e?.message);
+      }
+    }
+    stOld.ws = null;
+  }
+  if (_closedStale > 0) {
+    pushLog(`既存のWS接続(${_closedStale})を閉じてから再接続します（多重接続防止）`, "info", false, host);
+  }
 
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(protocol + dest);
@@ -882,7 +936,10 @@ function handleSocketMessage(event, host) {
   let hostKey = host;
   // 1) --- 生データ "ok" はスキップ ---
   if (event.data === "ok") {
-    pushLog("受信: heart beat:" + event.data, "success", false, hostKey);
+    // ★ 生ハートビートのログは既定で抑制（毎回の "ok" でログを汚さない）。logLevel="debug" 時のみ。
+    if (monitorData.appSettings.logLevel === "debug") {
+      pushLog("受信: heart beat:" + event.data, "success", false, hostKey);
+    }
     return;
   }
 
@@ -892,8 +949,13 @@ function handleSocketMessage(event, host) {
   const tsField = tsEl?.querySelector(".value");
   if (tsField) tsField.textContent = now;
 
-// --- 3) ログ出力 (受信した JSON 生データ) ---
-  pushLog("受信: " + event.data, "normal", false, hostKey);
+// --- 3) ログ出力 (受信した JSON 生データ) — ★ 既定で抑制 (fix/bg-cpu) ---
+  //   生パケットを毎メッセージ "normal" で記録すると、(行数)×(ログパネル数) の同期DOM処理が
+  //   最小化中も throttle されずに走り CPU を浪費し、意味あるログを埋もれさせる。
+  //   logLevel="debug" 時のみ生ダンプを出力（エラー/状態変化等の意味あるログは別 pushLog で従来どおり記録）。
+  if (monitorData.appSettings.logLevel === "debug") {
+    pushLog("受信: " + event.data, "normal", false, hostKey);
+  }
 
 // --- 4) JSON パース ---
   let data;

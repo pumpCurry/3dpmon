@@ -18,7 +18,7 @@ vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
   sendCommand: vi.fn(),
 }));
 
-const { verifyPromotePin } = await import('../../3dp_lib/dashboard_relay_bridge.js');
+const { verifyPromotePin, buildCameraEndpoints } = await import('../../3dp_lib/dashboard_relay_bridge.js');
 
 describe('verifyPromotePin — 昇格PIN検証', () => {
   it('PIN未設定(空)なら入力に関わらず許可', () => {
@@ -53,5 +53,56 @@ describe('verifyPromotePin — 昇格PIN検証', () => {
 
   it('数値型PINでも文字列化して比較', () => {
     expect(verifyPromotePin(1234, 1234)).toEqual({ granted: true, reason: '' });
+  });
+});
+
+describe('buildCameraEndpoints — カメラパススルー用エンドポイントマップ構築', () => {
+  it('hostname/dest からIP+ポートを構築（cameraPort 優先）', () => {
+    const targets = [
+      { dest: '192.168.1.10:9999', hostname: 'k1-max', cameraPort: 8081 },
+      { dest: '192.168.1.11:9999', hostname: 'ender' },
+    ];
+    expect(buildCameraEndpoints(targets, 8080)).toEqual({
+      'k1-max': { ip: '192.168.1.10', port: 8081 },
+      'ender': { ip: '192.168.1.11', port: 8080 },
+    });
+  });
+
+  it('cameraPort も既定も無ければ 8080 にフォールバック', () => {
+    expect(buildCameraEndpoints([{ dest: '10.0.0.5:80', hostname: 'h' }])).toEqual({
+      'h': { ip: '10.0.0.5', port: 8080 },
+    });
+  });
+
+  it('hostname 未解決(空)のターゲットはスキップ', () => {
+    const targets = [
+      { dest: '192.168.1.10:9999', hostname: '' },
+      { dest: '192.168.1.11:9999', hostname: '  ' },
+      { dest: '192.168.1.12:9999', hostname: 'ok' },
+    ];
+    expect(buildCameraEndpoints(targets, 8080)).toEqual({
+      'ok': { ip: '192.168.1.12', port: 8080 },
+    });
+  });
+
+  it('dest にIPが無ければスキップ', () => {
+    expect(buildCameraEndpoints([{ dest: '', hostname: 'h' }], 8080)).toEqual({});
+    expect(buildCameraEndpoints([{ dest: ':8080', hostname: 'h' }], 8080)).toEqual({});
+  });
+
+  it('同一 hostname は後勝ち', () => {
+    const targets = [
+      { dest: '192.168.1.10:9999', hostname: 'dup' },
+      { dest: '192.168.1.99:9999', hostname: 'dup' },
+    ];
+    expect(buildCameraEndpoints(targets, 8080)).toEqual({
+      'dup': { ip: '192.168.1.99', port: 8080 },
+    });
+  });
+
+  it('配列以外/空は空オブジェクト', () => {
+    expect(buildCameraEndpoints(null)).toEqual({});
+    expect(buildCameraEndpoints(undefined)).toEqual({});
+    expect(buildCameraEndpoints([])).toEqual({});
   });
 });

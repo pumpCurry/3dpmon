@@ -36,8 +36,8 @@ import { monitorData } from "./dashboard_data.js";
 const DEFAULT_CAMERA_PORT = 8080;
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
-import { registerPrintManagerAccessor } from "./dashboard_spool.js";
-import { registerRelayCallback } from "./dashboard_aggregator.js";
+import { registerPrintManagerAccessor, registerRebaselineHostUsage } from "./dashboard_spool.js";
+import { registerRelayCallback, rebaselineHostUsage } from "./dashboard_aggregator.js";
 import { getFileList, buildFileInsight } from "./dashboard_printmanager.js";
 
 /**
@@ -76,6 +76,9 @@ export function bootPanelSystem() {
 
   /* (0a) printmanager アクセサを spool.js に登録（循環参照回避） */
   registerPrintManagerAccessor({ getFileList, buildFileInsight });
+
+  /* (0a2) aggregator の rebaselineHostUsage を spool.js に登録（ADR-0005・循環参照回避） */
+  registerRebaselineHostUsage(rebaselineHostUsage);
 
   /* (0b) 旧レイアウトを即座に非表示にする
      .legacy-card-source クラスを付与 → CSS で display:none
