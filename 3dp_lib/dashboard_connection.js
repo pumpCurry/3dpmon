@@ -936,7 +936,10 @@ function handleSocketMessage(event, host) {
   let hostKey = host;
   // 1) --- 生データ "ok" はスキップ ---
   if (event.data === "ok") {
-    pushLog("受信: heart beat:" + event.data, "success", false, hostKey);
+    // ★ 生ハートビートのログは既定で抑制（毎回の "ok" でログを汚さない）。logLevel="debug" 時のみ。
+    if (monitorData.appSettings.logLevel === "debug") {
+      pushLog("受信: heart beat:" + event.data, "success", false, hostKey);
+    }
     return;
   }
 
@@ -946,8 +949,13 @@ function handleSocketMessage(event, host) {
   const tsField = tsEl?.querySelector(".value");
   if (tsField) tsField.textContent = now;
 
-// --- 3) ログ出力 (受信した JSON 生データ) ---
-  pushLog("受信: " + event.data, "normal", false, hostKey);
+// --- 3) ログ出力 (受信した JSON 生データ) — ★ 既定で抑制 (fix/bg-cpu) ---
+  //   生パケットを毎メッセージ "normal" で記録すると、(行数)×(ログパネル数) の同期DOM処理が
+  //   最小化中も throttle されずに走り CPU を浪費し、意味あるログを埋もれさせる。
+  //   logLevel="debug" 時のみ生ダンプを出力（エラー/状態変化等の意味あるログは別 pushLog で従来どおり記録）。
+  if (monitorData.appSettings.logLevel === "debug") {
+    pushLog("受信: " + event.data, "normal", false, hostKey);
+  }
 
 // --- 4) JSON パース ---
   let data;
