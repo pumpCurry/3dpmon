@@ -56,4 +56,25 @@ for (const t of targets) {
   console.log(`[sync-version] 更新: ${t.file} (${t.label}) → ${VERSION}`);
 }
 
+// ─── package-lock.json: ルート version を同期（バージョンドリフト再発防止） ───
+// lockfileVersion 3 では先頭2件の "version"（ルート と packages[""]）のみがパッケージ
+// 本体のバージョン。依存パッケージの version を壊さぬよう、先頭2件に限定して置換する。
+// （従来 sync-version は package-lock を対象外としており、リリースのたびに lock の
+//   version だけ取り残されてドリフトしていた。本処理で恒久的に同期する。）
+const lockFile = path.join(ROOT, "package-lock.json");
+if (fs.existsSync(lockFile)) {
+  const orig = fs.readFileSync(lockFile, "utf-8");
+  let n = 0;
+  const next = orig.replace(/"version": "[^"]*"/g, (m) => (n++ < 2 ? `"version": "${VERSION}"` : m));
+  if (next !== orig) {
+    fs.writeFileSync(lockFile, next, "utf-8");
+    updated++;
+    console.log(`[sync-version] 更新: package-lock.json (root version) → ${VERSION}`);
+  } else {
+    console.log(`[sync-version] 変更なし: package-lock.json (root version)`);
+  }
+} else {
+  console.warn(`[sync-version] スキップ: package-lock.json (見つかりません)`);
+}
+
 console.log(`[sync-version] 完了: ${updated} ファイル更新`);
