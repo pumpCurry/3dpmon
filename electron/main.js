@@ -15,10 +15,14 @@
  * 【公開関数一覧】
  * - なし（Electron メインプロセスとして即時実行）
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.790 (v2.2.1020)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-03-10 21:00:00
+ * @lastModified 2026-06-08
  * -----------------------------------------------------------
+ * 【v2.2.1020 変更点】
+ * - 効率モード/最小化/非フォア時の通知遅延・画面更新停止を解消:
+ *   webPreferences.backgroundThrottling=false + 背景スロットリング抑止スイッチ3種
+ *   + powerSaveBlocker("prevent-app-suspension") を導入。
  * @todo
  * - IPC 経由のファイル保存機能
  * - ネイティブメニュー統合
@@ -26,7 +30,7 @@
 
 "use strict";
 
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, powerSaveBlocker } = require("electron");
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
@@ -165,6 +169,14 @@ function _fetchCameraSnapshot(host, ep) {
  * @type {BrowserWindow|null}
  */
 let mainWindow = null;
+
+/**
+ * powerSaveBlocker のハンドル ID。
+ * アプリ稼働中はシステム/アプリのサスペンドを抑止し続ける（24/7 監視のため）。
+ *
+ * @type {number|null}
+ */
+let _powerSaveBlockerId = null;
 
 /* ─── ポータブル版: ユーザーデータを exe と同じディレクトリに保存 ─── */
 // portable 版（NSIS portable や --portable フラグ）の場合、
@@ -631,6 +643,14 @@ function createWindow() {
       nodeIntegration: false,
       /* Electron版: ユーザークリックなしで音声再生（TTS/効果音）を許可 */
       autoplayPolicy: "no-user-gesture-required",
+      /* ★ v2.2.1020: バックグラウンド/最小化/非フォア時もタイマー(setInterval/
+         setTimeout)・requestAnimationFrame を全速で維持する。
+         既定(true)のままだと Chromium が背景窓のタイマーを 1Hz→(5分後)1/分 に絞り、
+         aggregator(500ms)による画面更新の停止、通知の大幅遅延、heartbeat(30s)切れに
+         よる WS 切断を招く。監視ツールとして常時リアルタイム動作が必須のため無効化する。
+         （真に最小化された窓の「描画」は OS が止めるため復帰時に即時反映となるが、
+           JS/タイマー/通知/WS は本設定で背景でも生き続ける。） */
+      backgroundThrottling: false,
       /* ★ partition は指定しない — file:// オリジンのデフォルトパーティションを使用。
          persist:3dpmon パーティションはオリジン不一致でデータ消失を引き起こすため廃止。 */
     }
@@ -670,9 +690,33 @@ if (!gotTheLock) {
 /* ─── Chromium フラグ: 音声自動再生を許可 ─── */
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
+/* ─── Chromium フラグ: バックグラウンド スロットリング / 効率モード(EcoQoS) 抑止 ─── */
+// ★ v2.2.1020: 最小化・非フォア・他窓オクルージョン時に Chromium がレンダラを
+//   背景降格し、Windows 11 が効率モード(EcoQoS = PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
+//   を適用すると、タイマー駆動の画面更新/通知/heartbeat が停止または大幅遅延する。
+//   webPreferences.backgroundThrottling=false と併せ、プロセスレベルでも背景降格を止める。
+//   - disable-background-timer-throttling   : 背景窓の setTimeout/setInterval 抑制を停止
+//   - disable-renderer-backgrounding        : レンダラのプロセス優先度降格(EcoQoS)を停止（効率モードの核）
+//   - disable-backgrounding-occluded-windows: 他窓に隠れた窓の描画/処理停止を防止（非フォア対策）
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+
 /* ─── アプリケーションライフサイクル ─── */
 
 app.whenReady().then(async () => {
+  // ★ v2.2.1020: システム/アプリのサスペンドを抑止する（24/7 監視のため）。
+  //   省電力スリープやアプリサスペンドでレンダラが停止し通知を取りこぼすのを防ぐ。
+  //   "prevent-app-suspension" はディスプレイ消灯は許容しつつアプリの実行を維持する。
+  try {
+    if (_powerSaveBlockerId === null || !powerSaveBlocker.isStarted(_powerSaveBlockerId)) {
+      _powerSaveBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+      console.log(`[3dpmon] powerSaveBlocker 起動 (id=${_powerSaveBlockerId})`);
+    }
+  } catch (e) {
+    console.warn("[3dpmon] powerSaveBlocker 起動失敗:", e.message);
+  }
+
   // 壊れた GPU / コードキャッシュを起動時にクリーンアップ
   // (多重起動やクラッシュで破損した場合のリカバリ)
   const cacheDirs = ["GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "Code Cache"];
@@ -775,4 +819,14 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+/* 終了時: powerSaveBlocker を解放する */
+app.on("will-quit", () => {
+  try {
+    if (_powerSaveBlockerId !== null && powerSaveBlocker.isStarted(_powerSaveBlockerId)) {
+      powerSaveBlocker.stop(_powerSaveBlockerId);
+    }
+  } catch { /* 解放失敗は無視（プロセス終了に伴い回収される） */ }
+  _powerSaveBlockerId = null;
 });
