@@ -795,6 +795,35 @@ export function connectWs(hostOrDest) {
   updatePrinterListUI();
   pushLog(`WS接続を試みます...(試行${state.reconnect}回目/${MAX_RECONNECT}回)`, "warn", false, host);
 
+  /* ★ 多重接続防止 (fix/ws-duplicate-connection):
+     既存ソケットが残ったまま新規接続を張ると、同一機器に対して WebSocket が
+     重複し（onmessage が多重発火して CPU を多重計上）、リークが蓄積する。
+     初回接続では connectionMap のキーが IP→ホスト名へ移行する過程で、
+     IP キーとホスト名キーの双方に生ソケットが並存し得る（updateConnectionHost
+     は newHost キーが既存の場合のみ移行するため）。特定キーの state.ws だけを
+     見ると取りこぼすので、同一 dest を指す全エントリの生ソケットを閉じる。
+     旧ソケットの onclose は handleSocketClose 経由で自動再接続を誘発するため、
+     close() 前にハンドラを全無効化し、意図的クローズと自然切断を区別する。 */
+  let _closedStale = 0;
+  for (const key of Object.keys(connectionMap)) {
+    const stOld = connectionMap[key];
+    if (!stOld || !stOld.ws || stOld.dest !== dest) continue;
+    const rs = stOld.ws.readyState;
+    if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) {
+      try {
+        stOld.ws.onopen = stOld.ws.onmessage = stOld.ws.onerror = stOld.ws.onclose = null;
+        stOld.ws.close();
+        _closedStale++;
+      } catch (e) {
+        console.debug(`[ws] 旧ソケットのクローズに失敗 (${key}):`, e?.message);
+      }
+    }
+    stOld.ws = null;
+  }
+  if (_closedStale > 0) {
+    pushLog(`既存のWS接続(${_closedStale})を閉じてから再接続します（多重接続防止）`, "info", false, host);
+  }
+
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(protocol + dest);
   // ★ バイナリフレーム対応: K1が非UTF-8テキストフレームを送る場合にデコードエラーを防ぐ
