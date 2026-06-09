@@ -47,6 +47,7 @@ import {
 } from "./dashboard_storage.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
+import { itemKeeperIntegration } from "./dashboard_integration_itemkeeper.js";
 import { handlePrintStateTransition } from "./dashboard_printstatus.js";
 import { parseCurPosition, getCurrentTimestamp } from "./dashboard_utils.js";
 import {
@@ -541,6 +542,8 @@ export function processData(data, hostname) {
     notificationManager.notify("printStarted", _buildNotifyPayload(host, machine, {
       includeSpool: true
     }));
+    // ItemKeeper 連携: 印刷開始時に全件スナップショットを送信（onStart 設定で制御）
+    itemKeeperIntegration.onPrintEvent(host, "started");
     _set("preparationTime", 0, true);
 
     // 現在ジョブを即座に保存（printFileName/fileName が同一メッセージに含まれていれば反映）
@@ -711,6 +714,8 @@ export function processData(data, hostname) {
       includeLayer: true, includeDuration: true
     });
     notificationManager.notify(evt, notifPayload);
+    // ItemKeeper 連携: 印刷完了/失敗時に全件スナップショットを送信（onFinish 設定で制御）
+    itemKeeperIntegration.onPrintEvent(host, "finished");
     persistHistoryTimers(currStartTime, host);
   }
   // (2.6.2) Idle or 再開でリセット

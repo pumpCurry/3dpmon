@@ -47,6 +47,7 @@ import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId, setCurrentSpool
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
+import { itemKeeperIntegration } from "./dashboard_integration_itemkeeper.js";
 import {
   persistAggregatorState,
   stopAggregatorTimer,
@@ -70,6 +71,8 @@ export async function initializeDashboard() {
   // ★ v2.2.0: cleanupLegacy は削除済み。v2.1.017 で最終掃除完了。
   // 読み込んだストレージ内容を通知マネージャへ反映
   notificationManager.loadSettings();
+  // ItemKeeper / 外部連携 設定を反映
+  itemKeeperIntegration.loadSettings();
   if (!monitorData.filamentSpools.length) {
     const preset = FILAMENT_PRESETS.find(
       p => p.presetId === "preset-unknown-somename-somecolor"

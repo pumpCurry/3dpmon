@@ -36,6 +36,7 @@ import { monitorData } from "./dashboard_data.js";
 const DEFAULT_CAMERA_PORT = 8080;
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
+import { itemKeeperIntegration } from "./dashboard_integration_itemkeeper.js";
 import { registerPrintManagerAccessor, registerRebaselineHostUsage } from "./dashboard_spool.js";
 import { registerRelayCallback, rebaselineHostUsage } from "./dashboard_aggregator.js";
 import { getFileList, buildFileInsight } from "./dashboard_printmanager.js";
@@ -538,6 +539,33 @@ function _initTopMenuBar() {
       if (e.target === storageOverlay) storageOverlay.classList.remove("open");
     });
   }
+
+  /* ── 外部連携サブモーダル（汎用Webhook / ItemKeeper）── */
+  const externalBtn     = document.getElementById("conn-modal-external-btn");
+  const externalOverlay = document.getElementById("external-modal-overlay");
+  const externalClose   = document.getElementById("external-modal-close");
+  const externalBody    = document.getElementById("external-modal-body");
+  /** @private 外部連携モーダルを閉じる（=変更を破棄してキャンセル。確定は「保存して戻る」のみ）*/
+  const closeExternal = () => { if (externalOverlay) externalOverlay.classList.remove("open"); };
+  if (externalBtn && externalOverlay) {
+    externalBtn.addEventListener("click", () => {
+      // 開くたびに保存値からフォームを再構築（トランザクション編集の下書き）
+      itemKeeperIntegration.initModalUI(externalBody);
+      externalOverlay.classList.add("open");
+    });
+  }
+  if (externalClose) externalClose.addEventListener("click", closeExternal);
+  if (externalOverlay) {
+    externalOverlay.addEventListener("click", e => {
+      if (e.target === externalOverlay) closeExternal();
+    });
+  }
+  // Esc で閉じる（破棄）
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && externalOverlay && externalOverlay.classList.contains("open")) {
+      closeExternal();
+    }
+  });
 
   /* ─── オーディオ トグルボタン（トップバー） ─── */
   const soundBtn = document.getElementById("top-sound-btn");

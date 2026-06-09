@@ -155,6 +155,8 @@ export class NotificationManager {
     this.statusSnapshotEnabled = false;
     /** ステータススナップショット送信間隔 [秒] */
     this.statusSnapshotIntervalSec = 30;
+    /** 汎用Webhookを通知マスター(enabled)非依存で送信するか（外部連携・独立push） */
+    this.webhookIndependent = false;
 
     // 永続化済み設定の読み込みは initializeDashboard() から
     // 行うため、コンストラクタでは呼び出さない。
@@ -216,6 +218,9 @@ export class NotificationManager {
     if (typeof saved.statusSnapshotIntervalSec === "number" && saved.statusSnapshotIntervalSec >= 5) {
       this.statusSnapshotIntervalSec = saved.statusSnapshotIntervalSec;
     }
+    if (typeof saved.webhookIndependent === "boolean") {
+      this.webhookIndependent = saved.webhookIndependent;
+    }
 
     // level プロパティが欠けている場合は info を補填
     Object.values(this.map).forEach(cfg => {
@@ -256,7 +261,8 @@ export class NotificationManager {
       webhookUrls: this.webhookUrls,
       filamentLowThreshold: this.filamentLowThreshold,
       statusSnapshotEnabled: this.statusSnapshotEnabled,
-      statusSnapshotIntervalSec: this.statusSnapshotIntervalSec
+      statusSnapshotIntervalSec: this.statusSnapshotIntervalSec,
+      webhookIndependent: this.webhookIndependent
     };
     saveUnifiedStorage();
   }
@@ -282,6 +288,34 @@ export class NotificationManager {
    * @returns {string[]} URL 配列
    */
   getWebhookUrls() { return [...this.webhookUrls]; }
+  /**
+   * 汎用Webhookを通知マスター(enabled)に依存せず送信するかを設定する。
+   * true の場合、画面/TTS 通知が OFF でも印刷イベント等で Webhook を送る（外部連携・独立push）。
+   *
+   * @param {boolean} flag - 独立送信を有効にするか
+   * @returns {void}
+   */
+  setWebhookIndependent(flag) { this.webhookIndependent = !!flag; this._persistSettings(); }
+  /**
+   * 汎用Webhook 独立送信フラグを取得する。
+   *
+   * @returns {boolean} 独立送信が有効なら true
+   */
+  getWebhookIndependent() { return this.webhookIndependent; }
+  /**
+   * ステータス定期送信(statusSnapshot)の有効/間隔を設定する（外部連携モーダルから利用）。
+   *
+   * @param {boolean} enabled - 定期送信を有効にするか
+   * @param {number} [intervalSec] - 送信間隔[秒]（5以上のとき採用）
+   * @returns {void}
+   */
+  setStatusSnapshot(enabled, intervalSec) {
+    this.statusSnapshotEnabled = !!enabled;
+    if (typeof intervalSec === "number" && intervalSec >= 5) {
+      this.statusSnapshotIntervalSec = intervalSec;
+    }
+    this._persistSettings();
+  }
   /**
    * フィラメント残量警告の閾値を設定する。
    * 値は 0〜1 の範囲に丸められる。
@@ -430,9 +464,17 @@ export class NotificationManager {
    * @param {object} [payload] - マクロ展開用データ（hostname を含むこと）
   */
   notify(type, payload = {}) {
-    if (!this.enabled || isNotificationSuppressed(payload?.hostname)) return;
+    // ホスト抑制は全チャネル（画面/TTS/効果音/WebPush/Webhook）に適用する。
+    if (isNotificationSuppressed(payload?.hostname)) return;
     const def = this.map[type];
+    // イベントフィルタ: 通知マップで無効なイベントは Webhook も送らない（共有フィルタ）。
     if (!def?.enabled) return;
+
+    // 通知マスター(enabled)は 画面/TTS/効果音/WebPush の可否を決める。
+    // Webhook は webhookIndependent=true のとき通知OFFでも送信する（外部連携・独立push）。
+    const notifyActive  = this.enabled;
+    const webhookActive = this.webhookUrls.length > 0 && (notifyActive || this.webhookIndependent);
+    if (!notifyActive && !webhookActive) return; // 何もすることが無ければ離脱（後方互換）
 
     // マクロ展開
     const now = new Date().toLocaleString();
@@ -446,32 +488,34 @@ export class NotificationManager {
       .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
       .replace(/[\r\n]+/g, " ");
 
-    // 1) 固定アラート（showAlert 内でログ出力も行われる）
-    showAlert(text, def.level, def.level === "error", hostname);
+    // ── UI チャネル（通知マスターONのときのみ）──
+    if (notifyActive) {
+      // 1) 固定アラート（showAlert 内でログ出力も行われる）
+      showAlert(text, def.level, def.level === "error", hostname);
 
-    // 3) TTS（ホスト別設定を適用）
-    if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
-      this._speakText(text, hostname);
+      // 3) TTS（ホスト別設定を適用）
+      if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
+        this._speakText(text, hostname);
+      }
+
+      // 4) 効果音
+      if (!this.muted && audioManager.isMusicAllowed() && def.sound) {
+        audioManager.play(def.sound);
+      }
+
+      // 5) Web Push
+      // Notification の許可がある場合だけ Web Push 処理を呼ぶ
+      if (this.useWebPush
+          && "Notification" in window
+          && Notification.permission === "granted") {
+        this._sendWebPush(text);
+      }
     }
 
-
-    // 4) 効果音
-    if (!this.muted && audioManager.isMusicAllowed() && def.sound) {
-      audioManager.play(def.sound);
-    }
-
-    // 5) Web Push
-    // Notification の許可がある場合だけ Web Push 処理を呼ぶ
-    if (this.useWebPush
-        && "Notification" in window
-        && Notification.permission === "granted") {
-      this._sendWebPush(text);
-    }
-
-    if (this.webhookUrls.length > 0) {
+    // ── Webhook（webhookIndependent=true なら通知OFFでも送信）──
+    if (webhookActive) {
       this._sendWebHook(text, type, ctx);
     }
-
   }
 
   /**

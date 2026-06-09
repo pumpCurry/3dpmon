@@ -29,6 +29,7 @@
 import { initializeDashboard } from "./3dp_dashboard_init.js";
 import { audioManager } from "./dashboard_audio_manager.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
+import { itemKeeperIntegration } from "./dashboard_integration_itemkeeper.js";
 
 import { initStorageUI } from "./dashboard_storage_ui.js";
 import { bootPanelSystem } from "./dashboard_panel_boot.js";
@@ -46,6 +47,7 @@ window.addEventListener("unhandledrejection", evt => {
 // ——— デバッグ用グローバル参照 ———
 window.audioManager = audioManager;
 window.notificationManager = notificationManager;
+window.itemKeeperIntegration = itemKeeperIntegration;
 
 /**
  * ページ読み込み完了後のエントリポイント。
