@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <!-- ★ app-version: ビルド時に scripts/sync-version.js が package.json から自動更新する -->
-  <meta name="app-version" content="2.2.1020" />
-  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1020</title>
+  <meta name="app-version" content="2.2.1021" />
+  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1021</title>
   <!-- サイトアイコン -->
   <link rel="icon" href="favicon.ico">
 
@@ -91,6 +91,7 @@
           <span style="flex:1"></span>
           <button id="conn-modal-notif-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">🔔 通知設定</button>
           <button id="conn-modal-storage-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">💾 ストレージ</button>
+          <button id="conn-modal-external-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e8f5f3;border:1px solid #99cdc6;border-radius:3px;">🔌 外部連携</button>
         </div>
       </div>
 
@@ -148,6 +149,21 @@
       </div>
       <div class="notif-modal-body" id="notif-modal-body">
         <!-- 動的生成される通知設定テーブル -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ===============================================================
+       外部連携サブモーダル（汎用Webhook Push / ItemKeeper 連携）
+  =============================================================== -->
+  <div class="notif-modal-overlay" id="external-modal-overlay">
+    <div class="notif-modal" style="max-width:680px;">
+      <div class="notif-modal-header" style="background:#0f766e;">
+        <span>🔌 外部連携</span>
+        <button class="notif-modal-close" id="external-modal-close">×</button>
+      </div>
+      <div class="notif-modal-body" id="external-modal-body">
+        <!-- 動的生成: itemKeeperIntegration.initModalUI() -->
       </div>
     </div>
   </div>
