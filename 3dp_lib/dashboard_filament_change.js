@@ -14,16 +14,16 @@
  * 【公開関数一覧】
  * - {@link showFilamentChangeDialog}：交換ダイアログ表示
  *
- * @version 1.390.630 (PR #292)
+ * @version 1.390.1110 (PR #380)
  * @since   1.390.230 (PR #104)
- * @lastModified 2025-07-02 16:26:34
+ * @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
  */
 "use strict";
 
-import { getSpools, getSpoolById, setCurrentSpoolId, getCurrentSpoolId, getCurrentSpool, addSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel, formatFilamentAmount } from "./dashboard_spool.js";
+import { getSpools, getSpoolById, setCurrentSpoolId, getCurrentSpoolId, getCurrentSpool, addSpoolFromPreset, mountNewSpoolFromPreset, formatSpoolDisplayId, getSpoolState, getSpoolStateLabel, formatFilamentAmount } from "./dashboard_spool.js";
 import { consumeInventory, getInventoryItem } from "./dashboard_filament_inventory.js";
 import { monitorData } from "./dashboard_data.js";
 import { getAllPresets } from "./dashboard_filament_presets.js";
@@ -119,6 +119,37 @@ export function updatePreview(sp, preview = null) {
   } else {
     fp.setOption("showMaterialColorCode", false);
   }
+}
+
+/**
+ * 装着完了後のフィラメントプレビュー状態を一括反映する。
+ *
+ * 【詳細説明】
+ * - 交換ダイアログの「装着」成功時に呼ばれる共通処理。
+ *   monitorData から最新スプール（setCurrentSpoolId 後の値）を引き直して反映する。
+ * - プレビュー未生成（パネル未構築）の場合は何もしない。
+ *
+ * @private
+ * @param {Object} mountSpool - 装着したスプール
+ * @param {string} hostname - 対象ホスト名
+ * @returns {void}
+ */
+function _applyMountedPreview(mountSpool, hostname) {
+  const hostPreview = window._filamentPreviews?.get(hostname);
+  if (!hostPreview || !mountSpool) return;
+  const updatedSpool = getSpoolById(mountSpool.id) || mountSpool;
+  hostPreview.setState({
+    isFilamentPresent: true,
+    filamentCurrentLength: updatedSpool.remainingLengthMm ?? 0,  // ★ F1: || → ?? (0は0として保持)
+    filamentTotalLength: updatedSpool.totalLengthMm || 330000,
+    filamentColor: updatedSpool.filamentColor || updatedSpool.color || "#22C55E",
+    reelName: updatedSpool.name || "",
+    reelSubName: updatedSpool.reelSubName || "",
+    materialName: updatedSpool.materialName || updatedSpool.material || "",
+    materialColorName: updatedSpool.colorName || "",
+    materialColorCode: updatedSpool.filamentColor || "",
+    manufacturerName: updatedSpool.manufacturerName || updatedSpool.brand || ""
+  });
 }
 
 /**
@@ -352,15 +383,20 @@ export function showPresetOpenDialog(hostname) {
 
     dlg.querySelector('#fc-ok').addEventListener('click', () => {
       if (!selectedPreset) { overlay.remove(); resolve(false); return; }
-      const sp = addSpoolFromPreset(selectedPreset);
-      if (!setCurrentSpoolId(sp.id, hostname)) {
+      // ★ リレー子対応: 開封+装着は複合操作（子では親へ 1 RPC 委譲し、結果は relay-delta で還流）
+      const r = mountNewSpoolFromPreset(selectedPreset, {}, hostname);
+      if (!r.ok) {
         showAlert("このスプールは既に別のプリンタに装着されています", "warn");
         overlay.remove();
         resolve(false);
         return;
       }
-      const hostPreview = window._filamentPreviews?.get(hostname);
-      updatePreview(sp, hostPreview);
+      if (!r.relayed && r.spool) {
+        const hostPreview = window._filamentPreviews?.get(hostname);
+        updatePreview(r.spool, hostPreview);
+      } else if (r.relayed) {
+        showAlert("交換操作を親機へ送信しました", "success");
+      }
       overlay.remove();
       resolve(true);
     });
@@ -778,13 +814,28 @@ export function showFilamentChangeDialog(hostname) {
 
     dlg.querySelector("#fc-ok").addEventListener("click", () => {
       let mountSpool = selectedSpool;
-      // 新品開封の場合はプリセットからスプールを作成
+      // 新品開封の場合はプリセットからスプールを作成して装着
+      // ★ リレー子対応: 開封+装着は複合操作（子では親へ 1 RPC 委譲し、結果は relay-delta で還流）
       if (!mountSpool && selectedPreset) {
-        mountSpool = addSpoolFromPreset(selectedPreset);
-        if (!mountSpool) {
+        const r = mountNewSpoolFromPreset(selectedPreset, {}, hostname);
+        if (!r.ok) {
           showAlert("スプールの作成に失敗しました", "error");
           return;
         }
+        if (r.relayed) {
+          // 子: 実体は親側で生成・装着され、共有状態の還流でプレビューも更新される
+          showAlert("交換操作を親機へ送信しました", "success");
+          closeDialog(true);
+          return;
+        }
+        mountSpool = r.spool;
+        // 装着は mountNewSpoolFromPreset 内で完了済み（以下のプレビュー反映へ進む）
+        if (mountSpool) {
+          _applyMountedPreview(mountSpool, hostname);
+          showAlert(`${formatSpoolDisplayId(mountSpool)} を ${displayHost} に装着しました`, "success");
+        }
+        closeDialog(true);
+        return;
       }
       if (mountSpool) {
         if (!setCurrentSpoolId(mountSpool.id, hostname)) {
@@ -792,22 +843,7 @@ export function showFilamentChangeDialog(hostname) {
           return;
         }
         // フィラメントパネルのプレビューを即時反映
-        const hostPreview = window._filamentPreviews?.get(hostname);
-        if (hostPreview) {
-          const updatedSpool = getSpoolById(mountSpool.id) || mountSpool;
-          hostPreview.setState({
-            isFilamentPresent: true,
-            filamentCurrentLength: updatedSpool.remainingLengthMm ?? 0,  // ★ F1: || → ?? (0は0として保持)
-            filamentTotalLength: updatedSpool.totalLengthMm || 330000,
-            filamentColor: updatedSpool.filamentColor || updatedSpool.color || "#22C55E",
-            reelName: updatedSpool.name || "",
-            reelSubName: updatedSpool.reelSubName || "",
-            materialName: updatedSpool.materialName || updatedSpool.material || "",
-            materialColorName: updatedSpool.colorName || "",
-            materialColorCode: updatedSpool.filamentColor || "",
-            manufacturerName: updatedSpool.manufacturerName || updatedSpool.brand || ""
-          });
-        }
+        _applyMountedPreview(mountSpool, hostname);
         showAlert(`${formatSpoolDisplayId(mountSpool)} を ${displayHost} に装着しました`, "success");
       }
       closeDialog(true);
@@ -1009,6 +1045,10 @@ function showPresetOpenDialogForHistory(hostname) {
     dlg.querySelector('#fc-ok').addEventListener('click', () => {
       if (!selectedPreset) { overlay.remove(); resolve(false); return; }
       const sp = addSpoolFromPreset(selectedPreset);
+      // ★ リレー子では addSpoolFromPreset は null を返す（親へ RPC 委譲）。
+      //   このダイアログの呼び出し元（履歴フィラメント修正）は親専用のため通常到達しないが、
+      //   null のまま {spool:null} を返すと呼び出し側が壊れるため安全に中止する。
+      if (!sp) { overlay.remove(); resolve(false); return; }
       // 機器装着しない（setCurrentSpoolId を呼ばない）
       overlay.remove();
       resolve({ spool: sp, isNew: true });

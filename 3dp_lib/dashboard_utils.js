@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link formatDuration} ほか複数をエクスポート
  *
-* @version 1.390.729 (PR #336)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.193 (PR #86)
-* @lastModified 2025-07-12 08:22:10
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -284,6 +284,36 @@ function checkUpdatedFields(fieldNames, callback, dataStore) {
   return updated;
 }
 
+/**
+ * normalizeJobId
+ * --------------
+ * 印刷ジョブID（printStartTime 由来の epoch 秒）を正規化します。
+ *
+ * 【詳細説明】
+ * - K1 系プリンタは電源投入直後に printStartTime を 0 または null で
+ *   報告することがある。0 を有効IDとして扱うと epoch 0（1970年）の
+ *   「大過去」エントリが履歴に生成され、最新履歴のID比較・サムネイル
+ *   解決・印刷結果記録が誤動作する（電源投入直後バグの根本原因）。
+ * - 本関数は「正の有限整数」のみを有効IDとして返し、それ以外
+ *   （0 / null / undefined / NaN / 負数 / 数値化不能文字列）は
+ *   一律 null に正規化する。ID 比較・履歴登録の入口で必ず通すこと。
+ *
+ * @function normalizeJobId
+ * @param {number|string|null|undefined} value - 生のジョブID候補値
+ * @returns {?number} 有効な正のジョブID（整数）。無効値は null
+ * @example
+ * normalizeJobId(1749700000); // → 1749700000
+ * normalizeJobId(0);          // → null（電源投入直後の偽ID）
+ * normalizeJobId("0");        // → null
+ * normalizeJobId(null);       // → null
+ */
+function normalizeJobId(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
 export {
   formatDuration,
   formatDurationSimple,
@@ -296,5 +326,6 @@ export {
   showTempCheckMark,
   fallbackCopyTextToClipboard,
   copyLogsToClipboard,
-  checkUpdatedFields
+  checkUpdatedFields,
+  normalizeJobId
 };

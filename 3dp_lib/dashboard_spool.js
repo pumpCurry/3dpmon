@@ -27,10 +27,11 @@
  * - {@link reserveFilament}：使用量予約
  * - {@link finalizeFilamentUsage}：使用量確定
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
+ * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.787 (PR #367)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -55,6 +56,25 @@ import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
 import { getDisplayBaseUrl } from "./dashboard_connection.js";
+import { sendRelayFilament } from "./dashboard_client_sync.js";
+
+/**
+ * リレー子クライアント（satellite/readonly）として動作中かを判定する。
+ *
+ * 【詳細説明】
+ * - リレー子ではスプール状態の変更（装着/取外し/追加/編集/削除/復元/推定確定）を
+ *   ローカル実行してはならない。serialNo 採番（++spoolSerialCounter）や
+ *   プリセット在庫消費は不可逆なローカル資源であり、子で実行すると親と分岐して
+ *   台帳が壊れる。さらに mountHistory（ADR-0004 権威台帳）も親のみが追記する。
+ * - 子では各操作を {@link sendRelayFilament} で親へ RPC 委譲し、結果は
+ *   relay-delta（共有状態の全置換）として還流する。
+ *
+ * @private
+ * @returns {boolean} リレー子なら true
+ */
+function _isRelayChildSpool() {
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+}
 
 /**
  * ADR-0005: 一時停止の印刷状態コード（dashboard_ui_mapping.js の
@@ -637,6 +657,25 @@ export function setCurrentSpoolId(id, hostname) {
     ).catch(() => {});
     return false;
   }
+  // ★ リレー子（satellite）: 実処理は親へ RPC 委譲し、ローカル状態は変更しない。
+  //   旧実装は子でもローカル実行していたため、親に届かない「見かけだけの操作」になり、
+  //   さらに子ローカルの台帳が親と分岐して表示乖離の原因になっていた。
+  if (_isRelayChildSpool()) {
+    // 既に他ホストへ装着済みかは同期済みデータでローカル検査し、即時フィードバックする
+    // （親側でも同じ検証が再実行される）
+    if (id) {
+      for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
+        if (spId === id && h !== hostname) {
+          console.warn(`setCurrentSpoolId(relay): spool ${id} is already mounted on ${h}`);
+          return false;
+        }
+      }
+    }
+    return sendRelayFilament(
+      id ? "mount" : "unmount",
+      id ? { spoolId: id, hostname } : { hostname }
+    );
+  }
   const host = hostname;
   let prevId = getCurrentSpoolId(host);
 
@@ -1046,6 +1085,11 @@ export function addInferredSpool(source = {}) {
  * @returns {?Object} 確定後スプール（未発見/非inferred は null）
  */
 export function confirmInferredSpool(id, { consumePreset = true } = {}) {
+  // ★ リレー子（satellite）: serialNo 採番・在庫消費は不可逆のため必ず親で実行
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("confirmInferredSpool", { id });
+    return null;
+  }
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s || !s.inferred) return null;
   s.serialNo = ++monitorData.spoolSerialCounter;
@@ -1072,6 +1116,11 @@ export function confirmInferredSpool(id, { consumePreset = true } = {}) {
  * @returns {?Object} 復元した旧スプール（復元対象が無ければ null）
  */
 export function revertInferredSpool(id) {
+  // ★ リレー子（satellite）: 台帳巻き戻しを伴うため必ず親で実行
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("revertInferredSpool", { id });
+    return null;
+  }
   const inferred = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!inferred) return null;
   const sup = inferred._supersedes;
@@ -1132,6 +1181,11 @@ export function revertInferredSpool(id) {
 }
 
 export function updateSpool(id, patch) {
+  // ★ リレー子（satellite）: 編集は親へ RPC 委譲（結果は relay-delta で還流）
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("updateSpool", { id, patch });
+    return;
+  }
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
   Object.assign(s, patch);
@@ -1143,6 +1197,11 @@ export function updateSpool(id, patch) {
 }
 
 export function deleteSpool(id, hostname) {
+  // ★ リレー子（satellite）: 削除は親へ RPC 委譲（結果は relay-delta で還流）
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("deleteSpool", { id, hostname: hostname || null });
+    return;
+  }
   const host = hostname;
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
@@ -1175,6 +1234,11 @@ export function deleteSpool(id, hostname) {
  * @returns {void}
  */
 export function restoreSpool(id) {
+  // ★ リレー子（satellite）: 復活は親へ RPC 委譲（結果は relay-delta で還流）
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("restoreSpool", { id });
+    return;
+  }
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
   s.deleted = false;
@@ -1600,6 +1664,14 @@ export function cleanupUsageSnapshots(jobId) {
  */
 export function addSpoolFromPreset(preset, override = {}) {
   if (!preset) return null;
+  // ★ リレー子（satellite）: 新品開封（登録）は親へ RPC 委譲。
+  //   serialNo 採番とプリセット在庫消費は不可逆なため子で実行してはならない。
+  //   生成スプールは relay-delta で還流するため、戻り値は null（呼び出し側は
+  //   装着を伴う場合 mountNewSpoolFromPreset を使用すること）。
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("addSpoolFromPreset", { preset, override });
+    return null;
+  }
   const data = {
     presetId: preset.presetId,
     modelId: preset.presetId,
@@ -1635,6 +1707,41 @@ export function addSpoolFromPreset(preset, override = {}) {
     consumeInventory(preset.presetId, 1);
   }
   return spool;
+}
+
+/**
+ * 新品スプールをプリセットから開封し、指定ホストへ装着する複合操作。
+ *
+ * 【詳細説明】
+ * - 親（またはスタンドアロン）: addSpoolFromPreset → setCurrentSpoolId を同期実行する。
+ * - リレー子（satellite）: "mountNewSpoolFromPreset" として 1 RPC で親へ委譲する。
+ *   子では addSpoolFromPreset が null を返す（ローカル生成しない）ため、
+ *   「開封→装着」フローは必ず本関数を使うこと（生成IDを跨いだ 2 RPC は順序保証が
+ *   不要になり、親側で原子的に実行される）。
+ * - 装着失敗（他ホストに装着済み等）は ok=false で返す。
+ *
+ * @function mountNewSpoolFromPreset
+ * @param {Object} preset - フィラメントプリセット
+ * @param {Object} [override={}] - addSpoolFromPreset へ渡す上書きフィールド
+ * @param {string} hostname - 装着先ホスト名
+ * @returns {{ok: boolean, spool: ?Object, relayed: boolean}}
+ *   - ok: 操作受理（親実行成功 or RPC 送信成功）
+ *   - spool: 生成したスプール（リレー子では null。relay-delta で還流）
+ *   - relayed: リレー子として RPC 送信した場合 true
+ * @example
+ * const { ok, spool, relayed } = mountNewSpoolFromPreset(preset, {}, "K1Max-1");
+ */
+export function mountNewSpoolFromPreset(preset, override = {}, hostname) {
+  if (!preset || !hostname) return { ok: false, spool: null, relayed: false };
+  // リレー子: 複合操作を 1 RPC で親へ（親が addSpoolFromPreset + setCurrentSpoolId を実行）
+  if (_isRelayChildSpool()) {
+    const sent = sendRelayFilament("mountNewSpoolFromPreset", { preset, override, hostname });
+    return { ok: sent, spool: null, relayed: true };
+  }
+  const spool = addSpoolFromPreset(preset, override);
+  if (!spool) return { ok: false, spool: null, relayed: false };
+  const ok = setCurrentSpoolId(spool.id, hostname);
+  return { ok, spool, relayed: false };
 }
 
 /**

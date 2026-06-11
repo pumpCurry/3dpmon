@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.785 (PR #366)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-03-11 01:00:00
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -49,7 +49,7 @@ import { pushLog } from "./dashboard_log_util.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { itemKeeperIntegration } from "./dashboard_integration_itemkeeper.js";
 import { handlePrintStateTransition } from "./dashboard_printstatus.js";
-import { parseCurPosition, getCurrentTimestamp } from "./dashboard_utils.js";
+import { parseCurPosition, getCurrentTimestamp, normalizeJobId } from "./dashboard_utils.js";
 import {
   updateXYPreview,
   updateZPreview,
@@ -493,9 +493,16 @@ export function processData(data, hostname) {
 
   // 数値化／前回値取得
   const st            = Number(data.state);
-  const currStartTime = Number(
-    data.printStartTime ?? getCurrentPrintID(host) ?? 0
-  );
+  // ★ ID:0/null 正規化（電源投入直後バグ修正）:
+  //   機器は電源投入直後に printStartTime を 0/null で報告することがある。
+  //   旧実装の `??` は 0 を素通しするため currStartTime=0 となり、
+  //   (2.3.1) で curJob.id=0（epoch 0 = 1970年の「大過去」）が生成されていた。
+  //   normalizeJobId で 0/null/負数を無効化し、保存済み現在ジョブIDへ
+  //   フォールバックする。どちらも無効なら 0（センチネル値。比較専用で
+  //   ID としては使用しない）。
+  const currStartTime = normalizeJobId(data.printStartTime)
+    ?? normalizeJobId(getCurrentPrintID(host))
+    ?? 0;
   const currJobTime   = Number(data.printJobTime     || 0);
   const currSelfPct   = Number(data.withSelfTest      || 0);
   const device        = Number(data.deviceState      || 0);
@@ -554,8 +561,14 @@ export function processData(data, hostname) {
     // 現在ジョブを即座に保存（printFileName/fileName が同一メッセージに含まれていれば反映）
     {
       const curJob = printManager.loadCurrent(host) || {};
-      curJob.id = currStartTime;
-      curJob.startTime = new Date(currStartTime * 1000).toISOString();
+      // ★ ID:0/null 正規化: currStartTime=0（センチネル）のときは id/startTime を
+      //   書き込まない。0 を書くと epoch 0（1970年）の現在ジョブが生成され、
+      //   履歴ID比較・サムネイル解決が誤動作する。実IDは後続メッセージの
+      //   printStartTime 受信時（後段の data.printStartTime>0 ガード付き処理）で設定される。
+      if (currStartTime > 0) {
+        curJob.id = currStartTime;
+        curJob.startTime = new Date(currStartTime * 1000).toISOString();
+      }
       const wsFileName = data.printFileName || data.fileName;
       if (wsFileName) {
         curJob.filename = String(wsFileName).split("/").pop();
@@ -803,9 +816,26 @@ export function processData(data, hostname) {
   }
 
   // (2.7.4) 進捗100%以上で履歴登録（重複防止付き）
-  if (Number(data.printProgress ?? 0) >= 100) {
+  // ★ ID:0/null 正規化（電源投入直後バグ修正）:
+  //   電源投入直後、機器は前回印刷の進捗(printProgress=100)を printStartTime=0/null と
+  //   ともに push することがある。旧実装は entry.id=0（epoch 0 = 1970年の「大過去」）の
+  //   ゴースト履歴を生成し、(a) 履歴テーブルに偽エントリが出現しサムネイル解決が破綻、
+  //   (b) 以後の h.id===0 照合が偽エントリへ吸着してフィラメント情報を誤復元、
+  //   (c) 同一ID重複防止により実ジョブの完了記録が登録スキップされる、を引き起こしていた。
+  //   printStartTime が無効な場合は保存済み現在ジョブID→aggregator の現在IDへ
+  //   フォールバックし、いずれも無効なら履歴登録自体をスキップする
+  //   （完了履歴は機器の historyList が信頼ソースであり、後から必ず補完される）。
+  const _completedJobId = Number(data.printProgress ?? 0) >= 100
+    ? (normalizeJobId(data.printStartTime)
+        ?? normalizeJobId(printManager.loadCurrent(host)?.id)
+        ?? normalizeJobId(getCurrentPrintID(host)))
+    : null;
+  if (Number(data.printProgress ?? 0) >= 100 && _completedJobId == null) {
+    console.debug(`[processData] ${host}: printProgress>=100 だが有効なジョブIDが無いため履歴登録をスキップ（電源投入直後の stale push と判断）`);
+  }
+  if (_completedJobId != null) {
     const entry = { ...data };
-    entry.id = Number(data.printStartTime || 0);
+    entry.id = _completedJobId;
     const extraKeys = [
       "preparationTime",
       "firstLayerCheckTime",

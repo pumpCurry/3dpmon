@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.767 (PR #353)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.197 (PR #88)
-* @lastModified 2025-08-07 22:24:00
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -42,7 +42,7 @@ import {
   MAX_PRINT_HISTORY
 } from "./dashboard_storage.js";
 
-import { formatEpochToDateTime, formatDuration } from "./dashboard_utils.js";
+import { formatEpochToDateTime, formatDuration, normalizeJobId } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, scopedById, setStoredDataForHost } from "./dashboard_data.js";
@@ -545,6 +545,10 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
  */
 export function parseRawHistoryList(rawArray, baseUrl, host) {
   return rawArray
+    // ★ ID:0/null 正規化: 無効ID（0/null/負数）のエントリは履歴として扱わない。
+    //   電源投入直後の stale push 由来のゴースト（id=0 = epoch 1970）を
+    //   パース境界で遮断する（過去バージョンで保存済みのゴーストも再パース時に消える）。
+    .filter(r => normalizeJobId(r?.id) != null)
     .filter(r =>
       (typeof r.filename === "string" && r.filename.length > 0) ||
       (Array.isArray(r.filamentInfo) && r.filamentInfo.length > 0)
@@ -580,7 +584,9 @@ export function saveCurrent(job, hostname) {
  * @returns {Array<Object>}
  */
 export function loadHistory(hostname) {
-  return loadPrintHistory(hostname);
+  // ★ ID:0/null 正規化: 過去バージョンが保存した無効ID（0/null）のゴースト履歴を
+  //   読み出し境界で除去する（一度の保存サイクルで永続データからも消える）。
+  return loadPrintHistory(hostname).filter(j => normalizeJobId(j?.id) != null);
 }
 
 /**
@@ -597,6 +603,8 @@ export function loadHistory(hostname) {
 export function saveHistory(jobs, hostname) {
   const host = hostname;
   if (!host) return;
+  // ★ ID:0/null 正規化: 無効IDのエントリは保存しない（書き込み境界の最終防衛線）
+  jobs = Array.isArray(jobs) ? jobs.filter(j => normalizeJobId(j?.id) != null) : jobs;
   const json = JSON.stringify(jobs);
   if (json === _lastSavedJsonMap.get(host)) {
     // 変更なしならスキップ
@@ -1448,6 +1456,13 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       showVideoOverlay(raw.videoUrl);
     });
     tr.querySelector(".spool-edit")?.addEventListener("click", async ev => {
+      // ★ リレー子（satellite）では履歴フィラメント修正は未対応（複合操作のRPC未実装）。
+      //   ローカル状態だけが書き換わる「見かけ操作」を防ぐため明示ブロックする。
+      if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+        const { showAlert } = await import("./dashboard_notification_manager.js");
+        showAlert("履歴のフィラメント修正は親機でのみ操作できます", "warn");
+        return;
+      }
       const sid = ev.currentTarget?.dataset.id;
       const materialUsedMm = raw.usagematerial || 0;
       const result = await showHistoryFilamentDialog({
@@ -1489,6 +1504,12 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
     });
     tr.querySelector(".spool-assign")?.addEventListener("click", async () => {
+      // ★ リレー子（satellite）では履歴フィラメント指定は未対応（複合操作のRPC未実装）。
+      if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+        const { showAlert } = await import("./dashboard_notification_manager.js");
+        showAlert("履歴のフィラメント指定は親機でのみ操作できます", "warn");
+        return;
+      }
       const materialUsedMm = raw.usagematerial || 0;
       const result = await showHistoryFilamentDialog({
         hostname, materialUsedMm, currentSpoolId: null, jobId: String(raw.id)

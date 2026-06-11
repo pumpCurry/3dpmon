@@ -18,9 +18,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.790 (PR #367)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-03-12 12:00:00
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -49,6 +49,7 @@ import {
   getSpoolById,
   confirmInferredSpool,
   revertInferredSpool,
+  mountNewSpoolFromPreset,
   SPOOL_STATE
 } from "./dashboard_spool.js";
 import {
@@ -885,17 +886,13 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
       mountBtn.className = "btn-font-xs";
       mountBtn.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        const sp = addSpoolFromPreset(p);
-        if (!sp) return;
+        // ★ 装着先を先に確定してから開封する。
+        //   - 装着先選択をキャンセルしたときに未装着スプールを作らない（旧実装の改善）
+        //   - リレー子（satellite）では「開封+装着」を 1 RPC（mountNewSpoolFromPreset）で
+        //     親へ委譲する必要があるため、開封より前に装着先が必要
+        let targetHost = null;
         if (hosts.length === 1) {
-          if (!setCurrentSpoolId(sp.id, hosts[0])) {
-            showAlert("装着に失敗しました", "warn");
-            return;
-          }
-          _syncFilamentPreview(hosts[0], sp);
-          if (onRegisteredRefresh) onRegisteredRefresh();
-          render();
-          showAlert("スプールを装着しました", "success");
+          targetHost = hosts[0];
         } else if (hosts.length > 1) {
           const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
           const hostOptions = hosts.map(h => {
@@ -905,7 +902,7 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
           const ok = await showConfirmDialog({
             level: "info",
             title: "装着先の選択",
-            html: `<div class="fm-host-prompt">${formatSpoolDisplayId(sp)} を装着するプリンタを選択</div>
+            html: `<div class="fm-host-prompt">${p.name || `${p.brand} ${p.colorName}`} を装着するプリンタを選択</div>
               <select id="mount-host-select" class="fm-host-select">
                 ${hosts.map((h, i) => `<option value="${h}">${hostOptions[i]}</option>`).join("")}
               </select>`,
@@ -914,21 +911,26 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
           });
           if (!ok) return;
           const selEl = document.getElementById("mount-host-select");
-          const targetHost = selEl?.value;
+          targetHost = selEl?.value || null;
           if (!targetHost) { showAlert("装着先が選択されていません", "warn"); return; }
-          if (!setCurrentSpoolId(sp.id, targetHost)) {
-            showAlert("このスプールは既に別のプリンタに装着されています", "warn");
-            return;
-          }
-          _syncFilamentPreview(targetHost, sp);
-          if (onRegisteredRefresh) onRegisteredRefresh();
-          render();
-          showAlert("スプールを装着しました", "success");
-        } else {
+        }
+        if (!targetHost) {
+          // 接続機器なし: 従来どおり登録のみ（リレー子では親へ登録 RPC）
+          addSpoolFromPreset(p);
           if (onRegisteredRefresh) onRegisteredRefresh();
           render();
           showAlert("スプールを登録しました（装着先が見つかりません）", "info");
+          return;
         }
+        const r = mountNewSpoolFromPreset(p, {}, targetHost);
+        if (!r.ok) {
+          showAlert("装着に失敗しました", "warn");
+          return;
+        }
+        if (!r.relayed && r.spool) _syncFilamentPreview(targetHost, r.spool);
+        if (onRegisteredRefresh) onRegisteredRefresh();
+        render();
+        showAlert(r.relayed ? "装着操作を親機へ送信しました" : "スプールを装着しました", "success");
       });
       cmd.appendChild(mountBtn);
       tr.appendChild(cmd);
@@ -1413,7 +1415,11 @@ function createRegisteredContent(openEditor, hostname) {
             if (!targetHost) { showAlert("スプールの装着先が不明です", "warn"); return; }
             const ok = setCurrentSpoolId(null, targetHost);
             // setCurrentSpoolId が hostSpoolMap 不整合で取り外せなかった場合の安全弁
-            if (!ok || sp.isActive) {
+            // ★ リレー子では実処理が親に委譲され、ローカル状態は relay-delta 還流まで
+            //   変化しない（sp.isActive が true のまま）ため、安全弁による直接書換は
+            //   行わない（親権威データとの乖離・偽の取り外し表示を防ぐ）
+            const _isRelayChildHere = typeof window !== "undefined" && window._3dpmonRelayChild === true;
+            if (!_isRelayChildHere && (!ok || sp.isActive)) {
               sp.isActive = false;
               sp.isInUse = false;
               sp.hostname = null;
