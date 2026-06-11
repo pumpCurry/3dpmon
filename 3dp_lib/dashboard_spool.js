@@ -706,12 +706,15 @@ export function setCurrentSpoolId(id, hostname) {
     const _consumed = Math.max(0, _startLen - (Number(prevSpool.remainingLengthMm) || 0));
     // 切れ確定なら旧スプールを 0 へ駆動（物理的に空）。それ以外は consumed-so-far。
     _Uold = _runoutConfirmed ? _startLen : _consumed;
-    finalizeFilamentUsage(_Uold, prevSpool.currentPrintID, host);
+    // ★ ADR-0005: per-reel 確定は exact（_Uold が権威。見積りフォールバック禁止）。
+    //   残量0で開始したスプール(_startLen=0→_Uold=0)で架空消費が記録される根本バグの修正。
+    finalizeFilamentUsage(_Uold, prevSpool.currentPrintID, host, true, { exact: true });
   } else if (host && prevSpool && !newSpool && prevSpool.currentJobStartLength != null) {
     // 純粋な取り外し（mid-print だが新スプール無し）: 従来どおり中途確定（残量保全）。
     const _used = Math.max(0,
       (Number(prevSpool.currentJobStartLength) || 0) - (Number(prevSpool.remainingLengthMm) || 0));
-    finalizeFilamentUsage(_used, prevSpool.currentPrintID, host);
+    // ★ per-reel 確定は exact（_used が権威。0 のとき見積りで埋めない）。
+    finalizeFilamentUsage(_used, prevSpool.currentPrintID, host, true, { exact: true });
   }
 
   // per-host マップを更新（hostSpoolMap が唯一の権威）
@@ -801,7 +804,11 @@ export function setCurrentSpoolId(id, hostname) {
         newSpool.currentJobStartLength = _newRemain;
         _rebaselineHostUsage?.(host, { accumulated: 0, prevUsed: _usedAtSwap });
         // 進行中ジョブ J に旧リールの per-reel 消費(U_old)を信頼ソースへ反映（derive 分割帰属）。
-        if (_J) _upsertSplitReel(host, _J, prevSpool, _Uold);
+        // ★ ADR-0005 防御: 旧リールの消費が 0（残量0で開始＝空リール）のときは per-reel に
+        //   載せない。0 を載せると当該ジョブが「複数スプール」扱いになり、実際に印刷した
+        //   新スプールが materialUsedMm フォールバックを受けられず未帰属(=満タンのまま)になる。
+        //   0 リールを除けばジョブは単一スプール扱いとなり、新スプールが正しく帰属される。
+        if (_J && _Uold > 0) _upsertSplitReel(host, _J, prevSpool, _Uold);
       }
       // 旧スプールは印刷フラグ解除済み → 信頼ソースから残量を冪等補正
       //   （whole: until=Lc で J 除外 → J前の値へ復元 / split: until=J で U_old 反映）。
@@ -1409,6 +1416,13 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * @param {string} [jobId=""] - 印刷ジョブID
  * @param {string} hostname - ホスト名
  * @param {boolean} [isSuccess=true] - 印刷成功フラグ（false=失敗/キャンセル）
+ * @param {Object} [opts]
+ * @param {boolean} [opts.exact=false] - true の場合、lengthMm を権威値として扱い
+ *   currentJobExpectedLength への「見積りフォールバック」を行わない（ADR-0005）。
+ *   印刷途中の per-reel 確定（split 交換／取り外し）で 0/実消費を渡す呼び出しに使う。
+ *   これを付けないと used<=0 のとき見積り長を架空消費として代入し、空スプールに
+ *   架空消費を記録＋進行中ジョブを早期に完了マークしてしまう（残量0で印刷開始した
+ *   スプールを途中交換したときの記録消失バグの根本原因）。
  * @returns {void}
  * @description
  * 使用完了時点のスプール情報を履歴にスナップショットとして保存する。
@@ -1416,7 +1430,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * name/color/material などのメタ情報を同時に記録する。
  * 履歴更新後は {@link updateHistoryList} を介して永続化し UI へ即時反映する。
  */
-export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true) {
+export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true, { exact = false } = {}) {
   const host = hostname;
   if (!host) return;
   const s = getCurrentSpool(host);
@@ -1449,12 +1463,15 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   const expectedLength = Number(s.currentJobExpectedLength ?? NaN);
   let resolvedUsed = used;
   if (
+    !exact &&
     (isNaN(resolvedUsed) || resolvedUsed <= 0) &&
     !isNaN(expectedLength) &&
     expectedLength > 0
   ) {
     // 使用量が0または不明なのに予定使用量がある場合は、
-    // 予定使用量をフォールバックとして採用し、ログを残す
+    // 予定使用量をフォールバックとして採用し、ログを残す。
+    // ★ ADR-0005: per-reel 確定(exact=true)では行わない。途中交換で 0/実消費を
+    //   渡すのに見積り長を架空消費として代入すると記録が破壊されるため。
     console.warn(
       "finalizeFilamentUsage: used length was empty. fallback to expected length.",
       { used: resolvedUsed, expectedLength, jobId: normalizedJobId }
