@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.2.1023 (2026-06-11)
+
+### フィラメント記録消失バグの修正（残量0で開始したスプールの印刷中交換 / ADR-0005 B8）
+
+#### 修正（致命的データ整合バグ）
+- **残量0/要交換のスプールで印刷開始 → 印刷中にフィラメント交換すると、完了後に実際に印刷した新スプールの記録が捨てられ、新スプールが満タン(100%)のまま残り印刷記録が残らない問題を修正**。
+  - 根本原因: 残量0で印刷開始すると `beginExternalPrint` が `currentJobStartLength=0` / `currentJobExpectedLength=見積り長` をセットする。一時停止中(split)交換で `setCurrentSpoolId` が `finalizeFilamentUsage(_Uold=0)` を呼ぶと、finalize の「used<=0 → 見積り長フォールバック」が誤発火し、空スプールにジョブ全体の見積り長(架空消費)を記録・進行中ジョブを早期に完了マーク・`printCount` を水増しする。結果ジョブが旧スプールだけの完了に化け、実際に印刷した新スプールが未帰属となり満タンに reconcile される。
+  - 修正(根本): `finalizeFilamentUsage` に `{ exact }` オプションを追加し、per-reel 確定(split 交換／取り外し)では見積りフォールバックを抑止（`lengthMm` を権威値として扱う）。
+  - 修正(防御): 消費0の旧リールは split `filamentInfo` に載せない（`_Uold>0` 条件）。これによりジョブが単一スプール扱いとなり、新スプールが `materialUsedMm` で正しく帰属される（`NEW=100%` 固定化も解消）。
+
+#### テスト
+- 回帰テスト `tests/unit/dashboard_filament_runout_start_swap.test.js` を追加（4件: 架空消費なし／新スプール正帰属／実測≒0でも非100%／genuine split 回帰防止）。全テスト緑、eslint 0 error。
+
+---
+
 ## v2.2.1022 (2026-06-11)
 
 ### 状態パネル「エラー状況」の per-host 表示修正 ＋ 単一ホストバグの再発防止インフラ
