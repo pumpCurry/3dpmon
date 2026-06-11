@@ -2560,23 +2560,6 @@ export function setupUploadUI(root, hostname) {
   if (dropClose) dropClose.addEventListener("click", hideDropLayer);
 }
 
-/** --- 1) タブ切り替えの初期設定 --- */
-export function initHistoryTabs() {
-  const btnH = document.getElementById("tab-print-history");
-  const btnF = document.getElementById("tab-file-list");
-  const pH = document.getElementById("panel-print-history-tab");
-  const pF = document.getElementById("panel-file-list");
-  if (!btnH || !btnF || !pH || !pF) return;
-  btnH.addEventListener("click", () => {
-    btnH.classList.add("active"); btnF.classList.remove("active");
-    pH.classList.remove("hidden"); pF.classList.add("hidden");
-  });
-  btnF.addEventListener("click", () => {
-    btnF.classList.add("active"); btnH.classList.remove("active");
-    pF.classList.remove("hidden"); pH.classList.add("hidden");
-  });
-}
-
 /**
  * 印刷履歴からファイル単位の統計情報を生成する。
  * 完了済みの履歴のみを対象とし、印刷回数と総使用時間を集計する。
