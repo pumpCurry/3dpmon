@@ -758,18 +758,8 @@ export function ingestData(data, hostname) {
     persistAggregatorState(host);
   }
 
-/*  // H. エラー検知
-  // ① 生データ中に errorCode があれば拾う
-  const { value: errCode } = getMergedValueWithSource("err", data);
-  // ② storedData にセット（rawValue=false なので「表示用 computedValue」に流し込み）
-  if (errCode != null) {
-    // 例: コード123 の場合は "コード123"
-    setStoredData("errorStatus", `コード${errCode.errcode},キー${errCode.key}`, false);
-  } else {
-    // エラーなしなら '---'
-    setStoredData("errorStatus", null, false);
-  }
-*/
+  // H. エラー検知は dashboard_msg_handler.js の (2.2) で per-host 処理へ一本化済み。
+  //   旧・非ホストスコープのエラー直書き（errorStatus への単一ホスト書き込み）は撤去。
 }
 
 

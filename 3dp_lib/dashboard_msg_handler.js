@@ -167,7 +167,7 @@ function _buildNotifyPayload(host, machine, opts = {}) {
 const _WS_SKIP_KEYS = new Set([
   "hostname",         // ホスト識別用、storedData 不要
   "ModeCode",         // プロトコル種別（heart_beat 等）
-  "err",              // 2.2 でエラー処理済み
+  "err",              // 2.2 でログ/通知＋storedData["err"] へ明示格納済み（バルク反映しない）
   "historyList",      // 配列、printManager で処理
   "elapseVideoList",  // 配列、printManager で処理
   "curPosition",      // 2.7.1 で positionX/Y/Z に分解済み
@@ -471,6 +471,11 @@ export function processData(data, hostname) {
     const isSame = prev && prev.errcode === errcode && prev.key === key;
     machine.runtimeData.lastError = { errcode, key };
     if (!isSame) {
+      // 状態パネル「エラー状況」(data-field="errorStatus") 表示用に storedData へ反映する。
+      // err は _WS_SKIP_KEYS によりバルク反映 (2.7.3) から除外されるため、ここで全ホスト分を
+      // 明示的に格納する。dashboardMapping["err"] → formatErrorStatus が {errcode,key} を期待。
+      // 変更時のみ更新するので、毎メッセージでの再描画(青フラッシュ)は発生しない。
+      _set("err", { errcode, key }, true, true);
       if (errcode === 0 && key === 0) {
         pushLog("エラーが解消しました。", "info", false, host);
         notificationManager.notify("errorResolved", { hostname: host });
@@ -761,8 +766,9 @@ export function processData(data, hostname) {
   // storedData に格納せず、dirty key への追加も回避する
   for (const [k, v] of Object.entries(data)) {
     if (_WS_SKIP_KEYS.has(k)) continue;
-    // 配列・オブジェクト型（err以外）はスカラー値ではないため storedData に格納しない
-    if (v !== null && typeof v === "object" && !Array.isArray(v) && k !== "err") continue;
+    // 配列・オブジェクト型はスカラー値ではないため storedData に格納しない
+    // （err は _WS_SKIP_KEYS で除外済みのため、ここには到達しない）
+    if (v !== null && typeof v === "object" && !Array.isArray(v)) continue;
     if (Array.isArray(v)) continue;
     _set(k, v, true, true);
   }

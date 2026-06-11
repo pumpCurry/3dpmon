@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.2.1022 (2026-06-11)
+
+### 状態パネル「エラー状況」の per-host 表示修正 ＋ 単一ホストバグの再発防止インフラ
+
+#### 修正
+- **状態パネル「エラー状況」が2台目以降で表示されない問題を修正**: WS受信の `err`(errcode/key) がどのホストの `storedData` にも格納されておらず（マルチプリンタ化 commit 627fc47 で混入した書き漏れ）、`errorStatus` 要素が更新されなかった。`processData` のエラー処理(2.2)で、エラー状態が変化した時のみ per-host に `storedData["err"]` を格納するよう修正（全ホストでエラーコード表示・無駄な再描画なし）。
+
+#### 再発防止（単一ホスト＝「優先1ホスト」アンチパターン対策）
+- **behavioral マルチホスト回帰テスト** `tests/unit/processData_multihost.test.js`: 実 `processData` を2〜3台分流し、各ホストが期待フィールド(err含む)を独立して持つことを検証（fix を外すと red になることを実証）。grep/目視では見つからない「書き漏れ(omission)」型バグを捕捉する。
+- **静的ガード** `tests/guards/anti_pattern_guard.test.js`: 非ホストスコープAPI `setStoredData(` / `getStoredData(` / `getCurrentHostname(` をソース全体から禁止。
+- 共有ヘルパ `tests/helpers/multihost.js`。両テストとも blocking CI（`test` job）で常時実行。
+- 全 `getElementById`/`querySelector` 367箇所/26ファイルを監査 → ライブな host-scoping 漏れ **0件** を確認。
+
+#### 整理
+- 旧 aggregator のコメントアウト済みエラー処理（非ホスト `setStoredData("errorStatus")`）を撤去。
+- デッドコード削除: `dashboard_filemanager.js`（printmanager に置換済の未使用モジュール）、`initHistoryTabs`（パネルシステム化以前のタブ切替・未呼出・存在しないID参照）。
+
+#### テスト
+- 全443テスト緑（既存435＋behavioral 4＋guard 4）、eslint 0 error。
+
+---
+
 ## v2.2.1021 (2026-06-09)
 
 ### 外部連携UI + ItemKeeper 連携（印刷履歴プッシュ）+ 汎用Webhook独立化
