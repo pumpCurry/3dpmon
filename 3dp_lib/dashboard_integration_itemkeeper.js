@@ -30,6 +30,7 @@ import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { getSpoolById, getMaterialDensity, weightFromLength } from "./dashboard_spool.js";
 import { attributedUsed, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
+import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 
 /** ペイロードスキーマ識別子 */
 const IK_SCHEMA = "3dpmon.ik.history.v1";
@@ -47,8 +48,11 @@ const DEFAULTS = Object.freeze({
   clientId: "",
   secret: "",
   encoding: "none",      // Phase1 固定
-  onStart: true,
-  onFinish: true,
+  onStart: true,         // 印刷開始時に送信
+  onFinish: true,        // 印刷終了(完了/失敗)時に送信
+  onPause: true,         // 一時停止時に送信
+  onInterval: false,     // 指定タイミング(intervalMin 分ごと)に送信
+  intervalMin: 5,        // 指定タイミング間隔[分]（既定5）
   historyScope: "all"    // "all" | "recent:{n}"
 });
 
@@ -70,8 +74,12 @@ function escHtml(s) {
  */
 export class ItemKeeperIntegration {
   constructor() {
-    /** @type {{enabled:boolean,endpoint:string,clientId:string,secret:string,encoding:string,onStart:boolean,onFinish:boolean,historyScope:string}} */
+    /** @type {{enabled:boolean,endpoint:string,clientId:string,secret:string,encoding:string,onStart:boolean,onFinish:boolean,onPause:boolean,onInterval:boolean,intervalMin:number,historyScope:string}} */
     this.settings = { ...DEFAULTS };
+    /** @type {number|null} 指定タイミング送信タイマーID */
+    this._intervalTimer = null;
+    /** @type {boolean} 外部連携モーダル編集中に未保存変更があるか */
+    this._dirty = false;
   }
 
   // ───────────────────────────── 設定 load/save ─────────────────────────────
@@ -84,6 +92,7 @@ export class ItemKeeperIntegration {
     const saved = monitorData.appSettings[SETTINGS_KEY];
     this.settings = { ...DEFAULTS, ...(saved && typeof saved === "object" ? saved : {}) };
     this.settings.encoding = "none"; // Phase1 は none 固定
+    this._restartIntervalTimer();
   }
 
   /**
@@ -93,6 +102,7 @@ export class ItemKeeperIntegration {
   persist() {
     monitorData.appSettings[SETTINGS_KEY] = { ...this.settings };
     saveUnifiedStorage(true);
+    this._restartIntervalTimer();
   }
 
   // ───────────────────────────── ペイロード組立 ─────────────────────────────
@@ -478,7 +488,7 @@ export class ItemKeeperIntegration {
    * dashboard_msg_handler.js のトリガ箇所から呼び出す。
    *
    * @param {string} host - イベント発生ホスト名
-   * @param {"started"|"finished"} kind - イベント種別
+   * @param {"started"|"finished"|"paused"} kind - イベント種別
    * @returns {void}
    */
   onPrintEvent(host, kind) {
@@ -486,12 +496,32 @@ export class ItemKeeperIntegration {
     if (!s.enabled) return;
     if (kind === "started" && !s.onStart) return;
     if (kind === "finished" && !s.onFinish) return;
+    if (kind === "paused" && !s.onPause) return;
     const t = (monitorData.appSettings.connectionTargets || [])
       .find(x => x && (x.hostname === host || x.dest === host));
     if (t && t.ikEnabled === false) return; // この機器は連携対象外
-    const trigger = kind === "started" ? "print.started" : "print.finished";
+    const trigger = kind === "started" ? "print.started"
+      : kind === "paused" ? "print.paused"
+        : "print.finished";
     this.sendSnapshot({ trigger, host })
       .catch(e => console.warn("[itemkeeper] sendSnapshot failed:", e?.message || e));
+  }
+
+  /**
+   * 指定タイミング（intervalMin 分ごと）の定期送信タイマーを再構築する。
+   * enabled かつ onInterval のときのみ作動。設定の読込・変更のたびに呼ぶ。
+   * @private
+   * @returns {void}
+   */
+  _restartIntervalTimer() {
+    if (this._intervalTimer) { clearInterval(this._intervalTimer); this._intervalTimer = null; }
+    const s = this.settings;
+    if (!s.enabled || !s.onInterval) return;
+    const min = (Number(s.intervalMin) > 0) ? Number(s.intervalMin) : 5;
+    this._intervalTimer = setInterval(() => {
+      this.sendSnapshot({ trigger: "snapshot.interval" })
+        .catch(e => console.warn("[itemkeeper] interval send failed:", e?.message || e));
+    }, min * 60 * 1000);
   }
 
   // ───────────────────────────── モーダル UI ─────────────────────────────
@@ -534,7 +564,6 @@ export class ItemKeeperIntegration {
           <div style="font-weight:bold;margin-bottom:6px;">📡 汎用 Webhook Push</div>
           <div style="font-size:11px;color:#667;margin-bottom:8px;">
             印刷・温度・フィラメント等のイベントを構造化JSONで外部URLへ送信します（Slack/Discord/IFTTT/n8n 等）。
-            仕様: docs/develop/webhook-specification.md
           </div>
           <label style="display:block;margin-bottom:6px;">Webhook URLs（カンマ区切り）
             <textarea data-role="wh-urls" rows="2" style="width:100%;font-size:12px;box-sizing:border-box;">${escHtml(urls)}</textarea>
@@ -557,65 +586,84 @@ export class ItemKeeperIntegration {
           </div>
         </section>
 
-        <!-- ===== §B ItemKeeper 連携 ===== -->
+        <!-- ===== §B ItemKeeper 連携（OFF時は折りたたみ）===== -->
         <section style="border:1px solid #d8e0ea;border-radius:6px;padding:10px 12px;background:#fffdfa;">
-          <div style="font-weight:bold;margin-bottom:6px;">📦 ItemKeeper 連携</div>
-          <div style="font-size:11px;color:#667;margin-bottom:8px;">
-            印刷開始・完了/失敗時に印刷履歴の全件スナップショットを ItemKeeper(ik2) へ Bearer 認証で送信します。
-            仕様: docs/develop/itemkeeper-integration-specification.md
+          <div data-role="ik-header" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
+            <span data-role="ik-chevron" style="font-size:12px;color:#667;width:1em;text-align:center;">${s.enabled ? "▾" : "▸"}</span>
+            <span style="font-weight:bold;">📦 ItemKeeper 連携</span>
+            <span data-role="ik-hint" style="font-size:11px;color:#999;">${s.enabled ? "" : "（未使用 / クリックで展開）"}</span>
           </div>
-          <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-weight:bold;">
-            <input type="checkbox" data-role="ik-enabled" ${s.enabled ? "checked" : ""}>
-            この連携を有効化する
-          </label>
-          <label style="display:block;margin-bottom:6px;">接続先 URL
-            <input type="text" data-role="ik-endpoint" value="${escAttr(s.endpoint)}"
-              placeholder="itemkeeper.com（自動で https://…/api/ingest/print-events へ正規化）"
-              style="width:100%;font-size:12px;box-sizing:border-box;padding:3px 6px;border:1px solid #ccc;border-radius:3px;">
-          </label>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-            <label style="flex:1;min-width:12em;">クライアント ID
-              <input type="text" data-role="ik-clientid" value="${escAttr(s.clientId)}" autocomplete="off"
+          <div data-role="ik-body" style="${s.enabled ? "" : "display:none;"}margin-top:8px;">
+            <div style="font-size:11px;color:#667;margin-bottom:8px;">
+              印刷開始・完了/失敗時に印刷履歴の全件スナップショットを ItemKeeper(ik2) へ Bearer 認証で送信します（利用には ItemKeeper アカウントが必要）。
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-weight:bold;">
+              <input type="checkbox" data-role="ik-enabled" ${s.enabled ? "checked" : ""}>
+              この連携を有効化する
+            </label>
+            <label style="display:block;margin-bottom:6px;">接続先 URL
+              <input type="text" data-role="ik-endpoint" value="${escAttr(s.endpoint)}"
+                placeholder="itemkeeper.com（自動で https://…/api/ingest/print-events へ正規化）"
                 style="width:100%;font-size:12px;box-sizing:border-box;padding:3px 6px;border:1px solid #ccc;border-radius:3px;">
             </label>
-            <label style="flex:1;min-width:12em;">暗号キー（鍵）
-              <input type="password" data-role="ik-secret" value="${escAttr(s.secret)}" autocomplete="off"
-                style="width:100%;font-size:12px;box-sizing:border-box;padding:3px 6px;border:1px solid #ccc;border-radius:3px;">
-            </label>
-          </div>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
-            <label>暗号化
-              <select data-role="ik-encoding" style="font-size:12px;padding:2px 4px;">
-                <option value="none" selected>none（平文・Bearer認証）</option>
-                <option value="aes-256-gcm" disabled>aes-256-gcm（受信側 Phase4+・未対応）</option>
-              </select>
-            </label>
-            <label>履歴範囲
-              <select data-role="ik-scope" style="font-size:12px;padding:2px 4px;">
-                <option value="all" ${s.historyScope === "all" ? "selected" : ""}>全件</option>
-                <option value="recent:200" ${s.historyScope === "recent:200" ? "selected" : ""}>直近200件</option>
-                <option value="recent:500" ${s.historyScope === "recent:500" ? "selected" : ""}>直近500件</option>
-              </select>
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;">
-              <input type="checkbox" data-role="ik-onstart" ${s.onStart ? "checked" : ""}>開始時に送信
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;">
-              <input type="checkbox" data-role="ik-onfinish" ${s.onFinish ? "checked" : ""}>完了/失敗時に送信
-            </label>
-          </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+              <label style="flex:1;min-width:12em;">クライアント ID
+                <input type="text" data-role="ik-clientid" value="${escAttr(s.clientId)}" autocomplete="off"
+                  style="width:100%;font-size:12px;box-sizing:border-box;padding:3px 6px;border:1px solid #ccc;border-radius:3px;">
+              </label>
+              <label style="flex:1;min-width:12em;">暗号キー（鍵）
+                <input type="password" data-role="ik-secret" value="${escAttr(s.secret)}" autocomplete="off"
+                  style="width:100%;font-size:12px;box-sizing:border-box;padding:3px 6px;border:1px solid #ccc;border-radius:3px;">
+              </label>
+            </div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+              <label>暗号化
+                <select data-role="ik-encoding" style="font-size:12px;padding:2px 4px;">
+                  <option value="none" selected>none（平文・Bearer認証）</option>
+                  <option value="aes-256-gcm" disabled>aes-256-gcm（受信側 Phase4+・未対応）</option>
+                </select>
+              </label>
+              <label>履歴範囲
+                <select data-role="ik-scope" style="font-size:12px;padding:2px 4px;">
+                  <option value="all" ${s.historyScope === "all" ? "selected" : ""}>全件</option>
+                  <option value="recent:200" ${s.historyScope === "recent:200" ? "selected" : ""}>直近200件</option>
+                  <option value="recent:500" ${s.historyScope === "recent:500" ? "selected" : ""}>直近500件</option>
+                </select>
+              </label>
+            </div>
 
-          <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF）</div>
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <thead><tr style="color:#667;text-align:left;">
-              <th style="padding:2px 6px;">機器</th><th style="padding:2px 6px;">エイリアス（ItemKeeper側の安定名）</th><th style="padding:2px 6px;">連携</th>
-            </tr></thead>
-            <tbody data-role="ik-devices">${deviceRows || `<tr><td colspan="3" style="padding:6px;color:#999;">接続先がありません</td></tr>`}</tbody>
-          </table>
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">連携タイミング</div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+              <label style="display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" data-role="ik-onstart" ${s.onStart ? "checked" : ""}>印刷開始時
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" data-role="ik-onfinish" ${s.onFinish ? "checked" : ""}>印刷終了時
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" data-role="ik-onpause" ${s.onPause ? "checked" : ""}>一時停止時
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" data-role="ik-oninterval" ${s.onInterval ? "checked" : ""}>指定タイミング
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;">(分)
+                <input type="number" data-role="ik-intervalmin" min="1" max="1440" step="1" value="${Number(s.intervalMin) || 5}"
+                  style="width:4.5em;font-size:12px;padding:2px 4px;border:1px solid #ccc;border-radius:3px;">
+              </label>
+            </div>
 
-          <div style="margin-top:8px;">
-            <button type="button" data-role="ik-test" style="font-size:12px;padding:3px 12px;">連携テスト送信</button>
-            <span data-role="ik-test-result" style="margin-left:8px;font-size:12px;"></span>
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF）</div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead><tr style="color:#667;text-align:left;">
+                <th style="padding:2px 6px;">機器</th><th style="padding:2px 6px;">エイリアス（ItemKeeper側の安定名）</th><th style="padding:2px 6px;">連携</th>
+              </tr></thead>
+              <tbody data-role="ik-devices">${deviceRows || `<tr><td colspan="3" style="padding:6px;color:#999;">接続先がありません</td></tr>`}</tbody>
+            </table>
+
+            <div style="margin-top:8px;">
+              <button type="button" data-role="ik-test" style="font-size:12px;padding:3px 12px;">連携テスト送信</button>
+              <span data-role="ik-test-result" style="margin-left:8px;font-size:12px;"></span>
+            </div>
           </div>
         </section>
 
@@ -632,6 +680,26 @@ export class ItemKeeperIntegration {
   /** @private モーダルのイベントを束ねる */
   _bindModalHandlers(container) {
     const q = sel => container.querySelector(sel);
+
+    // 編集中の未保存検知（枠外クリック等での誤破棄を確認ダイアログで防ぐ）
+    this._dirty = false;
+    const markDirty = () => { this._dirty = true; };
+    container.addEventListener("input", markDirty);
+    container.addEventListener("change", markDirty);
+
+    // ItemKeeper 節の折りたたみ（未使用の人には項目を見せない。OFFなら初期折りたたみ）
+    const ikHeader = q('[data-role="ik-header"]');
+    const ikBody = q('[data-role="ik-body"]');
+    const ikChevron = q('[data-role="ik-chevron"]');
+    const ikHint = q('[data-role="ik-hint"]');
+    if (ikHeader && ikBody) {
+      ikHeader.addEventListener("click", () => {
+        const willShow = ikBody.style.display === "none";
+        ikBody.style.display = willShow ? "" : "none";
+        if (ikChevron) ikChevron.textContent = willShow ? "▾" : "▸";
+        if (ikHint) ikHint.textContent = willShow ? "" : "（未使用 / クリックで展開）";
+      });
+    }
 
     // 汎用Webhook テスト送信（下書きの URL でテスト）
     const whTest = q('[data-role="wh-test"]');
@@ -673,12 +741,13 @@ export class ItemKeeperIntegration {
     if (saveBtn) {
       saveBtn.addEventListener("click", () => {
         this._commitModal(container);
+        this._dirty = false;
         this._closeModal();
       });
     }
-    // 変更を破棄してキャンセル
+    // 変更を破棄してキャンセル（明示操作なので確認なしで即破棄）
     const cancelBtn = q('[data-role="ext-cancel"]');
-    if (cancelBtn) cancelBtn.addEventListener("click", () => this._closeModal());
+    if (cancelBtn) cancelBtn.addEventListener("click", () => { this._dirty = false; this._closeModal(); });
   }
 
   /** @private モーダルの DOM 値を確定し永続化する（保存して戻る） */
@@ -702,6 +771,10 @@ export class ItemKeeperIntegration {
     this.settings.historyScope = q('[data-role="ik-scope"]')?.value || "all";
     this.settings.onStart = !!q('[data-role="ik-onstart"]')?.checked;
     this.settings.onFinish = !!q('[data-role="ik-onfinish"]')?.checked;
+    this.settings.onPause = !!q('[data-role="ik-onpause"]')?.checked;
+    this.settings.onInterval = !!q('[data-role="ik-oninterval"]')?.checked;
+    const _im = parseInt(q('[data-role="ik-intervalmin"]')?.value, 10);
+    this.settings.intervalMin = (Number.isFinite(_im) && _im > 0) ? _im : 5;
 
     // ── 対象機器（connectionTargets に反映）──
     const targets = monitorData.appSettings.connectionTargets || [];
@@ -718,6 +791,23 @@ export class ItemKeeperIntegration {
 
     // 永続化（即時フラッシュ＝即反映）
     this.persist();
+  }
+
+  /**
+   * 外部連携モーダルを閉じる要求（枠外クリック/Esc/×から呼ぶ）。
+   * 未保存の変更があれば共通の確認ダイアログで破棄可否を尋ね、許可時のみ閉じる。
+   * @returns {Promise<void>}
+   */
+  async requestCloseExternal() {
+    if (!this._dirty) { this._closeModal(); return; }
+    const discard = await showConfirmDialog({
+      level: "warn",
+      title: "変更を破棄しますか？",
+      message: "外部連携の編集内容は保存されていません。破棄して閉じますか？（「保存して戻る」で保存できます）",
+      confirmText: "破棄して閉じる",
+      cancelText: "編集に戻る"
+    });
+    if (discard) { this._dirty = false; this._closeModal(); }
   }
 
   /** @private 外部連携モーダルを閉じる */

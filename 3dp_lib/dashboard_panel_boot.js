@@ -545,8 +545,8 @@ function _initTopMenuBar() {
   const externalOverlay = document.getElementById("external-modal-overlay");
   const externalClose   = document.getElementById("external-modal-close");
   const externalBody    = document.getElementById("external-modal-body");
-  /** @private 外部連携モーダルを閉じる（=変更を破棄してキャンセル。確定は「保存して戻る」のみ）*/
-  const closeExternal = () => { if (externalOverlay) externalOverlay.classList.remove("open"); };
+  /** @private 外部連携モーダルを閉じる要求（未保存があれば破棄確認ダイアログ。確定は「保存して戻る」のみ）*/
+  const closeExternal = () => { itemKeeperIntegration.requestCloseExternal(); };
   if (externalBtn && externalOverlay) {
     externalBtn.addEventListener("click", () => {
       // 開くたびに保存値からフォームを再構築（トランザクション編集の下書き）

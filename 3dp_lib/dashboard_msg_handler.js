@@ -673,6 +673,8 @@ export function processData(data, hostname) {
     notificationManager.notify("printPaused", _buildNotifyPayload(host, machine, {
       includeProgress: true, includeLayer: true
     }));
+    // ItemKeeper 連携: 一時停止時に全件スナップショットを送信（onPause 設定で制御）
+    itemKeeperIntegration.onPrintEvent(host, "paused");
     persistHistoryTimers(currStartTime, host);
   }
   // (2.5.2) 停止解除
