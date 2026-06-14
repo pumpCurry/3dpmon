@@ -28,9 +28,9 @@
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
  *
- * @version 1.390.787 (PR #367)
+ * @version 1.390.1110 (PR #380)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-03-12
+ * @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1289,9 +1289,14 @@ export function disconnectWs(host) {
  */
 export function sendCommand(method, params = {}, host) {
   // ★ リレー子モード: 親経由でコマンド送信
+  //   呼び出し側が await/then できるよう、親モードと同様に Promise を返す
+  //   （旧実装は undefined を返しており、戻り値を使う呼び出し元が壊れる可能性があった）
   if (window._3dpmonRelayChild) {
-    import("./dashboard_client_sync.js").then(m => m.sendRelayCommand(method, params, host));
-    return;
+    return import("./dashboard_client_sync.js")
+      .then(m => m.sendRelayCommand(method, params, host))
+      .then(sent => sent
+        ? null
+        : Promise.reject(new Error("relay not connected or readonly")));
   }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
@@ -1331,6 +1336,15 @@ export function sendCommand(method, params = {}, host) {
  * @returns {Promise<Object>} サーバー result フィールド
  */
 export function sendGcodeCommand(gcode, host) {
+  // ★ リレー子モード: 親経由で G-code を送信（旧実装はこの分岐が無く、
+  //   サテライトの G-code 操作が「WS未接続」エラーでサイレント失敗していた）
+  if (window._3dpmonRelayChild) {
+    return import("./dashboard_client_sync.js")
+      .then(m => m.sendRelayCommand("set", { gcodeCmd: gcode }, host))
+      .then(sent => sent
+        ? null
+        : Promise.reject(new Error("relay not connected or readonly")));
+  }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
     const now = Date.now();
