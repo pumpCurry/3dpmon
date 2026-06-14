@@ -132,3 +132,101 @@ describe("_commitModal（保存して戻る）", () => {
     expect(document.getElementById("external-modal-overlay").classList.contains("open")).toBe(false);
   });
 });
+
+describe("折りたたみ / 連携タイミング / 仕様非表示", () => {
+  it("OFF時は ItemKeeper 本体(ik-body)を折りたたむ（▸）", () => {
+    const ik = new ItemKeeperIntegration(); // enabled:false 既定
+    const c = openModal(ik);
+    expect(c.querySelector('[data-role="ik-body"]').style.display).toBe("none");
+    expect(c.querySelector('[data-role="ik-chevron"]').textContent).toBe("▸");
+  });
+  it("ON時は展開（▾）", () => {
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    expect(c.querySelector('[data-role="ik-body"]').style.display).not.toBe("none");
+    expect(c.querySelector('[data-role="ik-chevron"]').textContent).toBe("▾");
+  });
+  it("ヘッダクリックで展開トグル", () => {
+    const ik = new ItemKeeperIntegration();
+    const c = openModal(ik);
+    const body = c.querySelector('[data-role="ik-body"]');
+    expect(body.style.display).toBe("none");
+    c.querySelector('[data-role="ik-header"]').click();
+    expect(body.style.display).not.toBe("none");
+  });
+  it("連携タイミング欄(開始/終了/一時停止/指定/分=既定5)を描画", () => {
+    const ik = new ItemKeeperIntegration();
+    const c = openModal(ik);
+    expect(c.querySelector('[data-role="ik-onstart"]')).toBeTruthy();
+    expect(c.querySelector('[data-role="ik-onfinish"]')).toBeTruthy();
+    expect(c.querySelector('[data-role="ik-onpause"]')).toBeTruthy();
+    expect(c.querySelector('[data-role="ik-oninterval"]')).toBeTruthy();
+    expect(c.querySelector('[data-role="ik-intervalmin"]').value).toBe("5");
+  });
+  it("仕様ファイルパスを表示しない（情報漏えい防止）", () => {
+    const ik = new ItemKeeperIntegration();
+    const c = openModal(ik);
+    expect(c.innerHTML).not.toContain("docs/develop");
+    expect(c.innerHTML).not.toContain("specification.md");
+  });
+  it("タイミングを保存できる（onPause/onInterval/intervalMin）", () => {
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    c.querySelector('[data-role="ik-onpause"]').checked = false;
+    c.querySelector('[data-role="ik-oninterval"]').checked = true;
+    c.querySelector('[data-role="ik-intervalmin"]').value = "10";
+    c.querySelector('[data-role="ext-save"]').click();
+    expect(ik.settings.onPause).toBe(false);
+    expect(ik.settings.onInterval).toBe(true);
+    expect(ik.settings.intervalMin).toBe(10);
+    if (ik._intervalTimer) clearInterval(ik._intervalTimer); // タイマーリーク防止
+  });
+});
+
+describe("破棄確認 (requestCloseExternal・共通confirm)", () => {
+  it("未変更なら確認なしで閉じる", async () => {
+    const ik = new ItemKeeperIntegration();
+    openModal(ik);
+    await ik.requestCloseExternal();
+    expect(document.getElementById("external-modal-overlay").classList.contains("open")).toBe(false);
+  });
+  it("入力すると dirty になる", () => {
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    expect(ik._dirty).toBe(false);
+    const ep = c.querySelector('[data-role="ik-endpoint"]');
+    ep.value = "x.com";
+    ep.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(ik._dirty).toBe(true);
+  });
+  it("dirty時は確認ダイアログを出し、破棄して閉じるでクローズ", async () => {
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    const ep = c.querySelector('[data-role="ik-endpoint"]');
+    ep.value = "x.com";
+    ep.dispatchEvent(new Event("input", { bubbles: true }));
+    const p = ik.requestCloseExternal(); // 共通confirmが同期的にDOMへ出る
+    const discardBtn = [...document.querySelectorAll(".confirm-button")].find(b => b.textContent === "破棄して閉じる");
+    expect(discardBtn).toBeTruthy();
+    discardBtn.click();
+    await p;
+    expect(document.getElementById("external-modal-overlay").classList.contains("open")).toBe(false);
+  });
+  it("dirty時に「編集に戻る」を押すと閉じない", async () => {
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    const ep = c.querySelector('[data-role="ik-endpoint"]');
+    ep.value = "x.com";
+    ep.dispatchEvent(new Event("input", { bubbles: true }));
+    const p = ik.requestCloseExternal();
+    const keepBtn = [...document.querySelectorAll(".confirm-button")].find(b => b.textContent === "編集に戻る");
+    keepBtn.click();
+    await p;
+    expect(document.getElementById("external-modal-overlay").classList.contains("open")).toBe(true);
+  });
+});
