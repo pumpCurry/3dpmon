@@ -11,9 +11,11 @@
  * - HTTP サーバにアタッチする WebSocket リレーサーバ
  * - 子クライアントへの state snapshot / delta 配信
  * - 子（satellite）からのコマンドを親レンダラーに中継
+ * - 初回接続は常に readonly（操作権限は relay-promote-request + PIN 検証経由でのみ付与）
  *
- * @version 1.390.820 (PR #367)
+ * @version 1.390.1110 (PR #380)
  * @since   1.390.820 (PR #367)
+ * @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  */
 
@@ -57,10 +59,13 @@ function startRelayServer(httpServer, options = {}) {
   _wss = new WebSocketServer({ server: httpServer });
 
   _wss.on("connection", (ws, req) => {
-    // モード判定: URLクエリパラメータから
-    const url = new URL(req.url, "http://localhost");
-    const mode = url.searchParams.get("mode") || "readonly";
-    const validMode = (mode === "satellite") ? "satellite" : "readonly";
+    // ★ 初回接続は常に readonly で受け付ける（PIN 保護の徹底）。
+    //   旧実装は ?mode=satellite を指定するだけで PIN 検証なしに操作権限が
+    //   付与されており、昇格 PIN 機能を素通りできる穴になっていた。
+    //   satellite を要求するクライアントは relay-init 受信後に
+    //   relay-promote-request を送る（クライアント側で自動送信。
+    //   親に PIN 未設定なら即昇格、設定済みなら PIN 入力が必要）。
+    const validMode = "readonly";
 
     const client = {
       ws,

@@ -10,7 +10,9 @@
  * 【機能内容サマリ】
  * - 親リレーサーバへの WebSocket 接続
  * - relay-snapshot / relay-delta の受信と monitorData への反映
- * - satellite モードでのコマンド/フィラメント操作の送信
+ *   （フィラメント共有状態は親権威の全置換 + mountHistory 同期）
+ * - satellite モードでのコマンド/フィラメント操作の送信（操作は親へ RPC 委譲）
+ * - 初回接続は常に readonly。?relay=satellite 要求時は自動昇格リクエスト（PIN 保護）
  *
  * 【公開関数一覧】
  * - {@link initClientSync}：子クライアント同期を開始
@@ -18,8 +20,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.820 (PR #367)
+ * @version 1.390.1110 (PR #380)
  * @since   1.390.820 (PR #367)
+ * @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  */
 
@@ -35,6 +38,12 @@ import {
 
 /** リレーモード: null=未検出, "parent"=親, "readonly"=子閲覧, "satellite"=子操作 */
 let _relayMode = null;
+
+/** URL で要求されたモード（自動昇格判定用。サーバ初回接続は常に readonly のため） */
+let _wantedMode = null;
+
+/** このページロード中に一度でも satellite へ昇格したか（再接続時の自動再昇格用） */
+let _everSatellite = false;
 
 /** リレー WebSocket インスタンス */
 let _relayWs = null;
@@ -106,6 +115,7 @@ export function initClientSync() {
   }
 
   console.info(`[client-sync] 子モード: ${_relayMode}`);
+  _wantedMode = _relayMode; // URL 要求モードを記憶（relay-init 後の自動昇格判定に使用）
   _parentOrigin = window.location.host; // "parentIP:5313"
 
   // 親リレーに接続
@@ -186,11 +196,20 @@ function _handleRelayMessage(msg) {
       console.info(`[client-sync] 初期化: clientId=${_clientId}, mode=${_relayMode}`);
       _updateRelayModeUI(_relayMode);
       _setupPromoteButton();
+      // ★ サーバは初回接続を常に readonly で受け付ける（?mode=satellite による
+      //   PIN 回避を防止）。URL が satellite を要求している、または切断前に
+      //   satellite だった（再接続）場合は自動で昇格要求を送る。
+      //   親に PIN 未設定なら即昇格、設定済みなら PIN 入力ダイアログが開く。
+      if (msg.mode === "readonly" && (_wantedMode === "satellite" || _everSatellite)) {
+        console.info("[client-sync] satellite を要求 → 昇格リクエストを自動送信");
+        _sendPromoteRequest("");
+      }
       break;
 
     case "relay-promote-granted":
       console.info("[client-sync] 操作モードへ昇格しました");
       _relayMode = "satellite";
+      _everSatellite = true; // 再接続時の自動再昇格用
       _updateRelayModeUI("satellite");
       _notifyModeChange("operate");
       break;
@@ -203,6 +222,7 @@ function _handleRelayMessage(msg) {
     case "relay-demote-granted":
       console.info("[client-sync] 閲覧専用に戻りました");
       _relayMode = "readonly";
+      _everSatellite = false; // 明示的な降格 → 再接続時に自動再昇格しない
       _updateRelayModeUI("readonly");
       _notifyModeChange("view");
       break;
@@ -248,6 +268,105 @@ function _applyRelayPrintStore(hostname, ps) {
 }
 
 /**
+ * 親から受信した共有フィラメント状態（filamentSpools / hostSpoolMap / mountHistory）を
+ * monitorData へ「全置換」で適用する。
+ *
+ * 【詳細説明】
+ * - 親が唯一の権威。子はフィラメント状態をローカル変更しない
+ *   （aggregator はリレー子ガード済み、ユーザー操作は relay-filament RPC で親に委譲）ため、
+ *   受信値での全置換が安全であり、取り外し・削除・交換の伝搬も正しく行われる。
+ * - 配列・オブジェクトは参照を保ったまま中身を置換する（in-place）。
+ *   ビューやモジュールが monitorData.filamentSpools / hostSpoolMap の参照を保持しているため。
+ * - フィールドが欠落（undefined）している場合はそのフィールドを変更しない
+ *   （差分メッセージに shared が部分的にしか含まれないケースの安全策）。
+ * - 適用後はフィラメントプレビューへ反映する（パネルの装着スプール表示の追従）。
+ *
+ * ※ モジュール内部用だが、マージ規則の回帰テストのために export している。
+ *
+ * @function _applySharedFilamentState
+ * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>}} shared
+ *   - 受信した共有データ
+ * @returns {void}
+ */
+export function _applySharedFilamentState(shared) {
+  if (!shared) return;
+  if (Array.isArray(shared.filamentSpools)) {
+    // 空配列も正当（親が全削除した状態）。全置換で削除を伝搬する。
+    monitorData.filamentSpools.splice(
+      0, monitorData.filamentSpools.length, ...shared.filamentSpools
+    );
+  }
+  if (shared.hostSpoolMap && typeof shared.hostSpoolMap === "object") {
+    for (const k of Object.keys(monitorData.hostSpoolMap)) {
+      delete monitorData.hostSpoolMap[k];
+    }
+    Object.assign(monitorData.hostSpoolMap, shared.hostSpoolMap);
+  }
+  if (Array.isArray(shared.mountHistory)) {
+    // ADR-0004 台帳（装着履歴）。子では読み取り専用のため全置換でよい。
+    monitorData.mountHistory = shared.mountHistory.slice();
+  }
+  _refreshFilamentPreviews();
+}
+
+/** 前回プレビューへ反映した装着構成シグネチャ（host → signature）。再描画間引き用 */
+const _prevPreviewSig = new Map();
+
+/**
+ * 各ホストのフィラメントプレビュー（リール描画）へ、同期済みの装着スプール情報を反映する。
+ *
+ * 【詳細説明】
+ * - 親側ではスプール操作フロー（交換ダイアログ等）が直接 preview.setState を呼ぶが、
+ *   子では操作が RPC 化されており UI 反映の契機が無いため、共有データ適用後に
+ *   本関数で一括反映する。
+ * - 印刷中は共有デルタが 500ms ごとに届く（remainingLengthMm が毎 tick 変化する）ため、
+ *   「装着構成（スプールID・名称・色・総量）」のシグネチャが変化したときのみ
+ *   setState する。残量のライブ更新は従来どおり storedData の
+ *   filamentRemainingMm dirty-key 経由（dashboard_ui.js）が担うため、
+ *   ここで毎デルタ再描画する必要はない（再描画2重化によるCPU増を防ぐ）。
+ * - プレビュー未生成（パネル未構築）の場合は何もしない。
+ *
+ * @private
+ * @returns {void}
+ */
+function _refreshFilamentPreviews() {
+  try {
+    const previews = (typeof window !== "undefined" && window._filamentPreviews) || null;
+    if (!previews || typeof previews.entries !== "function") return;
+    for (const [host, fp] of previews.entries()) {
+      if (!fp || typeof fp.setState !== "function") continue;
+      const spId = monitorData.hostSpoolMap?.[host];
+      const sp = spId ? monitorData.filamentSpools.find(s => s && s.id === spId) : null;
+      // 装着構成シグネチャ（残量は含めない — ライブ更新は dirty-key 経路が担当）
+      const sig = sp
+        ? [sp.id, sp.name, sp.filamentColor || sp.color, sp.totalLengthMm,
+           sp.materialName || sp.material, sp.colorName].join("|")
+        : "(none)";
+      if (_prevPreviewSig.get(host) === sig) continue;
+      _prevPreviewSig.set(host, sig);
+      if (sp) {
+        fp.setState({
+          isFilamentPresent: true,
+          filamentCurrentLength: sp.remainingLengthMm ?? 0,
+          filamentTotalLength: sp.totalLengthMm || 330000,
+          filamentColor: sp.filamentColor || sp.color || "#22C55E",
+          reelName: sp.name || "",
+          reelSubName: sp.reelSubName || "",
+          materialName: sp.materialName || sp.material || "",
+          materialColorName: sp.colorName || "",
+          materialColorCode: sp.filamentColor || "",
+          manufacturerName: sp.manufacturerName || sp.brand || ""
+        });
+      } else {
+        fp.setState({ isFilamentPresent: false });
+      }
+    }
+  } catch (e) {
+    console.debug("[client-sync] フィラメントプレビュー反映スキップ:", e?.message || e);
+  }
+}
+
+/**
  * フルスナップショットを monitorData に適用する。
  *
  * @private
@@ -262,29 +381,14 @@ function _applySnapshot(state) {
     monitorData.appSettings.connectionTargets = state.appSettings.connectionTargets;
   }
 
-  // ★ フィラメントデータ: IDベースマージ（全置換は既存スプールを破壊するため禁止）
-  if (Array.isArray(state.filamentSpools) && state.filamentSpools.length > 0) {
-    const existingIds = new Set(monitorData.filamentSpools.map(s => s.id));
-    for (const sp of state.filamentSpools) {
-      if (!sp.id) continue;
-      if (existingIds.has(sp.id)) {
-        const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
-        if (existing) {
-          const prevActive = existing.isActive;
-          const prevInUse = existing.isInUse;
-          const prevHostname = existing.hostname;
-          Object.assign(existing, sp);
-          // ランタイム装着状態を保護
-          existing.isActive = prevActive || existing.isActive;
-          existing.isInUse = prevInUse || existing.isInUse;
-          existing.hostname = prevHostname || existing.hostname;
-        }
-      } else {
-        monitorData.filamentSpools.push(sp);
-      }
-    }
-  }
-  if (state.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, state.hostSpoolMap);
+  // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
+  //   旧実装は IDベースマージ + sticky フラグ保護（prevActive || ... ）だったため、
+  //   (a) 親で取り外し/交換しても子の isActive/isInUse/hostname が永遠に解除されない、
+  //   (b) 親で削除したスプールが子に残り続ける、という親子乖離の根本原因だった。
+  //   子はスプール状態をローカル変更しない（aggregator はリレー子ガード済み・
+  //   操作は relay-filament RPC で親に委譲）ため、全置換が安全かつ正しい。
+  //   配列/オブジェクトの参照は保持する（ビュー側が参照を保持しているため in-place 置換）。
+  _applySharedFilamentState(state);
 
   // per-host データ
   if (state.machines) {
@@ -368,29 +472,11 @@ function _applyDelta(msg) {
     }
   }
 
-  // ★ 共有データ差分: IDベースマージ（全置換は既存データを破壊するため禁止）
+  // ★ 共有データ差分: 親が唯一の権威 — 受信内容で全置換する（スナップショットと同一規則）。
+  //   親は変更検出時に filamentSpools/hostSpoolMap の「完全な現在値」を送るため、
+  //   差分でも全置換で整合する（IDマージ+stickyフラグは乖離の根本原因だった）。
   if (msg.shared) {
-    if (Array.isArray(msg.shared.filamentSpools) && msg.shared.filamentSpools.length > 0) {
-      const existingIds = new Set(monitorData.filamentSpools.map(s => s.id));
-      for (const sp of msg.shared.filamentSpools) {
-        if (!sp.id) continue;
-        if (existingIds.has(sp.id)) {
-          const existing = monitorData.filamentSpools.find(s => s.id === sp.id);
-          if (existing) {
-            const prevActive = existing.isActive;
-            const prevInUse = existing.isInUse;
-            const prevHostname = existing.hostname;
-            Object.assign(existing, sp);
-            existing.isActive = prevActive || existing.isActive;
-            existing.isInUse = prevInUse || existing.isInUse;
-            existing.hostname = prevHostname || existing.hostname;
-          }
-        } else {
-          monitorData.filamentSpools.push(sp);
-        }
-      }
-    }
-    if (msg.shared.hostSpoolMap) Object.assign(monitorData.hostSpoolMap, msg.shared.hostSpoolMap);
+    _applySharedFilamentState(msg.shared);
   }
 
   // ★ 印刷履歴・現在ジョブの差分適用 + 履歴パネル再描画
@@ -430,10 +516,12 @@ function _applyDelta(msg) {
 export function sendRelayCommand(method, params, hostname) {
   if (_relayMode !== "satellite") {
     console.warn("[client-sync] readonly モードではコマンド送信不可");
+    _alertRelayBlocked("readonly");
     return false;
   }
   if (!_relayWs || _relayWs.readyState !== 1) {
     console.warn("[client-sync] リレー未接続");
+    _alertRelayBlocked("disconnected");
     return false;
   }
   _relayWs.send(JSON.stringify({
@@ -445,13 +533,33 @@ export function sendRelayCommand(method, params, hostname) {
   return true;
 }
 
+/** リレー操作ブロック時のトースト連続表示を抑制するための最終表示時刻 */
+let _lastRelayAlertMs = 0;
+
 /**
- * 親経由でフィラメント操作を送信する（satellite モード専用）。
+ * リレー経由の操作が送信できなかったことをユーザーへトースト通知する。
  *
- * @param {string} action - "mount" | "unmount"
- * @param {Object} data - 操作データ
- * @returns {boolean} 送信成功なら true
+ * 【詳細説明】
+ * - 旧実装は console.warn のみでサイレント失敗していたため、
+ *   サテライト側のボタンが「押せるのに何も起きない」モック的挙動に見えていた。
+ * - 1.5 秒以内の連続失敗は 1 回にまとめる（スライダー操作等の連打対策）。
+ *
+ * @private
+ * @param {"readonly"|"disconnected"} reason - ブロック理由
+ * @returns {void}
  */
+function _alertRelayBlocked(reason) {
+  const now = Date.now();
+  if (now - _lastRelayAlertMs < 1500) return;
+  _lastRelayAlertMs = now;
+  import("./dashboard_notification_manager.js").then(({ showAlert }) => {
+    const msg = reason === "readonly"
+      ? "閲覧専用モードのため操作できません（右上の昇格ボタンから操作モードに切り替えてください）"
+      : "親機との接続が切れているため操作を送信できません";
+    showAlert(msg, "warn");
+  }).catch(() => { /* 通知不能時は console のみ */ });
+}
+
 /**
  * リレーモードに応じてUI（body クラス・バッジ・昇格ボタン）を一括更新する。
  *
@@ -619,9 +727,34 @@ function _notifyModeChange(kind) {
   } catch { /* 通知失敗は無視 */ }
 }
 
+/**
+ * 親経由でフィラメント操作を送信する（satellite モード専用）。
+ *
+ * 【詳細説明】
+ * - 子（satellite）はスプール状態をローカル変更せず、本関数で親へ操作を委譲する。
+ *   親が実処理（dashboard_relay_bridge の onRelayFilament ハンドラ）を実行し、
+ *   結果は relay-delta（filamentSpools/hostSpoolMap/mountHistory 全置換）で還流する。
+ * - readonly モード・未接続時はトーストでユーザーへ通知し false を返す。
+ *
+ * @function sendRelayFilament
+ * @param {string} action - 操作種別
+ *   ("mount" | "unmount" | "addSpoolFromPreset" | "mountNewSpoolFromPreset" |
+ *    "updateSpool" | "deleteSpool" | "restoreSpool" |
+ *    "confirmInferredSpool" | "revertInferredSpool")
+ * @param {Object} data - 操作データ（action ごとのペイロード）
+ * @returns {boolean} 送信できた場合 true
+ */
 export function sendRelayFilament(action, data) {
-  if (_relayMode !== "satellite") return false;
-  if (!_relayWs || _relayWs.readyState !== 1) return false;
+  if (_relayMode !== "satellite") {
+    console.warn(`[client-sync] readonly モードではフィラメント操作不可: ${action}`);
+    _alertRelayBlocked("readonly");
+    return false;
+  }
+  if (!_relayWs || _relayWs.readyState !== 1) {
+    console.warn(`[client-sync] リレー未接続のためフィラメント操作を送信できません: ${action}`);
+    _alertRelayBlocked("disconnected");
+    return false;
+  }
   _relayWs.send(JSON.stringify({
     type: "relay-filament",
     action,

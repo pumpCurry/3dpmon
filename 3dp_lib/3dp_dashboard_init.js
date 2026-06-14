@@ -22,9 +22,9 @@
  * - {@link persistPrintResume}：印刷再開用データを保存（per-host）
  * - {@link initializeAutoSave}：自動保存タイマーを開始
  *
-* @version 1.390.652 (PR #366)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -73,16 +73,6 @@ export async function initializeDashboard() {
   notificationManager.loadSettings();
   // ItemKeeper / 外部連携 設定を反映
   itemKeeperIntegration.loadSettings();
-  if (!monitorData.filamentSpools.length) {
-    const preset = FILAMENT_PRESETS.find(
-      p => p.presetId === "preset-unknown-somename-somecolor"
-    );
-    if (preset) {
-      // 初回起動時はホストが未確定なので登録のみ（装着はしない）
-      addSpoolFromPreset(preset);
-      saveUnifiedStorage();
-    }
-  }
 
   // (3) 通知コンテナ初期化（notificationManager 用）
   if (!document.querySelector(".notification-container")) {
@@ -92,6 +82,8 @@ export async function initializeDashboard() {
   }
 
   // (4) リレーモード検出 + ページロード時の自動接続
+  // ★ デフォルトスプール作成より前に行う（リレー子はスプールをローカル生成せず、
+  //   親のスナップショット/デルタで受信した共有状態のみを表示するため）
   let isRelayChild = false;
   try {
     const { initClientSync } = await import("./dashboard_client_sync.js");
@@ -101,6 +93,18 @@ export async function initializeDashboard() {
     }
   } catch (e) {
     console.debug("[init] client_sync 読み込みスキップ:", e.message);
+  }
+
+  // (4.5) 初回起動時のデフォルトスプール作成（親/スタンドアロンのみ）
+  if (!isRelayChild && !monitorData.filamentSpools.length) {
+    const preset = FILAMENT_PRESETS.find(
+      p => p.presetId === "preset-unknown-somename-somecolor"
+    );
+    if (preset) {
+      // 初回起動時はホストが未確定なので登録のみ（装着はしない）
+      addSpoolFromPreset(preset);
+      saveUnifiedStorage();
+    }
   }
 
   // ★ 旧接続/切断ボタン (connect-button, disconnect-button) はシングルホスト時代の遺物。

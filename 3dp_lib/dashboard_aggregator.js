@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.787 (PR #367)
+* @version 1.390.1110 (PR #380)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -88,6 +88,24 @@ let historyPersistFunc = null;
  */
 export function setHistoryPersistFunc(fn) {
   historyPersistFunc = typeof fn === "function" ? fn : null;
+}
+
+/**
+ * リレー子クライアント（satellite/readonly）として動作中かを判定する。
+ *
+ * 【詳細説明】
+ * - リレー子では aggregator が「フィラメント消費の積算・台帳(mountHistory)書込・
+ *   スプール状態の変更・履歴の永続化」を行ってはならない。これらは親が唯一の
+ *   権威であり、子は relay-delta/snapshot で受信した値を表示するだけにする。
+ * - 旧実装では子も独自に消費計算を行い spool.remainingLengthMm を毎 tick 上書き
+ *   していたため、親とサテライトでフィラメント表示が大きく乖離していた（根本原因）。
+ * - タイマー類・通知ロジックは従来どおり子でも動作する（受信値ベースで無害）。
+ *
+ * @private
+ * @returns {boolean} リレー子なら true
+ */
+function _isRelayChild() {
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
 }
 
 // 通知閾値定数（全ホスト共通）
@@ -478,7 +496,8 @@ export function ingestData(data, hostname) {
 
     if (s.prevPrintID === null && s.actualStartEpoch !== null) {
       // printJobTime から開始済みのジョブに ID が後から届いた場合
-      const spool = getCurrentSpool(host);
+      // ★ リレー子ガード: スプール予約/台帳系の書込みは親のみが行う（子は受信値を表示するだけ）
+      const spool = _isRelayChild() ? null : getCurrentSpool(host);
       if (spool && spool.currentPrintID !== String(id)) {
         if (spool.currentJobExpectedLength == null) {
           reserveFilament(0, String(id), host);
@@ -488,7 +507,7 @@ export function ingestData(data, hostname) {
       }
       s.prevPrintID = id;
       _resetNotificationState(s, nowMs);
-      if (historyPersistFunc) {
+      if (historyPersistFunc && !_isRelayChild()) {
         try {
           historyPersistFunc(id, host);
         } catch (e) {
@@ -510,7 +529,8 @@ export function ingestData(data, hostname) {
       });
     }
 
-    const spool = getCurrentSpool(host);
+    // ★ リレー子ガード: スプール予約/台帳系の書込みは親のみが行う（子は受信値を表示するだけ）
+    const spool = _isRelayChild() ? null : getCurrentSpool(host);
     if (spool && spool.currentPrintID !== String(id)) {
       if (spool.currentJobExpectedLength == null) {
         reserveFilament(0, String(id), host);
@@ -519,7 +539,7 @@ export function ingestData(data, hostname) {
       }
     }
     s.prevPrintID = id;
-    if (historyPersistFunc) {
+    if (historyPersistFunc && !_isRelayChild()) {
       try {
         historyPersistFunc(id, host);
       } catch (e) {
@@ -646,28 +666,32 @@ export function ingestData(data, hostname) {
     if (s.prevMaterialStatus === 0 && matStat === 1) {
       notificationManager.notify("filamentOut", { hostname: host });
       // ★ ADR-0005 P1: 切れイベントの状態文脈を per-host に記録（後の交換操作の遡及判定用）
-      try {
-        const _curSp = getCurrentSpool(host);
-        const _stNow = Number(storedData.state?.rawValue || 0);
-        const _total = Number(_curSp?.totalLengthMm);
-        recordFilamentEvent({
-          host,
-          ts: nowMs,
-          stateAtEvent: _stNow,
-          oldSpoolId: _curSp?.id ?? null,
-          oldRemainingMm: Number(_curSp?.remainingLengthMm),
-          oldRemainingPct: _curSp && _total > 0
-            ? (Number(_curSp.remainingLengthMm) / _total) * 100 : NaN,
-          runout: true,
-          inflightJobId: _curSp?.currentPrintID || (machine?.printStore?.current?.id ?? null)
-        });
-      } catch (e) { console.warn("[aggregator] recordFilamentEvent(runout) 失敗:", e?.message || e); }
-      if (s.filamentOutTimer) clearTimeout(s.filamentOutTimer);
-      s.filamentOutTimer = setTimeout(() => {
-        if (s.currentMaterialStatus === 1) {
-          showFilamentChangeDialog(host);
-        }
-      }, 2000);
+      // ★ リレー子ガード: イベント文脈の記録・交換ダイアログ自動表示は親のみ
+      //   （通知は子でも発火する。文脈記録/自動UIは状態機械を持つ親の責務）
+      if (!_isRelayChild()) {
+        try {
+          const _curSp = getCurrentSpool(host);
+          const _stNow = Number(storedData.state?.rawValue || 0);
+          const _total = Number(_curSp?.totalLengthMm);
+          recordFilamentEvent({
+            host,
+            ts: nowMs,
+            stateAtEvent: _stNow,
+            oldSpoolId: _curSp?.id ?? null,
+            oldRemainingMm: Number(_curSp?.remainingLengthMm),
+            oldRemainingPct: _curSp && _total > 0
+              ? (Number(_curSp.remainingLengthMm) / _total) * 100 : NaN,
+            runout: true,
+            inflightJobId: _curSp?.currentPrintID || (machine?.printStore?.current?.id ?? null)
+          });
+        } catch (e) { console.warn("[aggregator] recordFilamentEvent(runout) 失敗:", e?.message || e); }
+        if (s.filamentOutTimer) clearTimeout(s.filamentOutTimer);
+        s.filamentOutTimer = setTimeout(() => {
+          if (s.currentMaterialStatus === 1) {
+            showFilamentChangeDialog(host);
+          }
+        }, 2000);
+      }
     }
     if (s.prevMaterialStatus === 1 && matStat === 0) {
       notificationManager.notify("filamentReplaced", { hostname: host });
@@ -677,8 +701,11 @@ export function ingestData(data, hostname) {
       }
       // ★ ADR-0005 P6: 切れ復帰時の状態認識つき解決（#3 inferred / #4 reseat）。
       //   未解決の runout 文脈があれば 2信号ゲートで判定。ダイアログ自動クローズ(B3)も内包。
-      try { _resolveRunoutOnReplace(host, machine, nowMs); }
-      catch (e) { console.warn("[aggregator] _resolveRunoutOnReplace 失敗:", e?.message || e); }
+      // ★ リレー子ガード: inferred スプール生成/装着切替を伴うため親のみ実行
+      if (!_isRelayChild()) {
+        try { _resolveRunoutOnReplace(host, machine, nowMs); }
+        catch (e) { console.warn("[aggregator] _resolveRunoutOnReplace 失敗:", e?.message || e); }
+      }
     }
   }
   s.prevMaterialStatus = matStat;
@@ -694,7 +721,7 @@ export function ingestData(data, hostname) {
     // 時点で前回ジョブの残り時間通知などを初期化する。
     _resetNotificationState(s, nowMs);
 
-    if (historyPersistFunc && id) {
+    if (historyPersistFunc && id && !_isRelayChild()) {
       try {
         historyPersistFunc(id, host);
       } catch (e) {
@@ -1078,7 +1105,12 @@ export function aggregatorUpdate() {
     }, storedData);
 
     // --- フィラメント残量の動的計算 ---
-    const spool = getCurrentSpool(host);
+    // ★ リレー子ガード: 子（satellite/readonly）はフィラメント消費計算・スプール状態
+    //   変更・台帳書込みを一切行わない（spool=null で以下の全ブロックをスキップ）。
+    //   残量(filamentRemainingMm)・スプール配列は親が relay-delta で配信した値が権威。
+    //   旧実装では子も独自に積算し spool.remainingLengthMm を上書きしていたため、
+    //   親→子の配信値が 500ms 以内に子のローカル計算で破壊され、表示が乖離していた。
+    const spool = _isRelayChild() ? null : getCurrentSpool(host);
     const _now = Date.now();
     const st   = Number(storedData.state?.rawValue || 0);
     const isPrinting =
@@ -1113,8 +1145,11 @@ export function aggregatorUpdate() {
     // ★ ADR-0005 P6 (#6/#7): 未解決の切れ文脈が「当該ジョブ非アクティブ」になったら stale 解決
     //   （完了/別ジョブ/オフライン跨ぎ。ゲート成立なら新リール使用の可能性として flag＋通知。
     //   未解決のまま次ジョブへ漏らさない。ゲート不成立は既定継続）。
-    try { _evaluateStaleRunout(host, machine, _now); }
-    catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
+    // ★ リレー子ガード: イベント文脈の解決（書込み）は親のみ
+    if (!_isRelayChild()) {
+      try { _evaluateStaleRunout(host, machine, _now); }
+      catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
+    }
 
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
       console.log(`[aggregatorUpdate] ${host}: state=${st}(完了) で currentPrintID=${spool.currentPrintID} が残留 → クリア`);
@@ -1589,11 +1624,15 @@ export function persistAggregatorState(hostname) {
     }
   });
   // ★ A3: スプールの currentPrintID を別途保存（復元時のジョブID照合用）
-  try {
-    const spool = getCurrentSpool(host);
-    const pid = spool?.currentPrintID ?? "";
-    localStorage.setItem(prefix + "spoolCurrentPrintID", JSON.stringify(pid));
-  } catch { /* ignore */ }
+  // ★ リレー子ガード: 子は消費トラッキングを行わないため、スプール由来の
+  //   復元情報も保存しない（親権威データとの不整合な復元を防ぐ）
+  if (!_isRelayChild()) {
+    try {
+      const spool = getCurrentSpool(host);
+      const pid = spool?.currentPrintID ?? "";
+      localStorage.setItem(prefix + "spoolCurrentPrintID", JSON.stringify(pid));
+    } catch { /* ignore */ }
+  }
 }
 
 // ---------------------------------------------------------------------------

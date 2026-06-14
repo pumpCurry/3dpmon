@@ -9,14 +9,20 @@
  *
  * 【機能内容サマリ】
  * - aggregator 更新後に dirty keys を収集し、リレーサーバにブロードキャスト
- * - 子（satellite）からのコマンド/フィラメント操作を受信し実行
+ *   （filamentSpools / hostSpoolMap / mountHistory の共有状態を含む）
+ * - 子（satellite）からのコマンド/フィラメント操作 RPC を受信し親側で実行
  * - 新規子クライアント接続時にフルスナップショットを送信
  *
  * 【公開関数一覧】
  * - {@link initRelayBridge}：ブリッジを初期化する
+ * - {@link handleRelayFilamentAction}：子からのフィラメント操作 RPC を実行する
+ * - {@link verifyPromotePin}：昇格 PIN を検証する
+ * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
+ * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.820 (PR #367)
+ * @version 1.390.1110 (PR #380)
  * @since   1.390.820 (PR #367)
+ * @lastModified 2026-06-12 12:00:00
  * -----------------------------------------------------------
  */
 
@@ -33,6 +39,9 @@ const _prevSnapshot = new Map();
 
 /** 前回ブロードキャストした共有データのハッシュ（簡易変更検出） */
 let _prevSharedHash = "";
+
+/** 前回ブロードキャストした mountHistory（ADR-0004 台帳）のハッシュ（変更検出） */
+let _prevMountHash = "";
 
 /** 前回ブロードキャスト時の各ホストの印刷履歴(printStore)ハッシュ */
 const _prevPrintHash = new Map();
@@ -78,29 +87,7 @@ export function initRelayBridge() {
   // 子クライアントからのフィラメント操作受信
   window.electronAPI.onRelayFilament?.(async (data) => {
     console.debug(`[relay-bridge] 子からフィラメント操作受信:`, data.action);
-    // フィラメント操作は動的インポートで循環参照回避
-    try {
-      const { setCurrentSpoolId } = await import("./dashboard_spool.js");
-      const { saveUnifiedStorage } = await import("./dashboard_storage.js");
-      switch (data.action) {
-        case "mount":
-          if (data.data.spoolId && data.data.hostname) {
-            setCurrentSpoolId(data.data.spoolId, data.data.hostname);
-            saveUnifiedStorage();
-          }
-          break;
-        case "unmount":
-          if (data.data.hostname) {
-            setCurrentSpoolId(null, data.data.hostname);
-            saveUnifiedStorage();
-          }
-          break;
-        default:
-          console.debug(`[relay-bridge] 未知のフィラメントアクション: ${data.action}`);
-      }
-    } catch (e) {
-      console.error("[relay-bridge] フィラメント操作エラー:", e);
-    }
+    await handleRelayFilamentAction(data.action, data.data || {});
   });
 
   // 新規子クライアントからのスナップショット要求
@@ -123,6 +110,93 @@ export function initRelayBridge() {
   _initialized = true;
   console.info("[relay-bridge] 親側リレーブリッジ初期化完了");
   return true;
+}
+
+/**
+ * 子（satellite）から中継されたフィラメント操作を親側で実行する。
+ *
+ * 【詳細説明】
+ * - サテライトはスプール状態をローカル変更せず、操作を本ハンドラへ RPC 委譲する。
+ *   実行結果は次回 relay-delta（filamentSpools/hostSpoolMap/mountHistory 全置換）で
+ *   全子クライアントへ還流する。
+ * - switch が操作のホワイトリストを兼ねる（未知 action は無視してログのみ）。
+ * - serialNo 採番・プリセット在庫消費などの不可逆リソースは必ず親側で消費される
+ *   （サテライトでローカル実行するとカウンタが分岐し台帳が壊れるため）。
+ *
+ * @function handleRelayFilamentAction
+ * @param {string} action - 操作種別
+ *   ("mount" | "unmount" | "addSpoolFromPreset" | "mountNewSpoolFromPreset" |
+ *    "updateSpool" | "deleteSpool" | "restoreSpool" |
+ *    "confirmInferredSpool" | "revertInferredSpool")
+ * @param {Object} payload - 操作データ（action ごとのペイロード）
+ * @returns {Promise<void>} - 実行完了で解決（失敗時もログのみで解決）
+ */
+export async function handleRelayFilamentAction(action, payload) {
+  // フィラメント操作は動的インポートで循環参照回避
+  try {
+    const spoolMod = await import("./dashboard_spool.js");
+    const { saveUnifiedStorage } = await import("./dashboard_storage.js");
+    switch (action) {
+      case "mount":
+        if (payload.spoolId && payload.hostname) {
+          spoolMod.setCurrentSpoolId(payload.spoolId, payload.hostname);
+          saveUnifiedStorage();
+        }
+        break;
+      case "unmount":
+        if (payload.hostname) {
+          spoolMod.setCurrentSpoolId(null, payload.hostname);
+          saveUnifiedStorage();
+        }
+        break;
+      case "addSpoolFromPreset":
+        // 新品開封（登録のみ・装着なし）。在庫消費・serialNo 採番は親側で実行
+        if (payload.preset) {
+          spoolMod.addSpoolFromPreset(payload.preset, payload.override || {});
+          saveUnifiedStorage();
+        }
+        break;
+      case "mountNewSpoolFromPreset":
+        // 新品開封して装着（addSpoolFromPreset + setCurrentSpoolId の複合操作）
+        if (payload.preset && payload.hostname) {
+          spoolMod.mountNewSpoolFromPreset(payload.preset, payload.override || {}, payload.hostname);
+          saveUnifiedStorage();
+        }
+        break;
+      case "updateSpool":
+        // スプール編集（残量修正・お気に入り等）
+        if (payload.id && payload.patch && typeof payload.patch === "object") {
+          spoolMod.updateSpool(payload.id, payload.patch);
+        }
+        break;
+      case "deleteSpool":
+        if (payload.id) {
+          spoolMod.deleteSpool(payload.id, payload.hostname);
+        }
+        break;
+      case "restoreSpool":
+        if (payload.id) {
+          spoolMod.restoreSpool(payload.id);
+        }
+        break;
+      case "confirmInferredSpool":
+        // ADR-0005 P6: 暫定推定スプールの確定（serialNo 採番・在庫消費は親のみ）
+        if (payload.id) {
+          spoolMod.confirmInferredSpool(payload.id);
+        }
+        break;
+      case "revertInferredSpool":
+        // ADR-0005 P6: 暫定推定スプールの取消（旧スプール完全復元）
+        if (payload.id) {
+          spoolMod.revertInferredSpool(payload.id);
+        }
+        break;
+      default:
+        console.debug(`[relay-bridge] 未知のフィラメントアクション: ${action}`);
+    }
+  } catch (e) {
+    console.error("[relay-bridge] フィラメント操作エラー:", e);
+  }
 }
 
 /**
@@ -307,6 +381,18 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // mountHistory（ADR-0004 装着台帳）の変更検出。
+  // 印刷中は filamentSpools が毎 tick 変化するのに対し、台帳は装着/取外し時のみ
+  // 変化するため別ハッシュで検出し、変化時のみ送る（転送量の無駄を防ぐ）。
+  // 子はこれを受けてスプール解析・台帳由来の表示を親と一致させる。
+  const mountHash = _quickHash(monitorData.mountHistory || []);
+  if (mountHash !== _prevMountHash) {
+    _prevMountHash = mountHash;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.mountHistory = monitorData.mountHistory || [];
+    hasChanges = true;
+  }
+
   if (!hasChanges) return null;
 
   const delta = { machines: machinesDelta, shared: sharedDelta };
@@ -356,6 +442,7 @@ function _buildFullSnapshot() {
     fileInfos,
     filamentSpools: monitorData.filamentSpools,
     hostSpoolMap: monitorData.hostSpoolMap,
+    mountHistory: monitorData.mountHistory || [],
     appSettings: {
       connectionTargets: monitorData.appSettings.connectionTargets || []
     }
