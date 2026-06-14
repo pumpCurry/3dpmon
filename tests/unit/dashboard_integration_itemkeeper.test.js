@@ -281,3 +281,38 @@ describe("送信ゲート", () => {
     expect(spy).toHaveBeenCalledWith({ trigger: "print.finished", host: "k1" });
   });
 });
+
+describe("一時停止トリガ (onPause)", () => {
+  it("onPause=false なら一時停止で送らない", () => {
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", onPause: false });
+    const spy = vi.spyOn(ik, "sendSnapshot").mockResolvedValue({ ok: true });
+    ik.onPrintEvent("k1", "paused");
+    expect(spy).not.toHaveBeenCalled();
+  });
+  it("onPause=true なら print.paused トリガで送る", () => {
+    mockMonitorData.appSettings.connectionTargets = [{ dest: "d", hostname: "k1" }];
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", onPause: true });
+    const spy = vi.spyOn(ik, "sendSnapshot").mockResolvedValue({ ok: true });
+    ik.onPrintEvent("k1", "paused");
+    expect(spy).toHaveBeenCalledWith({ trigger: "print.paused", host: "k1" });
+  });
+});
+
+describe("指定タイミング定期送信 (onInterval)", () => {
+  it("onInterval=false ならタイマー無し", () => {
+    const ik = newIK({ enabled: true, onInterval: false });
+    ik._restartIntervalTimer();
+    expect(ik._intervalTimer).toBeNull();
+  });
+  it("enabled+onInterval でタイマー作動し snapshot.interval を送る", () => {
+    vi.useFakeTimers();
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", onInterval: true, intervalMin: 1 });
+    const spy = vi.spyOn(ik, "sendSnapshot").mockResolvedValue({ ok: true });
+    ik._restartIntervalTimer();
+    expect(ik._intervalTimer).not.toBeNull();
+    vi.advanceTimersByTime(60 * 1000);
+    expect(spy).toHaveBeenCalledWith({ trigger: "snapshot.interval" });
+    clearInterval(ik._intervalTimer);
+    vi.useRealTimers();
+  });
+});
