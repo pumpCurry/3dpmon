@@ -62,7 +62,7 @@ import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
-import { createMoonrakerSession } from "./dashboard_moonraker.js";
+import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -1439,6 +1439,39 @@ export function disconnectWs(host) {
 // ★ setupConnectButton は v2.2.0 で完全削除済み（シングルホスト時代の遺物）
 
 /**
+ * Moonraker 機への操作コマンドを送出する。
+ * K1 の (method, params) を {@link translateK1CommandToMoonraker} で RPC/gcode 手順へ
+ * 変換し、セッションの request() で順次実行する。未対応操作はログのみで no-op。
+ *
+ * @private
+ * @param {string} method - K1 コマンド名
+ * @param {Object} params - K1 パラメータ
+ * @param {string} host - 対象ホスト名
+ * @returns {Promise<null>} 全手順完了で解決
+ */
+function _sendMoonrakerCommand(method, params, host) {
+  const st = resolveActiveState(host);
+  const session = st?._extSession;
+  if (!session || typeof session.request !== "function") {
+    showAlert(`[${host}] Moonraker に接続されていません`, "error", false, host);
+    return Promise.reject(new Error("Moonraker session not connected"));
+  }
+  const steps = translateK1CommandToMoonraker(method, params);
+  if (!steps || steps.length === 0) {
+    pushLog(`Moonraker機では未対応の操作のため無視しました: ${method} ${JSON.stringify(params)}`, "warn", false, host);
+    return Promise.resolve(null);
+  }
+  pushLog(`送信(Moonraker): ${steps.map(s => s.gcode || s.rpc).join(" / ")}`, "send", false, host);
+  return Promise.all(steps.map(s => s.gcode
+    ? session.request("printer.gcode.script", { script: s.gcode })
+    : session.request(s.rpc, s.params || {})
+  )).then(() => null).catch(e => {
+    pushLog(`Moonraker操作エラー: ${e.message}`, "error", false, host);
+    return Promise.reject(e);
+  });
+}
+
+/**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
  * @param {string} method - コマンド名
  * @param {Object} params - パラメータ
@@ -1454,6 +1487,10 @@ export function sendCommand(method, params = {}, host) {
       .then(sent => sent
         ? null
         : Promise.reject(new Error("relay not connected or readonly")));
+  }
+  // ★ Moonraker 機: K1 コマンド意図を RPC / gcode に翻訳して送出する
+  if (getPrinterType(host) === "moonraker") {
+    return _sendMoonrakerCommand(method, params, host);
   }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
@@ -1501,6 +1538,10 @@ export function sendGcodeCommand(gcode, host) {
       .then(sent => sent
         ? null
         : Promise.reject(new Error("relay not connected or readonly")));
+  }
+  // ★ Moonraker 機: gcode を printer.gcode.script で直接実行
+  if (getPrinterType(host) === "moonraker") {
+    return _sendMoonrakerCommand("runGcode", { cmd: gcode }, host);
   }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {

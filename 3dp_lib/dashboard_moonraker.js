@@ -507,6 +507,72 @@ export function moonrakerFilesToEntries(files, metaMap, httpBase) {
   });
 }
 
+/* ==========================================================================
+ * 操作コマンドの変換(K1 コマンド意図 → Moonraker RPC / gcode)
+ * ======================================================================== */
+
+/**
+ * K1 系の操作コマンド(sendCommand の method/params)を、Moonraker で実行する
+ * 一連の手順へ変換する。各手順は gcode 実行 か JSON-RPC 呼び出しのいずれか。
+ *
+ * 【詳細説明】
+ * - 戻り値は手順配列。`{gcode:"..."}` は `printer.gcode.script` で実行、
+ *   `{rpc:"method", params:{...}}` はその RPC をそのまま呼ぶ。
+ * - 対応しない操作(K1 専用トグルや get 系の取得要求など)は空配列を返す。
+ *   呼び出し側はログを出して no-op とする。
+ *
+ * @function translateK1CommandToMoonraker
+ * @param {string} method - K1 コマンド名("set"/"print"/"autoHome"/"runGcode" 等)
+ * @param {Object} [params] - K1 パラメータ
+ * @returns {Array<({gcode:string}|{rpc:string,params:Object})>} 実行手順(未対応は [])
+ */
+export function translateK1CommandToMoonraker(method, params = {}) {
+  const p = params || {};
+  const round = (v) => Math.round(Number(v) || 0);
+
+  switch (method) {
+    case "print":
+      return p.file ? [{ rpc: "printer.print.start", params: { filename: String(p.file) } }] : [];
+
+    case "autoHome":
+      return [{ gcode: "G28" }];
+
+    case "autoLevel":
+      // ベッドメッシュ較正(ホーム後)。機種により BED_MESH_CALIBRATE が標準。
+      return [{ gcode: "G28" }, { gcode: "BED_MESH_CALIBRATE" }];
+
+    case "runGcode":
+      return p.cmd ? [{ gcode: String(p.cmd) }] : [];
+
+    case "deleteFile":
+      return p.path
+        ? [{ rpc: "server.files.delete_file", params: { path: `gcodes/${String(p.path).replace(/^gcodes\//, "")}` } }]
+        : [];
+
+    case "set": {
+      if ("stop" in p) return [{ rpc: "printer.print.cancel", params: {} }];
+      if ("pause" in p) {
+        return p.pause
+          ? [{ rpc: "printer.print.pause", params: {} }]
+          : [{ rpc: "printer.print.resume", params: {} }];
+      }
+      if ("gcodeCmd" in p && p.gcodeCmd) return [{ gcode: String(p.gcodeCmd) }];
+      if ("nozzleTempControl" in p) return [{ gcode: `M104 S${round(p.nozzleTempControl)}` }];
+      if ("targetNozzleTemp" in p) return [{ gcode: `M104 S${round(p.targetNozzleTemp)}` }];
+      if ("bedTempControl" in p) return [{ gcode: `M140 S${round(p.bedTempControl?.val)}` }];
+      if ("targetBedTemp0" in p) return [{ gcode: `M140 S${round(p.targetBedTemp0)}` }];
+      if ("fan" in p) return [{ gcode: `M106 S${p.fan ? 255 : 0}` }];
+      // cleanErr / K1専用トグル(fanCase/fanAuxiliary/lightSw/ai*)等は未対応
+      return [];
+    }
+
+    // get(reqHistory/reqGcodeFile/状態取得)は Moonraker では購読/自動取得のため不要
+    case "get":
+    default:
+      return [];
+  }
+}
+
 /**
  * Moonraker WebSocket セッションを生成し、接続・購読・再接続を管理する。
  *
@@ -534,7 +600,8 @@ export function moonrakerFilesToEntries(files, metaMap, httpBase) {
  * @param {function(string, string):void} [opts.onGcode] - gcode コンソール行 (line, resolvedHost)
  * @param {string} [opts.httpBase] - サムネイル/ファイル取得用 "http://IP:PORT"
  * @param {function():boolean} opts.shouldReconnect - 再接続を許可するか判定する述語
- * @returns {{close: function():void}} セッションハンドル(close で明示停止)
+ * @returns {{close: function():void, request: function(string, Object=):Promise<*>}}
+ *   セッションハンドル(close で明示停止 / request で任意 RPC 実行)
  */
 export function createMoonrakerSession(opts) {
   const {
@@ -867,5 +934,14 @@ export function createMoonrakerSession(opts) {
   // 起動
   open();
 
-  return { close };
+  return {
+    close,
+    /**
+     * 任意の JSON-RPC を実行する(操作コマンドの送出に使用)。
+     * @param {string} method - メソッド名
+     * @param {Object} [params] - パラメータ
+     * @returns {Promise<*>} result
+     */
+    request: (method, params = {}) => rpc(method, params),
+  };
 }

@@ -36,6 +36,7 @@ import {
   buildMoonrakerThumbUrl,
   moonrakerHistoryToK1,
   moonrakerFilesToEntries,
+  translateK1CommandToMoonraker,
   MOONRAKER_DEFAULT_MAX_NOZZLE,
   MOONRAKER_DEFAULT_MAX_BED,
 } from '../../3dp_lib/dashboard_moonraker.js';
@@ -614,5 +615,61 @@ describe('moonrakerFilesToEntries', () => {
   });
   it('サムネURL(ルート)', () => {
     expect(out[0].thumbUrl).toBe('http://h:80/server/files/gcodes/.thumbs/3DBenchy-PLA-200x200.png');
+  });
+});
+
+// =============================================================
+// 操作コマンド変換(K1 → Moonraker RPC/gcode)
+// =============================================================
+describe('translateK1CommandToMoonraker', () => {
+  it('停止: set{stop:1} → printer.print.cancel', () => {
+    expect(translateK1CommandToMoonraker('set', { stop: 1 }))
+      .toEqual([{ rpc: 'printer.print.cancel', params: {} }]);
+  });
+  it('一時停止/再開: set{pause}', () => {
+    expect(translateK1CommandToMoonraker('set', { pause: 1 }))
+      .toEqual([{ rpc: 'printer.print.pause', params: {} }]);
+    expect(translateK1CommandToMoonraker('set', { pause: 0 }))
+      .toEqual([{ rpc: 'printer.print.resume', params: {} }]);
+  });
+  it('ノズル温度: set{nozzleTempControl} → M104', () => {
+    expect(translateK1CommandToMoonraker('set', { nozzleTempControl: 209.6 }))
+      .toEqual([{ gcode: 'M104 S210' }]);
+  });
+  it('ベッド温度: set{bedTempControl{num,val}} → M140', () => {
+    expect(translateK1CommandToMoonraker('set', { bedTempControl: { num: 0, val: 60 } }))
+      .toEqual([{ gcode: 'M140 S60' }]);
+  });
+  it('ファン: set{fan} → M106', () => {
+    expect(translateK1CommandToMoonraker('set', { fan: 1 })).toEqual([{ gcode: 'M106 S255' }]);
+    expect(translateK1CommandToMoonraker('set', { fan: 0 })).toEqual([{ gcode: 'M106 S0' }]);
+  });
+  it('生gcode: set{gcodeCmd} → そのまま', () => {
+    expect(translateK1CommandToMoonraker('set', { gcodeCmd: 'M106 P0 S128' }))
+      .toEqual([{ gcode: 'M106 P0 S128' }]);
+  });
+  it('ホーム: autoHome → G28', () => {
+    expect(translateK1CommandToMoonraker('autoHome', {})).toEqual([{ gcode: 'G28' }]);
+  });
+  it('印刷開始: print{file} → printer.print.start', () => {
+    expect(translateK1CommandToMoonraker('print', { file: 'a.gcode' }))
+      .toEqual([{ rpc: 'printer.print.start', params: { filename: 'a.gcode' } }]);
+  });
+  it('runGcode{cmd} → そのまま', () => {
+    expect(translateK1CommandToMoonraker('runGcode', { cmd: 'G1 X10' }))
+      .toEqual([{ gcode: 'G1 X10' }]);
+  });
+  it('ファイル削除: deleteFile{path} → server.files.delete_file(gcodes/前置)', () => {
+    expect(translateK1CommandToMoonraker('deleteFile', { path: 'a.gcode' }))
+      .toEqual([{ rpc: 'server.files.delete_file', params: { path: 'gcodes/a.gcode' } }]);
+    // 既に gcodes/ が付いていても二重化しない
+    expect(translateK1CommandToMoonraker('deleteFile', { path: 'gcodes/a.gcode' }))
+      .toEqual([{ rpc: 'server.files.delete_file', params: { path: 'gcodes/a.gcode' } }]);
+  });
+  it('未対応(get/cleanErr/K1専用トグル)は空配列', () => {
+    expect(translateK1CommandToMoonraker('get', { reqHistory: 1 })).toEqual([]);
+    expect(translateK1CommandToMoonraker('set', { cleanErr: 1 })).toEqual([]);
+    expect(translateK1CommandToMoonraker('set', { aiSw: 1 })).toEqual([]);
+    expect(translateK1CommandToMoonraker('set', { fanCase: 1 })).toEqual([]);
   });
 });
