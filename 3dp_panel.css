@@ -3484,7 +3484,8 @@ body.panel-mode .notification-container {
   border-radius: var(--radius-sm, 4px);
   background: var(--color-bg-secondary, #f8fafc);
   cursor: pointer;
-  margin-left: var(--space-2, 8px);
+  white-space: nowrap;
+  /* 間隔は親(.temp-graph-footer)の gap で確保するため margin-left は撤去（重なり防止） */
 }
 .chart-interaction-lock.locked {
   background: var(--color-warning-bg, #fef3c7);

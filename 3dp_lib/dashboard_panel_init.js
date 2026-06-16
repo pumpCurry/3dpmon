@@ -33,7 +33,7 @@
 
 "use strict";
 
-import { initTemperatureGraph, resetTemperatureGraph, toggleChartInteractionLock } from "./dashboard_chart.js";
+import { initTemperatureGraph, resetTemperatureGraph, toggleChartInteractionLock, setChartWindowMinutes } from "./dashboard_chart.js";
 import {
   registerCameraPanel,
   unregisterCameraPanel,
@@ -492,7 +492,10 @@ function initTempGraphPanel(body, hostname) {
   const canvas = body.querySelector("#temp-graph-canvas");
   if (!canvas) return;
 
-  // Chart.js の初期化（per-host インスタンス）
+  // 保持時間枠を保存設定（appSettings.chartWindowMin, 既定15分）から適用してから初期化
+  setChartWindowMinutes(monitorData.appSettings.chartWindowMin ?? 15);
+
+  // uPlot の初期化（per-host インスタンス）
   resetTemperatureGraph(hostname);
   initTemperatureGraph(body, hostname);
 

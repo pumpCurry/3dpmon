@@ -274,6 +274,29 @@ export function switchChartHost(hostname) {
 }
 
 /**
+ * グラフの保持時間枠（=メモリ保持＆表示範囲）を分単位で設定する。
+ *
+ * 【詳細説明】
+ * - 既定 15 分。この枠を超えた古い点は {@link _trimWindow} で破棄されるため、
+ *   メモリは「枠 × 更新レート」で上限が決まり、起動時間に比例して無制限に増えない。
+ * - 既存の全 per-host チャートと、以後生成されるチャートの両方へ即時反映する。
+ * - 範囲外は安全側にクランプ（1〜720分、不正値は15分）。
+ *
+ * @function setChartWindowMinutes
+ * @param {number} minutes - 保持/表示する分数
+ * @returns {number} 実際に適用された分数
+ */
+export function setChartWindowMinutes(minutes) {
+  const m = Number(minutes);
+  const clamped = (Number.isFinite(m) && m >= 1) ? Math.min(Math.round(m), 720) : 15;
+  DEFAULT_CONFIG.timeWindowMs = clamped * 60 * 1000;
+  for (const [, hs] of _hostCharts) {
+    hs.config.timeWindowMs = DEFAULT_CONFIG.timeWindowMs;
+  }
+  return clamped;
+}
+
+/**
  * 温度グラフのズーム表示のみを初期状態（自動範囲）へ戻す。
  *
  * @param {string} hostname - 対象ホスト名（省略時は全ホスト）

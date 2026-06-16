@@ -200,6 +200,7 @@ export const monitorData = {
   appSettings: {
     updateInterval: 500,
     logMaxLines: 1000,
+    chartWindowMin: 15,   // 温度グラフの保持/表示時間枠（分）。古い点は破棄しメモリ無制限化を防ぐ
     logLevel: "info",
     autoConnect: true,
     // ★ wsDest は v2.2.0 で完全削除済み。connectionTargets が唯一の接続先リスト。

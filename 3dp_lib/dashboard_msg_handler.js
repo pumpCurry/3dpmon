@@ -252,6 +252,34 @@ function _getMsgState(hostname) {
 }
 
 /**
+ * machine.historyData（タイマー情報の中間バッファ）の上限件数。
+ * printStore.history（MAX_PRINT_HISTORY=1500）と同規模。これを超える分は古い順に破棄。
+ * @constant {number}
+ */
+const HISTORY_DATA_CAP = 1500;
+
+/**
+ * machine.historyData（タイマー情報の中間バッファ）の上限を保つ。
+ *
+ * 【背景・重要】
+ * historyData は印刷ジョブ完了ごとに push されるが、printStore.history と異なり
+ * 上限が無く、長時間運用で無制限に肥大していた。machine 全体は約2秒ごとに
+ * localStorage/IndexedDB へシリアライズされるため、肥大したバッファが
+ * 保存のたびに JSON 化され、メモリ・CPU を圧迫して最終的にハングし得る。
+ * printStore.history と同じ規模の上限（{@link HISTORY_DATA_CAP}）で古いものから捨てる。
+ *
+ * @private
+ * @param {Object} machine - monitorData.machines[host]
+ * @returns {void}
+ */
+function _capHistoryData(machine) {
+  const h = machine?.historyData;
+  if (Array.isArray(h) && h.length > HISTORY_DATA_CAP) {
+    h.splice(0, h.length - HISTORY_DATA_CAP);
+  }
+}
+
+/**
  * persistHistoryTimers:
  *   現在の印刷IDに対応する履歴エントリへタイマー情報をマージし、
  *   永続化を即時実行します。F5 リロードによる消失を防ぐ目的です。
@@ -273,6 +301,7 @@ function persistHistoryTimers(printId, hostname) {
   if (!entry) {
     entry = { id: printId };
     machine.historyData.push(entry);
+    _capHistoryData(machine); // ★ 無制限肥大→保存肥大→ハング を防止
   }
   [
     "preparationTime",
@@ -353,6 +382,9 @@ export function processData(data, hostname) {
   if (!_initializedHosts.has(host)) {
     _initializedHosts.add(host);
     console.info(`[processData] per-host 初期化: ${host}`);
+
+    // ★ 旧版で無制限肥大した historyData を復元直後に一度トリムする（既存肥大の救済）
+    _capHistoryData(machine);
 
     // ★ 初期化ブロック全体を try/catch で保護
     //    ここで例外が出てもデータ書き込み（L784以降）は続行する
@@ -893,6 +925,7 @@ export function processData(data, hostname) {
     // 同一ジョブIDの重複登録を防止する
     if (!machine.historyData.find(h => h.id === entry.id)) {
       machine.historyData.push(entry);
+      _capHistoryData(machine); // ★ 無制限肥大→保存肥大→ハング を防止
       const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
       printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
       persistPrintResume(host);

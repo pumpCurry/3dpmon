@@ -35,6 +35,8 @@ import {
   importHistoryOnly,
   saveUnifiedStorage
 } from "./dashboard_storage.js";
+import { monitorData } from "./dashboard_data.js";
+import { setChartWindowMinutes } from "./dashboard_chart.js";
 
 let liveTimer = null;
 
@@ -125,6 +127,44 @@ export function initStorageUI() {
   // Import (配置のみ)
   impLayoutBtn.addEventListener("click", () => doImportLayoutOnly(panelToast));
 
+  /* ---------------- 保持設定（ログ最大行数 / 温度グラフ保持時間）---------------- */
+  // ※ これまで setting-log-max-lines は未配線（飾りだけ）だった。両者を即時保存で配線する。
+  const elLogMax = document.getElementById("setting-log-max-lines");
+  const elChartWin = document.getElementById("setting-chart-window-min");
+
+  /** 入力値を保存値で初期化する（モーダル展開時に呼ぶ） */
+  const _syncRetentionInputs = () => {
+    if (elLogMax) elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
+    if (elChartWin) elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
+  };
+
+  if (elLogMax) {
+    elLogMax.addEventListener("change", () => {
+      const v = parseInt(elLogMax.value, 10);
+      if (Number.isFinite(v) && v >= 100) {
+        monitorData.appSettings.logMaxLines = v;
+        saveUnifiedStorage(true);
+        panelToast(`ログ最大行数: ${v}`);
+      } else {
+        elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
+      }
+    });
+  }
+  if (elChartWin) {
+    elChartWin.addEventListener("change", () => {
+      const v = parseInt(elChartWin.value, 10);
+      if (Number.isFinite(v) && v >= 1) {
+        const applied = setChartWindowMinutes(v); // 全チャートへ即時反映＋クランプ
+        elChartWin.value = String(applied);
+        monitorData.appSettings.chartWindowMin = applied;
+        saveUnifiedStorage(true);
+        panelToast(`温度グラフ保持時間: ${applied}分`);
+      } else {
+        elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
+      }
+    });
+  }
+
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 
   // サブモーダル開閉時に使用量を更新
@@ -132,7 +172,7 @@ export function initStorageUI() {
   const storageOverlay = document.getElementById("storage-modal-overlay");
   if (storageOverlay) {
     const obs = new MutationObserver(() => {
-      if (storageOverlay.classList.contains("open")) { startLiveUsage(); updateUsage(); }
+      if (storageOverlay.classList.contains("open")) { startLiveUsage(); updateUsage(); _syncRetentionInputs(); }
       else stopLiveUsage();
     });
     obs.observe(storageOverlay, { attributes: true, attributeFilter: ["class"] });
