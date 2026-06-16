@@ -62,6 +62,13 @@ export const MOONRAKER_DEFAULT_MAX_BED = 120;
 export const MOONRAKER_MAX_RECONNECT = 5;
 
 /**
+ * ベルト(無限Z)機と判定する Z 軸上限のしきい値(mm)。
+ * 通常機の Z は数百mm。ベルト機は config で 99999 等の巨大値になる。
+ * @constant {number}
+ */
+export const MOONRAKER_BELT_Z_THRESHOLD = 10000;
+
+/**
  * Moonraker `printer.objects.subscribe` で購読する監視対象オブジェクト。
  * 値 `null` は「そのオブジェクトの全フィールド」を意味する(Moonraker 仕様)。
  *
@@ -73,7 +80,7 @@ export const MOONRAKER_SUBSCRIBE_OBJECTS = {
   print_stats: null,                               // 状態/経過/使用フィラメント/ファイル名
   display_status: null,                            // 進捗(0-1)
   virtual_sdcard: null,                            // ファイル位置進捗(0-1)
-  toolhead: ["position", "homed_axes"],            // 座標フォールバック
+  toolhead: ["position", "homed_axes", "axis_maximum", "axis_minimum"], // 座標フォールバック＋軸範囲(幾何判定)
   gcode_move: ["gcode_position", "speed_factor", "extrude_factor"], // スライサZ(レイヤ算出)/速度/流量
   motion_report: ["live_position", "live_velocity"], // 実位置(プレビュー用・最頻更新)
   fan: ["speed"],                                  // モデルファン
@@ -366,6 +373,23 @@ export function translateMoonrakerStatus(status, ctx, nowMs) {
   // Klippy 異常時はエラー状況へ反映(errorStatus パネル表示用)
   if (klippyState && klippyState !== "ready") {
     out.err = { errcode: 1, key: 0 };
+  }
+
+  // --- 幾何(ベルト機/非正方ベッド) ------------------------------------------
+  // toolhead.axis_maximum から判定。Z 上限が極端に大きい(無限)= ベルト機。
+  // beltGeometry はオブジェクトのため processData のバルク反映から除外され、
+  // setStageGeometry へ明示転送される。model は機器情報パネル表示用の文字列。
+  const am = th.axis_maximum;
+  if (Array.isArray(am) && am.length >= 3) {
+    const zMax = Number(am[2]);
+    const belt = Number.isFinite(zMax) && zMax >= MOONRAKER_BELT_Z_THRESHOLD;
+    out.beltGeometry = {
+      belt,
+      sizeX: Number.isFinite(Number(am[0])) && Number(am[0]) > 0 ? Number(am[0]) : 0,
+      sizeY: Number.isFinite(Number(am[1])) && Number(am[1]) > 0 ? Number(am[1]) : 0,
+      zMax: belt ? null : (Number.isFinite(zMax) ? zMax : null),
+    };
+    out.model = belt ? "Klipper (belt)" : "Klipper";
   }
 
   return out;

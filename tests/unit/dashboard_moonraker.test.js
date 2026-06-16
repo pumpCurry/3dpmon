@@ -458,6 +458,41 @@ describe('残時間(metadata.estimated_time 優先)', () => {
 });
 
 // =============================================================
+// 幾何(ベルト機判定)
+// =============================================================
+describe('beltGeometry 判定', () => {
+  it('Z上限が巨大(99999)ならベルト機・zMax=null', () => {
+    const status = {
+      print_stats: { state: 'printing', print_duration: 1, filename: 'x.gcode' },
+      webhooks: { state: 'ready' },
+      toolhead: { axis_maximum: [250, 354, 99999, 0] },
+    };
+    const out = translateMoonrakerStatus(status, mkCtx(), NOW_MS);
+    expect(out.beltGeometry).toEqual({ belt: true, sizeX: 250, sizeY: 354, zMax: null });
+    expect(out.model).toBe('Klipper (belt)');
+  });
+  it('通常機(Z上限300)はベルトでない・zMax保持', () => {
+    const status = {
+      print_stats: { state: 'printing', print_duration: 1, filename: 'x.gcode' },
+      webhooks: { state: 'ready' },
+      toolhead: { axis_maximum: [220, 220, 250, 0] },
+    };
+    const out = translateMoonrakerStatus(status, mkCtx(), NOW_MS);
+    expect(out.beltGeometry).toEqual({ belt: false, sizeX: 220, sizeY: 220, zMax: 250 });
+    expect(out.model).toBe('Klipper');
+  });
+  it('axis_maximum 無しなら beltGeometry/model を出さない', () => {
+    const status = {
+      print_stats: { state: 'printing', print_duration: 1, filename: 'x.gcode' },
+      webhooks: { state: 'ready' },
+    };
+    const out = translateMoonrakerStatus(status, mkCtx(), NOW_MS);
+    expect('beltGeometry' in out).toBe(false);
+    expect('model' in out).toBe(false);
+  });
+});
+
+// =============================================================
 // サムネイルURL
 // =============================================================
 describe('pickLargestThumbnail / buildMoonrakerThumbUrl', () => {

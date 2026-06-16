@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1119 (PR #385)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-06-16 22:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -53,7 +53,8 @@ import { parseCurPosition, getCurrentTimestamp, normalizeJobId } from "./dashboa
 import {
   updateXYPreview,
   updateZPreview,
-  setPrinterModel
+  setPrinterModel,
+  setStageGeometry
 } from "./dashboard_stage_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import {
@@ -773,6 +774,11 @@ export function processData(data, hostname) {
   // (2.7.2) プリンタモデルに基づくプレビュー設定
   if (data.model) {
     setPrinterModel(String(data.model), host);
+  }
+  // (2.7.2b) 軸範囲由来の幾何(ベルト機/非正方ベッド)。Moonraker 等が beltGeometry を供給する。
+  //   オブジェクト型のため _WS_SKIP_KEYS 相当でバルク反映されず、ここで明示的に処理する。
+  if (data.beltGeometry && typeof data.beltGeometry === "object") {
+    setStageGeometry(data.beltGeometry, host);
   }
 
   // (2.7.3) その他フィールド一括反映
