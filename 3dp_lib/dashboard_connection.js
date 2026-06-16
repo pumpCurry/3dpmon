@@ -225,6 +225,23 @@ async function _resolveAndSaveMac(dest, hostname) {
  * @param {string} dest
  * @returns {string}
  */
+/**
+ * HTML 属性/テキストへ安全に埋め込むためのエスケープ。
+ * 接続先の表示名(label)はユーザー自由入力のため、innerHTML/属性に
+ * そのまま展開すると引用符崩れや XSS の恐れがあるので最小限エスケープする。
+ *
+ * @private
+ * @param {*} s - 入力値
+ * @returns {string} エスケープ済み文字列
+ */
+function _escAttr(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function _extractIp(dest) {
   if (!dest) return "";
   // IPv6 bracket notation: [addr]:port
@@ -1838,10 +1855,15 @@ export function updatePrinterListUI() {
       const toggleBtn = (isConn || isTrying)
         ? `<button class="conn-target-disconnect conn-toggle-btn" data-dest="${dest}" data-host="${info.host}" title="切断（設定は保持）">■</button>`
         : `<button class="conn-target-reconnect conn-toggle-btn" data-dest="${dest}" title="接続">▶</button>`;
+      // 表示名(label)が設定されていれば名前として優先表示する（dest は併記）
+      const lbl = (tgt?.label || "").trim();
+      const nameHtml = lbl
+        ? `${info.stateIcon} ${_escAttr(lbl)} <span class="conn-detail-dest">[${dest}]</span>`
+        : info.line1;
       return `<div class="printer-item conn-detail-item" data-host="${info.host}">
         <div class="conn-detail-row">
           <input type="color" class="conn-target-color conn-color-picker" data-dest="${dest}" value="${color}" title="パネルバー色">
-          <span class="conn-detail-name">${info.line1}</span>
+          <span class="conn-detail-name">${nameHtml}</span>
           ${toggleBtn}
           <label class="conn-webhook-btn" title="Webhook 通知の ON/OFF"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}><span class="conn-webhook-state"></span>📡</label>
           <button class="conn-target-edit conn-edit-btn" data-dest="${dest}" title="接続先設定を編集">⚙</button>
@@ -1857,7 +1879,9 @@ export function updatePrinterListUI() {
     for (const t of savedTargets) {
       if (!connectedDests.has(t.dest)) {
         const savedColor = t.color || "#444444";
-        const savedLabel = t.hostname ? ` (${t.hostname})` : "";
+        // 表示名(label) > ホスト名 の優先で併記
+        const savedLabel = t.label ? ` ${_escAttr(t.label.trim())}`
+                         : t.hostname ? ` (${_escAttr(t.hostname)})` : "";
         listHtml += `<div class="conn-detail-item disconnected">
           <div class="conn-detail-row">
             <input type="color" class="conn-target-color conn-color-picker" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色">
@@ -1962,13 +1986,13 @@ export function updatePrinterListUI() {
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
 
-        const result = await showConfirmDialog({
+        const dlgPromise = showConfirmDialog({
           level: "info",
           title: `接続先設定: ${dest}`,
           html: `
             <div class="conn-edit-grid">
               <label>表示名:</label>
-              <input type="text" id="edit-label" value="${currentLabel}">
+              <input type="text" id="edit-label" value="${_escAttr(currentLabel)}">
               <label>カメラポート:</label>
               <input type="number" id="edit-cam-port" value="${currentCam}" min="1" max="65535">
               <label>HTTPポート:</label>
@@ -1977,16 +2001,21 @@ export function updatePrinterListUI() {
           confirmText: "保存",
           cancelText: "キャンセル"
         });
-        if (!result) return;
-        // showConfirmDialog から値を取得（DOM がまだ存在する場合）
+        // ★ ダイアログ生成は同期。await の前に入力要素参照を捕捉する。
+        //   detach 後も element.value は保持されるため、ダイアログ DOM 破棄の
+        //   タイミングに依存せず確実に値を読み取れる（保存取りこぼしの二重防御）。
         const labelEl = document.getElementById("edit-label");
         const camEl = document.getElementById("edit-cam-port");
         const httpEl = document.getElementById("edit-http-port");
-        if (labelEl) tgt.label = labelEl.value;
+        const result = await dlgPromise;
+        if (!result) return;
+        if (labelEl) tgt.label = labelEl.value.trim();
         if (camEl) tgt.cameraPort = parseInt(camEl.value, 10) || currentCam;
         if (httpEl) tgt.httpPort = parseInt(httpEl.value, 10) || currentHttp;
         saveUnifiedStorage();
         updatePrinterListUI();
+        // 表示名(label)/色はパネルヘッダーにも反映されるため即時更新する
+        updateAllPanelHeaders();
       });
     });
 

@@ -15,9 +15,9 @@
  * - {@link showConfirmDialog}：確認モーダル
  * - {@link showInputDialog}：入力モーダル
  *
- * @version 1.390.317 (PR #143)
+ * @version 2.2.1027 (PR #385)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2026-06-17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -136,9 +136,7 @@ export function showConfirmDialog({
       btnConfirm.className = "confirm-button confirm-destructive";
       btnConfirm.textContent = confirmText;
       btnConfirm.style.color = color;
-      btnConfirm.addEventListener("click", () => {
-        cleanup(); resolve(true);
-      });
+      btnConfirm.addEventListener("click", () => close(true));
       btns.appendChild(btnConfirm);
     }
 
@@ -147,9 +145,7 @@ export function showConfirmDialog({
       const btnMiddle = document.createElement("button");
       btnMiddle.className = "confirm-button confirm-safe";
       btnMiddle.textContent = middleText;
-      btnMiddle.addEventListener("click", () => {
-        cleanup(); resolve("middle");
-      });
+      btnMiddle.addEventListener("click", () => close("middle"));
       btns.appendChild(btnMiddle);
     }
 
@@ -158,15 +154,32 @@ export function showConfirmDialog({
       const btnCancel = document.createElement("button");
       btnCancel.className = "confirm-button confirm-safe";
       btnCancel.textContent = cancelText;
-      btnCancel.addEventListener("click", () => {
-        cleanup(); resolve(false);
-      });
+      btnCancel.addEventListener("click", () => close(false));
       btns.appendChild(btnCancel);
+    }
+
+    let _settled = false;
+    /**
+     * ダイアログを確定して resolve する。
+     *
+     * ★ 重要: DOM 破棄(cleanup)を「次のマクロタスク」へ遅延する。
+     * resolve → await 継続はマイクロタスクで先に走るため、呼び出し側は
+     * await 直後に `document.getElementById(...)` でフォーム入力値を読み取れる
+     * （従来は resolve 前に DOM を除去していたため、html 入力を持つ全ダイアログで
+     *  保存処理が値を取りこぼし「保存しても変わらない」ダミー化していた）。
+     *
+     * @param {true|false|"middle"} value - resolve する値
+     */
+    function close(value) {
+      if (_settled) return;
+      _settled = true;
+      resolve(value);
+      setTimeout(cleanup, 0);
     }
 
     function cleanup() {
       document.removeEventListener("keydown", handleKeydown);
-      document.body.removeChild(overlay);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       _zIndexCounter--;
     }
 
@@ -177,8 +190,7 @@ export function showConfirmDialog({
     function handleKeydown(e) {
       if (e.key === "Escape") {
         e.preventDefault();
-        cleanup();
-        resolve(cancelText ? false : true);
+        close(cancelText ? false : true);
         return;
       }
       // フォーカストラップ: Tab キーをダイアログ内に閉じ込める
