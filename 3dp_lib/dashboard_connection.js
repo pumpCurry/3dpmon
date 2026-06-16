@@ -48,7 +48,7 @@ import {
   markAllKeysDirty,
   scopedById
 } from "./dashboard_data.js";
-import { pushLog } from "./dashboard_log_util.js";
+import { pushLog, pushGcodeConsole } from "./dashboard_log_util.js";
 import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
 import { restorePrintResume } from "./3dp_dashboard_init.js";
 import { processData } from "./dashboard_msg_handler.js";
@@ -945,6 +945,14 @@ function connectMoonraker(dest, host) {
         }
       } catch (e) {
         console.error("[moonraker] onAux 処理エラー:", e);
+      }
+    },
+    // リアルタイム gcode コンソール出力 → ログパネルの Gcode タブへ
+    onGcode: (line, resolvedHost) => {
+      try {
+        pushGcodeConsole(resolvedHost || host, line);
+      } catch (e) {
+        console.error("[moonraker] onGcode 処理エラー:", e);
       }
     },
     // ユーザー明示切断時(userDisc=true)は再接続しない

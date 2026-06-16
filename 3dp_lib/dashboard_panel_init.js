@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.1119 (PR #385)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-03-10 23:30:00
+ * @lastModified 2026-06-16 22:30:00
  * -----------------------------------------------------------
  */
 
@@ -546,31 +546,38 @@ function initLogPanel(body, hostname) {
     initLogRenderer(logBox, notifBox, hostname);
   }
 
-  // タブ切り替え
+  // タブ切り替え（受信ログ / 通知ログ / Gcode コンソール）
   const tabReceived = body.querySelector("#tab-received");
   const tabNotification = body.querySelector("#tab-notification");
+  const tabGcode = body.querySelector("#tab-gcode");
+  const gcodeBox = body.querySelector("#gcode-console");
   const tsReceivedEl = body.querySelector("#last-log-timestamp");
   const tsErrorEl = body.querySelector("#last-notification-timestamp");
+  const logControlsEl = body.querySelector("#log-controls");
+  const notifControlsEl = body.querySelector("#notification-controls");
 
-  if (tabReceived && tabNotification) {
-    tabReceived.addEventListener("click", () => {
-      tabReceived.classList.add("active");
-      tabNotification.classList.remove("active");
-      if (logBox) logBox.classList.remove("hidden");
-      if (tsReceivedEl) tsReceivedEl.classList.remove("hidden");
-      if (notifBox) notifBox.classList.add("hidden");
-      if (tsErrorEl) tsErrorEl.classList.add("hidden");
-    });
+  /**
+   * 3 タブのうち 1 つを表示し、他を隠す。
+   * @param {"received"|"notification"|"gcode"} which - 表示するタブ
+   * @returns {void}
+   */
+  const selectLogTab = (which) => {
+    const tabs = { received: tabReceived, notification: tabNotification, gcode: tabGcode };
+    for (const [k, el] of Object.entries(tabs)) {
+      if (el) el.classList.toggle("active", k === which);
+    }
+    if (logBox) logBox.classList.toggle("hidden", which !== "received");
+    if (notifBox) notifBox.classList.toggle("hidden", which !== "notification");
+    if (gcodeBox) gcodeBox.classList.toggle("hidden", which !== "gcode");
+    if (tsReceivedEl) tsReceivedEl.classList.toggle("hidden", which !== "received");
+    if (tsErrorEl) tsErrorEl.classList.toggle("hidden", which !== "notification");
+    if (logControlsEl) logControlsEl.classList.toggle("hidden", which !== "received");
+    if (notifControlsEl) notifControlsEl.classList.toggle("hidden", which !== "notification");
+  };
 
-    tabNotification.addEventListener("click", () => {
-      tabNotification.classList.add("active");
-      tabReceived.classList.remove("active");
-      if (logBox) logBox.classList.add("hidden");
-      if (tsReceivedEl) tsReceivedEl.classList.add("hidden");
-      if (notifBox) notifBox.classList.remove("hidden");
-      if (tsErrorEl) tsErrorEl.classList.remove("hidden");
-    });
-  }
+  if (tabReceived) tabReceived.addEventListener("click", () => selectLogTab("received"));
+  if (tabNotification) tabNotification.addEventListener("click", () => selectLogTab("notification"));
+  if (tabGcode) tabGcode.addEventListener("click", () => selectLogTab("gcode"));
 
   // コピーボタン（HTML上のID: copy-all-button, copy-last-50-button, copy-storeddata-button,
   //   copy-all-notification-button, copy-last-50-notification-button）
@@ -627,20 +634,7 @@ function initLogPanel(body, hostname) {
       if (el) el.innerHTML = "";
     });
   }
-
-  // 受信ログ/通知ログ切替時にコントロール表示も切り替え
-  const logControls = body.querySelector("#log-controls");
-  const notifControls = body.querySelector("#notification-controls");
-  if (tabReceived && logControls && notifControls) {
-    tabReceived.addEventListener("click", () => {
-      logControls.classList.remove("hidden");
-      notifControls.classList.add("hidden");
-    });
-    tabNotification.addEventListener("click", () => {
-      logControls.classList.add("hidden");
-      notifControls.classList.remove("hidden");
-    });
-  }
+  // ※ コントロール(コピー/消去)ボタンの表示切替は selectLogTab() に統合済み。
 }
 
 /**

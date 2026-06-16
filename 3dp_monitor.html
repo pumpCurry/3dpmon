@@ -826,6 +826,8 @@
         <div class="tabs">
           <button id="tab-received" class="active">受信ログ</button>
           <button id="tab-notification">通知ログ</button>
+          <!-- Moonraker(Klipper)機のリアルタイム gcode コンソール出力 -->
+          <button id="tab-gcode">Gcode</button>
         </div>
         <div id="log-controls" class="log-controls">
           <button id="copy-all-button" data-original="全てコピー" style="font-size:12px;">全てコピー</button>
@@ -857,6 +859,9 @@
 
         <!-- 通知表示エリア (hidden 初期表示) -->
         <div id="notification-history" class="log-box hidden"></div>
+
+        <!-- gcode コンソール (hidden 初期表示・Moonraker機の notify_gcode_response) -->
+        <div id="gcode-console" class="log-box hidden"></div>
       </div>
     </div>
   </div>

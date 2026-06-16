@@ -531,6 +531,7 @@ export function moonrakerFilesToEntries(files, metaMap, httpBase) {
  * @param {function(Object, string):void} [opts.onAux] - 履歴/ファイル一覧の通知
  *   (aux: {historyList?, fileEntries?, fileTotal?}, resolvedHost) を渡す。
  *   Date 等を保つため JSON を経由せず直接渡す。
+ * @param {function(string, string):void} [opts.onGcode] - gcode コンソール行 (line, resolvedHost)
  * @param {string} [opts.httpBase] - サムネイル/ファイル取得用 "http://IP:PORT"
  * @param {function():boolean} opts.shouldReconnect - 再接続を許可するか判定する述語
  * @returns {{close: function():void}} セッションハンドル(close で明示停止)
@@ -543,6 +544,7 @@ export function createMoonrakerSession(opts) {
     onState = () => {},
     onData = () => {},
     onAux = () => {},
+    onGcode = () => {},
     httpBase = "",
     shouldReconnect = () => false,
   } = opts || {};
@@ -775,6 +777,11 @@ export function createMoonrakerSession(opts) {
     } else if (msg.method === "notify_filelist_changed") {
       // ファイル追加/削除/更新 → ファイル一覧を再取得
       fetchFiles();
+    } else if (msg.method === "notify_gcode_response" && Array.isArray(msg.params)) {
+      // リアルタイム gcode コンソール出力(温度自動報告/echo/M117/エラー応答等)
+      for (const line of msg.params) {
+        if (line != null && line !== "") onGcode(String(line), ctx.hostname);
+      }
     }
   };
 
