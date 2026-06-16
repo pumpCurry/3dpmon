@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1119 (PR #385)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-06-16 21:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -488,8 +488,9 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   // 材料使用量: 機器報告値をそのまま保持（丸めない）
   const materialUsedMm = Number(raw.usagematerial || 0);
 
-  // raw.filename に基づくサムネイル生成
-  const thumbUrl       = makeThumbUrl(baseUrl, raw.filename);
+  // サムネイルURL: 呼び出し側が完成URLを供給していればそれを優先（Moonraker等の
+  // 別スキーム対応）。無ければ従来どおり K1 仕様(humbnailフォルダ)で組み立てる。
+  const thumbUrl       = raw.thumbUrl || makeThumbUrl(baseUrl, raw.filename);
 
   const startway       = raw.startway;
   const size           = raw.size;
@@ -2725,7 +2726,11 @@ function parseFileInfo(text, baseUrl) {
 export function renderFileList(info, baseUrl, hostname) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
   pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info", false, hostname);
-  const arr = parseFileInfo(info.fileInfo, baseUrl);
+  // ★ Moonraker 等は K1 の区切り文字列ではなく、解析済みエントリ配列(info.entries)を
+  //   直接供給できる。供給があればそれを使い、無ければ従来の fileInfo 文字列を解析する。
+  const arr = Array.isArray(info.entries)
+    ? info.entries.slice()
+    : parseFileInfo(info.fileInfo, baseUrl);
 
   // 最新の一覧をアップロード検証用に保持
   _fileListMap.set(hostname, arr.slice());

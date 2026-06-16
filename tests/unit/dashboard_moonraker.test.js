@@ -32,6 +32,10 @@ import {
   mapMoonrakerState,
   mergeMoonrakerStatus,
   translateMoonrakerStatus,
+  pickLargestThumbnail,
+  buildMoonrakerThumbUrl,
+  moonrakerHistoryToK1,
+  moonrakerFilesToEntries,
   MOONRAKER_DEFAULT_MAX_NOZZLE,
   MOONRAKER_DEFAULT_MAX_BED,
 } from '../../3dp_lib/dashboard_moonraker.js';
@@ -450,5 +454,130 @@ describe('残時間(metadata.estimated_time 優先)', () => {
     const out = translateMoonrakerStatus(status, mkCtx({ meta: { estimatedTime: 5380 } }), NOW_MS);
     // 5380-6000<0 → 線形: total=6000/0.8=7500 → 残=1500
     expect(out.printLeftTime).toBe(1500);
+  });
+});
+
+// =============================================================
+// サムネイルURL
+// =============================================================
+describe('pickLargestThumbnail / buildMoonrakerThumbUrl', () => {
+  const THUMBS = [
+    { width: 32, height: 32, relative_path: '.thumbs/foo-32x32.png' },
+    { width: 200, height: 200, relative_path: '.thumbs/foo-200x200.png' },
+  ];
+  it('最大サイズのサムネを選ぶ', () => {
+    expect(pickLargestThumbnail(THUMBS).width).toBe(200);
+  });
+  it('空配列/未定義は null', () => {
+    expect(pickLargestThumbnail([])).toBeNull();
+    expect(pickLargestThumbnail(undefined)).toBeNull();
+  });
+  it('ルート直下ファイルのサムネURL', () => {
+    const u = buildMoonrakerThumbUrl('http://192.168.54.15:80', 'foo.gcode', '.thumbs/foo-200x200.png');
+    expect(u).toBe('http://192.168.54.15:80/server/files/gcodes/.thumbs/foo-200x200.png');
+  });
+  it('サブフォルダ内ファイルは相対パスにディレクトリを前置する', () => {
+    const u = buildMoonrakerThumbUrl('http://h:80', 'sub/dir/foo.gcode', '.thumbs/foo-200x200.png');
+    expect(u).toBe('http://h:80/server/files/gcodes/sub/dir/.thumbs/foo-200x200.png');
+  });
+});
+
+// =============================================================
+// 履歴変換(Moonraker server.history.list → K1 raw)
+// =============================================================
+describe('moonrakerHistoryToK1', () => {
+  // 実機 server.history.list の形(3DBenchy)
+  const JOBS = [
+    {
+      job_id: '000004', status: 'in_progress', filename: '3DBenchy-PLA.gcode',
+      start_time: 1781591339.67, print_duration: 0, filament_used: 0,
+      metadata: { size: 4690168, thumbnails: [{ width: 200, relative_path: '.thumbs/3DBenchy-PLA-200x200.png' }], filament_type: 'PLA' },
+    },
+    {
+      job_id: '000003', status: 'cancelled', filename: '3DBenchy-PLA.gcode',
+      start_time: 1744784914.42, print_duration: 1614.62, filament_used: 2251.31,
+      metadata: { size: 4690168, thumbnails: [{ width: 32, relative_path: '.thumbs/a-32x32.png' }, { width: 200, relative_path: '.thumbs/a-200x200.png' }], filament_type: 'PLA' },
+    },
+    {
+      job_id: '000002', status: 'completed', filename: 'Cube-PLA.gcode',
+      start_time: 1744000000.0, print_duration: 600.4, filament_used: 800.9,
+      metadata: { thumbnails: [] },
+    },
+  ];
+  const out = moonrakerHistoryToK1(JOBS, 'http://h:80');
+
+  it('in_progress は除外する(現在ジョブはライブ側)', () => {
+    expect(out.length).toBe(2);
+    expect(out.some((e) => e.id === Math.floor(1781591339.67))).toBe(false);
+  });
+  it('id/starttime は start_time の floor', () => {
+    const j = out.find((e) => e.id === 1744784914);
+    expect(j).toBeTruthy();
+    expect(j.starttime).toBe(1744784914);
+  });
+  it('使用時間/材料は整数化', () => {
+    const j = out.find((e) => e.id === 1744784914);
+    expect(j.usagetime).toBe(1615);
+    expect(j.usagematerial).toBe(2251);
+  });
+  it('printfinish: completed→1 / それ以外→0', () => {
+    expect(out.find((e) => e.filename === 'Cube-PLA.gcode').printfinish).toBe(1);
+    expect(out.find((e) => e.id === 1744784914).printfinish).toBe(0); // cancelled
+  });
+  it('thumbUrl は最大サムネから組む / 無ければ空', () => {
+    expect(out.find((e) => e.id === 1744784914).thumbUrl)
+      .toBe('http://h:80/server/files/gcodes/.thumbs/a-200x200.png');
+    expect(out.find((e) => e.filename === 'Cube-PLA.gcode').thumbUrl).toBe('');
+  });
+  it('非配列は空配列', () => {
+    expect(moonrakerHistoryToK1(null, 'http://h')).toEqual([]);
+  });
+});
+
+// =============================================================
+// ファイル一覧変換(Moonraker server.files.list + metadata → entries)
+// =============================================================
+describe('moonrakerFilesToEntries', () => {
+  const FILES = [
+    { path: '3DBenchy-PLA.gcode', size: 4690168, modified: 1732008962 },
+    { path: 'sub/Piggy.gcode', size: 9975038, modified: 1732008957 },
+  ];
+  const METAS = {
+    '3DBenchy-PLA.gcode': {
+      object_height: 140.502, layer_height: 0.283, first_layer_height: 0.4,
+      estimated_time: 2720, filament_total: 3633.7,
+      thumbnails: [{ width: 200, relative_path: '.thumbs/3DBenchy-PLA-200x200.png' }],
+    },
+    'sub/Piggy.gcode': { layer_count: 250, estimated_time: 5380, filament_total: 7030.9, thumbnails: [] },
+  };
+  const out = moonrakerFilesToEntries(FILES, METAS, 'http://h:80');
+
+  it('basename / size(数値) / number', () => {
+    expect(out[0].basename).toBe('3DBenchy-PLA.gcode');
+    expect(out[0].size).toBe(4690168);
+    expect(typeof out[0].size).toBe('number');
+    expect(out[0].number).toBe(1);
+  });
+  it('mtime は Date オブジェクト(JSON非経由で直接渡す前提)', () => {
+    expect(out[0].mtime instanceof Date).toBe(true);
+    expect(out[0].mtime.getTime()).toBe(1732008962 * 1000);
+  });
+  it('layer: 高さ/層厚から導出', () => {
+    // ceil((140.502-0.4)/0.283)+1
+    expect(out[0].layer).toBe(Math.ceil((140.502 - 0.4) / 0.283) + 1);
+  });
+  it('layer: layer_count があれば優先', () => {
+    expect(out[1].layer).toBe(250);
+  });
+  it('expect=filament_total, usagetime=estimated_time', () => {
+    expect(out[0].expect).toBe(3633.7);
+    expect(out[0].usagetime).toBe(2720);
+  });
+  it('サブフォルダのファイルは filename にパスを保持し thumb 無しは空', () => {
+    expect(out[1].filename).toBe('sub/Piggy.gcode');
+    expect(out[1].thumbUrl).toBe('');
+  });
+  it('サムネURL(ルート)', () => {
+    expect(out[0].thumbUrl).toBe('http://h:80/server/files/gcodes/.thumbs/3DBenchy-PLA-200x200.png');
   });
 });

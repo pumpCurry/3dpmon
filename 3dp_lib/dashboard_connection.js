@@ -905,11 +905,13 @@ function connectMoonraker(dest, host) {
 
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
   const url = `${protocol}${dest}/websocket`;
+  const httpBase = (location.protocol === "https:" ? "https://" : "http://") + dest;
   const fallbackHost = _extractIp(dest) || host;
 
   st._extSession = createMoonrakerSession({
     url,
     fallbackHost,
+    httpBase,
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
     onState: (s) => {
       st.state = s;
@@ -925,6 +927,24 @@ function connectMoonraker(dest, host) {
         simulateReceivedJson(JSON.stringify(k1obj), host);
       } catch (e) {
         console.error("[moonraker] onData 処理エラー:", e);
+      }
+    },
+    // 履歴/ファイル一覧（Date 等を保つため JSON を経由せず直接 printManager へ）
+    onAux: (aux, resolvedHost) => {
+      try {
+        const h = resolvedHost || host;
+        const baseUrl = `http://${getDeviceDest(h)}`;
+        if (Array.isArray(aux.historyList)) {
+          printManager.updateHistoryList(aux.historyList, baseUrl, "print-current-container", h);
+        }
+        if (Array.isArray(aux.fileEntries)) {
+          const machine = monitorData.machines[h];
+          const info = { entries: aux.fileEntries, totalNum: aux.fileTotal ?? aux.fileEntries.length };
+          if (machine) machine._cachedFileInfo = info;
+          printManager.renderFileList(info, baseUrl, h);
+        }
+      } catch (e) {
+        console.error("[moonraker] onAux 処理エラー:", e);
       }
     },
     // ユーザー明示切断時(userDisc=true)は再接続しない

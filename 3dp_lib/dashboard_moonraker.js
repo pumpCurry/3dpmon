@@ -371,6 +371,118 @@ export function translateMoonrakerStatus(status, ctx, nowMs) {
   return out;
 }
 
+/* ==========================================================================
+ * 履歴 / ファイル一覧の変換(Moonraker REST/RPC → K1 形)
+ * ======================================================================== */
+
+/**
+ * Moonraker のサムネイル配列から最大サイズのものを選ぶ。
+ *
+ * @function pickLargestThumbnail
+ * @param {Array<{width:number,relative_path:string}>} thumbnails - metadata.thumbnails
+ * @returns {?{width:number,relative_path:string}} 最大サムネ、無ければ null
+ */
+export function pickLargestThumbnail(thumbnails) {
+  if (!Array.isArray(thumbnails) || thumbnails.length === 0) return null;
+  return thumbnails.reduce((a, b) => (Number(b?.width || 0) > Number(a?.width || 0) ? b : a));
+}
+
+/**
+ * Moonraker のサムネイル相対パスから完全な画像URLを組み立てる。
+ * relative_path は gcode ファイルのあるディレクトリからの相対パス。
+ *
+ * @function buildMoonrakerThumbUrl
+ * @param {string} httpBase     - "http://IP:PORT"
+ * @param {string} gcodeFilename - gcodes ルートからの相対ファイルパス
+ * @param {string} relativePath  - thumbnail.relative_path
+ * @returns {string} 完全なサムネイルURL(組み立て不能時は空文字)
+ */
+export function buildMoonrakerThumbUrl(httpBase, gcodeFilename, relativePath) {
+  if (!httpBase || !relativePath) return "";
+  const fn = String(gcodeFilename || "");
+  const dir = fn.includes("/") ? fn.slice(0, fn.lastIndexOf("/") + 1) : "";
+  const path = dir + relativePath;
+  return `${httpBase}/server/files/gcodes/${path}`;
+}
+
+/**
+ * Moonraker `server.history.list` のジョブ配列を、K1 の生履歴エントリ配列へ変換する。
+ * 進行中(in_progress)ジョブは現在ジョブとしてライブ状態側で扱うため除外する。
+ *
+ * @function moonrakerHistoryToK1
+ * @param {Array<Object>} jobs - server.history.list の result.jobs
+ * @param {string} httpBase    - サムネイル用 "http://IP:PORT"
+ * @returns {Array<Object>} parseRawHistoryEntry が解釈できる生履歴エントリ配列
+ */
+export function moonrakerHistoryToK1(jobs, httpBase) {
+  if (!Array.isArray(jobs)) return [];
+  return jobs
+    .filter((j) => j && j.status !== "in_progress" && Number.isFinite(Number(j.start_time)))
+    .map((j) => {
+      const md = j.metadata || {};
+      const thumb = pickLargestThumbnail(md.thumbnails);
+      const thumbUrl = thumb ? buildMoonrakerThumbUrl(httpBase, j.filename, thumb.relative_path) : "";
+      // 状態: completed → 成功(1) / それ以外(cancelled/error/klippy_*) → 失敗(0)
+      const printfinish = j.status === "completed" ? 1 : 0;
+      return {
+        id: Math.floor(Number(j.start_time)),
+        filename: j.filename,
+        starttime: Math.floor(Number(j.start_time)),
+        usagetime: Math.round(Number(j.print_duration || 0)),
+        usagematerial: Math.round(Number(j.filament_used || 0)),
+        printfinish,
+        size: Number(md.size || 0) || undefined,
+        thumbUrl,
+        filamentType: md.filament_type || undefined,
+      };
+    });
+}
+
+/**
+ * Moonraker のファイル一覧＋メタ情報を、renderFileList が受け取れる解析済みエントリ配列へ変換する。
+ * mtime は Date オブジェクトで返す(JSON を経由せず直接コールバックで渡す前提)。
+ *
+ * @function moonrakerFilesToEntries
+ * @param {Array<{path:string,size:number,modified:number}>} files - server.files.list の結果
+ * @param {Object<string,Object>} metaMap - path → server.files.metadata 結果
+ * @param {string} httpBase - サムネイル用 "http://IP:PORT"
+ * @returns {Array<Object>} renderFileList の entries 用配列
+ */
+export function moonrakerFilesToEntries(files, metaMap, httpBase) {
+  if (!Array.isArray(files)) return [];
+  const metas = metaMap || {};
+  return files.map((f, i) => {
+    const meta = metas[f.path] || {};
+    const thumb = pickLargestThumbnail(meta.thumbnails);
+    const thumbUrl = thumb ? buildMoonrakerThumbUrl(httpBase, f.path, thumb.relative_path) : "";
+    // 総レイヤー: layer_count 優先、無ければ高さ/層厚から導出
+    let layer = 0;
+    if (Number.isFinite(Number(meta.layer_count)) && Number(meta.layer_count) > 0) {
+      layer = Number(meta.layer_count);
+    } else if (Number(meta.object_height) > 0 && Number(meta.layer_height) > 0) {
+      const flh = Number.isFinite(Number(meta.first_layer_height)) ? Number(meta.first_layer_height) : Number(meta.layer_height);
+      layer = Math.ceil((Number(meta.object_height) - flh) / Number(meta.layer_height)) + 1;
+    }
+    const estSec = Number.isFinite(Number(meta.estimated_time)) ? Math.round(Number(meta.estimated_time)) : 0;
+    const filamentMm = Number.isFinite(Number(meta.filament_total)) ? Number(meta.filament_total) : null;
+    return {
+      number: i + 1,
+      basename: String(f.path || "").split("/").pop(),
+      size: Number(f.size || 0),
+      layer: Number(layer || 0),
+      mtime: new Date(Number(f.modified || 0) * 1000),
+      expect: filamentMm != null ? filamentMm : null,
+      thumbUrl,
+      filename: f.path,            // gcodes ルートからの相対パス(印刷コマンドで使用)
+      usagetime: estSec,
+      usagematerial: filamentMm != null ? Math.round(filamentMm) : 0,
+      filemd5: "",
+      printCount: 0,
+      _gcodeMeta: estSec ? { timeSec: estSec, layers: String(layer || ""), filamentMm } : undefined,
+    };
+  });
+}
+
 /**
  * Moonraker WebSocket セッションを生成し、接続・購読・再接続を管理する。
  *
@@ -392,6 +504,10 @@ export function translateMoonrakerStatus(status, ctx, nowMs) {
  * @param {function(string, string=):void} opts.onLog - ログ出力 (message, level)
  * @param {function("connecting"|"connected"|"waiting"|"disconnected"):void} opts.onState - 状態通知
  * @param {function(Object):void} opts.onData - 翻訳済み K1 形データの通知
+ * @param {function(Object, string):void} [opts.onAux] - 履歴/ファイル一覧の通知
+ *   (aux: {historyList?, fileEntries?, fileTotal?}, resolvedHost) を渡す。
+ *   Date 等を保つため JSON を経由せず直接渡す。
+ * @param {string} [opts.httpBase] - サムネイル/ファイル取得用 "http://IP:PORT"
  * @param {function():boolean} opts.shouldReconnect - 再接続を許可するか判定する述語
  * @returns {{close: function():void}} セッションハンドル(close で明示停止)
  */
@@ -402,6 +518,8 @@ export function createMoonrakerSession(opts) {
     onLog = () => {},
     onState = () => {},
     onData = () => {},
+    onAux = () => {},
+    httpBase = "",
     shouldReconnect = () => false,
   } = opts || {};
 
@@ -450,6 +568,28 @@ export function createMoonrakerSession(opts) {
     }
   };
 
+  /** RPC id → {resolve, reject}(Promise ベースの一発リクエスト用) */
+  const pendingRpc = new Map();
+
+  /**
+   * JSON-RPC を Promise で投げる(履歴/ファイル取得などの取得系に使用)。
+   * @private
+   * @param {string} method - メソッド名
+   * @param {Object} [params] - パラメータ
+   * @returns {Promise<*>} result
+   */
+  const rpc = (method, params = {}) => new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) { reject(new Error("ws not open")); return; }
+    const id = ++rpcId;
+    pendingRpc.set(id, { resolve, reject });
+    try {
+      ws.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+    } catch (e) {
+      pendingRpc.delete(id);
+      reject(e);
+    }
+  });
+
   /**
    * 現在の累積状態を翻訳して onData に渡す。
    * @private
@@ -479,6 +619,53 @@ export function createMoonrakerSession(opts) {
     send("server.files.metadata", { filename: fn }, "meta");
   };
 
+  /** ファイルメタ取得の上限(大量ファイル時の RPC 過多を防ぐ) */
+  const FILE_META_CAP = 80;
+
+  /**
+   * 印刷履歴(server.history.list)を取得して K1 形へ変換し onAux 経由で通知する。
+   * 進行中ジョブの開始 epoch をライブのジョブIDへ同期して、履歴と現在ジョブのIDを一致させる。
+   * @private
+   * @returns {Promise<void>}
+   */
+  const fetchHistory = async () => {
+    try {
+      const res = await rpc("server.history.list", { limit: 100, order: "desc" });
+      const jobs = res?.jobs || [];
+      // 進行中ジョブの start_time をライブのジョブIDに採用(履歴と現在ジョブのID整合)
+      const inprog = jobs.find((j) => j && j.status === "in_progress" && Number.isFinite(Number(j.start_time)));
+      if (inprog) ctx.job.startEpoch = Math.floor(Number(inprog.start_time));
+      const historyList = moonrakerHistoryToK1(jobs, httpBase);
+      onAux({ historyList }, ctx.hostname);
+      onLog(`[moonraker] 履歴 ${historyList.length} 件を取得`, "info");
+    } catch (e) {
+      onLog(`[moonraker] 履歴取得失敗: ${e.message}`, "warn");
+    }
+  };
+
+  /**
+   * gcode ファイル一覧(server.files.list)＋各メタ情報を取得し、解析済みエントリへ変換して通知する。
+   * @private
+   * @returns {Promise<void>}
+   */
+  const fetchFiles = async () => {
+    try {
+      const res = await rpc("server.files.list", { root: "gcodes" });
+      const files = Array.isArray(res) ? res : (res?.files || []);
+      const capped = files.slice(0, FILE_META_CAP);
+      const metaMap = {};
+      for (const f of capped) {
+        try { metaMap[f.path] = await rpc("server.files.metadata", { filename: f.path }); }
+        catch { /* 個別メタ失敗は無視(名前/サイズのみで描画) */ }
+      }
+      const fileEntries = moonrakerFilesToEntries(capped, metaMap, httpBase);
+      onAux({ fileEntries, fileTotal: files.length }, ctx.hostname);
+      onLog(`[moonraker] ファイル ${fileEntries.length}/${files.length} 件を取得`, "info");
+    } catch (e) {
+      onLog(`[moonraker] ファイル一覧取得失敗: ${e.message}`, "warn");
+    }
+  };
+
   /**
    * 受信メッセージを処理する。
    * @private
@@ -494,7 +681,16 @@ export function createMoonrakerSession(opts) {
     }
     if (!msg || typeof msg !== "object") return;
 
-    // --- RPC 応答 ---
+    // --- Promise ベース RPC 応答(履歴/ファイル取得) ---
+    if (msg.id != null && pendingRpc.has(msg.id)) {
+      const { resolve, reject } = pendingRpc.get(msg.id);
+      pendingRpc.delete(msg.id);
+      if (msg.error) reject(new Error(msg.error.message || "rpc error"));
+      else resolve(msg.result);
+      return;
+    }
+
+    // --- RPC 応答(タグ方式: 初期化フロー) ---
     if (msg.id != null && pending.has(msg.id)) {
       const tag = pending.get(msg.id);
       pending.delete(msg.id);
@@ -517,6 +713,9 @@ export function createMoonrakerSession(opts) {
         mergeMoonrakerStatus(accStatus, result.status);
         maybeFetchMeta();
         emit();
+        // 状態購読が確立(=ホスト確定・パネル生成済み)した後に履歴/ファイルを取得
+        fetchHistory();
+        fetchFiles();
       } else if (tag === "meta" && result) {
         // gcode メタ(残時間/レイヤー算出用)を ctx へ格納
         ctx.meta = {
@@ -546,6 +745,12 @@ export function createMoonrakerSession(opts) {
       mergeMoonrakerStatus(accStatus, { webhooks: { state: "ready" } });
       emit();
       onLog("[moonraker] Klippy が ready になりました", "info");
+    } else if (msg.method === "notify_history_changed") {
+      // ジョブ追加/完了 → 履歴を再取得
+      fetchHistory();
+    } else if (msg.method === "notify_filelist_changed") {
+      // ファイル追加/削除/更新 → ファイル一覧を再取得
+      fetchFiles();
     }
   };
 
@@ -589,6 +794,7 @@ export function createMoonrakerSession(opts) {
     ws.onopen = () => {
       reconnectCount = 0;
       accStatus = {};
+      lastMetaFile = null; // 再接続時にメタ再取得を許可
       onState("connected");
       onLog(`[moonraker] 接続確立: ${url}`, "info");
       // まずホスト名を取得(その応答内で config 取得→購読を連鎖実行)
@@ -600,6 +806,9 @@ export function createMoonrakerSession(opts) {
     };
     ws.onclose = () => {
       pending.clear();
+      // 取得系の保留 Promise を解放(再接続後に再取得される)
+      for (const { reject } of pendingRpc.values()) { try { reject(new Error("ws closed")); } catch { /* noop */ } }
+      pendingRpc.clear();
       scheduleReconnect();
     };
   }
@@ -611,6 +820,8 @@ export function createMoonrakerSession(opts) {
   const close = () => {
     closed = true;
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    for (const { reject } of pendingRpc.values()) { try { reject(new Error("session closed")); } catch { /* noop */ } }
+    pendingRpc.clear();
     if (ws) {
       try {
         ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
