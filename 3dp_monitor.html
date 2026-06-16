@@ -69,8 +69,36 @@
         <button class="conn-modal-close" id="conn-modal-close">×</button>
       </div>
 
-      <!-- 上部固定エリア: 接続追加 + オプション -->
+      <!-- 上部固定エリア: 設定ショートカット + 表示オプション -->
       <div class="conn-modal-toolbar">
+        <!-- ① 各種設定（通知 / ストレージ / 外部連携）を最上段に -->
+        <div class="conn-action-row">
+          <button id="conn-modal-notif-btn" class="conn-action-btn">🔔 通知設定</button>
+          <button id="conn-modal-storage-btn" class="conn-action-btn">💾 ストレージ</button>
+          <button id="conn-modal-external-btn" class="conn-action-btn conn-action-btn-accent">🔌 外部連携</button>
+        </div>
+        <!-- ② 表示オプション（操作昇格PINは外部連携へ移設） -->
+        <div class="conn-opt-row">
+          <label class="conn-opt-label">
+            <input type="checkbox" id="conn-modal-auto-connect"> 自動接続
+          </label>
+          <label class="conn-opt-label">
+            <input type="checkbox" id="conn-modal-show-host-tag" checked> 機器名表示
+          </label>
+          <label class="conn-opt-label">
+            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" step="1" inputmode="numeric" class="conn-opt-num" placeholder="8080">
+          </label>
+        </div>
+      </div>
+
+      <!-- ③ 機器一覧セクション（タイトル＋新規追加トグル） -->
+      <div class="conn-devices-header">
+        <span class="conn-devices-title">機器一覧</span>
+        <button id="conn-modal-add-toggle" class="conn-add-toggle" aria-expanded="false">＋ 新規追加</button>
+      </div>
+
+      <!-- 新規追加フォーム（普段は折りたたみ。新規登録は頻繁でないため） -->
+      <div id="conn-modal-add-form" class="conn-add-form" hidden>
         <div class="btn-row" style="gap:6px;">
           <input type="text" id="conn-modal-ip" placeholder="192.168.54.151:9999" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
           <select id="conn-modal-type" title="プリンタ種別" style="padding:6px 4px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
@@ -82,25 +110,6 @@
         <!-- リレー子(ブラウザ)モード時の注記。直接接続不可の理由を明示（既定は非表示、JSで制御） -->
         <div id="conn-modal-child-note" style="display:none;margin-top:4px;font-size:11px;color:var(--color-warning-text,#856404);background:var(--color-warning-bg,#fef3c7);border-radius:4px;padding:4px 8px;">
           ブラウザ(子)モードでは親リレー経由で表示しています。プリンタへの直接接続は親機(アプリ)で行うか、<code>?relay=standalone</code> 付きで開いてください。
-        </div>
-        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12px;">
-          <label style="white-space:nowrap;cursor:pointer;">
-            <input type="checkbox" id="conn-modal-auto-connect"> 自動接続
-          </label>
-          <label style="white-space:nowrap;cursor:pointer;">
-            <input type="checkbox" id="conn-modal-show-host-tag" checked> 機器名表示
-          </label>
-          <label style="white-space:nowrap;">
-            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" step="1" inputmode="numeric" style="width:5em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="8080">
-          </label>
-          <!-- リレー操作昇格PIN（親モードのみ表示。子クライアントからは参照・変更不可） -->
-          <label id="conn-modal-relay-pin-label" style="white-space:nowrap;display:none;" title="ビューモードの端末が操作モードへ昇格する際に要求するPIN。空欄なら確認のみで昇格可。">
-            操作昇格PIN: <input type="text" id="conn-modal-relay-pin" autocomplete="off" style="width:6em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="未設定">
-          </label>
-          <span style="flex:1"></span>
-          <button id="conn-modal-notif-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">🔔 通知設定</button>
-          <button id="conn-modal-storage-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">💾 ストレージ</button>
-          <button id="conn-modal-external-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e8f5f3;border:1px solid #99cdc6;border-radius:3px;">🔌 外部連携</button>
         </div>
       </div>
 

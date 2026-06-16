@@ -419,13 +419,13 @@ function _initTopMenuBar() {
       const camPort = document.getElementById("conn-modal-camera-port");
       if (camPort) camPort.value = monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
 
-      /* ★ リレー操作昇格PIN: 親(Electron)モードのみ表示・編集可。
-         子クライアント(ブラウザ)からは参照も変更もできない。 */
-      const relayPinLabel = document.getElementById("conn-modal-relay-pin-label");
-      const relayPin = document.getElementById("conn-modal-relay-pin");
-      const isParent = !!(window.electronAPI?.isElectron?.());
-      if (relayPinLabel) relayPinLabel.style.display = isParent ? "" : "none";
-      if (relayPin && isParent) relayPin.value = monitorData.appSettings.relayPromotePin || "";
+      /* ★ 操作昇格PIN は外部連携画面へ移設（Item C）。ここでは扱わない。 */
+
+      /* 新規追加フォームは既定で折りたたむ（新規登録は頻繁でないため常時非表示） */
+      const addForm = document.getElementById("conn-modal-add-form");
+      const addToggle = document.getElementById("conn-modal-add-toggle");
+      if (addForm) addForm.hidden = true;
+      if (addToggle) addToggle.setAttribute("aria-expanded", "false");
 
       /* 入力欄をクリア */
       const modalIp = document.getElementById("conn-modal-ip");
@@ -458,6 +458,22 @@ function _initTopMenuBar() {
   if (overlay) {
     overlay.addEventListener("click", e => {
       if (e.target === overlay) _closeModal();
+    });
+  }
+
+  /* 「＋ 新規追加」トグル: 新規追加フォームの開閉 */
+  const addToggleBtn = document.getElementById("conn-modal-add-toggle");
+  if (addToggleBtn) {
+    addToggleBtn.addEventListener("click", () => {
+      const addForm = document.getElementById("conn-modal-add-form");
+      if (!addForm) return;
+      const willShow = addForm.hidden;
+      addForm.hidden = !willShow;
+      addToggleBtn.setAttribute("aria-expanded", String(willShow));
+      if (willShow) {
+        const ip = document.getElementById("conn-modal-ip");
+        if (ip && !ip.disabled) ip.focus();
+      }
     });
   }
 
@@ -515,9 +531,13 @@ function _initTopMenuBar() {
          ★ wsDest は廃止済み。connectionTargets のみが権威。 */
       connectWithType(ip, printerType);
 
-      /* 入力欄をクリア */
+      /* 入力欄をクリアし、新規追加フォームを折りたたむ（普段は閉じておく方針） */
       const modalIpEl = document.getElementById("conn-modal-ip");
       if (modalIpEl) modalIpEl.value = "";
+      const addForm = document.getElementById("conn-modal-add-form");
+      const addToggle = document.getElementById("conn-modal-add-toggle");
+      if (addForm) addForm.hidden = true;
+      if (addToggle) addToggle.setAttribute("aria-expanded", "false");
     });
   }
 
