@@ -29,8 +29,8 @@
  * - {@link translateMoonrakerStatus}：Moonraker 状態 → K1 形オブジェクトへ翻訳(純粋関数)
  * - {@link createMoonrakerSession}：WebSocket セッション(接続/購読/再接続)生成
  *
- * @version 1.390.1118 (PR #385)
- * @since   1.390.1118 (PR #385)
+ * @version 1.390.1119 (PR #385)
+ * @since   1.390.1119 (PR #385)
  * @lastModified 2026-06-16 21:00:00
  * -----------------------------------------------------------
  * @todo

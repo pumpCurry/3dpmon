@@ -29,7 +29,7 @@
  * - {@link getConnectionState}：指定ホストの接続状態取得
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  *
- * @version 1.390.1118 (PR #385)
+ * @version 1.390.1119 (PR #385)
  * @since   1.390.451 (PR #205)
  * @lastModified 2026-06-16 21:00:00
  * -----------------------------------------------------------
