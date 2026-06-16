@@ -59,7 +59,7 @@ import {
   formatSpoolDisplayId,
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -439,6 +439,49 @@ function makeThumbUrl(baseUrl, rawFilename) {
   return `${baseUrl}/downloads/humbnail/${base}.png`;
 }
 
+/**
+ * サムネイル不在時のローカル代替画像（data-URI の SVG）。
+ * 機器側の固定パス(downloads/defData/...)は K1 にしか存在せず、Moonraker 機では
+ * 404 になり、再描画のたびに同じ URL を取りに行って大量リトライ(スロットル)を招いていた。
+ * ネットワークを使わない data-URI を最終フォールバックにすることで 404 嵐を根絶する。
+ * @constant {string}
+ */
+const THUMB_PLACEHOLDER = "data:image/svg+xml;utf8," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">' +
+  '<rect width="48" height="48" rx="4" fill="#e2e8f0"/>' +
+  '<path d="M12 32l8-9 5 6 4-4 7 7z" fill="#94a3b8"/>' +
+  '<circle cx="18" cy="17" r="3" fill="#94a3b8"/>' +
+  '</svg>'
+);
+
+/**
+ * ホスト種別に応じてサムネイル URL を解決する。
+ *
+ * 【詳細説明】
+ * - 明示 URL（Moonraker メタ由来など）があれば最優先。
+ * - Moonraker 機: gcode のサムネはメタの相対パス由来で、ファイル名から K1 規則で
+ *   組み立てられない。ファイル一覧キャッシュ(machine._cachedFileInfo)から同名ファイルの
+ *   thumbUrl を引く。見つからなければローカル代替({@link THUMB_PLACEHOLDER})を返し、
+ *   存在しない機器パスを叩き続けない（K1 規則の humbnail/defData は使わない）。
+ * - K1 機: 従来どおり {@link makeThumbUrl}（downloads/humbnail/…）。
+ *
+ * @param {string} host - ホスト名
+ * @param {string} filename - ファイル名（パス可）
+ * @param {string} [explicit] - 既知のサムネ URL（あれば最優先）
+ * @returns {string} 表示に使える URL（不明時は data-URI 代替）
+ */
+function resolveThumbUrl(host, filename, explicit) {
+  if (explicit) return explicit;
+  if (getPrinterType(host) === "moonraker") {
+    const m = monitorData.machines[host];
+    const bn = String(filename || "").split("/").pop();
+    const entries = m?._cachedFileInfo?.entries || [];
+    const hit = entries.find(e => String(e.filename || "").split("/").pop() === bn);
+    return hit?.thumbUrl || THUMB_PLACEHOLDER;
+  }
+  return makeThumbUrl(getDisplayBaseUrl(host), filename) || THUMB_PLACEHOLDER;
+}
+
 
 /**
  * 生の履歴エントリをモデル化
@@ -488,9 +531,9 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   // 材料使用量: 機器報告値をそのまま保持（丸めない）
   const materialUsedMm = Number(raw.usagematerial || 0);
 
-  // サムネイルURL: 呼び出し側が完成URLを供給していればそれを優先（Moonraker等の
-  // 別スキーム対応）。無ければ従来どおり K1 仕様(humbnailフォルダ)で組み立てる。
-  const thumbUrl       = raw.thumbUrl || makeThumbUrl(baseUrl, raw.filename);
+  // サムネイルURL: ホスト種別に応じて解決（Moonrakerはメタ/ファイル一覧キャッシュ由来、
+  // 不明時はローカル代替。K1は従来の humbnail パス）。
+  const thumbUrl       = resolveThumbUrl(host, raw.filename, raw.thumbUrl);
 
   const startway       = raw.startway;
   const size           = raw.size;
@@ -707,12 +750,19 @@ export const renderTemplates = {
   * @param job - 表示対象ジョブ
   * @param {string} baseUrl 例: "http://192.168.54.151"
   */
-  current(job, baseUrl) {
+  current(job, baseUrl, host) {
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
     const name = job.filename || '(名称不明)';
-    const ts = Date.now();
-    const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
-    const fallback   = `${baseUrl}/downloads/defData/file_print_photo.png`;
+    // K1 はライブ撮影画像(current_print_image.png, キャッシュバスター付き)を使う。
+    // Moonraker にはこのパスが無く、毎描画(?ts)で 404 を取りに行きスロットルを招くため、
+    // 当該機では gcode サムネ(静的・キャッシュ可)へ切り替え、404 嵐を避ける。
+    const isMoonraker = getPrinterType(host) === "moonraker";
+    const currentUrl = isMoonraker
+      ? resolveThumbUrl(host, job.rawFilename || job.filename, job.thumbUrl)
+      : `${baseUrl}/downloads/original/current_print_image.png?${Date.now()}`;
+    const fallback   = isMoonraker
+      ? THUMB_PLACEHOLDER
+      : `${baseUrl}/downloads/defData/file_print_photo.png`;
     const finishHtml = job.finishTime
       ? `<div class="cp-row"><span class="cp-label">終了:</span> ${fmt(job.finishTime)}</div>` : "";
 
@@ -780,9 +830,9 @@ export const renderTemplates = {
    * @param job
    * @param {string} baseUrl
    */
-  historyItem(job, baseUrl) {
-    const thumbUrl = makeThumbUrl(baseUrl, job.rawFilename || job.filename);
-    const fallback = `${baseUrl}/downloads/defData/file_icon.png`;
+  historyItem(job, baseUrl, host) {
+    const thumbUrl = resolveThumbUrl(host, job.rawFilename || job.filename, job.thumbUrl);
+    const fallback = THUMB_PLACEHOLDER;
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
     return `
       <img
@@ -843,7 +893,7 @@ export function renderPrintCurrent(containerEl, hostname) {
     }
   }
 
-  containerEl.innerHTML = renderTemplates.current(job, baseUrl);
+  containerEl.innerHTML = renderTemplates.current(job, baseUrl, hostname);
 }
 
 
@@ -865,7 +915,7 @@ export function renderPrintHistory(containerEl, hostname) {
     const li = document.createElement("li");
     li.className = "print-job-item";
     // rawFilename を渡せるように、履歴保存時に保持しておくと良いです
-    li.innerHTML = renderTemplates.historyItem(job, baseUrl);
+    li.innerHTML = renderTemplates.historyItem(job, baseUrl, hostname);
     containerEl.appendChild(li);
   }
 }
@@ -1313,8 +1363,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
 
   rawArray.forEach((raw, index) => {
     const name     = raw.filename.split("/").pop();
-    const thumbUrl = makeThumbUrl(baseUrl, raw.filename);
-    const fallback = `${baseUrl}/downloads/defData/file_icon.png`;
+    const thumbUrl = resolveThumbUrl(hostname, raw.filename, raw.thumbUrl);
+    const fallback = THUMB_PLACEHOLDER;
 
     // データ整形
     const startwayLabel =
@@ -1590,7 +1640,7 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   // ヘッダー
   const hdr = document.createElement("div");
   hdr.className = "pm-drilldown-header";
-  const thumbUrl = makeThumbUrl(baseUrl, raw.rawFilename || raw.filename);
+  const thumbUrl = resolveThumbUrl(hostname, raw.rawFilename || raw.filename, raw.thumbUrl);
   hdr.innerHTML = `<div class="flex-row"><img src="${thumbUrl}" class="pm-thumb" onerror="this.style.display='none'"><div><strong>${filename}</strong><br><span class="text-secondary-xs">${raw.printfinish === 1 ? "✔ 成功" : raw.printfinish === 0 ? "✗ 失敗" : "— 不明"}</span></div></div>`;
   const closeBtn = document.createElement("button");
   closeBtn.textContent = "×";
@@ -1758,7 +1808,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
 
   // --- ダイアログ HTML 構築 ---
   let html = `<div class="pm-print-header">`;
-  html += `<img src="${thumbUrl}" class="pm-print-thumb">`;
+  html += `<img src="${thumbUrl}" class="pm-print-thumb" onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'">`;
   html += `<div><strong class="pm-print-filename">${filename}</strong></div></div>`;
 
   // スプール未装着警告
@@ -2305,11 +2355,10 @@ export function setupUploadUI(root, hostname) {
         && getConnectionState(h) === "connected"
     );
 
-    // ★ サムネイル欠落時のフォールバックアイコンは、接続中の任意ホストが配信する
-    //   静的画像（全機種で同一）を使う。特定 hostname への依存を排除するため
-    //   allHosts 確定後に解決する。allHosts が空なら直後のエラー分岐で抜ける。
-    if (!thumb && allHosts.length > 0) {
-      thumb = `${getDisplayBaseUrl(allHosts[0])}/downloads/defData/file_icon.png`;
+    // ★ サムネイル欠落時はローカル代替（data-URI）を使う。機器固定パス(defData)は
+    //   K1 にしか無く Moonraker では 404 になるため、機種非依存の代替で 404 を避ける。
+    if (!thumb) {
+      thumb = THUMB_PLACEHOLDER;
     }
 
     // ★ 接続中ホストが0台なら即エラー
@@ -2813,7 +2862,7 @@ export function renderFileList(info, baseUrl, hostname) {
           src="${item.thumbUrl}"
           alt="${item.basename}"
           style="width:40px"
-          onerror="this.onerror=null;this.src='${baseUrl}/downloads/defData/file_icon.png'"
+          onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'"
         >
       </td>
       <td data-key="filename">${item.basename}</td>
