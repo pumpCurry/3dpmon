@@ -28,6 +28,7 @@
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
+ * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
  * @version 1.390.1119 (PR #385)
  * @since   1.390.451 (PR #205)
@@ -2180,6 +2181,22 @@ function _fetchWithRetry(host) {
 export function getConnectionState(host) {
   const st = connectionMap[host];
   return st?.state || "disconnected";
+}
+
+/**
+ * getPrinterType:
+ * 指定ホストのプリンタ種別を返す。connectionTargets の printerType を参照し、
+ * 未設定なら従来どおり "creality-k1" を返す(後方互換)。
+ * IP→ホスト名移行後もホスト名で接続先設定を逆引きできる。
+ *
+ * @function getPrinterType
+ * @param {string} host - ホスト名(または IP)
+ * @returns {"creality-k1"|"moonraker"} プリンタ種別
+ */
+export function getPrinterType(host) {
+  const st = connectionMap[host];
+  const tgt = _findConnectionTarget(st?.dest || host) || _findConnectionTarget(host);
+  return tgt?.printerType || "creality-k1";
 }
 
 /**

@@ -447,12 +447,12 @@
             <button id="btn-pause-print" class="btn-pause">一時停止</button>
             <button id="btn-resume-print" class="btn-resume">再開</button>
             <button id="btn-ack-error">エラー了承</button>
-            <button id="btn-pause-home">一時停止時<br>原点復帰</button>
-            <button id="btn-xy-unlock">XYロック解除</button>
+            <button id="btn-pause-home" data-machine-type="k1-only">一時停止時<br>原点復帰</button>
+            <button id="btn-xy-unlock" data-machine-type="k1-only">XYロック解除</button>
           </div>
           <div class="cmd-group">
-            <button id="btn-history-list">履歴一覧取得</button>
-            <button id="btn-file-list">ファイル一覧取得</button>
+            <button id="btn-history-list" data-machine-type="k1-only">履歴一覧取得</button>
+            <button id="btn-file-list" data-machine-type="k1-only">ファイル一覧取得</button>
             <button id="btn-send-gcode">G-code送信</button>
             <button id="btn-send-raw-json">JSONコマンド送信</button>
           </div>
@@ -520,7 +520,7 @@
                   </div>
                 </div>
 
-              <div class="temp-box">
+              <div class="temp-box" data-machine-type="k1-only">
                 <div class="temp-title">箱内温度</div>
                 <div class="temp-item">&nbsp;</div>
                 <div class="temp-item">&nbsp;</div>
@@ -551,7 +551,7 @@
                 </div>
 
               </div>
-              <div class="fan-item">
+              <div class="fan-item" data-machine-type="k1-only">
                 <strong>側面FAN</strong>
                 <label class="switch">
                   <input type="checkbox" id="sideFanToggle2" data-field="fanAuxiliary">
@@ -567,7 +567,7 @@
                     <span class="value">--</span><span class="unit">%</span>
                   </span>
               </div>
-              <div class="fan-item">
+              <div class="fan-item" data-machine-type="k1-only">
                 <strong>背面FAN</strong>
                 <label class="switch">
                   <input type="checkbox" id="backFanToggle2" data-field="fanCase">
@@ -589,7 +589,7 @@
             </div>
             <div class="control-temp-col control-temp-right">
             <div class="fan-lights-row">
-              <div class="fan-item">
+              <div class="fan-item" data-machine-type="k1-only">
                 <strong>LED照明</strong>
                 <label class="switch">
                   <input type="checkbox" id="ledToggle2" data-field="lightSw">
@@ -619,7 +619,7 @@
                 </div>
               </div>
             </div>
-            <div class="fan-lights-row ai-row">
+            <div class="fan-lights-row ai-row" data-machine-type="k1-only">
               <div class="fan-item">
                 <strong class="feature-name"><nobr>印刷前AI</nobr><wbr><nobr>自動調整</nobr></strong>
                 <label class="switch">
