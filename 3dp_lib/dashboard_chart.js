@@ -1,33 +1,39 @@
 /**
  * @fileoverview
- * @description 3Dプリンタ監視ツール 3dpmon 用 グラフ描画モジュール
+ * @description 3Dプリンタ監視ツール 3dpmon 用 温度グラフ描画モジュール（uPlot 版）
  * @file dashboard_chart.js
- * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @copyright (c) pumpCurry 2025-2026 / 5r4ce2
  * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_chart
  *
  * 【機能内容サマリ】
- * - Chart.js を用いた温度グラフ描画
- * - データ点の間引きやスロットリング更新に対応
- * - Zoom プラグインによる拡大・パン操作
- * - マルチプリンタ対応: per-host Chart.js インスタンス管理
+ * - uPlot を用いた温度時系列グラフ描画（ストリーミング特化・低CPU）
+ * - マルチプリンタ対応: per-host uPlot インスタンス管理
+ * - 表示時間枠でのスライディングウィンドウ・throttle 更新
+ * - ドラッグズーム（ロック切替）・表示範囲リセット
+ *
+ * 【chart.js からの移行理由】
+ * - 旧 chart.js + time 軸(date-fns) は 500ms 毎の全再描画で measureText/draw が
+ *   renderer CPU を占有していた（実測: 可視 renderer 68% / GPU 24%）。
+ * - uPlot は canvas 直描画でラベル計測コストが小さく、2Hz 更新でもほぼ無コスト。
+ * - 異常検知は dashboard_thermal_guard.js が描画から独立して担う（描画レート非依存）。
  *
  * 【公開関数一覧】
- * - {@link initTemperatureGraph}：グラフ初期化（パネル本体＋ホスト名を受け取る）
+ * - {@link initTemperatureGraph}：グラフ初期化（パネル本体＋ホスト名）
  * - {@link resetTemperatureGraph}：グラフデータリセット
- * - {@link resetTemperatureGraphView}：表示範囲リセット
+ * - {@link resetTemperatureGraphView}：表示範囲（ズーム）リセット
+ * - {@link toggleChartInteractionLock}：ドラッグズームのロック切替
  * - {@link updateTemperatureGraphFromStoredData}：データ更新
  * - {@link switchChartHost}：指定ホストのチャート状態を確保
  *
- * @version 1.390.788 (PR #366)
+ * @version 2.0.0
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-03-11 02:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
  *
- * ※ Chart.js および Zoom プラグインは HTML 側で読み込んでください。
+ * ※ uPlot 本体(JS/CSS)は HTML 側で読み込んでください（window.uPlot グローバル）。
  */
 
 "use strict";
@@ -39,32 +45,43 @@
 /**
  * デフォルト構成パラメータ
  * - timeWindowMs: 表示範囲の時間幅（ms）
- * - decimationSamples: LTTBアルゴリズムで間引く最大点数
- * - throttleIntervalMs: Chart更新の最小間隔（ms）
+ * - throttleIntervalMs: 描画更新の最小間隔（ms）
  */
 const DEFAULT_CONFIG = {
   timeWindowMs:       15 * 60 * 1000,
-  decimationSamples:  180,
   throttleIntervalMs: 500,
 };
+
+/** データ系列の順序（uPlot data[1..5] に対応） */
+const DATASET_KEYS = ["nozzleCurrent", "nozzleTarget", "bedCurrent", "bedTarget", "boxCurrent"];
+
+/** storedData のキー（DATASET_KEYS と同順） */
+const FIELD_KEYS = ["nozzleTemp", "targetNozzleTemp", "bedTemp0", "targetBedTemp0", "boxTemp"];
+
+/** 系列の表示定義（uPlot series[1..5]） */
+const SERIES_DEFS = [
+  { label: "ノズル(現在)", stroke: "#e6194b", width: 2 },
+  { label: "ノズル(目標)", stroke: "#f58231", width: 1.5, dash: [5, 4] },
+  { label: "ベッド(現在)", stroke: "#3cb44b", width: 2 },
+  { label: "ベッド(目標)", stroke: "#1f9e89", width: 1.5, dash: [5, 4] },
+  { label: "箱内(現在)",   stroke: "#4363d8", width: 2 },
+];
 
 // ==============================
 // 内部状態管理（per-host）
 // ==============================
 
-/** 取得対象キー群（サーバーから渡される storedData のキーに合わせる） */
-const DATASET_KEYS = ["nozzleCurrent", "nozzleTarget", "bedCurrent", "bedTarget", "boxCurrent"];
-const FIELD_KEYS   = ["nozzleTemp", "targetNozzleTemp", "bedTemp0", "targetBedTemp0", "boxTemp"];
-
 /**
  * @typedef {Object} HostChartState
- * @property {Chart|null} chart       - Chart.js インスタンス
- * @property {Object}     tempData    - データセット別時系列データ
- * @property {Object}     pointQueue  - キューバッファ
- * @property {number}     lastUpdate  - 最終更新タイムスタンプ
- * @property {boolean}    updateQueued - 更新キュー済みフラグ
- * @property {boolean}    isFirstRender - 初回描画フラグ
- * @property {Object}     config      - 構成パラメータ
+ * @property {Object|null} u            - uPlot インスタンス
+ * @property {Array<Array<number>>} data - [xs(秒), nozzleCur, nozzleTgt, bedCur, bedTgt, boxCur]
+ * @property {number}  lastUpdate       - 最終描画更新タイムスタンプ(ms)
+ * @property {boolean} updateQueued     - 更新キュー済みフラグ
+ * @property {boolean} isFirstRender    - 初回描画フラグ
+ * @property {Object}  config           - 構成パラメータ
+ * @property {HTMLElement|null} container - uPlot マウント先
+ * @property {ResizeObserver|null} ro   - リサイズ追従
+ * @property {boolean} zoomLocked       - ドラッグズーム無効フラグ
  */
 
 /** @type {Map<string, HostChartState>} */
@@ -78,20 +95,59 @@ const _hostCharts = new Map();
  */
 function _getHostState(hostname) {
   if (!_hostCharts.has(hostname)) {
-    const pq = {};
-    const td = {};
-    DATASET_KEYS.forEach(key => { pq[key] = []; td[key] = []; });
     _hostCharts.set(hostname, {
-      chart: null,
-      tempData: td,
-      pointQueue: pq,
+      u: null,
+      data: [[], [], [], [], [], []],
       lastUpdate: 0,
       updateQueued: false,
       isFirstRender: true,
-      config: { ...DEFAULT_CONFIG }
+      config: { ...DEFAULT_CONFIG },
+      container: null,
+      ro: null,
+      zoomLocked: true,
     });
   }
   return _hostCharts.get(hostname);
+}
+
+/**
+ * uPlot オプションを構築する。
+ * @private
+ * @param {Object} cfg 構成
+ * @param {number} w 幅(px)
+ * @param {number} h 高さ(px)
+ * @param {boolean} locked ドラッグズーム無効
+ * @returns {Object} uPlot opts
+ */
+function _buildOpts(cfg, w, h, locked) {
+  const axisStroke = "#888";
+  const gridStroke = "rgba(128,128,128,0.18)";
+  const tickStroke = "rgba(128,128,128,0.30)";
+  return {
+    width: w,
+    height: h,
+    cursor: {
+      drag: { x: !locked, y: false, setScale: true },
+      focus: { prox: 20 },
+    },
+    legend: { show: true, live: true },
+    scales: { x: { time: true } },
+    series: [
+      {},
+      ...SERIES_DEFS.map(s => ({
+        label: s.label, stroke: s.stroke, width: s.width,
+        dash: s.dash, points: { show: false },
+        value: (_u, v) => (v == null ? "--" : v.toFixed(1) + "℃"),
+      })),
+    ],
+    axes: [
+      { stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke } },
+      {
+        stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },
+        size: 50, values: (_u, vals) => vals.map(v => v + "℃"),
+      },
+    ],
+  };
 }
 
 // ==============================
@@ -100,7 +156,7 @@ function _getHostState(hostname) {
 
 /**
  * グラフの初期化処理。
- * パネル本体内の canvas を検索し、Chart.js インスタンスを per-host で作成する。
+ * パネル本体内の .temp-graph-area を探し、uPlot インスタンスを per-host で作成する。
  *
  * @param {HTMLElement} [panelBody] - パネル本体要素（省略時は document から検索）
  * @param {string} hostname        - ホスト名
@@ -109,181 +165,128 @@ function _getHostState(hostname) {
 export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...userConfig };
 
-  /* canvas をパネル内から検索 */
-  const canvas = panelBody
-    ? panelBody.querySelector("#temp-graph-canvas") || panelBody.querySelector("canvas")
-    : document.getElementById("temp-graph-canvas");
-  if (!canvas) {
-    console.debug("initTemperatureGraph: canvas 要素が見つかりません（パネルシステムでは正常）");
+  if (!window.uPlot) {
+    console.warn("initTemperatureGraph: uPlot が未ロードです（HTML で読み込んでください）");
     return;
   }
 
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    console.warn("initTemperatureGraph: 2D コンテキスト取得に失敗");
+  /* uPlot のマウント先コンテナを検索（.temp-graph-area） */
+  const findContainer = (root) => {
+    if (!root) return null;
+    return root.querySelector(".temp-graph-area")
+        || root.querySelector("#temp-graph-canvas")?.parentElement
+        || null;
+  };
+  const container = panelBody
+    ? findContainer(panelBody)
+    : (document.querySelector(".temp-graph-area") || document.getElementById("temp-graph-canvas")?.parentElement);
+
+  if (!container) {
+    console.debug("initTemperatureGraph: コンテナ未検出（パネルシステムでは正常）");
     return;
   }
-
-  /* ホスト状態を取得し config を設定 */
   if (!hostname) {
     console.warn("initTemperatureGraph: hostname が未指定のため初期化をスキップ");
     return;
   }
+
   const host = hostname;
   const hs = _getHostState(host);
   hs.config = cfg;
 
-  /* 既存チャートがあれば破棄 */
-  if (hs.chart) {
-    hs.chart.destroy();
-    hs.chart = null;
-  }
+  /* 既存インスタンス・リサイズ監視を破棄 */
+  if (hs.u) { try { hs.u.destroy(); } catch { /* noop */ } hs.u = null; }
+  if (hs.ro) { try { hs.ro.disconnect(); } catch { /* noop */ } hs.ro = null; }
 
-  // ★ 初期値: マウス操作ロック（ズーム・パン無効）
-  // スクロール阻害を防止するためデフォルトOFF
-  const zoomLocked = true;
+  /* 旧 canvas 等を除去して uPlot を載せる */
+  container.innerHTML = "";
+  hs.container = container;
+  hs.zoomLocked = true;
 
-  hs.chart = new Chart(ctx, {
-    type: "line",
-    data: {
-      datasets: [
-        { label: "ノズル温度 (現在)", data: hs.tempData.nozzleCurrent, fill: false, borderWidth: 2 },
-        { label: "ノズル温度 (目標)", data: hs.tempData.nozzleTarget,  fill: false, borderWidth: 2 },
-        { label: "ベッド温度 (現在)", data: hs.tempData.bedCurrent,    fill: false, borderWidth: 2 },
-        { label: "ベッド温度 (目標)", data: hs.tempData.bedTarget,     fill: false, borderWidth: 2 },
-        { label: "箱内温度 (現在)",   data: hs.tempData.boxCurrent,     fill: false, borderWidth: 2 }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: { duration: 0 },
-      parsing: { xAxisKey: "t", yAxisKey: "y" },
-      plugins: {
-        zoom: {
-          pan: { enabled: !zoomLocked, mode: "x" },
-          zoom: {
-            wheel: { enabled: !zoomLocked },
-            pinch: { enabled: !zoomLocked },
-            mode: "x"
-          }
-        }
-      },
-      decimation: {
-        enabled: true,
-        algorithm: "lttb",
-        samples: cfg.decimationSamples
-      },
-      scales: {
-        x: {
-          type: "time",
-          time: {
-            tooltipFormat: "HH:mm:ss.SSS",
-            unit: "second",
-            displayFormats: {
-              second: "HH:mm:ss",
-              minute: "HH:mm"
-            }
-          },
-          title: { display: true, text: "時間" }
-        },
-        y: {
-          title: { display: true, text: "温度 (℃)" }
-        }
-      }
-    }
+  const w = Math.max(container.clientWidth || 0, 120);
+  const h = Math.max(container.clientHeight || 0, 120);
+  hs.u = new window.uPlot(_buildOpts(cfg, w, h, hs.zoomLocked), hs.data, container);
+
+  /* コンテナのサイズ変化に追従（chart.js の responsive 相当） */
+  hs.ro = new ResizeObserver(() => {
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (cw > 0 && ch > 0 && hs.u) hs.u.setSize({ width: cw, height: ch });
   });
+  hs.ro.observe(container);
+
+  hs.isFirstRender = true;
 }
 
 /**
- * 温度グラフのマウス操作（ズーム・パン）のロックを切り替える。
- * ロック中はホイールズーム・ピンチ・パンが無効になり、ページスクロールを阻害しない。
+ * 温度グラフのドラッグズームのロックを切り替える。
+ * ロック中はドラッグによる範囲ズームを無効化する（ページスクロール阻害防止）。
  *
  * @param {string} hostname - 対象ホスト名
  * @param {boolean} [locked] - true=ロック、false=アンロック。省略時はトグル
  * @returns {boolean} 切り替え後のロック状態
  */
 export function toggleChartInteractionLock(hostname, locked) {
-  const hs = _hostStates.get(hostname);
-  if (!hs?.chart) return true;
+  const hs = _hostCharts.get(hostname);
+  if (!hs?.u) return true;
 
-  const zoomOpts = hs.chart.options.plugins.zoom;
-  if (!zoomOpts) return true;
-
-  // 現在のロック状態を判定（pan.enabled === false → ロック中）
-  const wasLocked = !zoomOpts.pan.enabled;
+  const wasLocked = hs.zoomLocked;
   const newLocked = locked !== undefined ? locked : !wasLocked;
+  hs.zoomLocked = newLocked;
 
-  zoomOpts.pan.enabled = !newLocked;
-  zoomOpts.zoom.wheel.enabled = !newLocked;
-  zoomOpts.zoom.pinch.enabled = !newLocked;
-  hs.chart.update("none");
-
+  /* uPlot の cursor.drag.x を切り替える（次のドラッグ操作から反映） */
+  if (hs.u.cursor && hs.u.cursor.drag) {
+    hs.u.cursor.drag.x = !newLocked;
+  }
   return newLocked;
 }
 
 /**
  * グラフをクリアし、全データと状態をリセットする。
  *
- * @param {string} hostname - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名（省略時は全ホスト）
  */
 export function resetTemperatureGraph(hostname) {
-  if (!hostname) return;
-  if (hostname) {
-    const hs = _getHostState(hostname);
-    DATASET_KEYS.forEach(key => {
-      hs.tempData[key].length = 0;
-      hs.pointQueue[key].length = 0;
-    });
-    if (hs.chart) {
-      hs.chart.data.datasets.forEach(ds => (ds.data = []));
-      hs.chart.resetZoom?.();
-      hs.chart.update();
+  const clearOne = (hs) => {
+    for (let i = 0; i < hs.data.length; i++) hs.data[i] = [];
+    if (hs.u) {
+      hs.u.setData(hs.data);
+      hs.u.setScale?.("x", { min: null, max: null });
     }
     hs.isFirstRender = true;
+  };
+
+  if (hostname) {
+    const hs = _hostCharts.get(hostname);
+    if (hs) clearOne(hs);
   } else {
-    /* 全ホストをリセット */
-    for (const [, hs] of _hostCharts) {
-      DATASET_KEYS.forEach(key => {
-        hs.tempData[key].length = 0;
-        hs.pointQueue[key].length = 0;
-      });
-      if (hs.chart) {
-        hs.chart.data.datasets.forEach(ds => (ds.data = []));
-        hs.chart.resetZoom?.();
-        hs.chart.update();
-      }
-      hs.isFirstRender = true;
-    }
+    for (const [, hs] of _hostCharts) clearOne(hs);
   }
 }
 
 /**
- * 指定ホストのチャート状態を確保する。
- * per-host Chart インスタンス方式では各ホストが独立しているため、
- * 状態オブジェクトの初期化のみを行う。
+ * 指定ホストのチャート状態を確保する（per-host 方式の遅延初期化）。
  *
  * @param {string} hostname - ホスト名
  */
 export function switchChartHost(hostname) {
-  /* ホスト状態が未作成なら作成だけ行う */
   if (hostname) _getHostState(hostname);
 }
 
 /**
- * 温度グラフのズームおよびパン表示のみを初期状態へ戻す。
+ * 温度グラフのズーム表示のみを初期状態（自動範囲）へ戻す。
  *
- * @param {string} hostname - 対象ホスト名
+ * @param {string} hostname - 対象ホスト名（省略時は全ホスト）
  */
 export function resetTemperatureGraphView(hostname) {
-  if (!hostname) return;
+  const resetOne = (hs) => {
+    if (!hs?.u) return;
+    hs.u.setScale("x", { min: null, max: null });
+  };
   if (hostname) {
-    const hs = _hostCharts.get(hostname);
-    hs?.chart?.resetZoom?.();
+    resetOne(_hostCharts.get(hostname));
   } else {
-    for (const [, hs] of _hostCharts) {
-      hs.chart?.resetZoom?.();
-    }
+    for (const [, hs] of _hostCharts) resetOne(hs);
   }
 }
 
@@ -292,32 +295,37 @@ export function resetTemperatureGraphView(hostname) {
 // ==============================
 
 /**
- * 古いデータ点を削除して表示対象時間枠を制限する
- * @param {Array<{t:number,y:number}>} arr
- * @param {number} now - 現在時刻(ms)
- * @param {number} timeWindowMs - 表示範囲(ms)
- * @returns {Array} - フィルタ済み配列
+ * 表示時間枠を外れた古い先頭データを全系列から除去する。
+ * @private
+ * @param {HostChartState} hs
+ * @param {number} nowSec 現在時刻(秒)
  */
-function filterOldData(arr, now, timeWindowMs) {
-  return arr.filter(pt => pt.t >= now - timeWindowMs);
+function _trimWindow(hs, nowSec) {
+  const xs = hs.data[0];
+  const cutoff = nowSec - hs.config.timeWindowMs / 1000;
+  let drop = 0;
+  while (drop < xs.length && xs[drop] < cutoff) drop++;
+  if (drop > 0) {
+    for (let i = 0; i < hs.data.length; i++) hs.data[i].splice(0, drop);
+  }
 }
 
 /**
- * Chart.jsの更新を間引き制御（スロットリング）して呼び出す
+ * uPlot の再描画を throttle して呼び出す。
  * @private
- * @param {HostChartState} hs - ホスト状態
+ * @param {HostChartState} hs
  */
-function scheduleChartUpdate(hs) {
+function _scheduleUpdate(hs) {
+  if (!hs.u) return;
   const now = Date.now();
-
   if (now - hs.lastUpdate >= hs.config.throttleIntervalMs) {
-    hs.chart.update(hs.isFirstRender ? undefined : "none");
+    hs.u.setData(hs.data);
     hs.lastUpdate = now;
     hs.isFirstRender = false;
   } else if (!hs.updateQueued) {
     hs.updateQueued = true;
     setTimeout(() => {
-      hs.chart.update("none");
+      if (hs.u) hs.u.setData(hs.data);
       hs.lastUpdate = Date.now();
       hs.updateQueued = false;
     }, hs.config.throttleIntervalMs - (now - hs.lastUpdate));
@@ -325,38 +333,29 @@ function scheduleChartUpdate(hs) {
 }
 
 /**
- * storedData オブジェクトから最新温度データを抽出し、
- * 時系列グラフに反映する。
+ * storedData から最新温度を抽出し、時系列グラフに反映する。
+ * uPlot 未生成（パネル未展開）でもデータは蓄積し、生成時に履歴が乗る。
  *
  * @param {Record<string, {rawValue: number|string}>} dataStore - storedData
  * @param {string} hostname - ホスト名
  */
 export function updateTemperatureGraphFromStoredData(dataStore, hostname) {
-  const now = Date.now();
   if (!hostname) return;
   const host = hostname;
   const hs = _getHostState(host);
 
-  const getVal = key => parseFloat(dataStore[key]?.rawValue ?? 0) || 0;
+  const nowSec = Date.now() / 1000;
+  const getVal = (key) => parseFloat(dataStore[key]?.rawValue ?? 0) || 0;
 
-  /* 1) データ点をキューに追加 */
-  hs.pointQueue.nozzleCurrent.push({ t: now, y: getVal("nozzleTemp") });
-  hs.pointQueue.nozzleTarget.push({ t: now, y: getVal("targetNozzleTemp") });
-  hs.pointQueue.bedCurrent.push({ t: now, y: getVal("bedTemp0") });
-  hs.pointQueue.bedTarget.push({ t: now, y: getVal("targetBedTemp0") });
-  hs.pointQueue.boxCurrent.push({ t: now, y: getVal("boxTemp") });
+  /* 1) 各系列へ追加（x は秒・全系列同一サンプル時刻で整列） */
+  hs.data[0].push(nowSec);
+  for (let i = 0; i < FIELD_KEYS.length; i++) {
+    hs.data[i + 1].push(getVal(FIELD_KEYS[i]));
+  }
 
-  /* 2) キューから本体に移し、古い点を除去 */
-  DATASET_KEYS.forEach(key => {
-    hs.tempData[key].push(...hs.pointQueue[key]);
-    hs.tempData[key] = filterOldData(hs.tempData[key], now, hs.config.timeWindowMs);
-    hs.pointQueue[key].length = 0;
-  });
+  /* 2) 表示枠外の古い点を除去 */
+  _trimWindow(hs, nowSec);
 
-  /* 3) Chart.js がある場合のみ描画更新 */
-  if (!hs.chart) return;
-  DATASET_KEYS.forEach((key, idx) => {
-    hs.chart.data.datasets[idx].data = hs.tempData[key];
-  });
-  scheduleChartUpdate(hs);
+  /* 3) throttle 描画更新（uPlot がある場合のみ） */
+  _scheduleUpdate(hs);
 }

@@ -491,7 +491,15 @@ export class NotificationManager {
     // ── UI チャネル（通知マスターONのときのみ）──
     if (notifyActive) {
       // 1) 固定アラート（showAlert 内でログ出力も行われる）
-      showAlert(text, def.level, def.level === "error", hostname);
+      //    noBanner=true の通知(サーマル異常等)はバナーを積まず、通知ログのみ残す。
+      //    主インジケータは別途(数値セル背景色＋集約バッジ)が担うため。
+      if (def.noBanner) {
+        import("./dashboard_log_util.js").then(({ pushNotificationLog }) =>
+          pushNotificationLog(text, def.level, hostname)
+        );
+      } else {
+        showAlert(text, def.level, def.level === "error", hostname);
+      }
 
       // 3) TTS（ホスト別設定を適用）
       if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
@@ -722,6 +730,7 @@ export class NotificationManager {
     {
       label: "温度アラート",
       types: [
+        "thermalAnomaly", "thermalCaution",
         "tempNearNozzle80", "tempNearBed80",
         "tempNearNozzle90", "tempNearBed90",
         "tempNearNozzle95", "tempNearBed95",
@@ -764,7 +773,9 @@ export class NotificationManager {
     tempNearNozzle98:  "ノズル98%",
     tempNearBed98:     "ベッド98%",
     tempNearNozzle100: "ノズル100%",
-    tempNearBed100:    "ベッド100%"
+    tempNearBed100:    "ベッド100%",
+    thermalAnomaly:    "サーマル異常(急変/暴走/上限)",
+    thermalCaution:    "サーマル警告(乖離/昇温不良)"
   };
 
   /**
