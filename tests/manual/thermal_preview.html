@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>サーマル検知 / 着色 プレビュー（モックデータ）</title>
+<!-- 実アプリと同じCSSを読み込み、見た目を忠実に再現する -->
+<link rel="stylesheet" href="../../3dp_panel.css">
+<link rel="stylesheet" href="../../3dp_monitor.css">
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; }
+  .preview-wrap { max-width: 760px; margin: 0 auto; }
+  .top-menu-bar { position: static; display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 14px; }
+  .ctl { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+  .ctl button { font-size: 12px; padding: 6px 10px; cursor: pointer; }
+  .readout { margin-top: 12px; font-size: 12px; }
+  .alert-line { padding: 2px 0; }
+  .alert-line.error { color: var(--color-danger); }
+  .alert-line.warn  { color: var(--color-warning); }
+  h1 { font-size: 16px; }
+  .hint { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+<div class="preview-wrap">
+  <h1>サーマル検知 / 着色 プレビュー <span class="hint">（実 dashboard_thermal_guard.js + 実CSS / モックデータ）</span></h1>
+
+  <div class="top-menu-bar">
+    <strong>3dpmon</strong>
+    <span class="status-dot" style="width:8px;height:8px;border-radius:50%;background:#639922;display:inline-block"></span>
+    <span style="font-size:12px;">mock-printer</span>
+    <span id="thermal-badge" class="thermal-badge" style="display:none" title="サーマル異常/警告の件数"></span>
+  </div>
+
+  <div class="control-temp-area">
+    <div class="temp-row">
+      <div class="temp-box">
+        <div class="temp-title">ノズル</div>
+        <div class="temp-item"><span class="temp-label">目標:</span>
+          <span class="temp-val" data-field="targetNozzleTemp"><span class="value">--</span><span class="unit"></span></span></div>
+        <div class="temp-item"><span class="temp-label">現在:</span>
+          <span class="temp-val" data-field="nozzleTemp"><span class="value">--</span><span class="unit"></span></span></div>
+        <div class="temp-item"><span class="temp-label">差:</span>
+          <span class="temp-val" data-field="nozzleDiff"><span class="value">--</span><span class="unit"></span></span></div>
+      </div>
+      <div class="temp-box">
+        <div class="temp-title">ベッド</div>
+        <div class="temp-item"><span class="temp-label">目標:</span>
+          <span class="temp-val" data-field="targetBedTemp0"><span class="value">--</span><span class="unit"></span></span></div>
+        <div class="temp-item"><span class="temp-label">現在:</span>
+          <span class="temp-val" data-field="bedTemp0"><span class="value">--</span><span class="unit"></span></span></div>
+        <div class="temp-item"><span class="temp-label">差:</span>
+          <span class="temp-val" data-field="bedDiff"><span class="value">--</span><span class="unit"></span></span></div>
+      </div>
+      <div class="temp-box">
+        <div class="temp-title">箱内</div>
+        <div class="temp-item"><span class="temp-label">目標:</span>
+          <span class="temp-val"><span class="value">—</span></span></div>
+        <div class="temp-item"><span class="temp-label">現在:</span>
+          <span class="temp-val" data-field="boxTemp"><span class="value">--</span><span class="unit"></span></span></div>
+        <div class="temp-item">&nbsp;</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ctl">
+    <button id="btn-auto">▶ 自動サイクル(加熱→安定→冷却)</button>
+    <button id="btn-spike">急変化を注入(error)</button>
+    <button id="btn-over">上限超過(error)</button>
+    <button id="btn-deviate">目標乖離を保持(warn)</button>
+    <button id="btn-ff">⏩ 15秒経過させる</button>
+    <button id="btn-reset">リセット</button>
+  </div>
+  <div class="readout">
+    <div>clock: <span id="rd-clock">0</span> ms ／ counts: <span id="rd-counts">-</span></div>
+    <div id="rd-alerts"></div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  createThermalState, evaluateThermal, thermalCellStyle, thermalArrowColor,
+} from '../../3dp_lib/dashboard_thermal_guard.js';
+
+let state = createThermalState();
+let clock = 0;
+const reading = {
+  nozzleTemp: 25, targetNozzleTemp: 0,
+  bedTemp0: 25, targetBedTemp0: 0,
+  boxTemp: 25, maxNozzleTemp: 300, maxBedTemp: 120,
+};
+
+const CELLS = [
+  { key: 'nozzle', cur: 'nozzleTemp', tgt: 'targetNozzleTemp', diff: 'nozzleDiff' },
+  { key: 'bed',    cur: 'bedTemp0',   tgt: 'targetBedTemp0',   diff: 'bedDiff' },
+  { key: 'box',    cur: 'boxTemp',    tgt: null,               diff: null },
+];
+
+const $val = (f) => document.querySelector(`[data-field="${f}"] .value`);
+const setVal = (f, t) => { const e = $val(f); if (e) e.textContent = t; };
+
+// dashboard_ui.js と同じ着色ロジック（共有の thermalCellStyle / thermalArrowColor を使用）
+function paintCurrent(field, style) {
+  document.querySelectorAll(`[data-field="${field}"]`).forEach(el => {
+    el.classList.add('thermal-cell');
+    el.style.backgroundColor = style ? style.bg : '';
+    el.style.color = style ? (style.fg || '') : '';
+  });
+}
+function paintArrow(field, cell) {
+  document.querySelectorAll(`[data-field="${field}"]`).forEach(el => {
+    let a = el.querySelector('.thermal-arrow');
+    const dir = cell ? cell.direction : 0;
+    if (!dir) { if (a) a.textContent = ''; return; }
+    if (!a) { a = document.createElement('span'); a.className = 'thermal-arrow'; el.insertBefore(a, el.firstChild); }
+    a.textContent = dir > 0 ? '▲' : '▼';
+    a.style.color = thermalArrowColor(cell);
+  });
+}
+function updateBadge(counts) {
+  const badge = document.getElementById('thermal-badge');
+  const err = counts.error, warn = counts.warn;
+  if (!err && !warn) { badge.style.display = 'none'; badge.textContent = ''; badge.classList.remove('has-error', 'has-warn'); return; }
+  badge.style.display = '';
+  badge.classList.toggle('has-error', err > 0);
+  badge.classList.toggle('has-warn', err === 0 && warn > 0);
+  const p = [];
+  if (err > 0) p.push(`⚠ 異常 ${err}`);
+  if (warn > 0) p.push(`警告 ${warn}`);
+  badge.textContent = p.join(' / ');
+}
+
+function render() {
+  setVal('nozzleTemp', reading.nozzleTemp.toFixed(1) + '℃');
+  setVal('targetNozzleTemp', reading.targetNozzleTemp ? reading.targetNozzleTemp.toFixed(0) + '℃' : 'OFF');
+  setVal('bedTemp0', reading.bedTemp0.toFixed(1) + '℃');
+  setVal('targetBedTemp0', reading.targetBedTemp0 ? reading.targetBedTemp0.toFixed(0) + '℃' : 'OFF');
+  setVal('boxTemp', reading.boxTemp.toFixed(1) + '℃');
+  const nd = reading.nozzleTemp - reading.targetNozzleTemp;
+  const bd = reading.bedTemp0 - reading.targetBedTemp0;
+  setVal('nozzleDiff', reading.targetNozzleTemp ? (nd >= 0 ? '+' : '') + nd.toFixed(1) + '℃' : '—');
+  setVal('bedDiff', reading.targetBedTemp0 ? (bd >= 0 ? '+' : '') + bd.toFixed(1) + '℃' : '—');
+
+  const r = evaluateThermal(reading, state, clock);
+  for (const c of CELLS) {
+    paintCurrent(c.cur, thermalCellStyle(r.cells[c.key]));
+    if (c.diff) paintArrow(c.diff, r.cells[c.key]);
+  }
+  updateBadge(r.counts);
+
+  document.getElementById('rd-clock').textContent = clock;
+  document.getElementById('rd-counts').textContent = `error=${r.counts.error}, warn=${r.counts.warn}`;
+  document.getElementById('rd-alerts').innerHTML = r.alerts
+    .map(a => `<div class="alert-line ${a.level}">[${a.level}] ${a.message}</div>`).join('') || '<div class="hint">アラートなし</div>';
+}
+
+// ── 自動サイクル ──
+let timer = null, mode = 'heat', hold = 0;
+function step() {
+  clock += 500;
+  if (mode === 'heat') {
+    reading.targetNozzleTemp = 220; reading.targetBedTemp0 = 60;
+    reading.nozzleTemp = Math.min(reading.nozzleTemp + 6, 221);
+    reading.bedTemp0 = Math.min(reading.bedTemp0 + 1.6, 60.5);
+    reading.boxTemp = Math.min(reading.boxTemp + 0.4, 42);
+    if (reading.nozzleTemp >= 219 && reading.bedTemp0 >= 59.5) { mode = 'hold'; hold = 0; }
+  } else if (mode === 'hold') {
+    reading.nozzleTemp += (Math.sin(clock / 800) * 0.4);
+    reading.bedTemp0 += (Math.sin(clock / 900) * 0.2);
+    if (++hold > 14) mode = 'cool';
+  } else {
+    reading.targetNozzleTemp = 0; reading.targetBedTemp0 = 0;
+    reading.nozzleTemp = Math.max(reading.nozzleTemp - 4, 25);
+    reading.bedTemp0 = Math.max(reading.bedTemp0 - 1.2, 25);
+    reading.boxTemp = Math.max(reading.boxTemp - 0.3, 25);
+    if (reading.nozzleTemp <= 28 && reading.bedTemp0 <= 27) { mode = 'heat'; }
+  }
+  render();
+}
+document.getElementById('btn-auto').addEventListener('click', (e) => {
+  if (timer) { clearInterval(timer); timer = null; e.target.textContent = '▶ 自動サイクル(加熱→安定→冷却)'; }
+  else { timer = setInterval(step, 500); e.target.textContent = '⏸ 停止'; }
+});
+document.getElementById('btn-spike').addEventListener('click', () => { clock += 500; reading.nozzleTemp += 30; render(); });
+document.getElementById('btn-over').addEventListener('click', () => { clock += 500; reading.targetNozzleTemp = 220; reading.nozzleTemp = 305; render(); });
+document.getElementById('btn-deviate').addEventListener('click', () => { reading.targetNozzleTemp = 220; reading.nozzleTemp = 150; clock += 12000; render(); });
+document.getElementById('btn-ff').addEventListener('click', () => { clock += 15000; render(); });
+document.getElementById('btn-reset').addEventListener('click', () => {
+  if (timer) { clearInterval(timer); timer = null; document.getElementById('btn-auto').textContent = '▶ 自動サイクル(加熱→安定→冷却)'; }
+  state = createThermalState(); clock = 0; mode = 'heat'; hold = 0;
+  Object.assign(reading, { nozzleTemp: 25, targetNozzleTemp: 0, bedTemp0: 25, targetBedTemp0: 0, boxTemp: 25, maxNozzleTemp: 300, maxBedTemp: 120 });
+  render();
+});
+
+render();
+window.__thermalPreview = {
+  reading, getState: () => state, render, step, get clock() { return clock; },
+  // 検証用: 隔離シナリオを直接回せるよう生関数も露出
+  createThermalState, evaluateThermal, thermalCellStyle, thermalArrowColor,
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>温度グラフ uPlot プレビュー（モックデータ）</title>
+<link rel="stylesheet" href="../../3dp_panel.css">
+<link rel="stylesheet" href="../../3dp_monitor.css">
+<link rel="stylesheet" href="../../node_modules/uplot/dist/uPlot.min.css">
+<script src="../../node_modules/uplot/dist/uPlot.iife.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .stage { height: 320px; border: 1px solid #ccc; border-radius: 6px; }
+  .ctl { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .ctl button { font-size: 12px; padding: 6px 10px; cursor: pointer; }
+  .readout { margin-top: 10px; font-size: 12px; color: #555; }
+  h1 { font-size: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>温度グラフ uPlot プレビュー <span style="font-size:12px;color:#888">（実 dashboard_chart.js + uPlot / モックデータ）</span></h1>
+  <div class="stage temp-graph-panel-wrapper" id="panel">
+    <div class="temp-graph-area"><canvas id="temp-graph-canvas"></canvas></div>
+    <div class="temp-graph-footer"></div>
+  </div>
+  <div class="ctl">
+    <button id="btn-auto">▶ 自動サイクル(加熱→冷却)</button>
+    <button id="btn-lock">ズームロック切替</button>
+    <button id="btn-resetview">表示範囲リセット</button>
+    <button id="btn-reset">データリセット</button>
+    <button id="btn-perf">描画コスト計測(200回)</button>
+  </div>
+  <div class="readout" id="readout">準備完了。「自動サイクル」で2Hz更新を開始。</div>
+</div>
+
+<script type="module">
+import {
+  initTemperatureGraph, updateTemperatureGraphFromStoredData,
+  switchChartHost, resetTemperatureGraph, resetTemperatureGraphView, toggleChartInteractionLock,
+} from '../../3dp_lib/dashboard_chart.js';
+
+const HOST = 'mock-printer';
+const panel = document.getElementById('panel');
+const ro = document.getElementById('readout');
+
+switchChartHost(HOST);
+// throttle を 0 にして毎回描画（計測しやすく）。実アプリは既定 500ms。
+initTemperatureGraph(panel, HOST, { throttleIntervalMs: 0 });
+
+const store = (o) => ({
+  nozzleTemp: { rawValue: o.n }, targetNozzleTemp: { rawValue: o.tn },
+  bedTemp0: { rawValue: o.b }, targetBedTemp0: { rawValue: o.tb },
+  boxTemp: { rawValue: o.x },
+});
+
+let st = { n: 25, b: 25, x: 25, tn: 220, tb: 60, mode: 'heat', hold: 0 };
+function advance() {
+  if (st.mode === 'heat') {
+    st.tn = 220; st.tb = 60;
+    st.n = Math.min(st.n + 6, 221); st.b = Math.min(st.b + 1.6, 60.5); st.x = Math.min(st.x + 0.4, 42);
+    if (st.n >= 219 && st.b >= 59.5) { st.mode = 'hold'; st.hold = 0; }
+  } else if (st.mode === 'hold') {
+    if (++st.hold > 12) st.mode = 'cool';
+  } else {
+    st.tn = 0; st.tb = 0;
+    st.n = Math.max(st.n - 4, 25); st.b = Math.max(st.b - 1.2, 25); st.x = Math.max(st.x - 0.3, 25);
+    if (st.n <= 28 && st.b <= 27) st.mode = 'heat';
+  }
+}
+
+let timer = null;
+document.getElementById('btn-auto').addEventListener('click', (e) => {
+  if (timer) { clearInterval(timer); timer = null; e.target.textContent = '▶ 自動サイクル(加熱→冷却)'; }
+  else {
+    timer = setInterval(() => { advance(); updateTemperatureGraphFromStoredData(store(st), HOST); ro.textContent = `mode=${st.mode} ノズル=${st.n.toFixed(0)}℃ ベッド=${st.b.toFixed(0)}℃`; }, 500);
+    e.target.textContent = '⏸ 停止';
+  }
+});
+document.getElementById('btn-lock').addEventListener('click', () => { const l = toggleChartInteractionLock(HOST); ro.textContent = 'ズームロック: ' + (l ? 'ON(ドラッグズーム無効)' : 'OFF(ドラッグで範囲ズーム可)'); });
+document.getElementById('btn-resetview').addEventListener('click', () => { resetTemperatureGraphView(HOST); ro.textContent = '表示範囲をリセット'; });
+document.getElementById('btn-reset').addEventListener('click', () => { resetTemperatureGraph(HOST); ro.textContent = 'データをリセット'; });
+document.getElementById('btn-perf').addEventListener('click', () => {
+  // 15分窓相当のデータを投入してから 200 回更新を計測
+  const N = 200;
+  const t0 = performance.now();
+  for (let i = 0; i < N; i++) { advance(); updateTemperatureGraphFromStoredData(store(st), HOST); }
+  const dt = performance.now() - t0;
+  ro.textContent = `200回更新: 合計 ${dt.toFixed(1)}ms / 1回平均 ${(dt / N).toFixed(3)}ms（throttle=0で毎回 setData）`;
+});
+
+window.__chartPreview = { store, advance, getState: () => st, HOST };
+</script>
+</body>
+</html>

@@ -111,9 +111,16 @@ body {
   min-height: 0;
   width: 100%;
 }
-.temp-graph-area canvas {
+/* 旧 chart.js 直下 canvas 用（uPlot は入れ子 .u-wrap 配下に自前 canvas を持つため
+   子孫セレクタにすると uPlot の精密サイズ管理を壊す。直下 canvas のみに限定する）。 */
+.temp-graph-area > canvas {
   width: 100% !important;
   height: 100% !important;
+}
+/* uPlot をコンテナいっぱいに配置 */
+.temp-graph-area .uplot,
+.temp-graph-area .u-wrap {
+  width: 100%;
 }
 .temp-graph-footer {
   flex-shrink: 0;
@@ -689,6 +696,39 @@ body {
   flex: 1;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── サーマル可視化 ── */
+/* 「現在」セルの背景色は JS が連続スケール(加熱=黄緑/放熱=水色)・異常(赤黄)で設定。
+   transition で「徐々に」変化させ、2Hz の離散更新でも滑らかに見せる。 */
+.thermal-cell {
+  border-radius: 4px;
+  padding: 0 4px;
+  transition: background-color .35s ease, color .35s ease;
+}
+/* 方向矢印は「差」セルの数字の左。右揃えの桁・単位位置は不変のまま左に出る。 */
+.thermal-arrow {
+  margin-right: 3px;
+  font-size: 0.82em;
+  line-height: 1;
+}
+/* トップメニューのサーマル集約バッジ */
+.thermal-badge {
+  font-size: 12px;
+  font-weight: bold;
+  padding: 1px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.thermal-badge.has-error {
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger);
+}
+.thermal-badge.has-warn {
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning);
 }
 .quick-buttons {
   display: flex;
