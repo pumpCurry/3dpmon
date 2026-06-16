@@ -34,6 +34,26 @@ const { app, BrowserWindow, Menu, ipcMain, dialog, shell, powerSaveBlocker } = r
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
+const os = require("os");
+
+/**
+ * このマシンの LAN 向け IPv4 アドレス一覧を返す（内部/ループバックを除く）。
+ * 他端末からブラウザでリレーへ接続する際の URL 案内に用いる。
+ *
+ * @returns {string[]} IPv4 アドレス配列（取得不能時は空配列）
+ */
+function _getLanIps() {
+  const out = [];
+  try {
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+      for (const ni of ifaces[name] || []) {
+        if (ni && ni.family === "IPv4" && !ni.internal && ni.address) out.push(ni.address);
+      }
+    }
+  } catch { /* 取得失敗時は空配列 */ }
+  return out;
+}
 
 /**
  * アプリケーションバージョンを package.json から確実に取得する。
@@ -783,7 +803,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("relay-get-config", () => ({
     enabled: !!relayServer,
     port: RELAY_PORT,
-    clients: relayServer?.getClients() || []
+    clients: relayServer?.getClients() || [],
+    lanIps: _getLanIps()
   }));
 
   // レンダラー(親) → カメラパススルー: ホスト→エンドポイント のマップを受け取る

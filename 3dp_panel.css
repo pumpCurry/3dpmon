@@ -3790,3 +3790,62 @@ body.relay-readonly textarea {
 }
 .conn-webhook-state::before { content: "⬜"; }
 .conn-webhook-btn input:checked ~ .conn-webhook-state::before { content: "✅"; }
+
+/* ===========================================================================
+ * 外部連携モーダル: 他端末ブラウザ接続 + 操作昇格PIN セクション (v2.2.1027)
+ * ======================================================================== */
+.external-relay-section {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--color-accent-light, rgba(14,165,233,0.08));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+.external-relay-title {
+  font-size: var(--font-sm);
+  font-weight: bold;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+.external-relay-desc {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  margin: 0 0 8px;
+}
+.external-relay-url-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.external-relay-url {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-xs);
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg, #fff);
+  color: var(--color-text);
+}
+.external-relay-note {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  word-break: break-all;
+}
+.external-relay-pin {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.external-relay-subtitle {
+  font-size: var(--font-xs);
+  font-weight: bold;
+  color: var(--color-text);
+  width: 100%;
+}

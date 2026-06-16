@@ -499,11 +499,7 @@ function _initTopMenuBar() {
       monitorData.appSettings.cameraPort = parseInt(camPort.value, 10) || DEFAULT_CAMERA_PORT;
     }
 
-    // ★ リレー操作昇格PIN: 親モードのみ保存（子は要素が非表示で値も持たない）
-    const relayPin = document.getElementById("conn-modal-relay-pin");
-    if (relayPin && window.electronAPI?.isElectron?.()) {
-      monitorData.appSettings.relayPromotePin = String(relayPin.value || "").trim();
-    }
+    // ★ 操作昇格PIN は外部連携モーダルの専用UIで即時保存する（_injectRelayConnectSection）。
     // ★ 設定変更を即時保存（保存漏れでリスタート時に設定消失するバグ修正）
     saveUnifiedStorage(true);
   }
@@ -596,6 +592,8 @@ function _initTopMenuBar() {
     externalBtn.addEventListener("click", () => {
       // 開くたびに保存値からフォームを再構築（トランザクション編集の下書き）
       itemKeeperIntegration.initModalUI(externalBody);
+      // ★ 最上段に「他端末からブラウザでつなぐ」＋操作昇格PIN セクションを差し込む
+      _injectRelayConnectSection(externalBody);
       externalOverlay.classList.add("open");
     });
   }
@@ -713,3 +711,108 @@ function _initTopMenuBar() {
 /* _buildDefaultLayout は廃止。
  * 初回起動時はパネルを生成せず、接続確立時に
  * ensureHostPanels() がホスト名付きで自動生成する。 */
+
+/**
+ * 外部連携モーダルの最上段へ「他端末からブラウザでつなぐ」＋操作昇格PIN セクションを差し込む。
+ *
+ * 【詳細説明】
+ * - 親機(Electron)では relayGetConfig() から LAN IP とリレーポートを取得し、
+ *   他端末から開くための URL（http://IP:PORT/）をコピー可能に提示する。
+ *   開いた端末は閲覧専用(READONLY)で起動し、モード表示クリックでサテライト(操作)へ昇格できる旨を明示。
+ * - ブラウザ単体(非Electron)では親機能が無い旨を案内し、URL/コピーは無効化する。
+ * - 操作昇格PIN を「◎使用しない / 〇使用する PIN[]」のラジオUIで管理し、変更を即時保存する。
+ *   PIN は monitorData.appSettings.relayPromotePin に格納（空文字＝使用しない）。
+ *
+ * @private
+ * @param {HTMLElement} container - 外部連携モーダル本体(#external-modal-body)
+ * @returns {void}
+ */
+function _injectRelayConnectSection(container) {
+  if (!container) return;
+  /* 再オープン時の重複差し込みを防ぐ */
+  const old = container.querySelector("#external-relay-section");
+  if (old) old.remove();
+
+  const savedPin = String(monitorData.appSettings.relayPromotePin || "");
+  const usePin = savedPin.length > 0;
+
+  const sec = document.createElement("div");
+  sec.id = "external-relay-section";
+  sec.className = "external-relay-section";
+  sec.innerHTML = `
+    <div class="external-relay-title">📱 他端末からブラウザでつなぐ</div>
+    <p class="external-relay-desc">
+      同じネットワーク上の PC・スマホ・タブレットのブラウザから、この監視画面をリアルタイム共有できます。
+      下の URL を開くと <b>閲覧専用（READONLY）</b> で起動します。画面上部のモード表示をクリックすると
+      <b>サテライト（操作）モード</b> へ切り替えられます（必要に応じて下の昇格PINの入力を求めます）。
+    </p>
+    <div class="external-relay-url-row">
+      <input type="text" id="external-relay-url" class="external-relay-url" readonly value="（取得中…）">
+      <button id="external-relay-copy" class="conn-action-btn" type="button">コピー</button>
+    </div>
+    <div class="external-relay-note" id="external-relay-note"></div>
+    <div class="external-relay-pin">
+      <div class="external-relay-subtitle">操作モードへの昇格PIN</div>
+      <label class="conn-opt-label"><input type="radio" name="relay-pin-mode" value="off" ${usePin ? "" : "checked"}> 使用しない</label>
+      <label class="conn-opt-label"><input type="radio" name="relay-pin-mode" value="on" ${usePin ? "checked" : ""}> 使用する</label>
+      <input type="text" id="external-relay-pin-input" class="conn-opt-num" style="width:8em;" autocomplete="off" placeholder="PIN" value="${usePin ? savedPin.replace(/"/g, "&quot;") : ""}" ${usePin ? "" : "disabled"}>
+    </div>
+  `;
+  container.insertBefore(sec, container.firstChild);
+
+  const urlEl  = sec.querySelector("#external-relay-url");
+  const noteEl = sec.querySelector("#external-relay-note");
+  const copyBtn = sec.querySelector("#external-relay-copy");
+
+  /* 接続URL: 親(Electron)のリレー設定から LAN IP + ポートを取得して提示 */
+  const cfgApi = window.electronAPI?.relayGetConfig;
+  if (typeof cfgApi === "function") {
+    Promise.resolve(cfgApi()).then(cfg => {
+      const port = cfg?.port || 5313;
+      const ips = Array.isArray(cfg?.lanIps) ? cfg.lanIps : [];
+      if (ips.length > 0) {
+        urlEl.value = `http://${ips[0]}:${port}/`;
+        if (ips.length > 1) {
+          noteEl.textContent = "他のIPでも可: " + ips.slice(1).map(ip => `http://${ip}:${port}/`).join(" , ");
+        }
+      } else {
+        urlEl.value = `http://<このPCのIPアドレス>:${port}/`;
+        noteEl.textContent = "LAN IP を自動取得できませんでした。OS側でこのPCのIPアドレスをご確認ください。";
+      }
+    }).catch(() => { urlEl.value = "（取得に失敗しました）"; });
+  } else {
+    urlEl.value = "（アプリ版でのみ利用可能）";
+    if (copyBtn) copyBtn.disabled = true;
+    noteEl.textContent = "他端末からの接続は、親機（デスクトップアプリ）で 3dpmon を起動しているときに利用できます。";
+  }
+
+  /* URL コピー */
+  if (copyBtn) {
+    copyBtn.addEventListener("click", () => {
+      const v = urlEl.value || "";
+      if (!v || copyBtn.disabled || v.startsWith("（")) return;
+      navigator.clipboard?.writeText(v).then(() => {
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = "✓ コピー";
+        setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+      }).catch(() => {});
+    });
+  }
+
+  /* 昇格PIN: ラジオ/入力変更で即時保存（空＝使用しない） */
+  const pinInput = sec.querySelector("#external-relay-pin-input");
+  const radios = sec.querySelectorAll('input[name="relay-pin-mode"]');
+  const persistPin = () => {
+    const mode = sec.querySelector('input[name="relay-pin-mode"]:checked')?.value;
+    if (mode === "on") {
+      if (pinInput) pinInput.disabled = false;
+      monitorData.appSettings.relayPromotePin = String(pinInput?.value || "").trim();
+    } else {
+      if (pinInput) pinInput.disabled = true;
+      monitorData.appSettings.relayPromotePin = "";
+    }
+    saveUnifiedStorage(true);
+  };
+  radios.forEach(r => r.addEventListener("change", persistPin));
+  if (pinInput) pinInput.addEventListener("change", persistPin);
+}
