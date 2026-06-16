@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <!-- ★ app-version: ビルド時に scripts/sync-version.js が package.json から自動更新する -->
-  <meta name="app-version" content="2.2.1025" />
-  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1025</title>
+  <meta name="app-version" content="2.2.1026" />
+  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1026</title>
   <!-- サイトアイコン -->
   <link rel="icon" href="favicon.ico">
 
@@ -14,10 +14,9 @@
   <link rel="stylesheet" href="node_modules/gridstack/dist/gridstack.min.css">
   <link rel="stylesheet" href="3dp_panel.css">
 
-  <!-- Chart.js ライブラリ (温度グラフ用) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+  <!-- uPlot ライブラリ (温度グラフ用・ローカル/オフライン) -->
+  <link rel="stylesheet" href="node_modules/uplot/dist/uPlot.min.css">
+  <script src="node_modules/uplot/dist/uPlot.iife.min.js"></script>
   <!-- GridStack ライブラリ -->
   <script src="node_modules/gridstack/dist/gridstack-all.js"></script>
 </head>
@@ -40,6 +39,8 @@
       <button id="relay-promote-btn" class="relay-promote-btn" style="display:none"></button>
       <span class="status-dot disconnected" id="top-status-dot"></span>
       <span id="top-conn-label" style="font-size:12px;">未接続</span>
+      <!-- サーマル異常/警告の集約バッジ（件数0で非表示。クリックで通知ログへ） -->
+      <span id="thermal-badge" class="thermal-badge" style="display:none" title="サーマル異常/警告の件数"></span>
     </div>
     <!-- 旧シングルホスト時代のステータス表示は #top-printer-list に統合済み -->
     <div class="menu-spacer"></div>
@@ -77,6 +78,10 @@
             <option value="moonraker">Moonraker (Fluidd/Klipper)</option>
           </select>
           <button class="primary" id="conn-modal-connect">接続追加</button>
+        </div>
+        <!-- リレー子(ブラウザ)モード時の注記。直接接続不可の理由を明示（既定は非表示、JSで制御） -->
+        <div id="conn-modal-child-note" style="display:none;margin-top:4px;font-size:11px;color:var(--color-warning-text,#856404);background:var(--color-warning-bg,#fef3c7);border-radius:4px;padding:4px 8px;">
+          ブラウザ(子)モードでは親リレー経由で表示しています。プリンタへの直接接続は親機(アプリ)で行うか、<code>?relay=standalone</code> 付きで開いてください。
         </div>
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12px;">
           <label style="white-space:nowrap;cursor:pointer;">

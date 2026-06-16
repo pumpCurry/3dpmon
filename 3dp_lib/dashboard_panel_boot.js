@@ -35,7 +35,7 @@ import { monitorData } from "./dashboard_data.js";
 /** デフォルトカメラポート（一部ロットで異なる可能性あり。per-host で上書き可能） */
 const DEFAULT_CAMERA_PORT = 8080;
 import { saveUnifiedStorage } from "./dashboard_storage.js";
-import { notificationManager } from "./dashboard_notification_manager.js";
+import { notificationManager, showAlert } from "./dashboard_notification_manager.js";
 import { itemKeeperIntegration } from "./dashboard_integration_itemkeeper.js";
 import { registerPrintManagerAccessor, registerRebaselineHostUsage } from "./dashboard_spool.js";
 import { registerRelayCallback, rebaselineHostUsage } from "./dashboard_aggregator.js";
@@ -430,6 +430,22 @@ function _initTopMenuBar() {
       /* 入力欄をクリア */
       const modalIp = document.getElementById("conn-modal-ip");
       if (modalIp) modalIp.value = "";
+
+      /* ★ リレー子モード(readonly/satellite)では直接接続できない（connectWs がガードされる）。
+         接続IP欄・追加ボタンを無効化し、理由を明示して「押せるのに無反応」の混乱を防ぐ。
+         直接接続したい場合は親(Electron)で行うか ?relay=standalone で開く。 */
+      const isRelayChild = window._3dpmonRelayChild === true;
+      const modalConnect = document.getElementById("conn-modal-connect");
+      const note = document.getElementById("conn-modal-child-note");
+      if (isRelayChild) {
+        if (modalIp) { modalIp.disabled = true; modalIp.placeholder = "子モードでは直接接続不可（親リレー経由で表示中）"; }
+        if (modalConnect) modalConnect.disabled = true;
+        if (note) note.style.display = "";
+      } else {
+        if (modalIp) { modalIp.disabled = false; modalIp.placeholder = "192.168.54.151:9999"; }
+        if (modalConnect) modalConnect.disabled = false;
+        if (note) note.style.display = "none";
+      }
     });
   }
   /* モーダルを閉じる際に設定を保存・反映 */
@@ -480,6 +496,11 @@ function _initTopMenuBar() {
   const modalConnect = document.getElementById("conn-modal-connect");
   if (modalConnect) {
     modalConnect.addEventListener("click", () => {
+      /* ★ リレー子モードでは connectWs がガードされ無反応になるため、明示的に弾いて理由を通知する */
+      if (window._3dpmonRelayChild === true) {
+        showAlert("子モード（親リレー経由）では直接接続できません。親機で接続するか、?relay=standalone で開いてください。", "warn");
+        return;
+      }
       const ip = document.getElementById("conn-modal-ip")?.value.trim();
       if (!ip) return;
 

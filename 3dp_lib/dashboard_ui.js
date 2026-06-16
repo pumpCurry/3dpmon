@@ -31,6 +31,7 @@
 import { monitorData, PLACEHOLDER_HOSTNAME, scopedById } from "./dashboard_data.js";
 import { getDisplayValue, consumeDirtyKeysForHost, getHostsWithDirtyKeys } from "./dashboard_data.js";
 import { dashboardMapping } from "./dashboard_ui_mapping.js";         // フィールド別定義と処理
+import { thermalCellStyle, thermalArrowColor, thermalArrowGlyph } from "./dashboard_thermal_guard.js"; // サーマル着色(純)
 
 /* ─── B: data-field 要素キャッシュ（per-host） ─── */
 
@@ -266,7 +267,13 @@ export function updateStoredDataToDOM() {
 
       d.isNew = false;
     }
+
+    /* サーマル検知結果(machine.thermalResult)を温度セルへ反映(着色＋方向矢印) */
+    _applyThermalToHost(host, machine);
   }
+
+  /* 全ホスト集計のサーマル異常件数バッジを更新 */
+  _updateThermalBadge();
 }
 
 /**
@@ -303,5 +310,110 @@ function _applyValueToElement(el, d, value, unit) {
   } else {
     el.textContent = `${value}${unit}`;
   }
+}
+
+/* ============================================================================
+ * サーマル可視化（数値セル背景色＋方向矢印＋集約バッジ）
+ *  - 着色/バッジは aggregator が machine.thermalResult に書いた評価結果を読むだけ。
+ *  - 「現在」セル(nozzleTemp/bedTemp0/boxTemp)を加熱=黄緑/放熱=水色/異常=赤黄で着色。
+ *  - 方向矢印(▲▼)は「差」セル(nozzleDiff/bedDiff)の数字の左に置き、数字位置は不変。
+ * ========================================================================== */
+
+/** 着色対象チャンネル → data-field 対応 */
+const THERMAL_CELL_MAP = [
+  { key: "nozzle", current: "nozzleTemp", diff: "nozzleDiff" },
+  { key: "bed",    current: "bedTemp0",   diff: "bedDiff" },
+  { key: "box",    current: "boxTemp",    diff: null },
+];
+
+/**
+ * 「現在」セルへ背景/文字色を適用(null で解除)。
+ * @private
+ * @param {Element} el
+ * @param {?{bg:string,fg:string}} style
+ */
+function _paintThermalCurrent(el, style) {
+  if (!el) return;
+  el.classList.add("thermal-cell");
+  if (!style) {
+    el.style.backgroundColor = "";
+    el.style.color = "";
+    return;
+  }
+  el.style.backgroundColor = style.bg;
+  el.style.color = style.fg || "";
+}
+
+/**
+ * 「差」セルの数字の左に方向矢印(▲昇温/▼降温)を表示。数字の出し方は不変。
+ * @private
+ * @param {Element} el
+ * @param {?{phase:string,direction:number}} cell
+ */
+function _paintThermalArrow(el, cell) {
+  if (!el) return;
+  let arrow = el.querySelector(".thermal-arrow");
+  const dir = cell ? cell.direction : 0;
+  const glyph = thermalArrowGlyph(dir);
+  if (!glyph) {
+    if (arrow) arrow.textContent = "";
+    return;
+  }
+  if (!arrow) {
+    arrow = document.createElement("span");
+    arrow.className = "thermal-arrow";
+    el.insertBefore(arrow, el.firstChild);
+  }
+  arrow.textContent = glyph;
+  arrow.style.color = thermalArrowColor(cell);
+}
+
+/**
+ * 1ホスト分のサーマル着色を反映する。
+ * @private
+ * @param {string} host
+ * @param {Object} machine - monitorData.machines[host]
+ */
+function _applyThermalToHost(host, machine) {
+  const cells = machine?.thermalResult?.cells || {};
+  for (const m of THERMAL_CELL_MAP) {
+    const cell = cells[m.key] || null;
+    const style = thermalCellStyle(cell);
+    _getFieldElements(host, m.current).forEach(el => _paintThermalCurrent(el, style));
+    if (m.diff) _getFieldElements(host, m.diff).forEach(el => _paintThermalArrow(el, cell));
+  }
+}
+
+/**
+ * 全ホストのサーマル異常/警告件数を集計し、トップメニューの集約バッジへ反映。
+ * 0 件のときは非表示。バナーを積まず、ここで一目把握できるようにする。
+ * @private
+ */
+function _updateThermalBadge() {
+  const badge = document.getElementById("thermal-badge");
+  if (!badge) return;
+  let err = 0;
+  let warn = 0;
+  const machines = monitorData?.machines || {};
+  for (const h of Object.keys(machines)) {
+    const c = machines[h]?.thermalResult?.counts;
+    if (c) {
+      err += c.error || 0;
+      warn += c.warn || 0;
+    }
+  }
+  if (err === 0 && warn === 0) {
+    badge.style.display = "none";
+    badge.textContent = "";
+    badge.classList.remove("has-error", "has-warn");
+    return;
+  }
+  badge.style.display = "";
+  badge.classList.toggle("has-error", err > 0);
+  badge.classList.toggle("has-warn", err === 0 && warn > 0);
+  const parts = [];
+  if (err > 0) parts.push(`⚠ 異常 ${err}`);
+  if (warn > 0) parts.push(`警告 ${warn}`);
+  badge.textContent = parts.join(" / ");
 }
 

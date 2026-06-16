@@ -45,6 +45,10 @@ export const defaultNotificationMap = {
   errorOccurred:    { talk: "{hostname} でエラー発生：コード{error_code}, キー{error_key}, メッセージ{error_msg} ({now})", sound: DEFAULT_SOUND, enabled: true, level: "error"   },
   errorResolved:    { talk: "{hostname} のエラーは解消しました ({now})",                           sound: DEFAULT_SOUND, enabled: true, level: "success" },
   tempOutOfRange:   { talk: "{hostname} の温度が {material} の推奨範囲外です: {detail}",           sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
+  // サーマル異常検知(dashboard_thermal_guard)。バナーは出さず(noBanner)、
+  // 通知ログ＋音声＋デスクトップ通知のみ。主インジケータは数値セルの背景色＋集約バッジ。
+  thermalAnomaly:   { talk: "{hostname} サーマル異常：{detail}",                                   sound: DEFAULT_SOUND, enabled: true, level: "error", noBanner: true },
+  thermalCaution:   { talk: "{hostname} サーマル警告：{detail}",                                   sound: DEFAULT_SOUND, enabled: true, level: "warn",  noBanner: true },
   filamentOut:      { talk: "{hostname} のフィラメントが切れました",                               sound: DEFAULT_SOUND, enabled: true, level: "warn"    },
   filamentReplaced: { talk: "{hostname} にフィラメントが補充されました",                         sound: DEFAULT_SOUND, enabled: true, level: "success" },
   inferredSpoolCreated: { talk: "{hostname} で新リールを推定投入しました。確認/訂正してください",   sound: DEFAULT_SOUND, enabled: true, level: "info"    },

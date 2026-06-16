@@ -60,8 +60,10 @@ let _parentOrigin = "";
 /**
  * リレーモードを検出する。
  * - Electron親: window.electronAPI 存在 → "parent"
+ * - ブラウザ: URL ?relay=standalone → "standalone"（直接接続・明示オプトアウト）
  * - ブラウザ子: URL ?relay=readonly|satellite → "readonly"|"satellite"
- * - それ以外: "standalone"（従来のスタンドアロン動作）
+ * - それ以外の http(s): デフォルトで "readonly"（リレー子）
+ * - file://: "standalone"
  *
  * @returns {string} "parent" | "readonly" | "satellite" | "standalone"
  */
@@ -74,6 +76,9 @@ export function detectRelayMode() {
   // URL パラメータでモード指定
   const params = new URLSearchParams(window.location.search);
   const relayParam = params.get("relay");
+  // ★ ?relay=standalone : http(s) でもリレー子にせずプリンタ直接接続する明示オプトアウト。
+  //   （既定は下の readonly のまま。サテライト運用に影響しない。）
+  if (relayParam === "standalone" || relayParam === "direct") return "standalone";
   if (relayParam === "satellite") return "satellite";
   if (relayParam === "readonly") return "readonly";
 
