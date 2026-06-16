@@ -676,6 +676,29 @@ function createWindow() {
     }
   });
 
+  /* ★ Moonraker(Klipper)機 WebSocket 接続の Origin 対策。
+     Moonraker は同一オリジン/cors_domains 以外からの WebSocket を CORS/CSRF で 403 拒否する。
+     親ウィンドウは file:// オリジンのため弾かれ、「K1(独自WSはOrigin無視)は繋がるのに
+     IR3 v2 等 Moonraker 機だけ繋がらない」原因になっていた（実測: Origin 付き WS=403 /
+     Origin 無し WS=101）。LAN 内プリンタへの WebSocket 要求から Origin ヘッダを除去して送る
+     （信頼済みクライアントIPなら Origin 無しで Moonraker が許可する）。K1 は Origin を見ないため無害。 */
+  try {
+    const ses = mainWindow.webContents.session;
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const url = details.url || "";
+      const isWs = details.resourceType === "webSocket"
+                || url.startsWith("ws://") || url.startsWith("wss://");
+      if (isWs && details.requestHeaders) {
+        for (const k of Object.keys(details.requestHeaders)) {
+          if (k.toLowerCase() === "origin") delete details.requestHeaders[k];
+        }
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    });
+  } catch (e) {
+    console.warn("[main] WebSocket Origin 除去フックの設定に失敗:", e?.message);
+  }
+
   /* ★ 親ウィンドウは常に file:// で読み込む。
      http://localhost: だとオリジンが変わり、localStorage/IndexedDB が
      別パーティションになってデータが消失する。
