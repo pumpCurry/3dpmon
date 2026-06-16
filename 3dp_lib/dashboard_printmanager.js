@@ -52,7 +52,6 @@ import {
   setCurrentSpoolId,
   useFilament,
   getSpoolById,
-  updateSpool,
   formatFilamentAmount,
   formatUsageHtml,
   usageHeaderLabel,
@@ -60,6 +59,7 @@ import {
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
+import { recomputeSpoolFromManualEdit } from "./dashboard_filament_ledger.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -207,6 +207,38 @@ function _patchHistoryFilament(raw, hostname) {
     cur.filamentType = raw.filamentType;
     saveCurrent(cur, hostname);
     renderPrintCurrent(scopedById("print-current-container", hostname), hostname);
+  }
+}
+
+/**
+ * 手動の履歴フィラメント編集を権威として当該スプール残量を再計算し（総量基準＋再アンカー）、
+ * 装着中ホストの残量表示(storedData)も更新する。
+ *
+ * ADR-0004 のアンカー方式（{@link reconcileSpool}）は装着以降のジョブしか見ないため、
+ * インポート済み履歴の編集が残量へ反映されない。手動編集は高信頼データとみなし
+ * {@link recomputeSpoolFromManualEdit} で履歴全体から再計算する（ユーザー選択 Option 1）。
+ *
+ * @private
+ * @param {?string} spoolId - 再計算するスプールID（falsy なら何もしない）
+ * @param {number} ts - 更新時刻 ms
+ * @returns {void}
+ */
+function _recomputeAndRefreshSpool(spoolId, ts) {
+  if (!spoolId) return;
+  try {
+    recomputeSpoolFromManualEdit(spoolId, { ts });
+  } catch (e) {
+    console.warn("[printmanager] recomputeSpoolFromManualEdit 失敗:", e?.message || e);
+    return;
+  }
+  const sp = getSpoolById(spoolId);
+  if (!sp) return;
+  // 装着中ホストの残量表示を更新（dirty マーク → 次の描画サイクルで反映）
+  const map = monitorData.hostSpoolMap || {};
+  for (const [h, sid] of Object.entries(map)) {
+    if (sid === spoolId) {
+      setStoredDataForHost(h, "filamentRemainingMm", sp.remainingLengthMm, true);
+    }
   }
 }
 
@@ -1523,28 +1555,17 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       const { spool: newSp } = result;
       // 同一スプール選択時はスキップ
       if (sid && newSp.id === sid) return;
-      // 旧スプールに使用量を復元
-      if (sid && materialUsedMm > 0) {
-        const oldSp = getSpoolById(sid);
-        if (oldSp) {
-          updateSpool(oldSp.id, {
-            remainingLengthMm: oldSp.remainingLengthMm + materialUsedMm
-          });
-        }
-      }
-      // 新スプールから使用量を差し引く
-      if (materialUsedMm > 0) {
-        const freshSp = getSpoolById(newSp.id);
-        const remain = freshSp ? freshSp.remainingLengthMm : newSp.remainingLengthMm;
-        updateSpool(newSp.id, {
-          remainingLengthMm: Math.max(0, remain - materialUsedMm)
-        });
-      }
-      const updatedSp = getSpoolById(newSp.id) || newSp;
-      // パース済み raw にフィラメント情報を直接セット（再パースを避ける）
-      _applyFilamentToRaw(raw, updatedSp);
+      // ★ ADR-0004 + Option1（手動編集=権威）: 累積減算(updateSpool ±materialUsedMm)は
+      //   二重計上の温床なので使わない。先に帰属(filamentInfo)を書き換えてから、旧/新
+      //   スプールを総量基準で権威再計算する（recomputeSpoolFromManualEdit が再アンカーも実施）。
+      _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
       // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
       _patchHistoryFilament(raw, hostname);
+      const recoTs = Date.now();
+      _recomputeAndRefreshSpool(sid, recoTs);          // 旧スプール（帰属が外れた）
+      _recomputeAndRefreshSpool(newSp.id, recoTs);     // 新スプール（帰属が付いた）
+      saveUnifiedStorage(true);
+      const updatedSp = getSpoolById(newSp.id) || newSp;
       // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
       _linkCurrentPrintSpool(raw, updatedSp, hostname);
       // パネルのフィラメントプレビューを更新
@@ -1567,13 +1588,15 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       });
       if (!result) return;
       const { spool: newSp } = result;
-      // ★ 「指定」は記録目的の紐付けのみ — 残量を差し引かない
-      // 過去の印刷で既に物理的に消費された量を再度差し引くと残量が不正になる
-      const updatedSp = getSpoolById(newSp.id) || newSp;
-      // パース済み raw にフィラメント情報を直接セット
-      _applyFilamentToRaw(raw, updatedSp);
+      // ★ ADR-0004 + Option1（手動編集=権威）: 「指定」は過去ジョブへスプールを後付け帰属する操作。
+      //   filamentInfo を書き込んでから recomputeSpoolFromManualEdit で総量基準に残量を再計算する
+      //   （= 総量 − 当該スプールに明示帰属する全完了ジョブの消費）。インポート済み履歴でも即反映。
+      _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
       // 保存済み履歴を直接更新
       _patchHistoryFilament(raw, hostname);
+      _recomputeAndRefreshSpool(newSp.id, Date.now());
+      saveUnifiedStorage(true);
+      const updatedSp = getSpoolById(newSp.id) || newSp;
       // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
       _linkCurrentPrintSpool(raw, updatedSp, hostname);
       // パネルのフィラメントプレビューを更新
