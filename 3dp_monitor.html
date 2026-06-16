@@ -72,6 +72,10 @@
       <div class="conn-modal-toolbar">
         <div class="btn-row" style="gap:6px;">
           <input type="text" id="conn-modal-ip" placeholder="192.168.54.151:9999" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+          <select id="conn-modal-type" title="プリンタ種別" style="padding:6px 4px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+            <option value="creality-k1">K1系 (Creality)</option>
+            <option value="moonraker">Moonraker (Fluidd/Klipper)</option>
+          </select>
           <button class="primary" id="conn-modal-connect">接続追加</button>
         </div>
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12px;">

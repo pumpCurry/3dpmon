@@ -1,0 +1,629 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Moonraker(Fluidd/Klipper)プロトコルアダプタ モジュール
+ * @file dashboard_moonraker.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_moonraker
+ *
+ * 【機能内容サマリ】
+ * - Klipper + Moonraker 機(例: Ideaformer IR3 v2)を、既存の Creality K1 系
+ *   データパイプライン(processData → storedData → UI)へ「翻訳」して流し込む
+ *   薄いアダプタ層。
+ * - Moonraker の JSON-RPC 2.0 over WebSocket (`/websocket`) を購読(subscribe)し、
+ *   差分push される機器状態を K1 系の WS JSON と同じ形へ正規化する。
+ * - 翻訳は純粋関数 {@link translateMoonrakerStatus} に分離し、ユニットテスト可能とする。
+ *   WebSocket ライフサイクルは {@link createMoonrakerSession} が担う。
+ *
+ * 【設計方針(Phase 0 PoC)】
+ * - 監視(読み取り)専用。操作(pause/resume/温度設定等)は後続フェーズ。
+ * - 既存 K1 系コードには一切手を入れず、出力を K1 形 JSON に揃えることで
+ *   下流(集計/台帳/通知/パネル)を無改修で再利用する。
+ * - 進捗はファイル位置(virtual_sdcard)優先。IR3 はベルト(無限Z)機のため
+ *   Z 基準のレイヤ推定が成立しない点に配慮している。
+ *
+ * 【公開関数一覧】
+ * - {@link mapMoonrakerState}：Moonraker 状態文字列 → K1 数値状態コード
+ * - {@link mergeMoonrakerStatus}：subscribe 差分を全体状態へマージ
+ * - {@link translateMoonrakerStatus}：Moonraker 状態 → K1 形オブジェクトへ翻訳(純粋関数)
+ * - {@link createMoonrakerSession}：WebSocket セッション(接続/購読/再接続)生成
+ *
+ * @version 1.390.1118 (PR #385)
+ * @since   1.390.1118 (PR #385)
+ * @lastModified 2026-06-16 21:00:00
+ * -----------------------------------------------------------
+ * @todo
+ * - Phase 1: 履歴(server/history)/ファイル(server/files)取り込み、カメラ(webcams/list)URL対応
+ * - Phase 2: belt 45°プレビュー、gcode ログタブ、per-type 操作/温調パネル、追加温度センサ(CAN/MCU/HOST)グラフ
+ * - Phase 3: 操作系(printer.print.* / gcode.script / emergency_stop / 温度設定)の RPC 化
+ * - 認証(API key / JWT)対応(現状の実機は login_required=false の前提)
+ * - done(v1): live_position 実位置、レイヤー導出(meta+slicerZ)、残時間(estimated_time)高精度化
+ */
+
+import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
+
+/**
+ * 押出ノズル温度スライダ上限の既定値(機器 config 取得前のフォールバック)。
+ * @constant {number}
+ */
+export const MOONRAKER_DEFAULT_MAX_NOZZLE = 300;
+
+/**
+ * ベッド温度スライダ上限の既定値(機器 config 取得前のフォールバック)。
+ * @constant {number}
+ */
+export const MOONRAKER_DEFAULT_MAX_BED = 120;
+
+/**
+ * 再接続の上限回数(K1 系 connectWs と揃える)。
+ * @constant {number}
+ */
+export const MOONRAKER_MAX_RECONNECT = 5;
+
+/**
+ * Moonraker `printer.objects.subscribe` で購読する監視対象オブジェクト。
+ * 値 `null` は「そのオブジェクトの全フィールド」を意味する(Moonraker 仕様)。
+ *
+ * @constant {Object<string, (null|string[])>}
+ */
+export const MOONRAKER_SUBSCRIBE_OBJECTS = {
+  extruder: null,                                  // ノズル温度/目標
+  heater_bed: null,                                // ベッド温度/目標
+  print_stats: null,                               // 状態/経過/使用フィラメント/ファイル名
+  display_status: null,                            // 進捗(0-1)
+  virtual_sdcard: null,                            // ファイル位置進捗(0-1)
+  toolhead: ["position", "homed_axes"],            // 座標フォールバック
+  gcode_move: ["gcode_position", "speed_factor", "extrude_factor"], // スライサZ(レイヤ算出)/速度/流量
+  motion_report: ["live_position", "live_velocity"], // 実位置(プレビュー用・最頻更新)
+  fan: ["speed"],                                  // モデルファン
+  idle_timeout: ["state"],                         // Idle/Printing/Ready
+  webhooks: ["state", "state_message"],            // Klippy 状態(ready/shutdown/error)
+  "filament_motion_sensor encoder_sensor": ["enabled", "filament_detected"], // 材料検知
+};
+
+/**
+ * 数値を小数2桁へ丸める(温度表示用)。非数値は null を返す。
+ *
+ * @private
+ * @param {*} v - 入力値
+ * @returns {?number} 丸めた数値、または null
+ */
+function _round2(v) {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Moonraker(Klipper)の状態文字列を、ダッシュボード内部の K1 数値状態コードへ写像する。
+ *
+ * 【詳細説明】
+ * - Klippy 自体が `ready` 以外(shutdown/error/startup)の場合は機器異常とみなし
+ *   printFailed(=4)を返して UI 上で異常を可視化する。
+ * - 印刷状態は print_stats.state の文字列を K1 の {@link PRINT_STATE_CODE} に対応づける。
+ *   cancelled / error は K1 に対応コードが無いため printFailed(=4)へ寄せる。
+ *
+ * @function mapMoonrakerState
+ * @param {string} printState  - print_stats.state("standby"|"printing"|"paused"|"complete"|"cancelled"|"error")
+ * @param {string} [klippyState] - webhooks.state("ready"|"startup"|"shutdown"|"error")
+ * @returns {number} K1 数値状態コード(0:停止 1:印刷中 2:正常終了 4:失敗 5:一時停止)
+ * @example
+ * mapMoonrakerState("printing", "ready"); // → 1
+ * mapMoonrakerState("complete", "ready"); // → 2
+ * mapMoonrakerState("standby", "shutdown"); // → 4
+ */
+export function mapMoonrakerState(printState, klippyState) {
+  if (klippyState && klippyState !== "ready") {
+    // Klippy 異常(shutdown/error/startup)→ 失敗扱いで可視化
+    return PRINT_STATE_CODE.printFailed;
+  }
+  switch (printState) {
+    case "printing":  return PRINT_STATE_CODE.printStarted; // 1
+    case "paused":    return PRINT_STATE_CODE.printPaused;  // 5
+    case "complete":  return PRINT_STATE_CODE.printDone;    // 2
+    case "cancelled": return PRINT_STATE_CODE.printFailed;  // 4
+    case "error":     return PRINT_STATE_CODE.printFailed;  // 4
+    case "standby":
+    default:          return PRINT_STATE_CODE.printIdle;    // 0
+  }
+}
+
+/**
+ * Moonraker の subscribe 差分(notify_status_update)を、保持している全体状態へ
+ * マージする。Moonraker の status は「オブジェクト名 → フィールド辞書」の2階層
+ * 構造であり、差分は変更されたフィールドのみを含むため、オブジェクト単位で
+ * 浅いマージ(Object.assign)を行う。
+ *
+ * @function mergeMoonrakerStatus
+ * @param {Object} target  - マージ先(累積している全体状態。破壊的に更新する)
+ * @param {Object} partial - 受信した差分(または初期スナップショット)
+ * @returns {Object} マージ後の target(同一参照)
+ * @example
+ * const acc = {};
+ * mergeMoonrakerStatus(acc, { extruder: { temperature: 200 } });
+ * mergeMoonrakerStatus(acc, { extruder: { target: 210 } });
+ * // acc.extruder === { temperature: 200, target: 210 }
+ */
+export function mergeMoonrakerStatus(target, partial) {
+  if (!partial || typeof partial !== "object") return target;
+  for (const [key, val] of Object.entries(partial)) {
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      const base = (target[key] && typeof target[key] === "object" && !Array.isArray(target[key]))
+        ? target[key]
+        : {};
+      target[key] = Object.assign(base, val);
+    } else {
+      target[key] = val;
+    }
+  }
+  return target;
+}
+
+/**
+ * Moonraker の累積状態を、K1 系 WS JSON と同じ形のオブジェクトへ翻訳する(純粋関数)。
+ *
+ * 【詳細説明】
+ * - 返値は {@link processData} がそのまま解釈できるよう、K1 のキー名・単位・状態コードに
+ *   揃える(例: nozzleTemp/bedTemp0/printProgress[0-100]/state[数値]/usedMaterialLength[mm])。
+ * - 進捗は virtual_sdcard.progress(ファイル位置)優先、無ければ display_status.progress。
+ * - 残時間(printLeftTime)は Moonraker がネイティブに持たないため、ファイル進捗からの
+ *   線形推定(Fluidd の file 方式)で算出する。0 進捗時は null(算出不能)。
+ * - ジョブID(printStartTime, epoch秒)は Moonraker が開始 epoch を返さないため、
+ *   印刷検知時に `now - print_duration` で安定IDを確定し、ファイル名が変わるまで維持する。
+ *   ctx.job を破壊的に更新する点に注意(セッション内で状態を引き継ぐため)。
+ * - 座標は parseCurPosition が解釈できる "X: .. Y: .. Z: .." 文字列を生成する。
+ *
+ * @function translateMoonrakerStatus
+ * @param {Object} status - 累積済み Moonraker status(mergeMoonrakerStatus の結果)
+ * @param {MoonrakerTranslateContext} ctx - 翻訳コンテキスト(hostname/最大温度/ジョブ状態)
+ * @param {number} nowMs - 現在時刻(Date.now() 相当, ミリ秒)。テスト容易性のため引数化
+ * @returns {Object} K1 形に正規化したデータオブジェクト
+ *
+ * @typedef {Object} MoonrakerGcodeMeta
+ * @property {?number} estimatedTime    - スライサ見積り総時間(秒)
+ * @property {?number} objectHeight     - 造形高さ(mm)
+ * @property {?number} layerHeight      - レイヤー高さ(mm)
+ * @property {?number} firstLayerHeight - 初層高さ(mm)
+ * @property {?number} [layerCount]     - 総レイヤー数(スライサが供給する場合)
+ *
+ * @typedef {Object} MoonrakerTranslateContext
+ * @property {string}  hostname        - 機器ホスト名(routing キー)
+ * @property {number} [maxNozzleTemp]  - ノズル温度上限(config 由来)
+ * @property {number} [maxBedTemp]     - ベッド温度上限(config 由来)
+ * @property {?MoonrakerGcodeMeta} [meta] - 現在ファイルの gcode メタ(残時間/レイヤー算出に使用)
+ * @property {{startEpoch:?number, filename:?string}} job - セッション内ジョブ状態(破壊的更新)
+ *
+ * @example
+ * const ctx = { hostname: "Ideaformer", maxNozzleTemp: 310, maxBedTemp: 90, job: { startEpoch: null, filename: null } };
+ * const k1 = translateMoonrakerStatus(merged, ctx, Date.now());
+ * // k1.nozzleTemp, k1.printProgress, k1.state ... が K1 形で得られる
+ */
+export function translateMoonrakerStatus(status, ctx, nowMs) {
+  const s   = status || {};
+  const ext = s.extruder || {};
+  const bed = s.heater_bed || {};
+  const ps  = s.print_stats || {};
+  const ds  = s.display_status || {};
+  const vsd = s.virtual_sdcard || {};
+  const gm  = s.gcode_move || {};
+  const th  = s.toolhead || {};
+  const mr  = s.motion_report || {};
+  const fan = s.fan || {};
+  const wh  = s.webhooks || {};
+  const fms = s["filament_motion_sensor encoder_sensor"] || {};
+
+  const klippyState = wh.state;       // "ready" | "shutdown" | "error" | "startup"
+  const printState  = ps.state;       // "standby" | "printing" | ...
+  const stateCode   = mapMoonrakerState(printState, klippyState);
+
+  // --- 進捗(0-1)→ K1 の 0-100 ----------------------------------------------
+  // ベルト(無限Z)機のため Z 基準は使わず、ファイル位置(virtual_sdcard)を最優先。
+  const progressFrac = (typeof vsd.progress === "number") ? vsd.progress
+                     : (typeof ds.progress === "number")  ? ds.progress
+                     : null;
+  const printProgress = progressFrac != null ? Math.round(progressFrac * 100) : 0;
+
+  // --- 経過時間(秒) ---------------------------------------------------------
+  const printDuration = Number(ps.print_duration || 0);
+
+  // --- ジョブID(printStartTime, epoch秒) -----------------------------------
+  // 印刷/一時停止中はジョブが進行中。ファイル名が変わるか未確定なら確定し直す。
+  const nowSec   = Math.floor((Number(nowMs) || 0) / 1000);
+  const filename = ps.filename || "";
+  if (!ctx.job) ctx.job = { startEpoch: null, filename: null };
+  if (printState === "printing" || printState === "paused") {
+    if (!ctx.job.startEpoch || ctx.job.filename !== filename) {
+      // now - 経過 で開始時刻を逆算(安定したジョブIDとして利用)
+      ctx.job.startEpoch = Math.max(1, nowSec - Math.round(printDuration));
+      ctx.job.filename   = filename;
+    }
+  }
+  // 完了/失敗時は直近のジョブIDを維持(履歴登録で同一IDを使うため)。
+  const printStartTime = ctx.job.startEpoch || 0;
+
+  // --- 残時間(秒) -----------------------------------------------------------
+  // スライサ見積り(metadata.estimated_time)があればそれを優先（より安定）、
+  // 無い/超過時はファイル進捗からの線形推定にフォールバックする（Fluidd の file 方式）。
+  const meta = ctx.meta || null;
+  let printLeftTime = null;
+  if (meta && Number(meta.estimatedTime) > 0) {
+    printLeftTime = Math.round(Number(meta.estimatedTime) - printDuration);
+  }
+  if ((printLeftTime == null || printLeftTime <= 0)
+      && progressFrac && progressFrac > 0.001 && printDuration > 0) {
+    const totalEst = printDuration / progressFrac;
+    printLeftTime  = Math.round(totalEst - printDuration);
+  }
+  if (printLeftTime != null) printLeftTime = Math.max(0, printLeftTime);
+
+  // --- 座標 "X: .. Y: .. Z: .." (parseCurPosition 互換) ----------------------
+  // プレビューには実位置 motion_report.live_position を最優先（最も実機に追従）。
+  // 無ければ gcode_move.gcode_position → toolhead.position の順でフォールバック。
+  // ※ live_position の Z はベルト機ではベルト軸の実座標（高さではない）。
+  const pos = Array.isArray(mr.live_position) ? mr.live_position
+            : Array.isArray(gm.gcode_position) ? gm.gcode_position
+            : Array.isArray(th.position)       ? th.position
+            : null;
+  let curPosition = null;
+  if (pos && pos.length >= 3
+      && Number.isFinite(Number(pos[0]))
+      && Number.isFinite(Number(pos[1]))
+      && Number.isFinite(Number(pos[2]))) {
+    curPosition = `X: ${Number(pos[0]).toFixed(2)} Y: ${Number(pos[1]).toFixed(2)} Z: ${Number(pos[2]).toFixed(2)}`;
+  }
+
+  // --- レイヤー(導出) -------------------------------------------------------
+  // print_stats.info.{current,total}_layer はこのファームでは null のため、Fluidd と
+  // 同じく gcode メタ + スライサZ(gcode_move.gcode_position[2]) から算出する。
+  //   総レイヤー = ceil((object_height - first_layer_height) / layer_height) + 1
+  //   現在レイヤー = ceil((slicerZ - first_layer_height) / layer_height) + 1  (0..total にクランプ)
+  // ※ レイヤーには「スライサZ」を使う。実位置(キネマティックZ=ベルト軸)とは別物。
+  let layerTotal = null;
+  let layerCurrent = null;
+  // ファーム側が将来 info を埋める場合はそれを最優先する。
+  const psInfo = ps.info || {};
+  if (Number.isFinite(Number(psInfo.total_layer)) && Number(psInfo.total_layer) > 0) {
+    layerTotal = Number(psInfo.total_layer);
+  }
+  if (Number.isFinite(Number(psInfo.current_layer))) {
+    layerCurrent = Number(psInfo.current_layer);
+  }
+  // スライサが layer_count を埋めていれば総レイヤーはそれを最優先(最も正確)
+  if (layerTotal == null && meta && Number(meta.layerCount) > 0) {
+    layerTotal = Number(meta.layerCount);
+  }
+  if (meta && Number(meta.objectHeight) > 0 && Number(meta.layerHeight) > 0) {
+    const lh  = Number(meta.layerHeight);
+    const flh = Number.isFinite(Number(meta.firstLayerHeight)) ? Number(meta.firstLayerHeight) : lh;
+    if (layerTotal == null) {
+      layerTotal = Math.ceil((Number(meta.objectHeight) - flh) / lh) + 1;
+    }
+    const slicerZ = Array.isArray(gm.gcode_position) ? Number(gm.gcode_position[2]) : NaN;
+    if (layerCurrent == null && Number.isFinite(slicerZ)) {
+      // 完了レイヤー数は round で求める(浮動小数の境界での±1ブレを回避)。
+      // 現在レイヤー = 完了数 + 1、[0, total] にクランプ。
+      const c = Math.round((slicerZ - flh) / lh) + 1;
+      layerCurrent = Math.min(layerTotal, Math.max(0, c));
+    }
+  }
+
+  // --- ファン --------------------------------------------------------------
+  const fanSpeed = Number(fan.speed || 0);
+
+  /** @type {Object} K1 形に正規化した出力 */
+  const out = {
+    hostname: ctx.hostname,
+
+    // 状態(数値コード)
+    state: stateCode,
+    printState: stateCode,
+
+    // 温度
+    nozzleTemp: _round2(ext.temperature),
+    targetNozzleTemp: _round2(ext.target),
+    maxNozzleTemp: ctx.maxNozzleTemp || MOONRAKER_DEFAULT_MAX_NOZZLE,
+    bedTemp0: _round2(bed.temperature),
+    targetBedTemp0: _round2(bed.target),
+    maxBedTemp: ctx.maxBedTemp || MOONRAKER_DEFAULT_MAX_BED,
+
+    // 進捗/時間
+    printProgress: printProgress,
+    printJobTime: Math.round(printDuration),
+    printLeftTime: printLeftTime,
+    printStartTime: printStartTime,
+
+    // ファイル
+    printFileName: filename,
+
+    // 材料(mm)
+    usedMaterialLength: Math.round(Number(ps.filament_used || 0)),
+
+    // ファン(ON/OFF と %)
+    fan: fanSpeed > 0 ? 1 : 0,
+    modelFanPct: Math.round(fanSpeed * 100),
+  };
+
+  // 座標は取得できたときのみ付与(parseCurPosition で X/Y/Z に分解される)
+  if (curPosition) out.curPosition = curPosition;
+
+  // レイヤー(導出できたときのみ付与)。dashboardMapping の layer / TotalLayer に対応。
+  if (layerTotal != null) out.TotalLayer = layerTotal;
+  if (layerCurrent != null) out.layer = layerCurrent;
+
+  // 材料検知センサ(エンコーダ)が有効なときのみ materialStatus を反映
+  //   0:材料OK / 1:材料切れNG (K1 の MATERIAL_STATUS_MAP に合わせる)
+  if (fms && fms.enabled === true && typeof fms.filament_detected === "boolean") {
+    out.materialStatus = fms.filament_detected ? 0 : 1;
+  }
+
+  // 完了時は終了時刻(epoch秒)を付与(履歴の見栄え用)
+  if (stateCode === PRINT_STATE_CODE.printDone) {
+    out.printFinishTime = nowSec;
+  }
+
+  // Klippy 異常時はエラー状況へ反映(errorStatus パネル表示用)
+  if (klippyState && klippyState !== "ready") {
+    out.err = { errcode: 1, key: 0 };
+  }
+
+  return out;
+}
+
+/**
+ * Moonraker WebSocket セッションを生成し、接続・購読・再接続を管理する。
+ *
+ * 【詳細説明】
+ * - `ws://host/websocket`(または wss)へ接続し、JSON-RPC 2.0 で
+ *   `printer.info`(ホスト名取得)→ `printer.objects.query configfile`(温度上限)→
+ *   `printer.objects.subscribe`(状態購読)の順に初期化する。
+ * - 初期スナップショットおよび `notify_status_update` を受信するたびに
+ *   {@link mergeMoonrakerStatus} で全体状態を更新し、{@link translateMoonrakerStatus}
+ *   で K1 形へ翻訳して `onData` コールバックに渡す。
+ * - 切断時は指数バックオフで再接続する(`shouldReconnect` が true かつ上限未満のとき)。
+ *   生 WebSocket は呼び出し側(connection.js)の ConnectionState には載せない設計のため、
+ *   再接続はこのセッション内で完結させる。
+ *
+ * @function createMoonrakerSession
+ * @param {Object} opts - セッション設定
+ * @param {string} opts.url - 接続先 WebSocket URL("ws://IP:PORT/websocket")
+ * @param {string} opts.fallbackHost - printer.info 失敗時に使うホスト名(通常 IP)
+ * @param {function(string, string=):void} opts.onLog - ログ出力 (message, level)
+ * @param {function("connecting"|"connected"|"waiting"|"disconnected"):void} opts.onState - 状態通知
+ * @param {function(Object):void} opts.onData - 翻訳済み K1 形データの通知
+ * @param {function():boolean} opts.shouldReconnect - 再接続を許可するか判定する述語
+ * @returns {{close: function():void}} セッションハンドル(close で明示停止)
+ */
+export function createMoonrakerSession(opts) {
+  const {
+    url,
+    fallbackHost,
+    onLog = () => {},
+    onState = () => {},
+    onData = () => {},
+    shouldReconnect = () => false,
+  } = opts || {};
+
+  /** @type {MoonrakerTranslateContext} 翻訳コンテキスト(再接続後も維持) */
+  const ctx = {
+    hostname: fallbackHost,
+    maxNozzleTemp: MOONRAKER_DEFAULT_MAX_NOZZLE,
+    maxBedTemp: MOONRAKER_DEFAULT_MAX_BED,
+    job: { startEpoch: null, filename: null },
+  };
+
+  /** @type {Object} 累積している Moonraker 全体状態 */
+  let accStatus = {};
+  /** @type {?string} 直近で gcode メタを取得済みのファイル名(再取得抑止) */
+  let lastMetaFile = null;
+  /** @type {WebSocket|null} */
+  let ws = null;
+  /** @type {boolean} close() による明示停止フラグ */
+  let closed = false;
+  /** @type {number} 再接続試行回数 */
+  let reconnectCount = 0;
+  /** @type {number|null} 再接続タイマー */
+  let retryTimer = null;
+  /** @type {number} JSON-RPC id 採番カウンタ */
+  let rpcId = 0;
+
+  /** RPC id → 用途("info"|"config"|"subscribe"|"meta") の対応 */
+  const pending = new Map();
+
+  /**
+   * JSON-RPC リクエストを送信する。
+   * @private
+   * @param {string} method - メソッド名
+   * @param {Object} params - パラメータ
+   * @param {string} [tag]  - 応答識別タグ
+   * @returns {void}
+   */
+  const send = (method, params, tag) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const id = ++rpcId;
+    if (tag) pending.set(id, tag);
+    try {
+      ws.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+    } catch (e) {
+      onLog(`[moonraker] 送信失敗: ${e.message}`, "error");
+    }
+  };
+
+  /**
+   * 現在の累積状態を翻訳して onData に渡す。
+   * @private
+   * @returns {void}
+   */
+  const emit = () => {
+    try {
+      const k1 = translateMoonrakerStatus(accStatus, ctx, Date.now());
+      onData(k1);
+    } catch (e) {
+      onLog(`[moonraker] 翻訳エラー: ${e.message}`, "error");
+    }
+  };
+
+  /**
+   * 現在印刷中ファイルが変わったら gcode メタ(残時間/レイヤー算出用)を取得する。
+   * ファイル名が変化したときのみ RPC を投げ、同一ファイルでは再取得しない。
+   * @private
+   * @returns {void}
+   */
+  const maybeFetchMeta = () => {
+    const fn = accStatus.print_stats?.filename || "";
+    if (!fn) return;
+    if (fn === lastMetaFile) return;
+    lastMetaFile = fn;
+    ctx.meta = null; // 旧メタを破棄(取得完了まで線形推定にフォールバック)
+    send("server.files.metadata", { filename: fn }, "meta");
+  };
+
+  /**
+   * 受信メッセージを処理する。
+   * @private
+   * @param {MessageEvent} evt - WebSocket メッセージイベント
+   * @returns {void}
+   */
+  const onMessage = (evt) => {
+    let msg;
+    try {
+      msg = JSON.parse(typeof evt.data === "string" ? evt.data : "");
+    } catch {
+      return; // JSON 以外は無視
+    }
+    if (!msg || typeof msg !== "object") return;
+
+    // --- RPC 応答 ---
+    if (msg.id != null && pending.has(msg.id)) {
+      const tag = pending.get(msg.id);
+      pending.delete(msg.id);
+      const result = msg.result;
+      if (tag === "info" && result) {
+        ctx.hostname = result.hostname || fallbackHost;
+        onLog(`[moonraker] 機器ホスト名を取得: ${ctx.hostname}`, "info");
+        // 温度上限取得 → 状態購読 の順に開始
+        send("printer.objects.query", { objects: { configfile: ["settings"] } }, "config");
+        send("printer.objects.subscribe", { objects: MOONRAKER_SUBSCRIBE_OBJECTS }, "subscribe");
+      } else if (tag === "config" && result?.status?.configfile?.settings) {
+        const st = result.status.configfile.settings;
+        const en = Number(st?.extruder?.max_temp);
+        const bn = Number(st?.heater_bed?.max_temp);
+        if (Number.isFinite(en)) ctx.maxNozzleTemp = en;
+        if (Number.isFinite(bn)) ctx.maxBedTemp = bn;
+        onLog(`[moonraker] 温度上限 nozzle=${ctx.maxNozzleTemp} bed=${ctx.maxBedTemp}`, "info");
+      } else if (tag === "subscribe" && result?.status) {
+        // 初期スナップショット
+        mergeMoonrakerStatus(accStatus, result.status);
+        maybeFetchMeta();
+        emit();
+      } else if (tag === "meta" && result) {
+        // gcode メタ(残時間/レイヤー算出用)を ctx へ格納
+        ctx.meta = {
+          estimatedTime: Number.isFinite(Number(result.estimated_time)) ? Number(result.estimated_time) : null,
+          objectHeight: Number.isFinite(Number(result.object_height)) ? Number(result.object_height) : null,
+          layerHeight: Number.isFinite(Number(result.layer_height)) ? Number(result.layer_height) : null,
+          firstLayerHeight: Number.isFinite(Number(result.first_layer_height)) ? Number(result.first_layer_height) : null,
+          layerCount: Number.isFinite(Number(result.layer_count)) ? Number(result.layer_count) : null,
+        };
+        onLog(`[moonraker] gcodeメタ取得: est=${ctx.meta.estimatedTime}s 高さ=${ctx.meta.objectHeight}mm 層=${ctx.meta.layerHeight}mm`, "info");
+        emit();
+      }
+      return;
+    }
+
+    // --- 通知(method 付き) ---
+    if (msg.method === "notify_status_update" && Array.isArray(msg.params)) {
+      mergeMoonrakerStatus(accStatus, msg.params[0] || {});
+      maybeFetchMeta();
+      emit();
+    } else if (msg.method === "notify_klippy_shutdown" || msg.method === "notify_klippy_disconnected") {
+      // Klippy 異常 → webhooks.state を擬似的に落として翻訳に反映
+      mergeMoonrakerStatus(accStatus, { webhooks: { state: "shutdown" } });
+      emit();
+      onLog("[moonraker] Klippy が停止/切断されました", "warn");
+    } else if (msg.method === "notify_klippy_ready") {
+      mergeMoonrakerStatus(accStatus, { webhooks: { state: "ready" } });
+      emit();
+      onLog("[moonraker] Klippy が ready になりました", "info");
+    }
+  };
+
+  /**
+   * 切断時の再接続スケジューリング。
+   * @private
+   * @returns {void}
+   */
+  const scheduleReconnect = () => {
+    if (closed || !shouldReconnect()) {
+      onState("disconnected");
+      return;
+    }
+    if (reconnectCount >= MOONRAKER_MAX_RECONNECT) {
+      onState("disconnected");
+      onLog(`[moonraker] 自動接続リトライが上限(${MOONRAKER_MAX_RECONNECT})に達しました。`, "error");
+      return;
+    }
+    reconnectCount++;
+    const delayMs = 2000 * Math.pow(2, reconnectCount - 1);
+    onState("waiting");
+    onLog(`[moonraker] 切断。${Math.ceil(delayMs / 1000)}秒後に再試行します...(${reconnectCount}/${MOONRAKER_MAX_RECONNECT})`, "warn");
+    retryTimer = setTimeout(open, delayMs);
+  };
+
+  /**
+   * WebSocket 接続を開く。
+   * @private
+   * @returns {void}
+   */
+  function open() {
+    if (closed) return;
+    onState("connecting");
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      onLog(`[moonraker] WebSocket 生成失敗: ${e.message}`, "error");
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      reconnectCount = 0;
+      accStatus = {};
+      onState("connected");
+      onLog(`[moonraker] 接続確立: ${url}`, "info");
+      // まずホスト名を取得(その応答内で config 取得→購読を連鎖実行)
+      send("printer.info", {}, "info");
+    };
+    ws.onmessage = onMessage;
+    ws.onerror = () => {
+      onLog("[moonraker] WebSocket エラー", "warn");
+    };
+    ws.onclose = () => {
+      pending.clear();
+      scheduleReconnect();
+    };
+  }
+
+  /**
+   * セッションを明示停止する(再接続も行わない)。
+   * @returns {void}
+   */
+  const close = () => {
+    closed = true;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (ws) {
+      try {
+        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      } catch { /* noop */ }
+      ws = null;
+    }
+  };
+
+  // 起動
+  open();
+
+  return { close };
+}

@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link bootPanelSystem}：パネルシステムを起動
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.1118 (PR #385)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-03-10 21:00:00
+ * @lastModified 2026-06-16 21:00:00
  * -----------------------------------------------------------
  * @todo
  * - テンプレート抽出の自動化改善
@@ -29,7 +29,7 @@
 import { initGridStack, restoreLayout, updateAllPanelHeaders, toggleGlobalLock, unlockAllPanels } from "./dashboard_panel_factory.js";
 import { initPanelMenu } from "./dashboard_panel_menu.js";
 import { registerAllPanelInits } from "./dashboard_panel_init.js";
-import { connectWs, updatePrinterListUI } from "./dashboard_connection.js";
+import { connectWs, connectWithType, updatePrinterListUI } from "./dashboard_connection.js";
 import { monitorData } from "./dashboard_data.js";
 
 /** デフォルトカメラポート（一部ロットで異なる可能性あり。per-host で上書き可能） */
@@ -483,12 +483,16 @@ function _initTopMenuBar() {
       const ip = document.getElementById("conn-modal-ip")?.value.trim();
       if (!ip) return;
 
+      /* プリンタ種別（K1系 / Moonraker）。未取得時は K1 系を既定とする。 */
+      const printerType = document.getElementById("conn-modal-type")?.value || "creality-k1";
+
       /* 設定を同期 */
       _syncModalSettings();
 
-      /* connectWs は内部で _addConnectionTarget を呼んで永続化する。
+      /* connectWithType は printerType を connectionTargets に保存してから connectWs を呼ぶ。
+         connectWs は printerType を見て K1 / Moonraker の接続経路を分岐する。
          ★ wsDest は廃止済み。connectionTargets のみが権威。 */
-      connectWs(ip);
+      connectWithType(ip, printerType);
 
       /* 入力欄をクリア */
       const modalIpEl = document.getElementById("conn-modal-ip");

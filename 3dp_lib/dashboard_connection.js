@@ -27,10 +27,11 @@
  * - {@link cleanupConnection}：接続情報の完全破棄
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
+ * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  *
- * @version 1.390.1110 (PR #380)
+ * @version 1.390.1118 (PR #385)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-06-12 12:00:00
+ * @lastModified 2026-06-16 21:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,6 +61,7 @@ import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
+import { createMoonrakerSession } from "./dashboard_moonraker.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -95,6 +97,10 @@ const connectionMap = {};
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
  * @property {string}         dest          - 接続先(IP:PORT)
+ * @property {{close:function():void}|null} [_extSession]
+ *                                        - 外部プロトコル(Moonraker 等)セッション。
+ *                                          生 WebSocket は st.ws に載せず、ここで保持して
+ *                                          切断/クリーンアップ時に close() する。
  * @property {"disconnected"|"connecting"|"connected"|"waiting"} state
  *                                        - UI 表示用状態
  */
@@ -770,6 +776,14 @@ export function connectWs(hostOrDest) {
   const target = _findConnectionTarget(dest);
   const host = (target?.hostname) || ip;
 
+  // ★ Moonraker(Fluidd/Klipper)機: 別プロトコルのため専用アダプタへ委譲する。
+  //   K1 系の生 WebSocket・ハートビート・履歴フェッチ処理は一切通さない。
+  //   printerType は connectWithType（接続追加 UI）で connectionTargets に保存済み。
+  if (target?.printerType === "moonraker") {
+    connectMoonraker(dest, host);
+    return;
+  }
+
   // ★ currentHostname / wsDest / setCurrentHostname は全て廃止済み。
   //   per-host 処理は processData 内の _initializedHosts で管理する。
   const state = getState(host);
@@ -845,6 +859,114 @@ export function connectWs(hostOrDest) {
   };
   ws.onerror   = err => handleSocketError(err, host);
   ws.onclose   = () => handleSocketClose(host);
+}
+
+/**
+ * connectMoonraker:
+ * Moonraker(Fluidd/Klipper)機への接続を確立する。
+ *
+ * 【詳細説明】
+ * - {@link createMoonrakerSession} に WebSocket ライフサイクルと購読/翻訳を委譲し、
+ *   翻訳済み K1 形データを {@link simulateReceivedJson} 経由で既存パイプライン
+ *   (handleSocketMessage → processData → storedData → UI)へ流し込む。
+ * - 生 WebSocket は ConnectionState.ws には載せない（updateConnectionHost が K1 用
+ *   ハンドラを再バインドして購読を奪う事故、および K1 制御コマンドの誤送信を防ぐ）。
+ *   代わりにセッションを st._extSession に保持し、切断時に close() する。
+ * - 監視(読み取り)専用。操作系は後続フェーズ（PoC では未対応）。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式の接続先（Moonraker は通常 80 または 7125）
+ * @param {string} host - 接続キー（既知ホスト名、未確定時は IP）
+ * @returns {void}
+ */
+function connectMoonraker(dest, host) {
+  // ★ リレー子モードではプリンタ直接接続をスキップ（K1 と同様）
+  if (window._3dpmonRelayChild) return;
+
+  const st = getState(host);
+  st.dest = dest;
+  st.userDisc = false;
+  // ★ 生 WS は載せない（理由は関数 JSDoc 参照）
+  st.ws = null;
+  st.state = "connecting";
+
+  /* 接続先を永続リストに保存（printerType は connectWithType 側で設定済み） */
+  _addConnectionTarget(dest);
+
+  updateConnectionUI("connecting", {}, host);
+  updatePrinterListUI();
+  pushLog(`Moonraker(Fluidd)へ接続を試みます: ${dest}`, "warn", false, host);
+
+  /* 既存セッションが残っていれば閉じる（多重接続防止） */
+  if (st._extSession) {
+    try { st._extSession.close(); } catch { /* noop */ }
+    st._extSession = null;
+  }
+
+  const protocol = location.protocol === "https:" ? "wss://" : "ws://";
+  const url = `${protocol}${dest}/websocket`;
+  const fallbackHost = _extractIp(dest) || host;
+
+  st._extSession = createMoonrakerSession({
+    url,
+    fallbackHost,
+    onLog: (msg, level = "info") => pushLog(msg, level, false, host),
+    onState: (s) => {
+      st.state = s;
+      updateConnectionUI(s, {}, host);
+      updatePrinterListUI();
+      // 接続確立時に集計ループを起動（K1 の handleSocketOpen 相当）
+      if (s === "connected") restartAggregatorTimer(500);
+    },
+    onData: (k1obj) => {
+      // data.hostname により handleSocketMessage 側で IP→ホスト名解決される。
+      // host(初期キー)を渡せば初回は IP→ホスト名移行、以降はホスト名へ解決される。
+      try {
+        simulateReceivedJson(JSON.stringify(k1obj), host);
+      } catch (e) {
+        console.error("[moonraker] onData 処理エラー:", e);
+      }
+    },
+    // ユーザー明示切断時(userDisc=true)は再接続しない
+    shouldReconnect: () => !st.userDisc,
+  });
+}
+
+/**
+ * connectWithType:
+ * プリンタ種別を指定して接続する（接続追加 UI から呼ばれる統一エントリ）。
+ *
+ * 【詳細説明】
+ * - dest にポートが無ければ種別に応じた既定ポートを補完する
+ *   （K1: {@link DEFAULT_WS_PORT}=9999 / Moonraker: 80=nginx・Fluidd と同口）。
+ * - connectionTargets に printerType を保存してから {@link connectWs} を呼ぶ。
+ *   connectWs は printerType を見て K1 / Moonraker のいずれの経路かを分岐する。
+ *
+ * @function connectWithType
+ * @param {string} dest - "IP" もしくは "IP:PORT"
+ * @param {"creality-k1"|"moonraker"} [printerType="creality-k1"] - プリンタ種別
+ * @returns {void}
+ * @example
+ * connectWithType("192.168.54.15", "moonraker"); // → "192.168.54.15:80" として接続
+ */
+export function connectWithType(dest, printerType = "creality-k1") {
+  let d = (dest || "").trim();
+  if (!d) return;
+  /* ポート未指定なら種別ごとの既定ポートを補完（target.dest と connectWs の dest を一致させ重複登録を防ぐ） */
+  if (!d.includes(":")) {
+    d += (printerType === "moonraker") ? ":80" : ":" + DEFAULT_WS_PORT;
+  }
+  /* connectionTargets に printerType を保存（connectWs 内の分岐判定に使用） */
+  const targets = monitorData.appSettings.connectionTargets ??= [];
+  let t = targets.find(x => x.dest === d);
+  if (!t) {
+    t = { dest: d, color: "", label: "", hostname: "" };
+    targets.push(t);
+  }
+  t.printerType = printerType;
+  saveUnifiedStorage();
+
+  connectWs(d);
 }
 
 /**
@@ -1261,6 +1383,12 @@ export function disconnectWs(host) {
   // 接続中 or 接続試行中なら明示的に close を発行
   if (st.ws && (st.ws.readyState === WebSocket.OPEN || st.ws.readyState === WebSocket.CONNECTING)) {
     st.ws.close();
+  }
+
+  // ★ Moonraker 等の外部プロトコルセッションも停止（userDisc=true により再接続も抑止）
+  if (st._extSession) {
+    try { st._extSession.close(); } catch { /* noop */ }
+    st._extSession = null;
   }
 
   // 再接続カウント初期化
@@ -1878,6 +2006,17 @@ export function cleanupConnection(host) {
       console.warn(`cleanupConnection: WebSocket close エラー (${host})`, e);
     }
     st.ws = null;
+  }
+
+  // ★ Moonraker 等の外部プロトコルセッションを停止
+  if (st._extSession) {
+    try {
+      st.userDisc = true; // 再接続抑止
+      st._extSession.close();
+    } catch (e) {
+      console.warn(`cleanupConnection: 外部セッション close エラー (${host})`, e);
+    }
+    st._extSession = null;
   }
 
   // 全タイマーを停止
