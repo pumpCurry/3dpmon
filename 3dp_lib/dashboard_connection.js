@@ -54,7 +54,7 @@ import { pushLog, pushGcodeConsole } from "./dashboard_log_util.js";
 import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
 import { restorePrintResume } from "./3dp_dashboard_init.js";
 import { processData } from "./dashboard_msg_handler.js";
-import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
+import { restartAggregatorTimer, stopAggregatorTimer, ensureAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
@@ -709,6 +709,15 @@ export function getDisplayBaseUrl(host) {
 }
 
 /**
+ * _syncPanelsForHost の重い初期同期を完了したホスト集合。
+ * 本関数は毎メッセージ呼ばれるため、初回(orキー移行/パネル新規生成)以外は
+ * 重い処理(markAllKeysDirty/restore/timer)をスキップする冪等化に用いる。
+ * @type {Set<string>}
+ * @private
+ */
+const _syncedPanelHosts = new Set();
+
+/**
  * _syncPanelsForHost:
  * -------------------
  * ホスト名確定時にパネルを同期する。
@@ -724,36 +733,49 @@ export function getDisplayBaseUrl(host) {
 function _syncPanelsForHost(hostname, oldHost) {
   if (!hostname || hostname === "shared" || hostname === PLACEHOLDER_HOSTNAME) return;
 
+  const isMigration = !!(oldHost && oldHost !== hostname);
+
   /* IP→ホスト名移行: 旧IPベースのパネルを新ホスト名に移行する */
-  if (oldHost && oldHost !== hostname) {
+  if (isMigration) {
     renamePanelsHost(oldHost, hostname);
+    _syncedPanelHosts.delete(oldHost);
   }
 
-  /* shared パネルの移行を試みる（起動時に shared で生成されている場合） */
+  /* パネル存在保証（冪等・安価: 既存ホストなら即 0 を返す。安全網として毎回確認する）。
+     - migratePanelsToHost: shared パネルの移行（起動時に shared 生成時のみ）
+     - ensureHostPanels: 未生成なら自動生成（破棄→再生成にも追従） */
   const migrated = migratePanelsToHost(hostname);
+  let created = 0;
+  if (migrated === 0) created = ensureHostPanels(hostname) || 0;
 
-  /* 移行対象がなかった場合（初回起動でパネル未生成 or 2台目以降）
-     → このホスト用パネルを自動生成する */
-  if (migrated === 0) {
-    ensureHostPanels(hostname);
+  /* ★★ 2fps停止の真因修正 ★★
+     本関数は handleSocketMessage → updateConnectionHost(oldHost===newHost の
+     早期パス) 経由で「毎メッセージ(約4Hz)」呼ばれる。下記を毎回実行していたため:
+       - restartAggregatorTimer(): 500ms タイマーを約250ms毎にクリア＆再生成し、
+         発火(500ms到達)に永遠に届かない＝集約ループが回らず全状態が固着（真因）。
+       - markAllKeysDirty(): 毎ティック全セル再描画（無駄＝294 .new/回 の正体）。
+       - restoreAggregatorState(): 復元状態でライブ状態を毎回上書き（副作用）。
+     これらは「初回同期 or キー移行 or パネル新規生成」時のみ必要。定常メッセージでは
+     『集約タイマーが生きていることだけ』を ensureAggregatorTimer()（稼働中 no-op＝
+     リセットしない）で保証する。 */
+  const needFullSync = isMigration || migrated > 0 || created > 0 || !_syncedPanelHosts.has(hostname);
+  if (needFullSync) {
+    /* 接続確立/パネル生成時に per-host 状態を復元（既に復元済みでも冪等） */
+    restoreAggregatorState(hostname);
+
+    /* 印刷再開用データの復元（per-host） */
+    const curId = Number(monitorData.machines[hostname]?.storedData?.printStartTime?.rawValue || 0) || null;
+    restorePrintResume(hostname, curId);
+
+    /* パネル生成後、到着済みキャッシュを新 DOM に反映するため全キーを dirty に
+       マークし、次回 aggregatorUpdate で再描画させる */
+    markAllKeysDirty(hostname);
+
+    _syncedPanelHosts.add(hostname);
   }
 
-  /* ★ 接続確立時に per-host 状態を復元（全ホスト共通）
-     handleMessage の初回ブランチでは initHost のみ復元されるが、
-     2台目以降のホストはここで復元する。既に復元済みでも冪等。 */
-  restoreAggregatorState(hostname);
-
-  /* 印刷再開用データの復元（per-host） */
-  const curId = Number(monitorData.machines[hostname]?.storedData?.printStartTime?.rawValue || 0) || null;
-  restorePrintResume(hostname, curId);
-
-  /* パネル生成後、processData がパネル生成前に到着済みのデータを
-     新しい DOM に反映するため、全キーを dirty にマークして
-     次回の aggregatorUpdate で再描画されるようにする */
-  markAllKeysDirty(hostname);
-
-  /* aggregator を即座に実行し、キャッシュ済みデータを描画する */
-  restartAggregatorTimer(100);
+  /* 集約ループが停止していれば起動（稼働中はリセットしない＝発火を妨げない） */
+  ensureAggregatorTimer();
 }
 
 /* ===================== WebSocket 接続・受信処理 ===================== */
