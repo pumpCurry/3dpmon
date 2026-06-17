@@ -29,7 +29,8 @@
 
 import {
   monitorData,
-  isNotificationSuppressed
+  isNotificationSuppressed,
+  getHostDisplayName
 } from "./dashboard_data.js";
 import { saveUnifiedStorage }           from "./dashboard_storage.js";
 import { audioManager }                 from "./dashboard_audio_manager.js";
@@ -479,10 +480,9 @@ export class NotificationManager {
     // マクロ展開
     const now = new Date().toLocaleString();
     const hostname = payload.hostname || "unknown";
-    const machine = monitorData.machines[hostname];
-    const displayName = machine?.storedData?.hostname?.rawValue
-                     || machine?.storedData?.model?.rawValue
-                     || hostname;
+    // {hostname} は「呼び出し名称」= 表示名(label) を最優先で解決する
+    // （ユーザーが付けた表示名が通知・読み上げに反映されるようにする）
+    const displayName = getHostDisplayName(hostname);
     const ctx = { hostname: displayName, now, _rawHostname: hostname, ...payload };
     const text = (def.talk || def.label || "")
       .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
@@ -985,9 +985,8 @@ export class NotificationManager {
     const hostKeys = Object.keys(monitorData.machines || {}).filter(h => h !== "_$_NO_MACHINE_$_");
     const ttsEntries = [{ key: "__default__", label: "デフォルト（全機器共通）" }];
     for (const h of hostKeys) {
-      const machine = monitorData.machines[h];
-      const machineLabel = machine?.storedData?.hostname?.rawValue || machine?.storedData?.model?.rawValue || h;
-      ttsEntries.push({ key: h, label: machineLabel });
+      // 機器別一覧の名称も表示名(label) を優先（IP のまま出る問題の解消）
+      ttsEntries.push({ key: h, label: getHostDisplayName(h) });
     }
 
     // 各ホスト用 TTS 行を生成

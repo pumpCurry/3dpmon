@@ -47,7 +47,8 @@ import {
   setStoredDataForHost,
   ensureMachineData,
   markAllKeysDirty,
-  scopedById
+  scopedById,
+  getHostDisplayName
 } from "./dashboard_data.js";
 import { pushLog, pushGcodeConsole } from "./dashboard_log_util.js";
 import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
@@ -965,10 +966,26 @@ function connectMoonraker(dest, host) {
           // Moonraker のカメラURLは可変 → 機器申告の解決済み絶対URLを machine に保持し、
           // カメラ系が K1 固定URLではなくこちらを使う。到着時にストリームを張り直す。
           const machine = monitorData.machines[h];
+          const streamUrl = aux.webcams[0]?.streamUrl || null;
           if (machine) {
             machine._moonrakerWebcams = aux.webcams;
-            machine._cameraStreamUrl = aux.webcams[0]?.streamUrl || null;
+            machine._cameraStreamUrl = streamUrl;
             machine._cameraSnapshotUrl = aux.webcams[0]?.snapshotUrl || null;
+          }
+          // ★ 接続先設定のカメラポートを「機器が実際に使うURL」から反映する
+          //   （Moonraker はカメラポート欄を指定しても機器申告URLが優先＝従来は値が
+          //   無視されて見えた。解決済みURLのポートを書き戻して表示を実態に一致させる）
+          if (streamUrl) {
+            try {
+              const u = new URL(streamUrl);
+              const camPort = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+              const tgt = _findConnectionTarget(getDeviceDest(h)) || _findConnectionTarget(h);
+              if (tgt && tgt.cameraPort !== camPort) {
+                tgt.cameraPort = camPort;
+                saveUnifiedStorage();
+                updatePrinterListUI();
+              }
+            } catch { /* URL 解析失敗時は据え置き */ }
           }
           // camera_ctrl は connection.js を import するため循環回避に動的 import
           import("./dashboard_camera_ctrl.js")
@@ -1794,8 +1811,9 @@ export function updatePrinterListUI() {
                     : st.state === "waiting" ? "\u{1F504}"
                     : "\u274C";
 
-    // 基本情報
-    let line1 = `${stateIcon} ${h}`;
+    // 基本情報（表示名=label を優先。未設定時はホストキー）
+    const dispName = getHostDisplayName(h);
+    let line1 = `${stateIcon} ${dispName}`;
     line1 += ` [${st.dest}]`;
 
     // データ情報
@@ -1820,7 +1838,7 @@ export function updatePrinterListUI() {
       line2 = "\u30C7\u30FC\u30BF\u672A\u53D7\u4FE1";
     }
 
-    return { host: h, stateIcon, line1, line2, state: st.state };
+    return { host: h, displayName: dispName, stateIcon, line1, line2, state: st.state };
   });
 
   // ── 従来のサイドバーステータスリスト更新 ──
@@ -1847,7 +1865,7 @@ export function updatePrinterListUI() {
   if (topList) {
     topList.innerHTML = printerInfos.map(info => {
       const bg = info.state === "connected" ? "#555" : "#777";
-      return `<span class="printer-item conn-chip" data-host="${info.host}" style="background:${bg}">${info.stateIcon} ${info.host}</span>`;
+      return `<span class="printer-item conn-chip" data-host="${info.host}" style="background:${bg}">${info.stateIcon} ${info.displayName}</span>`;
     }).join("");
   }
 

@@ -20,6 +20,7 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
   PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_",
   setNotificationSuppressed: vi.fn(), setStoredDataForHost: vi.fn(),
   ensureMachineData: vi.fn(), markAllKeysDirty: vi.fn(), scopedById: vi.fn(),
+  getHostDisplayName: vi.fn((h) => h),
 }));
 vi.mock("../../3dp_lib/dashboard_log_util.js", () => ({ pushLog: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({
