@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1119 (PR #385)
+* @version 1.390.1120 (PR #385)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-06-16 21:30:00
+* @lastModified 2026-06-17 20:20:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1550,6 +1550,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const tr = document.createElement("tr");
     const isPrinting = finishCls === "result-active";
     tr.className = `history-row${isPrinting ? " history-row-printing" : ""}`;
+    tr.style.cursor = "pointer";   // ドリルダウン可能を示す（旧: 行ごとに設定）
     tr.innerHTML = `
       <td class="col-cmd">
         <button class="cmd-print icon-btn" title="印刷">▶</button>
@@ -1558,7 +1559,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       </td>
       <td data-key="number" class="col-num">${index + 1}<div class="sub-id">${raw.id}</div></td>
       <td class="col-thumb">
-        <img src="${thumbUrl}" alt="${name}" style="width:40px"
+        <img src="${thumbUrl}" alt="${name}" style="width:40px;min-height:40px" loading="lazy" decoding="async"
           onerror="this.onerror=null;this.src='${fallback}'" />
       </td>
       <td data-key="filename" class="col-file">
@@ -1579,89 +1580,10 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         <span class="md5-short" title="${raw.filemd5 || ''}">${md5short}</span>
       </td>
     `;
+    // ★ 描画律速対策: 行ごとの addEventListener を廃止し、tbody 1個へ委譲。
+    //   行特定は data-row-index で行う（dispatch は _historyTbodyClick）。
+    tr.dataset.rowIndex = String(index);
     tbody.appendChild(tr);
-
-    // イベントハンドラ登録
-    tr.querySelector(".cmd-print")?.addEventListener("click", () => {
-      handlePrintClick(raw, thumbUrl, hostname);
-    });
-    tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
-      handleRenameClick(raw, hostname);
-    });
-    tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
-      handleDeleteClick(raw, hostname);
-    });
-    tr.querySelector(".video-link")?.addEventListener("click", () => {
-      showVideoOverlay(raw.videoUrl);
-    });
-    tr.querySelector(".spool-edit")?.addEventListener("click", async ev => {
-      // ★ リレー子（satellite）では履歴フィラメント修正は未対応（複合操作のRPC未実装）。
-      //   ローカル状態だけが書き換わる「見かけ操作」を防ぐため明示ブロックする。
-      if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
-        const { showAlert } = await import("./dashboard_notification_manager.js");
-        showAlert("履歴のフィラメント修正は親機でのみ操作できます", "warn");
-        return;
-      }
-      const sid = ev.currentTarget?.dataset.id;
-      const materialUsedMm = raw.usagematerial || 0;
-      const result = await showHistoryFilamentDialog({
-        hostname, materialUsedMm, currentSpoolId: sid, jobId: String(raw.id)
-      });
-      if (!result) return;
-      const { spool: newSp } = result;
-      // 同一スプール選択時はスキップ
-      if (sid && newSp.id === sid) return;
-      // ★ ADR-0004 + Option1（手動編集=権威）: 累積減算(updateSpool ±materialUsedMm)は
-      //   二重計上の温床なので使わない。先に帰属(filamentInfo)を書き換えてから、旧/新
-      //   スプールを総量基準で権威再計算する（recomputeSpoolFromManualEdit が再アンカーも実施）。
-      _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
-      // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
-      _patchHistoryFilament(raw, hostname);
-      const recoTs = Date.now();
-      _recomputeAndRefreshSpool(sid, recoTs);          // 旧スプール（帰属が外れた）
-      _recomputeAndRefreshSpool(newSp.id, recoTs);     // 新スプール（帰属が付いた）
-      saveUnifiedStorage(true);
-      const updatedSp = getSpoolById(newSp.id) || newSp;
-      // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
-      _linkCurrentPrintSpool(raw, updatedSp, hostname);
-      // パネルのフィラメントプレビューを更新
-      const hostPreview = window._filamentPreviews?.get(hostname);
-      if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
-      // UI 再描画
-      const allJobs = loadHistory(hostname);
-      renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
-    });
-    tr.querySelector(".spool-assign")?.addEventListener("click", async () => {
-      // ★ リレー子（satellite）では履歴フィラメント指定は未対応（複合操作のRPC未実装）。
-      if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
-        const { showAlert } = await import("./dashboard_notification_manager.js");
-        showAlert("履歴のフィラメント指定は親機でのみ操作できます", "warn");
-        return;
-      }
-      const materialUsedMm = raw.usagematerial || 0;
-      const result = await showHistoryFilamentDialog({
-        hostname, materialUsedMm, currentSpoolId: null, jobId: String(raw.id)
-      });
-      if (!result) return;
-      const { spool: newSp } = result;
-      // ★ ADR-0004 + Option1（手動編集=権威）: 「指定」は過去ジョブへスプールを後付け帰属する操作。
-      //   filamentInfo を書き込んでから recomputeSpoolFromManualEdit で総量基準に残量を再計算する
-      //   （= 総量 − 当該スプールに明示帰属する全完了ジョブの消費）。インポート済み履歴でも即反映。
-      _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
-      // 保存済み履歴を直接更新
-      _patchHistoryFilament(raw, hostname);
-      _recomputeAndRefreshSpool(newSp.id, Date.now());
-      saveUnifiedStorage(true);
-      const updatedSp = getSpoolById(newSp.id) || newSp;
-      // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
-      _linkCurrentPrintSpool(raw, updatedSp, hostname);
-      // パネルのフィラメントプレビューを更新
-      const hostPreview = window._filamentPreviews?.get(hostname);
-      if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
-      // UI 再描画
-      const allJobs = loadHistory(hostname);
-      renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
-    });
   });
 
   // ソート用リスナ追加 + ソートインジケータ
@@ -1671,29 +1593,153 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
 
   // ── ジョブ詳細ドリルダウン (5-1 + 4-3) ──
   const tableParent = table?.parentElement;
+  let drilldown = null;
   if (tableParent) {
     // 既存のドリルダウンがあれば再利用
-    let drilldown = tableParent.querySelector(".job-drilldown");
+    drilldown = tableParent.querySelector(".job-drilldown");
     if (!drilldown) {
       drilldown = document.createElement("div");
       drilldown.className = "job-drilldown";
       drilldown.classList.add("pm-drilldown");
       tableParent.appendChild(drilldown);
     }
-
-    // 各行にクリックハンドラ追加
-    tbody?.querySelectorAll("tr.history-row").forEach((tr, idx) => {
-      tr.style.cursor = "pointer";
-      tr.addEventListener("click", (ev) => {
-        // ボタン操作時はドリルダウンしない
-        if (ev.target.closest("button, select, input")) return;
-        const raw = rawArray[idx];
-        if (!raw) return;
-        _renderJobDrilldown(drilldown, raw, baseUrl, hostname);
-      });
-    });
   }
 
+  // ★ 描画律速対策: 行ごとの addEventListener（印刷/改名/削除/動画/スプール/ドリルダウン）を
+  //   tbody 1個のイベント委譲に集約する。数百行 × 数リスナ＝数千リスナによるメモリ/再描画
+  //   コストを排除する。tbody は innerHTML 入替で行が作り直されても永続するため、ハンドラは
+  //   1度だけバインドし、行データ・コンテキストは _historyCtx に最新を保持して参照する。
+  tbody._historyCtx = { rawArray, baseUrl, hostname, drilldown, table };
+  if (!tbody._historyDelegated) {
+    tbody._historyDelegated = true;
+    tbody.addEventListener("click", _historyTbodyClick);
+  }
+
+}
+
+/**
+ * 履歴テーブル tbody のクリックを委譲処理する単一ハンドラ。
+ * 行は data-row-index → _historyCtx.rawArray[index] で特定する。
+ *
+ * @private
+ * @param {MouseEvent} ev
+ * @returns {Promise<void>}
+ */
+async function _historyTbodyClick(ev) {
+  const tbody = ev.currentTarget;
+  const ctx = tbody?._historyCtx;
+  if (!ctx) return;
+  const { rawArray, baseUrl, hostname, drilldown } = ctx;
+
+  const trEl = ev.target.closest("tr.history-row");
+  if (!trEl) return;
+  const idx = Number(trEl.dataset.rowIndex);
+  const raw = rawArray[idx];
+  if (!raw) return;
+
+  if (ev.target.closest(".cmd-print")) {
+    const thumbUrl = resolveThumbUrl(hostname, raw.filename, raw.thumbUrl);
+    handlePrintClick(raw, thumbUrl, hostname);
+    return;
+  }
+  if (ev.target.closest(".cmd-rename")) { handleRenameClick(raw, hostname); return; }
+  if (ev.target.closest(".cmd-delete")) { handleDeleteClick(raw, hostname); return; }
+  if (ev.target.closest(".video-link")) { showVideoOverlay(raw.videoUrl); return; }
+  const editBtn = ev.target.closest(".spool-edit");
+  if (editBtn) { await _handleHistorySpoolEdit(raw, baseUrl, hostname, editBtn.dataset.id); return; }
+  if (ev.target.closest(".spool-assign")) { await _handleHistorySpoolAssign(raw, baseUrl, hostname); return; }
+
+  // ボタン/フォーム以外 → ドリルダウン
+  if (ev.target.closest("button, select, input")) return;
+  if (drilldown) _renderJobDrilldown(drilldown, raw, baseUrl, hostname);
+}
+
+/**
+ * 履歴行のスプール「修正」操作（旧 .spool-edit クリックハンドラと同一ロジック）。
+ *
+ * @private
+ * @param {Object} raw - 行データ
+ * @param {string} baseUrl - サムネイルベースURL
+ * @param {string} hostname - ホスト名
+ * @param {string} [sid] - 現在のスプールID（編集ボタンの data-id）
+ * @returns {Promise<void>}
+ */
+async function _handleHistorySpoolEdit(raw, baseUrl, hostname, sid) {
+  // ★ リレー子（satellite）では履歴フィラメント修正は未対応（複合操作のRPC未実装）。
+  //   ローカル状態だけが書き換わる「見かけ操作」を防ぐため明示ブロックする。
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    const { showAlert } = await import("./dashboard_notification_manager.js");
+    showAlert("履歴のフィラメント修正は親機でのみ操作できます", "warn");
+    return;
+  }
+  const materialUsedMm = raw.usagematerial || 0;
+  const result = await showHistoryFilamentDialog({
+    hostname, materialUsedMm, currentSpoolId: sid, jobId: String(raw.id)
+  });
+  if (!result) return;
+  const { spool: newSp } = result;
+  // 同一スプール選択時はスキップ
+  if (sid && newSp.id === sid) return;
+  // ★ ADR-0004 + Option1（手動編集=権威）: 累積減算(updateSpool ±materialUsedMm)は
+  //   二重計上の温床なので使わない。先に帰属(filamentInfo)を書き換えてから、旧/新
+  //   スプールを総量基準で権威再計算する（recomputeSpoolFromManualEdit が再アンカーも実施）。
+  _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
+  // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
+  _patchHistoryFilament(raw, hostname);
+  const recoTs = Date.now();
+  _recomputeAndRefreshSpool(sid, recoTs);          // 旧スプール（帰属が外れた）
+  _recomputeAndRefreshSpool(newSp.id, recoTs);     // 新スプール（帰属が付いた）
+  saveUnifiedStorage(true);
+  const updatedSp = getSpoolById(newSp.id) || newSp;
+  // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
+  _linkCurrentPrintSpool(raw, updatedSp, hostname);
+  // パネルのフィラメントプレビューを更新
+  const hostPreview = window._filamentPreviews?.get(hostname);
+  if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
+  // UI 再描画
+  const allJobs = loadHistory(hostname);
+  renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
+}
+
+/**
+ * 履歴行のスプール「指定」操作（旧 .spool-assign クリックハンドラと同一ロジック）。
+ *
+ * @private
+ * @param {Object} raw - 行データ
+ * @param {string} baseUrl - サムネイルベースURL
+ * @param {string} hostname - ホスト名
+ * @returns {Promise<void>}
+ */
+async function _handleHistorySpoolAssign(raw, baseUrl, hostname) {
+  // ★ リレー子（satellite）では履歴フィラメント指定は未対応（複合操作のRPC未実装）。
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    const { showAlert } = await import("./dashboard_notification_manager.js");
+    showAlert("履歴のフィラメント指定は親機でのみ操作できます", "warn");
+    return;
+  }
+  const materialUsedMm = raw.usagematerial || 0;
+  const result = await showHistoryFilamentDialog({
+    hostname, materialUsedMm, currentSpoolId: null, jobId: String(raw.id)
+  });
+  if (!result) return;
+  const { spool: newSp } = result;
+  // ★ ADR-0004 + Option1（手動編集=権威）: 「指定」は過去ジョブへスプールを後付け帰属する操作。
+  //   filamentInfo を書き込んでから recomputeSpoolFromManualEdit で総量基準に残量を再計算する
+  //   （= 総量 − 当該スプールに明示帰属する全完了ジョブの消費）。インポート済み履歴でも即反映。
+  _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
+  // 保存済み履歴を直接更新
+  _patchHistoryFilament(raw, hostname);
+  _recomputeAndRefreshSpool(newSp.id, Date.now());
+  saveUnifiedStorage(true);
+  const updatedSp = getSpoolById(newSp.id) || newSp;
+  // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
+  _linkCurrentPrintSpool(raw, updatedSp, hostname);
+  // パネルのフィラメントプレビューを更新
+  const hostPreview = window._filamentPreviews?.get(hostname);
+  if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
+  // UI 再描画
+  const allJobs = loadHistory(hostname);
+  renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
 }
 
 /**
@@ -2901,9 +2947,10 @@ export function renderFileList(info, baseUrl, hostname) {
   // 前回の行をクリアしてから再描画
   tbody.innerHTML = "";
 
-  arr.forEach(item => {
+  arr.forEach((item, index) => {
     const tr = document.createElement("tr");
     tr.className = "file-row";
+    tr.dataset.rowIndex = String(index);
     const md5short = item.filemd5 ? item.filemd5.substring(0, 8) : "";
     // 更新日時を YYYY/MM/DD HH:MM:SS 形式にフォーマット
     const d = item.mtime;
@@ -2946,7 +2993,9 @@ export function renderFileList(info, baseUrl, hostname) {
         <img
           src="${item.thumbUrl}"
           alt="${item.basename}"
-          style="width:40px"
+          style="width:40px;min-height:40px"
+          loading="lazy"
+          decoding="async"
           onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'"
         >
       </td>
@@ -2960,24 +3009,43 @@ export function renderFileList(info, baseUrl, hostname) {
       <td data-key="md5" class="col-md5" title="${item.filemd5 || ''}">${md5short}</td>
     `;
     tbody.appendChild(tr);
-
-    // イベントハンドラ
-    tr.querySelector(".cmd-print")?.addEventListener("click", () => {
-      handlePrintClick(item, item.thumbUrl, hostname);
-    });
-    tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
-      handleRenameClick(item, hostname);
-    });
-    tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
-      handleDeleteClick(item, hostname);
-    });
   });
+
+  // ★ 描画律速対策: 行ごとの addEventListener を tbody 1個のイベント委譲へ集約。
+  //   行特定は data-row-index → _fileCtx.arr[index]。tbody は永続するため 1度だけバインド。
+  tbody._fileCtx = { arr, hostname };
+  if (!tbody._fileDelegated) {
+    tbody._fileDelegated = true;
+    tbody.addEventListener("click", _fileTbodyClick);
+  }
 
   // ソート用リスナ + インジケータ
   if (fileTable) {
     _bindSortHeaders(fileTable, "file-list-table", hostname);
   }
   pushLog("[renderFileList] UI へ反映しました", "info", false, hostname);
+}
+
+/**
+ * ファイル一覧 tbody のクリックを委譲処理する単一ハンドラ。
+ * 行は data-row-index → _fileCtx.arr[index] で特定する。
+ *
+ * @private
+ * @param {MouseEvent} ev
+ * @returns {void}
+ */
+function _fileTbodyClick(ev) {
+  const tbody = ev.currentTarget;
+  const ctx = tbody?._fileCtx;
+  if (!ctx) return;
+  const { arr, hostname } = ctx;
+  const trEl = ev.target.closest("tr.file-row");
+  if (!trEl) return;
+  const item = arr[Number(trEl.dataset.rowIndex)];
+  if (!item) return;
+  if (ev.target.closest(".cmd-print"))  { handlePrintClick(item, item.thumbUrl, hostname); return; }
+  if (ev.target.closest(".cmd-rename")) { handleRenameClick(item, hostname); return; }
+  if (ev.target.closest(".cmd-delete")) { handleDeleteClick(item, hostname); return; }
 }
 
 /**
