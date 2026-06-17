@@ -142,17 +142,18 @@ body {
   justify-content: flex-end; gap: 6px; padding: 4px; position: relative; z-index: 2;
 }
 .temp-graph-footer > button { flex: 0 0 auto; white-space: nowrap; }
-/* 凡例(uPlot live legend): 複数行でも値が切れず読めるように折り返し＋上限スクロール */
+/* 凡例(uPlot live legend): 複数行でも値が切れず読めるように折り返す。
+   ★ スクロール(overflow-y:auto)は廃止 — 狭い領域でスピナー状の操作不能スクロールが
+   出る不具合（ポイントすると枠外へ出て消える）を回避。領域は JS の LEGEND_RESERVE_PX(=40px,
+   約2行ぶん)で確保し、折り返しで素直に下へ伸ばす。 */
 .temp-graph-area .u-legend {
   font-size: var(--font-xs, 10px);
   max-width: 100%;
   display: flex;
   flex-wrap: wrap;            /* 系列を折り返す（あふれを縦方向へ逃がす） */
   gap: 1px 10px;
-  max-height: 3.4em;          /* 2〜3行を上限に、超過分はスクロール（消えない） */
-  overflow-y: auto;
-  overflow-x: hidden;
   padding: 1px 2px;
+  overflow: visible;
 }
 /* 各系列はラベル＋値を1かたまりで折り返さない（値だけ見えない問題の解消） */
 .temp-graph-area .u-legend .u-series { white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }

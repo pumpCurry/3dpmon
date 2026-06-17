@@ -231,22 +231,23 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
   hs.zoomLocked = true;
 
   const w = Math.max(container.clientWidth || 0, 120);
-  // ★ M: 凡例(複数行になりうる)のぶん高さを確保し、プロットが凡例で隠れ/あふれないようにする。
-  const legendH0 = 28;
-  const h = Math.max((container.clientHeight || 0) - legendH0, 100);
+  // ★ M/N: 凡例ぶんの高さは固定値で確保する。
+  //   旧実装は ResizeObserver 内で legend.offsetHeight を読み（強制同期レイアウト）→setSize
+  //   していたため、リサイズ時にレイアウトスラッシングのループに陥り CPU が暴走していた。
+  //   固定 reserve なら測定不要＝ループしない（凡例の折返しは CSS の max-height+スクロールで吸収）。
+  const LEGEND_RESERVE_PX = 40;
+  const h = Math.max((container.clientHeight || 0) - LEGEND_RESERVE_PX, 100);
   hs.u = new window.uPlot(_buildOpts(cfg, w, h, hs.zoomLocked, hs), hs.data, container);
   hs.userZoomed = false;
   hs.viewMs = cfg.timeWindowMs;
 
-  /* コンテナのサイズ変化に追従（凡例の高さを差し引いてプロット領域を確保） */
+  /* コンテナのサイズ変化に追従（凡例ぶんを固定差し引き。offsetHeight 測定はしない）。 */
   hs.ro = new ResizeObserver(() => {
     if (!hs.u) return;
     const cw = container.clientWidth;
     const ch = container.clientHeight;
     if (cw <= 0 || ch <= 0) return;
-    const legendEl = hs.u.root?.querySelector(".u-legend");
-    const legendH = (legendEl?.offsetHeight) || legendH0;
-    const plotH = Math.max(80, ch - legendH);
+    const plotH = Math.max(80, ch - LEGEND_RESERVE_PX);
     // 同寸法での無駄な再設定を避ける（setSize ループ防止）
     if (hs._lastW !== cw || hs._lastH !== plotH) {
       hs._lastW = cw; hs._lastH = plotH;

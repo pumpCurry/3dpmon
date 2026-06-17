@@ -369,23 +369,33 @@ function _buildDelta() {
     // 子（satellite/readonly）はプリンタ直結しないため、ここで配信しないと履歴が空になる
     const ps = machine.printStore;
     if (ps) {
-      const psHash = _quickHash(ps.history, ps.current);
-      if (psHash !== _prevPrintHash.get(hostname)) {
-        _prevPrintHash.set(hostname, psHash);
-        printStoresDelta[hostname] = {
-          history: ps.history || [],
-          current: ps.current || null
-        };
+      // ★【重篤・親CPU飽和修正】従来は全履歴(最大1500件×機器数)を毎500ms JSON.stringify して
+      //   ハッシュ化しており、長時間稼働で履歴が積もると親のメインスレッドを飽和→aggregator
+      //   (500ms)が starve され状態/グラフ更新が数分に1回まで低下していた。
+      //   全件 stringify をやめ、O(1) の安価な署名（件数＋末尾エントリ＋現在ジョブの要点）で
+      //   変化検出する（新規完了/現在ジョブ変化/末尾の帰属変更を捕捉）。
+      const hist = ps.history || [];
+      const last = hist.length ? hist[hist.length - 1] : null;
+      const cur = ps.current || null;
+      const psSig = `${hist.length}|${last?.id ?? ""}|${last?.materialUsedMm ?? last?.usagematerial ?? ""}|`
+        + `${last?.printfinish ?? ""}|${last?.filamentId ?? ""}|${last?.observed ?? ""}|`
+        + `${cur?.id ?? ""}|${cur?.materialUsedMm ?? ""}|${cur?.filamentId ?? ""}`;
+      if (psSig !== _prevPrintHash.get(hostname)) {
+        _prevPrintHash.set(hostname, psSig);
+        printStoresDelta[hostname] = { history: hist, current: cur };
         hasChanges = true;
       }
     }
 
-    // ファイル一覧（_cachedFileInfo）の変更検出
+    // ファイル一覧（_cachedFileInfo）の変更検出（同様に全件 stringify を避ける）
     const fi = machine._cachedFileInfo;
     if (fi) {
-      const fiHash = _quickHash(fi);
-      if (fiHash !== _prevFileHash.get(hostname)) {
-        _prevFileHash.set(hostname, fiHash);
+      const ents = fi.entries || [];
+      const fl = ents[ents.length - 1];
+      const fiSig = `${fi.totalNum ?? ""}|${ents.length}|${ents[0]?.filename ?? ""}|`
+        + `${fl?.filename ?? ""}|${String(fl?.mtime ?? "")}`;
+      if (fiSig !== _prevFileHash.get(hostname)) {
+        _prevFileHash.set(hostname, fiSig);
         fileInfosDelta[hostname] = fi;
         hasChanges = true;
       }
