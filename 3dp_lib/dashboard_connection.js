@@ -961,6 +961,20 @@ function connectMoonraker(dest, host) {
           if (machine) machine._cachedFileInfo = info;
           printManager.renderFileList(info, baseUrl, h);
         }
+        if (Array.isArray(aux.webcams)) {
+          // Moonraker のカメラURLは可変 → 機器申告の解決済み絶対URLを machine に保持し、
+          // カメラ系が K1 固定URLではなくこちらを使う。到着時にストリームを張り直す。
+          const machine = monitorData.machines[h];
+          if (machine) {
+            machine._moonrakerWebcams = aux.webcams;
+            machine._cameraStreamUrl = aux.webcams[0]?.streamUrl || null;
+            machine._cameraSnapshotUrl = aux.webcams[0]?.snapshotUrl || null;
+          }
+          // camera_ctrl は connection.js を import するため循環回避に動的 import
+          import("./dashboard_camera_ctrl.js")
+            .then((m) => { try { m.startCameraStream(h); } catch { /* noop */ } })
+            .catch(() => { /* noop */ });
+        }
       } catch (e) {
         console.error("[moonraker] onAux 処理エラー:", e);
       }

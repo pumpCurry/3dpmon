@@ -80,8 +80,11 @@ export const MOONRAKER_SUBSCRIBE_OBJECTS = {
   print_stats: null,                               // 状態/経過/使用フィラメント/ファイル名
   display_status: null,                            // 進捗(0-1)
   virtual_sdcard: null,                            // ファイル位置進捗(0-1)
-  toolhead: ["position", "homed_axes", "axis_maximum", "axis_minimum"], // 座標フォールバック＋軸範囲(幾何判定)
-  gcode_move: ["gcode_position", "speed_factor", "extrude_factor"], // スライサZ(レイヤ算出)/速度/流量
+  // 座標フォールバック＋軸範囲(幾何判定)＋プリンタ制限(Fluidd Printer Limits ペイン相当)
+  toolhead: ["position", "homed_axes", "axis_maximum", "axis_minimum",
+             "max_velocity", "max_accel", "max_accel_to_decel", "square_corner_velocity"],
+  // スライサZ(レイヤ算出)/速度係数(M220)/流量係数(M221)/実速度/Gコードオフセット(Z)
+  gcode_move: ["gcode_position", "speed_factor", "extrude_factor", "speed", "homing_origin"],
   motion_report: ["live_position", "live_velocity"], // 実位置(プレビュー用・最頻更新)
   fan: ["speed"],                                  // モデルファン
   idle_timeout: ["state"],                         // Idle/Printing/Ready
@@ -101,6 +104,28 @@ function _round2(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * 数値を整数へ丸める(速度/加速度の制限表示用)。非数値は null。
+ * @private
+ * @param {*} v - 入力値
+ * @returns {?number} 丸めた整数、または null
+ */
+function _round0(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/**
+ * 数値を小数3桁へ丸める(pressure_advance 等の微小値表示用)。非数値は null。
+ * @private
+ * @param {*} v - 入力値
+ * @returns {?number} 丸めた数値、または null
+ */
+function _round3(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : null;
 }
 
 /**
@@ -359,6 +384,24 @@ export function translateMoonrakerStatus(status, ctx, nowMs) {
   if (layerTotal != null) out.TotalLayer = layerTotal;
   if (layerCurrent != null) out.layer = layerCurrent;
 
+  // --- 速度/流量 係数(Fluidd Tool ペイン相当・既存 K1 制御UIへ流用) ----------
+  // gcode_move.speed_factor=M220, extrude_factor=M221（1.0=100%）。
+  // 既存の curFeedratePct/curFlowratePct(印刷速度/フロー率スライダ)へそのまま反映。
+  if (Number.isFinite(Number(gm.speed_factor)))   out.curFeedratePct = Math.round(Number(gm.speed_factor) * 100);
+  if (Number.isFinite(Number(gm.extrude_factor))) out.curFlowratePct = Math.round(Number(gm.extrude_factor) * 100);
+
+  // --- プリンタ制限(Fluidd Printer Limits ペイン相当・機器情報テーブルへ表示) ----
+  // 既存 K1 フィールド(accelerationLimits/velocityLimits/...)は NO_PROCESSING=生文字列表示。
+  if (Number.isFinite(Number(th.max_velocity)))           out.velocityLimits       = `${_round0(th.max_velocity)} mm/s`;
+  if (Number.isFinite(Number(th.max_accel)))              out.accelerationLimits   = `${_round0(th.max_accel)} mm/s²`;
+  if (Number.isFinite(Number(th.square_corner_velocity))) out.cornerVelocityLimits = `${_round2(th.square_corner_velocity)} mm/s`;
+  if (Number.isFinite(Number(th.max_accel_to_decel)))     out.accelToDecelLimits   = `${_round0(th.max_accel_to_decel)} mm/s²`;
+  if (Number.isFinite(Number(ext.pressure_advance)))      out.pressureAdvance      = `${_round3(ext.pressure_advance)} s`;
+  // リアルタイム速度(実速度 mm/s): motion_report.live_velocity 優先、無ければ gcode_move.speed
+  const liveVel = Number.isFinite(Number(mr.live_velocity)) ? Number(mr.live_velocity)
+                : Number.isFinite(Number(gm.speed)) ? Number(gm.speed) : null;
+  if (liveVel != null) out.realTimeSpeed = `${_round0(liveVel)} mm/s`;
+
   // 材料検知センサ(エンコーダ)が有効なときのみ materialStatus を反映
   //   0:材料OK / 1:材料切れNG (K1 の MATERIAL_STATUS_MAP に合わせる)
   if (fms && fms.enabled === true && typeof fms.filament_detected === "boolean") {
@@ -427,6 +470,50 @@ export function buildMoonrakerThumbUrl(httpBase, gcodeFilename, relativePath) {
   const dir = fn.includes("/") ? fn.slice(0, fn.lastIndexOf("/") + 1) : "";
   const path = dir + relativePath;
   return `${httpBase}/server/files/gcodes/${path}`;
+}
+
+/**
+ * Moonraker のカメラ stream_url / snapshot_url を絶対URLへ解決する。
+ *
+ * Moonraker/Fluidd のカメラURLは機器・構成依存で可変（例 IR3 v2 は相対
+ * "/webcam/?action=stream" を nginx(80) が crowsnest へプロキシ）。K1 の固定
+ * "ip:8080/?action=stream" とは別。相対パスは httpBase 起点、絶対(http...)は
+ * そのまま返す。
+ *
+ * @function buildMoonrakerCameraUrl
+ * @param {string} camUrl   - webcams[].stream_url / snapshot_url
+ * @param {string} httpBase - "http://IP:PORT"（相対URL解決の起点）
+ * @returns {string} 絶対URL（解決不能なら空文字）
+ */
+export function buildMoonrakerCameraUrl(camUrl, httpBase) {
+  const u = String(camUrl || "").trim();
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  const base = String(httpBase || "").replace(/\/+$/, "");
+  if (!base) return "";
+  return u.startsWith("/") ? base + u : base + "/" + u;
+}
+
+/**
+ * Moonraker `server.webcams.list` の結果を、表示用カメラ配列へ正規化する。
+ * 無効(enabled:false)カメラと stream_url 解決不能なものは除外する。
+ *
+ * @function moonrakerWebcamsToList
+ * @param {Object|Array} result - server.webcams.list の result（{webcams:[...]} か配列）
+ * @param {string} httpBase     - "http://IP:PORT"
+ * @returns {Array<{name:string, streamUrl:string, snapshotUrl:string}>}
+ */
+export function moonrakerWebcamsToList(result, httpBase) {
+  const cams = Array.isArray(result?.webcams) ? result.webcams
+             : (Array.isArray(result) ? result : []);
+  return cams
+    .filter((c) => c && c.enabled !== false)
+    .map((c) => ({
+      name: c.name || c.location || "camera",
+      streamUrl: buildMoonrakerCameraUrl(c.stream_url, httpBase),
+      snapshotUrl: buildMoonrakerCameraUrl(c.snapshot_url, httpBase),
+    }))
+    .filter((c) => c.streamUrl);
 }
 
 /**
@@ -562,6 +649,15 @@ export function translateK1CommandToMoonraker(method, params = {}) {
       if ("bedTempControl" in p) return [{ gcode: `M140 S${round(p.bedTempControl?.val)}` }];
       if ("targetBedTemp0" in p) return [{ gcode: `M140 S${round(p.targetBedTemp0)}` }];
       if ("fan" in p) return [{ gcode: `M106 S${p.fan ? 255 : 0}` }];
+      // 印刷速度(M220)/フロー率(M221): 既存UIは setFeedratePct / curFlowratePct で送る
+      if ("setFeedratePct" in p) return [{ gcode: `M220 S${round(p.setFeedratePct)}` }];
+      if ("curFeedratePct" in p) return [{ gcode: `M220 S${round(p.curFeedratePct)}` }];
+      if ("setFlowratePct" in p) return [{ gcode: `M221 S${round(p.setFlowratePct)}` }];
+      if ("curFlowratePct" in p) return [{ gcode: `M221 S${round(p.curFlowratePct)}` }];
+      // 速度制限(Fluidd Printer Limits): SET_VELOCITY_LIMIT
+      if ("velocityLimit" in p)      return [{ gcode: `SET_VELOCITY_LIMIT VELOCITY=${round(p.velocityLimit)}` }];
+      if ("accelLimit" in p)         return [{ gcode: `SET_VELOCITY_LIMIT ACCEL=${round(p.accelLimit)}` }];
+      if ("squareCornerVelocity" in p) return [{ gcode: `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=${Number(p.squareCornerVelocity) || 0}` }];
       // cleanErr / K1専用トグル(fanCase/fanAuxiliary/lightSw/ai*)等は未対応
       return [];
     }
@@ -760,6 +856,23 @@ export function createMoonrakerSession(opts) {
   };
 
   /**
+   * カメラ一覧(server.webcams.list)を取得し、絶対URLへ解決して onAux 経由で通知する。
+   * K1 の固定URLと異なり Moonraker のカメラURLは可変なので機器申告値を使う(IR3 v2 対応)。
+   * @private
+   * @returns {Promise<void>}
+   */
+  const fetchWebcams = async () => {
+    try {
+      const res = await rpc("server.webcams.list", {});
+      const webcams = moonrakerWebcamsToList(res, httpBase);
+      onAux({ webcams }, ctx.hostname);
+      onLog(`[moonraker] カメラ ${webcams.length} 件を取得`, webcams.length ? "info" : "warn");
+    } catch (e) {
+      onLog(`[moonraker] カメラ一覧取得失敗: ${e.message}`, "warn");
+    }
+  };
+
+  /**
    * 受信メッセージを処理する。
    * @private
    * @param {MessageEvent} evt - WebSocket メッセージイベント
@@ -806,9 +919,10 @@ export function createMoonrakerSession(opts) {
         mergeMoonrakerStatus(accStatus, result.status);
         maybeFetchMeta();
         emit();
-        // 状態購読が確立(=ホスト確定・パネル生成済み)した後に履歴/ファイルを取得
+        // 状態購読が確立(=ホスト確定・パネル生成済み)した後に履歴/ファイル/カメラを取得
         fetchHistory();
         fetchFiles();
+        fetchWebcams();
       } else if (tag === "meta" && result) {
         // gcode メタ(残時間/レイヤー算出用)を ctx へ格納
         ctx.meta = {
@@ -844,6 +958,9 @@ export function createMoonrakerSession(opts) {
     } else if (msg.method === "notify_filelist_changed") {
       // ファイル追加/削除/更新 → ファイル一覧を再取得
       fetchFiles();
+    } else if (msg.method === "notify_webcams_changed") {
+      // カメラ構成変更 → カメラ一覧を再取得
+      fetchWebcams();
     } else if (msg.method === "notify_gcode_response" && Array.isArray(msg.params)) {
       // リアルタイム gcode コンソール出力(温度自動報告/echo/M117/エラー応答等)
       for (const line of msg.params) {

@@ -27,7 +27,8 @@ vi.doMock("../../3dp_lib/dashboard_notification_manager.js", () => ({
 // dup-A と dup-B は同一IP(=同一物理カメラ)、other は別IP
 vi.doMock("../../3dp_lib/dashboard_connection.js", () => ({
   getDeviceIp: vi.fn((h) => ({ "dup-A": "192.168.1.50", "dup-B": "192.168.1.50", "other": "192.168.1.99" }[h] || "")),
-  getDeviceDest: vi.fn((h) => ({ "dup-A": "192.168.1.50:9999", "dup-B": "192.168.1.50:9999", "other": "192.168.1.99:9999" }[h] || ""))
+  getDeviceDest: vi.fn((h) => ({ "dup-A": "192.168.1.50:9999", "dup-B": "192.168.1.50:9999", "other": "192.168.1.99:9999" }[h] || "")),
+  getPrinterType: vi.fn(() => "creality-k1")
 }));
 global.fetch = vi.fn(() => Promise.resolve({ ok: true }));
 

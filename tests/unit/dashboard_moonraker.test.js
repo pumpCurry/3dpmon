@@ -34,6 +34,8 @@ import {
   translateMoonrakerStatus,
   pickLargestThumbnail,
   buildMoonrakerThumbUrl,
+  buildMoonrakerCameraUrl,
+  moonrakerWebcamsToList,
   moonrakerHistoryToK1,
   moonrakerFilesToEntries,
   translateK1CommandToMoonraker,
@@ -519,6 +521,50 @@ describe('pickLargestThumbnail / buildMoonrakerThumbUrl', () => {
 });
 
 // =============================================================
+// カメラURL解決(IR3 v2: 可変stream_url・別パス/ポート)
+// =============================================================
+describe('buildMoonrakerCameraUrl / moonrakerWebcamsToList', () => {
+  it('相対 stream_url は httpBase 起点で絶対化(IR3 v2 実機形)', () => {
+    expect(buildMoonrakerCameraUrl('/webcam/?action=stream', 'http://192.168.54.15:80'))
+      .toBe('http://192.168.54.15:80/webcam/?action=stream');
+  });
+  it('絶対URLはそのまま', () => {
+    expect(buildMoonrakerCameraUrl('http://192.168.54.15:8080/?action=stream', 'http://192.168.54.15:80'))
+      .toBe('http://192.168.54.15:8080/?action=stream');
+  });
+  it('先頭スラッシュ無し相対も結合', () => {
+    expect(buildMoonrakerCameraUrl('webcam/?action=stream', 'http://h:80'))
+      .toBe('http://h:80/webcam/?action=stream');
+  });
+  it('httpBase 末尾スラッシュは正規化', () => {
+    expect(buildMoonrakerCameraUrl('/webcam/', 'http://h:80/'))
+      .toBe('http://h:80/webcam/');
+  });
+  it('空入力は空文字', () => {
+    expect(buildMoonrakerCameraUrl('', 'http://h:80')).toBe('');
+    expect(buildMoonrakerCameraUrl('/x', '')).toBe('');
+  });
+  it('webcams.list を正規化(enabled:false 除外・絶対URL化)', () => {
+    const res = { webcams: [
+      { name: 'ir3v2-1_cam', enabled: true, stream_url: '/webcam/?action=stream', snapshot_url: '/webcam/?action=snapshot' },
+      { name: 'off-cam', enabled: false, stream_url: '/webcam2/?action=stream' },
+      { name: 'broken', enabled: true, stream_url: '' }
+    ] };
+    const list = moonrakerWebcamsToList(res, 'http://192.168.54.15:80');
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      name: 'ir3v2-1_cam',
+      streamUrl: 'http://192.168.54.15:80/webcam/?action=stream',
+      snapshotUrl: 'http://192.168.54.15:80/webcam/?action=snapshot'
+    });
+  });
+  it('結果が配列でも受理、未定義は空配列', () => {
+    expect(moonrakerWebcamsToList([{ enabled: true, stream_url: '/c/' }], 'http://h:80')).toHaveLength(1);
+    expect(moonrakerWebcamsToList(undefined, 'http://h:80')).toEqual([]);
+  });
+});
+
+// =============================================================
 // 履歴変換(Moonraker server.history.list → K1 raw)
 // =============================================================
 describe('moonrakerHistoryToK1', () => {
@@ -666,10 +712,66 @@ describe('translateK1CommandToMoonraker', () => {
     expect(translateK1CommandToMoonraker('deleteFile', { path: 'gcodes/a.gcode' }))
       .toEqual([{ rpc: 'server.files.delete_file', params: { path: 'gcodes/a.gcode' } }]);
   });
+  it('印刷速度: set{setFeedratePct/curFeedratePct} → M220', () => {
+    expect(translateK1CommandToMoonraker('set', { setFeedratePct: 120 })).toEqual([{ gcode: 'M220 S120' }]);
+    expect(translateK1CommandToMoonraker('set', { curFeedratePct: 80 })).toEqual([{ gcode: 'M220 S80' }]);
+  });
+  it('フロー率: set{setFlowratePct/curFlowratePct} → M221', () => {
+    expect(translateK1CommandToMoonraker('set', { setFlowratePct: 103 })).toEqual([{ gcode: 'M221 S103' }]);
+    expect(translateK1CommandToMoonraker('set', { curFlowratePct: 100 })).toEqual([{ gcode: 'M221 S100' }]);
+  });
+  it('速度制限: set{velocityLimit/accelLimit/squareCornerVelocity} → SET_VELOCITY_LIMIT', () => {
+    expect(translateK1CommandToMoonraker('set', { velocityLimit: 300 }))
+      .toEqual([{ gcode: 'SET_VELOCITY_LIMIT VELOCITY=300' }]);
+    expect(translateK1CommandToMoonraker('set', { accelLimit: 5000 }))
+      .toEqual([{ gcode: 'SET_VELOCITY_LIMIT ACCEL=5000' }]);
+    expect(translateK1CommandToMoonraker('set', { squareCornerVelocity: 5 }))
+      .toEqual([{ gcode: 'SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=5' }]);
+  });
   it('未対応(get/cleanErr/K1専用トグル)は空配列', () => {
     expect(translateK1CommandToMoonraker('get', { reqHistory: 1 })).toEqual([]);
     expect(translateK1CommandToMoonraker('set', { cleanErr: 1 })).toEqual([]);
     expect(translateK1CommandToMoonraker('set', { aiSw: 1 })).toEqual([]);
     expect(translateK1CommandToMoonraker('set', { fanCase: 1 })).toEqual([]);
+  });
+});
+
+// =============================================================
+// プリンタ制限/速度・流量(Fluidd Tool/Printer Limits ペイン相当)
+// =============================================================
+describe('translateMoonrakerStatus 機器情報(制限/速度/流量)', () => {
+  const STATUS = {
+    extruder: { temperature: 200, target: 200, pressure_advance: 0.0425 },
+    heater_bed: { temperature: 60, target: 60 },
+    print_stats: { state: 'printing', filename: 'a.gcode', print_duration: 100 },
+    virtual_sdcard: { progress: 0.5 },
+    toolhead: {
+      position: [10, 20, 1, 0],
+      axis_maximum: [250, 354, 99999],
+      max_velocity: 300, max_accel: 5000,
+      max_accel_to_decel: 2500, square_corner_velocity: 5.0,
+    },
+    gcode_move: { gcode_position: [10, 20, 1, 0], speed_factor: 1.2, extrude_factor: 0.97, speed: 7200 },
+    motion_report: { live_position: [10, 20, 1, 0], live_velocity: 83.3 },
+    webhooks: { state: 'ready' },
+  };
+  const out = translateMoonrakerStatus(STATUS, { hostname: 'h', maxNozzleTemp: 300, maxBedTemp: 100, job: {} }, 1_700_000_000_000);
+
+  it('速度係数(M220)→ curFeedratePct(%)', () => { expect(out.curFeedratePct).toBe(120); });
+  it('流量係数(M221)→ curFlowratePct(%)', () => { expect(out.curFlowratePct).toBe(97); });
+  it('速度制限 → velocityLimits 文字列', () => { expect(out.velocityLimits).toBe('300 mm/s'); });
+  it('加速度制限 → accelerationLimits 文字列', () => { expect(out.accelerationLimits).toBe('5000 mm/s²'); });
+  it('コーナー速度制限 → cornerVelocityLimits 文字列', () => { expect(out.cornerVelocityLimits).toBe('5 mm/s'); });
+  it('加減速制御 → accelToDecelLimits 文字列', () => { expect(out.accelToDecelLimits).toBe('2500 mm/s²'); });
+  it('圧力先行 → pressureAdvance 文字列(3桁)', () => { expect(out.pressureAdvance).toBe('0.043 s'); });
+  it('リアルタイム速度 → realTimeSpeed(live_velocity 優先)', () => { expect(out.realTimeSpeed).toBe('83 mm/s'); });
+
+  it('制限フィールド未提供時は出力しない(K1へ混入させない)', () => {
+    const bare = translateMoonrakerStatus(
+      { print_stats: { state: 'standby' }, webhooks: { state: 'ready' }, toolhead: {}, gcode_move: {} },
+      { hostname: 'h', job: {} }, 1_700_000_000_000
+    );
+    expect(bare.velocityLimits).toBeUndefined();
+    expect(bare.curFeedratePct).toBeUndefined();
   });
 });

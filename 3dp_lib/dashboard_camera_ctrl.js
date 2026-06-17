@@ -33,7 +33,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
-import { getDeviceIp, getDeviceDest } from "./dashboard_connection.js";
+import { getDeviceIp, getDeviceDest, getPrinterType } from "./dashboard_connection.js";
 import { pushLog }                  from "./dashboard_log_util.js";
 import { notificationManager }      from "./dashboard_notification_manager.js";
 
@@ -223,6 +223,27 @@ export function startCameraStream(hostname) {
     return;
   }
 
+  /* ★ Moonraker(Fluidd): カメラURLは機器・構成依存で可変（相対 /webcam/... を nginx が
+     proxy 等）。K1 固定の "ip:8080/?action=stream" は使わず、server.webcams.list 由来の
+     解決済み絶対URL(machine._cameraStreamUrl)を使う。未取得時は K1 URL を叩かず待機し、
+     onAux でカメラ一覧到着時に startCameraStream が再実行される。 */
+  if (getPrinterType(host) === "moonraker") {
+    const machine = monitorData.machines[host];
+    const camUrl = machine?._cameraStreamUrl;
+    if (!camUrl) {
+      _updateUI(entry, "disconnected");
+      return;
+    }
+    let camPort = 80;
+    try { camPort = Number(new URL(camUrl).port) || (camUrl.startsWith("https") ? 443 : 80); } catch { /* noop */ }
+    entry.streamUrl = camUrl;
+    entry.attempts = 0;
+    entry.cameraPort = camPort;
+    _cancelTimers(entry);
+    _connectStream(entry, ip.split(":")[0]);
+    return;
+  }
+
   /* カメラポート解決: per-host（connectionTarget.cameraPort）→ グローバル設定 → デフォルト
      connectionTarget の検索は getDeviceDest 経由で dest を取得して行う */
   const dest = getDeviceDest(host);
@@ -230,6 +251,7 @@ export function startCameraStream(hostname) {
   const tgt = targets.find(t => t.dest === dest) || targets.find(t => t.hostname === host);
   const port = tgt?.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_STREAM_PORT;
 
+  entry.streamUrl = null;  // K1 はポート方式（override 不使用）
   entry.attempts = 0;
   entry.cameraPort = port;
   _cancelTimers(entry);
@@ -427,7 +449,8 @@ function _connectStream(entry, host) {
   const delayMs = DEFAULT_RETRY_DELAY * Math.pow(2, entry.attempts - 1);
   const waitSec = Math.ceil(delayMs / 1000);
   const port = entry.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_STREAM_PORT;
-  const url = `http://${host}:${port}/?action=stream`;
+  // Moonraker は解決済み絶対URL(entry.streamUrl)を優先。K1 はポート方式の固定URL。
+  const url = entry.streamUrl || `http://${host}:${port}/?action=stream`;
 
   _cancelTimers(entry);
 
