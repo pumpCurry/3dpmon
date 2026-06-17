@@ -105,6 +105,12 @@ function _getHostState(hostname) {
       container: null,
       ro: null,
       zoomLocked: true,
+      // ★ M: 表示ウィンドウ（最新から viewMs ぶんをスライド表示）。既定=保持枠と同じ。
+      viewMs: DEFAULT_CONFIG.timeWindowMs,
+      // ユーザーがドラッグズームしたか（true の間はスライド追従を止め、その範囲を保持）
+      userZoomed: false,
+      // 自前の setScale 中フラグ（setScale フックでユーザー操作と区別するため）
+      _progScale: false,
     });
   }
   return _hostCharts.get(hostname);
@@ -119,10 +125,17 @@ function _getHostState(hostname) {
  * @param {boolean} locked ドラッグズーム無効
  * @returns {Object} uPlot opts
  */
-function _buildOpts(cfg, w, h, locked) {
+function _buildOpts(cfg, w, h, locked, hs) {
   const axisStroke = "#888";
   const gridStroke = "rgba(128,128,128,0.18)";
   const tickStroke = "rgba(128,128,128,0.30)";
+  // ★ M: 0℃ 救済 — 軸 min を常に 0 よりわずかに下げ、0℃ ちょうどの点が下端に張り付いて
+  //   ホバー/視認できなくなるのを防ぐ。上端も余白を確保。
+  const yRange = (_u, dataMin, dataMax) => {
+    const lo = Math.min(0, Number.isFinite(dataMin) ? dataMin : 0) - 3;
+    const hi = (Number.isFinite(dataMax) ? dataMax : 100) + 5;
+    return [lo, hi];
+  };
   return {
     width: w,
     height: h,
@@ -131,7 +144,16 @@ function _buildOpts(cfg, w, h, locked) {
       focus: { prox: 20 },
     },
     legend: { show: true, live: true },
-    scales: { x: { time: true } },
+    scales: { x: { time: true }, y: { range: yRange } },
+    // ★ M: ユーザーのドラッグズームを検出（自前の setScale 中は _progScale で除外）。
+    //   ユーザー操作時はスライド追従を止め、その拡大範囲を保持する。
+    hooks: {
+      setScale: [
+        (u, key) => {
+          if (key === "x" && hs && !hs._progScale) hs.userZoomed = true;
+        },
+      ],
+    },
     series: [
       {},
       ...SERIES_DEFS.map(s => ({
@@ -141,7 +163,12 @@ function _buildOpts(cfg, w, h, locked) {
       })),
     ],
     axes: [
-      { stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke } },
+      {
+        stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },
+        // ★ M: 1分刻みを基準にした縦補助線（15分表示でも時刻が読み取れるように）。
+        //   ズーム時は uPlot が適切な刻みを選ぶよう候補を与える（1/2/5/10/15分）。
+        incrs: [60, 120, 300, 600, 900],
+      },
       {
         stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },
         size: 50, values: (_u, vals) => vals.map(v => v + "℃"),
@@ -204,14 +231,27 @@ export function initTemperatureGraph(panelBody, hostname, userConfig = {}) {
   hs.zoomLocked = true;
 
   const w = Math.max(container.clientWidth || 0, 120);
-  const h = Math.max(container.clientHeight || 0, 120);
-  hs.u = new window.uPlot(_buildOpts(cfg, w, h, hs.zoomLocked), hs.data, container);
+  // ★ M: 凡例(複数行になりうる)のぶん高さを確保し、プロットが凡例で隠れ/あふれないようにする。
+  const legendH0 = 28;
+  const h = Math.max((container.clientHeight || 0) - legendH0, 100);
+  hs.u = new window.uPlot(_buildOpts(cfg, w, h, hs.zoomLocked, hs), hs.data, container);
+  hs.userZoomed = false;
+  hs.viewMs = cfg.timeWindowMs;
 
-  /* コンテナのサイズ変化に追従（chart.js の responsive 相当） */
+  /* コンテナのサイズ変化に追従（凡例の高さを差し引いてプロット領域を確保） */
   hs.ro = new ResizeObserver(() => {
+    if (!hs.u) return;
     const cw = container.clientWidth;
     const ch = container.clientHeight;
-    if (cw > 0 && ch > 0 && hs.u) hs.u.setSize({ width: cw, height: ch });
+    if (cw <= 0 || ch <= 0) return;
+    const legendEl = hs.u.root?.querySelector(".u-legend");
+    const legendH = (legendEl?.offsetHeight) || legendH0;
+    const plotH = Math.max(80, ch - legendH);
+    // 同寸法での無駄な再設定を避ける（setSize ループ防止）
+    if (hs._lastW !== cw || hs._lastH !== plotH) {
+      hs._lastW = cw; hs._lastH = plotH;
+      hs.u.setSize({ width: cw, height: plotH });
+    }
   });
   hs.ro.observe(container);
 
@@ -292,25 +332,58 @@ export function setChartWindowMinutes(minutes) {
   DEFAULT_CONFIG.timeWindowMs = clamped * 60 * 1000;
   for (const [, hs] of _hostCharts) {
     hs.config.timeWindowMs = DEFAULT_CONFIG.timeWindowMs;
+    // 表示ウィンドウが保持枠を超えないようクランプ（超えるとデータ無しの空白になる）
+    if (hs.viewMs > DEFAULT_CONFIG.timeWindowMs) hs.viewMs = DEFAULT_CONFIG.timeWindowMs;
   }
   return clamped;
 }
 
 /**
- * 温度グラフのズーム表示のみを初期状態（自動範囲）へ戻す。
+ * 温度グラフの「絞り込み（ドラッグズーム）を解除」して、最新からの表示ウィンドウへ戻す。
+ *
+ * ★ M: 旧実装はデータ破棄ではないが setScale(null,null)=全データ自動範囲だった。
+ * ここではユーザーズームを解除し、現在の viewMs（既定15分）ぶんの最新スライド表示へ戻す
+ * （データは保持したまま「絞り込みからもどす」）。ドラッグズーム後の復帰手段。
  *
  * @param {string} hostname - 対象ホスト名（省略時は全ホスト）
  */
 export function resetTemperatureGraphView(hostname) {
   const resetOne = (hs) => {
     if (!hs?.u) return;
-    hs.u.setScale("x", { min: null, max: null });
+    hs.userZoomed = false;
+    _applySlidingWindow(hs);
   };
   if (hostname) {
     resetOne(_hostCharts.get(hostname));
   } else {
     for (const [, hs] of _hostCharts) resetOne(hs);
   }
+}
+
+/**
+ * 指定ホストの温度グラフの表示ウィンドウ（最新から何分を見せるか）を設定する。
+ *
+ * ★ M: 15/10/5/3/1分の絞り込みドロップダウン用。選択するとユーザーズームを解除し、
+ * 最新から指定分ぶんのスライド表示へ戻す（ドラッグズーム中でも選び直せば復帰できる）。
+ * 保持枠（{@link setChartWindowMinutes}）と独立。viewMs は保持枠を超えない値にクランプ。
+ *
+ * @function setChartViewMinutes
+ * @param {string} hostname - 対象ホスト名
+ * @param {number} minutes - 表示する分数（最新から）
+ * @returns {number} 適用された分数
+ */
+export function setChartViewMinutes(hostname, minutes) {
+  const hs = _hostCharts.get(hostname);
+  const m = Number(minutes);
+  const clamped = (Number.isFinite(m) && m >= 1) ? Math.round(m) : 15;
+  if (!hs) return clamped;
+  // 保持枠を超える表示は無意味（データが無い）ため保持枠でクランプ
+  const maxMin = Math.round((hs.config.timeWindowMs || DEFAULT_CONFIG.timeWindowMs) / 60000);
+  const eff = Math.min(clamped, maxMin);
+  hs.viewMs = eff * 60 * 1000;
+  hs.userZoomed = false;
+  _applySlidingWindow(hs);
+  return eff;
 }
 
 // ==============================
@@ -334,6 +407,22 @@ function _trimWindow(hs, nowSec) {
 }
 
 /**
+ * 最新から viewMs ぶんへ x 軸表示範囲をスライドさせる（ユーザーズーム中は何もしない）。
+ * @private
+ * @param {HostChartState} hs
+ */
+function _applySlidingWindow(hs) {
+  if (!hs.u || hs.userZoomed) return;
+  const xs = hs.data[0];
+  if (!xs.length) return;
+  const maxX = xs[xs.length - 1];
+  const minX = maxX - hs.viewMs / 1000;
+  hs._progScale = true;
+  try { hs.u.setScale("x", { min: minX, max: maxX }); }
+  finally { hs._progScale = false; }
+}
+
+/**
  * uPlot の再描画を throttle して呼び出す。
  * @private
  * @param {HostChartState} hs
@@ -343,12 +432,13 @@ function _scheduleUpdate(hs) {
   const now = Date.now();
   if (now - hs.lastUpdate >= hs.config.throttleIntervalMs) {
     hs.u.setData(hs.data);
+    _applySlidingWindow(hs);
     hs.lastUpdate = now;
     hs.isFirstRender = false;
   } else if (!hs.updateQueued) {
     hs.updateQueued = true;
     setTimeout(() => {
-      if (hs.u) hs.u.setData(hs.data);
+      if (hs.u) { hs.u.setData(hs.data); _applySlidingWindow(hs); }
       hs.lastUpdate = Date.now();
       hs.updateQueued = false;
     }, hs.config.throttleIntervalMs - (now - hs.lastUpdate));

@@ -122,25 +122,40 @@ body {
 .temp-graph-area .u-wrap {
   width: 100%;
 }
-.temp-graph-footer {
+/* ★ M: 操作ツールバー（グラフ上部）。凡例とボタンの重なりを避け、操作を上に集約。 */
+.temp-graph-toolbar {
   flex-shrink: 0;
   display: flex;
-  flex-wrap: wrap;            /* 狭幅時はボタンを折り返す（重なり/被り防止） */
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;                   /* リセット/操作ロックの間隔を確保 */
-  padding: 4px;
+  gap: 6px;
+  padding: 3px 4px;
   position: relative;
-  z-index: 2;                 /* 凡例が下にはみ出しても押せるよう前面に */
+  z-index: 2;
+}
+.temp-graph-toolbar .temp-graph-range-label { font-size: var(--font-xs, 11px); display: inline-flex; align-items: center; gap: 3px; }
+.temp-graph-toolbar .temp-graph-range { font-size: var(--font-xs, 11px); padding: 1px 3px; }
+.temp-graph-toolbar .temp-graph-btn { flex: 0 0 auto; white-space: nowrap; font-size: 12px; }
+/* 旧フッタ（互換のため残置。HTML 上は未使用） */
+.temp-graph-footer {
+  flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: flex-end; gap: 6px; padding: 4px; position: relative; z-index: 2;
 }
 .temp-graph-footer > button { flex: 0 0 auto; white-space: nowrap; }
-/* 凡例(uPlot live legend)レスポンシブ: 狭幅/モバイルで数値が切れず読めるように */
+/* 凡例(uPlot live legend): 複数行でも値が切れず読めるように折り返し＋上限スクロール */
 .temp-graph-area .u-legend {
   font-size: var(--font-xs, 10px);
   max-width: 100%;
-  overflow-x: auto;          /* どうしても収まらない場合は横スクロール（消えない） */
+  display: flex;
+  flex-wrap: wrap;            /* 系列を折り返す（あふれを縦方向へ逃がす） */
+  gap: 1px 10px;
+  max-height: 3.4em;          /* 2〜3行を上限に、超過分はスクロール（消えない） */
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1px 2px;
 }
-.temp-graph-area .u-legend .u-series { white-space: nowrap; }
+/* 各系列はラベル＋値を1かたまりで折り返さない（値だけ見えない問題の解消） */
+.temp-graph-area .u-legend .u-series { white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
 .temp-graph-area .u-legend .u-value { min-width: 3.5em; text-align: right; }
 @media (max-width: 520px) {
   .temp-graph-area .u-legend { font-size: 9px; }

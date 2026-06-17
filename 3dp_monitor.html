@@ -760,11 +760,22 @@
       <div class="graph-wrapper">
         <div class="card temp-graph-panel-wrapper" id="temp-graph-card">
           <!-- タイトルはパネルヘッダーに表示されるため省略 -->
+          <!-- ★ M: 操作はグラフ上部のツールバーへ集約（凡例とボタンの重なり回避）。 -->
+          <div class="temp-graph-toolbar">
+            <label class="temp-graph-range-label">表示
+              <select id="temp-graph-range" class="temp-graph-range" title="最新からの表示範囲">
+                <option value="15">15分</option>
+                <option value="10">10分</option>
+                <option value="5">5分</option>
+                <option value="3">3分</option>
+                <option value="1">1分</option>
+              </select>
+            </label>
+            <button id="temp-graph-reset-button" class="btn temp-graph-btn" title="ドラッグズームを解除して最新表示に戻す">絞り込み解除</button>
+            <!-- 操作ロックボタンは panel_init が動的に追記 -->
+          </div>
           <div class="temp-graph-area">
             <canvas id="temp-graph-canvas"></canvas>
-          </div>
-          <div class="temp-graph-footer">
-            <button id="temp-graph-reset-button" class="btn" style="font-size:12px;">リセット</button>
           </div>
         </div>
       </div>

@@ -33,7 +33,7 @@
 
 "use strict";
 
-import { initTemperatureGraph, resetTemperatureGraph, toggleChartInteractionLock, setChartWindowMinutes } from "./dashboard_chart.js";
+import { initTemperatureGraph, resetTemperatureGraph, resetTemperatureGraphView, toggleChartInteractionLock, setChartWindowMinutes, setChartViewMinutes } from "./dashboard_chart.js";
 import {
   registerCameraPanel,
   unregisterCameraPanel,
@@ -499,17 +499,27 @@ function initTempGraphPanel(body, hostname) {
   resetTemperatureGraph(hostname);
   initTemperatureGraph(body, hostname);
 
-  // リセットボタン
+  // ★ M: リセット=「絞り込み(ドラッグズーム)解除」。データは破棄せず最新表示へ戻す。
   const resetBtn = body.querySelector("#temp-graph-reset-button");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
-      resetTemperatureGraph(hostname);
+      resetTemperatureGraphView(hostname);
+    });
+  }
+
+  // ★ M: 表示範囲（最新から N 分）絞り込みドロップダウン。選択でズーム解除＋スライド表示。
+  const rangeSel = body.querySelector("#temp-graph-range");
+  if (rangeSel) {
+    rangeSel.value = String(Math.min(15, Math.round((monitorData.appSettings.chartWindowMin ?? 15))));
+    rangeSel.addEventListener("change", () => {
+      const eff = setChartViewMinutes(hostname, parseInt(rangeSel.value, 10));
+      rangeSel.value = String(eff);
     });
   }
 
   // マウス操作ロックボタン（初期値: ロック=スクロール阻害防止）
   const lockBtn = document.createElement("button");
-  lockBtn.className = "chart-interaction-lock locked";
+  lockBtn.className = "chart-interaction-lock locked temp-graph-btn";
   lockBtn.textContent = "🔒 操作ロック中";
   lockBtn.title = "グラフのズーム・パン操作を有効/無効にする";
   lockBtn.addEventListener("click", () => {
@@ -517,8 +527,11 @@ function initTempGraphPanel(body, hostname) {
     lockBtn.textContent = nowLocked ? "🔒 操作ロック中" : "🔓 操作可能";
     lockBtn.classList.toggle("locked", nowLocked);
   });
-  // リセットボタンの隣に配置
-  if (resetBtn?.parentElement) {
+  // 上部ツールバー（無ければリセットボタンの隣／canvas 前）へ配置
+  const toolbar = body.querySelector(".temp-graph-toolbar");
+  if (toolbar) {
+    toolbar.appendChild(lockBtn);
+  } else if (resetBtn?.parentElement) {
     resetBtn.parentElement.appendChild(lockBtn);
   } else {
     body.insertBefore(lockBtn, canvas);
