@@ -215,6 +215,93 @@ describe("buildSnapshot", () => {
   });
 });
 
+describe("カメラ画像添付 (attachCamera / device.camera)", () => {
+  beforeEach(() => {
+    mockMonitorData.appSettings.connectionTargets = [
+      { dest: "192.168.1.5:9999", hostname: "k1", label: "1号機", ikDeviceAlias: "1号機" },
+      { dest: "192.168.1.6:9999", hostname: "k2", label: "2号機", ikCamera: false }
+    ];
+    mockMonitorData.machines.k1 = { storedData: {}, printStore: { history: [job({ id: 1700000000, materialUsedMm: 10 })] } };
+    mockMonitorData.machines.k2 = { storedData: {}, printStore: { history: [job({ id: 1700000900, materialUsedMm: 5 })] } };
+  });
+
+  it("既定では attachCamera は false（下位互換）", () => {
+    const ik = newIK();
+    expect(ik.settings.attachCamera).toBe(false);
+  });
+
+  it("buildSnapshot 自体は camera を付けない（純粋・同期のまま）", () => {
+    const ik = newIK({ attachCamera: true });
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    expect(snap.devices.every(d => d.camera === undefined)).toBe(true);
+  });
+
+  it("_attachCameras は取得成功機に device.camera を付与する", async () => {
+    const ik = newIK({ attachCamera: true });
+    vi.spyOn(ik, "_captureCamera").mockResolvedValue({
+      mime: "image/jpeg", dataBase64: "AAAA", bytes: 3, capturedAt: "2026-06-17T00:00:00.000Z"
+    });
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    await ik._attachCameras(snap);
+    const d = snap.devices.find(x => x.device.hostname === "k1");
+    expect(d.camera).toEqual({
+      mime: "image/jpeg", dataBase64: "AAAA", bytes: 3, capturedAt: "2026-06-17T00:00:00.000Z"
+    });
+  });
+
+  it("機器別 ikCamera=false の機器は camera を付与しない", async () => {
+    const ik = newIK({ attachCamera: true });
+    const spy = vi.spyOn(ik, "_captureCamera").mockResolvedValue({ mime: "image/jpeg", dataBase64: "AAAA", bytes: 3, capturedAt: "x" });
+    const snap = ik.buildSnapshot("print.finished", "k1"); // k2 は ikCamera=false（ただし ikEnabled は既定ON）
+    await ik._attachCameras(snap);
+    const k2 = snap.devices.find(x => x.device.hostname === "k2");
+    expect(k2.camera).toBeUndefined();
+    // k1 は対象なので _captureCamera が呼ばれている
+    expect(spy).toHaveBeenCalledWith("k1");
+    expect(spy).not.toHaveBeenCalledWith("k2");
+  });
+
+  it("取得失敗(null)の機器は camera を省略する（JSON は valid）", async () => {
+    const ik = newIK({ attachCamera: true });
+    vi.spyOn(ik, "_captureCamera").mockResolvedValue(null);
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    await ik._attachCameras(snap);
+    expect(snap.devices.every(d => d.camera === undefined)).toBe(true);
+  });
+
+  it("_captureCamera は Electron IPC(getCameraSnapshot) の結果を camera 化する", async () => {
+    const ik = newIK({ attachCamera: true });
+    const prevWindow = globalThis.window;
+    globalThis.window = { electronAPI: { getCameraSnapshot: vi.fn().mockResolvedValue({ mime: "image/jpeg", dataBase64: "Zm9v", bytes: 3 }) } };
+    try {
+      const cam = await ik._captureCamera("k1");
+      expect(globalThis.window.electronAPI.getCameraSnapshot).toHaveBeenCalledWith("k1");
+      expect(cam.dataBase64).toBe("Zm9v");
+      expect(cam.mime).toBe("image/jpeg");
+      expect(cam.bytes).toBe(3);
+      expect(typeof cam.capturedAt).toBe("string");
+    } finally {
+      globalThis.window = prevWindow;
+    }
+  });
+
+  it("attachCamera=ON のとき sendSnapshot は _attachCameras を呼ぶ", async () => {
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", attachCamera: true });
+    const attach = vi.spyOn(ik, "_attachCameras").mockResolvedValue();
+    vi.spyOn(ik, "_post").mockResolvedValue({ ok: true });
+    await ik.sendSnapshot({ trigger: "print.finished", host: "k1" });
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("attachCamera=OFF のとき sendSnapshot は _attachCameras を呼ばない", async () => {
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", attachCamera: false });
+    const attach = vi.spyOn(ik, "_attachCameras").mockResolvedValue();
+    vi.spyOn(ik, "_post").mockResolvedValue({ ok: true });
+    await ik.sendSnapshot({ trigger: "print.finished", host: "k1" });
+    expect(attach).not.toHaveBeenCalled();
+  });
+});
+
 describe("buildHeaders", () => {
   it("Bearer と X-IK-* を付与", () => {
     const ik = newIK({ clientId: "cid", secret: "sec" });

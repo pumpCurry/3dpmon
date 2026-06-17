@@ -842,6 +842,27 @@ app.whenReady().then(async () => {
     }
   });
 
+  // レンダラー(親) → カメラ snapshot を Base64(JPEG) で取得（ItemKeeper 連携の画像添付用）
+  // 親レンダラーは file:// オリジンのため CORS でプリンタ画像を直接読めない。
+  // メインプロセスが _cameraEndpoints allowlist 経由で1枚取得し Base64 で返す。
+  // /relay-camera プロキシと同じ取得関数・短期キャッシュを共有し、プリンタ負荷を抑える。
+  ipcMain.handle("get-camera-snapshot", async (_e, host) => {
+    const ep = _cameraEndpoints[host];
+    if (!ep || !ep.ip) return null;
+    const toResult = (buf) => ({ mime: "image/jpeg", dataBase64: buf.toString("base64"), bytes: buf.length });
+    // 新鮮なキャッシュがあれば再取得しない（カメラパネル表示と取得を集約）
+    const cached = _camSnapCache.get(host);
+    if (cached && Date.now() - cached.ts < _CAM_CACHE_TTL_MS) return toResult(cached.buf);
+    try {
+      const buf = await _fetchCameraSnapshot(host, ep);
+      _camSnapCache.set(host, { buf, ts: Date.now() });
+      return toResult(buf);
+    } catch {
+      const stale = _camSnapCache.get(host);
+      return stale ? toResult(stale.buf) : null;
+    }
+  });
+
   /* ─── ARP 解決 IPC ─── */
   const { resolveArp, scanArpTable, isCrealityDevice } = require("./arp_resolver.js");
 

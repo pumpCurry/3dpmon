@@ -198,11 +198,6 @@ export class NotificationManager {
         cfg.label = cfg.label.replace(/[\r\n]+/g, " ");
       }
     });
-    // ★ L 移行: 旧 filamentLow テンプレの "{remaining}mm"(単位ハードコード) を
-    //   "{remaining}"(値側で単位付与=表示オプション準拠) へ置換。既存保存設定を救済。
-    if (merged.filamentLow && typeof merged.filamentLow.talk === "string") {
-      merged.filamentLow.talk = merged.filamentLow.talk.replace(/\{remaining\}\s*mm/g, "{remaining}");
-    }
     this.map = merged;
 
     if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;
@@ -232,6 +227,21 @@ export class NotificationManager {
     Object.values(this.map).forEach(cfg => {
       if (!cfg.level) cfg.level = "info";
     });
+
+    // ★ L 移行（統合）: 旧 filamentLow 既定を新既定（{remainingText}＝表示単位・小数1桁）へ。
+    //   対象は (a) 最初期 "{remaining}mm"（mmハードコード・全桁読み上げ）と
+    //   (b) 中間版 "{remaining}"（値側で単位付与）の2系統。{remaining} は生mm値を
+    //   返すため読み上げに使うと再び全桁化する → 既知の旧既定と完全一致のときだけ
+    //   新既定へ差し替える（ユーザのカスタム文面は尊重）。
+    if (this.map.filamentLow && typeof this.map.filamentLow.talk === "string") {
+      const OLD_FILAMENTLOW_DEFAULTS = [
+        "{hostname} フィラメント残量が少なくなっています 残り{remaining}mm ({now})",
+        "{hostname} フィラメント残量が少なくなっています 残り{remaining} ({now})",
+      ];
+      if (OLD_FILAMENTLOW_DEFAULTS.includes(this.map.filamentLow.talk)) {
+        this.map.filamentLow.talk = defaultNotificationMap.filamentLow.talk;
+      }
+    }
 
     // 旧データが改行を含んでいた場合は保存し直す
     this._persistSettings();
