@@ -271,13 +271,36 @@ export function buildCameraEndpoints(targets, defaultCameraPort = 8080) {
  */
 function _syncCameraEndpoints() {
   if (!window.electronAPI?.setCameraEndpoints) return;
-  const map = buildCameraEndpoints(
-    monitorData.appSettings.connectionTargets || [],
-    monitorData.appSettings.cameraPort || 8080
-  );
-  // 画像パススルー用 httpPort を host ごとに付与（builder は pure のまま）。
-  for (const hostname of Object.keys(map)) {
-    map[hostname].httpPort = getHttpPort(hostname);
+  const targets = monitorData.appSettings.connectionTargets || [];
+  const defaultCam = monitorData.appSettings.cameraPort || 8080;
+  const map = {};
+  for (const t of targets) {
+    const dest = (t?.dest || "").trim();
+    const ip = dest.split(":")[0].trim();
+    if (!ip) continue;                              // IP 不明は転送不可
+    const hostname = (t?.hostname || "").trim();
+    const label = (t?.label || "").trim();
+    // machine 解決（Moonraker はキーが IP のままのことがあるため hostname/IP 双方で探す）
+    const machine = (hostname && monitorData.machines?.[hostname])
+      || monitorData.machines?.[ip] || null;
+    let port = (t?.cameraPort) || defaultCam || 8080;
+    let snapshotPath = "/?action=snapshot";         // K1 既定（mjpg-streamer）
+    // ★ K: Moonraker は機器申告のスナップショットURL（/webcam/?action=snapshot 等）から
+    //   パス/ポートを採用する。子が機器へ直接到達せず親が代理取得するための解決値。
+    const snapUrl = machine?._cameraSnapshotUrl;
+    if (snapUrl) {
+      try {
+        const u = new URL(snapUrl);
+        port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+        snapshotPath = (u.pathname || "/") + (u.search || "");
+      } catch { /* 解析失敗時は K1 既定のまま */ }
+    }
+    const ep = { ip, port, httpPort: getHttpPort(hostname || ip), snapshotPath };
+    // 子の /relay-camera/{key} 要求がどの識別子でも当たるよう別名登録
+    //   （表示名 label / 機器申告 hostname / IP / dest。先勝ちで上書きしない）
+    for (const key of [hostname, label, ip, dest]) {
+      if (key && !map[key]) map[key] = ep;
+    }
   }
   const hash = _quickHash(map);
   if (hash === _prevCameraEpHash) return;          // 変化なし

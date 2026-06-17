@@ -198,6 +198,11 @@ export class NotificationManager {
         cfg.label = cfg.label.replace(/[\r\n]+/g, " ");
       }
     });
+    // ★ L 移行: 旧 filamentLow テンプレの "{remaining}mm"(単位ハードコード) を
+    //   "{remaining}"(値側で単位付与=表示オプション準拠) へ置換。既存保存設定を救済。
+    if (merged.filamentLow && typeof merged.filamentLow.talk === "string") {
+      merged.filamentLow.talk = merged.filamentLow.talk.replace(/\{remaining\}\s*mm/g, "{remaining}");
+    }
     this.map = merged;
 
     if (saved.ttsVoice) this.ttsVoice = saved.ttsVoice;

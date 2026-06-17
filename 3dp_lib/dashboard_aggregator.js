@@ -1391,8 +1391,12 @@ export function aggregatorUpdate() {
         const ratio = remain / spool.totalLengthMm;
         if (ratio <= thr && !s.filamentLowWarned) {
           s.filamentLowWarned = true;
+          // ★ L: 読み上げ残量は「表示オプションの単位(mm/m)＋小数1桁(2桁目四捨五入)」で渡す。
+          const _unit = monitorData.appSettings.filamentUnit === "mm" ? "mm" : "m";
+          const _remVal = _unit === "mm" ? Number(remain) : Number(remain) / 1000;
+          const _remainingStr = `${(Number.isFinite(_remVal) ? _remVal : 0).toFixed(1)}${_unit}`;
           notificationManager.notify("filamentLow", {
-            hostname: host, remaining: remain,
+            hostname: host, remaining: _remainingStr,
             thresholdPct: Math.round(thr * 100),
             spoolName: spool.name
           });

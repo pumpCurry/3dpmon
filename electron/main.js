@@ -138,8 +138,12 @@ function _fetchCameraSnapshot(host, ep) {
 
   const p = new Promise((resolve, reject) => {
     const port = ep.port || 8080;
+    // ★ K: スナップショットのパスは機種で異なる。K1=":8080/?action=snapshot"、
+    //   Moonraker/Fluidd(IR3 v2 等)=":80/webcam/?action=snapshot"。endpoint が
+    //   snapshotPath を持てばそれを使う(レンダラーが webcams.list 由来で解決して渡す)。
+    const path = ep.snapshotPath || "/?action=snapshot";
     const req = http.get(
-      { host: ep.ip, port, path: "/?action=snapshot", timeout: _CAM_FETCH_TIMEOUT_MS },
+      { host: ep.ip, port, path, timeout: _CAM_FETCH_TIMEOUT_MS },
       (resp) => {
         if (resp.statusCode !== 200) {
           resp.resume(); // ソケット解放
