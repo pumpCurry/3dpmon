@@ -243,6 +243,47 @@ function _recomputeAndRefreshSpool(spoolId, ts) {
 }
 
 /**
+ * 印刷ライフサイクル計測値（観測フラグ＋区間時間）を、保存済み履歴エントリへ付与する。
+ *
+ * 完了確定時(processData の →printDone 遷移)に呼ばれ、進捗100%時に登録済みのエントリを
+ * printId(=id) で引いて observed / postProcessingTime（／Moonraker は warmup→preparationTime,
+ * paused→pauseTime）を書き込む。機器申告値(K1 の preparationTime/pauseTime)が既に
+ * あれば実測値で上書きしない。device 再取得時のマージ(updateHistoryList)は incoming が
+ * これらを持たない＝null のため backfill で保持される。
+ *
+ * @function applyLifecycleMetrics
+ * @param {string} host - ホスト名
+ * @param {number|string} jobId - printId（= start_time epoch）
+ * @param {{observed?:string, postProcessingTime?:?number, warmupSec?:?number, pausedSec?:?number}} metrics
+ * @returns {void}
+ */
+export function applyLifecycleMetrics(host, jobId, metrics) {
+  if (!host || jobId == null || !metrics) return;
+  const jobs = loadHistory(host);
+  const job = jobs.find(j => String(j.id) === String(jobId));
+  if (!job) return; // 進捗100%登録前のレア競合（K1-Max即完了等）。後処理≈0で実害小。
+  let changed = false;
+  if (metrics.observed != null && job.observed !== metrics.observed) {
+    job.observed = metrics.observed; changed = true;
+  }
+  if (metrics.postProcessingTime != null && job.postProcessingTime == null) {
+    job.postProcessingTime = metrics.postProcessingTime; changed = true;
+  }
+  if (metrics.warmupSec != null && (job.preparationTime == null || Number(job.preparationTime) === 0)) {
+    job.preparationTime = metrics.warmupSec; changed = true;
+  }
+  if (metrics.pausedSec != null && (job.pauseTime == null || Number(job.pauseTime) === 0)) {
+    job.pauseTime = metrics.pausedSec; changed = true;
+  }
+  if (!changed) return;
+  saveHistory(jobs, host);
+  try {
+    const baseUrl = getDisplayBaseUrl(host);
+    renderHistoryTable(jobsToRaw(loadHistory(host)), baseUrl, host);
+  } catch { /* 描画失敗は無視（保存は済んでいる） */ }
+}
+
+/**
  * 履歴マージ時にゼロ値を無視したいフィールド一覧
  *
  * これらのタイマー値は機器から送信されないため、
@@ -576,6 +617,9 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const pauseTime           = raw.pauseTime;
   // ★ A: Moonraker のネイティブ ID（job_id）を内部保持（printId=id は start_time のまま）
   const moonrakerJobId      = raw.moonrakerJobId;
+  // ★ J: 観測フラグ（live/partial/history）＋印刷後処理時間（秒）。既定は未設定＝取れなかった。
+  const observed            = raw.observed;
+  const postProcessingTime  = raw.postProcessingTime;
   const filamentId          = raw.filamentId;
   const filamentColor       = raw.filamentColor;
   const filamentType        = raw.filamentType;
@@ -603,6 +647,8 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     firstLayerCheckTime,
     pauseTime,
     moonrakerJobId,
+    observed,
+    postProcessingTime,
     filamentId,
     filamentColor,
     filamentType,
@@ -758,6 +804,8 @@ export function jobsToRaw(jobs) {
       ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
       ...(job.pauseTime             !== undefined && { pauseTime:             job.pauseTime }),
       ...(job.moonrakerJobId       !== undefined && { moonrakerJobId:       job.moonrakerJobId }),
+      ...(job.observed             !== undefined && { observed:             job.observed }),
+      ...(job.postProcessingTime   !== undefined && { postProcessingTime:   job.postProcessingTime }),
       ...(job.filamentId            !== undefined && { filamentId:            job.filamentId }),
       ...(job.filamentColor         !== undefined && { filamentColor:         job.filamentColor }),
       ...(job.filamentType          !== undefined && { filamentType:          job.filamentType })
@@ -1418,6 +1466,9 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const checktime = checkSec != null ? formatDuration(checkSec) : "";
     const pauseSec  = raw.pauseTime != null ? Number(raw.pauseTime) : null;
     const pausetime = pauseSec != null ? formatDuration(pauseSec) : "";
+    // ★ J: 印刷後処理時間（進捗100%→完了。立ち会えたときのみ実測値あり）
+    const postSec   = raw.postProcessingTime != null ? Number(raw.postProcessingTime) : null;
+    const posttime  = postSec != null ? formatDuration(postSec) : "";
     // フィラメント情報（umaterial 算出前に必要）
     const spoolInfos = Array.isArray(raw.filamentInfo)
       ? raw.filamentInfo
@@ -1446,11 +1497,12 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       ? `<button class="video-link icon-btn" data-url="${raw.videoUrl}" title="動画">📹</button>`
       : "";
 
-    // 時間詳細行（準備・確認・停止があれば表示）
+    // 時間詳細行（準備・確認・停止・後処理があれば表示）
     const timeDetails = [];
     if (preptime) timeDetails.push(`準備${preptime}`);
     if (checktime) timeDetails.push(`確認${checktime}`);
     if (pausetime) timeDetails.push(`停止${pausetime}`);
+    if (posttime) timeDetails.push(`後処理${posttime}`);
     const timeDetailHtml = timeDetails.length
       ? `<div class="time-detail">${timeDetails.join(" ")}</div>`
       : "";
@@ -1686,6 +1738,8 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   const prepSec = Number(raw.preparationTime || 0);
   const checkSec = Number(raw.firstLayerCheckTime || 0);
   const pauseSec = Number(raw.pauseTime || 0);
+  // ★ J: 印刷後処理時間（進捗100%→完了。立ち会えたときのみ実測値あり）
+  const postSec = raw.postProcessingTime != null ? Number(raw.postProcessingTime) : null;
   const actualPrintSec = Math.max(0, usageSec - prepSec - checkSec - pauseSec);
 
   const addCard = (label, value, sub) => {
@@ -1699,7 +1753,11 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   if (actualPrintSec > 0) addCard("実印刷", formatDuration(actualPrintSec), "");
   if (prepSec > 0) addCard("準備", formatDuration(prepSec), "");
   if (pauseSec > 0) addCard("停止", formatDuration(pauseSec), "");
+  // 後処理は 0 でも「実測したが≈0(K1-Max 等)」を示すため値があれば表示
+  if (postSec != null) addCard("後処理", formatDuration(postSec), "");
   if (materialFmt) addCard("消費量", materialFmt.display, "");
+  // 観測フラグ: live=実測 / partial=途中参加 / 既定(history)=取れなかった
+  if (raw.observed === "partial") addCard("観測", "途中参加", "区間時間は一部のみ");
 
   // スプール変動
   if (spool && Array.isArray(raw.filamentInfo) && raw.filamentInfo.length >= 2) {

@@ -70,6 +70,7 @@ import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js"
 import * as printManager from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 import { getCurrentSpool, formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
+import { recordPrintLifecycle, getPrintLifecycleMetrics, resetPrintLifecycle } from "./dashboard_print_lifecycle.js";
 
 /**
  * Webhook 通知用の共通ペイロードを構築する。
@@ -151,6 +152,20 @@ function _buildNotifyPayload(host, machine, opts = {}) {
       payload.printStartTime_epoch = startEpoch;
       payload.duration_sec = Math.floor((Date.now() - startEpoch) / 1000);
     }
+    // ★ J: 観測フラグ＋区間時間（履歴に確定済みのものを添付。取れなかった軸は省略）。
+    //   webhook にも「準備/一時停止/後処理」と実測/履歴のみ区別を乗せる。
+    try {
+      const jid = normalizeJobId(sd.printStartTime?.rawValue);
+      const hj = jid != null
+        ? printManager.loadHistory(host).find(j => String(j.id) === String(jid))
+        : null;
+      if (hj) {
+        if (hj.observed) payload.observed = hj.observed;
+        if (hj.preparationTime != null)    payload.warmupSec = Number(hj.preparationTime);
+        if (hj.pauseTime != null)          payload.pausedSec = Number(hj.pauseTime);
+        if (hj.postProcessingTime != null) payload.postProcessingSec = Number(hj.postProcessingTime);
+      }
+    } catch { /* noop */ }
   }
 
   return payload;
@@ -540,6 +555,16 @@ export function processData(data, hostname) {
   const currSelfPct   = Number(data.withSelfTest      || 0);
   const device        = Number(data.deviceState      || 0);
 
+  // ★ J: 印刷ライフサイクル計測（毎push 状態/進捗を記録。完了時に区間時間を履歴へ付与）
+  try {
+    recordPrintLifecycle(host, {
+      state: st,
+      progress: Number(data.printProgress ?? 0),
+      jobId: currStartTime || null,
+      nowMs: Date.now(),
+    });
+  } catch { /* 計測失敗は本処理に影響させない */ }
+
   // タイマー全クリアユーティリティ
   const clearAllTimers = () => {
     [ms.prepTimerId, ms.checkTimerId, ms.pauseTimerId]
@@ -892,6 +917,19 @@ export function processData(data, hostname) {
       const v = machine.storedData[k]?.rawValue;
       if (v !== undefined) entry[k] = v;
     });
+    // ★ J: 観測フラグ＋区間時間を付与（warmup→preparationTime / paused→pauseTime）。
+    //   既定は付けない＝「取れなかった」。後処理時間は完了遷移時に別途付与する。
+    //   機器申告値(K1 の preparationTime/pauseTime)が既にあれば実測値で上書きしない。
+    try {
+      const lc = getPrintLifecycleMetrics(host, { nowMs: Date.now() });
+      if (lc.observed && entry.observed == null) entry.observed = lc.observed;
+      if (lc.warmupSec != null && (entry.preparationTime == null || Number(entry.preparationTime) === 0)) {
+        entry.preparationTime = lc.warmupSec;
+      }
+      if (lc.pausedSec != null && (entry.pauseTime == null || Number(entry.pauseTime) === 0)) {
+        entry.pauseTime = lc.pausedSec;
+      }
+    } catch { /* noop */ }
     // ★ E1: フィラメント情報の消失防止 — 3段階フォールバック
     // printStore → historyData既存エントリ → 受信データ の優先順で復元
     const savedJobs = printManager.loadHistory(host);
@@ -930,6 +968,22 @@ export function processData(data, hostname) {
       printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
       persistPrintResume(host);
     }
+  }
+
+  // ★ J: 完了遷移（→printDone）で「印刷後処理時間」(進捗100%→完了)を確定し履歴へ付与。
+  //   2.7.4 で進捗100%時に登録済みのエントリを id で引いて postProcessingTime/observed を書く。
+  //   K1-Max は完了がほぼ即時=後処理≈0、IR3 v2 等は end-gcode/排出ぶんの実測値が乗る。
+  if (st === PRINT_STATE_CODE.printDone
+      && ms.prevPrintState != null
+      && ms.prevPrintState !== PRINT_STATE_CODE.printDone) {
+    try {
+      const doneJobId = currStartTime
+        || normalizeJobId(printManager.loadCurrent(host)?.id)
+        || normalizeJobId(getCurrentPrintID(host));
+      const lc = getPrintLifecycleMetrics(host, { nowMs: Date.now() });
+      if (doneJobId) printManager.applyLifecycleMetrics(host, doneJobId, lc);
+      resetPrintLifecycle(host);
+    } catch (e) { console.debug("[processData] lifecycle 完了付与スキップ:", e?.message || e); }
   }
 
   // 次回比較用に保存（リロード時の再通知防止のため localStorage にも永続化）

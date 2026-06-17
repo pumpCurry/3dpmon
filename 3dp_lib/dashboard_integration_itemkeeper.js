@@ -241,6 +241,14 @@ export class ItemKeeperIntegration {
       result,
       printfinish: (pf === 1 || pf === 0) ? pf : null,
       materialUsedMm: Number(job.materialUsedMm || 0),
+      // ★ J: 観測フラグ＋区間時間（取れなかった軸は null）＋実機ネイティブID。
+      //   observed: "live"(実測) / "partial"(途中参加) / "history"(履歴のみ=取れなかった)
+      observed: job.observed || "history",
+      preparationSec:     job.preparationTime     != null ? Number(job.preparationTime)     : null,
+      firstLayerCheckSec: job.firstLayerCheckTime  != null ? Number(job.firstLayerCheckTime)  : null,
+      pausedSec:          job.pauseTime            != null ? Number(job.pauseTime)            : null,
+      postProcessingSec:  job.postProcessingTime   != null ? Number(job.postProcessingTime)   : null,
+      ...(job.moonrakerJobId != null && { moonrakerJobId: String(job.moonrakerJobId) }),
       filaments: this.buildFilaments(job)
     };
   }
