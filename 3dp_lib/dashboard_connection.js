@@ -1308,8 +1308,18 @@ function handleSocketClose(host) {
   stopHeartbeat(host);             // ハートビート停止
 
   // 接続中ホストが0になった場合のみ集計ループ停止
+  // ★ 種別非依存で判定する: Moonraker(IR3v2 等)は生WSを st.ws に載せない設計
+  //   （st._extSession 上で稼働）ため、s.ws だけを見ると Moonraker 接続を
+  //   「未接続」と誤判定し、K1 が一瞬フラップした隙に stopAggregatorTimer()→
+  //   全ホストの状態更新が永久停止する（2fps停止の真因のひとつ）。
+  //   K1=生WS OPEN / Moonraker=_extSession 稼働 / 双方を st.state でも担保する。
+  const closing = getState(host);
   const remainingConnected = Object.values(connectionMap).some(
-    s => s && s.ws && s.ws.readyState === WebSocket.OPEN && s !== getState(host)
+    s => s && s !== closing && (
+      (s.ws && s.ws.readyState === WebSocket.OPEN) ||  // K1: 生WS
+      s._extSession != null ||                          // Moonraker: 外部セッション稼働
+      s.state === "connected"                           // 種別非依存の状態フラグ
+    )
   );
   if (!remainingConnected) {
     stopAggregatorTimer();

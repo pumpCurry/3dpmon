@@ -61,6 +61,7 @@ import {
   ingestData,
   restoreAggregatorState,
   restartAggregatorTimer,
+  ensureAggregatorTimer,
   persistAggregatorState,
   setHistoryPersistFunc,
   aggregatorUpdate,
@@ -384,6 +385,12 @@ export function processData(data, hostname) {
   if (!('lastError' in machine.runtimeData)) {
     machine.runtimeData.lastError = null;
   }
+
+  // ★ 自己修復インバリアント（2fps停止の根本対策）:
+  //   データが流れている＝集約ループは必ず動いていなければならない。
+  //   stopAggregatorTimer が接続数誤判定（Moonrakerは s.ws を持たない等）で誤発火しても、
+  //   次の受信メッセージでループを復帰させる。稼働中は no-op（タイマーをリセットしない）。
+  ensureAggregatorTimer();
 
   // 初回ホスト初期化完了後は該当ホストの通知抑制を解除
   // (handleMessage の初期化パスを通らない2台目以降のホストにも対応)

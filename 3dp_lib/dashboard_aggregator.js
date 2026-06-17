@@ -1704,6 +1704,24 @@ export function restartAggregatorTimer() {
 }
 
 /**
+ * ensureAggregatorTimer:
+ *   集約ループが**停止している場合のみ**起動する（稼働中なら何もしない）。
+ *
+ *   ★ 自己修復インバリアント（2fps停止の根本対策）:
+ *     「データが流れているなら集約ループは必ず動いていなければならない」。
+ *     stopAggregatorTimer は接続数判定（種別非依存でない実装が過去に存在）で
+ *     誤発火し得るため、データ受信経路(processData)から毎メッセージこれを呼ぶ。
+ *     restartAggregatorTimer と違い clearInterval を伴わない＝稼働中タイマーを
+ *     リセットしない（高頻度呼び出しでも発火を妨げない）ので安全に多重呼び出しできる。
+ *
+ * @returns {void}
+ */
+export function ensureAggregatorTimer() {
+  if (aggregatorTimer !== null) return;   // 稼働中: 触らない（リセット禁止）
+  restartAggregatorTimer();
+}
+
+/**
  * stopAggregatorTimer:
  *   - 集約ループを停止
  *   - 停止直前に {@link aggregatorUpdate} を実行し最終状態を保存

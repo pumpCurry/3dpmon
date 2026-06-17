@@ -74,7 +74,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   getCurrentSpool: vi.fn(() => null), formatFilamentAmount: vi.fn(() => ""), formatSpoolDisplayId: vi.fn(() => ""),
 }));
 vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({
-  ingestData: vi.fn(), restoreAggregatorState: vi.fn(), restartAggregatorTimer: vi.fn(),
+  ingestData: vi.fn(), restoreAggregatorState: vi.fn(), restartAggregatorTimer: vi.fn(), ensureAggregatorTimer: vi.fn(),
   persistAggregatorState: vi.fn(), setHistoryPersistFunc: vi.fn(), aggregatorUpdate: vi.fn(),
   getCurrentPrintID: vi.fn(() => 0),
 }));
