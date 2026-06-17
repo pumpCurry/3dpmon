@@ -227,6 +227,14 @@ export class NotificationManager {
       if (!cfg.level) cfg.level = "info";
     });
 
+    // 旧既定の filamentLow talk（残量に mm ハードコード・丸めなし＝全桁読み上げ）を
+    // 新既定（{remainingText}＝表示単位・小数1桁）へ移行する。
+    // ユーザがカスタムした文面は尊重し、旧既定と完全一致のときだけ差し替える。
+    if (this.map.filamentLow &&
+        this.map.filamentLow.talk === "{hostname} フィラメント残量が少なくなっています 残り{remaining}mm ({now})") {
+      this.map.filamentLow.talk = defaultNotificationMap.filamentLow.talk;
+    }
+
     // 旧データが改行を含んでいた場合は保存し直す
     this._persistSettings();
   }

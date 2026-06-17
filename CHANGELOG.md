@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.2.1027 (2026-06-17)
+
+### ItemKeeper 連携: カメラ画像(Base64)の添付オプション
+
+ItemKeeper 連携の送信ペイロードに「**現在のカメラ画像を各機ごとに添付**」するオプションを追加した。既定 OFF で、OFF 時は現行 JSON と完全一致＝**下位互換を維持**する。
+
+#### 追加内容
+- 新設定 `attachCamera`（既定 OFF）。ON で送信のたびに各機の現在カメラ画像（JPEG）を Base64 化し、`device.camera = { mime, dataBase64, bytes, capturedAt }` として付与する（任意フィールド・スキーマ番号据え置き）。
+- 機器別 `ikCamera`（既定 ON）。`attachCamera` ON 時、カメラ無し機などを `device.camera` 添付対象から個別に外せる。外部連携モーダルの対象機器テーブルに「カメラ」列を追加。
+- 取得経路は堅牢性順にフォールバック: ① Electron 親はメインプロセスの新 IPC `get-camera-snapshot`（`file://` オリジンの CORS 制約を回避。`/relay-camera` プロキシと取得関数・短期キャッシュを共有）② リレー子/同一オリジン http は `/relay-camera/{host}/snapshot.jpg` を同一オリジン fetch。いずれも不可なら**画像を省略**（履歴 JSON は valid のまま）。
+- カメラ取得は全機並列＋タイムアウト付きで、送信の総待ち時間を抑制。`buildSnapshot` は純粋・同期のまま維持し、添付は `sendSnapshot` 内の非同期ステップとして実施。**413（サイズ超過）時は履歴縮小再送が `buildSnapshot` で組み直すため画像は自動的に外れる**（履歴優先）。
+
+### フィラメント残量読み上げの小数まるめ＋単位整形（修正漏れ）
+
+`filamentLow` 通知の読み上げが残量を小数点以下全桁で読み上げていた（例「残り187399.8333mm」）のを修正。**表示単位（`filamentUnit` の m/mm）に従い、小数1桁**へ整形する（m選択時「残り187.4m」、mm選択時「残り187399.8mm」）。
+- 整形済み文字列を新プレースホルダ `{remainingText}` として渡し、既定 talk を `残り{remainingText}` へ変更（旧 `残り{remaining}mm` のハードコード単位を撤去）。`{remaining}`（mm 生値・数値）は Webhook/data 用に温存。
+- 既存ユーザの保存済み通知設定は talk 文面を凍結保持するため、**旧既定 talk と完全一致のときだけ新既定へ自動移行**（カスタム文面は尊重）。
+
+#### テスト
+- 全531テスト緑（ItemKeeper 連携 +10、外部連携モーダル +3、filamentLow 読み上げ +4: 既定talk検証／{remainingText}展開／旧既定の移行／カスタム文面の尊重）。
+
+---
+
 ## v2.2.1026 (2026-06-16)
 
 ### 温度グラフの CPU 占有を根本解消（検知と描画の分離 + uPlot 移行）＋ブラウザ直接接続の修正

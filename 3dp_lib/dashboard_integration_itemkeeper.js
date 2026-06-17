@@ -22,8 +22,8 @@
 
 "use strict";
 
-/* グローバル（ブラウザ/Electron レンダラ・Node18+ ランタイム）: 認証ノンス・gzip 圧縮で使用 */
-/* global crypto, CompressionStream, Response */
+/* グローバル（ブラウザ/Electron レンダラ・Node18+ ランタイム）: 認証ノンス・gzip 圧縮・カメラ画像取得で使用 */
+/* global crypto, CompressionStream, Response, location */
 
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
@@ -40,6 +40,8 @@ const IK_DEFAULT_PATH = "/api/ingest/print-events";
 const SETTINGS_KEY = "itemkeeper";
 /** インメモリ再送の最大試行回数（MVP。恒久アウトボックスは第二段） */
 const MAX_RETRY = 3;
+/** カメラ画像取得の打ち切りタイムアウト[ms]（送信を不当に遅延させない） */
+const CAMERA_CAPTURE_TIMEOUT_MS = 4500;
 
 /** 既定設定 */
 const DEFAULTS = Object.freeze({
@@ -48,6 +50,7 @@ const DEFAULTS = Object.freeze({
   clientId: "",
   secret: "",
   encoding: "none",      // Phase1 固定
+  attachCamera: false,   // 各機の現在カメラ画像(Base64/JPEG)を device.camera に添付（既定OFF=下位互換）
   onStart: true,         // 印刷開始時に送信
   onFinish: true,        // 印刷終了(完了/失敗)時に送信
   onPause: true,         // 一時停止時に送信
@@ -293,6 +296,134 @@ export class ItemKeeperIntegration {
     return { schema: IK_SCHEMA, sentAt: new Date().toISOString(), trigger, devices };
   }
 
+  // ───────────────────────────── カメラ画像添付 ─────────────────────────────
+
+  /**
+   * Promise にタイムアウトを付与する（カメラ取得が送信を不当に遅延させないため）。
+   * @private
+   * @template T
+   * @param {Promise<T>} promise
+   * @param {number} ms
+   * @returns {Promise<T>}
+   */
+  _withTimeout(promise, ms) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("timeout")), ms);
+      Promise.resolve(promise).then(
+        v => { clearTimeout(t); resolve(v); },
+        e => { clearTimeout(t); reject(e); }
+      );
+    });
+  }
+
+  /**
+   * Blob を「data: プレフィックスを除いた生 Base64 文字列」へ変換する。
+   * @private
+   * @param {Blob} blob
+   * @returns {Promise<string>} 失敗時は ""
+   */
+  _blobToBase64(blob) {
+    return new Promise((resolve) => {
+      try {
+        const fr = new FileReader();
+        fr.onload = () => {
+          const s = String(fr.result || "");
+          const i = s.indexOf(",");
+          resolve(i >= 0 ? s.slice(i + 1) : "");
+        };
+        fr.onerror = () => resolve("");
+        fr.readAsDataURL(blob);
+      } catch { resolve(""); }
+    });
+  }
+
+  /**
+   * 1 ホストの「現在のカメラ画像」を取得し camera オブジェクトを返す。
+   *
+   * 取得経路（堅牢性の高い順にフォールバック）:
+   *  1. Electron 親（本番）: `window.electronAPI.getCameraSnapshot(host)`
+   *     親レンダラーは file:// オリジンのため CORS でプリンタ画像を直接読めない。
+   *     メインプロセスが `_cameraEndpoints` allowlist 経由で1枚取得し Base64 で返す。
+   *  2. リレー子 / 同一オリジン http: `/relay-camera/{host}/snapshot.jpg` を fetch。
+   *     子は親(5313)と同一オリジンなので CORS なしで blob を読める。
+   *
+   * いずれも取得不能なら null（→ 呼び出し側は camera フィールドを省略＝下位互換）。
+   *
+   * @private
+   * @param {string} host - プリンタホスト名
+   * @returns {Promise<{mime:string,dataBase64:string,bytes:number,capturedAt:string}|null>}
+   */
+  async _captureCamera(host) {
+    if (!host) return null;
+
+    // 1) Electron 親: IPC 経由でメインプロセスが取得（CORS 回避・本番経路）
+    try {
+      if (typeof window !== "undefined" && window.electronAPI?.getCameraSnapshot) {
+        const r = await this._withTimeout(window.electronAPI.getCameraSnapshot(host), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (r && r.dataBase64) {
+          return {
+            mime: r.mime || "image/jpeg",
+            dataBase64: r.dataBase64,
+            bytes: Number(r.bytes) || 0,
+            capturedAt: new Date().toISOString()
+          };
+        }
+        return null; // Electron 環境で取得不可なら他経路は無効（プリンタへ直接到達できない）
+      }
+    } catch { /* フォールバックへ */ }
+
+    // 2) リレー子 / 同一オリジン http: 親プロキシを同一オリジン fetch
+    try {
+      if (typeof fetch === "function" && typeof location !== "undefined" && /^https?:$/.test(location.protocol)) {
+        const url = `/relay-camera/${encodeURIComponent(host)}/snapshot.jpg?t=${Date.now()}`;
+        const res = await this._withTimeout(fetch(url, { cache: "no-store" }), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (res && res.ok) {
+          const blob = await res.blob();
+          const b64 = await this._blobToBase64(blob);
+          if (b64) {
+            return {
+              mime: blob.type || "image/jpeg",
+              dataBase64: b64,
+              bytes: Number(blob.size) || 0,
+              capturedAt: new Date().toISOString()
+            };
+          }
+        }
+      }
+    } catch { /* noop */ }
+
+    return null;
+  }
+
+  /**
+   * スナップショットの各 device に「現在のカメラ画像(Base64)」を添付する。
+   * `settings.attachCamera` が ON のとき sendSnapshot から呼ばれる。
+   *
+   * - 機器別 `ikCamera === false` の機器は添付しない。
+   * - 取得できない機器（カメラ無し/オフライン等）は省略する（JSON は valid のまま）。
+   * - device.camera = { mime, dataBase64, bytes, capturedAt }。
+   * - 全機器を並列取得し、送信の総待ち時間を抑える。
+   *
+   * @private
+   * @param {{devices:Array<object>}} snap - buildSnapshot の結果（破壊的に変更）
+   * @returns {Promise<void>}
+   */
+  async _attachCameras(snap) {
+    const devices = snap?.devices || [];
+    if (!devices.length) return;
+    const targets = monitorData.appSettings.connectionTargets || [];
+    await Promise.all(devices.map(async (d) => {
+      const host = d?.device?.hostname;
+      if (!host) return;
+      const t = targets.find(x => x && x.hostname === host);
+      if (t && t.ikCamera === false) return; // この機器はカメラ添付OFF
+      try {
+        const cam = await this._captureCamera(host);
+        if (cam) d.camera = cam;
+      } catch { /* 取得失敗は省略（下位互換） */ }
+    }));
+  }
+
   // ───────────────────────────── HTTP 送信 ─────────────────────────────
 
   /** @private ランダム UUID（フォールバックあり） */
@@ -358,6 +489,11 @@ export class ItemKeeperIntegration {
     const event = trigger || "";
     const snap = this.buildSnapshot(event, host);
     if (!snap.devices.length) return { ok: false, skipped: true };
+    // カメラ画像(Base64)を各機に添付（ON時のみ）。取得失敗機は省略＝下位互換。
+    // 413(サイズ超過)時は _post 内の縮小再送が buildSnapshot で組み直すため画像は自然に外れる。
+    if (s.attachCamera) {
+      try { await this._attachCameras(snap); } catch { /* 添付失敗は無視して履歴のみ送る */ }
+    }
     return this._post(endpoint, event, snap, { host, retriesLeft: MAX_RETRY });
   }
 
@@ -548,11 +684,13 @@ export class ItemKeeperIntegration {
       const name = escHtml(t.label || t.hostname || t.dest || "(未解決)");
       const alias = escAttr(t.ikDeviceAlias || "");
       const ikEnabled = t.ikEnabled !== false;
+      const ikCamera = t.ikCamera !== false;
       return `<tr>
         <td style="padding:2px 6px;white-space:nowrap;">${name}</td>
         <td style="padding:2px 6px;"><input type="text" data-ik-alias="${dest}" value="${alias}"
             placeholder="${escAttr(t.hostname || "")}" style="width:10em;font-size:12px;padding:2px 4px;border:1px solid #ccc;border-radius:3px;"></td>
         <td style="padding:2px 6px;text-align:center;"><input type="checkbox" data-ik-enabled="${dest}" ${ikEnabled ? "checked" : ""}></td>
+        <td style="padding:2px 6px;text-align:center;"><input type="checkbox" data-ik-camera="${dest}" ${ikCamera ? "checked" : ""}></td>
       </tr>`;
     }).join("");
 
@@ -652,12 +790,21 @@ export class ItemKeeperIntegration {
               </label>
             </div>
 
-            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF）</div>
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">カメラ画像の添付</div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-camera" ${s.attachCamera ? "checked" : ""}>
+              現在のカメラ画像を各機ごとに添付する（Base64・JPEG）
+            </label>
+            <div style="font-size:11px;color:#999;margin:0 0 6px 22px;">
+              ※送信のたびに各機のスナップショットを取得し <code>device.camera</code> に付与します。カメラ無し/オフラインの機器は省略されます（下位互換）。機器ごとのON-OFFは下表の「カメラ」列で調整できます。
+            </div>
+
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF / カメラ添付）</div>
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
               <thead><tr style="color:#667;text-align:left;">
-                <th style="padding:2px 6px;">機器</th><th style="padding:2px 6px;">エイリアス（ItemKeeper側の安定名）</th><th style="padding:2px 6px;">連携</th>
+                <th style="padding:2px 6px;">機器</th><th style="padding:2px 6px;">エイリアス（ItemKeeper側の安定名）</th><th style="padding:2px 6px;">連携</th><th style="padding:2px 6px;">カメラ</th>
               </tr></thead>
-              <tbody data-role="ik-devices">${deviceRows || `<tr><td colspan="3" style="padding:6px;color:#999;">接続先がありません</td></tr>`}</tbody>
+              <tbody data-role="ik-devices">${deviceRows || `<tr><td colspan="4" style="padding:6px;color:#999;">接続先がありません</td></tr>`}</tbody>
             </table>
 
             <div style="margin-top:8px;">
@@ -768,6 +915,7 @@ export class ItemKeeperIntegration {
     this.settings.clientId = (q('[data-role="ik-clientid"]')?.value || "").trim();
     this.settings.secret = q('[data-role="ik-secret"]')?.value || "";
     this.settings.encoding = "none";
+    this.settings.attachCamera = !!q('[data-role="ik-attach-camera"]')?.checked;
     this.settings.historyScope = q('[data-role="ik-scope"]')?.value || "all";
     this.settings.onStart = !!q('[data-role="ik-onstart"]')?.checked;
     this.settings.onFinish = !!q('[data-role="ik-onfinish"]')?.checked;
@@ -787,6 +935,11 @@ export class ItemKeeperIntegration {
       const dest = chk.getAttribute("data-ik-enabled");
       const t = targets.find(x => x && x.dest === dest);
       if (t) t.ikEnabled = chk.checked;
+    });
+    container.querySelectorAll('[data-ik-camera]').forEach(chk => {
+      const dest = chk.getAttribute("data-ik-camera");
+      const t = targets.find(x => x && x.dest === dest);
+      if (t) t.ikCamera = chk.checked;
     });
 
     // 永続化（即時フラッシュ＝即反映）
