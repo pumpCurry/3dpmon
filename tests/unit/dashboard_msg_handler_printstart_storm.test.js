@@ -104,6 +104,23 @@ describe("processData printStarted 通知ストーム防止", () => {
     expect(starts.length, "printStarted 通知は新規開始の1回のみ").toBe(1);
   });
 
+  it("同一ファイルで開始時刻が推定値→実値に1回補正されても printStarted は1回だけ", () => {
+    const H = "IR3V2-REFINE";
+    ensureMachineData(H);
+    // 起動直後: Moonraker は推定値(now-print_duration)で開始
+    processData(makeK1Status(H, {
+      state: 1, printProgress: 12, printStartTime: 1781000050, printFileName: "/x/Piggy.gcode",
+    }), H);
+    // 履歴到着で実 start_time に補正（同一ファイル・state継続）→ 再発火してはいけない
+    for (let i = 0; i < 5; i++) {
+      processData(makeK1Status(H, {
+        state: 1, printProgress: 13 + i, printStartTime: 1781000001, printFileName: "/x/Piggy.gcode",
+      }), H);
+    }
+    const starts = notificationManager.notify.mock.calls.filter(c => c[0] === "printStarted");
+    expect(starts.length, "推定→実値の補正は新規印刷ではない＝1回のみ").toBe(1);
+  });
+
   it("別ジョブ（startTime変化）では改めて printStarted が出る（リグレッションなし）", () => {
     const H = "IR3V2-STORM2";
     ensureMachineData(H);

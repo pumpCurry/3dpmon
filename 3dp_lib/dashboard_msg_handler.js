@@ -234,7 +234,8 @@ function _createMsgHostState() {
     tsPrintStart: null, tsPrepEnd: null,
     tsCheckStart: null, tsCheckEnd: null, totalCheckSeconds: 0,
     tsPauseStart: null, tsCompletion: null, totalPauseSeconds: 0,
-    prevPrintState: null, prevPrintStartTime: null, prevSelfTestPct: null
+    prevPrintState: null, prevPrintStartTime: null, prevSelfTestPct: null,
+    prevPrintFileName: null
   };
 }
 
@@ -614,9 +615,24 @@ export function processData(data, hostname) {
   // (2.3.1) 新規印刷開始検出
   const initialized = ms.prevPrintState !== null && ms.prevPrintStartTime !== null;
 
+  // ★ 起動時 printStarted 二重通知の修正:
+  //   印刷開始は「非印刷→printStarted の状態遷移」で検出する。currStartTime の
+  //   変化単独では発火させない — Moonraker は起動直後に開始時刻を
+  //   推定値(now−print_duration)→履歴の実 start_time へ1回補正するため、
+  //   印刷継続中の start time 補正を「新規印刷」と誤検出して通知が二重化していた。
+  //   別ジョブ連続(idle を挟まない printStarted→printStarted)を取りこぼさないため、
+  //   start time 変化に加え「ファイル名も変わった」ときのみ新規開始として扱う
+  //   （同一ファイルの開始時刻補正＝refinement では発火しない）。
+  const _curPrintFile = (data.printFileName || data.fileName || "");
+  const _startedTransition = ms.prevPrintState !== st;
+  const _backToBackNewJob =
+    currStartTime !== ms.prevPrintStartTime &&
+    _curPrintFile !== "" &&
+    _curPrintFile !== ms.prevPrintFileName;
+
   if (
     st === PRINT_STATE_CODE.printStarted &&
-    (ms.prevPrintState !== st || currStartTime !== ms.prevPrintStartTime)
+    (_startedTransition || _backToBackNewJob)
   ) {
     console.debug(">>> (2.3.1) 印刷開始：準備タイマー起動");
     clearAllTimers();
@@ -1016,6 +1032,7 @@ export function processData(data, hostname) {
   ms.prevPrintState     = st;
   ms.prevPrintStartTime = currStartTime;
   ms.prevSelfTestPct    = currSelfPct;
+  ms.prevPrintFileName  = (data.printFileName || data.fileName || "");
   try {
     const msPrefix = `msg_${host}_`;
     localStorage.setItem(msPrefix + "prevPrintState", JSON.stringify(st));

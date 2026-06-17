@@ -190,6 +190,23 @@ export function startCameraStream(hostname) {
     return;
   }
 
+  /* ★ 冪等化（起動時「カメラ接続成功」二重ログ/二重接続の修正）:
+     onAux(server.webcams.list 到着) と panel_init/接続確立 が両方 startCameraStream を
+     呼ぶため、Moonraker では一度接続→URL解決後に再接続して "接続成功" が二重化していた。
+     既に接続済み(firstConnected)で配信先URLが変わらないなら、再接続せず即 return する。
+     ※ K1/relay 子は配信URLが固定のため「接続済みなら同一」とみなす。Moonraker は
+       machine._cameraStreamUrl の変化時のみ再接続する。停止中(userStopped)は対象外。 */
+  if (entry.firstConnected && !entry.userStopped && entry._activeStreamUrl) {
+    const toggleOn = (monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle);
+    if (toggleOn) {
+      let nextUrl = entry._activeStreamUrl;
+      if (!_isRelayChild() && getPrinterType(host) === "moonraker") {
+        nextUrl = monitorData.machines[host]?._cameraStreamUrl || entry._activeStreamUrl;
+      }
+      if (nextUrl === entry._activeStreamUrl) return;  // 同一URLで配信中 → 何もしない
+    }
+  }
+
   /* ★ 並行制御: 既存接続を完全停止してから新規開始
      handleSocketOpen + initCameraPanel からの同時呼び出しを安全にする */
   _cancelTimers(entry);
@@ -362,6 +379,7 @@ function _stopEntry(entry) {
   _cancelTimers(entry);
   entry.attempts = 0;
   entry.streamTarget = null;
+  entry._activeStreamUrl = null;   // ★ 冪等化用の配信URL記録もクリア（再開時に再接続させる）
   if (entry.img) {
     entry.img.src = "";
     entry.img.classList.add("off");
@@ -468,6 +486,7 @@ function _connectStream(entry, host) {
     if (!entry.firstConnected) {
       entry.attempts = 0;
       entry.firstConnected = true;
+      entry._activeStreamUrl = url;   // ★ 冪等化用: 現在配信中のURLを記録
       _updateUI(entry, "connected");
       pushLog("カメラ接続成功", "success", false, entry.hostname);
       notificationManager.notify("cameraConnected", { hostname: entry.hostname });
