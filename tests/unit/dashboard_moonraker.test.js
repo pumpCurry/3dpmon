@@ -614,6 +614,12 @@ describe('moonrakerHistoryToK1', () => {
   it('非配列は空配列', () => {
     expect(moonrakerHistoryToK1(null, 'http://h')).toEqual([]);
   });
+  it('A: 実機ネイティブ job_id を moonrakerJobId として内部保持（printId=id は start_time）', () => {
+    const j = out.find((e) => e.id === 1744784914);
+    expect(j.moonrakerJobId).toBe('000003'); // 実IDを保持
+    expect(j.id).toBe(1744784914);           // printId は start_time のまま
+    expect(out.find((e) => e.filename === 'Cube-PLA.gcode').moonrakerJobId).toBe('000002');
+  });
 });
 
 // =============================================================

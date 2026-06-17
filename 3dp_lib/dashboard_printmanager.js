@@ -574,6 +574,8 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const preparationTime     = raw.preparationTime;
   const firstLayerCheckTime = raw.firstLayerCheckTime;
   const pauseTime           = raw.pauseTime;
+  // ★ A: Moonraker のネイティブ ID（job_id）を内部保持（printId=id は start_time のまま）
+  const moonrakerJobId      = raw.moonrakerJobId;
   const filamentId          = raw.filamentId;
   const filamentColor       = raw.filamentColor;
   const filamentType        = raw.filamentType;
@@ -600,6 +602,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     preparationTime,
     firstLayerCheckTime,
     pauseTime,
+    moonrakerJobId,
     filamentId,
     filamentColor,
     filamentType,
@@ -754,6 +757,7 @@ export function jobsToRaw(jobs) {
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
       ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
       ...(job.pauseTime             !== undefined && { pauseTime:             job.pauseTime }),
+      ...(job.moonrakerJobId       !== undefined && { moonrakerJobId:       job.moonrakerJobId }),
       ...(job.filamentId            !== undefined && { filamentId:            job.filamentId }),
       ...(job.filamentColor         !== undefined && { filamentColor:         job.filamentColor }),
       ...(job.filamentType          !== undefined && { filamentType:          job.filamentType })

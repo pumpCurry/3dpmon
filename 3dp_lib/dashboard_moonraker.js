@@ -545,6 +545,10 @@ export function moonrakerHistoryToK1(jobs, httpBase) {
         size: Number(md.size || 0) || undefined,
         thumbUrl,
         filamentType: md.filament_type || undefined,
+        // ★ A: Moonraker のネイティブ ID を内部保持する（printId は start_time のまま）。
+        //   制御は現在ジョブ対象でID不要だが、将来 server.history 個別操作(uid=job_id)に
+        //   備えて実IDを保持。表示・dedup・フィラメント帰属には使わない。
+        moonrakerJobId: j.job_id != null ? String(j.job_id) : undefined,
       };
     });
 }
