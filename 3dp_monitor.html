@@ -54,7 +54,7 @@
     </div>
     <div class="menu-section">
       <button id="top-layout-lock" title="レイアウト固定/解除">🔓 固定</button>
-      <button id="top-conn-btn" title="接続設定">⚙ 接続</button>
+      <button id="top-conn-btn" title="環境設定">⚙ 設定</button>
       <button id="panel-menu-toggle" title="パネル追加">+ パネル</button>
     </div>
   </div>
@@ -65,7 +65,7 @@
   <div class="conn-modal-overlay" id="conn-modal-overlay">
     <div class="conn-modal">
       <div class="conn-modal-header">
-        <span>接続設定</span>
+        <span>環境設定</span>
         <button class="conn-modal-close" id="conn-modal-close">×</button>
       </div>
 
@@ -85,9 +85,7 @@
           <label class="conn-opt-label">
             <input type="checkbox" id="conn-modal-show-host-tag" checked> 機器名表示
           </label>
-          <label class="conn-opt-label">
-            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" step="1" inputmode="numeric" class="conn-opt-num" placeholder="8080">
-          </label>
+          <!-- ★ グローバルのカメラポートは廃止（per-host の接続先設定で管理。K1=8080/Moonrakerは機器申告）。 -->
         </div>
       </div>
 

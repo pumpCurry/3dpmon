@@ -2020,6 +2020,9 @@ export function updatePrinterListUI() {
         const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
+        // ★ ④: 機器報告ホスト名（内部管理キー）＋機種設定を変更不可で明示する。
+        const hnText = tgt.hostname ? tgt.hostname : "(未取得)";
+        const ptText = tgt.printerType === "moonraker" ? "Moonraker (Fluidd/Klipper)" : "Creality K1系";
 
         const dlgPromise = showConfirmDialog({
           level: "info",
@@ -2032,6 +2035,13 @@ export function updatePrinterListUI() {
               <input type="number" id="edit-cam-port" value="${currentCam}" min="1" max="65535">
               <label>HTTPポート:</label>
               <input type="number" id="edit-http-port" value="${currentHttp}" min="1" max="65535">
+              <label>機器ホスト名:</label>
+              <input type="text" value="${_escAttr(hnText)}" disabled title="機器報告値（内部管理キー）">
+              <label>機種設定:</label>
+              <input type="text" value="${_escAttr(ptText)}" disabled>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.45;">
+              機器ホスト名は<strong>機器から報告された名前で内部管理</strong>されます。機器側で名称を変更すると<strong>別機器として扱われ</strong>、履歴・設定が分かれます。
             </div>`,
           confirmText: "保存",
           cancelText: "キャンセル"

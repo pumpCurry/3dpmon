@@ -507,6 +507,16 @@ function initTempGraphPanel(body, hostname) {
     });
   }
 
+  // ★ M: 現在の絞り込み範囲インジケータ（ロックボタンの右に表示）
+  const rangeInd = body.querySelector(".temp-graph-toolbar")
+    ? document.createElement("span") : null;
+  if (rangeInd) {
+    rangeInd.className = "temp-graph-range-ind";
+    const setInd = (min) => { rangeInd.textContent = `範囲: 最新${min}分`; };
+    setInd(Math.min(15, Math.round((monitorData.appSettings.chartWindowMin ?? 15))));
+    body._tempGraphSetRangeInd = setInd;
+  }
+
   // ★ M: 表示範囲（最新から N 分）絞り込みドロップダウン。選択でズーム解除＋スライド表示。
   const rangeSel = body.querySelector("#temp-graph-range");
   if (rangeSel) {
@@ -514,6 +524,7 @@ function initTempGraphPanel(body, hostname) {
     rangeSel.addEventListener("change", () => {
       const eff = setChartViewMinutes(hostname, parseInt(rangeSel.value, 10));
       rangeSel.value = String(eff);
+      body._tempGraphSetRangeInd?.(eff);
     });
   }
 
@@ -524,13 +535,15 @@ function initTempGraphPanel(body, hostname) {
   lockBtn.title = "グラフのズーム・パン操作を有効/無効にする";
   lockBtn.addEventListener("click", () => {
     const nowLocked = toggleChartInteractionLock(hostname);
-    lockBtn.textContent = nowLocked ? "🔒 操作ロック中" : "🔓 操作可能";
+    // ★ ロック解除時はドラッグで「絞り込み(ズーム)」できる状態 → ラベルを「絞込み可能」に
+    lockBtn.textContent = nowLocked ? "🔒 操作ロック中" : "🔓 絞込み可能";
     lockBtn.classList.toggle("locked", nowLocked);
   });
   // 上部ツールバー（無ければリセットボタンの隣／canvas 前）へ配置
   const toolbar = body.querySelector(".temp-graph-toolbar");
   if (toolbar) {
     toolbar.appendChild(lockBtn);
+    if (rangeInd) toolbar.appendChild(rangeInd);
   } else if (resetBtn?.parentElement) {
     resetBtn.parentElement.appendChild(lockBtn);
   } else {

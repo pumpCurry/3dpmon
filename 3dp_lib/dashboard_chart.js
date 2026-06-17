@@ -165,9 +165,9 @@ function _buildOpts(cfg, w, h, locked, hs) {
     axes: [
       {
         stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },
-        // ★ M: 1分刻みを基準にした縦補助線（15分表示でも時刻が読み取れるように）。
-        //   ズーム時は uPlot が適切な刻みを選ぶよう候補を与える（1/2/5/10/15分）。
-        incrs: [60, 120, 300, 600, 900],
+        // ★ M: 縦補助線の刻み候補。15分表示では概ね1分、短い絞り込み時は秒単位まで uPlot が選ぶ。
+        //   秒を含めることで「1分表示で秒まで読める」要望に対応（uPlot は刻みが秒なら自動で秒表示）。
+        incrs: [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900],
       },
       {
         stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },
