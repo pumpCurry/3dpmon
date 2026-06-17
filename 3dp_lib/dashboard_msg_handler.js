@@ -483,8 +483,15 @@ export function processData(data, hostname) {
   //   ここでは tsCompletion の復元のみ行い、setInterval は起動しない。
   //   リマインダーも aggregator 側で処理。
   if (ms.tsCompletion === null) {
+    // ★ 通知ストーム修正: ここは「リロード後の完了経過タイマー復元」用に
+    //   prevPrintStartTime を**初期シード**する箇所。tsCompletion===null は印刷中も
+    //   真のため毎メッセージ走る。無条件に上書きすると、aggregator が書き込む
+    //   storedData.prevPrintID が（Moonraker では latched currStartTime と一致しない
+    //   ことがあり）末尾(L1010)で維持している prevPrintStartTime を毎回壊し、
+    //   (2.3.1) の `currStartTime !== prevPrintStartTime` が毎push真→「印刷開始」
+    //   通知を約4Hzで連発する。未初期化(null)のときだけシードし、以降は L1010 が維持する。
     const storedPrev = Number(machine.storedData.prevPrintID?.rawValue ?? NaN);
-    if (!isNaN(storedPrev)) {
+    if (!isNaN(storedPrev) && ms.prevPrintStartTime === null) {
       ms.prevPrintStartTime = storedPrev;
     }
     // historyData は揮発性のため、永続化された printStore.history も検索する
