@@ -1545,6 +1545,12 @@ function _sendMoonrakerCommand(method, params, host) {
     return Promise.resolve(null);
   }
   pushLog(`送信(Moonraker): ${steps.map(s => s.gcode || s.rpc).join(" / ")}`, "send", false, host);
+  // ★ gcode コンソールへ送信エコー（端末風に「送った」ことを可視化＝動作確認しやすく）。
+  //   Klipper は応答系(温度自動報告/echo/M117/エラー)しか notify_gcode_response を吐かず
+  //   クリーン印刷中はコンソールが空に見えるため、送信側を ▷ で明示する。
+  for (const s of steps) {
+    pushGcodeConsole(host, "▷ " + (s.gcode || (s.rpc + (s.params && Object.keys(s.params).length ? " " + JSON.stringify(s.params) : ""))));
+  }
   return Promise.all(steps.map(s => s.gcode
     ? session.request("printer.gcode.script", { script: s.gcode })
     : session.request(s.rpc, s.params || {})
