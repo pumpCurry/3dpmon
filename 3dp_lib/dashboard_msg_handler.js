@@ -895,10 +895,17 @@ export function processData(data, hostname) {
         ?? normalizeJobId(printManager.loadCurrent(host)?.id)
         ?? normalizeJobId(getCurrentPrintID(host)))
     : null;
-  if (Number(data.printProgress ?? 0) >= 100 && _completedJobId == null) {
-    console.debug(`[processData] ${host}: printProgress>=100 だが有効なジョブIDが無いため履歴登録をスキップ（電源投入直後の stale push と判断）`);
+  // ★ 再起動直後ゴースト(「(不明)/→0秒」)対策:
+  //   printStartTime が無効でも保存済み現在IDへフォールバックすると、開始時刻 0・ファイル名空の
+  //   完了エントリが生成されることがある（機器/アプリ再起動直後に前回印刷の stale push が届く）。
+  //   有効な開始時刻もファイル名も無い完了は登録しない（完了履歴は機器 historyList が信頼ソース）。
+  const _startValid = normalizeJobId(data.printStartTime) != null;
+  const _fnameValid = !!(data.printFileName || data.fileName);
+  const _staleGhost = _completedJobId != null && !_startValid && !_fnameValid;
+  if (Number(data.printProgress ?? 0) >= 100 && (_completedJobId == null || _staleGhost)) {
+    console.debug(`[processData] ${host}: printProgress>=100 だが ${_completedJobId == null ? "有効なジョブID無し" : "開始時刻/ファイル名が無い stale push"} のため履歴登録をスキップ`);
   }
-  if (_completedJobId != null) {
+  if (_completedJobId != null && !_staleGhost) {
     const entry = { ...data };
     entry.id = _completedJobId;
     const extraKeys = [
