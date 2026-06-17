@@ -967,8 +967,13 @@ export function processData(data, hostname) {
         if (data[k] != null) entry[k] = data[k];
       });
     }
-    // 同一ジョブIDの重複登録を防止する
-    if (!machine.historyData.find(h => h.id === entry.id)) {
+    // ★【重篤・2fps停止/CPU暴走の真因】同一ジョブIDの重複登録を防止する。
+    //   旧実装は machine.historyData(揮発バッファ)のみを確認していたが、updateHistoryList は
+    //   マージ後に該当エントリをバッファから除去する。Moonraker は印刷完了後も state="complete"・
+    //   progress=100 を報告し続けるため、毎push(約4Hz)で「バッファに無い→再登録→updateHistoryList→
+    //   saveHistory→バッファから除去」を無限ループし、親CPUを飽和させ 2fps を停止させていた。
+    //   → 永続ストア(printStore.history=savedJob)に既にあれば再登録しない（ループを断つ）。
+    if (!savedJob && !machine.historyData.find(h => h.id === entry.id)) {
       machine.historyData.push(entry);
       _capHistoryData(machine); // ★ 無制限肥大→保存肥大→ハング を防止
       const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;

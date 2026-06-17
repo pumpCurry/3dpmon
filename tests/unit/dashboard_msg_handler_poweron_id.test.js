@@ -211,4 +211,21 @@ describe("processData 電源投入直後 behavioral (ID:0/null)", () => {
     expect(monitorData.machines[H].historyData.find(h => Number(h.id) === STALE_ID)).toBeUndefined();
     expect(monitorData.machines[H].historyData.filter(h => !(Number(h.id) > 0))).toEqual([]);
   });
+
+  it("(F) 既に保存済みの完了ジョブを連続報告(Moonraker state=complete)しても再登録ループしない", () => {
+    const H = "K1Max-PWR-F";
+    ensureMachineData(H);
+    const REAL_ID = 1781659601;
+    // 既に printStore.history に保存済み（前回登録 or 機器履歴由来）
+    printManager.loadHistory.mockReturnValue([{ id: REAL_ID, filename: "Piggy.gcode", filamentInfo: [] }]);
+
+    // 完了後も state=complete・progress=100 を報告し続ける状況を5回再現
+    for (let i = 0; i < 5; i++) {
+      processData(makeK1Status(H, {
+        state: 2, printProgress: 100, printStartTime: REAL_ID, printFileName: "/x/Piggy.gcode",
+      }), H);
+    }
+    // savedJob があるため再登録されない（毎push の updateHistoryList/saveHistory ループを断つ）
+    expect(monitorData.machines[H].historyData.filter(h => Number(h.id) === REAL_ID)).toEqual([]);
+  });
 });
