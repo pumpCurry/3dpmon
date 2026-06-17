@@ -1151,8 +1151,11 @@ function handleSocketMessage(event, host) {
 // --- 3) ログ出力 (受信した JSON 生データ) — ★ 既定で抑制 (fix/bg-cpu) ---
   //   生パケットを毎メッセージ "normal" で記録すると、(行数)×(ログパネル数) の同期DOM処理が
   //   最小化中も throttle されずに走り CPU を浪費し、意味あるログを埋もれさせる。
-  //   logLevel="debug" 時のみ生ダンプを出力（エラー/状態変化等の意味あるログは別 pushLog で従来どおり記録）。
-  if (monitorData.appSettings.logLevel === "debug") {
+  //   logLevel="debug" 時、または「受信生ログ表示(K1系のみ)」トグルON時に生ダンプを出力。
+  //   Moonraker は handleSocketMessage に渡るのが翻訳済みK1形のため対象外（生プロトコルは Gcode タブ）。
+  if (monitorData.appSettings.logLevel === "debug"
+      || (monitorData.appSettings.logReceivedRaw === true
+          && getPrinterType(hostKey) === "creality-k1")) {
     pushLog("受信: " + event.data, "normal", false, hostKey);
   }
 

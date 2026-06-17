@@ -131,12 +131,22 @@ export function initStorageUI() {
   // ※ これまで setting-log-max-lines は未配線（飾りだけ）だった。両者を即時保存で配線する。
   const elLogMax = document.getElementById("setting-log-max-lines");
   const elChartWin = document.getElementById("setting-chart-window-min");
+  const elLogRaw = document.getElementById("setting-log-received-raw");
 
   /** 入力値を保存値で初期化する（モーダル展開時に呼ぶ） */
   const _syncRetentionInputs = () => {
     if (elLogMax) elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
     if (elChartWin) elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
+    if (elLogRaw) elLogRaw.checked = monitorData.appSettings.logReceivedRaw === true;
   };
+
+  if (elLogRaw) {
+    elLogRaw.addEventListener("change", () => {
+      monitorData.appSettings.logReceivedRaw = elLogRaw.checked === true;
+      saveUnifiedStorage(true);
+      panelToast(`受信生ログ: ${elLogRaw.checked ? "ON（K1系）" : "OFF"}`);
+    });
+  }
 
   if (elLogMax) {
     elLogMax.addEventListener("change", () => {

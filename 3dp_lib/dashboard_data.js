@@ -202,6 +202,8 @@ export const monitorData = {
     logMaxLines: 1000,
     chartWindowMin: 15,   // 温度グラフの保持/表示時間枠（分）。古い点は破棄しメモリ無制限化を防ぐ
     logLevel: "info",
+    logReceivedRaw: false, // 受信生ログをログパネルに流す（K1系のみ）。既定OFF=CPU/ログ汚染防止
+
     autoConnect: true,
     // ★ wsDest は v2.2.0 で完全削除済み。connectionTargets が唯一の接続先リスト。
     connectionTargets: [],  // 複数接続先リスト [{dest, color?, label?}]
