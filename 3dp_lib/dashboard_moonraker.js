@@ -641,6 +641,15 @@ export function translateK1CommandToMoonraker(method, params = {}) {
         : [];
 
     case "set": {
+      // 履歴/ファイル一覧からの印刷実行（K1 は set{opGcodeFile:"printprt:NAME"} を送る）。
+      //   Moonraker は printer.print.start{filename} へ。Fluidd の /#/jobs と同等。
+      if ("opGcodeFile" in p && p.opGcodeFile) {
+        const fn = String(p.opGcodeFile)
+          .replace(/^printprt:/, "")
+          .replace(/^gcodes\//, "")
+          .trim();
+        return fn ? [{ rpc: "printer.print.start", params: { filename: fn } }] : [];
+      }
       if ("stop" in p) return [{ rpc: "printer.print.cancel", params: {} }];
       if ("pause" in p) {
         return p.pause

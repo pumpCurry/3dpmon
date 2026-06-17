@@ -125,6 +125,27 @@ function _getHostState(hostname) {
  * @param {boolean} locked ドラッグズーム無効
  * @returns {Object} uPlot opts
  */
+/** 2桁ゼロ埋め */
+function _pad2(n) { return n < 10 ? "0" + n : "" + n; }
+/**
+ * UNIX秒 → "YYYY/MM/DD HH:mm:ss"（24h）。カーソル凡例の Time 欄用。
+ * ★ メモ（後日対応）: 時刻表示はアプリ全体で 12h(午前午後) / 12h(AM/PM) / 24h を
+ *   切り替え可能にする想定。現状は YYYY/MM/DD・24時間・秒まで に統一する。
+ *   切替実装時は appSettings.timeFormat 等を見て本関数群と各表示箇所を分岐させる。
+ * @param {number} tsSec
+ * @returns {string}
+ */
+function _fmtFull(tsSec) {
+  const d = new Date(tsSec * 1000);
+  return `${d.getFullYear()}/${_pad2(d.getMonth() + 1)}/${_pad2(d.getDate())} `
+    + `${_pad2(d.getHours())}:${_pad2(d.getMinutes())}:${_pad2(d.getSeconds())}`;
+}
+/** UNIX秒 → "HH:mm:ss"（24h）。x 軸ティック用（秒まで表示）。 */
+function _fmtClock(tsSec) {
+  const d = new Date(tsSec * 1000);
+  return `${_pad2(d.getHours())}:${_pad2(d.getMinutes())}:${_pad2(d.getSeconds())}`;
+}
+
 function _buildOpts(cfg, w, h, locked, hs) {
   const axisStroke = "#888";
   const gridStroke = "rgba(128,128,128,0.18)";
@@ -155,7 +176,8 @@ function _buildOpts(cfg, w, h, locked, hs) {
       ],
     },
     series: [
-      {},
+      // x 系列: カーソル凡例の「Time:」欄を YYYY/MM/DD HH:mm:ss(24h・秒まで)で表示
+      { value: (_u, ts) => (ts == null ? "--" : _fmtFull(ts)) },
       ...SERIES_DEFS.map(s => ({
         label: s.label, stroke: s.stroke, width: s.width,
         dash: s.dash, points: { show: false },
@@ -166,8 +188,9 @@ function _buildOpts(cfg, w, h, locked, hs) {
       {
         stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },
         // ★ M: 縦補助線の刻み候補。15分表示では概ね1分、短い絞り込み時は秒単位まで uPlot が選ぶ。
-        //   秒を含めることで「1分表示で秒まで読める」要望に対応（uPlot は刻みが秒なら自動で秒表示）。
         incrs: [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900],
+        // ★ 時刻ティックは 24h HH:mm:ss（ロケール依存の 12h/AMPM を使わない）。
+        values: (_u, splits) => splits.map(_fmtClock),
       },
       {
         stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: tickStroke },

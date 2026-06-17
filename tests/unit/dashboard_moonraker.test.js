@@ -707,6 +707,13 @@ describe('translateK1CommandToMoonraker', () => {
     expect(translateK1CommandToMoonraker('print', { file: 'a.gcode' }))
       .toEqual([{ rpc: 'printer.print.start', params: { filename: 'a.gcode' } }]);
   });
+  it('履歴/ファイルからの印刷: set{opGcodeFile:"printprt:NAME"} → printer.print.start', () => {
+    expect(translateK1CommandToMoonraker('set', { opGcodeFile: 'printprt:Piggy-PLA-3.gcode' }))
+      .toEqual([{ rpc: 'printer.print.start', params: { filename: 'Piggy-PLA-3.gcode' } }]);
+    // gcodes/ 前置も剥がす
+    expect(translateK1CommandToMoonraker('set', { opGcodeFile: 'gcodes/sub/x.gcode' }))
+      .toEqual([{ rpc: 'printer.print.start', params: { filename: 'sub/x.gcode' } }]);
+  });
   it('runGcode{cmd} → そのまま', () => {
     expect(translateK1CommandToMoonraker('runGcode', { cmd: 'G1 X10' }))
       .toEqual([{ gcode: 'G1 X10' }]);
