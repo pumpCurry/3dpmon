@@ -596,11 +596,15 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
-  // raw.usagetime が 0 でも 1 を返す場合があるため、機器の報告値を優先
+  // printfinish: 機器の明示値を最優先。未設定のときは「終了済み(endtime あり)」の
+  //   ジョブに限り使用時間から成否を推測し、終了時刻が無い=印刷中/未確定は null のまま
+  //   残す。★ 旧実装は printfinish 未設定を無条件に usagetime>0?1:0 で確定していたため、
+  //   印刷中ジョブを再起動時に「IR3v2=usagetime>0→成功(✔) / K1=usagetime0→失敗(✗)」と
+  //   誤確定＝誤計上していた。完了が確認できるまで成否を確定しない（null=印刷中/未確定）。
+  const _hasFinishSignal = (raw.endtime != null && Number(raw.endtime) > 0);
   const printfinish    = raw.printfinish != null
     ? Number(raw.printfinish)
-    // 値が存在しない場合のみ使用時間から推測
-    : (useTimeSec > 0 ? 1 : 0);
+    : (_hasFinishSignal ? (useTimeSec > 0 ? 1 : 0) : null);
   // 材料使用量: 機器報告値をそのまま保持（丸めない）
   const materialUsedMm = Number(raw.usagematerial || 0);
 
@@ -796,8 +800,11 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
-        // ★ printfinish: 明示値優先。未設定で finishTime なし = 印刷中（null = 未確定）
-        printfinish:   job.printfinish ?? (finishEpoch ? 1 : null),
+        // ★ printfinish: 機器の明示値(1/0)をそのまま渡す。null=印刷中/未確定 は null のまま。
+        //   旧実装は finishEpoch(=finishTime, 印刷中ジョブでも usagetime から派生して付く)が
+        //   あれば 1 に昇格させていたため、印刷中ジョブを再起動時に「成功(✔)」と誤確定して
+        //   いた。完了が確認できるまで成否を確定しない（誤計上防止）。
+        printfinish:   job.printfinish ?? null,
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
@@ -1410,7 +1417,14 @@ export function resolveHistoryFinishStatus({ isCurrentJob, isPaused, printfinish
   if (printfinish === 1) {
     return { finish: "✔", finishCls: "result-ok" };
   }
-  // 非カレント かつ 成功でない → 失敗/中断として ✗
+  // ★ printfinish == null/undefined = 印刷中/未確定（再起動直後など、機器が完了を
+  //   まだ報告していない）。完了が確認できるまで成否を確定しない＝✗にしない（誤計上防止）。
+  //   currentPrintID と一致すれば上の isCurrentJob 分岐で ▶ になる。一致しない過渡状態は
+  //   中立の「…」で表示し、stats でも除外される（printfinish==null は集計対象外）。
+  if (printfinish == null) {
+    return { finish: "…", finishCls: "result-pending" };
+  }
+  // 明示値で成功(1)でない（0 / -1 等）＝失敗/中断 → ✗
   return { finish: "✗", finishCls: "result-ng" };
 }
 

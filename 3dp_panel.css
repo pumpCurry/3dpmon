@@ -1852,6 +1852,8 @@ body.panel-mode .notification-container {
 .col-result .result-ok, .col-finish .result-ok { color: var(--color-success); font-weight: bold; }
 .col-result .result-ng, .col-finish .result-ng { color: var(--color-danger); }
 .col-finish .result-active { color: var(--color-info); font-weight: bold; }
+/* 印刷中/未確定（完了未報告・再起動直後の過渡状態）: 成否を確定せず中立のグレー表示 */
+.col-result .result-pending, .col-finish .result-pending { color: var(--color-text-secondary, #94a3b8); }
 /* 印刷中の行を薄い黄色で強調 */
 .history-row-printing { background: rgba(250, 204, 21, 0.08) !important; }
 
