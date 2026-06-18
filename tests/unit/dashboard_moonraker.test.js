@@ -193,8 +193,10 @@ describe('translateMoonrakerStatus(印刷中)', () => {
     expect(out.printLeftTime).toBeGreaterThan(1300);
     expect(out.printLeftTime).toBeLessThan(1500);
   });
-  it('printStartTime = now - 経過(安定ジョブID)', () => {
-    expect(out.printStartTime).toBe(Math.floor(NOW_MS / 1000) - 1470);
+  it('printStartTime = now - total_duration(加熱含む総経過＝実開始時刻に一致)', () => {
+    // ★ print_duration(加熱除外)でなく total_duration(1533.88→1534)で逆算する。
+    //   加熱ぶん後ろにズレて履歴の実 start_time と食い違い ▶→「…」になる不具合の対策。
+    expect(out.printStartTime).toBe(Math.floor(NOW_MS / 1000) - 1534);
   });
   it('ファン速度を ON/OFF と % に', () => {
     expect(out.fan).toBe(1);
@@ -240,7 +242,8 @@ describe('ジョブID(printStartTime)安定性', () => {
   it('ファイル名が変わると新しいジョブIDを確定する', () => {
     const ctx = mkCtx();
     const a = translateMoonrakerStatus(FIXTURE_PRINTING, ctx, NOW_MS);
-    const other = { ...FIXTURE_PRINTING, print_stats: { ...FIXTURE_PRINTING.print_stats, filename: 'Cube-PLA.gcode', print_duration: 10 } };
+    // 新ファイルが開始直後（total_duration も print_duration も ~10秒）
+    const other = { ...FIXTURE_PRINTING, print_stats: { ...FIXTURE_PRINTING.print_stats, filename: 'Cube-PLA.gcode', print_duration: 10, total_duration: 10 } };
     const b = translateMoonrakerStatus(other, ctx, NOW_MS + 60_000);
     expect(b.printStartTime).not.toBe(a.printStartTime);
     expect(b.printStartTime).toBe(Math.floor((NOW_MS + 60_000) / 1000) - 10);

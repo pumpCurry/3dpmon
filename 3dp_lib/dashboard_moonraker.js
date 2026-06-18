@@ -259,6 +259,10 @@ export function translateMoonrakerStatus(status, ctx, nowMs) {
 
   // --- 経過時間(秒) ---------------------------------------------------------
   const printDuration = Number(ps.print_duration || 0);
+  // total_duration は加熱・一時停止を含む「開始からの総経過」。開始時刻の逆算には
+  // こちらを使う（print_duration は加熱/停止を除くため、逆算すると実開始より後ろへ
+  // 数十秒〜数分ズレ、履歴の実 start_time と食い違って ▶→「…」になる）。
+  const totalDuration = Number(ps.total_duration || ps.print_duration || 0);
 
   // --- ジョブID(printStartTime, epoch秒) -----------------------------------
   // 印刷/一時停止中はジョブが進行中。ファイル名が変わるか未確定なら確定し直す。
@@ -267,8 +271,9 @@ export function translateMoonrakerStatus(status, ctx, nowMs) {
   if (!ctx.job) ctx.job = { startEpoch: null, filename: null };
   if (printState === "printing" || printState === "paused") {
     if (!ctx.job.startEpoch || ctx.job.filename !== filename) {
-      // now - 経過 で開始時刻を逆算(安定したジョブIDとして利用)
-      ctx.job.startEpoch = Math.max(1, nowSec - Math.round(printDuration));
+      // ★ now - total_duration で開始時刻を逆算（履歴未取得時のブートストラップ）。
+      //   接続時は fetchHistory が実 start_time を先に確定するためここは通常使われない。
+      ctx.job.startEpoch = Math.max(1, nowSec - Math.round(totalDuration));
       ctx.job.filename   = filename;
     }
   }
@@ -931,11 +936,16 @@ export function createMoonrakerSession(opts) {
         // 初期スナップショット
         mergeMoonrakerStatus(accStatus, result.status);
         maybeFetchMeta();
-        emit();
-        // 状態購読が確立(=ホスト確定・パネル生成済み)した後に履歴/ファイル/カメラを取得
-        fetchHistory();
-        fetchFiles();
-        fetchWebcams();
+        // ★ 印刷中ジョブID(=開始時刻)の再採番防止:
+        //   先に履歴を取得して進行中ジョブの「実 start_time」を ctx.job.startEpoch へ確定
+        //   してから初回 emit する。これをやらないと、初回 emit が逆算ID(now-duration)で
+        //   現在ジョブ行を作り、直後の履歴取得で実IDへ貼り替わって ▶→「…」になる
+        //   （印刷中に 3dpmon を再起動した時の不具合）。
+        fetchHistory().finally(() => {
+          emit();
+          fetchFiles();
+          fetchWebcams();
+        });
       } else if (tag === "meta" && result) {
         // gcode メタ(残時間/レイヤー算出用)を ctx へ格納
         ctx.meta = {
