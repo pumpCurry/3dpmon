@@ -1045,7 +1045,12 @@ export function processData(data, hostname) {
 
   // runtimeData.state は ingestData 後に更新することで
   // aggregator 側が前回状態を正しく参照できるようにする
-  machine.runtimeData.state = String(st);
+  // ★ state 欠落メッセージ(data.state 無し)では st=NaN。runtimeData.state を "NaN" で
+  //   上書きすると印刷中でも ▶ にならない/前回状態参照が壊れるため、NaN のときは
+  //   直近の有効値を維持する（K1 は状態を含まない部分更新メッセージを送ることがある）。
+  if (!Number.isNaN(st)) {
+    machine.runtimeData.state = String(st);
+  }
 }
 
 /**

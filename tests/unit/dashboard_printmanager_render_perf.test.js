@@ -84,8 +84,9 @@ vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({ getCurrentPrintID: vi.
 
 const { renderHistoryTable, renderFileList } =
   await import("../../3dp_lib/dashboard_printmanager.js");
-const { scopedById } = await import("../../3dp_lib/dashboard_data.js");
+const { scopedById, monitorData } = await import("../../3dp_lib/dashboard_data.js");
 const spoolMod = await import("../../3dp_lib/dashboard_spool.js");
+const aggMod = await import("../../3dp_lib/dashboard_aggregator.js");
 
 /** スコープ付きテーブル（thead+tbody+親）を生成して scopedById に登録する */
 function makeTable(tableId) {
@@ -181,6 +182,30 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     renderHistoryTable(makeHistoryRows(3), "http://127.0.0.1", HOST);
     const drill = table.parentElement.querySelector(".job-drilldown");
     expect(drill).toBeTruthy();
+  });
+
+  it("(D) 印刷中(storedData.state=printStarted)の現在ジョブは ▶(result-active)になる（runtimeData.state が NaN でも）", () => {
+    const CURID = 1781739950;
+    // ★ K1 は state 欠落メッセージで runtimeData.state が "NaN" に化けるが、
+    //   storedData.state(機器報告の生値)で判定して印刷中ジョブを ▶ にする回帰防止。
+    monitorData.machines[HOST] = {
+      storedData: { state: { rawValue: 1 /* printStarted */ } },
+      runtimeData: { state: "NaN" },
+    };
+    aggMod.getCurrentPrintID.mockReturnValue(CURID);
+
+    renderHistoryTable(
+      [{ id: CURID, filename: "/x/cur.gcode", starttime: CURID, usagetime: 0, printfinish: 0 }],
+      "http://127.0.0.1", HOST
+    );
+
+    const row = table.querySelector("tbody tr.history-row");
+    const finishSpan = row?.querySelector(".col-finish span");
+    expect(finishSpan?.className, "現在の印刷ジョブは ▶(result-active)").toBe("result-active");
+    expect(finishSpan?.textContent).toBe("▶");
+    expect(row?.classList.contains("history-row-printing"), "印刷中行ハイライト").toBe(true);
+    aggMod.getCurrentPrintID.mockReturnValue(0);
+    delete monitorData.machines[HOST];
   });
 });
 

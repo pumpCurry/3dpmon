@@ -1539,6 +1539,23 @@ function _sendMoonrakerCommand(method, params, host) {
     showAlert(`[${host}] Moonraker に接続されていません`, "error", false, host);
     return Promise.reject(new Error("Moonraker session not connected"));
   }
+
+  // ★ K1 の 履歴/ファイル一覧 再取得(🔄) を Moonraker の fetchHistory/fetchFiles へ橋渡し。
+  //   旧実装は get{reqHistory:1}/{reqGcodeFile:1} を「未対応」で no-op にしており、
+  //   Moonraker 機で 🔄 を押しても履歴/ファイルが更新されなかった。
+  if (method === "get" && params && (params.reqHistory || params.reqGcodeFile)) {
+    const tasks = [];
+    if (params.reqHistory && typeof session.refreshHistory === "function") {
+      pushLog("送信(Moonraker): 印刷履歴を再取得", "send", false, host);
+      tasks.push(Promise.resolve(session.refreshHistory()).catch(() => {}));
+    }
+    if (params.reqGcodeFile && typeof session.refreshFiles === "function") {
+      pushLog("送信(Moonraker): ファイル一覧を再取得", "send", false, host);
+      tasks.push(Promise.resolve(session.refreshFiles()).catch(() => {}));
+    }
+    return Promise.all(tasks).then(() => null);
+  }
+
   const steps = translateK1CommandToMoonraker(method, params);
   if (!steps || steps.length === 0) {
     pushLog(`Moonraker機では未対応の操作のため無視しました: ${method} ${JSON.stringify(params)}`, "warn", false, host);

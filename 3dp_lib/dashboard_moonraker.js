@@ -1073,5 +1073,9 @@ export function createMoonrakerSession(opts) {
      * @returns {Promise<*>} result
      */
     request: (method, params = {}) => rpc(method, params),
+    /** 印刷履歴を再取得して onAux 通知する（K1 の reqHistory 相当の🔄用）。 */
+    refreshHistory: () => fetchHistory(),
+    /** gcode ファイル一覧を再取得して onAux 通知する（K1 の reqGcodeFile 相当の🔄用）。 */
+    refreshFiles: () => fetchFiles(),
   };
 }
