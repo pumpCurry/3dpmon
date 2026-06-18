@@ -596,15 +596,15 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
-  // printfinish: 機器の明示値を最優先。未設定のときは「終了済み(endtime あり)」の
-  //   ジョブに限り使用時間から成否を推測し、終了時刻が無い=印刷中/未確定は null のまま
-  //   残す。★ 旧実装は printfinish 未設定を無条件に usagetime>0?1:0 で確定していたため、
-  //   印刷中ジョブを再起動時に「IR3v2=usagetime>0→成功(✔) / K1=usagetime0→失敗(✗)」と
-  //   誤確定＝誤計上していた。完了が確認できるまで成否を確定しない（null=印刷中/未確定）。
-  const _hasFinishSignal = (raw.endtime != null && Number(raw.endtime) > 0);
-  const printfinish    = raw.printfinish != null
-    ? Number(raw.printfinish)
-    : (_hasFinishSignal ? (useTimeSec > 0 ? 1 : 0) : null);
+  // printfinish: 完了シグナル(実印刷時間 usagetime>0 または 終了時刻 endtime>0)が有る
+  //   ジョブのみ成否を確定する。どちらも無い＝印刷中/未完了は null（未確定）にし、
+  //   機器の「早すぎる result」も無視する。★ K1 は履歴再取得で印刷中エントリに
+  //   printfinish=0 を付けて寄越すため、明示値があっても完了シグナルが無ければ信頼しない
+  //   （印刷中ジョブを再起動時に失敗(✗)/成功(✔)へ誤確定＝誤計上していた根本対策）。
+  const _finished = (useTimeSec > 0) || (raw.endtime != null && Number(raw.endtime) > 0);
+  const printfinish    = _finished
+    ? (raw.printfinish != null ? Number(raw.printfinish) : (useTimeSec > 0 ? 1 : 0))
+    : null;
   // 材料使用量: 機器報告値をそのまま保持（丸めない）
   const materialUsedMm = Number(raw.usagematerial || 0);
 
@@ -1296,6 +1296,21 @@ export function updateHistoryList(
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_PRINT_HISTORY);
+
+  // ★ 印刷中の現在ジョブは「未完了」＝ printfinish を確定しない（誤計上防止）。
+  //   K1 は履歴再取得時に印刷中エントリへ printfinish=0(早すぎる失敗) を付けて寄越すため、
+  //   現在の印刷ID(getCurrentPrintID)かつ機器が稼働中(printing/paused)のエントリは
+  //   成否(0/1)が入っていても null へ強制し、完了報告後に初めて確定させる。
+  //   （これは既存の誤確定済みエントリも次回マージで自己修復する）
+  try {
+    const _curId = getCurrentPrintID(host);
+    const _st = Number(machine?.runtimeData?.state ?? -1);
+    const _active = (_st === PRINT_STATE_CODE.printStarted || _st === PRINT_STATE_CODE.printPaused);
+    if (_curId && _active) {
+      const ce = jobs.find(j => String(j.id) === String(_curId));
+      if (ce && ce.printfinish != null) ce.printfinish = null;
+    }
+  } catch { /* noop */ }
 
   const videoMap = loadVideos(host);
   jobs.forEach(j => {
