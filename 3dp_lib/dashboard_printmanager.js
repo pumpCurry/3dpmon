@@ -969,7 +969,14 @@ export function renderPrintCurrent(containerEl, hostname) {
 
   /* 印刷中であれば storedData からリアルタイム使用量を取得 */
   const machine = monitorData.machines[hostname];
-  const printState = Number(machine?.runtimeData?.state ?? -1);
+  // ★ 状態は storedData.state(機器報告の生値・再起動後も保持)を最優先。
+  //   runtimeData.state は data.state 欠落メッセージで "NaN" に化け、印刷中でも
+  //   ▶(進行中)にならない不具合があったため、信頼できる storedData.state を一次ソースにする。
+  const printState = Number(
+    machine?.storedData?.state?.rawValue
+    ?? machine?.runtimeData?.state
+    ?? -1
+  );
   if (
     (printState === PRINT_STATE_CODE.printStarted ||
      printState === PRINT_STATE_CODE.printPaused) &&
@@ -1463,7 +1470,14 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
   /* 現在印刷中のジョブ判定用 */
   const curPrintId = getCurrentPrintID(hostname);
   const machine    = monitorData.machines[hostname];
-  const printState = Number(machine?.runtimeData?.state ?? -1);
+  // ★ 状態は storedData.state(機器報告の生値・再起動後も保持)を最優先。
+  //   runtimeData.state は data.state 欠落メッセージで "NaN" に化け、印刷中でも
+  //   ▶(進行中)にならない不具合があったため、信頼できる storedData.state を一次ソースにする。
+  const printState = Number(
+    machine?.storedData?.state?.rawValue
+    ?? machine?.runtimeData?.state
+    ?? -1
+  );
   const isActive   = (st) =>
     st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused;
 
