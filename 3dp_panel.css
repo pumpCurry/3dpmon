@@ -1852,6 +1852,8 @@ body.panel-mode .notification-container {
 .col-result .result-ok, .col-finish .result-ok { color: var(--color-success); font-weight: bold; }
 .col-result .result-ng, .col-finish .result-ng { color: var(--color-danger); }
 .col-finish .result-active { color: var(--color-info); font-weight: bold; }
+/* 印刷中/未確定（完了未報告・再起動直後の過渡状態）: 成否を確定せず中立のグレー表示 */
+.col-result .result-pending, .col-finish .result-pending { color: var(--color-text-secondary, #94a3b8); }
 /* 印刷中の行を薄い黄色で強調 */
 .history-row-printing { background: rgba(250, 204, 21, 0.08) !important; }
 
@@ -3484,7 +3486,8 @@ body.panel-mode .notification-container {
   border-radius: var(--radius-sm, 4px);
   background: var(--color-bg-secondary, #f8fafc);
   cursor: pointer;
-  margin-left: var(--space-2, 8px);
+  white-space: nowrap;
+  /* 間隔は親(.temp-graph-footer)の gap で確保するため margin-left は撤去（重なり防止） */
 }
 .chart-interaction-lock.locked {
   background: var(--color-warning-bg, #fef3c7);
@@ -3692,3 +3695,160 @@ body.relay-readonly textarea {
   background: var(--color-accent, #0ea5e9); transition: height 0.3s;
 }
 .trend-label { font-size: 0.6em; color: var(--color-text-muted, #64748b); margin-top: 1px; }
+
+/* ===========================================================================
+ * 接続設定モーダル 整理 (v2.2.1027)
+ *  - 設定ショートカット行 / 表示オプション行 / 機器一覧ヘッダ / 新規追加フォーム
+ *  - webhook トグルを枠付きボタン化 (✅📡)
+ * ======================================================================== */
+.conn-action-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.conn-action-btn {
+  font-size: var(--font-xs);
+  padding: 4px 12px;
+  cursor: pointer;
+  background: var(--color-accent-light);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+}
+.conn-action-btn-accent {
+  background: var(--color-success-bg, var(--color-accent-light));
+  border-color: var(--color-success-border, var(--color-border));
+}
+.conn-opt-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: var(--font-xs);
+}
+.conn-opt-label {
+  white-space: nowrap;
+  cursor: pointer;
+}
+.conn-opt-num {
+  width: 5em;
+  font-size: var(--font-xs);
+  padding: 4px;
+  border: 1px solid var(--color-border, #ccc);
+  border-radius: 3px;
+}
+/* 機器一覧ヘッダ（タイトル＋新規追加トグル） */
+.conn-devices-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 4px 2px 2px;
+  border-bottom: 1px solid var(--color-border);
+}
+.conn-devices-title {
+  font-size: var(--font-sm);
+  font-weight: bold;
+  color: var(--color-text);
+}
+.conn-add-toggle {
+  font-size: var(--font-xs);
+  padding: 3px 10px;
+  cursor: pointer;
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+}
+.conn-add-form {
+  margin-top: 6px;
+  padding: 6px;
+  background: var(--color-bg-subtle, rgba(0,0,0,0.03));
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+/* webhook トグルを枠付きボタン化（左右ボタンと同じ見た目で ✅📡 表示） */
+.conn-webhook-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-size: var(--font-xs);
+  line-height: 1;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  cursor: pointer;
+  background: var(--color-accent-light);
+  white-space: nowrap;
+}
+/* ネイティブチェックボックスは視覚的に隠す（アクセシビリティのため DOM には残す） */
+.conn-webhook-btn input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.conn-webhook-state::before { content: "⬜"; }
+.conn-webhook-btn input:checked ~ .conn-webhook-state::before { content: "✅"; }
+
+/* ===========================================================================
+ * 外部連携モーダル: 他端末ブラウザ接続 + 操作昇格PIN セクション (v2.2.1027)
+ * ======================================================================== */
+.external-relay-section {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--color-accent-light, rgba(14,165,233,0.08));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+.external-relay-title {
+  font-size: var(--font-sm);
+  font-weight: bold;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+.external-relay-desc {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  margin: 0 0 8px;
+}
+.external-relay-url-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.external-relay-url {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-xs);
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg, #fff);
+  color: var(--color-text);
+}
+.external-relay-note {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  word-break: break-all;
+}
+.external-relay-pin {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.external-relay-subtitle {
+  font-size: var(--font-xs);
+  font-weight: bold;
+  color: var(--color-text);
+  width: 100%;
+}

@@ -122,11 +122,46 @@ body {
 .temp-graph-area .u-wrap {
   width: 100%;
 }
-.temp-graph-footer {
+/* ★ M: 操作ツールバー（グラフ上部）。凡例とボタンの重なりを避け、操作を上に集約。 */
+.temp-graph-toolbar {
   flex-shrink: 0;
   display: flex;
-  justify-content: flex-end;
-  padding: 2px 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  position: relative;
+  z-index: 2;
+}
+.temp-graph-toolbar .temp-graph-range-label { font-size: var(--font-xs, 11px); display: inline-flex; align-items: center; gap: 3px; }
+.temp-graph-toolbar .temp-graph-range { font-size: var(--font-xs, 11px); padding: 1px 3px; }
+.temp-graph-toolbar .temp-graph-btn { flex: 0 0 auto; white-space: nowrap; font-size: 12px; }
+.temp-graph-toolbar .temp-graph-range-ind { font-size: var(--font-xs, 11px); color: var(--color-text-secondary, #64748b); white-space: nowrap; }
+/* 旧フッタ（互換のため残置。HTML 上は未使用） */
+.temp-graph-footer {
+  flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: flex-end; gap: 6px; padding: 4px; position: relative; z-index: 2;
+}
+.temp-graph-footer > button { flex: 0 0 auto; white-space: nowrap; }
+/* 凡例(uPlot live legend): 複数行でも値が切れず読めるように折り返す。
+   ★ スクロール(overflow-y:auto)は廃止 — 狭い領域でスピナー状の操作不能スクロールが
+   出る不具合（ポイントすると枠外へ出て消える）を回避。領域は JS の LEGEND_RESERVE_PX(=40px,
+   約2行ぶん)で確保し、折り返しで素直に下へ伸ばす。 */
+.temp-graph-area .u-legend {
+  font-size: var(--font-xs, 10px);
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;            /* 系列を折り返す（あふれを縦方向へ逃がす） */
+  gap: 1px 10px;
+  padding: 1px 2px;
+  overflow: visible;
+}
+/* 各系列はラベル＋値を1かたまりで折り返さない（値だけ見えない問題の解消） */
+.temp-graph-area .u-legend .u-series { white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
+.temp-graph-area .u-legend .u-value { min-width: 3.5em; text-align: right; }
+@media (max-width: 520px) {
+  .temp-graph-area .u-legend { font-size: 9px; }
+  .temp-graph-area .u-legend .u-value { min-width: 3em; }
 }
 
 /* 旧レイアウト互換: 非パネル時の最低高さ */

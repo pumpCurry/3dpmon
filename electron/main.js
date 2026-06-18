@@ -34,6 +34,26 @@ const { app, BrowserWindow, Menu, ipcMain, dialog, shell, powerSaveBlocker } = r
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
+const os = require("os");
+
+/**
+ * このマシンの LAN 向け IPv4 アドレス一覧を返す（内部/ループバックを除く）。
+ * 他端末からブラウザでリレーへ接続する際の URL 案内に用いる。
+ *
+ * @returns {string[]} IPv4 アドレス配列（取得不能時は空配列）
+ */
+function _getLanIps() {
+  const out = [];
+  try {
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+      for (const ni of ifaces[name] || []) {
+        if (ni && ni.family === "IPv4" && !ni.internal && ni.address) out.push(ni.address);
+      }
+    }
+  } catch { /* 取得失敗時は空配列 */ }
+  return out;
+}
 
 /**
  * アプリケーションバージョンを package.json から確実に取得する。
@@ -118,8 +138,12 @@ function _fetchCameraSnapshot(host, ep) {
 
   const p = new Promise((resolve, reject) => {
     const port = ep.port || 8080;
+    // ★ K: スナップショットのパスは機種で異なる。K1=":8080/?action=snapshot"、
+    //   Moonraker/Fluidd(IR3 v2 等)=":80/webcam/?action=snapshot"。endpoint が
+    //   snapshotPath を持てばそれを使う(レンダラーが webcams.list 由来で解決して渡す)。
+    const path = ep.snapshotPath || "/?action=snapshot";
     const req = http.get(
-      { host: ep.ip, port, path: "/?action=snapshot", timeout: _CAM_FETCH_TIMEOUT_MS },
+      { host: ep.ip, port, path, timeout: _CAM_FETCH_TIMEOUT_MS },
       (resp) => {
         if (resp.statusCode !== 200) {
           resp.resume(); // ソケット解放
@@ -656,6 +680,29 @@ function createWindow() {
     }
   });
 
+  /* ★ Moonraker(Klipper)機 WebSocket 接続の Origin 対策。
+     Moonraker は同一オリジン/cors_domains 以外からの WebSocket を CORS/CSRF で 403 拒否する。
+     親ウィンドウは file:// オリジンのため弾かれ、「K1(独自WSはOrigin無視)は繋がるのに
+     IR3 v2 等 Moonraker 機だけ繋がらない」原因になっていた（実測: Origin 付き WS=403 /
+     Origin 無し WS=101）。LAN 内プリンタへの WebSocket 要求から Origin ヘッダを除去して送る
+     （信頼済みクライアントIPなら Origin 無しで Moonraker が許可する）。K1 は Origin を見ないため無害。 */
+  try {
+    const ses = mainWindow.webContents.session;
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const url = details.url || "";
+      const isWs = details.resourceType === "webSocket"
+                || url.startsWith("ws://") || url.startsWith("wss://");
+      if (isWs && details.requestHeaders) {
+        for (const k of Object.keys(details.requestHeaders)) {
+          if (k.toLowerCase() === "origin") delete details.requestHeaders[k];
+        }
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    });
+  } catch (e) {
+    console.warn("[main] WebSocket Origin 除去フックの設定に失敗:", e?.message);
+  }
+
   /* ★ 親ウィンドウは常に file:// で読み込む。
      http://localhost: だとオリジンが変わり、localStorage/IndexedDB が
      別パーティションになってデータが消失する。
@@ -783,7 +830,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("relay-get-config", () => ({
     enabled: !!relayServer,
     port: RELAY_PORT,
-    clients: relayServer?.getClients() || []
+    clients: relayServer?.getClients() || [],
+    lanIps: _getLanIps()
   }));
 
   // レンダラー(親) → カメラパススルー: ホスト→エンドポイント のマップを受け取る
@@ -791,6 +839,27 @@ app.whenReady().then(async () => {
   ipcMain.on("set-camera-endpoints", (_e, map) => {
     if (map && typeof map === "object") {
       _cameraEndpoints = map;
+    }
+  });
+
+  // レンダラー(親) → カメラ snapshot を Base64(JPEG) で取得（ItemKeeper 連携の画像添付用）
+  // 親レンダラーは file:// オリジンのため CORS でプリンタ画像を直接読めない。
+  // メインプロセスが _cameraEndpoints allowlist 経由で1枚取得し Base64 で返す。
+  // /relay-camera プロキシと同じ取得関数・短期キャッシュを共有し、プリンタ負荷を抑える。
+  ipcMain.handle("get-camera-snapshot", async (_e, host) => {
+    const ep = _cameraEndpoints[host];
+    if (!ep || !ep.ip) return null;
+    const toResult = (buf) => ({ mime: "image/jpeg", dataBase64: buf.toString("base64"), bytes: buf.length });
+    // 新鮮なキャッシュがあれば再取得しない（カメラパネル表示と取得を集約）
+    const cached = _camSnapCache.get(host);
+    if (cached && Date.now() - cached.ts < _CAM_CACHE_TTL_MS) return toResult(cached.buf);
+    try {
+      const buf = await _fetchCameraSnapshot(host, ep);
+      _camSnapCache.set(host, { buf, ts: Date.now() });
+      return toResult(buf);
+    } catch {
+      const stale = _camSnapCache.get(host);
+      return stale ? toResult(stale.buf) : null;
     }
   });
 

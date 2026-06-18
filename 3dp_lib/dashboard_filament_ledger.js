@@ -20,14 +20,15 @@
  * - {@link getSpoolIntervals}：スプールの装着区間配列を構築
  * - {@link deriveSpoolRemaining}：信頼ソースから残量を冪等に導出
  * - {@link reconcileSpool}：導出値で spool.remainingLengthMm を補正（印刷中は触らない）
+ * - {@link recomputeSpoolFromManualEdit}：手動の履歴帰属編集を権威として総量基準で残量再計算＋再アンカー
  * - {@link initLedgerAnchors}：装着中スプールにアンカー mount イベントを種付け（過去再計算しない）
  * - {@link recordFilamentEvent}：切れ/一時停止イベントの状態文脈を per-host に記録（ADR-0005）
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 2.2.1015
+ * @version 2.2.1027
  * @since   2.2.1012
- * @lastModified 2026-06-07
+ * @lastModified 2026-06-17
  * -----------------------------------------------------------
  */
 
@@ -369,6 +370,133 @@ export function reconcileSpool(spoolId, { ts } = {}) {
   spool._remainingVerified = verified;
   if (ts != null) spool.updatedAt = ts;
   return { before, after: remainingMm, verified, mode };
+}
+
+/**
+ * ジョブが当該スプールに「明示的に」帰属しているか判定する。
+ *
+ * `attributedUsed` は filamentInfo 無しの単一スプールジョブを materialUsedMm として
+ * どのスプールにも帰属させてしまう（アンカー方式では区間で絞るため問題ない）。
+ * 一方、総量基準の手動再計算では「ユーザーが明示帰属させたジョブのみ」を合算したいので、
+ * filamentId 一致または filamentInfo に当該 spoolId を含むものだけを true とする。
+ *
+ * @private
+ * @param {Object} job - 履歴ジョブ
+ * @param {string} spoolId - スプールID
+ * @returns {boolean} 明示帰属していれば true
+ */
+function _isExplicitlyAttributed(job, spoolId) {
+  if (!job) return false;
+  if (job.filamentId === spoolId) return true;
+  const info = Array.isArray(job.filamentInfo) ? job.filamentInfo : null;
+  return !!(info && info.some(fi => fi && fi.spoolId === spoolId));
+}
+
+/**
+ * (host, spoolId) の最新オープン mount イベントのアンカーをその場で貼り直す。
+ *
+ * 手動編集（総量基準の権威再計算）後に、以後の自動 reconcile（印刷完了時の
+ * アンカー方式）が権威値を上書きしないよう、開区間の anchorRemainingMm/sinceJobId を
+ * 新しい権威値へ更新する。開区間が無ければ新規 mount を追記する。
+ * イベントを増殖させず（その場更新）、同 ms 二重クリックの evId 衝突も回避する。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {string} spoolId - スプールID
+ * @param {number} anchorRemainingMm - 新しいアンカー残量（= 権威再計算後の残量）
+ * @param {number} sinceJobId - 新しい sinceJobId（= そのホストの最新完了 printId）
+ * @param {number} [ts] - イベント時刻 ms（新規追記時のみ使用）
+ * @returns {Object} 更新/追記した mount イベント
+ */
+function _reanchorOpenMount(host, spoolId, anchorRemainingMm, sinceJobId, ts) {
+  const list = _getMountHistory();
+  const evs = list
+    .filter(e => e && e.spoolId === spoolId && e.host === host && (e.type === "mount" || e.type === "unmount"))
+    .slice()
+    .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+  const lastMount = evs.filter(e => e.type === "mount").pop();
+  if (lastMount) {
+    const closedAfter = evs.some(
+      e => e.type === "unmount" && (Number(e.ts) || 0) > (Number(lastMount.ts) || 0)
+    );
+    if (!closedAfter) {
+      // 開区間 → アンカーをその場で更新（ts/evId は保持＝順序を壊さない）
+      lastMount.anchorRemainingMm = Number(anchorRemainingMm) || 0;
+      lastMount.sinceJobId = Number(sinceJobId) || 0;
+      return lastMount;
+    }
+  }
+  // 開区間が無い → 新規 mount を追記
+  return appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts });
+}
+
+/**
+ * 手動の履歴フィラメント編集を「権威」として、スプール残量を総量基準で再計算する。
+ *
+ * 【ユーザー選択（Option 1）】手動で履歴の帰属(filamentInfo)を変更/指定したとき、
+ * 当該スプールの残量を
+ *   remaining = totalLengthMm − Σ(明示帰属する全完了ジョブの消費)
+ * で再計算する（インポート済み履歴を含め、編集が即反映＝「全然活きない」を解消）。
+ *
+ * アンカー方式（{@link deriveSpoolRemaining}）が装着以降のジョブしか見ないのに対し、
+ * 本関数は手動編集を高信頼データとみなして履歴全体を合算する。ただし二重計上を避けるため
+ * 帰属判定は {@link _isExplicitlyAttributed}（filamentInfo/filamentId 明示）に限定する。
+ *
+ * 再計算後は、装着中スプールについて開区間 mount を {@link _reanchorOpenMount} で
+ * 「anchor=再計算値・since=最新完了」へ貼り直す。これにより以後の自動 reconcile
+ * （印刷完了時のアンカー方式）はこの権威値を基点に新規ジョブのみ減算し、過去を
+ * 再計上しない（＝手動値が壊れない・冪等）。
+ *
+ * 印刷中スプールは触らない（live 追跡と競合するため完了時 reconcile に委ねる）。
+ * totalLengthMm が不明（0以下）なら総量基準が成立しないため {@link reconcileSpool}
+ * （アンカー方式）へフォールバックする。
+ *
+ * @function recomputeSpoolFromManualEdit
+ * @param {string} spoolId - スプールID
+ * @param {Object} [opts]
+ * @param {number} [opts.ts] - 更新時刻 ms（updatedAt と新規 mount の ts）
+ * @returns {?{before:number, after:number, used:number, mode:string, skipped?:boolean}}
+ *   再計算結果。スプール未発見時は null。mode は "total"（総量基準）／"skip"（印刷中）／
+ *   reconcileSpool 由来（total 不明フォールバック時）。
+ */
+export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
+  const spool = (monitorData.filamentSpools || []).find(s => s.id === spoolId);
+  if (!spool) return null;
+  const before = Number(spool.remainingLengthMm);
+  // 印刷中スプールは触らない（二重防御。live 追跡と競合 → 完了時 reconcile に委ねる）
+  if (spool.currentPrintID) {
+    return { before, after: before, used: 0, mode: "skip", skipped: true };
+  }
+  const total = Number(spool.totalLengthMm) || 0;
+  if (!(total > 0)) {
+    // 総量不明 → 総量基準が不能。アンカー方式へフォールバック。
+    return reconcileSpool(spoolId, { ts });
+  }
+  // 全ホストの履歴を走査し、当該スプールに明示帰属する完了ジョブの消費を合算
+  let used = 0;
+  const machines = monitorData.machines || {};
+  for (const host of Object.keys(machines)) {
+    const hist = machines[host]?.printStore?.history;
+    if (!Array.isArray(hist)) continue;
+    for (const j of hist) {
+      if (!_isCompleted(j)) continue;
+      if (!_isExplicitlyAttributed(j, spoolId)) continue;
+      used += attributedUsed(j, spoolId);
+    }
+  }
+  const after = _clamp(0, total - used, total);
+  spool.remainingLengthMm = after;
+  spool._remainingVerified = true; // 手動編集＝権威
+  if (ts != null) spool.updatedAt = ts;
+
+  // ★ 再アンカー: 装着中スプールは開区間 mount を貼り直して権威値を保持
+  const hostSpoolMap = monitorData.hostSpoolMap || {};
+  for (const [host, sid] of Object.entries(hostSpoolMap)) {
+    if (sid !== spoolId) continue;
+    _reanchorOpenMount(host, spoolId, after, _latestCompletedPrintId(host), ts);
+  }
+
+  return { before, after, used, mode: "total" };
 }
 
 /**

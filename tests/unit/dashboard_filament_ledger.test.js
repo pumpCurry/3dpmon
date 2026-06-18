@@ -31,6 +31,7 @@ const {
   getSpoolIntervals,
   deriveSpoolRemaining,
   reconcileSpool,
+  recomputeSpoolFromManualEdit,
   initLedgerAnchors,
   recordFilamentEvent,
   getOpenFilamentEvent,
@@ -676,6 +677,161 @@ describe("ADR-0005 境界トラップ（since=J でジョブ消失）", () => {
     appendMountEvent({ host: "h", spoolId: "NEW", anchorRemainingMm: 330000, sinceJobId: 300, ts: 10 });
     const r = deriveSpoolRemaining("NEW");
     expect(r.usedMm).toBe(0); // ← 実装は Lc(=最新完了) を since にすることでこれを回避
+  });
+});
+
+// =====================================================================
+// 19. recomputeSpoolFromManualEdit（Option1: 手動編集=権威・総量基準再計算＋再アンカー）
+// =====================================================================
+describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
+  beforeEach(reset);
+
+  it("総量 − 明示帰属する全完了ジョブの消費 で再計算（インポート済み履歴=pre-anchor でも反映）", () => {
+    // 装着アンカー since=最新完了 のため、アンカー方式なら過去ジョブは一切引かれない。
+    // 手動編集権威は履歴全体（pre-anchor 含む）を合算する。
+    const sp = addSpool({ id: "sp1", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [
+      job(100, 20000, { filamentInfo: [{ spoolId: "sp1", usedMm: 20000 }] }),
+      job(200, 30000, { filamentId: "sp1" })
+    ]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    // 装着中: since=200（最新完了）で種付け → アンカー方式では derive=anchor（過去引かない）
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 330000, sinceJobId: 200, ts: 10 });
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 999 });
+    expect(res.mode).toBe("total");
+    expect(res.used).toBe(50000);          // 20000 + 30000（pre-anchor も合算）
+    expect(res.after).toBe(280000);        // 330000 - 50000
+    expect(sp.remainingLengthMm).toBe(280000);
+    expect(sp._remainingVerified).toBe(true);
+    expect(sp.updatedAt).toBe(999);
+  });
+
+  it("明示帰属していないジョブ（filamentInfo/filamentId なし）は合算しない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
+    setHistory("h", [
+      job(100, 20000),                                                  // 帰属なし → 除外
+      job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] }) // 帰属あり
+    ]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 200, ts: 10 });
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+    expect(res.used).toBe(5000);
+    expect(res.after).toBe(95000);
+  });
+
+  it("他スプールに帰属するジョブは合算しない（multi-spool の per-reel 厳密帰属）", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
+    setHistory("h", [
+      job(100, 9000, { filamentInfo: [
+        { spoolId: "sp1", usedMm: 4000 },
+        { spoolId: "sp2", usedMm: 5000 }
+      ] })
+    ]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 100, ts: 10 });
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+    expect(res.used).toBe(4000);           // sp1 持ち分のみ
+    expect(res.after).toBe(96000);
+  });
+
+  it("再アンカー: 再計算後に deriveSpoolRemaining が同値（自動 reconcile が権威値を壊さない）", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [
+      job(100, 20000, { filamentId: "sp1" }),
+      job(200, 30000, { filamentId: "sp1" })
+    ]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 330000, sinceJobId: 200, ts: 10 });
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 999 });
+    expect(res.after).toBe(280000);
+    // 開区間 mount が貼り直され anchor=280000, since=最新完了(200) になっている
+    const open = getSpoolIntervals("sp1").find(iv => iv.untilJobId == null);
+    expect(open.anchorRemainingMm).toBe(280000);
+    expect(open.sinceJobId).toBe(200);
+    // 以後の reconcile は anchor 基点（過去を再計上しない）→ 権威値を維持
+    const d = deriveSpoolRemaining("sp1");
+    expect(d.remainingMm).toBe(280000);
+    const r = reconcileSpool("sp1", { ts: 1000 });
+    expect(r.after).toBe(280000);
+    expect(sp.remainingLengthMm).toBe(280000);
+  });
+
+  it("再アンカー後に新規完了ジョブ → reconcile はその分だけ減算（過去は二重計上しない）", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [job(200, 30000, { filamentId: "sp1" })]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 330000, sinceJobId: 200, ts: 10 });
+
+    recomputeSpoolFromManualEdit("sp1", { ts: 999 });
+    expect(sp.remainingLengthMm).toBe(300000); // 330000 - 30000
+
+    // 以後に新規完了ジョブ M（since=200 より後）を追加して reconcile
+    mockMonitorData.machines.h.printStore.history.push(job(300, 12000, { filamentId: "sp1" }));
+    const r = reconcileSpool("sp1", { ts: 1000 });
+    expect(r.after).toBe(288000);  // 300000(=anchor) - 12000（過去30000 は再計上しない）
+  });
+
+  it("冪等: 同編集を10回再計算しても同値", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
+    setHistory("h", [job(100, 25000, { filamentId: "sp1" })]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 100, ts: 10 });
+    for (let i = 0; i < 10; i++) {
+      const r = recomputeSpoolFromManualEdit("sp1", { ts: 50 + i });
+      expect(r.after).toBe(75000);
+    }
+    expect(sp.remainingLengthMm).toBe(75000);
+    // 開区間は1つに保たれる（イベント増殖なし）
+    expect(getSpoolIntervals("sp1").filter(iv => iv.untilJobId == null)).toHaveLength(1);
+  });
+
+  it("消費が総量を超える → 0 にクランプ", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 50000, remainingLengthMm: 50000 });
+    setHistory("h", [job(100, 80000, { filamentId: "sp1" })]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 100, ts: 10 });
+    const r = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+    expect(r.after).toBe(0);
+    expect(sp.remainingLengthMm).toBe(0);
+  });
+
+  it("印刷中スプールは触らない（skip）", () => {
+    const sp = addSpool({
+      id: "sp1", totalLengthMm: 100000, remainingLengthMm: 41234, currentPrintID: "777"
+    });
+    setHistory("h", [job(100, 5000, { filamentId: "sp1" })]);
+    const r = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+    expect(r.skipped).toBe(true);
+    expect(r.mode).toBe("skip");
+    expect(sp.remainingLengthMm).toBe(41234); // 不変
+  });
+
+  it("総量不明(0) → アンカー方式 reconcile へフォールバック", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 0, remainingLengthMm: 90000 });
+    setHistory("h", [job(100, 5000, { filamentId: "sp1" })]);
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 90000, sinceJobId: 0, ts: 10 });
+    const r = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+    // reconcileSpool（アンカー方式）の戻り（mode:"anchor"）= 90000 - 5000
+    expect(r.mode).toBe("anchor");
+    expect(sp.remainingLengthMm).toBe(85000);
+  });
+
+  it("非装着スプール → 残量は再計算するが mount は増やさない（自動 reconcile 対象外）", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
+    setHistory("h", [job(100, 15000, { filamentId: "sp1" })]);
+    // hostSpoolMap に sp1 は無い（取り外し済み）
+    mockMonitorData.hostSpoolMap = {};
+    const r = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+    expect(r.after).toBe(85000);
+    expect(sp.remainingLengthMm).toBe(85000);
+    expect(mockMonitorData.mountHistory.filter(e => e.spoolId === "sp1")).toHaveLength(0);
+  });
+
+  it("スプール未発見 → null", () => {
+    expect(recomputeSpoolFromManualEdit("nope", { ts: 1 })).toBeNull();
   });
 });
 

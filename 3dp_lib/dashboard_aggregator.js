@@ -1391,8 +1391,15 @@ export function aggregatorUpdate() {
         const ratio = remain / spool.totalLengthMm;
         if (ratio <= thr && !s.filamentLowWarned) {
           s.filamentLowWarned = true;
+          // ★ L: 読み上げ用に残量を「表示単位(m/mm)・小数1桁(2桁目四捨五入)」へ整形する。
+          //   remaining(mm の生値) は webhook/data 用に従来どおり数値で温存し、
+          //   読み上げ/通知文では {remainingText} を使う（interesting-easley と統合）。
+          const _unit = monitorData.appSettings.filamentUnit === "mm" ? "mm" : "m";
+          const remainingText = Number.isFinite(remain)
+            ? (_unit === "mm" ? `${remain.toFixed(1)}mm` : `${(remain / 1000).toFixed(1)}m`)
+            : "---";
           notificationManager.notify("filamentLow", {
-            hostname: host, remaining: remain,
+            hostname: host, remaining: remain, remainingText,
             thresholdPct: Math.round(thr * 100),
             spoolName: spool.name
           });
@@ -1697,6 +1704,24 @@ export function restartAggregatorTimer() {
       console.error("aggregatorUpdate エラー:", e);
     }
   }, intervalMs);
+}
+
+/**
+ * ensureAggregatorTimer:
+ *   集約ループが**停止している場合のみ**起動する（稼働中なら何もしない）。
+ *
+ *   ★ 自己修復インバリアント（2fps停止の根本対策）:
+ *     「データが流れているなら集約ループは必ず動いていなければならない」。
+ *     stopAggregatorTimer は接続数判定（種別非依存でない実装が過去に存在）で
+ *     誤発火し得るため、データ受信経路(processData)から毎メッセージこれを呼ぶ。
+ *     restartAggregatorTimer と違い clearInterval を伴わない＝稼働中タイマーを
+ *     リセットしない（高頻度呼び出しでも発火を妨げない）ので安全に多重呼び出しできる。
+ *
+ * @returns {void}
+ */
+export function ensureAggregatorTimer() {
+  if (aggregatorTimer !== null) return;   // 稼働中: 触らない（リセット禁止）
+  restartAggregatorTimer();
 }
 
 /**

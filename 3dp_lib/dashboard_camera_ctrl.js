@@ -33,7 +33,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
-import { getDeviceIp, getDeviceDest } from "./dashboard_connection.js";
+import { getDeviceIp, getDeviceDest, getPrinterType } from "./dashboard_connection.js";
 import { pushLog }                  from "./dashboard_log_util.js";
 import { notificationManager }      from "./dashboard_notification_manager.js";
 
@@ -190,6 +190,23 @@ export function startCameraStream(hostname) {
     return;
   }
 
+  /* ★ 冪等化（起動時「カメラ接続成功」二重ログ/二重接続の修正）:
+     onAux(server.webcams.list 到着) と panel_init/接続確立 が両方 startCameraStream を
+     呼ぶため、Moonraker では一度接続→URL解決後に再接続して "接続成功" が二重化していた。
+     既に接続済み(firstConnected)で配信先URLが変わらないなら、再接続せず即 return する。
+     ※ K1/relay 子は配信URLが固定のため「接続済みなら同一」とみなす。Moonraker は
+       machine._cameraStreamUrl の変化時のみ再接続する。停止中(userStopped)は対象外。 */
+  if (entry.firstConnected && !entry.userStopped && entry._activeStreamUrl) {
+    const toggleOn = (monitorData.hostCameraToggle[host] ?? monitorData.appSettings.cameraToggle);
+    if (toggleOn) {
+      let nextUrl = entry._activeStreamUrl;
+      if (!_isRelayChild() && getPrinterType(host) === "moonraker") {
+        nextUrl = monitorData.machines[host]?._cameraStreamUrl || entry._activeStreamUrl;
+      }
+      if (nextUrl === entry._activeStreamUrl) return;  // 同一URLで配信中 → 何もしない
+    }
+  }
+
   /* ★ 並行制御: 既存接続を完全停止してから新規開始
      handleSocketOpen + initCameraPanel からの同時呼び出しを安全にする */
   _cancelTimers(entry);
@@ -223,6 +240,27 @@ export function startCameraStream(hostname) {
     return;
   }
 
+  /* ★ Moonraker(Fluidd): カメラURLは機器・構成依存で可変（相対 /webcam/... を nginx が
+     proxy 等）。K1 固定の "ip:8080/?action=stream" は使わず、server.webcams.list 由来の
+     解決済み絶対URL(machine._cameraStreamUrl)を使う。未取得時は K1 URL を叩かず待機し、
+     onAux でカメラ一覧到着時に startCameraStream が再実行される。 */
+  if (getPrinterType(host) === "moonraker") {
+    const machine = monitorData.machines[host];
+    const camUrl = machine?._cameraStreamUrl;
+    if (!camUrl) {
+      _updateUI(entry, "disconnected");
+      return;
+    }
+    let camPort = 80;
+    try { camPort = Number(new URL(camUrl).port) || (camUrl.startsWith("https") ? 443 : 80); } catch { /* noop */ }
+    entry.streamUrl = camUrl;
+    entry.attempts = 0;
+    entry.cameraPort = camPort;
+    _cancelTimers(entry);
+    _connectStream(entry, ip.split(":")[0]);
+    return;
+  }
+
   /* カメラポート解決: per-host（connectionTarget.cameraPort）→ グローバル設定 → デフォルト
      connectionTarget の検索は getDeviceDest 経由で dest を取得して行う */
   const dest = getDeviceDest(host);
@@ -230,6 +268,7 @@ export function startCameraStream(hostname) {
   const tgt = targets.find(t => t.dest === dest) || targets.find(t => t.hostname === host);
   const port = tgt?.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_STREAM_PORT;
 
+  entry.streamUrl = null;  // K1 はポート方式（override 不使用）
   entry.attempts = 0;
   entry.cameraPort = port;
   _cancelTimers(entry);
@@ -340,6 +379,7 @@ function _stopEntry(entry) {
   _cancelTimers(entry);
   entry.attempts = 0;
   entry.streamTarget = null;
+  entry._activeStreamUrl = null;   // ★ 冪等化用の配信URL記録もクリア（再開時に再接続させる）
   if (entry.img) {
     entry.img.src = "";
     entry.img.classList.add("off");
@@ -427,7 +467,8 @@ function _connectStream(entry, host) {
   const delayMs = DEFAULT_RETRY_DELAY * Math.pow(2, entry.attempts - 1);
   const waitSec = Math.ceil(delayMs / 1000);
   const port = entry.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_STREAM_PORT;
-  const url = `http://${host}:${port}/?action=stream`;
+  // Moonraker は解決済み絶対URL(entry.streamUrl)を優先。K1 はポート方式の固定URL。
+  const url = entry.streamUrl || `http://${host}:${port}/?action=stream`;
 
   _cancelTimers(entry);
 
@@ -445,6 +486,7 @@ function _connectStream(entry, host) {
     if (!entry.firstConnected) {
       entry.attempts = 0;
       entry.firstConnected = true;
+      entry._activeStreamUrl = url;   // ★ 冪等化用: 現在配信中のURLを記録
       _updateUI(entry, "connected");
       pushLog("カメラ接続成功", "success", false, entry.hostname);
       notificationManager.notify("cameraConnected", { hostname: entry.hostname });

@@ -6,6 +6,9 @@
  *
  * @file dashboard_about.js
  * @copyright (c) pumpCurry 2025-2026 / 5r4ce2
+ *
+ * @version 1.390.1119 (PR #385)
+ * @lastModified 2026-06-16 23:00:00
  */
 
 "use strict";
@@ -49,9 +52,12 @@ function _injectStyles() {
       from { opacity: 0; } to { opacity: 1; }
     }
     .about-dialog {
-      background: var(--color-surface, #1e293b);
-      color: var(--color-text, #f1f5f9);
-      border: 1px solid var(--color-border, #334155);
+      /* ★ 常時ダーク固定（ヘッダが濃色グラデのため）。アプリのテーマトークンに
+         依存すると surface=明 / text=明 の不整合で値が白抜き(不可視)になるため
+         明示色で自己完結させる。 */
+      background: #1e293b;
+      color: #f1f5f9;
+      border: 1px solid #334155;
       border-radius: 8px;
       box-shadow: 0 10px 40px rgba(0,0,0,0.5);
       width: 480px; max-width: calc(100vw - 40px);
@@ -85,35 +91,44 @@ function _injectStyles() {
     .about-body { padding: 16px 20px; }
     .about-row {
       display: flex; padding: 6px 0;
-      border-bottom: 1px solid var(--color-border, #334155);
+      border-bottom: 1px solid #334155;
       font-size: 0.9em;
     }
     .about-row:last-child { border-bottom: none; }
     .about-label {
       width: 110px; flex-shrink: 0;
-      color: var(--color-text-secondary, #94a3b8);
+      color: #94a3b8;
     }
-    .about-value { flex: 1; word-break: break-all; }
+    .about-value { flex: 1; word-break: break-all; color: #f1f5f9; }
     .about-value a { color: #0ea5e9; text-decoration: none; }
     .about-value a:hover { text-decoration: underline; }
     .about-footer {
       padding: 12px 20px;
       background: rgba(0,0,0,0.2);
-      border-top: 1px solid var(--color-border, #334155);
-      display: flex; gap: 8px; justify-content: flex-end;
+      border-top: 1px solid #334155;
+      display: flex; gap: 8px; align-items: center; justify-content: flex-end;
       border-radius: 0 0 8px 8px;
     }
+    /* 更新確認ステータス（最新リリースボタンの前） */
+    .about-update-status {
+      margin-right: auto;
+      font-size: 0.82em;
+      color: #94a3b8;
+    }
+    .about-update-status.up-to-date { color: #34d399; }
+    .about-update-status.update-available { color: #fbbf24; font-weight: bold; }
+    .about-update-status.unknown { color: #64748b; }
     .about-btn {
       padding: 6px 16px; border-radius: 4px;
-      border: 1px solid var(--color-border, #334155);
-      background: var(--color-surface-alt, #334155);
-      color: var(--color-text, #f1f5f9);
+      border: 1px solid #475569;
+      background: #334155;
+      color: #f1f5f9;
       cursor: pointer; font-size: 0.9em;
     }
-    .about-btn:hover { background: var(--color-accent, #0ea5e9); border-color: var(--color-accent, #0ea5e9); }
+    .about-btn:hover { background: #0ea5e9; border-color: #0ea5e9; }
     .about-btn-primary { background: #0ea5e9; border-color: #0ea5e9; }
     .about-license {
-      font-size: 0.78em; color: var(--color-text-muted, #64748b);
+      font-size: 0.78em; color: #94a3b8;
       padding: 8px 20px 0;
       line-height: 1.5;
     }
@@ -164,7 +179,7 @@ export function showAboutDialog() {
         </div>
         <div class="about-row">
           <span class="about-label">対応機種</span>
-          <span class="about-value">CREALITY K1 / K1C / K1 Max</span>
+          <span class="about-value">CREALITY K1 / K1C / K1 Max ／ Klipper・Moonraker 機 (Fluidd) ※Ideaformer IR3 v2 等</span>
         </div>
         <div class="about-row">
           <span class="about-label">著作権</span>
@@ -192,6 +207,7 @@ export function showAboutDialog() {
         詳細はライセンス全文を参照してください。
       </div>
       <div class="about-footer">
+        <span class="about-update-status" data-role="update-status" aria-live="polite">確認中…</span>
         <button class="about-btn" data-action="release">最新リリース</button>
         <button class="about-btn about-btn-primary" data-action="close">閉じる</button>
       </div>
@@ -222,6 +238,77 @@ export function showAboutDialog() {
   document.addEventListener("keydown", escHandler);
 
   document.body.appendChild(overlay);
+
+  // ─── 更新確認（開いたとき1回だけ・失敗時は即諦めて "----"） ───
+  _checkLatestRelease(version, overlay.querySelector('[data-role="update-status"]'));
+}
+
+/**
+ * セマンティックなバージョン文字列を比較する（"2.2.1026" 形式）。
+ * 区切りは . - + を許容し、各セグメントを数値比較する。
+ *
+ * @private
+ * @param {string} a - バージョンA
+ * @param {string} b - バージョンB
+ * @returns {number} a>b なら 1 / a<b なら -1 / 同等なら 0
+ */
+function _compareVersions(a, b) {
+  const pa = String(a).split(/[.\-+]/).map(n => parseInt(n, 10) || 0);
+  const pb = String(b).split(/[.\-+]/).map(n => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+/**
+ * GitHub の最新リリースを1回だけ確認し、ステータス表示を更新する。
+ *
+ * 【詳細説明】
+ * - `確認中…` → `最新版をご利用中です` / `最新版 vX.Y.Z があります` を表示。
+ * - オフライン/到達不可/レート制限/タイムアウト時は **即座に諦めて `----`**。
+ *   AbortController で 5 秒タイムアウトし、再試行・ループ・スロットルは行わない。
+ *
+ * @private
+ * @param {string} currentVersion - 現在のアプリバージョン
+ * @param {HTMLElement|null} statusEl - 表示先要素
+ * @returns {Promise<void>}
+ */
+async function _checkLatestRelease(currentVersion, statusEl) {
+  if (!statusEl) return;
+  statusEl.textContent = "確認中…";
+  statusEl.className = "about-update-status checking";
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(
+      "https://api.github.com/repos/pumpCurry/3dpmon/releases/latest",
+      { signal: controller.signal, headers: { Accept: "application/vnd.github+json" } }
+    );
+    clearTimeout(timer);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const latest = String(data?.tag_name || data?.name || "").trim().replace(/^v/i, "");
+    if (!latest) throw new Error("no tag");
+
+    const cur = String(currentVersion).replace(/^v/i, "");
+    if (_compareVersions(latest, cur) > 0) {
+      statusEl.textContent = `最新版 v${latest} があります`;
+      statusEl.className = "about-update-status update-available";
+    } else {
+      statusEl.textContent = "最新版をご利用中です";
+      statusEl.className = "about-update-status up-to-date";
+    }
+  } catch {
+    clearTimeout(timer);
+    // オフライン/到達不可/タイムアウト等 → 即諦めて "----"（再試行しない）
+    statusEl.textContent = "----";
+    statusEl.className = "about-update-status unknown";
+  }
 }
 
 /**

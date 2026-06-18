@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1119 (PR #385)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-06-16 22:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -53,13 +53,15 @@ import { parseCurPosition, getCurrentTimestamp, normalizeJobId } from "./dashboa
 import {
   updateXYPreview,
   updateZPreview,
-  setPrinterModel
+  setPrinterModel,
+  setStageGeometry
 } from "./dashboard_stage_preview.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import {
   ingestData,
   restoreAggregatorState,
   restartAggregatorTimer,
+  ensureAggregatorTimer,
   persistAggregatorState,
   setHistoryPersistFunc,
   aggregatorUpdate,
@@ -69,6 +71,7 @@ import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js"
 import * as printManager from "./dashboard_printmanager.js";
 import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 import { getCurrentSpool, formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
+import { recordPrintLifecycle, getPrintLifecycleMetrics, resetPrintLifecycle } from "./dashboard_print_lifecycle.js";
 
 /**
  * Webhook 通知用の共通ペイロードを構築する。
@@ -150,6 +153,20 @@ function _buildNotifyPayload(host, machine, opts = {}) {
       payload.printStartTime_epoch = startEpoch;
       payload.duration_sec = Math.floor((Date.now() - startEpoch) / 1000);
     }
+    // ★ J: 観測フラグ＋区間時間（履歴に確定済みのものを添付。取れなかった軸は省略）。
+    //   webhook にも「準備/一時停止/後処理」と実測/履歴のみ区別を乗せる。
+    try {
+      const jid = normalizeJobId(sd.printStartTime?.rawValue);
+      const hj = jid != null
+        ? printManager.loadHistory(host).find(j => String(j.id) === String(jid))
+        : null;
+      if (hj) {
+        if (hj.observed) payload.observed = hj.observed;
+        if (hj.preparationTime != null)    payload.warmupSec = Number(hj.preparationTime);
+        if (hj.pauseTime != null)          payload.pausedSec = Number(hj.pauseTime);
+        if (hj.postProcessingTime != null) payload.postProcessingSec = Number(hj.postProcessingTime);
+      }
+    } catch { /* noop */ }
   }
 
   return payload;
@@ -217,7 +234,8 @@ function _createMsgHostState() {
     tsPrintStart: null, tsPrepEnd: null,
     tsCheckStart: null, tsCheckEnd: null, totalCheckSeconds: 0,
     tsPauseStart: null, tsCompletion: null, totalPauseSeconds: 0,
-    prevPrintState: null, prevPrintStartTime: null, prevSelfTestPct: null
+    prevPrintState: null, prevPrintStartTime: null, prevSelfTestPct: null,
+    prevPrintFileName: null
   };
 }
 
@@ -251,6 +269,34 @@ function _getMsgState(hostname) {
 }
 
 /**
+ * machine.historyData（タイマー情報の中間バッファ）の上限件数。
+ * printStore.history（MAX_PRINT_HISTORY=1500）と同規模。これを超える分は古い順に破棄。
+ * @constant {number}
+ */
+const HISTORY_DATA_CAP = 1500;
+
+/**
+ * machine.historyData（タイマー情報の中間バッファ）の上限を保つ。
+ *
+ * 【背景・重要】
+ * historyData は印刷ジョブ完了ごとに push されるが、printStore.history と異なり
+ * 上限が無く、長時間運用で無制限に肥大していた。machine 全体は約2秒ごとに
+ * localStorage/IndexedDB へシリアライズされるため、肥大したバッファが
+ * 保存のたびに JSON 化され、メモリ・CPU を圧迫して最終的にハングし得る。
+ * printStore.history と同じ規模の上限（{@link HISTORY_DATA_CAP}）で古いものから捨てる。
+ *
+ * @private
+ * @param {Object} machine - monitorData.machines[host]
+ * @returns {void}
+ */
+function _capHistoryData(machine) {
+  const h = machine?.historyData;
+  if (Array.isArray(h) && h.length > HISTORY_DATA_CAP) {
+    h.splice(0, h.length - HISTORY_DATA_CAP);
+  }
+}
+
+/**
  * persistHistoryTimers:
  *   現在の印刷IDに対応する履歴エントリへタイマー情報をマージし、
  *   永続化を即時実行します。F5 リロードによる消失を防ぐ目的です。
@@ -272,6 +318,7 @@ function persistHistoryTimers(printId, hostname) {
   if (!entry) {
     entry = { id: printId };
     machine.historyData.push(entry);
+    _capHistoryData(machine); // ★ 無制限肥大→保存肥大→ハング を防止
   }
   [
     "preparationTime",
@@ -340,6 +387,12 @@ export function processData(data, hostname) {
     machine.runtimeData.lastError = null;
   }
 
+  // ★ 自己修復インバリアント（2fps停止の根本対策）:
+  //   データが流れている＝集約ループは必ず動いていなければならない。
+  //   stopAggregatorTimer が接続数誤判定（Moonrakerは s.ws を持たない等）で誤発火しても、
+  //   次の受信メッセージでループを復帰させる。稼働中は no-op（タイマーをリセットしない）。
+  ensureAggregatorTimer();
+
   // 初回ホスト初期化完了後は該当ホストの通知抑制を解除
   // (handleMessage の初期化パスを通らない2台目以降のホストにも対応)
   if (_initializedHosts.has(host) && isNotificationSuppressed(host)) {
@@ -352,6 +405,9 @@ export function processData(data, hostname) {
   if (!_initializedHosts.has(host)) {
     _initializedHosts.add(host);
     console.info(`[processData] per-host 初期化: ${host}`);
+
+    // ★ 旧版で無制限肥大した historyData を復元直後に一度トリムする（既存肥大の救済）
+    _capHistoryData(machine);
 
     // ★ 初期化ブロック全体を try/catch で保護
     //    ここで例外が出てもデータ書き込み（L784以降）は続行する
@@ -428,8 +484,15 @@ export function processData(data, hostname) {
   //   ここでは tsCompletion の復元のみ行い、setInterval は起動しない。
   //   リマインダーも aggregator 側で処理。
   if (ms.tsCompletion === null) {
+    // ★ 通知ストーム修正: ここは「リロード後の完了経過タイマー復元」用に
+    //   prevPrintStartTime を**初期シード**する箇所。tsCompletion===null は印刷中も
+    //   真のため毎メッセージ走る。無条件に上書きすると、aggregator が書き込む
+    //   storedData.prevPrintID が（Moonraker では latched currStartTime と一致しない
+    //   ことがあり）末尾(L1010)で維持している prevPrintStartTime を毎回壊し、
+    //   (2.3.1) の `currStartTime !== prevPrintStartTime` が毎push真→「印刷開始」
+    //   通知を約4Hzで連発する。未初期化(null)のときだけシードし、以降は L1010 が維持する。
     const storedPrev = Number(machine.storedData.prevPrintID?.rawValue ?? NaN);
-    if (!isNaN(storedPrev)) {
+    if (!isNaN(storedPrev) && ms.prevPrintStartTime === null) {
       ms.prevPrintStartTime = storedPrev;
     }
     // historyData は揮発性のため、永続化された printStore.history も検索する
@@ -507,6 +570,16 @@ export function processData(data, hostname) {
   const currSelfPct   = Number(data.withSelfTest      || 0);
   const device        = Number(data.deviceState      || 0);
 
+  // ★ J: 印刷ライフサイクル計測（毎push 状態/進捗を記録。完了時に区間時間を履歴へ付与）
+  try {
+    recordPrintLifecycle(host, {
+      state: st,
+      progress: Number(data.printProgress ?? 0),
+      jobId: currStartTime || null,
+      nowMs: Date.now(),
+    });
+  } catch { /* 計測失敗は本処理に影響させない */ }
+
   // タイマー全クリアユーティリティ
   const clearAllTimers = () => {
     [ms.prepTimerId, ms.checkTimerId, ms.pauseTimerId]
@@ -542,9 +615,24 @@ export function processData(data, hostname) {
   // (2.3.1) 新規印刷開始検出
   const initialized = ms.prevPrintState !== null && ms.prevPrintStartTime !== null;
 
+  // ★ 起動時 printStarted 二重通知の修正:
+  //   印刷開始は「非印刷→printStarted の状態遷移」で検出する。currStartTime の
+  //   変化単独では発火させない — Moonraker は起動直後に開始時刻を
+  //   推定値(now−print_duration)→履歴の実 start_time へ1回補正するため、
+  //   印刷継続中の start time 補正を「新規印刷」と誤検出して通知が二重化していた。
+  //   別ジョブ連続(idle を挟まない printStarted→printStarted)を取りこぼさないため、
+  //   start time 変化に加え「ファイル名も変わった」ときのみ新規開始として扱う
+  //   （同一ファイルの開始時刻補正＝refinement では発火しない）。
+  const _curPrintFile = (data.printFileName || data.fileName || "");
+  const _startedTransition = ms.prevPrintState !== st;
+  const _backToBackNewJob =
+    currStartTime !== ms.prevPrintStartTime &&
+    _curPrintFile !== "" &&
+    _curPrintFile !== ms.prevPrintFileName;
+
   if (
     st === PRINT_STATE_CODE.printStarted &&
-    (ms.prevPrintState !== st || currStartTime !== ms.prevPrintStartTime)
+    (_startedTransition || _backToBackNewJob)
   ) {
     console.debug(">>> (2.3.1) 印刷開始：準備タイマー起動");
     clearAllTimers();
@@ -774,6 +862,11 @@ export function processData(data, hostname) {
   if (data.model) {
     setPrinterModel(String(data.model), host);
   }
+  // (2.7.2b) 軸範囲由来の幾何(ベルト機/非正方ベッド)。Moonraker 等が beltGeometry を供給する。
+  //   オブジェクト型のため _WS_SKIP_KEYS 相当でバルク反映されず、ここで明示的に処理する。
+  if (data.beltGeometry && typeof data.beltGeometry === "object") {
+    setStageGeometry(data.beltGeometry, host);
+  }
 
   // (2.7.3) その他フィールド一括反映
   // 重要：ここで得られた値のみ、setStoredDataの第4フラグ(機器から得られる情報)をフラグONとする
@@ -832,10 +925,17 @@ export function processData(data, hostname) {
         ?? normalizeJobId(printManager.loadCurrent(host)?.id)
         ?? normalizeJobId(getCurrentPrintID(host)))
     : null;
-  if (Number(data.printProgress ?? 0) >= 100 && _completedJobId == null) {
-    console.debug(`[processData] ${host}: printProgress>=100 だが有効なジョブIDが無いため履歴登録をスキップ（電源投入直後の stale push と判断）`);
+  // ★ 再起動直後ゴースト(「(不明)/→0秒」)対策:
+  //   printStartTime が無効でも保存済み現在IDへフォールバックすると、開始時刻 0・ファイル名空の
+  //   完了エントリが生成されることがある（機器/アプリ再起動直後に前回印刷の stale push が届く）。
+  //   有効な開始時刻もファイル名も無い完了は登録しない（完了履歴は機器 historyList が信頼ソース）。
+  const _startValid = normalizeJobId(data.printStartTime) != null;
+  const _fnameValid = !!(data.printFileName || data.fileName);
+  const _staleGhost = _completedJobId != null && !_startValid && !_fnameValid;
+  if (Number(data.printProgress ?? 0) >= 100 && (_completedJobId == null || _staleGhost)) {
+    console.debug(`[processData] ${host}: printProgress>=100 だが ${_completedJobId == null ? "有効なジョブID無し" : "開始時刻/ファイル名が無い stale push"} のため履歴登録をスキップ`);
   }
-  if (_completedJobId != null) {
+  if (_completedJobId != null && !_staleGhost) {
     const entry = { ...data };
     entry.id = _completedJobId;
     const extraKeys = [
@@ -854,6 +954,19 @@ export function processData(data, hostname) {
       const v = machine.storedData[k]?.rawValue;
       if (v !== undefined) entry[k] = v;
     });
+    // ★ J: 観測フラグ＋区間時間を付与（warmup→preparationTime / paused→pauseTime）。
+    //   既定は付けない＝「取れなかった」。後処理時間は完了遷移時に別途付与する。
+    //   機器申告値(K1 の preparationTime/pauseTime)が既にあれば実測値で上書きしない。
+    try {
+      const lc = getPrintLifecycleMetrics(host, { nowMs: Date.now() });
+      if (lc.observed && entry.observed == null) entry.observed = lc.observed;
+      if (lc.warmupSec != null && (entry.preparationTime == null || Number(entry.preparationTime) === 0)) {
+        entry.preparationTime = lc.warmupSec;
+      }
+      if (lc.pausedSec != null && (entry.pauseTime == null || Number(entry.pauseTime) === 0)) {
+        entry.pauseTime = lc.pausedSec;
+      }
+    } catch { /* noop */ }
     // ★ E1: フィラメント情報の消失防止 — 3段階フォールバック
     // printStore → historyData既存エントリ → 受信データ の優先順で復元
     const savedJobs = printManager.loadHistory(host);
@@ -884,19 +997,42 @@ export function processData(data, hostname) {
         if (data[k] != null) entry[k] = data[k];
       });
     }
-    // 同一ジョブIDの重複登録を防止する
-    if (!machine.historyData.find(h => h.id === entry.id)) {
+    // ★【重篤・2fps停止/CPU暴走の真因】同一ジョブIDの重複登録を防止する。
+    //   旧実装は machine.historyData(揮発バッファ)のみを確認していたが、updateHistoryList は
+    //   マージ後に該当エントリをバッファから除去する。Moonraker は印刷完了後も state="complete"・
+    //   progress=100 を報告し続けるため、毎push(約4Hz)で「バッファに無い→再登録→updateHistoryList→
+    //   saveHistory→バッファから除去」を無限ループし、親CPUを飽和させ 2fps を停止させていた。
+    //   → 永続ストア(printStore.history=savedJob)に既にあれば再登録しない（ループを断つ）。
+    if (!savedJob && !machine.historyData.find(h => h.id === entry.id)) {
       machine.historyData.push(entry);
+      _capHistoryData(machine); // ★ 無制限肥大→保存肥大→ハング を防止
       const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
       printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
       persistPrintResume(host);
     }
   }
 
+  // ★ J: 完了遷移（→printDone）で「印刷後処理時間」(進捗100%→完了)を確定し履歴へ付与。
+  //   2.7.4 で進捗100%時に登録済みのエントリを id で引いて postProcessingTime/observed を書く。
+  //   K1-Max は完了がほぼ即時=後処理≈0、IR3 v2 等は end-gcode/排出ぶんの実測値が乗る。
+  if (st === PRINT_STATE_CODE.printDone
+      && ms.prevPrintState != null
+      && ms.prevPrintState !== PRINT_STATE_CODE.printDone) {
+    try {
+      const doneJobId = currStartTime
+        || normalizeJobId(printManager.loadCurrent(host)?.id)
+        || normalizeJobId(getCurrentPrintID(host));
+      const lc = getPrintLifecycleMetrics(host, { nowMs: Date.now() });
+      if (doneJobId) printManager.applyLifecycleMetrics(host, doneJobId, lc);
+      resetPrintLifecycle(host);
+    } catch (e) { console.debug("[processData] lifecycle 完了付与スキップ:", e?.message || e); }
+  }
+
   // 次回比較用に保存（リロード時の再通知防止のため localStorage にも永続化）
   ms.prevPrintState     = st;
   ms.prevPrintStartTime = currStartTime;
   ms.prevSelfTestPct    = currSelfPct;
+  ms.prevPrintFileName  = (data.printFileName || data.fileName || "");
   try {
     const msPrefix = `msg_${host}_`;
     localStorage.setItem(msPrefix + "prevPrintState", JSON.stringify(st));

@@ -35,7 +35,9 @@ vi.doMock("../../3dp_lib/dashboard_connection.js", () => ({
   getDeviceDest: vi.fn((host) => {
     const m = { "host-A": "192.168.1.10:9999", "host-B": "192.168.1.11:9999" };
     return m[host] || "";
-  })
+  }),
+  // 既存テストは K1 ホスト前提（Moonraker 分岐に入らない）
+  getPrinterType: vi.fn(() => "creality-k1")
 }));
 
 // グローバル fetch モック（_isServiceDown 用 — 常に成功 = サービス停止していない）

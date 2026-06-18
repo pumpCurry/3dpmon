@@ -1328,8 +1328,12 @@ export function loadPrintVideos(hostname) {
   if (!host) return {};
   ensureMachineData(host);
   const map = monitorData.machines[host].printStore.videos;
-  // デバッグ用: 現在保持している動画マップ件数をログに残す
-  pushLog(`[loadPrintVideos] マップ読込件数: ${Object.keys(map).length}`);
+  // ★ bg-cpu/ログ汚染対策: loadPrintVideos は履歴/現在ジョブ描画ごと（印刷中は毎秒複数回）
+  //   呼ばれるため、毎回 pushLog するとログパネルを「マップ読込件数:0」で埋め尽くし、
+  //   (行数)×(パネル数) の DOM 処理で CPU も浪費していた。debug 時のみ出力する。
+  if (monitorData.appSettings?.logLevel === "debug") {
+    pushLog(`[loadPrintVideos] マップ読込件数: ${Object.keys(map).length}`);
+  }
   console.debug("[loadPrintVideos] map", map);
   return map;
 }
@@ -1351,8 +1355,10 @@ export function savePrintVideos(map, hostname) {
     pushLog(`[savePrintVideos] 上限超過のため ${excess.length} 件を削除`);
   }
   monitorData.machines[host].printStore.videos = map;
-  // デバッグ用: 保存する動画マップの件数をログに記録
-  pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);
+  // デバッグ用: 保存件数（debug 時のみ。ログ汚染/CPU 浪費防止）
+  if (monitorData.appSettings?.logLevel === "debug") {
+    pushLog(`[savePrintVideos] マップ保存件数: ${Object.keys(map).length}`);
+  }
   console.debug("[savePrintVideos] map", map);
   saveUnifiedStorage();
 }

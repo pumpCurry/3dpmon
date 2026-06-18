@@ -20,10 +20,11 @@
  * - {@link initLogRenderer}：レンダラー初期化
  * - {@link pushLog}：ログ追加
  * - {@link pushNotificationLog}：通知レベルログ追加
+ * - {@link pushGcodeConsole}：gcode コンソールタブへ追記
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.1119 (PR #385)
  * @since   1.390.193 (PR #86)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2026-06-16 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -359,4 +360,50 @@ export function pushNotificationLog(msg, level = "info", hostname) {
   const tsEl = scopedById("last-notification-timestamp", hostname);
   const tsField = tsEl?.querySelector(".value");
   if (tsField) tsField.textContent = getCurrentTimestamp();
+}
+
+/* ============================================================================
+ * Function: pushGcodeConsole
+ * ============================================================================ */
+/**
+ * gcode コンソールタブ(#gcode-console)へ 1 行以上を追記する。
+ *
+ * 【詳細説明】
+ * - Moonraker(Klipper)機の `notify_gcode_response`(温度自動報告・echo・M117・
+ *   エラー応答等)をリアルタイム表示する専用ストリーム。通常のログ/通知マネージャ
+ *   とは独立しており、ログレベルやストレージ永続化の対象外。
+ * - 対象ホストの scoped 要素へ直接追記し、最下部付近にいる場合のみ自動スクロールする。
+ * - 行数は getMaxLogLines() を上限に古い行から削除する。
+ *
+ * @function pushGcodeConsole
+ * @param {string} hostname - 対象ホスト名
+ * @param {(string|string[])} text - 追記する 1 行、または複数行の配列
+ * @returns {void}
+ */
+export function pushGcodeConsole(hostname, text) {
+  const box = scopedById("gcode-console", hostname);
+  if (!box) return;
+
+  const atBottom =
+    box.scrollHeight <= box.clientHeight ||
+    box.scrollHeight - (box.scrollTop + box.clientHeight) < 50;
+
+  const ts = getCurrentTimestamp();
+  const lines = Array.isArray(text) ? text : [text];
+  for (const line of lines) {
+    if (line == null || line === "") continue;
+    const p = document.createElement("p");
+    p.className = "log-line log-send";
+    p.textContent = `[${ts}] ${String(line)}`;
+    box.appendChild(p);
+  }
+
+  const max = getMaxLogLines();
+  const all = box.querySelectorAll("p.log-line");
+  if (all.length > max) {
+    const removeCount = all.length - max;
+    for (let i = 0; i < removeCount; i++) box.removeChild(all[i]);
+  }
+
+  if (atBottom) box.scrollTop = box.scrollHeight - box.clientHeight;
 }
