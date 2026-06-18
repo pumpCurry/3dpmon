@@ -800,11 +800,11 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
-        // ★ printfinish: 機器の明示値(1/0)をそのまま渡す。null=印刷中/未確定 は null のまま。
-        //   旧実装は finishEpoch(=finishTime, 印刷中ジョブでも usagetime から派生して付く)が
-        //   あれば 1 に昇格させていたため、印刷中ジョブを再起動時に「成功(✔)」と誤確定して
-        //   いた。完了が確認できるまで成否を確定しない（誤計上防止）。
-        printfinish:   job.printfinish ?? null,
+        // ★ printfinish: finishTime(=完了)が無ければ未確定(null)。あれば明示値(1/0)をそのまま。
+        //   印刷中ジョブ(finishTime なし)は保存値が誤って 0/1 でも表示で未確定(…)に矯正する
+        //   （K1 履歴再取得の早すぎる result / マージ復元によるストアの誤確定を描画側で吸収）。
+        //   完了(finishTime 付与)後に初めて ✔/✗ を表示する。
+        printfinish:   finishEpoch ? (job.printfinish ?? null) : null,
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
@@ -1297,20 +1297,15 @@ export function updateHistoryList(
     .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_PRINT_HISTORY);
 
-  // ★ 印刷中の現在ジョブは「未完了」＝ printfinish を確定しない（誤計上防止）。
-  //   K1 は履歴再取得時に印刷中エントリへ printfinish=0(早すぎる失敗) を付けて寄越すため、
-  //   現在の印刷ID(getCurrentPrintID)かつ機器が稼働中(printing/paused)のエントリは
-  //   成否(0/1)が入っていても null へ強制し、完了報告後に初めて確定させる。
-  //   （これは既存の誤確定済みエントリも次回マージで自己修復する）
-  try {
-    const _curId = getCurrentPrintID(host);
-    const _st = Number(machine?.runtimeData?.state ?? -1);
-    const _active = (_st === PRINT_STATE_CODE.printStarted || _st === PRINT_STATE_CODE.printPaused);
-    if (_curId && _active) {
-      const ce = jobs.find(j => String(j.id) === String(_curId));
-      if (ce && ce.printfinish != null) ce.printfinish = null;
-    }
-  } catch { /* noop */ }
+  // ★ 未完了ジョブ(終了時刻なし)は成否を確定しない＝printfinish=null（誤計上防止・タイミング非依存）。
+  //   K1 は履歴再取得で印刷中エントリへ早すぎる printfinish=0 を付け(usagetime=0/finishTime=null)、
+  //   さらにマージが旧値(0)を復元するため、保存直前に「finishTime が無いエントリは未確定(null)」へ
+  //   正規化する。完了報告(finishTime 付与)後に初めて ✔/✗ が確定し、既存の誤確定エントリ
+  //   (printfinish=0/finishTime=null)も次回マージで自己修復される。
+  //   ※ getCurrentPrintID 依存だと起動時(現在ID未確立)に発火せず外していた。finishTime 基準は確実。
+  jobs.forEach(j => {
+    if (j.finishTime == null && j.printfinish != null) j.printfinish = null;
+  });
 
   const videoMap = loadVideos(host);
   jobs.forEach(j => {
