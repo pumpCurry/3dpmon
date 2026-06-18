@@ -596,15 +596,15 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
-  // printfinish: 機器の明示値を最優先。未設定のときは「終了済み(endtime あり)」の
-  //   ジョブに限り使用時間から成否を推測し、終了時刻が無い=印刷中/未確定は null のまま
-  //   残す。★ 旧実装は printfinish 未設定を無条件に usagetime>0?1:0 で確定していたため、
-  //   印刷中ジョブを再起動時に「IR3v2=usagetime>0→成功(✔) / K1=usagetime0→失敗(✗)」と
-  //   誤確定＝誤計上していた。完了が確認できるまで成否を確定しない（null=印刷中/未確定）。
-  const _hasFinishSignal = (raw.endtime != null && Number(raw.endtime) > 0);
-  const printfinish    = raw.printfinish != null
-    ? Number(raw.printfinish)
-    : (_hasFinishSignal ? (useTimeSec > 0 ? 1 : 0) : null);
+  // printfinish: 完了シグナル(実印刷時間 usagetime>0 または 終了時刻 endtime>0)が有る
+  //   ジョブのみ成否を確定する。どちらも無い＝印刷中/未完了は null（未確定）にし、
+  //   機器の「早すぎる result」も無視する。★ K1 は履歴再取得で印刷中エントリに
+  //   printfinish=0 を付けて寄越すため、明示値があっても完了シグナルが無ければ信頼しない
+  //   （印刷中ジョブを再起動時に失敗(✗)/成功(✔)へ誤確定＝誤計上していた根本対策）。
+  const _finished = (useTimeSec > 0) || (raw.endtime != null && Number(raw.endtime) > 0);
+  const printfinish    = _finished
+    ? (raw.printfinish != null ? Number(raw.printfinish) : (useTimeSec > 0 ? 1 : 0))
+    : null;
   // 材料使用量: 機器報告値をそのまま保持（丸めない）
   const materialUsedMm = Number(raw.usagematerial || 0);
 
@@ -800,11 +800,11 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
-        // ★ printfinish: 機器の明示値(1/0)をそのまま渡す。null=印刷中/未確定 は null のまま。
-        //   旧実装は finishEpoch(=finishTime, 印刷中ジョブでも usagetime から派生して付く)が
-        //   あれば 1 に昇格させていたため、印刷中ジョブを再起動時に「成功(✔)」と誤確定して
-        //   いた。完了が確認できるまで成否を確定しない（誤計上防止）。
-        printfinish:   job.printfinish ?? null,
+        // ★ printfinish: finishTime(=完了)が無ければ未確定(null)。あれば明示値(1/0)をそのまま。
+        //   印刷中ジョブ(finishTime なし)は保存値が誤って 0/1 でも表示で未確定(…)に矯正する
+        //   （K1 履歴再取得の早すぎる result / マージ復元によるストアの誤確定を描画側で吸収）。
+        //   完了(finishTime 付与)後に初めて ✔/✗ を表示する。
+        printfinish:   finishEpoch ? (job.printfinish ?? null) : null,
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
@@ -1296,6 +1296,16 @@ export function updateHistoryList(
   const jobs = Array.from(mergedMap.values())
     .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_PRINT_HISTORY);
+
+  // ★ 未完了ジョブ(終了時刻なし)は成否を確定しない＝printfinish=null（誤計上防止・タイミング非依存）。
+  //   K1 は履歴再取得で印刷中エントリへ早すぎる printfinish=0 を付け(usagetime=0/finishTime=null)、
+  //   さらにマージが旧値(0)を復元するため、保存直前に「finishTime が無いエントリは未確定(null)」へ
+  //   正規化する。完了報告(finishTime 付与)後に初めて ✔/✗ が確定し、既存の誤確定エントリ
+  //   (printfinish=0/finishTime=null)も次回マージで自己修復される。
+  //   ※ getCurrentPrintID 依存だと起動時(現在ID未確立)に発火せず外していた。finishTime 基準は確実。
+  jobs.forEach(j => {
+    if (j.finishTime == null && j.printfinish != null) j.printfinish = null;
+  });
 
   const videoMap = loadVideos(host);
   jobs.forEach(j => {
