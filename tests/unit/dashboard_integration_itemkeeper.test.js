@@ -56,6 +56,11 @@ vi.doMock("../../3dp_lib/dashboard_notification_manager.js", () => ({
     setWebhookUrls: vi.fn(), setWebhookIndependent: vi.fn(), setStatusSnapshot: vi.fn()
   }
 }));
+/** printmanager.getFileList を mock（_attachFiles の動的 import が解決する） */
+const mockFiles = {};
+vi.doMock("../../3dp_lib/dashboard_printmanager.js", () => ({
+  getFileList: (host) => mockFiles[host] || []
+}));
 
 const { ItemKeeperIntegration } = await import("../../3dp_lib/dashboard_integration_itemkeeper.js");
 
@@ -299,6 +304,117 @@ describe("カメラ画像添付 (attachCamera / device.camera)", () => {
     vi.spyOn(ik, "_post").mockResolvedValue({ ok: true });
     await ik.sendSnapshot({ trigger: "print.finished", host: "k1" });
     expect(attach).not.toHaveBeenCalled();
+  });
+});
+
+describe("状態パネル添付 (attachState / device.state)", () => {
+  beforeEach(() => {
+    mockMonitorData.appSettings.connectionTargets = [
+      { dest: "192.168.1.5:9999", hostname: "k1", label: "1号機", ikDeviceAlias: "1号機" }
+    ];
+    mockMonitorData.machines.k1 = {
+      storedData: {
+        nozzleTemp: { rawValue: 215.34, computedValue: { value: "215.3", unit: "℃" } },
+        state:      { rawValue: 1, computedValue: "印刷中" },
+        bare:       { rawValue: 42, computedValue: null }
+      },
+      printStore: { history: [job({ id: 1700000000, materialUsedMm: 10 })] }
+    };
+  });
+
+  it("既定では attachState/attachFiles/attachFileThumbs は false（下位互換）", () => {
+    const ik = newIK();
+    expect(ik.settings.attachState).toBe(false);
+    expect(ik.settings.attachFiles).toBe(false);
+    expect(ik.settings.attachFileThumbs).toBe(false);
+  });
+
+  it("_buildState は raw＋正規化(value/unit/text)を併記する", () => {
+    const ik = newIK();
+    const st = ik._buildState("k1");
+    expect(st.fields.nozzleTemp).toEqual({ raw: 215.34, value: "215.3", unit: "℃", text: "215.3℃" });
+    expect(st.fields.state).toEqual({ raw: 1, value: "印刷中", unit: "", text: "印刷中" });
+    // computedValue=null は raw を value に流用、unit 無し
+    expect(st.fields.bare).toEqual({ raw: 42, value: "42", unit: "", text: "42" });
+    expect(typeof st.capturedAt).toBe("string");
+  });
+
+  it("_attachState は各 device に state を付与する", () => {
+    const ik = newIK();
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    ik._attachState(snap);
+    const d = snap.devices.find(x => x.device.hostname === "k1");
+    expect(d.state.fields.nozzleTemp.text).toBe("215.3℃");
+  });
+
+  it("attachState=ON のとき sendSnapshot は _attachState を呼ぶ", async () => {
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", attachState: true });
+    const spy = vi.spyOn(ik, "_attachState");
+    vi.spyOn(ik, "_post").mockResolvedValue({ ok: true });
+    await ik.sendSnapshot({ trigger: "print.finished", host: "k1" });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ファイル一覧添付 (attachFiles / device.files)", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(mockFiles)) delete mockFiles[k];
+    mockMonitorData.appSettings.connectionTargets = [
+      { dest: "192.168.1.5:9999", hostname: "k1", label: "1号機", ikDeviceAlias: "1号機" }
+    ];
+    mockMonitorData.machines.k1 = { storedData: {}, printStore: { history: [job({ id: 1700000000, materialUsedMm: 10 })] } };
+  });
+
+  it("_attachFiles は getFileList を整形して device.files に付与する", async () => {
+    mockFiles.k1 = [
+      { basename: "a.gcode", filename: "/card/gcodes/a.gcode", size: 1234, layer: 100, mtime: new Date(1700000000000), expect: 5000, thumbUrl: "http://192.168.1.5/downloads/a.png" }
+    ];
+    const ik = newIK();
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    await ik._attachFiles(snap, false);
+    const d = snap.devices.find(x => x.device.hostname === "k1");
+    expect(d.files.items).toHaveLength(1);
+    expect(d.files.items[0]).toMatchObject({
+      name: "a.gcode", path: "/card/gcodes/a.gcode", sizeBytes: 1234, layer: 100, expectMm: 5000,
+      modifiedSec: 1700000000, thumbnailUrl: "http://192.168.1.5/downloads/a.png"
+    });
+    expect(d.files.items[0].thumbnail).toBeUndefined(); // withThumbs=false
+  });
+
+  it("ファイル一覧が空の機器は files を付けない", async () => {
+    const ik = newIK();
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    await ik._attachFiles(snap, false);
+    const d = snap.devices.find(x => x.device.hostname === "k1");
+    expect(d.files).toBeUndefined();
+  });
+
+  it("withThumbs=true は IPC(getImageBase64) 結果を thumbnail に入れる", async () => {
+    mockFiles.k1 = [
+      { basename: "a.gcode", filename: "/card/gcodes/a.gcode", size: 1, thumbUrl: "http://192.168.1.5/downloads/a.png" }
+    ];
+    const prevWindow = globalThis.window;
+    globalThis.window = { electronAPI: { getImageBase64: vi.fn().mockResolvedValue({ mime: "image/png", dataBase64: "Zm9v", bytes: 3 }) } };
+    try {
+      const ik = newIK();
+      const snap = ik.buildSnapshot("print.finished", "k1");
+      await ik._attachFiles(snap, true);
+      const it = snap.devices.find(x => x.device.hostname === "k1").files.items[0];
+      expect(globalThis.window.electronAPI.getImageBase64).toHaveBeenCalledWith("k1", "/downloads/a.png");
+      expect(it.thumbnail).toEqual({ mime: "image/png", dataBase64: "Zm9v", bytes: 3 });
+    } finally {
+      globalThis.window = prevWindow;
+    }
+  });
+
+  it("attachFiles=ON のとき sendSnapshot は _attachFiles を呼ぶ", async () => {
+    mockFiles.k1 = [{ basename: "a.gcode", filename: "/card/gcodes/a.gcode", size: 1 }];
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", attachFiles: true });
+    const spy = vi.spyOn(ik, "_attachFiles");
+    vi.spyOn(ik, "_post").mockResolvedValue({ ok: true });
+    await ik.sendSnapshot({ trigger: "print.finished", host: "k1" });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(expect.anything(), false); // attachFileThumbs 既定OFF
   });
 });
 

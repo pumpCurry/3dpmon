@@ -42,6 +42,10 @@ const SETTINGS_KEY = "itemkeeper";
 const MAX_RETRY = 3;
 /** カメラ画像取得の打ち切りタイムアウト[ms]（送信を不当に遅延させない） */
 const CAMERA_CAPTURE_TIMEOUT_MS = 4500;
+/** サムネ Base64 取得の同時実行数（プリンタ負荷・送信遅延を抑える） */
+const THUMB_FETCH_CONCURRENCY = 4;
+/** 1機あたりのサムネ取得上限枚数（暴走防止。超過分は thumbnailUrl のみ） */
+const THUMB_MAX_PER_DEVICE = 60;
 
 /** 既定設定 */
 const DEFAULTS = Object.freeze({
@@ -49,14 +53,17 @@ const DEFAULTS = Object.freeze({
   endpoint: "",
   clientId: "",
   secret: "",
-  encoding: "none",      // Phase1 固定
-  attachCamera: false,   // 各機の現在カメラ画像(Base64/JPEG)を device.camera に添付（既定OFF=下位互換）
-  onStart: true,         // 印刷開始時に送信
-  onFinish: true,        // 印刷終了(完了/失敗)時に送信
-  onPause: true,         // 一時停止時に送信
-  onInterval: false,     // 指定タイミング(intervalMin 分ごと)に送信
-  intervalMin: 5,        // 指定タイミング間隔[分]（既定5）
-  historyScope: "all"    // "all" | "recent:{n}"
+  encoding: "none",        // Phase1 固定
+  attachCamera: false,     // 各機の現在カメラ画像(Base64/JPEG)を device.camera に添付（既定OFF=下位互換）
+  attachState: false,      // 状態パネル(storedData)を device.state に添付（raw＋computed）
+  attachFiles: false,      // ファイル一覧を device.files に添付（メタ情報）
+  attachFileThumbs: false, // files[].thumbnail に Base64 サムネを添付（attachFiles 前提・重い）
+  onStart: true,           // 印刷開始時に送信
+  onFinish: true,          // 印刷終了(完了/失敗)時に送信
+  onPause: true,           // 一時停止時に送信
+  onInterval: false,       // 指定タイミング(intervalMin 分ごと)に送信
+  intervalMin: 5,          // 指定タイミング間隔[分]（既定5）
+  historyScope: "all"      // "all" | "recent:{n}"
 });
 
 /** 属性値エスケープ */
@@ -432,6 +439,206 @@ export class ItemKeeperIntegration {
     }));
   }
 
+  // ───────────────────────────── 状態パネル添付 ─────────────────────────────
+
+  /**
+   * 値を JSON 安全な形へ落とす（オブジェクト/関数/循環は文字列化）。
+   * @private
+   */
+  _jsonSafe(v) {
+    if (v == null) return null;
+    const t = typeof v;
+    if (t === "number" || t === "string" || t === "boolean") return v;
+    try { return JSON.parse(JSON.stringify(v)); } catch { return String(v); }
+  }
+
+  /**
+   * 1 ホストの状態パネル(storedData)を device.state 形へ整形する。
+   * 各キーは raw（加工前＝rawValue）と value/unit/text（加工後＝computedValue 正規化）を併記。
+   *
+   * @private
+   * @param {string} host
+   * @returns {{capturedAt:string, fields:Object<string,{raw:*,value:string,unit:string,text:string}>}|null}
+   */
+  _buildState(host) {
+    const sd = monitorData.machines?.[host]?.storedData;
+    if (!sd || typeof sd !== "object") return null;
+    const fields = {};
+    for (const key of Object.keys(sd)) {
+      const d = sd[key];
+      if (!d || typeof d !== "object") continue;
+      const raw = this._jsonSafe(d.rawValue);
+      const cv = d.computedValue;
+      let value = "", unit = "";
+      if (cv && typeof cv === "object" && "value" in cv) {
+        value = String(cv.value ?? "");
+        unit = String(cv.unit ?? "");
+      } else if (cv != null) {
+        value = String(cv);
+      } else if (raw != null) {
+        value = String(raw);
+      }
+      const text = unit ? `${value}${unit}` : value;
+      fields[key] = { raw, value, unit, text };
+    }
+    if (!Object.keys(fields).length) return null;
+    return { capturedAt: new Date().toISOString(), fields };
+  }
+
+  /**
+   * スナップショットの各 device に状態パネル(device.state)を添付する（同期）。
+   * @private
+   * @param {{devices:Array<object>}} snap
+   * @returns {void}
+   */
+  _attachState(snap) {
+    for (const d of (snap?.devices || [])) {
+      const host = d?.device?.hostname;
+      if (!host) continue;
+      try { const st = this._buildState(host); if (st) d.state = st; } catch { /* 省略 */ }
+    }
+  }
+
+  // ───────────────────────────── ファイル一覧添付 ─────────────────────────────
+
+  /**
+   * printmanager.getFileList を遅延取得する（静的 import の循環依存を避ける）。
+   * @private
+   * @returns {Promise<((host:string)=>Array<object>)|null>}
+   */
+  async _getFileListFn() {
+    if (this.__getFileList !== undefined) return this.__getFileList;
+    try {
+      const m = await import("./dashboard_printmanager.js");
+      this.__getFileList = typeof m.getFileList === "function" ? m.getFileList : null;
+    } catch { this.__getFileList = null; }
+    return this.__getFileList;
+  }
+
+  /**
+   * ファイル一覧エントリ（printmanager 形）を §4.5 の files item へ整形する。
+   * @private
+   */
+  _fileItem(f) {
+    const mtime = f?.mtime;
+    const modifiedSec = (mtime instanceof Date) ? Math.floor(mtime.getTime() / 1000)
+      : (Number.isFinite(Number(mtime)) ? Number(mtime) : null);
+    const item = {
+      name: f?.basename || "",
+      path: f?.filename || "",
+      sizeBytes: Number(f?.size) || 0,
+      modifiedSec,
+      layer: Number.isFinite(Number(f?.layer)) ? Number(f.layer) : null,
+      expectMm: Number(f?.expect ?? f?.usagematerial) || 0
+    };
+    if (f?.thumbUrl) item.thumbnailUrl = String(f.thumbUrl);
+    return item;
+  }
+
+  /**
+   * 絶対/相対のサムネ URL から「pathname+search」を取り出す（IPC/リレー転送用パス）。
+   * @private
+   */
+  _urlPath(url) {
+    const u = String(url || "");
+    if (!u) return "";
+    try {
+      const parsed = new URL(u, "http://x");
+      return (parsed.pathname || "") + (parsed.search || "");
+    } catch {
+      return u.startsWith("/") ? u : "/" + u;
+    }
+  }
+
+  /**
+   * 1 枚のサムネ画像を Base64 で取得する（カメラと同じ二経路フォールバック）。
+   *  1. Electron 親: window.electronAPI.getImageBase64(host, path)
+   *  2. リレー子/同一オリジン http: /relay-image/{host}/{path}
+   * 取得不能なら null。host+path 単位でインメモリキャッシュ（サムネは実質不変）。
+   *
+   * @private
+   * @param {string} host
+   * @param {string} thumbUrl
+   * @returns {Promise<{mime:string,dataBase64:string,bytes:number}|null>}
+   */
+  async _captureThumb(host, thumbUrl) {
+    const path = this._urlPath(thumbUrl);
+    if (!host || !path) return null;
+    if (!this._thumbCache) this._thumbCache = new Map();
+    const ck = host + "\n" + path;
+    if (this._thumbCache.has(ck)) return this._thumbCache.get(ck);
+
+    let result = null;
+    // 1) Electron 親: IPC（CORS 回避）
+    try {
+      if (typeof window !== "undefined" && window.electronAPI?.getImageBase64) {
+        const r = await this._withTimeout(window.electronAPI.getImageBase64(host, path), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (r && r.dataBase64) result = { mime: r.mime || "image/png", dataBase64: r.dataBase64, bytes: Number(r.bytes) || 0 };
+      } else if (typeof fetch === "function" && typeof location !== "undefined" && /^https?:$/.test(location.protocol)) {
+        // 2) リレー子/同一オリジン http: 親プロキシ（downloads/ 配下のみ）
+        const rel = path.replace(/^\/+/, "");
+        const url = `/relay-image/${encodeURIComponent(host)}/${rel}`;
+        const res = await this._withTimeout(fetch(url, { cache: "no-store" }), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (res && res.ok) {
+          const blob = await res.blob();
+          const b64 = await this._blobToBase64(blob);
+          if (b64) result = { mime: blob.type || "image/png", dataBase64: b64, bytes: Number(blob.size) || 0 };
+        }
+      }
+    } catch { /* null のまま */ }
+
+    this._thumbCache.set(ck, result);
+    return result;
+  }
+
+  /**
+   * スナップショットの各 device にファイル一覧(device.files)を添付する。
+   * withThumbs=true のときは files[].thumbnail に Base64 サムネを付与する
+   * （同時実行数・1機あたり枚数を制限。取得失敗は thumbnailUrl のみ残す）。
+   *
+   * @private
+   * @param {{devices:Array<object>}} snap
+   * @param {boolean} withThumbs
+   * @returns {Promise<void>}
+   */
+  async _attachFiles(snap, withThumbs) {
+    const getFileList = await this._getFileListFn();
+    if (!getFileList) return;
+    await Promise.all((snap?.devices || []).map(async (d) => {
+      const host = d?.device?.hostname;
+      if (!host) return;
+      let list = [];
+      try { list = getFileList(host) || []; } catch { list = []; }
+      if (!list.length) return;
+      const items = list.map(f => this._fileItem(f));
+      if (withThumbs) await this._attachThumbs(host, items);
+      d.files = { capturedAt: new Date().toISOString(), items };
+    }));
+  }
+
+  /**
+   * files items に Base64 サムネを並列（上限つき）で付与する。
+   * @private
+   * @param {string} host
+   * @param {Array<object>} items
+   * @returns {Promise<void>}
+   */
+  async _attachThumbs(host, items) {
+    const targets = items.filter(it => it.thumbnailUrl).slice(0, THUMB_MAX_PER_DEVICE);
+    let idx = 0;
+    const worker = async () => {
+      while (idx < targets.length) {
+        const it = targets[idx++];
+        try {
+          const thumb = await this._captureThumb(host, it.thumbnailUrl);
+          if (thumb) it.thumbnail = thumb;
+        } catch { /* 省略 */ }
+      }
+    };
+    const n = Math.min(THUMB_FETCH_CONCURRENCY, targets.length);
+    await Promise.all(Array.from({ length: n }, () => worker()));
+  }
+
   // ───────────────────────────── HTTP 送信 ─────────────────────────────
 
   /** @private ランダム UUID（フォールバックあり） */
@@ -497,10 +704,17 @@ export class ItemKeeperIntegration {
     const event = trigger || "";
     const snap = this.buildSnapshot(event, host);
     if (!snap.devices.length) return { ok: false, skipped: true };
-    // カメラ画像(Base64)を各機に添付（ON時のみ）。取得失敗機は省略＝下位互換。
-    // 413(サイズ超過)時は _post 内の縮小再送が buildSnapshot で組み直すため画像は自然に外れる。
+    // 任意ブロック（カメラ/状態/ファイル）を各機に添付（ON時のみ）。取得失敗機は省略＝下位互換。
+    // 413(サイズ超過)時は _post 内の縮小再送が buildSnapshot で組み直すため、これら重い任意
+    // ブロックは再送時に自然に外れて履歴のみ送られる（履歴優先）。
     if (s.attachCamera) {
       try { await this._attachCameras(snap); } catch { /* 添付失敗は無視して履歴のみ送る */ }
+    }
+    if (s.attachState) {
+      try { this._attachState(snap); } catch { /* 省略 */ }
+    }
+    if (s.attachFiles) {
+      try { await this._attachFiles(snap, !!s.attachFileThumbs); } catch { /* 省略 */ }
     }
     return this._post(endpoint, event, snap, { host, retriesLeft: MAX_RETRY });
   }
@@ -807,6 +1021,23 @@ export class ItemKeeperIntegration {
               ※送信のたびに各機のスナップショットを取得し <code>device.camera</code> に付与します。カメラ無し/オフラインの機器は省略されます（下位互換）。機器ごとのON-OFFは下表の「カメラ」列で調整できます。
             </div>
 
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">状態・ファイルの添付</div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-state" ${s.attachState ? "checked" : ""}>
+              状態パネルの内容を添付する（<code>device.state</code>／加工前 raw ＋ 加工後 value/unit/text）
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-files" ${s.attachFiles ? "checked" : ""}>
+              ファイル一覧を添付する（<code>device.files</code>／ファイル名・サイズ・日時等）
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;margin:0 0 2px 22px;">
+              <input type="checkbox" data-role="ik-attach-thumbs" ${s.attachFileThumbs ? "checked" : ""}>
+              ↳ サムネ画像も Base64 で添付する（重い・ファイル一覧ONが前提）
+            </label>
+            <div style="font-size:11px;color:#999;margin:0 0 6px 22px;">
+              ※状態/ファイルは各機ごとに付与。取得できない機器は省略されます（下位互換）。サムネBase64は送信のたびに各ファイルの画像取得が走るため本文が大きくなります（既定OFF）。
+            </div>
+
             <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF / カメラ添付）</div>
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
               <thead><tr style="color:#667;text-align:left;">
@@ -924,6 +1155,9 @@ export class ItemKeeperIntegration {
     this.settings.secret = q('[data-role="ik-secret"]')?.value || "";
     this.settings.encoding = "none";
     this.settings.attachCamera = !!q('[data-role="ik-attach-camera"]')?.checked;
+    this.settings.attachState = !!q('[data-role="ik-attach-state"]')?.checked;
+    this.settings.attachFiles = !!q('[data-role="ik-attach-files"]')?.checked;
+    this.settings.attachFileThumbs = !!q('[data-role="ik-attach-thumbs"]')?.checked;
     this.settings.historyScope = q('[data-role="ik-scope"]')?.value || "all";
     this.settings.onStart = !!q('[data-role="ik-onstart"]')?.checked;
     this.settings.onFinish = !!q('[data-role="ik-onfinish"]')?.checked;
