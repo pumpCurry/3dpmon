@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.2.1029 (2026-06-19)
+
+### ItemKeeper 連携: 状態パネル・ファイル一覧の添付オプション（＋サムネ Base64）
+
+カメラ添付に続き、送信ペイロードに任意ブロックを2つ追加した。いずれも**既定 OFF・任意フィールド・スキーマ番号据え置き＝下位互換維持**。全体トグルのみ（機器別は既存の連携ON/OFF で制御）。
+
+- **状態パネル `device.state`（`attachState`）**: 各機の `storedData` 全キーを付与。各キーは **加工前 `raw`（プリンタ生値）＋ 加工後 `value`/`unit`/`text`（UI変換値）を併記**。`storedData` は `rawValue` と `computedValue` を同居保持しているため両方を無損失で送れる。in-memory 由来でクロスオリジン無関係。
+- **ファイル一覧 `device.files`（`attachFiles`）**: `getFileList(host)` から name/path/sizeBytes/modifiedSec/layer/expectMm/thumbnailUrl を整形。in-memory 由来。
+- **サムネ Base64 `files[].thumbnail`（`attachFileThumbs`）**: ファイル一覧ON時の追加オプション。カメラと同型の取得（① Electron 親＝新 IPC `get-image-base64`＝`/relay-image` と同じ SSRF 制約[`downloads/` 配下・`httpPort`] ② リレー子/同一オリジン＝`/relay-image/{host}/{path}` fetch）。**同時取得数（4）・1機あたり枚数（60）を制限**し、host+path 単位でキャッシュ。取得不能は `thumbnailUrl` のみ残す。
+- いずれの任意ブロックも **413（サイズ超過）時は履歴縮小再送が `buildSnapshot` で組み直すため自動的に外れる**（履歴優先）。`buildSnapshot` は純粋同期のまま、添付は `sendSnapshot` の非同期ステップ。
+
+#### テスト
+- 全711テスト緑（ItemKeeper 連携 +8: state 正規化/`_attachState`/files 整形/空スキップ/サムネIPC/sendSnapshot 分岐、外部連携モーダル +2: 新トグル描画・保存）。spec §2.1/4.5/4.6 更新。
+
+---
+
 ## v2.2.1027 (2026-06-17)
 
 ### ItemKeeper 連携: カメラ画像(Base64)の添付オプション

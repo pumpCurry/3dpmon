@@ -100,6 +100,14 @@ describe("initModalUI（描画）", () => {
     expect(c.querySelector('[data-ik-camera="192.168.1.5:9999"]').checked).toBe(true);
   });
 
+  it("状態/ファイル/サムネ添付トグル（既定OFF）を描画", () => {
+    const ik = new ItemKeeperIntegration();
+    const c = openModal(ik);
+    expect(c.querySelector('[data-role="ik-attach-state"]')?.checked).toBe(false);
+    expect(c.querySelector('[data-role="ik-attach-files"]')?.checked).toBe(false);
+    expect(c.querySelector('[data-role="ik-attach-thumbs"]')?.checked).toBe(false);
+  });
+
   it("ikCamera=false の機器はカメラ列が未チェック", () => {
     mockMonitorData.appSettings.connectionTargets = [
       { dest: "192.168.1.5:9999", hostname: "k1", label: "1号機", ikEnabled: true, ikCamera: false }
@@ -154,6 +162,19 @@ describe("_commitModal（保存して戻る）", () => {
     expect(mockMonitorData.appSettings.itemkeeper.attachCamera).toBe(true);
     const t = mockMonitorData.appSettings.connectionTargets.find(x => x.dest === "192.168.1.5:9999");
     expect(t.ikCamera).toBe(false);
+  });
+
+  it("状態/ファイル/サムネ添付トグルを確定し永続化", () => {
+    const ik = new ItemKeeperIntegration();
+    const c = openModal(ik);
+    c.querySelector('[data-role="ik-attach-state"]').checked = true;
+    c.querySelector('[data-role="ik-attach-files"]').checked = true;
+    c.querySelector('[data-role="ik-attach-thumbs"]').checked = true;
+    c.querySelector('[data-role="ext-save"]').click();
+    expect(ik.settings.attachState).toBe(true);
+    expect(ik.settings.attachFiles).toBe(true);
+    expect(ik.settings.attachFileThumbs).toBe(true);
+    expect(mockMonitorData.appSettings.itemkeeper.attachFiles).toBe(true);
   });
 
   it("キャンセルは設定を変更しない", () => {

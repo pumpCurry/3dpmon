@@ -863,6 +863,45 @@ app.whenReady().then(async () => {
     }
   });
 
+  // レンダラー(親) → プリンタ静的画像（サムネ等, downloads/ 配下）を Base64 で取得。
+  // 親レンダラーは file:// オリジンのため CORS で読めない。/relay-image プロキシと同じ
+  // SSRF/トラバーサル対策（_cameraEndpoints 限定・downloads/ 配下のみ・".." 禁止・httpPort）を適用。
+  // ItemKeeper 連携の files[].thumbnail 添付で使用。
+  ipcMain.handle("get-image-base64", async (_e, host, reqPath) => {
+    const ep = _cameraEndpoints[host];
+    if (!ep || !ep.ip) return null;
+    // パス正規化＆検査: クエリ分離 → 先頭スラッシュ除去 → downloads/ 配下のみ・".." 禁止
+    const raw = String(reqPath || "");
+    const qIdx = raw.indexOf("?");
+    const query = qIdx >= 0 ? raw.slice(qIdx) : "";
+    let cleanPath = (qIdx >= 0 ? raw.slice(0, qIdx) : raw).replace(/^\/+/, "");
+    if (cleanPath.includes("..") || !cleanPath.startsWith("downloads/")) return null;
+    const port = ep.httpPort || 80;
+    return await new Promise((resolve) => {
+      const req = http.get(
+        { host: ep.ip, port, path: "/" + cleanPath + query, timeout: _IMG_FETCH_TIMEOUT_MS },
+        (resp) => {
+          if (resp.statusCode !== 200) { resp.resume(); resolve(null); return; }
+          const chunks = [];
+          let total = 0;
+          resp.on("data", (chunk) => {
+            total += chunk.length;
+            if (total > _IMG_MAX_BYTES) { req.destroy(); resolve(null); return; }
+            chunks.push(chunk);
+          });
+          resp.on("end", () => {
+            const buf = Buffer.concat(chunks);
+            const mime = resp.headers["content-type"] || "image/png";
+            resolve({ mime, dataBase64: buf.toString("base64"), bytes: buf.length });
+          });
+          resp.on("error", () => resolve(null));
+        }
+      );
+      req.on("timeout", () => req.destroy());
+      req.on("error", () => resolve(null));
+    });
+  });
+
   /* ─── ARP 解決 IPC ─── */
   const { resolveArp, scanArpTable, isCrealityDevice } = require("./arp_resolver.js");
 
