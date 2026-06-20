@@ -137,6 +137,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onRelayFilament: (callback) => ipcRenderer.on("relay-filament", (_, data) => callback(data)),
 
   /**
+   * リレー経由の外部連携設定変更（satellite→親）を受信するリスナーを登録する。
+   * 親レンダラーが ItemKeeper 設定を確定保存し、次回 delta で全子へ還流する。
+   *
+   * @param {Function} callback - (data: {payload}) => void
+   */
+  onRelaySettings: (callback) => ipcRenderer.on("relay-settings", (_, data) => callback(data)),
+
+  /**
    * リレー経由のスナップショット要求を受信するリスナーを登録する。
    *
    * @param {Function} callback - (data: {clientId}) => void
