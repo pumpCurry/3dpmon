@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.2.1030 (2026-06-20)
+
+### ItemKeeper 連携: フィラメント更新履歴の添付オプション（spools[] レジストリ＋装着/切れ交換イベント）
+
+#### 新機能
+- **`attachFilamentHistory`（既定 OFF＝完全後方互換）**: ON で ItemKeeper への送信 JSON に次を付与。カメラ/状態/ファイル添付と同じ作法（任意・取得不可は省略・413 時は縮小再送で自動離脱・スキーマ番号据え置き）。
+  - **トップレベル `spools[]`**: 画面上のフィラメント一覧（識別子レジストリ・削除済み除外）。`spoolId`/`serialNo`/`serialDisplay`(#NNN)/`name`/`material`/`colorName`/`colorHex`/`brand`/径・密度/総・残量/`isActive`/`hostname`/`usedLengthLog`（スプール視点の per-print 消費）。履歴・ジョブの `spoolId` を画面上の識別子へ解決できる。
+  - **各機 `device.filamentHistory`**: 装着/取外し履歴（`mountHistory`・ADR-0004）＋切れ/交換イベント（`events`・ADR-0005）を host 別に付与。
+  - **ジョブ毎 `jobs[].filaments[]` に `serialDisplay`(#NNN)・`name` を追加**（画面識別子・後方互換の追加フィールド）。
+  - 消費量は印刷履歴 `jobs[]` に既出のため `usageHistory` は重複回避で除外（`usedLengthLog` のみ同梱）。
+- 外部連携モーダルに「フィラメント更新履歴の添付」トグルを追加。
+
+#### テスト
+- 全716テスト緑（新規6: spoolレジストリ/host別履歴/filaments識別子/送信ゲート）。touched 3dp_lib は eslint 0 error。仕様書 §2.1＋§4.7 追記。
+
+---
+
 ## v2.2.1029 (2026-06-19)
 
 ### ItemKeeper 連携: 状態パネル・ファイル一覧の添付オプション（＋サムネ Base64）

@@ -37,6 +37,7 @@ vi.doMock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.
 vi.doMock("../../3dp_lib/dashboard_spool.js", () => ({
   getSpoolById: (id) => mockSpools[id] || null,
   getMaterialDensity: () => 1.24,
+  formatSpoolDisplayId: (sp) => "#" + String(sp?.serialNo || 0).padStart(3, "0"),
   weightFromLength: (mm, density, dia) => {
     const r = (dia || 1.75) / 2;
     return Math.PI * r * r * (mm / 1000) * (density || 1.24);
@@ -517,5 +518,70 @@ describe("指定タイミング定期送信 (onInterval)", () => {
     expect(spy).toHaveBeenCalledWith({ trigger: "snapshot.interval" });
     clearInterval(ik._intervalTimer);
     vi.useRealTimers();
+  });
+});
+
+describe("フィラメント更新履歴添付 (attachFilamentHistory)", () => {
+  beforeEach(() => {
+    mockMonitorData.appSettings.connectionTargets = [
+      { dest: "192.168.1.5:9999", hostname: "k1", label: "1号機", ikDeviceAlias: "1号機" }
+    ];
+    mockMonitorData.machines.k1 = { storedData: {}, printStore: { history: [job({ id: 1700000000, materialUsedMm: 10 })] } };
+    mockMonitorData.filamentSpools = [
+      { id: "s1", serialNo: 1, name: "緑PLA", materialName: "PLA", colorName: "Leaf Green", filamentColor: "#2ECC71",
+        manufacturerName: "CC3D", filamentDiameter: 1.75, density: 1.24, totalLengthMm: 330000, remainingLengthMm: 187400,
+        printCount: 3, isActive: true, hostname: "k1", usedLengthLog: [{ jobId: 1700000000, used: 14256 }] },
+      { id: "s9", serialNo: 9, name: "削除済", deleted: true }
+    ];
+    mockMonitorData.mountHistory = [
+      { evId: "mount_s1_1", ts: 1700000000000, type: "mount", host: "k1", spoolId: "s1", anchorRemainingMm: 200000, sinceJobId: 0 },
+      { evId: "unmount_s0_0", ts: 1699000000000, type: "unmount", host: "k2", spoolId: "s0", untilJobId: 1699 }
+    ];
+    mockMonitorData.filamentEventContext = {
+      k1: { evId: "fctx_k1_1", ts: 1700000500000, stateAtEvent: 5, oldSpoolId: "s1", oldRemainingMm: 1000,
+        oldRemainingPct: 0.5, runout: true, resolved: false, resolution: null, jobIdAtEvent: 1700000000 }
+    };
+  });
+
+  it("既定で attachFilamentHistory は false（下位互換）", () => {
+    expect(newIK().settings.attachFilamentHistory).toBe(false);
+  });
+
+  it("_buildSpoolRegistry は画面識別子(#NNN/name)＋消費ログを含み削除済を除外", () => {
+    const reg = newIK()._buildSpoolRegistry();
+    expect(reg).toHaveLength(1); // s9(deleted) 除外
+    expect(reg[0]).toMatchObject({
+      spoolId: "s1", serialNo: 1, serialDisplay: "#001", name: "緑PLA",
+      material: "PLA", colorName: "Leaf Green", colorHex: "#2ECC71", brand: "CC3D",
+      remainingLengthMm: 187400, isActive: true, hostname: "k1"
+    });
+    expect(reg[0].usedLengthLog).toEqual([{ jobId: "1700000000", usedMm: 14256 }]);
+  });
+
+  it("_attachFilamentHistory はトップレベル filaments[]＋各機 filamentHistory を付与(host別)", () => {
+    const ik = newIK();
+    const snap = ik.buildSnapshot("print.finished", "k1");
+    ik._attachFilamentHistory(snap);
+    expect(Array.isArray(snap.spools)).toBe(true);
+    expect(snap.spools[0].serialDisplay).toBe("#001");
+    const d = snap.devices.find(x => x.device.hostname === "k1");
+    expect(d.filamentHistory.mountHistory).toHaveLength(1); // k2分は除外
+    expect(d.filamentHistory.mountHistory[0]).toMatchObject({ type: "mount", spoolId: "s1", anchorRemainingMm: 200000, sinceJobId: "0" });
+    expect(d.filamentHistory.events).toHaveLength(1);
+    expect(d.filamentHistory.events[0]).toMatchObject({ oldSpoolId: "s1", runout: true, resolved: false });
+  });
+
+  it("attachFilamentHistory=ON のとき sendSnapshot は _attachFilamentHistory を呼ぶ", async () => {
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", attachFilamentHistory: true });
+    const spy = vi.spyOn(ik, "_attachFilamentHistory");
+    vi.spyOn(ik, "_post").mockResolvedValue({ ok: true });
+    await ik.sendSnapshot({ trigger: "print.finished", host: "k1" });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("ジョブ毎 filaments[] に serialDisplay(#NNN)＋name が入る", () => {
+    const fil = newIK().buildFilaments(job({ id: 5, filamentInfo: [{ spoolId: "s1", usedMm: 100, spoolName: "緑PLA" }] }));
+    expect(fil[0].serialDisplay).toBe("#001"); // mockSpools s1 serialNo=1
+    expect(fil[0].name).toBe("緑PLA");
   });
 });
