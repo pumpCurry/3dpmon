@@ -20,11 +20,12 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
   PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_",
   setNotificationSuppressed: vi.fn(), setStoredDataForHost: vi.fn(),
   ensureMachineData: vi.fn(), markAllKeysDirty: vi.fn(), scopedById: vi.fn(),
+  getHostDisplayName: vi.fn((h) => h),
 }));
 vi.mock("../../3dp_lib/dashboard_log_util.js", () => ({ pushLog: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({
   aggregatorUpdate: vi.fn(), restoreAggregatorState: vi.fn(),
-  restartAggregatorTimer: vi.fn(), stopAggregatorTimer: vi.fn(),
+  restartAggregatorTimer: vi.fn(), stopAggregatorTimer: vi.fn(), ensureAggregatorTimer: vi.fn(),
 }));
 vi.mock("../../3dp_lib/3dp_dashboard_init.js", () => ({ restorePrintResume: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_msg_handler.js", () => ({ processData: vi.fn() }));

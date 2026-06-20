@@ -200,7 +200,10 @@ export const monitorData = {
   appSettings: {
     updateInterval: 500,
     logMaxLines: 1000,
+    chartWindowMin: 15,   // 温度グラフの保持/表示時間枠（分）。古い点は破棄しメモリ無制限化を防ぐ
     logLevel: "info",
+    logReceivedRaw: false, // 受信生ログをログパネルに流す（K1系のみ）。既定OFF=CPU/ログ汚染防止
+
     autoConnect: true,
     // ★ wsDest は v2.2.0 で完全削除済み。connectionTargets が唯一の接続先リスト。
     connectionTargets: [],  // 複数接続先リスト [{dest, color?, label?}]
@@ -308,6 +311,36 @@ export function setStoredDataForHost(host, key, value, isRaw = true, isFromEquip
   }
   d.isNew = true;
   _getDirtySet(host).add(key);
+}
+
+/**
+ * 指定ホストの「表示名（呼び出し名称）」を解決する。
+ *
+ * 優先順: 接続先設定の表示名(label) ＞ 機器申告ホスト名 ＞ モデル名 ＞ ホストキー。
+ * ユーザーに見せる名称（通知の {hostname} 置換・読み上げ・機器別設定一覧・トップバー等）は
+ * 全てこれを通すことで、ユーザーが付けた表示名を「呼び出し名称」として一貫適用する。
+ *
+ * 接続先設定は host（＝機器申告ホスト名 or IP キー）から hostname / dest / dest先頭IP の
+ * いずれかで逆引きする。これにより Moonraker のようにホストキーが IP のまま
+ * （ホスト名へ未移行）でも label を解決できる。monitorData のみ参照（循環回避のため
+ * connection.js には依存しない）。
+ *
+ * @function getHostDisplayName
+ * @param {string} host - ホストキー（機器申告ホスト名 or IP）
+ * @returns {string} 表示名
+ */
+export function getHostDisplayName(host) {
+  if (!host) return host || "";
+  const targets = monitorData.appSettings?.connectionTargets || [];
+  const tgt = targets.find(t => t && (
+    t.hostname === host ||
+    t.dest === host ||
+    (typeof t.dest === "string" && t.dest.startsWith(host + ":"))
+  ));
+  const label = (tgt?.label || "").trim();
+  if (label) return label;
+  const m = monitorData.machines?.[host];
+  return m?.storedData?.hostname?.rawValue || m?.storedData?.model?.rawValue || host;
 }
 
 

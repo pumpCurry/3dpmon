@@ -1,5 +1,88 @@
 # Changelog
 
+## v2.2.1030 (2026-06-20)
+
+### ItemKeeper 連携: フィラメント更新履歴の添付オプション（spools[] レジストリ＋装着/切れ交換イベント）
+
+#### 新機能
+- **`attachFilamentHistory`（既定 OFF＝完全後方互換）**: ON で ItemKeeper への送信 JSON に次を付与。カメラ/状態/ファイル添付と同じ作法（任意・取得不可は省略・413 時は縮小再送で自動離脱・スキーマ番号据え置き）。
+  - **トップレベル `spools[]`**: 画面上のフィラメント一覧（識別子レジストリ・削除済み除外）。`spoolId`/`serialNo`/`serialDisplay`(#NNN)/`name`/`material`/`colorName`/`colorHex`/`brand`/径・密度/総・残量/`isActive`/`hostname`/`usedLengthLog`（スプール視点の per-print 消費）。履歴・ジョブの `spoolId` を画面上の識別子へ解決できる。
+  - **各機 `device.filamentHistory`**: 装着/取外し履歴（`mountHistory`・ADR-0004）＋切れ/交換イベント（`events`・ADR-0005）を host 別に付与。
+  - **ジョブ毎 `jobs[].filaments[]` に `serialDisplay`(#NNN)・`name` を追加**（画面識別子・後方互換の追加フィールド）。
+  - 消費量は印刷履歴 `jobs[]` に既出のため `usageHistory` は重複回避で除外（`usedLengthLog` のみ同梱）。
+- 外部連携モーダルに「フィラメント更新履歴の添付」トグルを追加。
+
+#### テスト
+- 全716テスト緑（新規6: spoolレジストリ/host別履歴/filaments識別子/送信ゲート）。touched 3dp_lib は eslint 0 error。仕様書 §2.1＋§4.7 追記。
+
+---
+
+## v2.2.1029 (2026-06-19)
+
+### ItemKeeper 連携: 状態パネル・ファイル一覧の添付オプション（＋サムネ Base64）
+
+カメラ添付に続き、送信ペイロードに任意ブロックを2つ追加した。いずれも**既定 OFF・任意フィールド・スキーマ番号据え置き＝下位互換維持**。全体トグルのみ（機器別は既存の連携ON/OFF で制御）。
+
+- **状態パネル `device.state`（`attachState`）**: 各機の `storedData` 全キーを付与。各キーは **加工前 `raw`（プリンタ生値）＋ 加工後 `value`/`unit`/`text`（UI変換値）を併記**。`storedData` は `rawValue` と `computedValue` を同居保持しているため両方を無損失で送れる。in-memory 由来でクロスオリジン無関係。
+- **ファイル一覧 `device.files`（`attachFiles`）**: `getFileList(host)` から name/path/sizeBytes/modifiedSec/layer/expectMm/thumbnailUrl を整形。in-memory 由来。
+- **サムネ Base64 `files[].thumbnail`（`attachFileThumbs`）**: ファイル一覧ON時の追加オプション。カメラと同型の取得（① Electron 親＝新 IPC `get-image-base64`＝`/relay-image` と同じ SSRF 制約[`downloads/` 配下・`httpPort`] ② リレー子/同一オリジン＝`/relay-image/{host}/{path}` fetch）。**同時取得数（4）・1機あたり枚数（60）を制限**し、host+path 単位でキャッシュ。取得不能は `thumbnailUrl` のみ残す。
+- いずれの任意ブロックも **413（サイズ超過）時は履歴縮小再送が `buildSnapshot` で組み直すため自動的に外れる**（履歴優先）。`buildSnapshot` は純粋同期のまま、添付は `sendSnapshot` の非同期ステップ。
+
+#### テスト
+- 全711テスト緑（ItemKeeper 連携 +8: state 正規化/`_attachState`/files 整形/空スキップ/サムネIPC/sendSnapshot 分岐、外部連携モーダル +2: 新トグル描画・保存）。spec §2.1/4.5/4.6 更新。
+
+---
+
+## v2.2.1027 (2026-06-17)
+
+### ItemKeeper 連携: カメラ画像(Base64)の添付オプション
+
+ItemKeeper 連携の送信ペイロードに「**現在のカメラ画像を各機ごとに添付**」するオプションを追加した。既定 OFF で、OFF 時は現行 JSON と完全一致＝**下位互換を維持**する。
+
+#### 追加内容
+- 新設定 `attachCamera`（既定 OFF）。ON で送信のたびに各機の現在カメラ画像（JPEG）を Base64 化し、`device.camera = { mime, dataBase64, bytes, capturedAt }` として付与する（任意フィールド・スキーマ番号据え置き）。
+- 機器別 `ikCamera`（既定 ON）。`attachCamera` ON 時、カメラ無し機などを `device.camera` 添付対象から個別に外せる。外部連携モーダルの対象機器テーブルに「カメラ」列を追加。
+- 取得経路は堅牢性順にフォールバック: ① Electron 親はメインプロセスの新 IPC `get-camera-snapshot`（`file://` オリジンの CORS 制約を回避。`/relay-camera` プロキシと取得関数・短期キャッシュを共有）② リレー子/同一オリジン http は `/relay-camera/{host}/snapshot.jpg` を同一オリジン fetch。いずれも不可なら**画像を省略**（履歴 JSON は valid のまま）。
+- カメラ取得は全機並列＋タイムアウト付きで、送信の総待ち時間を抑制。`buildSnapshot` は純粋・同期のまま維持し、添付は `sendSnapshot` 内の非同期ステップとして実施。**413（サイズ超過）時は履歴縮小再送が `buildSnapshot` で組み直すため画像は自動的に外れる**（履歴優先）。
+
+### フィラメント残量読み上げの小数まるめ＋単位整形（修正漏れ）
+
+`filamentLow` 通知の読み上げが残量を小数点以下全桁で読み上げていた（例「残り187399.8333mm」）のを修正。**表示単位（`filamentUnit` の m/mm）に従い、小数1桁**へ整形する（m選択時「残り187.4m」、mm選択時「残り187399.8mm」）。
+- 整形済み文字列を新プレースホルダ `{remainingText}` として渡し、既定 talk を `残り{remainingText}` へ変更（旧 `残り{remaining}mm` のハードコード単位を撤去）。`{remaining}`（mm 生値・数値）は Webhook/data 用に温存。
+- 既存ユーザの保存済み通知設定は talk 文面を凍結保持するため、**旧既定 talk と完全一致のときだけ新既定へ自動移行**（カスタム文面は尊重）。
+
+#### テスト
+- 全531テスト緑（ItemKeeper 連携 +10、外部連携モーダル +3、filamentLow 読み上げ +4: 既定talk検証／{remainingText}展開／旧既定の移行／カスタム文面の尊重）。
+
+---
+
+## v2.2.1026 (2026-06-16)
+
+### 温度グラフの CPU 占有を根本解消（検知と描画の分離 + uPlot 移行）＋ブラウザ直接接続の修正
+
+CPU 占有の実測診断で、温度グラフ2枚を 500ms 毎（2Hz）に chart.js の time 軸で全再描画していたことが renderer CPU を占有（可視時 renderer 68% / GPU 24%、グラフ折り畳みで 8.8% / 1.9%）。2Hz 更新は「急なサーモ異常に気づく」ための要求であり、**検知と描画を分離**して両立させた。
+
+#### サーマル異常検知の分離（描画レート非依存）
+- 新規 `dashboard_thermal_guard.js`（純関数・DOM 非依存・温度フィールド限定）。検知はデータ経路（aggregator, 2Hz）で実行し、描画レートから独立。`err`(解除時 0,0)・`fan` 等ビット値(0/1) は検知対象外。絶対上限は機器報告 `maxNozzleTemp`/`maxBedTemp` を優先。
+- 検知ルール: 絶対上限到達(error)／急変化(error)／オーバーシュート継続(error)／目標乖離継続(warn)／昇温不良(warn)。乖離・昇温不良・オーバーシュートは **目標>0 のときのみ**（印刷完了後の自然冷却＝目標0では発報しない）。
+- **数値セルの背景色で可視化**: 「現在」セルを加熱=黄緑／放熱=水色の連続スケール（温度差で濃度変化・transition で滑らか）で着色し、異常時は警告色(黄)・異常色(赤)が上書き、解決で自動復帰。バナーを積まない。
+- **方向矢印**を「差」セルの数字の左に表示（右揃えの桁・単位位置は不変）。明確な上昇/下降=▲▼、微増/微減=△▽（ベッドのバンバン制御等）、安定時は非表示。
+- トップメニューに**異常/警告の集約バッジ**（新カードを作らず既存ヘッダに集約）。通知は既存 `notificationManager` を流用（デスクトップ通知/音/音声、`noBanner` でバナーは積まない）。設定は既存「通知設定」モーダルに項目追加。
+
+#### 温度グラフを chart.js → uPlot へ移行
+- `dashboard_chart.js` を uPlot で全面書き換え（公開 API・呼び出し側は無改修）。time 軸の measureText/date-fns コストを排除し、1 更新あたりの描画コストを大幅削減（計測で 0.004ms/更新）。
+- uPlot はローカル vendoring（`node_modules/uplot`、オフライン安全）。chart.js / date-fns / zoom の CDN 読み込みを撤去。
+- ドラッグズーム（ロック切替）・表示範囲リセットは uPlot 内蔵機能で再実装。旧 `toggleChartInteractionLock` の未定義参照バグ（`_hostStates`）も修正。
+
+#### ブラウザ直接接続の修正（リレー子の既定挙動）
+- `http(s)` のブラウザは既定でリレー子(readonly)となり `connectWs` がガードされるため、接続設定でプリンタ IP を追加しても無反応だった。`?relay=standalone`（/`direct`）の明示オプトアウトを追加し、ブラウザでもスタンドアロン直接接続を可能にした（既定挙動は不変）。
+- リレー子モードでは接続モーダルの IP 入力・追加ボタンを無効化し、理由を明示（「押せるのに無反応」の混乱を解消）。接続ハンドラにもガードを追加。
+
+#### テスト
+- 全516テスト緑（新規 `dashboard_thermal_guard.test.js` 20件: フェーズ/着色/絶対上限/急変化/継続判定/誤発報抑止/差分通知/方向4段階/字形・色/マルチホスト独立）。touched 3dp_lib は eslint 0 error。実機2台でサーマル着色・uPlot 描画・誤発報0を実データ確認。
+
+---
+
 ## v2.2.1025 (2026-06-15)
 
 ### サテライト機能の再設計（フィラメント同期・操作中継・電源投入直後の ID:0 対策）

@@ -28,6 +28,7 @@ vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({
   restoreAggregatorState: vi.fn(),
   restartAggregatorTimer: vi.fn(),
   stopAggregatorTimer: vi.fn(),
+  ensureAggregatorTimer: vi.fn(),
 }));
 vi.mock("../../3dp_lib/3dp_dashboard_init.js", () => ({ restorePrintResume: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_msg_handler.js", () => ({ processData: vi.fn() }));

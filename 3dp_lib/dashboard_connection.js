@@ -27,10 +27,12 @@
  * - {@link cleanupConnection}：接続情報の完全破棄
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
+ * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
+ * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1110 (PR #380)
+ * @version 1.390.1119 (PR #385)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-06-12 12:00:00
+ * @lastModified 2026-06-16 21:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,13 +47,14 @@ import {
   setStoredDataForHost,
   ensureMachineData,
   markAllKeysDirty,
-  scopedById
+  scopedById,
+  getHostDisplayName
 } from "./dashboard_data.js";
-import { pushLog } from "./dashboard_log_util.js";
+import { pushLog, pushGcodeConsole } from "./dashboard_log_util.js";
 import { aggregatorUpdate, restoreAggregatorState } from "./dashboard_aggregator.js";
 import { restorePrintResume } from "./3dp_dashboard_init.js";
 import { processData } from "./dashboard_msg_handler.js";
-import { restartAggregatorTimer, stopAggregatorTimer } from "./dashboard_aggregator.js";
+import { restartAggregatorTimer, stopAggregatorTimer, ensureAggregatorTimer } from "./dashboard_aggregator.js";
 import * as printManager from "./dashboard_printmanager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
@@ -60,6 +63,7 @@ import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
+import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -95,6 +99,10 @@ const connectionMap = {};
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
  * @property {string}         dest          - 接続先(IP:PORT)
+ * @property {{close:function():void}|null} [_extSession]
+ *                                        - 外部プロトコル(Moonraker 等)セッション。
+ *                                          生 WebSocket は st.ws に載せず、ここで保持して
+ *                                          切断/クリーンアップ時に close() する。
  * @property {"disconnected"|"connecting"|"connected"|"waiting"} state
  *                                        - UI 表示用状態
  */
@@ -218,6 +226,23 @@ async function _resolveAndSaveMac(dest, hostname) {
  * @param {string} dest
  * @returns {string}
  */
+/**
+ * HTML 属性/テキストへ安全に埋め込むためのエスケープ。
+ * 接続先の表示名(label)はユーザー自由入力のため、innerHTML/属性に
+ * そのまま展開すると引用符崩れや XSS の恐れがあるので最小限エスケープする。
+ *
+ * @private
+ * @param {*} s - 入力値
+ * @returns {string} エスケープ済み文字列
+ */
+function _escAttr(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function _extractIp(dest) {
   if (!dest) return "";
   // IPv6 bracket notation: [addr]:port
@@ -684,6 +709,15 @@ export function getDisplayBaseUrl(host) {
 }
 
 /**
+ * _syncPanelsForHost の重い初期同期を完了したホスト集合。
+ * 本関数は毎メッセージ呼ばれるため、初回(orキー移行/パネル新規生成)以外は
+ * 重い処理(markAllKeysDirty/restore/timer)をスキップする冪等化に用いる。
+ * @type {Set<string>}
+ * @private
+ */
+const _syncedPanelHosts = new Set();
+
+/**
  * _syncPanelsForHost:
  * -------------------
  * ホスト名確定時にパネルを同期する。
@@ -699,36 +733,49 @@ export function getDisplayBaseUrl(host) {
 function _syncPanelsForHost(hostname, oldHost) {
   if (!hostname || hostname === "shared" || hostname === PLACEHOLDER_HOSTNAME) return;
 
+  const isMigration = !!(oldHost && oldHost !== hostname);
+
   /* IP→ホスト名移行: 旧IPベースのパネルを新ホスト名に移行する */
-  if (oldHost && oldHost !== hostname) {
+  if (isMigration) {
     renamePanelsHost(oldHost, hostname);
+    _syncedPanelHosts.delete(oldHost);
   }
 
-  /* shared パネルの移行を試みる（起動時に shared で生成されている場合） */
+  /* パネル存在保証（冪等・安価: 既存ホストなら即 0 を返す。安全網として毎回確認する）。
+     - migratePanelsToHost: shared パネルの移行（起動時に shared 生成時のみ）
+     - ensureHostPanels: 未生成なら自動生成（破棄→再生成にも追従） */
   const migrated = migratePanelsToHost(hostname);
+  let created = 0;
+  if (migrated === 0) created = ensureHostPanels(hostname) || 0;
 
-  /* 移行対象がなかった場合（初回起動でパネル未生成 or 2台目以降）
-     → このホスト用パネルを自動生成する */
-  if (migrated === 0) {
-    ensureHostPanels(hostname);
+  /* ★★ 2fps停止の真因修正 ★★
+     本関数は handleSocketMessage → updateConnectionHost(oldHost===newHost の
+     早期パス) 経由で「毎メッセージ(約4Hz)」呼ばれる。下記を毎回実行していたため:
+       - restartAggregatorTimer(): 500ms タイマーを約250ms毎にクリア＆再生成し、
+         発火(500ms到達)に永遠に届かない＝集約ループが回らず全状態が固着（真因）。
+       - markAllKeysDirty(): 毎ティック全セル再描画（無駄＝294 .new/回 の正体）。
+       - restoreAggregatorState(): 復元状態でライブ状態を毎回上書き（副作用）。
+     これらは「初回同期 or キー移行 or パネル新規生成」時のみ必要。定常メッセージでは
+     『集約タイマーが生きていることだけ』を ensureAggregatorTimer()（稼働中 no-op＝
+     リセットしない）で保証する。 */
+  const needFullSync = isMigration || migrated > 0 || created > 0 || !_syncedPanelHosts.has(hostname);
+  if (needFullSync) {
+    /* 接続確立/パネル生成時に per-host 状態を復元（既に復元済みでも冪等） */
+    restoreAggregatorState(hostname);
+
+    /* 印刷再開用データの復元（per-host） */
+    const curId = Number(monitorData.machines[hostname]?.storedData?.printStartTime?.rawValue || 0) || null;
+    restorePrintResume(hostname, curId);
+
+    /* パネル生成後、到着済みキャッシュを新 DOM に反映するため全キーを dirty に
+       マークし、次回 aggregatorUpdate で再描画させる */
+    markAllKeysDirty(hostname);
+
+    _syncedPanelHosts.add(hostname);
   }
 
-  /* ★ 接続確立時に per-host 状態を復元（全ホスト共通）
-     handleMessage の初回ブランチでは initHost のみ復元されるが、
-     2台目以降のホストはここで復元する。既に復元済みでも冪等。 */
-  restoreAggregatorState(hostname);
-
-  /* 印刷再開用データの復元（per-host） */
-  const curId = Number(monitorData.machines[hostname]?.storedData?.printStartTime?.rawValue || 0) || null;
-  restorePrintResume(hostname, curId);
-
-  /* パネル生成後、processData がパネル生成前に到着済みのデータを
-     新しい DOM に反映するため、全キーを dirty にマークして
-     次回の aggregatorUpdate で再描画されるようにする */
-  markAllKeysDirty(hostname);
-
-  /* aggregator を即座に実行し、キャッシュ済みデータを描画する */
-  restartAggregatorTimer(100);
+  /* 集約ループが停止していれば起動（稼働中はリセットしない＝発火を妨げない） */
+  ensureAggregatorTimer();
 }
 
 /* ===================== WebSocket 接続・受信処理 ===================== */
@@ -769,6 +816,14 @@ export function connectWs(hostOrDest) {
      これにより、再接続時に connectionMap に IP キーの孤立エントリが生まれる問題を防ぐ。 */
   const target = _findConnectionTarget(dest);
   const host = (target?.hostname) || ip;
+
+  // ★ Moonraker(Fluidd/Klipper)機: 別プロトコルのため専用アダプタへ委譲する。
+  //   K1 系の生 WebSocket・ハートビート・履歴フェッチ処理は一切通さない。
+  //   printerType は connectWithType（接続追加 UI）で connectionTargets に保存済み。
+  if (target?.printerType === "moonraker") {
+    connectMoonraker(dest, host);
+    return;
+  }
 
   // ★ currentHostname / wsDest / setCurrentHostname は全て廃止済み。
   //   per-host 処理は processData 内の _initializedHosts で管理する。
@@ -845,6 +900,172 @@ export function connectWs(hostOrDest) {
   };
   ws.onerror   = err => handleSocketError(err, host);
   ws.onclose   = () => handleSocketClose(host);
+}
+
+/**
+ * connectMoonraker:
+ * Moonraker(Fluidd/Klipper)機への接続を確立する。
+ *
+ * 【詳細説明】
+ * - {@link createMoonrakerSession} に WebSocket ライフサイクルと購読/翻訳を委譲し、
+ *   翻訳済み K1 形データを {@link simulateReceivedJson} 経由で既存パイプライン
+ *   (handleSocketMessage → processData → storedData → UI)へ流し込む。
+ * - 生 WebSocket は ConnectionState.ws には載せない（updateConnectionHost が K1 用
+ *   ハンドラを再バインドして購読を奪う事故、および K1 制御コマンドの誤送信を防ぐ）。
+ *   代わりにセッションを st._extSession に保持し、切断時に close() する。
+ * - 監視(読み取り)専用。操作系は後続フェーズ（PoC では未対応）。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式の接続先（Moonraker は通常 80 または 7125）
+ * @param {string} host - 接続キー（既知ホスト名、未確定時は IP）
+ * @returns {void}
+ */
+function connectMoonraker(dest, host) {
+  // ★ リレー子モードではプリンタ直接接続をスキップ（K1 と同様）
+  if (window._3dpmonRelayChild) return;
+
+  const st = getState(host);
+  st.dest = dest;
+  st.userDisc = false;
+  // ★ 生 WS は載せない（理由は関数 JSDoc 参照）
+  st.ws = null;
+  st.state = "connecting";
+
+  /* 接続先を永続リストに保存（printerType は connectWithType 側で設定済み） */
+  _addConnectionTarget(dest);
+
+  updateConnectionUI("connecting", {}, host);
+  updatePrinterListUI();
+  pushLog(`Moonraker(Fluidd)へ接続を試みます: ${dest}`, "warn", false, host);
+
+  /* 既存セッションが残っていれば閉じる（多重接続防止） */
+  if (st._extSession) {
+    try { st._extSession.close(); } catch { /* noop */ }
+    st._extSession = null;
+  }
+
+  const protocol = location.protocol === "https:" ? "wss://" : "ws://";
+  const url = `${protocol}${dest}/websocket`;
+  const httpBase = (location.protocol === "https:" ? "https://" : "http://") + dest;
+  const fallbackHost = _extractIp(dest) || host;
+
+  st._extSession = createMoonrakerSession({
+    url,
+    fallbackHost,
+    httpBase,
+    onLog: (msg, level = "info") => pushLog(msg, level, false, host),
+    onState: (s) => {
+      st.state = s;
+      updateConnectionUI(s, {}, host);
+      updatePrinterListUI();
+      // 接続確立時に集計ループを起動（K1 の handleSocketOpen 相当）
+      if (s === "connected") restartAggregatorTimer(500);
+    },
+    onData: (k1obj) => {
+      // data.hostname により handleSocketMessage 側で IP→ホスト名解決される。
+      // host(初期キー)を渡せば初回は IP→ホスト名移行、以降はホスト名へ解決される。
+      try {
+        simulateReceivedJson(JSON.stringify(k1obj), host);
+      } catch (e) {
+        console.error("[moonraker] onData 処理エラー:", e);
+      }
+    },
+    // 履歴/ファイル一覧（Date 等を保つため JSON を経由せず直接 printManager へ）
+    onAux: (aux, resolvedHost) => {
+      try {
+        const h = resolvedHost || host;
+        const baseUrl = `http://${getDeviceDest(h)}`;
+        if (Array.isArray(aux.historyList)) {
+          printManager.updateHistoryList(aux.historyList, baseUrl, "print-current-container", h);
+        }
+        if (Array.isArray(aux.fileEntries)) {
+          const machine = monitorData.machines[h];
+          const info = { entries: aux.fileEntries, totalNum: aux.fileTotal ?? aux.fileEntries.length };
+          if (machine) machine._cachedFileInfo = info;
+          printManager.renderFileList(info, baseUrl, h);
+        }
+        if (Array.isArray(aux.webcams)) {
+          // Moonraker のカメラURLは可変 → 機器申告の解決済み絶対URLを machine に保持し、
+          // カメラ系が K1 固定URLではなくこちらを使う。到着時にストリームを張り直す。
+          const machine = monitorData.machines[h];
+          const streamUrl = aux.webcams[0]?.streamUrl || null;
+          if (machine) {
+            machine._moonrakerWebcams = aux.webcams;
+            machine._cameraStreamUrl = streamUrl;
+            machine._cameraSnapshotUrl = aux.webcams[0]?.snapshotUrl || null;
+          }
+          // ★ 接続先設定のカメラポートを「機器が実際に使うURL」から反映する
+          //   （Moonraker はカメラポート欄を指定しても機器申告URLが優先＝従来は値が
+          //   無視されて見えた。解決済みURLのポートを書き戻して表示を実態に一致させる）
+          if (streamUrl) {
+            try {
+              const u = new URL(streamUrl);
+              const camPort = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+              const tgt = _findConnectionTarget(getDeviceDest(h)) || _findConnectionTarget(h);
+              if (tgt && tgt.cameraPort !== camPort) {
+                tgt.cameraPort = camPort;
+                saveUnifiedStorage();
+                updatePrinterListUI();
+              }
+            } catch { /* URL 解析失敗時は据え置き */ }
+          }
+          // camera_ctrl は connection.js を import するため循環回避に動的 import
+          import("./dashboard_camera_ctrl.js")
+            .then((m) => { try { m.startCameraStream(h); } catch { /* noop */ } })
+            .catch(() => { /* noop */ });
+        }
+      } catch (e) {
+        console.error("[moonraker] onAux 処理エラー:", e);
+      }
+    },
+    // リアルタイム gcode コンソール出力 → ログパネルの Gcode タブへ
+    onGcode: (line, resolvedHost) => {
+      try {
+        pushGcodeConsole(resolvedHost || host, line);
+      } catch (e) {
+        console.error("[moonraker] onGcode 処理エラー:", e);
+      }
+    },
+    // ユーザー明示切断時(userDisc=true)は再接続しない
+    shouldReconnect: () => !st.userDisc,
+  });
+}
+
+/**
+ * connectWithType:
+ * プリンタ種別を指定して接続する（接続追加 UI から呼ばれる統一エントリ）。
+ *
+ * 【詳細説明】
+ * - dest にポートが無ければ種別に応じた既定ポートを補完する
+ *   （K1: {@link DEFAULT_WS_PORT}=9999 / Moonraker: 80=nginx・Fluidd と同口）。
+ * - connectionTargets に printerType を保存してから {@link connectWs} を呼ぶ。
+ *   connectWs は printerType を見て K1 / Moonraker のいずれの経路かを分岐する。
+ *
+ * @function connectWithType
+ * @param {string} dest - "IP" もしくは "IP:PORT"
+ * @param {"creality-k1"|"moonraker"} [printerType="creality-k1"] - プリンタ種別
+ * @returns {void}
+ * @example
+ * connectWithType("192.168.54.15", "moonraker"); // → "192.168.54.15:80" として接続
+ */
+export function connectWithType(dest, printerType = "creality-k1") {
+  let d = (dest || "").trim();
+  if (!d) return;
+  /* ポート未指定なら種別ごとの既定ポートを補完（target.dest と connectWs の dest を一致させ重複登録を防ぐ） */
+  if (!d.includes(":")) {
+    d += (printerType === "moonraker") ? ":80" : ":" + DEFAULT_WS_PORT;
+  }
+  /* connectionTargets に printerType を保存（connectWs 内の分岐判定に使用） */
+  const targets = monitorData.appSettings.connectionTargets ??= [];
+  let t = targets.find(x => x.dest === d);
+  if (!t) {
+    t = { dest: d, color: "", label: "", hostname: "" };
+    targets.push(t);
+  }
+  t.printerType = printerType;
+  saveUnifiedStorage();
+
+  connectWs(d);
 }
 
 /**
@@ -952,8 +1173,11 @@ function handleSocketMessage(event, host) {
 // --- 3) ログ出力 (受信した JSON 生データ) — ★ 既定で抑制 (fix/bg-cpu) ---
   //   生パケットを毎メッセージ "normal" で記録すると、(行数)×(ログパネル数) の同期DOM処理が
   //   最小化中も throttle されずに走り CPU を浪費し、意味あるログを埋もれさせる。
-  //   logLevel="debug" 時のみ生ダンプを出力（エラー/状態変化等の意味あるログは別 pushLog で従来どおり記録）。
-  if (monitorData.appSettings.logLevel === "debug") {
+  //   logLevel="debug" 時、または「受信生ログ表示(K1系のみ)」トグルON時に生ダンプを出力。
+  //   Moonraker は handleSocketMessage に渡るのが翻訳済みK1形のため対象外（生プロトコルは Gcode タブ）。
+  if (monitorData.appSettings.logLevel === "debug"
+      || (monitorData.appSettings.logReceivedRaw === true
+          && getPrinterType(hostKey) === "creality-k1")) {
     pushLog("受信: " + event.data, "normal", false, hostKey);
   }
 
@@ -1106,8 +1330,18 @@ function handleSocketClose(host) {
   stopHeartbeat(host);             // ハートビート停止
 
   // 接続中ホストが0になった場合のみ集計ループ停止
+  // ★ 種別非依存で判定する: Moonraker(IR3v2 等)は生WSを st.ws に載せない設計
+  //   （st._extSession 上で稼働）ため、s.ws だけを見ると Moonraker 接続を
+  //   「未接続」と誤判定し、K1 が一瞬フラップした隙に stopAggregatorTimer()→
+  //   全ホストの状態更新が永久停止する（2fps停止の真因のひとつ）。
+  //   K1=生WS OPEN / Moonraker=_extSession 稼働 / 双方を st.state でも担保する。
+  const closing = getState(host);
   const remainingConnected = Object.values(connectionMap).some(
-    s => s && s.ws && s.ws.readyState === WebSocket.OPEN && s !== getState(host)
+    s => s && s !== closing && (
+      (s.ws && s.ws.readyState === WebSocket.OPEN) ||  // K1: 生WS
+      s._extSession != null ||                          // Moonraker: 外部セッション稼働
+      s.state === "connected"                           // 種別非依存の状態フラグ
+    )
   );
   if (!remainingConnected) {
     stopAggregatorTimer();
@@ -1263,6 +1497,12 @@ export function disconnectWs(host) {
     st.ws.close();
   }
 
+  // ★ Moonraker 等の外部プロトコルセッションも停止（userDisc=true により再接続も抑止）
+  if (st._extSession) {
+    try { st._extSession.close(); } catch { /* noop */ }
+    st._extSession = null;
+  }
+
   // 再接続カウント初期化
   st.reconnect = 0;
 
@@ -1282,6 +1522,62 @@ export function disconnectWs(host) {
 // ★ setupConnectButton は v2.2.0 で完全削除済み（シングルホスト時代の遺物）
 
 /**
+ * Moonraker 機への操作コマンドを送出する。
+ * K1 の (method, params) を {@link translateK1CommandToMoonraker} で RPC/gcode 手順へ
+ * 変換し、セッションの request() で順次実行する。未対応操作はログのみで no-op。
+ *
+ * @private
+ * @param {string} method - K1 コマンド名
+ * @param {Object} params - K1 パラメータ
+ * @param {string} host - 対象ホスト名
+ * @returns {Promise<null>} 全手順完了で解決
+ */
+function _sendMoonrakerCommand(method, params, host) {
+  const st = resolveActiveState(host);
+  const session = st?._extSession;
+  if (!session || typeof session.request !== "function") {
+    showAlert(`[${host}] Moonraker に接続されていません`, "error", false, host);
+    return Promise.reject(new Error("Moonraker session not connected"));
+  }
+
+  // ★ K1 の 履歴/ファイル一覧 再取得(🔄) を Moonraker の fetchHistory/fetchFiles へ橋渡し。
+  //   旧実装は get{reqHistory:1}/{reqGcodeFile:1} を「未対応」で no-op にしており、
+  //   Moonraker 機で 🔄 を押しても履歴/ファイルが更新されなかった。
+  if (method === "get" && params && (params.reqHistory || params.reqGcodeFile)) {
+    const tasks = [];
+    if (params.reqHistory && typeof session.refreshHistory === "function") {
+      pushLog("送信(Moonraker): 印刷履歴を再取得", "send", false, host);
+      tasks.push(Promise.resolve(session.refreshHistory()).catch(() => {}));
+    }
+    if (params.reqGcodeFile && typeof session.refreshFiles === "function") {
+      pushLog("送信(Moonraker): ファイル一覧を再取得", "send", false, host);
+      tasks.push(Promise.resolve(session.refreshFiles()).catch(() => {}));
+    }
+    return Promise.all(tasks).then(() => null);
+  }
+
+  const steps = translateK1CommandToMoonraker(method, params);
+  if (!steps || steps.length === 0) {
+    pushLog(`Moonraker機では未対応の操作のため無視しました: ${method} ${JSON.stringify(params)}`, "warn", false, host);
+    return Promise.resolve(null);
+  }
+  pushLog(`送信(Moonraker): ${steps.map(s => s.gcode || s.rpc).join(" / ")}`, "send", false, host);
+  // ★ gcode コンソールへ送信エコー（端末風に「送った」ことを可視化＝動作確認しやすく）。
+  //   Klipper は応答系(温度自動報告/echo/M117/エラー)しか notify_gcode_response を吐かず
+  //   クリーン印刷中はコンソールが空に見えるため、送信側を ▷ で明示する。
+  for (const s of steps) {
+    pushGcodeConsole(host, "▷ " + (s.gcode || (s.rpc + (s.params && Object.keys(s.params).length ? " " + JSON.stringify(s.params) : ""))));
+  }
+  return Promise.all(steps.map(s => s.gcode
+    ? session.request("printer.gcode.script", { script: s.gcode })
+    : session.request(s.rpc, s.params || {})
+  )).then(() => null).catch(e => {
+    pushLog(`Moonraker操作エラー: ${e.message}`, "error", false, host);
+    return Promise.reject(e);
+  });
+}
+
+/**
  * ペイロードを送信し、同一 id の応答を待つ Promise を返す
  * @param {string} method - コマンド名
  * @param {Object} params - パラメータ
@@ -1297,6 +1593,10 @@ export function sendCommand(method, params = {}, host) {
       .then(sent => sent
         ? null
         : Promise.reject(new Error("relay not connected or readonly")));
+  }
+  // ★ Moonraker 機: K1 コマンド意図を RPC / gcode に翻訳して送出する
+  if (getPrinterType(host) === "moonraker") {
+    return _sendMoonrakerCommand(method, params, host);
   }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
@@ -1344,6 +1644,10 @@ export function sendGcodeCommand(gcode, host) {
       .then(sent => sent
         ? null
         : Promise.reject(new Error("relay not connected or readonly")));
+  }
+  // ★ Moonraker 機: gcode を printer.gcode.script で直接実行
+  if (getPrinterType(host) === "moonraker") {
+    return _sendMoonrakerCommand("runGcode", { cmd: gcode }, host);
   }
   const st = resolveActiveState(host);
   if (!st.ws || st.ws.readyState !== WebSocket.OPEN) {
@@ -1565,8 +1869,9 @@ export function updatePrinterListUI() {
                     : st.state === "waiting" ? "\u{1F504}"
                     : "\u274C";
 
-    // 基本情報
-    let line1 = `${stateIcon} ${h}`;
+    // 基本情報（表示名=label を優先。未設定時はホストキー）
+    const dispName = getHostDisplayName(h);
+    let line1 = `${stateIcon} ${dispName}`;
     line1 += ` [${st.dest}]`;
 
     // データ情報
@@ -1591,7 +1896,7 @@ export function updatePrinterListUI() {
       line2 = "\u30C7\u30FC\u30BF\u672A\u53D7\u4FE1";
     }
 
-    return { host: h, stateIcon, line1, line2, state: st.state };
+    return { host: h, displayName: dispName, stateIcon, line1, line2, state: st.state };
   });
 
   // ── 従来のサイドバーステータスリスト更新 ──
@@ -1618,7 +1923,7 @@ export function updatePrinterListUI() {
   if (topList) {
     topList.innerHTML = printerInfos.map(info => {
       const bg = info.state === "connected" ? "#555" : "#777";
-      return `<span class="printer-item conn-chip" data-host="${info.host}" style="background:${bg}">${info.stateIcon} ${info.host}</span>`;
+      return `<span class="printer-item conn-chip" data-host="${info.host}" style="background:${bg}">${info.stateIcon} ${info.displayName}</span>`;
     }).join("");
   }
 
@@ -1640,14 +1945,19 @@ export function updatePrinterListUI() {
       const toggleBtn = (isConn || isTrying)
         ? `<button class="conn-target-disconnect conn-toggle-btn" data-dest="${dest}" data-host="${info.host}" title="切断（設定は保持）">■</button>`
         : `<button class="conn-target-reconnect conn-toggle-btn" data-dest="${dest}" title="接続">▶</button>`;
+      // 表示名(label)が設定されていれば名前として優先表示する（dest は併記）
+      const lbl = (tgt?.label || "").trim();
+      const nameHtml = lbl
+        ? `${info.stateIcon} ${_escAttr(lbl)} <span class="conn-detail-dest">[${dest}]</span>`
+        : info.line1;
       return `<div class="printer-item conn-detail-item" data-host="${info.host}">
         <div class="conn-detail-row">
           <input type="color" class="conn-target-color conn-color-picker" data-dest="${dest}" value="${color}" title="パネルバー色">
-          <span class="conn-detail-name">${info.line1}</span>
+          <span class="conn-detail-name">${nameHtml}</span>
           ${toggleBtn}
-          <label class="conn-webhook-label" title="Webhook 通知の ON/OFF"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}>📡</label>
+          <label class="conn-webhook-btn" title="Webhook 通知の ON/OFF"><input type="checkbox" class="conn-target-webhook" data-dest="${dest}" ${whEnabled ? "checked" : ""}><span class="conn-webhook-state"></span>📡</label>
           <button class="conn-target-edit conn-edit-btn" data-dest="${dest}" title="接続先設定を編集">⚙</button>
-          <button class="conn-target-delete conn-delete-btn" data-dest="${dest}" data-host="${info.host}" title="削除">✕</button>
+          <button class="conn-target-delete conn-delete-btn" data-dest="${dest}" data-host="${info.host}" title="削除">🗑</button>
         </div>
         <div class="conn-detail-sub">${info.line2} <span class="conn-ports">cam:${cameraPort} http:${httpPort}</span></div>
       </div>`;
@@ -1659,13 +1969,15 @@ export function updatePrinterListUI() {
     for (const t of savedTargets) {
       if (!connectedDests.has(t.dest)) {
         const savedColor = t.color || "#444444";
-        const savedLabel = t.hostname ? ` (${t.hostname})` : "";
+        // 表示名(label) > ホスト名 の優先で併記
+        const savedLabel = t.label ? ` ${_escAttr(t.label.trim())}`
+                         : t.hostname ? ` (${_escAttr(t.hostname)})` : "";
         listHtml += `<div class="conn-detail-item disconnected">
           <div class="conn-detail-row">
             <input type="color" class="conn-target-color conn-color-picker" data-dest="${t.dest}" value="${savedColor}" title="パネルバー色">
             <span class="conn-detail-name">⬜ ${t.dest}${savedLabel} (未接続)</span>
             <button class="conn-target-reconnect conn-toggle-btn" data-dest="${t.dest}" title="接続">▶</button>
-            <button class="conn-target-delete conn-delete-btn" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除">✕</button>
+            <button class="conn-target-delete conn-delete-btn" data-dest="${t.dest}" data-host="${t.hostname || ""}" title="削除">🗑</button>
           </div>
         </div>`;
       }
@@ -1763,32 +2075,47 @@ export function updatePrinterListUI() {
         const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
+        // ★ ④: 機器報告ホスト名（内部管理キー）＋機種設定を変更不可で明示する。
+        const hnText = tgt.hostname ? tgt.hostname : "(未取得)";
+        const ptText = tgt.printerType === "moonraker" ? "Moonraker (Fluidd/Klipper)" : "Creality K1系";
 
-        const result = await showConfirmDialog({
+        const dlgPromise = showConfirmDialog({
           level: "info",
           title: `接続先設定: ${dest}`,
           html: `
             <div class="conn-edit-grid">
               <label>表示名:</label>
-              <input type="text" id="edit-label" value="${currentLabel}">
+              <input type="text" id="edit-label" value="${_escAttr(currentLabel)}">
               <label>カメラポート:</label>
               <input type="number" id="edit-cam-port" value="${currentCam}" min="1" max="65535">
               <label>HTTPポート:</label>
               <input type="number" id="edit-http-port" value="${currentHttp}" min="1" max="65535">
+              <label>機器ホスト名:</label>
+              <input type="text" value="${_escAttr(hnText)}" disabled title="機器報告値（内部管理キー）">
+              <label>機種設定:</label>
+              <input type="text" value="${_escAttr(ptText)}" disabled>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.45;">
+              機器ホスト名は<strong>機器から報告された名前で内部管理</strong>されます。機器側で名称を変更すると<strong>別機器として扱われ</strong>、履歴・設定が分かれます。
             </div>`,
           confirmText: "保存",
           cancelText: "キャンセル"
         });
-        if (!result) return;
-        // showConfirmDialog から値を取得（DOM がまだ存在する場合）
+        // ★ ダイアログ生成は同期。await の前に入力要素参照を捕捉する。
+        //   detach 後も element.value は保持されるため、ダイアログ DOM 破棄の
+        //   タイミングに依存せず確実に値を読み取れる（保存取りこぼしの二重防御）。
         const labelEl = document.getElementById("edit-label");
         const camEl = document.getElementById("edit-cam-port");
         const httpEl = document.getElementById("edit-http-port");
-        if (labelEl) tgt.label = labelEl.value;
+        const result = await dlgPromise;
+        if (!result) return;
+        if (labelEl) tgt.label = labelEl.value.trim();
         if (camEl) tgt.cameraPort = parseInt(camEl.value, 10) || currentCam;
         if (httpEl) tgt.httpPort = parseInt(httpEl.value, 10) || currentHttp;
         saveUnifiedStorage();
         updatePrinterListUI();
+        // 表示名(label)/色はパネルヘッダーにも反映されるため即時更新する
+        updateAllPanelHeaders();
       });
     });
 
@@ -1878,6 +2205,17 @@ export function cleanupConnection(host) {
       console.warn(`cleanupConnection: WebSocket close エラー (${host})`, e);
     }
     st.ws = null;
+  }
+
+  // ★ Moonraker 等の外部プロトコルセッションを停止
+  if (st._extSession) {
+    try {
+      st.userDisc = true; // 再接続抑止
+      st._extSession.close();
+    } catch (e) {
+      console.warn(`cleanupConnection: 外部セッション close エラー (${host})`, e);
+    }
+    st._extSession = null;
   }
 
   // 全タイマーを停止
@@ -2013,6 +2351,22 @@ function _fetchWithRetry(host) {
 export function getConnectionState(host) {
   const st = connectionMap[host];
   return st?.state || "disconnected";
+}
+
+/**
+ * getPrinterType:
+ * 指定ホストのプリンタ種別を返す。connectionTargets の printerType を参照し、
+ * 未設定なら従来どおり "creality-k1" を返す(後方互換)。
+ * IP→ホスト名移行後もホスト名で接続先設定を逆引きできる。
+ *
+ * @function getPrinterType
+ * @param {string} host - ホスト名(または IP)
+ * @returns {"creality-k1"|"moonraker"} プリンタ種別
+ */
+export function getPrinterType(host) {
+  const st = connectionMap[host];
+  const tgt = _findConnectionTarget(st?.dest || host) || _findConnectionTarget(host);
+  return tgt?.printerType || "creality-k1";
 }
 
 /**

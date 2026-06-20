@@ -15,7 +15,8 @@ let suppressed = false;
 vi.doMock("../../3dp_lib/dashboard_data.js", () => ({
   monitorData: mockMonitorData,
   isNotificationSuppressed: () => suppressed,
-  PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_"
+  PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_",
+  getHostDisplayName: (h) => h
 }));
 vi.doMock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn() }));
 vi.doMock("../../3dp_lib/dashboard_audio_manager.js", () => ({

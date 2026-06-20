@@ -34,6 +34,7 @@ import { monitorData, setStoredDataForHost } from "./dashboard_data.js";
 import { clearNewClasses, updateStoredDataToDOM } from "./dashboard_ui.js";
 import { saveUnifiedStorage, loadPrintCurrent } from "./dashboard_storage.js";
 import { updateTemperatureGraphFromStoredData, switchChartHost } from "./dashboard_chart.js";
+import { createThermalState, evaluateThermal, getThermalConfig } from "./dashboard_thermal_guard.js";
 import { checkUpdatedFields, formatDuration } from "./dashboard_utils.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { formatDurationSimple } from "./dashboard_utils.js";
@@ -1075,6 +1076,40 @@ export function aggregatorUpdate() {
     switchChartHost(host);
     updateTemperatureGraphFromStoredData(storedData, host);
 
+    // ─── サーマル異常検知(描画から独立・2Hz) ───
+    // 温度フィールド限定。err(0,0)・fan 等ビット値は対象外。結果は machine に保持し、
+    // セル着色/集約バッジは dashboard_ui の描画ループが machine.thermalResult を読んで反映する。
+    {
+      const thermalState = (s.thermal ??= createThermalState());
+      const thermalResult = evaluateThermal({
+        nozzleTemp:       storedData.nozzleTemp?.rawValue,
+        targetNozzleTemp: storedData.targetNozzleTemp?.rawValue,
+        bedTemp0:         storedData.bedTemp0?.rawValue,
+        targetBedTemp0:   storedData.targetBedTemp0?.rawValue,
+        boxTemp:          storedData.boxTemp?.rawValue,
+        maxNozzleTemp:    storedData.maxNozzleTemp?.rawValue,
+        maxBedTemp:       storedData.maxBedTemp?.rawValue,
+      }, thermalState, Date.now(), getThermalConfig());
+      machine.thermalResult = thermalResult;
+
+      // 新規アラートのみワンショット通知(既存 notificationManager 流用 = デスクトップ通知/音/音声)。
+      // セル背景色＋集約バッジが主インジケータのため、thermal* は noBanner(積もらせない)。
+      // over(絶対上限)は印刷中は既存 tempNear* が担当するため重複回避、deviation は視覚のみ。
+      if (thermalResult.newAlerts.length) {
+        const stCode = Number(storedData.state?.rawValue || 0);
+        const printingNow = stCode === PRINT_STATE_CODE.printStarted || stCode === PRINT_STATE_CODE.printPaused;
+        for (const a of thermalResult.newAlerts) {
+          if (a.category === "deviation") continue;
+          if (a.category === "over" && printingNow) continue;
+          notificationManager.notify(a.level === "error" ? "thermalAnomaly" : "thermalCaution", {
+            hostname: host,
+            channel: a.label,
+            detail: a.message,
+          });
+        }
+      }
+    }
+
     // printFinishTime 再計算
     checkUpdatedFields(["printStartTime","printLeftTime"], () => {
       const sv = parseInt(storedData.printStartTime?.rawValue,10)||0;
@@ -1356,8 +1391,15 @@ export function aggregatorUpdate() {
         const ratio = remain / spool.totalLengthMm;
         if (ratio <= thr && !s.filamentLowWarned) {
           s.filamentLowWarned = true;
+          // ★ L: 読み上げ用に残量を「表示単位(m/mm)・小数1桁(2桁目四捨五入)」へ整形する。
+          //   remaining(mm の生値) は webhook/data 用に従来どおり数値で温存し、
+          //   読み上げ/通知文では {remainingText} を使う（interesting-easley と統合）。
+          const _unit = monitorData.appSettings.filamentUnit === "mm" ? "mm" : "m";
+          const remainingText = Number.isFinite(remain)
+            ? (_unit === "mm" ? `${remain.toFixed(1)}mm` : `${(remain / 1000).toFixed(1)}m`)
+            : "---";
           notificationManager.notify("filamentLow", {
-            hostname: host, remaining: remain,
+            hostname: host, remaining: remain, remainingText,
             thresholdPct: Math.round(thr * 100),
             spoolName: spool.name
           });
@@ -1662,6 +1704,24 @@ export function restartAggregatorTimer() {
       console.error("aggregatorUpdate エラー:", e);
     }
   }, intervalMs);
+}
+
+/**
+ * ensureAggregatorTimer:
+ *   集約ループが**停止している場合のみ**起動する（稼働中なら何もしない）。
+ *
+ *   ★ 自己修復インバリアント（2fps停止の根本対策）:
+ *     「データが流れているなら集約ループは必ず動いていなければならない」。
+ *     stopAggregatorTimer は接続数判定（種別非依存でない実装が過去に存在）で
+ *     誤発火し得るため、データ受信経路(processData)から毎メッセージこれを呼ぶ。
+ *     restartAggregatorTimer と違い clearInterval を伴わない＝稼働中タイマーを
+ *     リセットしない（高頻度呼び出しでも発火を妨げない）ので安全に多重呼び出しできる。
+ *
+ * @returns {void}
+ */
+export function ensureAggregatorTimer() {
+  if (aggregatorTimer !== null) return;   // 稼働中: 触らない（リセット禁止）
+  restartAggregatorTimer();
 }
 
 /**

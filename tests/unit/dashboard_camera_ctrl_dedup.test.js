@@ -27,12 +27,14 @@ vi.doMock("../../3dp_lib/dashboard_notification_manager.js", () => ({
 // dup-A と dup-B は同一IP(=同一物理カメラ)、other は別IP
 vi.doMock("../../3dp_lib/dashboard_connection.js", () => ({
   getDeviceIp: vi.fn((h) => ({ "dup-A": "192.168.1.50", "dup-B": "192.168.1.50", "other": "192.168.1.99" }[h] || "")),
-  getDeviceDest: vi.fn((h) => ({ "dup-A": "192.168.1.50:9999", "dup-B": "192.168.1.50:9999", "other": "192.168.1.99:9999" }[h] || ""))
+  getDeviceDest: vi.fn((h) => ({ "dup-A": "192.168.1.50:9999", "dup-B": "192.168.1.50:9999", "other": "192.168.1.99:9999" }[h] || "")),
+  getPrinterType: vi.fn(() => "creality-k1")
 }));
 global.fetch = vi.fn(() => Promise.resolve({ ok: true }));
 
 const { registerCameraPanel, unregisterCameraPanel, startCameraStream, stopCameraStream } =
   await import("../../3dp_lib/dashboard_camera_ctrl.js");
+const logUtil = await import("../../3dp_lib/dashboard_log_util.js");
 
 function mkImg() { return document.createElement("img"); }
 function mkBody() { const d = document.createElement("div"); return d; }
@@ -77,6 +79,23 @@ describe("カメラ多重接続防止 (fix/camera-dedup)", () => {
     expect(imgO.src).toMatch(/192\.168\.1\.99:8080/);
     expect(imgA.classList.contains("off")).toBe(false);
     expect(imgO.classList.contains("off")).toBe(false);
+  });
+
+  it("接続済みで同一URLなら再 startCameraStream しても再接続しない(冪等＝接続成功二重化防止)", () => {
+    const imgO = mkImg(), body = mkBody();
+    registerCameraPanel("other", imgO, body, null);
+
+    startCameraStream("other");
+    // 接続成功をシミュレート（jsdom は img.src で onload を自動発火しないため手動）
+    if (typeof imgO.onload === "function") imgO.onload();
+
+    const tries1 = logUtil.pushLog.mock.calls.filter(c => /接続試行/.test(String(c[0]))).length;
+    expect(tries1).toBe(1);
+
+    // 同一URLで再度開始（onAux と panel_init の二重呼び出し相当）→ 再接続しない
+    startCameraStream("other");
+    const tries2 = logUtil.pushLog.mock.calls.filter(c => /接続試行/.test(String(c[0]))).length;
+    expect(tries2, "接続済み同一URLでは再接続(接続試行)しない").toBe(1);
   });
 
   it("停止した重複ストリームはリトライしない(userStopped)", () => {

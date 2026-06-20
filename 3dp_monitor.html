@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <!-- ★ app-version: ビルド時に scripts/sync-version.js が package.json から自動更新する -->
-  <meta name="app-version" content="2.2.1025" />
-  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1025</title>
+  <meta name="app-version" content="2.2.1030" />
+  <title>3dpmon - 3Dプリンタ監視ダッシュボード v2.2.1030</title>
   <!-- サイトアイコン -->
   <link rel="icon" href="favicon.ico">
 
@@ -14,10 +14,9 @@
   <link rel="stylesheet" href="node_modules/gridstack/dist/gridstack.min.css">
   <link rel="stylesheet" href="3dp_panel.css">
 
-  <!-- Chart.js ライブラリ (温度グラフ用) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+  <!-- uPlot ライブラリ (温度グラフ用・ローカル/オフライン) -->
+  <link rel="stylesheet" href="node_modules/uplot/dist/uPlot.min.css">
+  <script src="node_modules/uplot/dist/uPlot.iife.min.js"></script>
   <!-- GridStack ライブラリ -->
   <script src="node_modules/gridstack/dist/gridstack-all.js"></script>
 </head>
@@ -40,6 +39,8 @@
       <button id="relay-promote-btn" class="relay-promote-btn" style="display:none"></button>
       <span class="status-dot disconnected" id="top-status-dot"></span>
       <span id="top-conn-label" style="font-size:12px;">未接続</span>
+      <!-- サーマル異常/警告の集約バッジ（件数0で非表示。クリックで通知ログへ） -->
+      <span id="thermal-badge" class="thermal-badge" style="display:none" title="サーマル異常/警告の件数"></span>
     </div>
     <!-- 旧シングルホスト時代のステータス表示は #top-printer-list に統合済み -->
     <div class="menu-spacer"></div>
@@ -53,7 +54,7 @@
     </div>
     <div class="menu-section">
       <button id="top-layout-lock" title="レイアウト固定/解除">🔓 固定</button>
-      <button id="top-conn-btn" title="接続設定">⚙ 接続</button>
+      <button id="top-conn-btn" title="環境設定">⚙ 設定</button>
       <button id="panel-menu-toggle" title="パネル追加">+ パネル</button>
     </div>
   </div>
@@ -64,34 +65,49 @@
   <div class="conn-modal-overlay" id="conn-modal-overlay">
     <div class="conn-modal">
       <div class="conn-modal-header">
-        <span>接続設定</span>
+        <span>環境設定</span>
         <button class="conn-modal-close" id="conn-modal-close">×</button>
       </div>
 
-      <!-- 上部固定エリア: 接続追加 + オプション -->
+      <!-- 上部固定エリア: 設定ショートカット + 表示オプション -->
       <div class="conn-modal-toolbar">
-        <div class="btn-row" style="gap:6px;">
-          <input type="text" id="conn-modal-ip" placeholder="192.168.54.151:9999" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
-          <button class="primary" id="conn-modal-connect">接続追加</button>
+        <!-- ① 各種設定（通知 / ストレージ / 外部連携）を最上段に -->
+        <div class="conn-action-row">
+          <button id="conn-modal-notif-btn" class="conn-action-btn">🔔 通知設定</button>
+          <button id="conn-modal-storage-btn" class="conn-action-btn">💾 ストレージ</button>
+          <button id="conn-modal-external-btn" class="conn-action-btn conn-action-btn-accent">🔌 外部連携</button>
         </div>
-        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12px;">
-          <label style="white-space:nowrap;cursor:pointer;">
+        <!-- ② 表示オプション（操作昇格PINは外部連携へ移設） -->
+        <div class="conn-opt-row">
+          <label class="conn-opt-label">
             <input type="checkbox" id="conn-modal-auto-connect"> 自動接続
           </label>
-          <label style="white-space:nowrap;cursor:pointer;">
+          <label class="conn-opt-label">
             <input type="checkbox" id="conn-modal-show-host-tag" checked> 機器名表示
           </label>
-          <label style="white-space:nowrap;">
-            カメラポート: <input type="number" id="conn-modal-camera-port" min="1" max="65535" step="1" inputmode="numeric" style="width:5em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="8080">
-          </label>
-          <!-- リレー操作昇格PIN（親モードのみ表示。子クライアントからは参照・変更不可） -->
-          <label id="conn-modal-relay-pin-label" style="white-space:nowrap;display:none;" title="ビューモードの端末が操作モードへ昇格する際に要求するPIN。空欄なら確認のみで昇格可。">
-            操作昇格PIN: <input type="text" id="conn-modal-relay-pin" autocomplete="off" style="width:6em;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:3px;" placeholder="未設定">
-          </label>
-          <span style="flex:1"></span>
-          <button id="conn-modal-notif-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">🔔 通知設定</button>
-          <button id="conn-modal-storage-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#f0f4ff;border:1px solid #c0d0e0;border-radius:3px;">💾 ストレージ</button>
-          <button id="conn-modal-external-btn" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e8f5f3;border:1px solid #99cdc6;border-radius:3px;">🔌 外部連携</button>
+          <!-- ★ グローバルのカメラポートは廃止（per-host の接続先設定で管理。K1=8080/Moonrakerは機器申告）。 -->
+        </div>
+      </div>
+
+      <!-- ③ 機器一覧セクション（タイトル＋新規追加トグル） -->
+      <div class="conn-devices-header">
+        <span class="conn-devices-title">機器一覧</span>
+        <button id="conn-modal-add-toggle" class="conn-add-toggle" aria-expanded="false">＋ 新規追加</button>
+      </div>
+
+      <!-- 新規追加フォーム（普段は折りたたみ。新規登録は頻繁でないため） -->
+      <div id="conn-modal-add-form" class="conn-add-form" hidden>
+        <div class="btn-row" style="gap:6px;">
+          <input type="text" id="conn-modal-ip" placeholder="192.168.54.151:9999" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+          <select id="conn-modal-type" title="プリンタ種別" style="padding:6px 4px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+            <option value="creality-k1">K1系 (Creality)</option>
+            <option value="moonraker">Moonraker (Fluidd/Klipper)</option>
+          </select>
+          <button class="primary" id="conn-modal-connect">接続追加</button>
+        </div>
+        <!-- リレー子(ブラウザ)モード時の注記。直接接続不可の理由を明示（既定は非表示、JSで制御） -->
+        <div id="conn-modal-child-note" style="display:none;margin-top:4px;font-size:11px;color:var(--color-warning-text,#856404);background:var(--color-warning-bg,#fef3c7);border-radius:4px;padding:4px 8px;">
+          ブラウザ(子)モードでは親リレー経由で表示しています。プリンタへの直接接続は親機(アプリ)で行うか、<code>?relay=standalone</code> 付きで開いてください。
         </div>
       </div>
 
@@ -124,6 +140,15 @@
         <div>
           <label for="setting-log-max-lines"><strong>ログ最大行数:</strong></label>
           <input type="number" id="setting-log-max-lines" min="100" step="100" value="1000" style="width:6em;font-size:12px;padding:3px;border:1px solid #ccc;border-radius:3px;margin-left:6px;" />
+        </div>
+        <div style="margin-top:6px;">
+          <label for="setting-chart-window-min"><strong>温度グラフ保持時間:</strong></label>
+          <input type="number" id="setting-chart-window-min" min="1" max="720" step="1" value="15" style="width:5em;font-size:12px;padding:3px;border:1px solid #ccc;border-radius:3px;margin-left:6px;" /> 分
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">グラフはこの時間ぶんだけ保持・表示します（古い点は破棄）。長くするとメモリ使用が増えます。</div>
+        </div>
+        <div style="margin-top:6px;">
+          <label><input type="checkbox" id="setting-log-received-raw" /> <strong>受信生ログを表示（K1系のみ）</strong></label>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">K1系の受信パケットをログに流します（大量・CPU増。既定OFF）。Moonraker は Gcode タブを使用。</div>
         </div>
         <div id="confirm-delete-modal" class="confirm-modal" style="display:none;">
           <div class="confirm-modal-box">
@@ -438,12 +463,12 @@
             <button id="btn-pause-print" class="btn-pause">一時停止</button>
             <button id="btn-resume-print" class="btn-resume">再開</button>
             <button id="btn-ack-error">エラー了承</button>
-            <button id="btn-pause-home">一時停止時<br>原点復帰</button>
-            <button id="btn-xy-unlock">XYロック解除</button>
+            <button id="btn-pause-home" data-machine-type="k1-only">一時停止時<br>原点復帰</button>
+            <button id="btn-xy-unlock" data-machine-type="k1-only">XYロック解除</button>
           </div>
           <div class="cmd-group">
-            <button id="btn-history-list">履歴一覧取得</button>
-            <button id="btn-file-list">ファイル一覧取得</button>
+            <button id="btn-history-list" data-machine-type="k1-only">履歴一覧取得</button>
+            <button id="btn-file-list" data-machine-type="k1-only">ファイル一覧取得</button>
             <button id="btn-send-gcode">G-code送信</button>
             <button id="btn-send-raw-json">JSONコマンド送信</button>
           </div>
@@ -511,7 +536,7 @@
                   </div>
                 </div>
 
-              <div class="temp-box">
+              <div class="temp-box" data-machine-type="k1-only">
                 <div class="temp-title">箱内温度</div>
                 <div class="temp-item">&nbsp;</div>
                 <div class="temp-item">&nbsp;</div>
@@ -542,7 +567,7 @@
                 </div>
 
               </div>
-              <div class="fan-item">
+              <div class="fan-item" data-machine-type="k1-only">
                 <strong>側面FAN</strong>
                 <label class="switch">
                   <input type="checkbox" id="sideFanToggle2" data-field="fanAuxiliary">
@@ -558,7 +583,7 @@
                     <span class="value">--</span><span class="unit">%</span>
                   </span>
               </div>
-              <div class="fan-item">
+              <div class="fan-item" data-machine-type="k1-only">
                 <strong>背面FAN</strong>
                 <label class="switch">
                   <input type="checkbox" id="backFanToggle2" data-field="fanCase">
@@ -580,7 +605,7 @@
             </div>
             <div class="control-temp-col control-temp-right">
             <div class="fan-lights-row">
-              <div class="fan-item">
+              <div class="fan-item" data-machine-type="k1-only">
                 <strong>LED照明</strong>
                 <label class="switch">
                   <input type="checkbox" id="ledToggle2" data-field="lightSw">
@@ -610,7 +635,7 @@
                 </div>
               </div>
             </div>
-            <div class="fan-lights-row ai-row">
+            <div class="fan-lights-row ai-row" data-machine-type="k1-only">
               <div class="fan-item">
                 <strong class="feature-name"><nobr>印刷前AI</nobr><wbr><nobr>自動調整</nobr></strong>
                 <label class="switch">
@@ -733,11 +758,22 @@
       <div class="graph-wrapper">
         <div class="card temp-graph-panel-wrapper" id="temp-graph-card">
           <!-- タイトルはパネルヘッダーに表示されるため省略 -->
+          <!-- ★ M: 操作はグラフ上部のツールバーへ集約（凡例とボタンの重なり回避）。 -->
+          <div class="temp-graph-toolbar">
+            <label class="temp-graph-range-label">表示
+              <select id="temp-graph-range" class="temp-graph-range" title="最新からの表示範囲">
+                <option value="15">15分</option>
+                <option value="10">10分</option>
+                <option value="5">5分</option>
+                <option value="3">3分</option>
+                <option value="1">1分</option>
+              </select>
+            </label>
+            <button id="temp-graph-reset-button" class="btn temp-graph-btn" title="ドラッグズームを解除して最新表示に戻す">絞り込み解除</button>
+            <!-- 操作ロックボタンは panel_init が動的に追記 -->
+          </div>
           <div class="temp-graph-area">
             <canvas id="temp-graph-canvas"></canvas>
-          </div>
-          <div class="temp-graph-footer">
-            <button id="temp-graph-reset-button" class="btn" style="font-size:12px;">リセット</button>
           </div>
         </div>
       </div>
@@ -817,6 +853,8 @@
         <div class="tabs">
           <button id="tab-received" class="active">受信ログ</button>
           <button id="tab-notification">通知ログ</button>
+          <!-- Moonraker(Klipper)機のリアルタイム gcode コンソール出力 -->
+          <button id="tab-gcode">Gcode</button>
         </div>
         <div id="log-controls" class="log-controls">
           <button id="copy-all-button" data-original="全てコピー" style="font-size:12px;">全てコピー</button>
@@ -848,6 +886,9 @@
 
         <!-- 通知表示エリア (hidden 初期表示) -->
         <div id="notification-history" class="log-box hidden"></div>
+
+        <!-- gcode コンソール (hidden 初期表示・Moonraker機の notify_gcode_response) -->
+        <div id="gcode-console" class="log-box hidden"></div>
       </div>
     </div>
   </div>

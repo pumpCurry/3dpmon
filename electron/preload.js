@@ -99,6 +99,29 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setCameraEndpoints: (map) => ipcRenderer.send("set-camera-endpoints", map),
 
   /**
+   * 指定ホストの現在カメラ画像を1枚取得し Base64(JPEG) で返す。
+   * 親レンダラーは file:// オリジンのため CORS でプリンタ画像を直接読めない。
+   * メインプロセスが set-camera-endpoints の allowlist 経由で取得して返す
+   * （ItemKeeper 連携の device.camera 添付で使用）。
+   *
+   * @param {string} host - ホスト名（_cameraEndpoints のキー）
+   * @returns {Promise<{mime:string, dataBase64:string, bytes:number}|null>}
+   */
+  getCameraSnapshot: (host) => ipcRenderer.invoke("get-camera-snapshot", host),
+
+  /**
+   * 指定ホストのプリンタ静的画像（サムネ等, downloads/ 配下）を取得し Base64 で返す。
+   * 親レンダラーは file:// オリジンのため CORS でプリンタ画像を直接読めない。
+   * メインプロセスが _cameraEndpoints の allowlist + downloads/ 制限つきで取得して返す
+   * （ItemKeeper 連携の files[].thumbnail 添付で使用）。
+   *
+   * @param {string} host - ホスト名（_cameraEndpoints のキー）
+   * @param {string} path - 画像パス（pathname+search, downloads/ 配下のみ許可）
+   * @returns {Promise<{mime:string, dataBase64:string, bytes:number}|null>}
+   */
+  getImageBase64: (host, path) => ipcRenderer.invoke("get-image-base64", host, path),
+
+  /**
    * リレー経由のコマンドを受信するリスナーを登録する。
    * 子（satellite）からのコマンドを親レンダラーが処理する。
    *

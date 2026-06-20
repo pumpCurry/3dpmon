@@ -36,6 +36,12 @@ import {
   PLACEHOLDER_HOSTNAME
 } from "./dashboard_data.js";
 
+/** dashboard_ui の updateStoredDataToDOM を遅延解決（重い UI 連鎖を import 時に巻き込まない） */
+let _updateStoredDataToDOM = null;
+import("./dashboard_ui.js")
+  .then((m) => { _updateStoredDataToDOM = m.updateStoredDataToDOM; })
+  .catch(() => { /* 非ブラウザ環境では未解決のまま（描画不要） */ });
+
 /** リレーモード: null=未検出, "parent"=親, "readonly"=子閲覧, "satellite"=子操作 */
 let _relayMode = null;
 
@@ -60,8 +66,10 @@ let _parentOrigin = "";
 /**
  * リレーモードを検出する。
  * - Electron親: window.electronAPI 存在 → "parent"
+ * - ブラウザ: URL ?relay=standalone → "standalone"（直接接続・明示オプトアウト）
  * - ブラウザ子: URL ?relay=readonly|satellite → "readonly"|"satellite"
- * - それ以外: "standalone"（従来のスタンドアロン動作）
+ * - それ以外の http(s): デフォルトで "readonly"（リレー子）
+ * - file://: "standalone"
  *
  * @returns {string} "parent" | "readonly" | "satellite" | "standalone"
  */
@@ -74,6 +82,9 @@ export function detectRelayMode() {
   // URL パラメータでモード指定
   const params = new URLSearchParams(window.location.search);
   const relayParam = params.get("relay");
+  // ★ ?relay=standalone : http(s) でもリレー子にせずプリンタ直接接続する明示オプトアウト。
+  //   （既定は下の readonly のまま。サテライト運用に影響しない。）
+  if (relayParam === "standalone" || relayParam === "direct") return "standalone";
   if (relayParam === "satellite") return "satellite";
   if (relayParam === "readonly") return "readonly";
 
@@ -470,6 +481,13 @@ function _applyDelta(msg) {
         setStoredDataForHost(hostname, key, rawValue, true);
       }
     }
+    // ★ 重篤バグ修正: 子(satellite/readonly)の状態描画を「delta 受信(WS イベント)」駆動で行う。
+    //   storedData の DOM 反映は本来 aggregator の setInterval(500ms) に依存するが、
+    //   子(ブラウザ)のタブが背面化すると Chromium のタイマー間引き（背面 5 分後に
+    //   intensive throttling で約1回/分）で更新が数分に1回まで落ちていた。
+    //   WS onmessage は間引かれないため、親のブロードキャスト(2回/秒)ごとにここで明示描画し、
+    //   背面タブでも 2fps の状態更新を維持する（Electron 親は backgroundThrottling:false で別途担保）。
+    try { _updateStoredDataToDOM?.(); } catch (e) { console.debug("[client-sync] delta描画スキップ:", e?.message || e); }
   }
 
   // ★ 共有データ差分: 親が唯一の権威 — 受信内容で全置換する（スナップショットと同一規則）。

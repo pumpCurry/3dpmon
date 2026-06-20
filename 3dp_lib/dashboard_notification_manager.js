@@ -29,7 +29,8 @@
 
 import {
   monitorData,
-  isNotificationSuppressed
+  isNotificationSuppressed,
+  getHostDisplayName
 } from "./dashboard_data.js";
 import { saveUnifiedStorage }           from "./dashboard_storage.js";
 import { audioManager }                 from "./dashboard_audio_manager.js";
@@ -226,6 +227,21 @@ export class NotificationManager {
     Object.values(this.map).forEach(cfg => {
       if (!cfg.level) cfg.level = "info";
     });
+
+    // ★ L 移行（統合）: 旧 filamentLow 既定を新既定（{remainingText}＝表示単位・小数1桁）へ。
+    //   対象は (a) 最初期 "{remaining}mm"（mmハードコード・全桁読み上げ）と
+    //   (b) 中間版 "{remaining}"（値側で単位付与）の2系統。{remaining} は生mm値を
+    //   返すため読み上げに使うと再び全桁化する → 既知の旧既定と完全一致のときだけ
+    //   新既定へ差し替える（ユーザのカスタム文面は尊重）。
+    if (this.map.filamentLow && typeof this.map.filamentLow.talk === "string") {
+      const OLD_FILAMENTLOW_DEFAULTS = [
+        "{hostname} フィラメント残量が少なくなっています 残り{remaining}mm ({now})",
+        "{hostname} フィラメント残量が少なくなっています 残り{remaining} ({now})",
+      ];
+      if (OLD_FILAMENTLOW_DEFAULTS.includes(this.map.filamentLow.talk)) {
+        this.map.filamentLow.talk = defaultNotificationMap.filamentLow.talk;
+      }
+    }
 
     // 旧データが改行を含んでいた場合は保存し直す
     this._persistSettings();
@@ -479,10 +495,9 @@ export class NotificationManager {
     // マクロ展開
     const now = new Date().toLocaleString();
     const hostname = payload.hostname || "unknown";
-    const machine = monitorData.machines[hostname];
-    const displayName = machine?.storedData?.hostname?.rawValue
-                     || machine?.storedData?.model?.rawValue
-                     || hostname;
+    // {hostname} は「呼び出し名称」= 表示名(label) を最優先で解決する
+    // （ユーザーが付けた表示名が通知・読み上げに反映されるようにする）
+    const displayName = getHostDisplayName(hostname);
     const ctx = { hostname: displayName, now, _rawHostname: hostname, ...payload };
     const text = (def.talk || def.label || "")
       .replace(/\{([^}]+)\}/g, (_, k) => ctx[k] != null ? String(ctx[k]) : "")
@@ -491,7 +506,15 @@ export class NotificationManager {
     // ── UI チャネル（通知マスターONのときのみ）──
     if (notifyActive) {
       // 1) 固定アラート（showAlert 内でログ出力も行われる）
-      showAlert(text, def.level, def.level === "error", hostname);
+      //    noBanner=true の通知(サーマル異常等)はバナーを積まず、通知ログのみ残す。
+      //    主インジケータは別途(数値セル背景色＋集約バッジ)が担うため。
+      if (def.noBanner) {
+        import("./dashboard_log_util.js").then(({ pushNotificationLog }) =>
+          pushNotificationLog(text, def.level, hostname)
+        );
+      } else {
+        showAlert(text, def.level, def.level === "error", hostname);
+      }
 
       // 3) TTS（ホスト別設定を適用）
       if (!this.muted && audioManager.isVoiceAllowed() && def.talk) {
@@ -722,6 +745,7 @@ export class NotificationManager {
     {
       label: "温度アラート",
       types: [
+        "thermalAnomaly", "thermalCaution",
         "tempNearNozzle80", "tempNearBed80",
         "tempNearNozzle90", "tempNearBed90",
         "tempNearNozzle95", "tempNearBed95",
@@ -764,7 +788,9 @@ export class NotificationManager {
     tempNearNozzle98:  "ノズル98%",
     tempNearBed98:     "ベッド98%",
     tempNearNozzle100: "ノズル100%",
-    tempNearBed100:    "ベッド100%"
+    tempNearBed100:    "ベッド100%",
+    thermalAnomaly:    "サーマル異常(急変/暴走/上限)",
+    thermalCaution:    "サーマル警告(乖離/昇温不良)"
   };
 
   /**
@@ -974,9 +1000,8 @@ export class NotificationManager {
     const hostKeys = Object.keys(monitorData.machines || {}).filter(h => h !== "_$_NO_MACHINE_$_");
     const ttsEntries = [{ key: "__default__", label: "デフォルト（全機器共通）" }];
     for (const h of hostKeys) {
-      const machine = monitorData.machines[h];
-      const machineLabel = machine?.storedData?.hostname?.rawValue || machine?.storedData?.model?.rawValue || h;
-      ttsEntries.push({ key: h, label: machineLabel });
+      // 機器別一覧の名称も表示名(label) を優先（IP のまま出る問題の解消）
+      ttsEntries.push({ key: h, label: getHostDisplayName(h) });
     }
 
     // 各ホスト用 TTS 行を生成

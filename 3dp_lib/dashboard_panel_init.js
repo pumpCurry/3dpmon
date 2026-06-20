@@ -25,15 +25,15 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.1119 (PR #385)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-03-10 23:30:00
+ * @lastModified 2026-06-16 22:30:00
  * -----------------------------------------------------------
  */
 
 "use strict";
 
-import { initTemperatureGraph, resetTemperatureGraph, toggleChartInteractionLock } from "./dashboard_chart.js";
+import { initTemperatureGraph, resetTemperatureGraph, resetTemperatureGraphView, toggleChartInteractionLock, setChartWindowMinutes, setChartViewMinutes } from "./dashboard_chart.js";
 import {
   registerCameraPanel,
   unregisterCameraPanel,
@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getDisplayBaseUrl, sendCommand } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -136,6 +136,39 @@ export function initializePanel(panelType, panelBody, hostname) {
       console.error(`[panel-init] ${panelType} の初期化に失敗:`, e);
     }
   }
+  // プリンタ種別に応じて K1 専用 UI を出し分ける（全パネル共通）
+  try {
+    _applyMachineTypeVisibility(panelBody, hostname);
+  } catch (e) {
+    console.error(`[panel-init] machineType 可視性適用に失敗:`, e);
+  }
+}
+
+/**
+ * パネル内の `data-machine-type` 付き要素を、対象ホストのプリンタ種別に応じて
+ * 表示/非表示にする。
+ *
+ * 【詳細説明】
+ * - `data-machine-type="k1-only"`: Creality K1 系のみ表示（Moonraker 機では非表示）。
+ *   箱内温度・側面/背面FAN・LED・AI 機能・K1 専用コマンドボタン等が対象。
+ * - `data-machine-type="moonraker-only"`: Moonraker 機のみ表示。
+ * - 属性なしの要素は常に表示（両機種共通 UI）。
+ *
+ * @private
+ * @param {HTMLElement} panelBody - パネル本体要素
+ * @param {string} hostname - 対象ホスト名
+ * @returns {void}
+ */
+function _applyMachineTypeVisibility(panelBody, hostname) {
+  if (!panelBody || !hostname || hostname === "shared") return;
+  const type = getPrinterType(hostname);
+  const isK1 = type === "creality-k1";
+  panelBody.querySelectorAll('[data-machine-type="k1-only"]').forEach((el) => {
+    el.classList.toggle("hidden", !isK1);
+  });
+  panelBody.querySelectorAll('[data-machine-type="moonraker-only"]').forEach((el) => {
+    el.classList.toggle("hidden", isK1);
+  });
 }
 
 /**
@@ -459,30 +492,59 @@ function initTempGraphPanel(body, hostname) {
   const canvas = body.querySelector("#temp-graph-canvas");
   if (!canvas) return;
 
-  // Chart.js の初期化（per-host インスタンス）
+  // 保持時間枠を保存設定（appSettings.chartWindowMin, 既定15分）から適用してから初期化
+  setChartWindowMinutes(monitorData.appSettings.chartWindowMin ?? 15);
+
+  // uPlot の初期化（per-host インスタンス）
   resetTemperatureGraph(hostname);
   initTemperatureGraph(body, hostname);
 
-  // リセットボタン
+  // ★ M: リセット=「絞り込み(ドラッグズーム)解除」。データは破棄せず最新表示へ戻す。
   const resetBtn = body.querySelector("#temp-graph-reset-button");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
-      resetTemperatureGraph(hostname);
+      resetTemperatureGraphView(hostname);
+    });
+  }
+
+  // ★ M: 現在の絞り込み範囲インジケータ（ロックボタンの右に表示）
+  const rangeInd = body.querySelector(".temp-graph-toolbar")
+    ? document.createElement("span") : null;
+  if (rangeInd) {
+    rangeInd.className = "temp-graph-range-ind";
+    const setInd = (min) => { rangeInd.textContent = `範囲: 最新${min}分`; };
+    setInd(Math.min(15, Math.round((monitorData.appSettings.chartWindowMin ?? 15))));
+    body._tempGraphSetRangeInd = setInd;
+  }
+
+  // ★ M: 表示範囲（最新から N 分）絞り込みドロップダウン。選択でズーム解除＋スライド表示。
+  const rangeSel = body.querySelector("#temp-graph-range");
+  if (rangeSel) {
+    rangeSel.value = String(Math.min(15, Math.round((monitorData.appSettings.chartWindowMin ?? 15))));
+    rangeSel.addEventListener("change", () => {
+      const eff = setChartViewMinutes(hostname, parseInt(rangeSel.value, 10));
+      rangeSel.value = String(eff);
+      body._tempGraphSetRangeInd?.(eff);
     });
   }
 
   // マウス操作ロックボタン（初期値: ロック=スクロール阻害防止）
   const lockBtn = document.createElement("button");
-  lockBtn.className = "chart-interaction-lock locked";
+  lockBtn.className = "chart-interaction-lock locked temp-graph-btn";
   lockBtn.textContent = "🔒 操作ロック中";
   lockBtn.title = "グラフのズーム・パン操作を有効/無効にする";
   lockBtn.addEventListener("click", () => {
     const nowLocked = toggleChartInteractionLock(hostname);
-    lockBtn.textContent = nowLocked ? "🔒 操作ロック中" : "🔓 操作可能";
+    // ★ ロック解除時はドラッグで「絞り込み(ズーム)」できる状態 → ラベルを「絞込み可能」に
+    lockBtn.textContent = nowLocked ? "🔒 操作ロック中" : "🔓 絞込み可能";
     lockBtn.classList.toggle("locked", nowLocked);
   });
-  // リセットボタンの隣に配置
-  if (resetBtn?.parentElement) {
+  // 上部ツールバー（無ければリセットボタンの隣／canvas 前）へ配置
+  const toolbar = body.querySelector(".temp-graph-toolbar");
+  if (toolbar) {
+    toolbar.appendChild(lockBtn);
+    if (rangeInd) toolbar.appendChild(rangeInd);
+  } else if (resetBtn?.parentElement) {
     resetBtn.parentElement.appendChild(lockBtn);
   } else {
     body.insertBefore(lockBtn, canvas);
@@ -546,31 +608,38 @@ function initLogPanel(body, hostname) {
     initLogRenderer(logBox, notifBox, hostname);
   }
 
-  // タブ切り替え
+  // タブ切り替え（受信ログ / 通知ログ / Gcode コンソール）
   const tabReceived = body.querySelector("#tab-received");
   const tabNotification = body.querySelector("#tab-notification");
+  const tabGcode = body.querySelector("#tab-gcode");
+  const gcodeBox = body.querySelector("#gcode-console");
   const tsReceivedEl = body.querySelector("#last-log-timestamp");
   const tsErrorEl = body.querySelector("#last-notification-timestamp");
+  const logControlsEl = body.querySelector("#log-controls");
+  const notifControlsEl = body.querySelector("#notification-controls");
 
-  if (tabReceived && tabNotification) {
-    tabReceived.addEventListener("click", () => {
-      tabReceived.classList.add("active");
-      tabNotification.classList.remove("active");
-      if (logBox) logBox.classList.remove("hidden");
-      if (tsReceivedEl) tsReceivedEl.classList.remove("hidden");
-      if (notifBox) notifBox.classList.add("hidden");
-      if (tsErrorEl) tsErrorEl.classList.add("hidden");
-    });
+  /**
+   * 3 タブのうち 1 つを表示し、他を隠す。
+   * @param {"received"|"notification"|"gcode"} which - 表示するタブ
+   * @returns {void}
+   */
+  const selectLogTab = (which) => {
+    const tabs = { received: tabReceived, notification: tabNotification, gcode: tabGcode };
+    for (const [k, el] of Object.entries(tabs)) {
+      if (el) el.classList.toggle("active", k === which);
+    }
+    if (logBox) logBox.classList.toggle("hidden", which !== "received");
+    if (notifBox) notifBox.classList.toggle("hidden", which !== "notification");
+    if (gcodeBox) gcodeBox.classList.toggle("hidden", which !== "gcode");
+    if (tsReceivedEl) tsReceivedEl.classList.toggle("hidden", which !== "received");
+    if (tsErrorEl) tsErrorEl.classList.toggle("hidden", which !== "notification");
+    if (logControlsEl) logControlsEl.classList.toggle("hidden", which !== "received");
+    if (notifControlsEl) notifControlsEl.classList.toggle("hidden", which !== "notification");
+  };
 
-    tabNotification.addEventListener("click", () => {
-      tabNotification.classList.add("active");
-      tabReceived.classList.remove("active");
-      if (logBox) logBox.classList.add("hidden");
-      if (tsReceivedEl) tsReceivedEl.classList.add("hidden");
-      if (notifBox) notifBox.classList.remove("hidden");
-      if (tsErrorEl) tsErrorEl.classList.remove("hidden");
-    });
-  }
+  if (tabReceived) tabReceived.addEventListener("click", () => selectLogTab("received"));
+  if (tabNotification) tabNotification.addEventListener("click", () => selectLogTab("notification"));
+  if (tabGcode) tabGcode.addEventListener("click", () => selectLogTab("gcode"));
 
   // コピーボタン（HTML上のID: copy-all-button, copy-last-50-button, copy-storeddata-button,
   //   copy-all-notification-button, copy-last-50-notification-button）
@@ -627,20 +696,7 @@ function initLogPanel(body, hostname) {
       if (el) el.innerHTML = "";
     });
   }
-
-  // 受信ログ/通知ログ切替時にコントロール表示も切り替え
-  const logControls = body.querySelector("#log-controls");
-  const notifControls = body.querySelector("#notification-controls");
-  if (tabReceived && logControls && notifControls) {
-    tabReceived.addEventListener("click", () => {
-      logControls.classList.remove("hidden");
-      notifControls.classList.add("hidden");
-    });
-    tabNotification.addEventListener("click", () => {
-      logControls.classList.add("hidden");
-      notifControls.classList.remove("hidden");
-    });
-  }
+  // ※ コントロール(コピー/消去)ボタンの表示切替は selectLogTab() に統合済み。
 }
 
 /**

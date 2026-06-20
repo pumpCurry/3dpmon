@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1120 (PR #385)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-06-17 20:20:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -52,14 +52,14 @@ import {
   setCurrentSpoolId,
   useFilament,
   getSpoolById,
-  updateSpool,
   formatFilamentAmount,
   formatUsageHtml,
   usageHeaderLabel,
   formatSpoolDisplayId,
   buildFilamentRecommendations
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
+import { recomputeSpoolFromManualEdit } from "./dashboard_filament_ledger.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
@@ -208,6 +208,79 @@ function _patchHistoryFilament(raw, hostname) {
     saveCurrent(cur, hostname);
     renderPrintCurrent(scopedById("print-current-container", hostname), hostname);
   }
+}
+
+/**
+ * 手動の履歴フィラメント編集を権威として当該スプール残量を再計算し（総量基準＋再アンカー）、
+ * 装着中ホストの残量表示(storedData)も更新する。
+ *
+ * ADR-0004 のアンカー方式（{@link reconcileSpool}）は装着以降のジョブしか見ないため、
+ * インポート済み履歴の編集が残量へ反映されない。手動編集は高信頼データとみなし
+ * {@link recomputeSpoolFromManualEdit} で履歴全体から再計算する（ユーザー選択 Option 1）。
+ *
+ * @private
+ * @param {?string} spoolId - 再計算するスプールID（falsy なら何もしない）
+ * @param {number} ts - 更新時刻 ms
+ * @returns {void}
+ */
+function _recomputeAndRefreshSpool(spoolId, ts) {
+  if (!spoolId) return;
+  try {
+    recomputeSpoolFromManualEdit(spoolId, { ts });
+  } catch (e) {
+    console.warn("[printmanager] recomputeSpoolFromManualEdit 失敗:", e?.message || e);
+    return;
+  }
+  const sp = getSpoolById(spoolId);
+  if (!sp) return;
+  // 装着中ホストの残量表示を更新（dirty マーク → 次の描画サイクルで反映）
+  const map = monitorData.hostSpoolMap || {};
+  for (const [h, sid] of Object.entries(map)) {
+    if (sid === spoolId) {
+      setStoredDataForHost(h, "filamentRemainingMm", sp.remainingLengthMm, true);
+    }
+  }
+}
+
+/**
+ * 印刷ライフサイクル計測値（観測フラグ＋区間時間）を、保存済み履歴エントリへ付与する。
+ *
+ * 完了確定時(processData の →printDone 遷移)に呼ばれ、進捗100%時に登録済みのエントリを
+ * printId(=id) で引いて observed / postProcessingTime（／Moonraker は warmup→preparationTime,
+ * paused→pauseTime）を書き込む。機器申告値(K1 の preparationTime/pauseTime)が既に
+ * あれば実測値で上書きしない。device 再取得時のマージ(updateHistoryList)は incoming が
+ * これらを持たない＝null のため backfill で保持される。
+ *
+ * @function applyLifecycleMetrics
+ * @param {string} host - ホスト名
+ * @param {number|string} jobId - printId（= start_time epoch）
+ * @param {{observed?:string, postProcessingTime?:?number, warmupSec?:?number, pausedSec?:?number}} metrics
+ * @returns {void}
+ */
+export function applyLifecycleMetrics(host, jobId, metrics) {
+  if (!host || jobId == null || !metrics) return;
+  const jobs = loadHistory(host);
+  const job = jobs.find(j => String(j.id) === String(jobId));
+  if (!job) return; // 進捗100%登録前のレア競合（K1-Max即完了等）。後処理≈0で実害小。
+  let changed = false;
+  if (metrics.observed != null && job.observed !== metrics.observed) {
+    job.observed = metrics.observed; changed = true;
+  }
+  if (metrics.postProcessingTime != null && job.postProcessingTime == null) {
+    job.postProcessingTime = metrics.postProcessingTime; changed = true;
+  }
+  if (metrics.warmupSec != null && (job.preparationTime == null || Number(job.preparationTime) === 0)) {
+    job.preparationTime = metrics.warmupSec; changed = true;
+  }
+  if (metrics.pausedSec != null && (job.pauseTime == null || Number(job.pauseTime) === 0)) {
+    job.pauseTime = metrics.pausedSec; changed = true;
+  }
+  if (!changed) return;
+  saveHistory(jobs, host);
+  try {
+    const baseUrl = getDisplayBaseUrl(host);
+    renderHistoryTable(jobsToRaw(loadHistory(host)), baseUrl, host);
+  } catch { /* 描画失敗は無視（保存は済んでいる） */ }
 }
 
 /**
@@ -439,6 +512,49 @@ function makeThumbUrl(baseUrl, rawFilename) {
   return `${baseUrl}/downloads/humbnail/${base}.png`;
 }
 
+/**
+ * サムネイル不在時のローカル代替画像（data-URI の SVG）。
+ * 機器側の固定パス(downloads/defData/...)は K1 にしか存在せず、Moonraker 機では
+ * 404 になり、再描画のたびに同じ URL を取りに行って大量リトライ(スロットル)を招いていた。
+ * ネットワークを使わない data-URI を最終フォールバックにすることで 404 嵐を根絶する。
+ * @constant {string}
+ */
+const THUMB_PLACEHOLDER = "data:image/svg+xml;utf8," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">' +
+  '<rect width="48" height="48" rx="4" fill="#e2e8f0"/>' +
+  '<path d="M12 32l8-9 5 6 4-4 7 7z" fill="#94a3b8"/>' +
+  '<circle cx="18" cy="17" r="3" fill="#94a3b8"/>' +
+  '</svg>'
+);
+
+/**
+ * ホスト種別に応じてサムネイル URL を解決する。
+ *
+ * 【詳細説明】
+ * - 明示 URL（Moonraker メタ由来など）があれば最優先。
+ * - Moonraker 機: gcode のサムネはメタの相対パス由来で、ファイル名から K1 規則で
+ *   組み立てられない。ファイル一覧キャッシュ(machine._cachedFileInfo)から同名ファイルの
+ *   thumbUrl を引く。見つからなければローカル代替({@link THUMB_PLACEHOLDER})を返し、
+ *   存在しない機器パスを叩き続けない（K1 規則の humbnail/defData は使わない）。
+ * - K1 機: 従来どおり {@link makeThumbUrl}（downloads/humbnail/…）。
+ *
+ * @param {string} host - ホスト名
+ * @param {string} filename - ファイル名（パス可）
+ * @param {string} [explicit] - 既知のサムネ URL（あれば最優先）
+ * @returns {string} 表示に使える URL（不明時は data-URI 代替）
+ */
+function resolveThumbUrl(host, filename, explicit) {
+  if (explicit) return explicit;
+  if (getPrinterType(host) === "moonraker") {
+    const m = monitorData.machines[host];
+    const bn = String(filename || "").split("/").pop();
+    const entries = m?._cachedFileInfo?.entries || [];
+    const hit = entries.find(e => String(e.filename || "").split("/").pop() === bn);
+    return hit?.thumbUrl || THUMB_PLACEHOLDER;
+  }
+  return makeThumbUrl(getDisplayBaseUrl(host), filename) || THUMB_PLACEHOLDER;
+}
+
 
 /**
  * 生の履歴エントリをモデル化
@@ -480,16 +596,21 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const finishTime     = useTimeSec > 0
     ? new Date((startSec + useTimeSec) * 1000).toISOString()
     : null;
-  // raw.usagetime が 0 でも 1 を返す場合があるため、機器の報告値を優先
-  const printfinish    = raw.printfinish != null
-    ? Number(raw.printfinish)
-    // 値が存在しない場合のみ使用時間から推測
-    : (useTimeSec > 0 ? 1 : 0);
+  // printfinish: 完了シグナル(実印刷時間 usagetime>0 または 終了時刻 endtime>0)が有る
+  //   ジョブのみ成否を確定する。どちらも無い＝印刷中/未完了は null（未確定）にし、
+  //   機器の「早すぎる result」も無視する。★ K1 は履歴再取得で印刷中エントリに
+  //   printfinish=0 を付けて寄越すため、明示値があっても完了シグナルが無ければ信頼しない
+  //   （印刷中ジョブを再起動時に失敗(✗)/成功(✔)へ誤確定＝誤計上していた根本対策）。
+  const _finished = (useTimeSec > 0) || (raw.endtime != null && Number(raw.endtime) > 0);
+  const printfinish    = _finished
+    ? (raw.printfinish != null ? Number(raw.printfinish) : (useTimeSec > 0 ? 1 : 0))
+    : null;
   // 材料使用量: 機器報告値をそのまま保持（丸めない）
   const materialUsedMm = Number(raw.usagematerial || 0);
 
-  // raw.filename に基づくサムネイル生成
-  const thumbUrl       = makeThumbUrl(baseUrl, raw.filename);
+  // サムネイルURL: ホスト種別に応じて解決（Moonrakerはメタ/ファイル一覧キャッシュ由来、
+  // 不明時はローカル代替。K1は従来の humbnail パス）。
+  const thumbUrl       = resolveThumbUrl(host, raw.filename, raw.thumbUrl);
 
   const startway       = raw.startway;
   const size           = raw.size;
@@ -498,6 +619,11 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const preparationTime     = raw.preparationTime;
   const firstLayerCheckTime = raw.firstLayerCheckTime;
   const pauseTime           = raw.pauseTime;
+  // ★ A: Moonraker のネイティブ ID（job_id）を内部保持（printId=id は start_time のまま）
+  const moonrakerJobId      = raw.moonrakerJobId;
+  // ★ J: 観測フラグ（live/partial/history）＋印刷後処理時間（秒）。既定は未設定＝取れなかった。
+  const observed            = raw.observed;
+  const postProcessingTime  = raw.postProcessingTime;
   const filamentId          = raw.filamentId;
   const filamentColor       = raw.filamentColor;
   const filamentType        = raw.filamentType;
@@ -524,6 +650,9 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     preparationTime,
     firstLayerCheckTime,
     pauseTime,
+    moonrakerJobId,
+    observed,
+    postProcessingTime,
     filamentId,
     filamentColor,
     filamentType,
@@ -671,13 +800,19 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
-        // ★ printfinish: 明示値優先。未設定で finishTime なし = 印刷中（null = 未確定）
-        printfinish:   job.printfinish ?? (finishEpoch ? 1 : null),
+        // ★ printfinish: finishTime(=完了)が無ければ未確定(null)。あれば明示値(1/0)をそのまま。
+        //   印刷中ジョブ(finishTime なし)は保存値が誤って 0/1 でも表示で未確定(…)に矯正する
+        //   （K1 履歴再取得の早すぎる result / マージ復元によるストアの誤確定を描画側で吸収）。
+        //   完了(finishTime 付与)後に初めて ✔/✗ を表示する。
+        printfinish:   finishEpoch ? (job.printfinish ?? null) : null,
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
       ...(job.firstLayerCheckTime   !== undefined && { firstLayerCheckTime:   job.firstLayerCheckTime }),
       ...(job.pauseTime             !== undefined && { pauseTime:             job.pauseTime }),
+      ...(job.moonrakerJobId       !== undefined && { moonrakerJobId:       job.moonrakerJobId }),
+      ...(job.observed             !== undefined && { observed:             job.observed }),
+      ...(job.postProcessingTime   !== undefined && { postProcessingTime:   job.postProcessingTime }),
       ...(job.filamentId            !== undefined && { filamentId:            job.filamentId }),
       ...(job.filamentColor         !== undefined && { filamentColor:         job.filamentColor }),
       ...(job.filamentType          !== undefined && { filamentType:          job.filamentType })
@@ -706,12 +841,19 @@ export const renderTemplates = {
   * @param job - 表示対象ジョブ
   * @param {string} baseUrl 例: "http://192.168.54.151"
   */
-  current(job, baseUrl) {
+  current(job, baseUrl, host) {
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
     const name = job.filename || '(名称不明)';
-    const ts = Date.now();
-    const currentUrl = `${baseUrl}/downloads/original/current_print_image.png?${ts}`;
-    const fallback   = `${baseUrl}/downloads/defData/file_print_photo.png`;
+    // K1 はライブ撮影画像(current_print_image.png, キャッシュバスター付き)を使う。
+    // Moonraker にはこのパスが無く、毎描画(?ts)で 404 を取りに行きスロットルを招くため、
+    // 当該機では gcode サムネ(静的・キャッシュ可)へ切り替え、404 嵐を避ける。
+    const isMoonraker = getPrinterType(host) === "moonraker";
+    const currentUrl = isMoonraker
+      ? resolveThumbUrl(host, job.rawFilename || job.filename, job.thumbUrl)
+      : `${baseUrl}/downloads/original/current_print_image.png?${Date.now()}`;
+    const fallback   = isMoonraker
+      ? THUMB_PLACEHOLDER
+      : `${baseUrl}/downloads/defData/file_print_photo.png`;
     const finishHtml = job.finishTime
       ? `<div class="cp-row"><span class="cp-label">終了:</span> ${fmt(job.finishTime)}</div>` : "";
 
@@ -779,9 +921,9 @@ export const renderTemplates = {
    * @param job
    * @param {string} baseUrl
    */
-  historyItem(job, baseUrl) {
-    const thumbUrl = makeThumbUrl(baseUrl, job.rawFilename || job.filename);
-    const fallback = `${baseUrl}/downloads/defData/file_icon.png`;
+  historyItem(job, baseUrl, host) {
+    const thumbUrl = resolveThumbUrl(host, job.rawFilename || job.filename, job.thumbUrl);
+    const fallback = THUMB_PLACEHOLDER;
     const fmt = iso => iso ? formatEpochToDateTime(iso) : "—";
     return `
       <img
@@ -827,7 +969,14 @@ export function renderPrintCurrent(containerEl, hostname) {
 
   /* 印刷中であれば storedData からリアルタイム使用量を取得 */
   const machine = monitorData.machines[hostname];
-  const printState = Number(machine?.runtimeData?.state ?? -1);
+  // ★ 状態は storedData.state(機器報告の生値・再起動後も保持)を最優先。
+  //   runtimeData.state は data.state 欠落メッセージで "NaN" に化け、印刷中でも
+  //   ▶(進行中)にならない不具合があったため、信頼できる storedData.state を一次ソースにする。
+  const printState = Number(
+    machine?.storedData?.state?.rawValue
+    ?? machine?.runtimeData?.state
+    ?? -1
+  );
   if (
     (printState === PRINT_STATE_CODE.printStarted ||
      printState === PRINT_STATE_CODE.printPaused) &&
@@ -842,7 +991,7 @@ export function renderPrintCurrent(containerEl, hostname) {
     }
   }
 
-  containerEl.innerHTML = renderTemplates.current(job, baseUrl);
+  containerEl.innerHTML = renderTemplates.current(job, baseUrl, hostname);
 }
 
 
@@ -864,7 +1013,7 @@ export function renderPrintHistory(containerEl, hostname) {
     const li = document.createElement("li");
     li.className = "print-job-item";
     // rawFilename を渡せるように、履歴保存時に保持しておくと良いです
-    li.innerHTML = renderTemplates.historyItem(job, baseUrl);
+    li.innerHTML = renderTemplates.historyItem(job, baseUrl, hostname);
     containerEl.appendChild(li);
   }
 }
@@ -1155,6 +1304,16 @@ export function updateHistoryList(
     .sort((a, b) => Number(b.id) - Number(a.id))
     .slice(0, MAX_PRINT_HISTORY);
 
+  // ★ 未完了ジョブ(終了時刻なし)は成否を確定しない＝printfinish=null（誤計上防止・タイミング非依存）。
+  //   K1 は履歴再取得で印刷中エントリへ早すぎる printfinish=0 を付け(usagetime=0/finishTime=null)、
+  //   さらにマージが旧値(0)を復元するため、保存直前に「finishTime が無いエントリは未確定(null)」へ
+  //   正規化する。完了報告(finishTime 付与)後に初めて ✔/✗ が確定し、既存の誤確定エントリ
+  //   (printfinish=0/finishTime=null)も次回マージで自己修復される。
+  //   ※ getCurrentPrintID 依存だと起動時(現在ID未確立)に発火せず外していた。finishTime 基準は確実。
+  jobs.forEach(j => {
+    if (j.finishTime == null && j.printfinish != null) j.printfinish = null;
+  });
+
   const videoMap = loadVideos(host);
   jobs.forEach(j => {
     const info = videoMap[j.id];
@@ -1275,7 +1434,14 @@ export function resolveHistoryFinishStatus({ isCurrentJob, isPaused, printfinish
   if (printfinish === 1) {
     return { finish: "✔", finishCls: "result-ok" };
   }
-  // 非カレント かつ 成功でない → 失敗/中断として ✗
+  // ★ printfinish == null/undefined = 印刷中/未確定（再起動直後など、機器が完了を
+  //   まだ報告していない）。完了が確認できるまで成否を確定しない＝✗にしない（誤計上防止）。
+  //   currentPrintID と一致すれば上の isCurrentJob 分岐で ▶ になる。一致しない過渡状態は
+  //   中立の「…」で表示し、stats でも除外される（printfinish==null は集計対象外）。
+  if (printfinish == null) {
+    return { finish: "…", finishCls: "result-pending" };
+  }
+  // 明示値で成功(1)でない（0 / -1 等）＝失敗/中断 → ✗
   return { finish: "✗", finishCls: "result-ng" };
 }
 
@@ -1304,7 +1470,14 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
   /* 現在印刷中のジョブ判定用 */
   const curPrintId = getCurrentPrintID(hostname);
   const machine    = monitorData.machines[hostname];
-  const printState = Number(machine?.runtimeData?.state ?? -1);
+  // ★ 状態は storedData.state(機器報告の生値・再起動後も保持)を最優先。
+  //   runtimeData.state は data.state 欠落メッセージで "NaN" に化け、印刷中でも
+  //   ▶(進行中)にならない不具合があったため、信頼できる storedData.state を一次ソースにする。
+  const printState = Number(
+    machine?.storedData?.state?.rawValue
+    ?? machine?.runtimeData?.state
+    ?? -1
+  );
   const isActive   = (st) =>
     st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused;
 
@@ -1312,8 +1485,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
 
   rawArray.forEach((raw, index) => {
     const name     = raw.filename.split("/").pop();
-    const thumbUrl = makeThumbUrl(baseUrl, raw.filename);
-    const fallback = `${baseUrl}/downloads/defData/file_icon.png`;
+    const thumbUrl = resolveThumbUrl(hostname, raw.filename, raw.thumbUrl);
+    const fallback = THUMB_PLACEHOLDER;
 
     // データ整形
     const startwayLabel =
@@ -1331,6 +1504,9 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const checktime = checkSec != null ? formatDuration(checkSec) : "";
     const pauseSec  = raw.pauseTime != null ? Number(raw.pauseTime) : null;
     const pausetime = pauseSec != null ? formatDuration(pauseSec) : "";
+    // ★ J: 印刷後処理時間（進捗100%→完了。立ち会えたときのみ実測値あり）
+    const postSec   = raw.postProcessingTime != null ? Number(raw.postProcessingTime) : null;
+    const posttime  = postSec != null ? formatDuration(postSec) : "";
     // フィラメント情報（umaterial 算出前に必要）
     const spoolInfos = Array.isArray(raw.filamentInfo)
       ? raw.filamentInfo
@@ -1359,11 +1535,12 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       ? `<button class="video-link icon-btn" data-url="${raw.videoUrl}" title="動画">📹</button>`
       : "";
 
-    // 時間詳細行（準備・確認・停止があれば表示）
+    // 時間詳細行（準備・確認・停止・後処理があれば表示）
     const timeDetails = [];
     if (preptime) timeDetails.push(`準備${preptime}`);
     if (checktime) timeDetails.push(`確認${checktime}`);
     if (pausetime) timeDetails.push(`停止${pausetime}`);
+    if (posttime) timeDetails.push(`後処理${posttime}`);
     const timeDetailHtml = timeDetails.length
       ? `<div class="time-detail">${timeDetails.join(" ")}</div>`
       : "";
@@ -1411,6 +1588,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const tr = document.createElement("tr");
     const isPrinting = finishCls === "result-active";
     tr.className = `history-row${isPrinting ? " history-row-printing" : ""}`;
+    tr.style.cursor = "pointer";   // ドリルダウン可能を示す（旧: 行ごとに設定）
     tr.innerHTML = `
       <td class="col-cmd">
         <button class="cmd-print icon-btn" title="印刷">▶</button>
@@ -1419,7 +1597,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       </td>
       <td data-key="number" class="col-num">${index + 1}<div class="sub-id">${raw.id}</div></td>
       <td class="col-thumb">
-        <img src="${thumbUrl}" alt="${name}" style="width:40px"
+        <img src="${thumbUrl}" alt="${name}" style="width:40px;min-height:40px" loading="lazy" decoding="async"
           onerror="this.onerror=null;this.src='${fallback}'" />
       </td>
       <td data-key="filename" class="col-file">
@@ -1440,98 +1618,10 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         <span class="md5-short" title="${raw.filemd5 || ''}">${md5short}</span>
       </td>
     `;
+    // ★ 描画律速対策: 行ごとの addEventListener を廃止し、tbody 1個へ委譲。
+    //   行特定は data-row-index で行う（dispatch は _historyTbodyClick）。
+    tr.dataset.rowIndex = String(index);
     tbody.appendChild(tr);
-
-    // イベントハンドラ登録
-    tr.querySelector(".cmd-print")?.addEventListener("click", () => {
-      handlePrintClick(raw, thumbUrl, hostname);
-    });
-    tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
-      handleRenameClick(raw, hostname);
-    });
-    tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
-      handleDeleteClick(raw, hostname);
-    });
-    tr.querySelector(".video-link")?.addEventListener("click", () => {
-      showVideoOverlay(raw.videoUrl);
-    });
-    tr.querySelector(".spool-edit")?.addEventListener("click", async ev => {
-      // ★ リレー子（satellite）では履歴フィラメント修正は未対応（複合操作のRPC未実装）。
-      //   ローカル状態だけが書き換わる「見かけ操作」を防ぐため明示ブロックする。
-      if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
-        const { showAlert } = await import("./dashboard_notification_manager.js");
-        showAlert("履歴のフィラメント修正は親機でのみ操作できます", "warn");
-        return;
-      }
-      const sid = ev.currentTarget?.dataset.id;
-      const materialUsedMm = raw.usagematerial || 0;
-      const result = await showHistoryFilamentDialog({
-        hostname, materialUsedMm, currentSpoolId: sid, jobId: String(raw.id)
-      });
-      if (!result) return;
-      const { spool: newSp } = result;
-      // 同一スプール選択時はスキップ
-      if (sid && newSp.id === sid) return;
-      // 旧スプールに使用量を復元
-      if (sid && materialUsedMm > 0) {
-        const oldSp = getSpoolById(sid);
-        if (oldSp) {
-          updateSpool(oldSp.id, {
-            remainingLengthMm: oldSp.remainingLengthMm + materialUsedMm
-          });
-        }
-      }
-      // 新スプールから使用量を差し引く
-      if (materialUsedMm > 0) {
-        const freshSp = getSpoolById(newSp.id);
-        const remain = freshSp ? freshSp.remainingLengthMm : newSp.remainingLengthMm;
-        updateSpool(newSp.id, {
-          remainingLengthMm: Math.max(0, remain - materialUsedMm)
-        });
-      }
-      const updatedSp = getSpoolById(newSp.id) || newSp;
-      // パース済み raw にフィラメント情報を直接セット（再パースを避ける）
-      _applyFilamentToRaw(raw, updatedSp);
-      // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
-      _patchHistoryFilament(raw, hostname);
-      // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
-      _linkCurrentPrintSpool(raw, updatedSp, hostname);
-      // パネルのフィラメントプレビューを更新
-      const hostPreview = window._filamentPreviews?.get(hostname);
-      if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
-      // UI 再描画
-      const allJobs = loadHistory(hostname);
-      renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
-    });
-    tr.querySelector(".spool-assign")?.addEventListener("click", async () => {
-      // ★ リレー子（satellite）では履歴フィラメント指定は未対応（複合操作のRPC未実装）。
-      if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
-        const { showAlert } = await import("./dashboard_notification_manager.js");
-        showAlert("履歴のフィラメント指定は親機でのみ操作できます", "warn");
-        return;
-      }
-      const materialUsedMm = raw.usagematerial || 0;
-      const result = await showHistoryFilamentDialog({
-        hostname, materialUsedMm, currentSpoolId: null, jobId: String(raw.id)
-      });
-      if (!result) return;
-      const { spool: newSp } = result;
-      // ★ 「指定」は記録目的の紐付けのみ — 残量を差し引かない
-      // 過去の印刷で既に物理的に消費された量を再度差し引くと残量が不正になる
-      const updatedSp = getSpoolById(newSp.id) || newSp;
-      // パース済み raw にフィラメント情報を直接セット
-      _applyFilamentToRaw(raw, updatedSp);
-      // 保存済み履歴を直接更新
-      _patchHistoryFilament(raw, hostname);
-      // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
-      _linkCurrentPrintSpool(raw, updatedSp, hostname);
-      // パネルのフィラメントプレビューを更新
-      const hostPreview = window._filamentPreviews?.get(hostname);
-      if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
-      // UI 再描画
-      const allJobs = loadHistory(hostname);
-      renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
-    });
   });
 
   // ソート用リスナ追加 + ソートインジケータ
@@ -1541,29 +1631,153 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
 
   // ── ジョブ詳細ドリルダウン (5-1 + 4-3) ──
   const tableParent = table?.parentElement;
+  let drilldown = null;
   if (tableParent) {
     // 既存のドリルダウンがあれば再利用
-    let drilldown = tableParent.querySelector(".job-drilldown");
+    drilldown = tableParent.querySelector(".job-drilldown");
     if (!drilldown) {
       drilldown = document.createElement("div");
       drilldown.className = "job-drilldown";
       drilldown.classList.add("pm-drilldown");
       tableParent.appendChild(drilldown);
     }
-
-    // 各行にクリックハンドラ追加
-    tbody?.querySelectorAll("tr.history-row").forEach((tr, idx) => {
-      tr.style.cursor = "pointer";
-      tr.addEventListener("click", (ev) => {
-        // ボタン操作時はドリルダウンしない
-        if (ev.target.closest("button, select, input")) return;
-        const raw = rawArray[idx];
-        if (!raw) return;
-        _renderJobDrilldown(drilldown, raw, baseUrl, hostname);
-      });
-    });
   }
 
+  // ★ 描画律速対策: 行ごとの addEventListener（印刷/改名/削除/動画/スプール/ドリルダウン）を
+  //   tbody 1個のイベント委譲に集約する。数百行 × 数リスナ＝数千リスナによるメモリ/再描画
+  //   コストを排除する。tbody は innerHTML 入替で行が作り直されても永続するため、ハンドラは
+  //   1度だけバインドし、行データ・コンテキストは _historyCtx に最新を保持して参照する。
+  tbody._historyCtx = { rawArray, baseUrl, hostname, drilldown, table };
+  if (!tbody._historyDelegated) {
+    tbody._historyDelegated = true;
+    tbody.addEventListener("click", _historyTbodyClick);
+  }
+
+}
+
+/**
+ * 履歴テーブル tbody のクリックを委譲処理する単一ハンドラ。
+ * 行は data-row-index → _historyCtx.rawArray[index] で特定する。
+ *
+ * @private
+ * @param {MouseEvent} ev
+ * @returns {Promise<void>}
+ */
+async function _historyTbodyClick(ev) {
+  const tbody = ev.currentTarget;
+  const ctx = tbody?._historyCtx;
+  if (!ctx) return;
+  const { rawArray, baseUrl, hostname, drilldown } = ctx;
+
+  const trEl = ev.target.closest("tr.history-row");
+  if (!trEl) return;
+  const idx = Number(trEl.dataset.rowIndex);
+  const raw = rawArray[idx];
+  if (!raw) return;
+
+  if (ev.target.closest(".cmd-print")) {
+    const thumbUrl = resolveThumbUrl(hostname, raw.filename, raw.thumbUrl);
+    handlePrintClick(raw, thumbUrl, hostname);
+    return;
+  }
+  if (ev.target.closest(".cmd-rename")) { handleRenameClick(raw, hostname); return; }
+  if (ev.target.closest(".cmd-delete")) { handleDeleteClick(raw, hostname); return; }
+  if (ev.target.closest(".video-link")) { showVideoOverlay(raw.videoUrl); return; }
+  const editBtn = ev.target.closest(".spool-edit");
+  if (editBtn) { await _handleHistorySpoolEdit(raw, baseUrl, hostname, editBtn.dataset.id); return; }
+  if (ev.target.closest(".spool-assign")) { await _handleHistorySpoolAssign(raw, baseUrl, hostname); return; }
+
+  // ボタン/フォーム以外 → ドリルダウン
+  if (ev.target.closest("button, select, input")) return;
+  if (drilldown) _renderJobDrilldown(drilldown, raw, baseUrl, hostname);
+}
+
+/**
+ * 履歴行のスプール「修正」操作（旧 .spool-edit クリックハンドラと同一ロジック）。
+ *
+ * @private
+ * @param {Object} raw - 行データ
+ * @param {string} baseUrl - サムネイルベースURL
+ * @param {string} hostname - ホスト名
+ * @param {string} [sid] - 現在のスプールID（編集ボタンの data-id）
+ * @returns {Promise<void>}
+ */
+async function _handleHistorySpoolEdit(raw, baseUrl, hostname, sid) {
+  // ★ リレー子（satellite）では履歴フィラメント修正は未対応（複合操作のRPC未実装）。
+  //   ローカル状態だけが書き換わる「見かけ操作」を防ぐため明示ブロックする。
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    const { showAlert } = await import("./dashboard_notification_manager.js");
+    showAlert("履歴のフィラメント修正は親機でのみ操作できます", "warn");
+    return;
+  }
+  const materialUsedMm = raw.usagematerial || 0;
+  const result = await showHistoryFilamentDialog({
+    hostname, materialUsedMm, currentSpoolId: sid, jobId: String(raw.id)
+  });
+  if (!result) return;
+  const { spool: newSp } = result;
+  // 同一スプール選択時はスキップ
+  if (sid && newSp.id === sid) return;
+  // ★ ADR-0004 + Option1（手動編集=権威）: 累積減算(updateSpool ±materialUsedMm)は
+  //   二重計上の温床なので使わない。先に帰属(filamentInfo)を書き換えてから、旧/新
+  //   スプールを総量基準で権威再計算する（recomputeSpoolFromManualEdit が再アンカーも実施）。
+  _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
+  // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
+  _patchHistoryFilament(raw, hostname);
+  const recoTs = Date.now();
+  _recomputeAndRefreshSpool(sid, recoTs);          // 旧スプール（帰属が外れた）
+  _recomputeAndRefreshSpool(newSp.id, recoTs);     // 新スプール（帰属が付いた）
+  saveUnifiedStorage(true);
+  const updatedSp = getSpoolById(newSp.id) || newSp;
+  // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
+  _linkCurrentPrintSpool(raw, updatedSp, hostname);
+  // パネルのフィラメントプレビューを更新
+  const hostPreview = window._filamentPreviews?.get(hostname);
+  if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
+  // UI 再描画
+  const allJobs = loadHistory(hostname);
+  renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
+}
+
+/**
+ * 履歴行のスプール「指定」操作（旧 .spool-assign クリックハンドラと同一ロジック）。
+ *
+ * @private
+ * @param {Object} raw - 行データ
+ * @param {string} baseUrl - サムネイルベースURL
+ * @param {string} hostname - ホスト名
+ * @returns {Promise<void>}
+ */
+async function _handleHistorySpoolAssign(raw, baseUrl, hostname) {
+  // ★ リレー子（satellite）では履歴フィラメント指定は未対応（複合操作のRPC未実装）。
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    const { showAlert } = await import("./dashboard_notification_manager.js");
+    showAlert("履歴のフィラメント指定は親機でのみ操作できます", "warn");
+    return;
+  }
+  const materialUsedMm = raw.usagematerial || 0;
+  const result = await showHistoryFilamentDialog({
+    hostname, materialUsedMm, currentSpoolId: null, jobId: String(raw.id)
+  });
+  if (!result) return;
+  const { spool: newSp } = result;
+  // ★ ADR-0004 + Option1（手動編集=権威）: 「指定」は過去ジョブへスプールを後付け帰属する操作。
+  //   filamentInfo を書き込んでから recomputeSpoolFromManualEdit で総量基準に残量を再計算する
+  //   （= 総量 − 当該スプールに明示帰属する全完了ジョブの消費）。インポート済み履歴でも即反映。
+  _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
+  // 保存済み履歴を直接更新
+  _patchHistoryFilament(raw, hostname);
+  _recomputeAndRefreshSpool(newSp.id, Date.now());
+  saveUnifiedStorage(true);
+  const updatedSp = getSpoolById(newSp.id) || newSp;
+  // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
+  _linkCurrentPrintSpool(raw, updatedSp, hostname);
+  // パネルのフィラメントプレビューを更新
+  const hostPreview = window._filamentPreviews?.get(hostname);
+  if (hostPreview) updateFilamentPreview(updatedSp, hostPreview);
+  // UI 再描画
+  const allJobs = loadHistory(hostname);
+  renderHistoryTable(jobsToRaw(allJobs), baseUrl, hostname);
 }
 
 /**
@@ -1589,7 +1803,7 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   // ヘッダー
   const hdr = document.createElement("div");
   hdr.className = "pm-drilldown-header";
-  const thumbUrl = makeThumbUrl(baseUrl, raw.rawFilename || raw.filename);
+  const thumbUrl = resolveThumbUrl(hostname, raw.rawFilename || raw.filename, raw.thumbUrl);
   hdr.innerHTML = `<div class="flex-row"><img src="${thumbUrl}" class="pm-thumb" onerror="this.style.display='none'"><div><strong>${filename}</strong><br><span class="text-secondary-xs">${raw.printfinish === 1 ? "✔ 成功" : raw.printfinish === 0 ? "✗ 失敗" : "— 不明"}</span></div></div>`;
   const closeBtn = document.createElement("button");
   closeBtn.textContent = "×";
@@ -1608,6 +1822,8 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   const prepSec = Number(raw.preparationTime || 0);
   const checkSec = Number(raw.firstLayerCheckTime || 0);
   const pauseSec = Number(raw.pauseTime || 0);
+  // ★ J: 印刷後処理時間（進捗100%→完了。立ち会えたときのみ実測値あり）
+  const postSec = raw.postProcessingTime != null ? Number(raw.postProcessingTime) : null;
   const actualPrintSec = Math.max(0, usageSec - prepSec - checkSec - pauseSec);
 
   const addCard = (label, value, sub) => {
@@ -1621,7 +1837,11 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
   if (actualPrintSec > 0) addCard("実印刷", formatDuration(actualPrintSec), "");
   if (prepSec > 0) addCard("準備", formatDuration(prepSec), "");
   if (pauseSec > 0) addCard("停止", formatDuration(pauseSec), "");
+  // 後処理は 0 でも「実測したが≈0(K1-Max 等)」を示すため値があれば表示
+  if (postSec != null) addCard("後処理", formatDuration(postSec), "");
   if (materialFmt) addCard("消費量", materialFmt.display, "");
+  // 観測フラグ: live=実測 / partial=途中参加 / 既定(history)=取れなかった
+  if (raw.observed === "partial") addCard("観測", "途中参加", "区間時間は一部のみ");
 
   // スプール変動
   if (spool && Array.isArray(raw.filamentInfo) && raw.filamentInfo.length >= 2) {
@@ -1757,7 +1977,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
 
   // --- ダイアログ HTML 構築 ---
   let html = `<div class="pm-print-header">`;
-  html += `<img src="${thumbUrl}" class="pm-print-thumb">`;
+  html += `<img src="${thumbUrl}" class="pm-print-thumb" onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'">`;
   html += `<div><strong class="pm-print-filename">${filename}</strong></div></div>`;
 
   // スプール未装着警告
@@ -2304,11 +2524,10 @@ export function setupUploadUI(root, hostname) {
         && getConnectionState(h) === "connected"
     );
 
-    // ★ サムネイル欠落時のフォールバックアイコンは、接続中の任意ホストが配信する
-    //   静的画像（全機種で同一）を使う。特定 hostname への依存を排除するため
-    //   allHosts 確定後に解決する。allHosts が空なら直後のエラー分岐で抜ける。
-    if (!thumb && allHosts.length > 0) {
-      thumb = `${getDisplayBaseUrl(allHosts[0])}/downloads/defData/file_icon.png`;
+    // ★ サムネイル欠落時はローカル代替（data-URI）を使う。機器固定パス(defData)は
+    //   K1 にしか無く Moonraker では 404 になるため、機種非依存の代替で 404 を避ける。
+    if (!thumb) {
+      thumb = THUMB_PLACEHOLDER;
     }
 
     // ★ 接続中ホストが0台なら即エラー
@@ -2725,7 +2944,11 @@ function parseFileInfo(text, baseUrl) {
 export function renderFileList(info, baseUrl, hostname) {
   // parseFileInfo で揃えたキー群をもつオブジェクト配列を得る
   pushLog("[renderFileList] マージ処理開始 (保存データなし)", "info", false, hostname);
-  const arr = parseFileInfo(info.fileInfo, baseUrl);
+  // ★ Moonraker 等は K1 の区切り文字列ではなく、解析済みエントリ配列(info.entries)を
+  //   直接供給できる。供給があればそれを使い、無ければ従来の fileInfo 文字列を解析する。
+  const arr = Array.isArray(info.entries)
+    ? info.entries.slice()
+    : parseFileInfo(info.fileInfo, baseUrl);
 
   // 最新の一覧をアップロード検証用に保持
   _fileListMap.set(hostname, arr.slice());
@@ -2762,9 +2985,10 @@ export function renderFileList(info, baseUrl, hostname) {
   // 前回の行をクリアしてから再描画
   tbody.innerHTML = "";
 
-  arr.forEach(item => {
+  arr.forEach((item, index) => {
     const tr = document.createElement("tr");
     tr.className = "file-row";
+    tr.dataset.rowIndex = String(index);
     const md5short = item.filemd5 ? item.filemd5.substring(0, 8) : "";
     // 更新日時を YYYY/MM/DD HH:MM:SS 形式にフォーマット
     const d = item.mtime;
@@ -2807,8 +3031,10 @@ export function renderFileList(info, baseUrl, hostname) {
         <img
           src="${item.thumbUrl}"
           alt="${item.basename}"
-          style="width:40px"
-          onerror="this.onerror=null;this.src='${baseUrl}/downloads/defData/file_icon.png'"
+          style="width:40px;min-height:40px"
+          loading="lazy"
+          decoding="async"
+          onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'"
         >
       </td>
       <td data-key="filename">${item.basename}</td>
@@ -2821,24 +3047,43 @@ export function renderFileList(info, baseUrl, hostname) {
       <td data-key="md5" class="col-md5" title="${item.filemd5 || ''}">${md5short}</td>
     `;
     tbody.appendChild(tr);
-
-    // イベントハンドラ
-    tr.querySelector(".cmd-print")?.addEventListener("click", () => {
-      handlePrintClick(item, item.thumbUrl, hostname);
-    });
-    tr.querySelector(".cmd-rename")?.addEventListener("click", () => {
-      handleRenameClick(item, hostname);
-    });
-    tr.querySelector(".cmd-delete")?.addEventListener("click", () => {
-      handleDeleteClick(item, hostname);
-    });
   });
+
+  // ★ 描画律速対策: 行ごとの addEventListener を tbody 1個のイベント委譲へ集約。
+  //   行特定は data-row-index → _fileCtx.arr[index]。tbody は永続するため 1度だけバインド。
+  tbody._fileCtx = { arr, hostname };
+  if (!tbody._fileDelegated) {
+    tbody._fileDelegated = true;
+    tbody.addEventListener("click", _fileTbodyClick);
+  }
 
   // ソート用リスナ + インジケータ
   if (fileTable) {
     _bindSortHeaders(fileTable, "file-list-table", hostname);
   }
   pushLog("[renderFileList] UI へ反映しました", "info", false, hostname);
+}
+
+/**
+ * ファイル一覧 tbody のクリックを委譲処理する単一ハンドラ。
+ * 行は data-row-index → _fileCtx.arr[index] で特定する。
+ *
+ * @private
+ * @param {MouseEvent} ev
+ * @returns {void}
+ */
+function _fileTbodyClick(ev) {
+  const tbody = ev.currentTarget;
+  const ctx = tbody?._fileCtx;
+  if (!ctx) return;
+  const { arr, hostname } = ctx;
+  const trEl = ev.target.closest("tr.file-row");
+  if (!trEl) return;
+  const item = arr[Number(trEl.dataset.rowIndex)];
+  if (!item) return;
+  if (ev.target.closest(".cmd-print"))  { handlePrintClick(item, item.thumbUrl, hostname); return; }
+  if (ev.target.closest(".cmd-rename")) { handleRenameClick(item, hostname); return; }
+  if (ev.target.closest(".cmd-delete")) { handleDeleteClick(item, hostname); return; }
 }
 
 /**

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link restoreXYPreviewState} など複数を一括エクスポート
  *
- * @version 1.390.788 (PR #366)
+ * @version 1.390.1119 (PR #385)
  * @since   1.390.214 (PR #95)
- * @lastModified 2026-03-11 02:00:00
+ * @lastModified 2026-06-16 22:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -69,7 +69,12 @@ function _getPreviewState(hostname) {
       lastZPosition: 0,
       currentModel: null,
       stageSizeMm: 300,
+      stageSizeXMm: 300,   // X 軸スケール(非正方ベッド対応)
+      stageSizeYMm: 300,   // Y 軸スケール
       stageZMaxMm: 300,
+      isBelt: false,       // ベルト(無限Z)機モード
+      _geoKey: null,       // setStageGeometry の冪等判定用
+      _beltViewApplied: false,
       panelBody: null,
       stageRotX: 0,
       stageRotZ: 0,
@@ -138,6 +143,53 @@ function setPrinterModel(model, hostname) {
 
   // XY プレビューを再初期化して座標を復元
   initXYPreview(s.panelBody, hostname);
+  updateZPreview(s.lastZPosition, hostname);
+}
+
+/**
+ * プリンタの幾何(ベッド寸法・ベルト機か否か)を設定し、プレビューを再構成する。
+ * Moonraker 等、モデル名でなく軸範囲から幾何を与えるプリンタ向け。
+ *
+ * 【詳細説明】
+ * - `belt:true` のとき: Z は高さでなく「ベルトが進んだ距離」を表す無限軸とみなし、
+ *   Z バーのクランプを行わず数値表示に切り替える。初回は 45° 側面ビューを既定とする。
+ * - 非正方ベッドに対応するため X/Y のスケールを個別に持つ。
+ *
+ * @function setStageGeometry
+ * @param {{belt:boolean, sizeX:number, sizeY:number, zMax:(number|null)}} geo - 幾何情報
+ * @param {string} hostname - ホスト名
+ * @returns {void}
+ */
+function setStageGeometry(geo, hostname) {
+  if (!geo) return;
+  const s = _getPreviewState(hostname);
+  const key = `${geo.belt ? 1 : 0}:${geo.sizeX}:${geo.sizeY}:${geo.zMax}`;
+  if (s._geoKey === key) return; // 変化なし
+  s._geoKey = key;
+
+  s.isBelt = !!geo.belt;
+  s.stageSizeXMm = Number(geo.sizeX) > 0 ? Number(geo.sizeX) : s.stageSizeMm;
+  s.stageSizeYMm = Number(geo.sizeY) > 0 ? Number(geo.sizeY) : s.stageSizeMm;
+  s.stageSizeMm = Math.max(s.stageSizeXMm, s.stageSizeYMm); // 後方互換(正方前提コード用)
+  if (!s.isBelt && Number(geo.zMax) > 0) s.stageZMaxMm = Number(geo.zMax);
+  // ※ s.currentModel は setPrinterModel 専用。ここでは _geoKey で冪等判定するため触らない。
+
+  // ベルト機は初回のみ 45° 側面ビューを既定にする(ユーザー操作は以後尊重)
+  if (s.isBelt && !s._beltViewApplied) {
+    s.stageRotX = 45;
+    s.stageRotZ = 0;
+    s._beltViewApplied = true;
+  }
+
+  const stageElem = _findInPanel(s, "xy-stage");
+  if (stageElem) {
+    stageElem.innerHTML = "";
+    s.xyDots.length = 0;
+    s.xyInitialized = false;
+    initXYPreview(s.panelBody, hostname);
+  }
+  const labelBottom = s.panelBody ? s.panelBody.querySelector(".z-label-bottom") : null;
+  if (labelBottom) labelBottom.textContent = s.isBelt ? "ベルト距離" : String(s.stageZMaxMm);
   updateZPreview(s.lastZPosition, hostname);
 }
 
@@ -385,9 +437,11 @@ function updateXYPreview(x, y, hostname) {
   const s = _getPreviewState(hostname);
   if (!s.xyInitialized) return;
 
-  // mm → ステージサイズに対する％に変換
-  const pctX = (x / s.stageSizeMm) * 100;
-  const pctY = (y / s.stageSizeMm) * 100;
+  // mm → ステージサイズに対する％に変換(X/Y を個別スケール: 非正方ベッド対応)
+  const sizeX = s.stageSizeXMm || s.stageSizeMm;
+  const sizeY = s.stageSizeYMm || s.stageSizeMm;
+  const pctX = (x / sizeX) * 100;
+  const pctY = (y / sizeY) * 100;
 
   const currentDot = _findInPanel(s, "xy-current-dot");
   const currentCircle = _findInPanel(s, "xy-current-circle");
@@ -421,18 +475,34 @@ function updateXYPreview(x, y, hostname) {
  */
 function updateZPreview(z, hostname) {
   const s = _getPreviewState(hostname);
+  const barDiv = _findInPanel(s, "z-preview");
+  const zValueElem = _findInPanel(s, "z-value");
+
+  if (s.isBelt) {
+    // ★ ベルト機: Z は高さではなく「ベルトが進んだ距離」。上限が無いためクランプも
+    //   バー表現も行わず、数値(mm)のみを表示する。
+    if (barDiv) {
+      barDiv.style.height = "0%";
+      barDiv.style.backgroundColor = "";
+    }
+    if (zValueElem) zValueElem.textContent = z.toFixed(1);
+    if (s.lastZPosition !== z) {
+      s.lastZPosition = z;
+      saveXYPreviewState(hostname);
+    }
+    return;
+  }
+
   const clampedZ = Math.min(z, s.stageZMaxMm);
   // コンテナ高さの87%を使用可能領域とし（上部13%はラベル領域）、
   // Z最大値に対する比率でバーの高さを％指定する
   const barPct = s.stageZMaxMm > 0
     ? (clampedZ / s.stageZMaxMm) * 87
     : 0;
-  const barDiv = _findInPanel(s, "z-preview");
   if (barDiv) {
     barDiv.style.height = barPct + "%";
     barDiv.style.backgroundColor = (z < 0) ? "magenta" : "";
   }
-  const zValueElem = _findInPanel(s, "z-value");
   if (zValueElem) {
     zValueElem.textContent = z.toFixed(2);
   }
@@ -655,6 +725,7 @@ export {
   updateXYPreview,
   updateZPreview,
   setPrinterModel,
+  setStageGeometry,
   registerPreviewPanel,
   replayPreviewState,
   destroyPreviewPanel,

@@ -271,13 +271,36 @@ export function buildCameraEndpoints(targets, defaultCameraPort = 8080) {
  */
 function _syncCameraEndpoints() {
   if (!window.electronAPI?.setCameraEndpoints) return;
-  const map = buildCameraEndpoints(
-    monitorData.appSettings.connectionTargets || [],
-    monitorData.appSettings.cameraPort || 8080
-  );
-  // 画像パススルー用 httpPort を host ごとに付与（builder は pure のまま）。
-  for (const hostname of Object.keys(map)) {
-    map[hostname].httpPort = getHttpPort(hostname);
+  const targets = monitorData.appSettings.connectionTargets || [];
+  const defaultCam = monitorData.appSettings.cameraPort || 8080;
+  const map = {};
+  for (const t of targets) {
+    const dest = (t?.dest || "").trim();
+    const ip = dest.split(":")[0].trim();
+    if (!ip) continue;                              // IP 不明は転送不可
+    const hostname = (t?.hostname || "").trim();
+    const label = (t?.label || "").trim();
+    // machine 解決（Moonraker はキーが IP のままのことがあるため hostname/IP 双方で探す）
+    const machine = (hostname && monitorData.machines?.[hostname])
+      || monitorData.machines?.[ip] || null;
+    let port = (t?.cameraPort) || defaultCam || 8080;
+    let snapshotPath = "/?action=snapshot";         // K1 既定（mjpg-streamer）
+    // ★ K: Moonraker は機器申告のスナップショットURL（/webcam/?action=snapshot 等）から
+    //   パス/ポートを採用する。子が機器へ直接到達せず親が代理取得するための解決値。
+    const snapUrl = machine?._cameraSnapshotUrl;
+    if (snapUrl) {
+      try {
+        const u = new URL(snapUrl);
+        port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+        snapshotPath = (u.pathname || "/") + (u.search || "");
+      } catch { /* 解析失敗時は K1 既定のまま */ }
+    }
+    const ep = { ip, port, httpPort: getHttpPort(hostname || ip), snapshotPath };
+    // 子の /relay-camera/{key} 要求がどの識別子でも当たるよう別名登録
+    //   （表示名 label / 機器申告 hostname / IP / dest。先勝ちで上書きしない）
+    for (const key of [hostname, label, ip, dest]) {
+      if (key && !map[key]) map[key] = ep;
+    }
   }
   const hash = _quickHash(map);
   if (hash === _prevCameraEpHash) return;          // 変化なし
@@ -346,23 +369,33 @@ function _buildDelta() {
     // 子（satellite/readonly）はプリンタ直結しないため、ここで配信しないと履歴が空になる
     const ps = machine.printStore;
     if (ps) {
-      const psHash = _quickHash(ps.history, ps.current);
-      if (psHash !== _prevPrintHash.get(hostname)) {
-        _prevPrintHash.set(hostname, psHash);
-        printStoresDelta[hostname] = {
-          history: ps.history || [],
-          current: ps.current || null
-        };
+      // ★【重篤・親CPU飽和修正】従来は全履歴(最大1500件×機器数)を毎500ms JSON.stringify して
+      //   ハッシュ化しており、長時間稼働で履歴が積もると親のメインスレッドを飽和→aggregator
+      //   (500ms)が starve され状態/グラフ更新が数分に1回まで低下していた。
+      //   全件 stringify をやめ、O(1) の安価な署名（件数＋末尾エントリ＋現在ジョブの要点）で
+      //   変化検出する（新規完了/現在ジョブ変化/末尾の帰属変更を捕捉）。
+      const hist = ps.history || [];
+      const last = hist.length ? hist[hist.length - 1] : null;
+      const cur = ps.current || null;
+      const psSig = `${hist.length}|${last?.id ?? ""}|${last?.materialUsedMm ?? last?.usagematerial ?? ""}|`
+        + `${last?.printfinish ?? ""}|${last?.filamentId ?? ""}|${last?.observed ?? ""}|`
+        + `${cur?.id ?? ""}|${cur?.materialUsedMm ?? ""}|${cur?.filamentId ?? ""}`;
+      if (psSig !== _prevPrintHash.get(hostname)) {
+        _prevPrintHash.set(hostname, psSig);
+        printStoresDelta[hostname] = { history: hist, current: cur };
         hasChanges = true;
       }
     }
 
-    // ファイル一覧（_cachedFileInfo）の変更検出
+    // ファイル一覧（_cachedFileInfo）の変更検出（同様に全件 stringify を避ける）
     const fi = machine._cachedFileInfo;
     if (fi) {
-      const fiHash = _quickHash(fi);
-      if (fiHash !== _prevFileHash.get(hostname)) {
-        _prevFileHash.set(hostname, fiHash);
+      const ents = fi.entries || [];
+      const fl = ents[ents.length - 1];
+      const fiSig = `${fi.totalNum ?? ""}|${ents.length}|${ents[0]?.filename ?? ""}|`
+        + `${fl?.filename ?? ""}|${String(fl?.mtime ?? "")}`;
+      if (fiSig !== _prevFileHash.get(hostname)) {
+        _prevFileHash.set(hostname, fiSig);
         fileInfosDelta[hostname] = fi;
         hasChanges = true;
       }

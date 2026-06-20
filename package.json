@@ -1,6 +1,6 @@
 {
   "name": "3dpmon",
-  "version": "2.2.1025",
+  "version": "2.2.1030",
   "description": "3Dプリンタ監視ダッシュボード - Electron版",
   "main": "electron/main.js",
   "scripts": {
@@ -45,8 +45,18 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis",     "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build/icon.ico",
       "requestedExecutionLevel": "asInvoker"
@@ -75,6 +85,7 @@
   },
   "dependencies": {
     "gridstack": "^10.3.1",
+    "uplot": "^1.6.32",
     "ws": "^8.19.0"
   },
   "devDependencies": {

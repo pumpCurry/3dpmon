@@ -22,12 +22,12 @@
 
 "use strict";
 
-/* グローバル（ブラウザ/Electron レンダラ・Node18+ ランタイム）: 認証ノンス・gzip 圧縮で使用 */
-/* global crypto, CompressionStream, Response */
+/* グローバル（ブラウザ/Electron レンダラ・Node18+ ランタイム）: 認証ノンス・gzip 圧縮・カメラ画像取得で使用 */
+/* global crypto, CompressionStream, Response, location */
 
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
-import { getSpoolById, getMaterialDensity, weightFromLength } from "./dashboard_spool.js";
+import { getSpoolById, getMaterialDensity, weightFromLength, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { attributedUsed, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
@@ -40,6 +40,12 @@ const IK_DEFAULT_PATH = "/api/ingest/print-events";
 const SETTINGS_KEY = "itemkeeper";
 /** インメモリ再送の最大試行回数（MVP。恒久アウトボックスは第二段） */
 const MAX_RETRY = 3;
+/** カメラ画像取得の打ち切りタイムアウト[ms]（送信を不当に遅延させない） */
+const CAMERA_CAPTURE_TIMEOUT_MS = 4500;
+/** サムネ Base64 取得の同時実行数（プリンタ負荷・送信遅延を抑える） */
+const THUMB_FETCH_CONCURRENCY = 4;
+/** 1機あたりのサムネ取得上限枚数（暴走防止。超過分は thumbnailUrl のみ） */
+const THUMB_MAX_PER_DEVICE = 60;
 
 /** 既定設定 */
 const DEFAULTS = Object.freeze({
@@ -47,13 +53,18 @@ const DEFAULTS = Object.freeze({
   endpoint: "",
   clientId: "",
   secret: "",
-  encoding: "none",      // Phase1 固定
-  onStart: true,         // 印刷開始時に送信
-  onFinish: true,        // 印刷終了(完了/失敗)時に送信
-  onPause: true,         // 一時停止時に送信
-  onInterval: false,     // 指定タイミング(intervalMin 分ごと)に送信
-  intervalMin: 5,        // 指定タイミング間隔[分]（既定5）
-  historyScope: "all"    // "all" | "recent:{n}"
+  encoding: "none",        // Phase1 固定
+  attachCamera: false,     // 各機の現在カメラ画像(Base64/JPEG)を device.camera に添付（既定OFF=下位互換）
+  attachState: false,      // 状態パネル(storedData)を device.state に添付（raw＋computed）
+  attachFiles: false,      // ファイル一覧を device.files に添付（メタ情報）
+  attachFileThumbs: false, // files[].thumbnail に Base64 サムネを添付（attachFiles 前提・重い）
+  attachFilamentHistory: false, // フィラメント更新履歴(spools[]レジストリ＋装着/切れ交換イベント)を添付（既定OFF=下位互換）
+  onStart: true,           // 印刷開始時に送信
+  onFinish: true,          // 印刷終了(完了/失敗)時に送信
+  onPause: true,           // 一時停止時に送信
+  onInterval: false,       // 指定タイミング(intervalMin 分ごと)に送信
+  intervalMin: 5,          // 指定タイミング間隔[分]（既定5）
+  historyScope: "all"      // "all" | "recent:{n}"
 });
 
 /** 属性値エスケープ */
@@ -198,6 +209,9 @@ export class ItemKeeperIntegration {
     return {
       spoolId: f.spoolId || spool?.id || "",
       serialNo: (f.serialNo != null) ? f.serialNo : (spool?.serialNo ?? null),
+      serialDisplay: spool ? formatSpoolDisplayId(spool)
+        : (f.serialNo != null ? `#${String(f.serialNo).padStart(3, "0")}` : ""),
+      name: f.spoolName || spool?.name || "",
       material,
       colorName: f.colorName || spool?.colorName || "",
       colorHex,
@@ -241,6 +255,14 @@ export class ItemKeeperIntegration {
       result,
       printfinish: (pf === 1 || pf === 0) ? pf : null,
       materialUsedMm: Number(job.materialUsedMm || 0),
+      // ★ J: 観測フラグ＋区間時間（取れなかった軸は null）＋実機ネイティブID。
+      //   observed: "live"(実測) / "partial"(途中参加) / "history"(履歴のみ=取れなかった)
+      observed: job.observed || "history",
+      preparationSec:     job.preparationTime     != null ? Number(job.preparationTime)     : null,
+      firstLayerCheckSec: job.firstLayerCheckTime  != null ? Number(job.firstLayerCheckTime)  : null,
+      pausedSec:          job.pauseTime            != null ? Number(job.pauseTime)            : null,
+      postProcessingSec:  job.postProcessingTime   != null ? Number(job.postProcessingTime)   : null,
+      ...(job.moonrakerJobId != null && { moonrakerJobId: String(job.moonrakerJobId) }),
       filaments: this.buildFilaments(job)
     };
   }
@@ -291,6 +313,334 @@ export class ItemKeeperIntegration {
     if (triggerJobId != null) trigger.jobId = triggerJobId;
 
     return { schema: IK_SCHEMA, sentAt: new Date().toISOString(), trigger, devices };
+  }
+
+  // ───────────────────────────── カメラ画像添付 ─────────────────────────────
+
+  /**
+   * Promise にタイムアウトを付与する（カメラ取得が送信を不当に遅延させないため）。
+   * @private
+   * @template T
+   * @param {Promise<T>} promise
+   * @param {number} ms
+   * @returns {Promise<T>}
+   */
+  _withTimeout(promise, ms) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("timeout")), ms);
+      Promise.resolve(promise).then(
+        v => { clearTimeout(t); resolve(v); },
+        e => { clearTimeout(t); reject(e); }
+      );
+    });
+  }
+
+  /**
+   * Blob を「data: プレフィックスを除いた生 Base64 文字列」へ変換する。
+   * @private
+   * @param {Blob} blob
+   * @returns {Promise<string>} 失敗時は ""
+   */
+  _blobToBase64(blob) {
+    return new Promise((resolve) => {
+      try {
+        const fr = new FileReader();
+        fr.onload = () => {
+          const s = String(fr.result || "");
+          const i = s.indexOf(",");
+          resolve(i >= 0 ? s.slice(i + 1) : "");
+        };
+        fr.onerror = () => resolve("");
+        fr.readAsDataURL(blob);
+      } catch { resolve(""); }
+    });
+  }
+
+  /**
+   * 1 ホストの「現在のカメラ画像」を取得し camera オブジェクトを返す。
+   *
+   * 取得経路（堅牢性の高い順にフォールバック）:
+   *  1. Electron 親（本番）: `window.electronAPI.getCameraSnapshot(host)`
+   *     親レンダラーは file:// オリジンのため CORS でプリンタ画像を直接読めない。
+   *     メインプロセスが `_cameraEndpoints` allowlist 経由で1枚取得し Base64 で返す。
+   *  2. リレー子 / 同一オリジン http: `/relay-camera/{host}/snapshot.jpg` を fetch。
+   *     子は親(5313)と同一オリジンなので CORS なしで blob を読める。
+   *
+   * いずれも取得不能なら null（→ 呼び出し側は camera フィールドを省略＝下位互換）。
+   *
+   * @private
+   * @param {string} host - プリンタホスト名
+   * @returns {Promise<{mime:string,dataBase64:string,bytes:number,capturedAt:string}|null>}
+   */
+  async _captureCamera(host) {
+    if (!host) return null;
+
+    // 1) Electron 親: IPC 経由でメインプロセスが取得（CORS 回避・本番経路）
+    try {
+      if (typeof window !== "undefined" && window.electronAPI?.getCameraSnapshot) {
+        const r = await this._withTimeout(window.electronAPI.getCameraSnapshot(host), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (r && r.dataBase64) {
+          return {
+            mime: r.mime || "image/jpeg",
+            dataBase64: r.dataBase64,
+            bytes: Number(r.bytes) || 0,
+            capturedAt: new Date().toISOString()
+          };
+        }
+        return null; // Electron 環境で取得不可なら他経路は無効（プリンタへ直接到達できない）
+      }
+    } catch { /* フォールバックへ */ }
+
+    // 2) リレー子 / 同一オリジン http: 親プロキシを同一オリジン fetch
+    try {
+      if (typeof fetch === "function" && typeof location !== "undefined" && /^https?:$/.test(location.protocol)) {
+        const url = `/relay-camera/${encodeURIComponent(host)}/snapshot.jpg?t=${Date.now()}`;
+        const res = await this._withTimeout(fetch(url, { cache: "no-store" }), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (res && res.ok) {
+          const blob = await res.blob();
+          const b64 = await this._blobToBase64(blob);
+          if (b64) {
+            return {
+              mime: blob.type || "image/jpeg",
+              dataBase64: b64,
+              bytes: Number(blob.size) || 0,
+              capturedAt: new Date().toISOString()
+            };
+          }
+        }
+      }
+    } catch { /* noop */ }
+
+    return null;
+  }
+
+  /**
+   * スナップショットの各 device に「現在のカメラ画像(Base64)」を添付する。
+   * `settings.attachCamera` が ON のとき sendSnapshot から呼ばれる。
+   *
+   * - 機器別 `ikCamera === false` の機器は添付しない。
+   * - 取得できない機器（カメラ無し/オフライン等）は省略する（JSON は valid のまま）。
+   * - device.camera = { mime, dataBase64, bytes, capturedAt }。
+   * - 全機器を並列取得し、送信の総待ち時間を抑える。
+   *
+   * @private
+   * @param {{devices:Array<object>}} snap - buildSnapshot の結果（破壊的に変更）
+   * @returns {Promise<void>}
+   */
+  async _attachCameras(snap) {
+    const devices = snap?.devices || [];
+    if (!devices.length) return;
+    const targets = monitorData.appSettings.connectionTargets || [];
+    await Promise.all(devices.map(async (d) => {
+      const host = d?.device?.hostname;
+      if (!host) return;
+      const t = targets.find(x => x && x.hostname === host);
+      if (t && t.ikCamera === false) return; // この機器はカメラ添付OFF
+      try {
+        const cam = await this._captureCamera(host);
+        if (cam) d.camera = cam;
+      } catch { /* 取得失敗は省略（下位互換） */ }
+    }));
+  }
+
+  // ───────────────────────────── 状態パネル添付 ─────────────────────────────
+
+  /**
+   * 値を JSON 安全な形へ落とす（オブジェクト/関数/循環は文字列化）。
+   * @private
+   */
+  _jsonSafe(v) {
+    if (v == null) return null;
+    const t = typeof v;
+    if (t === "number" || t === "string" || t === "boolean") return v;
+    try { return JSON.parse(JSON.stringify(v)); } catch { return String(v); }
+  }
+
+  /**
+   * 1 ホストの状態パネル(storedData)を device.state 形へ整形する。
+   * 各キーは raw（加工前＝rawValue）と value/unit/text（加工後＝computedValue 正規化）を併記。
+   *
+   * @private
+   * @param {string} host
+   * @returns {{capturedAt:string, fields:Object<string,{raw:*,value:string,unit:string,text:string}>}|null}
+   */
+  _buildState(host) {
+    const sd = monitorData.machines?.[host]?.storedData;
+    if (!sd || typeof sd !== "object") return null;
+    const fields = {};
+    for (const key of Object.keys(sd)) {
+      const d = sd[key];
+      if (!d || typeof d !== "object") continue;
+      const raw = this._jsonSafe(d.rawValue);
+      const cv = d.computedValue;
+      let value = "", unit = "";
+      if (cv && typeof cv === "object" && "value" in cv) {
+        value = String(cv.value ?? "");
+        unit = String(cv.unit ?? "");
+      } else if (cv != null) {
+        value = String(cv);
+      } else if (raw != null) {
+        value = String(raw);
+      }
+      const text = unit ? `${value}${unit}` : value;
+      fields[key] = { raw, value, unit, text };
+    }
+    if (!Object.keys(fields).length) return null;
+    return { capturedAt: new Date().toISOString(), fields };
+  }
+
+  /**
+   * スナップショットの各 device に状態パネル(device.state)を添付する（同期）。
+   * @private
+   * @param {{devices:Array<object>}} snap
+   * @returns {void}
+   */
+  _attachState(snap) {
+    for (const d of (snap?.devices || [])) {
+      const host = d?.device?.hostname;
+      if (!host) continue;
+      try { const st = this._buildState(host); if (st) d.state = st; } catch { /* 省略 */ }
+    }
+  }
+
+  // ───────────────────────────── ファイル一覧添付 ─────────────────────────────
+
+  /**
+   * printmanager.getFileList を遅延取得する（静的 import の循環依存を避ける）。
+   * @private
+   * @returns {Promise<((host:string)=>Array<object>)|null>}
+   */
+  async _getFileListFn() {
+    if (this.__getFileList !== undefined) return this.__getFileList;
+    try {
+      const m = await import("./dashboard_printmanager.js");
+      this.__getFileList = typeof m.getFileList === "function" ? m.getFileList : null;
+    } catch { this.__getFileList = null; }
+    return this.__getFileList;
+  }
+
+  /**
+   * ファイル一覧エントリ（printmanager 形）を §4.5 の files item へ整形する。
+   * @private
+   */
+  _fileItem(f) {
+    const mtime = f?.mtime;
+    const modifiedSec = (mtime instanceof Date) ? Math.floor(mtime.getTime() / 1000)
+      : (Number.isFinite(Number(mtime)) ? Number(mtime) : null);
+    const item = {
+      name: f?.basename || "",
+      path: f?.filename || "",
+      sizeBytes: Number(f?.size) || 0,
+      modifiedSec,
+      layer: Number.isFinite(Number(f?.layer)) ? Number(f.layer) : null,
+      expectMm: Number(f?.expect ?? f?.usagematerial) || 0
+    };
+    if (f?.thumbUrl) item.thumbnailUrl = String(f.thumbUrl);
+    return item;
+  }
+
+  /**
+   * 絶対/相対のサムネ URL から「pathname+search」を取り出す（IPC/リレー転送用パス）。
+   * @private
+   */
+  _urlPath(url) {
+    const u = String(url || "");
+    if (!u) return "";
+    try {
+      const parsed = new URL(u, "http://x");
+      return (parsed.pathname || "") + (parsed.search || "");
+    } catch {
+      return u.startsWith("/") ? u : "/" + u;
+    }
+  }
+
+  /**
+   * 1 枚のサムネ画像を Base64 で取得する（カメラと同じ二経路フォールバック）。
+   *  1. Electron 親: window.electronAPI.getImageBase64(host, path)
+   *  2. リレー子/同一オリジン http: /relay-image/{host}/{path}
+   * 取得不能なら null。host+path 単位でインメモリキャッシュ（サムネは実質不変）。
+   *
+   * @private
+   * @param {string} host
+   * @param {string} thumbUrl
+   * @returns {Promise<{mime:string,dataBase64:string,bytes:number}|null>}
+   */
+  async _captureThumb(host, thumbUrl) {
+    const path = this._urlPath(thumbUrl);
+    if (!host || !path) return null;
+    if (!this._thumbCache) this._thumbCache = new Map();
+    const ck = host + "\n" + path;
+    if (this._thumbCache.has(ck)) return this._thumbCache.get(ck);
+
+    let result = null;
+    // 1) Electron 親: IPC（CORS 回避）
+    try {
+      if (typeof window !== "undefined" && window.electronAPI?.getImageBase64) {
+        const r = await this._withTimeout(window.electronAPI.getImageBase64(host, path), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (r && r.dataBase64) result = { mime: r.mime || "image/png", dataBase64: r.dataBase64, bytes: Number(r.bytes) || 0 };
+      } else if (typeof fetch === "function" && typeof location !== "undefined" && /^https?:$/.test(location.protocol)) {
+        // 2) リレー子/同一オリジン http: 親プロキシ（downloads/ 配下のみ）
+        const rel = path.replace(/^\/+/, "");
+        const url = `/relay-image/${encodeURIComponent(host)}/${rel}`;
+        const res = await this._withTimeout(fetch(url, { cache: "no-store" }), CAMERA_CAPTURE_TIMEOUT_MS);
+        if (res && res.ok) {
+          const blob = await res.blob();
+          const b64 = await this._blobToBase64(blob);
+          if (b64) result = { mime: blob.type || "image/png", dataBase64: b64, bytes: Number(blob.size) || 0 };
+        }
+      }
+    } catch { /* null のまま */ }
+
+    this._thumbCache.set(ck, result);
+    return result;
+  }
+
+  /**
+   * スナップショットの各 device にファイル一覧(device.files)を添付する。
+   * withThumbs=true のときは files[].thumbnail に Base64 サムネを付与する
+   * （同時実行数・1機あたり枚数を制限。取得失敗は thumbnailUrl のみ残す）。
+   *
+   * @private
+   * @param {{devices:Array<object>}} snap
+   * @param {boolean} withThumbs
+   * @returns {Promise<void>}
+   */
+  async _attachFiles(snap, withThumbs) {
+    const getFileList = await this._getFileListFn();
+    if (!getFileList) return;
+    await Promise.all((snap?.devices || []).map(async (d) => {
+      const host = d?.device?.hostname;
+      if (!host) return;
+      let list = [];
+      try { list = getFileList(host) || []; } catch { list = []; }
+      if (!list.length) return;
+      const items = list.map(f => this._fileItem(f));
+      if (withThumbs) await this._attachThumbs(host, items);
+      d.files = { capturedAt: new Date().toISOString(), items };
+    }));
+  }
+
+  /**
+   * files items に Base64 サムネを並列（上限つき）で付与する。
+   * @private
+   * @param {string} host
+   * @param {Array<object>} items
+   * @returns {Promise<void>}
+   */
+  async _attachThumbs(host, items) {
+    const targets = items.filter(it => it.thumbnailUrl).slice(0, THUMB_MAX_PER_DEVICE);
+    let idx = 0;
+    const worker = async () => {
+      while (idx < targets.length) {
+        const it = targets[idx++];
+        try {
+          const thumb = await this._captureThumb(host, it.thumbnailUrl);
+          if (thumb) it.thumbnail = thumb;
+        } catch { /* 省略 */ }
+      }
+    };
+    const n = Math.min(THUMB_FETCH_CONCURRENCY, targets.length);
+    await Promise.all(Array.from({ length: n }, () => worker()));
   }
 
   // ───────────────────────────── HTTP 送信 ─────────────────────────────
@@ -344,6 +694,113 @@ export class ItemKeeperIntegration {
     return { body: jsonStr, gzipped: false };
   }
 
+  // ───────────────────────────── フィラメント更新履歴 添付 ─────────────────────────────
+
+  /**
+   * フィラメント更新履歴を添付する（settings.attachFilamentHistory が ON のとき sendSnapshot から）。
+   * - トップレベル `spools`: 画面上のフィラメント一覧（spool レジストリ）。履歴の spoolId を識別子へ解決する。
+   * - 各 device.filamentHistory: 当該 host の装着/取外し履歴(mountHistory)＋切れ/交換イベント(filamentEventContext)。
+   * 純粋同期（in-memory のみ・CORS 無関係）。消費量はジョブ履歴 jobs[] と重複するため含めない。
+   * @private
+   * @param {object} snap - buildSnapshot のスナップショット（破壊的に拡張）
+   * @returns {void}
+   */
+  _attachFilamentHistory(snap) {
+    if (!snap) return;
+    snap.spools = this._buildSpoolRegistry();
+    const mh = Array.isArray(monitorData.mountHistory) ? monitorData.mountHistory : [];
+    const ctxMap = (monitorData.filamentEventContext && typeof monitorData.filamentEventContext === "object")
+      ? monitorData.filamentEventContext : {};
+    for (const d of (snap.devices || [])) {
+      const host = d?.device?.hostname;
+      if (!host) continue;
+      const mountHistory = mh.filter(e => e && e.host === host).map(e => this._mountEvent(e));
+      const ctx = ctxMap[host];
+      const events = ctx ? [this._filamentEvent(ctx)] : [];
+      if (mountHistory.length || events.length) {
+        d.filamentHistory = { mountHistory, events };
+      }
+    }
+  }
+
+  /**
+   * 画面上のフィラメント一覧（spool レジストリ）を組み立てる。削除済みは除外。
+   * 各要素に画面表示の識別子（#NNN・名前・素材・色）と per-print 消費ログ(usedLengthLog)を含む。
+   * @private
+   * @returns {Array<object>}
+   */
+  _buildSpoolRegistry() {
+    const spools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+    return spools.filter(sp => sp && !sp.deleted && !sp.isDeleted).map(sp => ({
+      spoolId: sp.id || sp.spoolId || "",
+      serialNo: sp.serialNo ?? null,
+      serialDisplay: formatSpoolDisplayId(sp),
+      name: sp.name || "",
+      material: sp.materialName || sp.material || "",
+      materialSub: sp.materialSubName || "",
+      colorName: sp.colorName || "",
+      colorHex: sp.filamentColor || sp.color || "",
+      brand: sp.manufacturerName || sp.brand || "",
+      diameterMm: Number(sp.filamentDiameter || 1.75),
+      density: (sp.density != null) ? Number(sp.density) : null,
+      totalLengthMm: Number(sp.totalLengthMm || 0),
+      remainingLengthMm: Number(sp.remainingLengthMm || 0),
+      printCount: Number(sp.printCount || 0),
+      isActive: !!(sp.isActive || sp.isInUse),
+      inferred: !!sp.inferred,
+      hostname: sp.hostname || null,
+      usedLengthLog: Array.isArray(sp.usedLengthLog)
+        ? sp.usedLengthLog.map(u => ({
+          jobId: (u?.jobId != null) ? String(u.jobId) : "",
+          usedMm: Number(u?.used || 0)
+        }))
+        : []
+    }));
+  }
+
+  /**
+   * mountHistory の1イベントを送出形へ整形する（mount/unmount で持つ区間フィールドが異なる）。
+   * @private
+   * @param {object} e - MountEvent
+   * @returns {object}
+   */
+  _mountEvent(e) {
+    const o = {
+      evId: e.evId || "",
+      ts: Number(e.ts) || null,
+      type: e.type || "",
+      spoolId: e.spoolId || ""
+    };
+    if (e.type === "mount") {
+      o.anchorRemainingMm = (e.anchorRemainingMm != null) ? Number(e.anchorRemainingMm) : null;
+      o.sinceJobId = (e.sinceJobId != null) ? String(e.sinceJobId) : null;
+    } else {
+      o.untilJobId = (e.untilJobId != null) ? String(e.untilJobId) : null;
+    }
+    return o;
+  }
+
+  /**
+   * filamentEventContext（切れ/交換イベント）を送出形へ整形する。
+   * @private
+   * @param {object} ctx
+   * @returns {object}
+   */
+  _filamentEvent(ctx) {
+    return {
+      evId: ctx.evId || "",
+      ts: Number(ctx.ts) || null,
+      stateAtEvent: (ctx.stateAtEvent != null) ? Number(ctx.stateAtEvent) : null,
+      oldSpoolId: ctx.oldSpoolId || null,
+      oldRemainingMm: (ctx.oldRemainingMm != null) ? Number(ctx.oldRemainingMm) : null,
+      oldRemainingPct: (ctx.oldRemainingPct != null) ? Number(ctx.oldRemainingPct) : null,
+      runout: !!ctx.runout,
+      resolved: !!ctx.resolved,
+      resolution: ctx.resolution || null,
+      jobIdAtEvent: (ctx.jobIdAtEvent != null) ? String(ctx.jobIdAtEvent) : null
+    };
+  }
+
   /**
    * スナップショットを送信する（簡易再送つき）。fire-and-forget 用途。
    *
@@ -358,6 +815,21 @@ export class ItemKeeperIntegration {
     const event = trigger || "";
     const snap = this.buildSnapshot(event, host);
     if (!snap.devices.length) return { ok: false, skipped: true };
+    // 任意ブロック（カメラ/状態/ファイル）を各機に添付（ON時のみ）。取得失敗機は省略＝下位互換。
+    // 413(サイズ超過)時は _post 内の縮小再送が buildSnapshot で組み直すため、これら重い任意
+    // ブロックは再送時に自然に外れて履歴のみ送られる（履歴優先）。
+    if (s.attachCamera) {
+      try { await this._attachCameras(snap); } catch { /* 添付失敗は無視して履歴のみ送る */ }
+    }
+    if (s.attachState) {
+      try { this._attachState(snap); } catch { /* 省略 */ }
+    }
+    if (s.attachFiles) {
+      try { await this._attachFiles(snap, !!s.attachFileThumbs); } catch { /* 省略 */ }
+    }
+    if (s.attachFilamentHistory) {
+      try { this._attachFilamentHistory(snap); } catch { /* 省略 */ }
+    }
     return this._post(endpoint, event, snap, { host, retriesLeft: MAX_RETRY });
   }
 
@@ -548,11 +1020,13 @@ export class ItemKeeperIntegration {
       const name = escHtml(t.label || t.hostname || t.dest || "(未解決)");
       const alias = escAttr(t.ikDeviceAlias || "");
       const ikEnabled = t.ikEnabled !== false;
+      const ikCamera = t.ikCamera !== false;
       return `<tr>
         <td style="padding:2px 6px;white-space:nowrap;">${name}</td>
         <td style="padding:2px 6px;"><input type="text" data-ik-alias="${dest}" value="${alias}"
             placeholder="${escAttr(t.hostname || "")}" style="width:10em;font-size:12px;padding:2px 4px;border:1px solid #ccc;border-radius:3px;"></td>
         <td style="padding:2px 6px;text-align:center;"><input type="checkbox" data-ik-enabled="${dest}" ${ikEnabled ? "checked" : ""}></td>
+        <td style="padding:2px 6px;text-align:center;"><input type="checkbox" data-ik-camera="${dest}" ${ikCamera ? "checked" : ""}></td>
       </tr>`;
     }).join("");
 
@@ -652,12 +1126,47 @@ export class ItemKeeperIntegration {
               </label>
             </div>
 
-            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF）</div>
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">カメラ画像の添付</div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-camera" ${s.attachCamera ? "checked" : ""}>
+              現在のカメラ画像を各機ごとに添付する（Base64・JPEG）
+            </label>
+            <div style="font-size:11px;color:#999;margin:0 0 6px 22px;">
+              ※送信のたびに各機のスナップショットを取得し <code>device.camera</code> に付与します。カメラ無し/オフラインの機器は省略されます（下位互換）。機器ごとのON-OFFは下表の「カメラ」列で調整できます。
+            </div>
+
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">状態・ファイルの添付</div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-state" ${s.attachState ? "checked" : ""}>
+              状態パネルの内容を添付する（<code>device.state</code>／加工前 raw ＋ 加工後 value/unit/text）
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-files" ${s.attachFiles ? "checked" : ""}>
+              ファイル一覧を添付する（<code>device.files</code>／ファイル名・サイズ・日時等）
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;margin:0 0 2px 22px;">
+              <input type="checkbox" data-role="ik-attach-thumbs" ${s.attachFileThumbs ? "checked" : ""}>
+              ↳ サムネ画像も Base64 で添付する（重い・ファイル一覧ONが前提）
+            </label>
+            <div style="font-size:11px;color:#999;margin:0 0 6px 22px;">
+              ※状態/ファイルは各機ごとに付与。取得できない機器は省略されます（下位互換）。サムネBase64は送信のたびに各ファイルの画像取得が走るため本文が大きくなります（既定OFF）。
+            </div>
+
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">フィラメント更新履歴の添付</div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-filhistory" ${s.attachFilamentHistory ? "checked" : ""}>
+              フィラメント更新履歴を添付する（<code>spools[]</code> 一覧＋各機 <code>filamentHistory</code>）
+            </label>
+            <div style="font-size:11px;color:#999;margin:0 0 6px 22px;">
+              ※画面上のフィラメント一覧（ID/#NNN/名前/素材/色/残量/消費ログ）と、各機の装着・取外し履歴＋切れ/交換イベントを付与します。消費量はジョブ履歴と重複するため含めません。
+            </div>
+
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF / カメラ添付）</div>
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
               <thead><tr style="color:#667;text-align:left;">
-                <th style="padding:2px 6px;">機器</th><th style="padding:2px 6px;">エイリアス（ItemKeeper側の安定名）</th><th style="padding:2px 6px;">連携</th>
+                <th style="padding:2px 6px;">機器</th><th style="padding:2px 6px;">エイリアス（ItemKeeper側の安定名）</th><th style="padding:2px 6px;">連携</th><th style="padding:2px 6px;">カメラ</th>
               </tr></thead>
-              <tbody data-role="ik-devices">${deviceRows || `<tr><td colspan="3" style="padding:6px;color:#999;">接続先がありません</td></tr>`}</tbody>
+              <tbody data-role="ik-devices">${deviceRows || `<tr><td colspan="4" style="padding:6px;color:#999;">接続先がありません</td></tr>`}</tbody>
             </table>
 
             <div style="margin-top:8px;">
@@ -768,6 +1277,11 @@ export class ItemKeeperIntegration {
     this.settings.clientId = (q('[data-role="ik-clientid"]')?.value || "").trim();
     this.settings.secret = q('[data-role="ik-secret"]')?.value || "";
     this.settings.encoding = "none";
+    this.settings.attachCamera = !!q('[data-role="ik-attach-camera"]')?.checked;
+    this.settings.attachState = !!q('[data-role="ik-attach-state"]')?.checked;
+    this.settings.attachFiles = !!q('[data-role="ik-attach-files"]')?.checked;
+    this.settings.attachFileThumbs = !!q('[data-role="ik-attach-thumbs"]')?.checked;
+    this.settings.attachFilamentHistory = !!q('[data-role="ik-attach-filhistory"]')?.checked;
     this.settings.historyScope = q('[data-role="ik-scope"]')?.value || "all";
     this.settings.onStart = !!q('[data-role="ik-onstart"]')?.checked;
     this.settings.onFinish = !!q('[data-role="ik-onfinish"]')?.checked;
@@ -787,6 +1301,11 @@ export class ItemKeeperIntegration {
       const dest = chk.getAttribute("data-ik-enabled");
       const t = targets.find(x => x && x.dest === dest);
       if (t) t.ikEnabled = chk.checked;
+    });
+    container.querySelectorAll('[data-ik-camera]').forEach(chk => {
+      const dest = chk.getAttribute("data-ik-camera");
+      const t = targets.find(x => x && x.dest === dest);
+      if (t) t.ikCamera = chk.checked;
     });
 
     // 永続化（即時フラッシュ＝即反映）
