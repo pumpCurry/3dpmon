@@ -378,6 +378,21 @@ function _refreshFilamentPreviews() {
 }
 
 /**
+ * 親からミラーされた ItemKeeper 設定を子の monitorData + itemKeeperIntegration へ反映する。
+ * 子は親の設定を読み取りミラーするのみ（ローカル確定保存はしない）。開いている
+ * 外部連携モーダルがあれば（未編集時のみ）再描画して最新設定を反映する。
+ *
+ * @private
+ * @param {Object} ik - ItemKeeper 設定オブジェクト
+ */
+function _applyItemkeeperSettings(ik) {
+  if (!ik || typeof ik !== "object") return;
+  monitorData.appSettings.itemkeeper = ik;
+  try { window.itemKeeperIntegration?.loadSettings?.(); } catch { /* noop */ }
+  try { window.itemKeeperIntegration?.refreshOpenModal?.(); } catch { /* noop */ }
+}
+
+/**
  * フルスナップショットを monitorData に適用する。
  *
  * @private
@@ -390,6 +405,11 @@ function _applySnapshot(state) {
   // 接続先情報を設定
   if (state.appSettings?.connectionTargets) {
     monitorData.appSettings.connectionTargets = state.appSettings.connectionTargets;
+  }
+
+  // ★ ItemKeeper 連携設定を親からミラー（親が唯一の設定元・送信元）。
+  if (state.appSettings?.itemkeeper) {
+    _applyItemkeeperSettings(state.appSettings.itemkeeper);
   }
 
   // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
@@ -495,6 +515,10 @@ function _applyDelta(msg) {
   //   差分でも全置換で整合する（IDマージ+stickyフラグは乖離の根本原因だった）。
   if (msg.shared) {
     _applySharedFilamentState(msg.shared);
+    // ★ ItemKeeper 設定の差分ミラー（親で変更 or satellite 逆反映が確定したとき届く）。
+    if (msg.shared.appSettingsItemkeeper) {
+      _applyItemkeeperSettings(msg.shared.appSettingsItemkeeper);
+    }
   }
 
   // ★ 印刷履歴・現在ジョブの差分適用 + 履歴パネル再描画
@@ -549,6 +573,42 @@ export function sendRelayCommand(method, params, hostname) {
     params
   }));
   return true;
+}
+
+/**
+ * ItemKeeper 等の外部連携設定の変更を親へ逆反映する（satellite モード専用）。
+ *
+ * 子（satellite）はローカルに設定を確定保存せず、本 RPC で親へ委譲する。
+ * 親が唯一の設定元として確定保存し、次回 relay-delta(appSettingsItemkeeper)で
+ * 全子クライアント（自分自身を含む）へミラー還流する。
+ * readonly モードはサーバ側ガードで弾かれる（閲覧専用）。
+ *
+ * @param {Object} itemkeeper - ItemKeeper 設定オブジェクト（this.settings 相当）
+ * @returns {boolean} 送信成功なら true
+ */
+export function sendRelaySettings(itemkeeper) {
+  if (_relayMode !== "satellite") {
+    console.warn("[client-sync] readonly モードでは設定変更不可");
+    _alertRelayBlocked("readonly");
+    return false;
+  }
+  if (!_relayWs || _relayWs.readyState !== 1) {
+    console.warn("[client-sync] リレー未接続");
+    _alertRelayBlocked("disconnected");
+    return false;
+  }
+  _relayWs.send(JSON.stringify({
+    type: "relay-settings",
+    payload: { itemkeeper }
+  }));
+  return true;
+}
+
+/* ★ 外部連携モーダル(itemkeeper)がリレーモード分岐に使うため window へ公開。
+   静的 import の循環（client_sync ↔ itemkeeper）を避けるための疎結合。 */
+if (typeof window !== "undefined") {
+  window.getRelayMode = getRelayMode;
+  window.sendRelaySettings = sendRelaySettings;
 }
 
 /** リレー操作ブロック時のトースト連続表示を抑制するための最終表示時刻 */

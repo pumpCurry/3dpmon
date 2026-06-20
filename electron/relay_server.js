@@ -239,6 +239,14 @@ function _handleClientMessage(client, msg) {
       }
       break;
 
+    case "relay-settings":
+      // ★ ItemKeeper 等の外部連携設定変更の中継: satellite → 親レンダラー。
+      //   readonly はここに到達しない（上の readonly ガードで弾かれる＝閲覧専用ミラー）。
+      if (_sendToRenderer && msg.payload) {
+        _sendToRenderer("relay-settings", { payload: msg.payload });
+      }
+      break;
+
     case "relay-ping":
       _safeSend(client.ws, { type: "relay-pong", timestamp: Date.now() });
       break;

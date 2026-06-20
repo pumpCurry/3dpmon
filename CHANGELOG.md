@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.2.1031 (2026-06-20)
+
+### ItemKeeper 連携設定をリレー親子で同期（サテライト/閲覧専用のミラー＋逆反映、送信は親のみ）
+
+#### 修正（不具合）
+- **デスクトップ本体とブラウザ画面で ItemKeeper 設定が共有されず「保存しても消える」ように見える問題を解消。** 原因は両者が別オリジン（`file://` と `http://localhost:5313`）で IndexedDB が分離していたため。保存自体は全環境で正常だが、片方で設定してももう片方には反映されなかった。
+  - **リレー親 → 子へ設定をミラー配信**: relay-snapshot / relay-delta に `appSettings.itemkeeper` を追加。子（readonly/satellite）は受信して自身の表示を親に揃える。
+  - **閲覧専用（readonly）= 読み取りミラー**: ItemKeeper 設定欄を無効化し「親機で設定してください」の注意書きを表示。
+  - **操作（satellite）= 編集可・親へ逆反映**: 子で保存すると新 RPC `relay-settings` で親へ委譲。親が唯一の設定元として確定保存し、次回 delta で全子へ還流（往復同期）。
+  - **送信元は親（とスタンドアロン）のみ**: リレー子は ItemKeeper への送信・定期送信を行わない（`window._3dpmonRelayChild` ガード）＝重複報告を防止。
+  - スタンドアロンは従来どおり独立設定を維持。
+
+#### テスト
+- 全724テスト緑（新規8: 送信ガード/定期タイマー抑止/applyRemoteSettings/readonly無効化・注意書き/satellite RPC ルーティング/parent ローカル保存）。touched 3dp_lib は eslint 0 error。**実機検証済**（親→readonly子ミラー・satellite 自動昇格→RPC→親確定→子へ還流の往復、CDP 実測）。
+
+---
+
 ## v2.2.1030 (2026-06-20)
 
 ### ItemKeeper 連携: フィラメント更新履歴の添付オプション（spools[] レジストリ＋装着/切れ交換イベント）

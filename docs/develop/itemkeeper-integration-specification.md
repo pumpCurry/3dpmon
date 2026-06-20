@@ -367,6 +367,14 @@ X-IK-Signature:  sha256={hex}            // HMAC-SHA256(secret, `${X-IK-Timestam
 ### 6.6 3dpmon が必ず載せるべきフィールド
 解析は ItemKeeper 側が行うが、それには **`deviceKey`/`device`、`job.filename`+`job.filemd5`、`filaments[].{material,colorHex,spoolId,usedMm}`** が要。**欠かさず載せる**こと。
 
+### 6.7 リレー親子での設定同期（v2.2.1031〜）
+ItemKeeper 設定（`appSettings.itemkeeper`）は **親（デスクトップ `file://`）が唯一の権威**として保持・送信する。ブラウザ画面はオリジンが異なり IndexedDB が分離するため、以下で親子の表示と送信元を一致させる。
+- **親 → 子ミラー**: relay-snapshot / relay-delta に `appSettings.itemkeeper` を含める。子は受信して `monitorData.appSettings.itemkeeper` を置換し `itemKeeperIntegration.loadSettings()` で自身を再構築する。
+- **readonly（閲覧専用）**: 設定欄は無効化＝読み取りミラー。
+- **satellite（操作）**: 編集可。保存は新 RPC `relay-settings`（`{type:"relay-settings", payload:{itemkeeper}}`）で親へ委譲。親が `applyRemoteSettings()` で確定保存し、次回 delta で全子へ還流する（往復同期）。readonly からの `relay-settings` はサーバ側ガードで拒否。
+- **送信元**: ItemKeeper への POST・定期送信は **親とスタンドアロンのみ**。リレー子（readonly/satellite）は `window._3dpmonRelayChild` ガードで送信しない＝重複報告を防ぐ。
+- **standalone（`?relay=standalone`）**: リレー子ではなく独立クライアント。自身の設定を独自に保持・送信する（同期対象外）。
+
 ---
 
 ## 7. レスポンス契約と再送判断

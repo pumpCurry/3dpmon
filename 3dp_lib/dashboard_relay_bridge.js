@@ -43,6 +43,9 @@ let _prevSharedHash = "";
 /** 前回ブロードキャストした mountHistory（ADR-0004 台帳）のハッシュ（変更検出） */
 let _prevMountHash = "";
 
+/** 前回ブロードキャストした ItemKeeper 設定のハッシュ（変更検出） */
+let _prevIkHash = "";
+
 /** 前回ブロードキャスト時の各ホストの印刷履歴(printStore)ハッシュ */
 const _prevPrintHash = new Map();
 
@@ -88,6 +91,16 @@ export function initRelayBridge() {
   window.electronAPI.onRelayFilament?.(async (data) => {
     console.debug(`[relay-bridge] 子からフィラメント操作受信:`, data.action);
     await handleRelayFilamentAction(data.action, data.data || {});
+  });
+
+  // ★ satellite からの ItemKeeper 設定変更を親で受領 → 親が唯一の設定元として確定保存。
+  //   確定後は次回 relay-delta(appSettingsItemkeeper)で全子へ還流しミラーが揃う。
+  window.electronAPI.onRelaySettings?.((data) => {
+    const ik = data?.payload?.itemkeeper;
+    if (ik && typeof ik === "object") {
+      console.debug("[relay-bridge] satellite から ItemKeeper 設定受信");
+      window.itemKeeperIntegration?.applyRemoteSettings?.(ik);
+    }
   });
 
   // 新規子クライアントからのスナップショット要求
@@ -426,6 +439,16 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // ★ ItemKeeper 設定の変更検出（親で変更 or satellite からの逆反映時のみ送る）。
+  //   子はこれを受けて自身の itemKeeperIntegration を親設定で再読込（ミラー）する。
+  const ikHash = _quickHash(monitorData.appSettings.itemkeeper || {});
+  if (ikHash !== _prevIkHash) {
+    _prevIkHash = ikHash;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.appSettingsItemkeeper = monitorData.appSettings.itemkeeper || {};
+    hasChanges = true;
+  }
+
   if (!hasChanges) return null;
 
   const delta = { machines: machinesDelta, shared: sharedDelta };
@@ -477,7 +500,10 @@ function _buildFullSnapshot() {
     hostSpoolMap: monitorData.hostSpoolMap,
     mountHistory: monitorData.mountHistory || [],
     appSettings: {
-      connectionTargets: monitorData.appSettings.connectionTargets || []
+      connectionTargets: monitorData.appSettings.connectionTargets || [],
+      // ★ ItemKeeper 連携設定を子へミラー（親が唯一の設定元・送信元）。
+      //   子(readonly=閲覧専用ミラー / satellite=編集可だが変更は relay-settings で親へ逆反映)。
+      itemkeeper: monitorData.appSettings.itemkeeper || {}
     }
   };
 }

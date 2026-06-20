@@ -80,6 +80,27 @@ function escHtml(s) {
 }
 
 /**
+ * 現在のリレーモードを安全に取得する（window 越しに疎結合、循環 import 回避）。
+ * @returns {string|null} "parent"|"readonly"|"satellite"|"standalone"|null
+ */
+function _relayMode() {
+  try {
+    return (typeof window !== "undefined" && window.getRelayMode) ? window.getRelayMode() : null;
+  } catch { return null; }
+}
+
+/**
+ * リレー子（readonly/satellite）かどうか。子は ItemKeeper をローカル確定保存も送信もせず、
+ * 親の設定をミラーする（送信元は親のみ）。standalone/parent は自分が権威で送信する。
+ * @returns {boolean}
+ */
+function _isRelayChild() {
+  try {
+    return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+  } catch { return false; }
+}
+
+/**
  * 外部連携 / ItemKeeper 連携マネージャ。
  * シングルトン `itemKeeperIntegration` として export する。
  */
@@ -114,6 +135,48 @@ export class ItemKeeperIntegration {
     monitorData.appSettings[SETTINGS_KEY] = { ...this.settings };
     saveUnifiedStorage(true);
     this._restartIntervalTimer();
+  }
+
+  /**
+   * satellite から逆反映された設定を親側で確定保存する（親が唯一の設定元）。
+   * 親レンダラーが relay-settings RPC を受けて呼ぶ。確定後は relay-delta
+   * (appSettingsItemkeeper) で全子（送信元 satellite を含む）へミラー還流する。
+   *
+   * @param {Object} ik - ItemKeeper 設定オブジェクト（子の this.settings 相当）
+   * @returns {void}
+   */
+  applyRemoteSettings(ik) {
+    if (!ik || typeof ik !== "object") return;
+    this.settings = { ...DEFAULTS, ...ik };
+    this.settings.encoding = "none"; // Phase1 は none 固定
+    this.persist();
+  }
+
+  /**
+   * 親設定がミラー更新されたとき、開いている外部連携モーダルの ItemKeeper 入力欄を
+   * （未編集時のみ）最新値へ追従させる。full re-render はせず（リレー接続節やハンドラを
+   * 壊さないため）入力値だけを差し替える。編集中(_dirty)はユーザー入力を尊重して触らない。
+   * 子（readonly/satellite）が relay-snapshot/delta を適用したときに呼ばれる。
+   *
+   * @returns {void}
+   */
+  refreshOpenModal() {
+    try {
+      const overlay = document.getElementById("external-modal-overlay");
+      if (!overlay || !overlay.classList.contains("open")) return;
+      if (this._dirty) return; // 編集中は壊さない
+      const body = document.getElementById("external-modal-body");
+      if (!body) return;
+      const s = this.settings;
+      const chk = (role, v) => { const el = body.querySelector(`[data-role="${role}"]`); if (el) el.checked = !!v; };
+      const val = (role, v) => { const el = body.querySelector(`[data-role="${role}"]`); if (el) el.value = v ?? ""; };
+      chk("ik-enabled", s.enabled);
+      val("ik-endpoint", s.endpoint); val("ik-clientid", s.clientId); val("ik-secret", s.secret);
+      val("ik-scope", s.historyScope || "all"); val("ik-intervalmin", String(Number(s.intervalMin) || 5));
+      chk("ik-onstart", s.onStart); chk("ik-onfinish", s.onFinish); chk("ik-onpause", s.onPause); chk("ik-oninterval", s.onInterval);
+      chk("ik-attach-camera", s.attachCamera); chk("ik-attach-state", s.attachState); chk("ik-attach-files", s.attachFiles);
+      chk("ik-attach-thumbs", s.attachFileThumbs); chk("ik-attach-filhistory", s.attachFilamentHistory);
+    } catch { /* noop */ }
   }
 
   // ───────────────────────────── ペイロード組立 ─────────────────────────────
@@ -808,6 +871,9 @@ export class ItemKeeperIntegration {
    * @returns {Promise<{ok:boolean,status?:number,error?:string,skipped?:boolean}>}
    */
   async sendSnapshot({ trigger, host } = {}) {
+    // ★ リレー子(readonly/satellite)は ItemKeeper へ送信しない（送信元は親のみ＝重複報告防止）。
+    //   子は親設定をミラーするだけ。standalone/parent のみがここから送る。
+    if (_isRelayChild()) return { ok: false, skipped: "relay-child" };
     const s = this.settings;
     if (!s.enabled) return { ok: false, skipped: true };
     const endpoint = this.normalizeEndpoint(s.endpoint);
@@ -987,6 +1053,8 @@ export class ItemKeeperIntegration {
    */
   _restartIntervalTimer() {
     if (this._intervalTimer) { clearInterval(this._intervalTimer); this._intervalTimer = null; }
+    // ★ リレー子は定期送信もしない（送信元は親のみ）。
+    if (_isRelayChild()) return;
     const s = this.settings;
     if (!s.enabled || !s.onInterval) return;
     const min = (Number(s.intervalMin) > 0) ? Number(s.intervalMin) : 5;
@@ -1257,6 +1325,27 @@ export class ItemKeeperIntegration {
     // 変更を破棄してキャンセル（明示操作なので確認なしで即破棄）
     const cancelBtn = q('[data-role="ext-cancel"]');
     if (cancelBtn) cancelBtn.addEventListener("click", () => { this._dirty = false; this._closeModal(); });
+
+    // ★ リレーモードに応じた ItemKeeper 節の編集可否:
+    //   readonly(閲覧専用ミラー) = ItemKeeper 入力を無効化し注意書きを出す（親で設定）。
+    //   satellite(操作) = 編集可。保存は _commitModal が親へ逆反映する。
+    //   parent/standalone = 従来どおり編集可・ローカル保存。
+    if (_relayMode() === "readonly") {
+      const ikBody = q('[data-role="ik-body"]');
+      if (ikBody) {
+        ikBody.querySelectorAll('input, select, textarea, button[data-role="ik-test"]')
+          .forEach(el => { el.disabled = true; });
+        container.querySelectorAll('[data-ik-alias], [data-ik-enabled], [data-ik-camera]')
+          .forEach(el => { el.disabled = true; });
+        if (!ikBody.querySelector('[data-role="ik-readonly-note"]')) {
+          const note = document.createElement("div");
+          note.setAttribute("data-role", "ik-readonly-note");
+          note.style.cssText = "margin:0 0 8px;padding:6px 8px;border-radius:4px;background:#fff5e6;border:1px solid #f0c674;font-size:11px;color:#a06a00;";
+          note.textContent = "閲覧専用（ミラー）：ItemKeeper 連携の設定は親機（デスクトップ）で変更してください。ここでは編集・送信できません。";
+          ikBody.insertBefore(note, ikBody.firstChild);
+        }
+      }
+    }
   }
 
   /** @private モーダルの DOM 値を確定し永続化する（保存して戻る） */
@@ -1308,8 +1397,22 @@ export class ItemKeeperIntegration {
       if (t) t.ikCamera = chk.checked;
     });
 
-    // 永続化（即時フラッシュ＝即反映）
-    this.persist();
+    // ★ リレーモードで ItemKeeper 設定の保存先を分岐:
+    //   - satellite : 親へ relay-settings RPC で逆反映（親が確定保存→delta で全子ミラー）。
+    //                 子はローカル確定しない（webhook/機器のローカル変更だけ flush）。
+    //   - readonly  : ItemKeeper は親ミラー（編集不可）＝確定しない。webhook/機器のみ flush。
+    //   - parent/standalone: 従来どおりローカル確定保存（即時フラッシュ＝即反映）。
+    const mode = _relayMode();
+    if (mode === "satellite") {
+      if (typeof window !== "undefined" && window.sendRelaySettings) {
+        window.sendRelaySettings({ ...this.settings });
+      }
+      saveUnifiedStorage(true);
+    } else if (mode === "readonly") {
+      saveUnifiedStorage(true);
+    } else {
+      this.persist();
+    }
   }
 
   /**

@@ -8,7 +8,7 @@
  * 依存モジュールは全て vi.doMock でモックする（dashboard_notification_manager は
  * モジュール読込時に document へ触れるため node 環境では必ずモックすること）。
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 /** モック monitorData */
 const mockMonitorData = {
@@ -583,5 +583,46 @@ describe("フィラメント更新履歴添付 (attachFilamentHistory)", () => {
     const fil = newIK().buildFilaments(job({ id: 5, filamentInfo: [{ spoolId: "s1", usedMm: 100, spoolName: "緑PLA" }] }));
     expect(fil[0].serialDisplay).toBe("#001"); // mockSpools s1 serialNo=1
     expect(fil[0].name).toBe("緑PLA");
+  });
+});
+
+describe("リレー子ガード／親逆反映 (relay mirror)", () => {
+  afterEach(() => { delete globalThis.window; });
+
+  it("リレー子(window._3dpmonRelayChild=true)では sendSnapshot が送信せずスキップ", async () => {
+    globalThis.window = { _3dpmonRelayChild: true };
+    const ik = newIK({ enabled: true, endpoint: "x.com", clientId: "c", secret: "s", onStart: true });
+    const r = await ik.sendSnapshot({ trigger: "print.started", host: "k1" });
+    expect(r.skipped).toBe("relay-child");
+  });
+
+  it("parent/standalone(window未設定)では sendSnapshot のガードを通過する", async () => {
+    // window 無し（node）＝ _isRelayChild()=false。enabled だが endpoint 不足で別理由 skip になることを確認
+    const ik = newIK({ enabled: true, endpoint: "", clientId: "", secret: "" });
+    const r = await ik.sendSnapshot({ trigger: "print.started", host: "k1" });
+    expect(r.skipped).toBe(true);   // relay-child ではなく endpoint 不足の skip
+    expect(r.skipped).not.toBe("relay-child");
+  });
+
+  it("リレー子では定期送信タイマーを起動しない", () => {
+    globalThis.window = { _3dpmonRelayChild: true };
+    const ik = newIK({ enabled: true, onInterval: true, intervalMin: 1 });
+    ik._restartIntervalTimer();
+    expect(ik._intervalTimer).toBeNull();
+  });
+
+  it("applyRemoteSettings は satellite の設定を親で確定保存する", () => {
+    const ik = newIK();
+    ik.applyRemoteSettings({
+      enabled: true, endpoint: "ik.example.com", clientId: "c", secret: "s",
+      attachState: true, attachFiles: true, attachFilamentHistory: true
+    });
+    expect(ik.settings.enabled).toBe(true);
+    expect(ik.settings.attachState).toBe(true);
+    expect(ik.settings.attachFilamentHistory).toBe(true);
+    expect(ik.settings.encoding).toBe("none");
+    // persist で monitorData へ書き込まれる（次回 relay-delta で子へミラー還流する元）
+    expect(mockMonitorData.appSettings.itemkeeper.attachState).toBe(true);
+    expect(mockMonitorData.appSettings.itemkeeper.attachFilamentHistory).toBe(true);
   });
 });

@@ -6,7 +6,7 @@
  * DOM を使うため jsdom 環境で実行する。
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const mockMonitorData = {
   machines: {},
@@ -282,5 +282,62 @@ describe("破棄確認 (requestCloseExternal・共通confirm)", () => {
     keepBtn.click();
     await p;
     expect(document.getElementById("external-modal-overlay").classList.contains("open")).toBe(true);
+  });
+});
+
+describe("リレーモード別の編集可否 (readonly/satellite)", () => {
+  afterEach(() => {
+    delete window.getRelayMode; delete window.sendRelaySettings; delete window._3dpmonRelayChild;
+    mockMonitorData.appSettings.itemkeeper = {};
+  });
+
+  it("readonly: ItemKeeper入力が無効化され注意書きが出る", () => {
+    window.getRelayMode = () => "readonly";
+    window._3dpmonRelayChild = true;
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    expect(c.querySelector('[data-role="ik-readonly-note"]')).toBeTruthy();
+    expect(c.querySelector('[data-role="ik-attach-state"]').disabled).toBe(true);
+    expect(c.querySelector('[data-role="ik-endpoint"]').disabled).toBe(true);
+    expect(c.querySelector('[data-role="ik-enabled"]').disabled).toBe(true);
+  });
+
+  it("satellite: ItemKeeper入力は編集可・注意書きは出ない", () => {
+    window.getRelayMode = () => "satellite";
+    window._3dpmonRelayChild = true;
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    expect(c.querySelector('[data-role="ik-attach-state"]').disabled).toBe(false);
+    expect(c.querySelector('[data-role="ik-readonly-note"]')).toBeFalsy();
+  });
+
+  it("satellite: 保存は親へ relay-settings RPC で逆反映しローカル確定しない", () => {
+    window.getRelayMode = () => "satellite";
+    window._3dpmonRelayChild = true;
+    window.sendRelaySettings = vi.fn();
+    mockMonitorData.appSettings.itemkeeper = {};
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    c.querySelector('[data-role="ik-attach-state"]').checked = true;
+    c.querySelector('[data-role="ik-attach-filhistory"]').checked = true;
+    ik._commitModal(c);
+    expect(window.sendRelaySettings).toHaveBeenCalledTimes(1);
+    const sent = window.sendRelaySettings.mock.calls[0][0];
+    expect(sent.attachState).toBe(true);
+    expect(sent.attachFilamentHistory).toBe(true);
+    // 子はローカル確定しない（親が確定→delta でミラー還流）
+    expect(mockMonitorData.appSettings.itemkeeper.attachState).toBeUndefined();
+  });
+
+  it("parent(モード未設定): 従来どおりローカル確定保存する", () => {
+    const ik = new ItemKeeperIntegration();
+    ik.settings.enabled = true;
+    const c = openModal(ik);
+    c.querySelector('[data-role="ik-attach-state"]').checked = true;
+    ik._commitModal(c);
+    expect(mockMonitorData.appSettings.itemkeeper.attachState).toBe(true);
   });
 });
