@@ -27,7 +27,7 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
-import { getSpoolById, getMaterialDensity, weightFromLength } from "./dashboard_spool.js";
+import { getSpoolById, getMaterialDensity, weightFromLength, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { attributedUsed, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
@@ -58,6 +58,7 @@ const DEFAULTS = Object.freeze({
   attachState: false,      // 状態パネル(storedData)を device.state に添付（raw＋computed）
   attachFiles: false,      // ファイル一覧を device.files に添付（メタ情報）
   attachFileThumbs: false, // files[].thumbnail に Base64 サムネを添付（attachFiles 前提・重い）
+  attachFilamentHistory: false, // フィラメント更新履歴(spools[]レジストリ＋装着/切れ交換イベント)を添付（既定OFF=下位互換）
   onStart: true,           // 印刷開始時に送信
   onFinish: true,          // 印刷終了(完了/失敗)時に送信
   onPause: true,           // 一時停止時に送信
@@ -208,6 +209,9 @@ export class ItemKeeperIntegration {
     return {
       spoolId: f.spoolId || spool?.id || "",
       serialNo: (f.serialNo != null) ? f.serialNo : (spool?.serialNo ?? null),
+      serialDisplay: spool ? formatSpoolDisplayId(spool)
+        : (f.serialNo != null ? `#${String(f.serialNo).padStart(3, "0")}` : ""),
+      name: f.spoolName || spool?.name || "",
       material,
       colorName: f.colorName || spool?.colorName || "",
       colorHex,
@@ -690,6 +694,113 @@ export class ItemKeeperIntegration {
     return { body: jsonStr, gzipped: false };
   }
 
+  // ───────────────────────────── フィラメント更新履歴 添付 ─────────────────────────────
+
+  /**
+   * フィラメント更新履歴を添付する（settings.attachFilamentHistory が ON のとき sendSnapshot から）。
+   * - トップレベル `spools`: 画面上のフィラメント一覧（spool レジストリ）。履歴の spoolId を識別子へ解決する。
+   * - 各 device.filamentHistory: 当該 host の装着/取外し履歴(mountHistory)＋切れ/交換イベント(filamentEventContext)。
+   * 純粋同期（in-memory のみ・CORS 無関係）。消費量はジョブ履歴 jobs[] と重複するため含めない。
+   * @private
+   * @param {object} snap - buildSnapshot のスナップショット（破壊的に拡張）
+   * @returns {void}
+   */
+  _attachFilamentHistory(snap) {
+    if (!snap) return;
+    snap.spools = this._buildSpoolRegistry();
+    const mh = Array.isArray(monitorData.mountHistory) ? monitorData.mountHistory : [];
+    const ctxMap = (monitorData.filamentEventContext && typeof monitorData.filamentEventContext === "object")
+      ? monitorData.filamentEventContext : {};
+    for (const d of (snap.devices || [])) {
+      const host = d?.device?.hostname;
+      if (!host) continue;
+      const mountHistory = mh.filter(e => e && e.host === host).map(e => this._mountEvent(e));
+      const ctx = ctxMap[host];
+      const events = ctx ? [this._filamentEvent(ctx)] : [];
+      if (mountHistory.length || events.length) {
+        d.filamentHistory = { mountHistory, events };
+      }
+    }
+  }
+
+  /**
+   * 画面上のフィラメント一覧（spool レジストリ）を組み立てる。削除済みは除外。
+   * 各要素に画面表示の識別子（#NNN・名前・素材・色）と per-print 消費ログ(usedLengthLog)を含む。
+   * @private
+   * @returns {Array<object>}
+   */
+  _buildSpoolRegistry() {
+    const spools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+    return spools.filter(sp => sp && !sp.deleted && !sp.isDeleted).map(sp => ({
+      spoolId: sp.id || sp.spoolId || "",
+      serialNo: sp.serialNo ?? null,
+      serialDisplay: formatSpoolDisplayId(sp),
+      name: sp.name || "",
+      material: sp.materialName || sp.material || "",
+      materialSub: sp.materialSubName || "",
+      colorName: sp.colorName || "",
+      colorHex: sp.filamentColor || sp.color || "",
+      brand: sp.manufacturerName || sp.brand || "",
+      diameterMm: Number(sp.filamentDiameter || 1.75),
+      density: (sp.density != null) ? Number(sp.density) : null,
+      totalLengthMm: Number(sp.totalLengthMm || 0),
+      remainingLengthMm: Number(sp.remainingLengthMm || 0),
+      printCount: Number(sp.printCount || 0),
+      isActive: !!(sp.isActive || sp.isInUse),
+      inferred: !!sp.inferred,
+      hostname: sp.hostname || null,
+      usedLengthLog: Array.isArray(sp.usedLengthLog)
+        ? sp.usedLengthLog.map(u => ({
+          jobId: (u?.jobId != null) ? String(u.jobId) : "",
+          usedMm: Number(u?.used || 0)
+        }))
+        : []
+    }));
+  }
+
+  /**
+   * mountHistory の1イベントを送出形へ整形する（mount/unmount で持つ区間フィールドが異なる）。
+   * @private
+   * @param {object} e - MountEvent
+   * @returns {object}
+   */
+  _mountEvent(e) {
+    const o = {
+      evId: e.evId || "",
+      ts: Number(e.ts) || null,
+      type: e.type || "",
+      spoolId: e.spoolId || ""
+    };
+    if (e.type === "mount") {
+      o.anchorRemainingMm = (e.anchorRemainingMm != null) ? Number(e.anchorRemainingMm) : null;
+      o.sinceJobId = (e.sinceJobId != null) ? String(e.sinceJobId) : null;
+    } else {
+      o.untilJobId = (e.untilJobId != null) ? String(e.untilJobId) : null;
+    }
+    return o;
+  }
+
+  /**
+   * filamentEventContext（切れ/交換イベント）を送出形へ整形する。
+   * @private
+   * @param {object} ctx
+   * @returns {object}
+   */
+  _filamentEvent(ctx) {
+    return {
+      evId: ctx.evId || "",
+      ts: Number(ctx.ts) || null,
+      stateAtEvent: (ctx.stateAtEvent != null) ? Number(ctx.stateAtEvent) : null,
+      oldSpoolId: ctx.oldSpoolId || null,
+      oldRemainingMm: (ctx.oldRemainingMm != null) ? Number(ctx.oldRemainingMm) : null,
+      oldRemainingPct: (ctx.oldRemainingPct != null) ? Number(ctx.oldRemainingPct) : null,
+      runout: !!ctx.runout,
+      resolved: !!ctx.resolved,
+      resolution: ctx.resolution || null,
+      jobIdAtEvent: (ctx.jobIdAtEvent != null) ? String(ctx.jobIdAtEvent) : null
+    };
+  }
+
   /**
    * スナップショットを送信する（簡易再送つき）。fire-and-forget 用途。
    *
@@ -715,6 +826,9 @@ export class ItemKeeperIntegration {
     }
     if (s.attachFiles) {
       try { await this._attachFiles(snap, !!s.attachFileThumbs); } catch { /* 省略 */ }
+    }
+    if (s.attachFilamentHistory) {
+      try { this._attachFilamentHistory(snap); } catch { /* 省略 */ }
     }
     return this._post(endpoint, event, snap, { host, retriesLeft: MAX_RETRY });
   }
@@ -1038,6 +1152,15 @@ export class ItemKeeperIntegration {
               ※状態/ファイルは各機ごとに付与。取得できない機器は省略されます（下位互換）。サムネBase64は送信のたびに各ファイルの画像取得が走るため本文が大きくなります（既定OFF）。
             </div>
 
+            <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">フィラメント更新履歴の添付</div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <input type="checkbox" data-role="ik-attach-filhistory" ${s.attachFilamentHistory ? "checked" : ""}>
+              フィラメント更新履歴を添付する（<code>spools[]</code> 一覧＋各機 <code>filamentHistory</code>）
+            </label>
+            <div style="font-size:11px;color:#999;margin:0 0 6px 22px;">
+              ※画面上のフィラメント一覧（ID/#NNN/名前/素材/色/残量/消費ログ）と、各機の装着・取外し履歴＋切れ/交換イベントを付与します。消費量はジョブ履歴と重複するため含めません。
+            </div>
+
             <div style="margin:8px 0 4px;font-weight:bold;font-size:12px;">対象機器（機器エイリアス / 連携ON-OFF / カメラ添付）</div>
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
               <thead><tr style="color:#667;text-align:left;">
@@ -1158,6 +1281,7 @@ export class ItemKeeperIntegration {
     this.settings.attachState = !!q('[data-role="ik-attach-state"]')?.checked;
     this.settings.attachFiles = !!q('[data-role="ik-attach-files"]')?.checked;
     this.settings.attachFileThumbs = !!q('[data-role="ik-attach-thumbs"]')?.checked;
+    this.settings.attachFilamentHistory = !!q('[data-role="ik-attach-filhistory"]')?.checked;
     this.settings.historyScope = q('[data-role="ik-scope"]')?.value || "all";
     this.settings.onStart = !!q('[data-role="ik-onstart"]')?.checked;
     this.settings.onFinish = !!q('[data-role="ik-onfinish"]')?.checked;
