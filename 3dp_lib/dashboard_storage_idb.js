@@ -37,10 +37,51 @@
 // 定数
 // ==============================
 
-const DB_NAME    = "3dpmon";
+/**
+ * 既定の IndexedDB 名。
+ *
+ * 親(Electron file://) と standalone(?relay=standalone) は同一オリジン上では
+ * このDBを使う(file:// と http:// はブラウザの origin 規則で自動分離されるため、
+ * 同名でも互いの DB は物理的に別)。一方、同一ブラウザ内の readonly/satellite は
+ * クエリ違いでオリジンが同じため、setIdbDbName() で別名("3dpmon-relay")へ
+ * 切り替えてリレー子の永続データを standalone と物理分離する。
+ *
+ * 旧仕様では DB 名固定 ("3dpmon") のため、ブラウザで readonly を一度開くと
+ * 親由来の relay-snapshot で上書きされた monitorData が autoSave で同じDBに
+ * 書き戻され、後で ?relay=standalone を開くと standalone の永続データが
+ * 物理的に破壊される問題があった(v2.2.1031 spec §6.7 の前提が崩れていた)。
+ *
+ * @constant {string}
+ */
+const DEFAULT_DB_NAME = "3dpmon";
+
+/** 現在の IndexedDB 名 (setIdbDbName で初期化前に切替可能) */
+let _dbName = DEFAULT_DB_NAME;
+
 const DB_VERSION = 1;
 const STORE_SHARED   = "shared";
 const STORE_MACHINES = "machines";
+
+/**
+ * IndexedDB の DB 名を設定する。**必ず {@link initIdb} の前に呼ぶこと**。
+ *
+ * リレー子(readonly/satellite)では "3dpmon-relay" 等を渡して standalone と
+ * 物理分離する。空文字/undefined を渡すと既定値("3dpmon")へ戻る。
+ *
+ * @param {string} name - DB 名(例: "3dpmon" / "3dpmon-relay")
+ * @returns {void}
+ */
+export function setIdbDbName(name) {
+  _dbName = (typeof name === "string" && name.length > 0) ? name : DEFAULT_DB_NAME;
+}
+
+/**
+ * 現在設定されている IndexedDB 名を返す。
+ * @returns {string}
+ */
+export function getIdbDbName() {
+  return _dbName;
+}
 
 // ★ LS_KEY ("3dp-monitor_1.400") は v2.2.0 で削除。マイグレーション不要。
 
@@ -303,7 +344,7 @@ export async function importAllIdb(data) {
  */
 function _openDatabase() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(_dbName, DB_VERSION);
 
     req.onupgradeneeded = (event) => {
       const db = event.target.result;
