@@ -367,13 +367,27 @@ X-IK-Signature:  sha256={hex}            // HMAC-SHA256(secret, `${X-IK-Timestam
 ### 6.6 3dpmon が必ず載せるべきフィールド
 解析は ItemKeeper 側が行うが、それには **`deviceKey`/`device`、`job.filename`+`job.filemd5`、`filaments[].{material,colorHex,spoolId,usedMm}`** が要。**欠かさず載せる**こと。
 
-### 6.7 リレー親子での設定同期（v2.2.1031〜）
-ItemKeeper 設定（`appSettings.itemkeeper`）は **親（デスクトップ `file://`）が唯一の権威**として保持・送信する。ブラウザ画面はオリジンが異なり IndexedDB が分離するため、以下で親子の表示と送信元を一致させる。
+### 6.7 リレー親子での設定同期（v2.2.1031〜、v2.2.1032 で永続層を物理分離）
+ItemKeeper 設定（`appSettings.itemkeeper`）は **親（デスクトップ `file://`）が唯一の権威**として保持・送信する。以下で親子の表示と送信元を一致させる。
 - **親 → 子ミラー**: relay-snapshot / relay-delta に `appSettings.itemkeeper` を含める。子は受信して `monitorData.appSettings.itemkeeper` を置換し `itemKeeperIntegration.loadSettings()` で自身を再構築する。
 - **readonly（閲覧専用）**: 設定欄は無効化＝読み取りミラー。
 - **satellite（操作）**: 編集可。保存は新 RPC `relay-settings`（`{type:"relay-settings", payload:{itemkeeper}}`）で親へ委譲。親が `applyRemoteSettings()` で確定保存し、次回 delta で全子へ還流する（往復同期）。readonly からの `relay-settings` はサーバ側ガードで拒否。
 - **送信元**: ItemKeeper への POST・定期送信は **親とスタンドアロンのみ**。リレー子（readonly/satellite）は `window._3dpmonRelayChild` ガードで送信しない＝重複報告を防ぐ。
 - **standalone（`?relay=standalone`）**: リレー子ではなく独立クライアント。自身の設定を独自に保持・送信する（同期対象外）。
+
+#### 6.7.1 ストレージ分離（v2.2.1032〜）
+親(`file://`) と ブラウザ(`http://host:5313`) のオリジン差で IndexedDB は自動分離されるが、**同一ブラウザ内の `?relay=standalone` と既定の readonly はクエリ違いだけで origin が同じため IDB / localStorage を共有してしまう**（v2.2.1031 までの暗黙の前提崩れ）。readonly が relay-snapshot で受けた親由来 `monitorData` を autoSave で同一DBへ書き戻すと、後から開く standalone の永続データが破壊される。
+
+これを防ぐため、リレー子（readonly/satellite）モードで起動した時のみ、ストレージ初期化前に名前空間を `"relay"` へ切り替える（`setStorageNamespace("relay")` + `setPanelLayoutNamespace("relay")`）。具体的には:
+
+| 対象 | 親 / standalone | リレー子(readonly/satellite) |
+|---|---|---|
+| IndexedDB DB 名 | `"3dpmon"` | `"3dpmon-relay"` |
+| localStorage 全体キー | `"3dpmon-global"` | `"3dpmon-relay-global"` |
+| localStorage host 接頭辞 | `"3dpmon-host-"` | `"3dpmon-relay-host-"` |
+| パネルレイアウト LS キー | `"3dpmon_panel_layout_v5"` | `"3dpmon_panel_layout_v5_relay"` |
+
+これにより同一ブラウザ内の standalone とリレー子は **物理的に別DB／別LSキー** に書き出されるため、互いに永続データを上書きしない。親(Electron `file://`) と standalone(`http://`) は従来通り origin 差で自動分離される（両方 `"3dpmon"` のままで後方互換）。
 
 ---
 
