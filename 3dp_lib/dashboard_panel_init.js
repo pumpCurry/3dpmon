@@ -366,6 +366,9 @@ function initFilamentPanel(body, hostname) {
     /* per-host Map で管理（グローバル window.filamentPreview は廃止） */
     if (!window._filamentPreviews) window._filamentPreviews = new Map();
     window._filamentPreviews.set(hostname, preview);
+    // ★ P1-6: destroy 時に破棄できるよう body に保持（マルチプリンタでパネル再生成の
+    //   繰り返しによる preview / ResizeObserver / detached DOM リークを防ぐ）。
+    body._filamentPreview = preview;
   } catch (e) {
     console.warn("[panel-init] filament preview 生成エラー:", e);
   }
@@ -381,6 +384,8 @@ function initFilamentPanel(body, hostname) {
         }
       });
       ro.observe(area);
+      // ★ P1-6: destroy 時に disconnect するため body に保持
+      body._filamentResizeObserver = ro;
       // 初回サイズ適用
       requestAnimationFrame(() => {
         const rect = area.getBoundingClientRect();
@@ -878,6 +883,16 @@ export function registerAllPanelInits() {
       clearInterval(body._productionTimer);
       body._productionTimer = null;
     }
+  });
+  // ★ P1-6: フィラメントパネルの ResizeObserver / preview / レジストリ参照を破棄。
+  //   マルチプリンタでパネル削除・再生成を繰り返すと ro/preview/detached DOM が
+  //   リークするため、destroy で確実に解放する。
+  registerPanelDestroy("filament", (body, hostname) => {
+    try { body._filamentResizeObserver?.disconnect?.(); } catch { /* 無視 */ }
+    body._filamentResizeObserver = null;
+    try { body._filamentPreview?.destroy?.(); } catch { /* 無視 */ }
+    body._filamentPreview = null;
+    try { window._filamentPreviews?.delete?.(hostname); } catch { /* 無視 */ }
   });
 }
 
