@@ -1854,6 +1854,9 @@ body.panel-mode .notification-container {
 .col-finish .result-active { color: var(--color-info); font-weight: bold; }
 /* 印刷中/未確定（完了未報告・再起動直後の過渡状態）: 成否を確定せず中立のグレー表示 */
 .col-result .result-pending, .col-finish .result-pending { color: var(--color-text-secondary, #94a3b8); }
+/* 中止確定（非最新のまま放置＝後続の印刷が開始済で継続されていない）: 成否は不明のまま、
+   失敗(赤)とは区別したくすんだオレンジで「もう続いていない」ことを明示 */
+.col-result .result-aborted, .col-finish .result-aborted { color: var(--color-warning, #d97706); font-weight: bold; }
 /* 印刷中の行を薄い黄色で強調 */
 .history-row-printing { background: rgba(250, 204, 21, 0.08) !important; }
 

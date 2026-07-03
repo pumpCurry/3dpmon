@@ -321,6 +321,11 @@ export class ItemKeeperIntegration {
       // ★ J: 観測フラグ＋区間時間（取れなかった軸は null）＋実機ネイティブID。
       //   observed: "live"(実測) / "partial"(途中参加) / "history"(履歴のみ=取れなかった)
       observed: job.observed || "history",
+      // ★ 中止確定フラグ（非破壊・additive）: 未確定(state:"printing"/result:null)のまま
+      //   放置され、より新しい印刷が後続で始まったため継続されていないと内部判定した
+      //   ジョブに true。printfinish/state は変えない（成否は依然「不明」）ので後方互換。
+      //   受信側は state:"printing" かつ discontinued:true を「中止(継続なし)」として扱える。
+      ...(job.discontinued === true && { discontinued: true }),
       preparationSec:     job.preparationTime     != null ? Number(job.preparationTime)     : null,
       firstLayerCheckSec: job.firstLayerCheckTime  != null ? Number(job.firstLayerCheckTime)  : null,
       pausedSec:          job.pauseTime            != null ? Number(job.pauseTime)            : null,

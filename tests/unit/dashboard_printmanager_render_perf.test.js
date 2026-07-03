@@ -207,6 +207,32 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     aggMod.getCurrentPrintID.mockReturnValue(0);
     delete monitorData.machines[HOST];
   });
+
+  it("(E) 中止確定(discontinued)の行は ⏹(result-aborted)＋ツールチップで描画される", () => {
+    aggMod.getCurrentPrintID.mockReturnValue(0); // 稼働中ジョブなし
+    // discontinued=true / 未確定(finishTime なし=usagetime0) の非カレント行
+    renderHistoryTable(
+      [{ id: 1234, filename: "/x/aborted.gcode", starttime: 1234, usagetime: 0,
+         printfinish: null, discontinued: true }],
+      "http://127.0.0.1", HOST
+    );
+    const span = table.querySelector("tbody tr.history-row .col-finish span");
+    expect(span?.className).toBe("result-aborted");
+    expect(span?.textContent).toBe("⏹");
+    expect(span?.getAttribute("title"), "中止理由のツールチップ").toContain("中止");
+  });
+
+  it("(E) discontinued でない未確定行は従来どおり …(result-pending)", () => {
+    aggMod.getCurrentPrintID.mockReturnValue(0);
+    renderHistoryTable(
+      [{ id: 1234, filename: "/x/pending.gcode", starttime: 1234, usagetime: 0, printfinish: null }],
+      "http://127.0.0.1", HOST
+    );
+    const span = table.querySelector("tbody tr.history-row .col-finish span");
+    expect(span?.className).toBe("result-pending");
+    expect(span?.textContent).toBe("…");
+    expect(span?.hasAttribute("title"), "通常未確定にはツールチップを付けない").toBe(false);
+  });
 });
 
 describe("renderFileList — 描画律速対策（lazy画像＋イベント委譲）", () => {
