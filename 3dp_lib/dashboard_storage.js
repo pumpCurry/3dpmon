@@ -41,6 +41,7 @@ import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { initLedgerAnchors } from "./dashboard_filament_ledger.js";
+import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -278,10 +279,10 @@ export async function importAllData(data) {
   // ── machines: 印刷履歴をマージ ──
   // ★ PLACEHOLDER とIPキー（hostnameが解決済みなら不要）を除外
   if (data.machines && typeof data.machines === "object") {
-    const _isIpLike = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+    const _isIpLike = (s) => isIpLiteral(s);
     const importTargets = data.appSettings?.connectionTargets || [];
     const resolvedHosts = new Set(importTargets.filter(t => t.hostname).map(t => t.hostname));
-    const resolvedIps = new Set(importTargets.filter(t => t.hostname).map(t => t.dest?.split(":")[0]));
+    const resolvedIps = new Set(importTargets.filter(t => t.hostname).map(t => extractHost(t.dest)));
 
     for (const [host, machineData] of Object.entries(data.machines)) {
       // PLACEHOLDER は常にスキップ
@@ -319,16 +320,16 @@ export async function importAllData(data) {
       (monitorData.appSettings.connectionTargets || []).map(t => t.dest)
     );
     const existingIps = new Set(
-      (monitorData.appSettings.connectionTargets || []).map(t => t.dest?.split(":")[0])
+      (monitorData.appSettings.connectionTargets || []).map(t => extractHost(t.dest))
     );
     for (const t of data.appSettings.connectionTargets) {
       if (!t.dest) continue;
       // ポートなしエントリはスキップ（ポート付きが既にあるか追加される）
-      if (!t.dest.includes(":")) continue;
+      if (!parseDest(t.dest).hasPort) continue;
       // 同一 dest は重複スキップ
       if (existingDests.has(t.dest)) continue;
       // 同一 IP で既存エントリがあればスキップ（hostname違いのゴミ防止）
-      const ip = t.dest.split(":")[0];
+      const ip = extractHost(t.dest);
       if (existingIps.has(ip) && !t.hostname) continue;
       monitorData.appSettings.connectionTargets.push(t);
       existingDests.add(t.dest);
@@ -990,7 +991,7 @@ function _restoreFromData(shared, machines) {
     const ipToHostname = new Map();
     for (const t of targets) {
       if (t.hostname && t.dest) {
-        const ip = t.dest.split(":")[0];
+        const ip = extractHost(t.dest);
         ipToHostname.set(ip, t.hostname);
       }
     }

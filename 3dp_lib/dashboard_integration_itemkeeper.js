@@ -28,6 +28,7 @@
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { getSpoolById, getMaterialDensity, weightFromLength, formatSpoolDisplayId } from "./dashboard_spool.js";
+import { extractHost } from "./dashboard_target_identity.js";
 import { attributedUsed, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
@@ -362,7 +363,7 @@ export class ItemKeeperIntegration {
         device: {
           alias: t.ikDeviceAlias || t.label || host || "",
           hostname: host,
-          ip: String(t.dest || "").split(":")[0] || "",
+          ip: extractHost(t.dest),
           mac: t.macAddress || "",
           model: machine?.storedData?.model?.rawValue || ""
         },

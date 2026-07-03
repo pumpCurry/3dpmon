@@ -43,6 +43,7 @@
 import { initializePanel, destroyPanel } from "./dashboard_panel_init.js";
 import { monitorData, PLACEHOLDER_HOSTNAME, markAllKeysDirty } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { extractHost } from "./dashboard_target_identity.js";
 import { registerFieldElements, unregisterFieldElements } from "./dashboard_ui.js";
 
 /* ─── localStorage キー ─── */
@@ -682,7 +683,7 @@ export function restoreLayout() {
       if (t.hostname) validHosts.add(t.hostname);
       if (t.dest) {
         // "IP:PORT" からIPのみ抽出して追加（パネルの host はポートなし）
-        const ip = t.dest.split(":")[0];
+        const ip = extractHost(t.dest);
         if (ip) validHosts.add(ip);
       }
     }
@@ -1124,10 +1125,10 @@ export function applyLayoutTemplate(templateId) {
 
   // connectionTargets に hostname がないエントリは dest の IP を使用
   // ★ ただし同じIPで hostname 付きエントリが別にあればスキップ（IP重複防止）
-  const resolvedIps = new Set(targets.filter(t => t.hostname).map(t => t.dest.split(":")[0]));
+  const resolvedIps = new Set(targets.filter(t => t.hostname).map(t => extractHost(t.dest)));
   for (const t of targets) {
     if (!t.hostname && t.dest) {
-      const ip = t.dest.split(":")[0];
+      const ip = extractHost(t.dest);
       if (ip && !allKnownHosts.includes(ip) && !resolvedIps.has(ip)) {
         allKnownHosts.push(ip);
       }
@@ -1308,7 +1309,7 @@ function _getHostConfig(hostname) {
   const targets = monitorData.appSettings.connectionTargets || [];
   /* ホスト名 or IP で接続先設定を検索 */
   for (const t of targets) {
-    const ip = t.dest?.split(":")[0];
+    const ip = extractHost(t.dest);
     if (t.dest === hostname || ip === hostname ||
         t.hostname === hostname) {
       result.color = t.color || "";
