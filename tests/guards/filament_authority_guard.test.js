@@ -92,4 +92,22 @@ describe("フィラメント権威残量 anti-pattern 静的ガード (3dp_lib)"
       ).toEqual([]);
     });
   }
+
+  // ★ P0-9: aggregator は runout 復帰で自動 inferred 投入しない。
+  //   addInferredSpool の呼び出しは dashboard_spool.js（定義側）等に限り、
+  //   dashboard_aggregator.js からは呼ばない（センサー復帰＝交換確定にしない）。
+  it("dashboard_aggregator.js が addInferredSpool を呼び出さない（P0-9 runout自動投入停止）", () => {
+    const f = join(LIB_DIR, "dashboard_aggregator.js");
+    const stripped = stripCommentsKeepLines(readFileSync(f, "utf8"));
+    const offenders = [];
+    stripped.split("\n").forEach((ln, idx) => {
+      if (/addInferredSpool\s*\(/.test(ln)) {
+        offenders.push(`3dp_lib/dashboard_aggregator.js:${idx + 1}  ${ln.trim().slice(0, 90)}`);
+      }
+    });
+    expect(
+      offenders,
+      `aggregator からの addInferredSpool 呼び出しを検出。runout 復帰は pendingResolution＋通知に留めること:\n${offenders.join("\n")}`
+    ).toEqual([]);
+  });
 });
