@@ -103,11 +103,12 @@ export function bootPanelSystem() {
   gridContainer.id = "panel-grid";
 
   /* トップメニューバーの直後に挿入 */
+  // ★ 2.9: 旧 `titleBar` fallback を削除。titleBar は未定義変数で、topMenuBar が無い
+  //   経路に入ると ReferenceError になる死んだ分岐だった（旧UIの残骸）。
+  //   現行 UI は top-menu-bar が唯一の基準。未検出時は body 末尾へ append する。
   const topMenuBar = document.getElementById("top-menu-bar");
-  if (topMenuBar && topMenuBar.nextSibling) {
+  if (topMenuBar && topMenuBar.parentNode) {
     topMenuBar.parentNode.insertBefore(gridContainer, topMenuBar.nextSibling);
-  } else if (titleBar && titleBar.nextSibling) {
-    titleBar.parentNode.insertBefore(gridContainer, titleBar.nextSibling);
   } else {
     document.body.appendChild(gridContainer);
   }
