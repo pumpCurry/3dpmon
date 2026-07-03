@@ -30,6 +30,7 @@
 
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { sendCommand, getHttpPort } from "./dashboard_connection.js";
+import { extractHost } from "./dashboard_target_identity.js";
 
 /** ブリッジ初期化済みフラグ */
 let _initialized = false;
@@ -260,7 +261,7 @@ export function buildCameraEndpoints(targets, defaultCameraPort = 8080) {
     const hostname = (t && t.hostname || "").trim();
     if (!hostname) continue;                       // 未解決ホストはキーにできない
     const dest = (t && t.dest || "").trim();
-    const ip = dest.split(":")[0].trim();
+    const ip = extractHost(dest);
     if (!ip) continue;                             // IP 不明は転送不可
     const port = (t && t.cameraPort) || defaultCameraPort || 8080;
     map[hostname] = { ip, port };
@@ -289,7 +290,7 @@ function _syncCameraEndpoints() {
   const map = {};
   for (const t of targets) {
     const dest = (t?.dest || "").trim();
-    const ip = dest.split(":")[0].trim();
+    const ip = extractHost(dest);
     if (!ip) continue;                              // IP 不明は転送不可
     const hostname = (t?.hostname || "").trim();
     const label = (t?.label || "").trim();

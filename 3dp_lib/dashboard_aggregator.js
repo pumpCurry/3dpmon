@@ -1612,7 +1612,10 @@ export function restoreAggregatorState(hostname) {
   // 履歴に反映して UI を即時更新する
   if (historyPersistFunc && s.prevPrintID && s.actualStartEpoch != null) {
     try {
-      historyPersistFunc(s.prevPrintID);
+      // ★ P0-8: 復元経路だけ host 欠落で historyPersistFunc(id) を呼んでおり、
+      //   マルチホストで別ホスト/既定ホストへ履歴が吸着する恐れがあった。
+      //   他の呼び出し(processData 経路)と同じく host を必ず渡す。
+      historyPersistFunc(s.prevPrintID, host);
     } catch (e) {
       console.error("historyPersistFunc error", e);
     }
