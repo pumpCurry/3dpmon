@@ -34,6 +34,7 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { getDeviceIp, getDeviceDest, getPrinterType } from "./dashboard_connection.js";
+import { extractHost } from "./dashboard_target_identity.js";
 import { pushLog }                  from "./dashboard_log_util.js";
 import { notificationManager }      from "./dashboard_notification_manager.js";
 
@@ -257,7 +258,7 @@ export function startCameraStream(hostname) {
     entry.attempts = 0;
     entry.cameraPort = camPort;
     _cancelTimers(entry);
-    _connectStream(entry, ip.split(":")[0]);
+    _connectStream(entry, extractHost(ip));
     return;
   }
 
@@ -272,7 +273,7 @@ export function startCameraStream(hostname) {
   entry.attempts = 0;
   entry.cameraPort = port;
   _cancelTimers(entry);
-  _connectStream(entry, ip.split(":")[0]);
+  _connectStream(entry, extractHost(ip));
 }
 
 /**
