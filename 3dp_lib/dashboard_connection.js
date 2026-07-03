@@ -64,6 +64,7 @@ import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsFo
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
+import { parseDest, normalizeDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -165,15 +166,34 @@ function _setConnectionTargetHostname(dest, hostname) {
   }
 
   if (t.hostname && t.hostname !== hostname) {
-    // ★ 同じ dest(IP) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）
-    // ★ 既知の制限: 同一 hostname の複数機器が存在する場合、区別不可能。
-    //   ARP で MAC アドレスが取得できれば _resolveAndSaveMac で検出されるが、
-    //   ブラウザ版や ARP 非対応環境ではコンタミネーションを完全には防げない。
-    console.warn(`[_setConnectionTargetHostname] IP再利用検出: ${dest} の hostname が ${t.hostname} → ${hostname} に変化`);
+    // ★ 同じ dest(IP:PORT) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）。
+    //   【P0-3 止血】旧機体の label/color/ports が新機体へ寄る事故を防ぐため、
+    //   hostname を即上書きしない。identityStatus="ip-reuse-conflict" を立てて記録し、
+    //   ユーザーへ通知するだけに留める（解消UIは後続P1）。conflict target は
+    //   connectAllSavedTargets で自動接続対象から除外される。
+    //   ※ MAC 変化による強い同一性判定（Electron）はP1で追加予定。現状は全モード共通で
+    //     hostname 変化＝conflict の安全側に倒す。
+    console.warn(`[_setConnectionTargetHostname] IP再利用conflict: ${dest} の hostname ${t.hostname} → ${hostname}（即上書きせず保留）`);
+    t.identityStatus = "ip-reuse-conflict";
+    t.conflict = {
+      previousHostname: t.hostname,
+      reportedHostname: hostname,
+      dest,
+      previousMac: t.macAddress || null
+    };
+    saveUnifiedStorage(true);
+    pushLog(
+      `⚠ 接続先 ${dest} で機体が入れ替わった可能性（${t.hostname} → ${hostname}）。設定を保護し自動接続を保留しました。接続先設定を確認してください。`,
+      "warn", true, hostname
+    );
+    try { showAlert(`接続先 ${dest} の機体同一性に不一致（${t.hostname} → ${hostname}）。設定を保護しました。`, "warn"); } catch { /* noop */ }
+    try { updatePrinterListUI(); } catch { /* noop */ }
+    return;
   }
 
-  // hostname を設定/更新
+  // hostname を設定/更新（初回確定 or 同一hostname）。conflict は上で return 済み。
   t.hostname = hostname;
+  if (t.identityStatus === "ip-reuse-conflict") delete t.identityStatus;
   saveUnifiedStorage();
   // MAC アドレスを非同期で解決（Electron版のみ）
   _resolveAndSaveMac(dest, hostname);
@@ -244,16 +264,8 @@ function _escAttr(s) {
 }
 
 function _extractIp(dest) {
-  if (!dest) return "";
-  // IPv6 bracket notation: [addr]:port
-  const v6Match = dest.match(/^\[([^\]]+)\]/);
-  if (v6Match) return v6Match[1];
-  // IPv4 or hostname: addr:port — 最後のコロン以降がポート
-  const lastColon = dest.lastIndexOf(":");
-  // IPv6 without brackets (multiple colons): return as-is
-  if ((dest.match(/:/g) || []).length > 1) return dest;
-  // IPv4 or hostname:port
-  return lastColon > 0 ? dest.substring(0, lastColon) : dest;
+  // ★ 宛先解析は dashboard_target_identity.parseDest に一本化（IPv4/IPv6/hostname:port）。
+  return extractHost(dest);
 }
 
 function _findConnectionTarget(destOrHost) {
@@ -263,7 +275,7 @@ function _findConnectionTarget(destOrHost) {
   const exact = targets.find(t => t.dest === destOrHost);
   if (exact) return exact;
   /* 2) ポート補完で再検索（"192.168.54.151" → "192.168.54.151:9999"） */
-  if (!destOrHost.includes(":")) {
+  if (!parseDest(destOrHost).hasPort) {
     const withPort = targets.find(t => t.dest === destOrHost + ":" + DEFAULT_WS_PORT);
     if (withPort) return withPort;
   }
@@ -312,7 +324,7 @@ export function connectAllSavedTargets() {
   const destSet = new Set(targets.map(t => t.dest));
   const toRemove = [];
   for (const t of targets) {
-    if (!t.dest.includes(":") || t.dest.split(":").length === 1) {
+    if (!parseDest(t.dest).hasPort) {
       // ポートなし → ポート付きが存在すれば不要
       const withPort = t.dest + ":" + DEFAULT_WS_PORT;
       if (destSet.has(withPort)) {
@@ -329,14 +341,20 @@ export function connectAllSavedTargets() {
     saveUnifiedStorage(true);
   }
 
-  /* connectionTargets を唯一の接続先リストとして使用 */
+  /* connectionTargets を唯一の接続先リストとして使用。
+     ★ P0-1 dedupe は IP 単位ではなく `printerType|normalizedDest` 単位。
+        これにより「同一IP・別ポート」「K1/Moonraker 混在」を両方とも接続候補にできる
+        （旧: IP だけで捨てると同一IP別ポートの片方が落ちていた）。
+     ★ P0-3 ip-reuse-conflict の target は自動接続対象から除外（保留）。 */
   for (const t of targets) {
-    const dest = t.dest.includes(":") ? t.dest : t.dest + ":" + DEFAULT_WS_PORT;
-    const ip = _extractIp(dest);
-    if (!connected.has(ip)) {
-      connected.add(ip);
-      connectWs(dest);
-    }
+    if (t.identityStatus === "ip-reuse-conflict") continue;
+    const defaultPort = t.printerType === "moonraker" ? 80 : DEFAULT_WS_PORT;
+    const parsed = normalizeDest(t.dest, { defaultPort });
+    if (!parsed.ok) continue;
+    const key = `${t.printerType || "creality-k1"}|${parsed.normalizedDest}`;
+    if (connected.has(key)) continue;
+    connected.add(key);
+    connectWs(parsed.normalizedDest);
   }
 }
 
@@ -507,7 +525,9 @@ export function updateConnectionHost(oldHost, newHost) {
      IP → ホスト名 の遷移（初回接続時）のみ移行する。
      ホスト名 → ホスト名 の遷移（IP再利用で別機器が応答）は
      移行せず、旧データを保護して新キーを新規作成する。 */
-  const _isIpLike = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+  // ★ P0-4: IPv4 だけでなく IPv6 リテラルも「一時到達先キー」として hostname へ移行する。
+  //   旧実装は IPv4 regex のみで、IPv6 接続時に IP 一時キーが machines に残留していた。
+  const _isIpLike = (s) => isIpLiteral(s);
   if (monitorData.machines[oldHost] && oldHost !== newHost) {
     if (_isIpLike(oldHost)) {
       // IP → ホスト名: 正常な初回接続 → machines データを移行
@@ -808,7 +828,9 @@ export function connectWs(hostOrDest) {
 
   let dest = hostOrDest || "";
   if (!dest) return;
-  if (!dest.includes(":")) dest += ":" + DEFAULT_WS_PORT;
+  // ★ ポート補完・正規化は normalizeDest に一本化（IPv6 は角括弧化）。
+  const _n = normalizeDest(dest, { defaultPort: DEFAULT_WS_PORT });
+  if (_n.ok && _n.normalizedDest) dest = _n.normalizedDest;
   const ip = _extractIp(dest);
 
   /* 再接続時に正しいホスト名キーを使うため、connectionTargets に保存済みの
@@ -1051,10 +1073,10 @@ function connectMoonraker(dest, host) {
 export function connectWithType(dest, printerType = "creality-k1") {
   let d = (dest || "").trim();
   if (!d) return;
-  /* ポート未指定なら種別ごとの既定ポートを補完（target.dest と connectWs の dest を一致させ重複登録を防ぐ） */
-  if (!d.includes(":")) {
-    d += (printerType === "moonraker") ? ":80" : ":" + DEFAULT_WS_PORT;
-  }
+  /* ポート未指定なら種別ごとの既定ポートを補完（target.dest と connectWs の dest を一致させ重複登録を防ぐ）。
+     ★ 正規化は normalizeDest に一本化（IPv6 角括弧化・素朴 split 排除）。 */
+  const _dn = normalizeDest(d, { defaultPort: printerType === "moonraker" ? 80 : DEFAULT_WS_PORT });
+  if (_dn.ok && _dn.normalizedDest) d = _dn.normalizedDest;
   /* connectionTargets に printerType を保存（connectWs 内の分岐判定に使用） */
   const targets = monitorData.appSettings.connectionTargets ??= [];
   let t = targets.find(x => x.dest === d);
