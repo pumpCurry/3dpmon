@@ -179,12 +179,15 @@ const persistKeys = [
 ];
 
 // 印刷再開用に保存したいスプール関連キー
+// ★ P0-5: remainingLengthMm は「停止前のライブ途中値」であり再起動後の権威値ではない。
+//   resume に残すとアプリ停止中に進んだ印刷を無視して古い残量が復活する。
+//   残量は printStore.history + mountHistory から reconcileSpool で導出するため、
+//   resume では保存も復元もしない。既存 pd_*_remainingLengthMm は restore 時に掃除する。
 const spoolKeys = [
   "currentSpoolId",
   "currentPrintID",
   "currentJobStartLength",
-  "currentJobExpectedLength",
-  "remainingLengthMm"
+  "currentJobExpectedLength"
 ];
 
 /**
@@ -249,13 +252,14 @@ export function restorePrintResume(hostname, currentPrintId = null) {
           case 'currentJobExpectedLength':
             spool.currentJobExpectedLength = val;
             break;
-          case 'remainingLengthMm':
-            spool.remainingLengthMm = val;
-            break;
         }
       } catch (e) { console.debug("[restorePrintResume] スプール復元エラー:", e.message); }
     });
   }
+
+  // ★ P0-5: 旧バージョンが保存した pd_*_remainingLengthMm は権威値ではないため無視・削除する。
+  //   （残量は reconcileSpool が履歴+装着区間から導出する）
+  try { localStorage.removeItem(`pd_${hostname}_remainingLengthMm`); } catch { /* noop */ }
 }
 
 /**
@@ -294,8 +298,6 @@ export function persistPrintResume(hostname) {
             return spool.currentJobStartLength;
           case 'currentJobExpectedLength':
             return spool.currentJobExpectedLength;
-          case 'remainingLengthMm':
-            return spool.remainingLengthMm;
           default:
             return null;
         }

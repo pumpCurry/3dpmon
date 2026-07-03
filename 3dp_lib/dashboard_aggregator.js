@@ -1328,11 +1328,13 @@ export function aggregatorUpdate() {
           s.prevUsageProgress = prog;
         }
         s.accumulatedUsedMaterial += delta;
-        remain = spool.currentJobStartLength - s.accumulatedUsedMaterial;
-        // 印刷途中にページを更新しても残量が巻き戻らないよう、
-        // 計算値をスプールオブジェクトへ反映しておく
-        spool.remainingLengthMm = Math.max(0, remain);
-        spool.updatedAt = _now;  // ★ C1: 時系列判定用タイムスタンプ更新
+        // ★ P0-6: 印刷中のライブ残量は「表示用」。権威残量 spool.remainingLengthMm へは
+        //   書き戻さない（runout判定/resume/import/restore の入力になり誤判定が増幅するため）。
+        //   ライブ値は下の _set("filamentRemainingMm", remain) で storedData にだけ出す。
+        //   ページ更新時の巻き戻りは storedData(永続) の filamentRemainingMm が担保する。
+        //   権威残量は完了時に finalizeFilamentUsage→reconcileSpool でのみ更新する。
+        //   （禁止）spool.remainingLengthMm = Math.max(0, remain); spool.updatedAt = _now;
+        remain = Math.max(0, spool.currentJobStartLength - s.accumulatedUsedMaterial);
       } else if (
         spool.currentJobStartLength != null &&
         (Number(machine?.runtimeData?.state) ===
