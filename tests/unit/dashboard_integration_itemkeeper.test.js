@@ -86,7 +86,8 @@ function job(o) {
     filamentId: o.filamentId,
     filamentType: o.filamentType,
     filamentColor: o.filamentColor,
-    filamentInfo: o.filamentInfo ?? []
+    filamentInfo: o.filamentInfo ?? [],
+    ...(o.discontinued !== undefined && { discontinued: o.discontinued })
   };
 }
 
@@ -136,6 +137,17 @@ describe("buildJob", () => {
   it("filename 未指定なら rawFilename の basename", () => {
     const j = ik.buildJob({ id: 1, rawFilename: "/card/gcodes/dragon.gcode" });
     expect(j.filename).toBe("dragon.gcode");
+  });
+  it("★中止確定(discontinued=true)を additive で送る・state は printing のまま(後方互換)", () => {
+    const j = ik.buildJob(job({ id: 1700000300, finishTime: null, printfinish: null, discontinued: true }));
+    expect(j.discontinued).toBe(true);
+    expect(j.state, "state は printing のまま(破壊しない)").toBe("printing");
+    expect(j.result).toBeNull();
+    expect(j.printfinish).toBeNull();
+  });
+  it("★中止でないジョブには discontinued キーを付けない(余計な field を増やさない)", () => {
+    const j = ik.buildJob(job({ id: 1700000400, finishTime: null, printfinish: null }));
+    expect("discontinued" in j).toBe(false);
   });
 });
 

@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1120 (PR #385)
+* @version 1.390.1121 (PR #385)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-06-17 20:20:00
+* @lastModified 2026-06-23 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -805,6 +805,8 @@ export function jobsToRaw(jobs) {
         //   （K1 履歴再取得の早すぎる result / マージ復元によるストアの誤確定を描画側で吸収）。
         //   完了(finishTime 付与)後に初めて ✔/✗ を表示する。
         printfinish:   finishEpoch ? (job.printfinish ?? null) : null,
+        // ★ 中止確定フラグ（非破壊）。printfinish は触らず表示のみ「⏹」へ切替える。
+        ...(job.discontinued === true && { discontinued: true }),
         filemd5:       job.filemd5 ?? "",
       ...(job.videoUrl !== undefined && { videoUrl: job.videoUrl }),
       ...(job.preparationTime      !== undefined && { preparationTime:      job.preparationTime }),
@@ -1314,6 +1316,30 @@ export function updateHistoryList(
     if (j.finishTime == null && j.printfinish != null) j.printfinish = null;
   });
 
+  // ★ 中止検知（非破壊・自己修復）: 「未確定(printfinish==null/finishTime なし)」のまま
+  //   放置された“非最新”ジョブ＝より大きい id（＝より新しい印刷）が後続で存在する以上、
+  //   そのジョブはもう継続されていない（中断/電源断/再起動等で完了報告が来なかった）。
+  //   printfinish を 0(失敗) へ書き換えると統計を汚染し復元不能になるため破壊的修正は行わず、
+  //   別フラグ discontinued=true を立てて「継続されていない」ことだけを内部データへ明示する。
+  //   成否は printfinish=null のまま＝stats 集計対象外を維持（依然「不明」）。
+  //   完了報告が後から届けば finishTime/printfinish が入り isPending=false となり、
+  //   次回マージで discontinued は自動解除される（自己修復）。
+  //   ※ 最新(=id 最大)ジョブ自身と、currentPrintID 一致の稼働中ジョブは保護対象（中止にしない）。
+  const curId    = getCurrentPrintID(host);
+  const newestId = jobs.reduce((m, j) => Math.max(m, Number(j.id) || 0), 0);
+  jobs.forEach(j => {
+    const isPending = j.printfinish == null && j.finishTime == null;
+    const hasNewer  = (Number(j.id) || 0) < newestId;
+    const isCurrent = curId != null && String(j.id) === String(curId);
+    if (isPending && hasNewer && !isCurrent) {
+      if (j.discontinued !== true) { j.discontinued = true; merged = true; }
+    } else if (j.discontinued) {
+      // 条件を満たさなくなった（完了報告が来た / 最新になった等）→ 整合のため解除
+      delete j.discontinued;
+      merged = true;
+    }
+  });
+
   const videoMap = loadVideos(host);
   jobs.forEach(j => {
     const info = videoMap[j.id];
@@ -1424,9 +1450,10 @@ export function updateVideoList(videoArray, baseUrl, host) {
  * @param {boolean} params.isCurrentJob - 現在の印刷ジョブと一致し稼働中か
  * @param {boolean} params.isPaused     - 一時停止中か
  * @param {number|null|undefined} params.printfinish - 完了フラグ(1=成功)
+ * @param {boolean} [params.discontinued] - 非最新のまま放置され中止と確定したか
  * @returns {{finish: string, finishCls: string}}
  */
-export function resolveHistoryFinishStatus({ isCurrentJob, isPaused, printfinish }) {
+export function resolveHistoryFinishStatus({ isCurrentJob, isPaused, printfinish, discontinued }) {
   if (isCurrentJob) {
     // 唯一の「印刷中」: 現在の印刷ジョブ
     return { finish: isPaused ? "⏸" : "▶", finishCls: "result-active" };
@@ -1439,6 +1466,14 @@ export function resolveHistoryFinishStatus({ isCurrentJob, isPaused, printfinish
   //   currentPrintID と一致すれば上の isCurrentJob 分岐で ▶ になる。一致しない過渡状態は
   //   中立の「…」で表示し、stats でも除外される（printfinish==null は集計対象外）。
   if (printfinish == null) {
+    // ★ 中止確定（discontinued）: より新しいジョブが存在する＝その後に別の印刷が
+    //   始まっている以上、この未確定ジョブはもう継続されていない（中断/電源断等で
+    //   完了報告が来なかった）。無期限の「…」ではなく「⏹(中止)」で明示する。
+    //   printfinish は依然 null＝成否は「不明」のまま（stats 集計対象外を維持）で、
+    //   破壊的な ✗(失敗) 確定はしない。
+    if (discontinued) {
+      return { finish: "⏹", finishCls: "result-aborted" };
+    }
     return { finish: "…", finishCls: "result-pending" };
   }
   // 明示値で成功(1)でない（0 / -1 等）＝失敗/中断 → ✗
@@ -1528,8 +1563,13 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const { finish, finishCls } = resolveHistoryFinishStatus({
       isCurrentJob,
       isPaused: printState === PRINT_STATE_CODE.printPaused,
-      printfinish: raw.printfinish
+      printfinish: raw.printfinish,
+      discontinued: raw.discontinued === true
     });
+    // 中止確定セルには理由をツールチップで補足する
+    const finishTitle = finishCls === "result-aborted"
+      ? "中止（より新しい印刷が開始されたため継続されていません。成否は不明）"
+      : "";
     const md5short  = raw.filemd5 ? raw.filemd5.substring(0, 8) : "";
     const videoLink = raw.videoUrl
       ? `<button class="video-link icon-btn" data-url="${raw.videoUrl}" title="動画">📹</button>`
@@ -1610,7 +1650,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         <div class="time-duration">⏱ ${utime}</div>
         ${timeDetailHtml}
       </td>
-      <td data-key="printfinish" class="col-finish"><span class="${finishCls}">${finish}</span></td>
+      <td data-key="printfinish" class="col-finish"><span class="${finishCls}"${finishTitle ? ` title="${finishTitle}"` : ""}>${finish}</span></td>
       <td data-key="usagematerial" class="usage-cell" data-mm="${raw.usagematerial != null ? raw.usagematerial : ''}" data-spool="${spoolForFmt?.id || ''}">${umaterial}</td>
       <td data-key="spool" class="col-spool">${spoolHtml}</td>
       <td data-key="filemd5" class="col-extra">
