@@ -49,7 +49,8 @@ import {
   queueMachineWrite,
   flushIdb,
   exportAllIdb,
-  importAllIdb
+  importAllIdb,
+  setIdbDbName
 } from "./dashboard_storage_idb.js";
 
 let _enableStorageLog = false;
@@ -561,10 +562,49 @@ function pushLog(msg, isErr = false) {
  */
 // ★ STORAGE_KEY ("3dp-monitor_1.400") は v2.2.0 で削除。v2.1.017 LTS が最終移行ポイント。
 
-/** per-host localStorage 分割キー: グローバルデータ用 */
-const LS_KEY_GLOBAL = "3dpmon-global";
-/** per-host localStorage 分割キー: ホスト別データの接頭辞 */
-const LS_KEY_HOST_PREFIX = "3dpmon-host-";
+/**
+ * per-host localStorage 分割キー: グローバルデータ用 (既定値)。
+ *
+ * リレー子(readonly/satellite)では setStorageNamespace() により
+ * "3dpmon-relay-global" 等へ切り替わる。
+ *
+ * @type {string}
+ */
+let LS_KEY_GLOBAL = "3dpmon-global";
+
+/**
+ * per-host localStorage 分割キー: ホスト別データの接頭辞 (既定値)。
+ * setStorageNamespace() で "3dpmon-relay-host-" 等へ切り替わる。
+ *
+ * @type {string}
+ */
+let LS_KEY_HOST_PREFIX = "3dpmon-host-";
+
+/**
+ * ストレージの名前空間を設定する。**必ず {@link initStorage} の前に呼ぶこと**。
+ *
+ * 【背景】
+ * v2.2.1031 spec §6.7 は「親(file://) と ブラウザ(http://) はオリジン差で
+ * IndexedDB が分離される」前提だったが、同一ブラウザ内の readonly と
+ * ?relay=standalone はクエリ違いで origin が同じため IDB/LS を共有してしまう。
+ * その結果、readonly が relay-snapshot で受けた親由来データを autoSave で
+ * 共有ストレージに書き戻し、後から開く standalone の永続データを破壊する。
+ *
+ * 【挙動】
+ * - 既定 (空文字 / "") : DB="3dpmon", LS="3dpmon-global"/"3dpmon-host-"
+ *   → 親(file://) と standalone(http://) で従来通り。
+ * - "relay" : DB="3dpmon-relay", LS="3dpmon-relay-global"/"3dpmon-relay-host-"
+ *   → readonly/satellite 専用。同一ブラウザ内の standalone と物理分離される。
+ *
+ * @param {string} ns - 名前空間("" | "relay" 等)
+ * @returns {void}
+ */
+export function setStorageNamespace(ns) {
+  const prefix = (typeof ns === "string" && ns.length > 0) ? `3dpmon-${ns}` : "3dpmon";
+  LS_KEY_GLOBAL = `${prefix}-global`;
+  LS_KEY_HOST_PREFIX = `${prefix}-host-`;
+  setIdbDbName(prefix);
+}
 
 /** localStorage 用に保存可能なグローバルフィールド名一覧 */
 const LS_GLOBAL_FIELDS = [

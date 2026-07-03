@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.2.1032 (2026-06-23)
+## v2.2.1033 (2026-07-04)
 
 ### 印刷履歴: 放置された「印刷中」ジョブの中止確定（非破壊・新フラグ `discontinued`）
 
@@ -15,6 +15,25 @@
 
 #### テスト
 - 全739テスト緑（新規16: 判定純関数/merge統合の中止検知・保護・自己修復/実DOMでの ⏹ レンダリング/jobsToRaw 引き継ぎ/ItemKeeper additive 送信）。
+
+---
+
+## v2.2.1032 (2026-06-28)
+
+### ブラウザ standalone と リレー子(readonly/satellite)の永続データを物理分離（IndexedDB / localStorage を別名前空間化）
+
+#### 修正（不具合）
+- **`http://<host>:5313/?relay=standalone` で保存した設定が、同じブラウザで `http://<host>:5313/`（readonly 既定）を開くたびに親由来データで上書きされ、消滅する不具合を根本修正。**
+  - 原因: v2.2.1031 spec §6.7 は「親(`file://`)とブラウザ(`http://`)はオリジンが異なるため IndexedDB が分離される」前提だったが、**同一ブラウザ内の `?relay=standalone` と既定の readonly はクエリ違いだけで origin が同じ**（`http://host:5313`）。よって IDB / localStorage を共有し、readonly が relay-snapshot で受けた親由来 `monitorData` を autoSave で同じDBへ書き戻して standalone の永続データを破壊していた。
+  - 修正: リレー子（readonly/satellite）モードで起動した時のみ、ストレージ初期化前に名前空間を `"relay"` へ切り替える。
+    - IndexedDB DB 名: `"3dpmon"`（親/standalone）→ `"3dpmon-relay"`（リレー子）
+    - localStorage 全体キー: `"3dpmon-global"` / `"3dpmon-host-*"` → `"3dpmon-relay-global"` / `"3dpmon-relay-host-*"`
+    - パネルレイアウト: `"3dpmon_panel_layout_v5"` → `"3dpmon_panel_layout_v5_relay"`
+  - 結果: 同一ブラウザの standalone とリレー子は **物理的に別DB／別LSキー** に書き出されるため、もう互いに上書きしない。spec §6.7 の「standalone は独立設定を維持」が実体化される。
+  - 親(Electron `file://`) と standalone(`http://`) は従来通り origin 差で自動分離される（DB 名は両方 `"3dpmon"` のままで後方互換）。
+
+#### テスト
+- 全728テスト緑（新規4: 既定/relay切替時のDB名・LSキー検証、相互非干渉、復元時の分離）。touched 3dp_lib は eslint 0 error。spec §6.7 を改訂。
 
 ---
 

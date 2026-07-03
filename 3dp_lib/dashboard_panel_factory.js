@@ -48,12 +48,29 @@ import { registerFieldElements, unregisterFieldElements } from "./dashboard_ui.j
 /* ─── localStorage キー ─── */
 
 /**
- * レイアウト保存用の localStorage キー
- * @constant {string}
+ * レイアウト保存用の localStorage キー (既定値)。
+ *
+ * リレー子(readonly/satellite)では setPanelLayoutNamespace() で
+ * "3dpmon_panel_layout_v5_relay" 等に切り替わり、同一ブラウザ内の
+ * standalone とパネルレイアウトを物理分離する。
+ *
+ * @type {string}
  */
-const LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v5";
+let LAYOUT_STORAGE_KEY = "3dpmon_panel_layout_v5";
 // ★ v2.2.0: レイアウト v2→v3→v5 マイグレーションコードは削除。
 //   v2.1.017 LTS が最終移行ポイント。
+
+/**
+ * パネルレイアウトの localStorage キーに名前空間サフィックスを付与する。
+ * **必ず restoreLayout/saveLayout より前に呼ぶこと**。
+ *
+ * @param {string} ns - 名前空間("" | "relay" 等)
+ * @returns {void}
+ */
+export function setPanelLayoutNamespace(ns) {
+  const base = "3dpmon_panel_layout_v5";
+  LAYOUT_STORAGE_KEY = (typeof ns === "string" && ns.length > 0) ? `${base}_${ns}` : base;
+}
 
 /* ─── パネル種別定義 ─── */
 

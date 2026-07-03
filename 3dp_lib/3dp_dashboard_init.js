@@ -35,8 +35,10 @@
 import {
   initStorage,
   restoreUnifiedStorage,
-  saveUnifiedStorage
+  saveUnifiedStorage,
+  setStorageNamespace
 } from "./dashboard_storage.js";
+import { setPanelLayoutNamespace } from "./dashboard_panel_factory.js";
 import {
   PLACEHOLDER_HOSTNAME,
   monitorData,
@@ -64,6 +66,27 @@ import { initAboutDialogListener } from "./dashboard_about.js";
  */
 export async function initializeDashboard() {
   // (1) ★ currentHostname / PLACEHOLDER 設定は廃止済み。per-host 処理のみ使用。
+
+  // (1.5) ★ ストレージ初期化より前にリレーモードを判定し、名前空間を設定する。
+  //   理由: 同一ブラウザ内の readonly/satellite と ?relay=standalone はクエリ違い
+  //   だけで origin が同じ(http://host:port)ため、IndexedDB/localStorage を共有する。
+  //   旧実装はこれを「ブラウザ画面はオリジンが異なり IDB が分離する」と誤認しており、
+  //   readonly が relay-snapshot で受けた親由来データを autoSave で共有DBに書き戻し、
+  //   後で開く standalone の永続データを破壊する不具合があった(v2.2.1031 spec §6.7
+  //   の前提崩れ)。リレー子では DB を "3dpmon-relay" 等へ切り替えて物理分離する。
+  //   detectRelayMode は dashboard_client_sync.js から動的 import で取得する
+  //   (テスト環境(node)で client_sync の重い依存を読み込まない方針を維持)。
+  let _earlyRelayMode = "standalone";
+  try {
+    const { detectRelayMode } = await import("./dashboard_client_sync.js");
+    _earlyRelayMode = detectRelayMode();
+  } catch (e) {
+    console.debug("[init] detectRelayMode スキップ:", e.message);
+  }
+  const _storageNs = (_earlyRelayMode === "readonly" || _earlyRelayMode === "satellite")
+    ? "relay" : "";
+  setStorageNamespace(_storageNs);
+  setPanelLayoutNamespace(_storageNs);
 
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
