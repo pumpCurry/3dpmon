@@ -167,6 +167,11 @@ ItemKeeper は 2xx を返す。401/403 は認証失敗として UI に明示す�
   "state":          "finished",          // "printing" | "finished"
   "result":         "success",           // finished 時: success | failed | canceled（printing 時は null）
   "printfinish":    1,                   // 1=成功 0=失敗 null=未確定（3dpmon内部値）
+  "discontinued":   true,                // ★任意・true時のみ付与。state="printing"のまま未確定で放置され、
+                                         //   より新しい印刷が後続で開始されたため「もう継続されていない」と
+                                         //   3dpmonが判定したジョブ。printfinish/state/resultは変えない（成否は
+                                         //   依然不明）。受信側は state="printing" かつ discontinued=true を
+                                         //   「中止(継続なし)」として扱える。未知なら無視可（後方互換のadditive）
   "materialUsedMm": 14256,               // 確定総消費(mm)。進行中は途中値/省略可
   "filaments": [                         // 分割交換対応の配列
     {

@@ -187,6 +187,33 @@ describe('resolveHistoryFinishStatus — 印刷中は currentPrintID 一致の�
     // null は ✗ ではなく「…」(未確定) になる（誤計上防止）
     expect(results[1].finish).toBe('…');
   });
+
+  it('★中止確定: 非カレント + printfinish=null + discontinued=true は「⏹」(result-aborted)', () => {
+    // 非最新のまま放置＝後続印刷が開始済で継続されていない。…(無期限保留)ではなく中止を明示。
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: null, discontinued: true });
+    expect(r.finish).toBe('⏹');
+    expect(r.finishCls).toBe('result-aborted');
+  });
+
+  it('★中止は printfinish==null 限定: 完了(1)/失敗(0)は discontinued でも本来の成否を優先', () => {
+    // discontinued は「未確定のまま放置」のときのみ意味を持つ。成否が出ていれば本来の結果。
+    const ok = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: 1, discontinued: true });
+    expect(ok.finishCls).toBe('result-ok');
+    const ng = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: 0, discontinued: true });
+    expect(ng.finishCls).toBe('result-ng');
+  });
+
+  it('★中止より現在ジョブ優先: isCurrentJob なら discontinued でも ▶（保護対象）', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: true, isPaused: false, printfinish: null, discontinued: true });
+    expect(r.finish).toBe('▶');
+    expect(r.finishCls).toBe('result-active');
+  });
+
+  it('★回帰: discontinued 未指定（既存呼び出し）は従来どおり「…」(誤動作しない)', () => {
+    const r = resolveHistoryFinishStatus({ isCurrentJob: false, isPaused: false, printfinish: null });
+    expect(r.finish).toBe('…');
+    expect(r.finishCls).toBe('result-pending');
+  });
 });
 
 describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定しない（再起動時 誤計上防止）', () => {
@@ -236,6 +263,17 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
     expect(raw.printfinish).toBeNull();
   });
 
+  it('★jobsToRaw: discontinued=true を描画用 raw へ引き継ぐ（中止表示の前提）', () => {
+    const raw = jobsToRaw([{ id: 8, filename: 'a', startTime: new Date(1e12).toISOString(), finishTime: null, discontinued: true }])[0];
+    expect(raw.discontinued).toBe(true);
+    expect(raw.printfinish, '中止でも printfinish は破壊しない=null のまま').toBeNull();
+  });
+
+  it('★jobsToRaw: discontinued でないジョブには discontinued キーを付けない', () => {
+    const raw = jobsToRaw([{ id: 8, filename: 'a', startTime: new Date(1e12).toISOString(), finishTime: null }])[0];
+    expect('discontinued' in raw).toBe(false);
+  });
+
   it('updateHistoryList: 終了時刻なしの印刷中ジョブは履歴に0/1が来てもnullへ正規化（K1誤計上の根治・タイミング非依存）', () => {
     const HOST = 'K1Max-INPROG';
     const CURID = 1781739950;
@@ -261,6 +299,88 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
     expect(cur, '現在ジョブが保存されている').toBeTruthy();
     expect(cur.finishTime == null, '終了時刻なし(印刷中)').toBe(true);
     expect(cur.printfinish, '終了時刻なし=未完了 → null へ正規化（誤計上しない）').toBeNull();
+  });
+});
+
+// =====================================================================
+// 中止検知: 非最新のまま放置された印刷中(未確定)ジョブへ discontinued を付与
+//   - printfinish は破壊しない（null のまま＝stats 集計対象外）＝非破壊
+//   - 後続(より新しい id)が存在するジョブのみ中止扱い＝最新/稼働中は保護
+// =====================================================================
+describe('updateHistoryList — 放置印刷中ジョブの中止検知(discontinued, 非破壊)', () => {
+  beforeEach(() => {
+    _aggMock.getCurrentPrintID.mockReset();
+    _storageMock.savePrintHistory.mockClear();
+    _storageMock.loadPrintVideos.mockReturnValue([]);
+    _storageMock.loadPrintCurrent.mockReturnValue(null);
+  });
+
+  /** 共通: ホストを用意し、与えた既存履歴で updateHistoryList を一巡させて保存結果を返す */
+  function runMerge(host, oldHistory, incomingRaw = [], curId = null) {
+    _dataMock.monitorData.machines[host] = {
+      runtimeData: { state: 0 }, historyData: [], printStore: { history: [] }, storedData: {},
+    };
+    _storageMock.loadPrintHistory.mockReturnValue(oldHistory);
+    _aggMock.getCurrentPrintID.mockReturnValue(curId);
+    updateHistoryList(incomingRaw, 'http://127.0.0.1', 'print-current-container', host);
+    return _storageMock.savePrintHistory.mock.calls.at(-1)?.[0] || [];
+  }
+
+  it('★非最新の印刷中(未確定)ジョブに discontinued=true を付与（printfinish は null のまま）', () => {
+    const HOST = 'K1-ABORT-1';
+    // 旧(100): 印刷中のまま放置 / 新(200): 完了済み → 旧は継続されていない＝中止確定
+    const saved = runMerge(HOST, [
+      { id: 100, filename: '/x/old.gcode', startTime: new Date(100e3).toISOString(), finishTime: null, printfinish: null },
+      { id: 200, filename: '/x/new.gcode', startTime: new Date(200e3).toISOString(), finishTime: new Date(260e3).toISOString(), printfinish: 1 },
+    ]);
+    const old = saved.find(j => String(j.id) === '100');
+    expect(old.discontinued, '非最新の放置印刷中 → 中止確定').toBe(true);
+    expect(old.printfinish, '破壊的に 0(失敗) へ書き換えない（非破壊・null 維持）').toBeNull();
+    expect(old.finishTime, '終了時刻も捏造しない').toBeNull();
+  });
+
+  it('★最新(=id 最大)の印刷中ジョブは保護＝中止にしない（再開報告待ちの可能性）', () => {
+    const HOST = 'K1-ABORT-2';
+    const saved = runMerge(HOST, [
+      { id: 300, filename: '/x/latest.gcode', startTime: new Date(300e3).toISOString(), finishTime: null, printfinish: null },
+      { id: 100, filename: '/x/old.gcode', startTime: new Date(100e3).toISOString(), finishTime: new Date(160e3).toISOString(), printfinish: 1 },
+    ]);
+    const latest = saved.find(j => String(j.id) === '300');
+    expect(latest.discontinued, '最新ジョブは中止にしない').toBeFalsy();
+  });
+
+  it('★稼働中ジョブ(currentPrintID 一致)は非最新でも保護＝中止にしない', () => {
+    const HOST = 'K1-ABORT-3';
+    // currentPrintID=100（稼働中）かつ後続 200 が存在しても、稼働中ジョブは守る
+    const saved = runMerge(HOST, [
+      { id: 100, filename: '/x/cur.gcode', startTime: new Date(100e3).toISOString(), finishTime: null, printfinish: null },
+      { id: 200, filename: '/x/new.gcode', startTime: new Date(200e3).toISOString(), finishTime: null, printfinish: null },
+    ], [], 100);
+    const cur = saved.find(j => String(j.id) === '100');
+    expect(cur.discontinued, '稼働中(currentPrintID)は保護').toBeFalsy();
+  });
+
+  it('★完了済みジョブは中止対象外（finishTime あり=未確定ではない）', () => {
+    const HOST = 'K1-ABORT-4';
+    const saved = runMerge(HOST, [
+      { id: 100, filename: '/x/done.gcode', startTime: new Date(100e3).toISOString(), finishTime: new Date(160e3).toISOString(), printfinish: 1 },
+      { id: 200, filename: '/x/new.gcode', startTime: new Date(200e3).toISOString(), finishTime: new Date(260e3).toISOString(), printfinish: 1 },
+    ]);
+    const done = saved.find(j => String(j.id) === '100');
+    expect(done.discontinued, '完了済みは中止扱いしない').toBeFalsy();
+  });
+
+  it('★自己修復: 一度 discontinued でも後から完了報告(finishTime)が来れば自動解除', () => {
+    const HOST = 'K1-ABORT-5';
+    // 旧ストアに discontinued=true が残るが、今回 finishTime が確定 → 解除される
+    const saved = runMerge(HOST, [
+      { id: 100, filename: '/x/late.gcode', startTime: new Date(100e3).toISOString(),
+        finishTime: new Date(160e3).toISOString(), printfinish: 1, discontinued: true },
+      { id: 200, filename: '/x/new.gcode', startTime: new Date(200e3).toISOString(),
+        finishTime: new Date(260e3).toISOString(), printfinish: 1 },
+    ]);
+    const healed = saved.find(j => String(j.id) === '100');
+    expect('discontinued' in healed, '完了報告で discontinued は除去される').toBe(false);
   });
 });
 
