@@ -580,6 +580,11 @@ export function updateConnectionHost(oldHost, newHost) {
           const key = localStorage.key(i);
           if (key && key.startsWith(pdPrefix)) {
             const suffix = key.slice(pdPrefix.length);
+            // ★ P0-5: remainingLengthMm は resume 権威値ではないため移行しない（旧キーは破棄）。
+            if (suffix === "remainingLengthMm") {
+              localStorage.removeItem(key);
+              continue;
+            }
             const newKey = pdNewPrefix + suffix;
             if (!localStorage.getItem(newKey)) {
               localStorage.setItem(newKey, localStorage.getItem(key));

@@ -300,6 +300,41 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
     expect(cur.finishTime == null, '終了時刻なし(印刷中)').toBe(true);
     expect(cur.printfinish, '終了時刻なし=未完了 → null へ正規化（誤計上しない）').toBeNull();
   });
+
+  it('★T-FIL-06(P1-2): updateHistoryList は色のみ incoming で既存 spoolId/usedMm を消さない', () => {
+    const HOST = 'K1Max-FIL';
+    const JID = 1700009999;
+    _dataMock.monitorData.machines[HOST] = {
+      runtimeData: { state: 0 }, historyData: [], printStore: { history: [] }, storedData: {},
+    };
+    // 既存ストア: 分割済み per-reel（OLD/NEW の usedMm 付き）
+    _storageMock.loadPrintHistory.mockReturnValue([
+      {
+        id: JID, filename: '/x/split.gcode',
+        startTime: new Date(JID * 1000).toISOString(),
+        finishTime: new Date((JID + 3600) * 1000).toISOString(), printfinish: 1,
+        filamentInfo: [{ spoolId: 'OLD', usedMm: 300000 }, { spoolId: 'NEW', usedMm: 25000 }],
+      },
+    ]);
+    _storageMock.loadPrintVideos.mockReturnValue([]);
+    _storageMock.loadPrintCurrent.mockReturnValue(null);
+    _storageMock.savePrintHistory.mockClear();
+
+    // プリンタ由来の薄い履歴（色のみ・spoolId なし）が同一IDで再取得される
+    updateHistoryList(
+      [{
+        id: JID, filename: '/x/split.gcode', starttime: JID, usagetime: 3600, printfinish: 1,
+        filamentInfo: [{ filamentColor: '#fff' }],
+      }],
+      'http://127.0.0.1', 'print-current-container', HOST
+    );
+
+    const saved = _storageMock.savePrintHistory.mock.calls.at(-1)?.[0] || [];
+    const j = saved.find(x => String(x.id) === String(JID));
+    const byId = Object.fromEntries((j.filamentInfo || []).filter(e => e.spoolId).map(e => [e.spoolId, e]));
+    expect(byId.OLD?.usedMm, 'OLD の usedMm は保持').toBe(300000);
+    expect(byId.NEW?.usedMm, 'NEW の usedMm は保持').toBe(25000);
+  });
 });
 
 // =====================================================================
