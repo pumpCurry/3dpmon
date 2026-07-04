@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.2.1035 (2026-07-04) — ⚠ 実機検証候補（フィラメント中核変更を含む）
+
+### 統合監査 残りの P0/P1: フィラメント（resume/live/finalize/runout）＋旧UI削除＋relay revision
+
+> **注意**: 本版は **フィラメント中核の挙動変更**（残量の権威扱い・runout 自動交換推定の反転）を含む
+> **実機検証候補**。残量 reconcile／完了計上／runout 誤発火0 を実機で確認してから正式リリースすること。
+
+#### 修正（不具合）— フィラメント
+- **P0-5 resume に remainingLengthMm を保存・復元しない**: 停止前のライブ途中値で古い残量が復活する問題を解消。残量は printStore.history + mountHistory から reconcileSpool で導出。旧 pd_*_remainingLengthMm は restore 時に掃除、IP→hostname 移行でも非移行。
+- **P0-6 印刷中のライブ残量を権威 `spool.remainingLengthMm` へ直書きしない**: ライブ値は `storedData.filamentRemainingMm` のみへ。権威残量は完了時 finalize→reconcile でのみ更新（runout/resume/import への誤入力を断つ）。
+- **P0-7 完了 finalize 順序**: 完了検出で transient を消す前に finalize→reconcile を実行し、消費の履歴計上漏れを解消。二重計上は `accumulatedUsedMaterial>0` 条件で相互排他。
+- **P0-9 runout 復帰の自動 inferred 作成を停止（ADR-0005 反転）**: センサー復帰（1→0）を「交換確定」とせず、旧リールを 0 化する破壊を止め、`pendingResolution`＋通知に留める。新品交換はユーザー明示時のみ（確認UIは後続）。
+- **P1-2 履歴 merge**: `updateHistoryList` の filamentInfo を `_mergeFilamentInfo` で upsert（色のみ incoming で spoolId/usedMm を消さない）。
+
+#### 修正（不具合）— 旧UI / relay
+- **P1-4/P1-5**: シングルホスト時代の旧接続UI 8要素（destination-input 等）を HTML から削除し、`updateConnectionUI` を `updatePrinterListUI` 委譲へ縮約（旧DOM非依存化）。
+- **§6 relay delta revision**: `savePrintHistory` で `printStore._historyRev` を加算し relay 署名に含め、履歴中間の filamentInfo 編集・分割・reconcile を子（readonly/satellite）へ確実に伝播。
+
+#### テスト・インフラ
+- 全**781**テスト緑。`filament_authority_guard`（印刷中ライブ直書き／resume remainingLengthMm／aggregator の addInferredSpool を CI 禁止）。touched 3dp_lib は eslint 0 error。
+
+---
+
 ## v2.2.1034 (2026-07-04)
 
 ### 統合監査 P0/P1: 接続先同一性（IPv6/DHCP/IP再利用）＋パネルライフサイクル

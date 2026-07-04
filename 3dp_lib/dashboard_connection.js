@@ -580,6 +580,11 @@ export function updateConnectionHost(oldHost, newHost) {
           const key = localStorage.key(i);
           if (key && key.startsWith(pdPrefix)) {
             const suffix = key.slice(pdPrefix.length);
+            // ★ P0-5: remainingLengthMm は resume 権威値ではないため移行しない（旧キーは破棄）。
+            if (suffix === "remainingLengthMm") {
+              localStorage.removeItem(key);
+              continue;
+            }
             const newKey = pdNewPrefix + suffix;
             if (!localStorage.getItem(newKey)) {
               localStorage.setItem(newKey, localStorage.getItem(key));
@@ -1698,140 +1703,23 @@ export function sendGcodeCommand(gcode, host) {
 }
 
 /**
- * 接続 UI の表示状態を一元管理します。
- * - "connecting": 接続試行中 → 「接続中…(n/m)」
- * - "waiting":    再接続待機中 → 「接続中…(n/m) リトライ待ち(あと x 秒)」
- * - "connected":  接続済み     → ホスト名表示・切断ボタン
- * - "disconnected":切断中     → 入力欄再表示・接続ボタン
+ * 接続 UI の表示状態を反映します。
  *
- * NOTE: この関数はレガシー接続 UI 要素（3dp_monitor.html 内の
- * destination-input, destination-display, connection-status,
- * connect-button, disconnect-button, audio-muted-tag）を対象とする。
- * Electron パネルシステムでは接続モーダル（conn-modal-*）が使われるため、
- * これらの要素は存在しない場合がある。各要素アクセスにはnullガードを適用。
+ * ★ 監査 P1-5: シングルホスト時代の旧接続DOM（destination-input/destination-display/
+ *   connection-status/connect-button/disconnect-button）は撤去済み（HTMLからも削除）。
+ *   per-host の接続状態（connecting/waiting/connected/disconnected）は
+ *   {@link updatePrinterListUI} が connectionMap[host].state から新UI
+ *   （printer-status-list / top-menu-bar のステータスドット / conn-modal-*）へ
+ *   描画する。本関数は旧DOMを一切触らず一覧の再描画へ委譲するだけの薄いラッパ。
+ *   引数 state/opt は後方互換のため受けるが、状態は getState 由来で描画される。
  *
- * @param {"connecting"|"waiting"|"connected"|"disconnected"} state
- *   接続状態を指定
- * @param {{attempt?: number, max?: number, wait?: number}} [opt={}]
- *   connecting/waiting 時に使用する { attempt, max, wait }
- * @param {string} [host] - 対象ホスト名
+ * @param {"connecting"|"waiting"|"connected"|"disconnected"} [state] - 接続状態（後方互換・未使用）
+ * @param {{attempt?: number, max?: number, wait?: number}} [opt={}] - 後方互換・未使用
+ * @param {string} [host] - 対象ホスト名（後方互換・未使用。描画は全ホスト一括）
+ * @returns {void}
  */
 export function updateConnectionUI(state, opt = {}, host) {
-  // ホスト指定が無い場合はプリンタ一覧のみ更新
-  if (!host) {
-    updatePrinterListUI();
-    return;
-  }
-
-  /* レガシー接続 UI 要素（Electron モードでは存在しない場合がある） */
-  const ipInput       = document.getElementById("destination-input");
-  const ipDisplay     = document.getElementById("destination-display");
-  const statusEl      = document.getElementById("connection-status");
-  const btnConnect    = document.getElementById("connect-button");
-  const btnDisconnect = document.getElementById("disconnect-button");
-  const muteTag       = document.getElementById("audio-muted-tag");
-
-  // per-host の dest からホスト部のみを取り出す（例 "192.168.1.5:9090" → "192.168.1.5"）
-  const st = getState(host);
-  const rawDest  = st.dest || "";
-  const hostOnly = _extractIp(rawDest) || "";
-
-  // 入力欄を隠し・無効化
-  function hideInput() {
-    if (ipInput) {
-      ipInput.classList.add("hidden");
-      ipInput.setAttribute("disabled", "true");
-    }
-  }
-
-  // 入力欄を表示・有効化し、値を復元
-  function showInput() {
-    if (ipInput) {
-      ipInput.classList.remove("hidden");
-      ipInput.removeAttribute("disabled");
-      ipInput.value = rawDest;
-    }
-  }
-
-  // ミュート中タグを隠す
-  function hideMute() {
-    if (muteTag) {
-      muteTag.classList.add("hidden");
-    }
-  }
-
-  switch (state) {
-    case "connecting": {
-      // --- 接続試行中 ---
-      hideInput();
-      const { attempt = 0, max = 0 } = opt;
-      const label = `接続中…(${attempt}/${max})`;
-      // ホスト名は常に表示
-      if (ipDisplay) {
-        ipDisplay.classList.remove("hidden");
-        ipDisplay.textContent = hostOnly;
-      }
-      if (statusEl) {
-        statusEl.textContent = label;
-      }
-      btnConnect?.classList.add("hidden");
-      btnConnect?.setAttribute("disabled", "true");
-      btnDisconnect?.classList.remove("hidden");
-      break;
-    }
-
-    case "waiting": {
-      // --- 再接続待機中 ---
-      hideInput();
-      const { attempt = 0, max = 0, wait = 0 } = opt;
-      const label = `接続中…(${attempt}/${max}) リトライ待ち(あと ${wait} 秒)`;
-      if (ipDisplay) {
-        ipDisplay.classList.remove("hidden");
-        ipDisplay.textContent = hostOnly;
-      }
-      if (statusEl) {
-        statusEl.textContent = label;
-      }
-      btnConnect?.classList.add("hidden");
-      btnDisconnect?.classList.remove("hidden");
-      break;
-    }
-
-    case "connected": {
-      // --- 接続済み ---
-      hideInput();
-      if (ipDisplay) {
-        ipDisplay.classList.remove("hidden");
-        ipDisplay.textContent = hostOnly;
-      }
-      if (statusEl) {
-        statusEl.textContent = "接続済み";
-      }
-      btnConnect?.classList.add("hidden");
-      btnDisconnect?.classList.remove("hidden");
-      // ミュートタグはそのまま残す
-      break;
-    }
-
-    case "disconnected": {
-      // --- 切断中 ---
-      showInput();
-      if (ipDisplay) {
-        ipDisplay.classList.add("hidden");
-      }
-      if (statusEl) {
-        statusEl.textContent = "切断";
-      }
-      btnConnect?.removeAttribute("disabled");
-      btnConnect?.classList.remove("hidden");
-      btnDisconnect?.classList.add("hidden");
-      hideMute();
-      break;
-    }
-
-    default:
-      console.error(`updateConnectionUI: unknown state="${state}"`);
-  }
+  void state; void opt; void host; // 後方互換のため引数は受けるが未使用（状態は getState 由来で描画）
   updatePrinterListUI();
 }
 

@@ -1277,6 +1277,17 @@ export function updateHistoryList(
         //   newJobs（historyData バッファ経由）に値がある場合はユーザー操作結果
         //   なのでそちらを優先する。newJobs に値がない場合のみ旧データで補完。
         if (FILAMENT_KEYS.has(k)) {
+          // ★ P1-2: filamentInfo は配列（分割交換の per-reel spoolId/usedMm を保持）。
+          //   薄い incoming（色のみ・spoolId なし）が spoolId/usedMm 付きの既存を丸ごと
+          //   上書き消去しないよう、refreshHistory と同じ _mergeFilamentInfo で upsert する。
+          if (k === "filamentInfo") {
+            if (v != null) {
+              const before = JSON.stringify(cur.filamentInfo || null);
+              cur.filamentInfo = _mergeFilamentInfo(cur.filamentInfo, v);
+              if (JSON.stringify(cur.filamentInfo || null) !== before) merged = true;
+            }
+            return;
+          }
           if (cur[k] == null && v != null) {
             cur[k] = v;
             merged = true;
