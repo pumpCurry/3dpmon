@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.2.1034 (2026-07-04)
+
+### 統合監査 P0/P1: 接続先同一性（IPv6/DHCP/IP再利用）＋パネルライフサイクル
+
+2026-07-04 の統合監査（4ドメイン）のうち、**マージ確定した Domain-1（識別性/接続）と Domain-4 の一部（パネルライフサイクル）**をまとめてリリース。フィラメント系（Domain-2）はレビュー＋実機検証待ちのため本版には含めない（別PR）。
+
+#### 修正（不具合）
+- **接続先(dest)解析を単一ソース化（新規 `dashboard_target_identity.js`）**: `parseDest`/`normalizeDest`/`isIPv4`/`isIpLiteral`/`extractHost`。IPv4/IPv6(bracket・bare)/hostname:port を素朴な `split(":")` で壊さない。本番コードから `dest.split(":")[0]` とポート判定 `dest.includes(":")` を一掃（静的ガードで恒久禁止）。
+- **P0-1 同一IP・別ポートを両方接続**: `connectAllSavedTargets` の dedupe を IP単位→`printerType|normalizedDest` 単位に。DHCP・同一IP別ポート・K1/Moonraker 混在で片方が落ちる問題を解消。
+- **P0-3 IP再利用時の設定破壊を停止**: 同一 dest で別 hostname が返ったら `identityStatus:"ip-reuse-conflict"` を立て hostname を即上書きせず通知のみ（旧機体の label/color/ports を保護）。conflict target は自動接続保留。解消UIは後続。
+- **P0-4 IPv6 の IP→hostname 移行**: 移行判定を IPv4 regex→`isIpLiteral` に。IPv6 接続時の一時到達先キー残留を解消。
+- **P0-8 復元時の履歴ホスト吸着**: `restoreAggregatorState` の `historyPersistFunc(id)`→`(id, host)`。マルチホストで復元時だけ履歴が別/既定ホストへ吸着する不具合を修正。
+- **P1-6 フィラメントパネルのリーク解消**: `initFilamentPanel` の preview/ResizeObserver を `registerPanelDestroy("filament")` で確実に解放。パネル削除・再生成の繰り返しによる detached DOM リークを防止。
+- **2.9 起動時の潜在 ReferenceError 除去**: `bootPanelSystem` の未定義変数 `titleBar` を参照する死んだ fallback を削除。
+
+#### テスト・インフラ
+- 全**773**テスト緑（新規: identity 21 / connection 5 / dest-parsing guard 4）。touched 3dp_lib は eslint 0 error。
+- 静的ガード追加: `dest.split(":")[0]`／ポート判定 `includes(":")`／host欠落 `historyPersistFunc(x)` を CI で禁止。
+
+---
+
 ## v2.2.1033 (2026-07-04)
 
 ### 印刷履歴: 放置された「印刷中」ジョブの中止確定（非破壊・新フラグ `discontinued`）
