@@ -1354,8 +1354,14 @@ export function savePrintHistory(history, hostname) {
   const host = hostname;
   if (!host) return;
   ensureMachineData(host);
-  monitorData.machines[host].printStore.history =
-    history.slice(0, MAX_PRINT_HISTORY);
+  const ps = monitorData.machines[host].printStore;
+  ps.history = history.slice(0, MAX_PRINT_HISTORY);
+  // ★ 監査§6: 履歴 revision を単調インクリメント。relay delta の変更検出署名は
+  //   O(1) の軽量サンプル（末尾ジョブ＋現在ジョブ）で、履歴中間の filamentInfo 編集・
+  //   分割 upsert・reconcile 等（件数・末尾不変）を取りこぼしうる。履歴を実際に書き換える
+  //   単一チョークポイント（saveHistory の JSON 差分ガード経由のみ）で rev を上げ、
+  //   署名に含めることで子（readonly/satellite）へ確実に伝播させる。
+  ps._historyRev = (Number(ps._historyRev) || 0) + 1;
   saveUnifiedStorage();
 }
 

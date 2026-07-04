@@ -391,7 +391,10 @@ function _buildDelta() {
       const hist = ps.history || [];
       const last = hist.length ? hist[hist.length - 1] : null;
       const cur = ps.current || null;
-      const psSig = `${hist.length}|${last?.id ?? ""}|${last?.materialUsedMm ?? last?.usagematerial ?? ""}|`
+      // ★ 監査§6: 履歴 revision(_historyRev) を署名に含める。末尾サンプルでは拾えない
+      //   履歴中間の filamentInfo 編集・分割 upsert・reconcile 等（saveHistory 経由の実変更）を
+      //   子へ確実に伝播させる。rev は savePrintHistory が実書き換え時のみ加算する。
+      const psSig = `${ps._historyRev ?? ""}|${hist.length}|${last?.id ?? ""}|${last?.materialUsedMm ?? last?.usagematerial ?? ""}|`
         + `${last?.printfinish ?? ""}|${last?.filamentId ?? ""}|${last?.observed ?? ""}|`
         + `${cur?.id ?? ""}|${cur?.materialUsedMm ?? ""}|${cur?.filamentId ?? ""}`;
       if (psSig !== _prevPrintHash.get(hostname)) {
