@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.2.1036 (2026-07-04) — ⚠ 実機検証候補（フィラメント帰属の入力変更）
+
+### 統合監査 P1-3: autoCorrect のオフライン紐付け下限を mountHistory 権威境界へ
+
+> **注意**: フィラメント帰属の入力を変更する**実機検証候補**。オフライン完了印刷の遡及紐付けが
+> 正しい装着区間で絞られるか（過剰/過少紐付けが無いか）を実機で確認してから正式リリースすること。
+
+- **P1-3**: `autoCorrectCurrentSpool` の「オフライン中に完了した印刷を現在スプールへ遡及紐付け」する
+  下限を、legacy `spool.startPrintID` から **mountHistory の open 区間 `sinceJobId`（ADR-0004 権威台帳、
+  `getSpoolIntervals`）** へ変更。`startPrintID` が編集等でドリフトした場合の誤紐付け（古い境界で過剰に
+  リンク）を防ぐ。mount 記録が無い旧データのみ `startPrintID` へフォールバック。
+- テスト: 新規2（mountHistory 境界で絞る／記録なし時フォールバック）。全**783**テスト緑・eslint 0 error。
+
+---
+
 ## v2.2.1035 (2026-07-04) — ⚠ 実機検証候補（フィラメント中核変更を含む）
 
 ### 統合監査 残りの P0/P1: フィラメント（resume/live/finalize/runout）＋旧UI削除＋relay revision
