@@ -221,30 +221,18 @@
       <span id="audio-muted-tag" style="display:none; cursor:pointer; font-size:12px; margin-left:4px;">
         🔇:ミュート中
       </span>
-      <!-- 接続先入力 -->
-      <input id="destination-input" type="text" placeholder="IP アドレス">
-      <span id="destination-display">----</span>
 
-      <!-- プリンタ選択 -->
+      <!-- プリンタ選択（表示用・更新は updatePrinterListUI） -->
       <select id="printer-select" style="font-size:12px;"></select>
 
-      <!-- 追加プリンタ接続 -->
-      <input id="add-printer-input" type="text" placeholder="追加IP:port" style="font-size:12px; width:120px;">
-      <button id="add-printer-button" style="font-size:12px;">追加接続</button>
-
-      <!-- 接続状態一覧 -->
+      <!-- 接続状態一覧（per-host 状態は updatePrinterListUI が描画） -->
       <div id="printer-status-list" style="font-size:12px;"></div>
 
-      <!-- 自動接続(ON/OFF) -->
-      <label style="font-size:12px;">
-        <input type="checkbox" id="auto-connect-toggle">
-        自動接続
-      </label>
-
-      <!-- 接続ボタン / 切断ボタン -->
-      <button id="connect-button" style="font-size:12px;" class="hidden">接続</button>
-      <button id="disconnect-button" style="font-size:12px;" class="hidden">切断</button>
-      <span id="connection-status" style="margin-left:5px; font-size:12px;">----</span>
+      <!-- ★ 監査 P1-4: シングルホスト時代の旧接続UI（destination-input/destination-display/
+           add-printer-input/add-printer-button/auto-connect-toggle/connect-button/
+           disconnect-button/connection-status）を削除。マルチホストでは全台一括操作しか
+           できず危険なため未配線の死DOMだった。接続操作は接続設定モーダル(conn-modal-*)＋
+           per-host トグルへ移行済み。詳細: docs/LEGACY_UI.md -->
     </div>
   </div>
 

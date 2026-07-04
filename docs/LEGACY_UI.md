@@ -51,10 +51,17 @@
 - `connectWs(host)` / `disconnectWs(host)` を個別ホストで呼び出し
 - 接続状態インジケーター (🟢/🔴) を per-host で表示
 
-### Phase 3: 旧要素除去 (Phase 2 完了後)
-- 上記「危険な要素」と「死んでいる要素」を HTML から除去
-- `updateConnectionUI()` 内の旧要素参照コードを削除
-- `setupConnectButton()` を削除
+### Phase 3: 旧要素除去 (✅ 完了 — 統合監査 P1-4/P1-5, 2026-07-04)
+- ✅ `destination-input` / `destination-display` / `connection-status` / `connect-button` /
+  `disconnect-button` / `auto-connect-toggle` / `add-printer-input` / `add-printer-button` を
+  HTML から除去（いずれも未配線の死DOM、または cosmetic のみ）。
+- ✅ `updateConnectionUI()` 内の旧要素参照コードを削除し、`updatePrinterListUI()` への
+  薄い委譲に縮約（per-host 状態は connectionMap[host].state から新UIへ描画）。
+- **残置（意図的）**:
+  - `audio-muted-tag`: 監査の除去対象外。JS からは実質「隠す」だけで表示元が無く常に
+    非表示の inert 要素だが、ミュートUI用に HTML には残す（updateConnectionUI からは非参照化）。
+  - `printer-select` / `printer-status-list`: `updatePrinterListUI()` が更新する安全要素として維持。
+- 補足: `setupConnectButton()` は本リポジトリの現行コードには存在しない（既に撤去済み）。
 
 ## 関連コード
 

@@ -130,9 +130,9 @@ export async function initializeDashboard() {
     }
   }
 
-  // ★ 旧接続/切断ボタン (connect-button, disconnect-button) はシングルホスト時代の遺物。
-  //   マルチホスト環境では全台一括 ON/OFF しかできず危険なため、リスナーを設定しない。
-  //   per-host 接続トグルは接続設定モーダル内に実装予定。
+  // ★ 監査 P1-4: 旧接続/切断ボタン (connect-button, disconnect-button) 等の
+  //   シングルホスト時代の旧接続UIは HTML から削除済み（未配線の死DOMだった）。
+  //   per-host 接続操作は接続設定モーダル(conn-modal-*)＋per-host トグルへ移行済み。
   //   → 詳細: docs/LEGACY_UI.md
 
   // 子モードでなければ通常のプリンタ直接接続
