@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.783
+  Version 1.390.1173
 */
 
 /* ===============================================================
@@ -2975,20 +2975,36 @@ body.panel-mode .notification-container {
   pointer-events: none;
 }
 
-/* --- アニメーション --- */
-.dfv-blink-light {
-  animation: dfv-blink-light 1.5s infinite ease-in-out;
+/* --- フィラメント警告表示（通常時は静的、状態遷移時のみ有限pulse） --- */
+.dfv-alert-slash,
+.dfv-alert-light {
+  opacity: 1;
 }
-@keyframes dfv-blink-light {
+.dfv-alert-slash.dfv-alert-pulse {
+  animation: dfv-alert-slash-pulse 0.5s ease-in-out 6 alternate;
+}
+.dfv-alert-light.dfv-alert-pulse {
+  animation: dfv-alert-light-pulse 0.75s ease-in-out 4 alternate;
+}
+@keyframes dfv-alert-light-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: 0.3; transform: scale(0.8); }
+  50%      { opacity: 0.35; transform: scale(0.85); }
 }
-.dfv-blink-slash {
-  animation: dfv-blink-slash 0.5s infinite alternate ease-in-out;
-}
-@keyframes dfv-blink-slash {
+@keyframes dfv-alert-slash-pulse {
   from { opacity: 1; }
-  to   { opacity: 0.3; }
+  to   { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dfv-alert-pulse {
+    animation: none !important;
+  }
+}
+
+.fil-footer-rot-btn {
+  font-size: var(--font-xs);
+  padding: var(--space-1) var(--space-2);
+  min-width: 24px;
+  min-height: 24px;
 }
 
 /* ===============================================================
