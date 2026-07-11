@@ -107,6 +107,75 @@ describe("registerCameraPanel — entry 構造", () => {
 });
 
 // ======================================================================
+//  MJPEG img パイプライン差し替え (P0・目玉修正の回帰保護)
+//  ※ 旧テストは img を DOM に接続しておらず _releaseImagePipeline の
+//    clone/replace 分岐(oldImg.isConnected 前提)を一度も通っていなかった。
+// ======================================================================
+describe("MJPEG img パイプライン差し替え (P0)", () => {
+  it("stop 時: DOM接続済み img を新品へ差し替え、旧img は src/handlers を解放", () => {
+    const img = createMockImg();
+    const body = createMockBody();
+    body.appendChild(img);                 // ★ 実DOM接続（clone/replace の前提）
+    img.onload = () => {}; img.onerror = () => {};
+    registerCameraPanel("host-A", img, body, null);
+    startCameraStream("host-A");
+    flushCameraStart();
+    expect(img.isConnected, "前提: img は接続済み").toBe(true);
+
+    stopCameraStream("host-A");
+
+    // 旧img: src 除去・handlers null
+    expect(img.getAttribute("src"), "旧img の src 除去").toBeNull();
+    expect(img.onload, "旧img onload null").toBeNull();
+    expect(img.onerror, "旧img onerror null").toBeNull();
+    // body 内の img は別要素へ差し替わっている（＝MJPEG デコード資源を解放）
+    const cur = body.querySelector("img");
+    expect(cur, "body に新 img が存在").toBeTruthy();
+    expect(cur === img, "新 img は旧 img と別要素").toBe(false);
+    expect(cur.getAttribute("src"), "新 img は src 無し").toBeNull();
+  });
+
+  it("id/class/data 属性は clone で維持される", () => {
+    const img = createMockImg();
+    img.id = "cam-img-hostA";
+    img.className = "camera-stream foo";
+    img.dataset.host = "host-A";
+    const body = createMockBody();
+    body.appendChild(img);
+    registerCameraPanel("host-A", img, body, null);
+    startCameraStream("host-A");
+    flushCameraStart();
+    stopCameraStream("host-A");
+
+    const cur = body.querySelector("img");
+    expect(cur).not.toBe(img);
+    expect(cur.id).toBe("cam-img-hostA");
+    expect(cur.classList.contains("camera-stream")).toBe(true);
+    expect(cur.dataset.host).toBe("host-A");
+  });
+
+  it("ON→OFF→ON の連打で最後の1回だけ実接続（debounce 合流）", () => {
+    const img = createMockImg();
+    const body = createMockBody();
+    body.appendChild(img);
+    registerCameraPanel("host-A", img, body, null);
+    // 750ms 未満の間に ON を連打
+    startCameraStream("host-A");
+    vi.advanceTimersByTime(200);
+    startCameraStream("host-A");
+    vi.advanceTimersByTime(200);
+    startCameraStream("host-A");
+    // まだ debounce 中 → 実接続していない（src 未設定）
+    expect(img.getAttribute("src"), "debounce 中は未接続").toBeNull();
+    // 最後の要求から 750ms 経過 → 1回だけ接続
+    vi.advanceTimersByTime(750);
+    const connected = body.querySelector("img");
+    expect(connected.getAttribute("src"), "最後の1回だけ接続").toMatch(/192\.168\.1\.10:8080/);
+    stopCameraStream("host-A");
+  });
+});
+
+// ======================================================================
 //  Phase 2: watchdog タイマー
 // ======================================================================
 
@@ -122,10 +191,10 @@ describe("watchdog タイマー (CRITICAL)", () => {
     // src が設定されているはず
     expect(img.src).toMatch(/192\.168\.1\.10:8080/);
 
-    // 10秒経過 → watchdog 発火 → src が "" になり _scheduleRetry が呼ばれる
+    // 10秒経過 → watchdog 発火 → _releaseImagePipeline で src が除去される
     vi.advanceTimersByTime(10_000);
-    // watchdog で src がクリアされる
-    expect(img.src === "" || img.src === "http://localhost:3000/" || img.getAttribute("src") === "" || img.src.endsWith("/") || true).toBe(true);
+    // watchdog で removeAttribute("src") される（旧: || true で常に成功していた無意味assertionを是正）
+    expect(img.getAttribute("src")).toBeNull();
     stopCameraStream("host-A");
   });
 

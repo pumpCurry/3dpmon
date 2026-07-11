@@ -332,7 +332,7 @@ const THERMAL_CELL_MAP = [
  * @param {Element} el
  * @param {?{bg:string,fg:string}} style
  */
-function _paintThermalCurrent(el, style) {
+export function _paintThermalCurrent(el, style) {
   if (!el) return;
   el.classList.add("thermal-cell");
   const nextBg = style?.bg || "";
