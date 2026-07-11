@@ -1,6 +1,6 @@
 /* 
   3dp_monitor.css
-  Version1.339
+  Version 1.390.1173
 */
 
 /* ---------------------------------------------------------------
@@ -735,11 +735,11 @@ body {
 
 /* ── サーマル可視化 ── */
 /* 「現在」セルの背景色は JS が連続スケール(加熱=黄緑/放熱=水色)・異常(赤黄)で設定。
-   transition で「徐々に」変化させ、2Hz の離散更新でも滑らかに見せる。 */
+   2Hz更新ごとに transition が継続生成されるため、既定では静的反映にする。 */
 .thermal-cell {
   border-radius: 4px;
   padding: 0 4px;
-  transition: background-color .35s ease, color .35s ease;
+  transition: none;
 }
 /* 方向矢印は「差」セルの数字の左。右揃えの桁・単位位置は不変のまま左に出る。 */
 .thermal-arrow {

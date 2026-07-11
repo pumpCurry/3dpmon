@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1119 (PR #385)
+ * @version 1.390.1173 (PR #404)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-06-16 22:30:00
+ * @lastModified 2026-07-11 11:08:28
  * -----------------------------------------------------------
  */
 
@@ -312,6 +312,7 @@ function initFilamentPanel(body, hostname) {
   // フィラメントプレビューを生成（per-host・スプール情報反映）
   /** @type {ReturnType<typeof createFilamentPreview>|null} */
   let preview = null;
+  let autoRotateFooterButton = null;
   try {
     const machine = monitorData.machines[hostname] || {};
     const spool = getCurrentSpool(hostname);
@@ -337,10 +338,10 @@ function initFilamentPanel(body, hostname) {
       showInfoPercent:          false,
       showInfoLayers:           false,
       showResetButton:          false,
-      showProfileViewButton:    true,
-      showSideViewButton:       true,
-      showFrontViewButton:      true,
-      showAutoRotateButton:     true,
+      showProfileViewButton:    false,
+      showSideViewButton:       false,
+      showFrontViewButton:      false,
+      showAutoRotateButton:     false,
       enableDrag:               true,
       enableClick:              false,
       onClick:                  null,
@@ -356,6 +357,10 @@ function initFilamentPanel(body, hostname) {
       showManufacturerName:     true,
       showOverlayBar:           true,
       showPurchaseButton:       true,
+      onAutoRotateChange:       (enabled) => {
+        autoRotateFooterButton?.classList.toggle("active", enabled);
+        autoRotateFooterButton?.classList.toggle("dfv-btn-active", enabled);
+      },
       reelName:                 spool?.name || "",
       reelSubName:              spool?.reelSubName || "",
       materialName:             spool?.materialName || spool?.material || "",
@@ -366,8 +371,6 @@ function initFilamentPanel(body, hostname) {
     /* per-host Map で管理（グローバル window.filamentPreview は廃止） */
     if (!window._filamentPreviews) window._filamentPreviews = new Map();
     window._filamentPreviews.set(hostname, preview);
-    // ★ P1-6: destroy 時に破棄できるよう body に保持（マルチプリンタでパネル再生成の
-    //   繰り返しによる preview / ResizeObserver / detached DOM リークを防ぐ）。
     body._filamentPreview = preview;
   } catch (e) {
     console.warn("[panel-init] filament preview 生成エラー:", e);
@@ -384,7 +387,6 @@ function initFilamentPanel(body, hostname) {
         }
       });
       ro.observe(area);
-      // ★ P1-6: destroy 時に disconnect するため body に保持
       body._filamentResizeObserver = ro;
       // 初回サイズ適用
       requestAnimationFrame(() => {
@@ -469,17 +471,17 @@ function initFilamentPanel(body, hostname) {
       const rotGroup = document.createElement("span");
       rotGroup.className = "fil-footer-group";
       const rotBtns = [
-        { label: "⟲", title: "自動回転", action: () => preview.toggleAutoRotate?.() },
-        { label: "◐", title: "正面", action: () => preview.setFrontView?.() },
-        { label: "◑", title: "横", action: () => preview.setSideView?.() },
-        { label: "◉", title: "斜め", action: () => preview.setProfileView?.() },
+        { label: "⟲", title: "自動回転", action: () => preview.toggleAutoRotate(), auto: true },
+        { label: "◐", title: "正面", action: () => preview.setFrontView() },
+        { label: "◑", title: "横", action: () => preview.setSideView() },
+        { label: "◉", title: "斜め", action: () => preview.setProfileView() },
       ];
-      for (const { label, title, action } of rotBtns) {
+      for (const { label, title, action, auto } of rotBtns) {
         const btn = document.createElement("button");
-        btn.className = "btn";
+        btn.className = "btn fil-footer-rot-btn";
         btn.textContent = label;
         btn.title = title;
-        btn.style.cssText = "font-size:11px;padding:2px 5px;min-width:24px;min-height:24px";
+        if (auto) autoRotateFooterButton = btn;
         btn.addEventListener("click", action);
         rotGroup.appendChild(btn);
       }
@@ -864,9 +866,20 @@ export function registerAllPanelInits() {
       if (img) {
         img.onload = null;
         img.onerror = null;
-        img.src = "";
+        img.removeAttribute("src");
+        img.classList.add("off");
       }
     }
+  });
+  registerPanelDestroy("filament", (body, hostname) => {
+    if (body._filamentResizeObserver) {
+      body._filamentResizeObserver.disconnect();
+      body._filamentResizeObserver = null;
+    }
+    const preview = body._filamentPreview || window._filamentPreviews?.get(hostname);
+    preview?.destroy?.();
+    if (window._filamentPreviews) window._filamentPreviews.delete(hostname);
+    body._filamentPreview = null;
   });
   registerPanelDestroy("file-list", (body, hostname) => {
     /* アップロード UI レジストリから解除し detached DOM 参照を残さない */
@@ -883,16 +896,6 @@ export function registerAllPanelInits() {
       clearInterval(body._productionTimer);
       body._productionTimer = null;
     }
-  });
-  // ★ P1-6: フィラメントパネルの ResizeObserver / preview / レジストリ参照を破棄。
-  //   マルチプリンタでパネル削除・再生成を繰り返すと ro/preview/detached DOM が
-  //   リークするため、destroy で確実に解放する。
-  registerPanelDestroy("filament", (body, hostname) => {
-    try { body._filamentResizeObserver?.disconnect?.(); } catch { /* 無視 */ }
-    body._filamentResizeObserver = null;
-    try { body._filamentPreview?.destroy?.(); } catch { /* 無視 */ }
-    body._filamentPreview = null;
-    try { window._filamentPreviews?.delete?.(hostname); } catch { /* 無視 */ }
   });
 }
 

@@ -18,9 +18,9 @@
  * - {@link registerFieldElements}：data-field 要素をキャッシュに登録
  * - {@link unregisterFieldElements}：data-field 要素をキャッシュから除去
  *
- * @version 1.390.785 (PR #366)
+ * @version 1.390.1173 (PR #404)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-03-12 12:00:00
+ * @lastModified 2026-07-11 11:08:28
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -332,16 +332,25 @@ const THERMAL_CELL_MAP = [
  * @param {Element} el
  * @param {?{bg:string,fg:string}} style
  */
-function _paintThermalCurrent(el, style) {
+export function _paintThermalCurrent(el, style) {
   if (!el) return;
   el.classList.add("thermal-cell");
+  const nextBg = style?.bg || "";
+  const nextFg = style?.fg || "";
+  const currentBg = el.dataset.thermalBg || "";
+  const currentFg = el.dataset.thermalFg || "";
+  if (currentBg === nextBg && currentFg === nextFg) {
+    return;
+  }
+  el.dataset.thermalBg = nextBg;
+  el.dataset.thermalFg = nextFg;
   if (!style) {
     el.style.backgroundColor = "";
     el.style.color = "";
     return;
   }
-  el.style.backgroundColor = style.bg;
-  el.style.color = style.fg || "";
+  el.style.backgroundColor = nextBg;
+  el.style.color = nextFg;
 }
 
 /**
@@ -416,4 +425,3 @@ function _updateThermalBadge() {
   if (warn > 0) parts.push(`警告 ${warn}`);
   badge.textContent = parts.join(" / ");
 }
-
