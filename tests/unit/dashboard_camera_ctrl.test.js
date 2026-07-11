@@ -66,7 +66,12 @@ function createMockBody() {
     <div data-status="disconnected" style="display:none"></div>
     <div data-status="connected" style="display:none"></div>
   `;
+  document.body.appendChild(body);
   return body;
+}
+
+function flushCameraStart() {
+  vi.advanceTimersByTime(750);
 }
 
 beforeEach(() => {
@@ -93,6 +98,7 @@ describe("registerCameraPanel — entry 構造", () => {
     registerCameraPanel("host-A", img, body, null);
     // 内部状態にアクセスするため startCameraStream を呼んで挙動から確認
     startCameraStream("host-A");
+    flushCameraStart();
     // 1回目の接続試行が記録される（attempts=1）
     // watchdogTimer が設定されているはず → vi.getTimerCount() で確認
     expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -110,6 +116,7 @@ describe("watchdog タイマー (CRITICAL)", () => {
     const body = createMockBody();
     registerCameraPanel("host-A", img, body, null);
     startCameraStream("host-A");
+    flushCameraStart();
 
     // 最初の接続試行（attempts=1）
     // src が設定されているはず
@@ -127,6 +134,7 @@ describe("watchdog タイマー (CRITICAL)", () => {
     const body = createMockBody();
     registerCameraPanel("host-A", img, body, null);
     startCameraStream("host-A");
+    flushCameraStart();
 
     const timersBeforeOnload = vi.getTimerCount();
     expect(timersBeforeOnload).toBeGreaterThan(0);
@@ -145,6 +153,7 @@ describe("watchdog タイマー (CRITICAL)", () => {
     const body = createMockBody();
     registerCameraPanel("host-A", img, body, null);
     startCameraStream("host-A");
+    flushCameraStart();
     stopCameraStream("host-A"); // userStopped = true
 
     // watchdog が発火しても何も起こらない
@@ -165,6 +174,7 @@ describe("startCameraStream 並行制御 (HIGH)", () => {
     registerCameraPanel("host-A", img, body, null);
 
     startCameraStream("host-A");
+    flushCameraStart();
     const timers1 = vi.getTimerCount();
 
     startCameraStream("host-A"); // 2回目
@@ -183,10 +193,12 @@ describe("startCameraStream 並行制御 (HIGH)", () => {
 
     // 旧コールバックを取得
     startCameraStream("host-A");
+    flushCameraStart();
     const oldOnerror = img.onerror;
 
     // 2回目の呼び出し
     startCameraStream("host-A");
+    flushCameraStart();
 
     // 旧 onerror が発火しても stale 扱いで何も起こらない（generation 不一致）
     // 新しい onerror に差し替わっている
@@ -205,6 +217,7 @@ describe("registerCameraPanel での旧 entry 完全停止", () => {
     const body = createMockBody();
     registerCameraPanel("host-A", oldImg, body, null);
     startCameraStream("host-A");
+    flushCameraStart();
     expect(oldImg.src).toMatch(/192\.168\.1\.10/);
 
     // 同じホスト名で再登録
@@ -223,6 +236,7 @@ describe("registerCameraPanel での旧 entry 完全停止", () => {
     const body = createMockBody();
     registerCameraPanel("host-A", oldImg, body, null);
     startCameraStream("host-A"); // _generation++
+    flushCameraStart();
 
     // 再登録
     const newImg = createMockImg();
@@ -230,6 +244,7 @@ describe("registerCameraPanel での旧 entry 完全停止", () => {
 
     // 新 entry で startCameraStream を呼ぶ
     startCameraStream("host-A");
+    flushCameraStart();
     // 例外なく動作する（generation が独立している）
     expect(true).toBe(true);
     stopCameraStream("host-A");
@@ -246,6 +261,7 @@ describe("unregisterCameraPanel", () => {
     const body = createMockBody();
     registerCameraPanel("host-A", img, body, null);
     startCameraStream("host-A");
+    flushCameraStart();
 
     const timersBefore = vi.getTimerCount();
     expect(timersBefore).toBeGreaterThan(0);
@@ -275,6 +291,7 @@ describe("マルチホスト独立性", () => {
 
     startCameraStream("host-A");
     startCameraStream("host-B");
+    flushCameraStart();
 
     expect(imgA.src).toMatch(/192\.168\.1\.10/);
     expect(imgB.src).toMatch(/192\.168\.1\.11/);
@@ -293,6 +310,7 @@ describe("マルチホスト独立性", () => {
 
     startCameraStream("host-A");
     startCameraStream("host-B");
+    flushCameraStart();
 
     stopCameraStream("host-A");
 

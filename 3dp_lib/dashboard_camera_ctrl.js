@@ -22,9 +22,9 @@
  * - {@link stopAllCameraStreams}：全ホストのカメラを停止
  * - {@link handleCameraError}：接続エラー処理（互換用）
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.1173 (PR #404)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-03-10 23:30:00
+ * @lastModified 2026-07-11 11:08:28
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -34,9 +34,9 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { getDeviceIp, getDeviceDest, getPrinterType } from "./dashboard_connection.js";
-import { extractHost } from "./dashboard_target_identity.js";
 import { pushLog }                  from "./dashboard_log_util.js";
 import { notificationManager }      from "./dashboard_notification_manager.js";
+import { extractHost }              from "./dashboard_target_identity.js";
 
 // ─── 定数 ────────────────────────────────────────────────────
 /** @constant {number} 最大再接続試行回数 */
@@ -51,6 +51,10 @@ const CAMERA_WATCHDOG_MS    = 10_000;
 const RELAY_CAMERA_INTERVAL_MS = 2500;
 /** @constant {number} リレー子モードのポーリング間隔 下限 (ms) */
 const RELAY_CAMERA_MIN_INTERVAL_MS = 1000;
+/** @constant {number} ユーザー操作でONへ戻す際に実接続を合流する待機時間 (ms) */
+const CAMERA_USER_RESTART_DEBOUNCE_MS = 750;
+/** @constant {number} カメラサービス疎通確認 fetch の明示タイムアウト (ms) */
+const CAMERA_SERVICE_PROBE_TIMEOUT_MS = 3000;
 
 /**
  * 現在のレンダラーがリレー子（readonly/satellite）かどうかを返す。
@@ -92,6 +96,9 @@ function _relayCameraIntervalMs() {
  * @property {number|null} countdownTimer - setInterval ID
  * @property {number|null} watchdogTimer  - setTimeout ID (img.src 後の応答監視)
  * @property {number|null} pollTimeout    - setTimeout ID (リレー子 snapshot ポーリング)
+ * @property {number|null} userRestartTimer - ユーザーON要求を合流する debounce タイマー
+ * @property {AbortController|null} serviceProbeAbortController - サービス疎通確認 fetch の中断制御
+ * @property {boolean} desiredEnabled     - UI/設定上のカメラ有効希望状態
  * @property {number}   _generation       - stale 検出用 epoch カウンタ
  *                                          各非同期コールバックはクロージャでこの値をキャプチャし
  *                                          発火時に entry._generation と比較して stale なら return する
@@ -123,15 +130,12 @@ export function registerCameraPanel(hostname, img, body, toggle) {
   /* 既存エントリの完全停止（順序重要） */
   const prev = cameraRegistry.get(hostname);
   if (prev) {
-    // 1. ハンドラ・タイマーを全クリア（src="" で onerror が発火するのを防ぐ）
+    // 1. ハンドラ・タイマーを全クリア（停止時の spurious onerror を防ぐ）
     _cancelTimers(prev);
     // 2. generation インクリメントで suspend 中の async onerror を stale 化
     prev._generation = (prev._generation || 0) + 1;
-    // 3. 旧 img の MJPEG TCP 接続を切断
-    if (prev.img) {
-      prev.img.src = "";
-      prev.img.classList.add("off");
-    }
+    // 3. 旧 img の MJPEG デコードパイプラインを完全解放
+    _releaseImagePipeline(prev, { replace: false });
     // 4. リトライ抑制フラグ
     prev.userStopped = true;
   }
@@ -146,7 +150,10 @@ export function registerCameraPanel(hostname, img, body, toggle) {
     countdownTimer: null,
     watchdogTimer: null,
     pollTimeout: null,
+    userRestartTimer: null,
+    serviceProbeAbortController: null,
     streamTarget: null,
+    desiredEnabled: false,
     _generation: 0,
     firstConnected: false,
     userStopped: false,
@@ -167,7 +174,13 @@ export function unregisterCameraPanel(hostname) {
   if (!entry) return;
   // suspend 中の async onerror を stale 化（orphan タイマー防止）
   entry._generation = (entry._generation || 0) + 1;
-  _stopEntry(entry);
+  entry.userStopped = true;
+  entry.desiredEnabled = false;
+  _cancelTimers(entry);
+  entry.attempts = 0;
+  entry.streamTarget = null;
+  entry._activeStreamUrl = null;
+  _releaseImagePipeline(entry, { replace: false });
   cameraRegistry.delete(hostname);
 }
 
@@ -191,6 +204,37 @@ export function startCameraStream(hostname) {
     return;
   }
 
+  entry.desiredEnabled = true;
+  entry.userStopped = false;
+  _cancelUserRestartTimer(entry);
+
+  /* ユーザーが短時間にON/OFFを連打した場合、途中のON要求を実接続へ進めない。
+     generationを捕捉し、停止・再登録・別ON要求で古くなったcallbackは接続開始前に捨てる。 */
+  entry._generation = (entry._generation || 0) + 1;
+  const gen = entry._generation;
+  entry.userRestartTimer = setTimeout(() => {
+    entry.userRestartTimer = null;
+    if (!_canUseEntry(entry, gen)) return;
+    _startCameraStreamNow(host, entry, gen);
+  }, CAMERA_USER_RESTART_DEBOUNCE_MS);
+}
+
+/**
+ * debounce 後に実際のカメラストリーム接続を開始する。
+ *
+ * 【詳細説明】
+ * - 公開APIの startCameraStream() はユーザー操作を合流するだけにし、実接続は本関数へ集約する。
+ * - generation と desiredEnabled を入口で検査し、停止後に残った古いタイマーが img.src を設定しないようにする。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {CameraPanelEntry} entry - レジストリ上のカメラ状態
+ * @param {number} gen - start要求時点の世代番号
+ * @returns {void}
+ */
+function _startCameraStreamNow(host, entry, gen) {
+  if (!_canUseEntry(entry, gen)) return;
+
   /* ★ 冪等化（起動時「カメラ接続成功」二重ログ/二重接続の修正）:
      onAux(server.webcams.list 到着) と panel_init/接続確立 が両方 startCameraStream を
      呼ぶため、Moonraker では一度接続→URL解決後に再接続して "接続成功" が二重化していた。
@@ -211,9 +255,10 @@ export function startCameraStream(hostname) {
   /* ★ 並行制御: 既存接続を完全停止してから新規開始
      handleSocketOpen + initCameraPanel からの同時呼び出しを安全にする */
   _cancelTimers(entry);
-  entry._generation++;  // 旧コールバックを全て stale にする
+  entry._generation = gen;  // debounce要求の世代を、この実接続の有効世代として維持する
 
   entry.userStopped = false;
+  entry.desiredEnabled = true;
   entry.serviceNotified = false;
   entry.firstConnected = false;
 
@@ -229,7 +274,7 @@ export function startCameraStream(hostname) {
   if (_isRelayChild()) {
     entry.attempts = 0;
     _cancelTimers(entry);
-    _connectStreamRelay(entry, host);
+    _connectStreamRelay(entry, host, gen);
     return;
   }
 
@@ -258,7 +303,7 @@ export function startCameraStream(hostname) {
     entry.attempts = 0;
     entry.cameraPort = camPort;
     _cancelTimers(entry);
-    _connectStream(entry, extractHost(ip));
+    _connectStream(entry, extractHost(ip), gen);
     return;
   }
 
@@ -273,7 +318,7 @@ export function startCameraStream(hostname) {
   entry.attempts = 0;
   entry.cameraPort = port;
   _cancelTimers(entry);
-  _connectStream(entry, extractHost(ip));
+  _connectStream(entry, extractHost(ip), gen);
 }
 
 /**
@@ -292,6 +337,8 @@ export function stopCameraStream(hostname) {
   if (!entry) return;
 
   entry.userStopped = true;
+  entry.desiredEnabled = false;
+  entry._generation = (entry._generation || 0) + 1;
   _stopEntry(entry);
   _updateUI(entry, "disconnected");
   pushLog(`カメラストリーム停止 (${host})`, "info", false, host);
@@ -307,6 +354,8 @@ export function stopCameraStream(hostname) {
 export function stopAllCameraStreams() {
   for (const [, entry] of cameraRegistry) {
     entry.userStopped = true;
+    entry.desiredEnabled = false;
+    entry._generation = (entry._generation || 0) + 1;
     _stopEntry(entry);
     _updateUI(entry, "disconnected");
   }
@@ -355,6 +404,8 @@ function _cancelTimers(entry) {
     clearTimeout(entry.pollTimeout);
     entry.pollTimeout = null;
   }
+  _cancelUserRestartTimer(entry);
+  _abortServiceProbe(entry);
 }
 
 /**
@@ -381,10 +432,7 @@ function _stopEntry(entry) {
   entry.attempts = 0;
   entry.streamTarget = null;
   entry._activeStreamUrl = null;   // ★ 冪等化用の配信URL記録もクリア（再開時に再接続させる）
-  if (entry.img) {
-    entry.img.src = "";
-    entry.img.classList.add("off");
-  }
+  _releaseImagePipeline(entry, { replace: true });
 }
 
 /**
@@ -406,11 +454,9 @@ function _stopDuplicateTargetStreams(keepEntry, target) {
     _cancelTimers(other);
     other._generation = (other._generation || 0) + 1; // 旧 async コールバックを stale 化
     other.userStopped = true;
+    other.desiredEnabled = false;
     other.streamTarget = null;
-    if (other.img) {
-      other.img.src = "";
-      other.img.classList.add("off");
-    }
+    _releaseImagePipeline(other, { replace: true });
     _updateUI(other, "disconnected");
     pushLog(
       `同一カメラ(${target})への重複接続を検出 → 旧ホスト「${other.hostname}」のストリームを停止しました`,
@@ -426,13 +472,26 @@ function _stopDuplicateTargetStreams(keepEntry, target) {
  * @param {string} host - IPアドレス
  * @returns {Promise<boolean>}
  */
-async function _isServiceDown(host, port) {
+async function _isServiceDown(entry, host, port) {
   port = port || monitorData.appSettings.cameraPort || DEFAULT_STREAM_PORT;
+  _abortServiceProbe(entry);
+  const controller = new AbortController();
+  entry.serviceProbeAbortController = controller;
+  const timeoutId = setTimeout(() => controller.abort(), CAMERA_SERVICE_PROBE_TIMEOUT_MS);
   try {
-    await fetch(`http://${host}:${port}/`, { method: "GET", mode: "no-cors" });
+    await fetch(`http://${host}:${port}/`, {
+      method: "GET",
+      mode: "no-cors",
+      signal: controller.signal
+    });
     return false;
   } catch {
     return true;
+  } finally {
+    clearTimeout(timeoutId);
+    if (entry.serviceProbeAbortController === controller) {
+      entry.serviceProbeAbortController = null;
+    }
   }
 }
 
@@ -445,8 +504,8 @@ async function _isServiceDown(host, port) {
  * @param {string} host - IPアドレス（ポートなし）
  * @returns {void}
  */
-function _connectStream(entry, host) {
-  if (entry.userStopped) return;
+function _connectStream(entry, host, gen = entry._generation) {
+  if (!_canUseEntry(entry, gen)) return;
 
   /* リトライ上限チェック */
   if (entry.attempts >= CAMERA_MAX_RETRY) {
@@ -474,13 +533,13 @@ function _connectStream(entry, host) {
   _cancelTimers(entry);
 
   /* ★ このコールバックが有効な世代を記憶（stale 検出用） */
-  const gen = entry._generation;
+  const img = entry.img;
+  if (!img) return;
 
   /* 読み込み成功 */
-  entry.img.onload = () => {
+  img.onload = () => {
     _clearWatchdog(entry);
-    if (entry._generation !== gen) return;  // stale (re-register/start中)
-    if (entry.userStopped) return;
+    if (!_canUseEntry(entry, gen, img)) return;  // stale (re-register/start中)
 
     _cancelTimers(entry);
 
@@ -499,10 +558,9 @@ function _connectStream(entry, host) {
   };
 
   /* 読み込みエラー */
-  entry.img.onerror = async () => {
+  img.onerror = async () => {
     _clearWatchdog(entry);
-    if (entry._generation !== gen) return;  // stale (再入 or unregister 済み)
-    if (entry.userStopped) return;
+    if (!_canUseEntry(entry, gen, img)) return;  // stale (再入 or unregister 済み)
 
     /* ★ 再入ガード: 自分の generation をインクリメントして
         suspend 中に発火する2回目以降の onerror を stale 化 */
@@ -510,8 +568,8 @@ function _connectStream(entry, host) {
     const myGen = entry._generation;
 
     /* サービス停止チェック */
-    if (!entry.serviceNotified && await _isServiceDown(host, port)) {
-      if (entry._generation !== myGen) return;  // await 中に外部変更 → stale
+    if (!entry.serviceNotified && await _isServiceDown(entry, host, port)) {
+      if (!_canUseEntry(entry, myGen, img)) return;  // await 中に外部変更 → stale
       entry.serviceNotified = true;
       _cancelTimers(entry);
       _updateUI(entry, "disconnected");
@@ -520,10 +578,10 @@ function _connectStream(entry, host) {
       return;
     }
 
-    if (entry._generation !== myGen) return;  // await 後の stale チェック
+    if (!_canUseEntry(entry, myGen, img)) return;  // await 後の stale チェック
 
     /* リトライをスケジュール */
-    _scheduleRetry(entry, host, delayMs, waitSec);
+    _scheduleRetry(entry, host, delayMs, waitSec, myGen);
   };
 
   /* ★ 多重動画接続防止 (fix/camera-dedup):
@@ -533,29 +591,26 @@ function _connectStream(entry, host) {
   _stopDuplicateTargetStreams(entry, entry.streamTarget);
 
   /* ストリーム開始 */
-  entry.img.src = url;
-  entry.img.classList.remove("off");
+  img.setAttribute("src", url);
+  img.classList.remove("off");
 
   /* ★ watchdog: onload/onerror が CAMERA_WATCHDOG_MS 以内に来なければ強制的に失敗扱い
       MJPEG ストリームでサーバが TCP 接続を受け入れたが正常にデータを返さない場合、
       onload/onerror がどちらも発火せず、ブラウザが CPU 100% で固まる問題への対策 */
   entry.watchdogTimer = setTimeout(() => {
     entry.watchdogTimer = null;
-    if (entry._generation !== gen) return;  // stale
-    if (entry.userStopped) return;
+    if (!_canUseEntry(entry, gen, img)) return;  // stale
 
-    // ハンドラを null にしてから src="" で接続を強制終了
-    // （src="" による spurious onerror が onerror ロジックを再実行するのを防止）
-    entry.img.onload = null;
-    entry.img.onerror = null;
-    entry.img.src = "";
+    // ハンドラを null にしてから src 属性を除去し、img自体を差し替えて接続を強制終了する。
+    // 停止時の spurious onerror が onerror ロジックを再実行しないようにする。
+    _releaseImagePipeline(entry, { replace: true });
     pushLog(
       `カメラ watchdog タイムアウト (${CAMERA_WATCHDOG_MS}ms) — サーバ応答なし`,
       "warn", false, entry.hostname
     );
     // 旧 generation のハンドラを stale 化してからリトライ
     entry._generation++;
-    _scheduleRetry(entry, host, delayMs, waitSec);
+    _scheduleRetry(entry, host, delayMs, waitSec, entry._generation);
   }, CAMERA_WATCHDOG_MS);
 }
 
@@ -573,8 +628,8 @@ function _connectStream(entry, host) {
  * @param {string} host - プリンタホスト名（親 _cameraEndpoints のキーと一致）
  * @returns {void}
  */
-function _connectStreamRelay(entry, host) {
-  if (entry.userStopped) return;
+function _connectStreamRelay(entry, host, gen = entry._generation) {
+  if (!_canUseEntry(entry, gen)) return;
 
   /* リトライ上限チェック（直結版と同一仕様） */
   if (entry.attempts >= CAMERA_MAX_RETRY) {
@@ -599,15 +654,14 @@ function _connectStreamRelay(entry, host) {
   _cancelTimers(entry);
 
   /* このコールバック群が有効な世代を記憶（stale 検出用） */
-  const gen = entry._generation;
-
   /** 1フレーム分の取得を開始する（watchdog を都度張り直す） */
   const loadOne = () => {
-    if (entry._generation !== gen || entry.userStopped) return;
+    const img = entry.img;
+    if (!_canUseEntry(entry, gen, img)) return;
 
-    entry.img.onload = () => {
+    img.onload = () => {
       _clearWatchdog(entry);
-      if (entry._generation !== gen || entry.userStopped) return;
+      if (!_canUseEntry(entry, gen, img)) return;
 
       /* 接続成功（初回 / 再接続）を一度だけ通知し attempts をリセット */
       if (!entry.firstConnected) {
@@ -629,31 +683,29 @@ function _connectStreamRelay(entry, host) {
       }, _relayCameraIntervalMs());
     };
 
-    entry.img.onerror = () => {
+    img.onerror = () => {
       _clearWatchdog(entry);
-      if (entry._generation !== gen || entry.userStopped) return;
+      if (!_canUseEntry(entry, gen, img)) return;
       /* 旧ハンドラを stale 化してからリトライ（再入ガード） */
       entry._generation++;
-      _scheduleRelayRetry(entry, host, delayMs, waitSec);
+      _scheduleRelayRetry(entry, host, delayMs, waitSec, entry._generation);
     };
 
     /* キャッシュ回避のためクエリにタイムスタンプを付与（親側は no-store） */
-    entry.img.src = url + "?t=" + Date.now();
-    entry.img.classList.remove("off");
+    img.setAttribute("src", url + "?t=" + Date.now());
+    img.classList.remove("off");
 
     /* watchdog: onload/onerror がどちらも来ない場合の保険 */
     entry.watchdogTimer = setTimeout(() => {
       entry.watchdogTimer = null;
-      if (entry._generation !== gen || entry.userStopped) return;
-      entry.img.onload = null;
-      entry.img.onerror = null;
-      entry.img.src = "";
+      if (!_canUseEntry(entry, gen, img)) return;
+      _releaseImagePipeline(entry, { replace: true });
       pushLog(
         `カメラ(リレー) watchdog タイムアウト (${CAMERA_WATCHDOG_MS}ms) — 応答なし`,
         "warn", false, entry.hostname
       );
       entry._generation++;
-      _scheduleRelayRetry(entry, host, delayMs, waitSec);
+      _scheduleRelayRetry(entry, host, delayMs, waitSec, entry._generation);
     }, CAMERA_WATCHDOG_MS);
   };
 
@@ -670,8 +722,8 @@ function _connectStreamRelay(entry, host) {
  * @param {number} delayMs
  * @param {number} waitSec
  */
-function _scheduleRelayRetry(entry, host, delayMs, waitSec) {
-  if (entry.userStopped) return;
+function _scheduleRelayRetry(entry, host, delayMs, waitSec, gen = entry._generation) {
+  if (!_canUseEntry(entry, gen)) return;
 
   _updateUI(entry, "retrying", {
     attempt: entry.attempts + 1,
@@ -699,9 +751,9 @@ function _scheduleRelayRetry(entry, host, delayMs, waitSec) {
   /* リトライ実行 → リレー版に再入 */
   entry.retryTimeout = setTimeout(() => {
     entry.retryTimeout = null;
-    if (entry.userStopped) return;
-    if (entry.img) entry.img.src = "";
-    _connectStreamRelay(entry, host);
+    if (!_canUseEntry(entry, gen)) return;
+    _releaseImagePipeline(entry, { replace: true });
+    _connectStreamRelay(entry, host, gen);
   }, delayMs);
 }
 
@@ -715,8 +767,8 @@ function _scheduleRelayRetry(entry, host, delayMs, waitSec) {
  * @param {number} delayMs
  * @param {number} waitSec
  */
-function _scheduleRetry(entry, host, delayMs, waitSec) {
-  if (entry.userStopped) return;
+function _scheduleRetry(entry, host, delayMs, waitSec, gen = entry._generation) {
+  if (!_canUseEntry(entry, gen)) return;
 
   _updateUI(entry, "retrying", {
     attempt: entry.attempts + 1,
@@ -744,10 +796,94 @@ function _scheduleRetry(entry, host, delayMs, waitSec) {
   /* リトライ実行 */
   entry.retryTimeout = setTimeout(() => {
     entry.retryTimeout = null;
-    if (entry.userStopped) return;
-    if (entry.img) entry.img.src = "";
-    _connectStream(entry, host);
+    if (!_canUseEntry(entry, gen)) return;
+    _releaseImagePipeline(entry, { replace: true });
+    _connectStream(entry, host, gen);
   }, delayMs);
+}
+
+/**
+ * ユーザーON要求を合流する debounce タイマーだけを解除する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @returns {void}
+ */
+function _cancelUserRestartTimer(entry) {
+  if (entry?.userRestartTimer != null) {
+    clearTimeout(entry.userRestartTimer);
+    entry.userRestartTimer = null;
+  }
+}
+
+/**
+ * カメラサービス疎通確認 fetch を中断する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @returns {void}
+ */
+function _abortServiceProbe(entry) {
+  if (entry?.serviceProbeAbortController) {
+    try { entry.serviceProbeAbortController.abort(); } catch { /* noop */ }
+    entry.serviceProbeAbortController = null;
+  }
+}
+
+/**
+ * MJPEGを受けていたHTMLImageElementのパイプラインを解放し、必要なら新品imgへ差し替える。
+ *
+ * 【詳細説明】
+ * - Chromium内部に残り得るMJPEG decode/Raster/Compositor資源を切るため、停止時は同じimgを再利用しない。
+ * - cloneNode(false)によりid/class/alt/data属性を維持し、entry.imgは必ず新要素またはnullへ更新する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @param {{replace?: boolean}} [options={}] - DOM上のimgを新品へ置換するかどうか
+ * @returns {HTMLImageElement|null} 置換後のimg、または完全解放時はnull
+ */
+function _releaseImagePipeline(entry, { replace = true } = {}) {
+  const oldImg = entry?.img;
+  if (!oldImg) return null;
+
+  oldImg.onload = null;
+  oldImg.onerror = null;
+  oldImg.removeAttribute("src");
+  oldImg.classList.add("off");
+
+  if (replace && oldImg.isConnected && oldImg.parentNode) {
+    const newImg = oldImg.cloneNode(false);
+    newImg.onload = null;
+    newImg.onerror = null;
+    newImg.removeAttribute("src");
+    newImg.classList.add("off");
+    oldImg.replaceWith(newImg);
+    entry.img = newImg;
+    return newImg;
+  }
+
+  entry.img = null;
+  return null;
+}
+
+/**
+ * 非同期callbackが現在も有効なカメラentryへ属しているか検査する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @param {number} gen - callbackが捕捉した世代
+ * @param {HTMLImageElement|null} [img=null] - callbackが捕捉したimg
+ * @returns {boolean} 接続処理を継続できる場合はtrue
+ */
+function _canUseEntry(entry, gen, img = null) {
+  if (!entry) return false;
+  if (cameraRegistry.get(entry.hostname) !== entry) return false;
+  if (entry._generation !== gen) return false;
+  if (entry.desiredEnabled !== true) return false;
+  if (entry.userStopped === true) return false;
+  if (img && entry.img !== img) return false;
+  if (entry.body && entry.body.isConnected === false) return false;
+  return true;
 }
 
 /**
