@@ -37,7 +37,15 @@ const { registerCameraPanel, unregisterCameraPanel, startCameraStream, stopCamer
 const logUtil = await import("../../3dp_lib/dashboard_log_util.js");
 
 function mkImg() { return document.createElement("img"); }
-function mkBody() { const d = document.createElement("div"); return d; }
+function mkBody() {
+  const d = document.createElement("div");
+  document.body.appendChild(d);
+  return d;
+}
+
+function flushCameraStart() {
+  vi.advanceTimersByTime(750);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -55,10 +63,12 @@ describe("カメラ多重接続防止 (fix/camera-dedup)", () => {
     registerCameraPanel("dup-B", imgB, body, null);
 
     startCameraStream("dup-A");
+    flushCameraStart();
     expect(imgA.src).toMatch(/192\.168\.1\.50:8080/);   // A がストリーム中
     expect(imgA.classList.contains("off")).toBe(false);
 
     startCameraStream("dup-B");                          // 同一IPでBを開始
+    flushCameraStart();
     expect(imgB.src).toMatch(/192\.168\.1\.50:8080/);   // B がストリーム中
     expect(imgB.classList.contains("off")).toBe(false);
     // A は重複として停止（src クリア + off）
@@ -73,6 +83,7 @@ describe("カメラ多重接続防止 (fix/camera-dedup)", () => {
 
     startCameraStream("dup-A");
     startCameraStream("other");
+    flushCameraStart();
 
     // 異なるIPなので両方ストリーム中
     expect(imgA.src).toMatch(/192\.168\.1\.50:8080/);
@@ -86,6 +97,7 @@ describe("カメラ多重接続防止 (fix/camera-dedup)", () => {
     registerCameraPanel("other", imgO, body, null);
 
     startCameraStream("other");
+    flushCameraStart();
     // 接続成功をシミュレート（jsdom は img.src で onload を自動発火しないため手動）
     if (typeof imgO.onload === "function") imgO.onload();
 
@@ -103,7 +115,9 @@ describe("カメラ多重接続防止 (fix/camera-dedup)", () => {
     registerCameraPanel("dup-A", imgA, body, null);
     registerCameraPanel("dup-B", imgB, body, null);
     startCameraStream("dup-A");
+    flushCameraStart();
     startCameraStream("dup-B");   // A を停止
+    flushCameraStart();
 
     const before = vi.getTimerCount();
     vi.advanceTimersByTime(30_000); // A の watchdog/retry が動かないこと（停止済み）

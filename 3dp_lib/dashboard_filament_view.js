@@ -13,8 +13,9 @@
  * 【公開関数一覧】
  * - {@link createFilamentPreview}：プレビューを生成
  *
- * @version 1.390.309 (PR #139)
+ * @version 1.390.1173 (PR #404)
  * @since   1.390.193 (PR #86)
+ * @lastModified 2026-07-11 11:08:28
  *
  */
 
@@ -305,7 +306,15 @@ function div(cls) {
  * @returns {{
  *   setRemainingLength:(n:number)=>void,
  *   setState:(s:Partial<FilamentOptions>)=>void,
- *   resetRotation:()=>void
+ *   resetRotation:()=>void,
+ *   setFrontView:()=>void,
+ *   setSideView:()=>void,
+ *   setProfileView:()=>void,
+ *   toggleAutoRotate:()=>boolean,
+ *   startAutoRotate:()=>boolean,
+ *   stopAutoRotate:()=>boolean,
+ *   isAutoRotating:()=>boolean,
+ *   destroy:()=>void
  * }} */
 export function createFilamentPreview(mount, opts) {
   /* --- デフォルト値適用 -------------------------------------------- */
@@ -383,6 +392,13 @@ export function createFilamentPreview(mount, opts) {
   let isPresent  = o.isFilamentPresent;
   let autoRotate   = false;
   let autoRotateId = null;
+  let autoRotateLastTs = 0;
+  let destroyed = false;
+  let visibleForRotation = true;
+  let lastAlertState = 'normal';
+  const autoRotateIntervalMs = 1000 / 15;
+  /** @type {IntersectionObserver|null} */
+  let intersectionObserver = null;
 
   /**
    * 回転軸の現在値を最短経路でターゲット角度へ設定する。
@@ -398,6 +414,192 @@ export function createFilamentPreview(mount, opts) {
     if (diff >  180) diff -= 360;
     if (diff < -180) diff += 360;
     return cur + diff;
+  }
+
+  /**
+   * 現在の回転角度だけを scene の transform へ反映する。
+   *
+   * 【詳細説明】
+   * - 残量計算やリング再構築を行わず、固定ビュー・ドラッグ・自動回転の軽量更新に使う。
+   * - 自動回転中は裏面側でZ軸を反転し、従来の見え方を保つ。
+   *
+   * @function applyRotationTransform
+   * @returns {void}
+   */
+  function applyRotationTransform() {
+    rotX = ((rotX % 720) + 720) % 720; if (rotX >= 360) { rotX -= 720; }
+    rotY = ((rotY % 360) + 360) % 360;
+    rotZ = ((rotZ % 720) + 720) % 720; if (rotZ >= 360) { rotZ -= 720; }
+    const rotZValue = autoRotate
+      ? (rotY < 180 ? rotZ : -rotZ)
+      : rotZ;
+    scene.style.transform =
+      `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZValue}deg)`;
+    if (o.showRotationInfo && typeof infoRot !== 'undefined') {
+      infoRot.textContent =
+        `X: ${rotX.toFixed(1)}°  Y: ${rotY.toFixed(1)}°  Z: ${rotZ.toFixed(1)}°`;
+    }
+  }
+
+  /**
+   * 自動回転を実行してよい表示状態か判定する。
+   *
+   * @function canAnimateRotation
+   * @returns {boolean} 表示中かつ破棄されていない場合はtrue
+   */
+  function canAnimateRotation() {
+    if (destroyed || !autoRotate) return false;
+    if (typeof document !== 'undefined' && document.hidden) return false;
+    if (!root.isConnected || !mount.isConnected) return false;
+    if (!visibleForRotation) return false;
+    const rect = root.getBoundingClientRect?.();
+    if (rect && (rect.width <= 0 || rect.height <= 0)) return false;
+    return true;
+  }
+
+  /**
+   * 自動回転状態をボタンと外部callbackへ通知する。
+   *
+   * @function notifyAutoRotateChange
+   * @returns {void}
+   */
+  function notifyAutoRotateChange() {
+    if (btnAuto) btnAuto.classList.toggle('dfv-btn-active', autoRotate);
+    if (typeof o.onAutoRotateChange === 'function') {
+      o.onAutoRotateChange(autoRotate);
+    }
+  }
+
+  /**
+   * 自動回転の requestAnimationFrame ループを1フレーム進める。
+   *
+   * @function autoRotateLoop
+   * @param {number} ts - requestAnimationFrame が渡す現在時刻
+   * @returns {void}
+   */
+  function autoRotateLoop(ts) {
+    autoRotateId = null;
+    if (!autoRotate || destroyed) return;
+    if (canAnimateRotation()) {
+      const elapsed = autoRotateLastTs ? ts - autoRotateLastTs : autoRotateIntervalMs;
+      if (elapsed >= autoRotateIntervalMs) {
+        rotY += elapsed * 0.03;
+        autoRotateLastTs = ts;
+        applyRotationTransform();
+      }
+    } else {
+      autoRotateLastTs = ts;
+    }
+    if (autoRotate && !destroyed) {
+      autoRotateId = requestAnimationFrame(autoRotateLoop);
+    }
+  }
+
+  /**
+   * 自動回転を開始する。
+   *
+   * @function startAutoRotate
+   * @returns {boolean} 開始後に自動回転が有効ならtrue
+   */
+  function startAutoRotate() {
+    if (destroyed) return false;
+    if (autoRotate) return true;
+    autoRotate = true;
+    autoRotateLastTs = 0;
+    notifyAutoRotateChange();
+    autoRotateId = requestAnimationFrame(autoRotateLoop);
+    return true;
+  }
+
+  /**
+   * 自動回転を停止する。
+   *
+   * @function stopAutoRotate
+   * @returns {boolean} 停止後に自動回転が有効ならtrue
+   */
+  function stopAutoRotate() {
+    autoRotate = false;
+    autoRotateLastTs = 0;
+    if (autoRotateId != null) {
+      cancelAnimationFrame(autoRotateId);
+      autoRotateId = null;
+    }
+    notifyAutoRotateChange();
+    applyRotationTransform();
+    return false;
+  }
+
+  /**
+   * 固定ビューへ切り替える共通処理。
+   *
+   * @function setRotationView
+   * @param {number} x - X軸回転角度
+   * @param {number} y - Y軸回転角度
+   * @param {number} z - Z軸回転角度
+   * @returns {void}
+   */
+  function setRotationView(x, y, z) {
+    stopAutoRotate();
+    rotX = x;
+    rotY = _smoothAngle(rotY, y);
+    rotZ = z;
+    applyRotationTransform();
+  }
+
+  /**
+   * フィラメント警告の静的表示と有限pulse状態を更新する。
+   *
+   * @function updateAlertIndicators
+   * @param {"normal"|"missing"|"used-up"} nextState - フィラメント警告状態
+   * @param {number} slashWidthPx - スラッシュ表示幅
+   * @returns {void}
+   */
+  function updateAlertIndicators(nextState, slashWidthPx) {
+    const isAlert = nextState !== 'normal';
+    const isMissing = nextState === 'missing';
+    slash.style.display = isAlert ? 'block' : 'none';
+    light.style.display = isMissing ? 'block' : 'none';
+    slash.classList.toggle('dfv-alert-slash', isAlert);
+    light.classList.toggle('dfv-alert-light', isMissing);
+    slash.classList.toggle('dfv-alert-used-up', nextState === 'used-up');
+    slash.classList.toggle('dfv-alert-missing', isMissing);
+
+    if (isAlert) {
+      const color = isMissing ? 'rgba(59,130,246,0.8)' : 'rgba(239,68,68,0.8)';
+      slash.style.cssText = `
+        position:absolute;
+        top:50%; left:50%;
+        width:${slashWidthPx}px; height:10px;
+        transform:translate(-50%,-50%) rotate(-47.5deg);
+        background:${color};
+        border-radius:6px;
+        pointer-events:none;
+        z-index:10;`;
+    } else {
+      slash.classList.remove('dfv-alert-pulse');
+      slash.removeAttribute('style');
+    }
+
+    if (isMissing) {
+      light.style.cssText = `
+        position:absolute;top:calc(50% - 7.5px);left:calc(50% - 7.5px);
+        width:15px;height:15px;border-radius:50%;background:${o.blinkingLightColor};
+        box-shadow:0 0 10px ${o.blinkingLightColor};transform:translateZ(${zHalf + zUnit * 3}px);`;
+    } else {
+      light.classList.remove('dfv-alert-pulse');
+      light.removeAttribute('style');
+    }
+
+    if (nextState !== lastAlertState) {
+      slash.classList.remove('dfv-alert-pulse');
+      light.classList.remove('dfv-alert-pulse');
+      if (isAlert && !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+        void slash.offsetWidth;
+        slash.classList.add('dfv-alert-pulse');
+        if (isMissing) light.classList.add('dfv-alert-pulse');
+      }
+      lastAlertState = nextState;
+    }
   }
 
   /* --- 数式用定数 -------------------------------------------------- */
@@ -544,6 +746,8 @@ export function createFilamentPreview(mount, opts) {
   const light   = div();
   slash.classList.add('slash');
   light.classList.add('light');
+  slash.addEventListener('animationend', () => slash.classList.remove('dfv-alert-pulse'));
+  light.addEventListener('animationend', () => light.classList.remove('dfv-alert-pulse'));
   root.appendChild(slash);
   root.appendChild(light);
 
@@ -610,16 +814,11 @@ export function createFilamentPreview(mount, opts) {
     btnWrapper.appendChild(btnReset);
 
     btnReset.addEventListener('click', () => {
-      // 自動回転を解除
-      if (autoRotate) {
-        cancelAnimationFrame(autoRotateId);
-        autoRotate = false;
-        btnAuto.classList.remove('dfv-btn-active');
-      }
       rotX = o.initialRotX;
       rotY = _smoothAngle(rotY, o.initialRotY);
       rotZ = o.initialRotZ;
-      redraw();
+      stopAutoRotate();
+      applyRotationTransform();
     });
   }
 
@@ -631,18 +830,7 @@ export function createFilamentPreview(mount, opts) {
     btnProfile.className = 'dfv-btn';
     btnProfile.title = '斜め上からのビュー';
     btnProfile.addEventListener('click', () => {
-
-      // 自動回転を解除
-      if (autoRotate) {
-        cancelAnimationFrame(autoRotateId);
-        autoRotate = false;
-        btnAuto.classList.remove('dfv-btn-active');
-      }
-
-      rotX = -25;
-      rotY = _smoothAngle(rotY, 35);
-      rotZ = -50;
-      redraw();
+      setRotationView(-25, 35, -50);
     });
     btnWrapper.appendChild(btnProfile);
   }
@@ -653,18 +841,7 @@ export function createFilamentPreview(mount, opts) {
     btnSide.className = 'dfv-btn';
     btnSide.title = '正面からのビュー';
     btnSide.addEventListener('click', () => {
-
-      // 自動回転を解除
-      if (autoRotate) {
-        cancelAnimationFrame(autoRotateId);
-        autoRotate = false;
-        btnAuto.classList.remove('dfv-btn-active');
-      }
-
-      rotX =   0;
-      rotY = _smoothAngle(rotY, 0);
-      rotZ = -50;
-      redraw();
+      setRotationView(0, 0, -50);
     });
     btnWrapper.appendChild(btnSide);
   }
@@ -676,18 +853,7 @@ export function createFilamentPreview(mount, opts) {
     btnFront.className = 'dfv-btn';
     btnFront.title = '真横からのビュー';
     btnFront.addEventListener('click', () => {
-
-      // 自動回転を解除
-      if (autoRotate) {
-        cancelAnimationFrame(autoRotateId);
-        autoRotate = false;
-        btnAuto.classList.remove('dfv-btn-active');
-      }
-
-      rotX = -42;
-      rotY = _smoothAngle(rotY, 90);
-      rotZ = -50;
-      redraw();
+      setRotationView(-42, 90, -50);
     });
     btnWrapper.appendChild(btnFront);
   }
@@ -701,20 +867,8 @@ export function createFilamentPreview(mount, opts) {
     btnAuto.title = 'Toggle auto-rotate';
     btnWrapper.appendChild(btnAuto);
     btnAuto.addEventListener('click', () => {
-      if (autoRotate) {
-        cancelAnimationFrame(autoRotateId);
-        autoRotate = false;
-        btnAuto.classList.remove('dfv-btn-active');
-      } else {
-        autoRotate = true;
-        btnAuto.classList.add('dfv-btn-active');
-        (function rotateLoop() {
-          if (!autoRotate) return;
-          rotY += 0.5;
-          redraw();
-          autoRotateId = requestAnimationFrame(rotateLoop);
-        })();
-      }
+      if (autoRotate) stopAutoRotate();
+      else startAutoRotate();
     });
   }
 
@@ -899,48 +1053,11 @@ export function createFilamentPreview(mount, opts) {
     }
 
 
-    /* ----- スラッシュ / ライト ----- */
-    slash.style.display = ( (usedUp && o.showUsedUpIndicator) || !isPresent ) ? 'block':'none';
-
-    if (slash.style.display === 'block') {
-      const color = !isPresent ? 'rgba(59,130,246,0.8)' : 'rgba(239,68,68,0.8)';
-      slash.className = 'dfv-blink-slash';
-      // ３D 回転から切り離し、常に前景に固定
-      slash.style.cssText = `
-        position:absolute;
-        top:50%; left:50%;
-        width:${reelOuterPx*1.50}px; height:10px;
-        transform:translate(-50%,-50%) rotate(-47.5deg);
-        background:${color};
-        border-radius:6px;
-        pointer-events:none;
-        z-index:10;`;
-    }
-
-/*
-    if (slash.style.display === 'block') {
-      const color = !isPresent ? 'rgba(59,130,246,0.8)' : 'rgba(239,68,68,0.8)';
-      slash.className = 'dfv-blink-slash';
-      slash.style.cssText = `
-        position:absolute;top:50%;left:50%;width:${reelOuterPx*1.125}px;height:10px;
-        transform:translate(-50%,-50%) rotate(-45deg) translateZ(${zHalf + zUnit * 2}px);
-        background:${color};border-radius:6px;pointer-events:none;`;
-    }
-*/
-
-    light.style.display = !isPresent ? 'block':'none';
-    if (!isPresent) {
-      light.className = 'dfv-blink-light';
-      light.style.cssText = `
-        position:absolute;top:calc(50% - 7.5px);left:calc(50% - 7.5px);
-        width:15px;height:15px;border-radius:50%;background:${o.blinkingLightColor};
-        box-shadow:0 0 10px ${o.blinkingLightColor};transform:translateZ(${zHalf + zUnit * 3}px);`;
-    }
-
-    /* ----- 3D 回転角度正規化 ---- */
-    rotX = ((rotX % 720) + 720) % 720; if (rotX >= 360) { rotX -= 720; }
-    rotY = ((rotY % 720) + 720) % 720; if (rotY >= 360) { rotY -= 720; }
-    rotZ = ((rotZ % 720) + 720) % 720; if (rotZ >= 360) { rotZ -= 720; }
+    /* ----- スラッシュ / ライト ---- */
+    const alertState = !isPresent
+      ? 'missing'
+      : (usedUp && o.showUsedUpIndicator) ? 'used-up' : 'normal';
+    updateAlertIndicators(alertState, reelOuterPx * 1.50);
 
     /* ----- 情報表示更新 ---- */
     infoLength.style.display  = o.showInfoLength  ? 'block' : 'none';
@@ -965,15 +1082,7 @@ export function createFilamentPreview(mount, opts) {
     }
 
     /* ----- 3D 回転 ---- */
-    // rotY を [0,360) に正規化し、累積による巨大値を防止
-    rotY = ((rotY % 360) + 360) % 360;
-    // autoRotate 時は、正面(0–180)ならそのまま、背面(180–360)なら Z を反転
-    const rotZval = autoRotate
-      ? (rotY < 180 ? rotZ : -rotZ)
-      : rotZ;
-
-    scene.style.transform =
-      `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZval}deg)`;
+    applyRotationTransform();
 
     /* ----- オーバーレイ情報更新 ----- */
     overlayLength.style.display  = o.showOverlayLength  ? 'block' : 'none';
@@ -1098,7 +1207,7 @@ export function createFilamentPreview(mount, opts) {
         const dx = e.clientX - lastX, dy = e.clientY - lastY;
         rotY += dx * 0.5; rotX -= dy * 0.5;
         lastX = e.clientX; lastY = e.clientY;
-        redraw();
+        applyRotationTransform();
       });
       scene.addEventListener('pointerup', () => {
         dragging = false; scene.style.cursor = 'grab';
@@ -1132,8 +1241,16 @@ export function createFilamentPreview(mount, opts) {
       rotX = o.initialRotX;
       rotY = _smoothAngle(rotY, o.initialRotY);
       rotZ = o.initialRotZ;
-      redraw();
+      stopAutoRotate();
+      applyRotationTransform();
     });
+  }
+
+  if (typeof IntersectionObserver === 'function') {
+    intersectionObserver = new IntersectionObserver(entries => {
+      visibleForRotation = entries.some(entry => entry.isIntersecting);
+    });
+    intersectionObserver.observe(root);
   }
 
   /* 初回描画 */
@@ -1159,7 +1276,7 @@ export function createFilamentPreview(mount, opts) {
     },
     /** 内部状態を取得 */
     getState(){
-      return { rotX, rotY, rotZ, currentLen, isPresent };
+      return { rotX, rotY, rotZ, currentLen, isPresent, autoRotate };
     },
 
     /**
@@ -1192,7 +1309,56 @@ export function createFilamentPreview(mount, opts) {
       rotX = o.initialRotX;
       rotY = _smoothAngle(rotY, o.initialRotY);
       rotZ = o.initialRotZ;
-      redraw();
+      stopAutoRotate();
+      applyRotationTransform();
+    },
+
+    /** 正面ビューへ切り替える */
+    setFrontView(){
+      setRotationView(-42, 90, -50);
+    },
+
+    /** 横ビューへ切り替える */
+    setSideView(){
+      setRotationView(0, 0, -50);
+    },
+
+    /** 斜めビューへ切り替える */
+    setProfileView(){
+      setRotationView(-25, 35, -50);
+    },
+
+    /** 自動回転をトグルし、現在の有効状態を返す */
+    toggleAutoRotate(){
+      return autoRotate ? stopAutoRotate() : startAutoRotate();
+    },
+
+    /** 自動回転を開始する */
+    startAutoRotate,
+
+    /** 自動回転を停止する */
+    stopAutoRotate,
+
+    /** 自動回転中かどうかを返す */
+    isAutoRotating(){
+      return autoRotate;
+    },
+
+    /** プレビュー内部の非同期資源を破棄する */
+    destroy(){
+      destroyed = true;
+      autoRotate = false;
+      if (autoRotateId != null) {
+        cancelAnimationFrame(autoRotateId);
+        autoRotateId = null;
+      }
+      if (intersectionObserver) {
+        intersectionObserver.disconnect();
+        intersectionObserver = null;
+      }
+      slash.classList.remove('dfv-alert-pulse');
+      light.classList.remove('dfv-alert-pulse');
+      notifyAutoRotateChange();
     },
 
     /**

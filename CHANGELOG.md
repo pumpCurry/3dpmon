@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.2.1037 (2026-07-11) — ⚠ 実機検証候補（CPU負荷・カメラライフサイクル修正）
+
+### 実機確認済みの CPU 高負荷・カメラ/フィラメント/温度セル ライフサイクル修正
+
+> **注意**: 1035(origin/main) 上へ統合した実機検証候補。カメラON/OFF連打のCPU累積、フィラメント警告の
+> 無限アニメ、温度セルの常時transition を止める性能修正を含む。実機で 7.1〜7.4 の受入項目を確認すること。
+> 版番号: 1036 は別候補(P1-3, PR#405)が先取り中のため 1037。マージ順で最終番号は調整する。
+
+#### 修正（不具合）— カメラ（P0）
+- **MJPEG カメラのON/OFF連打でCPU負荷が累積する問題を修正。** 停止を `img.src=""` から `removeAttribute("src")`＋
+  `<img>` 要素の新品差し替え（`_releaseImagePipeline`）に変更し、Chromium の MJPEG デコード/Raster/Compositor
+  資源を解放。OFFは即時、ONは 750ms debounce で最後の要求だけ接続。generation で stale callback を無効化。
+  retry/countdown/watchdog/poll/debounce/service-probe を停止時に全解除、疎通確認 fetch に AbortController＋3秒
+  timeout。同一 ip:port の newest-wins dedup は維持。
+
+#### 修正（不具合）— フィラメント警告アニメ / 表示（P0/P1）
+- **フィラメント切れ/未装着の無限CSSアニメ（`dfv-blink-slash`/`dfv-blink-light`）を廃止。** 状態遷移時だけ
+  有限pulse（2〜3秒で終了）を出し、以後は静的警告を維持。`prefers-reduced-motion` 対応。定常状態で running な
+  dfv アニメは0。
+- **フィラメント疑似3Dモデルの回転ボタン（⟲/◐/◑/◉）を機能化。** `createFilamentPreview` に
+  setFrontView/setSideView/setProfileView/toggleAutoRotate/startAutoRotate/stopAutoRotate/destroy を公開。
+  自動回転は `redraw()` 全体を呼ばず transform 更新のみ・~15fps 間引き・hidden/detached/destroy で停止。
+  destroy で rAF cancel・observer disconnect。フッターボタンは公開APIへ直結（optional chain で欠落を隠さない）。
+
+#### 修正（不具合）— 温度セル（P1）
+- **`.thermal-cell` の 350ms color/background transition（2Hz更新のたびに常時稼働）を `transition: none` へ。**
+  同一論理色は dataset キーで比較し変化時だけ style を書き換え。方向矢印・加熱/放熱色・異常色・集約バッジは維持。
+
+#### 統合・テスト
+- 元実装(別セッション)は v2.2.1032 土台だったため、監査作業(1033〜1035)を含む現行 1035 の上へ統合。統合時に
+  カメラの `split(":")[0]` を `extractHost`（dest_parsing_guard 準拠・IPv6安全）へ、`result-aborted`(1033) を再追加。
+- レビュー指摘のテスト穴を補強: img差し替えの実経路検証、無意味assertionの是正、thermal dedup の behavioral 検証。
+  eslint の tests glob に jsdom/Node グローバルを追加（pre-existing な no-undef を解消）。
+- 全**793**テスト緑。touched 3dp_lib は eslint 0 error。
+- ⚠ 既存の WebSocket 再接続／ホスト名統合の静的監査候補は本PRに含めない（指示書に従い分離）。
+
+---
+
 ## v2.2.1035 (2026-07-04) — ⚠ 実機検証候補（フィラメント中核変更を含む）
 
 ### 統合監査 残りの P0/P1: フィラメント（resume/live/finalize/runout）＋旧UI削除＋relay revision
