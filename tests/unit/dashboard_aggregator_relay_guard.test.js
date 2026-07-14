@@ -64,6 +64,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   reserveFilament: vi.fn(),
   finalizeFilamentUsage: vi.fn(),
   autoCorrectCurrentSpool: vi.fn(),
+  catchUpOfflineFilamentAttribution: vi.fn(),
   addUsageSnapshot: vi.fn(),
   beginExternalPrint: vi.fn(),
   formatFilamentAmount: vi.fn(() => ({ display: "" })),

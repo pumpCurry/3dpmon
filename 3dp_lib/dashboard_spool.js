@@ -1822,8 +1822,14 @@ export function buildOfflineFilamentInfo(spool, usedMm) {
  */
 export function shouldLinkOfflineJob(job) {
   if (!job) return false;
-  if (Array.isArray(job.filamentInfo) && job.filamentInfo.length > 0) return false;
-  if (job.filamentId) return false;  // 既に紐付け済み
+  // ★ レビュー指摘(点4): 色情報だけ(spoolId 無し)の filamentInfo は「帰属済み」とみなさない。
+  //   従来は配列が空でなければ帰属済み扱いだったため、色のみエントリを持つオフライン完了ジョブが
+  //   補完対象から外れ、「残量だけ減る/履歴はフィラメントなし」という不整合を生んでいた。
+  //   spoolId を持つエントリが1つでもあるか、filamentId が付いていれば帰属済みとする。
+  const info = Array.isArray(job.filamentInfo) ? job.filamentInfo : [];
+  const hasExplicitSpool = info.some(fi => fi && fi.spoolId);
+  if (hasExplicitSpool) return false;
+  if (job.filamentId) return false;
   return true;
 }
 
@@ -1848,7 +1854,12 @@ function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
     if (!jobIds.has(String(job.id))) continue;
     if (!shouldLinkOfflineJob(job)) continue;
     const usedMm = Number(job.materialUsedMm ?? job.usagematerial ?? 0) || 0;
-    job.filamentInfo = [buildOfflineFilamentInfo(spool, usedMm)];
+    // ★ レビュー指摘(点5): 全置換ではなく upsert。既存の色情報エントリ等を残しつつ、
+    //   当該スプールのエントリが無ければ追加する（冪等：同一 spoolId が既にあれば何もしない）。
+    const prev = Array.isArray(job.filamentInfo) ? job.filamentInfo : [];
+    if (!prev.some(fi => fi && fi.spoolId === spool.id)) {
+      job.filamentInfo = [...prev, buildOfflineFilamentInfo(spool, usedMm)];
+    }
     job.filamentId = spool.id;
     linked++;
   }
@@ -1879,6 +1890,38 @@ function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
  *   遡及紐付けする（reconcile の帰属計算の入力になる）。
  * ★ 印刷中(currentPrintID あり)のスプールは reconcile しない（オシレーション回避）。
  */
+export function catchUpOfflineFilamentAttribution(hostname, { liveJobId = null, spool = null } = {}) {
+  if (!hostname || hostname === "_$_NO_MACHINE_$_") return 0;
+  const sp = spool || getCurrentSpool(hostname);
+  if (!sp) return 0;
+  let jobs;
+  try { jobs = loadHistory(hostname); } catch { return 0; }
+  if (!Array.isArray(jobs) || !jobs.length) return 0;
+
+  // 装着区間の下限（startPrintID/最新 mount の sinceJobId）。排他的下限（numId > sinceId）。
+  // ★ レビュー指摘(点6): この比較(<=)は変更しない。sinceJobId は「装着時点で最後に完了済み
+  //   だったジョブ」＝排他的下限であり、<= のまま除外するのが正しい（装着直前完了ジョブを
+  //   新スプールへ誤帰属＝二重減算するのを防ぐ）。
+  const sinceId = Number(sp.startPrintID) || 0;
+  const liveIdStr = liveJobId != null ? String(liveJobId) : null;
+  const linkJobIds = new Set();
+  for (const entry of jobs) {
+    if (!entry) continue;
+    // ★ レビュー指摘(点2): 現在進行中のジョブ(C)は除外する（完了ジョブと誤認しない）。
+    if (liveIdStr != null && String(entry.id) === liveIdStr) continue;
+    if (!shouldLinkOfflineJob(entry)) continue;
+    if (!entry.printfinish) continue;
+    const used = Number(entry.materialUsedMm ?? entry.usagematerial ?? NaN);
+    if (!Number.isFinite(used) || used <= 0) continue;
+    const numId = Number(entry.id);
+    if (!Number.isFinite(numId) || numId <= 0) continue;
+    if (sinceId > 0 && numId <= sinceId) continue;   // 排他的下限（<= のまま）
+    linkJobIds.add(String(entry.id));
+  }
+  if (linkJobIds.size === 0) return 0;
+  return _linkOfflineJobsToSpool(hostname, sp, linkJobIds);
+}
+
 export function autoCorrectCurrentSpool(hostname) {
   if (!hostname || hostname === "_$_NO_MACHINE_$_") {
     console.error(`[IMPL_ERROR] autoCorrectCurrentSpool: 異常な機器指定 hostname="${hostname}"`);
@@ -1891,28 +1934,11 @@ export function autoCorrectCurrentSpool(hostname) {
 
   // ── オフライン完了印刷へ現在フィラメントを継続紐付け（filamentInfo を補完）──
   //   この紐付けが reconcile の attributedUsed の入力になるため reconcile の前に行う。
+  //   ★ レビュー指摘(点1): 帰属補完は reconcile から分離した catchUp 関数へ委譲する。
+  //   （帰属＝filamentInfo/filamentId のみ、残量には触れない。残量は下の reconcile が担当）。
   const beforeRemain = Number(spool.remainingLengthMm);
   try {
-    const persistedHistory = loadHistory(hostname);
-    if (Array.isArray(persistedHistory) && persistedHistory.length) {
-      // 装着区間の下限（startPrintID/最新 mount の sinceJobId）以降の未紐付け完了印刷を対象
-      const sinceId = Number(spool.startPrintID) || 0;
-      const linkJobIds = new Set();
-      for (const entry of persistedHistory) {
-        if (!entry || !shouldLinkOfflineJob(entry)) continue;
-        if (!entry.printfinish) continue;
-        const used = Number(entry.materialUsedMm ?? NaN);
-        if (!Number.isFinite(used) || used <= 0) continue;
-        const numId = Number(entry.id);
-        if (!Number.isFinite(numId) || numId <= 0) continue;
-        // sinceId が確定している場合のみ下限で絞る（0=ブートストラップは全件対象）
-        if (sinceId > 0 && numId <= sinceId) continue;
-        linkJobIds.add(String(entry.id));
-      }
-      if (linkJobIds.size > 0) {
-        _linkOfflineJobsToSpool(hostname, spool, linkJobIds);
-      }
-    }
+    catchUpOfflineFilamentAttribution(hostname, { liveJobId: null, spool });
   } catch (e) {
     console.warn(`[autoCorrect] ${hostname}: オフライン紐付けに失敗:`, e?.message || e);
   }

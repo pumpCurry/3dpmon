@@ -54,8 +54,10 @@ import {
   buildOfflineFilamentInfo,
   shouldLinkOfflineJob,
   finalizeFilamentUsage,
+  catchUpOfflineFilamentAttribution,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
+import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
 
 // =============================================
 // getSpoolState
@@ -566,5 +568,76 @@ describe('buildFilamentRecommendations', () => {
     registerPrintManagerAccessor({ getFileList: () => [{ basename: 'a.gcode', usagematerial: 100 }], buildFileInsight: () => null });
     expect(buildFilamentRecommendations(0, 'PLA', 'host1')).toEqual([]);
     expect(buildFilamentRecommendations(-100, 'PLA', 'host1')).toEqual([]);
+  });
+});
+
+// =============================================
+// オフライン完了ジョブの遡及帰属（P0: mid-print 再起動シナリオ）
+// レビュー指摘の catchUpOfflineFilamentAttribution を検証する。
+// シナリオ: S装着 → A開始 → A途中でapp停止 → A/Bオフライン完了 → C途中でapp起動。
+// 期待: A・Bに現在装着スプールSを継続帰属（filamentId=S, spoolId=S, usedMm=各materialUsedMm）、
+//       Cは触らない、再実行で二重帰属しない。
+// =============================================
+describe('catchUpOfflineFilamentAttribution — オフライン完了ジョブの遡及帰属(P0)', () => {
+  const S = {
+    id: 'S', serialNo: 1, name: 'PLA-S', colorName: '白', filamentColor: '#fff',
+    material: 'PLA', printCount: 0, remainingLengthMm: 100000, startPrintID: '0',
+  };
+  let history;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    history = [
+      { id: 1001, printfinish: 1, materialUsedMm: 15000 },            // A: オフライン完了
+      { id: 1002, printfinish: 1, materialUsedMm: 25000, filamentInfo: [] }, // B: オフライン完了
+      { id: 1003, printfinish: 0, materialUsedMm: 0 },                // C: 進行中(現在ジョブ)
+    ];
+    loadHistory.mockReturnValue(history);
+  });
+
+  it('A・Bに継続帰属し、現在ジョブCは除外する', () => {
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    expect(n).toBe(2);
+    const a = history.find(j => j.id === 1001);
+    const b = history.find(j => j.id === 1002);
+    const c = history.find(j => j.id === 1003);
+    expect(a.filamentId).toBe('S');
+    expect(a.filamentInfo[0]).toMatchObject({ spoolId: 'S', usedMm: 15000, isOfflineInferred: true });
+    expect(b.filamentInfo.find(fi => fi.spoolId === 'S').usedMm).toBe(25000);
+    expect(c.filamentId).toBeUndefined();       // 現在ジョブは触らない
+    expect(saveHistory).toHaveBeenCalled();
+  });
+
+  it('冪等: 2回目は対象0で重複エントリを作らない', () => {
+    catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    const lenA = history.find(j => j.id === 1001).filamentInfo.length;
+    const n2 = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    expect(n2).toBe(0);
+    expect(history.find(j => j.id === 1001).filamentInfo.length).toBe(lenA);
+  });
+
+  it('色情報だけのfilamentInfoも帰属対象(点4)・既存色エントリは残す(点5 upsert)', () => {
+    history[0].filamentInfo = [{ filamentColor: '#abc' }]; // 色のみ(spoolId無し)
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    expect(n).toBeGreaterThanOrEqual(1);
+    const a = history.find(j => j.id === 1001);
+    expect(a.filamentInfo.some(fi => fi.filamentColor === '#abc')).toBe(true); // 色エントリ保持
+    expect(a.filamentInfo.some(fi => fi.spoolId === 'S')).toBe(true);          // スプール追加
+    expect(a.filamentId).toBe('S');
+  });
+
+  it('sinceId(startPrintID)以下は排他的下限で除外(点6 <=のまま)', () => {
+    const S2 = { ...S, startPrintID: '1001' }; // 装着はA完了後
+    catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S2 });
+    expect(history.find(j => j.id === 1001).filamentId).toBeUndefined(); // A(1001<=sinceId)除外
+    expect(history.find(j => j.id === 1002).filamentId).toBe('S');       // B(1002>1001)帰属
+  });
+
+  it('spoolId付き既存帰属のジョブは尊重して上書きしない', () => {
+    history[0].filamentInfo = [{ spoolId: 'OTHER', usedMm: 9999 }];
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    // A は既に spoolId 帰属済み → 対象外。B のみ帰属。
+    expect(history.find(j => j.id === 1001).filamentInfo[0].spoolId).toBe('OTHER');
+    expect(history.find(j => j.id === 1002).filamentId).toBe('S');
+    expect(n).toBe(1);
   });
 });

@@ -46,6 +46,7 @@ import {
   reserveFilament,
   finalizeFilamentUsage,
   autoCorrectCurrentSpool,
+  catchUpOfflineFilamentAttribution,
   addUsageSnapshot,
   beginExternalPrint,
   formatFilamentAmount,
@@ -1217,6 +1218,30 @@ export function aggregatorUpdate() {
       s._lastAutoCorrect = _now;
       autoCorrectCurrentSpool(host);
     }
+    // ★ レビュー指摘(点3): stale resume 対策。復元/前回の currentPrintID が実機の現在ジョブより
+    //   古い（アプリ停止中に別ジョブが開始→現在ジョブが更新された）場合、旧ジョブの一時追跡値を
+    //   現在ジョブへ持ち越さないよう破棄する。これをしないと直下の現在ジョブ採用(!currentPrintID)が
+    //   働かず、C の初期化・filamentId 付与・ライブ追跡が旧 A の残骸に阻害される。
+    //   ジョブID(printStartTime epoch)は単調増加なので「live > current」を stale 判定に使う
+    //   （非数値IDは NaN で判定不成立＝安全側で破棄しない）。
+    if (spool && spool.currentPrintID && isPrinting) {
+      const liveJob = resolveFilamentJobId(
+        storedData,
+        machine?.printStore?.current ?? null,
+        s.prevPrintID
+      );
+      const liveN = Number(liveJob);
+      const curN = Number(spool.currentPrintID);
+      if (liveJob && Number.isFinite(liveN) && Number.isFinite(curN) && liveN > curN) {
+        console.warn(`[aggregator] stale resume 検出: currentPrintID=${spool.currentPrintID} < live=${liveJob} → 旧一時値を破棄`, { host });
+        spool.currentPrintID = "";
+        spool.currentJobStartLength = null;
+        spool.currentJobExpectedLength = null;
+        s.accumulatedUsedMaterial = 0;
+        s.prevUsedMaterialLength = null;
+        s.prevUsageProgress = 0;
+      }
+    }
     // フィラメント残量計算に入る前に、未確定のジョブIDを補完して紐付け漏れを防ぐ
     // ただし印刷中でない場合は resolve しない（クリア済みの stale ID を書き戻す防止）
     if (spool && !spool.currentPrintID && isPrinting) {
@@ -1228,6 +1253,17 @@ export function aggregatorUpdate() {
       if (resolvedJobId) {
         spool.currentPrintID = resolvedJobId;
       }
+    }
+    // ★ レビュー指摘(点2): オフライン完了ジョブ(A/B)の帰属補完を印刷中でも走らせる。
+    //   現在ジョブ(C)は除外し、残量・currentJobStartLength には触れない（filamentInfo/filamentId
+    //   のみ補完・冪等）。historyList マージで printStore.history へ A/B が入り、C が解決された後に
+    //   実行される。idle 時は上の autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
+    if (spool && (!s._lastCatchUp || _now - s._lastCatchUp > 10000)) {
+      s._lastCatchUp = _now;
+      try {
+        const liveJob = spool.currentPrintID || (machine?.printStore?.current?.id ?? null);
+        catchUpOfflineFilamentAttribution(host, { liveJobId: liveJob, spool });
+      } catch (e) { console.warn("[aggregator] catchUp 失敗:", e?.message || e); }
     }
 
     // アイドル状態から印刷開始へ遷移した場合の初期化

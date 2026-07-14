@@ -48,7 +48,7 @@ vi.mock("../../3dp_lib/dashboard_filament_change.js", () => ({
 }));
 vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   getCurrentSpool: vi.fn(() => null), reserveFilament: vi.fn(), finalizeFilamentUsage: vi.fn(),
-  autoCorrectCurrentSpool: vi.fn(), addUsageSnapshot: vi.fn(), beginExternalPrint: vi.fn(),
+  autoCorrectCurrentSpool: vi.fn(), catchUpOfflineFilamentAttribution: vi.fn(), addUsageSnapshot: vi.fn(), beginExternalPrint: vi.fn(),
   formatFilamentAmount: vi.fn(() => ({ display: "" })), formatSpoolDisplayId: vi.fn(() => ""),
   getSpoolById: vi.fn(() => null), setCurrentSpoolId: vi.fn(), addInferredSpool: vi.fn(),
 }));
