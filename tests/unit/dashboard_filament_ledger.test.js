@@ -29,6 +29,7 @@ const {
   appendUnmountEvent,
   attributedUsed,
   getSpoolIntervals,
+  getOpenMountInterval,
   deriveSpoolRemaining,
   reconcileSpool,
   recomputeSpoolFromManualEdit,
@@ -912,5 +913,56 @@ describe("boundaryStatus — 境界不明区間は遡及減算しない(P0-1)", 
     setHistory("h", [job(1000, 10000), job(1001, 5000)]);
     const d = deriveSpoolRemaining("S");
     expect(d.remainingMm).toBe(285000); // 1001(>1000)のみ: 290000-5000
+  });
+});
+
+// =====================================================================
+// レビュー変更要求(第2弾): boundaryStatus 移行 / excludeJobId / open区間
+// =====================================================================
+describe("旧mount移行・excludeJobId・getOpenMountInterval(レビュー第2弾)", () => {
+  beforeEach(reset);
+
+  it("P0-2: 旧mountイベント(boundaryStatus無し, sinceJobId=0)は unknown 扱いで遡及減算しない", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 270000 });
+    // 旧バージョンが作った危険な bootstrap アンカー（boundaryStatus フィールドが存在しない）
+    mockMonitorData.mountHistory = [
+      { evId: "mount_S_1", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 270000, sinceJobId: 0 }
+    ];
+    setHistory("h", [job(1001, 15000), job(1002, 20000)]);
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.boundaryStatus).toBe("unknown");
+    const d = deriveSpoolRemaining("S");
+    expect(d.remainingMm).toBe(270000);   // 全履歴の二重減算(=235000)にならない
+    expect(d.verified).toBe(false);
+  });
+
+  it("P0-2: 旧mountイベントでも sinceJobId>0 なら known（装着後の完了ジョブを減算）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 290000 });
+    mockMonitorData.mountHistory = [
+      { evId: "mount_S_1", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 290000, sinceJobId: 1000 }
+    ];
+    setHistory("h", [job(1000, 10000), job(1001, 5000)]);
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.boundaryStatus).toBe("known");
+    expect(deriveSpoolRemaining("S").remainingMm).toBe(285000); // 1001(>1000)のみ
+  });
+
+  it("P0-5: excludeJobId 指定で進行中ジョブ(履歴に混入)を減算から除外する", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    // C(1003) が finishTime 無しでも materialUsedMm>0 で履歴に存在（K1の途中使用量）
+    setHistory("h", [job(1001, 10000), job(1002, 20000), job(1003, 5000)]);
+    expect(deriveSpoolRemaining("S").remainingMm).toBe(265000);                       // A+B+C 全減算
+    expect(deriveSpoolRemaining("S", { excludeJobId: 1003 }).remainingMm).toBe(270000); // C除外=A+Bのみ
+  });
+
+  it("getOpenMountInterval は最新オープン区間を返し、閉じた区間は返さない", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 100000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 200000, sinceJobId: 10, ts: 1, boundaryStatus: "known" });
+    appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 20, ts: 2 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 100000, sinceJobId: 20, ts: 3, boundaryStatus: "known" });
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.sinceJobId).toBe(20);   // 最新オープン
+    expect(iv.untilJobId).toBeNull();
   });
 });

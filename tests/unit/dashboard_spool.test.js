@@ -651,3 +651,69 @@ describe('catchUpOfflineFilamentAttribution — オフライン完了ジョブ�
     expect(n).toBe(1);
   });
 });
+
+// =============================================
+// catch-up / finalize と mount区間の結合（レビュー第2弾・実ledger）
+// =============================================
+describe("catchUp/finalize と mount区間の結合(レビュー第2弾)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monitorData.machines = {};
+    monitorData.filamentSpools = [];
+    monitorData.hostSpoolMap = {};
+    monitorData.mountHistory = [];
+    monitorData.usageHistory = [];
+  });
+
+  it("P0-1: unknown区間ではcatch-upを禁止し filamentId/filamentInfo を自動補完しない", () => {
+    const S = { id: "S", startPrintID: "0", name: "S", serialNo: 1, remainingLengthMm: 300000 };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    monitorData.mountHistory = [
+      { evId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "unknown" }
+    ];
+    const hist = [{ id: 1001, printfinish: 1, materialUsedMm: 10000 }];
+    loadHistory.mockReturnValue(hist);
+    const n = catchUpOfflineFilamentAttribution("h", { liveJobId: 1003, spool: S });
+    expect(n).toBe(0);
+    expect(hist[0].filamentId).toBeUndefined();
+    expect(hist[0].filamentInfo).toBeUndefined();
+  });
+
+  it("P0-1: catch-upの下限は startPrintID ではなく open mount区間の sinceJobId を使う", () => {
+    const S = { id: "S", startPrintID: "0", name: "S", serialNo: 1, remainingLengthMm: 300000 };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    // startPrintID=0 だが、装着区間 sinceJobId=1001（A完了後に装着）
+    monitorData.mountHistory = [
+      { evId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 1001, boundaryStatus: "known" }
+    ];
+    const hist = [
+      { id: 1001, printfinish: 1, materialUsedMm: 10000 },
+      { id: 1002, printfinish: 1, materialUsedMm: 20000 },
+    ];
+    loadHistory.mockReturnValue(hist);
+    catchUpOfflineFilamentAttribution("h", { liveJobId: 1003, spool: S });
+    expect(hist.find(j => j.id === 1001).filamentId).toBeUndefined(); // 1001<=sinceId 除外
+    expect(hist.find(j => j.id === 1002).filamentId).toBe("S");       // 1002>sinceId 帰属
+  });
+
+  it("P0-3: unknown区間は完了印刷で known へ再アンカーされる(finalizeFilamentUsage)", () => {
+    const S = {
+      id: "S", name: "S", serialNo: 1, remainingLengthMm: 300000,
+      currentPrintID: "1005", currentJobStartLength: 300000, totalLengthMm: 330000, usedLengthLog: [],
+    };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    monitorData.machines = { h: { printStore: { history: [] }, historyData: [] } };
+    monitorData.mountHistory = [
+      { evId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "unknown" }
+    ];
+    loadHistory.mockReturnValue([]);
+    finalizeFilamentUsage(40000, "1005", "h", true); // ジョブ1005が実消費40000で完了
+    const known = monitorData.mountHistory.filter(e => e.type === "mount" && e.boundaryStatus === "known");
+    expect(known.length).toBe(1);
+    expect(known[0].sinceJobId).toBe(1005);          // 完了ジョブで再アンカー
+    expect(known[0].anchorRemainingMm).toBe(260000); // 300000 - 40000
+  });
+});

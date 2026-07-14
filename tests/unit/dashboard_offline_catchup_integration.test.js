@@ -132,8 +132,8 @@ describe("オフライン取りこぼし→mid-print再起動 の帰属・基準
     const arg = _spool.catchUpOfflineFilamentAttribution.mock.calls[0][1];
     expect(String(arg.liveJobId)).toBe("1003");
 
-    // 4/5. derive(270000) が C の開始基準へ取り込まれる
-    expect(_ledger.deriveSpoolRemaining).toHaveBeenCalledWith("S");
+    // 4/5. derive(270000) が C(1003) 除外で呼ばれ、C の開始基準へ取り込まれる
+    expect(_ledger.deriveSpoolRemaining).toHaveBeenCalledWith("S", { excludeJobId: "1003" });
     expect(spool.remainingLengthMm).toBe(270000);
     // 2. 現在ジョブ C が採用されている（A のままではない）
     expect(String(spool.currentPrintID)).toBe("1003");

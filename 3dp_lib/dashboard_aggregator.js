@@ -1259,20 +1259,25 @@ export function aggregatorUpdate() {
     //   現在ジョブ(C)は除外し、filamentInfo/filamentId のみ補完（冪等）。historyList マージで
     //   printStore.history へ A/B が入り、C が解決された後に実行される。idle 時は上の
     //   autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
+    // catch-up でリベースが必要になった反映後残量（下の開始基準設定の後で currentJobStartLength へ反映）。
+    let _rebaseRemaining = null;
     if (spool && (!s._lastCatchUp || _now - s._lastCatchUp > 10000)) {
       s._lastCatchUp = _now;
       try {
         const liveJob = spool.currentPrintID || (machine?.printStore?.current?.id ?? null);
         const linked = catchUpOfflineFilamentAttribution(host, { liveJobId: liveJob, spool });
-        // ★ レビュー指摘(P0-2): A・B を帰属したら、その反映後残量を現在ジョブ C の開始基準へ
-        //   一度だけリベースする。これをしないと C.currentJobStartLength が A 開始前の古い残量に
-        //   なり、C 印刷中の表示・低残量/runout 判定が A+B 分だけ多いままになる。
-        //   印刷中でも「過去完了ジョブ分の取り込み」だけ行う専用処理（通常 reconcile は不許可）。
-        //   currentJobStartLength 未設定（C の追跡開始前）のときだけ行い、二重取り込みを避ける。
-        if (linked > 0 && spool.currentPrintID && spool.currentJobStartLength == null) {
-          const d = deriveSpoolRemaining(spool.id);
+        // ★ レビュー指摘(P0-2/P0-4/P0-5): A・B を帰属したら、その反映後残量を現在ジョブ C の開始基準へ
+        //   リベースする（C 印刷中の表示・低残量/runout 判定が A+B 分ズレないように）。
+        //   - P0-5: リベース用導出では現在ジョブ C を除外（C が履歴に materialUsedMm>0 で混入していても
+        //     完了扱いして二重減算しない）。
+        //   - currentJobStartLength への反映は「開始基準設定ブロック」の後で行う（先に書くと直後の
+        //     idle→start stale-transient クリアに巻き込まれ currentPrintID まで消えるため）。P0-4 対応で
+        //     currentJobStartLength が既設定でも下で上書きする。
+        if (linked > 0 && spool.currentPrintID) {
+          const d = deriveSpoolRemaining(spool.id, { excludeJobId: spool.currentPrintID });
           if (d && Number.isFinite(d.remainingMm)) {
             spool.remainingLengthMm = d.remainingMm;
+            _rebaseRemaining = d.remainingMm;
           }
         }
       } catch (e) { console.warn("[aggregator] catchUp 失敗:", e?.message || e); }
@@ -1329,6 +1334,12 @@ export function aggregatorUpdate() {
           s.prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
         }
         s.prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
+      }
+      // ★ レビュー指摘(P0-4): catch-up でリベースが発生していれば、C の開始基準を反映後残量へ補正する。
+      //   ここは開始基準設定・idle→start クリアの後なので、currentJobStartLength が先に設定済み
+      //   （履歴の遅延到着）でも安全に上書きできる。累積消費(accumulatedUsedMaterial)は独立なので保たれる。
+      if (_rebaseRemaining != null && spool.currentPrintID) {
+        spool.currentJobStartLength = _rebaseRemaining;
       }
       const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
       const used = Number(storedData.usedMaterialLength?.rawValue);

@@ -233,12 +233,20 @@ export function getSpoolIntervals(spoolId) {
     if (e.type === "mount") {
       // 直前の mount がオープンのままなら（unmount を見届けず）クローズ扱いにせず置換せず、
       // 新規区間を開く（前の区間はオープンのまま残す＝最新 anchor を信頼）
+      // ★ レビュー指摘(P0-2): 旧バージョンの mount イベントには boundaryStatus が無い。
+      //   boundaryStatus 欠落 かつ sinceJobId=0 の「危険な bootstrap アンカー」は、
+      //   後から届く全履歴を遡及減算し得るため、読込時に安全側で "unknown" へ移行する。
+      //   （明示 "unknown" もそのまま unknown。それ以外＝新イベント/sinceJobId>0 は known。）
+      const _since = Number(e.sinceJobId) || 0;
+      const bs = (e.boundaryStatus === "unknown"
+        || (e.boundaryStatus == null && _since === 0))
+        ? "unknown" : "known";
       open = {
         host: e.host,
-        sinceJobId: Number(e.sinceJobId) || 0,
+        sinceJobId: _since,
         untilJobId: null,
         anchorRemainingMm: Number(e.anchorRemainingMm) || 0,
-        boundaryStatus: e.boundaryStatus === "unknown" ? "unknown" : "known"
+        boundaryStatus: bs
       };
       intervals.push(open);
     } else if (e.type === "unmount") {
@@ -258,6 +266,26 @@ export function getSpoolIntervals(spoolId) {
   }
   // mount 記録が無ければ空（レガシー printIdRanges からの区間捏造はしない）。
   return intervals;
+}
+
+/**
+ * 指定スプール・ホストの「最新オープン装着区間」を返す（無ければ最新区間、無ければ null）。
+ *
+ * catch-up の下限判定・境界状態(boundaryStatus)の参照に使う。startPrintID ではなく
+ * mount 区間の sinceJobId/boundaryStatus を権威とするための入口（レビュー指摘 P0-1）。
+ *
+ * @function getOpenMountInterval
+ * @param {string} spoolId - スプールID
+ * @param {string} host - ホスト名
+ * @returns {?{host:string, sinceJobId:number, untilJobId:?number, anchorRemainingMm:number, boundaryStatus:string}}
+ */
+export function getOpenMountInterval(spoolId, host) {
+  const ivs = getSpoolIntervals(spoolId).filter(iv => iv.host === host);
+  if (ivs.length === 0) return null;
+  for (let i = ivs.length - 1; i >= 0; i--) {
+    if (ivs[i].untilJobId == null) return ivs[i];
+  }
+  return ivs[ivs.length - 1];
 }
 
 /**
@@ -282,10 +310,14 @@ export function getSpoolIntervals(spoolId) {
  * @param {string} spoolId - スプールID
  * @param {Object} [opts]
  * @param {number} [opts.liveUsedMm=0] - 進行中ジョブの暫定消費（表示用オーバーレイ）。権威 reconcile では 0
+ * @param {string|number|null} [opts.excludeJobId=null] - 減算から除外するジョブID。
+ *   ★ レビュー指摘(P0-5): 進行中ジョブ(C)が履歴に materialUsedMm>0 で混入している場合、
+ *   完了判定(materialUsedMm>0)だけでは C を完了扱いして減算し、ライブ積算で二重減算になる。
+ *   リベース用の導出では現在ジョブ(C)をここで除外する。
  * @returns {{remainingMm:number, verified:boolean, mode:string, usedMm:number}}
  *   mode は "anchor"（通常）／"none"（区間なし）。
  */
-export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0 } = {}) {
+export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = null } = {}) {
   const spool = (monitorData.filamentSpools || []).find(s => s.id === spoolId);
   const total = Number(spool?.totalLengthMm) || 0;
   const intervals = getSpoolIntervals(spoolId);
@@ -322,10 +354,13 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0 } = {}) {
     if (!Number.isFinite(pid)) continue;
     if (pid < minPrintId) minPrintId = pid;
   }
+  const _excl = excludeJobId != null ? String(excludeJobId) : null;
   if (!boundaryUnknown) {
     for (const job of hist) {
       const pid = _jobId(job);
       if (!Number.isFinite(pid)) continue;
+      // ★ P0-5: 除外指定ジョブ（進行中の現在ジョブ）は減算に含めない。
+      if (_excl != null && String(job.id) === _excl) continue;
       // printId > sinceJobId（厳密大なり）かつ（open or <= untilJobId）かつ完了
       if (pid <= anchorIv.sinceJobId) continue;
       if (anchorIv.untilJobId != null && pid > anchorIv.untilJobId) continue;

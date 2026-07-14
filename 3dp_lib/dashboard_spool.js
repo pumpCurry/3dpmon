@@ -50,7 +50,8 @@ import {
   reconcileSpool,
   getOpenFilamentEvent,
   resolveFilamentEvent,
-  deriveSpoolRemaining
+  deriveSpoolRemaining,
+  getOpenMountInterval
 } from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
@@ -1659,6 +1660,28 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       && _entry.filamentInfo.some(fi => fi && fi.spoolId && fi.spoolId !== s.id);
     if (_isSplit) _upsertSplitReel(host, normalizedJobId, s, resolvedUsed);
   }
+  // ★ レビュー指摘(P0-3): 境界不明(unknown)区間は、最初の信頼できるライブ印刷完了で再アンカーする。
+  //   これをしないと unknown 区間は deriveSpoolRemaining が常にアンカー値を返すため、以後の全印刷
+  //   消費が reconcile でアンカーへ戻されて消える。完了後残量を新アンカー・sinceJobId=完了ジョブ・
+  //   boundaryStatus=known にして、以後の完了ジョブを正しく減算できる区間へ昇格させる。
+  try {
+    if (resolvedUsed > 0) {
+      const iv = getOpenMountInterval(s.id, host);
+      if (iv && iv.boundaryStatus === "unknown") {
+        appendMountEvent({
+          host,
+          spoolId: s.id,
+          anchorRemainingMm: s.remainingLengthMm,
+          sinceJobId: Number(normalizedJobId) || 0,
+          ts: Date.now() + 1,
+          boundaryStatus: "known"
+        });
+        console.info(`[finalizeFilamentUsage] ${host}: unknown 区間を完了ジョブ ${normalizedJobId} で再アンカー(known)`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[finalizeFilamentUsage] 再アンカー失敗 (${host}):`, e?.message || e);
+  }
   // ★ 完了直後に信頼ソースから残量を冪等補正（finalize の startLen-used 値は暫定。reconcile が権威）。
   //   currentPrintID は上で "" にクリア済みなので reconcile は走る。
   try {
@@ -1904,11 +1927,15 @@ export function catchUpOfflineFilamentAttribution(hostname, { liveJobId = null, 
   try { jobs = loadHistory(hostname); } catch { return 0; }
   if (!Array.isArray(jobs) || !jobs.length) return 0;
 
-  // 装着区間の下限（startPrintID/最新 mount の sinceJobId）。排他的下限（numId > sinceId）。
-  // ★ レビュー指摘(点6): この比較(<=)は変更しない。sinceJobId は「装着時点で最後に完了済み
-  //   だったジョブ」＝排他的下限であり、<= のまま除外するのが正しい（装着直前完了ジョブを
-  //   新スプールへ誤帰属＝二重減算するのを防ぐ）。
-  const sinceId = Number(sp.startPrintID) || 0;
+  // ★ レビュー指摘(P0-1): 対象下限は startPrintID ではなく「最新オープン装着区間」を権威にする。
+  //   境界不明(unknown)区間では現在スプールを過去の未帰属履歴へ誤って書き込む恐れがあるため、
+  //   catch-up 自体を禁止する（filamentId/filamentInfo の永続的誤記録を防ぐ）。
+  //   区間があればその sinceJobId、無ければ startPrintID をフォールバックの下限に使う。
+  const interval = getOpenMountInterval(sp.id, hostname);
+  if (interval && interval.boundaryStatus === "unknown") return 0;
+  const sinceId = interval
+    ? (Number(interval.sinceJobId) || 0)
+    : (Number(sp.startPrintID) || 0);
   const liveIdStr = liveJobId != null ? String(liveJobId) : null;
   const linkJobIds = new Set();
   for (const entry of jobs) {
