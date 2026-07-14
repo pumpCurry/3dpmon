@@ -513,18 +513,29 @@ describe("appendMountEvent / appendUnmountEvent", () => {
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 1000 });
     appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 50, ts: 2000 });
     expect(mockMonitorData.mountHistory).toHaveLength(2);
-    // evId は内容ベースの一意キー（type_spoolId_ts）
-    expect(mockMonitorData.mountHistory[0]).toMatchObject({ type: "mount", spoolId: "sp1", evId: "mount_sp1_1000" });
-    expect(mockMonitorData.mountHistory[1]).toMatchObject({ type: "unmount", untilJobId: 50, evId: "unmount_sp1_2000" });
+    // ★ Phase2B: 冪等キーは opId（内容ベース type_spoolId_ts）、intervalId も opId。
+    //   evId は壁時計非依存の一意UUID（内容ベースではない）。
+    expect(mockMonitorData.mountHistory[0]).toMatchObject({
+      type: "mount", spoolId: "sp1", opId: "mount_sp1_1000", intervalId: "mount_sp1_1000"
+    });
+    expect(mockMonitorData.mountHistory[1]).toMatchObject({
+      type: "unmount", untilJobId: 50, opId: "unmount_sp1_2000"
+    });
+    // evId は UUID 形式（composite ではない）
+    expect(mockMonitorData.mountHistory[0].evId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(mockMonitorData.mountHistory[0].evId).not.toBe("mount_sp1_1000");
   });
 
-  it("同一 ts・異なるスプールでも evId が衝突しない（復元/import dedup での消失を防止）", () => {
+  it("同一 ts・異なるスプールでも opId が衝突しない（復元/import dedup での消失を防止）", () => {
     // initLedgerAnchors が複数ホストを同じ nowMs で種付けする状況を再現
     appendMountEvent({ host: "h1", spoolId: "spA", anchorRemainingMm: 100, sinceJobId: 0, ts: 5000 });
     appendMountEvent({ host: "h2", spoolId: "spB", anchorRemainingMm: 200, sinceJobId: 0, ts: 5000 });
-    const ids = mockMonitorData.mountHistory.map(e => e.evId);
-    expect(ids).toEqual(["mount_spA_5000", "mount_spB_5000"]);
-    expect(new Set(ids).size).toBe(2); // 衝突なし → dedup で片方が消えない
+    const opIds = mockMonitorData.mountHistory.map(e => e.opId);
+    expect(opIds).toEqual(["mount_spA_5000", "mount_spB_5000"]);
+    expect(new Set(opIds).size).toBe(2); // 冪等キー衝突なし → dedup で片方が消えない
+    // evId(UUID) も当然すべて一意
+    const evIds = mockMonitorData.mountHistory.map(e => e.evId);
+    expect(new Set(evIds).size).toBe(2);
   });
 });
 
@@ -547,6 +558,20 @@ describe("ADR-0005 evId 重複ガード", () => {
     appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 77, ts: 2000 });
     const unmounts = mockMonitorData.mountHistory.filter(e => e.type === "unmount" && e.spoolId === "sp1");
     expect(unmounts).toHaveLength(1);
+  });
+
+  it("Phase2B: 旧イベント(opId無し・evId=旧composite)とも冪等突合して二重区間を防ぐ", () => {
+    // Phase2B 以前に保存された既存 mountHistory を模す（opId 無し、evId が composite）。
+    mockMonitorData.mountHistory.push({
+      evId: "mount_sp1_1000", intervalId: "mount_sp1_1000", seq: 1, ts: 1000,
+      type: "mount", host: "h", spoolId: "sp1", anchorRemainingMm: 100, sinceJobId: 0,
+      boundaryStatus: "known"
+    });
+    // 同一 spoolId/ts の再追記（アプリ更新後）は 1件に畳まれ、二重区間を作らない。
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 999, sinceJobId: 9, ts: 1000 });
+    const mounts = mockMonitorData.mountHistory.filter(e => e.type === "mount" && e.spoolId === "sp1");
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0].anchorRemainingMm).toBe(100); // 旧イベントが残る（先勝ち）
   });
 });
 

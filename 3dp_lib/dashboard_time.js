@@ -53,6 +53,44 @@ export function monotonicNowMs() {
 }
 
 /**
+ * イベントの一意識別子（UUID v4）を生成する。
+ *
+ * 【方針】イベントIDに壁時計（Date.now）を使わない。壁時計は後退・重複し得るため、
+ *   同一 ms 内の複数イベントで衝突し、順序も保証できない。識別子は「一意性」だけを担い、
+ *   順序は親権威 seq、再送冪等は opId、監査時刻は wallNowMs と役割を分離する。
+ * - secure context（https/localhost/Electron）では crypto.randomUUID を使う。
+ * - http:// のサテライト等 非secure context で randomUUID が無い場合は
+ *   crypto.getRandomValues ベース、さらに無ければ Math.random ベースの v4 へフォールバック
+ *   （いずれも壁時計非依存）。
+ *
+ * @returns {string} UUID v4 形式の文字列
+ */
+export function randomEventId() {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch { /* 非secure context 等 → 下のフォールバックへ */ }
+  // getRandomValues があれば暗号品質の乱数で v4 を組み立てる
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+      const b = new Uint8Array(16);
+      crypto.getRandomValues(b);
+      b[6] = (b[6] & 0x0f) | 0x40; // version 4
+      b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+      const h = [];
+      for (let i = 0; i < 16; i++) h.push(b[i].toString(16).padStart(2, "0"));
+      return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;
+    }
+  } catch { /* 最終フォールバックへ */ }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : ((r & 0x3) | 0x8);
+    return v.toString(16);
+  });
+}
+
+/**
  * 実行環境の解決済み IANA タイムゾーン（"Asia/Tokyo" 等）。取得不能なら "UTC"。
  * @returns {string}
  */

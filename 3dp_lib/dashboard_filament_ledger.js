@@ -35,6 +35,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
+import { wallNowMs, randomEventId } from "./dashboard_time.js";
 
 /**
  * 値を [min, max] の範囲にクランプする。
@@ -131,23 +132,29 @@ function _isCompleted(job) {
  * @param {string} params.spoolId - スプールID
  * @param {number} params.anchorRemainingMm - 装着時点のそのスプールの導出残量（繰越基点）
  * @param {number|string} params.sinceJobId - 装着時点でそのホストの最後に完了した printId（区間の下限・排他）
- * @param {number} params.ts - イベント時刻 ms（evId もこれから導出）
+ * @param {number} [params.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記した MountEvent
  */
-export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts, boundaryStatus = "known" } = {}) {
+export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts = wallNowMs(), boundaryStatus = "known" } = {}) {
   const list = _getMountHistory();
-  // evId は内容ベースで一意かつ安定にする（同一 ts で複数ホストを種付けしても衝突せず、
-  // 再 import 時は同一イベントが同一 evId になり dedup が正しく効く）
-  const evId = `mount_${spoolId}_${ts}`;
-  // ★ ADR-0005 P7: evId 重複ガード。同一 evId（= 同一 spoolId/ts）の二重追記は
-  //   1件に畳む（同秒の二重発火を冪等化し、二重区間の発生を防ぐ）。
-  const dup = list.find(e => e && e.evId === evId);
+  // ★ Phase2B: ID の役割分離。
+  //   - opId : 再送冪等キー（内容ベースで安定＝同秒二重発火・relay再送・再importを畳む）。
+  //   - evId : 一意識別子（UUID。壁時計非依存。順序も担わない）。
+  //   - seq  : 親権威の処理順（採番）。
+  //   - ts   : 監査時刻（wall）。順序・冪等・識別には使わない。
+  //   intervalId は opId（=安定キー）を用い、UUID の evId が再import で変わっても
+  //   unmount/reanchor の targetIntervalId 参照が壊れないようにする。
+  const opId = `mount_${spoolId}_${ts}`;
+  // ★ ADR-0005 P7: 冪等ガード。同一 opId の二重追記は 1件に畳む（二重区間の発生を防ぐ）。
+  //   旧イベント（opId 無し・evId=旧composite）とも突合するため (opId||evId) で比較する。
+  const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
-    evId,
+    evId: randomEventId(),
+    opId,
     // ★ レビュー(Q1): intervalId を持たせ、unmount/reanchor がこの区間を明示指定できるようにする。
     //   （「直近 open を閉じる」という暗黙動作を廃止し、区間の取り違えを防ぐ。）
-    intervalId: evId,
+    intervalId: opId,
     seq: _nextMountSeq(),
     ts,
     type: "mount",
@@ -182,17 +189,19 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
  * @param {string} [p.boundaryStatus="known"]
  * @param {number|string} [p.sourceJobId] - 由来ジョブ（冪等 evId 生成に使用）
  * @param {string} [p.reason]
- * @param {number} p.ts
+ * @param {number} [p.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記イベント
  */
-export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRemainingMm, sinceJobId, boundaryStatus = "known", sourceJobId, reason, ts } = {}) {
+export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRemainingMm, sinceJobId, boundaryStatus = "known", sourceJobId, reason, ts = wallNowMs() } = {}) {
   const list = _getMountHistory();
-  // 冪等: 同一区間×同一由来ジョブの再アンカーは1件に畳む（多重通知/再送/再起動に強い）。
-  const evId = `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
-  const dup = list.find(e => e && e.evId === evId);
+  // ★ Phase2B: opId=再送冪等キー（同一区間×同一由来ジョブの再アンカーを1件に畳む＝
+  //   多重通知/relay再送/再起動に強い）。evId=一意識別子(UUID)。
+  const opId = `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
+  const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
-    evId,
+    evId: randomEventId(),
+    opId,
     seq: _nextMountSeq(),
     ts,
     type: "reanchor",
@@ -223,17 +232,19 @@ export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRem
  * @param {string[]} p.targetIntervalIds - 無効化する区間の intervalId 群
  * @param {?string} [p.survivingIntervalId] - 残す区間（無ければ null）
  * @param {string} [p.reason]
- * @param {number} p.ts
+ * @param {number} [p.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記イベント
  */
-export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts } = {}) {
+export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts = wallNowMs() } = {}) {
   const list = _getMountHistory();
   const ids = Array.isArray(targetIntervalIds) ? targetIntervalIds.slice().sort() : [];
-  const evId = `supersede_${spoolId}_${ids.join("+")}_${ts}`;
-  const dup = list.find(e => e && e.evId === evId);
+  // ★ Phase2B: opId=再送冪等キー（同一対象群×時刻の修復を畳む）。evId=一意識別子(UUID)。
+  const opId = `supersede_${spoolId}_${ids.join("+")}_${ts}`;
+  const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
-    evId,
+    evId: randomEventId(),
+    opId,
     seq: _nextMountSeq(),
     ts,
     type: "supersede",
@@ -255,17 +266,18 @@ export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivi
  * @param {string} params.host - ホスト名
  * @param {string} params.spoolId - スプールID
  * @param {number|string} params.untilJobId - 取外し時点の最後の完了 printId（区間の上限・包含）
- * @param {number} params.ts - イベント時刻 ms
+ * @param {number} [params.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記した MountEvent
  */
-export function appendUnmountEvent({ host, spoolId, untilJobId, ts, targetIntervalId = null } = {}) {
+export function appendUnmountEvent({ host, spoolId, untilJobId, ts = wallNowMs(), targetIntervalId = null } = {}) {
   const list = _getMountHistory();
-  const evId = `unmount_${spoolId}_${ts}`;
-  // ★ ADR-0005 P7: evId 重複ガード（mount と同じく同秒二重追記を畳む）
-  const dup = list.find(e => e && e.evId === evId);
+  // ★ Phase2B: opId=再送冪等キー（mount と同じく同秒二重追記を畳む）。evId=一意識別子(UUID)。
+  const opId = `unmount_${spoolId}_${ts}`;
+  const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
-    evId,
+    evId: randomEventId(),
+    opId,
     seq: _nextMountSeq(),
     ts,
     type: "unmount",
