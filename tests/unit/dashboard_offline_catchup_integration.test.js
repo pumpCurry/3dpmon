@@ -148,4 +148,32 @@ describe("オフライン取りこぼし→mid-print再起動 の帰属・基準
     expect(spool.currentJobStartLength).toBe(270000);
     expect(String(spool.currentPrintID)).toBe("1003"); // C 採用済み・stale A へ戻らない
   });
+
+  it("Phase3: catchUp が0件(linked=0)でも台帳導出値で開始基準が自己修復される（linked>0依存の除去）", () => {
+    setup("hostC");
+    // 今tickは何も紐付かない（従来なら linked>0 でないため rebase されなかった）
+    _spool.catchUpOfflineFilamentAttribution.mockReturnValue(0);
+    // 台帳は権威として 250000 を導出（現在の開始基準 300000 とはズレている）
+    _ledger.deriveSpoolRemaining.mockReturnValue({ remainingMm: 250000, verified: true, mode: "anchor" });
+
+    aggregatorUpdate("hostC");
+
+    // linked=0 でも watermark/ドリフト経路で開始基準が台帳値へ自己修復される
+    expect(spool.currentJobStartLength).toBe(250000);
+    expect(spool.remainingLengthMm).toBe(250000);
+    expect(_ledger.deriveSpoolRemaining).toHaveBeenCalledWith("S", { excludeJobId: "1003" });
+  });
+
+  it("Phase3: 台帳が曖昧(mode!=anchor)なら開始基準を壊さない（halt時は現状維持）", () => {
+    setup("hostD");
+    _spool.catchUpOfflineFilamentAttribution.mockReturnValue(0);
+    // 複数open等で halt-ambiguous: remainingMm は現在値だが mode が anchor でない
+    _ledger.deriveSpoolRemaining.mockReturnValue({ remainingMm: 999, verified: false, mode: "halt-ambiguous" });
+
+    aggregatorUpdate("hostD");
+
+    // rebase 対象外 → currentJobStartLength は台帳の 999 に引きずられない
+    expect(spool.currentJobStartLength).not.toBe(999);
+    expect(spool.remainingLengthMm).not.toBe(999);
+  });
 });
