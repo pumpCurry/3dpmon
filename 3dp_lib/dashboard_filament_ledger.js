@@ -124,19 +124,6 @@ function _isCompleted(job) {
 }
 
 /**
- * 境界確からしさ(boundaryStatus)を3段の正準値へ正規化する。
- * 既知の値("known"/"inferred"/"unknown")以外は安全側で "known" を返す
- * （明示指定のみを尊重。null/不正は呼び出し側の既定に委ねるため known）。
- *
- * @private
- * @param {string} v - 生の boundaryStatus
- * @returns {"known"|"inferred"|"unknown"} 正準値
- */
-function _normBoundaryStatus(v) {
-  return (v === "unknown" || v === "inferred") ? v : "known";
-}
-
-/**
  * 装着イベントを mountHistory に追記する。
  *
  * @function appendMountEvent
@@ -175,12 +162,10 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
     spoolId,
     anchorRemainingMm: Number(anchorRemainingMm) || 0,
     sinceJobId: Number(sinceJobId) || 0,
-    // ★ レビュー指摘(P0-1)/inferred-continuity: 装着区間の下限の「確からしさ」を3段で記録する。
-    //   - "known"    : 実際の装着/取外し境界を観測できた（遡及減算＝確定）。
-    //   - "inferred" : オフライン連続などで同一スプール継続とみなせる十分な状況証拠がある。
-    //     deriveSpoolRemaining は known 同様に減算して残量へ反映するが verified=false（推定・可逆）。
-    //   - "unknown"  : 交換/再起動/履歴欠落を否定できない。遡及減算しない（アンカー値を維持）。
-    boundaryStatus: _normBoundaryStatus(boundaryStatus)
+    // ★ レビュー指摘(P0-1): 装着区間の下限が「証明できるか」を記録する。
+    //   "unknown" は境界不明（履歴欠落＋idle 種付け等）を意味し、deriveSpoolRemaining は
+    //   この区間で過去履歴の遡及減算を行わない（アンカー値をそのまま残量とする）。
+    boundaryStatus: boundaryStatus === "unknown" ? "unknown" : "known"
   };
   list.push(ev);
   return ev;
@@ -225,7 +210,7 @@ export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRem
     targetIntervalId,
     anchorRemainingMm: Number(anchorRemainingMm) || 0,
     sinceJobId: Number(sinceJobId) || 0,
-    boundaryStatus: _normBoundaryStatus(boundaryStatus),
+    boundaryStatus: boundaryStatus === "unknown" ? "unknown" : "known",
     sourceJobId: sourceJobId != null ? String(sourceJobId) : null,
     reason: reason || null
   };
@@ -394,13 +379,8 @@ function _buildIntervalProjection(spoolId) {
   for (const e of events) {
     if (e.type === "mount") {
       const _since = Number(e.sinceJobId) || 0;
-      // 3段の境界確からしさを保持。旧データ（boundaryStatus 欠落＋sinceJobId=0）は
-      // 安全側で "unknown" へ移行する（従来の後方互換）。"inferred" は明示指定のみ。
-      let bs;
-      if (e.boundaryStatus === "unknown") bs = "unknown";
-      else if (e.boundaryStatus === "inferred") bs = "inferred";
-      else if (e.boundaryStatus == null && _since === 0) bs = "unknown";
-      else bs = "known";
+      const bs = (e.boundaryStatus === "unknown"
+        || (e.boundaryStatus == null && _since === 0)) ? "unknown" : "known";
       const iv = {
         intervalId: e.intervalId || e.evId,
         host: e.host,
@@ -431,7 +411,7 @@ function _buildIntervalProjection(spoolId) {
       if (target.untilJobId != null || target.superseded) { diagnostics.push({ code: "reanchor-on-closed", detail: e.targetIntervalId }); continue; }
       target.anchorRemainingMm = Number(e.anchorRemainingMm) || 0;
       target.sinceJobId = Number(e.sinceJobId) || 0;
-      target.boundaryStatus = _normBoundaryStatus(e.boundaryStatus);
+      target.boundaryStatus = e.boundaryStatus === "unknown" ? "unknown" : "known";
     } else if (e.type === "supersede") {
       for (const id of (e.targetIntervalIds || [])) {
         const iv = byId.get(id);
@@ -568,9 +548,6 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   //   過去全件を二重減算してしまう（＝機器再起動での残量崩壊）。unknown 区間はアンカー値を
   //   そのまま残量とし、ライブ消費のオーバーレイのみ適用する。
   const boundaryUnknown = anchorIv.boundaryStatus === "unknown";
-  // ★ inferred-continuity: "inferred" 区間は known 同様に減算して残量へ反映するが（推定残量）、
-  //   確定ではないので verified=false とする（後からユーザ確認で known 昇格＝可逆）。
-  const boundaryInferred = anchorIv.boundaryStatus === "inferred";
 
   // 当該区間の帰属消費 Σ と、被覆チェック用の最小 printId
   const hist = _historyForHost(anchorIv.host);
@@ -607,8 +584,6 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   }
   // 境界不明区間は常に未検証（減算しない＝アンカー値を維持）。
   if (boundaryUnknown) verified = false;
-  // 推定継続(inferred)区間は減算するが確定ではない＝常に未検証（推定残量）。
-  if (boundaryInferred) verified = false;
 
   // 純アンカー: remaining = anchorRemainingMm − Σ(当該区間の完了ジョブ消費)
   const anchor = Number(anchorIv.anchorRemainingMm) || 0;
