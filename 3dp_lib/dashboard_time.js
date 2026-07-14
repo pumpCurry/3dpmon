@@ -41,10 +41,15 @@ export function wallNowMs() {
  * performance.now が無い環境（古い node 等）は Date.now にフォールバックする。
  * @returns {number} ミリ秒（基準は環境依存＝差分のみ意味を持つ）
  */
+let _monoLast = 0;
 export function monotonicNowMs() {
-  return (typeof performance !== "undefined" && typeof performance.now === "function")
+  const raw = (typeof performance !== "undefined" && typeof performance.now === "function")
     ? performance.now()
     : Date.now();
+  // ★ レビュー(P2): performance.now が無い環境の Date.now フォールバックは単調でないため、
+  //   最終値との Math.max で最低限「後退しない」契約を満たす（壁時計後退でも throttle が壊れない）。
+  if (raw >= _monoLast) { _monoLast = raw; return raw; }
+  return _monoLast;
 }
 
 /**
@@ -66,15 +71,49 @@ export function resolvedLocalTimeZone() {
  * @param {string} timeZone
  * @returns {{year:string, month:string, day:string}}
  */
+/** タイムゾーン単位の Intl.DateTimeFormat キャッシュ（レビュー P1: 集計毎の大量生成を防ぐ）。 */
+const _fmtCache = new Map();
+
+/**
+ * 指定 IANA タイムゾーンの日付フォーマッタを返す（キャッシュ）。
+ * @private
+ * @param {string} timeZone
+ * @returns {Intl.DateTimeFormat}
+ */
+function _formatterFor(timeZone) {
+  let fmt = _fmtCache.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit"
+    });
+    _fmtCache.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
 function _partsAtZone(epochMs, timeZone) {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone, year: "numeric", month: "2-digit", day: "2-digit"
-  });
   const out = { year: "1970", month: "01", day: "01" };
-  for (const p of fmt.formatToParts(new Date(epochMs))) {
+  for (const p of _formatterFor(timeZone).formatToParts(new Date(epochMs))) {
     if (p.type === "year" || p.type === "month" || p.type === "day") out[p.type] = p.value;
   }
   return out;
+}
+
+/**
+ * 業務日付キー("YYYY-MM-DD")を「カレンダー日」単位で加減算する（DST 安全）。
+ *
+ * ★ レビュー(P0): 「nowMs − d*86400000」は 24 時間前であってカレンダー前日ではない。DST 開始日を
+ * 跨ぐと 1 日飛んで N 日に満たない配列になる。キー文字列を UTC の Date でカレンダー日として増減し、
+ * ゾーン変換を挟まないことで DST の影響を受けないようにする。
+ *
+ * @param {string} key - "YYYY-MM-DD"
+ * @param {number} days - 加算日数（負で過去）
+ * @returns {string} "YYYY-MM-DD"
+ */
+export function shiftDateKey(key, days) {
+  const [y, m, d] = String(key).split("-").map(Number);
+  const x = new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + (Number(days) || 0)));
+  return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`;
 }
 
 /**
@@ -107,16 +146,49 @@ export function monthKey(epochMs, timeZone = resolvedLocalTimeZone()) {
  * 解釈が割れる）ため、業務ロジックの正本としては受理しない（null を返す）。永続データは epoch を
  * 正本にし、文字列を保存する場合は必ず Z か オフセットを付けること。
  *
+ * ★ 数値は epoch ミリ秒のみを受け付ける（epoch 秒を渡すと 1970 年になるため、呼び出し側で ms へ）。
+ *
  * @param {number|string|null|undefined} value
  * @returns {?number} epoch ミリ秒、または受理不能なら null
  */
+/**
+ * タイムゾーンなしの「壁時計」文字列を、指定 IANA タイムゾーンでの実時刻(epoch ms)へ変換する。
+ *
+ * ★ レビュー(P1): 旧履歴の offset なし文字列（"2026-04-01T10:00:00" 等）を移行するための明示関数。
+ * 「そのゾーンでの 10:00」として解釈する（暗黙のローカル/UTC 解釈をしない）。DST の実オフセットも
+ * 当該瞬間で算出する。offset 付き文字列は本関数ではなく {@link parseInstantStrict} を使うこと。
+ *
+ * @param {string} wallStr - "YYYY-MM-DDTHH:mm[:ss]"（offset/Z なし）
+ * @param {string} timeZone - IANA タイムゾーン
+ * @returns {?number} epoch ミリ秒、または解釈不能なら null
+ */
+export function epochMsFromWallClock(wallStr, timeZone) {
+  const s = String(wallStr == null ? "" : wallStr).trim().replace(/[zZ]$/, "");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s)) return null;
+  const asUtcMs = Date.parse(s + "Z"); // 壁時計値をいったん UTC とみなす
+  if (!Number.isFinite(asUtcMs)) return null;
+  // 当該瞬間の timeZone オフセット(ms) を算出し、壁時計 → 実時刻へ補正する
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit"
+  });
+  const p = {};
+  for (const part of dtf.formatToParts(new Date(asUtcMs))) p[part.type] = part.value;
+  const asIfLocalMs = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  const offsetMs = asIfLocalMs - asUtcMs;
+  return asUtcMs - offsetMs;
+}
+
 export function parseInstantStrict(value) {
   if (value == null) return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string") {
     const s = value.trim();
-    // Z、または 末尾の ±HH:mm / ±HHmm オフセットを含む ISO のみ許可
-    if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) {
+    // ★ レビュー(P2): 末尾判定でなく「完全な offset/Z 付き ISO 日時」を検査してからparseする
+    //   （エンジン依存の寛容な Date.parse 差を排除）。
+    //   例: 2026-04-01T10:00:00Z / 2026-04-01T10:00:00.123+09:00 / 2026-04-01T10:00+0900
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
       const t = Date.parse(s);
       return Number.isFinite(t) ? t : null;
     }

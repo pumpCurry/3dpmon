@@ -47,6 +47,9 @@ let _prevMountHash = "";
 /** 前回ブロードキャストした ItemKeeper 設定のハッシュ（変更検出） */
 let _prevIkHash = "";
 
+/** 前回ブロードキャストした業務タイムゾーン（変更検出）。undefined=未送信 */
+let _prevBizTz;
+
 /**
  * 前回ブロードキャストしたフィラメント補助ドメイン（在庫・プリセット・
  * 切れ文脈・serialCounter・使用履歴）のハッシュ（変更検出）。
@@ -635,6 +638,15 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // ★ レビュー(時計衛生): 業務タイムゾーンの変更を子へ配信（親権威）。
+  const bizTz = monitorData.appSettings.businessTimeZone ?? null;
+  if (bizTz !== _prevBizTz) {
+    _prevBizTz = bizTz;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.appSettingsBusinessTimeZone = bizTz;
+    hasChanges = true;
+  }
+
   if (!hasChanges) return null;
 
   const delta = { machines: machinesDelta, shared: sharedDelta };
@@ -697,7 +709,9 @@ function _buildFullSnapshot() {
       connectionTargets: monitorData.appSettings.connectionTargets || [],
       // ★ ItemKeeper 連携設定を子へミラー（親が唯一の設定元・送信元）。
       //   子(readonly=閲覧専用ミラー / satellite=編集可だが変更は relay-settings で親へ逆反映)。
-      itemkeeper: monitorData.appSettings.itemkeeper || {}
+      itemkeeper: monitorData.appSettings.itemkeeper || {},
+      // ★ レビュー(時計衛生): 業務タイムゾーン(親権威)を子へミラー（日次/月次集計の既定ゾーン）。
+      businessTimeZone: monitorData.appSettings.businessTimeZone ?? null
     }
   };
 }

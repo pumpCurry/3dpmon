@@ -213,6 +213,9 @@ export const monitorData = {
     httpPort: 80,         // HTTP ポート（デフォルト。印刷履歴・ファイル取得用）
     relayPromotePin: "",  // リレー操作モード昇格PIN（空=確認のみ）。親でのみ設定・参照可
     filamentUnit: "m",    // 使用量表示単位 "m" | "mm"（印刷履歴・ファイル一覧共通トグル）
+    // ★ レビュー(時計衛生 P1): 日次/月次集計の業務タイムゾーン（IANA）。親権威の永続設定で、
+    //   リレーで子へミラーする。null=未設定（実行PCの解決済みローカルを初期候補とする）。
+    businessTimeZone: null,
     notificationSettings: {}
   },
   machines: {

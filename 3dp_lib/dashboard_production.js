@@ -28,7 +28,23 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
-import { wallNowMs, resolvedLocalTimeZone, dateKey, monthKey } from "./dashboard_time.js";
+import {
+  wallNowMs, resolvedLocalTimeZone, dateKey, monthKey, shiftDateKey,
+  parseInstantStrict, epochMsFromWallClock
+} from "./dashboard_time.js";
+
+/**
+ * レポートの業務タイムゾーンを決める（親権威の永続設定を優先）。
+ * ★ レビュー(P1): 既定を実行PCローカルにすると、親Electron(東京)と閲覧ブラウザ(別地域)で
+ *   同じ履歴から異なる集計が出る。appSettings.businessTimeZone を正本にし、未設定時のみ
+ *   解決済みローカルを初期候補として使う。
+ * @private
+ * @param {string} [override] - 明示指定（テスト/呼び出し側）
+ * @returns {string} IANA タイムゾーン
+ */
+function _reportTimeZone(override) {
+  return override || monitorData.appSettings?.businessTimeZone || resolvedLocalTimeZone();
+}
 
 /**
  * 印刷状態コード
@@ -58,13 +74,19 @@ const PRINT_STATE = {
  * @returns {{startSec:number, finishSec:number, durationSec:number,
  *            materialMm:number, isSuccess:boolean, isFinished:boolean}}
  */
-function _normalizeHistoryEntry(entry) {
-  const startSec = Number(entry?.startTimeSec)
-    || (entry?.startTime ? Math.floor(Date.parse(entry.startTime) / 1000) : 0)
-    || 0;
-  const finishSec = Number(entry?.finishTimeSec)
-    || (entry?.finishTime ? Math.floor(Date.parse(entry.finishTime) / 1000) : 0)
-    || 0;
+function _normalizeHistoryEntry(entry, legacyTimeZone = _reportTimeZone()) {
+  // ★ レビュー(P1): 文字列時刻の UTC/local 混入を閉じる。優先順位:
+  //   1) *_TimeSec(epoch秒) を最優先  2) offset/Z 付き文字列は parseInstantStrict
+  //   3) offset なし旧履歴は明示 legacyTimeZone で移行(epochMsFromWallClock)
+  //   4) 解釈不能なら 0（黙ってローカル parse しない）。
+  const _sec = (str) => {
+    if (!str) return 0;
+    let ms = parseInstantStrict(str);
+    if (ms == null) ms = epochMsFromWallClock(str, legacyTimeZone);
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+  };
+  const startSec = Number(entry?.startTimeSec) || _sec(entry?.startTime) || 0;
+  const finishSec = Number(entry?.finishTimeSec) || _sec(entry?.finishTime) || 0;
   const durationSec = (finishSec > startSec) ? (finishSec - startSec) : 0;
   const materialMm = Number(entry?.materialUsedMm || 0);
   const isSuccess = entry?.printfinish === 1;
@@ -231,15 +253,16 @@ export function buildHostUtilization(hostname, options = {}) {
 export function buildDailyProductionReport(options = {}) {
   const days = options.days || 7;
   // ★ レビュー(時計衛生): 実時計依存を排除する。nowMs/timeZone を注入可能にし、省略時のみ実時刻・
-  //   解決済みローカルゾーンを使う（後方互換）。日付キーは明示ゾーンで決定論的に決める。
-  const timeZone = options.timeZone || resolvedLocalTimeZone();
+  //   業務ゾーン(親権威設定)を使う。日付キーは明示ゾーンで決定論的に決める。
+  const timeZone = _reportTimeZone(options.timeZone);
   const nowMs = options.nowMs != null ? Number(options.nowMs) : wallNowMs();
-  const DAY_MS = 86400000;
   const dayMap = {};
 
-  // 過去N日分の空データを初期化（同一キーは重複させない＝DST 折返しでも安全）
+  // ★ レビュー(P0): 過去N日は「24時間前」ではなく「カレンダー前日」で減算する（DST 開始日でも
+  //   1日飛ばず、必ず N 日分そろう）。まず現在の業務日付を得て、キー文字列を日単位で減算する。
+  const todayKey = dateKey(nowMs, timeZone);
   for (let d = 0; d < days; d++) {
-    const key = dateKey(nowMs - d * DAY_MS, timeZone);
+    const key = shiftDateKey(todayKey, -d);
     if (dayMap[key]) continue;
     dayMap[key] = {
       date: key,
@@ -606,7 +629,7 @@ export function buildHostRanking(options = {}) {
  * }>}
  */
 export function buildMaterialReport(options = {}) {
-  const timeZone = options.timeZone || resolvedLocalTimeZone();
+  const timeZone = _reportTimeZone(options.timeZone);
   const materialMap = {};
 
   for (const spool of monitorData.filamentSpools) {

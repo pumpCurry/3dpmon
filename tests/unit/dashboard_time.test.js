@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
   wallNowMs, monotonicNowMs, resolvedLocalTimeZone,
-  dateKey, monthKey, parseInstantStrict
+  dateKey, monthKey, parseInstantStrict, shiftDateKey, epochMsFromWallClock
 } from "../../3dp_lib/dashboard_time.js";
 
 describe("dashboard_time", () => {
@@ -65,6 +65,44 @@ describe("dashboard_time", () => {
       expect(parseInstantStrict(undefined)).toBeNull();
       expect(parseInstantStrict(NaN)).toBeNull();
       expect(parseInstantStrict("not-a-date")).toBeNull();
+    });
+    it("完全なISO形式でない offset 付き文字列も弾く（P2 厳格化）", () => {
+      expect(parseInstantStrict("2026-04-01 10:00:00+09:00")).toBeNull(); // T 無し(スペース)
+      expect(parseInstantStrict("garbage+09:00")).toBeNull();
+    });
+  });
+
+  describe("shiftDateKey（DST安全なカレンダー日減算）", () => {
+    it("単純な前日/翌日", () => {
+      expect(shiftDateKey("2026-07-15", -1)).toBe("2026-07-14");
+      expect(shiftDateKey("2026-07-15", 1)).toBe("2026-07-16");
+    });
+    it("月/年の境界を跨ぐ", () => {
+      expect(shiftDateKey("2026-03-01", -1)).toBe("2026-02-28");
+      expect(shiftDateKey("2026-01-01", -1)).toBe("2025-12-31");
+    });
+    it("うるう年 2/29", () => {
+      expect(shiftDateKey("2028-03-01", -1)).toBe("2028-02-29");
+    });
+    it("DST開始日(LA 2026-03-08)を跨いでもカレンダー日で減算する", () => {
+      // 24時間減算だと 3/8 を飛ばすが、shiftDateKey は必ず 3/8 を返す
+      expect(shiftDateKey("2026-03-09", -1)).toBe("2026-03-08");
+      expect(shiftDateKey("2026-03-08", -1)).toBe("2026-03-07");
+    });
+  });
+
+  describe("epochMsFromWallClock（旧履歴の明示ゾーン移行）", () => {
+    it("壁時計文字列を指定ゾーンの実時刻へ変換", () => {
+      // JST 10:00 は UTC 01:00
+      expect(epochMsFromWallClock("2026-04-01T10:00:00", "Asia/Tokyo"))
+        .toBe(Date.parse("2026-04-01T10:00:00+09:00"));
+      // UTC ゾーンなら そのまま UTC
+      expect(epochMsFromWallClock("2026-04-01T10:00:00", "UTC"))
+        .toBe(Date.parse("2026-04-01T10:00:00Z"));
+    });
+    it("offset/Z 付きや不正形式は null（本関数は offset なし専用）", () => {
+      expect(epochMsFromWallClock("2026-04-01T10:00:00+09:00", "Asia/Tokyo")).toBeNull();
+      expect(epochMsFromWallClock("2026-04-01", "UTC")).toBeNull();
     });
   });
 });

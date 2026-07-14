@@ -515,6 +515,10 @@ function _applySnapshot(state) {
   if (state.appSettings?.itemkeeper) {
     _applyItemkeeperSettings(state.appSettings.itemkeeper);
   }
+  // ★ レビュー(時計衛生): 業務タイムゾーンを親からミラー（日次/月次集計の既定ゾーンを親子で統一）。
+  if (state.appSettings && "businessTimeZone" in state.appSettings) {
+    monitorData.appSettings.businessTimeZone = state.appSettings.businessTimeZone ?? null;
+  }
 
   // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
   //   旧実装は IDベースマージ + sticky フラグ保護（prevActive || ... ）だったため、
@@ -626,6 +630,10 @@ function _applyDelta(msg) {
     // ★ ItemKeeper 設定の差分ミラー（親で変更 or satellite 逆反映が確定したとき届く）。
     if (msg.shared.appSettingsItemkeeper) {
       _applyItemkeeperSettings(msg.shared.appSettingsItemkeeper);
+    }
+    // ★ レビュー(時計衛生): 業務タイムゾーンの差分ミラー（親権威）。
+    if ("appSettingsBusinessTimeZone" in msg.shared) {
+      monitorData.appSettings.businessTimeZone = msg.shared.appSettingsBusinessTimeZone ?? null;
     }
   }
 
