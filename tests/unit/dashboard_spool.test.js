@@ -58,6 +58,9 @@ import {
   isAttributionPending,
   getUnattributedUsageForHost,
   countUnattributedUsageForHost,
+  getAttributionPresentation,
+  getAttributionIssueIdsForHost,
+  countAttributionIssuesForHost,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
@@ -617,6 +620,62 @@ describe('isAttributionPending / getUnattributedUsageForHost（Phase4）', () =>
     expect(countUnattributedUsageForHost('h1')).toBe(2);
     expect(countUnattributedUsageForHost('h2')).toBe(1);
     expect(countUnattributedUsageForHost()).toBe(3); // 全体
+  });
+});
+
+// =============================================
+// 帰属表示セレクタ（Phase5 U1）
+// =============================================
+describe('getAttributionPresentation / getAttributionIssueIdsForHost（Phase5 U1）', () => {
+  beforeEach(() => {
+    monitorData.machines = {};
+    monitorData.pendingUnattributedUsage = [];
+  });
+
+  it('pending ジョブは state=pending / label=未確認 / severity=warning', () => {
+    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000 });
+    expect(p).toEqual({ state: 'pending', label: '未確認', reason: 'unattributed', severity: 'warning' });
+  });
+
+  it('確定ジョブ（spoolId あり）は state=known / label なし / severity=none', () => {
+    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000, filamentInfo: [{ spoolId: 'sp1' }] });
+    expect(p).toEqual({ state: 'known', label: null, reason: null, severity: 'none' });
+  });
+
+  it('課題ID集合は履歴pendingと隔離消費を安定キーで統合する', () => {
+    monitorData.machines = {
+      h1: { printStore: { history: [
+        { id: 100, materialUsedMm: 5000 },                      // pending
+        { id: 101, materialUsedMm: 5000, filamentInfo: [{ spoolId: 'sp1' }] }, // 確定
+        { id: 102, materialUsedMm: 0 },                          // 消費なし→対象外
+      ] } },
+    };
+    monitorData.pendingUnattributedUsage = [
+      { pendingUsageId: 'q-abc', host: 'h1', usedMm: 100 },
+      { pendingUsageId: 'q-def', host: 'h2', usedMm: 200 },   // 別ホスト
+    ];
+    const ids = getAttributionIssueIdsForHost('h1');
+    expect(ids).toEqual(new Set(['pending:h1:100', 'quarantine:h1:q-abc']));
+    expect(countAttributionIssuesForHost('h1')).toBe(2);
+    expect(countAttributionIssuesForHost('h2')).toBe(1); // 隔離のみ
+  });
+
+  it('同一集合は安定（差分判定の基盤＝再計算で増減しない）', () => {
+    monitorData.machines = { h1: { printStore: { history: [{ id: 100, materialUsedMm: 5000 }] } } };
+    const a = getAttributionIssueIdsForHost('h1');
+    const b = getAttributionIssueIdsForHost('h1');
+    expect([...a].sort()).toEqual([...b].sort());
+  });
+
+  it('pendingUsageId 欠落の旧隔離レコードは detectedAtEpochMs で代替キー化', () => {
+    monitorData.pendingUnattributedUsage = [{ host: 'h1', usedMm: 100, detectedAtEpochMs: 1784000000000 }];
+    const ids = getAttributionIssueIdsForHost('h1');
+    expect(ids.has('quarantine:h1:1784000000000')).toBe(true);
+  });
+
+  it('host 未指定は空集合', () => {
+    expect(getAttributionIssueIdsForHost().size).toBe(0);
+    expect(countAttributionIssuesForHost('')).toBe(0);
   });
 });
 

@@ -60,7 +60,7 @@ import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printma
 import { getDisplayBaseUrl } from "./dashboard_connection.js";
 import { sendRelayFilament } from "./dashboard_client_sync.js";
 import { normalizeJobId } from "./dashboard_utils.js";
-import { wallNowMs } from "./dashboard_time.js";
+import { wallNowMs, randomEventId } from "./dashboard_time.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -1542,6 +1542,9 @@ function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "i
     monitorData.pendingUnattributedUsage = [];
   }
   monitorData.pendingUnattributedUsage.push({
+    // ★ Phase5(U1): 通知の差分判定で使う安定ID（壁時計非依存の一意キー）。
+    //   detectedAtEpochMs は同一msで衝突し得るため fingerprint の材料にしない。
+    pendingUsageId: randomEventId(),
     host,
     spoolId: spool?.id ?? null,
     usedMm: used,
@@ -1981,6 +1984,65 @@ export function getUnattributedUsageForHost(host) {
  */
 export function countUnattributedUsageForHost(host) {
   return getUnattributedUsageForHost(host).length;
+}
+
+/**
+ * 履歴ジョブの帰属状態を表示用に記述する純粋セレクタ（Phase5 U1・DOM非依存）。
+ *
+ * ロジックを DOM 側に散らさず、UI(チップ/バッジ)と通知判定が同じ語彙を使えるよう
+ * 「状態・ラベル・理由・重大度」を1か所で決める。#409 段階の状態は
+ * known(確認済み＝バッジ無し) と pending(未確認) の2値。inferred(推定) は Option4 で追加予定。
+ *
+ * @function getAttributionPresentation
+ * @param {Object} entry - 履歴ジョブ
+ * @returns {{state:"known"|"pending", label:?string, reason:?string, severity:"none"|"warning"}}
+ */
+export function getAttributionPresentation(entry) {
+  if (isAttributionPending(entry)) {
+    return { state: "pending", label: "未確認", reason: "unattributed", severity: "warning" };
+  }
+  return { state: "known", label: null, reason: null, severity: "none" };
+}
+
+/**
+ * 指定ホストの「帰属未確認 課題」の安定 fingerprint 集合を返す（Phase5 U1）。
+ *
+ * 2系統を統合する:
+ * - 履歴 pending（消費ありなのに未帰属の完了ジョブ）: `pending:<host>:<jobId>`
+ * - 隔離消費（無効jobId等で退避された消費）: `quarantine:<host>:<pendingUsageId>`
+ * 通知(U3)はこの集合の差分（新規のみ）で判定する。件数比較では
+ * 「1件解決＋1件新規」で件数不変のとき新規を見逃すため、集合を用いる。
+ *
+ * @function getAttributionIssueIdsForHost
+ * @param {string} host - ホスト名
+ * @returns {Set<string>} 課題の安定IDの集合
+ */
+export function getAttributionIssueIdsForHost(host) {
+  const ids = new Set();
+  if (!host) return ids;
+  const hist = monitorData.machines?.[host]?.printStore?.history;
+  if (Array.isArray(hist)) {
+    for (const job of hist) {
+      if (isAttributionPending(job)) ids.add(`pending:${host}:${job.id}`);
+    }
+  }
+  for (const q of getUnattributedUsageForHost(host)) {
+    // pendingUsageId が無い旧レコードは detectedAtEpochMs で代替（安定性は劣るが後方互換）。
+    ids.add(`quarantine:${host}:${q.pendingUsageId ?? q.detectedAtEpochMs}`);
+  }
+  return ids;
+}
+
+/**
+ * 指定ホストの帰属未確認 課題の件数を返す（バッジ表示用・Phase5 U1）。
+ * 履歴 pending と隔離消費の合算（getAttributionIssueIdsForHost の要素数）。
+ *
+ * @function countAttributionIssuesForHost
+ * @param {string} host - ホスト名
+ * @returns {number} 課題件数
+ */
+export function countAttributionIssuesForHost(host) {
+  return getAttributionIssueIdsForHost(host).size;
 }
 
 /**
