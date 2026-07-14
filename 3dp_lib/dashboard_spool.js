@@ -59,6 +59,8 @@ import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
 import { getDisplayBaseUrl } from "./dashboard_connection.js";
 import { sendRelayFilament } from "./dashboard_client_sync.js";
+import { normalizeJobId } from "./dashboard_utils.js";
+import { wallNowMs } from "./dashboard_time.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -1513,6 +1515,55 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
 }
 
 /**
+ * 有効な jobId が無いまま完了した消費量を隔離領域へ退避する（Phase2A）。
+ *
+ * 【なぜ隔離するのか】
+ * - 電源投入直後は printStartTime が 0/null で報告されることがあり
+ *   normalizeJobId が null を返す（＝無効ID）。無効IDのまま履歴/usedLengthLog/
+ *   境界へ確定記録を作ると、sinceJobId=0 の「大過去アンカー」が生まれて過去全履歴を
+ *   誤って減算する退行や、id=0 の偽履歴が発生する。
+ * - かといって消費を捨てると残量が実態より多く見えてしまう。そこで「job へ帰属できない
+ *   消費」を本領域に退避し、実IDが判明した時点で解決する（解決UIは後続PR）。
+ * - 残量そのものは job 帰属の権威（printStore.history）に載せられないため本関数では
+ *   触れない。隔離レコードが「未帰属の差分」を可視化する。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {Object} spool - 対象スプール
+ * @param {number} usedMm - 未帰属の消費量 [mm]
+ * @param {number} startLen - ジョブ開始時残量 [mm]（監査用）
+ * @param {string} [reason="invalid-job-id"] - 隔離理由
+ * @returns {void}
+ */
+function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "invalid-job-id") {
+  const used = Number(usedMm);
+  if (!Number.isFinite(used) || used <= 0) return;
+  if (!Array.isArray(monitorData.pendingUnattributedUsage)) {
+    monitorData.pendingUnattributedUsage = [];
+  }
+  monitorData.pendingUnattributedUsage.push({
+    host,
+    spoolId: spool?.id ?? null,
+    usedMm: used,
+    startLen: Number.isFinite(Number(startLen)) ? Number(startLen) : null,
+    reason,
+    // ★ 監査用の壁時計時刻（epoch ms）。イベント順序や再送冪等には使わない。
+    detectedAtEpochMs: wallNowMs()
+  });
+  // 肥大化防止（最新200件を保持）
+  const cap = 200;
+  if (monitorData.pendingUnattributedUsage.length > cap) {
+    monitorData.pendingUnattributedUsage.splice(
+      0, monitorData.pendingUnattributedUsage.length - cap
+    );
+  }
+  console.warn(
+    `[finalizeFilamentUsage] ${host}: 無効jobIdのため消費 ${used.toFixed(1)}mm を`
+    + ` pendingUnattributedUsage へ隔離（spool=${spool?.id ?? "?"}, reason=${reason}）`
+  );
+}
+
+/**
  * 実際に使用したフィラメント長を残量に反映して確定する。
  * 予約時に記録した startLength から使用量を差し引き更新する。
  *
@@ -1544,6 +1595,11 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     return;
   }
   const normalizedJobId = String(jobId ?? "");
+  // ★ Phase2A: jobId を「有効/無効」で明確に分類する。
+  //   normalizeJobId は正の有限整数のみを有効とし、0/null/負数/非数は null（無効ID）。
+  //   無効IDのときは jobId 由来の確定記録（履歴・usedLengthLog・境界昇格）を一切作らず、
+  //   消費量だけを隔離領域へ退避する（下の分岐で処理）。
+  const validJobId = normalizeJobId(jobId);
   // ★ ADR-0004: 多重 finalize ガード。既に確定済みの同一 jobId なら
   //   残量・log・printCount を一切触らず即 return（二重減算の根を断つ）。
   if (normalizedJobId && normalizedJobId === s.lastCompletedPrintID) {
@@ -1582,6 +1638,22 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       { used: resolvedUsed, expectedLength, jobId: normalizedJobId }
     );
     resolvedUsed = expectedLength;
+  }
+  // ★ Phase2A: 有効な jobId が無い場合は、jobId 由来の確定記録を一切作らずに
+  //   消費量を隔離領域へ退避して即 return する。
+  //   ここで残量（remainingLengthMm）を減算しないのは、残量の権威が job 帰属の
+  //   printStore.history（reconcile がこれを再計算の元にする）にあるため。未帰属の
+  //   消費を残量へ直接反映すると、次の reconcile がそれを取りこぼして盛り戻してしまう。
+  //   隔離レコードが差分を保持し、実IDが判明した時点で正規の帰属として解決する。
+  if (validJobId == null) {
+    _quarantineUnattributedUsage(host, s, resolvedUsed, startLen);
+    // transient はクリアするが lastCompletedPrintID は設定しない（空/偽IDを確定IDにしない）。
+    s.currentJobStartLength = null;
+    s.currentJobExpectedLength = null;
+    s.currentPrintID = "";
+    saveUnifiedStorage(true);
+    updateStoredDataToDOM();
+    return;
   }
   // ★ B2: 0消費は残量を変更しない（二重finalize等による偽値での破壊を防止）
   if (!isNaN(resolvedUsed) && resolvedUsed > 0) {

@@ -482,6 +482,106 @@ describe('finalizeFilamentUsage 多重 finalize ガード', () => {
 });
 
 // =============================================
+// finalizeFilamentUsage: 無効jobId隔離（Phase2A）
+// =============================================
+describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
+  beforeEach(() => {
+    monitorData.machines = {
+      h: { printStore: { current: null, history: [] }, historyData: [] }
+    };
+    monitorData.hostSpoolMap = { h: 'sp1' };
+    monitorData.filamentSpools = [{
+      id: 'sp1', serialNo: 1, name: 'PLA', colorName: '黒', filamentColor: '#000',
+      material: 'PLA', totalLengthMm: 100000, remainingLengthMm: 100000,
+      // ★ 電源投入直後の偽完了を模す: アクティブ追跡ジョブ無し（currentPrintID=""）
+      currentPrintID: '', currentJobStartLength: 100000, currentJobExpectedLength: 5000,
+      usedLengthLog: [], printCount: 0, costPerMm: 0
+    }];
+    monitorData.usageHistory = [];
+    monitorData.mountHistory = [];
+    monitorData.pendingUnattributedUsage = [];
+  });
+
+  it('無効jobId(0)は残量を減算せず消費を隔離し、確定記録を一切作らない', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const sp = monitorData.filamentSpools[0];
+
+    // 消費は隔離領域へ退避（失わない）
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    const q = monitorData.pendingUnattributedUsage[0];
+    expect(q.host).toBe('h');
+    expect(q.spoolId).toBe('sp1');
+    expect(q.usedMm).toBe(5000);
+    expect(q.reason).toBe('invalid-job-id');
+    expect(typeof q.detectedAtEpochMs).toBe('number');
+
+    // ★ 残量は減算しない（権威は printStore.history。未帰属を残量へ入れると reconcile が盛り戻す）
+    expect(sp.remainingLengthMm).toBe(100000);
+    // jobId 由来の確定記録は一切作らない
+    expect(sp.usedLengthLog).toHaveLength(0);
+    expect(sp.lastCompletedPrintID).toBeUndefined();
+    expect(sp.printCount).toBe(0);
+    expect(monitorData.machines.h.historyData).toHaveLength(0);
+    // transient はクリアされる
+    expect(sp.currentJobStartLength).toBeNull();
+    expect(sp.currentJobExpectedLength).toBeNull();
+    expect(sp.currentPrintID).toBe('');
+  });
+
+  it.each([null, '', -5, 'abc', NaN])('無効jobId(%s)も同様に隔離される', (badId) => {
+    finalizeFilamentUsage(5000, badId, 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    expect(sp.usedLengthLog).toHaveLength(0);
+    expect(sp.lastCompletedPrintID).toBeUndefined();
+    expect(sp.remainingLengthMm).toBe(100000);
+  });
+
+  it('無効jobIdでも消費0/NaNなら隔離レコードを作らず（差分なし）transientのみクリア', () => {
+    // exact:true で 0 消費（見積りフォールバック無し）→ 隔離対象外
+    finalizeFilamentUsage(0, 0, 'h', true, { exact: true });
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0);
+    expect(sp.currentJobStartLength).toBeNull();
+    expect(sp.currentPrintID).toBe('');
+  });
+
+  it('有効jobIdは従来どおり記録し隔離しない（対比・退行防止）', () => {
+    // currentPrintID を有効IDに合わせて通常完了させる
+    monitorData.filamentSpools[0].currentPrintID = '1001';
+    finalizeFilamentUsage(5000, '1001', 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0);
+    expect(sp.remainingLengthMm).toBe(95000);   // 100000 - 5000
+    expect(sp.usedLengthLog).toHaveLength(1);
+    expect(sp.lastCompletedPrintID).toBe('1001');
+    expect(sp.printCount).toBe(1);
+  });
+
+  it('有効なcurrentPrintIDに対する無効ID完了は不一致ガードが優先（隔離しない）', () => {
+    // アクティブジョブ 1001 が進行中に、偽の jobId=0 完了通知が来た場合は
+    // 「別ジョブの完了」として不一致ガードで transient をクリアして無視する（隔離しない）。
+    monitorData.filamentSpools[0].currentPrintID = '1001';
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0);
+    expect(sp.remainingLengthMm).toBe(100000);  // 減算なし
+    expect(sp.currentPrintID).toBe('');          // 不一致で transient クリア
+  });
+
+  it('隔離レコードは最新200件に上限される（肥大化防止）', () => {
+    for (let i = 0; i < 210; i++) {
+      // 毎回 transient を戻して無効ID完了を繰り返す
+      monitorData.filamentSpools[0].currentJobStartLength = 100000;
+      monitorData.filamentSpools[0].currentJobExpectedLength = 5000;
+      monitorData.filamentSpools[0].currentPrintID = '';
+      finalizeFilamentUsage(100, 0, 'h', true);
+    }
+    expect(monitorData.pendingUnattributedUsage.length).toBe(200);
+  });
+});
+
+// =============================================
 // SPOOL_STATE 定数の完全性
 // =============================================
 describe('SPOOL_STATE 定数', () => {
