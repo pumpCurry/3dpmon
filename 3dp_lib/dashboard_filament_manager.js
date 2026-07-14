@@ -611,7 +611,15 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
         if (result.success) {
           saveUnifiedStorage();
           render();
-          showAlert(`インポート完了: ${result.added}件追加, ${result.skipped}件スキップ`, "success");
+          // ★ レビュー指摘#7: リレー子では実体の取り込みは親が行い、実際の件数は親の
+          //   同時更新で変わり得る。確定件数として表示せず「送信」表示にする（正確な件数は
+          //   親からの還流後に画面へ反映される）。
+          showAlert(
+            result.pending
+              ? "カスタムプリセットを親機へ送信しました（反映まで数秒かかります）"
+              : `インポート完了: ${result.added}件追加, ${result.skipped}件スキップ`,
+            "success"
+          );
         } else {
           showAlert(`インポート失敗: ${result.errors.join(", ")}`, "error");
         }
@@ -2499,6 +2507,13 @@ function createEditorContent(onDone) {
   const preview = createFilamentPreview(prevBox, { ...DEFAULT_PREVIEW_OPTIONS });
 
   let current = null;
+  /**
+   * 編集画面を開いた時点のスプール値のスナップショット（浅いコピー）。
+   * ★ レビュー指摘#3: 変更フィールド判定と残量競合検査の基準は「開いた時点の値」でなければ
+   *   ならない。live な current 参照は印刷完了等で編集中に書き換わり得るため、基準に使うと
+   *   触っていないフィールドまで差分と誤認したり、古い残量で上書きしてしまう。
+   */
+  let baseline = {};
   let isNew = false;
   let dirty = false;
 
@@ -2596,7 +2611,36 @@ function createEditorContent(onDone) {
     }
     // ★ C1: updatedAt 更新（ユーザー操作）
     data.updatedAt = Date.now();
-    if (isNew) addSpool(data); else updateSpool(current.id, data);
+    if (isNew) {
+      addSpool(data);
+    } else {
+      // ★ B8(ChatGPT): 保存直前に対象がまだ存在するか再検証する。子で編集画面を開いている間に
+      //   親で削除/交換され、共有デルタで手元から消えている（＝陳腐化した）場合、古い対象へ
+      //   操作を送らずに中断して画面を更新する。親側も存在しないIDは no-op ガード済み。
+      const stillExists = (monitorData.filamentSpools || []).some(s => s && s.id === current.id);
+      if (!stillExists) {
+        showAlert("このスプールは既に削除または変更されています。画面を更新します。", "warn");
+        dirty = false;
+        onDone();
+        return;
+      }
+      // ★ レビュー指摘(ChatGPT): 編集フォームは開いた時点の全フィールド（残量含む）を保持する。
+      //   色名だけ変えて保存しても、フォームに残った古い残量が同時送信され、印刷完了で減った
+      //   親の残量を巻き戻す＝親正本の破壊が起き得る。開いた時点の baseline と異なるフィールド
+      //   のみを patch として送る（残量を触っていなければ残量は送らない）。updatedAt は常に更新。
+      const patch = { updatedAt: data.updatedAt };
+      for (const [k, v] of Object.entries(data)) {
+        if (k === "updatedAt") continue;
+        if (baseline[k] !== v) patch[k] = v;
+      }
+      // ★ #3: 残量を実際に変更した場合は、開いた時点の残量(baseline)を expectedRemainingLengthMm
+      //   として添える。親は自身の現在値と一致するときだけ残量変更を適用し、編集中に印刷消費が
+      //   進んで基準がズレた場合は残量上書きを拒否する（他フィールドは適用）。
+      if ("remainingLengthMm" in patch) {
+        patch.expectedRemainingLengthMm = baseline.remainingLengthMm ?? null;
+      }
+      updateSpool(current.id, patch);
+    }
     showAlert("フィラメントを保存しました", "success");
     dirty = false;
     onDone();
@@ -2620,6 +2664,7 @@ function createEditorContent(onDone) {
     el: div,
     setSpool(sp = {}, fresh = false) {
       current = sp;
+      baseline = sp ? { ...sp } : {}; // 開いた時点の値を固定（#3 の基準）
       isNew = fresh || !sp.id;
       fillForm(sp);
     }
@@ -2743,6 +2788,19 @@ export function showFilamentManager(activeIdx = 0, hostname) {
 
   document.body.appendChild(overlay);
   switchTab(activeIdx);
+
+  // ★ 監査 P1(第2報): 親からの共有デルタ（在庫/プリセット/スプール等）受信時に、
+  //   開いている管理画面を再描画するためのフックを登録する（リレー子で有効）。
+  //   モーダルが閉じられていれば（overlay が DOM から外れていれば）自動で解除する。
+  //   スプール一覧・ダッシュボードを再描画する（他タブの live 再描画は今後の課題）。
+  window._refreshFilamentManagerIfOpen = () => {
+    if (!document.body.contains(overlay)) {
+      window._refreshFilamentManagerIfOpen = null;
+      return;
+    }
+    try { registered.render(); } catch { /* noop */ }
+    try { dashboardTab.render(); } catch { /* noop */ }
+  };
 }
 
 /* ===================================================================

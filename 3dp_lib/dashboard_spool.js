@@ -77,6 +77,19 @@ function _isRelayChildSpool() {
 }
 
 /**
+ * 残量値を「整数 mm」へ正規化する（残量競合比較用・レビュー指摘#6）。
+ * 文字列/小数を数値化し四捨五入する。数値化できない値（null/NaN/非有限）は null を返す。
+ *
+ * @private
+ * @param {*} x - 残量値（数値・数値文字列など）
+ * @returns {?number} 整数 mm、または判定不能なら null
+ */
+function _normMm(x) {
+  const n = Math.round(Number(x));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * ADR-0005: 一時停止の印刷状態コード（dashboard_ui_mapping.js の
  * PRINT_STATE_CODE.printPaused=5 と同値）。ui_mapping は notification_manager 等の
  * 重い依存を持つため、循環/重依存 import を避けてここでローカル定義する。
@@ -935,6 +948,14 @@ function _calcCostPerMm(spool) {
 }
 
 export function addSpool(data, { inferred = false } = {}) {
+  // ★ 監査 P0(第2報): リレー子（satellite）での新規スプール登録を親へ RPC 委譲する。
+  //   従来 addSpool だけがガード漏れで、子がローカルに spoolSerialCounter を採番・
+  //   filamentSpools へ push していた（不可逆カウンタの分岐＝台帳破壊の原因）。
+  //   serialNo 採番は親のみが行い、結果は relay-delta（filamentSpools 全置換）で還流する。
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("addSpool", { data, inferred });
+    return null;
+  }
   // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const id = genId();
   // ★ ADR-0005 P6/R1: inferred(暫定推定)スプールは serialNo を採番しない
@@ -1188,9 +1209,27 @@ export function updateSpool(id, patch) {
   }
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
-  Object.assign(s, patch);
+  // ★ レビュー指摘#3: 残量競合検査。編集画面を開いた時点の残量(expectedRemainingLengthMm)と、
+  //   権威側の現在残量が一致しない場合（編集中に印刷消費が進んだ等）は残量の上書きを拒否する。
+  //   他フィールドは適用する。expectedRemainingLengthMm 自体はスプールに保存しない。
+  const applied = { ...patch };
+  if ("expectedRemainingLengthMm" in applied) {
+    const expected = applied.expectedRemainingLengthMm;
+    delete applied.expectedRemainingLengthMm;
+    if ("remainingLengthMm" in applied && expected != null) {
+      // ★ レビュー指摘#6: "1000" と 1000、小数、null/NaN で誤競合/誤一致しないよう、
+      //   親子双方を「整数 mm」へ正規化して比較する（許容誤差は設けない＝1mm 単位で厳密一致）。
+      const e = _normMm(expected);
+      const cur = _normMm(s.remainingLengthMm);
+      if (e === null || cur === null || e !== cur) {
+        console.warn(`[updateSpool] 残量基準不一致のため残量変更を拒否: id=${id} expected=${expected} current=${s.remainingLengthMm}`);
+        delete applied.remainingLengthMm;
+      }
+    }
+  }
+  Object.assign(s, applied);
   // purchasePrice or totalLengthMm が変わった場合に costPerMm を再算出
-  if ("purchasePrice" in patch || "totalLengthMm" in patch) {
+  if ("purchasePrice" in applied || "totalLengthMm" in applied) {
     s.costPerMm = _calcCostPerMm(s);
   }
   saveUnifiedStorage(true);
@@ -1650,6 +1689,8 @@ export function cleanupUsageSnapshots(jobId) {
     e => !(e.jobId === jobId && e.isSnapshot)
   );
   if (before !== monitorData.usageHistory.length) {
+    // ★ レビュー指摘#8: 追記以外（中間削除）の変更でも rev を加算し、リレーの変更検出を確実にする。
+    monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
     saveUnifiedStorage(true);
   }
 }
@@ -1669,7 +1710,10 @@ export function addSpoolFromPreset(preset, override = {}) {
   //   生成スプールは relay-delta で還流するため、戻り値は null（呼び出し側は
   //   装着を伴う場合 mountNewSpoolFromPreset を使用すること）。
   if (_isRelayChildSpool()) {
-    sendRelayFilament("addSpoolFromPreset", { preset, override });
+    // ★ レビュー指摘(ChatGPT): プリセット本体ではなく presetId のみを送る。
+    //   親は自身の正本(getAllPresets)から presetId を引き、許可された override だけを適用する。
+    //   古い/改変されたプリセット本体を子から親へ持ち込ませない（孤児プリセット防止）。
+    sendRelayFilament("addSpoolFromPreset", { presetId: preset.presetId, override });
     return null;
   }
   const data = {
@@ -1735,7 +1779,8 @@ export function mountNewSpoolFromPreset(preset, override = {}, hostname) {
   if (!preset || !hostname) return { ok: false, spool: null, relayed: false };
   // リレー子: 複合操作を 1 RPC で親へ（親が addSpoolFromPreset + setCurrentSpoolId を実行）
   if (_isRelayChildSpool()) {
-    const sent = sendRelayFilament("mountNewSpoolFromPreset", { preset, override, hostname });
+    // ★ レビュー指摘(ChatGPT): presetId のみを送り、親が正本から解決する（本体を送らない）。
+    const sent = sendRelayFilament("mountNewSpoolFromPreset", { presetId: preset.presetId, override, hostname });
     return { ok: sent, spool: null, relayed: true };
   }
   const spool = addSpoolFromPreset(preset, override);

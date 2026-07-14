@@ -147,6 +147,8 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
 
   // ★ setCurrentSpoolId を使い、旧スプール解除 + 新スプール装着を正規ルートで実行
   // （直接 hostSpoolMap を操作すると isActive/hostname/removedAt 等の状態が不整合になる）
+  // 旧スプールIDは付け替え前に取得しておく（ログ用。setCurrentSpoolId 後は取得できない）。
+  const oldId = getCurrentSpoolId(hostname);
   setCurrentSpoolId(updatedSp.id, hostname);
   updatedSp.currentPrintID = String(curJob.id);
   // storedData を更新してフィラメントプレビューを連動
@@ -166,15 +168,38 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
  * @param {Object} sp - スプールオブジェクト
  * @returns {void}
  */
-function _applyFilamentToRaw(raw, sp) {
-  raw.filamentInfo = [{
+export function _applyFilamentToRaw(raw, sp) {
+  // ★ 監査 P0-5: 従来は filamentInfo 配列全体を1件で全置換していたため、
+  //   複数リール割当て（A:15m / B:25m 等）のジョブで片方を編集すると
+  //   もう一方の割当てと usedMm が消失していた。置換対象（raw.filamentId 一致、
+  //   無ければ先頭）のみ差し替え、他リールのエントリと usedMm は保持する。
+  const prev = Array.isArray(raw.filamentInfo) ? raw.filamentInfo : [];
+  let targetIdx = raw.filamentId != null
+    ? prev.findIndex(fi => fi && fi.spoolId === raw.filamentId)
+    : -1;
+  if (targetIdx < 0 && prev.length > 0) targetIdx = 0;
+  const prevUsedMm = targetIdx >= 0 ? prev[targetIdx]?.usedMm : undefined;
+
+  const entry = {
     spoolId: sp.id, serialNo: sp.serialNo,
     spoolName: sp.name, colorName: sp.colorName,
     filamentColor: sp.filamentColor, material: sp.material,
     spoolCount: sp.printCount,
     expectedRemain: sp.remainingLengthMm
-  }];
-  raw.filamentId = sp.id;
+  };
+  // 置換対象が持っていた実消費量(usedMm)は帰属計算の権威値なので引き継ぐ。
+  if (prevUsedMm != null) entry.usedMm = prevUsedMm;
+
+  const next = prev.slice();
+  if (targetIdx >= 0) next[targetIdx] = entry; else next.push(entry);
+  raw.filamentInfo = next;
+
+  // ★ レビュー指摘(ChatGPT): 単数形 filamentId は「代表リール」を表す後方互換フィールド。
+  //   複数リール（distinct spoolId が2つ以上）の履歴で1本を差し替えた際に、編集リールへ
+  //   filamentId を無条件で切り替えると代表リールが狂う。distinct が1つのときだけそのIDを
+  //   採用し、複数なら null（＝代表なし）にする。色/素材は表示ヒントとして編集リール値を残す。
+  const distinct = [...new Set(next.map(fi => fi && fi.spoolId).filter(v => v != null))];
+  raw.filamentId = distinct.length === 1 ? distinct[0] : null;
   raw.filamentColor = sp.filamentColor;
   raw.filamentType = sp.material;
 }

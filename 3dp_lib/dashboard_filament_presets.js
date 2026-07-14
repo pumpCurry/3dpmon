@@ -24,6 +24,23 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
+import { sendRelayFilament } from "./dashboard_client_sync.js";
+
+/**
+ * リレー子（satellite/readonly）判定。
+ *
+ * ★ 監査 P0(第2報): カスタムプリセット／表示・お気に入り状態は親が唯一の権威。
+ * 子はローカル変更せず親へ RPC 委譲し、結果は relay-delta（userPresets/
+ * hiddenPresets/favoritePresets を含む）で還流する。従来はプリセット操作に
+ * ガードが無く、子だけに存在するプリセットが RPC ペイロード経由で親のデータ
+ * 不整合（孤児プリセット・在庫負数）を作る経路になっていた。
+ *
+ * @private
+ * @returns {boolean} リレー子なら true
+ */
+function _isRelayChildPreset() {
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+}
 
 /** プリセットエクスポートのフォーマットバージョン */
 const FORMAT_VERSION = 1;
@@ -691,6 +708,10 @@ export function isHiddenPreset(presetId) {
  * @returns {boolean} 切替後の非表示状態
  */
 export function togglePresetVisibility(presetId) {
+  if (_isRelayChildPreset()) {
+    sendRelayFilament("togglePresetVisibility", { presetId });
+    return !isHiddenPreset(presetId); // 楽観値。親確定後に relay-delta で還流
+  }
   if (!monitorData.hiddenPresets) monitorData.hiddenPresets = [];
   const idx = monitorData.hiddenPresets.indexOf(presetId);
   if (idx >= 0) {
@@ -716,6 +737,11 @@ export function toggleBrandVisibility(brand) {
   const hiddenSet = new Set(monitorData.hiddenPresets);
   const allHidden = brandPresets.every(p => hiddenSet.has(p.presetId));
 
+  if (_isRelayChildPreset()) {
+    sendRelayFilament("toggleBrandVisibility", { brand });
+    return !allHidden; // 楽観値
+  }
+
   if (allHidden) {
     // 全非表示 → 全表示に戻す
     for (const p of brandPresets) hiddenSet.delete(p.presetId);
@@ -733,6 +759,10 @@ export function toggleBrandVisibility(brand) {
  * @returns {boolean} 切替後のお気に入り状態
  */
 export function togglePresetFavorite(presetId) {
+  if (_isRelayChildPreset()) {
+    sendRelayFilament("togglePresetFavorite", { presetId });
+    return !isPresetFavorite(presetId); // 楽観値
+  }
   if (!monitorData.favoritePresets) monitorData.favoritePresets = [];
   const idx = monitorData.favoritePresets.indexOf(presetId);
   if (idx >= 0) {
@@ -782,6 +812,12 @@ export function addUserPreset(data) {
   const validation = _validatePreset(data);
   if (!validation.valid) return { success: false, errors: validation.errors };
 
+  if (_isRelayChildPreset()) {
+    // 検証は子でも実施済み。実体（presetId 採番）は親が生成し relay-delta で還流する。
+    sendRelayFilament("addUserPreset", { data });
+    return { success: true, pending: true };
+  }
+
   if (!monitorData.userPresets) monitorData.userPresets = [];
 
   const preset = {
@@ -830,6 +866,11 @@ export function updateUserPreset(presetId, changes) {
   const validation = _validatePreset(merged);
   if (!validation.valid) return { success: false, errors: validation.errors };
 
+  if (_isRelayChildPreset()) {
+    sendRelayFilament("updateUserPreset", { presetId, changes });
+    return { success: true, pending: true };
+  }
+
   arr[idx] = merged;
   return { success: true };
 }
@@ -848,6 +889,11 @@ export function deleteUserPreset(presetId) {
   const arr = monitorData.userPresets || [];
   const idx = arr.findIndex(p => p.presetId === presetId);
   if (idx < 0) return { success: false, errors: ["プリセットが見つかりません"] };
+
+  if (_isRelayChildPreset()) {
+    sendRelayFilament("deleteUserPreset", { presetId });
+    return { success: true, pending: true };
+  }
 
   arr.splice(idx, 1);
   // 非表示リストからも除去
@@ -880,6 +926,27 @@ export function exportUserPresets() {
  * @returns {{ success: boolean, added: number, skipped: number, errors: string[] }}
  */
 export function importUserPresets(jsonStr, opts = {}) {
+  // ★ レビュー指摘(ChatGPT): 個別追加/更新/削除は RPC 化したが、一括インポートが子ローカルで
+  //   直接配列を書き換えるままだと再び親子が分岐する。子は生JSONを親へRPC委譲し、実体の
+  //   取り込みは親が行う。件数は親と同じ検証ロジックで見積って返す（monitorData は変更しない）。
+  if (_isRelayChildPreset()) {
+    let dry;
+    try { dry = JSON.parse(jsonStr); }
+    catch (e) { return { success: false, added: 0, skipped: 0, errors: ["JSONの解析に失敗しました: " + e.message] }; }
+    if (!dry.presets || !Array.isArray(dry.presets)) {
+      return { success: false, added: 0, skipped: 0, errors: ["presets配列が見つかりません"] };
+    }
+    sendRelayFilament("importUserPresets", { jsonStr, opts });
+    const existing = new Set((monitorData.userPresets || []).map(p => p.presetId));
+    let a = 0, s = 0;
+    for (const p of dry.presets) {
+      if (!_validatePreset(p).valid) { s++; continue; }
+      if (p.presetId && existing.has(p.presetId)) { s++; continue; }
+      a++;
+    }
+    return { success: true, added: a, skipped: s, errors: [], pending: true };
+  }
+
   const merge = opts.merge !== false;
   const errors = [];
   let parsed;

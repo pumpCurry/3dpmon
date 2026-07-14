@@ -111,20 +111,30 @@ describe("リレー子（window._3dpmonRelayChild=true）でのスプール操�
     expect(sendRelayFilament).not.toHaveBeenCalled();
   });
 
-  it("addSpoolFromPreset: RPC 委譲し null を返す（serialNo/在庫を子で消費しない）", () => {
+  it("addSpoolFromPreset: presetId のみ RPC 委譲し null を返す（serialNo/在庫を子で消費しない）", () => {
     const sp = addSpoolFromPreset(PRESET);
     expect(sp).toBeNull();
-    expect(sendRelayFilament).toHaveBeenCalledWith("addSpoolFromPreset", { preset: PRESET, override: {} });
+    // ★ B5: プリセット本体ではなく presetId のみ送る（親が正本から解決）
+    expect(sendRelayFilament).toHaveBeenCalledWith("addSpoolFromPreset", { presetId: PRESET.presetId, override: {} });
     expect(mockMonitorData.filamentSpools.length).toBe(0);
     expect(mockMonitorData.spoolSerialCounter).toBe(0);
     expect(consumeInventory).not.toHaveBeenCalled();
+  });
+
+  it("addSpool: 新規登録は RPC 委譲し null を返す（serialNo を子で採番しない）", () => {
+    // 監査 P0(第2報): addSpool だけガード漏れで、子がローカルに採番・push していた回帰。
+    const sp = addSpool({ name: "childNew" });
+    expect(sp).toBeNull();
+    expect(sendRelayFilament).toHaveBeenCalledWith("addSpool", { data: { name: "childNew" }, inferred: false });
+    expect(mockMonitorData.filamentSpools.length).toBe(0);
+    expect(mockMonitorData.spoolSerialCounter).toBe(0);
   });
 
   it("mountNewSpoolFromPreset: 開封+装着を 1 RPC で委譲する", () => {
     const r = mountNewSpoolFromPreset(PRESET, {}, "h1");
     expect(r).toEqual({ ok: true, spool: null, relayed: true });
     expect(sendRelayFilament).toHaveBeenCalledWith("mountNewSpoolFromPreset", {
-      preset: PRESET, override: {}, hostname: "h1",
+      presetId: PRESET.presetId, override: {}, hostname: "h1",
     });
     expect(mockMonitorData.filamentSpools.length).toBe(0);
   });
@@ -175,6 +185,34 @@ describe("親/スタンドアロン（フラグなし）では従来のローカ
     updateSpool("A", { remainingLengthMm: 5000 });
     expect(sendRelayFilament).not.toHaveBeenCalled();
     expect(mockMonitorData.filamentSpools[0].remainingLengthMm).toBe(5000);
+  });
+
+  it("updateSpool: expectedRemainingLengthMm 不一致なら残量のみ拒否・他は適用 (#3)", () => {
+    // 権威側は既に 90（印刷消費が進んだ）。基準 100 で残量95を送っても残量は拒否。
+    mockMonitorData.filamentSpools.push({ id: "A", remainingLengthMm: 90, name: "old" });
+    updateSpool("A", { remainingLengthMm: 95, name: "new", expectedRemainingLengthMm: 100 });
+    const s = mockMonitorData.filamentSpools[0];
+    expect(s.remainingLengthMm).toBe(90);            // 残量は巻き戻さない
+    expect(s.name).toBe("new");                      // 他フィールドは適用
+    expect(s.expectedRemainingLengthMm).toBeUndefined(); // 補助キーは保存しない
+  });
+
+  it("updateSpool: expectedRemainingLengthMm 一致なら残量を適用 (#3)", () => {
+    mockMonitorData.filamentSpools.push({ id: "A", remainingLengthMm: 90 });
+    updateSpool("A", { remainingLengthMm: 80, expectedRemainingLengthMm: 90 });
+    expect(mockMonitorData.filamentSpools[0].remainingLengthMm).toBe(80);
+  });
+
+  it("updateSpool: 残量競合は整数mm正規化で比較（\"90\"と90は一致）(#6)", () => {
+    mockMonitorData.filamentSpools.push({ id: "A", remainingLengthMm: 90 });
+    updateSpool("A", { remainingLengthMm: 80, expectedRemainingLengthMm: "90" });
+    expect(mockMonitorData.filamentSpools[0].remainingLengthMm).toBe(80); // 文字列基準でも一致→適用
+  });
+
+  it("updateSpool: expected が NaN/非数なら残量を安全側で拒否 (#6)", () => {
+    mockMonitorData.filamentSpools.push({ id: "A", remainingLengthMm: 90 });
+    updateSpool("A", { remainingLengthMm: 80, expectedRemainingLengthMm: "abc" });
+    expect(mockMonitorData.filamentSpools[0].remainingLengthMm).toBe(90); // 判定不能→拒否
   });
 
   it("addSpool はローカルに生成し serialNo を採番する", () => {

@@ -205,6 +205,9 @@ export async function importAllData(data) {
     // 時系列順にソート
     monitorData.usageHistory.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
     trimUsageHistory();
+    // ★ レビュー指摘#4: 一括インポートは中間レコードの順序/内容を変え得る（件数＋末尾署名では
+    //   捕捉しきれない）。rev を加算してリレーの変更検出を確実にする。
+    monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
   }
 
   // ── ADR-0004 mountHistory: 装着履歴を evId ベースで重複排除追加 ──
@@ -702,7 +705,12 @@ export function trimUsageHistory() {
   }
 
   const cutoff = logs.length - MAX_USAGE_HISTORY;
-  monitorData.usageHistory = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
+  const trimmed = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
+  // ★ レビュー指摘#8: トリム（先頭側の中間削除）でも rev を加算し変更検出を確実にする。
+  if (trimmed.length !== logs.length) {
+    monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
+  }
+  monitorData.usageHistory = trimmed;
 }
 
 /**
@@ -943,6 +951,14 @@ export function restoreUnifiedStorage() {
  * @returns {void}
  */
 function _reconcileAfterRestore() {
+  // ★ 監査 P0-1(第1報): リレー子（satellite/readonly）は台帳の権威を持たない。
+  //   親スナップショットが唯一の正であり、復元したローカルデータから mount イベントや
+  //   推定アンカーを再生成すると親と分岐する（＝残量乖離が再起動でも直らない主因）。
+  //   フラグは init 側でストレージ復元前に確定済み。
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    console.debug("[restoreUnifiedStorage] リレー子: 台帳アンカー種付けをスキップ（親が権威）");
+    return;
+  }
   try {
     const report = initLedgerAnchors({ nowMs: Date.now() });
     if (report && report.seeded > 0) {

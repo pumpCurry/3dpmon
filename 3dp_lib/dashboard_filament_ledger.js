@@ -679,11 +679,18 @@ export function getOpenFilamentEvent(host) {
  * @param {string} resolution - 解決種別（"whole" | "split" | "default-continue" 等）
  * @param {Object} [opts]
  * @param {number} [opts.ts] - 解決時刻 ms（任意）
- * @returns {?Object} 解決した文脈（未解決が無ければ null）
+ * @param {?string} [opts.expectedEvId] - 解決対象として想定するイベントID（evId）。
+ *   指定時、現在の未解決文脈の evId と一致しないと解決しない（遅延した reseat が、
+ *   既に別イベントへ切り替わった文脈を誤解決するのを防ぐ＝レビュー指摘#2）。
+ * @returns {?Object} 解決した文脈（未解決が無い/evId不一致なら null）
  */
-export function resolveFilamentEvent(host, resolution, { ts } = {}) {
+export function resolveFilamentEvent(host, resolution, { ts, expectedEvId } = {}) {
   const ctx = monitorData.filamentEventContext?.[host];
   if (!ctx || ctx.resolved) return null;
+  if (expectedEvId != null && ctx.evId !== expectedEvId) {
+    // 想定と異なるイベント（既に解決済み→新イベント発生等）は誤解決しない。
+    return null;
+  }
   ctx.resolved = true;
   ctx.resolution = resolution ?? "default-continue";
   if (ts != null) ctx.resolvedAt = ts;

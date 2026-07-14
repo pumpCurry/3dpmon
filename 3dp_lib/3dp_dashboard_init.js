@@ -88,6 +88,16 @@ export async function initializeDashboard() {
   setStorageNamespace(_storageNs);
   setPanelLayoutNamespace(_storageNs);
 
+  // ★ 監査 P0-1(第1報): リレー子フラグをストレージ復元より前に確定する。
+  //   従来はこのフラグを initClientSync() 後（＝restoreUnifiedStorage の後）に立てていたため、
+  //   復元時点ではまだ false で、子でもローカルの台帳再構築(initLedgerAnchors)・フィラメント
+  //   権威マージ・印刷再開/aggregator 永続化が走り、親スナップショット受信前に独自状態が
+  //   成立していた（＝残量が親と乖離し、再起動でも直らない主因の一つ）。
+  //   名前空間判定と同じ detectRelayMode 由来なので、ここで確定して以後の復元/保存を分岐させる。
+  if (_storageNs === "relay") {
+    window._3dpmonRelayChild = true;
+  }
+
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
   restoreUnifiedStorage();
@@ -335,10 +345,17 @@ function autoSaveAll() {
 
   try {
     /* 全接続ホストの印刷再開データと aggregator 状態を保存 */
-    for (const host of Object.keys(monitorData.machines)) {
-      if (host === PLACEHOLDER_HOSTNAME) continue;
-      persistPrintResume(host);
-      persistAggregatorState(host);
+    // ★ 監査 P0-2(第1報): リレー子はプリンタ直結せず印刷再開/aggregator の権威を持たない。
+    //   さらに pd_*/aggr_* キーは名前空間非対応で、同一ブラウザの standalone と衝突する
+    //   （relay 名前空間へ分離されるのは統一ストレージ blob のみ）。よってリレー子では
+    //   これらを永続化しない。統一ストレージ（名前空間分離済み・親ミラーのキャッシュ）は保存する。
+    const _isChild = typeof window !== "undefined" && window._3dpmonRelayChild === true;
+    if (!_isChild) {
+      for (const host of Object.keys(monitorData.machines)) {
+        if (host === PLACEHOLDER_HOSTNAME) continue;
+        persistPrintResume(host);
+        persistAggregatorState(host);
+      }
     }
     saveUnifiedStorage(true);   // 即時書き込み（スロットリングバイパス）
   } catch (e) {

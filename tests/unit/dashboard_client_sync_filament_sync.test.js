@@ -141,3 +141,56 @@ describe("_applySharedFilamentState — 親権威の全置換", () => {
     expect(monitorData.filamentSpools.length).toBe(0);
   });
 });
+
+describe("_applySharedFilamentState — フィラメント補助ドメイン（監査 P0 第2報）", () => {
+  beforeEach(() => {
+    monitorData.filamentInventory.splice(0, monitorData.filamentInventory.length);
+    monitorData.userPresets.splice(0, monitorData.userPresets.length);
+    monitorData.hiddenPresets.splice(0, monitorData.hiddenPresets.length);
+    monitorData.favoritePresets.splice(0, monitorData.favoritePresets.length);
+    monitorData.usageHistory.splice(0, monitorData.usageHistory.length);
+    for (const k of Object.keys(monitorData.filamentEventContext)) delete monitorData.filamentEventContext[k];
+    monitorData.spoolSerialCounter = 0;
+  });
+
+  it("在庫・プリセット・使用履歴を親からミラー（in-place 全置換・参照維持）", () => {
+    const refInv = monitorData.filamentInventory;
+    monitorData.filamentInventory.push({ modelId: "old", quantity: 9 });
+    _applySharedFilamentState({
+      filamentInventory: [{ modelId: "m1", quantity: 3 }],
+      userPresets: [{ presetId: "user-1" }],
+      hiddenPresets: ["h1"],
+      favoritePresets: ["f1"],
+      usageHistory: [{ id: "u1" }],
+    });
+    expect(monitorData.filamentInventory).toBe(refInv); // ビュー参照維持
+    expect(monitorData.filamentInventory).toEqual([{ modelId: "m1", quantity: 3 }]);
+    expect(monitorData.userPresets).toEqual([{ presetId: "user-1" }]);
+    expect(monitorData.hiddenPresets).toEqual(["h1"]);
+    expect(monitorData.favoritePresets).toEqual(["f1"]);
+    expect(monitorData.usageHistory).toEqual([{ id: "u1" }]);
+  });
+
+  it("切れイベント文脈（filamentEventContext）を全置換ミラー", () => {
+    monitorData.filamentEventContext.stale = { resolved: false };
+    _applySharedFilamentState({
+      filamentEventContext: { h1: { resolved: true, resolution: "reseat" } },
+    });
+    expect(monitorData.filamentEventContext.stale).toBeUndefined();
+    expect(monitorData.filamentEventContext.h1).toEqual({ resolved: true, resolution: "reseat" });
+  });
+
+  it("spoolSerialCounter を親値でミラー（子採番の分岐防止）", () => {
+    monitorData.spoolSerialCounter = 2;
+    _applySharedFilamentState({ spoolSerialCounter: 57 });
+    expect(monitorData.spoolSerialCounter).toBe(57);
+  });
+
+  it("補助ドメインのフィールド欠落は変更しない（部分デルタ安全策）", () => {
+    monitorData.filamentInventory.push({ modelId: "keep", quantity: 1 });
+    monitorData.spoolSerialCounter = 5;
+    _applySharedFilamentState({ filamentSpools: [] });
+    expect(monitorData.filamentInventory).toEqual([{ modelId: "keep", quantity: 1 }]);
+    expect(monitorData.spoolSerialCounter).toBe(5);
+  });
+});

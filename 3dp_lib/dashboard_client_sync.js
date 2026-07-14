@@ -51,6 +51,15 @@ let _wantedMode = null;
 /** このページロード中に一度でも satellite へ昇格したか（再接続時の自動再昇格用） */
 let _everSatellite = false;
 
+/**
+ * 親フルスナップショットを一度でも受信・適用したか。
+ *
+ * ★ レビュー指摘(ChatGPT): satellite へ昇格済みだが初回 snapshot 未受信の短い隙に、
+ * relay 名前空間の古いキャッシュ（スプールID・在庫等）を基にフィラメント操作を親へ
+ * 送れてしまう。初回 snapshot 適用までフィラメント変更 RPC を禁止する同期ゲート。
+ */
+let _filamentSnapshotReady = false;
+
 /** リレー WebSocket インスタンス */
 let _relayWs = null;
 
@@ -144,6 +153,10 @@ function _connectToParent() {
   const wsUrl = `ws://${_parentOrigin}/?mode=${_relayMode}`;
   console.info(`[client-sync] 親リレーに接続: ${wsUrl}`);
 
+  // ★ レビュー指摘#4: 新しい接続の入口でも同期ゲートを明示的に閉じる。onclose だけに頼らず、
+  //   再接続開始時点で false に戻すことで、新 snapshot 受信前の操作を確実に禁止する。
+  _filamentSnapshotReady = false;
+
   try {
     _relayWs = new WebSocket(wsUrl);
   } catch (e) {
@@ -173,6 +186,9 @@ function _connectToParent() {
   _relayWs.onclose = () => {
     console.warn("[client-sync] 親リレーから切断");
     _relayWs = null;
+    // ★ レビュー指摘#6: 切断時は同期ゲートを閉じる。再接続後に新 snapshot を受信する前に、
+    //   切断前の古い状態のままフィラメント操作を送れてしまうのを防ぐ。
+    _filamentSnapshotReady = false;
     _scheduleReconnect();
   };
 
@@ -317,7 +333,95 @@ export function _applySharedFilamentState(shared) {
     // ADR-0004 台帳（装着履歴）。子では読み取り専用のため全置換でよい。
     monitorData.mountHistory = shared.mountHistory.slice();
   }
+
+  // ★ 監査 P0(第2報): フィラメント補助ドメイン（在庫・プリセット・切れ文脈・
+  //   serialCounter・使用履歴）を親からミラー。子は権威を持たず全置換で安全。
+  //   フィールド欠落時はそのフィールドを変更しない（部分 delta 安全策）。
+  //   配列は参照を保ったまま in-place 置換する（ビュー側が参照を保持するため）。
+  _replaceArrayInPlace(monitorData.filamentInventory, shared.filamentInventory);
+  _replaceArrayInPlace(monitorData.userPresets, shared.userPresets);
+  _replaceArrayInPlace(monitorData.hiddenPresets, shared.hiddenPresets);
+  _replaceArrayInPlace(monitorData.favoritePresets, shared.favoritePresets);
+  _replaceArrayInPlace(monitorData.usageHistory, shared.usageHistory);
+  if (shared.filamentEventContext && typeof shared.filamentEventContext === "object") {
+    if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
+      monitorData.filamentEventContext = {};
+    }
+    for (const k of Object.keys(monitorData.filamentEventContext)) {
+      delete monitorData.filamentEventContext[k];
+    }
+    Object.assign(monitorData.filamentEventContext, shared.filamentEventContext);
+  }
+  if (shared.spoolSerialCounter != null) {
+    // 子の採番は親のみ（addSpool ガード）。親のカウンタをミラーして分岐を防ぐ。
+    monitorData.spoolSerialCounter = Number(shared.spoolSerialCounter) || 0;
+  }
+
   _refreshFilamentPreviews();
+  _maybeNotifyFilamentDomainChanged();
+}
+
+/** 前回フィラメント管理再描画をトリガした構造シグネチャ（remaining の毎tick変化は除外） */
+let _prevDomainSig = "";
+
+/**
+ * フィラメント管理画面の再描画が必要な「構造的」変化があったときのみ通知する。
+ *
+ * ★ 監査 P1(第2報)＋CPU配慮: 印刷中は共有デルタが 500ms ごとに届き、スプールの
+ * remainingLengthMm が毎 tick 変化する。これを毎回管理画面の全再描画に繋げると
+ * テーブルを 2回/秒で再構築し CPU を圧迫する（近年の描画律速修正に逆行する）。
+ * よって残量そのものはシグネチャに含めず、スプール集合・在庫数量・プリセット集合・
+ * serialCounter・使用履歴件数など「表示の構造」が変わったときだけ再描画する。
+ * 残量のライブ表示はフィラメントプレビュー（dirty-key 経路）が別途担う。
+ *
+ * @private
+ * @returns {void}
+ */
+function _maybeNotifyFilamentDomainChanged() {
+  const sig = [
+    (monitorData.filamentSpools || []).map(s => s && s.id).join(","),
+    Object.entries(monitorData.hostSpoolMap || {}).map(([h, id]) => `${h}=${id}`).join(","),
+    (monitorData.filamentInventory || []).map(i => `${i?.modelId}:${i?.quantity}`).join(","),
+    (monitorData.userPresets || []).length,
+    (monitorData.hiddenPresets || []).join(","),
+    (monitorData.favoritePresets || []).join(","),
+    monitorData.spoolSerialCounter ?? 0,
+    (monitorData.usageHistory || []).length,
+  ].join("|");
+  if (sig === _prevDomainSig) return;
+  _prevDomainSig = sig;
+  _notifyFilamentDomainChanged();
+}
+
+/**
+ * 配列を参照を保ったまま in-place で全置換する（src が配列のときのみ）。
+ * dst がまだ配列でない場合は何もしない（monitorData 未初期化の防御）。
+ *
+ * @private
+ * @param {Array<*>} dst - 置換先（monitorData 上の配列）
+ * @param {Array<*>|undefined} src - 受信値（配列でなければ無視）
+ * @returns {void}
+ */
+function _replaceArrayInPlace(dst, src) {
+  if (!Array.isArray(src) || !Array.isArray(dst)) return;
+  dst.splice(0, dst.length, ...src);
+}
+
+/**
+ * フィラメント補助ドメインの同期後、開いているフィラメント管理モーダルを再描画する。
+ *
+ * ★ 監査 P1(第2報): 子はメモリ上のデータは更新されても、開いている管理画面
+ * （在庫/プリセット/一覧/集計）が再描画されず古い表示のままになっていた。
+ * モーダルが開いていれば安全に再描画フックを呼ぶ（未実装/未オープンなら no-op）。
+ *
+ * @private
+ * @returns {void}
+ */
+function _notifyFilamentDomainChanged() {
+  try {
+    const fn = (typeof window !== "undefined") && window._refreshFilamentManagerIfOpen;
+    if (typeof fn === "function") fn();
+  } catch { /* 再描画失敗は無視 */ }
 }
 
 /** 前回プレビューへ反映した装着構成シグネチャ（host → signature）。再描画間引き用 */
@@ -449,6 +553,10 @@ function _applySnapshot(state) {
       monitorData.machines[hostname]._cachedFileInfo = info;
     }
   }
+
+  // ★ レビュー指摘#4: 同期部分の適用が全て成功した「後」でのみ同期ゲートを開く。
+  //   途中で例外が発生した場合はここへ到達せず ready=false のまま＝古い状態での操作を防ぐ。
+  _filamentSnapshotReady = true;
 
   console.info(`[client-sync] スナップショット適用完了: ${Object.keys(state.machines || {}).length}ホスト`);
 
@@ -633,7 +741,9 @@ function _alertRelayBlocked(reason) {
   import("./dashboard_notification_manager.js").then(({ showAlert }) => {
     const msg = reason === "readonly"
       ? "閲覧専用モードのため操作できません（右上の昇格ボタンから操作モードに切り替えてください）"
-      : "親機との接続が切れているため操作を送信できません";
+      : reason === "syncing"
+        ? "親機と同期中です。少し待ってからもう一度操作してください"
+        : "親機との接続が切れているため操作を送信できません";
     showAlert(msg, "warn");
   }).catch(() => { /* 通知不能時は console のみ */ });
 }
@@ -833,10 +943,54 @@ export function sendRelayFilament(action, data) {
     _alertRelayBlocked("disconnected");
     return false;
   }
+  // ★ B4: 初回スナップショット未受信の間はフィラメント変更を禁止（古いキャッシュで親を汚さない）。
+  if (!_filamentSnapshotReady) {
+    console.warn(`[client-sync] 初回 snapshot 未受信のため操作をブロック: ${action}`);
+    _alertRelayBlocked("syncing");
+    return false;
+  }
+  // ★ B6: 非冪等操作（採番・在庫消費を伴う開封/追加/確定）の二重送信を抑止する。
+  //   同一ペイロードの連続送信（ダブルクリック等）を短時間ウィンドウで1回に丸める。
+  //   在庫±や mount 等の冪等・意図的反復操作は対象外（正当な連続操作を殺さない）。
+  if (_NON_IDEMPOTENT_FILAMENT.has(action)) {
+    const key = `${action}:${JSON.stringify(data)}`;
+    const now = Date.now();
+    const prev = _recentFilamentSends.get(key);
+    if (prev && now - prev < 1500) {
+      console.warn(`[client-sync] 二重送信を抑止: ${action}`);
+      return false;
+    }
+    _recentFilamentSends.set(key, now);
+    if (_recentFilamentSends.size > 50) {
+      for (const [k, t] of _recentFilamentSends) if (now - t > 5000) _recentFilamentSends.delete(k);
+    }
+  }
+  // ★ レビュー指摘#1: 非冪等操作には opId を付与する。親が直近 opId を記録し、
+  //   同一 opId の再配信（リトライ/リレー再送）を二重採番・二重在庫消費せず拒否できる。
+  //   子側 payload は変更せず、送信用のコピーへ付与する。
+  let sendData = data;
+  if (_NON_IDEMPOTENT_FILAMENT.has(action)) {
+    const opId = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `op_${Date.now()}_${Math.floor(performance.now())}`;
+    sendData = { ...data, _opId: opId };
+  }
   _relayWs.send(JSON.stringify({
     type: "relay-filament",
     action,
-    data
+    data: sendData
   }));
   return true;
 }
+
+/**
+ * 非冪等（採番・在庫消費・一括import）フィラメント操作。二重送信抑止＋opId 付与の対象。
+ * レビュー指摘#3で importUserPresets を追加（再実行で二重追加になり得るため）。
+ */
+const _NON_IDEMPOTENT_FILAMENT = new Set([
+  "addSpool", "addSpoolFromPreset", "mountNewSpoolFromPreset", "confirmInferredSpool",
+  "importUserPresets"
+]);
+
+/** 直近の非冪等送信（key → ts）。二重送信抑止用。 */
+const _recentFilamentSends = new Map();

@@ -236,6 +236,14 @@ export const monitorData = {
   /** お気に入りプリセットID一覧 @type {Array<string>} */
   favoritePresets: [],
   usageHistory: [],
+  /**
+   * usageHistory の非追記的変更（一括インポート等）を示す改訂番号。
+   * ★ レビュー指摘#4: リレーの usageHistory 変更検出は「件数＋末尾」の O(1) 署名だが、
+   *   同件数・同末尾で中間レコードだけが変わる一括インポートを検出できない。import 完了時に
+   *   本 rev を加算し、署名へ含めることで子への伝播を保証する。
+   * @type {number}
+   */
+  usageHistoryRev: 0,
   filamentInventory: [],
   /**
    * フィラメント装着履歴（追記専用イベントログ。ADR-0004）。
