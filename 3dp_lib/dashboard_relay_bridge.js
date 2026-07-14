@@ -711,7 +711,9 @@ function _buildFullSnapshot() {
       //   子(readonly=閲覧専用ミラー / satellite=編集可だが変更は relay-settings で親へ逆反映)。
       itemkeeper: monitorData.appSettings.itemkeeper || {},
       // ★ レビュー(時計衛生): 業務タイムゾーン(親権威)を子へミラー（日次/月次集計の既定ゾーン）。
-      businessTimeZone: monitorData.appSettings.businessTimeZone ?? null
+      businessTimeZone: monitorData.appSettings.businessTimeZone ?? null,
+      // 旧履歴移行の固定基準ゾーンも子へミラー（親の tz-less 旧履歴を子が同一解釈するため）。
+      legacyHistoryTimeZone: monitorData.appSettings.legacyHistoryTimeZone ?? null
     }
   };
 }

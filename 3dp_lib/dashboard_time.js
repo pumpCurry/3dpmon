@@ -65,6 +65,27 @@ export function resolvedLocalTimeZone() {
 }
 
 /**
+ * 値が有効な IANA タイムゾーン名なら正規化して返し、無効なら null を返す。
+ *
+ * ★ レビュー(P1): import/手動編集で "Asia/Toky" "JST" "Japan" 等が入ると Intl が RangeError を
+ * 投げ、レポート全体が停止する。保存・snapshot 適用・import 時に本関数で検証し、無効値は採用しない
+ * （UTC へ黙って変えるのではなく、呼び出し側で直前の有効値を維持する）。
+ *
+ * @param {*} value - 候補タイムゾーン
+ * @returns {?string} 有効な IANA 名、または null
+ */
+export function normalizeTimeZone(value) {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const tz = value.trim();
+  try {
+    // 無効な timeZone は RangeError。有効なら解決名を返す（Intl が正準化する場合がある）。
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone || tz;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * epoch ミリ秒を指定 IANA タイムゾーンの年月日パーツへ分解する（内部）。
  * @private
  * @param {number} epochMs
@@ -162,36 +183,72 @@ export function monthKey(epochMs, timeZone = resolvedLocalTimeZone()) {
  * @param {string} timeZone - IANA タイムゾーン
  * @returns {?number} epoch ミリ秒、または解釈不能なら null
  */
-export function epochMsFromWallClock(wallStr, timeZone) {
-  const s = String(wallStr == null ? "" : wallStr).trim().replace(/[zZ]$/, "");
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s)) return null;
-  const asUtcMs = Date.parse(s + "Z"); // 壁時計値をいったん UTC とみなす
-  if (!Number.isFinite(asUtcMs)) return null;
-  // 当該瞬間の timeZone オフセット(ms) を算出し、壁時計 → 実時刻へ補正する
+/**
+ * instant を指定ゾーンで表した壁時計文字列 "YYYY-MM-DDTHH:mm:ss" を返す（内部）。
+ * @private
+ */
+function _wallStrAtZone(instantMs, timeZone) {
   const dtf = new Intl.DateTimeFormat("en-US", {
     timeZone, hourCycle: "h23",
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit"
   });
   const p = {};
-  for (const part of dtf.formatToParts(new Date(asUtcMs))) p[part.type] = part.value;
-  const asIfLocalMs = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
-  const offsetMs = asIfLocalMs - asUtcMs;
-  return asUtcMs - offsetMs;
+  for (const part of dtf.formatToParts(new Date(instantMs))) p[part.type] = part.value;
+  // hourCycle:h23 でも稀に "24" を返す環境があるため 00 へ寄せる
+  const hh = p.hour === "24" ? "00" : p.hour;
+  return `${p.year}-${p.month}-${p.day}T${hh}:${p.minute}:${p.second}`;
+}
+
+export function epochMsFromWallClock(wallStr, timeZone) {
+  const s = String(wallStr == null ? "" : wallStr).trim().replace(/[zZ]$/, "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (!m) return null;
+  const wall = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] || "00"}`;
+  const wallUtcMs = Date.parse(wall + "Z"); // 壁時計値をいったん UTC とみなした基準
+  if (!Number.isFinite(wallUtcMs)) return null;
+
+  // ★ レビュー(P0): 1回だけの offset 補正は DST 切替付近で誤変換する。切替を挟む候補オフセットを
+  //   複数試し、各候補 instant を「同じゾーンへ round-trip」して元の壁時計に一致するものだけ採用する。
+  //   一致0件=存在しない時刻(春の gap)→null / 一致2件=重複時刻(秋の overlap)→曖昧として null。
+  const offsets = new Set();
+  for (const h of [-12, -6, 0, 6, 12]) {
+    const probe = wallUtcMs + h * 3600000;
+    // offset(ms) = (probe をゾーン表記した壁時計を UTC とみなした値) − probe
+    const off = Date.parse(_wallStrAtZone(probe, timeZone) + "Z") - probe;
+    if (Number.isFinite(off)) offsets.add(off);
+  }
+  const valid = new Set();
+  for (const off of offsets) {
+    const cand = wallUtcMs - off;
+    if (_wallStrAtZone(cand, timeZone) === wall) valid.add(cand);
+  }
+  if (valid.size === 1) return [...valid][0];
+  return null; // 0=gap(存在しない) / 2以上=overlap(曖昧) は安全側で null（未検証として隔離）
+}
+
+/** 指定年月(1-based)の日数を返す（内部）。 */
+function _daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 export function parseInstantStrict(value) {
   if (value == null) return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string") {
-    const s = value.trim();
-    // ★ レビュー(P2): 末尾判定でなく「完全な offset/Z 付き ISO 日時」を検査してからparseする
-    //   （エンジン依存の寛容な Date.parse 差を排除）。
-    //   例: 2026-04-01T10:00:00Z / 2026-04-01T10:00:00.123+09:00 / 2026-04-01T10:00+0900
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
-      const t = Date.parse(s);
-      return Number.isFinite(t) ? t : null;
-    }
+  if (typeof value !== "string") return null;
+  const s = value.trim();
+  // ★ レビュー(P2): 完全な offset/Z 付き ISO 日時を検査する（エンジン依存の寛容 parse 差を排除）。
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|([+-])(\d{2}):?(\d{2}))$/.exec(s);
+  if (!m) return null;
+  const Y = +m[1], Mo = +m[2], D = +m[3], H = +m[4], Mi = +m[5], S = m[6] != null ? +m[6] : 0;
+  // ★ レビュー(P1 item4): 形式だけでなく実在する年月日時かを検証（2026-02-31 等を弾く）。
+  if (Mo < 1 || Mo > 12) return null;
+  if (D < 1 || D > _daysInMonth(Y, Mo)) return null;
+  if (H > 23 || Mi > 59 || S > 59) return null;
+  if (m[7]) { // Z ではなくオフセット指定
+    const oh = +m[8], om = +m[9];
+    if (oh > 14 || om > 59) return null; // オフセット範囲（±14:00 まで）
   }
-  return null;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
 }

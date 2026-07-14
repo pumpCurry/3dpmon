@@ -29,21 +29,34 @@
 
 import { monitorData } from "./dashboard_data.js";
 import {
-  wallNowMs, resolvedLocalTimeZone, dateKey, monthKey, shiftDateKey,
+  wallNowMs, resolvedLocalTimeZone, normalizeTimeZone, dateKey, monthKey, shiftDateKey,
   parseInstantStrict, epochMsFromWallClock
 } from "./dashboard_time.js";
 
 /**
- * レポートの業務タイムゾーンを決める（親権威の永続設定を優先）。
- * ★ レビュー(P1): 既定を実行PCローカルにすると、親Electron(東京)と閲覧ブラウザ(別地域)で
- *   同じ履歴から異なる集計が出る。appSettings.businessTimeZone を正本にし、未設定時のみ
- *   解決済みローカルを初期候補として使う。
+ * レポートの業務タイムゾーンを決める（親権威の永続設定を優先・IANA 検証つき）。
+ * ★ レビュー(P1): 既定を実行PCローカルにすると親子で分岐する。appSettings.businessTimeZone を正本にし、
+ *   無効値は正規化で弾いて安全化する。親起動時に具体名へ確定済みなので通常は具体値が入る。
  * @private
  * @param {string} [override] - 明示指定（テスト/呼び出し側）
- * @returns {string} IANA タイムゾーン
+ * @returns {string} 有効な IANA タイムゾーン
  */
 function _reportTimeZone(override) {
-  return override || monitorData.appSettings?.businessTimeZone || resolvedLocalTimeZone();
+  return normalizeTimeZone(override)
+    || normalizeTimeZone(monitorData.appSettings?.businessTimeZone)
+    || resolvedLocalTimeZone();
+}
+
+/**
+ * offset なし旧履歴の移行に使う「固定基準ゾーン」（レビュー P2 item5）。
+ * businessTimeZone を後から変更しても旧文字列が再解釈されないよう、専用の固定設定を優先する。
+ * @private
+ * @returns {string} 有効な IANA タイムゾーン
+ */
+function _legacyHistoryTimeZone() {
+  return normalizeTimeZone(monitorData.appSettings?.legacyHistoryTimeZone)
+    || normalizeTimeZone(monitorData.appSettings?.businessTimeZone)
+    || "UTC";
 }
 
 /**
@@ -74,7 +87,7 @@ const PRINT_STATE = {
  * @returns {{startSec:number, finishSec:number, durationSec:number,
  *            materialMm:number, isSuccess:boolean, isFinished:boolean}}
  */
-function _normalizeHistoryEntry(entry, legacyTimeZone = _reportTimeZone()) {
+function _normalizeHistoryEntry(entry, legacyTimeZone = _legacyHistoryTimeZone()) {
   // ★ レビュー(P1): 文字列時刻の UTC/local 混入を閉じる。優先順位:
   //   1) *_TimeSec(epoch秒) を最優先  2) offset/Z 付き文字列は parseInstantStrict
   //   3) offset なし旧履歴は明示 legacyTimeZone で移行(epochMsFromWallClock)

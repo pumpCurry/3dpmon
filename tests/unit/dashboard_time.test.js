@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  wallNowMs, monotonicNowMs, resolvedLocalTimeZone,
+  wallNowMs, monotonicNowMs, resolvedLocalTimeZone, normalizeTimeZone,
   dateKey, monthKey, parseInstantStrict, shiftDateKey, epochMsFromWallClock
 } from "../../3dp_lib/dashboard_time.js";
 
@@ -70,6 +70,18 @@ describe("dashboard_time", () => {
       expect(parseInstantStrict("2026-04-01 10:00:00+09:00")).toBeNull(); // T 無し(スペース)
       expect(parseInstantStrict("garbage+09:00")).toBeNull();
     });
+    it("実在しない年月日時は弾く（P1 item4: 形式OKでも 2/31 等）", () => {
+      expect(parseInstantStrict("2026-02-31T10:00:00Z")).toBeNull();
+      expect(parseInstantStrict("2026-13-01T10:00:00Z")).toBeNull();
+      expect(parseInstantStrict("2026-04-31T10:00:00Z")).toBeNull(); // 4月は30日まで
+      expect(parseInstantStrict("2026-04-01T25:00:00Z")).toBeNull();
+      expect(parseInstantStrict("2026-04-01T10:60:00Z")).toBeNull();
+      expect(parseInstantStrict("2026-04-01T10:00:00+15:00")).toBeNull(); // offset範囲外
+    });
+    it("うるう年 2/29 は受理、非うるう年は弾く", () => {
+      expect(parseInstantStrict("2028-02-29T00:00:00Z")).toBe(Date.parse("2028-02-29T00:00:00Z"));
+      expect(parseInstantStrict("2026-02-29T00:00:00Z")).toBeNull();
+    });
   });
 
   describe("shiftDateKey（DST安全なカレンダー日減算）", () => {
@@ -103,6 +115,38 @@ describe("dashboard_time", () => {
     it("offset/Z 付きや不正形式は null（本関数は offset なし専用）", () => {
       expect(epochMsFromWallClock("2026-04-01T10:00:00+09:00", "Asia/Tokyo")).toBeNull();
       expect(epochMsFromWallClock("2026-04-01", "UTC")).toBeNull();
+    });
+    it("DST gap（存在しない壁時計）は null（LA 2026-03-08 02:30）", () => {
+      // 春の spring-forward で 02:00→03:00。02:30 は存在しない。
+      expect(epochMsFromWallClock("2026-03-08T02:30:00", "America/Los_Angeles")).toBeNull();
+    });
+    it("DST overlap（2回存在する壁時計）は曖昧なので null（LA 2026-11-01 01:30）", () => {
+      // 秋の fall-back で 02:00→01:00。01:30 は PDT/PST の2回存在。
+      expect(epochMsFromWallClock("2026-11-01T01:30:00", "America/Los_Angeles")).toBeNull();
+    });
+    it("DST 近傍でも通常時刻は正しく変換（LA 2026-03-08 04:30 PDT）", () => {
+      expect(epochMsFromWallClock("2026-03-08T04:30:00", "America/Los_Angeles"))
+        .toBe(Date.parse("2026-03-08T04:30:00-07:00"));
+    });
+  });
+
+  describe("normalizeTimeZone（IANA検証）", () => {
+    it("有効なIANA名を返す", () => {
+      expect(normalizeTimeZone("Asia/Tokyo")).toBe("Asia/Tokyo");
+      expect(normalizeTimeZone("America/Los_Angeles")).toBe("America/Los_Angeles");
+      expect(normalizeTimeZone("UTC")).toBe("UTC");
+    });
+    it("ICU が正準化する別名は正準名へ（クラッシュしない）", () => {
+      // Intl は "JST"/"Japan"→"Asia/Tokyo"、"GMT"→"UTC" 等を決定論的に正準化する。
+      expect(normalizeTimeZone("Japan")).toBe("Asia/Tokyo");
+      expect(normalizeTimeZone("GMT")).toBe("UTC");
+    });
+    it("正準化できない無効値は null（RangeError を投げない）", () => {
+      expect(normalizeTimeZone("Asia/Toky")).toBeNull();  // タイプミス
+      expect(normalizeTimeZone("Not/AZone")).toBeNull();
+      expect(normalizeTimeZone("")).toBeNull();
+      expect(normalizeTimeZone(null)).toBeNull();
+      expect(normalizeTimeZone(123)).toBeNull();
     });
   });
 });

@@ -45,6 +45,7 @@ import {
   setStoredDataForHost
 } from "./dashboard_data.js";
 import { connectAllSavedTargets } from "./dashboard_connection.js";
+import { resolvedLocalTimeZone, normalizeTimeZone } from "./dashboard_time.js";
 import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId, setCurrentSpoolId } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
@@ -101,6 +102,21 @@ export async function initializeDashboard() {
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
   restoreUnifiedStorage();
+
+  // ★ レビュー(時計衛生 P1/P2): 親/standalone は業務タイムゾーンを起動時に「具体的な IANA 名」へ確定する。
+  //   null のままだと親子が各自の resolvedLocalTimeZone() へ分岐し、同じ親権威設定から異なる集計が出る。
+  //   子(relay)は親からミラーするのでここで確定しない。legacyHistoryTimeZone は旧履歴移行の固定基準
+  //   （一度確定したら変更しない）。無効値は正規化して安全化する。
+  if (_storageNs !== "relay") {
+    const as = monitorData.appSettings;
+    const normBiz = normalizeTimeZone(as.businessTimeZone);
+    if (!normBiz) { as.businessTimeZone = resolvedLocalTimeZone(); }
+    else if (normBiz !== as.businessTimeZone) { as.businessTimeZone = normBiz; }
+    if (!normalizeTimeZone(as.legacyHistoryTimeZone)) {
+      as.legacyHistoryTimeZone = as.businessTimeZone;
+    }
+    try { saveUnifiedStorage(); } catch { /* noop */ }
+  }
   // ★ v2.2.0: cleanupLegacy は削除済み。v2.1.017 で最終掃除完了。
   // 読み込んだストレージ内容を通知マネージャへ反映
   notificationManager.loadSettings();

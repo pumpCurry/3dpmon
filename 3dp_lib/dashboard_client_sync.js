@@ -35,6 +35,7 @@ import {
   markAllKeysDirty,
   PLACEHOLDER_HOSTNAME
 } from "./dashboard_data.js";
+import { normalizeTimeZone } from "./dashboard_time.js";
 
 /** dashboard_ui の updateStoredDataToDOM を遅延解決（重い UI 連鎖を import 時に巻き込まない） */
 let _updateStoredDataToDOM = null;
@@ -515,9 +516,12 @@ function _applySnapshot(state) {
   if (state.appSettings?.itemkeeper) {
     _applyItemkeeperSettings(state.appSettings.itemkeeper);
   }
-  // ★ レビュー(時計衛生): 業務タイムゾーンを親からミラー（日次/月次集計の既定ゾーンを親子で統一）。
-  if (state.appSettings && "businessTimeZone" in state.appSettings) {
-    monitorData.appSettings.businessTimeZone = state.appSettings.businessTimeZone ?? null;
+  // ★ レビュー(時計衛生): 業務タイムゾーンを親からミラー（IANA 検証つき。無効値は採用せず現値維持）。
+  if (state.appSettings) {
+    const btz = normalizeTimeZone(state.appSettings.businessTimeZone);
+    if (btz) monitorData.appSettings.businessTimeZone = btz;
+    const ltz = normalizeTimeZone(state.appSettings.legacyHistoryTimeZone);
+    if (ltz) monitorData.appSettings.legacyHistoryTimeZone = ltz;
   }
 
   // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
@@ -631,9 +635,10 @@ function _applyDelta(msg) {
     if (msg.shared.appSettingsItemkeeper) {
       _applyItemkeeperSettings(msg.shared.appSettingsItemkeeper);
     }
-    // ★ レビュー(時計衛生): 業務タイムゾーンの差分ミラー（親権威）。
+    // ★ レビュー(時計衛生): 業務タイムゾーンの差分ミラー（親権威・IANA 検証つき）。
     if ("appSettingsBusinessTimeZone" in msg.shared) {
-      monitorData.appSettings.businessTimeZone = msg.shared.appSettingsBusinessTimeZone ?? null;
+      const btz = normalizeTimeZone(msg.shared.appSettingsBusinessTimeZone);
+      if (btz) monitorData.appSettings.businessTimeZone = btz;
     }
   }
 

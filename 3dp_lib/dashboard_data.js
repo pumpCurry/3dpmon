@@ -214,8 +214,11 @@ export const monitorData = {
     relayPromotePin: "",  // リレー操作モード昇格PIN（空=確認のみ）。親でのみ設定・参照可
     filamentUnit: "m",    // 使用量表示単位 "m" | "mm"（印刷履歴・ファイル一覧共通トグル）
     // ★ レビュー(時計衛生 P1): 日次/月次集計の業務タイムゾーン（IANA）。親権威の永続設定で、
-    //   リレーで子へミラーする。null=未設定（実行PCの解決済みローカルを初期候補とする）。
+    //   リレーで子へミラーする。親起動時に未設定なら解決済みローカルへ確定・保存する。
     businessTimeZone: null,
+    // ★ レビュー(時計衛生 P2 item5): offset なし旧履歴を epoch へ移行する際の固定基準ゾーン。
+    //   一度確定したら変更しない（businessTimeZone を後から変えても旧文字列を再解釈させないため）。
+    legacyHistoryTimeZone: null,
     notificationSettings: {}
   },
   machines: {
