@@ -312,7 +312,7 @@ function _applyRelayPrintStore(hostname, ps) {
  * ※ モジュール内部用だが、マージ規則の回帰テストのために export している。
  *
  * @function _applySharedFilamentState
- * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>}} shared
+ * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>}} shared
  *   - 受信した共有データ
  * @returns {void}
  */
@@ -344,6 +344,8 @@ export function _applySharedFilamentState(shared) {
   _replaceArrayInPlace(monitorData.hiddenPresets, shared.hiddenPresets);
   _replaceArrayInPlace(monitorData.favoritePresets, shared.favoritePresets);
   _replaceArrayInPlace(monitorData.usageHistory, shared.usageHistory);
+  // ★ Phase4: 未帰属消費の隔離領域を親からミラー（子は読み取り専用。欠落時は不変）。
+  _replaceArrayInPlace(monitorData.pendingUnattributedUsage, shared.pendingUnattributedUsage);
   if (shared.filamentEventContext && typeof shared.filamentEventContext === "object") {
     if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
       monitorData.filamentEventContext = {};

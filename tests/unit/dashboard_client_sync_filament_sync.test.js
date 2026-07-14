@@ -149,8 +149,28 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     monitorData.hiddenPresets.splice(0, monitorData.hiddenPresets.length);
     monitorData.favoritePresets.splice(0, monitorData.favoritePresets.length);
     monitorData.usageHistory.splice(0, monitorData.usageHistory.length);
+    if (!Array.isArray(monitorData.pendingUnattributedUsage)) monitorData.pendingUnattributedUsage = [];
+    monitorData.pendingUnattributedUsage.splice(0, monitorData.pendingUnattributedUsage.length);
     for (const k of Object.keys(monitorData.filamentEventContext)) delete monitorData.filamentEventContext[k];
     monitorData.spoolSerialCounter = 0;
+  });
+
+  it("Phase4: pendingUnattributedUsage を親からミラー（in-place 全置換・参照維持）", () => {
+    const ref = monitorData.pendingUnattributedUsage;
+    monitorData.pendingUnattributedUsage.push({ host: "old", usedMm: 1 });
+    _applySharedFilamentState({
+      pendingUnattributedUsage: [{ host: "k1", spoolId: "s1", usedMm: 5000, reason: "invalid-job-id" }],
+    });
+    expect(monitorData.pendingUnattributedUsage).toBe(ref); // ビュー参照維持
+    expect(monitorData.pendingUnattributedUsage).toEqual([
+      { host: "k1", spoolId: "s1", usedMm: 5000, reason: "invalid-job-id" },
+    ]);
+  });
+
+  it("Phase4: pendingUnattributedUsage 欠落は変更しない（部分デルタ安全策）", () => {
+    monitorData.pendingUnattributedUsage.push({ host: "keep", usedMm: 3 });
+    _applySharedFilamentState({ filamentSpools: [] });
+    expect(monitorData.pendingUnattributedUsage).toEqual([{ host: "keep", usedMm: 3 }]);
   });
 
   it("在庫・プリセット・使用履歴を親からミラー（in-place 全置換・参照維持）", () => {

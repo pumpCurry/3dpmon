@@ -44,6 +44,9 @@ let _prevSharedHash = "";
 /** 前回ブロードキャストした mountHistory（ADR-0004 台帳）のハッシュ（変更検出） */
 let _prevMountHash = "";
 
+/** 前回ブロードキャストした pendingUnattributedUsage（未帰属消費 隔離領域）のハッシュ（変更検出） */
+let _prevPendingHash = "";
+
 /** 前回ブロードキャストした ItemKeeper 設定のハッシュ（変更検出） */
 let _prevIkHash = "";
 
@@ -593,6 +596,17 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // ★ Phase4: pendingUnattributedUsage（無効jobId等で未帰属となった消費の隔離領域）の
+  //   変更検出。子（サテライト/読み取り専用）でも「未確認の消費」を親と一致して可視化する
+  //   ため、変化時のみ全置換で配信する（mountHistory と同じく低頻度変化＝別ハッシュ）。
+  const pendingHash = _quickHash(monitorData.pendingUnattributedUsage || []);
+  if (pendingHash !== _prevPendingHash) {
+    _prevPendingHash = pendingHash;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.pendingUnattributedUsage = monitorData.pendingUnattributedUsage || [];
+    hasChanges = true;
+  }
+
   // ★ 監査 P0(第2報): フィラメント補助ドメイン（在庫・カスタムプリセット・表示/
   //   お気に入り・切れ文脈・serialCounter・使用履歴）の変更検出。従来は
   //   filamentSpools/hostSpoolMap/mountHistory のみ共有していたため、これらが親子で
@@ -697,6 +711,8 @@ function _buildFullSnapshot() {
     filamentSpools: monitorData.filamentSpools,
     hostSpoolMap: monitorData.hostSpoolMap,
     mountHistory: monitorData.mountHistory || [],
+    // ★ Phase4: 未帰属消費の隔離領域も同梱（親=権威、子は読み取り専用で全置換ミラー）。
+    pendingUnattributedUsage: monitorData.pendingUnattributedUsage || [],
     // ★ 監査 P0(第2報): フィラメント補助ドメインをスナップショットにも同梱（親=権威）。
     filamentInventory: monitorData.filamentInventory || [],
     userPresets: monitorData.userPresets || [],

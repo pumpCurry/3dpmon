@@ -1938,6 +1938,52 @@ export function shouldLinkOfflineJob(job) {
 }
 
 /**
+ * 履歴ジョブのフィラメント帰属が「未確認(pending)」かを判定する純関数（Phase4/5 可視化用）。
+ *
+ * 【定義】実際に消費があった完了ジョブ(materialUsedMm>0)なのに、確定スプールへ帰属して
+ * いない（spoolId 付き filamentInfo も filamentId も無い）状態を「未確認」とする。
+ * これは持続フィールドを新設せず shouldLinkOfflineJob と同じ確定条件から導出するため、
+ * 履歴マージで確定/未確認が食い違う事故（マージ保護の必要）が構造的に発生しない。
+ *
+ * @function isAttributionPending
+ * @param {Object} entry - 履歴ジョブ（printStore.history / historyData のエントリ）
+ * @returns {boolean} 帰属未確認なら true
+ */
+export function isAttributionPending(entry) {
+  if (!entry) return false;
+  // 消費が無い（materialUsedMm<=0）ジョブは帰属対象外＝pending ではない。
+  if (!(Number(entry.materialUsedMm || 0) > 0)) return false;
+  const info = Array.isArray(entry.filamentInfo) ? entry.filamentInfo : [];
+  if (info.some(fi => fi && fi.spoolId)) return false; // 確定スプールあり
+  if (entry.filamentId) return false;                   // filamentId 確定
+  return true;
+}
+
+/**
+ * 指定ホスト（省略時は全体）の未帰属消費 隔離レコードを返す（Phase4/5 可視化用）。
+ *
+ * @function getUnattributedUsageForHost
+ * @param {string} [host] - ホスト名。省略時は全件のコピー
+ * @returns {Array<Object>} pendingUnattributedUsage の該当要素配列
+ */
+export function getUnattributedUsageForHost(host) {
+  const list = Array.isArray(monitorData.pendingUnattributedUsage)
+    ? monitorData.pendingUnattributedUsage : [];
+  return host ? list.filter(e => e && e.host === host) : list.slice();
+}
+
+/**
+ * 指定ホスト（省略時は全体）の未帰属消費 隔離レコード件数を返す（バッジ表示用）。
+ *
+ * @function countUnattributedUsageForHost
+ * @param {string} [host] - ホスト名
+ * @returns {number} 件数
+ */
+export function countUnattributedUsageForHost(host) {
+  return getUnattributedUsageForHost(host).length;
+}
+
+/**
  * 指定ジョブID群（オフライン中に完了した印刷）に、現在装着スプールの
  * filamentInfo を遡及的に紐付ける。フィラメント交換していなければ
  * 現在のフィラメントで印刷が継続されたとみなす要望に対応。

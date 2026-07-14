@@ -55,6 +55,9 @@ import {
   shouldLinkOfflineJob,
   finalizeFilamentUsage,
   catchUpOfflineFilamentAttribution,
+  isAttributionPending,
+  getUnattributedUsageForHost,
+  countUnattributedUsageForHost,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
@@ -578,6 +581,42 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
       finalizeFilamentUsage(100, 0, 'h', true);
     }
     expect(monitorData.pendingUnattributedUsage.length).toBe(200);
+  });
+});
+
+// =============================================
+// 未帰属消費の可視化 純関数（Phase4）
+// =============================================
+describe('isAttributionPending / getUnattributedUsageForHost（Phase4）', () => {
+  beforeEach(() => {
+    monitorData.pendingUnattributedUsage = [];
+  });
+
+  it('消費あり×未帰属（spoolId/filamentId無し）は pending', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, filamentInfo: [{ colorName: '黒' }] })).toBe(true);
+  });
+
+  it('確定スプール（spoolId）or filamentId があれば pending でない', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, filamentInfo: [{ spoolId: 'sp1' }] })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, filamentId: 'sp1' })).toBe(false);
+  });
+
+  it('消費なし（materialUsedMm<=0/欠落）は pending でない', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 0 })).toBe(false);
+    expect(isAttributionPending({ id: 1 })).toBe(false);
+    expect(isAttributionPending(null)).toBe(false);
+  });
+
+  it('getUnattributedUsageForHost はホストで絞り込み、count が件数を返す', () => {
+    monitorData.pendingUnattributedUsage = [
+      { host: 'h1', usedMm: 100 }, { host: 'h2', usedMm: 200 }, { host: 'h1', usedMm: 300 },
+    ];
+    expect(getUnattributedUsageForHost('h1')).toHaveLength(2);
+    expect(getUnattributedUsageForHost('h2')).toHaveLength(1);
+    expect(countUnattributedUsageForHost('h1')).toBe(2);
+    expect(countUnattributedUsageForHost('h2')).toBe(1);
+    expect(countUnattributedUsageForHost()).toBe(3); // 全体
   });
 });
 
