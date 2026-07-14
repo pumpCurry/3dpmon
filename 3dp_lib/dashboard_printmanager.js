@@ -44,6 +44,7 @@ import {
 
 import { formatEpochToDateTime, formatDuration, normalizeJobId } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
+import { scheduleAttributionNotice } from "./dashboard_attribution_notify.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, scopedById, setStoredDataForHost } from "./dashboard_data.js";
 import {
@@ -1745,6 +1746,9 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
   // ★ Phase5(U2): 印刷履歴カード ヘッダの「未確認 N」バッジを更新する
   //   （親の初期描画・子の relay 再描画の両パスがここを通る）。
   updateAttributionBadge(hostname);
+  // ★ Phase5(U3): 帰属未確認の重複抑制通知（判定は別モジュール＝UI描画と分離）。
+  //   親のみ発火・debounce 集約。子や 0件では no-op。
+  scheduleAttributionNotice(hostname);
 }
 
 /**
