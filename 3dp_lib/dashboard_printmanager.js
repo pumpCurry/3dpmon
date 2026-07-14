@@ -56,7 +56,9 @@ import {
   formatUsageHtml,
   usageHeaderLabel,
   formatSpoolDisplayId,
-  buildFilamentRecommendations
+  buildFilamentRecommendations,
+  getAttributionPresentation,
+  countAttributionIssuesForHost
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
 import { recomputeSpoolFromManualEdit } from "./dashboard_filament_ledger.js";
@@ -1661,6 +1663,17 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
       spoolHtml = parts.join("");
     }
 
+    // ★ Phase5(U2): 帰属未確認（消費ありなのに確定スプール無し）の完了ジョブへ「未確認」チップを付す。
+    //   raw は jobsToRaw で materialUsedMm→usagematerial に改名済みのため adapt して判定する。
+    const _attrPres = getAttributionPresentation({
+      materialUsedMm: raw.usagematerial,
+      filamentInfo: raw.filamentInfo,
+      filamentId: raw.filamentId
+    });
+    if (_attrPres.state === "pending") {
+      spoolHtml += `<span class="attr-chip" title="このジョブの消費フィラメントが未確定です（確認してください）">${_attrPres.label}</span>`;
+    }
+
     const tr = document.createElement("tr");
     const isPrinting = finishCls === "result-active";
     tr.className = `history-row${isPrinting ? " history-row-printing" : ""}`;
@@ -1729,6 +1742,41 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     tbody.addEventListener("click", _historyTbodyClick);
   }
 
+  // ★ Phase5(U2): 印刷履歴カード ヘッダの「未確認 N」バッジを更新する
+  //   （親の初期描画・子の relay 再描画の両パスがここを通る）。
+  updateAttributionBadge(hostname);
+}
+
+/**
+ * 印刷履歴カード ヘッダの「未確認 N」件数バッジを更新する（Phase5 U2）。
+ *
+ * 対象ホストの帰属未確認 課題（履歴 pending ＋ 隔離消費）の件数を集約表示する。
+ * 0 件のときはバッジを隠す。バッジ要素は panel_factory が history パネルの
+ * ヘッダへ用意する（未構築なら no-op）。親・子（サテライト）双方で同じ表示。
+ *
+ * @function updateAttributionBadge
+ * @param {string} hostname - 対象ホスト名
+ * @returns {void}
+ */
+export function updateAttributionBadge(hostname) {
+  if (!hostname) return;
+  try {
+    // data-host は IP/コロン等を含み得るため CSS セレクタ用エスケープを避け、走査で一致判定する。
+    const panels = document.querySelectorAll('[data-panel-type="history"]');
+    let panel = null;
+    for (const p of panels) { if (p.dataset && p.dataset.host === hostname) { panel = p; break; } }
+    if (!panel) return;
+    const badge = panel.querySelector(".panel-attr-badge");
+    if (!badge) return;
+    const n = countAttributionIssuesForHost(hostname);
+    if (n > 0) {
+      badge.textContent = `未確認 ${n}`;
+      badge.hidden = false;
+    } else {
+      badge.textContent = "";
+      badge.hidden = true;
+    }
+  } catch { /* DOM 未構築・環境非DOM は無視 */ }
 }
 
 /**

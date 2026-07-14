@@ -1877,6 +1877,36 @@ body.panel-mode .notification-container {
 .col-spool .filament-color-box {
   font-size: 12px;
 }
+/* ★ Phase5(U2): 帰属未確認チップ（印刷履歴 行のフィラメント列）。
+   消費ありなのに確定スプールが無いジョブに小さく黄橙で示す。 */
+.col-spool .attr-chip {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: bold;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* ★ Phase5(U2): 印刷履歴カード ヘッダの「未確認 N」件数バッジ。 */
+.panel-attr-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--font-xs);
+  font-weight: bold;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  white-space: nowrap;
+}
+.panel-attr-badge[hidden] {
+  display: none;
+}
 
 /* その他セル */
 .col-extra {
