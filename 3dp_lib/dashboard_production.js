@@ -28,6 +28,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
+import { wallNowMs, resolvedLocalTimeZone, dateKey, monthKey } from "./dashboard_time.js";
 
 /**
  * 印刷状態コード
@@ -229,27 +230,17 @@ export function buildHostUtilization(hostname, options = {}) {
  */
 export function buildDailyProductionReport(options = {}) {
   const days = options.days || 7;
-  const now = new Date();
+  // ★ レビュー(時計衛生): 実時計依存を排除する。nowMs/timeZone を注入可能にし、省略時のみ実時刻・
+  //   解決済みローカルゾーンを使う（後方互換）。日付キーは明示ゾーンで決定論的に決める。
+  const timeZone = options.timeZone || resolvedLocalTimeZone();
+  const nowMs = options.nowMs != null ? Number(options.nowMs) : wallNowMs();
+  const DAY_MS = 86400000;
   const dayMap = {};
 
-  /**
-   * ローカルタイムゾーンで YYYY-MM-DD を生成する。
-   * toISOString() はUTC基準で日付境界がずれるため使わない。
-   * @param {Date} d - 日付
-   * @returns {string} "YYYY-MM-DD"
-   */
-  function _localDateKey(d) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-
-  // 過去N日分の空データを初期化
+  // 過去N日分の空データを初期化（同一キーは重複させない＝DST 折返しでも安全）
   for (let d = 0; d < days; d++) {
-    const date = new Date(now);
-    date.setDate(date.getDate() - d);
-    const key = _localDateKey(date);
+    const key = dateKey(nowMs - d * DAY_MS, timeZone);
+    if (dayMap[key]) continue;
     dayMap[key] = {
       date: key,
       printCount: 0,
@@ -269,8 +260,8 @@ export function buildDailyProductionReport(options = {}) {
     for (const entry of history) {
       const { startSec, durationSec, materialMm, isSuccess, isFinished } = _normalizeHistoryEntry(entry);
       if (startSec === 0) continue;
-      const dateKey = _localDateKey(new Date(startSec * 1000));
-      const day = dayMap[dateKey];
+      const dk = dateKey(startSec * 1000, timeZone);
+      const day = dayMap[dk];
       if (!day) continue;
 
       day.printCount++;
@@ -614,7 +605,8 @@ export function buildHostRanking(options = {}) {
  *   monthlyTrend: Array<{month: string, consumedMm: number, costYen: number}>
  * }>}
  */
-export function buildMaterialReport() {
+export function buildMaterialReport(options = {}) {
+  const timeZone = options.timeZone || resolvedLocalTimeZone();
   const materialMap = {};
 
   for (const spool of monitorData.filamentSpools) {
@@ -652,15 +644,14 @@ export function buildMaterialReport() {
       for (const log of spool.usedLengthLog) {
         const jobIdNum = Number(log.jobId);
         if (!Number.isFinite(jobIdNum) || jobIdNum <= 0) continue;
-        // jobId は epoch 秒
-        const date = new Date(jobIdNum * 1000);
-        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        if (!m.monthlyBuckets[monthKey]) {
-          m.monthlyBuckets[monthKey] = { consumedMm: 0, costYen: 0 };
+        // jobId は epoch 秒。業務月キーは明示ゾーンで決定論的に決める（実行PCローカル依存排除）。
+        const mk = monthKey(jobIdNum * 1000, timeZone);
+        if (!m.monthlyBuckets[mk]) {
+          m.monthlyBuckets[mk] = { consumedMm: 0, costYen: 0 };
         }
         const used = Number(log.used) || 0;
-        m.monthlyBuckets[monthKey].consumedMm += used;
-        m.monthlyBuckets[monthKey].costYen += used * costPerMm;
+        m.monthlyBuckets[mk].consumedMm += used;
+        m.monthlyBuckets[mk].costYen += used * costPerMm;
       }
     }
   }
