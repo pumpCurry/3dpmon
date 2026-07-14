@@ -55,8 +55,9 @@ import {
   // ★ P0-9: 自動 inferred 投入停止に伴い setCurrentSpoolId / addInferredSpool の
   //   aggregator からの利用は撤去（ユーザー明示交換のみ mount）。
 } from "./dashboard_spool.js";
-import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld } from "./dashboard_filament_ledger.js";
+import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
+import { normalizeJobId } from "./dashboard_utils.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -1218,22 +1219,22 @@ export function aggregatorUpdate() {
       s._lastAutoCorrect = _now;
       autoCorrectCurrentSpool(host);
     }
-    // ★ レビュー指摘(点3): stale resume 対策。復元/前回の currentPrintID が実機の現在ジョブより
-    //   古い（アプリ停止中に別ジョブが開始→現在ジョブが更新された）場合、旧ジョブの一時追跡値を
-    //   現在ジョブへ持ち越さないよう破棄する。これをしないと直下の現在ジョブ採用(!currentPrintID)が
-    //   働かず、C の初期化・filamentId 付与・ライブ追跡が旧 A の残骸に阻害される。
-    //   ジョブID(printStartTime epoch)は単調増加なので「live > current」を stale 判定に使う
-    //   （非数値IDは NaN で判定不成立＝安全側で破棄しない）。
+    // ★ レビュー指摘(P1-1): stale resume 対策。復元/前回の currentPrintID が「実機のライブ印刷中
+    //   状態から取得した現在ジョブID」と不一致なら、旧ジョブの一時追跡値を現在ジョブへ持ち越さない
+    //   よう破棄する。これをしないと直下の現在ジョブ採用(!currentPrintID)が働かず、C の初期化・
+    //   filamentId 付与・ライブ追跡が旧 A の残骸に阻害される。
+    //   ★ 大小比較(live>current)ではなく正規化した不一致で判定する（機器再起動/時刻補正で新ジョブ
+    //   ID が小さくなり得るため）。有効なライブIDが取れない場合は破棄しない（安全側）。
     if (spool && spool.currentPrintID && isPrinting) {
       const liveJob = resolveFilamentJobId(
         storedData,
         machine?.printStore?.current ?? null,
         s.prevPrintID
       );
-      const liveN = Number(liveJob);
-      const curN = Number(spool.currentPrintID);
-      if (liveJob && Number.isFinite(liveN) && Number.isFinite(curN) && liveN > curN) {
-        console.warn(`[aggregator] stale resume 検出: currentPrintID=${spool.currentPrintID} < live=${liveJob} → 旧一時値を破棄`, { host });
+      const liveN = normalizeJobId(liveJob);
+      const curN = normalizeJobId(spool.currentPrintID);
+      if (liveN != null && curN != null && String(liveN) !== String(curN)) {
+        console.warn(`[aggregator] stale resume 検出: currentPrintID=${spool.currentPrintID} != live=${liveJob} → 旧一時値を破棄`, { host });
         spool.currentPrintID = "";
         spool.currentJobStartLength = null;
         spool.currentJobExpectedLength = null;
@@ -1255,14 +1256,25 @@ export function aggregatorUpdate() {
       }
     }
     // ★ レビュー指摘(点2): オフライン完了ジョブ(A/B)の帰属補完を印刷中でも走らせる。
-    //   現在ジョブ(C)は除外し、残量・currentJobStartLength には触れない（filamentInfo/filamentId
-    //   のみ補完・冪等）。historyList マージで printStore.history へ A/B が入り、C が解決された後に
-    //   実行される。idle 時は上の autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
+    //   現在ジョブ(C)は除外し、filamentInfo/filamentId のみ補完（冪等）。historyList マージで
+    //   printStore.history へ A/B が入り、C が解決された後に実行される。idle 時は上の
+    //   autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
     if (spool && (!s._lastCatchUp || _now - s._lastCatchUp > 10000)) {
       s._lastCatchUp = _now;
       try {
         const liveJob = spool.currentPrintID || (machine?.printStore?.current?.id ?? null);
-        catchUpOfflineFilamentAttribution(host, { liveJobId: liveJob, spool });
+        const linked = catchUpOfflineFilamentAttribution(host, { liveJobId: liveJob, spool });
+        // ★ レビュー指摘(P0-2): A・B を帰属したら、その反映後残量を現在ジョブ C の開始基準へ
+        //   一度だけリベースする。これをしないと C.currentJobStartLength が A 開始前の古い残量に
+        //   なり、C 印刷中の表示・低残量/runout 判定が A+B 分だけ多いままになる。
+        //   印刷中でも「過去完了ジョブ分の取り込み」だけ行う専用処理（通常 reconcile は不許可）。
+        //   currentJobStartLength 未設定（C の追跡開始前）のときだけ行い、二重取り込みを避ける。
+        if (linked > 0 && spool.currentPrintID && spool.currentJobStartLength == null) {
+          const d = deriveSpoolRemaining(spool.id);
+          if (d && Number.isFinite(d.remainingMm)) {
+            spool.remainingLengthMm = d.remainingMm;
+          }
+        }
       } catch (e) { console.warn("[aggregator] catchUp 失敗:", e?.message || e); }
     }
 

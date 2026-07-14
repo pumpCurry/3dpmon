@@ -862,3 +862,55 @@ describe("ADR-0005 P6 runoutGateHeld（2信号ゲート）", () => {
     expect(runoutGateHeld(undefined)).toBe(false);
   });
 });
+
+// =====================================================================
+// boundaryStatus：境界不明区間は遡及減算しない（レビュー P0-1）
+// =====================================================================
+describe("boundaryStatus — 境界不明区間は遡及減算しない(P0-1)", () => {
+  beforeEach(reset);
+
+  it("idle+sinceJobId=0 の種付けは unknown 区間で、後から届く全履歴を減算しない", () => {
+    // 復元直後: 装着(idle, 残量270000), 履歴は空（オフライン完了分はまだ無い）
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 270000 });
+    mockMonitorData.hostSpoolMap = { h: "S" };
+    setHistory("h", []);
+    initLedgerAnchors({ nowMs: 1000 });
+    const ev = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "S");
+    expect(ev.boundaryStatus).toBe("unknown");
+    // 後から機器の全履歴（過去消費）が届く
+    setHistory("h", [job(1001, 15000), job(1002, 20000)]);
+    const d = deriveSpoolRemaining("S");
+    // unknown → 減算しない（アンカー270000維持）。二重減算(235000)にならない
+    expect(d.remainingMm).toBe(270000);
+    expect(d.verified).toBe(false);
+  });
+
+  it("printing 種付け(anchor=currentJobStartLength)は known 区間で以後の完了ジョブを減算する", () => {
+    // A印刷中(復元でcurrentPrintID/開始残量が戻った状態), 履歴は空
+    addSpool({
+      id: "S", totalLengthMm: 330000, remainingLengthMm: 300000,
+      currentPrintID: "1001", currentJobStartLength: 300000
+    });
+    mockMonitorData.hostSpoolMap = { h: "S" };
+    setHistory("h", []);
+    initLedgerAnchors({ nowMs: 1000 });
+    const ev = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "S");
+    expect(ev.boundaryStatus).toBe("known");
+    // A,B がオフライン完了して履歴に届く
+    setHistory("h", [job(1001, 10000), job(1002, 20000)]);
+    const d = deriveSpoolRemaining("S");
+    expect(d.remainingMm).toBe(270000); // 300000 - (10000+20000)
+  });
+
+  it("idle+sinceJobId>0 は known 区間で装着後の完了ジョブのみ減算する", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 290000 });
+    mockMonitorData.hostSpoolMap = { h: "S" };
+    setHistory("h", [job(1000, 10000)]); // 既に完了ジョブ → sinceJobId=1000
+    initLedgerAnchors({ nowMs: 1000 });
+    const ev = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "S");
+    expect(ev.boundaryStatus).toBe("known");
+    setHistory("h", [job(1000, 10000), job(1001, 5000)]);
+    const d = deriveSpoolRemaining("S");
+    expect(d.remainingMm).toBe(285000); // 1001(>1000)のみ: 290000-5000
+  });
+});

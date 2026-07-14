@@ -1854,10 +1854,16 @@ function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
     if (!jobIds.has(String(job.id))) continue;
     if (!shouldLinkOfflineJob(job)) continue;
     const usedMm = Number(job.materialUsedMm ?? job.usagematerial ?? 0) || 0;
-    // ★ レビュー指摘(点5): 全置換ではなく upsert。既存の色情報エントリ等を残しつつ、
-    //   当該スプールのエントリが無ければ追加する（冪等：同一 spoolId が既にあれば何もしない）。
+    // ★ レビュー指摘(点5/minor): 全置換ではなく upsert。同一 spoolId が既にあれば何もしない（冪等）。
+    //   色情報だけの単一エントリ（spoolId 無し1件）の場合は、UIの2行表示を避けるため、その
+    //   エントリへ spoolId/usedMm を補完する。それ以外（複数エントリ等）は末尾へ追加する。
     const prev = Array.isArray(job.filamentInfo) ? job.filamentInfo : [];
-    if (!prev.some(fi => fi && fi.spoolId === spool.id)) {
+    if (prev.some(fi => fi && fi.spoolId === spool.id)) {
+      // 既に当該スプール帰属あり（冪等・何もしない）
+    } else if (prev.length === 1 && prev[0] && !prev[0].spoolId) {
+      Object.assign(prev[0], buildOfflineFilamentInfo(spool, usedMm));
+      job.filamentInfo = prev;
+    } else {
       job.filamentInfo = [...prev, buildOfflineFilamentInfo(spool, usedMm)];
     }
     job.filamentId = spool.id;

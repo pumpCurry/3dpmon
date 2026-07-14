@@ -615,14 +615,24 @@ describe('catchUpOfflineFilamentAttribution — オフライン完了ジョブ�
     expect(history.find(j => j.id === 1001).filamentInfo.length).toBe(lenA);
   });
 
-  it('色情報だけのfilamentInfoも帰属対象(点4)・既存色エントリは残す(点5 upsert)', () => {
-    history[0].filamentInfo = [{ filamentColor: '#abc' }]; // 色のみ(spoolId無し)
+  it('色情報だけの単一filamentInfoは同エントリへ spoolId/usedMm を補完し2行にしない(点4/minor)', () => {
+    history[0].filamentInfo = [{ filamentColor: '#abc' }]; // 色のみ(spoolId無し)1件
     const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
     expect(n).toBeGreaterThanOrEqual(1);
     const a = history.find(j => j.id === 1001);
-    expect(a.filamentInfo.some(fi => fi.filamentColor === '#abc')).toBe(true); // 色エントリ保持
-    expect(a.filamentInfo.some(fi => fi.spoolId === 'S')).toBe(true);          // スプール追加
+    expect(a.filamentInfo).toHaveLength(1);           // 色行＋スプール行の2行にしない
+    expect(a.filamentInfo[0].spoolId).toBe('S');      // 同エントリへ spoolId 補完
+    expect(a.filamentInfo[0].usedMm).toBe(15000);
     expect(a.filamentId).toBe('S');
+  });
+
+  it('複数エントリ(色+別spool)の場合は既存を残して末尾へ追加(点5 upsert)', () => {
+    history[0].filamentInfo = [{ filamentColor: '#abc' }, { spoolId: 'X', usedMm: 1 }];
+    // 既に spoolId(X) を持つため shouldLinkOfflineJob=false → 対象外（既存尊重）
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    const a = history.find(j => j.id === 1001);
+    expect(a.filamentInfo.find(fi => fi.spoolId === 'X')).toBeTruthy(); // 既存尊重
+    expect(n).toBe(1); // B のみ帰属
   });
 
   it('sinceId(startPrintID)以下は排他的下限で除外(点6 <=のまま)', () => {

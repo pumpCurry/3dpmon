@@ -112,7 +112,7 @@ function _isCompleted(job) {
  * @param {number} params.ts - イベント時刻 ms（evId もこれから導出）
  * @returns {Object} 追記した MountEvent
  */
-export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts } = {}) {
+export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts, boundaryStatus = "known" } = {}) {
   const list = _getMountHistory();
   // evId は内容ベースで一意かつ安定にする（同一 ts で複数ホストを種付けしても衝突せず、
   // 再 import 時は同一イベントが同一 evId になり dedup が正しく効く）
@@ -128,7 +128,11 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
     host,
     spoolId,
     anchorRemainingMm: Number(anchorRemainingMm) || 0,
-    sinceJobId: Number(sinceJobId) || 0
+    sinceJobId: Number(sinceJobId) || 0,
+    // ★ レビュー指摘(P0-1): 装着区間の下限が「証明できるか」を記録する。
+    //   "unknown" は境界不明（履歴欠落＋idle 種付け等）を意味し、deriveSpoolRemaining は
+    //   この区間で過去履歴の遡及減算を行わない（アンカー値をそのまま残量とする）。
+    boundaryStatus: boundaryStatus === "unknown" ? "unknown" : "known"
   };
   list.push(ev);
   return ev;
@@ -233,7 +237,8 @@ export function getSpoolIntervals(spoolId) {
         host: e.host,
         sinceJobId: Number(e.sinceJobId) || 0,
         untilJobId: null,
-        anchorRemainingMm: Number(e.anchorRemainingMm) || 0
+        anchorRemainingMm: Number(e.anchorRemainingMm) || 0,
+        boundaryStatus: e.boundaryStatus === "unknown" ? "unknown" : "known"
       };
       intervals.push(open);
     } else if (e.type === "unmount") {
@@ -301,6 +306,13 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0 } = {}) {
   }
   if (!anchorIv) anchorIv = intervals[intervals.length - 1];
 
+  // ★ レビュー指摘(P0-1): 境界不明("unknown")区間では履歴の遡及減算をしない。
+  //   境界を証明できない状態（例: mountHistory 欠落 → idle 種付けで sinceJobId=0）で
+  //   後から機器の全履歴を取得すると、アンカー残量（既に過去消費を反映済みのことがある）から
+  //   過去全件を二重減算してしまう（＝機器再起動での残量崩壊）。unknown 区間はアンカー値を
+  //   そのまま残量とし、ライブ消費のオーバーレイのみ適用する。
+  const boundaryUnknown = anchorIv.boundaryStatus === "unknown";
+
   // 当該区間の帰属消費 Σ と、被覆チェック用の最小 printId
   const hist = _historyForHost(anchorIv.host);
   let used = 0;
@@ -310,14 +322,16 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0 } = {}) {
     if (!Number.isFinite(pid)) continue;
     if (pid < minPrintId) minPrintId = pid;
   }
-  for (const job of hist) {
-    const pid = _jobId(job);
-    if (!Number.isFinite(pid)) continue;
-    // printId > sinceJobId（厳密大なり）かつ（open or <= untilJobId）かつ完了
-    if (pid <= anchorIv.sinceJobId) continue;
-    if (anchorIv.untilJobId != null && pid > anchorIv.untilJobId) continue;
-    if (!_isCompleted(job)) continue;
-    used += attributedUsed(job, spoolId);
+  if (!boundaryUnknown) {
+    for (const job of hist) {
+      const pid = _jobId(job);
+      if (!Number.isFinite(pid)) continue;
+      // printId > sinceJobId（厳密大なり）かつ（open or <= untilJobId）かつ完了
+      if (pid <= anchorIv.sinceJobId) continue;
+      if (anchorIv.untilJobId != null && pid > anchorIv.untilJobId) continue;
+      if (!_isCompleted(job)) continue;
+      used += attributedUsed(job, spoolId);
+    }
   }
 
   // 被覆チェック: 最新区間 host の最小 printId O が sinceJobId より「新しい」なら未検証
@@ -329,6 +343,8 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0 } = {}) {
   if (since > 0 && Number.isFinite(O) && O > since + 1) {
     verified = false;
   }
+  // 境界不明区間は常に未検証（減算しない＝アンカー値を維持）。
+  if (boundaryUnknown) verified = false;
 
   // 純アンカー: remaining = anchorRemainingMm − Σ(当該区間の完了ジョブ消費)
   const anchor = Number(anchorIv.anchorRemainingMm) || 0;
@@ -572,7 +588,16 @@ export function initLedgerAnchors({ nowMs } = {}) {
     const printing = !!spool.currentPrintID && Number.isFinite(startLen);
     const anchorRemainingMm = printing ? startLen : (Number(spool.remainingLengthMm) || 0);
 
-    appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts: nowMs });
+    // ★ レビュー指摘(P0-1): 境界の証明可否を判定する。
+    //   - printing: アンカーは現在ジョブ開始時残量（＝現在ジョブ直前の確定基点）なので、
+    //     以後の完了ジョブを減算するのは正しい ⇒ "known"。
+    //   - idle かつ sinceJobId>0: 最後の完了ジョブが下限を証明 ⇒ "known"。
+    //   - idle かつ sinceJobId=0: 完了履歴が無く境界を証明できない。アンカー＝現在残量は
+    //     既に過去消費を反映済みのことがあるため、後から届く履歴を減算すると二重計上になる
+    //     ⇒ "unknown"（deriveSpoolRemaining は減算せずアンカー値を維持）。
+    const boundaryStatus = (printing || sinceJobId > 0) ? "known" : "unknown";
+
+    appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts: nowMs, boundaryStatus });
     spool._remainingVerified = false; // 推定繰越
 
     seeded++;
