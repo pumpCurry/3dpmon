@@ -27,9 +27,12 @@ vi.doMock("../../3dp_lib/dashboard_data.js", () => ({
 const {
   appendMountEvent,
   appendUnmountEvent,
+  appendReanchorEvent,
+  appendSupersedeEvent,
   attributedUsed,
   getSpoolIntervals,
   getOpenMountInterval,
+  getMountIntervalStatus,
   deriveSpoolRemaining,
   reconcileSpool,
   recomputeSpoolFromManualEdit,
@@ -964,5 +967,80 @@ describe("旧mount移行・excludeJobId・getOpenMountInterval(レビュー第2�
     const iv = getOpenMountInterval("S", "h");
     expect(iv.sinceJobId).toBe(20);   // 最新オープン
     expect(iv.untilJobId).toBeNull();
+  });
+});
+
+// =====================================================================
+// Q1: mount-event モデル再設計（reanchor/supersede/targetIntervalId/open不変条件）
+// =====================================================================
+describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
+  beforeEach(reset);
+
+  it("Q1/P0-1: unknown→known reanchor 後に unmount しても旧unknownが復活しない(open=0)", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "unknown" });
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.boundaryStatus).toBe("unknown");
+    // 完了で known 再アンカー（新mountを増やさず対象区間を更新）
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: iv.intervalId, anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known", sourceJobId: 1005, ts: 2 });
+    const st1 = getMountIntervalStatus("S", "h");
+    expect(st1.status).toBe("ok");                       // open は依然1件
+    expect(st1.openInterval.boundaryStatus).toBe("known");
+    expect(st1.openInterval.sinceJobId).toBe(1005);
+    expect(getSpoolIntervals("S").filter(x => x.untilJobId == null)).toHaveLength(1);
+    // 取り外し（対象区間を明示クローズ）
+    appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 1005, ts: 3, targetIntervalId: iv.intervalId });
+    const st2 = getMountIntervalStatus("S", "h");
+    expect(st2.status).toBe("none");                     // open=0（旧unknownは復活しない＝P0-1根治）
+  });
+
+  it("Q1/P0-6: 複数openは ambiguous でderiveを停止・getOpenMountIntervalはnull", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 1005, ts: 2, boundaryStatus: "known" });
+    const st = getMountIntervalStatus("S", "h");
+    expect(st.status).toBe("ambiguous");
+    expect(getOpenMountInterval("S", "h")).toBeNull();   // 曖昧フォールバックしない
+    const d = deriveSpoolRemaining("S");
+    expect(d.mode).toBe("halt-ambiguous");
+    expect(d.remainingMm).toBe(250000);                  // 現在値維持（誤った区間で減算しない）
+    expect(d.verified).toBe(false);
+  });
+
+  it("Q1/P0-6: open 0件(none)では getOpenMountInterval は null", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 100, ts: 2 });
+    expect(getMountIntervalStatus("S", "h").status).toBe("none");
+    expect(getOpenMountInterval("S", "h")).toBeNull();
+  });
+
+  it("Q1: reanchor の対象参照不整合は corrupt でderiveを停止", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known", sourceJobId: 1, ts: 2 });
+    const st = getMountIntervalStatus("S", "h");
+    expect(st.status).toBe("corrupt");
+    expect(deriveSpoolRemaining("S").mode).toBe("halt-corrupt");
+  });
+
+  it("Q1: supersede は対象区間を無効化し surviving を残す", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "unknown" });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 1005, ts: 2, boundaryStatus: "known" });
+    const old = getSpoolIntervals("S")[0];
+    appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: [old.intervalId], survivingIntervalId: null, ts: 3 });
+    const st = getMountIntervalStatus("S", "h");
+    expect(st.status).toBe("ok");                        // 残り1 open
+    expect(st.openInterval.sinceJobId).toBe(1005);
+  });
+
+  it("Q1: reanchor は冪等（同一区間×同一由来ジョブは1件に畳む）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "unknown" });
+    const iv = getOpenMountInterval("S", "h");
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: iv.intervalId, anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known", sourceJobId: 1005, ts: 2 });
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: iv.intervalId, anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known", sourceJobId: 1005, ts: 3 });
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(1);
   });
 });

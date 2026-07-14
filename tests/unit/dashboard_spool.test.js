@@ -711,9 +711,13 @@ describe("catchUp/finalize と mount区間の結合(レビュー第2弾)", () =>
     ];
     loadHistory.mockReturnValue([]);
     finalizeFilamentUsage(40000, "1005", "h", true); // ジョブ1005が実消費40000で完了
-    const known = monitorData.mountHistory.filter(e => e.type === "mount" && e.boundaryStatus === "known");
-    expect(known.length).toBe(1);
-    expect(known[0].sinceJobId).toBe(1005);          // 完了ジョブで再アンカー
-    expect(known[0].anchorRemainingMm).toBe(260000); // 300000 - 40000
+    // ★ 新しい mount ではなく reanchor イベントで既存 open 区間を known 化する（open 二重化しない）
+    const reanchor = monitorData.mountHistory.filter(e => e.type === "reanchor" && e.boundaryStatus === "known");
+    expect(reanchor.length).toBe(1);
+    expect(reanchor[0].targetIntervalId).toBe("m");  // 既存区間を対象
+    expect(reanchor[0].sinceJobId).toBe(1005);       // 完了ジョブで再アンカー
+    expect(reanchor[0].anchorRemainingMm).toBe(260000); // 300000 - 40000
+    // mount は増えていない（open 二重化なし）
+    expect(monitorData.mountHistory.filter(e => e.type === "mount").length).toBe(1);
   });
 });

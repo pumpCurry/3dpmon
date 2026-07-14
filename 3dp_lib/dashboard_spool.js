@@ -47,6 +47,7 @@ import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import {
   appendMountEvent,
   appendUnmountEvent,
+  appendReanchorEvent,
   reconcileSpool,
   getOpenFilamentEvent,
   resolveFilamentEvent,
@@ -1660,23 +1661,31 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       && _entry.filamentInfo.some(fi => fi && fi.spoolId && fi.spoolId !== s.id);
     if (_isSplit) _upsertSplitReel(host, normalizedJobId, s, resolvedUsed);
   }
-  // ★ レビュー指摘(P0-3): 境界不明(unknown)区間は、最初の信頼できるライブ印刷完了で再アンカーする。
-  //   これをしないと unknown 区間は deriveSpoolRemaining が常にアンカー値を返すため、以後の全印刷
-  //   消費が reconcile でアンカーへ戻されて消える。完了後残量を新アンカー・sinceJobId=完了ジョブ・
-  //   boundaryStatus=known にして、以後の完了ジョブを正しく減算できる区間へ昇格させる。
+  // ★ レビュー(P0-1/P0-2/P1): unknown 区間の known 昇格を「再アンカーイベント」で行う。
+  //   条件を厳格化する:
+  //   - 通常完了(!exact)のみ。印刷途中交換(exact:true)では昇格しない（直後の unmount で
+  //     旧 unknown が復活する事故＝P0-1 を防ぐ。交換の境界確定は setCurrentSpoolId が担う）。
+  //   - 有効な正の jobId があるときのみ（無効IDで known/sinceJobId=0 を作り、過去全履歴を
+  //     減算する退行＝P0-2 を防ぐ）。
+  //   - open 区間が正確に1件(getOpenMountInterval が返す＝status ok)かつ unknown のときのみ。
+  //   新しい mount を追加せず reanchor で対象区間を更新する（open を二重化しない＝P0-1）。
   try {
-    if (resolvedUsed > 0) {
+    const _reanchorJobId = Number(normalizedJobId);
+    if (!exact && resolvedUsed > 0 && Number.isFinite(_reanchorJobId) && _reanchorJobId > 0) {
       const iv = getOpenMountInterval(s.id, host);
       if (iv && iv.boundaryStatus === "unknown") {
-        appendMountEvent({
+        appendReanchorEvent({
           host,
           spoolId: s.id,
+          targetIntervalId: iv.intervalId,
           anchorRemainingMm: s.remainingLengthMm,
-          sinceJobId: Number(normalizedJobId) || 0,
-          ts: Date.now() + 1,
-          boundaryStatus: "known"
+          sinceJobId: _reanchorJobId,
+          boundaryStatus: "known",
+          sourceJobId: _reanchorJobId,
+          reason: "first-trusted-completion",
+          ts: Date.now() + 1
         });
-        console.info(`[finalizeFilamentUsage] ${host}: unknown 区間を完了ジョブ ${normalizedJobId} で再アンカー(known)`);
+        console.info(`[finalizeFilamentUsage] ${host}: unknown 区間 ${iv.intervalId} を完了ジョブ ${normalizedJobId} で reanchor(known)`);
       }
     }
   } catch (e) {

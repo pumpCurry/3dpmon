@@ -77,6 +77,28 @@ function _historyForHost(host) {
 }
 
 /**
+ * mountHistory の親権威・単調増加 seq を採番する（ログ末尾の高水位番号）。
+ *
+ * ★ レビュー(Q1/Q3): 既存イベントの更新 revision ではなく、追記ログの末尾番号として使う。
+ * projection 差分適用や C 基準 watermark(mountProjectionSeq) の比較に用いる。
+ * 子(readonly/satellite)は親の値をミラーするだけで自前採番しない。
+ *
+ * @private
+ * @returns {number} 次の seq
+ */
+function _nextMountSeq() {
+  const list = _getMountHistory();
+  let max = Number(monitorData.mountHistorySeq) || 0;
+  for (const e of list) {
+    const s = Number(e?.seq) || 0;
+    if (s > max) max = s;
+  }
+  const next = max + 1;
+  monitorData.mountHistorySeq = next;
+  return next;
+}
+
+/**
  * ジョブの printId（数値）を取得する。printStore.history のエントリは
  * id = 開始 epoch 秒（parseRawHistoryEntry の出力）。
  *
@@ -123,6 +145,10 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
   if (dup) return dup;
   const ev = {
     evId,
+    // ★ レビュー(Q1): intervalId を持たせ、unmount/reanchor がこの区間を明示指定できるようにする。
+    //   （「直近 open を閉じる」という暗黙動作を廃止し、区間の取り違えを防ぐ。）
+    intervalId: evId,
+    seq: _nextMountSeq(),
     ts,
     type: "mount",
     host,
@@ -139,6 +165,89 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
 }
 
 /**
+ * 再アンカーイベントを追記する（既存 open 区間の境界/アンカーを投影上で更新する）。
+ *
+ * ★ レビュー(Q1/P0-1): unknown→known 昇格や境界補正は、新しい mount を追加せず（＝open を
+ * 二重化せず）、対象区間(targetIntervalId)を指す reanchor イベントで表現する。元 mount は
+ * 変更しない（追記専用＝クラッシュ耐性・監査性・マージ整合性を維持）。getSpoolIntervals が
+ * 適用時に対象 open 区間へ反映する。
+ *
+ * @function appendReanchorEvent
+ * @param {Object} p
+ * @param {string} p.host
+ * @param {string} p.spoolId
+ * @param {string} p.targetIntervalId - 対象区間の intervalId
+ * @param {number} p.anchorRemainingMm - 新アンカー残量
+ * @param {number} p.sinceJobId - 新しい下限（排他的）
+ * @param {string} [p.boundaryStatus="known"]
+ * @param {number|string} [p.sourceJobId] - 由来ジョブ（冪等 evId 生成に使用）
+ * @param {string} [p.reason]
+ * @param {number} p.ts
+ * @returns {Object} 追記イベント
+ */
+export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRemainingMm, sinceJobId, boundaryStatus = "known", sourceJobId, reason, ts } = {}) {
+  const list = _getMountHistory();
+  // 冪等: 同一区間×同一由来ジョブの再アンカーは1件に畳む（多重通知/再送/再起動に強い）。
+  const evId = `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
+  const dup = list.find(e => e && e.evId === evId);
+  if (dup) return dup;
+  const ev = {
+    evId,
+    seq: _nextMountSeq(),
+    ts,
+    type: "reanchor",
+    host,
+    spoolId,
+    targetIntervalId,
+    anchorRemainingMm: Number(anchorRemainingMm) || 0,
+    sinceJobId: Number(sinceJobId) || 0,
+    boundaryStatus: boundaryStatus === "unknown" ? "unknown" : "known",
+    sourceJobId: sourceJobId != null ? String(sourceJobId) : null,
+    reason: reason || null
+  };
+  list.push(ev);
+  return ev;
+}
+
+/**
+ * 修復イベント（supersede）を追記する。曖昧/破損区間を投影上で無効化する。
+ *
+ * ★ レビュー(Q1): 複数 open・参照不整合・旧データ由来の破損は、勝手に「最新採用」せず、
+ * 明示的な supersede で対象区間群を無効化し、survivingIntervalId を1件残す。修復操作の証跡を
+ * ログへ残す（追記専用）。
+ *
+ * @function appendSupersedeEvent
+ * @param {Object} p
+ * @param {string} p.host
+ * @param {string} p.spoolId
+ * @param {string[]} p.targetIntervalIds - 無効化する区間の intervalId 群
+ * @param {?string} [p.survivingIntervalId] - 残す区間（無ければ null）
+ * @param {string} [p.reason]
+ * @param {number} p.ts
+ * @returns {Object} 追記イベント
+ */
+export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts } = {}) {
+  const list = _getMountHistory();
+  const ids = Array.isArray(targetIntervalIds) ? targetIntervalIds.slice().sort() : [];
+  const evId = `supersede_${spoolId}_${ids.join("+")}_${ts}`;
+  const dup = list.find(e => e && e.evId === evId);
+  if (dup) return dup;
+  const ev = {
+    evId,
+    seq: _nextMountSeq(),
+    ts,
+    type: "supersede",
+    host,
+    spoolId,
+    targetIntervalIds: ids,
+    survivingIntervalId,
+    reason: reason || null
+  };
+  list.push(ev);
+  return ev;
+}
+
+/**
  * 取外しイベントを mountHistory に追記する。
  *
  * @function appendUnmountEvent
@@ -149,7 +258,7 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
  * @param {number} params.ts - イベント時刻 ms
  * @returns {Object} 追記した MountEvent
  */
-export function appendUnmountEvent({ host, spoolId, untilJobId, ts } = {}) {
+export function appendUnmountEvent({ host, spoolId, untilJobId, ts, targetIntervalId = null } = {}) {
   const list = _getMountHistory();
   const evId = `unmount_${spoolId}_${ts}`;
   // ★ ADR-0005 P7: evId 重複ガード（mount と同じく同秒二重追記を畳む）
@@ -157,11 +266,15 @@ export function appendUnmountEvent({ host, spoolId, untilJobId, ts } = {}) {
   if (dup) return dup;
   const ev = {
     evId,
+    seq: _nextMountSeq(),
     ts,
     type: "unmount",
     host,
     spoolId,
-    untilJobId: Number(untilJobId) || 0
+    untilJobId: Number(untilJobId) || 0,
+    // ★ レビュー(Q1): 閉じる区間を明示する。null の旧イベントは投影側で「同host最新open」を閉じる
+    //   （後方互換）。新規は intervalId を渡して区間の取り違えを防ぐ。
+    targetIntervalId: targetIntervalId || null
   };
   list.push(ev);
   return ev;
@@ -220,52 +333,125 @@ export function attributedUsed(job, spoolId) {
  * @returns {Array<{host:string, sinceJobId:number, untilJobId:?number, anchorRemainingMm:number}>}
  *   装着区間配列（mount 時系列順）。untilJobId=null はオープン区間。mount 記録が無ければ []。
  */
-export function getSpoolIntervals(spoolId) {
+/**
+ * mountHistory から当該スプールの装着区間 projection を構築する（内部）。
+ *
+ * ★ レビュー(Q1): mount/unmount/reanchor/supersede を seq(→ts) 順に適用する。
+ * - mount: intervalId で新区間を開く。
+ * - unmount: targetIntervalId を明示クローズ。null（旧イベント）は同host最新openをクローズ（後方互換）。
+ * - reanchor: 対象 open 区間の anchor/sinceJobId/boundaryStatus を更新（元mountは不変）。
+ *   対象が open で無ければ invalid-reference 診断を残す。
+ * - supersede: 対象区間群を無効化（surviving は残す）。修復用。
+ * 旧イベントの boundaryStatus 欠落＋sinceJobId=0 は安全側で "unknown" へ移行する。
+ *
+ * @private
+ * @param {string} spoolId
+ * @returns {{intervals:Array, byId:Map, diagnostics:Array<{code:string, detail:any}>}}
+ */
+function _buildIntervalProjection(spoolId) {
   const list = _getMountHistory();
   const events = list
-    .filter(e => e && e.spoolId === spoolId && (e.type === "mount" || e.type === "unmount"))
+    .filter(e => e && e.spoolId === spoolId
+      && (e.type === "mount" || e.type === "unmount" || e.type === "reanchor" || e.type === "supersede"))
     .slice()
-    .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+    .sort((a, b) => {
+      const sa = Number(a.seq), sb = Number(b.seq);
+      if (Number.isFinite(sa) && Number.isFinite(sb) && sa !== sb) return sa - sb;
+      return (Number(a.ts) || 0) - (Number(b.ts) || 0);
+    });
 
   const intervals = [];
-  let open = null;
+  const byId = new Map();
+  const diagnostics = [];
+
   for (const e of events) {
     if (e.type === "mount") {
-      // 直前の mount がオープンのままなら（unmount を見届けず）クローズ扱いにせず置換せず、
-      // 新規区間を開く（前の区間はオープンのまま残す＝最新 anchor を信頼）
-      // ★ レビュー指摘(P0-2): 旧バージョンの mount イベントには boundaryStatus が無い。
-      //   boundaryStatus 欠落 かつ sinceJobId=0 の「危険な bootstrap アンカー」は、
-      //   後から届く全履歴を遡及減算し得るため、読込時に安全側で "unknown" へ移行する。
-      //   （明示 "unknown" もそのまま unknown。それ以外＝新イベント/sinceJobId>0 は known。）
       const _since = Number(e.sinceJobId) || 0;
       const bs = (e.boundaryStatus === "unknown"
-        || (e.boundaryStatus == null && _since === 0))
-        ? "unknown" : "known";
-      open = {
+        || (e.boundaryStatus == null && _since === 0)) ? "unknown" : "known";
+      const iv = {
+        intervalId: e.intervalId || e.evId,
         host: e.host,
         sinceJobId: _since,
         untilJobId: null,
         anchorRemainingMm: Number(e.anchorRemainingMm) || 0,
-        boundaryStatus: bs
+        boundaryStatus: bs,
+        superseded: false
       };
-      intervals.push(open);
+      intervals.push(iv);
+      byId.set(iv.intervalId, iv);
     } else if (e.type === "unmount") {
-      // 直近のオープン区間（同一 host 優先）をクローズ
       let target = null;
-      for (let i = intervals.length - 1; i >= 0; i--) {
-        if (intervals[i].untilJobId == null) {
-          if (intervals[i].host === e.host) { target = intervals[i]; break; }
-          if (!target) target = intervals[i];
+      if (e.targetIntervalId) {
+        target = byId.get(e.targetIntervalId) || null;
+        if (!target) diagnostics.push({ code: "unmount-invalid-reference", detail: e.targetIntervalId });
+        else if (target.untilJobId != null) diagnostics.push({ code: "unmount-already-closed", detail: e.targetIntervalId });
+      } else {
+        // 後方互換: 同 host の最新 open をクローズ
+        for (let i = intervals.length - 1; i >= 0; i--) {
+          if (intervals[i].untilJobId == null && !intervals[i].superseded && intervals[i].host === e.host) { target = intervals[i]; break; }
         }
       }
-      if (target) {
-        target.untilJobId = Number(e.untilJobId) || 0;
-        if (target === open) open = null;
+      if (target && target.untilJobId == null) target.untilJobId = Number(e.untilJobId) || 0;
+    } else if (e.type === "reanchor") {
+      const target = e.targetIntervalId ? byId.get(e.targetIntervalId) : null;
+      if (!target) { diagnostics.push({ code: "reanchor-invalid-reference", detail: e.targetIntervalId }); continue; }
+      if (target.untilJobId != null || target.superseded) { diagnostics.push({ code: "reanchor-on-closed", detail: e.targetIntervalId }); continue; }
+      target.anchorRemainingMm = Number(e.anchorRemainingMm) || 0;
+      target.sinceJobId = Number(e.sinceJobId) || 0;
+      target.boundaryStatus = e.boundaryStatus === "unknown" ? "unknown" : "known";
+    } else if (e.type === "supersede") {
+      for (const id of (e.targetIntervalIds || [])) {
+        const iv = byId.get(id);
+        if (iv) { iv.superseded = true; if (iv.untilJobId == null) iv.untilJobId = 0; }
+        else diagnostics.push({ code: "supersede-invalid-reference", detail: id });
       }
     }
   }
-  // mount 記録が無ければ空（レガシー printIdRanges からの区間捏造はしない）。
-  return intervals;
+  return { intervals, byId, diagnostics };
+}
+
+/**
+ * 当該スプールの装着区間配列を構築する（superseded を除外した最終状態）。
+ * 後方互換のため配列を返す（各区間に intervalId/boundaryStatus を含む）。
+ *
+ * @function getSpoolIntervals
+ * @param {string} spoolId - スプールID
+ * @returns {Array<{intervalId:string, host:string, sinceJobId:number, untilJobId:?number, anchorRemainingMm:number, boundaryStatus:string}>}
+ */
+export function getSpoolIntervals(spoolId) {
+  return _buildIntervalProjection(spoolId).intervals.filter(iv => !iv.superseded);
+}
+
+/**
+ * 当該スプール・ホストの装着区間 open 状態を返す。
+ *
+ * ★ レビュー(Q1/P0-6): 「最新採用」の曖昧フォールバックを禁止する。open が正確に1件のときだけ
+ * openInterval を返し、0件=none / 2件以上=ambiguous / 参照不整合=corrupt を明示する。
+ * ambiguous/corrupt では自動 derive/catch-up/reconcile を停止すべき（呼び出し側で判定）。
+ *
+ * @function getMountIntervalStatus
+ * @param {string} spoolId
+ * @param {string} host
+ * @returns {{status:"ok"|"none"|"ambiguous"|"corrupt", openInterval:?Object, intervals:Array, diagnostics:Array}}
+ */
+export function getMountIntervalStatus(spoolId, host) {
+  const { intervals, diagnostics } = _buildIntervalProjection(spoolId);
+  const hostIvs = intervals.filter(iv => iv.host === host && !iv.superseded);
+  const open = hostIvs.filter(iv => iv.untilJobId == null);
+  // 構造破損（参照先不存在）のみ corrupt 扱い。already-closed 等の冪等診断は無害。
+  const hardDiag = diagnostics.filter(d => /invalid-reference/.test(d.code));
+  let status;
+  if (hardDiag.length > 0) status = "corrupt";
+  else if (open.length >= 2) status = "ambiguous";
+  else if (open.length === 0) status = "none";
+  else status = "ok";
+  return {
+    status,
+    openInterval: status === "ok" ? open[0] : null,
+    intervals: hostIvs,
+    diagnostics
+  };
 }
 
 /**
@@ -280,12 +466,8 @@ export function getSpoolIntervals(spoolId) {
  * @returns {?{host:string, sinceJobId:number, untilJobId:?number, anchorRemainingMm:number, boundaryStatus:string}}
  */
 export function getOpenMountInterval(spoolId, host) {
-  const ivs = getSpoolIntervals(spoolId).filter(iv => iv.host === host);
-  if (ivs.length === 0) return null;
-  for (let i = ivs.length - 1; i >= 0; i--) {
-    if (ivs[i].untilJobId == null) return ivs[i];
-  }
-  return ivs[ivs.length - 1];
+  // ★ レビュー(P0-6): open が正確に1件のときだけ返す。0件/複数/破損では null（曖昧フォールバック禁止）。
+  return getMountIntervalStatus(spoolId, host).openInterval;
 }
 
 /**
@@ -320,23 +502,33 @@ export function getOpenMountInterval(spoolId, host) {
 export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = null } = {}) {
   const spool = (monitorData.filamentSpools || []).find(s => s.id === spoolId);
   const total = Number(spool?.totalLengthMm) || 0;
-  const intervals = getSpoolIntervals(spoolId);
+  const proj = _buildIntervalProjection(spoolId);
+  const activeIvs = proj.intervals.filter(iv => !iv.superseded);
+  const hardDiag = proj.diagnostics.filter(d => /invalid-reference/.test(d.code));
 
-  if (intervals.length === 0) {
+  const _cur = Number(spool?.remainingLengthMm);
+  const _base = Number.isFinite(_cur) ? _cur : total;
+  const _cap = total > 0 ? total : _base;
+
+  if (activeIvs.length === 0) {
     // 装着履歴が無い → 現在値をそのまま維持（total へリセットしない）
-    const cur = Number(spool?.remainingLengthMm);
-    const base = Number.isFinite(cur) ? cur : total;
-    const cap = total > 0 ? total : base;
-    const remaining = _clamp(0, base - (Number(liveUsedMm) || 0), cap);
+    const remaining = _clamp(0, _base - (Number(liveUsedMm) || 0), _cap);
     return { remainingMm: remaining, verified: false, mode: "none", usedMm: 0 };
   }
 
-  // 最新区間（open があれば open、無ければ最終区間）だけを使う
-  let anchorIv = null;
-  for (let i = intervals.length - 1; i >= 0; i--) {
-    if (intervals[i].untilJobId == null) { anchorIv = intervals[i]; break; }
+  // ★ レビュー(Q1/P0-6): 構造破損(参照不整合)・複数 open は自動処理を停止する。
+  //   誤った区間を選んで減算するより、現在値を維持して未検証にする方が安全（台帳が曖昧な状態）。
+  const openIvs = activeIvs.filter(iv => iv.untilJobId == null);
+  if (hardDiag.length > 0 || openIvs.length >= 2) {
+    const remaining = _clamp(0, _base - (Number(liveUsedMm) || 0), _cap);
+    return {
+      remainingMm: remaining, verified: false,
+      mode: hardDiag.length > 0 ? "halt-corrupt" : "halt-ambiguous", usedMm: 0
+    };
   }
-  if (!anchorIv) anchorIv = intervals[intervals.length - 1];
+
+  // アンカー区間 = 唯一の open（無ければ最終区間）
+  const anchorIv = openIvs[0] || activeIvs[activeIvs.length - 1];
 
   // ★ レビュー指摘(P0-1): 境界不明("unknown")区間では履歴の遡及減算をしない。
   //   境界を証明できない状態（例: mountHistory 欠落 → idle 種付けで sinceJobId=0）で
