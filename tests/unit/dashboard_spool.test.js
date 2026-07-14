@@ -585,6 +585,17 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
     }
     expect(monitorData.pendingUnattributedUsage.length).toBe(200);
   });
+
+  it('U4連携: 無効ID隔離→pendingUsageId付与→getAttributionIssueIdsForHostに出現（実コード経路）', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const q = monitorData.pendingUnattributedUsage[0];
+    expect(typeof q.pendingUsageId).toBe('string');
+    expect(q.pendingUsageId.length).toBeGreaterThan(0);
+    // 実際の隔離レコードが U1 セレクタの課題ID集合へ安定キーで現れる
+    const ids = getAttributionIssueIdsForHost('h');
+    expect(ids.has(`quarantine:h:${q.pendingUsageId}`)).toBe(true);
+    expect(countAttributionIssuesForHost('h')).toBe(1);
+  });
 });
 
 // =============================================
