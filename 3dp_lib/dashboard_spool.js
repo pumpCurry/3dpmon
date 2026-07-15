@@ -1544,7 +1544,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * @param {string} [reason="invalid-job-id"] - 隔離理由
  * @returns {void}
  */
-function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "invalid-job-id", { estimated = false } = {}) {
+function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "invalid-job-id", { estimated = false, completionOpId = null } = {}) {
   const used = Number(usedMm);
   if (!Number.isFinite(used) || used <= 0) return;
   if (!Array.isArray(monitorData.pendingUnattributedUsage)) {
@@ -1553,15 +1553,24 @@ function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "i
   const list = monitorData.pendingUnattributedUsage;
   const spoolId = spool?.id ?? null;
   const _startLen = Number.isFinite(Number(startLen)) ? Number(startLen) : null;
-  // ★ P0-2(レビュー): 冪等キー。同一の偽完了通知が再送されても隔離レコードを増殖させない。
-  //   出所データから安定に導出（同一完了の再送は同値）。整数mmへ丸めて微差ノイズを吸収。
+  // ★ RR-1(レビュー2): 冪等の同一性は「完了を観測した操作単位ID(completionOpId)」で判定する。
+  //   payload fingerprint を恒久的同一性に使うと、同じ G-code を2回印刷して両方 jobId 欠落した
+  //   ような別々の正当な消費を「再送」と誤判定して捨ててしまう。completionOpId が無い呼び出しでは
+  //   fingerprint を「短い再送抑制窓」だけに使う（恒久同一性にはしない）。
   const completionFingerprint =
     `${host}|${spoolId}|${reason}|${Math.round(used)}|${Math.round(_startLen || 0)}|${estimated ? "est" : "meas"}`;
-  if (list.some(e => e && e.completionFingerprint === completionFingerprint)) {
-    // 同一完了の再送 → 冪等スキップ（未確認件数を水増ししない）。
-    return;
+  if (completionOpId != null) {
+    if (list.some(e => e && e.completionOpId === completionOpId)) return; // 同一完了の再送 → 冪等スキップ
+  } else {
+    const _now = wallNowMs();
+    const RESEND_WINDOW_MS = 5000; // 完了観測IDが無い場合の短い再送抑制窓
+    const recent = list.find(e => e && e.completionOpId == null
+      && e.completionFingerprint === completionFingerprint
+      && (_now - (Number(e.detectedAtEpochMs) || 0)) < RESEND_WINDOW_MS);
+    if (recent) return; // 短窓内の再送のみ抑制（窓外の同一payloadは別の正当消費として登録）
   }
   list.push({
+    completionOpId: completionOpId || null,
     // ★ Phase5(U1): 通知の差分判定で使う安定ID（壁時計非依存の一意キー）。
     pendingUsageId: randomEventId(),
     completionFingerprint,
@@ -1665,7 +1674,7 @@ function _archiveUnattributedUsage(records) {
  * name/color/material などのメタ情報を同時に記録する。
  * 履歴更新後は {@link updateHistoryList} を介して永続化し UI へ即時反映する。
  */
-export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true, { exact = false } = {}) {
+export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true, { exact = false, completionOpId = null } = {}) {
   const host = hostname;
   if (!host) return;
   const s = getCurrentSpool(host);
@@ -1739,7 +1748,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   //   消費を残量へ直接反映すると、次の reconcile がそれを取りこぼして盛り戻してしまう。
   //   隔離レコードが差分を保持し、実IDが判明した時点で正規の帰属として解決する。
   if (validJobId == null) {
-    _quarantineUnattributedUsage(host, s, resolvedUsed, startLen, "invalid-job-id", { estimated: _usedIsEstimated });
+    _quarantineUnattributedUsage(host, s, resolvedUsed, startLen, "invalid-job-id", { estimated: _usedIsEstimated, completionOpId });
     // transient はクリアするが lastCompletedPrintID は設定しない（空/偽IDを確定IDにしない）。
     s.currentJobStartLength = null;
     s.currentJobExpectedLength = null;

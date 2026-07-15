@@ -584,17 +584,35 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
     expect(sp.currentPrintID).toBe('');              // 不一致で transient クリア
   });
 
-  it('P0-2: 同一完了の再送は冪等（増殖しない）／別完了は別レコード', () => {
-    finalizeFilamentUsage(100, 0, 'h', true);
-    // 同一 used/startLen の再送 → 増えない（未確認件数を水増ししない）
+  it('RR-1: completionOpId で冪等（同一IDは1件／別IDは同一payloadでも別レコード）', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true, { completionOpId: 'h:completion:1' });
+    // 同一 completionOpId の再送 → 増えない（未確認件数を水増ししない）
     monitorData.filamentSpools[0].currentJobStartLength = 100000;
     monitorData.filamentSpools[0].currentPrintID = '';
-    finalizeFilamentUsage(100, 0, 'h', true);
+    finalizeFilamentUsage(5000, 0, 'h', true, { completionOpId: 'h:completion:1' });
     expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
-    // used が異なれば別完了として別レコード
+    // ★ 別の印刷(別 completionOpId)は「同一 payload」でも別レコード（payload衝突で捨てない）
     monitorData.filamentSpools[0].currentJobStartLength = 100000;
     monitorData.filamentSpools[0].currentPrintID = '';
-    finalizeFilamentUsage(200, 0, 'h', true);
+    finalizeFilamentUsage(5000, 0, 'h', true, { completionOpId: 'h:completion:2' });
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(2);
+    expect(monitorData.pendingUnattributedUsage[0].completionOpId).toBe('h:completion:1');
+    expect(monitorData.pendingUnattributedUsage[1].completionOpId).toBe('h:completion:2');
+  });
+
+  it('RR-1: completionOpId 無しは短い再送窓のみ抑制（窓外の同一payloadは別登録）', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true); // opId 無し
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    // 直近（窓内）の同一 payload 再送 → 抑制
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    // 窓外（detectedAtEpochMs を過去へ）にすると別の正当消費として登録される
+    monitorData.pendingUnattributedUsage[0].detectedAtEpochMs = 1; // 遥か過去
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(5000, 0, 'h', true);
     expect(monitorData.pendingUnattributedUsage).toHaveLength(2);
   });
 

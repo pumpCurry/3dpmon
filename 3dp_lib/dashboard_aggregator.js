@@ -1188,6 +1188,17 @@ export function aggregatorUpdate() {
       catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
     }
 
+    // ★ RR-1(レビュー2): 完了観測ごとの安定 opId をスタンプする。印刷中→完了エッジで採番し、
+    //   完了状態が続く間は再利用（再送では同一ID＝隔離が冪等）。次の印刷開始で解除し、別の印刷は
+    //   別 seq になる（同一 G-code の2回印刷で jobId 欠落しても別々に隔離＝payload衝突で捨てない）。
+    if (isPrinting) {
+      s._completionStamped = false;
+    } else if (isCompleted && !s._completionStamped) {
+      s._completionSeq = (s._completionSeq || 0) + 1;
+      s._completionOpId = `${host}:completion:${s._completionSeq}`;
+      s._completionStamped = true;
+    }
+
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
       const _jobId = spool.currentPrintID;
       // ★ P0-7: transient(currentPrintID/currentJobStartLength) を消す前に finalize を走らせ、
@@ -1199,7 +1210,7 @@ export function aggregatorUpdate() {
       //   （下の完了ブロックと相互排他）。
       if (spool.currentJobStartLength != null && s.accumulatedUsedMaterial > 0) {
         const _isSuccess = (st === PRINT_STATE_CODE.printDone);
-        try { finalizeFilamentUsage(s.accumulatedUsedMaterial, _jobId, host, _isSuccess); }
+        try { finalizeFilamentUsage(s.accumulatedUsedMaterial, _jobId, host, _isSuccess, { completionOpId: s._completionOpId }); }
         catch (e) { console.warn("[aggregator] finalize(P0-7) 失敗:", e?.message || e); }
         try { reconcileSpool(spool.id, { ts: _now }); }
         catch (e2) { console.warn("[aggregator] reconcileSpool(P0-7) 失敗:", e2?.message || e2); }
@@ -1454,7 +1465,7 @@ export function aggregatorUpdate() {
           }
         }
         const isSuccess2 = (st === PRINT_STATE_CODE.printDone);
-        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2);
+        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2, { completionOpId: s._completionOpId });
         // ★ ADR-0004: 完了後に信頼ソースから残量を冪等補正（idle で権威補正）。
         //   finalize 内でも reconcile するが、currentPrintID クリア後の確定状態で再度走らせる。
         //   reconcile は印刷中スプールに触れないため二重防御として安全。冪等なので無害。
