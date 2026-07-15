@@ -1580,6 +1580,27 @@ function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "i
     + ` pendingUnattributedUsage へ隔離（spool=${spoolId ?? "?"}, reason=${reason},`
     + ` source=${estimated ? "expected-fallback" : "measured"}）`
   );
+  // ★ P1-3(レビュー): 隔離は履歴行を持たないため、renderHistoryTable の再描画を待たずに
+  //   バッジ・通知を直接動かす。UI/通知層への直接依存を避けるため疎結合な DOM イベントで
+  //   通知する（リスナは印刷履歴 UI 側が登録）。node/非DOM 環境では no-op。
+  _emitAttributionChanged(host);
+}
+
+/**
+ * 帰属未確認の状態変化を UI/通知層へ疎結合に通知する（Phase5 P1-3）。
+ * 実際のバッジ更新・通知判定・relay delta は購読側が行う。
+ *
+ * @private
+ * @param {string} host - 対象ホスト
+ * @returns {void}
+ */
+function _emitAttributionChanged(host) {
+  try {
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function"
+        && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("3dpmon:attribution-changed", { detail: { host } }));
+    }
+  } catch { /* 非DOM/未対応環境は無視 */ }
 }
 
 /**

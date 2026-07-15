@@ -1763,6 +1763,20 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
  * @param {string} hostname - 対象ホスト名
  * @returns {void}
  */
+// ★ P1-3(レビュー): 隔離追加（履歴行を持たない）の状態変化を購読し、renderHistoryTable を
+//   待たずにバッジ更新・通知再評価を直接動かす。UI描画(updateAttributionBadge)と
+//   通知判定(scheduleAttributionNotice)は別関数のまま、ここで両者を駆動する。
+if (typeof window !== "undefined" && typeof window.addEventListener === "function"
+    && !window._3dpmonAttrListenerBound) {
+  window._3dpmonAttrListenerBound = true;
+  window.addEventListener("3dpmon:attribution-changed", (e) => {
+    const h = e?.detail?.host;
+    if (!h) return;
+    try { updateAttributionBadge(h); } catch { /* no-op */ }
+    try { scheduleAttributionNotice(h); } catch { /* no-op */ }
+  });
+}
+
 export function updateAttributionBadge(hostname) {
   if (!hostname) return;
   try {

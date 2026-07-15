@@ -32,8 +32,18 @@ const DEBOUNCE_MS = 6000;
 
 /** host -> { initialized:boolean, observed:Set<string>, lastNotifiedAt:number } */
 const _state = new Map();
-/** host -> debounce タイマー */
-const _timers = new Map();
+/** host -> { timer, sig } debounce タイマーと、その時点の課題ID集合シグネチャ */
+const _sched = new Map();
+
+/**
+ * 課題ID集合の安定シグネチャ（順不同で一意）。
+ * @private
+ * @param {Set<string>} idSet
+ * @returns {string}
+ */
+function _sigOf(idSet) {
+  return [...idSet].sort().join("\n");
+}
 
 /**
  * per-host 通知状態を取得（無ければ初期化）。
@@ -125,15 +135,20 @@ function _emit(notice) {
 export function scheduleAttributionNotice(host) {
   if (!host) return;
   if (_isRelayChild()) return; // 子は表示のみ。親が通知権威。
-  const prev = _timers.get(host);
-  if (prev) clearTimeout(prev);
-  const t = setTimeout(() => {
-    _timers.delete(host);
+  const sig = _sigOf(getAttributionIssueIdsForHost(host));
+  const st = _sched.get(host);
+  // ★ P1-4(レビュー): 課題ID集合が前回スケジュール時から変わっていなければ、
+  //   既存タイマーを延長しない（renderHistoryTable の連続呼び出しで debounce が
+  //   永久に延期＝通知が永遠に出ない、を防ぐ）。新規/解決で集合が変わったときだけ再設定する。
+  if (st && st.timer && st.sig === sig) return;
+  if (st && st.timer) clearTimeout(st.timer);
+  const timer = setTimeout(() => {
+    _sched.delete(host);
     const notice = evaluateAttributionNotice(host, { nowMs: monotonicNowMs() });
     if (notice) _emit(notice);
   }, DEBOUNCE_MS);
-  if (t && typeof t.unref === "function") t.unref(); // プロセスを引き止めない
-  _timers.set(host, t);
+  if (timer && typeof timer.unref === "function") timer.unref(); // プロセスを引き止めない
+  _sched.set(host, { timer, sig });
 }
 
 /**
@@ -142,7 +157,7 @@ export function scheduleAttributionNotice(host) {
  * @returns {void}
  */
 export function resetAttributionNoticeState() {
-  for (const t of _timers.values()) clearTimeout(t);
-  _timers.clear();
+  for (const s of _sched.values()) { if (s && s.timer) clearTimeout(s.timer); }
+  _sched.clear();
   _state.clear();
 }

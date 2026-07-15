@@ -86,17 +86,28 @@ describe("scheduleAttributionNotice（debounce 集約・親のみ）", () => {
   });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("連続呼び出しは quiet 窓後に1回だけ発火（起動バーストを畳む）", () => {
+  it("P1-4: 同一集合の連続呼び出しはタイマーを延長しない（永久延期を防ぐ）", () => {
     setIssues(["pending:h:1", "pending:h:2"]);
-    scheduleAttributionNotice("h");
-    vi.advanceTimersByTime(1000);
-    scheduleAttributionNotice("h"); // タイマー再設定
-    vi.advanceTimersByTime(1000);
-    expect(showAlert).not.toHaveBeenCalled(); // まだ quiet 未達
-    vi.advanceTimersByTime(6000);             // 最後の呼び出しから DEBOUNCE 経過
+    scheduleAttributionNotice("h");     // t=0, timer→6000
+    vi.advanceTimersByTime(3000);       // t=3000
+    scheduleAttributionNotice("h");     // 同一集合 → 延長しない（P1-4）
+    vi.advanceTimersByTime(2000);       // t=5000 未発火
+    expect(showAlert).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1500);       // t=6500 > 6000 → 最初のタイマーが発火
     expect(showAlert).toHaveBeenCalledTimes(1);
     expect(showAlert.mock.calls[0][0]).toContain("2 件");
     expect(showAlert.mock.calls[0][1]).toBe("warn"); // 低優先・画面内
+  });
+
+  it("P1-4: 課題集合が変わったら再スケジュールして新規分を通知", () => {
+    setIssues(["pending:h:1"]);
+    scheduleAttributionNotice("h");
+    vi.advanceTimersByTime(6000);
+    expect(showAlert).toHaveBeenCalledTimes(1); // startup（既存1件）
+    setIssues(["pending:h:1", "pending:h:2"]);  // 集合変化＝新規
+    scheduleAttributionNotice("h");
+    vi.advanceTimersByTime(6000);
+    expect(showAlert).toHaveBeenCalledTimes(2); // new（h:2）
   });
 
   it("リレー子（window._3dpmonRelayChild）は通知しない（親のみ権威）", () => {

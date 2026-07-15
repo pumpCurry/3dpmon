@@ -634,6 +634,28 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
     expect(countAttributionIssuesForHost('h')).toBe(210); // バッジ=詳細200＋アーカイブ10
   });
 
+  it('P1-3: 隔離追加で attribution-changed イベントを発火（冪等dupでは発火しない）', () => {
+    const disp = vi.fn();
+    const origWin = globalThis.window;
+    const origCE = globalThis.CustomEvent;
+    globalThis.window = { dispatchEvent: disp };
+    globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+    try {
+      finalizeFilamentUsage(5000, 0, 'h', true);
+      expect(disp).toHaveBeenCalledTimes(1);
+      expect(disp.mock.calls[0][0].type).toBe('3dpmon:attribution-changed');
+      expect(disp.mock.calls[0][0].detail.host).toBe('h');
+      // 同一完了の再送 → 冪等 skip → イベント発火しない
+      monitorData.filamentSpools[0].currentJobStartLength = 100000;
+      monitorData.filamentSpools[0].currentPrintID = '';
+      finalizeFilamentUsage(5000, 0, 'h', true);
+      expect(disp).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.window = origWin;
+      globalThis.CustomEvent = origCE;
+    }
+  });
+
   it('U4連携: 無効ID隔離→pendingUsageId付与→getAttributionIssueIdsForHostに出現（実コード経路）', () => {
     finalizeFilamentUsage(5000, 0, 'h', true);
     const q = monitorData.pendingUnattributedUsage[0];

@@ -59,6 +59,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   buildFilamentRecommendations: vi.fn(() => []),
   getAttributionPresentation: vi.fn(() => ({ state: "known", label: null, reason: null, severity: "none" })),
   countAttributionIssuesForHost: vi.fn(() => 0),
+  getAttributionIssueIdsForHost: vi.fn(() => new Set()),
 }));
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   sendCommand: vi.fn(),
