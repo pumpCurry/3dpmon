@@ -1535,35 +1535,81 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * @param {string} [reason="invalid-job-id"] - 隔離理由
  * @returns {void}
  */
-function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "invalid-job-id") {
+function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "invalid-job-id", { estimated = false } = {}) {
   const used = Number(usedMm);
   if (!Number.isFinite(used) || used <= 0) return;
   if (!Array.isArray(monitorData.pendingUnattributedUsage)) {
     monitorData.pendingUnattributedUsage = [];
   }
-  monitorData.pendingUnattributedUsage.push({
+  const list = monitorData.pendingUnattributedUsage;
+  const spoolId = spool?.id ?? null;
+  const _startLen = Number.isFinite(Number(startLen)) ? Number(startLen) : null;
+  // ★ P0-2(レビュー): 冪等キー。同一の偽完了通知が再送されても隔離レコードを増殖させない。
+  //   出所データから安定に導出（同一完了の再送は同値）。整数mmへ丸めて微差ノイズを吸収。
+  const completionFingerprint =
+    `${host}|${spoolId}|${reason}|${Math.round(used)}|${Math.round(_startLen || 0)}|${estimated ? "est" : "meas"}`;
+  if (list.some(e => e && e.completionFingerprint === completionFingerprint)) {
+    // 同一完了の再送 → 冪等スキップ（未確認件数を水増ししない）。
+    return;
+  }
+  list.push({
     // ★ Phase5(U1): 通知の差分判定で使う安定ID（壁時計非依存の一意キー）。
-    //   detectedAtEpochMs は同一msで衝突し得るため fingerprint の材料にしない。
     pendingUsageId: randomEventId(),
+    completionFingerprint,
     host,
-    spoolId: spool?.id ?? null,
-    usedMm: used,
-    startLen: Number.isFinite(Number(startLen)) ? Number(startLen) : null,
+    spoolId,
     reason,
+    // ★ P1-2(レビュー): 実測(confirmed)と見積りフォールバック(estimated)を分離する。
+    //   予定使用量を実消費(usedMm)として確定させない。後続(#410)の解決時に区別できるようにする。
+    usedSource: estimated ? "expected-fallback" : "measured",
+    confidence: estimated ? "estimated" : "confirmed",
+    usedMm: estimated ? 0 : used,
+    estimatedUsedMm: estimated ? used : 0,
+    startLen: _startLen,
     // ★ 監査用の壁時計時刻（epoch ms）。イベント順序や再送冪等には使わない。
     detectedAtEpochMs: wallNowMs()
   });
-  // 肥大化防止（最新200件を保持）
+  // ★ P0-2: 上限超過分は「黙って捨てず」per-host アーカイブへ集約（件数・合計・期間を保持）。
   const cap = 200;
-  if (monitorData.pendingUnattributedUsage.length > cap) {
-    monitorData.pendingUnattributedUsage.splice(
-      0, monitorData.pendingUnattributedUsage.length - cap
-    );
+  if (list.length > cap) {
+    const overflow = list.splice(0, list.length - cap); // 古い順に溢れた分
+    _archiveUnattributedUsage(overflow);
   }
   console.warn(
     `[finalizeFilamentUsage] ${host}: 無効jobIdのため消費 ${used.toFixed(1)}mm を`
-    + ` pendingUnattributedUsage へ隔離（spool=${spool?.id ?? "?"}, reason=${reason}）`
+    + ` pendingUnattributedUsage へ隔離（spool=${spoolId ?? "?"}, reason=${reason},`
+    + ` source=${estimated ? "expected-fallback" : "measured"}）`
   );
+}
+
+/**
+ * 上限を超えた隔離レコードを per-host アーカイブへ集約する（総量・件数・期間を失わない）。
+ *
+ * @private
+ * @param {Array<Object>} records - 溢れた隔離レコード群
+ * @returns {void}
+ */
+function _archiveUnattributedUsage(records) {
+  if (!Array.isArray(records) || records.length === 0) return;
+  if (!monitorData.pendingUnattributedUsageArchive
+      || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+    monitorData.pendingUnattributedUsageArchive = {};
+  }
+  const arch = monitorData.pendingUnattributedUsageArchive;
+  for (const r of records) {
+    const h = r?.host ?? "_";
+    const a = arch[h] || (arch[h] = {
+      count: 0, totalUsedMm: 0, totalEstimatedMm: 0, firstAtEpochMs: null, lastAtEpochMs: null
+    });
+    a.count += 1;
+    a.totalUsedMm += Number(r?.usedMm) || 0;
+    a.totalEstimatedMm += Number(r?.estimatedUsedMm) || 0;
+    const t = Number(r?.detectedAtEpochMs) || 0;
+    if (t) {
+      if (a.firstAtEpochMs == null || t < a.firstAtEpochMs) a.firstAtEpochMs = t;
+      if (a.lastAtEpochMs == null || t > a.lastAtEpochMs) a.lastAtEpochMs = t;
+    }
+  }
 }
 
 /**
@@ -1637,6 +1683,8 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   const used = Number(lengthMm);
   const expectedLength = Number(s.currentJobExpectedLength ?? NaN);
   let resolvedUsed = used;
+  // ★ P1-2: この resolvedUsed が実測か見積りフォールバックかを追う（隔離の出所記録用）。
+  let _usedIsEstimated = false;
   if (
     !exact &&
     (isNaN(resolvedUsed) || resolvedUsed <= 0) &&
@@ -1652,6 +1700,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       { used: resolvedUsed, expectedLength, jobId: normalizedJobId }
     );
     resolvedUsed = expectedLength;
+    _usedIsEstimated = true;
   }
   // ★ Phase2A: 有効な jobId が無い場合は、jobId 由来の確定記録を一切作らずに
   //   消費量を隔離領域へ退避して即 return する。
@@ -1660,7 +1709,7 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   //   消費を残量へ直接反映すると、次の reconcile がそれを取りこぼして盛り戻してしまう。
   //   隔離レコードが差分を保持し、実IDが判明した時点で正規の帰属として解決する。
   if (validJobId == null) {
-    _quarantineUnattributedUsage(host, s, resolvedUsed, startLen);
+    _quarantineUnattributedUsage(host, s, resolvedUsed, startLen, "invalid-job-id", { estimated: _usedIsEstimated });
     // transient はクリアするが lastCompletedPrintID は設定しない（空/偽IDを確定IDにしない）。
     s.currentJobStartLength = null;
     s.currentJobExpectedLength = null;
@@ -2057,7 +2106,9 @@ export function getAttributionIssueIdsForHost(host) {
  * @returns {number} 課題件数
  */
 export function countAttributionIssuesForHost(host) {
-  return getAttributionIssueIdsForHost(host).size;
+  // 詳細レコード（履歴pending＋隔離）＋ 上限超過でアーカイブへ集約された件数。
+  const arch = monitorData.pendingUnattributedUsageArchive?.[host];
+  return getAttributionIssueIdsForHost(host).size + (Number(arch?.count) || 0);
 }
 
 /**

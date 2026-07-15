@@ -506,6 +506,7 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
     monitorData.usageHistory = [];
     monitorData.mountHistory = [];
     monitorData.pendingUnattributedUsage = [];
+    monitorData.pendingUnattributedUsageArchive = {};
   });
 
   it('無効jobId(0)は残量を減算せず消費を隔離し、確定記録を一切作らない', () => {
@@ -583,15 +584,54 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
     expect(sp.currentPrintID).toBe('');              // 不一致で transient クリア
   });
 
-  it('隔離レコードは最新200件に上限される（肥大化防止）', () => {
-    for (let i = 0; i < 210; i++) {
-      // 毎回 transient を戻して無効ID完了を繰り返す
+  it('P0-2: 同一完了の再送は冪等（増殖しない）／別完了は別レコード', () => {
+    finalizeFilamentUsage(100, 0, 'h', true);
+    // 同一 used/startLen の再送 → 増えない（未確認件数を水増ししない）
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(100, 0, 'h', true);
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    // used が異なれば別完了として別レコード
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(200, 0, 'h', true);
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(2);
+  });
+
+  it('P1-2: 実測は usedMm/confirmed、見積りフォールバックは estimatedUsedMm/estimated に分離', () => {
+    // used=5000 実測
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const meas = monitorData.pendingUnattributedUsage[0];
+    expect(meas.usedSource).toBe('measured');
+    expect(meas.confidence).toBe('confirmed');
+    expect(meas.usedMm).toBe(5000);
+    expect(meas.estimatedUsedMm).toBe(0);
+    // used=0 だが expected=5000 → フォールバック（見積り）
+    monitorData.pendingUnattributedUsage = [];
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentJobExpectedLength = 5000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(0, 0, 'h', true);
+    const est = monitorData.pendingUnattributedUsage[0];
+    expect(est.usedSource).toBe('expected-fallback');
+    expect(est.confidence).toBe('estimated');
+    expect(est.usedMm).toBe(0);            // 予定値を実消費にしない
+    expect(est.estimatedUsedMm).toBe(5000);
+  });
+
+  it('P0-2: 上限超過分は黙って捨てず per-host アーカイブへ集約（総量・件数保持）', () => {
+    monitorData.pendingUnattributedUsageArchive = {};
+    for (let i = 1; i <= 210; i++) {
       monitorData.filamentSpools[0].currentJobStartLength = 100000;
       monitorData.filamentSpools[0].currentJobExpectedLength = 5000;
       monitorData.filamentSpools[0].currentPrintID = '';
-      finalizeFilamentUsage(100, 0, 'h', true);
+      finalizeFilamentUsage(i, 0, 'h', true); // used=i で distinct fingerprint
     }
-    expect(monitorData.pendingUnattributedUsage.length).toBe(200);
+    expect(monitorData.pendingUnattributedUsage.length).toBe(200); // 詳細は最新200
+    const arch = monitorData.pendingUnattributedUsageArchive.h;
+    expect(arch.count).toBe(10);                       // 溢れた古い10件は集約（捨てない）
+    expect(arch.totalUsedMm).toBe(55);                 // used 1..10 の合計
+    expect(countAttributionIssuesForHost('h')).toBe(210); // バッジ=詳細200＋アーカイブ10
   });
 
   it('U4連携: 無効ID隔離→pendingUsageId付与→getAttributionIssueIdsForHostに出現（実コード経路）', () => {

@@ -276,6 +276,13 @@ export const monitorData = {
    */
   pendingUnattributedUsage: [],
   /**
+   * ★ P0-2: pendingUnattributedUsage の上限超過分を「黙って捨てず」集約保持する
+   * per-host アーカイブ（件数・合計消費・期間）。詳細レコードは失うが総量は失わない。
+   * host -> { count, totalUsedMm, totalEstimatedMm, firstAtEpochMs, lastAtEpochMs }
+   * @type {Object.<string, Object>}
+   */
+  pendingUnattributedUsageArchive: {},
+  /**
    * ADR-0005: フィラメント切れ/一時停止イベントの状態文脈（per-host）。
    * キーはホスト名、値は recordFilamentEvent が記録する文脈オブジェクト。
    * 交換操作の遡及帰属（稼働中=ジョブ全体 / 一時停止=分割）判定に用いる。
