@@ -173,6 +173,16 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     expect(monitorData.pendingUnattributedUsage).toEqual([{ host: "keep", usedMm: 3 }]);
   });
 
+  it("P0-1: pendingUnattributedUsageArchive（隔離集約）を親から全置換ミラー", () => {
+    if (!monitorData.pendingUnattributedUsageArchive) monitorData.pendingUnattributedUsageArchive = {};
+    monitorData.pendingUnattributedUsageArchive.stale = { count: 9 };
+    _applySharedFilamentState({
+      pendingUnattributedUsageArchive: { k1: { count: 3, totalUsedMm: 300 } },
+    });
+    expect(monitorData.pendingUnattributedUsageArchive.stale).toBeUndefined();
+    expect(monitorData.pendingUnattributedUsageArchive.k1).toEqual({ count: 3, totalUsedMm: 300 });
+  });
+
   it("在庫・プリセット・使用履歴を親からミラー（in-place 全置換・参照維持）", () => {
     const refInv = monitorData.filamentInventory;
     monitorData.filamentInventory.push({ modelId: "old", quantity: 9 });

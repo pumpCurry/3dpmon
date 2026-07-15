@@ -38,6 +38,9 @@ const monitorData = {
   favoritePresets: [],
   filamentInventory: [],
   mountHistory: [],
+  mountHistorySeq: 0,
+  pendingUnattributedUsage: [],
+  pendingUnattributedUsageArchive: {},
   filamentEventContext: {},
   hostSpoolMap: {},
   hostCameraToggle: {},
@@ -57,6 +60,9 @@ function resetMonitorData() {
   monitorData.filamentInventory = [];
   monitorData.mountHistory = [];
   monitorData.filamentEventContext = {};
+  monitorData.mountHistorySeq = 0;
+  monitorData.pendingUnattributedUsage = [];
+  monitorData.pendingUnattributedUsageArchive = {};
   monitorData.hostSpoolMap = {};
   monitorData.hostCameraToggle = {};
   monitorData.spoolSerialCounter = 0;
@@ -142,6 +148,42 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
 
     // runtimeData は永続化されない（復元後は ensureMachineData の空 {} 相当）
     expect(monitorData.machines['Ideaformer'].runtimeData?.lastError).toBeUndefined();
+  });
+
+  it('P0-1: pendingUnattributedUsage / archive / mountHistorySeq が往復で保持される', () => {
+    monitorData.pendingUnattributedUsage = [
+      { pendingUsageId: 'q1', completionFingerprint: 'fp1', host: 'h', usedMm: 5000,
+        estimatedUsedMm: 0, usedSource: 'measured', confidence: 'confirmed', reason: 'invalid-job-id' },
+    ];
+    monitorData.pendingUnattributedUsageArchive = {
+      h: { count: 3, totalUsedMm: 300, totalEstimatedMm: 0, firstAtEpochMs: 111, lastAtEpochMs: 222 },
+    };
+    monitorData.mountHistorySeq = 42;
+
+    saveUnifiedStorage(true);
+    resetMonitorData(); // リロード模擬（隔離・アーカイブ・seq を空へ）
+    restoreUnifiedStorage();
+
+    // 隔離レコードが復元される（再起動で消えない）
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    expect(monitorData.pendingUnattributedUsage[0].pendingUsageId).toBe('q1');
+    expect(monitorData.pendingUnattributedUsage[0].usedMm).toBe(5000);
+    // アーカイブ（総量・件数）が復元される
+    expect(monitorData.pendingUnattributedUsageArchive.h.count).toBe(3);
+    expect(monitorData.pendingUnattributedUsageArchive.h.totalUsedMm).toBe(300);
+    // watermark(seq) は後退しない
+    expect(monitorData.mountHistorySeq).toBe(42);
+  });
+
+  it('P0-1: 復元は pendingUsageId で冪等（二重復元でも増えない）', () => {
+    monitorData.pendingUnattributedUsage = [
+      { pendingUsageId: 'q1', completionFingerprint: 'fp1', host: 'h', usedMm: 5000 },
+    ];
+    saveUnifiedStorage(true);
+    // メモリを消さずに二重復元 → 同一 pendingUsageId は重複追加されない
+    restoreUnifiedStorage();
+    restoreUnifiedStorage();
+    expect(monitorData.pendingUnattributedUsage.filter(r => r.pendingUsageId === 'q1')).toHaveLength(1);
   });
 
   it('保存された per-host JSON は妥当で、未知フィールドを含んでも JSON.parse 可能（旧版が落ちない）', () => {

@@ -346,6 +346,16 @@ export function _applySharedFilamentState(shared) {
   _replaceArrayInPlace(monitorData.usageHistory, shared.usageHistory);
   // ★ Phase4: 未帰属消費の隔離領域を親からミラー（子は読み取り専用。欠落時は不変）。
   _replaceArrayInPlace(monitorData.pendingUnattributedUsage, shared.pendingUnattributedUsage);
+  // ★ P0-1: 隔離アーカイブ（per-host 集約オブジェクト）を全置換ミラー（子バッジ件数の親子一致）。
+  if (shared.pendingUnattributedUsageArchive && typeof shared.pendingUnattributedUsageArchive === "object") {
+    if (!monitorData.pendingUnattributedUsageArchive
+        || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+      monitorData.pendingUnattributedUsageArchive = {};
+    }
+    const arch = monitorData.pendingUnattributedUsageArchive;
+    for (const k of Object.keys(arch)) delete arch[k];
+    Object.assign(arch, shared.pendingUnattributedUsageArchive);
+  }
   if (shared.filamentEventContext && typeof shared.filamentEventContext === "object") {
     if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
       monitorData.filamentEventContext = {};

@@ -223,6 +223,42 @@ export async function importAllData(data) {
     monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
   }
 
+  // ── ★ P0-1(レビュー): mountHistorySeq(watermark) を最大値へ引き上げ（後退させない） ──
+  if (data.mountHistorySeq != null) {
+    monitorData.mountHistorySeq = Math.max(
+      Number(monitorData.mountHistorySeq) || 0, Number(data.mountHistorySeq) || 0
+    );
+  }
+
+  // ── ★ P0-1: pendingUnattributedUsage を pendingUsageId(無ければ completionFingerprint)で
+  //   重複排除しつつ追加。再起動/再import後も未帰属消費と未確認バッジ・通知集合が失われない。──
+  if (Array.isArray(data.pendingUnattributedUsage)) {
+    if (!Array.isArray(monitorData.pendingUnattributedUsage)) monitorData.pendingUnattributedUsage = [];
+    const seen = new Set(
+      monitorData.pendingUnattributedUsage.map(e => e?.pendingUsageId ?? e?.completionFingerprint)
+    );
+    for (const r of data.pendingUnattributedUsage) {
+      const key = r?.pendingUsageId ?? r?.completionFingerprint;
+      if (r && key != null && !seen.has(key)) {
+        monitorData.pendingUnattributedUsage.push(r);
+        seen.add(key);
+      }
+    }
+  }
+
+  // ── ★ P0-1: 隔離アーカイブ（per-host 集約）は未保持ホストのみ取り込む（二重集計回避） ──
+  if (data.pendingUnattributedUsageArchive && typeof data.pendingUnattributedUsageArchive === "object") {
+    if (!monitorData.pendingUnattributedUsageArchive
+        || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+      monitorData.pendingUnattributedUsageArchive = {};
+    }
+    for (const [h, a] of Object.entries(data.pendingUnattributedUsageArchive)) {
+      if (a && !monitorData.pendingUnattributedUsageArchive[h]) {
+        monitorData.pendingUnattributedUsageArchive[h] = { ...a };
+      }
+    }
+  }
+
   // ── プリセット: presetId ベースで新規のみ追加 (ユーザー編集版を保持) ──
   if (Array.isArray(data.filamentPresets)) {
     const existingIds = new Set(
@@ -614,8 +650,10 @@ export function setStorageNamespace(ns) {
 const LS_GLOBAL_FIELDS = [
   "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
   "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
-  // ★ ADR-0004: フィラメント装着履歴
-  "mountHistory",
+  // ★ ADR-0004: フィラメント装着履歴 ＋ watermark(seq)
+  "mountHistory", "mountHistorySeq",
+  // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
+  "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
   // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
   "filamentEventContext",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
@@ -830,8 +868,12 @@ function _flushStorage() {
       queueSharedWrite("hiddenPresets",      monitorData.hiddenPresets);
       queueSharedWrite("favoritePresets",    monitorData.favoritePresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
-      // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）
+      // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）＋ watermark(seq)
       queueSharedWrite("mountHistory",       monitorData.mountHistory);
+      queueSharedWrite("mountHistorySeq",    monitorData.mountHistorySeq);
+      // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
+      queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
+      queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
       // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
@@ -1134,6 +1176,42 @@ function _restoreFromData(shared, machines) {
       }
     }
     monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
+  }
+
+  // ★ P0-1(レビュー): mountHistorySeq(watermark) を最大値へ引き上げ（後退させない）
+  if (shared && shared.mountHistorySeq != null) {
+    monitorData.mountHistorySeq = Math.max(
+      Number(monitorData.mountHistorySeq) || 0, Number(shared.mountHistorySeq) || 0
+    );
+  }
+
+  // ★ P0-1: pendingUnattributedUsage を pendingUsageId(無ければ fingerprint)で重複排除追加。
+  //   再起動後も未帰属消費・未確認バッジ・通知集合が失われないようにする。
+  if (Array.isArray(shared?.pendingUnattributedUsage)) {
+    if (!Array.isArray(monitorData.pendingUnattributedUsage)) monitorData.pendingUnattributedUsage = [];
+    const seen = new Set(
+      monitorData.pendingUnattributedUsage.map(e => e?.pendingUsageId ?? e?.completionFingerprint)
+    );
+    for (const r of shared.pendingUnattributedUsage) {
+      const key = r?.pendingUsageId ?? r?.completionFingerprint;
+      if (r && key != null && !seen.has(key)) {
+        monitorData.pendingUnattributedUsage.push(r);
+        seen.add(key);
+      }
+    }
+  }
+
+  // ★ P0-1: 隔離アーカイブ（per-host 集約）は未保持ホストのみ取り込む（二重集計回避）。
+  if (shared?.pendingUnattributedUsageArchive && typeof shared.pendingUnattributedUsageArchive === "object") {
+    if (!monitorData.pendingUnattributedUsageArchive
+        || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+      monitorData.pendingUnattributedUsageArchive = {};
+    }
+    for (const [h, a] of Object.entries(shared.pendingUnattributedUsageArchive)) {
+      if (a && !monitorData.pendingUnattributedUsageArchive[h]) {
+        monitorData.pendingUnattributedUsageArchive[h] = { ...a };
+      }
+    }
   }
 
   // ★ filamentInventory: IDベースマージ

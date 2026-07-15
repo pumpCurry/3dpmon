@@ -599,11 +599,15 @@ function _buildDelta() {
   // ★ Phase4: pendingUnattributedUsage（無効jobId等で未帰属となった消費の隔離領域）の
   //   変更検出。子（サテライト/読み取り専用）でも「未確認の消費」を親と一致して可視化する
   //   ため、変化時のみ全置換で配信する（mountHistory と同じく低頻度変化＝別ハッシュ）。
-  const pendingHash = _quickHash(monitorData.pendingUnattributedUsage || []);
+  const pendingHash = _quickHash([
+    monitorData.pendingUnattributedUsage || [],
+    monitorData.pendingUnattributedUsageArchive || {}
+  ]);
   if (pendingHash !== _prevPendingHash) {
     _prevPendingHash = pendingHash;
     sharedDelta = sharedDelta || {};
     sharedDelta.pendingUnattributedUsage = monitorData.pendingUnattributedUsage || [];
+    sharedDelta.pendingUnattributedUsageArchive = monitorData.pendingUnattributedUsageArchive || {};
     hasChanges = true;
   }
 
@@ -711,8 +715,9 @@ function _buildFullSnapshot() {
     filamentSpools: monitorData.filamentSpools,
     hostSpoolMap: monitorData.hostSpoolMap,
     mountHistory: monitorData.mountHistory || [],
-    // ★ Phase4: 未帰属消費の隔離領域も同梱（親=権威、子は読み取り専用で全置換ミラー）。
+    // ★ Phase4/P0-1: 未帰属消費の隔離領域とアーカイブも同梱（親=権威、子は読み取り専用ミラー）。
     pendingUnattributedUsage: monitorData.pendingUnattributedUsage || [],
+    pendingUnattributedUsageArchive: monitorData.pendingUnattributedUsageArchive || {},
     // ★ 監査 P0(第2報): フィラメント補助ドメインをスナップショットにも同梱（親=権威）。
     filamentInventory: monitorData.filamentInventory || [],
     userPresets: monitorData.userPresets || [],
