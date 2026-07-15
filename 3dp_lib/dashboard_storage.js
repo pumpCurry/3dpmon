@@ -210,14 +210,16 @@ export async function importAllData(data) {
     monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
   }
 
-  // ── ADR-0004 mountHistory: 装着履歴を evId ベースで重複排除追加 ──
+  // ── ADR-0004 mountHistory: 装着履歴を (opId||evId) ベースで重複排除追加 ──
+  //   ★ P1-1(レビュー): 同一操作が再送で別 evId(UUID) になっても opId で1件に畳む。
   if (Array.isArray(data.mountHistory)) {
     if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
-    const existingIds = new Set(monitorData.mountHistory.map(e => e?.evId));
+    const existingIds = new Set(monitorData.mountHistory.map(e => e?.opId || e?.evId));
     for (const ev of data.mountHistory) {
-      if (ev && ev.evId != null && !existingIds.has(ev.evId)) {
+      const key = ev?.opId || ev?.evId;
+      if (ev && key != null && !existingIds.has(key)) {
         monitorData.mountHistory.push(ev);
-        existingIds.add(ev.evId);
+        existingIds.add(key);
       }
     }
     monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
@@ -1161,17 +1163,18 @@ function _restoreFromData(shared, machines) {
   }
   trimUsageHistory();
 
-  // ★ ADR-0004 mountHistory: 装着履歴を evId ベースでマージ（追記専用ログ・全クリアしない）
+  // ★ ADR-0004/P1-1 mountHistory: (opId||evId) ベースでマージ（追記専用ログ・全クリアしない）
   if (Array.isArray(shared?.mountHistory)) {
     if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
     if (monitorData.mountHistory.length === 0) {
       monitorData.mountHistory = shared.mountHistory.slice();
     } else {
-      const existingIds = new Set(monitorData.mountHistory.map(e => e?.evId));
+      const existingIds = new Set(monitorData.mountHistory.map(e => e?.opId || e?.evId));
       for (const ev of shared.mountHistory) {
-        if (ev && !existingIds.has(ev.evId)) {
+        const key = ev?.opId || ev?.evId;
+        if (ev && key != null && !existingIds.has(key)) {
           monitorData.mountHistory.push(ev);
-          existingIds.add(ev.evId);
+          existingIds.add(key);
         }
       }
     }

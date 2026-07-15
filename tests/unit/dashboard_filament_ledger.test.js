@@ -560,6 +560,17 @@ describe("ADR-0005 evId 重複ガード", () => {
     expect(unmounts).toHaveLength(1);
   });
 
+  it("P1-1: 明示 opId は ts が違っても冪等（再送で別tsでも1件）", () => {
+    // 上位RPCが操作開始点で生成した安定 opId を渡す。ts が異なる再送でも同一 opId → 1件。
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100, sinceJobId: 0, ts: 1000, opId: "op-STABLE" });
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 999, sinceJobId: 9, ts: 5000, opId: "op-STABLE" });
+    const mounts = mockMonitorData.mountHistory.filter(e => e.type === "mount" && e.spoolId === "sp1");
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0].opId).toBe("op-STABLE");
+    expect(mounts[0].intervalId).toBe("op-STABLE"); // intervalId は opId（安定）
+    expect(mounts[0].anchorRemainingMm).toBe(100);  // 先勝ち
+  });
+
   it("Phase2B: 旧イベント(opId無し・evId=旧composite)とも冪等突合して二重区間を防ぐ", () => {
     // Phase2B 以前に保存された既存 mountHistory を模す（opId 無し、evId が composite）。
     mockMonitorData.mountHistory.push({

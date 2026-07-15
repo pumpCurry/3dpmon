@@ -92,7 +92,7 @@ vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   exportAllIdb: vi.fn(), importAllIdb: vi.fn(),
 }));
 
-const { saveUnifiedStorage, restoreUnifiedStorage } = await import('../../3dp_lib/dashboard_storage.js');
+const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await import('../../3dp_lib/dashboard_storage.js');
 
 beforeEach(() => {
   globalThis.localStorage.clear();
@@ -173,6 +173,19 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.pendingUnattributedUsageArchive.h.totalUsedMm).toBe(300);
     // watermark(seq) は後退しない
     expect(monitorData.mountHistorySeq).toBe(42);
+  });
+
+  it('P1-1: import は同一 opId(別evId)の mount を1件に畳む', async () => {
+    monitorData.mountHistory = [{ opId: 'op1', evId: 'A', type: 'mount', spoolId: 's', ts: 1 }];
+    await importAllData({
+      mountHistory: [
+        { opId: 'op1', evId: 'B', type: 'mount', spoolId: 's', ts: 2 }, // 同一opId・別evId → 畳む
+        { opId: 'op2', evId: 'C', type: 'mount', spoolId: 's', ts: 3 }, // 別opId → 追加
+      ],
+    });
+    const opIds = monitorData.mountHistory.map(e => e.opId);
+    expect(opIds.filter(x => x === 'op1')).toHaveLength(1); // op1 は再送されても1件
+    expect(opIds).toContain('op2');
   });
 
   it('P0-1: 復元は pendingUsageId で冪等（二重復元でも増えない）', () => {

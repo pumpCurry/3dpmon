@@ -135,16 +135,17 @@ function _isCompleted(job) {
  * @param {number} [params.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記した MountEvent
  */
-export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts = wallNowMs(), boundaryStatus = "known" } = {}) {
+export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts = wallNowMs(), boundaryStatus = "known", opId: providedOpId } = {}) {
   const list = _getMountHistory();
-  // ★ Phase2B: ID の役割分離。
-  //   - opId : 再送冪等キー（内容ベースで安定＝同秒二重発火・relay再送・再importを畳む）。
+  // ★ Phase2B/P1-1: ID の役割分離。
+  //   - opId : 再送冪等キー。上位（RPC/操作）が操作開始点で生成した安定IDを渡せる。
+  //     渡されない場合のみ内容ベースの composite へフォールバック（ts 依存は最終手段）。
   //   - evId : 一意識別子（UUID。壁時計非依存。順序も担わない）。
   //   - seq  : 親権威の処理順（採番）。
   //   - ts   : 監査時刻（wall）。順序・冪等・識別には使わない。
   //   intervalId は opId（=安定キー）を用い、UUID の evId が再import で変わっても
   //   unmount/reanchor の targetIntervalId 参照が壊れないようにする。
-  const opId = `mount_${spoolId}_${ts}`;
+  const opId = providedOpId || `mount_${spoolId}_${ts}`;
   // ★ ADR-0005 P7: 冪等ガード。同一 opId の二重追記は 1件に畳む（二重区間の発生を防ぐ）。
   //   旧イベント（opId 無し・evId=旧composite）とも突合するため (opId||evId) で比較する。
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
@@ -192,11 +193,11 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
  * @param {number} [p.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記イベント
  */
-export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRemainingMm, sinceJobId, boundaryStatus = "known", sourceJobId, reason, ts = wallNowMs() } = {}) {
+export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRemainingMm, sinceJobId, boundaryStatus = "known", sourceJobId, reason, ts = wallNowMs(), opId: providedOpId } = {}) {
   const list = _getMountHistory();
-  // ★ Phase2B: opId=再送冪等キー（同一区間×同一由来ジョブの再アンカーを1件に畳む＝
-  //   多重通知/relay再送/再起動に強い）。evId=一意識別子(UUID)。
-  const opId = `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
+  // ★ Phase2B/P1-1: opId=再送冪等キー。上位提供があればそれを、無ければ内容ベース
+  //   （sourceJobId があれば ts 非依存、無ければ ts フォールバック）。
+  const opId = providedOpId || `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
@@ -235,11 +236,11 @@ export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRem
  * @param {number} [p.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記イベント
  */
-export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts = wallNowMs() } = {}) {
+export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts = wallNowMs(), opId: providedOpId } = {}) {
   const list = _getMountHistory();
   const ids = Array.isArray(targetIntervalIds) ? targetIntervalIds.slice().sort() : [];
-  // ★ Phase2B: opId=再送冪等キー（同一対象群×時刻の修復を畳む）。evId=一意識別子(UUID)。
-  const opId = `supersede_${spoolId}_${ids.join("+")}_${ts}`;
+  // ★ Phase2B/P1-1: opId=再送冪等キー。上位提供が無ければ内容ベース composite へフォールバック。
+  const opId = providedOpId || `supersede_${spoolId}_${ids.join("+")}_${ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
@@ -269,10 +270,10 @@ export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivi
  * @param {number} [params.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記した MountEvent
  */
-export function appendUnmountEvent({ host, spoolId, untilJobId, ts = wallNowMs(), targetIntervalId = null } = {}) {
+export function appendUnmountEvent({ host, spoolId, untilJobId, ts = wallNowMs(), targetIntervalId = null, opId: providedOpId } = {}) {
   const list = _getMountHistory();
-  // ★ Phase2B: opId=再送冪等キー（mount と同じく同秒二重追記を畳む）。evId=一意識別子(UUID)。
-  const opId = `unmount_${spoolId}_${ts}`;
+  // ★ Phase2B/P1-1: opId=再送冪等キー。上位提供が無ければ内容ベース composite へフォールバック。
+  const opId = providedOpId || `unmount_${spoolId}_${ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
   const ev = {
