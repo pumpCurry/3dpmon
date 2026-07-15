@@ -135,7 +135,7 @@ function _isCompleted(job) {
  * @param {number} [params.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記した MountEvent
  */
-export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts = wallNowMs(), boundaryStatus = "known", opId: providedOpId } = {}) {
+export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts = wallNowMs(), boundaryStatus = "known", opId: providedOpId, force = false } = {}) {
   const list = _getMountHistory();
   // ★ Phase2B/P1-1: ID の役割分離。
   //   - opId : 再送冪等キー。上位（RPC/操作）が操作開始点で生成した安定IDを渡せる。
@@ -150,6 +150,16 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
   //   旧イベント（opId 無し・evId=旧composite）とも突合するため (opId||evId) で比較する。
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
+  // ★ RR-5(レビュー2): open 区間最大1を API で保証する。既に open がある（status!=="none"）
+  //   状態で新 mount を追記しない（通常操作だけでは2重 open を作れない＝ambiguous を作らない）。
+  //   force:true は明示修復フロー用のエスケープ。
+  if (!force) {
+    const _st = getMountIntervalStatus(spoolId, host);
+    if (_st.status !== "none") {
+      console.warn(`[appendMountEvent] ${host}/${spoolId}: 既存区間 status=${_st.status} のため mount 追記を拒否（open最大1）`);
+      return null;
+    }
+  }
   const ev = {
     evId: randomEventId(),
     opId,
@@ -200,10 +210,14 @@ export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRem
   const opId = providedOpId || `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
-  // ★ P0-4(レビュー): 対象区間が open として存在することを追記前に検証する。存在しない／
-  //   クローズ済み／superseded なら追記しない（invalid-reference を残して projection を
-  //   corrupt にしない＝一度混入すると supersede でも消せない事故を防ぐ）。
-  if (targetIntervalId != null) {
+  // ★ P0-4/RR-5(レビュー): reanchor は targetIntervalId 必須。対象が open として存在することを
+  //   追記前に検証する。null／存在しない／クローズ済み／superseded なら追記しない
+  //   （invalid-reference を残して projection を corrupt にしない）。
+  if (targetIntervalId == null) {
+    console.warn(`[appendReanchorEvent] ${host}/${spoolId}: targetIntervalId 未指定のため追記を拒否`);
+    return null;
+  }
+  {
     const proj = _buildIntervalProjection(spoolId);
     const target = proj.byId.get(targetIntervalId);
     if (!target || target.superseded || target.untilJobId != null) {
@@ -282,14 +296,35 @@ export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivi
  * @param {string} params.spoolId - スプールID
  * @param {number|string} params.untilJobId - 取外し時点の最後の完了 printId（区間の上限・包含）
  * @param {number} [params.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
- * @returns {Object} 追記した MountEvent
+ * @returns {?Object} 追記した MountEvent（対象が open として解決できない場合は null）
  */
-export function appendUnmountEvent({ host, spoolId, untilJobId, ts = wallNowMs(), targetIntervalId = null, opId: providedOpId } = {}) {
+export function appendUnmountEvent({ host, spoolId, untilJobId, ts = wallNowMs(), targetIntervalId = null, opId: providedOpId, force = false } = {}) {
   const list = _getMountHistory();
   // ★ Phase2B/P1-1: opId=再送冪等キー。上位提供が無ければ内容ベース composite へフォールバック。
   const opId = providedOpId || `unmount_${spoolId}_${ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
+  // ★ RR-5(レビュー2): 閉じる区間を確定させる。対象未指定(null)は「唯一の open」へ解決し、
+  //   ambiguous/corrupt/none では追記しない（旧 projection の「最新openを暗黙選択」に落ちない
+  //   ＝複数open時に別区間を誤クローズしない）。明示指定時は対象が open であることを検証する。
+  if (!force) {
+    if (targetIntervalId == null) {
+      const _st = getMountIntervalStatus(spoolId, host);
+      if (_st.status === "ok" && _st.openInterval) {
+        targetIntervalId = _st.openInterval.intervalId; // 一意 open を明示化
+      } else {
+        console.warn(`[appendUnmountEvent] ${host}/${spoolId}: 対象未指定かつ open が一意でない(status=${_st.status})ため unmount 追記を拒否`);
+        return null;
+      }
+    } else {
+      const _proj = _buildIntervalProjection(spoolId);
+      const _t = _proj.byId.get(targetIntervalId);
+      if (!_t || _t.superseded || _t.untilJobId != null) {
+        console.warn(`[appendUnmountEvent] targetIntervalId=${targetIntervalId} が open でないため unmount 追記を拒否（spoolId=${spoolId}）`);
+        return null;
+      }
+    }
+  }
   const ev = {
     evId: randomEventId(),
     opId,

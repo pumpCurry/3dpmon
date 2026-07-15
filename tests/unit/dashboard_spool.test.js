@@ -1005,4 +1005,23 @@ describe("catchUp/finalize と mount区間の結合(レビュー第2弾)", () =>
     // mount は増えていない（open 二重化なし）
     expect(monitorData.mountHistory.filter(e => e.type === "mount").length).toBe(1);
   });
+
+  it("RR-3: 見積りフォールバック(実測なし)では unknown→known へ昇格しない", () => {
+    const S = {
+      id: "S", name: "S", serialNo: 1, remainingLengthMm: 300000,
+      currentPrintID: "1005", currentJobStartLength: 300000, currentJobExpectedLength: 40000,
+      totalLengthMm: 330000, usedLengthLog: [],
+    };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    monitorData.machines = { h: { printStore: { history: [] }, historyData: [] } };
+    monitorData.mountHistory = [
+      { evId: "m", intervalId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "unknown" }
+    ];
+    loadHistory.mockReturnValue([]);
+    finalizeFilamentUsage(0, "1005", "h", true); // 実測0 → 見積り40000へフォールバック
+    // 見積り消費では known 昇格しない（後から実測が判明したとき再計算対象外にしない）
+    const reanchorKnown = monitorData.mountHistory.filter(e => e.type === "reanchor" && e.boundaryStatus === "known");
+    expect(reanchorKnown.length).toBe(0);
+  });
 });

@@ -1164,8 +1164,13 @@ export function revertInferredSpool(id) {
   } catch (e) { /* noop */ }
 
   // inferred を取り外し（mountHistory に unmount 追記）＋削除
+  //   ★ RR-5: 対象区間を明示（唯一 open へ解決。ambiguous/corrupt では unmount しない）。
   if (host) {
-    appendUnmountEvent({ host, spoolId: inferred.id, untilJobId: _latestCompletedPrintId(host), ts: nowTs });
+    const _open = getOpenMountInterval(inferred.id, host);
+    appendUnmountEvent({
+      host, spoolId: inferred.id, untilJobId: _latestCompletedPrintId(host),
+      targetIntervalId: _open ? _open.intervalId : null, ts: nowTs
+    });
   }
   inferred.deleted = true; inferred.isDeleted = true;
   inferred.isActive = false; inferred.isInUse = false;
@@ -1827,11 +1832,14 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   //     旧 unknown が復活する事故＝P0-1 を防ぐ。交換の境界確定は setCurrentSpoolId が担う）。
   //   - 有効な正の jobId があるときのみ（無効IDで known/sinceJobId=0 を作り、過去全履歴を
   //     減算する退行＝P0-2 を防ぐ）。
+  //   - ★ 見積りフォールバック(_usedIsEstimated)では昇格しない（レビュー2 P0-3）。
+  //     予定使用量で known 昇格＋sinceJobId 前進すると、後から実測が判明しても当該ジョブが
+  //     新 sinceJobId 以下で再計算対象外となり、見積り誤差がアンカーへ恒久固定される。
   //   - open 区間が正確に1件(getOpenMountInterval が返す＝status ok)かつ unknown のときのみ。
   //   新しい mount を追加せず reanchor で対象区間を更新する（open を二重化しない＝P0-1）。
   try {
     const _reanchorJobId = Number(normalizedJobId);
-    if (!exact && resolvedUsed > 0 && Number.isFinite(_reanchorJobId) && _reanchorJobId > 0) {
+    if (!exact && !_usedIsEstimated && resolvedUsed > 0 && Number.isFinite(_reanchorJobId) && _reanchorJobId > 0) {
       const iv = getOpenMountInterval(s.id, host);
       if (iv && iv.boundaryStatus === "unknown") {
         appendReanchorEvent({
