@@ -663,9 +663,13 @@ function _upsertSplitReel(host, jobId, reelSpool, usedMm) {
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
  * @param {string} hostname - 対象ホスト名
+ * @param {Object} [opts]
+ * @param {string} [opts.operationId] - ★ RR-4: この交換操作1回の安定ID（RPC/操作開始点で採番）。
+ *   unmount/mount の各イベント opId をこの基底から派生させ、再送で二重区間を作らない。
+ *   未指定時はローカル操作としてランダム基底を採番する。
  * @returns {boolean} 設定成功時 true、既に他ホストに装着済みの場合 false
  */
-export function setCurrentSpoolId(id, hostname) {
+export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
   // ★ hostname ガード: 空/undefined/PLACEHOLDER は即拒否（データ破壊防止）
   if (!hostname || hostname === "_$_NO_MACHINE_$_") {
     console.error(`[IMPL_ERROR] setCurrentSpoolId: 異常な機器指定 hostname="${hostname}", id="${id}"`);
@@ -793,6 +797,9 @@ export function setCurrentSpoolId(id, hostname) {
 
   // ★ ADR-0004: 単調増加 ts（同一 tick で mount/unmount を区別できるよう ts と evId を分ける）
   const nowTs = Date.now();
+  // ★ RR-4: 交換操作1回の安定基底ID。unmount/mount で別々の派生 opId を使う
+  //   （同一 opId を両方へ渡すとグローバル重複判定で後者が消えるため type ごとに派生させる）。
+  const _opBase = operationId || randomEventId();
 
   if (prevSpool) {
     if (Array.isArray(prevSpool.printIdRanges) && prevSpool.printIdRanges.length) {
@@ -813,6 +820,7 @@ export function setCurrentSpoolId(id, hostname) {
         spoolId: prevSpool.id,
         untilJobId: (_midPrintSwap && _mode === "split") ? _J : _Lc,
         targetIntervalId: _prevOpen ? _prevOpen.intervalId : null,
+        opId: `${_opBase}:unmount:${prevSpool.id}`,
         ts: nowTs
       });
     }
@@ -843,6 +851,7 @@ export function setCurrentSpoolId(id, hostname) {
           ? (Number(newSpool.remainingLengthMm) || 0) + _usedAtSwap
           : newSpool.remainingLengthMm,
         sinceJobId: _Lc,
+        opId: `${_opBase}:mount:${newSpool.id}`,
         ts: nowTs + 1
       });
     }

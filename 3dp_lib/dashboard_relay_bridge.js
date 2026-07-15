@@ -240,13 +240,14 @@ export async function handleRelayFilamentAction(action, payload) {
     switch (action) {
       case "mount":
         if (payload.spoolId && payload.hostname) {
-          spoolMod.setCurrentSpoolId(payload.spoolId, payload.hostname);
+          // ★ RR-4: 受信 RPC の _opId を交換操作の基底IDとして親の台帳追記へ伝播する。
+          spoolMod.setCurrentSpoolId(payload.spoolId, payload.hostname, { operationId: payload._opId });
           saveUnifiedStorage();
         }
         break;
       case "unmount":
         if (payload.hostname) {
-          spoolMod.setCurrentSpoolId(null, payload.hostname);
+          spoolMod.setCurrentSpoolId(null, payload.hostname, { operationId: payload._opId });
           saveUnifiedStorage();
         }
         break;

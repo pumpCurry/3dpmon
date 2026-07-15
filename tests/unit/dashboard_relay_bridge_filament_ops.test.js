@@ -72,14 +72,15 @@ describe("handleRelayFilamentAction — 親側 RPC ディスパッチ", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("mount → setCurrentSpoolId + 保存", async () => {
-    await handleRelayFilamentAction("mount", { spoolId: "A", hostname: "h1" });
-    expect(spool.setCurrentSpoolId).toHaveBeenCalledWith("A", "h1");
+    await handleRelayFilamentAction("mount", { spoolId: "A", hostname: "h1", _opId: "op-77" });
+    // ★ RR-4: 受信 RPC の _opId を operationId として伝播する
+    expect(spool.setCurrentSpoolId).toHaveBeenCalledWith("A", "h1", { operationId: "op-77" });
     expect(saveUnifiedStorage).toHaveBeenCalled();
   });
 
   it("unmount → setCurrentSpoolId(null) + 保存", async () => {
-    await handleRelayFilamentAction("unmount", { hostname: "h1" });
-    expect(spool.setCurrentSpoolId).toHaveBeenCalledWith(null, "h1");
+    await handleRelayFilamentAction("unmount", { hostname: "h1", _opId: "op-88" });
+    expect(spool.setCurrentSpoolId).toHaveBeenCalledWith(null, "h1", { operationId: "op-88" });
     expect(saveUnifiedStorage).toHaveBeenCalled();
   });
 

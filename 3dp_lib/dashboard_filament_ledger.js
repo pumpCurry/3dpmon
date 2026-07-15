@@ -149,7 +149,11 @@ export function appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId,
   // ★ ADR-0005 P7: 冪等ガード。同一 opId の二重追記は 1件に畳む（二重区間の発生を防ぐ）。
   //   旧イベント（opId 無し・evId=旧composite）とも突合するため (opId||evId) で比較する。
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
-  if (dup) return dup;
+  if (dup) {
+    // ★ RR-4: 同一 opId で異なる type が来たら opId 再利用のバグを隠さず警告する。
+    if (dup.type !== "mount") console.warn(`[appendMountEvent] opId=${opId} が既存 type=${dup.type} と衝突（opId 再利用の疑い）`);
+    return dup;
+  }
   // ★ RR-5(レビュー2): open 区間最大1を API で保証する。既に open がある（status!=="none"）
   //   状態で新 mount を追記しない（通常操作だけでは2重 open を作れない＝ambiguous を作らない）。
   //   force:true は明示修復フロー用のエスケープ。
@@ -303,7 +307,10 @@ export function appendUnmountEvent({ host, spoolId, untilJobId, ts = wallNowMs()
   // ★ Phase2B/P1-1: opId=再送冪等キー。上位提供が無ければ内容ベース composite へフォールバック。
   const opId = providedOpId || `unmount_${spoolId}_${ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
-  if (dup) return dup;
+  if (dup) {
+    if (dup.type !== "unmount") console.warn(`[appendUnmountEvent] opId=${opId} が既存 type=${dup.type} と衝突（opId 再利用の疑い）`);
+    return dup;
+  }
   // ★ RR-5(レビュー2): 閉じる区間を確定させる。対象未指定(null)は「唯一の open」へ解決し、
   //   ambiguous/corrupt/none では追記しない（旧 projection の「最新openを暗黙選択」に落ちない
   //   ＝複数open時に別区間を誤クローズしない）。明示指定時は対象が open であることを検証する。
