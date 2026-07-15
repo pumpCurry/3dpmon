@@ -1132,6 +1132,60 @@ describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
     expect(s2).toBe("b");
   });
 
+  it("#410-2: appendSupersedeEvent は不正な survivor を拒否（実在しない/クローズ済み）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    const iv = getSpoolIntervals("S")[0].intervalId;
+    // survivor が実在しない
+    expect(appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: [iv], survivingIntervalId: "ghost", ts: 2 })).toBeNull();
+    // supersede が追記されていない
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "supersede")).toHaveLength(0);
+  });
+
+  it("#410-2: 修復後 open が1件にならない supersede を拒否（未対象openが残る）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    // 3 open を直接注入（破損状態）
+    mockMonitorData.mountHistory.push(
+      { evId: "a", opId: "a", intervalId: "a", seq: 1, ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "known" },
+      { evId: "b", opId: "b", intervalId: "b", seq: 2, ts: 2, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 5, boundaryStatus: "known" },
+      { evId: "c", opId: "c", intervalId: "c", seq: 3, ts: 3, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 250000, sinceJobId: 9, boundaryStatus: "known" }
+    );
+    // a のみ対象・survivor=b → c が未対象 open のまま残る → 拒否
+    expect(appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a"], survivingIntervalId: "b", ts: 4 })).toBeNull();
+    // a,c 対象・survivor=b → 修復後 open は b のみ → 成功
+    const ok = appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a", "c"], survivingIntervalId: "b", ts: 5 });
+    expect(ok).not.toBeNull();
+    expect(getMountIntervalStatus("S", "h").openInterval.intervalId).toBe("b");
+  });
+
+  it("#410-3: mountHistory を serialize/reload しても survivor が同じ（決定論）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    mockMonitorData.mountHistory.push(
+      { evId: "a", opId: "a", intervalId: "a", seq: 1, ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "known" },
+      { evId: "b", opId: "b", intervalId: "b", seq: 2, ts: 2, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 5, boundaryStatus: "known" }
+    );
+    appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a", "b"], survivingIntervalId: "b", ts: 3 });
+    const before = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    // serialize→reload 相当（配列順もシャッフルして順序非依存を確認）
+    const reloaded = JSON.parse(JSON.stringify(mockMonitorData.mountHistory)).reverse();
+    mockMonitorData.mountHistory = reloaded;
+    const after = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    expect(after).toBe(before);
+    expect(after).toBe("b");
+  });
+
+  it("#410-3: 同一seq・同一tsでも evId tie-break で順序決定的", () => {
+    addSpool({ id: "S", totalLengthMm: 100000, remainingLengthMm: 100000 });
+    // 同一 seq・同一 ts の2イベント（配列順を変えても projection 結果が同じ）
+    const ev1 = { evId: "z-mount", opId: "z", intervalId: "z", seq: 5, ts: 100, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 100000, sinceJobId: 0, boundaryStatus: "known" };
+    const ev2 = { evId: "a-unmount", opId: "a", seq: 5, ts: 100, type: "unmount", host: "h", spoolId: "S", untilJobId: 3, targetIntervalId: "z" };
+    mockMonitorData.mountHistory = [ev1, ev2];
+    const s1 = getMountIntervalStatus("S", "h").status;
+    mockMonitorData.mountHistory = [ev2, ev1]; // 配列順反転
+    const s2 = getMountIntervalStatus("S", "h").status;
+    expect(s1).toBe(s2); // 決定論（配列順に依存しない）
+  });
+
   it("P0-4: appendReanchorEvent は存在しない対象への追記を拒否する（corrupt を作らない）", () => {
     addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
     appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });

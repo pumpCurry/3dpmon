@@ -268,13 +268,32 @@ export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRem
  * @param {number} [p.ts] - イベント時刻 ms（監査用。省略時 wallNowMs）
  * @returns {Object} 追記イベント
  */
-export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts = wallNowMs(), opId: providedOpId } = {}) {
+export function appendSupersedeEvent({ host, spoolId, targetIntervalIds, survivingIntervalId = null, reason, ts = wallNowMs(), opId: providedOpId, force = false } = {}) {
   const list = _getMountHistory();
   const ids = Array.isArray(targetIntervalIds) ? targetIntervalIds.slice().sort() : [];
   // ★ Phase2B/P1-1: opId=再送冪等キー。上位提供が無ければ内容ベース composite へフォールバック。
   const opId = providedOpId || `supersede_${spoolId}_${ids.join("+")}_${ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
+  // ★ #410-2(レビュー3): survivor を指定するなら、追記前に入力整合性を検証する。
+  //   survivor が実在・open・非superseded・host一致で、かつ修復後 open が正確に1件(=survivor)に
+  //   なることを保証する（「たまたま1 openになる」ではなく survivor が保証される）。
+  if (!force && survivingIntervalId != null) {
+    const proj = _buildIntervalProjection(spoolId);
+    const surv = proj.byId.get(survivingIntervalId);
+    if (!surv || surv.superseded || surv.untilJobId != null || surv.host !== host) {
+      console.warn(`[appendSupersedeEvent] survivingIntervalId=${survivingIntervalId} が有効な open 区間でない → 拒否(supersede-invalid-survivor)`);
+      return null;
+    }
+    const targetSet = new Set(ids);
+    const remainingOpen = proj.intervals.filter(iv =>
+      iv.host === host && !iv.superseded && iv.untilJobId == null
+      && iv.intervalId !== survivingIntervalId && !targetSet.has(iv.intervalId));
+    if (remainingOpen.length > 0) {
+      console.warn(`[appendSupersedeEvent] 修復後 open が1件にならない（未対象 open ${remainingOpen.length}件）→ 拒否(supersede-repair-incomplete)`);
+      return null;
+    }
+  }
   const ev = {
     evId: randomEventId(),
     opId,
@@ -423,10 +442,17 @@ function _buildIntervalProjection(spoolId) {
     .filter(e => e && e.spoolId === spoolId
       && (e.type === "mount" || e.type === "unmount" || e.type === "reanchor" || e.type === "supersede"))
     .slice()
+    // ★ #410-3(レビュー3): 全順序ソート。seq→ts→evId(||opId) の3段 tie-break で、
+    //   同一 seq・同一 ts でも決定論的に順序が定まる（非推移比較=Array.sort 未定義動作を排除）。
+    //   seq 無しの旧イベントは seq=0 扱い＝API採番(≥1)より前に置き（旧＝時系列で先）、
+    //   同値は ts→evId で決定的に並べる。
     .sort((a, b) => {
-      const sa = Number(a.seq), sb = Number(b.seq);
-      if (Number.isFinite(sa) && Number.isFinite(sb) && sa !== sb) return sa - sb;
-      return (Number(a.ts) || 0) - (Number(b.ts) || 0);
+      const sa = Number(a.seq) || 0;
+      const sb = Number(b.seq) || 0;
+      if (sa !== sb) return sa - sb;
+      const ta = Number(a.ts) || 0, tb = Number(b.ts) || 0;
+      if (ta !== tb) return ta - tb;
+      return String(a.evId || a.opId || "").localeCompare(String(b.evId || b.opId || ""));
     });
 
   const intervals = [];
