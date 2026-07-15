@@ -1113,6 +1113,25 @@ describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
     expect(appendReanchorEvent({ host: "h", spoolId: "S", anchorRemainingMm: 1, sinceJobId: 1, sourceJobId: 1, ts: 2 })).toBeNull();
   });
 
+  it("P0.5(レビュー2): survivingIntervalId は targetIntervalIds に含まれても無効化されず derive が安定", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    // 破損状態（2 open）を直接注入
+    mockMonitorData.mountHistory.push(
+      { evId: "a", opId: "a", intervalId: "a", seq: 1, ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "known" },
+      { evId: "b", opId: "b", intervalId: "b", seq: 2, ts: 2, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known" }
+    );
+    // survivor(b) を対象群にも含めて supersede（呼び出し側が survivor を除外し忘れても保護される）
+    appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a", "b"], survivingIntervalId: "b", ts: 3 });
+    const st1 = getMountIntervalStatus("S", "h");
+    expect(st1.status).toBe("ok");
+    expect(st1.openInterval.intervalId).toBe("b");   // survivor は生き残る
+    // derive を何度やり直しても survivor が変わらない（安定）
+    const s1 = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    const s2 = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    expect(s1).toBe("b");
+    expect(s2).toBe("b");
+  });
+
   it("P0-4: appendReanchorEvent は存在しない対象への追記を拒否する（corrupt を作らない）", () => {
     addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
     appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });

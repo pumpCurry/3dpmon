@@ -58,7 +58,19 @@ import {
 import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
-import { monotonicNowMs } from "./dashboard_time.js";
+import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
+
+/**
+ * ★ RR-1(電源断対策): アプリ起動セッションごとに一意な ID。completionOpId に含めることで、
+ * 再起動で per-host の completion seq が 0 へ戻っても、別セッションの別完了が同一
+ * completionOpId になって「別々の消費が誤って冪等スキップされる」衝突を防ぐ。
+ * @private @returns {string}
+ */
+let _aggregatorSessionId = null;
+function _sessionId() {
+  if (!_aggregatorSessionId) _aggregatorSessionId = randomEventId();
+  return _aggregatorSessionId;
+}
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -1195,7 +1207,8 @@ export function aggregatorUpdate() {
       s._completionStamped = false;
     } else if (isCompleted && !s._completionStamped) {
       s._completionSeq = (s._completionSeq || 0) + 1;
-      s._completionOpId = `${host}:completion:${s._completionSeq}`;
+      // ★ RR-1(電源断対策): セッションIDを含めて再起動を跨いだ seq 衝突を防ぐ。
+      s._completionOpId = `${host}:${_sessionId()}:c${s._completionSeq}`;
       s._completionStamped = true;
     }
 

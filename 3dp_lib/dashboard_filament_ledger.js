@@ -471,6 +471,10 @@ function _buildIntervalProjection(spoolId) {
       target.boundaryStatus = e.boundaryStatus === "unknown" ? "unknown" : "known";
     } else if (e.type === "supersede") {
       for (const id of (e.targetIntervalIds || [])) {
+        // ★ P1-2/P0.5(レビュー2): survivingIntervalId は対象群に含まれていても決して無効化しない。
+        //   これにより「どの区間が残るか」が derive を何度やり直しても決定論的・安定になる
+        //   （survivingIntervalId は opId ベースの安定 intervalId なので保存・参照しても不一致しない）。
+        if (e.survivingIntervalId != null && id === e.survivingIntervalId) continue;
         const iv = byId.get(id);
         if (iv) { iv.superseded = true; if (iv.untilJobId == null) iv.untilJobId = 0; }
         else diagnostics.push({ code: "supersede-invalid-reference", detail: id });
