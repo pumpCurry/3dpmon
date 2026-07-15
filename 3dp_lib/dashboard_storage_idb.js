@@ -104,6 +104,8 @@ const SHARED_KEYS = [
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage",
   "pendingUnattributedUsageArchive",
+  // ★ RR-2: 台帳修復要求フラグ
+  "ledgerRepairRequired",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",

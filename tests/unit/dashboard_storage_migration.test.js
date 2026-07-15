@@ -41,6 +41,7 @@ const monitorData = {
   mountHistorySeq: 0,
   pendingUnattributedUsage: [],
   pendingUnattributedUsageArchive: {},
+  ledgerRepairRequired: {},
   filamentEventContext: {},
   hostSpoolMap: {},
   hostCameraToggle: {},
@@ -63,6 +64,7 @@ function resetMonitorData() {
   monitorData.mountHistorySeq = 0;
   monitorData.pendingUnattributedUsage = [];
   monitorData.pendingUnattributedUsageArchive = {};
+  monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
   monitorData.hostCameraToggle = {};
   monitorData.spoolSerialCounter = 0;
@@ -159,9 +161,10 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       h: { count: 3, totalUsedMm: 300, totalEstimatedMm: 0, firstAtEpochMs: 111, lastAtEpochMs: 222 },
     };
     monitorData.mountHistorySeq = 42;
+    monitorData.ledgerRepairRequired = { h: { spoolId: "S", status: "ambiguous", detectedAtEpochMs: 99 } };
 
     saveUnifiedStorage(true);
-    resetMonitorData(); // リロード模擬（隔離・アーカイブ・seq を空へ）
+    resetMonitorData(); // リロード模擬（隔離・アーカイブ・seq・修復要求を空へ）
     restoreUnifiedStorage();
 
     // 隔離レコードが復元される（再起動で消えない）
@@ -173,6 +176,8 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.pendingUnattributedUsageArchive.h.totalUsedMm).toBe(300);
     // watermark(seq) は後退しない
     expect(monitorData.mountHistorySeq).toBe(42);
+    // RR-2: 台帳修復要求フラグも往復で保持
+    expect(monitorData.ledgerRepairRequired.h.status).toBe("ambiguous");
   });
 
   it('P1-1: import は同一 opId(別evId)の mount を1件に畳む', async () => {

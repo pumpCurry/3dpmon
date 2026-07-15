@@ -52,7 +52,8 @@ import {
   getOpenFilamentEvent,
   resolveFilamentEvent,
   deriveSpoolRemaining,
-  getOpenMountInterval
+  getOpenMountInterval,
+  getMountIntervalStatus
 } from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
@@ -815,6 +816,12 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
       // ★ P0-4(レビュー): 閉じる区間を明示指定する（projection の「同host最新open」旧
       //   フォールバック依存を廃し、複数open時に別区間を誤クローズしない）。
       const _prevOpen = getOpenMountInterval(prevSpool.id, host);
+      // ★ RR-2(レビュー2): 旧区間が ambiguous/corrupt のときは暗黙クローズせず修復要求を記録する。
+      //   hostSpoolMap（物理割当て）は下で更新し運用は継続させるが、不明な旧区間は勝手に閉じない。
+      const _prevStatus = getMountIntervalStatus(prevSpool.id, host).status;
+      if (_prevStatus === "ambiguous" || _prevStatus === "corrupt") {
+        _markLedgerRepairRequired(host, prevSpool.id, _prevStatus);
+      }
       appendUnmountEvent({
         host,
         spoolId: prevSpool.id,
@@ -1628,6 +1635,27 @@ function _emitAttributionChanged(host) {
       window.dispatchEvent(new CustomEvent("3dpmon:attribution-changed", { detail: { host } }));
     }
   } catch { /* 非DOM/未対応環境は無視 */ }
+}
+
+/**
+ * 台帳(mount区間)が破損/曖昧で安全にクローズできなかったことを per-host に記録する（RR-2）。
+ * 暗黙の「最新open選択」に落ちる代わりに、修復要求を永続・可視化するためのフラグ。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {string} spoolId - 対象スプールID
+ * @param {string} status - "ambiguous" | "corrupt"
+ * @returns {void}
+ */
+function _markLedgerRepairRequired(host, spoolId, status) {
+  if (!host) return;
+  if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
+    monitorData.ledgerRepairRequired = {};
+  }
+  monitorData.ledgerRepairRequired[host] = {
+    spoolId: spoolId ?? null, status, detectedAtEpochMs: wallNowMs()
+  };
+  console.warn(`[setCurrentSpoolId] ${host}: 旧区間 status=${status} のため暗黙クローズせず ledgerRepairRequired を記録`);
 }
 
 /**

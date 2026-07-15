@@ -283,6 +283,13 @@ export const monitorData = {
    */
   pendingUnattributedUsageArchive: {},
   /**
+   * ★ RR-2: 台帳(mount区間)が ambiguous/corrupt で、交換時に旧区間を安全にクローズできなかった
+   * ことを per-host に記録する（暗黙クローズせず修復要求を可視化）。
+   * host -> { spoolId, status, detectedAtEpochMs }
+   * @type {Object.<string, Object>}
+   */
+  ledgerRepairRequired: {},
+  /**
    * ADR-0005: フィラメント切れ/一時停止イベントの状態文脈（per-host）。
    * キーはホスト名、値は recordFilamentEvent が記録する文脈オブジェクト。
    * 交換操作の遡及帰属（稼働中=ジョブ全体 / 一時停止=分割）判定に用いる。

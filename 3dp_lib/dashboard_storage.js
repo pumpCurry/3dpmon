@@ -656,6 +656,8 @@ const LS_GLOBAL_FIELDS = [
   "mountHistory", "mountHistorySeq",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
+  // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
+  "ledgerRepairRequired",
   // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
   "filamentEventContext",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
@@ -876,6 +878,7 @@ function _flushStorage() {
       // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
       queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
       queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
+      queueSharedWrite("ledgerRepairRequired",            monitorData.ledgerRepairRequired);
       // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
@@ -1214,6 +1217,16 @@ function _restoreFromData(shared, machines) {
       if (a && !monitorData.pendingUnattributedUsageArchive[h]) {
         monitorData.pendingUnattributedUsageArchive[h] = { ...a };
       }
+    }
+  }
+
+  // ★ RR-2: 台帳修復要求フラグ（per-host）は未保持ホストのみ取り込む。
+  if (shared?.ledgerRepairRequired && typeof shared.ledgerRepairRequired === "object") {
+    if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
+      monitorData.ledgerRepairRequired = {};
+    }
+    for (const [h, v] of Object.entries(shared.ledgerRepairRequired)) {
+      if (v && !monitorData.ledgerRepairRequired[h]) monitorData.ledgerRepairRequired[h] = { ...v };
     }
   }
 
