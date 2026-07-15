@@ -60,18 +60,6 @@ import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
 
-/**
- * ★ RR-1(電源断対策): アプリ起動セッションごとに一意な ID。completionOpId に含めることで、
- * 再起動で per-host の completion seq が 0 へ戻っても、別セッションの別完了が同一
- * completionOpId になって「別々の消費が誤って冪等スキップされる」衝突を防ぐ。
- * @private @returns {string}
- */
-let _aggregatorSessionId = null;
-function _sessionId() {
-  if (!_aggregatorSessionId) _aggregatorSessionId = randomEventId();
-  return _aggregatorSessionId;
-}
-
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
 // ---------------------------------------------------------------------------
@@ -1200,16 +1188,16 @@ export function aggregatorUpdate() {
       catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
     }
 
-    // ★ RR-1(レビュー2): 完了観測ごとの安定 opId をスタンプする。印刷中→完了エッジで採番し、
-    //   完了状態が続く間は再利用（再送では同一ID＝隔離が冪等）。次の印刷開始で解除し、別の印刷は
-    //   別 seq になる（同一 G-code の2回印刷で jobId 欠落しても別々に隔離＝payload衝突で捨てない）。
+    // ★ #410-1(レビュー3): 完了観測ごとの安定 ID(completionObsId)。印刷中→完了エッジで
+    //   UUID を採番し、finalize/quarantine より「前に」永続化する。これにより保存途中クラッシュ後の
+    //   再観測でも同一完了に同じ ID を再利用でき（＝二重隔離しない）、別完了は別 UUID になる
+    //   （payload衝突で捨てない）。次の印刷開始で解除する。
     if (isPrinting) {
-      s._completionStamped = false;
-    } else if (isCompleted && !s._completionStamped) {
-      s._completionSeq = (s._completionSeq || 0) + 1;
-      // ★ RR-1(電源断対策): セッションIDを含めて再起動を跨いだ seq 衝突を防ぐ。
-      s._completionOpId = `${host}:${_sessionId()}:c${s._completionSeq}`;
-      s._completionStamped = true;
+      s._completionObsId = null;
+    } else if (isCompleted && !s._completionObsId && !_isRelayChild()) {
+      s._completionObsId = randomEventId();
+      // ★ finalize より前に永続化（クラッシュ耐性）。ID→隔離の順序で保存する。
+      try { persistAggregatorState(host); } catch (e) { console.warn("[aggregator] completionObsId 永続化失敗:", e?.message || e); }
     }
 
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
@@ -1223,7 +1211,7 @@ export function aggregatorUpdate() {
       //   （下の完了ブロックと相互排他）。
       if (spool.currentJobStartLength != null && s.accumulatedUsedMaterial > 0) {
         const _isSuccess = (st === PRINT_STATE_CODE.printDone);
-        try { finalizeFilamentUsage(s.accumulatedUsedMaterial, _jobId, host, _isSuccess, { completionOpId: s._completionOpId }); }
+        try { finalizeFilamentUsage(s.accumulatedUsedMaterial, _jobId, host, _isSuccess, { completionOpId: s._completionObsId }); }
         catch (e) { console.warn("[aggregator] finalize(P0-7) 失敗:", e?.message || e); }
         try { reconcileSpool(spool.id, { ts: _now }); }
         catch (e2) { console.warn("[aggregator] reconcileSpool(P0-7) 失敗:", e2?.message || e2); }
@@ -1478,7 +1466,7 @@ export function aggregatorUpdate() {
           }
         }
         const isSuccess2 = (st === PRINT_STATE_CODE.printDone);
-        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2, { completionOpId: s._completionOpId });
+        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2, { completionOpId: s._completionObsId });
         // ★ ADR-0004: 完了後に信頼ソースから残量を冪等補正（idle で権威補正）。
         //   finalize 内でも reconcile するが、currentPrintID クリア後の確定状態で再度走らせる。
         //   reconcile は印刷中スプールに触れないため二重防御として安全。冪等なので無害。
@@ -1652,7 +1640,9 @@ export function restoreAggregatorState(hostname) {
     "prevProgress",
     "lastPrintState",
     "lastProgressTimestamp",
-    "prevRemainingSec"
+    "prevRemainingSec",
+    // ★ #410-1: 完了観測ID（再起動後に同一完了へ同じIDを再利用するため復元する）
+    "_completionObsId"
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
@@ -1779,7 +1769,9 @@ export function persistAggregatorState(hostname) {
     notifiedTimeThresholds: [...s.notifiedTimeThresholds],
     notifiedTempMilestones: [...s.notifiedTempMilestones],
     filamentLowWarned: s.filamentLowWarned || false,
-    _removalReminderSent: s._removalReminderSent || false
+    _removalReminderSent: s._removalReminderSent || false,
+    // ★ #410-1: 完了観測ID（クラッシュ後の同一完了 replay を冪等にする＝二重隔離しない）
+    _completionObsId: s._completionObsId || null
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;
