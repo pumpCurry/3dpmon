@@ -805,10 +805,14 @@ export function setCurrentSpoolId(id, hostname) {
     //   分割(一時停止交換)では旧区間に進行中ジョブ J を含める（until=J）。
     //   稼働中=全体/通常取り外しでは最新完了 Lc（J を除外）。
     if (host) {
+      // ★ P0-4(レビュー): 閉じる区間を明示指定する（projection の「同host最新open」旧
+      //   フォールバック依存を廃し、複数open時に別区間を誤クローズしない）。
+      const _prevOpen = getOpenMountInterval(prevSpool.id, host);
       appendUnmountEvent({
         host,
         spoolId: prevSpool.id,
         untilJobId: (_midPrintSwap && _mode === "split") ? _J : _Lc,
+        targetIntervalId: _prevOpen ? _prevOpen.intervalId : null,
         ts: nowTs
       });
     }

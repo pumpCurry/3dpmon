@@ -200,6 +200,20 @@ export function appendReanchorEvent({ host, spoolId, targetIntervalId, anchorRem
   const opId = providedOpId || `reanchor_${targetIntervalId}_${sourceJobId ?? ts}`;
   const dup = list.find(e => e && (e.opId || e.evId) === opId);
   if (dup) return dup;
+  // ★ P0-4(レビュー): 対象区間が open として存在することを追記前に検証する。存在しない／
+  //   クローズ済み／superseded なら追記しない（invalid-reference を残して projection を
+  //   corrupt にしない＝一度混入すると supersede でも消せない事故を防ぐ）。
+  if (targetIntervalId != null) {
+    const proj = _buildIntervalProjection(spoolId);
+    const target = proj.byId.get(targetIntervalId);
+    if (!target || target.superseded || target.untilJobId != null) {
+      console.warn(
+        `[appendReanchorEvent] targetIntervalId=${targetIntervalId} が open 区間として`
+        + ` 存在しないため追記をスキップ（spoolId=${spoolId}）`
+      );
+      return null;
+    }
+  }
   const ev = {
     evId: randomEventId(),
     opId,
@@ -665,25 +679,31 @@ function _isExplicitlyAttributed(job, spoolId) {
  * @returns {Object} 更新/追記した mount イベント
  */
 function _reanchorOpenMount(host, spoolId, anchorRemainingMm, sinceJobId, ts) {
-  const list = _getMountHistory();
-  const evs = list
-    .filter(e => e && e.spoolId === spoolId && e.host === host && (e.type === "mount" || e.type === "unmount"))
-    .slice()
-    .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
-  const lastMount = evs.filter(e => e.type === "mount").pop();
-  if (lastMount) {
-    const closedAfter = evs.some(
-      e => e.type === "unmount" && (Number(e.ts) || 0) > (Number(lastMount.ts) || 0)
-    );
-    if (!closedAfter) {
-      // 開区間 → アンカーをその場で更新（ts/evId は保持＝順序を壊さない）
-      lastMount.anchorRemainingMm = Number(anchorRemainingMm) || 0;
-      lastMount.sinceJobId = Number(sinceJobId) || 0;
-      return lastMount;
-    }
+  // ★ P0-4(レビュー): 既存 mount イベントを直接書き換えない（追記専用ログ＝クラッシュ耐性・
+  //   監査性・マージ整合性を守る）。projection で open 区間を厳密判定し、
+  //   - ok(open 1件) → 追記専用の reanchor イベントで anchor/sinceJobId を更新。
+  //   - none(open 0件) → 新規 mount を1件だけ種付け（open=1 を維持）。
+  //   - ambiguous/corrupt → mount を足して悪化させない（手動残量は spool 側へ反映済み）。
+  const st = getMountIntervalStatus(spoolId, host);
+  if (st.status === "ok" && st.openInterval) {
+    return appendReanchorEvent({
+      host, spoolId,
+      targetIntervalId: st.openInterval.intervalId,
+      anchorRemainingMm,
+      sinceJobId,
+      boundaryStatus: st.openInterval.boundaryStatus, // 境界確からしさは維持
+      reason: "manual-edit-recompute",
+      ts
+    });
   }
-  // 開区間が無い → 新規 mount を追記
-  return appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts });
+  if (st.status === "none") {
+    return appendMountEvent({ host, spoolId, anchorRemainingMm, sinceJobId, ts });
+  }
+  console.warn(
+    `[recomputeSpoolFromManualEdit] ${host}/${spoolId}: 区間status=${st.status} のため`
+    + ` 台帳 reanchor をスキップ（spool 残量は更新済み）`
+  );
+  return null;
 }
 
 /**

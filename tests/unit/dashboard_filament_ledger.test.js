@@ -747,6 +747,27 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(sp.updatedAt).toBe(999);
   });
 
+  it("P0-4: 再アンカーは mount を直接書き換えず追記専用 reanchor イベントで行う", () => {
+    addSpool({ id: "sp1", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [job(200, 30000, { filamentId: "sp1" })]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 330000, sinceJobId: 200, ts: 10 });
+    const mountBefore = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "sp1");
+    const anchorBefore = mountBefore.anchorRemainingMm;
+
+    recomputeSpoolFromManualEdit("sp1", { ts: 999 });
+
+    // 元 mount の anchor は不変（直接書き換えていない＝追記専用ログ）
+    expect(mountBefore.anchorRemainingMm).toBe(anchorBefore);
+    // 追記専用 reanchor イベントが1件、その anchor が再計算値
+    const reanchors = mockMonitorData.mountHistory.filter(e => e.type === "reanchor" && e.spoolId === "sp1");
+    expect(reanchors).toHaveLength(1);
+    expect(reanchors[0].anchorRemainingMm).toBe(300000); // 330000-30000
+    // projection は open 1件のまま（二重区間を作らない）
+    expect(getMountIntervalStatus("sp1", "h").status).toBe("ok");
+    expect(getOpenMountInterval("sp1", "h").anchorRemainingMm).toBe(300000);
+  });
+
   it("明示帰属していないジョブ（filamentInfo/filamentId なし）は合算しない", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
     setHistory("h", [
@@ -1051,10 +1072,24 @@ describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
     expect(getOpenMountInterval("S", "h")).toBeNull();
   });
 
-  it("Q1: reanchor の対象参照不整合は corrupt でderiveを停止", () => {
+  it("P0-4: appendReanchorEvent は存在しない対象への追記を拒否する（corrupt を作らない）", () => {
     addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
     appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
-    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known", sourceJobId: 1, ts: 2 });
+    const r = appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known", sourceJobId: 1, ts: 2 });
+    expect(r).toBeNull(); // 追記されない
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(0);
+    // 正常な mount のみ残り projection は ok のまま（corrupt にしない）
+    expect(getMountIntervalStatus("S", "h").status).toBe("ok");
+  });
+
+  it("Q1: import 済み invalid-reference reanchor（API 迂回）は corrupt で derive を停止", () => {
+    // API はもう invalid を作らないが、旧データ/外部importで混入した不整合は projection が検出する。
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    mockMonitorData.mountHistory.push({
+      evId: "bad", opId: "bad", seq: 99, ts: 2, type: "reanchor", host: "h", spoolId: "S",
+      targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known"
+    });
     const st = getMountIntervalStatus("S", "h");
     expect(st.status).toBe("corrupt");
     expect(deriveSpoolRemaining("S").mode).toBe("halt-corrupt");
