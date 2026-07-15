@@ -1669,7 +1669,8 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     const _attrPres = getAttributionPresentation({
       materialUsedMm: raw.usagematerial,
       filamentInfo: raw.filamentInfo,
-      filamentId: raw.filamentId
+      filamentId: raw.filamentId,
+      printfinish: raw.printfinish   // ★ P1-5: 完了判定に必要（印刷中=null は除外）
     });
     if (_attrPres.state === "pending") {
       spoolHtml += `<span class="attr-chip" title="このジョブの消費フィラメントが未確定です（確認してください）">${_attrPres.label}</span>`;

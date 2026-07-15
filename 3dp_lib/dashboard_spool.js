@@ -1610,8 +1610,19 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     return;
   }
   if (s.currentPrintID && s.currentPrintID !== normalizedJobId) {
-    // jobId 不一致 — 別のジョブの完了通知なので無視するが、
-    // transient フィールドが古いジョブのまま残留していたらクリアする
+    // ★ P0-3(レビュー): 進行中の「有効な」ジョブに対して「無効ID」の完了通知が来た場合、
+    //   受信側が低信頼（電源投入直後の偽完了 jobId=0 等）なので、現在ジョブ追跡を壊さず
+    //   単に無視する。stale クリアは「有効ID同士が異なる」＝別ジョブ完了のときだけ行う。
+    const storedValid = normalizeJobId(s.currentPrintID);
+    if (validJobId == null && storedValid != null) {
+      console.warn(
+        "finalizeFilamentUsage: 無効IDの完了通知を無視（有効な進行中ジョブを維持）",
+        { stored: s.currentPrintID, received: normalizedJobId }
+      );
+      return;
+    }
+    // 有効ID同士の不一致（または現在IDが無効な残骸）— 別ジョブの完了なので無視しつつ、
+    // 古いジョブのまま残留した transient をクリアする。
     console.warn(
       "finalizeFilamentUsage: jobId mismatch, clearing stale transient fields",
       { stored: s.currentPrintID, received: normalizedJobId }
@@ -1954,6 +1965,10 @@ export function shouldLinkOfflineJob(job) {
  */
 export function isAttributionPending(entry) {
   if (!entry) return false;
+  // ★ P1-5(レビュー): 完了ジョブのみ対象。printfinish==null は「未確定/印刷中」を意味し
+  //   （K1 は印刷中エントリにも materialUsedMm を載せ得る）、現在進行中の現在ジョブを
+  //   「未確認」と誤判定してチップ/バッジ/通知させないよう除外する。
+  if (entry.printfinish == null) return false;
   // 消費が無い（materialUsedMm<=0）ジョブは帰属対象外＝pending ではない。
   if (!(Number(entry.materialUsedMm || 0) > 0)) return false;
   const info = Array.isArray(entry.filamentInfo) ? entry.filamentInfo : [];

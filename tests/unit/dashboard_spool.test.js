@@ -564,15 +564,23 @@ describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
     expect(sp.printCount).toBe(1);
   });
 
-  it('有効なcurrentPrintIDに対する無効ID完了は不一致ガードが優先（隔離しない）', () => {
-    // アクティブジョブ 1001 が進行中に、偽の jobId=0 完了通知が来た場合は
-    // 「別ジョブの完了」として不一致ガードで transient をクリアして無視する（隔離しない）。
+  it('P0-3: 有効な進行中ジョブへの無効ID完了通知は無視し、現在ジョブ追跡を維持する', () => {
+    // アクティブジョブ 1001 が進行中に、偽の jobId=0 完了通知が来ても、受信側が低信頼なので
+    // 現在ジョブ追跡を壊さず単に無視する（隔離もしない）。stale クリアは有効ID同士の不一致時のみ。
     monitorData.filamentSpools[0].currentPrintID = '1001';
     finalizeFilamentUsage(5000, 0, 'h', true);
     const sp = monitorData.filamentSpools[0];
-    expect(monitorData.pendingUnattributedUsage).toHaveLength(0);
-    expect(sp.remainingLengthMm).toBe(100000);  // 減算なし
-    expect(sp.currentPrintID).toBe('');          // 不一致で transient クリア
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0); // 隔離しない
+    expect(sp.remainingLengthMm).toBe(100000);      // 減算なし
+    expect(sp.currentPrintID).toBe('1001');          // ★ 現在ジョブを維持（クリアしない）
+    expect(sp.currentJobStartLength).toBe(100000);   // 開始基準も維持
+  });
+
+  it('P0-3: 有効ID同士の不一致（別ジョブ完了）では従来どおり stale transient をクリア', () => {
+    monitorData.filamentSpools[0].currentPrintID = '1001';
+    finalizeFilamentUsage(5000, 2002, 'h', true); // 有効な別ID
+    const sp = monitorData.filamentSpools[0];
+    expect(sp.currentPrintID).toBe('');              // 不一致で transient クリア
   });
 
   it('隔離レコードは最新200件に上限される（肥大化防止）', () => {
@@ -607,19 +615,24 @@ describe('isAttributionPending / getUnattributedUsageForHost（Phase4）', () =>
   });
 
   it('消費あり×未帰属（spoolId/filamentId無し）は pending', () => {
-    expect(isAttributionPending({ id: 1, materialUsedMm: 5000 })).toBe(true);
-    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, filamentInfo: [{ colorName: '黒' }] })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 1 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 0, filamentInfo: [{ colorName: '黒' }] })).toBe(true);
   });
 
   it('確定スプール（spoolId）or filamentId があれば pending でない', () => {
-    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, filamentInfo: [{ spoolId: 'sp1' }] })).toBe(false);
-    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, filamentId: 'sp1' })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 1, filamentInfo: [{ spoolId: 'sp1' }] })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 1, filamentId: 'sp1' })).toBe(false);
   });
 
   it('消費なし（materialUsedMm<=0/欠落）は pending でない', () => {
-    expect(isAttributionPending({ id: 1, materialUsedMm: 0 })).toBe(false);
-    expect(isAttributionPending({ id: 1 })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 0, printfinish: 1 })).toBe(false);
+    expect(isAttributionPending({ id: 1, printfinish: 1 })).toBe(false);
     expect(isAttributionPending(null)).toBe(false);
+  });
+
+  it('P1-5: 印刷中/未確定（printfinish=null）は消費ありでも pending でない', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: null })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000 })).toBe(false); // printfinish 欠落=未確定
   });
 
   it('getUnattributedUsageForHost はホストで絞り込み、count が件数を返す', () => {
@@ -644,21 +657,22 @@ describe('getAttributionPresentation / getAttributionIssueIdsForHost（Phase5 U1
   });
 
   it('pending ジョブは state=pending / label=未確認 / severity=warning', () => {
-    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000 });
+    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000, printfinish: 1 });
     expect(p).toEqual({ state: 'pending', label: '未確認', reason: 'unattributed', severity: 'warning' });
   });
 
   it('確定ジョブ（spoolId あり）は state=known / label なし / severity=none', () => {
-    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000, filamentInfo: [{ spoolId: 'sp1' }] });
+    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000, printfinish: 1, filamentInfo: [{ spoolId: 'sp1' }] });
     expect(p).toEqual({ state: 'known', label: null, reason: null, severity: 'none' });
   });
 
   it('課題ID集合は履歴pendingと隔離消費を安定キーで統合する', () => {
     monitorData.machines = {
       h1: { printStore: { history: [
-        { id: 100, materialUsedMm: 5000 },                      // pending
-        { id: 101, materialUsedMm: 5000, filamentInfo: [{ spoolId: 'sp1' }] }, // 確定
-        { id: 102, materialUsedMm: 0 },                          // 消費なし→対象外
+        { id: 100, materialUsedMm: 5000, printfinish: 1 },      // pending（完了・未帰属）
+        { id: 101, materialUsedMm: 5000, printfinish: 1, filamentInfo: [{ spoolId: 'sp1' }] }, // 確定
+        { id: 102, materialUsedMm: 0, printfinish: 1 },          // 消費なし→対象外
+        { id: 103, materialUsedMm: 5000, printfinish: null },    // 印刷中→対象外（P1-5）
       ] } },
     };
     monitorData.pendingUnattributedUsage = [
@@ -672,7 +686,7 @@ describe('getAttributionPresentation / getAttributionIssueIdsForHost（Phase5 U1
   });
 
   it('同一集合は安定（差分判定の基盤＝再計算で増減しない）', () => {
-    monitorData.machines = { h1: { printStore: { history: [{ id: 100, materialUsedMm: 5000 }] } } };
+    monitorData.machines = { h1: { printStore: { history: [{ id: 100, materialUsedMm: 5000, printfinish: 1 }] } } };
     const a = getAttributionIssueIdsForHost('h1');
     const b = getAttributionIssueIdsForHost('h1');
     expect([...a].sort()).toEqual([...b].sort());
