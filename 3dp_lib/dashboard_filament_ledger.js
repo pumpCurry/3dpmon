@@ -123,6 +123,9 @@ function _isCompleted(job) {
   return Number(job?.materialUsedMm || 0) > 0;
 }
 
+/** mountHistoryRejectedEvents の保持上限（rotation で最新のみ保持）。 */
+const REJECTED_CAP = 1000;
+
 /**
  * mountHistory から参照不整合イベントを隔離する（#410-9・import/restore 後の防衛）。
  *
@@ -158,9 +161,15 @@ export function quarantineInvalidMountEvents() {
   }
   if (rejected.length) {
     if (!Array.isArray(monitorData.mountHistoryRejectedEvents)) monitorData.mountHistoryRejectedEvents = [];
+    const now = wallNowMs();
+    for (const r of rejected) r.rejectedAtEpochMs = now; // 監査・将来TTL用
     monitorData.mountHistoryRejectedEvents.push(...rejected);
     monitorData.mountHistory = kept;
-    console.warn(`[quarantineInvalidMountEvents] 参照不整合 ${rejected.length} 件を mountHistoryRejectedEvents へ隔離`);
+    // ★ P0-2(レビュー4): 保持上限（最新 REJECTED_CAP 件）で無制限成長→毎回ロードを防ぐ。
+    //   古い順に溢れた分を捨てる（rotation）。隔離は稀なため件数上限で十分。
+    const arr = monitorData.mountHistoryRejectedEvents;
+    if (arr.length > REJECTED_CAP) arr.splice(0, arr.length - REJECTED_CAP);
+    console.warn(`[quarantineInvalidMountEvents] 参照不整合 ${rejected.length} 件を mountHistoryRejectedEvents へ隔離（保持上限 ${REJECTED_CAP}）`);
   }
   return rejected.length;
 }

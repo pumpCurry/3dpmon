@@ -1217,6 +1217,19 @@ describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
     expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(0);
   });
 
+  it("#410-9/P0-2: mountHistoryRejectedEvents は上限1000で rotation（古い順に溢れる）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    // 既に上限まで隔離済みを模す
+    mockMonitorData.mountHistoryRejectedEvents = Array.from({ length: 1000 }, (_, i) => ({ event: { evId: `old${i}` }, reason: "x" }));
+    // 新たな不正参照を1件隔離 → 溢れ1件を古い順に捨て、上限維持
+    mockMonitorData.mountHistory.push({ evId: "bad", opId: "bad", seq: 9, ts: 2, type: "reanchor", host: "h", spoolId: "S", targetIntervalId: "nope", anchorRemainingMm: 1, sinceJobId: 1 });
+    quarantineInvalidMountEvents();
+    expect(mockMonitorData.mountHistoryRejectedEvents).toHaveLength(1000);
+    expect(mockMonitorData.mountHistoryRejectedEvents[0].event.evId).toBe("old1"); // old0 が溢れた
+    expect(mockMonitorData.mountHistoryRejectedEvents[999].reason).toBe("reanchor-invalid-reference");
+  });
+
   it("Q1: import 済み invalid-reference reanchor（API 迂回）は corrupt で derive を停止", () => {
     // API はもう invalid を作らないが、旧データ/外部importで混入した不整合は projection が検出する。
     addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });

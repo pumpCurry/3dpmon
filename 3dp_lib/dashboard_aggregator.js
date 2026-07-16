@@ -1196,7 +1196,10 @@ export function aggregatorUpdate() {
       s._completionObsId = null;
     } else if (isCompleted && !s._completionObsId && !_isRelayChild()) {
       s._completionObsId = randomEventId();
-      // ★ finalize より前に永続化（クラッシュ耐性）。ID→隔離の順序で保存する。
+      // ★ finalize より「前に」永続化する（クラッシュ耐性・ID→隔離の順序）。
+      //   persistAggregatorState は localStorage.setItem を「同期」で行うため、この行を抜けた時点で
+      //   _completionObsId は耐久保存済み（メモリのみではない）。restoreAggregatorState が localStorage
+      //   から復元する。ゆえに「ID生成→耐久保存→finalize→隔離」の順序が保証される。
       try { persistAggregatorState(host); } catch (e) { console.warn("[aggregator] completionObsId 永続化失敗:", e?.message || e); }
     }
 
