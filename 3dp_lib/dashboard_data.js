@@ -285,6 +285,13 @@ export const monitorData = {
    */
   hostObservationWatermark: {},
   /**
+   * ★ #411-O1: 現セッションの最新観測（baseline とは別スロット）。
+   * recordHostObservation が更新し、オフライン窓評価まで baseline を上書きしない
+   * （起動直後に停止前基準を消さないため）。
+   * @type {Object.<string, Object>}
+   */
+  hostObservationCurrent: {},
+  /**
    * ★ Phase2A: 有効な jobId が無いまま完了した消費の隔離領域。
    * 電源投入直後などで printStartTime が 0/null の「無効ID」ジョブは
    * 履歴・usedLengthLog・境界へ確定記録を作らず（過去全履歴の誤減算＝退行を防ぐ）、

@@ -62,6 +62,7 @@ import { getDisplayBaseUrl } from "./dashboard_connection.js";
 import { sendRelayFilament } from "./dashboard_client_sync.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { wallNowMs, randomEventId } from "./dashboard_time.js";
+import { isCompletedHistoryEntry } from "./dashboard_history_identity.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -2091,24 +2092,9 @@ export function shouldLinkOfflineJob(job) {
  * @param {Object} entry - 履歴ジョブ（printStore.history / historyData のエントリ）
  * @returns {boolean} 帰属未確認なら true
  */
-/**
- * 履歴エントリが「完了」しているかの共通判定（Phase5 P1-5 / #410-8）。
- * printfinish が正のシグナル。旧保存データは printfinish 欠落でも finishTime/finishTimeSec/
- * endtime/usagetime による完了証拠があれば完了扱いにする（古いログを未完了と誤判定しない）。
- *
- * @function isCompletedHistoryEntry
- * @param {Object} entry - 履歴ジョブ
- * @returns {boolean} 完了なら true
- */
-export function isCompletedHistoryEntry(entry) {
-  if (!entry) return false;
-  if (entry.printfinish != null) return true;
-  if (Number(entry.finishTime) > 0) return true;
-  if (Number(entry.finishTimeSec) > 0) return true;
-  if (Number(entry.endtime) > 0) return true;
-  if (Number(entry.usagetime) > 0) return true;
-  return false;
-}
+// ★ #410-8/#411-P1-4: 完了判定は下位の共通 pure utility へ一本化（判定ロジックの二重化を排す）。
+//   import は先頭で行い（ローカル束縛）、ここで再エクスポートする。
+export { isCompletedHistoryEntry };
 
 export function isAttributionPending(entry) {
   if (!entry) return false;

@@ -55,7 +55,7 @@ import {
   // ★ P0-9: 自動 inferred 投入停止に伴い setCurrentSpoolId / addInferredSpool の
   //   aggregator からの利用は撤去（ユーザー明示交換のみ mount）。
 } from "./dashboard_spool.js";
-import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
+import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld, deriveSpoolRemaining, getMountIntervalStatus } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
@@ -1282,10 +1282,19 @@ export function aggregatorUpdate() {
     //   autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
     // ★ #411-O1(Option4): 観測 watermark を read-only で更新する（推定帰属の前段）。
     //   親のみ・5s throttle。安全基盤（隔離/台帳/completionObsId 等）には一切書き込まない。
-    if (spool && !_isRelayChild() && (!s._lastObs || _mono - s._lastObs > 5000)) {
+    //   ★ P0-3: spool の有無に依らず記録する（未装着/交換済みという反証を残すため）。
+    //   ★ P0-4: open 区間が一意(ok)のときだけ intervalId を明示配線し、ambiguous/corrupt は null。
+    if (!_isRelayChild() && (!s._lastObs || _mono - s._lastObs > 5000)) {
       s._lastObs = _mono;
-      try { recordHostObservation(host); }
-      catch (e) { /* read-only 観測失敗は無視 */ }
+      try {
+        let _ivId = null, _ivStatus = "unknown";
+        if (spool) {
+          const _st = getMountIntervalStatus(spool.id, host);
+          _ivStatus = _st.status;
+          _ivId = (_st.status === "ok" && _st.openInterval) ? _st.openInterval.intervalId : null;
+        }
+        recordHostObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus });
+      } catch (e) { /* read-only 観測失敗は無視 */ }
     }
 
     // catch-up でリベースが必要になった反映後残量（下の開始基準設定の後で currentJobStartLength へ反映）。

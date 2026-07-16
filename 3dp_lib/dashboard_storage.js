@@ -656,8 +656,8 @@ const LS_GLOBAL_FIELDS = [
   "mountHistory", "mountHistorySeq",
   // ★ #410-9: 参照不整合で隔離した mount イベント（元データを失わない）
   "mountHistoryRejectedEvents",
-  // ★ #411-O1: オフライン推定の観測 watermark（再起動後の差分基準）
-  "hostObservationWatermark",
+  // ★ #411-O1: オフライン推定の観測 watermark（baseline＝再起動後の差分基準）＋現セッション観測
+  "hostObservationWatermark", "hostObservationCurrent",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
   // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
@@ -881,6 +881,7 @@ function _flushStorage() {
       queueSharedWrite("mountHistorySeq",    monitorData.mountHistorySeq);
       queueSharedWrite("mountHistoryRejectedEvents", monitorData.mountHistoryRejectedEvents);
       queueSharedWrite("hostObservationWatermark", monitorData.hostObservationWatermark);
+      queueSharedWrite("hostObservationCurrent",   monitorData.hostObservationCurrent);
       // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
       queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
       queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
@@ -1239,14 +1240,23 @@ function _restoreFromData(shared, machines) {
     }
   }
 
-  // ★ #411-O1: オフライン推定の観測 watermark（per-host）は未保持ホストのみ取り込む
-  //   （再起動後の差分基準＝停止直前の観測状態を復元する）。
+  // ★ #411-O1: オフライン推定の観測 watermark（baseline・per-host）は未保持ホストのみ取り込む
+  //   （再起動後の差分基準＝停止直前の観測状態を復元。起動直後の record は baseline を上書きしない）。
   if (shared?.hostObservationWatermark && typeof shared.hostObservationWatermark === "object") {
     if (!monitorData.hostObservationWatermark || typeof monitorData.hostObservationWatermark !== "object") {
       monitorData.hostObservationWatermark = {};
     }
     for (const [h, v] of Object.entries(shared.hostObservationWatermark)) {
       if (v && !monitorData.hostObservationWatermark[h]) monitorData.hostObservationWatermark[h] = { ...v };
+    }
+  }
+  // ★ #411-O1: 現セッション観測（crash 耐性用）。record が上書きするため未保持のみ取り込む。
+  if (shared?.hostObservationCurrent && typeof shared.hostObservationCurrent === "object") {
+    if (!monitorData.hostObservationCurrent || typeof monitorData.hostObservationCurrent !== "object") {
+      monitorData.hostObservationCurrent = {};
+    }
+    for (const [h, v] of Object.entries(shared.hostObservationCurrent)) {
+      if (v && !monitorData.hostObservationCurrent[h]) monitorData.hostObservationCurrent[h] = { ...v };
     }
   }
 

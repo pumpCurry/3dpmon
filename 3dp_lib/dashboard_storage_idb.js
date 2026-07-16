@@ -103,8 +103,9 @@ const SHARED_KEYS = [
   "mountHistorySeq",
   // ★ #410-9: 参照不整合で隔離した mount イベント
   "mountHistoryRejectedEvents",
-  // ★ #411-O1: オフライン推定の観測 watermark
+  // ★ #411-O1: オフライン推定の観測 watermark（baseline）＋現セッション観測
   "hostObservationWatermark",
+  "hostObservationCurrent",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage",
   "pendingUnattributedUsageArchive",
