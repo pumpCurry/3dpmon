@@ -274,6 +274,17 @@ export const monitorData = {
    */
   mountHistoryRejectedEvents: [],
   /**
+   * ★ #411-O1(Option4): オフライン推定帰属の前段となる「観測 watermark」。
+   * アプリ稼働中に per-host で「見えていた状態」を記録し、再起動後に
+   * (現在の完了履歴 − 前回観測済み集合) でオフライン新規ジョブを特定する材料にする。
+   * 本フィールドは read-only 運用の追加専用で、安全基盤（completionObservationId/
+   * pendingUnattributedUsage/mountHistory/usedLengthLog 等）には一切影響しない。
+   * host -> { observedAtEpochMs, mountedSpoolId, mountIntervalId, printerIdentity,
+   *           seenCompletedJobIds:Array<number>, historyCount }
+   * @type {Object.<string, Object>}
+   */
+  hostObservationWatermark: {},
+  /**
    * ★ Phase2A: 有効な jobId が無いまま完了した消費の隔離領域。
    * 電源投入直後などで printStartTime が 0/null の「無効ID」ジョブは
    * 履歴・usedLengthLog・境界へ確定記録を作らず（過去全履歴の誤減算＝退行を防ぐ）、

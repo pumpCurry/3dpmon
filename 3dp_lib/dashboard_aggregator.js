@@ -59,6 +59,7 @@ import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilam
 import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
+import { recordHostObservation } from "./dashboard_offline_observation.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -1279,6 +1280,14 @@ export function aggregatorUpdate() {
     //   現在ジョブ(C)は除外し、filamentInfo/filamentId のみ補完（冪等）。historyList マージで
     //   printStore.history へ A/B が入り、C が解決された後に実行される。idle 時は上の
     //   autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
+    // ★ #411-O1(Option4): 観測 watermark を read-only で更新する（推定帰属の前段）。
+    //   親のみ・5s throttle。安全基盤（隔離/台帳/completionObsId 等）には一切書き込まない。
+    if (spool && !_isRelayChild() && (!s._lastObs || _mono - s._lastObs > 5000)) {
+      s._lastObs = _mono;
+      try { recordHostObservation(host); }
+      catch (e) { /* read-only 観測失敗は無視 */ }
+    }
+
     // catch-up でリベースが必要になった反映後残量（下の開始基準設定の後で currentJobStartLength へ反映）。
     let _rebaseRemaining = null;
     if (spool && (!s._lastCatchUp || _mono - s._lastCatchUp > 10000)) {
