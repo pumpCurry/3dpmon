@@ -101,6 +101,8 @@ const SHARED_KEYS = [
   // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）＋ watermark(seq)
   "mountHistory",
   "mountHistorySeq",
+  // ★ #410-9: 参照不整合で隔離した mount イベント
+  "mountHistoryRejectedEvents",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage",
   "pendingUnattributedUsageArchive",

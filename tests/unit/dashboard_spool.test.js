@@ -710,9 +710,18 @@ describe('isAttributionPending / getUnattributedUsageForHost（Phase4）', () =>
     expect(isAttributionPending(null)).toBe(false);
   });
 
-  it('P1-5: 印刷中/未確定（printfinish=null）は消費ありでも pending でない', () => {
+  it('P1-5: 印刷中/未確定（printfinish=null かつ完了証拠なし）は消費ありでも pending でない', () => {
     expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: null })).toBe(false);
     expect(isAttributionPending({ id: 1, materialUsedMm: 5000 })).toBe(false); // printfinish 欠落=未確定
+  });
+
+  it('#410-8: 旧保存データ(printfinish欠落だが finishTime/endtime あり)は完了扱いで pending 判定', () => {
+    // printfinish が無くても完了証拠（finishTime/endtime/usagetime）があれば完了→未帰属なら pending
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, finishTime: 1784000000 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, endtime: 1784000000 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, usagetime: 3600 })).toBe(true);
+    // 完了証拠が一切なければ非完了
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, finishTime: 0, endtime: 0 })).toBe(false);
   });
 
   it('getUnattributedUsageForHost はホストで絞り込み、count が件数を返す', () => {

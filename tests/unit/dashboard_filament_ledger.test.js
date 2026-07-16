@@ -29,6 +29,7 @@ const {
   appendUnmountEvent,
   appendReanchorEvent,
   appendSupersedeEvent,
+  quarantineInvalidMountEvents,
   attributedUsed,
   getSpoolIntervals,
   getOpenMountInterval,
@@ -74,6 +75,7 @@ function reset() {
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
   mockMonitorData.mountHistory = [];
+  mockMonitorData.mountHistoryRejectedEvents = [];
   mockMonitorData.hostSpoolMap = {};
   mockMonitorData.filamentEventContext = {};
 }
@@ -1194,6 +1196,25 @@ describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
     expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(0);
     // 正常な mount のみ残り projection は ok のまま（corrupt にしない）
     expect(getMountIntervalStatus("S", "h").status).toBe("ok");
+  });
+
+  it("#410-9: quarantineInvalidMountEvents は参照不整合を隔離し projection を ok に戻す", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    // import 相当で不正参照 reanchor を直接注入
+    mockMonitorData.mountHistory.push({
+      evId: "bad", opId: "bad", seq: 99, ts: 2, type: "reanchor", host: "h", spoolId: "S",
+      targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known"
+    });
+    expect(getMountIntervalStatus("S", "h").status).toBe("corrupt"); // 隔離前は corrupt
+    const n = quarantineInvalidMountEvents();
+    expect(n).toBe(1);
+    // 不正イベントは隔離され元データは失われない
+    expect(mockMonitorData.mountHistoryRejectedEvents).toHaveLength(1);
+    expect(mockMonitorData.mountHistoryRejectedEvents[0].reason).toBe("reanchor-invalid-reference");
+    // 隔離後は正常な mount のみ残り ok
+    expect(getMountIntervalStatus("S", "h").status).toBe("ok");
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(0);
   });
 
   it("Q1: import 済み invalid-reference reanchor（API 迂回）は corrupt で derive を停止", () => {

@@ -22,7 +22,7 @@
 
 "use strict";
 
-import { getAttributionIssueIdsForHost } from "./dashboard_spool.js";
+import { getAttributionIssueIdsForHost, countAttributionIssuesForHost } from "./dashboard_spool.js";
 import { getHostDisplayName } from "./dashboard_data.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { monotonicNowMs } from "./dashboard_time.js";
@@ -88,12 +88,16 @@ export function evaluateAttributionNotice(host, { nowMs = 0 } = {}) {
   const st = _getState(host);
   const current = getAttributionIssueIdsForHost(host);
 
+  // ★ #410-7: 通知の total はバッジと一致させるため countAttributionIssuesForHost（詳細＋集約済み）。
+  //   新規判定(newIds)は詳細IDの集合差分で行う（集約済みは詳細IDを持たないため差分対象外）。
+  const total = countAttributionIssuesForHost(host);
+
   if (!st.initialized) {
     st.initialized = true;
     st.observed = new Set(current);
     if (current.size > 0) {
       st.lastNotifiedAt = nowMs;
-      return { host, newIds: [...current], total: current.size, kind: "startup" };
+      return { host, newIds: [...current], total, kind: "startup" };
     }
     return null;
   }
@@ -102,7 +106,7 @@ export function evaluateAttributionNotice(host, { nowMs = 0 } = {}) {
   st.observed = new Set(current); // 解決分も反映（再通知しない）
   if (newIds.length === 0) return null;
   st.lastNotifiedAt = nowMs;
-  return { host, newIds, total: current.size, kind: "new" };
+  return { host, newIds, total, kind: "new" };
 }
 
 /**

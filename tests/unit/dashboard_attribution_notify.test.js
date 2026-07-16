@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 let _issueIds = new Set();
 vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   getAttributionIssueIdsForHost: vi.fn(() => new Set(_issueIds)),
+  countAttributionIssuesForHost: vi.fn(() => _issueIds.size),
 }));
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({
   getHostDisplayName: vi.fn((h) => h),

@@ -2091,12 +2091,30 @@ export function shouldLinkOfflineJob(job) {
  * @param {Object} entry - 履歴ジョブ（printStore.history / historyData のエントリ）
  * @returns {boolean} 帰属未確認なら true
  */
+/**
+ * 履歴エントリが「完了」しているかの共通判定（Phase5 P1-5 / #410-8）。
+ * printfinish が正のシグナル。旧保存データは printfinish 欠落でも finishTime/finishTimeSec/
+ * endtime/usagetime による完了証拠があれば完了扱いにする（古いログを未完了と誤判定しない）。
+ *
+ * @function isCompletedHistoryEntry
+ * @param {Object} entry - 履歴ジョブ
+ * @returns {boolean} 完了なら true
+ */
+export function isCompletedHistoryEntry(entry) {
+  if (!entry) return false;
+  if (entry.printfinish != null) return true;
+  if (Number(entry.finishTime) > 0) return true;
+  if (Number(entry.finishTimeSec) > 0) return true;
+  if (Number(entry.endtime) > 0) return true;
+  if (Number(entry.usagetime) > 0) return true;
+  return false;
+}
+
 export function isAttributionPending(entry) {
   if (!entry) return false;
-  // ★ P1-5(レビュー): 完了ジョブのみ対象。printfinish==null は「未確定/印刷中」を意味し
-  //   （K1 は印刷中エントリにも materialUsedMm を載せ得る）、現在進行中の現在ジョブを
-  //   「未確認」と誤判定してチップ/バッジ/通知させないよう除外する。
-  if (entry.printfinish == null) return false;
+  // ★ P1-5/#410-8(レビュー): 完了ジョブのみ対象。印刷中(未完了)の現在ジョブを「未確認」と
+  //   誤判定させない。旧保存データ(printfinish欠落だが finishTime/endtime あり)も完了扱いにする。
+  if (!isCompletedHistoryEntry(entry)) return false;
   // 消費が無い（materialUsedMm<=0）ジョブは帰属対象外＝pending ではない。
   if (!(Number(entry.materialUsedMm || 0) > 0)) return false;
   const info = Array.isArray(entry.filamentInfo) ? entry.filamentInfo : [];
@@ -2186,8 +2204,20 @@ export function getAttributionIssueIdsForHost(host) {
  */
 export function countAttributionIssuesForHost(host) {
   // 詳細レコード（履歴pending＋隔離）＋ 上限超過でアーカイブへ集約された件数。
+  return getAttributionIssueIdsForHost(host).size + countUnattributedArchiveForHost(host);
+}
+
+/**
+ * 指定ホストの「集約済み（詳細なし）」未確認件数を返す（#410-7 バッジ内訳表示用）。
+ * これらは pendingUnattributedUsage の上限超過でアーカイブへ畳まれ、個別詳細は持たない。
+ *
+ * @function countUnattributedArchiveForHost
+ * @param {string} host - ホスト名
+ * @returns {number} 集約済み件数
+ */
+export function countUnattributedArchiveForHost(host) {
   const arch = monitorData.pendingUnattributedUsageArchive?.[host];
-  return getAttributionIssueIdsForHost(host).size + (Number(arch?.count) || 0);
+  return Number(arch?.count) || 0;
 }
 
 /**

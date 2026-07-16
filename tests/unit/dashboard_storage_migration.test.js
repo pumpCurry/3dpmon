@@ -87,7 +87,7 @@ vi.mock('../../3dp_lib/dashboard_data.js', () => ({
 vi.mock('../../3dp_lib/dashboard_filament_presets.js', () => ({ FILAMENT_PRESETS: [] }));
 vi.mock('../../3dp_lib/dashboard_log_util.js', () => ({ logManager: { add: vi.fn() } }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: () => ({ seeded: 0 }) }));
+vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: () => ({ seeded: 0 }), quarantineInvalidMountEvents: () => 0 }));
 vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   initIdb: vi.fn(), isIdbAvailable: () => false, getIdbCache: () => null,
   queueSharedWrite: vi.fn(), queueMachineWrite: vi.fn(), flushIdb: vi.fn(),

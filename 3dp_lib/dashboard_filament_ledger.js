@@ -124,6 +124,48 @@ function _isCompleted(job) {
 }
 
 /**
+ * mountHistory から参照不整合イベントを隔離する（#410-9・import/restore 後の防衛）。
+ *
+ * ★ レビュー3: import された不正参照イベントをそのまま本台帳へ入れると projection が corrupt に
+ * なり derive が停止する。自動で survivor を推測して修復するのは誤帰属を確定する恐れがあるため
+ * 行わず、参照先の mount 区間が存在しない reanchor/unmount(target付き)/supersede を
+ * `mountHistoryRejectedEvents` へ退避する（元データは失わず、有効 projection には適用しない）。
+ * closed/superseded 参照は projection が安全に扱うため対象外（存在しない参照のみ隔離）。
+ *
+ * @function quarantineInvalidMountEvents
+ * @returns {number} 隔離した件数
+ */
+export function quarantineInvalidMountEvents() {
+  const list = _getMountHistory();
+  if (!list.length) return 0;
+  const mountIds = new Set();
+  for (const e of list) {
+    if (e && e.type === "mount") mountIds.add(e.intervalId || e.evId);
+  }
+  const rejected = [];
+  const kept = [];
+  for (const e of list) {
+    let reason = null;
+    if (e && e.type === "reanchor") {
+      if (e.targetIntervalId == null || !mountIds.has(e.targetIntervalId)) reason = "reanchor-invalid-reference";
+    } else if (e && e.type === "unmount") {
+      if (e.targetIntervalId != null && !mountIds.has(e.targetIntervalId)) reason = "unmount-invalid-reference";
+    } else if (e && e.type === "supersede") {
+      const ids = Array.isArray(e.targetIntervalIds) ? e.targetIntervalIds : [];
+      if (ids.some(id => !mountIds.has(id))) reason = "supersede-invalid-reference";
+    }
+    if (reason) rejected.push({ event: e, reason }); else kept.push(e);
+  }
+  if (rejected.length) {
+    if (!Array.isArray(monitorData.mountHistoryRejectedEvents)) monitorData.mountHistoryRejectedEvents = [];
+    monitorData.mountHistoryRejectedEvents.push(...rejected);
+    monitorData.mountHistory = kept;
+    console.warn(`[quarantineInvalidMountEvents] 参照不整合 ${rejected.length} 件を mountHistoryRejectedEvents へ隔離`);
+  }
+  return rejected.length;
+}
+
+/**
  * 装着イベントを mountHistory に追記する。
  *
  * @function appendMountEvent

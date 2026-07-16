@@ -267,6 +267,13 @@ export const monitorData = {
    */
   mountHistorySeq: 0,
   /**
+   * ★ #410-9: import/restore 時に参照不整合と判定された mount イベントの隔離領域。
+   * 有効な projection へは適用せず（corrupt 化を防ぐ）、元データは失わない。
+   * 各要素: { event, reason }
+   * @type {Array<Object>}
+   */
+  mountHistoryRejectedEvents: [],
+  /**
    * ★ Phase2A: 有効な jobId が無いまま完了した消費の隔離領域。
    * 電源投入直後などで printStartTime が 0/null の「無効ID」ジョブは
    * 履歴・usedLengthLog・境界へ確定記録を作らず（過去全履歴の誤減算＝退行を防ぐ）、

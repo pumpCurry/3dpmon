@@ -40,7 +40,7 @@ import { monitorData, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboar
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
-import { initLedgerAnchors } from "./dashboard_filament_ledger.js";
+import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import {
   initIdb,
@@ -654,6 +654,8 @@ const LS_GLOBAL_FIELDS = [
   "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
   // ★ ADR-0004: フィラメント装着履歴 ＋ watermark(seq)
   "mountHistory", "mountHistorySeq",
+  // ★ #410-9: 参照不整合で隔離した mount イベント（元データを失わない）
+  "mountHistoryRejectedEvents",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
   // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
@@ -875,6 +877,7 @@ function _flushStorage() {
       // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）＋ watermark(seq)
       queueSharedWrite("mountHistory",       monitorData.mountHistory);
       queueSharedWrite("mountHistorySeq",    monitorData.mountHistorySeq);
+      queueSharedWrite("mountHistoryRejectedEvents", monitorData.mountHistoryRejectedEvents);
       // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
       queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
       queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
@@ -1006,6 +1009,9 @@ function _reconcileAfterRestore() {
     console.debug("[restoreUnifiedStorage] リレー子: 台帳アンカー種付けをスキップ（親が権威）");
     return;
   }
+  // ★ #410-9: 種付け前に、import/復元された参照不整合イベントを隔離する（projection の corrupt 化防止）。
+  try { quarantineInvalidMountEvents(); }
+  catch (e) { console.warn("[restoreUnifiedStorage] quarantineInvalidMountEvents 失敗:", e?.message || e); }
   try {
     const report = initLedgerAnchors({ nowMs: Date.now() });
     if (report && report.seeded > 0) {

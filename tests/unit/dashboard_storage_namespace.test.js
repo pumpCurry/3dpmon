@@ -70,7 +70,7 @@ vi.mock('../../3dp_lib/dashboard_filament_presets.js', () => ({ FILAMENT_PRESETS
 vi.mock('../../3dp_lib/dashboard_log_util.js', () => ({ logManager: { add: vi.fn() } }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({ getCurrentTimestamp: () => 0 }));
 const _initLedgerAnchors = vi.hoisted(() => vi.fn(() => ({ seeded: 0 })));
-vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: _initLedgerAnchors }));
+vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: _initLedgerAnchors, quarantineInvalidMountEvents: () => 0 }));
 
 /* IDB は実装の setIdbDbName 呼び出しを spy できる本物のモジュールを使う(LS 経路は無効化) */
 const _idbDbNameCalls = [];

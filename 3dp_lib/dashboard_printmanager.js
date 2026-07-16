@@ -59,7 +59,9 @@ import {
   formatSpoolDisplayId,
   buildFilamentRecommendations,
   getAttributionPresentation,
-  countAttributionIssuesForHost
+  countAttributionIssuesForHost,
+  getAttributionIssueIdsForHost,
+  countUnattributedArchiveForHost
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
 import { recomputeSpoolFromManualEdit } from "./dashboard_filament_ledger.js";
@@ -1787,12 +1789,20 @@ export function updateAttributionBadge(hostname) {
     if (!panel) return;
     const badge = panel.querySelector(".panel-attr-badge");
     if (!badge) return;
-    const n = countAttributionIssuesForHost(hostname);
-    if (n > 0) {
-      badge.textContent = `未確認 ${n}`;
+    // ★ #410-7: 詳細（履歴/隔離で確認可能）と 集約済み（上限超過で詳細なし）を分けて示す。
+    //   バッジ本文は詳細件数、集約済みがあれば "+M" を付し、ツールチップで内訳を明示する。
+    const detail = getAttributionIssueIdsForHost(hostname).size;
+    const archived = countUnattributedArchiveForHost(hostname);
+    const total = detail + archived;
+    if (total > 0) {
+      badge.textContent = archived > 0 ? `未確認 ${detail}+${archived}` : `未確認 ${detail}`;
+      badge.title = archived > 0
+        ? `未確認 ${total} 件（確認可能 ${detail} 件・集約済み ${archived} 件＝詳細なし）`
+        : `未確認 ${detail} 件`;
       badge.hidden = false;
     } else {
       badge.textContent = "";
+      badge.title = "";
       badge.hidden = true;
     }
   } catch { /* DOM 未構築・環境非DOM は無視 */ }
