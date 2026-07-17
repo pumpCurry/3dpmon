@@ -52,6 +52,22 @@ function _nextSeq(host) {
   return Math.max(base, cur) + 1;
 }
 
+/**
+ * @private 観測スナップショットから装着「事実」だけを投影する（解釈しない）。
+ * O2 が baseline/current の装着状態を比較できるよう ObservationWindow へ載せる。
+ * @param {?Object} snap 観測スナップショット（watermark or current）
+ * @returns {{spoolId:?string, intervalId:?string, intervalStatus:string, observationState:string}}
+ */
+function _mountFacts(snap) {
+  if (!snap) return { spoolId: null, intervalId: null, intervalStatus: "unknown", observationState: "unknown" };
+  return {
+    spoolId: snap.mountedSpoolId ?? null,
+    intervalId: snap.mountIntervalId ?? null,
+    intervalStatus: snap.mountIntervalStatus || "unknown",
+    observationState: snap.observationState || (snap.mountedSpoolId != null ? "mounted" : "unmounted")
+  };
+}
+
 /** @private 現在履歴から観測スナップショットを構築（read-only）。 */
 function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "none" } = {}) {
   const hist = monitorData.machines?.[host]?.printStore?.history;
@@ -113,8 +129,9 @@ export function recordObservation(host, opts = {}) {
  *
  * @function computeObservationWindow
  * @param {string} host
- * @returns {{windowId:string, bounded:boolean, truncated:boolean, generationChanged:boolean,
- *   reason:string, offlineObservationKeys:string[], unresolvedJobIds:string[],
+ * @returns {{windowId:string, windowKind:string, bounded:boolean, truncated:boolean,
+ *   generationChanged:boolean, reason:string, offlineObservationKeys:string[], unresolvedJobIds:string[],
+ *   hasCurrentObservation:boolean, baselineMount:Object, currentMount:Object,
  *   baselineFingerprint:?Object, currentFingerprint:Object,
  *   baselineSequence:number, currentSequence:number, stalenessMs:?number, watermark:?Object}}
  */
@@ -128,15 +145,28 @@ export function computeObservationWindow(host) {
   const currentSequence = Number(curSnap?.observationSequence) || 0;
   const windowId = `${host}|b${baselineSequence}|c${currentSequence}`;
 
+  // ★ O2-P0: 解釈しない観測事実を ObservationWindow へ載せる（O1 責務は不変・戻り値拡張のみ）。
+  //   O2 は baseline/current の装着一致を candidate 必須条件に使う。
+  const hasCurrentObservation = !!curSnap;
+  const baselineMount = _mountFacts(wm);
+  const currentMount = _mountFacts(curSnap);
   const base = {
     windowId, truncated: !!wm?.retainedRange?.truncated,
     baselineFingerprint: wm?.generation || null, currentFingerprint,
-    baselineSequence, currentSequence, watermark: wm
+    baselineSequence, currentSequence, watermark: wm,
+    hasCurrentObservation, baselineMount, currentMount
   };
 
   if (!wm || !Array.isArray(wm.seenObservationKeys)) {
-    return { ...base, bounded: false, generationChanged: false, reason: "no-prior-observation",
-      offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
+    return { ...base, windowKind: "no-prior", bounded: false, generationChanged: false,
+      reason: "no-prior-observation", offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
+  }
+
+  // ★ O2-P0-2: baseline はあるが復帰後の current 観測がまだ無い＝装着状態未確認。
+  //   O2 が装着一致を検証できないため、この段階では窓を不完全として扱う。
+  if (!hasCurrentObservation) {
+    return { ...base, windowKind: "incomplete", bounded: false, generationChanged: false,
+      reason: "current-observation-missing", offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
   }
 
   const identityChanged = wm.printerIdentity !== _identity(host);
@@ -191,10 +221,17 @@ export function computeObservationWindow(host) {
 
   const persistedAt = Number(wm.persistedAt) || Number(wm.observedAtEpochMs) || 0;
   const stalenessMs = persistedAt > 0 ? Math.max(0, wallNowMs() - persistedAt) : null;
+  const bounded = !generationChanged && unresolvedJobIds.length === 0;
+
+  // ★ O2-P1-1: 構造化した windowKind を提供し、O2 が reason 文字列に依存しないようにする。
+  //   reason は説明表示用に残す。
+  let windowKind;
+  if (hasIdReuse || hasInsufficient) windowKind = "insufficient";
+  else if (!bounded) windowKind = "unbounded";
+  else windowKind = "bounded";
 
   return {
-    ...base,
-    bounded: !generationChanged && unresolvedJobIds.length === 0,
+    ...base, windowKind, bounded,
     generationChanged, reason, offlineObservationKeys, unresolvedJobIds, stalenessMs
   };
 }

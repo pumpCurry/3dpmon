@@ -10,9 +10,15 @@
  *   純関数で「分類 → candidate → confidence(理由付き)」を生成するだけの Classification レイヤ。
  *   - 入力は ObservationWindow のみ（computeObservationWindow は USE のみ・変更しない）。
  *   - remaining / projected / 安全基盤には一切触れない（それは O3 以降）。
- *   - 副作用なし（monitorData への書き込みなし）。永続化・relay・確認UIは O4/O5。
+ *   - 副作用なし（monitorData への書き込み・参照なし）。永続化・relay・確認UIは O4/O5。
  *
  *   ObservationWindow → classifyObservationWindow → { classification, candidate, confidence }
+ *
+ * 【継続候補(continuity-candidate)の必須条件（O2レビュー P0-1/P0-2）】
+ *   「停止前に A が付いていた」だけでは不足。復帰後も**同じスプールが観測されている**事実が要る:
+ *   ①current 観測が存在する ②baseline/current とも mounted ③spoolId 一致
+ *   ④current の mount interval が corrupt/ambiguous でない。1つでも欠ければ candidate を出さない
+ *   （current 未観測=observation-incomplete、相違/未装着/corrupt=continuity-contradicted）。
  *
  * @version 2.3.0
  * @since   2.3.0
@@ -25,12 +31,14 @@ import { computeObservationWindow, buildConfidence } from "./dashboard_offline_o
 
 /** 帰属分類（O2 の出力ラベル）。O3/O5 はこれで分岐する。 */
 export const ATTR_CLASS = Object.freeze({
-  CONTINUITY_CANDIDATE: "continuity-candidate", // bounded＋offline完了あり＋装着スプール既知
-  NO_OFFLINE_ACTIVITY: "no-offline-activity",   // bounded だが offline 完了なし（帰属対象なし）
-  NO_MOUNTED_SPOOL: "no-mounted-spool",         // bounded＋offline あるが baseline 未装着＝継続不能
-  UNBOUNDED: "unbounded",                        // 世代交代/identity変化/巻き戻し＝窓を作れない
-  INSUFFICIENT: "insufficient",                  // 識別材料不足/再利用ID未検証＝候補単位で判定不能
-  NO_PRIOR: "no-prior"                           // 前回観測なし（初回導入/移行）
+  CONTINUITY_CANDIDATE: "continuity-candidate",       // 停止前後で同一スプール装着継続を観測＝帰属候補
+  CONTINUITY_CONTRADICTED: "continuity-contradicted", // 復帰後に別スプール/未装着/corrupt＝継続と矛盾
+  NO_OFFLINE_ACTIVITY: "no-offline-activity",         // bounded だが offline 完了なし（帰属対象なし）
+  NO_MOUNTED_SPOOL: "no-mounted-spool",               // baseline 未装着＝どのスプールへ継続か不明
+  OBSERVATION_INCOMPLETE: "observation-incomplete",   // baseline あるが復帰後 current 未観測
+  UNBOUNDED: "unbounded",                              // 世代交代/identity変化/巻き戻し＝窓を作れない
+  INSUFFICIENT: "insufficient",                        // 識別材料不足/再利用ID未検証＝候補単位で判定不能
+  NO_PRIOR: "no-prior"                                 // 前回観測なし（初回導入/移行）
 });
 
 /** 観測鮮度の劣化しきい値（これを超える古さは confidence を1段下げる）。 */
@@ -43,7 +51,8 @@ function _downgrade(level, floor = "none") {
   const i = _LEVELS.indexOf(level);
   const fi = _LEVELS.indexOf(floor);
   if (i < 0) return floor;
-  return _LEVELS[Math.min(Math.max(i + 1, 0), fi < 0 ? _LEVELS.length - 1 : fi)];
+  const cap = fi < 0 ? _LEVELS.length - 1 : fi;
+  return _LEVELS[Math.min(i + 1, cap)];
 }
 
 /** 分類結果オブジェクトを一定形で組み立てる。 */
@@ -51,6 +60,7 @@ function _result(classification, candidate, confidence, window) {
   return {
     classification,
     windowId: window?.windowId ?? null,
+    windowKind: window?.windowKind ?? null,
     bounded: !!window?.bounded,
     reason: window?.reason ?? null,
     candidate: candidate || null,
@@ -66,7 +76,7 @@ function _result(classification, candidate, confidence, window) {
  *
  * @function classifyObservationWindow
  * @param {Object} window computeObservationWindow の戻り値（ObservationWindow）
- * @returns {{classification:string, windowId:?string, bounded:boolean, reason:?string,
+ * @returns {{classification:string, windowId:?string, windowKind:?string, bounded:boolean, reason:?string,
  *   candidate:?Object, confidence:{level:string, reasons:string[]},
  *   offlineObservationKeys:string[], unresolvedJobIds:string[]}}
  */
@@ -74,56 +84,75 @@ export function classifyObservationWindow(window) {
   if (!window || typeof window !== "object") {
     return _result(ATTR_CLASS.NO_PRIOR, null, buildConfidence("none", ["no-window"]), window);
   }
-  const wm = window.watermark || null;
+  const kind = window.windowKind;
   const offline = Array.isArray(window.offlineObservationKeys) ? window.offlineObservationKeys : [];
-  const unresolved = Array.isArray(window.unresolvedJobIds) ? window.unresolvedJobIds : [];
+  const baselineMount = window.baselineMount || {};
+  const currentMount = window.currentMount || {};
 
-  // 前回観測なし（初回導入・移行）
-  if (window.reason === "no-prior-observation") {
+  // 前回観測なし（baseline がない）
+  if (kind === "no-prior" || window.reason === "no-prior-observation") {
     return _result(ATTR_CLASS.NO_PRIOR, null, buildConfidence("none", ["no-prior-observation"]), window);
   }
-
-  // 窓を作れない（bounded=false）
-  if (!window.bounded) {
-    if (window.reason === "reused-job-id-unverifiable" || window.reason === "job-identity-insufficient") {
-      // 候補単位で識別不能：継続推定せず、未解決 id を持ち越す
-      return _result(ATTR_CLASS.INSUFFICIENT, null, buildConfidence("none", [window.reason]), window);
-    }
-    // identity 変化 / 時刻巻き戻し / 世代交代 / 大幅縮小＝境界不成立
+  // baseline はあるが復帰後 current 観測がまだ無い（装着状態を検証できない）
+  if (kind === "incomplete" || window.hasCurrentObservation === false) {
+    return _result(ATTR_CLASS.OBSERVATION_INCOMPLETE, null, buildConfidence("none", ["current-observation-missing"]), window);
+  }
+  // 候補単位で識別不能（再利用ID未検証/識別材料不足）
+  if (kind === "insufficient") {
+    return _result(ATTR_CLASS.INSUFFICIENT, null, buildConfidence("none", [window.reason || "insufficient"]), window);
+  }
+  // 世代交代/identity変化/時刻巻き戻し/大幅縮小＝境界不成立
+  if (kind === "unbounded" || !window.bounded) {
     return _result(ATTR_CLASS.UNBOUNDED, null, buildConfidence("none", [window.reason || "unbounded"]), window);
   }
 
-  // bounded だが offline 完了なし＝帰属対象なし（正常）
+  // ここから bounded 確定。まず offline 完了の有無。
   if (offline.length === 0) {
-    return _result(ATTR_CLASS.NO_OFFLINE_ACTIVITY, null, buildConfidence("high", ["bounded", "no-offline-jobs"]), window);
+    // 帰属対象なし（正常）。ただし truncated/stale は監査用に理由へ残し軽く降格。
+    const reasons = ["bounded", "no-offline-jobs"];
+    let level = "high";
+    if (window.truncated) { reasons.push("history-truncated"); level = _downgrade(level, "medium"); }
+    if ((Number(window.stalenessMs) || 0) > STALE_DOWNGRADE_MS) { reasons.push("stale-observation"); level = _downgrade(level, "medium"); }
+    return _result(ATTR_CLASS.NO_OFFLINE_ACTIVITY, null, buildConfidence(level, reasons), window);
   }
 
-  // bounded かつ offline 完了あり
-  const spoolId = wm?.mountedSpoolId ?? null;
-  if (spoolId == null) {
-    // オフライン期間に装着スプール不明＝どのスプールへ継続帰属すべきか決められない
+  // offline 完了あり → 停止前後の装着一致を必須検証。
+  // ① baseline 未装着＝どのスプールへ継続か決められない
+  if (baselineMount.observationState !== "mounted" || baselineMount.spoolId == null) {
     return _result(ATTR_CLASS.NO_MOUNTED_SPOOL, null, buildConfidence("none", ["bounded", "no-mounted-spool-at-baseline"]), window);
   }
+  // ② current 未装着＝復帰後にスプールが外れている＝継続と矛盾
+  if (currentMount.observationState !== "mounted" || currentMount.spoolId == null) {
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["current-unmounted"]), window);
+  }
+  // ③ spoolId 相違＝停止中に別スプールへ交換された＝継続と矛盾（最重要）
+  if (baselineMount.spoolId !== currentMount.spoolId) {
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["mounted-spool-changed"]), window);
+  }
+  // ④ current の mount interval が corrupt/ambiguous＝装着継続を信頼できない＝矛盾扱い
+  if (currentMount.intervalStatus === "corrupt" || currentMount.intervalStatus === "ambiguous") {
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", [`current-interval-${currentMount.intervalStatus}`]), window);
+  }
 
-  // 継続候補：装着スプールを candidate に、証拠に応じて confidence を段階付け（下限 low）
+  // 停止前後で同一スプールが装着継続＝continuity candidate。confidence を証拠で段階付け（下限 low）。
   const reasons = ["bounded", "same-mounted-spool"];
   let level = "high";
-  const ivStatus = wm?.mountIntervalStatus || "unknown";
-  if (ivStatus === "ok") {
-    reasons.push("mount-interval-ok");
-  } else {
-    reasons.push(`mount-interval-${ivStatus}`);
-    level = _downgrade(level, "low");
-  }
+  const ivStatus = currentMount.intervalStatus;
+  if (ivStatus === "ok") { reasons.push("current-interval-ok"); }
+  else if (ivStatus === "none") { reasons.push("current-interval-none"); level = _downgrade(level, "low"); }
+  else { reasons.push(`current-interval-${ivStatus}`); level = _downgrade(level, "low"); } // unknown 等
+  // interval id が停止前後で不一致＝途中 detach/reattach の可能性＝同一スプールでも降格。
+  const sameInterval = baselineMount.intervalId != null && baselineMount.intervalId === currentMount.intervalId;
+  if (sameInterval) { reasons.push("same-mount-interval"); }
+  else { reasons.push("mount-interval-changed"); level = _downgrade(level, "low"); }
   if (window.truncated) { reasons.push("history-truncated"); level = _downgrade(level, "low"); }
-  if (unresolved.length > 0) { reasons.push("some-unresolved-jobs"); level = _downgrade(level, "low"); }
   if ((Number(window.stalenessMs) || 0) > STALE_DOWNGRADE_MS) { reasons.push("stale-observation"); level = _downgrade(level, "low"); }
 
   const candidate = {
-    candidateSpoolId: spoolId,
-    candidateIntervalId: wm?.mountIntervalId ?? null,
+    candidateSpoolId: baselineMount.spoolId,
+    candidateBaselineIntervalId: baselineMount.intervalId ?? null,
+    candidateCurrentIntervalId: currentMount.intervalId ?? null,
     offlineObservationKeys: offline.slice(),
-    unresolvedJobIds: unresolved.slice(),
     windowId: window.windowId ?? null
   };
   return _result(ATTR_CLASS.CONTINUITY_CANDIDATE, candidate, buildConfidence(level, reasons), window);

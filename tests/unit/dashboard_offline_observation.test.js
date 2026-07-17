@@ -222,6 +222,50 @@ describe("commitObservationWindow — fail-closed transaction（P0-3）", () => 
   });
 });
 
+describe("computeObservationWindow — 観測事実の投影（O2-P0 用・解釈しない）", () => {
+  it("baselineMount / currentMount / hasCurrentObservation / windowKind を返す", () => {
+    mockMonitorData.hostSpoolMap.h = "S1";
+    setHistory("h", [job("1000", 100)]);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w0 = computeObservationWindow("h");
+    commitObservationWindow("h", { windowId: w0.windowId, expectedSequence: w0.currentSequence, candidatePersistedAt: 1 });
+    setHistory("h", [job("1000", 100), job("1001", 200)]);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w = computeObservationWindow("h");
+    expect(w.hasCurrentObservation).toBe(true);
+    expect(w.windowKind).toBe("bounded");
+    expect(w.baselineMount).toMatchObject({ spoolId: "S1", intervalId: "iv1", intervalStatus: "ok", observationState: "mounted" });
+    expect(w.currentMount).toMatchObject({ spoolId: "S1", observationState: "mounted" });
+  });
+
+  it("baseline はあるが current 未観測なら hasCurrentObservation=false / windowKind=incomplete", () => {
+    mockMonitorData.hostObservationWatermark = { h: {
+      seenObservationKeys: [], observationSequence: 3, printerIdentity: "h||", generation: {},
+      retainedRange: {}, mountedSpoolId: "S1", observationState: "mounted", persistedAt: 1
+    } };
+    // hostObservationCurrent.h は未設定
+    setHistory("h", [job("1", 100)]);
+    const w = computeObservationWindow("h");
+    expect(w.hasCurrentObservation).toBe(false);
+    expect(w.windowKind).toBe("incomplete");
+    expect(w.baselineMount.spoolId).toBe("S1");
+  });
+
+  it("current が別スプールでも観測事実として反映する（分類はしない）", () => {
+    mockMonitorData.hostSpoolMap.h = "S1";
+    setHistory("h", [job("1000", 100)]);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w0 = computeObservationWindow("h");
+    commitObservationWindow("h", { windowId: w0.windowId, expectedSequence: w0.currentSequence, candidatePersistedAt: 1 });
+    mockMonitorData.hostSpoolMap.h = "S2"; // 復帰後に別スプール
+    setHistory("h", [job("1000", 100), job("1001", 200)]);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv9" });
+    const w = computeObservationWindow("h");
+    expect(w.baselineMount.spoolId).toBe("S1");
+    expect(w.currentMount.spoolId).toBe("S2");
+  });
+});
+
 describe("buildConfidence", () => {
   it("level と reasons を保持、不正 level は none", () => {
     expect(buildConfidence("high", ["seen-job"])).toEqual({ level: "high", reasons: ["seen-job"] });
