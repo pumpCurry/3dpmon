@@ -1,29 +1,27 @@
 /**
- * @fileoverview オフライン推定帰属(Option4)の観測 watermark 層 — #411-O1
+ * @fileoverview オフライン推定帰属(Option4)の観測レイヤ — #411-O1
  * @file dashboard_offline_observation.js
  * @copyright (c) pumpCurry 2026 / 5r4ce2
  * @author pumpCurry
  * -----------------------------------------------------------
  * @module dashboard_offline_observation
  *
- * 【役割】アプリ稼働中に per-host で「見えていた状態」を記録し（観測 watermark）、
- *   再起動後に「現在の完了履歴 − 停止前観測」でオフライン新規ジョブを特定する材料にする。
+ * 【責務（レビュー#411 で固定）】O1 は「観測・保存・比較」だけを行う Observation レイヤ。
+ *   解釈・分類・candidate 生成（O2）や推定残量（O3）は含めない。公開 API は3つ:
+ *   - recordObservation(host)          … 稼働中の観測を current へ記録（baseline 非上書き）
+ *   - computeObservationWindow(host)   … baseline vs current で ObservationWindow を返す（純関数）
+ *   - commitObservationWindow(host,..) … 窓評価後に baseline 昇格（fail-closed transaction）
  *
- * 【同一実行の識別（レビュー#411 P0-1）】job id だけではプリンタ再起動で同じ id が別の
- *   物理印刷へ再利用された場合を区別できない。id ＋ 開始/完了時刻 ＋ ファイル同一性の
- *   複合キー（jobObservationKey）を集合差分に使う。識別材料が不足するときは bounded=false。
+ * 【重要な安全性（レビュー指摘）】
+ *   - baseline は「最新 SEEN_CAP 件」に切詰めるため retainedRange（時系列境界）を保存し、
+ *     比較は境界内/以降のみ。境界より古い履歴を offline 扱いしない（5000件問題の根治）。
+ *   - 同一実行は jobObservationIdentity（id＋開始/完了時刻＋file）の複合キーで識別。
+ *     識別材料不足/再利用IDは offline **候補単位**で判定し bounded=false／unresolved へ。
+ *   - commit は fail-closed（windowId/candidatePersistedAt/expectedSequence 必須・不一致は拒否）。
  *
- * 【世代反証（P0-2）】printer identity 変化に加え、履歴 generation fingerprint（completion 時系列
- *   ベース）を baseline/current で実際に比較し、latest completion 巻き戻り・世代交代・大幅縮小を検出する。
- *
- * 【ライフサイクル（P0-1）】baseline(hostObservationWatermark)と current(hostObservationCurrent)を
- *   別スロット化。record は current のみ更新（baseline 非上書き。未設定初回のみ bootstrap）。
- *   commitObservationBaseline は「窓評価後」に windowId 付きで昇格する（同一 windowId は冪等）。
- *
- * 【安全境界（レビュー4の絶対条件）】read-only。書き込みは hostObservationWatermark /
- *   hostObservationCurrent のみ。completionObservationId/completionOpId/opId/intervalId/
- *   pendingUnattributedUsage/mountHistoryRejectedEvents/ledgerRepairRequired/mountHistory/
- *   usedLengthLog/remainingLengthMm には一切触れない。残量は減らさない（O3 以降・確認後）。
+ * 【read-only 境界】書き込みは hostObservationWatermark / hostObservationCurrent のみ。
+ *   安全基盤（completionObservationId/pendingUnattributedUsage/mountHistory/intervalId/
+ *   usedLengthLog/remainingLengthMm 等）には一切触れない。残量は減らさない。
  *
  * @version 2.3.0
  * @since   2.3.0
@@ -36,18 +34,10 @@ import { monitorData } from "./dashboard_data.js";
 import { wallNowMs } from "./dashboard_time.js";
 import { completedJobObservations, historyGenerationFingerprint } from "./dashboard_history_identity.js";
 
-/** 観測キーの保持上限（#411-P1-4。completion 時系列で最新のみ保持）。 */
+/** 観測キーの保持上限（completion 時系列で最新のみ保持）。 */
 const SEEN_CAP = 5000;
-/** 「識別材料不足」とみなす割合しきい（未識別が半数超なら bounded=false）。 */
-const INSUFFICIENT_RATIO = 0.5;
 
-/** per-host session observation counter（メモリ。再起動後は baseline/current から継続採番）。 */
-const _sessionObsSeq = new Map();
-
-/**
- * プリンタ同一性シグネチャ（read-only・取得できる範囲）。
- * @private @param {string} host @returns {string}
- */
+/** @private */
 function _identity(host) {
   const sd = monitorData.machines?.[host]?.storedData || {};
   const model = sd.model?.rawValue ?? "";
@@ -55,165 +45,207 @@ function _identity(host) {
   return `${host}|${type}|${model}`;
 }
 
-/**
- * 観測 sequence を継続採番する（#411-P1-3。再起動で 1 へ戻さない）。
- * @private @param {string} host @returns {number}
- */
+/** @private 継続採番（再起動で 1 へ戻さない）。current/baseline から常に単調増加。 */
 function _nextSeq(host) {
   const base = Number(monitorData.hostObservationWatermark?.[host]?.observationSequence) || 0;
   const cur = Number(monitorData.hostObservationCurrent?.[host]?.observationSequence) || 0;
-  const mem = _sessionObsSeq.get(host) || 0;
-  const next = Math.max(base, cur, mem) + 1;
-  _sessionObsSeq.set(host, next);
-  return next;
+  return Math.max(base, cur) + 1;
 }
 
-/**
- * 現在の観測スナップショットを構築する（read-only）。
- * @private
- */
-function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "unknown" } = {}) {
+/** @private 現在履歴から観測スナップショットを構築（read-only）。 */
+function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "none" } = {}) {
   const hist = monitorData.machines?.[host]?.printStore?.history;
-  const obsAll = completedJobObservations(hist);          // completion 時系列・重複排除済み
+  const obsAll = completedJobObservations(hist); // completion 時系列・重複排除
   const totalCompletedCount = obsAll.length;
-  // ★ P1-4: 文字列順ではなく completion 時系列の「最新 SEEN_CAP 件」を保持。
   const retained = obsAll.length > SEEN_CAP ? obsAll.slice(obsAll.length - SEEN_CAP) : obsAll;
+  const truncated = totalCompletedCount > retained.length;
   const spoolId = monitorData.hostSpoolMap?.[host] ?? null;
+  const first = retained[0] || null;
+  const last = retained[retained.length - 1] || null;
   return {
     observedAtEpochMs: wallNowMs(),
     persistedAt: null,
     observationSequence: _nextSeq(host),
     mountedSpoolId: spoolId,
     mountIntervalId: mountIntervalId ?? null,
-    mountIntervalStatus,                                   // ok/none/ambiguous/corrupt/unknown
+    mountIntervalStatus,
     observationState: spoolId ? "mounted" : "unmounted",
     printerIdentity: _identity(host),
-    generation: historyGenerationFingerprint(hist),       // 時系列ベース fingerprint
-    seenObservationKeys: retained.map(o => o.key),         // 複合キー（diff 基準）
-    undistinguishedCount: retained.filter(o => !o.hasDistinguishing).length,
+    generation: historyGenerationFingerprint(hist),
+    seenObservationKeys: retained.map(o => o.key),
+    // ★ retainedRange: 比較を境界内に限定するための時系列境界（5000件問題対策）。
+    retainedRange: {
+      firstKey: first ? first.key : null,
+      lastKey: last ? last.key : null,
+      firstCompletedAt: first ? (first.finishAt || 0) : 0,
+      lastCompletedAt: last ? (last.finishAt || 0) : 0,
+      truncated
+    },
     retainedObservationCount: retained.length,
     totalCompletedCount,
-    truncated: totalCompletedCount > retained.length
+    truncated
   };
 }
 
 /**
- * アプリ稼働中の観測を per-host に記録する（#411-O1・read-only）。current を更新し baseline は不変。
- * @function recordHostObservation
+ * 稼働中の観測を current へ記録する（baseline 非上書き。未設定初回のみ bootstrap）。
+ * @function recordObservation
  * @param {string} host
  * @param {{mountIntervalId?:?string, mountIntervalStatus?:string}} [opts]
- * @returns {?Object}
+ * @returns {?Object} current スナップショット
  */
-export function recordHostObservation(host, opts = {}) {
+export function recordObservation(host, opts = {}) {
   if (!host) return null;
   if (!monitorData.hostObservationWatermark || typeof monitorData.hostObservationWatermark !== "object") monitorData.hostObservationWatermark = {};
   if (!monitorData.hostObservationCurrent || typeof monitorData.hostObservationCurrent !== "object") monitorData.hostObservationCurrent = {};
   const snap = _buildObservation(host, opts);
   monitorData.hostObservationCurrent[host] = snap;
-  // ★ P0-1: 既存 baseline は評価前に上書きしない。無い初回のみ bootstrap（新規導入＝offline無し）。
   if (!monitorData.hostObservationWatermark[host]) {
     monitorData.hostObservationWatermark[host] = {
-      ...snap, committedReason: "bootstrap", persistedAt: wallNowMs(),
-      baselineObservationSequence: snap.observationSequence, lastCommittedWindowId: "bootstrap"
+      ...snap, committedReason: "bootstrap", persistedAt: wallNowMs(), lastCommittedWindowId: "bootstrap"
     };
   }
   return snap;
 }
 
 /**
- * オフライン窓「評価後」に current を baseline へ昇格する（#411-O1/P1-2）。
+ * オフライン観測窓を計算する（純関数。O2 はこの ObservationWindow を分類する）。
  *
- * ★ commit 順序契約（O2 が守る）: ①window 評価 → ②candidate/report を永続化 →
- *   ③同一 windowId で本関数を呼び baseline 昇格 → ④durable flush。baseline を先に進めない。
- * 同一 windowId の再処理は冪等（既昇格なら no-op）＝クラッシュ後の再実行で二重昇格しない。
- *
- * @function commitObservationBaseline
+ * @function computeObservationWindow
  * @param {string} host
- * @param {{reason?:string, windowId?:?string, candidatePersistedAt?:?number}} [opts]
- * @returns {?Object} 新しい baseline（未昇格 or current 無しなら null）
+ * @returns {{windowId:string, bounded:boolean, truncated:boolean, generationChanged:boolean,
+ *   reason:string, offlineObservationKeys:string[], unresolvedJobIds:string[],
+ *   baselineFingerprint:?Object, currentFingerprint:Object,
+ *   baselineSequence:number, currentSequence:number, stalenessMs:?number, watermark:?Object}}
  */
-export function commitObservationBaseline(host, { reason = "committed", windowId = null, candidatePersistedAt = null } = {}) {
-  if (!host) return null;
-  const cur = monitorData.hostObservationCurrent?.[host];
-  if (!cur) return null;
-  if (!monitorData.hostObservationWatermark || typeof monitorData.hostObservationWatermark !== "object") monitorData.hostObservationWatermark = {};
-  const prev = monitorData.hostObservationWatermark[host];
-  // 冪等: 同一 windowId で既に昇格済みなら何もしない。
-  if (windowId != null && prev && prev.lastCommittedWindowId === windowId) return prev;
-  monitorData.hostObservationWatermark[host] = {
-    ...cur,
-    committedReason: reason,
-    persistedAt: wallNowMs(),
-    baselineCommittedAt: wallNowMs(),
-    baselineObservationSequence: cur.observationSequence,
-    currentObservationSequence: cur.observationSequence,
-    candidatePersistedAt: candidatePersistedAt ?? (prev?.candidatePersistedAt ?? null),
-    lastCommittedWindowId: windowId ?? (prev?.lastCommittedWindowId ?? null)
-  };
-  return monitorData.hostObservationWatermark[host];
-}
-
-/**
- * 「アプリ停止中に新たに現れた完了ジョブ」を複合観測キーの集合差分で求める純関数（#411-O1/O2 基盤）。
- *
- * @function computeOfflineWindow
- * @param {string} host
- * @returns {{bounded:boolean, offlineJobKeys:string[], reason:string, identityChanged:boolean,
- *            generationChanged:boolean, stalenessMs:?number, watermark:?Object}}
- */
-export function computeOfflineWindow(host) {
+export function computeObservationWindow(host) {
   const wm = monitorData.hostObservationWatermark?.[host] || null;
+  const curSnap = monitorData.hostObservationCurrent?.[host] || null;
   const hist = monitorData.machines?.[host]?.printStore?.history;
   const currentObs = completedJobObservations(hist);
-  const currentGen = historyGenerationFingerprint(hist);
+  const currentFingerprint = historyGenerationFingerprint(hist);
+  const baselineSequence = Number(wm?.observationSequence) || 0;
+  const currentSequence = Number(curSnap?.observationSequence) || 0;
+  const windowId = `${host}|b${baselineSequence}|c${currentSequence}`;
+
+  const base = {
+    windowId, truncated: !!wm?.retainedRange?.truncated,
+    baselineFingerprint: wm?.generation || null, currentFingerprint,
+    baselineSequence, currentSequence, watermark: wm
+  };
 
   if (!wm || !Array.isArray(wm.seenObservationKeys)) {
-    return { bounded: false, offlineJobKeys: [], reason: "no-prior-observation",
-      identityChanged: false, generationChanged: false, stalenessMs: null, watermark: wm };
+    return { ...base, bounded: false, generationChanged: false, reason: "no-prior-observation",
+      offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
   }
 
   const identityChanged = wm.printerIdentity !== _identity(host);
   const seen = new Set(wm.seenObservationKeys);
-  const currentKeys = currentObs.map(o => o.key);
-  const currentSet = new Set(currentKeys);
+  const baselineIds = new Set(wm.seenObservationKeys.map(_idOf));
+  const firstAt = Number(wm.retainedRange?.firstCompletedAt) || 0;
 
-  // #411-P0-2: 世代反証（baseline/current fingerprint を実際に比較）。
+  // ★ P0-2(世代反証): baseline/current fingerprint を実比較。current キー集合は一度だけ構築（O(n)）。
+  const currentKeySet = new Set(currentObs.map(o => o.key));
   const priorCount = wm.seenObservationKeys.length;
-  const missing = priorCount ? wm.seenObservationKeys.filter(k => !currentSet.has(k)).length : 0;
+  let missing = 0;
+  if (priorCount) for (const k of wm.seenObservationKeys) if (!currentKeySet.has(k)) missing++;
   const mostMissing = priorCount > 0 && missing > Math.floor(priorCount * 0.5);
   const shrunk = currentObs.length < Math.floor((Number(wm.retainedObservationCount) || 0) * 0.5);
-  const baseLatest = Number(wm.generation?.latestAt) || 0;
-  const curLatest = Number(currentGen.latestAt) || 0;
+  const baseLatest = Number(wm.generation?.latestCompletedAt) || 0;
+  const curLatest = Number(currentFingerprint.latestCompletedAt) || 0;
   const timeRollback = baseLatest > 0 && curLatest > 0 && curLatest < baseLatest;
-
-  // #411-P0-1: 識別材料不足（id 以外の distinguishing が半数超で無い）→ 複合キーを信頼できない。
-  const undist = currentObs.filter(o => !o.hasDistinguishing).length;
-  const identityInsufficient = currentObs.length > 0 && undist > Math.floor(currentObs.length * INSUFFICIENT_RATIO);
-
   const generationChanged = identityChanged || mostMissing || shrunk || timeRollback;
-  const offlineJobKeys = currentKeys.filter(k => !seen.has(k));
+
+  // ★ P0-1(retainedRange 境界): baseline に無く、かつ retained 境界「以降」の完了のみ offline 候補。
+  //   境界より古い履歴（切詰めで捨てた分）は offline にしない。finishAt 不明は候補単位で unresolved。
+  const offlineObservationKeys = [];
+  const unresolvedJobIds = [];
+  let hasIdReuse = false, hasInsufficient = false;
+  for (const o of currentObs) {
+    if (seen.has(o.key)) continue;                 // 既観測
+    if (o.finishAt && firstAt && o.finishAt < firstAt) continue; // 境界より古い＝offline 対象外
+    const idReused = baselineIds.has(o.canonicalJobId);
+    // ★ P0-2(候補単位判定): 識別材料が無い候補は unresolved。canonicalJobId が baseline と
+    //   衝突（再利用）で検証できない場合と、単なる識別不足を分けて理由を立てる。
+    if (!o.hasDistinguishing) {
+      if (idReused) hasIdReuse = true; else hasInsufficient = true;
+      unresolvedJobIds.push(o.canonicalJobId);
+      continue;
+    }
+    if (idReused && o.finishAt === 0) {            // 再利用IDで時刻検証もできない
+      hasIdReuse = true;
+      unresolvedJobIds.push(o.canonicalJobId);
+      continue;
+    }
+    offlineObservationKeys.push(o.key);            // 識別十分＝offline 確定候補（再利用IDでも別実行として保持）
+  }
 
   let reason;
   if (identityChanged) reason = "printer-identity-changed";
   else if (timeRollback) reason = "history-time-rollback";
   else if (mostMissing) reason = "history-generation-changed";
   else if (shrunk) reason = "history-shrunk";
-  else if (identityInsufficient) reason = "job-identity-insufficient";
+  else if (hasIdReuse) reason = "reused-job-id-unverifiable";
+  else if (hasInsufficient) reason = "job-identity-insufficient";
   else reason = "diff-ok";
 
   const persistedAt = Number(wm.persistedAt) || Number(wm.observedAtEpochMs) || 0;
   const stalenessMs = persistedAt > 0 ? Math.max(0, wallNowMs() - persistedAt) : null;
 
   return {
-    bounded: !generationChanged && !identityInsufficient,
-    offlineJobKeys, reason, identityChanged, generationChanged, stalenessMs, watermark: wm
+    ...base,
+    bounded: !generationChanged && unresolvedJobIds.length === 0,
+    generationChanged, reason, offlineObservationKeys, unresolvedJobIds, stalenessMs
   };
 }
 
+/** @private 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
+function _idOf(key) {
+  try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
+}
+
 /**
- * confidence（推定確度）を reasons 付きで組み立てる純関数（#411 で schema 先行導入）。
- * remaining には一切影響しない（表示・監査用の宣言のみ）。
+ * 観測窓評価後に baseline を昇格する（fail-closed transaction。#411-P0-3）。
  *
+ * 必須: windowId（非空）・candidatePersistedAt・expectedSequence（評価時の currentSequence）。
+ * 不一致は昇格せず理由を返す。同一 windowId は冪等（二重昇格しない）。
+ *
+ * @function commitObservationWindow
+ * @param {string} host
+ * @param {{windowId:string, expectedSequence:number, candidatePersistedAt:number, candidateHash?:string}} opts
+ * @returns {{ok:boolean, reason:string, baseline?:Object, idempotent?:boolean}}
+ */
+export function commitObservationWindow(host, { windowId, expectedSequence, candidatePersistedAt, candidateHash = null } = {}) {
+  if (!host) return { ok: false, reason: "host_required" };
+  if (windowId == null || String(windowId) === "") return { ok: false, reason: "window_id_required" };
+  if (!monitorData.hostObservationWatermark || typeof monitorData.hostObservationWatermark !== "object") monitorData.hostObservationWatermark = {};
+  const prev = monitorData.hostObservationWatermark[host];
+  // ★ 冪等: 既に同一 windowId を昇格済みなら、以後の観測変化に関わらず no-op（二重適用防止）。
+  if (prev && prev.lastCommittedWindowId === windowId) {
+    return { ok: true, reason: "idempotent", baseline: prev, idempotent: true };
+  }
+  // ★ fail-closed 契約: 新規窓は candidate 永続証跡＋評価時 sequence 一致が必須。
+  if (!(Number(candidatePersistedAt) > 0)) return { ok: false, reason: "candidate_not_persisted" };
+  const cur = monitorData.hostObservationCurrent?.[host];
+  if (!cur) return { ok: false, reason: "no_current_observation" };
+  if (Number(expectedSequence) !== Number(cur.observationSequence)) {
+    return { ok: false, reason: "observation_changed_since_evaluation" };
+  }
+  const baseline = {
+    ...cur,
+    committedReason: "window-evaluated",
+    persistedAt: wallNowMs(),
+    baselineCommittedAt: wallNowMs(),
+    candidatePersistedAt: Number(candidatePersistedAt),
+    candidateHash,
+    lastCommittedWindowId: windowId
+  };
+  monitorData.hostObservationWatermark[host] = baseline;
+  return { ok: true, reason: "committed", baseline };
+}
+
+/**
+ * confidence（推定確度）を reasons 付きで組み立てる純関数。remaining には影響しない。
  * @function buildConfidence
  * @param {"high"|"medium"|"low"|"none"} level
  * @param {string[]} [reasons]

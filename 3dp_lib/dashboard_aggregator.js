@@ -59,7 +59,7 @@ import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilam
 import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
-import { recordHostObservation } from "./dashboard_offline_observation.js";
+import { recordObservation } from "./dashboard_offline_observation.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -1294,7 +1294,7 @@ export function aggregatorUpdate() {
           _ivStatus = _st.status;
           _ivId = (_st.status === "ok" && _st.openInterval) ? _st.openInterval.intervalId : null;
         }
-        recordHostObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus });
+        recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus });
       } catch (e) { /* read-only 観測失敗は無視 */ }
     }
 
