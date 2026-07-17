@@ -53,11 +53,105 @@ export function canonicalJobKey(entryOrId) {
 }
 
 /**
- * 指定履歴配列の「完了ジョブ canonical key 集合」を返す（重複排除・ソート済み）。
+ * ジョブの完了時刻/開始時刻/ファイル同一性を抽出する（read-only・ベストエフォート）。
+ * printStore.history のスキーマ差異を吸収する。
+ *
+ * @function jobTemporal
+ * @param {Object} entry - 履歴ジョブ
+ * @returns {{startAt:number, finishAt:number, fileSig:string}}
+ */
+export function jobTemporal(entry) {
+  const startAt = Number(entry?.printStartTime) || Number(entry?.starttime)
+    || Number(entry?.startTime) || Number(entry?.id) || 0; // K1: id = 開始 epoch 秒
+  const finishAt = Number(entry?.finishTime) || Number(entry?.finishTimeSec)
+    || Number(entry?.endtime) || 0;
+  const fileSig = String(entry?.filemd5 ?? entry?.filename ?? entry?.file ?? "");
+  return { startAt, finishAt, fileSig };
+}
+
+/**
+ * ジョブの「物理実行を識別する複合観測キー」を返す（#411-P0-1）。
+ * 単なる job id では、プリンタ再起動で同じ id が別の物理印刷へ再利用された場合に区別できない。
+ * id ＋ 開始/完了時刻 ＋ ファイル同一性で同一実行を識別する。表示用 id は別途 canonicalJobKey。
+ *
+ * @function jobObservationKey
+ * @param {Object} entry - 履歴ジョブ
+ * @returns {?{key:string, id:string, hasDistinguishing:boolean, finishAt:number}}
+ *   識別不能（有効 id 無し）なら null。hasDistinguishing=false は「id 以外の識別材料が無い」。
+ */
+export function jobObservationKey(entry) {
+  const id = canonicalJobKey(entry);
+  if (id == null) return null;
+  const { startAt, finishAt, fileSig } = jobTemporal(entry);
+  // 開始が id と同源(=id を start に使った)場合は識別材料に数えない。
+  const startDistinct = startAt > 0 && String(startAt) !== id;
+  const hasDistinguishing = finishAt > 0 || fileSig !== "" || startDistinct;
+  const key = `${id}|s${startAt}|f${finishAt}|${fileSig}`;
+  return { key, id, hasDistinguishing, finishAt };
+}
+
+/**
+ * 完了ジョブの複合観測キー配列（完了時刻→キーで安定ソート・重複排除）を返す（#411-P0-1/P0-2）。
+ *
+ * @function completedJobObservations
+ * @param {Array<Object>} history - printStore.history 配列
+ * @returns {Array<{key:string, id:string, hasDistinguishing:boolean, finishAt:number}>}
+ *   completion 時系列（finishAt 昇順、tie-break key）で安定ソート済み・キー重複排除済み。
+ */
+export function completedJobObservations(history) {
+  const seen = new Set();
+  const obs = [];
+  if (Array.isArray(history)) {
+    for (const j of history) {
+      if (!isCompletedHistoryEntry(j)) continue;
+      const o = jobObservationKey(j);
+      if (!o || seen.has(o.key)) continue;
+      seen.add(o.key);
+      obs.push(o);
+    }
+  }
+  // ★ #411-P1-4: 文字列 sort ではなく completion 時系列（finishAt）で安定ソート。
+  obs.sort((a, b) => (a.finishAt - b.finishAt) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return obs;
+}
+
+/** 決定論的な軽量ハッシュ（FNV-1a 32bit 相当）。 */
+function _hash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16);
+}
+
+/**
+ * 履歴 generation fingerprint を返す（#411-P0-2・時系列ベース）。
+ * completion 時刻の最古/最新、件数、順序ハッシュを含む。文字列 sort ではなく時系列で構成し、
+ * computeOfflineWindow で baseline/current を実際に比較して世代交代・時刻巻き戻り・ID 再利用を検出する。
+ *
+ * @function historyGenerationFingerprint
+ * @param {Array<Object>} history - printStore.history 配列
+ * @returns {{count:number, earliestAt:number, latestAt:number, hash:string}}
+ */
+export function historyGenerationFingerprint(history) {
+  const obs = completedJobObservations(history);
+  const finishes = obs.map(o => o.finishAt).filter(t => t > 0);
+  return {
+    count: obs.length,
+    earliestAt: finishes.length ? Math.min(...finishes) : 0,
+    latestAt: finishes.length ? Math.max(...finishes) : 0,
+    hash: _hash(obs.map(o => o.key).join("\n"))
+  };
+}
+
+/**
+ * 完了ジョブの表示用 canonical id 集合（重複排除・文字列ソート）。表示/関連付け用。
+ * ※ 集合差分（オフライン窓）には jobObservationKey（複合キー）を使うこと。
  *
  * @function completedJobKeySet
- * @param {Array<Object>} history - printStore.history 配列
- * @returns {string[]} 完了ジョブの canonical key（ユニーク・昇順風の文字列ソート）
+ * @param {Array<Object>} history
+ * @returns {string[]}
  */
 export function completedJobKeySet(history) {
   const set = new Set();
@@ -69,22 +163,4 @@ export function completedJobKeySet(history) {
     }
   }
   return [...set].sort();
-}
-
-/**
- * 履歴 generation fingerprint を返す（#411-P0-2 ID再利用/世代交代の反証材料）。
- * 件数と最古/最新の完了キー、キー集合サイズを含む。プリンタ履歴の全置換・大幅縮小・
- * ID 再利用を後で検出するために用いる（identity だけでは再起動を検出できないため）。
- *
- * @function historyGenerationFingerprint
- * @param {Array<Object>} history - printStore.history 配列
- * @returns {{count:number, oldestKey:?string, newestKey:?string}}
- */
-export function historyGenerationFingerprint(history) {
-  const keys = completedJobKeySet(history);
-  return {
-    count: keys.length,
-    oldestKey: keys.length ? keys[0] : null,
-    newestKey: keys.length ? keys[keys.length - 1] : null
-  };
 }

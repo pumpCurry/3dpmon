@@ -1287,7 +1287,8 @@ export function aggregatorUpdate() {
     if (!_isRelayChild() && (!s._lastObs || _mono - s._lastObs > 5000)) {
       s._lastObs = _mono;
       try {
-        let _ivId = null, _ivStatus = "unknown";
+        // ★ P1-1: 未装着は「既知の none」（取得失敗の unknown と区別）。装着時は台帳 status。
+        let _ivId = null, _ivStatus = "none";
         if (spool) {
           const _st = getMountIntervalStatus(spool.id, host);
           _ivStatus = _st.status;
