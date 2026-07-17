@@ -20,6 +20,7 @@
  * 履歴エントリが「完了」しているかの共通判定。
  * printfinish は完了フラグ（1=成功/0=失敗、いずれも「完了」。null=未完了）。旧保存データは
  * printfinish 欠落でも finishTime/finishTimeSec/endtime/usagetime による完了証拠があれば完了扱い。
+ * finishTime/endtime は数値 epoch だけでなく ISO 文字列（Z/offset 付き）も完了証拠として受理する。
  *
  * @function isCompletedHistoryEntry
  * @param {Object} entry
@@ -30,8 +31,8 @@ export function isCompletedHistoryEntry(entry) {
   // printfinish は数値フラグのみ完了扱い（空文字等の曖昧値は完了証拠にしない）。
   if (typeof entry.printfinish === "number") return true;
   if (typeof entry.printfinish === "boolean") return true; // 明示 true/false は「完了(成/否)」
-  return (Number(entry.finishTime) > 0) || (Number(entry.finishTimeSec) > 0)
-    || (Number(entry.endtime) > 0) || (Number(entry.usagetime) > 0);
+  return (_epochMs(entry.finishTime) > 0) || (Number(entry.finishTimeSec) > 0)
+    || (_epochMs(entry.endtime) > 0) || (Number(entry.usagetime) > 0);
 }
 
 /**
@@ -51,12 +52,27 @@ export function canonicalJobKey(entryOrId) {
 }
 
 /**
- * epoch 値を ms へ正規化する（秒/ミリ秒を自動判定）。判定不能は 0。
+ * ISO 8601（Z または ±HH:MM offset 付き）文字列を epoch ms へ。曖昧なローカル時刻は拒否。
+ * @private
+ * @param {string} s
+ * @returns {number} epoch ms（不正は 0）
+ */
+function _isoToMs(s) {
+  if (typeof s !== "string") return 0;
+  const t = s.trim();
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(t)) return 0;
+  const ms = Date.parse(t);
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+/**
+ * epoch 値を ms へ正規化する（秒/ミリ秒を自動判定、ISO 文字列も受理）。判定不能は 0。
  * @private
  * @param {*} v
  * @returns {number} epoch ms（不明は 0）
  */
 function _epochMs(v) {
+  if (typeof v === "string" && v.trim() !== "" && Number.isNaN(Number(v))) return _isoToMs(v);
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return 0;
   if (n >= 1e12) return Math.floor(n);        // すでに ms

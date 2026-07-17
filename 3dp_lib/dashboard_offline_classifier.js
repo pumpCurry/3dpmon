@@ -55,16 +55,41 @@ function _downgrade(level, floor = "none") {
   return _LEVELS[Math.min(i + 1, cap)];
 }
 
+/** 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
+function _idOfKey(key) {
+  try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
+}
+
+/** ObservationWindow から証拠（解釈済みの事実サマリ）を組み立てる。 */
+function _evidence(window) {
+  const bm = window?.baselineMount || {}, cm = window?.currentMount || {};
+  const offlineIds = new Set((window?.offlineObservationKeys || []).map(_idOfKey));
+  const activeJobId = window?.watermark?.activeJobId ?? null;
+  return {
+    sameStrongPrinterIdentity: window?.identityChanged === false || window?.identityChanged == null,
+    sameMountedSpool: bm.spoolId != null && bm.spoolId === cm.spoolId,
+    sameMountInterval: bm.intervalId != null && bm.intervalId === cm.intervalId,
+    activeJobContinued: activeJobId != null && offlineIds.has(String(activeJobId)),
+    historyShrank: !!window?.shrunk,
+    mountStatus: cm.intervalStatus ?? "unknown",
+    elapsedMs: window?.stalenessMs ?? null
+  };
+}
+
 /** 分類結果オブジェクトを一定形で組み立てる。 */
 function _result(classification, candidate, confidence, window) {
   return {
     classification,
     windowId: window?.windowId ?? null,
     windowKind: window?.windowKind ?? null,
+    host: window?.host ?? null,
+    baselineSequence: window?.baselineSequence ?? 0,
+    currentSequence: window?.currentSequence ?? 0,
     bounded: !!window?.bounded,
     reason: window?.reason ?? null,
     candidate: candidate || null,
     confidence,
+    evidence: _evidence(window),
     offlineObservationKeys: Array.isArray(window?.offlineObservationKeys) ? window.offlineObservationKeys.slice() : [],
     unresolvedJobIds: Array.isArray(window?.unresolvedJobIds) ? window.unresolvedJobIds.slice() : []
   };
@@ -99,11 +124,11 @@ export function classifyObservationWindow(window) {
   }
   // 候補単位で識別不能（再利用ID未検証/識別材料不足）
   if (kind === "insufficient") {
-    return _result(ATTR_CLASS.INSUFFICIENT, null, buildConfidence("none", [window.reason || "insufficient"]), window);
+    return _result(ATTR_CLASS.INSUFFICIENT, null, buildConfidence("none", [window.reason || "insufficient"], [window.reason || "insufficient"]), window);
   }
   // 世代交代/identity変化/時刻巻き戻し/大幅縮小＝境界不成立
   if (kind === "unbounded" || !window.bounded) {
-    return _result(ATTR_CLASS.UNBOUNDED, null, buildConfidence("none", [window.reason || "unbounded"]), window);
+    return _result(ATTR_CLASS.UNBOUNDED, null, buildConfidence("none", [window.reason || "unbounded"], [window.reason || "unbounded"]), window);
   }
 
   // ここから bounded 確定。まず offline 完了の有無。
@@ -123,15 +148,16 @@ export function classifyObservationWindow(window) {
   }
   // ② current 未装着＝復帰後にスプールが外れている＝継続と矛盾
   if (currentMount.observationState !== "mounted" || currentMount.spoolId == null) {
-    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["current-unmounted"]), window);
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["current-unmounted"], ["current-unmounted"]), window);
   }
   // ③ spoolId 相違＝停止中に別スプールへ交換された＝継続と矛盾（最重要）
   if (baselineMount.spoolId !== currentMount.spoolId) {
-    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["mounted-spool-changed"]), window);
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["mounted-spool-changed"], ["mounted-spool-changed"]), window);
   }
   // ④ current の mount interval が corrupt/ambiguous＝装着継続を信頼できない＝矛盾扱い
   if (currentMount.intervalStatus === "corrupt" || currentMount.intervalStatus === "ambiguous") {
-    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", [`current-interval-${currentMount.intervalStatus}`]), window);
+    const c = `current-interval-${currentMount.intervalStatus}`;
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", [c], [c]), window);
   }
 
   // 停止前後で同一スプールが装着継続＝continuity candidate。confidence を証拠で段階付け（下限 low）。

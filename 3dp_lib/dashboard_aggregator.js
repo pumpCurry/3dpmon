@@ -1280,22 +1280,33 @@ export function aggregatorUpdate() {
     //   現在ジョブ(C)は除外し、filamentInfo/filamentId のみ補完（冪等）。historyList マージで
     //   printStore.history へ A/B が入り、C が解決された後に実行される。idle 時は上の
     //   autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
-    // ★ #411-O1(Option4): 観測 watermark を read-only で更新する（推定帰属の前段）。
-    //   親のみ・5s throttle。安全基盤（隔離/台帳/completionObsId 等）には一切書き込まない。
-    //   ★ P0-3: spool の有無に依らず記録する（未装着/交換済みという反証を残すため）。
-    //   ★ P0-4: open 区間が一意(ok)のときだけ intervalId を明示配線し、ambiguous/corrupt は null。
-    if (!_isRelayChild() && (!s._lastObs || _mono - s._lastObs > 5000)) {
-      s._lastObs = _mono;
+    // ★ #411-O1(Option4): 観測 current を read-only で更新する（推定帰属の前段。O2 のライブ配線は未実施）。
+    //   親のみ。安全基盤（隔離/台帳/completionObsId 等）には一切書き込まない。
+    //   spool の有無に依らず記録する（未装着/交換済みという反証を残すため）。
+    //   open 区間が一意(ok)のときだけ intervalId を明示配線し、ambiguous/corrupt は null。
+    //   ★ P1-5: 固定5s heartbeat だけでなく、観測 signature（履歴rev/現在ジョブ/印刷状態/装着/interval）
+    //   が変化したら即記録し、稼働中に見たジョブを再起動後 offline と誤認する隙間を減らす。
+    if (!_isRelayChild()) {
+      // ★ read-only 観測は best-effort＝この中の失敗が本流（帰属/消費トラッキング）を止めないよう
+      //   ブロック全体を try で囲う（台帳参照や signature 計算の例外も飲み込む）。
       try {
-        // ★ P1-1: 未装着は「既知の none」（取得失敗の unknown と区別）。装着時は台帳 status。
+        // 未装着は「既知の none」（取得失敗の unknown と区別）。装着時は台帳 status。
         let _ivId = null, _ivStatus = "none";
         if (spool) {
           const _st = getMountIntervalStatus(spool.id, host);
           _ivStatus = _st.status;
           _ivId = (_st.status === "ok" && _st.openInterval) ? _st.openInterval.intervalId : null;
         }
-        recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus });
-      } catch (e) { /* read-only 観測失敗は無視 */ }
+        const _activeJobId = machine?.printStore?.current?.id ?? null;
+        const _printState = Number(storedData.state?.rawValue ?? 0);
+        const _histRev = machine?.printStore?.revision ?? null;
+        const _obsSig = `${_histRev}|${_activeJobId}|${_printState}|${spool?.id ?? ""}|${_ivStatus}`;
+        if (!s._lastObs || _mono - s._lastObs > 5000 || s._lastObsSig !== _obsSig) {
+          s._lastObs = _mono;
+          s._lastObsSig = _obsSig;
+          recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus, activeJobId: _activeJobId, printState: _printState });
+        }
+      } catch (e) { /* read-only 観測失敗は本流を止めない */ }
     }
 
     // catch-up でリベースが必要になった反映後残量（下の開始基準設定の後で currentJobStartLength へ反映）。

@@ -37,12 +37,48 @@ import { completedJobObservations, historyGenerationFingerprint } from "./dashbo
 /** 観測キーの保持上限（completion 時系列で最新のみ保持）。 */
 const SEEN_CAP = 5000;
 
-/** @private */
+/**
+ * @private プリンタ識別を構造化して返す（P1-1）。model/serial/deviceId のいずれかが
+ * 機器から届いていれば completeness="strong"、未取得は "weak"（printerType は設定値なので
+ * strong 判定には使わない）。weak→strong は情報補完でありプリンタ交換ではない。
+ */
 function _identity(host) {
   const sd = monitorData.machines?.[host]?.storedData || {};
-  const model = sd.model?.rawValue ?? "";
-  const type = monitorData.appSettings?.connectionTargets?.find?.(t => t && t.hostname === host)?.printerType ?? "";
-  return `${host}|${type}|${model}`;
+  const model = String(sd.model?.rawValue ?? "").trim();
+  const printerType = monitorData.appSettings?.connectionTargets?.find?.(t => t && t.hostname === host)?.printerType ?? "";
+  const serialNumber = String(sd.sn?.rawValue ?? sd.serialNumber?.rawValue ?? "").trim();
+  const deviceId = String(sd.deviceId?.rawValue ?? sd.id?.rawValue ?? "").trim();
+  const completeness = (model || serialNumber || deviceId) ? "strong" : "weak";
+  return { host, printerType, model, serialNumber, deviceId, completeness };
+}
+
+/** @private 文字列（旧保存）/構造体いずれの identity も構造体へ正規化する。 */
+function _normIdentity(id) {
+  if (id && typeof id === "object") {
+    const model = id.model ?? "", serialNumber = id.serialNumber ?? "", deviceId = id.deviceId ?? "";
+    return {
+      host: id.host ?? "", printerType: id.printerType ?? "", model, serialNumber, deviceId,
+      completeness: id.completeness || ((model || serialNumber || deviceId) ? "strong" : "weak")
+    };
+  }
+  if (typeof id === "string") {
+    const [host = "", printerType = "", model = ""] = id.split("|");
+    return { host, printerType, model, serialNumber: "", deviceId: "", completeness: model ? "strong" : "weak" };
+  }
+  return { host: "", printerType: "", model: "", serialNumber: "", deviceId: "", completeness: "weak" };
+}
+
+/**
+ * @private baseline/current の identity が「プリンタ交換」を示すか。
+ * strong 同士の安定識別子（serial→deviceId→model/type）不一致のみ反証。
+ * weak→strong の補完・weak 同士は反証にしない（同一機で情報が後から届く正常系）。
+ */
+function _identityContradicts(baseId, curId) {
+  const a = _normIdentity(baseId), b = _normIdentity(curId);
+  if (a.completeness !== "strong" || b.completeness !== "strong") return false;
+  if (a.serialNumber && b.serialNumber) return a.serialNumber !== b.serialNumber;
+  if (a.deviceId && b.deviceId) return a.deviceId !== b.deviceId;
+  return (a.model !== b.model) || (a.printerType !== b.printerType);
 }
 
 /** @private 継続採番（再起動で 1 へ戻さない）。current/baseline から常に単調増加。 */
@@ -69,8 +105,9 @@ function _mountFacts(snap) {
 }
 
 /** @private 現在履歴から観測スナップショットを構築（read-only）。 */
-function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "none" } = {}) {
-  const hist = monitorData.machines?.[host]?.printStore?.history;
+function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "none", activeJobId = null, printState = null } = {}) {
+  const machine = monitorData.machines?.[host];
+  const hist = machine?.printStore?.history;
   const obsAll = completedJobObservations(hist); // completion 時系列・重複排除
   const totalCompletedCount = obsAll.length;
   const retained = obsAll.length > SEEN_CAP ? obsAll.slice(obsAll.length - SEEN_CAP) : obsAll;
@@ -86,6 +123,10 @@ function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus =
     mountIntervalId: mountIntervalId ?? null,
     mountIntervalStatus,
     observationState: spoolId ? "mounted" : "unmounted",
+    // ★ P0-4: 連続印刷の証拠（停止前に何を印刷中だったか）。O2 の activeJobContinued 判定に使う。
+    activeJobId: activeJobId ?? (machine?.printStore?.current?.id ?? null),
+    printState: printState ?? null,
+    historyRevision: machine?.printStore?.revision ?? null,
     printerIdentity: _identity(host),
     generation: historyGenerationFingerprint(hist),
     seenObservationKeys: retained.map(o => o.key),
@@ -124,70 +165,84 @@ export function recordObservation(host, opts = {}) {
   return snap;
 }
 
-/**
- * オフライン観測窓を計算する（純関数。O2 はこの ObservationWindow を分類する）。
- *
- * @function computeObservationWindow
- * @param {string} host
- * @returns {{windowId:string, windowKind:string, bounded:boolean, truncated:boolean,
- *   generationChanged:boolean, reason:string, offlineObservationKeys:string[], unresolvedJobIds:string[],
- *   hasCurrentObservation:boolean, baselineMount:Object, currentMount:Object,
- *   baselineFingerprint:?Object, currentFingerprint:Object,
- *   baselineSequence:number, currentSequence:number, stalenessMs:?number, watermark:?Object}}
- */
-export function computeObservationWindow(host) {
-  const wm = monitorData.hostObservationWatermark?.[host] || null;
-  const curSnap = monitorData.hostObservationCurrent?.[host] || null;
-  const hist = monitorData.machines?.[host]?.printStore?.history;
-  const currentObs = completedJobObservations(hist);
-  const currentFingerprint = historyGenerationFingerprint(hist);
-  const baselineSequence = Number(wm?.observationSequence) || 0;
-  const currentSequence = Number(curSnap?.observationSequence) || 0;
-  const windowId = `${host}|b${baselineSequence}|c${currentSequence}`;
+/** @private 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
+function _idOf(key) {
+  try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
+}
 
-  // ★ O2-P0: 解釈しない観測事実を ObservationWindow へ載せる（O1 責務は不変・戻り値拡張のみ）。
-  //   O2 は baseline/current の装着一致を candidate 必須条件に使う。
-  const hasCurrentObservation = !!curSnap;
-  const baselineMount = _mountFacts(wm);
-  const currentMount = _mountFacts(curSnap);
+/** @private 複合キー配列から観測 identity を復元する（純関数・履歴非依存）。 */
+function _obsFromKeys(keys) {
+  const out = [];
+  if (!Array.isArray(keys)) return out;
+  for (const key of keys) {
+    let a; try { a = JSON.parse(key); } catch { continue; }
+    if (!Array.isArray(a)) continue;
+    const canonicalJobId = String(a[0]);
+    const startAt = Number(a[1]) || 0;
+    const finishAt = Number(a[2]) || 0;
+    const fileSignature = a[3] || "";
+    out.push({ key, canonicalJobId, startAt, finishAt, fileSignature, hasDistinguishing: finishAt > 0 || startAt > 0 || fileSignature !== "" });
+  }
+  return out;
+}
+
+/**
+ * オフライン観測窓を計算する **完全な純関数**（O1-P1-4）。
+ * 前回観測(previous=baseline)と現在観測(current)の2スナップショットのみを入力にとり、
+ * グローバル状態（watermark/履歴/live identity）を一切参照しない。O2 はこの ObservationWindow を分類する。
+ *
+ * @function computeOfflineWindow
+ * @param {?Object} previous baseline 観測スナップショット
+ * @param {?Object} current  現在観測スナップショット
+ * @param {string} [host] windowId 用のホスト識別（任意・比較には不使用）
+ * @returns {Object} ObservationWindow
+ */
+export function computeOfflineWindow(previous, current, host = "") {
+  const currentFingerprint = current?.generation || { completedCount: 0, earliestCompletedAt: 0, latestCompletedAt: 0, retainedHash: "" };
+  const baselineSequence = Number(previous?.observationSequence) || 0;
+  const currentSequence = Number(current?.observationSequence) || 0;
+  const windowId = `${host ? host + "|" : ""}b${baselineSequence}|c${currentSequence}`;
+  const hasCurrentObservation = !!current;
+  const baselineMount = _mountFacts(previous);
+  const currentMount = _mountFacts(current);
+
   const base = {
-    windowId, truncated: !!wm?.retainedRange?.truncated,
-    baselineFingerprint: wm?.generation || null, currentFingerprint,
-    baselineSequence, currentSequence, watermark: wm,
-    hasCurrentObservation, baselineMount, currentMount
+    windowId, host: host || null, truncated: !!previous?.retainedRange?.truncated,
+    baselineFingerprint: previous?.generation || null, currentFingerprint,
+    baselineSequence, currentSequence, watermark: previous || null,
+    hasCurrentObservation, baselineMount, currentMount, identityChanged: false
   };
 
-  if (!wm || !Array.isArray(wm.seenObservationKeys)) {
+  if (!previous || !Array.isArray(previous.seenObservationKeys)) {
     return { ...base, windowKind: "no-prior", bounded: false, generationChanged: false,
       reason: "no-prior-observation", offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
   }
-
-  // ★ O2-P0-2: baseline はあるが復帰後の current 観測がまだ無い＝装着状態未確認。
-  //   O2 が装着一致を検証できないため、この段階では窓を不完全として扱う。
+  // ★ O2-P0-2: baseline はあるが復帰後 current 観測がまだ無い＝装着状態未確認。
   if (!hasCurrentObservation) {
     return { ...base, windowKind: "incomplete", bounded: false, generationChanged: false,
       reason: "current-observation-missing", offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
   }
 
-  const identityChanged = wm.printerIdentity !== _identity(host);
-  const seen = new Set(wm.seenObservationKeys);
-  const baselineIds = new Set(wm.seenObservationKeys.map(_idOf));
-  const firstAt = Number(wm.retainedRange?.firstCompletedAt) || 0;
+  // current 観測は保存済みキーから復元（履歴を再読しない＝純関数化）。
+  const currentObs = _obsFromKeys(current.seenObservationKeys);
+  const identityChanged = _identityContradicts(previous.printerIdentity, current.printerIdentity);
+  const seen = new Set(previous.seenObservationKeys);
+  const baselineIds = new Set(previous.seenObservationKeys.map(_idOf));
+  const firstAt = Number(previous.retainedRange?.firstCompletedAt) || 0;
 
-  // ★ P0-2(世代反証): baseline/current fingerprint を実比較。current キー集合は一度だけ構築（O(n)）。
+  // ★ P0-2(世代反証): baseline/current を実比較。current キー集合は一度だけ構築（O(n)）。
   const currentKeySet = new Set(currentObs.map(o => o.key));
-  const priorCount = wm.seenObservationKeys.length;
+  const priorCount = previous.seenObservationKeys.length;
   let missing = 0;
-  if (priorCount) for (const k of wm.seenObservationKeys) if (!currentKeySet.has(k)) missing++;
+  if (priorCount) for (const k of previous.seenObservationKeys) if (!currentKeySet.has(k)) missing++;
   const mostMissing = priorCount > 0 && missing > Math.floor(priorCount * 0.5);
-  const shrunk = currentObs.length < Math.floor((Number(wm.retainedObservationCount) || 0) * 0.5);
-  const baseLatest = Number(wm.generation?.latestCompletedAt) || 0;
+  const shrunk = currentObs.length < Math.floor((Number(previous.retainedObservationCount) || 0) * 0.5);
+  const baseLatest = Number(previous.generation?.latestCompletedAt) || 0;
   const curLatest = Number(currentFingerprint.latestCompletedAt) || 0;
   const timeRollback = baseLatest > 0 && curLatest > 0 && curLatest < baseLatest;
   const generationChanged = identityChanged || mostMissing || shrunk || timeRollback;
 
   // ★ P0-1(retainedRange 境界): baseline に無く、かつ retained 境界「以降」の完了のみ offline 候補。
-  //   境界より古い履歴（切詰めで捨てた分）は offline にしない。finishAt 不明は候補単位で unresolved。
   const offlineObservationKeys = [];
   const unresolvedJobIds = [];
   let hasIdReuse = false, hasInsufficient = false;
@@ -195,8 +250,6 @@ export function computeObservationWindow(host) {
     if (seen.has(o.key)) continue;                 // 既観測
     if (o.finishAt && firstAt && o.finishAt < firstAt) continue; // 境界より古い＝offline 対象外
     const idReused = baselineIds.has(o.canonicalJobId);
-    // ★ P0-2(候補単位判定): 識別材料が無い候補は unresolved。canonicalJobId が baseline と
-    //   衝突（再利用）で検証できない場合と、単なる識別不足を分けて理由を立てる。
     if (!o.hasDistinguishing) {
       if (idReused) hasIdReuse = true; else hasInsufficient = true;
       unresolvedJobIds.push(o.canonicalJobId);
@@ -207,7 +260,7 @@ export function computeObservationWindow(host) {
       unresolvedJobIds.push(o.canonicalJobId);
       continue;
     }
-    offlineObservationKeys.push(o.key);            // 識別十分＝offline 確定候補（再利用IDでも別実行として保持）
+    offlineObservationKeys.push(o.key);            // 識別十分＝offline 確定候補
   }
 
   let reason;
@@ -219,26 +272,36 @@ export function computeObservationWindow(host) {
   else if (hasInsufficient) reason = "job-identity-insufficient";
   else reason = "diff-ok";
 
-  const persistedAt = Number(wm.persistedAt) || Number(wm.observedAtEpochMs) || 0;
-  const stalenessMs = persistedAt > 0 ? Math.max(0, wallNowMs() - persistedAt) : null;
+  // 鮮度は current 観測時刻 − baseline 永続時刻で算出（wall clock を読まず純関数を保つ）。
+  const baseAt = Number(previous.persistedAt) || Number(previous.observedAtEpochMs) || 0;
+  const curAt = Number(current.observedAtEpochMs) || 0;
+  const stalenessMs = (baseAt > 0 && curAt > 0) ? Math.max(0, curAt - baseAt) : null;
   const bounded = !generationChanged && unresolvedJobIds.length === 0;
 
   // ★ O2-P1-1: 構造化した windowKind を提供し、O2 が reason 文字列に依存しないようにする。
-  //   reason は説明表示用に残す。
   let windowKind;
   if (hasIdReuse || hasInsufficient) windowKind = "insufficient";
   else if (!bounded) windowKind = "unbounded";
   else windowKind = "bounded";
 
   return {
-    ...base, windowKind, bounded,
-    generationChanged, reason, offlineObservationKeys, unresolvedJobIds, stalenessMs
+    ...base, windowKind, bounded, generationChanged, identityChanged, shrunk,
+    reason, offlineObservationKeys, unresolvedJobIds, stalenessMs
   };
 }
 
-/** @private 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
-function _idOf(key) {
-  try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
+/**
+ * host の baseline/current 観測から ObservationWindow を計算する（薄いラッパ）。
+ * 実体は純関数 computeOfflineWindow。O2 はこの窓を分類する。read-only。
+ *
+ * @function computeObservationWindow
+ * @param {string} host
+ * @returns {Object} ObservationWindow
+ */
+export function computeObservationWindow(host) {
+  const previous = monitorData.hostObservationWatermark?.[host] || null;
+  const current = monitorData.hostObservationCurrent?.[host] || null;
+  return computeOfflineWindow(previous, current, host);
 }
 
 /**
@@ -282,13 +345,18 @@ export function commitObservationWindow(host, { windowId, expectedSequence, cand
 }
 
 /**
- * confidence（推定確度）を reasons 付きで組み立てる純関数。remaining には影響しない。
+ * confidence（推定確度）を reasons/contradictions 付きで組み立てる純関数。remaining には影響しない。
  * @function buildConfidence
  * @param {"high"|"medium"|"low"|"none"} level
  * @param {string[]} [reasons]
- * @returns {{level:string, reasons:string[]}}
+ * @param {string[]} [contradictions]
+ * @returns {{level:string, reasons:string[], contradictions:string[]}}
  */
-export function buildConfidence(level, reasons = []) {
+export function buildConfidence(level, reasons = [], contradictions = []) {
   const lv = ["high", "medium", "low", "none"].includes(level) ? level : "none";
-  return { level: lv, reasons: Array.isArray(reasons) ? reasons.slice() : [] };
+  return {
+    level: lv,
+    reasons: Array.isArray(reasons) ? reasons.slice() : [],
+    contradictions: Array.isArray(contradictions) ? contradictions.slice() : []
+  };
 }

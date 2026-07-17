@@ -12,7 +12,7 @@ const mockMonitorData = {
 };
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mockMonitorData }));
 
-const { recordObservation, commitObservationWindow, computeObservationWindow, buildConfidence } =
+const { recordObservation, commitObservationWindow, computeObservationWindow, computeOfflineWindow, buildConfidence } =
   await import("../../3dp_lib/dashboard_offline_observation.js");
 
 const BASE = 1_700_000_000_000; // epoch ms 基準（_epochMs が ms として扱える範囲）
@@ -266,9 +266,86 @@ describe("computeObservationWindow — 観測事実の投影（O2-P0 用・解�
   });
 });
 
+describe("computeOfflineWindow（P1-4 完全な純関数・2スナップショットのみ）", () => {
+  const BASE = 1_700_000_000_000;
+  const snap = (over = {}) => ({
+    observationSequence: 1, observedAtEpochMs: BASE, persistedAt: BASE,
+    mountedSpoolId: "S1", mountIntervalId: "iv1", mountIntervalStatus: "ok", observationState: "mounted",
+    printerIdentity: { host: "h", printerType: "k1", model: "K1 Max", completeness: "strong" },
+    generation: { completedCount: 1, earliestCompletedAt: BASE, latestCompletedAt: BASE, retainedHash: "x" },
+    seenObservationKeys: [JSON.stringify(["1000", 0, BASE, "f.gcode"])],
+    retainedRange: { firstCompletedAt: BASE, lastCompletedAt: BASE, truncated: false },
+    retainedObservationCount: 1, totalCompletedCount: 1, truncated: false,
+    ...over
+  });
+
+  it("グローバル状態を読まず、引数のみで決定論的に窓を返す", () => {
+    const prev = snap();
+    const curKeys = prev.seenObservationKeys.concat([JSON.stringify(["1001", 0, BASE + 1000, "g.gcode"])]);
+    const cur = snap({ observationSequence: 2, observedAtEpochMs: BASE + 5000, persistedAt: null,
+      seenObservationKeys: curKeys,
+      generation: { completedCount: 2, earliestCompletedAt: BASE, latestCompletedAt: BASE + 1000, retainedHash: "y" } });
+    const w = computeOfflineWindow(prev, cur, "h");
+    expect(w.bounded).toBe(true);
+    expect(w.offlineObservationKeys).toHaveLength(1);
+    expect(w.windowKind).toBe("bounded");
+    expect(w.stalenessMs).toBe(5000); // curAt - baseAt（wall clock 非依存）
+  });
+
+  it("previous なし＝no-prior / current なし＝incomplete", () => {
+    expect(computeOfflineWindow(null, snap()).windowKind).toBe("no-prior");
+    expect(computeOfflineWindow(snap(), null).windowKind).toBe("incomplete");
+  });
+});
+
+describe("printerIdentity（P1-1 構造化・weak→strong は交換扱いしない）", () => {
+  it("weak→strong の情報補完は identityChanged にしない（同一機で model が後着）", () => {
+    mockMonitorData.hostSpoolMap.h = "S1";
+    setHistory("h", [job("1000", 100)]);
+    // baseline は model 未取得（weak）で確定
+    mockMonitorData.machines.h.storedData = {};
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w0 = computeObservationWindow("h");
+    commitObservationWindow("h", { windowId: w0.windowId, expectedSequence: w0.currentSequence, candidatePersistedAt: 1 });
+    // 復帰後: model が届いた（strong）＋ offline 完了
+    mockMonitorData.machines.h.storedData = { model: { rawValue: "K1 Max" } };
+    setHistory("h", [job("1000", 100), job("1001", 200)]);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w = computeObservationWindow("h");
+    expect(w.identityChanged).toBe(false);         // 補完であって交換ではない
+    expect(w.reason).toBe("diff-ok");
+  });
+
+  it("strong 同士で model 不一致＝プリンタ交換は identityChanged", () => {
+    mockMonitorData.hostSpoolMap.h = "S1";
+    mockMonitorData.machines.h = { printStore: { history: [job("1000", 100)] }, storedData: { model: { rawValue: "K1 Max" } } };
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w0 = computeObservationWindow("h");
+    commitObservationWindow("h", { windowId: w0.windowId, expectedSequence: w0.currentSequence, candidatePersistedAt: 1 });
+    mockMonitorData.machines.h.storedData = { model: { rawValue: "Ender 3" } }; // 別機種へ本体交換
+    setHistory("h", [job("1000", 100), job("2001", 300)]);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w = computeObservationWindow("h");
+    expect(w.identityChanged).toBe(true);
+    expect(w.bounded).toBe(false);
+  });
+});
+
+describe("P0-4 連続印刷証拠の記録", () => {
+  it("activeJobId / printState / historyRevision を観測へ保存", () => {
+    mockMonitorData.hostSpoolMap.h = "S1";
+    mockMonitorData.machines.h = { printStore: { history: [job("1000", 100)], current: { id: "1000" }, revision: 7 }, storedData: {} };
+    const snap = recordObservation("h", { mountIntervalStatus: "ok", activeJobId: "1000", printState: 13 });
+    expect(snap.activeJobId).toBe("1000");
+    expect(snap.printState).toBe(13);
+    expect(snap.historyRevision).toBe(7);
+  });
+});
+
 describe("buildConfidence", () => {
-  it("level と reasons を保持、不正 level は none", () => {
-    expect(buildConfidence("high", ["seen-job"])).toEqual({ level: "high", reasons: ["seen-job"] });
-    expect(buildConfidence("bogus")).toEqual({ level: "none", reasons: [] });
+  it("level / reasons / contradictions を保持、不正 level は none", () => {
+    expect(buildConfidence("high", ["seen-job"])).toEqual({ level: "high", reasons: ["seen-job"], contradictions: [] });
+    expect(buildConfidence("none", ["r"], ["c"])).toEqual({ level: "none", reasons: ["r"], contradictions: ["c"] });
+    expect(buildConfidence("bogus")).toEqual({ level: "none", reasons: [], contradictions: [] });
   });
 });

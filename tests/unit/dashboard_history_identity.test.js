@@ -21,6 +21,11 @@ describe("isCompletedHistoryEntry", () => {
     expect(isCompletedHistoryEntry({})).toBe(false);
     expect(isCompletedHistoryEntry(null)).toBe(false);
   });
+  it("★ P1-2: ISO 8601（Z/offset）の finishTime も完了証拠として受理する", () => {
+    expect(isCompletedHistoryEntry({ finishTime: "2026-07-16T10:20:30.000Z" })).toBe(true);
+    expect(isCompletedHistoryEntry({ endtime: "2026-07-16T19:20:30+09:00" })).toBe(true);
+    expect(isCompletedHistoryEntry({ finishTime: "not-a-date" })).toBe(false); // 曖昧/不正は不採用
+  });
 });
 
 describe("canonicalJobKey（Number化しない・偽ID除外）", () => {
@@ -57,6 +62,11 @@ describe("jobTemporal（P1-1: id を時刻 fallback にしない / P1-3: 単位�
   });
   it("単位不明な小さい値は 0（誤って秒/ms 化しない）", () => {
     expect(jobTemporal({ finishTime: 500 }).finishAt).toBe(0);
+  });
+  it("★ P1-2: ISO finishTime を epoch ms へ正規化", () => {
+    const t = jobTemporal({ finishTime: "2026-07-16T10:20:30.000Z" });
+    expect(t.finishAt).toBe(Date.parse("2026-07-16T10:20:30.000Z"));
+    expect(t.timeSource).toBe("finishTime");
   });
 });
 

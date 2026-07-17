@@ -165,6 +165,28 @@ describe("非 candidate 分類", () => {
   });
 });
 
+describe("evidence / contradictions（O2 返却仕様）", () => {
+  it("continuity-candidate は evidence を埋める（sameMountedSpool/sameMountInterval/mountStatus）", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"] }));
+    expect(r.evidence.sameMountedSpool).toBe(true);
+    expect(r.evidence.sameMountInterval).toBe(true);
+    expect(r.evidence.mountStatus).toBe("ok");
+  });
+  it("activeJobContinued: baseline の activeJobId が offline 集合に現れる", () => {
+    const key = JSON.stringify(["1000", 0, 1700000000000, "f.gcode"]);
+    const r = classifyObservationWindow(win({ offlineObservationKeys: [key], watermark: { activeJobId: "1000" } }));
+    expect(r.evidence.activeJobContinued).toBe(true);
+  });
+  it("continuity-contradicted は confidence.contradictions を埋める", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], currentMount: { spoolId: "S2" } }));
+    expect(r.confidence.contradictions).toContain("mounted-spool-changed");
+  });
+  it("unbounded も contradictions を埋める", () => {
+    const r = classifyObservationWindow(win({ windowKind: "unbounded", bounded: false, reason: "printer-identity-changed" }));
+    expect(r.confidence.contradictions).toContain("printer-identity-changed");
+  });
+});
+
 describe("classifyHostAttribution（Observation 層を利用のみ・read-only）", () => {
   const BASE = 1_700_000_000_000;
   function job(id, t) { return { id, materialUsedMm: 5000, printfinish: 1, finishTime: BASE + t * 1000, filename: `f${id}.gcode` }; }
