@@ -12,7 +12,7 @@ const mockMonitorData = {
 };
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mockMonitorData }));
 
-const { recordObservation, commitObservationWindow, computeObservationWindow, computeOfflineWindow, buildConfidence } =
+const { recordObservation, commitObservationWindow, computeObservationWindow, computeOfflineWindow, observationDue, buildConfidence } =
   await import("../../3dp_lib/dashboard_offline_observation.js");
 
 const BASE = 1_700_000_000_000; // epoch ms 基準（_epochMs が ms として扱える範囲）
@@ -331,10 +331,36 @@ describe("printerIdentity（P1-1 構造化・weak→strong は交換扱いしな
   });
 });
 
+describe("observationDue（P0-1 signature 判定・純関数）", () => {
+  const facts = (over = {}) => ({ historyRevision: 5, activeJobId: "1000", printState: 13, mountedSpoolId: "S1", mountIntervalStatus: "ok", mountIntervalId: "iv1", ...over });
+
+  it("初回（prev なし）は必ず記録", () => {
+    expect(observationDue(null, facts(), { nowMs: 1000 }).record).toBe(true);
+  });
+  it("★ _historyRev だけ変化したら 5s 未満でも即記録", () => {
+    const { signature } = observationDue(null, facts(), { nowMs: 1000 });
+    const due = observationDue({ lastAtMs: 1000, signature }, facts({ historyRevision: 6 }), { nowMs: 1200 });
+    expect(due.record).toBe(true);
+  });
+  it("★ 同一 spool・status=ok のまま intervalId だけ変化したら 5s 未満でも即記録", () => {
+    const { signature } = observationDue(null, facts(), { nowMs: 1000 });
+    const due = observationDue({ lastAtMs: 1000, signature }, facts({ mountIntervalId: "iv2" }), { nowMs: 1200 });
+    expect(due.record).toBe(true);
+  });
+  it("signature 不変かつ 5s 未満なら記録しない", () => {
+    const { signature } = observationDue(null, facts(), { nowMs: 1000 });
+    expect(observationDue({ lastAtMs: 1000, signature }, facts(), { nowMs: 1200 }).record).toBe(false);
+  });
+  it("signature 不変でも 5s 超過（heartbeat）なら記録", () => {
+    const { signature } = observationDue(null, facts(), { nowMs: 1000 });
+    expect(observationDue({ lastAtMs: 1000, signature }, facts(), { nowMs: 7000 }).record).toBe(true);
+  });
+});
+
 describe("P0-4 連続印刷証拠の記録", () => {
   it("activeJobId / printState / historyRevision を観測へ保存", () => {
     mockMonitorData.hostSpoolMap.h = "S1";
-    mockMonitorData.machines.h = { printStore: { history: [job("1000", 100)], current: { id: "1000" }, revision: 7 }, storedData: {} };
+    mockMonitorData.machines.h = { printStore: { history: [job("1000", 100)], current: { id: "1000" }, _historyRev: 7 }, storedData: {} };
     const snap = recordObservation("h", { mountIntervalStatus: "ok", activeJobId: "1000", printState: 13 });
     expect(snap.activeJobId).toBe("1000");
     expect(snap.printState).toBe(13);

@@ -55,23 +55,39 @@ function _downgrade(level, floor = "none") {
   return _LEVELS[Math.min(i + 1, cap)];
 }
 
+/** 2つの confidence レベルのうち低い方（index が大きい方）を返す。 */
+function _levelMin(a, b) {
+  const ia = _LEVELS.indexOf(a), ib = _LEVELS.indexOf(b);
+  return _LEVELS[Math.max(ia < 0 ? 0 : ia, ib < 0 ? 0 : ib)];
+}
+
 /** 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
 function _idOfKey(key) {
   try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
 }
 
+/** 停止前に印刷中だったジョブ(baseline.activeJobId)が offline 完了集合に現れたか（＝開始をアプリが観測済み）。 */
+function _activeJobContinued(window) {
+  const activeJobId = window?.watermark?.activeJobId ?? null;
+  if (activeJobId == null) return false;
+  const offlineIds = new Set((window?.offlineObservationKeys || []).map(_idOfKey));
+  return offlineIds.has(String(activeJobId));
+}
+
 /** ObservationWindow から証拠（解釈済みの事実サマリ）を組み立てる。 */
 function _evidence(window) {
   const bm = window?.baselineMount || {}, cm = window?.currentMount || {};
-  const offlineIds = new Set((window?.offlineObservationKeys || []).map(_idOfKey));
-  const activeJobId = window?.watermark?.activeJobId ?? null;
+  const idMatch = window?.printerIdentityMatch || { status: "unverifiable", matchedBy: null };
   return {
-    sameStrongPrinterIdentity: window?.identityChanged === false || window?.identityChanged == null,
+    printerIdentityMatch: idMatch,
+    // ★ P1-1: model 一致だけでは筐体同一を保証しない＝serial/deviceId 一致(same-strong)のみ true。
+    sameStrongPrinterIdentity: idMatch.status === "same-strong",
     sameMountedSpool: bm.spoolId != null && bm.spoolId === cm.spoolId,
     sameMountInterval: bm.intervalId != null && bm.intervalId === cm.intervalId,
-    activeJobContinued: activeJobId != null && offlineIds.has(String(activeJobId)),
+    activeJobContinued: _activeJobContinued(window),
     historyShrank: !!window?.shrunk,
     mountStatus: cm.intervalStatus ?? "unknown",
+    baselineMountStatus: bm.intervalStatus ?? "unknown",
     elapsedMs: window?.stalenessMs ?? null
   };
 }
@@ -146,6 +162,12 @@ export function classifyObservationWindow(window) {
   if (baselineMount.observationState !== "mounted" || baselineMount.spoolId == null) {
     return _result(ATTR_CLASS.NO_MOUNTED_SPOOL, null, buildConfidence("none", ["bounded", "no-mounted-spool-at-baseline"]), window);
   }
+  // ★ P0-2 ①' baseline の mount interval が corrupt/ambiguous＝台帳破損。破損 baseline を
+  //   推定 debit の根拠（candidate の baseline interval）にしてはいけない＝矛盾扱い。
+  if (baselineMount.intervalStatus === "corrupt" || baselineMount.intervalStatus === "ambiguous") {
+    const c = `baseline-interval-${baselineMount.intervalStatus}`;
+    return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", [c], [c]), window);
+  }
   // ② current 未装着＝復帰後にスプールが外れている＝継続と矛盾
   if (currentMount.observationState !== "mounted" || currentMount.spoolId == null) {
     return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", ["current-unmounted"], ["current-unmounted"]), window);
@@ -160,19 +182,27 @@ export function classifyObservationWindow(window) {
     return _result(ATTR_CLASS.CONTINUITY_CONTRADICTED, null, buildConfidence("none", [c], [c]), window);
   }
 
-  // 停止前後で同一スプールが装着継続＝continuity candidate。confidence を証拠で段階付け（下限 low）。
+  // 停止前後で同一スプールが装着継続＝continuity candidate。confidence は cap 方式で段階付け。
+  // ★ P0-3 の tier 定義（reviewer）:
+  //   high  : activeJobContinued＝停止前ジョブの完了を観測＋同一 interval＋前後 interval=ok
+  //   medium: 完全オフライン（開始をアプリが観測していない）だが same spool/same interval・反証なし
+  //   low   : interval none/unknown／interval id 変化／truncated／stale
+  //   （identity 反証は既に unbounded で除外済み。identity の強さは evidence に残す。）
   const reasons = ["bounded", "same-mounted-spool"];
   let level = "high";
-  const ivStatus = currentMount.intervalStatus;
-  if (ivStatus === "ok") { reasons.push("current-interval-ok"); }
-  else if (ivStatus === "none") { reasons.push("current-interval-none"); level = _downgrade(level, "low"); }
-  else { reasons.push(`current-interval-${ivStatus}`); level = _downgrade(level, "low"); } // unknown 等
-  // interval id が停止前後で不一致＝途中 detach/reattach の可能性＝同一スプールでも降格。
+  const cap = (t) => { level = _levelMin(level, t); };
+  if (_activeJobContinued(window)) { reasons.push("active-job-continued"); }
+  else { reasons.push("fully-offline"); cap("medium"); }             // 完全オフラインは high にしない
+  if (currentMount.intervalStatus === "ok") { reasons.push("current-interval-ok"); }
+  else { reasons.push(`current-interval-${currentMount.intervalStatus || "unknown"}`); cap("low"); }
+  if (baselineMount.intervalStatus === "ok") { reasons.push("baseline-interval-ok"); }
+  else { reasons.push(`baseline-interval-${baselineMount.intervalStatus || "unknown"}`); cap("low"); }
   const sameInterval = baselineMount.intervalId != null && baselineMount.intervalId === currentMount.intervalId;
   if (sameInterval) { reasons.push("same-mount-interval"); }
-  else { reasons.push("mount-interval-changed"); level = _downgrade(level, "low"); }
-  if (window.truncated) { reasons.push("history-truncated"); level = _downgrade(level, "low"); }
-  if ((Number(window.stalenessMs) || 0) > STALE_DOWNGRADE_MS) { reasons.push("stale-observation"); level = _downgrade(level, "low"); }
+  else { reasons.push("mount-interval-changed"); cap("low"); }        // detach/reattach 疑い
+  if (window.truncated) { reasons.push("history-truncated"); cap("low"); }
+  if ((Number(window.stalenessMs) || 0) > STALE_DOWNGRADE_MS) { reasons.push("stale-observation"); cap("low"); }
+  reasons.push(`printer-identity-${window?.printerIdentityMatch?.status || "unverifiable"}`);
 
   const candidate = {
     candidateSpoolId: baselineMount.spoolId,

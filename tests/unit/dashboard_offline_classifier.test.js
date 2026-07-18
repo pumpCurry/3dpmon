@@ -20,6 +20,8 @@ const { recordObservation, computeObservationWindow, commitObservationWindow } =
   await import("../../3dp_lib/dashboard_offline_observation.js");
 
 const M = (over = {}) => ({ spoolId: "S1", intervalId: "iv1", intervalStatus: "ok", observationState: "mounted", ...over });
+const AJ = "J1";
+const AJKEY = JSON.stringify([AJ, 0, 1700000000000, "fJ1.gcode"]); // active job の offline 複合キー
 
 /** 既定 bounded・同一スプール継続の ObservationWindow を組み立てる。 */
 function win(over = {}) {
@@ -29,22 +31,26 @@ function win(over = {}) {
     windowId: "h|b1|c2", windowKind: "bounded", bounded: true, truncated: false, generationChanged: false,
     reason: "diff-ok", offlineObservationKeys: [], unresolvedJobIds: [], hasCurrentObservation: true,
     baselineFingerprint: {}, currentFingerprint: {}, baselineSequence: 1, currentSequence: 2, stalenessMs: 0,
-    watermark: {},
+    watermark: {}, printerIdentityMatch: { status: "same-descriptive", matchedBy: "model" },
     ...over,
     baselineMount, currentMount
   };
 }
+/** activeJobContinued=true（停止前ジョブの完了を観測＝high の前提）の継続窓。 */
+function contWin(over = {}) {
+  return win({ offlineObservationKeys: [AJKEY], watermark: { activeJobId: AJ }, ...over });
+}
 
 describe("continuity 成立条件（O2-P0-1: 停止前後で同一スプール装着継続の観測が必須）", () => {
-  it("baseline A / current A / offline あり → continuity-candidate（interval一致で high）", () => {
-    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1", "k2"] }));
+  it("baseline A / current A / activeJob継続 → continuity-candidate（interval一致で high）", () => {
+    const r = classifyObservationWindow(contWin());
     expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
     expect(r.candidate.candidateSpoolId).toBe("S1");
     expect(r.candidate.candidateBaselineIntervalId).toBe("iv1");
     expect(r.candidate.candidateCurrentIntervalId).toBe("iv1");
-    expect(r.candidate.offlineObservationKeys).toEqual(["k1", "k2"]);
+    expect(r.candidate.offlineObservationKeys).toEqual([AJKEY]);
     expect(r.confidence.level).toBe("high");
-    expect(r.confidence.reasons).toEqual(expect.arrayContaining(["same-mounted-spool", "current-interval-ok", "same-mount-interval"]));
+    expect(r.confidence.reasons).toEqual(expect.arrayContaining(["same-mounted-spool", "active-job-continued", "current-interval-ok", "baseline-interval-ok", "same-mount-interval"]));
   });
 
   it("baseline A / current B → continuity-contradicted（candidate なし）", () => {
@@ -87,6 +93,18 @@ describe("continuity 成立条件（O2-P0-1: 停止前後で同一スプール�
     expect(r.classification).toBe(ATTR_CLASS.NO_MOUNTED_SPOOL);
     expect(r.candidate).toBeNull();
   });
+
+  it("★P0-2: baseline interval が corrupt → continuity-contradicted（破損台帳を根拠にしない）", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], baselineMount: { intervalStatus: "corrupt" } }));
+    expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CONTRADICTED);
+    expect(r.candidate).toBeNull();
+    expect(r.confidence.contradictions).toContain("baseline-interval-corrupt");
+  });
+
+  it("★P0-2: baseline interval が ambiguous → continuity-contradicted", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], baselineMount: { intervalStatus: "ambiguous" } }));
+    expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CONTRADICTED);
+  });
 });
 
 describe("O2-P0-2: current 観測が無ければ candidate を作らない", () => {
@@ -98,29 +116,41 @@ describe("O2-P0-2: current 観測が無ければ candidate を作らない", () 
   });
 });
 
-describe("confidence 段階（interval / truncated）", () => {
-  it("same spool / same interval → high", () => {
-    expect(classifyObservationWindow(win({ offlineObservationKeys: ["k1"] })).confidence.level).toBe("high");
+describe("confidence 段階（P0-3: activeJobContinued / interval / truncated）", () => {
+  it("activeJob継続＋same spool＋same interval＋前後ok → high", () => {
+    expect(classifyObservationWindow(contWin()).confidence.level).toBe("high");
+  });
+
+  it("★P0-3: 完全オフライン（activeJobContinued=false）は high にしない＝medium 止まり", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"] })); // watermark.activeJobId なし
+    expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
+    expect(r.confidence.level).toBe("medium");
+    expect(r.confidence.reasons).toContain("fully-offline");
   });
 
   it("same spool / different interval → high にしない（途中 detach/reattach 疑い）", () => {
-    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], currentMount: { intervalId: "iv2" } }));
+    const r = classifyObservationWindow(contWin({ currentMount: { intervalId: "iv2" } }));
     expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
     expect(r.confidence.level).not.toBe("high");
     expect(r.confidence.reasons).toContain("mount-interval-changed");
   });
 
   it("current interval none（同一スプール・mounted）→ candidate は出すが low", () => {
-    const r = classifyObservationWindow(win({
-      offlineObservationKeys: ["k1"], currentMount: { intervalStatus: "none", intervalId: null }
-    }));
+    const r = classifyObservationWindow(contWin({ currentMount: { intervalStatus: "none", intervalId: null } }));
     expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
     expect(r.confidence.level).toBe("low");
   });
 
-  it("truncated は candidate の confidence を1段下げる（下限 low）", () => {
-    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], truncated: true }));
-    expect(r.confidence.level).toBe("medium");
+  it("baseline interval が none/unknown → candidate は出すが low", () => {
+    const r = classifyObservationWindow(contWin({ baselineMount: { intervalStatus: "none" } }));
+    expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
+    expect(r.confidence.level).toBe("low");
+    expect(r.confidence.reasons).toContain("baseline-interval-none");
+  });
+
+  it("truncated は low tier（窓が欠けている可能性）", () => {
+    const r = classifyObservationWindow(contWin({ truncated: true }));
+    expect(r.confidence.level).toBe("low");
     expect(r.confidence.reasons).toContain("history-truncated");
   });
 });
@@ -172,6 +202,13 @@ describe("evidence / contradictions（O2 返却仕様）", () => {
     expect(r.evidence.sameMountInterval).toBe(true);
     expect(r.evidence.mountStatus).toBe("ok");
   });
+  it("★P1-1: sameStrongPrinterIdentity は serial/deviceId 一致(same-strong)のみ true。model一致(same-descriptive)では false", () => {
+    const desc = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], printerIdentityMatch: { status: "same-descriptive", matchedBy: "model" } }));
+    expect(desc.evidence.sameStrongPrinterIdentity).toBe(false);
+    expect(desc.evidence.printerIdentityMatch.status).toBe("same-descriptive");
+    const strong = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], printerIdentityMatch: { status: "same-strong", matchedBy: "serialNumber" } }));
+    expect(strong.evidence.sameStrongPrinterIdentity).toBe(true);
+  });
   it("activeJobContinued: baseline の activeJobId が offline 集合に現れる", () => {
     const key = JSON.stringify(["1000", 0, 1700000000000, "f.gcode"]);
     const r = classifyObservationWindow(win({ offlineObservationKeys: [key], watermark: { activeJobId: "1000" } }));
@@ -213,7 +250,7 @@ describe("classifyHostAttribution（Observation 層を利用のみ・read-only�
     mockMonitorData.remainingLengthMm = 12345;
   });
 
-  it("同一スプール継続で offline 完了が出れば continuity-candidate、安全基盤は不変", () => {
+  it("同一スプール継続で offline 完了が出れば continuity-candidate（完全オフラインは medium）、安全基盤は不変", () => {
     establishBaseline("h", "S1", [job("1000", 100)]);
     setHistory("h", [job("1000", 100), job("1001", 200)]);
     recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
@@ -222,11 +259,24 @@ describe("classifyHostAttribution（Observation 層を利用のみ・read-only�
     expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
     expect(r.candidate.candidateSpoolId).toBe("S1");
     expect(r.candidate.offlineObservationKeys).toHaveLength(1);
-    expect(r.confidence.level).toBe("high");
+    expect(r.confidence.level).toBe("medium"); // 停止前 idle＝完全オフライン→high にしない
     // read-only 境界
     expect(mockMonitorData.remainingLengthMm).toBe(12345);
     expect(mockMonitorData.mountHistory).toEqual([{ evId: "keep" }]);
     expect(mockMonitorData.pendingUnattributedUsage).toEqual([{ pendingUsageId: "keep" }]);
+  });
+
+  it("★P1-2: 永続復元された旧 current だけでは observation-incomplete（現セッションの観測が要る）", () => {
+    establishBaseline("h", "S1", [job("1000", 100)]);
+    // 復帰後: current を「旧セッションの appSessionId」に差し替える（永続復元を模す）
+    mockMonitorData.hostObservationCurrent.h = { ...mockMonitorData.hostObservationCurrent.h, appSessionId: "stale-session" };
+    setHistory("h", [job("1000", 100), job("1001", 200)]);
+    const r = classifyHostAttribution("h");
+    expect(r.classification).toBe(ATTR_CLASS.OBSERVATION_INCOMPLETE);
+    expect(r.candidate).toBeNull();
+    // 現セッションで観測を取れば bounded 判定へ進める
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    expect(classifyHostAttribution("h").classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
   });
 
   it("復帰後に別スプールへ替わっていたら continuity-contradicted（誤帰属しない）", () => {

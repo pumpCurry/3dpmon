@@ -31,11 +31,19 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
-import { wallNowMs } from "./dashboard_time.js";
+import { wallNowMs, randomEventId } from "./dashboard_time.js";
 import { completedJobObservations, historyGenerationFingerprint } from "./dashboard_history_identity.js";
 
 /** 観測キーの保持上限（completion 時系列で最新のみ保持）。 */
 const SEEN_CAP = 5000;
+
+/** アプリ起動セッションID（P1-2: 永続復元された旧 current と現セッション観測を区別）。 */
+let _appSessionId = null;
+/** @private セッションIDを遅延生成して返す（同一セッション内で安定）。 */
+function _sessionId() {
+  if (_appSessionId == null) { try { _appSessionId = randomEventId(); } catch { _appSessionId = "session-0"; } }
+  return _appSessionId;
+}
 
 /**
  * @private プリンタ識別を構造化して返す（P1-1）。model/serial/deviceId のいずれかが
@@ -69,16 +77,29 @@ function _normIdentity(id) {
 }
 
 /**
- * @private baseline/current の identity が「プリンタ交換」を示すか。
- * strong 同士の安定識別子（serial→deviceId→model/type）不一致のみ反証。
- * weak→strong の補完・weak 同士は反証にしない（同一機で情報が後から届く正常系）。
+ * @private baseline/current identity の一致強度を返す（P1-1）。
+ * model は同機種で共通し得るため「一意識別子」ではない＝一致しても same-strong にしない。
+ *  - same-strong: serialNumber または deviceId が一致（本当に同一筐体）
+ *  - same-descriptive: model/type は一致するが一意IDが無い（同一機とは断定できない）
+ *  - contradicted: 比較可能な一意ID/model が不一致（＝プリンタ交換の反証）
+ *  - unverifiable: 情報不足（weak／weak→strong 補完）。反証にはしない。
+ * @param {*} baseId
+ * @param {*} curId
+ * @returns {{status:string, matchedBy:?string}}
  */
-function _identityContradicts(baseId, curId) {
+function _identityMatch(baseId, curId) {
   const a = _normIdentity(baseId), b = _normIdentity(curId);
-  if (a.completeness !== "strong" || b.completeness !== "strong") return false;
-  if (a.serialNumber && b.serialNumber) return a.serialNumber !== b.serialNumber;
-  if (a.deviceId && b.deviceId) return a.deviceId !== b.deviceId;
-  return (a.model !== b.model) || (a.printerType !== b.printerType);
+  if (a.serialNumber && b.serialNumber) {
+    return { status: a.serialNumber === b.serialNumber ? "same-strong" : "contradicted", matchedBy: "serialNumber" };
+  }
+  if (a.deviceId && b.deviceId) {
+    return { status: a.deviceId === b.deviceId ? "same-strong" : "contradicted", matchedBy: "deviceId" };
+  }
+  if (a.model && b.model) {
+    const same = a.model === b.model && a.printerType === b.printerType;
+    return { status: same ? "same-descriptive" : "contradicted", matchedBy: "model" };
+  }
+  return { status: "unverifiable", matchedBy: null };
 }
 
 /** @private 継続採番（再起動で 1 へ戻さない）。current/baseline から常に単調増加。 */
@@ -126,7 +147,9 @@ function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus =
     // ★ P0-4: 連続印刷の証拠（停止前に何を印刷中だったか）。O2 の activeJobContinued 判定に使う。
     activeJobId: activeJobId ?? (machine?.printStore?.current?.id ?? null),
     printState: printState ?? null,
-    historyRevision: machine?.printStore?.revision ?? null,
+    historyRevision: machine?.printStore?._historyRev ?? null,
+    // ★ P1-2: 現セッションで取得した観測か（永続復元された旧 current と区別する）。
+    appSessionId: _sessionId(),
     printerIdentity: _identity(host),
     generation: historyGenerationFingerprint(hist),
     seenObservationKeys: retained.map(o => o.key),
@@ -165,6 +188,27 @@ export function recordObservation(host, opts = {}) {
   return snap;
 }
 
+/**
+ * 観測を記録すべきかを判定する純関数（P0-1: signature 変化 or heartbeat 経過で記録）。
+ * signature には履歴 revision・現在ジョブ・印刷状態・装着スプール・mount status/interval id を含める。
+ * これにより「稼働中に完了を観測したのに 5s 以内クラッシュで offline 化」する隙間を縮める。
+ *
+ * @function observationDue
+ * @param {?{lastAtMs:?number, signature:?string}} prev 前回記録の時刻(monotonic)と signature
+ * @param {{historyRevision:*, activeJobId:*, printState:*, mountedSpoolId:*, mountIntervalStatus:*, mountIntervalId:*}} facts
+ * @param {{nowMs:number, heartbeatMs?:number}} clock
+ * @returns {{record:boolean, signature:string}}
+ */
+export function observationDue(prev, facts = {}, { nowMs = 0, heartbeatMs = 5000 } = {}) {
+  const signature = [
+    facts.historyRevision ?? "", facts.activeJobId ?? "", facts.printState ?? "",
+    facts.mountedSpoolId ?? "", facts.mountIntervalStatus ?? "", facts.mountIntervalId ?? ""
+  ].join("|");
+  const lastAt = prev?.lastAtMs;
+  const record = lastAt == null || (nowMs - lastAt) > heartbeatMs || prev?.signature !== signature;
+  return { record, signature };
+}
+
 /** @private 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
 function _idOf(key) {
   try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
@@ -194,38 +238,47 @@ function _obsFromKeys(keys) {
  * @function computeOfflineWindow
  * @param {?Object} previous baseline 観測スナップショット
  * @param {?Object} current  現在観測スナップショット
- * @param {string} [host] windowId 用のホスト識別（任意・比較には不使用）
+ * @param {string|{host?:string, sessionId?:?string}} [opts] windowId 用 host と、鮮度検証用 sessionId
  * @returns {Object} ObservationWindow
  */
-export function computeOfflineWindow(previous, current, host = "") {
+export function computeOfflineWindow(previous, current, opts = {}) {
+  const { host = "", sessionId = null } = (typeof opts === "string") ? { host: opts } : (opts || {});
   const currentFingerprint = current?.generation || { completedCount: 0, earliestCompletedAt: 0, latestCompletedAt: 0, retainedHash: "" };
   const baselineSequence = Number(previous?.observationSequence) || 0;
   const currentSequence = Number(current?.observationSequence) || 0;
   const windowId = `${host ? host + "|" : ""}b${baselineSequence}|c${currentSequence}`;
-  const hasCurrentObservation = !!current;
+  // ★ P1-2: current は「現セッションで取得した観測」だけを装着状態の根拠にする。
+  //   sessionId 未指定（純関数テスト等）は fresh 扱い。復元された旧 current は stale＝不採用。
+  const currentIsFresh = !!current && (sessionId == null || current.appSessionId === sessionId);
+  const currentObservationStale = !!current && !currentIsFresh;
+  const hasCurrentObservation = currentIsFresh;
   const baselineMount = _mountFacts(previous);
-  const currentMount = _mountFacts(current);
+  const currentMount = _mountFacts(currentIsFresh ? current : null);
+  const printerIdentityMatch = _identityMatch(previous?.printerIdentity, current?.printerIdentity);
 
   const base = {
     windowId, host: host || null, truncated: !!previous?.retainedRange?.truncated,
     baselineFingerprint: previous?.generation || null, currentFingerprint,
     baselineSequence, currentSequence, watermark: previous || null,
-    hasCurrentObservation, baselineMount, currentMount, identityChanged: false
+    hasCurrentObservation, currentObservationStale, baselineMount, currentMount,
+    printerIdentityMatch, identityChanged: false
   };
 
   if (!previous || !Array.isArray(previous.seenObservationKeys)) {
     return { ...base, windowKind: "no-prior", bounded: false, generationChanged: false,
       reason: "no-prior-observation", offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
   }
-  // ★ O2-P0-2: baseline はあるが復帰後 current 観測がまだ無い＝装着状態未確認。
+  // ★ O2-P0-2 / P1-2: baseline はあるが「現セッションの」current 観測がまだ無い＝装着状態未確認。
+  //   復元された旧 current だけでは復帰後の装着を検証できないため incomplete とする。
   if (!hasCurrentObservation) {
     return { ...base, windowKind: "incomplete", bounded: false, generationChanged: false,
-      reason: "current-observation-missing", offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
+      reason: currentObservationStale ? "current-observation-stale" : "current-observation-missing",
+      offlineObservationKeys: [], unresolvedJobIds: [], stalenessMs: null };
   }
 
   // current 観測は保存済みキーから復元（履歴を再読しない＝純関数化）。
   const currentObs = _obsFromKeys(current.seenObservationKeys);
-  const identityChanged = _identityContradicts(previous.printerIdentity, current.printerIdentity);
+  const identityChanged = printerIdentityMatch.status === "contradicted";
   const seen = new Set(previous.seenObservationKeys);
   const baselineIds = new Set(previous.seenObservationKeys.map(_idOf));
   const firstAt = Number(previous.retainedRange?.firstCompletedAt) || 0;
@@ -301,7 +354,8 @@ export function computeOfflineWindow(previous, current, host = "") {
 export function computeObservationWindow(host) {
   const previous = monitorData.hostObservationWatermark?.[host] || null;
   const current = monitorData.hostObservationCurrent?.[host] || null;
-  return computeOfflineWindow(previous, current, host);
+  // ★ P1-2: 現セッションで取得した current だけを装着根拠にする（復元された旧 current は stale）。
+  return computeOfflineWindow(previous, current, { host, sessionId: _sessionId() });
 }
 
 /**

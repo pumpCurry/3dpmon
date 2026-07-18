@@ -59,7 +59,7 @@ import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilam
 import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
-import { recordObservation } from "./dashboard_offline_observation.js";
+import { recordObservation, observationDue } from "./dashboard_offline_observation.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -1299,11 +1299,17 @@ export function aggregatorUpdate() {
         }
         const _activeJobId = machine?.printStore?.current?.id ?? null;
         const _printState = Number(storedData.state?.rawValue ?? 0);
-        const _histRev = machine?.printStore?.revision ?? null;
-        const _obsSig = `${_histRev}|${_activeJobId}|${_printState}|${spool?.id ?? ""}|${_ivStatus}`;
-        if (!s._lastObs || _mono - s._lastObs > 5000 || s._lastObsSig !== _obsSig) {
+        // ★ P0-1: 履歴 revision の正式フィールドは _historyRev（relay 側と同一）。revision は存在しない。
+        const _histRev = machine?.printStore?._historyRev ?? null;
+        // ★ P0-1: signature 判定は純関数 observationDue に集約（intervalId 変化も含め、5s 待たず記録）。
+        const _due = observationDue(
+          { lastAtMs: s._lastObs, signature: s._lastObsSig },
+          { historyRevision: _histRev, activeJobId: _activeJobId, printState: _printState, mountedSpoolId: spool?.id ?? null, mountIntervalStatus: _ivStatus, mountIntervalId: _ivId },
+          { nowMs: _mono }
+        );
+        if (_due.record) {
           s._lastObs = _mono;
-          s._lastObsSig = _obsSig;
+          s._lastObsSig = _due.signature;
           recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus, activeJobId: _activeJobId, printState: _printState });
         }
       } catch (e) { /* read-only 観測失敗は本流を止めない */ }
