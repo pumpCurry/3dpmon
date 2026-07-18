@@ -1299,6 +1299,8 @@ export function aggregatorUpdate() {
         }
         const _activeJobId = machine?.printStore?.current?.id ?? null;
         const _printState = Number(storedData.state?.rawValue ?? 0);
+        // ★ P1-B: 印刷中/一時停止のときだけ「連続印刷証拠」として現在ジョブの複合 identity を残す。
+        const _activePrinting = _printState === PRINT_STATE_CODE.printStarted || _printState === PRINT_STATE_CODE.printPaused;
         // ★ P0-1: 履歴 revision の正式フィールドは _historyRev（relay 側と同一）。revision は存在しない。
         const _histRev = machine?.printStore?._historyRev ?? null;
         // ★ P0-1: signature 判定は純関数 observationDue に集約（intervalId 変化も含め、5s 待たず記録）。
@@ -1310,7 +1312,7 @@ export function aggregatorUpdate() {
         if (_due.record) {
           s._lastObs = _mono;
           s._lastObsSig = _due.signature;
-          recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus, activeJobId: _activeJobId, printState: _printState });
+          recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus, activeJobId: _activeJobId, printState: _printState, activePrinting: _activePrinting });
         }
       } catch (e) { /* read-only 観測失敗は本流を止めない */ }
     }

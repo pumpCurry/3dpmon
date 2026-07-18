@@ -21,7 +21,9 @@ const { recordObservation, computeObservationWindow, commitObservationWindow } =
 
 const M = (over = {}) => ({ spoolId: "S1", intervalId: "iv1", intervalStatus: "ok", observationState: "mounted", ...over });
 const AJ = "J1";
-const AJKEY = JSON.stringify([AJ, 0, 1700000000000, "fJ1.gcode"]); // active job の offline 複合キー
+const AJ_START = 1700000000000;
+const AJKEY = JSON.stringify([AJ, AJ_START, AJ_START + 5000, "fJ1.gcode"]); // active job の offline 複合キー
+const AJOBS = { canonicalJobId: AJ, startAt: AJ_START, fileSignature: "fJ1.gcode" }; // 印刷中に取得した複合 identity
 
 /** 既定 bounded・同一スプール継続の ObservationWindow を組み立てる。 */
 function win(over = {}) {
@@ -36,9 +38,9 @@ function win(over = {}) {
     baselineMount, currentMount
   };
 }
-/** activeJobContinued=true（停止前ジョブの完了を観測＝high の前提）の継続窓。 */
+/** activeJobContinued=true（停止前印刷中ジョブの完了を複合 identity で観測＝high の前提）の継続窓。 */
 function contWin(over = {}) {
-  return win({ offlineObservationKeys: [AJKEY], watermark: { activeJobId: AJ }, ...over });
+  return win({ offlineObservationKeys: [AJKEY], watermark: { activeJobObservation: AJOBS }, ...over });
 }
 
 describe("continuity 成立条件（O2-P0-1: 停止前後で同一スプール装着継続の観測が必須）", () => {
@@ -121,11 +123,27 @@ describe("confidence 段階（P0-3: activeJobContinued / interval / truncated）
     expect(classifyObservationWindow(contWin()).confidence.level).toBe("high");
   });
 
-  it("★P0-3: 完全オフライン（activeJobContinued=false）は high にしない＝medium 止まり", () => {
-    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"] })); // watermark.activeJobId なし
+  it("★P0-3: 完全オフライン（activeJobObservation なし）は high にしない＝medium 止まり", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: ["k1"] })); // activeJobObservation なし
     expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
     expect(r.confidence.level).toBe("medium");
     expect(r.confidence.reasons).toContain("fully-offline");
+  });
+
+  it("★P1-B: active job の ID は一致でも複合 identity（開始時刻/file）が不一致なら high にしない", () => {
+    // offline key は同 id だが startAt/file が別＝別実行（ID 再利用など）
+    const otherKey = JSON.stringify([AJ, 999, 1000, "other.gcode"]);
+    const r = classifyObservationWindow(win({
+      offlineObservationKeys: [otherKey], watermark: { activeJobObservation: AJOBS }
+    }));
+    expect(r.classification).toBe(ATTR_CLASS.CONTINUITY_CANDIDATE);
+    expect(r.confidence.level).toBe("medium"); // activeJobContinued=false 扱い
+    expect(r.evidence.activeJobContinued).toBe(false);
+  });
+
+  it("★P1-B: baseline が idle（activeJobObservation なし）なら activeJobContinued=false", () => {
+    const r = classifyObservationWindow(win({ offlineObservationKeys: [AJKEY], watermark: {} }));
+    expect(r.evidence.activeJobContinued).toBe(false);
   });
 
   it("same spool / different interval → high にしない（途中 detach/reattach 疑い）", () => {
@@ -209,9 +227,8 @@ describe("evidence / contradictions（O2 返却仕様）", () => {
     const strong = classifyObservationWindow(win({ offlineObservationKeys: ["k1"], printerIdentityMatch: { status: "same-strong", matchedBy: "serialNumber" } }));
     expect(strong.evidence.sameStrongPrinterIdentity).toBe(true);
   });
-  it("activeJobContinued: baseline の activeJobId が offline 集合に現れる", () => {
-    const key = JSON.stringify(["1000", 0, 1700000000000, "f.gcode"]);
-    const r = classifyObservationWindow(win({ offlineObservationKeys: [key], watermark: { activeJobId: "1000" } }));
+  it("activeJobContinued: baseline の active job 複合 identity が offline 集合に現れる", () => {
+    const r = classifyObservationWindow(contWin());
     expect(r.evidence.activeJobContinued).toBe(true);
   });
   it("continuity-contradicted は confidence.contradictions を埋める", () => {

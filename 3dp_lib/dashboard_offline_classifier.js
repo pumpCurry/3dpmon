@@ -66,12 +66,24 @@ function _idOfKey(key) {
   try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
 }
 
-/** 停止前に印刷中だったジョブ(baseline.activeJobId)が offline 完了集合に現れたか（＝開始をアプリが観測済み）。 */
+/**
+ * 停止前に印刷中だったジョブの完了を offline で観測できたか（＝開始をアプリが観測済み）。
+ * ★ P1-B: ID 一致だけでは不十分（idle の残存 current・ID 再利用で誤判定）。印刷中に取得した
+ *   複合 identity（canonicalJobId＋開始時刻＋file署名）が offline 完了と整合する場合のみ true。
+ */
 function _activeJobContinued(window) {
-  const activeJobId = window?.watermark?.activeJobId ?? null;
-  if (activeJobId == null) return false;
-  const offlineIds = new Set((window?.offlineObservationKeys || []).map(_idOfKey));
-  return offlineIds.has(String(activeJobId));
+  const aj = window?.watermark?.activeJobObservation;
+  if (!aj || aj.canonicalJobId == null) return false; // 印刷中に取得した証拠が無い＝high にしない
+  const cid = String(aj.canonicalJobId);
+  const startAt = Number(aj.startAt) || 0;
+  const fileSig = aj.fileSignature || "";
+  for (const key of window?.offlineObservationKeys || []) {
+    let a; try { a = JSON.parse(key); } catch { continue; }
+    if (!Array.isArray(a)) continue;
+    // 複合一致: id＋開始時刻＋file（finishAt は active=未完了なので比較しない）。
+    if (String(a[0]) === cid && (Number(a[1]) || 0) === startAt && (a[3] || "") === fileSig) return true;
+  }
+  return false;
 }
 
 /** ObservationWindow から証拠（解釈済みの事実サマリ）を組み立てる。 */

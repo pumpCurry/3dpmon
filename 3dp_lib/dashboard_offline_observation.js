@@ -32,7 +32,7 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { wallNowMs, randomEventId } from "./dashboard_time.js";
-import { completedJobObservations, historyGenerationFingerprint } from "./dashboard_history_identity.js";
+import { completedJobObservations, historyGenerationFingerprint, jobObservationIdentity } from "./dashboard_history_identity.js";
 
 /** 観測キーの保持上限（completion 時系列で最新のみ保持）。 */
 const SEEN_CAP = 5000;
@@ -126,8 +126,18 @@ function _mountFacts(snap) {
 }
 
 /** @private 現在履歴から観測スナップショットを構築（read-only）。 */
-function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "none", activeJobId = null, printState = null } = {}) {
+function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus = "none", activeJobId = null, printState = null, activePrinting = false } = {}) {
   const machine = monitorData.machines?.[host];
+  // ★ P1-B: 印刷中/一時停止のときだけ、印刷中ジョブの複合 identity（id+開始時刻+file）を保存。
+  //   idle の残存 current や ID 再利用で high 誤判定しないよう、O2 は composite 一致を要求する。
+  let activeJobObservation = null;
+  if (activePrinting) {
+    const cur = machine?.printStore?.current;
+    const oid = cur ? jobObservationIdentity(cur) : null;
+    if (oid && oid.canonicalJobId != null) {
+      activeJobObservation = { canonicalJobId: oid.canonicalJobId, startAt: oid.startAt ?? null, fileSignature: oid.fileSignature ?? null };
+    }
+  }
   const hist = machine?.printStore?.history;
   const obsAll = completedJobObservations(hist); // completion 時系列・重複排除
   const totalCompletedCount = obsAll.length;
@@ -146,6 +156,7 @@ function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus =
     observationState: spoolId ? "mounted" : "unmounted",
     // ★ P0-4: 連続印刷の証拠（停止前に何を印刷中だったか）。O2 の activeJobContinued 判定に使う。
     activeJobId: activeJobId ?? (machine?.printStore?.current?.id ?? null),
+    activeJobObservation, // ★ P1-B: 印刷中のみ非null（複合 identity）
     printState: printState ?? null,
     historyRevision: machine?.printStore?._historyRev ?? null,
     // ★ P1-2: 現セッションで取得した観測か（永続復元された旧 current と区別する）。
@@ -366,10 +377,10 @@ export function computeObservationWindow(host) {
  *
  * @function commitObservationWindow
  * @param {string} host
- * @param {{windowId:string, expectedSequence:number, candidatePersistedAt:number, candidateHash?:string}} opts
+ * @param {{windowId:string, expectedSequence:number, candidatePersistedAt:number, candidateHash?:string, expectedAppSessionId?:?string}} opts
  * @returns {{ok:boolean, reason:string, baseline?:Object, idempotent?:boolean}}
  */
-export function commitObservationWindow(host, { windowId, expectedSequence, candidatePersistedAt, candidateHash = null } = {}) {
+export function commitObservationWindow(host, { windowId, expectedSequence, candidatePersistedAt, candidateHash = null, expectedAppSessionId = null } = {}) {
   if (!host) return { ok: false, reason: "host_required" };
   if (windowId == null || String(windowId) === "") return { ok: false, reason: "window_id_required" };
   if (!monitorData.hostObservationWatermark || typeof monitorData.hostObservationWatermark !== "object") monitorData.hostObservationWatermark = {};
@@ -382,6 +393,13 @@ export function commitObservationWindow(host, { windowId, expectedSequence, cand
   if (!(Number(candidatePersistedAt) > 0)) return { ok: false, reason: "candidate_not_persisted" };
   const cur = monitorData.hostObservationCurrent?.[host];
   if (!cur) return { ok: false, reason: "no_current_observation" };
+  // ★ P1-A: current は「現セッションで取得した観測」でなければ baseline へ昇格しない。
+  //   candidate 永続化直後・baseline 昇格前にクラッシュ→旧 current を復元→sequence 一致でも
+  //   fresh 観測が無いまま commit されるのを防ぐ（stale current で確定させない）。
+  if (cur.appSessionId !== _sessionId()) return { ok: false, reason: "current_observation_stale" };
+  if (expectedAppSessionId != null && cur.appSessionId !== expectedAppSessionId) {
+    return { ok: false, reason: "app_session_changed_since_evaluation" };
+  }
   if (Number(expectedSequence) !== Number(cur.observationSequence)) {
     return { ok: false, reason: "observation_changed_since_evaluation" };
   }

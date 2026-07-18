@@ -220,6 +220,22 @@ describe("commitObservationWindow — fail-closed transaction（P0-3）", () => 
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("observation_changed_since_evaluation");
   });
+
+  it("★P1-A: 旧セッションの current（sequence一致でも）は baseline へ昇格しない", () => {
+    const w = prep();
+    // candidate 永続化後・baseline 昇格前にクラッシュ→旧 current を復元した状況を模す
+    mockMonitorData.hostObservationCurrent.h = { ...mockMonitorData.hostObservationCurrent.h, appSessionId: "old-session" };
+    const r = commitObservationWindow("h", { windowId: "wS", expectedSequence: w.currentSequence, candidatePersistedAt: 1 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("current_observation_stale");
+  });
+
+  it("★P1-A: expectedAppSessionId 不一致は昇格しない（transaction 境界）", () => {
+    const w = prep();
+    const r = commitObservationWindow("h", { windowId: "wT", expectedSequence: w.currentSequence, candidatePersistedAt: 1, expectedAppSessionId: "some-other" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("app_session_changed_since_evaluation");
+  });
 });
 
 describe("computeObservationWindow — 観測事実の投影（O2-P0 用・解釈しない）", () => {
@@ -357,7 +373,7 @@ describe("observationDue（P0-1 signature 判定・純関数）", () => {
   });
 });
 
-describe("P0-4 連続印刷証拠の記録", () => {
+describe("P0-4 / P1-B 連続印刷証拠の記録", () => {
   it("activeJobId / printState / historyRevision を観測へ保存", () => {
     mockMonitorData.hostSpoolMap.h = "S1";
     mockMonitorData.machines.h = { printStore: { history: [job("1000", 100)], current: { id: "1000" }, _historyRev: 7 }, storedData: {} };
@@ -365,6 +381,18 @@ describe("P0-4 連続印刷証拠の記録", () => {
     expect(snap.activeJobId).toBe("1000");
     expect(snap.printState).toBe(13);
     expect(snap.historyRevision).toBe(7);
+  });
+
+  it("★P1-B: activePrinting のときだけ activeJobObservation（複合 identity）を保存", () => {
+    mockMonitorData.hostSpoolMap.h = "S1";
+    const current = { id: "1000", printStartTime: BASE, filename: "a.gcode" };
+    mockMonitorData.machines.h = { printStore: { history: [job("1000", 100)], current, _historyRev: 3 }, storedData: {} };
+    // 印刷中
+    const printing = recordObservation("h", { mountIntervalStatus: "ok", activePrinting: true });
+    expect(printing.activeJobObservation).toMatchObject({ canonicalJobId: "1000", startAt: BASE, fileSignature: "a.gcode" });
+    // idle（activePrinting=false）は null＝high の根拠にしない
+    const idle = recordObservation("h", { mountIntervalStatus: "ok", activePrinting: false });
+    expect(idle.activeJobObservation).toBeNull();
   });
 });
 
