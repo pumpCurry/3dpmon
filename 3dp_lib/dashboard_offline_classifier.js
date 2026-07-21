@@ -61,11 +61,6 @@ function _levelMin(a, b) {
   return _LEVELS[Math.max(ia < 0 ? 0 : ia, ib < 0 ? 0 : ib)];
 }
 
-/** 複合キー(JSON tuple)から canonicalJobId を取り出す。 */
-function _idOfKey(key) {
-  try { const a = JSON.parse(key); return Array.isArray(a) ? String(a[0]) : ""; } catch { return ""; }
-}
-
 /**
  * 停止前に印刷中だったジョブの完了を offline で観測できたか（＝開始をアプリが観測済み）。
  * ★ P1-B: ID 一致だけでは不十分（idle の残存 current・ID 再利用で誤判定）。印刷中に取得した

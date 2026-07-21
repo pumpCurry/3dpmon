@@ -184,7 +184,8 @@ function _buildObservation(host, { mountIntervalId = null, mountIntervalStatus =
  * 稼働中の観測を current へ記録する（baseline 非上書き。未設定初回のみ bootstrap）。
  * @function recordObservation
  * @param {string} host
- * @param {{mountIntervalId?:?string, mountIntervalStatus?:string}} [opts]
+ * @param {{mountIntervalId?:?string, mountIntervalStatus?:string, activeJobId?:?string,
+ *   printState?:?number, activePrinting?:boolean}} [opts]
  * @returns {?Object} current スナップショット
  */
 export function recordObservation(host, opts = {}) {
