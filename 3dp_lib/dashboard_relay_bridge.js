@@ -20,9 +20,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1110 (PR #380)
+ * @version 1.390.1245 (PR #412)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-06-12 12:00:00
+ * @lastModified 2026-07-19 18:45:00
  * -----------------------------------------------------------
  */
 
@@ -46,6 +46,9 @@ let _prevMountHash = "";
 
 /** 前回ブロードキャストした pendingUnattributedUsage（未帰属消費 隔離領域）のハッシュ（変更検出） */
 let _prevPendingHash = "";
+
+/** 前回ブロードキャストした inferredCandidateStore（オフライン推定候補）のハッシュ（変更検出） */
+let _prevInferredCandidateHash = "";
 
 /** 前回ブロードキャストした ItemKeeper 設定のハッシュ（変更検出） */
 let _prevIkHash = "";
@@ -612,6 +615,16 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // ★ #412-O4: O2/O3 の分類結果・推定 debit を子へミラーする。
+  //   生の 5000 件観測ではなく、親が耐久保存した candidate store だけを同期する。
+  const inferredCandidateHash = _quickHash(monitorData.inferredCandidateStore || {});
+  if (inferredCandidateHash !== _prevInferredCandidateHash) {
+    _prevInferredCandidateHash = inferredCandidateHash;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.inferredCandidateStore = monitorData.inferredCandidateStore || {};
+    hasChanges = true;
+  }
+
   // ★ 監査 P0(第2報): フィラメント補助ドメイン（在庫・カスタムプリセット・表示/
   //   お気に入り・切れ文脈・serialCounter・使用履歴）の変更検出。従来は
   //   filamentSpools/hostSpoolMap/mountHistory のみ共有していたため、これらが親子で
@@ -719,6 +732,8 @@ function _buildFullSnapshot() {
     // ★ Phase4/P0-1: 未帰属消費の隔離領域とアーカイブも同梱（親=権威、子は読み取り専用ミラー）。
     pendingUnattributedUsage: monitorData.pendingUnattributedUsage || [],
     pendingUnattributedUsageArchive: monitorData.pendingUnattributedUsageArchive || {},
+    // ★ #412-O4: 子は分類済み candidate と推定量だけを受け取り、生観測は受け取らない。
+    inferredCandidateStore: monitorData.inferredCandidateStore || {},
     // ★ 監査 P0(第2報): フィラメント補助ドメインをスナップショットにも同梱（親=権威）。
     filamentInventory: monitorData.filamentInventory || [],
     userPresets: monitorData.userPresets || [],

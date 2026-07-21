@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.787 (PR #366)
+ * @version 1.390.1245 (PR #412)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-03-11 01:00:00
+ * @lastModified 2026-07-19 18:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -106,6 +106,8 @@ const SHARED_KEYS = [
   // ★ #411-O1: オフライン推定の観測 watermark（baseline）＋現セッション観測
   "hostObservationWatermark",
   "hostObservationCurrent",
+  // #412-O4: candidate store は baseline commit 前の耐久保存対象。
+  "inferredCandidateStore",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage",
   "pendingUnattributedUsageArchive",

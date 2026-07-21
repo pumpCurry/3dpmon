@@ -41,6 +41,7 @@ const monitorData = {
   mountHistorySeq: 0,
   pendingUnattributedUsage: [],
   pendingUnattributedUsageArchive: {},
+  inferredCandidateStore: {},
   ledgerRepairRequired: {},
   filamentEventContext: {},
   hostSpoolMap: {},
@@ -64,6 +65,7 @@ function resetMonitorData() {
   monitorData.mountHistorySeq = 0;
   monitorData.pendingUnattributedUsage = [];
   monitorData.pendingUnattributedUsageArchive = {};
+  monitorData.inferredCandidateStore = {};
   monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
   monitorData.hostCameraToggle = {};
@@ -162,6 +164,9 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     };
     monitorData.mountHistorySeq = 42;
     monitorData.ledgerRepairRequired = { h: { spoolId: "S", status: "ambiguous", detectedAtEpochMs: 99 } };
+    monitorData.inferredCandidateStore = {
+      "ic-a": { candidateHash: "ic-a", host: "h", windowId: "w1", candidateSpoolId: "S", usedMm: 1234, status: "pending", updatedAt: 111 },
+    };
 
     saveUnifiedStorage(true);
     resetMonitorData(); // リロード模擬（隔離・アーカイブ・seq・修復要求を空へ）
@@ -178,6 +183,25 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.mountHistorySeq).toBe(42);
     // RR-2: 台帳修復要求フラグも往復で保持
     expect(monitorData.ledgerRepairRequired.h.status).toBe("ambiguous");
+    // #412-O4: 推定 candidate store も往復で保持
+    expect(monitorData.inferredCandidateStore["ic-a"].usedMm).toBe(1234);
+  });
+
+  it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {
+    monitorData.inferredCandidateStore = {
+      "ic-a": { candidateHash: "ic-a", status: "pending", usedMm: 100, updatedAt: 20 },
+      "ic-old": { candidateHash: "ic-old", status: "pending", usedMm: 50, updatedAt: 100 },
+    };
+    await importAllData({
+      inferredCandidateStore: {
+        "ic-a": { candidateHash: "ic-a", status: "confirmed", usedMm: 100, updatedAt: 30 },
+        "ic-old": { candidateHash: "ic-old", status: "rejected", usedMm: 50, updatedAt: 10 },
+        "ic-b": { candidateHash: "ic-b", status: "pending", usedMm: 200, updatedAt: 40 },
+      },
+    });
+    expect(monitorData.inferredCandidateStore["ic-a"].status).toBe("confirmed");
+    expect(monitorData.inferredCandidateStore["ic-old"].status).toBe("pending");
+    expect(monitorData.inferredCandidateStore["ic-b"].usedMm).toBe(200);
   });
 
   it('P1-1: import は同一 opId(別evId)の mount を1件に畳む', async () => {

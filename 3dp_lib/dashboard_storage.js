@@ -26,9 +26,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.787 (PR #367)
+* @version 1.390.1245 (PR #412)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-07-19 18:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -257,6 +257,22 @@ export async function importAllData(data) {
     for (const [h, a] of Object.entries(data.pendingUnattributedUsageArchive)) {
       if (a && !monitorData.pendingUnattributedUsageArchive[h]) {
         monitorData.pendingUnattributedUsageArchive[h] = { ...a };
+      }
+    }
+  }
+
+  // ── ★ #412-O4: inferredCandidateStore は candidateHash 単位でマージ ──
+  //   同一 window/candidate の二重処理を避け、既存候補と import 候補が衝突した場合は
+  //   updatedAt が新しい方を採用する。削除ではなく状態遷移で監査する前提のため、未知状態も保持する。
+  if (data.inferredCandidateStore && typeof data.inferredCandidateStore === "object") {
+    if (!monitorData.inferredCandidateStore || typeof monitorData.inferredCandidateStore !== "object") {
+      monitorData.inferredCandidateStore = {};
+    }
+    for (const [hash, value] of Object.entries(data.inferredCandidateStore)) {
+      if (!value || typeof value !== "object") continue;
+      const current = monitorData.inferredCandidateStore[hash];
+      if (!current || (Number(value.updatedAt) || 0) >= (Number(current.updatedAt) || 0)) {
+        monitorData.inferredCandidateStore[hash] = { ...value };
       }
     }
   }
@@ -658,6 +674,8 @@ const LS_GLOBAL_FIELDS = [
   "mountHistoryRejectedEvents",
   // ★ #411-O1: オフライン推定の観測 watermark（baseline＝再起動後の差分基準）＋現セッション観測
   "hostObservationWatermark", "hostObservationCurrent",
+  // ★ #412-O4: オフライン継続推定 candidate（親権威・状態遷移つき）
+  "inferredCandidateStore",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
   // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
@@ -882,6 +900,7 @@ function _flushStorage() {
       queueSharedWrite("mountHistoryRejectedEvents", monitorData.mountHistoryRejectedEvents);
       queueSharedWrite("hostObservationWatermark", monitorData.hostObservationWatermark);
       queueSharedWrite("hostObservationCurrent",   monitorData.hostObservationCurrent);
+      queueSharedWrite("inferredCandidateStore",   monitorData.inferredCandidateStore);
       // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
       queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
       queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
@@ -1257,6 +1276,21 @@ function _restoreFromData(shared, machines) {
     }
     for (const [h, v] of Object.entries(shared.hostObservationCurrent)) {
       if (v && !monitorData.hostObservationCurrent[h]) monitorData.hostObservationCurrent[h] = { ...v };
+    }
+  }
+
+  // ★ #412-O4: inferredCandidateStore は candidateHash 単位でマージする。
+  //   既存候補がある場合は updatedAt が新しい方を採用し、同一 window の二重処理を避ける。
+  if (shared?.inferredCandidateStore && typeof shared.inferredCandidateStore === "object") {
+    if (!monitorData.inferredCandidateStore || typeof monitorData.inferredCandidateStore !== "object") {
+      monitorData.inferredCandidateStore = {};
+    }
+    for (const [hash, value] of Object.entries(shared.inferredCandidateStore)) {
+      if (!value || typeof value !== "object") continue;
+      const current = monitorData.inferredCandidateStore[hash];
+      if (!current || (Number(value.updatedAt) || 0) >= (Number(current.updatedAt) || 0)) {
+        monitorData.inferredCandidateStore[hash] = { ...value };
+      }
     }
   }
 

@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.787 (PR #367)
+* @version 1.390.1245 (PR #412)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-07-19 18:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -292,6 +292,15 @@ export const monitorData = {
    */
   hostObservationCurrent: {},
   /**
+   * ★ #412-O4: オフライン継続推定 candidate の親権威ストア。
+   * O2/O3 で得た分類・推定 debit を、baseline commit 前に耐久保存するための領域。
+   * 削除ではなく status 遷移と events 追記で監査可能にし、子へは分類結果と推定量のみ同期する。
+   * hash -> { candidateHash, windowId, candidateSpoolId, observationKeys, usedMm, confidence, evidence,
+   *           status, createdAt, updatedAt, resolvedAt, events:Array<Object> }
+   * @type {Object.<string, Object>}
+   */
+  inferredCandidateStore: {},
+  /**
    * ★ Phase2A: 有効な jobId が無いまま完了した消費の隔離領域。
    * 電源投入直後などで printStartTime が 0/null の「無効ID」ジョブは
    * 履歴・usedLengthLog・境界へ確定記録を作らず（過去全履歴の誤減算＝退行を防ぐ）、
@@ -531,6 +540,5 @@ export function markAllKeysDirty(hostname) {
     dirtySet.add(key);
   }
 }
-
 
 

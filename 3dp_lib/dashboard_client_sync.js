@@ -20,9 +20,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1110 (PR #380)
+ * @version 1.390.1245 (PR #412)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-06-12 12:00:00
+ * @lastModified 2026-07-19 18:45:00
  * -----------------------------------------------------------
  */
 
@@ -312,7 +312,7 @@ function _applyRelayPrintStore(hostname, ps) {
  * ※ モジュール内部用だが、マージ規則の回帰テストのために export している。
  *
  * @function _applySharedFilamentState
- * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>}} shared
+ * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object}} shared
  *   - 受信した共有データ
  * @returns {void}
  */
@@ -355,6 +355,15 @@ export function _applySharedFilamentState(shared) {
     const arch = monitorData.pendingUnattributedUsageArchive;
     for (const k of Object.keys(arch)) delete arch[k];
     Object.assign(arch, shared.pendingUnattributedUsageArchive);
+  }
+  // ★ #412-O4: 推定 candidate store は親が権威。子は全置換で表示・確認導線用の状態を同期する。
+  if (shared.inferredCandidateStore && typeof shared.inferredCandidateStore === "object") {
+    if (!monitorData.inferredCandidateStore || typeof monitorData.inferredCandidateStore !== "object") {
+      monitorData.inferredCandidateStore = {};
+    }
+    const store = monitorData.inferredCandidateStore;
+    for (const k of Object.keys(store)) delete store[k];
+    Object.assign(store, shared.inferredCandidateStore);
   }
   if (shared.filamentEventContext && typeof shared.filamentEventContext === "object") {
     if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {

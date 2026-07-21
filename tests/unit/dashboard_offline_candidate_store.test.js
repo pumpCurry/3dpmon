@@ -1,0 +1,151 @@
+/**
+ * @fileoverview dashboard_offline_candidate_store.js（#412-O4 candidate store）の単体テスト
+ * O2/O3 の結果を冪等に永続候補化し、削除ではなく状態遷移で監査できることを検証する。
+ */
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+const mockMonitorData = { inferredCandidateStore: {} };
+vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mockMonitorData }));
+
+const {
+  INFERRED_CANDIDATE_STATUS,
+  buildInferredCandidateHash,
+  persistInferredCandidate,
+  transitionInferredCandidate,
+  getInferredCandidatesForHost
+} = await import("../../3dp_lib/dashboard_offline_candidate_store.js");
+
+/**
+ * O2 分類結果 fixture を作る。
+ *
+ * @function cls
+ * @param {Object} [over] - 上書き値。
+ * @returns {Object} classifyObservationWindow の戻り値相当。
+ */
+function cls(over = {}) {
+  return {
+    classification: "continuity-candidate",
+    host: "k1",
+    windowId: "k1|b1|c2",
+    confidence: { level: "medium", reasons: ["bounded"], contradictions: [] },
+    evidence: { sameMountedSpool: true },
+    candidate: {
+      candidateSpoolId: "S1",
+      candidateBaselineIntervalId: "iv1",
+      candidateCurrentIntervalId: "iv1",
+      offlineObservationKeys: ["kA", "kB"],
+      windowId: "k1|b1|c2"
+    },
+    ...over
+  };
+}
+
+/**
+ * O3 projection fixture を作る。
+ *
+ * @function proj
+ * @param {Object} [over] - 上書き値。
+ * @returns {Object} buildInferredContinuityProjection の戻り値相当。
+ */
+function proj(over = {}) {
+  return {
+    host: "k1",
+    inferredContinuityUsedMm: 3000,
+    candidateDebits: [
+      { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] },
+      { observationKey: "kB", status: "inferred-debit", usedMm: 2000, reason: "unattributed-usage", confirmedSpoolIds: [] }
+    ],
+    ...over
+  };
+}
+
+beforeEach(() => {
+  mockMonitorData.inferredCandidateStore = {};
+});
+
+describe("buildInferredCandidateHash", () => {
+  it("observationKeys の順序差を同じ candidateHash に畳む", () => {
+    const a = buildInferredCandidateHash(cls(), proj());
+    const b = buildInferredCandidateHash(cls({
+      candidate: { ...cls().candidate, offlineObservationKeys: ["kB", "kA"] }
+    }), proj());
+    expect(a).toBe(b);
+    expect(a.startsWith("ic-")).toBe(true);
+  });
+
+  it("windowId が異なれば別 candidateHash になる", () => {
+    const a = buildInferredCandidateHash(cls(), proj());
+    const b = buildInferredCandidateHash(cls({ windowId: "k1|b2|c3" }), proj());
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("persistInferredCandidate", () => {
+  it("O2/O3 結果を pending candidate として保存する", () => {
+    const r = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe("created");
+    expect(r.record.status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+    expect(r.record.usedMm).toBe(3000);
+    expect(r.record.observationKeys).toEqual(["kA", "kB"]);
+    expect(r.record.events).toHaveLength(1);
+    expect(Object.keys(mockMonitorData.inferredCandidateStore)).toEqual([r.candidateHash]);
+  });
+
+  it("同一 candidateHash は再保存しても増殖しない", () => {
+    const first = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    const second = persistInferredCandidate(cls(), proj(), { nowMs: 2000 });
+    expect(second.reason).toBe("idempotent");
+    expect(second.record).toBe(first.record);
+    expect(Object.keys(mockMonitorData.inferredCandidateStore)).toHaveLength(1);
+    expect(second.record.events).toHaveLength(1);
+  });
+
+  it("推定 debit が 0 なら保存しない", () => {
+    const r = persistInferredCandidate(cls(), proj({ inferredContinuityUsedMm: 0 }), { nowMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("no_inferred_debit");
+    expect(mockMonitorData.inferredCandidateStore).toEqual({});
+  });
+});
+
+describe("transitionInferredCandidate", () => {
+  it("confirmed へ状態遷移し resolvedAt と event を追記する", () => {
+    const created = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    const r = transitionInferredCandidate(created.candidateHash, "confirmed", {
+      nowMs: 2000, actor: "user", reason: "same-spool-confirmed"
+    });
+    expect(r.ok).toBe(true);
+    expect(r.record.status).toBe("confirmed");
+    expect(r.record.resolvedAt).toBe(2000);
+    expect(r.record.events).toHaveLength(2);
+    expect(r.record.events[1].actor).toBe("user");
+  });
+
+  it("同じ状態への再適用は冪等で event を増やさない", () => {
+    const created = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    transitionInferredCandidate(created.candidateHash, "rejected", { nowMs: 2000 });
+    const r = transitionInferredCandidate(created.candidateHash, "rejected", { nowMs: 3000 });
+    expect(r.reason).toBe("idempotent");
+    expect(r.record.events).toHaveLength(2);
+  });
+
+  it("reassigned は assignedSpoolId を保持する", () => {
+    const created = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    const r = transitionInferredCandidate(created.candidateHash, "reassigned", {
+      nowMs: 2000, assignedSpoolId: "S2"
+    });
+    expect(r.record.assignedSpoolId).toBe("S2");
+  });
+});
+
+describe("getInferredCandidatesForHost", () => {
+  it("host と status で candidate を取得する", () => {
+    const k1 = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    persistInferredCandidate(cls({ host: "k2", windowId: "k2|b1|c2" }), proj({ host: "k2" }), { nowMs: 2000 });
+    transitionInferredCandidate(k1.candidateHash, "confirmed", { nowMs: 3000 });
+    expect(getInferredCandidatesForHost("k1")).toHaveLength(1);
+    expect(getInferredCandidatesForHost("k1", { status: "pending" })).toHaveLength(0);
+    expect(getInferredCandidatesForHost("k1", { status: "confirmed" })).toHaveLength(1);
+  });
+});

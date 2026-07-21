@@ -153,6 +153,10 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     monitorData.pendingUnattributedUsage.splice(0, monitorData.pendingUnattributedUsage.length);
     for (const k of Object.keys(monitorData.filamentEventContext)) delete monitorData.filamentEventContext[k];
     monitorData.spoolSerialCounter = 0;
+    if (!monitorData.inferredCandidateStore || typeof monitorData.inferredCandidateStore !== "object") {
+      monitorData.inferredCandidateStore = {};
+    }
+    for (const k of Object.keys(monitorData.inferredCandidateStore)) delete monitorData.inferredCandidateStore[k];
   });
 
   it("Phase4: pendingUnattributedUsage を親からミラー（in-place 全置換・参照維持）", () => {
@@ -181,6 +185,19 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     });
     expect(monitorData.pendingUnattributedUsageArchive.stale).toBeUndefined();
     expect(monitorData.pendingUnattributedUsageArchive.k1).toEqual({ count: 3, totalUsedMm: 300 });
+  });
+
+  it("#412-O4: inferredCandidateStore を親から全置換ミラー", () => {
+    monitorData.inferredCandidateStore.stale = { candidateHash: "stale", status: "pending" };
+    _applySharedFilamentState({
+      inferredCandidateStore: {
+        "ic-a": { candidateHash: "ic-a", host: "k1", status: "pending", usedMm: 1200 },
+      },
+    });
+    expect(monitorData.inferredCandidateStore.stale).toBeUndefined();
+    expect(monitorData.inferredCandidateStore["ic-a"]).toEqual({
+      candidateHash: "ic-a", host: "k1", status: "pending", usedMm: 1200
+    });
   });
 
   it("在庫・プリセット・使用履歴を親からミラー（in-place 全置換・参照維持）", () => {
