@@ -20,9 +20,9 @@
  * - {@link transitionInferredCandidate}：candidate の状態を監査 event 付きで変更する
  * - {@link getInferredCandidatesForHost}：host 単位で candidate を取得する
  *
- * @version 1.390.1250 (PR #412)
+ * @version 1.390.1246 (PR #413)
  * @since   1.390.1245 (PR #412)
- * @lastModified 2026-07-25 12:17:09
+ * @lastModified 2026-07-22 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - O4 後続で aggregator の O2/O3 ライブ配線から `persistInferredCandidate` を呼び出す。
@@ -220,6 +220,8 @@ export function buildInferredCandidateHash(classificationResult, projection) {
  * 【詳細説明】
  * - `projection.eligibleForPersistence` が true でなければ fail-closed で保存しない。
  * - `projection.inferredContinuityUsedMm` が 0 以下なら、推定 debit 対象が無いため保存しない。
+ * - `projection.eligibleForPersistence` が true でない場合は、矛盾・曖昧・残量不明などの fail-closed
+ *   判定を尊重して保存しない。
  * - 同じ candidateHash が既に存在する場合は既存レコードを返し、二重作成しない。
  * - 同じ candidateHash でも同一性材料が完全一致しない場合は hash 衝突として保存を拒否する。
  * - 作成時点の candidate/projection/confidence/evidence をスナップショット化し、後続 UI が
@@ -236,7 +238,8 @@ export function buildInferredCandidateHash(classificationResult, projection) {
  */
 export function persistInferredCandidate(classificationResult, projection, options = {}) {
   if (projection?.eligibleForPersistence !== true) {
-    return { ok: false, reason: "projection_not_eligible", candidateHash: null, record: null };
+    const reason = projection?.status && projection.status !== "ok" ? projection.status : "projection_not_eligible";
+    return { ok: false, reason, candidateHash: null, record: null };
   }
   const usedMm = Math.max(0, Number(projection?.inferredContinuityUsedMm) || 0);
   if (usedMm <= 0) {

@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.1245 (PR #412)
+ * @version 1.390.1246 (PR #413)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-07-19 18:45:00
+ * @lastModified 2026-07-22 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -212,7 +212,7 @@ export function getIdbCache() {
  * @param {any} value - 保存する値
  */
 export function queueSharedWrite(key, value) {
-  _pendingShared.set(key, value);
+  _pendingShared.set(key, _cloneForStorageQueue(value));
   _scheduleFlush();
 }
 
@@ -239,7 +239,7 @@ export function queueMachineWrite(hostname, machineData) {
     filtered.storedData = sd;
   }
 
-  _pendingMachines.set(hostname, filtered);
+  _pendingMachines.set(hostname, _cloneForStorageQueue(filtered));
   _scheduleFlush();
 }
 
@@ -414,6 +414,33 @@ function _txComplete(tx) {
     tx.onerror    = () => reject(tx.error);
     tx.onabort    = () => reject(tx.error || new Error("Transaction aborted"));
   });
+}
+
+/**
+ * IndexedDB キューへ積む値を保存時点のスナップショットへ複製する。
+ *
+ * 【詳細説明】
+ * - queueSharedWrite/queueMachineWrite は非同期 flush まで値を保持するため、参照をそのまま積むと
+ *   flush 前の monitorData 更新が「過去に積んだはずの保存境界」へ混入する。
+ * - candidate 保存後 baseline commit 前に耐久境界を作るには、キュー投入時点の値を clone する必要がある。
+ * - IndexedDB に保存する値は JSON 互換データが前提なので、structuredClone が使えない環境では
+ *   JSON round-trip で代替する。clone 不能な値は最後の安全策として元値を返す。
+ *
+ * @private
+ * @function _cloneForStorageQueue
+ * @param {*} value - キューへ積む保存値。
+ * @returns {*} キュー投入時点のスナップショット。
+ */
+function _cloneForStorageQueue(value) {
+  if (value == null) return value;
+  try {
+    if (typeof structuredClone === "function") return structuredClone(value);
+  } catch { /* JSON fallback へ進む */ }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
 }
 
 /**

@@ -16,6 +16,7 @@
  * 【公開関数一覧】
  * - {@link setStorageLogEnabled}：ログ出力有効化
  * - {@link saveUnifiedStorage}：全データ保存
+ * - {@link saveUnifiedStorageDurably}：全データを耐久保存完了まで待つ
  * - {@link restoreUnifiedStorage}：全データ復元
  * - {@link restoreLegacyStoredData}：レガシーデータ読込
  * - {@link cleanupLegacy}：レガシー削除
@@ -26,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1245 (PR #412)
+* @version 1.390.1246 (PR #413)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-07-19 18:45:00
+* @lastModified 2026-07-22 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -799,6 +800,34 @@ export function saveUnifiedStorage(immediate = false) {
     _saveTimer = null;
     if (_savePending) _flushStorage();
   }, SAVE_THROTTLE_MS);
+}
+
+/**
+ * monitorData 全体を保存し、IndexedDB 利用時は transaction 完了まで待機する。
+ *
+ * 【詳細説明】
+ * - `saveUnifiedStorage(true)` は IndexedDB パスでは queue へ積むだけで即時復帰する。
+ * - candidate 保存後に observation baseline を進める経路では、candidate が実際に耐久保存されたことを
+ *   確認してから commit しないと、クラッシュ時に baseline だけ進む可能性がある。
+ * - IndexedDB が無効または未初期化の場合は localStorage 同期保存が完了した時点で成功とみなす。
+ * - IndexedDB flush 中にフォールバックへ切り替わった場合は、呼び出し元に失敗を返し、baseline commit を止める。
+ *
+ * @function saveUnifiedStorageDurably
+ * @returns {Promise<{ok:boolean, backend:string, reason:string}>} 耐久保存結果。
+ * @example
+ * const saved = await saveUnifiedStorageDurably();
+ */
+export async function saveUnifiedStorageDurably() {
+  const expectedIdb = _idbInitialized && isIdbAvailable();
+  _flushStorage();
+  if (!expectedIdb) {
+    return { ok: true, backend: "localStorage", reason: "saved" };
+  }
+  await flushIdb();
+  if (!isIdbAvailable()) {
+    return { ok: false, backend: "indexedDB", reason: "idb_flush_failed" };
+  }
+  return { ok: true, backend: "indexedDB", reason: "flushed" };
 }
 
 /**

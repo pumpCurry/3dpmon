@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
     hostObservationCurrent: { k1: { appSessionId: "session-a" } },
     machines: { k1: { printStore: { history: [{ id: "job-a", materialUsedMm: 1200 }] } } }
   },
-  saveUnifiedStorage: vi.fn(() => { mocks.events.push("save"); }),
+  saveUnifiedStorage: vi.fn(async () => { mocks.events.push("save"); return { ok: true, backend: "indexedDB", reason: "flushed" }; }),
   classifyHostAttribution: vi.fn(),
   buildInferredContinuityProjection: vi.fn(),
   persistInferredCandidate: vi.fn(),
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
-vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: mocks.saveUnifiedStorage }));
+vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorageDurably: mocks.saveUnifiedStorage }));
 vi.mock("../../3dp_lib/dashboard_offline_classifier.js", () => ({
   ATTR_CLASS: { CONTINUITY_CANDIDATE: "continuity-candidate" },
   classifyHostAttribution: mocks.classifyHostAttribution
@@ -62,7 +62,11 @@ beforeEach(() => {
   mocks.events.length = 0;
   mocks.monitorData.hostObservationCurrent = { k1: { appSessionId: "session-a" } };
   mocks.monitorData.machines = { k1: { printStore: { history: [{ id: "job-a", materialUsedMm: 1200 }] } } };
-  mocks.saveUnifiedStorage.mockClear();
+  mocks.saveUnifiedStorage.mockReset();
+  mocks.saveUnifiedStorage.mockImplementation(async () => {
+    mocks.events.push("save");
+    return { ok: true, backend: "indexedDB", reason: "flushed" };
+  });
   mocks.classifyHostAttribution.mockReset();
   mocks.buildInferredContinuityProjection.mockReset();
   mocks.persistInferredCandidate.mockReset();
@@ -70,9 +74,9 @@ beforeEach(() => {
 });
 
 describe("runInferredContinuityShadow", () => {
-  it("candidate を保存してから baseline commit し、commit 成功後に再保存する", () => {
+  it("candidate を耐久保存してから baseline commit し、commit 成功後に再保存する", async () => {
     const cls = classification();
-    const projection = { host: "k1", inferredContinuityUsedMm: 1200 };
+    const projection = { host: "k1", inferredContinuityUsedMm: 1200, eligibleForPersistence: true, status: "ok" };
     mocks.classifyHostAttribution.mockReturnValue(cls);
     mocks.buildInferredContinuityProjection.mockReturnValue(projection);
     mocks.persistInferredCandidate.mockImplementation(() => {
@@ -84,7 +88,7 @@ describe("runInferredContinuityShadow", () => {
       return { ok: true, reason: "committed" };
     });
 
-    const result = runInferredContinuityShadow("k1", { id: "S1", remainingLengthMm: 5000 });
+    const result = await runInferredContinuityShadow("k1", { id: "S1", remainingLengthMm: 5000 });
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe("committed");
@@ -99,10 +103,10 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.events).toEqual(["persist", "save", "commit", "save"]);
   });
 
-  it("O2 が continuity-candidate 以外なら projection と保存を実行しない", () => {
+  it("O2 が continuity-candidate 以外なら projection と保存を実行しない", async () => {
     mocks.classifyHostAttribution.mockReturnValue(classification({ classification: "no-offline-activity" }));
 
-    const result = runInferredContinuityShadow("k1", { id: "S1" });
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("no-offline-activity");
@@ -111,12 +115,12 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
   });
 
-  it("O4 が no_inferred_debit を返した場合は baseline を進めない", () => {
+  it("O4 が no_inferred_debit を返した場合は baseline を進めない", async () => {
     mocks.classifyHostAttribution.mockReturnValue(classification());
-    mocks.buildInferredContinuityProjection.mockReturnValue({ host: "k1", inferredContinuityUsedMm: 0 });
+    mocks.buildInferredContinuityProjection.mockReturnValue({ host: "k1", inferredContinuityUsedMm: 0, eligibleForPersistence: true, status: "ok" });
     mocks.persistInferredCandidate.mockReturnValue({ ok: false, reason: "no_inferred_debit", candidateHash: null, record: null });
 
-    const result = runInferredContinuityShadow("k1", { id: "S1" });
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("no_inferred_debit");
@@ -124,10 +128,85 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
   });
 
-  it("例外を shadow_failed に畳み、本流へ throw しない", () => {
+  it("O3 が persistence 不可なら O4 保存と baseline commit を実行しない", async () => {
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: false,
+      status: "contradicted",
+      contradictions: [{ reason: "already-confirmed-on-other-spool" }]
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("contradicted");
+    expect(mocks.persistInferredCandidate).not.toHaveBeenCalled();
+    expect(mocks.saveUnifiedStorage).not.toHaveBeenCalled();
+    expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
+  });
+
+  it("candidate の耐久保存に失敗した場合は baseline commit へ進まない", async () => {
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+    });
+    mocks.saveUnifiedStorage.mockImplementation(async () => {
+      mocks.events.push("save");
+      return { ok: false, backend: "indexedDB", reason: "idb_flush_failed" };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("idb_flush_failed");
+    expect(mocks.events).toEqual(["persist", "save"]);
+    expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
+  });
+
+  it("baseline commit 後の耐久保存に失敗した場合は失敗として返す", async () => {
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+    });
+    mocks.commitObservationWindow.mockImplementation(() => {
+      mocks.events.push("commit");
+      return { ok: true, reason: "committed" };
+    });
+    mocks.saveUnifiedStorage.mockImplementationOnce(async () => {
+      mocks.events.push("save");
+      return { ok: true, backend: "indexedDB", reason: "flushed" };
+    }).mockImplementationOnce(async () => {
+      mocks.events.push("save");
+      return { ok: false, backend: "indexedDB", reason: "idb_flush_failed" };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("idb_flush_failed");
+    expect(mocks.events).toEqual(["persist", "save", "commit", "save"]);
+  });
+
+  it("例外を shadow_failed に畳み、本流へ throw しない", async () => {
     mocks.classifyHostAttribution.mockImplementation(() => { throw new Error("classifier boom"); });
 
-    const result = runInferredContinuityShadow("k1", { id: "S1" });
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("shadow_failed");

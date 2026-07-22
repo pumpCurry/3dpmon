@@ -133,6 +133,9 @@ describe("buildInferredContinuityProjection", () => {
     const result = buildInferredContinuityProjection(classification([keyOf(j1), keyOf(j2)]), spool, [j1, j2]);
 
     expect(result.confirmedRemainingMm).toBe(10_000);
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("ok");
+    expect(result.eligibleForPersistence).toBe(true);
     expect(result.inferredContinuityUsedMm).toBe(3500);
     expect(result.projectedRemainingMm).toBe(6500);
     expect(result.candidateDebits.map(d => d.status)).toEqual(["inferred-debit", "inferred-debit"]);
@@ -164,8 +167,26 @@ describe("buildInferredContinuityProjection", () => {
 
     expect(result.inferredContinuityUsedMm).toBe(0);
     expect(result.projectedRemainingMm).toBe(9000);
+    expect(result.status).toBe("contradicted");
+    expect(result.eligibleForPersistence).toBe(false);
     expect(result.contradictions).toHaveLength(1);
     expect(result.contradictions[0].reason).toBe("already-confirmed-on-other-spool");
+  });
+
+  it("未帰属 job と別スプール確定 job が混在した window は全体を fail-closed する", () => {
+    const pending = job("411", 1000, 411);
+    const other = job("412", 4000, 412, { filamentInfo: [{ spoolId: "S2", usedMm: 4000 }] });
+    const result = buildInferredContinuityProjection(
+      classification([keyOf(pending), keyOf(other)]),
+      { id: "S1", remainingLengthMm: 9000 },
+      [pending, other]
+    );
+
+    expect(result.candidateDebits.map(d => d.status)).toEqual(["inferred-debit", "confirmed-other-spool"]);
+    expect(result.inferredContinuityUsedMm).toBe(0);
+    expect(result.projectedRemainingMm).toBe(9000);
+    expect(result.status).toBe("contradicted");
+    expect(result.eligibleForPersistence).toBe(false);
   });
 
   it("履歴消失と使用量不明は unresolved に分離し projected へ入れない", () => {
@@ -178,7 +199,53 @@ describe("buildInferredContinuityProjection", () => {
 
     expect(result.inferredContinuityUsedMm).toBe(0);
     expect(result.projectedRemainingMm).toBe(5000);
+    expect(result.status).toBe("unresolved");
+    expect(result.eligibleForPersistence).toBe(false);
     expect(result.unresolved.map(d => d.status)).toEqual(["no-usage", "unresolved"]);
+  });
+
+  it("確定残量が不明なら 0mm に丸めず persistence 不可にする", () => {
+    const entry = job("511", 1200, 511);
+    const result = buildInferredContinuityProjection(
+      classification([keyOf(entry)]),
+      { id: "S1", remainingLengthMm: null },
+      [entry]
+    );
+
+    expect(result.confirmedRemainingMm).toBe(null);
+    expect(result.projectedRemainingMm).toBe(null);
+    expect(result.inferredContinuityUsedMm).toBe(0);
+    expect(result.status).toBe("remaining-unknown");
+    expect(result.eligibleForPersistence).toBe(false);
+  });
+
+  it("同一 observation key が履歴に重複する場合は配列順に依存せず ambiguous として拒否する", () => {
+    const first = job("521", 1000, 521);
+    const duplicate = { ...first, filamentInfo: [{ spoolId: "S2", usedMm: 1000 }] };
+    const result = buildInferredContinuityProjection(
+      classification([keyOf(first)]),
+      { id: "S1", remainingLengthMm: 5000 },
+      [first, duplicate]
+    );
+
+    expect(result.inferredContinuityUsedMm).toBe(0);
+    expect(result.status).toBe("ambiguous-history");
+    expect(result.eligibleForPersistence).toBe(false);
+    expect(result.unresolved[0].reason).toBe("duplicate-observation-key");
+  });
+
+  it("filamentInfo と filamentId の確定スプールが競合する履歴は ambiguous として拒否する", () => {
+    const entry = job("531", 1000, 531, { filamentInfo: [{ spoolId: "S1", usedMm: 1000 }], filamentId: "S2" });
+    const result = buildInferredContinuityProjection(
+      classification([keyOf(entry)]),
+      { id: "S1", remainingLengthMm: 5000 },
+      [entry]
+    );
+
+    expect(result.inferredContinuityUsedMm).toBe(0);
+    expect(result.status).toBe("ambiguous-history");
+    expect(result.eligibleForPersistence).toBe(false);
+    expect(result.unresolved[0].reason).toBe("conflicting-confirmed-spool-fields");
   });
 
   it("continuity-candidate 以外の分類では推定 debit しない", () => {
@@ -192,6 +259,7 @@ describe("buildInferredContinuityProjection", () => {
     expect(result.inferredContinuityUsedMm).toBe(0);
     expect(result.candidateDebits).toEqual([]);
     expect(result.projectedRemainingMm).toBe(7000);
+    expect(result.eligibleForPersistence).toBe(false);
   });
 
   it("projection 対象 spool と candidate spool が違う場合は矛盾として debit しない", () => {
@@ -205,6 +273,8 @@ describe("buildInferredContinuityProjection", () => {
     expect(result.inferredContinuityUsedMm).toBe(0);
     expect(result.candidateDebits).toEqual([]);
     expect(result.contradictions[0].reason).toBe("projection-spool-mismatch");
+    expect(result.status).toBe("projection-spool-mismatch");
+    expect(result.eligibleForPersistence).toBe(false);
     expect(result.projectedRemainingMm).toBe(7000);
   });
 

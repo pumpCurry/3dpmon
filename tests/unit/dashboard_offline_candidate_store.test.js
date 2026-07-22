@@ -50,12 +50,14 @@ function cls(over = {}) {
 function proj(over = {}) {
   return {
     host: "k1",
-    eligibleForPersistence: true,
     inferredContinuityUsedMm: 3000,
     candidateDebits: [
       { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] },
       { observationKey: "kB", status: "inferred-debit", usedMm: 2000, reason: "unattributed-usage", confirmedSpoolIds: [] }
     ],
+    ok: true,
+    status: "ok",
+    eligibleForPersistence: true,
     ...over
   };
 }
@@ -174,6 +176,13 @@ describe("persistInferredCandidate", () => {
     expect(r.collision).toBe(mockMonitorData.inferredCandidateStore[candidateHash]);
     expect(Object.keys(mockMonitorData.inferredCandidateStore)).toHaveLength(1);
     expect(mockMonitorData.inferredCandidateStore[candidateHash].windowId).toBe("k9|b1|c2");
+  });
+
+  it("O3 が persistence 不可なら推定 debit があっても保存しない", () => {
+    const r = persistInferredCandidate(cls(), proj({ eligibleForPersistence: false, status: "contradicted" }), { nowMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("contradicted");
+    expect(mockMonitorData.inferredCandidateStore).toEqual({});
   });
 });
 

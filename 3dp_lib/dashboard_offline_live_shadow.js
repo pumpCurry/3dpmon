@@ -20,7 +20,7 @@
  *
  * @version 1.390.1246 (PR #413)
  * @since   1.390.1246 (PR #413)
- * @lastModified 2026-07-22 02:00:00
+ * @lastModified 2026-07-22 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - O5 で UI 確認・否認・再割当てから candidate status を遷移させる。
@@ -29,7 +29,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { saveUnifiedStorageDurably } from "./dashboard_storage.js";
 import { ATTR_CLASS, classifyHostAttribution } from "./dashboard_offline_classifier.js";
 import { commitObservationWindow } from "./dashboard_offline_observation.js";
 import { buildInferredContinuityProjection } from "./dashboard_offline_projection.js";
@@ -80,11 +80,11 @@ function _historyForHost(host) {
  * @function _saveIfEnabled
  * @param {Object} options - 実行オプション。
  * @param {boolean} [options.save=true] - false の場合は保存をスキップする。
- * @returns {*} saveUnifiedStorage の戻り値。保存しない場合は null。
+ * @returns {Promise<*>} saveUnifiedStorageDurably の戻り値。保存しない場合は null。
  */
-function _saveIfEnabled(options) {
+async function _saveIfEnabled(options) {
   if (options?.save === false) return null;
-  return saveUnifiedStorage(true);
+  return await saveUnifiedStorageDurably();
 }
 
 /**
@@ -94,19 +94,19 @@ function _saveIfEnabled(options) {
  * - O2 が `continuity-candidate` を返した場合だけ O3 projection と O4 candidate store へ進む。
  * - O3 で推定 debit が 0 の場合は、既に catch-up で同一スプールへ確定済み、または消費量不明のため
  *   candidate を保存せず、baseline も進めない。
- * - candidate 永続化の直後に保存し、その保存が例外なく終わった後で `commitObservationWindow()` を呼ぶ。
+ * - candidate 永続化の直後に耐久保存を待ち、その保存が成功した後で `commitObservationWindow()` を呼ぶ。
  * - aggregator から呼ばれる shadow 経路なので、例外は返り値へ畳み、本流の帰属・消費処理を止めない。
  *
  * @function runInferredContinuityShadow
  * @param {string} host - 対象ホスト名。
  * @param {?Object} spool - 現在選択中の spool オブジェクト。
  * @param {{save?:boolean}} [options] - テスト用オプション。
- * @returns {{ok:boolean, reason:string, classification?:Object, projection?:Object, persist?:Object, commit?:Object, error?:string}}
+ * @returns {Promise<{ok:boolean, reason:string, classification?:Object, projection?:Object, persist?:Object, commit?:Object, save?:Object, error?:string}>}
  *   shadow 評価結果。
  * @example
- * const result = runInferredContinuityShadow("printer-a", spool);
+ * const result = await runInferredContinuityShadow("printer-a", spool);
  */
-export function runInferredContinuityShadow(host, spool, options = {}) {
+export async function runInferredContinuityShadow(host, spool, options = {}) {
   try {
     if (!host) return { ok: false, reason: "host_required" };
     if (!spool || !spool.id) return { ok: false, reason: "spool_required" };
@@ -118,12 +118,18 @@ export function runInferredContinuityShadow(host, spool, options = {}) {
 
     const expectedAppSessionId = _currentAppSessionId(host);
     const projection = buildInferredContinuityProjection(classification, spool, _historyForHost(host));
+    if (projection?.eligibleForPersistence !== true) {
+      return { ok: false, reason: projection?.status || "projection_not_eligible", classification, projection };
+    }
     const persist = persistInferredCandidate(classification, projection);
     if (!persist?.ok) {
       return { ok: false, reason: persist?.reason || "candidate_not_persisted", classification, projection, persist };
     }
 
-    _saveIfEnabled(options);
+    const save = await _saveIfEnabled(options);
+    if (save && save.ok === false) {
+      return { ok: false, reason: save.reason || "candidate_not_durably_saved", classification, projection, persist, save };
+    }
     const persistedAt = Number(persist.record?.createdAt) || Number(persist.record?.updatedAt) || Date.now();
     const commit = commitObservationWindow(host, {
       windowId: classification.windowId,
@@ -132,7 +138,10 @@ export function runInferredContinuityShadow(host, spool, options = {}) {
       candidateHash: persist.candidateHash,
       expectedAppSessionId
     });
-    if (commit?.ok) _saveIfEnabled(options);
+    const commitSave = commit?.ok ? await _saveIfEnabled(options) : null;
+    if (commit?.ok && commitSave && commitSave.ok === false) {
+      return { ok: false, reason: commitSave.reason || "baseline_not_durably_saved", classification, projection, persist, commit, save: commitSave };
+    }
 
     return {
       ok: !!commit?.ok,
@@ -140,7 +149,8 @@ export function runInferredContinuityShadow(host, spool, options = {}) {
       classification,
       projection,
       persist,
-      commit
+      commit,
+      save: commitSave || save
     };
   } catch (e) {
     return { ok: false, reason: "shadow_failed", error: e?.message || String(e) };

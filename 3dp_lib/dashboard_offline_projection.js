@@ -11,7 +11,8 @@
  * - #411-O3 の純粋 projection として、O2 の continuity candidate を確定残量へ直接混ぜず、
  *   未帰属のオフライン完了分だけを推定 debit として集計する。
  * - 確定済み履歴と observation key を照合し、同一スプール確定済み・別スプール確定済み・
- *   履歴消失・未帰属を分離することで、二重減算と誤帰属を防ぐ。
+ *   履歴消失・未帰属・履歴曖昧性を分離することで、二重減算と誤帰属を防ぐ。
+ * - window 内に矛盾や曖昧性がある場合は projection 全体を fail-closed し、O4 永続化へ進ませない。
  * - spool.remainingLengthMm、mountHistory、usedLengthLog、filamentInfo などの確定台帳には
  *   一切書き込まない。UI・ライブ残量・不可逆操作への接続は O4/O5 以降で行う。
  *
@@ -20,9 +21,9 @@
  * - {@link evaluateCandidateObservationKey}：candidate の observation key 1件を履歴へ照合する。
  * - {@link buildInferredContinuityProjection}：candidate 全体から推定残量 projection を作る。
  *
- * @version 1.390.1244 (PR #411)
+ * @version 1.390.1246 (PR #413)
  * @since   1.390.1244 (PR #411)
- * @lastModified  2026-07-19 18:21:09
+ * @lastModified  2026-07-22 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - O4 で candidate 永続化・状態遷移・親子同期へ接続する。
@@ -58,9 +59,14 @@ const CONTINUITY_CANDIDATE = "continuity-candidate";
  * @property {?string} spoolId - projection 対象スプール ID。
  * @property {?string} windowId - O1/O2 の ObservationWindow ID。
  * @property {?string} classification - O2 分類ラベル。
- * @property {number} confirmedRemainingMm - 確定台帳だけから見た残量 mm。
+ * @property {boolean} ok - O4 永続化へ進められる projection なら true。
+ * @property {string} status - `ok` / `not-continuity-candidate` / `contradicted` /
+ *   `unresolved` / `remaining-unknown` / `ambiguous-history` / `projection-spool-mismatch` のいずれか。
+ * @property {boolean} eligibleForPersistence - O4 candidate store へ保存可能なら true。
+ * @property {?number} confirmedRemainingMm - 確定台帳だけから見た残量 mm。不明な場合は null。
  * @property {number} inferredContinuityUsedMm - 未帰属かつ継続候補として推定 debit する消費量 mm。
- * @property {number} projectedRemainingMm - `confirmedRemainingMm - inferredContinuityUsedMm` の表示用推定残量 mm。
+ * @property {?number} projectedRemainingMm - `confirmedRemainingMm - inferredContinuityUsedMm` の表示用推定残量 mm。
+ *   確定残量が不明な場合は null。
  * @property {Array<CandidateDebitEvaluation>} candidateDebits - candidate key ごとの照合結果。
  * @property {Array<CandidateDebitEvaluation>} contradictions - 別スプール確定済みなど、推定と矛盾する key。
  * @property {Array<CandidateDebitEvaluation>} unresolved - 履歴消失・消費量不明など projection へ入れられない key。
@@ -85,55 +91,109 @@ function _nonNegativeMm(value) {
 }
 
 /**
+ * 確定残量として使える値を正規化する。
+ *
+ * 【詳細説明】
+ * - `remainingLengthMm` の `0` は実残量ゼロとして有効だが、null/undefined/NaN/負値は「不明」として扱う。
+ * - O5 の UI や不可逆操作 gate が「空」と「不明」を混同しないよう、不明値は null のまま返す。
+ *
+ * @private
+ * @function _remainingOrNull
+ * @param {*} value - spool.remainingLengthMm 相当の値。
+ * @returns {?number} 有効な 0 以上の数値。不明な場合は null。
+ */
+function _remainingOrNull(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
  * observation key から lookup 用 Map を構築する。
  *
  * 【詳細説明】
  * - O1/O2 と同じ `jobObservationIdentity()` を使い、ID だけでなく開始/完了時刻・ファイル署名を
  *   含む複合 key で履歴行を検索できるようにする。
- * - 同一 key が複数ある場合は、最初に見つけた履歴行を保持する。重複がある時点で履歴側が
- *   既に曖昧なので、projection は台帳を書き換えず監査情報だけを返す。
+ * - 同一 key が複数ある場合は ambiguous として記録し、履歴配列順に依存した first-wins を避ける。
  *
  * @private
  * @function _historyByObservationKey
  * @param {Array<Object>} history - printStore.history 相当の履歴配列。
- * @returns {Map<string,Object>} observation key から履歴行への Map。
+ * @returns {Map<string,{status:string, entries:Array<Object>}>} observation key から履歴候補への Map。
  */
 function _historyByObservationKey(history) {
   const map = new Map();
   if (!Array.isArray(history)) return map;
   for (const entry of history) {
     const identity = jobObservationIdentity(entry);
-    if (!identity || !identity.key || map.has(identity.key)) continue;
-    map.set(identity.key, entry);
+    if (!identity || !identity.key) continue;
+    const current = map.get(identity.key);
+    if (!current) {
+      map.set(identity.key, { status: "unique", entries: [entry] });
+      continue;
+    }
+    current.status = "ambiguous";
+    current.entries.push(entry);
   }
   return map;
 }
 
 /**
- * 履歴行の確定帰属スプール ID 一覧を返す。
+ * 履歴 lookup レコードから一意の entry を取り出す。
  *
  * 【詳細説明】
- * - `filamentInfo[].spoolId` を最優先にし、配列にスプール情報が無い場合だけ `filamentId` を見る。
- * - `filamentId="none"` や空文字は確定スプールではないため除外する。
- * - 重複は Set で畳み、projection 側の二重判定を防ぐ。
+ * - 履歴に key が無い場合は missing、同一 key が複数ある場合は ambiguous を返す。
+ * - ambiguous は O3 window 全体の fail-closed 条件として扱う。
  *
  * @private
- * @function _confirmedSpoolIds
- * @param {Object} entry - 履歴行。
- * @returns {Array<string>} 確定帰属済みのスプール ID 一覧。
+ * @function _entryLookupState
+ * @param {?Object} lookup - `_historyByObservationKey()` の値、または後方互換用の履歴行。
+ * @returns {{status:string, entry:?Object, entries:Array<Object>}}
  */
-function _confirmedSpoolIds(entry) {
+function _entryLookupState(lookup) {
+  if (!lookup) return { status: "missing", entry: null, entries: [] };
+  if (lookup.status === "ambiguous") return { status: "ambiguous", entry: null, entries: lookup.entries || [] };
+  if (lookup.status === "unique") return { status: "unique", entry: lookup.entries?.[0] || null, entries: lookup.entries || [] };
+  return { status: "unique", entry: lookup, entries: [lookup] };
+}
+
+/**
+ * 値を有効な確定スプール ID として集合へ追加する。
+ *
+ * @private
+ * @function _addConfirmedId
+ * @param {Set<string>} ids - 追加先 Set。
+ * @param {*} value - スプール ID 候補値。
+ * @returns {void}
+ */
+function _addConfirmedId(ids, value) {
+  const id = value == null ? "" : String(value).trim();
+  if (id && id !== "none") ids.add(id);
+}
+
+/**
+ * 履歴行の確定帰属スプール情報を、矛盾検出付きで返す。
+ *
+ * 【詳細説明】
+ * - `filamentInfo[].spoolId` と `filamentId` の両方を同じ確定ソースとして集合化する。
+ * - 複数の spool ID が同じ履歴行に現れた場合は、確定ソース同士が競合しているため ambiguous とする。
+ *
+ * @private
+ * @function _confirmedSpoolState
+ * @param {Object} entry - 履歴行。
+ * @returns {{ids:Array<string>, ambiguous:boolean, reason:?string}} 確定スプール情報。
+ */
+function _confirmedSpoolState(entry) {
   const ids = new Set();
   const info = Array.isArray(entry?.filamentInfo) ? entry.filamentInfo : [];
-  for (const item of info) {
-    const id = item?.spoolId == null ? "" : String(item.spoolId).trim();
-    if (id && id !== "none") ids.add(id);
-  }
-  if (ids.size === 0) {
-    const id = entry?.filamentId == null ? "" : String(entry.filamentId).trim();
-    if (id && id !== "none") ids.add(id);
-  }
-  return [...ids];
+  for (const item of info) _addConfirmedId(ids, item?.spoolId);
+  _addConfirmedId(ids, entry?.filamentId);
+  const out = [...ids];
+  return {
+    ids: out,
+    ambiguous: out.length > 1,
+    reason: out.length > 1 ? "conflicting-confirmed-spool-fields" : null
+  };
 }
 
 /**
@@ -171,7 +231,7 @@ export function estimateHistoryEntryUsedMm(entry) {
  *
  * @function evaluateCandidateObservationKey
  * @param {string} observationKey - O2 candidate の observation key。
- * @param {?Object} entry - observation key に一致した履歴行。見つからない場合は null。
+ * @param {?Object} entry - observation key に一致した履歴行、または lookup レコード。見つからない場合は null。
  * @param {string} candidateSpoolId - O2 が提示した候補スプール ID。
  * @returns {CandidateDebitEvaluation} key 1件の projection 判定。
  * @example
@@ -179,7 +239,20 @@ export function estimateHistoryEntryUsedMm(entry) {
  */
 export function evaluateCandidateObservationKey(observationKey, entry, candidateSpoolId) {
   const candidateId = candidateSpoolId == null ? null : String(candidateSpoolId);
-  if (!entry) {
+  const lookup = _entryLookupState(entry);
+  if (lookup.status === "ambiguous") {
+    return {
+      observationKey,
+      status: "unresolved",
+      usedMm: 0,
+      candidateSpoolId: candidateId,
+      confirmedSpoolIds: [],
+      entry: null,
+      reason: "duplicate-observation-key"
+    };
+  }
+  const resolvedEntry = lookup.entry;
+  if (!resolvedEntry) {
     return {
       observationKey,
       status: "unresolved",
@@ -191,8 +264,20 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
     };
   }
 
-  const usedMm = estimateHistoryEntryUsedMm(entry);
-  const confirmedSpoolIds = _confirmedSpoolIds(entry);
+  const usedMm = estimateHistoryEntryUsedMm(resolvedEntry);
+  const confirmedState = _confirmedSpoolState(resolvedEntry);
+  const confirmedSpoolIds = confirmedState.ids;
+  if (confirmedState.ambiguous) {
+    return {
+      observationKey,
+      status: "unresolved",
+      usedMm,
+      candidateSpoolId: candidateId,
+      confirmedSpoolIds,
+      entry: resolvedEntry,
+      reason: confirmedState.reason
+    };
+  }
   if (confirmedSpoolIds.includes(candidateId)) {
     return {
       observationKey,
@@ -200,7 +285,7 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
       usedMm,
       candidateSpoolId: candidateId,
       confirmedSpoolIds,
-      entry,
+      entry: resolvedEntry,
       reason: "already-confirmed-on-candidate-spool"
     };
   }
@@ -211,7 +296,7 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
       usedMm,
       candidateSpoolId: candidateId,
       confirmedSpoolIds,
-      entry,
+      entry: resolvedEntry,
       reason: "already-confirmed-on-other-spool"
     };
   }
@@ -222,7 +307,7 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
       usedMm: 0,
       candidateSpoolId: candidateId,
       confirmedSpoolIds,
-      entry,
+      entry: resolvedEntry,
       reason: "usage-missing-or-zero"
     };
   }
@@ -232,7 +317,7 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
     usedMm,
     candidateSpoolId: candidateId,
     confirmedSpoolIds,
-    entry,
+    entry: resolvedEntry,
     reason: "unattributed-usage"
   };
 }
@@ -242,8 +327,8 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
  *
  * 【詳細説明】
  * - `classificationResult.classification` が `continuity-candidate` でない場合は推定 debit しない。
- * - `spool.remainingLengthMm` を `confirmedRemainingMm` として読み、未帰属 candidate の消費量だけを
- *   `inferredContinuityUsedMm` に集計する。
+ * - `spool.remainingLengthMm` が 0 以上の有限値の場合だけ `confirmedRemainingMm` として読み、
+ *   不明値は null として返す。
  * - `projectedRemainingMm` は表示・計画用の推定値であり、spool オブジェクトへは書き戻さない。
  * - 入力履歴に同一 observation key が既に候補スプールへ確定帰属している場合は対象外にし、
  *   別スプール確定済みなら contradictions に分離する。
@@ -258,7 +343,7 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
  * const projection = buildInferredContinuityProjection(classification, spool, history);
  */
 export function buildInferredContinuityProjection(classificationResult, spool, history) {
-  const confirmedRemainingMm = _nonNegativeMm(spool?.remainingLengthMm);
+  const confirmedRemainingMm = _remainingOrNull(spool?.remainingLengthMm);
   const candidate = classificationResult?.candidate || null;
   const candidateSpoolId = candidate?.candidateSpoolId == null ? null : String(candidate.candidateSpoolId);
   const base = {
@@ -266,6 +351,9 @@ export function buildInferredContinuityProjection(classificationResult, spool, h
     spoolId: spool?.id == null ? candidateSpoolId : String(spool.id),
     windowId: classificationResult?.windowId ?? candidate?.windowId ?? null,
     classification: classificationResult?.classification ?? null,
+    ok: false,
+    status: "not-continuity-candidate",
+    eligibleForPersistence: false,
     confirmedRemainingMm,
     inferredContinuityUsedMm: 0,
     projectedRemainingMm: confirmedRemainingMm,
@@ -288,7 +376,7 @@ export function buildInferredContinuityProjection(classificationResult, spool, h
       confirmedSpoolIds: [String(spool.id)],
       entry: null,
       reason: "projection-spool-mismatch"
-    }] };
+    }], status: "projection-spool-mismatch" };
   }
 
   const byKey = _historyByObservationKey(history);
@@ -296,14 +384,28 @@ export function buildInferredContinuityProjection(classificationResult, spool, h
   const candidateDebits = keys.map(key => evaluateCandidateObservationKey(key, byKey.get(key) || null, candidateSpoolId));
   const contradictions = candidateDebits.filter(item => item.status === "confirmed-other-spool");
   const unresolved = candidateDebits.filter(item => item.status === "unresolved" || item.status === "no-usage");
-  const inferredContinuityUsedMm = candidateDebits
+  const rawInferredContinuityUsedMm = candidateDebits
     .filter(item => item.status === "inferred-debit")
     .reduce((sum, item) => sum + _nonNegativeMm(item.usedMm), 0);
+  const hasAmbiguousHistory = unresolved.some(item =>
+    item.reason === "duplicate-observation-key" || item.reason === "conflicting-confirmed-spool-fields"
+  );
+  let status = "ok";
+  if (contradictions.length > 0) status = "contradicted";
+  else if (hasAmbiguousHistory) status = "ambiguous-history";
+  else if (unresolved.length > 0) status = "unresolved";
+  else if (confirmedRemainingMm == null) status = "remaining-unknown";
+
+  const eligibleForPersistence = status === "ok" && rawInferredContinuityUsedMm > 0;
+  const inferredContinuityUsedMm = eligibleForPersistence ? rawInferredContinuityUsedMm : 0;
 
   return {
     ...base,
+    ok: eligibleForPersistence,
+    status,
+    eligibleForPersistence,
     inferredContinuityUsedMm,
-    projectedRemainingMm: Math.max(0, confirmedRemainingMm - inferredContinuityUsedMm),
+    projectedRemainingMm: confirmedRemainingMm == null ? null : Math.max(0, confirmedRemainingMm - inferredContinuityUsedMm),
     candidateDebits,
     contradictions,
     unresolved
