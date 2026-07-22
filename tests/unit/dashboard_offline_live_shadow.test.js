@@ -104,6 +104,60 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.events).toEqual(["persist", "save", "commit", "save"]);
   });
 
+  it("耐久保存中に sequence だけ進んだ同一 window は最新 sequence で baseline commit する", async () => {
+    const before = classification({ currentSequence: 2 });
+    const after = classification({ currentSequence: 3 });
+    const projection = { host: "k1", inferredContinuityUsedMm: 1200, eligibleForPersistence: true, status: "ok" };
+    mocks.classifyHostAttribution.mockReturnValueOnce(before).mockReturnValueOnce(after);
+    mocks.buildInferredContinuityProjection.mockReturnValue(projection);
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+    });
+    mocks.commitObservationWindow.mockImplementation(() => {
+      mocks.events.push("commit");
+      return { ok: true, reason: "committed" };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.commitObservationWindow).toHaveBeenCalledWith("k1", {
+      windowId: "k1|b1|c2",
+      expectedSequence: 3,
+      candidatePersistedAt: 1000,
+      candidateHash: "ic-1",
+      expectedAppSessionId: "session-a"
+    });
+    expect(mocks.events).toEqual(["persist", "save", "commit", "save"]);
+  });
+
+  it("耐久保存中に offline key 集合が変わった場合は baseline commit を止める", async () => {
+    const before = classification({ currentSequence: 2 });
+    const after = classification({
+      currentSequence: 3,
+      candidate: { ...classification().candidate, offlineObservationKeys: ["job-a", "job-b"] }
+    });
+    mocks.classifyHostAttribution.mockReturnValueOnce(before).mockReturnValueOnce(after);
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("classification_changed_since_candidate_persisted");
+    expect(mocks.events).toEqual(["persist", "save"]);
+    expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
+  });
+
   it("O2 が continuity-candidate 以外なら projection と保存を実行しない", async () => {
     mocks.classifyHostAttribution.mockReturnValue(classification({ classification: "no-offline-activity" }));
 

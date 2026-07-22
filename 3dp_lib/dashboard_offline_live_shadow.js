@@ -20,7 +20,7 @@
  *
  * @version 1.390.1246 (PR #413)
  * @since   1.390.1246 (PR #413)
- * @lastModified 2026-07-22 19:00:00
+ * @lastModified 2026-07-22 20:30:00
  * -----------------------------------------------------------
  * @todo
  * - O5 で UI 確認・否認・再割当てから candidate status を遷移させる。
@@ -71,6 +71,52 @@ function _historyForHost(host) {
 }
 
 /**
+ * offline observation key 配列が同じ候補窓を表すか判定する。
+ *
+ * 【詳細説明】
+ * - O2 の candidate identity は observation key 集合で決まるため、順序差は同一とみなす。
+ * - 保存待ち中に新しい offline job が増えた場合は別窓として扱い、baseline commit を止める。
+ *
+ * @private
+ * @function _sameObservationKeys
+ * @param {Array<string>} a - 比較元 key 配列。
+ * @param {Array<string>} b - 比較先 key 配列。
+ * @returns {boolean} 同じ key 集合なら true。
+ */
+function _sameObservationKeys(a, b) {
+  const left = Array.isArray(a) ? a.map(String).sort() : [];
+  const right = Array.isArray(b) ? b.map(String).sort() : [];
+  if (left.length !== right.length) return false;
+  return left.every((key, index) => key === right[index]);
+}
+
+/**
+ * candidate 保存後の再分類結果が、保存済み candidate と同じ窓 identity を保っているか判定する。
+ *
+ * 【詳細説明】
+ * - `saveUnifiedStorageDurably()` の await 中に observationSequence だけが進んだ場合は、
+ *   同一窓として最新 sequence で baseline commit してよい。
+ * - spool、mount interval、windowId、offline key 集合のいずれかが変わった場合は、保存済み
+ *   candidate と現在窓が一致しないため fail-closed する。
+ *
+ * @private
+ * @function _sameCandidateIdentity
+ * @param {Object} before - candidate 保存前に使った classification。
+ * @param {Object} after - candidate 保存後に再取得した classification。
+ * @returns {boolean} baseline commit に同じ candidateHash を使えるなら true。
+ */
+function _sameCandidateIdentity(before, after) {
+  if (after?.classification !== ATTR_CLASS.CONTINUITY_CANDIDATE) return false;
+  const b = before?.candidate || {};
+  const a = after?.candidate || {};
+  return (before?.windowId ?? b.windowId ?? null) === (after?.windowId ?? a.windowId ?? null)
+    && (b.candidateSpoolId ?? null) === (a.candidateSpoolId ?? null)
+    && (b.candidateBaselineIntervalId ?? null) === (a.candidateBaselineIntervalId ?? null)
+    && (b.candidateCurrentIntervalId ?? null) === (a.candidateCurrentIntervalId ?? null)
+    && _sameObservationKeys(b.offlineObservationKeys, a.offlineObservationKeys);
+}
+
+/**
  * candidate 保存後に永続化を即時 flush する。
  *
  * 【詳細説明】
@@ -117,7 +163,6 @@ export async function runInferredContinuityShadow(host, spool, options = {}) {
       return { ok: false, reason: classification?.classification || "not_continuity_candidate", classification };
     }
 
-    const expectedAppSessionId = _currentAppSessionId(host);
     const projection = buildInferredContinuityProjection(classification, spool, _historyForHost(host));
     if (projection?.eligibleForPersistence !== true) {
       return { ok: false, reason: projection?.status || "projection_not_eligible", classification, projection };
@@ -131,13 +176,25 @@ export async function runInferredContinuityShadow(host, spool, options = {}) {
     if (save && save.ok === false) {
       return { ok: false, reason: save.reason || "candidate_not_durably_saved", classification, projection, persist, save };
     }
+    const commitClassification = classifyHostAttribution(host);
+    if (!_sameCandidateIdentity(classification, commitClassification)) {
+      return {
+        ok: false,
+        reason: "classification_changed_since_candidate_persisted",
+        classification,
+        commitClassification,
+        projection,
+        persist,
+        save
+      };
+    }
     const persistedAt = Number(persist.record?.createdAt) || Number(persist.record?.updatedAt) || wallNowMs();
     const commit = commitObservationWindow(host, {
-      windowId: classification.windowId,
-      expectedSequence: classification.currentSequence,
+      windowId: commitClassification.windowId,
+      expectedSequence: commitClassification.currentSequence,
       candidatePersistedAt: persistedAt,
       candidateHash: persist.candidateHash,
-      expectedAppSessionId
+      expectedAppSessionId: _currentAppSessionId(host)
     });
     const commitSave = commit?.ok && !commit.idempotent ? await _saveIfEnabled(options) : null;
     if (commit?.ok && commitSave && commitSave.ok === false) {
