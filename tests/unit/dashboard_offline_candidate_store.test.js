@@ -126,7 +126,7 @@ describe("persistInferredCandidate", () => {
       }),
       { nowMs: 2000 }
     );
-    expect(second.reason).toBe("idempotent");
+    expect(second.reason).toBe("updated");
     expect(second.record).toBe(first.record);
     expect(second.record.usedMm).toBe(4500);
     expect(second.record.confidence.level).toBe("high");

@@ -23,7 +23,7 @@
  *
 * @version 1.390.1246 (PR #413)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-07-22 12:00:00
+* @lastModified 2026-07-22 19:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1363,13 +1363,15 @@ export function aggregatorUpdate() {
         // ★ #413-O2/O3/O4 live shadow: #409 catch-up 後も未帰属として残った offline 完了だけを
         //   inferredCandidateStore へ冪等保存し、candidate 保存成功時のみ観測 baseline を昇格する。
         //   projection/candidate は確認 UI 用の pending 情報であり、確定残量や filamentInfo は変更しない。
-        runInferredContinuityShadow(host, spool).then((shadow) => {
-          if (shadow.ok && shadow.persist?.candidateHash) {
-            console.debug(`[aggregator] ${host}: inferred continuity candidate=${shadow.persist.candidateHash} commit=${shadow.commit?.reason}`);
-          }
-        }).catch((e) => {
-          console.warn("[aggregator] inferred continuity shadow 失敗:", e?.message || e);
-        });
+        if (!_isRelayChild()) {
+          runInferredContinuityShadow(host, spool).then((shadow) => {
+            if (shadow.ok && shadow.persist?.candidateHash) {
+              console.debug(`[aggregator] ${host}: inferred continuity candidate=${shadow.persist.candidateHash} commit=${shadow.commit?.reason}`);
+            }
+          }).catch((e) => {
+            console.warn("[aggregator] inferred continuity shadow 失敗:", e?.message || e);
+          });
+        }
       } catch (e) { console.warn("[aggregator] catchUp 失敗:", e?.message || e); }
     }
 

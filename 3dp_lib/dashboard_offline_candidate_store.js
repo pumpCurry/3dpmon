@@ -22,7 +22,7 @@
  *
  * @version 1.390.1246 (PR #413)
  * @since   1.390.1245 (PR #412)
- * @lastModified 2026-07-22 12:00:00
+ * @lastModified 2026-07-22 19:00:00
  * -----------------------------------------------------------
  * @todo
  * - O4 後続で aggregator の O2/O3 ライブ配線から `persistInferredCandidate` を呼び出す。
@@ -222,7 +222,8 @@ export function buildInferredCandidateHash(classificationResult, projection) {
  * - `projection.inferredContinuityUsedMm` が 0 以下なら、推定 debit 対象が無いため保存しない。
  * - `projection.eligibleForPersistence` が true でない場合は、矛盾・曖昧・残量不明などの fail-closed
  *   判定を尊重して保存しない。
- * - 同じ candidateHash が既に存在する場合は既存レコードを返し、二重作成しない。
+ * - 同じ candidateHash が既に存在する場合は既存レコードを返し、推定 debit が変化した時だけ同じ
+ *   レコードを更新して監査 event を追記する。
  * - 同じ candidateHash でも同一性材料が完全一致しない場合は hash 衝突として保存を拒否する。
  * - 作成時点の candidate/projection/confidence/evidence をスナップショット化し、後続 UI が
  *   生の 5000 件 observation を見ずに状態表示できるようにする。
@@ -277,6 +278,7 @@ export function persistInferredCandidate(classificationResult, projection, optio
         usedMm,
         reason: usedChanged ? "projection-used-mm-changed" : "projection-metadata-changed"
       });
+      return { ok: true, reason: "updated", candidateHash, record: existing };
     }
     return { ok: true, reason: "idempotent", candidateHash, record: store[candidateHash], idempotent: true };
   }

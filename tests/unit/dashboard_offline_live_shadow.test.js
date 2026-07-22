@@ -32,6 +32,7 @@ vi.mock("../../3dp_lib/dashboard_offline_candidate_store.js", () => ({
 vi.mock("../../3dp_lib/dashboard_offline_observation.js", () => ({
   commitObservationWindow: mocks.commitObservationWindow
 }));
+vi.mock("../../3dp_lib/dashboard_time.js", () => ({ wallNowMs: () => 123456 }));
 
 const { runInferredContinuityShadow } = await import("../../3dp_lib/dashboard_offline_live_shadow.js");
 
@@ -126,6 +127,37 @@ describe("runInferredContinuityShadow", () => {
     expect(result.reason).toBe("no_inferred_debit");
     expect(mocks.saveUnifiedStorage).not.toHaveBeenCalled();
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
+  });
+
+  it("candidate と baseline がともに idempotent の場合は耐久保存を追加実行しない", async () => {
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return {
+        ok: true,
+        reason: "idempotent",
+        candidateHash: "ic-1",
+        record: { createdAt: 1000, updatedAt: 1000 },
+        idempotent: true
+      };
+    });
+    mocks.commitObservationWindow.mockImplementation(() => {
+      mocks.events.push("commit");
+      return { ok: true, reason: "idempotent", idempotent: true };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe("idempotent");
+    expect(mocks.events).toEqual(["persist", "commit"]);
+    expect(mocks.saveUnifiedStorage).not.toHaveBeenCalled();
   });
 
   it("O3 が persistence 不可なら O4 保存と baseline commit を実行しない", async () => {

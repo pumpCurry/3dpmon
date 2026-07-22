@@ -20,7 +20,7 @@
  *
  * @version 1.390.1246 (PR #413)
  * @since   1.390.1246 (PR #413)
- * @lastModified 2026-07-22 12:00:00
+ * @lastModified 2026-07-22 19:00:00
  * -----------------------------------------------------------
  * @todo
  * - O5 で UI 確認・否認・再割当てから candidate status を遷移させる。
@@ -34,6 +34,7 @@ import { ATTR_CLASS, classifyHostAttribution } from "./dashboard_offline_classif
 import { commitObservationWindow } from "./dashboard_offline_observation.js";
 import { buildInferredContinuityProjection } from "./dashboard_offline_projection.js";
 import { persistInferredCandidate } from "./dashboard_offline_candidate_store.js";
+import { wallNowMs } from "./dashboard_time.js";
 
 /**
  * 現在の観測スナップショットから app session ID を取り出す。
@@ -126,11 +127,11 @@ export async function runInferredContinuityShadow(host, spool, options = {}) {
       return { ok: false, reason: persist?.reason || "candidate_not_persisted", classification, projection, persist };
     }
 
-    const save = await _saveIfEnabled(options);
+    const save = persist.idempotent ? null : await _saveIfEnabled(options);
     if (save && save.ok === false) {
       return { ok: false, reason: save.reason || "candidate_not_durably_saved", classification, projection, persist, save };
     }
-    const persistedAt = Number(persist.record?.createdAt) || Number(persist.record?.updatedAt) || Date.now();
+    const persistedAt = Number(persist.record?.createdAt) || Number(persist.record?.updatedAt) || wallNowMs();
     const commit = commitObservationWindow(host, {
       windowId: classification.windowId,
       expectedSequence: classification.currentSequence,
@@ -138,7 +139,7 @@ export async function runInferredContinuityShadow(host, spool, options = {}) {
       candidateHash: persist.candidateHash,
       expectedAppSessionId
     });
-    const commitSave = commit?.ok ? await _saveIfEnabled(options) : null;
+    const commitSave = commit?.ok && !commit.idempotent ? await _saveIfEnabled(options) : null;
     if (commit?.ok && commitSave && commitSave.ok === false) {
       return { ok: false, reason: commitSave.reason || "baseline_not_durably_saved", classification, projection, persist, commit, save: commitSave };
     }
