@@ -11,6 +11,7 @@
  *   - recordObservation(host)          … 稼働中の観測を current へ記録（baseline 非上書き）
  *   - computeObservationWindow(host)   … baseline vs current で ObservationWindow を返す（純関数）
  *   - commitObservationWindow(host,..) … 窓評価後に baseline 昇格（fail-closed transaction）
+ *   - rollbackObservationWindowCommit(host,..) … baseline 耐久保存失敗時に昇格を巻き戻す
  *
  * 【重要な安全性（レビュー指摘）】
  *   - baseline は「最新 SEEN_CAP 件」に切詰めるため retainedRange（時系列境界）を保存し、
@@ -23,9 +24,9 @@
  *   安全基盤（completionObservationId/pendingUnattributedUsage/mountHistory/intervalId/
  *   usedLengthLog/remainingLengthMm 等）には一切触れない。残量は減らさない。
  *
- * @version 1.390.1247 (PR #411)
+ * @version 1.390.1248 (PR #411)
  * @since   2.3.0
- * @lastModified 2026-07-23 15:21:14
+ * @lastModified 2026-07-23 15:24:14
  * -----------------------------------------------------------
  */
 
@@ -394,7 +395,7 @@ export function computeObservationWindow(host) {
  * @function commitObservationWindow
  * @param {string} host
  * @param {{windowId:string, expectedSequence:number, candidatePersistedAt:number, candidateHash?:string, expectedAppSessionId?:?string}} opts
- * @returns {{ok:boolean, reason:string, baseline?:Object, idempotent?:boolean}}
+ * @returns {{ok:boolean, reason:string, baseline?:Object, previousBaseline?:?Object, idempotent?:boolean}}
  */
 export function commitObservationWindow(host, { windowId, expectedSequence, candidatePersistedAt, candidateHash = null, expectedAppSessionId = null } = {}) {
   if (!host) return { ok: false, reason: "host_required" };
@@ -429,7 +430,38 @@ export function commitObservationWindow(host, { windowId, expectedSequence, cand
     lastCommittedWindowId: windowId
   };
   monitorData.hostObservationWatermark[host] = baseline;
-  return { ok: true, reason: "committed", baseline };
+  return { ok: true, reason: "committed", baseline, previousBaseline: prev ? { ...prev } : null };
+}
+
+/**
+ * baseline 昇格後の耐久保存失敗時に、メモリ上の baseline を直前状態へ戻す。
+ *
+ * 【詳細説明】
+ * - `commitObservationWindow()` はメモリ上の `hostObservationWatermark` を先に昇格する。
+ * - その後の `saveUnifiedStorageDurably()` が失敗した場合、メモリだけ baseline が進むと次回評価が
+ *   idempotent 扱いになり、耐久保存の再試行境界が曖昧になる。
+ * - 巻き戻しは `lastCommittedWindowId` が対象 windowId と一致する場合だけ実行し、別の観測が進んだ
+ *   場合は fail-closed で触らない。
+ *
+ * @function rollbackObservationWindowCommit
+ * @param {string} host - 対象ホスト名。
+ * @param {{windowId:string, previousBaseline?:?Object}} opts - 巻き戻し対象 windowId と直前 baseline。
+ * @returns {{ok:boolean, reason:string, baseline?:?Object}} 巻き戻し結果。
+ */
+export function rollbackObservationWindowCommit(host, { windowId, previousBaseline = null } = {}) {
+  if (!host) return { ok: false, reason: "host_required" };
+  if (windowId == null || String(windowId) === "") return { ok: false, reason: "window_id_required" };
+  const store = monitorData.hostObservationWatermark;
+  const current = store?.[host] || null;
+  if (!current || current.lastCommittedWindowId !== windowId) {
+    return { ok: false, reason: "baseline_changed_since_commit", baseline: current };
+  }
+  if (previousBaseline && typeof previousBaseline === "object") {
+    store[host] = { ...previousBaseline };
+    return { ok: true, reason: "rolled_back", baseline: store[host] };
+  }
+  delete store[host];
+  return { ok: true, reason: "rolled_back_to_empty", baseline: null };
 }
 
 /**

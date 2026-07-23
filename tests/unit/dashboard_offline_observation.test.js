@@ -3,9 +3,9 @@
  * record / computeObservationWindow / commitObservationWindow の read-only 契約と
  * 5000件切詰め境界・候補単位の識別判定・fail-closed commit を検証する。
  *
- * @version 1.390.1247 (PR #411)
+ * @version 1.390.1248 (PR #411)
  * @since   2.3.0
- * @lastModified 2026-07-23 15:21:14
+ * @lastModified 2026-07-23 15:24:14
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -16,7 +16,7 @@ const mockMonitorData = {
 };
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mockMonitorData }));
 
-const { recordObservation, commitObservationWindow, computeObservationWindow, computeOfflineWindow, observationDue, buildConfidence } =
+const { recordObservation, commitObservationWindow, rollbackObservationWindowCommit, computeObservationWindow, computeOfflineWindow, observationDue, buildConfidence } =
   await import("../../3dp_lib/dashboard_offline_observation.js");
 
 const BASE = 1_700_000_000_000; // epoch ms 基準（_epochMs が ms として扱える範囲）
@@ -281,6 +281,34 @@ describe("commitObservationWindow — fail-closed transaction（P0-3）", () => 
     const r = commitObservationWindow("h", { windowId: "wT", expectedSequence: w.currentSequence, candidatePersistedAt: 1, expectedAppSessionId: "some-other" });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("app_session_changed_since_evaluation");
+  });
+
+  it("baseline耐久保存失敗時は対象windowIdだけ直前baselineへ巻き戻せる", () => {
+    const w = prep();
+    const before = { ...mockMonitorData.hostObservationWatermark.h };
+    const committed = commitObservationWindow("h", { windowId: "wRollback", expectedSequence: w.currentSequence, candidatePersistedAt: 1 });
+    expect(committed.ok).toBe(true);
+    expect(committed.previousBaseline).toEqual(before);
+    const rolledBack = rollbackObservationWindowCommit("h", {
+      windowId: "wRollback",
+      previousBaseline: committed.previousBaseline
+    });
+    expect(rolledBack.ok).toBe(true);
+    expect(rolledBack.reason).toBe("rolled_back");
+    expect(mockMonitorData.hostObservationWatermark.h).toEqual(before);
+  });
+
+  it("baselineが別windowへ進んでいれば巻き戻さない", () => {
+    const w = prep();
+    const committed = commitObservationWindow("h", { windowId: "wRollbackA", expectedSequence: w.currentSequence, candidatePersistedAt: 1 });
+    mockMonitorData.hostObservationWatermark.h = { ...mockMonitorData.hostObservationWatermark.h, lastCommittedWindowId: "wRollbackB" };
+    const rolledBack = rollbackObservationWindowCommit("h", {
+      windowId: "wRollbackA",
+      previousBaseline: committed.previousBaseline
+    });
+    expect(rolledBack.ok).toBe(false);
+    expect(rolledBack.reason).toBe("baseline_changed_since_commit");
+    expect(mockMonitorData.hostObservationWatermark.h.lastCommittedWindowId).toBe("wRollbackB");
   });
 });
 
