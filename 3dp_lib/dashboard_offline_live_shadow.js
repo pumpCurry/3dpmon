@@ -18,9 +18,9 @@
  * 【公開関数一覧】
  * - {@link runInferredContinuityShadow}：host 単位で O2/O3/O4 の shadow 評価を実行する。
  *
- * @version 1.390.1246 (PR #413)
+ * @version 1.390.1255 (PR #413)
  * @since   1.390.1246 (PR #413)
- * @lastModified 2026-07-22 20:30:00
+ * @lastModified 2026-07-23 15:29:05
  * -----------------------------------------------------------
  * @todo
  * - O5 で UI 確認・否認・再割当てから candidate status を遷移させる。
@@ -31,10 +31,13 @@
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorageDurably } from "./dashboard_storage.js";
 import { ATTR_CLASS, classifyHostAttribution } from "./dashboard_offline_classifier.js";
-import { commitObservationWindow } from "./dashboard_offline_observation.js";
+import { commitObservationWindow, rollbackObservationWindowCommit } from "./dashboard_offline_observation.js";
 import { buildInferredContinuityProjection } from "./dashboard_offline_projection.js";
 import { persistInferredCandidate } from "./dashboard_offline_candidate_store.js";
 import { wallNowMs } from "./dashboard_time.js";
+
+/** host 単位で live shadow の多重実行を防ぐ in-flight registry。 */
+const _shadowInflightByHost = new Map();
 
 /**
  * 現在の観測スナップショットから app session ID を取り出す。
@@ -154,6 +157,33 @@ async function _saveIfEnabled(options) {
  * const result = await runInferredContinuityShadow("printer-a", spool);
  */
 export async function runInferredContinuityShadow(host, spool, options = {}) {
+  if (host && _shadowInflightByHost.has(host)) {
+    return { ok: false, reason: "shadow_in_flight" };
+  }
+  const run = _runInferredContinuityShadow(host, spool, options);
+  if (host) _shadowInflightByHost.set(host, run);
+  try {
+    return await run;
+  } finally {
+    if (host && _shadowInflightByHost.get(host) === run) _shadowInflightByHost.delete(host);
+  }
+}
+
+/**
+ * オフライン継続候補を live shadow mode で評価する内部実装。
+ *
+ * 【詳細説明】
+ * - 公開関数側で host 単位の in-flight 直列化を行い、この関数は1回分の評価だけを担当する。
+ *
+ * @private
+ * @function _runInferredContinuityShadow
+ * @param {string} host - 対象ホスト名。
+ * @param {?Object} spool - 現在選択中の spool オブジェクト。
+ * @param {{save?:boolean}} [options] - テスト用オプション。
+ * @returns {Promise<{ok:boolean, reason:string, classification?:Object, projection?:Object, persist?:Object, commit?:Object, save?:Object, rollback?:Object, error?:string}>}
+ *   shadow 評価結果。
+ */
+async function _runInferredContinuityShadow(host, spool, options = {}) {
   try {
     if (!host) return { ok: false, reason: "host_required" };
     if (!spool || !spool.id) return { ok: false, reason: "spool_required" };
@@ -172,7 +202,7 @@ export async function runInferredContinuityShadow(host, spool, options = {}) {
       return { ok: false, reason: persist?.reason || "candidate_not_persisted", classification, projection, persist };
     }
 
-    const save = persist.idempotent ? null : await _saveIfEnabled(options);
+    const save = await _saveIfEnabled(options);
     if (save && save.ok === false) {
       return { ok: false, reason: save.reason || "candidate_not_durably_saved", classification, projection, persist, save };
     }
@@ -198,7 +228,11 @@ export async function runInferredContinuityShadow(host, spool, options = {}) {
     });
     const commitSave = commit?.ok && !commit.idempotent ? await _saveIfEnabled(options) : null;
     if (commit?.ok && commitSave && commitSave.ok === false) {
-      return { ok: false, reason: commitSave.reason || "baseline_not_durably_saved", classification, projection, persist, commit, save: commitSave };
+      const rollback = rollbackObservationWindowCommit(host, {
+        windowId: commitClassification.windowId,
+        previousBaseline: commit.previousBaseline
+      });
+      return { ok: false, reason: commitSave.reason || "baseline_not_durably_saved", classification, projection, persist, commit, save: commitSave, rollback };
     }
 
     return {

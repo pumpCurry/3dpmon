@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => ({
   classifyHostAttribution: vi.fn(),
   buildInferredContinuityProjection: vi.fn(),
   persistInferredCandidate: vi.fn(),
-  commitObservationWindow: vi.fn()
+  commitObservationWindow: vi.fn(),
+  rollbackObservationWindowCommit: vi.fn()
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
@@ -30,7 +31,8 @@ vi.mock("../../3dp_lib/dashboard_offline_candidate_store.js", () => ({
   persistInferredCandidate: mocks.persistInferredCandidate
 }));
 vi.mock("../../3dp_lib/dashboard_offline_observation.js", () => ({
-  commitObservationWindow: mocks.commitObservationWindow
+  commitObservationWindow: mocks.commitObservationWindow,
+  rollbackObservationWindowCommit: mocks.rollbackObservationWindowCommit
 }));
 vi.mock("../../3dp_lib/dashboard_time.js", () => ({ wallNowMs: () => 123456 }));
 
@@ -72,6 +74,7 @@ beforeEach(() => {
   mocks.buildInferredContinuityProjection.mockReset();
   mocks.persistInferredCandidate.mockReset();
   mocks.commitObservationWindow.mockReset();
+  mocks.rollbackObservationWindowCommit.mockReset();
 });
 
 describe("runInferredContinuityShadow", () => {
@@ -183,7 +186,7 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
   });
 
-  it("candidate と baseline がともに idempotent の場合は耐久保存を追加実行しない", async () => {
+  it("candidate が idempotent でも commit 前に耐久保存を再試行する", async () => {
     mocks.classifyHostAttribution.mockReturnValue(classification());
     mocks.buildInferredContinuityProjection.mockReturnValue({
       host: "k1",
@@ -210,8 +213,8 @@ describe("runInferredContinuityShadow", () => {
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe("idempotent");
-    expect(mocks.events).toEqual(["persist", "commit"]);
-    expect(mocks.saveUnifiedStorage).not.toHaveBeenCalled();
+    expect(mocks.events).toEqual(["persist", "save", "commit"]);
+    expect(mocks.saveUnifiedStorage).toHaveBeenCalledTimes(1);
   });
 
   it("O3 が persistence 不可なら O4 保存と baseline commit を実行しない", async () => {
@@ -258,7 +261,7 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
   });
 
-  it("baseline commit 後の耐久保存に失敗した場合は失敗として返す", async () => {
+  it("baseline commit 後の耐久保存に失敗した場合はbaselineを巻き戻して失敗として返す", async () => {
     mocks.classifyHostAttribution.mockReturnValue(classification());
     mocks.buildInferredContinuityProjection.mockReturnValue({
       host: "k1",
@@ -272,7 +275,11 @@ describe("runInferredContinuityShadow", () => {
     });
     mocks.commitObservationWindow.mockImplementation(() => {
       mocks.events.push("commit");
-      return { ok: true, reason: "committed" };
+      return { ok: true, reason: "committed", previousBaseline: { windowId: "before" } };
+    });
+    mocks.rollbackObservationWindowCommit.mockImplementation(() => {
+      mocks.events.push("rollback");
+      return { ok: true, reason: "rolled_back" };
     });
     mocks.saveUnifiedStorage.mockImplementationOnce(async () => {
       mocks.events.push("save");
@@ -286,7 +293,50 @@ describe("runInferredContinuityShadow", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("idb_flush_failed");
-    expect(mocks.events).toEqual(["persist", "save", "commit", "save"]);
+    expect(result.rollback).toEqual({ ok: true, reason: "rolled_back" });
+    expect(mocks.rollbackObservationWindowCommit).toHaveBeenCalledWith("k1", {
+      windowId: "k1|b1|c2",
+      previousBaseline: { windowId: "before" }
+    });
+    expect(mocks.events).toEqual(["persist", "save", "commit", "save", "rollback"]);
+  });
+
+  it("同一hostのshadowが実行中なら二重起動しない", async () => {
+    let releaseSave;
+    const saveBlocker = new Promise((resolve) => { releaseSave = resolve; });
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+    });
+    mocks.saveUnifiedStorage.mockImplementationOnce(async () => {
+      mocks.events.push("save-wait");
+      await saveBlocker;
+      return { ok: true, backend: "indexedDB", reason: "flushed" };
+    }).mockImplementation(async () => {
+      mocks.events.push("save");
+      return { ok: true, backend: "indexedDB", reason: "flushed" };
+    });
+    mocks.commitObservationWindow.mockImplementation(() => {
+      mocks.events.push("commit");
+      return { ok: true, reason: "committed" };
+    });
+
+    const first = runInferredContinuityShadow("k1", { id: "S1" });
+    await Promise.resolve();
+    const second = await runInferredContinuityShadow("k1", { id: "S1" });
+    releaseSave();
+    const firstResult = await first;
+
+    expect(second).toEqual({ ok: false, reason: "shadow_in_flight" });
+    expect(firstResult.ok).toBe(true);
+    expect(mocks.persistInferredCandidate).toHaveBeenCalledTimes(1);
   });
 
   it("例外を shadow_failed に畳み、本流へ throw しない", async () => {
