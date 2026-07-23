@@ -23,8 +23,9 @@
  *   安全基盤（completionObservationId/pendingUnattributedUsage/mountHistory/intervalId/
  *   usedLengthLog/remainingLengthMm 等）には一切触れない。残量は減らさない。
  *
- * @version 2.3.0
+ * @version 1.390.1246 (PR #411)
  * @since   2.3.0
+ * @lastModified 2026-07-23 09:57:05
  * -----------------------------------------------------------
  */
 
@@ -293,6 +294,7 @@ export function computeOfflineWindow(previous, current, opts = {}) {
   const seen = new Set(previous.seenObservationKeys);
   const baselineIds = new Set(previous.seenObservationKeys.map(_idOf));
   const firstAt = Number(previous.retainedRange?.firstCompletedAt) || 0;
+  const truncatedBaseline = !!previous.retainedRange?.truncated;
 
   // ★ P0-2(世代反証): baseline/current を実比較。current キー集合は一度だけ構築（O(n)）。
   const currentKeySet = new Set(currentObs.map(o => o.key));
@@ -309,10 +311,19 @@ export function computeOfflineWindow(previous, current, opts = {}) {
   // ★ P0-1(retainedRange 境界): baseline に無く、かつ retained 境界「以降」の完了のみ offline 候補。
   const offlineObservationKeys = [];
   const unresolvedJobIds = [];
-  let hasIdReuse = false, hasInsufficient = false;
+  let hasIdReuse = false, hasInsufficient = false, hasTruncatedUnverifiable = false;
   for (const o of currentObs) {
     if (seen.has(o.key)) continue;                 // 既観測
     if (o.finishAt && firstAt && o.finishAt < firstAt) continue; // 境界より古い＝offline 対象外
+    // ★ codex-P1: baseline が truncated のとき、retained 時系列境界で「窓の内側」だと確認できない
+    //   （候補の finishAt 不明 or 境界時刻 firstAt 不明）ものは offline 確定しない。切詰めで落ちた
+    //   古い履歴や、履歴再取得で finishTime/複合キーが変わった古い完了を誤って offline 化しないための
+    //   fail-closed（unresolved 扱い＝bounded=false）。
+    if (truncatedBaseline && !(o.finishAt > 0 && firstAt > 0)) {
+      hasTruncatedUnverifiable = true;
+      unresolvedJobIds.push(o.canonicalJobId);
+      continue;
+    }
     const idReused = baselineIds.has(o.canonicalJobId);
     if (!o.hasDistinguishing) {
       if (idReused) hasIdReuse = true; else hasInsufficient = true;
@@ -334,6 +345,7 @@ export function computeOfflineWindow(previous, current, opts = {}) {
   else if (shrunk) reason = "history-shrunk";
   else if (hasIdReuse) reason = "reused-job-id-unverifiable";
   else if (hasInsufficient) reason = "job-identity-insufficient";
+  else if (hasTruncatedUnverifiable) reason = "history-truncated-unverifiable";
   else reason = "diff-ok";
 
   // 鮮度は current 観測時刻 − baseline 永続時刻で算出（wall clock を読まず純関数を保つ）。
@@ -344,7 +356,7 @@ export function computeOfflineWindow(previous, current, opts = {}) {
 
   // ★ O2-P1-1: 構造化した windowKind を提供し、O2 が reason 文字列に依存しないようにする。
   let windowKind;
-  if (hasIdReuse || hasInsufficient) windowKind = "insufficient";
+  if (hasIdReuse || hasInsufficient || hasTruncatedUnverifiable) windowKind = "insufficient";
   else if (!bounded) windowKind = "unbounded";
   else windowKind = "bounded";
 

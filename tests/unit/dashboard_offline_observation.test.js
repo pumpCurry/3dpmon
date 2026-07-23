@@ -2,6 +2,10 @@
  * @fileoverview dashboard_offline_observation.js（#411-O1 観測レイヤ）の単体テスト
  * record / computeObservationWindow / commitObservationWindow の read-only 契約と
  * 5000件切詰め境界・候補単位の識別判定・fail-closed commit を検証する。
+ *
+ * @version 1.390.1246 (PR #411)
+ * @since   2.3.0
+ * @lastModified 2026-07-23 09:57:05
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -95,6 +99,25 @@ describe("computeObservationWindow — 5000件切詰め境界（P0-1・実運用
     expect(w.truncated).toBe(true);
     expect(w.offlineObservationKeys).toEqual([]);
     expect(w.bounded).toBe(true);
+  });
+
+  it("★codex-P1: truncated baseline＋完了時刻なしの差分を offline 確定しない（fail-closed）", () => {
+    // Codex 指摘: 5000件切詰め後、完了時刻が無い/境界時刻が作れない古い履歴を offline 誤検出する。
+    const key = (id) => JSON.stringify([id, 0, 0, `f${id}.gcode`]);
+    const baselineKeys = []; for (let i = 1001; i <= 6000; i++) baselineKeys.push(key(String(i)));
+    const currentKeys = []; for (let i = 1; i <= 6000; i++) currentKeys.push(key(String(i))); // 1..1000 は baseline に無い（切詰め済）
+    const previous = {
+      observationSequence: 1, observedAtEpochMs: BASE, persistedAt: BASE,
+      seenObservationKeys: baselineKeys, retainedObservationCount: 5000, truncated: true,
+      retainedRange: { firstCompletedAt: 0, truncated: true },
+      generation: { latestCompletedAt: 0 }, printerIdentity: { model: "K1", completeness: "strong" },
+      mountedSpoolId: "S1", observationState: "mounted", mountIntervalStatus: "ok"
+    };
+    const current = { ...previous, observationSequence: 2, seenObservationKeys: currentKeys };
+    const w = computeOfflineWindow(previous, current); // sessionId 未指定=fresh
+    expect(w.offlineObservationKeys).toEqual([]);      // 誤 offline を出さない
+    expect(w.bounded).toBe(false);                     // 境界不確定は fail-closed
+    expect(w.reason).toBe("history-truncated-unverifiable");
   });
 
   it("6000件履歴＋新規2件 → offline は新規2件のみ（切詰めた古い分は混入しない）", () => {
