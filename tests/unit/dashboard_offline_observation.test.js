@@ -3,9 +3,9 @@
  * record / computeObservationWindow / commitObservationWindow の read-only 契約と
  * 5000件切詰め境界・候補単位の識別判定・fail-closed commit を検証する。
  *
- * @version 1.390.1246 (PR #411)
+ * @version 1.390.1247 (PR #411)
  * @since   2.3.0
- * @lastModified 2026-07-23 09:57:05
+ * @lastModified 2026-07-23 15:21:14
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -117,6 +117,29 @@ describe("computeObservationWindow — 5000件切詰め境界（P0-1・実運用
     const w = computeOfflineWindow(previous, current); // sessionId 未指定=fresh
     expect(w.offlineObservationKeys).toEqual([]);      // 誤 offline を出さない
     expect(w.bounded).toBe(false);                     // 境界不確定は fail-closed
+    expect(w.reason).toBe("history-truncated-unverifiable");
+  });
+
+  it("★codex-P1: truncated baselineで古い脱落履歴にfinishTimeが後付けされてもofflineへ再流入させない", () => {
+    const key = (id, finishAt) => JSON.stringify([String(id), 0, finishAt || 0, `f${id}.gcode`]);
+    const firstAt = BASE + 1001 * 1000;
+    const lastAt = BASE + 6000 * 1000;
+    const baselineKeys = []; for (let i = 1001; i <= 6000; i++) baselineKeys.push(key(i, BASE + i * 1000));
+    const currentKeys = [];
+    for (let i = 1; i <= 1000; i++) currentKeys.push(key(i, firstAt + i * 1000)); // 境界内へ後付けされた古い履歴
+    for (let i = 1001; i <= 6000; i++) currentKeys.push(key(i, BASE + i * 1000));
+    const previous = {
+      observationSequence: 1, observedAtEpochMs: BASE, persistedAt: BASE,
+      seenObservationKeys: baselineKeys, retainedObservationCount: 5000, totalCompletedCount: 6000, truncated: true,
+      retainedRange: { firstCompletedAt: firstAt, lastCompletedAt: lastAt, truncated: true },
+      generation: { latestCompletedAt: lastAt }, printerIdentity: { model: "K1", completeness: "strong" },
+      mountedSpoolId: "S1", observationState: "mounted", mountIntervalStatus: "ok"
+    };
+    const current = { ...previous, observationSequence: 2, seenObservationKeys: currentKeys, totalCompletedCount: 6000 };
+    const w = computeOfflineWindow(previous, current);
+    expect(w.offlineObservationKeys).toEqual([]);
+    expect(w.bounded).toBe(false);
+    expect(w.windowKind).toBe("insufficient");
     expect(w.reason).toBe("history-truncated-unverifiable");
   });
 

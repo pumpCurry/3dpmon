@@ -23,9 +23,9 @@
  *   安全基盤（completionObservationId/pendingUnattributedUsage/mountHistory/intervalId/
  *   usedLengthLog/remainingLengthMm 等）には一切触れない。残量は減らさない。
  *
- * @version 1.390.1246 (PR #411)
+ * @version 1.390.1247 (PR #411)
  * @since   2.3.0
- * @lastModified 2026-07-23 09:57:05
+ * @lastModified 2026-07-23 15:21:14
  * -----------------------------------------------------------
  */
 
@@ -294,7 +294,11 @@ export function computeOfflineWindow(previous, current, opts = {}) {
   const seen = new Set(previous.seenObservationKeys);
   const baselineIds = new Set(previous.seenObservationKeys.map(_idOf));
   const firstAt = Number(previous.retainedRange?.firstCompletedAt) || 0;
+  const lastAt = Number(previous.retainedRange?.lastCompletedAt) || 0;
   const truncatedBaseline = !!previous.retainedRange?.truncated;
+  const previousTotalCompleted = Number(previous.totalCompletedCount) || 0;
+  const currentTotalCompleted = Number(current.totalCompletedCount) || 0;
+  const completedCountGrew = previousTotalCompleted > 0 && currentTotalCompleted > previousTotalCompleted;
 
   // ★ P0-2(世代反証): baseline/current を実比較。current キー集合は一度だけ構築（O(n)）。
   const currentKeySet = new Set(currentObs.map(o => o.key));
@@ -315,11 +319,11 @@ export function computeOfflineWindow(previous, current, opts = {}) {
   for (const o of currentObs) {
     if (seen.has(o.key)) continue;                 // 既観測
     if (o.finishAt && firstAt && o.finishAt < firstAt) continue; // 境界より古い＝offline 対象外
-    // ★ codex-P1: baseline が truncated のとき、retained 時系列境界で「窓の内側」だと確認できない
-    //   （候補の finishAt 不明 or 境界時刻 firstAt 不明）ものは offline 確定しない。切詰めで落ちた
-    //   古い履歴や、履歴再取得で finishTime/複合キーが変わった古い完了を誤って offline 化しないための
-    //   fail-closed（unresolved 扱い＝bounded=false）。
-    if (truncatedBaseline && !(o.finishAt > 0 && firstAt > 0)) {
+    // ★ codex-P1: baseline が truncated のときは、retained 末尾より後に増えた完了だけを
+    //   offline 候補にする。firstAt 以降という条件だけでは、切詰めで落ちた古い履歴へ
+    //   後から finishTime が補完され、複合キーが変わった場合に再流入し得るため、
+    //   「履歴総数が増えた」かつ「baseline の lastCompletedAt より後」を必須にする。
+    if (truncatedBaseline && !(o.finishAt > 0 && lastAt > 0 && o.finishAt > lastAt && completedCountGrew)) {
       hasTruncatedUnverifiable = true;
       unresolvedJobIds.push(o.canonicalJobId);
       continue;
