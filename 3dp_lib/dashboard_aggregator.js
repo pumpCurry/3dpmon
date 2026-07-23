@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1246 (PR #413)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-07-22 02:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,6 +60,7 @@ import { getConnectionState } from "./dashboard_connection.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
 import { recordObservation, observationDue } from "./dashboard_offline_observation.js";
+import { runInferredContinuityShadow } from "./dashboard_offline_live_shadow.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -1358,6 +1359,13 @@ export function aggregatorUpdate() {
         }
         if (linked > 0) {
           console.debug(`[aggregator] ${host}: catchUp linked=${linked}`);
+        }
+        // ★ #413-O2/O3/O4 live shadow: #409 catch-up 後も未帰属として残った offline 完了だけを
+        //   inferredCandidateStore へ冪等保存し、candidate 保存成功時のみ観測 baseline を昇格する。
+        //   projection/candidate は確認 UI 用の pending 情報であり、確定残量や filamentInfo は変更しない。
+        const shadow = runInferredContinuityShadow(host, spool);
+        if (shadow.ok && shadow.persist?.candidateHash) {
+          console.debug(`[aggregator] ${host}: inferred continuity candidate=${shadow.persist.candidateHash} commit=${shadow.commit?.reason}`);
         }
       } catch (e) { console.warn("[aggregator] catchUp 失敗:", e?.message || e); }
     }
