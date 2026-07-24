@@ -101,6 +101,30 @@ describe("computeObservationWindow — 5000件切詰め境界（P0-1・実運用
     expect(w.bounded).toBe(true);
   });
 
+  it("★codex-P1(実経路): 再取得で古い脱落履歴に lastAt 超の finishTime が後付けされても offline へ再流入させない", () => {
+    // レビュアー指摘の実経路: baseline時に完了時刻なしで切詰め脱落した古い1000件へ、履歴再取得で
+    //   境界より新しい finishTime（複合キーも変化）が後付けされ current retained へ入るケース。新規印刷0件。
+    mockMonitorData.hostSpoolMap.h = "S1";
+    const baseHist = [];
+    for (let i = 1; i <= 1000; i++) baseHist.push({ id: String(i), printfinish: 1, filename: `f${i}.gcode`, materialUsedMm: 100 }); // 完了時刻なし
+    for (let i = 1001; i <= 6000; i++) baseHist.push({ id: String(i), printfinish: 1, filename: `f${i}.gcode`, materialUsedMm: 100, finishTime: BASE + i * 1000 });
+    setHistory("h", baseHist);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w0 = computeObservationWindow("h");
+    commitObservationWindow("h", { windowId: w0.windowId, expectedSequence: w0.currentSequence, candidatePersistedAt: 1 });
+    expect(mockMonitorData.hostObservationWatermark.h.retainedRange.truncated).toBe(true); // 古い1000件は脱落
+    // 再取得: 古い1000件へ lastAt 超の finishTime を後付け（新規印刷なし＝総数不変）
+    const lastAt = BASE + 6000 * 1000;
+    const refetched = baseHist.map((e, idx) => idx < 1000 ? { ...e, finishTime: lastAt + (idx + 1) * 1000 } : e);
+    setHistory("h", refetched);
+    recordObservation("h", { mountIntervalStatus: "ok", mountIntervalId: "iv1" });
+    const w = computeObservationWindow("h");
+    expect(w.offlineObservationKeys).toEqual([]);        // 誤 offline 再流入なし
+    expect(w.bounded).toBe(false);
+    expect(w.windowKind).toBe("insufficient");
+    expect(w.reason).toBe("history-truncated-unverifiable");
+  });
+
   it("★codex-P1: truncated baseline＋完了時刻なしの差分を offline 確定しない（fail-closed）", () => {
     // Codex 指摘: 5000件切詰め後、完了時刻が無い/境界時刻が作れない古い履歴を offline 誤検出する。
     const key = (id) => JSON.stringify([id, 0, 0, `f${id}.gcode`]);
