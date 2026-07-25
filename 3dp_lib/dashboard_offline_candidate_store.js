@@ -20,9 +20,9 @@
  * - {@link transitionInferredCandidate}：candidate の状態を監査 event 付きで変更する
  * - {@link getInferredCandidatesForHost}：host 単位で candidate を取得する
  *
- * @version 1.390.1246 (PR #413)
+ * @version 1.390.1256 (PR #413)
  * @since   1.390.1245 (PR #412)
- * @lastModified 2026-07-22 19:00:00
+ * @lastModified 2026-07-25 11:15:54
  * -----------------------------------------------------------
  * @todo
  * - O4 後続で aggregator の O2/O3 ライブ配線から `persistInferredCandidate` を呼び出す。
@@ -258,27 +258,27 @@ export function persistInferredCandidate(classificationResult, projection, optio
       return { ok: false, reason: "candidate_hash_collision", candidateHash, record: null, collision: store[candidateHash] };
     }
     const existing = store[candidateHash];
-    const now = _nowMs(options);
-    const nextDebits = _snapshotCandidateDebits(projection?.candidateDebits);
-    const usedChanged = Math.max(0, Number(existing.usedMm) || 0) !== usedMm;
-    const debitsChanged = JSON.stringify(existing.candidateDebits || []) !== JSON.stringify(nextDebits);
-    const confidenceChanged = JSON.stringify(existing.confidence || null) !== JSON.stringify(classificationResult.confidence || null);
-    const evidenceChanged = JSON.stringify(existing.evidence || null) !== JSON.stringify(classificationResult.evidence || null);
-    if (usedChanged || debitsChanged || confidenceChanged || evidenceChanged) {
-      existing.usedMm = usedMm;
-      existing.candidateDebits = nextDebits;
-      existing.confidence = classificationResult.confidence ? { ...classificationResult.confidence } : null;
-      existing.evidence = classificationResult.evidence ? { ...classificationResult.evidence } : null;
-      existing.updatedAt = now;
-      if (!Array.isArray(existing.events)) existing.events = [];
-      existing.events.push({
-        type: "updated",
-        at: now,
-        status: existing.status,
-        usedMm,
-        reason: usedChanged ? "projection-used-mm-changed" : "projection-metadata-changed"
-      });
-      return { ok: true, reason: "updated", candidateHash, record: existing };
+    if (existing.status === INFERRED_CANDIDATE_STATUS.PENDING) {
+      const nextDebits = _snapshotCandidateDebits(projection?.candidateDebits);
+      const nextConfidence = classificationResult.confidence ? { ...classificationResult.confidence } : null;
+      const nextEvidence = classificationResult.evidence ? { ...classificationResult.evidence } : null;
+      const usedChanged = existing.usedMm !== usedMm;
+      const debitsChanged = JSON.stringify(existing.candidateDebits ?? null) !== JSON.stringify(nextDebits);
+      const confidenceChanged = JSON.stringify(existing.confidence ?? null) !== JSON.stringify(nextConfidence);
+      const evidenceChanged = JSON.stringify(existing.evidence ?? null) !== JSON.stringify(nextEvidence);
+      if (usedChanged || debitsChanged || confidenceChanged || evidenceChanged) {
+        const now = _nowMs(options);
+        existing.usedMm = usedMm;
+        existing.updatedAt = now;
+        existing.candidateDebits = nextDebits;
+        existing.confidence = nextConfidence;
+        existing.evidence = nextEvidence;
+        if (!Array.isArray(existing.events)) existing.events = [];
+        if (usedChanged) {
+          existing.events.push({ type: "updated", at: now, status: existing.status, usedMm, reason: "projection-used-mm-changed" });
+        }
+        return { ok: true, reason: "updated", candidateHash, record: existing };
+      }
     }
     return { ok: true, reason: "idempotent", candidateHash, record: store[candidateHash], idempotent: true };
   }

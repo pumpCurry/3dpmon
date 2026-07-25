@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1246 (PR #413)
+* @version 1.390.1256 (PR #413)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-07-22 12:00:00
+* @lastModified 2026-07-25 11:15:54
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -819,9 +819,10 @@ export function saveUnifiedStorage(immediate = false) {
  */
 export async function saveUnifiedStorageDurably() {
   const expectedIdb = _idbInitialized && isIdbAvailable();
-  _flushStorage();
+  const queued = _flushStorage();
+  if (queued?.ok === false) return queued;
   if (!expectedIdb) {
-    return { ok: true, backend: "localStorage", reason: "saved" };
+    return queued || { ok: true, backend: "localStorage", reason: "saved" };
   }
   await flushIdb();
   if (!isIdbAvailable()) {
@@ -909,6 +910,7 @@ export function isEmptyHostShell(parsed) {
  * 実際のストレージ書き込みを行う内部関数。
  * IndexedDB が有効な場合はキューに追加し、無効な場合は localStorage へ書き込む。
  * @private
+ * @returns {{ok:boolean, backend:string, reason:string, error?:string}} 保存またはキュー投入の結果。
  */
 function _flushStorage() {
   _savePending = false;
@@ -963,6 +965,7 @@ function _flushStorage() {
       if (_enableStorageLog) {
         console.debug("[saveUnifiedStorage] IndexedDB キューに追加しました");
       }
+      return { ok: true, backend: "indexedDB", reason: "queued" };
     } else {
       // フォールバック: localStorage（per-host 分割形式）
       _writePerHostLocalStorage();
@@ -970,10 +973,17 @@ function _flushStorage() {
       if (_enableStorageLog) {
         console.debug("[saveUnifiedStorage] localStorage (per-host) に保存しました");
       }
+      return { ok: true, backend: "localStorage", reason: "saved" };
     }
   } catch (e) {
     console.warn("[saveUnifiedStorage] 保存に失敗しました:", e);
     logManager.add({ timestamp:getCurrentTimestamp(), level:"error", msg:`[saveUnifiedStorage] エラー: ${e.message}` });
+    return {
+      ok: false,
+      backend: (_idbInitialized && isIdbAvailable()) ? "indexedDB" : "localStorage",
+      reason: "local_storage_write_failed",
+      error: e?.message || String(e)
+    };
   }
 }
 

@@ -105,4 +105,26 @@ describe("saveUnifiedStorageDurably", () => {
 
     expect(result).toEqual({ ok: false, backend: "indexedDB", reason: "idb_flush_failed" });
   });
+
+  it("localStorage.setItem が例外なら ok=false を返す", async () => {
+    mocks.idbAvailable = false;
+    await initStorage();
+    const originalSetItem = globalThis.localStorage.setItem;
+    globalThis.localStorage.clear();
+    mocks.monitorData.machines.k1.storedData = { forceWrite: "quota-case" };
+    globalThis.localStorage.setItem = () => {
+      throw new DOMException("quota", "QuotaExceededError");
+    };
+
+    try {
+      const result = await saveUnifiedStorageDurably();
+
+      expect(result.ok).toBe(false);
+      expect(result.backend).toBe("localStorage");
+      expect(result.reason).toBe("local_storage_write_failed");
+      expect(result.error).toContain("quota");
+    } finally {
+      globalThis.localStorage.setItem = originalSetItem;
+    }
+  });
 });

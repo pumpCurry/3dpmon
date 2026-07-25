@@ -143,6 +143,22 @@ describe("persistInferredCandidate", () => {
     expect(mockMonitorData.inferredCandidateStore).toEqual({});
   });
 
+  it("同一 candidateHash の再評価で confidence と evidence を更新する", () => {
+    const first = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    const second = persistInferredCandidate(cls({
+      confidence: { level: "high", reasons: ["bounded", "same-spool"], contradictions: [] },
+      evidence: { sameMountedSpool: true, sequenceRefreshed: true }
+    }), proj(), { nowMs: 2000 });
+
+    expect(second.reason).toBe("updated");
+    expect(second.record).toBe(first.record);
+    expect(second.record.usedMm).toBe(3000);
+    expect(second.record.updatedAt).toBe(2000);
+    expect(second.record.confidence).toEqual({ level: "high", reasons: ["bounded", "same-spool"], contradictions: [] });
+    expect(second.record.evidence).toEqual({ sameMountedSpool: true, sequenceRefreshed: true });
+    expect(second.record.events).toHaveLength(1);
+  });
+
   it("推定 debit が 0 なら保存しない", () => {
     const r = persistInferredCandidate(cls(), proj({ inferredContinuityUsedMm: 0 }), { nowMs: 1000 });
     expect(r.ok).toBe(false);
