@@ -14,13 +14,14 @@
  * - スプール一覧（状態バッジ・フィルタ付き）
  * - 使用履歴（種別フィルタ付き）
  * - 集計レポート
+ * - 推定 candidate の確認・否認・再割当て
  *
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1262 (PR #415)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-07-25 14:25:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -73,6 +74,7 @@ import {
 } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
+import { createInferredCandidateCenterContent } from "./dashboard_inferred_candidate_ui.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
@@ -2708,13 +2710,14 @@ export function showFilamentManager(activeIdx = 0, hostname) {
     "ダッシュボード",
     "在庫・プリセット",
     "スプール一覧",
+    "推定候補",
     "使用履歴",
     "集計レポート"
   ];
 
   let switchTab = () => {};
 
-  // エディタ（非表示タブ、index 5）
+  // エディタ（非表示タブ、最後尾）
   const editTab = createEditorContent(() => {
     registered.render();
     switchTab(SPOOL_LIST_IDX);
@@ -2723,14 +2726,15 @@ export function showFilamentManager(activeIdx = 0, hostname) {
   // ダッシュボード（Tab 0）
   const dashboardTab = createDashboardContent(hostname, idx => switchTab(idx));
 
-  // 使用履歴（Tab 3）
+  // 使用履歴（Tab 4）
   const historyEl = createHistoryContent();
 
-  // contents 配列：0=ダッシュボード, 1=在庫プリセット, 2=スプール一覧, 3=使用履歴, 4=レポート, 5=エディタ(非表示)
+  // contents 配列：0=ダッシュボード, 1=在庫プリセット, 2=スプール一覧, 3=推定候補, 4=使用履歴, 5=レポート, 6=エディタ(非表示)
   const contents = [
     dashboardTab.el,
     null, // 在庫プリセット（後で設定）
     null, // スプール一覧（後で設定）
+    null, // 推定候補（後で設定）
     historyEl,
     createReportContent(),
     editTab.el
@@ -2745,9 +2749,17 @@ export function showFilamentManager(activeIdx = 0, hostname) {
 
   // 在庫・プリセット（Tab 1）
   const invPresetTab = createInventoryPresetContent(hostname, idx => switchTab(idx), () => registered.render());
+  const candidateCenter = createInferredCandidateCenterContent({
+    host: null,
+    onAfterDecision: () => {
+      try { registered.render(); } catch { /* noop */ }
+      try { dashboardTab.render(); } catch { /* noop */ }
+    }
+  });
 
   contents[1] = invPresetTab.el;
   contents[SPOOL_LIST_IDX] = registered.el;
+  contents[3] = candidateCenter.el;
 
   const contentWrap = document.createElement("div");
   contentWrap.className = "fm-content-wrap";
@@ -2769,6 +2781,7 @@ export function showFilamentManager(activeIdx = 0, hostname) {
     });
     // ダッシュボードタブに切り替えた場合は再描画
     if (idx === 0) dashboardTab.render();
+    if (idx === 3) candidateCenter.render();
   };
 
   // 可視タブボタンの生成（エディタタブは非表示）
@@ -2800,6 +2813,7 @@ export function showFilamentManager(activeIdx = 0, hostname) {
     }
     try { registered.render(); } catch { /* noop */ }
     try { dashboardTab.render(); } catch { /* noop */ }
+    try { candidateCenter.render(); } catch { /* noop */ }
   };
 }
 
@@ -2937,4 +2951,3 @@ async function _showCustomPresetDialog(onComplete, existing = null) {
   saveUnifiedStorage();
   if (onComplete) onComplete();
 }
-
