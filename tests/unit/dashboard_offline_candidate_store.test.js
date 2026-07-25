@@ -110,6 +110,28 @@ describe("persistInferredCandidate", () => {
     expect(second.record.events).toHaveLength(1);
   });
 
+  it.each([
+    INFERRED_CANDIDATE_STATUS.SUPERSEDED,
+    INFERRED_CANDIDATE_STATUS.REJECTED,
+    INFERRED_CANDIDATE_STATUS.CONFIRMED,
+    INFERRED_CANDIDATE_STATUS.REASSIGNED
+  ])("既存 candidate が %s の場合は同一 identity でも再利用しない", (status) => {
+    const first = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    const transition = transitionInferredCandidate(first.candidateHash, status, {
+      nowMs: 1500,
+      reason: "resolved-before-reevaluation",
+      assignedSpoolId: status === INFERRED_CANDIDATE_STATUS.REASSIGNED ? "S2" : null
+    });
+    const second = persistInferredCandidate(cls(), proj(), { nowMs: 2000 });
+
+    expect(transition.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(second.reason).toBe("candidate_not_pending");
+    expect(second.candidateHash).toBe(first.candidateHash);
+    expect(second.record).toBe(first.record);
+    expect(second.record.status).toBe(status);
+  });
+
   it("同一 candidateHash の再評価では使用量と根拠を同一 record 上で更新する", () => {
     const first = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
     const second = persistInferredCandidate(

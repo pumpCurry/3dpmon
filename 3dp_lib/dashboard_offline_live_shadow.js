@@ -18,9 +18,9 @@
  * 【公開関数一覧】
  * - {@link runInferredContinuityShadow}：host 単位で O2/O3/O4 の shadow 評価を実行する。
  *
- * @version 1.390.1259 (PR #413)
+ * @version 1.390.1260 (PR #413)
  * @since   1.390.1246 (PR #413)
- * @lastModified 2026-07-25 12:23:47
+ * @lastModified 2026-07-25 12:38:02
  * -----------------------------------------------------------
  * @todo
  * - O5 で UI 確認・否認・再割当てから candidate status を遷移させる。
@@ -225,6 +225,9 @@ async function _runInferredContinuityShadow(host, spool, options = {}) {
     const persist = persistInferredCandidate(classification, projection);
     if (!persist?.ok) {
       return { ok: false, reason: persist?.reason || "candidate_not_persisted", classification, projection, persist };
+    }
+    if (persist.record?.status !== INFERRED_CANDIDATE_STATUS.PENDING) {
+      return { ok: false, reason: "candidate_not_pending", classification, projection, persist };
     }
 
     const save = await _saveIfEnabled(options);

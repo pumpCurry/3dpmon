@@ -29,7 +29,7 @@ vi.mock("../../3dp_lib/dashboard_offline_projection.js", () => ({
   buildInferredContinuityProjection: mocks.buildInferredContinuityProjection
 }));
 vi.mock("../../3dp_lib/dashboard_offline_candidate_store.js", () => ({
-  INFERRED_CANDIDATE_STATUS: { SUPERSEDED: "superseded" },
+  INFERRED_CANDIDATE_STATUS: { PENDING: "pending", SUPERSEDED: "superseded" },
   transitionInferredCandidate: mocks.transitionInferredCandidate,
   persistInferredCandidate: mocks.persistInferredCandidate
 }));
@@ -93,7 +93,7 @@ describe("runInferredContinuityShadow", () => {
     mocks.buildInferredContinuityProjection.mockReturnValue(projection);
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
     mocks.commitObservationWindow.mockImplementation(() => {
       mocks.events.push("commit");
@@ -123,7 +123,7 @@ describe("runInferredContinuityShadow", () => {
     mocks.buildInferredContinuityProjection.mockReturnValue(projection);
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
     mocks.commitObservationWindow.mockImplementation(() => {
       mocks.events.push("commit");
@@ -158,7 +158,7 @@ describe("runInferredContinuityShadow", () => {
     });
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
 
     const result = await runInferredContinuityShadow("k1", { id: "S1" });
@@ -201,6 +201,34 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
   });
 
+  it("O4 が非 pending の既存 candidate を返した場合は保存と baseline commit を実行しない", async () => {
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return {
+        ok: true,
+        reason: "idempotent",
+        candidateHash: "ic-1",
+        record: { createdAt: 1000, status: "superseded" },
+        idempotent: true
+      };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_not_pending");
+    expect(mocks.events).toEqual(["persist"]);
+    expect(mocks.saveUnifiedStorage).not.toHaveBeenCalled();
+    expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
+  });
+
   it("candidate が idempotent でも commit 前に耐久保存を再試行する", async () => {
     mocks.classifyHostAttribution.mockReturnValue(classification());
     mocks.buildInferredContinuityProjection.mockReturnValue({
@@ -215,7 +243,7 @@ describe("runInferredContinuityShadow", () => {
         ok: true,
         reason: "idempotent",
         candidateHash: "ic-1",
-        record: { createdAt: 1000, updatedAt: 1000 },
+        record: { createdAt: 1000, updatedAt: 1000, status: "pending" },
         idempotent: true
       };
     });
@@ -261,7 +289,7 @@ describe("runInferredContinuityShadow", () => {
     });
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
     mocks.saveUnifiedStorage.mockImplementation(async () => {
       mocks.events.push("save");
@@ -286,7 +314,7 @@ describe("runInferredContinuityShadow", () => {
     });
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
     mocks.commitObservationWindow.mockImplementation(() => {
       mocks.events.push("commit");
@@ -327,7 +355,7 @@ describe("runInferredContinuityShadow", () => {
     });
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
     mocks.commitObservationWindow.mockImplementation(() => {
       mocks.events.push("commit");
@@ -360,7 +388,7 @@ describe("runInferredContinuityShadow", () => {
     });
     mocks.persistInferredCandidate.mockImplementation(() => {
       mocks.events.push("persist");
-      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000, status: "pending" } };
     });
     mocks.saveUnifiedStorage.mockImplementationOnce(async () => {
       mocks.events.push("save-wait");

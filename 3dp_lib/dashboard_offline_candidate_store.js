@@ -20,9 +20,9 @@
  * - {@link transitionInferredCandidate}：candidate の状態を監査 event 付きで変更する
  * - {@link getInferredCandidatesForHost}：host 単位で candidate を取得する
  *
- * @version 1.390.1256 (PR #413)
+ * @version 1.390.1260 (PR #413)
  * @since   1.390.1245 (PR #412)
- * @lastModified 2026-07-25 11:15:54
+ * @lastModified 2026-07-25 12:38:02
  * -----------------------------------------------------------
  * @todo
  * - O4 後続で aggregator の O2/O3 ライブ配線から `persistInferredCandidate` を呼び出す。
@@ -258,6 +258,9 @@ export function persistInferredCandidate(classificationResult, projection, optio
       return { ok: false, reason: "candidate_hash_collision", candidateHash, record: null, collision: store[candidateHash] };
     }
     const existing = store[candidateHash];
+    if (existing.status !== INFERRED_CANDIDATE_STATUS.PENDING) {
+      return { ok: false, reason: "candidate_not_pending", candidateHash, record: existing };
+    }
     if (existing.status === INFERRED_CANDIDATE_STATUS.PENDING) {
       const nextDebits = _snapshotCandidateDebits(projection?.candidateDebits);
       const nextConfidence = classificationResult.confidence ? { ...classificationResult.confidence } : null;
