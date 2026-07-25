@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1264 (PR #417)
+ * @version 1.390.1265 (PR #417)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-25 22:09:00
+ * @lastModified 2026-07-26 00:03:27
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -78,7 +78,10 @@ const REASON_LABELS = Object.freeze({
   candidate_not_undoable: "この候補は取り消しできません",
   candidate_ledger_event_missing: "取り消し対象の台帳イベントが見つかりません",
   candidate_ledger_event_ambiguous: "取り消し対象の台帳イベントが曖昧です",
+  candidate_ledger_event_spool_mismatch: "台帳イベントのスプールが一致しません",
+  candidate_ledger_event_host_mismatch: "台帳イベントの端末情報が一致しません",
   candidate_history_link_missing: "取り消し対象の履歴帰属が見つかりません",
+  candidate_history_link_ambiguous: "取り消し対象の履歴帰属が曖昧です",
   candidate_ledger_event_total_mismatch: "台帳イベントと候補の消費量が一致しません",
   invalid_reject_reason: "否認理由が不正です",
   rollback_durable_save_failed: "復旧状態の保存に失敗しました"
@@ -181,11 +184,12 @@ function _actor() {
  */
 async function _withBusy(root, task) {
   const buttons = [...root.querySelectorAll("button, select")];
+  const previousDisabled = new Map(buttons.map(button => [button, button.disabled]));
   buttons.forEach(button => { button.disabled = true; });
   try {
     return await task();
   } finally {
-    buttons.forEach(button => { button.disabled = false; });
+    buttons.forEach(button => { button.disabled = previousDisabled.get(button) === true; });
   }
 }
 

@@ -173,6 +173,30 @@ describe("createInferredCandidateCenterContent", () => {
     expect(mocks.confirmInferredCandidate).not.toHaveBeenCalled();
   });
 
+  it("操作失敗後は元から disabled だった action を disabled のまま戻す", async () => {
+    mocks.vm = vm({
+      canConfirm: true,
+      canReject: false,
+      canReassign: false,
+      canUndo: false
+    });
+    mocks.confirmInferredCandidate.mockResolvedValueOnce({ ok: false, reason: "candidate_history_link_ambiguous" });
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    center.el.querySelector("tbody .ic-open-button").click();
+    document.querySelector(".ic-action-primary").click();
+
+    await waitForAssertion(() => {
+      expect(mocks.showAlert).toHaveBeenCalledWith("取り消し対象の履歴帰属が曖昧です", "error");
+      expect(document.querySelector(".ic-action-primary").disabled).toBe(false);
+      const secondary = [...document.querySelectorAll(".ic-action-secondary")];
+      expect(secondary.find(button => button.textContent === "Reject").disabled).toBe(true);
+      expect(secondary.find(button => button.textContent === "Reassign").disabled).toBe(true);
+      expect(secondary.find(button => button.textContent === "Undo").disabled).toBe(true);
+    });
+  });
+
   it("confirmed ViewModel では Undo ボタンから Decision Core を呼ぶ", async () => {
     mocks.vm = vm({
       status: "confirmed",

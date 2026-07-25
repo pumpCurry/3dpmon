@@ -436,6 +436,55 @@ describe("undoInferredCandidateDecision", () => {
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
+  it("台帳 event の spoolId が一致しない場合は Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    mocks.monitorData.filamentSpools[0].usedLengthLog[0].spoolId = "S9";
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_ledger_event_spool_mismatch");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.machines.k1.printStore.history[0].filamentId).toBe("S1");
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("台帳 event の host が一致しない場合は Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    mocks.monitorData.filamentSpools[0].usedLengthLog[0].host = "other-host";
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_ledger_event_host_mismatch");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.machines.k1.printStore.history[0].filamentId).toBe("S1");
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("履歴内の candidate attribution が重複している場合は Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    const history = mocks.monitorData.machines.k1.printStore.history;
+    history[0].filamentInfo.push({ ...history[0].filamentInfo[0] });
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_history_link_ambiguous");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(history[0].filamentInfo).toHaveLength(2);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
   it("Undo 保存失敗時は台帳と candidate を元へ戻し rollback 状態を保存する", async () => {
     const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
     expect(confirmed.ok).toBe(true);

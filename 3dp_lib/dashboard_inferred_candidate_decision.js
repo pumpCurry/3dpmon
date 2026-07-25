@@ -24,9 +24,9 @@
  * - {@link reassignInferredCandidate}：別 spool へ再割当てして推定使用量を確定する
  * - {@link undoInferredCandidateDecision}：確定済み candidate の台帳反映を取り消す
  *
- * @version 1.390.1264 (PR #417)
+ * @version 1.390.1265 (PR #417)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-25 22:09:00
+ * @lastModified 2026-07-26 00:03:27
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -374,9 +374,8 @@ async function _saveDecisionOrRollback(params, options = {}) {
  *
  * 【詳細説明】
  * - STAND ALONE と PARENT は `window._3dpmonRelayChild !== true` なので true を返す。
- * - SATELLITE/readonly 子は確定台帳の権威を持たないため false を返す。
- * - 将来の O5C で SATELLITE から PARENT へ decision request を送る場合は、この関数または
- *   UI 側の command routing を拡張する。
+ * - SATELLITE/readonly 子はローカル確定台帳の権威を持たないため false を返す。
+ * - SATELLITE から Parent へ decision request を送れるかは {@link canSubmitLedgerDecision} で判定する。
  *
  * @function canExecuteLedgerDecision
  * @returns {boolean} ローカルで Confirm/Reject/Reassign/Undo を実行できる場合 true。

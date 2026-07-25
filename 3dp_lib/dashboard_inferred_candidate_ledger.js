@@ -18,9 +18,9 @@
  * - {@link undoInferredCandidateLedger}：確定済み candidate の台帳反映を取り消す
  * - {@link rollbackInferredCandidateLedger}：確定反映前 snapshot へメモリ状態を戻す
  *
- * @version 1.390.1264 (PR #417)
+ * @version 1.390.1265 (PR #417)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-25 22:09:00
+ * @lastModified 2026-07-26 00:03:27
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -349,6 +349,7 @@ function _unlinkHistoryEntryFromCandidate(entry, targetSpoolId, candidateHash) {
     }
   }
   if (matches.length === 0) return { ok: false, reason: "candidate_history_link_missing" };
+  if (matches.length > 1) return { ok: false, reason: "candidate_history_link_ambiguous" };
 
   const remove = new Set(matches);
   const remaining = info.filter((_, index) => !remove.has(index));
@@ -532,6 +533,12 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
   const events = _decisionEventsForCandidate(spool, candidateRecord.candidateHash);
   if (events.length === 0) return { ok: false, reason: "candidate_ledger_event_missing", snapshot: null, spool };
   if (events.length > 1) return { ok: false, reason: "candidate_ledger_event_ambiguous", snapshot: null, spool };
+  if (String(events[0].event.spoolId ?? "") !== String(spool.id ?? "")) {
+    return { ok: false, reason: "candidate_ledger_event_spool_mismatch", snapshot: null, spool };
+  }
+  if (String(events[0].event.host ?? "") !== String(host)) {
+    return { ok: false, reason: "candidate_ledger_event_host_mismatch", snapshot: null, spool };
+  }
   const eventUsedMm = _positiveMm(events[0].event.usedMm);
   if (eventUsedMm <= 0) return { ok: false, reason: "candidate_ledger_event_used_mm_missing", snapshot: null, spool };
 
