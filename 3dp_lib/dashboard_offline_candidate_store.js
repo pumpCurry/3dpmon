@@ -20,9 +20,9 @@
  * - {@link transitionInferredCandidate}：candidate の状態を監査 event 付きで変更する
  * - {@link getInferredCandidatesForHost}：host 単位で candidate を取得する
  *
- * @version 1.390.1245 (PR #412)
+ * @version 1.390.1250 (PR #412)
  * @since   1.390.1245 (PR #412)
- * @lastModified 2026-07-19 18:45:00
+ * @lastModified 2026-07-25 12:17:09
  * -----------------------------------------------------------
  * @todo
  * - O4 後続で aggregator の O2/O3 ライブ配線から `persistInferredCandidate` を呼び出す。
@@ -32,6 +32,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
+import { wallNowMs } from "./dashboard_time.js";
 
 /** candidate store で許可する状態。 */
 export const INFERRED_CANDIDATE_STATUS = Object.freeze({
@@ -97,7 +98,7 @@ function _hashString(text) {
 function _nowMs(options = {}) {
   const injected = Number(options.nowMs);
   if (Number.isFinite(injected) && injected > 0) return injected;
-  return Date.now();
+  return wallNowMs();
 }
 
 /**
@@ -115,10 +116,88 @@ function _store() {
 }
 
 /**
+ * candidate の物理同一性を表す材料を作る。
+ *
+ * 【詳細説明】
+ * - 32bit hash は衝突し得るため、store 内の既存レコードと同一候補かどうかは hash だけで
+ *   判断しない。
+ * - 推定使用量や confidence は再評価で変わり得る表示属性なので、同一性材料から外す。
+ *
+ * @private
+ * @function _candidateIdentityMaterial
+ * @param {{windowId?:?string, candidate?:?Object}} classificationResult - O2 分類結果。
+ * @returns {{windowId:?string,candidateSpoolId:?string,candidateBaselineIntervalId:?string,candidateCurrentIntervalId:?string,observationKeys:Array<string>}}
+ *   candidate の完全照合用材料。
+ */
+function _candidateIdentityMaterial(classificationResult) {
+  const candidate = classificationResult?.candidate || {};
+  const keys = Array.isArray(candidate.offlineObservationKeys)
+    ? candidate.offlineObservationKeys.map(key => String(key)).sort()
+    : [];
+  return {
+    windowId: classificationResult?.windowId ?? candidate.windowId ?? null,
+    candidateSpoolId: candidate.candidateSpoolId != null ? String(candidate.candidateSpoolId) : null,
+    candidateBaselineIntervalId: candidate.candidateBaselineIntervalId ?? null,
+    candidateCurrentIntervalId: candidate.candidateCurrentIntervalId ?? null,
+    observationKeys: keys
+  };
+}
+
+/**
+ * 既存 candidate と新しい同一性材料が完全一致するか判定する。
+ *
+ * 【詳細説明】
+ * - 新形式では `identityMaterial` を保存して直接比較する。
+ * - 旧形式レコードを読む場合は、保存済みフィールドから同じ材料を復元して比較し、import/restore
+ *   互換を保つ。
+ *
+ * @private
+ * @function _sameCandidateIdentity
+ * @param {Object} record - store 内の既存 candidate record。
+ * @param {Object} identityMaterial - 新しく保存しようとしている candidate の同一性材料。
+ * @returns {boolean} 完全一致する場合は true。
+ */
+function _sameCandidateIdentity(record, identityMaterial) {
+  if (!record || !identityMaterial) return false;
+  const existing = record.identityMaterial && typeof record.identityMaterial === "object"
+    ? record.identityMaterial
+    : {
+        windowId: record.windowId ?? null,
+        candidateSpoolId: record.candidateSpoolId != null ? String(record.candidateSpoolId) : null,
+        candidateBaselineIntervalId: record.candidateBaselineIntervalId ?? null,
+        candidateCurrentIntervalId: record.candidateCurrentIntervalId ?? null,
+        observationKeys: Array.isArray(record.observationKeys) ? record.observationKeys.map(key => String(key)).sort() : []
+      };
+  return JSON.stringify(_stable(existing)) === JSON.stringify(_stable(identityMaterial));
+}
+
+/**
+ * projection の debit 配列を candidate record 用にコピーする。
+ *
+ * 【詳細説明】
+ * - projection は純粋計算結果だが、store へ保持する値は後続の再分類やテスト fixture の変更で
+ *   参照が変化しないようにスナップショット化する。
+ *
+ * @private
+ * @function _snapshotCandidateDebits
+ * @param {Array<Object>} candidateDebits - O3 projection の candidateDebits。
+ * @returns {Array<Object>} store 保存用に正規化した debit 配列。
+ */
+function _snapshotCandidateDebits(candidateDebits) {
+  return Array.isArray(candidateDebits) ? candidateDebits.map(item => ({
+    observationKey: item.observationKey,
+    status: item.status,
+    usedMm: Math.max(0, Number(item.usedMm) || 0),
+    reason: item.reason,
+    confirmedSpoolIds: Array.isArray(item.confirmedSpoolIds) ? item.confirmedSpoolIds.slice() : []
+  })) : [];
+}
+
+/**
  * O2/O3 candidate の安定 hash を生成する。
  *
  * 【詳細説明】
- * - windowId、候補スプール、offline observation keys、推定 debit 総量を hash 材料にする。
+ * - windowId、候補スプール、interval、offline observation keys を hash 材料にする。
  * - confidence や evidence は表示・監査属性であり、後から詳細が増えても同じ物理 candidate を
  *   別物にしないため hash 材料へ入れない。
  *
@@ -130,16 +209,8 @@ function _store() {
  * const hash = buildInferredCandidateHash(classification, projection);
  */
 export function buildInferredCandidateHash(classificationResult, projection) {
-  const candidate = classificationResult?.candidate || {};
-  const keys = Array.isArray(candidate.offlineObservationKeys) ? candidate.offlineObservationKeys.slice().sort() : [];
-  const material = {
-    windowId: classificationResult?.windowId ?? candidate.windowId ?? null,
-    candidateSpoolId: candidate.candidateSpoolId ?? null,
-    candidateBaselineIntervalId: candidate.candidateBaselineIntervalId ?? null,
-    candidateCurrentIntervalId: candidate.candidateCurrentIntervalId ?? null,
-    observationKeys: keys,
-    usedMm: Math.max(0, Number(projection?.inferredContinuityUsedMm) || 0)
-  };
+  void projection;
+  const material = _candidateIdentityMaterial(classificationResult);
   return `ic-${_hashString(JSON.stringify(_stable(material)))}`;
 }
 
@@ -147,8 +218,10 @@ export function buildInferredCandidateHash(classificationResult, projection) {
  * O2/O3 の結果を candidate store へ冪等保存する。
  *
  * 【詳細説明】
+ * - `projection.eligibleForPersistence` が true でなければ fail-closed で保存しない。
  * - `projection.inferredContinuityUsedMm` が 0 以下なら、推定 debit 対象が無いため保存しない。
  * - 同じ candidateHash が既に存在する場合は既存レコードを返し、二重作成しない。
+ * - 同じ candidateHash でも同一性材料が完全一致しない場合は hash 衝突として保存を拒否する。
  * - 作成時点の candidate/projection/confidence/evidence をスナップショット化し、後続 UI が
  *   生の 5000 件 observation を見ずに状態表示できるようにする。
  *
@@ -162,6 +235,9 @@ export function buildInferredCandidateHash(classificationResult, projection) {
  * const result = persistInferredCandidate(classification, projection);
  */
 export function persistInferredCandidate(classificationResult, projection, options = {}) {
+  if (projection?.eligibleForPersistence !== true) {
+    return { ok: false, reason: "projection_not_eligible", candidateHash: null, record: null };
+  }
   const usedMm = Math.max(0, Number(projection?.inferredContinuityUsedMm) || 0);
   if (usedMm <= 0) {
     return { ok: false, reason: "no_inferred_debit", candidateHash: null, record: null };
@@ -171,27 +247,48 @@ export function persistInferredCandidate(classificationResult, projection, optio
     return { ok: false, reason: "candidate_incomplete", candidateHash: null, record: null };
   }
   const candidateHash = buildInferredCandidateHash(classificationResult, projection);
+  const identityMaterial = _candidateIdentityMaterial(classificationResult);
   const store = _store();
   if (store[candidateHash]) {
+    if (!_sameCandidateIdentity(store[candidateHash], identityMaterial)) {
+      return { ok: false, reason: "candidate_hash_collision", candidateHash, record: null, collision: store[candidateHash] };
+    }
+    const existing = store[candidateHash];
+    const now = _nowMs(options);
+    const nextDebits = _snapshotCandidateDebits(projection?.candidateDebits);
+    const usedChanged = Math.max(0, Number(existing.usedMm) || 0) !== usedMm;
+    const debitsChanged = JSON.stringify(existing.candidateDebits || []) !== JSON.stringify(nextDebits);
+    const confidenceChanged = JSON.stringify(existing.confidence || null) !== JSON.stringify(classificationResult.confidence || null);
+    const evidenceChanged = JSON.stringify(existing.evidence || null) !== JSON.stringify(classificationResult.evidence || null);
+    if (usedChanged || debitsChanged || confidenceChanged || evidenceChanged) {
+      existing.usedMm = usedMm;
+      existing.candidateDebits = nextDebits;
+      existing.confidence = classificationResult.confidence ? { ...classificationResult.confidence } : null;
+      existing.evidence = classificationResult.evidence ? { ...classificationResult.evidence } : null;
+      existing.updatedAt = now;
+      if (!Array.isArray(existing.events)) existing.events = [];
+      existing.events.push({
+        type: "updated",
+        at: now,
+        status: existing.status,
+        usedMm,
+        reason: usedChanged ? "projection-used-mm-changed" : "projection-metadata-changed"
+      });
+    }
     return { ok: true, reason: "idempotent", candidateHash, record: store[candidateHash], idempotent: true };
   }
 
   const now = _nowMs(options);
   const record = {
     candidateHash,
+    identityMaterial,
     windowId: classificationResult.windowId,
     host: classificationResult.host ?? projection?.host ?? null,
     candidateSpoolId: String(candidate.candidateSpoolId),
     candidateBaselineIntervalId: candidate.candidateBaselineIntervalId ?? null,
     candidateCurrentIntervalId: candidate.candidateCurrentIntervalId ?? null,
     observationKeys: Array.isArray(candidate.offlineObservationKeys) ? candidate.offlineObservationKeys.slice() : [],
-    candidateDebits: Array.isArray(projection?.candidateDebits) ? projection.candidateDebits.map(item => ({
-      observationKey: item.observationKey,
-      status: item.status,
-      usedMm: Math.max(0, Number(item.usedMm) || 0),
-      reason: item.reason,
-      confirmedSpoolIds: Array.isArray(item.confirmedSpoolIds) ? item.confirmedSpoolIds.slice() : []
-    })) : [],
+    candidateDebits: _snapshotCandidateDebits(projection?.candidateDebits),
     usedMm,
     confidence: classificationResult.confidence ? { ...classificationResult.confidence } : null,
     evidence: classificationResult.evidence ? { ...classificationResult.evidence } : null,

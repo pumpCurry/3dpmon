@@ -50,6 +50,7 @@ function cls(over = {}) {
 function proj(over = {}) {
   return {
     host: "k1",
+    eligibleForPersistence: true,
     inferredContinuityUsedMm: 3000,
     candidateDebits: [
       { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] },
@@ -78,6 +79,12 @@ describe("buildInferredCandidateHash", () => {
     const b = buildInferredCandidateHash(cls({ windowId: "k1|b2|c3" }), proj());
     expect(a).not.toBe(b);
   });
+
+  it("同一 candidate の使用量変化では candidateHash を変えない", () => {
+    const a = buildInferredCandidateHash(cls(), proj({ inferredContinuityUsedMm: 3000 }));
+    const b = buildInferredCandidateHash(cls(), proj({ inferredContinuityUsedMm: 4500 }));
+    expect(a).toBe(b);
+  });
 });
 
 describe("persistInferredCandidate", () => {
@@ -101,11 +108,72 @@ describe("persistInferredCandidate", () => {
     expect(second.record.events).toHaveLength(1);
   });
 
+  it("同一 candidateHash の再評価では使用量と根拠を同一 record 上で更新する", () => {
+    const first = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
+    const second = persistInferredCandidate(
+      cls({
+        confidence: { level: "high", reasons: ["bounded", "stable"], contradictions: [] },
+        evidence: { sameMountedSpool: true, operatorConfirmed: false }
+      }),
+      proj({
+        inferredContinuityUsedMm: 4500,
+        candidateDebits: [
+          { observationKey: "kA", status: "inferred-debit", usedMm: 1500, reason: "unattributed-usage", confirmedSpoolIds: [] },
+          { observationKey: "kB", status: "inferred-debit", usedMm: 3000, reason: "unattributed-usage", confirmedSpoolIds: [] }
+        ]
+      }),
+      { nowMs: 2000 }
+    );
+    expect(second.reason).toBe("idempotent");
+    expect(second.record).toBe(first.record);
+    expect(second.record.usedMm).toBe(4500);
+    expect(second.record.confidence.level).toBe("high");
+    expect(second.record.evidence.operatorConfirmed).toBe(false);
+    expect(second.record.events).toHaveLength(2);
+    expect(second.record.events[1].reason).toBe("projection-used-mm-changed");
+    expect(Object.keys(mockMonitorData.inferredCandidateStore)).toHaveLength(1);
+  });
+
+  it("projection が永続化対象外なら candidate を保存しない", () => {
+    const r = persistInferredCandidate(cls(), proj({ eligibleForPersistence: false }), { nowMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("projection_not_eligible");
+    expect(mockMonitorData.inferredCandidateStore).toEqual({});
+  });
+
   it("推定 debit が 0 なら保存しない", () => {
     const r = persistInferredCandidate(cls(), proj({ inferredContinuityUsedMm: 0 }), { nowMs: 1000 });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("no_inferred_debit");
     expect(mockMonitorData.inferredCandidateStore).toEqual({});
+  });
+
+  it("hash が一致しても identity が違う既存 record は衝突として拒否する", () => {
+    const candidateHash = buildInferredCandidateHash(cls(), proj());
+    mockMonitorData.inferredCandidateStore[candidateHash] = {
+      candidateHash,
+      status: INFERRED_CANDIDATE_STATUS.PENDING,
+      windowId: "k9|b1|c2",
+      host: "k9",
+      candidateSpoolId: "S9",
+      candidateBaselineIntervalId: "iv9",
+      candidateCurrentIntervalId: "iv9",
+      observationKeys: ["kZ"],
+      identityMaterial: {
+        windowId: "k9|b1|c2",
+        candidateSpoolId: "S9",
+        candidateBaselineIntervalId: "iv9",
+        candidateCurrentIntervalId: "iv9",
+        observationKeys: ["kZ"]
+      },
+      events: []
+    };
+    const r = persistInferredCandidate(cls(), proj(), { nowMs: 2000 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("candidate_hash_collision");
+    expect(r.collision).toBe(mockMonitorData.inferredCandidateStore[candidateHash]);
+    expect(Object.keys(mockMonitorData.inferredCandidateStore)).toHaveLength(1);
+    expect(mockMonitorData.inferredCandidateStore[candidateHash].windowId).toBe("k9|b1|c2");
   });
 });
 
