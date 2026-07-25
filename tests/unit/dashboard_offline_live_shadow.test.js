@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   classifyHostAttribution: vi.fn(),
   buildInferredContinuityProjection: vi.fn(),
   persistInferredCandidate: vi.fn(),
+  transitionInferredCandidate: vi.fn(),
   commitObservationWindow: vi.fn(),
   rollbackObservationWindowCommit: vi.fn()
 }));
@@ -28,6 +29,8 @@ vi.mock("../../3dp_lib/dashboard_offline_projection.js", () => ({
   buildInferredContinuityProjection: mocks.buildInferredContinuityProjection
 }));
 vi.mock("../../3dp_lib/dashboard_offline_candidate_store.js", () => ({
+  INFERRED_CANDIDATE_STATUS: { SUPERSEDED: "superseded" },
+  transitionInferredCandidate: mocks.transitionInferredCandidate,
   persistInferredCandidate: mocks.persistInferredCandidate
 }));
 vi.mock("../../3dp_lib/dashboard_offline_observation.js", () => ({
@@ -73,6 +76,11 @@ beforeEach(() => {
   mocks.classifyHostAttribution.mockReset();
   mocks.buildInferredContinuityProjection.mockReset();
   mocks.persistInferredCandidate.mockReset();
+  mocks.transitionInferredCandidate.mockReset();
+  mocks.transitionInferredCandidate.mockImplementation(() => {
+    mocks.events.push("supersede");
+    return { ok: true, reason: "transitioned", record: { status: "superseded" } };
+  });
   mocks.commitObservationWindow.mockReset();
   mocks.rollbackObservationWindowCommit.mockReset();
 });
@@ -135,7 +143,7 @@ describe("runInferredContinuityShadow", () => {
     expect(mocks.events).toEqual(["persist", "save", "commit", "save"]);
   });
 
-  it("耐久保存中に offline key 集合が変わった場合は baseline commit を止める", async () => {
+  it("耐久保存中に offline key 集合が変わった場合は candidate を supersede して baseline commit を止める", async () => {
     const before = classification({ currentSequence: 2 });
     const after = classification({
       currentSequence: 3,
@@ -157,7 +165,14 @@ describe("runInferredContinuityShadow", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("classification_changed_since_candidate_persisted");
-    expect(mocks.events).toEqual(["persist", "save"]);
+    expect(result.supersede).toEqual({ ok: true, reason: "transitioned", record: { status: "superseded" } });
+    expect(mocks.events).toEqual(["persist", "save", "supersede", "save"]);
+    expect(mocks.transitionInferredCandidate).toHaveBeenCalledWith("ic-1", "superseded", {
+      actor: "system",
+      reason: "classification-changed-after-persist",
+      supersededBy: null,
+      nowMs: undefined
+    });
     expect(mocks.commitObservationWindow).not.toHaveBeenCalled();
   });
 
@@ -298,7 +313,39 @@ describe("runInferredContinuityShadow", () => {
       windowId: "k1|b1|c2",
       previousBaseline: { windowId: "before" }
     });
-    expect(mocks.events).toEqual(["persist", "save", "commit", "save", "rollback"]);
+    expect(result.rollbackSave).toEqual({ ok: true, backend: "indexedDB", reason: "flushed" });
+    expect(mocks.events).toEqual(["persist", "save", "commit", "save", "rollback", "save"]);
+  });
+
+  it("baseline commit が失敗した場合は保存済み candidate を supersede する", async () => {
+    mocks.classifyHostAttribution.mockReturnValue(classification());
+    mocks.buildInferredContinuityProjection.mockReturnValue({
+      host: "k1",
+      inferredContinuityUsedMm: 1200,
+      eligibleForPersistence: true,
+      status: "ok"
+    });
+    mocks.persistInferredCandidate.mockImplementation(() => {
+      mocks.events.push("persist");
+      return { ok: true, reason: "created", candidateHash: "ic-1", record: { createdAt: 1000 } };
+    });
+    mocks.commitObservationWindow.mockImplementation(() => {
+      mocks.events.push("commit");
+      return { ok: false, reason: "observation_changed_since_evaluation" };
+    });
+
+    const result = await runInferredContinuityShadow("k1", { id: "S1" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("observation_changed_since_evaluation");
+    expect(result.supersede).toEqual({ ok: true, reason: "transitioned", record: { status: "superseded" } });
+    expect(mocks.transitionInferredCandidate).toHaveBeenCalledWith("ic-1", "superseded", {
+      actor: "system",
+      reason: "observation-commit-failed",
+      supersededBy: null,
+      nowMs: undefined
+    });
+    expect(mocks.events).toEqual(["persist", "save", "commit", "supersede", "save"]);
   });
 
   it("同一hostのshadowが実行中なら二重起動しない", async () => {

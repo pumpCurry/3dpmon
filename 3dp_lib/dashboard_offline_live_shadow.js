@@ -18,9 +18,9 @@
  * 【公開関数一覧】
  * - {@link runInferredContinuityShadow}：host 単位で O2/O3/O4 の shadow 評価を実行する。
  *
- * @version 1.390.1255 (PR #413)
+ * @version 1.390.1259 (PR #413)
  * @since   1.390.1246 (PR #413)
- * @lastModified 2026-07-23 15:29:05
+ * @lastModified 2026-07-25 12:23:47
  * -----------------------------------------------------------
  * @todo
  * - O5 で UI 確認・否認・再割当てから candidate status を遷移させる。
@@ -33,7 +33,7 @@ import { saveUnifiedStorageDurably } from "./dashboard_storage.js";
 import { ATTR_CLASS, classifyHostAttribution } from "./dashboard_offline_classifier.js";
 import { commitObservationWindow, rollbackObservationWindowCommit } from "./dashboard_offline_observation.js";
 import { buildInferredContinuityProjection } from "./dashboard_offline_projection.js";
-import { persistInferredCandidate } from "./dashboard_offline_candidate_store.js";
+import { INFERRED_CANDIDATE_STATUS, persistInferredCandidate, transitionInferredCandidate } from "./dashboard_offline_candidate_store.js";
 import { wallNowMs } from "./dashboard_time.js";
 
 /** host 単位で live shadow の多重実行を防ぐ in-flight registry。 */
@@ -138,6 +138,31 @@ async function _saveIfEnabled(options) {
 }
 
 /**
+ * baseline commit に進めなかった保存済み candidate を superseded へ遷移する。
+ *
+ * 【詳細説明】
+ * - candidate の耐久保存後に分類変化や observation commit 失敗が起きた場合、pending のまま残すと
+ *   O5 で古い候補と再評価後の候補が二重表示される。
+ * - 保存された candidate は削除せず、監査履歴を残すため `superseded` へ遷移する。
+ *
+ * @private
+ * @function _supersedePersistedCandidate
+ * @param {Object} persist - `persistInferredCandidate()` の戻り値。
+ * @param {string} reason - supersede する理由。
+ * @param {Object} [options] - テスト用 clock などのオプション。
+ * @returns {{ok:boolean, reason:string, record:?Object}|null} 遷移結果。candidateHash が無い場合は null。
+ */
+function _supersedePersistedCandidate(persist, reason, options = {}) {
+  if (!persist?.candidateHash) return null;
+  return transitionInferredCandidate(persist.candidateHash, INFERRED_CANDIDATE_STATUS.SUPERSEDED, {
+    actor: "system",
+    reason,
+    supersededBy: null,
+    nowMs: options?.nowMs
+  });
+}
+
+/**
  * オフライン継続候補を live shadow mode で評価し、pending candidate と baseline commit を冪等に作成する。
  *
  * 【詳細説明】
@@ -208,6 +233,21 @@ async function _runInferredContinuityShadow(host, spool, options = {}) {
     }
     const commitClassification = classifyHostAttribution(host);
     if (!_sameCandidateIdentity(classification, commitClassification)) {
+      const supersede = _supersedePersistedCandidate(persist, "classification-changed-after-persist", options);
+      const supersedeSave = supersede?.ok && !supersede.idempotent ? await _saveIfEnabled(options) : null;
+      if (supersedeSave && supersedeSave.ok === false) {
+        return {
+          ok: false,
+          reason: supersedeSave.reason || "candidate_supersede_not_durably_saved",
+          classification,
+          commitClassification,
+          projection,
+          persist,
+          save,
+          supersede,
+          supersedeSave
+        };
+      }
       return {
         ok: false,
         reason: "classification_changed_since_candidate_persisted",
@@ -215,7 +255,9 @@ async function _runInferredContinuityShadow(host, spool, options = {}) {
         commitClassification,
         projection,
         persist,
-        save
+        save,
+        supersede,
+        supersedeSave
       };
     }
     const persistedAt = Number(persist.record?.createdAt) || Number(persist.record?.updatedAt) || wallNowMs();
@@ -226,13 +268,45 @@ async function _runInferredContinuityShadow(host, spool, options = {}) {
       candidateHash: persist.candidateHash,
       expectedAppSessionId: _currentAppSessionId(host)
     });
+    if (!commit?.ok) {
+      const supersede = _supersedePersistedCandidate(persist, "observation-commit-failed", options);
+      const supersedeSave = supersede?.ok && !supersede.idempotent ? await _saveIfEnabled(options) : null;
+      if (supersedeSave && supersedeSave.ok === false) {
+        return {
+          ok: false,
+          reason: supersedeSave.reason || "candidate_supersede_not_durably_saved",
+          classification,
+          projection,
+          persist,
+          commit,
+          save,
+          supersede,
+          supersedeSave
+        };
+      }
+      return {
+        ok: false,
+        reason: commit?.reason || "commit_failed",
+        classification,
+        projection,
+        persist,
+        commit,
+        save,
+        supersede,
+        supersedeSave
+      };
+    }
     const commitSave = commit?.ok && !commit.idempotent ? await _saveIfEnabled(options) : null;
     if (commit?.ok && commitSave && commitSave.ok === false) {
       const rollback = rollbackObservationWindowCommit(host, {
         windowId: commitClassification.windowId,
         previousBaseline: commit.previousBaseline
       });
-      return { ok: false, reason: commitSave.reason || "baseline_not_durably_saved", classification, projection, persist, commit, save: commitSave, rollback };
+      const rollbackSave = rollback?.ok ? await _saveIfEnabled(options) : null;
+      const reason = rollbackSave && rollbackSave.ok === false
+        ? rollbackSave.reason || "rollback_not_durably_saved"
+        : commitSave.reason || "baseline_not_durably_saved";
+      return { ok: false, reason, classification, projection, persist, commit, save: commitSave, rollback, rollbackSave };
     }
 
     return {
