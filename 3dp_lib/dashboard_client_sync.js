@@ -21,9 +21,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1263 (PR #416)
+ * @version 1.390.1264 (PR #417)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-07-25 20:55:00
+ * @lastModified 2026-07-25 22:09:00
  * -----------------------------------------------------------
  */
 
@@ -964,7 +964,8 @@ function _notifyModeChange(kind) {
  *   ("mount" | "unmount" | "addSpoolFromPreset" | "mountNewSpoolFromPreset" |
  *    "updateSpool" | "deleteSpool" | "restoreSpool" |
  *    "confirmInferredSpool" | "revertInferredSpool" |
- *    "confirmInferredCandidate" | "rejectInferredCandidate" | "reassignInferredCandidate")
+ *    "confirmInferredCandidate" | "rejectInferredCandidate" | "reassignInferredCandidate" |
+ *    "undoInferredCandidateDecision")
  * @param {Object} data - 操作データ（action ごとのペイロード）
  * @returns {boolean} 送信できた場合 true
  */
@@ -1027,6 +1028,7 @@ export function sendRelayFilament(action, data) {
 const _NON_IDEMPOTENT_FILAMENT = new Set([
   "addSpool", "addSpoolFromPreset", "mountNewSpoolFromPreset", "confirmInferredSpool",
   "confirmInferredCandidate", "rejectInferredCandidate", "reassignInferredCandidate",
+  "undoInferredCandidateDecision",
   "importUserPresets"
 ]);
 

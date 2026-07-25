@@ -114,7 +114,8 @@ describe("persistInferredCandidate", () => {
     INFERRED_CANDIDATE_STATUS.SUPERSEDED,
     INFERRED_CANDIDATE_STATUS.REJECTED,
     INFERRED_CANDIDATE_STATUS.CONFIRMED,
-    INFERRED_CANDIDATE_STATUS.REASSIGNED
+    INFERRED_CANDIDATE_STATUS.REASSIGNED,
+    INFERRED_CANDIDATE_STATUS.UNDONE
   ])("既存 candidate が %s の場合は同一 identity でも再利用しない", (status) => {
     const first = persistInferredCandidate(cls(), proj(), { nowMs: 1000 });
     const transition = transitionInferredCandidate(first.candidateHash, status, {

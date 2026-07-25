@@ -9,10 +9,12 @@
  *
  * 【機能内容サマリ】
  * - O5A として、pending inferredCandidate の Confirm / Reject / Reassign を提供する。
+ * - O5D として、confirmed / reassigned candidate の Undo を提供する。
  * - STAND ALONE と PARENT は確定台帳の権威として decision を実行できる。
  * - SATELLITE はローカル candidate/ledger を書かず、Parent へ decision request を送る。
  * - Confirm/Reassign は台帳反映、candidate 状態遷移、耐久保存を一連の transaction として扱い、
  *   保存失敗時はメモリ rollback と rollback 状態の耐久保存を試みる。
+ * - Undo も同じ transaction 境界で、O5 が追加した台帳 event と履歴 attribution だけを逆反映する。
  *
  * 【公開関数一覧】
  * - {@link canExecuteLedgerDecision}：この端末で O5 decision を実行できるか判定する
@@ -20,10 +22,11 @@
  * - {@link confirmInferredCandidate}：candidate spool で推定使用量を確定する
  * - {@link rejectInferredCandidate}：candidate を否認し、確定台帳には触れない
  * - {@link reassignInferredCandidate}：別 spool へ再割当てして推定使用量を確定する
+ * - {@link undoInferredCandidateDecision}：確定済み candidate の台帳反映を取り消す
  *
- * @version 1.390.1263 (PR #416)
+ * @version 1.390.1264 (PR #417)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-25 20:55:00
+ * @lastModified 2026-07-25 22:09:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -39,7 +42,8 @@ import {
 } from "./dashboard_offline_candidate_store.js";
 import {
   applyInferredCandidateLedger,
-  rollbackInferredCandidateLedger
+  rollbackInferredCandidateLedger,
+  undoInferredCandidateLedger
 } from "./dashboard_inferred_candidate_ledger.js";
 import { getRelayMode, sendRelayFilament } from "./dashboard_client_sync.js";
 import { wallNowMs } from "./dashboard_time.js";
@@ -192,6 +196,29 @@ function _validatePendingCandidate(candidateHash) {
 }
 
 /**
+ * candidate が O5 Undo 可能な resolved record か検証する。
+ *
+ * 【詳細説明】
+ * - Undo は確定台帳へ実際に debit を反映した `confirmed` と `reassigned` だけを対象にする。
+ * - pending/rejected/superseded/undone は台帳反映を持たない、または既に取り消し済みなので拒否する。
+ *
+ * @private
+ * @function _validateUndoableCandidate
+ * @param {string} candidateHash - 対象 candidateHash。
+ * @returns {{ok:boolean, reason:string, record:?Object}} 検証結果。
+ */
+function _validateUndoableCandidate(candidateHash) {
+  if (!candidateHash) return { ok: false, reason: "candidate_hash_required", record: null };
+  const record = _candidate(candidateHash);
+  if (!record) return { ok: false, reason: "candidate_not_found", record: null };
+  if (record.status !== INFERRED_CANDIDATE_STATUS.CONFIRMED
+      && record.status !== INFERRED_CANDIDATE_STATUS.REASSIGNED) {
+    return { ok: false, reason: "candidate_not_undoable", record };
+  }
+  return { ok: true, reason: "candidate_undoable", record };
+}
+
+/**
  * rollback 後も耐久保存できない場合の復旧要求を monitorData へ記録する。
  *
  * 【詳細説明】
@@ -282,7 +309,7 @@ function _rollbackCandidateRecord(candidateHash, candidateSnapshot) {
  * 変更後に耐久保存し、失敗した場合は candidate と ledger を rollback する。
  *
  * 【詳細説明】
- * - Confirm/Reassign は ledger と candidate の両方を変更するため、保存失敗時は両方を復元する。
+ * - Confirm/Reassign/Undo は ledger と candidate の両方を変更するため、保存失敗時は両方を復元する。
  * - Reject は ledgerSnapshot が null で、candidate 状態だけを復元する。
  * - rollback 後の状態も再度耐久保存し、これに失敗した場合は recovery flag を残す。
  *
@@ -352,7 +379,7 @@ async function _saveDecisionOrRollback(params, options = {}) {
  *   UI 側の command routing を拡張する。
  *
  * @function canExecuteLedgerDecision
- * @returns {boolean} ローカルで Confirm/Reject/Reassign を実行できる場合 true。
+ * @returns {boolean} ローカルで Confirm/Reject/Reassign/Undo を実行できる場合 true。
  * @example
  * if (canExecuteLedgerDecision()) enableConfirmButton();
  */
@@ -370,7 +397,7 @@ export function canExecuteLedgerDecision() {
  * - readonly 子は request も送れないため false。
  *
  * @function canSubmitLedgerDecision
- * @returns {boolean} UI 上で Confirm/Reject/Reassign を有効にできる場合 true。
+ * @returns {boolean} UI 上で Confirm/Reject/Reassign/Undo を有効にできる場合 true。
  * @example
  * if (canSubmitLedgerDecision()) enableDecisionButtons();
  */
@@ -553,4 +580,55 @@ export async function reassignInferredCandidate(candidateHash, targetSpoolId, op
   }, options);
   if (!saved.ok) return { ok: false, reason: saved.reason, candidateHash, record: _candidate(candidateHash), applied, transition, ...saved };
   return { ok: true, reason: "reassigned", candidateHash, record: transition.record, applied, transition, save: saved.save };
+}
+
+/**
+ * confirmed / reassigned candidate の確定台帳反映を取り消す。
+ *
+ * 【詳細説明】
+ * - O5 が作成した usedLengthLog event と履歴 filamentInfo を candidateHash で照合し、一意に確認できる
+ *   場合だけ残量を戻して candidate を `undone` へ遷移する。
+ * - SATELLITE はローカル台帳を書かず、Parent へ Undo request を送る。
+ * - 保存失敗時は台帳と candidate status を保存前状態へ rollback し、その rollback 状態も耐久保存する。
+ *
+ * @function undoInferredCandidateDecision
+ * @param {string} candidateHash - Undo する candidateHash。
+ * @param {{actor?:string,nowMs?:number,save?:boolean}} [options] - 操作者・clock・保存オプション。
+ * @returns {Promise<Object>} decision 結果。
+ * @example
+ * const result = await undoInferredCandidateDecision("ic-abcd", { actor: "operator" });
+ */
+export async function undoInferredCandidateDecision(candidateHash, options = {}) {
+  if (_isRelayChild()) {
+    return _requestLedgerDecision("undoInferredCandidateDecision", candidateHash, {}, options);
+  }
+  const guard = _decisionGuard(candidateHash);
+  if (guard) return guard;
+  const undoable = _validateUndoableCandidate(candidateHash);
+  if (!undoable.ok) return { ok: false, reason: undoable.reason, candidateHash, record: undoable.record };
+  const record = undoable.record;
+  const candidateSnapshot = _clone(record);
+  const undone = undoInferredCandidateLedger(record, {
+    nowMs: options.nowMs,
+    actor: options.actor || "user"
+  });
+  if (!undone.ok) return { ok: false, reason: undone.reason, candidateHash, record, undone };
+  const transition = transitionInferredCandidate(candidateHash, INFERRED_CANDIDATE_STATUS.UNDONE, {
+    nowMs: options.nowMs,
+    actor: options.actor || "user",
+    reason: "operator-undo"
+  });
+  if (!transition.ok) {
+    const rollback = rollbackInferredCandidateLedger(undone.snapshot);
+    return { ok: false, reason: transition.reason, candidateHash, record, undone, transition, rollback };
+  }
+  const saved = await _saveDecisionOrRollback({
+    candidateHash,
+    action: "undo",
+    ledgerSnapshot: undone.snapshot,
+    candidateSnapshot,
+    transition
+  }, options);
+  if (!saved.ok) return { ok: false, reason: saved.reason, candidateHash, record: _candidate(candidateHash), undone, transition, ...saved };
+  return { ok: true, reason: "undone", candidateHash, record: transition.record, undone, transition, save: saved.save };
 }

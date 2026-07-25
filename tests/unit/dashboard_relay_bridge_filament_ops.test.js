@@ -42,6 +42,7 @@ vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
   confirmInferredCandidate: vi.fn(async () => ({ ok: true, reason: "confirmed" })),
   rejectInferredCandidate: vi.fn(async () => ({ ok: true, reason: "rejected" })),
   reassignInferredCandidate: vi.fn(async () => ({ ok: true, reason: "reassigned" })),
+  undoInferredCandidateDecision: vi.fn(async () => ({ ok: true, reason: "undone" })),
 }));
 vi.mock("../../3dp_lib/dashboard_filament_inventory.js", () => ({
   setInventoryQuantity: vi.fn(),
@@ -175,13 +176,20 @@ describe("handleRelayFilamentAction — 親側 RPC ディスパッチ", () => {
       _opId: "o5-reassign-1"
     });
     expect(decision.reassignInferredCandidate).toHaveBeenCalledWith("ic-c", "S2", { actor: "satellite-user" });
+
+    await handleRelayFilamentAction("undoInferredCandidateDecision", {
+      candidateHash: "ic-d",
+      actor: "satellite-user",
+      _opId: "o5-undo-1"
+    });
+    expect(decision.undoInferredCandidateDecision).toHaveBeenCalledWith("ic-d", { actor: "satellite-user" });
   });
 
   it("O5 decision request は opId 重複排除の対象になる", async () => {
-    await handleRelayFilamentAction("confirmInferredCandidate", { candidateHash: "ic-a", _opId: "o5-dup-1" });
-    await handleRelayFilamentAction("confirmInferredCandidate", { candidateHash: "ic-a", _opId: "o5-dup-1" });
+    await handleRelayFilamentAction("undoInferredCandidateDecision", { candidateHash: "ic-a", _opId: "o5-dup-1" });
+    await handleRelayFilamentAction("undoInferredCandidateDecision", { candidateHash: "ic-a", _opId: "o5-dup-1" });
 
-    expect(decision.confirmInferredCandidate).toHaveBeenCalledTimes(1);
+    expect(decision.undoInferredCandidateDecision).toHaveBeenCalledTimes(1);
   });
 
   it("opId 重複排除: 同一 opId の非冪等操作は2回目を実行しない (#1)", async () => {

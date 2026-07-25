@@ -20,13 +20,12 @@
  * - {@link transitionInferredCandidate}：candidate の状態を監査 event 付きで変更する
  * - {@link getInferredCandidatesForHost}：host 単位で candidate を取得する
  *
- * @version 1.390.1260 (PR #413)
+ * @version 1.390.1264 (PR #417)
  * @since   1.390.1245 (PR #412)
- * @lastModified 2026-07-25 12:38:02
+ * @lastModified 2026-07-25 22:09:00
  * -----------------------------------------------------------
  * @todo
- * - O4 後続で aggregator の O2/O3 ライブ配線から `persistInferredCandidate` を呼び出す。
- * - O5 で confirmed/rejected/reassigned の UI 操作から `transitionInferredCandidate` を呼び出す。
+ * - none
  */
 
 "use strict";
@@ -40,7 +39,8 @@ export const INFERRED_CANDIDATE_STATUS = Object.freeze({
   CONFIRMED: "confirmed",
   REJECTED: "rejected",
   REASSIGNED: "reassigned",
-  SUPERSEDED: "superseded"
+  SUPERSEDED: "superseded",
+  UNDONE: "undone"
 });
 
 /**
@@ -320,7 +320,7 @@ export function persistInferredCandidate(classificationResult, projection, optio
  *
  * @function transitionInferredCandidate
  * @param {string} candidateHash - 対象 candidateHash。
- * @param {"pending"|"confirmed"|"rejected"|"reassigned"|"superseded"} status - 新しい状態。
+ * @param {"pending"|"confirmed"|"rejected"|"reassigned"|"superseded"|"undone"} status - 新しい状態。
  * @param {{nowMs?:number, actor?:string, reason?:string, assignedSpoolId?:?string, supersededBy?:?string}} [options]
  *   - 状態遷移に付与する監査情報。
  * @returns {{ok:boolean, reason:string, record:?Object}}

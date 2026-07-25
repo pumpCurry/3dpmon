@@ -9,15 +9,15 @@
  *
  * 【機能内容サマリ】
  * - O5B Candidate Center として pending/処理済み candidate の一覧、詳細、監査 timeline を描画する。
- * - Confirm / Reject / Reassign の操作ダイアログを提供し、実更新は Decision Core へ委譲する。
+ * - Confirm / Reject / Reassign / Undo の操作ダイアログを提供し、実更新は Decision Core へ委譲する。
  * - SATELLITE 子では Parent へ decision request を送り、readonly 子では操作ボタンを disabled にする。
  *
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1263 (PR #416)
+ * @version 1.390.1264 (PR #417)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-25 20:55:00
+ * @lastModified 2026-07-25 22:09:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -29,7 +29,8 @@ import { monitorData } from "./dashboard_data.js";
 import {
   confirmInferredCandidate,
   rejectInferredCandidate,
-  reassignInferredCandidate
+  reassignInferredCandidate,
+  undoInferredCandidateDecision
 } from "./dashboard_inferred_candidate_decision.js";
 import {
   INFERRED_CANDIDATE_FILTER,
@@ -74,6 +75,11 @@ const REASON_LABELS = Object.freeze({
   history_observation_ambiguous: "対象履歴が曖昧です",
   history_already_attributed: "履歴がすでに別スプールへ確定されています",
   candidate_ledger_event_exists: "この候補はすでに台帳へ反映されています",
+  candidate_not_undoable: "この候補は取り消しできません",
+  candidate_ledger_event_missing: "取り消し対象の台帳イベントが見つかりません",
+  candidate_ledger_event_ambiguous: "取り消し対象の台帳イベントが曖昧です",
+  candidate_history_link_missing: "取り消し対象の履歴帰属が見つかりません",
+  candidate_ledger_event_total_mismatch: "台帳イベントと候補の消費量が一致しません",
   invalid_reject_reason: "否認理由が不正です",
   rollback_durable_save_failed: "復旧状態の保存に失敗しました"
 });
@@ -350,6 +356,36 @@ async function _reassignAction(vm) {
 }
 
 /**
+ * Undo 操作の確認ダイアログを表示する。
+ *
+ * 【詳細説明】
+ * - Undo は O5 が確定した残量・履歴帰属・usedLengthLog を戻すため、実行前に対象と消費量を表示する。
+ * - 実際に戻せるかどうかは Decision Core / Ledger 側で再検証する。
+ *
+ * @private
+ * @function _undoAction
+ * @param {Object} vm - candidate ViewModel。
+ * @returns {Promise<boolean>} 実行する場合 true。
+ */
+async function _undoAction(vm) {
+  const body = _el("div", "ic-confirm-summary");
+  body.append(
+    _kv("対象", vm.candidateSpoolName),
+    _kv("取り消す消費", vm.usedDisplay),
+    _kv("現在状態", vm.statusLabel),
+    _kv("対象ジョブ", `${vm.jobCount}件`)
+  );
+  const ok = await showConfirmDialog({
+    level: "warn",
+    title: "確定済み候補を取り消し",
+    html: body.outerHTML,
+    confirmText: "取り消す",
+    cancelText: "キャンセル"
+  });
+  return ok === true;
+}
+
+/**
  * decision 結果を通知し、必要なら再描画する。
  *
  * @private
@@ -364,8 +400,9 @@ function _handleDecisionResult(result, render, onAfterDecision) {
     const label = result.reason === "confirmed" ? "確定しました"
       : result.reason === "reassigned" ? "再割当てを確定しました"
         : result.reason === "rejected" ? "否認しました"
-          : result.reason === "decision_requested" ? "親端末へ送信しました"
-            : "処理しました";
+          : result.reason === "undone" ? "取り消しました"
+            : result.reason === "decision_requested" ? "親端末へ送信しました"
+              : "処理しました";
     showAlert(label, "success");
     try { onAfterDecision?.(result); } catch { /* noop */ }
     render();
@@ -426,7 +463,18 @@ function _appendActionButtons(wrap, vm, render, close, onAfterDecision) {
     });
   });
 
-  wrap.append(confirmBtn, rejectBtn, reassignBtn);
+  const undoBtn = _el("button", "ic-action-secondary", "Undo");
+  undoBtn.disabled = !vm.canUndo;
+  undoBtn.addEventListener("click", async () => {
+    await _withBusy(wrap, async () => {
+      if (!await _undoAction(vm)) return;
+      const result = await undoInferredCandidateDecision(vm.candidateHash, { actor: _actor() });
+      _handleDecisionResult(result, render, onAfterDecision);
+      if (result?.ok) close();
+    });
+  });
+
+  wrap.append(confirmBtn, rejectBtn, reassignBtn, undoBtn);
 }
 
 /**
@@ -564,6 +612,7 @@ export function createInferredCandidateCenterContent(options = {}) {
     [INFERRED_CANDIDATE_FILTER.REJECTED, "Rejected"],
     [INFERRED_CANDIDATE_FILTER.REASSIGNED, "Reassigned"],
     [INFERRED_CANDIDATE_FILTER.SUPERSEDED, "Superseded"],
+    [INFERRED_CANDIDATE_FILTER.UNDONE, "Undone"],
     [INFERRED_CANDIDATE_FILTER.ALL, "All"]
   ]) {
     const option = document.createElement("option");

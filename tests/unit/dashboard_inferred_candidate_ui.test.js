@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   confirmInferredCandidate: vi.fn(async () => ({ ok: true, reason: "confirmed" })),
   rejectInferredCandidate: vi.fn(async () => ({ ok: true, reason: "rejected" })),
   reassignInferredCandidate: vi.fn(async () => ({ ok: true, reason: "reassigned" })),
+  undoInferredCandidateDecision: vi.fn(async () => ({ ok: true, reason: "undone" })),
   showConfirmDialog: vi.fn(async () => true),
   showAlert: vi.fn()
 }));
@@ -22,7 +23,8 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorDa
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
   confirmInferredCandidate: mocks.confirmInferredCandidate,
   rejectInferredCandidate: mocks.rejectInferredCandidate,
-  reassignInferredCandidate: mocks.reassignInferredCandidate
+  reassignInferredCandidate: mocks.reassignInferredCandidate,
+  undoInferredCandidateDecision: mocks.undoInferredCandidateDecision
 }));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_view.js", () => ({
   INFERRED_CANDIDATE_FILTER: {
@@ -31,6 +33,7 @@ vi.mock("../../3dp_lib/dashboard_inferred_candidate_view.js", () => ({
     REJECTED: "rejected",
     REASSIGNED: "reassigned",
     SUPERSEDED: "superseded",
+    UNDONE: "undone",
     ALL: "all"
   },
   INFERRED_CANDIDATE_SORT: {
@@ -91,6 +94,7 @@ function vm(over = {}) {
     canConfirm: true,
     canReject: true,
     canReassign: true,
+    canUndo: false,
     readOnlyReason: null,
     ...over
   };
@@ -127,6 +131,7 @@ beforeEach(() => {
   mocks.confirmInferredCandidate.mockClear();
   mocks.rejectInferredCandidate.mockClear();
   mocks.reassignInferredCandidate.mockClear();
+  mocks.undoInferredCandidateDecision.mockClear();
   mocks.showConfirmDialog.mockClear();
   mocks.showConfirmDialog.mockResolvedValue(true);
   mocks.showAlert.mockClear();
@@ -166,6 +171,29 @@ describe("createInferredCandidateCenterContent", () => {
     expect(confirm.disabled).toBe(true);
     expect(document.querySelector(".ic-readonly-note").textContent).toContain("親端末");
     expect(mocks.confirmInferredCandidate).not.toHaveBeenCalled();
+  });
+
+  it("confirmed ViewModel では Undo ボタンから Decision Core を呼ぶ", async () => {
+    mocks.vm = vm({
+      status: "confirmed",
+      statusLabel: "Confirmed",
+      canConfirm: false,
+      canReject: false,
+      canReassign: false,
+      canUndo: true
+    });
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    center.el.querySelector("tbody .ic-open-button").click();
+    const buttons = [...document.querySelectorAll(".ic-action-secondary")];
+    const undo = buttons.find(button => button.textContent === "Undo");
+    undo.click();
+
+    await waitForAssertion(() => {
+      expect(mocks.undoInferredCandidateDecision).toHaveBeenCalledWith("ic-a", { actor: "local-user" });
+      expect(mocks.showAlert).toHaveBeenCalledWith("取り消しました", "success");
+    });
   });
 
   it("Satellite decision request 成功は親端末への送信として通知する", async () => {

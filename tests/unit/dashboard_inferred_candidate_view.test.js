@@ -122,6 +122,18 @@ describe("buildInferredCandidateViewModel", () => {
     expect(vm.readOnlyReason).toBeNull();
   });
 
+  it("confirmed / reassigned candidate だけ Undo を有効化する", () => {
+    const pending = buildInferredCandidateViewModel(mocks.monitorData.inferredCandidateStore["ic-new"]);
+    const confirmed = buildInferredCandidateViewModel(mocks.monitorData.inferredCandidateStore["ic-old"]);
+    const reassigned = buildInferredCandidateViewModel(record("ic-reassign", { status: "reassigned", assignedSpoolId: "S2" }));
+    const rejected = buildInferredCandidateViewModel(record("ic-reject", { status: "rejected" }));
+
+    expect(pending.canUndo).toBe(false);
+    expect(confirmed.canUndo).toBe(true);
+    expect(reassigned.canUndo).toBe(true);
+    expect(rejected.canUndo).toBe(false);
+  });
+
   it("O4保存後に履歴が帰属済みになった場合は警告へ出す", () => {
     mocks.monitorData.machines.k1.printStore.history[0].filamentInfo = [{ spoolId: "S9" }];
 
@@ -145,5 +157,6 @@ describe("listInferredCandidateViewModels", () => {
     expect(pending.map(vm => vm.candidateHash)).toEqual(["ic-new"]);
     expect(allOldest.map(vm => vm.candidateHash)).toEqual(["ic-old", "ic-new"]);
     expect(countPendingInferredCandidates()).toBe(1);
+    expect(INFERRED_CANDIDATE_FILTER.UNDONE).toBe("undone");
   });
 });

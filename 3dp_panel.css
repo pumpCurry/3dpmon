@@ -3974,7 +3974,8 @@ body.relay-readonly textarea {
   color: var(--color-success-text);
 }
 .ic-status-rejected,
-.ic-status-superseded {
+.ic-status-superseded,
+.ic-status-undone {
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
 }

@@ -99,6 +99,30 @@ Filament consumption is tracked per printer:
   lacks filament information, the mounted spool for that printer is
   added automatically.
 
+### Inferred Candidate Tab
+
+The Inferred Candidate tab shows offline-completion candidates where the
+system can infer that the same spool likely remained mounted. Candidates
+are never written to the confirmed ledger automatically; an operator must
+make the decision.
+
+| Action | Behavior |
+| --- | --- |
+| **Confirm** | Applies the inferred usage to the candidate spool and updates remaining length, print history and the audit ledger. |
+| **Reject** | Marks the candidate as rejected without changing remaining length or print history. |
+| **Reassign** | Applies the inferred usage to a different selected spool. |
+| **Undo** | Reverses the remaining length, print history links and audit event created by a previous Confirm or Reassign. |
+
+Candidate statuses are `pending`, `confirmed`, `rejected`, `reassigned`,
+`superseded` and `undone`. Only `pending` candidates can be confirmed,
+rejected or reassigned. Only `confirmed` and `reassigned` candidates can
+be undone.
+
+In Relay setups, Standalone and Parent devices can execute Confirm,
+Reject, Reassign and Undo. Satellite devices can view candidates. When a
+Satellite is promoted to operation mode, decision requests are sent to
+the Parent; readonly Satellites keep the action buttons disabled.
+
 ### Registered Filament Tab
 
 The Registered Filament tab lists all spools that have been added so far and lets you edit them.

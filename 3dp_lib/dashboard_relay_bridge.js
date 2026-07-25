@@ -21,9 +21,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1263 (PR #416)
+ * @version 1.390.1264 (PR #417)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-07-25 20:55:00
+ * @lastModified 2026-07-25 22:09:00
  * -----------------------------------------------------------
  */
 
@@ -71,6 +71,7 @@ let _prevAuxHash = "";
 const _NON_IDEMPOTENT_RELAY = new Set([
   "addSpool", "addSpoolFromPreset", "mountNewSpoolFromPreset", "confirmInferredSpool",
   "confirmInferredCandidate", "rejectInferredCandidate", "reassignInferredCandidate",
+  "undoInferredCandidateDecision",
   "importUserPresets"
 ]);
 
@@ -174,6 +175,7 @@ export function initRelayBridge() {
  *    "updateSpool" | "deleteSpool" | "restoreSpool" |
  *    "confirmInferredSpool" | "revertInferredSpool" | "resolveFilamentEvent" |
  *    "confirmInferredCandidate" | "rejectInferredCandidate" | "reassignInferredCandidate" |
+ *    "undoInferredCandidateDecision" |
  *    "setInventoryQuantity" | "adjustInventory" | "setMinStockAlert" |
  *    "togglePresetVisibility" | "toggleBrandVisibility" | "togglePresetFavorite" |
  *    "addUserPreset" | "updateUserPreset" | "deleteUserPreset")
@@ -366,6 +368,14 @@ export async function handleRelayFilamentAction(action, payload) {
             payload.targetSpoolId,
             _relayDecisionOptions(payload)
           );
+        }
+        break;
+      }
+      case "undoInferredCandidateDecision": {
+        // O5D: Undo は O5 が反映した確定台帳だけを親権威で逆反映する。
+        if (payload.candidateHash) {
+          const decisionMod = await import("./dashboard_inferred_candidate_decision.js");
+          await decisionMod.undoInferredCandidateDecision(payload.candidateHash, _relayDecisionOptions(payload));
         }
         break;
       }

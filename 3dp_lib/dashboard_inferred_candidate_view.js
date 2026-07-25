@@ -9,7 +9,7 @@
  *
  * 【機能内容サマリ】
  * - inferredCandidateStore の保存レコードから O5 UI 用 ViewModel を生成する。
- * - status filter、sort、pending count、残量差分、履歴照合警告、decision 送信可否を計算する。
+ * - status filter、sort、pending count、残量差分、履歴照合警告、decision/undo 送信可否を計算する。
  * - UI が candidate record や確定台帳を直接変更しないための表示専用境界を提供する。
  *
  * 【公開関数一覧】
@@ -17,12 +17,12 @@
  * - {@link listInferredCandidateViewModels}：candidate 一覧表示モデルを生成する
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  *
- * @version 1.390.1263 (PR #416)
+ * @version 1.390.1264 (PR #417)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-25 20:55:00
+ * @lastModified 2026-07-25 22:09:00
  * -----------------------------------------------------------
  * @todo
- * - O5C で recovery flag の起動時 reconciliation 結果を警告表示へ接続する。
+ * - none
  */
 
 "use strict";
@@ -44,6 +44,7 @@ export const INFERRED_CANDIDATE_FILTER = Object.freeze({
   REJECTED: "rejected",
   REASSIGNED: "reassigned",
   SUPERSEDED: "superseded",
+  UNDONE: "undone",
   ALL: "all"
 });
 
@@ -83,7 +84,8 @@ const STATUS_LABELS = Object.freeze({
   confirmed: "Confirmed",
   rejected: "Rejected",
   reassigned: "Reassigned",
-  superseded: "Superseded"
+  superseded: "Superseded",
+  undone: "Undone"
 });
 
 /**
@@ -334,6 +336,8 @@ export function buildInferredCandidateViewModel(record, options = {}) {
   const canSubmit = options.canSubmit ?? canSubmitLedgerDecision();
   if (!canSubmit) warnings.add("relay-readonly");
   const isPending = status === INFERRED_CANDIDATE_STATUS.PENDING;
+  const isUndoable = status === INFERRED_CANDIDATE_STATUS.CONFIRMED
+    || status === INFERRED_CANDIDATE_STATUS.REASSIGNED;
 
   return {
     candidateHash,
@@ -369,6 +373,7 @@ export function buildInferredCandidateViewModel(record, options = {}) {
     canConfirm: canSubmit && isPending,
     canReject: canSubmit && isPending,
     canReassign: canSubmit && isPending,
+    canUndo: canSubmit && isUndoable,
     readOnlyReason: canSubmit ? null : "relay-readonly",
     warningCodes: [...warnings].sort()
   };
