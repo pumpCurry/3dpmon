@@ -10,22 +10,23 @@
  * 【機能内容サマリ】
  * - O5A として、pending inferredCandidate の Confirm / Reject / Reassign を提供する。
  * - STAND ALONE と PARENT は確定台帳の権威として decision を実行できる。
- * - SATELLITE は初期実装では閲覧専用とし、candidate/ledger へローカル書き込みしない。
+ * - SATELLITE はローカル candidate/ledger を書かず、Parent へ decision request を送る。
  * - Confirm/Reassign は台帳反映、candidate 状態遷移、耐久保存を一連の transaction として扱い、
  *   保存失敗時はメモリ rollback と rollback 状態の耐久保存を試みる。
  *
  * 【公開関数一覧】
  * - {@link canExecuteLedgerDecision}：この端末で O5 decision を実行できるか判定する
+ * - {@link canSubmitLedgerDecision}：この端末から O5 decision を送信できるか判定する
  * - {@link confirmInferredCandidate}：candidate spool で推定使用量を確定する
  * - {@link rejectInferredCandidate}：candidate を否認し、確定台帳には触れない
  * - {@link reassignInferredCandidate}：別 spool へ再割当てして推定使用量を確定する
  *
- * @version 1.390.1261 (PR #414)
+ * @version 1.390.1263 (PR #416)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-25 13:45:00
+ * @lastModified 2026-07-25 20:55:00
  * -----------------------------------------------------------
  * @todo
- * - O5B でこの API を操作 UI と decision timeline へ接続する。
+ * - none
  */
 
 "use strict";
@@ -40,6 +41,7 @@ import {
   applyInferredCandidateLedger,
   rollbackInferredCandidateLedger
 } from "./dashboard_inferred_candidate_ledger.js";
+import { getRelayMode, sendRelayFilament } from "./dashboard_client_sync.js";
 import { wallNowMs } from "./dashboard_time.js";
 
 /**
@@ -103,6 +105,23 @@ function _nowMs(options = {}) {
  */
 function _isRelayChild() {
   return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+}
+
+/**
+ * Satellite から Parent へ O5 decision request を送れる状態か判定する。
+ *
+ * 【詳細説明】
+ * - `window._3dpmonRelayChild === true` だけでは readonly 子も含むため、relay mode が
+ *   `satellite` に昇格済みの場合だけ true にする。
+ * - 初回 snapshot 未受信や WebSocket 未接続の細かい条件は `sendRelayFilament()` 側で
+ *   最終ゲートされるため、ここでは UI の大まかな操作可否だけを返す。
+ *
+ * @private
+ * @function _canRequestLedgerDecision
+ * @returns {boolean} Parent へ decision request を送れる可能性がある場合 true。
+ */
+function _canRequestLedgerDecision() {
+  return _isRelayChild() && getRelayMode() === "satellite";
 }
 
 /**
@@ -213,6 +232,37 @@ function _decisionGuard(candidateHash) {
 }
 
 /**
+ * Satellite から Parent へ O5 decision request を送信する。
+ *
+ * 【詳細説明】
+ * - Satellite は確定台帳の権威を持たないため、ローカル candidate/ledger を変更しない。
+ * - 送信後の実結果は Parent の耐久保存後に relay-delta / snapshot で還流する。
+ * - `sendRelayFilament()` が readonly・未接続・初回 snapshot 未受信を fail-closed する。
+ *
+ * @private
+ * @function _requestLedgerDecision
+ * @param {string} action - 親へ送る O5 decision action。
+ * @param {string} candidateHash - 対象 candidateHash。
+ * @param {Object} payload - 追加 payload。
+ * @param {{actor?:string}} [options] - 操作者オプション。
+ * @returns {{ok:boolean,reason:string,relayed?:boolean,action:string,candidateHash:string}}
+ *   request 送信結果。
+ */
+function _requestLedgerDecision(action, candidateHash, payload = {}, options = {}) {
+  if (!candidateHash) return { ok: false, reason: "candidate_hash_required", action, candidateHash };
+  if (!_canRequestLedgerDecision()) {
+    return { ok: false, reason: "decision_not_authorized", action, candidateHash };
+  }
+  const sent = sendRelayFilament(action, {
+    candidateHash,
+    actor: options.actor || "satellite-user",
+    ...payload
+  });
+  if (!sent) return { ok: false, reason: "decision_request_not_sent", action, candidateHash };
+  return { ok: true, reason: "decision_requested", relayed: true, action, candidateHash };
+}
+
+/**
  * candidate 状態だけを保存前 snapshot へ戻す。
  *
  * @private
@@ -311,6 +361,24 @@ export function canExecuteLedgerDecision() {
 }
 
 /**
+ * この端末から O5 decision を送信できるか判定する。
+ *
+ * 【詳細説明】
+ * - STAND ALONE / PARENT はローカル実行できるため true。
+ * - SATELLITE はローカル実行はできないが、relay mode が `satellite` なら Parent へ request
+ *   を送れるため true。
+ * - readonly 子は request も送れないため false。
+ *
+ * @function canSubmitLedgerDecision
+ * @returns {boolean} UI 上で Confirm/Reject/Reassign を有効にできる場合 true。
+ * @example
+ * if (canSubmitLedgerDecision()) enableDecisionButtons();
+ */
+export function canSubmitLedgerDecision() {
+  return canExecuteLedgerDecision() || _canRequestLedgerDecision();
+}
+
+/**
  * candidate spool のまま推定使用量を確定する。
  *
  * 【詳細説明】
@@ -326,6 +394,9 @@ export function canExecuteLedgerDecision() {
  * const result = await confirmInferredCandidate("ic-abcd", { actor: "operator" });
  */
 export async function confirmInferredCandidate(candidateHash, options = {}) {
+  if (_isRelayChild()) {
+    return _requestLedgerDecision("confirmInferredCandidate", candidateHash, {}, options);
+  }
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   const pending = _validatePendingCandidate(candidateHash);
@@ -375,6 +446,16 @@ export async function confirmInferredCandidate(candidateHash, options = {}) {
  * const result = await rejectInferredCandidate("ic-abcd", { reason: "not-same-spool" });
  */
 export async function rejectInferredCandidate(candidateHash, options = {}) {
+  if (_isRelayChild()) {
+    const rejectReason = options.reason || "operator-decision";
+    if (!ALLOWED_REJECT_REASONS.has(rejectReason)) {
+      return { ok: false, reason: "invalid_reject_reason", candidateHash, rejectReason };
+    }
+    return _requestLedgerDecision("rejectInferredCandidate", candidateHash, {
+      reason: rejectReason,
+      note: options.note || ""
+    }, options);
+  }
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   const rejectReason = options.reason || "operator-decision";
@@ -430,6 +511,12 @@ export async function rejectInferredCandidate(candidateHash, options = {}) {
  * const result = await reassignInferredCandidate("ic-abcd", "spool-b");
  */
 export async function reassignInferredCandidate(candidateHash, targetSpoolId, options = {}) {
+  if (_isRelayChild()) {
+    if (!targetSpoolId) return { ok: false, reason: "target_spool_required", candidateHash };
+    return _requestLedgerDecision("reassignInferredCandidate", candidateHash, {
+      targetSpoolId: String(targetSpoolId)
+    }, options);
+  }
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   if (!targetSpoolId) return { ok: false, reason: "target_spool_required", candidateHash };

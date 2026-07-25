@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
     inferredCandidateStore: {}
   },
   saveUnifiedStorageDurably: vi.fn(async () => ({ ok: true, backend: "test", reason: "saved" })),
+  sendRelayFilament: vi.fn(() => true),
+  getRelayMode: vi.fn(() => "standalone"),
   eventSeq: 0
 }));
 
@@ -29,8 +31,8 @@ vi.mock("../../3dp_lib/dashboard_printmanager.js", () => ({
 }));
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({ getDisplayBaseUrl: vi.fn(() => "") }));
 vi.mock("../../3dp_lib/dashboard_client_sync.js", () => ({
-  sendRelayFilament: vi.fn(),
-  getRelayMode: vi.fn(() => "standalone")
+  sendRelayFilament: mocks.sendRelayFilament,
+  getRelayMode: mocks.getRelayMode
 }));
 vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
   appendMountEvent: vi.fn(),
@@ -52,10 +54,12 @@ const {
 } = await import("../../3dp_lib/dashboard_offline_candidate_store.js");
 const {
   canExecuteLedgerDecision,
+  canSubmitLedgerDecision,
   confirmInferredCandidate,
   rejectInferredCandidate,
   reassignInferredCandidate
 } = await import("../../3dp_lib/dashboard_inferred_candidate_decision.js");
+const { sendRelayFilament } = await import("../../3dp_lib/dashboard_client_sync.js");
 
 /**
  * observation key を持つ履歴 fixture を作る。
@@ -129,6 +133,10 @@ function candidate(over = {}) {
 beforeEach(() => {
   mocks.saveUnifiedStorageDurably.mockReset();
   mocks.saveUnifiedStorageDurably.mockResolvedValue({ ok: true, backend: "test", reason: "saved" });
+  mocks.sendRelayFilament.mockReset();
+  mocks.sendRelayFilament.mockReturnValue(true);
+  mocks.getRelayMode.mockReset();
+  mocks.getRelayMode.mockReturnValue("standalone");
   mocks.eventSeq = 0;
   delete globalThis.window;
   mocks.monitorData.machines = {
@@ -154,9 +162,53 @@ describe("canExecuteLedgerDecision", () => {
     const result = await confirmInferredCandidate("ic-a", { nowMs: 11000 });
 
     expect(canExecuteLedgerDecision()).toBe(false);
+    expect(canSubmitLedgerDecision()).toBe(false);
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("decision_not_authorized");
     expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("satellite 操作モードではローカル台帳を書かず Parent へ decision request を送る", async () => {
+    globalThis.window = { _3dpmonRelayChild: true };
+    mocks.getRelayMode.mockReturnValue("satellite");
+
+    const result = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+
+    expect(canExecuteLedgerDecision()).toBe(false);
+    expect(canSubmitLedgerDecision()).toBe(true);
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "decision_requested",
+      relayed: true,
+      action: "confirmInferredCandidate",
+      candidateHash: "ic-a"
+    });
+    expect(sendRelayFilament).toHaveBeenCalledWith("confirmInferredCandidate", {
+      candidateHash: "ic-a",
+      actor: "operator"
+    });
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("satellite request 送信に失敗した場合は未処理として返す", async () => {
+    globalThis.window = { _3dpmonRelayChild: true };
+    mocks.getRelayMode.mockReturnValue("satellite");
+    mocks.sendRelayFilament.mockReturnValue(false);
+
+    const result = await rejectInferredCandidate("ic-a", { actor: "operator", reason: "other", note: "skip" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("decision_request_not_sent");
+    expect(sendRelayFilament).toHaveBeenCalledWith("rejectInferredCandidate", {
+      candidateHash: "ic-a",
+      actor: "operator",
+      reason: "other",
+      note: "skip"
+    });
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 });

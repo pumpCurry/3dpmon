@@ -10,12 +10,12 @@ const mocks = vi.hoisted(() => ({
     filamentSpools: [],
     inferredCandidateStore: {}
   },
-  canExecute: true
+  canSubmit: true
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
-  canExecuteLedgerDecision: () => mocks.canExecute
+  canSubmitLedgerDecision: () => mocks.canSubmit
 }));
 vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   formatFilamentAmount: (mm) => ({ display: `${Math.round(Number(mm)).toLocaleString()} mm` }),
@@ -60,7 +60,7 @@ function record(hash, over = {}) {
 }
 
 beforeEach(() => {
-  mocks.canExecute = true;
+  mocks.canSubmit = true;
   mocks.monitorData.machines = {
     k1: {
       storedData: { hostname: { rawValue: "K1 Max" } },
@@ -100,7 +100,7 @@ describe("buildInferredCandidateViewModel", () => {
   });
 
   it("Satellite相当では閲覧専用 warning と操作不可を返す", () => {
-    mocks.canExecute = false;
+    mocks.canSubmit = false;
 
     const vm = buildInferredCandidateViewModel(mocks.monitorData.inferredCandidateStore["ic-new"]);
 
@@ -109,6 +109,17 @@ describe("buildInferredCandidateViewModel", () => {
     expect(vm.canReassign).toBe(false);
     expect(vm.readOnlyReason).toBe("relay-readonly");
     expect(vm.warningCodes).toContain("relay-readonly");
+  });
+
+  it("Satellite request が可能な場合は操作ボタンを有効化する", () => {
+    mocks.canSubmit = true;
+
+    const vm = buildInferredCandidateViewModel(mocks.monitorData.inferredCandidateStore["ic-new"]);
+
+    expect(vm.canConfirm).toBe(true);
+    expect(vm.canReject).toBe(true);
+    expect(vm.canReassign).toBe(true);
+    expect(vm.readOnlyReason).toBeNull();
   });
 
   it("O4保存後に履歴が帰属済みになった場合は警告へ出す", () => {

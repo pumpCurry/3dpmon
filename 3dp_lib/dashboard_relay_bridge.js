@@ -11,6 +11,7 @@
  * - aggregator 更新後に dirty keys を収集し、リレーサーバにブロードキャスト
  *   （filamentSpools / hostSpoolMap / mountHistory の共有状態を含む）
  * - 子（satellite）からのコマンド/フィラメント操作 RPC を受信し親側で実行
+ * - 子（satellite）からの O5 inferred candidate decision request を親側で実行
  * - 新規子クライアント接続時にフルスナップショットを送信
  *
  * 【公開関数一覧】
@@ -20,9 +21,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1245 (PR #412)
+ * @version 1.390.1263 (PR #416)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-07-19 18:45:00
+ * @lastModified 2026-07-25 20:55:00
  * -----------------------------------------------------------
  */
 
@@ -31,6 +32,7 @@
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { sendCommand, getHttpPort } from "./dashboard_connection.js";
 import { extractHost } from "./dashboard_target_identity.js";
+import { wallNowMs } from "./dashboard_time.js";
 
 /** ブリッジ初期化済みフラグ */
 let _initialized = false;
@@ -68,6 +70,7 @@ let _prevAuxHash = "";
  */
 const _NON_IDEMPOTENT_RELAY = new Set([
   "addSpool", "addSpoolFromPreset", "mountNewSpoolFromPreset", "confirmInferredSpool",
+  "confirmInferredCandidate", "rejectInferredCandidate", "reassignInferredCandidate",
   "importUserPresets"
 ]);
 
@@ -163,12 +166,14 @@ export function initRelayBridge() {
  * - switch が操作のホワイトリストを兼ねる（未知 action は無視してログのみ）。
  * - serialNo 採番・プリセット在庫消費などの不可逆リソースは必ず親側で消費される
  *   （サテライトでローカル実行するとカウンタが分岐し台帳が壊れるため）。
+ * - O5 inferred candidate decision は親の Decision Core だけが実行し、子は request のみを送る。
  *
  * @function handleRelayFilamentAction
  * @param {string} action - 操作種別
  *   ("mount" | "unmount" | "addSpool" | "addSpoolFromPreset" | "mountNewSpoolFromPreset" |
  *    "updateSpool" | "deleteSpool" | "restoreSpool" |
  *    "confirmInferredSpool" | "revertInferredSpool" | "resolveFilamentEvent" |
+ *    "confirmInferredCandidate" | "rejectInferredCandidate" | "reassignInferredCandidate" |
  *    "setInventoryQuantity" | "adjustInventory" | "setMinStockAlert" |
  *    "togglePresetVisibility" | "toggleBrandVisibility" | "togglePresetFavorite" |
  *    "addUserPreset" | "updateUserPreset" | "deleteUserPreset")
@@ -212,6 +217,24 @@ async function _resolveRelayPreset(payload) {
   return null;
 }
 
+/**
+ * O5 decision request の共通 options を親側の安全な形へ正規化する。
+ *
+ * 【詳細説明】
+ * - Satellite からの clock 注入は受け付けず、親の Decision Core が `wallNowMs()` で監査時刻を採番する。
+ * - actor は監査ログ用の表示情報に留め、未指定時は relay-satellite として記録する。
+ *
+ * @private
+ * @function _relayDecisionOptions
+ * @param {Object} payload - relay-filament payload。
+ * @returns {{actor:string}} Decision Core へ渡す options。
+ */
+function _relayDecisionOptions(payload) {
+  return {
+    actor: payload?.actor || "relay-satellite"
+  };
+}
+
 export async function handleRelayFilamentAction(action, payload) {
   // ★ レビュー指摘#1/#2/#3: 非冪等操作（採番・在庫消費・一括import）の opId 重複排除。
   //   子側 1.5 秒抑止だけでは、リトライやリレー再配信で同一操作が親へ2回届くと2回採番・
@@ -219,7 +242,7 @@ export async function handleRelayFilamentAction(action, payload) {
   //   2件を両方通さない）、既知 opId は実行しない。さらに同一 opId で action/payload 署名が
   //   異なる場合はクライアントの opId 再利用バグを隠さないよう警告する。
   if (_NON_IDEMPOTENT_RELAY.has(action) && payload && payload._opId) {
-    const now = Date.now();
+    const now = wallNowMs();
     const sig = `${action}:${JSON.stringify(payload)}`;
     const prev = _recentRelayOpIds.get(payload._opId);
     if (prev) {
@@ -314,6 +337,38 @@ export async function handleRelayFilamentAction(action, payload) {
           spoolMod.revertInferredSpool(payload.id);
         }
         break;
+      case "confirmInferredCandidate": {
+        // O5C: Satellite からの Confirm request。親の Decision Core が候補検証・台帳反映・耐久保存を行う。
+        if (payload.candidateHash) {
+          const decisionMod = await import("./dashboard_inferred_candidate_decision.js");
+          await decisionMod.confirmInferredCandidate(payload.candidateHash, _relayDecisionOptions(payload));
+        }
+        break;
+      }
+      case "rejectInferredCandidate": {
+        // O5C: Reject は確定台帳には触れないが、candidate status は親権威 store でのみ遷移する。
+        if (payload.candidateHash) {
+          const decisionMod = await import("./dashboard_inferred_candidate_decision.js");
+          await decisionMod.rejectInferredCandidate(payload.candidateHash, {
+            ..._relayDecisionOptions(payload),
+            reason: payload.reason,
+            note: payload.note || ""
+          });
+        }
+        break;
+      }
+      case "reassignInferredCandidate": {
+        // O5C: Reassign は target spool への確定台帳反映を伴うため、親の Decision Core だけが実行する。
+        if (payload.candidateHash && payload.targetSpoolId) {
+          const decisionMod = await import("./dashboard_inferred_candidate_decision.js");
+          await decisionMod.reassignInferredCandidate(
+            payload.candidateHash,
+            payload.targetSpoolId,
+            _relayDecisionOptions(payload)
+          );
+        }
+        break;
+      }
       case "resolveFilamentEvent":
         // ★ 監査 P0(第2報): フィラメント切れ文脈の解決（reseat 等）を親で確定。
         //   結果は relay-delta の filamentEventContext で全子へ還流する。
@@ -489,7 +544,7 @@ function _syncCameraEndpoints() {
 export function relayBroadcastIfNeeded() {
   if (!_initialized) return;
 
-  const now = Date.now();
+  const now = wallNowMs();
   if (now - _lastBroadcastMs < BROADCAST_INTERVAL_MS) return;
   _lastBroadcastMs = now;
 

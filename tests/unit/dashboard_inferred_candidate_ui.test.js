@@ -167,4 +167,23 @@ describe("createInferredCandidateCenterContent", () => {
     expect(document.querySelector(".ic-readonly-note").textContent).toContain("親端末");
     expect(mocks.confirmInferredCandidate).not.toHaveBeenCalled();
   });
+
+  it("Satellite decision request 成功は親端末への送信として通知する", async () => {
+    mocks.confirmInferredCandidate.mockResolvedValueOnce({
+      ok: true,
+      reason: "decision_requested",
+      relayed: true,
+      action: "confirmInferredCandidate",
+      candidateHash: "ic-a"
+    });
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    center.el.querySelector("tbody .ic-open-button").click();
+    document.querySelector(".ic-action-primary").click();
+
+    await waitForAssertion(() => {
+      expect(mocks.showAlert).toHaveBeenCalledWith("親端末へ送信しました", "success");
+    });
+  });
 });

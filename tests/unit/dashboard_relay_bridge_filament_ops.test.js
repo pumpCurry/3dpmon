@@ -38,6 +38,11 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
 vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
   resolveFilamentEvent: vi.fn(),
 }));
+vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
+  confirmInferredCandidate: vi.fn(async () => ({ ok: true, reason: "confirmed" })),
+  rejectInferredCandidate: vi.fn(async () => ({ ok: true, reason: "rejected" })),
+  reassignInferredCandidate: vi.fn(async () => ({ ok: true, reason: "reassigned" })),
+}));
 vi.mock("../../3dp_lib/dashboard_filament_inventory.js", () => ({
   setInventoryQuantity: vi.fn(),
   adjustInventory: vi.fn(),
@@ -60,6 +65,7 @@ vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
 const { handleRelayFilamentAction } = await import("../../3dp_lib/dashboard_relay_bridge.js");
 const spool = await import("../../3dp_lib/dashboard_spool.js");
 const ledger = await import("../../3dp_lib/dashboard_filament_ledger.js");
+const decision = await import("../../3dp_lib/dashboard_inferred_candidate_decision.js");
 const inventory = await import("../../3dp_lib/dashboard_filament_inventory.js");
 const presets = await import("../../3dp_lib/dashboard_filament_presets.js");
 const { saveUnifiedStorage } = await import("../../3dp_lib/dashboard_storage.js");
@@ -139,6 +145,43 @@ describe("handleRelayFilamentAction — 親側 RPC ディスパッチ", () => {
     await handleRelayFilamentAction("resolveFilamentEvent", { host: "h1", resolution: "reseat", evId: "fctx_h1_100" });
     expect(ledger.resolveFilamentEvent).toHaveBeenCalledWith("h1", "reseat", { expectedEvId: "fctx_h1_100" });
     expect(saveUnifiedStorage).toHaveBeenCalled();
+  });
+
+  it("O5 decision request → 親の Decision Core へ委譲する", async () => {
+    await handleRelayFilamentAction("confirmInferredCandidate", {
+      candidateHash: "ic-a",
+      actor: "satellite-user",
+      _opId: "o5-confirm-1"
+    });
+    expect(decision.confirmInferredCandidate).toHaveBeenCalledWith("ic-a", { actor: "satellite-user" });
+
+    await handleRelayFilamentAction("rejectInferredCandidate", {
+      candidateHash: "ic-b",
+      actor: "satellite-user",
+      reason: "other",
+      note: "wrong spool",
+      _opId: "o5-reject-1"
+    });
+    expect(decision.rejectInferredCandidate).toHaveBeenCalledWith("ic-b", {
+      actor: "satellite-user",
+      reason: "other",
+      note: "wrong spool"
+    });
+
+    await handleRelayFilamentAction("reassignInferredCandidate", {
+      candidateHash: "ic-c",
+      targetSpoolId: "S2",
+      actor: "satellite-user",
+      _opId: "o5-reassign-1"
+    });
+    expect(decision.reassignInferredCandidate).toHaveBeenCalledWith("ic-c", "S2", { actor: "satellite-user" });
+  });
+
+  it("O5 decision request は opId 重複排除の対象になる", async () => {
+    await handleRelayFilamentAction("confirmInferredCandidate", { candidateHash: "ic-a", _opId: "o5-dup-1" });
+    await handleRelayFilamentAction("confirmInferredCandidate", { candidateHash: "ic-a", _opId: "o5-dup-1" });
+
+    expect(decision.confirmInferredCandidate).toHaveBeenCalledTimes(1);
   });
 
   it("opId 重複排除: 同一 opId の非冪等操作は2回目を実行しない (#1)", async () => {

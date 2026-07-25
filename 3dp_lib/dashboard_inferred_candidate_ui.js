@@ -10,17 +10,17 @@
  * 【機能内容サマリ】
  * - O5B Candidate Center として pending/処理済み candidate の一覧、詳細、監査 timeline を描画する。
  * - Confirm / Reject / Reassign の操作ダイアログを提供し、実更新は Decision Core へ委譲する。
- * - SATELLITE/readonly 子では一覧・詳細だけを表示し、確定操作ボタンは disabled にする。
+ * - SATELLITE 子では Parent へ decision request を送り、readonly 子では操作ボタンを disabled にする。
  *
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1262 (PR #415)
+ * @version 1.390.1263 (PR #416)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-25 14:25:00
+ * @lastModified 2026-07-25 20:55:00
  * -----------------------------------------------------------
  * @todo
- * - O5C で Satellite から Parent へ decision request を送る RPC UI を追加する。
+ * - none
  */
 
 "use strict";
@@ -64,6 +64,7 @@ const REASON_LABELS = Object.freeze({
   candidate_not_pending: "候補はすでに処理済みです",
   candidate_hash_required: "候補IDが不正です",
   decision_not_authorized: "この端末では操作できません。親端末で実行してください",
+  decision_request_not_sent: "親端末へ送信できません。接続と同期状態を確認してください",
   decision_recovery_required: "整合性確認が必要です",
   target_spool_required: "再割当て先スプールを選択してください",
   target_spool_same_as_candidate: "候補スプールと同じため再割当てできません",
@@ -363,7 +364,8 @@ function _handleDecisionResult(result, render, onAfterDecision) {
     const label = result.reason === "confirmed" ? "確定しました"
       : result.reason === "reassigned" ? "再割当てを確定しました"
         : result.reason === "rejected" ? "否認しました"
-          : "処理しました";
+          : result.reason === "decision_requested" ? "親端末へ送信しました"
+            : "処理しました";
     showAlert(label, "success");
     try { onAfterDecision?.(result); } catch { /* noop */ }
     render();

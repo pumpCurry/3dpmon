@@ -9,7 +9,7 @@
  *
  * 【機能内容サマリ】
  * - inferredCandidateStore の保存レコードから O5 UI 用 ViewModel を生成する。
- * - status filter、sort、pending count、残量差分、履歴照合警告を read-only で計算する。
+ * - status filter、sort、pending count、残量差分、履歴照合警告、decision 送信可否を計算する。
  * - UI が candidate record や確定台帳を直接変更しないための表示専用境界を提供する。
  *
  * 【公開関数一覧】
@@ -17,9 +17,9 @@
  * - {@link listInferredCandidateViewModels}：candidate 一覧表示モデルを生成する
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  *
- * @version 1.390.1262 (PR #415)
+ * @version 1.390.1263 (PR #416)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-25 14:25:00
+ * @lastModified 2026-07-25 20:55:00
  * -----------------------------------------------------------
  * @todo
  * - O5C で recovery flag の起動時 reconciliation 結果を警告表示へ接続する。
@@ -29,7 +29,7 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { jobObservationIdentity } from "./dashboard_history_identity.js";
-import { canExecuteLedgerDecision } from "./dashboard_inferred_candidate_decision.js";
+import { canSubmitLedgerDecision } from "./dashboard_inferred_candidate_decision.js";
 import { INFERRED_CANDIDATE_STATUS } from "./dashboard_offline_candidate_store.js";
 import { formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 
@@ -300,12 +300,12 @@ function _jobViewModels(record, spool) {
  *
  * 【詳細説明】
  * - inferredCandidateStore の生 record と monitorData の spool/history を read-only に参照する。
- * - 操作可否は candidate status と `canExecuteLedgerDecision()` で決める。
+ * - 操作可否は candidate status と `canSubmitLedgerDecision()` で決める。
  * - warningCodes は O4 保存後に履歴や spool が変化した場合の UI 警告として使う。
  *
  * @function buildInferredCandidateViewModel
  * @param {Object} record - inferredCandidateStore の candidate record。
- * @param {{canExecute?:boolean}} [options] - テスト用の操作可否注入。
+ * @param {{canSubmit?:boolean}} [options] - テスト用の操作可否注入。
  * @returns {Object} O5 UI 用 ViewModel。
  * @example
  * const vm = buildInferredCandidateViewModel(record);
@@ -331,8 +331,8 @@ export function buildInferredCandidateViewModel(record, options = {}) {
   }
   if (confidenceLevel === "low") warnings.add("low-confidence");
   if (monitorData.inferredDecisionRecoveryRequired) warnings.add("decision-recovery-required");
-  const canExecute = options.canExecute ?? canExecuteLedgerDecision();
-  if (!canExecute) warnings.add("relay-readonly");
+  const canSubmit = options.canSubmit ?? canSubmitLedgerDecision();
+  if (!canSubmit) warnings.add("relay-readonly");
   const isPending = status === INFERRED_CANDIDATE_STATUS.PENDING;
 
   return {
@@ -366,10 +366,10 @@ export function buildInferredCandidateViewModel(record, options = {}) {
     confidence: record?.confidence || null,
     evidence: record?.evidence || null,
     events: Array.isArray(record?.events) ? record.events.map(event => ({ ...event })) : [],
-    canConfirm: canExecute && isPending,
-    canReject: canExecute && isPending,
-    canReassign: canExecute && isPending,
-    readOnlyReason: canExecute ? null : "relay-readonly",
+    canConfirm: canSubmit && isPending,
+    canReject: canSubmit && isPending,
+    canReassign: canSubmit && isPending,
+    readOnlyReason: canSubmit ? null : "relay-readonly",
     warningCodes: [...warnings].sort()
   };
 }
@@ -383,7 +383,7 @@ export function buildInferredCandidateViewModel(record, options = {}) {
  * - sort は UI の選択値に従い、安定した tie-break として candidateHash を最後に使う。
  *
  * @function listInferredCandidateViewModels
- * @param {{status?:string,sort?:string,host?:?string,canExecute?:boolean}} [options] - filter/sort 条件。
+ * @param {{status?:string,sort?:string,host?:?string,canSubmit?:boolean}} [options] - filter/sort 条件。
  * @returns {Array<Object>} ViewModel 配列。
  * @example
  * const pending = listInferredCandidateViewModels({ status: "pending" });
@@ -396,7 +396,7 @@ export function listInferredCandidateViewModels(options = {}) {
     .filter(record => record && typeof record === "object")
     .filter(record => !host || record.host === host)
     .filter(record => statusFilter === INFERRED_CANDIDATE_FILTER.ALL || record.status === statusFilter)
-    .map(record => buildInferredCandidateViewModel(record, { canExecute: options.canExecute }));
+    .map(record => buildInferredCandidateViewModel(record, { canSubmit: options.canSubmit }));
 
   models.sort((a, b) => {
     if (sort === INFERRED_CANDIDATE_SORT.OLDEST) return (a.createdAt - b.createdAt) || a.candidateHash.localeCompare(b.candidateHash);
@@ -421,6 +421,6 @@ export function countPendingInferredCandidates(host = null) {
   return listInferredCandidateViewModels({
     status: INFERRED_CANDIDATE_FILTER.PENDING,
     host,
-    canExecute: true
+    canSubmit: true
   }).length;
 }

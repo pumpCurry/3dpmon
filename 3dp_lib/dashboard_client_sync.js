@@ -12,6 +12,7 @@
  * - relay-snapshot / relay-delta の受信と monitorData への反映
  *   （フィラメント共有状態は親権威の全置換 + mountHistory 同期）
  * - satellite モードでのコマンド/フィラメント操作の送信（操作は親へ RPC 委譲）
+ * - O5 inferred candidate decision request を Parent へ送信
  * - 初回接続は常に readonly。?relay=satellite 要求時は自動昇格リクエスト（PIN 保護）
  *
  * 【公開関数一覧】
@@ -20,9 +21,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1245 (PR #412)
+ * @version 1.390.1263 (PR #416)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-07-19 18:45:00
+ * @lastModified 2026-07-25 20:55:00
  * -----------------------------------------------------------
  */
 
@@ -35,7 +36,7 @@ import {
   markAllKeysDirty,
   PLACEHOLDER_HOSTNAME
 } from "./dashboard_data.js";
-import { normalizeTimeZone } from "./dashboard_time.js";
+import { normalizeTimeZone, wallNowMs } from "./dashboard_time.js";
 
 /** dashboard_ui の updateStoredDataToDOM を遅延解決（重い UI 連鎖を import 時に巻き込まない） */
 let _updateStoredDataToDOM = null;
@@ -769,7 +770,7 @@ let _lastRelayAlertMs = 0;
  * @returns {void}
  */
 function _alertRelayBlocked(reason) {
-  const now = Date.now();
+  const now = wallNowMs();
   if (now - _lastRelayAlertMs < 1500) return;
   _lastRelayAlertMs = now;
   import("./dashboard_notification_manager.js").then(({ showAlert }) => {
@@ -962,7 +963,8 @@ function _notifyModeChange(kind) {
  * @param {string} action - 操作種別
  *   ("mount" | "unmount" | "addSpoolFromPreset" | "mountNewSpoolFromPreset" |
  *    "updateSpool" | "deleteSpool" | "restoreSpool" |
- *    "confirmInferredSpool" | "revertInferredSpool")
+ *    "confirmInferredSpool" | "revertInferredSpool" |
+ *    "confirmInferredCandidate" | "rejectInferredCandidate" | "reassignInferredCandidate")
  * @param {Object} data - 操作データ（action ごとのペイロード）
  * @returns {boolean} 送信できた場合 true
  */
@@ -988,7 +990,7 @@ export function sendRelayFilament(action, data) {
   //   在庫±や mount 等の冪等・意図的反復操作は対象外（正当な連続操作を殺さない）。
   if (_NON_IDEMPOTENT_FILAMENT.has(action)) {
     const key = `${action}:${JSON.stringify(data)}`;
-    const now = Date.now();
+    const now = wallNowMs();
     const prev = _recentFilamentSends.get(key);
     if (prev && now - prev < 1500) {
       console.warn(`[client-sync] 二重送信を抑止: ${action}`);
@@ -1004,9 +1006,10 @@ export function sendRelayFilament(action, data) {
   //   子側 payload は変更せず、送信用のコピーへ付与する。
   let sendData = data;
   if (_NON_IDEMPOTENT_FILAMENT.has(action)) {
-    const opId = (typeof crypto !== "undefined" && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `op_${Date.now()}_${Math.floor(performance.now())}`;
+    const cryptoApi = typeof globalThis !== "undefined" ? globalThis.crypto : null;
+    const opId = (cryptoApi && typeof cryptoApi.randomUUID === "function")
+      ? cryptoApi.randomUUID()
+      : `op_${wallNowMs()}_${Math.floor(performance.now())}`;
     sendData = { ...data, _opId: opId };
   }
   _relayWs.send(JSON.stringify({
@@ -1023,6 +1026,7 @@ export function sendRelayFilament(action, data) {
  */
 const _NON_IDEMPOTENT_FILAMENT = new Set([
   "addSpool", "addSpoolFromPreset", "mountNewSpoolFromPreset", "confirmInferredSpool",
+  "confirmInferredCandidate", "rejectInferredCandidate", "reassignInferredCandidate",
   "importUserPresets"
 ]);
 
