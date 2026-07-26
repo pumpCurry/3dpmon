@@ -16,7 +16,8 @@ const mocks = vi.hoisted(() => ({
   reassignInferredCandidate: vi.fn(async () => ({ ok: true, reason: "reassigned" })),
   undoInferredCandidateDecision: vi.fn(async () => ({ ok: true, reason: "undone" })),
   showConfirmDialog: vi.fn(async () => true),
-  showAlert: vi.fn()
+  showAlert: vi.fn(),
+  recoveryVm: { hasIssues: false, totalCount: 0, blockerCount: 0, warningCount: 0, cards: [] }
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
@@ -44,6 +45,7 @@ vi.mock("../../3dp_lib/dashboard_inferred_candidate_view.js", () => ({
     SPOOL: "spool"
   },
   buildInferredCandidateViewModel: vi.fn(() => mocks.vm),
+  buildInferredRecoverySurfaceViewModel: vi.fn(() => mocks.recoveryVm),
   countPendingInferredCandidates: vi.fn(() => mocks.vm?.status === "pending" ? 1 : 0),
   listInferredCandidateViewModels: vi.fn(() => mocks.vm ? [mocks.vm] : [])
 }));
@@ -124,6 +126,7 @@ async function waitForAssertion(assertion) {
 beforeEach(() => {
   document.body.innerHTML = "";
   mocks.vm = vm();
+  mocks.recoveryVm = { hasIssues: false, totalCount: 0, blockerCount: 0, warningCount: 0, cards: [] };
   mocks.monitorData.filamentSpools = [
     { id: "S2", name: "PLA Blue", material: "PLA", remainingLengthMm: 8000 }
   ];
@@ -138,6 +141,43 @@ beforeEach(() => {
 });
 
 describe("createInferredCandidateCenterContent", () => {
+  it("recovery surface を read-only 診断として表示する", () => {
+    mocks.recoveryVm = {
+      hasIssues: true,
+      totalCount: 2,
+      blockerCount: 1,
+      warningCount: 1,
+      cards: [
+        {
+          severity: "blocker",
+          title: "O5 decision recovery required",
+          summary: "rollback状態の確認が必要です",
+          details: [
+            { label: "Candidate", value: "ic-a" },
+            { label: "Reason", value: "rollback_durable_save_failed" }
+          ]
+        },
+        {
+          severity: "warning",
+          title: "Rejected mount history events",
+          summary: "2件の mountHistory event が隔離されています",
+          details: [{ label: "Rejected 1", value: "ev-b" }]
+        }
+      ]
+    };
+
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Blocker 1 / Warning 1");
+    expect(document.querySelector(".ic-recovery-surface").textContent).toContain("O5 decision recovery required");
+    expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Rejected mount history events");
+    expect(mocks.confirmInferredCandidate).not.toHaveBeenCalled();
+    expect(mocks.rejectInferredCandidate).not.toHaveBeenCalled();
+    expect(mocks.reassignInferredCandidate).not.toHaveBeenCalled();
+    expect(mocks.undoInferredCandidateDecision).not.toHaveBeenCalled();
+  });
+
   it("candidate 一覧から詳細を開き、Confirm は Decision Core を呼ぶ", async () => {
     const center = createInferredCandidateCenterContent();
     document.body.appendChild(center.el);

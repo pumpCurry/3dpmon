@@ -3929,6 +3929,67 @@ body.relay-readonly textarea {
   font-size: var(--font-sm);
   font-weight: bold;
 }
+.ic-recovery-wrap {
+  display: block;
+}
+
+.ic-recovery-surface {
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.ic-recovery-surface h4 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-base);
+}
+
+.ic-recovery-overview {
+  font-size: var(--font-sm);
+  font-weight: bold;
+  margin-bottom: var(--space-2);
+}
+
+.ic-recovery-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  padding: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.ic-recovery-blocker {
+  border-color: var(--color-danger);
+}
+
+.ic-recovery-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.ic-recovery-severity {
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: var(--font-xs);
+  font-weight: bold;
+  padding: 1px var(--space-2);
+}
+
+.ic-recovery-summary {
+  margin: var(--space-1) 0;
+  font-size: var(--font-sm);
+}
+
+.ic-recovery-details {
+  margin-top: var(--space-1);
+}
 .ic-list-wrap {
   flex: 1;
   min-height: 0;

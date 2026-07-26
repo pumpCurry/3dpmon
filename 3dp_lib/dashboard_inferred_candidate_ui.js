@@ -11,13 +11,14 @@
  * - O5B Candidate Center として pending/処理済み candidate の一覧、詳細、監査 timeline を描画する。
  * - Confirm / Reject / Reassign / Undo の操作ダイアログを提供し、実更新は Decision Core へ委譲する。
  * - SATELLITE 子では Parent へ decision request を送り、readonly 子では操作ボタンを disabled にする。
+ * - recovery / repair flag は read-only 診断カードとして表示し、復旧操作は後続PRへ分離する。
  *
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1266 (PR #417)
+ * @version 1.390.1267 (PR #418)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-26 11:03:46
+ * @lastModified 2026-07-26 15:48:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -35,6 +36,7 @@ import {
 import {
   INFERRED_CANDIDATE_FILTER,
   INFERRED_CANDIDATE_SORT,
+  buildInferredRecoverySurfaceViewModel,
   buildInferredCandidateViewModel,
   countPendingInferredCandidates,
   listInferredCandidateViewModels
@@ -252,6 +254,61 @@ function _warningChips(codes) {
     wrap.appendChild(_el("span", "ic-warning-chip", WARNING_LABELS[code] || code));
   }
   return wrap;
+}
+
+/**
+ * recovery / repair 診断カードを生成する。
+ *
+ * 【詳細説明】
+ * - #418 では復旧操作を持たせず、異常状態を read-only で見えるようにする。
+ * - card.details は ViewModel 層で表示可能な文字列へ整形済みなので、ここでは DOM を組み立てるだけにする。
+ *
+ * @private
+ * @function _recoveryCard
+ * @param {Object} card - recovery surface card ViewModel。
+ * @returns {HTMLElement} card 要素。
+ */
+function _recoveryCard(card) {
+  const el = _el("article", `ic-recovery-card ic-recovery-${card.severity || "warning"}`);
+  const header = _el("div", "ic-recovery-card-header");
+  header.append(
+    _el("span", "ic-recovery-severity", card.severity === "blocker" ? "BLOCKER" : "WARNING"),
+    _el("strong", "ic-recovery-title", card.title || "Recovery item")
+  );
+  el.append(header, _el("p", "ic-recovery-summary", card.summary || ""));
+  const detailWrap = _el("div", "ic-recovery-details");
+  for (const detail of card.details || []) {
+    detailWrap.appendChild(_kv(detail.label, detail.value));
+  }
+  if (detailWrap.childNodes.length > 0) el.appendChild(detailWrap);
+  return el;
+}
+
+/**
+ * recovery / repair 診断サーフェスを描画する。
+ *
+ * 【詳細説明】
+ * - recovery item が無い場合は空要素のままにし、Candidate Center の通常操作を邪魔しない。
+ * - blocker は decision guard と連動する状態なので、件数サマリを先頭へ出す。
+ *
+ * @private
+ * @function _renderRecoverySurface
+ * @param {HTMLElement} wrap - 描画先。
+ * @returns {void}
+ */
+function _renderRecoverySurface(wrap) {
+  const model = buildInferredRecoverySurfaceViewModel();
+  wrap.innerHTML = "";
+  if (!model.hasIssues) return;
+  const panel = _el("section", "ic-recovery-surface");
+  panel.appendChild(_el("h4", "", "Recovery / repair status"));
+  panel.appendChild(_el(
+    "div",
+    "ic-recovery-overview",
+    `Blocker ${model.blockerCount} / Warning ${model.warningCount}`
+  ));
+  for (const card of model.cards) panel.appendChild(_recoveryCard(card));
+  wrap.appendChild(panel);
 }
 
 /**
@@ -610,6 +667,7 @@ function _row(vm, render, onAfterDecision) {
  */
 export function createInferredCandidateCenterContent(options = {}) {
   const root = _el("div", "filament-manager-content ic-center");
+  const recoveryWrap = _el("div", "ic-recovery-wrap");
   const toolbar = _el("div", "ic-toolbar");
   const count = _el("span", "ic-count");
   const statusSelect = document.createElement("select");
@@ -643,7 +701,7 @@ export function createInferredCandidateCenterContent(options = {}) {
   const refreshBtn = _el("button", "ic-open-button", "Refresh");
   toolbar.append(count, statusSelect, sortSelect, refreshBtn);
   const body = _el("div", "ic-list-wrap");
-  root.append(toolbar, body);
+  root.append(recoveryWrap, toolbar, body);
 
   /**
    * Candidate Center の一覧表示を最新 store から再構築する。
@@ -656,6 +714,7 @@ export function createInferredCandidateCenterContent(options = {}) {
    * @returns {void} 戻り値はない。
    */
   function render() {
+    _renderRecoverySurface(recoveryWrap);
     const models = listInferredCandidateViewModels({
       status: statusSelect.value,
       sort: sortSelect.value,

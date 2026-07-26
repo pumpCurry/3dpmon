@@ -92,6 +92,8 @@ monitorData.hostSpoolMap = {
 
 Relay 構成では、Standalone と Parent は Confirm / Reject / Reassign / Undo を実行できます。Satellite は候補を閲覧でき、操作モードに昇格している場合は Parent へ decision request を送ります。Readonly の Satellite では操作ボタンは無効化されます。
 
+推定候補タブの上部には、必要に応じて Recovery / repair status が表示されます。これは `inferredDecisionRecoveryRequired`、`ledgerRepairRequired`、`mountHistoryRejectedEvents` など、自動継続してはいけない状態を確認するための読み取り専用診断です。表示された場合は、原因となった candidate、host、spool、保存失敗理由、隔離された mountHistory event を確認できます。#418 時点ではこの画面から修復や解除は実行せず、整合確認と復旧操作は後続の Recovery Actions で扱います。
+
 ### 登録済みフィラメントタブ
 
 登録済みフィラメントタブでは、過去に登録したスプールを一覧で確認し編集できます。

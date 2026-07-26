@@ -10,16 +10,18 @@
  * 【機能内容サマリ】
  * - inferredCandidateStore の保存レコードから O5 UI 用 ViewModel を生成する。
  * - status filter、sort、pending count、残量差分、履歴照合警告、decision/undo 送信可否を計算する。
+ * - recovery / repair flag を read-only 診断カードへ変換し、異常系を操作前に見える状態にする。
  * - UI が candidate record や確定台帳を直接変更しないための表示専用境界を提供する。
  *
  * 【公開関数一覧】
  * - {@link buildInferredCandidateViewModel}：candidate record 1件を表示モデルへ変換する
  * - {@link listInferredCandidateViewModels}：candidate 一覧表示モデルを生成する
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
+ * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1264 (PR #417)
+ * @version 1.390.1267 (PR #418)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-25 22:09:00
+ * @lastModified 2026-07-26 15:48:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -180,6 +182,48 @@ function _formatTime(epochMs) {
   } catch {
     return "--";
   }
+}
+
+/**
+ * 任意値を表示用の短い文字列へ変換する。
+ *
+ * 【詳細説明】
+ * - recovery flag には save/rollback などの object が入る場合があるため、UI では重要な
+ *   先頭情報だけを読めるよう JSON 化する。
+ * - 表示不能な値は `"--"` に寄せ、診断カード生成で例外を出さない。
+ *
+ * @private
+ * @function _formatValue
+ * @param {*} value - 表示対象値。
+ * @returns {string} 表示文字列。
+ */
+function _formatValue(value) {
+  if (value == null || value === "") return "--";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * recovery surface 用の key/value 配列を生成する。
+ *
+ * 【詳細説明】
+ * - undefined/null/空文字の値は表示対象から外し、カード内の情報量を絞る。
+ * - reason や candidateHash など、修復対象を特定するための値だけを上位で指定して渡す。
+ *
+ * @private
+ * @function _details
+ * @param {Array<{label:string,value:*}>} entries - detail 候補。
+ * @returns {Array<{label:string,value:string}>} 表示可能な detail。
+ */
+function _details(entries) {
+  return entries
+    .filter(item => item && item.value != null && item.value !== "")
+    .map(item => ({ label: item.label, value: _formatValue(item.value) }));
 }
 
 /**
@@ -428,4 +472,105 @@ export function countPendingInferredCandidates(host = null) {
     host,
     canSubmit: true
   }).length;
+}
+
+/**
+ * O5/ledger の recovery / repair 状態を read-only 診断表示モデルへ変換する。
+ *
+ * 【詳細説明】
+ * - この関数は monitorData を参照するだけで、recovery flag の解除や candidate 遷移は行わない。
+ * - `inferredDecisionRecoveryRequired` は新規 decision を止める blocker として表示する。
+ * - `ledgerRepairRequired` は host 単位の mount ledger 修復要求として表示する。
+ * - `mountHistoryRejectedEvents` は隔離済みイベントの件数と最新数件を表示し、元データが失われていない
+ *   ことをオペレーターが確認できるようにする。
+ *
+ * @function buildInferredRecoverySurfaceViewModel
+ * @param {{maxRejectedEvents?:number}} [options] - 表示する隔離イベントの最大件数。
+ * @returns {{hasIssues:boolean,totalCount:number,blockerCount:number,warningCount:number,cards:Array<Object>}}
+ *   recovery surface 表示モデル。
+ * @example
+ * const recovery = buildInferredRecoverySurfaceViewModel();
+ */
+export function buildInferredRecoverySurfaceViewModel(options = {}) {
+  const cards = [];
+  const recovery = monitorData.inferredDecisionRecoveryRequired;
+  if (recovery && typeof recovery === "object") {
+    cards.push({
+      type: "decision-recovery",
+      severity: "blocker",
+      title: "O5 decision recovery required",
+      summary: "保存失敗後のrollback状態を確認するまで、新しいcandidate decisionは停止されます",
+      host: recovery.host || null,
+      candidateHash: recovery.candidateHash || null,
+      createdAt: Number(recovery.createdAt) || 0,
+      createdAtDisplay: _formatTime(recovery.createdAt),
+      details: _details([
+        { label: "Action", value: recovery.action },
+        { label: "Reason", value: recovery.reason },
+        { label: "Candidate", value: recovery.candidateHash },
+        { label: "Save", value: recovery.save?.reason },
+        { label: "Rollback save", value: recovery.rollbackSave?.reason }
+      ])
+    });
+  }
+
+  const repair = monitorData.ledgerRepairRequired && typeof monitorData.ledgerRepairRequired === "object"
+    ? monitorData.ledgerRepairRequired
+    : {};
+  for (const [host, item] of Object.entries(repair)) {
+    if (!item || typeof item !== "object") continue;
+    cards.push({
+      type: "ledger-repair",
+      severity: "blocker",
+      title: "Mount ledger repair required",
+      summary: `${_hostLabel(host)} の装着区間が曖昧なため、暗黙クローズを停止しています`,
+      host,
+      candidateHash: null,
+      createdAt: Number(item.detectedAtEpochMs) || 0,
+      createdAtDisplay: _formatTime(item.detectedAtEpochMs),
+      details: _details([
+        { label: "Host", value: _hostLabel(host) },
+        { label: "Spool", value: item.spoolId },
+        { label: "Status", value: item.status },
+        { label: "Detected", value: _formatTime(item.detectedAtEpochMs) }
+      ])
+    });
+  }
+
+  const rejected = Array.isArray(monitorData.mountHistoryRejectedEvents)
+    ? monitorData.mountHistoryRejectedEvents
+    : [];
+  const maxRejected = Math.max(1, Math.min(10, Number(options.maxRejectedEvents) || 3));
+  if (rejected.length > 0) {
+    const recent = rejected.slice(-maxRejected).reverse();
+    cards.push({
+      type: "mount-history-rejected",
+      severity: "warning",
+      title: "Rejected mount history events",
+      summary: `${rejected.length}件の mountHistory event が隔離されています`,
+      host: null,
+      candidateHash: null,
+      createdAt: 0,
+      createdAtDisplay: "--",
+      details: recent.map((item, index) => ({
+        label: `Rejected ${index + 1}`,
+        value: _formatValue({
+          reason: item?.reason || "unknown",
+          host: item?.event?.host || null,
+          spoolId: item?.event?.spoolId || null,
+          evId: item?.event?.evId || null
+        })
+      }))
+    });
+  }
+
+  const blockerCount = cards.filter(card => card.severity === "blocker").length;
+  const warningCount = cards.filter(card => card.severity !== "blocker").length;
+  return {
+    hasIssues: cards.length > 0,
+    totalCount: cards.length,
+    blockerCount,
+    warningCount,
+    cards
+  };
 }

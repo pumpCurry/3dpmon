@@ -25,6 +25,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
 const {
   INFERRED_CANDIDATE_FILTER,
   INFERRED_CANDIDATE_SORT,
+  buildInferredRecoverySurfaceViewModel,
   buildInferredCandidateViewModel,
   countPendingInferredCandidates,
   listInferredCandidateViewModels
@@ -81,6 +82,8 @@ beforeEach(() => {
     "ic-old": record("ic-old", { createdAt: 1000, status: "confirmed" })
   };
   delete mocks.monitorData.inferredDecisionRecoveryRequired;
+  mocks.monitorData.ledgerRepairRequired = {};
+  mocks.monitorData.mountHistoryRejectedEvents = [];
 });
 
 describe("buildInferredCandidateViewModel", () => {
@@ -158,5 +161,53 @@ describe("listInferredCandidateViewModels", () => {
     expect(allOldest.map(vm => vm.candidateHash)).toEqual(["ic-old", "ic-new"]);
     expect(countPendingInferredCandidates()).toBe(1);
     expect(INFERRED_CANDIDATE_FILTER.UNDONE).toBe("undone");
+  });
+});
+
+describe("buildInferredRecoverySurfaceViewModel", () => {
+  it("recovery / ledger repair / rejected mount events を read-only card に変換する", () => {
+    mocks.monitorData.inferredDecisionRecoveryRequired = {
+      candidateHash: "ic-new",
+      action: "confirmInferredCandidate",
+      reason: "rollback_durable_save_failed",
+      createdAt: 4000,
+      save: { reason: "quota" },
+      rollbackSave: { reason: "quota-again" }
+    };
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 5000 }
+    };
+    mocks.monitorData.mountHistoryRejectedEvents = [
+      { reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1", spoolId: "S1" } },
+      { reason: "supersede-invalid-survivor", event: { evId: "ev-b", host: "k2", spoolId: "S2" } }
+    ];
+
+    const vm = buildInferredRecoverySurfaceViewModel({ maxRejectedEvents: 1 });
+
+    expect(vm.hasIssues).toBe(true);
+    expect(vm.totalCount).toBe(3);
+    expect(vm.blockerCount).toBe(2);
+    expect(vm.warningCount).toBe(1);
+    expect(vm.cards.map(card => card.type)).toEqual([
+      "decision-recovery",
+      "ledger-repair",
+      "mount-history-rejected"
+    ]);
+    expect(vm.cards[0].details).toContainEqual({ label: "Candidate", value: "ic-new" });
+    expect(vm.cards[1].summary).toContain("K1 Max");
+    expect(vm.cards[2].details).toHaveLength(1);
+    expect(vm.cards[2].details[0].value).toContain("ev-b");
+  });
+
+  it("recovery item がない場合は空の診断モデルを返す", () => {
+    const vm = buildInferredRecoverySurfaceViewModel();
+
+    expect(vm).toMatchObject({
+      hasIssues: false,
+      totalCount: 0,
+      blockerCount: 0,
+      warningCount: 0,
+      cards: []
+    });
   });
 });

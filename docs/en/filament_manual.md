@@ -123,6 +123,15 @@ Reject, Reassign and Undo. Satellite devices can view candidates. When a
 Satellite is promoted to operation mode, decision requests are sent to
 the Parent; readonly Satellites keep the action buttons disabled.
 
+When required, the top of the Inferred Candidate tab shows a Recovery /
+repair status surface. This is a read-only diagnostic view for states
+such as `inferredDecisionRecoveryRequired`, `ledgerRepairRequired` and
+`mountHistoryRejectedEvents`, where the app must not continue
+automatically. It shows the related candidate, host, spool, save-failure
+reason and quarantined mountHistory events. In #418 this surface does not
+run repair or clear flags; those actions are intentionally left for the
+later Recovery Actions slice.
+
 ### Registered Filament Tab
 
 The Registered Filament tab lists all spools that have been added so far and lets you edit them.
