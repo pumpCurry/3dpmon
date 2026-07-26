@@ -18,9 +18,9 @@
  * - {@link undoInferredCandidateLedger}：確定済み candidate の台帳反映を取り消す
  * - {@link rollbackInferredCandidateLedger}：確定反映前 snapshot へメモリ状態を戻す
  *
- * @version 1.390.1265 (PR #417)
+ * @version 1.390.1266 (PR #417)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-26 00:03:27
+ * @lastModified 2026-07-26 11:03:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -264,6 +264,86 @@ function _decisionEventsForCandidate(spool, candidateHash) {
 }
 
 /**
+ * O5 が履歴行へ attribution を書く前の表示・後方互換フィールドを snapshot 化する。
+ *
+ * 【詳細説明】
+ * - Undo は O5 が上書きした情報だけを推測削除すると、Confirm 前から存在していた色・素材などの
+ *   表示用 `filamentInfo` を失う可能性がある。
+ * - `filamentInfo` と `filamentId` は「プロパティが存在しなかった」状態も意味を持つため、
+ *   値だけでなく存在フラグも保存する。
+ *
+ * @private
+ * @function _captureHistoryBefore
+ * @param {Object} entry - Confirm/Reassign 前の履歴行。
+ * @param {string} observationKey - candidate debit の observation key。
+ * @returns {Object} Undo 復元用 snapshot。
+ */
+function _captureHistoryBefore(entry, observationKey) {
+  const hasFilamentInfo = Object.hasOwn(entry, "filamentInfo");
+  const hasFilamentId = Object.hasOwn(entry, "filamentId");
+  return {
+    observationKey: String(observationKey ?? ""),
+    filamentInfoPresent: hasFilamentInfo,
+    filamentInfo: hasFilamentInfo ? _clone(entry.filamentInfo) : null,
+    filamentIdPresent: hasFilamentId,
+    filamentId: hasFilamentId ? _clone(entry.filamentId) : null
+  };
+}
+
+/**
+ * ledger event の履歴snapshotを observation key で一意に引ける Map へ変換する。
+ *
+ * 【詳細説明】
+ * - snapshot が無い旧形式 event では、Undo 後の履歴表示を完全復元できないため fail-closed する。
+ * - 同一 observation key が複数ある場合も、どの変更前状態へ戻すべきか決められないため拒否する。
+ *
+ * @private
+ * @function _historyBeforeMap
+ * @param {Object} event - spool.usedLengthLog 内の O5 decision event。
+ * @returns {{ok:boolean,reason:?string,map:Map<string,Object>}} snapshot Map。
+ */
+function _historyBeforeMap(event) {
+  if (!Array.isArray(event?.historyBefore)) {
+    return { ok: false, reason: "candidate_history_snapshot_missing", map: new Map() };
+  }
+  const map = new Map();
+  for (const item of event.historyBefore) {
+    const key = String(item?.observationKey ?? "");
+    if (!key) return { ok: false, reason: "candidate_history_snapshot_invalid", map: new Map() };
+    if (map.has(key)) return { ok: false, reason: "candidate_history_snapshot_ambiguous", map: new Map() };
+    map.set(key, item);
+  }
+  return { ok: true, reason: null, map };
+}
+
+/**
+ * 履歴行の O5 attribution 対象フィールドを snapshot から復元する。
+ *
+ * 【詳細説明】
+ * - `filamentInfoPresent=false` の場合はプロパティを削除し、Confirm 前に存在しなかった状態へ戻す。
+ * - `filamentIdPresent=true` の場合は `"none"` や `null` も含めて元値を復元する。
+ *
+ * @private
+ * @function _restoreHistoryAttributionFromBefore
+ * @param {Object} entry - 復元対象履歴行。
+ * @param {Object} before - {@link _captureHistoryBefore} が作成した snapshot。
+ * @returns {void}
+ */
+function _restoreHistoryAttributionFromBefore(entry, before) {
+  if (before?.filamentInfoPresent === true) {
+    entry.filamentInfo = _clone(before.filamentInfo);
+  } else {
+    delete entry.filamentInfo;
+  }
+
+  if (before?.filamentIdPresent === true) {
+    entry.filamentId = _clone(before.filamentId);
+  } else {
+    delete entry.filamentId;
+  }
+}
+
+/**
  * candidate record から確定先 spool ID を取得する。
  *
  * 【詳細説明】
@@ -468,6 +548,7 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
     createdAt: now,
     actor
   };
+  const historyBefore = updates.map(item => _captureHistoryBefore(item.entry, item.debit.observationKey));
 
   for (const item of updates) {
     _linkHistoryEntryToSpool(item.entry, spool, item.usedMm, metadata);
@@ -486,6 +567,7 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
     actor,
     usedMm: total.usedMm,
     observationKeys: Array.isArray(candidateRecord.observationKeys) ? candidateRecord.observationKeys.map(String).sort() : [],
+    historyBefore,
     createdAt: now
   };
   spool.usedLengthLog.push(event);
@@ -550,6 +632,8 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
   if (Math.abs(eventUsedMm - total.usedMm) > 0.001) {
     return { ok: false, reason: "candidate_ledger_event_total_mismatch", snapshot: null, spool };
   }
+  const beforeMap = _historyBeforeMap(events[0].event);
+  if (!beforeMap.ok) return { ok: false, reason: beforeMap.reason, snapshot: null, spool };
 
   const byKey = _historyIndexByObservationKey(history);
   const updates = [];
@@ -567,9 +651,11 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
     }
     seenIndexes.add(index);
     const entry = history[index];
+    const before = beforeMap.map.get(key);
+    if (!before) return { ok: false, reason: "candidate_history_snapshot_missing", snapshot: null, spool, observationKey: key };
     const probe = _unlinkHistoryEntryFromCandidate(_clone(entry), targetSpoolId, candidateRecord.candidateHash);
     if (!probe.ok) return { ok: false, reason: probe.reason, snapshot: null, spool, observationKey: key };
-    updates.push({ index, entry, debit });
+    updates.push({ index, entry, debit, before });
   }
 
   const snapshot = {
@@ -581,7 +667,7 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
   };
 
   for (const item of updates) {
-    _unlinkHistoryEntryFromCandidate(item.entry, targetSpoolId, candidateRecord.candidateHash);
+    _restoreHistoryAttributionFromBefore(item.entry, item.before);
   }
   spool.usedLengthLog.splice(events[0].index, 1);
   spool.remainingLengthMm = remaining + eventUsedMm;

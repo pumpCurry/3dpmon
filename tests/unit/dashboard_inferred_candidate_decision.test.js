@@ -412,6 +412,155 @@ describe("undoInferredCandidateDecision", () => {
     expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
   });
 
+  it("色だけの filamentInfo は Confirm 前 snapshot から完全復元する", async () => {
+    mocks.monitorData.inferredCandidateStore["ic-a"] = candidate({
+      observationKeys: ["kA"],
+      candidateDebits: [
+        { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] }
+      ],
+      usedMm: 1000
+    });
+    const beforeInfo = [{ color: "#ff0000", material: "PLA", source: "preview-only" }];
+    const entry = mocks.monitorData.machines.k1.printStore.history[0];
+    entry.filamentInfo = beforeInfo.map(item => ({ ...item }));
+    expect(Object.hasOwn(entry, "filamentId")).toBe(false);
+
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[0].historyBefore).toEqual([{
+      observationKey: "kA",
+      filamentInfoPresent: true,
+      filamentInfo: beforeInfo,
+      filamentIdPresent: false,
+      filamentId: null
+    }]);
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(true);
+    expect(entry.filamentInfo).toEqual(beforeInfo);
+    expect(Object.hasOwn(entry, "filamentId")).toBe(false);
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+  });
+
+  it("複数の非O5 filamentInfo は順序と内容を保ったまま Undo で復元する", async () => {
+    mocks.monitorData.inferredCandidateStore["ic-a"] = candidate({
+      observationKeys: ["kA"],
+      candidateDebits: [
+        { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] }
+      ],
+      usedMm: 1000
+    });
+    const beforeInfo = [
+      { color: "#ff0000", material: "PLA", source: "preview-a" },
+      { color: "#00ff00", material: "PETG", source: "preview-b" }
+    ];
+    const entry = mocks.monitorData.machines.k1.printStore.history[0];
+    entry.filamentInfo = beforeInfo.map(item => ({ ...item }));
+
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    expect(entry.filamentInfo).toHaveLength(3);
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(true);
+    expect(entry.filamentInfo).toEqual(beforeInfo);
+    expect(Object.hasOwn(entry, "filamentId")).toBe(false);
+  });
+
+  it("Reassign 後の Undo でも Confirm 前の未帰属履歴情報を復元する", async () => {
+    mocks.monitorData.inferredCandidateStore["ic-a"] = candidate({
+      observationKeys: ["kA"],
+      candidateDebits: [
+        { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] }
+      ],
+      usedMm: 1000
+    });
+    const beforeInfo = [{ color: "#123456", material: "ABS", legacyHint: true }];
+    const entry = mocks.monitorData.machines.k1.printStore.history[0];
+    entry.filamentInfo = beforeInfo.map(item => ({ ...item }));
+
+    const reassigned = await reassignInferredCandidate("ic-a", "S2", { actor: "operator", nowMs: 11000 });
+    expect(reassigned.ok).toBe(true);
+    expect(entry.filamentId).toBe("S2");
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm).toBe(8000);
+    expect(entry.filamentInfo).toEqual(beforeInfo);
+    expect(Object.hasOwn(entry, "filamentId")).toBe(false);
+  });
+
+  it("snapshot に filamentId='none' が保存されている旧状態は Undo で値ごと復元する", async () => {
+    mocks.monitorData.inferredCandidateStore["ic-a"] = candidate({
+      observationKeys: ["kA"],
+      candidateDebits: [
+        { observationKey: "kA", status: "inferred-debit", usedMm: 1000, reason: "unattributed-usage", confirmedSpoolIds: [] }
+      ],
+      usedMm: 1000,
+      status: INFERRED_CANDIDATE_STATUS.CONFIRMED,
+      confirmedAt: 11000,
+      confirmedBy: "operator"
+    });
+    const beforeInfo = [{ color: "#ff0000", material: "PLA" }];
+    const entry = mocks.monitorData.machines.k1.printStore.history[0];
+    entry.filamentInfo = [{
+      ...beforeInfo[0],
+      spoolId: "S1",
+      usedMm: 1000,
+      candidateHash: "ic-a",
+      isInferredContinuityConfirmed: true
+    }];
+    entry.filamentId = "S1";
+    mocks.monitorData.filamentSpools[0].remainingLengthMm = 9000;
+    mocks.monitorData.filamentSpools[0].usedLengthLog.push({
+      eventId: "icd-manual",
+      type: "inferred-continuity-confirmed",
+      candidateHash: "ic-a",
+      host: "k1",
+      spoolId: "S1",
+      usedMm: 1000,
+      observationKeys: ["kA"],
+      historyBefore: [{
+        observationKey: "kA",
+        filamentInfoPresent: true,
+        filamentInfo: beforeInfo,
+        filamentIdPresent: true,
+        filamentId: "none"
+      }],
+      createdAt: 11000
+    });
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(true);
+    expect(entry.filamentInfo).toEqual(beforeInfo);
+    expect(entry.filamentId).toBe("none");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
+  });
+
+  it("履歴snapshotを持たない台帳 event は完全復元できないため Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    delete mocks.monitorData.filamentSpools[0].usedLengthLog[0].historyBefore;
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_history_snapshot_missing");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.machines.k1.printStore.history[0].filamentId).toBe("S1");
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
   it("reassigned candidate は assigned spool から Undo する", async () => {
     const reassigned = await reassignInferredCandidate("ic-a", "S2", { actor: "operator", nowMs: 11000 });
     expect(reassigned.ok).toBe(true);
