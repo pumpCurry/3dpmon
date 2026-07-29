@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1267 (PR #418)
+ * @version 1.390.1268 (PR #419)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-26 15:48:10
+ * @lastModified 2026-07-29 17:25:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -73,6 +73,7 @@ const REASON_LABELS = Object.freeze({
   target_spool_same_as_candidate: "候補スプールと同じため再割当てできません",
   target_spool_not_found: "対象スプールが見つかりません",
   confirmed_remaining_unknown: "確定残量が不明なため処理できません",
+  confirmed_remaining_insufficient: "確定残量が候補消費量を下回るため処理できません",
   history_entry_missing: "対象履歴が不足しています",
   history_observation_ambiguous: "対象履歴が曖昧です",
   history_already_attributed: "履歴がすでに別スプールへ確定されています",
@@ -80,6 +81,7 @@ const REASON_LABELS = Object.freeze({
   candidate_not_undoable: "この候補は取り消しできません",
   candidate_ledger_event_missing: "取り消し対象の台帳イベントが見つかりません",
   candidate_ledger_event_ambiguous: "取り消し対象の台帳イベントが曖昧です",
+  candidate_ledger_event_already_undone: "この台帳イベントはすでに取り消し済みです",
   candidate_ledger_event_spool_mismatch: "台帳イベントのスプールが一致しません",
   candidate_ledger_event_host_mismatch: "台帳イベントの端末情報が一致しません",
   candidate_history_link_missing: "取り消し対象の履歴帰属が見つかりません",
@@ -87,6 +89,7 @@ const REASON_LABELS = Object.freeze({
   candidate_history_snapshot_missing: "取り消し前の履歴情報が不足しています",
   candidate_history_snapshot_invalid: "取り消し前の履歴情報が不正です",
   candidate_history_snapshot_ambiguous: "取り消し前の履歴情報が曖昧です",
+  candidate_history_post_state_changed: "確定後に履歴情報が変更されたため取り消しできません",
   candidate_ledger_event_total_mismatch: "台帳イベントと候補の消費量が一致しません",
   invalid_reject_reason: "否認理由が不正です",
   rollback_durable_save_failed: "復旧状態の保存に失敗しました"
@@ -423,7 +426,8 @@ async function _reassignAction(vm) {
  * Undo 操作の確認ダイアログを表示する。
  *
  * 【詳細説明】
- * - Undo は O5 が確定した残量・履歴帰属・usedLengthLog を戻すため、実行前に対象と消費量を表示する。
+ * - Undo は O5 が確定した残量・履歴帰属を戻し、usedLengthLog へ逆仕訳 event を追記するため、
+ *   実行前に対象と消費量を表示する。
  * - 実際に戻せるかどうかは Decision Core / Ledger 側で再検証する。
  *
  * @private

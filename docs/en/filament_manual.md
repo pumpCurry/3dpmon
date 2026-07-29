@@ -108,10 +108,10 @@ make the decision.
 
 | Action | Behavior |
 | --- | --- |
-| **Confirm** | Applies the inferred usage to the candidate spool and updates remaining length, print history and the audit ledger. |
+| **Confirm** | Applies the inferred usage to the candidate spool and updates remaining length, print history and the audit ledger. It fails closed when confirmed remaining length is lower than the candidate debit. |
 | **Reject** | Marks the candidate as rejected without changing remaining length or print history. |
-| **Reassign** | Applies the inferred usage to a different selected spool. |
-| **Undo** | Reverses the remaining length, print history links and audit event created by a previous Confirm or Reassign. |
+| **Reassign** | Applies the inferred usage to a different selected spool. It fails closed when the target spool has insufficient confirmed remaining length. |
+| **Undo** | Reverses the remaining length and print history links created by a previous Confirm or Reassign, then appends a reversal ledger event instead of deleting the original audit event. |
 
 Candidate statuses are `pending`, `confirmed`, `rejected`, `reassigned`,
 `superseded` and `undone`. Only `pending` candidates can be confirmed,

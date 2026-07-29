@@ -14,6 +14,8 @@
  * - SATELLITE はローカル candidate/ledger を書かず、Parent へ decision request を送る。
  * - Confirm/Reassign は台帳反映、candidate 状態遷移、耐久保存を一連の transaction として扱い、
  *   保存失敗時はメモリ rollback と rollback 状態の耐久保存を試みる。
+ * - Parent/Standalone のローカル decision は全体直列化し、保存待ち中の別 decision が rollback
+ *   snapshot をまたいで混線しないようにする。
  * - Undo も同じ transaction 境界で、O5 が追加した台帳 event と履歴 attribution だけを逆反映する。
  *
  * 【公開関数一覧】
@@ -24,9 +26,9 @@
  * - {@link reassignInferredCandidate}：別 spool へ再割当てして推定使用量を確定する
  * - {@link undoInferredCandidateDecision}：確定済み candidate の台帳反映を取り消す
  *
- * @version 1.390.1265 (PR #417)
+ * @version 1.390.1268 (PR #419)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-26 00:03:27
+ * @lastModified 2026-07-29 17:25:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -67,6 +69,38 @@ const ALLOWED_REJECT_REASONS = new Set([
   "operator-decision",
   "other"
 ]);
+
+/**
+ * Parent/Standalone で実行する O5 decision の直列化キュー。
+ *
+ * 【詳細説明】
+ * - JavaScript は単一スレッドだが、`await saveUnifiedStorageDurably()` 中には別の UI/RPC 操作が
+ *   開始できるため、同一 spool の rollback snapshot が後続 decision を巻き戻す危険がある。
+ * - 初期実装では host/spool 単位ではなく全 O5 decision を直列化し、Confirm/Reassign/Reject/Undo の
+ *   競合範囲を安全側で閉じる。
+ *
+ * @type {Promise<void>}
+ */
+let _decisionQueue = Promise.resolve();
+
+/**
+ * ローカル O5 decision を全体キューへ投入する。
+ *
+ * 【詳細説明】
+ * - 直前 decision が成功しても失敗しても、次の decision は必ずその後に開始する。
+ * - 呼び出し元には task の戻り値をそのまま返し、キュー内部では rejection を吸収して後続が詰まらない
+ *   ようにする。
+ *
+ * @private
+ * @function _enqueueDecision
+ * @param {Function} task - 実行する decision 本体。
+ * @returns {Promise<*>} decision 本体の戻り値。
+ */
+function _enqueueDecision(task) {
+  const run = _decisionQueue.then(task, task);
+  _decisionQueue = run.catch(() => {});
+  return run;
+}
 
 /**
  * JSON 互換オブジェクトを deep clone する。
@@ -420,9 +454,20 @@ export function canSubmitLedgerDecision() {
  * const result = await confirmInferredCandidate("ic-abcd", { actor: "operator" });
  */
 export async function confirmInferredCandidate(candidateHash, options = {}) {
-  if (_isRelayChild()) {
-    return _requestLedgerDecision("confirmInferredCandidate", candidateHash, {}, options);
-  }
+  if (_isRelayChild()) return _requestLedgerDecision("confirmInferredCandidate", candidateHash, {}, options);
+  return _enqueueDecision(() => _confirmInferredCandidateLocal(candidateHash, options));
+}
+
+/**
+ * candidate spool のまま推定使用量をローカル確定する。
+ *
+ * @private
+ * @function _confirmInferredCandidateLocal
+ * @param {string} candidateHash - 確定する candidateHash。
+ * @param {{actor?:string,nowMs?:number,save?:boolean}} [options] - 操作者・clock・保存オプション。
+ * @returns {Promise<Object>} decision 結果。
+ */
+async function _confirmInferredCandidateLocal(candidateHash, options = {}) {
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   const pending = _validatePendingCandidate(candidateHash);
@@ -482,6 +527,20 @@ export async function rejectInferredCandidate(candidateHash, options = {}) {
       note: options.note || ""
     }, options);
   }
+  return _enqueueDecision(() => _rejectInferredCandidateLocal(candidateHash, options));
+}
+
+/**
+ * pending candidate をローカル否認する。
+ *
+ * @private
+ * @function _rejectInferredCandidateLocal
+ * @param {string} candidateHash - 否認する candidateHash。
+ * @param {{actor?:string,reason?:string,note?:string,nowMs?:number,save?:boolean}} [options]
+ *   - 操作者・否認理由・clock・保存オプション。
+ * @returns {Promise<Object>} decision 結果。
+ */
+async function _rejectInferredCandidateLocal(candidateHash, options = {}) {
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   const rejectReason = options.reason || "operator-decision";
@@ -543,6 +602,20 @@ export async function reassignInferredCandidate(candidateHash, targetSpoolId, op
       targetSpoolId: String(targetSpoolId)
     }, options);
   }
+  return _enqueueDecision(() => _reassignInferredCandidateLocal(candidateHash, targetSpoolId, options));
+}
+
+/**
+ * pending candidate を別 spool へローカル再割当てして確定する。
+ *
+ * @private
+ * @function _reassignInferredCandidateLocal
+ * @param {string} candidateHash - 再割当てする candidateHash。
+ * @param {string} targetSpoolId - 再割当て先 spool ID。
+ * @param {{actor?:string,nowMs?:number,save?:boolean}} [options] - 操作者・clock・保存オプション。
+ * @returns {Promise<Object>} decision 結果。
+ */
+async function _reassignInferredCandidateLocal(candidateHash, targetSpoolId, options = {}) {
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   if (!targetSpoolId) return { ok: false, reason: "target_spool_required", candidateHash };
@@ -598,9 +671,20 @@ export async function reassignInferredCandidate(candidateHash, targetSpoolId, op
  * const result = await undoInferredCandidateDecision("ic-abcd", { actor: "operator" });
  */
 export async function undoInferredCandidateDecision(candidateHash, options = {}) {
-  if (_isRelayChild()) {
-    return _requestLedgerDecision("undoInferredCandidateDecision", candidateHash, {}, options);
-  }
+  if (_isRelayChild()) return _requestLedgerDecision("undoInferredCandidateDecision", candidateHash, {}, options);
+  return _enqueueDecision(() => _undoInferredCandidateDecisionLocal(candidateHash, options));
+}
+
+/**
+ * confirmed / reassigned candidate の確定台帳反映をローカルで取り消す。
+ *
+ * @private
+ * @function _undoInferredCandidateDecisionLocal
+ * @param {string} candidateHash - Undo する candidateHash。
+ * @param {{actor?:string,nowMs?:number,save?:boolean}} [options] - 操作者・clock・保存オプション。
+ * @returns {Promise<Object>} decision 結果。
+ */
+async function _undoInferredCandidateDecisionLocal(candidateHash, options = {}) {
   const guard = _decisionGuard(candidateHash);
   if (guard) return guard;
   const undoable = _validateUndoableCandidate(candidateHash);

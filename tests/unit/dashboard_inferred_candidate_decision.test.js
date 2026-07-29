@@ -131,6 +131,22 @@ function candidate(over = {}) {
   };
 }
 
+/**
+ * 手動で resolve/reject できる Promise を作る。
+ *
+ * @function deferred
+ * @returns {{promise:Promise<*>,resolve:Function,reject:Function}} deferred Promise。
+ */
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   mocks.saveUnifiedStorageDurably.mockReset();
   mocks.saveUnifiedStorageDurably.mockResolvedValue({ ok: true, backend: "test", reason: "saved" });
@@ -284,6 +300,18 @@ describe("confirmInferredCandidate", () => {
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
+  it("対象 spool の確定残量が candidate 使用量未満なら fail-closed する", async () => {
+    mocks.monitorData.filamentSpools[0].remainingLengthMm = 100;
+
+    const result = await confirmInferredCandidate("ic-a", { nowMs: 11000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("confirmed_remaining_insufficient");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(100);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
   it("履歴が既に帰属済みなら二重反映しない", async () => {
     mocks.monitorData.machines.k1.printStore.history[0].filamentInfo = [{ spoolId: "S9", usedMm: 1000 }];
 
@@ -327,6 +355,78 @@ describe("confirmInferredCandidate", () => {
       action: "confirm",
       reason: "rollback_durable_save_failed"
     });
+  });
+
+  it("同時 decision は直列化され、先行失敗rollback後に後続を開始する", async () => {
+    mocks.monitorData.machines.k1.printStore.history.push(job("kC", 1500), job("kD", 1500));
+    mocks.monitorData.inferredCandidateStore["ic-b"] = candidate({
+      candidateHash: "ic-b",
+      observationKeys: ["kC", "kD"],
+      candidateDebits: [
+        { observationKey: "kC", status: "inferred-debit", usedMm: 1500, reason: "unattributed-usage", confirmedSpoolIds: [] },
+        { observationKey: "kD", status: "inferred-debit", usedMm: 1500, reason: "unattributed-usage", confirmedSpoolIds: [] }
+      ],
+      events: [{ type: "created", at: 9000, status: INFERRED_CANDIDATE_STATUS.PENDING, usedMm: 3000 }]
+    });
+    const firstSave = deferred();
+    mocks.saveUnifiedStorageDurably
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockResolvedValueOnce({ ok: true, backend: "indexedDB", reason: "rollback_saved" })
+      .mockResolvedValueOnce({ ok: true, backend: "indexedDB", reason: "saved-b" });
+
+    const first = confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    await Promise.resolve();
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+
+    const second = confirmInferredCandidate("ic-b", { actor: "operator", nowMs: 12000 });
+    await Promise.resolve();
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+    expect(mocks.monitorData.inferredCandidateStore["ic-b"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+
+    firstSave.resolve({ ok: false, backend: "indexedDB", reason: "idb_fail" });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.ok).toBe(false);
+    expect(firstResult.reason).toBe("idb_fail");
+    expect(secondResult.ok).toBe(true);
+    expect(secondResult.reason).toBe("confirmed");
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+    expect(mocks.monitorData.inferredCandidateStore["ic-b"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog).toHaveLength(1);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[0].candidateHash).toBe("ic-b");
+  });
+
+  it("先行 decision 成功後、後続 decision は更新後 remaining を基準に処理する", async () => {
+    mocks.monitorData.machines.k1.printStore.history.push(job("kC", 1500), job("kD", 1500));
+    mocks.monitorData.inferredCandidateStore["ic-b"] = candidate({
+      candidateHash: "ic-b",
+      observationKeys: ["kC", "kD"],
+      candidateDebits: [
+        { observationKey: "kC", status: "inferred-debit", usedMm: 1500, reason: "unattributed-usage", confirmedSpoolIds: [] },
+        { observationKey: "kD", status: "inferred-debit", usedMm: 1500, reason: "unattributed-usage", confirmedSpoolIds: [] }
+      ],
+      events: [{ type: "created", at: 9000, status: INFERRED_CANDIDATE_STATUS.PENDING, usedMm: 3000 }]
+    });
+    const firstSave = deferred();
+    mocks.saveUnifiedStorageDurably
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockResolvedValueOnce({ ok: true, backend: "indexedDB", reason: "saved-b" });
+
+    const first = confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    await Promise.resolve();
+    const second = confirmInferredCandidate("ic-b", { actor: "operator", nowMs: 12000 });
+    await Promise.resolve();
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+
+    firstSave.resolve({ ok: true, backend: "indexedDB", reason: "saved-a" });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.ok).toBe(true);
+    expect(secondResult.ok).toBe(true);
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(4000);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog.map(item => item.candidateHash)).toEqual(["ic-a", "ic-b"]);
   });
 });
 
@@ -384,6 +484,18 @@ describe("reassignInferredCandidate", () => {
     expect(result.reason).toBe("target_spool_same_as_candidate");
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
+
+  it("再割当て先 spool の確定残量が candidate 使用量未満なら fail-closed する", async () => {
+    mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm = 100;
+
+    const result = await reassignInferredCandidate("ic-a", "S2", { actor: "operator", nowMs: 11000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("confirmed_remaining_insufficient");
+    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm).toBe(100);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
 });
 
 describe("undoInferredCandidateDecision", () => {
@@ -397,7 +509,15 @@ describe("undoInferredCandidateDecision", () => {
     expect(result.ok).toBe(true);
     expect(result.reason).toBe("undone");
     expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
-    expect(mocks.monitorData.filamentSpools[0].usedLengthLog).toEqual([]);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog).toHaveLength(2);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[0].type).toBe("inferred-continuity-confirmed");
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[1]).toMatchObject({
+      type: "inferred-continuity-undone",
+      reversesEventId: mocks.monitorData.filamentSpools[0].usedLengthLog[0].eventId,
+      candidateHash: "ic-a",
+      usedMm: 3000,
+      actor: "operator"
+    });
     const history = mocks.monitorData.machines.k1.printStore.history;
     expect(history[0].filamentId).toBeUndefined();
     expect(history[0].filamentInfo).toBeUndefined();
@@ -571,9 +691,50 @@ describe("undoInferredCandidateDecision", () => {
     expect(result.ok).toBe(true);
     expect(mocks.monitorData.filamentSpools.find(s => s.id === "S1").remainingLengthMm).toBe(10000);
     expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm).toBe(8000);
-    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").usedLengthLog).toEqual([]);
+    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").usedLengthLog).toHaveLength(2);
+    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").usedLengthLog[1]).toMatchObject({
+      type: "inferred-continuity-undone",
+      candidateHash: "ic-a"
+    });
     expect(mocks.monitorData.machines.k1.printStore.history[0].filamentId).toBeUndefined();
     expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.UNDONE);
+  });
+
+  it("Confirm 後に別metadataが履歴へ追加された場合は Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    mocks.monitorData.machines.k1.printStore.history[0].filamentInfo.push({
+      spoolId: "S9",
+      usedMm: 1,
+      source: "post-confirm-edit"
+    });
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_history_post_state_changed");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("逆仕訳eventが既にある台帳eventは二重Undoしない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    const undone = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+    expect(undone.ok).toBe(true);
+    mocks.monitorData.inferredCandidateStore["ic-a"].status = INFERRED_CANDIDATE_STATUS.CONFIRMED;
+    mocks.monitorData.inferredCandidateStore["ic-a"].resolvedAt = 11000;
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 13000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_ledger_event_already_undone");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog).toHaveLength(2);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
   it("未反映 status の candidate は Undo しない", async () => {
