@@ -275,6 +275,18 @@ describe("confirmInferredCandidate", () => {
       isInferredContinuityConfirmed: true,
       candidateHash: "ic-a"
     });
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[0].historyAfter[0]).toMatchObject({
+      observationKey: "kA",
+      filamentInfoPresent: true,
+      filamentIdPresent: true,
+      filamentId: "S1"
+    });
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[0].historyAfter[0].filamentInfo[0]).toMatchObject({
+      spoolId: "S1",
+      usedMm: 1000,
+      isInferredContinuityConfirmed: true,
+      candidateHash: "ic-a"
+    });
     expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
     expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
   });
@@ -654,6 +666,13 @@ describe("undoInferredCandidateDecision", () => {
         filamentIdPresent: true,
         filamentId: "none"
       }],
+      historyAfter: [{
+        observationKey: "kA",
+        filamentInfoPresent: true,
+        filamentInfo: entry.filamentInfo.map(item => ({ ...item })),
+        filamentIdPresent: true,
+        filamentId: "S1"
+      }],
       createdAt: 11000
     });
     mocks.saveUnifiedStorageDurably.mockClear();
@@ -708,6 +727,60 @@ describe("undoInferredCandidateDecision", () => {
       usedMm: 1,
       source: "post-confirm-edit"
     });
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_history_post_state_changed");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["material", "PETG"],
+    ["filamentColor", "#00ff00"],
+    ["colorName", "green"],
+    ["usedMm", 9999]
+  ])("Confirm 後に同一 filamentInfo 行の %s が変更された場合は Undo しない", async (field, value) => {
+    const beforeInfo = [{ color: "#ff0000", material: "PLA", filamentColor: "#ff0000", colorName: "red" }];
+    const entry = mocks.monitorData.machines.k1.printStore.history[0];
+    entry.filamentInfo = beforeInfo.map(item => ({ ...item }));
+
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    entry.filamentInfo[0][field] = value;
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_history_post_state_changed");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("Confirm 後に filamentId が削除された場合は Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    delete mocks.monitorData.machines.k1.printStore.history[0].filamentId;
+    mocks.saveUnifiedStorageDurably.mockClear();
+
+    const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("candidate_history_post_state_changed");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(7000);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("Confirm 後に filamentId が null へ変更された場合は Undo しない", async () => {
+    const confirmed = await confirmInferredCandidate("ic-a", { actor: "operator", nowMs: 11000 });
+    expect(confirmed.ok).toBe(true);
+    mocks.monitorData.machines.k1.printStore.history[0].filamentId = null;
     mocks.saveUnifiedStorageDurably.mockClear();
 
     const result = await undoInferredCandidateDecision("ic-a", { actor: "operator", nowMs: 12000 });

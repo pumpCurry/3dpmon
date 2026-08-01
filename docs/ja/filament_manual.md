@@ -86,7 +86,7 @@ monitorData.hostSpoolMap = {
 | **Confirm** | 候補スプールへ推定消費量を確定反映し、残量・履歴・台帳イベントを更新します。確定残量が候補消費量より少ない場合は処理しません |
 | **Reject** | 候補を否認します。残量や履歴は変更しません |
 | **Reassign** | 候補とは別のスプールへ推定消費量を確定反映します。再割当て先の確定残量が不足する場合は処理しません |
-| **Undo** | Confirm / Reassign 済みの候補について、O5 が追加した残量・履歴帰属を戻し、台帳には逆仕訳イベントを追記します |
+| **Undo** | Confirm / Reassign 済みの候補について、O5 が追加した残量・履歴帰属を戻し、台帳には逆仕訳イベントを追記します。元の決定直後に記録した履歴状態と現在の履歴状態が完全一致しない場合は、後続変更を消さないため処理しません |
 
 候補には `pending`, `confirmed`, `rejected`, `reassigned`, `superseded`, `undone` の状態があります。`pending` だけが Confirm / Reject / Reassign の対象で、`confirmed` と `reassigned` だけが Undo の対象です。
 

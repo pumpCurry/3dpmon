@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1268 (PR #419)
+ * @version 1.390.1269 (PR #419)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-29 17:25:57
+ * @lastModified 2026-08-01 19:47:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -89,6 +89,9 @@ const REASON_LABELS = Object.freeze({
   candidate_history_snapshot_missing: "取り消し前の履歴情報が不足しています",
   candidate_history_snapshot_invalid: "取り消し前の履歴情報が不正です",
   candidate_history_snapshot_ambiguous: "取り消し前の履歴情報が曖昧です",
+  candidate_history_after_snapshot_missing: "確定後の履歴検証情報が不足しています",
+  candidate_history_after_snapshot_invalid: "確定後の履歴検証情報が不正です",
+  candidate_history_after_snapshot_ambiguous: "確定後の履歴検証情報が曖昧です",
   candidate_history_post_state_changed: "確定後に履歴情報が変更されたため取り消しできません",
   candidate_ledger_event_total_mismatch: "台帳イベントと候補の消費量が一致しません",
   invalid_reject_reason: "否認理由が不正です",

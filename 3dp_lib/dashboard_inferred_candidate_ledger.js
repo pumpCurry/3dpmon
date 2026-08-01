@@ -19,9 +19,9 @@
  * - {@link undoInferredCandidateLedger}：確定済み candidate の台帳反映を取り消す
  * - {@link rollbackInferredCandidateLedger}：確定反映前 snapshot へメモリ状態を戻す
  *
- * @version 1.390.1268 (PR #419)
+ * @version 1.390.1269 (PR #419)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-29 17:25:57
+ * @lastModified 2026-08-01 19:47:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -54,34 +54,6 @@ export const INFERRED_DECISION_LEDGER_EVENT_TYPE = "inferred-continuity-confirme
  * @constant {string}
  */
 export const INFERRED_DECISION_UNDO_LEDGER_EVENT_TYPE = "inferred-continuity-undone";
-
-/**
- * O5 attribution として履歴行へ追加され得るキー。
- *
- * 【詳細説明】
- * - Undo 前に Confirm/Reassign 後の履歴行が期待状態から変化していないか検証するために使う。
- * - Confirm 前から存在したキーは snapshot 側の値と比較し、O5 が追加したキーだけを許容する。
- *
- * @constant {Set<string>}
- */
-const O5_ATTRIBUTION_KEYS = new Set([
-  "spoolId",
-  "serialNo",
-  "spoolName",
-  "colorName",
-  "filamentColor",
-  "material",
-  "spoolCount",
-  "expectedRemain",
-  "usedMm",
-  "isOfflineInferred",
-  "isInferredContinuityConfirmed",
-  "candidateHash",
-  "decisionType",
-  "originalCandidateSpoolId",
-  "confirmedAt",
-  "confirmedBy"
-]);
 
 /**
  * JSON 互換オブジェクトを deep clone する。
@@ -351,11 +323,68 @@ function _captureHistoryBefore(entry, observationKey) {
 }
 
 /**
- * ledger event の履歴snapshotを observation key で一意に引ける Map へ変換する。
+ * O5 が履歴行へ attribution を書いた直後の表示・後方互換フィールドを snapshot 化する。
  *
  * 【詳細説明】
- * - snapshot が無い旧形式 event では、Undo 後の履歴表示を完全復元できないため fail-closed する。
+ * - Undo は Confirm/Reassign 直後の状態から後続変更が入っていない場合だけ実行できる。
+ * - `filamentInfo` と `filamentId` は値だけでなくプロパティ存在も比較対象にし、削除や null 化を
+ *   安全に検出する。
+ *
+ * @private
+ * @function _captureHistoryAfter
+ * @param {Object} entry - Confirm/Reassign 後の履歴行。
+ * @param {string} observationKey - candidate debit の observation key。
+ * @returns {Object} Undo 前検証用 snapshot。
+ */
+function _captureHistoryAfter(entry, observationKey) {
+  const hasFilamentInfo = Object.hasOwn(entry, "filamentInfo");
+  const hasFilamentId = Object.hasOwn(entry, "filamentId");
+  return {
+    observationKey: String(observationKey ?? ""),
+    filamentInfoPresent: hasFilamentInfo,
+    filamentInfo: hasFilamentInfo ? _clone(entry.filamentInfo) : null,
+    filamentIdPresent: hasFilamentId,
+    filamentId: hasFilamentId ? _clone(entry.filamentId) : null
+  };
+}
+
+/**
+ * ledger event の履歴snapshot配列を observation key で一意に引ける Map へ変換する。
+ *
+ * 【詳細説明】
+ * - snapshot が無い旧形式 event では、Undo 後の履歴表示や後続変更検出を保証できないため
+ *   fail-closed する。
  * - 同一 observation key が複数ある場合も、どの変更前状態へ戻すべきか決められないため拒否する。
+ *
+ * @private
+ * @function _historySnapshotMap
+ * @param {Object} event - spool.usedLengthLog 内の O5 decision event。
+ * @param {string} fieldName - snapshot 配列の event field 名。
+ * @param {string} missingReason - snapshot が存在しない場合の理由。
+ * @param {string} invalidReason - snapshot が不正な場合の理由。
+ * @param {string} ambiguousReason - snapshot が曖昧な場合の理由。
+ * @returns {{ok:boolean,reason:?string,map:Map<string,Object>}} snapshot Map。
+ */
+function _historySnapshotMap(event, fieldName, missingReason, invalidReason, ambiguousReason) {
+  const items = event?.[fieldName];
+  if (!Array.isArray(items)) {
+    return { ok: false, reason: missingReason, map: new Map() };
+  }
+  const map = new Map();
+  for (const item of items) {
+    const key = String(item?.observationKey ?? "");
+    if (!key) return { ok: false, reason: invalidReason, map: new Map() };
+    if (map.has(key)) return { ok: false, reason: ambiguousReason, map: new Map() };
+    map.set(key, item);
+  }
+  return { ok: true, reason: null, map };
+}
+
+/**
+ * ledger event の変更前履歴snapshotを observation key で一意に引ける Map へ変換する。
+ *
+ * 【詳細説明】
+ * - 変更前 snapshot は Undo の復元元であり、欠損している event は安全に取り消せない。
  *
  * @private
  * @function _historyBeforeMap
@@ -363,17 +392,35 @@ function _captureHistoryBefore(entry, observationKey) {
  * @returns {{ok:boolean,reason:?string,map:Map<string,Object>}} snapshot Map。
  */
 function _historyBeforeMap(event) {
-  if (!Array.isArray(event?.historyBefore)) {
-    return { ok: false, reason: "candidate_history_snapshot_missing", map: new Map() };
-  }
-  const map = new Map();
-  for (const item of event.historyBefore) {
-    const key = String(item?.observationKey ?? "");
-    if (!key) return { ok: false, reason: "candidate_history_snapshot_invalid", map: new Map() };
-    if (map.has(key)) return { ok: false, reason: "candidate_history_snapshot_ambiguous", map: new Map() };
-    map.set(key, item);
-  }
-  return { ok: true, reason: null, map };
+  return _historySnapshotMap(
+    event,
+    "historyBefore",
+    "candidate_history_snapshot_missing",
+    "candidate_history_snapshot_invalid",
+    "candidate_history_snapshot_ambiguous"
+  );
+}
+
+/**
+ * ledger event の変更直後履歴snapshotを observation key で一意に引ける Map へ変換する。
+ *
+ * 【詳細説明】
+ * - 変更直後 snapshot は Undo 前の後続変更検出に使う。
+ * - 欠損している旧形式 event は、合法的な後続 metadata 更新を消さないため fail-closed する。
+ *
+ * @private
+ * @function _historyAfterMap
+ * @param {Object} event - spool.usedLengthLog 内の O5 decision event。
+ * @returns {{ok:boolean,reason:?string,map:Map<string,Object>}} snapshot Map。
+ */
+function _historyAfterMap(event) {
+  return _historySnapshotMap(
+    event,
+    "historyAfter",
+    "candidate_history_after_snapshot_missing",
+    "candidate_history_after_snapshot_invalid",
+    "candidate_history_after_snapshot_ambiguous"
+  );
 }
 
 /**
@@ -417,24 +464,24 @@ function _sameJson(a, b) {
 }
 
 /**
- * Undo 対象履歴行が Confirm/Reassign 直後の期待状態から変化していないか検証する。
+ * Undo 対象履歴行が Confirm/Reassign 直後の snapshot から変化していないか検証する。
  *
  * 【詳細説明】
  * - Undo は Confirm 前 snapshot へ戻すため、Confirm 後に別経路が合法 metadata を追加している場合、
  *   無条件に復元するとその変更を消してしまう。
- * - そこで、現在の履歴行が「snapshot + O5 attribution」だけで構成されているかを確認する。
- * - 色だけの既存 filamentInfo を同じ行へ昇格したケースと、O5 attribution を末尾追加したケースの
- *   両方を許容する。
+ * - Confirm/Reassign 直後に保存した `historyAfter` と現在値を完全比較し、material や colorName の
+ *   ように O5 も触るキーへ後続変更が入った場合も fail-closed する。
+ * - `filamentId` はプロパティの存在も比較し、削除や null 化された状態を見逃さない。
  *
  * @private
  * @function _validateHistoryPostStateBeforeUndo
  * @param {Object} entry - 現在の履歴行。
- * @param {Object} before - Confirm/Reassign 前 snapshot。
+ * @param {Object} after - Confirm/Reassign 直後 snapshot。
  * @param {string} targetSpoolId - Undo 対象 spool ID。
  * @param {string} candidateHash - Undo 対象 candidateHash。
  * @returns {{ok:boolean,reason:string}} 検証結果。
  */
-function _validateHistoryPostStateBeforeUndo(entry, before, targetSpoolId, candidateHash) {
+function _validateHistoryPostStateBeforeUndo(entry, after, targetSpoolId, candidateHash) {
   const info = Array.isArray(entry?.filamentInfo) ? entry.filamentInfo : [];
   const targetId = String(targetSpoolId);
   const matches = [];
@@ -449,35 +496,9 @@ function _validateHistoryPostStateBeforeUndo(entry, before, targetSpoolId, candi
   }
   if (matches.length === 0) return { ok: false, reason: "candidate_history_link_missing" };
   if (matches.length > 1) return { ok: false, reason: "candidate_history_link_ambiguous" };
-  if (entry.filamentId != null && String(entry.filamentId) !== targetId) {
-    return { ok: false, reason: "candidate_history_post_state_changed" };
-  }
 
-  const beforeInfo = before?.filamentInfoPresent === true && Array.isArray(before.filamentInfo)
-    ? before.filamentInfo
-    : [];
-  const targetIndex = matches[0];
-  const withoutTarget = info.filter((_, index) => index !== targetIndex);
-  if (_sameJson(withoutTarget, beforeInfo)) return { ok: true, reason: "history_post_state_ok" };
-  if (info.length !== beforeInfo.length) return { ok: false, reason: "candidate_history_post_state_changed" };
-
-  for (let index = 0; index < info.length; index++) {
-    const current = info[index] || {};
-    const expected = beforeInfo[index] || {};
-    if (index !== targetIndex) {
-      if (!_sameJson(current, expected)) return { ok: false, reason: "candidate_history_post_state_changed" };
-      continue;
-    }
-    for (const key of Object.keys(expected)) {
-      if (O5_ATTRIBUTION_KEYS.has(key)) continue;
-      if (!_sameJson(current[key], expected[key])) return { ok: false, reason: "candidate_history_post_state_changed" };
-    }
-    for (const key of Object.keys(current)) {
-      if (!(key in expected) && !O5_ATTRIBUTION_KEYS.has(key)) {
-        return { ok: false, reason: "candidate_history_post_state_changed" };
-      }
-    }
-  }
+  const current = _captureHistoryAfter(entry, after?.observationKey);
+  if (!_sameJson(current, after)) return { ok: false, reason: "candidate_history_post_state_changed" };
   return { ok: true, reason: "history_post_state_ok" };
 }
 
@@ -643,6 +664,7 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
   for (const item of updates) {
     _linkHistoryEntryToSpool(item.entry, spool, item.usedMm, metadata);
   }
+  const historyAfter = updates.map(item => _captureHistoryAfter(item.entry, item.debit.observationKey));
 
   spool.remainingLengthMm = Math.max(0, remaining - total.usedMm);
   if (!Array.isArray(spool.usedLengthLog)) spool.usedLengthLog = [];
@@ -658,6 +680,7 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
     usedMm: total.usedMm,
     observationKeys: Array.isArray(candidateRecord.observationKeys) ? candidateRecord.observationKeys.map(String).sort() : [],
     historyBefore,
+    historyAfter,
     createdAt: now
   };
   spool.usedLengthLog.push(event);
@@ -727,6 +750,8 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
   }
   const beforeMap = _historyBeforeMap(events[0].event);
   if (!beforeMap.ok) return { ok: false, reason: beforeMap.reason, snapshot: null, spool };
+  const afterMap = _historyAfterMap(events[0].event);
+  if (!afterMap.ok) return { ok: false, reason: afterMap.reason, snapshot: null, spool };
 
   const byKey = _historyIndexByObservationKey(history);
   const updates = [];
@@ -746,7 +771,9 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
     const entry = history[index];
     const before = beforeMap.map.get(key);
     if (!before) return { ok: false, reason: "candidate_history_snapshot_missing", snapshot: null, spool, observationKey: key };
-    const probe = _validateHistoryPostStateBeforeUndo(entry, before, targetSpoolId, candidateRecord.candidateHash);
+    const after = afterMap.map.get(key);
+    if (!after) return { ok: false, reason: "candidate_history_after_snapshot_missing", snapshot: null, spool, observationKey: key };
+    const probe = _validateHistoryPostStateBeforeUndo(entry, after, targetSpoolId, candidateRecord.candidateHash);
     if (!probe.ok) return { ok: false, reason: probe.reason, snapshot: null, spool, observationKey: key };
     updates.push({ index, entry, debit, before });
   }
