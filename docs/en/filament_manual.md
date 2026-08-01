@@ -128,9 +128,10 @@ repair status surface. This is a read-only diagnostic view for states
 such as `inferredDecisionRecoveryRequired`, `ledgerRepairRequired` and
 `mountHistoryRejectedEvents`, where the app must not continue
 automatically. It shows the related candidate, host, spool, save-failure
-reason and quarantined mountHistory events. In #418 this surface does not
-run repair or clear flags; those actions are intentionally left for the
-later Recovery Actions slice.
+reason and quarantined mountHistory events. In Relay setups, Satellites
+mirror this diagnostic state from the Parent authority. In #418 this
+surface does not run repair or clear flags; those actions are intentionally
+left for the later Recovery Actions slice.
 
 ### Registered Filament Tab
 

@@ -9,7 +9,7 @@
  *
  * 【機能内容サマリ】
  * - aggregator 更新後に dirty keys を収集し、リレーサーバにブロードキャスト
- *   （filamentSpools / hostSpoolMap / mountHistory の共有状態を含む）
+ *   （filamentSpools / hostSpoolMap / mountHistory / recovery 診断の共有状態を含む）
  * - 子（satellite）からのコマンド/フィラメント操作 RPC を受信し親側で実行
  * - 子（satellite）からの O5 inferred candidate decision request を親側で実行
  * - 新規子クライアント接続時にフルスナップショットを送信
@@ -21,9 +21,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1264 (PR #417)
+ * @version 1.390.1268 (PR #418)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-07-25 22:09:00
+ * @lastModified 2026-08-01 23:20:09
  * -----------------------------------------------------------
  */
 
@@ -51,6 +51,9 @@ let _prevPendingHash = "";
 
 /** 前回ブロードキャストした inferredCandidateStore（オフライン推定候補）のハッシュ（変更検出） */
 let _prevInferredCandidateHash = "";
+
+/** 前回ブロードキャストした recovery / repair 診断状態のハッシュ（変更検出） */
+let _prevRecoveryHash = "";
 
 /** 前回ブロードキャストした ItemKeeper 設定のハッシュ（変更検出） */
 let _prevIkHash = "";
@@ -690,6 +693,23 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // ★ #418: recovery / repair 診断は Parent が権威を持つ。
+  //   Candidate Center の read-only 診断を Satellite でも親と一致させるため、
+  //   candidate store とは別ハッシュで低頻度同期する。
+  const recoveryHash = _quickHash(
+    monitorData.inferredDecisionRecoveryRequired || null,
+    monitorData.ledgerRepairRequired || {},
+    monitorData.mountHistoryRejectedEvents || []
+  );
+  if (recoveryHash !== _prevRecoveryHash) {
+    _prevRecoveryHash = recoveryHash;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.inferredDecisionRecoveryRequired = monitorData.inferredDecisionRecoveryRequired || null;
+    sharedDelta.ledgerRepairRequired = monitorData.ledgerRepairRequired || {};
+    sharedDelta.mountHistoryRejectedEvents = monitorData.mountHistoryRejectedEvents || [];
+    hasChanges = true;
+  }
+
   // ★ 監査 P0(第2報): フィラメント補助ドメイン（在庫・カスタムプリセット・表示/
   //   お気に入り・切れ文脈・serialCounter・使用履歴）の変更検出。従来は
   //   filamentSpools/hostSpoolMap/mountHistory のみ共有していたため、これらが親子で
@@ -799,6 +819,10 @@ function _buildFullSnapshot() {
     pendingUnattributedUsageArchive: monitorData.pendingUnattributedUsageArchive || {},
     // ★ #412-O4: 子は分類済み candidate と推定量だけを受け取り、生観測は受け取らない。
     inferredCandidateStore: monitorData.inferredCandidateStore || {},
+    // ★ #418: Candidate Center の Recovery / repair 診断も親権威で子へ同梱する。
+    inferredDecisionRecoveryRequired: monitorData.inferredDecisionRecoveryRequired || null,
+    ledgerRepairRequired: monitorData.ledgerRepairRequired || {},
+    mountHistoryRejectedEvents: monitorData.mountHistoryRejectedEvents || [],
     // ★ 監査 P0(第2報): フィラメント補助ドメインをスナップショットにも同梱（親=権威）。
     filamentInventory: monitorData.filamentInventory || [],
     userPresets: monitorData.userPresets || [],

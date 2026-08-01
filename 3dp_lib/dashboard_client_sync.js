@@ -10,7 +10,7 @@
  * 【機能内容サマリ】
  * - 親リレーサーバへの WebSocket 接続
  * - relay-snapshot / relay-delta の受信と monitorData への反映
- *   （フィラメント共有状態は親権威の全置換 + mountHistory 同期）
+ *   （フィラメント共有状態は親権威の全置換 + mountHistory / recovery 診断同期）
  * - satellite モードでのコマンド/フィラメント操作の送信（操作は親へ RPC 委譲）
  * - O5 inferred candidate decision request を Parent へ送信
  * - 初回接続は常に readonly。?relay=satellite 要求時は自動昇格リクエスト（PIN 保護）
@@ -21,9 +21,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1264 (PR #417)
+ * @version 1.390.1268 (PR #418)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-07-25 22:09:00
+ * @lastModified 2026-08-01 23:20:09
  * -----------------------------------------------------------
  */
 
@@ -297,7 +297,7 @@ function _applyRelayPrintStore(hostname, ps) {
 }
 
 /**
- * 親から受信した共有フィラメント状態（filamentSpools / hostSpoolMap / mountHistory）を
+ * 親から受信した共有フィラメント状態（filamentSpools / hostSpoolMap / mountHistory / recovery 診断）を
  * monitorData へ「全置換」で適用する。
  *
  * 【詳細説明】
@@ -313,7 +313,7 @@ function _applyRelayPrintStore(hostname, ps) {
  * ※ モジュール内部用だが、マージ規則の回帰テストのために export している。
  *
  * @function _applySharedFilamentState
- * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object}} shared
+ * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object, inferredDecisionRecoveryRequired?:Object|null, ledgerRepairRequired?:Object, mountHistoryRejectedEvents?:Array<Object>}} shared
  *   - 受信した共有データ
  * @returns {void}
  */
@@ -366,6 +366,28 @@ export function _applySharedFilamentState(shared) {
     for (const k of Object.keys(store)) delete store[k];
     Object.assign(store, shared.inferredCandidateStore);
   }
+  // ★ #418: Recovery / repair 診断も親が権威。Satellite ではローカル復旧状態を推測せず、
+  //   親が送った状態をそのまま read-only 表示へ使う。欠落時は部分deltaとして不変、
+  //   null/{} / [] は「親で解消済み」の明示状態として反映する。
+  if (Object.prototype.hasOwnProperty.call(shared, "inferredDecisionRecoveryRequired")) {
+    monitorData.inferredDecisionRecoveryRequired =
+      shared.inferredDecisionRecoveryRequired && typeof shared.inferredDecisionRecoveryRequired === "object"
+        ? { ...shared.inferredDecisionRecoveryRequired }
+        : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(shared, "ledgerRepairRequired")
+      && shared.ledgerRepairRequired
+      && typeof shared.ledgerRepairRequired === "object") {
+    if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
+      monitorData.ledgerRepairRequired = {};
+    }
+    for (const k of Object.keys(monitorData.ledgerRepairRequired)) delete monitorData.ledgerRepairRequired[k];
+    Object.assign(monitorData.ledgerRepairRequired, shared.ledgerRepairRequired);
+  }
+  if (Object.prototype.hasOwnProperty.call(shared, "mountHistoryRejectedEvents")) {
+    if (!Array.isArray(monitorData.mountHistoryRejectedEvents)) monitorData.mountHistoryRejectedEvents = [];
+    _replaceArrayInPlace(monitorData.mountHistoryRejectedEvents, shared.mountHistoryRejectedEvents);
+  }
   if (shared.filamentEventContext && typeof shared.filamentEventContext === "object") {
     if (!monitorData.filamentEventContext || typeof monitorData.filamentEventContext !== "object") {
       monitorData.filamentEventContext = {};
@@ -394,7 +416,7 @@ let _prevDomainSig = "";
  * remainingLengthMm が毎 tick 変化する。これを毎回管理画面の全再描画に繋げると
  * テーブルを 2回/秒で再構築し CPU を圧迫する（近年の描画律速修正に逆行する）。
  * よって残量そのものはシグネチャに含めず、スプール集合・在庫数量・プリセット集合・
- * serialCounter・使用履歴件数など「表示の構造」が変わったときだけ再描画する。
+ * serialCounter・使用履歴件数・recovery診断など「表示の構造」が変わったときだけ再描画する。
  * 残量のライブ表示はフィラメントプレビュー（dirty-key 経路）が別途担う。
  *
  * @private
@@ -410,6 +432,9 @@ function _maybeNotifyFilamentDomainChanged() {
     (monitorData.favoritePresets || []).join(","),
     monitorData.spoolSerialCounter ?? 0,
     (monitorData.usageHistory || []).length,
+    JSON.stringify(monitorData.inferredDecisionRecoveryRequired || null),
+    JSON.stringify(monitorData.ledgerRepairRequired || {}),
+    JSON.stringify(monitorData.mountHistoryRejectedEvents || []),
   ].join("|");
   if (sig === _prevDomainSig) return;
   _prevDomainSig = sig;

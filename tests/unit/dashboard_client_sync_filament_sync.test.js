@@ -157,6 +157,13 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
       monitorData.inferredCandidateStore = {};
     }
     for (const k of Object.keys(monitorData.inferredCandidateStore)) delete monitorData.inferredCandidateStore[k];
+    monitorData.inferredDecisionRecoveryRequired = null;
+    if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
+      monitorData.ledgerRepairRequired = {};
+    }
+    for (const k of Object.keys(monitorData.ledgerRepairRequired)) delete monitorData.ledgerRepairRequired[k];
+    if (!Array.isArray(monitorData.mountHistoryRejectedEvents)) monitorData.mountHistoryRejectedEvents = [];
+    monitorData.mountHistoryRejectedEvents.splice(0, monitorData.mountHistoryRejectedEvents.length);
   });
 
   it("Phase4: pendingUnattributedUsage を親からミラー（in-place 全置換・参照維持）", () => {
@@ -198,6 +205,60 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     expect(monitorData.inferredCandidateStore["ic-a"]).toEqual({
       candidateHash: "ic-a", host: "k1", status: "pending", usedMm: 1200
     });
+  });
+
+  it("#418: recovery / repair 診断を親から全置換ミラーする", () => {
+    monitorData.inferredDecisionRecoveryRequired = { candidateHash: "stale", reason: "old" };
+    monitorData.ledgerRepairRequired.stale = { status: "old" };
+    monitorData.mountHistoryRejectedEvents.push({ reason: "old", event: { evId: "old" } });
+
+    _applySharedFilamentState({
+      inferredDecisionRecoveryRequired: { candidateHash: "ic-a", action: "confirm", reason: "rollback_durable_save_failed" },
+      ledgerRepairRequired: { k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 } },
+      mountHistoryRejectedEvents: [{ reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1" } }],
+    });
+
+    expect(monitorData.inferredDecisionRecoveryRequired).toEqual({
+      candidateHash: "ic-a",
+      action: "confirm",
+      reason: "rollback_durable_save_failed",
+    });
+    expect(monitorData.ledgerRepairRequired.stale).toBeUndefined();
+    expect(monitorData.ledgerRepairRequired.k1).toEqual({ spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 });
+    expect(monitorData.mountHistoryRejectedEvents).toEqual([
+      { reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1" } },
+    ]);
+  });
+
+  it("#418: 親で解消済みの recovery / repair 診断を Satellite 側から消す", () => {
+    monitorData.inferredDecisionRecoveryRequired = { candidateHash: "ic-a", reason: "old" };
+    monitorData.ledgerRepairRequired.k1 = { status: "ambiguous" };
+    monitorData.mountHistoryRejectedEvents.push({ reason: "old" });
+
+    _applySharedFilamentState({
+      inferredDecisionRecoveryRequired: null,
+      ledgerRepairRequired: {},
+      mountHistoryRejectedEvents: [],
+    });
+
+    expect(monitorData.inferredDecisionRecoveryRequired).toBeNull();
+    expect(monitorData.ledgerRepairRequired).toEqual({});
+    expect(monitorData.mountHistoryRejectedEvents).toEqual([]);
+  });
+
+  it("#418: recovery 診断だけが変化した場合も開いている管理画面を再描画する", () => {
+    globalThis.window._refreshFilamentManagerIfOpen = vi.fn();
+    _applySharedFilamentState({
+      inferredDecisionRecoveryRequired: { candidateHash: "ic-a", reason: "rollback_failed" },
+    });
+    const firstCount = globalThis.window._refreshFilamentManagerIfOpen.mock.calls.length;
+
+    _applySharedFilamentState({
+      inferredDecisionRecoveryRequired: { candidateHash: "ic-b", reason: "rollback_failed" },
+    });
+
+    expect(globalThis.window._refreshFilamentManagerIfOpen.mock.calls.length).toBeGreaterThan(firstCount);
+    delete globalThis.window._refreshFilamentManagerIfOpen;
   });
 
   it("在庫・プリセット・使用履歴を親からミラー（in-place 全置換・参照維持）", () => {

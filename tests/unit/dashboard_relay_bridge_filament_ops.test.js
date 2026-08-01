@@ -16,6 +16,19 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
     filamentSpools: [],
     hostSpoolMap: {},
     mountHistory: [],
+    inferredDecisionRecoveryRequired: null,
+    ledgerRepairRequired: {},
+    mountHistoryRejectedEvents: [],
+    inferredCandidateStore: {},
+    pendingUnattributedUsage: [],
+    pendingUnattributedUsageArchive: {},
+    filamentInventory: [],
+    userPresets: [],
+    hiddenPresets: [],
+    favoritePresets: [],
+    filamentEventContext: {},
+    spoolSerialCounter: 0,
+    usageHistory: [],
     appSettings: { connectionTargets: [] },
   },
   PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_",
@@ -63,17 +76,71 @@ vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
   saveUnifiedStorage: vi.fn(),
 }));
 
-const { handleRelayFilamentAction } = await import("../../3dp_lib/dashboard_relay_bridge.js");
+const { handleRelayFilamentAction, initRelayBridge, relayBroadcastIfNeeded } = await import("../../3dp_lib/dashboard_relay_bridge.js");
 const spool = await import("../../3dp_lib/dashboard_spool.js");
 const ledger = await import("../../3dp_lib/dashboard_filament_ledger.js");
 const decision = await import("../../3dp_lib/dashboard_inferred_candidate_decision.js");
 const inventory = await import("../../3dp_lib/dashboard_filament_inventory.js");
 const presets = await import("../../3dp_lib/dashboard_filament_presets.js");
 const { saveUnifiedStorage } = await import("../../3dp_lib/dashboard_storage.js");
+const { monitorData } = await import("../../3dp_lib/dashboard_data.js");
 
 const RESOLVED_PRESET = { presetId: "p1", name: "PLA" };
 
 const PRESET = { presetId: "p1", name: "PLA" };
+
+/**
+ * relay bridge の Electron API mock を設定する。
+ *
+ * @function setupRelayApi
+ * @returns {{snapshotHandler:Function|null}} snapshot request handler 参照。
+ */
+function setupRelayApi() {
+  const state = { snapshotHandler: null };
+  globalThis.window.electronAPI = {
+    relayBroadcast: vi.fn(),
+    relaySendSnapshot: vi.fn(),
+    onRelayCommand: vi.fn(),
+    onRelayFilament: vi.fn(),
+    onRelaySettings: vi.fn(),
+    onRelayRequestSnapshot: vi.fn((handler) => { state.snapshotHandler = handler; }),
+    onRelayPromoteRequest: vi.fn(),
+    setCameraEndpoints: vi.fn(),
+  };
+  return state;
+}
+
+describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
+  it("full snapshot と delta に Parent 権威の recovery / repair 診断を同梱する", () => {
+    const relay = setupRelayApi();
+    monitorData.inferredDecisionRecoveryRequired = {
+      candidateHash: "ic-a",
+      action: "confirm",
+      reason: "rollback_durable_save_failed",
+    };
+    monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 },
+    };
+    monitorData.mountHistoryRejectedEvents = [
+      { reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1", spoolId: "S1" } },
+    ];
+
+    expect(initRelayBridge()).toBe(true);
+    relay.snapshotHandler({ clientId: "child-1" });
+
+    const snapshot = globalThis.window.electronAPI.relaySendSnapshot.mock.calls[0][1];
+    expect(snapshot.inferredDecisionRecoveryRequired).toEqual(monitorData.inferredDecisionRecoveryRequired);
+    expect(snapshot.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
+    expect(snapshot.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
+
+    relayBroadcastIfNeeded();
+
+    const delta = globalThis.window.electronAPI.relayBroadcast.mock.calls[0][0];
+    expect(delta.shared.inferredDecisionRecoveryRequired).toEqual(monitorData.inferredDecisionRecoveryRequired);
+    expect(delta.shared.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
+    expect(delta.shared.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
+  });
+});
 
 describe("handleRelayFilamentAction — 親側 RPC ディスパッチ", () => {
   beforeEach(() => vi.clearAllMocks());
