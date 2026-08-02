@@ -13,12 +13,16 @@ const mocks = vi.hoisted(() => ({
   },
   saveUnifiedStorageDurably: vi.fn(async () => ({ ok: true, backend: "test", reason: "saved" })),
   canExecuteLedgerDecision: vi.fn(() => true),
+  getMountIntervalStatus: vi.fn(() => ({ status: "none", openInterval: null, intervals: [], diagnostics: [] })),
   queue: Promise.resolve()
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
 vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorageDurably: mocks.saveUnifiedStorageDurably }));
 vi.mock("../../3dp_lib/dashboard_time.js", () => ({ wallNowMs: () => 123456 }));
+vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  getMountIntervalStatus: mocks.getMountIntervalStatus
+}));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
   canExecuteLedgerDecision: mocks.canExecuteLedgerDecision,
   enqueueLedgerDecisionTask: (task) => {
@@ -56,6 +60,8 @@ beforeEach(() => {
   mocks.canExecuteLedgerDecision.mockReturnValue(true);
   mocks.saveUnifiedStorageDurably.mockReset();
   mocks.saveUnifiedStorageDurably.mockResolvedValue({ ok: true, backend: "test", reason: "saved" });
+  mocks.getMountIntervalStatus.mockReset();
+  mocks.getMountIntervalStatus.mockReturnValue({ status: "none", openInterval: null, intervals: [], diagnostics: [] });
 });
 
 describe("canExecuteRecoveryOperation", () => {
@@ -145,12 +151,50 @@ describe("clearLedgerRepairRequired", () => {
     const result = await clearLedgerRepairRequired("k1", { actor: "operator", nowMs: 500 });
 
     expect(result).toMatchObject({ ok: true, reason: "ledger_repair_cleared", host: "k1" });
+    expect(mocks.getMountIntervalStatus).toHaveBeenCalledWith("S1", "k1");
     expect(mocks.monitorData.ledgerRepairRequired).toEqual({});
     expect(mocks.monitorData.inferredRecoveryEvents[0]).toMatchObject({
       type: "ledger-repair-cleared",
       host: "k1",
       createdAt: 500
     });
+    expect(mocks.monitorData.inferredRecoveryEvents[0].clearanceStatus.status).toBe("none");
+  });
+
+  it("現在も ambiguous/corrupt の ledger repair flag は解除しない", async () => {
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 }
+    };
+    mocks.getMountIntervalStatus.mockReturnValueOnce({
+      status: "ambiguous",
+      openInterval: null,
+      intervals: [{ intervalId: "iv-a" }, { intervalId: "iv-b" }],
+      diagnostics: []
+    });
+
+    const result = await clearLedgerRepairRequired("k1");
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "ledger_repair_still_unresolved",
+      host: "k1",
+      status: { status: "ambiguous" }
+    });
+    expect(mocks.monitorData.ledgerRepairRequired.k1.status).toBe("ambiguous");
+    expect(mocks.monitorData.inferredRecoveryEvents).toHaveLength(0);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("spoolId がない ledger repair flag は解除しない", async () => {
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { status: "ambiguous", detectedAtEpochMs: 100 }
+    };
+
+    const result = await clearLedgerRepairRequired("k1");
+
+    expect(result).toMatchObject({ ok: false, reason: "ledger_repair_spool_required", host: "k1" });
+    expect(mocks.getMountIntervalStatus).not.toHaveBeenCalled();
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
   it("保存失敗時は ledger repair flag を rollback する", async () => {

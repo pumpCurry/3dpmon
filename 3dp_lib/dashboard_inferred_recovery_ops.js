@@ -20,13 +20,13 @@
  * - {@link clearLedgerRepairRequired}：確認済みの host 単位 ledger repair flag を解除する
  * - {@link archiveMountHistoryRejectedEvents}：隔離済み mount event を監査 event に移して warning を閉じる
  *
- * @version 1.390.1270 (PR #420)
+ * @version 1.390.1272 (PR #422)
  * @since   1.390.1270 (PR #420)
- * @lastModified 2026-08-02 15:05:22
+ * @lastModified 2026-08-02 16:45:00
  * -----------------------------------------------------------
  * @todo
  * - O7 Ledger Reconciliation で、手動解除前の再計算監査と修復案提示を追加する。
- * - mount interval の survivor 明示選択は O6B 以降で実装する。
+ * - mount interval の survivor 明示選択は O6C 以降で実装する。
  */
 
 "use strict";
@@ -36,6 +36,7 @@ import {
   canExecuteLedgerDecision,
   enqueueLedgerDecisionTask
 } from "./dashboard_inferred_candidate_decision.js";
+import { getMountIntervalStatus } from "./dashboard_filament_ledger.js";
 import { saveUnifiedStorageDurably } from "./dashboard_storage.js";
 import { wallNowMs } from "./dashboard_time.js";
 
@@ -299,6 +300,43 @@ function _operationGuard() {
 }
 
 /**
+ * ledger repair flag を解除してよい状態か検証する。
+ *
+ * 【詳細説明】
+ * - `ledgerRepairRequired` は、mount interval が ambiguous/corrupt のまま暗黙クローズを止めた
+ *   ことを示す blocker である。
+ * - O6B では自動修復や survivor 選択までは行わないが、現在も ambiguous/corrupt なら解除を拒否する。
+ * - 状態が `ok` または `none` へ戻っている場合だけ、オペレーター確認済みとして flag 解除へ進める。
+ *
+ * @private
+ * @function _validateLedgerRepairClearance
+ * @param {string} host - host key。
+ * @param {Object} repairItem - ledgerRepairRequired の対象 item。
+ * @returns {{ok:boolean,reason:string,status?:Object}} 検証結果。
+ */
+function _validateLedgerRepairClearance(host, repairItem) {
+  const spoolId = repairItem?.spoolId != null ? String(repairItem.spoolId) : "";
+  if (!spoolId) return { ok: false, reason: "ledger_repair_spool_required" };
+  try {
+    const status = getMountIntervalStatus(spoolId, host);
+    if (status?.status === "ambiguous" || status?.status === "corrupt") {
+      return {
+        ok: false,
+        reason: "ledger_repair_still_unresolved",
+        status
+      };
+    }
+    return { ok: true, reason: "ledger_repair_clearable", status };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "ledger_repair_validation_failed",
+      status: { error: error?.message || String(error) }
+    };
+  }
+}
+
+/**
  * この端末で O6 recovery 操作を実行できるか判定する。
  *
  * 【詳細説明】
@@ -384,8 +422,9 @@ export function clearInferredDecisionRecoveryRequired(options = {}) {
  * 確認済みの host 単位 ledger repair flag を解除する。
  *
  * 【詳細説明】
- * - O7 の再計算監査が入るまでは、オペレーターが対象 host の mount ledger を確認済みであることを
- *   前提とする手動解除 API として扱う。
+ * - 現在の mount interval 状態を確認し、まだ ambiguous/corrupt の場合は fail-closed で解除しない。
+ * - O7 の再計算監査が入るまでは、`ok` / `none` に戻っている host について、オペレーターが
+ *   mount ledger を確認済みであることを前提とする手動解除 API として扱う。
  * - 解除対象の元 flag は audit event に保存し、保存失敗時は map を操作前へ戻す。
  *
  * @function clearLedgerRepairRequired
@@ -404,6 +443,8 @@ export function clearLedgerRepairRequired(host, options = {}) {
     const repair = _ledgerRepairRequired();
     const current = repair[hostKey];
     if (!current || typeof current !== "object") return { ok: false, reason: "ledger_repair_not_found", host: hostKey };
+    const clearance = _validateLedgerRepairClearance(hostKey, current);
+    if (!clearance.ok) return { ok: false, reason: clearance.reason, host: hostKey, status: clearance.status };
 
     const snapshot = _snapshotRecoveryState();
     delete repair[hostKey];
@@ -411,7 +452,8 @@ export function clearLedgerRepairRequired(host, options = {}) {
       reason: "operator-cleared-ledger-repair",
       host: hostKey,
       note: options.note || "",
-      clearedRepair: _clone(current)
+      clearedRepair: _clone(current),
+      clearanceStatus: _clone(clearance.status)
     }, options);
     const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_clear_not_durably_saved", options);
     if (!saved.ok) return saved;

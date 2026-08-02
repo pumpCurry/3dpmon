@@ -137,7 +137,7 @@ Recovery / repair status surface.
 | --- | --- |
 | **Retry save** | Attempts to durably save the current recovery / repair state again. |
 | **Clear recovery** | Clears `inferredDecisionRecoveryRequired` after the operator has verified the rolled-back state. |
-| **Clear repair** | Clears `ledgerRepairRequired` for the selected host after the mount ledger has been verified. |
+| **Clear repair** | Clears `ledgerRepairRequired` for the selected host after the mount ledger has been verified and the current state is no longer `ambiguous` or `corrupt`. |
 | **Archive rejected** | Moves quarantined mountHistory events into `inferredRecoveryEvents` audit history and closes the warning. |
 
 Each recovery operation appends an `inferredRecoveryEvents` audit event

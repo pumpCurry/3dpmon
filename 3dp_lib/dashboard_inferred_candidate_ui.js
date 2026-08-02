@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1271 (PR #421)
+ * @version 1.390.1272 (PR #422)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 15:30:00
+ * @lastModified 2026-08-02 16:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -110,7 +110,10 @@ const REASON_LABELS = Object.freeze({
   recovery_operation_rollback_save_failed: "復旧操作のrollback状態を保存できませんでした",
   decision_recovery_clear_not_durably_saved: "整合性確認フラグの解除を保存できませんでした",
   ledger_repair_host_required: "修復対象ホストが不正です",
+  ledger_repair_spool_required: "台帳修復対象スプールが不明です",
   ledger_repair_not_found: "台帳修復フラグは見つかりません",
+  ledger_repair_still_unresolved: "台帳状態がまだ曖昧または破損しているため解除できません",
+  ledger_repair_validation_failed: "台帳修復状態の検証に失敗しました",
   ledger_repair_clear_not_durably_saved: "台帳修復フラグの解除を保存できませんでした",
   mount_history_rejected_events_not_found: "隔離済みmount eventは見つかりません",
   mount_history_rejected_archive_not_durably_saved: "隔離済みmount eventの退避を保存できませんでした"

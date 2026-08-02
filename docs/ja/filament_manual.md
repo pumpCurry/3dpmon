@@ -100,7 +100,7 @@ Standalone / Parent では、Recovery / repair status から次の復旧操作�
 | --- | --- |
 | **Retry save** | 現在の recovery / repair 状態を再度耐久保存します |
 | **Clear recovery** | rollback 後の状態を確認済みの場合に `inferredDecisionRecoveryRequired` を解除します |
-| **Clear repair** | 対象 host の mount ledger を確認済みの場合に `ledgerRepairRequired` を解除します |
+| **Clear repair** | 対象 host の mount ledger を確認済みで、現在状態が `ambiguous` / `corrupt` ではない場合に `ledgerRepairRequired` を解除します |
 | **Archive rejected** | 隔離済み mountHistory event を `inferredRecoveryEvents` へ監査退避し、warning を閉じます |
 
 これらの復旧操作は `inferredRecoveryEvents` に監査 event を残し、保存失敗時は操作前の状態へ戻します。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示しますが、復旧操作は無効化されます。復旧操作は Parent 端末で実行してください。
