@@ -9,11 +9,23 @@ const mocks = vi.hoisted(() => ({
     inferredDecisionRecoveryRequired: null,
     inferredRecoveryEvents: [],
     ledgerRepairRequired: {},
-    mountHistoryRejectedEvents: []
+    mountHistoryRejectedEvents: [],
+    mountHistory: [],
+    mountHistorySeq: 0
   },
   saveUnifiedStorageDurably: vi.fn(async () => ({ ok: true, backend: "test", reason: "saved" })),
   canExecuteLedgerDecision: vi.fn(() => true),
   getMountIntervalStatus: vi.fn(() => ({ status: "none", openInterval: null, intervals: [], diagnostics: [] })),
+  appendSupersedeEvent: vi.fn(() => ({
+    evId: "ev-super",
+    opId: "op-super",
+    seq: 3,
+    type: "supersede",
+    host: "k1",
+    spoolId: "S1",
+    targetIntervalIds: ["iv-a"],
+    survivingIntervalId: "iv-b"
+  })),
   queue: Promise.resolve()
 }));
 
@@ -21,6 +33,7 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorDa
 vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorageDurably: mocks.saveUnifiedStorageDurably }));
 vi.mock("../../3dp_lib/dashboard_time.js", () => ({ wallNowMs: () => 123456 }));
 vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  appendSupersedeEvent: mocks.appendSupersedeEvent,
   getMountIntervalStatus: mocks.getMountIntervalStatus
 }));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
@@ -37,6 +50,7 @@ const {
   canExecuteRecoveryOperation,
   clearInferredDecisionRecoveryRequired,
   clearLedgerRepairRequired,
+  repairLedgerMountIntervals,
   retryInferredRecoveryDurableSave
 } = await import("../../3dp_lib/dashboard_inferred_recovery_ops.js");
 
@@ -51,6 +65,8 @@ function resetRecoveryState() {
   mocks.monitorData.inferredRecoveryEvents = [];
   mocks.monitorData.ledgerRepairRequired = {};
   mocks.monitorData.mountHistoryRejectedEvents = [];
+  mocks.monitorData.mountHistory = [];
+  mocks.monitorData.mountHistorySeq = 0;
 }
 
 beforeEach(() => {
@@ -62,6 +78,23 @@ beforeEach(() => {
   mocks.saveUnifiedStorageDurably.mockResolvedValue({ ok: true, backend: "test", reason: "saved" });
   mocks.getMountIntervalStatus.mockReset();
   mocks.getMountIntervalStatus.mockReturnValue({ status: "none", openInterval: null, intervals: [], diagnostics: [] });
+  mocks.appendSupersedeEvent.mockReset();
+  mocks.appendSupersedeEvent.mockImplementation(({ host, spoolId, targetIntervalIds, survivingIntervalId, ts, opId }) => {
+    const event = {
+      evId: "ev-super",
+      opId,
+      seq: 3,
+      ts,
+      type: "supersede",
+      host,
+      spoolId,
+      targetIntervalIds,
+      survivingIntervalId
+    };
+    mocks.monitorData.mountHistory.push(event);
+    mocks.monitorData.mountHistorySeq = 3;
+    return event;
+  });
 });
 
 describe("canExecuteRecoveryOperation", () => {
@@ -209,6 +242,133 @@ describe("clearLedgerRepairRequired", () => {
     expect(result).toMatchObject({ ok: false, reason: "ledger_repair_clear_not_durably_saved" });
     expect(mocks.monitorData.ledgerRepairRequired).toEqual(repair);
     expect(mocks.monitorData.inferredRecoveryEvents).toHaveLength(0);
+  });
+});
+
+describe("repairLedgerMountIntervals", () => {
+  it("ambiguous な ledger repair を survivor 選択で supersede 修復し flag を解除する", async () => {
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 }
+    };
+    mocks.getMountIntervalStatus
+      .mockReturnValueOnce({
+        status: "ambiguous",
+        openInterval: null,
+        intervals: [
+          { intervalId: "iv-a", host: "k1", untilJobId: null, sinceJobId: 1, anchorRemainingMm: 10000, boundaryStatus: "known" },
+          { intervalId: "iv-b", host: "k1", untilJobId: null, sinceJobId: 2, anchorRemainingMm: 9000, boundaryStatus: "known" }
+        ],
+        diagnostics: []
+      })
+      .mockReturnValueOnce({
+        status: "ok",
+        openInterval: { intervalId: "iv-b", host: "k1", untilJobId: null },
+        intervals: [{ intervalId: "iv-b", host: "k1", untilJobId: null }],
+        diagnostics: []
+      });
+
+    const result = await repairLedgerMountIntervals("k1", "iv-b", { actor: "operator", nowMs: 700 });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "ledger_repair_intervals_repaired",
+      host: "k1",
+      survivingIntervalId: "iv-b",
+      supersededIntervalIds: ["iv-a"]
+    });
+    expect(mocks.appendSupersedeEvent).toHaveBeenCalledWith({
+      host: "k1",
+      spoolId: "S1",
+      targetIntervalIds: ["iv-a"],
+      survivingIntervalId: "iv-b",
+      reason: "operator-selected-survivor",
+      ts: 700,
+      opId: "o6_repair_k1_S1_iv-b_700"
+    });
+    expect(mocks.monitorData.ledgerRepairRequired).toEqual({});
+    expect(mocks.monitorData.inferredRecoveryEvents[0]).toMatchObject({
+      type: "ledger-intervals-repaired",
+      host: "k1",
+      spoolId: "S1",
+      survivingIntervalId: "iv-b",
+      supersededIntervalIds: ["iv-a"]
+    });
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+  });
+
+  it("ambiguous ではない ledger repair は修復しない", async () => {
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 }
+    };
+    mocks.getMountIntervalStatus.mockReturnValueOnce({
+      status: "corrupt",
+      openInterval: null,
+      intervals: [],
+      diagnostics: [{ code: "supersede-invalid-reference" }]
+    });
+
+    const result = await repairLedgerMountIntervals("k1", "iv-b");
+
+    expect(result).toMatchObject({ ok: false, reason: "ledger_repair_not_ambiguous", host: "k1" });
+    expect(mocks.appendSupersedeEvent).not.toHaveBeenCalled();
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("選択 survivor が open 区間ではない場合は fail-closed する", async () => {
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 }
+    };
+    mocks.getMountIntervalStatus.mockReturnValueOnce({
+      status: "ambiguous",
+      openInterval: null,
+      intervals: [
+        { intervalId: "iv-a", host: "k1", untilJobId: null, sinceJobId: 1, anchorRemainingMm: 10000, boundaryStatus: "known" },
+        { intervalId: "iv-b", host: "k1", untilJobId: null, sinceJobId: 2, anchorRemainingMm: 9000, boundaryStatus: "known" }
+      ],
+      diagnostics: []
+    });
+
+    const result = await repairLedgerMountIntervals("k1", "iv-c");
+
+    expect(result).toMatchObject({ ok: false, reason: "ledger_repair_survivor_not_open", host: "k1" });
+    expect(mocks.appendSupersedeEvent).not.toHaveBeenCalled();
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("保存失敗時は supersede event と repair flag を rollback する", async () => {
+    const repair = { k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 } };
+    const mountHistory = [{ evId: "mount-a", intervalId: "iv-a", type: "mount", host: "k1", spoolId: "S1" }];
+    mocks.monitorData.ledgerRepairRequired = { k1: { ...repair.k1 } };
+    mocks.monitorData.mountHistory = mountHistory.map(item => ({ ...item }));
+    mocks.monitorData.mountHistorySeq = 1;
+    mocks.getMountIntervalStatus
+      .mockReturnValueOnce({
+        status: "ambiguous",
+        openInterval: null,
+        intervals: [
+          { intervalId: "iv-a", host: "k1", untilJobId: null, sinceJobId: 1, anchorRemainingMm: 10000, boundaryStatus: "known" },
+          { intervalId: "iv-b", host: "k1", untilJobId: null, sinceJobId: 2, anchorRemainingMm: 9000, boundaryStatus: "known" }
+        ],
+        diagnostics: []
+      })
+      .mockReturnValueOnce({
+        status: "ok",
+        openInterval: { intervalId: "iv-b", host: "k1", untilJobId: null },
+        intervals: [{ intervalId: "iv-b", host: "k1", untilJobId: null }],
+        diagnostics: []
+      });
+    mocks.saveUnifiedStorageDurably
+      .mockResolvedValueOnce({ ok: false, backend: "indexedDB", reason: "idb_flush_failed" })
+      .mockResolvedValueOnce({ ok: true, backend: "indexedDB", reason: "flushed" });
+
+    const result = await repairLedgerMountIntervals("k1", "iv-b", { nowMs: 800 });
+
+    expect(result).toMatchObject({ ok: false, reason: "ledger_repair_repair_not_durably_saved" });
+    expect(mocks.monitorData.ledgerRepairRequired).toEqual(repair);
+    expect(mocks.monitorData.mountHistory).toEqual(mountHistory);
+    expect(mocks.monitorData.mountHistorySeq).toBe(1);
+    expect(mocks.monitorData.inferredRecoveryEvents).toHaveLength(0);
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(2);
   });
 });
 

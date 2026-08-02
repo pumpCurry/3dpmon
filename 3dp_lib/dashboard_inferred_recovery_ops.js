@@ -17,16 +17,16 @@
  * - {@link canExecuteRecoveryOperation}：この端末で O6 recovery 操作を実行できるか判定する
  * - {@link retryInferredRecoveryDurableSave}：現在の recovery / repair 状態を再度耐久保存する
  * - {@link clearInferredDecisionRecoveryRequired}：確認済みの O5 decision recovery flag を解除する
+ * - {@link repairLedgerMountIntervals}：曖昧な mount interval の survivor を明示選択して修復する
  * - {@link clearLedgerRepairRequired}：確認済みの host 単位 ledger repair flag を解除する
  * - {@link archiveMountHistoryRejectedEvents}：隔離済み mount event を監査 event に移して warning を閉じる
  *
- * @version 1.390.1272 (PR #422)
+ * @version 1.390.1273 (PR #423)
  * @since   1.390.1270 (PR #420)
- * @lastModified 2026-08-02 16:45:00
+ * @lastModified 2026-08-02 18:20:00
  * -----------------------------------------------------------
  * @todo
  * - O7 Ledger Reconciliation で、手動解除前の再計算監査と修復案提示を追加する。
- * - mount interval の survivor 明示選択は O6C 以降で実装する。
  */
 
 "use strict";
@@ -36,7 +36,7 @@ import {
   canExecuteLedgerDecision,
   enqueueLedgerDecisionTask
 } from "./dashboard_inferred_candidate_decision.js";
-import { getMountIntervalStatus } from "./dashboard_filament_ledger.js";
+import { appendSupersedeEvent, getMountIntervalStatus } from "./dashboard_filament_ledger.js";
 import { saveUnifiedStorageDurably } from "./dashboard_storage.js";
 import { wallNowMs } from "./dashboard_time.js";
 
@@ -62,6 +62,7 @@ const DECISION_RECOVERY_FIELD = "inferredDecisionRecoveryRequired";
 export const INFERRED_RECOVERY_EVENT_TYPE = Object.freeze({
   DURABLE_SAVE_RETRIED: "recovery-durable-save-retried",
   DECISION_RECOVERY_CLEARED: "decision-recovery-cleared",
+  LEDGER_INTERVALS_REPAIRED: "ledger-intervals-repaired",
   LEDGER_REPAIR_CLEARED: "ledger-repair-cleared",
   REJECTED_MOUNT_EVENTS_ARCHIVED: "mount-history-rejected-events-archived"
 });
@@ -182,15 +183,21 @@ function _hasRecoveryIssues() {
  *
  * @private
  * @function _snapshotRecoveryState
+ * @param {{includeMountHistory?:boolean}} [options] - mountHistory も rollback 対象に含める場合 true。
  * @returns {Object} rollback 用 snapshot。
  */
-function _snapshotRecoveryState() {
-  return {
+function _snapshotRecoveryState(options = {}) {
+  const snapshot = {
     inferredDecisionRecoveryRequired: _clone(monitorData[DECISION_RECOVERY_FIELD] || null),
     ledgerRepairRequired: _clone(_ledgerRepairRequired()),
     mountHistoryRejectedEvents: _clone(_rejectedMountEvents()),
     inferredRecoveryEvents: _clone(_events())
   };
+  if (options.includeMountHistory) {
+    snapshot.mountHistory = _clone(Array.isArray(monitorData.mountHistory) ? monitorData.mountHistory : []);
+    snapshot.mountHistorySeq = Number(monitorData.mountHistorySeq) || 0;
+  }
+  return snapshot;
 }
 
 /**
@@ -219,6 +226,12 @@ function _restoreRecoveryState(snapshot) {
 
   const events = _events();
   events.splice(0, events.length, ..._clone(snapshot.inferredRecoveryEvents || []));
+
+  if (Object.hasOwn(snapshot, "mountHistory")) {
+    if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
+    monitorData.mountHistory.splice(0, monitorData.mountHistory.length, ..._clone(snapshot.mountHistory || []));
+    monitorData.mountHistorySeq = Number(snapshot.mountHistorySeq) || 0;
+  }
 }
 
 /**
@@ -334,6 +347,58 @@ function _validateLedgerRepairClearance(host, repairItem) {
       status: { error: error?.message || String(error) }
     };
   }
+}
+
+/**
+ * mount interval repair 操作用に現在の open 区間を取得する。
+ *
+ * 【詳細説明】
+ * - O6 の repair 操作は曖昧な mount interval だけを対象にする。
+ * - corrupt 状態は参照不整合を含むため、survivor 選択だけでは安全に直せない可能性がある。
+ * - そのためここでは `ambiguous` 以外を fail-closed にし、O7 の再計算監査へ委ねる。
+ *
+ * @private
+ * @function _validateLedgerIntervalRepair
+ * @param {string} host - host key。
+ * @param {Object} repairItem - ledgerRepairRequired の対象 item。
+ * @param {string} survivingIntervalId - 残す intervalId。
+ * @returns {{ok:boolean,reason:string,status?:Object,spoolId?:string,openIntervals?:Array<Object>,targetIntervalIds?:Array<string>}}
+ *   修復入力の検証結果。
+ */
+function _validateLedgerIntervalRepair(host, repairItem, survivingIntervalId) {
+  const spoolId = repairItem?.spoolId != null ? String(repairItem.spoolId) : "";
+  if (!spoolId) return { ok: false, reason: "ledger_repair_spool_required" };
+  const survivorId = String(survivingIntervalId || "");
+  if (!survivorId) return { ok: false, reason: "ledger_repair_survivor_required", spoolId };
+  let status;
+  try {
+    status = getMountIntervalStatus(spoolId, host);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "ledger_repair_validation_failed",
+      spoolId,
+      status: { error: error?.message || String(error) }
+    };
+  }
+  if (status?.status !== "ambiguous") {
+    return { ok: false, reason: "ledger_repair_not_ambiguous", spoolId, status };
+  }
+  const openIntervals = Array.isArray(status.intervals)
+    ? status.intervals.filter(interval => interval && interval.untilJobId == null && !interval.superseded)
+    : [];
+  const survivor = openIntervals.find(interval => String(interval.intervalId) === survivorId);
+  if (!survivor) {
+    return { ok: false, reason: "ledger_repair_survivor_not_open", spoolId, status, openIntervals };
+  }
+  const targetIntervalIds = openIntervals
+    .map(interval => String(interval.intervalId))
+    .filter(intervalId => intervalId && intervalId !== survivorId)
+    .sort();
+  if (targetIntervalIds.length === 0) {
+    return { ok: false, reason: "ledger_repair_not_ambiguous", spoolId, status, openIntervals };
+  }
+  return { ok: true, reason: "ledger_repair_repairable", spoolId, status, openIntervals, targetIntervalIds };
 }
 
 /**
@@ -458,6 +523,97 @@ export function clearLedgerRepairRequired(host, options = {}) {
     const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_clear_not_durably_saved", options);
     if (!saved.ok) return saved;
     return { ok: true, reason: "ledger_repair_cleared", host: hostKey, event, save: saved.save };
+  });
+}
+
+/**
+ * 曖昧な mount interval を survivor 明示選択で修復する。
+ *
+ * 【詳細説明】
+ * - `ledgerRepairRequired[host]` が存在し、現在の mount interval 状態が `ambiguous` の場合だけ実行する。
+ * - 操作者が選んだ survivor 以外の open interval を `supersede` event で無効化し、投影後に
+ *   open interval が survivor 1件へ収束したことを再検証する。
+ * - 修復 event、ledger repair flag 解除、recovery audit event は同じ耐久保存境界で扱う。
+ * - 保存失敗時は `mountHistory` / `mountHistorySeq` / repair flag / audit event を操作前へ戻す。
+ *
+ * @function repairLedgerMountIntervals
+ * @param {string} host - 修復対象 host key。
+ * @param {string} survivingIntervalId - 残す mount interval ID。
+ * @param {{actor?:string,note?:string,nowMs?:number,save?:boolean}} [options] - 操作者・メモ・保存オプション。
+ * @returns {Promise<Object>} recovery 操作結果。
+ * @example
+ * const result = await repairLedgerMountIntervals("k1max.local", "mount_S1_100", { actor: "operator" });
+ */
+export function repairLedgerMountIntervals(host, survivingIntervalId, options = {}) {
+  return enqueueLedgerDecisionTask(async () => {
+    const guard = _operationGuard();
+    if (guard) return guard;
+    const hostKey = String(host || "");
+    if (!hostKey) return { ok: false, reason: "ledger_repair_host_required" };
+    const repair = _ledgerRepairRequired();
+    const current = repair[hostKey];
+    if (!current || typeof current !== "object") return { ok: false, reason: "ledger_repair_not_found", host: hostKey };
+    const validation = _validateLedgerIntervalRepair(hostKey, current, survivingIntervalId);
+    if (!validation.ok) return { ok: false, reason: validation.reason, host: hostKey, status: validation.status, openIntervals: validation.openIntervals };
+
+    const snapshot = _snapshotRecoveryState({ includeMountHistory: true });
+    const nowMs = _nowMs(options);
+    const supersedeEvent = appendSupersedeEvent({
+      host: hostKey,
+      spoolId: validation.spoolId,
+      targetIntervalIds: validation.targetIntervalIds,
+      survivingIntervalId: String(survivingIntervalId),
+      reason: "operator-selected-survivor",
+      ts: nowMs,
+      opId: `o6_repair_${hostKey}_${validation.spoolId}_${String(survivingIntervalId)}_${nowMs}`
+    });
+    if (!supersedeEvent) {
+      _restoreRecoveryState(snapshot);
+      return { ok: false, reason: "ledger_repair_supersede_failed", host: hostKey, status: validation.status };
+    }
+
+    let afterStatus;
+    try {
+      afterStatus = getMountIntervalStatus(validation.spoolId, hostKey);
+    } catch (error) {
+      _restoreRecoveryState(snapshot);
+      return {
+        ok: false,
+        reason: "ledger_repair_validation_failed",
+        host: hostKey,
+        status: { error: error?.message || String(error) }
+      };
+    }
+    if (afterStatus?.status !== "ok" || String(afterStatus?.openInterval?.intervalId || "") !== String(survivingIntervalId)) {
+      _restoreRecoveryState(snapshot);
+      return { ok: false, reason: "ledger_repair_post_status_invalid", host: hostKey, status: afterStatus };
+    }
+
+    delete repair[hostKey];
+    const event = _appendRecoveryEvent(INFERRED_RECOVERY_EVENT_TYPE.LEDGER_INTERVALS_REPAIRED, {
+      reason: "operator-repaired-ledger-intervals",
+      host: hostKey,
+      spoolId: validation.spoolId,
+      note: options.note || "",
+      repairedRepair: _clone(current),
+      beforeStatus: _clone(validation.status),
+      afterStatus: _clone(afterStatus),
+      survivingIntervalId: String(survivingIntervalId),
+      supersededIntervalIds: _clone(validation.targetIntervalIds),
+      supersedeEvent: _clone(supersedeEvent)
+    }, { ...options, nowMs });
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_repair_not_durably_saved", options);
+    if (!saved.ok) return saved;
+    return {
+      ok: true,
+      reason: "ledger_repair_intervals_repaired",
+      host: hostKey,
+      survivingIntervalId: String(survivingIntervalId),
+      supersededIntervalIds: validation.targetIntervalIds,
+      supersedeEvent,
+      event,
+      save: saved.save
+    };
   });
 }
 

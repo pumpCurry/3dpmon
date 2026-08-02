@@ -100,10 +100,13 @@ Standalone / Parent では、Recovery / repair status から次の復旧操作�
 | --- | --- |
 | **Retry save** | 現在の recovery / repair 状態を再度耐久保存します |
 | **Clear recovery** | rollback 後の状態を確認済みの場合に `inferredDecisionRecoveryRequired` を解除します |
+| **Repair intervals** | `ledgerRepairRequired` が示す曖昧な mount interval について、残す survivor 区間を明示選択し、それ以外の open 区間を supersede して修復します |
 | **Clear repair** | 対象 host の mount ledger を確認済みで、現在状態が `ambiguous` / `corrupt` ではない場合に `ledgerRepairRequired` を解除します |
 | **Archive rejected** | 隔離済み mountHistory event を `inferredRecoveryEvents` へ監査退避し、warning を閉じます |
 
-これらの復旧操作は `inferredRecoveryEvents` に監査 event を残し、保存失敗時は操作前の状態へ戻します。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示しますが、復旧操作は無効化されます。復旧操作は Parent 端末で実行してください。
+`Repair intervals` は現在状態が `ambiguous` で、open interval が複数あり、選択した survivor が現在も open の場合だけ実行できます。`corrupt` 状態は参照不整合を含むため、この操作では自動修復せず、O7 の再計算監査または手動調査の対象にします。
+
+これらの復旧操作は `inferredRecoveryEvents` に監査 event を残し、保存失敗時は操作前の状態へ戻します。`Repair intervals` では `mountHistory` と `mountHistorySeq` も rollback 対象です。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示しますが、復旧操作は無効化されます。復旧操作は Parent 端末で実行してください。
 
 復旧操作後は、同じ Recovery / repair status に **Recovery operation audit** が表示されます。ここには最新の再保存、recovery flag 解除、ledger repair flag 解除、隔離 event 退避の履歴が残り、対象 candidate、host、件数、操作者、実行時刻を確認できます。未解決 blocker が無い場合でも、直近の復旧操作履歴は INFO として表示されます。
 

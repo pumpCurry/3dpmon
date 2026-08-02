@@ -19,9 +19,9 @@
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1271 (PR #421)
+ * @version 1.390.1273 (PR #423)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 15:30:00
+ * @lastModified 2026-08-02 18:20:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -30,6 +30,7 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
+import { getMountIntervalStatus } from "./dashboard_filament_ledger.js";
 import { jobObservationIdentity } from "./dashboard_history_identity.js";
 import { canSubmitLedgerDecision } from "./dashboard_inferred_candidate_decision.js";
 import { INFERRED_CANDIDATE_STATUS } from "./dashboard_offline_candidate_store.js";
@@ -244,6 +245,68 @@ function _recoveryEventTarget(event) {
   if (event?.host) return String(event.host);
   if (Number.isFinite(Number(event?.rejectedEventCount))) return `${Number(event.rejectedEventCount)} rejected events`;
   return "--";
+}
+
+/**
+ * mount interval を Recovery surface 表示用へ整形する。
+ *
+ * 【詳細説明】
+ * - O6 の修復操作では、操作者が残す open interval を明示選択する。
+ * - ViewModel では intervalId、境界、アンカー値だけを提示し、確定台帳の変更は UI から行わない。
+ *
+ * @private
+ * @function _openIntervalOptions
+ * @param {?Object} status - {@link getMountIntervalStatus} の戻り値。
+ * @returns {Array<Object>} 選択可能な open interval 表示モデル。
+ */
+function _openIntervalOptions(status) {
+  const intervals = Array.isArray(status?.intervals) ? status.intervals : [];
+  return intervals
+    .filter(interval => interval && interval.untilJobId == null && !interval.superseded)
+    .map(interval => ({
+      intervalId: String(interval.intervalId || ""),
+      sinceJobId: Number(interval.sinceJobId) || 0,
+      anchorRemainingMm: Number(interval.anchorRemainingMm) || 0,
+      anchorRemainingDisplay: _formatMm(interval.anchorRemainingMm),
+      boundaryStatus: interval.boundaryStatus || "unknown"
+    }))
+    .filter(interval => interval.intervalId)
+    .sort((a, b) => (a.sinceJobId - b.sinceJobId) || a.intervalId.localeCompare(b.intervalId));
+}
+
+/**
+ * ledger repair flag の現在状態を read-only に取得する。
+ *
+ * 【詳細説明】
+ * - 表示層で例外が出ても Candidate Center 全体を壊さないよう、失敗時は error status として返す。
+ * - repair 操作の最終判定は O6 Recovery Operations 側で再取得・再検証する。
+ *
+ * @private
+ * @function _ledgerRepairStatusView
+ * @param {string} host - host key。
+ * @param {Object} item - ledgerRepairRequired の対象 item。
+ * @returns {{status:Object,openIntervals:Array<Object>}} 表示用の現在状態。
+ */
+function _ledgerRepairStatusView(host, item) {
+  const spoolId = item?.spoolId != null ? String(item.spoolId) : "";
+  if (!spoolId) {
+    return {
+      status: { status: "unknown", diagnostics: [{ code: "spoolId-missing" }] },
+      openIntervals: []
+    };
+  }
+  try {
+    const status = getMountIntervalStatus(spoolId, host);
+    return {
+      status,
+      openIntervals: _openIntervalOptions(status)
+    };
+  } catch (error) {
+    return {
+      status: { status: "error", diagnostics: [{ code: "status-read-failed", detail: error?.message || String(error) }] },
+      openIntervals: []
+    };
+  }
 }
 
 /**
@@ -540,19 +603,25 @@ export function buildInferredRecoverySurfaceViewModel(options = {}) {
     : {};
   for (const [host, item] of Object.entries(repair)) {
     if (!item || typeof item !== "object") continue;
+    const repairStatus = _ledgerRepairStatusView(host, item);
     cards.push({
       type: "ledger-repair",
       severity: "blocker",
       title: "Mount ledger repair required",
       summary: `${_hostLabel(host)} の装着区間が曖昧なため、暗黙クローズを停止しています`,
       host,
+      spoolId: item.spoolId || null,
       candidateHash: null,
       createdAt: Number(item.detectedAtEpochMs) || 0,
       createdAtDisplay: _formatTime(item.detectedAtEpochMs),
+      repairStatus: repairStatus.status,
+      openIntervals: repairStatus.openIntervals,
       details: _details([
         { label: "Host", value: _hostLabel(host) },
         { label: "Spool", value: item.spoolId },
         { label: "Status", value: item.status },
+        { label: "Current status", value: repairStatus.status?.status },
+        { label: "Open intervals", value: repairStatus.openIntervals.length },
         { label: "Detected", value: _formatTime(item.detectedAtEpochMs) }
       ])
     });

@@ -10,10 +10,14 @@ const mocks = vi.hoisted(() => ({
     filamentSpools: [],
     inferredCandidateStore: {}
   },
-  canSubmit: true
+  canSubmit: true,
+  getMountIntervalStatus: vi.fn(() => ({ status: "none", openInterval: null, intervals: [], diagnostics: [] }))
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
+vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  getMountIntervalStatus: mocks.getMountIntervalStatus
+}));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
   canSubmitLedgerDecision: () => mocks.canSubmit
 }));
@@ -85,6 +89,8 @@ beforeEach(() => {
   mocks.monitorData.inferredRecoveryEvents = [];
   mocks.monitorData.ledgerRepairRequired = {};
   mocks.monitorData.mountHistoryRejectedEvents = [];
+  mocks.getMountIntervalStatus.mockReset();
+  mocks.getMountIntervalStatus.mockReturnValue({ status: "none", openInterval: null, intervals: [], diagnostics: [] });
 });
 
 describe("buildInferredCandidateViewModel", () => {
@@ -178,6 +184,15 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
     mocks.monitorData.ledgerRepairRequired = {
       k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 5000 }
     };
+    mocks.getMountIntervalStatus.mockReturnValueOnce({
+      status: "ambiguous",
+      openInterval: null,
+      intervals: [
+        { intervalId: "iv-a", untilJobId: null, sinceJobId: 1, anchorRemainingMm: 10000, boundaryStatus: "known" },
+        { intervalId: "iv-b", untilJobId: null, sinceJobId: 2, anchorRemainingMm: 9000, boundaryStatus: "unknown" }
+      ],
+      diagnostics: []
+    });
     mocks.monitorData.mountHistoryRejectedEvents = [
       { reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1", spoolId: "S1" } },
       { reason: "supersede-invalid-survivor", event: { evId: "ev-b", host: "k2", spoolId: "S2" } }
@@ -197,6 +212,9 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
     ]);
     expect(vm.cards[0].details).toContainEqual({ label: "Candidate", value: "ic-new" });
     expect(vm.cards[1].summary).toContain("K1 Max");
+    expect(vm.cards[1].repairStatus.status).toBe("ambiguous");
+    expect(vm.cards[1].openIntervals.map(interval => interval.intervalId)).toEqual(["iv-a", "iv-b"]);
+    expect(vm.cards[1].details).toContainEqual({ label: "Open intervals", value: "2" });
     expect(vm.cards[2].details).toHaveLength(1);
     expect(vm.cards[2].details[0].value).toContain("ev-b");
   });

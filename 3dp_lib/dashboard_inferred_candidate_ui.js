@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1272 (PR #422)
+ * @version 1.390.1273 (PR #423)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 16:45:00
+ * @lastModified 2026-08-02 18:20:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -46,6 +46,7 @@ import {
   canExecuteRecoveryOperation,
   clearInferredDecisionRecoveryRequired,
   clearLedgerRepairRequired,
+  repairLedgerMountIntervals,
   retryInferredRecoveryDurableSave
 } from "./dashboard_inferred_recovery_ops.js";
 import { showAlert } from "./dashboard_notification_manager.js";
@@ -112,6 +113,12 @@ const REASON_LABELS = Object.freeze({
   ledger_repair_host_required: "修復対象ホストが不正です",
   ledger_repair_spool_required: "台帳修復対象スプールが不明です",
   ledger_repair_not_found: "台帳修復フラグは見つかりません",
+  ledger_repair_not_ambiguous: "台帳状態は曖昧ではありません",
+  ledger_repair_survivor_required: "残す装着区間を選択してください",
+  ledger_repair_survivor_not_open: "選択した装着区間は現在openではありません",
+  ledger_repair_supersede_failed: "台帳修復eventを作成できませんでした",
+  ledger_repair_post_status_invalid: "修復後の台帳状態を確認できませんでした",
+  ledger_repair_repair_not_durably_saved: "台帳修復結果を保存できませんでした",
   ledger_repair_still_unresolved: "台帳状態がまだ曖昧または破損しているため解除できません",
   ledger_repair_validation_failed: "台帳修復状態の検証に失敗しました",
   ledger_repair_clear_not_durably_saved: "台帳修復フラグの解除を保存できませんでした",
@@ -298,8 +305,9 @@ function _handleRecoveryResult(result, render, onAfterDecision) {
     const label = result.reason === "recovery_durable_save_retried" ? "復旧状態を再保存しました"
       : result.reason === "decision_recovery_cleared" ? "整合性確認フラグを解除しました"
         : result.reason === "ledger_repair_cleared" ? "台帳修復フラグを解除しました"
-          : result.reason === "mount_history_rejected_events_archived" ? "隔離イベントを監査へ退避しました"
-            : "復旧操作を実行しました";
+            : result.reason === "mount_history_rejected_events_archived" ? "隔離イベントを監査へ退避しました"
+              : result.reason === "ledger_repair_intervals_repaired" ? "台帳装着区間を修復しました"
+                : "復旧操作を実行しました";
     showAlert(label, "success");
     try { onAfterDecision?.(result); } catch { /* noop */ }
     render();
@@ -330,6 +338,45 @@ async function _confirmRecoveryAction(title, summary, confirmText) {
     cancelText: "キャンセル"
   });
   return ok === true;
+}
+
+/**
+ * ledger repair 操作用ダイアログを表示し、残す mount interval を取得する。
+ *
+ * 【詳細説明】
+ * - 操作者が survivor を明示選択しない限り、O6 は曖昧区間を自動解決しない。
+ * - 表示される interval 候補は read-only ViewModel 由来であり、実行時には Recovery Operations 側で
+ *   もう一度現在状態を検証する。
+ *
+ * @private
+ * @function _repairIntervalsAction
+ * @param {Object} card - ledger-repair recovery card。
+ * @returns {Promise<?string>} 残す intervalId。キャンセル時は null。
+ */
+async function _repairIntervalsAction(card) {
+  const intervals = Array.isArray(card.openIntervals) ? card.openIntervals : [];
+  if (intervals.length < 2) {
+    showAlert("修復可能なopen区間が不足しています", "warn");
+    return null;
+  }
+  const formId = `ic-ledger-repair-${++_dialogSeq}`;
+  const options = intervals.map(interval => {
+    const label = `${interval.intervalId} / since ${interval.sinceJobId} / anchor ${interval.anchorRemainingDisplay} / ${interval.boundaryStatus}`;
+    return `<option value="${_escapeHtml(interval.intervalId)}">${_escapeHtml(label)}</option>`;
+  }).join("");
+  const ok = await showConfirmDialog({
+    level: "warn",
+    title: "台帳装着区間を修復",
+    html:
+      `<form id="${formId}" class="ic-dialog-form">` +
+      `<label>Survivor<select name="survivingIntervalId">${options}</select></label>` +
+      `</form>`,
+    confirmText: "修復する",
+    cancelText: "キャンセル"
+  });
+  if (ok !== true) return null;
+  const form = document.getElementById(formId);
+  return form?.elements?.survivingIntervalId?.value || null;
 }
 
 /**
@@ -379,6 +426,16 @@ function _appendRecoveryActions(el, card, render, onAfterDecision) {
     });
     actions.append(retryBtn, clearBtn);
   } else if (card.type === "ledger-repair") {
+    const repairBtn = _el("button", "ic-action-secondary", "Repair intervals");
+    repairBtn.disabled = !canExecute || !card.host || card.repairStatus?.status !== "ambiguous" || !Array.isArray(card.openIntervals) || card.openIntervals.length < 2;
+    repairBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const survivingIntervalId = await _repairIntervalsAction(card);
+        if (!survivingIntervalId) return;
+        const result = await repairLedgerMountIntervals(card.host, survivingIntervalId, { actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
     const clearBtn = _el("button", "ic-action-secondary", "Clear repair");
     clearBtn.disabled = !canExecute || !card.host;
     clearBtn.addEventListener("click", async () => {
@@ -393,7 +450,7 @@ function _appendRecoveryActions(el, card, render, onAfterDecision) {
         _handleRecoveryResult(result, render, onAfterDecision);
       });
     });
-    actions.appendChild(clearBtn);
+    actions.append(repairBtn, clearBtn);
   } else if (card.type === "mount-history-rejected") {
     const archiveBtn = _el("button", "ic-action-secondary", "Archive rejected");
     archiveBtn.disabled = !canExecute;

@@ -137,14 +137,21 @@ Recovery / repair status surface.
 | --- | --- |
 | **Retry save** | Attempts to durably save the current recovery / repair state again. |
 | **Clear recovery** | Clears `inferredDecisionRecoveryRequired` after the operator has verified the rolled-back state. |
+| **Repair intervals** | Repairs an ambiguous mount interval by explicitly selecting the survivor interval and superseding the other open intervals. |
 | **Clear repair** | Clears `ledgerRepairRequired` for the selected host after the mount ledger has been verified and the current state is no longer `ambiguous` or `corrupt`. |
 | **Archive rejected** | Moves quarantined mountHistory events into `inferredRecoveryEvents` audit history and closes the warning. |
 
+`Repair intervals` only runs when the current state is `ambiguous`, there
+are multiple open intervals, and the selected survivor is still open.
+`corrupt` states can include invalid references, so this operation leaves
+them for O7 reconciliation or manual investigation.
+
 Each recovery operation appends an `inferredRecoveryEvents` audit event
-and rolls memory state back if durable save fails. In Relay setups,
-Satellites mirror the diagnostic state from the Parent authority but keep
-the recovery operation buttons disabled. Run recovery operations on the
-Parent device.
+and rolls memory state back if durable save fails. For `Repair intervals`,
+`mountHistory` and `mountHistorySeq` are also part of the rollback
+snapshot. In Relay setups, Satellites mirror the diagnostic state from the
+Parent authority but keep the recovery operation buttons disabled. Run
+recovery operations on the Parent device.
 
 After recovery operations run, the same Recovery / repair status surface
 shows a **Recovery operation audit** card. It lists recent retry-save,

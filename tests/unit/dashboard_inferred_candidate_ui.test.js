@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   retryInferredRecoveryDurableSave: vi.fn(async () => ({ ok: true, reason: "recovery_durable_save_retried" })),
   clearInferredDecisionRecoveryRequired: vi.fn(async () => ({ ok: true, reason: "decision_recovery_cleared" })),
   clearLedgerRepairRequired: vi.fn(async () => ({ ok: true, reason: "ledger_repair_cleared" })),
+  repairLedgerMountIntervals: vi.fn(async () => ({ ok: true, reason: "ledger_repair_intervals_repaired" })),
   archiveMountHistoryRejectedEvents: vi.fn(async () => ({ ok: true, reason: "mount_history_rejected_events_archived" })),
   showConfirmDialog: vi.fn(async () => true),
   showAlert: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("../../3dp_lib/dashboard_inferred_recovery_ops.js", () => ({
   retryInferredRecoveryDurableSave: mocks.retryInferredRecoveryDurableSave,
   clearInferredDecisionRecoveryRequired: mocks.clearInferredDecisionRecoveryRequired,
   clearLedgerRepairRequired: mocks.clearLedgerRepairRequired,
+  repairLedgerMountIntervals: mocks.repairLedgerMountIntervals,
   archiveMountHistoryRejectedEvents: mocks.archiveMountHistoryRejectedEvents
 }));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_view.js", () => ({
@@ -155,6 +157,8 @@ beforeEach(() => {
   mocks.clearInferredDecisionRecoveryRequired.mockResolvedValue({ ok: true, reason: "decision_recovery_cleared" });
   mocks.clearLedgerRepairRequired.mockClear();
   mocks.clearLedgerRepairRequired.mockResolvedValue({ ok: true, reason: "ledger_repair_cleared" });
+  mocks.repairLedgerMountIntervals.mockClear();
+  mocks.repairLedgerMountIntervals.mockResolvedValue({ ok: true, reason: "ledger_repair_intervals_repaired" });
   mocks.archiveMountHistoryRejectedEvents.mockClear();
   mocks.archiveMountHistoryRejectedEvents.mockResolvedValue({ ok: true, reason: "mount_history_rejected_events_archived" });
   mocks.showConfirmDialog.mockClear();
@@ -278,8 +282,52 @@ describe("createInferredCandidateCenterContent", () => {
 
     const clear = [...document.querySelectorAll(".ic-recovery-actions button")]
       .find(button => button.textContent === "Clear repair");
+    const repair = [...document.querySelectorAll(".ic-recovery-actions button")]
+      .find(button => button.textContent === "Repair intervals");
     expect(clear.disabled).toBe(true);
+    expect(repair.disabled).toBe(true);
     expect(document.querySelector(".ic-readonly-note").textContent).toContain("親端末");
+  });
+
+  it("#423/O6C: Repair intervals は survivor を選択して O6 repair 操作を呼ぶ", async () => {
+    mocks.recoveryVm = {
+      hasIssues: true,
+      totalCount: 1,
+      blockerCount: 1,
+      warningCount: 0,
+      infoCount: 0,
+      cards: [{
+        type: "ledger-repair",
+        severity: "blocker",
+        title: "Mount ledger repair required",
+        summary: "修復が必要です",
+        host: "k1",
+        repairStatus: { status: "ambiguous" },
+        openIntervals: [
+          { intervalId: "iv-a", sinceJobId: 1, anchorRemainingDisplay: "10,000 mm", boundaryStatus: "known" },
+          { intervalId: "iv-b", sinceJobId: 2, anchorRemainingDisplay: "9,000 mm", boundaryStatus: "unknown" }
+        ],
+        details: [{ label: "Open intervals", value: "2" }]
+      }]
+    };
+    mocks.showConfirmDialog.mockImplementationOnce(async ({ html }) => {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      document.body.appendChild(wrap.firstElementChild);
+      document.querySelector("select[name='survivingIntervalId']").value = "iv-b";
+      return true;
+    });
+
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+    [...document.querySelectorAll(".ic-recovery-actions button")]
+      .find(button => button.textContent === "Repair intervals")
+      .click();
+
+    await waitForAssertion(() => {
+      expect(mocks.repairLedgerMountIntervals).toHaveBeenCalledWith("k1", "iv-b", { actor: "local-user" });
+      expect(mocks.showAlert).toHaveBeenCalledWith("台帳装着区間を修復しました", "success");
+    });
   });
 
   it("candidate 一覧から詳細を開き、Confirm は Decision Core を呼ぶ", async () => {
