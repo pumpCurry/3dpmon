@@ -165,6 +165,14 @@ operations, including the related candidate, host, count, actor and time.
 When no unresolved blocker remains, recent recovery activity is still shown
 as an INFO card.
 
+The O7 read-only reconciliation check compares `inferredCandidateStore`,
+O5 confirmed / undone events in `usedLengthLog`, and the history
+`filamentInfo` / `filamentId` snapshots. When it finds a mismatch, the
+surface shows **Ledger reconciliation issues**. This diagnostic does not
+repair data or change remaining length. Full recalculation that includes
+the normal print-finalize remaining baseline is reserved for a later O7B
+step.
+
 ### Registered Filament Tab
 
 The Registered Filament tab lists all spools that have been added so far and lets you edit them.

@@ -11,7 +11,23 @@ const mocks = vi.hoisted(() => ({
     inferredCandidateStore: {}
   },
   canSubmit: true,
-  getMountIntervalStatus: vi.fn(() => ({ status: "none", openInterval: null, intervals: [], diagnostics: [] }))
+  getMountIntervalStatus: vi.fn(() => ({ status: "none", openInterval: null, intervals: [], diagnostics: [] })),
+  reconciliationReport: {
+    ok: true,
+    status: "ok",
+    checkedAt: 0,
+    candidateCount: 0,
+    spoolCount: 0,
+    decisionEventCount: 0,
+    undoEventCount: 0,
+    issueCount: 0,
+    visibleIssueCount: 0,
+    truncated: false,
+    blockerCount: 0,
+    warningCount: 0,
+    infoCount: 0,
+    issues: []
+  }
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({ monitorData: mocks.monitorData }));
@@ -20,6 +36,9 @@ vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
 }));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
   canSubmitLedgerDecision: () => mocks.canSubmit
+}));
+vi.mock("../../3dp_lib/dashboard_inferred_reconciliation.js", () => ({
+  buildInferredLedgerReconciliationReport: vi.fn(() => mocks.reconciliationReport)
 }));
 vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   formatFilamentAmount: (mm) => ({ display: `${Math.round(Number(mm)).toLocaleString()} mm` }),
@@ -90,6 +109,22 @@ beforeEach(() => {
   mocks.monitorData.inferredRecoveryEvents = [];
   mocks.monitorData.ledgerRepairRequired = {};
   mocks.monitorData.mountHistoryRejectedEvents = [];
+  mocks.reconciliationReport = {
+    ok: true,
+    status: "ok",
+    checkedAt: 0,
+    candidateCount: 0,
+    spoolCount: 0,
+    decisionEventCount: 0,
+    undoEventCount: 0,
+    issueCount: 0,
+    visibleIssueCount: 0,
+    truncated: false,
+    blockerCount: 0,
+    warningCount: 0,
+    infoCount: 0,
+    issues: []
+  };
   mocks.getMountIntervalStatus.mockReset();
   mocks.getMountIntervalStatus.mockReturnValue({ status: "none", openInterval: null, intervals: [], diagnostics: [] });
 });
@@ -289,6 +324,46 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
     });
     expect(vm.cards[0].details).toContainEqual({ label: "Operation", value: "clearLedgerRepairRequired" });
     expect(vm.cards[0].details).toContainEqual({ label: "Failure", value: "ledger_repair_clear_not_durably_saved" });
+  });
+
+  it("#425/O7A: ledger reconciliation issue を read-only blocker card に変換する", () => {
+    mocks.reconciliationReport = {
+      ok: false,
+      status: "blocker",
+      checkedAt: 7000,
+      candidateCount: 2,
+      spoolCount: 1,
+      decisionEventCount: 1,
+      undoEventCount: 0,
+      issueCount: 1,
+      visibleIssueCount: 1,
+      truncated: false,
+      blockerCount: 1,
+      warningCount: 0,
+      infoCount: 0,
+      issues: [{
+        severity: "blocker",
+        reason: "candidate_ledger_event_missing",
+        candidateHash: "ic-old",
+        host: "k1",
+        spoolId: "S1",
+        eventId: null,
+        observationKey: null,
+        details: {}
+      }]
+    };
+
+    const vm = buildInferredRecoverySurfaceViewModel();
+
+    expect(vm.hasIssues).toBe(true);
+    expect(vm.blockerCount).toBe(1);
+    expect(vm.cards[0]).toMatchObject({
+      type: "ledger-reconciliation",
+      severity: "blocker",
+      title: "Ledger reconciliation issues"
+    });
+    expect(vm.cards[0].details[0].value).toContain("candidate_ledger_event_missing");
+    expect(vm.cards[0].reconciliation.issueCount).toBe(1);
   });
 
   it("recovery item がない場合は空の診断モデルを返す", () => {

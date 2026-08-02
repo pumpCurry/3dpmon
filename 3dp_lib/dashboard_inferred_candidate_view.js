@@ -10,7 +10,8 @@
  * 【機能内容サマリ】
  * - inferredCandidateStore の保存レコードから O5 UI 用 ViewModel を生成する。
  * - status filter、sort、pending count、残量差分、履歴照合警告、decision/undo 送信可否を計算する。
- * - recovery / repair flag と O6 復旧操作 audit event を診断カードへ変換し、異常系を操作前後で見える状態にする。
+ * - recovery / repair flag、O6 復旧操作 audit event、O7 read-only reconciliation を診断カードへ変換し、
+ *   異常系を操作前後で見える状態にする。
  * - UI が candidate record や確定台帳を直接変更しないための表示専用境界を提供する。
  *
  * 【公開関数一覧】
@@ -19,9 +20,9 @@
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1274 (PR #424)
+ * @version 1.390.1275 (PR #425)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 18:33:44
+ * @lastModified 2026-08-02 19:10:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,6 +34,7 @@ import { monitorData } from "./dashboard_data.js";
 import { getMountIntervalStatus } from "./dashboard_filament_ledger.js";
 import { jobObservationIdentity } from "./dashboard_history_identity.js";
 import { canSubmitLedgerDecision } from "./dashboard_inferred_candidate_decision.js";
+import { buildInferredLedgerReconciliationReport } from "./dashboard_inferred_reconciliation.js";
 import { INFERRED_CANDIDATE_STATUS } from "./dashboard_offline_candidate_store.js";
 import { formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 
@@ -569,6 +571,8 @@ export function countPendingInferredCandidates(host = null) {
  * - `ledgerRepairRequired` は host 単位の mount ledger 修復要求として表示する。
  * - `mountHistoryRejectedEvents` は隔離済みイベントの件数と最新数件を表示し、元データが失われていない
  *   ことをオペレーターが確認できるようにする。
+ * - O7 reconciliation は read-only 監査として、candidate/ledger/history の構造的不一致だけを表示し、
+ *   自動修復や flag 解除は行わない。
  * - `inferredRecoveryEvents` は復旧操作の監査履歴として、問題が解消済みでも最新数件を表示する。
  *
  * @function buildInferredRecoverySurfaceViewModel
@@ -580,6 +584,10 @@ export function countPendingInferredCandidates(host = null) {
  */
 export function buildInferredRecoverySurfaceViewModel(options = {}) {
   const cards = [];
+  const reconciliation = buildInferredLedgerReconciliationReport({
+    nowMs: options.nowMs,
+    maxIssues: options.maxReconciliationIssues
+  });
   const recovery = monitorData.inferredDecisionRecoveryRequired;
   if (recovery && typeof recovery === "object") {
     cards.push({
@@ -674,6 +682,32 @@ export function buildInferredRecoverySurfaceViewModel(options = {}) {
           host: item?.event?.host || null,
           spoolId: item?.event?.spoolId || null,
           evId: item?.event?.evId || null
+        })
+      }))
+    });
+  }
+
+  if (reconciliation.issueCount > 0) {
+    cards.push({
+      type: "ledger-reconciliation",
+      severity: reconciliation.status === "blocker" ? "blocker" : "warning",
+      title: "Ledger reconciliation issues",
+      summary: `${reconciliation.issueCount}件の candidate / ledger / history 不整合を検出しました`,
+      host: null,
+      candidateHash: null,
+      createdAt: Number(reconciliation.checkedAt) || 0,
+      createdAtDisplay: _formatTime(reconciliation.checkedAt),
+      reconciliation,
+      details: reconciliation.issues.map((issue, index) => ({
+        label: `Issue ${index + 1}`,
+        value: _formatValue({
+          severity: issue.severity,
+          reason: issue.reason,
+          candidateHash: issue.candidateHash,
+          host: issue.host,
+          spoolId: issue.spoolId,
+          eventId: issue.eventId,
+          observationKey: issue.observationKey
         })
       }))
     });

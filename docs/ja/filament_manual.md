@@ -111,6 +111,8 @@ Standalone / Parent では、Recovery / repair status から次の復旧操作�
 
 復旧操作後は、同じ Recovery / repair status に **Recovery operation audit** が表示されます。ここには最新の再保存、recovery flag 解除、ledger repair flag 解除、隔離 event 退避の履歴が残り、対象 candidate、host、件数、操作者、実行時刻を確認できます。未解決 blocker が無い場合でも、直近の復旧操作履歴は INFO として表示されます。
 
+O7 の read-only 照合では、`inferredCandidateStore`、O5 が `usedLengthLog` へ追加した confirmed / undone event、履歴 `filamentInfo` / `filamentId` snapshot を突き合わせます。不一致がある場合は **Ledger reconciliation issues** として表示されます。この表示は診断専用で、自動修復や残量変更は行いません。通常 print finalize 由来の残量 baseline まで含む完全再計算は後続の O7B 対象です。
+
 ### 登録済みフィラメントタブ
 
 登録済みフィラメントタブでは、過去に登録したスプールを一覧で確認し編集できます。
