@@ -169,9 +169,14 @@ The O7 read-only reconciliation check compares `inferredCandidateStore`,
 O5 confirmed / undone events in `usedLengthLog`, and the history
 `filamentInfo` / `filamentId` snapshots. When it finds a mismatch, the
 surface shows **Ledger reconciliation issues**. This diagnostic does not
-repair data or change remaining length. Full recalculation that includes
-the normal print-finalize remaining baseline is reserved for a later O7B
-step.
+repair data or change remaining length. For spools with a known
+`startLength`, it also combines normal print-finalize `{jobId, used}`
+entries, O5 confirmed events, and O5 undone events to compare the
+recalculated remaining length with saved `remainingLengthMm`. Spools with
+unknown `startLength` or `remainingLengthMm` are counted as unverifiable
+instead of being reported as mismatches. Each issue includes a `repairHint`
+that names the next manual inspection or repair direction, but the
+diagnostic itself remains read-only.
 
 ### Registered Filament Tab
 

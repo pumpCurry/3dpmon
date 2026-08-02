@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
     spoolCount: 0,
     decisionEventCount: 0,
     undoEventCount: 0,
+    remainingBalanceOkCount: 0,
+    remainingBalanceMismatchCount: 0,
+    remainingBalanceUnverifiableCount: 0,
+    remainingBalances: [],
     issueCount: 0,
     visibleIssueCount: 0,
     truncated: false,
@@ -117,6 +121,10 @@ beforeEach(() => {
     spoolCount: 0,
     decisionEventCount: 0,
     undoEventCount: 0,
+    remainingBalanceOkCount: 0,
+    remainingBalanceMismatchCount: 0,
+    remainingBalanceUnverifiableCount: 0,
+    remainingBalances: [],
     issueCount: 0,
     visibleIssueCount: 0,
     truncated: false,
@@ -335,6 +343,10 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
       spoolCount: 1,
       decisionEventCount: 1,
       undoEventCount: 0,
+      remainingBalanceOkCount: 0,
+      remainingBalanceMismatchCount: 1,
+      remainingBalanceUnverifiableCount: 0,
+      remainingBalances: [{ spoolId: "S1", status: "mismatch" }],
       issueCount: 1,
       visibleIssueCount: 1,
       truncated: false,
@@ -344,6 +356,7 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
       issues: [{
         severity: "blocker",
         reason: "candidate_ledger_event_missing",
+        repairHint: "restore-ledger-event-or-reopen-candidate",
         candidateHash: "ic-old",
         host: "k1",
         spoolId: "S1",
@@ -362,7 +375,9 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
       severity: "blocker",
       title: "Ledger reconciliation issues"
     });
-    expect(vm.cards[0].details[0].value).toContain("candidate_ledger_event_missing");
+    expect(vm.cards[0].details).toContainEqual({ label: "Remaining mismatch", value: "1" });
+    expect(vm.cards[0].details[2].value).toContain("candidate_ledger_event_missing");
+    expect(vm.cards[0].details[2].value).toContain("restore-ledger-event-or-reopen-candidate");
     expect(vm.cards[0].reconciliation.issueCount).toBe(1);
   });
 

@@ -10,18 +10,20 @@
  * 【機能内容サマリ】
  * - O7 Ledger Reconciliation の read-only 入口として、O5 が作成した candidate decision と
  *   確定台帳 event、Undo 逆仕訳 event、履歴 attribution の構造的一致を検査する。
+ * - 再計算可能な spool では `startLength` と `usedLengthLog` から期待残量を計算し、保存残量との
+ *   差分を検出する。
  * - monitorData を読み取るだけで、spool 残量・履歴・candidate store・recovery flag は変更しない。
  * - 自動修復は行わず、O6/O7 の Recovery surface へ表示できる issue report を返す。
  *
  * 【公開関数一覧】
  * - {@link buildInferredLedgerReconciliationReport}：推定 candidate 台帳の read-only 照合結果を生成する
  *
- * @version 1.390.1275 (PR #425)
+ * @version 1.390.1276 (PR #426)
  * @since   1.390.1275 (PR #425)
- * @lastModified 2026-08-02 19:10:00
+ * @lastModified 2026-08-03 09:22:00
  * -----------------------------------------------------------
  * @todo
- * - O7B で通常 print finalize 由来の usedLengthLog と残量再計算 baseline を統合する。
+ * - none
  */
 
 "use strict";
@@ -52,6 +54,13 @@ export const INFERRED_RECONCILIATION_SEVERITY = Object.freeze({
  * @constant {string}
  */
 const INFERRED_DEBIT_STATUS = "inferred-debit";
+
+/**
+ * 残量再計算で許容する丸め誤差 [mm]。
+ *
+ * @constant {number}
+ */
+const REMAINING_TOLERANCE_MM = 0.1;
 
 /**
  * JSON 互換値を deep clone する。
@@ -91,6 +100,20 @@ function _nowMs(options = {}) {
 function _positiveMm(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * 0以上の有限 mm 値へ正規化する。
+ *
+ * @private
+ * @function _nonNegativeMmOrNull
+ * @param {*} value - mm 値候補。
+ * @returns {?number} 0以上の有限値。不正値は null。
+ */
+function _nonNegativeMmOrNull(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /**
@@ -288,6 +311,69 @@ function _usedLengthLog(spool) {
 }
 
 /**
+ * usedLengthLog の1行を残量再計算用 delta へ変換する。
+ *
+ * 【詳細説明】
+ * - 通常 print finalize の `{jobId, used}` は残量を減らす正の delta として扱う。
+ * - O5 Confirm/Reassign の confirmed event は `usedMm` を正の delta として扱う。
+ * - O5 Undo の undone event は `usedMm` を負の delta として扱い、逆仕訳として残量を戻す。
+ * - 未知 typed event や不正値は再計算を壊さないよう `ok:false` で返し、呼び出し側が
+ *   unverifiable issue に変換する。
+ *
+ * @private
+ * @function _usedLengthDelta
+ * @param {Object} entry - usedLengthLog entry。
+ * @returns {{ok:boolean,deltaMm:number,kind:string,reason:?string}} 残量計算 delta。
+ */
+function _usedLengthDelta(entry) {
+  if (!entry || typeof entry !== "object") {
+    return { ok: false, deltaMm: 0, kind: "invalid", reason: "used_length_log_entry_invalid" };
+  }
+  if (entry.type === INFERRED_DECISION_LEDGER_EVENT_TYPE) {
+    const usedMm = _positiveMm(entry.usedMm);
+    if (usedMm <= 0) return { ok: false, deltaMm: 0, kind: "inferred-confirmed", reason: "inferred_event_used_mm_invalid" };
+    return { ok: true, deltaMm: usedMm, kind: "inferred-confirmed", reason: null };
+  }
+  if (entry.type === INFERRED_DECISION_UNDO_LEDGER_EVENT_TYPE) {
+    const usedMm = _positiveMm(entry.usedMm);
+    if (usedMm <= 0) return { ok: false, deltaMm: 0, kind: "inferred-undone", reason: "inferred_undo_used_mm_invalid" };
+    return { ok: true, deltaMm: -usedMm, kind: "inferred-undone", reason: null };
+  }
+  if (entry.type) {
+    return { ok: false, deltaMm: 0, kind: "unknown-typed", reason: "used_length_log_type_unknown" };
+  }
+  const used = _nonNegativeMmOrNull(entry.used);
+  if (used == null) return { ok: false, deltaMm: 0, kind: "print-finalize", reason: "used_length_log_used_invalid" };
+  return { ok: true, deltaMm: used, kind: "print-finalize", reason: null };
+}
+
+/**
+ * issue reason から read-only 修復方針を返す。
+ *
+ * 【詳細説明】
+ * - O7 は自動修復を行わないため、issue には次に確認すべき運用操作や調査対象を添える。
+ * - ここで返す値は UI/レビュー用の提案であり、実際の台帳変更は O6/O7 の明示操作だけが行う。
+ *
+ * @private
+ * @function _repairHintForReason
+ * @param {string} reason - issue reason。
+ * @returns {string} 推奨される確認・修復方針。
+ */
+function _repairHintForReason(reason) {
+  if (reason === "spool_remaining_recalculation_mismatch") return "verify-spool-balance-and-repair-ledger";
+  if (reason === "spool_balance_unverifiable") return "inspect-used-length-log-entry";
+  if (reason === "orphan_inferred_ledger_event") return "restore-candidate-or-append-reversal";
+  if (reason === "unresolved_candidate_has_ledger_event") return "resolve-candidate-status-or-reverse-ledger-event";
+  if (reason === "candidate_ledger_event_missing") return "restore-ledger-event-or-reopen-candidate";
+  if (reason === "candidate_undo_event_missing_or_ambiguous") return "inspect-undo-ledger-events";
+  if (reason === "history_attribution_mismatch") return "inspect-history-attribution-before-undo";
+  if (reason.includes("history")) return "inspect-print-history-snapshots";
+  if (reason.includes("undo")) return "inspect-undo-ledger-events";
+  if (reason.includes("ledger")) return "inspect-candidate-ledger-events";
+  return "manual-reconciliation-required";
+}
+
+/**
  * spool.usedLengthLog から O5 confirmed event を抽出する。
  *
  * @private
@@ -335,6 +421,7 @@ function _issue(severity, reason, data = {}) {
   return {
     severity,
     reason,
+    repairHint: data.repairHint || _repairHintForReason(reason),
     candidateHash: data.candidateHash || null,
     host: data.host || null,
     spoolId: data.spoolId || null,
@@ -654,6 +741,122 @@ function _checkOrphanLedgerEvents(knownCandidateHashes) {
 }
 
 /**
+ * spool の startLength と usedLengthLog から期待残量を再計算する。
+ *
+ * 【詳細説明】
+ * - `startLength` はこの spool の台帳開始点であり、通常 print finalize と O5 inferred decision の
+ *   delta をすべて差し引くことで期待残量を求める。
+ * - `startLength` や `remainingLengthMm` が不明な spool は、古い import や手動編集の可能性があるため
+ *   issue にはせず `status:"unverifiable"` として集計だけ行う。
+ * - usedLengthLog 内の不正 entry は再計算結果を信用できないため warning issue を返す。
+ *
+ * @private
+ * @function _checkSpoolRemainingBalance
+ * @param {Object} spool - spool object。
+ * @returns {{balance:Object,issues:Array<Object>}} balance と issue 配列。
+ */
+function _checkSpoolRemainingBalance(spool) {
+  const spoolId = spool?.id == null ? null : String(spool.id);
+  const startLengthMm = _nonNegativeMmOrNull(spool?.startLength);
+  const remainingLengthMm = _nonNegativeMmOrNull(spool?.remainingLengthMm);
+  const log = _usedLengthLog(spool);
+  const base = {
+    spoolId,
+    startLengthMm,
+    remainingLengthMm,
+    expectedRemainingMm: null,
+    netUsedMm: null,
+    deltaMm: null,
+    status: "unverifiable",
+    reason: null,
+    logCount: log.length
+  };
+  if (!spoolId) {
+    return {
+      balance: { ...base, reason: "spool_id_missing" },
+      issues: [_issue(INFERRED_RECONCILIATION_SEVERITY.WARNING, "spool_balance_unverifiable", {
+        spoolId,
+        details: { reason: "spool_id_missing" }
+      })]
+    };
+  }
+  if (startLengthMm == null || remainingLengthMm == null) {
+    return {
+      balance: {
+        ...base,
+        reason: startLengthMm == null ? "start_length_unknown" : "remaining_length_unknown"
+      },
+      issues: []
+    };
+  }
+
+  let netUsedMm = 0;
+  const issues = [];
+  for (let index = 0; index < log.length; index++) {
+    const delta = _usedLengthDelta(log[index]);
+    if (!delta.ok) {
+      issues.push(_issue(INFERRED_RECONCILIATION_SEVERITY.WARNING, "spool_balance_unverifiable", {
+        spoolId,
+        eventId: log[index]?.eventId || null,
+        details: {
+          reason: delta.reason,
+          index,
+          kind: delta.kind
+        }
+      }));
+      return {
+        balance: { ...base, status: "unverifiable", reason: delta.reason },
+        issues
+      };
+    }
+    netUsedMm += delta.deltaMm;
+  }
+
+  const expectedRemainingMm = Math.max(0, startLengthMm - netUsedMm);
+  const deltaMm = remainingLengthMm - expectedRemainingMm;
+  const ok = Math.abs(deltaMm) <= REMAINING_TOLERANCE_MM;
+  const balance = {
+    ...base,
+    expectedRemainingMm,
+    netUsedMm,
+    deltaMm,
+    status: ok ? "ok" : "mismatch",
+    reason: ok ? null : "remaining_length_mismatch"
+  };
+  if (!ok) {
+    issues.push(_issue(INFERRED_RECONCILIATION_SEVERITY.BLOCKER, "spool_remaining_recalculation_mismatch", {
+      spoolId,
+      details: {
+        startLengthMm,
+        netUsedMm,
+        expectedRemainingMm,
+        remainingLengthMm,
+        deltaMm
+      }
+    }));
+  }
+  return { balance, issues };
+}
+
+/**
+ * 全 active spool の残量再計算結果を作る。
+ *
+ * @private
+ * @function _checkSpoolRemainingBalances
+ * @returns {{balances:Array<Object>,issues:Array<Object>}} balance report。
+ */
+function _checkSpoolRemainingBalances() {
+  const balances = [];
+  const issues = [];
+  for (const spool of _spools()) {
+    const result = _checkSpoolRemainingBalance(spool);
+    balances.push(result.balance);
+    issues.push(...result.issues);
+  }
+  return { balances, issues };
+}
+
+/**
  * 推定 candidate 台帳の read-only 照合結果を生成する。
  *
  * 【詳細説明】
@@ -685,6 +888,8 @@ export function buildInferredLedgerReconciliationReport(options = {}) {
     }
   }
   issues.push(..._checkOrphanLedgerEvents(known));
+  const remainingBalances = _checkSpoolRemainingBalances();
+  issues.push(...remainingBalances.issues);
 
   const maxIssues = Math.max(1, Math.min(100, Number(options.maxIssues) || 20));
   const limitedIssues = issues.slice(0, maxIssues);
@@ -695,6 +900,9 @@ export function buildInferredLedgerReconciliationReport(options = {}) {
     sum + _usedLengthLog(spool).filter(event => event?.type === INFERRED_DECISION_LEDGER_EVENT_TYPE).length, 0);
   const undoEventCount = _spools().reduce((sum, spool) =>
     sum + _usedLengthLog(spool).filter(event => event?.type === INFERRED_DECISION_UNDO_LEDGER_EVENT_TYPE).length, 0);
+  const remainingBalanceOkCount = remainingBalances.balances.filter(item => item.status === "ok").length;
+  const remainingBalanceMismatchCount = remainingBalances.balances.filter(item => item.status === "mismatch").length;
+  const remainingBalanceUnverifiableCount = remainingBalances.balances.filter(item => item.status === "unverifiable").length;
 
   return {
     ok: issues.length === 0,
@@ -704,6 +912,10 @@ export function buildInferredLedgerReconciliationReport(options = {}) {
     spoolCount: _spools().length,
     decisionEventCount,
     undoEventCount,
+    remainingBalanceOkCount,
+    remainingBalanceMismatchCount,
+    remainingBalanceUnverifiableCount,
+    remainingBalances: remainingBalances.balances,
     issueCount: issues.length,
     visibleIssueCount: limitedIssues.length,
     truncated: limitedIssues.length < issues.length,

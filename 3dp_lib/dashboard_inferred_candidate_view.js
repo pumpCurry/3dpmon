@@ -20,9 +20,9 @@
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1275 (PR #425)
+ * @version 1.390.1276 (PR #426)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 19:10:00
+ * @lastModified 2026-08-03 09:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -698,18 +698,23 @@ export function buildInferredRecoverySurfaceViewModel(options = {}) {
       createdAt: Number(reconciliation.checkedAt) || 0,
       createdAtDisplay: _formatTime(reconciliation.checkedAt),
       reconciliation,
-      details: reconciliation.issues.map((issue, index) => ({
-        label: `Issue ${index + 1}`,
-        value: _formatValue({
-          severity: issue.severity,
-          reason: issue.reason,
-          candidateHash: issue.candidateHash,
-          host: issue.host,
-          spoolId: issue.spoolId,
-          eventId: issue.eventId,
-          observationKey: issue.observationKey
-        })
-      }))
+      details: [
+        { label: "Remaining mismatch", value: _formatValue(reconciliation.remainingBalanceMismatchCount || 0) },
+        { label: "Remaining unverifiable", value: _formatValue(reconciliation.remainingBalanceUnverifiableCount || 0) },
+        ...reconciliation.issues.map((issue, index) => ({
+          label: `Issue ${index + 1}`,
+          value: _formatValue({
+            severity: issue.severity,
+            reason: issue.reason,
+            repairHint: issue.repairHint,
+            candidateHash: issue.candidateHash,
+            host: issue.host,
+            spoolId: issue.spoolId,
+            eventId: issue.eventId,
+            observationKey: issue.observationKey
+          })
+        }))
+      ]
     });
   }
 

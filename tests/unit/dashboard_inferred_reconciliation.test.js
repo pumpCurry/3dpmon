@@ -134,7 +134,7 @@ beforeEach(() => {
     }
   };
   mocks.monitorData.filamentSpools = [
-    { id: "S1", remainingLengthMm: 7000, usedLengthLog: [decisionEvent()] }
+    { id: "S1", startLength: 10000, remainingLengthMm: 7000, usedLengthLog: [decisionEvent()] }
   ];
   mocks.monitorData.inferredCandidateStore = {
     "ic-a": candidate("confirmed")
@@ -153,6 +153,9 @@ describe("buildInferredLedgerReconciliationReport", () => {
       spoolCount: 1,
       decisionEventCount: 1,
       undoEventCount: 0,
+      remainingBalanceOkCount: 1,
+      remainingBalanceMismatchCount: 0,
+      remainingBalanceUnverifiableCount: 0,
       issueCount: 0,
       issues: []
     });
@@ -204,6 +207,7 @@ describe("buildInferredLedgerReconciliationReport", () => {
   it("#425/O7A: undone candidate の履歴が Confirm 前 snapshot に戻っていれば ok を返す", () => {
     mocks.monitorData.inferredCandidateStore["ic-a"] = candidate("undone");
     mocks.monitorData.filamentSpools[0].usedLengthLog = [decisionEvent(), undoEvent()];
+    mocks.monitorData.filamentSpools[0].remainingLengthMm = 10000;
     mocks.monitorData.machines.k1.printStore.history = [
       { observationKey: "kA" },
       { observationKey: "kB" }
@@ -213,6 +217,7 @@ describe("buildInferredLedgerReconciliationReport", () => {
 
     expect(report.ok).toBe(true);
     expect(report.undoEventCount).toBe(1);
+    expect(report.remainingBalanceOkCount).toBe(1);
   });
 
   it("#425/O7A: confirmed candidate の履歴 attribution 変更を blocker として検出する", () => {
@@ -256,6 +261,91 @@ describe("buildInferredLedgerReconciliationReport", () => {
       reason: "orphan_inferred_ledger_event",
       candidateHash: "ic-a",
       eventId: "ev-a"
+    }));
+  });
+
+  it("#426/O7B: startLength と usedLengthLog から保存残量の不一致を検出する", () => {
+    mocks.monitorData.filamentSpools[0].remainingLengthMm = 6500;
+
+    const report = buildInferredLedgerReconciliationReport();
+
+    expect(report.ok).toBe(false);
+    expect(report.remainingBalanceMismatchCount).toBe(1);
+    expect(report.remainingBalances[0]).toMatchObject({
+      spoolId: "S1",
+      startLengthMm: 10000,
+      expectedRemainingMm: 7000,
+      remainingLengthMm: 6500,
+      deltaMm: -500,
+      status: "mismatch"
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      severity: "blocker",
+      reason: "spool_remaining_recalculation_mismatch",
+      repairHint: "verify-spool-balance-and-repair-ledger",
+      spoolId: "S1"
+    }));
+  });
+
+  it("#426/O7B: 通常 usedLengthLog と O5逆仕訳を同じ残量再計算へ含める", () => {
+    mocks.monitorData.inferredCandidateStore["ic-a"] = candidate("undone");
+    mocks.monitorData.filamentSpools[0].usedLengthLog = [
+      { jobId: "normal-a", used: 500 },
+      decisionEvent(),
+      undoEvent()
+    ];
+    mocks.monitorData.filamentSpools[0].remainingLengthMm = 9500;
+    mocks.monitorData.machines.k1.printStore.history = [
+      { observationKey: "kA" },
+      { observationKey: "kB" }
+    ];
+
+    const report = buildInferredLedgerReconciliationReport();
+
+    expect(report.ok).toBe(true);
+    expect(report.remainingBalances[0]).toMatchObject({
+      spoolId: "S1",
+      netUsedMm: 500,
+      expectedRemainingMm: 9500,
+      remainingLengthMm: 9500,
+      status: "ok"
+    });
+  });
+
+  it("#426/O7B: 0使用量の通常 usedLengthLog は no-op として残量再計算へ含める", () => {
+    mocks.monitorData.inferredCandidateStore = {};
+    mocks.monitorData.filamentSpools = [
+      { id: "S2", startLength: 1000, remainingLengthMm: 1000, usedLengthLog: [{ jobId: "zero", used: 0 }] }
+    ];
+
+    const report = buildInferredLedgerReconciliationReport();
+
+    expect(report.ok).toBe(true);
+    expect(report.remainingBalanceOkCount).toBe(1);
+    expect(report.remainingBalances[0]).toMatchObject({
+      spoolId: "S2",
+      netUsedMm: 0,
+      expectedRemainingMm: 1000,
+      status: "ok"
+    });
+  });
+
+  it("#426/O7B: 非数値の usedLengthLog は残量再計算不能 warning として検出する", () => {
+    mocks.monitorData.inferredCandidateStore = {};
+    mocks.monitorData.filamentSpools = [
+      { id: "S2", startLength: 1000, remainingLengthMm: 900, usedLengthLog: [{ jobId: "bad", used: "abc" }] }
+    ];
+
+    const report = buildInferredLedgerReconciliationReport();
+
+    expect(report.ok).toBe(false);
+    expect(report.status).toBe("warning");
+    expect(report.remainingBalanceUnverifiableCount).toBe(1);
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      reason: "spool_balance_unverifiable",
+      repairHint: "inspect-used-length-log-entry",
+      spoolId: "S2"
     }));
   });
 });
