@@ -11,14 +11,14 @@
  * - O5B Candidate Center として pending/処理済み candidate の一覧、詳細、監査 timeline を描画する。
  * - Confirm / Reject / Reassign / Undo の操作ダイアログを提供し、実更新は Decision Core へ委譲する。
  * - SATELLITE 子では Parent へ decision request を送り、readonly 子では操作ボタンを disabled にする。
- * - recovery / repair flag は read-only 診断カードとして表示し、復旧操作は後続PRへ分離する。
+ * - recovery / repair flag は診断カードとして表示し、O6 Recovery Operations を Parent/Standalone へ接続する。
  *
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1269 (PR #419)
+ * @version 1.390.1270 (PR #420)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-01 19:47:47
+ * @lastModified 2026-08-02 15:05:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,6 +41,13 @@ import {
   countPendingInferredCandidates,
   listInferredCandidateViewModels
 } from "./dashboard_inferred_candidate_view.js";
+import {
+  archiveMountHistoryRejectedEvents,
+  canExecuteRecoveryOperation,
+  clearInferredDecisionRecoveryRequired,
+  clearLedgerRepairRequired,
+  retryInferredRecoveryDurableSave
+} from "./dashboard_inferred_recovery_ops.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
@@ -95,7 +102,18 @@ const REASON_LABELS = Object.freeze({
   candidate_history_post_state_changed: "確定後に履歴情報が変更されたため取り消しできません",
   candidate_ledger_event_total_mismatch: "台帳イベントと候補の消費量が一致しません",
   invalid_reject_reason: "否認理由が不正です",
-  rollback_durable_save_failed: "復旧状態の保存に失敗しました"
+  rollback_durable_save_failed: "復旧状態の保存に失敗しました",
+  recovery_not_authorized: "この端末では復旧操作を実行できません。親端末で実行してください",
+  recovery_not_required: "復旧対象はありません",
+  decision_recovery_not_found: "整合性確認フラグは見つかりません",
+  recovery_retry_not_durably_saved: "復旧状態の再保存に失敗しました",
+  recovery_operation_rollback_save_failed: "復旧操作のrollback状態を保存できませんでした",
+  decision_recovery_clear_not_durably_saved: "整合性確認フラグの解除を保存できませんでした",
+  ledger_repair_host_required: "修復対象ホストが不正です",
+  ledger_repair_not_found: "台帳修復フラグは見つかりません",
+  ledger_repair_clear_not_durably_saved: "台帳修復フラグの解除を保存できませんでした",
+  mount_history_rejected_events_not_found: "隔離済みmount eventは見つかりません",
+  mount_history_rejected_archive_not_durably_saved: "隔離済みmount eventの退避を保存できませんでした"
 });
 
 /**
@@ -263,18 +281,152 @@ function _warningChips(codes) {
 }
 
 /**
+ * recovery 操作結果を通知し、必要なら再描画する。
+ *
+ * @private
+ * @function _handleRecoveryResult
+ * @param {Object} result - O6 Recovery Operations の戻り値。
+ * @param {Function} render - 再描画関数。
+ * @param {Function} [onAfterDecision] - 外部再描画 hook。
+ * @returns {void}
+ */
+function _handleRecoveryResult(result, render, onAfterDecision) {
+  if (result?.ok) {
+    const label = result.reason === "recovery_durable_save_retried" ? "復旧状態を再保存しました"
+      : result.reason === "decision_recovery_cleared" ? "整合性確認フラグを解除しました"
+        : result.reason === "ledger_repair_cleared" ? "台帳修復フラグを解除しました"
+          : result.reason === "mount_history_rejected_events_archived" ? "隔離イベントを監査へ退避しました"
+            : "復旧操作を実行しました";
+    showAlert(label, "success");
+    try { onAfterDecision?.(result); } catch { /* noop */ }
+    render();
+    return;
+  }
+  showAlert(_reasonLabel(result?.reason), "error");
+  render();
+}
+
+/**
+ * recovery 操作の確認ダイアログを表示する。
+ *
+ * @private
+ * @function _confirmRecoveryAction
+ * @param {string} title - ダイアログタイトル。
+ * @param {string} summary - 表示する説明。
+ * @param {string} confirmText - 実行ボタン文言。
+ * @returns {Promise<boolean>} 実行する場合 true。
+ */
+async function _confirmRecoveryAction(title, summary, confirmText) {
+  const body = _el("div", "ic-confirm-summary");
+  body.appendChild(_el("p", "", summary));
+  const ok = await showConfirmDialog({
+    level: "warn",
+    title,
+    html: body.outerHTML,
+    confirmText,
+    cancelText: "キャンセル"
+  });
+  return ok === true;
+}
+
+/**
+ * recovery card の操作ボタンを追加する。
+ *
+ * 【詳細説明】
+ * - O6A では Parent/Standalone だけが復旧操作を実行できる。
+ * - Satellite は親の診断を read-only 表示するため、ボタンは disabled としローカル書き込みを行わない。
+ *
+ * @private
+ * @function _appendRecoveryActions
+ * @param {HTMLElement} el - card 要素。
+ * @param {Object} card - recovery surface card ViewModel。
+ * @param {Function} render - 再描画関数。
+ * @param {Function} [onAfterDecision] - 外部再描画 hook。
+ * @returns {void}
+ */
+function _appendRecoveryActions(el, card, render, onAfterDecision) {
+  const canExecute = canExecuteRecoveryOperation();
+  const actions = _el("div", "ic-recovery-actions");
+  if (!canExecute) {
+    actions.appendChild(_el("div", "ic-readonly-note", "この端末はSatellite/閲覧専用です。復旧操作は親端末で実行してください。"));
+  }
+
+  if (card.type === "decision-recovery") {
+    const retryBtn = _el("button", "ic-action-secondary", "Retry save");
+    retryBtn.disabled = !canExecute;
+    retryBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const result = await retryInferredRecoveryDurableSave({ actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
+    const clearBtn = _el("button", "ic-action-secondary", "Clear recovery");
+    clearBtn.disabled = !canExecute;
+    clearBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const ok = await _confirmRecoveryAction(
+          "整合性確認フラグを解除",
+          "rollback後のcandidate・残量・履歴状態を確認済みの場合だけ解除してください。",
+          "解除する"
+        );
+        if (!ok) return;
+        const result = await clearInferredDecisionRecoveryRequired({ actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
+    actions.append(retryBtn, clearBtn);
+  } else if (card.type === "ledger-repair") {
+    const clearBtn = _el("button", "ic-action-secondary", "Clear repair");
+    clearBtn.disabled = !canExecute || !card.host;
+    clearBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const ok = await _confirmRecoveryAction(
+          "台帳修復フラグを解除",
+          "対象hostのmount ledgerを確認済みの場合だけ解除してください。",
+          "解除する"
+        );
+        if (!ok) return;
+        const result = await clearLedgerRepairRequired(card.host, { actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
+    actions.appendChild(clearBtn);
+  } else if (card.type === "mount-history-rejected") {
+    const archiveBtn = _el("button", "ic-action-secondary", "Archive rejected");
+    archiveBtn.disabled = !canExecute;
+    archiveBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const ok = await _confirmRecoveryAction(
+          "隔離イベントを監査へ退避",
+          "隔離済みmount eventをrecovery audit eventへ退避し、warningを閉じます。",
+          "退避する"
+        );
+        if (!ok) return;
+        const result = await archiveMountHistoryRejectedEvents({ actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
+    actions.appendChild(archiveBtn);
+  }
+
+  if (actions.childNodes.length > 0) el.appendChild(actions);
+}
+
+/**
  * recovery / repair 診断カードを生成する。
  *
  * 【詳細説明】
- * - #418 では復旧操作を持たせず、異常状態を read-only で見えるようにする。
- * - card.details は ViewModel 層で表示可能な文字列へ整形済みなので、ここでは DOM を組み立てるだけにする。
+ * - #420 では Parent/Standalone に限定して復旧操作を接続する。
+ * - card.details は ViewModel 層で表示可能な文字列へ整形済みなので、ここでは DOM と操作ボタンを組み立てる。
  *
  * @private
  * @function _recoveryCard
  * @param {Object} card - recovery surface card ViewModel。
+ * @param {Function} render - 再描画関数。
+ * @param {Function} [onAfterDecision] - 外部再描画 hook。
  * @returns {HTMLElement} card 要素。
  */
-function _recoveryCard(card) {
+function _recoveryCard(card, render, onAfterDecision) {
   const el = _el("article", `ic-recovery-card ic-recovery-${card.severity || "warning"}`);
   const header = _el("div", "ic-recovery-card-header");
   header.append(
@@ -287,6 +439,7 @@ function _recoveryCard(card) {
     detailWrap.appendChild(_kv(detail.label, detail.value));
   }
   if (detailWrap.childNodes.length > 0) el.appendChild(detailWrap);
+  _appendRecoveryActions(el, card, render, onAfterDecision);
   return el;
 }
 
@@ -302,7 +455,7 @@ function _recoveryCard(card) {
  * @param {HTMLElement} wrap - 描画先。
  * @returns {void}
  */
-function _renderRecoverySurface(wrap) {
+function _renderRecoverySurface(wrap, render, onAfterDecision) {
   const model = buildInferredRecoverySurfaceViewModel();
   wrap.innerHTML = "";
   if (!model.hasIssues) return;
@@ -313,7 +466,7 @@ function _renderRecoverySurface(wrap) {
     "ic-recovery-overview",
     `Blocker ${model.blockerCount} / Warning ${model.warningCount}`
   ));
-  for (const card of model.cards) panel.appendChild(_recoveryCard(card));
+  for (const card of model.cards) panel.appendChild(_recoveryCard(card, render, onAfterDecision));
   wrap.appendChild(panel);
 }
 
@@ -721,7 +874,7 @@ export function createInferredCandidateCenterContent(options = {}) {
    * @returns {void} 戻り値はない。
    */
   function render() {
-    _renderRecoverySurface(recoveryWrap);
+    _renderRecoverySurface(recoveryWrap, render, options.onAfterDecision);
     const models = listInferredCandidateViewModels({
       status: statusSelect.value,
       sort: sortSelect.value,

@@ -12,6 +12,7 @@
  *   （filamentSpools / hostSpoolMap / mountHistory / recovery 診断の共有状態を含む）
  * - 子（satellite）からのコマンド/フィラメント操作 RPC を受信し親側で実行
  * - 子（satellite）からの O5 inferred candidate decision request を親側で実行
+ * - O6 recovery / repair 操作の監査状態を子へ read-only 配信する
  * - 新規子クライアント接続時にフルスナップショットを送信
  *
  * 【公開関数一覧】
@@ -21,9 +22,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1268 (PR #418)
+ * @version 1.390.1270 (PR #420)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-01 23:20:09
+ * @lastModified 2026-08-02 15:05:22
  * -----------------------------------------------------------
  */
 
@@ -698,6 +699,7 @@ function _buildDelta() {
   //   candidate store とは別ハッシュで低頻度同期する。
   const recoveryHash = _quickHash(
     monitorData.inferredDecisionRecoveryRequired || null,
+    monitorData.inferredRecoveryEvents || [],
     monitorData.ledgerRepairRequired || {},
     monitorData.mountHistoryRejectedEvents || []
   );
@@ -705,6 +707,7 @@ function _buildDelta() {
     _prevRecoveryHash = recoveryHash;
     sharedDelta = sharedDelta || {};
     sharedDelta.inferredDecisionRecoveryRequired = monitorData.inferredDecisionRecoveryRequired || null;
+    sharedDelta.inferredRecoveryEvents = monitorData.inferredRecoveryEvents || [];
     sharedDelta.ledgerRepairRequired = monitorData.ledgerRepairRequired || {};
     sharedDelta.mountHistoryRejectedEvents = monitorData.mountHistoryRejectedEvents || [];
     hasChanges = true;
@@ -821,6 +824,7 @@ function _buildFullSnapshot() {
     inferredCandidateStore: monitorData.inferredCandidateStore || {},
     // ★ #418: Candidate Center の Recovery / repair 診断も親権威で子へ同梱する。
     inferredDecisionRecoveryRequired: monitorData.inferredDecisionRecoveryRequired || null,
+    inferredRecoveryEvents: monitorData.inferredRecoveryEvents || [],
     ledgerRepairRequired: monitorData.ledgerRepairRequired || {},
     mountHistoryRejectedEvents: monitorData.mountHistoryRejectedEvents || [],
     // ★ 監査 P0(第2報): フィラメント補助ドメインをスナップショットにも同梱（親=権威）。

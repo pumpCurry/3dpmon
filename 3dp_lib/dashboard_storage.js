@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1256 (PR #413)
+* @version 1.390.1270 (PR #420)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-07-25 11:15:54
+* @lastModified 2026-08-02 15:05:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -276,6 +276,32 @@ export async function importAllData(data) {
         monitorData.inferredCandidateStore[hash] = { ...value };
       }
     }
+  }
+
+  // ── ★ #420/O6A: O5 recovery flag と recovery 操作 audit event をインポート ──
+  //   recovery flag は未解決 blocker なので、既存より新しい createdAt を持つ場合だけ採用する。
+  if (Object.prototype.hasOwnProperty.call(data, "inferredDecisionRecoveryRequired")) {
+    const incoming = data.inferredDecisionRecoveryRequired;
+    if (incoming && typeof incoming === "object") {
+      const current = monitorData.inferredDecisionRecoveryRequired;
+      if (!current || (Number(incoming.createdAt) || 0) >= (Number(current.createdAt) || 0)) {
+        monitorData.inferredDecisionRecoveryRequired = { ...incoming };
+      }
+    } else if (!monitorData.inferredDecisionRecoveryRequired) {
+      monitorData.inferredDecisionRecoveryRequired = null;
+    }
+  }
+  if (Array.isArray(data.inferredRecoveryEvents)) {
+    if (!Array.isArray(monitorData.inferredRecoveryEvents)) monitorData.inferredRecoveryEvents = [];
+    const seen = new Set(monitorData.inferredRecoveryEvents.map(event => event?.eventId));
+    for (const event of data.inferredRecoveryEvents) {
+      const key = event?.eventId;
+      if (event && key != null && !seen.has(key)) {
+        monitorData.inferredRecoveryEvents.push({ ...event });
+        seen.add(key);
+      }
+    }
+    monitorData.inferredRecoveryEvents.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
   }
 
   // ── プリセット: presetId ベースで新規のみ追加 (ユーザー編集版を保持) ──
@@ -677,6 +703,8 @@ const LS_GLOBAL_FIELDS = [
   "hostObservationWatermark", "hostObservationCurrent",
   // ★ #412-O4: オフライン継続推定 candidate（親権威・状態遷移つき）
   "inferredCandidateStore",
+  // ★ #420/O6A: O5 recovery blocker と復旧操作 audit event
+  "inferredDecisionRecoveryRequired", "inferredRecoveryEvents",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
   // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
@@ -932,6 +960,8 @@ function _flushStorage() {
       queueSharedWrite("hostObservationWatermark", monitorData.hostObservationWatermark);
       queueSharedWrite("hostObservationCurrent",   monitorData.hostObservationCurrent);
       queueSharedWrite("inferredCandidateStore",   monitorData.inferredCandidateStore);
+      queueSharedWrite("inferredDecisionRecoveryRequired", monitorData.inferredDecisionRecoveryRequired || null);
+      queueSharedWrite("inferredRecoveryEvents", monitorData.inferredRecoveryEvents || []);
       // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
       queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
       queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
@@ -1331,6 +1361,27 @@ function _restoreFromData(shared, machines) {
         monitorData.inferredCandidateStore[hash] = { ...value };
       }
     }
+  }
+
+  // ★ #420/O6A: O5 recovery flag と復旧操作 audit event を復元する。
+  //   recovery flag は blocker なので、ストレージ値が明示 null の場合も状態を消す。
+  if (shared && Object.prototype.hasOwnProperty.call(shared, "inferredDecisionRecoveryRequired")) {
+    monitorData.inferredDecisionRecoveryRequired =
+      shared.inferredDecisionRecoveryRequired && typeof shared.inferredDecisionRecoveryRequired === "object"
+        ? { ...shared.inferredDecisionRecoveryRequired }
+        : null;
+  }
+  if (Array.isArray(shared?.inferredRecoveryEvents)) {
+    if (!Array.isArray(monitorData.inferredRecoveryEvents)) monitorData.inferredRecoveryEvents = [];
+    const seen = new Set(monitorData.inferredRecoveryEvents.map(event => event?.eventId));
+    for (const event of shared.inferredRecoveryEvents) {
+      const key = event?.eventId;
+      if (event && key != null && !seen.has(key)) {
+        monitorData.inferredRecoveryEvents.push({ ...event });
+        seen.add(key);
+      }
+    }
+    monitorData.inferredRecoveryEvents.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
   }
 
   // ★ filamentInventory: IDベースマージ

@@ -42,6 +42,8 @@ const monitorData = {
   pendingUnattributedUsage: [],
   pendingUnattributedUsageArchive: {},
   inferredCandidateStore: {},
+  inferredDecisionRecoveryRequired: null,
+  inferredRecoveryEvents: [],
   ledgerRepairRequired: {},
   filamentEventContext: {},
   hostSpoolMap: {},
@@ -66,6 +68,8 @@ function resetMonitorData() {
   monitorData.pendingUnattributedUsage = [];
   monitorData.pendingUnattributedUsageArchive = {};
   monitorData.inferredCandidateStore = {};
+  monitorData.inferredDecisionRecoveryRequired = null;
+  monitorData.inferredRecoveryEvents = [];
   monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
   monitorData.hostCameraToggle = {};
@@ -167,6 +171,15 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     monitorData.inferredCandidateStore = {
       "ic-a": { candidateHash: "ic-a", host: "h", windowId: "w1", candidateSpoolId: "S", usedMm: 1234, status: "pending", updatedAt: 111 },
     };
+    monitorData.inferredDecisionRecoveryRequired = {
+      candidateHash: "ic-a",
+      action: "confirmInferredCandidate",
+      reason: "rollback_durable_save_failed",
+      createdAt: 120,
+    };
+    monitorData.inferredRecoveryEvents = [
+      { eventId: "ir-a", type: "decision-recovery-cleared", createdAt: 130, actor: "operator" },
+    ];
 
     saveUnifiedStorage(true);
     resetMonitorData(); // リロード模擬（隔離・アーカイブ・seq・修復要求を空へ）
@@ -185,6 +198,11 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.ledgerRepairRequired.h.status).toBe("ambiguous");
     // #412-O4: 推定 candidate store も往復で保持
     expect(monitorData.inferredCandidateStore["ic-a"].usedMm).toBe(1234);
+    // #420/O6A: recovery flag と audit event も往復で保持
+    expect(monitorData.inferredDecisionRecoveryRequired.reason).toBe("rollback_durable_save_failed");
+    expect(monitorData.inferredRecoveryEvents).toEqual([
+      { eventId: "ir-a", type: "decision-recovery-cleared", createdAt: 130, actor: "operator" },
+    ]);
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {
@@ -202,6 +220,32 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.inferredCandidateStore["ic-a"].status).toBe("confirmed");
     expect(monitorData.inferredCandidateStore["ic-old"].status).toBe("pending");
     expect(monitorData.inferredCandidateStore["ic-b"].usedMm).toBe(200);
+  });
+
+  it('#420/O6A: import は recovery flag と audit event を安全にマージする', async () => {
+    monitorData.inferredDecisionRecoveryRequired = {
+      candidateHash: "ic-old",
+      reason: "old",
+      createdAt: 10,
+    };
+    monitorData.inferredRecoveryEvents = [
+      { eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 20 },
+    ];
+
+    await importAllData({
+      inferredDecisionRecoveryRequired: {
+        candidateHash: "ic-new",
+        reason: "rollback_durable_save_failed",
+        createdAt: 30,
+      },
+      inferredRecoveryEvents: [
+        { eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 20 },
+        { eventId: "ir-b", type: "decision-recovery-cleared", createdAt: 40 },
+      ],
+    });
+
+    expect(monitorData.inferredDecisionRecoveryRequired.candidateHash).toBe("ic-new");
+    expect(monitorData.inferredRecoveryEvents.map(event => event.eventId)).toEqual(["ir-a", "ir-b"]);
   });
 
   it('P1-1: import は同一 opId(別evId)の mount を1件に畳む', async () => {

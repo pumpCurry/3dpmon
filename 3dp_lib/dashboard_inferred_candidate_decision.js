@@ -19,6 +19,7 @@
  * - Undo も同じ transaction 境界で、O5 が追加した台帳 event と履歴 attribution だけを逆反映する。
  *
  * 【公開関数一覧】
+ * - {@link enqueueLedgerDecisionTask}：O5/O6 の ledger 操作を共通キューで直列化する
  * - {@link canExecuteLedgerDecision}：この端末で O5 decision を実行できるか判定する
  * - {@link canSubmitLedgerDecision}：この端末から O5 decision を送信できるか判定する
  * - {@link confirmInferredCandidate}：candidate spool で推定使用量を確定する
@@ -26,9 +27,9 @@
  * - {@link reassignInferredCandidate}：別 spool へ再割当てして推定使用量を確定する
  * - {@link undoInferredCandidateDecision}：確定済み candidate の台帳反映を取り消す
  *
- * @version 1.390.1268 (PR #419)
+ * @version 1.390.1270 (PR #420)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-07-29 17:25:57
+ * @lastModified 2026-08-02 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -84,12 +85,29 @@ const ALLOWED_REJECT_REASONS = new Set([
 let _decisionQueue = Promise.resolve();
 
 /**
- * ローカル O5 decision を全体キューへ投入する。
+ * O5/O6 の ledger 操作を全体キューへ投入する。
  *
  * 【詳細説明】
  * - 直前 decision が成功しても失敗しても、次の decision は必ずその後に開始する。
  * - 呼び出し元には task の戻り値をそのまま返し、キュー内部では rejection を吸収して後続が詰まらない
  *   ようにする。
+ *
+ * @function enqueueLedgerDecisionTask
+ * @param {Function} task - 実行する decision 本体。
+ * @returns {Promise<*>} decision 本体の戻り値。
+ */
+export function enqueueLedgerDecisionTask(task) {
+  const run = _decisionQueue.then(task, task);
+  _decisionQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * ローカル O5 decision を全体キューへ投入する。
+ *
+ * 【詳細説明】
+ * - O6 Recovery Operations も同じキューを使うため、O5 側の呼び出し点は小さな wrapper に集約する。
+ * - public API ではない既存 decision 実装の読みやすさを保つため、関数名は O5 文脈のまま残す。
  *
  * @private
  * @function _enqueueDecision
@@ -97,9 +115,7 @@ let _decisionQueue = Promise.resolve();
  * @returns {Promise<*>} decision 本体の戻り値。
  */
 function _enqueueDecision(task) {
-  const run = _decisionQueue.then(task, task);
-  _decisionQueue = run.catch(() => {});
-  return run;
+  return enqueueLedgerDecisionTask(task);
 }
 
 /**

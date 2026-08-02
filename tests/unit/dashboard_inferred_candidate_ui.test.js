@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
   rejectInferredCandidate: vi.fn(async () => ({ ok: true, reason: "rejected" })),
   reassignInferredCandidate: vi.fn(async () => ({ ok: true, reason: "reassigned" })),
   undoInferredCandidateDecision: vi.fn(async () => ({ ok: true, reason: "undone" })),
+  canExecuteRecoveryOperation: vi.fn(() => true),
+  retryInferredRecoveryDurableSave: vi.fn(async () => ({ ok: true, reason: "recovery_durable_save_retried" })),
+  clearInferredDecisionRecoveryRequired: vi.fn(async () => ({ ok: true, reason: "decision_recovery_cleared" })),
+  clearLedgerRepairRequired: vi.fn(async () => ({ ok: true, reason: "ledger_repair_cleared" })),
+  archiveMountHistoryRejectedEvents: vi.fn(async () => ({ ok: true, reason: "mount_history_rejected_events_archived" })),
   showConfirmDialog: vi.fn(async () => true),
   showAlert: vi.fn(),
   recoveryVm: { hasIssues: false, totalCount: 0, blockerCount: 0, warningCount: 0, cards: [] }
@@ -26,6 +31,13 @@ vi.mock("../../3dp_lib/dashboard_inferred_candidate_decision.js", () => ({
   rejectInferredCandidate: mocks.rejectInferredCandidate,
   reassignInferredCandidate: mocks.reassignInferredCandidate,
   undoInferredCandidateDecision: mocks.undoInferredCandidateDecision
+}));
+vi.mock("../../3dp_lib/dashboard_inferred_recovery_ops.js", () => ({
+  canExecuteRecoveryOperation: mocks.canExecuteRecoveryOperation,
+  retryInferredRecoveryDurableSave: mocks.retryInferredRecoveryDurableSave,
+  clearInferredDecisionRecoveryRequired: mocks.clearInferredDecisionRecoveryRequired,
+  clearLedgerRepairRequired: mocks.clearLedgerRepairRequired,
+  archiveMountHistoryRejectedEvents: mocks.archiveMountHistoryRejectedEvents
 }));
 vi.mock("../../3dp_lib/dashboard_inferred_candidate_view.js", () => ({
   INFERRED_CANDIDATE_FILTER: {
@@ -135,13 +147,23 @@ beforeEach(() => {
   mocks.rejectInferredCandidate.mockClear();
   mocks.reassignInferredCandidate.mockClear();
   mocks.undoInferredCandidateDecision.mockClear();
+  mocks.canExecuteRecoveryOperation.mockClear();
+  mocks.canExecuteRecoveryOperation.mockReturnValue(true);
+  mocks.retryInferredRecoveryDurableSave.mockClear();
+  mocks.retryInferredRecoveryDurableSave.mockResolvedValue({ ok: true, reason: "recovery_durable_save_retried" });
+  mocks.clearInferredDecisionRecoveryRequired.mockClear();
+  mocks.clearInferredDecisionRecoveryRequired.mockResolvedValue({ ok: true, reason: "decision_recovery_cleared" });
+  mocks.clearLedgerRepairRequired.mockClear();
+  mocks.clearLedgerRepairRequired.mockResolvedValue({ ok: true, reason: "ledger_repair_cleared" });
+  mocks.archiveMountHistoryRejectedEvents.mockClear();
+  mocks.archiveMountHistoryRejectedEvents.mockResolvedValue({ ok: true, reason: "mount_history_rejected_events_archived" });
   mocks.showConfirmDialog.mockClear();
   mocks.showConfirmDialog.mockResolvedValue(true);
   mocks.showAlert.mockClear();
 });
 
 describe("createInferredCandidateCenterContent", () => {
-  it("recovery surface を read-only 診断として表示する", () => {
+  it("recovery surface を診断カードと復旧操作として表示する", () => {
     mocks.recoveryVm = {
       hasIssues: true,
       totalCount: 2,
@@ -149,6 +171,7 @@ describe("createInferredCandidateCenterContent", () => {
       warningCount: 1,
       cards: [
         {
+          type: "decision-recovery",
           severity: "blocker",
           title: "O5 decision recovery required",
           summary: "rollback状態の確認が必要です",
@@ -158,6 +181,7 @@ describe("createInferredCandidateCenterContent", () => {
           ]
         },
         {
+          type: "mount-history-rejected",
           severity: "warning",
           title: "Rejected mount history events",
           summary: "2件の mountHistory event が隔離されています",
@@ -172,10 +196,65 @@ describe("createInferredCandidateCenterContent", () => {
     expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Blocker 1 / Warning 1");
     expect(document.querySelector(".ic-recovery-surface").textContent).toContain("O5 decision recovery required");
     expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Rejected mount history events");
+    expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Retry save");
+    expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Archive rejected");
     expect(mocks.confirmInferredCandidate).not.toHaveBeenCalled();
     expect(mocks.rejectInferredCandidate).not.toHaveBeenCalled();
     expect(mocks.reassignInferredCandidate).not.toHaveBeenCalled();
     expect(mocks.undoInferredCandidateDecision).not.toHaveBeenCalled();
+  });
+
+  it("recovery card の Retry save は O6 Recovery Operations を呼ぶ", async () => {
+    mocks.recoveryVm = {
+      hasIssues: true,
+      totalCount: 1,
+      blockerCount: 1,
+      warningCount: 0,
+      cards: [{
+        type: "decision-recovery",
+        severity: "blocker",
+        title: "O5 decision recovery required",
+        summary: "rollback状態の確認が必要です",
+        details: [{ label: "Candidate", value: "ic-a" }]
+      }]
+    };
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    [...document.querySelectorAll(".ic-recovery-actions button")]
+      .find(button => button.textContent === "Retry save")
+      .click();
+
+    await waitForAssertion(() => {
+      expect(mocks.retryInferredRecoveryDurableSave).toHaveBeenCalledWith({ actor: "local-user" });
+      expect(mocks.showAlert).toHaveBeenCalledWith("復旧状態を再保存しました", "success");
+    });
+  });
+
+  it("Satellite では recovery 操作を disabled にする", () => {
+    mocks.canExecuteRecoveryOperation.mockReturnValue(false);
+    mocks.recoveryVm = {
+      hasIssues: true,
+      totalCount: 1,
+      blockerCount: 1,
+      warningCount: 0,
+      cards: [{
+        type: "ledger-repair",
+        severity: "blocker",
+        title: "Mount ledger repair required",
+        summary: "修復が必要です",
+        host: "k1",
+        details: [{ label: "Host", value: "k1" }]
+      }]
+    };
+
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    const clear = [...document.querySelectorAll(".ic-recovery-actions button")]
+      .find(button => button.textContent === "Clear repair");
+    expect(clear.disabled).toBe(true);
+    expect(document.querySelector(".ic-readonly-note").textContent).toContain("親端末");
   });
 
   it("candidate 一覧から詳細を開き、Confirm は Decision Core を呼ぶ", async () => {

@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.1246 (PR #413)
+ * @version 1.390.1270 (PR #420)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-07-22 12:00:00
+ * @lastModified 2026-08-02 15:05:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -108,6 +108,9 @@ const SHARED_KEYS = [
   "hostObservationCurrent",
   // #412-O4: candidate store は baseline commit 前の耐久保存対象。
   "inferredCandidateStore",
+  // #420/O6A: recovery blocker と復旧操作 audit event。
+  "inferredDecisionRecoveryRequired",
+  "inferredRecoveryEvents",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage",
   "pendingUnattributedUsageArchive",

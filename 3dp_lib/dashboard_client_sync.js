@@ -13,6 +13,7 @@
  *   （フィラメント共有状態は親権威の全置換 + mountHistory / recovery 診断同期）
  * - satellite モードでのコマンド/フィラメント操作の送信（操作は親へ RPC 委譲）
  * - O5 inferred candidate decision request を Parent へ送信
+ * - O6 recovery / repair 操作の監査状態を Parent から read-only 同期する
  * - 初回接続は常に readonly。?relay=satellite 要求時は自動昇格リクエスト（PIN 保護）
  *
  * 【公開関数一覧】
@@ -21,9 +22,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1268 (PR #418)
+ * @version 1.390.1270 (PR #420)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-01 23:20:09
+ * @lastModified 2026-08-02 15:05:22
  * -----------------------------------------------------------
  */
 
@@ -313,7 +314,7 @@ function _applyRelayPrintStore(hostname, ps) {
  * ※ モジュール内部用だが、マージ規則の回帰テストのために export している。
  *
  * @function _applySharedFilamentState
- * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object, inferredDecisionRecoveryRequired?:Object|null, ledgerRepairRequired?:Object, mountHistoryRejectedEvents?:Array<Object>}} shared
+ * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object, inferredDecisionRecoveryRequired?:Object|null, inferredRecoveryEvents?:Array<Object>, ledgerRepairRequired?:Object, mountHistoryRejectedEvents?:Array<Object>}} shared
  *   - 受信した共有データ
  * @returns {void}
  */
@@ -375,6 +376,10 @@ export function _applySharedFilamentState(shared) {
         ? { ...shared.inferredDecisionRecoveryRequired }
         : null;
   }
+  if (Object.prototype.hasOwnProperty.call(shared, "inferredRecoveryEvents")) {
+    if (!Array.isArray(monitorData.inferredRecoveryEvents)) monitorData.inferredRecoveryEvents = [];
+    _replaceArrayInPlace(monitorData.inferredRecoveryEvents, shared.inferredRecoveryEvents);
+  }
   if (Object.prototype.hasOwnProperty.call(shared, "ledgerRepairRequired")
       && shared.ledgerRepairRequired
       && typeof shared.ledgerRepairRequired === "object") {
@@ -433,6 +438,7 @@ function _maybeNotifyFilamentDomainChanged() {
     monitorData.spoolSerialCounter ?? 0,
     (monitorData.usageHistory || []).length,
     JSON.stringify(monitorData.inferredDecisionRecoveryRequired || null),
+    JSON.stringify(monitorData.inferredRecoveryEvents || []),
     JSON.stringify(monitorData.ledgerRepairRequired || {}),
     JSON.stringify(monitorData.mountHistoryRejectedEvents || []),
   ].join("|");

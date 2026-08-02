@@ -92,7 +92,18 @@ monitorData.hostSpoolMap = {
 
 Relay 構成では、Standalone と Parent は Confirm / Reject / Reassign / Undo を実行できます。Satellite は候補を閲覧でき、操作モードに昇格している場合は Parent へ decision request を送ります。Readonly の Satellite では操作ボタンは無効化されます。
 
-推定候補タブの上部には、必要に応じて Recovery / repair status が表示されます。これは `inferredDecisionRecoveryRequired`、`ledgerRepairRequired`、`mountHistoryRejectedEvents` など、自動継続してはいけない状態を確認するための読み取り専用診断です。表示された場合は、原因となった candidate、host、spool、保存失敗理由、隔離された mountHistory event を確認できます。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示します。#418 時点ではこの画面から修復や解除は実行せず、整合確認と復旧操作は後続の Recovery Actions で扱います。
+推定候補タブの上部には、必要に応じて Recovery / repair status が表示されます。これは `inferredDecisionRecoveryRequired`、`ledgerRepairRequired`、`mountHistoryRejectedEvents` など、自動継続してはいけない状態を確認するための診断です。表示された場合は、原因となった candidate、host、spool、保存失敗理由、隔離された mountHistory event を確認できます。
+
+Standalone / Parent では、Recovery / repair status から次の復旧操作を実行できます。
+
+| 復旧操作 | 内容 |
+| --- | --- |
+| **Retry save** | 現在の recovery / repair 状態を再度耐久保存します |
+| **Clear recovery** | rollback 後の状態を確認済みの場合に `inferredDecisionRecoveryRequired` を解除します |
+| **Clear repair** | 対象 host の mount ledger を確認済みの場合に `ledgerRepairRequired` を解除します |
+| **Archive rejected** | 隔離済み mountHistory event を `inferredRecoveryEvents` へ監査退避し、warning を閉じます |
+
+これらの復旧操作は `inferredRecoveryEvents` に監査 event を残し、保存失敗時は操作前の状態へ戻します。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示しますが、復旧操作は無効化されます。復旧操作は Parent 端末で実行してください。
 
 ### 登録済みフィラメントタブ
 

@@ -17,6 +17,7 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
     hostSpoolMap: {},
     mountHistory: [],
     inferredDecisionRecoveryRequired: null,
+    inferredRecoveryEvents: [],
     ledgerRepairRequired: {},
     mountHistoryRejectedEvents: [],
     inferredCandidateStore: {},
@@ -121,6 +122,9 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
     monitorData.ledgerRepairRequired = {
       k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 },
     };
+    monitorData.inferredRecoveryEvents = [
+      { eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 124 },
+    ];
     monitorData.mountHistoryRejectedEvents = [
       { reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1", spoolId: "S1" } },
     ];
@@ -130,6 +134,7 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
 
     const snapshot = globalThis.window.electronAPI.relaySendSnapshot.mock.calls[0][1];
     expect(snapshot.inferredDecisionRecoveryRequired).toEqual(monitorData.inferredDecisionRecoveryRequired);
+    expect(snapshot.inferredRecoveryEvents).toEqual(monitorData.inferredRecoveryEvents);
     expect(snapshot.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(snapshot.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
 
@@ -137,6 +142,7 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
 
     const delta = globalThis.window.electronAPI.relayBroadcast.mock.calls[0][0];
     expect(delta.shared.inferredDecisionRecoveryRequired).toEqual(monitorData.inferredDecisionRecoveryRequired);
+    expect(delta.shared.inferredRecoveryEvents).toEqual(monitorData.inferredRecoveryEvents);
     expect(delta.shared.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(delta.shared.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
   });

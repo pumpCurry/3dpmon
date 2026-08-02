@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1245 (PR #412)
+* @version 1.390.1270 (PR #420)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-07-19 18:45:00
+* @lastModified 2026-08-02 15:05:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -301,6 +301,20 @@ export const monitorData = {
    */
   inferredCandidateStore: {},
   /**
+   * ★ #417/O5D: O5 decision rollback 後の状態を耐久保存できなかった場合の復旧要求。
+   * null なら通常状態。object の場合は新規 Confirm/Reject/Reassign/Undo を fail-closed で停止し、
+   * O6 Recovery Operations で状態確認・再保存・解除を行う。
+   * @type {?Object}
+   */
+  inferredDecisionRecoveryRequired: null,
+  /**
+   * ★ #420/O6A: recovery / repair 操作の監査 event。
+   * decision recovery flag 解除、ledger repair flag 解除、隔離 mount event の archive などを追記し、
+   * 復旧操作が通常の candidate decision と同様に追跡できるようにする。
+   * @type {Array<Object>}
+   */
+  inferredRecoveryEvents: [],
+  /**
    * ★ Phase2A: 有効な jobId が無いまま完了した消費の隔離領域。
    * 電源投入直後などで printStartTime が 0/null の「無効ID」ジョブは
    * 履歴・usedLengthLog・境界へ確定記録を作らず（過去全履歴の誤減算＝退行を防ぐ）、
@@ -540,5 +554,4 @@ export function markAllKeysDirty(hostname) {
     dirtySet.add(key);
   }
 }
-
 

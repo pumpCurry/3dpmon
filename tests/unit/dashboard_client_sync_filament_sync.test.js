@@ -158,6 +158,8 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     }
     for (const k of Object.keys(monitorData.inferredCandidateStore)) delete monitorData.inferredCandidateStore[k];
     monitorData.inferredDecisionRecoveryRequired = null;
+    if (!Array.isArray(monitorData.inferredRecoveryEvents)) monitorData.inferredRecoveryEvents = [];
+    monitorData.inferredRecoveryEvents.splice(0, monitorData.inferredRecoveryEvents.length);
     if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
       monitorData.ledgerRepairRequired = {};
     }
@@ -209,11 +211,13 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
 
   it("#418: recovery / repair 診断を親から全置換ミラーする", () => {
     monitorData.inferredDecisionRecoveryRequired = { candidateHash: "stale", reason: "old" };
+    monitorData.inferredRecoveryEvents.push({ eventId: "ir-old", type: "old" });
     monitorData.ledgerRepairRequired.stale = { status: "old" };
     monitorData.mountHistoryRejectedEvents.push({ reason: "old", event: { evId: "old" } });
 
     _applySharedFilamentState({
       inferredDecisionRecoveryRequired: { candidateHash: "ic-a", action: "confirm", reason: "rollback_durable_save_failed" },
+      inferredRecoveryEvents: [{ eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 123 }],
       ledgerRepairRequired: { k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 } },
       mountHistoryRejectedEvents: [{ reason: "reanchor-invalid-reference", event: { evId: "ev-a", host: "k1" } }],
     });
@@ -223,6 +227,9 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
       action: "confirm",
       reason: "rollback_durable_save_failed",
     });
+    expect(monitorData.inferredRecoveryEvents).toEqual([
+      { eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 123 },
+    ]);
     expect(monitorData.ledgerRepairRequired.stale).toBeUndefined();
     expect(monitorData.ledgerRepairRequired.k1).toEqual({ spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 });
     expect(monitorData.mountHistoryRejectedEvents).toEqual([
@@ -232,16 +239,19 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
 
   it("#418: 親で解消済みの recovery / repair 診断を Satellite 側から消す", () => {
     monitorData.inferredDecisionRecoveryRequired = { candidateHash: "ic-a", reason: "old" };
+    monitorData.inferredRecoveryEvents.push({ eventId: "ir-a", type: "old" });
     monitorData.ledgerRepairRequired.k1 = { status: "ambiguous" };
     monitorData.mountHistoryRejectedEvents.push({ reason: "old" });
 
     _applySharedFilamentState({
       inferredDecisionRecoveryRequired: null,
+      inferredRecoveryEvents: [],
       ledgerRepairRequired: {},
       mountHistoryRejectedEvents: [],
     });
 
     expect(monitorData.inferredDecisionRecoveryRequired).toBeNull();
+    expect(monitorData.inferredRecoveryEvents).toEqual([]);
     expect(monitorData.ledgerRepairRequired).toEqual({});
     expect(monitorData.mountHistoryRejectedEvents).toEqual([]);
   });
@@ -250,11 +260,13 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     globalThis.window._refreshFilamentManagerIfOpen = vi.fn();
     _applySharedFilamentState({
       inferredDecisionRecoveryRequired: { candidateHash: "ic-a", reason: "rollback_failed" },
+      inferredRecoveryEvents: [{ eventId: "ir-a", type: "retry" }],
     });
     const firstCount = globalThis.window._refreshFilamentManagerIfOpen.mock.calls.length;
 
     _applySharedFilamentState({
       inferredDecisionRecoveryRequired: { candidateHash: "ic-b", reason: "rollback_failed" },
+      inferredRecoveryEvents: [{ eventId: "ir-b", type: "retry" }],
     });
 
     expect(globalThis.window._refreshFilamentManagerIfOpen.mock.calls.length).toBeGreaterThan(firstCount);

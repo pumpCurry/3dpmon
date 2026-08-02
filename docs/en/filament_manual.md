@@ -124,14 +124,27 @@ Satellite is promoted to operation mode, decision requests are sent to
 the Parent; readonly Satellites keep the action buttons disabled.
 
 When required, the top of the Inferred Candidate tab shows a Recovery /
-repair status surface. This is a read-only diagnostic view for states
-such as `inferredDecisionRecoveryRequired`, `ledgerRepairRequired` and
+repair status surface. This is a diagnostic view for states such as
+`inferredDecisionRecoveryRequired`, `ledgerRepairRequired` and
 `mountHistoryRejectedEvents`, where the app must not continue
 automatically. It shows the related candidate, host, spool, save-failure
-reason and quarantined mountHistory events. In Relay setups, Satellites
-mirror this diagnostic state from the Parent authority. In #418 this
-surface does not run repair or clear flags; those actions are intentionally
-left for the later Recovery Actions slice.
+reason and quarantined mountHistory events.
+
+Standalone and Parent devices can run these recovery operations from the
+Recovery / repair status surface.
+
+| Recovery action | Behavior |
+| --- | --- |
+| **Retry save** | Attempts to durably save the current recovery / repair state again. |
+| **Clear recovery** | Clears `inferredDecisionRecoveryRequired` after the operator has verified the rolled-back state. |
+| **Clear repair** | Clears `ledgerRepairRequired` for the selected host after the mount ledger has been verified. |
+| **Archive rejected** | Moves quarantined mountHistory events into `inferredRecoveryEvents` audit history and closes the warning. |
+
+Each recovery operation appends an `inferredRecoveryEvents` audit event
+and rolls memory state back if durable save fails. In Relay setups,
+Satellites mirror the diagnostic state from the Parent authority but keep
+the recovery operation buttons disabled. Run recovery operations on the
+Parent device.
 
 ### Registered Filament Tab
 
