@@ -11,14 +11,14 @@
  * - O5B Candidate Center として pending/処理済み candidate の一覧、詳細、監査 timeline を描画する。
  * - Confirm / Reject / Reassign / Undo の操作ダイアログを提供し、実更新は Decision Core へ委譲する。
  * - SATELLITE 子では Parent へ decision request を送り、readonly 子では操作ボタンを disabled にする。
- * - recovery / repair flag は診断カードとして表示し、O6 Recovery Operations を Parent/Standalone へ接続する。
+ * - recovery / repair flag と復旧操作 audit event を表示し、O6 Recovery Operations を Parent/Standalone へ接続する。
  *
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1270 (PR #420)
+ * @version 1.390.1271 (PR #421)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 15:05:22
+ * @lastModified 2026-08-02 15:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -429,8 +429,11 @@ function _appendRecoveryActions(el, card, render, onAfterDecision) {
 function _recoveryCard(card, render, onAfterDecision) {
   const el = _el("article", `ic-recovery-card ic-recovery-${card.severity || "warning"}`);
   const header = _el("div", "ic-recovery-card-header");
+  const severityLabel = card.severity === "blocker" ? "BLOCKER"
+    : card.severity === "info" ? "INFO"
+      : "WARNING";
   header.append(
-    _el("span", "ic-recovery-severity", card.severity === "blocker" ? "BLOCKER" : "WARNING"),
+    _el("span", "ic-recovery-severity", severityLabel),
     _el("strong", "ic-recovery-title", card.title || "Recovery item")
   );
   el.append(header, _el("p", "ic-recovery-summary", card.summary || ""));
@@ -464,7 +467,7 @@ function _renderRecoverySurface(wrap, render, onAfterDecision) {
   panel.appendChild(_el(
     "div",
     "ic-recovery-overview",
-    `Blocker ${model.blockerCount} / Warning ${model.warningCount}`
+    `Blocker ${model.blockerCount} / Warning ${model.warningCount} / Info ${model.infoCount || 0}`
   ));
   for (const card of model.cards) panel.appendChild(_recoveryCard(card, render, onAfterDecision));
   wrap.appendChild(panel);

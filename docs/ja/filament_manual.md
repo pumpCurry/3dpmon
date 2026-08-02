@@ -105,6 +105,8 @@ Standalone / Parent では、Recovery / repair status から次の復旧操作�
 
 これらの復旧操作は `inferredRecoveryEvents` に監査 event を残し、保存失敗時は操作前の状態へ戻します。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示しますが、復旧操作は無効化されます。復旧操作は Parent 端末で実行してください。
 
+復旧操作後は、同じ Recovery / repair status に **Recovery operation audit** が表示されます。ここには最新の再保存、recovery flag 解除、ledger repair flag 解除、隔離 event 退避の履歴が残り、対象 candidate、host、件数、操作者、実行時刻を確認できます。未解決 blocker が無い場合でも、直近の復旧操作履歴は INFO として表示されます。
+
 ### 登録済みフィラメントタブ
 
 登録済みフィラメントタブでは、過去に登録したスプールを一覧で確認し編集できます。

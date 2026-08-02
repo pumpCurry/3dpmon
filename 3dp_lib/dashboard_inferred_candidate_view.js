@@ -10,7 +10,7 @@
  * 【機能内容サマリ】
  * - inferredCandidateStore の保存レコードから O5 UI 用 ViewModel を生成する。
  * - status filter、sort、pending count、残量差分、履歴照合警告、decision/undo 送信可否を計算する。
- * - recovery / repair flag を read-only 診断カードへ変換し、異常系を操作前に見える状態にする。
+ * - recovery / repair flag と O6 復旧操作 audit event を診断カードへ変換し、異常系を操作前後で見える状態にする。
  * - UI が candidate record や確定台帳を直接変更しないための表示専用境界を提供する。
  *
  * 【公開関数一覧】
@@ -19,9 +19,9 @@
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1267 (PR #418)
+ * @version 1.390.1271 (PR #421)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-07-26 15:48:10
+ * @lastModified 2026-08-02 15:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -224,6 +224,26 @@ function _details(entries) {
   return entries
     .filter(item => item && item.value != null && item.value !== "")
     .map(item => ({ label: item.label, value: _formatValue(item.value) }));
+}
+
+/**
+ * recovery audit event から短い対象説明を生成する。
+ *
+ * 【詳細説明】
+ * - event type ごとに見るべき target が異なるため、候補 ID / host / 件数を優先して要約する。
+ * - 表示専用の整形であり、監査 event 本体は `inferredRecoveryEvents` にそのまま残す。
+ *
+ * @private
+ * @function _recoveryEventTarget
+ * @param {Object} event - recovery audit event。
+ * @returns {string} 表示用 target。
+ */
+function _recoveryEventTarget(event) {
+  if (event?.clearedRecovery?.candidateHash) return String(event.clearedRecovery.candidateHash);
+  if (event?.decisionRecovery?.candidateHash) return String(event.decisionRecovery.candidateHash);
+  if (event?.host) return String(event.host);
+  if (Number.isFinite(Number(event?.rejectedEventCount))) return `${Number(event.rejectedEventCount)} rejected events`;
+  return "--";
 }
 
 /**
@@ -475,7 +495,7 @@ export function countPendingInferredCandidates(host = null) {
 }
 
 /**
- * O5/ledger の recovery / repair 状態を read-only 診断表示モデルへ変換する。
+ * O5/ledger の recovery / repair 状態を診断表示モデルへ変換する。
  *
  * 【詳細説明】
  * - この関数は monitorData を参照するだけで、recovery flag の解除や candidate 遷移は行わない。
@@ -483,10 +503,11 @@ export function countPendingInferredCandidates(host = null) {
  * - `ledgerRepairRequired` は host 単位の mount ledger 修復要求として表示する。
  * - `mountHistoryRejectedEvents` は隔離済みイベントの件数と最新数件を表示し、元データが失われていない
  *   ことをオペレーターが確認できるようにする。
+ * - `inferredRecoveryEvents` は復旧操作の監査履歴として、問題が解消済みでも最新数件を表示する。
  *
  * @function buildInferredRecoverySurfaceViewModel
- * @param {{maxRejectedEvents?:number}} [options] - 表示する隔離イベントの最大件数。
- * @returns {{hasIssues:boolean,totalCount:number,blockerCount:number,warningCount:number,cards:Array<Object>}}
+ * @param {{maxRejectedEvents?:number,maxRecoveryEvents?:number}} [options] - 表示する隔離/audit event の最大件数。
+ * @returns {{hasIssues:boolean,totalCount:number,blockerCount:number,warningCount:number,infoCount:number,cards:Array<Object>}}
  *   recovery surface 表示モデル。
  * @example
  * const recovery = buildInferredRecoverySurfaceViewModel();
@@ -564,13 +585,45 @@ export function buildInferredRecoverySurfaceViewModel(options = {}) {
     });
   }
 
+  const recoveryEvents = Array.isArray(monitorData.inferredRecoveryEvents)
+    ? monitorData.inferredRecoveryEvents
+    : [];
+  const maxRecoveryEvents = Math.max(1, Math.min(10, Number(options.maxRecoveryEvents) || 5));
+  if (recoveryEvents.length > 0) {
+    const recentEvents = recoveryEvents
+      .slice()
+      .sort((a, b) => (Number(b?.createdAt) || 0) - (Number(a?.createdAt) || 0))
+      .slice(0, maxRecoveryEvents);
+    cards.push({
+      type: "recovery-audit",
+      severity: "info",
+      title: "Recovery operation audit",
+      summary: `${recoveryEvents.length}件の recovery 操作監査eventがあります`,
+      host: null,
+      candidateHash: null,
+      createdAt: Number(recentEvents[0]?.createdAt) || 0,
+      createdAtDisplay: _formatTime(recentEvents[0]?.createdAt),
+      details: recentEvents.map((event, index) => ({
+        label: `Audit ${index + 1}`,
+        value: _formatValue({
+          type: event?.type || "unknown",
+          target: _recoveryEventTarget(event),
+          actor: event?.actor || null,
+          at: _formatTime(event?.createdAt)
+        })
+      }))
+    });
+  }
+
   const blockerCount = cards.filter(card => card.severity === "blocker").length;
-  const warningCount = cards.filter(card => card.severity !== "blocker").length;
+  const warningCount = cards.filter(card => card.severity === "warning").length;
+  const infoCount = cards.filter(card => card.severity === "info").length;
   return {
     hasIssues: cards.length > 0,
     totalCount: cards.length,
     blockerCount,
     warningCount,
+    infoCount,
     cards
   };
 }

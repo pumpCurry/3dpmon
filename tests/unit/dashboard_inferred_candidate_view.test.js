@@ -82,6 +82,7 @@ beforeEach(() => {
     "ic-old": record("ic-old", { createdAt: 1000, status: "confirmed" })
   };
   delete mocks.monitorData.inferredDecisionRecoveryRequired;
+  mocks.monitorData.inferredRecoveryEvents = [];
   mocks.monitorData.ledgerRepairRequired = {};
   mocks.monitorData.mountHistoryRejectedEvents = [];
 });
@@ -188,6 +189,7 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
     expect(vm.totalCount).toBe(3);
     expect(vm.blockerCount).toBe(2);
     expect(vm.warningCount).toBe(1);
+    expect(vm.infoCount).toBe(0);
     expect(vm.cards.map(card => card.type)).toEqual([
       "decision-recovery",
       "ledger-repair",
@@ -197,6 +199,37 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
     expect(vm.cards[1].summary).toContain("K1 Max");
     expect(vm.cards[2].details).toHaveLength(1);
     expect(vm.cards[2].details[0].value).toContain("ev-b");
+  });
+
+  it("#421/O6B: recovery 操作 audit event を info card に変換する", () => {
+    mocks.monitorData.inferredRecoveryEvents = [
+      {
+        eventId: "ir-a",
+        type: "recovery-durable-save-retried",
+        actor: "operator-a",
+        createdAt: 1000,
+        decisionRecovery: { candidateHash: "ic-old" }
+      },
+      {
+        eventId: "ir-b",
+        type: "decision-recovery-cleared",
+        actor: "operator-b",
+        createdAt: 3000,
+        clearedRecovery: { candidateHash: "ic-new" }
+      }
+    ];
+
+    const vm = buildInferredRecoverySurfaceViewModel({ maxRecoveryEvents: 1 });
+
+    expect(vm.hasIssues).toBe(true);
+    expect(vm.blockerCount).toBe(0);
+    expect(vm.warningCount).toBe(0);
+    expect(vm.infoCount).toBe(1);
+    expect(vm.cards.map(card => card.type)).toEqual(["recovery-audit"]);
+    expect(vm.cards[0].summary).toContain("2件");
+    expect(vm.cards[0].details).toHaveLength(1);
+    expect(vm.cards[0].details[0].value).toContain("decision-recovery-cleared");
+    expect(vm.cards[0].details[0].value).toContain("ic-new");
   });
 
   it("recovery item がない場合は空の診断モデルを返す", () => {

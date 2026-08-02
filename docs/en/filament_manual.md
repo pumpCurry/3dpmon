@@ -146,6 +146,13 @@ Satellites mirror the diagnostic state from the Parent authority but keep
 the recovery operation buttons disabled. Run recovery operations on the
 Parent device.
 
+After recovery operations run, the same Recovery / repair status surface
+shows a **Recovery operation audit** card. It lists recent retry-save,
+recovery-flag clear, ledger-repair clear and rejected-event archive
+operations, including the related candidate, host, count, actor and time.
+When no unresolved blocker remains, recent recovery activity is still shown
+as an INFO card.
+
 ### Registered Filament Tab
 
 The Registered Filament tab lists all spools that have been added so far and lets you edit them.

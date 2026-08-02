@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1270
+  Version 1.390.1271
 */
 
 /* ===============================================================
@@ -3962,9 +3962,13 @@ body.relay-readonly textarea {
   margin-top: var(--space-2);
 }
 
-.ic-recovery-blocker {
-  border-color: var(--color-danger);
-}
+  .ic-recovery-blocker {
+    border-color: var(--color-danger);
+  }
+
+  .ic-recovery-info {
+    border-color: var(--color-accent);
+  }
 
 .ic-recovery-card-header {
   display: flex;

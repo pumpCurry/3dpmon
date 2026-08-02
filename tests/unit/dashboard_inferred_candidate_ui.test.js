@@ -231,6 +231,31 @@ describe("createInferredCandidateCenterContent", () => {
     });
   });
 
+  it("#421/O6B: recovery audit card は INFO として表示し操作ボタンを出さない", () => {
+    mocks.recoveryVm = {
+      hasIssues: true,
+      totalCount: 1,
+      blockerCount: 0,
+      warningCount: 0,
+      infoCount: 1,
+      cards: [{
+        type: "recovery-audit",
+        severity: "info",
+        title: "Recovery operation audit",
+        summary: "2件の recovery 操作監査eventがあります",
+        details: [{ label: "Audit 1", value: "decision-recovery-cleared" }]
+      }]
+    };
+
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+
+    expect(document.querySelector(".ic-recovery-surface").textContent).toContain("Blocker 0 / Warning 0 / Info 1");
+    expect(document.querySelector(".ic-recovery-severity").textContent).toBe("INFO");
+    expect(document.querySelector(".ic-recovery-title").textContent).toBe("Recovery operation audit");
+    expect(document.querySelector(".ic-recovery-actions")).toBeNull();
+  });
+
   it("Satellite では recovery 操作を disabled にする", () => {
     mocks.canExecuteRecoveryOperation.mockReturnValue(false);
     mocks.recoveryVm = {
