@@ -17,6 +17,7 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
     hostSpoolMap: {},
     mountHistory: [],
     inferredDecisionRecoveryRequired: null,
+    inferredRecoveryOperationRecoveryRequired: null,
     inferredRecoveryEvents: [],
     ledgerRepairRequired: {},
     mountHistoryRejectedEvents: [],
@@ -119,6 +120,10 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
       action: "confirm",
       reason: "rollback_durable_save_failed",
     };
+    monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+    };
     monitorData.ledgerRepairRequired = {
       k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 123 },
     };
@@ -134,6 +139,7 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
 
     const snapshot = globalThis.window.electronAPI.relaySendSnapshot.mock.calls[0][1];
     expect(snapshot.inferredDecisionRecoveryRequired).toEqual(monitorData.inferredDecisionRecoveryRequired);
+    expect(snapshot.inferredRecoveryOperationRecoveryRequired).toEqual(monitorData.inferredRecoveryOperationRecoveryRequired);
     expect(snapshot.inferredRecoveryEvents).toEqual(monitorData.inferredRecoveryEvents);
     expect(snapshot.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(snapshot.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
@@ -142,6 +148,7 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
 
     const delta = globalThis.window.electronAPI.relayBroadcast.mock.calls[0][0];
     expect(delta.shared.inferredDecisionRecoveryRequired).toEqual(monitorData.inferredDecisionRecoveryRequired);
+    expect(delta.shared.inferredRecoveryOperationRecoveryRequired).toEqual(monitorData.inferredRecoveryOperationRecoveryRequired);
     expect(delta.shared.inferredRecoveryEvents).toEqual(monitorData.inferredRecoveryEvents);
     expect(delta.shared.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(delta.shared.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);

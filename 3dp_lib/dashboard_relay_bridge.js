@@ -22,9 +22,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1270 (PR #420)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-02 15:05:22
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  */
 
@@ -699,6 +699,7 @@ function _buildDelta() {
   //   candidate store とは別ハッシュで低頻度同期する。
   const recoveryHash = _quickHash(
     monitorData.inferredDecisionRecoveryRequired || null,
+    monitorData.inferredRecoveryOperationRecoveryRequired || null,
     monitorData.inferredRecoveryEvents || [],
     monitorData.ledgerRepairRequired || {},
     monitorData.mountHistoryRejectedEvents || []
@@ -707,6 +708,7 @@ function _buildDelta() {
     _prevRecoveryHash = recoveryHash;
     sharedDelta = sharedDelta || {};
     sharedDelta.inferredDecisionRecoveryRequired = monitorData.inferredDecisionRecoveryRequired || null;
+    sharedDelta.inferredRecoveryOperationRecoveryRequired = monitorData.inferredRecoveryOperationRecoveryRequired || null;
     sharedDelta.inferredRecoveryEvents = monitorData.inferredRecoveryEvents || [];
     sharedDelta.ledgerRepairRequired = monitorData.ledgerRepairRequired || {};
     sharedDelta.mountHistoryRejectedEvents = monitorData.mountHistoryRejectedEvents || [];
@@ -824,6 +826,7 @@ function _buildFullSnapshot() {
     inferredCandidateStore: monitorData.inferredCandidateStore || {},
     // ★ #418: Candidate Center の Recovery / repair 診断も親権威で子へ同梱する。
     inferredDecisionRecoveryRequired: monitorData.inferredDecisionRecoveryRequired || null,
+    inferredRecoveryOperationRecoveryRequired: monitorData.inferredRecoveryOperationRecoveryRequired || null,
     inferredRecoveryEvents: monitorData.inferredRecoveryEvents || [],
     ledgerRepairRequired: monitorData.ledgerRepairRequired || {},
     mountHistoryRejectedEvents: monitorData.mountHistoryRejectedEvents || [],

@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1270 (PR #420)
+* @version 1.390.1274 (PR #424)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-02 15:05:22
+* @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -289,6 +289,17 @@ export async function importAllData(data) {
       }
     } else if (!monitorData.inferredDecisionRecoveryRequired) {
       monitorData.inferredDecisionRecoveryRequired = null;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "inferredRecoveryOperationRecoveryRequired")) {
+    const incoming = data.inferredRecoveryOperationRecoveryRequired;
+    if (incoming && typeof incoming === "object") {
+      const current = monitorData.inferredRecoveryOperationRecoveryRequired;
+      if (!current || (Number(incoming.createdAt) || 0) >= (Number(current.createdAt) || 0)) {
+        monitorData.inferredRecoveryOperationRecoveryRequired = { ...incoming };
+      }
+    } else if (!monitorData.inferredRecoveryOperationRecoveryRequired) {
+      monitorData.inferredRecoveryOperationRecoveryRequired = null;
     }
   }
   if (Array.isArray(data.inferredRecoveryEvents)) {
@@ -704,7 +715,7 @@ const LS_GLOBAL_FIELDS = [
   // ★ #412-O4: オフライン継続推定 candidate（親権威・状態遷移つき）
   "inferredCandidateStore",
   // ★ #420/O6A: O5 recovery blocker と復旧操作 audit event
-  "inferredDecisionRecoveryRequired", "inferredRecoveryEvents",
+  "inferredDecisionRecoveryRequired", "inferredRecoveryOperationRecoveryRequired", "inferredRecoveryEvents",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
   // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
@@ -961,6 +972,7 @@ function _flushStorage() {
       queueSharedWrite("hostObservationCurrent",   monitorData.hostObservationCurrent);
       queueSharedWrite("inferredCandidateStore",   monitorData.inferredCandidateStore);
       queueSharedWrite("inferredDecisionRecoveryRequired", monitorData.inferredDecisionRecoveryRequired || null);
+      queueSharedWrite("inferredRecoveryOperationRecoveryRequired", monitorData.inferredRecoveryOperationRecoveryRequired || null);
       queueSharedWrite("inferredRecoveryEvents", monitorData.inferredRecoveryEvents || []);
       // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
       queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
@@ -1369,6 +1381,12 @@ function _restoreFromData(shared, machines) {
     monitorData.inferredDecisionRecoveryRequired =
       shared.inferredDecisionRecoveryRequired && typeof shared.inferredDecisionRecoveryRequired === "object"
         ? { ...shared.inferredDecisionRecoveryRequired }
+        : null;
+  }
+  if (shared && Object.prototype.hasOwnProperty.call(shared, "inferredRecoveryOperationRecoveryRequired")) {
+    monitorData.inferredRecoveryOperationRecoveryRequired =
+      shared.inferredRecoveryOperationRecoveryRequired && typeof shared.inferredRecoveryOperationRecoveryRequired === "object"
+        ? { ...shared.inferredRecoveryOperationRecoveryRequired }
         : null;
   }
   if (Array.isArray(shared?.inferredRecoveryEvents)) {

@@ -125,7 +125,8 @@ the Parent; readonly Satellites keep the action buttons disabled.
 
 When required, the top of the Inferred Candidate tab shows a Recovery /
 repair status surface. This is a diagnostic view for states such as
-`inferredDecisionRecoveryRequired`, `ledgerRepairRequired` and
+`inferredDecisionRecoveryRequired`,
+`inferredRecoveryOperationRecoveryRequired`, `ledgerRepairRequired` and
 `mountHistoryRejectedEvents`, where the app must not continue
 automatically. It shows the related candidate, host, spool, save-failure
 reason and quarantined mountHistory events.
@@ -137,6 +138,7 @@ Recovery / repair status surface.
 | --- | --- |
 | **Retry save** | Attempts to durably save the current recovery / repair state again. |
 | **Clear recovery** | Clears `inferredDecisionRecoveryRequired` after the operator has verified the rolled-back state. |
+| **Clear operation recovery** | Clears `inferredRecoveryOperationRecoveryRequired` after the operator has verified a failed O6 recovery-operation rollback save. |
 | **Repair intervals** | Repairs an ambiguous mount interval by explicitly selecting the survivor interval and superseding the other open intervals. |
 | **Clear repair** | Clears `ledgerRepairRequired` for the selected host after the mount ledger has been verified and the current state is no longer `ambiguous` or `corrupt`. |
 | **Archive rejected** | Moves quarantined mountHistory events into `inferredRecoveryEvents` audit history and closes the warning. |
@@ -149,9 +151,12 @@ them for O7 reconciliation or manual investigation.
 Each recovery operation appends an `inferredRecoveryEvents` audit event
 and rolls memory state back if durable save fails. For `Repair intervals`,
 `mountHistory` and `mountHistorySeq` are also part of the rollback
-snapshot. In Relay setups, Satellites mirror the diagnostic state from the
-Parent authority but keep the recovery operation buttons disabled. Run
-recovery operations on the Parent device.
+snapshot. If that rollback state also cannot be saved,
+`inferredRecoveryOperationRecoveryRequired` is raised and normal O5/O6
+operations stop until retry-save or operator clearance resolves it. In
+Relay setups, Satellites mirror the diagnostic state from the Parent
+authority but keep the recovery operation buttons disabled. Run recovery
+operations on the Parent device.
 
 After recovery operations run, the same Recovery / repair status surface
 shows a **Recovery operation audit** card. It lists recent retry-save,

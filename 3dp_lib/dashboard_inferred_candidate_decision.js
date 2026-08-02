@@ -27,9 +27,9 @@
  * - {@link reassignInferredCandidate}：別 spool へ再割当てして推定使用量を確定する
  * - {@link undoInferredCandidateDecision}：確定済み candidate の台帳反映を取り消す
  *
- * @version 1.390.1270 (PR #420)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-08-02 00:00:00
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -57,6 +57,13 @@ import { wallNowMs } from "./dashboard_time.js";
  * @constant {string}
  */
 const RECOVERY_FIELD = "inferredDecisionRecoveryRequired";
+
+/**
+ * O6 recovery operation 復旧要求を保存する monitorData field 名。
+ *
+ * @constant {string}
+ */
+const RECOVERY_OPERATION_FIELD = "inferredRecoveryOperationRecoveryRequired";
 
 /**
  * Reject の理由として受け付ける短い識別子。
@@ -291,6 +298,28 @@ function _markRecoveryRequired(data, options = {}) {
 }
 
 /**
+ * 未解決の recovery blocker を取得する。
+ *
+ * 【詳細説明】
+ * - O5 decision rollback が耐久保存できなかった場合と、O6 recovery operation rollback が
+ *   耐久保存できなかった場合のどちらも、確定台帳に対する後続操作を止める。
+ * - null 以外を返した場合、呼び出し側は先に Recovery / repair status で状態確認と再保存を行う。
+ *
+ * @private
+ * @function _activeRecoveryBlocker
+ * @returns {?Object} 未解決 recovery blocker。無い場合は null。
+ */
+function _activeRecoveryBlocker() {
+  if (monitorData[RECOVERY_FIELD]) {
+    return { type: RECOVERY_FIELD, recovery: monitorData[RECOVERY_FIELD] };
+  }
+  if (monitorData[RECOVERY_OPERATION_FIELD]) {
+    return { type: RECOVERY_OPERATION_FIELD, recovery: monitorData[RECOVERY_OPERATION_FIELD] };
+  }
+  return null;
+}
+
+/**
  * decision 実行前の共通ガードを適用する。
  *
  * 【詳細説明】
@@ -304,7 +333,16 @@ function _markRecoveryRequired(data, options = {}) {
  */
 function _decisionGuard(candidateHash) {
   if (!canExecuteLedgerDecision()) return { ok: false, reason: "decision_not_authorized", candidateHash };
-  if (monitorData[RECOVERY_FIELD]) return { ok: false, reason: "decision_recovery_required", candidateHash, recovery: monitorData[RECOVERY_FIELD] };
+  const blocker = _activeRecoveryBlocker();
+  if (blocker) {
+    return {
+      ok: false,
+      reason: blocker.type === RECOVERY_FIELD ? "decision_recovery_required" : "recovery_required",
+      candidateHash,
+      recovery: blocker.recovery,
+      recoveryField: blocker.type
+    };
+  }
   return null;
 }
 
@@ -451,6 +489,7 @@ export function canExecuteLedgerDecision() {
  * if (canSubmitLedgerDecision()) enableDecisionButtons();
  */
 export function canSubmitLedgerDecision() {
+  if (_activeRecoveryBlocker()) return false;
   return canExecuteLedgerDecision() || _canRequestLedgerDecision();
 }
 

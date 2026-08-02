@@ -86,6 +86,7 @@ beforeEach(() => {
     "ic-old": record("ic-old", { createdAt: 1000, status: "confirmed" })
   };
   delete mocks.monitorData.inferredDecisionRecoveryRequired;
+  delete mocks.monitorData.inferredRecoveryOperationRecoveryRequired;
   mocks.monitorData.inferredRecoveryEvents = [];
   mocks.monitorData.ledgerRepairRequired = {};
   mocks.monitorData.mountHistoryRejectedEvents = [];
@@ -150,6 +151,22 @@ describe("buildInferredCandidateViewModel", () => {
     const vm = buildInferredCandidateViewModel(mocks.monitorData.inferredCandidateStore["ic-new"]);
 
     expect(vm.warningCodes).toContain("history-already-attributed");
+  });
+
+  it("#424/O6D: recovery operation blocker がある場合は candidate decision を無効化する", () => {
+    mocks.monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+      createdAt: 900
+    };
+
+    const vm = buildInferredCandidateViewModel(mocks.monitorData.inferredCandidateStore["ic-new"]);
+
+    expect(vm.canConfirm).toBe(false);
+    expect(vm.canReject).toBe(false);
+    expect(vm.canReassign).toBe(false);
+    expect(vm.readOnlyReason).toBe("recovery-required");
+    expect(vm.warningCodes).toContain("decision-recovery-required");
   });
 });
 
@@ -248,6 +265,30 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
     expect(vm.cards[0].details).toHaveLength(1);
     expect(vm.cards[0].details[0].value).toContain("decision-recovery-cleared");
     expect(vm.cards[0].details[0].value).toContain("ic-new");
+  });
+
+  it("#424/O6D: recovery operation blocker を blocker card に変換する", () => {
+    mocks.monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+      failureReason: "ledger_repair_clear_not_durably_saved",
+      createdAt: 900,
+      target: { host: "k1", spoolId: "S1" },
+      save: { reason: "idb_flush_failed" },
+      rollbackSave: { reason: "rollback_flush_failed" }
+    };
+
+    const vm = buildInferredRecoverySurfaceViewModel();
+
+    expect(vm.hasIssues).toBe(true);
+    expect(vm.blockerCount).toBe(1);
+    expect(vm.cards[0]).toMatchObject({
+      type: "recovery-operation-recovery",
+      severity: "blocker",
+      title: "O6 recovery operation recovery required"
+    });
+    expect(vm.cards[0].details).toContainEqual({ label: "Operation", value: "clearLedgerRepairRequired" });
+    expect(vm.cards[0].details).toContainEqual({ label: "Failure", value: "ledger_repair_clear_not_durably_saved" });
   });
 
   it("recovery item がない場合は空の診断モデルを返す", () => {

@@ -19,9 +19,9 @@
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1273 (PR #423)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 18:20:00
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -241,6 +241,7 @@ function _details(entries) {
  */
 function _recoveryEventTarget(event) {
   if (event?.clearedRecovery?.candidateHash) return String(event.clearedRecovery.candidateHash);
+  if (event?.clearedRecovery?.operation) return String(event.clearedRecovery.operation);
   if (event?.decisionRecovery?.candidateHash) return String(event.decisionRecovery.candidateHash);
   if (event?.host) return String(event.host);
   if (Number.isFinite(Number(event?.rejectedEventCount))) return `${Number(event.rejectedEventCount)} rejected events`;
@@ -459,8 +460,10 @@ export function buildInferredCandidateViewModel(record, options = {}) {
     warnings.add("remaining-insufficient");
   }
   if (confidenceLevel === "low") warnings.add("low-confidence");
-  if (monitorData.inferredDecisionRecoveryRequired) warnings.add("decision-recovery-required");
-  const canSubmit = options.canSubmit ?? canSubmitLedgerDecision();
+  const hasRecoveryBlocker = !!monitorData.inferredDecisionRecoveryRequired
+    || !!monitorData.inferredRecoveryOperationRecoveryRequired;
+  if (hasRecoveryBlocker) warnings.add("decision-recovery-required");
+  const canSubmit = !hasRecoveryBlocker && (options.canSubmit ?? canSubmitLedgerDecision());
   if (!canSubmit) warnings.add("relay-readonly");
   const isPending = status === INFERRED_CANDIDATE_STATUS.PENDING;
   const isUndoable = status === INFERRED_CANDIDATE_STATUS.CONFIRMED
@@ -501,7 +504,7 @@ export function buildInferredCandidateViewModel(record, options = {}) {
     canReject: canSubmit && isPending,
     canReassign: canSubmit && isPending,
     canUndo: canSubmit && isUndoable,
-    readOnlyReason: canSubmit ? null : "relay-readonly",
+    readOnlyReason: canSubmit ? null : (hasRecoveryBlocker ? "recovery-required" : "relay-readonly"),
     warningCodes: [...warnings].sort()
   };
 }
@@ -594,6 +597,28 @@ export function buildInferredRecoverySurfaceViewModel(options = {}) {
         { label: "Candidate", value: recovery.candidateHash },
         { label: "Save", value: recovery.save?.reason },
         { label: "Rollback save", value: recovery.rollbackSave?.reason }
+      ])
+    });
+  }
+
+  const operationRecovery = monitorData.inferredRecoveryOperationRecoveryRequired;
+  if (operationRecovery && typeof operationRecovery === "object") {
+    cards.push({
+      type: "recovery-operation-recovery",
+      severity: "blocker",
+      title: "O6 recovery operation recovery required",
+      summary: "復旧操作のrollback状態を保存できなかったため、状態確認まで新しい操作は停止されます",
+      host: operationRecovery.target?.host || null,
+      candidateHash: null,
+      createdAt: Number(operationRecovery.createdAt) || 0,
+      createdAtDisplay: _formatTime(operationRecovery.createdAt),
+      details: _details([
+        { label: "Operation", value: operationRecovery.operation },
+        { label: "Reason", value: operationRecovery.reason },
+        { label: "Failure", value: operationRecovery.failureReason },
+        { label: "Target", value: operationRecovery.target },
+        { label: "Save", value: operationRecovery.save?.reason },
+        { label: "Rollback save", value: operationRecovery.rollbackSave?.reason }
       ])
     });
   }

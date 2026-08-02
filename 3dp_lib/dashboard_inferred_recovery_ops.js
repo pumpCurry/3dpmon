@@ -12,18 +12,20 @@
  * - STAND ALONE と PARENT だけが復旧操作を実行し、SATELLITE は親権威の診断を閲覧するだけにする。
  * - 各操作は O5 decision と同じ直列化キューを使い、保存境界や rollback 境界の競合を避ける。
  * - 復旧操作は `inferredRecoveryEvents` へ監査 event を追記し、耐久保存失敗時はメモリ状態を rollback する。
+ * - 復旧操作の rollback 状態も耐久保存できない場合は O6 専用 blocker を残し、通常操作を停止する。
  *
  * 【公開関数一覧】
  * - {@link canExecuteRecoveryOperation}：この端末で O6 recovery 操作を実行できるか判定する
  * - {@link retryInferredRecoveryDurableSave}：現在の recovery / repair 状態を再度耐久保存する
  * - {@link clearInferredDecisionRecoveryRequired}：確認済みの O5 decision recovery flag を解除する
+ * - {@link clearInferredRecoveryOperationRecoveryRequired}：確認済みの O6 recovery operation blocker を解除する
  * - {@link repairLedgerMountIntervals}：曖昧な mount interval の survivor を明示選択して修復する
  * - {@link clearLedgerRepairRequired}：確認済みの host 単位 ledger repair flag を解除する
  * - {@link archiveMountHistoryRejectedEvents}：隔離済み mount event を監査 event に移して warning を閉じる
  *
- * @version 1.390.1273 (PR #423)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.1270 (PR #420)
- * @lastModified 2026-08-02 18:20:00
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - O7 Ledger Reconciliation で、手動解除前の再計算監査と修復案提示を追加する。
@@ -55,6 +57,13 @@ const RECOVERY_EVENT_CAP = 1000;
 const DECISION_RECOVERY_FIELD = "inferredDecisionRecoveryRequired";
 
 /**
+ * O6 recovery operation 復旧要求の monitorData field 名。
+ *
+ * @constant {string}
+ */
+const RECOVERY_OPERATION_FIELD = "inferredRecoveryOperationRecoveryRequired";
+
+/**
  * O6 recovery audit event の type 一覧。
  *
  * @enum {string}
@@ -62,6 +71,7 @@ const DECISION_RECOVERY_FIELD = "inferredDecisionRecoveryRequired";
 export const INFERRED_RECOVERY_EVENT_TYPE = Object.freeze({
   DURABLE_SAVE_RETRIED: "recovery-durable-save-retried",
   DECISION_RECOVERY_CLEARED: "decision-recovery-cleared",
+  RECOVERY_OPERATION_RECOVERY_CLEARED: "recovery-operation-recovery-cleared",
   LEDGER_INTERVALS_REPAIRED: "ledger-intervals-repaired",
   LEDGER_REPAIR_CLEARED: "ledger-repair-cleared",
   REJECTED_MOUNT_EVENTS_ARCHIVED: "mount-history-rejected-events-archived"
@@ -174,6 +184,7 @@ function _rejectedMountEvents() {
  */
 function _hasRecoveryIssues() {
   return !!monitorData[DECISION_RECOVERY_FIELD]
+    || !!monitorData[RECOVERY_OPERATION_FIELD]
     || Object.keys(_ledgerRepairRequired()).length > 0
     || _rejectedMountEvents().length > 0;
 }
@@ -189,6 +200,7 @@ function _hasRecoveryIssues() {
 function _snapshotRecoveryState(options = {}) {
   const snapshot = {
     inferredDecisionRecoveryRequired: _clone(monitorData[DECISION_RECOVERY_FIELD] || null),
+    inferredRecoveryOperationRecoveryRequired: _clone(monitorData[RECOVERY_OPERATION_FIELD] || null),
     ledgerRepairRequired: _clone(_ledgerRepairRequired()),
     mountHistoryRejectedEvents: _clone(_rejectedMountEvents()),
     inferredRecoveryEvents: _clone(_events())
@@ -215,6 +227,9 @@ function _snapshotRecoveryState(options = {}) {
 function _restoreRecoveryState(snapshot) {
   monitorData[DECISION_RECOVERY_FIELD] = snapshot.inferredDecisionRecoveryRequired
     ? _clone(snapshot.inferredDecisionRecoveryRequired)
+    : null;
+  monitorData[RECOVERY_OPERATION_FIELD] = snapshot.inferredRecoveryOperationRecoveryRequired
+    ? _clone(snapshot.inferredRecoveryOperationRecoveryRequired)
     : null;
 
   const repair = _ledgerRepairRequired();
@@ -262,6 +277,29 @@ function _appendRecoveryEvent(type, data = {}, options = {}) {
 }
 
 /**
+ * O6 recovery operation の rollback 保存失敗 blocker を記録する。
+ *
+ * 【詳細説明】
+ * - O6 操作で保存失敗後にメモリ rollback までは完了しても、その rollback 状態を耐久保存できない
+ *   場合は、保存済み snapshot とメモリ状態のどちらが権威か判断できない。
+ * - そのため独立 blocker を残し、O5 decision と通常 O6 操作を止める。
+ *
+ * @private
+ * @function _markRecoveryOperationRequired
+ * @param {Object} data - blocker metadata。
+ * @param {{nowMs?:number}} [options] - clock 注入オプション。
+ * @returns {Object} 記録した blocker。
+ */
+function _markRecoveryOperationRequired(data, options = {}) {
+  monitorData[RECOVERY_OPERATION_FIELD] = {
+    ..._clone(data || {}),
+    reason: "rollback_durable_save_failed",
+    createdAt: _nowMs(options)
+  };
+  return monitorData[RECOVERY_OPERATION_FIELD];
+}
+
+/**
  * 変更後状態を耐久保存し、失敗した場合は snapshot へ rollback する。
  *
  * 【詳細説明】
@@ -274,9 +312,10 @@ function _appendRecoveryEvent(type, data = {}, options = {}) {
  * @param {Object} snapshot - 操作前 snapshot。
  * @param {string} failureReason - 保存失敗時に返す reason。
  * @param {{save?:boolean}} [options] - 保存オプション。
+ * @param {{operation?:string,target?:Object}} [blockerData] - rollback 保存失敗時に blocker へ残す操作情報。
  * @returns {Promise<{ok:boolean,reason:string,save?:Object,rollbackSave?:Object}>} 保存結果。
  */
-async function _saveOrRollbackRecoveryMutation(snapshot, failureReason, options = {}) {
+async function _saveOrRollbackRecoveryMutation(snapshot, failureReason, options = {}, blockerData = {}) {
   const save = options.save === false
     ? { ok: true, backend: "disabled", reason: "save_disabled" }
     : await saveUnifiedStorageDurably();
@@ -288,11 +327,29 @@ async function _saveOrRollbackRecoveryMutation(snapshot, failureReason, options 
   const rollbackSave = options.save === false
     ? { ok: true, backend: "disabled", reason: "save_disabled" }
     : await saveUnifiedStorageDurably();
+  if (rollbackSave && rollbackSave.ok === false) {
+    const recovery = _markRecoveryOperationRequired({
+      operation: blockerData.operation || "unknown",
+      target: blockerData.target || null,
+      failureReason,
+      save,
+      rollbackSave
+    }, options);
+    const recoverySave = options.save === false
+      ? { ok: true, backend: "disabled", reason: "save_disabled" }
+      : await saveUnifiedStorageDurably();
+    return {
+      ok: false,
+      reason: "recovery_operation_rollback_save_failed",
+      save,
+      rollbackSave,
+      recovery,
+      recoverySave
+    };
+  }
   return {
     ok: false,
-    reason: rollbackSave && rollbackSave.ok === false
-      ? "recovery_operation_rollback_save_failed"
-      : failureReason,
+    reason: failureReason,
     save,
     rollbackSave
   };
@@ -303,11 +360,26 @@ async function _saveOrRollbackRecoveryMutation(snapshot, failureReason, options 
  *
  * @private
  * @function _operationGuard
+ * @param {{allowDecisionRecoveryBlocker?:boolean,allowRecoveryOperationBlocker?:boolean}} [options] - 復旧確認操作用の例外。
  * @returns {?{ok:boolean,reason:string}} 実行不可なら結果 object。実行可能なら null。
  */
-function _operationGuard() {
+function _operationGuard(options = {}) {
   if (!canExecuteRecoveryOperation()) {
     return { ok: false, reason: "recovery_not_authorized" };
+  }
+  if (monitorData[DECISION_RECOVERY_FIELD] && !options.allowDecisionRecoveryBlocker) {
+    return {
+      ok: false,
+      reason: "decision_recovery_required",
+      recovery: monitorData[DECISION_RECOVERY_FIELD]
+    };
+  }
+  if (monitorData[RECOVERY_OPERATION_FIELD] && !options.allowRecoveryOperationBlocker) {
+    return {
+      ok: false,
+      reason: "recovery_required",
+      recovery: monitorData[RECOVERY_OPERATION_FIELD]
+    };
   }
   return null;
 }
@@ -332,7 +404,7 @@ function _validateLedgerRepairClearance(host, repairItem) {
   if (!spoolId) return { ok: false, reason: "ledger_repair_spool_required" };
   try {
     const status = getMountIntervalStatus(spoolId, host);
-    if (status?.status === "ambiguous" || status?.status === "corrupt") {
+    if (status?.status !== "ok" && status?.status !== "none") {
       return {
         ok: false,
         reason: "ledger_repair_still_unresolved",
@@ -433,7 +505,10 @@ export function canExecuteRecoveryOperation() {
  */
 export function retryInferredRecoveryDurableSave(options = {}) {
   return enqueueLedgerDecisionTask(async () => {
-    const guard = _operationGuard();
+    const guard = _operationGuard({
+      allowDecisionRecoveryBlocker: true,
+      allowRecoveryOperationBlocker: true
+    });
     if (guard) return guard;
     if (!_hasRecoveryIssues()) return { ok: false, reason: "recovery_not_required" };
 
@@ -444,7 +519,13 @@ export function retryInferredRecoveryDurableSave(options = {}) {
       ledgerRepairHosts: Object.keys(_ledgerRepairRequired()),
       rejectedMountEventCount: _rejectedMountEvents().length
     }, options);
-    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "recovery_retry_not_durably_saved", options);
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "recovery_retry_not_durably_saved", options, {
+      operation: "retryInferredRecoveryDurableSave",
+      target: {
+        hasDecisionRecovery: !!monitorData[DECISION_RECOVERY_FIELD],
+        hasRecoveryOperationRecovery: !!monitorData[RECOVERY_OPERATION_FIELD]
+      }
+    });
     if (!saved.ok) return saved;
     return { ok: true, reason: "recovery_durable_save_retried", event, save: saved.save };
   });
@@ -465,7 +546,7 @@ export function retryInferredRecoveryDurableSave(options = {}) {
  */
 export function clearInferredDecisionRecoveryRequired(options = {}) {
   return enqueueLedgerDecisionTask(async () => {
-    const guard = _operationGuard();
+    const guard = _operationGuard({ allowDecisionRecoveryBlocker: true });
     if (guard) return guard;
     const current = monitorData[DECISION_RECOVERY_FIELD];
     if (!current || typeof current !== "object") return { ok: false, reason: "decision_recovery_not_found" };
@@ -477,9 +558,52 @@ export function clearInferredDecisionRecoveryRequired(options = {}) {
       note: options.note || "",
       clearedRecovery: _clone(current)
     }, options);
-    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "decision_recovery_clear_not_durably_saved", options);
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "decision_recovery_clear_not_durably_saved", options, {
+      operation: "clearInferredDecisionRecoveryRequired",
+      target: { candidateHash: current.candidateHash || null }
+    });
     if (!saved.ok) return saved;
     return { ok: true, reason: "decision_recovery_cleared", event, save: saved.save };
+  });
+}
+
+/**
+ * 確認済みの O6 recovery operation blocker を解除する。
+ *
+ * 【詳細説明】
+ * - rollback 保存失敗後、オペレーターが保存状態とメモリ状態を確認した場合だけ呼ぶ。
+ * - この操作は `inferredRecoveryOperationRecoveryRequired` が存在する状態でも実行できる例外であり、
+ *   blocker 解除と audit event 追記を同じ耐久保存境界で扱う。
+ *
+ * @function clearInferredRecoveryOperationRecoveryRequired
+ * @param {{actor?:string,note?:string,nowMs?:number,save?:boolean}} [options] - 操作者・メモ・保存オプション。
+ * @returns {Promise<Object>} recovery 操作結果。
+ * @example
+ * const result = await clearInferredRecoveryOperationRecoveryRequired({ actor: "operator", note: "checked" });
+ */
+export function clearInferredRecoveryOperationRecoveryRequired(options = {}) {
+  return enqueueLedgerDecisionTask(async () => {
+    const guard = _operationGuard({
+      allowDecisionRecoveryBlocker: true,
+      allowRecoveryOperationBlocker: true
+    });
+    if (guard) return guard;
+    const current = monitorData[RECOVERY_OPERATION_FIELD];
+    if (!current || typeof current !== "object") return { ok: false, reason: "recovery_operation_recovery_not_found" };
+
+    const snapshot = _snapshotRecoveryState();
+    monitorData[RECOVERY_OPERATION_FIELD] = null;
+    const event = _appendRecoveryEvent(INFERRED_RECOVERY_EVENT_TYPE.RECOVERY_OPERATION_RECOVERY_CLEARED, {
+      reason: "operator-cleared-recovery-operation-recovery",
+      note: options.note || "",
+      clearedRecovery: _clone(current)
+    }, options);
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "recovery_operation_recovery_clear_not_durably_saved", options, {
+      operation: "clearInferredRecoveryOperationRecoveryRequired",
+      target: { operation: current.operation || null }
+    });
+    if (!saved.ok) return saved;
+    return { ok: true, reason: "recovery_operation_recovery_cleared", event, save: saved.save };
   });
 }
 
@@ -520,7 +644,10 @@ export function clearLedgerRepairRequired(host, options = {}) {
       clearedRepair: _clone(current),
       clearanceStatus: _clone(clearance.status)
     }, options);
-    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_clear_not_durably_saved", options);
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_clear_not_durably_saved", options, {
+      operation: "clearLedgerRepairRequired",
+      target: { host: hostKey, spoolId: current.spoolId || null }
+    });
     if (!saved.ok) return saved;
     return { ok: true, reason: "ledger_repair_cleared", host: hostKey, event, save: saved.save };
   });
@@ -602,7 +729,14 @@ export function repairLedgerMountIntervals(host, survivingIntervalId, options = 
       supersededIntervalIds: _clone(validation.targetIntervalIds),
       supersedeEvent: _clone(supersedeEvent)
     }, { ...options, nowMs });
-    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_repair_not_durably_saved", options);
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "ledger_repair_repair_not_durably_saved", options, {
+      operation: "repairLedgerMountIntervals",
+      target: {
+        host: hostKey,
+        spoolId: validation.spoolId,
+        survivingIntervalId: String(survivingIntervalId)
+      }
+    });
     if (!saved.ok) return saved;
     return {
       ok: true,
@@ -647,7 +781,10 @@ export function archiveMountHistoryRejectedEvents(options = {}) {
       rejectedEventCount: rejectedSnapshot.length,
       rejectedEvents: rejectedSnapshot
     }, options);
-    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "mount_history_rejected_archive_not_durably_saved", options);
+    const saved = await _saveOrRollbackRecoveryMutation(snapshot, "mount_history_rejected_archive_not_durably_saved", options, {
+      operation: "archiveMountHistoryRejectedEvents",
+      target: { rejectedEventCount: rejectedSnapshot.length }
+    });
     if (!saved.ok) return saved;
     return {
       ok: true,

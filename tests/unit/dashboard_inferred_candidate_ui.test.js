@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   canExecuteRecoveryOperation: vi.fn(() => true),
   retryInferredRecoveryDurableSave: vi.fn(async () => ({ ok: true, reason: "recovery_durable_save_retried" })),
   clearInferredDecisionRecoveryRequired: vi.fn(async () => ({ ok: true, reason: "decision_recovery_cleared" })),
+  clearInferredRecoveryOperationRecoveryRequired: vi.fn(async () => ({ ok: true, reason: "recovery_operation_recovery_cleared" })),
   clearLedgerRepairRequired: vi.fn(async () => ({ ok: true, reason: "ledger_repair_cleared" })),
   repairLedgerMountIntervals: vi.fn(async () => ({ ok: true, reason: "ledger_repair_intervals_repaired" })),
   archiveMountHistoryRejectedEvents: vi.fn(async () => ({ ok: true, reason: "mount_history_rejected_events_archived" })),
@@ -37,6 +38,7 @@ vi.mock("../../3dp_lib/dashboard_inferred_recovery_ops.js", () => ({
   canExecuteRecoveryOperation: mocks.canExecuteRecoveryOperation,
   retryInferredRecoveryDurableSave: mocks.retryInferredRecoveryDurableSave,
   clearInferredDecisionRecoveryRequired: mocks.clearInferredDecisionRecoveryRequired,
+  clearInferredRecoveryOperationRecoveryRequired: mocks.clearInferredRecoveryOperationRecoveryRequired,
   clearLedgerRepairRequired: mocks.clearLedgerRepairRequired,
   repairLedgerMountIntervals: mocks.repairLedgerMountIntervals,
   archiveMountHistoryRejectedEvents: mocks.archiveMountHistoryRejectedEvents
@@ -155,6 +157,8 @@ beforeEach(() => {
   mocks.retryInferredRecoveryDurableSave.mockResolvedValue({ ok: true, reason: "recovery_durable_save_retried" });
   mocks.clearInferredDecisionRecoveryRequired.mockClear();
   mocks.clearInferredDecisionRecoveryRequired.mockResolvedValue({ ok: true, reason: "decision_recovery_cleared" });
+  mocks.clearInferredRecoveryOperationRecoveryRequired.mockClear();
+  mocks.clearInferredRecoveryOperationRecoveryRequired.mockResolvedValue({ ok: true, reason: "recovery_operation_recovery_cleared" });
   mocks.clearLedgerRepairRequired.mockClear();
   mocks.clearLedgerRepairRequired.mockResolvedValue({ ok: true, reason: "ledger_repair_cleared" });
   mocks.repairLedgerMountIntervals.mockClear();
@@ -258,6 +262,35 @@ describe("createInferredCandidateCenterContent", () => {
     expect(document.querySelector(".ic-recovery-severity").textContent).toBe("INFO");
     expect(document.querySelector(".ic-recovery-title").textContent).toBe("Recovery operation audit");
     expect(document.querySelector(".ic-recovery-actions")).toBeNull();
+  });
+
+  it("#424/O6D: recovery operation blocker card の Clear recovery は専用解除APIを呼ぶ", async () => {
+    mocks.recoveryVm = {
+      hasIssues: true,
+      totalCount: 1,
+      blockerCount: 1,
+      warningCount: 0,
+      infoCount: 0,
+      cards: [{
+        type: "recovery-operation-recovery",
+        severity: "blocker",
+        title: "O6 recovery operation recovery required",
+        summary: "状態確認が必要です",
+        details: [{ label: "Operation", value: "clearLedgerRepairRequired" }]
+      }]
+    };
+
+    const center = createInferredCandidateCenterContent();
+    document.body.appendChild(center.el);
+    [...document.querySelectorAll(".ic-recovery-actions button")]
+      .find(button => button.textContent === "Clear operation recovery")
+      .click();
+
+    await waitForAssertion(() => {
+      expect(mocks.clearInferredRecoveryOperationRecoveryRequired).toHaveBeenCalledWith({ actor: "local-user" });
+      expect(mocks.clearInferredDecisionRecoveryRequired).not.toHaveBeenCalled();
+      expect(mocks.showAlert).toHaveBeenCalledWith("復旧操作の整合性確認フラグを解除しました", "success");
+    });
   });
 
   it("Satellite では recovery 操作を disabled にする", () => {

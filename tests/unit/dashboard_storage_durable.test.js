@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
     hostObservationCurrent: {},
     inferredCandidateStore: {},
     inferredDecisionRecoveryRequired: null,
+    inferredRecoveryOperationRecoveryRequired: null,
     inferredRecoveryEvents: [],
     pendingUnattributedUsage: [],
     pendingUnattributedUsageArchive: {},
@@ -79,6 +80,7 @@ beforeEach(async () => {
   mocks.monitorData.machines = { k1: { storedData: {}, printStore: { history: [] }, runtimeData: { transient: true } } };
   mocks.monitorData.inferredCandidateStore = { "ic-a": { candidateHash: "ic-a", usedMm: 1200 } };
   mocks.monitorData.inferredDecisionRecoveryRequired = { candidateHash: "ic-a", reason: "rollback_durable_save_failed" };
+  mocks.monitorData.inferredRecoveryOperationRecoveryRequired = { operation: "clearLedgerRepairRequired", reason: "rollback_durable_save_failed" };
   mocks.monitorData.inferredRecoveryEvents = [{ eventId: "ir-a", type: "recovery-durable-save-retried" }];
   mocks.monitorData.hostObservationWatermark = { k1: { observationSequence: 1 } };
   mocks.queueSharedWrite.mockClear();
@@ -95,6 +97,7 @@ describe("saveUnifiedStorageDurably", () => {
     expect(result).toEqual({ ok: true, backend: "indexedDB", reason: "flushed" });
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredCandidateStore", mocks.monitorData.inferredCandidateStore);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredDecisionRecoveryRequired", mocks.monitorData.inferredDecisionRecoveryRequired);
+    expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredRecoveryOperationRecoveryRequired", mocks.monitorData.inferredRecoveryOperationRecoveryRequired);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredRecoveryEvents", mocks.monitorData.inferredRecoveryEvents);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);

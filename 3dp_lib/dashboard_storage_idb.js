@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.1270 (PR #420)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-08-02 15:05:22
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -110,6 +110,7 @@ const SHARED_KEYS = [
   "inferredCandidateStore",
   // #420/O6A: recovery blocker と復旧操作 audit event。
   "inferredDecisionRecoveryRequired",
+  "inferredRecoveryOperationRecoveryRequired",
   "inferredRecoveryEvents",
   // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
   "pendingUnattributedUsage",

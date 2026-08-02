@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1273 (PR #423)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 18:20:00
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,6 +45,7 @@ import {
   archiveMountHistoryRejectedEvents,
   canExecuteRecoveryOperation,
   clearInferredDecisionRecoveryRequired,
+  clearInferredRecoveryOperationRecoveryRequired,
   clearLedgerRepairRequired,
   repairLedgerMountIntervals,
   retryInferredRecoveryDurableSave
@@ -104,12 +105,15 @@ const REASON_LABELS = Object.freeze({
   candidate_ledger_event_total_mismatch: "台帳イベントと候補の消費量が一致しません",
   invalid_reject_reason: "否認理由が不正です",
   rollback_durable_save_failed: "復旧状態の保存に失敗しました",
+  recovery_required: "復旧状態の確認が必要です",
   recovery_not_authorized: "この端末では復旧操作を実行できません。親端末で実行してください",
   recovery_not_required: "復旧対象はありません",
   decision_recovery_not_found: "整合性確認フラグは見つかりません",
+  recovery_operation_recovery_not_found: "復旧操作の整合性確認フラグは見つかりません",
   recovery_retry_not_durably_saved: "復旧状態の再保存に失敗しました",
   recovery_operation_rollback_save_failed: "復旧操作のrollback状態を保存できませんでした",
   decision_recovery_clear_not_durably_saved: "整合性確認フラグの解除を保存できませんでした",
+  recovery_operation_recovery_clear_not_durably_saved: "復旧操作の整合性確認フラグを保存できませんでした",
   ledger_repair_host_required: "修復対象ホストが不正です",
   ledger_repair_spool_required: "台帳修復対象スプールが不明です",
   ledger_repair_not_found: "台帳修復フラグは見つかりません",
@@ -304,7 +308,8 @@ function _handleRecoveryResult(result, render, onAfterDecision) {
   if (result?.ok) {
     const label = result.reason === "recovery_durable_save_retried" ? "復旧状態を再保存しました"
       : result.reason === "decision_recovery_cleared" ? "整合性確認フラグを解除しました"
-        : result.reason === "ledger_repair_cleared" ? "台帳修復フラグを解除しました"
+        : result.reason === "recovery_operation_recovery_cleared" ? "復旧操作の整合性確認フラグを解除しました"
+          : result.reason === "ledger_repair_cleared" ? "台帳修復フラグを解除しました"
             : result.reason === "mount_history_rejected_events_archived" ? "隔離イベントを監査へ退避しました"
               : result.reason === "ledger_repair_intervals_repaired" ? "台帳装着区間を修復しました"
                 : "復旧操作を実行しました";
@@ -421,6 +426,30 @@ function _appendRecoveryActions(el, card, render, onAfterDecision) {
         );
         if (!ok) return;
         const result = await clearInferredDecisionRecoveryRequired({ actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
+    actions.append(retryBtn, clearBtn);
+  } else if (card.type === "recovery-operation-recovery") {
+    const retryBtn = _el("button", "ic-action-secondary", "Retry save");
+    retryBtn.disabled = !canExecute;
+    retryBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const result = await retryInferredRecoveryDurableSave({ actor: _actor() });
+        _handleRecoveryResult(result, render, onAfterDecision);
+      });
+    });
+    const clearBtn = _el("button", "ic-action-secondary", "Clear operation recovery");
+    clearBtn.disabled = !canExecute;
+    clearBtn.addEventListener("click", async () => {
+      await _withBusy(el, async () => {
+        const ok = await _confirmRecoveryAction(
+          "復旧操作の整合性確認フラグを解除",
+          "rollback後の復旧状態、保存状態、relay同期状態を確認済みの場合だけ解除してください。",
+          "解除する"
+        );
+        if (!ok) return;
+        const result = await clearInferredRecoveryOperationRecoveryRequired({ actor: _actor() });
         _handleRecoveryResult(result, render, onAfterDecision);
       });
     });

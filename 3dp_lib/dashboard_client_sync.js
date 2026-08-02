@@ -22,9 +22,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1270 (PR #420)
+ * @version 1.390.1274 (PR #424)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-02 15:05:22
+ * @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  */
 
@@ -314,7 +314,7 @@ function _applyRelayPrintStore(hostname, ps) {
  * ※ モジュール内部用だが、マージ規則の回帰テストのために export している。
  *
  * @function _applySharedFilamentState
- * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object, inferredDecisionRecoveryRequired?:Object|null, inferredRecoveryEvents?:Array<Object>, ledgerRepairRequired?:Object, mountHistoryRejectedEvents?:Array<Object>}} shared
+ * @param {{filamentSpools?:Array<Object>, hostSpoolMap?:Object, mountHistory?:Array<Object>, pendingUnattributedUsage?:Array<Object>, inferredCandidateStore?:Object, inferredDecisionRecoveryRequired?:Object|null, inferredRecoveryOperationRecoveryRequired?:Object|null, inferredRecoveryEvents?:Array<Object>, ledgerRepairRequired?:Object, mountHistoryRejectedEvents?:Array<Object>}} shared
  *   - 受信した共有データ
  * @returns {void}
  */
@@ -374,6 +374,12 @@ export function _applySharedFilamentState(shared) {
     monitorData.inferredDecisionRecoveryRequired =
       shared.inferredDecisionRecoveryRequired && typeof shared.inferredDecisionRecoveryRequired === "object"
         ? { ...shared.inferredDecisionRecoveryRequired }
+        : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(shared, "inferredRecoveryOperationRecoveryRequired")) {
+    monitorData.inferredRecoveryOperationRecoveryRequired =
+      shared.inferredRecoveryOperationRecoveryRequired && typeof shared.inferredRecoveryOperationRecoveryRequired === "object"
+        ? { ...shared.inferredRecoveryOperationRecoveryRequired }
         : null;
   }
   if (Object.prototype.hasOwnProperty.call(shared, "inferredRecoveryEvents")) {
@@ -438,6 +444,7 @@ function _maybeNotifyFilamentDomainChanged() {
     monitorData.spoolSerialCounter ?? 0,
     (monitorData.usageHistory || []).length,
     JSON.stringify(monitorData.inferredDecisionRecoveryRequired || null),
+    JSON.stringify(monitorData.inferredRecoveryOperationRecoveryRequired || null),
     JSON.stringify(monitorData.inferredRecoveryEvents || []),
     JSON.stringify(monitorData.ledgerRepairRequired || {}),
     JSON.stringify(monitorData.mountHistoryRejectedEvents || []),

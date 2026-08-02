@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1270 (PR #420)
+* @version 1.390.1274 (PR #424)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-02 15:05:22
+* @lastModified 2026-08-02 18:33:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -308,6 +308,13 @@ export const monitorData = {
    */
   inferredDecisionRecoveryRequired: null,
   /**
+   * ★ #424/O6D: O6 recovery operation 自体の rollback 状態を耐久保存できなかった場合の復旧要求。
+   * null なら通常状態。object の場合は O5 decision と通常 O6 operation を fail-closed で停止し、
+   * recovery 状態の再保存または operator 確認後の解除だけを許可する。
+   * @type {?Object}
+   */
+  inferredRecoveryOperationRecoveryRequired: null,
+  /**
    * ★ #420/O6A: recovery / repair 操作の監査 event。
    * decision recovery flag 解除、ledger repair flag 解除、隔離 mount event の archive などを追記し、
    * 復旧操作が通常の candidate decision と同様に追跡できるようにする。
@@ -554,4 +561,3 @@ export function markAllKeysDirty(hostname) {
     dirtySet.add(key);
   }
 }
-

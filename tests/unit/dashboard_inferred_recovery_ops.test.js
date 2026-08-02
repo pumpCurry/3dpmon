@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   monitorData: {
     inferredDecisionRecoveryRequired: null,
+    inferredRecoveryOperationRecoveryRequired: null,
     inferredRecoveryEvents: [],
     ledgerRepairRequired: {},
     mountHistoryRejectedEvents: [],
@@ -49,6 +50,7 @@ const {
   archiveMountHistoryRejectedEvents,
   canExecuteRecoveryOperation,
   clearInferredDecisionRecoveryRequired,
+  clearInferredRecoveryOperationRecoveryRequired,
   clearLedgerRepairRequired,
   repairLedgerMountIntervals,
   retryInferredRecoveryDurableSave
@@ -62,6 +64,7 @@ const {
  */
 function resetRecoveryState() {
   mocks.monitorData.inferredDecisionRecoveryRequired = null;
+  mocks.monitorData.inferredRecoveryOperationRecoveryRequired = null;
   mocks.monitorData.inferredRecoveryEvents = [];
   mocks.monitorData.ledgerRepairRequired = {};
   mocks.monitorData.mountHistoryRejectedEvents = [];
@@ -218,6 +221,29 @@ describe("clearLedgerRepairRequired", () => {
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
+  it("#424/O6D: ok/none 以外の未知状態では ledger repair flag を解除しない", async () => {
+    mocks.monitorData.ledgerRepairRequired = {
+      k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 }
+    };
+    mocks.getMountIntervalStatus.mockReturnValueOnce({
+      status: "error",
+      openInterval: null,
+      intervals: [],
+      diagnostics: [{ code: "status-read-failed" }]
+    });
+
+    const result = await clearLedgerRepairRequired("k1");
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "ledger_repair_still_unresolved",
+      host: "k1",
+      status: { status: "error" }
+    });
+    expect(mocks.monitorData.ledgerRepairRequired.k1.status).toBe("ambiguous");
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
   it("spoolId がない ledger repair flag は解除しない", async () => {
     mocks.monitorData.ledgerRepairRequired = {
       k1: { status: "ambiguous", detectedAtEpochMs: 100 }
@@ -242,6 +268,55 @@ describe("clearLedgerRepairRequired", () => {
     expect(result).toMatchObject({ ok: false, reason: "ledger_repair_clear_not_durably_saved" });
     expect(mocks.monitorData.ledgerRepairRequired).toEqual(repair);
     expect(mocks.monitorData.inferredRecoveryEvents).toHaveLength(0);
+  });
+
+  it("#424/O6D: rollback 保存にも失敗した場合は recovery operation blocker を残し後続通常操作を止める", async () => {
+    const repair = { k1: { spoolId: "S1", status: "ambiguous", detectedAtEpochMs: 100 } };
+    mocks.monitorData.ledgerRepairRequired = { k1: { ...repair.k1 } };
+    mocks.saveUnifiedStorageDurably
+      .mockResolvedValueOnce({ ok: false, backend: "indexedDB", reason: "idb_flush_failed" })
+      .mockResolvedValueOnce({ ok: false, backend: "indexedDB", reason: "rollback_flush_failed" })
+      .mockResolvedValueOnce({ ok: true, backend: "indexedDB", reason: "blocker_saved" });
+
+    const result = await clearLedgerRepairRequired("k1", { nowMs: 900 });
+
+    expect(result).toMatchObject({ ok: false, reason: "recovery_operation_rollback_save_failed" });
+    expect(result.recovery).toMatchObject({
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+      failureReason: "ledger_repair_clear_not_durably_saved",
+      target: { host: "k1", spoolId: "S1" },
+      createdAt: 900
+    });
+    expect(result.recoverySave).toEqual({ ok: true, backend: "indexedDB", reason: "blocker_saved" });
+    expect(mocks.monitorData.ledgerRepairRequired).toEqual(repair);
+    expect(mocks.monitorData.inferredRecoveryOperationRecoveryRequired).toEqual(result.recovery);
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(3);
+
+    const blocked = await archiveMountHistoryRejectedEvents();
+    expect(blocked).toMatchObject({ ok: false, reason: "recovery_required" });
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("clearInferredRecoveryOperationRecoveryRequired", () => {
+  it("確認済みの recovery operation blocker を解除し audit event を保存する", async () => {
+    mocks.monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+      createdAt: 900
+    };
+
+    const result = await clearInferredRecoveryOperationRecoveryRequired({ actor: "operator", note: "checked", nowMs: 950 });
+
+    expect(result).toMatchObject({ ok: true, reason: "recovery_operation_recovery_cleared" });
+    expect(mocks.monitorData.inferredRecoveryOperationRecoveryRequired).toBeNull();
+    expect(mocks.monitorData.inferredRecoveryEvents[0]).toMatchObject({
+      type: "recovery-operation-recovery-cleared",
+      actor: "operator",
+      note: "checked",
+      createdAt: 950
+    });
   });
 });
 

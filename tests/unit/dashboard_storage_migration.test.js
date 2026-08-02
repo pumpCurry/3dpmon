@@ -43,6 +43,7 @@ const monitorData = {
   pendingUnattributedUsageArchive: {},
   inferredCandidateStore: {},
   inferredDecisionRecoveryRequired: null,
+  inferredRecoveryOperationRecoveryRequired: null,
   inferredRecoveryEvents: [],
   ledgerRepairRequired: {},
   filamentEventContext: {},
@@ -69,6 +70,7 @@ function resetMonitorData() {
   monitorData.pendingUnattributedUsageArchive = {};
   monitorData.inferredCandidateStore = {};
   monitorData.inferredDecisionRecoveryRequired = null;
+  monitorData.inferredRecoveryOperationRecoveryRequired = null;
   monitorData.inferredRecoveryEvents = [];
   monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
@@ -177,6 +179,11 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       reason: "rollback_durable_save_failed",
       createdAt: 120,
     };
+    monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+      createdAt: 125,
+    };
     monitorData.inferredRecoveryEvents = [
       { eventId: "ir-a", type: "decision-recovery-cleared", createdAt: 130, actor: "operator" },
     ];
@@ -200,6 +207,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.inferredCandidateStore["ic-a"].usedMm).toBe(1234);
     // #420/O6A: recovery flag と audit event も往復で保持
     expect(monitorData.inferredDecisionRecoveryRequired.reason).toBe("rollback_durable_save_failed");
+    expect(monitorData.inferredRecoveryOperationRecoveryRequired.operation).toBe("clearLedgerRepairRequired");
     expect(monitorData.inferredRecoveryEvents).toEqual([
       { eventId: "ir-a", type: "decision-recovery-cleared", createdAt: 130, actor: "operator" },
     ]);
@@ -228,6 +236,11 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       reason: "old",
       createdAt: 10,
     };
+    monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "old-operation",
+      reason: "old",
+      createdAt: 10,
+    };
     monitorData.inferredRecoveryEvents = [
       { eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 20 },
     ];
@@ -238,6 +251,11 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
         reason: "rollback_durable_save_failed",
         createdAt: 30,
       },
+      inferredRecoveryOperationRecoveryRequired: {
+        operation: "clearLedgerRepairRequired",
+        reason: "rollback_durable_save_failed",
+        createdAt: 35,
+      },
       inferredRecoveryEvents: [
         { eventId: "ir-a", type: "recovery-durable-save-retried", createdAt: 20 },
         { eventId: "ir-b", type: "decision-recovery-cleared", createdAt: 40 },
@@ -245,6 +263,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     });
 
     expect(monitorData.inferredDecisionRecoveryRequired.candidateHash).toBe("ic-new");
+    expect(monitorData.inferredRecoveryOperationRecoveryRequired.operation).toBe("clearLedgerRepairRequired");
     expect(monitorData.inferredRecoveryEvents.map(event => event.eventId)).toEqual(["ir-a", "ir-b"]);
   });
 

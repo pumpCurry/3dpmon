@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => ({
   monitorData: {
     machines: {},
     filamentSpools: [],
-    inferredCandidateStore: {}
+    inferredCandidateStore: {},
+    inferredDecisionRecoveryRequired: null,
+    inferredRecoveryOperationRecoveryRequired: null
   },
   saveUnifiedStorageDurably: vi.fn(async () => ({ ok: true, backend: "test", reason: "saved" })),
   sendRelayFilament: vi.fn(() => true),
@@ -165,7 +167,8 @@ beforeEach(() => {
   };
   mocks.monitorData.filamentSpools = [spool("S1", 10000), spool("S2", 8000)];
   mocks.monitorData.inferredCandidateStore = { "ic-a": candidate() };
-  delete mocks.monitorData.inferredDecisionRecoveryRequired;
+  mocks.monitorData.inferredDecisionRecoveryRequired = null;
+  mocks.monitorData.inferredRecoveryOperationRecoveryRequired = null;
 });
 
 describe("canExecuteLedgerDecision", () => {
@@ -207,6 +210,26 @@ describe("canExecuteLedgerDecision", () => {
     });
     expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
     expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
+    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+  });
+
+  it("#424/O6D: recovery operation blocker がある間は O5 decision を停止する", async () => {
+    mocks.monitorData.inferredRecoveryOperationRecoveryRequired = {
+      operation: "clearLedgerRepairRequired",
+      reason: "rollback_durable_save_failed",
+      createdAt: 900
+    };
+
+    const result = await confirmInferredCandidate("ic-a", { nowMs: 11000 });
+
+    expect(canSubmitLedgerDecision()).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "recovery_required",
+      candidateHash: "ic-a",
+      recoveryField: "inferredRecoveryOperationRecoveryRequired"
+    });
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(10000);
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
