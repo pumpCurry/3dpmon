@@ -19,9 +19,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1280 (PR #426)
+* @version 1.390.1281 (PR #428)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-04 12:15:00
+* @lastModified 2026-08-04 14:46:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -79,6 +79,7 @@ import {
 } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
+import { buildFilamentRemainingModel } from "./dashboard_filament_remaining_model.js";
 import { createInferredCandidateCenterContent } from "./dashboard_inferred_candidate_ui.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
@@ -251,6 +252,74 @@ function renderBalanceBadge(balanceState) {
 }
 
 /**
+ * O8 の確定残量・推定残量サマリ HTML を生成する。
+ *
+ * 【詳細説明】
+ * - 確定残量は必ず `remainingLengthMm` をそのままモデル層から受け取り、通常 UI でも台帳真値を明示する。
+ * - 推定残量は pending candidate が存在する場合だけ表示し、不可逆操作に使えない値であることをラベルで分離する。
+ * - `formatRemainingFilamentAmount()` に表示専用 0 クロップ設定を委譲し、内部の signed 残量は変更しない。
+ *
+ * @private
+ * @function renderRemainingProjectionSummary
+ * @param {Object} spool - 表示対象スプール。
+ * @param {{host?:string}} [options={}] - host で pending candidate を絞り込むための表示オプション。
+ * @returns {string} 確定残量・推定残量・未確認推定量の HTML。
+ */
+function renderRemainingProjectionSummary(spool, options = {}) {
+  const model = buildFilamentRemainingModel(spool, { host: options.host });
+  const confirmedFmt = formatRemainingFilamentAmount(model.confirmedRemainingMm, spool);
+  const confirmedClamp = confirmedFmt.isDisplayClamped ? '<span class="fm-remaining-clamp-note">表示0</span>' : "";
+  let html =
+    '<div class="fm-remaining-summary" aria-label="フィラメント残量サマリ">' +
+    '<span class="fm-remaining-pill fm-remaining-pill-confirmed">' +
+    '<span class="fm-remaining-label">確定残量</span>' +
+    `<strong>${confirmedFmt.display}</strong>${confirmedClamp}` +
+    '</span>';
+
+  if (model.hasPendingInferredUsage) {
+    const projectedFmt = formatRemainingFilamentAmount(model.projectedRemainingMm, spool);
+    const pendingFmt = formatFilamentAmount(model.pendingInferredUsedMm, spool);
+    const projectedClamp = projectedFmt.isDisplayClamped ? '<span class="fm-remaining-clamp-note">表示0</span>' : "";
+    html +=
+      '<span class="fm-remaining-pill fm-remaining-pill-projected" title="未確認推定を差し引いた表示専用の値です">' +
+      '<span class="fm-remaining-label">推定残量</span>' +
+      `<strong>${projectedFmt.display}</strong>${projectedClamp}` +
+      '</span>' +
+      '<span class="fm-remaining-pill fm-remaining-pill-pending" title="Candidate Center で確認待ちの推定使用量です">' +
+      '<span class="fm-remaining-label">未確認推定</span>' +
+      `<strong>${pendingFmt.display}</strong>` +
+      '</span>';
+  }
+
+  return `${html}</div>`;
+}
+
+/**
+ * スプール一覧セル向けの推定残量補助表示を生成する。
+ *
+ * 【詳細説明】
+ * - 一覧ではセル幅を圧迫しないよう、pending candidate が存在する場合だけ短い 1 行を追加する。
+ * - 残量バー自体は確定残量を基準に描画し、推定値を確定値の代替として使わない。
+ *
+ * @private
+ * @function renderProjectedRemainingInline
+ * @param {Object} spool - 表示対象スプール。
+ * @returns {string} 一覧セルに追加する推定残量 HTML。pending が無ければ空文字。
+ */
+function renderProjectedRemainingInline(spool) {
+  const model = buildFilamentRemainingModel(spool);
+  if (!model.hasPendingInferredUsage) return "";
+  const projectedFmt = formatRemainingFilamentAmount(model.projectedRemainingMm, spool);
+  const pendingFmt = formatFilamentAmount(model.pendingInferredUsedMm, spool);
+  return (
+    '<div class="fm-remaining-projected-inline" title="未確認推定は不可逆操作には使いません">' +
+    `<span>推定 ${projectedFmt.display}</span>` +
+    `<span>未確認 ${pendingFmt.display}</span>` +
+    '</div>'
+  );
+}
+
+/**
  * 接続中の全ホスト名リストを取得する（PLACEHOLDER を除外）。
  *
  * @private
@@ -359,13 +428,14 @@ function createDashboardContent(hostname, switchTab) {
 
         const infoBox = document.createElement("div");
         infoBox.className = "fm-mounted-info";
-        const displayRemainingMm = displayRemainingLengthMm(spool.remainingLengthMm);
+        const remainingModel = buildFilamentRemainingModel(spool, { host });
+        const displayRemainingMm = displayRemainingLengthMm(remainingModel.confirmedRemainingMm);
         const pct = spool.totalLengthMm > 0 && displayRemainingMm != null
           ? ((displayRemainingMm / spool.totalLengthMm) * 100).toFixed(0)
           : 0;
         const colorSwatch = `<span class="color-swatch color-swatch-md" style="background:${spool.filamentColor || spool.color || "#ccc"}"></span>`;
-        // 残量を人間可読フォーマットで表示
-        const remainFmt = formatRemainingFilamentAmount(spool.remainingLengthMm, spool);
+        // 残量サマリは確定値と推定値を分けて表示する。
+        const remainingSummary = renderRemainingProjectionSummary(spool, { host });
         // 枯渇予測
         const analytics = buildSpoolAnalytics(spool.id);
         let predLine = "";
@@ -379,8 +449,9 @@ function createDashboardContent(hostname, switchTab) {
         infoBox.innerHTML =
           `<div><strong>${formatSpoolDisplayId(spool)}</strong> ${spool.name || ""}</div>` +
           `<div>${colorSwatch}${spool.colorName || ""} / ${spool.materialName || spool.material || ""}</div>` +
-          `<div style="margin:2px 0">${remainFmt.display} (${pct}%)</div>` +
-          `<div>${renderRemainBar(displayRemainingMm ?? spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
+          remainingSummary +
+          `<div>${renderRemainBar(displayRemainingMm ?? remainingModel.confirmedRemainingMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
+          `<div class="fm-remaining-bar-caption">確定残量ベース ${pct}%</div>` +
           predLine;
 
         const btnWrap = document.createElement("div");
@@ -1380,12 +1451,13 @@ function createRegisteredContent(openEditor, hostname) {
 
       // 残量バー
       const remainTd = document.createElement("td");
-      const displayRemainingMm = displayRemainingLengthMm(sp.remainingLengthMm);
+      const remainingModel = buildFilamentRemainingModel(sp);
+      const displayRemainingMm = displayRemainingLengthMm(remainingModel.confirmedRemainingMm);
       remainTd.innerHTML = renderRemainBar(
-        displayRemainingMm ?? sp.remainingLengthMm ?? 0,
+        displayRemainingMm ?? remainingModel.confirmedRemainingMm ?? 0,
         sp.totalLengthMm || 0,
         sp.filamentColor || sp.color
-      );
+      ) + renderProjectedRemainingInline(sp);
       tr.appendChild(remainTd);
 
       // 使用数

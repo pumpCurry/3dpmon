@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1280
+  Version 1.390.1281
 */
 
 /* ===============================================================
@@ -2274,6 +2274,59 @@ body.panel-mode .notification-container {
   overflow: hidden; vertical-align: middle; margin-right: var(--space-1);
 }
 .remain-bar-fill { height: 100%; border-radius: 5px; }
+.fm-remaining-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+}
+.fm-remaining-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+}
+.fm-remaining-pill strong {
+  font-size: var(--font-sm);
+}
+.fm-remaining-pill-projected {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+.fm-remaining-pill-pending {
+  border-color: var(--color-info);
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+.fm-remaining-label {
+  color: var(--color-text-secondary);
+  font-weight: normal;
+}
+.fm-remaining-pill-projected .fm-remaining-label,
+.fm-remaining-pill-pending .fm-remaining-label {
+  color: inherit;
+}
+.fm-remaining-clamp-note {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+}
+.fm-remaining-bar-caption,
+.fm-remaining-projected-inline {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+}
+.fm-remaining-projected-inline {
+  display: grid;
+  gap: 1px;
+}
 /* --- ダッシュボードタブ: ホストセクション --- */
 .dashboard-host-section {
   border: 1px solid var(--color-border);
