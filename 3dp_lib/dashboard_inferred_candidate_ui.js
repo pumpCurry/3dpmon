@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1278 (PR #426)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-04 09:22:41
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -83,7 +83,7 @@ const REASON_LABELS = Object.freeze({
   target_spool_same_as_candidate: "候補スプールと同じため再割当てできません",
   target_spool_not_found: "対象スプールが見つかりません",
   confirmed_remaining_unknown: "確定残量が不明なため処理できません",
-  confirmed_remaining_insufficient: "確定残量が候補消費量を下回っています",
+  confirmed_remaining_insufficient: "確定後に負残量になります",
   history_entry_missing: "対象履歴が不足しています",
   history_observation_ambiguous: "対象履歴が曖昧です",
   history_already_attributed: "履歴がすでに別スプールへ確定されています",

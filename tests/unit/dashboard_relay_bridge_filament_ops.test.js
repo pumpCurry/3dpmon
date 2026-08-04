@@ -115,6 +115,7 @@ function setupRelayApi() {
 describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
   it("full snapshot と delta に Parent 権威の recovery / repair 診断を同梱する", () => {
     const relay = setupRelayApi();
+    monitorData.appSettings.negativeRemainingDisplayMode = "clamp-zero";
     monitorData.inferredDecisionRecoveryRequired = {
       candidateHash: "ic-a",
       action: "confirm",
@@ -143,6 +144,7 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
     expect(snapshot.inferredRecoveryEvents).toEqual(monitorData.inferredRecoveryEvents);
     expect(snapshot.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(snapshot.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
+    expect(snapshot.appSettings.negativeRemainingDisplayMode).toBe("clamp-zero");
 
     relayBroadcastIfNeeded();
 
@@ -152,6 +154,7 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
     expect(delta.shared.inferredRecoveryEvents).toEqual(monitorData.inferredRecoveryEvents);
     expect(delta.shared.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(delta.shared.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
+    expect(delta.shared.appSettingsNegativeRemainingDisplayMode).toBe("clamp-zero");
   });
 });
 

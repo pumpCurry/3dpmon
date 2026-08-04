@@ -428,7 +428,7 @@ describe("buildInferredLedgerReconciliationReport", () => {
       netUsedMm: 1250,
       expectedRemainingMm: -250,
       remainingLengthMm: -250,
-      status: "negative"
+      status: "negative-but-accounted"
     });
     expect(report.issues).toContainEqual(expect.objectContaining({
       severity: "warning",

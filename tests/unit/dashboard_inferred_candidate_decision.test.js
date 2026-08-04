@@ -288,7 +288,12 @@ describe("confirmInferredCandidate", () => {
       spoolId: "S1",
       usedMm: 3000,
       decisionType: "confirm",
-      actor: "operator"
+      actor: "operator",
+      remainingBeforeMm: 10000,
+      appliedDebitMm: 3000,
+      remainingAfterMm: 7000,
+      overdrawnMm: 0,
+      crossedZero: false
     });
     const history = mocks.monitorData.machines.k1.printStore.history;
     expect(history[0].filamentId).toBe("S1");
@@ -343,6 +348,13 @@ describe("confirmInferredCandidate", () => {
     expect(result.ok).toBe(true);
     expect(result.reason).toBe("confirmed");
     expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(-2900);
+    expect(mocks.monitorData.filamentSpools[0].usedLengthLog[0]).toMatchObject({
+      remainingBeforeMm: 100,
+      appliedDebitMm: 3000,
+      remainingAfterMm: -2900,
+      overdrawnMm: 2900,
+      crossedZero: true
+    });
     expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
     expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
   });
@@ -528,6 +540,13 @@ describe("reassignInferredCandidate", () => {
     expect(result.ok).toBe(true);
     expect(result.reason).toBe("reassigned");
     expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm).toBe(-2900);
+    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").usedLengthLog[0]).toMatchObject({
+      remainingBeforeMm: 100,
+      appliedDebitMm: 3000,
+      remainingAfterMm: -2900,
+      overdrawnMm: 2900,
+      crossedZero: true
+    });
     expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.REASSIGNED);
     expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
   });
@@ -551,7 +570,10 @@ describe("undoInferredCandidateDecision", () => {
       reversesEventId: mocks.monitorData.filamentSpools[0].usedLengthLog[0].eventId,
       candidateHash: "ic-a",
       usedMm: 3000,
-      actor: "operator"
+      actor: "operator",
+      remainingBeforeMm: 7000,
+      reversedUsedMm: 3000,
+      remainingAfterMm: 10000
     });
     const history = mocks.monitorData.machines.k1.printStore.history;
     expect(history[0].filamentId).toBeUndefined();

@@ -22,9 +22,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1274 (PR #424)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-02 18:33:44
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  */
 
@@ -44,6 +44,19 @@ let _updateStoredDataToDOM = null;
 import("./dashboard_ui.js")
   .then((m) => { _updateStoredDataToDOM = m.updateStoredDataToDOM; })
   .catch(() => { /* 非ブラウザ環境では未解決のまま（描画不要） */ });
+
+/**
+ * 親から受信した負残量表示モードを正規化する。
+ *
+ * @private
+ * @param {*} value - relay snapshot/delta の表示モード。
+ * @returns {?string} `"show-negative"` / `"clamp-zero"`。不明値は null。
+ */
+function _normalizeNegativeRemainingDisplayMode(value) {
+  if (value === "clamp-zero") return "clamp-zero";
+  if (value === "show-negative" || value === "show" || value === "signed") return "show-negative";
+  return null;
+}
 
 /** リレーモード: null=未検出, "parent"=親, "readonly"=子閲覧, "satellite"=子操作 */
 let _relayMode = null;
@@ -582,6 +595,12 @@ function _applySnapshot(state) {
     if (btz) monitorData.appSettings.businessTimeZone = btz;
     const ltz = normalizeTimeZone(state.appSettings.legacyHistoryTimeZone);
     if (ltz) monitorData.appSettings.legacyHistoryTimeZone = ltz;
+    const negativeMode = _normalizeNegativeRemainingDisplayMode(
+      state.appSettings.negativeRemainingDisplayMode
+        ?? state.appSettings.negativeRemainingDisplay
+        ?? state.appSettings.filamentRemainingDisplayMode
+    );
+    if (negativeMode) monitorData.appSettings.negativeRemainingDisplayMode = negativeMode;
   }
 
   // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
@@ -699,6 +718,10 @@ function _applyDelta(msg) {
     if ("appSettingsBusinessTimeZone" in msg.shared) {
       const btz = normalizeTimeZone(msg.shared.appSettingsBusinessTimeZone);
       if (btz) monitorData.appSettings.businessTimeZone = btz;
+    }
+    if ("appSettingsNegativeRemainingDisplayMode" in msg.shared) {
+      const negativeMode = _normalizeNegativeRemainingDisplayMode(msg.shared.appSettingsNegativeRemainingDisplayMode);
+      if (negativeMode) monitorData.appSettings.negativeRemainingDisplayMode = negativeMode;
     }
   }
 

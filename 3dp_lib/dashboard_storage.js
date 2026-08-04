@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1274 (PR #424)
+* @version 1.390.1279 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-02 18:33:44
+* @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -164,8 +164,8 @@ export async function importAllData(data) {
           // ★ remainingLengthMm は updatedAt で判定（新しい方が勝つ）
           const importRemain = existing.remainingLengthMm;
           const importTime = existing.updatedAt ?? 0;
-          const prevValid = Number.isFinite(prevRemain) && prevRemain > 0;
-          const importValid = Number.isFinite(importRemain) && importRemain > 0;
+          const prevValid = Number.isFinite(prevRemain);
+          const importValid = Number.isFinite(importRemain);
           if (prevValid && importValid) {
             if (prevUpdatedAt >= importTime) {
               existing.remainingLengthMm = prevRemain;
@@ -429,6 +429,20 @@ export async function importAllData(data) {
       monitorData.appSettings.connectionTargets.push(t);
       existingDests.add(t.dest);
       existingIps.add(ip);
+    }
+  }
+  if (data.appSettings && typeof data.appSettings === "object") {
+    const importedNegativeMode = data.appSettings.negativeRemainingDisplayMode
+      ?? data.appSettings.negativeRemainingDisplay
+      ?? data.appSettings.filamentRemainingDisplayMode;
+    if (importedNegativeMode === "clamp-zero") {
+      monitorData.appSettings.negativeRemainingDisplayMode = "clamp-zero";
+    } else if (
+      importedNegativeMode === "show-negative"
+      || importedNegativeMode === "show"
+      || importedNegativeMode === "signed"
+    ) {
+      monitorData.appSettings.negativeRemainingDisplayMode = "show-negative";
     }
   }
 
@@ -1215,8 +1229,8 @@ function _restoreFromData(shared, machines) {
           // ★ C2: remainingLengthMm — updatedAt 時系列判定（Math.min 廃止）
           const existRemain = existing.remainingLengthMm;
           const restoredRemain = restored.remainingLengthMm;
-          const existValid = Number.isFinite(existRemain) && existRemain > 0;
-          const restoredValid = Number.isFinite(restoredRemain) && restoredRemain > 0;
+          const existValid = Number.isFinite(existRemain);
+          const restoredValid = Number.isFinite(restoredRemain);
 
           let mergedRemain;
           if (existValid && restoredValid) {

@@ -22,9 +22,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1274 (PR #424)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-02 18:33:44
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  */
 
@@ -61,6 +61,20 @@ let _prevIkHash = "";
 
 /** 前回ブロードキャストした業務タイムゾーン（変更検出）。undefined=未送信 */
 let _prevBizTz;
+
+/** 前回ブロードキャストした負残量表示モード（変更検出）。undefined=未送信 */
+let _prevNegativeRemainingDisplayMode;
+
+/**
+ * 負残量表示モードを親子同期用の正規値へ変換する。
+ *
+ * @private
+ * @param {*} value - appSettings に保存された表示モード。
+ * @returns {string} `"show-negative"` または `"clamp-zero"`。
+ */
+function _normalizeNegativeRemainingDisplayMode(value) {
+  return value === "clamp-zero" ? "clamp-zero" : "show-negative";
+}
 
 /**
  * 前回ブロードキャストしたフィラメント補助ドメイン（在庫・プリセット・
@@ -769,6 +783,19 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  // ★ Signed remaining: 負残量表示設定は Parent が権威を持ち、Satellite へミラーする。
+  const negativeMode = _normalizeNegativeRemainingDisplayMode(
+    monitorData.appSettings.negativeRemainingDisplayMode
+      ?? monitorData.appSettings.negativeRemainingDisplay
+      ?? monitorData.appSettings.filamentRemainingDisplayMode
+  );
+  if (negativeMode !== _prevNegativeRemainingDisplayMode) {
+    _prevNegativeRemainingDisplayMode = negativeMode;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.appSettingsNegativeRemainingDisplayMode = negativeMode;
+    hasChanges = true;
+  }
+
   if (!hasChanges) return null;
 
   const delta = { machines: machinesDelta, shared: sharedDelta };
@@ -846,7 +873,13 @@ function _buildFullSnapshot() {
       // ★ レビュー(時計衛生): 業務タイムゾーン(親権威)を子へミラー（日次/月次集計の既定ゾーン）。
       businessTimeZone: monitorData.appSettings.businessTimeZone ?? null,
       // 旧履歴移行の固定基準ゾーンも子へミラー（親の tz-less 旧履歴を子が同一解釈するため）。
-      legacyHistoryTimeZone: monitorData.appSettings.legacyHistoryTimeZone ?? null
+      legacyHistoryTimeZone: monitorData.appSettings.legacyHistoryTimeZone ?? null,
+      // 負残量表示は Parent 権威でミラーする。台帳値は filamentSpools の signed 値をそのまま使う。
+      negativeRemainingDisplayMode: _normalizeNegativeRemainingDisplayMode(
+        monitorData.appSettings.negativeRemainingDisplayMode
+          ?? monitorData.appSettings.negativeRemainingDisplay
+          ?? monitorData.appSettings.filamentRemainingDisplayMode
+      )
     }
   };
 }

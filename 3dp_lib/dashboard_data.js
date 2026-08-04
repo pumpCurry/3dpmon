@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1278 (PR #426)
+* @version 1.390.1279 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 09:22:41
+* @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -214,7 +214,7 @@ export const monitorData = {
     httpPort: 80,         // HTTP ポート（デフォルト。印刷履歴・ファイル取得用）
     relayPromotePin: "",  // リレー操作モード昇格PIN（空=確認のみ）。親でのみ設定・参照可
     filamentUnit: "m",    // 使用量表示単位 "m" | "mm"（印刷履歴・ファイル一覧共通トグル）
-    negativeRemainingDisplayMode: "show", // 負残量の表示方針 "show" | "clamp-zero"。台帳内部値は常に負値を保持する
+    negativeRemainingDisplayMode: "show-negative", // 負残量の表示方針 "show-negative" | "clamp-zero"。旧値 "show"/"signed" は読取互換
     // ★ レビュー(時計衛生 P1): 日次/月次集計の業務タイムゾーン（IANA）。親権威の永続設定で、
     //   リレーで子へミラーする。親起動時に未設定なら解決済みローカルへ確定・保存する。
     businessTimeZone: null,

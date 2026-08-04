@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1278 (PR #426)
+ * @version 1.390.1279 (PR #426)
  * @since   2.2.1012
- * @lastModified 2026-08-04 09:22:41
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  */
 
@@ -850,6 +850,54 @@ function _reanchorOpenMount(host, spoolId, anchorRemainingMm, sinceJobId, ts) {
 }
 
 /**
+ * 手動再計算による残量補正を監査履歴へ追記し、O7 用 baseline を更新する。
+ *
+ * 【詳細説明】
+ * - 負残量は台帳上の正常な signed value として保存する。
+ * - 手動履歴帰属を権威として残量を再計算した時点を baseline にし、O7 が古い
+ *   `usedLengthLog` を二重に差し引かないようにする。
+ * - 監査eventは append-only で `usageHistory` へ残す。
+ *
+ * @private
+ * @param {Object} spool - 補正対象スプール。
+ * @param {number} beforeMm - 補正前の台帳残量。
+ * @param {number} afterMm - 補正後の台帳残量。
+ * @param {{ts?:number,reason?:string,actor?:string,source?:string}} [options] - 監査メタデータ。
+ * @returns {?Object} 追加した監査event。変更が無い場合は null。
+ */
+function _recordManualRemainingAdjustment(spool, beforeMm, afterMm, options = {}) {
+  if (!spool) return null;
+  if (!Number.isFinite(beforeMm) || !Number.isFinite(afterMm)) return null;
+  if (Math.abs(beforeMm - afterMm) <= 0.001) return null;
+  if (!Array.isArray(monitorData.usageHistory)) monitorData.usageHistory = [];
+  const now = Number.isFinite(Number(options.ts)) ? Number(options.ts) : wallNowMs();
+  const event = {
+    usageId: randomEventId("manual-remaining"),
+    type: "manual-remaining-adjustment",
+    spoolId: spool.id,
+    spoolSerial: spool.serialNo,
+    hostname: spool.hostname || null,
+    beforeMm,
+    afterMm,
+    deltaMm: afterMm - beforeMm,
+    reason: options.reason || "manual-history-recompute",
+    actor: options.actor || "user",
+    source: options.source || "recomputeSpoolFromManualEdit",
+    createdAt: now
+  };
+  monitorData.usageHistory.push(event);
+  monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
+  spool.remainingLedgerBaseline = {
+    remainingLengthMm: afterMm,
+    usedLengthLogIndex: Array.isArray(spool.usedLengthLog) ? spool.usedLengthLog.length : 0,
+    createdAt: now,
+    source: event.type,
+    eventId: event.usageId
+  };
+  return event;
+}
+
+/**
  * 手動の履歴フィラメント編集を「権威」として、スプール残量を総量基準で再計算する。
  *
  * 【ユーザー選択（Option 1）】手動で履歴の帰属(filamentInfo)を変更/指定したとき、
@@ -907,6 +955,11 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
   spool.remainingLengthMm = after;
   spool._remainingVerified = true; // 手動編集＝権威
   if (ts != null) spool.updatedAt = ts;
+  _recordManualRemainingAdjustment(spool, before, after, {
+    ts,
+    reason: "manual-history-recompute",
+    source: "recomputeSpoolFromManualEdit"
+  });
 
   // ★ 再アンカー: 装着中スプールは開区間 mount を貼り直して権威値を保持
   const hostSpoolMap = monitorData.hostSpoolMap || {};

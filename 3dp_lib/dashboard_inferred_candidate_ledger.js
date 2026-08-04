@@ -19,9 +19,9 @@
  * - {@link undoInferredCandidateLedger}：確定済み candidate の台帳反映を取り消す
  * - {@link rollbackInferredCandidateLedger}：確定反映前 snapshot へメモリ状態を戻す
  *
- * @version 1.390.1278 (PR #426)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-08-04 09:22:41
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -664,7 +664,8 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
   const historyAfter = updates.map(item => _captureHistoryAfter(item.entry, item.debit.observationKey));
 
   // 台帳内部値は負残量を保持する。見た目だけの 0 クロップは表示層で行う。
-  spool.remainingLengthMm = remaining - total.usedMm;
+  const remainingAfterMm = remaining - total.usedMm;
+  spool.remainingLengthMm = remainingAfterMm;
   if (!Array.isArray(spool.usedLengthLog)) spool.usedLengthLog = [];
   const event = {
     eventId: options.eventId || randomEventId("icd"),
@@ -676,6 +677,11 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
     decisionType,
     actor,
     usedMm: total.usedMm,
+    remainingBeforeMm: remaining,
+    appliedDebitMm: total.usedMm,
+    remainingAfterMm,
+    overdrawnMm: remainingAfterMm < 0 ? Math.abs(remainingAfterMm) : 0,
+    crossedZero: remaining >= 0 && remainingAfterMm < 0,
     observationKeys: Array.isArray(candidateRecord.observationKeys) ? candidateRecord.observationKeys.map(String).sort() : [],
     historyBefore,
     historyAfter,
@@ -798,12 +804,15 @@ export function undoInferredCandidateLedger(candidateRecord, options = {}) {
     spoolId: spool.id,
     actor,
     usedMm: eventUsedMm,
+    remainingBeforeMm: remaining,
+    reversedUsedMm: eventUsedMm,
+    remainingAfterMm: remaining + eventUsedMm,
     observationKeys: Array.isArray(events[0].event.observationKeys) ? events[0].event.observationKeys.slice() : [],
     createdAt: now
   };
   if (!Array.isArray(spool.usedLengthLog)) spool.usedLengthLog = [];
   spool.usedLengthLog.push(undoEvent);
-  spool.remainingLengthMm = remaining + eventUsedMm;
+  spool.remainingLengthMm = undoEvent.remainingAfterMm;
 
   return {
     ok: true,

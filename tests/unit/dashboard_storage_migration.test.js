@@ -267,6 +267,29 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.inferredRecoveryEvents.map(event => event.eventId)).toEqual(["ir-a", "ir-b"]);
   });
 
+  it('#426 signed remaining: import は負残量と表示モード互換名を保持する', async () => {
+    monitorData.filamentSpools = [
+      { id: 'sp-neg', remainingLengthMm: 500, updatedAt: 10 },
+    ];
+    monitorData.appSettings = { connectionTargets: [], panelLayout: [] };
+
+    await importAllData({
+      appSettings: {
+        connectionTargets: [],
+        panelLayout: [],
+        filamentRemainingDisplayMode: 'signed',
+      },
+      filamentSpools: [
+        { id: 'sp-neg', remainingLengthMm: -1250, updatedAt: 20 },
+        { id: 'sp-new-neg', remainingLengthMm: -300, updatedAt: 30 },
+      ],
+    });
+
+    expect(monitorData.filamentSpools.find(sp => sp.id === 'sp-neg').remainingLengthMm).toBe(-1250);
+    expect(monitorData.filamentSpools.find(sp => sp.id === 'sp-new-neg').remainingLengthMm).toBe(-300);
+    expect(monitorData.appSettings.negativeRemainingDisplayMode).toBe('show-negative');
+  });
+
   it('P1-1: import は同一 opId(別evId)の mount を1件に畳む', async () => {
     monitorData.mountHistory = [{ opId: 'op1', evId: 'A', type: 'mount', spoolId: 's', ts: 1 }];
     await importAllData({

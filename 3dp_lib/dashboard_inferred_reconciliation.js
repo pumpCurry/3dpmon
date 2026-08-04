@@ -18,9 +18,9 @@
  * 【公開関数一覧】
  * - {@link buildInferredLedgerReconciliationReport}：推定 candidate 台帳の read-only 照合結果を生成する
  *
- * @version 1.390.1278 (PR #426)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.1275 (PR #425)
- * @lastModified 2026-08-04 09:22:41
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -949,8 +949,8 @@ function _checkSpoolRemainingBalance(spool) {
     rawExpectedRemainingMm: expectedRemainingMm,
     netUsedMm,
     deltaMm,
-    status: ok ? (expectedRemainingMm < 0 ? "negative" : "ok") : "mismatch",
-    reason: ok ? (expectedRemainingMm < 0 ? "negative_remaining" : null) : "remaining_length_mismatch"
+    status: ok ? (expectedRemainingMm < 0 ? "negative-but-accounted" : "ok") : "mismatch",
+    reason: ok ? (expectedRemainingMm < 0 ? "negative_remaining_accounted" : null) : "remaining_length_mismatch"
   };
   if (ok && expectedRemainingMm < 0) {
     issues.push(_issue(INFERRED_RECONCILIATION_SEVERITY.WARNING, "spool_negative_remaining", {
@@ -1044,7 +1044,7 @@ export function buildInferredLedgerReconciliationReport(options = {}) {
   const undoEventCount = _spools().reduce((sum, spool) =>
     sum + _usedLengthLog(spool).filter(event => event?.type === INFERRED_DECISION_UNDO_LEDGER_EVENT_TYPE).length, 0);
   const remainingBalanceOkCount = remainingBalances.balances.filter(item => item.status === "ok").length;
-  const remainingBalanceNegativeCount = remainingBalances.balances.filter(item => item.status === "negative").length;
+  const remainingBalanceNegativeCount = remainingBalances.balances.filter(item => item.status === "negative-but-accounted").length;
   const remainingBalanceMismatchCount = remainingBalances.balances.filter(item => item.status === "mismatch").length;
   const remainingBalanceUnverifiableCount = remainingBalances.balances.filter(item => item.status === "unverifiable").length;
 

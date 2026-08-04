@@ -19,9 +19,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1278 (PR #426)
+* @version 1.390.1279 (PR #426)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-04 09:22:41
+* @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -2603,12 +2603,13 @@ function createEditorContent(onDone) {
       note: noteIn.value,
       isFavorite: favIn.checked
     };
-    // ★ D1: 残量バリデーション（0未満やtotal超過を防止）
+    // ★ D1: 残量バリデーション（total超過のみ防止）
+    // 台帳内部では負残量を監査可能な真値として保存するため、0未満への丸めは表示層だけで行う。
     if (data.filamentCurrentLength != null) {
       const curVal = Number(data.filamentCurrentLength);
       const totVal = Number(data.filamentTotalLength || 0);
       if (!isNaN(curVal) && !isNaN(totVal)) {
-        data.filamentCurrentLength = Math.max(0, Math.min(curVal, totVal));
+        data.filamentCurrentLength = Math.min(curVal, totVal);
       }
     }
     // ★ D2: フィールド名マッピング（remainingLengthMm が未設定の場合のみ）

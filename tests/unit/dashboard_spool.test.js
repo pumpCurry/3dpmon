@@ -64,6 +64,7 @@ import {
   getAttributionPresentation,
   getAttributionIssueIdsForHost,
   countAttributionIssuesForHost,
+  updateSpool,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
@@ -87,6 +88,11 @@ describe('getSpoolState', () => {
 
   it('isActive=true → MOUNTED', () => {
     expect(getSpoolState({ isActive: true })).toBe(SPOOL_STATE.MOUNTED);
+  });
+
+  it('負残量は台帳上の超過使用状態として分類する', () => {
+    expect(getSpoolState({ remainingLengthMm: -1 })).toBe(SPOOL_STATE.OVERDRAWN);
+    expect(getSpoolState({ isActive: true, remainingLengthMm: -1 })).toBe(SPOOL_STATE.OVERDRAWN);
   });
 
   it('deleted優先: deleted=true + isActive=true → DISCARDED', () => {
@@ -138,6 +144,7 @@ describe('getSpoolStateLabel', () => {
     expect(getSpoolStateLabel(SPOOL_STATE.MOUNTED)).toBe('装着中');
     expect(getSpoolStateLabel(SPOOL_STATE.STORED)).toBe('保管中');
     expect(getSpoolStateLabel(SPOOL_STATE.EXHAUSTED)).toBe('使い切り');
+    expect(getSpoolStateLabel(SPOOL_STATE.OVERDRAWN)).toBe('超過使用');
     expect(getSpoolStateLabel(SPOOL_STATE.DISCARDED)).toBe('廃棄済');
   });
 
@@ -343,7 +350,7 @@ describe('formatFilamentAmount', () => {
     monitorData.appSettings = { negativeRemainingDisplayMode: 'show' };
     const result = formatRemainingFilamentAmount(-2500);
 
-    expect(getNegativeRemainingDisplayMode()).toBe('show');
+    expect(getNegativeRemainingDisplayMode()).toBe('show-negative');
     expect(displayRemainingLengthMm(-2500)).toBe(-2500);
     expect(result.rawMm).toBe(-2500);
     expect(result.mm).toBe(-2500);
@@ -361,6 +368,59 @@ describe('formatFilamentAmount', () => {
     expect(result.mm).toBe(0);
     expect(result.display).toContain('0.0m');
     expect(result.isDisplayClamped).toBe(true);
+  });
+
+  it('負残量表示モードは提案仕様名と旧値を show-negative へ正規化する', () => {
+    expect(getNegativeRemainingDisplayMode({ negativeRemainingDisplay: 'show-negative' })).toBe('show-negative');
+    expect(getNegativeRemainingDisplayMode({ negativeRemainingDisplayMode: 'show' })).toBe('show-negative');
+    expect(getNegativeRemainingDisplayMode({ filamentRemainingDisplayMode: 'signed' })).toBe('show-negative');
+    expect(getNegativeRemainingDisplayMode({ filamentRemainingDisplayMode: 'clamp-zero' })).toBe('clamp-zero');
+  });
+});
+
+describe('updateSpool — signed remaining manual baseline', () => {
+  beforeEach(() => {
+    monitorData.filamentSpools = [];
+    monitorData.usageHistory = [];
+    monitorData.usageHistoryRev = 0;
+    monitorData.hostSpoolMap = {};
+  });
+
+  it('手動残量補正は負値からの復帰も監査し、O7 baseline を補正位置へ更新する', () => {
+    monitorData.filamentSpools.push({
+      id: 'S-manual',
+      serialNo: 'SER-1',
+      hostname: 'k1',
+      remainingLengthMm: -2350,
+      usedLengthLog: [{ jobId: 'before-remount', used: 1000 }],
+    });
+
+    updateSpool('S-manual', {
+      expectedRemainingLengthMm: -2350,
+      remainingLengthMm: 420,
+      remainingAdjustmentReason: 'weighed-spool',
+      remainingAdjustmentActor: 'operator',
+    });
+
+    const spool = monitorData.filamentSpools[0];
+    expect(spool.remainingLengthMm).toBe(420);
+    expect(monitorData.usageHistory).toHaveLength(1);
+    expect(monitorData.usageHistory[0]).toMatchObject({
+      type: 'manual-remaining-adjustment',
+      spoolId: 'S-manual',
+      beforeMm: -2350,
+      afterMm: 420,
+      deltaMm: 2770,
+      reason: 'weighed-spool',
+      actor: 'operator',
+    });
+    expect(monitorData.usageHistoryRev).toBe(1);
+    expect(spool.remainingLedgerBaseline).toMatchObject({
+      remainingLengthMm: 420,
+      usedLengthLogIndex: 1,
+      source: 'manual-remaining-adjustment',
+      eventId: monitorData.usageHistory[0].usageId,
+    });
   });
 });
 
@@ -824,13 +884,14 @@ describe('getAttributionPresentation / getAttributionIssueIdsForHost（Phase5 U1
 // SPOOL_STATE 定数の完全性
 // =============================================
 describe('SPOOL_STATE 定数', () => {
-  it('5状態が定義されている', () => {
+  it('6状態が定義されている', () => {
     const states = Object.values(SPOOL_STATE);
-    expect(states).toHaveLength(5);
+    expect(states).toHaveLength(6);
     expect(states).toContain('inventory');
     expect(states).toContain('mounted');
     expect(states).toContain('stored');
     expect(states).toContain('exhausted');
+    expect(states).toContain('overdrawn');
     expect(states).toContain('discarded');
   });
 

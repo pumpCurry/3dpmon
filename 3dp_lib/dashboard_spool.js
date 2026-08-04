@@ -29,9 +29,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1278 (PR #426)
+* @version 1.390.1279 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 09:22:41
+* @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -134,6 +134,8 @@ export const SPOOL_STATE = {
   STORED:     "stored",
   /** 残量ゼロ近く（使い切り） */
   EXHAUSTED:  "exhausted",
+  /** 登録基準量を超過して使用済み（台帳残量が負数） */
+  OVERDRAWN:  "overdrawn",
   /** 廃棄済み（ソフトデリート） */
   DISCARDED:  "discarded"
 };
@@ -151,6 +153,7 @@ const EXHAUSTED_THRESHOLD_MM = 100;
 export function getSpoolState(spool) {
   if (!spool) return SPOOL_STATE.INVENTORY;
   if (spool.deleted || spool.isDeleted) return SPOOL_STATE.DISCARDED;
+  if (Number(spool.remainingLengthMm) < 0) return SPOOL_STATE.OVERDRAWN;
   if (spool.isActive) return SPOOL_STATE.MOUNTED;
   if (spool.removedAt) {
     return (spool.remainingLengthMm ?? 0) <= EXHAUSTED_THRESHOLD_MM
@@ -172,6 +175,7 @@ export function getSpoolStateLabel(state) {
     case SPOOL_STATE.MOUNTED:    return "装着中";
     case SPOOL_STATE.STORED:     return "保管中";
     case SPOOL_STATE.EXHAUSTED:  return "使い切り";
+    case SPOOL_STATE.OVERDRAWN:  return "超過使用";
     case SPOOL_STATE.DISCARDED:  return "廃棄済";
     default: return "不明";
   }
@@ -295,9 +299,13 @@ export function formatFilamentAmount(mm, spool = null) {
  * @enum {string}
  */
 export const NEGATIVE_REMAINING_DISPLAY_MODE = Object.freeze({
-  SHOW: "show",
+  SHOW: "show-negative",
+  SIGNED: "show-negative",
   CLAMP_ZERO: "clamp-zero"
 });
+
+/** 負残量表示モード定数の提案仕様名互換エイリアス。 */
+export const FILAMENT_REMAINING_DISPLAY_MODE = NEGATIVE_REMAINING_DISPLAY_MODE;
 
 /**
  * appSettings から負残量表示モードを取得する。
@@ -311,7 +319,9 @@ export const NEGATIVE_REMAINING_DISPLAY_MODE = Object.freeze({
  * @returns {string} `NEGATIVE_REMAINING_DISPLAY_MODE` の値。
  */
 export function getNegativeRemainingDisplayMode(settings = monitorData.appSettings) {
-  const value = settings?.negativeRemainingDisplayMode;
+  const value = settings?.negativeRemainingDisplayMode
+    ?? settings?.negativeRemainingDisplay
+    ?? settings?.filamentRemainingDisplayMode;
   return value === NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO
     ? NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO
     : NEGATIVE_REMAINING_DISPLAY_MODE.SHOW;
@@ -1340,7 +1350,19 @@ export function updateSpool(id, patch) {
       }
     }
   }
+  const remainingAdjustmentReason = applied.remainingAdjustmentReason;
+  const remainingAdjustmentActor = applied.remainingAdjustmentActor;
+  delete applied.remainingAdjustmentReason;
+  delete applied.remainingAdjustmentActor;
+  const beforeRemaining = Number(s.remainingLengthMm);
   Object.assign(s, applied);
+  if ("remainingLengthMm" in applied) {
+    _recordManualRemainingAdjustment(s, beforeRemaining, Number(s.remainingLengthMm), {
+      reason: remainingAdjustmentReason || "manual-spool-update",
+      actor: remainingAdjustmentActor || "user",
+      source: "updateSpool"
+    });
+  }
   // purchasePrice or totalLengthMm が変わった場合に costPerMm を再算出
   if ("purchasePrice" in applied || "totalLengthMm" in applied) {
     s.costPerMm = _calcCostPerMm(s);
@@ -1447,6 +1469,55 @@ function logUsage(spool, lengthMm, jobId, type = "complete") {
   });
   trimUsageHistory();
   saveUnifiedStorage(true);
+}
+
+/**
+ * 手動残量補正を監査履歴へ追記し、O7 再計算 baseline を現在位置へ更新する。
+ *
+ * 【詳細説明】
+ * - 台帳値 `remainingLengthMm` は負数を含む真値として保持する。
+ * - ユーザーが実測や手動編集で残量を補正した場合、古い `usedLengthLog` 全件を
+ *   O7 が再度差し引かないよう、補正時点を `remainingLedgerBaseline` として保存する。
+ * - 監査eventは `usageHistory` に append-only で残し、補正前後と差分を追跡できるようにする。
+ *
+ * @private
+ * @param {Object} spool - 補正対象スプール。
+ * @param {number} beforeMm - 補正前の台帳残量。
+ * @param {number} afterMm - 補正後の台帳残量。
+ * @param {{reason?:string,actor?:string,source?:string,ts?:number}} [options] - 監査メタデータ。
+ * @returns {?Object} 追加した監査event。変更が無い場合は null。
+ */
+function _recordManualRemainingAdjustment(spool, beforeMm, afterMm, options = {}) {
+  if (!spool) return null;
+  if (!Number.isFinite(beforeMm) || !Number.isFinite(afterMm)) return null;
+  if (Math.abs(beforeMm - afterMm) <= 0.001) return null;
+  const now = Number.isFinite(Number(options.ts)) ? Number(options.ts) : wallNowMs();
+  if (!Array.isArray(monitorData.usageHistory)) monitorData.usageHistory = [];
+  const event = {
+    usageId: randomEventId("manual-remaining"),
+    type: "manual-remaining-adjustment",
+    spoolId: spool.id,
+    spoolSerial: spool.serialNo,
+    hostname: spool.hostname || null,
+    beforeMm,
+    afterMm,
+    deltaMm: afterMm - beforeMm,
+    reason: options.reason || "manual-remaining-adjustment",
+    actor: options.actor || "user",
+    source: options.source || "manual",
+    createdAt: now
+  };
+  monitorData.usageHistory.push(event);
+  monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
+  spool.remainingLedgerBaseline = {
+    remainingLengthMm: afterMm,
+    usedLengthLogIndex: Array.isArray(spool.usedLengthLog) ? spool.usedLengthLog.length : 0,
+    createdAt: now,
+    source: event.type,
+    eventId: event.usageId
+  };
+  trimUsageHistory();
+  return event;
 }
 
 /**

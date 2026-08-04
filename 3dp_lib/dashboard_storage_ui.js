@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.1278 (PR #426)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.198 (PR #89)
- * @lastModified 2026-08-04 09:22:41
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -142,7 +142,7 @@ export function initStorageUI() {
     if (elNegativeRemaining) {
       elNegativeRemaining.value = monitorData.appSettings.negativeRemainingDisplayMode === "clamp-zero"
         ? "clamp-zero"
-        : "show";
+        : "show-negative";
     }
   };
 
@@ -158,7 +158,7 @@ export function initStorageUI() {
     elNegativeRemaining.addEventListener("change", () => {
       monitorData.appSettings.negativeRemainingDisplayMode = elNegativeRemaining.value === "clamp-zero"
         ? "clamp-zero"
-        : "show";
+        : "show-negative";
       saveUnifiedStorage(true);
       panelToast(
         monitorData.appSettings.negativeRemainingDisplayMode === "clamp-zero"
