@@ -19,9 +19,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1279 (PR #426)
+* @version 1.390.1280 (PR #426)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-04 11:50:46
+* @lastModified 2026-08-04 12:15:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,6 +43,8 @@ import {
   restoreSpool,
   getSpoolState,
   getSpoolStateLabel,
+  getSpoolBalanceState,
+  getSpoolBalanceStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
   formatRemainingFilamentAmount,
@@ -53,7 +55,8 @@ import {
   confirmInferredSpool,
   revertInferredSpool,
   mountNewSpoolFromPreset,
-  SPOOL_STATE
+  SPOOL_STATE,
+  SPOOL_BALANCE_STATE
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -232,6 +235,19 @@ function renderRemainBar(remaining, total, color) {
 function renderStateBadge(state) {
   const label = getSpoolStateLabel(state);
   return `<span class="spool-state-badge spool-state-${state}">${label}</span>`;
+}
+
+/**
+ * signed 残量状態バッジ HTML を生成する。
+ *
+ * @private
+ * @param {string} balanceState - SPOOL_BALANCE_STATE の値
+ * @returns {string} HTML 文字列
+ */
+function renderBalanceBadge(balanceState) {
+  if (balanceState !== SPOOL_BALANCE_STATE.OVERDRAWN) return "";
+  const label = getSpoolBalanceStateLabel(balanceState);
+  return ` <span class="spool-state-badge spool-balance-${balanceState}">${label}</span>`;
 }
 
 /**
@@ -1329,7 +1345,8 @@ function createRegisteredContent(openEditor, hostname) {
 
       // 状態バッジ + 装着先統合
       const stateTd = document.createElement("td");
-      let stateHtml = renderStateBadge(state);
+      const balanceState = getSpoolBalanceState(sp);
+      let stateHtml = renderStateBadge(state) + renderBalanceBadge(balanceState);
       // ★ ADR-0005 P6: 暫定推定スプールは「推定」バッジを前置（確認/訂正待ち）
       if (sp.inferred) {
         stateHtml = `<span class="spool-state-badge" style="background:#f59e0b;color:#fff" title="推定で自動投入。確認/訂正してください">推定</span> ` + stateHtml;

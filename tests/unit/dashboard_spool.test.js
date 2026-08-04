@@ -41,9 +41,12 @@ vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
 
 import {
   SPOOL_STATE,
+  SPOOL_BALANCE_STATE,
   MATERIAL_DENSITY,
   getSpoolState,
   getSpoolStateLabel,
+  getSpoolBalanceState,
+  getSpoolBalanceStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
   formatRemainingFilamentAmount,
@@ -65,9 +68,14 @@ import {
   getAttributionIssueIdsForHost,
   countAttributionIssuesForHost,
   updateSpool,
+  addSpool,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
+
+const {
+  buildInferredLedgerReconciliationReport
+} = await import('../../3dp_lib/dashboard_inferred_reconciliation.js');
 
 // =============================================
 // getSpoolState
@@ -90,9 +98,8 @@ describe('getSpoolState', () => {
     expect(getSpoolState({ isActive: true })).toBe(SPOOL_STATE.MOUNTED);
   });
 
-  it('負残量は台帳上の超過使用状態として分類する', () => {
-    expect(getSpoolState({ remainingLengthMm: -1 })).toBe(SPOOL_STATE.OVERDRAWN);
-    expect(getSpoolState({ isActive: true, remainingLengthMm: -1 })).toBe(SPOOL_STATE.OVERDRAWN);
+  it('負残量でも装着中ライフサイクル状態は MOUNTED のまま保持する', () => {
+    expect(getSpoolState({ isActive: true, remainingLengthMm: -1 })).toBe(SPOOL_STATE.MOUNTED);
   });
 
   it('deleted優先: deleted=true + isActive=true → DISCARDED', () => {
@@ -144,7 +151,6 @@ describe('getSpoolStateLabel', () => {
     expect(getSpoolStateLabel(SPOOL_STATE.MOUNTED)).toBe('装着中');
     expect(getSpoolStateLabel(SPOOL_STATE.STORED)).toBe('保管中');
     expect(getSpoolStateLabel(SPOOL_STATE.EXHAUSTED)).toBe('使い切り');
-    expect(getSpoolStateLabel(SPOOL_STATE.OVERDRAWN)).toBe('超過使用');
     expect(getSpoolStateLabel(SPOOL_STATE.DISCARDED)).toBe('廃棄済');
   });
 
@@ -152,6 +158,22 @@ describe('getSpoolStateLabel', () => {
     expect(getSpoolStateLabel('unknown')).toBe('不明');
     expect(getSpoolStateLabel(null)).toBe('不明');
     expect(getSpoolStateLabel('')).toBe('不明');
+  });
+});
+
+describe('getSpoolBalanceState / getSpoolBalanceStateLabel', () => {
+  it('signed remaining の残量状態をライフサイクルとは別軸で返す', () => {
+    expect(getSpoolBalanceState({ isActive: true, remainingLengthMm: -300 })).toBe(SPOOL_BALANCE_STATE.OVERDRAWN);
+    expect(getSpoolBalanceState({ remainingLengthMm: 0 })).toBe(SPOOL_BALANCE_STATE.ZERO);
+    expect(getSpoolBalanceState({ remainingLengthMm: 1 })).toBe(SPOOL_BALANCE_STATE.POSITIVE);
+    expect(getSpoolBalanceState({ remainingLengthMm: null })).toBe(SPOOL_BALANCE_STATE.UNKNOWN);
+  });
+
+  it('残量状態ラベルを返す', () => {
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.OVERDRAWN)).toBe('超過使用');
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.ZERO)).toBe('残量0');
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.POSITIVE)).toBe('残量あり');
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.UNKNOWN)).toBe('残量不明');
   });
 });
 
@@ -421,6 +443,75 @@ describe('updateSpool — signed remaining manual baseline', () => {
       source: 'manual-remaining-adjustment',
       eventId: monitorData.usageHistory[0].usageId,
     });
+  });
+});
+
+describe('addSpool — O7 remaining baseline', () => {
+  beforeEach(() => {
+    monitorData.filamentSpools = [];
+    monitorData.spoolSerialCounter = 0;
+  });
+
+  it('新規スプール作成時に signed 残量照合 baseline を初期化する', () => {
+    const spool = addSpool({
+      name: 'Baseline spool',
+      totalLengthMm: 10000,
+      remainingLengthMm: 10000,
+      usedLengthLog: [],
+    });
+
+    expect(spool.remainingLedgerBaseline).toMatchObject({
+      remainingLengthMm: 10000,
+      usedLengthLogIndex: 0,
+      source: 'spool-created',
+    });
+    expect(Number.isFinite(spool.remainingLedgerBaseline.createdAt)).toBe(true);
+  });
+
+  it('addSpool 作成baseline以降の通常使用量を O7 が ok として照合する', () => {
+    const spool = addSpool({
+      name: 'O7 baseline spool',
+      totalLengthMm: 10000,
+      remainingLengthMm: 10000,
+      usedLengthLog: [],
+    });
+    spool.usedLengthLog.push({ jobId: 'job-1', used: 500 });
+    spool.remainingLengthMm = 9500;
+
+    const report = buildInferredLedgerReconciliationReport({ nowMs: 9000 });
+
+    expect(report.remainingBalanceOkCount).toBe(1);
+    expect(report.remainingBalanceUnverifiableCount).toBe(0);
+    expect(report.remainingBalances[0]).toMatchObject({
+      spoolId: spool.id,
+      baselineRemainingMm: 10000,
+      usedLengthLogStartIndex: 0,
+      netUsedMm: 500,
+      expectedRemainingMm: 9500,
+      remainingLengthMm: 9500,
+      status: 'ok',
+    });
+    expect(report.issues).not.toContainEqual(expect.objectContaining({
+      reason: 'remaining_baseline_boundary_unknown',
+      spoolId: spool.id,
+    }));
+  });
+
+  it('明示済み baseline がある場合は上書きせず保持する', () => {
+    const existingBaseline = {
+      remainingLengthMm: -500,
+      usedLengthLogIndex: 2,
+      createdAt: 111,
+      source: 'imported-baseline',
+    };
+
+    const spool = addSpool({
+      name: 'Imported baseline spool',
+      remainingLengthMm: -500,
+      remainingLedgerBaseline: existingBaseline,
+    });
+
+    expect(spool.remainingLedgerBaseline).toEqual(existingBaseline);
   });
 });
 
@@ -884,14 +975,13 @@ describe('getAttributionPresentation / getAttributionIssueIdsForHost（Phase5 U1
 // SPOOL_STATE 定数の完全性
 // =============================================
 describe('SPOOL_STATE 定数', () => {
-  it('6状態が定義されている', () => {
+  it('5状態が定義されている', () => {
     const states = Object.values(SPOOL_STATE);
-    expect(states).toHaveLength(6);
+    expect(states).toHaveLength(5);
     expect(states).toContain('inventory');
     expect(states).toContain('mounted');
     expect(states).toContain('stored');
     expect(states).toContain('exhausted');
-    expect(states).toContain('overdrawn');
     expect(states).toContain('discarded');
   });
 

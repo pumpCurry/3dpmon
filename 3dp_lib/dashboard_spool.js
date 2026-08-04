@@ -18,6 +18,7 @@
  * - {@link getSpoolById}：ID指定取得
  * - {@link getCurrentSpoolId}：現在ID取得
  * - {@link getCurrentSpool}：現在スプール取得
+ * - {@link getSpoolBalanceState}：signed 残量状態取得
  * - {@link setCurrentSpoolId}：現在ID設定
  * - {@link addSpool}：スプール追加
  * - {@link updateSpool}：スプール更新
@@ -29,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1279 (PR #426)
+* @version 1.390.1280 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 11:50:46
+* @lastModified 2026-08-04 12:15:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -134,11 +135,29 @@ export const SPOOL_STATE = {
   STORED:     "stored",
   /** 残量ゼロ近く（使い切り） */
   EXHAUSTED:  "exhausted",
-  /** 登録基準量を超過して使用済み（台帳残量が負数） */
-  OVERDRAWN:  "overdrawn",
   /** 廃棄済み（ソフトデリート） */
   DISCARDED:  "discarded"
 };
+
+/**
+ * スプール残量状態定数。
+ *
+ * 【詳細説明】
+ * - `SPOOL_STATE` は装着・保管・廃棄などのライフサイクルだけを表す。
+ * - 本定数は signed `remainingLengthMm` の残量軸を分離して表す。
+ *
+ * @enum {string}
+ */
+export const SPOOL_BALANCE_STATE = Object.freeze({
+  /** 残量を数値として確認できない */
+  UNKNOWN: "unknown",
+  /** 正の残量がある */
+  POSITIVE: "positive",
+  /** 残量がちょうど 0 */
+  ZERO: "zero",
+  /** 台帳上の残量が負数 */
+  OVERDRAWN: "overdrawn"
+});
 
 /** 使い切り判定の閾値 [mm]（約 0.3g PLA 相当） */
 const EXHAUSTED_THRESHOLD_MM = 100;
@@ -153,7 +172,6 @@ const EXHAUSTED_THRESHOLD_MM = 100;
 export function getSpoolState(spool) {
   if (!spool) return SPOOL_STATE.INVENTORY;
   if (spool.deleted || spool.isDeleted) return SPOOL_STATE.DISCARDED;
-  if (Number(spool.remainingLengthMm) < 0) return SPOOL_STATE.OVERDRAWN;
   if (spool.isActive) return SPOOL_STATE.MOUNTED;
   if (spool.removedAt) {
     return (spool.remainingLengthMm ?? 0) <= EXHAUSTED_THRESHOLD_MM
@@ -161,6 +179,45 @@ export function getSpoolState(spool) {
       : SPOOL_STATE.STORED;
   }
   return SPOOL_STATE.INVENTORY;
+}
+
+/**
+ * スプールの signed 残量状態を返す。
+ *
+ * 【詳細説明】
+ * - 装着中かどうか、廃棄済みかどうかは `getSpoolState()` で扱う。
+ * - 本関数は `remainingLengthMm` の数値だけを見て、負残量を overdrawn として監査可能にする。
+ *
+ * @function getSpoolBalanceState
+ * @param {Object} spool - スプールオブジェクト。
+ * @returns {string} `SPOOL_BALANCE_STATE` の値。
+ */
+export function getSpoolBalanceState(spool) {
+  if (!spool || spool.remainingLengthMm == null || spool.remainingLengthMm === "") {
+    return SPOOL_BALANCE_STATE.UNKNOWN;
+  }
+  const remaining = Number(spool?.remainingLengthMm);
+  if (!Number.isFinite(remaining)) return SPOOL_BALANCE_STATE.UNKNOWN;
+  if (remaining < 0) return SPOOL_BALANCE_STATE.OVERDRAWN;
+  if (remaining === 0) return SPOOL_BALANCE_STATE.ZERO;
+  return SPOOL_BALANCE_STATE.POSITIVE;
+}
+
+/**
+ * スプール残量状態に対応する日本語ラベルを返す。
+ *
+ * @function getSpoolBalanceStateLabel
+ * @param {string} state - `SPOOL_BALANCE_STATE` の値。
+ * @returns {string} 日本語ラベル。
+ */
+export function getSpoolBalanceStateLabel(state) {
+  switch (state) {
+    case SPOOL_BALANCE_STATE.POSITIVE:  return "残量あり";
+    case SPOOL_BALANCE_STATE.ZERO:      return "残量0";
+    case SPOOL_BALANCE_STATE.OVERDRAWN: return "超過使用";
+    case SPOOL_BALANCE_STATE.UNKNOWN:   return "残量不明";
+    default: return "不明";
+  }
 }
 
 /**
@@ -175,7 +232,6 @@ export function getSpoolStateLabel(state) {
     case SPOOL_STATE.MOUNTED:    return "装着中";
     case SPOOL_STATE.STORED:     return "保管中";
     case SPOOL_STATE.EXHAUSTED:  return "使い切り";
-    case SPOOL_STATE.OVERDRAWN:  return "超過使用";
     case SPOOL_STATE.DISCARDED:  return "廃棄済";
     default: return "不明";
   }
@@ -311,7 +367,7 @@ export const FILAMENT_REMAINING_DISPLAY_MODE = NEGATIVE_REMAINING_DISPLAY_MODE;
  * appSettings から負残量表示モードを取得する。
  *
  * 【詳細説明】
- * - 保存済み設定が未知値の場合は既定の `show` に戻す。
+ * - 保存済み設定が未知値の場合は既定の `show-negative` に戻す。
  * - 親子同期や import の古い設定でも表示が壊れないよう、純粋な正規化だけを行う。
  *
  * @function getNegativeRemainingDisplayMode
@@ -1079,6 +1135,16 @@ export function addSpool(data, { inferred = false } = {}) {
   // ★ ADR-0005 P6/R1: inferred(暫定推定)スプールは serialNo を採番しない
   //   （不可逆な spoolSerialCounter を消費しない。確定時に confirmInferredSpool で採番）。
   const serialNo = inferred ? null : ++monitorData.spoolSerialCounter;
+  const initialRemainingLengthMm = Number(data.remainingLengthMm) || 0;
+  const initialUsedLengthLog = Array.isArray(data.usedLengthLog) ? data.usedLengthLog : [];
+  const initialRemainingLedgerBaseline = data.remainingLedgerBaseline && typeof data.remainingLedgerBaseline === "object"
+    ? { ...data.remainingLedgerBaseline }
+    : {
+      remainingLengthMm: initialRemainingLengthMm,
+      usedLengthLogIndex: 0,
+      createdAt: wallNowMs(),
+      source: inferred ? "inferred-spool-created" : "spool-created"
+    };
   const spool = {
     id,
     spoolId: id,
@@ -1116,7 +1182,7 @@ export function addSpool(data, { inferred = false } = {}) {
     purchaseLink: data.purchaseLink || "",
     priceCheckDate: data.priceCheckDate || "",
     totalLengthMm: Number(data.totalLengthMm) || 0,
-    remainingLengthMm: Number(data.remainingLengthMm) || 0,
+    remainingLengthMm: initialRemainingLengthMm,
     weightGram: Number(data.weightGram) || 0,
     printCount: Number(data.printCount) || 0,
     startDate: data.startDate || new Date().toISOString(),
@@ -1136,7 +1202,12 @@ export function addSpool(data, { inferred = false } = {}) {
     currentJobExpectedLength: data.currentJobExpectedLength ?? null,
     removedAt: data.removedAt || null,
     note: data.note || "",
-    usedLengthLog: data.usedLengthLog || [],
+    usedLengthLog: initialUsedLengthLog,
+    /**
+     * O7 残量再計算の基準点。
+     * @type {{remainingLengthMm:number,usedLengthLogIndex:number,createdAt:number,source:string}}
+     */
+    remainingLedgerBaseline: initialRemainingLedgerBaseline,
     /**
      * スプールを装着してから取り外すまでの印刷ID範囲配列
      * @type {Array<{startPrintID:string,endPrintID:?string}>}

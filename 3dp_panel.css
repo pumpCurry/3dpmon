@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1271
+  Version 1.390.1280
 */
 
 /* ===============================================================
@@ -2266,6 +2266,7 @@ body.panel-mode .notification-container {
 .spool-state-exhausted { background: var(--color-badge-stored);    color: #92400e; }
 .spool-state-discarded { background: var(--color-badge-exhausted); color: #991b1b; text-decoration: line-through; }
 .spool-state-inventory { background: var(--color-badge-inventory); color: #1e40af; }
+.spool-balance-overdrawn { background: var(--color-danger-bg); color: var(--color-danger-text); }
 /* --- 残量バー --- */
 .remain-bar {
   display: inline-block; width: 60px; height: 10px;
