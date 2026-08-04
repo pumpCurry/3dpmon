@@ -19,9 +19,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1281 (PR #428)
+* @version 1.390.1283 (PR #428)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-04 14:46:00
+* @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -428,14 +428,14 @@ function createDashboardContent(hostname, switchTab) {
 
         const infoBox = document.createElement("div");
         infoBox.className = "fm-mounted-info";
-        const remainingModel = buildFilamentRemainingModel(spool, { host });
+        const remainingModel = buildFilamentRemainingModel(spool);
         const displayRemainingMm = displayRemainingLengthMm(remainingModel.confirmedRemainingMm);
         const pct = spool.totalLengthMm > 0 && displayRemainingMm != null
           ? ((displayRemainingMm / spool.totalLengthMm) * 100).toFixed(0)
           : 0;
         const colorSwatch = `<span class="color-swatch color-swatch-md" style="background:${spool.filamentColor || spool.color || "#ccc"}"></span>`;
         // 残量サマリは確定値と推定値を分けて表示する。
-        const remainingSummary = renderRemainingProjectionSummary(spool, { host });
+        const remainingSummary = renderRemainingProjectionSummary(spool);
         // 枯渇予測
         const analytics = buildSpoolAnalytics(spool.id);
         let predLine = "";

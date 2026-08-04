@@ -91,6 +91,19 @@ describe("buildFilamentRemainingModel", () => {
     expect(model.projectedRemainingMm).toBe(7000);
   });
 
+  it("host 未指定の通常UI向け model は同一 spool の全 host candidate を合算する", () => {
+    mockMonitorData.inferredCandidateStore = {
+      "ic-a": candidate({ candidateHash: "ic-a", host: "k1", usedMm: 3000 }),
+      "ic-b": candidate({ candidateHash: "ic-b", host: "k2", usedMm: 1200 })
+    };
+
+    const model = buildFilamentRemainingModel("S1");
+
+    expect(model.pendingInferredUsedMm).toBe(4200);
+    expect(model.pendingCandidateHashes).toEqual(["ic-a", "ic-b"]);
+    expect(model.projectedRemainingMm).toBe(5800);
+  });
+
   it("確定残量が不明なら projected も不可逆判断値も不明にする", () => {
     mockMonitorData.filamentSpools = [spool({ remainingLengthMm: null })];
     mockMonitorData.inferredCandidateStore = {
