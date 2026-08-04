@@ -17,9 +17,9 @@
  * - {@link getIrreversibleFilamentRemaining}：不可逆判断用の確定残量だけを取得する
  * - {@link canExecuteIrreversibleRemainingAction}：必要量つき不可逆判断を confirmed 残量で検証する
  *
- * @version 1.390.1280 (PR #427)
+ * @version 1.390.1281 (PR #427)
  * @since   1.390.1280 (PR #427)
- * @lastModified 2026-08-04 14:20:23
+ * @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -99,6 +99,52 @@ function _resolveSpool(spoolOrId) {
   if (typeof spoolOrId === "object") return spoolOrId;
   const id = String(spoolOrId);
   return (monitorData.filamentSpools || []).find(spool => String(spool?.id) === id || String(spool?.spoolId) === id) || null;
+}
+
+/**
+ * スプール引数から正本検索に使う ID を抽出する。
+ *
+ * 【詳細説明】
+ * - 不可逆操作では UI が保持している古いオブジェクトを権威値として使わない。
+ * - そのため、オブジェクトで渡された場合も ID だけを取り出し、monitorData の正本へ再解決する。
+ *
+ * @private
+ * @function _spoolIdFromInput
+ * @param {string|Object|null|undefined} spoolOrId - スプール ID またはスプールオブジェクト。
+ * @returns {?string} 正本検索に使うスプール ID。
+ */
+function _spoolIdFromInput(spoolOrId) {
+  if (!spoolOrId) return null;
+  if (typeof spoolOrId === "object") {
+    const id = spoolOrId.id ?? spoolOrId.spoolId;
+    return id == null || id === "" ? null : String(id);
+  }
+  return String(spoolOrId);
+}
+
+/**
+ * 不可逆操作向けに monitorData 内の正本スプールを解決する。
+ *
+ * 【詳細説明】
+ * - `buildFilamentRemainingModel()` は表示用のためオブジェクトをそのまま扱える。
+ * - この関数は O9 の不可逆ゲート専用で、必ず現在の `monitorData.filamentSpools` から正本を取得する。
+ * - 正本が見つからない場合は fail-closed の理由を返す。
+ *
+ * @private
+ * @function _resolveCanonicalSpool
+ * @param {string|Object|null|undefined} spoolOrId - スプール ID またはスプールオブジェクト。
+ * @returns {{spool:?Object,spoolId:?string,reason:?string}} 正本スプール解決結果。
+ */
+function _resolveCanonicalSpool(spoolOrId) {
+  const spoolId = _spoolIdFromInput(spoolOrId);
+  if (!spoolId) {
+    return { spool: null, spoolId: null, reason: "canonical_spool_not_found" };
+  }
+  const spool = (monitorData.filamentSpools || [])
+    .find(record => String(record?.id) === spoolId || String(record?.spoolId) === spoolId) || null;
+  return spool
+    ? { spool, spoolId, reason: null }
+    : { spool: null, spoolId, reason: "canonical_spool_not_found" };
 }
 
 /**
@@ -270,8 +316,22 @@ export function buildFilamentRemainingModel(spoolOrId, options = {}) {
  * const gate = getIrreversibleFilamentRemaining(spool, { action: IRREVERSIBLE_REMAINING_ACTION.RUNOUT_DECISION });
  */
 export function getIrreversibleFilamentRemaining(spoolOrId, options = {}) {
-  const model = buildFilamentRemainingModel(spoolOrId, options);
   const action = options.action || IRREVERSIBLE_REMAINING_ACTION.LEDGER_MUTATION;
+  const canonical = _resolveCanonicalSpool(spoolOrId);
+  if (!canonical.spool) {
+    return {
+      ok: false,
+      reason: canonical.reason,
+      action,
+      spoolId: canonical.spoolId,
+      remainingMm: null,
+      source: "confirmed-ledger",
+      projectedRemainingMm: null,
+      ignoredPendingInferredUsedMm: 0
+    };
+  }
+
+  const model = buildFilamentRemainingModel(canonical.spool, options);
   if (!model.ok) {
     return {
       ok: false,
@@ -322,7 +382,21 @@ export function getIrreversibleFilamentRemaining(spoolOrId, options = {}) {
  * const canPrint = canExecuteIrreversibleRemainingAction(spool, 12000, { action: "print-start-gate" });
  */
 export function canExecuteIrreversibleRemainingAction(spoolOrId, requiredMm, options = {}) {
-  const required = Math.max(0, Number(requiredMm) || 0);
+  const action = options.action || IRREVERSIBLE_REMAINING_ACTION.LEDGER_MUTATION;
+  const spoolId = _spoolIdFromInput(spoolOrId);
+  const required = requiredMm == null || requiredMm === "" ? NaN : Number(requiredMm);
+  if (!Number.isFinite(required) || required < 0) {
+    return {
+      ok: false,
+      reason: "required_mm_invalid",
+      action,
+      spoolId,
+      remainingMm: null,
+      requiredMm: null,
+      projectedRemainingMm: null,
+      ignoredPendingInferredUsedMm: 0
+    };
+  }
   const gate = getIrreversibleFilamentRemaining(spoolOrId, options);
   if (!gate.ok) {
     return {

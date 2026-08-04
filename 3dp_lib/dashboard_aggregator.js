@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.1246 (PR #413)
+* @version 1.390.1281 (PR #427)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-07-22 19:00:00
+* @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -61,6 +61,10 @@ import { normalizeJobId } from "./dashboard_utils.js";
 import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
 import { recordObservation, observationDue } from "./dashboard_offline_observation.js";
 import { runInferredContinuityShadow } from "./dashboard_offline_live_shadow.js";
+import {
+  getIrreversibleFilamentRemaining,
+  IRREVERSIBLE_REMAINING_ACTION
+} from "./dashboard_filament_remaining_model.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -71,6 +75,32 @@ let aggregatorTimer = null;
 
 /** リレーブリッジ配信コールバック（Phase 6 で登録） */
 let _relayBroadcastCallback = null;
+
+/**
+ * runout 文脈へ記録する confirmed-only 残量スナップショットを作成する。
+ *
+ * 【詳細説明】
+ * - O9 では不可逆判断に projected 残量を混ぜないため、runout ゲートへ渡す残量も Model 層の
+ *   confirmed-only API から取得する。
+ * - 正本スプールが見つからない、または確定残量が不明な場合は `NaN` を返し、
+ *   `runoutGateHeld()` 側の既存 fail-closed 分岐に委譲する。
+ *
+ * @private
+ * @function _confirmedRunoutRemainingSnapshot
+ * @param {?Object} spool - 現在装着中スプール。
+ * @returns {{remainingMm:number,remainingPct:number}} runout イベントへ保存する残量情報。
+ */
+function _confirmedRunoutRemainingSnapshot(spool) {
+  const gate = getIrreversibleFilamentRemaining(spool, {
+    action: IRREVERSIBLE_REMAINING_ACTION.RUNOUT_DECISION
+  });
+  if (!gate.ok) return { remainingMm: NaN, remainingPct: NaN };
+  const total = Number(spool?.totalLengthMm);
+  return {
+    remainingMm: Number(gate.remainingMm),
+    remainingPct: total > 0 ? (Number(gate.remainingMm) / total) * 100 : NaN
+  };
+}
 
 /**
  * リレーブリッジの配信コールバックを登録する。
@@ -673,15 +703,14 @@ export function ingestData(data, hostname) {
         try {
           const _curSp = getCurrentSpool(host);
           const _stNow = Number(storedData.state?.rawValue || 0);
-          const _total = Number(_curSp?.totalLengthMm);
+          const _remaining = _confirmedRunoutRemainingSnapshot(_curSp);
           recordFilamentEvent({
             host,
             ts: nowMs,
             stateAtEvent: _stNow,
             oldSpoolId: _curSp?.id ?? null,
-            oldRemainingMm: Number(_curSp?.remainingLengthMm),
-            oldRemainingPct: _curSp && _total > 0
-              ? (Number(_curSp.remainingLengthMm) / _total) * 100 : NaN,
+            oldRemainingMm: _remaining.remainingMm,
+            oldRemainingPct: _remaining.remainingPct,
             runout: true,
             inflightJobId: _curSp?.currentPrintID || (machine?.printStore?.current?.id ?? null)
           });
@@ -1168,14 +1197,14 @@ export function aggregatorUpdate() {
         && st === PRINT_STATE_CODE.printPaused
         && s.lastPrintState === PRINT_STATE_CODE.printStarted) {
       try {
-        const _total = Number(spool.totalLengthMm);
+        const _remaining = _confirmedRunoutRemainingSnapshot(spool);
         recordFilamentEvent({
           host,
           ts: _now,
           stateAtEvent: PRINT_STATE_CODE.printPaused,
           oldSpoolId: spool.id,
-          oldRemainingMm: Number(spool.remainingLengthMm),
-          oldRemainingPct: _total > 0 ? (Number(spool.remainingLengthMm) / _total) * 100 : NaN,
+          oldRemainingMm: _remaining.remainingMm,
+          oldRemainingPct: _remaining.remainingPct,
           runout: s.currentMaterialStatus === 1,
           inflightJobId: spool.currentPrintID || (machine?.printStore?.current?.id ?? null)
         });

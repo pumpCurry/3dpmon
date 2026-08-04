@@ -30,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1280 (PR #426)
+* @version 1.390.1281 (PR #427)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 12:15:00
+* @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -64,6 +64,10 @@ import { sendRelayFilament } from "./dashboard_client_sync.js";
 import { normalizeJobId } from "./dashboard_utils.js";
 import { wallNowMs, randomEventId } from "./dashboard_time.js";
 import { isCompletedHistoryEntry } from "./dashboard_history_identity.js";
+import {
+  getIrreversibleFilamentRemaining,
+  IRREVERSIBLE_REMAINING_ACTION
+} from "./dashboard_filament_remaining_model.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -506,7 +510,10 @@ export function buildWasteReport() {
   for (const sp of allSpools) {
     // 廃棄済みで残量がある（＝ロス発生）スプールのみ対象
     if (!sp.deleted && !sp.isDeleted) continue;
-    const remain = sp.remainingLengthMm || 0;
+    const remainGate = getIrreversibleFilamentRemaining(sp, {
+      action: IRREVERSIBLE_REMAINING_ACTION.SPOOL_DISCARD
+    });
+    const remain = remainGate.ok ? remainGate.remainingMm : 0;
     if (remain <= 0) continue;
 
     count++;
@@ -1450,6 +1457,13 @@ export function deleteSpool(id, hostname) {
   const host = hostname;
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
+  const discardGate = getIrreversibleFilamentRemaining(id, {
+    action: IRREVERSIBLE_REMAINING_ACTION.SPOOL_DISCARD
+  });
+  if (!discardGate.ok) {
+    console.warn(`[deleteSpool] confirmed 残量を検証できないため廃棄を拒否: id=${id} reason=${discardGate.reason}`);
+    return;
+  }
   if (host && Array.isArray(s.printIdRanges) && s.printIdRanges.length) {
     const machine = monitorData.machines[host] || {};
     const pid = machine.printStore?.current?.id ?? "";

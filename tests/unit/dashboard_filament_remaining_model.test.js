@@ -136,6 +136,28 @@ describe("getIrreversibleFilamentRemaining", () => {
     expect(gate.reason).toBe("confirmed_remaining_unknown");
     expect(gate.remainingMm).toBe(null);
   });
+
+  it("不可逆判断では渡された古いオブジェクトではなく monitorData の正本を使う", () => {
+    mockMonitorData.filamentSpools = [spool({ remainingLengthMm: -500 })];
+    const staleUiCopy = spool({ remainingLengthMm: 5000 });
+
+    const gate = getIrreversibleFilamentRemaining(staleUiCopy, {
+      action: IRREVERSIBLE_REMAINING_ACTION.SPOOL_DISCARD
+    });
+
+    expect(gate.ok).toBe(true);
+    expect(gate.remainingMm).toBe(-500);
+  });
+
+  it("不可逆判断で正本スプールを取得できない場合は fail-closed する", () => {
+    const gate = getIrreversibleFilamentRemaining(spool({ id: "ghost", spoolId: "ghost" }), {
+      action: IRREVERSIBLE_REMAINING_ACTION.SPOOL_DISCARD
+    });
+
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toBe("canonical_spool_not_found");
+    expect(gate.spoolId).toBe("ghost");
+  });
 });
 
 describe("canExecuteIrreversibleRemainingAction", () => {
@@ -179,5 +201,22 @@ describe("canExecuteIrreversibleRemainingAction", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("confirmed_remaining_insufficient");
     expect(result.remainingMm).toBe(-300);
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["NaN", NaN],
+    ["Infinity", Infinity],
+    ["文字列", "abc"],
+    ["負数", -1]
+  ])("requiredMm が不正値(%s)なら 0 に丸めず fail-closed する", (_label, requiredMm) => {
+    const result = canExecuteIrreversibleRemainingAction("S1", requiredMm, {
+      action: IRREVERSIBLE_REMAINING_ACTION.PRINT_START_GATE
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("required_mm_invalid");
+    expect(result.requiredMm).toBe(null);
   });
 });
