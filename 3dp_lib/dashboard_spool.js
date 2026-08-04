@@ -50,7 +50,8 @@ import {
   reconcileSpool,
   getOpenFilamentEvent,
   resolveFilamentEvent,
-  deriveSpoolRemaining
+  deriveSpoolRemaining,
+  getSpoolIntervals
 } from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
@@ -1850,8 +1851,15 @@ export function autoCorrectCurrentSpool(hostname) {
   try {
     const persistedHistory = loadHistory(hostname);
     if (Array.isArray(persistedHistory) && persistedHistory.length) {
-      // 装着区間の下限（startPrintID/最新 mount の sinceJobId）以降の未紐付け完了印刷を対象
-      const sinceId = Number(spool.startPrintID) || 0;
+      // ★ P1-3: 装着区間の下限は ADR-0004 権威台帳(mountHistory)の open 区間 sinceJobId を使う。
+      //   legacy `spool.startPrintID` は編集等でドリフトしうるため、mount 記録があればそちらを
+      //   権威とし、無い場合(旧データ/未記録)のみ startPrintID へフォールバックする。
+      const _openIv = (getSpoolIntervals(spool.id) || [])
+        .filter(iv => iv.host === hostname && iv.untilJobId == null)
+        .at(-1) || null;
+      const sinceId = _openIv
+        ? (Number(_openIv.sinceJobId) || 0)
+        : (Number(spool.startPrintID) || 0);
       const linkJobIds = new Set();
       for (const entry of persistedHistory) {
         if (!entry || !shouldLinkOfflineJob(entry)) continue;
