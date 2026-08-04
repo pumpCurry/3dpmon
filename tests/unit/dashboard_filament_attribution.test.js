@@ -46,8 +46,10 @@ const {
   addInferredSpool,
   confirmInferredSpool,
   revertInferredSpool,
+  autoCorrectCurrentSpool,
 } = await import('../../3dp_lib/dashboard_spool.js');
 const { consumeInventory } = await import('../../3dp_lib/dashboard_filament_inventory.js');
+const pmMock = await import('../../3dp_lib/dashboard_printmanager.js');
 
 let rebaselineSpy;
 
@@ -349,5 +351,54 @@ describe('P6 #3 完全可逆（revertInferredSpool）', () => {
 
     const restored = revertInferredSpool(inferred.id);
     expect(restored.remainingLengthMm).toBe(13100);        // 23100 − 10000
+  });
+});
+
+// =====================================================================
+// P1-3: autoCorrectCurrentSpool の下限は mountHistory の open 区間 sinceJobId
+//   （legacy spool.startPrintID ではなく ADR-0004 権威台帳を使う）
+// =====================================================================
+describe('P1-3: autoCorrect のオフライン紐付け下限は mountHistory sinceJobId', () => {
+  beforeEach(reset);
+
+  it('startPrintID がドリフトしても mountHistory の open 区間 sinceJobId で絞る', () => {
+    // アイドル（currentPrintID なし）でオフライン完了印刷を紐付ける状況
+    setupHost('h', {
+      history: [job(150, 5000), job(250, 6000)],
+      currentId: '', state: 0,
+    });
+    const SP = addSpool({
+      id: 'SP', totalLengthMm: 330000, remainingLengthMm: 300000,
+      isActive: true, hostname: 'h', currentPrintID: '',
+      startPrintID: '100', // ★ legacy 値はドリフトして 100（誤って古い）
+    });
+    mockMonitorData.hostSpoolMap = { h: 'SP' };
+    // ★ 権威台帳の open 区間は since=200（100 ではない）
+    ledger.appendMountEvent({ host: 'h', spoolId: 'SP', anchorRemainingMm: 300000, sinceJobId: 200, ts: 1 });
+    // autoCorrect / _linkOfflineJobsToSpool が読む履歴を供給
+    pmMock.loadHistory.mockReturnValue(mockMonitorData.machines['h'].printStore.history);
+
+    autoCorrectCurrentSpool('h');
+
+    // since=200 基準 → 250(>200) のみ紐付け、150(<=200) は除外。
+    // もし startPrintID=100 を使っていたら 150 も紐付いてしまう（＝バグ）。
+    expect(histJob('h', '250').filamentId, '250(>200) は紐付く').toBe('SP');
+    expect(histJob('h', '150').filamentId, '150(<=200 権威境界) は紐付かない').not.toBe('SP');
+  });
+
+  it('mountHistory が無い場合は startPrintID にフォールバック', () => {
+    setupHost('h', { history: [job(150, 5000), job(250, 6000)], currentId: '', state: 0 });
+    addSpool({
+      id: 'SP2', totalLengthMm: 330000, remainingLengthMm: 300000,
+      isActive: true, hostname: 'h', currentPrintID: '', startPrintID: '200',
+    });
+    mockMonitorData.hostSpoolMap = { h: 'SP2' };
+    // mountHistory は空（open 区間なし）→ startPrintID=200 にフォールバック
+    pmMock.loadHistory.mockReturnValue(mockMonitorData.machines['h'].printStore.history);
+
+    autoCorrectCurrentSpool('h');
+
+    expect(histJob('h', '250').filamentId, '250(>200) 紐付く').toBe('SP2');
+    expect(histJob('h', '150').filamentId, '150(<=200) 紐付かない').not.toBe('SP2');
   });
 });
