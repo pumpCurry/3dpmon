@@ -111,7 +111,9 @@ Standalone / Parent では、Recovery / repair status から次の復旧操作�
 
 復旧操作後は、同じ Recovery / repair status に **Recovery operation audit** が表示されます。ここには最新の再保存、recovery flag 解除、ledger repair flag 解除、隔離 event 退避の履歴が残り、対象 candidate、host、件数、操作者、実行時刻を確認できます。未解決 blocker が無い場合でも、直近の復旧操作履歴は INFO として表示されます。
 
-O7 の read-only 照合では、`inferredCandidateStore`、O5 が `usedLengthLog` へ追加した confirmed / undone event、履歴 `filamentInfo` / `filamentId` snapshot を突き合わせます。不一致がある場合は **Ledger reconciliation issues** として表示されます。さらに、`startLength` が確認できるスプールでは、通常 print finalize の `{jobId, used}`、O5 confirmed event、O5 undone event を合算し、保存済み `remainingLengthMm` と再計算残量を比較します。各 issue には確認すべき修復方針 `repairHint` を添えますが、この表示は診断専用で、自動修復や残量変更は行いません。`startLength` または `remainingLengthMm` が不明なスプールは誤検出を避けるため再計算対象外として集計されます。
+O7 の read-only 照合では、`inferredCandidateStore`、O5 が `usedLengthLog` へ追加した confirmed / undone event、履歴 `filamentInfo` / `filamentId` snapshot を突き合わせます。不一致がある場合は **Ledger reconciliation issues** として表示されます。さらに、`remainingLedgerBaseline` などの明示された残量 baseline があるスプールでは、その baseline 以降の通常 print finalize `{jobId, used}`、O5 confirmed event、O5 undone event だけを合算し、保存済み `remainingLengthMm` と再計算残量を比較します。各 issue には確認すべき修復方針 `repairHint` を添えますが、この表示は診断専用で、自動修復や残量変更は行いません。再装着・手動補正・旧 import などで baseline 境界を証明できないスプールは誤検出を避けるため mismatch ではなく `unverifiable` として集計されます。負残量は台帳上の有効な監査値として保持され、再計算値と保存値が一致する場合は `spool_negative_remaining` warning として表示されます。
+
+負残量の表示はストレージ設定の **負残量表示** で切り替えできます。既定は「マイナス表示を許容」です。「表示だけ0に丸める」を選んだ場合も、内部台帳の `remainingLengthMm` は負値のまま保存され、O5/O7 の監査対象として残ります。
 
 ### 登録済みフィラメントタブ
 

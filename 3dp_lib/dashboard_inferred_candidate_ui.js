@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createInferredCandidateCenterContent}：フィラメント管理モーダル用 Candidate Center を生成する
  *
- * @version 1.390.1274 (PR #424)
+ * @version 1.390.1278 (PR #426)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-02 18:33:44
+ * @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -51,6 +51,7 @@ import {
   retryInferredRecoveryDurableSave
 } from "./dashboard_inferred_recovery_ops.js";
 import { showAlert } from "./dashboard_notification_manager.js";
+import { formatRemainingFilamentAmount } from "./dashboard_spool.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
 
@@ -82,7 +83,7 @@ const REASON_LABELS = Object.freeze({
   target_spool_same_as_candidate: "候補スプールと同じため再割当てできません",
   target_spool_not_found: "対象スプールが見つかりません",
   confirmed_remaining_unknown: "確定残量が不明なため処理できません",
-  confirmed_remaining_insufficient: "確定残量が候補消費量を下回るため処理できません",
+  confirmed_remaining_insufficient: "確定残量が候補消費量を下回っています",
   history_entry_missing: "対象履歴が不足しています",
   history_observation_ambiguous: "対象履歴が曖昧です",
   history_already_attributed: "履歴がすでに別スプールへ確定されています",
@@ -141,7 +142,8 @@ const WARNING_LABELS = Object.freeze({
   "history-already-attributed": "対象履歴が既に帰属済みです",
   "spool-missing": "候補スプールが見つかりません",
   "remaining-unknown": "確定残量が不明です",
-  "remaining-insufficient": "確定残量が推定消費量より少ない状態です",
+  "remaining-insufficient": "確定後に負残量になります",
+  "remaining-negative-after-decision": "確定後に負残量になります",
   "low-confidence": "信頼度が低い候補です",
   "decision-recovery-required": "整合性確認が必要です",
   "relay-readonly": "この端末は閲覧専用です"
@@ -650,7 +652,7 @@ async function _reassignAction(vm) {
   const formId = `ic-reassign-${++_dialogSeq}`;
   const options = spools.map(spool => {
     const remaining = Number.isFinite(Number(spool.remainingLengthMm))
-      ? `${Math.round(Number(spool.remainingLengthMm)).toLocaleString()} mm`
+      ? formatRemainingFilamentAmount(spool.remainingLengthMm, spool).display
       : "残量不明";
     const label = `${spool.name || spool.id} / ${spool.materialName || spool.material || ""} / ${remaining}`;
     return `<option value="${_escapeHtml(spool.id)}">${_escapeHtml(label)}</option>`;

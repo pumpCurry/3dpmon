@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1121 (PR #385)
+* @version 1.390.1278 (PR #426)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-06-23 00:00:00
+* @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -54,6 +54,7 @@ import {
   useFilament,
   getSpoolById,
   formatFilamentAmount,
+  formatRemainingFilamentAmount,
   formatUsageHtml,
   usageHeaderLabel,
   formatSpoolDisplayId,
@@ -902,7 +903,7 @@ export const renderTemplates = {
       const spName = spool.name || spool.colorName || "";
       const mat = spool.materialName || spool.material || "";
       const color = spool.filamentColor || "#000";
-      const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+      const remainFmt = formatRemainingFilamentAmount(spool.remainingLengthMm, spool);
       const remainPct = spool.totalLengthMm > 0
         ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0) : "?";
       spoolHtml = `
@@ -1659,7 +1660,7 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         }
         const cnt = info.spoolCount ?? sp?.printCount ?? 0;
         const remMm = info.expectedRemain ?? sp?.remainingLengthMm ?? 0;
-        const remFmt = formatFilamentAmount(remMm, sp);
+        const remFmt = formatRemainingFilamentAmount(remMm, sp);
         parts.push(`<div class="spool-line">${text}</div>`);
         parts.push(`<div class="spool-meta">残:${remFmt.display} 回:${cnt}</div>`);
       });
@@ -2098,13 +2099,13 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
     }
   }
 
-  const afterRemaining = Math.max(0, remaining - materialNeeded);
+  const afterRemaining = remaining - materialNeeded;
   const isShort        = remaining > 0 && materialNeeded > remaining;
 
   // フィラメント量を人間可読にフォーマット
   const fmtNeed  = formatFilamentAmount(materialNeeded, spool);
-  const fmtRemain = formatFilamentAmount(remaining, spool);
-  const fmtAfter = formatFilamentAmount(afterRemaining, spool);
+  const fmtRemain = formatRemainingFilamentAmount(remaining, spool);
+  const fmtAfter = formatRemainingFilamentAmount(afterRemaining, spool);
 
   // 所要時間（実績 > GCode見積 > 機器報告値）
   let estSec, durLabel;

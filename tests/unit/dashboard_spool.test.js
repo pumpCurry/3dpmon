@@ -46,6 +46,9 @@ import {
   getSpoolStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
+  formatRemainingFilamentAmount,
+  displayRemainingLengthMm,
+  getNegativeRemainingDisplayMode,
   formatUsageHtml,
   usageHeaderLabel,
   weightFromLength,
@@ -334,6 +337,30 @@ describe('formatFilamentAmount', () => {
     const result = formatFilamentAmount(12340);
     expect(typeof result.display).toBe('string');
     expect(result.display.length).toBeGreaterThan(0);
+  });
+
+  it('負残量は既定でマイナス表示を保持する', () => {
+    monitorData.appSettings = { negativeRemainingDisplayMode: 'show' };
+    const result = formatRemainingFilamentAmount(-2500);
+
+    expect(getNegativeRemainingDisplayMode()).toBe('show');
+    expect(displayRemainingLengthMm(-2500)).toBe(-2500);
+    expect(result.rawMm).toBe(-2500);
+    expect(result.mm).toBe(-2500);
+    expect(result.display).toContain('-2.5m');
+    expect(result.isDisplayClamped).toBe(false);
+  });
+
+  it('負残量の0クロップ設定は表示値だけを丸める', () => {
+    monitorData.appSettings = { negativeRemainingDisplayMode: 'clamp-zero' };
+    const result = formatRemainingFilamentAmount(-2500);
+
+    expect(getNegativeRemainingDisplayMode()).toBe('clamp-zero');
+    expect(displayRemainingLengthMm(-2500)).toBe(0);
+    expect(result.rawMm).toBe(-2500);
+    expect(result.mm).toBe(0);
+    expect(result.display).toContain('0.0m');
+    expect(result.isDisplayClamped).toBe(true);
   });
 });
 

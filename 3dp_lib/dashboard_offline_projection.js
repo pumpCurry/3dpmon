@@ -21,9 +21,9 @@
  * - {@link evaluateCandidateObservationKey}：candidate の observation key 1件を履歴へ照合する。
  * - {@link buildInferredContinuityProjection}：candidate 全体から推定残量 projection を作る。
  *
- * @version 1.390.1246 (PR #413)
+ * @version 1.390.1278 (PR #426)
  * @since   1.390.1244 (PR #411)
- * @lastModified  2026-07-22 12:00:00
+ * @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - O4 で candidate 永続化・状態遷移・親子同期へ接続する。
@@ -94,18 +94,19 @@ function _nonNegativeMm(value) {
  * 確定残量として使える値を正規化する。
  *
  * 【詳細説明】
- * - `remainingLengthMm` の `0` は実残量ゼロとして有効だが、null/undefined/NaN/負値は「不明」として扱う。
+ * - `remainingLengthMm` の負値は「使い切り後も印刷できた監査値」として有効に扱う。
+ * - null/undefined/NaN は「不明」として扱う。
  * - O5 の UI や不可逆操作 gate が「空」と「不明」を混同しないよう、不明値は null のまま返す。
  *
  * @private
  * @function _remainingOrNull
  * @param {*} value - spool.remainingLengthMm 相当の値。
- * @returns {?number} 有効な 0 以上の数値。不明な場合は null。
+ * @returns {?number} 有効な有限数値。不明な場合は null。
  */
 function _remainingOrNull(value) {
   if (value == null || value === "") return null;
   const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -327,8 +328,7 @@ export function evaluateCandidateObservationKey(observationKey, entry, candidate
  *
  * 【詳細説明】
  * - `classificationResult.classification` が `continuity-candidate` でない場合は推定 debit しない。
- * - `spool.remainingLengthMm` が 0 以上の有限値の場合だけ `confirmedRemainingMm` として読み、
- *   不明値は null として返す。
+ * - `spool.remainingLengthMm` が有限値の場合だけ `confirmedRemainingMm` として読み、不明値は null として返す。
  * - `projectedRemainingMm` は表示・計画用の推定値であり、spool オブジェクトへは書き戻さない。
  * - 入力履歴に同一 observation key が既に候補スプールへ確定帰属している場合は対象外にし、
  *   別スプール確定済みなら contradictions に分離する。
@@ -405,7 +405,7 @@ export function buildInferredContinuityProjection(classificationResult, spool, h
     status,
     eligibleForPersistence,
     inferredContinuityUsedMm,
-    projectedRemainingMm: confirmedRemainingMm == null ? null : Math.max(0, confirmedRemainingMm - inferredContinuityUsedMm),
+    projectedRemainingMm: confirmedRemainingMm == null ? null : confirmedRemainingMm - inferredContinuityUsedMm,
     candidateDebits,
     contradictions,
     unresolved

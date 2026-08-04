@@ -338,12 +338,12 @@ describe("ライブオーバーレイ", () => {
     expect(withLive.remainingMm).toBe(95000 - 1200);
   });
 
-  it("liveUsedMm は 0 未満にクランプ", () => {
+  it("liveUsedMm が残量を超えても負残量を保持する", () => {
     addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 0 });
     setHistory("h", [job(10, 99000)]);
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 100 });
     const r = deriveSpoolRemaining("sp1", { liveUsedMm: 5000 });
-    expect(r.remainingMm).toBe(0);
+    expect(r.remainingMm).toBe(-4000);
   });
 });
 
@@ -853,14 +853,14 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(getSpoolIntervals("sp1").filter(iv => iv.untilJobId == null)).toHaveLength(1);
   });
 
-  it("消費が総量を超える → 0 にクランプ", () => {
+  it("消費が総量を超える場合は負残量として保持する", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 50000, remainingLengthMm: 50000 });
     setHistory("h", [job(100, 80000, { filamentId: "sp1" })]);
     mockMonitorData.hostSpoolMap = { h: "sp1" };
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 100, ts: 10 });
     const r = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
-    expect(r.after).toBe(0);
-    expect(sp.remainingLengthMm).toBe(0);
+    expect(r.after).toBe(-30000);
+    expect(sp.remainingLengthMm).toBe(-30000);
   });
 
   it("印刷中スプールは触らない（skip）", () => {

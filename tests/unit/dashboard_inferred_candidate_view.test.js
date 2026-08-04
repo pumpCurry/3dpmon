@@ -376,8 +376,9 @@ describe("buildInferredRecoverySurfaceViewModel", () => {
       title: "Ledger reconciliation issues"
     });
     expect(vm.cards[0].details).toContainEqual({ label: "Remaining mismatch", value: "1" });
-    expect(vm.cards[0].details[2].value).toContain("candidate_ledger_event_missing");
-    expect(vm.cards[0].details[2].value).toContain("restore-ledger-event-or-reopen-candidate");
+    const issueDetail = vm.cards[0].details.find(item => item.label === "Issue 1");
+    expect(issueDetail?.value).toContain("candidate_ledger_event_missing");
+    expect(issueDetail?.value).toContain("restore-ledger-event-or-reopen-candidate");
     expect(vm.cards[0].reconciliation.issueCount).toBe(1);
   });
 

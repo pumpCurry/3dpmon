@@ -169,14 +169,23 @@ The O7 read-only reconciliation check compares `inferredCandidateStore`,
 O5 confirmed / undone events in `usedLengthLog`, and the history
 `filamentInfo` / `filamentId` snapshots. When it finds a mismatch, the
 surface shows **Ledger reconciliation issues**. This diagnostic does not
-repair data or change remaining length. For spools with a known
-`startLength`, it also combines normal print-finalize `{jobId, used}`
-entries, O5 confirmed events, and O5 undone events to compare the
-recalculated remaining length with saved `remainingLengthMm`. Spools with
-unknown `startLength` or `remainingLengthMm` are counted as unverifiable
-instead of being reported as mismatches. Each issue includes a `repairHint`
-that names the next manual inspection or repair direction, but the
-diagnostic itself remains read-only.
+repair data or change remaining length. For spools with an explicit
+remaining baseline such as `remainingLedgerBaseline`, it only combines
+normal print-finalize `{jobId, used}` entries, O5 confirmed events, and O5
+undone events after that baseline boundary, then compares the recalculated
+remaining length with saved `remainingLengthMm`. Spools whose baseline
+boundary cannot be proven after remounts, manual adjustments, or old imports
+are counted as unverifiable instead of being reported as mismatches. Negative
+remaining length is a valid audited ledger value; when the saved value and
+recalculated value match below zero, O7 reports a `spool_negative_remaining`
+warning rather than clamping the value away. Each issue includes a
+`repairHint` that names the next manual inspection or repair direction, but
+the diagnostic itself remains read-only.
+
+Negative remaining display is controlled by **Negative remaining display** in
+Storage settings. The default is to show negative values. Choosing display
+clamp only rounds the UI to zero; the internal `remainingLengthMm` remains
+negative and stays available for O5/O7 audit.
 
 ### Registered Filament Tab
 

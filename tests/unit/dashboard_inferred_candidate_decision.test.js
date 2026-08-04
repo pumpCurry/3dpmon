@@ -335,16 +335,16 @@ describe("confirmInferredCandidate", () => {
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
-  it("対象 spool の確定残量が candidate 使用量未満なら fail-closed する", async () => {
+  it("対象 spool の確定残量が candidate 使用量未満でも負残量として確定する", async () => {
     mocks.monitorData.filamentSpools[0].remainingLengthMm = 100;
 
     const result = await confirmInferredCandidate("ic-a", { nowMs: 11000 });
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("confirmed_remaining_insufficient");
-    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(100);
-    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
-    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe("confirmed");
+    expect(mocks.monitorData.filamentSpools[0].remainingLengthMm).toBe(-2900);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.CONFIRMED);
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
   });
 
   it("履歴が既に帰属済みなら二重反映しない", async () => {
@@ -520,16 +520,16 @@ describe("reassignInferredCandidate", () => {
     expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
   });
 
-  it("再割当て先 spool の確定残量が candidate 使用量未満なら fail-closed する", async () => {
+  it("再割当て先 spool の確定残量が candidate 使用量未満でも負残量として確定する", async () => {
     mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm = 100;
 
     const result = await reassignInferredCandidate("ic-a", "S2", { actor: "operator", nowMs: 11000 });
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("confirmed_remaining_insufficient");
-    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm).toBe(100);
-    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.PENDING);
-    expect(mocks.saveUnifiedStorageDurably).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe("reassigned");
+    expect(mocks.monitorData.filamentSpools.find(s => s.id === "S2").remainingLengthMm).toBe(-2900);
+    expect(mocks.monitorData.inferredCandidateStore["ic-a"].status).toBe(INFERRED_CANDIDATE_STATUS.REASSIGNED);
+    expect(mocks.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
   });
 });
 

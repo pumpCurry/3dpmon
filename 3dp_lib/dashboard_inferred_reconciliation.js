@@ -18,9 +18,9 @@
  * 【公開関数一覧】
  * - {@link buildInferredLedgerReconciliationReport}：推定 candidate 台帳の read-only 照合結果を生成する
  *
- * @version 1.390.1276 (PR #426)
+ * @version 1.390.1278 (PR #426)
  * @since   1.390.1275 (PR #425)
- * @lastModified 2026-08-03 09:22:00
+ * @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -103,6 +103,20 @@ function _positiveMm(value) {
 }
 
 /**
+ * 有限 mm 値へ正規化する。
+ *
+ * @private
+ * @function _finiteMmOrNull
+ * @param {*} value - mm 値候補。
+ * @returns {?number} 有限値。不正値は null。
+ */
+function _finiteMmOrNull(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * 0以上の有限 mm 値へ正規化する。
  *
  * @private
@@ -111,9 +125,8 @@ function _positiveMm(value) {
  * @returns {?number} 0以上の有限値。不正値は null。
  */
 function _nonNegativeMmOrNull(value) {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  const n = _finiteMmOrNull(value);
+  return n != null && n >= 0 ? n : null;
 }
 
 /**
@@ -157,25 +170,48 @@ function _store() {
 }
 
 /**
- * active spool 配列を安全に取得する。
+ * 全 spool 配列を安全に取得する。
  *
  * @private
  * @function _spools
- * @returns {Array<Object>} active spool 配列。
+ * @returns {Array<Object>} 削除済みを含む spool 配列。
  */
 function _spools() {
   return Array.isArray(monitorData.filamentSpools)
-    ? monitorData.filamentSpools.filter(spool => spool && !spool.deleted && !spool.isDeleted)
+    ? monitorData.filamentSpools.filter(spool => spool)
     : [];
 }
 
 /**
- * spool ID から active spool を取得する。
+ * spool が archive / deleted 相当か判定する。
+ *
+ * @private
+ * @function _isArchivedSpool
+ * @param {?Object} spool - spool object。
+ * @returns {boolean} 廃棄・削除済みなら true。
+ */
+function _isArchivedSpool(spool) {
+  return !!(spool?.deleted || spool?.isDeleted);
+}
+
+/**
+ * 残量再計算対象の active spool 配列を返す。
+ *
+ * @private
+ * @function _activeSpools
+ * @returns {Array<Object>} active spool 配列。
+ */
+function _activeSpools() {
+  return _spools().filter(spool => !_isArchivedSpool(spool));
+}
+
+/**
+ * spool ID から spool を取得する。
  *
  * @private
  * @function _spoolById
  * @param {?string} spoolId - spool ID。
- * @returns {?Object} spool。存在しない場合は null。
+ * @returns {?Object} 削除済みを含む spool。存在しない場合は null。
  */
 function _spoolById(spoolId) {
   if (spoolId == null) return null;
@@ -348,6 +384,64 @@ function _usedLengthDelta(entry) {
 }
 
 /**
+ * spool から残量再計算用 baseline を取得する。
+ *
+ * 【詳細説明】
+ * - `startLength` は再装着時に現在残量へ更新されるため、usedLengthLog 全件の基点とは限らない。
+ * - `remainingLedgerBaseline` などの明示 boundary がある場合だけ、そこから後続 log を再計算する。
+ * - baseline が無く log が存在する場合は、旧データ・再装着・手動補正の境界を証明できないため
+ *   `remaining_baseline_boundary_unknown` として fail-safe に unverifiable へ落とす。
+ *
+ * @private
+ * @function _remainingLedgerBaseline
+ * @param {Object} spool - spool object。
+ * @param {Array<Object>} log - usedLengthLog。
+ * @returns {{ok:boolean,reason:?string,remainingLengthMm:?number,usedLengthLogIndex:number,source:string}}
+ *   baseline 情報。
+ */
+function _remainingLedgerBaseline(spool, log) {
+  const candidates = [
+    { source: "remainingLedgerBaseline", value: spool?.remainingLedgerBaseline },
+    { source: "ledgerBaseline", value: spool?.ledgerBaseline },
+    { source: "remainingBalanceBaseline", value: spool?.remainingBalanceBaseline }
+  ];
+  for (const candidate of candidates) {
+    const value = candidate.value;
+    if (!value || typeof value !== "object") continue;
+    const remainingLengthMm = _finiteMmOrNull(
+      value.remainingLengthMm ?? value.remainingMm ?? value.startLengthMm ?? value.startLength
+    );
+    const rawIndex = Number(value.usedLengthLogIndex ?? value.logIndex ?? 0);
+    if (remainingLengthMm == null) {
+      return { ok: false, reason: "remaining_baseline_length_unknown", remainingLengthMm: null, usedLengthLogIndex: 0, source: candidate.source };
+    }
+    if (!Number.isInteger(rawIndex) || rawIndex < 0 || rawIndex > log.length) {
+      return { ok: false, reason: "remaining_baseline_log_index_invalid", remainingLengthMm: null, usedLengthLogIndex: 0, source: candidate.source };
+    }
+    return {
+      ok: true,
+      reason: null,
+      remainingLengthMm,
+      usedLengthLogIndex: rawIndex,
+      source: candidate.source
+    };
+  }
+  if (log.length === 0) {
+    const startLengthMm = _nonNegativeMmOrNull(spool?.startLength);
+    if (startLengthMm != null) {
+      return { ok: true, reason: null, remainingLengthMm: startLengthMm, usedLengthLogIndex: 0, source: "startLength-empty-log" };
+    }
+  }
+  return {
+    ok: false,
+    reason: log.length > 0 ? "remaining_baseline_boundary_unknown" : "remaining_baseline_missing",
+    remainingLengthMm: null,
+    usedLengthLogIndex: 0,
+    source: "none"
+  };
+}
+
+/**
  * issue reason から read-only 修復方針を返す。
  *
  * 【詳細説明】
@@ -361,7 +455,8 @@ function _usedLengthDelta(entry) {
  */
 function _repairHintForReason(reason) {
   if (reason === "spool_remaining_recalculation_mismatch") return "verify-spool-balance-and-repair-ledger";
-  if (reason === "spool_balance_unverifiable") return "inspect-used-length-log-entry";
+  if (reason === "spool_balance_unverifiable") return "inspect-used-length-log-baseline";
+  if (reason === "spool_negative_remaining") return "review-negative-remaining-ledger";
   if (reason === "orphan_inferred_ledger_event") return "restore-candidate-or-append-reversal";
   if (reason === "unresolved_candidate_has_ledger_event") return "resolve-candidate-status-or-reverse-ledger-event";
   if (reason === "candidate_ledger_event_missing") return "restore-ledger-event-or-reopen-candidate";
@@ -758,13 +853,17 @@ function _checkOrphanLedgerEvents(knownCandidateHashes) {
 function _checkSpoolRemainingBalance(spool) {
   const spoolId = spool?.id == null ? null : String(spool.id);
   const startLengthMm = _nonNegativeMmOrNull(spool?.startLength);
-  const remainingLengthMm = _nonNegativeMmOrNull(spool?.remainingLengthMm);
+  const remainingLengthMm = _finiteMmOrNull(spool?.remainingLengthMm);
   const log = _usedLengthLog(spool);
   const base = {
     spoolId,
     startLengthMm,
     remainingLengthMm,
+    baselineRemainingMm: null,
+    usedLengthLogStartIndex: null,
+    baselineSource: null,
     expectedRemainingMm: null,
+    rawExpectedRemainingMm: null,
     netUsedMm: null,
     deltaMm: null,
     status: "unverifiable",
@@ -780,24 +879,43 @@ function _checkSpoolRemainingBalance(spool) {
       })]
     };
   }
-  if (startLengthMm == null || remainingLengthMm == null) {
+  if (remainingLengthMm == null) {
     return {
       balance: {
         ...base,
-        reason: startLengthMm == null ? "start_length_unknown" : "remaining_length_unknown"
+        reason: "remaining_length_unknown"
       },
       issues: []
     };
   }
 
+  const baseline = _remainingLedgerBaseline(spool, log);
+  if (!baseline.ok) {
+    const baselineIssues = log.length > 0
+      ? [_issue(INFERRED_RECONCILIATION_SEVERITY.WARNING, "spool_balance_unverifiable", {
+        spoolId,
+        details: { reason: baseline.reason, baselineSource: baseline.source, logCount: log.length }
+      })]
+      : [];
+    return {
+      balance: {
+        ...base,
+        reason: baseline.reason,
+        baselineSource: baseline.source
+      },
+      issues: baselineIssues
+    };
+  }
+
   let netUsedMm = 0;
   const issues = [];
-  for (let index = 0; index < log.length; index++) {
+  for (let index = baseline.usedLengthLogIndex; index < log.length; index++) {
     const delta = _usedLengthDelta(log[index]);
     if (!delta.ok) {
       issues.push(_issue(INFERRED_RECONCILIATION_SEVERITY.WARNING, "spool_balance_unverifiable", {
         spoolId,
         eventId: log[index]?.eventId || null,
+        repairHint: "inspect-used-length-log-entry",
         details: {
           reason: delta.reason,
           index,
@@ -805,29 +923,54 @@ function _checkSpoolRemainingBalance(spool) {
         }
       }));
       return {
-        balance: { ...base, status: "unverifiable", reason: delta.reason },
+        balance: {
+          ...base,
+          baselineRemainingMm: baseline.remainingLengthMm,
+          usedLengthLogStartIndex: baseline.usedLengthLogIndex,
+          baselineSource: baseline.source,
+          status: "unverifiable",
+          reason: delta.reason
+        },
         issues
       };
     }
     netUsedMm += delta.deltaMm;
   }
 
-  const expectedRemainingMm = Math.max(0, startLengthMm - netUsedMm);
+  const expectedRemainingMm = baseline.remainingLengthMm - netUsedMm;
   const deltaMm = remainingLengthMm - expectedRemainingMm;
   const ok = Math.abs(deltaMm) <= REMAINING_TOLERANCE_MM;
   const balance = {
     ...base,
+    baselineRemainingMm: baseline.remainingLengthMm,
+    usedLengthLogStartIndex: baseline.usedLengthLogIndex,
+    baselineSource: baseline.source,
     expectedRemainingMm,
+    rawExpectedRemainingMm: expectedRemainingMm,
     netUsedMm,
     deltaMm,
-    status: ok ? "ok" : "mismatch",
-    reason: ok ? null : "remaining_length_mismatch"
+    status: ok ? (expectedRemainingMm < 0 ? "negative" : "ok") : "mismatch",
+    reason: ok ? (expectedRemainingMm < 0 ? "negative_remaining" : null) : "remaining_length_mismatch"
   };
+  if (ok && expectedRemainingMm < 0) {
+    issues.push(_issue(INFERRED_RECONCILIATION_SEVERITY.WARNING, "spool_negative_remaining", {
+      spoolId,
+      details: {
+        baselineRemainingMm: baseline.remainingLengthMm,
+        usedLengthLogStartIndex: baseline.usedLengthLogIndex,
+        netUsedMm,
+        expectedRemainingMm,
+        remainingLengthMm
+      }
+    }));
+  }
   if (!ok) {
     issues.push(_issue(INFERRED_RECONCILIATION_SEVERITY.BLOCKER, "spool_remaining_recalculation_mismatch", {
       spoolId,
       details: {
         startLengthMm,
+        baselineRemainingMm: baseline.remainingLengthMm,
+        usedLengthLogStartIndex: baseline.usedLengthLogIndex,
         netUsedMm,
         expectedRemainingMm,
         remainingLengthMm,
@@ -848,7 +991,7 @@ function _checkSpoolRemainingBalance(spool) {
 function _checkSpoolRemainingBalances() {
   const balances = [];
   const issues = [];
-  for (const spool of _spools()) {
+  for (const spool of _activeSpools()) {
     const result = _checkSpoolRemainingBalance(spool);
     balances.push(result.balance);
     issues.push(...result.issues);
@@ -901,6 +1044,7 @@ export function buildInferredLedgerReconciliationReport(options = {}) {
   const undoEventCount = _spools().reduce((sum, spool) =>
     sum + _usedLengthLog(spool).filter(event => event?.type === INFERRED_DECISION_UNDO_LEDGER_EVENT_TYPE).length, 0);
   const remainingBalanceOkCount = remainingBalances.balances.filter(item => item.status === "ok").length;
+  const remainingBalanceNegativeCount = remainingBalances.balances.filter(item => item.status === "negative").length;
   const remainingBalanceMismatchCount = remainingBalances.balances.filter(item => item.status === "mismatch").length;
   const remainingBalanceUnverifiableCount = remainingBalances.balances.filter(item => item.status === "unverifiable").length;
 
@@ -913,6 +1057,7 @@ export function buildInferredLedgerReconciliationReport(options = {}) {
     decisionEventCount,
     undoEventCount,
     remainingBalanceOkCount,
+    remainingBalanceNegativeCount,
     remainingBalanceMismatchCount,
     remainingBalanceUnverifiableCount,
     remainingBalances: remainingBalances.balances,

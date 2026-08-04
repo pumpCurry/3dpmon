@@ -19,9 +19,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1262 (PR #415)
+* @version 1.390.1278 (PR #426)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-07-25 14:25:00
+* @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,6 +45,8 @@ import {
   getSpoolStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
+  formatRemainingFilamentAmount,
+  displayRemainingLengthMm,
   buildSpoolAnalytics,
   buildWasteReport,
   getSpoolById,
@@ -215,7 +217,7 @@ function spoolToPreviewOverrides(sp) {
  * @returns {string} HTML 文字列
  */
 function renderRemainBar(remaining, total, color) {
-  const pct = total > 0 ? Math.min(100, (remaining / total) * 100) : 0;
+  const pct = total > 0 ? Math.max(0, Math.min(100, (remaining / total) * 100)) : 0;
   const barColor = color || "#22C55E";
   return `<span class="remain-bar"><span class="remain-bar-fill" style="width:${pct.toFixed(1)}%;background:${barColor}"></span></span>${pct.toFixed(0)}%`;
 }
@@ -341,12 +343,13 @@ function createDashboardContent(hostname, switchTab) {
 
         const infoBox = document.createElement("div");
         infoBox.className = "fm-mounted-info";
-        const pct = spool.totalLengthMm > 0
-          ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0)
+        const displayRemainingMm = displayRemainingLengthMm(spool.remainingLengthMm);
+        const pct = spool.totalLengthMm > 0 && displayRemainingMm != null
+          ? ((displayRemainingMm / spool.totalLengthMm) * 100).toFixed(0)
           : 0;
         const colorSwatch = `<span class="color-swatch color-swatch-md" style="background:${spool.filamentColor || spool.color || "#ccc"}"></span>`;
         // 残量を人間可読フォーマットで表示
-        const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+        const remainFmt = formatRemainingFilamentAmount(spool.remainingLengthMm, spool);
         // 枯渇予測
         const analytics = buildSpoolAnalytics(spool.id);
         let predLine = "";
@@ -361,7 +364,7 @@ function createDashboardContent(hostname, switchTab) {
           `<div><strong>${formatSpoolDisplayId(spool)}</strong> ${spool.name || ""}</div>` +
           `<div>${colorSwatch}${spool.colorName || ""} / ${spool.materialName || spool.material || ""}</div>` +
           `<div style="margin:2px 0">${remainFmt.display} (${pct}%)</div>` +
-          `<div>${renderRemainBar(spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
+          `<div>${renderRemainBar(displayRemainingMm ?? spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
           predLine;
 
         const btnWrap = document.createElement("div");
@@ -447,8 +450,9 @@ function createDashboardContent(hostname, switchTab) {
           enableDrag: false
         });
 
-        const pct = sp.totalLengthMm > 0
-          ? ((sp.remainingLengthMm / sp.totalLengthMm) * 100).toFixed(0)
+        const displayRemainingMm = displayRemainingLengthMm(sp.remainingLengthMm);
+        const pct = sp.totalLengthMm > 0 && displayRemainingMm != null
+          ? ((displayRemainingMm / sp.totalLengthMm) * 100).toFixed(0)
           : 0;
         const label = document.createElement("div");
         label.innerHTML = `${formatSpoolDisplayId(sp)}<br>${pct}%`;
@@ -1359,8 +1363,9 @@ function createRegisteredContent(openEditor, hostname) {
 
       // 残量バー
       const remainTd = document.createElement("td");
+      const displayRemainingMm = displayRemainingLengthMm(sp.remainingLengthMm);
       remainTd.innerHTML = renderRemainBar(
-        sp.remainingLengthMm || 0,
+        displayRemainingMm ?? sp.remainingLengthMm ?? 0,
         sp.totalLengthMm || 0,
         sp.filamentColor || sp.color
       );
@@ -1627,7 +1632,7 @@ function createRegisteredContent(openEditor, hostname) {
     drilldown.appendChild(hdr);
 
     // サマリカード
-    const remainFmt = formatFilamentAmount(analytics.remainMm, sp);
+    const remainFmt = formatRemainingFilamentAmount(analytics.remainMm, sp);
     const consumedFmt = formatFilamentAmount(analytics.consumedMm, sp);
     const cards = document.createElement("div");
     cards.className = "stat-cards";
@@ -1668,7 +1673,8 @@ function createRegisteredContent(openEditor, hostname) {
         const cumulativeData = [];
         for (let i = 0; i < log.length; i++) {
           remaining -= (log[i].used || 0);
-          cumulativeData.push(Math.max(0, remaining) / 1000); // m 単位
+          const displayRemainingMm = displayRemainingLengthMm(remaining);
+          cumulativeData.push((displayRemainingMm ?? remaining) / 1000); // m 単位
         }
         new Chart(canvas.getContext("2d"), {
           type: "line",
@@ -1854,7 +1860,7 @@ function createHistoryContent() {
       const remainTd = document.createElement("td");
       remainTd.style.textAlign = "right";
       const remVal = u.currentLength ?? u.startLength ?? null;
-      remainTd.textContent = remVal != null ? formatFilamentAmount(remVal, sp).display : "--";
+      remainTd.textContent = remVal != null ? formatRemainingFilamentAmount(remVal, sp).display : "--";
       tr.appendChild(remainTd);
 
       // 種別
@@ -2087,8 +2093,9 @@ function createReportContent() {
     for (const sp of activeSpools) {
       const a = buildSpoolAnalytics(sp.id);
       if (!a) continue;
-      const remainFmt = formatFilamentAmount(a.remainMm, sp);
-      const remainPct = a.totalMm > 0 ? ((a.remainMm / a.totalMm) * 100).toFixed(0) : "?";
+      const remainFmt = formatRemainingFilamentAmount(a.remainMm, sp);
+      const displayRemainingMm = displayRemainingLengthMm(a.remainMm);
+      const remainPct = a.totalMm > 0 && displayRemainingMm != null ? ((displayRemainingMm / a.totalMm) * 100).toFixed(0) : "?";
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${formatSpoolDisplayId(sp)} ${sp.name || ""}</td>` +
         `<td>${a.material}</td>` +

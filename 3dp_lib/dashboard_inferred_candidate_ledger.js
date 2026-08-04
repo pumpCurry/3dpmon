@@ -19,9 +19,9 @@
  * - {@link undoInferredCandidateLedger}：確定済み candidate の台帳反映を取り消す
  * - {@link rollbackInferredCandidateLedger}：確定反映前 snapshot へメモリ状態を戻す
  *
- * @version 1.390.1269 (PR #419)
+ * @version 1.390.1278 (PR #426)
  * @since   1.390.1261 (PR #414)
- * @lastModified 2026-08-01 19:47:47
+ * @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -112,17 +112,18 @@ function _positiveMm(value) {
  *
  * 【詳細説明】
  * - O5 の Confirm/Reassign は確定台帳を書き換えるため、残量不明の spool には適用しない。
- * - null/undefined/空文字/NaN/負値は不明扱いで null を返す。
+ * - null/undefined/空文字/NaN は不明扱いで null を返す。
+ * - 負値は「使い切り後も実際に印刷できた量」を保持する監査値として有効に扱う。
  *
  * @private
  * @function _remainingOrNull
  * @param {*} value - spool.remainingLengthMm 相当の値。
- * @returns {?number} 0 以上の有限値。不明値は null。
+ * @returns {?number} 有限値。不明値は null。
  */
 function _remainingOrNull(value) {
   if (value == null || value === "") return null;
   const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -614,10 +615,6 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
   const debits = _candidateDebits(candidateRecord);
   const total = _validateDebitTotal(candidateRecord, debits);
   if (!total.ok) return { ok: false, reason: total.reason, snapshot: null, spool };
-  if (remaining < total.usedMm) {
-    return { ok: false, reason: "confirmed_remaining_insufficient", snapshot: null, spool };
-  }
-
   const byKey = _historyIndexByObservationKey(history);
   const updates = [];
   const seenIndexes = new Set();
@@ -666,7 +663,8 @@ export function applyInferredCandidateLedger(candidateRecord, targetSpoolId, opt
   }
   const historyAfter = updates.map(item => _captureHistoryAfter(item.entry, item.debit.observationKey));
 
-  spool.remainingLengthMm = Math.max(0, remaining - total.usedMm);
+  // 台帳内部値は負残量を保持する。見た目だけの 0 クロップは表示層で行う。
+  spool.remainingLengthMm = remaining - total.usedMm;
   if (!Array.isArray(spool.usedLengthLog)) spool.usedLengthLog = [];
   const event = {
     eventId: options.eventId || randomEventId("icd"),

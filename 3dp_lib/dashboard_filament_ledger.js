@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 2.2.1027
+ * @version 1.390.1278 (PR #426)
  * @since   2.2.1012
- * @lastModified 2026-06-17
+ * @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  */
 
@@ -49,6 +49,26 @@ import { wallNowMs, randomEventId } from "./dashboard_time.js";
 function _clamp(min, v, max) {
   if (!Number.isFinite(v)) return min;
   return Math.max(min, Math.min(v, max));
+}
+
+/**
+ * 残量台帳値を上限だけで制限する。
+ *
+ * 【詳細説明】
+ * - `remainingLengthMm` は監査上、0 未満の値を保持できる必要がある。
+ * - 総量を超える残量は従来どおり上限へ丸めるが、下限 0 のクランプは行わない。
+ *
+ * @private
+ * @function _capLedgerRemaining
+ * @param {number} value - 残量候補 mm。
+ * @param {number} cap - 許容上限 mm。
+ * @returns {number} 上限だけを適用した残量 mm。
+ */
+function _capLedgerRemaining(value, cap) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const max = Number(cap);
+  return Number.isFinite(max) && max > 0 ? Math.min(n, max) : n;
 }
 
 /**
@@ -662,7 +682,7 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
 
   if (activeIvs.length === 0) {
     // 装着履歴が無い → 現在値をそのまま維持（total へリセットしない）
-    const remaining = _clamp(0, _base - (Number(liveUsedMm) || 0), _cap);
+    const remaining = _capLedgerRemaining(_base - (Number(liveUsedMm) || 0), _cap);
     return { remainingMm: remaining, verified: false, mode: "none", usedMm: 0 };
   }
 
@@ -670,7 +690,7 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   //   誤った区間を選んで減算するより、現在値を維持して未検証にする方が安全（台帳が曖昧な状態）。
   const openIvs = activeIvs.filter(iv => iv.untilJobId == null);
   if (hardDiag.length > 0 || openIvs.length >= 2) {
-    const remaining = _clamp(0, _base - (Number(liveUsedMm) || 0), _cap);
+    const remaining = _capLedgerRemaining(_base - (Number(liveUsedMm) || 0), _cap);
     return {
       remainingMm: remaining, verified: false,
       mode: hardDiag.length > 0 ? "halt-corrupt" : "halt-ambiguous", usedMm: 0
@@ -727,11 +747,11 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   const anchor = Number(anchorIv.anchorRemainingMm) || 0;
   let remaining = anchor - used;
 
-  // clamp(0, remaining, total>0?total:anchor)。liveUsedMm はオーバーレイで追加減算。
+  // 上限だけを total に制限する。負残量は監査対象の台帳値として保持する。
   const cap = total > 0 ? total : Math.max(anchor, 0);
-  remaining = _clamp(0, remaining, cap);
+  remaining = _capLedgerRemaining(remaining, cap);
   if (liveUsedMm > 0) {
-    remaining = _clamp(0, remaining - liveUsedMm, cap);
+    remaining = _capLedgerRemaining(remaining - liveUsedMm, cap);
   }
 
   return { remainingMm: remaining, verified, mode: "anchor", usedMm: used };
@@ -883,7 +903,7 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
       used += attributedUsed(j, spoolId);
     }
   }
-  const after = _clamp(0, total - used, total);
+  const after = _capLedgerRemaining(total - used, total);
   spool.remainingLengthMm = after;
   spool._remainingVerified = true; // 手動編集＝権威
   if (ts != null) spool.updatedAt = ts;

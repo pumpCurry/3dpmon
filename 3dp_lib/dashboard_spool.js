@@ -29,9 +29,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1278 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -283,6 +283,85 @@ export function formatFilamentAmount(mm, spool = null) {
   }
 
   return { mm: val, m, g, cost, currency, display };
+}
+
+/**
+ * 負残量表示モードの定数。
+ *
+ * 【詳細説明】
+ * - 台帳内部の `remainingLengthMm` は負値を保持できる。ここで切り替えるのは表示値だけ。
+ * - `SHOW` は負値をそのまま表示し、`CLAMP_ZERO` は画面表示だけ 0mm に丸める。
+ *
+ * @enum {string}
+ */
+export const NEGATIVE_REMAINING_DISPLAY_MODE = Object.freeze({
+  SHOW: "show",
+  CLAMP_ZERO: "clamp-zero"
+});
+
+/**
+ * appSettings から負残量表示モードを取得する。
+ *
+ * 【詳細説明】
+ * - 保存済み設定が未知値の場合は既定の `show` に戻す。
+ * - 親子同期や import の古い設定でも表示が壊れないよう、純粋な正規化だけを行う。
+ *
+ * @function getNegativeRemainingDisplayMode
+ * @param {Object} [settings=monitorData.appSettings] - appSettings 相当のオブジェクト。
+ * @returns {string} `NEGATIVE_REMAINING_DISPLAY_MODE` の値。
+ */
+export function getNegativeRemainingDisplayMode(settings = monitorData.appSettings) {
+  const value = settings?.negativeRemainingDisplayMode;
+  return value === NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO
+    ? NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO
+    : NEGATIVE_REMAINING_DISPLAY_MODE.SHOW;
+}
+
+/**
+ * 残量表示用の mm 値を返す。
+ *
+ * 【詳細説明】
+ * - 台帳値は引数の `mm` をそのまま保持し、表示用だけ `clamp-zero` 設定時に 0 へ丸める。
+ * - 非有限値は `null` を返し、呼び出し側が `"---"` などの不明表示へ変換する。
+ *
+ * @function displayRemainingLengthMm
+ * @param {*} mm - 台帳上の残量 mm。
+ * @param {{mode?:string,settings?:Object}} [options] - 表示モード指定。
+ * @returns {?number} 表示用 mm。判定不能なら null。
+ */
+export function displayRemainingLengthMm(mm, options = {}) {
+  const n = Number(mm);
+  if (!Number.isFinite(n)) return null;
+  const mode = options.mode || getNegativeRemainingDisplayMode(options.settings || monitorData.appSettings);
+  return mode === NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO && n < 0 ? 0 : n;
+}
+
+/**
+ * 残量を表示設定に従ってフォーマットする。
+ *
+ * 【詳細説明】
+ * - `formatFilamentAmount()` は汎用の量表示であり、負値もそのまま表示できる。
+ * - 本関数は残量専用に「表示だけ 0 クロップ」設定を適用し、同時に元台帳値とクロップ有無を返す。
+ *
+ * @function formatRemainingFilamentAmount
+ * @param {*} mm - 台帳上の残量 mm。
+ * @param {?Object} [spool=null] - spool context。
+ * @param {{mode?:string,settings?:Object}} [options] - 表示モード指定。
+ * @returns {{mm:?number,rawMm:?number,m:string,g:?string,cost:?string,currency:string,display:string,isDisplayClamped:boolean}}
+ *   表示用フォーマットと元台帳値。
+ */
+export function formatRemainingFilamentAmount(mm, spool = null, options = {}) {
+  const raw = Number(mm);
+  if (!Number.isFinite(raw)) {
+    return { mm: null, rawMm: null, m: "---", g: null, cost: null, currency: "", display: "---", isDisplayClamped: false };
+  }
+  const displayMm = displayRemainingLengthMm(raw, options);
+  const formatted = formatFilamentAmount(displayMm, spool);
+  return {
+    ...formatted,
+    rawMm: raw,
+    isDisplayClamped: displayMm !== raw
+  };
 }
 
 /**
@@ -811,8 +890,12 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
       }
     }
     // ★ ADR-0004/0005: 取外しイベントを mountHistory に追記。
-    //   分割(一時停止交換)では旧区間に進行中ジョブ J を含める（until=J）。
-    //   稼働中=全体/通常取り外しでは最新完了 Lc（J を除外）。
+    //   分割(一時停止交換)で旧リール消費がある場合だけ旧区間に進行中ジョブ J を含める。
+    //   残量0で開始した空OLDなど旧リール消費が0の分割では、J を旧区間へ含めると
+    //   filamentInfo 未設定の単一スプール履歴が OLD/NEW の両方に帰属し、0クロップ解除後に
+    //   OLD が負残量へ落ちる。J を除外し、NEW 側だけが実測 materialUsedMm を受け取る。
+    //   稼働中=全体/通常取り外しでも最新完了 Lc（J を除外）。
+    const _prevUntilJobId = (_midPrintSwap && _mode === "split" && _Uold > 0) ? _J : _Lc;
     if (host) {
       // ★ P0-4(レビュー): 閉じる区間を明示指定する（projection の「同host最新open」旧
       //   フォールバック依存を廃し、複数open時に別区間を誤クローズしない）。
@@ -826,7 +909,7 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
       appendUnmountEvent({
         host,
         spoolId: prevSpool.id,
-        untilJobId: (_midPrintSwap && _mode === "split") ? _J : _Lc,
+        untilJobId: _prevUntilJobId,
         targetIntervalId: _prevOpen ? _prevOpen.intervalId : null,
         opId: `${_opBase}:unmount:${prevSpool.id}`,
         ts: nowTs
@@ -1797,7 +1880,8 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   }
   // ★ B2: 0消費は残量を変更しない（二重finalize等による偽値での破壊を防止）
   if (!isNaN(resolvedUsed) && resolvedUsed > 0) {
-    s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
+    // 台帳内部値は負残量を保持する。表示だけを設定で 0 クロップできるよう、ここでは丸めない。
+    s.remainingLengthMm = startLen - resolvedUsed;
     s.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
   } else if (resolvedUsed === 0 || isNaN(resolvedUsed)) {
     console.warn(`[finalizeFilamentUsage] resolvedUsed=${resolvedUsed} → 残量変更なし (${hostname})`);

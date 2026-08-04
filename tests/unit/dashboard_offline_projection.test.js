@@ -278,7 +278,7 @@ describe("buildInferredContinuityProjection", () => {
     expect(result.projectedRemainingMm).toBe(7000);
   });
 
-  it("推定 debit が確定残量を超えても projectedRemainingMm は 0 未満にしない", () => {
+  it("推定 debit が確定残量を超える場合は projectedRemainingMm を負値で保持する", () => {
     const entry = job("801", 9000, 801);
     const result = buildInferredContinuityProjection(
       classification([keyOf(entry)]),
@@ -287,6 +287,20 @@ describe("buildInferredContinuityProjection", () => {
     );
 
     expect(result.inferredContinuityUsedMm).toBe(9000);
-    expect(result.projectedRemainingMm).toBe(0);
+    expect(result.projectedRemainingMm).toBe(-8000);
+  });
+
+  it("確定残量が負値でも不明扱いにせず projection へ反映する", () => {
+    const entry = job("802", 500, 802);
+    const result = buildInferredContinuityProjection(
+      classification([keyOf(entry)]),
+      { id: "S1", remainingLengthMm: -1200 },
+      [entry]
+    );
+
+    expect(result.confirmedRemainingMm).toBe(-1200);
+    expect(result.inferredContinuityUsedMm).toBe(500);
+    expect(result.projectedRemainingMm).toBe(-1700);
+    expect(result.eligibleForPersistence).toBe(true);
   });
 });

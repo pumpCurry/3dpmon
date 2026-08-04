@@ -20,9 +20,9 @@
  * - {@link countPendingInferredCandidates}：pending candidate 件数を返す
  * - {@link buildInferredRecoverySurfaceViewModel}：recovery / repair 状態を診断表示モデルへ変換する
  *
- * @version 1.390.1276 (PR #426)
+ * @version 1.390.1278 (PR #426)
  * @since   1.390.1262 (PR #415)
- * @lastModified 2026-08-03 09:22:00
+ * @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -36,7 +36,7 @@ import { jobObservationIdentity } from "./dashboard_history_identity.js";
 import { canSubmitLedgerDecision } from "./dashboard_inferred_candidate_decision.js";
 import { buildInferredLedgerReconciliationReport } from "./dashboard_inferred_reconciliation.js";
 import { INFERRED_CANDIDATE_STATUS } from "./dashboard_offline_candidate_store.js";
-import { formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
+import { formatFilamentAmount, formatRemainingFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 
 /**
  * Candidate Center の status filter。
@@ -164,6 +164,29 @@ function _formatMm(mm, spool = null) {
   if (!Number.isFinite(n)) return "--";
   try {
     return formatFilamentAmount(n, spool).display;
+  } catch {
+    return `${Math.round(n).toLocaleString()} mm`;
+  }
+}
+
+/**
+ * 残量 mm 値を UI 表示用文字列へ変換する。
+ *
+ * 【詳細説明】
+ * - 台帳内部は負残量を保持できるため、残量表示には appSettings の表示モードを適用する。
+ * - 汎用使用量表示とは分け、表示だけ 0 クロップする設定でも元の台帳値は変更しない。
+ *
+ * @private
+ * @function _formatRemainingMm
+ * @param {*} mm - 残量 mm 値。
+ * @param {?Object} [spool=null] - spool context。
+ * @returns {string} 表示文字列。
+ */
+function _formatRemainingMm(mm, spool = null) {
+  const n = Number(mm);
+  if (!Number.isFinite(n)) return "--";
+  try {
+    return formatRemainingFilamentAmount(n, spool).display;
   } catch {
     return `${Math.round(n).toLocaleString()} mm`;
   }
@@ -452,14 +475,14 @@ export function buildInferredCandidateViewModel(record, options = {}) {
     : null;
   const projectedRemainingMm = confirmedRemainingMm == null || !Number.isFinite(usedMm)
     ? null
-    : Math.max(0, confirmedRemainingMm - usedMm);
+    : confirmedRemainingMm - usedMm;
   const confidenceLevel = record?.confidence?.level || "unknown";
   const jobData = _jobViewModels(record || {}, spool);
   const warnings = new Set(jobData.warningCodes);
   if (!spool) warnings.add("spool-missing");
   if (confirmedRemainingMm == null) warnings.add("remaining-unknown");
   if (confirmedRemainingMm != null && Number.isFinite(usedMm) && confirmedRemainingMm < usedMm) {
-    warnings.add("remaining-insufficient");
+    warnings.add("remaining-negative-after-decision");
   }
   if (confidenceLevel === "low") warnings.add("low-confidence");
   const hasRecoveryBlocker = !!monitorData.inferredDecisionRecoveryRequired
@@ -483,9 +506,9 @@ export function buildInferredCandidateViewModel(record, options = {}) {
     usedMm: Number.isFinite(usedMm) ? usedMm : 0,
     usedDisplay: Number.isFinite(usedMm) ? _formatMm(usedMm, spool) : "--",
     confirmedRemainingMm,
-    confirmedRemainingDisplay: confirmedRemainingMm == null ? "--" : _formatMm(confirmedRemainingMm, spool),
+    confirmedRemainingDisplay: confirmedRemainingMm == null ? "--" : _formatRemainingMm(confirmedRemainingMm, spool),
     projectedRemainingMm,
-    projectedRemainingDisplay: projectedRemainingMm == null ? "--" : _formatMm(projectedRemainingMm, spool),
+    projectedRemainingDisplay: projectedRemainingMm == null ? "--" : _formatRemainingMm(projectedRemainingMm, spool),
     confidenceLevel,
     confidenceLabel: CONFIDENCE_LABELS[confidenceLevel] || confidenceLevel,
     confidenceRank: CONFIDENCE_RANK[confidenceLevel] || 0,
@@ -699,6 +722,7 @@ export function buildInferredRecoverySurfaceViewModel(options = {}) {
       createdAtDisplay: _formatTime(reconciliation.checkedAt),
       reconciliation,
       details: [
+        { label: "Remaining negative", value: _formatValue(reconciliation.remainingBalanceNegativeCount || 0) },
         { label: "Remaining mismatch", value: _formatValue(reconciliation.remainingBalanceMismatchCount || 0) },
         { label: "Remaining unverifiable", value: _formatValue(reconciliation.remainingBalanceUnverifiableCount || 0) },
         ...reconciliation.issues.map((issue, index) => ({

@@ -53,6 +53,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   useFilament: vi.fn(),
   getSpoolById: vi.fn(() => null),
   formatFilamentAmount: vi.fn(() => ({ display: "—", g: null })),
+  formatRemainingFilamentAmount: vi.fn(() => ({ display: "—", g: null })),
   formatUsageHtml: vi.fn(() => "—"),
   usageHeaderLabel: vi.fn(() => "使用量"),
   formatSpoolDisplayId: vi.fn(() => ""),
