@@ -27,8 +27,13 @@ vi.doMock("../../3dp_lib/dashboard_data.js", () => ({
 const {
   appendMountEvent,
   appendUnmountEvent,
+  appendReanchorEvent,
+  appendSupersedeEvent,
+  quarantineInvalidMountEvents,
   attributedUsed,
   getSpoolIntervals,
+  getOpenMountInterval,
+  getMountIntervalStatus,
   deriveSpoolRemaining,
   reconcileSpool,
   recomputeSpoolFromManualEdit,
@@ -70,6 +75,7 @@ function reset() {
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
   mockMonitorData.mountHistory = [];
+  mockMonitorData.mountHistoryRejectedEvents = [];
   mockMonitorData.hostSpoolMap = {};
   mockMonitorData.filamentEventContext = {};
 }
@@ -332,12 +338,12 @@ describe("ライブオーバーレイ", () => {
     expect(withLive.remainingMm).toBe(95000 - 1200);
   });
 
-  it("liveUsedMm は 0 未満にクランプ", () => {
+  it("liveUsedMm が残量を超えても負残量を保持する", () => {
     addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 0 });
     setHistory("h", [job(10, 99000)]);
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 100 });
     const r = deriveSpoolRemaining("sp1", { liveUsedMm: 5000 });
-    expect(r.remainingMm).toBe(0);
+    expect(r.remainingMm).toBe(-4000);
   });
 });
 
@@ -509,18 +515,29 @@ describe("appendMountEvent / appendUnmountEvent", () => {
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 1000 });
     appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 50, ts: 2000 });
     expect(mockMonitorData.mountHistory).toHaveLength(2);
-    // evId は内容ベースの一意キー（type_spoolId_ts）
-    expect(mockMonitorData.mountHistory[0]).toMatchObject({ type: "mount", spoolId: "sp1", evId: "mount_sp1_1000" });
-    expect(mockMonitorData.mountHistory[1]).toMatchObject({ type: "unmount", untilJobId: 50, evId: "unmount_sp1_2000" });
+    // ★ Phase2B: 冪等キーは opId（内容ベース type_spoolId_ts）、intervalId も opId。
+    //   evId は壁時計非依存の一意UUID（内容ベースではない）。
+    expect(mockMonitorData.mountHistory[0]).toMatchObject({
+      type: "mount", spoolId: "sp1", opId: "mount_sp1_1000", intervalId: "mount_sp1_1000"
+    });
+    expect(mockMonitorData.mountHistory[1]).toMatchObject({
+      type: "unmount", untilJobId: 50, opId: "unmount_sp1_2000"
+    });
+    // evId は UUID 形式（composite ではない）
+    expect(mockMonitorData.mountHistory[0].evId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(mockMonitorData.mountHistory[0].evId).not.toBe("mount_sp1_1000");
   });
 
-  it("同一 ts・異なるスプールでも evId が衝突しない（復元/import dedup での消失を防止）", () => {
+  it("同一 ts・異なるスプールでも opId が衝突しない（復元/import dedup での消失を防止）", () => {
     // initLedgerAnchors が複数ホストを同じ nowMs で種付けする状況を再現
     appendMountEvent({ host: "h1", spoolId: "spA", anchorRemainingMm: 100, sinceJobId: 0, ts: 5000 });
     appendMountEvent({ host: "h2", spoolId: "spB", anchorRemainingMm: 200, sinceJobId: 0, ts: 5000 });
-    const ids = mockMonitorData.mountHistory.map(e => e.evId);
-    expect(ids).toEqual(["mount_spA_5000", "mount_spB_5000"]);
-    expect(new Set(ids).size).toBe(2); // 衝突なし → dedup で片方が消えない
+    const opIds = mockMonitorData.mountHistory.map(e => e.opId);
+    expect(opIds).toEqual(["mount_spA_5000", "mount_spB_5000"]);
+    expect(new Set(opIds).size).toBe(2); // 冪等キー衝突なし → dedup で片方が消えない
+    // evId(UUID) も当然すべて一意
+    const evIds = mockMonitorData.mountHistory.map(e => e.evId);
+    expect(new Set(evIds).size).toBe(2);
   });
 });
 
@@ -539,10 +556,37 @@ describe("ADR-0005 evId 重複ガード", () => {
   });
 
   it("unmount も同様に重複追記を畳む", () => {
+    // RR-5: 閉じる open が必要。まず mount（開区間）を作る。
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100, sinceJobId: 0, ts: 1000 });
     appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 50, ts: 2000 });
-    appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 77, ts: 2000 });
+    appendUnmountEvent({ host: "h", spoolId: "sp1", untilJobId: 77, ts: 2000 }); // 同 opId → 畳む
     const unmounts = mockMonitorData.mountHistory.filter(e => e.type === "unmount" && e.spoolId === "sp1");
     expect(unmounts).toHaveLength(1);
+  });
+
+  it("P1-1: 明示 opId は ts が違っても冪等（再送で別tsでも1件）", () => {
+    // 上位RPCが操作開始点で生成した安定 opId を渡す。ts が異なる再送でも同一 opId → 1件。
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100, sinceJobId: 0, ts: 1000, opId: "op-STABLE" });
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 999, sinceJobId: 9, ts: 5000, opId: "op-STABLE" });
+    const mounts = mockMonitorData.mountHistory.filter(e => e.type === "mount" && e.spoolId === "sp1");
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0].opId).toBe("op-STABLE");
+    expect(mounts[0].intervalId).toBe("op-STABLE"); // intervalId は opId（安定）
+    expect(mounts[0].anchorRemainingMm).toBe(100);  // 先勝ち
+  });
+
+  it("Phase2B: 旧イベント(opId無し・evId=旧composite)とも冪等突合して二重区間を防ぐ", () => {
+    // Phase2B 以前に保存された既存 mountHistory を模す（opId 無し、evId が composite）。
+    mockMonitorData.mountHistory.push({
+      evId: "mount_sp1_1000", intervalId: "mount_sp1_1000", seq: 1, ts: 1000,
+      type: "mount", host: "h", spoolId: "sp1", anchorRemainingMm: 100, sinceJobId: 0,
+      boundaryStatus: "known"
+    });
+    // 同一 spoolId/ts の再追記（アプリ更新後）は 1件に畳まれ、二重区間を作らない。
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 999, sinceJobId: 9, ts: 1000 });
+    const mounts = mockMonitorData.mountHistory.filter(e => e.type === "mount" && e.spoolId === "sp1");
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0].anchorRemainingMm).toBe(100); // 旧イベントが残る（先勝ち）
   });
 });
 
@@ -707,6 +751,27 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(sp.updatedAt).toBe(999);
   });
 
+  it("P0-4: 再アンカーは mount を直接書き換えず追記専用 reanchor イベントで行う", () => {
+    addSpool({ id: "sp1", totalLengthMm: 330000, remainingLengthMm: 330000 });
+    setHistory("h", [job(200, 30000, { filamentId: "sp1" })]);
+    mockMonitorData.hostSpoolMap = { h: "sp1" };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 330000, sinceJobId: 200, ts: 10 });
+    const mountBefore = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "sp1");
+    const anchorBefore = mountBefore.anchorRemainingMm;
+
+    recomputeSpoolFromManualEdit("sp1", { ts: 999 });
+
+    // 元 mount の anchor は不変（直接書き換えていない＝追記専用ログ）
+    expect(mountBefore.anchorRemainingMm).toBe(anchorBefore);
+    // 追記専用 reanchor イベントが1件、その anchor が再計算値
+    const reanchors = mockMonitorData.mountHistory.filter(e => e.type === "reanchor" && e.spoolId === "sp1");
+    expect(reanchors).toHaveLength(1);
+    expect(reanchors[0].anchorRemainingMm).toBe(300000); // 330000-30000
+    // projection は open 1件のまま（二重区間を作らない）
+    expect(getMountIntervalStatus("sp1", "h").status).toBe("ok");
+    expect(getOpenMountInterval("sp1", "h").anchorRemainingMm).toBe(300000);
+  });
+
   it("明示帰属していないジョブ（filamentInfo/filamentId なし）は合算しない", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
     setHistory("h", [
@@ -788,14 +853,14 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(getSpoolIntervals("sp1").filter(iv => iv.untilJobId == null)).toHaveLength(1);
   });
 
-  it("消費が総量を超える → 0 にクランプ", () => {
+  it("消費が総量を超える場合は負残量として保持する", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 50000, remainingLengthMm: 50000 });
     setHistory("h", [job(100, 80000, { filamentId: "sp1" })]);
     mockMonitorData.hostSpoolMap = { h: "sp1" };
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 100, ts: 10 });
     const r = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
-    expect(r.after).toBe(0);
-    expect(sp.remainingLengthMm).toBe(0);
+    expect(r.after).toBe(-30000);
+    expect(sp.remainingLengthMm).toBe(-30000);
   });
 
   it("印刷中スプールは触らない（skip）", () => {
@@ -860,5 +925,345 @@ describe("ADR-0005 P6 runoutGateHeld（2信号ゲート）", () => {
     expect(runoutGateHeld({ runout: true })).toBe(false);
     expect(runoutGateHeld(null)).toBe(false);
     expect(runoutGateHeld(undefined)).toBe(false);
+  });
+});
+
+// =====================================================================
+// boundaryStatus：境界不明区間は遡及減算しない（レビュー P0-1）
+// =====================================================================
+describe("boundaryStatus — 境界不明区間は遡及減算しない(P0-1)", () => {
+  beforeEach(reset);
+
+  it("idle+sinceJobId=0 の種付けは unknown 区間で、後から届く全履歴を減算しない", () => {
+    // 復元直後: 装着(idle, 残量270000), 履歴は空（オフライン完了分はまだ無い）
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 270000 });
+    mockMonitorData.hostSpoolMap = { h: "S" };
+    setHistory("h", []);
+    initLedgerAnchors({ nowMs: 1000 });
+    const ev = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "S");
+    expect(ev.boundaryStatus).toBe("unknown");
+    // 後から機器の全履歴（過去消費）が届く
+    setHistory("h", [job(1001, 15000), job(1002, 20000)]);
+    const d = deriveSpoolRemaining("S");
+    // unknown → 減算しない（アンカー270000維持）。二重減算(235000)にならない
+    expect(d.remainingMm).toBe(270000);
+    expect(d.verified).toBe(false);
+  });
+
+  it("printing 種付け(anchor=currentJobStartLength)は known 区間で以後の完了ジョブを減算する", () => {
+    // A印刷中(復元でcurrentPrintID/開始残量が戻った状態), 履歴は空
+    addSpool({
+      id: "S", totalLengthMm: 330000, remainingLengthMm: 300000,
+      currentPrintID: "1001", currentJobStartLength: 300000
+    });
+    mockMonitorData.hostSpoolMap = { h: "S" };
+    setHistory("h", []);
+    initLedgerAnchors({ nowMs: 1000 });
+    const ev = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "S");
+    expect(ev.boundaryStatus).toBe("known");
+    // A,B がオフライン完了して履歴に届く
+    setHistory("h", [job(1001, 10000), job(1002, 20000)]);
+    const d = deriveSpoolRemaining("S");
+    expect(d.remainingMm).toBe(270000); // 300000 - (10000+20000)
+  });
+
+  it("idle+sinceJobId>0 は known 区間で装着後の完了ジョブのみ減算する", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 290000 });
+    mockMonitorData.hostSpoolMap = { h: "S" };
+    setHistory("h", [job(1000, 10000)]); // 既に完了ジョブ → sinceJobId=1000
+    initLedgerAnchors({ nowMs: 1000 });
+    const ev = mockMonitorData.mountHistory.find(e => e.type === "mount" && e.spoolId === "S");
+    expect(ev.boundaryStatus).toBe("known");
+    setHistory("h", [job(1000, 10000), job(1001, 5000)]);
+    const d = deriveSpoolRemaining("S");
+    expect(d.remainingMm).toBe(285000); // 1001(>1000)のみ: 290000-5000
+  });
+});
+
+// =====================================================================
+// レビュー変更要求(第2弾): boundaryStatus 移行 / excludeJobId / open区間
+// =====================================================================
+describe("旧mount移行・excludeJobId・getOpenMountInterval(レビュー第2弾)", () => {
+  beforeEach(reset);
+
+  it("P0-2: 旧mountイベント(boundaryStatus無し, sinceJobId=0)は unknown 扱いで遡及減算しない", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 270000 });
+    // 旧バージョンが作った危険な bootstrap アンカー（boundaryStatus フィールドが存在しない）
+    mockMonitorData.mountHistory = [
+      { evId: "mount_S_1", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 270000, sinceJobId: 0 }
+    ];
+    setHistory("h", [job(1001, 15000), job(1002, 20000)]);
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.boundaryStatus).toBe("unknown");
+    const d = deriveSpoolRemaining("S");
+    expect(d.remainingMm).toBe(270000);   // 全履歴の二重減算(=235000)にならない
+    expect(d.verified).toBe(false);
+  });
+
+  it("P0-2: 旧mountイベントでも sinceJobId>0 なら known（装着後の完了ジョブを減算）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 290000 });
+    mockMonitorData.mountHistory = [
+      { evId: "mount_S_1", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 290000, sinceJobId: 1000 }
+    ];
+    setHistory("h", [job(1000, 10000), job(1001, 5000)]);
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.boundaryStatus).toBe("known");
+    expect(deriveSpoolRemaining("S").remainingMm).toBe(285000); // 1001(>1000)のみ
+  });
+
+  it("P0-5: excludeJobId 指定で進行中ジョブ(履歴に混入)を減算から除外する", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    // C(1003) が finishTime 無しでも materialUsedMm>0 で履歴に存在（K1の途中使用量）
+    setHistory("h", [job(1001, 10000), job(1002, 20000), job(1003, 5000)]);
+    expect(deriveSpoolRemaining("S").remainingMm).toBe(265000);                       // A+B+C 全減算
+    expect(deriveSpoolRemaining("S", { excludeJobId: 1003 }).remainingMm).toBe(270000); // C除外=A+Bのみ
+  });
+
+  it("getOpenMountInterval は最新オープン区間を返し、閉じた区間は返さない", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 100000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 200000, sinceJobId: 10, ts: 1, boundaryStatus: "known" });
+    appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 20, ts: 2 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 100000, sinceJobId: 20, ts: 3, boundaryStatus: "known" });
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.sinceJobId).toBe(20);   // 最新オープン
+    expect(iv.untilJobId).toBeNull();
+  });
+});
+
+// =====================================================================
+// Q1: mount-event モデル再設計（reanchor/supersede/targetIntervalId/open不変条件）
+// =====================================================================
+describe("mount-event モデル再設計(レビュー第3弾 Q1)", () => {
+  beforeEach(reset);
+
+  it("Q1/P0-1: unknown→known reanchor 後に unmount しても旧unknownが復活しない(open=0)", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "unknown" });
+    const iv = getOpenMountInterval("S", "h");
+    expect(iv.boundaryStatus).toBe("unknown");
+    // 完了で known 再アンカー（新mountを増やさず対象区間を更新）
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: iv.intervalId, anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known", sourceJobId: 1005, ts: 2 });
+    const st1 = getMountIntervalStatus("S", "h");
+    expect(st1.status).toBe("ok");                       // open は依然1件
+    expect(st1.openInterval.boundaryStatus).toBe("known");
+    expect(st1.openInterval.sinceJobId).toBe(1005);
+    expect(getSpoolIntervals("S").filter(x => x.untilJobId == null)).toHaveLength(1);
+    // 取り外し（対象区間を明示クローズ）
+    appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 1005, ts: 3, targetIntervalId: iv.intervalId });
+    const st2 = getMountIntervalStatus("S", "h");
+    expect(st2.status).toBe("none");                     // open=0（旧unknownは復活しない＝P0-1根治）
+  });
+
+  it("Q1/P0-6: 複数openは ambiguous でderiveを停止・getOpenMountIntervalはnull", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    // ★ RR-5: API は2重 open を拒否するため、旧データ/外部import 相当の2件目は直接注入する。
+    mockMonitorData.mountHistory.push({
+      evId: "m2", opId: "m2", intervalId: "m2", seq: 999, ts: 2, type: "mount", host: "h", spoolId: "S",
+      anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known"
+    });
+    const st = getMountIntervalStatus("S", "h");
+    expect(st.status).toBe("ambiguous");
+    expect(getOpenMountInterval("S", "h")).toBeNull();   // 曖昧フォールバックしない
+    const d = deriveSpoolRemaining("S");
+    expect(d.mode).toBe("halt-ambiguous");
+    expect(d.remainingMm).toBe(250000);                  // 現在値維持（誤った区間で減算しない）
+    expect(d.verified).toBe(false);
+  });
+
+  it("Q1/P0-6: open 0件(none)では getOpenMountInterval は null", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 100, ts: 2 });
+    expect(getMountIntervalStatus("S", "h").status).toBe("none");
+    expect(getOpenMountInterval("S", "h")).toBeNull();
+  });
+
+  it("RR-5: appendMountEvent は既に open がある spool への2件目を拒否（open最大1保証）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    const r = appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 1, ts: 2 });
+    expect(r).toBeNull();
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "mount" && e.spoolId === "S")).toHaveLength(1);
+    // force:true は明示修復用エスケープ（注意して使う）
+    const f = appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 1, sinceJobId: 2, ts: 3, force: true });
+    expect(f).not.toBeNull();
+  });
+
+  it("RR-5: appendUnmountEvent は対象未指定を唯一openへ解決し、open が無ければ拒否", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    // open が無い状態での unmount(null) は拒否
+    expect(appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 5, ts: 1 })).toBeNull();
+    // mount 後は null → 唯一 open へ解決してクローズ
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 2 });
+    const u = appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 5, ts: 3 });
+    expect(u).not.toBeNull();
+    expect(u.targetIntervalId).toBe(getSpoolIntervals("S")[0].intervalId);
+    expect(getMountIntervalStatus("S", "h").status).toBe("none"); // クローズ済み
+  });
+
+  it("RR-5: appendUnmountEvent は存在しない/クローズ済み対象を拒否", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    expect(appendUnmountEvent({ host: "h", spoolId: "S", untilJobId: 5, targetIntervalId: "nope", ts: 2 })).toBeNull();
+  });
+
+  it("RR-5: appendReanchorEvent は targetIntervalId 未指定を拒否", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    expect(appendReanchorEvent({ host: "h", spoolId: "S", anchorRemainingMm: 1, sinceJobId: 1, sourceJobId: 1, ts: 2 })).toBeNull();
+  });
+
+  it("P0.5(レビュー2): survivingIntervalId は targetIntervalIds に含まれても無効化されず derive が安定", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    // 破損状態（2 open）を直接注入
+    mockMonitorData.mountHistory.push(
+      { evId: "a", opId: "a", intervalId: "a", seq: 1, ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "known" },
+      { evId: "b", opId: "b", intervalId: "b", seq: 2, ts: 2, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known" }
+    );
+    // survivor(b) を対象群にも含めて supersede（呼び出し側が survivor を除外し忘れても保護される）
+    appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a", "b"], survivingIntervalId: "b", ts: 3 });
+    const st1 = getMountIntervalStatus("S", "h");
+    expect(st1.status).toBe("ok");
+    expect(st1.openInterval.intervalId).toBe("b");   // survivor は生き残る
+    // derive を何度やり直しても survivor が変わらない（安定）
+    const s1 = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    const s2 = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    expect(s1).toBe("b");
+    expect(s2).toBe("b");
+  });
+
+  it("#410-2: appendSupersedeEvent は不正な survivor を拒否（実在しない/クローズ済み）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    const iv = getSpoolIntervals("S")[0].intervalId;
+    // survivor が実在しない
+    expect(appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: [iv], survivingIntervalId: "ghost", ts: 2 })).toBeNull();
+    // supersede が追記されていない
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "supersede")).toHaveLength(0);
+  });
+
+  it("#410-2: 修復後 open が1件にならない supersede を拒否（未対象openが残る）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    // 3 open を直接注入（破損状態）
+    mockMonitorData.mountHistory.push(
+      { evId: "a", opId: "a", intervalId: "a", seq: 1, ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "known" },
+      { evId: "b", opId: "b", intervalId: "b", seq: 2, ts: 2, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 5, boundaryStatus: "known" },
+      { evId: "c", opId: "c", intervalId: "c", seq: 3, ts: 3, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 250000, sinceJobId: 9, boundaryStatus: "known" }
+    );
+    // a のみ対象・survivor=b → c が未対象 open のまま残る → 拒否
+    expect(appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a"], survivingIntervalId: "b", ts: 4 })).toBeNull();
+    // a,c 対象・survivor=b → 修復後 open は b のみ → 成功
+    const ok = appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a", "c"], survivingIntervalId: "b", ts: 5 });
+    expect(ok).not.toBeNull();
+    expect(getMountIntervalStatus("S", "h").openInterval.intervalId).toBe("b");
+  });
+
+  it("#410-3: mountHistory を serialize/reload しても survivor が同じ（決定論）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    mockMonitorData.mountHistory.push(
+      { evId: "a", opId: "a", intervalId: "a", seq: 1, ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "known" },
+      { evId: "b", opId: "b", intervalId: "b", seq: 2, ts: 2, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 260000, sinceJobId: 5, boundaryStatus: "known" }
+    );
+    appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: ["a", "b"], survivingIntervalId: "b", ts: 3 });
+    const before = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    // serialize→reload 相当（配列順もシャッフルして順序非依存を確認）
+    const reloaded = JSON.parse(JSON.stringify(mockMonitorData.mountHistory)).reverse();
+    mockMonitorData.mountHistory = reloaded;
+    const after = getMountIntervalStatus("S", "h").openInterval.intervalId;
+    expect(after).toBe(before);
+    expect(after).toBe("b");
+  });
+
+  it("#410-3: 同一seq・同一tsでも evId tie-break で順序決定的", () => {
+    addSpool({ id: "S", totalLengthMm: 100000, remainingLengthMm: 100000 });
+    // 同一 seq・同一 ts の2イベント（配列順を変えても projection 結果が同じ）
+    const ev1 = { evId: "z-mount", opId: "z", intervalId: "z", seq: 5, ts: 100, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 100000, sinceJobId: 0, boundaryStatus: "known" };
+    const ev2 = { evId: "a-unmount", opId: "a", seq: 5, ts: 100, type: "unmount", host: "h", spoolId: "S", untilJobId: 3, targetIntervalId: "z" };
+    mockMonitorData.mountHistory = [ev1, ev2];
+    const s1 = getMountIntervalStatus("S", "h").status;
+    mockMonitorData.mountHistory = [ev2, ev1]; // 配列順反転
+    const s2 = getMountIntervalStatus("S", "h").status;
+    expect(s1).toBe(s2); // 決定論（配列順に依存しない）
+  });
+
+  it("P0-4: appendReanchorEvent は存在しない対象への追記を拒否する（corrupt を作らない）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    const r = appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known", sourceJobId: 1, ts: 2 });
+    expect(r).toBeNull(); // 追記されない
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(0);
+    // 正常な mount のみ残り projection は ok のまま（corrupt にしない）
+    expect(getMountIntervalStatus("S", "h").status).toBe("ok");
+  });
+
+  it("#410-9: quarantineInvalidMountEvents は参照不整合を隔離し projection を ok に戻す", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    // import 相当で不正参照 reanchor を直接注入
+    mockMonitorData.mountHistory.push({
+      evId: "bad", opId: "bad", seq: 99, ts: 2, type: "reanchor", host: "h", spoolId: "S",
+      targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known"
+    });
+    expect(getMountIntervalStatus("S", "h").status).toBe("corrupt"); // 隔離前は corrupt
+    const n = quarantineInvalidMountEvents();
+    expect(n).toBe(1);
+    // 不正イベントは隔離され元データは失われない
+    expect(mockMonitorData.mountHistoryRejectedEvents).toHaveLength(1);
+    expect(mockMonitorData.mountHistoryRejectedEvents[0].reason).toBe("reanchor-invalid-reference");
+    // 隔離後は正常な mount のみ残り ok
+    expect(getMountIntervalStatus("S", "h").status).toBe("ok");
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(0);
+  });
+
+  it("#410-9/P0-2: mountHistoryRejectedEvents は上限1000で rotation（古い順に溢れる）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1 });
+    // 既に上限まで隔離済みを模す
+    mockMonitorData.mountHistoryRejectedEvents = Array.from({ length: 1000 }, (_, i) => ({ event: { evId: `old${i}` }, reason: "x" }));
+    // 新たな不正参照を1件隔離 → 溢れ1件を古い順に捨て、上限維持
+    mockMonitorData.mountHistory.push({ evId: "bad", opId: "bad", seq: 9, ts: 2, type: "reanchor", host: "h", spoolId: "S", targetIntervalId: "nope", anchorRemainingMm: 1, sinceJobId: 1 });
+    quarantineInvalidMountEvents();
+    expect(mockMonitorData.mountHistoryRejectedEvents).toHaveLength(1000);
+    expect(mockMonitorData.mountHistoryRejectedEvents[0].event.evId).toBe("old1"); // old0 が溢れた
+    expect(mockMonitorData.mountHistoryRejectedEvents[999].reason).toBe("reanchor-invalid-reference");
+  });
+
+  it("Q1: import 済み invalid-reference reanchor（API 迂回）は corrupt で derive を停止", () => {
+    // API はもう invalid を作らないが、旧データ/外部importで混入した不整合は projection が検出する。
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 250000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "known" });
+    mockMonitorData.mountHistory.push({
+      evId: "bad", opId: "bad", seq: 99, ts: 2, type: "reanchor", host: "h", spoolId: "S",
+      targetIntervalId: "does-not-exist", anchorRemainingMm: 1, sinceJobId: 1, boundaryStatus: "known"
+    });
+    const st = getMountIntervalStatus("S", "h");
+    expect(st.status).toBe("corrupt");
+    expect(deriveSpoolRemaining("S").mode).toBe("halt-corrupt");
+  });
+
+  it("Q1: supersede は対象区間を無効化し surviving を残す", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 260000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "unknown" });
+    // ★ RR-5: 2件目 open は API が拒否するため、破損状態を再現するため直接注入する。
+    mockMonitorData.mountHistory.push({
+      evId: "m2", opId: "m2", intervalId: "m2", seq: 999, ts: 2, type: "mount", host: "h", spoolId: "S",
+      anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known"
+    });
+    const old = getSpoolIntervals("S")[0];
+    appendSupersedeEvent({ host: "h", spoolId: "S", targetIntervalIds: [old.intervalId], survivingIntervalId: null, ts: 3 });
+    const st = getMountIntervalStatus("S", "h");
+    expect(st.status).toBe("ok");                        // 残り1 open
+    expect(st.openInterval.sinceJobId).toBe(1005);
+  });
+
+  it("Q1: reanchor は冪等（同一区間×同一由来ジョブは1件に畳む）", () => {
+    addSpool({ id: "S", totalLengthMm: 330000, remainingLengthMm: 300000 });
+    appendMountEvent({ host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, ts: 1, boundaryStatus: "unknown" });
+    const iv = getOpenMountInterval("S", "h");
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: iv.intervalId, anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known", sourceJobId: 1005, ts: 2 });
+    appendReanchorEvent({ host: "h", spoolId: "S", targetIntervalId: iv.intervalId, anchorRemainingMm: 260000, sinceJobId: 1005, boundaryStatus: "known", sourceJobId: 1005, ts: 3 });
+    expect(mockMonitorData.mountHistory.filter(e => e.type === "reanchor")).toHaveLength(1);
   });
 });

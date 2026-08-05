@@ -7,6 +7,7 @@ This document introduces the filament management features in 3dpmon that help yo
 - Each spool is assigned a serial number displayed as **#NNN** for quick identification.
 - Specify the spool name, total length and remaining length. Manufacturer and material information can also be stored.
 - A 3D preview appears on the dashboard and the remaining amount is updated automatically after each job.
+- When pending inferred candidates exist, the normal filament management UI separates **confirmed remaining**, **projected remaining**, and **pending inferred usage**.
 
 ## Global vs Per-Host Data
 
@@ -31,6 +32,7 @@ In a multi-printer setup, spool operations are routed to the correct printer:
 - Mounting or unmounting a spool targets the specific printer associated with the panel.
 - The `hostSpoolMap` maps each hostname to its currently mounted spool ID.
 - Spool remaining length is updated based on consumption data from the correct printer.
+- Projected remaining may be used for display and forecasting, but irreversible operations such as inventory consumption, runout decisions, and discarding spools use confirmed remaining only.
 
 ## Tips
 - Modify `dashboard_spool.js` if you want to maintain a custom spool database.

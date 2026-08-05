@@ -40,18 +40,24 @@ import { LEVELS }                       from "./dashboard_constants.js";
 /* ------------------------------------------------------------------
  * 固定アラートマネージャ（画面上部75%不透明）
  * ------------------------------------------------------------------ */
-const _alertContainer = document.createElement("div");
-_alertContainer.className = "notification-container";
-Object.assign(_alertContainer.style, {
-  position:      "fixed",
-  top:           "0",
-  left:          "0",
-  width:         "100%",
-  zIndex:        "4050",
-  opacity:       "0.75",
-  pointerEvents: "none"
-});
-document.body.appendChild(_alertContainer);
+// ★ Node/テスト環境（document 不在）ではコンテナ生成をスキップする。
+//   showAlert は実行時に .notification-container を都度 querySelector し、
+//   無ければ警告して no-op するため、module ロード時の DOM 生成は
+//   ブラウザ/Electron でのみ行えばよい（実挙動は不変）。
+if (typeof document !== "undefined") {
+  const _alertContainer = document.createElement("div");
+  _alertContainer.className = "notification-container";
+  Object.assign(_alertContainer.style, {
+    position:      "fixed",
+    top:           "0",
+    left:          "0",
+    width:         "100%",
+    zIndex:        "4050",
+    opacity:       "0.75",
+    pointerEvents: "none"
+  });
+  document.body.appendChild(_alertContainer);
+}
 
 /**
  * レベル名の正規化

@@ -303,10 +303,17 @@ export function addPanel(typeId, hostname, posOverride = null) {
   const tagText = (showTag && hostname !== "shared")
     ? (hostConf.label || hostname) : "";
 
+  /* ★ Phase5(U2): 印刷履歴パネルにのみ「未確認 N」バッジ枠を用意する（既定は非表示）。
+     件数は renderHistoryTable→updateAttributionBadge が後から埋める。 */
+  const attrBadgeHtml = (typeId === "history")
+    ? `<span class="panel-attr-badge" hidden title="帰属未確認のフィラメント消費があります（印刷履歴を確認してください）"></span>`
+    : "";
+
   header.innerHTML = `
     <span class="panel-title">${typeDef.label}</span>
     ${cameraToggleHtml}
     <span class="panel-host-tag">${tagText}</span>
+    ${attrBadgeHtml}
     <button class="panel-lock-btn" title="このパネルを固定/解除">📌</button>
     <button class="panel-close-btn" title="パネルを閉じる">×</button>
   `;

@@ -45,6 +45,7 @@ import {
   setStoredDataForHost
 } from "./dashboard_data.js";
 import { connectAllSavedTargets } from "./dashboard_connection.js";
+import { resolvedLocalTimeZone, normalizeTimeZone } from "./dashboard_time.js";
 import { addSpoolFromPreset, getCurrentSpool, getCurrentSpoolId, setCurrentSpoolId } from "./dashboard_spool.js";
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
@@ -88,9 +89,34 @@ export async function initializeDashboard() {
   setStorageNamespace(_storageNs);
   setPanelLayoutNamespace(_storageNs);
 
+  // ★ 監査 P0-1(第1報): リレー子フラグをストレージ復元より前に確定する。
+  //   従来はこのフラグを initClientSync() 後（＝restoreUnifiedStorage の後）に立てていたため、
+  //   復元時点ではまだ false で、子でもローカルの台帳再構築(initLedgerAnchors)・フィラメント
+  //   権威マージ・印刷再開/aggregator 永続化が走り、親スナップショット受信前に独自状態が
+  //   成立していた（＝残量が親と乖離し、再起動でも直らない主因の一つ）。
+  //   名前空間判定と同じ detectRelayMode 由来なので、ここで確定して以後の復元/保存を分岐させる。
+  if (_storageNs === "relay") {
+    window._3dpmonRelayChild = true;
+  }
+
   // (2) ストレージ復元／マイグレーション
   await initStorage();            // IndexedDB 初期化（localStorage からの自動マイグレーション含む）
   restoreUnifiedStorage();
+
+  // ★ レビュー(時計衛生 P1/P2): 親/standalone は業務タイムゾーンを起動時に「具体的な IANA 名」へ確定する。
+  //   null のままだと親子が各自の resolvedLocalTimeZone() へ分岐し、同じ親権威設定から異なる集計が出る。
+  //   子(relay)は親からミラーするのでここで確定しない。legacyHistoryTimeZone は旧履歴移行の固定基準
+  //   （一度確定したら変更しない）。無効値は正規化して安全化する。
+  if (_storageNs !== "relay") {
+    const as = monitorData.appSettings;
+    const normBiz = normalizeTimeZone(as.businessTimeZone);
+    if (!normBiz) { as.businessTimeZone = resolvedLocalTimeZone(); }
+    else if (normBiz !== as.businessTimeZone) { as.businessTimeZone = normBiz; }
+    if (!normalizeTimeZone(as.legacyHistoryTimeZone)) {
+      as.legacyHistoryTimeZone = as.businessTimeZone;
+    }
+    try { saveUnifiedStorage(); } catch { /* noop */ }
+  }
   // ★ v2.2.0: cleanupLegacy は削除済み。v2.1.017 で最終掃除完了。
   // 読み込んだストレージ内容を通知マネージャへ反映
   notificationManager.loadSettings();
@@ -335,10 +361,17 @@ function autoSaveAll() {
 
   try {
     /* 全接続ホストの印刷再開データと aggregator 状態を保存 */
-    for (const host of Object.keys(monitorData.machines)) {
-      if (host === PLACEHOLDER_HOSTNAME) continue;
-      persistPrintResume(host);
-      persistAggregatorState(host);
+    // ★ 監査 P0-2(第1報): リレー子はプリンタ直結せず印刷再開/aggregator の権威を持たない。
+    //   さらに pd_*/aggr_* キーは名前空間非対応で、同一ブラウザの standalone と衝突する
+    //   （relay 名前空間へ分離されるのは統一ストレージ blob のみ）。よってリレー子では
+    //   これらを永続化しない。統一ストレージ（名前空間分離済み・親ミラーのキャッシュ）は保存する。
+    const _isChild = typeof window !== "undefined" && window._3dpmonRelayChild === true;
+    if (!_isChild) {
+      for (const host of Object.keys(monitorData.machines)) {
+        if (host === PLACEHOLDER_HOSTNAME) continue;
+        persistPrintResume(host);
+        persistAggregatorState(host);
+      }
     }
     saveUnifiedStorage(true);   // 即時書き込み（スロットリングバイパス）
   } catch (e) {

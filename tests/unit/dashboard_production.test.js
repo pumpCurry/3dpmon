@@ -123,12 +123,21 @@ describe("buildHostUtilization", () => {
 });
 
 describe("buildDailyProductionReport", () => {
+  // ★ レビュー(時計衛生): 実時計依存を排除する。システム時刻を固定し、レポートへ nowMs/timeZone を注入する。
+  //   （旧テストは「18分前」を today 扱いしていたため 0:00〜0:18 に前日へ跨いで flake していた。）
+  const TZ = "Asia/Tokyo";
+  const FIXED_NOW = Date.parse("2026-07-15T12:00:00+09:00"); // 正午 JST（深夜跨ぎを回避）
   beforeEach(() => {
     mockMonitorData.machines = {};
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(FIXED_NOW));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("7日分の空データを返す", () => {
-    const result = buildDailyProductionReport({ days: 7 });
+    const result = buildDailyProductionReport({ days: 7, nowMs: FIXED_NOW, timeZone: TZ });
     expect(result).toHaveLength(7);
     result.forEach(day => {
       expect(day.printCount).toBe(0);
@@ -137,17 +146,13 @@ describe("buildDailyProductionReport", () => {
   });
 
   it("今日の印刷をカウント", () => {
-    // 18分前開始 / 6分前完了（日付境界問題を回避）
     mockMonitorData.machines["host1"] = {
       printStore: {
         history: [histEntry({ startHoursAgo: 0.3, endHoursAgo: 0.1, ok: true, materialMm: 3000 })]
       }
     };
-    const result = buildDailyProductionReport({ days: 1 });
-    // _localDateKey と同じロジック（ローカルタイムゾーン）
-    const now = new Date();
-    const todayKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-    const today = result.find(d => d.date === todayKey);
+    const result = buildDailyProductionReport({ days: 1, nowMs: FIXED_NOW, timeZone: TZ });
+    const today = result.find(d => d.date === "2026-07-15");
     expect(today).toBeDefined();
     expect(today.printCount).toBe(1);
     expect(today.successCount).toBe(1);
@@ -161,10 +166,67 @@ describe("buildDailyProductionReport", () => {
     mockMonitorData.machines["host2"] = {
       printStore: { history: [histEntry({ startHoursAgo: 0.3, endHoursAgo: 0.1, ok: true })] }
     };
-    const result = buildDailyProductionReport({ days: 1 });
+    const result = buildDailyProductionReport({ days: 1, nowMs: FIXED_NOW, timeZone: TZ });
     const today = result[0];
     expect(today.printCount).toBe(2);
     expect(Object.keys(today.byHost)).toHaveLength(2);
+  });
+
+  it("深夜0:10でも当日として集計される（date-rollover flake回避）", () => {
+    const midnight = Date.parse("2026-07-15T00:10:00+09:00");
+    vi.setSystemTime(new Date(midnight));
+    mockMonitorData.machines["host1"] = {
+      printStore: { history: [{
+        startTimeSec: Math.floor(Date.parse("2026-07-15T00:05:00+09:00") / 1000),
+        printfinish: 1, materialUsedMm: 1000
+      }] }
+    };
+    const result = buildDailyProductionReport({ days: 1, nowMs: midnight, timeZone: TZ });
+    const today = result.find(d => d.date === "2026-07-15");
+    expect(today).toBeDefined();
+    expect(today.printCount).toBe(1);
+  });
+
+  it("IANAゾーン指定で日付キーが決まる（LAでは前日・JSTでは当日）", () => {
+    // JST 2026-07-15 08:00 = LA(PDT) 2026-07-14 16:00
+    const nowJst = Date.parse("2026-07-15T08:00:00+09:00");
+    mockMonitorData.machines["host1"] = {
+      printStore: { history: [{ startTimeSec: Math.floor(nowJst / 1000), printfinish: 1 }] }
+    };
+    const la = buildDailyProductionReport({ days: 2, nowMs: nowJst, timeZone: "America/Los_Angeles" });
+    expect(la.find(d => d.date === "2026-07-14")?.printCount).toBe(1);
+    const jp = buildDailyProductionReport({ days: 2, nowMs: nowJst, timeZone: "Asia/Tokyo" });
+    expect(jp.find(d => d.date === "2026-07-15")?.printCount).toBe(1);
+  });
+
+  it("P0: DST開始日(LA 2026-03-08)を跨いでも過去N日が飛ばず連続する", () => {
+    const nowMs = Date.parse("2026-03-09T12:00:00-07:00"); // PDT
+    const result = buildDailyProductionReport({ days: 5, nowMs, timeZone: "America/Los_Angeles" });
+    expect(result).toHaveLength(5);
+    expect(result.map(d => d.date).sort())
+      .toEqual(["2026-03-05", "2026-03-06", "2026-03-07", "2026-03-08", "2026-03-09"]);
+  });
+
+  it("P0: DST終了日(LA 2026-11-01)を跨いでも連続する", () => {
+    const nowMs = Date.parse("2026-11-02T12:00:00-08:00"); // PST
+    const result = buildDailyProductionReport({ days: 5, nowMs, timeZone: "America/Los_Angeles" });
+    expect(result).toHaveLength(5);
+    expect(result.map(d => d.date).sort())
+      .toEqual(["2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"]);
+  });
+
+  it("timeZone 未指定なら appSettings.businessTimeZone(親権威)を既定に使う", () => {
+    mockMonitorData.appSettings = { businessTimeZone: "America/Los_Angeles" };
+    try {
+      const nowJst = Date.parse("2026-07-15T08:00:00+09:00"); // LA では前日
+      mockMonitorData.machines["h"] = {
+        printStore: { history: [{ startTimeSec: Math.floor(nowJst / 1000), printfinish: 1 }] }
+      };
+      const result = buildDailyProductionReport({ days: 2, nowMs: nowJst }); // timeZone 省略
+      expect(result.find(d => d.date === "2026-07-14")?.printCount).toBe(1);
+    } finally {
+      delete mockMonitorData.appSettings;
+    }
   });
 });
 

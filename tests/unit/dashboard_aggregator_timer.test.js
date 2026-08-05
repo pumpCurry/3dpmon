@@ -36,6 +36,7 @@ vi.mock("../../3dp_lib/dashboard_thermal_guard.js", () => ({
 }));
 vi.mock("../../3dp_lib/dashboard_utils.js", () => ({
   checkUpdatedFields: vi.fn(), formatDuration: vi.fn(() => ""), formatDurationSimple: vi.fn(() => ""),
+  normalizeJobId: vi.fn((v) => (v == null ? null : Number(v) || null)),
 }));
 vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({
   notificationManager: { statusSnapshotEnabled: false, notify: vi.fn() },
@@ -48,13 +49,14 @@ vi.mock("../../3dp_lib/dashboard_filament_change.js", () => ({
 }));
 vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   getCurrentSpool: vi.fn(() => null), reserveFilament: vi.fn(), finalizeFilamentUsage: vi.fn(),
-  autoCorrectCurrentSpool: vi.fn(), addUsageSnapshot: vi.fn(), beginExternalPrint: vi.fn(),
+  autoCorrectCurrentSpool: vi.fn(), catchUpOfflineFilamentAttribution: vi.fn(), addUsageSnapshot: vi.fn(), beginExternalPrint: vi.fn(),
   formatFilamentAmount: vi.fn(() => ({ display: "" })), formatSpoolDisplayId: vi.fn(() => ""),
   getSpoolById: vi.fn(() => null), setCurrentSpoolId: vi.fn(), addInferredSpool: vi.fn(),
 }));
 vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
   reconcileSpool: vi.fn(), recordFilamentEvent: vi.fn(), resolveFilamentEvent: vi.fn(),
   getOpenFilamentEvent: vi.fn(() => null), runoutGateHeld: vi.fn(() => false),
+  deriveSpoolRemaining: vi.fn(() => ({ remainingMm: 0, verified: false, mode: "none" })),
 }));
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   getConnectionState: vi.fn(() => "connected"),

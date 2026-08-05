@@ -52,7 +52,7 @@ vi.mock('../../3dp_lib/dashboard_ui_mapping.js', () => ({ PRINT_STATE_CODE: { pr
 vi.mock('../../3dp_lib/dashboard_aggregator.js', () => ({ getCurrentPrintID: vi.fn() }));
 
 const { registerGcodeMetaForHosts, resolveHistoryFinishStatus, _mergeFilamentInfo,
-  parseRawHistoryEntry, jobsToRaw, updateHistoryList } =
+  _applyFilamentToRaw, parseRawHistoryEntry, jobsToRaw, updateHistoryList } =
   await import('../../3dp_lib/dashboard_printmanager.js');
 const _storageMock = await import('../../3dp_lib/dashboard_storage.js');
 const _dataMock = await import('../../3dp_lib/dashboard_data.js');
@@ -462,5 +462,69 @@ describe('_mergeFilamentInfo — spoolId 単位 upsert（ADR-0005 分割保持�
     const r = _mergeFilamentInfo(cur, incoming);
     expect(r.filter(e => e.spoolId === 'A')).toHaveLength(1);
     expect(r.find(e => e.spoolId === 'C').usedMm).toBe(30);
+  });
+});
+
+describe('_applyFilamentToRaw — 履歴フィラメント編集（監査 P0-5: 全置換の是正）', () => {
+  const SP = {
+    id: 'B', serialNo: 7, name: 'NewSpool', colorName: 'Black',
+    filamentColor: '#000', material: 'PETG', printCount: 2, remainingLengthMm: 200000,
+  };
+
+  it('複数リール割当てのうち対象(raw.filamentId)のみ差し替え、他リールと usedMm を保持', () => {
+    const raw = {
+      id: 10,
+      filamentId: 'A',
+      filamentInfo: [
+        { spoolId: 'A', usedMm: 15000, spoolName: 'Old-A' },
+        { spoolId: 'X', usedMm: 25000, spoolName: 'Keep-X' },
+      ],
+    };
+    _applyFilamentToRaw(raw, SP);
+    // 他リール X は無傷
+    const keep = raw.filamentInfo.find(fi => fi.spoolId === 'X');
+    expect(keep).toEqual({ spoolId: 'X', usedMm: 25000, spoolName: 'Keep-X' });
+    // 対象 A → B に差し替え、旧 A の usedMm(15000) を引き継ぐ
+    const swapped = raw.filamentInfo.find(fi => fi.spoolId === 'B');
+    expect(swapped).toBeTruthy();
+    expect(swapped.usedMm).toBe(15000);
+    expect(swapped.material).toBe('PETG');
+    // A は消える（B へ差し替わったため）
+    expect(raw.filamentInfo.find(fi => fi.spoolId === 'A')).toBeUndefined();
+    expect(raw.filamentInfo).toHaveLength(2);
+    // ★ A2: distinct spoolId が2つ（B, X）なので代表 filamentId は null
+    expect(raw.filamentId).toBeNull();
+    expect(raw.filamentType).toBe('PETG');
+  });
+
+  it('単一リール履歴なら代表 filamentId は編集後スプールになる', () => {
+    const raw = { id: 13, filamentId: 'A', filamentInfo: [{ spoolId: 'A', usedMm: 100 }] };
+    _applyFilamentToRaw(raw, SP);
+    expect(raw.filamentInfo).toHaveLength(1);
+    expect(raw.filamentId).toBe('B'); // distinct が1つ → そのID
+  });
+
+  it('filamentInfo 未設定なら新規1件を追加（usedMm なし）', () => {
+    const raw = { id: 11 };
+    _applyFilamentToRaw(raw, SP);
+    expect(raw.filamentInfo).toHaveLength(1);
+    expect(raw.filamentInfo[0].spoolId).toBe('B');
+    expect(raw.filamentInfo[0].usedMm).toBeUndefined();
+    expect(raw.filamentId).toBe('B');
+  });
+
+  it('raw.filamentId 不一致時は先頭を差し替え（他は保持）', () => {
+    const raw = {
+      id: 12,
+      filamentId: 'ZZZ', // filamentInfo に存在しない
+      filamentInfo: [
+        { spoolId: 'P', usedMm: 100, spoolName: 'head' },
+        { spoolId: 'Q', usedMm: 200, spoolName: 'tail' },
+      ],
+    };
+    _applyFilamentToRaw(raw, SP);
+    expect(raw.filamentInfo.find(fi => fi.spoolId === 'B').usedMm).toBe(100); // 先頭の usedMm 継承
+    expect(raw.filamentInfo.find(fi => fi.spoolId === 'Q')).toBeTruthy();     // 末尾保持
+    expect(raw.filamentInfo).toHaveLength(2);
   });
 });

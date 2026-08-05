@@ -58,6 +58,18 @@ export class AudioManager {
     /** @type {HTMLButtonElement|null} 音声トグルボタン */
     this.btnVoice = null;
 
+    // ★ Node/テスト環境（window/document 不在）では DOM 構築をスキップした
+    //    no-op インスタンスとして生成する。これによりオーディオ→通知チェーンを
+    //    import しても module ロード時の window 参照でクラッシュしない
+    //    （純粋ロジックのユニットテストが notification 依存を毎回モックせずに済む）。
+    //    実アプリ（ブラウザ/Electron）では window/document が常に存在するため挙動不変。
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      this.c = true;
+      this.Tm = true;
+      this.Tv = true;
+      return;
+    }
+
     // ★ ブラウザ子クライアントモードではオーディオUI不要
     //    （http:// でアクセスかつ Electron でない = 子クライアント）
     const isElectron = !!(window.electronAPI?.isElectron?.());

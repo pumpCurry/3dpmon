@@ -53,10 +53,15 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   useFilament: vi.fn(),
   getSpoolById: vi.fn(() => null),
   formatFilamentAmount: vi.fn(() => ({ display: "—", g: null })),
+  formatRemainingFilamentAmount: vi.fn(() => ({ display: "—", g: null })),
   formatUsageHtml: vi.fn(() => "—"),
   usageHeaderLabel: vi.fn(() => "使用量"),
   formatSpoolDisplayId: vi.fn(() => ""),
   buildFilamentRecommendations: vi.fn(() => []),
+  getAttributionPresentation: vi.fn(() => ({ state: "known", label: null, reason: null, severity: "none" })),
+  countAttributionIssuesForHost: vi.fn(() => 0),
+  getAttributionIssueIdsForHost: vi.fn(() => new Set()),
+  countUnattributedArchiveForHost: vi.fn(() => 0),
 }));
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   sendCommand: vi.fn(),
@@ -232,6 +237,24 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     expect(span?.className).toBe("result-pending");
     expect(span?.textContent).toBe("…");
     expect(span?.hasAttribute("title"), "通常未確定にはツールチップを付けない").toBe(false);
+  });
+
+  it("(F) 帰属未確認ジョブの行に「未確認」チップが付く（Phase5 U2）", () => {
+    spoolMod.getAttributionPresentation.mockReturnValue(
+      { state: "pending", label: "未確認", reason: "unattributed", severity: "warning" }
+    );
+    renderHistoryTable(makeHistoryRows(1), "http://127.0.0.1", HOST);
+    const chip = table.querySelector("td.col-spool .attr-chip");
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toBe("未確認");
+  });
+
+  it("(F) 確定ジョブの行にはチップが付かない", () => {
+    spoolMod.getAttributionPresentation.mockReturnValue(
+      { state: "known", label: null, reason: null, severity: "none" }
+    );
+    renderHistoryTable(makeHistoryRows(1), "http://127.0.0.1", HOST);
+    expect(table.querySelector("td.col-spool .attr-chip")).toBeNull();
   });
 });
 

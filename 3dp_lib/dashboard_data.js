@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.787 (PR #367)
+* @version 1.390.1279 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -182,7 +182,8 @@ export function ensureMachineData(host) {
  *     autoConnect: boolean,
  *     wsDest: string,
  *     cameraToggle: boolean,
- *     notificationSettings: Record<string, any>
+ *     notificationSettings: Record<string, any>,
+ *     negativeRemainingDisplayMode: string
  *   },
  *   machines: Record<string, MachineData>,
  *   filamentSpools: Array<Object>,
@@ -213,6 +214,13 @@ export const monitorData = {
     httpPort: 80,         // HTTP ポート（デフォルト。印刷履歴・ファイル取得用）
     relayPromotePin: "",  // リレー操作モード昇格PIN（空=確認のみ）。親でのみ設定・参照可
     filamentUnit: "m",    // 使用量表示単位 "m" | "mm"（印刷履歴・ファイル一覧共通トグル）
+    negativeRemainingDisplayMode: "show-negative", // 負残量の表示方針 "show-negative" | "clamp-zero"。旧値 "show"/"signed" は読取互換
+    // ★ レビュー(時計衛生 P1): 日次/月次集計の業務タイムゾーン（IANA）。親権威の永続設定で、
+    //   リレーで子へミラーする。親起動時に未設定なら解決済みローカルへ確定・保存する。
+    businessTimeZone: null,
+    // ★ レビュー(時計衛生 P2 item5): offset なし旧履歴を epoch へ移行する際の固定基準ゾーン。
+    //   一度確定したら変更しない（businessTimeZone を後から変えても旧文字列を再解釈させないため）。
+    legacyHistoryTimeZone: null,
     notificationSettings: {}
   },
   machines: {
@@ -236,6 +244,14 @@ export const monitorData = {
   /** お気に入りプリセットID一覧 @type {Array<string>} */
   favoritePresets: [],
   usageHistory: [],
+  /**
+   * usageHistory の非追記的変更（一括インポート等）を示す改訂番号。
+   * ★ レビュー指摘#4: リレーの usageHistory 変更検出は「件数＋末尾」の O(1) 署名だが、
+   *   同件数・同末尾で中間レコードだけが変わる一括インポートを検出できない。import 完了時に
+   *   本 rev を加算し、署名へ含めることで子への伝播を保証する。
+   * @type {number}
+   */
+  usageHistoryRev: 0,
   filamentInventory: [],
   /**
    * フィラメント装着履歴（追記専用イベントログ。ADR-0004）。
@@ -246,6 +262,90 @@ export const monitorData = {
    * @type {Array<Object>}
    */
   mountHistory: [],
+  /**
+   * mountHistory の親権威・単調増加 seq の高水位番号（Q1/Q3）。
+   * appendMountEvent 等が採番するたびに更新される。子はミラーのみ。
+   * @type {number}
+   */
+  mountHistorySeq: 0,
+  /**
+   * ★ #410-9: import/restore 時に参照不整合と判定された mount イベントの隔離領域。
+   * 有効な projection へは適用せず（corrupt 化を防ぐ）、元データは失わない。
+   * 各要素: { event, reason }
+   * @type {Array<Object>}
+   */
+  mountHistoryRejectedEvents: [],
+  /**
+   * ★ #411-O1(Option4): オフライン推定帰属の前段となる「観測 watermark」。
+   * アプリ稼働中に per-host で「見えていた状態」を記録し、再起動後に
+   * (現在の完了履歴 − 前回観測済み集合) でオフライン新規ジョブを特定する材料にする。
+   * 本フィールドは read-only 運用の追加専用で、安全基盤（completionObservationId/
+   * pendingUnattributedUsage/mountHistory/usedLengthLog 等）には一切影響しない。
+   * host -> { observedAtEpochMs, mountedSpoolId, mountIntervalId, printerIdentity,
+   *           seenCompletedJobIds:Array<number>, historyCount }
+   * @type {Object.<string, Object>}
+   */
+  hostObservationWatermark: {},
+  /**
+   * ★ #411-O1: 現セッションの最新観測（baseline とは別スロット）。
+   * recordHostObservation が更新し、オフライン窓評価まで baseline を上書きしない
+   * （起動直後に停止前基準を消さないため）。
+   * @type {Object.<string, Object>}
+   */
+  hostObservationCurrent: {},
+  /**
+   * ★ #412-O4: オフライン継続推定 candidate の親権威ストア。
+   * O2/O3 で得た分類・推定 debit を、baseline commit 前に耐久保存するための領域。
+   * 削除ではなく status 遷移と events 追記で監査可能にし、子へは分類結果と推定量のみ同期する。
+   * hash -> { candidateHash, windowId, candidateSpoolId, observationKeys, usedMm, confidence, evidence,
+   *           status, createdAt, updatedAt, resolvedAt, events:Array<Object> }
+   * @type {Object.<string, Object>}
+   */
+  inferredCandidateStore: {},
+  /**
+   * ★ #417/O5D: O5 decision rollback 後の状態を耐久保存できなかった場合の復旧要求。
+   * null なら通常状態。object の場合は新規 Confirm/Reject/Reassign/Undo を fail-closed で停止し、
+   * O6 Recovery Operations で状態確認・再保存・解除を行う。
+   * @type {?Object}
+   */
+  inferredDecisionRecoveryRequired: null,
+  /**
+   * ★ #424/O6D: O6 recovery operation 自体の rollback 状態を耐久保存できなかった場合の復旧要求。
+   * null なら通常状態。object の場合は O5 decision と通常 O6 operation を fail-closed で停止し、
+   * recovery 状態の再保存または operator 確認後の解除だけを許可する。
+   * @type {?Object}
+   */
+  inferredRecoveryOperationRecoveryRequired: null,
+  /**
+   * ★ #420/O6A: recovery / repair 操作の監査 event。
+   * decision recovery flag 解除、ledger repair flag 解除、隔離 mount event の archive などを追記し、
+   * 復旧操作が通常の candidate decision と同様に追跡できるようにする。
+   * @type {Array<Object>}
+   */
+  inferredRecoveryEvents: [],
+  /**
+   * ★ Phase2A: 有効な jobId が無いまま完了した消費の隔離領域。
+   * 電源投入直後などで printStartTime が 0/null の「無効ID」ジョブは
+   * 履歴・usedLengthLog・境界へ確定記録を作らず（過去全履歴の誤減算＝退行を防ぐ）、
+   * 消費量だけを本領域に退避して失わないようにする。実IDが判明した時点で解決する。
+   * 各要素: { host, spoolId, usedMm, startLen, reason, detectedAtEpochMs }
+   * @type {Array<Object>}
+   */
+  pendingUnattributedUsage: [],
+  /**
+   * ★ P0-2: pendingUnattributedUsage の上限超過分を「黙って捨てず」集約保持する
+   * per-host アーカイブ（件数・合計消費・期間）。詳細レコードは失うが総量は失わない。
+   * host -> { count, totalUsedMm, totalEstimatedMm, firstAtEpochMs, lastAtEpochMs }
+   * @type {Object.<string, Object>}
+   */
+  pendingUnattributedUsageArchive: {},
+  /**
+   * ★ RR-2: 台帳(mount区間)が ambiguous/corrupt で、交換時に旧区間を安全にクローズできなかった
+   * ことを per-host に記録する（暗黙クローズせず修復要求を可視化）。
+   * host -> { spoolId, status, detectedAtEpochMs }
+   * @type {Object.<string, Object>}
+   */
+  ledgerRepairRequired: {},
   /**
    * ADR-0005: フィラメント切れ/一時停止イベントの状態文脈（per-host）。
    * キーはホスト名、値は recordFilamentEvent が記録する文脈オブジェクト。
@@ -463,6 +563,3 @@ export function markAllKeysDirty(hostname) {
     dirtySet.add(key);
   }
 }
-
-
-
