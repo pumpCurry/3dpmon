@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.317 (PR #143)
+ * @version 1.390.1279 (PR #426)
  * @since   1.390.198 (PR #89)
- * @lastModified 2025-06-19 22:38:18
+ * @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -132,12 +132,18 @@ export function initStorageUI() {
   const elLogMax = document.getElementById("setting-log-max-lines");
   const elChartWin = document.getElementById("setting-chart-window-min");
   const elLogRaw = document.getElementById("setting-log-received-raw");
+  const elNegativeRemaining = document.getElementById("setting-negative-remaining-display");
 
   /** 入力値を保存値で初期化する（モーダル展開時に呼ぶ） */
   const _syncRetentionInputs = () => {
     if (elLogMax) elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
     if (elChartWin) elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
     if (elLogRaw) elLogRaw.checked = monitorData.appSettings.logReceivedRaw === true;
+    if (elNegativeRemaining) {
+      elNegativeRemaining.value = monitorData.appSettings.negativeRemainingDisplayMode === "clamp-zero"
+        ? "clamp-zero"
+        : "show-negative";
+    }
   };
 
   if (elLogRaw) {
@@ -145,6 +151,20 @@ export function initStorageUI() {
       monitorData.appSettings.logReceivedRaw = elLogRaw.checked === true;
       saveUnifiedStorage(true);
       panelToast(`受信生ログ: ${elLogRaw.checked ? "ON（K1系）" : "OFF"}`);
+    });
+  }
+
+  if (elNegativeRemaining) {
+    elNegativeRemaining.addEventListener("change", () => {
+      monitorData.appSettings.negativeRemainingDisplayMode = elNegativeRemaining.value === "clamp-zero"
+        ? "clamp-zero"
+        : "show-negative";
+      saveUnifiedStorage(true);
+      panelToast(
+        monitorData.appSettings.negativeRemainingDisplayMode === "clamp-zero"
+          ? "負残量表示: 表示だけ0に丸めます"
+          : "負残量表示: マイナス表示を許容します"
+      );
     });
   }
 
@@ -236,7 +256,7 @@ function updateSyncTime(ts) {
   elSync.textContent = new Date(ts).toLocaleString();
 }
 
-/** 使用量ライブ更新開始（2 秒ごと） */
+/** 使用量ライブ更新開始（2秒ごと） */
 function startLiveUsage() {
   if (liveTimer) return;
   liveTimer = setInterval(updateUsage, 2000);
@@ -415,9 +435,9 @@ function doImportHistoryOnly(toast) {
   input.click();
 }
 
-/** バイト数を “X.XX MiB” に変換 */
+/** バイト数を "X.XX MiB" に変換 */
 function formatBytes(b) {
-  return (b / 1024 / 1024).toFixed(2) + " MiB";
+  return (b / 1024 / 1024).toFixed(2) + " MiB";
 }
 
 /**

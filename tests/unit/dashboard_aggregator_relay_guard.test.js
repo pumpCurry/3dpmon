@@ -64,6 +64,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   reserveFilament: vi.fn(),
   finalizeFilamentUsage: vi.fn(),
   autoCorrectCurrentSpool: vi.fn(),
+  catchUpOfflineFilamentAttribution: vi.fn(),
   addUsageSnapshot: vi.fn(),
   beginExternalPrint: vi.fn(),
   formatFilamentAmount: vi.fn(() => ({ display: "" })),
@@ -73,11 +74,15 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   addInferredSpool: vi.fn(),
 }));
 vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  deriveSpoolRemaining: vi.fn(() => ({ remainingMm: 100000, verified: true, mode: "anchor", usedMm: 0 })),
   reconcileSpool: vi.fn(),
   recordFilamentEvent: vi.fn(),
   resolveFilamentEvent: vi.fn(),
   getOpenFilamentEvent: vi.fn(() => null),
   runoutGateHeld: vi.fn(() => false),
+}));
+vi.mock("../../3dp_lib/dashboard_offline_live_shadow.js", () => ({
+  runInferredContinuityShadow: vi.fn(async () => ({ ok: false, reason: "not_continuity_candidate" })),
 }));
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   getConnectionState: vi.fn(() => ({ state: "connected" })),
@@ -87,6 +92,7 @@ const { aggregatorUpdate } = await import("../../3dp_lib/dashboard_aggregator.js
 const { monitorData, ensureMachineData, setStoredDataForHost } =
   await import("../../3dp_lib/dashboard_data.js");
 const spoolMod = await import("../../3dp_lib/dashboard_spool.js");
+const liveShadowMod = await import("../../3dp_lib/dashboard_offline_live_shadow.js");
 
 /**
  * 印刷中ホストを実データ層にセットアップする。
@@ -141,6 +147,7 @@ describe("aggregatorUpdate のリレー子ガード", () => {
     expect(spoolMod.finalizeFilamentUsage).not.toHaveBeenCalled();
     expect(spoolMod.beginExternalPrint).not.toHaveBeenCalled();
     expect(spoolMod.autoCorrectCurrentSpool).not.toHaveBeenCalled();
+    expect(liveShadowMod.runInferredContinuityShadow).not.toHaveBeenCalled();
     // スプールオブジェクトが無変更（親配信値が権威のまま）
     expect(spool.remainingLengthMm).toBe(100000);
     expect(spool.currentJobStartLength).toBeNull();
@@ -158,5 +165,6 @@ describe("aggregatorUpdate のリレー子ガード", () => {
     // スプールを取得し、印刷中ジョブの基点を記録している（ガード誤適用の検出）
     expect(spoolMod.getCurrentSpool).toHaveBeenCalled();
     expect(spool.currentJobStartLength).not.toBeNull();
+    expect(liveShadowMod.runInferredContinuityShadow).toHaveBeenCalled();
   });
 });

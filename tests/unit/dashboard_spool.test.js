@@ -41,11 +41,17 @@ vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
 
 import {
   SPOOL_STATE,
+  SPOOL_BALANCE_STATE,
   MATERIAL_DENSITY,
   getSpoolState,
   getSpoolStateLabel,
+  getSpoolBalanceState,
+  getSpoolBalanceStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
+  formatRemainingFilamentAmount,
+  displayRemainingLengthMm,
+  getNegativeRemainingDisplayMode,
   formatUsageHtml,
   usageHeaderLabel,
   weightFromLength,
@@ -54,8 +60,22 @@ import {
   buildOfflineFilamentInfo,
   shouldLinkOfflineJob,
   finalizeFilamentUsage,
+  catchUpOfflineFilamentAttribution,
+  isAttributionPending,
+  getUnattributedUsageForHost,
+  countUnattributedUsageForHost,
+  getAttributionPresentation,
+  getAttributionIssueIdsForHost,
+  countAttributionIssuesForHost,
+  updateSpool,
+  addSpool,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
+import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
+
+const {
+  buildInferredLedgerReconciliationReport
+} = await import('../../3dp_lib/dashboard_inferred_reconciliation.js');
 
 // =============================================
 // getSpoolState
@@ -76,6 +96,10 @@ describe('getSpoolState', () => {
 
   it('isActive=true → MOUNTED', () => {
     expect(getSpoolState({ isActive: true })).toBe(SPOOL_STATE.MOUNTED);
+  });
+
+  it('負残量でも装着中ライフサイクル状態は MOUNTED のまま保持する', () => {
+    expect(getSpoolState({ isActive: true, remainingLengthMm: -1 })).toBe(SPOOL_STATE.MOUNTED);
   });
 
   it('deleted優先: deleted=true + isActive=true → DISCARDED', () => {
@@ -134,6 +158,22 @@ describe('getSpoolStateLabel', () => {
     expect(getSpoolStateLabel('unknown')).toBe('不明');
     expect(getSpoolStateLabel(null)).toBe('不明');
     expect(getSpoolStateLabel('')).toBe('不明');
+  });
+});
+
+describe('getSpoolBalanceState / getSpoolBalanceStateLabel', () => {
+  it('signed remaining の残量状態をライフサイクルとは別軸で返す', () => {
+    expect(getSpoolBalanceState({ isActive: true, remainingLengthMm: -300 })).toBe(SPOOL_BALANCE_STATE.OVERDRAWN);
+    expect(getSpoolBalanceState({ remainingLengthMm: 0 })).toBe(SPOOL_BALANCE_STATE.ZERO);
+    expect(getSpoolBalanceState({ remainingLengthMm: 1 })).toBe(SPOOL_BALANCE_STATE.POSITIVE);
+    expect(getSpoolBalanceState({ remainingLengthMm: null })).toBe(SPOOL_BALANCE_STATE.UNKNOWN);
+  });
+
+  it('残量状態ラベルを返す', () => {
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.OVERDRAWN)).toBe('超過使用');
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.ZERO)).toBe('残量0');
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.POSITIVE)).toBe('残量あり');
+    expect(getSpoolBalanceStateLabel(SPOOL_BALANCE_STATE.UNKNOWN)).toBe('残量不明');
   });
 });
 
@@ -327,6 +367,152 @@ describe('formatFilamentAmount', () => {
     expect(typeof result.display).toBe('string');
     expect(result.display.length).toBeGreaterThan(0);
   });
+
+  it('負残量は既定でマイナス表示を保持する', () => {
+    monitorData.appSettings = { negativeRemainingDisplayMode: 'show' };
+    const result = formatRemainingFilamentAmount(-2500);
+
+    expect(getNegativeRemainingDisplayMode()).toBe('show-negative');
+    expect(displayRemainingLengthMm(-2500)).toBe(-2500);
+    expect(result.rawMm).toBe(-2500);
+    expect(result.mm).toBe(-2500);
+    expect(result.display).toContain('-2.5m');
+    expect(result.isDisplayClamped).toBe(false);
+  });
+
+  it('負残量の0クロップ設定は表示値だけを丸める', () => {
+    monitorData.appSettings = { negativeRemainingDisplayMode: 'clamp-zero' };
+    const result = formatRemainingFilamentAmount(-2500);
+
+    expect(getNegativeRemainingDisplayMode()).toBe('clamp-zero');
+    expect(displayRemainingLengthMm(-2500)).toBe(0);
+    expect(result.rawMm).toBe(-2500);
+    expect(result.mm).toBe(0);
+    expect(result.display).toContain('0.0m');
+    expect(result.isDisplayClamped).toBe(true);
+  });
+
+  it('負残量表示モードは提案仕様名と旧値を show-negative へ正規化する', () => {
+    expect(getNegativeRemainingDisplayMode({ negativeRemainingDisplay: 'show-negative' })).toBe('show-negative');
+    expect(getNegativeRemainingDisplayMode({ negativeRemainingDisplayMode: 'show' })).toBe('show-negative');
+    expect(getNegativeRemainingDisplayMode({ filamentRemainingDisplayMode: 'signed' })).toBe('show-negative');
+    expect(getNegativeRemainingDisplayMode({ filamentRemainingDisplayMode: 'clamp-zero' })).toBe('clamp-zero');
+  });
+});
+
+describe('updateSpool — signed remaining manual baseline', () => {
+  beforeEach(() => {
+    monitorData.filamentSpools = [];
+    monitorData.usageHistory = [];
+    monitorData.usageHistoryRev = 0;
+    monitorData.hostSpoolMap = {};
+  });
+
+  it('手動残量補正は負値からの復帰も監査し、O7 baseline を補正位置へ更新する', () => {
+    monitorData.filamentSpools.push({
+      id: 'S-manual',
+      serialNo: 'SER-1',
+      hostname: 'k1',
+      remainingLengthMm: -2350,
+      usedLengthLog: [{ jobId: 'before-remount', used: 1000 }],
+    });
+
+    updateSpool('S-manual', {
+      expectedRemainingLengthMm: -2350,
+      remainingLengthMm: 420,
+      remainingAdjustmentReason: 'weighed-spool',
+      remainingAdjustmentActor: 'operator',
+    });
+
+    const spool = monitorData.filamentSpools[0];
+    expect(spool.remainingLengthMm).toBe(420);
+    expect(monitorData.usageHistory).toHaveLength(1);
+    expect(monitorData.usageHistory[0]).toMatchObject({
+      type: 'manual-remaining-adjustment',
+      spoolId: 'S-manual',
+      beforeMm: -2350,
+      afterMm: 420,
+      deltaMm: 2770,
+      reason: 'weighed-spool',
+      actor: 'operator',
+    });
+    expect(monitorData.usageHistoryRev).toBe(1);
+    expect(spool.remainingLedgerBaseline).toMatchObject({
+      remainingLengthMm: 420,
+      usedLengthLogIndex: 1,
+      source: 'manual-remaining-adjustment',
+      eventId: monitorData.usageHistory[0].usageId,
+    });
+  });
+});
+
+describe('addSpool — O7 remaining baseline', () => {
+  beforeEach(() => {
+    monitorData.filamentSpools = [];
+    monitorData.spoolSerialCounter = 0;
+  });
+
+  it('新規スプール作成時に signed 残量照合 baseline を初期化する', () => {
+    const spool = addSpool({
+      name: 'Baseline spool',
+      totalLengthMm: 10000,
+      remainingLengthMm: 10000,
+      usedLengthLog: [],
+    });
+
+    expect(spool.remainingLedgerBaseline).toMatchObject({
+      remainingLengthMm: 10000,
+      usedLengthLogIndex: 0,
+      source: 'spool-created',
+    });
+    expect(Number.isFinite(spool.remainingLedgerBaseline.createdAt)).toBe(true);
+  });
+
+  it('addSpool 作成baseline以降の通常使用量を O7 が ok として照合する', () => {
+    const spool = addSpool({
+      name: 'O7 baseline spool',
+      totalLengthMm: 10000,
+      remainingLengthMm: 10000,
+      usedLengthLog: [],
+    });
+    spool.usedLengthLog.push({ jobId: 'job-1', used: 500 });
+    spool.remainingLengthMm = 9500;
+
+    const report = buildInferredLedgerReconciliationReport({ nowMs: 9000 });
+
+    expect(report.remainingBalanceOkCount).toBe(1);
+    expect(report.remainingBalanceUnverifiableCount).toBe(0);
+    expect(report.remainingBalances[0]).toMatchObject({
+      spoolId: spool.id,
+      baselineRemainingMm: 10000,
+      usedLengthLogStartIndex: 0,
+      netUsedMm: 500,
+      expectedRemainingMm: 9500,
+      remainingLengthMm: 9500,
+      status: 'ok',
+    });
+    expect(report.issues).not.toContainEqual(expect.objectContaining({
+      reason: 'remaining_baseline_boundary_unknown',
+      spoolId: spool.id,
+    }));
+  });
+
+  it('明示済み baseline がある場合は上書きせず保持する', () => {
+    const existingBaseline = {
+      remainingLengthMm: -500,
+      usedLengthLogIndex: 2,
+      createdAt: 111,
+      source: 'imported-baseline',
+    };
+
+    const spool = addSpool({
+      name: 'Imported baseline spool',
+      remainingLengthMm: -500,
+      remainingLedgerBaseline: existingBaseline,
+    });
+
+    expect(spool.remainingLedgerBaseline).toEqual(existingBaseline);
+  });
 });
 
 // =============================================
@@ -480,6 +666,312 @@ describe('finalizeFilamentUsage 多重 finalize ガード', () => {
 });
 
 // =============================================
+// finalizeFilamentUsage: 無効jobId隔離（Phase2A）
+// =============================================
+describe('finalizeFilamentUsage 無効jobId隔離（Phase2A）', () => {
+  beforeEach(() => {
+    monitorData.machines = {
+      h: { printStore: { current: null, history: [] }, historyData: [] }
+    };
+    monitorData.hostSpoolMap = { h: 'sp1' };
+    monitorData.filamentSpools = [{
+      id: 'sp1', serialNo: 1, name: 'PLA', colorName: '黒', filamentColor: '#000',
+      material: 'PLA', totalLengthMm: 100000, remainingLengthMm: 100000,
+      // ★ 電源投入直後の偽完了を模す: アクティブ追跡ジョブ無し（currentPrintID=""）
+      currentPrintID: '', currentJobStartLength: 100000, currentJobExpectedLength: 5000,
+      usedLengthLog: [], printCount: 0, costPerMm: 0
+    }];
+    monitorData.usageHistory = [];
+    monitorData.mountHistory = [];
+    monitorData.pendingUnattributedUsage = [];
+    monitorData.pendingUnattributedUsageArchive = {};
+  });
+
+  it('無効jobId(0)は残量を減算せず消費を隔離し、確定記録を一切作らない', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const sp = monitorData.filamentSpools[0];
+
+    // 消費は隔離領域へ退避（失わない）
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    const q = monitorData.pendingUnattributedUsage[0];
+    expect(q.host).toBe('h');
+    expect(q.spoolId).toBe('sp1');
+    expect(q.usedMm).toBe(5000);
+    expect(q.reason).toBe('invalid-job-id');
+    expect(typeof q.detectedAtEpochMs).toBe('number');
+
+    // ★ 残量は減算しない（権威は printStore.history。未帰属を残量へ入れると reconcile が盛り戻す）
+    expect(sp.remainingLengthMm).toBe(100000);
+    // jobId 由来の確定記録は一切作らない
+    expect(sp.usedLengthLog).toHaveLength(0);
+    expect(sp.lastCompletedPrintID).toBeUndefined();
+    expect(sp.printCount).toBe(0);
+    expect(monitorData.machines.h.historyData).toHaveLength(0);
+    // transient はクリアされる
+    expect(sp.currentJobStartLength).toBeNull();
+    expect(sp.currentJobExpectedLength).toBeNull();
+    expect(sp.currentPrintID).toBe('');
+  });
+
+  it.each([null, '', -5, 'abc', NaN])('無効jobId(%s)も同様に隔離される', (badId) => {
+    finalizeFilamentUsage(5000, badId, 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    expect(sp.usedLengthLog).toHaveLength(0);
+    expect(sp.lastCompletedPrintID).toBeUndefined();
+    expect(sp.remainingLengthMm).toBe(100000);
+  });
+
+  it('無効jobIdでも消費0/NaNなら隔離レコードを作らず（差分なし）transientのみクリア', () => {
+    // exact:true で 0 消費（見積りフォールバック無し）→ 隔離対象外
+    finalizeFilamentUsage(0, 0, 'h', true, { exact: true });
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0);
+    expect(sp.currentJobStartLength).toBeNull();
+    expect(sp.currentPrintID).toBe('');
+  });
+
+  it('有効jobIdは従来どおり記録し隔離しない（対比・退行防止）', () => {
+    // currentPrintID を有効IDに合わせて通常完了させる
+    monitorData.filamentSpools[0].currentPrintID = '1001';
+    finalizeFilamentUsage(5000, '1001', 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0);
+    expect(sp.remainingLengthMm).toBe(95000);   // 100000 - 5000
+    expect(sp.usedLengthLog).toHaveLength(1);
+    expect(sp.lastCompletedPrintID).toBe('1001');
+    expect(sp.printCount).toBe(1);
+  });
+
+  it('P0-3: 有効な進行中ジョブへの無効ID完了通知は無視し、現在ジョブ追跡を維持する', () => {
+    // アクティブジョブ 1001 が進行中に、偽の jobId=0 完了通知が来ても、受信側が低信頼なので
+    // 現在ジョブ追跡を壊さず単に無視する（隔離もしない）。stale クリアは有効ID同士の不一致時のみ。
+    monitorData.filamentSpools[0].currentPrintID = '1001';
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const sp = monitorData.filamentSpools[0];
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(0); // 隔離しない
+    expect(sp.remainingLengthMm).toBe(100000);      // 減算なし
+    expect(sp.currentPrintID).toBe('1001');          // ★ 現在ジョブを維持（クリアしない）
+    expect(sp.currentJobStartLength).toBe(100000);   // 開始基準も維持
+  });
+
+  it('P0-3: 有効ID同士の不一致（別ジョブ完了）では従来どおり stale transient をクリア', () => {
+    monitorData.filamentSpools[0].currentPrintID = '1001';
+    finalizeFilamentUsage(5000, 2002, 'h', true); // 有効な別ID
+    const sp = monitorData.filamentSpools[0];
+    expect(sp.currentPrintID).toBe('');              // 不一致で transient クリア
+  });
+
+  it('RR-1: completionOpId で冪等（同一IDは1件／別IDは同一payloadでも別レコード）', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true, { completionOpId: 'h:completion:1' });
+    // 同一 completionOpId の再送 → 増えない（未確認件数を水増ししない）
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(5000, 0, 'h', true, { completionOpId: 'h:completion:1' });
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    // ★ 別の印刷(別 completionOpId)は「同一 payload」でも別レコード（payload衝突で捨てない）
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(5000, 0, 'h', true, { completionOpId: 'h:completion:2' });
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(2);
+    expect(monitorData.pendingUnattributedUsage[0].completionOpId).toBe('h:completion:1');
+    expect(monitorData.pendingUnattributedUsage[1].completionOpId).toBe('h:completion:2');
+  });
+
+  it('RR-1: completionOpId 無しは短い再送窓のみ抑制（窓外の同一payloadは別登録）', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true); // opId 無し
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    // 直近（窓内）の同一 payload 再送 → 抑制
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(1);
+    // 窓外（detectedAtEpochMs を過去へ）にすると別の正当消費として登録される
+    monitorData.pendingUnattributedUsage[0].detectedAtEpochMs = 1; // 遥か過去
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    expect(monitorData.pendingUnattributedUsage).toHaveLength(2);
+  });
+
+  it('P1-2: 実測は usedMm/confirmed、見積りフォールバックは estimatedUsedMm/estimated に分離', () => {
+    // used=5000 実測
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const meas = monitorData.pendingUnattributedUsage[0];
+    expect(meas.usedSource).toBe('measured');
+    expect(meas.confidence).toBe('confirmed');
+    expect(meas.usedMm).toBe(5000);
+    expect(meas.estimatedUsedMm).toBe(0);
+    // used=0 だが expected=5000 → フォールバック（見積り）
+    monitorData.pendingUnattributedUsage = [];
+    monitorData.filamentSpools[0].currentJobStartLength = 100000;
+    monitorData.filamentSpools[0].currentJobExpectedLength = 5000;
+    monitorData.filamentSpools[0].currentPrintID = '';
+    finalizeFilamentUsage(0, 0, 'h', true);
+    const est = monitorData.pendingUnattributedUsage[0];
+    expect(est.usedSource).toBe('expected-fallback');
+    expect(est.confidence).toBe('estimated');
+    expect(est.usedMm).toBe(0);            // 予定値を実消費にしない
+    expect(est.estimatedUsedMm).toBe(5000);
+  });
+
+  it('P0-2: 上限超過分は黙って捨てず per-host アーカイブへ集約（総量・件数保持）', () => {
+    monitorData.pendingUnattributedUsageArchive = {};
+    for (let i = 1; i <= 210; i++) {
+      monitorData.filamentSpools[0].currentJobStartLength = 100000;
+      monitorData.filamentSpools[0].currentJobExpectedLength = 5000;
+      monitorData.filamentSpools[0].currentPrintID = '';
+      finalizeFilamentUsage(i, 0, 'h', true); // used=i で distinct fingerprint
+    }
+    expect(monitorData.pendingUnattributedUsage.length).toBe(200); // 詳細は最新200
+    const arch = monitorData.pendingUnattributedUsageArchive.h;
+    expect(arch.count).toBe(10);                       // 溢れた古い10件は集約（捨てない）
+    expect(arch.totalUsedMm).toBe(55);                 // used 1..10 の合計
+    expect(countAttributionIssuesForHost('h')).toBe(210); // バッジ=詳細200＋アーカイブ10
+  });
+
+  it('P1-3: 隔離追加で attribution-changed イベントを発火（冪等dupでは発火しない）', () => {
+    const disp = vi.fn();
+    const origWin = globalThis.window;
+    const origCE = globalThis.CustomEvent;
+    globalThis.window = { dispatchEvent: disp };
+    globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+    try {
+      finalizeFilamentUsage(5000, 0, 'h', true);
+      expect(disp).toHaveBeenCalledTimes(1);
+      expect(disp.mock.calls[0][0].type).toBe('3dpmon:attribution-changed');
+      expect(disp.mock.calls[0][0].detail.host).toBe('h');
+      // 同一完了の再送 → 冪等 skip → イベント発火しない
+      monitorData.filamentSpools[0].currentJobStartLength = 100000;
+      monitorData.filamentSpools[0].currentPrintID = '';
+      finalizeFilamentUsage(5000, 0, 'h', true);
+      expect(disp).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.window = origWin;
+      globalThis.CustomEvent = origCE;
+    }
+  });
+
+  it('U4連携: 無効ID隔離→pendingUsageId付与→getAttributionIssueIdsForHostに出現（実コード経路）', () => {
+    finalizeFilamentUsage(5000, 0, 'h', true);
+    const q = monitorData.pendingUnattributedUsage[0];
+    expect(typeof q.pendingUsageId).toBe('string');
+    expect(q.pendingUsageId.length).toBeGreaterThan(0);
+    // 実際の隔離レコードが U1 セレクタの課題ID集合へ安定キーで現れる
+    const ids = getAttributionIssueIdsForHost('h');
+    expect(ids.has(`quarantine:h:${q.pendingUsageId}`)).toBe(true);
+    expect(countAttributionIssuesForHost('h')).toBe(1);
+  });
+});
+
+// =============================================
+// 未帰属消費の可視化 純関数（Phase4）
+// =============================================
+describe('isAttributionPending / getUnattributedUsageForHost（Phase4）', () => {
+  beforeEach(() => {
+    monitorData.pendingUnattributedUsage = [];
+  });
+
+  it('消費あり×未帰属（spoolId/filamentId無し）は pending', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 1 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 0, filamentInfo: [{ colorName: '黒' }] })).toBe(true);
+  });
+
+  it('確定スプール（spoolId）or filamentId があれば pending でない', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 1, filamentInfo: [{ spoolId: 'sp1' }] })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: 1, filamentId: 'sp1' })).toBe(false);
+  });
+
+  it('消費なし（materialUsedMm<=0/欠落）は pending でない', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 0, printfinish: 1 })).toBe(false);
+    expect(isAttributionPending({ id: 1, printfinish: 1 })).toBe(false);
+    expect(isAttributionPending(null)).toBe(false);
+  });
+
+  it('P1-5: 印刷中/未確定（printfinish=null かつ完了証拠なし）は消費ありでも pending でない', () => {
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, printfinish: null })).toBe(false);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000 })).toBe(false); // printfinish 欠落=未確定
+  });
+
+  it('#410-8: 旧保存データ(printfinish欠落だが finishTime/endtime あり)は完了扱いで pending 判定', () => {
+    // printfinish が無くても完了証拠（finishTime/endtime/usagetime）があれば完了→未帰属なら pending
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, finishTime: 1784000000 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, endtime: 1784000000 })).toBe(true);
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, usagetime: 3600 })).toBe(true);
+    // 完了証拠が一切なければ非完了
+    expect(isAttributionPending({ id: 1, materialUsedMm: 5000, finishTime: 0, endtime: 0 })).toBe(false);
+  });
+
+  it('getUnattributedUsageForHost はホストで絞り込み、count が件数を返す', () => {
+    monitorData.pendingUnattributedUsage = [
+      { host: 'h1', usedMm: 100 }, { host: 'h2', usedMm: 200 }, { host: 'h1', usedMm: 300 },
+    ];
+    expect(getUnattributedUsageForHost('h1')).toHaveLength(2);
+    expect(getUnattributedUsageForHost('h2')).toHaveLength(1);
+    expect(countUnattributedUsageForHost('h1')).toBe(2);
+    expect(countUnattributedUsageForHost('h2')).toBe(1);
+    expect(countUnattributedUsageForHost()).toBe(3); // 全体
+  });
+});
+
+// =============================================
+// 帰属表示セレクタ（Phase5 U1）
+// =============================================
+describe('getAttributionPresentation / getAttributionIssueIdsForHost（Phase5 U1）', () => {
+  beforeEach(() => {
+    monitorData.machines = {};
+    monitorData.pendingUnattributedUsage = [];
+  });
+
+  it('pending ジョブは state=pending / label=未確認 / severity=warning', () => {
+    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000, printfinish: 1 });
+    expect(p).toEqual({ state: 'pending', label: '未確認', reason: 'unattributed', severity: 'warning' });
+  });
+
+  it('確定ジョブ（spoolId あり）は state=known / label なし / severity=none', () => {
+    const p = getAttributionPresentation({ id: 1, materialUsedMm: 5000, printfinish: 1, filamentInfo: [{ spoolId: 'sp1' }] });
+    expect(p).toEqual({ state: 'known', label: null, reason: null, severity: 'none' });
+  });
+
+  it('課題ID集合は履歴pendingと隔離消費を安定キーで統合する', () => {
+    monitorData.machines = {
+      h1: { printStore: { history: [
+        { id: 100, materialUsedMm: 5000, printfinish: 1 },      // pending（完了・未帰属）
+        { id: 101, materialUsedMm: 5000, printfinish: 1, filamentInfo: [{ spoolId: 'sp1' }] }, // 確定
+        { id: 102, materialUsedMm: 0, printfinish: 1 },          // 消費なし→対象外
+        { id: 103, materialUsedMm: 5000, printfinish: null },    // 印刷中→対象外（P1-5）
+      ] } },
+    };
+    monitorData.pendingUnattributedUsage = [
+      { pendingUsageId: 'q-abc', host: 'h1', usedMm: 100 },
+      { pendingUsageId: 'q-def', host: 'h2', usedMm: 200 },   // 別ホスト
+    ];
+    const ids = getAttributionIssueIdsForHost('h1');
+    expect(ids).toEqual(new Set(['pending:h1:100', 'quarantine:h1:q-abc']));
+    expect(countAttributionIssuesForHost('h1')).toBe(2);
+    expect(countAttributionIssuesForHost('h2')).toBe(1); // 隔離のみ
+  });
+
+  it('同一集合は安定（差分判定の基盤＝再計算で増減しない）', () => {
+    monitorData.machines = { h1: { printStore: { history: [{ id: 100, materialUsedMm: 5000, printfinish: 1 }] } } };
+    const a = getAttributionIssueIdsForHost('h1');
+    const b = getAttributionIssueIdsForHost('h1');
+    expect([...a].sort()).toEqual([...b].sort());
+  });
+
+  it('pendingUsageId 欠落の旧隔離レコードは detectedAtEpochMs で代替キー化', () => {
+    monitorData.pendingUnattributedUsage = [{ host: 'h1', usedMm: 100, detectedAtEpochMs: 1784000000000 }];
+    const ids = getAttributionIssueIdsForHost('h1');
+    expect(ids.has('quarantine:h1:1784000000000')).toBe(true);
+  });
+
+  it('host 未指定は空集合', () => {
+    expect(getAttributionIssueIdsForHost().size).toBe(0);
+    expect(countAttributionIssuesForHost('')).toBe(0);
+  });
+});
+
+// =============================================
 // SPOOL_STATE 定数の完全性
 // =============================================
 describe('SPOOL_STATE 定数', () => {
@@ -566,5 +1058,175 @@ describe('buildFilamentRecommendations', () => {
     registerPrintManagerAccessor({ getFileList: () => [{ basename: 'a.gcode', usagematerial: 100 }], buildFileInsight: () => null });
     expect(buildFilamentRecommendations(0, 'PLA', 'host1')).toEqual([]);
     expect(buildFilamentRecommendations(-100, 'PLA', 'host1')).toEqual([]);
+  });
+});
+
+// =============================================
+// オフライン完了ジョブの遡及帰属（P0: mid-print 再起動シナリオ）
+// レビュー指摘の catchUpOfflineFilamentAttribution を検証する。
+// シナリオ: S装着 → A開始 → A途中でapp停止 → A/Bオフライン完了 → C途中でapp起動。
+// 期待: A・Bに現在装着スプールSを継続帰属（filamentId=S, spoolId=S, usedMm=各materialUsedMm）、
+//       Cは触らない、再実行で二重帰属しない。
+// =============================================
+describe('catchUpOfflineFilamentAttribution — オフライン完了ジョブの遡及帰属(P0)', () => {
+  const S = {
+    id: 'S', serialNo: 1, name: 'PLA-S', colorName: '白', filamentColor: '#fff',
+    material: 'PLA', printCount: 0, remainingLengthMm: 100000, startPrintID: '0',
+  };
+  let history;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    history = [
+      { id: 1001, printfinish: 1, materialUsedMm: 15000 },            // A: オフライン完了
+      { id: 1002, printfinish: 1, materialUsedMm: 25000, filamentInfo: [] }, // B: オフライン完了
+      { id: 1003, printfinish: 0, materialUsedMm: 0 },                // C: 進行中(現在ジョブ)
+    ];
+    loadHistory.mockReturnValue(history);
+  });
+
+  it('A・Bに継続帰属し、現在ジョブCは除外する', () => {
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    expect(n).toBe(2);
+    const a = history.find(j => j.id === 1001);
+    const b = history.find(j => j.id === 1002);
+    const c = history.find(j => j.id === 1003);
+    expect(a.filamentId).toBe('S');
+    expect(a.filamentInfo[0]).toMatchObject({ spoolId: 'S', usedMm: 15000, isOfflineInferred: true });
+    expect(b.filamentInfo.find(fi => fi.spoolId === 'S').usedMm).toBe(25000);
+    expect(c.filamentId).toBeUndefined();       // 現在ジョブは触らない
+    expect(saveHistory).toHaveBeenCalled();
+  });
+
+  it('冪等: 2回目は対象0で重複エントリを作らない', () => {
+    catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    const lenA = history.find(j => j.id === 1001).filamentInfo.length;
+    const n2 = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    expect(n2).toBe(0);
+    expect(history.find(j => j.id === 1001).filamentInfo.length).toBe(lenA);
+  });
+
+  it('色情報だけの単一filamentInfoは同エントリへ spoolId/usedMm を補完し2行にしない(点4/minor)', () => {
+    history[0].filamentInfo = [{ filamentColor: '#abc' }]; // 色のみ(spoolId無し)1件
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    expect(n).toBeGreaterThanOrEqual(1);
+    const a = history.find(j => j.id === 1001);
+    expect(a.filamentInfo).toHaveLength(1);           // 色行＋スプール行の2行にしない
+    expect(a.filamentInfo[0].spoolId).toBe('S');      // 同エントリへ spoolId 補完
+    expect(a.filamentInfo[0].usedMm).toBe(15000);
+    expect(a.filamentId).toBe('S');
+  });
+
+  it('複数エントリ(色+別spool)の場合は既存を残して末尾へ追加(点5 upsert)', () => {
+    history[0].filamentInfo = [{ filamentColor: '#abc' }, { spoolId: 'X', usedMm: 1 }];
+    // 既に spoolId(X) を持つため shouldLinkOfflineJob=false → 対象外（既存尊重）
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    const a = history.find(j => j.id === 1001);
+    expect(a.filamentInfo.find(fi => fi.spoolId === 'X')).toBeTruthy(); // 既存尊重
+    expect(n).toBe(1); // B のみ帰属
+  });
+
+  it('sinceId(startPrintID)以下は排他的下限で除外(点6 <=のまま)', () => {
+    const S2 = { ...S, startPrintID: '1001' }; // 装着はA完了後
+    catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S2 });
+    expect(history.find(j => j.id === 1001).filamentId).toBeUndefined(); // A(1001<=sinceId)除外
+    expect(history.find(j => j.id === 1002).filamentId).toBe('S');       // B(1002>1001)帰属
+  });
+
+  it('spoolId付き既存帰属のジョブは尊重して上書きしない', () => {
+    history[0].filamentInfo = [{ spoolId: 'OTHER', usedMm: 9999 }];
+    const n = catchUpOfflineFilamentAttribution('h', { liveJobId: 1003, spool: S });
+    // A は既に spoolId 帰属済み → 対象外。B のみ帰属。
+    expect(history.find(j => j.id === 1001).filamentInfo[0].spoolId).toBe('OTHER');
+    expect(history.find(j => j.id === 1002).filamentId).toBe('S');
+    expect(n).toBe(1);
+  });
+});
+
+// =============================================
+// catch-up / finalize と mount区間の結合（レビュー第2弾・実ledger）
+// =============================================
+describe("catchUp/finalize と mount区間の結合(レビュー第2弾)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monitorData.machines = {};
+    monitorData.filamentSpools = [];
+    monitorData.hostSpoolMap = {};
+    monitorData.mountHistory = [];
+    monitorData.usageHistory = [];
+  });
+
+  it("P0-1: unknown区間ではcatch-upを禁止し filamentId/filamentInfo を自動補完しない", () => {
+    const S = { id: "S", startPrintID: "0", name: "S", serialNo: 1, remainingLengthMm: 300000 };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    monitorData.mountHistory = [
+      { evId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "unknown" }
+    ];
+    const hist = [{ id: 1001, printfinish: 1, materialUsedMm: 10000 }];
+    loadHistory.mockReturnValue(hist);
+    const n = catchUpOfflineFilamentAttribution("h", { liveJobId: 1003, spool: S });
+    expect(n).toBe(0);
+    expect(hist[0].filamentId).toBeUndefined();
+    expect(hist[0].filamentInfo).toBeUndefined();
+  });
+
+  it("P0-1: catch-upの下限は startPrintID ではなく open mount区間の sinceJobId を使う", () => {
+    const S = { id: "S", startPrintID: "0", name: "S", serialNo: 1, remainingLengthMm: 300000 };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    // startPrintID=0 だが、装着区間 sinceJobId=1001（A完了後に装着）
+    monitorData.mountHistory = [
+      { evId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 1001, boundaryStatus: "known" }
+    ];
+    const hist = [
+      { id: 1001, printfinish: 1, materialUsedMm: 10000 },
+      { id: 1002, printfinish: 1, materialUsedMm: 20000 },
+    ];
+    loadHistory.mockReturnValue(hist);
+    catchUpOfflineFilamentAttribution("h", { liveJobId: 1003, spool: S });
+    expect(hist.find(j => j.id === 1001).filamentId).toBeUndefined(); // 1001<=sinceId 除外
+    expect(hist.find(j => j.id === 1002).filamentId).toBe("S");       // 1002>sinceId 帰属
+  });
+
+  it("P0-3: unknown区間は完了印刷で known へ再アンカーされる(finalizeFilamentUsage)", () => {
+    const S = {
+      id: "S", name: "S", serialNo: 1, remainingLengthMm: 300000,
+      currentPrintID: "1005", currentJobStartLength: 300000, totalLengthMm: 330000, usedLengthLog: [],
+    };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    monitorData.machines = { h: { printStore: { history: [] }, historyData: [] } };
+    monitorData.mountHistory = [
+      { evId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "unknown" }
+    ];
+    loadHistory.mockReturnValue([]);
+    finalizeFilamentUsage(40000, "1005", "h", true); // ジョブ1005が実消費40000で完了
+    // ★ 新しい mount ではなく reanchor イベントで既存 open 区間を known 化する（open 二重化しない）
+    const reanchor = monitorData.mountHistory.filter(e => e.type === "reanchor" && e.boundaryStatus === "known");
+    expect(reanchor.length).toBe(1);
+    expect(reanchor[0].targetIntervalId).toBe("m");  // 既存区間を対象
+    expect(reanchor[0].sinceJobId).toBe(1005);       // 完了ジョブで再アンカー
+    expect(reanchor[0].anchorRemainingMm).toBe(260000); // 300000 - 40000
+    // mount は増えていない（open 二重化なし）
+    expect(monitorData.mountHistory.filter(e => e.type === "mount").length).toBe(1);
+  });
+
+  it("RR-3: 見積りフォールバック(実測なし)では unknown→known へ昇格しない", () => {
+    const S = {
+      id: "S", name: "S", serialNo: 1, remainingLengthMm: 300000,
+      currentPrintID: "1005", currentJobStartLength: 300000, currentJobExpectedLength: 40000,
+      totalLengthMm: 330000, usedLengthLog: [],
+    };
+    monitorData.filamentSpools = [S];
+    monitorData.hostSpoolMap = { h: "S" };
+    monitorData.machines = { h: { printStore: { history: [] }, historyData: [] } };
+    monitorData.mountHistory = [
+      { evId: "m", intervalId: "m", ts: 1, type: "mount", host: "h", spoolId: "S", anchorRemainingMm: 300000, sinceJobId: 0, boundaryStatus: "unknown" }
+    ];
+    loadHistory.mockReturnValue([]);
+    finalizeFilamentUsage(0, "1005", "h", true); // 実測0 → 見積り40000へフォールバック
+    // 見積り消費では known 昇格しない（後から実測が判明したとき再計算対象外にしない）
+    const reanchorKnown = monitorData.mountHistory.filter(e => e.type === "reanchor" && e.boundaryStatus === "known");
+    expect(reanchorKnown.length).toBe(0);
   });
 });
