@@ -18,6 +18,7 @@
  * - {@link getSpoolById}：ID指定取得
  * - {@link getCurrentSpoolId}：現在ID取得
  * - {@link getCurrentSpool}：現在スプール取得
+ * - {@link getSpoolBalanceState}：signed 残量状態取得
  * - {@link setCurrentSpoolId}：現在ID設定
  * - {@link addSpool}：スプール追加
  * - {@link updateSpool}：スプール更新
@@ -29,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1281 (PR #427)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,17 +48,26 @@ import { saveUnifiedStorage, trimUsageHistory } from "./dashboard_storage.js";
 import {
   appendMountEvent,
   appendUnmountEvent,
+  appendReanchorEvent,
   reconcileSpool,
   getOpenFilamentEvent,
   resolveFilamentEvent,
   deriveSpoolRemaining,
-  getSpoolIntervals
+  getOpenMountInterval,
+  getMountIntervalStatus
 } from "./dashboard_filament_ledger.js";
 import { consumeInventory } from "./dashboard_filament_inventory.js";
 import { updateStoredDataToDOM } from "./dashboard_ui.js";
 import { updateHistoryList, loadHistory, saveHistory } from "./dashboard_printmanager.js";
 import { getDisplayBaseUrl } from "./dashboard_connection.js";
 import { sendRelayFilament } from "./dashboard_client_sync.js";
+import { normalizeJobId } from "./dashboard_utils.js";
+import { wallNowMs, randomEventId } from "./dashboard_time.js";
+import { isCompletedHistoryEntry } from "./dashboard_history_identity.js";
+import {
+  getIrreversibleFilamentRemaining,
+  IRREVERSIBLE_REMAINING_ACTION
+} from "./dashboard_filament_remaining_model.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -75,6 +85,19 @@ import { sendRelayFilament } from "./dashboard_client_sync.js";
  */
 function _isRelayChildSpool() {
   return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+}
+
+/**
+ * 残量値を「整数 mm」へ正規化する（残量競合比較用・レビュー指摘#6）。
+ * 文字列/小数を数値化し四捨五入する。数値化できない値（null/NaN/非有限）は null を返す。
+ *
+ * @private
+ * @param {*} x - 残量値（数値・数値文字列など）
+ * @returns {?number} 整数 mm、または判定不能なら null
+ */
+function _normMm(x) {
+  const n = Math.round(Number(x));
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -120,6 +143,26 @@ export const SPOOL_STATE = {
   DISCARDED:  "discarded"
 };
 
+/**
+ * スプール残量状態定数。
+ *
+ * 【詳細説明】
+ * - `SPOOL_STATE` は装着・保管・廃棄などのライフサイクルだけを表す。
+ * - 本定数は signed `remainingLengthMm` の残量軸を分離して表す。
+ *
+ * @enum {string}
+ */
+export const SPOOL_BALANCE_STATE = Object.freeze({
+  /** 残量を数値として確認できない */
+  UNKNOWN: "unknown",
+  /** 正の残量がある */
+  POSITIVE: "positive",
+  /** 残量がちょうど 0 */
+  ZERO: "zero",
+  /** 台帳上の残量が負数 */
+  OVERDRAWN: "overdrawn"
+});
+
 /** 使い切り判定の閾値 [mm]（約 0.3g PLA 相当） */
 const EXHAUSTED_THRESHOLD_MM = 100;
 
@@ -140,6 +183,45 @@ export function getSpoolState(spool) {
       : SPOOL_STATE.STORED;
   }
   return SPOOL_STATE.INVENTORY;
+}
+
+/**
+ * スプールの signed 残量状態を返す。
+ *
+ * 【詳細説明】
+ * - 装着中かどうか、廃棄済みかどうかは `getSpoolState()` で扱う。
+ * - 本関数は `remainingLengthMm` の数値だけを見て、負残量を overdrawn として監査可能にする。
+ *
+ * @function getSpoolBalanceState
+ * @param {Object} spool - スプールオブジェクト。
+ * @returns {string} `SPOOL_BALANCE_STATE` の値。
+ */
+export function getSpoolBalanceState(spool) {
+  if (!spool || spool.remainingLengthMm == null || spool.remainingLengthMm === "") {
+    return SPOOL_BALANCE_STATE.UNKNOWN;
+  }
+  const remaining = Number(spool?.remainingLengthMm);
+  if (!Number.isFinite(remaining)) return SPOOL_BALANCE_STATE.UNKNOWN;
+  if (remaining < 0) return SPOOL_BALANCE_STATE.OVERDRAWN;
+  if (remaining === 0) return SPOOL_BALANCE_STATE.ZERO;
+  return SPOOL_BALANCE_STATE.POSITIVE;
+}
+
+/**
+ * スプール残量状態に対応する日本語ラベルを返す。
+ *
+ * @function getSpoolBalanceStateLabel
+ * @param {string} state - `SPOOL_BALANCE_STATE` の値。
+ * @returns {string} 日本語ラベル。
+ */
+export function getSpoolBalanceStateLabel(state) {
+  switch (state) {
+    case SPOOL_BALANCE_STATE.POSITIVE:  return "残量あり";
+    case SPOOL_BALANCE_STATE.ZERO:      return "残量0";
+    case SPOOL_BALANCE_STATE.OVERDRAWN: return "超過使用";
+    case SPOOL_BALANCE_STATE.UNKNOWN:   return "残量不明";
+    default: return "不明";
+  }
 }
 
 /**
@@ -268,6 +350,91 @@ export function formatFilamentAmount(mm, spool = null) {
 }
 
 /**
+ * 負残量表示モードの定数。
+ *
+ * 【詳細説明】
+ * - 台帳内部の `remainingLengthMm` は負値を保持できる。ここで切り替えるのは表示値だけ。
+ * - `SHOW` は負値をそのまま表示し、`CLAMP_ZERO` は画面表示だけ 0mm に丸める。
+ *
+ * @enum {string}
+ */
+export const NEGATIVE_REMAINING_DISPLAY_MODE = Object.freeze({
+  SHOW: "show-negative",
+  SIGNED: "show-negative",
+  CLAMP_ZERO: "clamp-zero"
+});
+
+/** 負残量表示モード定数の提案仕様名互換エイリアス。 */
+export const FILAMENT_REMAINING_DISPLAY_MODE = NEGATIVE_REMAINING_DISPLAY_MODE;
+
+/**
+ * appSettings から負残量表示モードを取得する。
+ *
+ * 【詳細説明】
+ * - 保存済み設定が未知値の場合は既定の `show-negative` に戻す。
+ * - 親子同期や import の古い設定でも表示が壊れないよう、純粋な正規化だけを行う。
+ *
+ * @function getNegativeRemainingDisplayMode
+ * @param {Object} [settings=monitorData.appSettings] - appSettings 相当のオブジェクト。
+ * @returns {string} `NEGATIVE_REMAINING_DISPLAY_MODE` の値。
+ */
+export function getNegativeRemainingDisplayMode(settings = monitorData.appSettings) {
+  const value = settings?.negativeRemainingDisplayMode
+    ?? settings?.negativeRemainingDisplay
+    ?? settings?.filamentRemainingDisplayMode;
+  return value === NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO
+    ? NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO
+    : NEGATIVE_REMAINING_DISPLAY_MODE.SHOW;
+}
+
+/**
+ * 残量表示用の mm 値を返す。
+ *
+ * 【詳細説明】
+ * - 台帳値は引数の `mm` をそのまま保持し、表示用だけ `clamp-zero` 設定時に 0 へ丸める。
+ * - 非有限値は `null` を返し、呼び出し側が `"---"` などの不明表示へ変換する。
+ *
+ * @function displayRemainingLengthMm
+ * @param {*} mm - 台帳上の残量 mm。
+ * @param {{mode?:string,settings?:Object}} [options] - 表示モード指定。
+ * @returns {?number} 表示用 mm。判定不能なら null。
+ */
+export function displayRemainingLengthMm(mm, options = {}) {
+  const n = Number(mm);
+  if (!Number.isFinite(n)) return null;
+  const mode = options.mode || getNegativeRemainingDisplayMode(options.settings || monitorData.appSettings);
+  return mode === NEGATIVE_REMAINING_DISPLAY_MODE.CLAMP_ZERO && n < 0 ? 0 : n;
+}
+
+/**
+ * 残量を表示設定に従ってフォーマットする。
+ *
+ * 【詳細説明】
+ * - `formatFilamentAmount()` は汎用の量表示であり、負値もそのまま表示できる。
+ * - 本関数は残量専用に「表示だけ 0 クロップ」設定を適用し、同時に元台帳値とクロップ有無を返す。
+ *
+ * @function formatRemainingFilamentAmount
+ * @param {*} mm - 台帳上の残量 mm。
+ * @param {?Object} [spool=null] - spool context。
+ * @param {{mode?:string,settings?:Object}} [options] - 表示モード指定。
+ * @returns {{mm:?number,rawMm:?number,m:string,g:?string,cost:?string,currency:string,display:string,isDisplayClamped:boolean}}
+ *   表示用フォーマットと元台帳値。
+ */
+export function formatRemainingFilamentAmount(mm, spool = null, options = {}) {
+  const raw = Number(mm);
+  if (!Number.isFinite(raw)) {
+    return { mm: null, rawMm: null, m: "---", g: null, cost: null, currency: "", display: "---", isDisplayClamped: false };
+  }
+  const displayMm = displayRemainingLengthMm(raw, options);
+  const formatted = formatFilamentAmount(displayMm, spool);
+  return {
+    ...formatted,
+    rawMm: raw,
+    isDisplayClamped: displayMm !== raw
+  };
+}
+
+/**
  * 使用量を「距離」と「(重量, 費用)」の2段に分けた HTML を返す。
  *
  * - 単位トグル(unit)に応じて距離を m / mm 表示で切り替える。
@@ -343,7 +510,10 @@ export function buildWasteReport() {
   for (const sp of allSpools) {
     // 廃棄済みで残量がある（＝ロス発生）スプールのみ対象
     if (!sp.deleted && !sp.isDeleted) continue;
-    const remain = sp.remainingLengthMm || 0;
+    const remainGate = getIrreversibleFilamentRemaining(sp, {
+      action: IRREVERSIBLE_REMAINING_ACTION.SPOOL_DISCARD
+    });
+    const remain = remainGate.ok ? remainGate.remainingMm : 0;
     if (remain <= 0) continue;
 
     count++;
@@ -647,9 +817,13 @@ function _upsertSplitReel(host, jobId, reelSpool, usedMm) {
  * @function setCurrentSpoolId
  * @param {string} id - 新しく設定するスプールID
  * @param {string} hostname - 対象ホスト名
+ * @param {Object} [opts]
+ * @param {string} [opts.operationId] - ★ RR-4: この交換操作1回の安定ID（RPC/操作開始点で採番）。
+ *   unmount/mount の各イベント opId をこの基底から派生させ、再送で二重区間を作らない。
+ *   未指定時はローカル操作としてランダム基底を採番する。
  * @returns {boolean} 設定成功時 true、既に他ホストに装着済みの場合 false
  */
-export function setCurrentSpoolId(id, hostname) {
+export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
   // ★ hostname ガード: 空/undefined/PLACEHOLDER は即拒否（データ破壊防止）
   if (!hostname || hostname === "_$_NO_MACHINE_$_") {
     console.error(`[IMPL_ERROR] setCurrentSpoolId: 異常な機器指定 hostname="${hostname}", id="${id}"`);
@@ -777,6 +951,9 @@ export function setCurrentSpoolId(id, hostname) {
 
   // ★ ADR-0004: 単調増加 ts（同一 tick で mount/unmount を区別できるよう ts と evId を分ける）
   const nowTs = Date.now();
+  // ★ RR-4: 交換操作1回の安定基底ID。unmount/mount で別々の派生 opId を使う
+  //   （同一 opId を両方へ渡すとグローバル重複判定で後者が消えるため type ごとに派生させる）。
+  const _opBase = operationId || randomEventId();
 
   if (prevSpool) {
     if (Array.isArray(prevSpool.printIdRanges) && prevSpool.printIdRanges.length) {
@@ -786,13 +963,28 @@ export function setCurrentSpoolId(id, hostname) {
       }
     }
     // ★ ADR-0004/0005: 取外しイベントを mountHistory に追記。
-    //   分割(一時停止交換)では旧区間に進行中ジョブ J を含める（until=J）。
-    //   稼働中=全体/通常取り外しでは最新完了 Lc（J を除外）。
+    //   分割(一時停止交換)で旧リール消費がある場合だけ旧区間に進行中ジョブ J を含める。
+    //   残量0で開始した空OLDなど旧リール消費が0の分割では、J を旧区間へ含めると
+    //   filamentInfo 未設定の単一スプール履歴が OLD/NEW の両方に帰属し、0クロップ解除後に
+    //   OLD が負残量へ落ちる。J を除外し、NEW 側だけが実測 materialUsedMm を受け取る。
+    //   稼働中=全体/通常取り外しでも最新完了 Lc（J を除外）。
+    const _prevUntilJobId = (_midPrintSwap && _mode === "split" && _Uold > 0) ? _J : _Lc;
     if (host) {
+      // ★ P0-4(レビュー): 閉じる区間を明示指定する（projection の「同host最新open」旧
+      //   フォールバック依存を廃し、複数open時に別区間を誤クローズしない）。
+      const _prevOpen = getOpenMountInterval(prevSpool.id, host);
+      // ★ RR-2(レビュー2): 旧区間が ambiguous/corrupt のときは暗黙クローズせず修復要求を記録する。
+      //   hostSpoolMap（物理割当て）は下で更新し運用は継続させるが、不明な旧区間は勝手に閉じない。
+      const _prevStatus = getMountIntervalStatus(prevSpool.id, host).status;
+      if (_prevStatus === "ambiguous" || _prevStatus === "corrupt") {
+        _markLedgerRepairRequired(host, prevSpool.id, _prevStatus);
+      }
       appendUnmountEvent({
         host,
         spoolId: prevSpool.id,
-        untilJobId: (_midPrintSwap && _mode === "split") ? _J : _Lc,
+        untilJobId: _prevUntilJobId,
+        targetIntervalId: _prevOpen ? _prevOpen.intervalId : null,
+        opId: `${_opBase}:unmount:${prevSpool.id}`,
         ts: nowTs
       });
     }
@@ -823,6 +1015,7 @@ export function setCurrentSpoolId(id, hostname) {
           ? (Number(newSpool.remainingLengthMm) || 0) + _usedAtSwap
           : newSpool.remainingLengthMm,
         sinceJobId: _Lc,
+        opId: `${_opBase}:mount:${newSpool.id}`,
         ts: nowTs + 1
       });
     }
@@ -936,11 +1129,29 @@ function _calcCostPerMm(spool) {
 }
 
 export function addSpool(data, { inferred = false } = {}) {
+  // ★ 監査 P0(第2報): リレー子（satellite）での新規スプール登録を親へ RPC 委譲する。
+  //   従来 addSpool だけがガード漏れで、子がローカルに spoolSerialCounter を採番・
+  //   filamentSpools へ push していた（不可逆カウンタの分岐＝台帳破壊の原因）。
+  //   serialNo 採番は親のみが行い、結果は relay-delta（filamentSpools 全置換）で還流する。
+  if (_isRelayChildSpool()) {
+    sendRelayFilament("addSpool", { data, inferred });
+    return null;
+  }
   // UI から渡されるデータを元に初期値を設定したスプールオブジェクトを生成する
   const id = genId();
   // ★ ADR-0005 P6/R1: inferred(暫定推定)スプールは serialNo を採番しない
   //   （不可逆な spoolSerialCounter を消費しない。確定時に confirmInferredSpool で採番）。
   const serialNo = inferred ? null : ++monitorData.spoolSerialCounter;
+  const initialRemainingLengthMm = Number(data.remainingLengthMm) || 0;
+  const initialUsedLengthLog = Array.isArray(data.usedLengthLog) ? data.usedLengthLog : [];
+  const initialRemainingLedgerBaseline = data.remainingLedgerBaseline && typeof data.remainingLedgerBaseline === "object"
+    ? { ...data.remainingLedgerBaseline }
+    : {
+      remainingLengthMm: initialRemainingLengthMm,
+      usedLengthLogIndex: 0,
+      createdAt: wallNowMs(),
+      source: inferred ? "inferred-spool-created" : "spool-created"
+    };
   const spool = {
     id,
     spoolId: id,
@@ -978,7 +1189,7 @@ export function addSpool(data, { inferred = false } = {}) {
     purchaseLink: data.purchaseLink || "",
     priceCheckDate: data.priceCheckDate || "",
     totalLengthMm: Number(data.totalLengthMm) || 0,
-    remainingLengthMm: Number(data.remainingLengthMm) || 0,
+    remainingLengthMm: initialRemainingLengthMm,
     weightGram: Number(data.weightGram) || 0,
     printCount: Number(data.printCount) || 0,
     startDate: data.startDate || new Date().toISOString(),
@@ -998,7 +1209,12 @@ export function addSpool(data, { inferred = false } = {}) {
     currentJobExpectedLength: data.currentJobExpectedLength ?? null,
     removedAt: data.removedAt || null,
     note: data.note || "",
-    usedLengthLog: data.usedLengthLog || [],
+    usedLengthLog: initialUsedLengthLog,
+    /**
+     * O7 残量再計算の基準点。
+     * @type {{remainingLengthMm:number,usedLengthLogIndex:number,createdAt:number,source:string}}
+     */
+    remainingLedgerBaseline: initialRemainingLedgerBaseline,
     /**
      * スプールを装着してから取り外すまでの印刷ID範囲配列
      * @type {Array<{startPrintID:string,endPrintID:?string}>}
@@ -1136,8 +1352,13 @@ export function revertInferredSpool(id) {
   } catch (e) { /* noop */ }
 
   // inferred を取り外し（mountHistory に unmount 追記）＋削除
+  //   ★ RR-5: 対象区間を明示（唯一 open へ解決。ambiguous/corrupt では unmount しない）。
   if (host) {
-    appendUnmountEvent({ host, spoolId: inferred.id, untilJobId: _latestCompletedPrintId(host), ts: nowTs });
+    const _open = getOpenMountInterval(inferred.id, host);
+    appendUnmountEvent({
+      host, spoolId: inferred.id, untilJobId: _latestCompletedPrintId(host),
+      targetIntervalId: _open ? _open.intervalId : null, ts: nowTs
+    });
   }
   inferred.deleted = true; inferred.isDeleted = true;
   inferred.isActive = false; inferred.isInUse = false;
@@ -1189,9 +1410,39 @@ export function updateSpool(id, patch) {
   }
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
-  Object.assign(s, patch);
+  // ★ レビュー指摘#3: 残量競合検査。編集画面を開いた時点の残量(expectedRemainingLengthMm)と、
+  //   権威側の現在残量が一致しない場合（編集中に印刷消費が進んだ等）は残量の上書きを拒否する。
+  //   他フィールドは適用する。expectedRemainingLengthMm 自体はスプールに保存しない。
+  const applied = { ...patch };
+  if ("expectedRemainingLengthMm" in applied) {
+    const expected = applied.expectedRemainingLengthMm;
+    delete applied.expectedRemainingLengthMm;
+    if ("remainingLengthMm" in applied && expected != null) {
+      // ★ レビュー指摘#6: "1000" と 1000、小数、null/NaN で誤競合/誤一致しないよう、
+      //   親子双方を「整数 mm」へ正規化して比較する（許容誤差は設けない＝1mm 単位で厳密一致）。
+      const e = _normMm(expected);
+      const cur = _normMm(s.remainingLengthMm);
+      if (e === null || cur === null || e !== cur) {
+        console.warn(`[updateSpool] 残量基準不一致のため残量変更を拒否: id=${id} expected=${expected} current=${s.remainingLengthMm}`);
+        delete applied.remainingLengthMm;
+      }
+    }
+  }
+  const remainingAdjustmentReason = applied.remainingAdjustmentReason;
+  const remainingAdjustmentActor = applied.remainingAdjustmentActor;
+  delete applied.remainingAdjustmentReason;
+  delete applied.remainingAdjustmentActor;
+  const beforeRemaining = Number(s.remainingLengthMm);
+  Object.assign(s, applied);
+  if ("remainingLengthMm" in applied) {
+    _recordManualRemainingAdjustment(s, beforeRemaining, Number(s.remainingLengthMm), {
+      reason: remainingAdjustmentReason || "manual-spool-update",
+      actor: remainingAdjustmentActor || "user",
+      source: "updateSpool"
+    });
+  }
   // purchasePrice or totalLengthMm が変わった場合に costPerMm を再算出
-  if ("purchasePrice" in patch || "totalLengthMm" in patch) {
+  if ("purchasePrice" in applied || "totalLengthMm" in applied) {
     s.costPerMm = _calcCostPerMm(s);
   }
   saveUnifiedStorage(true);
@@ -1206,6 +1457,13 @@ export function deleteSpool(id, hostname) {
   const host = hostname;
   const s = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!s) return;
+  const discardGate = getIrreversibleFilamentRemaining(id, {
+    action: IRREVERSIBLE_REMAINING_ACTION.SPOOL_DISCARD
+  });
+  if (!discardGate.ok) {
+    console.warn(`[deleteSpool] confirmed 残量を検証できないため廃棄を拒否: id=${id} reason=${discardGate.reason}`);
+    return;
+  }
   if (host && Array.isArray(s.printIdRanges) && s.printIdRanges.length) {
     const machine = monitorData.machines[host] || {};
     const pid = machine.printStore?.current?.id ?? "";
@@ -1296,6 +1554,55 @@ function logUsage(spool, lengthMm, jobId, type = "complete") {
   });
   trimUsageHistory();
   saveUnifiedStorage(true);
+}
+
+/**
+ * 手動残量補正を監査履歴へ追記し、O7 再計算 baseline を現在位置へ更新する。
+ *
+ * 【詳細説明】
+ * - 台帳値 `remainingLengthMm` は負数を含む真値として保持する。
+ * - ユーザーが実測や手動編集で残量を補正した場合、古い `usedLengthLog` 全件を
+ *   O7 が再度差し引かないよう、補正時点を `remainingLedgerBaseline` として保存する。
+ * - 監査eventは `usageHistory` に append-only で残し、補正前後と差分を追跡できるようにする。
+ *
+ * @private
+ * @param {Object} spool - 補正対象スプール。
+ * @param {number} beforeMm - 補正前の台帳残量。
+ * @param {number} afterMm - 補正後の台帳残量。
+ * @param {{reason?:string,actor?:string,source?:string,ts?:number}} [options] - 監査メタデータ。
+ * @returns {?Object} 追加した監査event。変更が無い場合は null。
+ */
+function _recordManualRemainingAdjustment(spool, beforeMm, afterMm, options = {}) {
+  if (!spool) return null;
+  if (!Number.isFinite(beforeMm) || !Number.isFinite(afterMm)) return null;
+  if (Math.abs(beforeMm - afterMm) <= 0.001) return null;
+  const now = Number.isFinite(Number(options.ts)) ? Number(options.ts) : wallNowMs();
+  if (!Array.isArray(monitorData.usageHistory)) monitorData.usageHistory = [];
+  const event = {
+    usageId: randomEventId("manual-remaining"),
+    type: "manual-remaining-adjustment",
+    spoolId: spool.id,
+    spoolSerial: spool.serialNo,
+    hostname: spool.hostname || null,
+    beforeMm,
+    afterMm,
+    deltaMm: afterMm - beforeMm,
+    reason: options.reason || "manual-remaining-adjustment",
+    actor: options.actor || "user",
+    source: options.source || "manual",
+    createdAt: now
+  };
+  monitorData.usageHistory.push(event);
+  monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
+  spool.remainingLedgerBaseline = {
+    remainingLengthMm: afterMm,
+    usedLengthLogIndex: Array.isArray(spool.usedLengthLog) ? spool.usedLengthLog.length : 0,
+    createdAt: now,
+    source: event.type,
+    eventId: event.usageId
+  };
+  trimUsageHistory();
+  return event;
 }
 
 /**
@@ -1473,6 +1780,155 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
 }
 
 /**
+ * 有効な jobId が無いまま完了した消費量を隔離領域へ退避する（Phase2A）。
+ *
+ * 【なぜ隔離するのか】
+ * - 電源投入直後は printStartTime が 0/null で報告されることがあり
+ *   normalizeJobId が null を返す（＝無効ID）。無効IDのまま履歴/usedLengthLog/
+ *   境界へ確定記録を作ると、sinceJobId=0 の「大過去アンカー」が生まれて過去全履歴を
+ *   誤って減算する退行や、id=0 の偽履歴が発生する。
+ * - かといって消費を捨てると残量が実態より多く見えてしまう。そこで「job へ帰属できない
+ *   消費」を本領域に退避し、実IDが判明した時点で解決する（解決UIは後続PR）。
+ * - 残量そのものは job 帰属の権威（printStore.history）に載せられないため本関数では
+ *   触れない。隔離レコードが「未帰属の差分」を可視化する。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {Object} spool - 対象スプール
+ * @param {number} usedMm - 未帰属の消費量 [mm]
+ * @param {number} startLen - ジョブ開始時残量 [mm]（監査用）
+ * @param {string} [reason="invalid-job-id"] - 隔離理由
+ * @returns {void}
+ */
+function _quarantineUnattributedUsage(host, spool, usedMm, startLen, reason = "invalid-job-id", { estimated = false, completionOpId = null } = {}) {
+  const used = Number(usedMm);
+  if (!Number.isFinite(used) || used <= 0) return;
+  if (!Array.isArray(monitorData.pendingUnattributedUsage)) {
+    monitorData.pendingUnattributedUsage = [];
+  }
+  const list = monitorData.pendingUnattributedUsage;
+  const spoolId = spool?.id ?? null;
+  const _startLen = Number.isFinite(Number(startLen)) ? Number(startLen) : null;
+  // ★ RR-1(レビュー2): 冪等の同一性は「完了を観測した操作単位ID(completionOpId)」で判定する。
+  //   payload fingerprint を恒久的同一性に使うと、同じ G-code を2回印刷して両方 jobId 欠落した
+  //   ような別々の正当な消費を「再送」と誤判定して捨ててしまう。completionOpId が無い呼び出しでは
+  //   fingerprint を「短い再送抑制窓」だけに使う（恒久同一性にはしない）。
+  const completionFingerprint =
+    `${host}|${spoolId}|${reason}|${Math.round(used)}|${Math.round(_startLen || 0)}|${estimated ? "est" : "meas"}`;
+  if (completionOpId != null) {
+    if (list.some(e => e && e.completionOpId === completionOpId)) return; // 同一完了の再送 → 冪等スキップ
+  } else {
+    const _now = wallNowMs();
+    const RESEND_WINDOW_MS = 5000; // 完了観測IDが無い場合の短い再送抑制窓
+    const recent = list.find(e => e && e.completionOpId == null
+      && e.completionFingerprint === completionFingerprint
+      && (_now - (Number(e.detectedAtEpochMs) || 0)) < RESEND_WINDOW_MS);
+    if (recent) return; // 短窓内の再送のみ抑制（窓外の同一payloadは別の正当消費として登録）
+  }
+  list.push({
+    completionOpId: completionOpId || null,
+    // ★ Phase5(U1): 通知の差分判定で使う安定ID（壁時計非依存の一意キー）。
+    pendingUsageId: randomEventId(),
+    completionFingerprint,
+    host,
+    spoolId,
+    reason,
+    // ★ P1-2(レビュー): 実測(confirmed)と見積りフォールバック(estimated)を分離する。
+    //   予定使用量を実消費(usedMm)として確定させない。後続(#410)の解決時に区別できるようにする。
+    usedSource: estimated ? "expected-fallback" : "measured",
+    confidence: estimated ? "estimated" : "confirmed",
+    usedMm: estimated ? 0 : used,
+    estimatedUsedMm: estimated ? used : 0,
+    startLen: _startLen,
+    // ★ 監査用の壁時計時刻（epoch ms）。イベント順序や再送冪等には使わない。
+    detectedAtEpochMs: wallNowMs()
+  });
+  // ★ P0-2: 上限超過分は「黙って捨てず」per-host アーカイブへ集約（件数・合計・期間を保持）。
+  const cap = 200;
+  if (list.length > cap) {
+    const overflow = list.splice(0, list.length - cap); // 古い順に溢れた分
+    _archiveUnattributedUsage(overflow);
+  }
+  console.warn(
+    `[finalizeFilamentUsage] ${host}: 無効jobIdのため消費 ${used.toFixed(1)}mm を`
+    + ` pendingUnattributedUsage へ隔離（spool=${spoolId ?? "?"}, reason=${reason},`
+    + ` source=${estimated ? "expected-fallback" : "measured"}）`
+  );
+  // ★ P1-3(レビュー): 隔離は履歴行を持たないため、renderHistoryTable の再描画を待たずに
+  //   バッジ・通知を直接動かす。UI/通知層への直接依存を避けるため疎結合な DOM イベントで
+  //   通知する（リスナは印刷履歴 UI 側が登録）。node/非DOM 環境では no-op。
+  _emitAttributionChanged(host);
+}
+
+/**
+ * 帰属未確認の状態変化を UI/通知層へ疎結合に通知する（Phase5 P1-3）。
+ * 実際のバッジ更新・通知判定・relay delta は購読側が行う。
+ *
+ * @private
+ * @param {string} host - 対象ホスト
+ * @returns {void}
+ */
+function _emitAttributionChanged(host) {
+  try {
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function"
+        && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("3dpmon:attribution-changed", { detail: { host } }));
+    }
+  } catch { /* 非DOM/未対応環境は無視 */ }
+}
+
+/**
+ * 台帳(mount区間)が破損/曖昧で安全にクローズできなかったことを per-host に記録する（RR-2）。
+ * 暗黙の「最新open選択」に落ちる代わりに、修復要求を永続・可視化するためのフラグ。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {string} spoolId - 対象スプールID
+ * @param {string} status - "ambiguous" | "corrupt"
+ * @returns {void}
+ */
+function _markLedgerRepairRequired(host, spoolId, status) {
+  if (!host) return;
+  if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
+    monitorData.ledgerRepairRequired = {};
+  }
+  monitorData.ledgerRepairRequired[host] = {
+    spoolId: spoolId ?? null, status, detectedAtEpochMs: wallNowMs()
+  };
+  console.warn(`[setCurrentSpoolId] ${host}: 旧区間 status=${status} のため暗黙クローズせず ledgerRepairRequired を記録`);
+}
+
+/**
+ * 上限を超えた隔離レコードを per-host アーカイブへ集約する（総量・件数・期間を失わない）。
+ *
+ * @private
+ * @param {Array<Object>} records - 溢れた隔離レコード群
+ * @returns {void}
+ */
+function _archiveUnattributedUsage(records) {
+  if (!Array.isArray(records) || records.length === 0) return;
+  if (!monitorData.pendingUnattributedUsageArchive
+      || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+    monitorData.pendingUnattributedUsageArchive = {};
+  }
+  const arch = monitorData.pendingUnattributedUsageArchive;
+  for (const r of records) {
+    const h = r?.host ?? "_";
+    const a = arch[h] || (arch[h] = {
+      count: 0, totalUsedMm: 0, totalEstimatedMm: 0, firstAtEpochMs: null, lastAtEpochMs: null
+    });
+    a.count += 1;
+    a.totalUsedMm += Number(r?.usedMm) || 0;
+    a.totalEstimatedMm += Number(r?.estimatedUsedMm) || 0;
+    const t = Number(r?.detectedAtEpochMs) || 0;
+    if (t) {
+      if (a.firstAtEpochMs == null || t < a.firstAtEpochMs) a.firstAtEpochMs = t;
+      if (a.lastAtEpochMs == null || t > a.lastAtEpochMs) a.lastAtEpochMs = t;
+    }
+  }
+}
+
+/**
  * 実際に使用したフィラメント長を残量に反映して確定する。
  * 予約時に記録した startLength から使用量を差し引き更新する。
  *
@@ -1495,7 +1951,7 @@ export function reserveFilament(lengthMm, jobId = "", hostname) {
  * name/color/material などのメタ情報を同時に記録する。
  * 履歴更新後は {@link updateHistoryList} を介して永続化し UI へ即時反映する。
  */
-export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true, { exact = false } = {}) {
+export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess = true, { exact = false, completionOpId = null } = {}) {
   const host = hostname;
   if (!host) return;
   const s = getCurrentSpool(host);
@@ -1504,6 +1960,11 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     return;
   }
   const normalizedJobId = String(jobId ?? "");
+  // ★ Phase2A: jobId を「有効/無効」で明確に分類する。
+  //   normalizeJobId は正の有限整数のみを有効とし、0/null/負数/非数は null（無効ID）。
+  //   無効IDのときは jobId 由来の確定記録（履歴・usedLengthLog・境界昇格）を一切作らず、
+  //   消費量だけを隔離領域へ退避する（下の分岐で処理）。
+  const validJobId = normalizeJobId(jobId);
   // ★ ADR-0004: 多重 finalize ガード。既に確定済みの同一 jobId なら
   //   残量・log・printCount を一切触らず即 return（二重減算の根を断つ）。
   if (normalizedJobId && normalizedJobId === s.lastCompletedPrintID) {
@@ -1511,8 +1972,19 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
     return;
   }
   if (s.currentPrintID && s.currentPrintID !== normalizedJobId) {
-    // jobId 不一致 — 別のジョブの完了通知なので無視するが、
-    // transient フィールドが古いジョブのまま残留していたらクリアする
+    // ★ P0-3(レビュー): 進行中の「有効な」ジョブに対して「無効ID」の完了通知が来た場合、
+    //   受信側が低信頼（電源投入直後の偽完了 jobId=0 等）なので、現在ジョブ追跡を壊さず
+    //   単に無視する。stale クリアは「有効ID同士が異なる」＝別ジョブ完了のときだけ行う。
+    const storedValid = normalizeJobId(s.currentPrintID);
+    if (validJobId == null && storedValid != null) {
+      console.warn(
+        "finalizeFilamentUsage: 無効IDの完了通知を無視（有効な進行中ジョブを維持）",
+        { stored: s.currentPrintID, received: normalizedJobId }
+      );
+      return;
+    }
+    // 有効ID同士の不一致（または現在IDが無効な残骸）— 別ジョブの完了なので無視しつつ、
+    // 古いジョブのまま残留した transient をクリアする。
     console.warn(
       "finalizeFilamentUsage: jobId mismatch, clearing stale transient fields",
       { stored: s.currentPrintID, received: normalizedJobId }
@@ -1527,6 +1999,8 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
   const used = Number(lengthMm);
   const expectedLength = Number(s.currentJobExpectedLength ?? NaN);
   let resolvedUsed = used;
+  // ★ P1-2: この resolvedUsed が実測か見積りフォールバックかを追う（隔離の出所記録用）。
+  let _usedIsEstimated = false;
   if (
     !exact &&
     (isNaN(resolvedUsed) || resolvedUsed <= 0) &&
@@ -1542,10 +2016,28 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       { used: resolvedUsed, expectedLength, jobId: normalizedJobId }
     );
     resolvedUsed = expectedLength;
+    _usedIsEstimated = true;
+  }
+  // ★ Phase2A: 有効な jobId が無い場合は、jobId 由来の確定記録を一切作らずに
+  //   消費量を隔離領域へ退避して即 return する。
+  //   ここで残量（remainingLengthMm）を減算しないのは、残量の権威が job 帰属の
+  //   printStore.history（reconcile がこれを再計算の元にする）にあるため。未帰属の
+  //   消費を残量へ直接反映すると、次の reconcile がそれを取りこぼして盛り戻してしまう。
+  //   隔離レコードが差分を保持し、実IDが判明した時点で正規の帰属として解決する。
+  if (validJobId == null) {
+    _quarantineUnattributedUsage(host, s, resolvedUsed, startLen, "invalid-job-id", { estimated: _usedIsEstimated, completionOpId });
+    // transient はクリアするが lastCompletedPrintID は設定しない（空/偽IDを確定IDにしない）。
+    s.currentJobStartLength = null;
+    s.currentJobExpectedLength = null;
+    s.currentPrintID = "";
+    saveUnifiedStorage(true);
+    updateStoredDataToDOM();
+    return;
   }
   // ★ B2: 0消費は残量を変更しない（二重finalize等による偽値での破壊を防止）
   if (!isNaN(resolvedUsed) && resolvedUsed > 0) {
-    s.remainingLengthMm = Math.max(0, startLen - resolvedUsed);
+    // 台帳内部値は負残量を保持する。表示だけを設定で 0 クロップできるよう、ここでは丸めない。
+    s.remainingLengthMm = startLen - resolvedUsed;
     s.updatedAt = Date.now();  // ★ C1: 時系列判定用タイムスタンプ更新
   } else if (resolvedUsed === 0 || isNaN(resolvedUsed)) {
     console.warn(`[finalizeFilamentUsage] resolvedUsed=${resolvedUsed} → 残量変更なし (${hostname})`);
@@ -1621,6 +2113,39 @@ export function finalizeFilamentUsage(lengthMm, jobId = "", hostname, isSuccess 
       && _entry.filamentInfo.some(fi => fi && fi.spoolId && fi.spoolId !== s.id);
     if (_isSplit) _upsertSplitReel(host, normalizedJobId, s, resolvedUsed);
   }
+  // ★ レビュー(P0-1/P0-2/P1): unknown 区間の known 昇格を「再アンカーイベント」で行う。
+  //   条件を厳格化する:
+  //   - 通常完了(!exact)のみ。印刷途中交換(exact:true)では昇格しない（直後の unmount で
+  //     旧 unknown が復活する事故＝P0-1 を防ぐ。交換の境界確定は setCurrentSpoolId が担う）。
+  //   - 有効な正の jobId があるときのみ（無効IDで known/sinceJobId=0 を作り、過去全履歴を
+  //     減算する退行＝P0-2 を防ぐ）。
+  //   - ★ 見積りフォールバック(_usedIsEstimated)では昇格しない（レビュー2 P0-3）。
+  //     予定使用量で known 昇格＋sinceJobId 前進すると、後から実測が判明しても当該ジョブが
+  //     新 sinceJobId 以下で再計算対象外となり、見積り誤差がアンカーへ恒久固定される。
+  //   - open 区間が正確に1件(getOpenMountInterval が返す＝status ok)かつ unknown のときのみ。
+  //   新しい mount を追加せず reanchor で対象区間を更新する（open を二重化しない＝P0-1）。
+  try {
+    const _reanchorJobId = Number(normalizedJobId);
+    if (!exact && !_usedIsEstimated && resolvedUsed > 0 && Number.isFinite(_reanchorJobId) && _reanchorJobId > 0) {
+      const iv = getOpenMountInterval(s.id, host);
+      if (iv && iv.boundaryStatus === "unknown") {
+        appendReanchorEvent({
+          host,
+          spoolId: s.id,
+          targetIntervalId: iv.intervalId,
+          anchorRemainingMm: s.remainingLengthMm,
+          sinceJobId: _reanchorJobId,
+          boundaryStatus: "known",
+          sourceJobId: _reanchorJobId,
+          reason: "first-trusted-completion",
+          ts: Date.now() + 1
+        });
+        console.info(`[finalizeFilamentUsage] ${host}: unknown 区間 ${iv.intervalId} を完了ジョブ ${normalizedJobId} で reanchor(known)`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[finalizeFilamentUsage] 再アンカー失敗 (${host}):`, e?.message || e);
+  }
   // ★ 完了直後に信頼ソースから残量を冪等補正（finalize の startLen-used 値は暫定。reconcile が権威）。
   //   currentPrintID は上で "" にクリア済みなので reconcile は走る。
   try {
@@ -1651,6 +2176,8 @@ export function cleanupUsageSnapshots(jobId) {
     e => !(e.jobId === jobId && e.isSnapshot)
   );
   if (before !== monitorData.usageHistory.length) {
+    // ★ レビュー指摘#8: 追記以外（中間削除）の変更でも rev を加算し、リレーの変更検出を確実にする。
+    monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
     saveUnifiedStorage(true);
   }
 }
@@ -1670,7 +2197,10 @@ export function addSpoolFromPreset(preset, override = {}) {
   //   生成スプールは relay-delta で還流するため、戻り値は null（呼び出し側は
   //   装着を伴う場合 mountNewSpoolFromPreset を使用すること）。
   if (_isRelayChildSpool()) {
-    sendRelayFilament("addSpoolFromPreset", { preset, override });
+    // ★ レビュー指摘(ChatGPT): プリセット本体ではなく presetId のみを送る。
+    //   親は自身の正本(getAllPresets)から presetId を引き、許可された override だけを適用する。
+    //   古い/改変されたプリセット本体を子から親へ持ち込ませない（孤児プリセット防止）。
+    sendRelayFilament("addSpoolFromPreset", { presetId: preset.presetId, override });
     return null;
   }
   const data = {
@@ -1736,7 +2266,8 @@ export function mountNewSpoolFromPreset(preset, override = {}, hostname) {
   if (!preset || !hostname) return { ok: false, spool: null, relayed: false };
   // リレー子: 複合操作を 1 RPC で親へ（親が addSpoolFromPreset + setCurrentSpoolId を実行）
   if (_isRelayChildSpool()) {
-    const sent = sendRelayFilament("mountNewSpoolFromPreset", { preset, override, hostname });
+    // ★ レビュー指摘(ChatGPT): presetId のみを送り、親が正本から解決する（本体を送らない）。
+    const sent = sendRelayFilament("mountNewSpoolFromPreset", { presetId: preset.presetId, override, hostname });
     return { ok: sent, spool: null, relayed: true };
   }
   const spool = addSpoolFromPreset(preset, override);
@@ -1778,9 +2309,141 @@ export function buildOfflineFilamentInfo(spool, usedMm) {
  */
 export function shouldLinkOfflineJob(job) {
   if (!job) return false;
-  if (Array.isArray(job.filamentInfo) && job.filamentInfo.length > 0) return false;
-  if (job.filamentId) return false;  // 既に紐付け済み
+  // ★ レビュー指摘(点4): 色情報だけ(spoolId 無し)の filamentInfo は「帰属済み」とみなさない。
+  //   従来は配列が空でなければ帰属済み扱いだったため、色のみエントリを持つオフライン完了ジョブが
+  //   補完対象から外れ、「残量だけ減る/履歴はフィラメントなし」という不整合を生んでいた。
+  //   spoolId を持つエントリが1つでもあるか、filamentId が付いていれば帰属済みとする。
+  const info = Array.isArray(job.filamentInfo) ? job.filamentInfo : [];
+  const hasExplicitSpool = info.some(fi => fi && fi.spoolId);
+  if (hasExplicitSpool) return false;
+  if (job.filamentId) return false;
   return true;
+}
+
+/**
+ * 履歴ジョブのフィラメント帰属が「未確認(pending)」かを判定する純関数（Phase4/5 可視化用）。
+ *
+ * 【定義】実際に消費があった完了ジョブ(materialUsedMm>0)なのに、確定スプールへ帰属して
+ * いない（spoolId 付き filamentInfo も filamentId も無い）状態を「未確認」とする。
+ * これは持続フィールドを新設せず shouldLinkOfflineJob と同じ確定条件から導出するため、
+ * 履歴マージで確定/未確認が食い違う事故（マージ保護の必要）が構造的に発生しない。
+ *
+ * @function isAttributionPending
+ * @param {Object} entry - 履歴ジョブ（printStore.history / historyData のエントリ）
+ * @returns {boolean} 帰属未確認なら true
+ */
+// ★ #410-8/#411-P1-4: 完了判定は下位の共通 pure utility へ一本化（判定ロジックの二重化を排す）。
+//   import は先頭で行い（ローカル束縛）、ここで再エクスポートする。
+export { isCompletedHistoryEntry };
+
+export function isAttributionPending(entry) {
+  if (!entry) return false;
+  // ★ P1-5/#410-8(レビュー): 完了ジョブのみ対象。印刷中(未完了)の現在ジョブを「未確認」と
+  //   誤判定させない。旧保存データ(printfinish欠落だが finishTime/endtime あり)も完了扱いにする。
+  if (!isCompletedHistoryEntry(entry)) return false;
+  // 消費が無い（materialUsedMm<=0）ジョブは帰属対象外＝pending ではない。
+  if (!(Number(entry.materialUsedMm || 0) > 0)) return false;
+  const info = Array.isArray(entry.filamentInfo) ? entry.filamentInfo : [];
+  if (info.some(fi => fi && fi.spoolId)) return false; // 確定スプールあり
+  if (entry.filamentId) return false;                   // filamentId 確定
+  return true;
+}
+
+/**
+ * 指定ホスト（省略時は全体）の未帰属消費 隔離レコードを返す（Phase4/5 可視化用）。
+ *
+ * @function getUnattributedUsageForHost
+ * @param {string} [host] - ホスト名。省略時は全件のコピー
+ * @returns {Array<Object>} pendingUnattributedUsage の該当要素配列
+ */
+export function getUnattributedUsageForHost(host) {
+  const list = Array.isArray(monitorData.pendingUnattributedUsage)
+    ? monitorData.pendingUnattributedUsage : [];
+  return host ? list.filter(e => e && e.host === host) : list.slice();
+}
+
+/**
+ * 指定ホスト（省略時は全体）の未帰属消費 隔離レコード件数を返す（バッジ表示用）。
+ *
+ * @function countUnattributedUsageForHost
+ * @param {string} [host] - ホスト名
+ * @returns {number} 件数
+ */
+export function countUnattributedUsageForHost(host) {
+  return getUnattributedUsageForHost(host).length;
+}
+
+/**
+ * 履歴ジョブの帰属状態を表示用に記述する純粋セレクタ（Phase5 U1・DOM非依存）。
+ *
+ * ロジックを DOM 側に散らさず、UI(チップ/バッジ)と通知判定が同じ語彙を使えるよう
+ * 「状態・ラベル・理由・重大度」を1か所で決める。#409 段階の状態は
+ * known(確認済み＝バッジ無し) と pending(未確認) の2値。inferred(推定) は Option4 で追加予定。
+ *
+ * @function getAttributionPresentation
+ * @param {Object} entry - 履歴ジョブ
+ * @returns {{state:"known"|"pending", label:?string, reason:?string, severity:"none"|"warning"}}
+ */
+export function getAttributionPresentation(entry) {
+  if (isAttributionPending(entry)) {
+    return { state: "pending", label: "未確認", reason: "unattributed", severity: "warning" };
+  }
+  return { state: "known", label: null, reason: null, severity: "none" };
+}
+
+/**
+ * 指定ホストの「帰属未確認 課題」の安定 fingerprint 集合を返す（Phase5 U1）。
+ *
+ * 2系統を統合する:
+ * - 履歴 pending（消費ありなのに未帰属の完了ジョブ）: `pending:<host>:<jobId>`
+ * - 隔離消費（無効jobId等で退避された消費）: `quarantine:<host>:<pendingUsageId>`
+ * 通知(U3)はこの集合の差分（新規のみ）で判定する。件数比較では
+ * 「1件解決＋1件新規」で件数不変のとき新規を見逃すため、集合を用いる。
+ *
+ * @function getAttributionIssueIdsForHost
+ * @param {string} host - ホスト名
+ * @returns {Set<string>} 課題の安定IDの集合
+ */
+export function getAttributionIssueIdsForHost(host) {
+  const ids = new Set();
+  if (!host) return ids;
+  const hist = monitorData.machines?.[host]?.printStore?.history;
+  if (Array.isArray(hist)) {
+    for (const job of hist) {
+      if (isAttributionPending(job)) ids.add(`pending:${host}:${job.id}`);
+    }
+  }
+  for (const q of getUnattributedUsageForHost(host)) {
+    // pendingUsageId が無い旧レコードは detectedAtEpochMs で代替（安定性は劣るが後方互換）。
+    ids.add(`quarantine:${host}:${q.pendingUsageId ?? q.detectedAtEpochMs}`);
+  }
+  return ids;
+}
+
+/**
+ * 指定ホストの帰属未確認 課題の件数を返す（バッジ表示用・Phase5 U1）。
+ * 履歴 pending と隔離消費の合算（getAttributionIssueIdsForHost の要素数）。
+ *
+ * @function countAttributionIssuesForHost
+ * @param {string} host - ホスト名
+ * @returns {number} 課題件数
+ */
+export function countAttributionIssuesForHost(host) {
+  // 詳細レコード（履歴pending＋隔離）＋ 上限超過でアーカイブへ集約された件数。
+  return getAttributionIssueIdsForHost(host).size + countUnattributedArchiveForHost(host);
+}
+
+/**
+ * 指定ホストの「集約済み（詳細なし）」未確認件数を返す（#410-7 バッジ内訳表示用）。
+ * これらは pendingUnattributedUsage の上限超過でアーカイブへ畳まれ、個別詳細は持たない。
+ *
+ * @function countUnattributedArchiveForHost
+ * @param {string} host - ホスト名
+ * @returns {number} 集約済み件数
+ */
+export function countUnattributedArchiveForHost(host) {
+  const arch = monitorData.pendingUnattributedUsageArchive?.[host];
+  return Number(arch?.count) || 0;
 }
 
 /**
@@ -1804,7 +2467,18 @@ function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
     if (!jobIds.has(String(job.id))) continue;
     if (!shouldLinkOfflineJob(job)) continue;
     const usedMm = Number(job.materialUsedMm ?? job.usagematerial ?? 0) || 0;
-    job.filamentInfo = [buildOfflineFilamentInfo(spool, usedMm)];
+    // ★ レビュー指摘(点5/minor): 全置換ではなく upsert。同一 spoolId が既にあれば何もしない（冪等）。
+    //   色情報だけの単一エントリ（spoolId 無し1件）の場合は、UIの2行表示を避けるため、その
+    //   エントリへ spoolId/usedMm を補完する。それ以外（複数エントリ等）は末尾へ追加する。
+    const prev = Array.isArray(job.filamentInfo) ? job.filamentInfo : [];
+    if (prev.some(fi => fi && fi.spoolId === spool.id)) {
+      // 既に当該スプール帰属あり（冪等・何もしない）
+    } else if (prev.length === 1 && prev[0] && !prev[0].spoolId) {
+      Object.assign(prev[0], buildOfflineFilamentInfo(spool, usedMm));
+      job.filamentInfo = prev;
+    } else {
+      job.filamentInfo = [...prev, buildOfflineFilamentInfo(spool, usedMm)];
+    }
     job.filamentId = spool.id;
     linked++;
   }
@@ -1835,6 +2509,42 @@ function _linkOfflineJobsToSpool(hostname, spool, jobIds) {
  *   遡及紐付けする（reconcile の帰属計算の入力になる）。
  * ★ 印刷中(currentPrintID あり)のスプールは reconcile しない（オシレーション回避）。
  */
+export function catchUpOfflineFilamentAttribution(hostname, { liveJobId = null, spool = null } = {}) {
+  if (!hostname || hostname === "_$_NO_MACHINE_$_") return 0;
+  const sp = spool || getCurrentSpool(hostname);
+  if (!sp) return 0;
+  let jobs;
+  try { jobs = loadHistory(hostname); } catch { return 0; }
+  if (!Array.isArray(jobs) || !jobs.length) return 0;
+
+  // ★ レビュー指摘(P0-1): 対象下限は startPrintID ではなく「最新オープン装着区間」を権威にする。
+  //   境界不明(unknown)区間では現在スプールを過去の未帰属履歴へ誤って書き込む恐れがあるため、
+  //   catch-up 自体を禁止する（filamentId/filamentInfo の永続的誤記録を防ぐ）。
+  //   区間があればその sinceJobId、無ければ startPrintID をフォールバックの下限に使う。
+  const interval = getOpenMountInterval(sp.id, hostname);
+  if (interval && interval.boundaryStatus === "unknown") return 0;
+  const sinceId = interval
+    ? (Number(interval.sinceJobId) || 0)
+    : (Number(sp.startPrintID) || 0);
+  const liveIdStr = liveJobId != null ? String(liveJobId) : null;
+  const linkJobIds = new Set();
+  for (const entry of jobs) {
+    if (!entry) continue;
+    // ★ レビュー指摘(点2): 現在進行中のジョブ(C)は除外する（完了ジョブと誤認しない）。
+    if (liveIdStr != null && String(entry.id) === liveIdStr) continue;
+    if (!shouldLinkOfflineJob(entry)) continue;
+    if (!entry.printfinish) continue;
+    const used = Number(entry.materialUsedMm ?? entry.usagematerial ?? NaN);
+    if (!Number.isFinite(used) || used <= 0) continue;
+    const numId = Number(entry.id);
+    if (!Number.isFinite(numId) || numId <= 0) continue;
+    if (sinceId > 0 && numId <= sinceId) continue;   // 排他的下限（<= のまま）
+    linkJobIds.add(String(entry.id));
+  }
+  if (linkJobIds.size === 0) return 0;
+  return _linkOfflineJobsToSpool(hostname, sp, linkJobIds);
+}
+
 export function autoCorrectCurrentSpool(hostname) {
   if (!hostname || hostname === "_$_NO_MACHINE_$_") {
     console.error(`[IMPL_ERROR] autoCorrectCurrentSpool: 異常な機器指定 hostname="${hostname}"`);
@@ -1847,35 +2557,11 @@ export function autoCorrectCurrentSpool(hostname) {
 
   // ── オフライン完了印刷へ現在フィラメントを継続紐付け（filamentInfo を補完）──
   //   この紐付けが reconcile の attributedUsed の入力になるため reconcile の前に行う。
+  //   ★ レビュー指摘(点1): 帰属補完は reconcile から分離した catchUp 関数へ委譲する。
+  //   （帰属＝filamentInfo/filamentId のみ、残量には触れない。残量は下の reconcile が担当）。
   const beforeRemain = Number(spool.remainingLengthMm);
   try {
-    const persistedHistory = loadHistory(hostname);
-    if (Array.isArray(persistedHistory) && persistedHistory.length) {
-      // ★ P1-3: 装着区間の下限は ADR-0004 権威台帳(mountHistory)の open 区間 sinceJobId を使う。
-      //   legacy `spool.startPrintID` は編集等でドリフトしうるため、mount 記録があればそちらを
-      //   権威とし、無い場合(旧データ/未記録)のみ startPrintID へフォールバックする。
-      const _openIv = (getSpoolIntervals(spool.id) || [])
-        .filter(iv => iv.host === hostname && iv.untilJobId == null)
-        .at(-1) || null;
-      const sinceId = _openIv
-        ? (Number(_openIv.sinceJobId) || 0)
-        : (Number(spool.startPrintID) || 0);
-      const linkJobIds = new Set();
-      for (const entry of persistedHistory) {
-        if (!entry || !shouldLinkOfflineJob(entry)) continue;
-        if (!entry.printfinish) continue;
-        const used = Number(entry.materialUsedMm ?? NaN);
-        if (!Number.isFinite(used) || used <= 0) continue;
-        const numId = Number(entry.id);
-        if (!Number.isFinite(numId) || numId <= 0) continue;
-        // sinceId が確定している場合のみ下限で絞る（0=ブートストラップは全件対象）
-        if (sinceId > 0 && numId <= sinceId) continue;
-        linkJobIds.add(String(entry.id));
-      }
-      if (linkJobIds.size > 0) {
-        _linkOfflineJobsToSpool(hostname, spool, linkJobIds);
-      }
-    }
+    catchUpOfflineFilamentAttribution(hostname, { liveJobId: null, spool });
   } catch (e) {
     console.warn(`[autoCorrect] ${hostname}: オフライン紐付けに失敗:`, e?.message || e);
   }

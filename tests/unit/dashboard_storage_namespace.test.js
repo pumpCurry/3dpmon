@@ -69,7 +69,8 @@ vi.mock('../../3dp_lib/dashboard_data.js', () => ({
 vi.mock('../../3dp_lib/dashboard_filament_presets.js', () => ({ FILAMENT_PRESETS: [] }));
 vi.mock('../../3dp_lib/dashboard_log_util.js', () => ({ logManager: { add: vi.fn() } }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: () => ({ seeded: 0 }) }));
+const _initLedgerAnchors = vi.hoisted(() => vi.fn(() => ({ seeded: 0 })));
+vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: _initLedgerAnchors, quarantineInvalidMountEvents: () => 0 }));
 
 /* IDB は実装の setIdbDbName 呼び出しを spy できる本物のモジュールを使う(LS 経路は無効化) */
 const _idbDbNameCalls = [];
@@ -196,5 +197,31 @@ describe('standalone と relay の物理分離(上書き耐性)', () => {
     resetMonitorData();
     restoreUnifiedStorage();
     expect(monitorData.appSettings.itemkeeper?.endpoint).toBe('https://standalone.example/');
+  });
+});
+
+// =============================================================
+// ★ 監査 P0-1(第1報): リレー子は復元時に台帳アンカーを再生成しない
+//   （親スナップショットが唯一の権威。ローカル復元値から mount/推定を再構築すると
+//    親と分岐し、残量乖離が再起動でも直らない主因になる）
+// =============================================================
+describe('リレー子の復元は台帳アンカーを再生成しない(監査 P0-1)', () => {
+  beforeEach(() => { globalThis.window = globalThis.window || {}; });
+  afterEach(() => { delete globalThis.window._3dpmonRelayChild; });
+
+  it('親/standalone(フラグなし)は initLedgerAnchors を実行する', () => {
+    delete globalThis.window._3dpmonRelayChild;
+    setStorageNamespace('');
+    _initLedgerAnchors.mockClear();
+    restoreUnifiedStorage();
+    expect(_initLedgerAnchors).toHaveBeenCalled();
+  });
+
+  it('リレー子(window._3dpmonRelayChild=true)は initLedgerAnchors をスキップする', () => {
+    globalThis.window._3dpmonRelayChild = true;
+    setStorageNamespace('relay');
+    _initLedgerAnchors.mockClear();
+    restoreUnifiedStorage();
+    expect(_initLedgerAnchors).not.toHaveBeenCalled();
   });
 });

@@ -52,13 +52,16 @@ monitorData.hostSpoolMap = {
 - **filamentInventory**: プリセットIDごとの在庫本数を管理し、交換時に1本減算します。
 
 ## 3. フィラメント管理ダイアログ
-「フィラメント管理」モーダルでは以下の4つのタブを切り替えて操作します。
+「フィラメント管理」モーダルでは以下のタブを切り替えて操作します。
 
 | タブ名 | 内容 |
 | --- | --- |
-| **使用記録簿** | 日付順の使用履歴と消費量を表示します |
-| **現在のスプール** | 交換操作と残量確認を行います |
+| **ダッシュボード** | 現在の装着状況、残量、最近の消費状況を確認します |
 | **在庫** | プリセット別の在庫数を確認し入出庫を記録します |
+| **スプール一覧** | 登録済みスプールの検索、編集、装着操作を行います |
+| **推定候補** | オフライン中に完了した印刷の推定 candidate を確認・確定・否認・再割当て・取り消しします |
+| **使用履歴** | 日付順の使用履歴と消費量を表示します |
+| **レポート** | 期間別・プリンタ別の消費量集計を表示します |
 | **プリセット** | プリセットの登録・編集・削除を行います |
 
 ### per-host スプール交換の流れ
@@ -73,6 +76,44 @@ monitorData.hostSpoolMap = {
 - `useFilament()`, `reserveFilament()`, `finalizeFilamentUsage()` などの関数はすべて hostname 引数を受け取ります
 - 使用履歴 (`usageHistory`) にはどのプリンタで消費されたかが記録されます
 - `getActiveHosts()` は接続中のプリンタのみを返し、未接続ホストのデータは表示されません
+
+### 推定候補タブ
+
+推定候補タブは、オフライン中に完了した印刷について「同じスプールが装着され続けていた」と判断できる候補だけを表示します。候補は確定台帳へ自動反映されず、オペレーターの判断で処理します。
+
+| 操作 | 内容 |
+| --- | --- |
+| **Confirm** | 候補スプールへ推定消費量を確定反映し、残量・履歴・台帳イベントを更新します。確定残量が候補消費量より少ない場合は処理しません |
+| **Reject** | 候補を否認します。残量や履歴は変更しません |
+| **Reassign** | 候補とは別のスプールへ推定消費量を確定反映します。再割当て先の確定残量が不足する場合は処理しません |
+| **Undo** | Confirm / Reassign 済みの候補について、O5 が追加した残量・履歴帰属を戻し、台帳には逆仕訳イベントを追記します。元の決定直後に記録した履歴状態と現在の履歴状態が完全一致しない場合は、後続変更を消さないため処理しません |
+
+候補には `pending`, `confirmed`, `rejected`, `reassigned`, `superseded`, `undone` の状態があります。`pending` だけが Confirm / Reject / Reassign の対象で、`confirmed` と `reassigned` だけが Undo の対象です。
+
+Relay 構成では、Standalone と Parent は Confirm / Reject / Reassign / Undo を実行できます。Satellite は候補を閲覧でき、操作モードに昇格している場合は Parent へ decision request を送ります。Readonly の Satellite では操作ボタンは無効化されます。
+
+推定候補タブの上部には、必要に応じて Recovery / repair status が表示されます。これは `inferredDecisionRecoveryRequired`、`inferredRecoveryOperationRecoveryRequired`、`ledgerRepairRequired`、`mountHistoryRejectedEvents` など、自動継続してはいけない状態を確認するための診断です。表示された場合は、原因となった candidate、host、spool、保存失敗理由、隔離された mountHistory event を確認できます。
+
+Standalone / Parent では、Recovery / repair status から次の復旧操作を実行できます。
+
+| 復旧操作 | 内容 |
+| --- | --- |
+| **Retry save** | 現在の recovery / repair 状態を再度耐久保存します |
+| **Clear recovery** | rollback 後の状態を確認済みの場合に `inferredDecisionRecoveryRequired` を解除します |
+| **Clear operation recovery** | O6復旧操作そのもののrollback保存失敗を確認済みの場合に `inferredRecoveryOperationRecoveryRequired` を解除します |
+| **Repair intervals** | `ledgerRepairRequired` が示す曖昧な mount interval について、残す survivor 区間を明示選択し、それ以外の open 区間を supersede して修復します |
+| **Clear repair** | 対象 host の mount ledger を確認済みで、現在状態が `ambiguous` / `corrupt` ではない場合に `ledgerRepairRequired` を解除します |
+| **Archive rejected** | 隔離済み mountHistory event を `inferredRecoveryEvents` へ監査退避し、warning を閉じます |
+
+`Repair intervals` は現在状態が `ambiguous` で、open interval が複数あり、選択した survivor が現在も open の場合だけ実行できます。`corrupt` 状態は参照不整合を含むため、この操作では自動修復せず、O7 の再計算監査または手動調査の対象にします。
+
+これらの復旧操作は `inferredRecoveryEvents` に監査 event を残し、保存失敗時は操作前の状態へ戻します。`Repair intervals` では `mountHistory` と `mountHistorySeq` も rollback 対象です。復旧操作のrollback状態も保存できなかった場合は `inferredRecoveryOperationRecoveryRequired` が立ち、Retry save と確認後の解除以外の O5/O6 操作を停止します。Relay 構成では Satellite も Parent 権威の診断状態をミラー表示しますが、復旧操作は無効化されます。復旧操作は Parent 端末で実行してください。
+
+復旧操作後は、同じ Recovery / repair status に **Recovery operation audit** が表示されます。ここには最新の再保存、recovery flag 解除、ledger repair flag 解除、隔離 event 退避の履歴が残り、対象 candidate、host、件数、操作者、実行時刻を確認できます。未解決 blocker が無い場合でも、直近の復旧操作履歴は INFO として表示されます。
+
+O7 の read-only 照合では、`inferredCandidateStore`、O5 が `usedLengthLog` へ追加した confirmed / undone event、履歴 `filamentInfo` / `filamentId` snapshot を突き合わせます。不一致がある場合は **Ledger reconciliation issues** として表示されます。さらに、`remainingLedgerBaseline` などの明示された残量 baseline があるスプールでは、その baseline 以降の通常 print finalize `{jobId, used}`、O5 confirmed event、O5 undone event だけを合算し、保存済み `remainingLengthMm` と再計算残量を比較します。各 issue には確認すべき修復方針 `repairHint` を添えますが、この表示は診断専用で、自動修復や残量変更は行いません。再装着・手動補正・旧 import などで baseline 境界を証明できないスプールは誤検出を避けるため mismatch ではなく `unverifiable` として集計されます。負残量は台帳上の有効な監査値として保持され、再計算値と保存値が一致する場合は `spool_negative_remaining` warning として表示されます。
+
+負残量の表示はストレージ設定の **負残量表示** で切り替えできます。既定は「マイナス表示を許容」です。「表示だけ0に丸める」を選んだ場合も、内部台帳の `remainingLengthMm` は負値のまま保存され、O5/O7 の監査対象として残ります。
 
 ### 登録済みフィラメントタブ
 

@@ -30,6 +30,22 @@
 
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { sendRelayFilament } from "./dashboard_client_sync.js";
+
+/**
+ * リレー子（satellite/readonly）判定。
+ *
+ * ★ 監査 P0(第2報): 在庫は親が唯一の権威。子はローカル変更せず親へ RPC 委譲し、
+ * 結果は relay-delta（filamentInventory を含む）で還流する。従来は在庫操作に
+ * ガードが一切無く、子で増減しても親へ伝わらず、親で増減しても子へ伝わらず、
+ * 在庫が親子で完全に別管理になっていた。
+ *
+ * @private
+ * @returns {boolean} リレー子なら true
+ */
+function _isRelayChildInv() {
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
+}
 
 /**
  * 在庫一覧を取得する。
@@ -86,8 +102,13 @@ function ensureItem(modelId) {
  * @returns {number} 設定後の在庫数
  */
 export function setInventoryQuantity(modelId, quantity) {
+  const q = Number(quantity) || 0;
+  if (_isRelayChildInv()) {
+    sendRelayFilament("setInventoryQuantity", { modelId, quantity: q });
+    return q; // 楽観値。親確定後に relay-delta で正が還流する
+  }
   const item = ensureItem(modelId);
-  item.quantity = Number(quantity) || 0;
+  item.quantity = q;
   saveUnifiedStorage(true);
   return item.quantity;
 }
@@ -101,8 +122,14 @@ export function setInventoryQuantity(modelId, quantity) {
  * @returns {number} 更新後の在庫数
  */
 export function adjustInventory(modelId, delta) {
+  const d = Number(delta) || 0;
+  if (_isRelayChildInv()) {
+    sendRelayFilament("adjustInventory", { modelId, delta: d });
+    const cur = getInventoryItem(modelId);
+    return (cur?.quantity || 0) + d; // 楽観値
+  }
   const item = ensureItem(modelId);
-  item.quantity = (item.quantity || 0) + Number(delta);
+  item.quantity = (item.quantity || 0) + d;
   saveUnifiedStorage(true);
   return item.quantity;
 }
@@ -123,8 +150,13 @@ export function adjustInventory(modelId, delta) {
  * @returns {number} 設定後の閾値
  */
 export function setMinStockAlert(modelId, threshold) {
+  const t = Math.max(0, Number(threshold) || 0);
+  if (_isRelayChildInv()) {
+    sendRelayFilament("setMinStockAlert", { modelId, threshold: t });
+    return t; // 楽観値
+  }
   const item = ensureItem(modelId);
-  item.minStockAlert = Math.max(0, Number(threshold) || 0);
+  item.minStockAlert = t;
   saveUnifiedStorage(true);
   return item.minStockAlert;
 }

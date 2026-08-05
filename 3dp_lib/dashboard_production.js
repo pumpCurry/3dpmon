@@ -28,6 +28,36 @@
 "use strict";
 
 import { monitorData } from "./dashboard_data.js";
+import {
+  wallNowMs, resolvedLocalTimeZone, normalizeTimeZone, dateKey, monthKey, shiftDateKey,
+  parseInstantStrict, epochMsFromWallClock
+} from "./dashboard_time.js";
+
+/**
+ * レポートの業務タイムゾーンを決める（親権威の永続設定を優先・IANA 検証つき）。
+ * ★ レビュー(P1): 既定を実行PCローカルにすると親子で分岐する。appSettings.businessTimeZone を正本にし、
+ *   無効値は正規化で弾いて安全化する。親起動時に具体名へ確定済みなので通常は具体値が入る。
+ * @private
+ * @param {string} [override] - 明示指定（テスト/呼び出し側）
+ * @returns {string} 有効な IANA タイムゾーン
+ */
+function _reportTimeZone(override) {
+  return normalizeTimeZone(override)
+    || normalizeTimeZone(monitorData.appSettings?.businessTimeZone)
+    || resolvedLocalTimeZone();
+}
+
+/**
+ * offset なし旧履歴の移行に使う「固定基準ゾーン」（レビュー P2 item5）。
+ * businessTimeZone を後から変更しても旧文字列が再解釈されないよう、専用の固定設定を優先する。
+ * @private
+ * @returns {string} 有効な IANA タイムゾーン
+ */
+function _legacyHistoryTimeZone() {
+  return normalizeTimeZone(monitorData.appSettings?.legacyHistoryTimeZone)
+    || normalizeTimeZone(monitorData.appSettings?.businessTimeZone)
+    || "UTC";
+}
 
 /**
  * 印刷状態コード
@@ -57,13 +87,19 @@ const PRINT_STATE = {
  * @returns {{startSec:number, finishSec:number, durationSec:number,
  *            materialMm:number, isSuccess:boolean, isFinished:boolean}}
  */
-function _normalizeHistoryEntry(entry) {
-  const startSec = Number(entry?.startTimeSec)
-    || (entry?.startTime ? Math.floor(Date.parse(entry.startTime) / 1000) : 0)
-    || 0;
-  const finishSec = Number(entry?.finishTimeSec)
-    || (entry?.finishTime ? Math.floor(Date.parse(entry.finishTime) / 1000) : 0)
-    || 0;
+function _normalizeHistoryEntry(entry, legacyTimeZone = _legacyHistoryTimeZone()) {
+  // ★ レビュー(P1): 文字列時刻の UTC/local 混入を閉じる。優先順位:
+  //   1) *_TimeSec(epoch秒) を最優先  2) offset/Z 付き文字列は parseInstantStrict
+  //   3) offset なし旧履歴は明示 legacyTimeZone で移行(epochMsFromWallClock)
+  //   4) 解釈不能なら 0（黙ってローカル parse しない）。
+  const _sec = (str) => {
+    if (!str) return 0;
+    let ms = parseInstantStrict(str);
+    if (ms == null) ms = epochMsFromWallClock(str, legacyTimeZone);
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+  };
+  const startSec = Number(entry?.startTimeSec) || _sec(entry?.startTime) || 0;
+  const finishSec = Number(entry?.finishTimeSec) || _sec(entry?.finishTime) || 0;
   const durationSec = (finishSec > startSec) ? (finishSec - startSec) : 0;
   const materialMm = Number(entry?.materialUsedMm || 0);
   const isSuccess = entry?.printfinish === 1;
@@ -229,27 +265,18 @@ export function buildHostUtilization(hostname, options = {}) {
  */
 export function buildDailyProductionReport(options = {}) {
   const days = options.days || 7;
-  const now = new Date();
+  // ★ レビュー(時計衛生): 実時計依存を排除する。nowMs/timeZone を注入可能にし、省略時のみ実時刻・
+  //   業務ゾーン(親権威設定)を使う。日付キーは明示ゾーンで決定論的に決める。
+  const timeZone = _reportTimeZone(options.timeZone);
+  const nowMs = options.nowMs != null ? Number(options.nowMs) : wallNowMs();
   const dayMap = {};
 
-  /**
-   * ローカルタイムゾーンで YYYY-MM-DD を生成する。
-   * toISOString() はUTC基準で日付境界がずれるため使わない。
-   * @param {Date} d - 日付
-   * @returns {string} "YYYY-MM-DD"
-   */
-  function _localDateKey(d) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-
-  // 過去N日分の空データを初期化
+  // ★ レビュー(P0): 過去N日は「24時間前」ではなく「カレンダー前日」で減算する（DST 開始日でも
+  //   1日飛ばず、必ず N 日分そろう）。まず現在の業務日付を得て、キー文字列を日単位で減算する。
+  const todayKey = dateKey(nowMs, timeZone);
   for (let d = 0; d < days; d++) {
-    const date = new Date(now);
-    date.setDate(date.getDate() - d);
-    const key = _localDateKey(date);
+    const key = shiftDateKey(todayKey, -d);
+    if (dayMap[key]) continue;
     dayMap[key] = {
       date: key,
       printCount: 0,
@@ -269,8 +296,8 @@ export function buildDailyProductionReport(options = {}) {
     for (const entry of history) {
       const { startSec, durationSec, materialMm, isSuccess, isFinished } = _normalizeHistoryEntry(entry);
       if (startSec === 0) continue;
-      const dateKey = _localDateKey(new Date(startSec * 1000));
-      const day = dayMap[dateKey];
+      const dk = dateKey(startSec * 1000, timeZone);
+      const day = dayMap[dk];
       if (!day) continue;
 
       day.printCount++;
@@ -614,7 +641,8 @@ export function buildHostRanking(options = {}) {
  *   monthlyTrend: Array<{month: string, consumedMm: number, costYen: number}>
  * }>}
  */
-export function buildMaterialReport() {
+export function buildMaterialReport(options = {}) {
+  const timeZone = _reportTimeZone(options.timeZone);
   const materialMap = {};
 
   for (const spool of monitorData.filamentSpools) {
@@ -652,15 +680,14 @@ export function buildMaterialReport() {
       for (const log of spool.usedLengthLog) {
         const jobIdNum = Number(log.jobId);
         if (!Number.isFinite(jobIdNum) || jobIdNum <= 0) continue;
-        // jobId は epoch 秒
-        const date = new Date(jobIdNum * 1000);
-        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        if (!m.monthlyBuckets[monthKey]) {
-          m.monthlyBuckets[monthKey] = { consumedMm: 0, costYen: 0 };
+        // jobId は epoch 秒。業務月キーは明示ゾーンで決定論的に決める（実行PCローカル依存排除）。
+        const mk = monthKey(jobIdNum * 1000, timeZone);
+        if (!m.monthlyBuckets[mk]) {
+          m.monthlyBuckets[mk] = { consumedMm: 0, costYen: 0 };
         }
         const used = Number(log.used) || 0;
-        m.monthlyBuckets[monthKey].consumedMm += used;
-        m.monthlyBuckets[monthKey].costYen += used * costPerMm;
+        m.monthlyBuckets[mk].consumedMm += used;
+        m.monthlyBuckets[mk].costYen += used * costPerMm;
       }
     }
   }

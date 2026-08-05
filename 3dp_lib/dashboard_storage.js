@@ -16,6 +16,7 @@
  * 【公開関数一覧】
  * - {@link setStorageLogEnabled}：ログ出力有効化
  * - {@link saveUnifiedStorage}：全データ保存
+ * - {@link saveUnifiedStorageDurably}：全データを耐久保存完了まで待つ
  * - {@link restoreUnifiedStorage}：全データ復元
  * - {@link restoreLegacyStoredData}：レガシーデータ読込
  * - {@link cleanupLegacy}：レガシー削除
@@ -26,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.787 (PR #367)
+* @version 1.390.1279 (PR #426)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-12
+* @lastModified 2026-08-04 11:50:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,7 +41,7 @@ import { monitorData, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboar
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
-import { initLedgerAnchors } from "./dashboard_filament_ledger.js";
+import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import {
   initIdb,
@@ -163,8 +164,8 @@ export async function importAllData(data) {
           // ★ remainingLengthMm は updatedAt で判定（新しい方が勝つ）
           const importRemain = existing.remainingLengthMm;
           const importTime = existing.updatedAt ?? 0;
-          const prevValid = Number.isFinite(prevRemain) && prevRemain > 0;
-          const importValid = Number.isFinite(importRemain) && importRemain > 0;
+          const prevValid = Number.isFinite(prevRemain);
+          const importValid = Number.isFinite(importRemain);
           if (prevValid && importValid) {
             if (prevUpdatedAt >= importTime) {
               existing.remainingLengthMm = prevRemain;
@@ -205,19 +206,113 @@ export async function importAllData(data) {
     // 時系列順にソート
     monitorData.usageHistory.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
     trimUsageHistory();
+    // ★ レビュー指摘#4: 一括インポートは中間レコードの順序/内容を変え得る（件数＋末尾署名では
+    //   捕捉しきれない）。rev を加算してリレーの変更検出を確実にする。
+    monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
   }
 
-  // ── ADR-0004 mountHistory: 装着履歴を evId ベースで重複排除追加 ──
+  // ── ADR-0004 mountHistory: 装着履歴を (opId||evId) ベースで重複排除追加 ──
+  //   ★ P1-1(レビュー): 同一操作が再送で別 evId(UUID) になっても opId で1件に畳む。
   if (Array.isArray(data.mountHistory)) {
     if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
-    const existingIds = new Set(monitorData.mountHistory.map(e => e?.evId));
+    const existingIds = new Set(monitorData.mountHistory.map(e => e?.opId || e?.evId));
     for (const ev of data.mountHistory) {
-      if (ev && ev.evId != null && !existingIds.has(ev.evId)) {
+      const key = ev?.opId || ev?.evId;
+      if (ev && key != null && !existingIds.has(key)) {
         monitorData.mountHistory.push(ev);
-        existingIds.add(ev.evId);
+        existingIds.add(key);
       }
     }
     monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
+  }
+
+  // ── ★ P0-1(レビュー): mountHistorySeq(watermark) を最大値へ引き上げ（後退させない） ──
+  if (data.mountHistorySeq != null) {
+    monitorData.mountHistorySeq = Math.max(
+      Number(monitorData.mountHistorySeq) || 0, Number(data.mountHistorySeq) || 0
+    );
+  }
+
+  // ── ★ P0-1: pendingUnattributedUsage を pendingUsageId(無ければ completionFingerprint)で
+  //   重複排除しつつ追加。再起動/再import後も未帰属消費と未確認バッジ・通知集合が失われない。──
+  if (Array.isArray(data.pendingUnattributedUsage)) {
+    if (!Array.isArray(monitorData.pendingUnattributedUsage)) monitorData.pendingUnattributedUsage = [];
+    const seen = new Set(
+      monitorData.pendingUnattributedUsage.map(e => e?.pendingUsageId ?? e?.completionFingerprint)
+    );
+    for (const r of data.pendingUnattributedUsage) {
+      const key = r?.pendingUsageId ?? r?.completionFingerprint;
+      if (r && key != null && !seen.has(key)) {
+        monitorData.pendingUnattributedUsage.push(r);
+        seen.add(key);
+      }
+    }
+  }
+
+  // ── ★ P0-1: 隔離アーカイブ（per-host 集約）は未保持ホストのみ取り込む（二重集計回避） ──
+  if (data.pendingUnattributedUsageArchive && typeof data.pendingUnattributedUsageArchive === "object") {
+    if (!monitorData.pendingUnattributedUsageArchive
+        || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+      monitorData.pendingUnattributedUsageArchive = {};
+    }
+    for (const [h, a] of Object.entries(data.pendingUnattributedUsageArchive)) {
+      if (a && !monitorData.pendingUnattributedUsageArchive[h]) {
+        monitorData.pendingUnattributedUsageArchive[h] = { ...a };
+      }
+    }
+  }
+
+  // ── ★ #412-O4: inferredCandidateStore は candidateHash 単位でマージ ──
+  //   同一 window/candidate の二重処理を避け、既存候補と import 候補が衝突した場合は
+  //   updatedAt が新しい方を採用する。削除ではなく状態遷移で監査する前提のため、未知状態も保持する。
+  if (data.inferredCandidateStore && typeof data.inferredCandidateStore === "object") {
+    if (!monitorData.inferredCandidateStore || typeof monitorData.inferredCandidateStore !== "object") {
+      monitorData.inferredCandidateStore = {};
+    }
+    for (const [hash, value] of Object.entries(data.inferredCandidateStore)) {
+      if (!value || typeof value !== "object") continue;
+      const current = monitorData.inferredCandidateStore[hash];
+      if (!current || (Number(value.updatedAt) || 0) >= (Number(current.updatedAt) || 0)) {
+        monitorData.inferredCandidateStore[hash] = { ...value };
+      }
+    }
+  }
+
+  // ── ★ #420/O6A: O5 recovery flag と recovery 操作 audit event をインポート ──
+  //   recovery flag は未解決 blocker なので、既存より新しい createdAt を持つ場合だけ採用する。
+  if (Object.prototype.hasOwnProperty.call(data, "inferredDecisionRecoveryRequired")) {
+    const incoming = data.inferredDecisionRecoveryRequired;
+    if (incoming && typeof incoming === "object") {
+      const current = monitorData.inferredDecisionRecoveryRequired;
+      if (!current || (Number(incoming.createdAt) || 0) >= (Number(current.createdAt) || 0)) {
+        monitorData.inferredDecisionRecoveryRequired = { ...incoming };
+      }
+    } else if (!monitorData.inferredDecisionRecoveryRequired) {
+      monitorData.inferredDecisionRecoveryRequired = null;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "inferredRecoveryOperationRecoveryRequired")) {
+    const incoming = data.inferredRecoveryOperationRecoveryRequired;
+    if (incoming && typeof incoming === "object") {
+      const current = monitorData.inferredRecoveryOperationRecoveryRequired;
+      if (!current || (Number(incoming.createdAt) || 0) >= (Number(current.createdAt) || 0)) {
+        monitorData.inferredRecoveryOperationRecoveryRequired = { ...incoming };
+      }
+    } else if (!monitorData.inferredRecoveryOperationRecoveryRequired) {
+      monitorData.inferredRecoveryOperationRecoveryRequired = null;
+    }
+  }
+  if (Array.isArray(data.inferredRecoveryEvents)) {
+    if (!Array.isArray(monitorData.inferredRecoveryEvents)) monitorData.inferredRecoveryEvents = [];
+    const seen = new Set(monitorData.inferredRecoveryEvents.map(event => event?.eventId));
+    for (const event of data.inferredRecoveryEvents) {
+      const key = event?.eventId;
+      if (event && key != null && !seen.has(key)) {
+        monitorData.inferredRecoveryEvents.push({ ...event });
+        seen.add(key);
+      }
+    }
+    monitorData.inferredRecoveryEvents.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
   }
 
   // ── プリセット: presetId ベースで新規のみ追加 (ユーザー編集版を保持) ──
@@ -334,6 +429,20 @@ export async function importAllData(data) {
       monitorData.appSettings.connectionTargets.push(t);
       existingDests.add(t.dest);
       existingIps.add(ip);
+    }
+  }
+  if (data.appSettings && typeof data.appSettings === "object") {
+    const importedNegativeMode = data.appSettings.negativeRemainingDisplayMode
+      ?? data.appSettings.negativeRemainingDisplay
+      ?? data.appSettings.filamentRemainingDisplayMode;
+    if (importedNegativeMode === "clamp-zero") {
+      monitorData.appSettings.negativeRemainingDisplayMode = "clamp-zero";
+    } else if (
+      importedNegativeMode === "show-negative"
+      || importedNegativeMode === "show"
+      || importedNegativeMode === "signed"
+    ) {
+      monitorData.appSettings.negativeRemainingDisplayMode = "show-negative";
     }
   }
 
@@ -611,8 +720,20 @@ export function setStorageNamespace(ns) {
 const LS_GLOBAL_FIELDS = [
   "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
   "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
-  // ★ ADR-0004: フィラメント装着履歴
-  "mountHistory",
+  // ★ ADR-0004: フィラメント装着履歴 ＋ watermark(seq)
+  "mountHistory", "mountHistorySeq",
+  // ★ #410-9: 参照不整合で隔離した mount イベント（元データを失わない）
+  "mountHistoryRejectedEvents",
+  // ★ #411-O1: オフライン推定の観測 watermark（baseline＝再起動後の差分基準）＋現セッション観測
+  "hostObservationWatermark", "hostObservationCurrent",
+  // ★ #412-O4: オフライン継続推定 candidate（親権威・状態遷移つき）
+  "inferredCandidateStore",
+  // ★ #420/O6A: O5 recovery blocker と復旧操作 audit event
+  "inferredDecisionRecoveryRequired", "inferredRecoveryOperationRecoveryRequired", "inferredRecoveryEvents",
+  // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない）
+  "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
+  // ★ RR-2: 台帳修復要求フラグ（破損時に暗黙クローズせず可視化）
+  "ledgerRepairRequired",
   // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
   "filamentEventContext",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
@@ -702,7 +823,12 @@ export function trimUsageHistory() {
   }
 
   const cutoff = logs.length - MAX_USAGE_HISTORY;
-  monitorData.usageHistory = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
+  const trimmed = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
+  // ★ レビュー指摘#8: トリム（先頭側の中間削除）でも rev を加算し変更検出を確実にする。
+  if (trimmed.length !== logs.length) {
+    monitorData.usageHistoryRev = (monitorData.usageHistoryRev || 0) + 1;
+  }
+  monitorData.usageHistory = trimmed;
 }
 
 /**
@@ -727,6 +853,35 @@ export function saveUnifiedStorage(immediate = false) {
     _saveTimer = null;
     if (_savePending) _flushStorage();
   }, SAVE_THROTTLE_MS);
+}
+
+/**
+ * monitorData 全体を保存し、IndexedDB 利用時は transaction 完了まで待機する。
+ *
+ * 【詳細説明】
+ * - `saveUnifiedStorage(true)` は IndexedDB パスでは queue へ積むだけで即時復帰する。
+ * - candidate 保存後に observation baseline を進める経路では、candidate が実際に耐久保存されたことを
+ *   確認してから commit しないと、クラッシュ時に baseline だけ進む可能性がある。
+ * - IndexedDB が無効または未初期化の場合は localStorage 同期保存が完了した時点で成功とみなす。
+ * - IndexedDB flush 中にフォールバックへ切り替わった場合は、呼び出し元に失敗を返し、baseline commit を止める。
+ *
+ * @function saveUnifiedStorageDurably
+ * @returns {Promise<{ok:boolean, backend:string, reason:string}>} 耐久保存結果。
+ * @example
+ * const saved = await saveUnifiedStorageDurably();
+ */
+export async function saveUnifiedStorageDurably() {
+  const expectedIdb = _idbInitialized && isIdbAvailable();
+  const queued = _flushStorage();
+  if (queued?.ok === false) return queued;
+  if (!expectedIdb) {
+    return queued || { ok: true, backend: "localStorage", reason: "saved" };
+  }
+  await flushIdb();
+  if (!isIdbAvailable()) {
+    return { ok: false, backend: "indexedDB", reason: "idb_flush_failed" };
+  }
+  return { ok: true, backend: "indexedDB", reason: "flushed" };
 }
 
 /**
@@ -808,6 +963,7 @@ export function isEmptyHostShell(parsed) {
  * 実際のストレージ書き込みを行う内部関数。
  * IndexedDB が有効な場合はキューに追加し、無効な場合は localStorage へ書き込む。
  * @private
+ * @returns {{ok:boolean, backend:string, reason:string, error?:string}} 保存またはキュー投入の結果。
  */
 function _flushStorage() {
   _savePending = false;
@@ -822,8 +978,20 @@ function _flushStorage() {
       queueSharedWrite("hiddenPresets",      monitorData.hiddenPresets);
       queueSharedWrite("favoritePresets",    monitorData.favoritePresets);
       queueSharedWrite("filamentInventory",  monitorData.filamentInventory);
-      // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）
+      // ★ ADR-0004: フィラメント装着履歴（残量導出の権威）＋ watermark(seq)
       queueSharedWrite("mountHistory",       monitorData.mountHistory);
+      queueSharedWrite("mountHistorySeq",    monitorData.mountHistorySeq);
+      queueSharedWrite("mountHistoryRejectedEvents", monitorData.mountHistoryRejectedEvents);
+      queueSharedWrite("hostObservationWatermark", monitorData.hostObservationWatermark);
+      queueSharedWrite("hostObservationCurrent",   monitorData.hostObservationCurrent);
+      queueSharedWrite("inferredCandidateStore",   monitorData.inferredCandidateStore);
+      queueSharedWrite("inferredDecisionRecoveryRequired", monitorData.inferredDecisionRecoveryRequired || null);
+      queueSharedWrite("inferredRecoveryOperationRecoveryRequired", monitorData.inferredRecoveryOperationRecoveryRequired || null);
+      queueSharedWrite("inferredRecoveryEvents", monitorData.inferredRecoveryEvents || []);
+      // ★ P0-1: 未帰属消費の隔離領域とアーカイブ（再起動後も失わない・子へも配信）
+      queueSharedWrite("pendingUnattributedUsage",        monitorData.pendingUnattributedUsage);
+      queueSharedWrite("pendingUnattributedUsageArchive", monitorData.pendingUnattributedUsageArchive);
+      queueSharedWrite("ledgerRepairRequired",            monitorData.ledgerRepairRequired);
       // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
@@ -853,6 +1021,7 @@ function _flushStorage() {
       if (_enableStorageLog) {
         console.debug("[saveUnifiedStorage] IndexedDB キューに追加しました");
       }
+      return { ok: true, backend: "indexedDB", reason: "queued" };
     } else {
       // フォールバック: localStorage（per-host 分割形式）
       _writePerHostLocalStorage();
@@ -860,10 +1029,17 @@ function _flushStorage() {
       if (_enableStorageLog) {
         console.debug("[saveUnifiedStorage] localStorage (per-host) に保存しました");
       }
+      return { ok: true, backend: "localStorage", reason: "saved" };
     }
   } catch (e) {
     console.warn("[saveUnifiedStorage] 保存に失敗しました:", e);
     logManager.add({ timestamp:getCurrentTimestamp(), level:"error", msg:`[saveUnifiedStorage] エラー: ${e.message}` });
+    return {
+      ok: false,
+      backend: (_idbInitialized && isIdbAvailable()) ? "indexedDB" : "localStorage",
+      reason: "local_storage_write_failed",
+      error: e?.message || String(e)
+    };
   }
 }
 
@@ -943,6 +1119,17 @@ export function restoreUnifiedStorage() {
  * @returns {void}
  */
 function _reconcileAfterRestore() {
+  // ★ 監査 P0-1(第1報): リレー子（satellite/readonly）は台帳の権威を持たない。
+  //   親スナップショットが唯一の正であり、復元したローカルデータから mount イベントや
+  //   推定アンカーを再生成すると親と分岐する（＝残量乖離が再起動でも直らない主因）。
+  //   フラグは init 側でストレージ復元前に確定済み。
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    console.debug("[restoreUnifiedStorage] リレー子: 台帳アンカー種付けをスキップ（親が権威）");
+    return;
+  }
+  // ★ #410-9: 種付け前に、import/復元された参照不整合イベントを隔離する（projection の corrupt 化防止）。
+  try { quarantineInvalidMountEvents(); }
+  catch (e) { console.warn("[restoreUnifiedStorage] quarantineInvalidMountEvents 失敗:", e?.message || e); }
   try {
     const report = initLedgerAnchors({ nowMs: Date.now() });
     if (report && report.seeded > 0) {
@@ -1042,8 +1229,8 @@ function _restoreFromData(shared, machines) {
           // ★ C2: remainingLengthMm — updatedAt 時系列判定（Math.min 廃止）
           const existRemain = existing.remainingLengthMm;
           const restoredRemain = restored.remainingLengthMm;
-          const existValid = Number.isFinite(existRemain) && existRemain > 0;
-          const restoredValid = Number.isFinite(restoredRemain) && restoredRemain > 0;
+          const existValid = Number.isFinite(existRemain);
+          const restoredValid = Number.isFinite(restoredRemain);
 
           let mergedRemain;
           if (existValid && restoredValid) {
@@ -1103,21 +1290,130 @@ function _restoreFromData(shared, machines) {
   }
   trimUsageHistory();
 
-  // ★ ADR-0004 mountHistory: 装着履歴を evId ベースでマージ（追記専用ログ・全クリアしない）
+  // ★ ADR-0004/P1-1 mountHistory: (opId||evId) ベースでマージ（追記専用ログ・全クリアしない）
   if (Array.isArray(shared?.mountHistory)) {
     if (!Array.isArray(monitorData.mountHistory)) monitorData.mountHistory = [];
     if (monitorData.mountHistory.length === 0) {
       monitorData.mountHistory = shared.mountHistory.slice();
     } else {
-      const existingIds = new Set(monitorData.mountHistory.map(e => e?.evId));
+      const existingIds = new Set(monitorData.mountHistory.map(e => e?.opId || e?.evId));
       for (const ev of shared.mountHistory) {
-        if (ev && !existingIds.has(ev.evId)) {
+        const key = ev?.opId || ev?.evId;
+        if (ev && key != null && !existingIds.has(key)) {
           monitorData.mountHistory.push(ev);
-          existingIds.add(ev.evId);
+          existingIds.add(key);
         }
       }
     }
     monitorData.mountHistory.sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
+  }
+
+  // ★ P0-1(レビュー): mountHistorySeq(watermark) を最大値へ引き上げ（後退させない）
+  if (shared && shared.mountHistorySeq != null) {
+    monitorData.mountHistorySeq = Math.max(
+      Number(monitorData.mountHistorySeq) || 0, Number(shared.mountHistorySeq) || 0
+    );
+  }
+
+  // ★ P0-1: pendingUnattributedUsage を pendingUsageId(無ければ fingerprint)で重複排除追加。
+  //   再起動後も未帰属消費・未確認バッジ・通知集合が失われないようにする。
+  if (Array.isArray(shared?.pendingUnattributedUsage)) {
+    if (!Array.isArray(monitorData.pendingUnattributedUsage)) monitorData.pendingUnattributedUsage = [];
+    const seen = new Set(
+      monitorData.pendingUnattributedUsage.map(e => e?.pendingUsageId ?? e?.completionFingerprint)
+    );
+    for (const r of shared.pendingUnattributedUsage) {
+      const key = r?.pendingUsageId ?? r?.completionFingerprint;
+      if (r && key != null && !seen.has(key)) {
+        monitorData.pendingUnattributedUsage.push(r);
+        seen.add(key);
+      }
+    }
+  }
+
+  // ★ P0-1: 隔離アーカイブ（per-host 集約）は未保持ホストのみ取り込む（二重集計回避）。
+  if (shared?.pendingUnattributedUsageArchive && typeof shared.pendingUnattributedUsageArchive === "object") {
+    if (!monitorData.pendingUnattributedUsageArchive
+        || typeof monitorData.pendingUnattributedUsageArchive !== "object") {
+      monitorData.pendingUnattributedUsageArchive = {};
+    }
+    for (const [h, a] of Object.entries(shared.pendingUnattributedUsageArchive)) {
+      if (a && !monitorData.pendingUnattributedUsageArchive[h]) {
+        monitorData.pendingUnattributedUsageArchive[h] = { ...a };
+      }
+    }
+  }
+
+  // ★ RR-2: 台帳修復要求フラグ（per-host）は未保持ホストのみ取り込む。
+  if (shared?.ledgerRepairRequired && typeof shared.ledgerRepairRequired === "object") {
+    if (!monitorData.ledgerRepairRequired || typeof monitorData.ledgerRepairRequired !== "object") {
+      monitorData.ledgerRepairRequired = {};
+    }
+    for (const [h, v] of Object.entries(shared.ledgerRepairRequired)) {
+      if (v && !monitorData.ledgerRepairRequired[h]) monitorData.ledgerRepairRequired[h] = { ...v };
+    }
+  }
+
+  // ★ #411-O1: オフライン推定の観測 watermark（baseline・per-host）は未保持ホストのみ取り込む
+  //   （再起動後の差分基準＝停止直前の観測状態を復元。起動直後の record は baseline を上書きしない）。
+  if (shared?.hostObservationWatermark && typeof shared.hostObservationWatermark === "object") {
+    if (!monitorData.hostObservationWatermark || typeof monitorData.hostObservationWatermark !== "object") {
+      monitorData.hostObservationWatermark = {};
+    }
+    for (const [h, v] of Object.entries(shared.hostObservationWatermark)) {
+      if (v && !monitorData.hostObservationWatermark[h]) monitorData.hostObservationWatermark[h] = { ...v };
+    }
+  }
+  // ★ #411-O1: 現セッション観測（crash 耐性用）。record が上書きするため未保持のみ取り込む。
+  if (shared?.hostObservationCurrent && typeof shared.hostObservationCurrent === "object") {
+    if (!monitorData.hostObservationCurrent || typeof monitorData.hostObservationCurrent !== "object") {
+      monitorData.hostObservationCurrent = {};
+    }
+    for (const [h, v] of Object.entries(shared.hostObservationCurrent)) {
+      if (v && !monitorData.hostObservationCurrent[h]) monitorData.hostObservationCurrent[h] = { ...v };
+    }
+  }
+
+  // ★ #412-O4: inferredCandidateStore は candidateHash 単位でマージする。
+  //   既存候補がある場合は updatedAt が新しい方を採用し、同一 window の二重処理を避ける。
+  if (shared?.inferredCandidateStore && typeof shared.inferredCandidateStore === "object") {
+    if (!monitorData.inferredCandidateStore || typeof monitorData.inferredCandidateStore !== "object") {
+      monitorData.inferredCandidateStore = {};
+    }
+    for (const [hash, value] of Object.entries(shared.inferredCandidateStore)) {
+      if (!value || typeof value !== "object") continue;
+      const current = monitorData.inferredCandidateStore[hash];
+      if (!current || (Number(value.updatedAt) || 0) >= (Number(current.updatedAt) || 0)) {
+        monitorData.inferredCandidateStore[hash] = { ...value };
+      }
+    }
+  }
+
+  // ★ #420/O6A: O5 recovery flag と復旧操作 audit event を復元する。
+  //   recovery flag は blocker なので、ストレージ値が明示 null の場合も状態を消す。
+  if (shared && Object.prototype.hasOwnProperty.call(shared, "inferredDecisionRecoveryRequired")) {
+    monitorData.inferredDecisionRecoveryRequired =
+      shared.inferredDecisionRecoveryRequired && typeof shared.inferredDecisionRecoveryRequired === "object"
+        ? { ...shared.inferredDecisionRecoveryRequired }
+        : null;
+  }
+  if (shared && Object.prototype.hasOwnProperty.call(shared, "inferredRecoveryOperationRecoveryRequired")) {
+    monitorData.inferredRecoveryOperationRecoveryRequired =
+      shared.inferredRecoveryOperationRecoveryRequired && typeof shared.inferredRecoveryOperationRecoveryRequired === "object"
+        ? { ...shared.inferredRecoveryOperationRecoveryRequired }
+        : null;
+  }
+  if (Array.isArray(shared?.inferredRecoveryEvents)) {
+    if (!Array.isArray(monitorData.inferredRecoveryEvents)) monitorData.inferredRecoveryEvents = [];
+    const seen = new Set(monitorData.inferredRecoveryEvents.map(event => event?.eventId));
+    for (const event of shared.inferredRecoveryEvents) {
+      const key = event?.eventId;
+      if (event && key != null && !seen.has(key)) {
+        monitorData.inferredRecoveryEvents.push({ ...event });
+        seen.add(key);
+      }
+    }
+    monitorData.inferredRecoveryEvents.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
   }
 
   // ★ filamentInventory: IDベースマージ

@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1121 (PR #385)
+* @version 1.390.1278 (PR #426)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-06-23 00:00:00
+* @lastModified 2026-08-04 09:22:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -44,6 +44,7 @@ import {
 
 import { formatEpochToDateTime, formatDuration, normalizeJobId } from "./dashboard_utils.js";
 import { pushLog } from "./dashboard_log_util.js";
+import { scheduleAttributionNotice } from "./dashboard_attribution_notify.js";
 import { showConfirmDialog, showInputDialog } from "./dashboard_ui_confirm.js";
 import { monitorData, scopedById, setStoredDataForHost } from "./dashboard_data.js";
 import {
@@ -53,10 +54,15 @@ import {
   useFilament,
   getSpoolById,
   formatFilamentAmount,
+  formatRemainingFilamentAmount,
   formatUsageHtml,
   usageHeaderLabel,
   formatSpoolDisplayId,
-  buildFilamentRecommendations
+  buildFilamentRecommendations,
+  getAttributionPresentation,
+  countAttributionIssuesForHost,
+  getAttributionIssueIdsForHost,
+  countUnattributedArchiveForHost
 } from "./dashboard_spool.js";
 import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
 import { recomputeSpoolFromManualEdit } from "./dashboard_filament_ledger.js";
@@ -147,6 +153,8 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
 
   // ★ setCurrentSpoolId を使い、旧スプール解除 + 新スプール装着を正規ルートで実行
   // （直接 hostSpoolMap を操作すると isActive/hostname/removedAt 等の状態が不整合になる）
+  // 旧スプールIDは付け替え前に取得しておく（ログ用。setCurrentSpoolId 後は取得できない）。
+  const oldId = getCurrentSpoolId(hostname);
   setCurrentSpoolId(updatedSp.id, hostname);
   updatedSp.currentPrintID = String(curJob.id);
   // storedData を更新してフィラメントプレビューを連動
@@ -166,15 +174,38 @@ function _linkCurrentPrintSpool(raw, updatedSp, hostname) {
  * @param {Object} sp - スプールオブジェクト
  * @returns {void}
  */
-function _applyFilamentToRaw(raw, sp) {
-  raw.filamentInfo = [{
+export function _applyFilamentToRaw(raw, sp) {
+  // ★ 監査 P0-5: 従来は filamentInfo 配列全体を1件で全置換していたため、
+  //   複数リール割当て（A:15m / B:25m 等）のジョブで片方を編集すると
+  //   もう一方の割当てと usedMm が消失していた。置換対象（raw.filamentId 一致、
+  //   無ければ先頭）のみ差し替え、他リールのエントリと usedMm は保持する。
+  const prev = Array.isArray(raw.filamentInfo) ? raw.filamentInfo : [];
+  let targetIdx = raw.filamentId != null
+    ? prev.findIndex(fi => fi && fi.spoolId === raw.filamentId)
+    : -1;
+  if (targetIdx < 0 && prev.length > 0) targetIdx = 0;
+  const prevUsedMm = targetIdx >= 0 ? prev[targetIdx]?.usedMm : undefined;
+
+  const entry = {
     spoolId: sp.id, serialNo: sp.serialNo,
     spoolName: sp.name, colorName: sp.colorName,
     filamentColor: sp.filamentColor, material: sp.material,
     spoolCount: sp.printCount,
     expectedRemain: sp.remainingLengthMm
-  }];
-  raw.filamentId = sp.id;
+  };
+  // 置換対象が持っていた実消費量(usedMm)は帰属計算の権威値なので引き継ぐ。
+  if (prevUsedMm != null) entry.usedMm = prevUsedMm;
+
+  const next = prev.slice();
+  if (targetIdx >= 0) next[targetIdx] = entry; else next.push(entry);
+  raw.filamentInfo = next;
+
+  // ★ レビュー指摘(ChatGPT): 単数形 filamentId は「代表リール」を表す後方互換フィールド。
+  //   複数リール（distinct spoolId が2つ以上）の履歴で1本を差し替えた際に、編集リールへ
+  //   filamentId を無条件で切り替えると代表リールが狂う。distinct が1つのときだけそのIDを
+  //   採用し、複数なら null（＝代表なし）にする。色/素材は表示ヒントとして編集リール値を残す。
+  const distinct = [...new Set(next.map(fi => fi && fi.spoolId).filter(v => v != null))];
+  raw.filamentId = distinct.length === 1 ? distinct[0] : null;
   raw.filamentColor = sp.filamentColor;
   raw.filamentType = sp.material;
 }
@@ -872,7 +903,7 @@ export const renderTemplates = {
       const spName = spool.name || spool.colorName || "";
       const mat = spool.materialName || spool.material || "";
       const color = spool.filamentColor || "#000";
-      const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+      const remainFmt = formatRemainingFilamentAmount(spool.remainingLengthMm, spool);
       const remainPct = spool.totalLengthMm > 0
         ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0) : "?";
       spoolHtml = `
@@ -1629,11 +1660,23 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
         }
         const cnt = info.spoolCount ?? sp?.printCount ?? 0;
         const remMm = info.expectedRemain ?? sp?.remainingLengthMm ?? 0;
-        const remFmt = formatFilamentAmount(remMm, sp);
+        const remFmt = formatRemainingFilamentAmount(remMm, sp);
         parts.push(`<div class="spool-line">${text}</div>`);
         parts.push(`<div class="spool-meta">残:${remFmt.display} 回:${cnt}</div>`);
       });
       spoolHtml = parts.join("");
+    }
+
+    // ★ Phase5(U2): 帰属未確認（消費ありなのに確定スプール無し）の完了ジョブへ「未確認」チップを付す。
+    //   raw は jobsToRaw で materialUsedMm→usagematerial に改名済みのため adapt して判定する。
+    const _attrPres = getAttributionPresentation({
+      materialUsedMm: raw.usagematerial,
+      filamentInfo: raw.filamentInfo,
+      filamentId: raw.filamentId,
+      printfinish: raw.printfinish   // ★ P1-5: 完了判定に必要（印刷中=null は除外）
+    });
+    if (_attrPres.state === "pending") {
+      spoolHtml += `<span class="attr-chip" title="このジョブの消費フィラメントが未確定です（確認してください）">${_attrPres.label}</span>`;
     }
 
     const tr = document.createElement("tr");
@@ -1704,6 +1747,66 @@ export function renderHistoryTable(rawArray, baseUrl, hostname) {
     tbody.addEventListener("click", _historyTbodyClick);
   }
 
+  // ★ Phase5(U2): 印刷履歴カード ヘッダの「未確認 N」バッジを更新する
+  //   （親の初期描画・子の relay 再描画の両パスがここを通る）。
+  updateAttributionBadge(hostname);
+  // ★ Phase5(U3): 帰属未確認の重複抑制通知（判定は別モジュール＝UI描画と分離）。
+  //   親のみ発火・debounce 集約。子や 0件では no-op。
+  scheduleAttributionNotice(hostname);
+}
+
+/**
+ * 印刷履歴カード ヘッダの「未確認 N」件数バッジを更新する（Phase5 U2）。
+ *
+ * 対象ホストの帰属未確認 課題（履歴 pending ＋ 隔離消費）の件数を集約表示する。
+ * 0 件のときはバッジを隠す。バッジ要素は panel_factory が history パネルの
+ * ヘッダへ用意する（未構築なら no-op）。親・子（サテライト）双方で同じ表示。
+ *
+ * @function updateAttributionBadge
+ * @param {string} hostname - 対象ホスト名
+ * @returns {void}
+ */
+// ★ P1-3(レビュー): 隔離追加（履歴行を持たない）の状態変化を購読し、renderHistoryTable を
+//   待たずにバッジ更新・通知再評価を直接動かす。UI描画(updateAttributionBadge)と
+//   通知判定(scheduleAttributionNotice)は別関数のまま、ここで両者を駆動する。
+if (typeof window !== "undefined" && typeof window.addEventListener === "function"
+    && !window._3dpmonAttrListenerBound) {
+  window._3dpmonAttrListenerBound = true;
+  window.addEventListener("3dpmon:attribution-changed", (e) => {
+    const h = e?.detail?.host;
+    if (!h) return;
+    try { updateAttributionBadge(h); } catch { /* no-op */ }
+    try { scheduleAttributionNotice(h); } catch { /* no-op */ }
+  });
+}
+
+export function updateAttributionBadge(hostname) {
+  if (!hostname) return;
+  try {
+    // data-host は IP/コロン等を含み得るため CSS セレクタ用エスケープを避け、走査で一致判定する。
+    const panels = document.querySelectorAll('[data-panel-type="history"]');
+    let panel = null;
+    for (const p of panels) { if (p.dataset && p.dataset.host === hostname) { panel = p; break; } }
+    if (!panel) return;
+    const badge = panel.querySelector(".panel-attr-badge");
+    if (!badge) return;
+    // ★ #410-7: 詳細（履歴/隔離で確認可能）と 集約済み（上限超過で詳細なし）を分けて示す。
+    //   バッジ本文は詳細件数、集約済みがあれば "+M" を付し、ツールチップで内訳を明示する。
+    const detail = getAttributionIssueIdsForHost(hostname).size;
+    const archived = countUnattributedArchiveForHost(hostname);
+    const total = detail + archived;
+    if (total > 0) {
+      badge.textContent = archived > 0 ? `未確認 ${detail}+${archived}` : `未確認 ${detail}`;
+      badge.title = archived > 0
+        ? `未確認 ${total} 件（確認可能 ${detail} 件・集約済み ${archived} 件＝詳細なし）`
+        : `未確認 ${detail} 件`;
+      badge.hidden = false;
+    } else {
+      badge.textContent = "";
+      badge.title = "";
+      badge.hidden = true;
+    }
+  } catch { /* DOM 未構築・環境非DOM は無視 */ }
 }
 
 /**
@@ -1996,13 +2099,13 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
     }
   }
 
-  const afterRemaining = Math.max(0, remaining - materialNeeded);
+  const afterRemaining = remaining - materialNeeded;
   const isShort        = remaining > 0 && materialNeeded > remaining;
 
   // フィラメント量を人間可読にフォーマット
   const fmtNeed  = formatFilamentAmount(materialNeeded, spool);
-  const fmtRemain = formatFilamentAmount(remaining, spool);
-  const fmtAfter = formatFilamentAmount(afterRemaining, spool);
+  const fmtRemain = formatRemainingFilamentAmount(remaining, spool);
+  const fmtAfter = formatRemainingFilamentAmount(afterRemaining, spool);
 
   // 所要時間（実績 > GCode見積 > 機器報告値）
   let estSec, durLabel;

@@ -21,9 +21,9 @@
  * - {@link setHistoryPersistFunc}：履歴永続化関数の登録
  * - {@link getCurrentPrintID}：現在の印刷IDを取得
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1281 (PR #427)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -46,6 +46,7 @@ import {
   reserveFilament,
   finalizeFilamentUsage,
   autoCorrectCurrentSpool,
+  catchUpOfflineFilamentAttribution,
   addUsageSnapshot,
   beginExternalPrint,
   formatFilamentAmount,
@@ -54,8 +55,16 @@ import {
   // ★ P0-9: 自動 inferred 投入停止に伴い setCurrentSpoolId / addInferredSpool の
   //   aggregator からの利用は撤去（ユーザー明示交換のみ mount）。
 } from "./dashboard_spool.js";
-import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld } from "./dashboard_filament_ledger.js";
+import { reconcileSpool, recordFilamentEvent, resolveFilamentEvent, getOpenFilamentEvent, runoutGateHeld, deriveSpoolRemaining, getMountIntervalStatus } from "./dashboard_filament_ledger.js";
 import { getConnectionState } from "./dashboard_connection.js";
+import { normalizeJobId } from "./dashboard_utils.js";
+import { monotonicNowMs, randomEventId } from "./dashboard_time.js";
+import { recordObservation, observationDue } from "./dashboard_offline_observation.js";
+import { runInferredContinuityShadow } from "./dashboard_offline_live_shadow.js";
+import {
+  getIrreversibleFilamentRemaining,
+  IRREVERSIBLE_REMAINING_ACTION
+} from "./dashboard_filament_remaining_model.js";
 
 // ---------------------------------------------------------------------------
 // 状態変数／タイムスタンプ定義（per-host 管理）
@@ -66,6 +75,32 @@ let aggregatorTimer = null;
 
 /** リレーブリッジ配信コールバック（Phase 6 で登録） */
 let _relayBroadcastCallback = null;
+
+/**
+ * runout 文脈へ記録する confirmed-only 残量スナップショットを作成する。
+ *
+ * 【詳細説明】
+ * - O9 では不可逆判断に projected 残量を混ぜないため、runout ゲートへ渡す残量も Model 層の
+ *   confirmed-only API から取得する。
+ * - 正本スプールが見つからない、または確定残量が不明な場合は `NaN` を返し、
+ *   `runoutGateHeld()` 側の既存 fail-closed 分岐に委譲する。
+ *
+ * @private
+ * @function _confirmedRunoutRemainingSnapshot
+ * @param {?Object} spool - 現在装着中スプール。
+ * @returns {{remainingMm:number,remainingPct:number}} runout イベントへ保存する残量情報。
+ */
+function _confirmedRunoutRemainingSnapshot(spool) {
+  const gate = getIrreversibleFilamentRemaining(spool, {
+    action: IRREVERSIBLE_REMAINING_ACTION.RUNOUT_DECISION
+  });
+  if (!gate.ok) return { remainingMm: NaN, remainingPct: NaN };
+  const total = Number(spool?.totalLengthMm);
+  return {
+    remainingMm: Number(gate.remainingMm),
+    remainingPct: total > 0 ? (Number(gate.remainingMm) / total) * 100 : NaN
+  };
+}
 
 /**
  * リレーブリッジの配信コールバックを登録する。
@@ -668,15 +703,14 @@ export function ingestData(data, hostname) {
         try {
           const _curSp = getCurrentSpool(host);
           const _stNow = Number(storedData.state?.rawValue || 0);
-          const _total = Number(_curSp?.totalLengthMm);
+          const _remaining = _confirmedRunoutRemainingSnapshot(_curSp);
           recordFilamentEvent({
             host,
             ts: nowMs,
             stateAtEvent: _stNow,
             oldSpoolId: _curSp?.id ?? null,
-            oldRemainingMm: Number(_curSp?.remainingLengthMm),
-            oldRemainingPct: _curSp && _total > 0
-              ? (Number(_curSp.remainingLengthMm) / _total) * 100 : NaN,
+            oldRemainingMm: _remaining.remainingMm,
+            oldRemainingPct: _remaining.remainingPct,
             runout: true,
             inflightJobId: _curSp?.currentPrintID || (machine?.printStore?.current?.id ?? null)
           });
@@ -1141,7 +1175,11 @@ export function aggregatorUpdate() {
     //   旧実装では子も独自に積算し spool.remainingLengthMm を上書きしていたため、
     //   親→子の配信値が 500ms 以内に子のローカル計算で破壊され、表示が乖離していた。
     const spool = _isRelayChild() ? null : getCurrentSpool(host);
-    const _now = Date.now();
+    const _now = Date.now();                 // 壁時計（イベント ts・永続・外部比較用）
+    // ★ Phase3: セッション内経過の throttle は monotonic を使う（壁時計の後退/NTP補正/DSTで
+    //   throttle が誤発火・停止しないように）。これらの last* は永続しないため wall→monotonic の
+    //   混在事故は起きない（persistAggregatorState は保存対象外）。
+    const _mono = monotonicNowMs();
     const st   = Number(storedData.state?.rawValue || 0);
     const isPrinting =
       st === PRINT_STATE_CODE.printStarted ||
@@ -1159,14 +1197,14 @@ export function aggregatorUpdate() {
         && st === PRINT_STATE_CODE.printPaused
         && s.lastPrintState === PRINT_STATE_CODE.printStarted) {
       try {
-        const _total = Number(spool.totalLengthMm);
+        const _remaining = _confirmedRunoutRemainingSnapshot(spool);
         recordFilamentEvent({
           host,
           ts: _now,
           stateAtEvent: PRINT_STATE_CODE.printPaused,
           oldSpoolId: spool.id,
-          oldRemainingMm: Number(spool.remainingLengthMm),
-          oldRemainingPct: _total > 0 ? (Number(spool.remainingLengthMm) / _total) * 100 : NaN,
+          oldRemainingMm: _remaining.remainingMm,
+          oldRemainingPct: _remaining.remainingPct,
           runout: s.currentMaterialStatus === 1,
           inflightJobId: spool.currentPrintID || (machine?.printStore?.current?.id ?? null)
         });
@@ -1181,6 +1219,21 @@ export function aggregatorUpdate() {
       catch (e) { console.warn("[aggregator] _evaluateStaleRunout 失敗:", e?.message || e); }
     }
 
+    // ★ #410-1(レビュー3): 完了観測ごとの安定 ID(completionObsId)。印刷中→完了エッジで
+    //   UUID を採番し、finalize/quarantine より「前に」永続化する。これにより保存途中クラッシュ後の
+    //   再観測でも同一完了に同じ ID を再利用でき（＝二重隔離しない）、別完了は別 UUID になる
+    //   （payload衝突で捨てない）。次の印刷開始で解除する。
+    if (isPrinting) {
+      s._completionObsId = null;
+    } else if (isCompleted && !s._completionObsId && !_isRelayChild()) {
+      s._completionObsId = randomEventId();
+      // ★ finalize より「前に」永続化する（クラッシュ耐性・ID→隔離の順序）。
+      //   persistAggregatorState は localStorage.setItem を「同期」で行うため、この行を抜けた時点で
+      //   _completionObsId は耐久保存済み（メモリのみではない）。restoreAggregatorState が localStorage
+      //   から復元する。ゆえに「ID生成→耐久保存→finalize→隔離」の順序が保証される。
+      try { persistAggregatorState(host); } catch (e) { console.warn("[aggregator] completionObsId 永続化失敗:", e?.message || e); }
+    }
+
     if (spool && isCompleted && !isPrinting && spool.currentPrintID) {
       const _jobId = spool.currentPrintID;
       // ★ P0-7: transient(currentPrintID/currentJobStartLength) を消す前に finalize を走らせ、
@@ -1192,7 +1245,7 @@ export function aggregatorUpdate() {
       //   （下の完了ブロックと相互排他）。
       if (spool.currentJobStartLength != null && s.accumulatedUsedMaterial > 0) {
         const _isSuccess = (st === PRINT_STATE_CODE.printDone);
-        try { finalizeFilamentUsage(s.accumulatedUsedMaterial, _jobId, host, _isSuccess); }
+        try { finalizeFilamentUsage(s.accumulatedUsedMaterial, _jobId, host, _isSuccess, { completionOpId: s._completionObsId }); }
         catch (e) { console.warn("[aggregator] finalize(P0-7) 失敗:", e?.message || e); }
         try { reconcileSpool(spool.id, { ts: _now }); }
         catch (e2) { console.warn("[aggregator] reconcileSpool(P0-7) 失敗:", e2?.message || e2); }
@@ -1208,14 +1261,38 @@ export function aggregatorUpdate() {
       saveUnifiedStorage(true);
       // ★ クリア直後の同 tick で autoCorrect が走るのを抑制
       //   finalizeFilamentUsage が完了するまで1サイクル待つ
-      s._lastAutoCorrect = _now;
+      s._lastAutoCorrect = _mono;
     }
     if (spool
         && !isPrinting
         && !spool.currentPrintID
-        && (!s._lastAutoCorrect || _now - s._lastAutoCorrect > 10000)) {
-      s._lastAutoCorrect = _now;
+        && (!s._lastAutoCorrect || _mono - s._lastAutoCorrect > 10000)) {
+      s._lastAutoCorrect = _mono;
       autoCorrectCurrentSpool(host);
+    }
+    // ★ レビュー指摘(P1-1): stale resume 対策。復元/前回の currentPrintID が「実機のライブ印刷中
+    //   状態から取得した現在ジョブID」と不一致なら、旧ジョブの一時追跡値を現在ジョブへ持ち越さない
+    //   よう破棄する。これをしないと直下の現在ジョブ採用(!currentPrintID)が働かず、C の初期化・
+    //   filamentId 付与・ライブ追跡が旧 A の残骸に阻害される。
+    //   ★ 大小比較(live>current)ではなく正規化した不一致で判定する（機器再起動/時刻補正で新ジョブ
+    //   ID が小さくなり得るため）。有効なライブIDが取れない場合は破棄しない（安全側）。
+    if (spool && spool.currentPrintID && isPrinting) {
+      const liveJob = resolveFilamentJobId(
+        storedData,
+        machine?.printStore?.current ?? null,
+        s.prevPrintID
+      );
+      const liveN = normalizeJobId(liveJob);
+      const curN = normalizeJobId(spool.currentPrintID);
+      if (liveN != null && curN != null && String(liveN) !== String(curN)) {
+        console.warn(`[aggregator] stale resume 検出: currentPrintID=${spool.currentPrintID} != live=${liveJob} → 旧一時値を破棄`, { host });
+        spool.currentPrintID = "";
+        spool.currentJobStartLength = null;
+        spool.currentJobExpectedLength = null;
+        s.accumulatedUsedMaterial = 0;
+        s.prevUsedMaterialLength = null;
+        s.prevUsageProgress = 0;
+      }
     }
     // フィラメント残量計算に入る前に、未確定のジョブIDを補完して紐付け漏れを防ぐ
     // ただし印刷中でない場合は resolve しない（クリア済みの stale ID を書き戻す防止）
@@ -1228,6 +1305,103 @@ export function aggregatorUpdate() {
       if (resolvedJobId) {
         spool.currentPrintID = resolvedJobId;
       }
+    }
+    // ★ レビュー指摘(点2): オフライン完了ジョブ(A/B)の帰属補完を印刷中でも走らせる。
+    //   現在ジョブ(C)は除外し、filamentInfo/filamentId のみ補完（冪等）。historyList マージで
+    //   printStore.history へ A/B が入り、C が解決された後に実行される。idle 時は上の
+    //   autoCorrectCurrentSpool 経由でも補完される（冪等なので重複しない）。
+    // ★ #411-O1(Option4): 観測 current を read-only で更新する（推定帰属の前段。O2 のライブ配線は未実施）。
+    //   親のみ。安全基盤（隔離/台帳/completionObsId 等）には一切書き込まない。
+    //   spool の有無に依らず記録する（未装着/交換済みという反証を残すため）。
+    //   open 区間が一意(ok)のときだけ intervalId を明示配線し、ambiguous/corrupt は null。
+    //   ★ P1-5: 固定5s heartbeat だけでなく、観測 signature（履歴rev/現在ジョブ/印刷状態/装着/interval）
+    //   が変化したら即記録し、稼働中に見たジョブを再起動後 offline と誤認する隙間を減らす。
+    if (!_isRelayChild()) {
+      // ★ read-only 観測は best-effort＝この中の失敗が本流（帰属/消費トラッキング）を止めないよう
+      //   ブロック全体を try で囲う（台帳参照や signature 計算の例外も飲み込む）。
+      try {
+        // 未装着は「既知の none」（取得失敗の unknown と区別）。装着時は台帳 status。
+        let _ivId = null, _ivStatus = "none";
+        if (spool) {
+          const _st = getMountIntervalStatus(spool.id, host);
+          _ivStatus = _st.status;
+          _ivId = (_st.status === "ok" && _st.openInterval) ? _st.openInterval.intervalId : null;
+        }
+        const _activeJobId = machine?.printStore?.current?.id ?? null;
+        const _printState = Number(storedData.state?.rawValue ?? 0);
+        // ★ P1-B: 印刷中/一時停止のときだけ「連続印刷証拠」として現在ジョブの複合 identity を残す。
+        const _activePrinting = _printState === PRINT_STATE_CODE.printStarted || _printState === PRINT_STATE_CODE.printPaused;
+        // ★ P0-1: 履歴 revision の正式フィールドは _historyRev（relay 側と同一）。revision は存在しない。
+        const _histRev = machine?.printStore?._historyRev ?? null;
+        // ★ P0-1: signature 判定は純関数 observationDue に集約（intervalId 変化も含め、5s 待たず記録）。
+        const _due = observationDue(
+          { lastAtMs: s._lastObs, signature: s._lastObsSig },
+          { historyRevision: _histRev, activeJobId: _activeJobId, printState: _printState, mountedSpoolId: spool?.id ?? null, mountIntervalStatus: _ivStatus, mountIntervalId: _ivId },
+          { nowMs: _mono }
+        );
+        if (_due.record) {
+          s._lastObs = _mono;
+          s._lastObsSig = _due.signature;
+          recordObservation(host, { mountIntervalId: _ivId, mountIntervalStatus: _ivStatus, activeJobId: _activeJobId, printState: _printState, activePrinting: _activePrinting });
+        }
+      } catch (e) { /* read-only 観測失敗は本流を止めない */ }
+    }
+
+    // catch-up でリベースが必要になった反映後残量（下の開始基準設定の後で currentJobStartLength へ反映）。
+    let _rebaseRemaining = null;
+    if (spool && (!s._lastCatchUp || _mono - s._lastCatchUp > 10000)) {
+      s._lastCatchUp = _mono;
+      try {
+        const liveJob = spool.currentPrintID || (machine?.printStore?.current?.id ?? null);
+        // catchUp は過去オフライン完了(A/B)の帰属/upsert を行う（冪等）。
+        const linked = catchUpOfflineFilamentAttribution(host, { liveJobId: liveJob, spool });
+        // ★ レビュー指摘(P0-2/P0-4/P0-5): A・B を帰属したら、その反映後残量を現在ジョブ C の開始基準へ
+        //   リベースする（C 印刷中の表示・低残量/runout 判定が A+B 分ズレないように）。
+        //   - P0-5: リベース用導出では現在ジョブ C を除外（C が履歴に materialUsedMm>0 で混入していても
+        //     完了扱いして二重減算しない）。
+        //   - currentJobStartLength への反映は「開始基準設定ブロック」の後で行う（先に書くと直後の
+        //     idle→start stale-transient クリアに巻き込まれ currentPrintID まで消えるため）。P0-4 対応で
+        //     currentJobStartLength が既設定でも下で上書きする。
+        // ★ Phase3 (Q3): リベースを「今tickで紐付けたか(linked>0)」という一過性条件から切り離し、
+        //   台帳から自己修復する。linked に依存すると、過去にタイマー停止や取りこぼしが起きた場合に
+        //   一度リベースを逃すと二度と補正されない。代わりに:
+        //   - watermark(主経路): 台帳署名(mountHistorySeq + 当該host完了履歴数)が前回リベース時から
+        //     進んでいれば即リベースする（新しい完了帰属/装着イベントの反映）。
+        //   - stateless audit(低頻度): 署名が同じでも、baseline(currentJobStartLength)と台帳導出値が
+        //     ズレていれば補正する。本ブロックは10s throttle＝低頻度監査として常時ドリフトを均す。
+        if (spool.currentPrintID) {
+          const d = deriveSpoolRemaining(spool.id, { excludeJobId: spool.currentPrintID });
+          // mode:"anchor"（実区間からの導出）だけを信頼する。none/halt-corrupt/halt-ambiguous は
+          // 現在値維持のため rebase 対象外（曖昧な台帳で開始基準を壊さない）。
+          if (d && d.mode === "anchor" && Number.isFinite(d.remainingMm)) {
+            const _sig = `${Number(monitorData.mountHistorySeq) || 0}:${(machine?.printStore?.history?.length) || 0}`;
+            const _wmAdvanced = s._baselineWatermark !== _sig;
+            const _base = spool.currentJobStartLength;
+            // 開始基準(currentJobStartLength)と台帳導出値の乖離。未設定(null)は要初期化＝要リベース。
+            const _drift = _base == null || Math.abs(Number(_base) - d.remainingMm) > 0.5;
+            if (_wmAdvanced || _drift) {
+              spool.remainingLengthMm = d.remainingMm;
+              _rebaseRemaining = d.remainingMm;
+            }
+            s._baselineWatermark = _sig;
+          }
+        }
+        if (linked > 0) {
+          console.debug(`[aggregator] ${host}: catchUp linked=${linked}`);
+        }
+        // ★ #413-O2/O3/O4 live shadow: #409 catch-up 後も未帰属として残った offline 完了だけを
+        //   inferredCandidateStore へ冪等保存し、candidate 保存成功時のみ観測 baseline を昇格する。
+        //   projection/candidate は確認 UI 用の pending 情報であり、確定残量や filamentInfo は変更しない。
+        if (!_isRelayChild()) {
+          runInferredContinuityShadow(host, spool).then((shadow) => {
+            if (shadow.ok && shadow.persist?.candidateHash) {
+              console.debug(`[aggregator] ${host}: inferred continuity candidate=${shadow.persist.candidateHash} commit=${shadow.commit?.reason}`);
+            }
+          }).catch((e) => {
+            console.warn("[aggregator] inferred continuity shadow 失敗:", e?.message || e);
+          });
+        }
+      } catch (e) { console.warn("[aggregator] catchUp 失敗:", e?.message || e); }
     }
 
     // アイドル状態から印刷開始へ遷移した場合の初期化
@@ -1281,6 +1455,12 @@ export function aggregatorUpdate() {
           s.prevUsedMaterialLength = Number(storedData.usedMaterialLength?.rawValue);
         }
         s.prevUsageProgress = parseInt(storedData.printProgress?.rawValue || 0, 10);
+      }
+      // ★ レビュー指摘(P0-4): catch-up でリベースが発生していれば、C の開始基準を反映後残量へ補正する。
+      //   ここは開始基準設定・idle→start クリアの後なので、currentJobStartLength が先に設定済み
+      //   （履歴の遅延到着）でも安全に上書きできる。累積消費(accumulatedUsedMaterial)は独立なので保たれる。
+      if (_rebaseRemaining != null && spool.currentPrintID) {
+        spool.currentJobStartLength = _rebaseRemaining;
       }
       const prog = parseInt(storedData.printProgress?.rawValue || 0, 10);
       const used = Number(storedData.usedMaterialLength?.rawValue);
@@ -1369,7 +1549,7 @@ export function aggregatorUpdate() {
           }
         }
         const isSuccess2 = (st === PRINT_STATE_CODE.printDone);
-        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2);
+        finalizeFilamentUsage(s.accumulatedUsedMaterial, spool.currentPrintID, host, isSuccess2, { completionOpId: s._completionObsId });
         // ★ ADR-0004: 完了後に信頼ソースから残量を冪等補正（idle で権威補正）。
         //   finalize 内でも reconcile するが、currentPrintID クリア後の確定状態で再度走らせる。
         //   reconcile は印刷中スプールに触れないため二重防御として安全。冪等なので無害。
@@ -1391,10 +1571,11 @@ export function aggregatorUpdate() {
         }
         if (
           (st === PRINT_STATE_CODE.printStarted || st === PRINT_STATE_CODE.printPaused) &&
-          (!s.lastUsageSnapshotSec || Date.now() / 1000 - s.lastUsageSnapshotSec >= USAGE_SNAPSHOT_INTERVAL)
+          // ★ Phase3: スナップショット間隔もセッション内経過なので monotonic 秒で測る（0=未取得の番兵は不変）。
+          (!s.lastUsageSnapshotSec || _mono / 1000 - s.lastUsageSnapshotSec >= USAGE_SNAPSHOT_INTERVAL)
         ) {
           addUsageSnapshot(spool, spool.currentPrintID, remain);
-          s.lastUsageSnapshotSec = Date.now() / 1000;
+          s.lastUsageSnapshotSec = _mono / 1000;
         }
       } else {
         s.snapshotPrintId = null;
@@ -1542,7 +1723,9 @@ export function restoreAggregatorState(hostname) {
     "prevProgress",
     "lastPrintState",
     "lastProgressTimestamp",
-    "prevRemainingSec"
+    "prevRemainingSec",
+    // ★ #410-1: 完了観測ID（再起動後に同一完了へ同じIDを再利用するため復元する）
+    "_completionObsId"
   ];
   // まず storedData 側をクリア
   keys.forEach(k => {
@@ -1669,7 +1852,9 @@ export function persistAggregatorState(hostname) {
     notifiedTimeThresholds: [...s.notifiedTimeThresholds],
     notifiedTempMilestones: [...s.notifiedTempMilestones],
     filamentLowWarned: s.filamentLowWarned || false,
-    _removalReminderSent: s._removalReminderSent || false
+    _removalReminderSent: s._removalReminderSent || false,
+    // ★ #410-1: 完了観測ID（クラッシュ後の同一完了 replay を冪等にする＝二重隔離しない）
+    _completionObsId: s._completionObsId || null
   };
   Object.entries(toSave).forEach(([k, v]) => {
     const key = prefix + k;

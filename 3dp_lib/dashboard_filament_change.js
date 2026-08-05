@@ -31,6 +31,33 @@ import { createFilamentPreview } from "./dashboard_filament_view.js";
 import { showFilamentManager } from "./dashboard_filament_manager.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { resolveFilamentEvent } from "./dashboard_filament_ledger.js";
+import { sendRelayFilament } from "./dashboard_client_sync.js";
+
+/**
+ * 切れイベント解決をモードに応じて実行する。
+ *
+ * ★ 監査 P0(第2報): 子（satellite/readonly）はフィラメント状態の権威を持たないため、
+ * 切れ文脈の解決（reseat/replace 等）もローカル変更せず親へ RPC 委譲する。従来は
+ * resolveFilamentEvent をローカル直呼びしており、子だけ解決済み・親は未解決のまま
+ * 分岐して以後の帰属・残量検証が食い違っていた。親確定後は relay-delta
+ * （filamentEventContext を含む）で全子へ還流しミラーが揃う。
+ *
+ * @private
+ * @param {string} host - 対象ホスト名
+ * @param {string} resolution - 解決種別（"reseat" 等）
+ * @returns {void}
+ */
+function _resolveFilamentEventAuthoritative(host, resolution) {
+  // ★ レビュー指摘#2: 解決対象の evId を明示し、遅延した reseat が別イベントを
+  //   誤解決しないようにする。開いていた切れ文脈の evId を送る/照合する。
+  const ctx = monitorData.filamentEventContext?.[host];
+  const evId = (ctx && !ctx.resolved) ? ctx.evId : null;
+  if (typeof window !== "undefined" && window._3dpmonRelayChild === true) {
+    sendRelayFilament("resolveFilamentEvent", { host, resolution, evId });
+    return;
+  }
+  resolveFilamentEvent(host, resolution, { expectedEvId: evId });
+}
 
 let styleInjected = false;
 /** per-host ダイアログ排他制御（グローバル単一ロックは廃止 — 他ホストをブロックしない） */
@@ -808,7 +835,8 @@ export function showFilamentChangeDialog(hostname) {
 
     dlg.querySelector("#fc-cancel").addEventListener("click", () => {
       // ★ ADR-0005 P5(B4): キャンセル = 同一スプール再セット（明示。切れ文脈を reseat 解決）
-      try { resolveFilamentEvent(hostname, "reseat"); } catch (e) { /* noop */ }
+      //   子は親へ RPC 委譲（_resolveFilamentEventAuthoritative）。
+      try { _resolveFilamentEventAuthoritative(hostname, "reseat"); } catch (e) { /* noop */ }
       closeDialog(false);
     });
 

@@ -14,13 +14,14 @@
  * - スプール一覧（状態バッジ・フィルタ付き）
  * - 使用履歴（種別フィルタ付き）
  * - 集計レポート
+ * - 推定 candidate の確認・否認・再割当て
  *
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1110 (PR #380)
+* @version 1.390.1283 (PR #428)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-06-12 12:00:00
+* @lastModified 2026-08-04 15:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -42,15 +43,20 @@ import {
   restoreSpool,
   getSpoolState,
   getSpoolStateLabel,
+  getSpoolBalanceState,
+  getSpoolBalanceStateLabel,
   formatSpoolDisplayId,
   formatFilamentAmount,
+  formatRemainingFilamentAmount,
+  displayRemainingLengthMm,
   buildSpoolAnalytics,
   buildWasteReport,
   getSpoolById,
   confirmInferredSpool,
   revertInferredSpool,
   mountNewSpoolFromPreset,
-  SPOOL_STATE
+  SPOOL_STATE,
+  SPOOL_BALANCE_STATE
 } from "./dashboard_spool.js";
 import {
   getInventory,
@@ -73,6 +79,8 @@ import {
 } from "./dashboard_filament_presets.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { createFilamentPreview } from "./dashboard_filament_view.js";
+import { buildFilamentRemainingModel } from "./dashboard_filament_remaining_model.js";
+import { createInferredCandidateCenterContent } from "./dashboard_inferred_candidate_ui.js";
 import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
@@ -213,7 +221,7 @@ function spoolToPreviewOverrides(sp) {
  * @returns {string} HTML 文字列
  */
 function renderRemainBar(remaining, total, color) {
-  const pct = total > 0 ? Math.min(100, (remaining / total) * 100) : 0;
+  const pct = total > 0 ? Math.max(0, Math.min(100, (remaining / total) * 100)) : 0;
   const barColor = color || "#22C55E";
   return `<span class="remain-bar"><span class="remain-bar-fill" style="width:${pct.toFixed(1)}%;background:${barColor}"></span></span>${pct.toFixed(0)}%`;
 }
@@ -228,6 +236,87 @@ function renderRemainBar(remaining, total, color) {
 function renderStateBadge(state) {
   const label = getSpoolStateLabel(state);
   return `<span class="spool-state-badge spool-state-${state}">${label}</span>`;
+}
+
+/**
+ * signed 残量状態バッジ HTML を生成する。
+ *
+ * @private
+ * @param {string} balanceState - SPOOL_BALANCE_STATE の値
+ * @returns {string} HTML 文字列
+ */
+function renderBalanceBadge(balanceState) {
+  if (balanceState !== SPOOL_BALANCE_STATE.OVERDRAWN) return "";
+  const label = getSpoolBalanceStateLabel(balanceState);
+  return ` <span class="spool-state-badge spool-balance-${balanceState}">${label}</span>`;
+}
+
+/**
+ * O8 の確定残量・推定残量サマリ HTML を生成する。
+ *
+ * 【詳細説明】
+ * - 確定残量は必ず `remainingLengthMm` をそのままモデル層から受け取り、通常 UI でも台帳真値を明示する。
+ * - 推定残量は pending candidate が存在する場合だけ表示し、不可逆操作に使えない値であることをラベルで分離する。
+ * - `formatRemainingFilamentAmount()` に表示専用 0 クロップ設定を委譲し、内部の signed 残量は変更しない。
+ *
+ * @private
+ * @function renderRemainingProjectionSummary
+ * @param {Object} spool - 表示対象スプール。
+ * @param {{host?:string}} [options={}] - host で pending candidate を絞り込むための表示オプション。
+ * @returns {string} 確定残量・推定残量・未確認推定量の HTML。
+ */
+function renderRemainingProjectionSummary(spool, options = {}) {
+  const model = buildFilamentRemainingModel(spool, { host: options.host });
+  const confirmedFmt = formatRemainingFilamentAmount(model.confirmedRemainingMm, spool);
+  const confirmedClamp = confirmedFmt.isDisplayClamped ? '<span class="fm-remaining-clamp-note">表示0</span>' : "";
+  let html =
+    '<div class="fm-remaining-summary" aria-label="フィラメント残量サマリ">' +
+    '<span class="fm-remaining-pill fm-remaining-pill-confirmed">' +
+    '<span class="fm-remaining-label">確定残量</span>' +
+    `<strong>${confirmedFmt.display}</strong>${confirmedClamp}` +
+    '</span>';
+
+  if (model.hasPendingInferredUsage) {
+    const projectedFmt = formatRemainingFilamentAmount(model.projectedRemainingMm, spool);
+    const pendingFmt = formatFilamentAmount(model.pendingInferredUsedMm, spool);
+    const projectedClamp = projectedFmt.isDisplayClamped ? '<span class="fm-remaining-clamp-note">表示0</span>' : "";
+    html +=
+      '<span class="fm-remaining-pill fm-remaining-pill-projected" title="未確認推定を差し引いた表示専用の値です">' +
+      '<span class="fm-remaining-label">推定残量</span>' +
+      `<strong>${projectedFmt.display}</strong>${projectedClamp}` +
+      '</span>' +
+      '<span class="fm-remaining-pill fm-remaining-pill-pending" title="Candidate Center で確認待ちの推定使用量です">' +
+      '<span class="fm-remaining-label">未確認推定</span>' +
+      `<strong>${pendingFmt.display}</strong>` +
+      '</span>';
+  }
+
+  return `${html}</div>`;
+}
+
+/**
+ * スプール一覧セル向けの推定残量補助表示を生成する。
+ *
+ * 【詳細説明】
+ * - 一覧ではセル幅を圧迫しないよう、pending candidate が存在する場合だけ短い 1 行を追加する。
+ * - 残量バー自体は確定残量を基準に描画し、推定値を確定値の代替として使わない。
+ *
+ * @private
+ * @function renderProjectedRemainingInline
+ * @param {Object} spool - 表示対象スプール。
+ * @returns {string} 一覧セルに追加する推定残量 HTML。pending が無ければ空文字。
+ */
+function renderProjectedRemainingInline(spool) {
+  const model = buildFilamentRemainingModel(spool);
+  if (!model.hasPendingInferredUsage) return "";
+  const projectedFmt = formatRemainingFilamentAmount(model.projectedRemainingMm, spool);
+  const pendingFmt = formatFilamentAmount(model.pendingInferredUsedMm, spool);
+  return (
+    '<div class="fm-remaining-projected-inline" title="未確認推定は不可逆操作には使いません">' +
+    `<span>推定 ${projectedFmt.display}</span>` +
+    `<span>未確認 ${pendingFmt.display}</span>` +
+    '</div>'
+  );
 }
 
 /**
@@ -339,12 +428,14 @@ function createDashboardContent(hostname, switchTab) {
 
         const infoBox = document.createElement("div");
         infoBox.className = "fm-mounted-info";
-        const pct = spool.totalLengthMm > 0
-          ? ((spool.remainingLengthMm / spool.totalLengthMm) * 100).toFixed(0)
+        const remainingModel = buildFilamentRemainingModel(spool);
+        const displayRemainingMm = displayRemainingLengthMm(remainingModel.confirmedRemainingMm);
+        const pct = spool.totalLengthMm > 0 && displayRemainingMm != null
+          ? ((displayRemainingMm / spool.totalLengthMm) * 100).toFixed(0)
           : 0;
         const colorSwatch = `<span class="color-swatch color-swatch-md" style="background:${spool.filamentColor || spool.color || "#ccc"}"></span>`;
-        // 残量を人間可読フォーマットで表示
-        const remainFmt = formatFilamentAmount(spool.remainingLengthMm, spool);
+        // 残量サマリは確定値と推定値を分けて表示する。
+        const remainingSummary = renderRemainingProjectionSummary(spool);
         // 枯渇予測
         const analytics = buildSpoolAnalytics(spool.id);
         let predLine = "";
@@ -358,8 +449,9 @@ function createDashboardContent(hostname, switchTab) {
         infoBox.innerHTML =
           `<div><strong>${formatSpoolDisplayId(spool)}</strong> ${spool.name || ""}</div>` +
           `<div>${colorSwatch}${spool.colorName || ""} / ${spool.materialName || spool.material || ""}</div>` +
-          `<div style="margin:2px 0">${remainFmt.display} (${pct}%)</div>` +
-          `<div>${renderRemainBar(spool.remainingLengthMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
+          remainingSummary +
+          `<div>${renderRemainBar(displayRemainingMm ?? remainingModel.confirmedRemainingMm, spool.totalLengthMm, spool.filamentColor || spool.color)}</div>` +
+          `<div class="fm-remaining-bar-caption">確定残量ベース ${pct}%</div>` +
           predLine;
 
         const btnWrap = document.createElement("div");
@@ -445,8 +537,9 @@ function createDashboardContent(hostname, switchTab) {
           enableDrag: false
         });
 
-        const pct = sp.totalLengthMm > 0
-          ? ((sp.remainingLengthMm / sp.totalLengthMm) * 100).toFixed(0)
+        const displayRemainingMm = displayRemainingLengthMm(sp.remainingLengthMm);
+        const pct = sp.totalLengthMm > 0 && displayRemainingMm != null
+          ? ((displayRemainingMm / sp.totalLengthMm) * 100).toFixed(0)
           : 0;
         const label = document.createElement("div");
         label.innerHTML = `${formatSpoolDisplayId(sp)}<br>${pct}%`;
@@ -611,7 +704,15 @@ function createInventoryPresetContent(hostname, switchTab, onRegisteredRefresh) 
         if (result.success) {
           saveUnifiedStorage();
           render();
-          showAlert(`インポート完了: ${result.added}件追加, ${result.skipped}件スキップ`, "success");
+          // ★ レビュー指摘#7: リレー子では実体の取り込みは親が行い、実際の件数は親の
+          //   同時更新で変わり得る。確定件数として表示せず「送信」表示にする（正確な件数は
+          //   親からの還流後に画面へ反映される）。
+          showAlert(
+            result.pending
+              ? "カスタムプリセットを親機へ送信しました（反映まで数秒かかります）"
+              : `インポート完了: ${result.added}件追加, ${result.skipped}件スキップ`,
+            "success"
+          );
         } else {
           showAlert(`インポート失敗: ${result.errors.join(", ")}`, "error");
         }
@@ -1315,7 +1416,8 @@ function createRegisteredContent(openEditor, hostname) {
 
       // 状態バッジ + 装着先統合
       const stateTd = document.createElement("td");
-      let stateHtml = renderStateBadge(state);
+      const balanceState = getSpoolBalanceState(sp);
+      let stateHtml = renderStateBadge(state) + renderBalanceBadge(balanceState);
       // ★ ADR-0005 P6: 暫定推定スプールは「推定」バッジを前置（確認/訂正待ち）
       if (sp.inferred) {
         stateHtml = `<span class="spool-state-badge" style="background:#f59e0b;color:#fff" title="推定で自動投入。確認/訂正してください">推定</span> ` + stateHtml;
@@ -1349,11 +1451,13 @@ function createRegisteredContent(openEditor, hostname) {
 
       // 残量バー
       const remainTd = document.createElement("td");
+      const remainingModel = buildFilamentRemainingModel(sp);
+      const displayRemainingMm = displayRemainingLengthMm(remainingModel.confirmedRemainingMm);
       remainTd.innerHTML = renderRemainBar(
-        sp.remainingLengthMm || 0,
+        displayRemainingMm ?? remainingModel.confirmedRemainingMm ?? 0,
         sp.totalLengthMm || 0,
         sp.filamentColor || sp.color
-      );
+      ) + renderProjectedRemainingInline(sp);
       tr.appendChild(remainTd);
 
       // 使用数
@@ -1617,7 +1721,7 @@ function createRegisteredContent(openEditor, hostname) {
     drilldown.appendChild(hdr);
 
     // サマリカード
-    const remainFmt = formatFilamentAmount(analytics.remainMm, sp);
+    const remainFmt = formatRemainingFilamentAmount(analytics.remainMm, sp);
     const consumedFmt = formatFilamentAmount(analytics.consumedMm, sp);
     const cards = document.createElement("div");
     cards.className = "stat-cards";
@@ -1658,7 +1762,8 @@ function createRegisteredContent(openEditor, hostname) {
         const cumulativeData = [];
         for (let i = 0; i < log.length; i++) {
           remaining -= (log[i].used || 0);
-          cumulativeData.push(Math.max(0, remaining) / 1000); // m 単位
+          const displayRemainingMm = displayRemainingLengthMm(remaining);
+          cumulativeData.push((displayRemainingMm ?? remaining) / 1000); // m 単位
         }
         new Chart(canvas.getContext("2d"), {
           type: "line",
@@ -1844,7 +1949,7 @@ function createHistoryContent() {
       const remainTd = document.createElement("td");
       remainTd.style.textAlign = "right";
       const remVal = u.currentLength ?? u.startLength ?? null;
-      remainTd.textContent = remVal != null ? formatFilamentAmount(remVal, sp).display : "--";
+      remainTd.textContent = remVal != null ? formatRemainingFilamentAmount(remVal, sp).display : "--";
       tr.appendChild(remainTd);
 
       // 種別
@@ -2077,8 +2182,9 @@ function createReportContent() {
     for (const sp of activeSpools) {
       const a = buildSpoolAnalytics(sp.id);
       if (!a) continue;
-      const remainFmt = formatFilamentAmount(a.remainMm, sp);
-      const remainPct = a.totalMm > 0 ? ((a.remainMm / a.totalMm) * 100).toFixed(0) : "?";
+      const remainFmt = formatRemainingFilamentAmount(a.remainMm, sp);
+      const displayRemainingMm = displayRemainingLengthMm(a.remainMm);
+      const remainPct = a.totalMm > 0 && displayRemainingMm != null ? ((displayRemainingMm / a.totalMm) * 100).toFixed(0) : "?";
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${formatSpoolDisplayId(sp)} ${sp.name || ""}</td>` +
         `<td>${a.material}</td>` +
@@ -2499,6 +2605,13 @@ function createEditorContent(onDone) {
   const preview = createFilamentPreview(prevBox, { ...DEFAULT_PREVIEW_OPTIONS });
 
   let current = null;
+  /**
+   * 編集画面を開いた時点のスプール値のスナップショット（浅いコピー）。
+   * ★ レビュー指摘#3: 変更フィールド判定と残量競合検査の基準は「開いた時点の値」でなければ
+   *   ならない。live な current 参照は印刷完了等で編集中に書き換わり得るため、基準に使うと
+   *   触っていないフィールドまで差分と誤認したり、古い残量で上書きしてしまう。
+   */
+  let baseline = {};
   let isNew = false;
   let dirty = false;
 
@@ -2579,12 +2692,13 @@ function createEditorContent(onDone) {
       note: noteIn.value,
       isFavorite: favIn.checked
     };
-    // ★ D1: 残量バリデーション（0未満やtotal超過を防止）
+    // ★ D1: 残量バリデーション（total超過のみ防止）
+    // 台帳内部では負残量を監査可能な真値として保存するため、0未満への丸めは表示層だけで行う。
     if (data.filamentCurrentLength != null) {
       const curVal = Number(data.filamentCurrentLength);
       const totVal = Number(data.filamentTotalLength || 0);
       if (!isNaN(curVal) && !isNaN(totVal)) {
-        data.filamentCurrentLength = Math.max(0, Math.min(curVal, totVal));
+        data.filamentCurrentLength = Math.min(curVal, totVal);
       }
     }
     // ★ D2: フィールド名マッピング（remainingLengthMm が未設定の場合のみ）
@@ -2596,7 +2710,36 @@ function createEditorContent(onDone) {
     }
     // ★ C1: updatedAt 更新（ユーザー操作）
     data.updatedAt = Date.now();
-    if (isNew) addSpool(data); else updateSpool(current.id, data);
+    if (isNew) {
+      addSpool(data);
+    } else {
+      // ★ B8(ChatGPT): 保存直前に対象がまだ存在するか再検証する。子で編集画面を開いている間に
+      //   親で削除/交換され、共有デルタで手元から消えている（＝陳腐化した）場合、古い対象へ
+      //   操作を送らずに中断して画面を更新する。親側も存在しないIDは no-op ガード済み。
+      const stillExists = (monitorData.filamentSpools || []).some(s => s && s.id === current.id);
+      if (!stillExists) {
+        showAlert("このスプールは既に削除または変更されています。画面を更新します。", "warn");
+        dirty = false;
+        onDone();
+        return;
+      }
+      // ★ レビュー指摘(ChatGPT): 編集フォームは開いた時点の全フィールド（残量含む）を保持する。
+      //   色名だけ変えて保存しても、フォームに残った古い残量が同時送信され、印刷完了で減った
+      //   親の残量を巻き戻す＝親正本の破壊が起き得る。開いた時点の baseline と異なるフィールド
+      //   のみを patch として送る（残量を触っていなければ残量は送らない）。updatedAt は常に更新。
+      const patch = { updatedAt: data.updatedAt };
+      for (const [k, v] of Object.entries(data)) {
+        if (k === "updatedAt") continue;
+        if (baseline[k] !== v) patch[k] = v;
+      }
+      // ★ #3: 残量を実際に変更した場合は、開いた時点の残量(baseline)を expectedRemainingLengthMm
+      //   として添える。親は自身の現在値と一致するときだけ残量変更を適用し、編集中に印刷消費が
+      //   進んで基準がズレた場合は残量上書きを拒否する（他フィールドは適用）。
+      if ("remainingLengthMm" in patch) {
+        patch.expectedRemainingLengthMm = baseline.remainingLengthMm ?? null;
+      }
+      updateSpool(current.id, patch);
+    }
     showAlert("フィラメントを保存しました", "success");
     dirty = false;
     onDone();
@@ -2620,6 +2763,7 @@ function createEditorContent(onDone) {
     el: div,
     setSpool(sp = {}, fresh = false) {
       current = sp;
+      baseline = sp ? { ...sp } : {}; // 開いた時点の値を固定（#3 の基準）
       isNew = fresh || !sp.id;
       fillForm(sp);
     }
@@ -2663,13 +2807,14 @@ export function showFilamentManager(activeIdx = 0, hostname) {
     "ダッシュボード",
     "在庫・プリセット",
     "スプール一覧",
+    "推定候補",
     "使用履歴",
     "集計レポート"
   ];
 
   let switchTab = () => {};
 
-  // エディタ（非表示タブ、index 5）
+  // エディタ（非表示タブ、最後尾）
   const editTab = createEditorContent(() => {
     registered.render();
     switchTab(SPOOL_LIST_IDX);
@@ -2678,14 +2823,15 @@ export function showFilamentManager(activeIdx = 0, hostname) {
   // ダッシュボード（Tab 0）
   const dashboardTab = createDashboardContent(hostname, idx => switchTab(idx));
 
-  // 使用履歴（Tab 3）
+  // 使用履歴（Tab 4）
   const historyEl = createHistoryContent();
 
-  // contents 配列：0=ダッシュボード, 1=在庫プリセット, 2=スプール一覧, 3=使用履歴, 4=レポート, 5=エディタ(非表示)
+  // contents 配列：0=ダッシュボード, 1=在庫プリセット, 2=スプール一覧, 3=推定候補, 4=使用履歴, 5=レポート, 6=エディタ(非表示)
   const contents = [
     dashboardTab.el,
     null, // 在庫プリセット（後で設定）
     null, // スプール一覧（後で設定）
+    null, // 推定候補（後で設定）
     historyEl,
     createReportContent(),
     editTab.el
@@ -2700,9 +2846,17 @@ export function showFilamentManager(activeIdx = 0, hostname) {
 
   // 在庫・プリセット（Tab 1）
   const invPresetTab = createInventoryPresetContent(hostname, idx => switchTab(idx), () => registered.render());
+  const candidateCenter = createInferredCandidateCenterContent({
+    host: null,
+    onAfterDecision: () => {
+      try { registered.render(); } catch { /* noop */ }
+      try { dashboardTab.render(); } catch { /* noop */ }
+    }
+  });
 
   contents[1] = invPresetTab.el;
   contents[SPOOL_LIST_IDX] = registered.el;
+  contents[3] = candidateCenter.el;
 
   const contentWrap = document.createElement("div");
   contentWrap.className = "fm-content-wrap";
@@ -2724,6 +2878,7 @@ export function showFilamentManager(activeIdx = 0, hostname) {
     });
     // ダッシュボードタブに切り替えた場合は再描画
     if (idx === 0) dashboardTab.render();
+    if (idx === 3) candidateCenter.render();
   };
 
   // 可視タブボタンの生成（エディタタブは非表示）
@@ -2743,6 +2898,20 @@ export function showFilamentManager(activeIdx = 0, hostname) {
 
   document.body.appendChild(overlay);
   switchTab(activeIdx);
+
+  // ★ 監査 P1(第2報): 親からの共有デルタ（在庫/プリセット/スプール等）受信時に、
+  //   開いている管理画面を再描画するためのフックを登録する（リレー子で有効）。
+  //   モーダルが閉じられていれば（overlay が DOM から外れていれば）自動で解除する。
+  //   スプール一覧・ダッシュボードを再描画する（他タブの live 再描画は今後の課題）。
+  window._refreshFilamentManagerIfOpen = () => {
+    if (!document.body.contains(overlay)) {
+      window._refreshFilamentManagerIfOpen = null;
+      return;
+    }
+    try { registered.render(); } catch { /* noop */ }
+    try { dashboardTab.render(); } catch { /* noop */ }
+    try { candidateCenter.render(); } catch { /* noop */ }
+  };
 }
 
 /* ===================================================================
@@ -2879,4 +3048,3 @@ async function _showCustomPresetDialog(onComplete, existing = null) {
   saveUnifiedStorage();
   if (onComplete) onComplete();
 }
-

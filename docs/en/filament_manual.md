@@ -99,6 +99,94 @@ Filament consumption is tracked per printer:
   lacks filament information, the mounted spool for that printer is
   added automatically.
 
+### Inferred Candidate Tab
+
+The Inferred Candidate tab shows offline-completion candidates where the
+system can infer that the same spool likely remained mounted. Candidates
+are never written to the confirmed ledger automatically; an operator must
+make the decision.
+
+| Action | Behavior |
+| --- | --- |
+| **Confirm** | Applies the inferred usage to the candidate spool and updates remaining length, print history and the audit ledger. It fails closed when confirmed remaining length is lower than the candidate debit. |
+| **Reject** | Marks the candidate as rejected without changing remaining length or print history. |
+| **Reassign** | Applies the inferred usage to a different selected spool. It fails closed when the target spool has insufficient confirmed remaining length. |
+| **Undo** | Reverses the remaining length and print history links created by a previous Confirm or Reassign, then appends a reversal ledger event instead of deleting the original audit event. Undo is refused if the linked print history no longer exactly matches the state recorded immediately after the original decision. |
+
+Candidate statuses are `pending`, `confirmed`, `rejected`, `reassigned`,
+`superseded` and `undone`. Only `pending` candidates can be confirmed,
+rejected or reassigned. Only `confirmed` and `reassigned` candidates can
+be undone.
+
+In Relay setups, Standalone and Parent devices can execute Confirm,
+Reject, Reassign and Undo. Satellite devices can view candidates. When a
+Satellite is promoted to operation mode, decision requests are sent to
+the Parent; readonly Satellites keep the action buttons disabled.
+
+When required, the top of the Inferred Candidate tab shows a Recovery /
+repair status surface. This is a diagnostic view for states such as
+`inferredDecisionRecoveryRequired`,
+`inferredRecoveryOperationRecoveryRequired`, `ledgerRepairRequired` and
+`mountHistoryRejectedEvents`, where the app must not continue
+automatically. It shows the related candidate, host, spool, save-failure
+reason and quarantined mountHistory events.
+
+Standalone and Parent devices can run these recovery operations from the
+Recovery / repair status surface.
+
+| Recovery action | Behavior |
+| --- | --- |
+| **Retry save** | Attempts to durably save the current recovery / repair state again. |
+| **Clear recovery** | Clears `inferredDecisionRecoveryRequired` after the operator has verified the rolled-back state. |
+| **Clear operation recovery** | Clears `inferredRecoveryOperationRecoveryRequired` after the operator has verified a failed O6 recovery-operation rollback save. |
+| **Repair intervals** | Repairs an ambiguous mount interval by explicitly selecting the survivor interval and superseding the other open intervals. |
+| **Clear repair** | Clears `ledgerRepairRequired` for the selected host after the mount ledger has been verified and the current state is no longer `ambiguous` or `corrupt`. |
+| **Archive rejected** | Moves quarantined mountHistory events into `inferredRecoveryEvents` audit history and closes the warning. |
+
+`Repair intervals` only runs when the current state is `ambiguous`, there
+are multiple open intervals, and the selected survivor is still open.
+`corrupt` states can include invalid references, so this operation leaves
+them for O7 reconciliation or manual investigation.
+
+Each recovery operation appends an `inferredRecoveryEvents` audit event
+and rolls memory state back if durable save fails. For `Repair intervals`,
+`mountHistory` and `mountHistorySeq` are also part of the rollback
+snapshot. If that rollback state also cannot be saved,
+`inferredRecoveryOperationRecoveryRequired` is raised and normal O5/O6
+operations stop until retry-save or operator clearance resolves it. In
+Relay setups, Satellites mirror the diagnostic state from the Parent
+authority but keep the recovery operation buttons disabled. Run recovery
+operations on the Parent device.
+
+After recovery operations run, the same Recovery / repair status surface
+shows a **Recovery operation audit** card. It lists recent retry-save,
+recovery-flag clear, ledger-repair clear and rejected-event archive
+operations, including the related candidate, host, count, actor and time.
+When no unresolved blocker remains, recent recovery activity is still shown
+as an INFO card.
+
+The O7 read-only reconciliation check compares `inferredCandidateStore`,
+O5 confirmed / undone events in `usedLengthLog`, and the history
+`filamentInfo` / `filamentId` snapshots. When it finds a mismatch, the
+surface shows **Ledger reconciliation issues**. This diagnostic does not
+repair data or change remaining length. For spools with an explicit
+remaining baseline such as `remainingLedgerBaseline`, it only combines
+normal print-finalize `{jobId, used}` entries, O5 confirmed events, and O5
+undone events after that baseline boundary, then compares the recalculated
+remaining length with saved `remainingLengthMm`. Spools whose baseline
+boundary cannot be proven after remounts, manual adjustments, or old imports
+are counted as unverifiable instead of being reported as mismatches. Negative
+remaining length is a valid audited ledger value; when the saved value and
+recalculated value match below zero, O7 reports a `spool_negative_remaining`
+warning rather than clamping the value away. Each issue includes a
+`repairHint` that names the next manual inspection or repair direction, but
+the diagnostic itself remains read-only.
+
+Negative remaining display is controlled by **Negative remaining display** in
+Storage settings. The default is to show negative values. Choosing display
+clamp only rounds the UI to zero; the internal `remainingLengthMm` remains
+negative and stays available for O5/O7 audit.
+
 ### Registered Filament Tab
 
 The Registered Filament tab lists all spools that have been added so far and lets you edit them.

@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.2.1039 (2026-08-06) — ⚠ 実機検証候補（フィラメント inferred-continuity スタック統合 #409–#428）
+
+### フィラメント帰属の大規模改修スタック（親権威／inferred-continuity／O5–O9）を main へ統合
+
+> **注意**: 全 DRAFT 由来の**実機検証候補**。フィラメント帰属（オフライン継続・inferred candidate・
+> 台帳再計算）の入力/判定を広範に変更する。実機で帰属・残量・UI を確認のこと。
+
+- **#409–411**: 親権威 relay 同期 / restart 冪等性ハードニング / inferred-continuity（オフライン連続の可逆推定帰属）
+- **#412–419 (O5)**: inferred candidate の永続化・shadow flow・decision core・候補センターUI・satellite 決定リレー・undo/recovery・診断・decision hardening
+- **#420–424 (O6)**: inferred recovery ops / recovery audit / repair clearance ゲート / 曖昧 mount 区間の修復 / 不正 recovery のブロック
+- **#425–427 (O7/O9)**: 台帳 reconciliation 診断・残量 reconcile / confirmed-only remaining ゲート
+- **#428 (O8)**: projected remaining UI
+
+統合コンフリクトは `dashboard_spool.js` の autoCorrect 1箇所のみ。スタック側
+`catchUpOfflineFilamentAttribution()` が v2.2.1038 の P1-3（mountHistory `sinceJobId` 下限）を包含し、
+`boundaryStatus === "unknown"` の追加ガードを持つ上位互換のためスタック側を採用（未使用化した
+`getSpoolIntervals` import を除去）。全 **1227** テスト緑（1038 の 795 + スタック +432）。
+
 ## v2.2.1038 (2026-07-11) — ⚠ 実機検証候補（フィラメント autoCorrect 境界）
 
 ### 統合監査 P1-3: autoCorrect のオフライン紐付け下限を mountHistory 権威境界へ（1037 上へ再構成）
