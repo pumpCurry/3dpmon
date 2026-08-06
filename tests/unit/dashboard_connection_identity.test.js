@@ -72,7 +72,12 @@ beforeEach(async () => {
   dataMock.monitorData.hostSpoolMap = {};
   dataMock.monitorData.filamentSpools = [];
 });
-afterEach(() => { delete window._3dpmonRelayChild; });
+afterEach(() => {
+  for (const ws of FakeWebSocket.instances) {
+    try { ws.close(); } catch { /* noop */ }
+  }
+  delete window._3dpmonRelayChild;
+});
 
 describe("T-ID-01: connectAllSavedTargets — 同一IP別ポートを両方接続", () => {
   it("同一IP・別ポート(共にK1)は2本とも接続する（IP単位dedupe廃止の証跡）", () => {
@@ -134,5 +139,61 @@ describe("T-ID-04: IPv6 IP→hostname 移行", () => {
 
     expect(dataMock.monitorData.machines["K1Max-A"], "hostnameキーへ移行").toBeTruthy();
     expect(dataMock.monitorData.machines["fe80::1"], "IPv6一時キーは削除").toBeUndefined();
+  });
+});
+
+describe("Printer Core v3 identity dry-run", () => {
+  it("WS受信データからv3 identity候補をconnectionTargetsへ保存する", () => {
+    mod.connectWithType("203.0.113.10:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Test",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }), "203.0.113.10");
+
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    expect(target.hostname).toBe("K2Pro-Test");
+    expect(target.printerCoreV3Identity).toMatchObject({
+      schemaVersion: 1,
+      dryRun: true,
+      deviceIdSeed: "serial:k2pro-serial-001",
+      identityStrength: "serial",
+      reportedModel: "F012",
+      reportedHostname: "K2Pro-Test",
+    });
+    expect(target.printerCoreV3Identity.endpointAliases.addresses).toEqual(["203.0.113.10"]);
+    expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual(["aa:11:22:33:44:55"]);
+  });
+
+  it("同一serialの別endpoint/別MACはDHCP統合後もaliasとして保持する", () => {
+    mod.connectWithType("203.0.113.10:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Test",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }), "203.0.113.10");
+
+    mod.connectWithType("203.0.113.11:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Test",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      mac: "66778899AABB",
+    }), "203.0.113.11");
+
+    const targets = dataMock.monitorData.appSettings.connectionTargets;
+    expect(targets.length).toBe(1);
+    expect(targets[0].dest).toBe("203.0.113.11:9999");
+    expect(targets[0].printerCoreV3Identity.deviceIdSeed).toBe("serial:k2pro-serial-001");
+    expect(targets[0].printerCoreV3Identity.endpointAliases.addresses).toEqual([
+      "203.0.113.10",
+      "203.0.113.11",
+    ]);
+    expect(targets[0].printerCoreV3Identity.endpointAliases.macs).toEqual([
+      "66:77:88:99:aa:bb",
+      "aa:11:22:33:44:55",
+    ]);
   });
 });
