@@ -1,0 +1,30 @@
+{
+  "fixtureVersion": 1,
+  "device": {
+    "model": "K1 Max",
+    "reportedModel": "K1 Max",
+    "reportedHostname": null,
+    "firmwareVersion": "unknown",
+    "cfsFirmwareVersion": null,
+    "attachment": "none"
+  },
+  "capture": {
+    "capturedAt": "2026-08-06T14:02:21.304Z",
+    "scenario": "idle-baseline",
+    "operatorNotes": "Gate 0 baseline capture for K1 Max device B"
+  },
+  "endpoints": [
+    {
+      "address": "<IP_001>",
+      "httpPort": 80,
+      "wsPort": 9999
+    }
+  ],
+  "redaction": {
+    "ip": true,
+    "mac": true,
+    "serial": true,
+    "credential": true,
+    "ssid": true
+  }
+}

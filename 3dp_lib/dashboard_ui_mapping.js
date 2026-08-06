@@ -17,9 +17,9 @@
  * - {@link PRINT_STATE_EVENT}：状態イベント表
  * - {@link dashboardMapping}：フィールドマッピング
  *
-* @version 1.390.783 (PR #366)
+* @version 1.390.1290 (PR #432)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-03-10 22:00:00
+* @lastModified 2026-08-06 22:53:37
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -195,7 +195,6 @@ export const dashboardMapping = {
   printProgress:          { elementKey: "printProgress",          process: v => ({ value: parseInt(v, 10), unit: "%" }) },
   printJobTime:           { elementKey: "printJobTime",           process: v => (v=== null) ? NO_VAL :({ value: utils.formatDuration(v), unit: "" }) },
   printLeftTime:          { elementKey: "printLeftTime",          process: v => (v=== null) ? NO_VAL :({ value: utils.formatDuration(v), unit: "" }) },
-  estimatedRemainingTime: { elementKey: "estimatedRemainingTime", process: v => (v=== null) ? NO_VAL :({ value: utils.formatDuration(v), unit: "" }) },
   printStartTime:         { elementKey: "printStartTime",         process: v => (v === 0 || v=== null) ? NO_VAL :({ value: utils.formatEpochToDateTime(v), unit: "" }) },
   printFinishTime:        { elementKey: "printFinishTime",        process: v => (v === 0 || v=== null) ? NO_VAL :({ value: utils.formatEpochToDateTime(v), unit: "" }) },
 

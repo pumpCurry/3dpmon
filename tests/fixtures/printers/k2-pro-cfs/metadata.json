@@ -1,0 +1,30 @@
+{
+  "fixtureVersion": 1,
+  "device": {
+    "model": "K2 Pro Combo",
+    "reportedModel": "F012",
+    "reportedHostname": null,
+    "firmwareVersion": "1.0.0",
+    "cfsFirmwareVersion": null,
+    "attachment": "CFS"
+  },
+  "capture": {
+    "capturedAt": "2026-08-06T14:31:42.941Z",
+    "scenario": "idle-baseline",
+    "operatorNotes": "Gate 0 baseline capture for K2 Pro Combo with read-only boxsInfo request"
+  },
+  "endpoints": [
+    {
+      "address": "<IP_001>",
+      "httpPort": 80,
+      "wsPort": 9999
+    }
+  ],
+  "redaction": {
+    "ip": true,
+    "mac": true,
+    "serial": true,
+    "credential": true,
+    "ssid": true
+  }
+}
