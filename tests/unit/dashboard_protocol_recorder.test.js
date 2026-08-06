@@ -104,6 +104,11 @@ describe("ProtocolRecorder", () => {
       rfid: "RFID-RAW-001",
       fileName: "customer-part.gcode",
       console: "seen 58:41:46:CF:FA:99 at fe80::5841:46ff:fecf:fa99 printing nested-demo.gcode",
+      captureLikeId: "capture_afff4598-cb09-4a50-bbd1-242e4574e818",
+      nozzleMoveSnapshot: 0,
+      emptyRfid: "",
+      emptyPrintId: "",
+      reportedHostname: null,
     });
 
     const fixture = recorder.exportFixture();
@@ -121,6 +126,7 @@ describe("ProtocolRecorder", () => {
     expect(text).not.toContain("RFID-RAW-001");
     expect(text).not.toContain("customer-part.gcode");
     expect(text).not.toContain("nested-demo.gcode");
+    expect(text).toContain("capture_afff4598-cb09-4a50-bbd1-242e4574e818");
     expect(text).toContain("<IP_001>");
     expect(text).toContain("<MAC_001>");
     expect(text).toContain("<SERIAL_001>");
@@ -132,6 +138,11 @@ describe("ProtocolRecorder", () => {
     expect(text).toContain("<FILE_001>.gcode");
     expect(fixture.events[0].payload.url).toBe("http://<IP_001>/upload/<FILE_001>.gcode");
     expect(fixture.events[0].payload.fileName).toBe("<FILE_002>.gcode");
+    expect(fixture.events[0].payload.nozzleMoveSnapshot).toBe(0);
+    expect(fixture.events[0].payload.emptyRfid).toBe("");
+    expect(fixture.events[0].payload.emptyPrintId).toBe("");
+    expect(fixture.events[0].payload.reportedHostname).toBeNull();
+    expect(fixture.metadata.redaction.mac).toBe(true);
   });
 
   it("standalone redaction でも同じ値を同じ token にする", () => {

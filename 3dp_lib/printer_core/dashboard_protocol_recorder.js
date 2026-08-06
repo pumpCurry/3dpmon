@@ -18,9 +18,9 @@
  * - {@link redactProtocolValue}：任意値を recorder と同じ規則で秘匿化
  * - {@link toFixtureNdjson}：fixture イベント配列を NDJSON 文字列へ変換
  *
- * @version 1.390.1293 (PR #432)
+ * @version 1.390.1294 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 02:48:00
+ * @lastModified 2026-08-07 08:36:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 0 実機キャプチャ UI との接続
@@ -84,11 +84,23 @@ const IPV6_PATTERN = /\b(?=(?:[0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}\b)(?:[0-9a-f]{1,4
  * MAC アドレスの検出正規表現。
  *
  * 【詳細説明】
- * - コロン区切り、ハイフン区切り、区切りなし 12 桁 HEX を秘匿対象にする。
+ * - 任意文字列中ではコロン区切り、ハイフン区切りのみを秘匿対象にする。
+ * - 区切りなし 12 桁 HEX は UUID 断片などと衝突しやすいため、MAC 系キー専用の検出に分ける。
  *
  * @constant {RegExp}
  */
-const MAC_PATTERN = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b|\b[0-9a-f]{12}\b/gi;
+const MAC_PATTERN = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b/gi;
+
+/**
+ * MAC 系キー専用の検出正規表現。
+ *
+ * 【詳細説明】
+ * - Creality `/info` の `mac` は区切りなし 12 桁 HEX なので、キーが MAC 系と分かる場合だけ
+ *   12 桁 HEX も MAC として秘匿する。
+ *
+ * @constant {RegExp}
+ */
+const MAC_KEY_VALUE_PATTERN = /^(?:[0-9a-f]{12}|[0-9a-f]{2}(?::[0-9a-f]{2}){5}|[0-9a-f]{2}(?:-[0-9a-f]{2}){5})$/i;
 
 /**
  * MAC 系キーを判定する正規表現。
@@ -128,7 +140,7 @@ const SSID_KEY_PATTERN = /(?:ssid|wifiName|wiFiName|wirelessName)/i;
  *
  * @constant {RegExp}
  */
-const SERIAL_KEY_PATTERN = /(?:serial|serialNumber|sn|machineId|deviceSerial)/i;
+const SERIAL_KEY_PATTERN = /^(?:serial|serialNumber|sn|machineId|deviceSerial)$/i;
 
 /**
  * IP 系キーを判定する正規表現。
@@ -255,6 +267,9 @@ function tokenFor(state, kind, rawValue) {
  * @returns {*} token 化した値、または元値
  */
 function redactScalarByKey(value, options, state, keyName) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") {
+    return value;
+  }
   if (options.credential && CREDENTIAL_KEY_PATTERN.test(keyName)) {
     return tokenFor(state, "credential", value);
   }
@@ -265,7 +280,10 @@ function redactScalarByKey(value, options, state, keyName) {
     return tokenFor(state, "serial", value);
   }
   if (options.mac && MAC_KEY_PATTERN.test(keyName)) {
-    return tokenFor(state, "mac", String(value).toLowerCase());
+    const macValue = String(value).trim();
+    return MAC_KEY_VALUE_PATTERN.test(macValue)
+      ? tokenFor(state, "mac", macValue.toLowerCase())
+      : value;
   }
   if (options.hostname && HOSTNAME_KEY_PATTERN.test(keyName)) {
     return tokenFor(state, "hostname", value);

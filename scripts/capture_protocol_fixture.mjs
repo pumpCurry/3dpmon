@@ -17,9 +17,9 @@
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1293 (PR #432)
+ * @version 1.390.1294 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 02:56:00
+ * @lastModified 2026-08-07 08:43:00
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -29,6 +29,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { createProtocolRecorder, toFixtureNdjson } from "../3dp_lib/printer_core/dashboard_protocol_recorder.js";
@@ -60,6 +61,7 @@ Options:
   --require-ws              Fail the result if WS did not open.
   --require-boxsinfo        Fail the result if boxsInfo was not observed.
   --minimum-events <number> Fail the result if fewer events were captured. Default: 0.
+  --keep-failed             Write failed captures under tmp/failed-captures instead of discarding them.
   --notes <text>            Operator notes for metadata.
   --help                    Show this help.
 `;
@@ -89,6 +91,7 @@ export function parseArgs(argv) {
     requireWs: false,
     requireBoxsInfo: false,
     minimumEvents: 0,
+    keepFailed: false,
     model: "unknown",
     attachment: "unknown",
     scenario: "unspecified",
@@ -123,6 +126,10 @@ export function parseArgs(argv) {
     }
     if (arg === "--require-boxsinfo") {
       options.requireBoxsInfo = true;
+      continue;
+    }
+    if (arg === "--keep-failed") {
+      options.keepFailed = true;
       continue;
     }
     const next = argv[index + 1];
@@ -338,6 +345,101 @@ export function sleep(ms) {
 }
 
 /**
+ * fixture 3ファイルを指定ディレクトリへ書き込む。
+ *
+ * 【詳細説明】
+ * - metadata.json / capture.json / events.ndjson を同じ fixture オブジェクトから生成し、
+ *   3ファイルが相互に同じ内容を指す状態を保つ。
+ *
+ * @function writeProtocolFixtureFiles
+ * @param {string} outDir - 書き込み先ディレクトリ
+ * @param {Object} fixture - ProtocolRecorder が export した fixture
+ * @returns {Promise<void>} 書き込み完了
+ * @throws {Error} ディレクトリ作成またはファイル書き込みに失敗した場合
+ * @example
+ * await writeProtocolFixtureFiles("tests/fixtures/printers/k2-pro-cfs", fixture);
+ */
+export async function writeProtocolFixtureFiles(outDir, fixture) {
+  const metadata = fixture.metadata;
+  await fs.mkdir(outDir, { recursive: true });
+  await fs.writeFile(path.join(outDir, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(outDir, "capture.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(outDir, "events.ndjson"), toFixtureNdjson(fixture.events), "utf8");
+}
+
+/**
+ * 成功した capture fixture を一時ディレクトリ経由で正式出力先へ置換する。
+ *
+ * 【詳細説明】
+ * - require 条件に失敗した capture は正式 fixture を上書きしない。
+ * - 成功時だけ同一親ディレクトリ内の一時ディレクトリへ3ファイルを書き、最後に出力先を置換する。
+ * - Windows では既存ディレクトリへの rename ができないため、短時間だけ backup へ退避してから差し替える。
+ *
+ * @function replaceProtocolFixtureDirectory
+ * @param {string} outDir - 正式 fixture ディレクトリ
+ * @param {Object} fixture - 書き込む fixture
+ * @returns {Promise<string>} 書き込み済み正式ディレクトリ
+ * @throws {Error} 書き込みまたは置換に失敗した場合
+ * @example
+ * await replaceProtocolFixtureDirectory("tests/fixtures/printers/k2-pro-cfs", fixture);
+ */
+export async function replaceProtocolFixtureDirectory(outDir, fixture) {
+  const parentDir = path.dirname(path.resolve(outDir));
+  const baseName = path.basename(path.resolve(outDir));
+  const tempDir = path.join(parentDir, `.protocol-capture-${baseName}-${randomUUID()}`);
+  const backupDir = path.join(parentDir, `.protocol-capture-${baseName}-backup-${randomUUID()}`);
+  let backupCreated = false;
+
+  await writeProtocolFixtureFiles(tempDir, fixture);
+  try {
+    await fs.rename(outDir, backupDir);
+    backupCreated = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  try {
+    await fs.rename(tempDir, outDir);
+    if (backupCreated) {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    if (backupCreated) {
+      await fs.rename(backupDir, outDir);
+    }
+    throw error;
+  }
+  return outDir;
+}
+
+/**
+ * 失敗 capture を任意で退避する。
+ *
+ * 【詳細説明】
+ * - 正式 fixture は成功 capture だけで更新し、失敗時の調査材料は tmp 配下へ分離する。
+ *
+ * @function writeFailedProtocolFixtureIfRequested
+ * @param {Object} options - capture オプション
+ * @param {Object} fixture - 失敗 capture fixture
+ * @param {string} captureId - capture ID
+ * @returns {Promise<string|null>} 退避先、または退避しない場合 null
+ * @example
+ * const failedOutDir = await writeFailedProtocolFixtureIfRequested(options, fixture, captureId);
+ */
+export async function writeFailedProtocolFixtureIfRequested(options, fixture, captureId) {
+  if (!options.keepFailed) {
+    return null;
+  }
+  const failedOutDir = path.resolve("tmp", "failed-captures", captureId);
+  await writeProtocolFixtureFiles(failedOutDir, fixture);
+  return failedOutDir;
+}
+
+/**
  * 実機通信をキャプチャして fixture ファイルへ保存する。
  *
  * 【詳細説明】
@@ -463,22 +565,26 @@ export async function captureProtocolFixture(options) {
   recorder.stopSession();
 
   const fixture = recorder.exportFixture({ redact: true });
-  const metadata = fixture.metadata;
   const failureReasons = [];
   if (options.requireHttp && !httpObserved) failureReasons.push("required-http-not-observed");
   if (options.requireWs && !wsOpened) failureReasons.push("required-ws-not-opened");
   if (options.requireBoxsInfo && !boxsInfoObserved) failureReasons.push("required-boxsinfo-not-observed");
   if (fixture.events.length < options.minimumEvents) failureReasons.push("minimum-events-not-met");
-  await fs.mkdir(options.outDir, { recursive: true });
-  await fs.writeFile(path.join(options.outDir, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
-  await fs.writeFile(path.join(options.outDir, "capture.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
-  await fs.writeFile(path.join(options.outDir, "events.ndjson"), toFixtureNdjson(fixture.events), "utf8");
+  const success = failureReasons.length === 0;
+  const failedOutDir = success
+    ? null
+    : await writeFailedProtocolFixtureIfRequested(options, fixture, started.captureId);
+  const writtenOutDir = success
+    ? await replaceProtocolFixtureDirectory(options.outDir, fixture)
+    : null;
 
   return {
     captureId: started.captureId,
     outDir: options.outDir,
+    writtenOutDir,
+    failedOutDir,
     eventCount: fixture.events.length,
-    success: failureReasons.length === 0,
+    success,
     failureReasons,
     observations: {
       httpObserved,

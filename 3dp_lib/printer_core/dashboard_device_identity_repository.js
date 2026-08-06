@@ -18,9 +18,9 @@
  * - {@link recordPrinterCoreV3Identity}：観測 evidence を target へ保存
  * - {@link toComparablePrinterCoreV3Identity}：時刻差分を除いた比較用コピーを生成
  *
- * @version 1.390.1293 (PR #432)
+ * @version 1.390.1294 (PR #432)
  * @since   1.390.1292 (PR #432)
- * @lastModified 2026-08-07 02:41:00
+ * @lastModified 2026-08-07 08:39:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で Data Schema v3 の `devices` / `deviceEndpoints` store へ保存先を差し替える
@@ -118,19 +118,26 @@ export function mergePrinterCoreV3IdentityRecords(existing, incoming) {
  *
  * 【詳細説明】
  * - DHCP 統合や endpoint 移行で connectionTargets の実体を一つに寄せる際に使う。
- * - identity は統合し、conflict は新 target 側に未記録の場合のみ引き継ぐ。
+ * - identity は record 時と同じ判定で、strong match のみ統合し、conflict / unknown / weak は
+ *   source 側の証拠を失わないよう conflict または pending に退避する。
+ * - 既存 conflict は新 target 側に未記録の場合のみ引き継ぐ。
  * - 戻り値の `changed` は呼び出し側が保存を行うかどうかを判断するために使う。
  *
  * @function transferPrinterCoreV3IdentityRecords
  * @param {object} target - 統合先 connectionTarget
  * @param {object} sourceTarget - 統合元 connectionTarget
- * @returns {{changed:boolean, identity:(object|null)}} 統合結果
+ * @returns {{changed:boolean, identity:(object|null), conflict:(object|null), pending:(object|null)}} 統合結果
  * @example
  * const result = transferPrinterCoreV3IdentityRecords(currentTarget, staleTarget);
  */
 export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
   if (!target || !sourceTarget) {
-    return { changed: false, identity: target?.printerCoreV3Identity || null };
+    return {
+      changed: false,
+      identity: target?.printerCoreV3Identity || null,
+      conflict: target?.printerCoreV3IdentityConflict || null,
+      pending: target?.printerCoreV3PendingIdentityCandidate || null,
+    };
   }
   const before = JSON.stringify({
     identity: toComparablePrinterCoreV3Identity(target.printerCoreV3Identity),
@@ -138,11 +145,30 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
     pending: toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate),
   });
 
-  if (sourceTarget.printerCoreV3Identity) {
-    target.printerCoreV3Identity = mergePrinterCoreV3IdentityRecords(
+  if (sourceTarget.printerCoreV3Identity && !target.printerCoreV3Identity) {
+    target.printerCoreV3Identity = sourceTarget.printerCoreV3Identity;
+  } else if (sourceTarget.printerCoreV3Identity) {
+    const decision = shouldMergeDeviceIdentity(
       target.printerCoreV3Identity,
       sourceTarget.printerCoreV3Identity
     );
+    if (decision.confidence === "conflict") {
+      target.printerCoreV3IdentityConflict = createOpenIdentityConflict(
+        target.printerCoreV3Identity,
+        sourceTarget.printerCoreV3Identity,
+        decision
+      );
+    } else if (!decision.merge || decision.confidence === "weak") {
+      target.printerCoreV3PendingIdentityCandidate = createPendingIdentityCandidate(
+        sourceTarget.printerCoreV3Identity,
+        decision
+      );
+    } else {
+      target.printerCoreV3Identity = mergePrinterCoreV3IdentityRecords(
+        target.printerCoreV3Identity,
+        sourceTarget.printerCoreV3Identity
+      );
+    }
   }
   if (sourceTarget.printerCoreV3IdentityConflict && !target.printerCoreV3IdentityConflict) {
     target.printerCoreV3IdentityConflict = sourceTarget.printerCoreV3IdentityConflict;
@@ -159,6 +185,8 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
   return {
     changed: before !== after,
     identity: target.printerCoreV3Identity || null,
+    conflict: target.printerCoreV3IdentityConflict || null,
+    pending: target.printerCoreV3PendingIdentityCandidate || null,
   };
 }
 

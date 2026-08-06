@@ -211,6 +211,67 @@ describe("dashboard_device_identity_repository", () => {
     ]);
   });
 
+  it("DHCP統合でserialが矛盾する旧targetを削除しても衝突証拠を保持する", () => {
+    const current = { dest: "203.0.113.21:9999", hostname: "K2Pro-Test" };
+    const stale = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(current, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-A",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.21",
+    });
+    recordPrinterCoreV3Identity(stale, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-B",
+      mac: "66778899AABB",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const transfer = transferPrinterCoreV3IdentityRecords(current, stale);
+
+    expect(transfer.changed).toBe(true);
+    expect(current.printerCoreV3Identity.deviceIdSeed).toBe("serial:k2pro-serial-a");
+    expect(current.printerCoreV3IdentityConflict.status).toBe("open");
+    expect(current.printerCoreV3IdentityConflict.decision).toEqual({
+      merge: false,
+      confidence: "conflict",
+      reason: "serial-conflict",
+    });
+    expect(current.printerCoreV3IdentityConflict.existingIdentity.deviceIdSeed).toBe("serial:k2pro-serial-a");
+    expect(current.printerCoreV3IdentityConflict.conflictingCandidate.deviceIdSeed).toBe("serial:k2pro-serial-b");
+  });
+
+  it("DHCP統合でweakな旧target identityはpendingへ隔離する", () => {
+    const current = { dest: "203.0.113.21:9999", hostname: "K2Pro-Test" };
+    const stale = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(current, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-A",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.21",
+    });
+    recordPrinterCoreV3Identity(stale, {
+      hostname: "K2Pro-Test",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const transfer = transferPrinterCoreV3IdentityRecords(current, stale);
+
+    expect(transfer.changed).toBe(true);
+    expect(current.printerCoreV3Identity.deviceIdSeed).toBe("serial:k2pro-serial-a");
+    expect(current.printerCoreV3PendingIdentityCandidate.status).toBe("pending");
+    expect(current.printerCoreV3PendingIdentityCandidate.decision).toEqual({
+      merge: true,
+      confidence: "weak",
+      reason: "endpoint-mac-overlap",
+    });
+  });
+
   it("Moonraker targetはCreality identity dry-runの対象外にする", () => {
     const target = { dest: "203.0.113.30:80", hostname: "Fluidd-Test", printerType: "moonraker" };
     const result = recordPrinterCoreV3Identity(target, {

@@ -1,8 +1,12 @@
 /**
  * @fileoverview capture_protocol_fixture.mjs の単体テスト
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import {
+  captureProtocolFixture,
   isHeartbeatPayload,
   normalizeWsPayload,
   parseArgs,
@@ -30,6 +34,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
       "--require-boxsinfo",
       "--minimum-events",
       "3",
+      "--keep-failed",
     ]);
 
     expect(options.host).toBe("192.168.54.151");
@@ -44,6 +49,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(options.requireWs).toBe(true);
     expect(options.requireBoxsInfo).toBe(true);
     expect(options.minimumEvents).toBe(3);
+    expect(options.keepFailed).toBe(true);
   });
 
   it("text JSON frameをJSONとして保持する", () => {
@@ -68,5 +74,40 @@ describe("capture_protocol_fixture CLI helpers", () => {
 
     expect(isHeartbeatPayload(heartbeat)).toBe(true);
     expect(payloadHasKey(data, "boxsInfo")).toBe(true);
+  });
+
+  it("require条件に失敗したcaptureは既存fixtureを上書きしない", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "3dpmon-capture-test-"));
+    const outDir = path.join(root, "fixture");
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, "capture.json"), "{\"existing\":true}\n", "utf8");
+
+    const result = await captureProtocolFixture({
+      host: "127.0.0.1",
+      outDir,
+      durationMs: 100,
+      wsPort: 9999,
+      httpPort: 80,
+      sendBoxsInfo: false,
+      skipHttp: true,
+      skipWs: true,
+      requireHttp: false,
+      requireWs: true,
+      requireBoxsInfo: false,
+      minimumEvents: 0,
+      keepFailed: false,
+      model: "K1 Max",
+      attachment: "none",
+      scenario: "unit-failed-capture",
+      notes: "",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.failureReasons).toEqual(["required-ws-not-opened"]);
+    expect(result.writtenOutDir).toBeNull();
+    expect(result.failedOutDir).toBeNull();
+    expect(fs.readFileSync(path.join(outDir, "capture.json"), "utf8")).toBe("{\"existing\":true}\n");
+
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });

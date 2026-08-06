@@ -3,7 +3,7 @@
   "device": {
     "model": "K1 Max",
     "reportedModel": "K1 Max",
-    "reportedHostname": "<HOSTNAME_001>",
+    "reportedHostname": null,
     "firmwareVersion": "unknown",
     "cfsFirmwareVersion": null,
     "attachment": "none"
@@ -22,9 +22,13 @@
   ],
   "redaction": {
     "ip": true,
-    "mac": "<MAC_002>",
-    "serial": "<SERIAL_001>",
-    "credential": "<CREDENTIAL_001>",
-    "ssid": "<SSID_001>"
+    "mac": true,
+    "serial": true,
+    "credential": true,
+    "ssid": true,
+    "hostname": true,
+    "id": true,
+    "fileName": true,
+    "rfid": true
   }
 }

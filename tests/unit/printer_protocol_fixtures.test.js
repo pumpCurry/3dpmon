@@ -9,9 +9,9 @@ const FIXTURE_ROOT = path.resolve("tests", "fixtures", "printers");
 const FIXTURE_VERSION = 1;
 const PRIVATE_IPV4_PATTERN = /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3})\b/u;
 const IPV6_PATTERN = /\b(?=(?:[0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}\b)(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}\b/iu;
-const MAC_PATTERN = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b|\b[0-9a-f]{12}\b/iu;
+const MAC_PATTERN = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b/iu;
 const RAW_GCODE_PATTERN = /\b(?!FILE_\d{3}\b)[^/\\:"<>|?*\r\n]+\.g(?:code|co|code3mf)\b/iu;
-const SENSITIVE_KEY_PATTERN = /(?:^hostname$|reportedHostname|deviceName|printerName|^sn$|serial|machineId|deviceId|^token$|printId|jobId|taskId|rfid)/i;
+const SENSITIVE_KEY_PATTERN = /(?:^hostname$|reportedHostname|deviceName|printerName|^sn$|serial|machineId|deviceId|^token$|printId|jobId|taskId|rfid|^mac$|macAddress|wifiMac|ethernetMac)/i;
 const REDACTION_TOKEN_PATTERN = /^<[A-Z]+_\d{3}>$/u;
 const REDACTED_GCODE_PATTERN = /^<FILE_\d{3}>\.g(?:code|co|code3mf)$/iu;
 
@@ -56,6 +56,9 @@ function readJson(filePath) {
 
 function isAllowedSensitiveValue(value) {
   if (value === null || value === undefined || value === "") {
+    return true;
+  }
+  if (typeof value === "boolean") {
     return true;
   }
   if (typeof value !== "string") {

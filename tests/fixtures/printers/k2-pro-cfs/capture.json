@@ -1,6 +1,6 @@
 {
   "fixtureVersion": 1,
-  "captureId": "capture_1fb25a0d-ea7d-4266-ae5a-<MAC_001>",
+  "captureId": "capture_1fb25a0d-ea7d-4266-ae5a-e36a921a658f",
   "startedAt": 1786026702941,
   "stoppedAt": 1786026705582,
   "durationMs": 2641,
@@ -9,7 +9,7 @@
     "device": {
       "model": "K2 Pro Combo",
       "reportedModel": "F012",
-      "reportedHostname": "<HOSTNAME_001>",
+      "reportedHostname": null,
       "firmwareVersion": "1.0.0",
       "cfsFirmwareVersion": null,
       "attachment": "CFS"
@@ -28,10 +28,14 @@
     ],
     "redaction": {
       "ip": true,
-      "mac": "<MAC_002>",
-      "serial": "<SERIAL_001>",
-      "credential": "<CREDENTIAL_001>",
-      "ssid": "<SSID_001>"
+      "mac": true,
+      "serial": true,
+      "credential": true,
+      "ssid": true,
+      "hostname": true,
+      "id": true,
+      "fileName": true,
+      "rfid": true
     }
   },
   "events": [
@@ -57,9 +61,9 @@
         "statusText": "OK",
         "bodyKind": "json",
         "body": {
-          "mac": "<MAC_003>",
+          "mac": "<MAC_001>",
           "model": "F012",
-          "sn": "<SERIAL_002>",
+          "sn": "<SERIAL_001>",
           "version": "1.0.0",
           "videoPort": 443,
           "wssPort": 443
@@ -128,7 +132,7 @@
           "curFlowratePct": 100,
           "curPosition": "X:205.00 Y:301.00 Z:147.81",
           "dProgress": 0,
-          "deviceName": "<HOSTNAME_002>",
+          "deviceName": "",
           "deviceState": 0,
           "enableSelfTest": 1,
           "err": {
@@ -144,7 +148,7 @@
             "printSettings.filamentRemaining"
           ],
           "feedState": 0,
-          "hostname": "<HOSTNAME_003>",
+          "hostname": "<HOSTNAME_001>",
           "layer": 0,
           "lightSw": 0,
           "materialDetect": 0,
@@ -156,7 +160,7 @@
           "model": "F012",
           "modelFanPct": 0,
           "modelVersion": "printer hw ver:;printer sw ver:;DWIN hw ver:CR0CN200400C10;DWIN sw ver:<IP_002>;",
-          "nozzleMoveSnapshot": "<SERIAL_003>",
+          "nozzleMoveSnapshot": 0,
           "nozzleTemp": "32.090000",
           "nozzleTempAutoPid": 0,
           "powerLoss": 0,
@@ -283,7 +287,7 @@
                     "selected": 0,
                     "percent": 100,
                     "editStatus": 2,
-                    "rfid": "<RFID_001>",
+                    "rfid": "",
                     "state": 1
                   }
                 ]
@@ -294,14 +298,14 @@
                 "type": 0,
                 "temp": 29,
                 "humidity": 50,
-                "sn": "<SERIAL_004>",
+                "sn": "<SERIAL_002>",
                 "materials": [
                   {
                     "id": 0,
                     "vendor": "Generic",
                     "type": "PLA",
                     "name": "Generic PLA",
-                    "rfid": "<RFID_002>",
+                    "rfid": "<RFID_001>",
                     "color": "#0ffffff",
                     "minTemp": 190,
                     "maxTemp": 240,
@@ -317,7 +321,7 @@
                     "vendor": "Generic",
                     "type": "PLA",
                     "name": "Generic PLA",
-                    "rfid": "<RFID_002>",
+                    "rfid": "<RFID_001>",
                     "color": "#072a530",
                     "minTemp": 190,
                     "maxTemp": 240,
@@ -333,7 +337,7 @@
                     "vendor": "Generic",
                     "type": "PLA",
                     "name": "Generic PLA-Silk",
-                    "rfid": "<RFID_003>",
+                    "rfid": "<RFID_002>",
                     "color": "#09ea7ae",
                     "minTemp": 190,
                     "maxTemp": 240,
@@ -349,7 +353,7 @@
                     "vendor": "Generic",
                     "type": "PLA",
                     "name": "Generic PLA",
-                    "rfid": "<RFID_002>",
+                    "rfid": "<RFID_001>",
                     "color": "#0fff014",
                     "minTemp": 190,
                     "maxTemp": 240,
