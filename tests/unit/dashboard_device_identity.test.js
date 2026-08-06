@@ -93,7 +93,59 @@ describe("dashboard_device_identity", () => {
     const candidate = createDeviceIdentityCandidate(evidence);
 
     expect(candidate.identityStrength).toBe("provisional");
-    expect(candidate.deviceIdSeed).toBe("provisional:k1-max:k1max-4a1b");
+    expect(candidate.deviceIdSeed).toBe("provisional:k1%20max:k1max-4a1b");
     expect(candidate.endpointAliases.macs).toEqual(["aa:bb:cc:dd:ee:ff"]);
+  });
+
+  it("記号違いのserialを同じdeviceId seedへ潰さない", () => {
+    const slash = createDeviceIdentityCandidate({ serialNumber: "ABC/123" });
+    const colon = createDeviceIdentityCandidate({ serialNumber: "ABC:123" });
+    const hyphen = createDeviceIdentityCandidate({ serialNumber: "ABC-123" });
+
+    expect(slash.deviceIdSeed).toBe("serial:abc%2F123");
+    expect(colon.deviceIdSeed).toBe("serial:abc%3A123");
+    expect(hyphen.deviceIdSeed).toBe("serial:abc-123");
+    expect(new Set([slash.deviceIdSeed, colon.deviceIdSeed, hyphen.deviceIdSeed]).size).toBe(3);
+  });
+
+  it("stableMachineId由来の候補は後続serial観測で昇格する", () => {
+    const stable = createDeviceIdentityCandidate({
+      stableMachineId: "K2PRO-STABLE-001",
+      endpointAddress: "192.0.2.10",
+    });
+    const serial = createDeviceIdentityCandidate({
+      serialNumber: "K2PRO-SERIAL-001",
+      stableMachineId: "K2PRO-STABLE-001",
+      endpointAddress: "192.0.2.11",
+    });
+
+    const decision = shouldMergeDeviceIdentity(stable, serial);
+    const merged = mergeDeviceIdentityCandidate(stable, serial);
+
+    expect(decision).toEqual({
+      merge: true,
+      confidence: "strong",
+      reason: "stable-machine-id-match",
+    });
+    expect(merged.identityStrength).toBe("serial");
+    expect(merged.deviceIdSeed).toBe("serial:k2pro-serial-001");
+    expect(merged.endpointAliases.addresses).toEqual(["192.0.2.10", "192.0.2.11"]);
+  });
+
+  it("serialが一致してもstableMachineIdが矛盾する場合はconflictを優先する", () => {
+    const left = createDeviceIdentityCandidate({
+      serialNumber: "K2PRO-SERIAL-001",
+      stableMachineId: "STABLE-A",
+    });
+    const right = createDeviceIdentityCandidate({
+      serialNumber: "K2PRO-SERIAL-001",
+      stableMachineId: "STABLE-B",
+    });
+
+    expect(shouldMergeDeviceIdentity(left, right)).toEqual({
+      merge: false,
+      confidence: "conflict",
+      reason: "stable-machine-id-conflict",
+    });
   });
 });

@@ -1,6 +1,6 @@
 {
   "fixtureVersion": 1,
-  "captureId": "capture_2ce27ea6-6a46-46e9-ab1c-316e0e280828",
+  "captureId": "capture_2ce27ea6-6a46-46e9-ab1c-<MAC_001>",
   "startedAt": 1786024941304,
   "stoppedAt": 1786024943964,
   "durationMs": 2660,
@@ -9,7 +9,7 @@
     "device": {
       "model": "K1 Max",
       "reportedModel": "K1 Max",
-      "reportedHostname": null,
+      "reportedHostname": "<HOSTNAME_001>",
       "firmwareVersion": "unknown",
       "cfsFirmwareVersion": null,
       "attachment": "none"
@@ -28,10 +28,10 @@
     ],
     "redaction": {
       "ip": true,
-      "mac": true,
-      "serial": true,
-      "credential": true,
-      "ssid": true
+      "mac": "<MAC_002>",
+      "serial": "<SERIAL_001>",
+      "credential": "<CREDENTIAL_001>",
+      "ssid": "<SSID_001>"
     }
   },
   "events": [
@@ -57,7 +57,7 @@
         "statusText": "OK",
         "bodyKind": "json",
         "body": {
-          "mac": "<MAC_001>",
+          "mac": "<MAC_003>",
           "model": "K1 Max"
         }
       },
@@ -115,7 +115,7 @@
           "fan": 0,
           "fanAuxiliary": 0,
           "fanCase": 0,
-          "hostname": "K1Max-03FA",
+          "hostname": "<HOSTNAME_002>",
           "layer": 0,
           "lightSw": 1,
           "materialDetect": 1,
@@ -125,13 +125,13 @@
           "model": "K1 Max",
           "modelFanPct": 0,
           "modelVersion": "printer hw ver:;printer sw ver:;DWIN hw ver:CR4CU220812S11;DWIN sw ver:<IP_002>;",
-          "nozzleMoveSnapshot": 0,
+          "nozzleMoveSnapshot": "<SERIAL_002>",
           "nozzleTemp": "26.020000",
           "nozzleTempAutoPid": 0,
           "powerLoss": 0,
           "pressureAdvance": "0.044000",
-          "printFileName": "/usr/data/printer_data/gcodes/20260527_kanban_c2_x3.gcode",
-          "printId": "",
+          "printFileName": "/usr/data/printer_data/gcodes/<FILE_001>.gcode",
+          "printId": "<ID_001>",
           "printJobTime": 3878,
           "printLeftTime": 0,
           "printProgress": 100,

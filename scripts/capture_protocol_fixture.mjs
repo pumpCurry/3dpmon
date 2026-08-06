@@ -17,9 +17,9 @@
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1290 (PR #432)
+ * @version 1.390.1293 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-06 22:53:37
+ * @lastModified 2026-08-07 02:56:00
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -56,6 +56,10 @@ Options:
   --send-boxsinfo           Send read-only {"method":"get","params":{"boxsInfo":1}} after WS open.
   --skip-http               Skip GET /info.
   --skip-ws                 Skip WebSocket observation.
+  --require-http            Fail the result if /info was not observed successfully.
+  --require-ws              Fail the result if WS did not open.
+  --require-boxsinfo        Fail the result if boxsInfo was not observed.
+  --minimum-events <number> Fail the result if fewer events were captured. Default: 0.
   --notes <text>            Operator notes for metadata.
   --help                    Show this help.
 `;
@@ -81,6 +85,10 @@ export function parseArgs(argv) {
     sendBoxsInfo: false,
     skipHttp: false,
     skipWs: false,
+    requireHttp: false,
+    requireWs: false,
+    requireBoxsInfo: false,
+    minimumEvents: 0,
     model: "unknown",
     attachment: "unknown",
     scenario: "unspecified",
@@ -105,6 +113,18 @@ export function parseArgs(argv) {
       options.skipWs = true;
       continue;
     }
+    if (arg === "--require-http") {
+      options.requireHttp = true;
+      continue;
+    }
+    if (arg === "--require-ws") {
+      options.requireWs = true;
+      continue;
+    }
+    if (arg === "--require-boxsinfo") {
+      options.requireBoxsInfo = true;
+      continue;
+    }
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       throw new Error(`Missing value for ${arg}`);
@@ -118,6 +138,7 @@ export function parseArgs(argv) {
     else if (arg === "--duration-ms") options.durationMs = Number(next);
     else if (arg === "--ws-port") options.wsPort = Number(next);
     else if (arg === "--http-port") options.httpPort = Number(next);
+    else if (arg === "--minimum-events") options.minimumEvents = Number(next);
     else if (arg === "--notes") options.notes = next;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -139,6 +160,9 @@ export function parseArgs(argv) {
   }
   if (!Number.isFinite(options.httpPort) || options.httpPort <= 0) {
     throw new Error("--http-port must be a positive number");
+  }
+  if (!Number.isFinite(options.minimumEvents) || options.minimumEvents < 0) {
+    throw new Error("--minimum-events must be a number >= 0");
   }
   return options;
 }
@@ -251,6 +275,51 @@ export function normalizeWsPayload(data, isBinary) {
 }
 
 /**
+ * payload 内に指定キーが含まれるか再帰的に判定する。
+ *
+ * 【詳細説明】
+ * - boxsInfo は root 直下だけでなく、レスポンス envelope の params/data 内に入ることがある。
+ * - capture の成功判定にだけ使うため、値の内容ではなくキーの存在を確認する。
+ *
+ * @function payloadHasKey
+ * @param {*} value - 検査対象 payload
+ * @param {string} keyName - 探すキー名
+ * @returns {boolean} キーが存在する場合 true
+ * @example
+ * const hasBoxsInfo = payloadHasKey({ data: { boxsInfo: {} } }, "boxsInfo");
+ */
+export function payloadHasKey(value, keyName) {
+  if (Array.isArray(value)) {
+    return value.some((entry) => payloadHasKey(entry, keyName));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return Object.entries(value).some(([childKey, childValue]) => {
+    return childKey === keyName || payloadHasKey(childValue, keyName);
+  });
+}
+
+/**
+ * WebSocket heartbeat frame かどうかを判定する。
+ *
+ * 【詳細説明】
+ * - Creality K1/K2 系の `heart_beat` text frame へ read-only な `ok` を返すために使う。
+ * - JSON envelope 化された文字列も安全側で認識する。
+ *
+ * @function isHeartbeatPayload
+ * @param {Object} payload - normalizeWsPayload の戻り値
+ * @returns {boolean} heartbeat の場合 true
+ * @example
+ * const isHeartbeat = isHeartbeatPayload(normalizeWsPayload("heart_beat", false));
+ */
+export function isHeartbeatPayload(payload) {
+  return payload?.frameType === "text" &&
+    payload.bodyKind === "text" &&
+    String(payload.body || "").trim() === "heart_beat";
+}
+
+/**
  * 指定時間だけ待機する。
  *
  * 【詳細説明】
@@ -284,6 +353,11 @@ export function sleep(ms) {
  */
 export async function captureProtocolFixture(options) {
   const recorder = createProtocolRecorder();
+  const errors = [];
+  let httpObserved = false;
+  let wsOpened = false;
+  let boxsInfoObserved = false;
+  let heartbeatAcked = false;
   const started = recorder.startSession({
     device: {
       model: options.model,
@@ -308,6 +382,7 @@ export async function captureProtocolFixture(options) {
       recorder.recordTransportEvent({ channel: "http-info", type: "request", details: { url: infoUrl } });
       const response = await fetchWithTimeout(infoUrl, 3000);
       const body = await readResponseBody(response);
+      httpObserved = response.status >= 200 && response.status < 300;
       if (body.bodyKind === "json" && body.body && typeof body.body === "object") {
         recorder.mergeMetadata({
           device: {
@@ -323,6 +398,10 @@ export async function captureProtocolFixture(options) {
         ...body,
       });
     } catch (error) {
+      errors.push({
+        channel: "http-info",
+        message: error instanceof Error ? error.message : String(error),
+      });
       recorder.recordTransportEvent({
         channel: "http-info",
         type: "error",
@@ -335,6 +414,7 @@ export async function captureProtocolFixture(options) {
     const wsUrl = `ws://${options.host}:${options.wsPort}`;
     const ws = new WebSocket(wsUrl, { handshakeTimeout: 3000 });
     ws.on("open", () => {
+      wsOpened = true;
       recorder.recordTransportEvent({ channel: "ws9999", type: "open", details: { url: wsUrl } });
       if (options.sendBoxsInfo) {
         const request = { method: "get", params: { boxsInfo: 1 } };
@@ -343,7 +423,15 @@ export async function captureProtocolFixture(options) {
       }
     });
     ws.on("message", (data, isBinary) => {
-      recorder.recordInbound("ws9999", normalizeWsPayload(data, isBinary));
+      const payload = normalizeWsPayload(data, isBinary);
+      recorder.recordInbound("ws9999", payload);
+      boxsInfoObserved = boxsInfoObserved || payloadHasKey(payload, "boxsInfo");
+      if (isHeartbeatPayload(payload) && ws.readyState === WebSocket.OPEN) {
+        const ackPayload = { frameType: "text", bodyKind: "text", body: "ok" };
+        recorder.recordOutbound("ws9999", ackPayload, { purpose: "heartbeat-ack" });
+        ws.send("ok");
+        heartbeatAcked = true;
+      }
     });
     ws.on("close", (code, reason) => {
       recorder.recordTransportEvent({
@@ -353,6 +441,10 @@ export async function captureProtocolFixture(options) {
       });
     });
     ws.on("error", (error) => {
+      errors.push({
+        channel: "ws9999",
+        message: error instanceof Error ? error.message : String(error),
+      });
       recorder.recordTransportEvent({
         channel: "ws9999",
         type: "error",
@@ -372,6 +464,11 @@ export async function captureProtocolFixture(options) {
 
   const fixture = recorder.exportFixture({ redact: true });
   const metadata = fixture.metadata;
+  const failureReasons = [];
+  if (options.requireHttp && !httpObserved) failureReasons.push("required-http-not-observed");
+  if (options.requireWs && !wsOpened) failureReasons.push("required-ws-not-opened");
+  if (options.requireBoxsInfo && !boxsInfoObserved) failureReasons.push("required-boxsinfo-not-observed");
+  if (fixture.events.length < options.minimumEvents) failureReasons.push("minimum-events-not-met");
   await fs.mkdir(options.outDir, { recursive: true });
   await fs.writeFile(path.join(options.outDir, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
   await fs.writeFile(path.join(options.outDir, "capture.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
@@ -381,6 +478,15 @@ export async function captureProtocolFixture(options) {
     captureId: started.captureId,
     outDir: options.outDir,
     eventCount: fixture.events.length,
+    success: failureReasons.length === 0,
+    failureReasons,
+    observations: {
+      httpObserved,
+      wsOpened,
+      boxsInfoObserved,
+      heartbeatAcked,
+      errors,
+    },
   };
 }
 
@@ -404,6 +510,9 @@ export async function main() {
     }
     const result = await captureProtocolFixture(options);
     console.log(JSON.stringify(result, null, 2));
+    if (!result.success) {
+      process.exitCode = 1;
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error(HELP_TEXT);

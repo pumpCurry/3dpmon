@@ -99,22 +99,39 @@ describe("ProtocolRecorder", () => {
       serialNumber: "SERIAL-12345",
       password: "printer-pass",
       ssid: "factory-lab",
+      hostname: "K2Pro-69E7",
+      printId: 123456789,
+      rfid: "RFID-RAW-001",
+      fileName: "customer-part.gcode",
+      console: "seen 58:41:46:CF:FA:99 at fe80::5841:46ff:fecf:fa99 printing nested-demo.gcode",
     });
 
     const fixture = recorder.exportFixture();
     const text = JSON.stringify(fixture);
     expect(text).not.toContain("192.168.54.151");
+    expect(text).not.toContain("fe80::5841:46ff:fecf:fa99");
     expect(text).not.toContain("AA:BB:CC:DD:EE:FF");
+    expect(text).not.toContain("58:41:46:CF:FA:99");
     expect(text).not.toContain("FCEE280E69E7");
     expect(text).not.toContain("SERIAL-12345");
     expect(text).not.toContain("printer-pass");
     expect(text).not.toContain("factory-lab");
+    expect(text).not.toContain("K2Pro-69E7");
+    expect(text).not.toContain("123456789");
+    expect(text).not.toContain("RFID-RAW-001");
+    expect(text).not.toContain("customer-part.gcode");
+    expect(text).not.toContain("nested-demo.gcode");
     expect(text).toContain("<IP_001>");
     expect(text).toContain("<MAC_001>");
     expect(text).toContain("<SERIAL_001>");
     expect(text).toContain("<CREDENTIAL_001>");
     expect(text).toContain("<SSID_001>");
-    expect(fixture.events[0].payload.url).toBe("http://<IP_001>/upload/demo.gcode");
+    expect(text).toContain("<HOSTNAME_001>");
+    expect(text).toContain("<ID_001>");
+    expect(text).toContain("<RFID_001>");
+    expect(text).toContain("<FILE_001>.gcode");
+    expect(fixture.events[0].payload.url).toBe("http://<IP_001>/upload/<FILE_001>.gcode");
+    expect(fixture.events[0].payload.fileName).toBe("<FILE_002>.gcode");
   });
 
   it("standalone redaction でも同じ値を同じ token にする", () => {

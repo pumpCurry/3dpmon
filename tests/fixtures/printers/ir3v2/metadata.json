@@ -3,7 +3,7 @@
   "device": {
     "model": "ir3v2",
     "reportedModel": null,
-    "reportedHostname": null,
+    "reportedHostname": "<HOSTNAME_001>",
     "firmwareVersion": "unknown",
     "cfsFirmwareVersion": null,
     "attachment": "unknown"
@@ -22,9 +22,9 @@
   ],
   "redaction": {
     "ip": true,
-    "mac": true,
-    "serial": true,
-    "credential": true,
-    "ssid": true
+    "mac": "<MAC_002>",
+    "serial": "<SERIAL_001>",
+    "credential": "<CREDENTIAL_001>",
+    "ssid": "<SSID_001>"
   }
 }

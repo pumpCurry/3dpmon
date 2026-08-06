@@ -19,12 +19,12 @@
  * - {@link shouldMergeDeviceIdentity}：二つの識別候補を同一物理機として統合できるか判定
  * - {@link mergeDeviceIdentityCandidate}：二つの識別候補を決定的に統合
  *
- * @version 1.390.1290 (PR #432)
+ * @version 1.390.1293 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 00:35:36
+ * @lastModified 2026-08-07 02:23:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 1 で dashboard_connection.js の既存 hostname 解決と接続する
+ * - Gate 3 以降で authoritative deviceId 生成を hash ベースへ移行する
  */
 
 "use strict";
@@ -51,22 +51,52 @@ export const PROVISIONAL_DEVICE_PREFIX = "provisional";
 const MAC_FORMAT_PATTERN = /^(?:[0-9a-f]{12}|[0-9a-f]{2}(?::[0-9a-f]{2}){5}|[0-9a-f]{2}(?:-[0-9a-f]{2}){5})$/i;
 
 /**
+ * identity 強度の順位。
+ *
+ * 【詳細説明】
+ * - 後から serial が観測された場合、stableMachineId や provisional seed から昇格できるようにする。
+ * - unknown は外部から壊れた値が入った場合の安全な最下位として扱う。
+ *
+ * @constant {object}
+ */
+const IDENTITY_STRENGTH_RANK = Object.freeze({
+  unknown: -1,
+  provisional: 0,
+  "stable-machine-id": 1,
+  serial: 2,
+});
+
+/**
+ * identity 値を比較用の標準形へ変換する。
+ *
+ * 【詳細説明】
+ * - serial や stableMachineId は大文字小文字の揺れで別機体扱いしない。
+ * - Unicode の互換文字差も NFKC で寄せる。
+ *
+ * @private
+ * @param {*} value - 入力値
+ * @returns {?string} 標準化された identity 値、または null
+ */
+function normalizeIdentityValue(value) {
+  const normalized = String(value || "").normalize("NFKC").trim().toLowerCase();
+  return normalized || null;
+}
+
+/**
  * ID seed 用に文字列を安全な部品へ変換する。
  *
  * 【詳細説明】
  * - deviceId はここでは最終 UUID ではなく、決定的 hash の入力 seed として扱う。
- * - 空白・記号を畳み、fixture やテストの比較を安定させる。
+ * - 記号をハイフンへ潰すと `ABC/123` と `ABC:123` が衝突し得るため、percent-encoding で
+ *   入力差分を残す。
  *
  * @private
  * @param {*} value - 入力値
  * @returns {string} 正規化済み ID 部品
  */
 function normalizeIdentityPart(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const normalized = normalizeIdentityValue(value);
+  return normalized ? encodeURIComponent(normalized) : "";
 }
 
 /**
@@ -134,8 +164,8 @@ export function normalizeMacAddress(value) {
  */
 export function normalizeIdentityEvidence(evidence) {
   const source = evidence && typeof evidence === "object" ? evidence : {};
-  const serialNumber = String(source.serialNumber || source.sn || "").trim() || null;
-  const stableMachineId = String(source.stableMachineId || source.machineId || source.deviceId || "").trim() || null;
+  const serialNumber = normalizeIdentityValue(source.serialNumber || source.sn);
+  const stableMachineId = normalizeIdentityValue(source.stableMachineId || source.machineId || source.deviceId);
   const reportedModel = String(source.reportedModel || source.model || "").trim() || null;
   const reportedHostname = String(source.reportedHostname || source.hostname || "").trim() || null;
   const endpointAddress = String(source.endpointAddress || source.address || source.ip || "").trim() || null;
@@ -236,20 +266,33 @@ export function createDeviceIdentityCandidate(evidence) {
 export function shouldMergeDeviceIdentity(left, right) {
   const a = left || {};
   const b = right || {};
+  const serialConflict = a.serialNumber && b.serialNumber && a.serialNumber !== b.serialNumber;
+  const stableConflict = a.stableMachineId && b.stableMachineId && a.stableMachineId !== b.stableMachineId;
+
+  if (serialConflict || stableConflict) {
+    const reason = serialConflict && stableConflict
+      ? "strong-identity-conflict"
+      : serialConflict ? "serial-conflict" : "stable-machine-id-conflict";
+    return {
+      merge: false,
+      confidence: "conflict",
+      reason,
+    };
+  }
 
   if (a.serialNumber && b.serialNumber) {
     return {
-      merge: a.serialNumber === b.serialNumber,
-      confidence: a.serialNumber === b.serialNumber ? "strong" : "conflict",
-      reason: a.serialNumber === b.serialNumber ? "serial-match" : "serial-conflict",
+      merge: true,
+      confidence: "strong",
+      reason: "serial-match",
     };
   }
 
   if (a.stableMachineId && b.stableMachineId) {
     return {
-      merge: a.stableMachineId === b.stableMachineId,
-      confidence: a.stableMachineId === b.stableMachineId ? "strong" : "conflict",
-      reason: a.stableMachineId === b.stableMachineId ? "stable-machine-id-match" : "stable-machine-id-conflict",
+      merge: true,
+      confidence: "strong",
+      reason: "stable-machine-id-match",
     };
   }
 
@@ -296,7 +339,9 @@ export function shouldMergeDeviceIdentity(left, right) {
 export function mergeDeviceIdentityCandidate(left, right) {
   const a = left || {};
   const b = right || {};
-  const preferred = a.identityStrength === "provisional" && b.identityStrength !== "provisional" ? b : a;
+  const rankA = IDENTITY_STRENGTH_RANK[a.identityStrength] ?? IDENTITY_STRENGTH_RANK.unknown;
+  const rankB = IDENTITY_STRENGTH_RANK[b.identityStrength] ?? IDENTITY_STRENGTH_RANK.unknown;
+  const preferred = rankB > rankA ? b : a;
   const fallback = preferred === a ? b : a;
 
   return {

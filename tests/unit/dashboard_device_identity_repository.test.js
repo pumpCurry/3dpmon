@@ -87,6 +87,97 @@ describe("dashboard_device_identity_repository", () => {
       confidence: "conflict",
       reason: "serial-conflict",
     });
+    expect(target.printerCoreV3IdentityConflict.status).toBe("open");
+    expect(target.printerCoreV3IdentityConflict.existingIdentity.deviceIdSeed).toBe("serial:k2pro-serial-001");
+    expect(target.printerCoreV3IdentityConflict.conflictingCandidate.deviceIdSeed).toBe("serial:k2pro-serial-other");
+  });
+
+  it("conflictは次の正常観測で自動削除しない", () => {
+    const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+    recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-OTHER",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const normal = recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    expect(normal.changed).toBe(false);
+    expect(normal.conflict.status).toBe("open");
+    expect(target.printerCoreV3IdentityConflict.status).toBe("open");
+    expect(target.printerCoreV3Identity.deviceIdSeed).toBe("serial:k2pro-serial-001");
+  });
+
+  it("共有証跡のない候補は既存identityへ混ぜずpendingへ隔離する", () => {
+    const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const pending = recordPrinterCoreV3Identity(target, {
+      hostname: "Unknown-Endpoint",
+      stableMachineId: "STABLE-UNRELATED-001",
+      mac: "66778899AABB",
+    }, {
+      endpointAddress: "203.0.113.99",
+    });
+
+    expect(pending.changed).toBe(true);
+    expect(pending.decision).toEqual({
+      merge: false,
+      confidence: "unknown",
+      reason: "insufficient-shared-identity",
+    });
+    expect(target.printerCoreV3Identity.deviceIdSeed).toBe("serial:k2pro-serial-001");
+    expect(target.printerCoreV3Identity.stableMachineId).toBeNull();
+    expect(target.printerCoreV3PendingIdentityCandidate.status).toBe("pending");
+    expect(target.printerCoreV3PendingIdentityCandidate.candidate.deviceIdSeed).toBe("machine:stable-unrelated-001");
+  });
+
+  it("MAC一致だけのweak候補は権威identityへ昇格せずpendingへ留める", () => {
+    const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const pending = recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Wifi",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.21",
+    });
+
+    expect(pending.decision).toEqual({
+      merge: true,
+      confidence: "weak",
+      reason: "endpoint-mac-overlap",
+    });
+    expect(target.printerCoreV3Identity.identityStrength).toBe("serial");
+    expect(target.printerCoreV3Identity.endpointAliases.addresses).toEqual(["203.0.113.20"]);
+    expect(target.printerCoreV3PendingIdentityCandidate.candidate.endpointAliases.addresses).toEqual(["203.0.113.21"]);
   });
 
   it("旧targetから新targetへidentityとconflictを移送できる", () => {

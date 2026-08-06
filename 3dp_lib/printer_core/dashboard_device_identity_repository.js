@@ -18,9 +18,9 @@
  * - {@link recordPrinterCoreV3Identity}：観測 evidence を target へ保存
  * - {@link toComparablePrinterCoreV3Identity}：時刻差分を除いた比較用コピーを生成
  *
- * @version 1.390.1292 (PR #432)
+ * @version 1.390.1293 (PR #432)
  * @since   1.390.1292 (PR #432)
- * @lastModified 2026-08-07 01:22:00
+ * @lastModified 2026-08-07 02:41:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で Data Schema v3 の `devices` / `deviceEndpoints` store へ保存先を差し替える
@@ -65,6 +65,8 @@ export function toComparablePrinterCoreV3Identity(record) {
   const comparable = { ...record };
   delete comparable.lastObservedAt;
   delete comparable.observedAt;
+  delete comparable.detectedAt;
+  delete comparable.resolvedAt;
   delete comparable.lastEvidenceReason;
   delete comparable.lastMergeDecision;
   delete comparable.evidenceReasons;
@@ -94,7 +96,7 @@ export function mergePrinterCoreV3IdentityRecords(existing, incoming) {
   if (!incoming) return existing;
 
   const decision = shouldMergeDeviceIdentity(existing, incoming);
-  if (decision.confidence === "conflict") {
+  if (!decision.merge || decision.confidence === "conflict") {
     return {
       ...existing,
       schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
@@ -133,6 +135,7 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
   const before = JSON.stringify({
     identity: toComparablePrinterCoreV3Identity(target.printerCoreV3Identity),
     conflict: toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict),
+    pending: toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate),
   });
 
   if (sourceTarget.printerCoreV3Identity) {
@@ -144,10 +147,14 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
   if (sourceTarget.printerCoreV3IdentityConflict && !target.printerCoreV3IdentityConflict) {
     target.printerCoreV3IdentityConflict = sourceTarget.printerCoreV3IdentityConflict;
   }
+  if (sourceTarget.printerCoreV3PendingIdentityCandidate && !target.printerCoreV3PendingIdentityCandidate) {
+    target.printerCoreV3PendingIdentityCandidate = sourceTarget.printerCoreV3PendingIdentityCandidate;
+  }
 
   const after = JSON.stringify({
     identity: toComparablePrinterCoreV3Identity(target.printerCoreV3Identity),
     conflict: toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict),
+    pending: toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate),
   });
   return {
     changed: before !== after,
@@ -159,7 +166,8 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
  * 観測 evidence から Printer Core v3 identity candidate を生成する。
  *
  * 【詳細説明】
- * - target に既に保存済みの MAC alias も候補に含め、複数 NIC の観測を落とさない。
+ * - target 自身と今回 evidence に含まれる MAC alias だけを候補にし、既存 identity の alias は
+ *   merge 判定後の統合処理で引き継ぐ。
  * - endpointAddress は呼び出し側が接続先正規化済みの値を渡す。
  *
  * @private
@@ -175,7 +183,6 @@ function createPrinterCoreV3IdentityCandidate(target, evidence, options) {
   const macAliases = [
     target.macAddress,
     ...(Array.isArray(source.macAliases) ? source.macAliases : []),
-    ...(target.printerCoreV3Identity?.endpointAliases?.macs || []),
   ];
 
   return createDeviceIdentityCandidate({
@@ -187,6 +194,75 @@ function createPrinterCoreV3IdentityCandidate(target, evidence, options) {
     macAddress: source.macAddress || source.mac || target.macAddress,
     macAliases,
   });
+}
+
+/**
+ * merge 不可または weak 判定の候補を pending レコードへ整形する。
+ *
+ * 【詳細説明】
+ * - serial / stableMachineId などの権威候補を持つ既存 identity へ、共有証跡のない候補を混ぜない。
+ * - MAC overlap だけの weak 判定も pending に留め、後続の serial 観測で安全に確定できるようにする。
+ *
+ * @private
+ * @param {object} candidate - 保留する identity candidate
+ * @param {object} decision - shouldMergeDeviceIdentity の判定結果
+ * @returns {object} pending レコード
+ */
+function createPendingIdentityCandidate(candidate, decision) {
+  return {
+    schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
+    dryRun: true,
+    status: "pending",
+    decision,
+    candidate,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * identity conflict を open 状態の監査レコードへ整形する。
+ *
+ * 【詳細説明】
+ * - 既存 identity と衝突した候補の両方を保存し、次の正常フレームで情報が消えないようにする。
+ * - 解決は明示オプションで行うため、通常観測では status=open のまま保持する。
+ *
+ * @private
+ * @param {object|null} existingIdentity - 既存 identity
+ * @param {object} candidate - 衝突した identity candidate
+ * @param {object} decision - shouldMergeDeviceIdentity の判定結果
+ * @returns {object} conflict レコード
+ */
+function createOpenIdentityConflict(existingIdentity, candidate, decision) {
+  return {
+    schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
+    dryRun: true,
+    status: "open",
+    decision,
+    existingIdentity,
+    conflictingCandidate: candidate,
+    detectedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * open conflict を resolved 状態へ更新する。
+ *
+ * 【詳細説明】
+ * - Gate 2 の dry-run では自動削除せず、監査証跡として解決時刻と理由を残す。
+ * - 呼び出し側が `allowConflictResolution` を指定した時だけ利用する。
+ *
+ * @private
+ * @param {object} conflict - 既存 conflict
+ * @param {object} decision - 解決根拠の merge 判定
+ * @returns {object} resolved conflict
+ */
+function createResolvedIdentityConflict(conflict, decision) {
+  return {
+    ...conflict,
+    status: "resolved",
+    resolvedAt: new Date().toISOString(),
+    resolutionReason: decision.reason,
+  };
 }
 
 /**
@@ -204,13 +280,15 @@ function createPrinterCoreV3IdentityCandidate(target, evidence, options) {
  * @param {object=} options - 保存オプション
  * @param {string=} options.hostOrDest - 接続キー、hostname、または dest
  * @param {string=} options.endpointAddress - 接続元 endpoint の IP / host
- * @returns {{changed:boolean, identity:(object|null), conflict:(object|null), decision:object|null}} 保存結果
+ * @param {boolean=} options.allowConflictResolution - open conflict を resolved に更新してよい場合に true
+ * @param {boolean=} options.allowWeakMerge - MAC overlap だけの weak 判定を統合してよい場合に true
+ * @returns {{changed:boolean, identity:(object|null), conflict:(object|null), pending:(object|null), decision:object|null}} 保存結果
  * @example
  * const result = recordPrinterCoreV3Identity(target, data, { endpointAddress: "printer.local" });
  */
 export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
   if (!target || target.printerType === "moonraker") {
-    return { changed: false, identity: null, conflict: null, decision: null };
+    return { changed: false, identity: null, conflict: null, pending: null, decision: null };
   }
 
   const candidate = createPrinterCoreV3IdentityCandidate(target, evidence, options);
@@ -222,19 +300,14 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
   };
 
   if (decision.confidence === "conflict") {
-    const nextConflict = {
-      schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
-      dryRun: true,
-      decision,
-      candidate,
-      observedAt: new Date().toISOString(),
-    };
+    const nextConflict = createOpenIdentityConflict(existing, candidate, decision);
     if (JSON.stringify(toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict)) ===
         JSON.stringify(toComparablePrinterCoreV3Identity(nextConflict))) {
       return {
         changed: false,
         identity: target.printerCoreV3Identity || null,
         conflict: target.printerCoreV3IdentityConflict || null,
+        pending: target.printerCoreV3PendingIdentityCandidate || null,
         decision,
       };
     }
@@ -243,6 +316,29 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
       changed: true,
       identity: target.printerCoreV3Identity || null,
       conflict: target.printerCoreV3IdentityConflict,
+      pending: target.printerCoreV3PendingIdentityCandidate || null,
+      decision,
+    };
+  }
+
+  if (!decision.merge || (decision.confidence === "weak" && !options.allowWeakMerge)) {
+    const nextPending = createPendingIdentityCandidate(candidate, decision);
+    if (JSON.stringify(toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate)) ===
+        JSON.stringify(toComparablePrinterCoreV3Identity(nextPending))) {
+      return {
+        changed: false,
+        identity: target.printerCoreV3Identity || null,
+        conflict: target.printerCoreV3IdentityConflict || null,
+        pending: target.printerCoreV3PendingIdentityCandidate || null,
+        decision,
+      };
+    }
+    target.printerCoreV3PendingIdentityCandidate = nextPending;
+    return {
+      changed: true,
+      identity: target.printerCoreV3Identity || null,
+      conflict: target.printerCoreV3IdentityConflict || null,
+      pending: target.printerCoreV3PendingIdentityCandidate,
       decision,
     };
   }
@@ -254,23 +350,36 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
     lastObservedAt: new Date().toISOString(),
     lastEvidenceReason: decision.reason,
   };
+  const canResolveConflict = Boolean(
+    target.printerCoreV3IdentityConflict &&
+    options.allowConflictResolution === true &&
+    decision.merge === true &&
+    decision.confidence === "strong"
+  );
   if (JSON.stringify(toComparablePrinterCoreV3Identity(existing)) ===
       JSON.stringify(toComparablePrinterCoreV3Identity(nextIdentity)) &&
-      !target.printerCoreV3IdentityConflict) {
+      !canResolveConflict) {
     return {
       changed: false,
       identity: target.printerCoreV3Identity,
-      conflict: null,
+      conflict: target.printerCoreV3IdentityConflict || null,
+      pending: target.printerCoreV3PendingIdentityCandidate || null,
       decision,
     };
   }
 
   target.printerCoreV3Identity = nextIdentity;
-  delete target.printerCoreV3IdentityConflict;
+  if (canResolveConflict) {
+    target.printerCoreV3IdentityConflict = createResolvedIdentityConflict(
+      target.printerCoreV3IdentityConflict,
+      decision
+    );
+  }
   return {
     changed: true,
     identity: target.printerCoreV3Identity,
-    conflict: null,
+    conflict: target.printerCoreV3IdentityConflict || null,
+    pending: target.printerCoreV3PendingIdentityCandidate || null,
     decision,
   };
 }

@@ -1,6 +1,6 @@
 {
   "fixtureVersion": 1,
-  "captureId": "capture_afff4598-cb09-4a50-bbd1-242e4574e818",
+  "captureId": "capture_afff4598-cb09-4a50-bbd1-<MAC_001>",
   "startedAt": 1786024941390,
   "stoppedAt": 1786024944416,
   "durationMs": 3026,
@@ -9,7 +9,7 @@
     "device": {
       "model": "ir3v2",
       "reportedModel": null,
-      "reportedHostname": null,
+      "reportedHostname": "<HOSTNAME_001>",
       "firmwareVersion": "unknown",
       "cfsFirmwareVersion": null,
       "attachment": "unknown"
@@ -28,10 +28,10 @@
     ],
     "redaction": {
       "ip": true,
-      "mac": true,
-      "serial": true,
-      "credential": true,
-      "ssid": true
+      "mac": "<MAC_002>",
+      "serial": "<SERIAL_001>",
+      "credential": "<CREDENTIAL_001>",
+      "ssid": "<SSID_001>"
     }
   },
   "events": [

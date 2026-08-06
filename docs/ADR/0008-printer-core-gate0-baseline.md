@@ -19,6 +19,7 @@ Gate 0 includes these artifacts:
 - `dashboard_device_identity.js` defines the first device identity boundary. Serial number and stable machine-reported IDs are strong identity evidence; wired and wireless MAC addresses are endpoint aliases.
 - Sanitized fixture sets exist for K1 Max device A, K1 Max device B, K2 Pro Combo with CFS, and the currently unreachable IR3V2 endpoint.
 - K1C+CFS-C is recorded as a pending external capture because that printer is not reachable from the current development network.
+- K2 Plus and K2 Pro without CFS remain supported model-family targets, but they are not live fixture requirements until hardware becomes available.
 
 ## Captured Devices
 
@@ -29,11 +30,13 @@ Gate 0 includes these artifacts:
 | `k2-pro-cfs` | Captured | K2 Pro Combo, reported model `F012`, read-only `boxsInfo` request included. |
 | `ir3v2` | Captured as connectivity evidence | HTTP `/info` timed out during Gate 0 capture. |
 | `k1c-cfs-c` | Pending external capture | Requires a separate K1C test environment. |
+| K2 Plus | Supported, no live fixture | No local hardware is available. |
+| K2 Pro without CFS | Supported, no live fixture | No local hardware is available. |
 
 ## Invariants Confirmed
 
 - Fixture exports must preserve event order and non-decreasing relative timestamps.
-- Public fixture files must not contain raw local IP addresses, raw MAC addresses, serial numbers, credentials, or SSIDs.
+- Public fixture files must not contain raw local IP addresses, IPv6 addresses, raw MAC addresses, serial numbers, credentials, SSIDs, hostnames, print IDs, RFID values, or G-code file names.
 - A MAC address must not become the physical device ID. It is stored only as endpoint evidence.
 - The K2 Pro Combo fixture remains `k2-pro-cfs`; it must not be relabeled as another K2-family product.
 

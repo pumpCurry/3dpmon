@@ -2,7 +2,12 @@
  * @fileoverview capture_protocol_fixture.mjs の単体テスト
  */
 import { describe, it, expect } from "vitest";
-import { parseArgs, normalizeWsPayload } from "../../scripts/capture_protocol_fixture.mjs";
+import {
+  isHeartbeatPayload,
+  normalizeWsPayload,
+  parseArgs,
+  payloadHasKey,
+} from "../../scripts/capture_protocol_fixture.mjs";
 
 describe("capture_protocol_fixture CLI helpers", () => {
   it("必須引数とskip系オプションを解析する", () => {
@@ -20,6 +25,11 @@ describe("capture_protocol_fixture CLI helpers", () => {
       "--send-boxsinfo",
       "--duration-ms",
       "1500",
+      "--require-http",
+      "--require-ws",
+      "--require-boxsinfo",
+      "--minimum-events",
+      "3",
     ]);
 
     expect(options.host).toBe("192.168.54.151");
@@ -30,6 +40,10 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(options.skipHttp).toBe(true);
     expect(options.sendBoxsInfo).toBe(true);
     expect(options.durationMs).toBe(1500);
+    expect(options.requireHttp).toBe(true);
+    expect(options.requireWs).toBe(true);
+    expect(options.requireBoxsInfo).toBe(true);
+    expect(options.minimumEvents).toBe(3);
   });
 
   it("text JSON frameをJSONとして保持する", () => {
@@ -47,5 +61,12 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(payload.encoding).toBe("base64");
     expect(payload.body).toBe("AQID");
   });
-});
 
+  it("heartbeat text frameとboxsInfo payloadを検出できる", () => {
+    const heartbeat = normalizeWsPayload(Buffer.from("heart_beat"), false);
+    const data = normalizeWsPayload(Buffer.from("{\"result\":{\"boxsInfo\":{\"materialBoxs\":[]}}}"), false);
+
+    expect(isHeartbeatPayload(heartbeat)).toBe(true);
+    expect(payloadHasKey(data, "boxsInfo")).toBe(true);
+  });
+});

@@ -18,9 +18,9 @@
  * - {@link redactProtocolValue}：任意値を recorder と同じ規則で秘匿化
  * - {@link toFixtureNdjson}：fixture イベント配列を NDJSON 文字列へ変換
  *
- * @version 1.390.1290 (PR #432)
+ * @version 1.390.1293 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-06 22:53:37
+ * @lastModified 2026-08-07 02:48:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 0 実機キャプチャ UI との接続
@@ -53,6 +53,10 @@ export const DEFAULT_REDACTION_OPTIONS = Object.freeze({
   serial: true,
   credential: true,
   ssid: true,
+  hostname: true,
+  id: true,
+  fileName: true,
+  rfid: true,
 });
 
 /**
@@ -66,14 +70,25 @@ export const DEFAULT_REDACTION_OPTIONS = Object.freeze({
 const IPV4_PATTERN = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g;
 
 /**
- * MAC アドレスの検出正規表現。
+ * IPv6 アドレスの検出正規表現。
  *
  * 【詳細説明】
- * - コロン区切り、ハイフン区切りの両方を秘匿対象にする。
+ * - 完全表記と省略表記の代表的な形を fixture から除去する。
+ * - ポート番号や時刻表記との誤検出を避けるため、2個以上のコロンを含む token だけを対象にする。
  *
  * @constant {RegExp}
  */
-const MAC_PATTERN = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b/gi;
+const IPV6_PATTERN = /\b(?=(?:[0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}\b)(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}\b/gi;
+
+/**
+ * MAC アドレスの検出正規表現。
+ *
+ * 【詳細説明】
+ * - コロン区切り、ハイフン区切り、区切りなし 12 桁 HEX を秘匿対象にする。
+ *
+ * @constant {RegExp}
+ */
+const MAC_PATTERN = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b|\b[0-9a-f]{12}\b/gi;
 
 /**
  * MAC 系キーを判定する正規表現。
@@ -126,6 +141,46 @@ const SERIAL_KEY_PATTERN = /(?:serial|serialNumber|sn|machineId|deviceSerial)/i;
 const IP_KEY_PATTERN = /(?:ip|address|addr|host|hostname|url|endpoint)/i;
 
 /**
+ * hostname 系キーを判定する正規表現。
+ *
+ * 【詳細説明】
+ * - WebSocket hostname や `/info` の device name は個人環境の命名規則を含むため値全体を秘匿する。
+ *
+ * @constant {RegExp}
+ */
+const HOSTNAME_KEY_PATTERN = /(?:^hostname$|reportedHostname|deviceName|printerName)/i;
+
+/**
+ * 印刷ジョブや機体固有 ID 系キーを判定する正規表現。
+ *
+ * 【詳細説明】
+ * - 数値だけの printId / jobId / token も string に変換して秘匿する。
+ *
+ * @constant {RegExp}
+ */
+const UNIQUE_ID_KEY_PATTERN = /(?:^printId$|^jobId$|^taskId$|^deviceId$|^machineId$|^uid$|^uuid$)/i;
+
+/**
+ * RFID 系キーを判定する正規表現。
+ *
+ * 【詳細説明】
+ * - CFS spool や材料タグの固有値を fixture へ残さないために利用する。
+ *
+ * @constant {RegExp}
+ */
+const RFID_KEY_PATTERN = /(?:rfid|rfidUid|rfidTag|tagUid)/i;
+
+/**
+ * 文字列内の G-code ファイル名を検出する正規表現。
+ *
+ * 【詳細説明】
+ * - URL や path 文字列内に埋め込まれたファイル名だけを token 化する。
+ *
+ * @constant {RegExp}
+ */
+const GCODE_FILE_PATTERN = /[^/\\:"<>|?*\r\n]+\.g(?:code|co|code3mf)\b/gi;
+
+/**
  * redaction token の種別別カウンタを初期化する。
  *
  * 【詳細説明】
@@ -142,6 +197,10 @@ function createRedactionState() {
       serial: new Map(),
       credential: new Map(),
       ssid: new Map(),
+      hostname: new Map(),
+      id: new Map(),
+      file: new Map(),
+      rfid: new Map(),
     },
     counts: {
       ip: 0,
@@ -149,6 +208,10 @@ function createRedactionState() {
       serial: 0,
       credential: 0,
       ssid: 0,
+      hostname: 0,
+      id: 0,
+      file: 0,
+      rfid: 0,
     },
   };
 }
@@ -178,6 +241,65 @@ function tokenFor(state, kind, rawValue) {
 }
 
 /**
+ * key 名に応じて非文字列の固有値も token 化する。
+ *
+ * 【詳細説明】
+ * - printId や RFID は数値で届くことがあるため、文字列処理に入る前に秘匿対象を判定する。
+ * - JSON 構造そのものは保ち、値だけを決定的 token へ置換する。
+ *
+ * @private
+ * @param {*} value - 入力値
+ * @param {Object} options - redaction オプション
+ * @param {Object} state - redaction 状態
+ * @param {string} keyName - 親オブジェクトのキー名
+ * @returns {*} token 化した値、または元値
+ */
+function redactScalarByKey(value, options, state, keyName) {
+  if (options.credential && CREDENTIAL_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "credential", value);
+  }
+  if (options.ssid && SSID_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "ssid", value);
+  }
+  if (options.serial && SERIAL_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "serial", value);
+  }
+  if (options.mac && MAC_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "mac", String(value).toLowerCase());
+  }
+  if (options.hostname && HOSTNAME_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "hostname", value);
+  }
+  if (options.rfid && RFID_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "rfid", value);
+  }
+  if (options.id && UNIQUE_ID_KEY_PATTERN.test(keyName)) {
+    return tokenFor(state, "id", value);
+  }
+  return value;
+}
+
+/**
+ * ファイル名またはパス内の G-code 名を token 化する。
+ *
+ * 【詳細説明】
+ * - directory や URL の構造は fixture replay の助けになるため残す。
+ * - 拡張子は互換性確認に必要な情報なので token の後ろに保持する。
+ *
+ * @private
+ * @param {string} value - 入力文字列
+ * @param {Object} state - redaction 状態
+ * @returns {string} ファイル名を秘匿した文字列
+ */
+function redactGcodeFileNames(value, state) {
+  return String(value).replace(GCODE_FILE_PATTERN, (match) => {
+    const extensionMatch = match.match(/(\.g(?:code|co|code3mf))$/i);
+    const extension = extensionMatch ? extensionMatch[1].toLowerCase() : "";
+    return `${tokenFor(state, "file", match)}${extension}`;
+  });
+}
+
+/**
  * JSON 互換値を深く複製する。
  *
  * 【詳細説明】
@@ -203,8 +325,8 @@ function cloneJsonValue(value) {
  *
  * 【詳細説明】
  * - オブジェクトと配列は再帰的に走査する。
- * - キー名が secret / serial / ssid を示す場合は値全体を秘匿する。
- * - 文字列中の IPv4 と MAC は、キー名に依存せず検出して置換する。
+ * - キー名が secret / serial / ssid / hostname / RFID / ID を示す場合は値全体を秘匿する。
+ * - 文字列中の IPv4 / IPv6 / MAC / G-code ファイル名は、キー名に依存せず検出して置換する。
  *
  * @function redactProtocolValue
  * @param {*} value - 秘匿化対象の JSON 互換値
@@ -228,24 +350,13 @@ export function redactProtocolValue(value, options = DEFAULT_REDACTION_OPTIONS, 
     return redacted;
   }
 
+  const keyedScalar = redactScalarByKey(value, options, state, keyName);
+  if (keyedScalar !== value) {
+    return keyedScalar;
+  }
+
   if (typeof value !== "string") {
     return value;
-  }
-
-  if (options.credential && CREDENTIAL_KEY_PATTERN.test(keyName)) {
-    return tokenFor(state, "credential", value);
-  }
-
-  if (options.ssid && SSID_KEY_PATTERN.test(keyName)) {
-    return tokenFor(state, "ssid", value);
-  }
-
-  if (options.serial && SERIAL_KEY_PATTERN.test(keyName)) {
-    return tokenFor(state, "serial", value);
-  }
-
-  if (options.mac && MAC_KEY_PATTERN.test(keyName)) {
-    return tokenFor(state, "mac", value.toLowerCase());
   }
 
   let result = value;
@@ -254,6 +365,10 @@ export function redactProtocolValue(value, options = DEFAULT_REDACTION_OPTIONS, 
   }
   if (options.ip || IP_KEY_PATTERN.test(keyName)) {
     result = result.replace(IPV4_PATTERN, (match) => tokenFor(state, "ip", match));
+    result = result.replace(IPV6_PATTERN, (match) => tokenFor(state, "ip", match));
+  }
+  if (options.fileName) {
+    result = redactGcodeFileNames(result, state);
   }
   return result;
 }
@@ -333,6 +448,10 @@ function normalizeMetadata(metadata, startedAt) {
       serial: true,
       credential: true,
       ssid: true,
+      hostname: true,
+      id: true,
+      fileName: true,
+      rfid: true,
       ...(source.redaction || {}),
     },
   };

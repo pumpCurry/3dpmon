@@ -3,7 +3,7 @@
   "device": {
     "model": "K2 Pro Combo",
     "reportedModel": "F012",
-    "reportedHostname": null,
+    "reportedHostname": "<HOSTNAME_001>",
     "firmwareVersion": "1.0.0",
     "cfsFirmwareVersion": null,
     "attachment": "CFS"
@@ -22,9 +22,9 @@
   ],
   "redaction": {
     "ip": true,
-    "mac": true,
-    "serial": true,
-    "credential": true,
-    "ssid": true
+    "mac": "<MAC_002>",
+    "serial": "<SERIAL_001>",
+    "credential": "<CREDENTIAL_001>",
+    "ssid": "<SSID_001>"
   }
 }
