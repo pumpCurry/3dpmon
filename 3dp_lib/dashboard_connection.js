@@ -31,9 +31,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1291 (PR #432)
+* @version 1.390.1292 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 01:12:00
+* @lastModified 2026-08-07 01:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -67,10 +67,9 @@ import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
 import { parseDest, normalizeDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import {
-  createDeviceIdentityCandidate,
-  mergeDeviceIdentityCandidate,
-  shouldMergeDeviceIdentity,
-} from "./printer_core/dashboard_device_identity.js";
+  recordPrinterCoreV3Identity,
+  transferPrinterCoreV3IdentityRecords,
+} from "./printer_core/dashboard_device_identity_repository.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -84,17 +83,6 @@ import {
  */
 const DEFAULT_WS_PORT = 9999;
 const DEFAULT_CAMERA_PORT = 8080;
-
-/**
- * connectionTargets に保存する Printer Core v3 identity dry-run の schema version。
- *
- * 【詳細説明】
- * - Gate 1 では v3 identity を既存接続判定に使わず、接続先設定へ観測結果として保存する。
- * - 後続 Gate で migration / repository 層へ移す時に、保存済みデータの形を判定できるようにする。
- *
- * @constant {number}
- */
-const PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION = 1;
 
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
@@ -148,65 +136,6 @@ function _addConnectionTarget(dest) {
 }
 
 /**
- * connectionTargets 上の Printer Core v3 identity dry-run 候補を統合する。
- *
- * 【詳細説明】
- * - hostname 由来の DHCP 統合では、旧 endpoint に保存されていた v3 identity 候補も新 endpoint へ
- *   引き継ぐ必要がある。
- * - serial / stableMachineId が矛盾する場合は統合せず、既存値を保護する。
- * - MAC 一致や同一 target 上の追加観測は dry-run の補助証跡として統合するが、この値は
- *   まだ接続可否や UI 挙動の権威にはしない。
- *
- * @private
- * @param {object|null|undefined} existing - 既存の v3 identity dry-run 候補
- * @param {object|null|undefined} incoming - 追加する v3 identity dry-run 候補
- * @returns {object|null} 統合後の v3 identity dry-run 候補
- */
-function _mergePrinterCoreV3IdentityRecords(existing, incoming) {
-  if (!existing && !incoming) return null;
-  if (!existing) return incoming;
-  if (!incoming) return existing;
-
-  const decision = shouldMergeDeviceIdentity(existing, incoming);
-  if (decision.confidence === "conflict") {
-    return {
-      ...existing,
-      schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
-      dryRun: true,
-      lastMergeDecision: decision,
-    };
-  }
-
-  return {
-    ...mergeDeviceIdentityCandidate(existing, incoming),
-    schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
-    dryRun: true,
-    lastMergeDecision: decision,
-  };
-}
-
-/**
- * Printer Core v3 identity dry-run の比較用コピーを返す。
- *
- * 【詳細説明】
- * - `lastObservedAt` は観測時刻であり、同じ内容の受信を繰り返すだけでも変化する。
- * - 保存頻度を抑えるため、時刻系フィールドを除いた比較用オブジェクトを作る。
- *
- * @private
- * @param {object|null|undefined} record - v3 identity dry-run 候補
- * @returns {object|null} 比較用に動的時刻を除いた候補
- */
-function _toComparablePrinterCoreV3Identity(record) {
-  if (!record) return null;
-  const {
-    lastObservedAt,
-    observedAt,
-    ...comparable
-  } = record;
-  return comparable;
-}
-
-/**
  * 接続先設定にホスト名を紐づける。
  * ホスト名解決後に呼び出してラベル表示等に利用する。
  *
@@ -236,15 +165,7 @@ function _setConnectionTargetHostname(dest, hostname) {
         if (stale.label && !t.label) t.label = stale.label;
         if (stale.cameraPort && !t.cameraPort) t.cameraPort = stale.cameraPort;
         if (stale.httpPort && !t.httpPort) t.httpPort = stale.httpPort;
-        if (stale.printerCoreV3Identity) {
-          t.printerCoreV3Identity = _mergePrinterCoreV3IdentityRecords(
-            t.printerCoreV3Identity,
-            stale.printerCoreV3Identity
-          );
-        }
-        if (stale.printerCoreV3IdentityConflict && !t.printerCoreV3IdentityConflict) {
-          t.printerCoreV3IdentityConflict = stale.printerCoreV3IdentityConflict;
-        }
+        transferPrinterCoreV3IdentityRecords(t, stale);
         targets.splice(idx, 1);
       }
     }
@@ -390,67 +311,18 @@ function _findConnectionTarget(destOrHost) {
  * @returns {object|null} 保存した v3 identity dry-run 候補、または対象なしの場合 null
  */
 function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
-  const source = evidence && typeof evidence === "object" ? evidence : {};
   const state = connectionMap[hostOrDest] || {};
   const target = _findConnectionTarget(state.dest || hostOrDest) || _findConnectionTarget(hostOrDest);
-  if (!target || target.printerType === "moonraker") return null;
-
+  if (!target) return null;
   const dest = target.dest || state.dest || hostOrDest;
-  const endpointAddress = source.endpointAddress || _extractIp(dest);
-  const candidate = createDeviceIdentityCandidate({
-    serialNumber: source.serialNumber || source.sn || source.serial,
-    stableMachineId: source.stableMachineId || source.machineId,
-    reportedModel: source.reportedModel || source.model || source.printerModel,
-    reportedHostname: source.reportedHostname || source.hostname || target.hostname || hostOrDest,
-    endpointAddress,
-    macAddress: source.macAddress || source.mac || target.macAddress,
-    macAliases: [
-      target.macAddress,
-      ...(Array.isArray(source.macAliases) ? source.macAliases : []),
-      ...(target.printerCoreV3Identity?.endpointAliases?.macs || []),
-    ],
+  const result = recordPrinterCoreV3Identity(target, evidence, {
+    hostOrDest,
+    endpointAddress: _extractIp(dest),
   });
-
-  const existing = target.printerCoreV3Identity || null;
-  const decision = existing ? shouldMergeDeviceIdentity(existing, candidate) : {
-    merge: true,
-    confidence: "new",
-    reason: "first-observation",
-  };
-
-  if (decision.confidence === "conflict") {
-    const nextConflict = {
-      schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
-      dryRun: true,
-      decision,
-      candidate,
-      observedAt: new Date().toISOString(),
-    };
-    if (JSON.stringify(_toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict)) ===
-        JSON.stringify(_toComparablePrinterCoreV3Identity(nextConflict))) {
-      return target.printerCoreV3Identity || null;
-    }
-    target.printerCoreV3IdentityConflict = nextConflict;
+  if (result.changed) {
     saveUnifiedStorage(true);
-    return target.printerCoreV3Identity || null;
   }
-
-  const nextIdentity = {
-    ..._mergePrinterCoreV3IdentityRecords(existing, candidate),
-    schemaVersion: PRINTER_CORE_V3_IDENTITY_SCHEMA_VERSION,
-    dryRun: true,
-    lastObservedAt: new Date().toISOString(),
-    lastEvidenceReason: decision.reason,
-  };
-  if (JSON.stringify(_toComparablePrinterCoreV3Identity(existing)) ===
-      JSON.stringify(_toComparablePrinterCoreV3Identity(nextIdentity)) &&
-      !target.printerCoreV3IdentityConflict) {
-    return target.printerCoreV3Identity;
-  }
-  target.printerCoreV3Identity = nextIdentity;
-  delete target.printerCoreV3IdentityConflict;
-  saveUnifiedStorage(true);
-  return target.printerCoreV3Identity;
+  return result.identity;
 }
 
 /**
