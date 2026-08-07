@@ -18,9 +18,9 @@
  * - {@link K2Adapter}：K2 系 payload を正規化する Adapter class
  * - {@link createK2Adapter}：K2Adapter の factory
  *
- * @version 1.390.1302 (PR #432)
+ * @version 1.390.1303 (PR #432)
  * @since   1.390.1302 (PR #432)
- * @lastModified 2026-08-07 20:48:46
+ * @lastModified 2026-08-07 21:00:10
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機 live shadow 接続後に delta frame の追加 alias を確認する
@@ -28,7 +28,7 @@
 
 "use strict";
 
-import { inferK2Capabilities } from "./dashboard_capabilities.js";
+import { inferK2Capabilities, mergeCapabilitySets } from "./dashboard_capabilities.js";
 import {
   createK2BoxsInfoPatch,
   createK2StatusPatch,
@@ -203,22 +203,55 @@ export function extractK2BoxsInfo(frame) {
 }
 
 /**
- * payload が boxsInfo 専用 frame か判定する。
+ * object を JSON 安全な deep merge にする。
  *
  * 【詳細説明】
- * - `boxsInfo` 以外の status key が混在する将来 payload では status と topology の両方を処理できるよう、
- *   専用 frame だけをここで true とする。
+ * - K2 の mixed status + boxsInfo frame で、status patch と topology patch を1つに合成するために使う。
+ * - 配列は topology snapshot として扱い、merge ではなく後続 patch で置き換える。
  *
  * @private
- * @param {object|null|undefined} payload - K2 raw payload
- * @returns {boolean} boxsInfo 専用 frame の場合 true
+ * @param {*} base - merge 元
+ * @param {*} patch - merge patch
+ * @returns {*} merge 済み値
  */
-function isBoxsInfoOnlyPayload(payload) {
-  if (!payload || typeof payload !== "object") {
-    return false;
+function mergePatchValue(base, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    return patch;
   }
-  const keys = Object.keys(payload);
-  return keys.length === 1 && keys[0] === "boxsInfo";
+  const next = base && typeof base === "object" && !Array.isArray(base)
+    ? { ...base }
+    : {};
+  for (const [key, value] of Object.entries(patch)) {
+    next[key] = mergePatchValue(next[key], value);
+  }
+  return next;
+}
+
+/**
+ * K2 status patch と topology patch を1つの Normalized Patch へ合成する。
+ *
+ * 【詳細説明】
+ * - 同一 raw frame から得た2種類の patch は同じ sequence / receivedAt として扱う。
+ * - rawKeys と capability は union 化し、status と topology のどちらの証拠も失わない。
+ *
+ * @private
+ * @param {object} statusPatch - status 用 Normalized Patch
+ * @param {object} topologyPatch - topology 用 Normalized Patch
+ * @returns {object} 合成済み Normalized Patch
+ */
+function mergeK2NormalizedPatches(statusPatch, topologyPatch) {
+  return {
+    ...statusPatch,
+    source: {
+      ...statusPatch.source,
+      rawKeys: Array.from(new Set([
+        ...(statusPatch.source?.rawKeys || []),
+        ...(topologyPatch.source?.rawKeys || []),
+      ])).sort(),
+    },
+    capabilities: mergeCapabilitySets(statusPatch.capabilities, topologyPatch.capabilities),
+    patch: mergePatchValue(statusPatch.patch, topologyPatch.patch),
+  };
 }
 
 /**
@@ -292,9 +325,16 @@ export class K2Adapter {
       capabilities,
       protocolState: adapterState.raw,
     };
-    const normalizedPatch = isBoxsInfoOnlyPayload(payload)
-      ? createK2BoxsInfoPatch(payload.boxsInfo, commonOptions)
-      : createK2StatusPatch(payload, commonOptions);
+    let normalizedPatch;
+    if (payload?.boxsInfo && typeof payload.boxsInfo === "object") {
+      const statusKeys = Object.keys(payload).filter((key) => key !== "boxsInfo");
+      const topologyPatch = createK2BoxsInfoPatch(payload.boxsInfo, commonOptions);
+      normalizedPatch = statusKeys.length > 0
+        ? mergeK2NormalizedPatches(createK2StatusPatch(payload, commonOptions), topologyPatch)
+        : topologyPatch;
+    } else {
+      normalizedPatch = createK2StatusPatch(payload, commonOptions);
+    }
     return {
       ...normalizedPatch,
       adapterState,

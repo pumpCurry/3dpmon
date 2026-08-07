@@ -85,6 +85,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       connected: true,
       enabled: true,
       unitCount: 1,
+      topologyState: "fresh",
     });
     expect(topology.units).toEqual([{
       unitId: "cfs:1",
@@ -93,7 +94,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       temperature: 29,
       humidity: 50,
       serialNumber: "<SERIAL_002>",
-      slotCount: 4,
+      observedSlotCount: 4,
     }]);
     expect(topology.sources).toHaveLength(5);
     expect(topology.sources[0]).toMatchObject({
@@ -103,7 +104,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       material: {
         vendor: "",
         type: "",
-        color: "",
+        color: { raw: "", normalized: "" },
       },
       status: {
         selected: false,
@@ -118,7 +119,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
         vendor: "Generic",
         type: "PLA",
         name: "Generic PLA",
-        color: "#0ffffff",
+        color: { raw: "#0ffffff", normalized: "0ffffff" },
         rfid: "<RFID_001>",
       },
       status: {
@@ -127,17 +128,124 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       },
     });
     expect(topology.assignments).toEqual([
-      { toolId: "T1A", sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0 },
-      { toolId: "T1B", sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1 },
-      { toolId: "T1C", sourceId: "cfs:1:slot:2", boxId: 1, slotId: 2 },
-      { toolId: "T1D", sourceId: "cfs:1:slot:3", boxId: 1, slotId: 3 },
+      {
+        assignmentId: "T1A",
+        namespace: "creality-color-match",
+        sourceId: "cfs:1:slot:0",
+        resolution: "resolved",
+        boxId: 1,
+        slotId: 0,
+      },
+      {
+        assignmentId: "T1B",
+        namespace: "creality-color-match",
+        sourceId: "cfs:1:slot:1",
+        resolution: "resolved",
+        boxId: 1,
+        slotId: 1,
+      },
+      {
+        assignmentId: "T1C",
+        namespace: "creality-color-match",
+        sourceId: "cfs:1:slot:2",
+        resolution: "resolved",
+        boxId: 1,
+        slotId: 2,
+      },
+      {
+        assignmentId: "T1D",
+        namespace: "creality-color-match",
+        sourceId: "cfs:1:slot:3",
+        resolution: "resolved",
+        boxId: 1,
+        slotId: 3,
+      },
     ]);
     expect(topology.sameMaterialGroups[0]).toMatchObject({
+      groupId: "same-material:PLA:000001:0ffffff:cfs:1:slot:0",
       materialCode: "000001",
-      color: "0ffffff",
+      color: { raw: "0ffffff", normalized: "0ffffff" },
       materialType: "PLA",
       sourceIds: ["cfs:1:slot:0"],
     });
+  });
+
+  it("status + boxsInfo 混在frameでは通常statusとCFS topologyを両方更新する", () => {
+    const adapter = createK2Adapter();
+    const boxsInfo = extractK2BoxsInfo(readK2BoxsInfoEvent());
+    const mixed = adapter.normalizeFrame({
+      model: "F012",
+      nozzleTemp: "200.000000",
+      cfsConnect: 1,
+      boxsInfo,
+    }, {
+      deviceId: "fixture:k2-pro-cfs",
+      sessionId: "fixture-session-k2",
+      sequence: 7,
+      receivedAt: "2026-08-07T10:00:07.000Z",
+    });
+
+    expect(mixed.source.rawKeys).toEqual(["boxsInfo", "cfsConnect", "model", "nozzleTemp"]);
+    expect(mixed.patch.identity.reportedModel).toBe("F012");
+    expect(mixed.patch.temperatures.nozzle.current).toBe(200);
+    expect(mixed.patch.materials.cfs.topologyState).toBe("fresh");
+    expect(mixed.patch.materials.sources).toHaveLength(5);
+  });
+
+  it("cfsConnect=false は最後に見たtopologyをcurrent扱いせずstaleとして示す", () => {
+    const facade = createK2PrinterFacade({
+      clock: () => new Date("2026-08-07T10:00:00.000Z"),
+    });
+    const deviceId = "fixture:k2-pro-cfs-disconnect";
+    const sessionId = "fixture-session-k2-disconnect";
+
+    facade.beginSession({ deviceId, sessionId });
+    facade.observeFrame({ deviceId, sessionId, frame: { cfsConnect: 1 } });
+    facade.observeFrame({ deviceId, sessionId, frame: readK2BoxsInfoEvent() });
+    const disconnected = facade.observeFrame({ deviceId, sessionId, frame: { cfsConnect: 0 } });
+
+    expect(disconnected.materials.cfs.connected).toBe(false);
+    expect(disconnected.materials.cfs.topologyState).toBe("stale");
+    expect(disconnected.materials.sources).toHaveLength(5);
+    expect(disconnected.materials.assignments[0]).toMatchObject({
+      assignmentId: "T1A",
+      resolution: "resolved",
+    });
+  });
+
+  it("material capability はexternal source観測とmulti source topologyを混同しない", () => {
+    const adapter = createK2Adapter();
+    const statusPatch = adapter.normalizeFrame({
+      materialDetect: 0,
+      materialStatus: 1,
+    }, {
+      deviceId: "fixture:k2-capability",
+      sessionId: "fixture-session-capability",
+      sequence: 1,
+    });
+    const topologyPatch = adapter.normalizeFrame({
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, state: 1 },
+              { id: 1, state: 1 },
+            ],
+          },
+        ],
+      },
+    }, {
+      deviceId: "fixture:k2-capability",
+      sessionId: "fixture-session-capability",
+      sequence: 2,
+    });
+
+    expect(hasCapability(statusPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE)).toBe(true);
+    expect(hasCapability(statusPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE)).toBe(false);
+    expect(hasCapability(topologyPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE)).toBe(true);
   });
 
   it("K2 Pro CFS fixture stream を Facade で replay し status と topology を同居させる", () => {
@@ -159,6 +267,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
     expect(finalState.temperatures.nozzle.current).toBeCloseTo(32.09);
     expect(finalState.materials.cfs.connected).toBe(true);
     expect(finalState.materials.cfs.enabled).toBe(true);
+    expect(finalState.materials.cfs.topologyState).toBe("fresh");
     expect(finalState.materials.sources.map((source) => source.sourceId)).toEqual([
       "external:0:slot:0",
       "cfs:1:slot:0",

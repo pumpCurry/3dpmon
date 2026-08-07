@@ -18,6 +18,9 @@ The local hardware target for this gate is K2 Pro Combo with CFS, represented by
 - Normalize K2 `boxsInfo.materialBoxs` into CFS units, material sources, tool assignments, and same-material groups.
 - Treat external spool and CFS slots as separate material sources.
 - Keep CFS `sourceId` values as runtime/fixture observation keys, not stable Data Schema v3 device or spool IDs.
+- Process mixed status + `boxsInfo` frames as one observation so neither ordinary status nor material topology is lost.
+- Mark CFS topology freshness separately from CFS connection state; a disconnect makes the last topology snapshot stale instead of silently current.
+- Treat `colorMatch[].id` as a Creality assignment identifier, not a slicer/G-code tool ID.
 - Add `createK2PrinterFacade()` as a convenience factory while preserving the generic facade's explicit adapter requirement.
 
 ## Non-Goals

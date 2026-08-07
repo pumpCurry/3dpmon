@@ -19,9 +19,9 @@
  * - {@link inferK1Capabilities}：K1 系 payload から capability set を推定
  * - {@link inferK2Capabilities}：K2 系 payload から capability set を推定
  *
- * @version 1.390.1302 (PR #432)
+ * @version 1.390.1303 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 20:48:46
+ * @lastModified 2026-08-07 21:00:10
  * -----------------------------------------------------------
  * @todo
  * - CFS-C 実機 fixture 取得後に CFS-C 固有 capability を追加する
@@ -54,8 +54,8 @@ export const PRINTER_CAPABILITIES = Object.freeze({
   COMMAND_LED: "command.led",
   MATERIAL_CFS: "material.cfs",
   MATERIAL_CFS_TOPOLOGY: "material.cfsTopology",
+  MATERIAL_EXTERNAL_SOURCE: "material.externalSource",
   MATERIAL_MULTI_SOURCE: "material.multiSource",
-  MATERIAL_SINGLE_SPOOL: "material.singleSpool",
   STATUS_AI_DETECTION: "status.aiDetection",
   STATUS_ERROR: "status.error",
   STATUS_FANS: "status.fans",
@@ -125,6 +125,23 @@ function hasOwn(object, key) {
  */
 function hasAny(payload, keys) {
   return keys.some((key) => hasOwn(payload, key));
+}
+
+/**
+ * K2 `boxsInfo` から観測された material source 数を数える。
+ *
+ * 【詳細説明】
+ * - `materialBoxs` は CFS unit / external box の単位であり、source は `materials[]` の各 entry として扱う。
+ *
+ * @private
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @returns {number} 観測された material source 数
+ */
+function countK2MaterialSources(boxsInfo) {
+  const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
+  return boxes.reduce((count, box) => {
+    return count + (Array.isArray(box?.materials) ? box.materials.length : 0);
+  }, 0);
 }
 
 /**
@@ -246,7 +263,7 @@ export function inferK1Capabilities(payload) {
     values.push(PRINTER_CAPABILITIES.CAMERA_WEBRTC);
   }
   if (hasAny(payload, ["materialDetect", "materialStatus"])) {
-    values.push(PRINTER_CAPABILITIES.MATERIAL_SINGLE_SPOOL);
+    values.push(PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE);
   }
   return createCapabilitySet(values);
 }
@@ -276,7 +293,7 @@ export function inferK2Capabilities(payload) {
   }
   if (payload.boxsInfo && typeof payload.boxsInfo === "object") {
     values.push(PRINTER_CAPABILITIES.MATERIAL_CFS_TOPOLOGY);
-    if (Array.isArray(payload.boxsInfo.materialBoxs) && payload.boxsInfo.materialBoxs.length > 1) {
+    if (countK2MaterialSources(payload.boxsInfo) > 1) {
       values.push(PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE);
     }
   }
