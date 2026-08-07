@@ -9,22 +9,24 @@
  *
  * 【機能内容サマリ】
  * - Adapter が生成する NormalizedPrinterState と Normalized Patch の標準形を提供
- * - K1 系 WS9999 status payload を legacy processData と比較しやすい patch へ正規化
- * - 温度、ファン、印刷状態、位置、エラー、AI/カメラ能力を意味単位へ分解
+ * - K1/K2 系 WS9999 status payload を legacy processData と比較しやすい patch へ正規化
+ * - 温度、ファン、印刷状態、位置、エラー、AI/カメラ能力、CFS topology を意味単位へ分解
  *
  * 【公開関数一覧】
  * - {@link createEmptyNormalizedPrinterState}：空の NormalizedPrinterState を生成
  * - {@link createK1StatusPatch}：K1 系 payload を Normalized Patch へ変換
+ * - {@link createK2StatusPatch}：K2 系 status payload を Normalized Patch へ変換
+ * - {@link createK2BoxsInfoPatch}：K2 系 boxsInfo payload を material topology patch へ変換
  * - {@link applyNormalizedStatePatch}：Normalized Patch を既存 state へ適用
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1301 (PR #432)
+ * @version 1.390.1302 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 20:38:03
+ * @lastModified 2026-08-07 20:48:46
  * -----------------------------------------------------------
  * @todo
- * - Gate 3 以降で K2 Pro Combo / CFS topology の正規化フィールドを追加する
+ * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
  */
 
 "use strict";
@@ -141,7 +143,7 @@ function firstFiniteNumber(values) {
  * 最初に取得できた percent number を返す。
  *
  * 【詳細説明】
- * - `modelFanPct` 系がある場合はそちらを優先し、旧 `fan` 系を fallback とする。
+ * - 呼び出し側が渡した優先順位に従い、percent として解釈できる最初の値だけを採用する。
  *
  * @private
  * @param {Array<*>} values - percent 候補の配列
@@ -287,6 +289,31 @@ export function parseK1Position(value) {
  */
 function listRawKeys(payload) {
   return payload && typeof payload === "object" ? Object.keys(payload).sort() : [];
+}
+
+/**
+ * K2 CFS topology の空 state を生成する。
+ *
+ * 【詳細説明】
+ * - CFS と外部スプールを同じ `sources` 配列で表し、sourceId を参照 key にする。
+ * - Gate 4 では read-only 観測だけに使い、既存 filament ledger や hostSpoolMap は更新しない。
+ *
+ * @private
+ * @returns {object} 空の material topology state
+ */
+function createEmptyMaterialTopology() {
+  return {
+    schemaVersion: 1,
+    cfs: {
+      connected: null,
+      enabled: null,
+      unitCount: 0,
+    },
+    units: [],
+    sources: [],
+    assignments: [],
+    sameMaterialGroups: [],
+  };
 }
 
 /**
@@ -517,6 +544,187 @@ function normalizeAi(payload, options = {}) {
 }
 
 /**
+ * CFS source ID を生成する。
+ *
+ * 【詳細説明】
+ * - sourceId は fixture / runtime 比較用の一時 ID であり、Data Schema v3 の永続 MaterialSource ID ではない。
+ * - 外部スプールと CFS slot を分け、CFS attach/detach と identity を混同しない。
+ *
+ * @private
+ * @param {object} box - `materialBoxs[]` の box object
+ * @param {object} material - `materials[]` の material object
+ * @returns {string} sourceId
+ */
+function createMaterialSourceId(box, material) {
+  const boxId = String(box?.id ?? "unknown");
+  const slotId = String(material?.id ?? "unknown");
+  if (Number(box?.id) === 0 || Number(box?.type) === 1) {
+    return `external:${boxId}:slot:${slotId}`;
+  }
+  return `cfs:${boxId}:slot:${slotId}`;
+}
+
+/**
+ * K2 `materialBoxs[]` の1件を CFS unit へ正規化する。
+ *
+ * 【詳細説明】
+ * - serialNumber は fixture で redaction 済みの値をそのまま保持し、identity authority には使わない。
+ * - 外部スプール box は CFS unit ではないため null を返す。
+ *
+ * @private
+ * @param {object} box - `materialBoxs[]` の box object
+ * @returns {object|null} CFS unit、または null
+ */
+function normalizeCfsUnit(box) {
+  if (!box || typeof box !== "object" || Number(box.id) === 0 || Number(box.type) === 1) {
+    return null;
+  }
+  const boxId = Number(box.id);
+  return {
+    unitId: `cfs:${boxId}`,
+    boxId,
+    stateCode: toFiniteNumber(box.state),
+    temperature: toFiniteNumber(box.temp),
+    humidity: toFiniteNumber(box.humidity),
+    serialNumber: toNullableString(box.sn),
+    slotCount: Array.isArray(box.materials) ? box.materials.length : 0,
+  };
+}
+
+/**
+ * K2 CFS material を MaterialSource へ正規化する。
+ *
+ * 【詳細説明】
+ * - CFS slot と外部スプールを区別しつつ、UI/Schema v3 が共通に扱える material source として並べる。
+ * - RFID は fixture 側で redaction 済みの値だけを保持し、永続 spool ID には使わない。
+ *
+ * @private
+ * @param {object} box - `materialBoxs[]` の box object
+ * @param {object} material - `materials[]` の material object
+ * @returns {object} 正規化済み material source
+ */
+function normalizeMaterialSource(box, material) {
+  const boxId = toFiniteNumber(box?.id);
+  const slotId = toFiniteNumber(material?.id);
+  const isExternal = Number(box?.id) === 0 || Number(box?.type) === 1;
+  return {
+    sourceId: createMaterialSourceId(box, material),
+    kind: isExternal ? "external-spool" : "cfs-slot",
+    unitId: isExternal ? null : `cfs:${boxId}`,
+    boxId,
+    slotId,
+    boxStateCode: toFiniteNumber(box?.state),
+    boxTypeCode: toFiniteNumber(box?.type),
+    material: {
+      vendor: toNullableString(material?.vendor),
+      type: toNullableString(material?.type),
+      name: toNullableString(material?.name),
+      color: toNullableString(material?.color),
+      rfid: toNullableString(material?.rfid),
+      minTemp: toFiniteNumber(material?.minTemp),
+      maxTemp: toFiniteNumber(material?.maxTemp),
+      pressure: toFiniteNumber(material?.pressure),
+    },
+    status: {
+      selected: toBooleanFlag(material?.selected),
+      percent: toPercentNumber(material?.percent),
+      stateCode: toFiniteNumber(material?.state),
+      editStatusCode: toFiniteNumber(material?.editStatus),
+      scrap: toFiniteNumber(material?.scrap),
+    },
+  };
+}
+
+/**
+ * K2 `colorMatch[]` を tool assignment へ正規化する。
+ *
+ * 【詳細説明】
+ * - `T1A` などの tool ID は firmware の観測値として保持し、sourceId で material source と結び付ける。
+ *
+ * @private
+ * @param {Array<object>} colorMatch - K2 `boxsInfo.colorMatch`
+ * @returns {Array<object>} 正規化済み tool assignment
+ */
+function normalizeColorMatches(colorMatch) {
+  return (Array.isArray(colorMatch) ? colorMatch : []).map((entry) => {
+    const box = { id: entry?.boxId, type: Number(entry?.boxId) === 0 ? 1 : 0 };
+    const material = { id: entry?.materialId };
+    return {
+      toolId: toNullableString(entry?.id),
+      sourceId: createMaterialSourceId(box, material),
+      boxId: toFiniteNumber(entry?.boxId),
+      slotId: toFiniteNumber(entry?.materialId),
+    };
+  });
+}
+
+/**
+ * K2 `same_material[]` を同材質グループへ正規化する。
+ *
+ * 【詳細説明】
+ * - auto-refill 判断の材料になるが、Gate 4 では観測結果として保持するだけで制御には使わない。
+ *
+ * @private
+ * @param {Array<Array<*>>} groups - K2 `boxsInfo.same_material`
+ * @returns {Array<object>} 正規化済み same-material group
+ */
+function normalizeSameMaterialGroups(groups) {
+  return (Array.isArray(groups) ? groups : []).map((entry, index) => {
+    const locations = Array.isArray(entry?.[2]) ? entry[2] : [];
+    return {
+      groupId: `same-material:${index}`,
+      materialCode: toNullableString(entry?.[0]),
+      color: toNullableString(entry?.[1]),
+      materialType: toNullableString(entry?.[3]),
+      sourceIds: locations.map((location) => {
+        const box = { id: location?.boxId, type: Number(location?.boxId) === 0 ? 1 : 0 };
+        const material = { id: location?.materialId };
+        return createMaterialSourceId(box, material);
+      }),
+    };
+  });
+}
+
+/**
+ * K2 `boxsInfo` payload を material topology へ正規化する。
+ *
+ * 【詳細説明】
+ * - `materialBoxs` の CFS unit と slot、外部スプール、tool assignment を read-only snapshot として保持する。
+ * - CFS が未接続または payload が壊れている場合でも同じ shape を返す。
+ *
+ * @function normalizeK2BoxsInfo
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @param {object=} options - 正規化オプション
+ * @param {?boolean=} options.connected - status frame で観測した CFS 接続有無
+ * @returns {object} 正規化済み material topology
+ * @example
+ * const topology = normalizeK2BoxsInfo(payload.boxsInfo);
+ */
+export function normalizeK2BoxsInfo(boxsInfo, options = {}) {
+  if (!boxsInfo || typeof boxsInfo !== "object") {
+    return createEmptyMaterialTopology();
+  }
+  const boxes = Array.isArray(boxsInfo.materialBoxs) ? boxsInfo.materialBoxs : [];
+  const units = boxes.map((box) => normalizeCfsUnit(box)).filter(Boolean);
+  const sources = boxes.flatMap((box) => {
+    const materials = Array.isArray(box?.materials) ? box.materials : [];
+    return materials.map((material) => normalizeMaterialSource(box, material));
+  });
+  return {
+    schemaVersion: 1,
+    cfs: {
+      connected: options.connected ?? (units.length > 0 ? true : null),
+      enabled: boxsInfo.enable === null || boxsInfo.enable === undefined ? null : Number(boxsInfo.enable) === 1,
+      unitCount: units.length,
+    },
+    units,
+    sources,
+    assignments: normalizeColorMatches(boxsInfo.colorMatch),
+    sameMaterialGroups: normalizeSameMaterialGroups(boxsInfo.same_material),
+  };
+}
+
+/**
  * カメラ関連 payload を NormalizedPrinterState の camera object へ変換する。
  *
  * 【詳細説明】
@@ -592,6 +800,7 @@ export function createEmptyNormalizedPrinterState(options = {}) {
       timelapseEnabled: null,
     },
     ai: normalizeAi({}),
+    materials: createEmptyMaterialTopology(),
   };
 }
 
@@ -736,6 +945,95 @@ export function createK1StatusPatch(payload, options = {}) {
     },
     capabilities: options.capabilities ?? EMPTY_CAPABILITY_SET,
     patch,
+  };
+}
+
+/**
+ * K2 系 WS9999 status payload を Normalized Patch へ変換する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo の status key は K1 系と近いため、温度・ファン・印刷状態などは既存変換を再利用する。
+ * - `cfsConnect` は material topology の接続状態として patch に追加する。
+ * - `boxsInfo` 専用 frame は {@link createK2BoxsInfoPatch} で扱う。
+ *
+ * @function createK2StatusPatch
+ * @param {object|null|undefined} payload - K2 系 WS9999 status payload
+ * @param {object=} options - 正規化オプション
+ * @param {?string=} options.deviceId - 物理機 identity
+ * @param {?string=} options.sessionId - 接続セッション ID
+ * @param {?string=} options.adapterId - Adapter ID
+ * @param {?string=} options.protocol - 受信 protocol 名
+ * @param {?number=} options.sequence - Instance 内の受信順序
+ * @param {?string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @param {object=} options.capabilities - Adapter が推定した capability set
+ * @param {object=} options.protocolState - delta frame を累積した protocol state
+ * @returns {object} Normalized Patch
+ * @example
+ * const patch = createK2StatusPatch(payload, { adapterId: "creality-k2" });
+ */
+export function createK2StatusPatch(payload, options = {}) {
+  const rawPayload = payload && typeof payload === "object" ? payload : {};
+  const patch = createK1StatusPatch(rawPayload, {
+    ...options,
+    adapterId: options.adapterId ?? "creality-k2",
+    protocol: options.protocol ?? "ws9999",
+  });
+  if (hasOwn(rawPayload, "cfsConnect")) {
+    patch.patch = {
+      ...patch.patch,
+      materials: {
+        cfs: {
+          connected: Number(rawPayload.cfsConnect) === 1,
+        },
+      },
+    };
+  }
+  return patch;
+}
+
+/**
+ * K2 `boxsInfo` payload を Normalized Patch へ変換する。
+ *
+ * 【詳細説明】
+ * - topology frame は material state だけを更新し、温度や印刷状態を消さない。
+ * - source metadata には rawKeys と sequence を残し、fixture replay で観測順を確認できるようにする。
+ *
+ * @function createK2BoxsInfoPatch
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @param {object=} options - 正規化オプション
+ * @param {?string=} options.adapterId - Adapter ID
+ * @param {?string=} options.protocol - 受信 protocol 名
+ * @param {?number=} options.sequence - Instance 内の受信順序
+ * @param {?string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @param {object=} options.capabilities - Adapter が推定した capability set
+ * @param {object=} options.protocolState - delta frame を累積した protocol state
+ * @returns {object} Normalized Patch
+ * @example
+ * const patch = createK2BoxsInfoPatch(payload.boxsInfo, { sequence: 2 });
+ */
+export function createK2BoxsInfoPatch(boxsInfo, options = {}) {
+  return {
+    kind: "state-patch",
+    schemaVersion: NORMALIZED_PRINTER_PATCH_SCHEMA_VERSION,
+    source: {
+      adapterId: options.adapterId ?? "creality-k2",
+      protocol: options.protocol ?? "ws9999",
+      sequence: options.sequence ?? 0,
+      receivedAt: options.receivedAt ?? null,
+      rawKeys: ["boxsInfo"],
+    },
+    capabilities: options.capabilities ?? EMPTY_CAPABILITY_SET,
+    patch: {
+      identity: {
+        deviceId: options.deviceId ?? null,
+        sessionId: options.sessionId ?? null,
+      },
+      materials: normalizeK2BoxsInfo(boxsInfo, {
+        connected: options.protocolState && Object.prototype.hasOwnProperty.call(options.protocolState, "cfsConnect")
+          ? Number(options.protocolState.cfsConnect) === 1
+          : undefined,
+      }),
+    },
   };
 }
 

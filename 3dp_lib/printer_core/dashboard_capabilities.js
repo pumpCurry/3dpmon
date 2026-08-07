@@ -9,7 +9,7 @@
  *
  * 【機能内容サマリ】
  * - Printer Core v3 が UI や Adapter へ公開する capability 名を定義
- * - K1 系 WS9999 status payload から観測済み capability を推定
+ * - K1/K2 系 WS9999 status payload から観測済み capability を推定
  * - capability 配列を決定的な set 形状へ正規化
  *
  * 【公開関数一覧】
@@ -17,13 +17,14 @@
  * - {@link hasCapability}：capability set に指定 capability が含まれるか判定
  * - {@link mergeCapabilitySets}：複数 capability set を重複なく統合
  * - {@link inferK1Capabilities}：K1 系 payload から capability set を推定
+ * - {@link inferK2Capabilities}：K2 系 payload から capability set を推定
  *
- * @version 1.390.1297 (PR #432)
+ * @version 1.390.1302 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 12:22:00
+ * @lastModified 2026-08-07 20:48:46
  * -----------------------------------------------------------
  * @todo
- * - K2 Pro Combo / CFS topology の capability を Gate 3 以降で追加する
+ * - CFS-C 実機 fixture 取得後に CFS-C 固有 capability を追加する
  */
 
 "use strict";
@@ -51,6 +52,9 @@ export const PRINTER_CAPABILITIES = Object.freeze({
   CAMERA_MJPEG: "camera.mjpeg",
   CAMERA_WEBRTC: "camera.webrtc",
   COMMAND_LED: "command.led",
+  MATERIAL_CFS: "material.cfs",
+  MATERIAL_CFS_TOPOLOGY: "material.cfsTopology",
+  MATERIAL_MULTI_SOURCE: "material.multiSource",
   MATERIAL_SINGLE_SPOOL: "material.singleSpool",
   STATUS_AI_DETECTION: "status.aiDetection",
   STATUS_ERROR: "status.error",
@@ -243,6 +247,38 @@ export function inferK1Capabilities(payload) {
   }
   if (hasAny(payload, ["materialDetect", "materialStatus"])) {
     values.push(PRINTER_CAPABILITIES.MATERIAL_SINGLE_SPOOL);
+  }
+  return createCapabilitySet(values);
+}
+
+/**
+ * K2 系 WS9999 payload から capability set を推定する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo は K1 と近い status key を返すため、まず K1 推定結果を再利用する。
+ * - `cfsConnect` と `boxsInfo` は CFS 接続と topology 観測を表すため、material 系 capability を追加する。
+ * - Gate 4 では read-only 観測だけを扱い、CFS 制御 command capability は追加しない。
+ *
+ * @function inferK2Capabilities
+ * @param {object|null|undefined} payload - K2 系 WS9999 payload
+ * @returns {{schemaVersion: number, values: string[]}} 推定 capability set
+ * @example
+ * const capabilities = inferK2Capabilities({ model: "F012", cfsConnect: 1 });
+ */
+export function inferK2Capabilities(payload) {
+  if (!payload || typeof payload !== "object") {
+    return createCapabilitySet([]);
+  }
+
+  const values = [...inferK1Capabilities(payload).values];
+  if (hasAny(payload, ["cfsConnect", "boxsInfo"])) {
+    values.push(PRINTER_CAPABILITIES.MATERIAL_CFS);
+  }
+  if (payload.boxsInfo && typeof payload.boxsInfo === "object") {
+    values.push(PRINTER_CAPABILITIES.MATERIAL_CFS_TOPOLOGY);
+    if (Array.isArray(payload.boxsInfo.materialBoxs) && payload.boxsInfo.materialBoxs.length > 1) {
+      values.push(PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE);
+    }
   }
   return createCapabilitySet(values);
 }

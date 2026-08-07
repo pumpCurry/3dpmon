@@ -16,18 +16,20 @@
  * - {@link PrinterFacade}：Printer Core v3 dry-run facade
  * - {@link createPrinterFacade}：PrinterFacade の factory
  * - {@link createK1PrinterFacade}：K1 dry-run 用 PrinterFacade の factory
+ * - {@link createK2PrinterFacade}：K2 read-only 用 PrinterFacade の factory
  *
- * @version 1.390.1299 (PR #432)
+ * @version 1.390.1302 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 17:15:03
+ * @lastModified 2026-08-07 20:48:46
  * -----------------------------------------------------------
  * @todo
- * - Gate 3 以降で legacy connection 層の shadow pipeline へ接続する
+ * - Gate 5 以降で K2 live shadow pipeline へ接続する
  */
 
 "use strict";
 
 import { createK1Adapter } from "./dashboard_k1_adapter.js";
+import { createK2Adapter } from "./dashboard_k2_adapter.js";
 import { createPrinterInstance } from "./dashboard_printer_instance.js";
 
 /**
@@ -235,5 +237,25 @@ export function createK1PrinterFacade(options = {}) {
   return new PrinterFacade({
     ...options,
     adapterFactory: options.adapterFactory || createK1Adapter,
+  });
+}
+
+/**
+ * K2 read-only 用 PrinterFacade を生成する。
+ *
+ * 【詳細説明】
+ * - Gate 4 の K2 Pro Combo + CFS fixture replay で使う convenience factory。
+ * - generic `createPrinterFacade()` は adapter 指定漏れを拒否するため、K2 を明示したい場所だけで使う。
+ *
+ * @function createK2PrinterFacade
+ * @param {object=} options - Facade 生成オプション
+ * @returns {PrinterFacade} K2 Adapter factory 済み PrinterFacade instance
+ * @example
+ * const facade = createK2PrinterFacade();
+ */
+export function createK2PrinterFacade(options = {}) {
+  return new PrinterFacade({
+    ...options,
+    adapterFactory: options.adapterFactory || createK2Adapter,
   });
 }
