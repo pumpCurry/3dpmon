@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1304 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 21:10:30
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -304,6 +304,12 @@ function listRawKeys(payload) {
 function createEmptyMaterialTopology() {
   return {
     schemaVersion: 1,
+    authority: {
+      mode: "read-only-observation",
+      canDriveLedger: false,
+      source: "none",
+      confidence: "none",
+    },
     cfs: {
       connected: null,
       enabled: null,
@@ -314,6 +320,7 @@ function createEmptyMaterialTopology() {
     sources: [],
     assignments: [],
     sameMaterialGroups: [],
+    diagnostics: [],
   };
 }
 
@@ -633,6 +640,9 @@ function normalizeMaterialSource(box, material) {
   const boxId = toFiniteNumber(box?.id);
   const slotId = toFiniteNumber(material?.id);
   const isExternal = Number(box?.id) === 0 || Number(box?.type) === 1;
+  const rawPercent = toFiniteNumber(material?.percent);
+  const normalizedPercent = toPercentNumber(material?.percent);
+  const percentValid = rawPercent !== null && rawPercent >= 0 && rawPercent <= 100;
   return {
     sourceId: createMaterialSourceId(box, material),
     kind: isExternal ? "external-spool" : "cfs-slot",
@@ -653,7 +663,15 @@ function normalizeMaterialSource(box, material) {
     },
     status: {
       selected: toBooleanFlag(material?.selected),
-      percent: toPercentNumber(material?.percent),
+      percent: normalizedPercent,
+      remaining: {
+        rawPercent,
+        normalizedPercent,
+        valid: percentValid,
+        provenance: "boxsInfo.materialBoxs[].materials[].percent",
+        confidence: "reported",
+        authority: "observation-only",
+      },
       stateCode: toFiniteNumber(material?.state),
       editStatusCode: toFiniteNumber(material?.editStatus),
       scrap: toFiniteNumber(material?.scrap),
@@ -672,9 +690,83 @@ function normalizeMaterialSource(box, material) {
  * @returns {Map<string, string>} `boxId:slotId` から sourceId への index
  */
 function createMaterialSourceIndex(sources) {
-  return new Map((Array.isArray(sources) ? sources : []).map((source) => {
-    return [`${source.boxId}:${source.slotId}`, source.sourceId];
-  }));
+  const index = new Map();
+  for (const source of Array.isArray(sources) ? sources : []) {
+    const key = `${source.boxId}:${source.slotId}`;
+    if (!index.has(key)) {
+      index.set(key, source.sourceId);
+    }
+  }
+  return index;
+}
+
+/**
+ * K2 material topology の診断情報を生成する。
+ *
+ * 【詳細説明】
+ * - sourceId や location が衝突した payload は捨てず、read-only observation として保持した上で
+ *   diagnostics へ記録する。
+ * - Data Schema v3 や filament ledger の authority 化前に、壊れた topology を ledger 入力として
+ *   誤用しないための証跡になる。
+ *
+ * @private
+ * @param {Array<object>} sources - 正規化済み material source 一覧
+ * @param {Array<object>} assignments - tool assignment 一覧
+ * @param {Array<object>} sameMaterialGroups - same-material group 一覧
+ * @returns {Array<object>} topology 診断レコード一覧
+ */
+function createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGroups) {
+  const diagnostics = [];
+  const locationMap = new Map();
+  for (const source of Array.isArray(sources) ? sources : []) {
+    if (source.boxId === null || source.slotId === null) {
+      diagnostics.push({
+        severity: "warning",
+        code: "material-source-location-incomplete",
+        sourceId: source.sourceId,
+        boxId: source.boxId,
+        slotId: source.slotId,
+      });
+    }
+    const locationKey = `${source.boxId}:${source.slotId}`;
+    const sourceIds = locationMap.get(locationKey) || [];
+    sourceIds.push(source.sourceId);
+    locationMap.set(locationKey, sourceIds);
+  }
+  for (const [locationKey, sourceIds] of locationMap.entries()) {
+    if (sourceIds.length > 1) {
+      diagnostics.push({
+        severity: "warning",
+        code: "material-source-location-duplicate",
+        locationKey,
+        sourceIds,
+      });
+    }
+  }
+  for (const assignment of Array.isArray(assignments) ? assignments : []) {
+    if (assignment.resolution === "unresolved") {
+      diagnostics.push({
+        severity: "warning",
+        code: "material-assignment-source-unresolved",
+        assignmentId: assignment.assignmentId,
+        boxId: assignment.boxId,
+        slotId: assignment.slotId,
+      });
+    }
+  }
+  for (const group of Array.isArray(sameMaterialGroups) ? sameMaterialGroups : []) {
+    const unresolvedRefs = (Array.isArray(group.sourceRefs) ? group.sourceRefs : [])
+      .filter((ref) => ref?.resolution === "unresolved");
+    if (unresolvedRefs.length > 0) {
+      diagnostics.push({
+        severity: "warning",
+        code: "same-material-source-unresolved",
+        groupId: group.groupId,
+        unresolvedRefs,
+      });
+    }
+  }
+  return diagnostics;
 }
 
 /**
@@ -797,9 +889,17 @@ export function normalizeK2BoxsInfo(boxsInfo, options = {}) {
     return materials.map((material) => normalizeMaterialSource(box, material));
   });
   const sourceIndex = createMaterialSourceIndex(sources);
+  const assignments = normalizeColorMatches(boxsInfo.colorMatch, sourceIndex);
+  const sameMaterialGroups = normalizeSameMaterialGroups(boxsInfo.same_material, sourceIndex);
   const connected = options.connected ?? (units.length > 0 ? true : null);
   return {
     schemaVersion: 1,
+    authority: {
+      mode: "read-only-observation",
+      canDriveLedger: false,
+      source: "boxsInfo",
+      confidence: "reported",
+    },
     cfs: {
       connected,
       enabled: boxsInfo.enable === null || boxsInfo.enable === undefined ? null : Number(boxsInfo.enable) === 1,
@@ -808,8 +908,9 @@ export function normalizeK2BoxsInfo(boxsInfo, options = {}) {
     },
     units,
     sources,
-    assignments: normalizeColorMatches(boxsInfo.colorMatch, sourceIndex),
-    sameMaterialGroups: normalizeSameMaterialGroups(boxsInfo.same_material, sourceIndex),
+    assignments,
+    sameMaterialGroups,
+    diagnostics: createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGroups),
   };
 }
 
@@ -1042,6 +1143,7 @@ export function createK1StatusPatch(payload, options = {}) {
  *
  * 【詳細説明】
  * - K2 Pro Combo の status key は K1 系と近いため、温度・ファン・印刷状態などは既存変換を再利用する。
+ * - 印刷状態は Gate 7.5 時点では K1 互換の暫定マッピングであることを `print.semantics` に明示する。
  * - `cfsConnect` は material topology の接続状態として patch に追加する。
  * - `boxsInfo` 専用 frame は {@link createK2BoxsInfoPatch} で扱う。
  *
@@ -1067,6 +1169,16 @@ export function createK2StatusPatch(payload, options = {}) {
     adapterId: options.adapterId ?? "creality-k2",
     protocol: options.protocol ?? "ws9999",
   });
+  if (patch.patch?.print) {
+    patch.patch.print = {
+      ...patch.patch.print,
+      semantics: {
+        family: "k2",
+        mapping: "k1-compatible-provisional",
+        certified: false,
+      },
+    };
+  }
   if (hasOwn(rawPayload, "cfsConnect")) {
     const connected = toBooleanFlag(rawPayload.cfsConnect);
     patch.patch = {
@@ -1098,11 +1210,20 @@ export function createK2StatusPatch(payload, options = {}) {
  * @param {?string=} options.receivedAt - 受信時刻 ISO 文字列
  * @param {object=} options.capabilities - Adapter が推定した capability set
  * @param {object=} options.protocolState - delta frame を累積した protocol state
+ * @param {object=} options.materialProvider - material topology を生成する read-only provider
  * @returns {object} Normalized Patch
  * @example
  * const patch = createK2BoxsInfoPatch(payload.boxsInfo, { sequence: 2 });
  */
 export function createK2BoxsInfoPatch(boxsInfo, options = {}) {
+  const materialProvider = options.materialProvider && typeof options.materialProvider.createTopology === "function"
+    ? options.materialProvider
+    : null;
+  const topologyOptions = {
+    connected: options.protocolState && Object.prototype.hasOwnProperty.call(options.protocolState, "cfsConnect")
+      ? toBooleanFlag(options.protocolState.cfsConnect)
+      : undefined,
+  };
   return {
     kind: "state-patch",
     schemaVersion: NORMALIZED_PRINTER_PATCH_SCHEMA_VERSION,
@@ -1119,11 +1240,9 @@ export function createK2BoxsInfoPatch(boxsInfo, options = {}) {
         deviceId: options.deviceId ?? null,
         sessionId: options.sessionId ?? null,
       },
-      materials: normalizeK2BoxsInfo(boxsInfo, {
-        connected: options.protocolState && Object.prototype.hasOwnProperty.call(options.protocolState, "cfsConnect")
-          ? toBooleanFlag(options.protocolState.cfsConnect)
-          : undefined,
-      }),
+      materials: materialProvider
+        ? materialProvider.createTopology(boxsInfo, topologyOptions)
+        : normalizeK2BoxsInfo(boxsInfo, topologyOptions),
     },
   };
 }

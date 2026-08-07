@@ -18,9 +18,9 @@
  * - {@link createK1PrinterFacade}：K1 dry-run 用 PrinterFacade の factory
  * - {@link createK2PrinterFacade}：K2 read-only 用 PrinterFacade の factory
  *
- * @version 1.390.1302 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 20:48:46
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - Gate 5 以降で K2 live shadow pipeline へ接続する
@@ -31,6 +31,43 @@
 import { createK1Adapter } from "./dashboard_k1_adapter.js";
 import { createK2Adapter } from "./dashboard_k2_adapter.js";
 import { createPrinterInstance } from "./dashboard_printer_instance.js";
+
+/**
+ * PrinterFacade が外部へ返す error code。
+ *
+ * 【詳細説明】
+ * - live shadow 側が `error.message` の自然文ではなく、安定した code で復旧可否を判定できるようにする。
+ *
+ * @constant {object}
+ */
+export const PRINTER_FACADE_ERROR_CODES = Object.freeze({
+  SESSION_NOT_STARTED: "session-not-started",
+});
+
+/**
+ * PrinterFacade の lifecycle error。
+ *
+ * 【詳細説明】
+ * - Error として既存 catch 経路に乗せつつ、`code` と `details` で機械判定できる形にする。
+ */
+export class PrinterFacadeSessionError extends Error {
+  /**
+   * PrinterFacadeSessionError を生成する。
+   *
+   * 【詳細説明】
+   * - message は人間向けの診断、code は呼び出し側の分岐条件として使う。
+   *
+   * @param {string} message - エラーメッセージ
+   * @param {string} code - 安定した error code
+   * @param {object=} details - deviceId/sessionId などの補助情報
+   */
+  constructor(message, code, details = {}) {
+    super(message);
+    this.name = "PrinterFacadeSessionError";
+    this.code = code;
+    this.details = details;
+  }
+}
 
 /**
  * Printer Core v3 dry-run facade。
@@ -152,13 +189,68 @@ export class PrinterFacade {
     const sessionId = this._requireNonEmptyId(options?.sessionId, "sessionId");
     const instance = this.instances.get(deviceId);
     if (!instance) {
-      throw new Error(`PrinterFacade session has not been started for deviceId "${deviceId}".`);
+      throw new PrinterFacadeSessionError(
+        `PrinterFacade session has not been started for deviceId "${deviceId}".`,
+        PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED,
+        { deviceId, sessionId }
+      );
     }
     return instance.observeFrame(options.frame, {
       ...options.context,
       sessionId,
       receivedAt: options.receivedAt,
     });
+  }
+
+  /**
+   * deviceId に対応する Instance へ frame を流し、accepted flag 付き result を返す。
+   *
+   * 【詳細説明】
+   * - `observeFrame()` の成功時 state / 拒否時 object という互換 union を、呼び出し側が安全に扱える
+   *   `{ accepted:true, state }` または `{ accepted:false, reason }` へ包む。
+   * - session 未開始は authority 化前の lifecycle 診断として rejection に変換し、Adapter 例外はそのまま投げる。
+   *
+   * @function observeFrameResult
+   * @param {object} options - 観測オプション
+   * @param {string} options.deviceId - 物理機 identity
+   * @param {string} options.sessionId - 接続セッション ID
+   * @param {object|null|undefined} options.frame - 受信 frame または raw payload
+   * @returns {object} accepted flag 付き観測結果
+   * @example
+   * const result = facade.observeFrameResult({ deviceId, sessionId, frame });
+   */
+  observeFrameResult(options) {
+    const deviceId = this._requireNonEmptyId(options?.deviceId, "deviceId");
+    const sessionId = this._requireNonEmptyId(options?.sessionId, "sessionId");
+    const instance = this.instances.get(deviceId);
+    if (!instance) {
+      return {
+        accepted: false,
+        reason: PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED,
+        deviceId,
+        sessionId,
+        activeSessionId: null,
+      };
+    }
+    if (typeof instance.observeFrameResult === "function") {
+      return instance.observeFrameResult(options.frame, {
+        ...options.context,
+        sessionId,
+        receivedAt: options.receivedAt,
+      });
+    }
+    const state = instance.observeFrame(options.frame, {
+      ...options.context,
+      sessionId,
+      receivedAt: options.receivedAt,
+    });
+    if (state?.accepted === false) {
+      return state;
+    }
+    return {
+      accepted: true,
+      state,
+    };
   }
 
   /**

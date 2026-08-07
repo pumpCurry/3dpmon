@@ -22,9 +22,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1305 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-07 21:18:02
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -33,7 +33,11 @@
 "use strict";
 
 import { monitorData } from "../dashboard_data.js";
-import { createK1PrinterFacade, createK2PrinterFacade } from "./dashboard_printer_facade.js";
+import {
+  PRINTER_FACADE_ERROR_CODES,
+  createK1PrinterFacade,
+  createK2PrinterFacade,
+} from "./dashboard_printer_facade.js";
 
 /**
  * live shadow runtime record の schema version。
@@ -814,6 +818,9 @@ export function isRecoverableK1LiveShadowObserveError(error) {
  * const recoverable = isRecoverablePrinterCoreV3LiveShadowObserveError(error);
  */
 export function isRecoverablePrinterCoreV3LiveShadowObserveError(error) {
+  if (error?.code === PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED) {
+    return true;
+  }
   const message = String(error?.message || error || "");
   return message.includes("session has not been started");
 }

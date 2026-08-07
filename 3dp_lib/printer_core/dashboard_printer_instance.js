@@ -16,9 +16,9 @@
  * - {@link PrinterInstance}：物理プリンタ単位の normalized state holder
  * - {@link createPrinterInstance}：PrinterInstance の factory
  *
- * @version 1.390.1298 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 16:50:55
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の device/session repository と接続する
@@ -154,6 +154,33 @@ export class PrinterInstance {
       capabilities: this.capabilities,
     };
     return cloneNormalizedValue(this.state);
+  }
+
+  /**
+   * 受信 frame を観測し、成功/拒否を明示した result object を返す。
+   *
+   * 【詳細説明】
+   * - 既存の `observeFrame()` は後方互換のため、成功時に NormalizedPrinterState を直接返す。
+   * - K2/CFS Provider や authority 化前の呼び出し側が union 型を取り違えないよう、この入口では
+   *   `{ accepted:true, state }` と `{ accepted:false, reason }` の形に統一する。
+   *
+   * @function observeFrameResult
+   * @param {object|null|undefined} frame - 受信 frame または raw payload
+   * @param {object=} context - 観測文脈
+   * @param {?string=} context.receivedAt - 受信時刻 ISO 文字列
+   * @returns {object} accepted flag 付き観測結果
+   * @example
+   * const result = instance.observeFrameResult(payload, { sessionId });
+   */
+  observeFrameResult(frame, context = {}) {
+    const state = this.observeFrame(frame, context);
+    if (state?.accepted === false) {
+      return state;
+    }
+    return {
+      accepted: true,
+      state,
+    };
   }
 
   /**

@@ -16,6 +16,7 @@ import {
   observeK2LiveShadowFrame,
   resolveK1LiveShadowDeviceId,
 } from "../../3dp_lib/printer_core/dashboard_live_shadow.js";
+import { PRINTER_FACADE_ERROR_CODES } from "../../3dp_lib/printer_core/dashboard_printer_facade.js";
 
 function stored(rawValue) {
   return { rawValue, isNew: false, isFromEquipVal: true };
@@ -71,6 +72,10 @@ describe("Printer Core v3 K1 live shadow", () => {
 
   it("session未開始だけをrecoverable observe errorとして扱う", () => {
     expect(isRecoverableK1LiveShadowObserveError(new Error("session has not been started"))).toBe(true);
+    expect(isRecoverableK1LiveShadowObserveError({
+      code: PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED,
+      message: "localized message",
+    })).toBe(true);
     expect(isRecoverableK1LiveShadowObserveError(new Error("adapter invariant failed"))).toBe(false);
   });
 

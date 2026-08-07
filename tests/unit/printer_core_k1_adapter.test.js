@@ -7,6 +7,7 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
 import { PRINTER_CAPABILITIES, hasCapability } from "../../3dp_lib/printer_core/dashboard_capabilities.js";
 import { createK1Adapter, extractK1StatusPayload } from "../../3dp_lib/printer_core/dashboard_k1_adapter.js";
 import {
+  PRINTER_FACADE_ERROR_CODES,
   createK1PrinterFacade,
   createPrinterFacade,
 } from "../../3dp_lib/printer_core/dashboard_printer_facade.js";
@@ -482,6 +483,45 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     expect(second.source.sequence).toBe(1);
     expect(facade.endSession({ deviceId: "fixture:k1-max-a", sessionId: "session-1" })).toBe(false);
     expect(facade.endSession({ deviceId: "fixture:k1-max-a", sessionId: "session-2" })).toBe(true);
+  });
+
+  it("observeFrameResult は成功と拒否をaccepted flag付きで返す", () => {
+    const event = readFirstStatusEvent(FIXTURE_DEVICE_A);
+    const facade = createK1PrinterFacade({
+      clock: () => new Date("2026-08-07T02:42:13.000Z"),
+    });
+
+    const missing = facade.observeFrameResult({
+      deviceId: "fixture:k1-result",
+      sessionId: "session-missing",
+      frame: event,
+    });
+    facade.beginSession({ deviceId: "fixture:k1-result", sessionId: "session-1" });
+    const accepted = facade.observeFrameResult({
+      deviceId: "fixture:k1-result",
+      sessionId: "session-1",
+      frame: event,
+    });
+    const stale = facade.observeFrameResult({
+      deviceId: "fixture:k1-result",
+      sessionId: "session-old",
+      frame: event,
+    });
+
+    expect(missing).toEqual({
+      accepted: false,
+      reason: PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED,
+      deviceId: "fixture:k1-result",
+      sessionId: "session-missing",
+      activeSessionId: null,
+    });
+    expect(accepted.accepted).toBe(true);
+    expect(accepted.state.source.sequence).toBe(1);
+    expect(stale).toMatchObject({
+      accepted: false,
+      reason: "stale-session",
+      activeSessionId: "session-1",
+    });
   });
 
   it("generic PrinterFacade は adapter 指定漏れをK1へfallbackしない", () => {

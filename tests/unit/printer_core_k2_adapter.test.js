@@ -77,6 +77,11 @@ describe("Printer Core v3 K2 read-only adapter", () => {
     expect(patch.patch.temperatures.nozzle.current).toBeCloseTo(numberFromFixtureValue(statusPayload.nozzleTemp));
     expect(patch.patch.temperatures.chamber.current).toBe(numberFromFixtureValue(statusPayload.boxTemp));
     expect(patch.patch.fans.case).toEqual({ enabled: false, percent: 0 });
+    expect(patch.patch.print.semantics).toEqual({
+      family: "k2",
+      mapping: "k1-compatible-provisional",
+      certified: false,
+    });
     expect(patch.patch.materials.cfs.connected).toBe(true);
     expect(hasCapability(patch.capabilities, PRINTER_CAPABILITIES.MATERIAL_CFS)).toBe(true);
     expect(hasCapability(patch.capabilities, PRINTER_CAPABILITIES.STATUS_TEMPERATURES)).toBe(true);
@@ -93,6 +98,14 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       unitCount: 1,
       topologyState: "fresh",
     });
+    expect(topology.authority).toMatchObject({
+      mode: "read-only-observation",
+      canDriveLedger: false,
+      source: "boxsInfo",
+      confidence: "reported",
+    });
+    expect(topology.provider).toBeUndefined();
+    expect(topology.diagnostics).toEqual([]);
     expect(topology.units).toEqual([{
       unitId: "cfs:1",
       boxId: 1,
@@ -115,6 +128,14 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       status: {
         selected: false,
         percent: 100,
+        remaining: {
+          rawPercent: 100,
+          normalizedPercent: 100,
+          valid: true,
+          provenance: "boxsInfo.materialBoxs[].materials[].percent",
+          confidence: "reported",
+          authority: "observation-only",
+        },
       },
     });
     expect(topology.sources[1]).toMatchObject({
@@ -131,6 +152,14 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       status: {
         selected: false,
         percent: 100,
+        remaining: {
+          rawPercent: 100,
+          normalizedPercent: 100,
+          valid: true,
+          provenance: "boxsInfo.materialBoxs[].materials[].percent",
+          confidence: "reported",
+          authority: "observation-only",
+        },
       },
     });
     expect(topology.assignments).toEqual([
@@ -267,6 +296,51 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       "same-material:PLA:000001:white:unresolved:10:0",
     ]);
     expect(topology.sameMaterialGroups.every((group) => group.sourceIds.length === 0)).toBe(true);
+    expect(topology.diagnostics.map((entry) => entry.code)).toEqual([
+      "same-material-source-unresolved",
+      "same-material-source-unresolved",
+    ]);
+  });
+
+  it("K2 boxsInfo のsource location衝突とinvalid remainingをdiagnosticsへ残す", () => {
+    const topology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          state: 1,
+          type: 0,
+          materials: [
+            { id: 0, state: 1, percent: 120 },
+            { id: 0, state: 1, percent: -10 },
+          ],
+        },
+      ],
+      colorMatch: [{ id: "T1A", boxId: 1, materialId: 9 }],
+    });
+
+    expect(topology.sources.map((source) => source.status.remaining)).toEqual([
+      {
+        rawPercent: 120,
+        normalizedPercent: 100,
+        valid: false,
+        provenance: "boxsInfo.materialBoxs[].materials[].percent",
+        confidence: "reported",
+        authority: "observation-only",
+      },
+      {
+        rawPercent: -10,
+        normalizedPercent: 0,
+        valid: false,
+        provenance: "boxsInfo.materialBoxs[].materials[].percent",
+        confidence: "reported",
+        authority: "observation-only",
+      },
+    ]);
+    expect(topology.diagnostics.map((entry) => entry.code)).toEqual([
+      "material-source-location-duplicate",
+      "material-assignment-source-unresolved",
+    ]);
   });
 
   it("material capability はexternal source観測とmulti source topologyを混同しない", () => {
@@ -299,9 +373,43 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       sequence: 2,
     });
 
-    expect(hasCapability(statusPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE)).toBe(true);
+    expect(hasCapability(statusPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_FILAMENT_SENSOR)).toBe(true);
+    expect(hasCapability(statusPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE)).toBe(false);
     expect(hasCapability(statusPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE)).toBe(false);
     expect(hasCapability(topologyPatch.capabilities, PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE)).toBe(true);
+  });
+
+  it("K2Adapter はread-only MaterialProvider経由でCFS topologyを生成する", () => {
+    const adapter = createK2Adapter();
+    const patch = adapter.normalizeFrame({
+      boxsInfo: {
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 0,
+            state: 1,
+            type: 1,
+            materials: [{ id: 0, state: 1, percent: 100 }],
+          },
+        ],
+      },
+    }, {
+      deviceId: "fixture:k2-provider",
+      sessionId: "fixture-session-provider",
+      sequence: 1,
+    });
+
+    expect(patch.patch.materials.provider).toMatchObject({
+      providerId: "creality-cfs-boxs-info",
+      readOnly: true,
+      canDriveLedger: false,
+    });
+    expect(patch.patch.materials.authority).toMatchObject({
+      mode: "read-only-observation",
+      canDriveLedger: false,
+      providerId: "creality-cfs-boxs-info",
+    });
+    expect(hasCapability(patch.capabilities, PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE)).toBe(true);
   });
 
   it("K2 Pro CFS fixture stream を Facade で replay し status と topology を同居させる", () => {

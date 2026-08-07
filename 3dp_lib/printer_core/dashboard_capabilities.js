@@ -19,9 +19,9 @@
  * - {@link inferK1Capabilities}：K1 系 payload から capability set を推定
  * - {@link inferK2Capabilities}：K2 系 payload から capability set を推定
  *
- * @version 1.390.1303 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 21:00:10
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - CFS-C 実機 fixture 取得後に CFS-C 固有 capability を追加する
@@ -55,6 +55,7 @@ export const PRINTER_CAPABILITIES = Object.freeze({
   MATERIAL_CFS: "material.cfs",
   MATERIAL_CFS_TOPOLOGY: "material.cfsTopology",
   MATERIAL_EXTERNAL_SOURCE: "material.externalSource",
+  MATERIAL_FILAMENT_SENSOR: "material.filamentSensor",
   MATERIAL_MULTI_SOURCE: "material.multiSource",
   STATUS_AI_DETECTION: "status.aiDetection",
   STATUS_ERROR: "status.error",
@@ -141,6 +142,25 @@ function countK2MaterialSources(boxsInfo) {
   const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
   return boxes.reduce((count, box) => {
     return count + (Array.isArray(box?.materials) ? box.materials.length : 0);
+  }, 0);
+}
+
+/**
+ * K2 `boxsInfo` から外部スプール source 数を数える。
+ *
+ * 【詳細説明】
+ * - K1/K2 status の `materialDetect` はフィラメントセンサー観測であり、外部スプール供給源そのものではない。
+ * - `material.externalSource` は `boxsInfo.materialBoxs[]` 上で外部 box が観測された場合だけ付与する。
+ *
+ * @private
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @returns {number} 外部スプールとして観測された material source 数
+ */
+function countK2ExternalMaterialSources(boxsInfo) {
+  const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
+  return boxes.reduce((count, box) => {
+    const isExternal = Number(box?.id) === 0 || Number(box?.type) === 1;
+    return count + (isExternal && Array.isArray(box?.materials) ? box.materials.length : 0);
   }, 0);
 }
 
@@ -263,7 +283,7 @@ export function inferK1Capabilities(payload) {
     values.push(PRINTER_CAPABILITIES.CAMERA_WEBRTC);
   }
   if (hasAny(payload, ["materialDetect", "materialStatus"])) {
-    values.push(PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE);
+    values.push(PRINTER_CAPABILITIES.MATERIAL_FILAMENT_SENSOR);
   }
   return createCapabilitySet(values);
 }
@@ -293,6 +313,9 @@ export function inferK2Capabilities(payload) {
   }
   if (payload.boxsInfo && typeof payload.boxsInfo === "object") {
     values.push(PRINTER_CAPABILITIES.MATERIAL_CFS_TOPOLOGY);
+    if (countK2ExternalMaterialSources(payload.boxsInfo) > 0) {
+      values.push(PRINTER_CAPABILITIES.MATERIAL_EXTERNAL_SOURCE);
+    }
     if (countK2MaterialSources(payload.boxsInfo) > 1) {
       values.push(PRINTER_CAPABILITIES.MATERIAL_MULTI_SOURCE);
     }

@@ -18,9 +18,9 @@
  * - {@link K2Adapter}：K2 系 payload を正規化する Adapter class
  * - {@link createK2Adapter}：K2Adapter の factory
  *
- * @version 1.390.1303 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1302 (PR #432)
- * @lastModified 2026-08-07 21:00:10
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機 live shadow 接続後に delta frame の追加 alias を確認する
@@ -29,6 +29,7 @@
 "use strict";
 
 import { inferK2Capabilities, mergeCapabilitySets } from "./dashboard_capabilities.js";
+import { createCfsBoxsInfoMaterialProvider } from "./dashboard_material_provider.js";
 import {
   createK2BoxsInfoPatch,
   createK2StatusPatch,
@@ -271,12 +272,14 @@ export class K2Adapter {
    * @param {object=} options - Adapter 生成オプション
    * @param {string=} options.adapterId - Adapter ID
    * @param {string=} options.protocol - protocol 名
+   * @param {object=} options.materialProvider - CFS topology を生成する read-only provider
    */
   constructor(options = {}) {
     this.adapterId = options.adapterId || K2_ADAPTER_ID;
     this.protocol = options.protocol || K2_ADAPTER_PROTOCOL;
     this.family = "k2";
     this.readOnly = true;
+    this.materialProvider = options.materialProvider || createCfsBoxsInfoMaterialProvider();
   }
 
   /**
@@ -324,6 +327,7 @@ export class K2Adapter {
       protocol: this.protocol,
       capabilities,
       protocolState: adapterState.raw,
+      materialProvider: this.materialProvider,
     };
     let normalizedPatch;
     if (payload?.boxsInfo && typeof payload.boxsInfo === "object") {

@@ -18,9 +18,9 @@
  * - {@link recordPrinterCoreV3Identity}：観測 evidence を target へ保存
  * - {@link toComparablePrinterCoreV3Identity}：時刻差分を除いた比較用コピーを生成
  *
- * @version 1.390.1295 (PR #432)
+ * @version 1.390.1312 (PR #432)
  * @since   1.390.1292 (PR #432)
- * @lastModified 2026-08-07 09:18:00
+ * @lastModified 2026-08-08 07:32:05
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で Data Schema v3 の `devices` / `deviceEndpoints` store へ保存先を差し替える
@@ -409,6 +409,42 @@ function createResolvedIdentityConflict(conflict, decision) {
 }
 
 /**
+ * singleton と plural の conflict record を同時に resolved へ更新する。
+ *
+ * 【詳細説明】
+ * - `printerCoreV3IdentityConflict` は旧コード互換の singleton だが、live shadow の安全判定は
+ *   `printerCoreV3IdentityConflicts[]` も参照する。
+ * - singleton だけを resolved にすると plural 側の open が残り、実際には解決済みの target が
+ *   いつまでも provisional shadow ID 扱いになるため、同一 record を両方で更新する。
+ *
+ * @private
+ * @param {object} target - connectionTarget
+ * @param {object} decision - 解決根拠の merge 判定
+ * @returns {boolean} conflict record を更新した場合 true
+ */
+function resolvePrinterCoreV3ConflictRecords(target, decision) {
+  if (!target?.printerCoreV3IdentityConflict) {
+    return false;
+  }
+  const openConflict = target.printerCoreV3IdentityConflict;
+  const comparableOpenConflict = JSON.stringify(toComparablePrinterCoreV3Identity(openConflict));
+  const resolvedConflict = createResolvedIdentityConflict(openConflict, decision);
+  target.printerCoreV3IdentityConflict = resolvedConflict;
+
+  const currentList = Array.isArray(target.printerCoreV3IdentityConflicts)
+    ? target.printerCoreV3IdentityConflicts
+    : [openConflict];
+  target.printerCoreV3IdentityConflicts = currentList.map((entry) => {
+    const comparableEntry = JSON.stringify(toComparablePrinterCoreV3Identity(entry));
+    if (entry?.status === "open" && comparableEntry === comparableOpenConflict) {
+      return createResolvedIdentityConflict(entry, decision);
+    }
+    return entry;
+  });
+  return true;
+}
+
+/**
  * 観測 evidence を connectionTarget へ Printer Core v3 identity dry-run として保存する。
  *
  * 【詳細説明】
@@ -523,10 +559,7 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
 
   target.printerCoreV3Identity = nextIdentity;
   if (canResolveConflict) {
-    target.printerCoreV3IdentityConflict = createResolvedIdentityConflict(
-      target.printerCoreV3IdentityConflict,
-      decision
-    );
+    resolvePrinterCoreV3ConflictRecords(target, decision);
   }
   return {
     changed: true,

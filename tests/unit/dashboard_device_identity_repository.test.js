@@ -123,6 +123,44 @@ describe("dashboard_device_identity_repository", () => {
     expect(target.printerCoreV3Identity.deviceIdSeed).toBe("serial:k2pro-serial-001");
   });
 
+  it("allowConflictResolution=trueではsingletonとpluralのconflictを同時にresolvedへ更新する", () => {
+    const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+    recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-OTHER",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const resolved = recordPrinterCoreV3Identity(target, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.20",
+      allowConflictResolution: true,
+    });
+
+    expect(resolved.changed).toBe(true);
+    expect(target.printerCoreV3IdentityConflict).toMatchObject({
+      status: "resolved",
+      resolutionReason: "serial-match",
+    });
+    expect(target.printerCoreV3IdentityConflicts).toHaveLength(1);
+    expect(target.printerCoreV3IdentityConflicts[0]).toMatchObject({
+      status: "resolved",
+      resolutionReason: "serial-match",
+    });
+  });
+
   it("共有証跡のない候補は既存identityへ混ぜずpendingへ隔離する", () => {
     const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
     recordPrinterCoreV3Identity(target, {
