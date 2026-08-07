@@ -242,6 +242,62 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     ]);
   });
 
+  it("metadata.validation countが実eventsと一致する場合はcount検査もPASSにする", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "count-match" },
+        validation: {
+          success: true,
+          failureReasons: [],
+          eventCount: 2,
+          protocolEventCount: 1,
+          markerCount: 1,
+        },
+      },
+      events: [
+        marker(1, 0, "observed", { source: "stdin" }),
+        ws(2, 50, { state: 1 }),
+      ],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.validation.counts).toEqual({
+      checked: [
+        { key: "eventCount", expected: 2, actual: 2, matches: true },
+        { key: "protocolEventCount", expected: 1, actual: 1, matches: true },
+        { key: "markerCount", expected: 1, actual: 1, matches: true },
+      ],
+      mismatches: [],
+      success: true,
+    });
+  });
+
+  it("metadata.validation countが実eventsとずれた場合はfailure reasonへ分離する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "count-mismatch" },
+        validation: {
+          success: true,
+          failureReasons: [],
+          eventCount: 3,
+          protocolEventCount: 2,
+          markerCount: 1,
+        },
+      },
+      events: [
+        marker(1, 0, "observed", { source: "stdin" }),
+        ws(2, 50, { state: 1 }),
+      ],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["fixture-event-count-mismatch"]);
+    expect(report.validation.counts.mismatches).toEqual([
+      { key: "eventCount", expected: 3, actual: 2 },
+      { key: "protocolEventCount", expected: 2, actual: 1 },
+    ]);
+  });
+
   it("marker不足、順序逆転、payload不足、validation失敗をfailureReasonsへ分離する", () => {
     const report = analyzeProtocolScenarioFixture({
       metadata: {

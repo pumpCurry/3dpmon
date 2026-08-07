@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1319 (PR #432)
+ * @version 1.390.1320 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:39:30
+ * @lastModified 2026-08-08 08:43:10
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -471,6 +471,50 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 }
 
 /**
+ * metadata.validation の event count と実 events を照合する。
+ *
+ * 【詳細説明】
+ * - capture CLI は `metadata.json` と `events.ndjson` を同じ fixture から生成するため、本来 count は一致する。
+ * - 手作業編集や不完全な fixture copy で片方だけが変わった場合、Analyzer report に差分を出す。
+ * - 古い fixture で count が未記録の場合は互換維持のため検査対象外にする。
+ *
+ * @private
+ * @param {object} metadata - fixture metadata
+ * @param {number} eventCount - 実 events 件数
+ * @param {number} protocolEventCount - 実 protocol event 件数
+ * @param {number} markerCount - 実 marker event 件数
+ * @returns {object} count 整合性 report
+ */
+function analyzeValidationCounts(metadata, eventCount, protocolEventCount, markerCount) {
+  const validation = metadata?.validation && typeof metadata.validation === "object"
+    ? metadata.validation
+    : {};
+  const checks = [
+    { key: "eventCount", actual: eventCount },
+    { key: "protocolEventCount", actual: protocolEventCount },
+    { key: "markerCount", actual: markerCount },
+  ].filter((entry) => Number.isFinite(validation[entry.key]));
+  const mismatches = checks
+    .filter((entry) => validation[entry.key] !== entry.actual)
+    .map((entry) => ({
+      key: entry.key,
+      expected: validation[entry.key],
+      actual: entry.actual,
+    }));
+
+  return {
+    checked: checks.map((entry) => ({
+      key: entry.key,
+      expected: validation[entry.key],
+      actual: entry.actual,
+      matches: validation[entry.key] === entry.actual,
+    })),
+    mismatches,
+    success: mismatches.length === 0,
+  };
+}
+
+/**
  * CFS `boxsInfo` を timeline 用 summary へ圧縮する。
  *
  * 【詳細説明】
@@ -730,6 +774,12 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   const payloadReport = analyzeRequiredPayloadKeys(events, requiredPayloadKeys);
   const payloadTimeline = createPayloadTimeline(events, requirements.timelinePayloadKeys);
   const protocolEventCount = events.filter((event) => event?.direction !== "marker").length;
+  const validationCounts = analyzeValidationCounts(
+    metadata,
+    events.length,
+    protocolEventCount,
+    markers.length,
+  );
   const failureReasons = [];
 
   if (requirements.unknownProfiles.length > 0) {
@@ -751,6 +801,9 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   }
   if (payloadReport.missing.length > 0) {
     failureReasons.push("required-payload-key-missing");
+  }
+  if (!validationCounts.success) {
+    failureReasons.push("fixture-event-count-mismatch");
   }
 
   return {
@@ -774,6 +827,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
       failureReasons: Array.isArray(metadata.validation?.failureReasons)
         ? metadata.validation.failureReasons
         : [],
+      counts: validationCounts,
     },
   };
 }

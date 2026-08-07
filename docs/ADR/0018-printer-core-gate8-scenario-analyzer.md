@@ -66,6 +66,10 @@ node scripts/analyze_protocol_scenario.mjs --fixture <dir> --require-observed-ma
   `--profile k2-print-lifecycle`, which expands the expected scenario label,
   validation requirement, source-aware lifecycle markers, and root payload keys
   needed before K2 print semantics can be reviewed.
+- When `metadata.validation` contains `eventCount`, `protocolEventCount`, or
+  `markerCount`, compare those values with `events.ndjson` and report
+  `fixture-event-count-mismatch` on drift. Missing legacy count fields remain
+  compatible.
 
 ## Non-Goals
 
