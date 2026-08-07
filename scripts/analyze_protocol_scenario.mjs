@@ -18,9 +18,9 @@
  * - {@link analyzeProtocolScenarioFromCli}：CLI options で scenario fixture を解析
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1314 (PR #432)
+ * @version 1.390.1315 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 07:47:23
+ * @lastModified 2026-08-08 08:09:55
  * -----------------------------------------------------------
  * @todo
  * - 標準 scenario profile を導入し、`--profile k2-printing` だけで必須条件を展開できるようにする
@@ -40,13 +40,17 @@ import { analyzeProtocolScenarioFixture } from "../3dp_lib/printer_core/dashboar
  * @constant {string}
  */
 const HELP_TEXT = `Usage:
-  node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/printing --require-marker operator-print-start --require-payload-key printProgress
+  node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/printing --require-observed-marker observed-printing --require-payload-key printProgress
 
 Options:
   --fixture <dir>              Required. Fixture directory containing metadata.json and events.ndjson.
   --expected-scenario <name>   Require metadata.capture.scenario to match.
   --require-validation-success Require metadata.validation.success === true.
-  --require-marker <name>      Require an operator marker by name. Repeatable.
+  --require-marker <name>      Require a marker by name with any source. Repeatable.
+  --require-observed-marker <name>
+                               Require a stdin/operator-observed marker by name. Repeatable.
+  --require-scheduled-marker <name>
+                               Require a scheduled marker by name. Repeatable.
   --require-payload-key <key>  Require a protocol payload key such as boxsInfo or printProgress. Repeatable.
   --pretty                    Print indented JSON.
   --help                      Show this help.
@@ -71,6 +75,8 @@ export function parseArgs(argv) {
     expectedScenario: "",
     requireValidationSuccess: false,
     requiredMarkers: [],
+    requiredObservedMarkers: [],
+    requiredScheduledMarkers: [],
     requiredPayloadKeys: [],
     pretty: false,
     help: false,
@@ -99,6 +105,14 @@ export function parseArgs(argv) {
     }
     if (arg === "--require-marker") {
       options.requiredMarkers.push(argv[++index] || "");
+      continue;
+    }
+    if (arg === "--require-observed-marker") {
+      options.requiredObservedMarkers.push(argv[++index] || "");
+      continue;
+    }
+    if (arg === "--require-scheduled-marker") {
+      options.requiredScheduledMarkers.push(argv[++index] || "");
       continue;
     }
     if (arg === "--require-payload-key") {
@@ -168,10 +182,18 @@ export async function readScenarioFixture(fixtureDir) {
  */
 export async function analyzeProtocolScenarioFromCli(options) {
   const fixture = await readScenarioFixture(options.fixtureDir);
+  const anySourceMarkers = Array.isArray(options.requiredMarkers) ? options.requiredMarkers : [];
+  const observedMarkers = Array.isArray(options.requiredObservedMarkers) ? options.requiredObservedMarkers : [];
+  const scheduledMarkers = Array.isArray(options.requiredScheduledMarkers) ? options.requiredScheduledMarkers : [];
+  const requiredMarkers = [
+    ...anySourceMarkers,
+    ...observedMarkers.map((name) => ({ name, source: "stdin" })),
+    ...scheduledMarkers.map((name) => ({ name, source: "scheduled" })),
+  ];
   return analyzeProtocolScenarioFixture(fixture, {
     expectedScenario: options.expectedScenario || undefined,
     requireValidationSuccess: options.requireValidationSuccess,
-    requiredMarkers: options.requiredMarkers,
+    requiredMarkers,
     requiredPayloadKeys: options.requiredPayloadKeys,
   });
 }

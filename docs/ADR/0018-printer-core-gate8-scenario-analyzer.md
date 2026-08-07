@@ -20,7 +20,20 @@ operator markers
 protocol payload keys
 ```
 
-- Support required marker checks for future physical scenarios such as:
+- Support required marker checks for future physical scenarios. Plain
+  `--require-marker` keeps backward-compatible "any source" matching, while
+  physical observations must use source-aware requirements such as
+  `--require-observed-marker` so scheduled markers cannot certify observed
+  printer state.
+
+```text
+operator-pause-requested  # any source
+observed-paused           # stdin/operator-observed source required
+observed-resumed          # stdin/operator-observed source required
+observed-completed        # stdin/operator-observed source required
+```
+
+- Scenario names can still use existing operator marker vocabulary such as:
 
 ```text
 operator-print-start
@@ -31,7 +44,10 @@ cfs-disconnected
 cfs-reconnected
 ```
 
-- Support required payload key checks such as:
+- Support required payload key checks at the semantic payload root only. The
+  analyzer unwraps known `result` / `data` envelopes, but it does not recursively
+  search arbitrary object trees. This prevents `boxsInfo.materialBoxs[].state`
+  from satisfying a printer-root `state` requirement.
 
 ```text
 printProgress
@@ -43,7 +59,7 @@ cfsConnect
 - Add a CLI wrapper:
 
 ```text
-node scripts/analyze_protocol_scenario.mjs --fixture <dir> --require-marker <name> --require-payload-key <key>
+node scripts/analyze_protocol_scenario.mjs --fixture <dir> --require-observed-marker <name> --require-payload-key <key>
 ```
 
 ## Non-Goals

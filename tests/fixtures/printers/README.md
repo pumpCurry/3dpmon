@@ -44,8 +44,13 @@ Live K2-family test target:
   with the marker and inbound payload keys expected for that scenario. Example:
 
 ```text
-node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/printing --require-validation-success --require-marker operator-print-start --require-payload-key printProgress
+node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/printing --require-validation-success --require-marker operator-print-start --require-observed-marker observed-printing --require-payload-key printProgress
 ```
+
+  Use `--require-observed-marker` for physical state observations that must come
+  from stdin/operator input. Required payload keys are checked at the inbound
+  semantic payload root, including known `result` / `data` envelopes, not inside
+  nested structures such as `boxsInfo.materialBoxs[].state`.
 
 Fixture rules:
 

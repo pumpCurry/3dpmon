@@ -16,9 +16,9 @@
  * - {@link analyzeProtocolScenarioFixture}：fixture events と metadata を scenario report へ変換
  * - {@link eventHasPayloadKey}：protocol event が指定 payload key を含むか判定
  *
- * @version 1.390.1314 (PR #432)
+ * @version 1.390.1315 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 07:47:23
+ * @lastModified 2026-08-08 08:09:55
  * -----------------------------------------------------------
  * @todo
  * - K2 printing / paused / resumed / completed の実機 scenario fixture 取得後に標準profileを追加する
@@ -62,7 +62,8 @@ function normalizeStringList(values) {
  *
  * 【詳細説明】
  * - WS9999 の `payload.body` と、テスト用の直接 `payload` の両方を許容する。
- * - body が `{ result:{...} }` wrapper の場合も payload key 検査で扱えるように呼び出し側で再帰する。
+ * - body が `{ result:{...} }` や `{ data:{...} }` wrapper の場合も payload key 検査で扱えるよう、
+ *   呼び出し側で既知 envelope を1段だけ展開する。
  *
  * @private
  * @param {object|null|undefined} event - ProtocolRecorder event
@@ -80,25 +81,29 @@ function extractEventPayloadBody(event) {
 }
 
 /**
- * object tree が指定 payload key を含むか再帰的に判定する。
+ * Protocol payload の既知 envelope を展開する。
  *
  * 【詳細説明】
- * - Creality firmware は `boxsInfo` を root または `result.boxsInfo` に返すことがあるため、
- *   shallow check だけではなく object tree を探索する。
+ * - Creality firmware と capture helper は root payload、`result` wrapper、`data` wrapper の
+ *   いずれかで semantic payload を持つことがある。
+ * - `boxsInfo.materialBoxs[].state` のような入れ子 key を printer root の `state` と誤認しないよう、
+ *   任意深度の再帰探索は行わず、既知 wrapper を1段だけ外す。
  *
  * @private
- * @param {*} value - 検査対象
- * @param {string} key - 検査する key
- * @returns {boolean} key が存在する場合 true
+ * @param {object|null} body - extractEventPayloadBody で取り出した payload body
+ * @returns {object|null} semantic payload root、または null
  */
-function objectTreeHasKey(value, key) {
-  if (!value || typeof value !== "object") {
-    return false;
+function unwrapProtocolEnvelope(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return null;
   }
-  if (hasOwn(value, key)) {
-    return true;
+  if (body.result && typeof body.result === "object" && !Array.isArray(body.result)) {
+    return body.result;
   }
-  return Object.values(value).some((child) => objectTreeHasKey(child, key));
+  if (body.data && typeof body.data === "object" && !Array.isArray(body.data)) {
+    return body.data;
+  }
+  return body;
 }
 
 /**
@@ -107,7 +112,8 @@ function objectTreeHasKey(value, key) {
  * 【詳細説明】
  * - marker、transport event、outbound request は payload key 検査の対象外にする。
  * - `boxsInfo` probe を送っただけで scenario evidence と誤判定しないよう、受信 frame だけを扱う。
- * - JSON body 内は再帰的に探索し、wrapper 差異で scenario 判定が壊れないようにする。
+ * - JSON body は root / result / data の既知 envelope だけを検査し、CFS内部の `state` などを
+ *   printer status root の `state` と誤判定しないようにする。
  *
  * @function eventHasPayloadKey
  * @param {object|null|undefined} event - ProtocolRecorder event
@@ -124,7 +130,73 @@ export function eventHasPayloadKey(event, key) {
   if (!normalizedKey) {
     return false;
   }
-  return objectTreeHasKey(extractEventPayloadBody(event), normalizedKey);
+  const body = unwrapProtocolEnvelope(extractEventPayloadBody(event));
+  return hasOwn(body, normalizedKey);
+}
+
+/**
+ * marker requirement を正規化する。
+ *
+ * 【詳細説明】
+ * - Gate 8 以前の `requiredMarkers: ["name"]` は source 不問として互換維持する。
+ * - 物理観測を scenario 合格条件にする場合は `{ name, source:"stdin" }` を使い、
+ *   scheduled marker だけで observed marker を満たさないようにする。
+ *
+ * @private
+ * @param {Array<string|object>|null|undefined} values - marker requirement 候補
+ * @returns {Array<object>} 正規化済み requirement 一覧
+ */
+function normalizeMarkerRequirements(values) {
+  return (Array.isArray(values) ? values : [])
+    .map((value) => {
+      if (value && typeof value === "object") {
+        const name = String(value.name ?? "").trim();
+        const source = value.source == null ? null : String(value.source).trim();
+        return {
+          name,
+          source: source || null,
+        };
+      }
+      return {
+        name: String(value ?? "").trim(),
+        source: null,
+      };
+    })
+    .filter((value) => value.name);
+}
+
+/**
+ * source 付き marker requirement の表示名を作る。
+ *
+ * 【詳細説明】
+ * - failure report では従来互換のため source 不問 requirement は name だけを返す。
+ * - source 指定がある場合は `source:name` として、どの provenance が不足したかを明示する。
+ *
+ * @private
+ * @param {object} requirement - marker requirement
+ * @returns {string} report 用 label
+ */
+function formatMarkerRequirement(requirement) {
+  return requirement.source ? `${requirement.source}:${requirement.name}` : requirement.name;
+}
+
+/**
+ * marker が requirement を満たすか判定する。
+ *
+ * 【詳細説明】
+ * - name は必須一致とし、source が指定された requirement では details.source 由来の
+ *   marker summary source も一致させる。
+ *
+ * @private
+ * @param {object} marker - marker summary
+ * @param {object} requirement - marker requirement
+ * @returns {boolean} requirement を満たす場合 true
+ */
+function markerMatchesRequirement(marker, requirement) {
+  if (!marker || marker.name !== requirement.name) {
+    return false;
+  }
+  return !requirement.source || marker.source === requirement.source;
 }
 
 /**
@@ -150,26 +222,30 @@ function summarizeMarker(event) {
  * 必須 marker の観測状況を集計する。
  *
  * 【詳細説明】
- * - 同じ marker 名を複数回要求する scenario は少ないため、Gate 8 では名前単位の存在検査に限定する。
+ * - source 不問 marker と source 指定 marker の両方を扱う。
  * - 順序検査は requiredMarkers の順で最初に見つかった marker index が単調増加することを確認する。
  *
  * @private
  * @param {Array<object>} markers - marker summary 一覧
- * @param {string[]} requiredMarkers - 必須 marker 名一覧
+ * @param {Array<object>} requiredMarkers - 必須 marker requirement 一覧
  * @returns {object} marker 判定結果
  */
 function analyzeRequiredMarkers(markers, requiredMarkers) {
-  const markerNames = markers.map((marker) => marker.name);
-  const missing = requiredMarkers.filter((name) => !markerNames.includes(name));
-  const matched = requiredMarkers.map((name) => {
-    const index = markerNames.indexOf(name);
+  const matched = requiredMarkers.map((requirement) => {
+    const index = markers.findIndex((marker) => markerMatchesRequirement(marker, requirement));
     return {
-      name,
+      name: requirement.name,
+      source: requirement.source,
+      label: formatMarkerRequirement(requirement),
       observed: index >= 0,
       index,
       atMs: index >= 0 ? markers[index].atMs : null,
+      observedSource: index >= 0 ? markers[index].source : null,
     };
   });
+  const missing = matched
+    .filter((entry) => !entry.observed)
+    .map((entry) => entry.label);
   const observedIndexes = matched
     .filter((entry) => entry.observed)
     .map((entry) => entry.index);
@@ -177,7 +253,11 @@ function analyzeRequiredMarkers(markers, requiredMarkers) {
     return position === 0 || index > observedIndexes[position - 1];
   });
   return {
-    required: requiredMarkers,
+    required: requiredMarkers.map((requirement) => ({
+      name: requirement.name,
+      source: requirement.source,
+      label: formatMarkerRequirement(requirement),
+    })),
     matched,
     missing,
     ordered,
@@ -227,7 +307,7 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
  * @param {object=} options - 解析オプション
  * @param {string=} options.expectedScenario - 期待する scenario 名
  * @param {boolean=} options.requireValidationSuccess - metadata.validation.success を必須にする場合 true
- * @param {Array<string>=} options.requiredMarkers - 必須 marker 名一覧
+ * @param {Array<string|object>=} options.requiredMarkers - 必須 marker requirement 一覧
  * @param {Array<string>=} options.requiredPayloadKeys - 必須 payload key 一覧
  * @returns {object} scenario 解析結果
  * @example
@@ -236,7 +316,7 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   const metadata = fixture?.metadata && typeof fixture.metadata === "object" ? fixture.metadata : {};
   const events = Array.isArray(fixture?.events) ? fixture.events : [];
-  const requiredMarkers = normalizeStringList(options.requiredMarkers);
+  const requiredMarkers = normalizeMarkerRequirements(options.requiredMarkers);
   const requiredPayloadKeys = normalizeStringList(options.requiredPayloadKeys);
   const markers = events
     .filter((event) => event?.direction === "marker" || event?.kind === "marker")
