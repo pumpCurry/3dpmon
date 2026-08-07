@@ -115,8 +115,8 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
         validation: { success: true, failureReasons: [] },
       },
       events: [
-        marker(1, 0, "operator-pause-requested", { source: "scheduled", scheduledAtMs: 0 }),
-        marker(2, 1000, "observed-paused", { source: "scheduled", scheduledAtMs: 1000 }),
+        marker(1, 0, "operator-pause-requested", { source: "scheduled-cli", scheduledAtMs: 0 }),
+        marker(2, 1000, "observed-paused", { source: "scheduled-cli", scheduledAtMs: 1000 }),
         marker(3, 2000, "observed-resumed", { source: "stdin" }),
       ],
     }, {
@@ -134,7 +134,7 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       name: "operator-pause-requested",
       source: null,
       observed: true,
-      observedSource: "scheduled",
+      observedSource: "scheduled-cli",
     });
     expect(report.requiredMarkers.matched[1]).toMatchObject({
       name: "observed-paused",
@@ -158,6 +158,36 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(options.requiredMarkers).toEqual(["operator-pause-requested"]);
     expect(options.requiredObservedMarkers).toEqual(["observed-paused"]);
     expect(options.requiredScheduledMarkers).toEqual(["operator-pause-requested"]);
+  });
+
+  it("CLIのscheduled marker requirementはcapture CLIのscheduled-cli sourceと一致する", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "3dpmon-scheduled-marker-"));
+    fs.writeFileSync(path.join(root, "metadata.json"), JSON.stringify({
+      fixtureVersion: 1,
+      capture: { scenario: "scheduled-marker" },
+      validation: { success: true, failureReasons: [] },
+    }), "utf8");
+    fs.writeFileSync(path.join(root, "events.ndjson"), [
+      JSON.stringify(marker(1, 0, "operator-pause-requested", { source: "scheduled-cli", scheduledAtMs: 0 })),
+      "",
+    ].join("\n"), "utf8");
+    const options = parseArgs([
+      "--fixture",
+      root,
+      "--require-scheduled-marker",
+      "operator-pause-requested",
+    ]);
+    const report = await analyzeProtocolScenarioFromCli(options);
+
+    expect(report.success).toBe(true);
+    expect(report.requiredMarkers.matched[0]).toMatchObject({
+      name: "operator-pause-requested",
+      source: "scheduled-cli",
+      observed: true,
+      observedSource: "scheduled-cli",
+    });
+
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("CLI optionsで既存K2 idle fixtureをread-only検査できる", async () => {

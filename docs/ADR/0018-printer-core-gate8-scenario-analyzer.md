@@ -23,11 +23,11 @@ protocol payload keys
 - Support required marker checks for future physical scenarios. Plain
   `--require-marker` keeps backward-compatible "any source" matching, while
   physical observations must use source-aware requirements such as
-  `--require-observed-marker` so scheduled markers cannot certify observed
-  printer state.
+  `--require-observed-marker` so `scheduled-cli` markers cannot certify
+  observed printer state.
 
 ```text
-operator-pause-requested  # any source
+operator-pause-requested  # any source or scheduled-cli source
 observed-paused           # stdin/operator-observed source required
 observed-resumed          # stdin/operator-observed source required
 observed-completed        # stdin/operator-observed source required

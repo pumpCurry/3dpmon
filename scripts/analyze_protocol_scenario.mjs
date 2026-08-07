@@ -18,9 +18,9 @@
  * - {@link analyzeProtocolScenarioFromCli}：CLI options で scenario fixture を解析
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1315 (PR #432)
+ * @version 1.390.1316 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:09:55
+ * @lastModified 2026-08-08 08:19:49
  * -----------------------------------------------------------
  * @todo
  * - 標準 scenario profile を導入し、`--profile k2-printing` だけで必須条件を展開できるようにする
@@ -50,7 +50,7 @@ Options:
   --require-observed-marker <name>
                                Require a stdin/operator-observed marker by name. Repeatable.
   --require-scheduled-marker <name>
-                               Require a scheduled marker by name. Repeatable.
+                               Require a scheduled-cli marker by name. Repeatable.
   --require-payload-key <key>  Require a protocol payload key such as boxsInfo or printProgress. Repeatable.
   --pretty                    Print indented JSON.
   --help                      Show this help.
@@ -188,7 +188,7 @@ export async function analyzeProtocolScenarioFromCli(options) {
   const requiredMarkers = [
     ...anySourceMarkers,
     ...observedMarkers.map((name) => ({ name, source: "stdin" })),
-    ...scheduledMarkers.map((name) => ({ name, source: "scheduled" })),
+    ...scheduledMarkers.map((name) => ({ name, source: "scheduled-cli" })),
   ];
   return analyzeProtocolScenarioFixture(fixture, {
     expectedScenario: options.expectedScenario || undefined,

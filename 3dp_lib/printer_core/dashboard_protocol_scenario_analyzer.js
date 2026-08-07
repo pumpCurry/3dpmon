@@ -16,9 +16,9 @@
  * - {@link analyzeProtocolScenarioFixture}：fixture events と metadata を scenario report へ変換
  * - {@link eventHasPayloadKey}：protocol event が指定 payload key を含むか判定
  *
- * @version 1.390.1315 (PR #432)
+ * @version 1.390.1316 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:09:55
+ * @lastModified 2026-08-08 08:19:49
  * -----------------------------------------------------------
  * @todo
  * - K2 printing / paused / resumed / completed の実機 scenario fixture 取得後に標準profileを追加する
