@@ -40,6 +40,12 @@ Live K2-family test target:
   operator-observed evidence. If a scheduled marker does not fire inside the
   capture window, the capture is failed by validation instead of silently
   dropping the marker.
+- Before accepting physical-state scenario fixtures, run the offline analyzer
+  with the marker and inbound payload keys expected for that scenario. Example:
+
+```text
+node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/printing --require-validation-success --require-marker operator-print-start --require-payload-key printProgress
+```
 
 Fixture rules:
 
