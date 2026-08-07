@@ -110,4 +110,40 @@ describe("capture_protocol_fixture CLI helpers", () => {
 
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it("成功captureは3ファイルだけを置換しnotes.mdなどの付随ファイルを保持する", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "3dpmon-capture-success-test-"));
+    const outDir = path.join(root, "fixture");
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, "notes.md"), "manual note\n", "utf8");
+    fs.writeFileSync(path.join(outDir, "capture.json"), "{\"existing\":true}\n", "utf8");
+
+    const result = await captureProtocolFixture({
+      host: "127.0.0.1",
+      outDir,
+      durationMs: 100,
+      wsPort: 9999,
+      httpPort: 80,
+      sendBoxsInfo: false,
+      skipHttp: true,
+      skipWs: true,
+      requireHttp: false,
+      requireWs: false,
+      requireBoxsInfo: false,
+      minimumEvents: 0,
+      keepFailed: false,
+      model: "K1 Max",
+      attachment: "none",
+      scenario: "unit-success-capture",
+      notes: "",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.writtenOutDir).toBe(outDir);
+    expect(fs.readFileSync(path.join(outDir, "notes.md"), "utf8")).toBe("manual note\n");
+    expect(JSON.parse(fs.readFileSync(path.join(outDir, "capture.json"), "utf8")).metadata.capture.scenario)
+      .toBe("unit-success-capture");
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

@@ -18,9 +18,9 @@
  * - {@link recordPrinterCoreV3Identity}：観測 evidence を target へ保存
  * - {@link toComparablePrinterCoreV3Identity}：時刻差分を除いた比較用コピーを生成
  *
- * @version 1.390.1294 (PR #432)
+ * @version 1.390.1295 (PR #432)
  * @since   1.390.1292 (PR #432)
- * @lastModified 2026-08-07 08:39:00
+ * @lastModified 2026-08-07 09:18:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で Data Schema v3 の `devices` / `deviceEndpoints` store へ保存先を差し替える
@@ -71,6 +71,111 @@ export function toComparablePrinterCoreV3Identity(record) {
   delete comparable.lastMergeDecision;
   delete comparable.evidenceReasons;
   return comparable;
+}
+
+/**
+ * Printer Core v3 identity evidence 配列を比較用コピーへ変換する。
+ *
+ * 【詳細説明】
+ * - 複数 conflict / pending を保持する配列でも、検出時刻や監査メタデータだけの差分で
+ *   changed にならないようにする。
+ *
+ * @private
+ * @param {Array<object>|null|undefined} records - identity evidence 配列
+ * @returns {Array<object>} 比較用 evidence 配列
+ */
+function toComparablePrinterCoreV3IdentityList(records) {
+  return (Array.isArray(records) ? records : [])
+    .map((record) => toComparablePrinterCoreV3Identity(record))
+    .filter(Boolean);
+}
+
+/**
+ * connectionTarget 上の identity repository 状態を比較用にまとめる。
+ *
+ * 【詳細説明】
+ * - singleton と plural の両方を比較に含め、後方互換フィールドだけ更新された場合も検出する。
+ *
+ * @private
+ * @param {object} target - connectionTarget
+ * @returns {object} 比較用 repository 状態
+ */
+function toComparablePrinterCoreV3RepositoryState(target) {
+  return {
+    identity: toComparablePrinterCoreV3Identity(target?.printerCoreV3Identity),
+    conflict: toComparablePrinterCoreV3Identity(target?.printerCoreV3IdentityConflict),
+    pending: toComparablePrinterCoreV3Identity(target?.printerCoreV3PendingIdentityCandidate),
+    conflicts: toComparablePrinterCoreV3IdentityList(target?.printerCoreV3IdentityConflicts),
+    pendings: toComparablePrinterCoreV3IdentityList(target?.printerCoreV3PendingIdentityCandidates),
+  };
+}
+
+/**
+ * identity evidence を重複なく配列へ追加する。
+ *
+ * 【詳細説明】
+ * - `printerCoreV3IdentityConflict` などの singleton は古いコード向けの互換フィールドとして残す。
+ * - `printerCoreV3IdentityConflicts` などの plural 配列は、Data Schema v3 移行時に複数証拠を
+ *   失わないための dry-run evidence log として扱う。
+ *
+ * @private
+ * @param {object} target - connectionTarget
+ * @param {string} listKey - plural evidence 配列のプロパティ名
+ * @param {string} singletonKey - 後方互換 singleton プロパティ名
+ * @param {object|null|undefined} record - 追加する evidence
+ * @param {object=} options - 追加オプション
+ * @param {boolean=} options.updateSingleton - singleton もこの record で更新する場合 true
+ * @returns {boolean} 配列または singleton が変化した場合 true
+ */
+function appendPrinterCoreV3EvidenceRecord(target, listKey, singletonKey, record, options = {}) {
+  if (!target || !record) return false;
+  const updateSingleton = options.updateSingleton !== false;
+  const currentList = Array.isArray(target[listKey]) ? [...target[listKey]] : [];
+  const comparableRecord = JSON.stringify(toComparablePrinterCoreV3Identity(record));
+  const comparableSingleton = JSON.stringify(toComparablePrinterCoreV3Identity(target[singletonKey]));
+  const singletonChanged = (updateSingleton || !target[singletonKey]) &&
+    comparableSingleton !== comparableRecord;
+  const exists = currentList.some((entry) => {
+    return JSON.stringify(toComparablePrinterCoreV3Identity(entry)) === comparableRecord;
+  });
+  if (!exists) {
+    currentList.push(record);
+    target[listKey] = currentList;
+  } else if (!Array.isArray(target[listKey])) {
+    target[listKey] = currentList;
+  }
+  if (updateSingleton || !target[singletonKey]) {
+    target[singletonKey] = record;
+  }
+  return !exists || singletonChanged;
+}
+
+/**
+ * source target の identity evidence を target へ重複なく移送する。
+ *
+ * 【詳細説明】
+ * - source 側に plural 配列があれば全件をコピーし、旧形式の singleton しかない場合も取り込む。
+ * - target 側に singleton が既にある場合は、互換 singleton を上書きせず plural 配列へだけ追加する。
+ *
+ * @private
+ * @param {object} target - 統合先 connectionTarget
+ * @param {object} sourceTarget - 統合元 connectionTarget
+ * @param {string} listKey - plural evidence 配列のプロパティ名
+ * @param {string} singletonKey - 後方互換 singleton プロパティ名
+ * @returns {void}
+ */
+function transferPrinterCoreV3EvidenceRecords(target, sourceTarget, listKey, singletonKey) {
+  const sourceRecords = Array.isArray(sourceTarget?.[listKey]) ? sourceTarget[listKey] : [];
+  for (const record of sourceRecords) {
+    appendPrinterCoreV3EvidenceRecord(target, listKey, singletonKey, record, {
+      updateSingleton: !target[singletonKey],
+    });
+  }
+  if (sourceTarget?.[singletonKey]) {
+    appendPrinterCoreV3EvidenceRecord(target, listKey, singletonKey, sourceTarget[singletonKey], {
+      updateSingleton: !target[singletonKey],
+    });
+  }
 }
 
 /**
@@ -139,11 +244,7 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
       pending: target?.printerCoreV3PendingIdentityCandidate || null,
     };
   }
-  const before = JSON.stringify({
-    identity: toComparablePrinterCoreV3Identity(target.printerCoreV3Identity),
-    conflict: toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict),
-    pending: toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate),
-  });
+  const before = JSON.stringify(toComparablePrinterCoreV3RepositoryState(target));
 
   if (sourceTarget.printerCoreV3Identity && !target.printerCoreV3Identity) {
     target.printerCoreV3Identity = sourceTarget.printerCoreV3Identity;
@@ -153,15 +254,25 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
       sourceTarget.printerCoreV3Identity
     );
     if (decision.confidence === "conflict") {
-      target.printerCoreV3IdentityConflict = createOpenIdentityConflict(
-        target.printerCoreV3Identity,
-        sourceTarget.printerCoreV3Identity,
-        decision
+      appendPrinterCoreV3EvidenceRecord(
+        target,
+        "printerCoreV3IdentityConflicts",
+        "printerCoreV3IdentityConflict",
+        createOpenIdentityConflict(
+          target.printerCoreV3Identity,
+          sourceTarget.printerCoreV3Identity,
+          decision
+        )
       );
     } else if (!decision.merge || decision.confidence === "weak") {
-      target.printerCoreV3PendingIdentityCandidate = createPendingIdentityCandidate(
-        sourceTarget.printerCoreV3Identity,
-        decision
+      appendPrinterCoreV3EvidenceRecord(
+        target,
+        "printerCoreV3PendingIdentityCandidates",
+        "printerCoreV3PendingIdentityCandidate",
+        createPendingIdentityCandidate(
+          sourceTarget.printerCoreV3Identity,
+          decision
+        )
       );
     } else {
       target.printerCoreV3Identity = mergePrinterCoreV3IdentityRecords(
@@ -170,23 +281,27 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
       );
     }
   }
-  if (sourceTarget.printerCoreV3IdentityConflict && !target.printerCoreV3IdentityConflict) {
-    target.printerCoreV3IdentityConflict = sourceTarget.printerCoreV3IdentityConflict;
-  }
-  if (sourceTarget.printerCoreV3PendingIdentityCandidate && !target.printerCoreV3PendingIdentityCandidate) {
-    target.printerCoreV3PendingIdentityCandidate = sourceTarget.printerCoreV3PendingIdentityCandidate;
-  }
+  transferPrinterCoreV3EvidenceRecords(
+    target,
+    sourceTarget,
+    "printerCoreV3IdentityConflicts",
+    "printerCoreV3IdentityConflict"
+  );
+  transferPrinterCoreV3EvidenceRecords(
+    target,
+    sourceTarget,
+    "printerCoreV3PendingIdentityCandidates",
+    "printerCoreV3PendingIdentityCandidate"
+  );
 
-  const after = JSON.stringify({
-    identity: toComparablePrinterCoreV3Identity(target.printerCoreV3Identity),
-    conflict: toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict),
-    pending: toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate),
-  });
+  const after = JSON.stringify(toComparablePrinterCoreV3RepositoryState(target));
   return {
     changed: before !== after,
     identity: target.printerCoreV3Identity || null,
     conflict: target.printerCoreV3IdentityConflict || null,
     pending: target.printerCoreV3PendingIdentityCandidate || null,
+    conflicts: target.printerCoreV3IdentityConflicts || [],
+    pendings: target.printerCoreV3PendingIdentityCandidates || [],
   };
 }
 
@@ -328,9 +443,15 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
   };
 
   if (decision.confidence === "conflict") {
+    const before = JSON.stringify(toComparablePrinterCoreV3RepositoryState(target));
     const nextConflict = createOpenIdentityConflict(existing, candidate, decision);
-    if (JSON.stringify(toComparablePrinterCoreV3Identity(target.printerCoreV3IdentityConflict)) ===
-        JSON.stringify(toComparablePrinterCoreV3Identity(nextConflict))) {
+    appendPrinterCoreV3EvidenceRecord(
+      target,
+      "printerCoreV3IdentityConflicts",
+      "printerCoreV3IdentityConflict",
+      nextConflict
+    );
+    if (before === JSON.stringify(toComparablePrinterCoreV3RepositoryState(target))) {
       return {
         changed: false,
         identity: target.printerCoreV3Identity || null,
@@ -339,7 +460,6 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
         decision,
       };
     }
-    target.printerCoreV3IdentityConflict = nextConflict;
     return {
       changed: true,
       identity: target.printerCoreV3Identity || null,
@@ -350,9 +470,15 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
   }
 
   if (!decision.merge || (decision.confidence === "weak" && !options.allowWeakMerge)) {
+    const before = JSON.stringify(toComparablePrinterCoreV3RepositoryState(target));
     const nextPending = createPendingIdentityCandidate(candidate, decision);
-    if (JSON.stringify(toComparablePrinterCoreV3Identity(target.printerCoreV3PendingIdentityCandidate)) ===
-        JSON.stringify(toComparablePrinterCoreV3Identity(nextPending))) {
+    appendPrinterCoreV3EvidenceRecord(
+      target,
+      "printerCoreV3PendingIdentityCandidates",
+      "printerCoreV3PendingIdentityCandidate",
+      nextPending
+    );
+    if (before === JSON.stringify(toComparablePrinterCoreV3RepositoryState(target))) {
       return {
         changed: false,
         identity: target.printerCoreV3Identity || null,
@@ -361,7 +487,6 @@ export function recordPrinterCoreV3Identity(target, evidence, options = {}) {
         decision,
       };
     }
-    target.printerCoreV3PendingIdentityCandidate = nextPending;
     return {
       changed: true,
       identity: target.printerCoreV3Identity || null,

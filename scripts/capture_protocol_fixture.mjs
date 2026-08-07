@@ -17,9 +17,9 @@
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1294 (PR #432)
+ * @version 1.390.1295 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 08:43:00
+ * @lastModified 2026-08-07 09:24:00
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -345,6 +345,34 @@ export function sleep(ms) {
 }
 
 /**
+ * テキストファイルを同一ディレクトリ内の一時ファイル経由で置換する。
+ *
+ * 【詳細説明】
+ * - capture 成功時の正式 fixture 更新で、途中失敗時に壊れた部分ファイルを残しにくくする。
+ * - 置換対象ファイル以外の notes.md や photos/ などの付随ファイルには一切触れない。
+ *
+ * @function writeTextFileAtomically
+ * @param {string} filePath - 置換するファイルパス
+ * @param {string} text - 書き込むテキスト
+ * @returns {Promise<void>} 書き込み完了
+ * @throws {Error} 一時ファイル作成または rename に失敗した場合
+ * @example
+ * await writeTextFileAtomically("tests/fixtures/printers/k2-pro-cfs/capture.json", "{}\n");
+ */
+export async function writeTextFileAtomically(filePath, text) {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const tempPath = path.join(dir, `.${base}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(tempPath, text, "utf8");
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
+/**
  * fixture 3ファイルを指定ディレクトリへ書き込む。
  *
  * 【詳細説明】
@@ -354,26 +382,37 @@ export function sleep(ms) {
  * @function writeProtocolFixtureFiles
  * @param {string} outDir - 書き込み先ディレクトリ
  * @param {Object} fixture - ProtocolRecorder が export した fixture
+ * @param {Object=} options - 書き込みオプション
+ * @param {boolean=} options.atomic - 3ファイルを一時ファイル経由で置換する場合 true
  * @returns {Promise<void>} 書き込み完了
  * @throws {Error} ディレクトリ作成またはファイル書き込みに失敗した場合
  * @example
  * await writeProtocolFixtureFiles("tests/fixtures/printers/k2-pro-cfs", fixture);
  */
-export async function writeProtocolFixtureFiles(outDir, fixture) {
+export async function writeProtocolFixtureFiles(outDir, fixture, options = {}) {
   const metadata = fixture.metadata;
   await fs.mkdir(outDir, { recursive: true });
-  await fs.writeFile(path.join(outDir, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
-  await fs.writeFile(path.join(outDir, "capture.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
-  await fs.writeFile(path.join(outDir, "events.ndjson"), toFixtureNdjson(fixture.events), "utf8");
+  const files = [
+    ["metadata.json", `${JSON.stringify(metadata, null, 2)}\n`],
+    ["capture.json", `${JSON.stringify(fixture, null, 2)}\n`],
+    ["events.ndjson", toFixtureNdjson(fixture.events)],
+  ];
+  for (const [fileName, text] of files) {
+    const filePath = path.join(outDir, fileName);
+    if (options.atomic) {
+      await writeTextFileAtomically(filePath, text);
+    } else {
+      await fs.writeFile(filePath, text, "utf8");
+    }
+  }
 }
 
 /**
- * 成功した capture fixture を一時ディレクトリ経由で正式出力先へ置換する。
+ * 成功した capture fixture の3ファイルだけを正式出力先へ置換する。
  *
  * 【詳細説明】
  * - require 条件に失敗した capture は正式 fixture を上書きしない。
- * - 成功時だけ同一親ディレクトリ内の一時ディレクトリへ3ファイルを書き、最後に出力先を置換する。
- * - Windows では既存ディレクトリへの rename ができないため、短時間だけ backup へ退避してから差し替える。
+ * - 成功時でも notes.md や photos/ などの付随ファイルは残し、capture 由来の3ファイルだけを置換する。
  *
  * @function replaceProtocolFixtureDirectory
  * @param {string} outDir - 正式 fixture ディレクトリ
@@ -384,35 +423,7 @@ export async function writeProtocolFixtureFiles(outDir, fixture) {
  * await replaceProtocolFixtureDirectory("tests/fixtures/printers/k2-pro-cfs", fixture);
  */
 export async function replaceProtocolFixtureDirectory(outDir, fixture) {
-  const parentDir = path.dirname(path.resolve(outDir));
-  const baseName = path.basename(path.resolve(outDir));
-  const tempDir = path.join(parentDir, `.protocol-capture-${baseName}-${randomUUID()}`);
-  const backupDir = path.join(parentDir, `.protocol-capture-${baseName}-backup-${randomUUID()}`);
-  let backupCreated = false;
-
-  await writeProtocolFixtureFiles(tempDir, fixture);
-  try {
-    await fs.rename(outDir, backupDir);
-    backupCreated = true;
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      await fs.rm(tempDir, { recursive: true, force: true });
-      throw error;
-    }
-  }
-
-  try {
-    await fs.rename(tempDir, outDir);
-    if (backupCreated) {
-      await fs.rm(backupDir, { recursive: true, force: true });
-    }
-  } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    if (backupCreated) {
-      await fs.rename(backupDir, outDir);
-    }
-    throw error;
-  }
+  await writeProtocolFixtureFiles(outDir, fixture, { atomic: true });
   return outDir;
 }
 

@@ -243,6 +243,83 @@ describe("dashboard_device_identity_repository", () => {
     expect(current.printerCoreV3IdentityConflict.conflictingCandidate.deviceIdSeed).toBe("serial:k2pro-serial-b");
   });
 
+  it("source既存conflictとtransfer中に発生した新規conflictを両方保持する", () => {
+    const current = { dest: "203.0.113.21:9999", hostname: "K2Pro-Test" };
+    const stale = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(current, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-A",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.21",
+    });
+    recordPrinterCoreV3Identity(stale, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-B",
+      mac: "66778899AABB",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+    recordPrinterCoreV3Identity(stale, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-C",
+      mac: "66778899AABB",
+    }, {
+      endpointAddress: "203.0.113.20",
+    });
+
+    const transfer = transferPrinterCoreV3IdentityRecords(current, stale);
+    const conflictPairs = current.printerCoreV3IdentityConflicts.map((conflictRecord) => {
+      return [
+        conflictRecord.existingIdentity.deviceIdSeed,
+        conflictRecord.conflictingCandidate.deviceIdSeed,
+      ];
+    });
+
+    expect(transfer.changed).toBe(true);
+    expect(current.printerCoreV3IdentityConflict.existingIdentity.deviceIdSeed).toBe("serial:k2pro-serial-a");
+    expect(current.printerCoreV3IdentityConflict.conflictingCandidate.deviceIdSeed).toBe("serial:k2pro-serial-b");
+    expect(conflictPairs).toEqual([
+      ["serial:k2pro-serial-a", "serial:k2pro-serial-b"],
+      ["serial:k2pro-serial-b", "serial:k2pro-serial-c"],
+    ]);
+  });
+
+  it("target/source双方のpendingをtransfer後もplural配列に保持する", () => {
+    const current = { dest: "203.0.113.21:9999", hostname: "K2Pro-Test" };
+    const stale = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
+    recordPrinterCoreV3Identity(current, {
+      hostname: "K2Pro-Test",
+      sn: "K2PRO-SERIAL-A",
+      mac: "AA1122334455",
+    }, {
+      endpointAddress: "203.0.113.21",
+    });
+    recordPrinterCoreV3Identity(current, {
+      hostname: "Unknown-A",
+      stableMachineId: "STABLE-PENDING-A",
+      mac: "66778899AABB",
+    }, {
+      endpointAddress: "203.0.113.31",
+    });
+    recordPrinterCoreV3Identity(stale, {
+      hostname: "Unknown-B",
+      stableMachineId: "STABLE-PENDING-B",
+      mac: "CCDDEEFF0011",
+    }, {
+      endpointAddress: "203.0.113.32",
+    });
+
+    transferPrinterCoreV3IdentityRecords(current, stale);
+
+    expect(current.printerCoreV3PendingIdentityCandidates.map((pendingRecord) => {
+      return pendingRecord.candidate.deviceIdSeed;
+    })).toEqual([
+      "machine:stable-pending-a",
+      "machine:stable-pending-b",
+    ]);
+  });
+
   it("DHCP統合でweakな旧target identityはpendingへ隔離する", () => {
     const current = { dest: "203.0.113.21:9999", hostname: "K2Pro-Test" };
     const stale = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
