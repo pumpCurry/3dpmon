@@ -18,9 +18,9 @@
  * - {@link mergeCapabilitySets}：複数 capability set を重複なく統合
  * - {@link inferK1Capabilities}：K1 系 payload から capability set を推定
  *
- * @version 1.390.1296 (PR #432)
+ * @version 1.390.1297 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 11:42:13
+ * @lastModified 2026-08-07 12:22:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo / CFS topology の capability を Gate 3 以降で追加する
@@ -230,7 +230,7 @@ export function inferK1Capabilities(payload) {
     values.push(PRINTER_CAPABILITIES.STATUS_ERROR);
   }
   if (hasAny(payload, ["lightSw"])) {
-    values.push(PRINTER_CAPABILITIES.STATUS_LIGHT, PRINTER_CAPABILITIES.COMMAND_LED);
+    values.push(PRINTER_CAPABILITIES.STATUS_LIGHT);
   }
   if (hasAny(payload, ["aiDetection", "aiSw", "aiPausePrint", "aiFirstFloor"])) {
     values.push(PRINTER_CAPABILITIES.STATUS_AI_DETECTION);

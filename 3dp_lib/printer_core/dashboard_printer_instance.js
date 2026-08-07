@@ -16,9 +16,9 @@
  * - {@link PrinterInstance}：物理プリンタ単位の normalized state holder
  * - {@link createPrinterInstance}：PrinterInstance の factory
  *
- * @version 1.390.1296 (PR #432)
+ * @version 1.390.1297 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 11:42:13
+ * @lastModified 2026-08-07 12:22:00
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の device/session repository と接続する
@@ -27,7 +27,31 @@
 "use strict";
 
 import { mergeCapabilitySets } from "./dashboard_capabilities.js";
-import { createEmptyNormalizedPrinterState } from "./dashboard_normalized_state.js";
+import {
+  applyNormalizedStatePatch,
+  cloneNormalizedValue,
+  createEmptyNormalizedPrinterState,
+} from "./dashboard_normalized_state.js";
+
+/**
+ * 必須 ID を空文字ではない文字列へ正規化する。
+ *
+ * 【詳細説明】
+ * - unknown-device への混入を防ぐため、deviceId/sessionId は Core 境界で fail-closed にする。
+ *
+ * @private
+ * @param {*} value - ID 候補
+ * @param {string} name - エラー表示用の ID 名
+ * @returns {string} 正規化済み ID
+ * @throws {TypeError} 空 ID の場合
+ */
+function requireNonEmptyId(value, name) {
+  const id = String(value ?? "").trim();
+  if (!id) {
+    throw new TypeError(`PrinterInstance requires a non-empty ${name}.`);
+  }
+  return id;
+}
 
 /**
  * 1台の物理プリンタに対応する Printer Core v3 Instance。
@@ -55,8 +79,8 @@ export class PrinterInstance {
     if (!options?.adapter || typeof options.adapter.normalizeFrame !== "function") {
       throw new TypeError("PrinterInstance requires an adapter with normalizeFrame().");
     }
-    this.deviceId = String(options.deviceId || "unknown-device");
-    this.sessionId = String(options.sessionId || `session:${this.deviceId}`);
+    this.deviceId = requireNonEmptyId(options.deviceId, "deviceId");
+    this.sessionId = requireNonEmptyId(options.sessionId, "sessionId");
     this.adapter = options.adapter;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.sequence = 0;
@@ -91,9 +115,19 @@ export class PrinterInstance {
    * const state = instance.observeFrame(payload);
    */
   observeFrame(frame, context = {}) {
+    const incomingSessionId = String(context.sessionId ?? "").trim();
+    if (incomingSessionId !== this.sessionId) {
+      return {
+        accepted: false,
+        reason: "stale-session",
+        deviceId: this.deviceId,
+        sessionId: incomingSessionId || null,
+        activeSessionId: this.sessionId,
+      };
+    }
     const nextSequence = this.sequence + 1;
     const receivedAt = context.receivedAt ?? this.clock().toISOString();
-    const nextState = this.adapter.normalizeFrame(frame, {
+    const normalizedPatch = this.adapter.normalizeFrame(frame, {
       ...context,
       deviceId: this.deviceId,
       sessionId: this.sessionId,
@@ -101,19 +135,19 @@ export class PrinterInstance {
       receivedAt,
     });
     this.sequence = nextSequence;
-    this.capabilities = mergeCapabilitySets(this.capabilities, nextState.capabilities);
+    this.capabilities = mergeCapabilitySets(this.capabilities, normalizedPatch.capabilities);
     this.state = {
-      ...nextState,
+      ...applyNormalizedStatePatch(this.state, normalizedPatch),
       capabilities: this.capabilities,
     };
-    return this.state;
+    return cloneNormalizedValue(this.state);
   }
 
   /**
    * 最新 NormalizedPrinterState を返す。
    *
    * 【詳細説明】
-   * - 呼び出し側が直接 mutation しないよう、トップレベルだけ shallow copy して返す。
+   * - 呼び出し側が直接 mutation しないよう、deep clone を返す。
    *
    * @function getState
    * @returns {object} 最新 NormalizedPrinterState
@@ -121,7 +155,7 @@ export class PrinterInstance {
    * const current = instance.getState();
    */
   getState() {
-    return { ...this.state };
+    return cloneNormalizedValue(this.state);
   }
 }
 

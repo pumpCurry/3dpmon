@@ -17,9 +17,9 @@
  * - {@link K1Adapter}：K1 系 payload を正規化する Adapter class
  * - {@link createK1Adapter}：K1Adapter の factory
  *
- * @version 1.390.1296 (PR #432)
+ * @version 1.390.1297 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 11:42:13
+ * @lastModified 2026-08-07 12:22:00
  * -----------------------------------------------------------
  * @todo
  * - K1C 実環境 fixture 取得後に K1C/CFS-C 固有差分を capability catalog へ追加する
@@ -28,7 +28,7 @@
 "use strict";
 
 import { inferK1Capabilities } from "./dashboard_capabilities.js";
-import { normalizeK1StatusPayload } from "./dashboard_normalized_state.js";
+import { createK1StatusPatch } from "./dashboard_normalized_state.js";
 
 /**
  * K1 Adapter の既定 ID。
@@ -123,11 +123,11 @@ export class K1Adapter {
   }
 
   /**
-   * K1 系 frame を NormalizedPrinterState へ変換する。
+   * K1 系 frame を Normalized Patch へ変換する。
    *
    * 【詳細説明】
-   * - 変換不能な frame は空 state として返し、呼び出し側が sequence を維持できるようにする。
-   * - Gate 2 ではこの戻り値を UI authority にせず、legacy 比較と smoke test にのみ使う。
+   * - 変換不能な frame は空 patch として返し、呼び出し側が sequence を維持できるようにする。
+   * - Gate 2 ではこの戻り値を Instance が既存 state へ適用し、legacy 比較と smoke test にのみ使う。
    *
    * @function normalizeFrame
    * @param {object|null|undefined} frame - fixture event、transport frame、または raw payload
@@ -136,14 +136,14 @@ export class K1Adapter {
    * @param {?string=} context.sessionId - 接続セッション ID
    * @param {?number=} context.sequence - Instance 内の受信順序
    * @param {?string=} context.receivedAt - 受信時刻 ISO 文字列
-   * @returns {object} 正規化済み NormalizedPrinterState
+   * @returns {object} 正規化済み Normalized Patch
    * @example
    * const state = adapter.normalizeFrame(event, { sequence: 1 });
    */
   normalizeFrame(frame, context = {}) {
     const payload = extractK1StatusPayload(frame);
     const capabilities = inferK1Capabilities(payload);
-    return normalizeK1StatusPayload(payload, {
+    return createK1StatusPatch(payload, {
       ...context,
       adapterId: this.adapterId,
       protocol: this.protocol,

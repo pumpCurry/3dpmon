@@ -8,19 +8,20 @@
  * @module dashboard_normalized_state
  *
  * 【機能内容サマリ】
- * - Adapter が生成する NormalizedPrinterState の標準形を提供
- * - K1 系 WS9999 status payload を legacy processData と比較しやすい状態へ正規化
+ * - Adapter が生成する NormalizedPrinterState と Normalized Patch の標準形を提供
+ * - K1 系 WS9999 status payload を legacy processData と比較しやすい patch へ正規化
  * - 温度、ファン、印刷状態、位置、エラー、AI/カメラ能力を意味単位へ分解
  *
  * 【公開関数一覧】
  * - {@link createEmptyNormalizedPrinterState}：空の NormalizedPrinterState を生成
- * - {@link normalizeK1StatusPayload}：K1 系 payload を NormalizedPrinterState へ変換
+ * - {@link createK1StatusPatch}：K1 系 payload を Normalized Patch へ変換
+ * - {@link applyNormalizedStatePatch}：Normalized Patch を既存 state へ適用
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1296 (PR #432)
+ * @version 1.390.1297 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 11:42:13
+ * @lastModified 2026-08-07 12:22:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で K2 Pro Combo / CFS topology の正規化フィールドを追加する
@@ -39,6 +40,16 @@ import { EMPTY_CAPABILITY_SET } from "./dashboard_capabilities.js";
  * @constant {number}
  */
 export const NORMALIZED_PRINTER_STATE_SCHEMA_VERSION = 1;
+
+/**
+ * Normalized Patch の schema version。
+ *
+ * 【詳細説明】
+ * - state と patch の version を分け、差分 frame を扱う境界を明示する。
+ *
+ * @constant {number}
+ */
+export const NORMALIZED_PRINTER_PATCH_SCHEMA_VERSION = 1;
 
 /**
  * K1 系印刷状態コードと Printer Core v3 ラベルの対応。
@@ -111,7 +122,13 @@ export function toPercentNumber(value) {
  * @returns {?number} 最初に変換できた有限 number、または null
  */
 function firstFiniteNumber(values) {
-  for (const value of values) {
+  for (const entry of values) {
+    if (entry && typeof entry === "object" && !entry.present) {
+      continue;
+    }
+    const value = entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "value")
+      ? entry.value
+      : entry;
     const numberValue = toFiniteNumber(value);
     if (numberValue !== null) {
       return numberValue;
@@ -131,7 +148,13 @@ function firstFiniteNumber(values) {
  * @returns {?number} 最初に変換できた percent number、または null
  */
 function firstPercentNumber(values) {
-  for (const value of values) {
+  for (const entry of values) {
+    if (entry && typeof entry === "object" && !entry.present) {
+      continue;
+    }
+    const value = entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "value")
+      ? entry.value
+      : entry;
     const percentValue = toPercentNumber(value);
     if (percentValue !== null) {
       return percentValue;
@@ -156,6 +179,87 @@ function toNullableString(value) {
     return null;
   }
   return String(value);
+}
+
+/**
+ * payload が指定 key を持つか判定する。
+ *
+ * 【詳細説明】
+ * - 差分 frame では「key が無い」と「key があり null が届いた」を区別する必要がある。
+ *
+ * @private
+ * @param {object|null|undefined} payload - WS9999 status payload
+ * @param {string} key - 検査する key
+ * @returns {boolean} key が存在する場合 true
+ */
+function hasOwn(payload, key) {
+  return !!payload && Object.prototype.hasOwnProperty.call(payload, key);
+}
+
+/**
+ * 条件付きで object に値を追加する。
+ *
+ * 【詳細説明】
+ * - key が観測された場合だけ patch に値を入れ、未観測値で既存 state を消さない。
+ *
+ * @private
+ * @param {object} target - 追加先 object
+ * @param {string} key - 追加する key
+ * @param {boolean} present - payload に key が存在する場合 true
+ * @param {*} value - 追加する値
+ * @returns {void}
+ */
+function setIfPresent(target, key, present, value) {
+  if (present) {
+    target[key] = value;
+  }
+}
+
+/**
+ * 追加済み key を持つ object だけ返す。
+ *
+ * 【詳細説明】
+ * - 空 object を patch に入れないことで、`applyNormalizedStatePatch()` の処理対象を明確にする。
+ *
+ * @private
+ * @param {object} value - 候補 object
+ * @returns {object|undefined} key がある object、または undefined
+ */
+function omitEmpty(value) {
+  return Object.keys(value).length > 0 ? value : undefined;
+}
+
+/**
+ * payload field を presence 情報付きで返す。
+ *
+ * 【詳細説明】
+ * - `firstFiniteNumber()` などへ「欠落 key」を伝えるための小さな wrapper。
+ *
+ * @private
+ * @param {object} payload - WS9999 status payload
+ * @param {string} key - 取得する key
+ * @returns {{present: boolean, value: *}} presence 付き値
+ */
+function field(payload, key) {
+  return {
+    present: hasOwn(payload, key),
+    value: payload?.[key],
+  };
+}
+
+/**
+ * 数値 flag を boolean へ変換する。
+ *
+ * 【詳細説明】
+ * - 変換不能な値は null にし、false と未観測を区別する。
+ *
+ * @private
+ * @param {*} value - flag 候補
+ * @returns {?boolean} boolean、または null
+ */
+function toBooleanFlag(value) {
+  const numberValue = toFiniteNumber(value);
+  return numberValue === null ? null : numberValue === 1;
 }
 
 /**
@@ -211,25 +315,50 @@ function listRawKeys(payload) {
  *
  * @private
  * @param {object} payload - K1 系 WS9999 status payload
+ * @param {object=} options - 正規化オプション
+ * @param {boolean=} options.patch - 差分 patch として未観測 key を省略する場合 true
  * @returns {object} 正規化済み温度 object
  */
-function normalizeTemperatures(payload) {
+function normalizeTemperatures(payload, options = {}) {
+  if (!options.patch) {
+    return {
+      nozzle: {
+        current: toFiniteNumber(payload.nozzleTemp),
+        target: toFiniteNumber(payload.targetNozzleTemp),
+        max: toFiniteNumber(payload.maxNozzleTemp),
+      },
+      bed: {
+        current: firstFiniteNumber([payload.bedTemp0, payload.bedTemp1, payload.bedTemp2]),
+        target: firstFiniteNumber([payload.targetBedTemp0, payload.targetBedTemp1, payload.targetBedTemp2]),
+        max: toFiniteNumber(payload.maxBedTemp),
+      },
+      chamber: {
+        current: toFiniteNumber(payload.boxTemp),
+        target: toFiniteNumber(payload.targetBoxTemp),
+        max: toFiniteNumber(payload.maxBoxTemp),
+      },
+    };
+  }
+  const nozzle = {};
+  const bed = {};
+  const chamber = {};
+  setIfPresent(nozzle, "current", hasOwn(payload, "nozzleTemp"), toFiniteNumber(payload.nozzleTemp));
+  setIfPresent(nozzle, "target", hasOwn(payload, "targetNozzleTemp"), toFiniteNumber(payload.targetNozzleTemp));
+  setIfPresent(nozzle, "max", hasOwn(payload, "maxNozzleTemp"), toFiniteNumber(payload.maxNozzleTemp));
+  if (hasOwn(payload, "bedTemp0") || hasOwn(payload, "bedTemp1") || hasOwn(payload, "bedTemp2")) {
+    bed.current = firstFiniteNumber([field(payload, "bedTemp0"), field(payload, "bedTemp1"), field(payload, "bedTemp2")]);
+  }
+  if (hasOwn(payload, "targetBedTemp0") || hasOwn(payload, "targetBedTemp1") || hasOwn(payload, "targetBedTemp2")) {
+    bed.target = firstFiniteNumber([field(payload, "targetBedTemp0"), field(payload, "targetBedTemp1"), field(payload, "targetBedTemp2")]);
+  }
+  setIfPresent(bed, "max", hasOwn(payload, "maxBedTemp"), toFiniteNumber(payload.maxBedTemp));
+  setIfPresent(chamber, "current", hasOwn(payload, "boxTemp"), toFiniteNumber(payload.boxTemp));
+  setIfPresent(chamber, "target", hasOwn(payload, "targetBoxTemp"), toFiniteNumber(payload.targetBoxTemp));
+  setIfPresent(chamber, "max", hasOwn(payload, "maxBoxTemp"), toFiniteNumber(payload.maxBoxTemp));
   return {
-    nozzle: {
-      current: toFiniteNumber(payload.nozzleTemp),
-      target: toFiniteNumber(payload.targetNozzleTemp),
-      max: toFiniteNumber(payload.maxNozzleTemp),
-    },
-    bed: {
-      current: firstFiniteNumber([payload.bedTemp0, payload.bedTemp1, payload.bedTemp2]),
-      target: firstFiniteNumber([payload.targetBedTemp0, payload.targetBedTemp1, payload.targetBedTemp2]),
-      max: toFiniteNumber(payload.maxBedTemp),
-    },
-    chamber: {
-      current: toFiniteNumber(payload.boxTemp),
-      target: toFiniteNumber(payload.targetBoxTemp),
-      max: toFiniteNumber(payload.maxBoxTemp),
-    },
+    ...(omitEmpty(nozzle) ? { nozzle } : {}),
+    ...(omitEmpty(bed) ? { bed } : {}),
+    ...(omitEmpty(chamber) ? { chamber } : {}),
   };
 }
 
@@ -241,13 +370,27 @@ function normalizeTemperatures(payload) {
  *
  * @private
  * @param {object} payload - K1 系 WS9999 status payload
+ * @param {object=} options - 正規化オプション
+ * @param {boolean=} options.patch - 差分 patch として未観測 key を省略する場合 true
  * @returns {object} 正規化済み fan object
  */
-function normalizeFans(payload) {
+function normalizeFans(payload, options = {}) {
+  const partCooling = {};
+  const auxiliary = {};
+  const chamber = {};
+  const partCoolingLegacyPct = options.patch ? null : firstPercentNumber([payload.modelFanPct]);
+  const auxiliaryLegacyPct = options.patch ? null : firstPercentNumber([payload.auxiliaryFanPct]);
+  const chamberLegacyPct = options.patch ? null : firstPercentNumber([payload.caseFanPct]);
+  setIfPresent(partCooling, "enabled", !options.patch || hasOwn(payload, "fan"), toBooleanFlag(payload.fan));
+  setIfPresent(partCooling, "percent", !options.patch || hasOwn(payload, "modelFanPct"), partCoolingLegacyPct ?? toPercentNumber(payload.modelFanPct));
+  setIfPresent(auxiliary, "enabled", !options.patch || hasOwn(payload, "fanAuxiliary"), toBooleanFlag(payload.fanAuxiliary));
+  setIfPresent(auxiliary, "percent", !options.patch || hasOwn(payload, "auxiliaryFanPct"), auxiliaryLegacyPct ?? toPercentNumber(payload.auxiliaryFanPct));
+  setIfPresent(chamber, "enabled", !options.patch || hasOwn(payload, "fanCase"), toBooleanFlag(payload.fanCase));
+  setIfPresent(chamber, "percent", !options.patch || hasOwn(payload, "caseFanPct"), chamberLegacyPct ?? toPercentNumber(payload.caseFanPct));
   return {
-    partCoolingPct: firstPercentNumber([payload.modelFanPct, payload.fan]),
-    auxiliaryPct: firstPercentNumber([payload.auxiliaryFanPct, payload.fanAuxiliary]),
-    chamberPct: firstPercentNumber([payload.caseFanPct, payload.fanCase]),
+    ...(omitEmpty(partCooling) ? { partCooling } : {}),
+    ...(omitEmpty(auxiliary) ? { auxiliary } : {}),
+    ...(omitEmpty(chamber) ? { chamber } : {}),
   };
 }
 
@@ -297,6 +440,37 @@ function normalizePrint(payload) {
 }
 
 /**
+ * 印刷ジョブ系 payload を差分 patch へ変換する。
+ *
+ * 【詳細説明】
+ * - 受信 key だけを patch に入れ、差分 frame で filename や state を消さない。
+ *
+ * @private
+ * @param {object} payload - K1 系 WS9999 status payload
+ * @returns {object|undefined} print patch、または undefined
+ */
+function createPrintPatch(payload) {
+  const patch = {};
+  if (hasOwn(payload, "state")) {
+    Object.assign(patch, normalizePrintState(payload.state));
+  }
+  setIfPresent(patch, "deviceStateCode", hasOwn(payload, "deviceState"), toFiniteNumber(payload.deviceState));
+  if (hasOwn(payload, "printProgress") || hasOwn(payload, "dProgress")) {
+    patch.progressPct = firstPercentNumber([field(payload, "printProgress"), field(payload, "dProgress")]);
+  }
+  setIfPresent(patch, "layer", hasOwn(payload, "layer"), toFiniteNumber(payload.layer));
+  setIfPresent(patch, "totalLayer", hasOwn(payload, "TotalLayer"), toFiniteNumber(payload.TotalLayer));
+  setIfPresent(patch, "remainingSec", hasOwn(payload, "printLeftTime"), toFiniteNumber(payload.printLeftTime));
+  setIfPresent(patch, "elapsedSec", hasOwn(payload, "printJobTime"), toFiniteNumber(payload.printJobTime));
+  if (hasOwn(payload, "printFileName") || hasOwn(payload, "fileName")) {
+    patch.fileName = toNullableString(payload.printFileName ?? payload.fileName);
+  }
+  setIfPresent(patch, "jobId", hasOwn(payload, "printId"), toNullableString(payload.printId));
+  setIfPresent(patch, "startedAtSec", hasOwn(payload, "printStartTime"), toFiniteNumber(payload.printStartTime));
+  return omitEmpty(patch);
+}
+
+/**
  * エラー payload を NormalizedPrinterState の error object へ変換する。
  *
  * 【詳細説明】
@@ -328,15 +502,17 @@ function normalizeError(payload) {
  *
  * @private
  * @param {object} payload - K1 系 WS9999 status payload
+ * @param {object=} options - 正規化オプション
+ * @param {boolean=} options.patch - 差分 patch として未観測 key を省略する場合 true
  * @returns {object} 正規化済み AI object
  */
-function normalizeAi(payload) {
-  return {
-    detection: toFiniteNumber(payload.aiDetection),
-    switchEnabled: toFiniteNumber(payload.aiSw),
-    pauseOnDetection: toFiniteNumber(payload.aiPausePrint),
-    firstLayer: toFiniteNumber(payload.aiFirstFloor),
-  };
+function normalizeAi(payload, options = {}) {
+  const ai = {};
+  setIfPresent(ai, "detection", !options.patch || hasOwn(payload, "aiDetection"), toFiniteNumber(payload.aiDetection));
+  setIfPresent(ai, "switchEnabled", !options.patch || hasOwn(payload, "aiSw"), toFiniteNumber(payload.aiSw));
+  setIfPresent(ai, "pauseOnDetection", !options.patch || hasOwn(payload, "aiPausePrint"), toFiniteNumber(payload.aiPausePrint));
+  setIfPresent(ai, "firstLayer", !options.patch || hasOwn(payload, "aiFirstFloor"), toFiniteNumber(payload.aiFirstFloor));
+  return ai;
 }
 
 /**
@@ -347,14 +523,18 @@ function normalizeAi(payload) {
  *
  * @private
  * @param {object} payload - K1 系 WS9999 status payload
+ * @param {object=} options - 正規化オプション
+ * @param {boolean=} options.patch - 差分 patch として未観測 key を省略する場合 true
  * @returns {object} 正規化済み camera object
  */
-function normalizeCamera(payload) {
-  return {
-    mjpeg: Number(payload.video) === 1 || Number(payload.video1) === 1,
-    webrtc: Number(payload.webrtcSupport) === 1,
-    timelapseEnabled: Number(payload.videoElapse) === 1,
-  };
+function normalizeCamera(payload, options = {}) {
+  const camera = {};
+  if (!options.patch || hasOwn(payload, "video") || hasOwn(payload, "video1")) {
+    camera.mjpeg = Number(payload.video) === 1 || Number(payload.video1) === 1;
+  }
+  setIfPresent(camera, "webrtc", !options.patch || hasOwn(payload, "webrtcSupport"), Number(payload.webrtcSupport) === 1);
+  setIfPresent(camera, "timelapseEnabled", !options.patch || hasOwn(payload, "videoElapse"), Number(payload.videoElapse) === 1);
+  return camera;
 }
 
 /**
@@ -401,8 +581,152 @@ export function createEmptyNormalizedPrinterState(options = {}) {
       rawPosition: null,
     },
     error: normalizeError({}),
-    camera: normalizeCamera({}),
+    camera: {
+      mjpeg: null,
+      webrtc: null,
+      timelapseEnabled: null,
+    },
     ai: normalizeAi({}),
+  };
+}
+
+/**
+ * object を JSON 安全な deep clone にする。
+ *
+ * 【詳細説明】
+ * - NormalizedState は plain data のみなので、structuredClone が無い環境では JSON clone に fallback する。
+ *
+ * @function cloneNormalizedValue
+ * @param {*} value - clone 対象
+ * @returns {*} clone 済み値
+ * @example
+ * const immutableCopy = cloneNormalizedValue(state);
+ */
+export function cloneNormalizedValue(value) {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * object を深く merge する。
+ *
+ * 【詳細説明】
+ * - patch に存在する key だけを既存値へ反映する。
+ * - null は明示的な更新値として扱い、欠落 key と区別する。
+ *
+ * @private
+ * @param {*} base - merge 元
+ * @param {*} patch - merge patch
+ * @returns {*} merge 済み値
+ */
+function deepMergePatch(base, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    return cloneNormalizedValue(patch);
+  }
+  const next = base && typeof base === "object" && !Array.isArray(base)
+    ? cloneNormalizedValue(base)
+    : {};
+  for (const [key, value] of Object.entries(patch)) {
+    next[key] = value && typeof value === "object" && !Array.isArray(value)
+      ? deepMergePatch(next[key], value)
+      : cloneNormalizedValue(value);
+  }
+  return next;
+}
+
+/**
+ * Normalized Patch を既存 NormalizedPrinterState へ適用する。
+ *
+ * 【詳細説明】
+ * - 実機の差分 WS frame に合わせ、patch に含まれる field だけを更新する。
+ * - source は最新 frame の metadata として毎回更新し、state 本体は deep merge する。
+ *
+ * @function applyNormalizedStatePatch
+ * @param {object} state - 適用前 NormalizedPrinterState
+ * @param {object} normalizedPatch - Adapter が返した Normalized Patch
+ * @returns {object} 適用後 NormalizedPrinterState
+ * @example
+ * const nextState = applyNormalizedStatePatch(currentState, patch);
+ */
+export function applyNormalizedStatePatch(state, normalizedPatch) {
+  const next = deepMergePatch(state, normalizedPatch?.patch || {});
+  return {
+    ...next,
+    schemaVersion: NORMALIZED_PRINTER_STATE_SCHEMA_VERSION,
+    source: {
+      ...state.source,
+      ...(normalizedPatch?.source || {}),
+    },
+  };
+}
+
+/**
+ * K1 系 WS9999 status payload を Normalized Patch へ変換する。
+ *
+ * 【詳細説明】
+ * - payload に含まれる key だけを patch に入れ、欠落 key で既存 state を消さない。
+ * - `{key:null}` は明示的な null 更新として扱う。
+ *
+ * @function createK1StatusPatch
+ * @param {object|null|undefined} payload - K1 系 WS9999 status payload
+ * @param {object=} options - 正規化オプション
+ * @param {?string=} options.deviceId - 物理機 identity
+ * @param {?string=} options.sessionId - 接続セッション ID
+ * @param {?string=} options.adapterId - Adapter ID
+ * @param {?string=} options.protocol - 受信 protocol 名
+ * @param {?number=} options.sequence - Instance 内の受信順序
+ * @param {?string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @param {object=} options.capabilities - Adapter が推定した capability set
+ * @returns {object} Normalized Patch
+ * @example
+ * const patch = createK1StatusPatch(payload, { adapterId: "creality-k1" });
+ */
+export function createK1StatusPatch(payload, options = {}) {
+  const rawPayload = payload && typeof payload === "object" ? payload : {};
+  const patch = {};
+  const identity = {};
+  const temperatures = normalizeTemperatures(rawPayload, { patch: true });
+  const fans = normalizeFans(rawPayload, { patch: true });
+  const print = createPrintPatch(rawPayload);
+  const ai = normalizeAi(rawPayload, { patch: true });
+  const camera = normalizeCamera(rawPayload, { patch: true });
+
+  setIfPresent(identity, "deviceId", true, options.deviceId ?? null);
+  setIfPresent(identity, "sessionId", true, options.sessionId ?? null);
+  setIfPresent(identity, "reportedModel", hasOwn(rawPayload, "model"), toNullableString(rawPayload.model));
+  if (hasOwn(rawPayload, "hostname") || hasOwn(rawPayload, "deviceName")) {
+    identity.reportedHostname = toNullableString(rawPayload.hostname ?? rawPayload.deviceName);
+  }
+  setIfPresent(patch, "identity", true, identity);
+  setIfPresent(patch, "temperatures", Object.keys(temperatures).length > 0, temperatures);
+  setIfPresent(patch, "fans", Object.keys(fans).length > 0, fans);
+  setIfPresent(patch, "light", hasOwn(rawPayload, "lightSw"), { enabled: toBooleanFlag(rawPayload.lightSw) });
+  setIfPresent(patch, "print", !!print, print);
+  if (hasOwn(rawPayload, "curPosition")) {
+    const position = parseK1Position(rawPayload.curPosition);
+    patch.motion = {
+      position: position ? { x: position.x, y: position.y, z: position.z } : null,
+      rawPosition: position?.raw ?? null,
+    };
+  }
+  setIfPresent(patch, "error", hasOwn(rawPayload, "err"), normalizeError(rawPayload));
+  setIfPresent(patch, "camera", Object.keys(camera).length > 0, camera);
+  setIfPresent(patch, "ai", Object.keys(ai).length > 0, ai);
+
+  return {
+    kind: "state-patch",
+    schemaVersion: NORMALIZED_PRINTER_PATCH_SCHEMA_VERSION,
+    source: {
+      adapterId: options.adapterId ?? "creality-k1",
+      protocol: options.protocol ?? "ws9999",
+      sequence: options.sequence ?? 0,
+      receivedAt: options.receivedAt ?? null,
+      rawKeys: listRawKeys(rawPayload),
+    },
+    capabilities: options.capabilities ?? EMPTY_CAPABILITY_SET,
+    patch,
   };
 }
 

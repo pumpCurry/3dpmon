@@ -15,8 +15,9 @@ K1 transmission and UI authority must not switch in this gate. The new path has 
 Gate 2 introduces the first read-only Printer Core body:
 
 - `PrinterInstance` holds one physical printer's latest normalized state and monotonic sequence.
-- `PrinterFacade` owns instances by `deviceId` and is the future connection-layer entry point.
+- `PrinterFacade` owns instances by `deviceId`, but sessions are started explicitly with `beginSession()` so stale frames cannot roll back a newer connection session.
 - `NormalizedPrinterState` defines the dry-run state shape for temperatures, fans, light, print progress, layers, remaining time, filename, motion position, error, camera flags, and AI flags.
+- `K1Adapter` returns normalized state patches, not replacement states. `PrinterInstance` applies those patches to preserve legacy K1 delta-frame semantics.
 - `Capability model` provides deterministic capability sets inferred from observed frames.
 - `K1Adapter` converts K1/K1 Max WS9999 status frames into `NormalizedPrinterState`.
 
@@ -26,9 +27,11 @@ The legacy `processData()` path remains the dashboard authority. Gate 2 only add
 
 This gate does not alter `connectionTargets`, IndexedDB stores, WebSocket routing, command routing, or UI rendering. The new modules live under `3dp_lib/printer_core/` and are imported only by tests at this stage.
 
+`deviceId` and `sessionId` are required. Missing IDs fail closed instead of falling back to a shared `unknown-device` bucket.
+
 ## Tests
 
-Gate 2 adds K1 fixture differential coverage using both captured K1 Max devices:
+Gate 2 adds real legacy differential coverage using both captured K1 Max devices. The same fixture frames are streamed through `processData()` and through `K1Adapter`/`PrinterInstance`, then compared after each frame:
 
 - nozzle and bed current/target temperatures
 - part cooling, auxiliary, and chamber fan percentages
@@ -39,6 +42,8 @@ Gate 2 adds K1 fixture differential coverage using both captured K1 Max devices:
 - MJPEG/WebRTC camera flags
 - AI detection flag
 - facade/instance sequence and capability accumulation
+- sequence 4 to sequence 5 delta replay for K1 Max device-b, ensuring sparse temperature updates preserve prior filename, state, fans, light, and position
+- session lifecycle and stale-session rejection
 
 ## Consequences
 
