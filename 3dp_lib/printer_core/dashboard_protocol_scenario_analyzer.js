@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1318 (PR #432)
+ * @version 1.390.1319 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:35:34
+ * @lastModified 2026-08-08 08:39:30
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -74,6 +74,30 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
       "printProgress",
       "printFileName",
       "printId",
+    ]),
+  }),
+  "k2-cfs-topology": Object.freeze({
+    name: "k2-cfs-topology",
+    expectedScenario: "k2-cfs-topology-validation",
+    requireValidationSuccess: true,
+    requiredMarkers: Object.freeze([
+      Object.freeze({ name: "observed-cfs-connected-fresh", source: "stdin" }),
+      Object.freeze({ name: "operator-cfs-disconnect", source: null }),
+      Object.freeze({ name: "observed-cfs-disconnected-stale", source: "stdin" }),
+      Object.freeze({ name: "operator-cfs-reconnect", source: null }),
+      Object.freeze({ name: "observed-cfs-reconnected-fresh", source: "stdin" }),
+      Object.freeze({ name: "observed-slot-change", source: "stdin" }),
+      Object.freeze({ name: "observed-material-change", source: "stdin" }),
+      Object.freeze({ name: "observed-external-spool", source: "stdin" }),
+      Object.freeze({ name: "observed-color-assignment-change", source: "stdin" }),
+    ]),
+    requiredPayloadKeys: Object.freeze([
+      "cfsConnect",
+      "boxsInfo",
+    ]),
+    timelinePayloadKeys: Object.freeze([
+      "cfsConnect",
+      "boxsInfo",
     ]),
   }),
 });
@@ -447,18 +471,68 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 }
 
 /**
+ * CFS `boxsInfo` を timeline 用 summary へ圧縮する。
+ *
+ * 【詳細説明】
+ * - Gate 10 では slot 抜差し、material 変更、external spool、`colorMatch` の変化を見たい。
+ * - raw `boxsInfo` 全体は大きく、serial や未確定 firmware field も含み得るため、比較に必要な
+ *   box/material/colorMatch の最小 shape だけを保持する。
+ *
+ * @private
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @returns {object} timeline 用 summary
+ */
+function summarizeBoxsInfoForTimeline(boxsInfo) {
+  const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
+  const colorMatch = Array.isArray(boxsInfo?.colorMatch) ? boxsInfo.colorMatch : [];
+  const materialSources = boxes.flatMap((box) => {
+    const materials = Array.isArray(box?.materials) ? box.materials : [];
+    return materials.map((material) => ({
+      boxId: box?.id ?? null,
+      boxType: box?.type ?? null,
+      materialId: material?.id ?? null,
+      state: material?.state ?? null,
+      percent: material?.percent ?? null,
+      materialType: material?.type ?? null,
+      materialCode: material?.materialId ?? null,
+      color: material?.color ?? null,
+    }));
+  });
+  return {
+    enable: boxsInfo?.enable ?? null,
+    boxCount: boxes.length,
+    materialSourceCount: materialSources.length,
+    externalSourceCount: materialSources.filter((source) => source.boxType === 1).length,
+    cfsSourceCount: materialSources.filter((source) => source.boxType !== 1).length,
+    colorMatchCount: colorMatch.length,
+    colorMatch: colorMatch.map((assignment) => ({
+      id: assignment?.id ?? null,
+      boxId: assignment?.boxId ?? null,
+      materialId: assignment?.materialId ?? null,
+    })),
+    materialSources,
+  };
+}
+
+/**
  * timeline record に保存してよい値へ正規化する。
  *
  * 【詳細説明】
  * - raw payload を丸ごと保存すると fixture report が肥大化し、CFS の詳細 payload も混ざる。
  * - Gate 9 では print lifecycle の root scalar を追跡することが目的なので、scalar はそのまま保持し、
  *   object / array は構造だけが分かる短い summary に圧縮する。
+ * - 例外として `boxsInfo` は Gate 10 の物理 topology 変化を読むため、material source と assignment の
+ *   圧縮 summary へ変換する。
  *
  * @private
  * @param {*} value - protocol payload value
+ * @param {string=} key - payload key
  * @returns {*} timeline 用に正規化した値
  */
-function normalizeTimelineValue(value) {
+function normalizeTimelineValue(value, key = "") {
+  if (key === "boxsInfo") {
+    return summarizeBoxsInfoForTimeline(value);
+  }
   if (value == null ||
       typeof value === "string" ||
       typeof value === "number" ||
@@ -538,7 +612,7 @@ function createPayloadTimeline(events, timelinePayloadKeys) {
       if (!hasOwn(body, key)) {
         continue;
       }
-      const nextValue = normalizeTimelineValue(body[key]);
+      const nextValue = normalizeTimelineValue(body[key], key);
       const before = createTimelineSignature({ value: currentSnapshot[key] });
       const after = createTimelineSignature({ value: nextValue });
       currentSnapshot[key] = nextValue;

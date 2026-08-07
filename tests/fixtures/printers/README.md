@@ -61,6 +61,16 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
   The profile report includes a reduced `payloadTimeline` for root
   `state` / `deviceState` / `printProgress` / file identity fields so review can
   compare raw protocol transitions with operator-observed markers.
+- For the Gate 10 K2 Pro Combo CFS topology fixture, prefer the built-in
+  Analyzer profile:
+
+```text
+node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-topology --profile k2-cfs-topology --pretty
+```
+
+  The profile report includes a reduced `payloadTimeline` for `cfsConnect` and
+  summarized `boxsInfo` topology so review can compare physical CFS changes with
+  operator-observed markers.
 
 Fixture rules:
 

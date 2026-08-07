@@ -73,6 +73,59 @@ function k2PrintLifecycleEvents() {
   ];
 }
 
+function k2CfsTopologyEvents() {
+  const freshBoxsInfo = {
+    enable: 1,
+    materialBoxs: [
+      {
+        id: 0,
+        type: 1,
+        materials: [{ id: 0, state: 1, percent: 100, type: "", color: "" }],
+      },
+      {
+        id: 1,
+        type: 0,
+        materials: [
+          { id: 0, state: 1, percent: 100, type: "PLA", materialId: "000001", color: "white" },
+          { id: 1, state: 1, percent: 95, type: "PLA", materialId: "000002", color: "black" },
+        ],
+      },
+    ],
+    colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+  };
+  const changedBoxsInfo = {
+    ...freshBoxsInfo,
+    materialBoxs: [
+      freshBoxsInfo.materialBoxs[0],
+      {
+        id: 1,
+        type: 0,
+        materials: [
+          { id: 0, state: 1, percent: 80, type: "PETG", materialId: "000003", color: "red" },
+          { id: 1, state: 0, percent: 0, type: "", materialId: "", color: "" },
+        ],
+      },
+    ],
+    colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+  };
+
+  return [
+    marker(1, 0, "observed-cfs-connected-fresh", { source: "stdin" }),
+    ws(2, 100, { cfsConnect: 1, boxsInfo: freshBoxsInfo }),
+    marker(3, 1000, "operator-cfs-disconnect", { source: "stdin" }),
+    ws(4, 1200, { cfsConnect: 0 }),
+    marker(5, 1500, "observed-cfs-disconnected-stale", { source: "stdin" }),
+    marker(6, 2000, "operator-cfs-reconnect", { source: "stdin" }),
+    ws(7, 2300, { cfsConnect: 1, boxsInfo: freshBoxsInfo }),
+    marker(8, 2600, "observed-cfs-reconnected-fresh", { source: "stdin" }),
+    ws(9, 3000, { boxsInfo: changedBoxsInfo }),
+    marker(10, 3200, "observed-slot-change", { source: "stdin" }),
+    marker(11, 3300, "observed-material-change", { source: "stdin" }),
+    marker(12, 3400, "observed-external-spool", { source: "stdin" }),
+    marker(13, 3500, "observed-color-assignment-change", { source: "stdin" }),
+  ];
+}
+
 describe("Printer Core v3 protocol scenario analyzer", () => {
   it("K2 print lifecycle profileを列挙・取得できる", () => {
     const profile = getProtocolScenarioProfile("k2-print-lifecycle");
@@ -96,6 +149,23 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       "printId",
     ]);
     expect(getProtocolScenarioProfile("missing-profile")).toBeNull();
+  });
+
+  it("K2 CFS topology profileを列挙・取得できる", () => {
+    const profile = getProtocolScenarioProfile("k2-cfs-topology");
+
+    expect(listProtocolScenarioProfiles()).toContain("k2-cfs-topology");
+    expect(profile).toMatchObject({
+      name: "k2-cfs-topology",
+      expectedScenario: "k2-cfs-topology-validation",
+      requireValidationSuccess: true,
+      requiredPayloadKeys: ["cfsConnect", "boxsInfo"],
+      timelinePayloadKeys: ["cfsConnect", "boxsInfo"],
+    });
+    expect(profile.requiredMarkers).toContainEqual({
+      name: "observed-cfs-disconnected-stale",
+      source: "stdin",
+    });
   });
 
   it("payload key はrootと既知wrapperだけから検出する", () => {
@@ -317,6 +387,40 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
         printFileName: "profile-test.gcode",
         printId: "print-1",
       },
+    });
+  });
+
+  it("K2 CFS topology profileはCFS物理変化markerとboxsInfo timelineを要求する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-cfs-topology-validation" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2CfsTopologyEvents(),
+    }, {
+      profiles: ["k2-cfs-topology"],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.profiles.applied).toEqual(["k2-cfs-topology"]);
+    expect(report.requiredMarkers.missing).toEqual([]);
+    expect(report.requiredPayloadKeys.missing).toEqual([]);
+    expect(report.payloadTimeline.entries.map((entry) => entry.sequence)).toEqual([2, 4, 7, 9]);
+    expect(report.payloadTimeline.entries[0].state.boxsInfo).toMatchObject({
+      boxCount: 2,
+      materialSourceCount: 3,
+      externalSourceCount: 1,
+      cfsSourceCount: 2,
+      colorMatchCount: 1,
+    });
+    expect(report.payloadTimeline.entries.at(-1).state.boxsInfo.materialSources[1]).toMatchObject({
+      boxId: 1,
+      materialId: 0,
+      state: 1,
+      percent: 80,
+      materialType: "PETG",
+      materialCode: "000003",
+      color: "red",
     });
   });
 
