@@ -99,6 +99,90 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(record.lastSequence).toBe(1);
   });
 
+  it("observeFrameResult contract のsession未開始rejectionも1回だけ復旧する", () => {
+    const host = "K1Max-Live-Result-Recover";
+    const deviceId = "host:K1Max-Live-Result-Recover";
+    const sessionId = "k1-live:test-result-recover";
+    const state = {
+      source: {
+        receivedAt: "2026-08-07T08:15:03.000Z",
+        sequence: 1,
+      },
+      identity: {
+        reportedModel: null,
+        reportedHostname: null,
+      },
+      temperatures: {
+        nozzle: { current: null, target: null, max: null },
+        bed: { current: null, target: null, max: null },
+        chamber: { current: null, target: null, max: null },
+      },
+      fans: {
+        partCooling: { enabled: null, percent: null },
+        auxiliary: { enabled: null, percent: null },
+        case: { enabled: null, percent: null },
+      },
+      light: {
+        enabled: null,
+      },
+      print: {
+        stateCode: null,
+        progressPct: 10,
+        layer: null,
+        totalLayer: null,
+        remainingSec: null,
+        fileName: null,
+      },
+      motion: {
+        position: null,
+      },
+      error: {
+        code: null,
+        key: null,
+      },
+      camera: {
+        mjpeg: null,
+        webrtc: null,
+        timelapseEnabled: null,
+      },
+      ai: {
+        detection: null,
+        switchEnabled: null,
+        pauseOnDetection: null,
+        firstLayer: null,
+      },
+    };
+    const facade = {
+      observeFrameResult: vi.fn()
+        .mockReturnValueOnce({
+          accepted: false,
+          reason: PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED,
+          deviceId,
+          sessionId,
+          activeSessionId: null,
+        })
+        .mockReturnValueOnce({
+          accepted: true,
+          state,
+        }),
+    };
+    setMachine(host, {
+      printProgress: stored(10),
+    });
+
+    const record = observeK1LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: { printProgress: 10 },
+      receivedAt: "2026-08-07T08:15:03.000Z",
+    }, { facade });
+
+    expect(facade.observeFrameResult).toHaveBeenCalledTimes(2);
+    expect(record.state).toBe("matched");
+    expect(record.lastSequence).toBe(1);
+  });
+
   it("未開始sessionでも現在runtime recordと異なる旧deviceId/sessionは復旧しない", () => {
     const host = "K1Max-Live-Stale-Recover";
     setMachine(host, {

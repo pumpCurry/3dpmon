@@ -22,9 +22,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1312 (PR #432)
+ * @version 1.390.1313 (PR #432)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-08 07:32:05
+ * @lastModified 2026-08-08 07:42:16
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -826,6 +826,213 @@ export function isRecoverablePrinterCoreV3LiveShadowObserveError(error) {
 }
 
 /**
+ * live shadow 用 Facade 観測結果を state/rejection へ正規化する。
+ *
+ * 【詳細説明】
+ * - Gate 7.5 以降は `observeFrameResult()` を forward contract として優先し、成功/拒否を
+ *   `accepted` flag で判定する。
+ * - 旧テストや既存依存注入は `observeFrame()` だけを持つため、互換 fallback も残す。
+ *
+ * @private
+ * @param {object} facade - PrinterFacade 互換 object
+ * @param {object} options - observeFrame/observeFrameResult へ渡す観測オプション
+ * @returns {{state:(object|null), rejection:(object|null)}} 正規化済み観測結果
+ */
+function observePrinterCoreV3ShadowFacadeFrame(facade, options) {
+  if (facade && typeof facade.observeFrameResult === "function") {
+    const result = facade.observeFrameResult(options);
+    if (result?.accepted === true) {
+      return {
+        state: result.state,
+        rejection: null,
+      };
+    }
+    if (result?.accepted === false) {
+      return {
+        state: null,
+        rejection: result,
+      };
+    }
+    return {
+      state: result,
+      rejection: null,
+    };
+  }
+  const state = facade.observeFrame(options);
+  return {
+    state,
+    rejection: null,
+  };
+}
+
+/**
+ * live shadow の rejection が session 未開始として復旧可能か判定する。
+ *
+ * 【詳細説明】
+ * - `observeFrameResult()` は session 未開始を throw ではなく rejection として返すため、
+ *   exception 経路と同じ復旧条件をここで共有する。
+ *
+ * @private
+ * @param {object|null|undefined} rejection - accepted:false の観測結果
+ * @returns {boolean} session 再生成で一度だけ復旧してよい場合 true
+ */
+function isRecoverablePrinterCoreV3LiveShadowRejection(rejection) {
+  return rejection?.reason === PRINTER_FACADE_ERROR_CODES.SESSION_NOT_STARTED;
+}
+
+/**
+ * live shadow rejection を既存の拒否レスポンス形式へ変換する。
+ *
+ * 【詳細説明】
+ * - observeFrameResult 導入後も、呼び出し側が期待する `host/deviceId/sessionId/activeSessionId` を
+ *   失わないようにする。
+ *
+ * @private
+ * @param {object} options - 変換オプション
+ * @param {object} options.rejection - accepted:false の観測結果
+ * @param {string} options.host - ホスト名
+ * @param {string} options.deviceId - shadow deviceId
+ * @param {string} options.sessionId - shadow sessionId
+ * @returns {object} live shadow の拒否レスポンス
+ */
+function createLiveShadowObserveRejection(options) {
+  const rejection = options.rejection || {};
+  return {
+    accepted: false,
+    reason: rejection.reason,
+    host: options.host,
+    deviceId: options.deviceId,
+    sessionId: options.sessionId,
+    activeDeviceId: rejection.activeDeviceId ?? null,
+    activeSessionId: rejection.activeSessionId ?? null,
+  };
+}
+
+/**
+ * live shadow frame を Facade へ渡し、session 未開始だけを復旧する。
+ *
+ * 【詳細説明】
+ * - K1/K2 の live shadow は同じ lifecycle 契約を使うため、復旧条件と error 記録を一箇所に集約する。
+ * - Adapter 例外や stale/closed rejection は session 再生成で隠さず、診断可能な戻り値として返す。
+ *
+ * @private
+ * @param {object} options - 観測/復旧オプション
+ * @param {object} options.facade - PrinterFacade 互換 object
+ * @param {Function} options.beginSession - family 別 shadow session 開始関数
+ * @param {string} options.printerFamily - `k1` または `k2`
+ * @param {string} options.logFamily - console 診断用 family 名
+ * @param {string} options.host - ホスト名
+ * @param {string} options.deviceId - shadow deviceId
+ * @param {string} options.sessionId - shadow sessionId
+ * @param {object|null|undefined} options.frame - raw frame
+ * @param {string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @returns {{state:(object|null), terminal:(object|null)}} state または最終レスポンス
+ */
+function observePrinterCoreV3ShadowFrameWithRecovery(options) {
+  const observeOptions = {
+    deviceId: options.deviceId,
+    sessionId: options.sessionId,
+    frame: options.frame,
+    receivedAt: options.receivedAt,
+  };
+  const observeOnce = () => observePrinterCoreV3ShadowFacadeFrame(options.facade, observeOptions);
+  const retryAfterRecovery = () => {
+    const recovery = canRecoverMissingShadowSession({
+      host: options.host,
+      deviceId: options.deviceId,
+      sessionId: options.sessionId,
+    });
+    if (!recovery.recoverable) {
+      return {
+        state: null,
+        terminal: recovery.rejection,
+      };
+    }
+    options.beginSession({
+      host: options.host,
+      deviceId: options.deviceId,
+      sessionId: options.sessionId,
+    });
+    try {
+      const retryObservation = observeOnce();
+      if (retryObservation.rejection) {
+        return {
+          state: null,
+          terminal: createLiveShadowObserveRejection({
+            rejection: retryObservation.rejection,
+            host: options.host,
+            deviceId: options.deviceId,
+            sessionId: options.sessionId,
+          }),
+        };
+      }
+      return {
+        state: retryObservation.state,
+        terminal: null,
+      };
+    } catch (retryError) {
+      console.error(`[printer-core-v3 shadow] ${options.logFamily} observe retry failed`, {
+        host: options.host,
+        sessionId: options.sessionId,
+        error: retryError,
+      });
+      return {
+        state: null,
+        terminal: recordLiveShadowObserveError({
+          host: options.host,
+          deviceId: options.deviceId,
+          sessionId: options.sessionId,
+          printerFamily: options.printerFamily,
+          error: retryError,
+          reason: "shadow-observe-retry-error",
+        }),
+      };
+    }
+  };
+
+  try {
+    const observation = observeOnce();
+    if (observation.rejection) {
+      if (!isRecoverablePrinterCoreV3LiveShadowRejection(observation.rejection)) {
+        return {
+          state: null,
+          terminal: createLiveShadowObserveRejection({
+            rejection: observation.rejection,
+            host: options.host,
+            deviceId: options.deviceId,
+            sessionId: options.sessionId,
+          }),
+        };
+      }
+      return retryAfterRecovery();
+    }
+    return {
+      state: observation.state,
+      terminal: null,
+    };
+  } catch (error) {
+    if (!isRecoverablePrinterCoreV3LiveShadowObserveError(error)) {
+      console.error(`[printer-core-v3 shadow] ${options.logFamily} observe failed`, {
+        host: options.host,
+        sessionId: options.sessionId,
+        error,
+      });
+      return {
+        state: null,
+        terminal: recordLiveShadowObserveError({
+          host: options.host,
+          deviceId: options.deviceId,
+          sessionId: options.sessionId,
+          printerFamily: options.printerFamily,
+          error,
+        }),
+      };
+    }
+    return retryAfterRecovery();
+  }
+}
+
+/**
  * live shadow の observe 失敗を runtimeData に記録する。
  *
  * 【詳細説明】
@@ -909,43 +1116,21 @@ export function observeK1LiveShadowFrame(options, dependencies = {}) {
   }
 
   const facade = dependencies.facade || k1LiveShadowFacade;
-  let state;
-  try {
-    state = facade.observeFrame({
-      deviceId,
-      sessionId,
-      frame: options.frame,
-      receivedAt: options.receivedAt,
-    });
-  } catch (error) {
-    if (!isRecoverableK1LiveShadowObserveError(error)) {
-      console.error("[printer-core-v3 shadow] K1 observe failed", { host, sessionId, error });
-      return recordLiveShadowObserveError({ host, deviceId, sessionId, printerFamily: "k1", error });
-    }
-    const recovery = canRecoverMissingShadowSession({ host, deviceId, sessionId });
-    if (!recovery.recoverable) {
-      return recovery.rejection;
-    }
-    beginK1LiveShadowSession({ host, deviceId, sessionId });
-    try {
-      state = facade.observeFrame({
-        deviceId,
-        sessionId,
-        frame: options.frame,
-        receivedAt: options.receivedAt,
-      });
-    } catch (retryError) {
-      console.error("[printer-core-v3 shadow] K1 observe retry failed", { host, sessionId, error: retryError });
-      return recordLiveShadowObserveError({
-        host,
-        deviceId,
-        sessionId,
-        printerFamily: "k1",
-        error: retryError,
-        reason: "shadow-observe-retry-error",
-      });
-    }
+  const observed = observePrinterCoreV3ShadowFrameWithRecovery({
+    facade,
+    beginSession: beginK1LiveShadowSession,
+    printerFamily: "k1",
+    logFamily: "K1",
+    host,
+    deviceId,
+    sessionId,
+    frame: options.frame,
+    receivedAt: options.receivedAt,
+  });
+  if (observed.terminal) {
+    return observed.terminal;
   }
+  const state = observed.state;
 
   if (state?.accepted === false) {
     return {
@@ -1029,43 +1214,21 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
   }
 
   const facade = dependencies.facade || k2LiveShadowFacade;
-  let state;
-  try {
-    state = facade.observeFrame({
-      deviceId,
-      sessionId,
-      frame: options.frame,
-      receivedAt: options.receivedAt,
-    });
-  } catch (error) {
-    if (!isRecoverablePrinterCoreV3LiveShadowObserveError(error)) {
-      console.error("[printer-core-v3 shadow] K2 observe failed", { host, sessionId, error });
-      return recordLiveShadowObserveError({ host, deviceId, sessionId, printerFamily: "k2", error });
-    }
-    const recovery = canRecoverMissingShadowSession({ host, deviceId, sessionId });
-    if (!recovery.recoverable) {
-      return recovery.rejection;
-    }
-    beginK2LiveShadowSession({ host, deviceId, sessionId });
-    try {
-      state = facade.observeFrame({
-        deviceId,
-        sessionId,
-        frame: options.frame,
-        receivedAt: options.receivedAt,
-      });
-    } catch (retryError) {
-      console.error("[printer-core-v3 shadow] K2 observe retry failed", { host, sessionId, error: retryError });
-      return recordLiveShadowObserveError({
-        host,
-        deviceId,
-        sessionId,
-        printerFamily: "k2",
-        error: retryError,
-        reason: "shadow-observe-retry-error",
-      });
-    }
+  const observed = observePrinterCoreV3ShadowFrameWithRecovery({
+    facade,
+    beginSession: beginK2LiveShadowSession,
+    printerFamily: "k2",
+    logFamily: "K2",
+    host,
+    deviceId,
+    sessionId,
+    frame: options.frame,
+    receivedAt: options.receivedAt,
+  });
+  if (observed.terminal) {
+    return observed.terminal;
   }
+  const state = observed.state;
 
   if (state?.accepted === false) {
     return {
