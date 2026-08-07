@@ -17,9 +17,9 @@
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1295 (PR #432)
+ * @version 1.390.1309 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 09:24:00
+ * @lastModified 2026-08-07 21:55:35
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -582,6 +582,24 @@ export async function captureProtocolFixture(options) {
   if (options.requireBoxsInfo && !boxsInfoObserved) failureReasons.push("required-boxsinfo-not-observed");
   if (fixture.events.length < options.minimumEvents) failureReasons.push("minimum-events-not-met");
   const success = failureReasons.length === 0;
+  fixture.metadata.validation = {
+    success,
+    failureReasons,
+    eventCount: fixture.events.length,
+    required: {
+      http: Boolean(options.requireHttp),
+      ws: Boolean(options.requireWs),
+      boxsInfo: Boolean(options.requireBoxsInfo),
+      minimumEvents: options.minimumEvents,
+    },
+    observations: {
+      httpObserved,
+      wsOpened,
+      boxsInfoObserved,
+      heartbeatAcked,
+      errorCount: errors.length,
+    },
+  };
   const failedOutDir = success
     ? null
     : await writeFailedProtocolFixtureIfRequested(options, fixture, started.captureId);

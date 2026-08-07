@@ -29,6 +29,9 @@ Live K2-family test target:
 - K2 Pro Combo with CFS: represented by `k2-pro-cfs`; reported model `F012`.
 - The `k2-pro-cfs` fixture was refreshed during Gate 6 with a read-only idle capture
   that observed HTTP `/info`, WebSocket 9999 status, and `boxsInfo` topology.
+- Keep the Gate 6 idle baseline at `k2-pro-cfs` stable. Add later physical-state
+  captures under scenario subdirectories such as `k2-pro-cfs/scenarios/printing`,
+  `k2-pro-cfs/scenarios/paused`, and `k2-pro-cfs/scenarios/cfs-reconnect`.
 
 Fixture rules:
 

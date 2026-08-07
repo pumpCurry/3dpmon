@@ -141,8 +141,28 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(result.success).toBe(true);
     expect(result.writtenOutDir).toBe(outDir);
     expect(fs.readFileSync(path.join(outDir, "notes.md"), "utf8")).toBe("manual note\n");
-    expect(JSON.parse(fs.readFileSync(path.join(outDir, "capture.json"), "utf8")).metadata.capture.scenario)
-      .toBe("unit-success-capture");
+    const capture = JSON.parse(fs.readFileSync(path.join(outDir, "capture.json"), "utf8"));
+    const metadata = JSON.parse(fs.readFileSync(path.join(outDir, "metadata.json"), "utf8"));
+    expect(capture.metadata.capture.scenario).toBe("unit-success-capture");
+    expect(capture.metadata.validation).toEqual(metadata.validation);
+    expect(metadata.validation).toEqual({
+      success: true,
+      failureReasons: [],
+      eventCount: 0,
+      required: {
+        http: false,
+        ws: false,
+        boxsInfo: false,
+        minimumEvents: 0,
+      },
+      observations: {
+        httpObserved: false,
+        wsOpened: false,
+        boxsInfoObserved: false,
+        heartbeatAcked: false,
+        errorCount: 0,
+      },
+    });
 
     fs.rmSync(root, { recursive: true, force: true });
   });

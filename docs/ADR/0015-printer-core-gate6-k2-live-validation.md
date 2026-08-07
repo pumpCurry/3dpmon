@@ -6,7 +6,7 @@ Gate 5 closed the K2 live shadow wiring while keeping the legacy UI, command rou
 print manager, and filament ledger authoritative. The next boundary is a live,
 read-only validation against the local K2 Pro Combo with CFS (`model: "F012"`).
 
-The local target is reachable at the development network endpoint and exposes:
+The local target is reachable on the development network and exposes:
 
 - HTTP `/info`: `model: "F012"`, `version: "1.0.0"`, `videoPort: 443`, `wssPort: 443`.
 - WebSocket 9999: K1-like status deltas plus K2 CFS `boxsInfo`.
@@ -32,21 +32,23 @@ live validation targets for this gate because no hardware is available.
 Capture command:
 
 ```text
-node scripts/capture_protocol_fixture.mjs --host 192.168.54.21 --model "K2 Pro Combo" --attachment CFS --scenario gate6-live-idle-validation --out tests/fixtures/printers/k2-pro-cfs --duration-ms 15000 --send-boxsinfo --require-http --require-ws --require-boxsinfo --minimum-events 2 --keep-failed --notes "Gate 6 read-only K2 Pro Combo live validation capture"
+node scripts/capture_protocol_fixture.mjs --host <DEVICE_IP> --model "K2 Pro Combo" --attachment CFS --scenario gate6-live-idle-validation --out tests/fixtures/printers/k2-pro-cfs --duration-ms 15000 --send-boxsinfo --require-http --require-ws --require-boxsinfo --minimum-events 2 --keep-failed --notes "Gate 6 read-only K2 Pro Combo live validation capture"
 ```
 
 Capture result:
 
 - `success: true`
-- `eventCount: 12`
+- `eventCount: 11`
 - `httpObserved: true`
 - `wsOpened: true`
 - `boxsInfoObserved: true`
 - `failureReasons: []`
+- The same success criteria are stored in fixture metadata under
+  `metadata.validation`.
 
 Replay result:
 
-- WebSocket JSON frames replayed: 7
+- WebSocket JSON frames replayed: 6
 - First status frame reported `model: "F012"` and `cfsConnect: 1`.
 - CFS topology became `connected: true`, `topologyState: "fresh"`.
 - Material topology normalized to 1 CFS unit, 5 material sources, and 4 tool
@@ -60,6 +62,13 @@ Gate 6 proves that the local K2 Pro Combo can provide the read-only evidence nee
 by Printer Core v3 and that the normalized CFS topology remains stable across sparse
 status delta frames.
 
+The proof level is intentionally split:
+
+- Real hardware verified: HTTP `/info`, WS9999 protocol capture, read-only
+  `boxsInfo`, K2Adapter replay, and PrinterFacade replay.
+- Fixture/integration verified: dashboard connection wiring into
+  `observeK2LiveShadowFrame()` and runtime shadow storage.
+
 This gate does not prove print lifecycle semantics for active K2 jobs. A later
 hardware-assisted gate should capture and review the following physical states:
 
@@ -71,3 +80,10 @@ hardware-assisted gate should capture and review the following physical states:
 - completed
 - CFS disconnect and reconnect
 - slot/material assignment changes
+
+Future physical-state captures should not overwrite the Gate 6 idle baseline.
+They should be added as separate scenario fixtures such as:
+
+- `tests/fixtures/printers/k2-pro-cfs/scenarios/printing`
+- `tests/fixtures/printers/k2-pro-cfs/scenarios/paused`
+- `tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-reconnect`

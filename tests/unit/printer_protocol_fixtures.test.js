@@ -141,6 +141,12 @@ describe("Printer protocol fixtures", () => {
       expect(capture.metadata, metadataPath).toEqual(metadata);
       expect(capture.events, eventsPath).toEqual(events);
       expect(metadata.fixtureVersion, metadataPath).toBe(FIXTURE_VERSION);
+      if (metadata.validation) {
+        expect(metadata.validation.eventCount, metadataPath).toBe(events.length);
+        expect(typeof metadata.validation.success, metadataPath).toBe("boolean");
+        expect(Array.isArray(metadata.validation.failureReasons), metadataPath).toBe(true);
+        expect(typeof metadata.validation.observations?.errorCount, metadataPath).toBe("number");
+      }
     }
   });
 

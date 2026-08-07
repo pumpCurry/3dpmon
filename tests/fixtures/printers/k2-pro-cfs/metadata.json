@@ -9,7 +9,7 @@
     "attachment": "CFS"
   },
   "capture": {
-    "capturedAt": "2026-08-07T12:48:25.973Z",
+    "capturedAt": "2026-08-07T12:56:15.346Z",
     "scenario": "gate6-live-idle-validation",
     "operatorNotes": "Gate 6 read-only K2 Pro Combo live validation capture"
   },
@@ -30,5 +30,23 @@
     "id": true,
     "fileName": true,
     "rfid": true
+  },
+  "validation": {
+    "success": true,
+    "failureReasons": [],
+    "eventCount": 11,
+    "required": {
+      "http": true,
+      "ws": true,
+      "boxsInfo": true,
+      "minimumEvents": 2
+    },
+    "observations": {
+      "httpObserved": true,
+      "wsOpened": true,
+      "boxsInfoObserved": true,
+      "heartbeatAcked": false,
+      "errorCount": 0
+    }
   }
 }
