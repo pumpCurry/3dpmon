@@ -359,6 +359,48 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     expect(second.source.rawKeys).toEqual(["dProgress"]);
   });
 
+  it.each([
+    {
+      label: "bed temperature aliases",
+      initial: { bedTemp0: "30", bedTemp1: "31" },
+      delta: { bedTemp1: "32" },
+      select: (state) => state.temperatures.bed.current,
+      expected: 30,
+    },
+    {
+      label: "filename aliases",
+      initial: { printFileName: "primary.gcode", fileName: "fallback.gcode" },
+      delta: { fileName: "changed.gcode" },
+      select: (state) => state.print.fileName,
+      expected: "primary.gcode",
+    },
+    {
+      label: "hostname aliases",
+      initial: { hostname: "primary", deviceName: "fallback" },
+      delta: { deviceName: "changed" },
+      select: (state) => state.identity.reportedHostname,
+      expected: "primary",
+    },
+  ])("multi-raw $label の delta frame でも primary raw field を維持する", ({ initial, delta, select, expected }) => {
+    const facade = createK1PrinterFacade({
+      clock: () => new Date("2026-08-07T02:42:13.000Z"),
+    });
+    facade.beginSession({ deviceId: "fixture:k1-alias", sessionId: "session-alias" });
+
+    facade.observeFrame({
+      deviceId: "fixture:k1-alias",
+      sessionId: "session-alias",
+      frame: initial,
+    });
+    const second = facade.observeFrame({
+      deviceId: "fixture:k1-alias",
+      sessionId: "session-alias",
+      frame: delta,
+    });
+
+    expect(select(second)).toBe(expected);
+  });
+
   it("K1 Max device-a fixture stream を実processDataとframeごとに比較できる", () => {
     const states = replayFixtureThroughLegacyAndV3(
       FIXTURE_DEVICE_A,
@@ -448,6 +490,36 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     expect(() => {
       facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-1" });
     }).toThrow("Adapter has not been resolved");
+  });
+
+  it("beginSession は新Instance構築が失敗した場合に旧Instanceを閉じない", () => {
+    const event = readFirstStatusEvent(FIXTURE_DEVICE_A);
+    const facade = createK1PrinterFacade({
+      clock: () => new Date("2026-08-07T02:42:13.000Z"),
+    });
+    facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-1" });
+    const first = facade.observeFrame({
+      deviceId: "fixture:k1-max-a",
+      sessionId: "session-1",
+      frame: event,
+    });
+
+    expect(() => {
+      facade.beginSession({
+        deviceId: "fixture:k1-max-a",
+        sessionId: "session-2",
+        adapter: {},
+      });
+    }).toThrow("PrinterInstance requires an adapter");
+
+    const second = facade.observeFrame({
+      deviceId: "fixture:k1-max-a",
+      sessionId: "session-1",
+      frame: { nozzleTemp: "27.600000" },
+    });
+    expect(first.source.sequence).toBe(1);
+    expect(second.source.sequence).toBe(2);
+    expect(second.temperatures.nozzle.current).toBeCloseTo(27.6);
   });
 
   it("getState と observeFrame の戻り値を mutate しても内部stateは壊れない", () => {

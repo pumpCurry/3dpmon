@@ -31,9 +31,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1292 (PR #432)
+* @version 1.390.1299 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 01:22:00
+* @lastModified 2026-08-07 17:15:03
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -70,6 +70,13 @@ import {
   recordPrinterCoreV3Identity,
   transferPrinterCoreV3IdentityRecords,
 } from "./printer_core/dashboard_device_identity_repository.js";
+import {
+  beginK1LiveShadowSession,
+  createPrinterCoreV3ShadowSessionId,
+  endK1LiveShadowSession,
+  observeK1LiveShadowFrame,
+  resolveK1LiveShadowDeviceId,
+} from "./printer_core/dashboard_live_shadow.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -105,6 +112,10 @@ const connectionMap = {};
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
  * @property {string}         dest          - 接続先(IP:PORT)
+ * @property {string|null}    printerCoreV3ShadowSessionId
+ *                                        - Printer Core v3 live shadow 用の接続 session ID
+ * @property {string|null}    printerCoreV3ShadowDeviceId
+ *                                        - Printer Core v3 live shadow 用の deviceId
  * @property {{close:function():void}|null} [_extSession]
  *                                        - 外部プロトコル(Moonraker 等)セッション。
  *                                          生 WebSocket は st.ws に載せず、ここで保持して
@@ -326,6 +337,70 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
 }
 
 /**
+ * Printer Core v3 K1 live shadow session を開始済みにする。
+ *
+ * 【詳細説明】
+ * - WebSocket open 時点では hostname / identity が未確定のことがあるため、初回 JSON 受信時にも遅延開始できる。
+ * - deviceId は session 中に固定し、後続 frame で identity が強くなっても同一 WebSocket session 内では混線防止を優先する。
+ *
+ * @private
+ * @param {string} host - 解決済みホスト名
+ * @param {ConnectionState} state - 接続状態
+ * @param {object|null} identity - Printer Core v3 identity dry-run record
+ * @returns {{deviceId:string, sessionId:string}|null} shadow session 情報
+ */
+function _ensureK1LiveShadowSession(host, state, identity) {
+  if (!host || !state) return null;
+  if (!state.printerCoreV3ShadowSessionId) {
+    state.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
+      host,
+      dest: state.dest || host,
+    });
+  }
+  if (!state.printerCoreV3ShadowDeviceId) {
+    state.printerCoreV3ShadowDeviceId = resolveK1LiveShadowDeviceId({
+      identity,
+      host,
+      dest: state.dest || host,
+    });
+    beginK1LiveShadowSession({
+      host,
+      deviceId: state.printerCoreV3ShadowDeviceId,
+      sessionId: state.printerCoreV3ShadowSessionId,
+    });
+  }
+  return {
+    deviceId: state.printerCoreV3ShadowDeviceId,
+    sessionId: state.printerCoreV3ShadowSessionId,
+  };
+}
+
+/**
+ * Printer Core v3 K1 live shadow session を終了する。
+ *
+ * 【詳細説明】
+ * - WebSocket close / cleanup と同じタイミングで呼び、旧 session の adapterState が再接続後へ残らないようにする。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {ConnectionState|null|undefined} state - 接続状態
+ * @returns {boolean} shadow session を終了した場合 true
+ */
+function _endK1LiveShadowSession(host, state) {
+  if (!state?.printerCoreV3ShadowSessionId || !state?.printerCoreV3ShadowDeviceId) {
+    return false;
+  }
+  const ended = endK1LiveShadowSession({
+    host,
+    deviceId: state.printerCoreV3ShadowDeviceId,
+    sessionId: state.printerCoreV3ShadowSessionId,
+  });
+  state.printerCoreV3ShadowSessionId = null;
+  state.printerCoreV3ShadowDeviceId = null;
+  return ended;
+}
+
+/**
  * 接続先を connectionTargets リストから削除し永続化する。
  * dest（IP:PORT）完全一致で検索する。
  * 削除前に保存されていたホスト名を返す（クリーンアップ用）。
@@ -435,6 +510,8 @@ const placeholderState = {
   buffer: [],
   latest: null,
   dest: "",
+  printerCoreV3ShadowSessionId: null,
+  printerCoreV3ShadowDeviceId: null,
   state: "disconnected"
 };
 
@@ -470,6 +547,8 @@ function getState(host) {
       buffer: [],
       latest: null,
       dest: "",
+      printerCoreV3ShadowSessionId: null,
+      printerCoreV3ShadowDeviceId: null,
       state: "disconnected"
     };
   }
@@ -936,6 +1015,7 @@ export function connectWs(hostOrDest) {
     if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) {
       try {
         stOld.ws.onopen = stOld.ws.onmessage = stOld.ws.onerror = stOld.ws.onclose = null;
+        _endK1LiveShadowSession(key, stOld);
         stOld.ws.close();
         _closedStale++;
       } catch (e) {
@@ -1149,6 +1229,11 @@ function handleSocketOpen(host) {
   const st = getState(host);
   st.reconnect = 0;
   st.userDisc = false;
+  st.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
+    host,
+    dest: st.dest || host,
+  });
+  st.printerCoreV3ShadowDeviceId = null;
 
   // Heartbeat開始（30秒おき）
   startHeartbeat(st.ws, 30_000, host);
@@ -1284,7 +1369,7 @@ function handleSocketMessage(event, host) {
 
     let st = getState(hostKey);
     st.latest = data;
-    _recordPrinterCoreV3Identity(hostKey, data);
+    const printerCoreV3Identity = _recordPrinterCoreV3Identity(hostKey, data);
 
     // ★ currentHostname / restoreLegacyStoredData / cleanupLegacy は廃止済み
     //   per-host 処理は processData の _initializedHosts で管理
@@ -1295,6 +1380,17 @@ function handleSocketMessage(event, host) {
     const resolvedHost = data?.hostname || hostKey;
     ensureMachineData(resolvedHost);
     processData(data, resolvedHost);
+    if (getPrinterType(hostKey) === "creality-k1") {
+      const shadowSession = _ensureK1LiveShadowSession(resolvedHost, st, printerCoreV3Identity);
+      if (shadowSession) {
+        observeK1LiveShadowFrame({
+          host: resolvedHost,
+          deviceId: shadowSession.deviceId,
+          sessionId: shadowSession.sessionId,
+          frame: data,
+        });
+      }
+    }
   } catch (e) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error", false, hostKey);
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
@@ -1380,6 +1476,7 @@ function handleSocketClose(host) {
  // 切断直後は該当ホストの通知を抑制する（他ホストには影響しない）
   setNotificationSuppressed(true, host);
   const st = getState(host);
+  _endK1LiveShadowSession(host, st);
 
   // ホスト名待ちポーリングが残っていれば解除
   if (st.fetchTimer !== null) {
@@ -1575,6 +1672,7 @@ export function disconnectWs(host) {
 
   // 再接続カウント初期化
   st.reconnect = 0;
+  _endK1LiveShadowSession(host, st);
 
   // 入力欄を再度書き換え可に
   // UIを切断状態に更新
@@ -2192,6 +2290,7 @@ export function cleanupConnection(host) {
   // バッファクリア
   st.buffer.length = 0;
   st.latest = null;
+  _endK1LiveShadowSession(host, st);
 
   // connectionMap から削除
   delete connectionMap[host];

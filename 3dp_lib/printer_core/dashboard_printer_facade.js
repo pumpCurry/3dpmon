@@ -17,9 +17,9 @@
  * - {@link createPrinterFacade}：PrinterFacade の factory
  * - {@link createK1PrinterFacade}：K1 dry-run 用 PrinterFacade の factory
  *
- * @version 1.390.1298 (PR #432)
+ * @version 1.390.1299 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 16:50:55
+ * @lastModified 2026-08-07 17:15:03
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で legacy connection 層の shadow pipeline へ接続する
@@ -100,7 +100,7 @@ export class PrinterFacade {
    *
    * 【詳細説明】
    * - 新 session は beginSession だけが作成し、古い frame で session が巻き戻らないようにする。
-   * - 同じ deviceId の既存 Instance は新 session で置き換える。
+   * - 同じ deviceId の既存 Instance は、新 Instance の構築成功後に close して置き換える。
    *
    * @function beginSession
    * @param {object} options - Instance 取得オプション
@@ -115,16 +115,16 @@ export class PrinterFacade {
     const deviceId = this._requireNonEmptyId(options?.deviceId, "deviceId");
     const sessionId = this._requireNonEmptyId(options?.sessionId, "sessionId");
     const adapter = this._resolveAdapter(options);
-    const previousInstance = this.instances.get(deviceId);
-    if (previousInstance && typeof previousInstance.close === "function") {
-      previousInstance.close();
-    }
     const instance = createPrinterInstance({
       deviceId,
       sessionId,
       adapter,
       clock: this.clock,
     });
+    const previousInstance = this.instances.get(deviceId);
+    if (previousInstance && typeof previousInstance.close === "function") {
+      previousInstance.close();
+    }
     this.instances.set(deviceId, instance);
     return instance;
   }

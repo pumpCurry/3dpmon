@@ -44,6 +44,13 @@ vi.mock("../../3dp_lib/dashboard_moonraker.js", () => ({
   createMoonrakerSession: vi.fn(() => ({ close: vi.fn() })),
   translateK1CommandToMoonraker: vi.fn(),
 }));
+vi.mock("../../3dp_lib/printer_core/dashboard_live_shadow.js", () => ({
+  beginK1LiveShadowSession: vi.fn(),
+  createPrinterCoreV3ShadowSessionId: vi.fn(() => "k1-live:test-session"),
+  endK1LiveShadowSession: vi.fn(),
+  observeK1LiveShadowFrame: vi.fn(),
+  resolveK1LiveShadowDeviceId: vi.fn(({ identity, host }) => identity?.deviceIdSeed || `host:${host}`),
+}));
 
 class FakeWebSocket {
   static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
@@ -58,7 +65,7 @@ class FakeWebSocket {
   send() {}
 }
 
-let mod, dataMock;
+let mod, dataMock, shadowMock;
 beforeEach(async () => {
   vi.resetModules();
   FakeWebSocket.instances = [];
@@ -67,10 +74,12 @@ beforeEach(async () => {
   delete window._3dpmonRelayChild;
   mod = await import("../../3dp_lib/dashboard_connection.js");
   dataMock = await import("../../3dp_lib/dashboard_data.js");
+  shadowMock = await import("../../3dp_lib/printer_core/dashboard_live_shadow.js");
   dataMock.monitorData.appSettings.connectionTargets = [];
   dataMock.monitorData.machines = {};
   dataMock.monitorData.hostSpoolMap = {};
   dataMock.monitorData.filamentSpools = [];
+  vi.clearAllMocks();
 });
 afterEach(() => {
   for (const ws of FakeWebSocket.instances) {
@@ -195,5 +204,34 @@ describe("Printer Core v3 identity dry-run", () => {
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
     ]);
+  });
+
+  it("K1 WS受信データをPrinter Core v3 live shadowへ分岐する", () => {
+    mod.connectWithType("203.0.113.12:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K1Max-Shadow",
+      model: "K1 Max",
+      printProgress: 50,
+      video: 1,
+      video1: 0,
+    }), "203.0.113.12");
+
+    expect(shadowMock.beginK1LiveShadowSession).toHaveBeenCalledWith({
+      host: "K1Max-Shadow",
+      deviceId: "provisional:k1%20max:k1max-shadow",
+      sessionId: "k1-live:test-session",
+    });
+    expect(shadowMock.observeK1LiveShadowFrame).toHaveBeenCalledWith({
+      host: "K1Max-Shadow",
+      deviceId: "provisional:k1%20max:k1max-shadow",
+      sessionId: "k1-live:test-session",
+      frame: {
+        hostname: "K1Max-Shadow",
+        model: "K1 Max",
+        printProgress: 50,
+        video: 1,
+        video1: 0,
+      },
+    });
   });
 });
