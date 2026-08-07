@@ -310,6 +310,65 @@ describe("Printer Core v3 identity dry-run", () => {
     expect(ws.sentMessages).toEqual([]);
   });
 
+  it("F012でK2確定後はhostnameがK2 prefixでない疎なdeltaでもK2 shadowを維持する", () => {
+    mod.connectWithType("203.0.113.32:9999", "creality-k1");
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "Workshop-Printer",
+      model: "F012",
+      cfsConnect: 1,
+    }), "203.0.113.32");
+    shadowMock.observeK2LiveShadowFrame.mockClear();
+    shadowMock.observeK1LiveShadowFrame.mockClear();
+
+    mod.simulateReceivedJson(JSON.stringify({
+      connectionCount: 1,
+    }), "Workshop-Printer");
+
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledWith({
+      host: "Workshop-Printer",
+      deviceId: "provisional:f012:workshop-printer",
+      sessionId: "k2-live:test-session",
+      frame: {
+        connectionCount: 1,
+      },
+    });
+    expect(shadowMock.observeK1LiveShadowFrame).not.toHaveBeenCalled();
+  });
+
+  it("K2 CFS reconnect後はboxsInfo probeを接続epoch単位で再送する", () => {
+    mod.connectWithType("203.0.113.33:9999", "creality-k1");
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Rearm",
+      model: "F012",
+      cfsConnect: 1,
+    }), "203.0.113.33");
+    expect(ws.sentMessages).toEqual([
+      JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
+    ]);
+
+    ws.sentMessages.length = 0;
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        materialBoxs: [],
+      },
+    }), "K2Pro-Rearm");
+    mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 0 }), "K2Pro-Rearm");
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        materialBoxs: [],
+      },
+    }), "K2Pro-Rearm");
+    expect(ws.sentMessages).toEqual([]);
+
+    mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-Rearm");
+    expect(ws.sentMessages).toEqual([
+      JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
+    ]);
+  });
+
   it("identity conflictがopenの場合は旧deviceIdではなくendpoint暫定shadow IDを使う", () => {
     dataMock.monitorData.appSettings.connectionTargets = [
       {

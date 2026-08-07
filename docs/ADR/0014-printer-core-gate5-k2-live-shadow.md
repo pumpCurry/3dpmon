@@ -14,11 +14,13 @@ The available live K2 target is K2 Pro Combo with CFS, reported model `F012`. K2
 
 - Reuse the existing Printer Core v3 live shadow lifecycle for K2.
 - Detect K2 live shadow by explicit `printerType: "creality-k2"` or observed K2 identifiers such as `model: "F012"`.
+- Treat an observed K2 decision as sticky for the WebSocket lifetime so sparse delta frames do not fall back to K1.
 - Keep K1 and K2 shadow sessions in separate namespaces: `k1-live:*` and `k2-live:*`.
 - Route K2 frames to `K2Adapter` and store the resulting `NormalizedPrinterState` in `runtimeData.printerCoreV3Shadow`.
 - Do not compare K2 to legacy storedData in Gate 5; K2 shadow state is observation-only until live semantics are proven.
-- Send a single read-only `boxsInfo` probe when a K2 frame reports `cfsConnect=1` and no `boxsInfo` has been observed.
+- Send a read-only `boxsInfo` probe once per CFS connection epoch when a K2 frame reports `cfsConnect=1` and no `boxsInfo` has been observed for that epoch.
 - Keep the probe separate from command authority and `sendCommand()` request/response tracking.
+- Keep K2 out of both K1-only and Moonraker-only panel controls until K2-specific UI authority is designed.
 - Do not write K2 material topology to `hostSpoolMap`, `filamentSpools`, mount history, or filament ledger.
 
 ## Non-Goals

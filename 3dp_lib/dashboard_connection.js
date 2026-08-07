@@ -32,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1305 (PR #432)
+* @version 1.390.1306 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 21:18:02
+* @lastModified 2026-08-07 21:35:27
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -126,6 +126,14 @@ const connectionMap = {};
  *                                        - K2 CFS boxsInfo read-only probe を送信済みか
  * @property {boolean}        printerCoreV3K2BoxsInfoReceived
  *                                        - K2 CFS boxsInfo を受信済みか
+ * @property {boolean|null}   printerCoreV3K2CfsConnected
+ *                                        - K2 CFS 接続状態の直近観測
+ * @property {number}         printerCoreV3K2CfsEpoch
+ *                                        - K2 CFS 接続 epoch
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeSentEpoch
+ *                                        - K2 CFS boxsInfo probe を送信した epoch
+ * @property {number|null}    printerCoreV3K2BoxsInfoReceivedEpoch
+ *                                        - K2 CFS boxsInfo を受信した epoch
  * @property {{close:function():void}|null} [_extSession]
  *                                        - 外部プロトコル(Moonraker 等)セッション。
  *                                          生 WebSocket は st.ws に載せず、ここで保持して
@@ -362,12 +370,16 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
  * @private
  * @param {string} host - 解決済みホスト名
  * @param {object|null|undefined} data - 受信 payload
+ * @param {ConnectionState|null|undefined} state - 接続状態
  * @returns {"k1"|"k2"|null} shadow family、または対象外 null
  */
-function _resolvePrinterCoreV3ShadowFamily(host, data) {
+function _resolvePrinterCoreV3ShadowFamily(host, data, state) {
   const printerType = getPrinterType(host);
   if (printerType === "moonraker") {
     return null;
+  }
+  if (state?.printerCoreV3ShadowFamily === "k2") {
+    return "k2";
   }
   if (printerType === "creality-k2") {
     return "k2";
@@ -483,19 +495,44 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
   if (!state?.ws || state.ws.readyState !== WebSocket.OPEN) {
     return false;
   }
+  const hasCfsConnect = Object.prototype.hasOwnProperty.call(data || {}, "cfsConnect");
+  const cfsConnectValue = hasCfsConnect ? Number(data.cfsConnect) : null;
+  if (hasCfsConnect && cfsConnectValue === 0) {
+    if (state.printerCoreV3K2CfsConnected !== false) {
+      state.printerCoreV3K2CfsEpoch = Number(state.printerCoreV3K2CfsEpoch || 0) + 1;
+    }
+    state.printerCoreV3K2CfsConnected = false;
+    state.printerCoreV3K2BoxsInfoProbeSent = false;
+    state.printerCoreV3K2BoxsInfoReceived = false;
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
+    return false;
+  }
   if (data?.boxsInfo && typeof data.boxsInfo === "object") {
     state.printerCoreV3K2BoxsInfoReceived = true;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = Number(state.printerCoreV3K2CfsEpoch || 0);
     return false;
   }
-  if (state.printerCoreV3K2BoxsInfoProbeSent || state.printerCoreV3K2BoxsInfoReceived) {
+  if (!hasCfsConnect || cfsConnectValue !== 1) {
     return false;
   }
-  if (Number(data?.cfsConnect) !== 1) {
+  if (state.printerCoreV3K2CfsConnected !== true) {
+    state.printerCoreV3K2CfsEpoch = Number(state.printerCoreV3K2CfsEpoch || 0) + 1;
+    state.printerCoreV3K2BoxsInfoProbeSent = false;
+    state.printerCoreV3K2BoxsInfoReceived = false;
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
+  }
+  state.printerCoreV3K2CfsConnected = true;
+  const epoch = Number(state.printerCoreV3K2CfsEpoch || 0);
+  if (state.printerCoreV3K2BoxsInfoProbeSentEpoch === epoch ||
+      state.printerCoreV3K2BoxsInfoReceivedEpoch === epoch) {
     return false;
   }
   try {
     state.ws.send(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
     state.printerCoreV3K2BoxsInfoProbeSent = true;
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch = epoch;
     pushLog("[Printer Core v3] K2 CFS boxsInfo read-only probe を送信しました", "info", false, host);
     return true;
   } catch (e) {
@@ -619,6 +656,10 @@ const placeholderState = {
   printerCoreV3ShadowFamily: null,
   printerCoreV3K2BoxsInfoProbeSent: false,
   printerCoreV3K2BoxsInfoReceived: false,
+  printerCoreV3K2CfsConnected: null,
+  printerCoreV3K2CfsEpoch: 0,
+  printerCoreV3K2BoxsInfoProbeSentEpoch: null,
+  printerCoreV3K2BoxsInfoReceivedEpoch: null,
   state: "disconnected"
 };
 
@@ -659,6 +700,10 @@ function getState(host) {
       printerCoreV3ShadowFamily: null,
       printerCoreV3K2BoxsInfoProbeSent: false,
       printerCoreV3K2BoxsInfoReceived: false,
+      printerCoreV3K2CfsConnected: null,
+      printerCoreV3K2CfsEpoch: 0,
+      printerCoreV3K2BoxsInfoProbeSentEpoch: null,
+      printerCoreV3K2BoxsInfoReceivedEpoch: null,
       state: "disconnected"
     };
   }
@@ -1349,6 +1394,10 @@ function handleSocketOpen(host) {
   st.printerCoreV3ShadowFamily = initialShadowFamily;
   st.printerCoreV3K2BoxsInfoProbeSent = false;
   st.printerCoreV3K2BoxsInfoReceived = false;
+  st.printerCoreV3K2CfsConnected = null;
+  st.printerCoreV3K2CfsEpoch = 0;
+  st.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
+  st.printerCoreV3K2BoxsInfoReceivedEpoch = null;
 
   // Heartbeat開始（30秒おき）
   startHeartbeat(st.ws, 30_000, host);
@@ -1495,7 +1544,7 @@ function handleSocketMessage(event, host) {
     const resolvedHost = data?.hostname || hostKey;
     ensureMachineData(resolvedHost);
     processData(data, resolvedHost);
-    const shadowFamily = _resolvePrinterCoreV3ShadowFamily(hostKey, data);
+    const shadowFamily = _resolvePrinterCoreV3ShadowFamily(hostKey, data, st);
     if (shadowFamily) {
       const shadowSession = _ensurePrinterCoreV3LiveShadowSession(resolvedHost, st, printerCoreV3Identity, shadowFamily);
       if (shadowSession) {

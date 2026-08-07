@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1173 (PR #404)
+ * @version 1.390.1306 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-07-11 11:08:28
+ * @lastModified 2026-08-07 21:31:50
  * -----------------------------------------------------------
  */
 
@@ -136,7 +136,7 @@ export function initializePanel(panelType, panelBody, hostname) {
       console.error(`[panel-init] ${panelType} の初期化に失敗:`, e);
     }
   }
-  // プリンタ種別に応じて K1 専用 UI を出し分ける（全パネル共通）
+  // プリンタ種別に応じて機種専用 UI を出し分ける（全パネル共通）
   try {
     _applyMachineTypeVisibility(panelBody, hostname);
   } catch (e) {
@@ -149,7 +149,7 @@ export function initializePanel(panelType, panelBody, hostname) {
  * 表示/非表示にする。
  *
  * 【詳細説明】
- * - `data-machine-type="k1-only"`: Creality K1 系のみ表示（Moonraker 機では非表示）。
+ * - `data-machine-type="k1-only"`: Creality K1 系のみ表示（K2 / Moonraker 機では非表示）。
  *   箱内温度・側面/背面FAN・LED・AI 機能・K1 専用コマンドボタン等が対象。
  * - `data-machine-type="moonraker-only"`: Moonraker 機のみ表示。
  * - 属性なしの要素は常に表示（両機種共通 UI）。
@@ -163,11 +163,12 @@ function _applyMachineTypeVisibility(panelBody, hostname) {
   if (!panelBody || !hostname || hostname === "shared") return;
   const type = getPrinterType(hostname);
   const isK1 = type === "creality-k1";
+  const isMoonraker = type === "moonraker";
   panelBody.querySelectorAll('[data-machine-type="k1-only"]').forEach((el) => {
     el.classList.toggle("hidden", !isK1);
   });
   panelBody.querySelectorAll('[data-machine-type="moonraker-only"]').forEach((el) => {
-    el.classList.toggle("hidden", isK1);
+    el.classList.toggle("hidden", !isMoonraker);
   });
 }
 
