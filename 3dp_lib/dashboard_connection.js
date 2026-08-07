@@ -32,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1306 (PR #432)
+* @version 1.390.1307 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 21:35:27
+* @lastModified 2026-08-07 21:42:04
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -497,6 +497,7 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
   }
   const hasCfsConnect = Object.prototype.hasOwnProperty.call(data || {}, "cfsConnect");
   const cfsConnectValue = hasCfsConnect ? Number(data.cfsConnect) : null;
+  const hasBoxsInfo = data?.boxsInfo && typeof data.boxsInfo === "object";
   if (hasCfsConnect && cfsConnectValue === 0) {
     if (state.printerCoreV3K2CfsConnected !== false) {
       state.printerCoreV3K2CfsEpoch = Number(state.printerCoreV3K2CfsEpoch || 0) + 1;
@@ -508,23 +509,25 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
     return false;
   }
-  if (data?.boxsInfo && typeof data.boxsInfo === "object") {
-    state.printerCoreV3K2BoxsInfoReceived = true;
-    state.printerCoreV3K2BoxsInfoReceivedEpoch = Number(state.printerCoreV3K2CfsEpoch || 0);
-    return false;
-  }
-  if (!hasCfsConnect || cfsConnectValue !== 1) {
-    return false;
-  }
-  if (state.printerCoreV3K2CfsConnected !== true) {
+  if (hasCfsConnect && cfsConnectValue === 1 && state.printerCoreV3K2CfsConnected !== true) {
     state.printerCoreV3K2CfsEpoch = Number(state.printerCoreV3K2CfsEpoch || 0) + 1;
     state.printerCoreV3K2BoxsInfoProbeSent = false;
     state.printerCoreV3K2BoxsInfoReceived = false;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
     state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
   }
-  state.printerCoreV3K2CfsConnected = true;
+  if (hasCfsConnect && cfsConnectValue === 1) {
+    state.printerCoreV3K2CfsConnected = true;
+  }
   const epoch = Number(state.printerCoreV3K2CfsEpoch || 0);
+  if (hasBoxsInfo) {
+    state.printerCoreV3K2BoxsInfoReceived = true;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
+    return false;
+  }
+  if (!hasCfsConnect || cfsConnectValue !== 1) {
+    return false;
+  }
   if (state.printerCoreV3K2BoxsInfoProbeSentEpoch === epoch ||
       state.printerCoreV3K2BoxsInfoReceivedEpoch === epoch) {
     return false;

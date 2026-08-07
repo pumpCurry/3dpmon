@@ -369,6 +369,24 @@ describe("Printer Core v3 identity dry-run", () => {
     ]);
   });
 
+  it("K2 CFS接続通知とboxsInfoが同一frameにある場合はprobeを送らない", () => {
+    mod.connectWithType("203.0.113.34:9999", "creality-k1");
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-MixedFrame",
+      model: "F012",
+      cfsConnect: 1,
+      boxsInfo: {
+        materialBoxs: [],
+      },
+    }), "203.0.113.34");
+    expect(ws.sentMessages).toEqual([]);
+
+    mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-MixedFrame");
+    expect(ws.sentMessages).toEqual([]);
+  });
+
   it("identity conflictがopenの場合は旧deviceIdではなくendpoint暫定shadow IDを使う", () => {
     dataMock.monitorData.appSettings.connectionTargets = [
       {
