@@ -18,6 +18,9 @@ Gate 3 connects K1 WebSocket receive handling to Printer Core v3 as a live shado
 - The shadow path records normalized state, sequence, last observed time, and field-by-field differences against legacy projection.
 - WebSocket open creates a new shadow session ID. The first JSON frame fixes the shadow `deviceId` for that session.
 - WebSocket close, manual disconnect, stale-socket replacement, and cleanup end the shadow session so `adapterState` cannot leak across reconnects.
+- Stale close requests update runtimeData only when they still target the current shadow `sessionId`.
+- If identity evidence has an open conflict, live shadow uses an endpoint/host provisional ID instead of reusing the conflicting authoritative seed.
+- `caseFanPct` is normalized as `fans.case` so it remains separate from K2 chamber temperature and chamber heater concepts.
 
 No command path, UI rendering path, IndexedDB schema, connection target authority, or K1 transmission behavior changes in this gate.
 
@@ -36,7 +39,11 @@ Gate 3 adds coverage for:
 - K1 delta replay preserving protocol-state semantics during live shadow
 - runtime differential recording when legacy and v3 diverge
 - shadow session close marking runtimeData as closed
+- stale session close preserving the active runtimeData record
+- recoverable session-not-started observe retry without hiding unrelated adapter exceptions
+- identity-conflict fallback to host provisional shadow ID
 - connection-layer K1 WebSocket receive branching into live shadow
+- connection-layer open, close, manual disconnect, cleanup, and stale WebSocket replacement lifecycle assertions
 - transactional `beginSession()` preserving the old instance if new instance construction fails
 - table-driven alias replay for bed temperature, filename, and hostname fields
 

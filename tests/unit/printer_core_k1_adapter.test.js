@@ -168,7 +168,7 @@ function projectLegacyStoredData(host) {
         enabled: rawBooleanFlag(host, "fanAuxiliary"),
         percent: rawNumber(host, "auxiliaryFanPct"),
       },
-      chamber: {
+      case: {
         enabled: rawBooleanFlag(host, "fanCase"),
         percent: rawNumber(host, "caseFanPct"),
       },

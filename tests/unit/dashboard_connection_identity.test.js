@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({
   monitorData: {
     appSettings: { httpPort: 80, connectionTargets: [] },
-    machines: {}, hostSpoolMap: {}, filamentSpools: [],
+    machines: {}, hostCameraToggle: {}, hostSpoolMap: {}, filamentSpools: [],
   },
   PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_",
   setNotificationSuppressed: vi.fn(), setStoredDataForHost: vi.fn(),
@@ -49,7 +49,11 @@ vi.mock("../../3dp_lib/printer_core/dashboard_live_shadow.js", () => ({
   createPrinterCoreV3ShadowSessionId: vi.fn(() => "k1-live:test-session"),
   endK1LiveShadowSession: vi.fn(),
   observeK1LiveShadowFrame: vi.fn(),
-  resolveK1LiveShadowDeviceId: vi.fn(({ identity, host }) => identity?.deviceIdSeed || `host:${host}`),
+  resolveK1LiveShadowDeviceId: vi.fn(({ identity, identityConflict, identityConflicts, host }) => {
+    const hasOpenConflict = identityConflict?.status === "open" ||
+      (Array.isArray(identityConflicts) && identityConflicts.some((entry) => entry?.status === "open"));
+    return hasOpenConflict ? `host:${host}` : identity?.deviceIdSeed || `host:${host}`;
+  }),
 }));
 
 class FakeWebSocket {
@@ -77,6 +81,7 @@ beforeEach(async () => {
   shadowMock = await import("../../3dp_lib/printer_core/dashboard_live_shadow.js");
   dataMock.monitorData.appSettings.connectionTargets = [];
   dataMock.monitorData.machines = {};
+  dataMock.monitorData.hostCameraToggle = {};
   dataMock.monitorData.hostSpoolMap = {};
   dataMock.monitorData.filamentSpools = [];
   vi.clearAllMocks();
@@ -87,6 +92,22 @@ afterEach(() => {
   }
   delete window._3dpmonRelayChild;
 });
+
+function connectK1Socket(dest) {
+  mod.connectWithType(dest, "creality-k1");
+  return FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+}
+
+function receiveK1Status(ip, host, extra = {}) {
+  mod.simulateReceivedJson(JSON.stringify({
+    hostname: host,
+    model: "K1 Max",
+    printProgress: 50,
+    video: 1,
+    video1: 0,
+    ...extra,
+  }), ip);
+}
 
 describe("T-ID-01: connectAllSavedTargets — 同一IP別ポートを両方接続", () => {
   it("同一IP・別ポート(共にK1)は2本とも接続する（IP単位dedupe廃止の証跡）", () => {
@@ -232,6 +253,111 @@ describe("Printer Core v3 identity dry-run", () => {
         video: 1,
         video1: 0,
       },
+    });
+  });
+
+  it("identity conflictがopenの場合は旧deviceIdではなくhost暫定shadow IDを使う", () => {
+    dataMock.monitorData.appSettings.connectionTargets = [
+      {
+        dest: "203.0.113.13:9999",
+        printerType: "creality-k1",
+        hostname: "K1Max-Conflict",
+        printerCoreV3Identity: {
+          schemaVersion: 1,
+          dryRun: true,
+          deviceIdSeed: "serial:old-serial",
+          identityStrength: "serial",
+          serialNumber: "OLD-SERIAL",
+          stableMachineId: null,
+          reportedModel: "K1 Max",
+          reportedHostname: "K1Max-Conflict",
+          endpointAliases: { addresses: ["203.0.113.13"], macs: [] },
+        },
+      },
+    ];
+
+    connectK1Socket("203.0.113.13:9999");
+    receiveK1Status("203.0.113.13", "K1Max-Conflict", { sn: "NEW-SERIAL" });
+
+    expect(shadowMock.resolveK1LiveShadowDeviceId).toHaveBeenCalledWith(expect.objectContaining({
+      identity: expect.objectContaining({ deviceIdSeed: "serial:old-serial" }),
+      identityConflict: expect.objectContaining({ status: "open" }),
+      identityConflicts: expect.arrayContaining([expect.objectContaining({ status: "open" })]),
+      host: "K1Max-Conflict",
+      dest: "203.0.113.13:9999",
+    }));
+    expect(shadowMock.beginK1LiveShadowSession).toHaveBeenCalledWith({
+      host: "K1Max-Conflict",
+      deviceId: "host:K1Max-Conflict",
+      sessionId: "k1-live:test-session",
+    });
+  });
+
+  it("WebSocket openでK1 live shadow session IDを生成する", () => {
+    const ws = connectK1Socket("203.0.113.20:9999");
+
+    ws.onopen();
+
+    expect(shadowMock.createPrinterCoreV3ShadowSessionId).toHaveBeenCalledWith({
+      host: "203.0.113.20",
+      dest: "203.0.113.20:9999",
+    });
+  });
+
+  it("WebSocket closeでK1 live shadow sessionを終了する", () => {
+    const ws = connectK1Socket("203.0.113.21:9999");
+    ws.onopen();
+    receiveK1Status("203.0.113.21", "K1Max-Close");
+    shadowMock.endK1LiveShadowSession.mockClear();
+
+    ws.onclose();
+
+    expect(shadowMock.endK1LiveShadowSession).toHaveBeenCalledWith({
+      host: "K1Max-Close",
+      deviceId: "provisional:k1%20max:k1max-close",
+      sessionId: "k1-live:test-session",
+    });
+  });
+
+  it("manual disconnectでK1 live shadow sessionを終了する", () => {
+    connectK1Socket("203.0.113.22:9999");
+    receiveK1Status("203.0.113.22", "K1Max-Disconnect");
+    shadowMock.endK1LiveShadowSession.mockClear();
+
+    mod.disconnectWs("K1Max-Disconnect");
+
+    expect(shadowMock.endK1LiveShadowSession).toHaveBeenCalledWith({
+      host: "K1Max-Disconnect",
+      deviceId: "provisional:k1%20max:k1max-disconnect",
+      sessionId: "k1-live:test-session",
+    });
+  });
+
+  it("cleanupConnectionでK1 live shadow sessionを終了する", () => {
+    connectK1Socket("203.0.113.23:9999");
+    receiveK1Status("203.0.113.23", "K1Max-Cleanup");
+    shadowMock.endK1LiveShadowSession.mockClear();
+
+    expect(mod.cleanupConnection("K1Max-Cleanup")).toBe(true);
+
+    expect(shadowMock.endK1LiveShadowSession).toHaveBeenCalledWith({
+      host: "K1Max-Cleanup",
+      deviceId: "provisional:k1%20max:k1max-cleanup",
+      sessionId: "k1-live:test-session",
+    });
+  });
+
+  it("同一destのstale WebSocket置換時に旧K1 live shadow sessionを終了する", () => {
+    connectK1Socket("203.0.113.24:9999");
+    receiveK1Status("203.0.113.24", "K1Max-Stale");
+    shadowMock.endK1LiveShadowSession.mockClear();
+
+    connectK1Socket("203.0.113.24:9999");
+
+    expect(shadowMock.endK1LiveShadowSession).toHaveBeenCalledWith({
+      host: "K1Max-Stale",
+      deviceId: "provisional:k1%20max:k1max-stale",
+      sessionId: "k1-live:test-session",
     });
   });
 });

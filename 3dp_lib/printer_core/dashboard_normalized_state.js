@@ -19,9 +19,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1298 (PR #432)
+ * @version 1.390.1300 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 16:50:55
+ * @lastModified 2026-08-07 18:07:20
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で K2 Pro Combo / CFS topology の正規化フィールドを追加する
@@ -361,6 +361,8 @@ function normalizeTemperatures(payload, options = {}) {
  *
  * 【詳細説明】
  * - `modelFanPct` / `auxiliaryFanPct` / `caseFanPct` を優先し、旧名 `fan` 系へ fallback する。
+ * - `caseFanPct` は筐体ファンであり、K2 系の chamber temperature / chamber heater と衝突しないよう
+ *   `fans.case` として保持する。
  *
  * @private
  * @param {object} payload - K1 系 WS9999 status payload
@@ -371,20 +373,20 @@ function normalizeTemperatures(payload, options = {}) {
 function normalizeFans(payload, options = {}) {
   const partCooling = {};
   const auxiliary = {};
-  const chamber = {};
+  const caseFan = {};
   const partCoolingLegacyPct = options.patch ? null : firstPercentNumber([payload.modelFanPct]);
   const auxiliaryLegacyPct = options.patch ? null : firstPercentNumber([payload.auxiliaryFanPct]);
-  const chamberLegacyPct = options.patch ? null : firstPercentNumber([payload.caseFanPct]);
+  const caseLegacyPct = options.patch ? null : firstPercentNumber([payload.caseFanPct]);
   setIfPresent(partCooling, "enabled", !options.patch || hasOwn(payload, "fan"), toBooleanFlag(payload.fan));
   setIfPresent(partCooling, "percent", !options.patch || hasOwn(payload, "modelFanPct"), partCoolingLegacyPct ?? toPercentNumber(payload.modelFanPct));
   setIfPresent(auxiliary, "enabled", !options.patch || hasOwn(payload, "fanAuxiliary"), toBooleanFlag(payload.fanAuxiliary));
   setIfPresent(auxiliary, "percent", !options.patch || hasOwn(payload, "auxiliaryFanPct"), auxiliaryLegacyPct ?? toPercentNumber(payload.auxiliaryFanPct));
-  setIfPresent(chamber, "enabled", !options.patch || hasOwn(payload, "fanCase"), toBooleanFlag(payload.fanCase));
-  setIfPresent(chamber, "percent", !options.patch || hasOwn(payload, "caseFanPct"), chamberLegacyPct ?? toPercentNumber(payload.caseFanPct));
+  setIfPresent(caseFan, "enabled", !options.patch || hasOwn(payload, "fanCase"), toBooleanFlag(payload.fanCase));
+  setIfPresent(caseFan, "percent", !options.patch || hasOwn(payload, "caseFanPct"), caseLegacyPct ?? toPercentNumber(payload.caseFanPct));
   return {
     ...(omitEmpty(partCooling) ? { partCooling } : {}),
     ...(omitEmpty(auxiliary) ? { auxiliary } : {}),
-    ...(omitEmpty(chamber) ? { chamber } : {}),
+    ...(omitEmpty(caseFan) ? { case: caseFan } : {}),
   };
 }
 

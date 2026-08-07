@@ -9,7 +9,9 @@ import {
   beginK1LiveShadowSession,
   createPrinterCoreV3ShadowSessionId,
   endK1LiveShadowSession,
+  isRecoverableK1LiveShadowObserveError,
   observeK1LiveShadowFrame,
+  resolveK1LiveShadowDeviceId,
 } from "../../3dp_lib/printer_core/dashboard_live_shadow.js";
 
 function stored(rawValue) {
@@ -40,6 +42,42 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
 
     expect(sessionId).toBe("k1-live:K1Max-A:192.168.54.151%3A9999:2026-08-07T08%3A15%3A03.000Z");
+  });
+
+  it("open conflictがある場合は旧identityのdeviceIdSeedではなくhost暫定IDを使う", () => {
+    const deviceId = resolveK1LiveShadowDeviceId({
+      host: "K1Max-New",
+      dest: "192.168.54.151:9999",
+      identity: { deviceIdSeed: "serial:old-machine" },
+      identityConflict: { status: "open" },
+    });
+
+    expect(deviceId).toBe("host:K1Max-New");
+  });
+
+  it("session未開始だけをrecoverable observe errorとして扱う", () => {
+    expect(isRecoverableK1LiveShadowObserveError(new Error("session has not been started"))).toBe(true);
+    expect(isRecoverableK1LiveShadowObserveError(new Error("adapter invariant failed"))).toBe(false);
+  });
+
+  it("未開始sessionのobserveは1回だけsessionを開始して復旧する", () => {
+    const host = "K1Max-Live-Recover";
+    const deviceId = "host:K1Max-Live-Recover";
+    const sessionId = "k1-live:test-recover";
+    setMachine(host, {
+      printProgress: stored(10),
+    });
+
+    const record = observeK1LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: { printProgress: 10 },
+      receivedAt: "2026-08-07T08:15:03.000Z",
+    });
+
+    expect(record.state).toBe("matched");
+    expect(record.lastSequence).toBe(1);
   });
 
   it("processData後のlegacy storedDataとv3 shadow stateが一致すればmatchedとしてruntimeDataへ記録する", () => {
@@ -156,5 +194,19 @@ describe("Printer Core v3 K1 live shadow", () => {
 
     expect(endK1LiveShadowSession({ host, deviceId, sessionId })).toBe(true);
     expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow.state).toBe("closed");
+  });
+
+  it("stale sessionの終了要求では現在のruntimeDataをclosedへ変えない", () => {
+    const host = "K1Max-Live-E";
+    const deviceId = "host:K1Max-Live-E";
+    setMachine(host);
+    beginK1LiveShadowSession({ host, deviceId, sessionId: "k1-live:old" });
+    beginK1LiveShadowSession({ host, deviceId, sessionId: "k1-live:new" });
+
+    expect(endK1LiveShadowSession({ host, deviceId, sessionId: "k1-live:old" })).toBe(false);
+    expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow).toMatchObject({
+      state: "active",
+      sessionId: "k1-live:new",
+    });
   });
 });

@@ -31,9 +31,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1299 (PR #432)
+* @version 1.390.1300 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 17:15:03
+* @lastModified 2026-08-07 18:07:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -319,7 +319,7 @@ function _findConnectionTarget(destOrHost) {
  * @private
  * @param {string} hostOrDest - 接続キー、hostname、または dest
  * @param {object} evidence - WebSocket 受信データまたは ARP 解決結果
- * @returns {object|null} 保存した v3 identity dry-run 候補、または対象なしの場合 null
+ * @returns {object|null} 保存結果と evidence 一式、または対象なしの場合 null
  */
 function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
   const state = connectionMap[hostOrDest] || {};
@@ -333,7 +333,13 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
   if (result.changed) {
     saveUnifiedStorage(true);
   }
-  return result.identity;
+  return {
+    ...result,
+    conflict: result.conflict || target.printerCoreV3IdentityConflict || null,
+    pending: result.pending || target.printerCoreV3PendingIdentityCandidate || null,
+    conflicts: Array.isArray(target.printerCoreV3IdentityConflicts) ? target.printerCoreV3IdentityConflicts : [],
+    pendings: Array.isArray(target.printerCoreV3PendingIdentityCandidates) ? target.printerCoreV3PendingIdentityCandidates : [],
+  };
 }
 
 /**
@@ -346,10 +352,10 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
  * @private
  * @param {string} host - 解決済みホスト名
  * @param {ConnectionState} state - 接続状態
- * @param {object|null} identity - Printer Core v3 identity dry-run record
+ * @param {object|null} identityResult - Printer Core v3 identity dry-run 保存結果
  * @returns {{deviceId:string, sessionId:string}|null} shadow session 情報
  */
-function _ensureK1LiveShadowSession(host, state, identity) {
+function _ensureK1LiveShadowSession(host, state, identityResult) {
   if (!host || !state) return null;
   if (!state.printerCoreV3ShadowSessionId) {
     state.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
@@ -359,7 +365,9 @@ function _ensureK1LiveShadowSession(host, state, identity) {
   }
   if (!state.printerCoreV3ShadowDeviceId) {
     state.printerCoreV3ShadowDeviceId = resolveK1LiveShadowDeviceId({
-      identity,
+      identity: identityResult?.identity || null,
+      identityConflict: identityResult?.conflict || null,
+      identityConflicts: identityResult?.conflicts || [],
       host,
       dest: state.dest || host,
     });

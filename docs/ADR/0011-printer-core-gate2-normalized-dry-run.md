@@ -35,7 +35,7 @@ This gate does not alter `connectionTargets`, IndexedDB stores, WebSocket routin
 Gate 2 adds real legacy differential coverage using both captured K1 Max devices. The same fixture frames are streamed through `processData()` and through `K1Adapter`/`PrinterInstance`, then compared after each frame:
 
 - nozzle and bed current/target temperatures
-- part cooling, auxiliary, and chamber fan percentages
+- part cooling, auxiliary, and case fan percentages
 - LED state
 - print state, progress, layer, total layer, remaining time, and filename
 - current XYZ position
