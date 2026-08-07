@@ -17,9 +17,9 @@
  * - {@link createPrinterFacade}：PrinterFacade の factory
  * - {@link createK1PrinterFacade}：K1 dry-run 用 PrinterFacade の factory
  *
- * @version 1.390.1297 (PR #432)
+ * @version 1.390.1298 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 12:22:00
+ * @lastModified 2026-08-07 16:50:55
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で legacy connection 層の shadow pipeline へ接続する
@@ -115,6 +115,10 @@ export class PrinterFacade {
     const deviceId = this._requireNonEmptyId(options?.deviceId, "deviceId");
     const sessionId = this._requireNonEmptyId(options?.sessionId, "sessionId");
     const adapter = this._resolveAdapter(options);
+    const previousInstance = this.instances.get(deviceId);
+    if (previousInstance && typeof previousInstance.close === "function") {
+      previousInstance.close();
+    }
     const instance = createPrinterInstance({
       deviceId,
       sessionId,
@@ -176,6 +180,7 @@ export class PrinterFacade {
     if (!instance || instance.sessionId !== sessionId) {
       return false;
     }
+    instance.close();
     return this.instances.delete(deviceId);
   }
 

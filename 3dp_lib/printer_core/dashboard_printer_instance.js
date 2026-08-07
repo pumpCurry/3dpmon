@@ -16,9 +16,9 @@
  * - {@link PrinterInstance}：物理プリンタ単位の normalized state holder
  * - {@link createPrinterInstance}：PrinterInstance の factory
  *
- * @version 1.390.1297 (PR #432)
+ * @version 1.390.1298 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 12:22:00
+ * @lastModified 2026-08-07 16:50:55
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の device/session repository と接続する
@@ -84,6 +84,8 @@ export class PrinterInstance {
     this.adapter = options.adapter;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.sequence = 0;
+    this.active = true;
+    this.adapterState = null;
     this.capabilities = createEmptyNormalizedPrinterState({
       deviceId: this.deviceId,
       sessionId: this.sessionId,
@@ -116,6 +118,15 @@ export class PrinterInstance {
    */
   observeFrame(frame, context = {}) {
     const incomingSessionId = String(context.sessionId ?? "").trim();
+    if (!this.active) {
+      return {
+        accepted: false,
+        reason: "session-closed",
+        deviceId: this.deviceId,
+        sessionId: incomingSessionId || null,
+        activeSessionId: this.sessionId,
+      };
+    }
     if (incomingSessionId !== this.sessionId) {
       return {
         accepted: false,
@@ -133,8 +144,10 @@ export class PrinterInstance {
       sessionId: this.sessionId,
       sequence: nextSequence,
       receivedAt,
+      adapterState: this.adapterState,
     });
     this.sequence = nextSequence;
+    this.adapterState = normalizedPatch.adapterState ?? this.adapterState;
     this.capabilities = mergeCapabilitySets(this.capabilities, normalizedPatch.capabilities);
     this.state = {
       ...applyNormalizedStatePatch(this.state, normalizedPatch),
@@ -156,6 +169,26 @@ export class PrinterInstance {
    */
   getState() {
     return cloneNormalizedValue(this.state);
+  }
+
+  /**
+   * Instance を closed 状態へ移行する。
+   *
+   * 【詳細説明】
+   * - Facade が同じ deviceId で新 session を開始した場合、旧参照からの直接 observe を拒否する。
+   * - close は冪等にし、複数回呼ばれても状態を巻き戻さない。
+   *
+   * @function close
+   * @returns {boolean} 今回の呼び出しで active から closed へ変化した場合 true
+   * @example
+   * const closed = instance.close();
+   */
+  close() {
+    if (!this.active) {
+      return false;
+    }
+    this.active = false;
+    return true;
   }
 }
 

@@ -15,9 +15,10 @@ K1 transmission and UI authority must not switch in this gate. The new path has 
 Gate 2 introduces the first read-only Printer Core body:
 
 - `PrinterInstance` holds one physical printer's latest normalized state and monotonic sequence.
-- `PrinterFacade` owns instances by `deviceId`, but sessions are started explicitly with `beginSession()` so stale frames cannot roll back a newer connection session.
+- `PrinterFacade` owns instances by `deviceId`, but sessions are started explicitly with `beginSession()` so stale frames cannot roll back a newer connection session. Superseded instances are closed so direct stale references fail closed.
 - `NormalizedPrinterState` defines the dry-run state shape for temperatures, fans, light, print progress, layers, remaining time, filename, motion position, error, camera flags, and AI flags.
 - `K1Adapter` returns normalized state patches, not replacement states. `PrinterInstance` applies those patches to preserve legacy K1 delta-frame semantics.
+- `K1Adapter` keeps a small internal protocol state for multi-raw-field semantics such as `video`/`video1`, `printProgress`/`dProgress`, bed temperature aliases, filename aliases, and hostname aliases. Delta payload keys still decide which normalized fields are patched, while the accumulated protocol state decides the semantic value.
 - `Capability model` provides deterministic capability sets inferred from observed frames.
 - `K1Adapter` converts K1/K1 Max WS9999 status frames into `NormalizedPrinterState`.
 
@@ -44,6 +45,8 @@ Gate 2 adds real legacy differential coverage using both captured K1 Max devices
 - facade/instance sequence and capability accumulation
 - sequence 4 to sequence 5 delta replay for K1 Max device-b, ensuring sparse temperature updates preserve prior filename, state, fans, light, and position
 - session lifecycle and stale-session rejection
+- direct stale `PrinterInstance` references returning `session-closed`
+- multi-raw-field delta replay for camera and progress, ensuring sparse deltas do not override higher-priority retained raw values
 
 ## Consequences
 

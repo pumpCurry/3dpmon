@@ -17,9 +17,9 @@
  * - {@link K1Adapter}：K1 系 payload を正規化する Adapter class
  * - {@link createK1Adapter}：K1Adapter の factory
  *
- * @version 1.390.1297 (PR #432)
+ * @version 1.390.1298 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 12:22:00
+ * @lastModified 2026-08-07 16:50:55
  * -----------------------------------------------------------
  * @todo
  * - K1C 実環境 fixture 取得後に K1C/CFS-C 固有差分を capability catalog へ追加する
@@ -49,6 +49,104 @@ export const K1_ADAPTER_ID = "creality-k1";
  * @constant {string}
  */
 export const K1_ADAPTER_PROTOCOL = "ws9999";
+
+/**
+ * K1 delta frame を意味値へ戻すために累積する raw key 一覧。
+ *
+ * 【詳細説明】
+ * - `video` と `video1`、`printProgress` と `dProgress` のように複数 raw key から
+ *   1つの semantic field を作る値は、delta 単体では正しい優先順位を復元できない。
+ * - Adapter 内部で protocol state として保持し、Normalized Patch には観測 key だけを出す。
+ *
+ * @constant {string[]}
+ */
+const K1_PROTOCOL_STATE_KEYS = Object.freeze([
+  "video",
+  "video1",
+  "printProgress",
+  "dProgress",
+  "printFileName",
+  "fileName",
+  "bedTemp0",
+  "bedTemp1",
+  "bedTemp2",
+  "targetBedTemp0",
+  "targetBedTemp1",
+  "targetBedTemp2",
+  "hostname",
+  "deviceName",
+]);
+
+/**
+ * K1Adapter が Instance 越しに保持する内部状態。
+ *
+ * @typedef {object} K1AdapterState
+ * @property {number} schemaVersion - Adapter 内部状態の schema version
+ * @property {object} raw - delta frame を累積した raw protocol state
+ */
+
+/**
+ * 空の K1 Adapter 内部状態を生成する。
+ *
+ * 【詳細説明】
+ * - Instance が初回 frame を処理する前でも同じ shape を Adapter に渡せるようにする。
+ *
+ * @private
+ * @returns {K1AdapterState} 空の K1 Adapter 内部状態
+ */
+function createEmptyK1AdapterState() {
+  return {
+    schemaVersion: 1,
+    raw: {},
+  };
+}
+
+/**
+ * K1 Adapter 内部状態を deep clone する。
+ *
+ * 【詳細説明】
+ * - Instance が保持する state を Adapter 側で直接 mutate しないための防御的 clone。
+ *
+ * @private
+ * @param {K1AdapterState|null|undefined} adapterState - 既存 Adapter 内部状態
+ * @returns {K1AdapterState} clone 済み Adapter 内部状態
+ */
+function cloneK1AdapterState(adapterState) {
+  if (!adapterState || typeof adapterState !== "object") {
+    return createEmptyK1AdapterState();
+  }
+  return {
+    schemaVersion: 1,
+    raw: {
+      ...(adapterState.raw && typeof adapterState.raw === "object" ? adapterState.raw : {}),
+    },
+  };
+}
+
+/**
+ * K1 raw delta payload を Adapter 内部 protocol state へ反映する。
+ *
+ * 【詳細説明】
+ * - multi-raw-field の semantic 値だけを復元対象にし、NormalizedState そのものとは分離する。
+ * - `null` や空文字も firmware から届いた明示値なので、key が存在する場合はそのまま保持する。
+ *
+ * @private
+ * @param {K1AdapterState|null|undefined} previousState - 既存 Adapter 内部状態
+ * @param {object|null|undefined} payload - 今回観測した K1 raw payload
+ * @returns {K1AdapterState} 更新後 Adapter 内部状態
+ */
+function reduceK1AdapterState(previousState, payload) {
+  const nextState = cloneK1AdapterState(previousState);
+  if (!payload || typeof payload !== "object") {
+    return nextState;
+  }
+  for (const key of K1_PROTOCOL_STATE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) {
+      nextState.raw[key] = payload[key];
+    }
+  }
+  return nextState;
+}
 
 /**
  * fixture event や frame から K1 系 status payload を抽出する。
@@ -136,19 +234,26 @@ export class K1Adapter {
    * @param {?string=} context.sessionId - 接続セッション ID
    * @param {?number=} context.sequence - Instance 内の受信順序
    * @param {?string=} context.receivedAt - 受信時刻 ISO 文字列
+   * @param {K1AdapterState=} context.adapterState - 前回 frame までの Adapter 内部状態
    * @returns {object} 正規化済み Normalized Patch
    * @example
    * const state = adapter.normalizeFrame(event, { sequence: 1 });
    */
   normalizeFrame(frame, context = {}) {
     const payload = extractK1StatusPayload(frame);
+    const adapterState = reduceK1AdapterState(context.adapterState, payload);
     const capabilities = inferK1Capabilities(payload);
-    return createK1StatusPatch(payload, {
+    const normalizedPatch = createK1StatusPatch(payload, {
       ...context,
       adapterId: this.adapterId,
       protocol: this.protocol,
       capabilities,
+      protocolState: adapterState.raw,
     });
+    return {
+      ...normalizedPatch,
+      adapterState,
+    };
   }
 }
 

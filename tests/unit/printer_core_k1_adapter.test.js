@@ -315,6 +315,50 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     expect(withPercent.patch.fans.partCooling).toEqual({ enabled: true, percent: 47 });
   });
 
+  it("multi-raw camera field の delta frame でも protocol state から MJPEG capability を復元する", () => {
+    const facade = createK1PrinterFacade({
+      clock: () => new Date("2026-08-07T02:42:13.000Z"),
+    });
+    facade.beginSession({ deviceId: "fixture:k1-camera", sessionId: "session-camera" });
+
+    const first = facade.observeFrame({
+      deviceId: "fixture:k1-camera",
+      sessionId: "session-camera",
+      frame: { video: 1, video1: 0 },
+    });
+    const second = facade.observeFrame({
+      deviceId: "fixture:k1-camera",
+      sessionId: "session-camera",
+      frame: { video1: 0 },
+    });
+
+    expect(first.camera.mjpeg).toBe(true);
+    expect(second.camera.mjpeg).toBe(true);
+    expect(second.source.rawKeys).toEqual(["video1"]);
+  });
+
+  it("multi-raw progress field の delta frame でも printProgress 優先を維持する", () => {
+    const facade = createK1PrinterFacade({
+      clock: () => new Date("2026-08-07T02:42:13.000Z"),
+    });
+    facade.beginSession({ deviceId: "fixture:k1-progress", sessionId: "session-progress" });
+
+    const first = facade.observeFrame({
+      deviceId: "fixture:k1-progress",
+      sessionId: "session-progress",
+      frame: { printProgress: 50, dProgress: 40 },
+    });
+    const second = facade.observeFrame({
+      deviceId: "fixture:k1-progress",
+      sessionId: "session-progress",
+      frame: { dProgress: 41 },
+    });
+
+    expect(first.print.progressPct).toBe(50);
+    expect(second.print.progressPct).toBe(50);
+    expect(second.source.rawKeys).toEqual(["dProgress"]);
+  });
+
   it("K1 Max device-a fixture stream を実processDataとframeごとに比較できる", () => {
     const states = replayFixtureThroughLegacyAndV3(
       FIXTURE_DEVICE_A,
@@ -358,7 +402,7 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     expect(() => facade.beginSession({ deviceId: "", sessionId: "session-1" })).toThrow(TypeError);
     expect(() => facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "" })).toThrow(TypeError);
 
-    facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-1" });
+    const oldInstance = facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-1" });
     const first = facade.observeFrame({
       deviceId: "fixture:k1-max-a",
       sessionId: "session-1",
@@ -366,6 +410,7 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     });
 
     facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-2" });
+    const closed = oldInstance.observeFrame(event, { sessionId: "session-1" });
     const stale = facade.observeFrame({
       deviceId: "fixture:k1-max-a",
       sessionId: "session-1",
@@ -378,6 +423,13 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     });
 
     expect(first.source.sequence).toBe(1);
+    expect(closed).toEqual({
+      accepted: false,
+      reason: "session-closed",
+      deviceId: "fixture:k1-max-a",
+      sessionId: "session-1",
+      activeSessionId: "session-1",
+    });
     expect(stale).toEqual({
       accepted: false,
       reason: "stale-session",

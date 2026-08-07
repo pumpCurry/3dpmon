@@ -19,9 +19,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1297 (PR #432)
+ * @version 1.390.1298 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-07 12:22:00
+ * @lastModified 2026-08-07 16:50:55
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で K2 Pro Combo / CFS topology の正規化フィールドを追加する
@@ -230,24 +230,6 @@ function omitEmpty(value) {
 }
 
 /**
- * payload field を presence 情報付きで返す。
- *
- * 【詳細説明】
- * - `firstFiniteNumber()` などへ「欠落 key」を伝えるための小さな wrapper。
- *
- * @private
- * @param {object} payload - WS9999 status payload
- * @param {string} key - 取得する key
- * @returns {{present: boolean, value: *}} presence 付き値
- */
-function field(payload, key) {
-  return {
-    present: hasOwn(payload, key),
-    value: payload?.[key],
-  };
-}
-
-/**
  * 数値 flag を boolean へ変換する。
  *
  * 【詳細説明】
@@ -317,9 +299,13 @@ function listRawKeys(payload) {
  * @param {object} payload - K1 系 WS9999 status payload
  * @param {object=} options - 正規化オプション
  * @param {boolean=} options.patch - 差分 patch として未観測 key を省略する場合 true
+ * @param {object=} options.protocolState - delta frame を累積した protocol state
  * @returns {object} 正規化済み温度 object
  */
 function normalizeTemperatures(payload, options = {}) {
+  const semanticPayload = options.protocolState && typeof options.protocolState === "object"
+    ? options.protocolState
+    : payload;
   if (!options.patch) {
     return {
       nozzle: {
@@ -346,10 +332,18 @@ function normalizeTemperatures(payload, options = {}) {
   setIfPresent(nozzle, "target", hasOwn(payload, "targetNozzleTemp"), toFiniteNumber(payload.targetNozzleTemp));
   setIfPresent(nozzle, "max", hasOwn(payload, "maxNozzleTemp"), toFiniteNumber(payload.maxNozzleTemp));
   if (hasOwn(payload, "bedTemp0") || hasOwn(payload, "bedTemp1") || hasOwn(payload, "bedTemp2")) {
-    bed.current = firstFiniteNumber([field(payload, "bedTemp0"), field(payload, "bedTemp1"), field(payload, "bedTemp2")]);
+    bed.current = firstFiniteNumber([
+      { present: hasOwn(semanticPayload, "bedTemp0"), value: semanticPayload.bedTemp0 },
+      { present: hasOwn(semanticPayload, "bedTemp1"), value: semanticPayload.bedTemp1 },
+      { present: hasOwn(semanticPayload, "bedTemp2"), value: semanticPayload.bedTemp2 },
+    ]);
   }
   if (hasOwn(payload, "targetBedTemp0") || hasOwn(payload, "targetBedTemp1") || hasOwn(payload, "targetBedTemp2")) {
-    bed.target = firstFiniteNumber([field(payload, "targetBedTemp0"), field(payload, "targetBedTemp1"), field(payload, "targetBedTemp2")]);
+    bed.target = firstFiniteNumber([
+      { present: hasOwn(semanticPayload, "targetBedTemp0"), value: semanticPayload.targetBedTemp0 },
+      { present: hasOwn(semanticPayload, "targetBedTemp1"), value: semanticPayload.targetBedTemp1 },
+      { present: hasOwn(semanticPayload, "targetBedTemp2"), value: semanticPayload.targetBedTemp2 },
+    ]);
   }
   setIfPresent(bed, "max", hasOwn(payload, "maxBedTemp"), toFiniteNumber(payload.maxBedTemp));
   setIfPresent(chamber, "current", hasOwn(payload, "boxTemp"), toFiniteNumber(payload.boxTemp));
@@ -447,23 +441,27 @@ function normalizePrint(payload) {
  *
  * @private
  * @param {object} payload - K1 系 WS9999 status payload
+ * @param {object=} protocolState - delta frame を累積した protocol state
  * @returns {object|undefined} print patch、または undefined
  */
-function createPrintPatch(payload) {
+function createPrintPatch(payload, protocolState = payload) {
   const patch = {};
   if (hasOwn(payload, "state")) {
     Object.assign(patch, normalizePrintState(payload.state));
   }
   setIfPresent(patch, "deviceStateCode", hasOwn(payload, "deviceState"), toFiniteNumber(payload.deviceState));
   if (hasOwn(payload, "printProgress") || hasOwn(payload, "dProgress")) {
-    patch.progressPct = firstPercentNumber([field(payload, "printProgress"), field(payload, "dProgress")]);
+    patch.progressPct = firstPercentNumber([
+      { present: hasOwn(protocolState, "printProgress"), value: protocolState.printProgress },
+      { present: hasOwn(protocolState, "dProgress"), value: protocolState.dProgress },
+    ]);
   }
   setIfPresent(patch, "layer", hasOwn(payload, "layer"), toFiniteNumber(payload.layer));
   setIfPresent(patch, "totalLayer", hasOwn(payload, "TotalLayer"), toFiniteNumber(payload.TotalLayer));
   setIfPresent(patch, "remainingSec", hasOwn(payload, "printLeftTime"), toFiniteNumber(payload.printLeftTime));
   setIfPresent(patch, "elapsedSec", hasOwn(payload, "printJobTime"), toFiniteNumber(payload.printJobTime));
   if (hasOwn(payload, "printFileName") || hasOwn(payload, "fileName")) {
-    patch.fileName = toNullableString(payload.printFileName ?? payload.fileName);
+    patch.fileName = toNullableString(protocolState.printFileName ?? protocolState.fileName);
   }
   setIfPresent(patch, "jobId", hasOwn(payload, "printId"), toNullableString(payload.printId));
   setIfPresent(patch, "startedAtSec", hasOwn(payload, "printStartTime"), toFiniteNumber(payload.printStartTime));
@@ -525,12 +523,16 @@ function normalizeAi(payload, options = {}) {
  * @param {object} payload - K1 系 WS9999 status payload
  * @param {object=} options - 正規化オプション
  * @param {boolean=} options.patch - 差分 patch として未観測 key を省略する場合 true
+ * @param {object=} options.protocolState - delta frame を累積した protocol state
  * @returns {object} 正規化済み camera object
  */
 function normalizeCamera(payload, options = {}) {
+  const semanticPayload = options.protocolState && typeof options.protocolState === "object"
+    ? options.protocolState
+    : payload;
   const camera = {};
   if (!options.patch || hasOwn(payload, "video") || hasOwn(payload, "video1")) {
-    camera.mjpeg = Number(payload.video) === 1 || Number(payload.video1) === 1;
+    camera.mjpeg = Number(semanticPayload.video) === 1 || Number(semanticPayload.video1) === 1;
   }
   setIfPresent(camera, "webrtc", !options.patch || hasOwn(payload, "webrtcSupport"), Number(payload.webrtcSupport) === 1);
   setIfPresent(camera, "timelapseEnabled", !options.patch || hasOwn(payload, "videoElapse"), Number(payload.videoElapse) === 1);
@@ -679,25 +681,29 @@ export function applyNormalizedStatePatch(state, normalizedPatch) {
  * @param {?number=} options.sequence - Instance 内の受信順序
  * @param {?string=} options.receivedAt - 受信時刻 ISO 文字列
  * @param {object=} options.capabilities - Adapter が推定した capability set
+ * @param {object=} options.protocolState - delta frame を累積した protocol state
  * @returns {object} Normalized Patch
  * @example
  * const patch = createK1StatusPatch(payload, { adapterId: "creality-k1" });
  */
 export function createK1StatusPatch(payload, options = {}) {
   const rawPayload = payload && typeof payload === "object" ? payload : {};
+  const protocolState = options.protocolState && typeof options.protocolState === "object"
+    ? options.protocolState
+    : rawPayload;
   const patch = {};
   const identity = {};
-  const temperatures = normalizeTemperatures(rawPayload, { patch: true });
+  const temperatures = normalizeTemperatures(rawPayload, { patch: true, protocolState });
   const fans = normalizeFans(rawPayload, { patch: true });
-  const print = createPrintPatch(rawPayload);
+  const print = createPrintPatch(rawPayload, protocolState);
   const ai = normalizeAi(rawPayload, { patch: true });
-  const camera = normalizeCamera(rawPayload, { patch: true });
+  const camera = normalizeCamera(rawPayload, { patch: true, protocolState });
 
   setIfPresent(identity, "deviceId", true, options.deviceId ?? null);
   setIfPresent(identity, "sessionId", true, options.sessionId ?? null);
   setIfPresent(identity, "reportedModel", hasOwn(rawPayload, "model"), toNullableString(rawPayload.model));
   if (hasOwn(rawPayload, "hostname") || hasOwn(rawPayload, "deviceName")) {
-    identity.reportedHostname = toNullableString(rawPayload.hostname ?? rawPayload.deviceName);
+    identity.reportedHostname = toNullableString(protocolState.hostname ?? protocolState.deviceName);
   }
   setIfPresent(patch, "identity", true, identity);
   setIfPresent(patch, "temperatures", Object.keys(temperatures).length > 0, temperatures);
