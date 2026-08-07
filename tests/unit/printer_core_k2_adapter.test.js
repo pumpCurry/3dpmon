@@ -43,6 +43,10 @@ function readK2BoxsInfoEvent() {
   return readK2JsonEvents().find((event) => event.payload.body.boxsInfo);
 }
 
+function numberFromFixtureValue(value) {
+  return Number(value);
+}
+
 describe("Printer Core v3 K2 read-only adapter", () => {
   it("fixture event から K2 status payload と boxsInfo payload を抽出する", () => {
     const statusEvent = readK2StatusEvent();
@@ -59,6 +63,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
   it("K2 status frame を K1 と同じ semantic field へ read-only 正規化する", () => {
     const adapter = createK2Adapter();
     const statusEvent = readK2StatusEvent();
+    const statusPayload = extractK2Payload(statusEvent);
     const patch = adapter.normalizeFrame(statusEvent, {
       deviceId: "fixture:k2-pro-cfs",
       sessionId: "fixture-session-k2",
@@ -69,8 +74,8 @@ describe("Printer Core v3 K2 read-only adapter", () => {
     expect(patch.kind).toBe("state-patch");
     expect(patch.source.adapterId).toBe("creality-k2");
     expect(patch.patch.identity.reportedModel).toBe("F012");
-    expect(patch.patch.temperatures.nozzle.current).toBeCloseTo(32.09);
-    expect(patch.patch.temperatures.chamber.current).toBe(28);
+    expect(patch.patch.temperatures.nozzle.current).toBeCloseTo(numberFromFixtureValue(statusPayload.nozzleTemp));
+    expect(patch.patch.temperatures.chamber.current).toBe(numberFromFixtureValue(statusPayload.boxTemp));
     expect(patch.patch.fans.case).toEqual({ enabled: false, percent: 0 });
     expect(patch.patch.materials.cfs.connected).toBe(true);
     expect(hasCapability(patch.capabilities, PRINTER_CAPABILITIES.MATERIAL_CFS)).toBe(true);
@@ -79,6 +84,7 @@ describe("Printer Core v3 K2 read-only adapter", () => {
 
   it("K2 boxsInfo を CFS unit / source / tool assignment topology へ正規化する", () => {
     const boxsInfo = extractK2BoxsInfo(readK2BoxsInfoEvent());
+    const cfsBox = boxsInfo.materialBoxs.find((box) => box.id === 1);
     const topology = normalizeK2BoxsInfo(boxsInfo);
 
     expect(topology.cfs).toEqual({
@@ -91,8 +97,8 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       unitId: "cfs:1",
       boxId: 1,
       stateCode: 1,
-      temperature: 29,
-      humidity: 50,
+      temperature: cfsBox.temp,
+      humidity: cfsBox.humidity,
       serialNumber: "<SERIAL_002>",
       observedSlotCount: 4,
     }]);
@@ -311,10 +317,14 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       states.push(facade.observeFrame({ deviceId, sessionId, frame: event }));
     }
 
+    const lastNozzleFrame = readK2JsonEvents()
+      .map((event) => extractK2Payload(event))
+      .filter((frame) => Object.prototype.hasOwnProperty.call(frame, "nozzleTemp"))
+      .at(-1);
     const finalState = states.at(-1);
-    expect(finalState.source.sequence).toBe(3);
+    expect(finalState.source.sequence).toBe(readK2JsonEvents().length);
     expect(finalState.identity.reportedModel).toBe("F012");
-    expect(finalState.temperatures.nozzle.current).toBeCloseTo(32.09);
+    expect(finalState.temperatures.nozzle.current).toBeCloseTo(numberFromFixtureValue(lastNozzleFrame.nozzleTemp));
     expect(finalState.materials.cfs.connected).toBe(true);
     expect(finalState.materials.cfs.enabled).toBe(true);
     expect(finalState.materials.cfs.topologyState).toBe("fresh");

@@ -9,9 +9,9 @@
     "attachment": "CFS"
   },
   "capture": {
-    "capturedAt": "2026-08-06T14:31:42.941Z",
-    "scenario": "idle-baseline",
-    "operatorNotes": "Gate 0 baseline capture for K2 Pro Combo with read-only boxsInfo request"
+    "capturedAt": "2026-08-07T12:48:25.973Z",
+    "scenario": "gate6-live-idle-validation",
+    "operatorNotes": "Gate 6 read-only K2 Pro Combo live validation capture"
   },
   "endpoints": [
     {

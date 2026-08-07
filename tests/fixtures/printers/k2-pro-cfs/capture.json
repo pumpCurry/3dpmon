@@ -1,9 +1,9 @@
 {
   "fixtureVersion": 1,
-  "captureId": "capture_1fb25a0d-ea7d-4266-ae5a-e36a921a658f",
-  "startedAt": 1786026702941,
-  "stoppedAt": 1786026705582,
-  "durationMs": 2641,
+  "captureId": "capture_602ece51-b7a6-42b2-be10-46e4a6ebf592",
+  "startedAt": 1786106905973,
+  "stoppedAt": 1786106921120,
+  "durationMs": 15147,
   "metadata": {
     "fixtureVersion": 1,
     "device": {
@@ -15,9 +15,9 @@
       "attachment": "CFS"
     },
     "capture": {
-      "capturedAt": "2026-08-06T14:31:42.941Z",
-      "scenario": "idle-baseline",
-      "operatorNotes": "Gate 0 baseline capture for K2 Pro Combo with read-only boxsInfo request"
+      "capturedAt": "2026-08-07T12:48:25.973Z",
+      "scenario": "gate6-live-idle-validation",
+      "operatorNotes": "Gate 6 read-only K2 Pro Combo live validation capture"
     },
     "endpoints": [
       {
@@ -41,7 +41,7 @@
   "events": [
     {
       "sequence": 1,
-      "atMs": 2,
+      "atMs": 3,
       "direction": "event",
       "channel": "http-info",
       "kind": "transport",
@@ -52,7 +52,7 @@
     },
     {
       "sequence": 2,
-      "atMs": 23,
+      "atMs": 32,
       "direction": "in",
       "channel": "http-info",
       "kind": "frame",
@@ -73,7 +73,7 @@
     },
     {
       "sequence": 3,
-      "atMs": 31,
+      "atMs": 59,
       "direction": "event",
       "channel": "ws9999",
       "kind": "transport",
@@ -84,7 +84,7 @@
     },
     {
       "sequence": 4,
-      "atMs": 32,
+      "atMs": 59,
       "direction": "out",
       "channel": "ws9999",
       "kind": "frame",
@@ -100,7 +100,7 @@
     },
     {
       "sequence": 5,
-      "atMs": 45,
+      "atMs": 62,
       "direction": "in",
       "channel": "ws9999",
       "kind": "frame",
@@ -118,11 +118,11 @@
           "autoLevelResult": "310:1.04",
           "autohome": "X:0 Y:0 Z:0",
           "auxiliaryFanPct": 0,
-          "bedTemp0": "28.160000",
+          "bedTemp0": "22.780000",
           "bedTemp1": "0.000000",
           "bedTemp2": "0.000000",
           "bedTempAutoPid": 0,
-          "boxTemp": 28,
+          "boxTemp": 24,
           "caseFanPct": 0,
           "cfsConnect": 1,
           "connect": 1,
@@ -161,7 +161,7 @@
           "modelFanPct": 0,
           "modelVersion": "printer hw ver:;printer sw ver:;DWIN hw ver:CR0CN200400C10;DWIN sw ver:<IP_002>;",
           "nozzleMoveSnapshot": 0,
-          "nozzleTemp": "32.090000",
+          "nozzleTemp": "26.580000",
           "nozzleTempAutoPid": 0,
           "powerLoss": 0,
           "pressureAdvance": "0.040000",
@@ -200,7 +200,7 @@
     },
     {
       "sequence": 6,
-      "atMs": 45,
+      "atMs": 62,
       "direction": "in",
       "channel": "ws9999",
       "kind": "frame",
@@ -215,7 +215,7 @@
     },
     {
       "sequence": 7,
-      "atMs": 54,
+      "atMs": 78,
       "direction": "in",
       "channel": "ws9999",
       "kind": "frame",
@@ -296,8 +296,8 @@
                 "id": 1,
                 "state": 1,
                 "type": 0,
-                "temp": 29,
-                "humidity": 50,
+                "temp": 26,
+                "humidity": 53,
                 "sn": "<SERIAL_002>",
                 "materials": [
                   {
@@ -394,6 +394,82 @@
         }
       },
       "details": {}
+    },
+    {
+      "sequence": 8,
+      "atMs": 3206,
+      "direction": "in",
+      "channel": "ws9999",
+      "kind": "frame",
+      "payload": {
+        "frameType": "text",
+        "bodyKind": "json",
+        "body": {
+          "nozzleTemp": "26.600000",
+          "bedTemp0": "22.970000"
+        }
+      },
+      "details": {}
+    },
+    {
+      "sequence": 9,
+      "atMs": 4621,
+      "direction": "in",
+      "channel": "ws9999",
+      "kind": "frame",
+      "payload": {
+        "frameType": "text",
+        "bodyKind": "json",
+        "body": {
+          "nozzleTemp": "26.560000",
+          "bedTemp0": "23.000000"
+        }
+      },
+      "details": {}
+    },
+    {
+      "sequence": 10,
+      "atMs": 4877,
+      "direction": "in",
+      "channel": "ws9999",
+      "kind": "frame",
+      "payload": {
+        "frameType": "text",
+        "bodyKind": "json",
+        "body": {
+          "nozzleTemp": "26.570000",
+          "bedTemp0": "22.990000"
+        }
+      },
+      "details": {}
+    },
+    {
+      "sequence": 11,
+      "atMs": 10109,
+      "direction": "in",
+      "channel": "ws9999",
+      "kind": "frame",
+      "payload": {
+        "frameType": "text",
+        "bodyKind": "json",
+        "body": {
+          "nozzleTemp": "26.550000",
+          "bedTemp0": "22.790000"
+        }
+      },
+      "details": {}
+    },
+    {
+      "sequence": 12,
+      "atMs": 15044,
+      "direction": "event",
+      "channel": "ws9999",
+      "kind": "transport",
+      "type": "close",
+      "details": {
+        "code": 1005,
+        "reason": ""
+      }
     }
   ]
 }

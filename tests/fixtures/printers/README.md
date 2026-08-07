@@ -27,6 +27,8 @@ Supported but not live-tested in this fixture set:
 Live K2-family test target:
 
 - K2 Pro Combo with CFS: represented by `k2-pro-cfs`; reported model `F012`.
+- The `k2-pro-cfs` fixture was refreshed during Gate 6 with a read-only idle capture
+  that observed HTTP `/info`, WebSocket 9999 status, and `boxsInfo` topology.
 
 Fixture rules:
 
