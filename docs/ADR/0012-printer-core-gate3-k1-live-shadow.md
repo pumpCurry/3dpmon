@@ -19,7 +19,8 @@ Gate 3 connects K1 WebSocket receive handling to Printer Core v3 as a live shado
 - WebSocket open creates a new shadow session ID. The first JSON frame fixes the shadow `deviceId` for that session.
 - WebSocket close, manual disconnect, stale-socket replacement, and cleanup end the shadow session so `adapterState` cannot leak across reconnects.
 - Stale close requests update runtimeData only when they still target the current shadow `sessionId`.
-- If identity evidence has an open conflict, live shadow uses an endpoint/host provisional ID instead of reusing the conflicting authoritative seed.
+- A missing-session recovery is allowed only when the requested `deviceId` / `sessionId` still matches the current runtime shadow record, so delayed callbacks cannot resurrect an older shadow session.
+- If identity evidence has an open conflict, live shadow uses an endpoint-first `provisional-shadow:*` ID instead of reusing the conflicting authoritative seed.
 - `caseFanPct` is normalized as `fans.case` so it remains separate from K2 chamber temperature and chamber heater concepts.
 
 No command path, UI rendering path, IndexedDB schema, connection target authority, or K1 transmission behavior changes in this gate.
@@ -28,7 +29,7 @@ No command path, UI rendering path, IndexedDB schema, connection target authorit
 
 The live shadow path is K1-only. Moonraker translated data continues through the existing `simulateReceivedJson()` route but is not shadowed by the K1 live observer.
 
-If Printer Core v3 detects a mismatch, it writes the diff to `runtimeData.printerCoreV3Shadow.lastDiffs` and logs a console warning. The legacy UI remains authoritative even when the shadow state differs.
+If Printer Core v3 detects a mismatch, it writes the diff to `runtimeData.printerCoreV3Shadow.lastDiffs`. Console warnings are emitted for the first diff, changed diff paths, or after a short interval so repeated equivalent mismatches do not flood DevTools. The legacy UI remains authoritative even when the shadow state differs.
 
 ## Tests
 
@@ -41,7 +42,10 @@ Gate 3 adds coverage for:
 - shadow session close marking runtimeData as closed
 - stale session close preserving the active runtimeData record
 - recoverable session-not-started observe retry without hiding unrelated adapter exceptions
-- identity-conflict fallback to host provisional shadow ID
+- stale missing-session recovery rejection when a newer runtime shadow record is active
+- nonrecoverable observe exception recording as `state:"error"`
+- repeated diff warning throttling while runtimeData still updates every frame
+- identity-conflict fallback to endpoint-first provisional shadow ID
 - connection-layer K1 WebSocket receive branching into live shadow
 - connection-layer open, close, manual disconnect, cleanup, and stale WebSocket replacement lifecycle assertions
 - transactional `beginSession()` preserving the old instance if new instance construction fails

@@ -44,7 +44,7 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(sessionId).toBe("k1-live:K1Max-A:192.168.54.151%3A9999:2026-08-07T08%3A15%3A03.000Z");
   });
 
-  it("open conflictがある場合は旧identityのdeviceIdSeedではなくhost暫定IDを使う", () => {
+  it("open conflictがある場合は旧identityのdeviceIdSeedではなくendpoint暫定IDを使う", () => {
     const deviceId = resolveK1LiveShadowDeviceId({
       host: "K1Max-New",
       dest: "192.168.54.151:9999",
@@ -52,7 +52,7 @@ describe("Printer Core v3 K1 live shadow", () => {
       identityConflict: { status: "open" },
     });
 
-    expect(deviceId).toBe("host:K1Max-New");
+    expect(deviceId).toBe("provisional-shadow:endpoint:192.168.54.151%3A9999");
   });
 
   it("session未開始だけをrecoverable observe errorとして扱う", () => {
@@ -78,6 +78,72 @@ describe("Printer Core v3 K1 live shadow", () => {
 
     expect(record.state).toBe("matched");
     expect(record.lastSequence).toBe(1);
+  });
+
+  it("未開始sessionでも現在runtime recordと異なる旧deviceId/sessionは復旧しない", () => {
+    const host = "K1Max-Live-Stale-Recover";
+    setMachine(host, {
+      printProgress: stored(10),
+    });
+    beginK1LiveShadowSession({ host, deviceId: "host:K1Max-Live-Stale-Recover", sessionId: "k1-live:old" });
+    endK1LiveShadowSession({ host, deviceId: "host:K1Max-Live-Stale-Recover", sessionId: "k1-live:old" });
+    beginK1LiveShadowSession({ host, deviceId: "serial:strong-id", sessionId: "k1-live:new" });
+
+    const stale = observeK1LiveShadowFrame({
+      host,
+      deviceId: "host:K1Max-Live-Stale-Recover",
+      sessionId: "k1-live:old",
+      frame: { printProgress: 10 },
+    });
+
+    expect(stale).toEqual({
+      accepted: false,
+      reason: "stale-shadow-session",
+      host,
+      deviceId: "host:K1Max-Live-Stale-Recover",
+      sessionId: "k1-live:old",
+      activeDeviceId: "serial:strong-id",
+      activeSessionId: "k1-live:new",
+    });
+    expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow).toMatchObject({
+      deviceId: "serial:strong-id",
+      sessionId: "k1-live:new",
+      state: "active",
+    });
+  });
+
+  it("非recoverable observe errorはsession再生成せずruntimeDataへerrorとして記録する", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const host = "K1Max-Live-Error";
+    const deviceId = "host:K1Max-Live-Error";
+    const sessionId = "k1-live:error";
+    const facade = {
+      observeFrame: vi.fn(() => {
+        throw new Error("adapter invariant failed");
+      }),
+    };
+    setMachine(host);
+
+    const record = observeK1LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: { printProgress: 10 },
+    }, { facade });
+
+    expect(facade.observeFrame).toHaveBeenCalledOnce();
+    expect(record).toMatchObject({
+      state: "error",
+      shadowError: {
+        reason: "shadow-observe-error",
+        message: "adapter invariant failed",
+      },
+    });
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow).toMatchObject({
+      state: "error",
+      sessionId,
+    });
   });
 
   it("processData後のlegacy storedDataとv3 shadow stateが一致すればmatchedとしてruntimeDataへ記録する", () => {
@@ -182,6 +248,17 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(record.lastDiffs).toEqual([
       { path: "print.progressPct", v3: 50, legacy: 49 },
     ]);
+    expect(warnSpy).toHaveBeenCalledOnce();
+
+    const repeated = observeK1LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: { printProgress: 51 },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    expect(repeated.state).toBe("diff");
     expect(warnSpy).toHaveBeenCalledOnce();
   });
 

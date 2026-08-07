@@ -18,9 +18,9 @@
  * - {@link observeK1LiveShadowFrame}：K1 live frame を v3 state へ反映し legacy differential を記録
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  *
- * @version 1.390.1300 (PR #432)
+ * @version 1.390.1301 (PR #432)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-07 18:07:20
+ * @lastModified 2026-08-07 20:38:03
  * -----------------------------------------------------------
  * @todo
  * - Gate 4 以降で K2 Pro Combo / CFS 用 shadow adapter を追加する
@@ -51,6 +51,16 @@ export const PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION = 1;
  * @constant {object}
  */
 const k1LiveShadowFacade = createK1PrinterFacade();
+
+/**
+ * 同一 diff path の console warning を再出力する最短間隔。
+ *
+ * 【詳細説明】
+ * - runtimeData は全 frame で更新するが、恒常的な差分で DevTools console が埋まらないようにする。
+ *
+ * @constant {number}
+ */
+const SHADOW_DIFF_WARN_INTERVAL_MS = 10_000;
 
 /**
  * object が持つ key を安全に判定する。
@@ -132,6 +142,28 @@ function hasOpenIdentityConflict(conflict, conflicts) {
 }
 
 /**
+ * identity conflict 中に使う暫定 shadow deviceId を生成する。
+ *
+ * 【詳細説明】
+ * - conflict 中は hostname や serial identity を信用しすぎないため、接続 endpoint を優先する。
+ * - `provisional-shadow:` namespace に閉じ、後続 Data Schema v3 の stable device ID と混同しないようにする。
+ *
+ * @private
+ * @param {object=} options - ID 生成オプション
+ * @param {string=} options.host - 解決済みホスト名
+ * @param {string=} options.dest - 接続先 dest
+ * @returns {string} 暫定 shadow deviceId
+ */
+function createConflictShadowDeviceId(options = {}) {
+  const endpoint = String(options.dest || "").trim();
+  if (endpoint) {
+    return `provisional-shadow:endpoint:${encodeURIComponent(endpoint)}`;
+  }
+  const host = String(options.host || "").trim();
+  return `provisional-shadow:host:${encodeURIComponent(host || "unknown")}`;
+}
+
+/**
  * shadow session 用の deviceId を決定する。
  *
  * 【詳細説明】
@@ -153,7 +185,7 @@ function hasOpenIdentityConflict(conflict, conflicts) {
 export function resolveK1LiveShadowDeviceId(options = {}) {
   const hostOrDest = String(options.host || options.dest || "").trim();
   if (hasOpenIdentityConflict(options.identityConflict, options.identityConflicts)) {
-    return `host:${hostOrDest || "unknown"}`;
+    return createConflictShadowDeviceId(options);
   }
   const seed = String(options.identity?.deviceIdSeed || "").trim();
   if (seed) {
@@ -179,6 +211,21 @@ function getMachineForShadow(host) {
   }
   machine.runtimeData ??= {};
   return machine;
+}
+
+/**
+ * host の現在の live shadow runtime record を返す。
+ *
+ * 【詳細説明】
+ * - recover 判定では runtimeData 側の現在 session を権威にし、古い callback が旧sessionを再生成しないようにする。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @returns {object|null} 現在の shadow runtime record、または null
+ */
+function getCurrentShadowRecord(host) {
+  const machine = getMachineForShadow(host);
+  return machine?.runtimeData?.printerCoreV3Shadow || null;
 }
 
 /**
@@ -506,6 +553,52 @@ export function diffK1ShadowStates(v3, legacy) {
 }
 
 /**
+ * diff path だけを使った console warning 用 signature を生成する。
+ *
+ * 【詳細説明】
+ * - 値が毎frame揺れても同じ原因の差分なら同一signatureにし、ログ量を抑制する。
+ *
+ * @private
+ * @param {Array<object>} diffs - 差分一覧
+ * @returns {string} diff path signature
+ */
+function createShadowDiffSignature(diffs) {
+  return (Array.isArray(diffs) ? diffs : [])
+    .map((diff) => String(diff?.path || ""))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+/**
+ * 差分を console warning として出力すべきか判定する。
+ *
+ * 【詳細説明】
+ * - 最初の差分、差分pathの変化、または一定時間経過時だけ true にする。
+ * - runtimeData の lastDiffs はこの判定に関係なく毎frame更新される。
+ *
+ * @private
+ * @param {object} previous - 前回の runtime shadow record
+ * @param {string} signature - 現在 diff の path signature
+ * @param {string} observedAt - 現在観測時刻
+ * @returns {boolean} console warning を出す場合 true
+ */
+function shouldWarnShadowDiff(previous, signature, observedAt) {
+  if (!signature) {
+    return false;
+  }
+  if (previous.lastDiffLogSignature !== signature) {
+    return true;
+  }
+  const previousAt = Date.parse(previous.lastDiffLogAt || "");
+  const currentAt = Date.parse(observedAt || "");
+  if (!Number.isFinite(previousAt) || !Number.isFinite(currentAt)) {
+    return true;
+  }
+  return currentAt - previousAt >= SHADOW_DIFF_WARN_INTERVAL_MS;
+}
+
+/**
  * K1 live shadow session を開始する。
  *
  * 【詳細説明】
@@ -553,6 +646,58 @@ export function beginK1LiveShadowSession(options) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }
   return record;
+}
+
+/**
+ * session 未開始 error から復旧してよいか runtime record と照合する。
+ *
+ * 【詳細説明】
+ * - deviceId や sessionId が現在 record と異なる場合、遅延 callback 由来の stale observe とみなし、
+ *   旧 session を再生成しない。
+ * - runtime record が存在しない初回だけは、従来どおり未開始 session を1回復旧できる。
+ *
+ * @private
+ * @param {object} options - 復旧判定オプション
+ * @param {string} options.host - ホスト名
+ * @param {string} options.deviceId - shadow 用 deviceId
+ * @param {string} options.sessionId - shadow session ID
+ * @returns {{recoverable:boolean,rejection:(object|null)}} 復旧可否と拒否理由
+ */
+function canRecoverMissingShadowSession(options) {
+  const currentRecord = getCurrentShadowRecord(options.host);
+  if (!currentRecord) {
+    return { recoverable: true, rejection: null };
+  }
+  const sameSession =
+    currentRecord.deviceId === options.deviceId &&
+    currentRecord.sessionId === options.sessionId;
+  if (!sameSession) {
+    return {
+      recoverable: false,
+      rejection: {
+        accepted: false,
+        reason: "stale-shadow-session",
+        host: options.host,
+        deviceId: options.deviceId,
+        sessionId: options.sessionId,
+        activeDeviceId: currentRecord.deviceId ?? null,
+        activeSessionId: currentRecord.sessionId ?? null,
+      },
+    };
+  }
+  if (currentRecord.state === "closed") {
+    return {
+      recoverable: false,
+      rejection: {
+        accepted: false,
+        reason: "session-closed",
+        host: options.host,
+        deviceId: options.deviceId,
+        sessionId: options.sessionId,
+      },
+    };
+  }
+  return { recoverable: true, rejection: null };
 }
 
 /**
@@ -634,11 +779,13 @@ function recordK1LiveShadowObserveError(options) {
  * @param {string} options.sessionId - shadow session ID
  * @param {object|null|undefined} options.frame - K1 raw payload
  * @param {string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @param {object=} dependencies - テスト用依存注入
+ * @param {object=} dependencies.facade - observeFrame を提供する Facade
  * @returns {object} shadow runtime record または拒否理由
  * @example
  * const record = observeK1LiveShadowFrame({ host, deviceId, sessionId, frame: data });
  */
-export function observeK1LiveShadowFrame(options) {
+export function observeK1LiveShadowFrame(options, dependencies = {}) {
   const host = String(options?.host || "").trim();
   const deviceId = String(options?.deviceId || "").trim();
   const sessionId = String(options?.sessionId || "").trim();
@@ -652,9 +799,10 @@ export function observeK1LiveShadowFrame(options) {
     };
   }
 
+  const facade = dependencies.facade || k1LiveShadowFacade;
   let state;
   try {
-    state = k1LiveShadowFacade.observeFrame({
+    state = facade.observeFrame({
       deviceId,
       sessionId,
       frame: options.frame,
@@ -665,9 +813,13 @@ export function observeK1LiveShadowFrame(options) {
       console.error("[printer-core-v3 shadow] K1 observe failed", { host, sessionId, error });
       return recordK1LiveShadowObserveError({ host, deviceId, sessionId, error });
     }
+    const recovery = canRecoverMissingShadowSession({ host, deviceId, sessionId });
+    if (!recovery.recoverable) {
+      return recovery.rejection;
+    }
     beginK1LiveShadowSession({ host, deviceId, sessionId });
     try {
-      state = k1LiveShadowFacade.observeFrame({
+      state = facade.observeFrame({
         deviceId,
         sessionId,
         frame: options.frame,
@@ -701,6 +853,9 @@ export function observeK1LiveShadowFrame(options) {
   const diffs = diffK1ShadowStates(v3, legacy);
   const machine = getMachineForShadow(host);
   const previous = machine?.runtimeData?.printerCoreV3Shadow || {};
+  const lastObservedAt = state.source?.receivedAt ?? options.receivedAt ?? new Date().toISOString();
+  const diffSignature = createShadowDiffSignature(diffs);
+  const warnDiff = shouldWarnShadowDiff(previous, diffSignature, lastObservedAt);
   const record = {
     schemaVersion: PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION,
     enabled: true,
@@ -711,16 +866,18 @@ export function observeK1LiveShadowFrame(options) {
     observedFrames: Number(previous.observedFrames || 0) + 1,
     diffCount: Number(previous.diffCount || 0) + diffs.length,
     lastDiffs: diffs,
-    lastObservedAt: state.source?.receivedAt ?? options.receivedAt ?? new Date().toISOString(),
+    lastObservedAt,
     lastSequence: state.source?.sequence ?? null,
     lastState: state,
+    lastDiffLogSignature: warnDiff ? diffSignature : previous.lastDiffLogSignature ?? null,
+    lastDiffLogAt: warnDiff ? lastObservedAt : previous.lastDiffLogAt ?? null,
   };
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }
-  if (diffs.length > 0) {
+  if (warnDiff) {
     console.warn("[printer-core-v3 shadow] K1 legacy differential", { host, sessionId, diffs });
-  } else if (monitorData.appSettings?.logLevel === "debug") {
+  } else if (diffs.length === 0 && monitorData.appSettings?.logLevel === "debug") {
     console.debug("[printer-core-v3 shadow] K1 frame matched legacy", { host, sessionId, sequence: record.lastSequence });
   }
   return record;

@@ -49,10 +49,12 @@ vi.mock("../../3dp_lib/printer_core/dashboard_live_shadow.js", () => ({
   createPrinterCoreV3ShadowSessionId: vi.fn(() => "k1-live:test-session"),
   endK1LiveShadowSession: vi.fn(),
   observeK1LiveShadowFrame: vi.fn(),
-  resolveK1LiveShadowDeviceId: vi.fn(({ identity, identityConflict, identityConflicts, host }) => {
+  resolveK1LiveShadowDeviceId: vi.fn(({ identity, identityConflict, identityConflicts, host, dest }) => {
     const hasOpenConflict = identityConflict?.status === "open" ||
       (Array.isArray(identityConflicts) && identityConflicts.some((entry) => entry?.status === "open"));
-    return hasOpenConflict ? `host:${host}` : identity?.deviceIdSeed || `host:${host}`;
+    return hasOpenConflict
+      ? `provisional-shadow:endpoint:${encodeURIComponent(dest)}`
+      : identity?.deviceIdSeed || `host:${host}`;
   }),
 }));
 
@@ -256,7 +258,7 @@ describe("Printer Core v3 identity dry-run", () => {
     });
   });
 
-  it("identity conflictがopenの場合は旧deviceIdではなくhost暫定shadow IDを使う", () => {
+  it("identity conflictがopenの場合は旧deviceIdではなくendpoint暫定shadow IDを使う", () => {
     dataMock.monitorData.appSettings.connectionTargets = [
       {
         dest: "203.0.113.13:9999",
@@ -288,7 +290,7 @@ describe("Printer Core v3 identity dry-run", () => {
     }));
     expect(shadowMock.beginK1LiveShadowSession).toHaveBeenCalledWith({
       host: "K1Max-Conflict",
-      deviceId: "host:K1Max-Conflict",
+      deviceId: "provisional-shadow:endpoint:203.0.113.13%3A9999",
       sessionId: "k1-live:test-session",
     });
   });
