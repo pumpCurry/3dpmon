@@ -62,6 +62,11 @@ cfsConnect
 node scripts/analyze_protocol_scenario.mjs --fixture <dir> --require-observed-marker <name> --require-payload-key <key>
 ```
 
+- Add built-in profiles for long scenario contracts. Gate 9 starts with
+  `--profile k2-print-lifecycle`, which expands the expected scenario label,
+  validation requirement, source-aware lifecycle markers, and root payload keys
+  needed before K2 print semantics can be reviewed.
+
 ## Non-Goals
 
 - No live printer connection.

@@ -18,18 +18,21 @@
  * - {@link analyzeProtocolScenarioFromCli}：CLI options で scenario fixture を解析
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1316 (PR #432)
+ * @version 1.390.1317 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:19:49
+ * @lastModified 2026-08-08 08:29:20
  * -----------------------------------------------------------
  * @todo
- * - 標準 scenario profile を導入し、`--profile k2-printing` だけで必須条件を展開できるようにする
+ * - 実機 capture に基づいて `--profile k2-print-lifecycle` の window predicate を追加する
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { analyzeProtocolScenarioFixture } from "../3dp_lib/printer_core/dashboard_protocol_scenario_analyzer.js";
+import {
+  analyzeProtocolScenarioFixture,
+  listProtocolScenarioProfiles,
+} from "../3dp_lib/printer_core/dashboard_protocol_scenario_analyzer.js";
 
 /**
  * CLI ヘルプテキスト。
@@ -40,10 +43,11 @@ import { analyzeProtocolScenarioFixture } from "../3dp_lib/printer_core/dashboar
  * @constant {string}
  */
 const HELP_TEXT = `Usage:
-  node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/printing --require-observed-marker observed-printing --require-payload-key printProgress
+  node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/print-lifecycle --profile k2-print-lifecycle
 
 Options:
   --fixture <dir>              Required. Fixture directory containing metadata.json and events.ndjson.
+  --profile <name>             Apply a built-in scenario profile. Repeatable.
   --expected-scenario <name>   Require metadata.capture.scenario to match.
   --require-validation-success Require metadata.validation.success === true.
   --require-marker <name>      Require a marker by name with any source. Repeatable.
@@ -54,6 +58,9 @@ Options:
   --require-payload-key <key>  Require a protocol payload key such as boxsInfo or printProgress. Repeatable.
   --pretty                    Print indented JSON.
   --help                      Show this help.
+
+Profiles:
+  ${listProtocolScenarioProfiles().join("\n  ")}
 `;
 
 /**
@@ -72,6 +79,7 @@ Options:
 export function parseArgs(argv) {
   const options = {
     fixtureDir: "",
+    profiles: [],
     expectedScenario: "",
     requireValidationSuccess: false,
     requiredMarkers: [],
@@ -97,6 +105,10 @@ export function parseArgs(argv) {
     }
     if (arg === "--fixture") {
       options.fixtureDir = argv[++index] || "";
+      continue;
+    }
+    if (arg === "--profile") {
+      options.profiles.push(argv[++index] || "");
       continue;
     }
     if (arg === "--expected-scenario") {
@@ -191,6 +203,7 @@ export async function analyzeProtocolScenarioFromCli(options) {
     ...scheduledMarkers.map((name) => ({ name, source: "scheduled-cli" })),
   ];
   return analyzeProtocolScenarioFixture(fixture, {
+    profiles: options.profiles,
     expectedScenario: options.expectedScenario || undefined,
     requireValidationSuccess: options.requireValidationSuccess,
     requiredMarkers,

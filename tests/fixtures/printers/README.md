@@ -51,6 +51,12 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
   from stdin/operator input. Required payload keys are checked at the inbound
   semantic payload root, including known `result` / `data` envelopes, not inside
   nested structures such as `boxsInfo.materialBoxs[].state`.
+- For the Gate 9 K2 Pro Combo print lifecycle fixture, prefer the built-in
+  Analyzer profile:
+
+```text
+node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/print-lifecycle --profile k2-print-lifecycle --pretty
+```
 
 Fixture rules:
 

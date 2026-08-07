@@ -15,16 +15,61 @@
  * 【公開関数一覧】
  * - {@link analyzeProtocolScenarioFixture}：fixture events と metadata を scenario report へ変換
  * - {@link eventHasPayloadKey}：protocol event が指定 payload key を含むか判定
+ * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
+ * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1316 (PR #432)
+ * @version 1.390.1317 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:19:49
+ * @lastModified 2026-08-08 08:29:20
  * -----------------------------------------------------------
  * @todo
- * - K2 printing / paused / resumed / completed の実機 scenario fixture 取得後に標準profileを追加する
+ * - K2 print lifecycle 実機 fixture 取得後に window predicate profile を追加する
  */
 
 "use strict";
+
+/**
+ * 標準 scenario profile 定義。
+ *
+ * 【詳細説明】
+ * - profile は CLI の長い required marker / payload key 指定をまとめるための読み取り専用定義。
+ * - `k2-print-lifecycle` は Gate 9 の連続実機 capture 用であり、state semantics の認定ではなく
+ *   raw evidence が揃っているかだけを確認する。
+ *
+ * @constant {object}
+ */
+const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
+  "k2-print-lifecycle": Object.freeze({
+    name: "k2-print-lifecycle",
+    expectedScenario: "k2-print-lifecycle",
+    requireValidationSuccess: true,
+    requiredMarkers: Object.freeze([
+      Object.freeze({ name: "observed-idle-before-start", source: "stdin" }),
+      Object.freeze({ name: "operator-print-start", source: null }),
+      Object.freeze({ name: "observed-heating", source: "stdin" }),
+      Object.freeze({ name: "observed-printing", source: "stdin" }),
+      Object.freeze({ name: "operator-pause-requested", source: null }),
+      Object.freeze({ name: "observed-paused", source: "stdin" }),
+      Object.freeze({ name: "operator-resume-requested", source: null }),
+      Object.freeze({ name: "observed-resumed", source: "stdin" }),
+      Object.freeze({ name: "observed-completed", source: "stdin" }),
+      Object.freeze({ name: "observed-idle-after-completed", source: "stdin" }),
+    ]),
+    requiredPayloadKeys: Object.freeze([
+      "state",
+      "deviceState",
+      "printProgress",
+      "printFileName",
+      "printId",
+      "nozzleTemp",
+      "targetNozzleTemp",
+      "bedTemp0",
+      "targetBedTemp0",
+      "cfsConnect",
+      "boxsInfo",
+    ]),
+  }),
+});
 
 /**
  * object が指定 key を自前プロパティとして持つか判定する。
@@ -55,6 +100,106 @@ function normalizeStringList(values) {
   return (Array.isArray(values) ? values : [])
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);
+}
+
+/**
+ * 文字列配列から重複を除去する。
+ *
+ * 【詳細説明】
+ * - profile と CLI 個別指定を合成したときに同じ payload key を二重要求しないようにする。
+ *
+ * @private
+ * @param {string[]} values - 文字列配列
+ * @returns {string[]} 最初の出現順を保持した一意な文字列配列
+ */
+function uniqueStringList(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    if (seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
+}
+
+/**
+ * marker requirement 配列から重複を除去する。
+ *
+ * 【詳細説明】
+ * - source 付き requirement は `source:name`、source 不問 requirement は `name` を重複判定キーにする。
+ * - profile と CLI 個別指定の単純な重複を避け、同じ marker requirement で順序判定が不安定にならないようにする。
+ *
+ * @private
+ * @param {Array<object>} requirements - 正規化済み marker requirement 一覧
+ * @returns {Array<object>} 最初の出現順を保持した一意な requirement 一覧
+ */
+function uniqueMarkerRequirements(requirements) {
+  const seen = new Set();
+  return requirements.filter((requirement) => {
+    const key = formatMarkerRequirement(requirement);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * 標準 scenario profile を安全に複製する。
+ *
+ * 【詳細説明】
+ * - 呼び出し側が profile 定義を変更しても module 内の標準定義へ影響しないよう、配列と marker object を複製する。
+ *
+ * @private
+ * @param {object} profile - 標準 profile 定義
+ * @returns {object} 複製済み profile
+ */
+function cloneProtocolScenarioProfile(profile) {
+  return {
+    name: profile.name,
+    expectedScenario: profile.expectedScenario,
+    requireValidationSuccess: Boolean(profile.requireValidationSuccess),
+    requiredMarkers: profile.requiredMarkers.map((marker) => ({
+      name: marker.name,
+      source: marker.source,
+    })),
+    requiredPayloadKeys: [...profile.requiredPayloadKeys],
+  };
+}
+
+/**
+ * 利用可能な標準 scenario profile 名を列挙する。
+ *
+ * 【詳細説明】
+ * - CLI の `--help` や unit test から、profile 名を定義と同期したまま参照するために使う。
+ *
+ * @function listProtocolScenarioProfiles
+ * @returns {string[]} profile 名一覧
+ * @example
+ * const names = listProtocolScenarioProfiles();
+ */
+export function listProtocolScenarioProfiles() {
+  return Object.keys(PROTOCOL_SCENARIO_PROFILE_DEFINITIONS);
+}
+
+/**
+ * 標準 scenario profile を取得する。
+ *
+ * 【詳細説明】
+ * - 未知 profile は null を返し、Analyzer report 側で failure reason に変換できるようにする。
+ *
+ * @function getProtocolScenarioProfile
+ * @param {string} name - profile 名
+ * @returns {object|null} 複製済み profile、または null
+ * @example
+ * const profile = getProtocolScenarioProfile("k2-print-lifecycle");
+ */
+export function getProtocolScenarioProfile(name) {
+  const normalizedName = String(name || "").trim();
+  const profile = PROTOCOL_SCENARIO_PROFILE_DEFINITIONS[normalizedName];
+  return profile ? cloneProtocolScenarioProfile(profile) : null;
 }
 
 /**
@@ -294,6 +439,52 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 }
 
 /**
+ * profile と個別 options を scenario 解析条件へ合成する。
+ *
+ * 【詳細説明】
+ * - profile は標準条件をまとめるためのものであり、CLI の明示 `expectedScenario` は profile の既定値を上書きする。
+ * - marker / payload key は profile 条件へ個別指定を追加し、重複は最初の出現を採用する。
+ *
+ * @private
+ * @param {object} options - analyzeProtocolScenarioFixture の options
+ * @returns {object} 合成済み解析条件
+ */
+function createScenarioAnalysisRequirements(options) {
+  const profileNames = normalizeStringList(options.profiles);
+  const profiles = [];
+  const unknownProfiles = [];
+
+  for (const profileName of profileNames) {
+    const profile = getProtocolScenarioProfile(profileName);
+    if (profile) {
+      profiles.push(profile);
+    } else {
+      unknownProfiles.push(profileName);
+    }
+  }
+
+  const profileMarkers = profiles.flatMap((profile) => profile.requiredMarkers);
+  const profilePayloadKeys = profiles.flatMap((profile) => profile.requiredPayloadKeys);
+  const profileExpectedScenario = profiles.find((profile) => profile.expectedScenario)?.expectedScenario || "";
+  const profileRequiresValidation = profiles.some((profile) => profile.requireValidationSuccess);
+
+  return {
+    profiles: profiles.map((profile) => profile.name),
+    unknownProfiles,
+    expectedScenario: options.expectedScenario || profileExpectedScenario,
+    requireValidationSuccess: options.requireValidationSuccess === true || profileRequiresValidation,
+    requiredMarkers: uniqueMarkerRequirements([
+      ...normalizeMarkerRequirements(profileMarkers),
+      ...normalizeMarkerRequirements(options.requiredMarkers),
+    ]),
+    requiredPayloadKeys: uniqueStringList([
+      ...normalizeStringList(profilePayloadKeys),
+      ...normalizeStringList(options.requiredPayloadKeys),
+    ]),
+  };
+}
+
+/**
  * ProtocolRecorder fixture を scenario report へ変換する。
  *
  * 【詳細説明】
@@ -305,6 +496,7 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
  * @param {object=} fixture.metadata - `metadata.json` または `capture.metadata`
  * @param {Array<object>=} fixture.events - `events.ndjson` 由来の event 一覧
  * @param {object=} options - 解析オプション
+ * @param {Array<string>=} options.profiles - 適用する標準 scenario profile 名一覧
  * @param {string=} options.expectedScenario - 期待する scenario 名
  * @param {boolean=} options.requireValidationSuccess - metadata.validation.success を必須にする場合 true
  * @param {Array<string|object>=} options.requiredMarkers - 必須 marker requirement 一覧
@@ -316,8 +508,9 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   const metadata = fixture?.metadata && typeof fixture.metadata === "object" ? fixture.metadata : {};
   const events = Array.isArray(fixture?.events) ? fixture.events : [];
-  const requiredMarkers = normalizeMarkerRequirements(options.requiredMarkers);
-  const requiredPayloadKeys = normalizeStringList(options.requiredPayloadKeys);
+  const requirements = createScenarioAnalysisRequirements(options);
+  const requiredMarkers = requirements.requiredMarkers;
+  const requiredPayloadKeys = requirements.requiredPayloadKeys;
   const markers = events
     .filter((event) => event?.direction === "marker" || event?.kind === "marker")
     .map((event) => summarizeMarker(event));
@@ -326,11 +519,14 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   const protocolEventCount = events.filter((event) => event?.direction !== "marker").length;
   const failureReasons = [];
 
-  if (options.expectedScenario &&
-      metadata.capture?.scenario !== options.expectedScenario) {
+  if (requirements.unknownProfiles.length > 0) {
+    failureReasons.push("unknown-scenario-profile");
+  }
+  if (requirements.expectedScenario &&
+      metadata.capture?.scenario !== requirements.expectedScenario) {
     failureReasons.push("scenario-name-mismatch");
   }
-  if (options.requireValidationSuccess === true &&
+  if (requirements.requireValidationSuccess === true &&
       metadata.validation?.success !== true) {
     failureReasons.push("fixture-validation-failed");
   }
@@ -348,6 +544,10 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
     schemaVersion: 1,
     success: failureReasons.length === 0,
     failureReasons,
+    profiles: {
+      applied: requirements.profiles,
+      unknown: requirements.unknownProfiles,
+    },
     scenario: metadata.capture?.scenario ?? null,
     eventCount: events.length,
     protocolEventCount,

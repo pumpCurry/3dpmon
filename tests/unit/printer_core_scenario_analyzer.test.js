@@ -8,6 +8,8 @@ import { describe, it, expect } from "vitest";
 import {
   analyzeProtocolScenarioFixture,
   eventHasPayloadKey,
+  getProtocolScenarioProfile,
+  listProtocolScenarioProfiles,
 } from "../../3dp_lib/printer_core/dashboard_protocol_scenario_analyzer.js";
 import {
   analyzeProtocolScenarioFromCli,
@@ -43,7 +45,52 @@ function ws(sequence, atMs, body) {
   };
 }
 
+function k2PrintLifecycleEvents() {
+  return [
+    marker(1, 0, "observed-idle-before-start", { source: "stdin" }),
+    marker(2, 1000, "operator-print-start", { source: "scheduled-cli", scheduledAtMs: 1000 }),
+    ws(3, 1500, {
+      state: 1,
+      deviceState: 1,
+      printProgress: 1,
+      printFileName: "profile-test.gcode",
+      printId: "print-1",
+      nozzleTemp: "25.0",
+      targetNozzleTemp: 220,
+      bedTemp0: "30.0",
+      targetBedTemp0: 60,
+      cfsConnect: 1,
+    }),
+    marker(4, 2000, "observed-heating", { source: "stdin" }),
+    marker(5, 3000, "observed-printing", { source: "stdin" }),
+    ws(6, 4000, { boxsInfo: { materialBoxs: [] } }),
+    marker(7, 5000, "operator-pause-requested", { source: "stdin" }),
+    marker(8, 6000, "observed-paused", { source: "stdin" }),
+    marker(9, 7000, "operator-resume-requested", { source: "stdin" }),
+    marker(10, 8000, "observed-resumed", { source: "stdin" }),
+    marker(11, 9000, "observed-completed", { source: "stdin" }),
+    marker(12, 10000, "observed-idle-after-completed", { source: "stdin" }),
+  ];
+}
+
 describe("Printer Core v3 protocol scenario analyzer", () => {
+  it("K2 print lifecycle profileを列挙・取得できる", () => {
+    const profile = getProtocolScenarioProfile("k2-print-lifecycle");
+
+    expect(listProtocolScenarioProfiles()).toContain("k2-print-lifecycle");
+    expect(profile).toMatchObject({
+      name: "k2-print-lifecycle",
+      expectedScenario: "k2-print-lifecycle",
+      requireValidationSuccess: true,
+    });
+    expect(profile.requiredMarkers).toContainEqual({
+      name: "observed-paused",
+      source: "stdin",
+    });
+    expect(profile.requiredPayloadKeys).toContain("deviceState");
+    expect(getProtocolScenarioProfile("missing-profile")).toBeNull();
+  });
+
   it("payload key はrootと既知wrapperだけから検出する", () => {
     expect(eventHasPayloadKey(ws(1, 0, { boxsInfo: { materialBoxs: [] } }), "boxsInfo")).toBe(true);
     expect(eventHasPayloadKey(ws(2, 0, { result: { boxsInfo: { materialBoxs: [] } } }), "boxsInfo")).toBe(true);
@@ -186,6 +233,70 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       observed: true,
       observedSource: "scheduled-cli",
     });
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("K2 print lifecycle profileはmarker/sourceとroot payload evidenceをまとめて要求する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-print-lifecycle" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2PrintLifecycleEvents(),
+    }, {
+      profiles: ["k2-print-lifecycle"],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.profiles.applied).toEqual(["k2-print-lifecycle"]);
+    expect(report.requiredMarkers.missing).toEqual([]);
+    expect(report.requiredPayloadKeys.missing).toEqual([]);
+    expect(report.requiredMarkers.required).toContainEqual({
+      name: "observed-paused",
+      source: "stdin",
+      label: "stdin:observed-paused",
+    });
+  });
+
+  it("未知profileはfailureReasonsへ分離する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "anything" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: [],
+    }, {
+      profiles: ["missing-profile"],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["unknown-scenario-profile"]);
+    expect(report.profiles.unknown).toEqual(["missing-profile"]);
+  });
+
+  it("CLI --profile はK2 print lifecycle profileをAnalyzerへ適用する", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "3dpmon-k2-profile-"));
+    fs.writeFileSync(path.join(root, "metadata.json"), JSON.stringify({
+      fixtureVersion: 1,
+      capture: { scenario: "k2-print-lifecycle" },
+      validation: { success: true, failureReasons: [] },
+    }), "utf8");
+    fs.writeFileSync(path.join(root, "events.ndjson"), [
+      ...k2PrintLifecycleEvents().map((event) => JSON.stringify(event)),
+      "",
+    ].join("\n"), "utf8");
+    const options = parseArgs([
+      "--fixture",
+      root,
+      "--profile",
+      "k2-print-lifecycle",
+    ]);
+    const report = await analyzeProtocolScenarioFromCli(options);
+
+    expect(options.profiles).toEqual(["k2-print-lifecycle"]);
+    expect(report.success).toBe(true);
+    expect(report.profiles.applied).toEqual(["k2-print-lifecycle"]);
 
     fs.rmSync(root, { recursive: true, force: true });
   });
