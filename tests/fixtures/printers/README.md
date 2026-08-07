@@ -58,6 +58,10 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
 node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/print-lifecycle --profile k2-print-lifecycle --pretty
 ```
 
+  The profile report includes a reduced `payloadTimeline` for root
+  `state` / `deviceState` / `printProgress` / file identity fields so review can
+  compare raw protocol transitions with operator-observed markers.
+
 Fixture rules:
 
 - Keep relative event order and relative timestamps.

@@ -18,12 +18,12 @@
  * - {@link analyzeProtocolScenarioFromCli}：CLI options で scenario fixture を解析
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1317 (PR #432)
+ * @version 1.390.1318 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:29:20
+ * @lastModified 2026-08-08 08:35:34
  * -----------------------------------------------------------
  * @todo
- * - 実機 capture に基づいて `--profile k2-print-lifecycle` の window predicate を追加する
+ * - 実機 capture に基づいて `--profile k2-print-lifecycle` の state/window predicate を追加する
  */
 
 import fs from "node:fs/promises";
@@ -56,6 +56,7 @@ Options:
   --require-scheduled-marker <name>
                                Require a scheduled-cli marker by name. Repeatable.
   --require-payload-key <key>  Require a protocol payload key such as boxsInfo or printProgress. Repeatable.
+  --timeline-payload-key <key> Include a root payload key in the reduced payload timeline. Repeatable.
   --pretty                    Print indented JSON.
   --help                      Show this help.
 
@@ -86,6 +87,7 @@ export function parseArgs(argv) {
     requiredObservedMarkers: [],
     requiredScheduledMarkers: [],
     requiredPayloadKeys: [],
+    timelinePayloadKeys: [],
     pretty: false,
     help: false,
   };
@@ -129,6 +131,10 @@ export function parseArgs(argv) {
     }
     if (arg === "--require-payload-key") {
       options.requiredPayloadKeys.push(argv[++index] || "");
+      continue;
+    }
+    if (arg === "--timeline-payload-key") {
+      options.timelinePayloadKeys.push(argv[++index] || "");
       continue;
     }
     throw new Error(`Unknown option: ${arg}`);
@@ -208,6 +214,7 @@ export async function analyzeProtocolScenarioFromCli(options) {
     requireValidationSuccess: options.requireValidationSuccess,
     requiredMarkers,
     requiredPayloadKeys: options.requiredPayloadKeys,
+    timelinePayloadKeys: options.timelinePayloadKeys,
   });
 }
 

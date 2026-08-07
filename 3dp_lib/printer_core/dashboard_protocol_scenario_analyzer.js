@@ -18,12 +18,12 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1317 (PR #432)
+ * @version 1.390.1318 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:29:20
+ * @lastModified 2026-08-08 08:35:34
  * -----------------------------------------------------------
  * @todo
- * - K2 print lifecycle 実機 fixture 取得後に window predicate profile を追加する
+ * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
  */
 
 "use strict";
@@ -67,6 +67,13 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
       "targetBedTemp0",
       "cfsConnect",
       "boxsInfo",
+    ]),
+    timelinePayloadKeys: Object.freeze([
+      "state",
+      "deviceState",
+      "printProgress",
+      "printFileName",
+      "printId",
     ]),
   }),
 });
@@ -166,6 +173,7 @@ function cloneProtocolScenarioProfile(profile) {
       source: marker.source,
     })),
     requiredPayloadKeys: [...profile.requiredPayloadKeys],
+    timelinePayloadKeys: [...(profile.timelinePayloadKeys || [])],
   };
 }
 
@@ -439,6 +447,130 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 }
 
 /**
+ * timeline record に保存してよい値へ正規化する。
+ *
+ * 【詳細説明】
+ * - raw payload を丸ごと保存すると fixture report が肥大化し、CFS の詳細 payload も混ざる。
+ * - Gate 9 では print lifecycle の root scalar を追跡することが目的なので、scalar はそのまま保持し、
+ *   object / array は構造だけが分かる短い summary に圧縮する。
+ *
+ * @private
+ * @param {*} value - protocol payload value
+ * @returns {*} timeline 用に正規化した値
+ */
+function normalizeTimelineValue(value) {
+  if (value == null ||
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return {
+      type: "array",
+      length: value.length,
+    };
+  }
+  if (typeof value === "object") {
+    return {
+      type: "object",
+      keys: Object.keys(value).sort(),
+    };
+  }
+  return String(value);
+}
+
+/**
+ * timeline snapshot の比較用 signature を作る。
+ *
+ * 【詳細説明】
+ * - delta frame を前回状態へ畳み込んだ後の snapshot を比較し、変化がない frame を report から省く。
+ *
+ * @private
+ * @param {object} snapshot - timeline snapshot
+ * @returns {string} 比較用 signature
+ */
+function createTimelineSignature(snapshot) {
+  const ordered = {};
+  for (const key of Object.keys(snapshot).sort()) {
+    ordered[key] = snapshot[key];
+  }
+  return JSON.stringify(ordered);
+}
+
+/**
+ * Protocol event 群から payload timeline を作る。
+ *
+ * 【詳細説明】
+ * - K1/K2 は delta payload を送ることがあるため、観測した key を前回 snapshot に merge しながら時系列化する。
+ * - marker と outbound request は timeline 対象外にし、受信 frame の root / result / data envelope だけを見る。
+ * - 連続して同一 snapshot になる frame は捨て、state 変化や progress 変化を読むための短い report にする。
+ *
+ * @private
+ * @param {Array<object>} events - ProtocolRecorder event 一覧
+ * @param {string[]} timelinePayloadKeys - timeline に含める payload key 一覧
+ * @returns {object} timeline report
+ */
+function createPayloadTimeline(events, timelinePayloadKeys) {
+  const keys = uniqueStringList(normalizeStringList(timelinePayloadKeys));
+  const entries = [];
+  const currentSnapshot = {};
+  let previousSignature = createTimelineSignature(currentSnapshot);
+
+  if (keys.length === 0) {
+    return {
+      keys,
+      entries,
+    };
+  }
+
+  for (const event of events) {
+    if (!event || event.direction !== "in") {
+      continue;
+    }
+    const body = unwrapProtocolEnvelope(extractEventPayloadBody(event));
+    if (!body || typeof body !== "object") {
+      continue;
+    }
+
+    const changedKeys = [];
+    for (const key of keys) {
+      if (!hasOwn(body, key)) {
+        continue;
+      }
+      const nextValue = normalizeTimelineValue(body[key]);
+      const before = createTimelineSignature({ value: currentSnapshot[key] });
+      const after = createTimelineSignature({ value: nextValue });
+      currentSnapshot[key] = nextValue;
+      if (before !== after) {
+        changedKeys.push(key);
+      }
+    }
+
+    if (changedKeys.length === 0) {
+      continue;
+    }
+
+    const signature = createTimelineSignature(currentSnapshot);
+    if (signature === previousSignature) {
+      continue;
+    }
+    previousSignature = signature;
+    entries.push({
+      sequence: event.sequence ?? null,
+      atMs: Number.isFinite(event.atMs) ? event.atMs : null,
+      changedKeys,
+      state: { ...currentSnapshot },
+    });
+  }
+
+  return {
+    keys,
+    entries,
+  };
+}
+
+/**
  * profile と個別 options を scenario 解析条件へ合成する。
  *
  * 【詳細説明】
@@ -465,6 +597,7 @@ function createScenarioAnalysisRequirements(options) {
 
   const profileMarkers = profiles.flatMap((profile) => profile.requiredMarkers);
   const profilePayloadKeys = profiles.flatMap((profile) => profile.requiredPayloadKeys);
+  const profileTimelineKeys = profiles.flatMap((profile) => profile.timelinePayloadKeys || []);
   const profileExpectedScenario = profiles.find((profile) => profile.expectedScenario)?.expectedScenario || "";
   const profileRequiresValidation = profiles.some((profile) => profile.requireValidationSuccess);
 
@@ -480,6 +613,10 @@ function createScenarioAnalysisRequirements(options) {
     requiredPayloadKeys: uniqueStringList([
       ...normalizeStringList(profilePayloadKeys),
       ...normalizeStringList(options.requiredPayloadKeys),
+    ]),
+    timelinePayloadKeys: uniqueStringList([
+      ...normalizeStringList(profileTimelineKeys),
+      ...normalizeStringList(options.timelinePayloadKeys),
     ]),
   };
 }
@@ -501,6 +638,7 @@ function createScenarioAnalysisRequirements(options) {
  * @param {boolean=} options.requireValidationSuccess - metadata.validation.success を必須にする場合 true
  * @param {Array<string|object>=} options.requiredMarkers - 必須 marker requirement 一覧
  * @param {Array<string>=} options.requiredPayloadKeys - 必須 payload key 一覧
+ * @param {Array<string>=} options.timelinePayloadKeys - payload timeline に含める key 一覧
  * @returns {object} scenario 解析結果
  * @example
  * const report = analyzeProtocolScenarioFixture({ metadata, events }, { requiredMarkers: ["operator-print-start"] });
@@ -516,6 +654,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
     .map((event) => summarizeMarker(event));
   const markerReport = analyzeRequiredMarkers(markers, requiredMarkers);
   const payloadReport = analyzeRequiredPayloadKeys(events, requiredPayloadKeys);
+  const payloadTimeline = createPayloadTimeline(events, requirements.timelinePayloadKeys);
   const protocolEventCount = events.filter((event) => event?.direction !== "marker").length;
   const failureReasons = [];
 
@@ -555,6 +694,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
     markers,
     requiredMarkers: markerReport,
     requiredPayloadKeys: payloadReport,
+    payloadTimeline,
     validation: {
       success: metadata.validation?.success ?? null,
       failureReasons: Array.isArray(metadata.validation?.failureReasons)

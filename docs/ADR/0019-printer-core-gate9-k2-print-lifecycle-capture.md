@@ -51,6 +51,16 @@ cfsConnect
 boxsInfo
 ```
 
+- The profile emits a reduced payload timeline for these root fields:
+
+```text
+state
+deviceState
+printProgress
+printFileName
+printId
+```
+
 - The recommended capture shape is:
 
 ```text
@@ -91,7 +101,8 @@ node scripts/analyze_protocol_scenario.mjs \
 ## Consequences
 
 Gate 9 capture can be accepted with one stable profile instead of a long list of
-manual marker and payload requirements. Once the fixture exists, the next review
-can compare raw `state` / `deviceState` timeline against the operator-observed
-markers and decide whether K2 print semantics can move beyond
+manual marker and payload requirements. The report also includes a reduced
+`payloadTimeline`, so the next review can compare raw `state` / `deviceState`
+timeline against the operator-observed markers and decide whether K2 print
+semantics can move beyond
 `k1-compatible-provisional`.

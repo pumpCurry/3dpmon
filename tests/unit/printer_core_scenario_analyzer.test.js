@@ -88,6 +88,13 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       source: "stdin",
     });
     expect(profile.requiredPayloadKeys).toContain("deviceState");
+    expect(profile.timelinePayloadKeys).toEqual([
+      "state",
+      "deviceState",
+      "printProgress",
+      "printFileName",
+      "printId",
+    ]);
     expect(getProtocolScenarioProfile("missing-profile")).toBeNull();
   });
 
@@ -123,6 +130,46 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.protocolEventCount).toBe(1);
     expect(report.requiredMarkers.ordered).toBe(true);
     expect(report.requiredPayloadKeys.missing).toEqual([]);
+  });
+
+  it("payload timelineはdelta frameを前回状態へ畳み込んで変化だけを保持する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "timeline" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: [
+        ws(1, 0, { state: 1, deviceState: 1, printProgress: 0 }),
+        ws(2, 100, { printProgress: 0 }),
+        ws(3, 200, { printProgress: 10 }),
+        marker(4, 250, "observed-printing", { source: "stdin" }),
+        ws(5, 300, { data: { deviceState: 2 } }),
+      ],
+    }, {
+      timelinePayloadKeys: ["state", "deviceState", "printProgress"],
+    });
+
+    expect(report.payloadTimeline.keys).toEqual(["state", "deviceState", "printProgress"]);
+    expect(report.payloadTimeline.entries).toEqual([
+      {
+        sequence: 1,
+        atMs: 0,
+        changedKeys: ["state", "deviceState", "printProgress"],
+        state: { state: 1, deviceState: 1, printProgress: 0 },
+      },
+      {
+        sequence: 3,
+        atMs: 200,
+        changedKeys: ["printProgress"],
+        state: { state: 1, deviceState: 1, printProgress: 10 },
+      },
+      {
+        sequence: 5,
+        atMs: 300,
+        changedKeys: ["deviceState"],
+        state: { state: 1, deviceState: 2, printProgress: 10 },
+      },
+    ]);
   });
 
   it("marker不足、順序逆転、payload不足、validation失敗をfailureReasonsへ分離する", () => {
@@ -200,11 +247,14 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       "observed-paused",
       "--require-scheduled-marker",
       "operator-pause-requested",
+      "--timeline-payload-key",
+      "state",
     ]);
 
     expect(options.requiredMarkers).toEqual(["operator-pause-requested"]);
     expect(options.requiredObservedMarkers).toEqual(["observed-paused"]);
     expect(options.requiredScheduledMarkers).toEqual(["operator-pause-requested"]);
+    expect(options.timelinePayloadKeys).toEqual(["state"]);
   });
 
   it("CLIのscheduled marker requirementはcapture CLIのscheduled-cli sourceと一致する", async () => {
@@ -256,6 +306,17 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       name: "observed-paused",
       source: "stdin",
       label: "stdin:observed-paused",
+    });
+    expect(report.payloadTimeline.entries.length).toBeGreaterThan(0);
+    expect(report.payloadTimeline.entries[0]).toMatchObject({
+      sequence: 3,
+      state: {
+        state: 1,
+        deviceState: 1,
+        printProgress: 1,
+        printFileName: "profile-test.gcode",
+        printId: "print-1",
+      },
     });
   });
 
