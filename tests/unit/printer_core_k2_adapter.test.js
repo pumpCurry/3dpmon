@@ -192,6 +192,24 @@ describe("Printer Core v3 K2 read-only adapter", () => {
     expect(mixed.patch.materials.sources).toHaveLength(5);
   });
 
+  it("cfsConnect=false と boxsInfo が同居してもtopologyをfresh扱いしない", () => {
+    const adapter = createK2Adapter();
+    const boxsInfo = extractK2BoxsInfo(readK2BoxsInfoEvent());
+    const mixedDisconnected = adapter.normalizeFrame({
+      cfsConnect: 0,
+      boxsInfo,
+    }, {
+      deviceId: "fixture:k2-pro-cfs-mixed-disconnect",
+      sessionId: "fixture-session-k2-mixed-disconnect",
+      sequence: 8,
+      receivedAt: "2026-08-07T10:00:08.000Z",
+    });
+
+    expect(mixedDisconnected.patch.materials.cfs.connected).toBe(false);
+    expect(mixedDisconnected.patch.materials.cfs.topologyState).toBe("stale");
+    expect(mixedDisconnected.patch.materials.sources).toHaveLength(5);
+  });
+
   it("cfsConnect=false は最後に見たtopologyをcurrent扱いせずstaleとして示す", () => {
     const facade = createK2PrinterFacade({
       clock: () => new Date("2026-08-07T10:00:00.000Z"),
@@ -211,6 +229,38 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       assignmentId: "T1A",
       resolution: "resolved",
     });
+  });
+
+  it("cfsConnect=false 後に boxsInfo が後着してもstale扱いを維持する", () => {
+    const facade = createK2PrinterFacade({
+      clock: () => new Date("2026-08-07T10:00:00.000Z"),
+    });
+    const deviceId = "fixture:k2-pro-cfs-late-boxs-info";
+    const sessionId = "fixture-session-k2-late-boxs-info";
+
+    facade.beginSession({ deviceId, sessionId });
+    facade.observeFrame({ deviceId, sessionId, frame: { cfsConnect: 0 } });
+    const lateTopology = facade.observeFrame({ deviceId, sessionId, frame: readK2BoxsInfoEvent() });
+
+    expect(lateTopology.materials.cfs.connected).toBe(false);
+    expect(lateTopology.materials.cfs.topologyState).toBe("stale");
+    expect(lateTopology.materials.sources).toHaveLength(5);
+  });
+
+  it("unresolved same-material group ID は未解決locationを含めて衝突を避ける", () => {
+    const topology = normalizeK2BoxsInfo({
+      same_material: [
+        ["000001", "white", [{ boxId: 9, materialId: 0 }], "PLA"],
+        ["000001", "white", [{ boxId: 10, materialId: 0 }], "PLA"],
+      ],
+      materialBoxs: [],
+    });
+
+    expect(topology.sameMaterialGroups.map((group) => group.groupId)).toEqual([
+      "same-material:PLA:000001:white:unresolved:9:0",
+      "same-material:PLA:000001:white:unresolved:10:0",
+    ]);
+    expect(topology.sameMaterialGroups.every((group) => group.sourceIds.length === 0)).toBe(true);
   });
 
   it("material capability はexternal source観測とmulti source topologyを混同しない", () => {
