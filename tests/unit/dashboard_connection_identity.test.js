@@ -46,9 +46,19 @@ vi.mock("../../3dp_lib/dashboard_moonraker.js", () => ({
 }));
 vi.mock("../../3dp_lib/printer_core/dashboard_live_shadow.js", () => ({
   beginK1LiveShadowSession: vi.fn(),
-  createPrinterCoreV3ShadowSessionId: vi.fn(() => "k1-live:test-session"),
+  beginK2LiveShadowSession: vi.fn(),
+  createPrinterCoreV3ShadowSessionId: vi.fn(({ family } = {}) => `${family === "k2" ? "k2" : "k1"}-live:test-session`),
   endK1LiveShadowSession: vi.fn(),
+  endK2LiveShadowSession: vi.fn(),
   observeK1LiveShadowFrame: vi.fn(),
+  observeK2LiveShadowFrame: vi.fn(),
+  resolvePrinterCoreV3LiveShadowDeviceId: vi.fn(({ identity, identityConflict, identityConflicts, host, dest }) => {
+    const hasOpenConflict = identityConflict?.status === "open" ||
+      (Array.isArray(identityConflicts) && identityConflicts.some((entry) => entry?.status === "open"));
+    return hasOpenConflict
+      ? `provisional-shadow:endpoint:${encodeURIComponent(dest)}`
+      : identity?.deviceIdSeed || `host:${host}`;
+  }),
   resolveK1LiveShadowDeviceId: vi.fn(({ identity, identityConflict, identityConflicts, host, dest }) => {
     const hasOpenConflict = identityConflict?.status === "open" ||
       (Array.isArray(identityConflicts) && identityConflicts.some((entry) => entry?.status === "open"));
@@ -65,10 +75,11 @@ class FakeWebSocket {
     this.url = url; this.binaryType = "";
     this.readyState = FakeWebSocket.OPEN;
     this.onopen = this.onmessage = this.onerror = this.onclose = null;
+    this.sentMessages = [];
     FakeWebSocket.instances.push(this);
   }
   close() { this.readyState = FakeWebSocket.CLOSED; }
-  send() {}
+  send(message) { this.sentMessages.push(message); }
 }
 
 let mod, dataMock, shadowMock;
@@ -258,6 +269,47 @@ describe("Printer Core v3 identity dry-run", () => {
     });
   });
 
+  it("K2 Pro Combo WS受信データをK2 live shadowへ分岐しCFS boxsInfo probeを一度だけ送る", () => {
+    mod.connectWithType("203.0.113.30:9999", "creality-k1");
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-69E7",
+      model: "F012",
+      cfsConnect: 1,
+      printProgress: 100,
+    }), "203.0.113.30");
+
+    expect(shadowMock.beginK2LiveShadowSession).toHaveBeenCalledWith({
+      host: "K2Pro-69E7",
+      deviceId: "provisional:f012:k2pro-69e7",
+      sessionId: "k2-live:test-session",
+    });
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledWith({
+      host: "K2Pro-69E7",
+      deviceId: "provisional:f012:k2pro-69e7",
+      sessionId: "k2-live:test-session",
+      frame: {
+        hostname: "K2Pro-69E7",
+        model: "F012",
+        cfsConnect: 1,
+        printProgress: 100,
+      },
+    });
+    expect(shadowMock.observeK1LiveShadowFrame).not.toHaveBeenCalled();
+    expect(ws.sentMessages).toContain(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
+
+    ws.sentMessages.length = 0;
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        materialBoxs: [],
+      },
+    }), "K2Pro-69E7");
+
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledTimes(2);
+    expect(ws.sentMessages).toEqual([]);
+  });
+
   it("identity conflictがopenの場合は旧deviceIdではなくendpoint暫定shadow IDを使う", () => {
     dataMock.monitorData.appSettings.connectionTargets = [
       {
@@ -281,7 +333,7 @@ describe("Printer Core v3 identity dry-run", () => {
     connectK1Socket("203.0.113.13:9999");
     receiveK1Status("203.0.113.13", "K1Max-Conflict", { sn: "NEW-SERIAL" });
 
-    expect(shadowMock.resolveK1LiveShadowDeviceId).toHaveBeenCalledWith(expect.objectContaining({
+    expect(shadowMock.resolvePrinterCoreV3LiveShadowDeviceId).toHaveBeenCalledWith(expect.objectContaining({
       identity: expect.objectContaining({ deviceIdSeed: "serial:old-serial" }),
       identityConflict: expect.objectContaining({ status: "open" }),
       identityConflicts: expect.arrayContaining([expect.objectContaining({ status: "open" })]),
@@ -301,8 +353,28 @@ describe("Printer Core v3 identity dry-run", () => {
     ws.onopen();
 
     expect(shadowMock.createPrinterCoreV3ShadowSessionId).toHaveBeenCalledWith({
+      family: "k1",
       host: "203.0.113.20",
       dest: "203.0.113.20:9999",
+    });
+  });
+
+  it("WebSocket closeでK2 live shadow sessionを終了する", () => {
+    const ws = connectK1Socket("203.0.113.31:9999");
+    ws.onopen();
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Close",
+      model: "F012",
+      cfsConnect: 1,
+    }), "203.0.113.31");
+    shadowMock.endK2LiveShadowSession.mockClear();
+
+    ws.onclose();
+
+    expect(shadowMock.endK2LiveShadowSession).toHaveBeenCalledWith({
+      host: "K2Pro-Close",
+      deviceId: "provisional:f012:k2pro-close",
+      sessionId: "k2-live:test-session",
     });
   });
 

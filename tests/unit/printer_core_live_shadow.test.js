@@ -7,10 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorData } from "../../3dp_lib/dashboard_data.js";
 import {
   beginK1LiveShadowSession,
+  beginK2LiveShadowSession,
   createPrinterCoreV3ShadowSessionId,
   endK1LiveShadowSession,
+  endK2LiveShadowSession,
   isRecoverableK1LiveShadowObserveError,
   observeK1LiveShadowFrame,
+  observeK2LiveShadowFrame,
   resolveK1LiveShadowDeviceId,
 } from "../../3dp_lib/printer_core/dashboard_live_shadow.js";
 
@@ -42,6 +45,17 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
 
     expect(sessionId).toBe("k1-live:K1Max-A:192.168.54.151%3A9999:2026-08-07T08%3A15%3A03.000Z");
+  });
+
+  it("K2 live shadow session ID はK1と別namespaceで生成する", () => {
+    const sessionId = createPrinterCoreV3ShadowSessionId({
+      family: "k2",
+      host: "K2Pro-69E7",
+      dest: "192.168.54.21:9999",
+      openedAt: "2026-08-07T08:15:03.000Z",
+    });
+
+    expect(sessionId).toBe("k2-live:K2Pro-69E7:192.168.54.21%3A9999:2026-08-07T08%3A15%3A03.000Z");
   });
 
   it("open conflictがある場合は旧identityのdeviceIdSeedではなくendpoint暫定IDを使う", () => {
@@ -271,6 +285,83 @@ describe("Printer Core v3 K1 live shadow", () => {
 
     expect(endK1LiveShadowSession({ host, deviceId, sessionId })).toBe(true);
     expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow.state).toBe("closed");
+  });
+
+  it("K2 live frameはlegacy差分ではなくstatus/material topologyの観測結果としてruntimeDataへ記録する", () => {
+    const host = "K2Pro-Live-A";
+    const deviceId = "host:K2Pro-Live-A";
+    const sessionId = "k2-live:test-a";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        hostname: host,
+        model: "F012",
+        cfsConnect: 1,
+        nozzleTemp: "32.090000",
+      },
+      receivedAt: "2026-08-07T08:15:03.000Z",
+    });
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              temp: 29,
+              humidity: 50,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", name: "Generic PLA", percent: 100 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    expect(record).toMatchObject({
+      printerFamily: "k2",
+      state: "observed",
+      observedFrames: 2,
+      diffCount: 0,
+      cfsConnected: true,
+      cfsTopologyState: "fresh",
+      cfsSourceCount: 1,
+      cfsAssignmentCount: 1,
+    });
+    expect(record.lastState.identity.reportedModel).toBe("F012");
+    expect(record.lastState.materials.sources[0].sourceId).toBe("cfs:1:slot:0");
+    expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow).toMatchObject({
+      printerFamily: "k2",
+      sessionId,
+      lastSequence: 2,
+    });
+  });
+
+  it("endK2LiveShadowSession はruntimeDataをclosedへ更新する", () => {
+    const host = "K2Pro-Live-D";
+    const deviceId = "host:K2Pro-Live-D";
+    const sessionId = "k2-live:test-d";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    expect(endK2LiveShadowSession({ host, deviceId, sessionId })).toBe(true);
+    expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow).toMatchObject({
+      printerFamily: "k2",
+      state: "closed",
+    });
   });
 
   it("stale sessionの終了要求では現在のruntimeDataをclosedへ変えない", () => {

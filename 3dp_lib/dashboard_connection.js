@@ -12,6 +12,7 @@
  * - Heartbeat 管理と定期更新トリガー
  * - UI 更新通知および aggregator 起動
  * - Printer Core v3 identity の dry-run 記録
+ * - Printer Core v3 K1/K2 live shadow の read-only 観測
  *
  * 【公開関数一覧】
  * - {@link fetchStoredData}：サーバーからデータ取得
@@ -31,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1300 (PR #432)
+* @version 1.390.1305 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 18:07:20
+* @lastModified 2026-08-07 21:18:02
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -72,10 +73,13 @@ import {
 } from "./printer_core/dashboard_device_identity_repository.js";
 import {
   beginK1LiveShadowSession,
+  beginK2LiveShadowSession,
   createPrinterCoreV3ShadowSessionId,
   endK1LiveShadowSession,
+  endK2LiveShadowSession,
   observeK1LiveShadowFrame,
-  resolveK1LiveShadowDeviceId,
+  observeK2LiveShadowFrame,
+  resolvePrinterCoreV3LiveShadowDeviceId,
 } from "./printer_core/dashboard_live_shadow.js";
 
 // ---------------------------------------------------------------------------
@@ -116,6 +120,12 @@ const connectionMap = {};
  *                                        - Printer Core v3 live shadow 用の接続 session ID
  * @property {string|null}    printerCoreV3ShadowDeviceId
  *                                        - Printer Core v3 live shadow 用の deviceId
+ * @property {"k1"|"k2"|null} printerCoreV3ShadowFamily
+ *                                        - Printer Core v3 live shadow 用の printer family
+ * @property {boolean}        printerCoreV3K2BoxsInfoProbeSent
+ *                                        - K2 CFS boxsInfo read-only probe を送信済みか
+ * @property {boolean}        printerCoreV3K2BoxsInfoReceived
+ *                                        - K2 CFS boxsInfo を受信済みか
  * @property {{close:function():void}|null} [_extSession]
  *                                        - 外部プロトコル(Moonraker 等)セッション。
  *                                          生 WebSocket は st.ws に載せず、ここで保持して
@@ -343,35 +353,74 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
 }
 
 /**
- * Printer Core v3 K1 live shadow session を開始済みにする。
+ * Printer Core v3 live shadow の printer family を判定する。
  *
  * 【詳細説明】
- * - WebSocket open 時点では hostname / identity が未確定のことがあるため、初回 JSON 受信時にも遅延開始できる。
+ * - Moonraker は別プロトコルで除外する。
+ * - K2 Pro Combo は現fixture/実機で `model:"F012"` を返すため、既存UIの printerType が未更新でも K2 shadow に分岐できる。
+ *
+ * @private
+ * @param {string} host - 解決済みホスト名
+ * @param {object|null|undefined} data - 受信 payload
+ * @returns {"k1"|"k2"|null} shadow family、または対象外 null
+ */
+function _resolvePrinterCoreV3ShadowFamily(host, data) {
+  const printerType = getPrinterType(host);
+  if (printerType === "moonraker") {
+    return null;
+  }
+  if (printerType === "creality-k2") {
+    return "k2";
+  }
+  const model = String(data?.model || data?.reportedModel || "").trim().toUpperCase();
+  const hostname = String(data?.hostname || data?.deviceName || host || "").trim().toUpperCase();
+  if (model === "F012" || hostname.startsWith("K2")) {
+    return "k2";
+  }
+  return "k1";
+}
+
+/**
+ * Printer Core v3 live shadow session を開始済みにする。
+ *
+ * 【詳細説明】
+ * - WebSocket open 時点では hostname / identity / printer family が未確定のことがあるため、初回 JSON 受信時にも遅延開始できる。
  * - deviceId は session 中に固定し、後続 frame で identity が強くなっても同一 WebSocket session 内では混線防止を優先する。
+ * - K2 判定へ切り替わった場合は、open 時点で仮生成した K1 session ID を破棄して K2 session ID を作り直す。
  *
  * @private
  * @param {string} host - 解決済みホスト名
  * @param {ConnectionState} state - 接続状態
  * @param {object|null} identityResult - Printer Core v3 identity dry-run 保存結果
+ * @param {"k1"|"k2"} family - shadow printer family
  * @returns {{deviceId:string, sessionId:string}|null} shadow session 情報
  */
-function _ensureK1LiveShadowSession(host, state, identityResult) {
+function _ensurePrinterCoreV3LiveShadowSession(host, state, identityResult, family) {
   if (!host || !state) return null;
+  if (state.printerCoreV3ShadowFamily && state.printerCoreV3ShadowFamily !== family) {
+    _endPrinterCoreV3LiveShadowSession(host, state);
+    state.printerCoreV3ShadowSessionId = null;
+    state.printerCoreV3ShadowDeviceId = null;
+    state.printerCoreV3ShadowFamily = null;
+  }
   if (!state.printerCoreV3ShadowSessionId) {
     state.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
+      family,
       host,
       dest: state.dest || host,
     });
+    state.printerCoreV3ShadowFamily = family;
   }
   if (!state.printerCoreV3ShadowDeviceId) {
-    state.printerCoreV3ShadowDeviceId = resolveK1LiveShadowDeviceId({
+    state.printerCoreV3ShadowDeviceId = resolvePrinterCoreV3LiveShadowDeviceId({
       identity: identityResult?.identity || null,
       identityConflict: identityResult?.conflict || null,
       identityConflicts: identityResult?.conflicts || [],
       host,
       dest: state.dest || host,
     });
-    beginK1LiveShadowSession({
+    const beginSession = family === "k2" ? beginK2LiveShadowSession : beginK1LiveShadowSession;
+    beginSession({
       host,
       deviceId: state.printerCoreV3ShadowDeviceId,
       sessionId: state.printerCoreV3ShadowSessionId,
@@ -380,11 +429,12 @@ function _ensureK1LiveShadowSession(host, state, identityResult) {
   return {
     deviceId: state.printerCoreV3ShadowDeviceId,
     sessionId: state.printerCoreV3ShadowSessionId,
+    family: state.printerCoreV3ShadowFamily,
   };
 }
 
 /**
- * Printer Core v3 K1 live shadow session を終了する。
+ * Printer Core v3 live shadow session を終了する。
  *
  * 【詳細説明】
  * - WebSocket close / cleanup と同じタイミングで呼び、旧 session の adapterState が再接続後へ残らないようにする。
@@ -394,18 +444,64 @@ function _ensureK1LiveShadowSession(host, state, identityResult) {
  * @param {ConnectionState|null|undefined} state - 接続状態
  * @returns {boolean} shadow session を終了した場合 true
  */
-function _endK1LiveShadowSession(host, state) {
+function _endPrinterCoreV3LiveShadowSession(host, state) {
   if (!state?.printerCoreV3ShadowSessionId || !state?.printerCoreV3ShadowDeviceId) {
+    if (state) {
+      state.printerCoreV3ShadowSessionId = null;
+      state.printerCoreV3ShadowDeviceId = null;
+      state.printerCoreV3ShadowFamily = null;
+    }
     return false;
   }
-  const ended = endK1LiveShadowSession({
+  const family = state.printerCoreV3ShadowFamily === "k2" ? "k2" : "k1";
+  const endSession = family === "k2" ? endK2LiveShadowSession : endK1LiveShadowSession;
+  const ended = endSession({
     host,
     deviceId: state.printerCoreV3ShadowDeviceId,
     sessionId: state.printerCoreV3ShadowSessionId,
   });
   state.printerCoreV3ShadowSessionId = null;
   state.printerCoreV3ShadowDeviceId = null;
+  state.printerCoreV3ShadowFamily = null;
   return ended;
+}
+
+/**
+ * K2 Pro Combo + CFS の read-only `boxsInfo` probe を必要に応じて送る。
+ *
+ * 【詳細説明】
+ * - Gate 5 では CFS topology を観測するため、`cfsConnect=1` を見た K2 接続にだけ非破壊の get request を1回送る。
+ * - command authority とは分離し、`sendCommand()` の id 待ちにも載せない。応答は通常の WebSocket 受信として K2Adapter が処理する。
+ *
+ * @private
+ * @param {string} host - 解決済みホスト名
+ * @param {ConnectionState} state - 接続状態
+ * @param {object} data - 受信 payload
+ * @returns {boolean} probe を送信した場合 true
+ */
+function _requestK2CfsBoxsInfoProbe(host, state, data) {
+  if (!state?.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  if (data?.boxsInfo && typeof data.boxsInfo === "object") {
+    state.printerCoreV3K2BoxsInfoReceived = true;
+    return false;
+  }
+  if (state.printerCoreV3K2BoxsInfoProbeSent || state.printerCoreV3K2BoxsInfoReceived) {
+    return false;
+  }
+  if (Number(data?.cfsConnect) !== 1) {
+    return false;
+  }
+  try {
+    state.ws.send(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
+    state.printerCoreV3K2BoxsInfoProbeSent = true;
+    pushLog("[Printer Core v3] K2 CFS boxsInfo read-only probe を送信しました", "info", false, host);
+    return true;
+  } catch (e) {
+    pushLog(`[Printer Core v3] K2 CFS boxsInfo probe 送信エラー: ${e.message}`, "warn", false, host);
+    return false;
+  }
 }
 
 /**
@@ -520,6 +616,9 @@ const placeholderState = {
   dest: "",
   printerCoreV3ShadowSessionId: null,
   printerCoreV3ShadowDeviceId: null,
+  printerCoreV3ShadowFamily: null,
+  printerCoreV3K2BoxsInfoProbeSent: false,
+  printerCoreV3K2BoxsInfoReceived: false,
   state: "disconnected"
 };
 
@@ -557,6 +656,9 @@ function getState(host) {
       dest: "",
       printerCoreV3ShadowSessionId: null,
       printerCoreV3ShadowDeviceId: null,
+      printerCoreV3ShadowFamily: null,
+      printerCoreV3K2BoxsInfoProbeSent: false,
+      printerCoreV3K2BoxsInfoReceived: false,
       state: "disconnected"
     };
   }
@@ -1023,7 +1125,7 @@ export function connectWs(hostOrDest) {
     if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) {
       try {
         stOld.ws.onopen = stOld.ws.onmessage = stOld.ws.onerror = stOld.ws.onclose = null;
-        _endK1LiveShadowSession(key, stOld);
+        _endPrinterCoreV3LiveShadowSession(key, stOld);
         stOld.ws.close();
         _closedStale++;
       } catch (e) {
@@ -1196,11 +1298,11 @@ function connectMoonraker(dest, host) {
  * - dest にポートが無ければ種別に応じた既定ポートを補完する
  *   （K1: {@link DEFAULT_WS_PORT}=9999 / Moonraker: 80=nginx・Fluidd と同口）。
  * - connectionTargets に printerType を保存してから {@link connectWs} を呼ぶ。
- *   connectWs は printerType を見て K1 / Moonraker のいずれの経路かを分岐する。
+ *   connectWs は printerType を見て Creality WS9999 / Moonraker のいずれの経路かを分岐する。
  *
  * @function connectWithType
  * @param {string} dest - "IP" もしくは "IP:PORT"
- * @param {"creality-k1"|"moonraker"} [printerType="creality-k1"] - プリンタ種別
+ * @param {"creality-k1"|"creality-k2"|"moonraker"} [printerType="creality-k1"] - プリンタ種別
  * @returns {void}
  * @example
  * connectWithType("192.168.54.15", "moonraker"); // → "192.168.54.15:80" として接続
@@ -1237,11 +1339,16 @@ function handleSocketOpen(host) {
   const st = getState(host);
   st.reconnect = 0;
   st.userDisc = false;
+  const initialShadowFamily = getPrinterType(host) === "creality-k2" ? "k2" : "k1";
   st.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
+    family: initialShadowFamily,
     host,
     dest: st.dest || host,
   });
   st.printerCoreV3ShadowDeviceId = null;
+  st.printerCoreV3ShadowFamily = initialShadowFamily;
+  st.printerCoreV3K2BoxsInfoProbeSent = false;
+  st.printerCoreV3K2BoxsInfoReceived = false;
 
   // Heartbeat開始（30秒おき）
   startHeartbeat(st.ws, 30_000, host);
@@ -1388,15 +1495,22 @@ function handleSocketMessage(event, host) {
     const resolvedHost = data?.hostname || hostKey;
     ensureMachineData(resolvedHost);
     processData(data, resolvedHost);
-    if (getPrinterType(hostKey) === "creality-k1") {
-      const shadowSession = _ensureK1LiveShadowSession(resolvedHost, st, printerCoreV3Identity);
+    const shadowFamily = _resolvePrinterCoreV3ShadowFamily(hostKey, data);
+    if (shadowFamily) {
+      const shadowSession = _ensurePrinterCoreV3LiveShadowSession(resolvedHost, st, printerCoreV3Identity, shadowFamily);
       if (shadowSession) {
-        observeK1LiveShadowFrame({
+        const observeShadowFrame = shadowSession.family === "k2"
+          ? observeK2LiveShadowFrame
+          : observeK1LiveShadowFrame;
+        observeShadowFrame({
           host: resolvedHost,
           deviceId: shadowSession.deviceId,
           sessionId: shadowSession.sessionId,
           frame: data,
         });
+        if (shadowSession.family === "k2") {
+          _requestK2CfsBoxsInfoProbe(resolvedHost, st, data);
+        }
       }
     }
   } catch (e) {
@@ -1484,7 +1598,7 @@ function handleSocketClose(host) {
  // 切断直後は該当ホストの通知を抑制する（他ホストには影響しない）
   setNotificationSuppressed(true, host);
   const st = getState(host);
-  _endK1LiveShadowSession(host, st);
+  _endPrinterCoreV3LiveShadowSession(host, st);
 
   // ホスト名待ちポーリングが残っていれば解除
   if (st.fetchTimer !== null) {
@@ -1680,7 +1794,7 @@ export function disconnectWs(host) {
 
   // 再接続カウント初期化
   st.reconnect = 0;
-  _endK1LiveShadowSession(host, st);
+  _endPrinterCoreV3LiveShadowSession(host, st);
 
   // 入力欄を再度書き換え可に
   // UIを切断状態に更新
@@ -2298,7 +2412,7 @@ export function cleanupConnection(host) {
   // バッファクリア
   st.buffer.length = 0;
   st.latest = null;
-  _endK1LiveShadowSession(host, st);
+  _endPrinterCoreV3LiveShadowSession(host, st);
 
   // connectionMap から削除
   delete connectionMap[host];
@@ -2421,7 +2535,7 @@ export function getConnectionState(host) {
  *
  * @function getPrinterType
  * @param {string} host - ホスト名(または IP)
- * @returns {"creality-k1"|"moonraker"} プリンタ種別
+ * @returns {"creality-k1"|"creality-k2"|"moonraker"} プリンタ種別
  */
 export function getPrinterType(host) {
   const st = connectionMap[host];
