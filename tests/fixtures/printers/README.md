@@ -36,6 +36,10 @@ Live K2-family test target:
   `--marker-at <ms:name[:json-details]>` or `--interactive-markers` so the fixture
   records the observed boundaries such as print start, pause, resume, completion,
   CFS disconnect, CFS reconnect, and material changes.
+- Treat `--marker-at` as a planned boundary and `--interactive-markers` as
+  operator-observed evidence. If a scheduled marker does not fire inside the
+  capture window, the capture is failed by validation instead of silently
+  dropping the marker.
 
 Fixture rules:
 
@@ -45,3 +49,5 @@ Fixture rules:
 - Preserve unknown raw fields after redaction.
 - Do not include commands that move hardware unless the scenario explicitly requires a hardware smoke capture.
 - Marker details must describe observations only. Do not store raw IP addresses, MAC addresses, serial numbers, hostnames, credentials, SSIDs, print IDs, RFID values, or unredacted G-code file names in marker text.
+- Marker provenance is set by the capture CLI. Do not rely on user-provided
+  `source` values inside marker details.

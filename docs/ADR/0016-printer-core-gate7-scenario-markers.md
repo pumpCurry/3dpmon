@@ -31,6 +31,11 @@ extra printer commands.
 - Keep marker handling local to the recorder. Marker capture must not change
   HTTP probing, WebSocket observation, heartbeat acknowledgement, `boxsInfo`
   probing, legacy UI state, command routing, or filament ledger authority.
+- Treat scheduled markers as planned boundaries and interactive markers as
+  operator observations. Scenario certification must compare both marker types
+  with protocol frames instead of treating timer expiry alone as physical truth.
+- Mark a capture as failed when a scheduled marker does not fire within the
+  capture window.
 - Continue storing later K2 Pro Combo physical fixtures under scenario
   subdirectories instead of overwriting the Gate 6 idle baseline.
 
@@ -60,14 +65,26 @@ should nevertheless avoid entering raw IP addresses, MAC addresses, serial
 numbers, hostnames, credentials, SSIDs, print IDs, RFID values, or unredacted
 G-code file names.
 
+Marker provenance is fixed by the CLI:
+
+- scheduled markers are exported with `source: "scheduled-cli"`.
+- interactive markers are exported with `source: "stdin"`.
+- invalid interactive marker JSON is recorded with
+  `errorCode: "invalid-marker-json"` and does not store the raw parser message
+  or input fragment.
+
 ## Acceptance
 
 - CLI parsing keeps existing Gate 6 capture behavior unchanged when marker
   options are omitted.
 - Scheduled markers are emitted as `direction: "marker"` events in the exported
   fixture.
+- Missing scheduled markers make `metadata.validation.success` false with
+  `required-marker-not-observed`.
 - `metadata.validation.eventCount` includes marker events, so scenarios can
   require a minimum amount of evidence.
+- `metadata.validation.protocolEventCount`, `markerCount`, and `markers` split
+  protocol evidence from marker evidence for later scenario analyzers.
 - The dry-run path can validate marker recording without requiring a live printer.
 
 ## Consequences

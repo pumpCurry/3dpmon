@@ -13,6 +13,7 @@ import {
   parseInteractiveMarkerLine,
   parseMarkerScheduleItem,
   payloadHasKey,
+  recordInteractiveMarkerLine,
 } from "../../scripts/capture_protocol_fixture.mjs";
 
 describe("capture_protocol_fixture CLI helpers", () => {
@@ -184,11 +185,14 @@ describe("capture_protocol_fixture CLI helpers", () => {
       success: true,
       failureReasons: [],
       eventCount: 0,
+      protocolEventCount: 0,
+      markerCount: 0,
       required: {
         http: false,
         ws: false,
         boxsInfo: false,
         minimumEvents: 0,
+        scheduledMarkers: 0,
       },
       observations: {
         httpObserved: false,
@@ -197,9 +201,50 @@ describe("capture_protocol_fixture CLI helpers", () => {
         heartbeatAcked: false,
         errorCount: 0,
       },
+      markers: {
+        scheduled: 0,
+        observedScheduled: 0,
+        markerCount: 0,
+        parseErrors: 0,
+        missing: [],
+      },
     });
 
     fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("interactive markerのprovenanceを固定しparse errorへ入力断片を保存しない", () => {
+    const events = [];
+    const tracker = { scheduled: [], parseErrors: 0 };
+    const recorder = {
+      addMarker(name, details) {
+        events.push({ name, details });
+      },
+    };
+
+    expect(recordInteractiveMarkerLine(recorder, "print resumed {\"source\":\"spoof\",\"phase\":\"resume\"}", tracker))
+      .toBe(true);
+    expect(recordInteractiveMarkerLine(recorder, "pause {\"hostname\":\"actual-printer-name\"", tracker))
+      .toBe(false);
+
+    expect(events).toEqual([
+      {
+        name: "print resumed",
+        details: {
+          source: "stdin",
+          phase: "resume",
+        },
+      },
+      {
+        name: "marker-parse-error",
+        details: {
+          source: "stdin",
+          errorCode: "invalid-marker-json",
+        },
+      },
+    ]);
+    expect(tracker.parseErrors).toBe(1);
+    expect(JSON.stringify(events)).not.toContain("actual-printer-name");
   });
 
   it("予約markerをcapture fixtureのeventとして保存する", async () => {
@@ -223,7 +268,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
         {
           atMs: 0,
           name: "operator-print-start",
-          details: { phase: "start" },
+          details: { phase: "start", source: "spoof" },
         },
       ],
       interactiveMarkers: false,
@@ -244,14 +289,73 @@ describe("capture_protocol_fixture CLI helpers", () => {
         kind: "marker",
         name: "operator-print-start",
         details: {
-          source: "scheduled-cli",
           phase: "start",
+          source: "scheduled-cli",
           scheduledAtMs: 0,
         },
       }),
     ]);
     expect(capture.metadata.validation.eventCount).toBe(1);
+    expect(capture.metadata.validation.protocolEventCount).toBe(0);
+    expect(capture.metadata.validation.markerCount).toBe(1);
+    expect(capture.metadata.validation.markers).toEqual({
+      scheduled: 1,
+      observedScheduled: 1,
+      markerCount: 1,
+      parseErrors: 0,
+      missing: [],
+    });
 
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("未発火の予約markerがあるcaptureは成功扱いにしない", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "3dpmon-capture-missing-marker-test-"));
+    const outDir = path.join(root, "fixture");
+
+    const result = await captureProtocolFixture({
+      host: "127.0.0.1",
+      outDir,
+      durationMs: 100,
+      wsPort: 9999,
+      httpPort: 80,
+      sendBoxsInfo: false,
+      skipHttp: true,
+      skipWs: true,
+      requireHttp: false,
+      requireWs: false,
+      requireBoxsInfo: false,
+      minimumEvents: 0,
+      markerSchedule: [
+        {
+          atMs: 200,
+          name: "operator-paused",
+          details: { phase: "paused" },
+        },
+      ],
+      interactiveMarkers: false,
+      keepFailed: true,
+      model: "K2 Pro Combo",
+      attachment: "CFS",
+      scenario: "unit-missing-marker-capture",
+      notes: "",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.failureReasons).toEqual(["required-marker-not-observed"]);
+    expect(result.writtenOutDir).toBeNull();
+    expect(result.failedOutDir).toMatch(/tmp[\\/]failed-captures/);
+    expect(result.markers).toEqual({
+      scheduled: 1,
+      observedScheduled: 0,
+      markerCount: 0,
+      parseErrors: 0,
+      missing: [{ index: 0, atMs: 200 }],
+    });
+    const failedCapture = JSON.parse(fs.readFileSync(path.join(result.failedOutDir, "capture.json"), "utf8"));
+    expect(failedCapture.metadata.validation.markers.missing).toEqual([{ index: 0, atMs: 200 }]);
+
+    fs.rmSync(result.failedOutDir, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

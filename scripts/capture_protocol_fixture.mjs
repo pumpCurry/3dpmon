@@ -16,12 +16,13 @@
  * - {@link parseArgs}：CLI 引数を解析
  * - {@link parseMarkerScheduleItem}：予約 marker 指定を解析
  * - {@link parseInteractiveMarkerLine}：標準入力 marker 行を解析
+ * - {@link recordInteractiveMarkerLine}：標準入力 marker を recorder へ記録
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1310 (PR #432)
+ * @version 1.390.1311 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 22:03:44
+ * @lastModified 2026-08-08 07:20:59
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -453,6 +454,30 @@ export function sleep(ms) {
 }
 
 /**
+ * scheduled marker の発火状態を追跡する。
+ *
+ * 【詳細説明】
+ * - 予約した marker が capture 内で実際に event 化されたかを validation へ反映する。
+ * - marker 名は公開 fixture に入る情報だが、未発火一覧では過剰な文字列露出を避けるため index と時刻だけを保持する。
+ *
+ * @function createMarkerTracker
+ * @param {Object[]} markerSchedule - 予約 marker 一覧
+ * @returns {Object} marker 追跡状態
+ * @example
+ * const tracker = createMarkerTracker([{ atMs: 1000, name: "print-start" }]);
+ */
+export function createMarkerTracker(markerSchedule = []) {
+  return {
+    scheduled: markerSchedule.map((marker, index) => ({
+      index,
+      atMs: marker.atMs,
+      observed: false,
+    })),
+    parseErrors: 0,
+  };
+}
+
+/**
  * capture 中に実行する予約 marker timer を登録する。
  *
  * 【詳細説明】
@@ -462,20 +487,62 @@ export function sleep(ms) {
  * @function scheduleCaptureMarkers
  * @param {Object} recorder - ProtocolRecorder instance
  * @param {Object[]} markerSchedule - 予約 marker 一覧
+ * @param {Object=} markerTracker - marker 発火状態の追跡先
  * @returns {Object[]} clearTimeout に渡せる timer handle 一覧
  * @example
  * const timers = scheduleCaptureMarkers(recorder, [{ atMs: 1000, name: "print-start", details: {} }]);
  */
-export function scheduleCaptureMarkers(recorder, markerSchedule = []) {
-  return markerSchedule.map((marker) => {
+export function scheduleCaptureMarkers(recorder, markerSchedule = [], markerTracker = null) {
+  return markerSchedule.map((marker, index) => {
     return setTimeout(() => {
       recorder.addMarker(marker.name, {
-        source: "scheduled-cli",
         ...marker.details,
+        source: "scheduled-cli",
         scheduledAtMs: marker.atMs,
       });
+      if (markerTracker?.scheduled?.[index]) {
+        markerTracker.scheduled[index].observed = true;
+      }
     }, marker.atMs);
   });
+}
+
+/**
+ * 標準入力 marker 行を recorder へ記録する。
+ *
+ * 【詳細説明】
+ * - details 内の source は操作者入力で上書きさせず、最後に `stdin` を固定する。
+ * - JSON 解析失敗時は入力断片を fixture へ残さず、固定 errorCode だけを marker として保存する。
+ *
+ * @function recordInteractiveMarkerLine
+ * @param {Object} recorder - ProtocolRecorder instance
+ * @param {string} line - 標準入力から受け取った 1 行
+ * @param {Object=} markerTracker - marker parse error 数の追跡先
+ * @returns {boolean} marker を正常に記録した場合 true、空行または解析失敗時 false
+ * @example
+ * recordInteractiveMarkerLine(recorder, "operator pause {\"phase\":\"pause\"}");
+ */
+export function recordInteractiveMarkerLine(recorder, line, markerTracker = null) {
+  try {
+    const marker = parseInteractiveMarkerLine(line);
+    if (!marker) {
+      return false;
+    }
+    recorder.addMarker(marker.name, {
+      ...marker.details,
+      source: "stdin",
+    });
+    return true;
+  } catch {
+    if (markerTracker) {
+      markerTracker.parseErrors += 1;
+    }
+    recorder.addMarker("marker-parse-error", {
+      source: "stdin",
+      errorCode: "invalid-marker-json",
+    });
+    return false;
+  }
 }
 
 /**
@@ -488,11 +555,12 @@ export function scheduleCaptureMarkers(recorder, markerSchedule = []) {
  * @function attachInteractiveMarkerReader
  * @param {Object} recorder - ProtocolRecorder instance
  * @param {boolean} enabled - 標準入力 marker を有効化するか
+ * @param {Object=} markerTracker - marker parse error 数の追跡先
  * @returns {Object|null} close() を持つ reader、無効時は null
  * @example
  * const reader = attachInteractiveMarkerReader(recorder, true);
  */
-export function attachInteractiveMarkerReader(recorder, enabled) {
+export function attachInteractiveMarkerReader(recorder, enabled, markerTracker = null) {
   if (!enabled) {
     return null;
   }
@@ -501,19 +569,39 @@ export function attachInteractiveMarkerReader(recorder, enabled) {
     terminal: false,
   });
   reader.on("line", (line) => {
-    try {
-      const marker = parseInteractiveMarkerLine(line);
-      if (marker) {
-        recorder.addMarker(marker.name, marker.details);
-      }
-    } catch (error) {
-      recorder.addMarker("marker-parse-error", {
-        source: "stdin",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    recordInteractiveMarkerLine(recorder, line, markerTracker);
   });
   return reader;
+}
+
+/**
+ * marker validation 用の集計を作成する。
+ *
+ * 【詳細説明】
+ * - scheduled marker の未発火を success 判定に使えるように、予定数・観測数・未発火一覧を返す。
+ * - 未発火一覧は marker 名を含めず、CLI 入力に秘密情報が混ざった場合の露出面を小さくする。
+ *
+ * @function summarizeMarkerValidation
+ * @param {Object} markerTracker - createMarkerTracker の戻り値
+ * @param {Object[]} markerEvents - fixture 内の marker event 一覧
+ * @returns {Object} marker validation 集計
+ * @example
+ * const summary = summarizeMarkerValidation(markerTracker, fixture.events.filter((event) => event.direction === "marker"));
+ */
+export function summarizeMarkerValidation(markerTracker, markerEvents) {
+  const missing = (markerTracker?.scheduled || [])
+    .filter((marker) => !marker.observed)
+    .map((marker) => ({
+      index: marker.index,
+      atMs: marker.atMs,
+    }));
+  return {
+    scheduled: markerTracker?.scheduled?.length || 0,
+    observedScheduled: (markerTracker?.scheduled || []).filter((marker) => marker.observed).length,
+    markerCount: markerEvents.length,
+    parseErrors: markerTracker?.parseErrors || 0,
+    missing,
+  };
 }
 
 /**
@@ -643,6 +731,9 @@ export async function captureProtocolFixture(options) {
   let wsOpened = false;
   let boxsInfoObserved = false;
   let heartbeatAcked = false;
+  let markerTimers = [];
+  let interactiveMarkerReader = null;
+  const markerTracker = createMarkerTracker(options.markerSchedule);
   const started = recorder.startSession({
     device: {
       model: options.model,
@@ -660,120 +751,130 @@ export async function captureProtocolFixture(options) {
       },
     ],
   });
-  const markerTimers = scheduleCaptureMarkers(recorder, options.markerSchedule);
-  const interactiveMarkerReader = attachInteractiveMarkerReader(recorder, options.interactiveMarkers);
+  try {
+    markerTimers = scheduleCaptureMarkers(recorder, options.markerSchedule, markerTracker);
+    interactiveMarkerReader = attachInteractiveMarkerReader(recorder, options.interactiveMarkers, markerTracker);
 
-  if (!options.skipHttp) {
-    const infoUrl = `http://${options.host}:${options.httpPort}/info`;
-    try {
-      recorder.recordTransportEvent({ channel: "http-info", type: "request", details: { url: infoUrl } });
-      const response = await fetchWithTimeout(infoUrl, 3000);
-      const body = await readResponseBody(response);
-      httpObserved = response.status >= 200 && response.status < 300;
-      if (body.bodyKind === "json" && body.body && typeof body.body === "object") {
-        recorder.mergeMetadata({
-          device: {
-            reportedModel: body.body.model || null,
-            reportedHostname: body.body.hostname || body.body.deviceName || null,
-            firmwareVersion: body.body.version || "unknown",
-          },
+    if (!options.skipHttp) {
+      const infoUrl = `http://${options.host}:${options.httpPort}/info`;
+      try {
+        recorder.recordTransportEvent({ channel: "http-info", type: "request", details: { url: infoUrl } });
+        const response = await fetchWithTimeout(infoUrl, 3000);
+        const body = await readResponseBody(response);
+        httpObserved = response.status >= 200 && response.status < 300;
+        if (body.bodyKind === "json" && body.body && typeof body.body === "object") {
+          recorder.mergeMetadata({
+            device: {
+              reportedModel: body.body.model || null,
+              reportedHostname: body.body.hostname || body.body.deviceName || null,
+              firmwareVersion: body.body.version || "unknown",
+            },
+          });
+        }
+        recorder.recordInbound("http-info", {
+          status: response.status,
+          statusText: response.statusText,
+          ...body,
+        });
+      } catch (error) {
+        errors.push({
+          channel: "http-info",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        recorder.recordTransportEvent({
+          channel: "http-info",
+          type: "error",
+          details: { message: error instanceof Error ? error.message : String(error) },
         });
       }
-      recorder.recordInbound("http-info", {
-        status: response.status,
-        statusText: response.statusText,
-        ...body,
-      });
-    } catch (error) {
-      errors.push({
-        channel: "http-info",
-        message: error instanceof Error ? error.message : String(error),
-      });
-      recorder.recordTransportEvent({
-        channel: "http-info",
-        type: "error",
-        details: { message: error instanceof Error ? error.message : String(error) },
-      });
     }
-  }
 
-  if (!options.skipWs) {
-    const wsUrl = `ws://${options.host}:${options.wsPort}`;
-    const ws = new WebSocket(wsUrl, { handshakeTimeout: 3000 });
-    ws.on("open", () => {
-      wsOpened = true;
-      recorder.recordTransportEvent({ channel: "ws9999", type: "open", details: { url: wsUrl } });
-      if (options.sendBoxsInfo) {
-        const request = { method: "get", params: { boxsInfo: 1 } };
-        recorder.recordOutbound("ws9999", request, { purpose: "read-only-boxsInfo-probe" });
-        ws.send(JSON.stringify(request));
-      }
-    });
-    ws.on("message", (data, isBinary) => {
-      const payload = normalizeWsPayload(data, isBinary);
-      recorder.recordInbound("ws9999", payload);
-      boxsInfoObserved = boxsInfoObserved || payloadHasKey(payload, "boxsInfo");
-      if (isHeartbeatPayload(payload) && ws.readyState === WebSocket.OPEN) {
-        const ackPayload = { frameType: "text", bodyKind: "text", body: "ok" };
-        recorder.recordOutbound("ws9999", ackPayload, { purpose: "heartbeat-ack" });
-        ws.send("ok");
-        heartbeatAcked = true;
-      }
-    });
-    ws.on("close", (code, reason) => {
-      recorder.recordTransportEvent({
-        channel: "ws9999",
-        type: "close",
-        details: { code, reason: reason ? reason.toString("utf8") : "" },
+    if (!options.skipWs) {
+      const wsUrl = `ws://${options.host}:${options.wsPort}`;
+      const ws = new WebSocket(wsUrl, { handshakeTimeout: 3000 });
+      ws.on("open", () => {
+        wsOpened = true;
+        recorder.recordTransportEvent({ channel: "ws9999", type: "open", details: { url: wsUrl } });
+        if (options.sendBoxsInfo) {
+          const request = { method: "get", params: { boxsInfo: 1 } };
+          recorder.recordOutbound("ws9999", request, { purpose: "read-only-boxsInfo-probe" });
+          ws.send(JSON.stringify(request));
+        }
       });
-    });
-    ws.on("error", (error) => {
-      errors.push({
-        channel: "ws9999",
-        message: error instanceof Error ? error.message : String(error),
+      ws.on("message", (data, isBinary) => {
+        const payload = normalizeWsPayload(data, isBinary);
+        recorder.recordInbound("ws9999", payload);
+        boxsInfoObserved = boxsInfoObserved || payloadHasKey(payload, "boxsInfo");
+        if (isHeartbeatPayload(payload) && ws.readyState === WebSocket.OPEN) {
+          const ackPayload = { frameType: "text", bodyKind: "text", body: "ok" };
+          recorder.recordOutbound("ws9999", ackPayload, { purpose: "heartbeat-ack" });
+          ws.send("ok");
+          heartbeatAcked = true;
+        }
       });
-      recorder.recordTransportEvent({
-        channel: "ws9999",
-        type: "error",
-        details: { message: error instanceof Error ? error.message : String(error) },
+      ws.on("close", (code, reason) => {
+        recorder.recordTransportEvent({
+          channel: "ws9999",
+          type: "close",
+          details: { code, reason: reason ? reason.toString("utf8") : "" },
+        });
       });
-    });
+      ws.on("error", (error) => {
+        errors.push({
+          channel: "ws9999",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        recorder.recordTransportEvent({
+          channel: "ws9999",
+          type: "error",
+          details: { message: error instanceof Error ? error.message : String(error) },
+        });
+      });
 
-    await sleep(options.durationMs);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.close();
-    } else if (ws.readyState === WebSocket.CONNECTING) {
-      ws.terminate();
+      await sleep(options.durationMs);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        ws.terminate();
+      }
+      await sleep(100);
     }
-    await sleep(100);
-  }
-  if (options.skipWs && (markerTimers.length > 0 || interactiveMarkerReader)) {
-    await sleep(options.durationMs);
-  }
-  markerTimers.forEach((timer) => {
-    clearTimeout(timer);
-  });
-  if (interactiveMarkerReader) {
-    interactiveMarkerReader.close();
+    if (options.skipWs && (markerTimers.length > 0 || interactiveMarkerReader)) {
+      await sleep(options.durationMs);
+    }
+  } finally {
+    markerTimers.forEach((timer) => {
+      clearTimeout(timer);
+    });
+    if (interactiveMarkerReader) {
+      interactiveMarkerReader.close();
+    }
   }
   recorder.stopSession();
 
   const fixture = recorder.exportFixture({ redact: true });
+  const markerEvents = fixture.events.filter((event) => event.direction === "marker");
+  const protocolEventCount = fixture.events.length - markerEvents.length;
+  const markerValidation = summarizeMarkerValidation(markerTracker, markerEvents);
   const failureReasons = [];
   if (options.requireHttp && !httpObserved) failureReasons.push("required-http-not-observed");
   if (options.requireWs && !wsOpened) failureReasons.push("required-ws-not-opened");
   if (options.requireBoxsInfo && !boxsInfoObserved) failureReasons.push("required-boxsinfo-not-observed");
+  if (markerValidation.missing.length > 0) failureReasons.push("required-marker-not-observed");
   if (fixture.events.length < options.minimumEvents) failureReasons.push("minimum-events-not-met");
   const success = failureReasons.length === 0;
   fixture.metadata.validation = {
     success,
     failureReasons,
     eventCount: fixture.events.length,
+    protocolEventCount,
+    markerCount: markerEvents.length,
     required: {
       http: Boolean(options.requireHttp),
       ws: Boolean(options.requireWs),
       boxsInfo: Boolean(options.requireBoxsInfo),
       minimumEvents: options.minimumEvents,
+      scheduledMarkers: markerTracker.scheduled.length,
     },
     observations: {
       httpObserved,
@@ -782,6 +883,7 @@ export async function captureProtocolFixture(options) {
       heartbeatAcked,
       errorCount: errors.length,
     },
+    markers: markerValidation,
   };
   const failedOutDir = success
     ? null
@@ -796,6 +898,8 @@ export async function captureProtocolFixture(options) {
     writtenOutDir,
     failedOutDir,
     eventCount: fixture.events.length,
+    protocolEventCount,
+    markerCount: markerEvents.length,
     success,
     failureReasons,
     observations: {
@@ -805,6 +909,7 @@ export async function captureProtocolFixture(options) {
       heartbeatAcked,
       errors,
     },
+    markers: markerValidation,
   };
 }
 
