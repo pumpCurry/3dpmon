@@ -14,12 +14,14 @@
  *
  * 【公開関数一覧】
  * - {@link parseArgs}：CLI 引数を解析
+ * - {@link parseMarkerScheduleItem}：予約 marker 指定を解析
+ * - {@link parseInteractiveMarkerLine}：標準入力 marker 行を解析
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1309 (PR #432)
+ * @version 1.390.1310 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 21:55:35
+ * @lastModified 2026-08-07 22:03:44
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -29,6 +31,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
@@ -61,10 +64,108 @@ Options:
   --require-ws              Fail the result if WS did not open.
   --require-boxsinfo        Fail the result if boxsInfo was not observed.
   --minimum-events <number> Fail the result if fewer events were captured. Default: 0.
+  --marker-at <ms:name[:json-details]>
+                            Add an operator marker after elapsed milliseconds. Repeatable.
+  --interactive-markers     Read marker lines from stdin while capturing. Format: name or name {"json":true}.
   --keep-failed             Write failed captures under tmp/failed-captures instead of discarding them.
   --notes <text>            Operator notes for metadata.
   --help                    Show this help.
 `;
+
+/**
+ * marker details の JSON 文字列を解析する。
+ *
+ * 【詳細説明】
+ * - CLI 入力の details は fixture 化時に recorder 側で redaction される。
+ * - details は marker の補助情報として扱うため、配列や null ではなく object に限定する。
+ *
+ * @function parseMarkerDetails
+ * @param {string} text - JSON object 文字列
+ * @returns {Object} 解析した details
+ * @throws {Error} JSON が object でない場合
+ * @example
+ * const details = parseMarkerDetails("{\"phase\":\"start\"}");
+ */
+export function parseMarkerDetails(text) {
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("marker details must be a JSON object");
+  }
+  return parsed;
+}
+
+/**
+ * 予約 marker 指定を解析する。
+ *
+ * 【詳細説明】
+ * - `ms:name` または `ms:name:json-details` の形式を扱う。
+ * - 物理操作の境界を通信ログと同じ時系列へ残すため、経過ミリ秒と marker 名を必須にする。
+ *
+ * @function parseMarkerScheduleItem
+ * @param {string} value - `ms:name[:json-details]` 形式の CLI 値
+ * @returns {Object} 予約 marker 情報
+ * @throws {Error} 形式が不正な場合
+ * @example
+ * const marker = parseMarkerScheduleItem("1500:print-start:{\"source\":\"operator\"}");
+ */
+export function parseMarkerScheduleItem(value) {
+  const firstSeparator = String(value || "").indexOf(":");
+  if (firstSeparator <= 0) {
+    throw new Error("--marker-at must be formatted as ms:name[:json-details]");
+  }
+  const atMs = Number(String(value).slice(0, firstSeparator));
+  const remainder = String(value).slice(firstSeparator + 1);
+  const detailsSeparator = remainder.indexOf(":");
+  const name = detailsSeparator >= 0 ? remainder.slice(0, detailsSeparator).trim() : remainder.trim();
+  const detailsText = detailsSeparator >= 0 ? remainder.slice(detailsSeparator + 1).trim() : "";
+  if (!Number.isFinite(atMs) || atMs < 0) {
+    throw new Error("--marker-at elapsed milliseconds must be a number >= 0");
+  }
+  if (!name) {
+    throw new Error("--marker-at marker name is required");
+  }
+  return {
+    atMs,
+    name,
+    details: detailsText ? parseMarkerDetails(detailsText) : { source: "scheduled-cli" },
+  };
+}
+
+/**
+ * 標準入力から受け取った marker 行を解析する。
+ *
+ * 【詳細説明】
+ * - 空行は marker として扱わず、操作者が改行を誤入力しても capture にノイズを残さない。
+ * - JSON details は最初の `{` 以降として読み取り、marker 名に空白を含められるようにする。
+ *
+ * @function parseInteractiveMarkerLine
+ * @param {string} line - 標準入力から受け取った 1 行
+ * @returns {Object|null} marker 情報、空行の場合 null
+ * @throws {Error} JSON details が不正な場合
+ * @example
+ * const marker = parseInteractiveMarkerLine("print-start {\"phase\":\"start\"}");
+ */
+export function parseInteractiveMarkerLine(line) {
+  const text = String(line || "").trim();
+  if (!text) {
+    return null;
+  }
+  const detailsStart = text.indexOf("{");
+  if (detailsStart < 0) {
+    return {
+      name: text,
+      details: { source: "stdin" },
+    };
+  }
+  const name = text.slice(0, detailsStart).trim();
+  if (!name) {
+    throw new Error("interactive marker name is required");
+  }
+  return {
+    name,
+    details: parseMarkerDetails(text.slice(detailsStart)),
+  };
+}
 
 /**
  * CLI 引数を解析する。
@@ -91,6 +192,8 @@ export function parseArgs(argv) {
     requireWs: false,
     requireBoxsInfo: false,
     minimumEvents: 0,
+    markerSchedule: [],
+    interactiveMarkers: false,
     keepFailed: false,
     model: "unknown",
     attachment: "unknown",
@@ -132,6 +235,10 @@ export function parseArgs(argv) {
       options.keepFailed = true;
       continue;
     }
+    if (arg === "--interactive-markers") {
+      options.interactiveMarkers = true;
+      continue;
+    }
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       throw new Error(`Missing value for ${arg}`);
@@ -146,6 +253,7 @@ export function parseArgs(argv) {
     else if (arg === "--ws-port") options.wsPort = Number(next);
     else if (arg === "--http-port") options.httpPort = Number(next);
     else if (arg === "--minimum-events") options.minimumEvents = Number(next);
+    else if (arg === "--marker-at") options.markerSchedule.push(parseMarkerScheduleItem(next));
     else if (arg === "--notes") options.notes = next;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -345,6 +453,70 @@ export function sleep(ms) {
 }
 
 /**
+ * capture 中に実行する予約 marker timer を登録する。
+ *
+ * 【詳細説明】
+ * - timer は capture 終了時に呼び出し側で clear できるように handle 配列として返す。
+ * - recorder への marker 追加だけを行い、実機通信には一切影響させない。
+ *
+ * @function scheduleCaptureMarkers
+ * @param {Object} recorder - ProtocolRecorder instance
+ * @param {Object[]} markerSchedule - 予約 marker 一覧
+ * @returns {Object[]} clearTimeout に渡せる timer handle 一覧
+ * @example
+ * const timers = scheduleCaptureMarkers(recorder, [{ atMs: 1000, name: "print-start", details: {} }]);
+ */
+export function scheduleCaptureMarkers(recorder, markerSchedule = []) {
+  return markerSchedule.map((marker) => {
+    return setTimeout(() => {
+      recorder.addMarker(marker.name, {
+        source: "scheduled-cli",
+        ...marker.details,
+        scheduledAtMs: marker.atMs,
+      });
+    }, marker.atMs);
+  });
+}
+
+/**
+ * capture 中だけ標準入力 marker reader を接続する。
+ *
+ * 【詳細説明】
+ * - `--interactive-markers` 指定時だけ readline を開き、操作者の物理操作メモを marker event に変換する。
+ * - marker 行の解析に失敗した場合も capture 自体は止めず、解析失敗 marker として記録する。
+ *
+ * @function attachInteractiveMarkerReader
+ * @param {Object} recorder - ProtocolRecorder instance
+ * @param {boolean} enabled - 標準入力 marker を有効化するか
+ * @returns {Object|null} close() を持つ reader、無効時は null
+ * @example
+ * const reader = attachInteractiveMarkerReader(recorder, true);
+ */
+export function attachInteractiveMarkerReader(recorder, enabled) {
+  if (!enabled) {
+    return null;
+  }
+  const reader = readline.createInterface({
+    input: process.stdin,
+    terminal: false,
+  });
+  reader.on("line", (line) => {
+    try {
+      const marker = parseInteractiveMarkerLine(line);
+      if (marker) {
+        recorder.addMarker(marker.name, marker.details);
+      }
+    } catch (error) {
+      recorder.addMarker("marker-parse-error", {
+        source: "stdin",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  return reader;
+}
+
+/**
  * テキストファイルを同一ディレクトリ内の一時ファイル経由で置換する。
  *
  * 【詳細説明】
@@ -488,6 +660,8 @@ export async function captureProtocolFixture(options) {
       },
     ],
   });
+  const markerTimers = scheduleCaptureMarkers(recorder, options.markerSchedule);
+  const interactiveMarkerReader = attachInteractiveMarkerReader(recorder, options.interactiveMarkers);
 
   if (!options.skipHttp) {
     const infoUrl = `http://${options.host}:${options.httpPort}/info`;
@@ -572,6 +746,15 @@ export async function captureProtocolFixture(options) {
       ws.terminate();
     }
     await sleep(100);
+  }
+  if (options.skipWs && (markerTimers.length > 0 || interactiveMarkerReader)) {
+    await sleep(options.durationMs);
+  }
+  markerTimers.forEach((timer) => {
+    clearTimeout(timer);
+  });
+  if (interactiveMarkerReader) {
+    interactiveMarkerReader.close();
   }
   recorder.stopSession();
 

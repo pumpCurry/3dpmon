@@ -32,6 +32,10 @@ Live K2-family test target:
 - Keep the Gate 6 idle baseline at `k2-pro-cfs` stable. Add later physical-state
   captures under scenario subdirectories such as `k2-pro-cfs/scenarios/printing`,
   `k2-pro-cfs/scenarios/paused`, and `k2-pro-cfs/scenarios/cfs-reconnect`.
+- For physical-state captures, add operator markers with
+  `--marker-at <ms:name[:json-details]>` or `--interactive-markers` so the fixture
+  records the observed boundaries such as print start, pause, resume, completion,
+  CFS disconnect, CFS reconnect, and material changes.
 
 Fixture rules:
 
@@ -40,3 +44,4 @@ Fixture rules:
 - Treat wired and wireless MAC addresses as endpoint aliases, not as the physical printer identity.
 - Preserve unknown raw fields after redaction.
 - Do not include commands that move hardware unless the scenario explicitly requires a hardware smoke capture.
+- Marker details must describe observations only. Do not store raw IP addresses, MAC addresses, serial numbers, hostnames, credentials, SSIDs, print IDs, RFID values, or unredacted G-code file names in marker text.

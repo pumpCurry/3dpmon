@@ -10,6 +10,8 @@ import {
   isHeartbeatPayload,
   normalizeWsPayload,
   parseArgs,
+  parseInteractiveMarkerLine,
+  parseMarkerScheduleItem,
   payloadHasKey,
 } from "../../scripts/capture_protocol_fixture.mjs";
 
@@ -34,6 +36,9 @@ describe("capture_protocol_fixture CLI helpers", () => {
       "--require-boxsinfo",
       "--minimum-events",
       "3",
+      "--marker-at",
+      "250:operator-print-start:{\"phase\":\"start\"}",
+      "--interactive-markers",
       "--keep-failed",
     ]);
 
@@ -49,7 +54,37 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(options.requireWs).toBe(true);
     expect(options.requireBoxsInfo).toBe(true);
     expect(options.minimumEvents).toBe(3);
+    expect(options.markerSchedule).toEqual([
+      {
+        atMs: 250,
+        name: "operator-print-start",
+        details: { phase: "start" },
+      },
+    ]);
+    expect(options.interactiveMarkers).toBe(true);
     expect(options.keepFailed).toBe(true);
+  });
+
+  it("予約markerと標準入力markerの行を解析する", () => {
+    expect(parseMarkerScheduleItem("1000:cfs-slot-loaded")).toEqual({
+      atMs: 1000,
+      name: "cfs-slot-loaded",
+      details: { source: "scheduled-cli" },
+    });
+    expect(parseMarkerScheduleItem("1500:operator print start:{\"phase\":\"start\",\"slot\":2}")).toEqual({
+      atMs: 1500,
+      name: "operator print start",
+      details: { phase: "start", slot: 2 },
+    });
+    expect(parseInteractiveMarkerLine("")).toBeNull();
+    expect(parseInteractiveMarkerLine("print paused")).toEqual({
+      name: "print paused",
+      details: { source: "stdin" },
+    });
+    expect(parseInteractiveMarkerLine("print resumed {\"phase\":\"resume\"}")).toEqual({
+      name: "print resumed",
+      details: { phase: "resume" },
+    });
   });
 
   it("text JSON frameをJSONとして保持する", () => {
@@ -163,6 +198,59 @@ describe("capture_protocol_fixture CLI helpers", () => {
         errorCount: 0,
       },
     });
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("予約markerをcapture fixtureのeventとして保存する", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "3dpmon-capture-marker-test-"));
+    const outDir = path.join(root, "fixture");
+
+    const result = await captureProtocolFixture({
+      host: "127.0.0.1",
+      outDir,
+      durationMs: 100,
+      wsPort: 9999,
+      httpPort: 80,
+      sendBoxsInfo: false,
+      skipHttp: true,
+      skipWs: true,
+      requireHttp: false,
+      requireWs: false,
+      requireBoxsInfo: false,
+      minimumEvents: 1,
+      markerSchedule: [
+        {
+          atMs: 0,
+          name: "operator-print-start",
+          details: { phase: "start" },
+        },
+      ],
+      interactiveMarkers: false,
+      keepFailed: false,
+      model: "K2 Pro Combo",
+      attachment: "CFS",
+      scenario: "unit-marker-capture",
+      notes: "",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.eventCount).toBe(1);
+    const capture = JSON.parse(fs.readFileSync(path.join(outDir, "capture.json"), "utf8"));
+    expect(capture.events).toEqual([
+      expect.objectContaining({
+        direction: "marker",
+        channel: "operator",
+        kind: "marker",
+        name: "operator-print-start",
+        details: {
+          source: "scheduled-cli",
+          phase: "start",
+          scheduledAtMs: 0,
+        },
+      }),
+    ]);
+    expect(capture.metadata.validation.eventCount).toBe(1);
 
     fs.rmSync(root, { recursive: true, force: true });
   });
