@@ -19,7 +19,7 @@
  *
  * @version 1.390.1348 (PR #432)
  * @since   1.390.1346 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 08:35:00
  * -----------------------------------------------------------
  * @todo
  * - 実 UI の raw JSON 参照を NormalizedState 参照へ段階的に差し替える
@@ -114,6 +114,28 @@ const TRUSTED_EVIDENCE_SOURCES = Object.freeze({
 });
 
 /**
+ * authority module だけが保持する想定の trust token。
+ *
+ * 【詳細説明】
+ * - この Symbol は export しない。caller が source 名と `trusted:true` を知っていても、
+ *   module-private token が無い snapshot は readiness evidence へ昇格しない。
+ * - 実authority module接続時は、このtokenを直接公開せず、composition layer側で各moduleの
+ *   snapshot API と結合する実装へ置き換える。
+ *
+ * @constant {object}
+ */
+const AUTHORITY_SOURCE_TOKENS = Object.freeze({
+  schemaV3WritesActive: Symbol("schema-v3-repository"),
+  normalizedStateCertified: Symbol("normalized-state-certification-registry"),
+  k2PrintSemanticsCertified: Symbol("k2-print-semantics-certification-registry"),
+  commandAuthorityCanSend: Symbol("command-dispatcher-authority"),
+  printPlanCanStart: Symbol("print-plan-authority"),
+  materialProviderCanDriveLedger: Symbol("material-provider-authority"),
+  filamentLedgerCanAppend: Symbol("filament-ledger-repository"),
+  legacyFallbackAvailable: Symbol("legacy-fallback-registry"),
+});
+
+/**
  * source object から readiness evidence を導出する関数定義。
  *
  * 【詳細説明】
@@ -162,7 +184,7 @@ function evidenceIsTrustedTrue(evidence, key) {
  *
  * 【詳細説明】
  * - source object は `{ source, trusted, ...状態 }` を持つ registry/repository facade の snapshot として扱う。
- * - source 名や trusted flag が期待値と一致しない場合は false evidence を返す。
+ * - source 名や private token が期待値と一致しない場合は false evidence を返す。
  *
  * @private
  * @param {string} key - check key
@@ -176,7 +198,9 @@ function deriveEvidenceFromTrustedSource(key, source) {
     return null;
   }
   return {
-    value: source.source === expectedSource && source.trusted === true && derive(source) === true,
+    value: source.source === expectedSource &&
+      source.trustToken === AUTHORITY_SOURCE_TOKENS[key] &&
+      derive(source) === true,
     source: expectedSource,
     trusted: true,
   };
@@ -247,8 +271,6 @@ function normalizeCutoverEvidence(options = {}) {
       source: TRUSTED_EVIDENCE_SOURCES.liveShadowDiffsClean,
       trusted: true,
     };
-  } else if (evidenceIsTrustedTrue(options.evidence, "liveShadowDiffsClean")) {
-    evidence.liveShadowDiffsClean = cloneJsonValue(options.evidence.liveShadowDiffsClean);
   }
   return evidence;
 }

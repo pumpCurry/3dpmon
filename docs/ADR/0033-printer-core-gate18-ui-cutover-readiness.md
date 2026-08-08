@@ -53,10 +53,16 @@ readiness evidence must be derived from trusted source snapshots:
 }
 ```
 
-Plain caller-supplied booleans, or caller-assembled `{ value, source, trusted }`
-objects, do not satisfy readiness for non-live-shadow checks. This prevents
-tests, review helpers, or feature flags from making cutover ready without
-state from the relevant repository/authority/certification source.
+Plain caller-supplied booleans, caller-assembled `{ value, source, trusted }`
+objects, or caller-assembled source snapshots do not satisfy readiness for
+non-live-shadow checks. A trusted source must be bound by code that owns the
+authority module, not by a caller that knows the expected source string.
+
+The dry-run guard represents that boundary with module-private trust tokens.
+Those tokens are not exported; therefore current Gate 18 cannot be made ready by
+unit tests or feature flags alone. Future authority wiring should replace this
+placeholder with a composition root that directly reads the real repositories,
+registries, and dispatchers.
 
 The cutover assertion also recomputes readiness from source snapshots. Passing a
 report-like object with `ready: true` is insufficient.
