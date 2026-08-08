@@ -9,16 +9,18 @@
  *
  * 【機能内容サマリ】
  * - K2 CFS `boxsInfo` を read-only material topology として提供
+ * - K1C/CFS-C の Moonraker 由来 CFS payload を同じ topology contract へ正規化
  * - material 観測と filament ledger authority の境界を明示
  * - CFS 未接続時にも同一 shape の material topology を返す
  *
  * 【公開関数一覧】
  * - {@link createNoCfsMaterialProvider}：CFS 非対応/未観測用 material provider を生成
  * - {@link createCfsBoxsInfoMaterialProvider}：K2 `boxsInfo` 用 read-only material provider を生成
+ * - {@link createCfsMoonrakerBoxMaterialProvider}：K1C/CFS-C `boxsInfo` 用 read-only material provider を生成
  *
- * @version 1.390.1312 (PR #432)
+ * @version 1.390.1340 (PR #432)
  * @since   1.390.1312 (PR #432)
- * @lastModified 2026-08-08 07:32:05
+ * @lastModified 2026-08-09 01:26:08
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の MaterialSource store と接続する際に provider event 化する
@@ -66,6 +68,8 @@ function attachMaterialProviderMetadata(topology, provider) {
       readOnly: true,
       supportsCfs: Boolean(provider.supportsCfs),
       canDriveLedger: false,
+      transportKind: provider.transportKind || "unknown",
+      sourceProtocol: provider.sourceProtocol || "unknown",
     },
   };
 }
@@ -88,6 +92,8 @@ export function createNoCfsMaterialProvider() {
     readOnly: true,
     supportsCfs: false,
     canDriveLedger: false,
+    transportKind: "none",
+    sourceProtocol: "none",
     /**
      * 空の material topology を返す。
      *
@@ -128,6 +134,8 @@ export function createCfsBoxsInfoMaterialProvider(options = {}) {
     readOnly: true,
     supportsCfs: true,
     canDriveLedger: false,
+    transportKind: "ws9999",
+    sourceProtocol: "creality-boxsInfo",
     /**
      * `boxsInfo` payload を read-only material topology へ変換する。
      *
@@ -142,6 +150,97 @@ export function createCfsBoxsInfoMaterialProvider(options = {}) {
      */
     createTopology(boxsInfo, topologyOptions = {}) {
       return attachMaterialProviderMetadata(normalizeBoxsInfo(boxsInfo, topologyOptions), provider);
+    },
+  };
+  return provider;
+}
+
+/**
+ * Moonraker/CFS-C 由来 payload から `boxsInfo` 相当の object を抽出する。
+ *
+ * 【詳細説明】
+ * - K1C+CFS-C 実機は別ネットワークで検証するため、Gate 12 準備では複数の read-only envelope を受けられる
+ *   入口だけを用意する。
+ * - `boxsInfo` そのもの、`result.boxsInfo`、`result.boxs_info`、`params.boxsInfo`、`data.boxsInfo` を順に見る。
+ * - どの形にも一致しない payload はそのまま返し、後段の normalizer が空/不正 topology として扱えるようにする。
+ *
+ * @function extractMoonrakerBoxsInfoPayload
+ * @param {object|null|undefined} payload - Moonraker/CFS-C 由来の read-only payload
+ * @returns {object|null|undefined} `boxsInfo` 相当 payload、または入力 payload
+ * @example
+ * const boxsInfo = extractMoonrakerBoxsInfoPayload({ result: { boxsInfo: {} } });
+ */
+export function extractMoonrakerBoxsInfoPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+  if (payload.boxsInfo && typeof payload.boxsInfo === "object") {
+    return payload.boxsInfo;
+  }
+  if (payload.boxs_info && typeof payload.boxs_info === "object") {
+    return payload.boxs_info;
+  }
+  for (const envelopeKey of ["result", "params", "data"]) {
+    const envelope = payload[envelopeKey];
+    if (!envelope || typeof envelope !== "object") {
+      continue;
+    }
+    if (envelope.boxsInfo && typeof envelope.boxsInfo === "object") {
+      return envelope.boxsInfo;
+    }
+    if (envelope.boxs_info && typeof envelope.boxs_info === "object") {
+      return envelope.boxs_info;
+    }
+  }
+  return payload;
+}
+
+/**
+ * K1C/CFS-C Moonraker 用 read-only material provider を生成する。
+ *
+ * 【詳細説明】
+ * - Moonraker provider は K1C 本体 identity を変更せず、CFS-C attachment を material topology としてだけ扱う。
+ * - `normalizeBoxsInfo` は K2 と同じ topology contract を再利用し、実機 fixture で差分が出た場合は
+ *   provider 変換層だけを拡張できるようにする。
+ * - provider metadata には `transportKind:"moonraker"` を入れ、K2 WS9999 由来 topology と区別できるようにする。
+ *
+ * @function createCfsMoonrakerBoxMaterialProvider
+ * @param {object=} options - provider 生成オプション
+ * @param {Function=} options.normalizeBoxsInfo - `boxsInfo` を topology へ変換する関数
+ * @param {Function=} options.extractBoxsInfo - Moonraker payload から `boxsInfo` を抽出する関数
+ * @returns {object} K1C/CFS-C read-only material provider
+ * @example
+ * const provider = createCfsMoonrakerBoxMaterialProvider();
+ */
+export function createCfsMoonrakerBoxMaterialProvider(options = {}) {
+  const normalizeBoxsInfo = typeof options.normalizeBoxsInfo === "function"
+    ? options.normalizeBoxsInfo
+    : normalizeK2BoxsInfo;
+  const extractBoxsInfo = typeof options.extractBoxsInfo === "function"
+    ? options.extractBoxsInfo
+    : extractMoonrakerBoxsInfoPayload;
+  const provider = {
+    schemaVersion: MATERIAL_PROVIDER_SCHEMA_VERSION,
+    providerId: "creality-cfs-moonraker-box",
+    readOnly: true,
+    supportsCfs: true,
+    canDriveLedger: false,
+    transportKind: "moonraker",
+    sourceProtocol: "creality-moonraker-boxsInfo",
+    /**
+     * Moonraker/CFS-C payload を read-only material topology へ変換する。
+     *
+     * 【詳細説明】
+     * - `boxsInfo` envelope の揺れを provider 境界で吸収し、NormalizedState 側は同じ material topology だけを見る。
+     * - attach/detach の観測は topology の fresh/stale 診断材料であり、printer identity や ledger には書き込まない。
+     *
+     * @function createTopology
+     * @param {object|null|undefined} payload - Moonraker/CFS-C 由来 payload
+     * @param {object=} topologyOptions - topology 正規化オプション
+     * @returns {object} provider metadata 付き material topology
+     */
+    createTopology(payload, topologyOptions = {}) {
+      return attachMaterialProviderMetadata(normalizeBoxsInfo(extractBoxsInfo(payload), topologyOptions), provider);
     },
   };
   return provider;
