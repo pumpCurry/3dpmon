@@ -22,9 +22,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1313 (PR #432)
+ * @version 1.390.1338 (PR #432)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-08 07:42:16
+ * @lastModified 2026-08-09 02:05:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -187,8 +187,9 @@ function createConflictShadowDeviceId(options = {}) {
  * shadow session 用の deviceId を決定する。
  *
  * 【詳細説明】
- * - 強い identity があれば `deviceIdSeed` を使い、無い場合は live shadow 専用の host seed に倒す。
+ * - identity があれば `deviceIdSeed` を使い、無い場合は live shadow 専用の暫定 endpoint/host ID に倒す。
  * - open conflict がある場合は旧 identity を採用せず、endpoint/host 由来の暫定 shadow ID に倒す。
+ * - fallback では `host:` namespace を使わず、hostname を安定 ID と誤読しない形にする。
  * - この値はまだ command authorization や routing authority には使わない。
  *
  * @function resolvePrinterCoreV3LiveShadowDeviceId
@@ -211,7 +212,10 @@ export function resolvePrinterCoreV3LiveShadowDeviceId(options = {}) {
   if (seed) {
     return seed;
   }
-  return `host:${hostOrDest || "unknown"}`;
+  return createConflictShadowDeviceId({
+    ...options,
+    host: hostOrDest || "unknown",
+  });
 }
 
 /**

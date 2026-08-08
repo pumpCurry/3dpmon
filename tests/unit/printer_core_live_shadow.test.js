@@ -70,6 +70,19 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(deviceId).toBe("provisional-shadow:endpoint:192.168.54.151%3A9999");
   });
 
+  it("identityが無い場合もhostnameをstable ID扱いせずshadow暫定IDにする", () => {
+    const withEndpoint = resolveK1LiveShadowDeviceId({
+      host: "K1Max-NoIdentity",
+      dest: "192.168.54.151:9999",
+    });
+    const withoutEndpoint = resolveK1LiveShadowDeviceId({
+      host: "K1Max-NoEndpoint",
+    });
+
+    expect(withEndpoint).toBe("provisional-shadow:endpoint:192.168.54.151%3A9999");
+    expect(withoutEndpoint).toBe("provisional-shadow:host:K1Max-NoEndpoint");
+  });
+
   it("session未開始だけをrecoverable observe errorとして扱う", () => {
     expect(isRecoverableK1LiveShadowObserveError(new Error("session has not been started"))).toBe(true);
     expect(isRecoverableK1LiveShadowObserveError({
