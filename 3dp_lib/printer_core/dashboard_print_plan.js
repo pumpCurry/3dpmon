@@ -113,16 +113,19 @@ function normalizeGcodeAsset(asset, options = {}) {
  * @param {object} options - assignment 生成オプション
  * @param {string} options.toolAlias - G-code tool alias
  * @param {string} options.materialSourceId - material source ID
+ * @param {string=} options.spoolId - material source に装着済みの spool ID
  * @param {number=} index - assignment index
  * @returns {object} tool assignment
  */
 function createToolAssignment(options, index = 0) {
   const toolAlias = requireNonEmptyString(options.toolAlias || "T1A", "toolAlias");
   const materialSourceId = requireNonEmptyString(options.materialSourceId, "materialSourceId");
+  const spoolId = String(options.spoolId || "").trim() || null;
   return {
     assignmentId: createPrinterCoreV3DeterministicId("tool-assignment", [toolAlias, materialSourceId]),
     toolAlias,
     materialSourceId,
+    spoolId,
     confidence: options.confidence || "operator-confirmed",
     order: Number.isFinite(Number(options.order)) ? Number(options.order) : index,
     protocol: cloneJsonValue(options.protocol || {}),
