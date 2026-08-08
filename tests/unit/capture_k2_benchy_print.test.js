@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractMatchedTool,
+  hasObservedCfsUnit,
   isCfsAttachmentLabel,
   normalizeK2GcodeFiles,
   parseArgs,
@@ -74,6 +75,36 @@ describe("capture_k2_benchy_print helpers", () => {
         allowUnsafeOpgcodeFileCfsStart: false,
       }), label).toBe(true);
     }
+  });
+
+  it("実機boxsInfoでCFS unitを観測した場合はattachment自己申告が外部リールでもblockする", () => {
+    const boxsInfo = {
+      materialBoxs: [
+        { id: 0, type: 1, materials: [{ id: 0, type: "PLA" }] },
+        { id: 1, type: 0, materials: [{ id: 0, type: "PLA" }] },
+      ],
+    };
+
+    expect(hasObservedCfsUnit(boxsInfo)).toBe(true);
+    expect(shouldBlockUnsafeOpgcodeFileCfsStart({
+      attachment: "external-spool",
+      boxsInfo,
+      allowUnsafeOpgcodeFileCfsStart: false,
+    })).toBe(true);
+    expect(shouldBlockUnsafeOpgcodeFileCfsStart({
+      attachment: "external-spool",
+      boxsInfo,
+      allowUnsafeOpgcodeFileCfsStart: true,
+    })).toBe(false);
+  });
+
+  it("CFS unit検出はtypeの暗黙変換でfalse/空白/配列を0扱いしない", () => {
+    for (const type of [false, " ", [], {}, [0]]) {
+      expect(hasObservedCfsUnit({ materialBoxs: [{ type, materials: [] }] }), JSON.stringify(type)).toBe(false);
+    }
+    expect(hasObservedCfsUnit({ materialBoxs: [{ type: "0", materials: [] }] })).toBe(true);
+    expect(hasObservedCfsUnit({ materialBoxs: [{ type: 0, materials: [] }] })).toBe(true);
+    expect(hasObservedCfsUnit({ materialBoxs: [{ type: "1", materials: [] }] })).toBe(false);
   });
 
   it("K2 retGcodeFileInfo2 から単色 Benchy を 4color Benchy より優先して選ぶ", () => {

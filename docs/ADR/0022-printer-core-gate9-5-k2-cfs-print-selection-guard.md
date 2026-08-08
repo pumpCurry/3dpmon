@@ -42,7 +42,9 @@ materialBoxs[].materials[].selected == 1
   `boxsInfo` frame by `boxId` and `materialId`.
 - `boxType`, `boxId`, and `materialId` are parsed as strict non-negative integer
   protocol indexes. Missing, empty, NaN, negative, or fractional values do not
-  qualify; they are not coerced to zero.
+  qualify; they are not coerced to zero. The parser accepts only numbers and
+  digit-only strings, so JavaScript values such as `false`, whitespace strings,
+  arrays, and objects do not qualify through implicit coercion.
 
 - The analyzer report now includes a read-only `cfsSelection` summary:
 
@@ -82,6 +84,12 @@ cfs-selected-source-missing
 Without that flag, it records preflight evidence and an
 `operator-print-start-blocked` marker instead of starting a dry-run-like CFS
 print.
+
+The capture helper does not rely only on the operator-provided attachment label
+for this safety boundary. If the preflight `boxsInfo` snapshot contains a CFS
+unit (`materialBoxs[].type == 0` using the same strict index parsing), unsafe
+`opGcodeFile` start is blocked even when `--attachment` was set to an external
+spool label.
 
 ## Source Evidence
 

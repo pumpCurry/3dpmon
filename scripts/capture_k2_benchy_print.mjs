@@ -16,6 +16,7 @@
  * - {@link parseArgs}：CLI 引数を解析
  * - {@link normalizeK2GcodeFiles}：K2 file list payload を配列へ正規化
  * - {@link isCfsAttachmentLabel}：attachment label が CFS 系か判定
+ * - {@link hasObservedCfsUnit}：boxsInfo に CFS unit が含まれるか判定
  * - {@link shouldBlockUnsafeOpgcodeFileCfsStart}：CFS の unsafe `opGcodeFile` 開始をブロックするか判定
  * - {@link selectK2GcodeFile}：印刷対象の G-code を選択
  * - {@link summarizeK2ToolSource}：CFS tool alias に対応する材料 source を要約
@@ -24,7 +25,7 @@
  *
  * @version 1.390.1328 (PR #432)
  * @since   1.390.1323 (PR #432)
- * @lastModified 2026-08-08 20:20:41
+ * @lastModified 2026-08-08 20:55:33
  * -----------------------------------------------------------
  * @todo
  * - K2 の公式 tool assignment 付き印刷 command が確定したら、slot override を dry-run PrintPlan 経由へ移す
@@ -201,22 +202,73 @@ export function isCfsAttachmentLabel(attachment) {
 }
 
 /**
+ * protocol index を安全側で非負整数へ変換する。
+ *
+ * 【詳細説明】
+ * - 実機 payload の `type` は数値または数字文字列として観測される可能性がある。
+ * - false / 空白 / 配列などを JavaScript の暗黙変換で 0 扱いすると CFS 誤検出になるため、
+ *   number と数字だけの string 以外は不正値として扱う。
+ *
+ * @private
+ * @param {*} value - protocol index 値
+ * @returns {number|null} 非負整数、または不正値の場合 null
+ * @example
+ * const index = toProtocolIndex("0");
+ */
+function toProtocolIndex(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!/^\d+$/.test(text)) {
+      return null;
+    }
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/**
+ * `boxsInfo` に CFS unit が観測されているか判定する。
+ *
+ * 【詳細説明】
+ * - `--attachment` は操作者の自己申告なので、安全境界では実機の read-only evidence も見る。
+ * - F012 実機では external spool が `type=1`、CFS unit が `type=0` として観測されるため、
+ *   malformed type を暗黙変換せず `type=0` の box だけを CFS unit とする。
+ *
+ * @function hasObservedCfsUnit
+ * @param {Object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @returns {boolean} CFS unit を観測した場合 true
+ * @example
+ * const hasCfs = hasObservedCfsUnit({ materialBoxs: [{ type: 0, materials: [] }] });
+ */
+export function hasObservedCfsUnit(boxsInfo) {
+  const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
+  return boxes.some((box) => toProtocolIndex(box?.type) === 0);
+}
+
+/**
  * `opGcodeFile` 単独開始を CFS 対象でブロックすべきか判定する。
  *
  * 【詳細説明】
  * - `opGcodeFile` は K2 の状態遷移 evidence を得るには有用だが、CFS の `selected` evidence を伴わない。
  * - CFS 対象では明示フラグなしに送信せず、negative evidence の再現や外部リール検証だけを意図的に許可する。
+ * - 判定は attachment label だけに依存せず、取得済み `boxsInfo` に CFS unit がある場合もブロックする。
  *
  * @function shouldBlockUnsafeOpgcodeFileCfsStart
  * @param {Object} options - capture オプション
  * @param {string=} options.attachment - attachment label
+ * @param {Object|null|undefined=} options.boxsInfo - 取得済み K2 `boxsInfo`
  * @param {boolean=} options.allowUnsafeOpgcodeFileCfsStart - 明示許可フラグ
  * @returns {boolean} 送信をブロックすべき場合 true
  * @example
  * const blocked = shouldBlockUnsafeOpgcodeFileCfsStart({ attachment: "CFS" });
  */
 export function shouldBlockUnsafeOpgcodeFileCfsStart(options) {
-  return isCfsAttachmentLabel(options?.attachment) && !options?.allowUnsafeOpgcodeFileCfsStart;
+  const cfsTarget = isCfsAttachmentLabel(options?.attachment) || hasObservedCfsUnit(options?.boxsInfo);
+  return cfsTarget && !options?.allowUnsafeOpgcodeFileCfsStart;
 }
 
 /**
@@ -714,7 +766,10 @@ export async function captureK2BenchyPrint(options) {
             ));
             return;
           }
-          if (shouldBlockUnsafeOpgcodeFileCfsStart(options)) {
+          if (shouldBlockUnsafeOpgcodeFileCfsStart({
+            ...options,
+            boxsInfo: state.boxsInfo,
+          })) {
             observations.printStartBlocked = true;
             addAutomationMarker("operator-print-start-blocked", {
               reason: "unsafe-opgcodefile-cfs-start",

@@ -20,7 +20,7 @@
  *
  * @version 1.390.1328 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 20:20:41
+ * @lastModified 2026-08-08 20:55:33
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -822,17 +822,26 @@ function isEventAfterTrustedPrintStart(event, boundary) {
  * 【詳細説明】
  * - JavaScript の `Number(null) === 0` や `Number("") === 0` による欠損値の誤認を防ぐ。
  * - CFS selection guard は安全側の判定なので、欠損・空文字・NaN・非整数・負数は null として扱う。
+ * - JavaScript の暗黙変換で false / 空白 / 配列が 0 や 1 へ丸められる経路を閉じるため、
+ *   protocol index として受け入れる型を number と数字だけの string に限定する。
  *
  * @private
  * @param {*} value - protocol の boxId / boxType / materialId 値
  * @returns {number|null} 非負整数、または不正値の場合 null
  */
 function toProtocolIndex(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!/^\d+$/.test(text)) {
+      return null;
+    }
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 /**
