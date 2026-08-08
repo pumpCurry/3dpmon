@@ -14,10 +14,14 @@ describe("dashboard_device_identity_repository", () => {
   it("観測evidenceをconnectionTarget上のdry-run identityとして保存する", () => {
     const target = { dest: "203.0.113.20:9999", hostname: "" };
     const result = recordPrinterCoreV3Identity(target, {
+      source: "http-info",
       hostname: "K2Pro-Test",
       model: "F012",
       sn: "K2PRO-SERIAL-001",
       mac: "AA1122334455",
+      version: "1.0.0",
+      wssPort: 443,
+      videoPort: 443,
     }, {
       hostOrDest: "203.0.113.20",
       endpointAddress: "203.0.113.20",
@@ -34,6 +38,18 @@ describe("dashboard_device_identity_repository", () => {
       lastEvidenceReason: "first-observation",
     });
     expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual(["aa:11:22:33:44:55"]);
+    expect(target.printerCoreV3Identity.deviceFingerprint).toMatchObject({
+      sources: ["http-info"],
+      reported: {
+        firmwareVersion: "1.0.0",
+      },
+      transports: {
+        httpInfoObserved: true,
+        ws9999Observed: false,
+        wssPort: 443,
+        videoPort: 443,
+      },
+    });
   });
 
   it("同じ内容の再観測では時刻だけを理由にchangedへしない", () => {

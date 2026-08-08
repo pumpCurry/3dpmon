@@ -20,9 +20,9 @@
  * - {@link shouldMergeDeviceIdentity}：二つの識別候補を同一物理機として統合できるか判定
  * - {@link mergeDeviceIdentityCandidate}：二つの識別候補を決定的に統合
  *
- * @version 1.390.1336 (PR #432)
+ * @version 1.390.1337 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-08 22:45:00
+ * @lastModified 2026-08-09 01:40:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で authoritative deviceId 生成を hash ベースへ移行する
@@ -147,6 +147,26 @@ function toFiniteNumberOrNull(value) {
 }
 
 /**
+ * evidence が意味のある HTTP /info transport key を持つか判定する。
+ *
+ * 【詳細説明】
+ * - repository helper は未観測値を `undefined` の property として渡すことがある。
+ * - property が存在するだけで HTTP /info と誤推定すると、WS9999 status frame の provenance が
+ *   `http-info` に化けるため、空値ではなく実値がある場合だけ true にする。
+ *
+ * @private
+ * @param {object} source - Probe または fixture metadata 由来の識別材料
+ * @param {string} key - 検査する key
+ * @returns {boolean} key が意味のある値を持つ場合 true
+ */
+function hasMeaningfulInfoKey(source, key) {
+  return Object.prototype.hasOwnProperty.call(source, key) &&
+    source[key] !== undefined &&
+    source[key] !== null &&
+    source[key] !== "";
+}
+
+/**
  * evidence の取得元を推定する。
  *
  * 【詳細説明】
@@ -163,9 +183,10 @@ function inferFingerprintSource(source) {
   if (explicitSource) {
     return explicitSource;
   }
-  if (Object.prototype.hasOwnProperty.call(source, "version") ||
-      Object.prototype.hasOwnProperty.call(source, "wssPort") ||
-      Object.prototype.hasOwnProperty.call(source, "videoPort")) {
+  if (hasMeaningfulInfoKey(source, "version") ||
+      hasMeaningfulInfoKey(source, "firmwareVersion") ||
+      hasMeaningfulInfoKey(source, "wssPort") ||
+      hasMeaningfulInfoKey(source, "videoPort")) {
     return "http-info";
   }
   if (Object.prototype.hasOwnProperty.call(source, "hostname") ||

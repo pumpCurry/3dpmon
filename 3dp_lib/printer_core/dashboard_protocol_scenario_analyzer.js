@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1333 (PR #432)
+ * @version 1.390.1337 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 22:55:00
+ * @lastModified 2026-08-09 01:40:00
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -120,14 +120,30 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
     requireValidationSuccess: true,
     requiredMarkers: Object.freeze([
       Object.freeze({ name: "observed-cfs-connected", source: "stdin" }),
-      Object.freeze({ name: "operator-cfs-disconnect", source: null }),
-      Object.freeze({ name: "observed-cfs-disconnected", source: "stdin" }),
-      Object.freeze({ name: "operator-cfs-reconnect", source: null }),
-      Object.freeze({ name: "observed-cfs-reconnected", source: "stdin" }),
       Object.freeze({ name: "observed-slot-change", source: "stdin" }),
       Object.freeze({ name: "observed-material-change", source: "stdin" }),
       Object.freeze({ name: "observed-external-spool", source: "stdin" }),
       Object.freeze({ name: "observed-color-assignment-change", source: "stdin" }),
+    ]),
+    requiredPayloadKeys: Object.freeze([
+      "cfsConnect",
+      "boxsInfo",
+    ]),
+    timelinePayloadKeys: Object.freeze([
+      "cfsConnect",
+      "boxsInfo",
+    ]),
+  }),
+  "k2-cfs-disconnect-diagnostic": Object.freeze({
+    name: "k2-cfs-disconnect-diagnostic",
+    expectedScenario: "k2-cfs-disconnect-diagnostic",
+    requireValidationSuccess: true,
+    requiredMarkers: Object.freeze([
+      Object.freeze({ name: "observed-cfs-connected", source: "stdin" }),
+      Object.freeze({ name: "operator-cfs-disconnect", source: null }),
+      Object.freeze({ name: "observed-cfs-disconnected", source: "stdin" }),
+      Object.freeze({ name: "operator-cfs-reconnect", source: null }),
+      Object.freeze({ name: "observed-cfs-reconnected", source: "stdin" }),
     ]),
     requiredPayloadKeys: Object.freeze([
       "cfsConnect",

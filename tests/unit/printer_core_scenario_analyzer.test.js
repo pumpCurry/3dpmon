@@ -501,9 +501,29 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       requiredPayloadKeys: ["cfsConnect", "boxsInfo"],
       timelinePayloadKeys: ["cfsConnect", "boxsInfo"],
     });
+    expect(profile.requiredMarkers).toEqual([
+      { name: "observed-cfs-connected", source: "stdin" },
+      { name: "observed-slot-change", source: "stdin" },
+      { name: "observed-material-change", source: "stdin" },
+      { name: "observed-external-spool", source: "stdin" },
+      { name: "observed-color-assignment-change", source: "stdin" },
+    ]);
+  });
+
+  it("K2 CFS disconnect diagnostic profileを列挙・取得できる", () => {
+    const profile = getProtocolScenarioProfile("k2-cfs-disconnect-diagnostic");
+
+    expect(listProtocolScenarioProfiles()).toContain("k2-cfs-disconnect-diagnostic");
+    expect(profile).toMatchObject({
+      name: "k2-cfs-disconnect-diagnostic",
+      expectedScenario: "k2-cfs-disconnect-diagnostic",
+      requireValidationSuccess: true,
+      requiredPayloadKeys: ["cfsConnect", "boxsInfo"],
+      timelinePayloadKeys: ["cfsConnect", "boxsInfo"],
+    });
     expect(profile.requiredMarkers).toContainEqual({
-      name: "observed-cfs-disconnected",
-      source: "stdin",
+      name: "operator-cfs-disconnect",
+      source: null,
     });
   });
 
@@ -1118,7 +1138,7 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     }
   });
 
-  it("K2 CFS topology profileはCFS物理変化markerとboxsInfo timelineを要求する", () => {
+  it("K2 CFS topology profileは安全なCFS観測markerとboxsInfo timelineを要求する", () => {
     const report = analyzeProtocolScenarioFixture({
       metadata: {
         capture: { scenario: "k2-cfs-topology-validation" },
@@ -1177,6 +1197,30 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.payloadTimeline.entries.at(-1).state.boxsInfo.colorMatch).toEqual([
       { id: "T1A", boxId: 1, materialId: 1 },
     ]);
+  });
+
+  it("K2 CFS topology profileはdisconnect/reconnect markerなしでも標準captureを合格にする", () => {
+    const events = k2CfsTopologyEvents().filter((event) => {
+      const markerName = event?.payload?.marker?.name;
+      return ![
+        "operator-cfs-disconnect",
+        "observed-cfs-disconnected",
+        "operator-cfs-reconnect",
+        "observed-cfs-reconnected",
+      ].includes(markerName);
+    });
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-cfs-topology-validation" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events,
+    }, {
+      profiles: ["k2-cfs-topology"],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.requiredMarkers.missing).toEqual([]);
   });
 
   it("未知profileはfailureReasonsへ分離する", () => {

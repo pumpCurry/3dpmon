@@ -61,6 +61,18 @@ videoPort
 
 - Merge fingerprints when two identity candidates are merged, so endpoint aliases
 and observed sources survive DHCP transfer or wired/wireless transitions.
+- Repository helper entry points forward `/info` provenance and transport
+  evidence into `DeviceFingerprint`:
+
+```text
+source / observedVia / protocolSource
+version / firmwareVersion
+wssPort
+videoPort
+```
+
+  This ensures production dry-run callers do not accidentally erase the
+  fingerprint evidence that lower-level helpers understand.
 
 ## Non-Goals
 

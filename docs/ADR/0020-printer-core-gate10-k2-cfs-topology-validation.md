@@ -3,10 +3,10 @@
 ## Context
 
 Gate 9 focuses on the K2 Pro Combo print lifecycle. The next physical evidence
-boundary is CFS topology: physical connect/disconnect/reconnect behavior,
-slot/material changes, external spool observation, and Creality `colorMatch`
-assignment changes. Protocol freshness/staleness remains derived evidence from
-`cfsConnect` and `boxsInfo`; it is not encoded in physical marker names.
+boundary is CFS topology: connected-state observation, slot/material changes,
+external spool observation, and Creality `colorMatch` assignment changes.
+Protocol freshness/staleness remains derived evidence from `cfsConnect` and
+`boxsInfo`; it is not encoded in physical marker names.
 
 Printer Core v3 already treats K2 `boxsInfo` as read-only material topology.
 This gate validates that interpretation against deliberate physical operations
@@ -21,19 +21,26 @@ before Data Schema v3 material-source authority is introduced.
 
 ```text
 observed-cfs-connected
-observed-cfs-disconnected
-observed-cfs-reconnected
 observed-slot-change
 observed-material-change
 observed-external-spool
 observed-color-assignment-change
 ```
 
-- The profile also requires action boundary markers:
+- The profile intentionally does not require CFS disconnect/reconnect markers.
+  CFS 485/power wiring must not be unplugged while the printer is powered.
+  Disconnect/reconnect evidence may be collected only by a
+  manufacturer-supported safe logical/operator path, or as a separate
+  power-off-assisted diagnostic capture.
+- Add a separate diagnostic profile named `k2-cfs-disconnect-diagnostic` for
+  that optional safe path. It requires:
 
 ```text
+observed-cfs-connected
 operator-cfs-disconnect
+observed-cfs-disconnected
 operator-cfs-reconnect
+observed-cfs-reconnected
 ```
 
 - The profile requires inbound root/envelope payload evidence:

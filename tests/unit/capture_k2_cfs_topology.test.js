@@ -122,10 +122,6 @@ describe("capture_k2_cfs_topology helpers", () => {
   it("Gate 10 profile に必要な marker 名をヘルプ用定数として公開する", () => {
     expect(REQUIRED_GATE10_MARKERS).toEqual([
       "observed-cfs-connected",
-      "operator-cfs-disconnect",
-      "observed-cfs-disconnected",
-      "operator-cfs-reconnect",
-      "observed-cfs-reconnected",
       "observed-slot-change",
       "observed-material-change",
       "observed-external-spool",

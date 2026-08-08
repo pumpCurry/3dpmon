@@ -9,6 +9,12 @@ observation, and read-only `boxsInfo` requests.
 Do not use this runbook for print start, pause, resume, stop, delete, CFS
 load/unload, or material assignment commands.
 
+Do not disconnect or reconnect CFS 485/power wiring while the printer is
+powered. Disconnect/reconnect transition evidence may be captured only when a
+manufacturer-supported safe logical/operator path is confirmed. When no safe
+path exists, split that evidence into a separate power-off-assisted diagnostic
+capture and do not force `cfsConnect 1 -> 0 -> 1` in one live WS session.
+
 ## Target
 
 Use the local K2 Pro Combo target:
@@ -60,7 +66,7 @@ physical markers are intentionally absent.
 
 ## Certification Capture Command
 
-Run this command when the operator is ready to perform the physical CFS
+Run this command when the operator is ready to perform the safe CFS observation
 operations. Keep stdin focused in the terminal and type marker names exactly as
 listed in the next section.
 
@@ -84,14 +90,21 @@ operation happens.
 
 ```text
 observed-cfs-connected
-operator-cfs-disconnect
-observed-cfs-disconnected
-operator-cfs-reconnect
-observed-cfs-reconnected
 observed-slot-change
 observed-material-change
 observed-external-spool
 observed-color-assignment-change
+```
+
+The disconnect/reconnect markers below are diagnostic-only. Use them only after
+confirming a manufacturer-supported safe logical/operator path that does not
+involve hot-unplugging CFS 485/power wiring:
+
+```text
+operator-cfs-disconnect
+observed-cfs-disconnected
+operator-cfs-reconnect
+observed-cfs-reconnected
 ```
 
 Optional JSON details can be appended when useful:
@@ -112,26 +125,23 @@ Suggested order:
 ```text
 1. Confirm CFS is connected and fresh in the printer UI.
 2. Enter observed-cfs-connected.
-3. Disconnect CFS physically or via the operator-approved physical path.
-4. Enter operator-cfs-disconnect at the action boundary.
-5. Wait until the printer UI or CFS state shows disconnected/stale.
-6. Enter observed-cfs-disconnected.
-7. Reconnect CFS.
-8. Enter operator-cfs-reconnect at the action boundary.
-9. Wait until the printer UI or CFS state shows connected/fresh.
-10. Enter observed-cfs-reconnected.
-11. Perform a slot remove/reinsert or comparable visible slot change.
-12. Enter observed-slot-change.
-13. Change material metadata or perform an observable material change.
-14. Enter observed-material-change.
-15. Observe or attach the external spool endpoint if available.
-16. Enter observed-external-spool.
-17. Change Creality color/tool assignment if available.
-18. Enter observed-color-assignment-change.
-19. Let the capture continue for at least one additional boxsInfo interval.
-20. Wait for the command duration to end, or stop only after enough post-action
+3. Perform a slot remove/reinsert or comparable visible slot change.
+4. Enter observed-slot-change.
+5. Change material metadata or perform an observable material change.
+6. Enter observed-material-change.
+7. Observe or attach the external spool endpoint if available.
+8. Enter observed-external-spool.
+9. Change Creality color/tool assignment if available.
+10. Enter observed-color-assignment-change.
+11. Let the capture continue for at least one additional boxsInfo interval.
+12. Wait for the command duration to end, or stop only after enough post-action
     evidence has been captured.
 ```
+
+If a safe logical disconnect/reconnect path is confirmed, capture it as a
+separate diagnostic scenario named `k2-cfs-disconnect-diagnostic` and analyze it
+with the `k2-cfs-disconnect-diagnostic` profile. Do not mix that optional
+diagnostic requirement into the Gate 10 certification capture.
 
 ## Acceptance Check
 
@@ -157,15 +167,14 @@ validation.counts.success=true
 Review the payload timeline manually before promoting any authority:
 
 ```text
-operator-cfs-disconnect -> cfsConnect 1 to 0
-operator-cfs-reconnect  -> cfsConnect 0 to 1 and fresh boxsInfo
 slot/material operation -> boxes/materialSources/sameMaterialGroups change
 assignment operation    -> colorMatch change
 ```
 
 If these transitions are visible, use the fixture to design the next
 transition/window predicates. Do not certify the predicates before the live
-fixture exists.
+fixture exists. Disconnect/reconnect predicates remain uncertified until the
+separate safe diagnostic evidence exists.
 
 ## Current Diagnostic Evidence
 

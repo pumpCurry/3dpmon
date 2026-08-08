@@ -18,9 +18,9 @@
  * - {@link recordPrinterCoreV3Identity}：観測 evidence を target へ保存
  * - {@link toComparablePrinterCoreV3Identity}：時刻差分を除いた比較用コピーを生成
  *
- * @version 1.390.1312 (PR #432)
+ * @version 1.390.1337 (PR #432)
  * @since   1.390.1292 (PR #432)
- * @lastModified 2026-08-08 07:32:05
+ * @lastModified 2026-08-09 01:40:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で Data Schema v3 の `devices` / `deviceEndpoints` store へ保存先を差し替える
@@ -329,10 +329,14 @@ function createPrinterCoreV3IdentityCandidate(target, evidence, options) {
   ];
 
   return createDeviceIdentityCandidate({
+    source: source.source ?? source.observedVia ?? source.protocolSource,
     serialNumber: source.serialNumber || source.sn || source.serial,
     stableMachineId: source.stableMachineId || source.machineId,
     reportedModel: source.reportedModel || source.model || source.printerModel,
     reportedHostname: source.reportedHostname || source.hostname || target.hostname || options.hostOrDest,
+    firmwareVersion: source.firmwareVersion ?? source.version,
+    wssPort: source.wssPort,
+    videoPort: source.videoPort,
     endpointAddress: source.endpointAddress || options.endpointAddress,
     macAddress: source.macAddress || source.mac || target.macAddress,
     macAliases,

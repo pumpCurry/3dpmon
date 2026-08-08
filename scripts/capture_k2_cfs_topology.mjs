@@ -18,9 +18,9 @@
  * - {@link captureK2CfsTopology}：Gate 10 fixture を取得
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1333 (PR #432)
+ * @version 1.390.1337 (PR #432)
  * @since   1.390.1326 (PR #432)
- * @lastModified 2026-08-08 22:55:00
+ * @lastModified 2026-08-09 01:40:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 10 実機 fixture 取得後、観測された marker timing の推奨例を docs へ追記する
@@ -38,16 +38,13 @@ import {
  *
  * 【詳細説明】
  * - marker 名は `k2-cfs-topology` profile の requiredMarkers と揃える。
- * - 実際の物理操作は操作者が行い、この CLI は read-only 通信観測と marker 記録だけを担当する。
+ * - 通電中の CFS 485/power 配線抜き差しを誘導しないため、標準 marker は接続済み状態と
+ *   slot/material/assignment の観測に限定する。
  *
  * @constant {string[]}
  */
 export const REQUIRED_GATE10_MARKERS = Object.freeze([
   "observed-cfs-connected",
-  "operator-cfs-disconnect",
-  "observed-cfs-disconnected",
-  "operator-cfs-reconnect",
-  "observed-cfs-reconnected",
   "observed-slot-change",
   "observed-material-change",
   "observed-external-spool",
