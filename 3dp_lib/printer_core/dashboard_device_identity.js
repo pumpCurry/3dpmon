@@ -15,13 +15,14 @@
  * 【公開関数一覧】
  * - {@link normalizeMacAddress}：MAC 表記を区切り付き小文字へ正規化
  * - {@link normalizeIdentityEvidence}：Probe 由来の識別材料を標準形へ変換
+ * - {@link createDeviceFingerprint}：/info と WS9999 由来の識別証拠を fingerprint へ変換
  * - {@link createDeviceIdentityCandidate}：deviceId seed と endpoint alias を生成
  * - {@link shouldMergeDeviceIdentity}：二つの識別候補を同一物理機として統合できるか判定
  * - {@link mergeDeviceIdentityCandidate}：二つの識別候補を決定的に統合
  *
- * @version 1.390.1293 (PR #432)
+ * @version 1.390.1336 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 02:23:00
+ * @lastModified 2026-08-08 22:45:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で authoritative deviceId 生成を hash ベースへ移行する
@@ -65,6 +66,17 @@ const IDENTITY_STRENGTH_RANK = Object.freeze({
   "stable-machine-id": 1,
   serial: 2,
 });
+
+/**
+ * DeviceFingerprint の schema version。
+ *
+ * 【詳細説明】
+ * - Gate 11 ではまだ Data Schema v3 の永続 store を作らず、identity candidate 内へ同居させる。
+ * - 後続 migration で fingerprint を正式 store へ移すとき、同居データの形を判別できるようにする。
+ *
+ * @constant {number}
+ */
+export const DEVICE_FINGERPRINT_SCHEMA_VERSION = 1;
 
 /**
  * identity 値を比較用の標準形へ変換する。
@@ -113,6 +125,56 @@ function uniqueSortedStrings(values) {
   return Array.from(new Set((Array.isArray(values) ? values : [])
     .map((value) => String(value || "").trim())
     .filter(Boolean))).sort();
+}
+
+/**
+ * 文字列化可能な数値を有限な number へ変換する。
+ *
+ * 【詳細説明】
+ * - `/info` の `wssPort` / `videoPort` は number で返る想定だが、fixture や手入力では
+ *   文字列になることもあるため、正規化時点で表記揺れを潰す。
+ *
+ * @private
+ * @param {*} value - 数値候補
+ * @returns {?number} 有限な数値、または null
+ */
+function toFiniteNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+/**
+ * evidence の取得元を推定する。
+ *
+ * 【詳細説明】
+ * - HTTP `/info` は `version` / `wssPort` / `videoPort` を持つため、WS9999 payload と区別しやすい。
+ * - 呼び出し側が `source` または `observedVia` を渡した場合はその値を優先し、capture tool 側の
+ *   provenance を壊さない。
+ *
+ * @private
+ * @param {object} source - Probe または fixture metadata 由来の識別材料
+ * @returns {string} fingerprint source
+ */
+function inferFingerprintSource(source) {
+  const explicitSource = String(source.source || source.observedVia || source.protocolSource || "").trim();
+  if (explicitSource) {
+    return explicitSource;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "version") ||
+      Object.prototype.hasOwnProperty.call(source, "wssPort") ||
+      Object.prototype.hasOwnProperty.call(source, "videoPort")) {
+    return "http-info";
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "hostname") ||
+      Object.prototype.hasOwnProperty.call(source, "reportedHostname") ||
+      Object.prototype.hasOwnProperty.call(source, "deviceState") ||
+      Object.prototype.hasOwnProperty.call(source, "state")) {
+    return "ws9999";
+  }
+  return "unknown";
 }
 
 /**
@@ -169,6 +231,10 @@ export function normalizeIdentityEvidence(evidence) {
   const reportedModel = String(source.reportedModel || source.model || "").trim() || null;
   const reportedHostname = String(source.reportedHostname || source.hostname || "").trim() || null;
   const endpointAddress = String(source.endpointAddress || source.address || source.ip || "").trim() || null;
+  const firmwareVersion = String(source.firmwareVersion || source.version || "").trim() || null;
+  const wssPort = toFiniteNumberOrNull(source.wssPort);
+  const videoPort = toFiniteNumberOrNull(source.videoPort);
+  const fingerprintSource = inferFingerprintSource(source);
   const macCandidates = [
     source.macAddress,
     source.mac,
@@ -184,7 +250,53 @@ export function normalizeIdentityEvidence(evidence) {
     reportedModel,
     reportedHostname,
     endpointAddress,
+    firmwareVersion,
+    wssPort,
+    videoPort,
+    fingerprintSource,
     macAliases,
+  };
+}
+
+/**
+ * /info と WS9999 由来の識別証拠を DeviceFingerprint へ変換する。
+ *
+ * 【詳細説明】
+ * - DeviceFingerprint は「この endpoint で観測した識別材料」を表し、deviceId そのものではない。
+ * - 有線/無線 MAC は `endpointAliases.macs` に集約し、物理機 identity の seed には使わない。
+ * - `http-info` 由来の model/version/port と、WS9999 由来の hostname/model を同じ形に寄せることで、
+ *   Gate 11 以降の Data Schema v3 migration が機械的に行えるようにする。
+ *
+ * @function createDeviceFingerprint
+ * @param {object} evidence - Probe または fixture metadata 由来の識別材料
+ * @returns {object} 正規化済み DeviceFingerprint
+ * @example
+ * const fingerprint = createDeviceFingerprint({ model: "F012", sn: "SERIAL-001", version: "1.0.0" });
+ */
+export function createDeviceFingerprint(evidence) {
+  const normalized = normalizeIdentityEvidence(evidence);
+  return {
+    schemaVersion: DEVICE_FINGERPRINT_SCHEMA_VERSION,
+    sources: uniqueSortedStrings([normalized.fingerprintSource]),
+    strong: {
+      serialNumber: normalized.serialNumber,
+      stableMachineId: normalized.stableMachineId,
+    },
+    reported: {
+      model: normalized.reportedModel,
+      hostname: normalized.reportedHostname,
+      firmwareVersion: normalized.firmwareVersion,
+    },
+    endpointAliases: {
+      addresses: uniqueSortedStrings([normalized.endpointAddress]),
+      macs: normalized.macAliases,
+    },
+    transports: {
+      httpInfoObserved: normalized.fingerprintSource === "http-info",
+      ws9999Observed: normalized.fingerprintSource === "ws9999",
+      wssPort: normalized.wssPort,
+      videoPort: normalized.videoPort,
+    },
   };
 }
 
@@ -207,6 +319,7 @@ export function normalizeIdentityEvidence(evidence) {
  */
 export function createDeviceIdentityCandidate(evidence) {
   const normalized = normalizeIdentityEvidence(evidence);
+  const deviceFingerprint = createDeviceFingerprint(evidence);
   let seed;
   let strength;
   const reasons = [];
@@ -238,11 +351,62 @@ export function createDeviceIdentityCandidate(evidence) {
     stableMachineId: normalized.stableMachineId,
     reportedModel: normalized.reportedModel,
     reportedHostname: normalized.reportedHostname,
+    deviceFingerprint,
     endpointAliases: {
       addresses: uniqueSortedStrings([normalized.endpointAddress]),
       macs: normalized.macAliases,
     },
     evidenceReasons: reasons,
+  };
+}
+
+/**
+ * 二つの DeviceFingerprint を統合する。
+ *
+ * 【詳細説明】
+ * - fingerprint は監査証拠なので、片側だけにある source / endpoint alias / port 情報を落とさない。
+ * - canonical な表示値は左側を優先し、配列系は和集合にする。
+ *
+ * @private
+ * @param {object|null|undefined} left - 左側 fingerprint
+ * @param {object|null|undefined} right - 右側 fingerprint
+ * @returns {object|null} 統合済み fingerprint、または null
+ */
+function mergeDeviceFingerprint(left, right) {
+  if (!left && !right) return null;
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    schemaVersion: DEVICE_FINGERPRINT_SCHEMA_VERSION,
+    sources: uniqueSortedStrings([
+      ...(left.sources || []),
+      ...(right.sources || []),
+    ]),
+    strong: {
+      serialNumber: left.strong?.serialNumber || right.strong?.serialNumber || null,
+      stableMachineId: left.strong?.stableMachineId || right.strong?.stableMachineId || null,
+    },
+    reported: {
+      model: left.reported?.model || right.reported?.model || null,
+      hostname: left.reported?.hostname || right.reported?.hostname || null,
+      firmwareVersion: left.reported?.firmwareVersion || right.reported?.firmwareVersion || null,
+    },
+    endpointAliases: {
+      addresses: uniqueSortedStrings([
+        ...(left.endpointAliases?.addresses || []),
+        ...(right.endpointAliases?.addresses || []),
+      ]),
+      macs: uniqueSortedStrings([
+        ...(left.endpointAliases?.macs || []),
+        ...(right.endpointAliases?.macs || []),
+      ]),
+    },
+    transports: {
+      httpInfoObserved: Boolean(left.transports?.httpInfoObserved || right.transports?.httpInfoObserved),
+      ws9999Observed: Boolean(left.transports?.ws9999Observed || right.transports?.ws9999Observed),
+      wssPort: left.transports?.wssPort ?? right.transports?.wssPort ?? null,
+      videoPort: left.transports?.videoPort ?? right.transports?.videoPort ?? null,
+    },
   };
 }
 
@@ -351,6 +515,7 @@ export function mergeDeviceIdentityCandidate(left, right) {
     stableMachineId: preferred.stableMachineId || fallback.stableMachineId || null,
     reportedModel: preferred.reportedModel || fallback.reportedModel || null,
     reportedHostname: preferred.reportedHostname || fallback.reportedHostname || null,
+    deviceFingerprint: mergeDeviceFingerprint(preferred.deviceFingerprint, fallback.deviceFingerprint),
     endpointAliases: {
       addresses: uniqueSortedStrings([
         ...(preferred.endpointAliases?.addresses || []),

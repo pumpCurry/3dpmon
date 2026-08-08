@@ -207,6 +207,25 @@ describe("Printer Core v3 identity dry-run", () => {
     });
     expect(target.printerCoreV3Identity.endpointAliases.addresses).toEqual(["203.0.113.10"]);
     expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual(["aa:11:22:33:44:55"]);
+    expect(target.printerCoreV3Identity.deviceFingerprint).toMatchObject({
+      schemaVersion: 1,
+      sources: ["ws9999"],
+      strong: {
+        serialNumber: "k2pro-serial-001",
+      },
+      reported: {
+        model: "F012",
+        hostname: "K2Pro-Test",
+      },
+      endpointAliases: {
+        addresses: ["203.0.113.10"],
+        macs: ["aa:11:22:33:44:55"],
+      },
+      transports: {
+        httpInfoObserved: false,
+        ws9999Observed: true,
+      },
+    });
   });
 
   it("同一serialの別endpoint/別MACはDHCP統合後もaliasとして保持する", () => {

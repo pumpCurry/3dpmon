@@ -4,6 +4,8 @@
 import { describe, it, expect } from "vitest";
 import {
   createDeviceIdentityCandidate,
+  createDeviceFingerprint,
+  DEVICE_FINGERPRINT_SCHEMA_VERSION,
   mergeDeviceIdentityCandidate,
   normalizeIdentityEvidence,
   normalizeMacAddress,
@@ -35,7 +37,54 @@ describe("dashboard_device_identity", () => {
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
     ]);
+    expect(candidate.deviceFingerprint).toMatchObject({
+      schemaVersion: DEVICE_FINGERPRINT_SCHEMA_VERSION,
+      strong: { serialNumber: "k2pro-serial-001" },
+      endpointAliases: {
+        macs: [
+          "66:77:88:99:aa:bb",
+          "aa:11:22:33:44:55",
+        ],
+      },
+    });
     expect(candidate.evidenceReasons).toContain("mac-as-endpoint-alias");
+  });
+
+  it("/info由来の証拠をDeviceFingerprintとして保持する", () => {
+    const fingerprint = createDeviceFingerprint({
+      source: "http-info",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      mac: "AA1122334455",
+      version: "1.0.0",
+      wssPort: "443",
+      videoPort: 443,
+      endpointAddress: "192.0.2.21",
+    });
+
+    expect(fingerprint).toEqual({
+      schemaVersion: DEVICE_FINGERPRINT_SCHEMA_VERSION,
+      sources: ["http-info"],
+      strong: {
+        serialNumber: "k2pro-serial-001",
+        stableMachineId: null,
+      },
+      reported: {
+        model: "F012",
+        hostname: null,
+        firmwareVersion: "1.0.0",
+      },
+      endpointAliases: {
+        addresses: ["192.0.2.21"],
+        macs: ["aa:11:22:33:44:55"],
+      },
+      transports: {
+        httpInfoObserved: true,
+        ws9999Observed: false,
+        wssPort: 443,
+        videoPort: 443,
+      },
+    });
   });
 
   it("有線MACと無線MACが違ってもserial一致なら同一物理機として統合する", () => {
@@ -64,6 +113,54 @@ describe("dashboard_device_identity", () => {
     expect(merged.endpointAliases.macs).toEqual([
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
+    ]);
+    expect(merged.deviceFingerprint.endpointAliases.addresses).toEqual([
+      "printer-wifi.local",
+      "printer-wired.local",
+    ]);
+    expect(merged.deviceFingerprint.endpointAliases.macs).toEqual([
+      "66:77:88:99:aa:bb",
+      "aa:11:22:33:44:55",
+    ]);
+  });
+
+  it("HTTP /info と WS9999 fingerprint source を統合して保持する", () => {
+    const info = createDeviceIdentityCandidate({
+      source: "http-info",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      version: "1.0.0",
+      wssPort: 443,
+      videoPort: 443,
+      endpointAddress: "192.0.2.21",
+      mac: "AA1122334455",
+    });
+    const ws = createDeviceIdentityCandidate({
+      source: "ws9999",
+      hostname: "K2Pro-Test",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      endpointAddress: "k2pro.local",
+      mac: "66778899AABB",
+    });
+
+    const merged = mergeDeviceIdentityCandidate(info, ws);
+
+    expect(merged.deviceFingerprint.sources).toEqual(["http-info", "ws9999"]);
+    expect(merged.deviceFingerprint.reported).toMatchObject({
+      model: "F012",
+      hostname: "K2Pro-Test",
+      firmwareVersion: "1.0.0",
+    });
+    expect(merged.deviceFingerprint.transports).toMatchObject({
+      httpInfoObserved: true,
+      ws9999Observed: true,
+      wssPort: 443,
+      videoPort: 443,
+    });
+    expect(merged.deviceFingerprint.endpointAliases.addresses).toEqual([
+      "192.0.2.21",
+      "k2pro.local",
     ]);
   });
 
