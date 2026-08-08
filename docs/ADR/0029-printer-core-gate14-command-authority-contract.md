@@ -34,7 +34,7 @@ retry safety
 
 ```text
 observed sequence > sent sequence
-same session
+same session, with an explicit observed session ID
 command-specific correlation present
 ```
 
@@ -90,3 +90,8 @@ in the normalized printer state.
 Transport errors, transient errors, timeouts, failed statuses, and unknown
 statuses cannot become completed solely because the current normalized state
 matches the requested target state.
+
+If the confirmation caller omits `observedSessionId`, the result is treated as
+not confirmed even when the expected state matches. Authority wiring should
+derive `observedSequence` and `observedSessionId` from the observed
+NormalizedState/session source rather than from free-form caller claims.

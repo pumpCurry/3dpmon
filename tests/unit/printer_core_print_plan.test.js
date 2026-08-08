@@ -3,9 +3,9 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -230,6 +230,39 @@ describe("Printer Core v3 PrintPlan", () => {
         { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
       ],
     })).toThrow("asset-tool-count-assignment-mismatch");
+    expect(() => createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset(),
+        toolCount: 2,
+      },
+      toolAssignments: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, materialSourceId: "cfs:1:slot:1" },
+      ],
+    })).toThrow("protocolToolAlias");
+    expect(() => createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset(),
+        toolCount: 2,
+      },
+      toolAssignments: [
+        { toolId: false, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
+      ],
+    })).toThrow("toolId");
+    expect(() => createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset(),
+        tools: [{ toolId: 0 }, { toolId: 0 }],
+      },
+      toolAssignments: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
+      ],
+    })).toThrow("logical tools");
   });
 
   it("CFSマルチカラーPrintPlan由来のcommandもcontract-onlyで送信しない", () => {
@@ -294,5 +327,27 @@ describe("Printer Core v3 PrintPlan", () => {
         "plan-can-start-print",
       ],
     });
+    expect(validatePrintPlan({
+      schemaVersion: 1,
+      printPlanId: "plan:bad-tool",
+      planKind: "single-color",
+      deviceId: "serial:k2pro",
+      asset: {
+        path: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+        toolCount: 1,
+        logicalTools: [0, 0],
+      },
+      toolAssignments: [
+        { toolId: false, protocolToolAlias: "", materialSourceId: "cfs:1:slot:0" },
+      ],
+      materialSourceIds: ["cfs:1:slot:0"],
+      authority: {
+        canStartPrint: false,
+      },
+    }).errors).toEqual(expect.arrayContaining([
+      "missing-tool-id",
+      "missing-protocol-tool-alias",
+      "duplicate-asset-logical-tool",
+    ]));
   });
 });

@@ -32,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1347 (PR #432)
+* @version 1.390.1348 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 06:52:36
+* @lastModified 2026-08-09 08:15:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -177,11 +177,15 @@ function _addConnectionTarget(dest) {
  * @returns {string} strong identity seed。無い場合は空文字
  */
 function _getConnectionTargetStrongIdentitySeed(target) {
-  return String(
-    target?.printerCoreV3Identity?.deviceIdSeed ||
-    target?.printerCoreV3DeviceFingerprint?.deviceIdSeed ||
-    ""
-  ).trim();
+  const identity = target?.printerCoreV3Identity;
+  if (identity?.identityStrength === "serial" || identity?.identityStrength === "stable-machine-id") {
+    return String(identity.deviceIdSeed || "").trim();
+  }
+  const fingerprint = target?.printerCoreV3DeviceFingerprint;
+  if (fingerprint?.identityStrength === "serial" || fingerprint?.identityStrength === "stable-machine-id") {
+    return String(fingerprint.deviceIdSeed || "").trim();
+  }
+  return "";
 }
 
 /**

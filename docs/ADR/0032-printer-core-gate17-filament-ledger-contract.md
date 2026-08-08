@@ -52,6 +52,12 @@ Rules:
   positive consumption identity
 - corrections use `material-consumption-correction`, `correctsLedgerEventId`,
   `supersedesLedgerEventId`, and signed `deltaUsedLengthMm`
+- correction event IDs are unique per `consumptionIdentity` and `eventRevision`
+  so two different payloads for the same revision collide as an idempotency
+  conflict instead of appending twice
+- correction creation must match the original event's `segmentId`, `printJobId`,
+  `deviceId`, `materialSourceId`, and `spoolId`; changing source/spool identity
+  is a different reallocation/reversal event type, not a usage correction
 
 ## Non-Goals
 
@@ -70,6 +76,10 @@ segments instead of silently subtracting filament from the wrong spool.
 
 Later exact measurements should be appended as correction events rather than as
 additional independent consumption events for the same segment.
+
+If two corrected payloads are proposed for the same revision, the repository
+must reject the second one as an idempotency conflict unless it is byte-for-byte
+equivalent to the first.
 
 Future gates can connect these candidates to Data Schema v3 repositories and to
 operator-confirmed spool mounts, but only after spool identity and material

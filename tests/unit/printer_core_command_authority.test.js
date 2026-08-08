@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -191,6 +191,65 @@ describe("Printer Core v3 command authority contract", () => {
     expect(result.postCommandObservation).toMatchObject({
       confirmed: false,
       reason: "sequence-not-advanced",
+    });
+    expect(result.completed).toBe(false);
+  });
+
+  it("observedSessionIdが欠落したexpected-state一致は完了証拠にしない", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      expectedState: {
+        path: "print.stateLabel",
+        expected: "printing",
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "acknowledged",
+      observedState: {
+        print: {
+          stateLabel: "printing",
+        },
+      },
+      sentSequence: 10,
+      observedSequence: 11,
+      commandCorrelation: true,
+    });
+
+    expect(result.transportAccepted).toBe(true);
+    expect(result.confirmation.confirmed).toBe(true);
+    expect(result.postCommandObservation).toMatchObject({
+      confirmed: false,
+      sameSession: false,
+      reason: "session-mismatch",
+    });
+    expect(result.completed).toBe(false);
+  });
+
+  it("observedSessionIdが異なるexpected-state一致は完了証拠にしない", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      expectedState: {
+        path: "print.stateLabel",
+        expected: "printing",
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "acknowledged",
+      observedState: {
+        print: {
+          stateLabel: "printing",
+        },
+      },
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:other",
+      commandCorrelation: true,
+    });
+
+    expect(result.postCommandObservation).toMatchObject({
+      confirmed: false,
+      sameSession: false,
+      reason: "session-mismatch",
     });
     expect(result.completed).toBe(false);
   });

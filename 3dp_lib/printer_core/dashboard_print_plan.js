@@ -20,9 +20,9 @@
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
  * - {@link createPrintStartCommandRequestFromPlan}：PrintPlan から print-start command request を生成
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since   1.390.1343 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  * -----------------------------------------------------------
  * @todo
  * - 実送信 protocol 生成へ拡張する
@@ -93,8 +93,18 @@ function requireNonEmptyString(value, name) {
  * @throws {TypeError} 不正な tool ID の場合
  */
 function normalizeToolId(value, fallback = 0) {
-  const raw = value === undefined || value === null || value === "" ? fallback : value;
-  const toolId = Number(raw);
+  const raw = value === undefined || value === null ? fallback : value;
+  if (typeof raw === "boolean" || Array.isArray(raw)) {
+    throw new TypeError("PrintPlan requires a non-negative integer toolId.");
+  }
+  if (typeof raw === "string" && raw.trim() === "") {
+    throw new TypeError("PrintPlan requires a non-negative integer toolId.");
+  }
+  const text = typeof raw === "string" ? raw.trim() : raw;
+  if (typeof text === "string" && !/^(0|[1-9]\d*)$/u.test(text)) {
+    throw new TypeError("PrintPlan requires a non-negative integer toolId.");
+  }
+  const toolId = typeof text === "number" ? text : Number(text);
   if (!Number.isInteger(toolId) || toolId < 0) {
     throw new TypeError("PrintPlan requires a non-negative integer toolId.");
   }
@@ -116,6 +126,9 @@ function normalizeAssetLogicalTools(asset) {
   const explicitTools = Array.isArray(asset?.tools) ? asset.tools : null;
   if (explicitTools && explicitTools.length > 0) {
     const logicalTools = explicitTools.map((tool, index) => normalizeToolId(tool?.toolId ?? tool, index));
+    if (new Set(logicalTools).size !== logicalTools.length) {
+      throw new TypeError("PrintPlan asset logical tools must be unique.");
+    }
     return {
       logicalTools,
       toolCount: logicalTools.length,
@@ -170,7 +183,7 @@ function normalizeGcodeAsset(asset) {
  */
 function createToolAssignment(options, index = 0) {
   const toolId = normalizeToolId(options.toolId, index);
-  const protocolToolAlias = requireNonEmptyString(options.protocolToolAlias || options.toolAlias || `T1${String.fromCharCode(65 + toolId)}`, "protocolToolAlias");
+  const protocolToolAlias = requireNonEmptyString(options.protocolToolAlias || options.toolAlias, "protocolToolAlias");
   const materialSourceId = requireNonEmptyString(options.materialSourceId, "materialSourceId");
   const spoolId = String(options.spoolId || "").trim() || null;
   return {
@@ -362,10 +375,18 @@ export function validatePrintPlan(plan) {
   }
   const toolIds = new Set();
   for (const assignment of assignments) {
-    const toolId = Number(assignment?.toolId);
+    let toolId = null;
+    try {
+      if (assignment?.toolId === undefined || assignment?.toolId === null) {
+        throw new TypeError("missing toolId");
+      }
+      toolId = normalizeToolId(assignment.toolId);
+    } catch {
+      toolId = null;
+    }
     const protocolToolAlias = String(assignment?.protocolToolAlias || assignment?.toolAlias || "").trim();
     const materialSourceId = String(assignment?.materialSourceId || "").trim();
-    if (!Number.isInteger(toolId) || toolId < 0) {
+    if (toolId === null) {
       errors.push("missing-tool-id");
     } else if (toolIds.has(toolId)) {
       errors.push("duplicate-tool-id");
@@ -383,8 +404,18 @@ export function validatePrintPlan(plan) {
     errors.push("missing-color-match-policy");
   }
   const assetLogicalTools = Array.isArray(plan.asset?.logicalTools)
-    ? plan.asset.logicalTools.map((toolId) => Number(toolId))
+    ? plan.asset.logicalTools.map((toolId) => {
+      try {
+        return normalizeToolId(toolId);
+      } catch {
+        errors.push("invalid-asset-logical-tool");
+        return null;
+      }
+    }).filter((toolId) => toolId !== null)
     : Array.from({ length: Number(plan.asset?.toolCount) || 0 }, (_, index) => index);
+  if (new Set(assetLogicalTools).size !== assetLogicalTools.length) {
+    errors.push("duplicate-asset-logical-tool");
+  }
   if (plan.asset?.toolCount && assignments.length > 0 && Number(plan.asset.toolCount) !== assignments.length) {
     errors.push("asset-tool-count-assignment-mismatch");
   }

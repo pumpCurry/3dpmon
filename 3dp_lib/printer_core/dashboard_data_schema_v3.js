@@ -20,9 +20,9 @@
  * - {@link createPrinterCoreV3MigrationPlan}：旧 monitorData の migration dry-run plan を生成
  * - {@link validatePrinterCoreV3MigrationPlan}：migration dry-run plan の整合性を検査
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since   1.390.1341 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  * -----------------------------------------------------------
  * @todo
  * - dashboard_storage_idb.js の version upgrade と v3 repository 実装へ接続する
@@ -116,7 +116,8 @@ function normalizeIdLabel(value) {
  * deterministic ID の digest 入力を lossless に正規化する。
  *
  * 【詳細説明】
- * - 文字列は trim/lowercase で従来の安定性を維持するが、記号や空白は置換せず JSON として保持する。
+ * - 文字列は byte/Unicode 内容をそのまま JSON として保持する。
+ * - serial/hostname など意味上 case-insensitive な値は、呼び出し側で明示的に正規化してから渡す。
  * - object/array は stable stringify に通し、同じ論理値が同じ digest になるようにする。
  *
  * @private
@@ -124,9 +125,6 @@ function normalizeIdLabel(value) {
  * @returns {*} canonical digest input
  */
 function canonicalizeIdPart(value) {
-  if (typeof value === "string") {
-    return value.trim().toLowerCase();
-  }
   if (Array.isArray(value)) {
     return value.map(canonicalizeIdPart);
   }

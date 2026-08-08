@@ -19,9 +19,9 @@
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -375,7 +375,8 @@ function evaluatePostCommandObservation(request, options = {}) {
   const sequenceAdvanced = Number.isFinite(sentSequence) &&
     Number.isFinite(observedSequence) &&
     observedSequence > sentSequence;
-  const sameSession = !options.observedSessionId || options.observedSessionId === request.sessionId;
+  const observedSessionId = String(options.observedSessionId || "").trim();
+  const sameSession = Boolean(observedSessionId) && observedSessionId === request.sessionId;
   const commandCorrelated = options.commandCorrelation === true;
   const missing = [];
   if (!sequenceAdvanced) missing.push("sequence-not-advanced");
@@ -389,7 +390,7 @@ function evaluatePostCommandObservation(request, options = {}) {
     commandCorrelated,
     sentSequence: Number.isFinite(sentSequence) ? sentSequence : null,
     observedSequence: Number.isFinite(observedSequence) ? observedSequence : null,
-    observedSessionId: options.observedSessionId || null,
+    observedSessionId: observedSessionId || null,
     reason: missing.length ? missing.join(",") : "confirmed",
   };
 }

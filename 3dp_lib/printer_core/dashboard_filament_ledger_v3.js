@@ -18,9 +18,9 @@
  * - {@link createFilamentLedgerCorrectionEvent}：既存 consumption event の correction 候補を生成
  * - {@link validateJobMaterialSegments}：segment 配列の整合性を検査
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since   1.390.1345 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 repository activation 後に append-only store へ接続する
@@ -398,6 +398,11 @@ export function createFilamentLedgerCorrectionEvent(originalEvent, correctedSegm
   if (!validation.ok) {
     throw new TypeError(`Invalid corrected JobMaterialSegment: ${validation.errors.join(",")}`);
   }
+  const identityKeys = ["segmentId", "printJobId", "deviceId", "materialSourceId", "spoolId"];
+  const mismatch = identityKeys.find((key) => String(originalEvent?.[key] || "") !== String(correctedSegment?.[key] || ""));
+  if (mismatch) {
+    throw new TypeError(`Filament ledger correction identity mismatch: ${mismatch}`);
+  }
   const originalUsed = normalizeUsedLengthMm(originalEvent?.usedLengthMm) ?? 0;
   const correctedUsed = normalizeUsedLengthMm(correctedSegment.usedLengthMm) ?? 0;
   const consumptionIdentity = originalEvent?.consumptionIdentity ||
@@ -407,10 +412,7 @@ export function createFilamentLedgerCorrectionEvent(originalEvent, correctedSegm
     schemaVersion: PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION,
     ledgerEventId: createPrinterCoreV3DeterministicId("filament-ledger-event", [
       consumptionIdentity,
-      "correction",
       revision,
-      correctedUsed,
-      correctedSegment.confidence,
     ]),
     consumptionIdentity,
     eventRevision: revision,

@@ -35,6 +35,12 @@ The planned v3 stores are:
 
 Migration must first export canonical legacy JSON, compute a checksum, write a migration journal, transform records with deterministic IDs, validate counts and references, and then activate schema v3. Failed migrations must quarantine unconverted data and retain the original payload.
 
+Generic deterministic IDs must hash a lossless canonical representation of the
+input values. Case folding, trimming, or hostname/serial-specific normalization
+belongs at the call site where that field's semantics are known; the shared ID
+helper must not collapse distinct file paths such as `Foo.gcode` and
+`foo.gcode`.
+
 ## Invariants
 
 - CFS slots and inventory spools are different entities.

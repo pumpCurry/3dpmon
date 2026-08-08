@@ -43,19 +43,23 @@ If any check is false or missing, the readiness report is blocked and
 created, but it keeps legacy authority in place.
 
 Except for live shadow diff cleanliness derived from runtime shadow records,
-readiness evidence must be trusted source records:
+readiness evidence must be derived from trusted source snapshots:
 
 ```text
 {
-  value: true,
   source: "<expected-authority-source>",
-  trusted: true
+  trusted: true,
+  ...source-specific state
 }
 ```
 
-Plain caller-supplied booleans do not satisfy readiness. This prevents tests,
-review helpers, or feature flags from making cutover ready without evidence from
-the relevant repository/authority/certification source.
+Plain caller-supplied booleans, or caller-assembled `{ value, source, trusted }`
+objects, do not satisfy readiness for non-live-shadow checks. This prevents
+tests, review helpers, or feature flags from making cutover ready without
+state from the relevant repository/authority/certification source.
+
+The cutover assertion also recomputes readiness from source snapshots. Passing a
+report-like object with `ready: true` is insufficient.
 
 Even when all checks pass, the generated plan requires explicit manual cutover
 and still does not retire legacy paths automatically.

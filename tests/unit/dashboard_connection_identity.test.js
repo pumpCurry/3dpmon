@@ -296,6 +296,34 @@ describe("Printer Core v3 identity dry-run", () => {
     ]);
   });
 
+  it("同一hostnameかつ同一provisional seedでもstrong identityが無い場合はDHCP統合しない", () => {
+    mod.connectWithType("203.0.113.12:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "Workshop-Printer",
+      model: "K1 Max",
+    }), "203.0.113.12");
+
+    mod.connectWithType("203.0.113.13:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "Workshop-Printer",
+      model: "K1 Max",
+    }), "203.0.113.13");
+
+    const targets = dataMock.monitorData.appSettings.connectionTargets;
+    expect(targets.map((target) => target.dest).sort()).toEqual([
+      "203.0.113.12:9999",
+      "203.0.113.13:9999",
+    ]);
+    expect(targets.map((target) => target.printerCoreV3Identity.identityStrength)).toEqual([
+      "provisional",
+      "provisional",
+    ]);
+    expect(targets.map((target) => target.printerCoreV3Identity.deviceIdSeed)).toEqual([
+      "provisional:k1%20max:workshop-printer",
+      "provisional:k1%20max:workshop-printer",
+    ]);
+  });
+
   it("接続時のHTTP /infoをPrinter Core v3 identity evidenceへ統合する", async () => {
     window.fetch = vi.fn(async () => ({
       ok: true,

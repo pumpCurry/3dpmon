@@ -3,9 +3,9 @@
  * @description
  * - Gate 17 で PrintPlan 由来の material segment と ledger event 候補を dry-run 検証する。
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1348 (PR #432)
  * @since 1.390.1345 (PR #432)
- * @lastModified 2026-08-09 06:52:36
+ * @lastModified 2026-08-09 08:15:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -203,6 +203,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     expect(correction).toMatchObject({
       eventType: "material-consumption-correction",
       consumptionIdentity: originalEvent.consumptionIdentity,
+      eventRevision: 2,
       supersedesLedgerEventId: originalEvent.ledgerEventId,
       correctsLedgerEventId: originalEvent.ledgerEventId,
       usedLengthMm: 1032,
@@ -214,6 +215,37 @@ describe("Printer Core v3 filament ledger contract", () => {
         canDebitRemaining: true,
       },
     });
+    const revisedExact = {
+      ...exact[0],
+      usedLengthMm: 1040,
+    };
+    const sameRevisionCorrection = createFilamentLedgerCorrectionEvent(originalEvent, revisedExact);
+    expect(sameRevisionCorrection.ledgerEventId).toBe(correction.ledgerEventId);
+    expect(sameRevisionCorrection.deltaUsedLengthMm).toBe(40);
+  });
+
+  it("別identityのsegmentでは既存ledger eventを補正できない", () => {
+    const plan = createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createAsset("benchy.gcode"),
+      materialSourceId: "cfs:1:slot:2",
+      spoolId: "spool:silver",
+    });
+    const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
+      printJobId: "job:correction-mismatch",
+      totalUsedLengthMm: 100,
+      confidence: "estimated",
+    });
+    const originalEvent = createFilamentLedgerEventsFromSegments(segments)[0];
+    const corrected = {
+      ...segments[0],
+      materialSourceId: "cfs:1:slot:3",
+      usedLengthMm: 120,
+      confidence: "exact",
+    };
+
+    expect(() => createFilamentLedgerCorrectionEvent(originalEvent, corrected))
+      .toThrow("materialSourceId");
   });
 
   it("spoolIdが無いsegmentやunknown segmentは残量debit不可のまま残す", () => {
