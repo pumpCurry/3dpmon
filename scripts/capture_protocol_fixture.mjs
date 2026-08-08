@@ -22,7 +22,7 @@
  *
  * @version 1.390.1328 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-08 20:41:12
+ * @lastModified 2026-08-08 21:18:00
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -60,7 +60,8 @@ Options:
   --http-port <number>      HTTP port. Default: 80.
   --send-boxsinfo           Send read-only {"method":"get","params":{"boxsInfo":1}} after WS open.
   --boxsinfo-interval-ms <number>
-                            Repeat read-only boxsInfo probe while WS is open. 0 disables. Default: 0.
+                            Repeat read-only boxsInfo probe while WS is open. 0 disables.
+                            Positive values must be >= 5000. Default: 0.
   --skip-http               Skip GET /info.
   --skip-ws                 Skip WebSocket observation.
   --require-http            Fail the result if /info was not observed successfully.
@@ -283,8 +284,8 @@ export function parseArgs(argv) {
   }
   if (!Number.isFinite(options.boxsInfoProbeIntervalMs) ||
       options.boxsInfoProbeIntervalMs < 0 ||
-      (options.boxsInfoProbeIntervalMs > 0 && options.boxsInfoProbeIntervalMs < 1000)) {
-    throw new Error("--boxsinfo-interval-ms must be 0 or a number >= 1000");
+      (options.boxsInfoProbeIntervalMs > 0 && options.boxsInfoProbeIntervalMs < 5000)) {
+    throw new Error("--boxsinfo-interval-ms must be 0 or a number >= 5000");
   }
   if (!Number.isFinite(options.minimumEvents) || options.minimumEvents < 0) {
     throw new Error("--minimum-events must be a number >= 0");
@@ -646,6 +647,45 @@ export function summarizeMarkerValidation(markerTracker, markerEvents) {
 }
 
 /**
+ * read-only boxsInfo probe request の event かどうかを判定する。
+ *
+ * 【詳細説明】
+ * - interval probe は CFS 状態を引き出すための観測補助であり、実機から得た状態変化そのものではない。
+ * - minimum-events 判定でこの outbound request を数えると、短い間隔を指定するだけで capture が有効に見える。
+ * - そのため、recorder が付けた purpose metadata を使い、読み取り probe request だけを除外対象として識別する。
+ *
+ * @function isReadOnlyBoxsInfoProbeEvent
+ * @param {Object} event - ProtocolRecorder event
+ * @returns {boolean} read-only boxsInfo probe request の場合 true
+ * @example
+ * const excluded = isReadOnlyBoxsInfoProbeEvent(event);
+ */
+export function isReadOnlyBoxsInfoProbeEvent(event) {
+  return event?.direction === "out" &&
+    event?.kind === "frame" &&
+    event?.details?.purpose === "read-only-boxsInfo-probe";
+}
+
+/**
+ * minimum-events validation で数える event 数を集計する。
+ *
+ * 【詳細説明】
+ * - marker、inbound frame、transport event、heartbeat ack は capture の観測・同期証拠として数える。
+ * - read-only boxsInfo probe request は観測補助のため、件数水増しを避ける目的で除外する。
+ *
+ * @function countMinimumValidationEvents
+ * @param {Object[]} events - ProtocolRecorder event 一覧
+ * @returns {number} minimum-events 判定に使う event 数
+ * @example
+ * const counted = countMinimumValidationEvents(fixture.events);
+ */
+export function countMinimumValidationEvents(events) {
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => !isReadOnlyBoxsInfoProbeEvent(event))
+    .length;
+}
+
+/**
  * テキストファイルを同一ディレクトリ内の一時ファイル経由で置換する。
  *
  * 【詳細説明】
@@ -922,18 +962,20 @@ export async function captureProtocolFixture(options) {
   const fixture = recorder.exportFixture({ redact: true });
   const markerEvents = fixture.events.filter((event) => event.direction === "marker");
   const protocolEventCount = fixture.events.length - markerEvents.length;
+  const countedEventCount = countMinimumValidationEvents(fixture.events);
   const markerValidation = summarizeMarkerValidation(markerTracker, markerEvents);
   const failureReasons = [];
   if (options.requireHttp && !httpObserved) failureReasons.push("required-http-not-observed");
   if (options.requireWs && !wsOpened) failureReasons.push("required-ws-not-opened");
   if (options.requireBoxsInfo && !boxsInfoObserved) failureReasons.push("required-boxsinfo-not-observed");
   if (markerValidation.missing.length > 0) failureReasons.push("required-marker-not-observed");
-  if (fixture.events.length < options.minimumEvents) failureReasons.push("minimum-events-not-met");
+  if (countedEventCount < options.minimumEvents) failureReasons.push("minimum-events-not-met");
   const success = failureReasons.length === 0;
   fixture.metadata.validation = {
     success,
     failureReasons,
     eventCount: fixture.events.length,
+    countedEventCount,
     protocolEventCount,
     markerCount: markerEvents.length,
     required: {
@@ -966,6 +1008,7 @@ export async function captureProtocolFixture(options) {
     writtenOutDir,
     failedOutDir,
     eventCount: fixture.events.length,
+    countedEventCount,
     protocolEventCount,
     markerCount: markerEvents.length,
     success,

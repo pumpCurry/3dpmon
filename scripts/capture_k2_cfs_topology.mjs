@@ -20,7 +20,7 @@
  *
  * @version 1.390.1328 (PR #432)
  * @since   1.390.1326 (PR #432)
- * @lastModified 2026-08-08 20:58:12
+ * @lastModified 2026-08-08 21:18:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 10 実機 fixture 取得後、観測された marker timing の推奨例を docs へ追記する
@@ -72,7 +72,8 @@ Options:
   --ws-port <number>        WebSocket port. Default: 9999.
   --http-port <number>      HTTP port. Default: 80.
   --boxsinfo-interval-ms <number>
-                            Repeat read-only boxsInfo probe while WS is open. Default: 30000.
+                            Repeat read-only boxsInfo probe while WS is open.
+                            Positive values must be >= 5000. Default: 30000.
   --minimum-events <number> Minimum required events. Default: 20.
   --marker-at <ms:name[:json-details]>
                             Optional scheduled marker. Repeatable.
@@ -166,8 +167,8 @@ export function parseArgs(argv) {
   }
   if (!Number.isFinite(options.boxsInfoProbeIntervalMs) ||
       options.boxsInfoProbeIntervalMs < 0 ||
-      (options.boxsInfoProbeIntervalMs > 0 && options.boxsInfoProbeIntervalMs < 1000)) {
-    throw new Error("--boxsinfo-interval-ms must be 0 or a number >= 1000");
+      (options.boxsInfoProbeIntervalMs > 0 && options.boxsInfoProbeIntervalMs < 5000)) {
+    throw new Error("--boxsinfo-interval-ms must be 0 or a number >= 5000");
   }
   if (!Number.isFinite(options.minimumEvents) || options.minimumEvents < 0) {
     throw new Error("--minimum-events must be a number >= 0");

@@ -60,6 +60,26 @@ describe("capture_k2_cfs_topology helpers", () => {
     expect(options.keepFailed).toBe(false);
   });
 
+  it("boxsInfo interval probe は5秒未満を拒否する", () => {
+    expect(() => parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/cfs-topology",
+      "--boxsinfo-interval-ms",
+      "1000",
+    ])).toThrow("--boxsinfo-interval-ms must be 0 or a number >= 5000");
+
+    expect(parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/cfs-topology",
+      "--boxsinfo-interval-ms",
+      "5000",
+    ]).boxsInfoProbeIntervalMs).toBe(5000);
+  });
+
   it("汎用 recorder option は K2+CFS read-only 条件へ固定される", () => {
     const options = buildK2CfsTopologyCaptureOptions(parseArgs([
       "--host",

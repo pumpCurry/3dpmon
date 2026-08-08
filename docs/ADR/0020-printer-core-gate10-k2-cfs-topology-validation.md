@@ -73,6 +73,16 @@ node scripts/capture_k2_cfs_topology.mjs \
   enabled by default. The interval probe repeats only
   `{"method":"get","params":{"boxsInfo":1}}` so CFS reconnect, slot changes,
   and material changes can be observed without CFS control authority.
+  Positive interval values must be at least `5000` ms; the default remains
+  `30000` ms for Gate 10 so the probe does not become a high-frequency polling
+  loop during physical operations.
+
+- Capture validation records both total `eventCount` and `countedEventCount`.
+  `countedEventCount` is the value used for `--minimum-events`. It excludes the
+  outbound read-only `boxsInfo` probe request events themselves, because those
+  requests are observation aids rather than device evidence. Inbound
+  `boxsInfo`, transport events, markers, and heartbeat acknowledgements remain
+  counted evidence.
 
 - The equivalent generic recorder command is:
 

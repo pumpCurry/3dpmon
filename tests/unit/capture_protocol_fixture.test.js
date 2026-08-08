@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   captureProtocolFixture,
+  countMinimumValidationEvents,
   isHeartbeatPayload,
   normalizeWsPayload,
   parseArgs,
@@ -92,6 +93,26 @@ describe("capture_protocol_fixture CLI helpers", () => {
     });
   });
 
+  it("boxsInfo interval probe は5秒未満を拒否する", () => {
+    expect(() => parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/capture",
+      "--boxsinfo-interval-ms",
+      "1000",
+    ])).toThrow("--boxsinfo-interval-ms must be 0 or a number >= 5000");
+
+    expect(parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/capture",
+      "--boxsinfo-interval-ms",
+      "5000",
+    ]).boxsInfoProbeIntervalMs).toBe(5000);
+  });
+
   it("text JSON frameをJSONとして保持する", () => {
     const payload = normalizeWsPayload(Buffer.from("{\"nozzleTemp\":\"220\"}"), false);
 
@@ -144,6 +165,33 @@ describe("capture_protocol_fixture CLI helpers", () => {
         },
       },
     ]);
+  });
+
+  it("minimum-events判定ではread-only boxsInfo probe requestを数えない", () => {
+    const events = [
+      {
+        direction: "out",
+        kind: "frame",
+        details: { purpose: "read-only-boxsInfo-probe" },
+      },
+      {
+        direction: "in",
+        kind: "frame",
+        payload: { result: { boxsInfo: {} } },
+      },
+      {
+        direction: "marker",
+        kind: "marker",
+        name: "observed-cfs-connected",
+      },
+      {
+        direction: "out",
+        kind: "frame",
+        details: { purpose: "heartbeat-ack" },
+      },
+    ];
+
+    expect(countMinimumValidationEvents(events)).toBe(3);
   });
 
   it("require条件に失敗したcaptureは既存fixtureを上書きしない", async () => {
@@ -219,6 +267,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
       success: true,
       failureReasons: [],
       eventCount: 0,
+      countedEventCount: 0,
       protocolEventCount: 0,
       markerCount: 0,
       required: {
@@ -331,6 +380,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
       }),
     ]);
     expect(capture.metadata.validation.eventCount).toBe(1);
+    expect(capture.metadata.validation.countedEventCount).toBe(1);
     expect(capture.metadata.validation.protocolEventCount).toBe(0);
     expect(capture.metadata.validation.markerCount).toBe(1);
     expect(capture.metadata.validation.markers).toEqual({
