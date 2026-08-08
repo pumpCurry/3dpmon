@@ -79,6 +79,41 @@ completed state
 idle after completion
 ```
 
+Later live comparison found an important negative result: a K2 Pro Combo can
+advance and complete a print lifecycle after an `opGcodeFile` start while no CFS
+material has `materials[].selected=1`. In that mode the protocol history and
+progress look print-like, but the CFS does not physically feed filament. This
+gate therefore records `opGcodeFile` as command evidence only, not as a safe K2
+CFS print-start contract.
+
+## OrcaSlicer / CrealityPrint Source Cross-Check
+
+Public source review was performed against:
+
+```text
+OrcaSlicer/OrcaSlicer@af9fd10d
+CrealityOfficial/CrealityPrint@24b9395
+```
+
+OrcaSlicer has the clearest LAN evidence. For K2-family models including F012,
+it does not rely on `opGcodeFile` for CFS slot printing. It builds a
+tool-to-slot list and sends:
+
+```text
+set colorMatch
+set multiColorPrint
+```
+
+When any selected source is the external box (`boxId == 0`), Orca falls back to
+`opGcodeFile`.
+
+CrealityPrint's newer send flow is more abstract. The desktop code passes
+`open_cfs` and `color_match_info[]` through the send UI / workflow boundary, and
+the cloud path converts those into `enableCfs` and `filamentsList`. This supports
+the same design conclusion: CFS printing must carry explicit material mapping
+evidence, and `selected` should be observed after start before treating the print
+as physically feeding filament.
+
 ## Non-Goals
 
 - No K2 command authority promotion.

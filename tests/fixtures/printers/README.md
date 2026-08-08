@@ -71,6 +71,16 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
   The profile report includes a reduced `payloadTimeline` for `cfsConnect` and
   summarized `boxsInfo` topology so review can compare physical CFS changes with
   operator-observed markers.
+- For K2/CFS print-start fixtures, also run the selected-source guard:
+
+```text
+node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/<scenario> --profile k2-cfs-print-selection --pretty
+```
+
+  This profile requires `boxsInfo.materialBoxs[].materials[].selected` evidence.
+  A print lifecycle that completes with no selected CFS source is retained as
+  negative command evidence, but must not be treated as proof that filament was
+  physically fed.
 
 Fixture rules:
 

@@ -117,6 +117,48 @@ function k2BenchyPrintCommandEvents() {
   ];
 }
 
+function k2CfsSelectedPrintEvents() {
+  return [
+    marker(1, 0, "operator-print-start", { source: "automation-cli" }),
+    marker(2, 500, "observed-printing", { source: "automation-cli" }),
+    ws(3, 1000, {
+      boxsInfo: {
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              {
+                id: 0,
+                vendor: "Generic",
+                type: "PLA",
+                name: "Generic PLA",
+                color: "#ffffff",
+                percent: 99,
+                state: 1,
+                selected: 1,
+              },
+              {
+                id: 1,
+                vendor: "Generic",
+                type: "PLA",
+                name: "Generic PLA",
+                color: "#72a530",
+                percent: 100,
+                state: 1,
+                selected: 0,
+              },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+      },
+    }),
+  ];
+}
+
 function k2CfsTopologyEvents() {
   const freshBoxsInfo = {
     enable: 1,
@@ -319,6 +361,24 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(profile.requiredMarkers).toContainEqual({
       name: "observed-cfs-disconnected",
       source: "stdin",
+    });
+  });
+
+  it("K2 CFS print selection profileを列挙・取得できる", () => {
+    const profile = getProtocolScenarioProfile("k2-cfs-print-selection");
+
+    expect(listProtocolScenarioProfiles()).toContain("k2-cfs-print-selection");
+    expect(profile).toMatchObject({
+      name: "k2-cfs-print-selection",
+      expectedScenario: "",
+      requireValidationSuccess: true,
+      requireCfsSelectedSource: true,
+      requiredPayloadKeys: ["boxsInfo"],
+      timelinePayloadKeys: ["boxsInfo"],
+    });
+    expect(profile.requiredMarkers).toContainEqual({
+      name: "operator-print-start",
+      source: null,
     });
   });
 
@@ -622,6 +682,68 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     });
     expect(report.requiredPayloadKeys.required).toContain("retGcodeFileInfo2");
     expect(report.payloadTimeline.entries.map((entry) => entry.sequence)).toEqual([2, 3, 8]);
+    expect(report.cfsSelection).toMatchObject({
+      checked: true,
+      observedSelectedSource: false,
+      framesWithSelected: 0,
+    });
+  });
+
+  it("K2 CFS print selection profileはselected source未観測をfailureにする", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-benchy-print-command" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2BenchyPrintCommandEvents(),
+    }, {
+      profiles: ["k2-cfs-print-selection"],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["cfs-selected-source-missing"]);
+    expect(report.cfsSelection).toMatchObject({
+      checked: true,
+      observedSelectedSource: false,
+      framesWithSelected: 0,
+    });
+  });
+
+  it("K2 CFS print selection profileはselected sourceを観測したfixtureをPASSにする", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-cfs-selected-print" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2CfsSelectedPrintEvents(),
+    }, {
+      profiles: ["k2-cfs-print-selection"],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.failureReasons).toEqual([]);
+    expect(report.cfsSelection).toMatchObject({
+      checked: true,
+      observedSelectedSource: true,
+      selectedSourceIds: ["box:1:type:0:slot:0"],
+      framesWithSelected: 1,
+      framesWithoutSelected: 0,
+    });
+    expect(report.cfsSelection.timeline[0]).toMatchObject({
+      sequence: 3,
+      selectedCount: 1,
+      selectedSources: [
+        {
+          sourceId: "box:1:type:0:slot:0",
+          boxId: 1,
+          boxType: 0,
+          materialId: 0,
+          materialType: "PLA",
+          color: "#ffffff",
+          percent: 99,
+        },
+      ],
+    });
   });
 
   it("K2 CFS topology profileはCFS物理変化markerとboxsInfo timelineを要求する", () => {

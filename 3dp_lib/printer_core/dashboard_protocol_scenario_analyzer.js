@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1323 (PR #432)
+ * @version 1.390.1324 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 13:24:36
+ * @lastModified 2026-08-08 19:51:16
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -138,6 +138,22 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
       "boxsInfo",
     ]),
   }),
+  "k2-cfs-print-selection": Object.freeze({
+    name: "k2-cfs-print-selection",
+    expectedScenario: "",
+    requireValidationSuccess: true,
+    requiredMarkers: Object.freeze([
+      Object.freeze({ name: "operator-print-start", source: null }),
+      Object.freeze({ name: "observed-printing", source: null }),
+    ]),
+    requiredPayloadKeys: Object.freeze([
+      "boxsInfo",
+    ]),
+    timelinePayloadKeys: Object.freeze([
+      "boxsInfo",
+    ]),
+    requireCfsSelectedSource: true,
+  }),
 });
 
 /**
@@ -230,6 +246,7 @@ function cloneProtocolScenarioProfile(profile) {
     name: profile.name,
     expectedScenario: profile.expectedScenario,
     requireValidationSuccess: Boolean(profile.requireValidationSuccess),
+    requireCfsSelectedSource: Boolean(profile.requireCfsSelectedSource),
     requiredMarkers: profile.requiredMarkers.map((marker) => ({
       name: marker.name,
       source: marker.source,
@@ -693,6 +710,108 @@ function summarizeBoxsInfoForTimeline(boxsInfo) {
 }
 
 /**
+ * K2 `selected` field を boolean に正規化する。
+ *
+ * 【詳細説明】
+ * - F012 実機では `materials[].selected` が 0/1 で流れるが、fixture や将来 firmware で boolean/string が
+ *   混ざっても selected 証跡を落とさないようにする。
+ * - `state` とは別概念であり、材料が装填済みかではなく「このprintで実際に選択された供給元か」を見る。
+ *
+ * @private
+ * @param {*} value - `materials[].selected` の raw value
+ * @returns {boolean} selected とみなせる場合 true
+ */
+function isCfsMaterialSelected(value) {
+  if (value === true) {
+    return true;
+  }
+  if (typeof value === "number") {
+    return value === 1;
+  }
+  if (typeof value === "string") {
+    return value.trim() === "1" || value.trim().toLowerCase() === "true";
+  }
+  return false;
+}
+
+/**
+ * CFS material source summary から表示用 source id を作る。
+ *
+ * 【詳細説明】
+ * - Analyzer report は Data Schema v3 の永続 ID ではなく、fixture review 用の短い evidence ID を返す。
+ * - external spool と CFS slot を区別できるよう、boxType も含める。
+ *
+ * @private
+ * @param {object} source - `summarizeBoxsInfoForTimeline()` が返した material source
+ * @returns {string} review 用 source id
+ */
+function formatMaterialSourceEvidenceId(source) {
+  return `box:${source.boxId ?? "unknown"}:type:${source.boxType ?? "unknown"}:slot:${source.materialId ?? "unknown"}`;
+}
+
+/**
+ * `boxsInfo` event から CFS selected 証跡を集計する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo 実機では `opGcodeFile` 単体でも印刷状態が進むことがあるが、CFS slot が選択されないと
+ *   物理フィラメントが供給されない dry-run-like な挙動になり得る。
+ * - この関数は read-only analyzer の証跡作成だけを担当し、fixture や実機状態は変更しない。
+ *
+ * @private
+ * @param {Array<object>} events - ProtocolRecorder event 一覧
+ * @returns {object} CFS selected 証跡 report
+ */
+function analyzeCfsSelectionEvidence(events) {
+  const timeline = [];
+  const selectedSourceIds = new Set();
+
+  for (const event of events) {
+    if (!event || event.direction !== "in") {
+      continue;
+    }
+    const body = unwrapProtocolEnvelope(extractEventPayloadBody(event));
+    if (!body || typeof body !== "object" || !hasOwn(body, "boxsInfo")) {
+      continue;
+    }
+
+    const summary = summarizeBoxsInfoForTimeline(body.boxsInfo);
+    const selectedSources = summary.materialSources
+      .filter((source) => isCfsMaterialSelected(source.selected))
+      .map((source) => {
+        const sourceId = formatMaterialSourceEvidenceId(source);
+        selectedSourceIds.add(sourceId);
+        return {
+          sourceId,
+          boxId: source.boxId,
+          boxType: source.boxType,
+          materialId: source.materialId,
+          materialType: source.materialType,
+          color: source.color,
+          percent: source.percent,
+        };
+      });
+
+    timeline.push({
+      sequence: event.sequence ?? null,
+      atMs: Number.isFinite(event.atMs) ? event.atMs : null,
+      enable: summary.enable,
+      colorMatchCount: summary.colorMatchCount,
+      selectedCount: selectedSources.length,
+      selectedSources,
+    });
+  }
+
+  return {
+    checked: timeline.length > 0,
+    observedSelectedSource: selectedSourceIds.size > 0,
+    selectedSourceIds: [...selectedSourceIds],
+    framesWithSelected: timeline.filter((entry) => entry.selectedCount > 0).length,
+    framesWithoutSelected: timeline.filter((entry) => entry.selectedCount === 0).length,
+    timeline,
+  };
+}
+
+/**
  * timeline record に保存してよい値へ正規化する。
  *
  * 【詳細説明】
@@ -852,12 +971,14 @@ function createScenarioAnalysisRequirements(options) {
   const profileTimelineKeys = profiles.flatMap((profile) => profile.timelinePayloadKeys || []);
   const profileExpectedScenario = profiles.find((profile) => profile.expectedScenario)?.expectedScenario || "";
   const profileRequiresValidation = profiles.some((profile) => profile.requireValidationSuccess);
+  const profileRequiresCfsSelectedSource = profiles.some((profile) => profile.requireCfsSelectedSource);
 
   return {
     profiles: profiles.map((profile) => profile.name),
     unknownProfiles,
     expectedScenario: options.expectedScenario || profileExpectedScenario,
     requireValidationSuccess: options.requireValidationSuccess === true || profileRequiresValidation,
+    requireCfsSelectedSource: options.requireCfsSelectedSource === true || profileRequiresCfsSelectedSource,
     requiredMarkers: uniqueMarkerRequirements([
       ...normalizeMarkerRequirements(profileMarkers),
       ...normalizeMarkerRequirements(options.requiredMarkers),
@@ -891,6 +1012,7 @@ function createScenarioAnalysisRequirements(options) {
  * @param {Array<string|object>=} options.requiredMarkers - 必須 marker requirement 一覧
  * @param {Array<string>=} options.requiredPayloadKeys - 必須 payload key 一覧
  * @param {Array<string>=} options.timelinePayloadKeys - payload timeline に含める key 一覧
+ * @param {boolean=} options.requireCfsSelectedSource - CFS selected source evidence を必須にする場合 true
  * @returns {object} scenario 解析結果
  * @example
  * const report = analyzeProtocolScenarioFixture({ metadata, events }, { requiredMarkers: ["operator-print-start"] });
@@ -907,6 +1029,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   const markerReport = analyzeRequiredMarkers(markers, requiredMarkers);
   const payloadReport = analyzeRequiredPayloadKeys(events, requiredPayloadKeys);
   const payloadTimeline = createPayloadTimeline(events, requirements.timelinePayloadKeys);
+  const cfsSelection = analyzeCfsSelectionEvidence(events);
   const protocolEventCount = events.filter((event) => event?.direction !== "marker").length;
   const validationCounts = analyzeValidationCounts(
     metadata,
@@ -939,6 +1062,10 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   if (!validationCounts.success) {
     failureReasons.push("fixture-event-count-mismatch");
   }
+  if (requirements.requireCfsSelectedSource === true &&
+      !cfsSelection.observedSelectedSource) {
+    failureReasons.push("cfs-selected-source-missing");
+  }
 
   return {
     schemaVersion: 1,
@@ -956,6 +1083,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
     requiredMarkers: markerReport,
     requiredPayloadKeys: payloadReport,
     payloadTimeline,
+    cfsSelection,
     validation: {
       success: metadata.validation?.success ?? null,
       failureReasons: Array.isArray(metadata.validation?.failureReasons)
