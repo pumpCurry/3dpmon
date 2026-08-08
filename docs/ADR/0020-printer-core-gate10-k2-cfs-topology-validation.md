@@ -3,9 +3,10 @@
 ## Context
 
 Gate 9 focuses on the K2 Pro Combo print lifecycle. The next physical evidence
-boundary is CFS topology: connection freshness, disconnect/reconnect behavior,
+boundary is CFS topology: physical connect/disconnect/reconnect behavior,
 slot/material changes, external spool observation, and Creality `colorMatch`
-assignment changes.
+assignment changes. Protocol freshness/staleness remains derived evidence from
+`cfsConnect` and `boxsInfo`; it is not encoded in physical marker names.
 
 Printer Core v3 already treats K2 `boxsInfo` as read-only material topology.
 This gate validates that interpretation against deliberate physical operations
@@ -19,9 +20,9 @@ before Data Schema v3 material-source authority is introduced.
 - The profile requires operator-observed markers from stdin:
 
 ```text
-observed-cfs-connected-fresh
-observed-cfs-disconnected-stale
-observed-cfs-reconnected-fresh
+observed-cfs-connected
+observed-cfs-disconnected
+observed-cfs-reconnected
 observed-slot-change
 observed-material-change
 observed-external-spool
@@ -49,15 +50,16 @@ cfsConnect
 boxsInfo
 ```
 
-  `boxsInfo` timeline entries are summarized to box/source counts, material
-  source state, and `colorMatch` assignment references. The analyzer does not
-  use the summary as authority; it is review evidence for the captured fixture.
+  `boxsInfo` timeline entries are summarized to box/source counts, external
+  source endpoint counts, material source state, `same_material` groups, and
+  `colorMatch` assignment references. The analyzer does not use the summary as
+  authority; it is review evidence for the captured fixture.
 
 - The recommended capture shape is:
 
 ```text
 node scripts/capture_protocol_fixture.mjs \
-  --host 192.168.54.21 \
+  --host <DEVICE_IP> \
   --model "K2 Pro Combo" \
   --attachment CFS \
   --scenario k2-cfs-topology-validation \

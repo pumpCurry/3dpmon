@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1320 (PR #432)
+ * @version 1.390.1321 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 08:43:10
+ * @lastModified 2026-08-08 09:23:03
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -45,12 +45,12 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
     requireValidationSuccess: true,
     requiredMarkers: Object.freeze([
       Object.freeze({ name: "observed-idle-before-start", source: "stdin" }),
-      Object.freeze({ name: "operator-print-start", source: null }),
+      Object.freeze({ name: "operator-print-start", source: "stdin" }),
       Object.freeze({ name: "observed-heating", source: "stdin" }),
       Object.freeze({ name: "observed-printing", source: "stdin" }),
-      Object.freeze({ name: "operator-pause-requested", source: null }),
+      Object.freeze({ name: "operator-pause-requested", source: "stdin" }),
       Object.freeze({ name: "observed-paused", source: "stdin" }),
-      Object.freeze({ name: "operator-resume-requested", source: null }),
+      Object.freeze({ name: "operator-resume-requested", source: "stdin" }),
       Object.freeze({ name: "observed-resumed", source: "stdin" }),
       Object.freeze({ name: "observed-completed", source: "stdin" }),
       Object.freeze({ name: "observed-idle-after-completed", source: "stdin" }),
@@ -81,11 +81,11 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
     expectedScenario: "k2-cfs-topology-validation",
     requireValidationSuccess: true,
     requiredMarkers: Object.freeze([
-      Object.freeze({ name: "observed-cfs-connected-fresh", source: "stdin" }),
+      Object.freeze({ name: "observed-cfs-connected", source: "stdin" }),
       Object.freeze({ name: "operator-cfs-disconnect", source: null }),
-      Object.freeze({ name: "observed-cfs-disconnected-stale", source: "stdin" }),
+      Object.freeze({ name: "observed-cfs-disconnected", source: "stdin" }),
       Object.freeze({ name: "operator-cfs-reconnect", source: null }),
-      Object.freeze({ name: "observed-cfs-reconnected-fresh", source: "stdin" }),
+      Object.freeze({ name: "observed-cfs-reconnected", source: "stdin" }),
       Object.freeze({ name: "observed-slot-change", source: "stdin" }),
       Object.freeze({ name: "observed-material-change", source: "stdin" }),
       Object.freeze({ name: "observed-external-spool", source: "stdin" }),
@@ -515,12 +515,67 @@ function analyzeValidationCounts(metadata, eventCount, protocolEventCount, marke
 }
 
 /**
+ * CFS `same_material` の参照配列を timeline summary 用へ正規化する。
+ *
+ * 【詳細説明】
+ * - 実機 F012 payload では material code は `materials[].materialId` ではなく
+ *   `same_material[]` 側に現れるため、slot 情報と code/group 情報を分けて保持する。
+ * - firmware 差分に備えて object 形式の参照も受け入れ、比較しやすい `{boxId, materialId}` へ揃える。
+ *
+ * @private
+ * @param {Array<*>|null|undefined} refs - `same_material` group の参照一覧
+ * @returns {Array<object>} 正規化済み参照一覧
+ */
+function summarizeSameMaterialRefs(refs) {
+  if (!Array.isArray(refs)) {
+    return [];
+  }
+  return refs.map((ref) => ({
+    boxId: ref?.boxId ?? ref?.box_id ?? null,
+    materialId: ref?.materialId ?? ref?.material_id ?? ref?.id ?? null,
+  }));
+}
+
+/**
+ * CFS `same_material` を timeline summary 用へ正規化する。
+ *
+ * 【詳細説明】
+ * - Creality payload の material code / color / material type と、box slot 参照を同じ group にまとめる。
+ * - array 形式と object 形式の両方を読むことで、実機 firmware 差分で analyzer が壊れにくくする。
+ *
+ * @private
+ * @param {Array<*>|null|undefined} sameMaterial - raw `same_material` payload
+ * @returns {Array<object>} 正規化済み same material group 一覧
+ */
+function summarizeSameMaterialGroups(sameMaterial) {
+  if (!Array.isArray(sameMaterial)) {
+    return [];
+  }
+  return sameMaterial.map((group) => {
+    if (Array.isArray(group)) {
+      return {
+        materialCode: group[0] ?? null,
+        color: group[1] ?? null,
+        materialType: group[3] ?? null,
+        refs: summarizeSameMaterialRefs(group[2]),
+      };
+    }
+    return {
+      materialCode: group?.materialCode ?? group?.material_code ?? group?.id ?? null,
+      color: group?.color ?? null,
+      materialType: group?.materialType ?? group?.material_type ?? group?.type ?? null,
+      refs: summarizeSameMaterialRefs(group?.refs ?? group?.materials ?? group?.materialRefs),
+    };
+  });
+}
+
+/**
  * CFS `boxsInfo` を timeline 用 summary へ圧縮する。
  *
  * 【詳細説明】
  * - Gate 10 では slot 抜差し、material 変更、external spool、`colorMatch` の変化を見たい。
  * - raw `boxsInfo` 全体は大きく、serial や未確定 firmware field も含み得るため、比較に必要な
- *   box/material/colorMatch の最小 shape だけを保持する。
+ *   box/material/same_material/colorMatch の最小 shape だけを保持する。
  *
  * @private
  * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
@@ -534,20 +589,31 @@ function summarizeBoxsInfoForTimeline(boxsInfo) {
     return materials.map((material) => ({
       boxId: box?.id ?? null,
       boxType: box?.type ?? null,
+      boxState: box?.state ?? null,
       materialId: material?.id ?? null,
       state: material?.state ?? null,
+      selected: material?.selected ?? null,
       percent: material?.percent ?? null,
+      vendor: material?.vendor ?? null,
+      name: material?.name ?? null,
       materialType: material?.type ?? null,
-      materialCode: material?.materialId ?? null,
       color: material?.color ?? null,
+      rfid: material?.rfid ?? null,
+      minTemp: material?.minTemp ?? null,
+      maxTemp: material?.maxTemp ?? null,
+      pressure: material?.pressure ?? null,
+      editStatus: material?.editStatus ?? null,
+      scrap: material?.scrap ?? null,
     }));
   });
+  const sameMaterialGroups = summarizeSameMaterialGroups(boxsInfo?.same_material);
   return {
     enable: boxsInfo?.enable ?? null,
     boxCount: boxes.length,
     materialSourceCount: materialSources.length,
-    externalSourceCount: materialSources.filter((source) => source.boxType === 1).length,
+    externalSourceEndpointCount: materialSources.filter((source) => source.boxType === 1).length,
     cfsSourceCount: materialSources.filter((source) => source.boxType !== 1).length,
+    sameMaterialGroupCount: sameMaterialGroups.length,
     colorMatchCount: colorMatch.length,
     colorMatch: colorMatch.map((assignment) => ({
       id: assignment?.id ?? null,
@@ -555,6 +621,7 @@ function summarizeBoxsInfoForTimeline(boxsInfo) {
       materialId: assignment?.materialId ?? null,
     })),
     materialSources,
+    sameMaterialGroups,
   };
 }
 

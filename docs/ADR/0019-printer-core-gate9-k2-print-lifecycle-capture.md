@@ -27,7 +27,8 @@ observed-completed
 observed-idle-after-completed
 ```
 
-- The profile also requires action boundary markers:
+- The profile also requires action boundary markers from stdin. These are
+  operator timing evidence for the live fixture, not scheduled CLI placeholders:
 
 ```text
 operator-print-start
@@ -65,7 +66,7 @@ printId
 
 ```text
 node scripts/capture_protocol_fixture.mjs \
-  --host 192.168.54.21 \
+  --host <DEVICE_IP> \
   --model "K2 Pro Combo" \
   --attachment CFS \
   --scenario k2-print-lifecycle \

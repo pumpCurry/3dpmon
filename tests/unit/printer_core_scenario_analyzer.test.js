@@ -48,7 +48,7 @@ function ws(sequence, atMs, body) {
 function k2PrintLifecycleEvents() {
   return [
     marker(1, 0, "observed-idle-before-start", { source: "stdin" }),
-    marker(2, 1000, "operator-print-start", { source: "scheduled-cli", scheduledAtMs: 1000 }),
+    marker(2, 1000, "operator-print-start", { source: "stdin" }),
     ws(3, 1500, {
       state: 1,
       deviceState: 1,
@@ -80,18 +80,71 @@ function k2CfsTopologyEvents() {
       {
         id: 0,
         type: 1,
-        materials: [{ id: 0, state: 1, percent: 100, type: "", color: "" }],
+        state: 1,
+        materials: [
+          {
+            id: 0,
+            vendor: "",
+            type: "",
+            name: "",
+            rfid: "",
+            color: "",
+            minTemp: 0,
+            maxTemp: 0,
+            pressure: 0,
+            percent: 100,
+            state: 1,
+            selected: false,
+            editStatus: 0,
+            scrap: 0,
+          },
+        ],
       },
       {
         id: 1,
         type: 0,
+        state: 1,
         materials: [
-          { id: 0, state: 1, percent: 100, type: "PLA", materialId: "000001", color: "white" },
-          { id: 1, state: 1, percent: 95, type: "PLA", materialId: "000002", color: "black" },
+          {
+            id: 0,
+            vendor: "Creality",
+            type: "PLA",
+            name: "Hyper PLA",
+            rfid: "rfid-white",
+            color: "white",
+            minTemp: 190,
+            maxTemp: 230,
+            pressure: 0.95,
+            percent: 100,
+            state: 1,
+            selected: true,
+            editStatus: 0,
+            scrap: 0,
+          },
+          {
+            id: 1,
+            vendor: "Creality",
+            type: "PLA",
+            name: "Hyper PLA",
+            rfid: "rfid-black",
+            color: "black",
+            minTemp: 190,
+            maxTemp: 230,
+            pressure: 0.96,
+            percent: 95,
+            state: 1,
+            selected: false,
+            editStatus: 0,
+            scrap: 0,
+          },
         ],
       },
     ],
     colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+    same_material: [
+      ["000001", "white", [{ boxId: 1, materialId: 0 }], "PLA"],
+      ["000002", "black", [{ boxId: 1, materialId: 1 }], "PLA"],
+    ],
   };
   const changedBoxsInfo = {
     ...freshBoxsInfo,
@@ -100,24 +153,59 @@ function k2CfsTopologyEvents() {
       {
         id: 1,
         type: 0,
+        state: 1,
         materials: [
-          { id: 0, state: 1, percent: 80, type: "PETG", materialId: "000003", color: "red" },
-          { id: 1, state: 0, percent: 0, type: "", materialId: "", color: "" },
+          {
+            id: 0,
+            vendor: "Creality",
+            type: "PETG",
+            name: "Hyper PETG",
+            rfid: "rfid-red",
+            color: "red",
+            minTemp: 220,
+            maxTemp: 250,
+            pressure: 1.05,
+            percent: 80,
+            state: 1,
+            selected: false,
+            editStatus: 1,
+            scrap: 0,
+          },
+          {
+            id: 1,
+            vendor: "Creality",
+            type: "PLA",
+            name: "Hyper PLA",
+            rfid: "rfid-black",
+            color: "black",
+            minTemp: 190,
+            maxTemp: 230,
+            pressure: 0.96,
+            percent: 95,
+            state: 1,
+            selected: true,
+            editStatus: 0,
+            scrap: 0,
+          },
         ],
       },
     ],
-    colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+    colorMatch: [{ id: "T1A", boxId: 1, materialId: 1 }],
+    same_material: [
+      ["000003", "red", [{ boxId: 1, materialId: 0 }], "PETG"],
+      ["000002", "black", [{ boxId: 1, materialId: 1 }], "PLA"],
+    ],
   };
 
   return [
-    marker(1, 0, "observed-cfs-connected-fresh", { source: "stdin" }),
+    marker(1, 0, "observed-cfs-connected", { source: "stdin" }),
     ws(2, 100, { cfsConnect: 1, boxsInfo: freshBoxsInfo }),
     marker(3, 1000, "operator-cfs-disconnect", { source: "stdin" }),
     ws(4, 1200, { cfsConnect: 0 }),
-    marker(5, 1500, "observed-cfs-disconnected-stale", { source: "stdin" }),
+    marker(5, 1500, "observed-cfs-disconnected", { source: "stdin" }),
     marker(6, 2000, "operator-cfs-reconnect", { source: "stdin" }),
     ws(7, 2300, { cfsConnect: 1, boxsInfo: freshBoxsInfo }),
-    marker(8, 2600, "observed-cfs-reconnected-fresh", { source: "stdin" }),
+    marker(8, 2600, "observed-cfs-reconnected", { source: "stdin" }),
     ws(9, 3000, { boxsInfo: changedBoxsInfo }),
     marker(10, 3200, "observed-slot-change", { source: "stdin" }),
     marker(11, 3300, "observed-material-change", { source: "stdin" }),
@@ -138,6 +226,10 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     });
     expect(profile.requiredMarkers).toContainEqual({
       name: "observed-paused",
+      source: "stdin",
+    });
+    expect(profile.requiredMarkers).toContainEqual({
+      name: "operator-print-start",
       source: "stdin",
     });
     expect(profile.requiredPayloadKeys).toContain("deviceState");
@@ -163,7 +255,7 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       timelinePayloadKeys: ["cfsConnect", "boxsInfo"],
     });
     expect(profile.requiredMarkers).toContainEqual({
-      name: "observed-cfs-disconnected-stale",
+      name: "observed-cfs-disconnected",
       source: "stdin",
     });
   });
@@ -465,19 +557,36 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.payloadTimeline.entries[0].state.boxsInfo).toMatchObject({
       boxCount: 2,
       materialSourceCount: 3,
-      externalSourceCount: 1,
+      externalSourceEndpointCount: 1,
       cfsSourceCount: 2,
+      sameMaterialGroupCount: 2,
       colorMatchCount: 1,
+    });
+    expect(report.payloadTimeline.entries[0].state.boxsInfo.sameMaterialGroups[0]).toMatchObject({
+      materialCode: "000001",
+      color: "white",
+      materialType: "PLA",
+      refs: [{ boxId: 1, materialId: 0 }],
     });
     expect(report.payloadTimeline.entries.at(-1).state.boxsInfo.materialSources[1]).toMatchObject({
       boxId: 1,
+      boxState: 1,
       materialId: 0,
       state: 1,
+      selected: false,
       percent: 80,
+      vendor: "Creality",
+      name: "Hyper PETG",
       materialType: "PETG",
-      materialCode: "000003",
       color: "red",
+      rfid: "rfid-red",
     });
+    expect(report.payloadTimeline.entries[0].state.boxsInfo.colorMatch).toEqual([
+      { id: "T1A", boxId: 1, materialId: 0 },
+    ]);
+    expect(report.payloadTimeline.entries.at(-1).state.boxsInfo.colorMatch).toEqual([
+      { id: "T1A", boxId: 1, materialId: 1 },
+    ]);
   });
 
   it("未知profileはfailureReasonsへ分離する", () => {
