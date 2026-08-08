@@ -88,6 +88,7 @@ beforeEach(async () => {
   FakeWebSocket.instances = [];
   global.WebSocket = FakeWebSocket;
   window.WebSocket = FakeWebSocket;
+  delete window.fetch;
   delete window._3dpmonRelayChild;
   mod = await import("../../3dp_lib/dashboard_connection.js");
   dataMock = await import("../../3dp_lib/dashboard_data.js");
@@ -103,8 +104,15 @@ afterEach(() => {
   for (const ws of FakeWebSocket.instances) {
     try { ws.close(); } catch { /* noop */ }
   }
+  delete window.fetch;
   delete window._3dpmonRelayChild;
 });
+
+async function flushAsyncProbe() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function connectK1Socket(dest) {
   mod.connectWithType(dest, "creality-k1");
@@ -254,6 +262,50 @@ describe("Printer Core v3 identity dry-run", () => {
       "203.0.113.11",
     ]);
     expect(targets[0].printerCoreV3Identity.endpointAliases.macs).toEqual([
+      "66:77:88:99:aa:bb",
+      "aa:11:22:33:44:55",
+    ]);
+  });
+
+  it("接続時のHTTP /infoをPrinter Core v3 identity evidenceへ統合する", async () => {
+    window.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        model: "F012",
+        sn: "K2PRO-SERIAL-001",
+        mac: "AA1122334455",
+        version: "1.0.0",
+        wssPort: 443,
+        videoPort: 443,
+      }),
+    }));
+
+    mod.connectWithType("203.0.113.21:9999", "creality-k1");
+    await flushAsyncProbe();
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Test",
+      model: "F012",
+      sn: "K2PRO-SERIAL-001",
+      mac: "66778899AABB",
+    }), "203.0.113.21");
+
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    expect(window.fetch).toHaveBeenCalledWith("http://203.0.113.21:80/info", expect.objectContaining({
+      cache: "no-store",
+    }));
+    expect(target.printerCoreV3Identity.deviceFingerprint.sources).toEqual(["http-info", "ws9999"]);
+    expect(target.printerCoreV3Identity.deviceFingerprint.reported).toMatchObject({
+      model: "F012",
+      hostname: "K2Pro-Test",
+      firmwareVersion: "1.0.0",
+    });
+    expect(target.printerCoreV3Identity.deviceFingerprint.transports).toMatchObject({
+      httpInfoObserved: true,
+      ws9999Observed: true,
+      wssPort: 443,
+      videoPort: 443,
+    });
+    expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual([
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
     ]);

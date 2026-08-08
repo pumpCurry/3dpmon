@@ -323,17 +323,20 @@ export function transferPrinterCoreV3IdentityRecords(target, sourceTarget) {
  */
 function createPrinterCoreV3IdentityCandidate(target, evidence, options) {
   const source = evidence && typeof evidence === "object" ? evidence : {};
+  const observedSource = source.source ?? source.observedVia ?? source.protocolSource;
+  const reportedHostname = source.reportedHostname || source.hostname ||
+    (observedSource === "http-info" ? null : target.hostname || options.hostOrDest);
   const macAliases = [
     target.macAddress,
     ...(Array.isArray(source.macAliases) ? source.macAliases : []),
   ];
 
   return createDeviceIdentityCandidate({
-    source: source.source ?? source.observedVia ?? source.protocolSource,
+    source: observedSource,
     serialNumber: source.serialNumber || source.sn || source.serial,
     stableMachineId: source.stableMachineId || source.machineId,
     reportedModel: source.reportedModel || source.model || source.printerModel,
-    reportedHostname: source.reportedHostname || source.hostname || target.hostname || options.hostOrDest,
+    reportedHostname,
     firmwareVersion: source.firmwareVersion ?? source.version,
     wssPort: source.wssPort,
     videoPort: source.videoPort,

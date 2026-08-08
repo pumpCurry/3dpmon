@@ -32,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1307 (PR #432)
+* @version 1.390.1338 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-07 21:42:04
+* @lastModified 2026-08-09 01:55:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -94,6 +94,7 @@ import {
  */
 const DEFAULT_WS_PORT = 9999;
 const DEFAULT_CAMERA_PORT = 8080;
+const DEFAULT_HTTP_INFO_PORT = 80;
 
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
@@ -358,6 +359,78 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
     conflicts: Array.isArray(target.printerCoreV3IdentityConflicts) ? target.printerCoreV3IdentityConflicts : [],
     pendings: Array.isArray(target.printerCoreV3PendingIdentityCandidates) ? target.printerCoreV3PendingIdentityCandidates : [],
   };
+}
+
+/**
+ * host 名を HTTP URL の authority へ安全に埋め込む。
+ *
+ * 【詳細説明】
+ * - IPv6 literal は URL 上で角括弧が必要になるため、`extractHost()` 後の値をここで補正する。
+ * - IPv4 / hostname はそのまま返し、既存の接続先表記を変えない。
+ *
+ * @private
+ * @param {string} host - IP literal または hostname
+ * @returns {string} HTTP URL 用 host
+ */
+function _formatHttpInfoHost(host) {
+  const value = String(host || "").trim();
+  if (!value) return "";
+  if (value.startsWith("[") && value.endsWith("]")) return value;
+  const parsed = parseDest(value);
+  return parsed.ok && parsed.isIPv6 ? `[${parsed.host}]` : value;
+}
+
+/**
+ * Printer Core v3 identity 用に HTTP /info を read-only probe する。
+ *
+ * 【詳細説明】
+ * - Gate 11 では `/info` を command authority ではなく識別証拠としてだけ扱う。
+ * - 失敗、CORS、timeout、非 JSON 応答は接続失敗にせず、WS9999 の既存パスを継続する。
+ * - 成功時は `source:"http-info"` を明示し、repository が firmware/port provenance を保持できるようにする。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式の接続先
+ * @param {string} hostOrDest - 接続キーまたは hostname
+ * @returns {Promise<void>} probe 完了
+ */
+async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
+  if (typeof window === "undefined" || typeof window.fetch !== "function") {
+    return;
+  }
+  const target = _findConnectionTarget(dest) || _findConnectionTarget(hostOrDest);
+  if (target?.printerType === "moonraker") {
+    return;
+  }
+  const endpointAddress = _extractIp(dest);
+  const httpHost = _formatHttpInfoHost(endpointAddress);
+  const httpPort = Number(target?.httpPort || monitorData.appSettings?.httpPort || DEFAULT_HTTP_INFO_PORT);
+  if (!httpHost || !Number.isFinite(httpPort) || httpPort <= 0) {
+    return;
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
+  try {
+    const response = await window.fetch(`http://${httpHost}:${httpPort}/info`, {
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+    if (!response || !response.ok || typeof response.json !== "function") {
+      return;
+    }
+    const body = await response.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return;
+    }
+    _recordPrinterCoreV3Identity(hostOrDest || dest, {
+      ...body,
+      source: "http-info",
+      endpointAddress,
+    });
+  } catch (error) {
+    console.debug(`[PrinterCoreV3] /info probe skipped (${dest}):`, error?.message || String(error));
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 /**
@@ -1140,6 +1213,7 @@ export function connectWs(hostOrDest) {
 
   /* 接続先を永続リストに保存 */
   _addConnectionTarget(dest);
+  _probePrinterCoreV3HttpInfo(dest, host);
 
   if (state.userDisc) {
     state.reconnect = 0;
