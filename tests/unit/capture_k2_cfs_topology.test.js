@@ -26,6 +26,7 @@ describe("capture_k2_cfs_topology helpers", () => {
     expect(options.boxsInfoProbeIntervalMs).toBe(30000);
     expect(options.minimumEvents).toBe(20);
     expect(options.interactiveMarkers).toBe(true);
+    expect(options.diagnosticCapture).toBe(false);
     expect(options.keepFailed).toBe(true);
   });
 
@@ -55,6 +56,7 @@ describe("capture_k2_cfs_topology helpers", () => {
       },
     ]);
     expect(options.interactiveMarkers).toBe(false);
+    expect(options.diagnosticCapture).toBe(true);
     expect(options.keepFailed).toBe(false);
   });
 
@@ -80,6 +82,20 @@ describe("capture_k2_cfs_topology helpers", () => {
       skipHttp: false,
       skipWs: false,
     });
+  });
+
+  it("interactive markerを無効化したcaptureはdiagnostic-only notesを残す", () => {
+    const options = buildK2CfsTopologyCaptureOptions(parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/cfs-topology",
+      "--no-interactive-markers",
+    ]));
+
+    expect(options.interactiveMarkers).toBe(false);
+    expect(options.notes).toContain("diagnostic-only");
+    expect(options.notes).toContain("Gate 10 profile acceptance is not expected");
   });
 
   it("Gate 10 profile に必要な marker 名をヘルプ用定数として公開する", () => {

@@ -20,7 +20,7 @@
  *
  * @version 1.390.1328 (PR #432)
  * @since   1.390.1326 (PR #432)
- * @lastModified 2026-08-08 20:41:12
+ * @lastModified 2026-08-08 20:58:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 10 実機 fixture 取得後、観測された marker timing の推奨例を docs へ追記する
@@ -76,7 +76,8 @@ Options:
   --minimum-events <number> Minimum required events. Default: 20.
   --marker-at <ms:name[:json-details]>
                             Optional scheduled marker. Repeatable.
-  --no-interactive-markers  Disable stdin markers. Interactive markers are enabled by default.
+  --no-interactive-markers  Disable stdin markers for diagnostic-only captures.
+                            Such captures cannot satisfy Gate 10 profile acceptance.
   --no-keep-failed          Do not keep failed captures under tmp/failed-captures.
   --notes <text>            Operator notes for metadata.
   --help                    Show this help.
@@ -108,6 +109,7 @@ export function parseArgs(argv) {
     minimumEvents: 20,
     markerSchedule: [],
     interactiveMarkers: true,
+    diagnosticCapture: false,
     keepFailed: true,
     notes: "Gate 10 K2 Pro Combo CFS physical topology",
   };
@@ -120,6 +122,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--no-interactive-markers") {
       options.interactiveMarkers = false;
+      options.diagnosticCapture = true;
       continue;
     }
     if (arg === "--no-keep-failed") {
@@ -186,6 +189,9 @@ export function parseArgs(argv) {
  * const captureOptions = buildK2CfsTopologyCaptureOptions({ host: "DEVICE_IP", outDir: "tmp/cfs" });
  */
 export function buildK2CfsTopologyCaptureOptions(options) {
+  const notes = options.diagnosticCapture
+    ? `${options.notes} (diagnostic-only: stdin markers disabled; Gate 10 profile acceptance is not expected)`
+    : options.notes;
   return {
     host: options.host,
     outDir: options.outDir,
@@ -200,7 +206,7 @@ export function buildK2CfsTopologyCaptureOptions(options) {
     model: "K2 Pro Combo",
     attachment: "CFS",
     scenario: "k2-cfs-topology-validation",
-    notes: options.notes,
+    notes,
     sendBoxsInfo: true,
     skipHttp: false,
     skipWs: false,
