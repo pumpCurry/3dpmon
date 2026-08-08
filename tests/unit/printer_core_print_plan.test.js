@@ -3,14 +3,15 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1343 (PR #432)
+ * @version 1.390.1344 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 01:38:47
+ * @lastModified 2026-08-09 01:42:18
  */
 
 import { describe, expect, it } from "vitest";
 import { createPrinterCommandResult, shouldRetryPrinterCommand } from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 import {
+  createMulticolorCfsPrintPlan,
   createPrintStartCommandRequestFromPlan,
   createSingleColorPrintPlan,
   validatePrintPlan,
@@ -143,6 +144,114 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(shouldRetryPrinterCommand(request, result)).toBe(false);
   });
 
+  it("CFSマルチカラーPrintPlanは各toolのmaterialSourceを明示する", () => {
+    const plan = createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        path: "/mnt/UDISK/printer_data/gcodes/4color_benchy.gcode",
+        fileName: "4color_benchy.gcode",
+      },
+      toolAssignments: [
+        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3", protocol: { colorMatch: "T1A" } },
+        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2", protocol: { colorMatch: "T1B" } },
+        { toolAlias: "T1C", materialSourceId: "cfs:1:slot:1", protocol: { colorMatch: "T1C" } },
+        { toolAlias: "T1D", materialSourceId: "cfs:1:slot:0", protocol: { colorMatch: "T1D" } },
+      ],
+      colorMatchPolicy: {
+        mode: "explicit-tool-assignment",
+        source: "operator-confirmed",
+      },
+    });
+
+    expect(plan).toMatchObject({
+      planKind: "multicolor-cfs",
+      asset: {
+        toolCount: 4,
+      },
+      materialSourceIds: [
+        "cfs:1:slot:3",
+        "cfs:1:slot:2",
+        "cfs:1:slot:1",
+        "cfs:1:slot:0",
+      ],
+      colorMatchPolicy: {
+        mode: "explicit-tool-assignment",
+        source: "operator-confirmed",
+      },
+      authority: {
+        mode: "plan-only",
+        canStartPrint: false,
+      },
+    });
+    expect(plan.toolAssignments.map((assignment) => [
+      assignment.toolAlias,
+      assignment.materialSourceId,
+      assignment.order,
+    ])).toEqual([
+      ["T1A", "cfs:1:slot:3", 0],
+      ["T1B", "cfs:1:slot:2", 1],
+      ["T1C", "cfs:1:slot:1", 2],
+      ["T1D", "cfs:1:slot:0", 3],
+    ]);
+    expect(validatePrintPlan(plan)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("CFSマルチカラーPrintPlanは未割当toolと重複toolを拒否する", () => {
+    expect(() => createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset(),
+      toolAssignments: [
+        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolAlias: "T1B", materialSourceId: "" },
+      ],
+    })).toThrow("materialSourceId");
+    expect(() => createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset(),
+      toolAssignments: [
+        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:1" },
+      ],
+    })).toThrow("duplicate-tool-alias");
+  });
+
+  it("CFSマルチカラーPrintPlan由来のcommandもcontract-onlyで送信しない", () => {
+    const plan = createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        path: "/mnt/UDISK/printer_data/gcodes/4color_benchy.gcode",
+      },
+      toolAssignments: [
+        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
+        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
+      ],
+    });
+    const request = createPrintStartCommandRequestFromPlan(plan, {
+      sessionId: "session:multi",
+      transportKind: "ws9999",
+      entropySource: () => "unit",
+    });
+    const result = createPrinterCommandResult(request, { status: "timeout" });
+
+    expect(request).toMatchObject({
+      commandKind: "print-start",
+      sideEffect: true,
+      idempotent: false,
+      expectedStateRequired: true,
+      authority: {
+        mode: "contract-only",
+        canSend: false,
+        canBlindRetry: false,
+      },
+      payload: {
+        planKind: "multicolor-cfs",
+        multiColorPrint: true,
+        materialSourceIds: ["cfs:1:slot:3", "cfs:1:slot:2"],
+      },
+    });
+    expect(shouldRetryPrinterCommand(request, result)).toBe(false);
+  });
+
   it("壊れたPrintPlanはvalidationで拒否する", () => {
     expect(validatePrintPlan({
       schemaVersion: 999,
@@ -163,9 +272,6 @@ describe("Printer Core v3 PrintPlan", () => {
         "unexpected-schema-version",
         "unsupported-plan-kind",
         "missing-asset-path",
-        "single-color-tool-assignment-count-invalid",
-        "missing-tool-alias",
-        "missing-material-source-id",
         "material-source-assignment-mismatch",
         "plan-can-start-print",
       ],
