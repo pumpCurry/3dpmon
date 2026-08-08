@@ -3,9 +3,9 @@
  * @description
  * - Gate 13 で IndexedDB を変更する前に、store 定義と migration dry-run plan を純粋関数で検証する。
  *
- * @version 1.390.1341 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since 1.390.1341 (PR #432)
- * @lastModified 2026-08-09 01:31:56
+ * @lastModified 2026-08-09 06:52:36
  */
 
 import { describe, expect, it } from "vitest";
@@ -145,6 +145,15 @@ describe("Printer Core v3 Data Schema contract", () => {
       .toBe(createPrinterCoreV3DeterministicId("DEVICE", [" serial ", "sn-001"]));
   });
 
+  it("deterministic IDはlossy normalizationで異なる入力を潰さない", () => {
+    const slash = createPrinterCoreV3DeterministicId("gcode-asset", ["ABC/123"]);
+    const question = createPrinterCoreV3DeterministicId("gcode-asset", ["ABC?123"]);
+    const space = createPrinterCoreV3DeterministicId("gcode-asset", ["ABC 123"]);
+
+    expect(slash).toMatch(/^gcode-asset:[0-9a-f]{32}$/u);
+    expect(new Set([slash, question, space]).size).toBe(3);
+  });
+
   it("legacy monitorDataからv3 migration dry-run planを生成する", () => {
     const plan = createPrinterCoreV3MigrationPlan(createLegacyMonitorData(), {
       createdAt: "2026-08-09T01:31:56.000+09:00",
@@ -175,14 +184,15 @@ describe("Printer Core v3 Data Schema contract", () => {
         migrationJournal: 1,
       },
       invariants: {
-        dualWriteAllowed: true,
+        dualWriteAllowed: false,
+        developmentDualRouteAllowed: true,
         activateV3Writes: false,
         preserveLegacyData: true,
         migrationIsDeterministic: true,
       },
       warnings: [],
     });
-    expect(plan.source.checksum).toMatch(/^fnv1a32:[0-9a-f]{8}$/u);
+    expect(plan.source.checksum).toMatch(/^fnv1a128:[0-9a-f]{32}$/u);
     expect(validatePrinterCoreV3MigrationPlan(plan)).toEqual({
       ok: true,
       errors: [],
@@ -213,6 +223,7 @@ describe("Printer Core v3 Data Schema contract", () => {
       invariants: {
         ...plan.invariants,
         activateV3Writes: true,
+        dualWriteAllowed: true,
       },
     };
 
@@ -221,6 +232,7 @@ describe("Printer Core v3 Data Schema contract", () => {
       errors: [
         "plan-status-not-dry-run",
         "plan-activates-v3-writes",
+        "plan-allows-production-dual-write",
         "planned-write-unknown:unknownStore",
       ],
     });

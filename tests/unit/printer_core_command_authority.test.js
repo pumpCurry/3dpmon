@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1342 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-09 01:35:57
+ * @lastModified 2026-08-09 06:52:36
  */
 
 import { describe, expect, it } from "vitest";
@@ -108,6 +108,10 @@ describe("Printer Core v3 command authority contract", () => {
           enabled: true,
         },
       },
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:1",
+      commandCorrelation: true,
     });
 
     expect(before.completed).toBe(false);
@@ -126,6 +130,69 @@ describe("Printer Core v3 command authority contract", () => {
         },
       ],
     });
+    expect(after.postCommandObservation).toMatchObject({
+      required: true,
+      confirmed: true,
+      sequenceAdvanced: true,
+      sameSession: true,
+      commandCorrelated: true,
+    });
+  });
+
+  it("transport errorではexpected-stateが一致してもcompletedにしない", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      expectedState: {
+        path: "print.stateLabel",
+        expected: "printing",
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "transport-error",
+      observedState: {
+        print: {
+          stateLabel: "printing",
+        },
+      },
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:1",
+      commandCorrelation: true,
+    });
+
+    expect(result.transportAccepted).toBe(false);
+    expect(result.confirmation.confirmed).toBe(true);
+    expect(result.completed).toBe(false);
+  });
+
+  it("command前から成立していたexpected-stateは完了証拠にしない", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      expectedState: {
+        path: "print.stateLabel",
+        expected: "printing",
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "acknowledged",
+      observedState: {
+        print: {
+          stateLabel: "printing",
+        },
+      },
+      sentSequence: 10,
+      observedSequence: 10,
+      observedSessionId: "session:1",
+      commandCorrelation: true,
+    });
+
+    expect(result.transportAccepted).toBe(true);
+    expect(result.confirmation.confirmed).toBe(true);
+    expect(result.postCommandObservation).toMatchObject({
+      confirmed: false,
+      reason: "sequence-not-advanced",
+    });
+    expect(result.completed).toBe(false);
   });
 
   it("未知commandは安全側で非冪等side-effect扱いにする", () => {

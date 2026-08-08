@@ -3,9 +3,9 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1344 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 01:42:18
+ * @lastModified 2026-08-09 06:52:36
  */
 
 import { describe, expect, it } from "vitest";
@@ -39,7 +39,8 @@ describe("Printer Core v3 PrintPlan", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
-      toolAlias: "T1C",
+      toolId: 0,
+      protocolToolAlias: "T1C",
       materialSourceId: "cfs:1:slot:2",
       createdAt: "2026-08-09T01:38:47.000+09:00",
       preflight: {
@@ -59,6 +60,8 @@ describe("Printer Core v3 PrintPlan", () => {
       },
       toolAssignments: [
         {
+          toolId: 0,
+          protocolToolAlias: "T1C",
           toolAlias: "T1C",
           materialSourceId: "cfs:1:slot:2",
           confidence: "operator-confirmed",
@@ -113,7 +116,8 @@ describe("Printer Core v3 PrintPlan", () => {
         materialSourceIds: ["cfs:1:slot:2"],
         toolAssignments: [
           {
-            toolAlias: "T1A",
+            toolId: 0,
+            protocolToolAlias: "T1A",
             materialSourceId: "cfs:1:slot:2",
           },
         ],
@@ -150,12 +154,13 @@ describe("Printer Core v3 PrintPlan", () => {
       asset: {
         path: "/mnt/UDISK/printer_data/gcodes/4color_benchy.gcode",
         fileName: "4color_benchy.gcode",
+        toolCount: 4,
       },
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3", protocol: { colorMatch: "T1A" } },
-        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2", protocol: { colorMatch: "T1B" } },
-        { toolAlias: "T1C", materialSourceId: "cfs:1:slot:1", protocol: { colorMatch: "T1C" } },
-        { toolAlias: "T1D", materialSourceId: "cfs:1:slot:0", protocol: { colorMatch: "T1D" } },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3", protocol: { colorMatch: "T1A" } },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2", protocol: { colorMatch: "T1B" } },
+        { toolId: 2, protocolToolAlias: "T1C", materialSourceId: "cfs:1:slot:1", protocol: { colorMatch: "T1C" } },
+        { toolId: 3, protocolToolAlias: "T1D", materialSourceId: "cfs:1:slot:0", protocol: { colorMatch: "T1D" } },
       ],
       colorMatchPolicy: {
         mode: "explicit-tool-assignment",
@@ -184,14 +189,15 @@ describe("Printer Core v3 PrintPlan", () => {
       },
     });
     expect(plan.toolAssignments.map((assignment) => [
-      assignment.toolAlias,
+      assignment.toolId,
+      assignment.protocolToolAlias,
       assignment.materialSourceId,
       assignment.order,
     ])).toEqual([
-      ["T1A", "cfs:1:slot:3", 0],
-      ["T1B", "cfs:1:slot:2", 1],
-      ["T1C", "cfs:1:slot:1", 2],
-      ["T1D", "cfs:1:slot:0", 3],
+      [0, "T1A", "cfs:1:slot:3", 0],
+      [1, "T1B", "cfs:1:slot:2", 1],
+      [2, "T1C", "cfs:1:slot:1", 2],
+      [3, "T1D", "cfs:1:slot:0", 3],
     ]);
     expect(validatePrintPlan(plan)).toEqual({ ok: true, errors: [] });
   });
@@ -201,18 +207,29 @@ describe("Printer Core v3 PrintPlan", () => {
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
-        { toolAlias: "T1B", materialSourceId: "" },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "" },
       ],
     })).toThrow("materialSourceId");
     expect(() => createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:1" },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 0, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
       ],
-    })).toThrow("duplicate-tool-alias");
+    })).toThrow("duplicate-tool-id");
+    expect(() => createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset(),
+        toolCount: 4,
+      },
+      toolAssignments: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
+      ],
+    })).toThrow("asset-tool-count-assignment-mismatch");
   });
 
   it("CFSマルチカラーPrintPlan由来のcommandもcontract-onlyで送信しない", () => {
@@ -220,10 +237,11 @@ describe("Printer Core v3 PrintPlan", () => {
       deviceId: "serial:k2pro",
       asset: {
         path: "/mnt/UDISK/printer_data/gcodes/4color_benchy.gcode",
+        toolCount: 2,
       },
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
-        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
       ],
     });
     const request = createPrintStartCommandRequestFromPlan(plan, {

@@ -42,6 +42,21 @@ If any check is false or missing, the readiness report is blocked and
 `assertPrinterCoreV3UiCutoverAllowed()` throws. A cutover plan can still be
 created, but it keeps legacy authority in place.
 
+Except for live shadow diff cleanliness derived from runtime shadow records,
+readiness evidence must be trusted source records:
+
+```text
+{
+  value: true,
+  source: "<expected-authority-source>",
+  trusted: true
+}
+```
+
+Plain caller-supplied booleans do not satisfy readiness. This prevents tests,
+review helpers, or feature flags from making cutover ready without evidence from
+the relevant repository/authority/certification source.
+
 Even when all checks pass, the generated plan requires explicit manual cutover
 and still does not retire legacy paths automatically.
 

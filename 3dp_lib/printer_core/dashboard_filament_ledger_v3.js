@@ -15,11 +15,12 @@
  * 【公開関数一覧】
  * - {@link createJobMaterialSegmentsFromPrintPlan}：PrintPlan から material segment 候補を生成
  * - {@link createFilamentLedgerEventsFromSegments}：segment から ledger event 候補を生成
+ * - {@link createFilamentLedgerCorrectionEvent}：既存 consumption event の correction 候補を生成
  * - {@link validateJobMaterialSegments}：segment 配列の整合性を検査
  *
- * @version 1.390.1345 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since   1.390.1345 (PR #432)
- * @lastModified 2026-08-09 01:46:31
+ * @lastModified 2026-08-09 06:52:36
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 repository activation 後に append-only store へ接続する
@@ -141,7 +142,7 @@ function readUsageEntryLength(entry) {
  * assignment に対応する usage entry を探す。
  *
  * 【詳細説明】
- * - toolAlias を優先し、無い場合は materialSourceId で照合する。
+ * - logical toolId を優先し、無い場合は protocolToolAlias / materialSourceId で照合する。
  *
  * @private
  * @param {object} assignment - PrintPlan tool assignment
@@ -149,9 +150,11 @@ function readUsageEntryLength(entry) {
  * @returns {object|null} 対応 usage entry
  */
 function findUsageForAssignment(assignment, materialUsages) {
-  const toolAlias = String(assignment?.toolAlias || "").trim();
+  const toolId = Number(assignment?.toolId);
+  const protocolToolAlias = String(assignment?.protocolToolAlias || assignment?.toolAlias || "").trim();
   const materialSourceId = String(assignment?.materialSourceId || "").trim();
-  return materialUsages.find((entry) => String(entry?.toolAlias || "").trim() === toolAlias) ||
+  return materialUsages.find((entry) => Number(entry?.toolId) === toolId) ||
+    materialUsages.find((entry) => String(entry?.protocolToolAlias || entry?.toolAlias || "").trim() === protocolToolAlias) ||
     materialUsages.find((entry) => String(entry?.materialSourceId || "").trim() === materialSourceId) ||
     null;
 }
@@ -240,7 +243,7 @@ export function createJobMaterialSegmentsFromPrintPlan(plan, observation = {}) {
     const segmentId = createPrinterCoreV3DeterministicId("job-material-segment", [
       printJobId,
       plan.printPlanId,
-      assignment.toolAlias,
+      assignment.toolId,
       assignment.materialSourceId,
     ]);
     return {
@@ -250,7 +253,9 @@ export function createJobMaterialSegmentsFromPrintPlan(plan, observation = {}) {
       printPlanId: plan.printPlanId,
       deviceId: plan.deviceId,
       planKind: plan.planKind,
-      toolAlias: assignment.toolAlias,
+      toolId: assignment.toolId,
+      protocolToolAlias: assignment.protocolToolAlias,
+      toolAlias: assignment.protocolToolAlias,
       materialSourceId: assignment.materialSourceId,
       spoolId,
       order: Number.isFinite(Number(assignment.order)) ? Number(assignment.order) : index,
@@ -286,10 +291,16 @@ export function validateJobMaterialSegments(segments) {
   }
   const ids = new Set();
   for (const segment of segments) {
-    for (const key of ["segmentId", "printJobId", "printPlanId", "deviceId", "toolAlias", "materialSourceId"]) {
+    for (const key of ["segmentId", "printJobId", "printPlanId", "deviceId", "materialSourceId"]) {
       if (!String(segment?.[key] || "").trim()) {
         errors.push(`missing-${key}`);
       }
+    }
+    if (!Number.isInteger(Number(segment?.toolId)) || Number(segment.toolId) < 0) {
+      errors.push("missing-toolId");
+    }
+    if (!String(segment?.protocolToolAlias || segment?.toolAlias || "").trim()) {
+      errors.push("missing-protocolToolAlias");
     }
     if (ids.has(segment?.segmentId)) {
       errors.push("duplicate-segmentId");
@@ -336,9 +347,13 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
       schemaVersion: PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION,
       ledgerEventId: createPrinterCoreV3DeterministicId("filament-ledger-event", [
         segment.segmentId,
-        segment.confidence,
-        segment.usedLengthMm,
+        "consumption",
+        1,
       ]),
+      consumptionIdentity: createPrinterCoreV3DeterministicId("filament-consumption", [
+        segment.segmentId,
+      ]),
+      eventRevision: 1,
       eventType: "material-consumption",
       printJobId: segment.printJobId,
       printPlanId: segment.printPlanId,
@@ -349,6 +364,9 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
       usedLengthMm: segment.usedLengthMm,
       confidence: segment.confidence,
       allocationMode: segment.allocationMode,
+      supersedesLedgerEventId: null,
+      correctsLedgerEventId: null,
+      deltaUsedLengthMm: null,
       createdAt: options.createdAt || segment.completedAt || null,
       authority: {
         mode: "candidate-only",
@@ -357,4 +375,63 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
       },
     };
   });
+}
+
+/**
+ * 既存 consumption event の correction event 候補を生成する。
+ *
+ * 【詳細説明】
+ * - estimated から exact へ更新する場合など、元 event を二重debitせず append-only に補正差分を表現する。
+ * - correction は元の `consumptionIdentity` を継承し、`deltaUsedLengthMm` に差分だけを持つ。
+ *
+ * @function createFilamentLedgerCorrectionEvent
+ * @param {object} originalEvent - 既存 consumption event
+ * @param {object} correctedSegment - 補正後の JobMaterialSegment
+ * @param {object=} options - correction 生成オプション
+ * @param {string=} options.createdAt - 作成時刻
+ * @returns {object} correction ledger event 候補
+ * @example
+ * const correction = createFilamentLedgerCorrectionEvent(originalEvent, correctedSegment);
+ */
+export function createFilamentLedgerCorrectionEvent(originalEvent, correctedSegment, options = {}) {
+  const validation = validateJobMaterialSegments([correctedSegment]);
+  if (!validation.ok) {
+    throw new TypeError(`Invalid corrected JobMaterialSegment: ${validation.errors.join(",")}`);
+  }
+  const originalUsed = normalizeUsedLengthMm(originalEvent?.usedLengthMm) ?? 0;
+  const correctedUsed = normalizeUsedLengthMm(correctedSegment.usedLengthMm) ?? 0;
+  const consumptionIdentity = originalEvent?.consumptionIdentity ||
+    createPrinterCoreV3DeterministicId("filament-consumption", [correctedSegment.segmentId]);
+  const revision = Math.max(2, Number(originalEvent?.eventRevision || 1) + 1);
+  return {
+    schemaVersion: PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION,
+    ledgerEventId: createPrinterCoreV3DeterministicId("filament-ledger-event", [
+      consumptionIdentity,
+      "correction",
+      revision,
+      correctedUsed,
+      correctedSegment.confidence,
+    ]),
+    consumptionIdentity,
+    eventRevision: revision,
+    eventType: "material-consumption-correction",
+    printJobId: correctedSegment.printJobId,
+    printPlanId: correctedSegment.printPlanId,
+    segmentId: correctedSegment.segmentId,
+    deviceId: correctedSegment.deviceId,
+    materialSourceId: correctedSegment.materialSourceId,
+    spoolId: correctedSegment.spoolId,
+    usedLengthMm: correctedUsed,
+    confidence: correctedSegment.confidence,
+    allocationMode: correctedSegment.allocationMode,
+    supersedesLedgerEventId: originalEvent?.ledgerEventId || null,
+    correctsLedgerEventId: originalEvent?.ledgerEventId || null,
+    deltaUsedLengthMm: correctedUsed - originalUsed,
+    createdAt: options.createdAt || correctedSegment.completedAt || null,
+    authority: {
+      mode: "candidate-only",
+      canAppend: false,
+      canDebitRemaining: Boolean(correctedSegment.spoolId) && correctedSegment.confidence !== "unknown",
+    },
+  };
 }

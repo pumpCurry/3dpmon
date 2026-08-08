@@ -3,9 +3,9 @@
  * @description
  * - Gate 18 で UI authority cutover を fail-closed に保つことを検証する。
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1347 (PR #432)
  * @since 1.390.1346 (PR #432)
- * @lastModified 2026-08-09 01:50:25
+ * @lastModified 2026-08-09 06:52:36
  */
 
 import { describe, expect, it } from "vitest";
@@ -26,15 +26,15 @@ import {
  */
 function createReadyEvidence() {
   return {
-    schemaV3WritesActive: true,
-    normalizedStateCertified: true,
-    k2PrintSemanticsCertified: true,
-    commandAuthorityCanSend: true,
-    printPlanCanStart: true,
-    materialProviderCanDriveLedger: true,
-    filamentLedgerCanAppend: true,
-    liveShadowDiffsClean: true,
-    legacyFallbackAvailable: true,
+    schemaV3WritesActive: { value: true, source: "schema-v3-repository", trusted: true },
+    normalizedStateCertified: { value: true, source: "normalized-state-certification-registry", trusted: true },
+    k2PrintSemanticsCertified: { value: true, source: "k2-print-semantics-certification-registry", trusted: true },
+    commandAuthorityCanSend: { value: true, source: "command-dispatcher-authority", trusted: true },
+    printPlanCanStart: { value: true, source: "print-plan-authority", trusted: true },
+    materialProviderCanDriveLedger: { value: true, source: "material-provider-authority", trusted: true },
+    filamentLedgerCanAppend: { value: true, source: "filament-ledger-repository", trusted: true },
+    liveShadowDiffsClean: { value: true, source: "live-shadow-runtime", trusted: true },
+    legacyFallbackAvailable: { value: true, source: "legacy-fallback-registry", trusted: true },
   };
 }
 
@@ -42,12 +42,12 @@ describe("Printer Core v3 UI cutover readiness", () => {
   it("現Gateのcontract-only状態ではcutoverをブロックする", () => {
     const report = createPrinterCoreV3CutoverReadinessReport({
       evidence: {
-        schemaV3WritesActive: false,
-        normalizedStateCertified: true,
-        commandAuthorityCanSend: false,
-        printPlanCanStart: false,
-        filamentLedgerCanAppend: false,
-        legacyFallbackAvailable: true,
+        schemaV3WritesActive: { value: false, source: "schema-v3-repository", trusted: true },
+        normalizedStateCertified: { value: true, source: "normalized-state-certification-registry", trusted: true },
+        commandAuthorityCanSend: { value: false, source: "command-dispatcher-authority", trusted: true },
+        printPlanCanStart: { value: false, source: "print-plan-authority", trusted: true },
+        filamentLedgerCanAppend: { value: false, source: "filament-ledger-repository", trusted: true },
+        legacyFallbackAvailable: { value: true, source: "legacy-fallback-registry", trusted: true },
       },
       createdAt: "2026-08-09T01:50:25.000+09:00",
     });
@@ -74,7 +74,7 @@ describe("Printer Core v3 UI cutover readiness", () => {
     const report = createPrinterCoreV3CutoverReadinessReport({
       evidence: {
         ...createReadyEvidence(),
-        liveShadowDiffsClean: false,
+        liveShadowDiffsClean: { value: false, source: "live-shadow-runtime", trusted: true },
       },
       shadowRecords: [
         { observedFrames: 12, diffCount: 0, state: "matched" },
@@ -83,7 +83,11 @@ describe("Printer Core v3 UI cutover readiness", () => {
     });
 
     expect(report.ready).toBe(true);
-    expect(report.evidence.liveShadowDiffsClean).toBe(true);
+    expect(report.evidence.liveShadowDiffsClean).toEqual({
+      value: true,
+      source: "live-shadow-runtime",
+      trusted: true,
+    });
     expect(assertPrinterCoreV3UiCutoverAllowed(report)).toBe(true);
   });
 
@@ -91,7 +95,7 @@ describe("Printer Core v3 UI cutover readiness", () => {
     const report = createPrinterCoreV3CutoverReadinessReport({
       evidence: {
         ...createReadyEvidence(),
-        liveShadowDiffsClean: false,
+        liveShadowDiffsClean: { value: false, source: "live-shadow-runtime", trusted: true },
       },
       shadowRecords: [
         { observedFrames: 12, diffCount: 1, state: "matched" },
@@ -128,6 +132,35 @@ describe("Printer Core v3 UI cutover readiness", () => {
       ["switch-command-route-to-printer-core", true, false],
       ["switch-ledger-route-to-printer-core", true, false],
       ["retire-legacy-raw-json-ui-paths", true, false],
+    ]);
+  });
+
+  it("caller supplied booleanだけではtrusted readinessにならない", () => {
+    const report = createPrinterCoreV3CutoverReadinessReport({
+      evidence: {
+        schemaV3WritesActive: true,
+        normalizedStateCertified: true,
+        k2PrintSemanticsCertified: true,
+        commandAuthorityCanSend: true,
+        printPlanCanStart: true,
+        materialProviderCanDriveLedger: true,
+        filamentLedgerCanAppend: true,
+        liveShadowDiffsClean: true,
+        legacyFallbackAvailable: true,
+      },
+    });
+
+    expect(report.ready).toBe(false);
+    expect(report.blockers).toEqual([
+      "schema-v3-writes-not-active",
+      "normalized-state-not-certified",
+      "k2-print-semantics-not-certified",
+      "command-authority-send-disabled",
+      "print-plan-start-disabled",
+      "material-provider-ledger-disabled",
+      "filament-ledger-append-disabled",
+      "live-shadow-diffs-not-clean",
+      "legacy-fallback-not-available",
     ]);
   });
 

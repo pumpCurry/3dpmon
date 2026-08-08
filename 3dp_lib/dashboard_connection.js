@@ -32,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1338 (PR #432)
+* @version 1.390.1347 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 01:55:00
+* @lastModified 2026-08-09 06:52:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -166,6 +166,85 @@ function _addConnectionTarget(dest) {
 }
 
 /**
+ * 接続先targetのstrong identity seedを取得する。
+ *
+ * 【詳細説明】
+ * - hostname は人間向け/legacy識別子であり、同名の別機体が存在し得る。
+ * - DHCP統合は serial/stableMachineId 由来の deviceIdSeed が一致する場合だけ許可する。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @returns {string} strong identity seed。無い場合は空文字
+ */
+function _getConnectionTargetStrongIdentitySeed(target) {
+  return String(
+    target?.printerCoreV3Identity?.deviceIdSeed ||
+    target?.printerCoreV3DeviceFingerprint?.deviceIdSeed ||
+    ""
+  ).trim();
+}
+
+/**
+ * hostname一致の旧targetをDHCP統合してよいか判定する。
+ *
+ * 【詳細説明】
+ * - 旧実装は hostname を安定IDとして扱っていたが、K2/K1ともhostname重複や変更があり得る。
+ * - strong identity seed が双方にあり一致する場合だけ同一機体のendpoint移動とみなす。
+ * - strong evidence が無い場合は旧targetを保持し、設定転送や削除を行わない。
+ *
+ * @private
+ * @param {object} currentTarget - 現在の connection target
+ * @param {object} staleTarget - hostname が一致した旧 connection target
+ * @returns {boolean} DHCP統合してよい場合 true
+ */
+function _canMergeConnectionTargetsByStrongIdentity(currentTarget, staleTarget) {
+  const currentSeed = _getConnectionTargetStrongIdentitySeed(currentTarget);
+  const staleSeed = _getConnectionTargetStrongIdentitySeed(staleTarget);
+  return !!(currentSeed && staleSeed && currentSeed === staleSeed);
+}
+
+/**
+ * strong identity が一致する hostname 重複targetを現在targetへ統合する。
+ *
+ * 【詳細説明】
+ * - hostname解決はidentity記録より先に走るため、初回判定時にcurrent側のstrong seedが未取得のことがある。
+ * - identity記録後にも同じhelperを呼び、同一serialのDHCP移動だけを遅延統合できるようにする。
+ *
+ * @private
+ * @param {object} currentTarget - 現在の connection target
+ * @param {string} hostname - 解決済み hostname
+ * @returns {boolean} 1件以上統合した場合 true
+ */
+function _mergeStrongHostnameDuplicateTargets(currentTarget, hostname) {
+  const targets = monitorData.appSettings.connectionTargets ??= [];
+  const staleEntries = targets.filter(e =>
+    e !== currentTarget && e.hostname === hostname && e.dest !== currentTarget.dest
+  );
+  let merged = false;
+  for (const stale of staleEntries) {
+    if (!_canMergeConnectionTargetsByStrongIdentity(currentTarget, stale)) {
+      stale.identityStatus = stale.identityStatus || "hostname-duplicate-pending-identity";
+      currentTarget.identityStatus = currentTarget.identityStatus || "hostname-duplicate-pending-identity";
+      console.warn(`[_setConnectionTargetHostname] hostname重複をstrong identity未確認のため統合保留: hostname="${hostname}", current="${currentTarget.dest}", stale="${stale.dest}"`);
+      continue;
+    }
+    const idx = targets.indexOf(stale);
+    if (idx >= 0) {
+      console.info(`[_setConnectionTargetHostname] DHCP統合(strong identity一致): 旧エントリ dest="${stale.dest}" (hostname="${hostname}") を削除 → 現在の dest="${currentTarget.dest}" に統合`);
+      if (stale.color && !currentTarget.color) currentTarget.color = stale.color;
+      if (stale.label && !currentTarget.label) currentTarget.label = stale.label;
+      if (stale.cameraPort && !currentTarget.cameraPort) currentTarget.cameraPort = stale.cameraPort;
+      if (stale.httpPort && !currentTarget.httpPort) currentTarget.httpPort = stale.httpPort;
+      transferPrinterCoreV3IdentityRecords(currentTarget, stale);
+      targets.splice(idx, 1);
+      if (currentTarget.identityStatus === "hostname-duplicate-pending-identity") delete currentTarget.identityStatus;
+      merged = true;
+    }
+  }
+  return merged;
+}
+
+/**
  * 接続先設定にホスト名を紐づける。
  * ホスト名解決後に呼び出してラベル表示等に利用する。
  *
@@ -179,27 +258,10 @@ function _setConnectionTargetHostname(dest, hostname) {
   if (!t) return;
   if (t.hostname === hostname && t.dest === dest) return; // 変更なし
 
-  // ★ DHCP対策: 同じ hostname を持つ旧エントリ（異なるdest）があれば統合
-  //   hostname は機器の安定ID。dest(IP:PORT) は DHCP で変わりうる。
-  //   旧IPのエントリを削除し、現在のIPに統合する。
-  const staleEntries = targets.filter(e =>
-    e !== t && e.hostname === hostname && e.dest !== dest
-  );
-  if (staleEntries.length > 0) {
-    for (const stale of staleEntries) {
-      const idx = targets.indexOf(stale);
-      if (idx >= 0) {
-        console.info(`[_setConnectionTargetHostname] DHCP統合: 旧エントリ dest="${stale.dest}" (hostname="${hostname}") を削除 → 現在の dest="${dest}" に統合`);
-        // 旧エントリの設定（色、ラベル等）を現在エントリに引き継ぎ
-        if (stale.color && !t.color) t.color = stale.color;
-        if (stale.label && !t.label) t.label = stale.label;
-        if (stale.cameraPort && !t.cameraPort) t.cameraPort = stale.cameraPort;
-        if (stale.httpPort && !t.httpPort) t.httpPort = stale.httpPort;
-        transferPrinterCoreV3IdentityRecords(t, stale);
-        targets.splice(idx, 1);
-      }
-    }
-  }
+  // ★ DHCP対策: 同じ hostname を持つ旧エントリ（異なるdest）があっても、
+  //   hostname だけでは統合しない。serial/stableMachineId 由来の strong identity が
+  //   双方で一致する場合だけ、同一機体の endpoint 移動として旧IPエントリを統合する。
+  _mergeStrongHostnameDuplicateTargets(t, hostname);
 
   if (t.hostname && t.hostname !== hostname) {
     // ★ 同じ dest(IP:PORT) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）。
@@ -1611,6 +1673,13 @@ function handleSocketMessage(event, host) {
     let st = getState(hostKey);
     st.latest = data;
     const printerCoreV3Identity = _recordPrinterCoreV3Identity(hostKey, data);
+    const resolvedTarget = _findConnectionTarget(st.dest || hostKey);
+    if (resolvedTarget?.hostname) {
+      const merged = _mergeStrongHostnameDuplicateTargets(resolvedTarget, resolvedTarget.hostname);
+      if (merged) {
+        saveUnifiedStorage();
+      }
+    }
 
     // ★ currentHostname / restoreLegacyStoredData / cleanupLegacy は廃止済み
     //   per-host 処理は processData の _initializedHosts で管理

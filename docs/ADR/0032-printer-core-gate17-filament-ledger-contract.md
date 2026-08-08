@@ -47,6 +47,11 @@ Rules:
   gate
 - `canDebitRemaining = true` is only possible when a segment has `spoolId`,
   positive numeric usage, and non-unknown confidence
+- consumption events carry a stable `consumptionIdentity` derived from the
+  segment, so an estimated-to-exact update does not create a second independent
+  positive consumption identity
+- corrections use `material-consumption-correction`, `correctsLedgerEventId`,
+  `supersedesLedgerEventId`, and signed `deltaUsedLengthMm`
 
 ## Non-Goals
 
@@ -62,6 +67,9 @@ Gate 17 gives command/print authority a safe accounting boundary without
 promoting read-only CFS observations into confirmed spool usage. It also makes
 the dry-run style print failure observable: a job can produce unknown or zero
 segments instead of silently subtracting filament from the wrong spool.
+
+Later exact measurements should be appended as correction events rather than as
+additional independent consumption events for the same segment.
 
 Future gates can connect these candidates to Data Schema v3 repositories and to
 operator-confirmed spool mounts, but only after spool identity and material

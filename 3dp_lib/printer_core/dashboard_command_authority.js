@@ -19,9 +19,9 @@
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
  *
- * @version 1.390.1342 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-09 01:35:57
+ * @lastModified 2026-08-09 06:52:36
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -100,6 +100,21 @@ export const PRINTER_COMMAND_KIND_CONTRACTS = Object.freeze({
     expectedStateRequired: true,
   }),
 });
+
+/**
+ * command が transport level で受理されたとみなせる status。
+ *
+ * 【詳細説明】
+ * - `unknown`、`transport-error`、`transient-error` は expected-state が偶然一致しても完了扱いにしない。
+ *
+ * @constant {ReadonlySet<string>}
+ */
+const COMMAND_TRANSPORT_ACCEPTED_STATUSES = Object.freeze(new Set([
+  "accepted",
+  "acknowledged",
+  "ok",
+  "success",
+]));
 
 /**
  * JSON 互換値を deep clone する。
@@ -332,6 +347,54 @@ export function evaluateExpectedStateConfirmation(request, state) {
 }
 
 /**
+ * command 後の観測であることを検査する。
+ *
+ * 【詳細説明】
+ * - expected-state が一致しても、それが command 送信前から成立していた状態なら完了証拠にはならない。
+ * - Gate 14 contract では sequence/session/correlation を呼び出し側に明示させ、欠落時は fail closed にする。
+ *
+ * @private
+ * @param {object} request - command request
+ * @param {object=} options - result 生成オプション
+ * @param {number=} options.sentSequence - command 送信時の state sequence
+ * @param {number=} options.observedSequence - confirmation 観測時の state sequence
+ * @param {string=} options.observedSessionId - confirmation 観測の session ID
+ * @param {boolean=} options.commandCorrelation - command 固有の関連付けが確認できたか
+ * @returns {object} post-command observation 判定
+ */
+function evaluatePostCommandObservation(request, options = {}) {
+  if (!request?.expectedStateRequired) {
+    return {
+      required: false,
+      confirmed: true,
+      reason: "not-required",
+    };
+  }
+  const sentSequence = Number(options.sentSequence);
+  const observedSequence = Number(options.observedSequence);
+  const sequenceAdvanced = Number.isFinite(sentSequence) &&
+    Number.isFinite(observedSequence) &&
+    observedSequence > sentSequence;
+  const sameSession = !options.observedSessionId || options.observedSessionId === request.sessionId;
+  const commandCorrelated = options.commandCorrelation === true;
+  const missing = [];
+  if (!sequenceAdvanced) missing.push("sequence-not-advanced");
+  if (!sameSession) missing.push("session-mismatch");
+  if (!commandCorrelated) missing.push("command-correlation-missing");
+  return {
+    required: true,
+    confirmed: missing.length === 0,
+    sequenceAdvanced,
+    sameSession,
+    commandCorrelated,
+    sentSequence: Number.isFinite(sentSequence) ? sentSequence : null,
+    observedSequence: Number.isFinite(observedSequence) ? observedSequence : null,
+    observedSessionId: options.observedSessionId || null,
+    reason: missing.length ? missing.join(",") : "confirmed",
+  };
+}
+
+/**
  * Printer Core v3 command result を生成する。
  *
  * 【詳細説明】
@@ -345,6 +408,10 @@ export function evaluateExpectedStateConfirmation(request, state) {
  * @param {object=} options.response - transport response
  * @param {object=} options.error - error 情報
  * @param {object=} options.observedState - confirmation に使う NormalizedPrinterState
+ * @param {number=} options.sentSequence - command 送信時の state sequence
+ * @param {number=} options.observedSequence - confirmation 観測時の state sequence
+ * @param {string=} options.observedSessionId - confirmation 観測の session ID
+ * @param {boolean=} options.commandCorrelation - command 固有の関連付けが確認できたか
  * @param {string=} options.completedAt - 完了時刻 ISO 文字列
  * @returns {object} command result
  * @example
@@ -353,8 +420,11 @@ export function evaluateExpectedStateConfirmation(request, state) {
 export function createPrinterCommandResult(request, options = {}) {
   const confirmation = evaluateExpectedStateConfirmation(request, options.observedState);
   const status = options.status || "unknown";
-  const hasError = Boolean(options.error) || status === "failed" || status === "timeout";
-  const completed = !hasError && (!request.expectedStateRequired || confirmation.confirmed);
+  const transportAccepted = !options.error && COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(status);
+  const hasError = Boolean(options.error) || !transportAccepted;
+  const postCommandObservation = evaluatePostCommandObservation(request, options);
+  const completed = transportAccepted &&
+    (!request.expectedStateRequired || (confirmation.confirmed && postCommandObservation.confirmed));
   return {
     schemaVersion: PRINTER_COMMAND_SCHEMA_VERSION,
     commandId: request.commandId,
@@ -362,10 +432,12 @@ export function createPrinterCommandResult(request, options = {}) {
     sessionId: request.sessionId,
     commandKind: request.commandKind,
     status,
+    transportAccepted,
     completed,
     response: cloneJsonValue(options.response || null),
     error: cloneJsonValue(options.error || null),
     confirmation,
+    postCommandObservation,
     completedAt: options.completedAt || null,
   };
 }

@@ -17,9 +17,9 @@
  * - {@link createPrinterCoreV3UiCutoverPlan}：UI cutover plan を生成
  * - {@link assertPrinterCoreV3UiCutoverAllowed}：cutover 許可条件を検査
  *
- * @version 1.390.1346 (PR #432)
+ * @version 1.390.1347 (PR #432)
  * @since   1.390.1346 (PR #432)
- * @lastModified 2026-08-09 01:50:25
+ * @lastModified 2026-08-09 06:52:36
  * -----------------------------------------------------------
  * @todo
  * - 実 UI の raw JSON 参照を NormalizedState 参照へ段階的に差し替える
@@ -94,18 +94,47 @@ const REQUIRED_CUTOVER_CHECKS = Object.freeze([
 ]);
 
 /**
- * boolean値を安全に読む。
+ * readiness evidence の信頼済み source 定義。
  *
  * 【詳細説明】
- * - evidence object は手動reviewやdry-runから渡るため、truthy 判定ではなく true のみを合格にする。
+ * - arbitrary boolean injection で ready にならないよう、各 evidence は authority source を明示する。
+ *
+ * @constant {object}
+ */
+const TRUSTED_EVIDENCE_SOURCES = Object.freeze({
+  schemaV3WritesActive: "schema-v3-repository",
+  normalizedStateCertified: "normalized-state-certification-registry",
+  k2PrintSemanticsCertified: "k2-print-semantics-certification-registry",
+  commandAuthorityCanSend: "command-dispatcher-authority",
+  printPlanCanStart: "print-plan-authority",
+  materialProviderCanDriveLedger: "material-provider-authority",
+  filamentLedgerCanAppend: "filament-ledger-repository",
+  liveShadowDiffsClean: "live-shadow-runtime",
+  legacyFallbackAvailable: "legacy-fallback-registry",
+});
+
+/**
+ * trusted readiness evidence を安全に読む。
+ *
+ * 【詳細説明】
+ * - evidence entry は `{ value: true, source, trusted: true }` の形だけを合格にする。
+ * - boolean の `true` は review memo としては読めても authority 昇格証拠にはしない。
  *
  * @private
  * @param {object} evidence - readiness evidence
  * @param {string} key - check key
  * @returns {boolean} true の場合だけ合格
  */
-function evidenceIsTrue(evidence, key) {
-  return evidence?.[key] === true;
+function evidenceIsTrustedTrue(evidence, key) {
+  const entry = evidence?.[key];
+  const expectedSource = TRUSTED_EVIDENCE_SOURCES[key];
+  return Boolean(
+    entry &&
+    typeof entry === "object" &&
+    entry.value === true &&
+    entry.trusted === true &&
+    entry.source === expectedSource
+  );
 }
 
 /**
@@ -160,8 +189,12 @@ function deriveLiveShadowDiffsClean(shadowRecords) {
  */
 function normalizeCutoverEvidence(options = {}) {
   const evidence = cloneJsonValue(options.evidence || {});
-  if (evidence.liveShadowDiffsClean !== true && Array.isArray(options.shadowRecords)) {
-    evidence.liveShadowDiffsClean = deriveLiveShadowDiffsClean(options.shadowRecords);
+  if (!evidenceIsTrustedTrue(evidence, "liveShadowDiffsClean") && Array.isArray(options.shadowRecords)) {
+    evidence.liveShadowDiffsClean = {
+      value: deriveLiveShadowDiffsClean(options.shadowRecords),
+      source: TRUSTED_EVIDENCE_SOURCES.liveShadowDiffsClean,
+      trusted: true,
+    };
   }
   return evidence;
 }
@@ -175,7 +208,7 @@ function normalizeCutoverEvidence(options = {}) {
  *
  * @function createPrinterCoreV3CutoverReadinessReport
  * @param {object=} options - report 生成オプション
- * @param {object=} options.evidence - authority readiness evidence
+ * @param {object=} options.evidence - authority readiness evidence。各値は `{value, source, trusted}` 形式
  * @param {Array<object>=} options.shadowRecords - live shadow runtime record 配列
  * @param {string=} options.createdAt - report 作成時刻
  * @returns {object} cutover readiness report
@@ -186,7 +219,7 @@ export function createPrinterCoreV3CutoverReadinessReport(options = {}) {
   const evidence = normalizeCutoverEvidence(options);
   const checks = REQUIRED_CUTOVER_CHECKS.map((definition) => ({
     key: definition.key,
-    passed: evidenceIsTrue(evidence, definition.key),
+    passed: evidenceIsTrustedTrue(evidence, definition.key),
     blocker: definition.blocker,
     description: definition.description,
   }));

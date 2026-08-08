@@ -267,6 +267,35 @@ describe("Printer Core v3 identity dry-run", () => {
     ]);
   });
 
+  it("同一hostnameでもstrong identityが異なる別endpointはDHCP統合しない", () => {
+    mod.connectWithType("203.0.113.10:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Duplicate",
+      model: "F012",
+      sn: "K2PRO-SERIAL-A",
+      mac: "AA1122334455",
+    }), "203.0.113.10");
+
+    mod.connectWithType("203.0.113.11:9999", "creality-k1");
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Duplicate",
+      model: "F012",
+      sn: "K2PRO-SERIAL-B",
+      mac: "66778899AABB",
+    }), "203.0.113.11");
+
+    const targets = dataMock.monitorData.appSettings.connectionTargets;
+    expect(targets.map((target) => target.dest).sort()).toEqual([
+      "203.0.113.10:9999",
+      "203.0.113.11:9999",
+    ]);
+    expect(targets.every((target) => target.hostname === "K2Pro-Duplicate")).toBe(true);
+    expect(targets.map((target) => target.printerCoreV3Identity.deviceIdSeed).sort()).toEqual([
+      "serial:k2pro-serial-a",
+      "serial:k2pro-serial-b",
+    ]);
+  });
+
   it("接続時のHTTP /infoをPrinter Core v3 identity evidenceへ統合する", async () => {
     window.fetch = vi.fn(async () => ({
       ok: true,

@@ -29,6 +29,15 @@ retry safety
   sending anything to a printer.
 - Add `createPrinterCommandResult()` to bind transport outcome and
   expected-state confirmation.
+- A result can complete only when the transport status is accepted/acknowledged
+  and, for expected-state commands, the observation is explicitly post-command:
+
+```text
+observed sequence > sent sequence
+same session
+command-specific correlation present
+```
+
 - Add `evaluateExpectedStateConfirmation()` for NormalizedState checks.
 - Add `shouldRetryPrinterCommand()` with fail-safe side-effect behavior.
 - Unknown commands are treated as:
@@ -77,3 +86,7 @@ non-idempotent side-effect command + timeout != blind retry
 Expected-state confirmation also gives the later command authority a single
 place to decide whether a command was merely acknowledged or actually observed
 in the normalized printer state.
+
+Transport errors, transient errors, timeouts, failed statuses, and unknown
+statuses cannot become completed solely because the current normalized state
+matches the requested target state.

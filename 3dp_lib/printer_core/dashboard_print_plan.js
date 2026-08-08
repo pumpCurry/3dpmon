@@ -10,6 +10,7 @@
  * 【機能内容サマリ】
  * - 単色印刷でも明示 PrintPlan を生成する
  * - CFS/マルチカラー印刷の tool assignment を command 前に固定する
+ * - G-code logical toolId と Creality protocol alias を分離する
  * - G-code asset と material source の対応を command 前に固定する
  * - PrintPlan から contract-only print-start command request を生成する
  *
@@ -19,9 +20,9 @@
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
  * - {@link createPrintStartCommandRequestFromPlan}：PrintPlan から print-start command request を生成
  *
- * @version 1.390.1344 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since   1.390.1343 (PR #432)
- * @lastModified 2026-08-09 01:42:18
+ * @lastModified 2026-08-09 06:52:36
  * -----------------------------------------------------------
  * @todo
  * - 実送信 protocol 生成へ拡張する
@@ -80,6 +81,54 @@ function requireNonEmptyString(value, name) {
 }
 
 /**
+ * logical tool ID を正規化する。
+ *
+ * 【詳細説明】
+ * - G-code 内の tool は数値 ID として扱い、Creality protocol の `T1A` などとは分離する。
+ *
+ * @private
+ * @param {*} value - tool ID 候補
+ * @param {number} fallback - fallback tool ID
+ * @returns {number} 正規化済み tool ID
+ * @throws {TypeError} 不正な tool ID の場合
+ */
+function normalizeToolId(value, fallback = 0) {
+  const raw = value === undefined || value === null || value === "" ? fallback : value;
+  const toolId = Number(raw);
+  if (!Number.isInteger(toolId) || toolId < 0) {
+    throw new TypeError("PrintPlan requires a non-negative integer toolId.");
+  }
+  return toolId;
+}
+
+/**
+ * asset の logical tool ID 配列を正規化する。
+ *
+ * 【詳細説明】
+ * - G-code analyzer が tool list を返す場合はその値を採用する。
+ * - toolCount だけがある場合は `0..toolCount-1` を生成する。
+ *
+ * @private
+ * @param {object} asset - G-code asset 候補
+ * @returns {{logicalTools: number[], toolCount: number}} logical tool 情報
+ */
+function normalizeAssetLogicalTools(asset) {
+  const explicitTools = Array.isArray(asset?.tools) ? asset.tools : null;
+  if (explicitTools && explicitTools.length > 0) {
+    const logicalTools = explicitTools.map((tool, index) => normalizeToolId(tool?.toolId ?? tool, index));
+    return {
+      logicalTools,
+      toolCount: logicalTools.length,
+    };
+  }
+  const toolCount = Math.max(1, Number(asset?.toolCount || 1) || 1);
+  return {
+    logicalTools: Array.from({ length: toolCount }, (_, index) => index),
+    toolCount,
+  };
+}
+
+/**
  * G-code asset 情報を正規化する。
  *
  * 【詳細説明】
@@ -89,16 +138,17 @@ function requireNonEmptyString(value, name) {
  * @param {object} asset - G-code asset 候補
  * @returns {object} 正規化済み asset
  */
-function normalizeGcodeAsset(asset, options = {}) {
+function normalizeGcodeAsset(asset) {
   const path = requireNonEmptyString(asset?.path || asset?.filePath || asset?.filename, "asset.path");
   const fileName = String(asset?.fileName || asset?.name || path.split(/[\\/]/u).pop() || path).trim();
-  const toolCount = Math.max(1, Number(options.toolCount || asset?.toolCount || 1) || 1);
+  const toolInfo = normalizeAssetLogicalTools(asset);
   return {
     assetId: asset?.assetId || createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName]),
     path,
     fileName,
     fileMd5: asset?.fileMd5 || null,
-    toolCount,
+    toolCount: toolInfo.toolCount,
+    logicalTools: toolInfo.logicalTools,
   };
 }
 
@@ -111,19 +161,23 @@ function normalizeGcodeAsset(asset, options = {}) {
  *
  * @private
  * @param {object} options - assignment 生成オプション
- * @param {string} options.toolAlias - G-code tool alias
+ * @param {number|string} options.toolId - G-code logical tool ID
+ * @param {string=} options.protocolToolAlias - Creality protocol/source alias
  * @param {string} options.materialSourceId - material source ID
  * @param {string=} options.spoolId - material source に装着済みの spool ID
  * @param {number=} index - assignment index
  * @returns {object} tool assignment
  */
 function createToolAssignment(options, index = 0) {
-  const toolAlias = requireNonEmptyString(options.toolAlias || "T1A", "toolAlias");
+  const toolId = normalizeToolId(options.toolId, index);
+  const protocolToolAlias = requireNonEmptyString(options.protocolToolAlias || options.toolAlias || `T1${String.fromCharCode(65 + toolId)}`, "protocolToolAlias");
   const materialSourceId = requireNonEmptyString(options.materialSourceId, "materialSourceId");
   const spoolId = String(options.spoolId || "").trim() || null;
   return {
-    assignmentId: createPrinterCoreV3DeterministicId("tool-assignment", [toolAlias, materialSourceId]),
-    toolAlias,
+    assignmentId: createPrinterCoreV3DeterministicId("tool-assignment", [toolId, protocolToolAlias, materialSourceId]),
+    toolId,
+    protocolToolAlias,
+    toolAlias: protocolToolAlias,
     materialSourceId,
     spoolId,
     confidence: options.confidence || "operator-confirmed",
@@ -167,10 +221,12 @@ function collectMaterialSourceIds(assignments) {
  */
 export function createSingleColorPrintPlan(options = {}) {
   const deviceId = requireNonEmptyString(options.deviceId, "deviceId");
-  const asset = normalizeGcodeAsset(options.asset || {}, { toolCount: 1 });
+  const asset = normalizeGcodeAsset(options.asset || {});
   const assignment = createToolAssignment({
-    toolAlias: options.toolAlias || "T1A",
+    toolId: options.toolId ?? 0,
+    protocolToolAlias: options.protocolToolAlias || options.toolAlias || "T1A",
     materialSourceId: options.materialSourceId,
+    spoolId: options.spoolId,
     confidence: options.confidence,
   });
   const printPlanId = options.printPlanId || createPrinterCoreV3DeterministicId("print-plan", [
@@ -214,7 +270,7 @@ export function createSingleColorPrintPlan(options = {}) {
  * @param {object} options - PrintPlan 生成オプション
  * @param {string} options.deviceId - 物理 device ID
  * @param {object} options.asset - G-code asset
- * @param {object[]} options.toolAssignments - tool alias と material source ID の対応
+ * @param {object[]} options.toolAssignments - logical tool ID と material source ID の対応
  * @param {string=} options.createdAt - 作成時刻 ISO 文字列
  * @param {object=} options.preflight - preflight evidence
  * @param {object=} options.colorMatchPolicy - colorMatch/assignment 方針
@@ -229,7 +285,7 @@ export function createMulticolorCfsPrintPlan(options = {}) {
     throw new TypeError("Multicolor CFS PrintPlan requires at least two toolAssignments.");
   }
   const assignments = inputAssignments.map((assignment, index) => createToolAssignment(assignment, index));
-  const asset = normalizeGcodeAsset(options.asset || {}, { toolCount: assignments.length });
+  const asset = normalizeGcodeAsset(options.asset || {});
   const materialSourceIds = collectMaterialSourceIds(assignments);
   const printPlanId = options.printPlanId || createPrinterCoreV3DeterministicId("print-plan", [
     deviceId,
@@ -269,7 +325,7 @@ export function createMulticolorCfsPrintPlan(options = {}) {
  *
  * 【詳細説明】
  * - 単色では assignment 1件、CFS/マルチカラーでは assignment 2件以上を要求する。
- * - 各 tool alias は重複を拒否し、material source ID は必ず command 前に明示させる。
+ * - 各 logical tool ID は重複を拒否し、material source ID は必ず command 前に明示させる。
  *
  * @function validatePrintPlan
  * @param {object|null|undefined} plan - PrintPlan
@@ -304,16 +360,20 @@ export function validatePrintPlan(plan) {
   if (plan.planKind === "multicolor-cfs" && assignments.length < 2) {
     errors.push("multicolor-tool-assignment-count-invalid");
   }
-  const toolAliases = new Set();
+  const toolIds = new Set();
   for (const assignment of assignments) {
-    const toolAlias = String(assignment?.toolAlias || "").trim();
+    const toolId = Number(assignment?.toolId);
+    const protocolToolAlias = String(assignment?.protocolToolAlias || assignment?.toolAlias || "").trim();
     const materialSourceId = String(assignment?.materialSourceId || "").trim();
-    if (!toolAlias) {
-      errors.push("missing-tool-alias");
-    } else if (toolAliases.has(toolAlias)) {
-      errors.push("duplicate-tool-alias");
+    if (!Number.isInteger(toolId) || toolId < 0) {
+      errors.push("missing-tool-id");
+    } else if (toolIds.has(toolId)) {
+      errors.push("duplicate-tool-id");
     } else {
-      toolAliases.add(toolAlias);
+      toolIds.add(toolId);
+    }
+    if (!protocolToolAlias) {
+      errors.push("missing-protocol-tool-alias");
     }
     if (!materialSourceId) {
       errors.push("missing-material-source-id");
@@ -322,8 +382,16 @@ export function validatePrintPlan(plan) {
   if (plan.planKind === "multicolor-cfs" && (!plan.colorMatchPolicy || typeof plan.colorMatchPolicy !== "object")) {
     errors.push("missing-color-match-policy");
   }
+  const assetLogicalTools = Array.isArray(plan.asset?.logicalTools)
+    ? plan.asset.logicalTools.map((toolId) => Number(toolId))
+    : Array.from({ length: Number(plan.asset?.toolCount) || 0 }, (_, index) => index);
   if (plan.asset?.toolCount && assignments.length > 0 && Number(plan.asset.toolCount) !== assignments.length) {
     errors.push("asset-tool-count-assignment-mismatch");
+  }
+  for (const toolId of assetLogicalTools) {
+    if (!toolIds.has(toolId)) {
+      errors.push("missing-gcode-tool-assignment");
+    }
   }
   const expectedMaterialSourceIds = collectMaterialSourceIds(assignments);
   if (plan.planKind === "single-color" && (!Array.isArray(plan.materialSourceIds) || plan.materialSourceIds.length !== 1)) {

@@ -20,9 +20,9 @@
  * - {@link createPrinterCoreV3MigrationPlan}：旧 monitorData の migration dry-run plan を生成
  * - {@link validatePrinterCoreV3MigrationPlan}：migration dry-run plan の整合性を検査
  *
- * @version 1.390.1341 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since   1.390.1341 (PR #432)
- * @lastModified 2026-08-09 01:31:56
+ * @lastModified 2026-08-09 06:52:36
  * -----------------------------------------------------------
  * @todo
  * - dashboard_storage_idb.js の version upgrade と v3 repository 実装へ接続する
@@ -96,38 +96,88 @@ function cloneJsonValue(value) {
 }
 
 /**
- * migration key へ使える文字列へ正規化する。
+ * ID prefix へ使える短い label 文字列へ正規化する。
  *
  * 【詳細説明】
- * - deterministic ID の namespace と part は、空白や制御文字を避けた ASCII に寄せる。
+ * - この値は可読 prefix 専用であり、同一性判定や digest 入力には使わない。
+ * - `/` と `?` のような重要な違いを潰さないよう、hash 入力は別途 canonical JSON を使う。
  *
  * @private
  * @param {*} value - ID 構成要素
- * @returns {string} 正規化済み文字列
+ * @returns {string} 正規化済み label
  */
-function normalizeIdPart(value) {
+function normalizeIdLabel(value) {
   const raw = value === null || value === undefined ? "null" : String(value);
   const normalized = raw.trim().toLowerCase().replace(/[^a-z0-9._:-]+/giu, "-");
   return normalized || "empty";
 }
 
 /**
+ * deterministic ID の digest 入力を lossless に正規化する。
+ *
+ * 【詳細説明】
+ * - 文字列は trim/lowercase で従来の安定性を維持するが、記号や空白は置換せず JSON として保持する。
+ * - object/array は stable stringify に通し、同じ論理値が同じ digest になるようにする。
+ *
+ * @private
+ * @param {*} value - ID 構成要素
+ * @returns {*} canonical digest input
+ */
+function canonicalizeIdPart(value) {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeIdPart);
+  }
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort()) {
+      result[key] = canonicalizeIdPart(value[key]);
+    }
+    return result;
+  }
+  return value === undefined ? null : value;
+}
+
+/**
  * 32bit FNV-1a hash を16進文字列として返す。
  *
  * 【詳細説明】
- * - migration dry-run の軽量 checksum 用であり、暗号学的な秘匿や署名には使わない。
+ * - 128bit digest の lane として使う非暗号 hash。秘匿や署名には使わない。
  *
  * @private
  * @param {string} text - hash 対象文字列
+ * @param {number} seed - lane 用 seed
  * @returns {string} 8桁16進 hash
  */
-function hashString32(text) {
-  let hash = 0x811c9dc5;
+function hashString32(text, seed = 0x811c9dc5) {
+  let hash = seed >>> 0;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * 128bit相当の deterministic digest を16進文字列として返す。
+ *
+ * 【詳細説明】
+ * - 4つの異なる seed の FNV-1a lane を連結し、32bit単独より birthday collision risk を下げる。
+ * - crypto 依存を避けるため非暗号 hash のままだが、Data Schema v3 の deterministic key には十分保守的な幅にする。
+ *
+ * @private
+ * @param {string} text - hash 対象文字列
+ * @returns {string} 32桁16進 digest
+ */
+function hashString128(text) {
+  return [
+    hashString32(text, 0x811c9dc5),
+    hashString32(`1:${text}`, 0x9e3779b9),
+    hashString32(`2:${text}`, 0x85ebca6b),
+    hashString32(`3:${text}`, 0xc2b2ae35),
+  ].join("");
 }
 
 /**
@@ -171,10 +221,11 @@ export function stableStringifyPrinterCoreV3Value(value) {
  * const id = createPrinterCoreV3DeterministicId("device", ["serial", "SN001"]);
  */
 export function createPrinterCoreV3DeterministicId(namespace, parts = []) {
-  const normalizedNamespace = normalizeIdPart(namespace);
-  const normalizedParts = (Array.isArray(parts) ? parts : [parts]).map(normalizeIdPart);
-  const source = stableStringifyPrinterCoreV3Value([normalizedNamespace, ...normalizedParts]);
-  return `${normalizedNamespace}:${hashString32(source)}`;
+  const normalizedNamespace = normalizeIdLabel(namespace);
+  const canonicalNamespace = canonicalizeIdPart(namespace);
+  const canonicalParts = (Array.isArray(parts) ? parts : [parts]).map(canonicalizeIdPart);
+  const source = stableStringifyPrinterCoreV3Value([canonicalNamespace, ...canonicalParts]);
+  return `${normalizedNamespace}:${hashString128(source)}`;
 }
 
 /**
@@ -260,7 +311,7 @@ function countLegacyDeviceEndpoints(targets) {
 export function createPrinterCoreV3MigrationPlan(legacyData, options = {}) {
   const source = legacyData && typeof legacyData === "object" ? legacyData : {};
   const canonicalSource = stableStringifyPrinterCoreV3Value(source);
-  const sourceChecksum = `fnv1a32:${hashString32(canonicalSource)}`;
+  const sourceChecksum = `fnv1a128:${hashString128(canonicalSource)}`;
   const machines = source.machines && typeof source.machines === "object" ? source.machines : {};
   const connectionTargets = Array.isArray(source.appSettings?.connectionTargets)
     ? source.appSettings.connectionTargets
@@ -321,7 +372,8 @@ export function createPrinterCoreV3MigrationPlan(legacyData, options = {}) {
       protocolCaptures: 0,
     },
     invariants: {
-      dualWriteAllowed: true,
+      dualWriteAllowed: false,
+      developmentDualRouteAllowed: true,
       activateV3Writes: false,
       preserveLegacyData: true,
       migrationIsDeterministic: true,
@@ -360,6 +412,9 @@ export function validatePrinterCoreV3MigrationPlan(plan) {
   }
   if (plan.invariants?.activateV3Writes !== false) {
     errors.push("plan-activates-v3-writes");
+  }
+  if (plan.invariants?.dualWriteAllowed !== false) {
+    errors.push("plan-allows-production-dual-write");
   }
   const storeNames = new Set(getPrinterCoreV3StoreNames());
   const plannedWriteNames = new Set(Object.keys(plan.plannedWrites || {}));

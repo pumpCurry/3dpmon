@@ -3,14 +3,15 @@
  * @description
  * - Gate 17 で PrintPlan 由来の material segment と ledger event 候補を dry-run 検証する。
  *
- * @version 1.390.1345 (PR #432)
+ * @version 1.390.1346 (PR #432)
  * @since 1.390.1345 (PR #432)
- * @lastModified 2026-08-09 01:46:31
+ * @lastModified 2026-08-09 06:52:36
  */
 
 import { describe, expect, it } from "vitest";
 import {
   createFilamentLedgerEventsFromSegments,
+  createFilamentLedgerCorrectionEvent,
   createJobMaterialSegmentsFromPrintPlan,
   validateJobMaterialSegments,
 } from "../../3dp_lib/printer_core/dashboard_filament_ledger_v3.js";
@@ -41,10 +42,11 @@ describe("Printer Core v3 filament ledger contract", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createAsset("benchy.gcode"),
-      toolAlias: "T1C",
+      toolId: 0,
+      protocolToolAlias: "T1C",
       materialSourceId: "cfs:1:slot:2",
+      spoolId: "spool:silver",
     });
-    plan.toolAssignments[0].spoolId = "spool:silver";
     const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
       printJobId: "job:benchy",
       totalUsedLengthMm: 1234.5,
@@ -56,7 +58,8 @@ describe("Printer Core v3 filament ledger contract", () => {
     expect(segments[0]).toMatchObject({
       printJobId: "job:benchy",
       printPlanId: plan.printPlanId,
-      toolAlias: "T1C",
+      toolId: 0,
+      protocolToolAlias: "T1C",
       materialSourceId: "cfs:1:slot:2",
       spoolId: "spool:silver",
       usedLengthMm: 1234.5,
@@ -73,48 +76,55 @@ describe("Printer Core v3 filament ledger contract", () => {
   it("CFSマルチカラーではper-tool実測を各segmentへ反映する", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
-      asset: createAsset("4color_benchy.gcode"),
+      asset: {
+        ...createAsset("4color_benchy.gcode"),
+        toolCount: 4,
+      },
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3", spoolId: "spool:red" },
-        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2", spoolId: "spool:green" },
-        { toolAlias: "T1C", materialSourceId: "cfs:1:slot:1", spoolId: "spool:silver" },
-        { toolAlias: "T1D", materialSourceId: "cfs:1:slot:0", spoolId: "spool:black" },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3", spoolId: "spool:red" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2", spoolId: "spool:green" },
+        { toolId: 2, protocolToolAlias: "T1C", materialSourceId: "cfs:1:slot:1", spoolId: "spool:silver" },
+        { toolId: 3, protocolToolAlias: "T1D", materialSourceId: "cfs:1:slot:0", spoolId: "spool:black" },
       ],
     });
     const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
       printJobId: "job:4color",
       materialUsages: [
-        { toolAlias: "T1A", usedLengthMm: 100, confidence: "exact" },
-        { toolAlias: "T1B", usedLengthMm: 200, confidence: "exact" },
-        { toolAlias: "T1C", usedLengthMm: 300, confidence: "exact" },
-        { toolAlias: "T1D", usedLengthMm: 400, confidence: "exact" },
+        { toolId: 0, protocolToolAlias: "T1A", usedLengthMm: 100, confidence: "exact" },
+        { toolId: 1, protocolToolAlias: "T1B", usedLengthMm: 200, confidence: "exact" },
+        { toolId: 2, protocolToolAlias: "T1C", usedLengthMm: 300, confidence: "exact" },
+        { toolId: 3, protocolToolAlias: "T1D", usedLengthMm: 400, confidence: "exact" },
       ],
     });
 
     expect(segments.map((segment) => [
-      segment.toolAlias,
+      segment.toolId,
+      segment.protocolToolAlias,
       segment.materialSourceId,
       segment.spoolId,
       segment.usedLengthMm,
       segment.confidence,
       segment.allocationMode,
     ])).toEqual([
-      ["T1A", "cfs:1:slot:3", "spool:red", 100, "exact", "observed-per-material"],
-      ["T1B", "cfs:1:slot:2", "spool:green", 200, "exact", "observed-per-material"],
-      ["T1C", "cfs:1:slot:1", "spool:silver", 300, "exact", "observed-per-material"],
-      ["T1D", "cfs:1:slot:0", "spool:black", 400, "exact", "observed-per-material"],
+      [0, "T1A", "cfs:1:slot:3", "spool:red", 100, "exact", "observed-per-material"],
+      [1, "T1B", "cfs:1:slot:2", "spool:green", 200, "exact", "observed-per-material"],
+      [2, "T1C", "cfs:1:slot:1", "spool:silver", 300, "exact", "observed-per-material"],
+      [3, "T1D", "cfs:1:slot:0", "spool:black", 400, "exact", "observed-per-material"],
     ]);
   });
 
   it("CFSマルチカラーで総消費しか無い場合はunknownにして等分配しない", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
-      asset: createAsset("4color_benchy.gcode"),
+      asset: {
+        ...createAsset("4color_benchy.gcode"),
+        toolCount: 4,
+      },
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
-        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
-        { toolAlias: "T1C", materialSourceId: "cfs:1:slot:1" },
-        { toolAlias: "T1D", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
+        { toolId: 2, protocolToolAlias: "T1C", materialSourceId: "cfs:1:slot:1" },
+        { toolId: 3, protocolToolAlias: "T1D", materialSourceId: "cfs:1:slot:0" },
       ],
     });
     const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
@@ -140,8 +150,8 @@ describe("Printer Core v3 filament ledger contract", () => {
       deviceId: "serial:k2pro",
       asset: createAsset("benchy.gcode"),
       materialSourceId: "cfs:1:slot:2",
+      spoolId: "spool:silver",
     });
-    plan.toolAssignments[0].spoolId = "spool:silver";
     const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
       printJobId: "job:benchy",
       totalUsedLengthMm: 1234.5,
@@ -168,13 +178,54 @@ describe("Printer Core v3 filament ledger contract", () => {
     });
   });
 
+  it("同じsegmentのestimatedからexactへの更新はcorrection eventで表現する", () => {
+    const plan = createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createAsset("benchy.gcode"),
+      materialSourceId: "cfs:1:slot:2",
+      spoolId: "spool:silver",
+    });
+    const estimated = createJobMaterialSegmentsFromPrintPlan(plan, {
+      printJobId: "job:correction",
+    });
+    estimated[0].usedLengthMm = 1000;
+    estimated[0].confidence = "estimated";
+    estimated[0].allocationMode = "plan-estimated";
+    const exact = createJobMaterialSegmentsFromPrintPlan(plan, {
+      printJobId: "job:correction",
+      totalUsedLengthMm: 1032,
+      confidence: "exact",
+    });
+    const originalEvent = createFilamentLedgerEventsFromSegments(estimated)[0];
+    const correction = createFilamentLedgerCorrectionEvent(originalEvent, exact[0]);
+
+    expect(createFilamentLedgerEventsFromSegments(exact)[0].ledgerEventId).toBe(originalEvent.ledgerEventId);
+    expect(correction).toMatchObject({
+      eventType: "material-consumption-correction",
+      consumptionIdentity: originalEvent.consumptionIdentity,
+      supersedesLedgerEventId: originalEvent.ledgerEventId,
+      correctsLedgerEventId: originalEvent.ledgerEventId,
+      usedLengthMm: 1032,
+      deltaUsedLengthMm: 32,
+      confidence: "exact",
+      authority: {
+        mode: "candidate-only",
+        canAppend: false,
+        canDebitRemaining: true,
+      },
+    });
+  });
+
   it("spoolIdが無いsegmentやunknown segmentは残量debit不可のまま残す", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
-      asset: createAsset("4color_benchy.gcode"),
+      asset: {
+        ...createAsset("4color_benchy.gcode"),
+        toolCount: 2,
+      },
       toolAssignments: [
-        { toolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
-        { toolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
       ],
     });
     const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
@@ -194,7 +245,8 @@ describe("Printer Core v3 filament ledger contract", () => {
         printJobId: "",
         printPlanId: "",
         deviceId: "",
-        toolAlias: "",
+        toolId: -1,
+        protocolToolAlias: "",
         materialSourceId: "",
         confidence: "certain",
         usedLengthMm: -1,
@@ -206,8 +258,9 @@ describe("Printer Core v3 filament ledger contract", () => {
         "missing-printJobId",
         "missing-printPlanId",
         "missing-deviceId",
-        "missing-toolAlias",
         "missing-materialSourceId",
+        "missing-toolId",
+        "missing-protocolToolAlias",
         "invalid-confidence",
         "invalid-usedLengthMm",
       ],
