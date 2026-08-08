@@ -56,7 +56,21 @@ boxsInfo
   does not use the summary as authority; it is review evidence for the captured
   fixture.
 
-- The recommended capture shape is:
+- The recommended capture shape is the dedicated read-only Gate 10 wrapper:
+
+```text
+node scripts/capture_k2_cfs_topology.mjs \
+  --host <DEVICE_IP> \
+  --out tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-topology \
+  --duration-ms <entire-cfs-observation-window>
+```
+
+  The wrapper uses the generic recorder with K2+CFS metadata, `--send-boxsinfo`,
+  `--require-http`, `--require-ws`, `--require-boxsinfo`,
+  `--interactive-markers`, `--minimum-events 20`, and failed-capture retention
+  enabled by default.
+
+- The equivalent generic recorder command is:
 
 ```text
 node scripts/capture_protocol_fixture.mjs \
