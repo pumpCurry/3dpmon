@@ -86,6 +86,16 @@ progress look print-like, but the CFS does not physically feed filament. This
 gate therefore records `opGcodeFile` as command evidence only, not as a safe K2
 CFS print-start contract.
 
+After Gate 9.5, `scripts/capture_k2_benchy_print.mjs` refuses to send this
+command for a CFS attachment unless the operator passes:
+
+```text
+--allow-unsafe-opgcodefile-cfs-start
+```
+
+That override is reserved for reproducing negative evidence. It is not the
+planned CFS print-start path.
+
 ## OrcaSlicer / CrealityPrint Source Cross-Check
 
 Public source review was performed against:
@@ -129,3 +139,7 @@ evidence, K2 `retGcodeFileInfo2` file-list shape, status deltas, and CFS
 topology snapshots. This is strong input for later command-authority design, but
 the authority cutover remains gated on explicit command/result contracts and
 Data Schema v3 material-source mapping.
+
+Any future CFS-safe command path must build a PrintPlan with explicit material
+assignment, then confirm selected-source evidence after start before it is
+allowed to affect command authority or filament-ledger state.

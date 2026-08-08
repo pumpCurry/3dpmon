@@ -14,6 +14,8 @@ authority, or filament ledger writes are enabled.
 ## Decision
 
 - Add a scenario analyzer profile named `k2-cfs-print-selection`.
+- Harden `scripts/capture_k2_benchy_print.mjs` so CFS attachments do not send
+  `opGcodeFile` by default.
 - The profile is intentionally scenario-name agnostic so it can be applied to
   Gate 9/10 fixtures and future manually started prints.
 - The profile requires:
@@ -48,6 +50,17 @@ timeline[]
 ```text
 cfs-selected-source-missing
 ```
+
+- The Gate 9 capture helper now requires an explicit negative-evidence override
+  before sending `opGcodeFile` with a CFS attachment:
+
+```text
+--allow-unsafe-opgcodefile-cfs-start
+```
+
+Without that flag, it records preflight evidence and an
+`operator-print-start-blocked` marker instead of starting a dry-run-like CFS
+print.
 
 ## Source Evidence
 
@@ -97,3 +110,8 @@ The Gate 9 Benchy command capture remains useful negative evidence: it can pass
 the command-capture profile while failing the CFS selected-source profile. That
 distinction prevents later command authority from mistaking protocol completion
 for physical filament delivery.
+
+Future reproduction of that negative evidence is still possible, but it must be
+intentional via `--allow-unsafe-opgcodefile-cfs-start`. Normal CFS command
+captures should wait for a PrintPlan path that can express explicit material
+assignment and selected-source confirmation.

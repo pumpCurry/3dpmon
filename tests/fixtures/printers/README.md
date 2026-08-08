@@ -81,6 +81,9 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
   A print lifecycle that completes with no selected CFS source is retained as
   negative command evidence, but must not be treated as proof that filament was
   physically fed.
+- `scripts/capture_k2_benchy_print.mjs` blocks CFS `opGcodeFile` starts by
+  default. Use `--allow-unsafe-opgcodefile-cfs-start` only when intentionally
+  reproducing the negative dry-run-like command evidence from Gate 9.
 
 Fixture rules:
 

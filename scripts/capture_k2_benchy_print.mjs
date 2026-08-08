@@ -9,23 +9,26 @@
  *
  * 【機能内容サマリ】
  * - K2 Pro Combo + CFS のローカル G-code 一覧と CFS 状態を取得
- * - Benchy 候補を選択して印刷開始 command を1回だけ送信
+ * - Benchy 候補を選択し、明示許可がある場合だけ印刷開始 command を1回だけ送信
  * - 印刷開始から完了までの WS9999 状態遷移を ProtocolRecorder fixture として保存
  *
  * 【公開関数一覧】
  * - {@link parseArgs}：CLI 引数を解析
  * - {@link normalizeK2GcodeFiles}：K2 file list payload を配列へ正規化
+ * - {@link isCfsAttachmentLabel}：attachment label が CFS 系か判定
+ * - {@link shouldBlockUnsafeOpgcodeFileCfsStart}：CFS の unsafe `opGcodeFile` 開始をブロックするか判定
  * - {@link selectK2GcodeFile}：印刷対象の G-code を選択
  * - {@link summarizeK2ToolSource}：CFS tool alias に対応する材料 source を要約
  * - {@link captureK2BenchyPrint}：実機印刷と通信キャプチャを実行
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1323 (PR #432)
+ * @version 1.390.1325 (PR #432)
  * @since   1.390.1323 (PR #432)
- * @lastModified 2026-08-08 13:24:36
+ * @lastModified 2026-08-08 19:59:12
  * -----------------------------------------------------------
  * @todo
  * - K2 の公式 tool assignment 付き印刷 command が確定したら、slot override を dry-run PrintPlan 経由へ移す
+ * - `opGcodeFile` 単独開始は CFS selected source を作らない negative evidence 再現時だけ許可する
  */
 
 import path from "node:path";
@@ -70,6 +73,8 @@ Options:
   --poll-ms <number>              Periodic read-only probe interval. Default: 60000.
   --keep-failed                   Write failed captures under tmp/failed-captures.
   --allow-mismatched-tool         Continue when selected file match does not target --preferred-tool.
+  --allow-unsafe-opgcodefile-cfs-start
+                                  Send opGcodeFile even when attachment is CFS. For negative evidence only.
   --notes <text>                  Operator notes for metadata.
   --help                          Show this help.
 `;
@@ -101,6 +106,7 @@ export function parseArgs(argv) {
     pollMs: 60000,
     keepFailed: false,
     allowMismatchedTool: false,
+    allowUnsafeOpgcodeFileCfsStart: false,
     notes: "",
   };
 
@@ -116,6 +122,10 @@ export function parseArgs(argv) {
     }
     if (arg === "--allow-mismatched-tool") {
       options.allowMismatchedTool = true;
+      continue;
+    }
+    if (arg === "--allow-unsafe-opgcodefile-cfs-start") {
+      options.allowUnsafeOpgcodeFileCfsStart = true;
       continue;
     }
     const next = argv[index + 1];
@@ -161,6 +171,42 @@ export function parseArgs(argv) {
     throw new Error("--poll-ms must be a number >= 5000");
   }
   return options;
+}
+
+/**
+ * attachment 名が CFS 系を示すか判定する。
+ *
+ * 【詳細説明】
+ * - Gate 9.5 で `opGcodeFile` 単独開始が CFS slot を選択しないまま印刷状態だけ進めることを確認した。
+ * - 実行系の安全境界では CFS / CFS-C / Combo などの表記ゆれを CFS 系として扱い、外部リール専用の再現実験と区別する。
+ *
+ * @function isCfsAttachmentLabel
+ * @param {string|null|undefined} attachment - metadata に記録する attachment label
+ * @returns {boolean} CFS 系 attachment と見なす場合 true
+ * @example
+ * const isCfs = isCfsAttachmentLabel("CFS");
+ */
+export function isCfsAttachmentLabel(attachment) {
+  return /\bcfs\b/i.test(String(attachment || ""));
+}
+
+/**
+ * `opGcodeFile` 単独開始を CFS 対象でブロックすべきか判定する。
+ *
+ * 【詳細説明】
+ * - `opGcodeFile` は K2 の状態遷移 evidence を得るには有用だが、CFS の `selected` evidence を伴わない。
+ * - CFS 対象では明示フラグなしに送信せず、negative evidence の再現や外部リール検証だけを意図的に許可する。
+ *
+ * @function shouldBlockUnsafeOpgcodeFileCfsStart
+ * @param {Object} options - capture オプション
+ * @param {string=} options.attachment - attachment label
+ * @param {boolean=} options.allowUnsafeOpgcodeFileCfsStart - 明示許可フラグ
+ * @returns {boolean} 送信をブロックすべき場合 true
+ * @example
+ * const blocked = shouldBlockUnsafeOpgcodeFileCfsStart({ attachment: "CFS" });
+ */
+export function shouldBlockUnsafeOpgcodeFileCfsStart(options) {
+  return isCfsAttachmentLabel(options?.attachment) && !options?.allowUnsafeOpgcodeFileCfsStart;
 }
 
 /**
@@ -437,7 +483,9 @@ async function writeFailedCapture(fixture, captureId) {
  *
  * 【詳細説明】
  * - 開始前に `/info`、`boxsInfo`、`reqHistory`、`reqGcodeFile` を取得する。
- * - 選択した G-code に対して `set { opGcodeFile: "printprt:<path>" }` を1回だけ送る。
+ * - CFS attachment では既定で `opGcodeFile` 単独開始を拒否する。
+ * - `--allow-unsafe-opgcodefile-cfs-start` がある場合だけ、選択した G-code に対して
+ *   `set { opGcodeFile: "printprt:<path>" }` を1回だけ送る。
  * - 完了検出後に history/boxsInfo を再取得し、fixture を保存する。
  *
  * @function captureK2BenchyPrint
@@ -652,6 +700,21 @@ export async function captureK2BenchyPrint(options) {
             finish(new Error(
               `selected file maps T1A to ${state.selectedFileMatchedTool}, not ${options.preferredTool}; ` +
               "rerun with --allow-mismatched-tool to capture the currently matched single-color Benchy",
+            ));
+            return;
+          }
+          if (shouldBlockUnsafeOpgcodeFileCfsStart(options)) {
+            addAutomationMarker("operator-print-start-blocked", {
+              reason: "unsafe-opgcodefile-cfs-start",
+              selectedFile: state.selectedFile?.name || path.basename(state.selectedFilePath),
+              selectedFilePath: state.selectedFilePath,
+              preferredTool: options.preferredTool,
+              selectedFileMatchedTool: state.selectedFileMatchedTool,
+              preferredToolSource: state.preferredToolSource,
+            });
+            finish(new Error(
+              "refusing to send opGcodeFile for CFS attachment without " +
+              "--allow-unsafe-opgcodefile-cfs-start; use selected-source evidence or a future PrintPlan command path",
             ));
             return;
           }

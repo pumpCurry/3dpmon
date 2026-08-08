@@ -7,9 +7,11 @@
 import { describe, expect, it } from "vitest";
 import {
   extractMatchedTool,
+  isCfsAttachmentLabel,
   normalizeK2GcodeFiles,
   parseArgs,
   selectK2GcodeFile,
+  shouldBlockUnsafeOpgcodeFileCfsStart,
   summarizeK2ToolSource,
 } from "../../scripts/capture_k2_benchy_print.mjs";
 
@@ -28,6 +30,40 @@ describe("capture_k2_benchy_print helpers", () => {
     expect(options.fileContains).toBe("bench");
     expect(options.preferredTool).toBe("T1C");
     expect(options.allowMismatchedTool).toBe(true);
+    expect(options.allowUnsafeOpgcodeFileCfsStart).toBe(false);
+  });
+
+  it("CFS attachment の opGcodeFile 単独開始は既定でブロックする", () => {
+    const options = parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/benchy",
+    ]);
+
+    expect(isCfsAttachmentLabel(options.attachment)).toBe(true);
+    expect(shouldBlockUnsafeOpgcodeFileCfsStart(options)).toBe(true);
+  });
+
+  it("negative evidence 再現用フラグがある場合だけ CFS attachment の opGcodeFile を許可する", () => {
+    const options = parseArgs([
+      "--host",
+      "192.0.2.21",
+      "--out",
+      "tmp/benchy",
+      "--allow-unsafe-opgcodefile-cfs-start",
+    ]);
+
+    expect(options.allowUnsafeOpgcodeFileCfsStart).toBe(true);
+    expect(shouldBlockUnsafeOpgcodeFileCfsStart(options)).toBe(false);
+  });
+
+  it("CFS ではない attachment では opGcodeFile capture をブロックしない", () => {
+    expect(isCfsAttachmentLabel("none")).toBe(false);
+    expect(shouldBlockUnsafeOpgcodeFileCfsStart({
+      attachment: "external-spool",
+      allowUnsafeOpgcodeFileCfsStart: false,
+    })).toBe(false);
   });
 
   it("K2 retGcodeFileInfo2 から単色 Benchy を 4color Benchy より優先して選ぶ", () => {
