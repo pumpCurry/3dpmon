@@ -50,10 +50,11 @@ cfsConnect
 boxsInfo
 ```
 
-  `boxsInfo` timeline entries are summarized to box/source counts, external
-  source endpoint counts, material source state, `same_material` groups, and
-  `colorMatch` assignment references. The analyzer does not use the summary as
-  authority; it is review evidence for the captured fixture.
+  `boxsInfo` timeline entries are summarized to box/source counts, box-unit
+  state, external source endpoint counts, material source state,
+  `same_material` groups, and `colorMatch` assignment references. The analyzer
+  does not use the summary as authority; it is review evidence for the captured
+  fixture.
 
 - The recommended capture shape is:
 

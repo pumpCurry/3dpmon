@@ -81,6 +81,8 @@ function k2CfsTopologyEvents() {
         id: 0,
         type: 1,
         state: 1,
+        boxTemp: 31,
+        humidity: 42,
         materials: [
           {
             id: 0,
@@ -94,6 +96,22 @@ function k2CfsTopologyEvents() {
             pressure: 0,
             percent: 100,
             state: 1,
+            selected: false,
+            editStatus: 0,
+            scrap: 0,
+          },
+          {
+            id: 1,
+            vendor: "",
+            type: "",
+            name: "",
+            rfid: "",
+            color: "",
+            minTemp: 0,
+            maxTemp: 0,
+            pressure: 0,
+            percent: 0,
+            state: 0,
             selected: false,
             editStatus: 0,
             scrap: 0,
@@ -556,11 +574,19 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.payloadTimeline.entries.map((entry) => entry.sequence)).toEqual([2, 4, 7, 9]);
     expect(report.payloadTimeline.entries[0].state.boxsInfo).toMatchObject({
       boxCount: 2,
-      materialSourceCount: 3,
+      materialSourceCount: 4,
       externalSourceEndpointCount: 1,
       cfsSourceCount: 2,
       sameMaterialGroupCount: 2,
       colorMatchCount: 1,
+    });
+    expect(report.payloadTimeline.entries[0].state.boxsInfo.boxes[0]).toMatchObject({
+      boxId: 0,
+      boxType: 1,
+      boxState: 1,
+      boxTemp: 31,
+      humidity: 42,
+      observedSlotCount: 2,
     });
     expect(report.payloadTimeline.entries[0].state.boxsInfo.sameMaterialGroups[0]).toMatchObject({
       materialCode: "000001",
@@ -568,7 +594,9 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
       materialType: "PLA",
       refs: [{ boxId: 1, materialId: 0 }],
     });
-    expect(report.payloadTimeline.entries.at(-1).state.boxsInfo.materialSources[1]).toMatchObject({
+    const changedPetgSource = report.payloadTimeline.entries.at(-1).state.boxsInfo.materialSources
+      .find((source) => source.boxId === 1 && source.materialId === 0);
+    expect(changedPetgSource).toMatchObject({
       boxId: 1,
       boxState: 1,
       materialId: 0,

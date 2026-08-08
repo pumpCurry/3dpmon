@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1321 (PR #432)
+ * @version 1.390.1322 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 09:23:03
+ * @lastModified 2026-08-08 11:00:52
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -570,12 +570,36 @@ function summarizeSameMaterialGroups(sameMaterial) {
 }
 
 /**
+ * CFS box を unit 単位の timeline summary 用へ正規化する。
+ *
+ * 【詳細説明】
+ * - `materialSources[]` は slot/source entry の一覧であり、CFS unit や external endpoint 自体の
+ *   個数とは一致しないため、box 単位の最小 summary を別に保持する。
+ * - 温湿度系 field は firmware 差分があり得るため、代表的な alias を nullable にまとめる。
+ *
+ * @private
+ * @param {object|null|undefined} box - raw `materialBoxs[]` entry
+ * @returns {object} box 単位の summary
+ */
+function summarizeBoxForTimeline(box) {
+  const materials = Array.isArray(box?.materials) ? box.materials : [];
+  return {
+    boxId: box?.id ?? null,
+    boxType: box?.type ?? null,
+    boxState: box?.state ?? null,
+    boxTemp: box?.boxTemp ?? box?.temp ?? box?.temperature ?? null,
+    humidity: box?.humidity ?? box?.boxHumidity ?? null,
+    observedSlotCount: materials.length,
+  };
+}
+
+/**
  * CFS `boxsInfo` を timeline 用 summary へ圧縮する。
  *
  * 【詳細説明】
  * - Gate 10 では slot 抜差し、material 変更、external spool、`colorMatch` の変化を見たい。
  * - raw `boxsInfo` 全体は大きく、serial や未確定 firmware field も含み得るため、比較に必要な
- *   box/material/same_material/colorMatch の最小 shape だけを保持する。
+ *   boxes/material/same_material/colorMatch の最小 shape だけを保持する。
  *
  * @private
  * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
@@ -584,6 +608,7 @@ function summarizeSameMaterialGroups(sameMaterial) {
 function summarizeBoxsInfoForTimeline(boxsInfo) {
   const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
   const colorMatch = Array.isArray(boxsInfo?.colorMatch) ? boxsInfo.colorMatch : [];
+  const boxSummaries = boxes.map((box) => summarizeBoxForTimeline(box));
   const materialSources = boxes.flatMap((box) => {
     const materials = Array.isArray(box?.materials) ? box.materials : [];
     return materials.map((material) => ({
@@ -607,12 +632,15 @@ function summarizeBoxsInfoForTimeline(boxsInfo) {
     }));
   });
   const sameMaterialGroups = summarizeSameMaterialGroups(boxsInfo?.same_material);
+  const externalSourceEndpointIds = boxes
+    .filter((box) => Number(box?.type) === 1)
+    .map((box, index) => box?.id ?? `missing-external-box-${index}`);
   return {
     enable: boxsInfo?.enable ?? null,
     boxCount: boxes.length,
     materialSourceCount: materialSources.length,
-    externalSourceEndpointCount: materialSources.filter((source) => source.boxType === 1).length,
-    cfsSourceCount: materialSources.filter((source) => source.boxType !== 1).length,
+    externalSourceEndpointCount: new Set(externalSourceEndpointIds).size,
+    cfsSourceCount: materialSources.filter((source) => Number(source.boxType) !== 1).length,
     sameMaterialGroupCount: sameMaterialGroups.length,
     colorMatchCount: colorMatch.length,
     colorMatch: colorMatch.map((assignment) => ({
@@ -620,6 +648,7 @@ function summarizeBoxsInfoForTimeline(boxsInfo) {
       boxId: assignment?.boxId ?? null,
       materialId: assignment?.materialId ?? null,
     })),
+    boxes: boxSummaries,
     materialSources,
     sameMaterialGroups,
   };
