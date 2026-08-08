@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1324 (PR #432)
+ * @version 1.390.1327 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 19:51:16
+ * @lastModified 2026-08-08 20:08:18
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -750,6 +750,107 @@ function formatMaterialSourceEvidenceId(source) {
 }
 
 /**
+ * marker source が print-start 境界として信頼できるか判定する。
+ *
+ * 【詳細説明】
+ * - selected-source guard は実際の開始操作後の証跡を見たいので、予定 marker だけの `scheduled-cli` は境界にしない。
+ * - 手入力観測の `stdin` と capture helper が実際に command 送信直前へ入れる `automation-cli` だけを許可する。
+ *
+ * @private
+ * @param {string|null|undefined} source - marker details.source
+ * @returns {boolean} trusted print-start source の場合 true
+ */
+function isTrustedPrintStartMarkerSource(source) {
+  return source === "stdin" || source === "automation-cli";
+}
+
+/**
+ * trusted `operator-print-start` marker を探す。
+ *
+ * 【詳細説明】
+ * - 複数ある場合は最初の trusted marker を境界として扱う。
+ * - 見つからない場合でも report に null を返し、必須 marker 判定側の failure と併せて診断できるようにする。
+ *
+ * @private
+ * @param {Array<object>} events - ProtocolRecorder event 一覧
+ * @returns {object|null} trusted print-start 境界
+ */
+function findTrustedPrintStartBoundary(events) {
+  const marker = events.find((event) => {
+    return event?.direction === "marker" &&
+      event?.name === "operator-print-start" &&
+      isTrustedPrintStartMarkerSource(event?.details?.source);
+  });
+  if (!marker) {
+    return null;
+  }
+  return {
+    sequence: marker.sequence ?? null,
+    atMs: Number.isFinite(marker.atMs) ? marker.atMs : null,
+    source: marker.details?.source ?? null,
+  };
+}
+
+/**
+ * event が trusted print-start 境界以後か判定する。
+ *
+ * 【詳細説明】
+ * - sequence が両方に存在する場合は sequence で比較する。
+ * - 古い fixture などで sequence が欠ける場合だけ atMs 比較にフォールバックする。
+ *
+ * @private
+ * @param {object} event - ProtocolRecorder event
+ * @param {object|null} boundary - trusted print-start 境界
+ * @returns {boolean} 境界以後の event の場合 true
+ */
+function isEventAfterTrustedPrintStart(event, boundary) {
+  if (!boundary) {
+    return false;
+  }
+  if (Number.isFinite(event?.sequence) && Number.isFinite(boundary.sequence)) {
+    return event.sequence > boundary.sequence;
+  }
+  if (Number.isFinite(event?.atMs) && Number.isFinite(boundary.atMs)) {
+    return event.atMs >= boundary.atMs;
+  }
+  return false;
+}
+
+/**
+ * material source が CFS slot を表すか判定する。
+ *
+ * 【詳細説明】
+ * - F012 実機では external spool が `boxType=1`、CFS slot が `boxType=0` として観測される。
+ * - CFS print-selection guard では external spool selected を CFS slot selection として扱わない。
+ *
+ * @private
+ * @param {object} source - material source summary
+ * @returns {boolean} CFS slot source の場合 true
+ */
+function isCfsSlotSource(source) {
+  return Number(source?.boxType) === 0;
+}
+
+/**
+ * material source が同じ frame の colorMatch に含まれるか判定する。
+ *
+ * 【詳細説明】
+ * - selected source が存在しても、explicit assignment と対応しない場合は CFS print plan の証跡として弱い。
+ * - boxId/materialId の数値一致だけを見て、tool alias 自体は review evidence として保持する。
+ *
+ * @private
+ * @param {object} source - material source summary
+ * @param {Array<object>} colorMatch - 同じ boxsInfo frame の colorMatch summary
+ * @returns {boolean} source と一致する assignment がある場合 true
+ */
+function sourceHasColorMatchAssignment(source, colorMatch) {
+  return (Array.isArray(colorMatch) ? colorMatch : []).some((assignment) => {
+    return Number(assignment?.boxId) === Number(source?.boxId) &&
+      Number(assignment?.materialId) === Number(source?.materialId);
+  });
+}
+
+/**
  * `boxsInfo` event から CFS selected 証跡を集計する。
  *
  * 【詳細説明】
@@ -764,6 +865,9 @@ function formatMaterialSourceEvidenceId(source) {
 function analyzeCfsSelectionEvidence(events) {
   const timeline = [];
   const selectedSourceIds = new Set();
+  const selectedSourceIdsAfterStart = new Set();
+  const qualifiedSelectedSourceIds = new Set();
+  const trustedPrintStart = findTrustedPrintStartBoundary(events);
 
   for (const event of events) {
     if (!event || event.direction !== "in") {
@@ -775,11 +879,22 @@ function analyzeCfsSelectionEvidence(events) {
     }
 
     const summary = summarizeBoxsInfoForTimeline(body.boxsInfo);
+    const afterTrustedPrintStart = isEventAfterTrustedPrintStart(event, trustedPrintStart);
+    const sourcesWithSelectedField = summary.materialSources.filter((source) => source.selected !== null);
     const selectedSources = summary.materialSources
       .filter((source) => isCfsMaterialSelected(source.selected))
       .map((source) => {
         const sourceId = formatMaterialSourceEvidenceId(source);
+        const cfsSlot = isCfsSlotSource(source);
+        const assignedByColorMatch = sourceHasColorMatchAssignment(source, summary.colorMatch);
+        const qualifiedForCfsPrint = afterTrustedPrintStart && cfsSlot && assignedByColorMatch;
         selectedSourceIds.add(sourceId);
+        if (afterTrustedPrintStart) {
+          selectedSourceIdsAfterStart.add(sourceId);
+        }
+        if (qualifiedForCfsPrint) {
+          qualifiedSelectedSourceIds.add(sourceId);
+        }
         return {
           sourceId,
           boxId: source.boxId,
@@ -788,6 +903,10 @@ function analyzeCfsSelectionEvidence(events) {
           materialType: source.materialType,
           color: source.color,
           percent: source.percent,
+          afterTrustedPrintStart,
+          cfsSlot,
+          assignedByColorMatch,
+          qualifiedForCfsPrint,
         };
       });
 
@@ -796,15 +915,31 @@ function analyzeCfsSelectionEvidence(events) {
       atMs: Number.isFinite(event.atMs) ? event.atMs : null,
       enable: summary.enable,
       colorMatchCount: summary.colorMatchCount,
+      afterTrustedPrintStart,
+      selectedFieldCount: sourcesWithSelectedField.length,
       selectedCount: selectedSources.length,
+      selectedCfsCount: selectedSources.filter((source) => source.cfsSlot).length,
+      qualifiedSelectedCount: selectedSources.filter((source) => source.qualifiedForCfsPrint).length,
       selectedSources,
     });
   }
 
   return {
     checked: timeline.length > 0,
+    trustedPrintStart,
+    observedSelectedField: timeline.some((entry) => entry.selectedFieldCount > 0),
     observedSelectedSource: selectedSourceIds.size > 0,
+    observedSelectedSourceAfterStart: selectedSourceIdsAfterStart.size > 0,
+    observedQualifiedCfsSelectionAfterStart: qualifiedSelectedSourceIds.size > 0,
     selectedSourceIds: [...selectedSourceIds],
+    selectedSourceIdsAfterStart: [...selectedSourceIdsAfterStart],
+    qualifiedSelectedSourceIds: [...qualifiedSelectedSourceIds],
+    firstSelectedAfterStart: timeline
+      .find((entry) => entry.afterTrustedPrintStart && entry.selectedCount > 0) || null,
+    firstQualifiedCfsSelectionAfterStart: timeline
+      .find((entry) => entry.afterTrustedPrintStart && entry.qualifiedSelectedCount > 0) || null,
+    framesWithSelectedField: timeline.filter((entry) => entry.selectedFieldCount > 0).length,
+    framesWithoutSelectedField: timeline.filter((entry) => entry.selectedFieldCount === 0).length,
     framesWithSelected: timeline.filter((entry) => entry.selectedCount > 0).length,
     framesWithoutSelected: timeline.filter((entry) => entry.selectedCount === 0).length,
     timeline,
@@ -1063,7 +1198,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
     failureReasons.push("fixture-event-count-mismatch");
   }
   if (requirements.requireCfsSelectedSource === true &&
-      !cfsSelection.observedSelectedSource) {
+      !cfsSelection.observedQualifiedCfsSelectionAfterStart) {
     failureReasons.push("cfs-selected-source-missing");
   }
 

@@ -159,6 +159,83 @@ function k2CfsSelectedPrintEvents() {
   ];
 }
 
+function k2CfsPreStartSelectedEvents() {
+  return [
+    ws(1, 100, {
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            materials: [
+              { id: 0, type: "PLA", color: "#ffffff", percent: 99, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+      },
+    }),
+    marker(2, 1000, "operator-print-start", { source: "automation-cli" }),
+    marker(3, 1200, "observed-printing", { source: "automation-cli" }),
+    ws(4, 1500, {
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            materials: [
+              { id: 0, type: "PLA", color: "#ffffff", percent: 99, selected: 0 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+      },
+    }),
+  ];
+}
+
+function k2ExternalSelectedPrintEvents() {
+  return [
+    marker(1, 0, "operator-print-start", { source: "automation-cli" }),
+    marker(2, 500, "observed-printing", { source: "automation-cli" }),
+    ws(3, 1000, {
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 0,
+            type: 1,
+            materials: [
+              { id: 0, type: "PLA", color: "#aaaaaa", percent: 88, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 0, materialId: 0 }],
+      },
+    }),
+  ];
+}
+
+function k2SelectedWithoutAssignmentEvents() {
+  return [
+    marker(1, 0, "operator-print-start", { source: "automation-cli" }),
+    marker(2, 500, "observed-printing", { source: "automation-cli" }),
+    ws(3, 1000, {
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            materials: [
+              { id: 0, type: "PLA", color: "#ffffff", percent: 99, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 1 }],
+      },
+    }),
+  ];
+}
+
 function k2CfsTopologyEvents() {
   const freshBoxsInfo = {
     enable: 1,
@@ -685,6 +762,7 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.cfsSelection).toMatchObject({
       checked: true,
       observedSelectedSource: false,
+      observedQualifiedCfsSelectionAfterStart: false,
       framesWithSelected: 0,
     });
   });
@@ -705,6 +783,7 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.cfsSelection).toMatchObject({
       checked: true,
       observedSelectedSource: false,
+      observedQualifiedCfsSelectionAfterStart: false,
       framesWithSelected: 0,
     });
   });
@@ -724,8 +803,19 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     expect(report.failureReasons).toEqual([]);
     expect(report.cfsSelection).toMatchObject({
       checked: true,
+      trustedPrintStart: {
+        sequence: 1,
+        atMs: 0,
+        source: "automation-cli",
+      },
+      observedSelectedField: true,
       observedSelectedSource: true,
+      observedSelectedSourceAfterStart: true,
+      observedQualifiedCfsSelectionAfterStart: true,
       selectedSourceIds: ["box:1:type:0:slot:0"],
+      selectedSourceIdsAfterStart: ["box:1:type:0:slot:0"],
+      qualifiedSelectedSourceIds: ["box:1:type:0:slot:0"],
+      framesWithSelectedField: 1,
       framesWithSelected: 1,
       framesWithoutSelected: 0,
     });
@@ -741,8 +831,93 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
           materialType: "PLA",
           color: "#ffffff",
           percent: 99,
+          afterTrustedPrintStart: true,
+          cfsSlot: true,
+          assignedByColorMatch: true,
+          qualifiedForCfsPrint: true,
         },
       ],
+    });
+  });
+
+  it("K2 CFS print selection profileはprint start前だけのselectedをfailureにする", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-cfs-prestart-selected" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2CfsPreStartSelectedEvents(),
+    }, {
+      profiles: ["k2-cfs-print-selection"],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["cfs-selected-source-missing"]);
+    expect(report.cfsSelection).toMatchObject({
+      observedSelectedSource: true,
+      observedSelectedSourceAfterStart: false,
+      observedQualifiedCfsSelectionAfterStart: false,
+      framesWithSelected: 1,
+    });
+    expect(report.cfsSelection.timeline[0]).toMatchObject({
+      sequence: 1,
+      afterTrustedPrintStart: false,
+      selectedCount: 1,
+      qualifiedSelectedCount: 0,
+    });
+  });
+
+  it("K2 CFS print selection profileはexternal spool selectedをCFS slot selectionとして扱わない", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-external-selected-print" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2ExternalSelectedPrintEvents(),
+    }, {
+      profiles: ["k2-cfs-print-selection"],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["cfs-selected-source-missing"]);
+    expect(report.cfsSelection).toMatchObject({
+      observedSelectedSource: true,
+      observedSelectedSourceAfterStart: true,
+      observedQualifiedCfsSelectionAfterStart: false,
+      selectedSourceIdsAfterStart: ["box:0:type:1:slot:0"],
+      qualifiedSelectedSourceIds: [],
+    });
+    expect(report.cfsSelection.timeline[0].selectedSources[0]).toMatchObject({
+      cfsSlot: false,
+      assignedByColorMatch: true,
+      qualifiedForCfsPrint: false,
+    });
+  });
+
+  it("K2 CFS print selection profileはselected CFS slotとcolorMatchの一致を要求する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-selected-without-assignment" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2SelectedWithoutAssignmentEvents(),
+    }, {
+      profiles: ["k2-cfs-print-selection"],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["cfs-selected-source-missing"]);
+    expect(report.cfsSelection).toMatchObject({
+      observedSelectedSource: true,
+      observedSelectedSourceAfterStart: true,
+      observedQualifiedCfsSelectionAfterStart: false,
+      selectedSourceIdsAfterStart: ["box:1:type:0:slot:0"],
+      qualifiedSelectedSourceIds: [],
+    });
+    expect(report.cfsSelection.timeline[0].selectedSources[0]).toMatchObject({
+      cfsSlot: true,
+      assignedByColorMatch: false,
+      qualifiedForCfsPrint: false,
     });
   });
 

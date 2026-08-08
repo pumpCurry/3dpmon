@@ -85,7 +85,9 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
 node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-pro-cfs/scenarios/<scenario> --profile k2-cfs-print-selection --pretty
 ```
 
-  This profile requires `boxsInfo.materialBoxs[].materials[].selected` evidence.
+  This profile requires post-start `boxsInfo.materialBoxs[].materials[].selected`
+  evidence for a CFS slot, plus a same-frame `colorMatch` assignment to that
+  source.
   A print lifecycle that completes with no selected CFS source is retained as
   negative command evidence, but must not be treated as proof that filament was
   physically fed.

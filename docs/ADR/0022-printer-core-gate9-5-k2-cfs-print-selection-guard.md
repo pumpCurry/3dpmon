@@ -26,19 +26,37 @@ observed-printing
 boxsInfo
 ```
 
-- The profile also requires that at least one observed `boxsInfo` frame contains
-  a material source with:
+- The profile also requires qualifying selected-source evidence. A qualifying
+  frame must be observed after a trusted `operator-print-start` marker from
+  `stdin` or `automation-cli`; `scheduled-cli` is not accepted as the start
+  boundary for this guard.
+
+- In that post-start frame, at least one CFS slot source must contain:
 
 ```text
 materialBoxs[].materials[].selected == 1
 ```
 
+- External spool sources (`boxType == 1`) do not satisfy the CFS selection guard.
+  The selected CFS source must also match a `colorMatch[]` assignment in the same
+  `boxsInfo` frame by `boxId` and `materialId`.
+
 - The analyzer report now includes a read-only `cfsSelection` summary:
 
 ```text
 checked
+trustedPrintStart
+observedSelectedField
 observedSelectedSource
+observedSelectedSourceAfterStart
+observedQualifiedCfsSelectionAfterStart
 selectedSourceIds
+selectedSourceIdsAfterStart
+qualifiedSelectedSourceIds
+firstSelectedAfterStart
+firstQualifiedCfsSelectionAfterStart
+framesWithSelectedField
+framesWithoutSelectedField
 framesWithSelected
 framesWithoutSelected
 timeline[]
@@ -87,6 +105,20 @@ This does not yet prove the final LAN command authority shape for 3dpmon, but it
 does prove that a CFS-safe print plan must carry explicit assignment evidence and
 must verify selected-source observation after start.
 
+The evidence sources have different strength:
+
+```text
+OrcaSlicer / CrealityPrint source review
+  -> explicit material assignment is required for CFS-oriented print flows
+
+F012 K2 Pro Combo live negative evidence
+  -> missing post-start CFS selected-source evidence is unsafe for authority
+```
+
+The public slicer sources are not treated as proof that `materials[].selected`
+alone means physical extrusion succeeded. The guard remains a prerequisite check,
+not a physical-feed-success certificate.
+
 ## Non-Goals
 
 - No automatic K2 print start.
@@ -115,3 +147,7 @@ Future reproduction of that negative evidence is still possible, but it must be
 intentional via `--allow-unsafe-opgcodefile-cfs-start`. Normal CFS command
 captures should wait for a PrintPlan path that can express explicit material
 assignment and selected-source confirmation.
+
+Passing `k2-cfs-print-selection` means only that the fixture contains a necessary
+post-start CFS selection prerequisite. It does not by itself certify actual
+extrusion, material consumption, or ledger authority.
