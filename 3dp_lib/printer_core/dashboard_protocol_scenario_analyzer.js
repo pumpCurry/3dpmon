@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1322 (PR #432)
+ * @version 1.390.1323 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 11:00:52
+ * @lastModified 2026-08-08 13:24:36
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -74,6 +74,44 @@ const PROTOCOL_SCENARIO_PROFILE_DEFINITIONS = Object.freeze({
       "printProgress",
       "printFileName",
       "printId",
+    ]),
+  }),
+  "k2-benchy-print-command": Object.freeze({
+    name: "k2-benchy-print-command",
+    expectedScenario: "k2-benchy-print-command",
+    requireValidationSuccess: true,
+    requiredMarkers: Object.freeze([
+      Object.freeze({ name: "observed-idle-before-start", source: "automation-cli" }),
+      Object.freeze({ name: "operator-print-start", source: "automation-cli" }),
+      Object.freeze({ name: "observed-printing", source: "automation-cli" }),
+      Object.freeze({ name: "observed-heating", source: "automation-cli" }),
+      Object.freeze({ name: "observed-completed", source: "automation-cli" }),
+      Object.freeze({ name: "observed-idle-after-completed", source: "automation-cli" }),
+    ]),
+    requiredPayloadKeys: Object.freeze([
+      "state",
+      "deviceState",
+      "printProgress",
+      "printFileName",
+      "printId",
+      "nozzleTemp",
+      "targetNozzleTemp",
+      "bedTemp0",
+      "targetBedTemp0",
+      "cfsConnect",
+      "boxsInfo",
+      "retGcodeFileInfo2",
+    ]),
+    timelinePayloadKeys: Object.freeze([
+      "state",
+      "deviceState",
+      "printProgress",
+      "printFileName",
+      "printId",
+      "printJobTime",
+      "printLeftTime",
+      "usedMaterialLength",
+      "boxsInfo",
     ]),
   }),
   "k2-cfs-topology": Object.freeze({

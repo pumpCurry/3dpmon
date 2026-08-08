@@ -73,6 +73,50 @@ function k2PrintLifecycleEvents() {
   ];
 }
 
+function k2BenchyPrintCommandEvents() {
+  return [
+    marker(1, 0, "observed-idle-before-start", { source: "automation-cli" }),
+    ws(2, 100, {
+      state: 0,
+      deviceState: 0,
+      printProgress: 100,
+      printFileName: "",
+      printId: "",
+      nozzleTemp: "25.0",
+      targetNozzleTemp: 0,
+      bedTemp0: "30.0",
+      targetBedTemp0: 0,
+      cfsConnect: 1,
+    }),
+    ws(3, 200, { boxsInfo: { materialBoxs: [] } }),
+    ws(4, 300, {
+      retGcodeFileInfo2: [
+        {
+          name: "3DBench_PLA_21m.gcode",
+          path: "/mnt/UDISK/printer_data/gcodes/3DBench_PLA_21m.gcode",
+          material: "PLA",
+          match: "T1A=T1B ",
+        },
+      ],
+    }),
+    marker(5, 400, "operator-print-start", { source: "automation-cli" }),
+    marker(6, 500, "observed-printing", { source: "automation-cli" }),
+    marker(7, 600, "observed-heating", { source: "automation-cli" }),
+    ws(8, 700, {
+      state: 1,
+      deviceState: 1,
+      printProgress: 1,
+      printFileName: "3DBench_PLA_21m.gcode",
+      printId: "print-1",
+      printJobTime: 10,
+      printLeftTime: 1200,
+      usedMaterialLength: 10,
+    }),
+    marker(9, 800, "observed-completed", { source: "automation-cli" }),
+    marker(10, 900, "observed-idle-after-completed", { source: "automation-cli" }),
+  ];
+}
+
 function k2CfsTopologyEvents() {
   const freshBoxsInfo = {
     enable: 1,
@@ -554,6 +598,30 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
         printId: "print-1",
       },
     });
+  });
+
+  it("K2 benchy print command profileはautomation markerとfile list evidenceを要求する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-benchy-print-command" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2BenchyPrintCommandEvents(),
+    }, {
+      profiles: ["k2-benchy-print-command"],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.profiles.applied).toEqual(["k2-benchy-print-command"]);
+    expect(report.requiredMarkers.missing).toEqual([]);
+    expect(report.requiredPayloadKeys.missing).toEqual([]);
+    expect(report.requiredMarkers.required).toContainEqual({
+      name: "operator-print-start",
+      source: "automation-cli",
+      label: "automation-cli:operator-print-start",
+    });
+    expect(report.requiredPayloadKeys.required).toContain("retGcodeFileInfo2");
+    expect(report.payloadTimeline.entries.map((entry) => entry.sequence)).toEqual([2, 3, 8]);
   });
 
   it("K2 CFS topology profileはCFS物理変化markerとboxsInfo timelineを要求する", () => {

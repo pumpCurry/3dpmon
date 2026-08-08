@@ -1,0 +1,95 @@
+{
+  "fixtureVersion": 1,
+  "device": {
+    "model": "K2 Pro Combo",
+    "reportedModel": "F012",
+    "reportedHostname": null,
+    "firmwareVersion": "1.0.0",
+    "cfsFirmwareVersion": null,
+    "attachment": "CFS"
+  },
+  "capture": {
+    "capturedAt": "2026-08-08T03:39:39.526Z",
+    "scenario": "k2-benchy-print-command",
+    "operatorNotes": "Gate 9 K2 Pro Combo single-color Benchy command lifecycle capture; selected file currently maps T1A to T1B, preferred T1C kept as evidence"
+  },
+  "endpoints": [
+    {
+      "address": "<IP_001>",
+      "httpPort": 80,
+      "wsPort": 9999
+    }
+  ],
+  "redaction": {
+    "ip": true,
+    "mac": true,
+    "serial": true,
+    "credential": true,
+    "ssid": true,
+    "hostname": true,
+    "id": true,
+    "fileName": true,
+    "rfid": true
+  },
+  "validation": {
+    "success": true,
+    "failureReasons": [],
+    "eventCount": 2251,
+    "protocolEventCount": 2245,
+    "markerCount": 6,
+    "required": {
+      "http": true,
+      "ws": true,
+      "boxsInfo": true,
+      "gcodeList": true,
+      "printCommand": true,
+      "completedPrint": true
+    },
+    "observations": {
+      "httpObserved": true,
+      "wsOpened": true,
+      "boxsInfoObserved": true,
+      "fileListObserved": true,
+      "historyObserved": true,
+      "commandSent": true,
+      "activeObserved": true,
+      "completedObserved": true,
+      "heartbeatAcked": false,
+      "selectedFilePath": "/mnt/UDISK/printer_data/gcodes/<FILE_008>.gcode",
+      "selectedFileName": "<FILE_008>.gcode",
+      "selectedFileMatchedTool": "T1B",
+      "preferredTool": "T1C",
+      "preferredToolSource": {
+        "toolAlias": "T1C",
+        "boxId": 1,
+        "materialId": 2,
+        "boxType": 0,
+        "boxState": 1,
+        "materialName": "Generic PLA-Silk",
+        "materialType": "PLA",
+        "color": "#09ea7ae",
+        "percent": 100,
+        "materialState": 1
+      },
+      "finalPrintSnapshot": {
+        "state": 0,
+        "deviceState": 0,
+        "printProgress": 100,
+        "printFileName": "/mnt/UDISK/printer_data/gcodes/<FILE_008>.gcode",
+        "printId": "<ID_002>",
+        "printJobTime": 0,
+        "printLeftTime": 0,
+        "usedMaterialLength": 0,
+        "nozzleTemp": "38.290000",
+        "targetNozzleTemp": 0,
+        "bedTemp0": "38.790000",
+        "targetBedTemp0": 0,
+        "layer": 0,
+        "TotalLayer": 0,
+        "cfsConnect": 1
+      },
+      "errorCount": 0
+    },
+    "errors": []
+  }
+}
