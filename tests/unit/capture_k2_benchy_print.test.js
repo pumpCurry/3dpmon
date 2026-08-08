@@ -66,6 +66,16 @@ describe("capture_k2_benchy_print helpers", () => {
     })).toBe(false);
   });
 
+  it("CFS/Combo 系 attachment alias は unsafe opGcodeFile guard の対象にする", () => {
+    for (const label of ["CFS", "CFS-C", "CFS_C", "K1_CFS-C", "Combo", "K2 Pro Combo"]) {
+      expect(isCfsAttachmentLabel(label), label).toBe(true);
+      expect(shouldBlockUnsafeOpgcodeFileCfsStart({
+        attachment: label,
+        allowUnsafeOpgcodeFileCfsStart: false,
+      }), label).toBe(true);
+    }
+  });
+
   it("K2 retGcodeFileInfo2 から単色 Benchy を 4color Benchy より優先して選ぶ", () => {
     const payload = {
       retGcodeFileInfo2: [

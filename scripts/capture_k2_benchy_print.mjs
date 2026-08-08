@@ -22,9 +22,9 @@
  * - {@link captureK2BenchyPrint}：実機印刷と通信キャプチャを実行
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1325 (PR #432)
+ * @version 1.390.1328 (PR #432)
  * @since   1.390.1323 (PR #432)
- * @lastModified 2026-08-08 19:59:12
+ * @lastModified 2026-08-08 20:20:41
  * -----------------------------------------------------------
  * @todo
  * - K2 の公式 tool assignment 付き印刷 command が確定したら、slot override を dry-run PrintPlan 経由へ移す
@@ -178,7 +178,8 @@ export function parseArgs(argv) {
  *
  * 【詳細説明】
  * - Gate 9.5 で `opGcodeFile` 単独開始が CFS slot を選択しないまま印刷状態だけ進めることを確認した。
- * - 実行系の安全境界では CFS / CFS-C / Combo などの表記ゆれを CFS 系として扱い、外部リール専用の再現実験と区別する。
+ * - 実行系の安全境界では CFS / CFS-C / CFS_C / K1_CFS-C / Combo などの表記ゆれを CFS 系として扱い、
+ *   外部リール専用の再現実験と区別する。
  *
  * @function isCfsAttachmentLabel
  * @param {string|null|undefined} attachment - metadata に記録する attachment label
@@ -187,7 +188,16 @@ export function parseArgs(argv) {
  * const isCfs = isCfsAttachmentLabel("CFS");
  */
 export function isCfsAttachmentLabel(attachment) {
-  return /\bcfs\b/i.test(String(attachment || ""));
+  const normalized = String(attachment || "").trim().toLowerCase();
+  if (!normalized ||
+      normalized === "none" ||
+      normalized === "external" ||
+      normalized === "external-spool" ||
+      normalized === "external spool") {
+    return false;
+  }
+  return /(^|[^a-z0-9])cfs([^a-z0-9]|$)/i.test(normalized) ||
+    /(^|[^a-z0-9])combo([^a-z0-9]|$)/i.test(normalized);
 }
 
 /**
@@ -508,6 +518,7 @@ export async function captureK2BenchyPrint(options) {
     activeObserved: false,
     completedObserved: false,
     heartbeatAcked: false,
+    printStartBlocked: false,
   };
   const state = {
     boxsInfo: null,
@@ -704,6 +715,7 @@ export async function captureK2BenchyPrint(options) {
             return;
           }
           if (shouldBlockUnsafeOpgcodeFileCfsStart(options)) {
+            observations.printStartBlocked = true;
             addAutomationMarker("operator-print-start-blocked", {
               reason: "unsafe-opgcodefile-cfs-start",
               selectedFile: state.selectedFile?.name || path.basename(state.selectedFilePath),
@@ -849,7 +861,9 @@ export async function captureK2BenchyPrint(options) {
   const writtenOutDir = success ? options.outDir : null;
   const failedOutDir = success
     ? null
-    : (options.keepFailed || observations.commandSent ? await writeFailedCapture(fixture, started.captureId) : null);
+    : (options.keepFailed || observations.commandSent || observations.printStartBlocked
+        ? await writeFailedCapture(fixture, started.captureId)
+        : null);
   if (success) {
     await writeProtocolFixtureFiles(options.outDir, fixture, { atomic: true });
   }

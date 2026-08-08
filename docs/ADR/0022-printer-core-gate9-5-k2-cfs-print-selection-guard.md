@@ -40,6 +40,9 @@ materialBoxs[].materials[].selected == 1
 - External spool sources (`boxType == 1`) do not satisfy the CFS selection guard.
   The selected CFS source must also match a `colorMatch[]` assignment in the same
   `boxsInfo` frame by `boxId` and `materialId`.
+- `boxType`, `boxId`, and `materialId` are parsed as strict non-negative integer
+  protocol indexes. Missing, empty, NaN, negative, or fractional values do not
+  qualify; they are not coerced to zero.
 
 - The analyzer report now includes a read-only `cfsSelection` summary:
 
@@ -147,6 +150,10 @@ Future reproduction of that negative evidence is still possible, but it must be
 intentional via `--allow-unsafe-opgcodefile-cfs-start`. Normal CFS command
 captures should wait for a PrintPlan path that can express explicit material
 assignment and selected-source confirmation.
+
+The negative-evidence override is also protected against common attachment-label
+aliases. `CFS`, `CFS-C`, `CFS_C`, `K1_CFS-C`, `Combo`, and `K2 Pro Combo` are
+treated as CFS-family labels; `none` and `external-spool` are not.
 
 Passing `k2-cfs-print-selection` means only that the fixture contains a necessary
 post-start CFS selection prerequisite. It does not by itself certify actual

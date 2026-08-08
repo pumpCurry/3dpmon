@@ -236,6 +236,25 @@ function k2SelectedWithoutAssignmentEvents() {
   ];
 }
 
+function k2MalformedSelectedEvents() {
+  return [
+    marker(1, 0, "operator-print-start", { source: "automation-cli" }),
+    marker(2, 500, "observed-printing", { source: "automation-cli" }),
+    ws(3, 1000, {
+      boxsInfo: {
+        materialBoxs: [
+          {
+            materials: [
+              { type: "PLA", color: "#ffffff", percent: 99, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{}],
+      },
+    }),
+  ];
+}
+
 function k2CfsTopologyEvents() {
   const freshBoxsInfo = {
     enable: 1,
@@ -916,6 +935,33 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     });
     expect(report.cfsSelection.timeline[0].selectedSources[0]).toMatchObject({
       cfsSlot: true,
+      assignedByColorMatch: false,
+      qualifiedForCfsPrint: false,
+    });
+  });
+
+  it("K2 CFS print selection profileは欠損IDを0へ丸めずmalformed selectedをfailureにする", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "k2-malformed-selected" },
+        validation: { success: true, failureReasons: [] },
+      },
+      events: k2MalformedSelectedEvents(),
+    }, {
+      profiles: ["k2-cfs-print-selection"],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["cfs-selected-source-missing"]);
+    expect(report.cfsSelection).toMatchObject({
+      observedSelectedSource: true,
+      observedSelectedSourceAfterStart: true,
+      observedQualifiedCfsSelectionAfterStart: false,
+      qualifiedSelectedSourceIds: [],
+    });
+    expect(report.cfsSelection.timeline[0].selectedSources[0]).toMatchObject({
+      sourceId: "box:unknown:type:unknown:slot:unknown",
+      cfsSlot: false,
       assignedByColorMatch: false,
       qualifiedForCfsPrint: false,
     });

@@ -18,9 +18,9 @@
  * - {@link captureK2CfsTopology}：Gate 10 fixture を取得
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1326 (PR #432)
+ * @version 1.390.1328 (PR #432)
  * @since   1.390.1326 (PR #432)
- * @lastModified 2026-08-08 20:04:39
+ * @lastModified 2026-08-08 20:20:41
  * -----------------------------------------------------------
  * @todo
  * - Gate 10 実機 fixture 取得後、観測された marker timing の推奨例を docs へ追記する
@@ -63,7 +63,7 @@ export const REQUIRED_GATE10_MARKERS = Object.freeze([
  * @constant {string}
  */
 const HELP_TEXT = `Usage:
-  node scripts/capture_k2_cfs_topology.mjs --host 192.168.54.21 --out tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-topology --duration-ms 900000
+  node scripts/capture_k2_cfs_topology.mjs --host <DEVICE_IP> --out tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-topology --duration-ms 900000
 
 Options:
   --host <ip-or-host>       Required. K2 Pro Combo host or IP address.
@@ -95,7 +95,7 @@ Required interactive markers:
  * @returns {Object} 解析済みオプション
  * @throws {Error} 必須引数または数値引数が不正な場合
  * @example
- * const options = parseArgs(["--host", "192.168.54.21", "--out", "tmp/cfs"]);
+ * const options = parseArgs(["--host", "DEVICE_IP", "--out", "tmp/cfs"]);
  */
 export function parseArgs(argv) {
   const options = {
@@ -174,7 +174,7 @@ export function parseArgs(argv) {
  * @param {Object} options - Gate 10 CLI option
  * @returns {Object} captureProtocolFixture に渡す option
  * @example
- * const captureOptions = buildK2CfsTopologyCaptureOptions({ host: "192.168.54.21", outDir: "tmp/cfs" });
+ * const captureOptions = buildK2CfsTopologyCaptureOptions({ host: "DEVICE_IP", outDir: "tmp/cfs" });
  */
 export function buildK2CfsTopologyCaptureOptions(options) {
   return {
@@ -211,7 +211,7 @@ export function buildK2CfsTopologyCaptureOptions(options) {
  * @returns {Promise<Object>} capture 結果
  * @throws {Error} 接続または保存に失敗した場合
  * @example
- * const result = await captureK2CfsTopology({ host: "192.168.54.21", outDir: "tmp/cfs" });
+ * const result = await captureK2CfsTopology({ host: "DEVICE_IP", outDir: "tmp/cfs" });
  */
 export async function captureK2CfsTopology(options) {
   const captureOptions = buildK2CfsTopologyCaptureOptions(options);

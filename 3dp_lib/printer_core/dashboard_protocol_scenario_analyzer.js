@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1327 (PR #432)
+ * @version 1.390.1328 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 20:08:18
+ * @lastModified 2026-08-08 20:20:41
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -817,6 +817,25 @@ function isEventAfterTrustedPrintStart(event, boundary) {
 }
 
 /**
+ * protocol ID / type 値を strict な非負整数へ変換する。
+ *
+ * 【詳細説明】
+ * - JavaScript の `Number(null) === 0` や `Number("") === 0` による欠損値の誤認を防ぐ。
+ * - CFS selection guard は安全側の判定なので、欠損・空文字・NaN・非整数・負数は null として扱う。
+ *
+ * @private
+ * @param {*} value - protocol の boxId / boxType / materialId 値
+ * @returns {number|null} 非負整数、または不正値の場合 null
+ */
+function toProtocolIndex(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
  * material source が CFS slot を表すか判定する。
  *
  * 【詳細説明】
@@ -828,7 +847,7 @@ function isEventAfterTrustedPrintStart(event, boundary) {
  * @returns {boolean} CFS slot source の場合 true
  */
 function isCfsSlotSource(source) {
-  return Number(source?.boxType) === 0;
+  return toProtocolIndex(source?.boxType) === 0;
 }
 
 /**
@@ -844,9 +863,14 @@ function isCfsSlotSource(source) {
  * @returns {boolean} source と一致する assignment がある場合 true
  */
 function sourceHasColorMatchAssignment(source, colorMatch) {
+  const sourceBoxId = toProtocolIndex(source?.boxId);
+  const sourceMaterialId = toProtocolIndex(source?.materialId);
+  if (sourceBoxId === null || sourceMaterialId === null) {
+    return false;
+  }
   return (Array.isArray(colorMatch) ? colorMatch : []).some((assignment) => {
-    return Number(assignment?.boxId) === Number(source?.boxId) &&
-      Number(assignment?.materialId) === Number(source?.materialId);
+    return toProtocolIndex(assignment?.boxId) === sourceBoxId &&
+      toProtocolIndex(assignment?.materialId) === sourceMaterialId;
   });
 }
 
