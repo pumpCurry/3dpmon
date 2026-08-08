@@ -445,12 +445,23 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     expect(() => facade.beginSession({ deviceId: "", sessionId: "session-1" })).toThrow(TypeError);
     expect(() => facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "" })).toThrow(TypeError);
 
-    const oldInstance = facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-1" });
+    const oldInstance = facade.beginSession({
+      deviceId: "fixture:k1-max-a",
+      sessionId: "session-1",
+      family: "k1",
+      transports: [
+        { kind: "ws9999", endpoint: "192.0.2.151:9999", role: "status-stream" },
+        { kind: "http-info", endpoint: "192.0.2.151:80", role: "identity-probe" },
+      ],
+    });
     const first = facade.observeFrame({
       deviceId: "fixture:k1-max-a",
       sessionId: "session-1",
       frame: event,
     });
+    const firstSession = facade.getSession("fixture:k1-max-a");
+    firstSession.transports[0].endpoint = "mutated";
+    expect(facade.getSession("fixture:k1-max-a").transports[0].endpoint).toBe("192.0.2.151:9999");
 
     facade.beginSession({ deviceId: "fixture:k1-max-a", sessionId: "session-2" });
     const closed = oldInstance.observeFrame(event, { sessionId: "session-1" });
@@ -466,6 +477,23 @@ describe("Printer Core v3 K1 dry-run adapter", () => {
     });
 
     expect(first.source.sequence).toBe(1);
+    expect(facade.getSession("fixture:k1-max-a").sessionId).toBe("session-2");
+    expect({
+      ...firstSession,
+      transports: [
+        { ...firstSession.transports[0], endpoint: "192.0.2.151:9999" },
+        firstSession.transports[1],
+      ],
+    }).toMatchObject({
+      deviceId: "fixture:k1-max-a",
+      sessionId: "session-1",
+      family: "k1",
+      status: "active",
+      transports: [
+        { kind: "ws9999", endpoint: "192.0.2.151:9999", role: "status-stream" },
+        { kind: "http-info", endpoint: "192.0.2.151:80", role: "identity-probe" },
+      ],
+    });
     expect(closed).toEqual({
       accepted: false,
       reason: "session-closed",

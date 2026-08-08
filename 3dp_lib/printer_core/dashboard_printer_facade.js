@@ -18,9 +18,9 @@
  * - {@link createK1PrinterFacade}：K1 dry-run 用 PrinterFacade の factory
  * - {@link createK2PrinterFacade}：K2 read-only 用 PrinterFacade の factory
  *
- * @version 1.390.1312 (PR #432)
+ * @version 1.390.1336 (PR #432)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-08 07:32:05
+ * @lastModified 2026-08-09 01:05:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 5 以降で K2 live shadow pipeline へ接続する
@@ -31,6 +31,11 @@
 import { createK1Adapter } from "./dashboard_k1_adapter.js";
 import { createK2Adapter } from "./dashboard_k2_adapter.js";
 import { createPrinterInstance } from "./dashboard_printer_instance.js";
+import {
+  clonePrinterSession,
+  closePrinterSession,
+  createPrinterSession,
+} from "./dashboard_printer_session.js";
 
 /**
  * PrinterFacade が外部へ返す error code。
@@ -89,6 +94,7 @@ export class PrinterFacade {
    */
   constructor(options = {}) {
     this.instances = new Map();
+    this.sessions = new Map();
     this.adapterFactory = typeof options.adapterFactory === "function" ? options.adapterFactory : null;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
   }
@@ -146,6 +152,8 @@ export class PrinterFacade {
    * @param {string} options.deviceId - 物理機 identity
    * @param {string} options.sessionId - 接続セッション ID
    * @param {object=} options.adapter - Printer Adapter
+   * @param {string=} options.family - printer family
+   * @param {Array<object>|object=} options.transports - session に紐づく transport metadata
    * @returns {object} PrinterInstance
    * @example
    * const instance = facade.beginSession({ deviceId: "serial:demo", sessionId: "session:1", adapter });
@@ -160,11 +168,30 @@ export class PrinterFacade {
       adapter,
       clock: this.clock,
     });
+    const openedAt = this.clock().toISOString();
+    const session = createPrinterSession({
+      deviceId,
+      sessionId,
+      family: options?.family,
+      adapterId: adapter.adapterId,
+      protocol: adapter.protocol,
+      openedAt,
+      transports: options?.transports || {
+        kind: adapter.protocol || "unknown",
+        role: "status-stream",
+      },
+      metadata: options?.sessionMetadata || {},
+    });
     const previousInstance = this.instances.get(deviceId);
     if (previousInstance && typeof previousInstance.close === "function") {
       previousInstance.close();
     }
+    const previousSession = this.sessions.get(deviceId);
+    if (previousSession) {
+      closePrinterSession(previousSession, { closedAt: openedAt });
+    }
     this.instances.set(deviceId, instance);
+    this.sessions.set(deviceId, session);
     return instance;
   }
 
@@ -275,6 +302,10 @@ export class PrinterFacade {
       return false;
     }
     instance.close();
+    closePrinterSession(this.sessions.get(deviceId), {
+      closedAt: this.clock().toISOString(),
+    });
+    this.sessions.delete(deviceId);
     return this.instances.delete(deviceId);
   }
 
@@ -293,6 +324,24 @@ export class PrinterFacade {
   getState(deviceId) {
     const normalizedDeviceId = this._requireNonEmptyId(deviceId, "deviceId");
     return this.instances.get(normalizedDeviceId)?.getState() ?? null;
+  }
+
+  /**
+   * deviceId に対応する active PrinterSession metadata を返す。
+   *
+   * 【詳細説明】
+   * - Gate 11 では read-only diagnostic metadata であり、command routing には使わない。
+   * - 呼び出し側 mutation で Facade 内部状態が壊れないよう clone を返す。
+   *
+   * @function getSession
+   * @param {string} deviceId - 物理機 identity
+   * @returns {object|null} PrinterSession metadata、または null
+   * @example
+   * const session = facade.getSession("serial:demo");
+   */
+  getSession(deviceId) {
+    const normalizedDeviceId = this._requireNonEmptyId(deviceId, "deviceId");
+    return clonePrinterSession(this.sessions.get(normalizedDeviceId));
   }
 }
 
