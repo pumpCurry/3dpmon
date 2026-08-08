@@ -62,13 +62,17 @@ boxsInfo
 node scripts/capture_k2_cfs_topology.mjs \
   --host <DEVICE_IP> \
   --out tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-topology \
-  --duration-ms <entire-cfs-observation-window>
+  --duration-ms <entire-cfs-observation-window> \
+  --boxsinfo-interval-ms 30000
 ```
 
   The wrapper uses the generic recorder with K2+CFS metadata, `--send-boxsinfo`,
+  a read-only `boxsInfo` interval probe,
   `--require-http`, `--require-ws`, `--require-boxsinfo`,
   `--interactive-markers`, `--minimum-events 20`, and failed-capture retention
-  enabled by default.
+  enabled by default. The interval probe repeats only
+  `{"method":"get","params":{"boxsInfo":1}}` so CFS reconnect, slot changes,
+  and material changes can be observed without CFS control authority.
 
 - The equivalent generic recorder command is:
 
@@ -81,6 +85,7 @@ node scripts/capture_protocol_fixture.mjs \
   --out tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-topology \
   --duration-ms <entire-cfs-observation-window> \
   --send-boxsinfo \
+  --boxsinfo-interval-ms 30000 \
   --require-http \
   --require-ws \
   --require-boxsinfo \

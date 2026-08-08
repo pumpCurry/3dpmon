@@ -14,6 +14,7 @@ import {
   parseMarkerScheduleItem,
   payloadHasKey,
   recordInteractiveMarkerLine,
+  sendReadOnlyBoxsInfoProbe,
 } from "../../scripts/capture_protocol_fixture.mjs";
 
 describe("capture_protocol_fixture CLI helpers", () => {
@@ -32,6 +33,8 @@ describe("capture_protocol_fixture CLI helpers", () => {
       "--send-boxsinfo",
       "--duration-ms",
       "1500",
+      "--boxsinfo-interval-ms",
+      "30000",
       "--require-http",
       "--require-ws",
       "--require-boxsinfo",
@@ -51,6 +54,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(options.skipHttp).toBe(true);
     expect(options.sendBoxsInfo).toBe(true);
     expect(options.durationMs).toBe(1500);
+    expect(options.boxsInfoProbeIntervalMs).toBe(30000);
     expect(options.requireHttp).toBe(true);
     expect(options.requireWs).toBe(true);
     expect(options.requireBoxsInfo).toBe(true);
@@ -110,6 +114,36 @@ describe("capture_protocol_fixture CLI helpers", () => {
 
     expect(isHeartbeatPayload(heartbeat)).toBe(true);
     expect(payloadHasKey(data, "boxsInfo")).toBe(true);
+  });
+
+  it("read-only boxsInfo probe は outbound metadata 付きで送信される", () => {
+    const outbound = [];
+    const sent = [];
+    const recorder = {
+      recordOutbound(channel, payload, metadata) {
+        outbound.push({ channel, payload, metadata });
+      },
+    };
+    const ws = {
+      readyState: 1,
+      send(payload) {
+        sent.push(payload);
+      },
+    };
+
+    expect(sendReadOnlyBoxsInfoProbe(ws, recorder, { probeIndex: 2, probeMode: "interval" })).toBe(true);
+    expect(sent).toEqual([JSON.stringify({ method: "get", params: { boxsInfo: 1 } })]);
+    expect(outbound).toEqual([
+      {
+        channel: "ws9999",
+        payload: { method: "get", params: { boxsInfo: 1 } },
+        metadata: {
+          purpose: "read-only-boxsInfo-probe",
+          probeIndex: 2,
+          probeMode: "interval",
+        },
+      },
+    ]);
   });
 
   it("require条件に失敗したcaptureは既存fixtureを上書きしない", async () => {
@@ -198,6 +232,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
         httpObserved: false,
         wsOpened: false,
         boxsInfoObserved: false,
+        boxsInfoProbeCount: 0,
         heartbeatAcked: false,
         errorCount: 0,
       },

@@ -20,9 +20,9 @@
  * - {@link captureProtocolFixture}：実機通信をキャプチャして fixture を保存
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1311 (PR #432)
+ * @version 1.390.1328 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-08 07:20:59
+ * @lastModified 2026-08-08 20:41:12
  * -----------------------------------------------------------
  * @todo
  * - Electron UI からのキャプチャ開始・停止操作を追加
@@ -59,6 +59,8 @@ Options:
   --ws-port <number>        WebSocket port. Default: 9999.
   --http-port <number>      HTTP port. Default: 80.
   --send-boxsinfo           Send read-only {"method":"get","params":{"boxsInfo":1}} after WS open.
+  --boxsinfo-interval-ms <number>
+                            Repeat read-only boxsInfo probe while WS is open. 0 disables. Default: 0.
   --skip-http               Skip GET /info.
   --skip-ws                 Skip WebSocket observation.
   --require-http            Fail the result if /info was not observed successfully.
@@ -187,6 +189,7 @@ export function parseArgs(argv) {
     wsPort: 9999,
     httpPort: 80,
     sendBoxsInfo: false,
+    boxsInfoProbeIntervalMs: 0,
     skipHttp: false,
     skipWs: false,
     requireHttp: false,
@@ -253,6 +256,7 @@ export function parseArgs(argv) {
     else if (arg === "--duration-ms") options.durationMs = Number(next);
     else if (arg === "--ws-port") options.wsPort = Number(next);
     else if (arg === "--http-port") options.httpPort = Number(next);
+    else if (arg === "--boxsinfo-interval-ms") options.boxsInfoProbeIntervalMs = Number(next);
     else if (arg === "--minimum-events") options.minimumEvents = Number(next);
     else if (arg === "--marker-at") options.markerSchedule.push(parseMarkerScheduleItem(next));
     else if (arg === "--notes") options.notes = next;
@@ -276,6 +280,11 @@ export function parseArgs(argv) {
   }
   if (!Number.isFinite(options.httpPort) || options.httpPort <= 0) {
     throw new Error("--http-port must be a positive number");
+  }
+  if (!Number.isFinite(options.boxsInfoProbeIntervalMs) ||
+      options.boxsInfoProbeIntervalMs < 0 ||
+      (options.boxsInfoProbeIntervalMs > 0 && options.boxsInfoProbeIntervalMs < 1000)) {
+    throw new Error("--boxsinfo-interval-ms must be 0 or a number >= 1000");
   }
   if (!Number.isFinite(options.minimumEvents) || options.minimumEvents < 0) {
     throw new Error("--minimum-events must be a number >= 0");
@@ -575,6 +584,38 @@ export function attachInteractiveMarkerReader(recorder, enabled, markerTracker =
 }
 
 /**
+ * K2/CFS の read-only boxsInfo probe を WebSocket へ送信する。
+ *
+ * 【詳細説明】
+ * - Gate 10 の物理トポロジ検証では、CFS disconnect/reconnect や slot 変更後の snapshot を取りたい。
+ * - 送信するのは `get { boxsInfo: 1 }` の読み取り要求だけであり、CFS load/unload や印刷開始などの制御は含めない。
+ * - outbound event に probe index と mode を残し、offline review で一回目と interval 再送を区別できるようにする。
+ *
+ * @function sendReadOnlyBoxsInfoProbe
+ * @param {WebSocket} ws - 送信先 WebSocket
+ * @param {Object} recorder - ProtocolRecorder instance
+ * @param {Object} options - probe metadata
+ * @param {number} options.probeIndex - capture session 内の probe 連番
+ * @param {string} options.probeMode - `initial` または `interval`
+ * @returns {boolean} 送信した場合 true、WS が open でない場合 false
+ * @example
+ * const sent = sendReadOnlyBoxsInfoProbe(ws, recorder, { probeIndex: 1, probeMode: "initial" });
+ */
+export function sendReadOnlyBoxsInfoProbe(ws, recorder, options) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  const request = { method: "get", params: { boxsInfo: 1 } };
+  recorder.recordOutbound("ws9999", request, {
+    purpose: "read-only-boxsInfo-probe",
+    probeIndex: options.probeIndex,
+    probeMode: options.probeMode,
+  });
+  ws.send(JSON.stringify(request));
+  return true;
+}
+
+/**
  * marker validation 用の集計を作成する。
  *
  * 【詳細説明】
@@ -730,8 +771,10 @@ export async function captureProtocolFixture(options) {
   let httpObserved = false;
   let wsOpened = false;
   let boxsInfoObserved = false;
+  let boxsInfoProbeCount = 0;
   let heartbeatAcked = false;
   let markerTimers = [];
+  let boxsInfoProbeTimer = null;
   let interactiveMarkerReader = null;
   const markerTracker = createMarkerTracker(options.markerSchedule);
   const started = recorder.startSession({
@@ -795,10 +838,26 @@ export async function captureProtocolFixture(options) {
       ws.on("open", () => {
         wsOpened = true;
         recorder.recordTransportEvent({ channel: "ws9999", type: "open", details: { url: wsUrl } });
-        if (options.sendBoxsInfo) {
-          const request = { method: "get", params: { boxsInfo: 1 } };
-          recorder.recordOutbound("ws9999", request, { purpose: "read-only-boxsInfo-probe" });
-          ws.send(JSON.stringify(request));
+        if (options.sendBoxsInfo || options.boxsInfoProbeIntervalMs > 0) {
+          boxsInfoProbeCount += 1;
+          sendReadOnlyBoxsInfoProbe(ws, recorder, {
+            probeIndex: boxsInfoProbeCount,
+            probeMode: "initial",
+          });
+        }
+        if (options.boxsInfoProbeIntervalMs > 0) {
+          boxsInfoProbeTimer = setInterval(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+              clearInterval(boxsInfoProbeTimer);
+              boxsInfoProbeTimer = null;
+              return;
+            }
+            boxsInfoProbeCount += 1;
+            sendReadOnlyBoxsInfoProbe(ws, recorder, {
+              probeIndex: boxsInfoProbeCount,
+              probeMode: "interval",
+            });
+          }, options.boxsInfoProbeIntervalMs);
         }
       });
       ws.on("message", (data, isBinary) => {
@@ -837,6 +896,10 @@ export async function captureProtocolFixture(options) {
       } else if (ws.readyState === WebSocket.CONNECTING) {
         ws.terminate();
       }
+      if (boxsInfoProbeTimer) {
+        clearInterval(boxsInfoProbeTimer);
+        boxsInfoProbeTimer = null;
+      }
       await sleep(100);
     }
     if (options.skipWs && (markerTimers.length > 0 || interactiveMarkerReader)) {
@@ -846,6 +909,10 @@ export async function captureProtocolFixture(options) {
     markerTimers.forEach((timer) => {
       clearTimeout(timer);
     });
+    if (boxsInfoProbeTimer) {
+      clearInterval(boxsInfoProbeTimer);
+      boxsInfoProbeTimer = null;
+    }
     if (interactiveMarkerReader) {
       interactiveMarkerReader.close();
     }
@@ -880,6 +947,7 @@ export async function captureProtocolFixture(options) {
       httpObserved,
       wsOpened,
       boxsInfoObserved,
+      boxsInfoProbeCount,
       heartbeatAcked,
       errorCount: errors.length,
     },
@@ -906,6 +974,7 @@ export async function captureProtocolFixture(options) {
       httpObserved,
       wsOpened,
       boxsInfoObserved,
+      boxsInfoProbeCount,
       heartbeatAcked,
       errors,
     },

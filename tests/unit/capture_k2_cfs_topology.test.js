@@ -23,6 +23,7 @@ describe("capture_k2_cfs_topology helpers", () => {
     expect(options.host).toBe("192.0.2.21");
     expect(options.outDir).toBe("tmp/cfs-topology");
     expect(options.durationMs).toBe(900000);
+    expect(options.boxsInfoProbeIntervalMs).toBe(30000);
     expect(options.minimumEvents).toBe(20);
     expect(options.interactiveMarkers).toBe(true);
     expect(options.keepFailed).toBe(true);
@@ -36,6 +37,8 @@ describe("capture_k2_cfs_topology helpers", () => {
       "tmp/cfs-topology",
       "--duration-ms",
       "120000",
+      "--boxsinfo-interval-ms",
+      "45000",
       "--marker-at",
       "1000:observed-cfs-connected",
       "--no-interactive-markers",
@@ -43,6 +46,7 @@ describe("capture_k2_cfs_topology helpers", () => {
     ]);
 
     expect(options.durationMs).toBe(120000);
+    expect(options.boxsInfoProbeIntervalMs).toBe(45000);
     expect(options.markerSchedule).toEqual([
       {
         atMs: 1000,
@@ -69,6 +73,7 @@ describe("capture_k2_cfs_topology helpers", () => {
       attachment: "CFS",
       scenario: "k2-cfs-topology-validation",
       sendBoxsInfo: true,
+      boxsInfoProbeIntervalMs: 30000,
       requireHttp: true,
       requireWs: true,
       requireBoxsInfo: true,

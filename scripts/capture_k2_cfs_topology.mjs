@@ -20,7 +20,7 @@
  *
  * @version 1.390.1328 (PR #432)
  * @since   1.390.1326 (PR #432)
- * @lastModified 2026-08-08 20:20:41
+ * @lastModified 2026-08-08 20:41:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 10 実機 fixture 取得後、観測された marker timing の推奨例を docs へ追記する
@@ -71,6 +71,8 @@ Options:
   --duration-ms <number>    Observation duration. Default: 900000.
   --ws-port <number>        WebSocket port. Default: 9999.
   --http-port <number>      HTTP port. Default: 80.
+  --boxsinfo-interval-ms <number>
+                            Repeat read-only boxsInfo probe while WS is open. Default: 30000.
   --minimum-events <number> Minimum required events. Default: 20.
   --marker-at <ms:name[:json-details]>
                             Optional scheduled marker. Repeatable.
@@ -102,6 +104,7 @@ export function parseArgs(argv) {
     durationMs: 900000,
     wsPort: 9999,
     httpPort: 80,
+    boxsInfoProbeIntervalMs: 30000,
     minimumEvents: 20,
     markerSchedule: [],
     interactiveMarkers: true,
@@ -133,6 +136,7 @@ export function parseArgs(argv) {
     else if (arg === "--duration-ms") options.durationMs = Number(next);
     else if (arg === "--ws-port") options.wsPort = Number(next);
     else if (arg === "--http-port") options.httpPort = Number(next);
+    else if (arg === "--boxsinfo-interval-ms") options.boxsInfoProbeIntervalMs = Number(next);
     else if (arg === "--minimum-events") options.minimumEvents = Number(next);
     else if (arg === "--marker-at") options.markerSchedule.push(parseMarkerScheduleItem(next));
     else if (arg === "--notes") options.notes = next;
@@ -157,6 +161,11 @@ export function parseArgs(argv) {
   if (!Number.isFinite(options.httpPort) || options.httpPort <= 0) {
     throw new Error("--http-port must be a positive number");
   }
+  if (!Number.isFinite(options.boxsInfoProbeIntervalMs) ||
+      options.boxsInfoProbeIntervalMs < 0 ||
+      (options.boxsInfoProbeIntervalMs > 0 && options.boxsInfoProbeIntervalMs < 1000)) {
+    throw new Error("--boxsinfo-interval-ms must be 0 or a number >= 1000");
+  }
   if (!Number.isFinite(options.minimumEvents) || options.minimumEvents < 0) {
     throw new Error("--minimum-events must be a number >= 0");
   }
@@ -168,7 +177,7 @@ export function parseArgs(argv) {
  *
  * 【詳細説明】
  * - K2 Pro Combo + CFS の固定 metadata と read-only 検証条件をここで付与する。
- * - `sendBoxsInfo` だけを true にし、印刷開始・停止・CFS制御などの command は一切含めない。
+ * - `sendBoxsInfo` と interval probe だけを true にし、印刷開始・停止・CFS制御などの command は一切含めない。
  *
  * @function buildK2CfsTopologyCaptureOptions
  * @param {Object} options - Gate 10 CLI option
@@ -183,6 +192,7 @@ export function buildK2CfsTopologyCaptureOptions(options) {
     durationMs: options.durationMs,
     wsPort: options.wsPort,
     httpPort: options.httpPort,
+    boxsInfoProbeIntervalMs: options.boxsInfoProbeIntervalMs,
     minimumEvents: options.minimumEvents,
     markerSchedule: options.markerSchedule,
     interactiveMarkers: options.interactiveMarkers,
