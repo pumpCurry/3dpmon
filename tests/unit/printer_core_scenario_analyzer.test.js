@@ -629,6 +629,81 @@ describe("Printer Core v3 protocol scenario analyzer", () => {
     });
   });
 
+  it("metadata.validation countedEventCountをread-only probe除外込みで再検算する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "counted-count-match" },
+        validation: {
+          success: true,
+          failureReasons: [],
+          eventCount: 3,
+          countedEventCount: 2,
+          protocolEventCount: 2,
+          markerCount: 1,
+        },
+      },
+      events: [
+        marker(1, 0, "observed", { source: "stdin" }),
+        {
+          sequence: 2,
+          atMs: 25,
+          direction: "out",
+          channel: "ws9999",
+          kind: "frame",
+          payload: { method: "get", params: { boxsInfo: 1 } },
+          details: { purpose: "read-only-boxsInfo-probe" },
+        },
+        ws(3, 50, { boxsInfo: { materialBoxs: [] } }),
+      ],
+    });
+
+    expect(report.success).toBe(true);
+    expect(report.countedEventCount).toBe(2);
+    expect(report.validation.counts.checked).toContainEqual({
+      key: "countedEventCount",
+      expected: 2,
+      actual: 2,
+      matches: true,
+    });
+  });
+
+  it("metadata.validation countedEventCountが実eventsのprobe分類とずれた場合は検出する", () => {
+    const report = analyzeProtocolScenarioFixture({
+      metadata: {
+        capture: { scenario: "counted-count-mismatch" },
+        validation: {
+          success: true,
+          failureReasons: [],
+          eventCount: 3,
+          countedEventCount: 2,
+          protocolEventCount: 2,
+          markerCount: 1,
+        },
+      },
+      events: [
+        marker(1, 0, "observed", { source: "stdin" }),
+        {
+          sequence: 2,
+          atMs: 25,
+          direction: "out",
+          channel: "ws9999",
+          kind: "frame",
+          payload: { method: "get", params: { boxsInfo: 1 } },
+          details: { purpose: "manual-edit-removed-probe-purpose" },
+        },
+        ws(3, 50, { boxsInfo: { materialBoxs: [] } }),
+      ],
+    });
+
+    expect(report.success).toBe(false);
+    expect(report.failureReasons).toEqual(["fixture-event-count-mismatch"]);
+    expect(report.validation.counts.mismatches).toContainEqual({
+      key: "countedEventCount",
+      expected: 2,
+      actual: 3,
+    });
+  });
+
   it("metadata.validation countが実eventsとずれた場合はfailure reasonへ分離する", () => {
     const report = analyzeProtocolScenarioFixture({
       metadata: {

@@ -18,9 +18,9 @@
  * - {@link getProtocolScenarioProfile}：標準 scenario profile を取得
  * - {@link listProtocolScenarioProfiles}：利用可能な標準 scenario profile 名を列挙
  *
- * @version 1.390.1328 (PR #432)
+ * @version 1.390.1333 (PR #432)
  * @since   1.390.1314 (PR #432)
- * @lastModified 2026-08-08 20:55:33
+ * @lastModified 2026-08-08 22:55:00
  * -----------------------------------------------------------
  * @todo
  * - K2 print lifecycle 実機 fixture 取得後に state/window predicate を追加する
@@ -526,6 +526,41 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
 }
 
 /**
+ * read-only boxsInfo probe request の event かどうかを判定する。
+ *
+ * 【詳細説明】
+ * - capture CLI の minimum-events 判定と同じ境界を Analyzer 側でも再現する。
+ * - outbound の読み取り request は観測補助であり、fixture の実証量として数える対象から除外する。
+ * - inbound `boxsInfo` response や marker は除外せず、実機から得た証拠として扱う。
+ *
+ * @private
+ * @param {object|null|undefined} event - ProtocolRecorder event
+ * @returns {boolean} read-only boxsInfo probe request の場合 true
+ */
+function isReadOnlyBoxsInfoProbeEvent(event) {
+  return event?.direction === "out" &&
+    event?.kind === "frame" &&
+    event?.details?.purpose === "read-only-boxsInfo-probe";
+}
+
+/**
+ * metadata.validation.countedEventCount と照合する event 数を再計算する。
+ *
+ * 【詳細説明】
+ * - `eventCount` は fixture 完全性の総数、`countedEventCount` は minimum-events 用の数で役割が異なる。
+ * - 手作業編集で `details.purpose` が変わった場合でも、Analyzer が再計算して差分を検出できるようにする。
+ *
+ * @private
+ * @param {Array<object>} events - ProtocolRecorder event 一覧
+ * @returns {number} countedEventCount として扱う event 数
+ */
+function countMinimumValidationEvents(events) {
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => !isReadOnlyBoxsInfoProbeEvent(event))
+    .length;
+}
+
+/**
  * metadata.validation の event count と実 events を照合する。
  *
  * 【詳細説明】
@@ -536,16 +571,18 @@ function analyzeRequiredPayloadKeys(events, requiredPayloadKeys) {
  * @private
  * @param {object} metadata - fixture metadata
  * @param {number} eventCount - 実 events 件数
+ * @param {number} countedEventCount - minimum-events 用に再計算した events 件数
  * @param {number} protocolEventCount - 実 protocol event 件数
  * @param {number} markerCount - 実 marker event 件数
  * @returns {object} count 整合性 report
  */
-function analyzeValidationCounts(metadata, eventCount, protocolEventCount, markerCount) {
+function analyzeValidationCounts(metadata, eventCount, countedEventCount, protocolEventCount, markerCount) {
   const validation = metadata?.validation && typeof metadata.validation === "object"
     ? metadata.validation
     : {};
   const checks = [
     { key: "eventCount", actual: eventCount },
+    { key: "countedEventCount", actual: countedEventCount },
     { key: "protocolEventCount", actual: protocolEventCount },
     { key: "markerCount", actual: markerCount },
   ].filter((entry) => Number.isFinite(validation[entry.key]));
@@ -1199,9 +1236,11 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
   const payloadTimeline = createPayloadTimeline(events, requirements.timelinePayloadKeys);
   const cfsSelection = analyzeCfsSelectionEvidence(events);
   const protocolEventCount = events.filter((event) => event?.direction !== "marker").length;
+  const countedEventCount = countMinimumValidationEvents(events);
   const validationCounts = analyzeValidationCounts(
     metadata,
     events.length,
+    countedEventCount,
     protocolEventCount,
     markers.length,
   );
@@ -1245,6 +1284,7 @@ export function analyzeProtocolScenarioFixture(fixture, options = {}) {
     },
     scenario: metadata.capture?.scenario ?? null,
     eventCount: events.length,
+    countedEventCount,
     protocolEventCount,
     markerCount: markers.length,
     markers,

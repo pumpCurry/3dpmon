@@ -114,6 +114,7 @@ describe("capture_k2_cfs_topology helpers", () => {
     ]));
 
     expect(options.interactiveMarkers).toBe(false);
+    expect(options.scenario).toBe("k2-cfs-topology-diagnostic");
     expect(options.notes).toContain("diagnostic-only");
     expect(options.notes).toContain("Gate 10 profile acceptance is not expected");
   });

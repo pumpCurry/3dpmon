@@ -82,7 +82,15 @@ node scripts/capture_k2_cfs_topology.mjs \
   outbound read-only `boxsInfo` probe request events themselves, because those
   requests are observation aids rather than device evidence. Inbound
   `boxsInfo`, transport events, markers, and heartbeat acknowledgements remain
-  counted evidence.
+  counted evidence. The offline Analyzer recomputes this value from
+  `events.ndjson` and compares it with `metadata.validation.countedEventCount`
+  when that metadata field is present.
+
+- `--no-interactive-markers` is diagnostic-only. When this option is used, the
+  wrapper writes `scenario: "k2-cfs-topology-diagnostic"` instead of
+  `k2-cfs-topology-validation`, and the notes also state that Gate 10 profile
+  acceptance is not expected. Certification captures must leave stdin markers
+  enabled.
 
 - The equivalent generic recorder command is:
 

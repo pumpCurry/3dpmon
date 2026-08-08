@@ -18,9 +18,9 @@
  * - {@link captureK2CfsTopology}：Gate 10 fixture を取得
  * - {@link main}：CLI エントリポイント
  *
- * @version 1.390.1328 (PR #432)
+ * @version 1.390.1333 (PR #432)
  * @since   1.390.1326 (PR #432)
- * @lastModified 2026-08-08 21:18:00
+ * @lastModified 2026-08-08 22:55:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 10 実機 fixture 取得後、観測された marker timing の推奨例を docs へ追記する
@@ -190,6 +190,9 @@ export function parseArgs(argv) {
  * const captureOptions = buildK2CfsTopologyCaptureOptions({ host: "DEVICE_IP", outDir: "tmp/cfs" });
  */
 export function buildK2CfsTopologyCaptureOptions(options) {
+  const scenario = options.diagnosticCapture
+    ? "k2-cfs-topology-diagnostic"
+    : "k2-cfs-topology-validation";
   const notes = options.diagnosticCapture
     ? `${options.notes} (diagnostic-only: stdin markers disabled; Gate 10 profile acceptance is not expected)`
     : options.notes;
@@ -206,7 +209,7 @@ export function buildK2CfsTopologyCaptureOptions(options) {
     keepFailed: options.keepFailed,
     model: "K2 Pro Combo",
     attachment: "CFS",
-    scenario: "k2-cfs-topology-validation",
+    scenario,
     notes,
     sendBoxsInfo: true,
     skipHttp: false,
