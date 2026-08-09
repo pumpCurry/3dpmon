@@ -3,9 +3,9 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1357 (PR #432)
+ * @version 1.390.1358 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 13:32:08
+ * @lastModified 2026-08-09 13:38:08
  */
 
 import { createHash } from "node:crypto";
@@ -506,7 +506,14 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(validatePrintPlanForStart(plan, {
       sessionId: "session:upload-a",
       uploadGeneration: "generation:7",
-    }).errors).toEqual(expect.arrayContaining(["untrusted-upload-receipt"]));
+    }).errors).toEqual(expect.arrayContaining([
+      "missing-start-device-id",
+      "missing-start-remote-path",
+      "missing-start-file-hash",
+      "missing-start-receipt-id",
+      "untrusted-start-context",
+      "untrusted-upload-receipt",
+    ]));
     expect(validatePrintPlanForStart(plan, {
       sessionId: "session:other",
       uploadGeneration: "generation:7",
@@ -521,6 +528,40 @@ describe("Printer Core v3 PrintPlan", () => {
       "upload-receipt-generation-mismatch",
       "untrusted-upload-receipt",
     ]));
+  });
+
+  it("receiptからコピーしたstartContextはactive authority証拠にならない", () => {
+    const plan = createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset("benchy.gcode", [0], {
+        sessionId: "session:stale",
+        uploadGeneration: "generation:old",
+      }),
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    });
+    const callerCopiedContext = {
+      sessionId: plan.asset.uploadReceipt.sessionId,
+      uploadGeneration: plan.asset.uploadReceipt.uploadGeneration,
+      deviceId: plan.deviceId,
+      remotePath: plan.asset.path,
+      fileHash: plan.asset.fileHash,
+      receiptId: plan.asset.uploadReceipt.receiptId,
+      provenance: {
+        source: "caller-declared",
+        attestation: "copied-context",
+      },
+    };
+
+    expect(validatePrintPlanForStart(plan, callerCopiedContext).errors).toEqual(expect.arrayContaining([
+      "untrusted-start-context",
+      "untrusted-upload-receipt",
+    ]));
+    expect(() => createPrintStartCommandRequestFromPlan(plan, {
+      startContext: callerCopiedContext,
+      transportKind: "ws9999",
+      entropySource: () => "unit",
+    })).toThrow("untrusted-start-context");
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {

@@ -73,7 +73,9 @@ must not produce blind retry for print start once command authority is enabled.
 Start-ready validation also compares the active command/session context and the
 current upload generation with the receipt. This prevents a stale but genuine
 upload receipt from a previous session or overwritten remote path from being
-replayed into a later multicolor start.
+replayed into a later multicolor start. The context must itself be issued by the
+start authority boundary. A caller-declared context that merely copies
+`sessionId` and `uploadGeneration` from the receipt remains untrusted.
 
 ## Consequences
 
