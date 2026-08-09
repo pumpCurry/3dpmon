@@ -11,7 +11,6 @@
 import { describe, expect, it } from "vitest";
 import { createPrinterCommandResult, shouldRetryPrinterCommand } from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 import {
-  createGcodeAnalysisAttestation,
   createMulticolorCfsPrintPlan,
   createPrintStartCommandRequestFromPlan,
   createSingleColorPrintPlan,
@@ -35,10 +34,8 @@ function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
     path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
     fileName,
     fileMd5: "md5-demo",
-    analysis: createGcodeAnalysisAttestation({
-      content,
-      analyzerVersion: "unit-gcode-analyzer",
-    }),
+    content,
+    analyzerVersion: "unit-gcode-analyzer",
   };
 }
 
@@ -293,7 +290,7 @@ describe("Printer Core v3 PrintPlan", () => {
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
         { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
       ],
-    })).toThrow("logical tools");
+    })).toThrow("derives G-code analysis from asset.content");
   });
 
   it("CFSマルチカラーPrintPlan由来のcommandもcontract-onlyで送信しない", () => {
@@ -401,7 +398,7 @@ describe("Printer Core v3 PrintPlan", () => {
       },
       protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
-    })).toThrow("analyzed G-code logical tools");
+    })).toThrow("asset.content");
 
     expect(() => createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
@@ -412,12 +409,6 @@ describe("Printer Core v3 PrintPlan", () => {
   });
 
   it("caller-declaredなanalysis provenanceではPrintPlanに昇格しない", () => {
-    expect(() => createGcodeAnalysisAttestation({
-      fileHash: "sha256:caller",
-      logicalTools: [0],
-      analyzerVersion: "caller",
-    })).toThrow("derives fileHash and logicalTools from content");
-
     expect(() => createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
@@ -437,7 +428,7 @@ describe("Printer Core v3 PrintPlan", () => {
       },
       protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
-    })).toThrow("attested G-code analysis provenance");
+    })).toThrow("derives G-code analysis from asset.content");
   });
 
   it("caller supplied assetIdでcontent hash bindingを迂回できない", () => {

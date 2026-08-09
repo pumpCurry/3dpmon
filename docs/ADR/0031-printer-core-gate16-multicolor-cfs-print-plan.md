@@ -36,9 +36,9 @@ The plan also carries:
 - unique `materialSourceIds[]`
 - `colorMatchPolicy.mode = "explicit-tool-assignment"`
 - `colorMatchPolicy.requireObservedSelectedSource = true`
-- `asset.toolCount` and `asset.logicalTools[]` from attested G-code analysis
-- `asset.analysis` with module-issued attestation, analyzer version, file hash,
-  and logical tool list
+- `asset.toolCount` and `asset.logicalTools[]` from module-owned G-code analysis
+- `asset.analysis` derived inside the PrintPlan module from `asset.content`,
+  with analyzer version, file hash, and logical tool list
 - `authority.canStartPrint = false`
 
 Callers cannot weaken the multicolor safety policy. If a caller supplies a
@@ -47,12 +47,13 @@ factory normalizes it back to the safe policy and validation rejects any
 manually assembled unsafe plan.
 
 Authority PrintPlans must not synthesize logical tools from `toolCount`,
-`asset.tools`, or other caller-provided convenience fields. Analysis attestation
-is derived from G-code content, not from caller-supplied logical tool claims. A
-file without analysis evidence is rejected instead of being treated as a
-one-tool file. The logical G-code asset identity includes the content hash, and
-caller supplied `assetId` must match that deterministic identity, so a path/name
-reuse with different bytes cannot silently reuse the old asset ID.
+`asset.tools`, `asset.analysis`, or other caller-provided convenience fields.
+Analysis is derived from G-code content owned by the PrintPlan path, not from
+caller-supplied logical tool claims or prebuilt attestations. A file without
+content is rejected instead of being treated as a one-tool file. The logical
+G-code asset identity includes the content hash, and caller supplied `assetId`
+must match that deterministic identity, so a path/name reuse with different
+bytes cannot silently reuse the old asset ID.
 
 `createPrintStartCommandRequestFromPlan()` may convert the plan into a
 `print-start` command request, but the command remains `contract-only` and

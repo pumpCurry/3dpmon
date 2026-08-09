@@ -43,15 +43,17 @@ Rules:
   segment usage
 - exact/high/estimated confidence must be explicit in observation evidence;
   omitted or unknown confidence stays `unknown`
-- exact/high/estimated confidence also requires confidence evidence with source
-  and measurement method; a caller-provided confidence string alone is treated
-  as `unknown`
+- exact/high/estimated confidence requires internally issued confidence
+  evidence; public callers cannot mint exact/high evidence by naming a trusted
+  source, and a caller-provided confidence string alone is treated as `unknown`
 - multicolor total-only usage is not split across tools
 - unknown segments remain auditable but cannot debit spool remaining length
 - candidate ledger events are append-only shaped, but `canAppend = false` in this
   gate
 - `canDebitRemaining = true` is only possible when a segment has `spoolId`,
-  positive numeric usage, and non-unknown confidence
+  positive numeric usage, and internally trusted exact/high confidence evidence;
+  Gate 17/18 public APIs therefore stay fail-closed and produce non-debit
+  candidates until the provider/repository owner issues that evidence
 - consumption events carry a stable `consumptionIdentity` derived from the
   segment, so an estimated-to-exact update does not create a second independent
   positive consumption identity

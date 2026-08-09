@@ -13,7 +13,6 @@
  * - exact/high/estimated/unknown の confidence 境界を固定する
  *
  * 【公開関数一覧】
- * - {@link createFilamentUsageConfidenceEvidence}：usage confidence evidence を生成
  * - {@link createJobMaterialSegmentsFromPrintPlan}：PrintPlan から material segment 候補を生成
  * - {@link createFilamentLedgerEventsFromSegments}：segment から ledger event 候補を生成
  * - {@link createFilamentLedgerCorrectionEvent}：既存 consumption event の correction 候補を生成
@@ -208,6 +207,7 @@ function createConfidenceEvidenceSignature(evidence) {
  * - caller 指定 confidence には署名せず、source/method policy から confidence を導出する。
  *
  * @function createFilamentUsageConfidenceEvidence
+ * @private
  * @param {object} options - evidence 生成オプション
  * @param {string} options.source - evidence source
  * @param {string} options.measurementMethod - measurement method
@@ -217,7 +217,7 @@ function createConfidenceEvidenceSignature(evidence) {
  * @example
  * const evidence = createFilamentUsageConfidenceEvidence({ source: "trusted-physical-counter", measurementMethod: "counter" });
  */
-export function createFilamentUsageConfidenceEvidence(options = {}) {
+function createFilamentUsageConfidenceEvidence(options = {}) {
   const source = requireNonEmptyString(options.source, "confidence.source");
   const measurementMethod = requireNonEmptyString(options.measurementMethod, "confidence.measurementMethod");
   const confidence = FILAMENT_CONFIDENCE_POLICY[`${source}:${measurementMethod}`] || "unknown";
@@ -270,6 +270,24 @@ function resolveTrustedConfidence(confidenceValue, evidence) {
   return evidence.confidence === confidence && evidence.attestation === expected
     ? confidence
     : "unknown";
+}
+
+/**
+ * segment が trusted debit confidence を持つか検査する。
+ *
+ * 【詳細説明】
+ * - caller が segment.confidence を `exact` / `high` に手書きしても、対応する内部evidenceが無ければdebit候補にしない。
+ * - Gate 18時点では evidence factory を公開しないため、外部APIから残量減算権威へ昇格できない。
+ *
+ * @private
+ * @param {object} segment - JobMaterialSegment 候補
+ * @returns {boolean} trusted debit confidence を持つ場合 true
+ */
+function hasTrustedDebitConfidence(segment) {
+  if (segment?.confidence !== "exact" && segment?.confidence !== "high") {
+    return false;
+  }
+  return resolveTrustedConfidence(segment.confidence, segment?.evidence?.confidenceEvidence) === segment.confidence;
 }
 
 /**
@@ -350,9 +368,10 @@ function resolveSegmentUsage(plan, assignment, observation) {
   const usageEntry = findUsageForAssignment(assignment, materialUsages);
   const entryUsed = readUsageEntryLength(usageEntry);
   if (entryUsed !== null) {
+    const confidence = resolveTrustedConfidence(usageEntry?.confidence, usageEntry?.confidenceEvidence);
     return {
       usedLengthMm: entryUsed,
-      confidence: resolveTrustedConfidence(usageEntry?.confidence, usageEntry?.confidenceEvidence),
+      confidence,
       allocationMode: "observed-per-material",
       evidence: cloneJsonValue(usageEntry),
     };
@@ -363,11 +382,15 @@ function resolveSegmentUsage(plan, assignment, observation) {
     observation.materialUsedMm
   );
   if (plan.planKind === "single-color" && totalUsed !== null) {
+    const confidence = resolveTrustedConfidence(observation.confidence, observation.confidenceEvidence);
     return {
       usedLengthMm: totalUsed,
-      confidence: resolveTrustedConfidence(observation.confidence, observation.confidenceEvidence),
+      confidence,
       allocationMode: "single-source-total",
-      evidence: { totalUsedLengthMm: totalUsed },
+      evidence: {
+        totalUsedLengthMm: totalUsed,
+        confidenceEvidence: cloneJsonValue(observation.confidenceEvidence),
+      },
     };
   }
   const estimatedUsed = normalizeUsedLengthMm(assignment?.estimatedUsedLengthMm);
@@ -517,7 +540,7 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
     const hasDebitAmount = normalizedUsed !== null && normalizedUsed > 0;
     const canDebitRemaining = Boolean(segment.spoolId) &&
       hasDebitAmount &&
-      (segment.confidence === "exact" || segment.confidence === "high");
+      hasTrustedDebitConfidence(segment);
     return {
       schemaVersion: PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION,
       ledgerEventId: createPrinterCoreV3DeterministicId("filament-ledger-event", [
@@ -610,7 +633,7 @@ export function createFilamentLedgerCorrectionEvent(originalEvent, correctedSegm
       canAppend: false,
       canDebitRemaining: Boolean(correctedSegment.spoolId) &&
         correctedUsed > 0 &&
-        (correctedSegment.confidence === "exact" || correctedSegment.confidence === "high"),
+        hasTrustedDebitConfidence(correctedSegment),
     },
   };
 }

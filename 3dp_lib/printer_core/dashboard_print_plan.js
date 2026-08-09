@@ -15,7 +15,6 @@
  * - PrintPlan から contract-only print-start command request を生成する
  *
  * 【公開関数一覧】
- * - {@link createGcodeAnalysisAttestation}：G-code content から analysis attestation を生成
  * - {@link createSingleColorPrintPlan}：単色 PrintPlan を生成
  * - {@link createMulticolorCfsPrintPlan}：CFS/マルチカラー PrintPlan を生成
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
@@ -290,6 +289,7 @@ function readAnalysisLogicalToolCandidates(analysis) {
  * - caller が同じshapeを手で組み立てても、module-private signature が一致しないため PrintPlan へ昇格しない。
  *
  * @function createGcodeAnalysisAttestation
+ * @private
  * @param {object} options - analysis 生成オプション
  * @param {string} options.content - G-code content
  * @param {string=} options.analyzerVersion - analyzer version
@@ -298,7 +298,7 @@ function readAnalysisLogicalToolCandidates(analysis) {
  * @example
  * const analysis = createGcodeAnalysisAttestation({ content: "T0\nG1 X0" });
  */
-export function createGcodeAnalysisAttestation(options = {}) {
+function createGcodeAnalysisAttestation(options = {}) {
   if (Array.isArray(options.logicalTools) || Array.isArray(options.tools) || options.fileHash || options.sha256) {
     throw new TypeError("G-code analysis attestation derives fileHash and logicalTools from content.");
   }
@@ -410,7 +410,16 @@ function normalizeGcodeAnalysis(asset) {
 function normalizeGcodeAsset(asset) {
   const path = requireNonEmptyString(asset?.path || asset?.filePath || asset?.filename, "asset.path");
   const fileName = String(asset?.fileName || asset?.name || path.split(/[\\/]/u).pop() || path).trim();
-  const analysis = normalizeGcodeAnalysis(asset);
+  if (asset?.analysis !== undefined) {
+    throw new TypeError("PrintPlan derives G-code analysis from asset.content.");
+  }
+  const content = requireNonEmptyString(asset?.content || asset?.gcodeContent, "asset.content");
+  const analysis = normalizeGcodeAnalysis({
+    analysis: createGcodeAnalysisAttestation({
+      content,
+      analyzerVersion: asset?.analyzerVersion || "printer-core-gcode-analyzer-v1",
+    }),
+  });
   const expectedAssetId = createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName, analysis.fileHash]);
   if (asset?.assetId && asset.assetId !== expectedAssetId) {
     throw new TypeError("PrintPlan assetId must match analyzed content hash.");
