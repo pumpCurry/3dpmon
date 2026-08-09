@@ -60,6 +60,10 @@ The plan additionally requires an upload receipt so the analyzed bytes are bound
 to the remote file path that command authority will ask the printer to start.
 Existing remote files without a printer-side hash/receipt remain outside
 authority and must be reuploaded or verified before PrintPlan creation.
+Caller-declared receipts are not authority receipts. They remain
+`trusted:false` unless issued by the upload authority boundary, so public
+PrintPlan creation cannot make a file command-ready by handwriting a matching
+receipt object.
 
 `createPrintStartCommandRequestFromPlan()` may convert the plan into a
 `print-start` command request, but the command remains `contract-only` and

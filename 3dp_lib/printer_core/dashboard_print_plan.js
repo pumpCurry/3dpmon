@@ -55,6 +55,17 @@ export const PRINT_PLAN_SCHEMA_VERSION = 1;
 const GCODE_ANALYSIS_ATTESTATION_SECRET = `printer-core-gcode-analysis:${Date.now()}:${Math.random()}`;
 
 /**
+ * upload receipt attestation 用の module-private secret。
+ *
+ * 【詳細説明】
+ * - caller supplied receipt は path/hash/device が一致しても `trusted:false` のまま扱う。
+ * - 将来のupload transport/providerだけが、このsecret相当の発行境界を所有する。
+ *
+ * @constant {string}
+ */
+const UPLOAD_RECEIPT_ATTESTATION_SECRET = `printer-core-upload-receipt:${Date.now()}:${Math.random()}`;
+
+/**
  * JSON 互換値を deep clone する。
  *
  * 【詳細説明】
@@ -261,6 +272,29 @@ function createGcodeAnalysisSignature(analysis) {
 }
 
 /**
+ * upload receipt signature を生成する。
+ *
+ * 【詳細説明】
+ * - 現Gateでは public factory からこの署名を発行しない。
+ * - upload authority 接続時に、実upload結果から発行されたreceiptだけをtrusted化するためのplaceholder。
+ *
+ * @private
+ * @param {object} receipt - upload receipt
+ * @returns {string} signature
+ */
+function createUploadReceiptSignature(receipt) {
+  return createPrinterCoreV3DeterministicId("upload-receipt", [
+    UPLOAD_RECEIPT_ATTESTATION_SECRET,
+    receipt.receiptId,
+    receipt.deviceId,
+    receipt.remotePath,
+    receipt.fileHash,
+    receipt.sessionId || "",
+    receipt.uploadGeneration || "",
+  ]);
+}
+
+/**
  * analysis payload から logical tool ID 候補を取り出す。
  *
  * 【詳細説明】
@@ -419,7 +453,9 @@ function normalizeUploadReceipt(asset, path, fileHash, deviceId) {
   const receiptId = requireNonEmptyString(receipt.receiptId || receipt.uploadReceiptId, "uploadReceipt.receiptId");
   const receiptPath = requireNonEmptyString(receipt.remotePath || receipt.path, "uploadReceipt.remotePath");
   const receiptHash = requireNonEmptyString(receipt.fileHash || receipt.contentHash || receipt.sha256, "uploadReceipt.fileHash");
-  const receiptDeviceId = String(receipt.deviceId || deviceId).trim();
+  const receiptDeviceId = requireNonEmptyString(receipt.deviceId, "uploadReceipt.deviceId");
+  const sessionId = String(receipt.sessionId || "").trim() || null;
+  const uploadGeneration = String(receipt.uploadGeneration || "").trim() || null;
   if (receiptPath !== path) {
     throw new TypeError("PrintPlan upload receipt remotePath must match asset.path.");
   }
@@ -429,14 +465,32 @@ function normalizeUploadReceipt(asset, path, fileHash, deviceId) {
   if (receiptDeviceId !== deviceId) {
     throw new TypeError("PrintPlan upload receipt deviceId must match plan deviceId.");
   }
+  const trustedReceipt = {
+    receiptId,
+    deviceId: receiptDeviceId,
+    remotePath: receiptPath,
+    fileHash: receiptHash,
+    sessionId,
+    uploadGeneration,
+  };
+  const expectedAttestation = createUploadReceiptSignature(trustedReceipt);
+  const trusted = receipt.provenance?.source === "printer-core-upload-authority" &&
+    receipt.provenance?.attestation === expectedAttestation;
   return {
     receiptId,
     uploadReceiptId: receiptId,
     deviceId: receiptDeviceId,
     remotePath: receiptPath,
     fileHash: receiptHash,
+    sessionId,
+    uploadGeneration,
     uploadedAt: receipt.uploadedAt || null,
     source: receipt.source || "printer-core-upload",
+    trusted,
+    provenance: {
+      source: receipt.provenance?.source || "caller-declared",
+      attestation: receipt.provenance?.attestation || null,
+    },
   };
 }
 
@@ -598,6 +652,7 @@ export function createSingleColorPrintPlan(options = {}) {
     authority: {
       mode: "plan-only",
       canStartPrint: false,
+      uploadReceiptTrusted: asset.uploadReceipt.trusted === true,
       requiresCommandAuthority: true,
       requiresExpectedStateConfirmation: true,
     },
@@ -657,6 +712,7 @@ export function createMulticolorCfsPrintPlan(options = {}) {
     authority: {
       mode: "plan-only",
       canStartPrint: false,
+      uploadReceiptTrusted: asset.uploadReceipt.trusted === true,
       requiresCommandAuthority: true,
       requiresExpectedStateConfirmation: true,
     },
@@ -804,6 +860,9 @@ export function validatePrintPlan(plan) {
   }
   if (plan.authority?.canStartPrint === true) {
     errors.push("plan-can-start-print");
+  }
+  if (plan.authority?.uploadReceiptTrusted === true && plan.asset?.uploadReceipt?.trusted !== true) {
+    errors.push("untrusted-upload-receipt");
   }
   return {
     ok: errors.length === 0,

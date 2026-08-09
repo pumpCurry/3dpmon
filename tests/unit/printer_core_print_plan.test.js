@@ -77,6 +77,13 @@ describe("Printer Core v3 PrintPlan", () => {
           logicalTools: [0],
         },
         toolCount: 1,
+        uploadReceipt: {
+          trusted: false,
+          provenance: {
+            source: "caller-declared",
+            attestation: null,
+          },
+        },
       },
       toolAssignments: [
         {
@@ -91,6 +98,7 @@ describe("Printer Core v3 PrintPlan", () => {
       authority: {
         mode: "plan-only",
         canStartPrint: false,
+        uploadReceiptTrusted: false,
         requiresCommandAuthority: true,
         requiresExpectedStateConfirmation: true,
       },
@@ -483,6 +491,45 @@ describe("Printer Core v3 PrintPlan", () => {
       protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     })).toThrow("upload receipt remotePath must match asset.path");
+
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset("benchy.gcode"),
+        uploadReceipt: {
+          receiptId: "upload:missing-device",
+          remotePath: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+          fileHash: createSampleAsset("benchy.gcode").uploadReceipt.fileHash,
+        },
+      },
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("uploadReceipt.deviceId");
+  });
+
+  it("caller-declared upload receiptは整合していてもtrusted authorityにはならない", () => {
+    const plan = createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset("benchy.gcode"),
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    });
+
+    expect(plan.asset.uploadReceipt).toMatchObject({
+      trusted: false,
+      provenance: {
+        source: "caller-declared",
+        attestation: null,
+      },
+    });
+    expect(plan.authority.uploadReceiptTrusted).toBe(false);
+    expect(validatePrintPlan({
+      ...plan,
+      authority: {
+        ...plan.authority,
+        uploadReceiptTrusted: true,
+      },
+    }).errors).toEqual(expect.arrayContaining(["untrusted-upload-receipt"]));
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {

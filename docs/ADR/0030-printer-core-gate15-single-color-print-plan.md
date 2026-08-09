@@ -80,6 +80,10 @@ The asset must also carry an upload receipt that binds the analyzed content hash
 to the remote print path. `analysis.fileHash`, `asset.fileHash`, and
 `uploadReceipt.fileHash` must match, and `uploadReceipt.remotePath` must match
 `asset.path`.
+At this gate, caller-declared receipts are normalized as `trusted:false` unless
+they carry upload-authority provenance. This keeps the public PrintPlan API
+usable for contract construction while preventing it from minting command-ready
+upload evidence.
 
 Single-color plans also do not infer `protocolToolAlias = T1A`. If the selected
 source is CFS-backed, the protocol alias must be explicitly supplied by the
