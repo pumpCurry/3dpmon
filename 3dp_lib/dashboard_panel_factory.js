@@ -878,11 +878,26 @@ export function recreatePanelsForHost(typeId, hostname) {
         w: node.w,
         h: node.h,
       },
+      locked: Boolean(node.noMove),
+      fontSize: entry.element?.style.fontSize || "",
     });
   }
   for (const target of targets) {
     removePanel(target.panelId);
-    addPanel(typeId, hostname, target.position);
+    const recreatedPanelId = addPanel(typeId, hostname, target.position);
+    const recreatedEntry = recreatedPanelId ? activePanels.get(recreatedPanelId) : null;
+    if (target.fontSize && recreatedEntry?.element) {
+      recreatedEntry.element.style.fontSize = target.fontSize;
+    }
+    if (target.locked && recreatedEntry?.widget) {
+      grid.update(recreatedEntry.widget, { noMove: true, noResize: true });
+      recreatedEntry.element?.classList.add("panel-locked");
+      const lockBtn = recreatedEntry.element?.querySelector(".panel-lock-btn");
+      if (lockBtn) {
+        lockBtn.textContent = "🔒";
+        lockBtn.title = "このパネルの固定を解除";
+      }
+    }
   }
   return targets.length;
 }
