@@ -64,6 +64,20 @@ const FILAMENT_CONFIDENCE_EVIDENCE_SECRET = `printer-core-filament-confidence:${
 const SEGMENT_CONFIDENCE_VALUES = Object.freeze(new Set(["exact", "high", "estimated", "unknown"]));
 
 /**
+ * confidence source/method policy。
+ *
+ * 【詳細説明】
+ * - caller が任意sourceで `exact` を名乗れないよう、source/methodごとの上限を固定する。
+ *
+ * @constant {object}
+ */
+const FILAMENT_CONFIDENCE_POLICY = Object.freeze({
+  "trusted-physical-counter:counter": "exact",
+  "firmware-reported-total:firmware-total": "high",
+  "slicer-projection:slicer-estimate": "estimated",
+});
+
+/**
  * JSON 互換値を deep clone する。
  *
  * 【詳細説明】
@@ -191,25 +205,28 @@ function createConfidenceEvidenceSignature(evidence) {
  *
  * 【詳細説明】
  * - firmware/slicer/counter/provider など、観測値の出所が confidence を決めた証跡を表現する。
- * - caller が confidence 値だけを指定してもこの evidence が無ければ `unknown` として扱う。
+ * - caller 指定 confidence には署名せず、source/method policy から confidence を導出する。
  *
  * @function createFilamentUsageConfidenceEvidence
  * @param {object} options - evidence 生成オプション
- * @param {string} options.confidence - confidence 値
  * @param {string} options.source - evidence source
  * @param {string} options.measurementMethod - measurement method
+ * @param {string=} options.confidence - 期待confidence。policyと不一致の場合は拒否
  * @param {string=} options.observedAt - 観測時刻
  * @returns {object} confidence evidence
  * @example
- * const evidence = createFilamentUsageConfidenceEvidence({ confidence: "exact", source: "unit", measurementMethod: "counter" });
+ * const evidence = createFilamentUsageConfidenceEvidence({ source: "trusted-physical-counter", measurementMethod: "counter" });
  */
 export function createFilamentUsageConfidenceEvidence(options = {}) {
-  const confidence = normalizeConfidence(options.confidence, "unknown");
-  if (confidence === "unknown") {
-    throw new TypeError("Filament confidence evidence requires exact, high, or estimated confidence.");
-  }
   const source = requireNonEmptyString(options.source, "confidence.source");
   const measurementMethod = requireNonEmptyString(options.measurementMethod, "confidence.measurementMethod");
+  const confidence = FILAMENT_CONFIDENCE_POLICY[`${source}:${measurementMethod}`] || "unknown";
+  if (confidence === "unknown") {
+    throw new TypeError("Filament confidence evidence source/method is not trusted.");
+  }
+  if (options.confidence !== undefined && normalizeConfidence(options.confidence, "unknown") !== confidence) {
+    throw new TypeError("Filament confidence evidence conflicts with source/method policy.");
+  }
   const evidenceId = createPrinterCoreV3DeterministicId("filament-confidence-evidence", [
     confidence,
     source,
@@ -498,7 +515,9 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
   return segments.map((segment) => {
     const normalizedUsed = normalizeUsedLengthMm(segment.usedLengthMm);
     const hasDebitAmount = normalizedUsed !== null && normalizedUsed > 0;
-    const canDebitRemaining = Boolean(segment.spoolId) && hasDebitAmount && segment.confidence !== "unknown";
+    const canDebitRemaining = Boolean(segment.spoolId) &&
+      hasDebitAmount &&
+      (segment.confidence === "exact" || segment.confidence === "high");
     return {
       schemaVersion: PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION,
       ledgerEventId: createPrinterCoreV3DeterministicId("filament-ledger-event", [
@@ -589,7 +608,9 @@ export function createFilamentLedgerCorrectionEvent(originalEvent, correctedSegm
     authority: {
       mode: "candidate-only",
       canAppend: false,
-      canDebitRemaining: Boolean(correctedSegment.spoolId) && correctedUsed > 0 && correctedSegment.confidence !== "unknown",
+      canDebitRemaining: Boolean(correctedSegment.spoolId) &&
+        correctedUsed > 0 &&
+        (correctedSegment.confidence === "exact" || correctedSegment.confidence === "high"),
     },
   };
 }

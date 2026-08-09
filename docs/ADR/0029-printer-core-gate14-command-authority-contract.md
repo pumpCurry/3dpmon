@@ -44,6 +44,10 @@ and evidence source. Current dry-run code uses module-private attestation as a
 fail-closed placeholder; production authority should replace it with
 dispatcher-owned evidence from the actual send/observe pipeline.
 
+The dry-run module does not export a public correlation evidence factory. Until
+the dispatcher owns that lifecycle evidence, expected-state commands can remain
+acknowledged but not completed.
+
 - Add `evaluateExpectedStateConfirmation()` for NormalizedState checks.
 - Add `shouldRetryPrinterCommand()` with fail-safe side-effect behavior.
 - Unknown commands are treated as:

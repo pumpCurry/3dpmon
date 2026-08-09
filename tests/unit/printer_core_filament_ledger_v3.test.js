@@ -34,13 +34,13 @@ import {
  * @returns {object} G-code asset
  */
 function createAsset(fileName, logicalTools = [0]) {
+  const content = logicalTools.map((toolId) => `T${toolId}\nG1 X${toolId}`).join("\n");
   return {
     path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
     fileName,
     analysis: createGcodeAnalysisAttestation({
-      fileHash: `sha256:${fileName}`,
+      content,
       analyzerVersion: "unit-gcode-analyzer",
-      logicalTools,
     }),
   };
 }
@@ -56,10 +56,16 @@ function createAsset(fileName, logicalTools = [0]) {
  * @returns {object} confidence evidence
  */
 function createConfidenceEvidence(confidence) {
+  const policy = {
+    exact: ["trusted-physical-counter", "counter"],
+    high: ["firmware-reported-total", "firmware-total"],
+    estimated: ["slicer-projection", "slicer-estimate"],
+  };
+  const [source, measurementMethod] = policy[confidence] || policy.high;
   return createFilamentUsageConfidenceEvidence({
     confidence,
-    source: "unit-fixture",
-    measurementMethod: "fixture-observation",
+    source,
+    measurementMethod,
     observedAt: "2026-08-09T01:46:31.000+09:00",
   });
 }
@@ -191,6 +197,11 @@ describe("Printer Core v3 filament ledger contract", () => {
 
     expect(segments.map((segment) => segment.confidence)).toEqual(["unknown", "unknown"]);
     expect(events.map((event) => event.authority.canDebitRemaining)).toEqual([false, false]);
+    expect(() => createFilamentUsageConfidenceEvidence({
+      confidence: "exact",
+      source: "manual",
+      measurementMethod: "guess",
+    })).toThrow("source/method is not trusted");
   });
 
   it("不正なtoolIdや使用量の暗黙Number変換ではusageを割り当てない", () => {
@@ -323,6 +334,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     const correction = createFilamentLedgerCorrectionEvent(originalEvent, exact[0]);
 
     expect(createFilamentLedgerEventsFromSegments(exact)[0].ledgerEventId).toBe(originalEvent.ledgerEventId);
+    expect(originalEvent.authority.canDebitRemaining).toBe(false);
     expect(correction).toMatchObject({
       eventType: "material-consumption-correction",
       consumptionIdentity: originalEvent.consumptionIdentity,

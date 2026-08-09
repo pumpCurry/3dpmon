@@ -30,14 +30,14 @@ import {
  * @returns {object} テスト用 G-code asset
  */
 function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
+  const content = logicalTools.map((toolId) => `T${toolId}\nG1 X${toolId}`).join("\n");
   return {
     path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
     fileName,
     fileMd5: "md5-demo",
     analysis: createGcodeAnalysisAttestation({
-      fileHash: `sha256:${fileName}`,
+      content,
       analyzerVersion: "unit-gcode-analyzer",
-      logicalTools,
     }),
   };
 }
@@ -67,7 +67,7 @@ describe("Printer Core v3 PrintPlan", () => {
         analysis: {
           analyzed: true,
           analyzerVersion: "unit-gcode-analyzer",
-          fileHash: "sha256:benchy.gcode",
+          fileHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
           logicalTools: [0],
         },
         toolCount: 1,
@@ -275,7 +275,19 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(() => createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createSampleAsset("benchy.gcode", [0, 0]),
+        path: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+        fileName: "benchy.gcode",
+        analysis: {
+          analyzed: true,
+          analyzerVersion: "unit-gcode-analyzer",
+          fileHash: "sha256:duplicate",
+          logicalTools: [0, 0],
+          provenance: {
+            source: "printer-core-gcode-analyzer",
+            analysisId: "manual-duplicate",
+            attestation: "manual-duplicate",
+          },
+        },
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
@@ -400,6 +412,12 @@ describe("Printer Core v3 PrintPlan", () => {
   });
 
   it("caller-declaredなanalysis provenanceではPrintPlanに昇格しない", () => {
+    expect(() => createGcodeAnalysisAttestation({
+      fileHash: "sha256:caller",
+      logicalTools: [0],
+      analyzerVersion: "caller",
+    })).toThrow("derives fileHash and logicalTools from content");
+
     expect(() => createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
@@ -420,6 +438,18 @@ describe("Printer Core v3 PrintPlan", () => {
       protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     })).toThrow("attested G-code analysis provenance");
+  });
+
+  it("caller supplied assetIdでcontent hash bindingを迂回できない", () => {
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset("benchy.gcode"),
+        assetId: "old-asset-id",
+      },
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("assetId must match analyzed content hash");
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {

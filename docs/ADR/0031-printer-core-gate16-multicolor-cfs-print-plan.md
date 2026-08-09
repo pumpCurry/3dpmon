@@ -47,11 +47,12 @@ factory normalizes it back to the safe policy and validation rejects any
 manually assembled unsafe plan.
 
 Authority PrintPlans must not synthesize logical tools from `toolCount`,
-`asset.tools`, or other caller-provided convenience fields. Those values are
-accepted only when they are part of an attested analysis payload. A file without
-analysis evidence is rejected instead of being treated as a one-tool file. The
-logical G-code asset identity includes the content hash so a path/name reuse
-with different bytes cannot silently reuse the old asset ID.
+`asset.tools`, or other caller-provided convenience fields. Analysis attestation
+is derived from G-code content, not from caller-supplied logical tool claims. A
+file without analysis evidence is rejected instead of being treated as a
+one-tool file. The logical G-code asset identity includes the content hash, and
+caller supplied `assetId` must match that deterministic identity, so a path/name
+reuse with different bytes cannot silently reuse the old asset ID.
 
 `createPrintStartCommandRequestFromPlan()` may convert the plan into a
 `print-start` command request, but the command remains `contract-only` and

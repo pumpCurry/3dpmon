@@ -15,7 +15,7 @@
  * - PrintPlan から contract-only print-start command request を生成する
  *
  * 【公開関数一覧】
- * - {@link createGcodeAnalysisAttestation}：G-code analysis attestation を生成
+ * - {@link createGcodeAnalysisAttestation}：G-code content から analysis attestation を生成
  * - {@link createSingleColorPrintPlan}：単色 PrintPlan を生成
  * - {@link createMulticolorCfsPrintPlan}：CFS/マルチカラー PrintPlan を生成
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
@@ -124,6 +124,123 @@ function normalizeToolId(value, fallback = 0) {
 }
 
 /**
+ * 文字列を UTF-8 byte 配列へ変換する。
+ *
+ * 【詳細説明】
+ * - ブラウザ/Nodeの両方で同期的に SHA-256 を計算するための小さな互換層。
+ *
+ * @private
+ * @param {string} value - 変換対象文字列
+ * @returns {number[]} UTF-8 byte 配列
+ */
+function encodeUtf8Bytes(value) {
+  if (typeof TextEncoder !== "undefined") {
+    return Array.from(new TextEncoder().encode(value));
+  }
+  return Array.from(unescape(encodeURIComponent(value))).map((char) => char.charCodeAt(0));
+}
+
+/**
+ * SHA-256 hex digest を同期的に計算する。
+ *
+ * 【詳細説明】
+ * - G-code content と analysis result の binding に使う。
+ * - WebCrypto は async のため、同期 factory で使える最小実装をここに閉じ込める。
+ *
+ * @private
+ * @param {string} value - digest 対象
+ * @returns {string} 64桁 hex digest
+ */
+function createSha256Hex(value) {
+  const bytes = encodeUtf8Bytes(value);
+  const bitLength = bytes.length * 8;
+  bytes.push(0x80);
+  while ((bytes.length % 64) !== 56) {
+    bytes.push(0);
+  }
+  const high = Math.floor(bitLength / 0x100000000);
+  const low = bitLength >>> 0;
+  for (const word of [high, low]) {
+    bytes.push((word >>> 24) & 0xff, (word >>> 16) & 0xff, (word >>> 8) & 0xff, word & 0xff);
+  }
+  const h = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ];
+  const k = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+  const rotr = (value32, bits) => (value32 >>> bits) | (value32 << (32 - bits));
+  for (let offset = 0; offset < bytes.length; offset += 64) {
+    const w = new Array(64).fill(0);
+    for (let index = 0; index < 16; index += 1) {
+      const cursor = offset + index * 4;
+      w[index] = ((bytes[cursor] << 24) | (bytes[cursor + 1] << 16) | (bytes[cursor + 2] << 8) | bytes[cursor + 3]) >>> 0;
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const s0 = (rotr(w[index - 15], 7) ^ rotr(w[index - 15], 18) ^ (w[index - 15] >>> 3)) >>> 0;
+      const s1 = (rotr(w[index - 2], 17) ^ rotr(w[index - 2], 19) ^ (w[index - 2] >>> 10)) >>> 0;
+      w[index] = (w[index - 16] + s0 + w[index - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let index = 0; index < 64; index += 1) {
+      const s1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
+      const ch = ((e & f) ^ (~e & g)) >>> 0;
+      const temp1 = (hh + s1 + ch + k[index] + w[index]) >>> 0;
+      const s0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
+      const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
+      const temp2 = (s0 + maj) >>> 0;
+      hh = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+    [a, b, c, d, e, f, g, hh].forEach((value32, index) => {
+      h[index] = (h[index] + value32) >>> 0;
+    });
+  }
+  return h.map((value32) => value32.toString(16).padStart(8, "0")).join("");
+}
+
+/**
+ * G-code content から logical tool ID 配列を抽出する。
+ *
+ * 【詳細説明】
+ * - `T0` / `T1` のような tool change command を順序保持で抽出する。
+ * - tool command が無い場合は single logical tool `0` として扱う。
+ *
+ * @private
+ * @param {string} content - G-code content
+ * @returns {number[]} logical tool ID 配列
+ */
+function extractLogicalToolsFromGcodeContent(content) {
+  const logicalTools = [];
+  const seen = new Set();
+  const pattern = /^\s*T(\d+)\b/gmu;
+  let match = pattern.exec(content);
+  while (match) {
+    const toolId = normalizeToolId(match[1]);
+    if (!seen.has(toolId)) {
+      seen.add(toolId);
+      logicalTools.push(toolId);
+    }
+    match = pattern.exec(content);
+  }
+  return logicalTools.length > 0 ? logicalTools : [0];
+}
+
+/**
  * G-code analysis attestation signature を生成する。
  *
  * 【詳細説明】
@@ -166,36 +283,29 @@ function readAnalysisLogicalToolCandidates(analysis) {
 }
 
 /**
- * G-code analysis attestation を生成する。
+ * G-code content から analysis attestation を生成する。
  *
  * 【詳細説明】
- * - analyzer/provider が logical tool list と content hash を確定した後に呼ぶ想定の factory。
+ * - caller claims に署名せず、content hash と logical tools をこの関数内で導出する。
  * - caller が同じshapeを手で組み立てても、module-private signature が一致しないため PrintPlan へ昇格しない。
  *
  * @function createGcodeAnalysisAttestation
  * @param {object} options - analysis 生成オプション
- * @param {string} options.fileHash - G-code content hash
- * @param {string} options.analyzerVersion - analyzer version
- * @param {Array<*>} options.logicalTools - analyzer が検出した logical tool ID 配列
+ * @param {string} options.content - G-code content
+ * @param {string=} options.analyzerVersion - analyzer version
  * @param {string=} options.analyzedAt - analysis 時刻
  * @returns {object} attested G-code analysis
  * @example
- * const analysis = createGcodeAnalysisAttestation({ fileHash, analyzerVersion, logicalTools: [0] });
+ * const analysis = createGcodeAnalysisAttestation({ content: "T0\nG1 X0" });
  */
 export function createGcodeAnalysisAttestation(options = {}) {
-  const fileHash = requireNonEmptyString(options.fileHash || options.sha256, "asset.analysis.fileHash");
-  if (!fileHash.startsWith("sha256:")) {
-    throw new TypeError("PrintPlan G-code analysis requires a sha256 fileHash.");
+  if (Array.isArray(options.logicalTools) || Array.isArray(options.tools) || options.fileHash || options.sha256) {
+    throw new TypeError("G-code analysis attestation derives fileHash and logicalTools from content.");
   }
-  const analyzerVersion = requireNonEmptyString(options.analyzerVersion || options.source, "asset.analysis.analyzerVersion");
-  const logicalToolCandidates = Array.isArray(options.logicalTools) ? options.logicalTools : options.tools;
-  if (!Array.isArray(logicalToolCandidates) || logicalToolCandidates.length === 0) {
-    throw new TypeError("PrintPlan requires analyzed G-code logical tools.");
-  }
-  const logicalTools = logicalToolCandidates.map((tool, index) => normalizeToolId(tool?.toolId ?? tool, index));
-  if (new Set(logicalTools).size !== logicalTools.length) {
-    throw new TypeError("PrintPlan asset logical tools must be unique.");
-  }
+  const content = requireNonEmptyString(options.content, "asset.content");
+  const fileHash = `sha256:${createSha256Hex(content)}`;
+  const analyzerVersion = String(options.analyzerVersion || "printer-core-gcode-analyzer-v1").trim();
+  const logicalTools = extractLogicalToolsFromGcodeContent(content);
   const analysisId = createPrinterCoreV3DeterministicId("gcode-analysis", [
     fileHash,
     analyzerVersion,
@@ -301,8 +411,12 @@ function normalizeGcodeAsset(asset) {
   const path = requireNonEmptyString(asset?.path || asset?.filePath || asset?.filename, "asset.path");
   const fileName = String(asset?.fileName || asset?.name || path.split(/[\\/]/u).pop() || path).trim();
   const analysis = normalizeGcodeAnalysis(asset);
+  const expectedAssetId = createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName, analysis.fileHash]);
+  if (asset?.assetId && asset.assetId !== expectedAssetId) {
+    throw new TypeError("PrintPlan assetId must match analyzed content hash.");
+  }
   return {
-    assetId: asset?.assetId || createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName, analysis.fileHash]),
+    assetId: expectedAssetId,
     path,
     fileName,
     fileMd5: asset?.fileMd5 || null,

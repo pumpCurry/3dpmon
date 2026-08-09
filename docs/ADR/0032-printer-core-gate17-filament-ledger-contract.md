@@ -86,9 +86,10 @@ segments instead of silently subtracting filament from the wrong spool.
 The contract is intentionally conservative about confidence. A per-material
 usage amount without confidence remains useful evidence, but it cannot debit
 remaining filament until a trusted observation source explicitly marks it
-`exact`, `high`, or `estimated`. Current dry-run code uses module-private
-attestation as a placeholder for that trusted source. Data Schema v3 should
-replace it with a persistent confidence policy registry such as:
+`exact`, `high`, or `estimated`. Current dry-run code derives confidence from a
+fixed source/method policy before issuing module-private attestation, so callers
+cannot request an arbitrary `exact` signature. Data Schema v3 should replace
+this placeholder with a persistent confidence policy registry such as:
 
 ```text
 firmware-reported-total -> high

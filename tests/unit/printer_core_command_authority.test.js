@@ -10,7 +10,6 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  createPrinterCommandCorrelationEvidence,
   createPrinterCommandRequest,
   createPrinterCommandResult,
   evaluateExpectedStateConfirmation,
@@ -102,12 +101,6 @@ describe("Printer Core v3 command authority contract", () => {
         },
       },
     });
-    const correlation = createPrinterCommandCorrelationEvidence(request, {
-      sentSequence: 10,
-      observedSequence: 11,
-      observedSessionId: "session:1",
-      evidenceSource: "unit-dispatcher",
-    });
     const after = createPrinterCommandResult(request, {
       status: "acknowledged",
       observedState: {
@@ -118,12 +111,11 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 11,
       observedSessionId: "session:1",
-      commandCorrelation: correlation,
     });
 
     expect(before.completed).toBe(false);
     expect(before.confirmation.confirmed).toBe(false);
-    expect(after.completed).toBe(true);
+    expect(after.completed).toBe(false);
     expect(after.confirmation).toMatchObject({
       checked: true,
       confirmed: true,
@@ -139,11 +131,12 @@ describe("Printer Core v3 command authority contract", () => {
     });
     expect(after.postCommandObservation).toMatchObject({
       required: true,
-      confirmed: true,
+      confirmed: false,
       sequenceAdvanced: true,
       sameSession: true,
-      commandCorrelated: true,
-      correlationId: correlation.correlationId,
+      commandCorrelated: false,
+      correlationId: null,
+      reason: "command-correlation-missing",
     });
   });
 
@@ -155,12 +148,6 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "printing",
       },
     });
-    const correlation = createPrinterCommandCorrelationEvidence(request, {
-      sentSequence: 10,
-      observedSequence: 11,
-      observedSessionId: "session:1",
-      evidenceSource: "unit-dispatcher",
-    });
     const result = createPrinterCommandResult(request, {
       status: "transport-error",
       observedState: {
@@ -171,7 +158,6 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 11,
       observedSessionId: "session:1",
-      commandCorrelation: correlation,
     });
 
     expect(result.transportAccepted).toBe(false);
@@ -187,12 +173,6 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "printing",
       },
     });
-    const correlation = createPrinterCommandCorrelationEvidence(request, {
-      sentSequence: 10,
-      observedSequence: 10,
-      observedSessionId: "session:1",
-      evidenceSource: "unit-dispatcher",
-    });
     const result = createPrinterCommandResult(request, {
       status: "acknowledged",
       observedState: {
@@ -203,14 +183,13 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 10,
       observedSessionId: "session:1",
-      commandCorrelation: correlation,
     });
 
     expect(result.transportAccepted).toBe(true);
     expect(result.confirmation.confirmed).toBe(true);
     expect(result.postCommandObservation).toMatchObject({
       confirmed: false,
-      reason: "sequence-not-advanced",
+      reason: "sequence-not-advanced,command-correlation-missing",
     });
     expect(result.completed).toBe(false);
   });
@@ -232,12 +211,6 @@ describe("Printer Core v3 command authority contract", () => {
       },
       sentSequence: 10,
       observedSequence: 11,
-      commandCorrelation: createPrinterCommandCorrelationEvidence(request, {
-        sentSequence: 10,
-        observedSequence: 11,
-        observedSessionId: "session:1",
-        evidenceSource: "unit-dispatcher",
-      }),
     });
 
     expect(result.transportAccepted).toBe(true);
@@ -259,12 +232,6 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "printing",
       },
     });
-    const correlation = createPrinterCommandCorrelationEvidence(request, {
-      sentSequence: 10,
-      observedSequence: 11,
-      observedSessionId: "session:other",
-      evidenceSource: "unit-dispatcher",
-    });
     const result = createPrinterCommandResult(request, {
       status: "acknowledged",
       observedState: {
@@ -275,13 +242,13 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 11,
       observedSessionId: "session:other",
-      commandCorrelation: correlation,
     });
 
     expect(result.postCommandObservation).toMatchObject({
       confirmed: false,
       sameSession: false,
-      reason: "session-mismatch",
+      commandCorrelated: false,
+      reason: "session-mismatch,command-correlation-missing",
     });
     expect(result.completed).toBe(false);
   });

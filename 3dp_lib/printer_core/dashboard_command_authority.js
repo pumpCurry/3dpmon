@@ -14,7 +14,6 @@
  *
  * 【公開関数一覧】
  * - {@link createPrinterCommandRequest}：command request を生成
- * - {@link createPrinterCommandCorrelationEvidence}：command correlation evidence を生成
  * - {@link createPrinterCommandResult}：command result を生成
  * - {@link shouldRetryPrinterCommand}：command retry 可否を判定
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
@@ -224,7 +223,13 @@ function createCommandId(options) {
  * @returns {number|null} 正規化済み sequence
  */
 function normalizeSequence(value) {
-  const sequence = Number(value);
+  if (value === undefined || value === null || typeof value === "boolean" || Array.isArray(value)) {
+    return null;
+  }
+  if (typeof value === "string" && !/^(0|[1-9]\d*)$/u.test(value.trim())) {
+    return null;
+  }
+  const sequence = typeof value === "string" ? Number(value.trim()) : value;
   return Number.isFinite(sequence) ? sequence : null;
 }
 
@@ -262,7 +267,7 @@ function createCommandCorrelationSignature(evidence) {
  * - dispatcher/transport層が command ID と観測 state を結び付けた証跡を表現する。
  * - caller が boolean を渡すだけでは post-command confirmation を満たさない。
  *
- * @function createPrinterCommandCorrelationEvidence
+ * @private
  * @param {object} request - command request
  * @param {object} options - correlation 生成オプション
  * @param {number} options.sentSequence - command 送信時 sequence
@@ -275,7 +280,7 @@ function createCommandCorrelationSignature(evidence) {
  * @example
  * const correlation = createPrinterCommandCorrelationEvidence(request, { sentSequence, observedSequence, observedSessionId, evidenceSource });
  */
-export function createPrinterCommandCorrelationEvidence(request, options = {}) {
+function createPrinterCommandCorrelationEvidence(request, options = {}) {
   const sentSequence = normalizeSequence(options.sentSequence);
   const observedSequence = normalizeSequence(options.observedSequence);
   const observedSessionId = requireNonEmptyString(options.observedSessionId, "observedSessionId");
