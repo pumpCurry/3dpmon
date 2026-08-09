@@ -21,9 +21,9 @@
  * - {@link validatePrintPlanForStart}：print-start 前提の整合性を検査
  * - {@link createPrintStartCommandRequestFromPlan}：PrintPlan から print-start command request を生成
  *
- * @version 1.390.1350 (PR #432)
+ * @version 1.390.1357 (PR #432)
  * @since   1.390.1343 (PR #432)
- * @lastModified 2026-08-09 09:25:00
+ * @lastModified 2026-08-09 13:32:08
  * -----------------------------------------------------------
  * @todo
  * - 実送信 protocol 生成へ拡張する
@@ -496,19 +496,66 @@ function normalizeUploadReceipt(asset, path, fileHash, deviceId) {
 }
 
 /**
+ * PrintPlan の upload receipt freshness error を収集する。
+ *
+ * 【詳細説明】
+ * - upload receipt が本物でも、別sessionや古いupload generationの証拠ならprint-startには使わない。
+ * - 通常の構造検査ではなく、start-ready検査だけで使うfreshness条件をここに閉じ込める。
+ *
+ * @private
+ * @param {object} plan - PrintPlan
+ * @param {object|null|undefined} startContext - print-start時のactive context
+ * @param {string=} startContext.sessionId - active command/session ID
+ * @param {string=} startContext.uploadGeneration - 現在のremote path upload generation
+ * @returns {string[]} freshness error 一覧
+ */
+function collectUploadReceiptFreshnessErrors(plan, startContext) {
+  const errors = [];
+  const receipt = plan?.asset?.uploadReceipt;
+  const receiptSessionId = String(receipt?.sessionId || "").trim();
+  const receiptUploadGeneration = String(receipt?.uploadGeneration || "").trim();
+  const contextSessionId = String(startContext?.sessionId || "").trim();
+  const contextUploadGeneration = String(startContext?.uploadGeneration || "").trim();
+  if (!contextSessionId) {
+    errors.push("missing-start-session-id");
+  }
+  if (!contextUploadGeneration) {
+    errors.push("missing-start-upload-generation");
+  }
+  if (!receiptSessionId) {
+    errors.push("upload-receipt-session-missing");
+  }
+  if (!receiptUploadGeneration) {
+    errors.push("upload-receipt-generation-missing");
+  }
+  if (contextSessionId && receiptSessionId && receiptSessionId !== contextSessionId) {
+    errors.push("upload-receipt-session-mismatch");
+  }
+  if (contextUploadGeneration && receiptUploadGeneration && receiptUploadGeneration !== contextUploadGeneration) {
+    errors.push("upload-receipt-generation-mismatch");
+  }
+  return errors;
+}
+
+/**
  * PrintPlan の upload receipt trust を再検証する。
  *
  * 【詳細説明】
  * - `uploadReceipt.trusted` や `authority.uploadReceiptTrusted` の boolean は caller mutation 可能なため信用しない。
  * - command-ready 判定では、receipt内容と private attestation から毎回 trust を導出する。
+ * - start context が渡された場合は、receiptのsession/generation freshnessも同時に要求する。
  *
  * @private
  * @param {object} plan - PrintPlan
+ * @param {object|null|undefined=} startContext - print-start時のactive context
  * @returns {boolean} trusted upload receipt の場合 true
  */
-function hasTrustedUploadReceipt(plan) {
+function hasTrustedUploadReceipt(plan, startContext = null) {
   const receipt = plan?.asset?.uploadReceipt;
   if (!receipt || typeof receipt !== "object") {
+    return false;
+  }
+  if (startContext && collectUploadReceiptFreshnessErrors(plan, startContext).length > 0) {
     return false;
   }
   const receiptId = String(receipt.receiptId || receipt.uploadReceiptId || "").trim();
@@ -919,16 +966,21 @@ export function validatePrintPlan(plan) {
  *
  * 【詳細説明】
  * - 通常の構造検査に加え、upload receipt の trust を private attestation から再導出する。
+ * - active session/upload generation とreceiptを照合し、古いupload証拠のreplayを拒否する。
  * - 現Gateでは public API caller が trusted upload receipt をmintできないため、start boundaryはfail-closedになる。
  *
  * @function validatePrintPlanForStart
  * @param {object} plan - PrintPlan
+ * @param {object=} startContext - print-start時のactive context
+ * @param {string=} startContext.sessionId - active command/session ID
+ * @param {string=} startContext.uploadGeneration - 現在のremote path upload generation
  * @returns {{ok: boolean, errors: string[]}} 検査結果
  */
-export function validatePrintPlanForStart(plan) {
+export function validatePrintPlanForStart(plan, startContext = {}) {
   const validation = validatePrintPlan(plan);
   const errors = [...validation.errors];
-  if (!hasTrustedUploadReceipt(plan)) {
+  errors.push(...collectUploadReceiptFreshnessErrors(plan, startContext));
+  if (!hasTrustedUploadReceipt(plan, startContext)) {
     errors.push("untrusted-upload-receipt");
   }
   return {
@@ -948,14 +1000,18 @@ export function validatePrintPlanForStart(plan) {
  * @param {object} plan - PrintPlan
  * @param {object} options - command request 生成オプション
  * @param {string} options.sessionId - active session ID
+ * @param {string} options.uploadGeneration - 現在のremote path upload generation
  * @param {string=} options.transportKind - 送信 transport 種別
  * @param {Function=} options.entropySource - command ID entropy source
  * @returns {object} print-start command request
  * @example
- * const request = createPrintStartCommandRequestFromPlan(plan, { sessionId });
+ * const request = createPrintStartCommandRequestFromPlan(plan, { sessionId, uploadGeneration });
  */
 export function createPrintStartCommandRequestFromPlan(plan, options = {}) {
-  const validation = validatePrintPlanForStart(plan);
+  const validation = validatePrintPlanForStart(plan, {
+    sessionId: options.sessionId,
+    uploadGeneration: options.uploadGeneration,
+  });
   if (!validation.ok) {
     throw new TypeError(`Invalid PrintPlan: ${validation.errors.join(",")}`);
   }

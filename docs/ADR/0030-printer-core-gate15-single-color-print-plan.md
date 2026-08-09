@@ -87,7 +87,10 @@ usable for contract construction while preventing it from minting command-ready
 upload evidence.
 Start-ready validation re-derives upload receipt trust from the private
 attestation instead of trusting stored `trusted` booleans, so caller mutation
-cannot promote a plan to command-ready.
+cannot promote a plan to command-ready. It also requires the start context to
+match the upload receipt's `sessionId` and `uploadGeneration`, because a genuine
+receipt from an earlier upload is not enough to prove that the current remote
+path still contains the same bytes.
 
 Single-color plans also do not infer `protocolToolAlias = T1A`. If the selected
 source is CFS-backed, the protocol alias must be explicitly supplied by the

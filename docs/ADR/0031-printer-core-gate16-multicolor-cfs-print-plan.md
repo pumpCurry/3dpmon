@@ -70,6 +70,10 @@ receipt object.
 gate, caller-declared upload receipts are not trusted, so public plans fail
 closed before command request generation. Timeout or transient failure still
 must not produce blind retry for print start once command authority is enabled.
+Start-ready validation also compares the active command/session context and the
+current upload generation with the receipt. This prevents a stale but genuine
+upload receipt from a previous session or overwritten remote path from being
+replayed into a later multicolor start.
 
 ## Consequences
 

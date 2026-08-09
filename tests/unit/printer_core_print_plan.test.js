@@ -3,9 +3,9 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1350 (PR #432)
+ * @version 1.390.1357 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 09:25:00
+ * @lastModified 2026-08-09 13:32:08
  */
 
 import { createHash } from "node:crypto";
@@ -27,9 +27,12 @@ import {
  * @function createSampleAsset
  * @param {string} fileName - file name
  * @param {number[]} logicalTools - analyzer が検出した logical tool ID 配列
+ * @param {object=} uploadContext - upload receipt context
+ * @param {string=} uploadContext.sessionId - upload session ID
+ * @param {string=} uploadContext.uploadGeneration - upload generation
  * @returns {object} テスト用 G-code asset
  */
-function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
+function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0], uploadContext = {}) {
   const content = logicalTools.map((toolId) => `T${toolId}\nG1 X${toolId}`).join("\n");
   const path = `/mnt/UDISK/printer_data/gcodes/${fileName}`;
   const fileHash = `sha256:${createHash("sha256").update(content).digest("hex")}`;
@@ -44,6 +47,8 @@ function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
       deviceId: "serial:k2pro",
       remotePath: path,
       fileHash,
+      sessionId: uploadContext.sessionId,
+      uploadGeneration: uploadContext.uploadGeneration,
     },
   };
 }
@@ -135,7 +140,12 @@ describe("Printer Core v3 PrintPlan", () => {
       entropySource: () => "unit",
     };
 
-    expect(validatePrintPlanForStart(plan).errors).toEqual(expect.arrayContaining(["untrusted-upload-receipt"]));
+    expect(validatePrintPlanForStart(plan, commandOptions).errors).toEqual(expect.arrayContaining([
+      "missing-start-upload-generation",
+      "upload-receipt-session-missing",
+      "upload-receipt-generation-missing",
+      "untrusted-upload-receipt",
+    ]));
     expect(() => createPrintStartCommandRequestFromPlan(plan, commandOptions))
       .toThrow("untrusted-upload-receipt");
   });
@@ -149,6 +159,7 @@ describe("Printer Core v3 PrintPlan", () => {
     });
     expect(() => createPrintStartCommandRequestFromPlan(plan, {
       sessionId: "session:1",
+      uploadGeneration: "upload-generation:1",
       entropySource: () => "unit",
     })).toThrow("untrusted-upload-receipt");
   });
@@ -287,6 +298,7 @@ describe("Printer Core v3 PrintPlan", () => {
     });
     expect(() => createPrintStartCommandRequestFromPlan(plan, {
       sessionId: "session:multi",
+      uploadGeneration: "upload-generation:1",
       transportKind: "ws9999",
       entropySource: () => "unit",
     })).toThrow("untrusted-upload-receipt");
@@ -477,6 +489,38 @@ describe("Printer Core v3 PrintPlan", () => {
         uploadReceiptTrusted: true,
       },
     }).errors).toEqual(expect.arrayContaining(["untrusted-upload-receipt"]));
+  });
+
+  it("print-start検証はupload receiptのactive sessionとgenerationを要求する", () => {
+    const plan = createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset("benchy.gcode", [0], {
+        sessionId: "session:upload-a",
+        uploadGeneration: "generation:7",
+      }),
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    });
+
+    expect(validatePrintPlan(plan)).toEqual({ ok: true, errors: [] });
+    expect(validatePrintPlanForStart(plan, {
+      sessionId: "session:upload-a",
+      uploadGeneration: "generation:7",
+    }).errors).toEqual(expect.arrayContaining(["untrusted-upload-receipt"]));
+    expect(validatePrintPlanForStart(plan, {
+      sessionId: "session:other",
+      uploadGeneration: "generation:7",
+    }).errors).toEqual(expect.arrayContaining([
+      "upload-receipt-session-mismatch",
+      "untrusted-upload-receipt",
+    ]));
+    expect(validatePrintPlanForStart(plan, {
+      sessionId: "session:upload-a",
+      uploadGeneration: "generation:8",
+    }).errors).toEqual(expect.arrayContaining([
+      "upload-receipt-generation-mismatch",
+      "untrusted-upload-receipt",
+    ]));
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {
