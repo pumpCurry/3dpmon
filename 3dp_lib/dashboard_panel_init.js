@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1362 (PR #432)
+ * @version 1.390.1363 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-09 16:41:00
+ * @lastModified 2026-08-09 17:33:00
  * -----------------------------------------------------------
  */
 
@@ -346,11 +346,26 @@ function initFilamentPanel(body, hostname) {
       });
       return createMaterialTopologyViewModel(latestTopology, viewOptions);
     };
-    const materialPanel = renderMaterialTopologyPanel(container, createViewModel(), { hostname });
+    const createSignature = (viewModel) => JSON.stringify({
+      limits: viewModel.limits,
+      cfs: viewModel.cfs,
+      external: viewModel.external,
+      units: viewModel.units,
+      summary: viewModel.summary,
+      diagnostics: viewModel.diagnostics,
+    });
+    const initialViewModel = createViewModel();
+    let materialPanelSignature = createSignature(initialViewModel);
+    const materialPanel = renderMaterialTopologyPanel(container, initialViewModel, { hostname });
     body._materialTopologyPanel = materialPanel;
     body._materialTopologyRefreshTimer = setInterval(() => {
       try {
-        materialPanel.update(createViewModel());
+        const nextViewModel = createViewModel();
+        const nextSignature = createSignature(nextViewModel);
+        if (nextSignature !== materialPanelSignature) {
+          materialPanel.update(nextViewModel);
+          materialPanelSignature = nextSignature;
+        }
       } catch (e) {
         console.warn("[panel-init] material topology 更新エラー:", e);
       }

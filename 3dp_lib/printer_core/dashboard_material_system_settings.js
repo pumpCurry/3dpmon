@@ -18,9 +18,9 @@
  * - {@link resolveMaterialDisplayMode}：フィラメントパネルの表示方式を決定
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  *
- * @version 1.390.1362 (PR #432)
+ * @version 1.390.1363 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 16:18:00
+ * @lastModified 2026-08-09 17:31:00
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -152,14 +152,31 @@ function countObservedMaterialUnits(topology) {
   if (!topology || typeof topology !== "object") {
     return 0;
   }
+  let maxPhysicalUnitIndex = 0;
   if (Array.isArray(topology.units) && topology.units.length > 0) {
+    for (const unit of topology.units) {
+      const boxId = Number(unit?.boxId);
+      if (Number.isInteger(boxId) && boxId >= 1 && boxId <= MAX_MATERIAL_UNIT_COUNT) {
+        maxPhysicalUnitIndex = Math.max(maxPhysicalUnitIndex, boxId);
+      }
+    }
+    if (maxPhysicalUnitIndex > 0) {
+      return maxPhysicalUnitIndex;
+    }
     return Math.min(MAX_MATERIAL_UNIT_COUNT, topology.units.length);
   }
   const unitIds = new Set();
   for (const source of Array.isArray(topology.sources) ? topology.sources : []) {
+    const boxId = Number(source?.boxId);
+    if (Number.isInteger(boxId) && boxId >= 1 && boxId <= MAX_MATERIAL_UNIT_COUNT) {
+      maxPhysicalUnitIndex = Math.max(maxPhysicalUnitIndex, boxId);
+    }
     if (source?.kind === "cfs-slot" && source.unitId) {
       unitIds.add(source.unitId);
     }
+  }
+  if (maxPhysicalUnitIndex > 0) {
+    return maxPhysicalUnitIndex;
   }
   return Math.min(MAX_MATERIAL_UNIT_COUNT, unitIds.size);
 }
@@ -230,7 +247,7 @@ export function normalizeMaterialSystemSettings(settings, printerType = "crealit
     unitLimit: normalizeUnitLimit(source.unitLimit, defaults.unitLimit),
     slotsPerUnit: Math.max(0, Math.min(MATERIAL_SLOTS_PER_UNIT, Number.isFinite(Number(source.slotsPerUnit)) ? Math.floor(Number(source.slotsPerUnit)) : defaults.slotsPerUnit)),
     externalSourceLimit: Math.max(0, Math.min(MATERIAL_EXTERNAL_SOURCE_LIMIT, Number.isFinite(Number(source.externalSourceLimit)) ? Math.floor(Number(source.externalSourceLimit)) : defaults.externalSourceLimit)),
-    readOnly: source.readOnly !== false,
+    readOnly: true,
     canSendCommands: false,
     canDriveLedger: false,
   };

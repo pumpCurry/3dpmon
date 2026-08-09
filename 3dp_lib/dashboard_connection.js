@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1362 (PR #432)
+* @version 1.390.1363 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 16:34:00
+* @lastModified 2026-08-09 17:27:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -63,7 +63,7 @@ import { showAlert } from "./dashboard_notification_manager.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
-import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
+import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, recreatePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
@@ -2281,10 +2281,10 @@ function _materialSystemSettingsHtml(materialSettings) {
     [MATERIAL_DISPLAY_MODE.MULTI_SLOT, "CFSスロット固定"],
   ].map(([value, label]) => _optionHtml(value, label, materialSettings.displayMode)).join("");
   const providerOptions = [
-    [MATERIAL_PROVIDER_MODE.AUTO, "自動"],
-    [MATERIAL_PROVIDER_MODE.K2_BOXS_INFO, "K2 boxsInfo"],
-    [MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO, "Moonraker boxsInfo"],
-    [MATERIAL_PROVIDER_MODE.NONE, "なし"],
+    [MATERIAL_PROVIDER_MODE.AUTO, "自動（将来用）"],
+    [MATERIAL_PROVIDER_MODE.K2_BOXS_INFO, "K2 boxsInfo（将来用）"],
+    [MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO, "Moonraker boxsInfo（将来用）"],
+    [MATERIAL_PROVIDER_MODE.NONE, "なし（将来用）"],
   ].map(([value, label]) => _optionHtml(value, label, materialSettings.provider)).join("");
   return `
               <label>CFS/CFS-C:</label>
@@ -2294,7 +2294,24 @@ function _materialSystemSettingsHtml(materialSettings) {
               <label>CFS台数:</label>
               <select id="edit-material-unit-limit">${_materialUnitOptionsHtml(materialSettings.unitLimit)}</select>
               <label>Provider:</label>
-              <select id="edit-material-provider">${providerOptions}</select>`;
+              <select id="edit-material-provider" disabled title="現Gateではread-only観測経路の診断値です">${providerOptions}</select>`;
+}
+
+/**
+ * 接続先設定から、再描画対象にする現在のhostキーを解決する。
+ *
+ * 【詳細説明】
+ * - パネルはhostname確定後のキーで作られることが多いが、初回接続前後ではdest/IPキーの可能性も残る。
+ * - connectionMapのdest一致を優先し、見つからない場合は保存済みhostname、最後にdestのhost部へフォールバックする。
+ *
+ * @private
+ * @param {object} target - connectionTargets内の接続先設定
+ * @param {string} dest - 接続先dest
+ * @returns {string} 再描画対象host候補
+ */
+function _resolveHostForPanelRefresh(target, dest) {
+  const connectedHost = Object.keys(connectionMap).find((host) => connectionMap[host]?.dest === dest);
+  return connectedHost || target?.hostname || _extractIp(dest) || dest;
 }
 
 export function updatePrinterListUI() {
@@ -2608,6 +2625,7 @@ ${_materialSystemSettingsHtml(currentMaterialSystem)}
         updatePrinterListUI();
         // 表示名(label)/色はパネルヘッダーにも反映されるため即時更新する
         updateAllPanelHeaders();
+        recreatePanelsForHost("filament", _resolveHostForPanelRefresh(tgt, dest));
       });
     });
 

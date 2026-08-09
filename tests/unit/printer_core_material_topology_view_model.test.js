@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1361 (PR #432)
+ * @version 1.390.1363 (PR #432)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-09 15:03:00
+ * @lastModified 2026-08-09 17:36:00
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -272,6 +272,41 @@ describe("Printer Core v3 material topology view model", () => {
       loadedSourceCount: 5,
       selectedSourceCount: 1,
       assignmentCount: 4,
+    });
+  });
+
+  it("物理boxIdに欠番があってもdisplay unit番号へcompactしない", () => {
+    const topology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 3,
+          type: 0,
+          state: 1,
+          materials: [
+            {
+              id: 0,
+              state: 1,
+              type: "PLA",
+              name: "Physical Unit 3 PLA",
+              color: "#A7ADB1",
+              selected: 1,
+              percent: 54,
+            },
+          ],
+        },
+      ],
+    }, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 4 });
+
+    expect(viewModel.units[0]).toMatchObject({ displayUnit: 1, observed: false });
+    expect(viewModel.units[1]).toMatchObject({ displayUnit: 2, observed: false });
+    expect(viewModel.units[2]).toMatchObject({ displayUnit: 3, observed: true, boxId: 3 });
+    expect(viewModel.units[2].slots[0]).toMatchObject({
+      displaySlot: "3A",
+      boxId: 3,
+      presence: "loaded",
+      selected: true,
     });
   });
 

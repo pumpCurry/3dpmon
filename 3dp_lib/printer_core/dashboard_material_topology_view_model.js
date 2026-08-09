@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1362 (PR #432)
+ * @version 1.390.1363 (PR #432)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-09 16:48:00
+ * @lastModified 2026-08-09 17:18:00
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -300,6 +300,43 @@ function collectUnits(topology) {
 }
 
 /**
+ * 観測済みunitを表示unit 1-4 の固定位置へ配置する。
+ *
+ * 【詳細説明】
+ * - 物理boxIdが1-4で報告される場合は、配列を詰めず `boxId - 1` へ配置する。
+ * - boxId未報告のproviderでは、未使用枠へ順番に配置して後方互換を維持する。
+ * - boxIdが表示範囲外の場合は誤った番号へcompactせず、現在設定では表示対象外として扱う。
+ *
+ * @private
+ * @param {Array<object>} units - 観測済みunit一覧
+ * @param {number} unitLimit - 表示unit数
+ * @returns {Array<object|null>} 表示位置ごとのunit一覧
+ */
+function placeUnitsByDisplayIndex(units, unitLimit) {
+  const placedUnits = Array.from({ length: unitLimit }, () => null);
+  const fallbackUnits = [];
+  for (const unit of Array.isArray(units) ? units : []) {
+    const boxId = toFiniteNumber(unit?.boxId);
+    if (Number.isInteger(boxId) && boxId >= 1) {
+      const index = boxId - 1;
+      if (index < unitLimit && !placedUnits[index]) {
+        placedUnits[index] = unit;
+      }
+      continue;
+    }
+    fallbackUnits.push(unit);
+  }
+  for (const unit of fallbackUnits) {
+    const index = placedUnits.findIndex((placed) => !placed);
+    if (index < 0) {
+      break;
+    }
+    placedUnits[index] = unit;
+  }
+  return placedUnits;
+}
+
+/**
  * CFS slot source を unitId と slotId で引ける Map にする。
  *
  * 【詳細説明】
@@ -375,7 +412,7 @@ function createExternalRows(topology, limit) {
 function createCfsUnitRows(topology, options) {
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
   const sourceMap = createCfsSourceMap(topology.sources);
-  const units = collectUnits(topology).slice(0, options.unitLimit);
+  const units = placeUnitsByDisplayIndex(collectUnits(topology), options.unitLimit);
   const rows = [];
   for (let unitIndex = 0; unitIndex < options.unitLimit; unitIndex += 1) {
     const unit = units[unitIndex] || null;

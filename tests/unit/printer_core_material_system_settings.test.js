@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1362 (PR #432)
+ * @version 1.390.1363 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 16:52:00
+ * @lastModified 2026-08-09 17:38:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -87,12 +87,14 @@ describe("Printer Core v3 material system settings", () => {
       materialSystem: {
         mode: MATERIAL_SYSTEM_MODE.SINGLE_SPOOL,
         unitLimit: 0,
+        readOnly: false,
       },
     };
 
     expect(normalizeMaterialSystemSettings(target.materialSystem, target.printerType)).toMatchObject({
       mode: MATERIAL_SYSTEM_MODE.SINGLE_SPOOL,
       unitLimit: 0,
+      readOnly: true,
       canSendCommands: false,
       canDriveLedger: false,
     });
@@ -135,6 +137,25 @@ describe("Printer Core v3 material system settings", () => {
     );
     expect(resolveMaterialTopologyViewOptions({ target, printerType: "creality-k1", topology })).toMatchObject({
       unitLimit: 2,
+    });
+  });
+
+  it("autoでboxId欠番を観測した場合は最大物理boxIdまで表示を広げる", () => {
+    const target = {
+      printerType: "creality-k1",
+      materialSystem: {
+        mode: MATERIAL_SYSTEM_MODE.AUTO,
+        unitLimit: 0,
+      },
+    };
+    const topology = {
+      cfs: { topologyState: "fresh", connected: true },
+      units: [{ unitId: "cfs:3", boxId: 3 }],
+      sources: [],
+    };
+
+    expect(resolveMaterialTopologyViewOptions({ target, printerType: "creality-k1", topology })).toMatchObject({
+      unitLimit: 3,
     });
   });
 });
