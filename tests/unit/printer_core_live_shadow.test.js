@@ -1,5 +1,11 @@
 /**
- * @fileoverview Printer Core v3 K1 live shadow の単体テスト
+ * @fileoverview Printer Core v3 live shadow の単体テスト
+ * @description
+ * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
+ *
+ * @version 1.390.1350 (PR #432)
+ * @since 1.390.1299 (PR #432)
+ * @lastModified 2026-08-09 09:25:00
  *
  * @vitest-environment jsdom
  */
@@ -307,6 +313,7 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
 
     expect(record.state).toBe("matched");
+    expect(record.differentialCompared).toBe(true);
     expect(record.lastDiffs).toEqual([]);
     expect(record.lastSequence).toBe(1);
     expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow.lastState.camera.mjpeg).toBe(true);
@@ -436,6 +443,7 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(record).toMatchObject({
       printerFamily: "k2",
       state: "observed",
+      differentialCompared: false,
       observedFrames: 2,
       diffCount: 0,
       cfsConnected: true,

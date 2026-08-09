@@ -67,6 +67,13 @@ registries, and dispatchers.
 The cutover assertion also recomputes readiness from source snapshots. Passing a
 report-like object with `ready: true` is insufficient.
 
+`liveShadowDiffsClean` is limited to K1 runtime records that explicitly carry
+`printerFamily = "k1"` and `differentialCompared = true`. K2 live shadow records
+are read-only observations without a legacy differential comparator, so
+`diffCount = 0` on K2 does not certify this readiness check. K2 remains covered
+by the separate `k2PrintSemanticsCertified` check after lifecycle captures prove
+the mapping.
+
 Even when all checks pass, the generated plan requires explicit manual cutover
 and still does not retire legacy paths automatically.
 

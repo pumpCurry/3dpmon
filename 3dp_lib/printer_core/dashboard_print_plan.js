@@ -20,9 +20,9 @@
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
  * - {@link createPrintStartCommandRequestFromPlan}：PrintPlan から print-start command request を生成
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since   1.390.1343 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 09:25:00
  * -----------------------------------------------------------
  * @todo
  * - 実送信 protocol 生成へ拡張する
@@ -112,32 +112,66 @@ function normalizeToolId(value, fallback = 0) {
 }
 
 /**
- * asset の logical tool ID 配列を正規化する。
+ * analysis payload から logical tool ID 候補を取り出す。
  *
  * 【詳細説明】
- * - G-code analyzer が tool list を返す場合はその値を採用する。
- * - toolCount だけがある場合は `0..toolCount-1` を生成する。
+ * - analyzer の実装差で `logicalTools` / `tools` のどちらを返しても同じ意味として読む。
+ * - `toolCount` だけから `0..N-1` を生成する fallback は authority PrintPlan では行わない。
+ *
+ * @private
+ * @param {object} analysis - G-code analysis 候補
+ * @returns {Array<*>|null} logical tool 候補配列
+ */
+function readAnalysisLogicalToolCandidates(analysis) {
+  if (Array.isArray(analysis?.logicalTools)) {
+    return analysis.logicalTools;
+  }
+  if (Array.isArray(analysis?.tools)) {
+    return analysis.tools;
+  }
+  return null;
+}
+
+/**
+ * G-code analysis evidence を正規化する。
+ *
+ * 【詳細説明】
+ * - PrintPlan authority では、G-code analyzer が確定した logical tool list だけを採用する。
+ * - `toolCount` や caller 指定 `asset.tools` だけでは、multicolor file を単色扱いできてしまうため拒否する。
  *
  * @private
  * @param {object} asset - G-code asset 候補
- * @returns {{logicalTools: number[], toolCount: number}} logical tool 情報
+ * @returns {object} 正規化済み analysis evidence
+ * @throws {TypeError} analysis evidence が不足している場合
  */
-function normalizeAssetLogicalTools(asset) {
-  const explicitTools = Array.isArray(asset?.tools) ? asset.tools : null;
-  if (explicitTools && explicitTools.length > 0) {
-    const logicalTools = explicitTools.map((tool, index) => normalizeToolId(tool?.toolId ?? tool, index));
-    if (new Set(logicalTools).size !== logicalTools.length) {
-      throw new TypeError("PrintPlan asset logical tools must be unique.");
-    }
-    return {
-      logicalTools,
-      toolCount: logicalTools.length,
-    };
+function normalizeGcodeAnalysis(asset) {
+  const analysis = asset?.analysis;
+  if (!analysis || typeof analysis !== "object" || analysis.analyzed !== true) {
+    throw new TypeError("PrintPlan requires analyzed G-code logical tools.");
   }
-  const toolCount = Math.max(1, Number(asset?.toolCount || 1) || 1);
+  const analyzerVersion = requireNonEmptyString(
+    analysis.analyzerVersion || analysis.source,
+    "asset.analysis.analyzerVersion"
+  );
+  const fileHash = requireNonEmptyString(
+    analysis.fileHash || analysis.sha256 || asset?.fileSha256 || asset?.fileMd5,
+    "asset.analysis.fileHash"
+  );
+  const logicalToolCandidates = readAnalysisLogicalToolCandidates(analysis);
+  if (!logicalToolCandidates || logicalToolCandidates.length === 0) {
+    throw new TypeError("PrintPlan requires analyzed G-code logical tools.");
+  }
+  const logicalTools = logicalToolCandidates.map((tool, index) => normalizeToolId(tool?.toolId ?? tool, index));
+  if (new Set(logicalTools).size !== logicalTools.length) {
+    throw new TypeError("PrintPlan asset logical tools must be unique.");
+  }
   return {
-    logicalTools: Array.from({ length: toolCount }, (_, index) => index),
-    toolCount,
+    analyzed: true,
+    analyzerVersion,
+    fileHash,
+    logicalTools,
+    toolCount: logicalTools.length,
+    analyzedAt: analysis.analyzedAt || null,
   };
 }
 
@@ -154,14 +188,36 @@ function normalizeAssetLogicalTools(asset) {
 function normalizeGcodeAsset(asset) {
   const path = requireNonEmptyString(asset?.path || asset?.filePath || asset?.filename, "asset.path");
   const fileName = String(asset?.fileName || asset?.name || path.split(/[\\/]/u).pop() || path).trim();
-  const toolInfo = normalizeAssetLogicalTools(asset);
+  const analysis = normalizeGcodeAnalysis(asset);
   return {
     assetId: asset?.assetId || createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName]),
     path,
     fileName,
     fileMd5: asset?.fileMd5 || null,
-    toolCount: toolInfo.toolCount,
-    logicalTools: toolInfo.logicalTools,
+    fileHash: analysis.fileHash,
+    toolCount: analysis.toolCount,
+    logicalTools: analysis.logicalTools,
+    analysis,
+  };
+}
+
+/**
+ * マルチカラーCFS用 colorMatch policy を正規化する。
+ *
+ * 【詳細説明】
+ * - caller が `requireObservedSelectedSource:false` を渡しても、authority前提条件を弱めない。
+ * - 追加の source/protocol note は保持するが、安全に関わる2項目は固定する。
+ *
+ * @private
+ * @param {object|null|undefined} policy - caller 指定 policy
+ * @returns {object} 正規化済み policy
+ */
+function normalizeMulticolorColorMatchPolicy(policy) {
+  const sourcePolicy = policy && typeof policy === "object" ? cloneJsonValue(policy) : {};
+  return {
+    ...sourcePolicy,
+    mode: "explicit-tool-assignment",
+    requireObservedSelectedSource: true,
   };
 }
 
@@ -313,10 +369,7 @@ export function createMulticolorCfsPrintPlan(options = {}) {
     asset,
     toolAssignments: assignments,
     materialSourceIds,
-    colorMatchPolicy: cloneJsonValue(options.colorMatchPolicy || {
-      mode: "explicit-tool-assignment",
-      requireObservedSelectedSource: true,
-    }),
+    colorMatchPolicy: normalizeMulticolorColorMatchPolicy(options.colorMatchPolicy),
     preflight: cloneJsonValue(options.preflight || {}),
     createdAt: options.createdAt || null,
     authority: {
@@ -400,19 +453,40 @@ export function validatePrintPlan(plan) {
       errors.push("missing-material-source-id");
     }
   }
-  if (plan.planKind === "multicolor-cfs" && (!plan.colorMatchPolicy || typeof plan.colorMatchPolicy !== "object")) {
-    errors.push("missing-color-match-policy");
-  }
-  const assetLogicalTools = Array.isArray(plan.asset?.logicalTools)
-    ? plan.asset.logicalTools.map((toolId) => {
-      try {
-        return normalizeToolId(toolId);
-      } catch {
-        errors.push("invalid-asset-logical-tool");
-        return null;
+  if (plan.planKind === "multicolor-cfs") {
+    if (!plan.colorMatchPolicy || typeof plan.colorMatchPolicy !== "object") {
+      errors.push("missing-color-match-policy");
+    } else {
+      if (plan.colorMatchPolicy.mode !== "explicit-tool-assignment") {
+        errors.push("unsafe-color-match-policy");
       }
-    }).filter((toolId) => toolId !== null)
-    : Array.from({ length: Number(plan.asset?.toolCount) || 0 }, (_, index) => index);
+      if (plan.colorMatchPolicy.requireObservedSelectedSource !== true) {
+        errors.push("missing-observed-selected-source-policy");
+      }
+    }
+  }
+  let assetLogicalTools = [];
+  try {
+    const analysis = normalizeGcodeAnalysis(plan.asset || {});
+    assetLogicalTools = analysis.logicalTools;
+    if (Array.isArray(plan.asset?.logicalTools) && plan.asset.logicalTools.length > 0) {
+      const topLevelLogicalTools = plan.asset.logicalTools.map((toolId) => normalizeToolId(toolId));
+      if (
+        topLevelLogicalTools.length !== assetLogicalTools.length ||
+        topLevelLogicalTools.some((toolId, index) => toolId !== assetLogicalTools[index])
+      ) {
+        errors.push("asset-analysis-logical-tool-mismatch");
+      }
+    }
+  } catch (error) {
+    if (error instanceof TypeError && /must be unique/u.test(error.message)) {
+      errors.push("duplicate-asset-logical-tool");
+    } else if (error instanceof TypeError && /requires analyzed G-code logical tools/u.test(error.message)) {
+      errors.push("missing-gcode-analysis");
+    } else {
+      errors.push("invalid-gcode-analysis");
+    }
+  }
   if (new Set(assetLogicalTools).size !== assetLogicalTools.length) {
     errors.push("duplicate-asset-logical-tool");
   }

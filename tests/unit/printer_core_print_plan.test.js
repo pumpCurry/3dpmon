@@ -3,9 +3,9 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 09:25:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -24,13 +24,21 @@ import {
  * - 実機 path は redaction 済み fixture に近い形を使い、path/name/fileMd5 の基本 field を確認する。
  *
  * @function createSampleAsset
+ * @param {string} fileName - file name
+ * @param {number[]} logicalTools - analyzer が検出した logical tool ID 配列
  * @returns {object} テスト用 G-code asset
  */
-function createSampleAsset() {
+function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
   return {
-    path: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
-    fileName: "benchy.gcode",
+    path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
+    fileName,
     fileMd5: "md5-demo",
+    analysis: {
+      analyzed: true,
+      analyzerVersion: "unit-gcode-analyzer",
+      fileHash: `sha256:${fileName}`,
+      logicalTools,
+    },
   };
 }
 
@@ -56,6 +64,12 @@ describe("Printer Core v3 PrintPlan", () => {
         path: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
         fileName: "benchy.gcode",
         fileMd5: "md5-demo",
+        analysis: {
+          analyzed: true,
+          analyzerVersion: "unit-gcode-analyzer",
+          fileHash: "sha256:benchy.gcode",
+          logicalTools: [0],
+        },
         toolCount: 1,
       },
       toolAssignments: [
@@ -151,11 +165,7 @@ describe("Printer Core v3 PrintPlan", () => {
   it("CFSマルチカラーPrintPlanは各toolのmaterialSourceを明示する", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
-      asset: {
-        path: "/mnt/UDISK/printer_data/gcodes/4color_benchy.gcode",
-        fileName: "4color_benchy.gcode",
-        toolCount: 4,
-      },
+      asset: createSampleAsset("4color_benchy.gcode", [0, 1, 2, 3]),
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3", protocol: { colorMatch: "T1A" } },
         { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2", protocol: { colorMatch: "T1B" } },
@@ -164,6 +174,7 @@ describe("Printer Core v3 PrintPlan", () => {
       ],
       colorMatchPolicy: {
         mode: "explicit-tool-assignment",
+        requireObservedSelectedSource: true,
         source: "operator-confirmed",
       },
     });
@@ -181,6 +192,7 @@ describe("Printer Core v3 PrintPlan", () => {
       ],
       colorMatchPolicy: {
         mode: "explicit-tool-assignment",
+        requireObservedSelectedSource: true,
         source: "operator-confirmed",
       },
       authority: {
@@ -222,8 +234,7 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(() => createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createSampleAsset(),
-        toolCount: 4,
+        ...createSampleAsset("benchy.gcode", [0, 1, 2, 3]),
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
@@ -233,8 +244,7 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(() => createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createSampleAsset(),
-        toolCount: 2,
+        ...createSampleAsset("benchy.gcode", [0, 1]),
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
@@ -244,8 +254,7 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(() => createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createSampleAsset(),
-        toolCount: 2,
+        ...createSampleAsset("benchy.gcode", [0, 1]),
       },
       toolAssignments: [
         { toolId: false, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
@@ -255,8 +264,7 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(() => createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createSampleAsset(),
-        tools: [{ toolId: 0 }, { toolId: 0 }],
+        ...createSampleAsset("benchy.gcode", [0, 0]),
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
@@ -268,10 +276,7 @@ describe("Printer Core v3 PrintPlan", () => {
   it("CFSマルチカラーPrintPlan由来のcommandもcontract-onlyで送信しない", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
-      asset: {
-        path: "/mnt/UDISK/printer_data/gcodes/4color_benchy.gcode",
-        toolCount: 2,
-      },
+      asset: createSampleAsset("4color_benchy.gcode", [0, 1]),
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
         { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
@@ -323,6 +328,7 @@ describe("Printer Core v3 PrintPlan", () => {
         "unexpected-schema-version",
         "unsupported-plan-kind",
         "missing-asset-path",
+        "missing-gcode-analysis",
         "material-source-assignment-mismatch",
         "plan-can-start-print",
       ],
@@ -336,6 +342,12 @@ describe("Printer Core v3 PrintPlan", () => {
         path: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
         toolCount: 1,
         logicalTools: [0, 0],
+        analysis: {
+          analyzed: true,
+          analyzerVersion: "unit-gcode-analyzer",
+          fileHash: "sha256:bad-tool",
+          logicalTools: [0, 0],
+        },
       },
       toolAssignments: [
         { toolId: false, protocolToolAlias: "", materialSourceId: "cfs:1:slot:0" },
@@ -348,6 +360,56 @@ describe("Printer Core v3 PrintPlan", () => {
       "missing-tool-id",
       "missing-protocol-tool-alias",
       "duplicate-asset-logical-tool",
+    ]));
+  });
+
+  it("解析済みlogical toolが無いG-code assetはPrintPlanに昇格しない", () => {
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        path: "/mnt/UDISK/printer_data/gcodes/unknown.gcode",
+        fileName: "unknown.gcode",
+        toolCount: 1,
+      },
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("analyzed G-code logical tools");
+
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset("4color_benchy.gcode", [0, 1, 2, 3]),
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("missing-gcode-tool-assignment");
+  });
+
+  it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {
+    const plan = createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset("4color_benchy.gcode", [0, 1]),
+      toolAssignments: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
+      ],
+      colorMatchPolicy: {
+        mode: "best-effort",
+        requireObservedSelectedSource: false,
+        source: "unsafe-caller",
+      },
+    });
+
+    expect(plan.colorMatchPolicy).toEqual({
+      mode: "explicit-tool-assignment",
+      requireObservedSelectedSource: true,
+      source: "unsafe-caller",
+    });
+    expect(validatePrintPlan({
+      ...plan,
+      colorMatchPolicy: {
+        mode: "best-effort",
+        requireObservedSelectedSource: false,
+      },
+    }).errors).toEqual(expect.arrayContaining([
+      "unsafe-color-match-policy",
+      "missing-observed-selected-source-policy",
     ]));
   });
 });

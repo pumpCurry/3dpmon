@@ -3,9 +3,9 @@
  * @description
  * - Gate 17 で PrintPlan 由来の material segment と ledger event 候補を dry-run 検証する。
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since 1.390.1345 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 09:25:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -28,12 +28,19 @@ import {
  *
  * @function createAsset
  * @param {string} fileName - file name
+ * @param {number[]} logicalTools - analyzer が検出した logical tool ID 配列
  * @returns {object} G-code asset
  */
-function createAsset(fileName) {
+function createAsset(fileName, logicalTools = [0]) {
   return {
     path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
     fileName,
+    analysis: {
+      analyzed: true,
+      analyzerVersion: "unit-gcode-analyzer",
+      fileHash: `sha256:${fileName}`,
+      logicalTools,
+    },
   };
 }
 
@@ -73,12 +80,32 @@ describe("Printer Core v3 filament ledger contract", () => {
     expect(validateJobMaterialSegments(segments)).toEqual({ ok: true, errors: [] });
   });
 
+  it("confidenceが明示されない総消費はunknownのまま残量debitしない", () => {
+    const plan = createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createAsset("benchy.gcode"),
+      materialSourceId: "cfs:1:slot:2",
+      spoolId: "spool:silver",
+    });
+    const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
+      printJobId: "job:implicit-confidence",
+      totalUsedLengthMm: 1234.5,
+    });
+    const events = createFilamentLedgerEventsFromSegments(segments);
+
+    expect(segments[0]).toMatchObject({
+      usedLengthMm: 1234.5,
+      confidence: "unknown",
+      allocationMode: "single-source-total",
+    });
+    expect(events[0].authority.canDebitRemaining).toBe(false);
+  });
+
   it("CFSマルチカラーではper-tool実測を各segmentへ反映する", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createAsset("4color_benchy.gcode"),
-        toolCount: 4,
+        ...createAsset("4color_benchy.gcode", [0, 1, 2, 3]),
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3", spoolId: "spool:red" },
@@ -113,12 +140,51 @@ describe("Printer Core v3 filament ledger contract", () => {
     ]);
   });
 
+  it("不正なtoolIdや使用量の暗黙Number変換ではusageを割り当てない", () => {
+    const plan = createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createAsset("4color_benchy.gcode", [0, 1]),
+      toolAssignments: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1" },
+      ],
+    });
+    const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
+      printJobId: "job:strict-usage",
+      materialUsages: [
+        {
+          toolId: false,
+          protocolToolAlias: "T1A",
+          materialSourceId: "cfs:1:slot:0",
+          usedLengthMm: 999,
+          confidence: "exact",
+        },
+        {
+          toolId: 1,
+          protocolToolAlias: "T1B",
+          materialSourceId: "cfs:1:slot:1",
+          usedLengthMm: "",
+          confidence: "exact",
+        },
+      ],
+    });
+
+    expect(segments.map((segment) => [
+      segment.toolId,
+      segment.usedLengthMm,
+      segment.confidence,
+      segment.allocationMode,
+    ])).toEqual([
+      [0, null, "unknown", "no-usage-observation"],
+      [1, null, "unknown", "no-usage-observation"],
+    ]);
+  });
+
   it("CFSマルチカラーで総消費しか無い場合はunknownにして等分配しない", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createAsset("4color_benchy.gcode"),
-        toolCount: 4,
+        ...createAsset("4color_benchy.gcode", [0, 1, 2, 3]),
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },
@@ -252,8 +318,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: {
-        ...createAsset("4color_benchy.gcode"),
-        toolCount: 2,
+        ...createAsset("4color_benchy.gcode", [0, 1]),
       },
       toolAssignments: [
         { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:3" },

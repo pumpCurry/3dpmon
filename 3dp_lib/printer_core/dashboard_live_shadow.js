@@ -22,9 +22,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1338 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-09 02:05:00
+ * @lastModified 2026-08-09 09:25:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -728,6 +728,7 @@ function beginPrinterCoreV3LiveShadowSession(options) {
     deviceId,
     sessionId,
     state: "active",
+    differentialCompared: false,
     observedFrames: 0,
     diffCount: 0,
     lastDiffs: [],
@@ -1163,6 +1164,7 @@ export function observeK1LiveShadowFrame(options, dependencies = {}) {
     deviceId,
     sessionId,
     state: diffs.length > 0 ? "diff" : "matched",
+    differentialCompared: true,
     observedFrames: Number(previous.observedFrames || 0) + 1,
     diffCount: Number(previous.diffCount || 0) + diffs.length,
     lastDiffs: diffs,
@@ -1256,6 +1258,7 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     deviceId,
     sessionId,
     state: "observed",
+    differentialCompared: false,
     observedFrames: Number(previous.observedFrames || 0) + 1,
     diffCount: 0,
     lastDiffs: [],

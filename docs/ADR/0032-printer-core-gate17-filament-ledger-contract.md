@@ -41,6 +41,8 @@ Rules:
 - single-color plans may bind total observed usage to the single material source
 - multicolor/CFS plans require per-tool/per-source usage to produce exact or high
   segment usage
+- exact/high/estimated confidence must be explicit in observation evidence;
+  omitted or unknown confidence stays `unknown`
 - multicolor total-only usage is not split across tools
 - unknown segments remain auditable but cannot debit spool remaining length
 - candidate ledger events are append-only shaped, but `canAppend = false` in this
@@ -58,6 +60,10 @@ Rules:
 - correction creation must match the original event's `segmentId`, `printJobId`,
   `deviceId`, `materialSourceId`, and `spoolId`; changing source/spool identity
   is a different reallocation/reversal event type, not a usage correction
+- `toolId` and used-length parsing is strict. Boolean, blank string, arrays, and
+  other JavaScript-coercible values are not treated as `0`.
+- A usage entry with an invalid `toolId` is ignored entirely, including alias or
+  material-source fallback, so malformed observations cannot debit tool 0.
 
 ## Non-Goals
 
@@ -73,6 +79,11 @@ Gate 17 gives command/print authority a safe accounting boundary without
 promoting read-only CFS observations into confirmed spool usage. It also makes
 the dry-run style print failure observable: a job can produce unknown or zero
 segments instead of silently subtracting filament from the wrong spool.
+
+The contract is intentionally conservative about confidence. A per-material
+usage amount without confidence remains useful evidence, but it cannot debit
+remaining filament until a trusted observation source explicitly marks it
+`exact`, `high`, or `estimated`.
 
 Later exact measurements should be appended as correction events rather than as
 additional independent consumption events for the same segment.

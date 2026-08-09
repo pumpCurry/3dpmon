@@ -17,9 +17,9 @@
  * - {@link createPrinterCoreV3UiCutoverPlan}：UI cutover plan を生成
  * - {@link assertPrinterCoreV3UiCutoverAllowed}：cutover 許可条件を検査
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since   1.390.1346 (PR #432)
- * @lastModified 2026-08-09 08:35:00
+ * @lastModified 2026-08-09 09:25:00
  * -----------------------------------------------------------
  * @todo
  * - 実 UI の raw JSON 参照を NormalizedState 参照へ段階的に差し替える
@@ -227,8 +227,8 @@ function cloneJsonValue(value) {
  * live shadow runtime record から clean 判定を作る。
  *
  * 【詳細説明】
- * - diffCount が0で、少なくとも1 frame を観測している record だけを clean とみなす。
- * - K1/K2を複数台見る場合は、呼び出し側が必須対象の record だけを渡す。
+ * - K1 の legacy differential を実行済みで、diffCount が0の record だけを clean とみなす。
+ * - K2 は read-only観測だけで legacy differential を持たないため、この証跡では合格にしない。
  *
  * @private
  * @param {Array<object>} shadowRecords - live shadow runtime record 配列
@@ -242,7 +242,12 @@ function deriveLiveShadowDiffsClean(shadowRecords) {
     const observedFrames = Number(record?.observedFrames);
     const diffCount = Number(record?.diffCount);
     const state = String(record?.state || "");
-    return observedFrames > 0 && diffCount === 0 && (state === "matched" || state === "observing" || state === "closed");
+    const printerFamily = String(record?.printerFamily || "").trim().toLowerCase();
+    return printerFamily === "k1" &&
+      record?.differentialCompared === true &&
+      observedFrames > 0 &&
+      diffCount === 0 &&
+      (state === "matched" || state === "observing" || state === "closed");
   });
 }
 

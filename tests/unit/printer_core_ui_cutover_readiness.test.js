@@ -3,9 +3,9 @@
  * @description
  * - Gate 18 で UI authority cutover を fail-closed に保つことを検証する。
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since 1.390.1346 (PR #432)
- * @lastModified 2026-08-09 08:35:00
+ * @lastModified 2026-08-09 09:25:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -120,8 +120,8 @@ describe("Printer Core v3 UI cutover readiness", () => {
     const report = createPrinterCoreV3CutoverReadinessReport({
       sources: createPlainReadySources(),
       shadowRecords: [
-        { observedFrames: 12, diffCount: 0, state: "matched" },
-        { observedFrames: 8, diffCount: 0, state: "observing" },
+        { printerFamily: "k1", differentialCompared: true, observedFrames: 12, diffCount: 0, state: "matched" },
+        { printerFamily: "k1", differentialCompared: true, observedFrames: 8, diffCount: 0, state: "observing" },
       ],
     });
 
@@ -134,7 +134,7 @@ describe("Printer Core v3 UI cutover readiness", () => {
     expect(() => assertPrinterCoreV3UiCutoverAllowed({
       sources: createPlainReadySources(),
       shadowRecords: [
-        { observedFrames: 12, diffCount: 0, state: "matched" },
+        { printerFamily: "k1", differentialCompared: true, observedFrames: 12, diffCount: 0, state: "matched" },
       ],
     })).toThrow("schema-v3-writes-not-active");
   });
@@ -143,7 +143,7 @@ describe("Printer Core v3 UI cutover readiness", () => {
     const report = createPrinterCoreV3CutoverReadinessReport({
       sources: createPlainReadySources(),
       shadowRecords: [
-        { observedFrames: 12, diffCount: 1, state: "matched" },
+        { printerFamily: "k1", differentialCompared: true, observedFrames: 12, diffCount: 1, state: "matched" },
       ],
     });
 
@@ -165,7 +165,7 @@ describe("Printer Core v3 UI cutover readiness", () => {
     const readinessInput = {
       sources: createPlainReadySources(),
       shadowRecords: [
-        { observedFrames: 12, diffCount: 0, state: "matched" },
+        { printerFamily: "k1", differentialCompared: true, observedFrames: 12, diffCount: 0, state: "matched" },
       ],
     };
     const report = createPrinterCoreV3CutoverReadinessReport(readinessInput);
@@ -264,5 +264,27 @@ describe("Printer Core v3 UI cutover readiness", () => {
     });
     expect(plan.blockers).toContain("schema-v3-writes-not-active");
     expect(plan.blockers).toContain("legacy-fallback-not-available");
+  });
+
+  it("K2 read-only観測recordはliveShadowDiffsCleanの証跡にしない", () => {
+    const report = createPrinterCoreV3CutoverReadinessReport({
+      sources: createPlainReadySources(),
+      shadowRecords: [
+        {
+          printerFamily: "k2",
+          differentialCompared: false,
+          observedFrames: 20,
+          diffCount: 0,
+          state: "closed",
+        },
+      ],
+    });
+
+    expect(report.evidence.liveShadowDiffsClean).toEqual({
+      value: false,
+      source: "live-shadow-runtime",
+      trusted: true,
+    });
+    expect(report.blockers).toContain("live-shadow-diffs-not-clean");
   });
 });

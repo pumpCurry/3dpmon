@@ -18,9 +18,9 @@
  * - {@link createFilamentLedgerCorrectionEvent}：既存 consumption event の correction 候補を生成
  * - {@link validateJobMaterialSegments}：segment 配列の整合性を検査
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since   1.390.1345 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 09:25:00
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 repository activation 後に append-only store へ接続する
@@ -89,17 +89,51 @@ function requireNonEmptyString(value, name) {
 }
 
 /**
+ * 非負整数IDを厳格に正規化する。
+ *
+ * 【詳細説明】
+ * - JavaScript の暗黙変換で `false` / 空文字 / 配列が0になる経路を拒否する。
+ *
+ * @private
+ * @param {*} value - ID 候補
+ * @returns {number|null} 正規化済みID。不正な場合 null
+ */
+function parseStrictNonNegativeInteger(value) {
+  if (value === undefined || value === null || typeof value === "boolean" || Array.isArray(value)) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!/^(0|[1-9]\d*)$/u.test(text)) {
+      return null;
+    }
+    return Number(text);
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
+/**
  * mm値を正規化する。
  *
  * 【詳細説明】
  * - 使用量は0以上の有限数だけを採用し、それ以外は null として未確定にする。
+ * - boolean / 空文字 / 配列など、`Number()` では0になり得る値は観測値として採用しない。
  *
  * @private
  * @param {*} value - mm 候補
  * @returns {number|null} 正規化済み mm
  */
 function normalizeUsedLengthMm(value) {
-  const numberValue = Number(value);
+  if (value === undefined || value === null || typeof value === "boolean" || Array.isArray(value)) {
+    return null;
+  }
+  if (typeof value === "string" && !/^(0|[1-9]\d*)(\.\d+)?$/u.test(value.trim())) {
+    return null;
+  }
+  const numberValue = typeof value === "string" ? Number(value.trim()) : value;
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
 }
 
@@ -115,7 +149,8 @@ function normalizeUsedLengthMm(value) {
  * @returns {string} 正規化済み confidence
  */
 function normalizeConfidence(value, fallback = "unknown") {
-  const text = String(value || fallback).trim();
+  const raw = value === undefined || value === null || value === "" ? fallback : value;
+  const text = String(raw).trim();
   return SEGMENT_CONFIDENCE_VALUES.has(text) ? text : "unknown";
 }
 
@@ -139,6 +174,22 @@ function readUsageEntryLength(entry) {
 }
 
 /**
+ * usage entry の toolId が存在するが不正かを判定する。
+ *
+ * 【詳細説明】
+ * - 不正な toolId を持つ entry は、alias/source fallback でも使わない。
+ * - これにより `false` が tool0 と一致し、別sourceの使用量を誤配分する経路を閉じる。
+ *
+ * @private
+ * @param {object} entry - material usage entry
+ * @returns {boolean} toolId が存在して不正な場合 true
+ */
+function usageEntryHasInvalidToolId(entry) {
+  return Object.prototype.hasOwnProperty.call(entry || {}, "toolId") &&
+    parseStrictNonNegativeInteger(entry?.toolId) === null;
+}
+
+/**
  * assignment に対応する usage entry を探す。
  *
  * 【詳細説明】
@@ -150,12 +201,15 @@ function readUsageEntryLength(entry) {
  * @returns {object|null} 対応 usage entry
  */
 function findUsageForAssignment(assignment, materialUsages) {
-  const toolId = Number(assignment?.toolId);
+  const toolId = parseStrictNonNegativeInteger(assignment?.toolId);
   const protocolToolAlias = String(assignment?.protocolToolAlias || assignment?.toolAlias || "").trim();
   const materialSourceId = String(assignment?.materialSourceId || "").trim();
-  return materialUsages.find((entry) => Number(entry?.toolId) === toolId) ||
-    materialUsages.find((entry) => String(entry?.protocolToolAlias || entry?.toolAlias || "").trim() === protocolToolAlias) ||
-    materialUsages.find((entry) => String(entry?.materialSourceId || "").trim() === materialSourceId) ||
+  const usableEntries = materialUsages.filter((entry) => !usageEntryHasInvalidToolId(entry));
+  return usableEntries.find((entry) => toolId !== null && parseStrictNonNegativeInteger(entry?.toolId) === toolId) ||
+    usableEntries.find((entry) => protocolToolAlias &&
+      String(entry?.protocolToolAlias || entry?.toolAlias || "").trim() === protocolToolAlias) ||
+    usableEntries.find((entry) => materialSourceId &&
+      String(entry?.materialSourceId || "").trim() === materialSourceId) ||
     null;
 }
 
@@ -180,7 +234,7 @@ function resolveSegmentUsage(plan, assignment, observation) {
   if (entryUsed !== null) {
     return {
       usedLengthMm: entryUsed,
-      confidence: normalizeConfidence(usageEntry?.confidence, "exact"),
+      confidence: normalizeConfidence(usageEntry?.confidence, "unknown"),
       allocationMode: "observed-per-material",
       evidence: cloneJsonValue(usageEntry),
     };
@@ -193,7 +247,7 @@ function resolveSegmentUsage(plan, assignment, observation) {
   if (plan.planKind === "single-color" && totalUsed !== null) {
     return {
       usedLengthMm: totalUsed,
-      confidence: normalizeConfidence(observation.confidence, "high"),
+      confidence: normalizeConfidence(observation.confidence, "unknown"),
       allocationMode: "single-source-total",
       evidence: { totalUsedLengthMm: totalUsed },
     };
@@ -296,7 +350,7 @@ export function validateJobMaterialSegments(segments) {
         errors.push(`missing-${key}`);
       }
     }
-    if (!Number.isInteger(Number(segment?.toolId)) || Number(segment.toolId) < 0) {
+    if (parseStrictNonNegativeInteger(segment?.toolId) === null) {
       errors.push("missing-toolId");
     }
     if (!String(segment?.protocolToolAlias || segment?.toolAlias || "").trim()) {
@@ -341,7 +395,8 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
     throw new TypeError(`Invalid JobMaterialSegments: ${validation.errors.join(",")}`);
   }
   return segments.map((segment) => {
-    const hasDebitAmount = normalizeUsedLengthMm(segment.usedLengthMm) !== null && Number(segment.usedLengthMm) > 0;
+    const normalizedUsed = normalizeUsedLengthMm(segment.usedLengthMm);
+    const hasDebitAmount = normalizedUsed !== null && normalizedUsed > 0;
     const canDebitRemaining = Boolean(segment.spoolId) && hasDebitAmount && segment.confidence !== "unknown";
     return {
       schemaVersion: PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION,
@@ -361,7 +416,7 @@ export function createFilamentLedgerEventsFromSegments(segments, options = {}) {
       deviceId: segment.deviceId,
       materialSourceId: segment.materialSourceId,
       spoolId: segment.spoolId,
-      usedLengthMm: segment.usedLengthMm,
+      usedLengthMm: normalizedUsed,
       confidence: segment.confidence,
       allocationMode: segment.allocationMode,
       supersedesLedgerEventId: null,
@@ -433,7 +488,7 @@ export function createFilamentLedgerCorrectionEvent(originalEvent, correctedSegm
     authority: {
       mode: "candidate-only",
       canAppend: false,
-      canDebitRemaining: Boolean(correctedSegment.spoolId) && correctedSegment.confidence !== "unknown",
+      canDebitRemaining: Boolean(correctedSegment.spoolId) && correctedUsed > 0 && correctedSegment.confidence !== "unknown",
     },
   };
 }
