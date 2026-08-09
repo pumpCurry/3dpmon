@@ -93,7 +93,9 @@ receipt from an earlier upload is not enough to prove that the current remote
 path still contains the same bytes. The start context itself is also treated as
 authority-owned evidence, not caller input: copying values out of a stale
 receipt cannot satisfy start-ready validation unless the context carries
-PrinterSession/UploadRegistry authority provenance.
+PrinterSession/UploadRegistry authority provenance. The command envelope must
+then use that same authority-derived session rather than a separate caller
+supplied session value.
 
 Single-color plans also do not infer `protocolToolAlias = T1A`. If the selected
 source is CFS-backed, the protocol alias must be explicitly supplied by the

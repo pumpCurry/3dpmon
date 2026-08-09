@@ -21,9 +21,9 @@
  * - {@link validatePrintPlanForStart}：print-start 前提の整合性を検査
  * - {@link createPrintStartCommandRequestFromPlan}：PrintPlan から print-start command request を生成
  *
- * @version 1.390.1358 (PR #432)
+ * @version 1.390.1359 (PR #432)
  * @since   1.390.1343 (PR #432)
- * @lastModified 2026-08-09 13:38:08
+ * @lastModified 2026-08-09 13:43:36
  * -----------------------------------------------------------
  * @todo
  * - 実送信 protocol 生成へ拡張する
@@ -1124,17 +1124,32 @@ export function createPrintStartCommandRequestFromPlan(plan, options = {}) {
     receiptId: options.receiptId,
     provenance: options.startContextProvenance,
   };
-  const validation = validatePrintPlanForStart(plan, {
+  const effectiveStartContext = {
     ...startContext,
     sessionId: startContext.sessionId || options.sessionId,
     uploadGeneration: startContext.uploadGeneration || options.uploadGeneration,
-  });
+  };
+  const commandSessionId = String(options.sessionId || "").trim();
+  const contextSessionId = String(effectiveStartContext.sessionId || "").trim();
+  const commandUploadGeneration = String(options.uploadGeneration || "").trim();
+  const contextUploadGeneration = String(effectiveStartContext.uploadGeneration || "").trim();
+  const bindingErrors = [];
+  if (commandSessionId && contextSessionId && commandSessionId !== contextSessionId) {
+    bindingErrors.push("start-command-session-mismatch");
+  }
+  if (commandUploadGeneration && contextUploadGeneration && commandUploadGeneration !== contextUploadGeneration) {
+    bindingErrors.push("start-command-upload-generation-mismatch");
+  }
+  const validation = validatePrintPlanForStart(plan, effectiveStartContext);
+  if (bindingErrors.length > 0) {
+    throw new TypeError(`Invalid PrintPlan: ${bindingErrors.join(",")}`);
+  }
   if (!validation.ok) {
     throw new TypeError(`Invalid PrintPlan: ${validation.errors.join(",")}`);
   }
   return createPrinterCommandRequest({
     deviceId: plan.deviceId,
-    sessionId: options.sessionId,
+    sessionId: effectiveStartContext.sessionId,
     commandKind: "print-start",
     transportKind: options.transportKind || "pending-adapter",
     payload: {
@@ -1145,6 +1160,11 @@ export function createPrintStartCommandRequestFromPlan(plan, options = {}) {
       materialSourceIds: cloneJsonValue(plan.materialSourceIds),
       colorMatchPolicy: cloneJsonValue(plan.colorMatchPolicy || null),
       multiColorPrint: plan.planKind === "multicolor-cfs",
+      startContext: {
+        sessionId: effectiveStartContext.sessionId,
+        uploadGeneration: effectiveStartContext.uploadGeneration,
+        receiptId: effectiveStartContext.receiptId || plan.asset?.uploadReceiptId || null,
+      },
     },
     expectedState: [
       {

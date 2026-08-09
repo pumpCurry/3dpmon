@@ -75,7 +75,10 @@ current upload generation with the receipt. This prevents a stale but genuine
 upload receipt from a previous session or overwritten remote path from being
 replayed into a later multicolor start. The context must itself be issued by the
 start authority boundary. A caller-declared context that merely copies
-`sessionId` and `uploadGeneration` from the receipt remains untrusted.
+`sessionId` and `uploadGeneration` from the receipt remains untrusted. The
+validated context is also the source of truth for the command envelope session,
+so a context validated for one session cannot be used to emit a command for
+another session.
 
 ## Consequences
 

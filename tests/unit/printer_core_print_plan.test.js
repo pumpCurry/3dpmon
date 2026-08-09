@@ -3,9 +3,9 @@
  * @description
  * - Gate 15 で単色印刷も PrintPlan を通し、material source と command contract を明示することを検証する。
  *
- * @version 1.390.1358 (PR #432)
+ * @version 1.390.1359 (PR #432)
  * @since 1.390.1343 (PR #432)
- * @lastModified 2026-08-09 13:38:08
+ * @lastModified 2026-08-09 13:43:36
  */
 
 import { createHash } from "node:crypto";
@@ -562,6 +562,18 @@ describe("Printer Core v3 PrintPlan", () => {
       transportKind: "ws9999",
       entropySource: () => "unit",
     })).toThrow("untrusted-start-context");
+    expect(() => createPrintStartCommandRequestFromPlan(plan, {
+      startContext: callerCopiedContext,
+      sessionId: "session:other",
+      transportKind: "ws9999",
+      entropySource: () => "unit",
+    })).toThrow("start-command-session-mismatch");
+    expect(() => createPrintStartCommandRequestFromPlan(plan, {
+      startContext: callerCopiedContext,
+      uploadGeneration: "generation:newer",
+      transportKind: "ws9999",
+      entropySource: () => "unit",
+    })).toThrow("start-command-upload-generation-mismatch");
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {
