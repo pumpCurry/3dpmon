@@ -39,6 +39,8 @@ The plan also carries:
 - `asset.toolCount` and `asset.logicalTools[]` from module-owned G-code analysis
 - `asset.analysis` derived inside the PrintPlan module from `asset.content`,
   with analyzer version, file hash, and logical tool list
+- `asset.uploadReceipt` binding that same file hash to the remote path that will
+  be used by print-start
 - `authority.canStartPrint = false`
 
 Callers cannot weaken the multicolor safety policy. If a caller supplies a
@@ -54,6 +56,10 @@ content is rejected instead of being treated as a one-tool file. The logical
 G-code asset identity includes the content hash, and caller supplied `assetId`
 must match that deterministic identity, so a path/name reuse with different
 bytes cannot silently reuse the old asset ID.
+The plan additionally requires an upload receipt so the analyzed bytes are bound
+to the remote file path that command authority will ask the printer to start.
+Existing remote files without a printer-side hash/receipt remain outside
+authority and must be reuploaded or verified before PrintPlan creation.
 
 `createPrintStartCommandRequestFromPlan()` may convert the plan into a
 `print-start` command request, but the command remains `contract-only` and

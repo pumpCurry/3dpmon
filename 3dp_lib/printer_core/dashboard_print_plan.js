@@ -398,6 +398,49 @@ function normalizeGcodeAnalysis(asset) {
 }
 
 /**
+ * upload receipt を正規化する。
+ *
+ * 【詳細説明】
+ * - 解析した `asset.content` と、実際に印刷する remote path の bytes を content hash で結び付ける。
+ * - 既存 remote path を直接指定する authority 化は、printer 側 hash または再upload receipt が得られるまで拒否する。
+ *
+ * @private
+ * @param {object} asset - G-code asset 候補
+ * @param {string} path - remote print path
+ * @param {string} fileHash - content hash
+ * @param {string} deviceId - device ID
+ * @returns {object} 正規化済み upload receipt
+ */
+function normalizeUploadReceipt(asset, path, fileHash, deviceId) {
+  const receipt = asset?.uploadReceipt || asset?.uploadReceiptEvidence;
+  if (!receipt || typeof receipt !== "object") {
+    throw new TypeError("PrintPlan requires upload receipt for analyzed G-code bytes.");
+  }
+  const receiptId = requireNonEmptyString(receipt.receiptId || receipt.uploadReceiptId, "uploadReceipt.receiptId");
+  const receiptPath = requireNonEmptyString(receipt.remotePath || receipt.path, "uploadReceipt.remotePath");
+  const receiptHash = requireNonEmptyString(receipt.fileHash || receipt.contentHash || receipt.sha256, "uploadReceipt.fileHash");
+  const receiptDeviceId = String(receipt.deviceId || deviceId).trim();
+  if (receiptPath !== path) {
+    throw new TypeError("PrintPlan upload receipt remotePath must match asset.path.");
+  }
+  if (receiptHash !== fileHash) {
+    throw new TypeError("PrintPlan upload receipt fileHash must match analyzed content hash.");
+  }
+  if (receiptDeviceId !== deviceId) {
+    throw new TypeError("PrintPlan upload receipt deviceId must match plan deviceId.");
+  }
+  return {
+    receiptId,
+    uploadReceiptId: receiptId,
+    deviceId: receiptDeviceId,
+    remotePath: receiptPath,
+    fileHash: receiptHash,
+    uploadedAt: receipt.uploadedAt || null,
+    source: receipt.source || "printer-core-upload",
+  };
+}
+
+/**
  * G-code asset 情報を正規化する。
  *
  * 【詳細説明】
@@ -405,9 +448,10 @@ function normalizeGcodeAnalysis(asset) {
  *
  * @private
  * @param {object} asset - G-code asset 候補
+ * @param {string} deviceId - device ID
  * @returns {object} 正規化済み asset
  */
-function normalizeGcodeAsset(asset) {
+function normalizeGcodeAsset(asset, deviceId) {
   const path = requireNonEmptyString(asset?.path || asset?.filePath || asset?.filename, "asset.path");
   const fileName = String(asset?.fileName || asset?.name || path.split(/[\\/]/u).pop() || path).trim();
   if (asset?.analysis !== undefined) {
@@ -424,12 +468,15 @@ function normalizeGcodeAsset(asset) {
   if (asset?.assetId && asset.assetId !== expectedAssetId) {
     throw new TypeError("PrintPlan assetId must match analyzed content hash.");
   }
+  const uploadReceipt = normalizeUploadReceipt(asset, path, analysis.fileHash, deviceId);
   return {
     assetId: expectedAssetId,
     path,
     fileName,
     fileMd5: asset?.fileMd5 || null,
     fileHash: analysis.fileHash,
+    uploadReceiptId: uploadReceipt.receiptId,
+    uploadReceipt,
     toolCount: analysis.toolCount,
     logicalTools: analysis.logicalTools,
     analysis,
@@ -525,7 +572,7 @@ function collectMaterialSourceIds(assignments) {
  */
 export function createSingleColorPrintPlan(options = {}) {
   const deviceId = requireNonEmptyString(options.deviceId, "deviceId");
-  const asset = normalizeGcodeAsset(options.asset || {});
+  const asset = normalizeGcodeAsset(options.asset || {}, deviceId);
   const assignment = createToolAssignment({
     toolId: options.toolId ?? 0,
     protocolToolAlias: options.protocolToolAlias || options.toolAlias,
@@ -589,7 +636,7 @@ export function createMulticolorCfsPrintPlan(options = {}) {
     throw new TypeError("Multicolor CFS PrintPlan requires at least two toolAssignments.");
   }
   const assignments = inputAssignments.map((assignment, index) => createToolAssignment(assignment, index));
-  const asset = normalizeGcodeAsset(options.asset || {});
+  const asset = normalizeGcodeAsset(options.asset || {}, deviceId);
   const materialSourceIds = collectMaterialSourceIds(assignments);
   const printPlanId = options.printPlanId || createPrinterCoreV3DeterministicId("print-plan", [
     deviceId,
@@ -653,6 +700,19 @@ export function validatePrintPlan(plan) {
   }
   if (!plan.asset || typeof plan.asset !== "object" || !String(plan.asset.path || "").trim()) {
     errors.push("missing-asset-path");
+  }
+  if (!plan.asset?.uploadReceipt || typeof plan.asset.uploadReceipt !== "object") {
+    errors.push("missing-upload-receipt");
+  } else {
+    if (plan.asset.uploadReceipt.remotePath !== plan.asset.path) {
+      errors.push("upload-receipt-path-mismatch");
+    }
+    if (plan.asset.uploadReceipt.fileHash !== plan.asset.fileHash) {
+      errors.push("upload-receipt-hash-mismatch");
+    }
+    if (plan.asset.uploadReceipt.deviceId !== plan.deviceId) {
+      errors.push("upload-receipt-device-mismatch");
+    }
   }
   const assignments = Array.isArray(plan.toolAssignments) ? plan.toolAssignments : [];
   if (plan.planKind === "single-color" && assignments.length !== 1) {

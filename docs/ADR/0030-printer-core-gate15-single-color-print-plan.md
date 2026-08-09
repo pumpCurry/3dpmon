@@ -76,6 +76,10 @@ is derived inside the PrintPlan module from `asset.content`; caller-supplied
 `asset.analysis` is rejected instead of being trusted as pre-signed evidence.
 The generated asset identity includes the file hash. Caller supplied `assetId`
 is accepted only when it matches the deterministic path/name/hash identity.
+The asset must also carry an upload receipt that binds the analyzed content hash
+to the remote print path. `analysis.fileHash`, `asset.fileHash`, and
+`uploadReceipt.fileHash` must match, and `uploadReceipt.remotePath` must match
+`asset.path`.
 
 Single-color plans also do not infer `protocolToolAlias = T1A`. If the selected
 source is CFS-backed, the protocol alias must be explicitly supplied by the

@@ -8,6 +8,7 @@
  * @lastModified 2026-08-09 09:25:00
  */
 
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createPrinterCommandResult, shouldRetryPrinterCommand } from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 import {
@@ -30,12 +31,20 @@ import {
  */
 function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
   const content = logicalTools.map((toolId) => `T${toolId}\nG1 X${toolId}`).join("\n");
+  const path = `/mnt/UDISK/printer_data/gcodes/${fileName}`;
+  const fileHash = `sha256:${createHash("sha256").update(content).digest("hex")}`;
   return {
-    path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
+    path,
     fileName,
     fileMd5: "md5-demo",
     content,
     analyzerVersion: "unit-gcode-analyzer",
+    uploadReceipt: {
+      receiptId: `upload:${fileName}`,
+      deviceId: "serial:k2pro",
+      remotePath: path,
+      fileHash,
+    },
   };
 }
 
@@ -348,6 +357,7 @@ describe("Printer Core v3 PrintPlan", () => {
         "unexpected-schema-version",
         "unsupported-plan-kind",
         "missing-asset-path",
+        "missing-upload-receipt",
         "missing-gcode-analysis",
         "material-source-assignment-mismatch",
         "plan-can-start-print",
@@ -441,6 +451,38 @@ describe("Printer Core v3 PrintPlan", () => {
       protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     })).toThrow("assetId must match analyzed content hash");
+  });
+
+  it("upload receiptがcontent hashやremote pathと一致しないassetは拒否する", () => {
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset("benchy.gcode"),
+        uploadReceipt: {
+          receiptId: "upload:bad-hash",
+          deviceId: "serial:k2pro",
+          remotePath: "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+          fileHash: "sha256:bad",
+        },
+      },
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("upload receipt fileHash must match analyzed content hash");
+
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        ...createSampleAsset("benchy.gcode"),
+        uploadReceipt: {
+          receiptId: "upload:bad-path",
+          deviceId: "serial:k2pro",
+          remotePath: "/mnt/UDISK/printer_data/gcodes/other.gcode",
+          fileHash: createSampleAsset("benchy.gcode").uploadReceipt.fileHash,
+        },
+      },
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("upload receipt remotePath must match asset.path");
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {

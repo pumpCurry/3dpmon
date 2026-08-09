@@ -8,6 +8,7 @@
  * @lastModified 2026-08-09 09:25:00
  */
 
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createFilamentLedgerEventsFromSegments,
@@ -33,11 +34,19 @@ import {
  */
 function createAsset(fileName, logicalTools = [0]) {
   const content = logicalTools.map((toolId) => `T${toolId}\nG1 X${toolId}`).join("\n");
+  const path = `/mnt/UDISK/printer_data/gcodes/${fileName}`;
+  const fileHash = `sha256:${createHash("sha256").update(content).digest("hex")}`;
   return {
-    path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
+    path,
     fileName,
     content,
     analyzerVersion: "unit-gcode-analyzer",
+    uploadReceipt: {
+      receiptId: `upload:${fileName}`,
+      deviceId: "serial:k2pro",
+      remotePath: path,
+      fileHash,
+    },
   };
 }
 
