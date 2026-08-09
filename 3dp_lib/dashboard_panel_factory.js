@@ -30,9 +30,9 @@
  * - {@link recreatePanelsForHost}：指定ホスト/種別のパネルを同じ位置で再生成
  * - {@link updateAllPanelHeaders}：全パネルヘッダーの色・ホスト名を再描画
  *
- * @version 1.390.1363 (PR #432)
+ * @version 1.390.1365 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-09 17:24:00
+ * @lastModified 2026-08-09 16:21:02
  * -----------------------------------------------------------
  * @todo
  * - パネルのタブ化（同一セル内に複数パネルを重ねる）
@@ -898,6 +898,10 @@ export function recreatePanelsForHost(typeId, hostname) {
         lockBtn.title = "このパネルの固定を解除";
       }
     }
+  }
+  if (targets.length > 0) {
+    /* fontSize や個別ロックを復元し終えた最終状態を永続化し、再起動後も見た目を維持する。 */
+    saveLayout();
   }
   return targets.length;
 }
