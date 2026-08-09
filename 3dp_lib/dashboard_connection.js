@@ -32,9 +32,9 @@
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1348 (PR #432)
+* @version 1.390.1360 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 08:15:00
+* @lastModified 2026-08-09 13:58:28
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -400,6 +400,7 @@ function _findConnectionTarget(destOrHost) {
  * - MAC は有線/無線で異なる可能性があるため、deviceId seed ではなく endpoint alias として
  *   保存する。
  * - serial 矛盾など強い conflict は `printerCoreV3IdentityConflict` に残し、既存値を上書きしない。
+ * - Moonraker/IR3 V2 は別protocolの既存compatibility pathなので、このK1/K2向けdry-runには入れない。
  *
  * @private
  * @param {string} hostOrDest - 接続キー、hostname、または dest
@@ -410,6 +411,7 @@ function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
   const state = connectionMap[hostOrDest] || {};
   const target = _findConnectionTarget(state.dest || hostOrDest) || _findConnectionTarget(hostOrDest);
   if (!target) return null;
+  if (target.printerType === "moonraker") return null;
   const dest = target.dest || state.dest || hostOrDest;
   const result = recordPrinterCoreV3Identity(target, evidence, {
     hostOrDest,

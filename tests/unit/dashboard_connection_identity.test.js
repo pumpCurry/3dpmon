@@ -6,6 +6,10 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
+ * @version 1.390.1360 (PR #432)
+ * @since 1.390.1342 (PR #432)
+ * @lastModified 2026-08-09 13:58:28
+ *
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -82,7 +86,7 @@ class FakeWebSocket {
   send(message) { this.sentMessages.push(message); }
 }
 
-let mod, dataMock, shadowMock;
+let mod, dataMock, shadowMock, moonrakerMock, msgHandlerMock;
 beforeEach(async () => {
   vi.resetModules();
   FakeWebSocket.instances = [];
@@ -93,6 +97,8 @@ beforeEach(async () => {
   mod = await import("../../3dp_lib/dashboard_connection.js");
   dataMock = await import("../../3dp_lib/dashboard_data.js");
   shadowMock = await import("../../3dp_lib/printer_core/dashboard_live_shadow.js");
+  moonrakerMock = await import("../../3dp_lib/dashboard_moonraker.js");
+  msgHandlerMock = await import("../../3dp_lib/dashboard_msg_handler.js");
   dataMock.monitorData.appSettings.connectionTargets = [];
   dataMock.monitorData.machines = {};
   dataMock.monitorData.hostCameraToggle = {};
@@ -366,6 +372,36 @@ describe("Printer Core v3 identity dry-run", () => {
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
     ]);
+  });
+
+  it("Moonraker/IR3翻訳フレームはlegacy processDataへ流すがPrinter Core v3 identity/shadowへ入れない", () => {
+    mod.connectWithType("203.0.113.40", "moonraker");
+    expect(moonrakerMock.createMoonrakerSession).toHaveBeenCalledTimes(1);
+    const sessionOptions = moonrakerMock.createMoonrakerSession.mock.calls[0][0];
+
+    sessionOptions.onData({
+      hostname: "IR3V2-Test",
+      model: "Ideaformer IR3 V2",
+      printProgress: 42,
+    });
+
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    expect(target).toMatchObject({
+      dest: "203.0.113.40:80",
+      hostname: "IR3V2-Test",
+      printerType: "moonraker",
+    });
+    expect(target.printerCoreV3Identity).toBeUndefined();
+    expect(target.printerCoreV3DeviceFingerprint).toBeUndefined();
+    expect(msgHandlerMock.processData).toHaveBeenCalledWith({
+      hostname: "IR3V2-Test",
+      model: "Ideaformer IR3 V2",
+      printProgress: 42,
+    }, "IR3V2-Test");
+    expect(shadowMock.beginK1LiveShadowSession).not.toHaveBeenCalled();
+    expect(shadowMock.beginK2LiveShadowSession).not.toHaveBeenCalled();
+    expect(shadowMock.observeK1LiveShadowFrame).not.toHaveBeenCalled();
+    expect(shadowMock.observeK2LiveShadowFrame).not.toHaveBeenCalled();
   });
 
   it("K1 WS受信データをPrinter Core v3 live shadowへ分岐する", () => {
