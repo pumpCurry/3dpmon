@@ -15,12 +15,12 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1361 (PR #432)
+ * @version 1.390.1362 (PR #432)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-09 14:52:00
+ * @lastModified 2026-08-09 16:48:00
  * -----------------------------------------------------------
  * @todo
- * - 実パネルへ接続し、CFS/CFS-C slot の read-only 表示を dashboard UI へ描画する
+ * - command authority Gateで、表示slotと安全なCore command contractを接続する
  */
 
 "use strict";

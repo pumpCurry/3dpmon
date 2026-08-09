@@ -30,11 +30,12 @@
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
  * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
+ * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1360 (PR #432)
+* @version 1.390.1362 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 13:58:28
+* @lastModified 2026-08-09 16:34:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -81,6 +82,12 @@ import {
   observeK2LiveShadowFrame,
   resolvePrinterCoreV3LiveShadowDeviceId,
 } from "./printer_core/dashboard_live_shadow.js";
+import {
+  MATERIAL_DISPLAY_MODE,
+  MATERIAL_PROVIDER_MODE,
+  MATERIAL_SYSTEM_MODE,
+  normalizeMaterialSystemSettings,
+} from "./printer_core/dashboard_material_system_settings.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -388,6 +395,23 @@ function _findConnectionTarget(destOrHost) {
   }
   /* 3) ホスト名での検索（connectWs からの逆引き用） */
   return targets.find(t => t.hostname === destOrHost) || null;
+}
+
+/**
+ * 保存済み接続先設定を取得する。
+ *
+ * 【詳細説明】
+ * - dest完全一致、ポート補完、ホスト名一致の順で既存の検索ルールを使う。
+ * - 返り値はconnectionTargets内の実オブジェクト参照であり、編集UIやパネル初期化で共有する。
+ *
+ * @function getConnectionTarget
+ * @param {string} destOrHost - "IP:PORT" 形式の接続先、またはホスト名
+ * @returns {object|null} connectionTargets 内のエントリ、または null
+ * @example
+ * const target = getConnectionTarget("192.168.54.21:9999");
+ */
+export function getConnectionTarget(destOrHost) {
+  return _findConnectionTarget(destOrHost);
 }
 
 /**
@@ -1512,6 +1536,7 @@ export function connectWithType(dest, printerType = "creality-k1") {
     targets.push(t);
   }
   t.printerType = printerType;
+  t.materialSystem = normalizeMaterialSystemSettings(t.materialSystem, printerType);
   saveUnifiedStorage();
 
   connectWs(d);
@@ -2201,6 +2226,77 @@ let _printerListTimer = null;
 /** 接続先リストの再描画をブロックするフラグ (色ピッカー操作中等) */
 let _printerListUpdateBlocked = false;
 
+/**
+ * select option HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - 接続設定ダイアログの値はユーザー操作後に保存されるため、表示値は必ずescapeしてinnerHTMLへ埋め込む。
+ *
+ * @private
+ * @param {string} value - option値
+ * @param {string} label - 表示ラベル
+ * @param {string} currentValue - 現在値
+ * @returns {string} option HTML
+ */
+function _optionHtml(value, label, currentValue) {
+  return `<option value="${_escAttr(value)}" ${value === currentValue ? "selected" : ""}>${_escAttr(label)}</option>`;
+}
+
+/**
+ * CFS/CFS-C台数selectのoption HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - 0台は従来の手動1巻運用、1-4台はCFS/CFS-C表示対象台数として扱う。
+ *
+ * @private
+ * @param {number} currentValue - 現在のCFS/CFS-C台数
+ * @returns {string} option HTML
+ */
+function _materialUnitOptionsHtml(currentValue) {
+  return [0, 1, 2, 3, 4]
+    .map((count) => _optionHtml(String(count), count === 0 ? "0台（通常1巻）" : `${count}台（${count * 4 + 1}巻表示）`, String(currentValue)))
+    .join("");
+}
+
+/**
+ * 接続設定ダイアログ用のmaterial system設定HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - ここで設定する値は表示とread-only provider選択だけで、feed/retract/selectなどの操作権限は開かない。
+ *
+ * @private
+ * @param {object} materialSettings - 正規化済みmaterial system設定
+ * @returns {string} ダイアログHTML断片
+ */
+function _materialSystemSettingsHtml(materialSettings) {
+  const modeOptions = [
+    [MATERIAL_SYSTEM_MODE.AUTO, "自動"],
+    [MATERIAL_SYSTEM_MODE.SINGLE_SPOOL, "通常1巻（手動）"],
+    [MATERIAL_SYSTEM_MODE.CFS_READONLY, "CFS read-only"],
+    [MATERIAL_SYSTEM_MODE.CFS_C_READONLY, "CFS-C read-only"],
+  ].map(([value, label]) => _optionHtml(value, label, materialSettings.mode)).join("");
+  const displayOptions = [
+    [MATERIAL_DISPLAY_MODE.AUTO, "自動"],
+    [MATERIAL_DISPLAY_MODE.LEGACY_CARD, "従来カード固定"],
+    [MATERIAL_DISPLAY_MODE.MULTI_SLOT, "CFSスロット固定"],
+  ].map(([value, label]) => _optionHtml(value, label, materialSettings.displayMode)).join("");
+  const providerOptions = [
+    [MATERIAL_PROVIDER_MODE.AUTO, "自動"],
+    [MATERIAL_PROVIDER_MODE.K2_BOXS_INFO, "K2 boxsInfo"],
+    [MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO, "Moonraker boxsInfo"],
+    [MATERIAL_PROVIDER_MODE.NONE, "なし"],
+  ].map(([value, label]) => _optionHtml(value, label, materialSettings.provider)).join("");
+  return `
+              <label>CFS/CFS-C:</label>
+              <select id="edit-material-mode">${modeOptions}</select>
+              <label>表示:</label>
+              <select id="edit-material-display-mode">${displayOptions}</select>
+              <label>CFS台数:</label>
+              <select id="edit-material-unit-limit">${_materialUnitOptionsHtml(materialSettings.unitLimit)}</select>
+              <label>Provider:</label>
+              <select id="edit-material-provider">${providerOptions}</select>`;
+}
+
 export function updatePrinterListUI() {
   const sel  = document.getElementById("printer-select");
   const list = document.getElementById("printer-status-list");
@@ -2449,9 +2545,14 @@ export function updatePrinterListUI() {
         const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
+        const currentMaterialSystem = normalizeMaterialSystemSettings(tgt.materialSystem, tgt.printerType);
         // ★ ④: 機器報告ホスト名（内部管理キー）＋機種設定を変更不可で明示する。
         const hnText = tgt.hostname ? tgt.hostname : "(未取得)";
-        const ptText = tgt.printerType === "moonraker" ? "Moonraker (Fluidd/Klipper)" : "Creality K1系";
+        const ptText = tgt.printerType === "moonraker"
+          ? "Moonraker (Fluidd/Klipper)"
+          : tgt.printerType === "creality-k2"
+            ? "Creality K2系"
+            : "Creality K1系";
 
         const dlgPromise = showConfirmDialog({
           level: "info",
@@ -2468,9 +2569,11 @@ export function updatePrinterListUI() {
               <input type="text" value="${_escAttr(hnText)}" disabled title="機器報告値（内部管理キー）">
               <label>機種設定:</label>
               <input type="text" value="${_escAttr(ptText)}" disabled>
+${_materialSystemSettingsHtml(currentMaterialSystem)}
             </div>
-            <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.45;">
+            <div class="conn-edit-note">
               機器ホスト名は<strong>機器から報告された名前で内部管理</strong>されます。機器側で名称を変更すると<strong>別機器として扱われ</strong>、履歴・設定が分かれます。
+              CFS/CFS-Cはread-only表示のみで、Feed/Retract/slot選択などの操作権限はまだ開きません。
             </div>`,
           confirmText: "保存",
           cancelText: "キャンセル"
@@ -2481,11 +2584,26 @@ export function updatePrinterListUI() {
         const labelEl = document.getElementById("edit-label");
         const camEl = document.getElementById("edit-cam-port");
         const httpEl = document.getElementById("edit-http-port");
+        const materialModeEl = document.getElementById("edit-material-mode");
+        const materialDisplayModeEl = document.getElementById("edit-material-display-mode");
+        const materialUnitLimitEl = document.getElementById("edit-material-unit-limit");
+        const materialProviderEl = document.getElementById("edit-material-provider");
         const result = await dlgPromise;
         if (!result) return;
         if (labelEl) tgt.label = labelEl.value.trim();
         if (camEl) tgt.cameraPort = parseInt(camEl.value, 10) || currentCam;
         if (httpEl) tgt.httpPort = parseInt(httpEl.value, 10) || currentHttp;
+        tgt.materialSystem = normalizeMaterialSystemSettings({
+          mode: materialModeEl?.value ?? currentMaterialSystem.mode,
+          displayMode: materialDisplayModeEl?.value ?? currentMaterialSystem.displayMode,
+          provider: materialProviderEl?.value ?? currentMaterialSystem.provider,
+          unitLimit: parseInt(materialUnitLimitEl?.value ?? String(currentMaterialSystem.unitLimit), 10),
+          slotsPerUnit: currentMaterialSystem.slotsPerUnit,
+          externalSourceLimit: currentMaterialSystem.externalSourceLimit,
+          readOnly: true,
+          canSendCommands: false,
+          canDriveLedger: false,
+        }, tgt.printerType);
         saveUnifiedStorage();
         updatePrinterListUI();
         // 表示名(label)/色はパネルヘッダーにも反映されるため即時更新する

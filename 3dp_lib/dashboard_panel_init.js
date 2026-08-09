@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1306 (PR #432)
+ * @version 1.390.1362 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-07 21:31:50
+ * @lastModified 2026-08-09 16:41:00
  * -----------------------------------------------------------
  */
 
@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -78,6 +78,17 @@ import {
   initPauseHome,
   initXYUnlock
 } from "./dashboard_send_command.js";
+import {
+  createMaterialTopologyViewModel,
+} from "./printer_core/dashboard_material_topology_view_model.js";
+import {
+  renderMaterialTopologyPanel,
+} from "./printer_core/dashboard_material_topology_panel.js";
+import {
+  MATERIAL_DISPLAY_MODE,
+  resolveMaterialDisplayMode,
+  resolveMaterialTopologyViewOptions,
+} from "./printer_core/dashboard_material_system_settings.js";
 
 // ==============================
 // レジストリ
@@ -310,12 +321,69 @@ function initFilamentPanel(body, hostname) {
   const container = body.querySelector("#filament-preview");
   if (!container) return;
 
+  if (body._materialTopologyRefreshTimer) {
+    clearInterval(body._materialTopologyRefreshTimer);
+    body._materialTopologyRefreshTimer = null;
+  }
+  body._materialTopologyPanel?.destroy?.();
+  body._materialTopologyPanel = null;
+
+  const machine = monitorData.machines[hostname] || {};
+  const target = getConnectionTarget(hostname);
+  const printerType = getPrinterType(hostname);
+  const topology = machine.runtimeData?.printerCoreV3Shadow?.lastState?.materials || null;
+  const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
+  if (materialDisplayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
+    body.classList.add("filament-panel-cfs-mode");
+    const createViewModel = () => {
+      const latestMachine = monitorData.machines[hostname] || {};
+      const latestTopology = latestMachine.runtimeData?.printerCoreV3Shadow?.lastState?.materials || null;
+      const latestTarget = getConnectionTarget(hostname);
+      const viewOptions = resolveMaterialTopologyViewOptions({
+        target: latestTarget,
+        printerType,
+        topology: latestTopology,
+      });
+      return createMaterialTopologyViewModel(latestTopology, viewOptions);
+    };
+    const materialPanel = renderMaterialTopologyPanel(container, createViewModel(), { hostname });
+    body._materialTopologyPanel = materialPanel;
+    body._materialTopologyRefreshTimer = setInterval(() => {
+      try {
+        materialPanel.update(createViewModel());
+      } catch (e) {
+        console.warn("[panel-init] material topology 更新エラー:", e);
+      }
+    }, 1000);
+
+    const changeBtn = body.querySelector("#filament-change-btn");
+    if (changeBtn) {
+      changeBtn.disabled = true;
+      changeBtn.title = "CFS/CFS-C read-only表示ではスプール交換操作はまだ未対応です";
+    }
+    const removeBtn = body.querySelector("#filament-remove-btn");
+    if (removeBtn) {
+      removeBtn.disabled = true;
+      removeBtn.title = "CFS/CFS-C read-only表示ではスプール取り外し操作はまだ未対応です";
+    }
+    const listBtn = body.querySelector("#filament-list-btn");
+    if (listBtn) {
+      listBtn.addEventListener("click", () => {
+        try { showFilamentManager(0, hostname); } catch (e) {
+          console.warn("[panel-init] filament manager エラー:", e);
+        }
+      });
+    }
+    return;
+  }
+
+  body.classList.remove("filament-panel-cfs-mode");
+
   // フィラメントプレビューを生成（per-host・スプール情報反映）
   /** @type {ReturnType<typeof createFilamentPreview>|null} */
   let preview = null;
   let autoRotateFooterButton = null;
   try {
-    const machine = monitorData.machines[hostname] || {};
     const spool = getCurrentSpool(hostname);
     // スプール未装着の場合はデフォルト満タン表示（0% 表示を防止）
     const defaultTotal = 330000;
@@ -873,6 +941,12 @@ export function registerAllPanelInits() {
     }
   });
   registerPanelDestroy("filament", (body, hostname) => {
+    if (body._materialTopologyRefreshTimer) {
+      clearInterval(body._materialTopologyRefreshTimer);
+      body._materialTopologyRefreshTimer = null;
+    }
+    body._materialTopologyPanel?.destroy?.();
+    body._materialTopologyPanel = null;
     if (body._filamentResizeObserver) {
       body._filamentResizeObserver.disconnect();
       body._filamentResizeObserver = null;
