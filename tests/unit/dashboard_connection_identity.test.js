@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1360 (PR #432)
+ * @version 1.390.1367 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-09 13:58:28
+ * @lastModified 2026-08-09 19:48:20
  *
  * @vitest-environment jsdom
  */
@@ -673,6 +673,35 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K1Max-Stale",
       deviceId: "provisional:k1%20max:k1max-stale",
       sessionId: "k1-live:test-session",
+    });
+  });
+});
+
+describe("Printer Core v3 material supply settings UI contract", () => {
+  it("AUTO + unitLimit=0 は設定画面で自動検出としてround-tripし通常スプールへ化けない", () => {
+    const currentMaterialSystem = {
+      mode: "auto",
+      displayMode: "auto",
+      provider: "auto",
+      unitLimit: 0,
+      slotsPerUnit: 4,
+      externalSourceLimit: 1,
+      readOnly: true,
+      canSendCommands: false,
+      canDriveLedger: false,
+    };
+
+    expect(mod._materialSupplyValue(currentMaterialSystem)).toBe("auto");
+    expect(mod._materialSystemFromSupplyValue("auto", true, currentMaterialSystem)).toMatchObject({
+      mode: "auto",
+      displayMode: "auto",
+      provider: "auto",
+      unitLimit: 0,
+      slotsPerUnit: 4,
+      externalSourceLimit: 1,
+      readOnly: true,
+      canSendCommands: false,
+      canDriveLedger: false,
     });
   });
 });

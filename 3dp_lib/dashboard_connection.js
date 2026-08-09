@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1366 (PR #432)
+* @version 1.390.1367 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 19:37:13
+* @lastModified 2026-08-09 19:48:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -2250,21 +2250,22 @@ function _optionHtml(value, label, currentValue) {
  *   UIでは「通常スプール」「CFS n台」「CFS-C n台」「自動検出」の単一selectへ畳み込む。
  *
  * @private
+ * @function _materialSupplyValue
  * @param {object} materialSettings - 正規化済みmaterial system設定
  * @returns {string} supply select値
  */
-function _materialSupplyValue(materialSettings) {
+export function _materialSupplyValue(materialSettings) {
   const unitLimit = Math.max(0, Math.min(4, Number(materialSettings?.unitLimit) || 0));
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.AUTO) {
+    return "auto";
+  }
   if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.CFS_C_READONLY && unitLimit > 0) {
     return `cfsc-${unitLimit}`;
   }
   if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.CFS_READONLY && unitLimit > 0) {
     return `cfs-${unitLimit}`;
   }
-  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.SINGLE_SPOOL || unitLimit === 0) {
-    return "single";
-  }
-  return "auto";
+  return "single";
 }
 
 /**
@@ -2302,12 +2303,13 @@ function _materialSupplyOptionsHtml(materialSettings) {
  * - 外部スプール表示はCFS/CFS-C監視パネル内の追加1枠として扱い、0/1へ丸める。
  *
  * @private
+ * @function _materialSystemFromSupplyValue
  * @param {string} supplyValue - supply select値
  * @param {boolean} externalEnabled - 外部スプール表示を有効にするか
  * @param {object} currentMaterialSystem - 現在の正規化済みmaterial system設定
  * @returns {object} normalizeMaterialSystemSettingsへ渡す保存候補
  */
-function _materialSystemFromSupplyValue(supplyValue, externalEnabled, currentMaterialSystem) {
+export function _materialSystemFromSupplyValue(supplyValue, externalEnabled, currentMaterialSystem) {
   const base = {
     provider: currentMaterialSystem.provider,
     slotsPerUnit: currentMaterialSystem.slotsPerUnit,
