@@ -14,14 +14,15 @@
  *
  * 【公開関数一覧】
  * - {@link createPrinterCommandRequest}：command request を生成
+ * - {@link createPrinterCommandCorrelationEvidence}：command correlation evidence を生成
  * - {@link createPrinterCommandResult}：command result を生成
  * - {@link shouldRetryPrinterCommand}：command retry 可否を判定
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 09:25:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -48,6 +49,17 @@ export const PRINTER_COMMAND_SCHEMA_VERSION = 1;
  * @constant {number}
  */
 export const DEFAULT_PRINTER_COMMAND_TIMEOUT_MS = 30000;
+
+/**
+ * command correlation evidence 用の module-private secret。
+ *
+ * 【詳細説明】
+ * - caller が `commandCorrelation:true` を指定するだけで完了扱いにできないようにする。
+ * - 実dispatcher接続時は dispatcher-owned evidence/signature に置き換える。
+ *
+ * @constant {string}
+ */
+const COMMAND_CORRELATION_EVIDENCE_SECRET = `printer-core-command-correlation:${Date.now()}:${Math.random()}`;
 
 /**
  * Printer Core v3 command kind の分類。
@@ -199,6 +211,100 @@ function createCommandId(options) {
     options.commandKind,
     `${entropy}${idempotencyPart}`,
   ].map((part) => encodeURIComponent(String(part))).join(":");
+}
+
+/**
+ * sequence 値を有限数へ正規化する。
+ *
+ * 【詳細説明】
+ * - command correlation で比較する state sequence を数値として固定する。
+ *
+ * @private
+ * @param {*} value - sequence 候補
+ * @returns {number|null} 正規化済み sequence
+ */
+function normalizeSequence(value) {
+  const sequence = Number(value);
+  return Number.isFinite(sequence) ? sequence : null;
+}
+
+/**
+ * command correlation evidence signature を生成する。
+ *
+ * 【詳細説明】
+ * - signature は module-private secret を含み、plain object 偽装を拒否する。
+ *
+ * @private
+ * @param {object} evidence - correlation evidence
+ * @returns {string} signature
+ */
+function createCommandCorrelationSignature(evidence) {
+  return createCommandId({
+    deviceId: evidence.deviceId,
+    sessionId: evidence.sessionId,
+    commandKind: "command-correlation",
+    idempotencyKey: [
+      COMMAND_CORRELATION_EVIDENCE_SECRET,
+      evidence.commandId,
+      evidence.sentSequence,
+      evidence.observedSequence,
+      evidence.observedSessionId,
+      evidence.evidenceSource,
+    ].join("|"),
+    entropySource: () => evidence.correlationId,
+  });
+}
+
+/**
+ * command correlation evidence を生成する。
+ *
+ * 【詳細説明】
+ * - dispatcher/transport層が command ID と観測 state を結び付けた証跡を表現する。
+ * - caller が boolean を渡すだけでは post-command confirmation を満たさない。
+ *
+ * @function createPrinterCommandCorrelationEvidence
+ * @param {object} request - command request
+ * @param {object} options - correlation 生成オプション
+ * @param {number} options.sentSequence - command 送信時 sequence
+ * @param {number} options.observedSequence - 観測時 sequence
+ * @param {string} options.observedSessionId - 観測 session ID
+ * @param {string} options.evidenceSource - evidence source
+ * @param {string=} options.observedJobId - 観測 job ID
+ * @param {string=} options.fileIdentity - 観測 file identity
+ * @returns {object} command correlation evidence
+ * @example
+ * const correlation = createPrinterCommandCorrelationEvidence(request, { sentSequence, observedSequence, observedSessionId, evidenceSource });
+ */
+export function createPrinterCommandCorrelationEvidence(request, options = {}) {
+  const sentSequence = normalizeSequence(options.sentSequence);
+  const observedSequence = normalizeSequence(options.observedSequence);
+  const observedSessionId = requireNonEmptyString(options.observedSessionId, "observedSessionId");
+  const evidenceSource = requireNonEmptyString(options.evidenceSource, "evidenceSource");
+  if (sentSequence === null || observedSequence === null) {
+    throw new TypeError("Printer command correlation requires finite sent/observed sequences.");
+  }
+  const correlationId = createCommandId({
+    deviceId: request.deviceId,
+    sessionId: request.sessionId,
+    commandKind: "correlation",
+    idempotencyKey: [request.commandId, sentSequence, observedSequence, observedSessionId].join("|"),
+    entropySource: () => evidenceSource,
+  });
+  const evidence = {
+    correlationId,
+    commandId: request.commandId,
+    deviceId: request.deviceId,
+    sessionId: request.sessionId,
+    sentSequence,
+    observedSequence,
+    observedSessionId,
+    evidenceSource,
+    observedJobId: options.observedJobId || null,
+    fileIdentity: options.fileIdentity || null,
+    attestation: null,
+  };
+  evidence.attestation = createCommandCorrelationSignature(evidence);
+  return evidence;
 }
 
 /**
@@ -359,7 +465,7 @@ export function evaluateExpectedStateConfirmation(request, state) {
  * @param {number=} options.sentSequence - command 送信時の state sequence
  * @param {number=} options.observedSequence - confirmation 観測時の state sequence
  * @param {string=} options.observedSessionId - confirmation 観測の session ID
- * @param {boolean=} options.commandCorrelation - command 固有の関連付けが確認できたか
+ * @param {object=} options.commandCorrelation - command correlation evidence
  * @returns {object} post-command observation 判定
  */
 function evaluatePostCommandObservation(request, options = {}) {
@@ -370,14 +476,27 @@ function evaluatePostCommandObservation(request, options = {}) {
       reason: "not-required",
     };
   }
-  const sentSequence = Number(options.sentSequence);
-  const observedSequence = Number(options.observedSequence);
-  const sequenceAdvanced = Number.isFinite(sentSequence) &&
-    Number.isFinite(observedSequence) &&
+  const sentSequence = normalizeSequence(options.sentSequence);
+  const observedSequence = normalizeSequence(options.observedSequence);
+  const sequenceAdvanced = sentSequence !== null &&
+    observedSequence !== null &&
     observedSequence > sentSequence;
   const observedSessionId = String(options.observedSessionId || "").trim();
   const sameSession = Boolean(observedSessionId) && observedSessionId === request.sessionId;
-  const commandCorrelated = options.commandCorrelation === true;
+  const correlation = options.commandCorrelation;
+  const expectedCorrelationSignature = correlation && typeof correlation === "object"
+    ? createCommandCorrelationSignature(correlation)
+    : null;
+  const commandCorrelated = Boolean(
+    correlation &&
+    typeof correlation === "object" &&
+    correlation.commandId === request.commandId &&
+    correlation.sessionId === request.sessionId &&
+    correlation.sentSequence === sentSequence &&
+    correlation.observedSequence === observedSequence &&
+    correlation.observedSessionId === observedSessionId &&
+    correlation.attestation === expectedCorrelationSignature
+  );
   const missing = [];
   if (!sequenceAdvanced) missing.push("sequence-not-advanced");
   if (!sameSession) missing.push("session-mismatch");
@@ -388,9 +507,10 @@ function evaluatePostCommandObservation(request, options = {}) {
     sequenceAdvanced,
     sameSession,
     commandCorrelated,
-    sentSequence: Number.isFinite(sentSequence) ? sentSequence : null,
-    observedSequence: Number.isFinite(observedSequence) ? observedSequence : null,
+    sentSequence,
+    observedSequence,
     observedSessionId: observedSessionId || null,
+    correlationId: commandCorrelated ? correlation.correlationId : null,
     reason: missing.length ? missing.join(",") : "confirmed",
   };
 }
@@ -412,7 +532,7 @@ function evaluatePostCommandObservation(request, options = {}) {
  * @param {number=} options.sentSequence - command 送信時の state sequence
  * @param {number=} options.observedSequence - confirmation 観測時の state sequence
  * @param {string=} options.observedSessionId - confirmation 観測の session ID
- * @param {boolean=} options.commandCorrelation - command 固有の関連付けが確認できたか
+ * @param {object=} options.commandCorrelation - command correlation evidence
  * @param {string=} options.completedAt - 完了時刻 ISO 文字列
  * @returns {object} command result
  * @example

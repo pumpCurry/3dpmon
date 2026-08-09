@@ -12,10 +12,12 @@ import { describe, expect, it } from "vitest";
 import {
   createFilamentLedgerEventsFromSegments,
   createFilamentLedgerCorrectionEvent,
+  createFilamentUsageConfidenceEvidence,
   createJobMaterialSegmentsFromPrintPlan,
   validateJobMaterialSegments,
 } from "../../3dp_lib/printer_core/dashboard_filament_ledger_v3.js";
 import {
+  createGcodeAnalysisAttestation,
   createMulticolorCfsPrintPlan,
   createSingleColorPrintPlan,
 } from "../../3dp_lib/printer_core/dashboard_print_plan.js";
@@ -35,13 +37,31 @@ function createAsset(fileName, logicalTools = [0]) {
   return {
     path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
     fileName,
-    analysis: {
-      analyzed: true,
-      analyzerVersion: "unit-gcode-analyzer",
+    analysis: createGcodeAnalysisAttestation({
       fileHash: `sha256:${fileName}`,
+      analyzerVersion: "unit-gcode-analyzer",
       logicalTools,
-    },
+    }),
   };
+}
+
+/**
+ * confidence evidence を生成する。
+ *
+ * 【詳細説明】
+ * - テストでは source/method を固定し、confidence provenance が無い場合との差分を明確にする。
+ *
+ * @function createConfidenceEvidence
+ * @param {string} confidence - confidence 値
+ * @returns {object} confidence evidence
+ */
+function createConfidenceEvidence(confidence) {
+  return createFilamentUsageConfidenceEvidence({
+    confidence,
+    source: "unit-fixture",
+    measurementMethod: "fixture-observation",
+    observedAt: "2026-08-09T01:46:31.000+09:00",
+  });
 }
 
 describe("Printer Core v3 filament ledger contract", () => {
@@ -58,6 +78,7 @@ describe("Printer Core v3 filament ledger contract", () => {
       printJobId: "job:benchy",
       totalUsedLengthMm: 1234.5,
       confidence: "high",
+      confidenceEvidence: createConfidenceEvidence("high"),
       completedAt: "2026-08-09T01:46:31.000+09:00",
     });
 
@@ -84,6 +105,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createAsset("benchy.gcode"),
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
       spoolId: "spool:silver",
     });
@@ -117,10 +139,10 @@ describe("Printer Core v3 filament ledger contract", () => {
     const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
       printJobId: "job:4color",
       materialUsages: [
-        { toolId: 0, protocolToolAlias: "T1A", usedLengthMm: 100, confidence: "exact" },
-        { toolId: 1, protocolToolAlias: "T1B", usedLengthMm: 200, confidence: "exact" },
-        { toolId: 2, protocolToolAlias: "T1C", usedLengthMm: 300, confidence: "exact" },
-        { toolId: 3, protocolToolAlias: "T1D", usedLengthMm: 400, confidence: "exact" },
+        { toolId: 0, protocolToolAlias: "T1A", usedLengthMm: 100, confidence: "exact", confidenceEvidence: createConfidenceEvidence("exact") },
+        { toolId: 1, protocolToolAlias: "T1B", usedLengthMm: 200, confidence: "exact", confidenceEvidence: createConfidenceEvidence("exact") },
+        { toolId: 2, protocolToolAlias: "T1C", usedLengthMm: 300, confidence: "exact", confidenceEvidence: createConfidenceEvidence("exact") },
+        { toolId: 3, protocolToolAlias: "T1D", usedLengthMm: 400, confidence: "exact", confidenceEvidence: createConfidenceEvidence("exact") },
       ],
     });
 
@@ -138,6 +160,37 @@ describe("Printer Core v3 filament ledger contract", () => {
       [2, "T1C", "cfs:1:slot:1", "spool:silver", 300, "exact", "observed-per-material"],
       [3, "T1D", "cfs:1:slot:0", "spool:black", 400, "exact", "observed-per-material"],
     ]);
+  });
+
+  it("confidence値だけを手書きしてもtrusted confidenceにはならない", () => {
+    const plan = createMulticolorCfsPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createAsset("4color_benchy.gcode", [0, 1]),
+      toolAssignments: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: "cfs:1:slot:0", spoolId: "spool:a" },
+        { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:1", spoolId: "spool:b" },
+      ],
+    });
+    const segments = createJobMaterialSegmentsFromPrintPlan(plan, {
+      printJobId: "job:untrusted-confidence",
+      materialUsages: [
+        { toolId: 0, protocolToolAlias: "T1A", usedLengthMm: 100, confidence: "exact" },
+        {
+          toolId: 1,
+          protocolToolAlias: "T1B",
+          usedLengthMm: 200,
+          confidence: "exact",
+          confidenceEvidence: {
+            ...createConfidenceEvidence("exact"),
+            attestation: "caller-attestation",
+          },
+        },
+      ],
+    });
+    const events = createFilamentLedgerEventsFromSegments(segments);
+
+    expect(segments.map((segment) => segment.confidence)).toEqual(["unknown", "unknown"]);
+    expect(events.map((event) => event.authority.canDebitRemaining)).toEqual([false, false]);
   });
 
   it("不正なtoolIdや使用量の暗黙Number変換ではusageを割り当てない", () => {
@@ -215,6 +268,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createAsset("benchy.gcode"),
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
       spoolId: "spool:silver",
     });
@@ -222,6 +276,7 @@ describe("Printer Core v3 filament ledger contract", () => {
       printJobId: "job:benchy",
       totalUsedLengthMm: 1234.5,
       confidence: "exact",
+      confidenceEvidence: createConfidenceEvidence("exact"),
     });
     const events = createFilamentLedgerEventsFromSegments(segments, {
       createdAt: "2026-08-09T01:46:31.000+09:00",
@@ -248,6 +303,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createAsset("benchy.gcode"),
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
       spoolId: "spool:silver",
     });
@@ -261,6 +317,7 @@ describe("Printer Core v3 filament ledger contract", () => {
       printJobId: "job:correction",
       totalUsedLengthMm: 1032,
       confidence: "exact",
+      confidenceEvidence: createConfidenceEvidence("exact"),
     });
     const originalEvent = createFilamentLedgerEventsFromSegments(estimated)[0];
     const correction = createFilamentLedgerCorrectionEvent(originalEvent, exact[0]);
@@ -294,6 +351,7 @@ describe("Printer Core v3 filament ledger contract", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createAsset("benchy.gcode"),
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
       spoolId: "spool:silver",
     });
@@ -301,6 +359,7 @@ describe("Printer Core v3 filament ledger contract", () => {
       printJobId: "job:correction-mismatch",
       totalUsedLengthMm: 100,
       confidence: "estimated",
+      confidenceEvidence: createConfidenceEvidence("estimated"),
     });
     const originalEvent = createFilamentLedgerEventsFromSegments(segments)[0];
     const corrected = {

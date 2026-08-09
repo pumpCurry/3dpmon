@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { createPrinterCommandResult, shouldRetryPrinterCommand } from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 import {
+  createGcodeAnalysisAttestation,
   createMulticolorCfsPrintPlan,
   createPrintStartCommandRequestFromPlan,
   createSingleColorPrintPlan,
@@ -33,12 +34,11 @@ function createSampleAsset(fileName = "benchy.gcode", logicalTools = [0]) {
     path: `/mnt/UDISK/printer_data/gcodes/${fileName}`,
     fileName,
     fileMd5: "md5-demo",
-    analysis: {
-      analyzed: true,
-      analyzerVersion: "unit-gcode-analyzer",
+    analysis: createGcodeAnalysisAttestation({
       fileHash: `sha256:${fileName}`,
+      analyzerVersion: "unit-gcode-analyzer",
       logicalTools,
-    },
+    }),
   };
 }
 
@@ -96,13 +96,23 @@ describe("Printer Core v3 PrintPlan", () => {
     expect(() => createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
+      protocolToolAlias: "T1A",
     })).toThrow("materialSourceId");
+  });
+
+  it("単色PrintPlanでもprotocolToolAliasを推測しない", () => {
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: createSampleAsset(),
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("protocolToolAlias");
   });
 
   it("PrintPlanからcontract-only print-start command requestを生成する", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     });
     const request = createPrintStartCommandRequestFromPlan(plan, {
@@ -150,6 +160,7 @@ describe("Printer Core v3 PrintPlan", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
+      protocolToolAlias: "T1A",
       materialSourceId: "external:0:slot:0",
     });
     const request = createPrintStartCommandRequestFromPlan(plan, {
@@ -347,6 +358,11 @@ describe("Printer Core v3 PrintPlan", () => {
           analyzerVersion: "unit-gcode-analyzer",
           fileHash: "sha256:bad-tool",
           logicalTools: [0, 0],
+          provenance: {
+            source: "printer-core-gcode-analyzer",
+            analysisId: "manual-duplicate",
+            attestation: "manual-duplicate",
+          },
         },
       },
       toolAssignments: [
@@ -371,14 +387,39 @@ describe("Printer Core v3 PrintPlan", () => {
         fileName: "unknown.gcode",
         toolCount: 1,
       },
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     })).toThrow("analyzed G-code logical tools");
 
     expect(() => createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset("4color_benchy.gcode", [0, 1, 2, 3]),
+      protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     })).toThrow("missing-gcode-tool-assignment");
+  });
+
+  it("caller-declaredなanalysis provenanceではPrintPlanに昇格しない", () => {
+    expect(() => createSingleColorPrintPlan({
+      deviceId: "serial:k2pro",
+      asset: {
+        path: "/mnt/UDISK/printer_data/gcodes/fake.gcode",
+        fileName: "fake.gcode",
+        analysis: {
+          analyzed: true,
+          analyzerVersion: "caller",
+          fileHash: "sha256:fake",
+          logicalTools: [0],
+          provenance: {
+            source: "printer-core-gcode-analyzer",
+            analysisId: "caller-analysis",
+            attestation: "caller-attestation",
+          },
+        },
+      },
+      protocolToolAlias: "T1A",
+      materialSourceId: "cfs:1:slot:2",
+    })).toThrow("attested G-code analysis provenance");
   });
 
   it("callerが弱いcolorMatchPolicyを渡しても安全条件は維持される", () => {

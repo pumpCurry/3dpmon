@@ -35,8 +35,14 @@ retry safety
 ```text
 observed sequence > sent sequence
 same session, with an explicit observed session ID
-command-specific correlation present
+dispatcher-owned command correlation evidence present
 ```
+
+The correlation is not a caller boolean. It must be structured evidence bound to
+the command ID, session ID, sent sequence, observed sequence, observed session,
+and evidence source. Current dry-run code uses module-private attestation as a
+fail-closed placeholder; production authority should replace it with
+dispatcher-owned evidence from the actual send/observe pipeline.
 
 - Add `evaluateExpectedStateConfirmation()` for NormalizedState checks.
 - Add `shouldRetryPrinterCommand()` with fail-safe side-effect behavior.
@@ -94,4 +100,6 @@ matches the requested target state.
 If the confirmation caller omits `observedSessionId`, the result is treated as
 not confirmed even when the expected state matches. Authority wiring should
 derive `observedSequence` and `observedSessionId` from the observed
-NormalizedState/session source rather than from free-form caller claims.
+NormalizedState/session source rather than from free-form caller claims. It
+should also derive command correlation from dispatcher evidence rather than from
+caller-provided `true`.

@@ -15,6 +15,7 @@
  * - PrintPlan から contract-only print-start command request を生成する
  *
  * 【公開関数一覧】
+ * - {@link createGcodeAnalysisAttestation}：G-code analysis attestation を生成
  * - {@link createSingleColorPrintPlan}：単色 PrintPlan を生成
  * - {@link createMulticolorCfsPrintPlan}：CFS/マルチカラー PrintPlan を生成
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
@@ -42,6 +43,17 @@ import { createPrinterCoreV3DeterministicId } from "./dashboard_data_schema_v3.j
  * @constant {number}
  */
 export const PRINT_PLAN_SCHEMA_VERSION = 1;
+
+/**
+ * G-code analysis attestation 用の module-private secret。
+ *
+ * 【詳細説明】
+ * - caller が `analyzed:true` を手書きしても authority evidence にならないようにする。
+ * - 現Gateでは実 analyzer registry の代替となる fail-closed placeholder として使う。
+ *
+ * @constant {string}
+ */
+const GCODE_ANALYSIS_ATTESTATION_SECRET = `printer-core-gcode-analysis:${Date.now()}:${Math.random()}`;
 
 /**
  * JSON 互換値を deep clone する。
@@ -112,6 +124,27 @@ function normalizeToolId(value, fallback = 0) {
 }
 
 /**
+ * G-code analysis attestation signature を生成する。
+ *
+ * 【詳細説明】
+ * - signature は module-private secret を含むため、caller が plain object を手書きしても一致しない。
+ * - Data Schema v3 では永続可能な analyzer registry signature へ置き換える想定。
+ *
+ * @private
+ * @param {object} analysis - 正規化済み analysis
+ * @returns {string} attestation signature
+ */
+function createGcodeAnalysisSignature(analysis) {
+  return createPrinterCoreV3DeterministicId("gcode-analysis-attestation", [
+    GCODE_ANALYSIS_ATTESTATION_SECRET,
+    analysis.analysisId,
+    analysis.fileHash,
+    analysis.analyzerVersion,
+    analysis.logicalTools.join(","),
+  ]);
+}
+
+/**
  * analysis payload から logical tool ID 候補を取り出す。
  *
  * 【詳細説明】
@@ -130,6 +163,59 @@ function readAnalysisLogicalToolCandidates(analysis) {
     return analysis.tools;
   }
   return null;
+}
+
+/**
+ * G-code analysis attestation を生成する。
+ *
+ * 【詳細説明】
+ * - analyzer/provider が logical tool list と content hash を確定した後に呼ぶ想定の factory。
+ * - caller が同じshapeを手で組み立てても、module-private signature が一致しないため PrintPlan へ昇格しない。
+ *
+ * @function createGcodeAnalysisAttestation
+ * @param {object} options - analysis 生成オプション
+ * @param {string} options.fileHash - G-code content hash
+ * @param {string} options.analyzerVersion - analyzer version
+ * @param {Array<*>} options.logicalTools - analyzer が検出した logical tool ID 配列
+ * @param {string=} options.analyzedAt - analysis 時刻
+ * @returns {object} attested G-code analysis
+ * @example
+ * const analysis = createGcodeAnalysisAttestation({ fileHash, analyzerVersion, logicalTools: [0] });
+ */
+export function createGcodeAnalysisAttestation(options = {}) {
+  const fileHash = requireNonEmptyString(options.fileHash || options.sha256, "asset.analysis.fileHash");
+  if (!fileHash.startsWith("sha256:")) {
+    throw new TypeError("PrintPlan G-code analysis requires a sha256 fileHash.");
+  }
+  const analyzerVersion = requireNonEmptyString(options.analyzerVersion || options.source, "asset.analysis.analyzerVersion");
+  const logicalToolCandidates = Array.isArray(options.logicalTools) ? options.logicalTools : options.tools;
+  if (!Array.isArray(logicalToolCandidates) || logicalToolCandidates.length === 0) {
+    throw new TypeError("PrintPlan requires analyzed G-code logical tools.");
+  }
+  const logicalTools = logicalToolCandidates.map((tool, index) => normalizeToolId(tool?.toolId ?? tool, index));
+  if (new Set(logicalTools).size !== logicalTools.length) {
+    throw new TypeError("PrintPlan asset logical tools must be unique.");
+  }
+  const analysisId = createPrinterCoreV3DeterministicId("gcode-analysis", [
+    fileHash,
+    analyzerVersion,
+    logicalTools.join(","),
+  ]);
+  const analysis = {
+    analyzed: true,
+    analyzerVersion,
+    fileHash,
+    logicalTools,
+    toolCount: logicalTools.length,
+    analyzedAt: options.analyzedAt || null,
+    provenance: {
+      source: "printer-core-gcode-analyzer",
+      analysisId,
+      attestation: null,
+    },
+  };
+  analysis.provenance.attestation = createGcodeAnalysisSignature({ ...analysis, analysisId });
+  return analysis;
 }
 
 /**
@@ -157,6 +243,9 @@ function normalizeGcodeAnalysis(asset) {
     analysis.fileHash || analysis.sha256 || asset?.fileSha256 || asset?.fileMd5,
     "asset.analysis.fileHash"
   );
+  if (!fileHash.startsWith("sha256:")) {
+    throw new TypeError("PrintPlan G-code analysis requires a sha256 fileHash.");
+  }
   const logicalToolCandidates = readAnalysisLogicalToolCandidates(analysis);
   if (!logicalToolCandidates || logicalToolCandidates.length === 0) {
     throw new TypeError("PrintPlan requires analyzed G-code logical tools.");
@@ -165,6 +254,24 @@ function normalizeGcodeAnalysis(asset) {
   if (new Set(logicalTools).size !== logicalTools.length) {
     throw new TypeError("PrintPlan asset logical tools must be unique.");
   }
+  const analysisId = createPrinterCoreV3DeterministicId("gcode-analysis", [
+    fileHash,
+    analyzerVersion,
+    logicalTools.join(","),
+  ]);
+  const expectedAttestation = createGcodeAnalysisSignature({
+    analysisId,
+    fileHash,
+    analyzerVersion,
+    logicalTools,
+  });
+  if (
+    analysis?.provenance?.source !== "printer-core-gcode-analyzer" ||
+    analysis?.provenance?.analysisId !== analysisId ||
+    analysis?.provenance?.attestation !== expectedAttestation
+  ) {
+    throw new TypeError("PrintPlan requires attested G-code analysis provenance.");
+  }
   return {
     analyzed: true,
     analyzerVersion,
@@ -172,6 +279,11 @@ function normalizeGcodeAnalysis(asset) {
     logicalTools,
     toolCount: logicalTools.length,
     analyzedAt: analysis.analyzedAt || null,
+    provenance: {
+      source: "printer-core-gcode-analyzer",
+      analysisId,
+      attestation: expectedAttestation,
+    },
   };
 }
 
@@ -190,7 +302,7 @@ function normalizeGcodeAsset(asset) {
   const fileName = String(asset?.fileName || asset?.name || path.split(/[\\/]/u).pop() || path).trim();
   const analysis = normalizeGcodeAnalysis(asset);
   return {
-    assetId: asset?.assetId || createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName]),
+    assetId: asset?.assetId || createPrinterCoreV3DeterministicId("gcode-asset", [path, fileName, analysis.fileHash]),
     path,
     fileName,
     fileMd5: asset?.fileMd5 || null,
@@ -293,7 +405,7 @@ export function createSingleColorPrintPlan(options = {}) {
   const asset = normalizeGcodeAsset(options.asset || {});
   const assignment = createToolAssignment({
     toolId: options.toolId ?? 0,
-    protocolToolAlias: options.protocolToolAlias || options.toolAlias || "T1A",
+    protocolToolAlias: options.protocolToolAlias || options.toolAlias,
     materialSourceId: options.materialSourceId,
     spoolId: options.spoolId,
     confidence: options.confidence,

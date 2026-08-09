@@ -27,6 +27,7 @@ gcode asset path
 attested G-code analysis with logical tool list
 one tool assignment
 one materialSourceId
+one explicit protocolToolAlias/source mapping
 ```
 
 - Add `validatePrintPlan()` for CI and future repository validation.
@@ -70,4 +71,11 @@ The single-color plan is intentionally strict: a missing material source is an
 invalid plan, not a fallback to external spool or printer default behavior.
 Likewise, an un-analyzed G-code asset is invalid. The factory does not assume a
 file is one-tool just because `toolCount` is missing, because that would allow a
-multicolor file to enter command authority as a single-color print.
+multicolor file to enter command authority as a single-color print. The analysis
+must carry module-issued attestation and content hash binding, and the generated
+asset identity includes the file hash.
+
+Single-color plans also do not infer `protocolToolAlias = T1A`. If the selected
+source is CFS-backed, the protocol alias must be explicitly supplied by the
+verified mapping stage. External-spool support should get its own explicit
+source-kind contract instead of relying on a hidden T1A default.

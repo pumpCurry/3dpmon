@@ -3,13 +3,14 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1348 (PR #432)
+ * @version 1.390.1350 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-09 08:15:00
+ * @lastModified 2026-08-09 09:25:00
  */
 
 import { describe, expect, it } from "vitest";
 import {
+  createPrinterCommandCorrelationEvidence,
   createPrinterCommandRequest,
   createPrinterCommandResult,
   evaluateExpectedStateConfirmation,
@@ -101,6 +102,12 @@ describe("Printer Core v3 command authority contract", () => {
         },
       },
     });
+    const correlation = createPrinterCommandCorrelationEvidence(request, {
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:1",
+      evidenceSource: "unit-dispatcher",
+    });
     const after = createPrinterCommandResult(request, {
       status: "acknowledged",
       observedState: {
@@ -111,7 +118,7 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 11,
       observedSessionId: "session:1",
-      commandCorrelation: true,
+      commandCorrelation: correlation,
     });
 
     expect(before.completed).toBe(false);
@@ -136,6 +143,7 @@ describe("Printer Core v3 command authority contract", () => {
       sequenceAdvanced: true,
       sameSession: true,
       commandCorrelated: true,
+      correlationId: correlation.correlationId,
     });
   });
 
@@ -147,6 +155,12 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "printing",
       },
     });
+    const correlation = createPrinterCommandCorrelationEvidence(request, {
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:1",
+      evidenceSource: "unit-dispatcher",
+    });
     const result = createPrinterCommandResult(request, {
       status: "transport-error",
       observedState: {
@@ -157,7 +171,7 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 11,
       observedSessionId: "session:1",
-      commandCorrelation: true,
+      commandCorrelation: correlation,
     });
 
     expect(result.transportAccepted).toBe(false);
@@ -173,6 +187,12 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "printing",
       },
     });
+    const correlation = createPrinterCommandCorrelationEvidence(request, {
+      sentSequence: 10,
+      observedSequence: 10,
+      observedSessionId: "session:1",
+      evidenceSource: "unit-dispatcher",
+    });
     const result = createPrinterCommandResult(request, {
       status: "acknowledged",
       observedState: {
@@ -183,7 +203,7 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 10,
       observedSessionId: "session:1",
-      commandCorrelation: true,
+      commandCorrelation: correlation,
     });
 
     expect(result.transportAccepted).toBe(true);
@@ -212,7 +232,12 @@ describe("Printer Core v3 command authority contract", () => {
       },
       sentSequence: 10,
       observedSequence: 11,
-      commandCorrelation: true,
+      commandCorrelation: createPrinterCommandCorrelationEvidence(request, {
+        sentSequence: 10,
+        observedSequence: 11,
+        observedSessionId: "session:1",
+        evidenceSource: "unit-dispatcher",
+      }),
     });
 
     expect(result.transportAccepted).toBe(true);
@@ -220,7 +245,8 @@ describe("Printer Core v3 command authority contract", () => {
     expect(result.postCommandObservation).toMatchObject({
       confirmed: false,
       sameSession: false,
-      reason: "session-mismatch",
+      commandCorrelated: false,
+      reason: "session-mismatch,command-correlation-missing",
     });
     expect(result.completed).toBe(false);
   });
@@ -233,6 +259,12 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "printing",
       },
     });
+    const correlation = createPrinterCommandCorrelationEvidence(request, {
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:other",
+      evidenceSource: "unit-dispatcher",
+    });
     const result = createPrinterCommandResult(request, {
       status: "acknowledged",
       observedState: {
@@ -243,7 +275,7 @@ describe("Printer Core v3 command authority contract", () => {
       sentSequence: 10,
       observedSequence: 11,
       observedSessionId: "session:other",
-      commandCorrelation: true,
+      commandCorrelation: correlation,
     });
 
     expect(result.postCommandObservation).toMatchObject({
@@ -267,6 +299,36 @@ describe("Printer Core v3 command authority contract", () => {
       },
     });
     expect(shouldRetryPrinterCommand(request, { status: "transient-error" })).toBe(false);
+  });
+
+  it("caller booleanのcommandCorrelationでは完了証跡にならない", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "acknowledged",
+      observedState: {
+        light: {
+          enabled: true,
+        },
+      },
+      sentSequence: 10,
+      observedSequence: 11,
+      observedSessionId: "session:1",
+      commandCorrelation: true,
+    });
+
+    expect(result.confirmation.confirmed).toBe(true);
+    expect(result.postCommandObservation).toMatchObject({
+      confirmed: false,
+      commandCorrelated: false,
+      reason: "command-correlation-missing",
+    });
+    expect(result.completed).toBe(false);
   });
 
   it("invalid requestはvalidationで具体的な理由を返す", () => {

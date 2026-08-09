@@ -13,6 +13,7 @@
  * - exact/high/estimated/unknown の confidence 境界を固定する
  *
  * 【公開関数一覧】
+ * - {@link createFilamentUsageConfidenceEvidence}：usage confidence evidence を生成
  * - {@link createJobMaterialSegmentsFromPrintPlan}：PrintPlan から material segment 候補を生成
  * - {@link createFilamentLedgerEventsFromSegments}：segment から ledger event 候補を生成
  * - {@link createFilamentLedgerCorrectionEvent}：既存 consumption event の correction 候補を生成
@@ -40,6 +41,17 @@ import { validatePrintPlan } from "./dashboard_print_plan.js";
  * @constant {number}
  */
 export const PRINTER_CORE_V3_FILAMENT_LEDGER_CONTRACT_VERSION = 1;
+
+/**
+ * usage confidence evidence 用の module-private secret。
+ *
+ * 【詳細説明】
+ * - caller が `confidence:"exact"` を手書きしても trusted confidence として採用しない。
+ * - Data Schema v3 repository 接続前の fail-closed placeholder として使う。
+ *
+ * @constant {string}
+ */
+const FILAMENT_CONFIDENCE_EVIDENCE_SECRET = `printer-core-filament-confidence:${Date.now()}:${Math.random()}`;
 
 /**
  * segment confidence の許可値。
@@ -155,6 +167,95 @@ function normalizeConfidence(value, fallback = "unknown") {
 }
 
 /**
+ * confidence evidence signature を生成する。
+ *
+ * 【詳細説明】
+ * - signature は module-private secret を含め、caller の plain object 偽装を拒否する。
+ *
+ * @private
+ * @param {object} evidence - confidence evidence
+ * @returns {string} signature
+ */
+function createConfidenceEvidenceSignature(evidence) {
+  return createPrinterCoreV3DeterministicId("filament-confidence-evidence", [
+    FILAMENT_CONFIDENCE_EVIDENCE_SECRET,
+    evidence.evidenceId,
+    evidence.confidence,
+    evidence.source,
+    evidence.measurementMethod,
+  ]);
+}
+
+/**
+ * usage confidence evidence を生成する。
+ *
+ * 【詳細説明】
+ * - firmware/slicer/counter/provider など、観測値の出所が confidence を決めた証跡を表現する。
+ * - caller が confidence 値だけを指定してもこの evidence が無ければ `unknown` として扱う。
+ *
+ * @function createFilamentUsageConfidenceEvidence
+ * @param {object} options - evidence 生成オプション
+ * @param {string} options.confidence - confidence 値
+ * @param {string} options.source - evidence source
+ * @param {string} options.measurementMethod - measurement method
+ * @param {string=} options.observedAt - 観測時刻
+ * @returns {object} confidence evidence
+ * @example
+ * const evidence = createFilamentUsageConfidenceEvidence({ confidence: "exact", source: "unit", measurementMethod: "counter" });
+ */
+export function createFilamentUsageConfidenceEvidence(options = {}) {
+  const confidence = normalizeConfidence(options.confidence, "unknown");
+  if (confidence === "unknown") {
+    throw new TypeError("Filament confidence evidence requires exact, high, or estimated confidence.");
+  }
+  const source = requireNonEmptyString(options.source, "confidence.source");
+  const measurementMethod = requireNonEmptyString(options.measurementMethod, "confidence.measurementMethod");
+  const evidenceId = createPrinterCoreV3DeterministicId("filament-confidence-evidence", [
+    confidence,
+    source,
+    measurementMethod,
+    options.observedAt || "",
+  ]);
+  const evidence = {
+    evidenceId,
+    confidence,
+    source,
+    measurementMethod,
+    observedAt: options.observedAt || null,
+    attestation: null,
+  };
+  evidence.attestation = createConfidenceEvidenceSignature(evidence);
+  return evidence;
+}
+
+/**
+ * confidence evidence を検証して confidence を解決する。
+ *
+ * 【詳細説明】
+ * - confidence 値と evidence 内の値が一致し、module-private signature も一致する場合だけ採用する。
+ *
+ * @private
+ * @param {*} confidenceValue - observation 側 confidence 値
+ * @param {object|null|undefined} evidence - confidence evidence
+ * @returns {string} trusted confidence。不正な場合 unknown
+ */
+function resolveTrustedConfidence(confidenceValue, evidence) {
+  const confidence = normalizeConfidence(confidenceValue, "unknown");
+  if (confidence === "unknown" || !evidence || typeof evidence !== "object") {
+    return "unknown";
+  }
+  const expected = createConfidenceEvidenceSignature({
+    evidenceId: evidence.evidenceId,
+    confidence,
+    source: evidence.source,
+    measurementMethod: evidence.measurementMethod,
+  });
+  return evidence.confidence === confidence && evidence.attestation === expected
+    ? confidence
+    : "unknown";
+}
+
+/**
  * 観測 usage entry から used length を読む。
  *
  * 【詳細説明】
@@ -234,7 +335,7 @@ function resolveSegmentUsage(plan, assignment, observation) {
   if (entryUsed !== null) {
     return {
       usedLengthMm: entryUsed,
-      confidence: normalizeConfidence(usageEntry?.confidence, "unknown"),
+      confidence: resolveTrustedConfidence(usageEntry?.confidence, usageEntry?.confidenceEvidence),
       allocationMode: "observed-per-material",
       evidence: cloneJsonValue(usageEntry),
     };
@@ -247,7 +348,7 @@ function resolveSegmentUsage(plan, assignment, observation) {
   if (plan.planKind === "single-color" && totalUsed !== null) {
     return {
       usedLengthMm: totalUsed,
-      confidence: normalizeConfidence(observation.confidence, "unknown"),
+      confidence: resolveTrustedConfidence(observation.confidence, observation.confidenceEvidence),
       allocationMode: "single-source-total",
       evidence: { totalUsedLengthMm: totalUsed },
     };

@@ -43,6 +43,9 @@ Rules:
   segment usage
 - exact/high/estimated confidence must be explicit in observation evidence;
   omitted or unknown confidence stays `unknown`
+- exact/high/estimated confidence also requires confidence evidence with source
+  and measurement method; a caller-provided confidence string alone is treated
+  as `unknown`
 - multicolor total-only usage is not split across tools
 - unknown segments remain auditable but cannot debit spool remaining length
 - candidate ledger events are append-only shaped, but `canAppend = false` in this
@@ -83,7 +86,16 @@ segments instead of silently subtracting filament from the wrong spool.
 The contract is intentionally conservative about confidence. A per-material
 usage amount without confidence remains useful evidence, but it cannot debit
 remaining filament until a trusted observation source explicitly marks it
-`exact`, `high`, or `estimated`.
+`exact`, `high`, or `estimated`. Current dry-run code uses module-private
+attestation as a placeholder for that trusted source. Data Schema v3 should
+replace it with a persistent confidence policy registry such as:
+
+```text
+firmware-reported-total -> high
+slicer projection       -> estimated
+trusted counter         -> exact
+unknown caller          -> unknown
+```
 
 Later exact measurements should be appended as correction events rather than as
 additional independent consumption events for the same segment.

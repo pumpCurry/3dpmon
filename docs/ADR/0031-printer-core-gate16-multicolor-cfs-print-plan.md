@@ -37,8 +37,8 @@ The plan also carries:
 - `colorMatchPolicy.mode = "explicit-tool-assignment"`
 - `colorMatchPolicy.requireObservedSelectedSource = true`
 - `asset.toolCount` and `asset.logicalTools[]` from attested G-code analysis
-- `asset.analysis` with `analyzed = true`, analyzer version, file hash, and
-  logical tool list
+- `asset.analysis` with module-issued attestation, analyzer version, file hash,
+  and logical tool list
 - `authority.canStartPrint = false`
 
 Callers cannot weaken the multicolor safety policy. If a caller supplies a
@@ -49,7 +49,9 @@ manually assembled unsafe plan.
 Authority PrintPlans must not synthesize logical tools from `toolCount`,
 `asset.tools`, or other caller-provided convenience fields. Those values are
 accepted only when they are part of an attested analysis payload. A file without
-analysis evidence is rejected instead of being treated as a one-tool file.
+analysis evidence is rejected instead of being treated as a one-tool file. The
+logical G-code asset identity includes the content hash so a path/name reuse
+with different bytes cannot silently reuse the old asset ID.
 
 `createPrintStartCommandRequestFromPlan()` may convert the plan into a
 `print-start` command request, but the command remains `contract-only` and
