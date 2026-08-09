@@ -18,6 +18,7 @@
  * - {@link createSingleColorPrintPlan}：単色 PrintPlan を生成
  * - {@link createMulticolorCfsPrintPlan}：CFS/マルチカラー PrintPlan を生成
  * - {@link validatePrintPlan}：PrintPlan の整合性を検査
+ * - {@link validatePrintPlanForStart}：print-start 前提の整合性を検査
  * - {@link createPrintStartCommandRequestFromPlan}：PrintPlan から print-start command request を生成
  *
  * @version 1.390.1350 (PR #432)
@@ -495,6 +496,49 @@ function normalizeUploadReceipt(asset, path, fileHash, deviceId) {
 }
 
 /**
+ * PrintPlan の upload receipt trust を再検証する。
+ *
+ * 【詳細説明】
+ * - `uploadReceipt.trusted` や `authority.uploadReceiptTrusted` の boolean は caller mutation 可能なため信用しない。
+ * - command-ready 判定では、receipt内容と private attestation から毎回 trust を導出する。
+ *
+ * @private
+ * @param {object} plan - PrintPlan
+ * @returns {boolean} trusted upload receipt の場合 true
+ */
+function hasTrustedUploadReceipt(plan) {
+  const receipt = plan?.asset?.uploadReceipt;
+  if (!receipt || typeof receipt !== "object") {
+    return false;
+  }
+  const receiptId = String(receipt.receiptId || receipt.uploadReceiptId || "").trim();
+  const deviceId = String(receipt.deviceId || "").trim();
+  const remotePath = String(receipt.remotePath || receipt.path || "").trim();
+  const fileHash = String(receipt.fileHash || receipt.contentHash || receipt.sha256 || "").trim();
+  if (
+    !receiptId ||
+    !deviceId ||
+    !remotePath ||
+    !fileHash ||
+    deviceId !== String(plan.deviceId || "").trim() ||
+    remotePath !== String(plan.asset?.path || "").trim() ||
+    fileHash !== String(plan.asset?.fileHash || "").trim()
+  ) {
+    return false;
+  }
+  const expectedAttestation = createUploadReceiptSignature({
+    receiptId,
+    deviceId,
+    remotePath,
+    fileHash,
+    sessionId: receipt.sessionId || null,
+    uploadGeneration: receipt.uploadGeneration || null,
+  });
+  return receipt.provenance?.source === "printer-core-upload-authority" &&
+    receipt.provenance?.attestation === expectedAttestation;
+}
+
+/**
  * G-code asset 情報を正規化する。
  *
  * 【詳細説明】
@@ -861,7 +905,30 @@ export function validatePrintPlan(plan) {
   if (plan.authority?.canStartPrint === true) {
     errors.push("plan-can-start-print");
   }
-  if (plan.authority?.uploadReceiptTrusted === true && plan.asset?.uploadReceipt?.trusted !== true) {
+  if (plan.authority?.uploadReceiptTrusted === true && !hasTrustedUploadReceipt(plan)) {
+    errors.push("untrusted-upload-receipt");
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * print-start command 前提の PrintPlan 整合性を検査する。
+ *
+ * 【詳細説明】
+ * - 通常の構造検査に加え、upload receipt の trust を private attestation から再導出する。
+ * - 現Gateでは public API caller が trusted upload receipt をmintできないため、start boundaryはfail-closedになる。
+ *
+ * @function validatePrintPlanForStart
+ * @param {object} plan - PrintPlan
+ * @returns {{ok: boolean, errors: string[]}} 検査結果
+ */
+export function validatePrintPlanForStart(plan) {
+  const validation = validatePrintPlan(plan);
+  const errors = [...validation.errors];
+  if (!hasTrustedUploadReceipt(plan)) {
     errors.push("untrusted-upload-receipt");
   }
   return {
@@ -888,7 +955,7 @@ export function validatePrintPlan(plan) {
  * const request = createPrintStartCommandRequestFromPlan(plan, { sessionId });
  */
 export function createPrintStartCommandRequestFromPlan(plan, options = {}) {
-  const validation = validatePrintPlan(plan);
+  const validation = validatePrintPlanForStart(plan);
   if (!validation.ok) {
     throw new TypeError(`Invalid PrintPlan: ${validation.errors.join(",")}`);
   }

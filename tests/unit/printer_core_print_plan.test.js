@@ -10,12 +10,12 @@
 
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createPrinterCommandResult, shouldRetryPrinterCommand } from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 import {
   createMulticolorCfsPrintPlan,
   createPrintStartCommandRequestFromPlan,
   createSingleColorPrintPlan,
   validatePrintPlan,
+  validatePrintPlanForStart,
 } from "../../3dp_lib/printer_core/dashboard_print_plan.js";
 
 /**
@@ -122,69 +122,35 @@ describe("Printer Core v3 PrintPlan", () => {
     })).toThrow("protocolToolAlias");
   });
 
-  it("PrintPlanからcontract-only print-start command requestを生成する", () => {
+  it("trusted upload receiptが無いPrintPlanからprint-start command requestを生成しない", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
       protocolToolAlias: "T1A",
       materialSourceId: "cfs:1:slot:2",
     });
-    const request = createPrintStartCommandRequestFromPlan(plan, {
+    const commandOptions = {
       sessionId: "session:1",
       transportKind: "ws9999",
       entropySource: () => "unit",
-    });
+    };
 
-    expect(request).toMatchObject({
-      commandKind: "print-start",
-      deviceId: "serial:k2pro",
-      sessionId: "session:1",
-      transportKind: "ws9999",
-      sideEffect: true,
-      idempotent: false,
-      expectedStateRequired: true,
-      idempotencyKey: plan.printPlanId,
-      authority: {
-        mode: "contract-only",
-        canSend: false,
-        canBlindRetry: false,
-      },
-      payload: {
-        printPlanId: plan.printPlanId,
-        materialSourceIds: ["cfs:1:slot:2"],
-        toolAssignments: [
-          {
-            toolId: 0,
-            protocolToolAlias: "T1A",
-            materialSourceId: "cfs:1:slot:2",
-          },
-        ],
-      },
-    });
-    expect(request.expectedState).toEqual([
-      {
-        path: "print.stateLabel",
-        operator: "oneOf",
-        expected: ["printing", "checking"],
-      },
-    ]);
+    expect(validatePrintPlanForStart(plan).errors).toEqual(expect.arrayContaining(["untrusted-upload-receipt"]));
+    expect(() => createPrintStartCommandRequestFromPlan(plan, commandOptions))
+      .toThrow("untrusted-upload-receipt");
   });
 
-  it("PrintPlan由来のprint-start commandはtimeoutでもblind retryしない", () => {
+  it("trusted upload receiptが無いPrintPlanはtimeout/retry判定へ進まない", () => {
     const plan = createSingleColorPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset(),
       protocolToolAlias: "T1A",
       materialSourceId: "external:0:slot:0",
     });
-    const request = createPrintStartCommandRequestFromPlan(plan, {
+    expect(() => createPrintStartCommandRequestFromPlan(plan, {
       sessionId: "session:1",
       entropySource: () => "unit",
-    });
-    const result = createPrinterCommandResult(request, { status: "timeout" });
-
-    expect(result.completed).toBe(false);
-    expect(shouldRetryPrinterCommand(request, result)).toBe(false);
+    })).toThrow("untrusted-upload-receipt");
   });
 
   it("CFSマルチカラーPrintPlanは各toolのmaterialSourceを明示する", () => {
@@ -310,7 +276,7 @@ describe("Printer Core v3 PrintPlan", () => {
     })).toThrow("derives G-code analysis from asset.content");
   });
 
-  it("CFSマルチカラーPrintPlan由来のcommandもcontract-onlyで送信しない", () => {
+  it("CFSマルチカラーPrintPlanもtrusted upload receipt無しではcommand化しない", () => {
     const plan = createMulticolorCfsPrintPlan({
       deviceId: "serial:k2pro",
       asset: createSampleAsset("4color_benchy.gcode", [0, 1]),
@@ -319,30 +285,11 @@ describe("Printer Core v3 PrintPlan", () => {
         { toolId: 1, protocolToolAlias: "T1B", materialSourceId: "cfs:1:slot:2" },
       ],
     });
-    const request = createPrintStartCommandRequestFromPlan(plan, {
+    expect(() => createPrintStartCommandRequestFromPlan(plan, {
       sessionId: "session:multi",
       transportKind: "ws9999",
       entropySource: () => "unit",
-    });
-    const result = createPrinterCommandResult(request, { status: "timeout" });
-
-    expect(request).toMatchObject({
-      commandKind: "print-start",
-      sideEffect: true,
-      idempotent: false,
-      expectedStateRequired: true,
-      authority: {
-        mode: "contract-only",
-        canSend: false,
-        canBlindRetry: false,
-      },
-      payload: {
-        planKind: "multicolor-cfs",
-        multiColorPrint: true,
-        materialSourceIds: ["cfs:1:slot:3", "cfs:1:slot:2"],
-      },
-    });
-    expect(shouldRetryPrinterCommand(request, result)).toBe(false);
+    })).toThrow("untrusted-upload-receipt");
   });
 
   it("壊れたPrintPlanはvalidationで拒否する", () => {

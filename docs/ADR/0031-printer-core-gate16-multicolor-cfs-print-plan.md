@@ -66,9 +66,10 @@ PrintPlan creation cannot make a file command-ready by handwriting a matching
 receipt object.
 
 `createPrintStartCommandRequestFromPlan()` may convert the plan into a
-`print-start` command request, but the command remains `contract-only` and
-`canSend = false`. Timeout or transient failure still must not produce blind
-retry for print start.
+`print-start` command request only after start-ready validation passes. In this
+gate, caller-declared upload receipts are not trusted, so public plans fail
+closed before command request generation. Timeout or transient failure still
+must not produce blind retry for print start once command authority is enabled.
 
 ## Consequences
 
