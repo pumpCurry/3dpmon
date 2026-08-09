@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1362
+  Version 1.390.1366
 */
 
 /* ===============================================================
@@ -1217,6 +1217,17 @@ body.panel-mode .notification-container {
   margin-bottom: 6px;
   flex-wrap: wrap;
 }
+.mtv-stale-banner {
+  margin-top: 5px;
+  margin-bottom: 6px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  padding: 5px;
+  font-size: 11px;
+  line-height: 1.35;
+}
 .mtv-external,
 .mtv-unit {
   border: 1px solid var(--color-border);
@@ -1250,6 +1261,13 @@ body.panel-mode .notification-container {
 .mtv-slot.mtv-selected {
   border-color: var(--color-success);
   box-shadow: inset 0 0 0 1px var(--color-success);
+}
+.mtv-root-stale .mtv-slot.mtv-selected {
+  border-color: var(--color-warning);
+  box-shadow: inset 0 0 0 1px var(--color-warning);
+}
+.mtv-root-stale .mtv-slot {
+  background: var(--color-surface-alt);
 }
 .mtv-presence-empty,
 .mtv-presence-unobserved {
@@ -1289,6 +1307,13 @@ body.panel-mode .notification-container {
 .mtv-remaining,
 .mtv-assignment {
   margin-top: 3px;
+}
+.mtv-remaining-invalid {
+  color: var(--color-danger-text);
+  font-weight: 700;
+}
+.mtv-remaining-stale {
+  color: var(--color-warning-text);
 }
 .mtv-readonly-note {
   margin-top: 6px;
@@ -2747,6 +2772,12 @@ body.panel-mode .notification-container {
 }
 .conn-edit-grid input[type="number"] {
   width: 6em;
+}
+.conn-edit-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-primary);
 }
 
 /* ---------------------------------------------------------------

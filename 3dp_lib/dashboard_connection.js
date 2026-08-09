@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
-* @version 1.390.1363 (PR #432)
+* @version 1.390.1366 (PR #432)
  * @since   1.390.451 (PR #205)
-* @lastModified 2026-08-09 17:27:00
+* @lastModified 2026-08-09 19:37:13
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -2243,19 +2243,111 @@ function _optionHtml(value, label, currentValue) {
 }
 
 /**
- * CFS/CFS-C台数selectのoption HTMLを生成する。
+ * material system設定から利用者向けの供給構成select値を生成する。
  *
  * 【詳細説明】
- * - 0台は従来の手動1巻運用、1-4台はCFS/CFS-C表示対象台数として扱う。
+ * - mode/displayMode/unitLimitを個別に露出すると矛盾設定を作れるため、
+ *   UIでは「通常スプール」「CFS n台」「CFS-C n台」「自動検出」の単一selectへ畳み込む。
  *
  * @private
- * @param {number} currentValue - 現在のCFS/CFS-C台数
+ * @param {object} materialSettings - 正規化済みmaterial system設定
+ * @returns {string} supply select値
+ */
+function _materialSupplyValue(materialSettings) {
+  const unitLimit = Math.max(0, Math.min(4, Number(materialSettings?.unitLimit) || 0));
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.CFS_C_READONLY && unitLimit > 0) {
+    return `cfsc-${unitLimit}`;
+  }
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.CFS_READONLY && unitLimit > 0) {
+    return `cfs-${unitLimit}`;
+  }
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.SINGLE_SPOOL || unitLimit === 0) {
+    return "single";
+  }
+  return "auto";
+}
+
+/**
+ * 供給構成selectのoption HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - 実運用で選ぶ単位をそのまま表示し、台数と表示モードを別々に触らせない。
+ *
+ * @private
+ * @param {object} materialSettings - 正規化済みmaterial system設定
  * @returns {string} option HTML
  */
-function _materialUnitOptionsHtml(currentValue) {
-  return [0, 1, 2, 3, 4]
-    .map((count) => _optionHtml(String(count), count === 0 ? "0台（通常1巻）" : `${count}台（${count * 4 + 1}巻表示）`, String(currentValue)))
-    .join("");
+function _materialSupplyOptionsHtml(materialSettings) {
+  const currentValue = _materialSupplyValue(materialSettings);
+  const options = [
+    ["auto", "自動検出"],
+    ["single", "通常スプール（手動1巻）"],
+    ["cfs-1", "CFS 1台"],
+    ["cfs-2", "CFS 2台"],
+    ["cfs-3", "CFS 3台"],
+    ["cfs-4", "CFS 4台"],
+    ["cfsc-1", "CFS-C 1台"],
+    ["cfsc-2", "CFS-C 2台"],
+    ["cfsc-3", "CFS-C 3台"],
+    ["cfsc-4", "CFS-C 4台"],
+  ];
+  return options.map(([value, label]) => _optionHtml(value, label, currentValue)).join("");
+}
+
+/**
+ * 供給構成select値を保存用material system設定へ変換する。
+ *
+ * 【詳細説明】
+ * - 保存時もread-only/権限なしを固定し、表示設定がcommand/ledger authorityを開かないようにする。
+ * - 外部スプール表示はCFS/CFS-C監視パネル内の追加1枠として扱い、0/1へ丸める。
+ *
+ * @private
+ * @param {string} supplyValue - supply select値
+ * @param {boolean} externalEnabled - 外部スプール表示を有効にするか
+ * @param {object} currentMaterialSystem - 現在の正規化済みmaterial system設定
+ * @returns {object} normalizeMaterialSystemSettingsへ渡す保存候補
+ */
+function _materialSystemFromSupplyValue(supplyValue, externalEnabled, currentMaterialSystem) {
+  const base = {
+    provider: currentMaterialSystem.provider,
+    slotsPerUnit: currentMaterialSystem.slotsPerUnit,
+    externalSourceLimit: externalEnabled ? 1 : 0,
+    readOnly: true,
+    canSendCommands: false,
+    canDriveLedger: false,
+  };
+  if (supplyValue === "single") {
+    return {
+      ...base,
+      mode: MATERIAL_SYSTEM_MODE.SINGLE_SPOOL,
+      displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+      unitLimit: 0,
+    };
+  }
+  const cfsMatch = /^cfs-(\d)$/.exec(supplyValue || "");
+  if (cfsMatch) {
+    return {
+      ...base,
+      mode: MATERIAL_SYSTEM_MODE.CFS_READONLY,
+      displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+      unitLimit: Number(cfsMatch[1]),
+    };
+  }
+  const cfscMatch = /^cfsc-(\d)$/.exec(supplyValue || "");
+  if (cfscMatch) {
+    return {
+      ...base,
+      mode: MATERIAL_SYSTEM_MODE.CFS_C_READONLY,
+      displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+      unitLimit: Number(cfscMatch[1]),
+    };
+  }
+  return {
+    ...base,
+    mode: MATERIAL_SYSTEM_MODE.AUTO,
+    displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+    unitLimit: currentMaterialSystem.unitLimit,
+  };
 }
 
 /**
@@ -2269,30 +2361,18 @@ function _materialUnitOptionsHtml(currentValue) {
  * @returns {string} ダイアログHTML断片
  */
 function _materialSystemSettingsHtml(materialSettings) {
-  const modeOptions = [
-    [MATERIAL_SYSTEM_MODE.AUTO, "自動"],
-    [MATERIAL_SYSTEM_MODE.SINGLE_SPOOL, "通常1巻（手動）"],
-    [MATERIAL_SYSTEM_MODE.CFS_READONLY, "CFS read-only"],
-    [MATERIAL_SYSTEM_MODE.CFS_C_READONLY, "CFS-C read-only"],
-  ].map(([value, label]) => _optionHtml(value, label, materialSettings.mode)).join("");
-  const displayOptions = [
-    [MATERIAL_DISPLAY_MODE.AUTO, "自動"],
-    [MATERIAL_DISPLAY_MODE.LEGACY_CARD, "従来カード固定"],
-    [MATERIAL_DISPLAY_MODE.MULTI_SLOT, "CFSスロット固定"],
-  ].map(([value, label]) => _optionHtml(value, label, materialSettings.displayMode)).join("");
   const providerOptions = [
     [MATERIAL_PROVIDER_MODE.AUTO, "自動（将来用）"],
     [MATERIAL_PROVIDER_MODE.K2_BOXS_INFO, "K2 boxsInfo（将来用）"],
     [MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO, "Moonraker boxsInfo（将来用）"],
     [MATERIAL_PROVIDER_MODE.NONE, "なし（将来用）"],
   ].map(([value, label]) => _optionHtml(value, label, materialSettings.provider)).join("");
+  const externalChecked = materialSettings.externalSourceLimit > 0 ? "checked" : "";
   return `
-              <label>CFS/CFS-C:</label>
-              <select id="edit-material-mode">${modeOptions}</select>
-              <label>表示:</label>
-              <select id="edit-material-display-mode">${displayOptions}</select>
-              <label>CFS台数:</label>
-              <select id="edit-material-unit-limit">${_materialUnitOptionsHtml(materialSettings.unitLimit)}</select>
+              <label>フィラメント供給:</label>
+              <select id="edit-material-supply">${_materialSupplyOptionsHtml(materialSettings)}</select>
+              <label>外部スプール:</label>
+              <label class="conn-edit-check"><input type="checkbox" id="edit-material-external-enabled" ${externalChecked}> 表示する</label>
               <label>Provider:</label>
               <select id="edit-material-provider" disabled title="現Gateではread-only観測経路の診断値です">${providerOptions}</select>`;
 }
@@ -2601,26 +2681,23 @@ ${_materialSystemSettingsHtml(currentMaterialSystem)}
         const labelEl = document.getElementById("edit-label");
         const camEl = document.getElementById("edit-cam-port");
         const httpEl = document.getElementById("edit-http-port");
-        const materialModeEl = document.getElementById("edit-material-mode");
-        const materialDisplayModeEl = document.getElementById("edit-material-display-mode");
-        const materialUnitLimitEl = document.getElementById("edit-material-unit-limit");
+        const materialSupplyEl = document.getElementById("edit-material-supply");
+        const materialExternalEnabledEl = document.getElementById("edit-material-external-enabled");
         const materialProviderEl = document.getElementById("edit-material-provider");
         const result = await dlgPromise;
         if (!result) return;
         if (labelEl) tgt.label = labelEl.value.trim();
         if (camEl) tgt.cameraPort = parseInt(camEl.value, 10) || currentCam;
         if (httpEl) tgt.httpPort = parseInt(httpEl.value, 10) || currentHttp;
-        tgt.materialSystem = normalizeMaterialSystemSettings({
-          mode: materialModeEl?.value ?? currentMaterialSystem.mode,
-          displayMode: materialDisplayModeEl?.value ?? currentMaterialSystem.displayMode,
-          provider: materialProviderEl?.value ?? currentMaterialSystem.provider,
-          unitLimit: parseInt(materialUnitLimitEl?.value ?? String(currentMaterialSystem.unitLimit), 10),
-          slotsPerUnit: currentMaterialSystem.slotsPerUnit,
-          externalSourceLimit: currentMaterialSystem.externalSourceLimit,
-          readOnly: true,
-          canSendCommands: false,
-          canDriveLedger: false,
-        }, tgt.printerType);
+        const materialDraft = _materialSystemFromSupplyValue(
+          materialSupplyEl?.value ?? _materialSupplyValue(currentMaterialSystem),
+          materialExternalEnabledEl ? materialExternalEnabledEl.checked : currentMaterialSystem.externalSourceLimit > 0,
+          {
+            ...currentMaterialSystem,
+            provider: materialProviderEl?.value ?? currentMaterialSystem.provider,
+          }
+        );
+        tgt.materialSystem = normalizeMaterialSystemSettings(materialDraft, tgt.printerType);
         saveUnifiedStorage();
         updatePrinterListUI();
         // 表示名(label)/色はパネルヘッダーにも反映されるため即時更新する

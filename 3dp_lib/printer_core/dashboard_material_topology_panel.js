@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1362 (PR #432)
+ * @version 1.390.1366 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 16:25:00
+ * @lastModified 2026-08-09 19:37:13
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、Core経由の安全なfeed/retract/select操作だけを別UIとして追加する
@@ -58,6 +58,50 @@ function normalizePresenceClass(value) {
 }
 
 /**
+ * topology stateを利用者向けの日本語表示へ変換する。
+ *
+ * 【詳細説明】
+ * - protocol内部語のfresh/staleをそのまま出すと現在値/過去値の判断が難しいため、
+ *   監視画面では「最新」「最終観測」などの運用語へ置き換える。
+ *
+ * @private
+ * @param {*} value - topology state候補
+ * @returns {string} 利用者向け状態ラベル
+ */
+function formatTopologyState(value) {
+  if (value === "fresh") {
+    return "状態: 最新";
+  }
+  if (value === "stale") {
+    return "状態: 最終観測";
+  }
+  return "状態: 未観測";
+}
+
+/**
+ * presenceを利用者向けの日本語表示へ変換する。
+ *
+ * 【詳細説明】
+ * - loaded/empty/unobserved/unknownを現場で誤読しにくい短い日本語へ変換する。
+ *
+ * @private
+ * @param {string} presence - 正規化済みpresence
+ * @returns {string} 利用者向けpresenceラベル
+ */
+function formatPresenceState(presence) {
+  if (presence === "loaded") {
+    return "装填中";
+  }
+  if (presence === "empty") {
+    return "未装填";
+  }
+  if (presence === "unobserved") {
+    return "未観測";
+  }
+  return "不明";
+}
+
+/**
  * material colorをCSSで使える表示値へ変換する。
  *
  * 【詳細説明】
@@ -75,25 +119,48 @@ function resolveMaterialColor(material) {
 }
 
 /**
- * 残量表示文字列を生成する。
+ * 残量表示情報を生成する。
  *
  * 【詳細説明】
- * - 残量未観測と0%を混同しないため、null/invalidは別ラベルにする。
+ * - invalid値は0%へ丸めて表示せず、「不明」として報告値異常を明示する。
+ * - stale中の有効値は現在値ではなく「最終観測」として表示する。
  *
  * @private
  * @param {object|null|undefined} remaining - ViewModelのremaining情報
- * @returns {string} 表示文字列
+ * @param {boolean=} isStale - trueなら最終観測値として表示する
+ * @returns {{text: string, className: string, title: string}} 表示情報
  */
-function formatRemaining(remaining) {
+function formatRemaining(remaining, isStale = false) {
   if (!remaining || remaining.displayPercent === null || remaining.displayPercent === undefined) {
-    return "残量 --";
+    return {
+      text: "残量 未観測",
+      className: "mtv-remaining-unobserved",
+      title: "残量はまだ観測されていません",
+    };
+  }
+  const rawTitle = remaining.rawPercent === null || remaining.rawPercent === undefined
+    ? ""
+    : `装置報告値: ${remaining.rawPercent}%`;
+  if (remaining.valid === false) {
+    return {
+      text: "残量 不明 ⚠",
+      className: "mtv-remaining-invalid",
+      title: rawTitle ? `${rawTitle}（報告値異常）` : "報告値異常のため残量は不明です",
+    };
   }
   const percent = Number(remaining.displayPercent);
   if (!Number.isFinite(percent)) {
-    return "残量 --";
+    return {
+      text: "残量 未観測",
+      className: "mtv-remaining-unobserved",
+      title: "残量はまだ観測されていません",
+    };
   }
-  const suffix = remaining.valid === false ? " ?" : "";
-  return `残量 ${Math.round(percent)}%${suffix}`;
+  return {
+    text: `${isStale ? "最終観測" : "残量"} ${Math.round(percent)}%`,
+    className: isStale ? "mtv-remaining-stale" : "mtv-remaining-valid",
+    title: rawTitle,
+  };
 }
 
 /**
@@ -146,9 +213,10 @@ function createElement(documentRef, tagName, className = "", text = "") {
  * @private
  * @param {Document} documentRef - DOM document
  * @param {object} row - ViewModel source row
+ * @param {boolean=} isStale - trueなら最終観測値として描画する
  * @returns {HTMLElement} slot要素
  */
-function renderSourceSlot(documentRef, row) {
+function renderSourceSlot(documentRef, row, isStale = false) {
   const presence = normalizePresenceClass(row?.presence);
   const slot = createElement(documentRef, "div", `mtv-slot mtv-presence-${presence}`);
   slot.dataset.slot = row?.displaySlot || "";
@@ -159,7 +227,9 @@ function renderSourceSlot(documentRef, row) {
 
   const header = createElement(documentRef, "div", "mtv-slot-header");
   header.appendChild(createElement(documentRef, "span", "mtv-slot-label", displayText(row?.displaySlot)));
-  const stateLabel = row?.selected === true ? "selected" : presence;
+  const stateLabel = row?.selected === true
+    ? (isStale ? "最終観測:選択中" : "現在選択中")
+    : formatPresenceState(presence);
   header.appendChild(createElement(documentRef, "span", "mtv-slot-state", stateLabel));
   slot.appendChild(header);
 
@@ -174,7 +244,12 @@ function renderSourceSlot(documentRef, row) {
   materialLine.appendChild(createElement(documentRef, "span", "mtv-material-name", materialName));
   slot.appendChild(materialLine);
 
-  slot.appendChild(createElement(documentRef, "div", "mtv-remaining", formatRemaining(row?.status?.remaining)));
+  const remainingView = formatRemaining(row?.status?.remaining, isStale);
+  const remaining = createElement(documentRef, "div", `mtv-remaining ${remainingView.className}`, remainingView.text);
+  if (remainingView.title) {
+    remaining.title = remainingView.title;
+  }
+  slot.appendChild(remaining);
 
   const assignmentText = formatAssignments(row?.assignments);
   if (assignmentText) {
@@ -192,9 +267,10 @@ function renderSourceSlot(documentRef, row) {
  * @private
  * @param {Document} documentRef - DOM document
  * @param {object} unit - ViewModel unit row
+ * @param {boolean=} isStale - trueなら最終観測値として描画する
  * @returns {HTMLElement} unit要素
  */
-function renderUnit(documentRef, unit) {
+function renderUnit(documentRef, unit, isStale = false) {
   const unitEl = createElement(documentRef, "section", "mtv-unit");
   if (!unit?.observed) {
     unitEl.classList.add("mtv-unit-unobserved");
@@ -211,12 +287,12 @@ function renderUnit(documentRef, unit) {
   if (unit?.humidity !== null && unit?.humidity !== undefined) {
     details.push(`${unit.humidity}%`);
   }
-  header.appendChild(createElement(documentRef, "span", "mtv-unit-meta", details.join(" / ") || "unobserved"));
+  header.appendChild(createElement(documentRef, "span", "mtv-unit-meta", details.join(" / ") || "未観測"));
   unitEl.appendChild(header);
 
   const slots = createElement(documentRef, "div", "mtv-slots");
   for (const row of Array.isArray(unit?.slots) ? unit.slots : []) {
-    slots.appendChild(renderSourceSlot(documentRef, row));
+    slots.appendChild(renderSourceSlot(documentRef, row, isStale));
   }
   unitEl.appendChild(slots);
   return unitEl;
@@ -262,37 +338,48 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const root = createElement(documentRef, "div", "mtv-root");
     const header = createElement(documentRef, "div", "mtv-header");
     const topologyState = currentViewModel?.summary?.topologyState || "unobserved";
-    header.appendChild(createElement(documentRef, "span", "mtv-title", "Material Sources"));
-    header.appendChild(createElement(documentRef, "span", "mtv-topology-state", topologyState));
+    const isStale = topologyState === "stale";
+    root.classList.add(`mtv-root-${topologyState}`);
+    header.appendChild(createElement(documentRef, "span", "mtv-title", "フィラメント供給"));
+    header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState)));
     root.appendChild(header);
+
+    if (isStale) {
+      root.appendChild(createElement(
+        documentRef,
+        "div",
+        "mtv-stale-banner",
+        "⚠ CFS情報を現在取得できません。以下は最後に観測した状態です。"
+      ));
+    }
 
     const summary = currentViewModel?.summary || {};
     const summaryText = [
-      `${summary.loadedSourceCount ?? 0} loaded`,
-      `${summary.selectedSourceCount ?? 0} selected`,
-      `${summary.cfsUnitCount ?? 0}/${currentViewModel?.limits?.cfsUnitLimit ?? 0} units`,
+      `装填 ${summary.loadedSourceCount ?? 0}`,
+      `選択中 ${summary.selectedSourceCount ?? 0}`,
+      `CFS ${summary.cfsUnitCount ?? 0}/${currentViewModel?.limits?.cfsUnitLimit ?? 0}台`,
     ].join(" / ");
     root.appendChild(createElement(documentRef, "div", "mtv-summary", summaryText));
 
     const externalRows = Array.isArray(currentViewModel?.external) ? currentViewModel.external : [];
     if (externalRows.length > 0) {
       const external = createElement(documentRef, "section", "mtv-external");
-      external.appendChild(createElement(documentRef, "div", "mtv-section-title", "External Spool"));
+      external.appendChild(createElement(documentRef, "div", "mtv-section-title", "外部スプール"));
       for (const row of externalRows) {
-        external.appendChild(renderSourceSlot(documentRef, row));
+        external.appendChild(renderSourceSlot(documentRef, row, isStale));
       }
       root.appendChild(external);
     }
 
     const units = createElement(documentRef, "div", "mtv-units");
     for (const unit of Array.isArray(currentViewModel?.units) ? currentViewModel.units : []) {
-      units.appendChild(renderUnit(documentRef, unit));
+      units.appendChild(renderUnit(documentRef, unit, isStale));
     }
     root.appendChild(units);
 
     const footer = createElement(documentRef, "div", "mtv-readonly-note");
     const host = options.hostname ? `${options.hostname}: ` : "";
-    footer.textContent = `${host}read-only observation / no feed-retract authority`;
+    footer.textContent = `${host}🔒 CFS/CFS-Cは現在監視のみです。フィラメント操作はプリンタ本体から行ってください。`;
     root.appendChild(footer);
     container.appendChild(root);
   }

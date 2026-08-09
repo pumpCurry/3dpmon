@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1363 (PR #432)
+ * @version 1.390.1366 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 17:38:00
+ * @lastModified 2026-08-09 19:37:13
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -101,6 +101,37 @@ describe("Printer Core v3 material system settings", () => {
     expect(resolveMaterialDisplayMode({ target, printerType: "creality-k2", topology: null })).toBe(
       MATERIAL_DISPLAY_MODE.LEGACY_CARD
     );
+  });
+
+  it("旧UI由来のCFSスロット固定+0台という矛盾設定は従来カードへ倒す", () => {
+    const target = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: MATERIAL_SYSTEM_MODE.SINGLE_SPOOL,
+        displayMode: MATERIAL_DISPLAY_MODE.MULTI_SLOT,
+        unitLimit: 0,
+      },
+    };
+
+    expect(resolveMaterialDisplayMode({ target, printerType: "creality-k2", topology: null })).toBe(
+      MATERIAL_DISPLAY_MODE.LEGACY_CARD
+    );
+  });
+
+  it("外部スプールなし設定ではtopology view optionも外部0本になる", () => {
+    const target = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: MATERIAL_SYSTEM_MODE.CFS_READONLY,
+        unitLimit: 3,
+        externalSourceLimit: 0,
+      },
+    };
+
+    expect(resolveMaterialTopologyViewOptions({ target, printerType: "creality-k2", topology: null })).toMatchObject({
+      unitLimit: 3,
+      externalSourceLimit: 0,
+    });
   });
 
   it("手動CFS台数は最大4台に丸め、表示枠数の入力として維持する", () => {

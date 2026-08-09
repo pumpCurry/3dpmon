@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1362 (PR #432)
+ * @version 1.390.1366 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 16:57:00
+ * @lastModified 2026-08-09 19:37:13
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -105,6 +105,8 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
     expect(container.textContent).toContain("Silver PLA");
     expect(container.textContent).toContain("残量 54%");
+    expect(container.textContent).toContain("現在選択中");
+    expect(container.textContent).toContain("監視のみ");
   });
 
   it("4台CFS設定では外部1本と1A-4Dまでの17枠を描画する", () => {
@@ -129,11 +131,40 @@ describe("Printer Core v3 material topology panel", () => {
       { hostname: "K2Pro" }
     );
 
-    expect(container.textContent).toContain("unobserved");
+    expect(container.textContent).toContain("未観測");
 
     handle.update(createMaterialTopologyViewModel(topology, { unitLimit: 1 }));
 
     expect(getSlotLabels(container)).toEqual(["external", "1A", "1B", "1C", "1D"]);
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
+  });
+
+  it("invalid remainingを0%として見せず報告値異常の不明表示にする", () => {
+    const payload = createOneUnitBoxsInfo();
+    payload.materialBoxs[1].materials[2].percent = -5;
+    const topology = normalizeK2BoxsInfo(payload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    const selectedRemaining = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining');
+    expect(selectedRemaining?.textContent).toBe("残量 不明 ⚠");
+    expect(selectedRemaining?.classList.contains("mtv-remaining-invalid")).toBe(true);
+    expect(selectedRemaining?.getAttribute("title")).toContain("装置報告値: -5%");
+    expect(container.textContent).not.toContain("残量 0%");
+  });
+
+  it("stale topologyではbannerと最終観測表示で現在値との誤認を防ぐ", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: false });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    expect(container.querySelector(".mtv-root")?.classList.contains("mtv-root-stale")).toBe(true);
+    expect(container.textContent).toContain("CFS情報を現在取得できません");
+    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:選択中");
+    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
   });
 });

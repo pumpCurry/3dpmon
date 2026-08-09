@@ -18,9 +18,9 @@
  * - {@link resolveMaterialDisplayMode}：フィラメントパネルの表示方式を決定
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  *
- * @version 1.390.1363 (PR #432)
+ * @version 1.390.1366 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 17:31:00
+ * @lastModified 2026-08-09 19:37:13
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -297,7 +297,9 @@ export function resolveMaterialDisplayMode({ target, printerType = "creality-k1"
     return MATERIAL_DISPLAY_MODE.LEGACY_CARD;
   }
   if (settings.displayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
-    return MATERIAL_DISPLAY_MODE.MULTI_SLOT;
+    return settings.unitLimit > 0 || hasObservedMaterialTopology(topology)
+      ? MATERIAL_DISPLAY_MODE.MULTI_SLOT
+      : MATERIAL_DISPLAY_MODE.LEGACY_CARD;
   }
   if (
     (settings.mode === MATERIAL_SYSTEM_MODE.CFS_READONLY ||
