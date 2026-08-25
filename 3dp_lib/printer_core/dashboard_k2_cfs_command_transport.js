@@ -16,9 +16,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1386 (PR #432)
+ * @version 1.390.1388 (PR #432)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-26 00:40:00
+ * @lastModified 2026-08-26 01:05:00
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -212,6 +212,33 @@ function extractProtocolFrameIds(responses) {
 }
 
 /**
+ * assignmentから材料protocol値と由来を取り出す。
+ *
+ * 【詳細説明】
+ * - type/colorをどの入力から採用したかをtransport plan detailsへ残し、live certification時に
+ *   送信直前のCFS slot観測と突き合わせられるようにする。
+ *
+ * @private
+ * @param {{path: string, value: *}[]} candidates - 候補値一覧
+ * @returns {{value: string|null, provenance: string|null}} 正規化値と由来
+ */
+function pickMaterialProtocolValue(candidates) {
+  for (const candidate of candidates) {
+    const value = toNonEmptyString(candidate.value);
+    if (value) {
+      return {
+        value,
+        provenance: candidate.path,
+      };
+    }
+  }
+  return {
+    value: null,
+    provenance: null,
+  };
+}
+
+/**
  * 失敗したtransport planを返す。
  *
  * 【詳細説明】
@@ -323,16 +350,18 @@ function createColorMatchEntry(assignment) {
       sourceId,
     };
   }
-  const type = toNonEmptyString(
-    assignment?.protocol?.materialType ||
-    assignment?.protocol?.type ||
-    assignment?.material?.type
-  );
-  const color = toNonEmptyString(
-    assignment?.protocol?.color ||
-    assignment?.material?.color?.normalized ||
-    assignment?.material?.color?.raw
-  );
+  const typeEvidence = pickMaterialProtocolValue([
+    { path: "assignment.protocol.materialType", value: assignment?.protocol?.materialType },
+    { path: "assignment.protocol.type", value: assignment?.protocol?.type },
+    { path: "assignment.material.type", value: assignment?.material?.type },
+  ]);
+  const colorEvidence = pickMaterialProtocolValue([
+    { path: "assignment.protocol.color", value: assignment?.protocol?.color },
+    { path: "assignment.material.color.normalized", value: assignment?.material?.color?.normalized },
+    { path: "assignment.material.color.raw", value: assignment?.material?.color?.raw },
+  ]);
+  const type = typeEvidence.value;
+  const color = colorEvidence.value;
   if (!type || !color) {
     return {
       ok: false,
@@ -347,6 +376,16 @@ function createColorMatchEntry(assignment) {
       id: alias,
       type,
       color,
+      boxId: location.boxId,
+      materialId: location.materialId,
+    },
+    evidence: {
+      protocolToolAlias: alias,
+      sourceId,
+      type,
+      typeProvenance: typeEvidence.provenance,
+      color,
+      colorProvenance: colorEvidence.provenance,
       boxId: location.boxId,
       materialId: location.materialId,
     },
@@ -378,6 +417,7 @@ function createK2CfsPrintStartPlan(request) {
     return createRejectedTransportPlan("missing-tool-assignments");
   }
   const colorMatchList = [];
+  const assignmentEvidence = [];
   for (const assignment of assignments) {
     const result = createColorMatchEntry(assignment);
     if (!result.ok) {
@@ -386,6 +426,7 @@ function createK2CfsPrintStartPlan(request) {
       });
     }
     colorMatchList.push(result.entry);
+    assignmentEvidence.push(result.evidence);
   }
   return {
     schemaVersion: K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION,
@@ -416,7 +457,9 @@ function createK2CfsPrintStartPlan(request) {
     details: {
       commandKind: request.commandKind,
       printPlanId: payload.printPlanId || null,
+      materialSupply: "cfs",
       assignmentCount: colorMatchList.length,
+      assignmentEvidence,
     },
   };
 }

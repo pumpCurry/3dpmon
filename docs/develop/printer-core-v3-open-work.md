@@ -76,6 +76,7 @@ Last updated: 2026-08-26
 - `protocolCommandId` はprofile/PrintPlan由来の合成IDを廃止し、transport responseに実IDがある場合だけ採用する。実IDが無い場合は `correlationEvidence.kind:"none"` としてauthority証跡へ昇格しない。
 - certification CLIのlive送信は `ws.send()` callbackをawaitし、WebSocket libraryが各frameを受け取る前に `sent:true` を返さない。
 - certification CLIの実送信は `--send` に加えて `--confirm-live --confirm-host <host>` を必須にし、dry-run確認後の明示操作だけをlive境界として扱う。
+- transport plan detailsへ `assignmentEvidence[]` を追加し、sourceId、protocol alias、type/color、各値の由来をdry-run結果に残す。live実行前にCFS slot観測値と一致確認するための証跡にする。
 
 ## Gate 20 後も残る command activation 項目
 

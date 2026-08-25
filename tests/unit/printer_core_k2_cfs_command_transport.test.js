@@ -4,9 +4,9 @@
  * - K2/CFS print-start が `colorMatch` と `multiColorPrint` の明示frameへ変換されることを検証する。
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  *
- * @version 1.390.1386 (PR #432)
+ * @version 1.390.1388 (PR #432)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-26 00:40:00
+ * @lastModified 2026-08-26 01:05:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -74,9 +74,32 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       profile: K2_CFS_PRINT_START_TRANSPORT_PROFILE,
       details: {
         printPlanId: "print-plan:k2-cfs",
+        materialSupply: "cfs",
         assignmentCount: 2,
       },
     });
+    expect(plan.details.assignmentEvidence).toEqual([
+      {
+        protocolToolAlias: "T1A",
+        sourceId: "cfs:1:slot:0",
+        type: "PLA",
+        typeProvenance: "assignment.protocol.type",
+        color: "0ffffff",
+        colorProvenance: "assignment.protocol.color",
+        boxId: 1,
+        materialId: 0,
+      },
+      {
+        protocolToolAlias: "T1B",
+        sourceId: "cfs:1:slot:1",
+        type: "PLA",
+        typeProvenance: "assignment.protocol.type",
+        color: "072a530",
+        colorProvenance: "assignment.protocol.color",
+        boxId: 1,
+        materialId: 1,
+      },
+    ]);
     expect(plan.frames).toEqual([
       {
         method: "set",

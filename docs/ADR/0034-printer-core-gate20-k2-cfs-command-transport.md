@@ -64,6 +64,10 @@ acknowledgement:
   ID. Otherwise `correlationEvidence.kind` remains `none`.
 - Any missing, unknown, rejected, failed, timeout, or error frame response stops
   the sequence before later frames are sent.
+- `details.assignmentEvidence[]` records the CFS source ID, protocol tool alias,
+  material type/color, and the source field used for each value. Live
+  certification must compare this dry-run evidence with the pre-start observed
+  CFS slot state before `--send`.
 
 ## Consequences
 
