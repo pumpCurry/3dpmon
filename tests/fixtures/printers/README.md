@@ -94,6 +94,11 @@ node scripts/analyze_protocol_scenario.mjs --fixture tests/fixtures/printers/k2-
 - `scripts/capture_k2_benchy_print.mjs` blocks CFS `opGcodeFile` starts by
   default. Use `--allow-unsafe-opgcodefile-cfs-start` only when intentionally
   reproducing the negative dry-run-like command evidence from Gate 9.
+- `scripts/capture_k2_cfs_print_start.mjs` is the Gate 20 dry-run/live
+  certification helper for the explicit CFS print-start path. Run it first
+  without `--send` to inspect the `colorMatch` -> `multiColorPrint` frames; add
+  `--send` only after the operator confirms the build plate, G-code path, and
+  CFS slot assignment.
 
 Fixture rules:
 

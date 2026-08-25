@@ -71,10 +71,12 @@ Last updated: 2026-08-26
 - CFS sourceを使う場合に `opGcodeFile` fallbackを生成しないことをテストで固定した。
 - external spool source、material type/color証拠不足、未certifiedのslot操作はtransport plan生成前に拒否する。
 - send hookはconnection layer注入のままにし、transport module自身はWebSocketを所有しない。
+- `scripts/capture_k2_cfs_print_start.mjs` を追加し、実機送信前に同じtransport planをCLIでdry-run確認できるようにした。`--send` が無い限りWS接続も送信も行わない。
 
 ## Gate 20 後も残る command activation 項目
 
 - K2実機で `colorMatch` -> `multiColorPrint` を明示確認し、post-start selected CFS source、物理feed、消費量変化、完了状態を同一fixtureで証明する。
+- certification CLIで実送信する場合は、dry-run出力を確認したうえでoperatorが明示的に `--send` を付ける。Codex側からlive送信する場合も、その直前にユーザー確認を取る。
 - 実機certificationが終わるまで、通常フィラメントパネルのCFS操作ボタンは送信可能にしない。
 - slot select / load / unload / feed / retract は、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyを確定してからadapterへ追加する。
 - K1C+CFS-Cについては、Moonraker object経由のmaterial providerとは別に、操作commandのprovider/transport境界を実機で確認する。
