@@ -3,14 +3,13 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1373 (PR #432)
+ * @version 1.390.1375 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-25 19:30:32
+ * @lastModified 2026-08-25 20:18:00
  */
 
 import { describe, expect, it, vi } from "vitest";
 import {
-  createPrinterCommandDispatchContext,
   createPrinterCommandRequest,
   createPrinterCommandResult,
   dispatchPrinterCommand,
@@ -42,26 +41,38 @@ function createBaseRequestOptions(commandKind) {
 }
 
 /**
- * production dispatcher 用の共通contextを返す。
+ * production dispatcher 用の共通send-time snapshotを返す。
  *
  * 【詳細説明】
- * - command authority の送信直前再検証テストで、active session と sequence を固定する。
+ * - dispatcherが内部でcontextを発行する前段として、active session と sequence を固定する。
  *
- * @function createBaseDispatchContext
- * @param {object=} overrides - context override
- * @returns {object} dispatch context
+ * @function createBaseSendTimeSnapshot
+ * @param {object=} overrides - snapshot override
+ * @returns {object} send-time snapshot
  */
-function createBaseDispatchContext(overrides = {}) {
-  return createPrinterCommandDispatchContext({
+function createBaseSendTimeSnapshot(overrides = {}) {
+  return {
     deviceId: "serial:demo",
     sessionId: "session:1",
     transportKind: "ws9999",
     active: true,
     stateSequence: 10,
     createdAt: "2026-08-25T19:30:32.000+09:00",
-    entropySource: () => "context-unit",
+    materialTopology: {
+      cfsConnected: true,
+      topologyState: "fresh",
+      sources: [
+        {
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+        },
+      ],
+    },
     ...overrides,
-  });
+  };
 }
 
 describe("Printer Core v3 command authority contract", () => {
@@ -371,10 +382,11 @@ describe("Printer Core v3 command authority contract", () => {
     }).confirmed).toBe(true);
   });
 
-  it("production dispatcherは手書きcontextを拒否しtransportを呼ばない", async () => {
+  it("production dispatcherは手書きcontextを受け取らずsend-time hookを必須にする", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("cfs-slot-select"),
       payload: {
+        sourceId: "cfs:1:slot:2",
         boxId: 1,
         slotIndex: 2,
       },
@@ -406,14 +418,53 @@ describe("Printer Core v3 command authority contract", () => {
     });
 
     expect(result.status).toBe("rejected");
-    expect(result.error.errors).toContain("untrusted-dispatch-context");
+    expect(result.error.errors).toContain("missing-send-time-context");
+    expect(sendTransport).not.toHaveBeenCalled();
+
+    expect(validatePrinterCommandSendTime(request, {
+      schemaVersion: 1,
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      active: true,
+      authority: {
+        source: "printer-core-command-dispatcher",
+        canSend: true,
+        attestation: "caller-forged",
+      },
+    }).errors).toContain("untrusted-dispatch-context");
+  });
+
+  it("production dispatcherは未知command kindを送信直前で拒否する", async () => {
+    const request = createPrinterCommandRequest(createBaseRequestOptions("vendor-unknown-op"));
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("unsupported-command-kind");
     expect(sendTransport).not.toHaveBeenCalled();
   });
 
-  it("CFS commandはfreshな接続topologyと明示制御capabilityを要求する", () => {
+  it("production dispatcherは不正send-time snapshotを送信前に拒否する", async () => {
+    const request = createPrinterCommandRequest(createBaseRequestOptions("set-led"));
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => ({ sessionId: "session:1", active: true }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("invalid-send-time-context");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS commandはfreshな接続topologyと明示制御capabilityを要求する", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("cfs-feed"),
       payload: {
+        sourceId: "cfs:1:slot:2",
         boxId: 1,
         slotIndex: 2,
       },
@@ -422,33 +473,65 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "feeding",
       },
     });
-    const staleContext = createBaseDispatchContext({
+    const staleSnapshot = createBaseSendTimeSnapshot({
       capabilities: ["material.cfs", "material.cfsTopology"],
       materialTopology: {
         cfsConnected: false,
         topologyState: "stale",
+        sources: [],
       },
     });
-    const readyContext = createBaseDispatchContext({
+    const readySnapshot = createBaseSendTimeSnapshot({
       capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
-      materialTopology: {
-        cfsConnected: true,
-        topologyState: "fresh",
-      },
+    });
+    const staleResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => staleSnapshot,
+      sendTransport: vi.fn(),
+    });
+    const readySendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const readyResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => readySnapshot,
+      sendTransport: readySendTransport,
     });
 
-    expect(validatePrinterCommandSendTime(request, staleContext)).toEqual({
-      ok: false,
-      errors: [
-        "missing-capability:command.cfs-control",
-        "cfs-not-connected",
-        "cfs-topology-not-fresh",
-      ],
-    });
-    expect(validatePrinterCommandSendTime(request, readyContext)).toEqual({ ok: true, errors: [] });
+    expect(staleResult.status).toBe("rejected");
+    expect(staleResult.error.errors).toEqual([
+      "missing-capability:command.cfs-control",
+      "cfs-not-connected",
+      "cfs-topology-not-fresh",
+      "cfs-target-source-not-current",
+    ]);
+    expect(readyResult.status).toBe("acknowledged");
+    expect(readySendTransport).toHaveBeenCalledTimes(1);
   });
 
-  it("dispatcherは送信時検証後にtransportと観測correlationで完了判定する", async () => {
+  it("CFS command targetは現在のtopology sourceへbindされていなければ送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-slot-select"),
+      payload: {
+        sourceId: "cfs:1:slot:3",
+        boxId: 1,
+        slotIndex: 3,
+      },
+      expectedState: {
+        path: "materials.selectedSource.sourceId",
+        expected: "cfs:1:slot:3",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-target-source-not-current");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("dispatcherは送信時snapshotを内部context化し、correlationが無ければ完了扱いにしない", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("set-led"),
       expectedState: {
@@ -456,7 +539,6 @@ describe("Printer Core v3 command authority contract", () => {
         expected: true,
       },
     });
-    const context = createBaseDispatchContext();
     const sendTransport = vi.fn().mockResolvedValue({
       status: "acknowledged",
       vendorCode: 0,
@@ -472,7 +554,7 @@ describe("Printer Core v3 command authority contract", () => {
     });
 
     const result = await dispatchPrinterCommand(request, {
-      context,
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
       sendTransport,
       observeState,
       completedAt: "2026-08-25T19:31:00.000+09:00",
@@ -483,18 +565,18 @@ describe("Printer Core v3 command authority contract", () => {
     expect(result).toMatchObject({
       status: "acknowledged",
       transportAccepted: true,
-      completed: true,
+      completed: false,
       postCommandObservation: {
-        confirmed: true,
+        confirmed: false,
         sequenceAdvanced: true,
         sameSession: true,
-        commandCorrelated: true,
-        reason: "confirmed",
+        commandCorrelated: false,
+        reason: "command-correlation-missing",
       },
     });
   });
 
-  it("print-startはupload generationとfile identityを送信直前に照合する", () => {
+  it("print-startはupload generationとfile identityを送信直前に照合する", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("print-start"),
       payload: {
@@ -512,7 +594,7 @@ describe("Printer Core v3 command authority contract", () => {
         expected: ["printing", "checking"],
       },
     });
-    const mismatchedContext = createBaseDispatchContext({
+    const mismatchedSnapshot = createBaseSendTimeSnapshot({
       capabilities: ["command.print-start"],
       uploadGeneration: "upload:41",
       fileIdentity: {
@@ -520,7 +602,7 @@ describe("Printer Core v3 command authority contract", () => {
         fileHash: "sha256:other",
       },
     });
-    const matchedContext = createBaseDispatchContext({
+    const matchedSnapshot = createBaseSendTimeSnapshot({
       capabilities: ["command.print-start"],
       uploadGeneration: "upload:42",
       fileIdentity: {
@@ -528,22 +610,33 @@ describe("Printer Core v3 command authority contract", () => {
         fileHash: "sha256:benchy",
       },
     });
-
-    expect(validatePrinterCommandSendTime(request, mismatchedContext)).toEqual({
-      ok: false,
-      errors: [
-        "upload-generation-mismatch",
-        "file-identity-path-mismatch",
-        "file-identity-hash-mismatch",
-      ],
+    const mismatchedSendTransport = vi.fn();
+    const matchedSendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const mismatchedResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => mismatchedSnapshot,
+      sendTransport: mismatchedSendTransport,
     });
-    expect(validatePrinterCommandSendTime(request, matchedContext)).toEqual({ ok: true, errors: [] });
+    const matchedResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => matchedSnapshot,
+      sendTransport: matchedSendTransport,
+    });
+
+    expect(mismatchedResult.status).toBe("rejected");
+    expect(mismatchedResult.error.errors).toEqual([
+      "upload-generation-mismatch",
+      "file-identity-path-mismatch",
+      "file-identity-hash-mismatch",
+    ]);
+    expect(mismatchedSendTransport).not.toHaveBeenCalled();
+    expect(matchedResult.status).toBe("acknowledged");
+    expect(matchedSendTransport).toHaveBeenCalledTimes(1);
   });
 
   it("transport例外はtransport-errorとして返しside-effect commandをblind retryしない", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("cfs-retract"),
       payload: {
+        sourceId: "cfs:1:slot:2",
         boxId: 1,
         slotIndex: 2,
       },
@@ -552,15 +645,11 @@ describe("Printer Core v3 command authority contract", () => {
         expected: "retracting",
       },
     });
-    const context = createBaseDispatchContext({
+    const snapshot = createBaseSendTimeSnapshot({
       capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
-      materialTopology: {
-        cfsConnected: true,
-        topologyState: "fresh",
-      },
     });
     const result = await dispatchPrinterCommand(request, {
-      context,
+      getSendTimeContext: () => snapshot,
       sendTransport: vi.fn().mockRejectedValue(new Error("socket closed")),
     });
 

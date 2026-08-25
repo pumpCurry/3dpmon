@@ -18,13 +18,12 @@
  * - {@link shouldRetryPrinterCommand}：command retry 可否を判定
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
- * - {@link createPrinterCommandDispatchContext}：送信直前再検証用 context を生成
  * - {@link validatePrinterCommandSendTime}：command request と送信時 context の整合性を検査
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1373 (PR #432)
+ * @version 1.390.1375 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-25 19:30:32
+ * @lastModified 2026-08-25 20:18:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -169,6 +168,16 @@ const PRINTER_COMMAND_REQUIRED_CAPABILITIES = Object.freeze({
   "cfs-feed": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
   "cfs-retract": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
 });
+
+/**
+ * production dispatcher から送信を許可するcommand kind一覧。
+ *
+ * 【詳細説明】
+ * - request生成時は未知commandを監査用に表現できるが、production dispatcherでは未知commandを送信しない。
+ *
+ * @constant {Set<string>}
+ */
+const PRINTER_COMMAND_DISPATCHABLE_KINDS = Object.freeze(new Set(Object.keys(PRINTER_COMMAND_KIND_CONTRACTS)));
 
 /**
  * command が transport level で受理されたとみなせる status。
@@ -324,6 +333,20 @@ function getRequiredCommandCapabilities(commandKind) {
 }
 
 /**
+ * command kind がproduction dispatcher送信対象か判定する。
+ *
+ * 【詳細説明】
+ * - 未知commandは request contract 上は非冪等side-effectへ倒すが、send-timeでは明示拒否する。
+ *
+ * @private
+ * @param {string} commandKind - command 種別
+ * @returns {boolean} dispatcher送信対象ならtrue
+ */
+function isDispatchableCommandKind(commandKind) {
+  return PRINTER_COMMAND_DISPATCHABLE_KINDS.has(String(commandKind || ""));
+}
+
+/**
  * command correlation evidence signature を生成する。
  *
  * 【詳細説明】
@@ -374,11 +397,16 @@ function createCommandDispatchContextSignature(context) {
       (context.capabilities || []).join(","),
       context.materialTopology?.cfsConnected === true ? "cfs-connected" : "cfs-not-connected",
       context.materialTopology?.topologyState || "",
+      (context.materialTopology?.sources || [])
+        .map((source) => [source.sourceId, source.kind, source.boxId ?? "", source.slotId ?? ""].join(":"))
+        .join(","),
       context.uploadGeneration || "",
       context.fileIdentity?.remotePath || "",
       context.fileIdentity?.fileHash || "",
       context.stateSequence ?? "",
       context.createdAt || "",
+      context.issuedAtMs ?? "",
+      context.expiresAtMs ?? "",
     ].join("|"),
     entropySource: () => context.contextId,
   });
@@ -532,7 +560,6 @@ export function createPrinterCommandRequest(options = {}) {
  * - 生成した context は module-private attestation を持ち、`validatePrinterCommandSendTime()` で偽装を検出できる。
  * - context は永続保存する authority ではなく、現在の接続sessionにだけ有効な一時証跡として扱う。
  *
- * @function createPrinterCommandDispatchContext
  * @param {object} options - dispatch context 生成オプション
  * @param {string} options.deviceId - 現在接続中の device ID
  * @param {string} options.sessionId - 現在接続中の session ID
@@ -549,12 +576,14 @@ export function createPrinterCommandRequest(options = {}) {
  * @param {number=} options.stateSequence - 送信前に観測済みのstate sequence
  * @param {object=} options.observedState - 送信前のNormalizedState
  * @param {string=} options.createdAt - context生成時刻ISO文字列
+ * @param {number=} options.issuedAtMs - context発行epoch ms
+ * @param {number=} options.expiresAtMs - context失効epoch ms
  * @param {Function=} options.entropySource - contextId生成用source
  * @returns {object} dispatch context
  * @example
  * const context = createPrinterCommandDispatchContext({ deviceId, sessionId, active: true });
  */
-export function createPrinterCommandDispatchContext(options = {}) {
+function createPrinterCommandDispatchContext(options = {}) {
   const deviceId = requireNonEmptyString(options.deviceId, "deviceId");
   const sessionId = requireNonEmptyString(options.sessionId, "sessionId");
   const capabilities = Array.from(normalizeCapabilitySet(options.capabilities)).sort();
@@ -565,11 +594,13 @@ export function createPrinterCommandDispatchContext(options = {}) {
         sourceCount: Number.isFinite(Number(options.materialTopology.sourceCount))
           ? Number(options.materialTopology.sourceCount)
           : null,
+        sources: normalizeMaterialTopologySources(options.materialTopology.sources),
       }
     : {
         cfsConnected: false,
         topologyState: "unobserved",
         sourceCount: null,
+        sources: [],
       };
   const fileIdentity = options.fileIdentity && typeof options.fileIdentity === "object"
     ? {
@@ -601,6 +632,8 @@ export function createPrinterCommandDispatchContext(options = {}) {
     stateSequence: normalizeSequence(options.stateSequence ?? options.sequence),
     observedState: cloneJsonValue(options.observedState || null),
     createdAt: options.createdAt || null,
+    issuedAtMs: Number.isFinite(Number(options.issuedAtMs)) ? Number(options.issuedAtMs) : null,
+    expiresAtMs: Number.isFinite(Number(options.expiresAtMs)) ? Number(options.expiresAtMs) : null,
     authority: {
       source: "printer-core-command-dispatcher",
       canSend: true,
@@ -609,6 +642,26 @@ export function createPrinterCommandDispatchContext(options = {}) {
   };
   context.authority.attestation = createCommandDispatchContextSignature(context);
   return context;
+}
+
+/**
+ * material topology source 一覧をsend-time検証用へ正規化する。
+ *
+ * 【詳細説明】
+ * - CFS操作targetを現在のtopologyへbindするため、sourceId/kind/boxId/slotId/presenceだけを保持する。
+ *
+ * @private
+ * @param {*} sources - topology sources候補
+ * @returns {Array<object>} 正規化済みsource一覧
+ */
+function normalizeMaterialTopologySources(sources) {
+  return (Array.isArray(sources) ? sources : []).map((source) => ({
+    sourceId: String(source?.sourceId || "").trim() || null,
+    kind: String(source?.kind || "").trim() || null,
+    boxId: normalizeSequence(source?.boxId),
+    slotId: normalizeSequence(source?.slotId ?? source?.protocolSlotId),
+    presence: String(source?.presence || source?.status?.presence || "").trim() || null,
+  })).filter((source) => source.sourceId);
 }
 
 /**
@@ -668,6 +721,28 @@ function collectCfsSendTimeErrors(request, context) {
   if (context.materialTopology?.topologyState !== "fresh") {
     errors.push("cfs-topology-not-fresh");
   }
+  const targetSourceId = String(request.payload?.sourceId || "").trim();
+  if (!targetSourceId) {
+    errors.push("cfs-target-source-missing");
+    return errors;
+  }
+  const currentSource = (Array.isArray(context.materialTopology?.sources) ? context.materialTopology.sources : [])
+    .find((source) => source.sourceId === targetSourceId);
+  if (!currentSource) {
+    errors.push("cfs-target-source-not-current");
+    return errors;
+  }
+  if (currentSource.kind !== "cfs-slot") {
+    errors.push("cfs-target-not-cfs-slot");
+  }
+  const requestBoxId = normalizeSequence(request.payload?.boxId);
+  if (requestBoxId !== null && currentSource.boxId !== null && requestBoxId !== currentSource.boxId) {
+    errors.push("cfs-target-box-mismatch");
+  }
+  const requestSlotId = normalizeSequence(request.payload?.slotId ?? request.payload?.protocolSlotId ?? request.payload?.slotIndex);
+  if (requestSlotId !== null && currentSource.slotId !== null && requestSlotId !== currentSource.slotId) {
+    errors.push("cfs-target-slot-mismatch");
+  }
   return errors;
 }
 
@@ -694,6 +769,9 @@ export function validatePrinterCommandSendTime(request, context) {
   if (!context || typeof context !== "object") {
     return { ok: false, errors: [...errors, "missing-dispatch-context"] };
   }
+  if (!isDispatchableCommandKind(request?.commandKind)) {
+    errors.push("unsupported-command-kind");
+  }
   if (context.schemaVersion !== PRINTER_COMMAND_DISPATCH_CONTEXT_SCHEMA_VERSION) {
     errors.push("unexpected-dispatch-context-schema-version");
   }
@@ -702,6 +780,10 @@ export function validatePrinterCommandSendTime(request, context) {
   }
   if (context.active !== true) {
     errors.push("dispatch-context-not-active");
+  }
+  const nowMs = Date.now();
+  if (Number.isFinite(Number(context.expiresAtMs)) && nowMs > Number(context.expiresAtMs)) {
+    errors.push("dispatch-context-expired");
   }
   if (request?.deviceId && context.deviceId !== request.deviceId) {
     errors.push("device-mismatch");
@@ -818,6 +900,7 @@ function normalizeCommandObservation(observation, context) {
     observedSessionId,
     observedJobId: observation?.observedJobId || observedState?.print?.jobId || null,
     fileIdentity: observation?.fileIdentity || context.fileIdentity || null,
+    commandCorrelation: observation?.commandCorrelation || null,
   };
 }
 
@@ -832,20 +915,30 @@ function normalizeCommandObservation(observation, context) {
  * @function dispatchPrinterCommand
  * @param {object} request - command request
  * @param {object=} options - dispatcher options
- * @param {object|Function=} options.context - dispatch context、またはrequestからcontextを返す関数
- * @param {Function=} options.getSendTimeContext - dispatch context 取得hook
+ * @param {Function} options.getSendTimeContext - 送信直前snapshot取得hook
  * @param {Function} options.sendTransport - transport送信hook `(request, context) => Promise<*>`
  * @param {Function=} options.observeState - expected-state確認用観測hook `(request, context, response) => Promise<object>`
  * @param {string=} options.completedAt - result完了時刻ISO文字列
  * @returns {Promise<object>} command result
  * @example
- * const result = await dispatchPrinterCommand(request, { context, sendTransport, observeState });
+ * const result = await dispatchPrinterCommand(request, { getSendTimeContext, sendTransport, observeState });
  */
 export async function dispatchPrinterCommand(request, options = {}) {
-  const contextSource = options.context || options.getSendTimeContext;
-  const context = typeof contextSource === "function"
-    ? await contextSource(request)
-    : contextSource;
+  if (typeof options.getSendTimeContext !== "function") {
+    return createRejectedCommandResult(request, ["missing-send-time-context"]);
+  }
+  const nowMs = typeof options.nowMs === "function" ? Number(options.nowMs()) : Date.now();
+  let context = null;
+  try {
+    const rawContext = await options.getSendTimeContext(request);
+    context = createPrinterCommandDispatchContext({
+      ...(rawContext && typeof rawContext === "object" ? rawContext : {}),
+      issuedAtMs: nowMs,
+      expiresAtMs: nowMs + (Number.isFinite(Number(options.contextTtlMs)) ? Number(options.contextTtlMs) : 1000),
+    });
+  } catch {
+    return createRejectedCommandResult(request, ["invalid-send-time-context"]);
+  }
   const sendTimeValidation = validatePrinterCommandSendTime(request, context);
   if (!sendTimeValidation.ok) {
     return createRejectedCommandResult(request, sendTimeValidation.errors);
@@ -884,25 +977,6 @@ export async function dispatchPrinterCommand(request, options = {}) {
   }
   const normalizedObservation = normalizeCommandObservation(observation, context);
   const sentSequence = normalizeSequence(context.stateSequence);
-  let commandCorrelation = null;
-  if (
-    sentSequence !== null &&
-    normalizedObservation.observedSequence !== null &&
-    normalizedObservation.observedSessionId
-  ) {
-    try {
-      commandCorrelation = createPrinterCommandCorrelationEvidence(request, {
-        sentSequence,
-        observedSequence: normalizedObservation.observedSequence,
-        observedSessionId: normalizedObservation.observedSessionId,
-        evidenceSource: "printer-core-command-dispatcher",
-        observedJobId: normalizedObservation.observedJobId || undefined,
-        fileIdentity: normalizedObservation.fileIdentity?.fileHash || normalizedObservation.fileIdentity?.remotePath || undefined,
-      });
-    } catch {
-      commandCorrelation = null;
-    }
-  }
   return createPrinterCommandResult(request, {
     status: normalizeTransportStatus(response),
     response,
@@ -910,7 +984,7 @@ export async function dispatchPrinterCommand(request, options = {}) {
     sentSequence,
     observedSequence: normalizedObservation.observedSequence,
     observedSessionId: normalizedObservation.observedSessionId,
-    commandCorrelation,
+    commandCorrelation: normalizedObservation.commandCorrelation,
     completedAt: options.completedAt || null,
   });
 }
