@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1374 (PR #432)
+ * @version 1.390.1376 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 19:58:02
+ * @lastModified 2026-08-25 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
@@ -227,6 +227,7 @@ function createElement(documentRef, tagName, className = "", text = "") {
  *
  * 【詳細説明】
  * - ViewModelだけ、またはrenderer optionだけでは操作を許可しない。
+ * - renderer側の`allowedActions`未指定は「全許可」ではなく空許可として扱い、二重whitelistを必須にする。
  * - 実送信前にはcommand dispatcherが再検証するため、ここはUI上の一次disabled判定に限定する。
  *
  * @private
@@ -238,9 +239,7 @@ function createControlPolicy(viewModel, options) {
   const authority = viewModel?.authority || {};
   const optionControl = options?.control && typeof options.control === "object" ? options.control : {};
   const authorityActions = new Set(Array.isArray(authority.allowedActions) ? authority.allowedActions : []);
-  const optionActions = Array.isArray(optionControl.allowedActions) && optionControl.allowedActions.length > 0
-    ? new Set(optionControl.allowedActions)
-    : authorityActions;
+  const optionActions = new Set(Array.isArray(optionControl.allowedActions) ? optionControl.allowedActions : []);
   const allowedActions = new Set([...authorityActions].filter((action) => optionActions.has(action)));
   const hasSendHook = typeof optionControl.onCommand === "function";
   const canSendCommands = authority.canSendCommands === true &&

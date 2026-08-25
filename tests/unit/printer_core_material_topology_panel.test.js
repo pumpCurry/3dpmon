@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1374 (PR #432)
+ * @version 1.390.1376 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 19:58:02
+ * @lastModified 2026-08-25 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -255,6 +255,38 @@ describe("Printer Core v3 material topology panel", () => {
       protocolSlotId: 2,
     });
     expect(container.textContent).toContain("送信直前に再検証");
+  });
+
+  it("renderer側allowedActions未指定ではViewModelが許可していてもCFS操作をdisabledにする", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "feed"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const onCommand = vi.fn();
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        onCommand,
+      },
+    });
+
+    const selectButton = getSlotActionButton(container, "1C", "select");
+    const feedButton = getSlotActionButton(container, "1C", "feed");
+    expect(selectButton?.disabled).toBe(true);
+    expect(feedButton?.disabled).toBe(true);
+
+    selectButton?.click();
+    feedButton?.click();
+
+    expect(onCommand).not.toHaveBeenCalled();
   });
 
   it("stale topologyでは明示authorityがあってもCFS操作をdisabledにする", () => {

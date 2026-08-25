@@ -11,14 +11,14 @@
  * - Printer Core v3 の read-only material topology を UI 表示用の固定スロット構造へ変換
  * - CFS/CFS-C を4スロット単位で最大4ユニット、外部スプール1本を加えた最大16+1表示へ整形
  * - selected、残量、物理状態、assignment、fresh/staleを表示専用の値としてまとめる
- * - 明示的な command authority 証跡がある場合だけ、CFS操作UI用の候補権限を表示モデルへ写す
+ * - 明示的な command UI candidate hint がある場合だけ、CFS操作UI用の候補権限を表示モデルへ写す
  *
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1374 (PR #432)
+ * @version 1.390.1376 (PR #432)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-25 19:58:02
+ * @lastModified 2026-08-25 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -131,10 +131,11 @@ function toNullableBoolean(value) {
  *
  * 【詳細説明】
  * - 既定では必ずread-onlyにし、明示的な`commandAuthority.canSendCommands=true`がある場合だけ候補権限を返す。
+ * - `commandAuthority`は呼び出し側申告のUI表示候補であり、security authorityや送信許可証跡ではない。
  * - ここで返す値はUI表示/disabled判定用であり、実送信時の最終権限はcommand dispatcher側で再検証する。
  *
  * @private
- * @param {object|null|undefined} commandAuthority - 呼び出し側が明示したcommand authority候補
+ * @param {object|null|undefined} commandAuthority - 呼び出し側が明示したcommand UI candidate hint
  * @returns {object} 表示用command authority
  */
 function normalizeCommandAuthorityView(commandAuthority) {
