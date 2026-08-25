@@ -22,9 +22,9 @@
  * - {@link stopAllCameraStreams}：全ホストのカメラを停止
  * - {@link handleCameraError}：接続エラー処理（互換用）
  *
- * @version 1.390.1173 (PR #404)
+ * @version 1.390.1391 (PR #432)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-07-11 11:08:28
+ * @lastModified 2026-08-26 02:02:52
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,6 +45,8 @@ const CAMERA_MAX_RETRY      = 5;
 const DEFAULT_RETRY_DELAY   = 2000;
 /** @constant {number} デフォルトのストリーム提供ポート */
 const DEFAULT_STREAM_PORT   = 8080;
+/** @constant {number} K2系WebRTC camera serviceの既定ポート */
+const DEFAULT_K2_WEBRTC_PORT = 8000;
 /** @constant {number} watchdog タイムアウト (ms) — onload/onerror が来なければ強制的に失敗扱い */
 const CAMERA_WATCHDOG_MS    = 10_000;
 /** @constant {number} リレー子モードでの snapshot ポーリング間隔 既定 (ms) ≈ 0.4FPS */
@@ -78,6 +80,44 @@ function _relayCameraIntervalMs() {
   const v = Number(monitorData.appSettings?.relayCameraIntervalMs);
   const ms = Number.isFinite(v) && v > 0 ? v : RELAY_CAMERA_INTERVAL_MS;
   return Math.max(RELAY_CAMERA_MIN_INTERVAL_MS, ms);
+}
+
+/**
+ * カメラ制御用に保存済みconnectionTargetを取得する。
+ *
+ * 【詳細説明】
+ * - dashboard_connection.js との循環参照を増やさないため、このmoduleでは monitorData から直接引く。
+ * - host名確定前後の両方に対応するため、dest一致、hostname一致、destのhost部一致の順に探す。
+ *
+ * @private
+ * @param {string} host - hostname または接続キー
+ * @returns {object|null} connectionTarget、見つからない場合 null
+ */
+function _findCameraConnectionTarget(host) {
+  const dest = getDeviceDest(host);
+  const hostText = String(host || "").trim();
+  const targets = monitorData.appSettings?.connectionTargets || [];
+  return targets.find((target) => target?.dest === dest) ||
+    targets.find((target) => target?.hostname === hostText) ||
+    targets.find((target) => extractHost(target?.dest || "") === hostText) ||
+    null;
+}
+
+/**
+ * K2系カメラ表示用portを解決する。
+ *
+ * 【詳細説明】
+ * - 明示的なper-host cameraPortを最優先し、未設定ならK2 WebRTC camera serviceとして観測される8000を返す。
+ * - `/info.videoPort` は443を返す個体があるが、従来MJPEG endpointではないためここでは既定portに使わない。
+ *
+ * @private
+ * @param {string} host - hostname または接続キー
+ * @returns {number} K2 camera service port
+ */
+function _resolveK2CameraPort(host) {
+  const target = _findCameraConnectionTarget(host);
+  const port = Number(target?.cameraPort);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : DEFAULT_K2_WEBRTC_PORT;
 }
 
 // ─── ホスト別カメラ状態レジストリ ─────────────────────────────
@@ -307,11 +347,32 @@ function _startCameraStreamNow(host, entry, gen) {
     return;
   }
 
+  /* ★ K2系: 現時点の実機はWebRTC/HTML camera serviceで、K1のMJPEG <img> endpointではない。
+     `http://ip:8000/` は応答するが `/?action=stream` 画像ではないため、ここでK1方式へ
+     フォールバックするとリトライを繰り返し、ユーザーに「故障」または「接続済み」と誤認させる。
+     Printer Core側でWebRTC viewerを実装するまでは、明示的な未対応状態として表示する。 */
+  if (getPrinterType(host) === "creality-k2") {
+    const port = _resolveK2CameraPort(host);
+    entry.streamUrl = `http://${extractHost(ip)}:${port}/`;
+    entry.attempts = 0;
+    entry.cameraPort = port;
+    entry.streamTarget = `${extractHost(ip)}:${port}`;
+    _cancelTimers(entry);
+    _updateUI(entry, "unsupported", {
+      reason: "K2 camera uses WebRTC",
+      url: entry.streamUrl,
+    });
+    pushLog(
+      `K2カメラはWebRTC方式のため、現在のMJPEGカメラパネルでは未対応です (${entry.streamUrl})`,
+      "warn", false, host
+    );
+    return;
+  }
+
   /* カメラポート解決: per-host（connectionTarget.cameraPort）→ グローバル設定 → デフォルト
      connectionTarget の検索は getDeviceDest 経由で dest を取得して行う */
   const dest = getDeviceDest(host);
-  const targets = monitorData.appSettings.connectionTargets || [];
-  const tgt = targets.find(t => t.dest === dest) || targets.find(t => t.hostname === host);
+  const tgt = _findCameraConnectionTarget(host) || { dest };
   const port = tgt?.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_STREAM_PORT;
 
   entry.streamUrl = null;  // K1 はポート方式（override 不使用）
@@ -892,8 +953,8 @@ function _canUseEntry(entry, gen, img = null) {
  *
  * @private
  * @param {CameraPanelEntry} entry
- * @param {"disconnected"|"connecting"|"retrying"|"connected"} state
- * @param {{attempt?:number, max?:number, wait?:number}} [opt={}]
+ * @param {"disconnected"|"connecting"|"retrying"|"connected"|"unsupported"} state
+ * @param {{attempt?:number, max?:number, wait?:number, reason?:string, url?:string}} [opt={}]
  * @returns {void}
  */
 function _updateUI(entry, state, opt = {}) {
@@ -959,6 +1020,19 @@ function _updateUI(entry, state, opt = {}) {
       hide(noSignal);
       hide(spinner);
       hide(cancelBtn);
+      break;
+
+    case "unsupported":
+      if (noSignalMain) noSignalMain.textContent = "K2 CAMERA";
+      if (labelEl) labelEl.textContent = "WebRTCカメラ未対応";
+      if (subEl) subEl.textContent = opt.url
+        ? `カメラサービス: ${opt.url}`
+        : "現在のカメラパネルはMJPEG表示のみ対応です";
+      img?.classList.add("off");
+      statusBox?.classList.remove("hidden");
+      show(noSignal);
+      hide(spinner);
+      show(cancelBtn);
       break;
   }
 

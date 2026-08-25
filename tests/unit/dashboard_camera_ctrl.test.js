@@ -12,6 +12,7 @@ const mockMonitorData = {
   hostCameraToggle: {},
   machines: {}
 };
+const mockPrinterTypes = {};
 
 vi.doMock("../../3dp_lib/dashboard_data.js", () => ({
   monitorData: mockMonitorData,
@@ -36,8 +37,7 @@ vi.doMock("../../3dp_lib/dashboard_connection.js", () => ({
     const m = { "host-A": "192.168.1.10:9999", "host-B": "192.168.1.11:9999" };
     return m[host] || "";
   }),
-  // 既存テストは K1 ホスト前提（Moonraker 分岐に入らない）
-  getPrinterType: vi.fn(() => "creality-k1")
+  getPrinterType: vi.fn((host) => mockPrinterTypes[host] || "creality-k1")
 }));
 
 // グローバル fetch モック（_isServiceDown 用 — 常に成功 = サービス停止していない）
@@ -61,6 +61,13 @@ function createMockBody() {
   const body = document.createElement("div");
   // _updateUI が querySelector で探す要素
   body.innerHTML = `
+    <div class="no-signal"><span class="no-signal-main"></span></div>
+    <div class="camera-status hidden">
+      <span class="camera-status-label"></span>
+      <span class="camera-status-sub"></span>
+      <span class="spinner"></span>
+    </div>
+    <button class="camera-cancel-btn"></button>
     <div data-status="connecting" style="display:none"></div>
     <div data-status="retrying" style="display:none"></div>
     <div data-status="disconnected" style="display:none"></div>
@@ -77,6 +84,10 @@ function flushCameraStart() {
 beforeEach(() => {
   vi.useFakeTimers();
   mockMonitorData.hostCameraToggle = { "host-A": true, "host-B": true };
+  mockMonitorData.appSettings.connectionTargets = [];
+  mockMonitorData.appSettings.cameraPort = 8080;
+  mockPrinterTypes["host-A"] = "creality-k1";
+  mockPrinterTypes["host-B"] = "creality-k1";
 });
 
 afterEach(() => {
@@ -103,6 +114,30 @@ describe("registerCameraPanel — entry 構造", () => {
     // watchdogTimer が設定されているはず → vi.getTimerCount() で確認
     expect(vi.getTimerCount()).toBeGreaterThan(0);
     stopCameraStream("host-A");
+  });
+
+  it("K2 WebRTCカメラはK1 MJPEG URLへ誤接続せず未対応表示にする", () => {
+    mockPrinterTypes["host-A"] = "creality-k2";
+    mockMonitorData.appSettings.connectionTargets = [
+      {
+        dest: "192.168.1.10:9999",
+        hostname: "host-A",
+        printerType: "creality-k2",
+        cameraPort: 8000,
+        cameraProtocol: "k2-webrtc",
+      },
+    ];
+    const img = createMockImg();
+    const body = createMockBody();
+    registerCameraPanel("host-A", img, body, null);
+
+    startCameraStream("host-A");
+    flushCameraStart();
+
+    expect(img.getAttribute("src")).toBeNull();
+    expect(body.querySelector(".no-signal-main")?.textContent).toBe("K2 CAMERA");
+    expect(body.querySelector(".camera-status-label")?.textContent).toBe("WebRTCカメラ未対応");
+    expect(body.querySelector(".camera-status-sub")?.textContent).toContain("http://192.168.1.10:8000/");
   });
 });
 

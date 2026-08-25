@@ -67,6 +67,15 @@ Last updated: 2026-08-26
 - CFS-CのMoonraker object名は `boxsInfo` / `boxs_info` を代表候補とし、実際に存在するobjectだけを購読する。実機firmwareで別名が出た場合はsecondary providerのsubscribe候補だけを追加する。
 - feed、retract、load、unload、slot selectのCRUD/command authorityは引き続き未開放。read-only表示とは別Gateでactual adapter transportを接続し、実機でcommand result、expected state、timeout、side-effect retry guardを満たしてから有効化する。
 
+## K2 Pro Combo アプリ登録 実機確認
+
+- `192.168.54.153` のK2 Pro Combo実機で、接続管理UI相当の `connectWithType("192.168.54.153:9999", "creality-k2")` をElectron rendererから実行し、登録、接続、表示更新を確認した。
+- `/info` は `model:"F012"`、`wssPort:443`、`videoPort:443` を返す。`mac` は有線LAN側を示すため、Wi-Fi接続時の同一性判定ではMAC単独を強い識別子にしない。WS9999のprovisional identityは同一endpointの後続 `/info` serial evidenceで強いidentityへ昇格する。
+- 接続後はhostname `K2Pro-69E7`、printerType `creality-k2`、state `0`、progress `0`、`cfsConnect:1`、Printer Core v3 shadow `observed`、material topology `fresh` を確認した。
+- CFS topologyは外部スプール空、CFS 1台、1A/1B/1C loaded、1D emptyとして観測できた。selected sourceは未選択のため、CFS print-start guardの実機条件として引き続き監視対象にする。
+- 印刷履歴はWS9999 `reqHistory` で35件を取得できた。ファイル一覧はWS9999 `retGcodeFileInfo2` を既存file renderer用entriesへ変換して13件を表示できた。WS応答が遅い場合に備え、K2 read-only HTTP API `http://host:4408/server/history/list` と `http://host:4408/server/files/list?root=gcodes` から補完するfallbackを追加した。
+- カメラについては `http://host:8000/` のcamera serviceは到達可能だが、K1 MJPEG endpointではなくWebRTC/HTML方式として振る舞う。現行カメラパネルはMJPEG `<img>` 前提なので、K2では接続リトライせず `WebRTCカメラ未対応` と表示する。K2カメラ映像の実描画はWebRTC viewer実装の別作業として残す。
+
 ## Gate 20 追加で閉じた command transport 項目
 
 - K2/CFS print-start command requestを、公開OrcaSlicer実装と同じ `set colorMatch` -> `set multiColorPrint` の順序付きWS9999 frameへ変換するtransport planを追加した。

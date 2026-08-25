@@ -78,6 +78,51 @@ describe("dashboard_device_identity_repository", () => {
     expect(toComparablePrinterCoreV3Identity(target.printerCoreV3Identity)).not.toHaveProperty("lastObservedAt");
   });
 
+  it("同一endpointのprovisional WS候補は後続HTTP /info serialで強いidentityへ昇格する", () => {
+    const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test", macAddress: "584146CFFA99" };
+    recordPrinterCoreV3Identity(target, {
+      source: "ws9999",
+      hostname: "K2Pro-Test",
+      model: "F012",
+      mac: "584146CFFA99",
+    }, {
+      hostOrDest: "K2Pro-Test",
+      endpointAddress: "203.0.113.20",
+    });
+
+    const upgraded = recordPrinterCoreV3Identity(target, {
+      source: "http-info",
+      model: "F012",
+      sn: "905251280E69E7",
+      mac: "FCEE280E69E7",
+      version: "1.0.0",
+      wssPort: 443,
+      videoPort: 443,
+    }, {
+      hostOrDest: "K2Pro-Test",
+      endpointAddress: "203.0.113.20",
+    });
+
+    expect(upgraded.changed).toBe(true);
+    expect(upgraded.decision).toEqual({
+      merge: true,
+      confidence: "strong",
+      reason: "same-endpoint-strong-upgrade",
+    });
+    expect(target.printerCoreV3Identity).toMatchObject({
+      deviceIdSeed: "serial:905251280e69e7",
+      identityStrength: "serial",
+      reportedModel: "F012",
+      reportedHostname: "K2Pro-Test",
+    });
+    expect(target.printerCoreV3Identity.endpointAliases.addresses).toEqual(["203.0.113.20"]);
+    expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual([
+      "58:41:46:cf:fa:99",
+      "fc:ee:28:0e:69:e7",
+    ]);
+    expect(target.printerCoreV3PendingIdentityCandidate).toBeUndefined();
+  });
+
   it("serial矛盾はconflictへ隔離し、既存identityを上書きしない", () => {
     const target = { dest: "203.0.113.20:9999", hostname: "K2Pro-Test" };
     recordPrinterCoreV3Identity(target, {

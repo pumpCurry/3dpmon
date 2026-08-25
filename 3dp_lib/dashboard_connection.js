@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1391 (PR #432)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-26 02:02:52
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -66,7 +66,12 @@ import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, recreatePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
-import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
+import {
+  createMoonrakerSession,
+  moonrakerFilesToEntries,
+  moonrakerHistoryToK1,
+  translateK1CommandToMoonraker,
+} from "./dashboard_moonraker.js";
 import { parseDest, normalizeDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import {
   recordPrinterCoreV3Identity,
@@ -104,6 +109,20 @@ import {
 const DEFAULT_WS_PORT = 9999;
 const DEFAULT_CAMERA_PORT = 8080;
 const DEFAULT_HTTP_INFO_PORT = 80;
+/** @constant {number} K2系Fluidd/Moonraker互換read-only APIの既定ポート */
+const DEFAULT_K2_MOONRAKER_HTTP_PORT = 4408;
+/**
+ * K2系のローカルWebRTCカメラページ既定ポート。
+ *
+ * 【詳細説明】
+ * - K1のMJPEGは8080だが、K2 Pro Combo実機では8080は閉じており、8000がWebRTC/HTML
+ *   camera serviceとして応答する。
+ * - `/info.videoPort` はF012実機で443を返すが、これは従来 `<img>` MJPEG endpointではないため、
+ *   connectionTargets[].videoPort へ証跡として保存し、UI用 cameraPort は8000を既定にする。
+ *
+ * @constant {number}
+ */
+const DEFAULT_K2_WEBRTC_CAMERA_PORT = 8000;
 
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
@@ -511,6 +530,74 @@ function _inferCrealityPrinterTypeFromEvidence(evidence, host = "") {
 }
 
 /**
+ * port候補を接続設定へ保存できる正の整数へ正規化する。
+ *
+ * 【詳細説明】
+ * - `/info` や手入力値は文字列になる可能性があるため、保存境界で 1-65535 の整数だけを採用する。
+ * - 0、NaN、配列、object は null にし、既存の手動設定を壊さない。
+ *
+ * @private
+ * @param {*} value - port候補
+ * @returns {?number} 採用できるport番号、または null
+ */
+function _normalizePositivePort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return null;
+  }
+  return port;
+}
+
+/**
+ * HTTP `/info` などから得たtransport hintをconnectionTargetへ保存する。
+ *
+ * 【詳細説明】
+ * - `wssPort` / `videoPort` はPrinter Core v3 identity evidenceにも保存されるが、UIの接続設定からも
+ *   確認できるようtarget直下へread-only hintとして残す。
+ * - K2 Pro Combo(F012)ではK1の8080 MJPEGではなく8000番のWebRTC/HTML camera serviceが開くため、
+ *   cameraPort未設定時だけ8000を既定値として補う。
+ * - `videoPort` は実機で443を返すが、これは従来の `<img src=".../?action=stream">` 互換ではないため、
+ *   cameraPortへそのまま流用せず `videoPort` 証跡として分離する。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @param {object|null|undefined} evidence - `/info` またはWS9999由来の証跡
+ * @param {"creality-k1"|"creality-k2"|null} inferredType - 推定printerType
+ * @returns {boolean} targetを変更した場合 true
+ */
+function _applyConnectionTargetTransportHints(target, evidence, inferredType) {
+  if (!target || target.printerType === "moonraker") {
+    return false;
+  }
+  let changed = false;
+  const wssPort = _normalizePositivePort(evidence?.wssPort);
+  const videoPort = _normalizePositivePort(evidence?.videoPort);
+  if (wssPort !== null && target.wssPort !== wssPort) {
+    target.wssPort = wssPort;
+    changed = true;
+  }
+  if (videoPort !== null && target.videoPort !== videoPort) {
+    target.videoPort = videoPort;
+    changed = true;
+  }
+  if (inferredType === "creality-k2") {
+    if (!target.cameraPort) {
+      target.cameraPort = DEFAULT_K2_WEBRTC_CAMERA_PORT;
+      changed = true;
+    }
+    if (!target.k2MoonrakerHttpPort) {
+      target.k2MoonrakerHttpPort = DEFAULT_K2_MOONRAKER_HTTP_PORT;
+      changed = true;
+    }
+    if (target.cameraProtocol !== "k2-webrtc") {
+      target.cameraProtocol = "k2-webrtc";
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
  * trusted evidence に基づいて保存済み接続先のprinterTypeを昇格する。
  *
  * 【詳細説明】
@@ -541,6 +628,15 @@ function _promoteConnectionTargetPrinterType(target, inferredType) {
   target.materialSystem = previousWasK1Default
     ? createDefaultMaterialSystemSettings("creality-k2")
     : normalizeMaterialSystemSettings(target.materialSystem, "creality-k2");
+  if (!target.cameraPort) {
+    target.cameraPort = DEFAULT_K2_WEBRTC_CAMERA_PORT;
+  }
+  if (!target.k2MoonrakerHttpPort) {
+    target.k2MoonrakerHttpPort = DEFAULT_K2_MOONRAKER_HTTP_PORT;
+  }
+  if (!target.cameraProtocol) {
+    target.cameraProtocol = "k2-webrtc";
+  }
   return true;
 }
 
@@ -588,6 +684,78 @@ function _normalizeMaterialProviderEndpoint(endpoint) {
   }
   const normalized = normalizeDest(raw, { defaultPort: 80 });
   return normalized.ok && normalized.normalizedDest ? normalized.normalizedDest : raw;
+}
+
+/**
+ * K2 `retGcodeFileInfo2` entry のmaterials使用量を数値へ丸める。
+ *
+ * 【詳細説明】
+ * - K2は `materialUsed:"1.0,2.0"` のような複数tool文字列を返すことがある。
+ * - ファイル一覧UIの予定使用量は単一数値を期待するため、カンマ区切り値を合算して表示用の概算値にする。
+ * - 変換不能な場合は `consumables` をフォールバックに使い、どちらも不明なら0にする。
+ *
+ * @private
+ * @param {object|null|undefined} entry - K2 file entry
+ * @returns {number} 表示用の予定使用量
+ */
+function _estimateK2GcodeUsage(entry) {
+  const materialUsed = String(entry?.materialUsed || "").trim();
+  if (materialUsed) {
+    const total = materialUsed
+      .split(",")
+      .map((part) => Number(part.trim()))
+      .filter((value) => Number.isFinite(value))
+      .reduce((sum, value) => sum + value, 0);
+    if (total > 0) {
+      return total;
+    }
+  }
+  const consumables = Number(entry?.consumables);
+  return Number.isFinite(consumables) && consumables > 0 ? consumables : 0;
+}
+
+/**
+ * K2 `retGcodeFileInfo2` を既存ファイル一覧rendererが扱えるentries形式へ変換する。
+ *
+ * 【詳細説明】
+ * - K1互換の `retGcodeFileInfo.fileInfo` 文字列ではなく、K2は配列の `retGcodeFileInfo2` を返す。
+ * - 既存 `renderFileList()` は `entries` 配列なら機種非依存で描画できるため、接続層で最小限のfield名を揃える。
+ * - thumbnail/preview はプリンタ内絶対パスのまま保持し、後続のthumbnail resolverが扱える範囲に留める。
+ *
+ * @private
+ * @param {Array<object>} files - K2 `retGcodeFileInfo2` 配列
+ * @returns {object} `renderFileList()` へ渡すfile info object
+ */
+function _createK2RenderableFileInfo(files) {
+  const entries = (Array.isArray(files) ? files : []).map((entry) => {
+    const filename = String(entry?.path || entry?.filename || entry?.name || "").trim();
+    const basename = String(entry?.name || filename.split(/[\\/]/).pop() || filename).trim();
+    const createTime = Number(entry?.create_time ?? entry?.ctime ?? entry?.mtime);
+    return {
+      basename,
+      filename,
+      size: Number(entry?.file_size ?? entry?.size) || 0,
+      layer: Number(entry?.layer ?? entry?.floorHeight) || 0,
+      mtime: Number.isFinite(createTime) && createTime > 0 ? new Date(createTime * 1000) : null,
+      expect: _estimateK2GcodeUsage(entry),
+      thumbUrl: entry?.thumbnail || entry?.preview || "",
+      filemd5: entry?.filemd5 || "",
+      printCount: 0,
+      usagetime: Number(entry?.timeCost ?? entry?.usagetime) || 0,
+      material: entry?.material || "",
+      materialColors: entry?.materialColors || "",
+      materialIds: entry?.materialIds || "",
+      materialUsed: entry?.materialUsed || "",
+      match: entry?.match || "",
+      sourceProtocol: "retGcodeFileInfo2",
+      raw: entry,
+    };
+  });
+  return {
+    entries,
+    totalNum: entries.length,
+    sourceProtocol: "retGcodeFileInfo2",
+  };
 }
 
 /**
@@ -673,11 +841,17 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
       source: "http-info",
       endpointAddress,
     });
+    const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
+    const transportChanged = _applyConnectionTargetTransportHints(target, body, inferredType);
     _applyInferredConnectionTargetPrinterType(
       target,
-      _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest),
+      inferredType,
       _resolveHostForPanelRefresh(target, dest)
     );
+    if (transportChanged) {
+      saveUnifiedStorage(true);
+      try { updatePrinterListUI(); } catch { /* 初期化前テスト環境では無視する。 */ }
+    }
   } catch (error) {
     console.debug(`[PrinterCoreV3] /info probe skipped (${dest}):`, error?.message || String(error));
   } finally {
@@ -1819,6 +1993,17 @@ export function connectWithType(dest, printerType = "creality-k1") {
   }
   t.printerType = printerType;
   t.materialSystem = normalizeMaterialSystemSettings(t.materialSystem, printerType);
+  if (printerType === "creality-k2") {
+    if (!t.cameraPort) {
+      t.cameraPort = DEFAULT_K2_WEBRTC_CAMERA_PORT;
+    }
+    if (!t.k2MoonrakerHttpPort) {
+      t.k2MoonrakerHttpPort = DEFAULT_K2_MOONRAKER_HTTP_PORT;
+    }
+    if (!t.cameraProtocol) {
+      t.cameraProtocol = "k2-webrtc";
+    }
+  }
   saveUnifiedStorage();
 
   connectWs(d);
@@ -1991,6 +2176,15 @@ function handleSocketMessage(event, host) {
     const resolvedTarget = _findConnectionTarget(st.dest || hostKey);
     const inferredPrinterType = _inferCrealityPrinterTypeFromEvidence(data, hostKey);
     _applyInferredConnectionTargetPrinterType(resolvedTarget, inferredPrinterType, resolvedTarget?.hostname || hostKey);
+    if (
+      inferredPrinterType === "creality-k2" &&
+      resolvedTarget &&
+      !resolvedTarget.wssPort &&
+      st.printerCoreV3HttpInfoRetryAfterK2Status !== true
+    ) {
+      st.printerCoreV3HttpInfoRetryAfterK2Status = true;
+      _probePrinterCoreV3HttpInfo(st.dest || resolvedTarget.dest || hostKey, resolvedTarget.hostname || hostKey);
+    }
     if (resolvedTarget?.hostname) {
       const merged = _mergeStrongHostnameDuplicateTargets(resolvedTarget, resolvedTarget.hostname);
       if (merged) {
@@ -2060,13 +2254,17 @@ function handleSocketMessage(event, host) {
 
 // 7) ファイル一覧の保存・再描画
   try {
-    if (hostReady && data.retGcodeFileInfo) {
+    const k2RenderableFileInfo = Array.isArray(data.retGcodeFileInfo2)
+      ? _createK2RenderableFileInfo(data.retGcodeFileInfo2)
+      : null;
+    const renderableFileInfo = k2RenderableFileInfo || data.retGcodeFileInfo || null;
+    if (hostReady && renderableFileInfo) {
       pushLog("retGcodeFileInfo を受信しました", "info", false, hostKey);
       const baseUrlHttp = `http://${ip}:${httpPort}`;
       /* キャッシュ: パネル未生成時でも後から initHistoryPanel で描画可能にする */
       const machine = monitorData.machines[hostKey];
-      if (machine) machine._cachedFileInfo = data.retGcodeFileInfo;
-      printManager.renderFileList(data.retGcodeFileInfo, baseUrlHttp, hostKey);
+      if (machine) machine._cachedFileInfo = renderableFileInfo;
+      printManager.renderFileList(renderableFileInfo, baseUrlHttp, hostKey);
       /* ファイル一覧受信完了フラグ → reqHistory 送出を許可する */
       const stFile = getState(hostKey);
       stFile.fileInfoReceived = true;
@@ -3153,6 +3351,140 @@ export function getConnectionMap() {
 }
 
 /**
+ * K2補助HTTP API用のbase URLを生成する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo実機は通常の `/info` が80、Fluidd/Moonraker互換APIが4408で応答する。
+ * - K1/Moonraker本体経路へ誤って入れないよう、呼び出し側で `getPrinterType(host)==="creality-k2"` を確認してから使う。
+ *
+ * @private
+ * @param {string} host - hostname または接続キー
+ * @returns {string} K2補助HTTP API base URL、解決不能なら空文字
+ */
+function _getK2MoonrakerFallbackBaseUrl(host) {
+  const ip = getDeviceIp(host);
+  if (!ip) {
+    return "";
+  }
+  const st = connectionMap[host];
+  const target = _findConnectionTarget(st?.dest || host) || _findConnectionTarget(host);
+  const port = _normalizePositivePort(target?.k2MoonrakerHttpPort) || DEFAULT_K2_MOONRAKER_HTTP_PORT;
+  return `http://${ip}:${port}`;
+}
+
+/**
+ * timeout付きでJSON endpointを取得する。
+ *
+ * 【詳細説明】
+ * - Electron renderer / browser の `fetch` を使い、CORSや到達不能時は呼び出し側でfallback失敗として扱う。
+ * - 制御系commandは一切送らず、GET read-only endpointに限定する。
+ *
+ * @private
+ * @param {string} url - 取得URL
+ * @param {number=} timeoutMs - timeout milliseconds
+ * @returns {Promise<object|null>} JSON object、取得不能なら null
+ */
+async function _fetchJsonWithTimeout(url, timeoutMs = 5000) {
+  if (typeof window === "undefined" || typeof window.fetch !== "function") {
+    return null;
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await window.fetch(url, {
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+    if (!response?.ok || typeof response.json !== "function") {
+      return null;
+    }
+    const body = await response.json();
+    return body && typeof body === "object" ? body : null;
+  } catch {
+    return null;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * K2のWS履歴取得が返らない場合にMoonraker互換APIから履歴を補完する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo実機では `http://host:4408/server/history/list` がread-onlyで応答する。
+ * - 既存の履歴UIはK1形のraw historyを受け取るため、Moonraker変換関数を再利用してから渡す。
+ *
+ * @private
+ * @param {string} host - hostname
+ * @returns {Promise<boolean>} 補完できた場合 true
+ */
+async function _fetchK2MoonrakerHistoryFallback(host) {
+  if (getPrinterType(host) !== "creality-k2") {
+    return false;
+  }
+  const baseUrl = _getK2MoonrakerFallbackBaseUrl(host);
+  if (!baseUrl) {
+    return false;
+  }
+  const body = await _fetchJsonWithTimeout(`${baseUrl}/server/history/list`);
+  const jobs = body?.result?.jobs;
+  if (!Array.isArray(jobs)) {
+    return false;
+  }
+  const history = moonrakerHistoryToK1(jobs, baseUrl);
+  printManager.updateHistoryList(history, baseUrl, "print-current-container", host);
+  const st = connectionMap[host];
+  if (st) {
+    st.historyReceived = true;
+  }
+  pushLog(`K2履歴をMoonraker互換APIから補完しました (${history.length}件)`, "info", false, host);
+  return true;
+}
+
+/**
+ * K2のWSファイル一覧取得が返らない場合にMoonraker互換APIからファイル一覧を補完する。
+ *
+ * 【詳細説明】
+ * - `retGcodeFileInfo2` がWS9999から返る個体/タイミングを優先し、timeout後だけHTTP fallbackへ入る。
+ * - metadata個別取得までは行わず、`server/files/list` のpath/size/modifiedだけで一覧表示できる最小entriesを生成する。
+ *
+ * @private
+ * @param {string} host - hostname
+ * @returns {Promise<boolean>} 補完できた場合 true
+ */
+async function _fetchK2MoonrakerFileListFallback(host) {
+  if (getPrinterType(host) !== "creality-k2") {
+    return false;
+  }
+  const baseUrl = _getK2MoonrakerFallbackBaseUrl(host);
+  if (!baseUrl) {
+    return false;
+  }
+  const body = await _fetchJsonWithTimeout(`${baseUrl}/server/files/list?root=gcodes`);
+  const files = body?.result;
+  if (!Array.isArray(files)) {
+    return false;
+  }
+  const entries = moonrakerFilesToEntries(files, {}, baseUrl);
+  const fileInfo = {
+    entries,
+    totalNum: entries.length,
+    sourceProtocol: "k2-moonraker-files-list",
+  };
+  const machine = monitorData.machines[host];
+  if (machine) {
+    machine._cachedFileInfo = fileInfo;
+  }
+  printManager.renderFileList(fileInfo, baseUrl, host);
+  const st = connectionMap[host];
+  if (st) {
+    st.fileInfoReceived = true;
+  }
+  pushLog(`K2ファイル一覧をMoonraker互換APIから補完しました (${entries.length}件)`, "info", false, host);
+  return true;
+}
+
+/**
  * _fetchWithRetry:
  * reqHistory → reqGcodeFile の順でリクエストを送出する。
  * 各リクエストは 6秒タイムアウト × 最大3回リトライ。
@@ -3217,18 +3549,24 @@ function _fetchWithRetry(host) {
 
   // reqHistory → reqGcodeFileInfo の順に送出（500ms 遅延後に開始）
   setTimeout(async () => {
-    await attempt(
+    const historyOk = await attempt(
       "reqHistory", { reqHistory: 1 },
       () => st.historyReceived,
       () => st.historyReqRetry,
       (n) => { st.historyReqRetry = n; }
     );
-    await attempt(
+    if (!historyOk) {
+      await _fetchK2MoonrakerHistoryFallback(host);
+    }
+    const fileOk = await attempt(
       "reqGcodeFile", { reqGcodeFile: 1 },
       () => st.fileInfoReceived,
       () => st.fileReqRetry,
       (n) => { st.fileReqRetry = n; }
     );
+    if (!fileOk) {
+      await _fetchK2MoonrakerFileListFallback(host);
+    }
   }, 500);
 }
 

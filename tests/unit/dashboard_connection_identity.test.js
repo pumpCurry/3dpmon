@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1391 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-26 02:02:52
  *
  * @vitest-environment jsdom
  */
@@ -31,7 +31,11 @@ vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({
 }));
 vi.mock("../../3dp_lib/3dp_dashboard_init.js", () => ({ restorePrintResume: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_msg_handler.js", () => ({ processData: vi.fn() }));
-vi.mock("../../3dp_lib/dashboard_printmanager.js", () => ({}));
+vi.mock("../../3dp_lib/dashboard_printmanager.js", () => ({
+  updateHistoryList: vi.fn(),
+  updateVideoList: vi.fn(),
+  renderFileList: vi.fn(),
+}));
 vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({ showAlert: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_camera_ctrl.js", () => ({
   startCameraStream: vi.fn(), stopCameraStream: vi.fn(),
@@ -46,6 +50,18 @@ vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_moonraker.js", () => ({
   createMoonrakerSession: vi.fn(() => ({ close: vi.fn() })),
+  moonrakerFilesToEntries: vi.fn((files) => (Array.isArray(files) ? files : []).map((file) => ({
+    basename: String(file.path || "").split("/").pop(),
+    filename: file.path,
+    size: Number(file.size || 0),
+    mtime: new Date(Number(file.modified || 0) * 1000),
+    expect: null,
+  }))),
+  moonrakerHistoryToK1: vi.fn((jobs) => (Array.isArray(jobs) ? jobs : []).map((job) => ({
+    id: Math.floor(Number(job.start_time || 0)),
+    filename: job.filename,
+    starttime: Math.floor(Number(job.start_time || 0)),
+  }))),
   translateK1CommandToMoonraker: vi.fn(),
 }));
 vi.mock("../../3dp_lib/printer_core/dashboard_live_shadow.js", () => ({
@@ -87,7 +103,7 @@ class FakeWebSocket {
   send(message) { this.sentMessages.push(message); }
 }
 
-let mod, dataMock, shadowMock, moonrakerMock, msgHandlerMock;
+let mod, dataMock, shadowMock, moonrakerMock, msgHandlerMock, printManagerMock;
 beforeEach(async () => {
   vi.resetModules();
   FakeWebSocket.instances = [];
@@ -100,6 +116,7 @@ beforeEach(async () => {
   shadowMock = await import("../../3dp_lib/printer_core/dashboard_live_shadow.js");
   moonrakerMock = await import("../../3dp_lib/dashboard_moonraker.js");
   msgHandlerMock = await import("../../3dp_lib/dashboard_msg_handler.js");
+  printManagerMock = await import("../../3dp_lib/dashboard_printmanager.js");
   dataMock.monitorData.appSettings.connectionTargets = [];
   dataMock.monitorData.machines = {};
   dataMock.monitorData.hostCameraToggle = {};
@@ -369,6 +386,13 @@ describe("Printer Core v3 identity dry-run", () => {
       wssPort: 443,
       videoPort: 443,
     });
+    expect(target).toMatchObject({
+      printerType: "creality-k2",
+      cameraPort: 8000,
+      cameraProtocol: "k2-webrtc",
+      wssPort: 443,
+      videoPort: 443,
+    });
     expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual([
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
@@ -510,6 +534,8 @@ describe("Printer Core v3 identity dry-run", () => {
     expect(dataMock.monitorData.appSettings.connectionTargets[0]).toMatchObject({
       dest: "203.0.113.30:9999",
       printerType: "creality-k2",
+      cameraPort: 8000,
+      cameraProtocol: "k2-webrtc",
       materialSystem: {
         mode: "auto",
         unitLimit: 1,
@@ -525,6 +551,57 @@ describe("Printer Core v3 identity dry-run", () => {
 
     expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledTimes(2);
     expect(ws.sentMessages).toEqual([]);
+  });
+
+  it("K2 retGcodeFileInfo2を既存ファイル一覧rendererのentries形式へ橋渡しする", () => {
+    mod.connectWithType("203.0.113.31:9999", "creality-k2");
+    dataMock.monitorData.machines["K2Pro-Files"] = { storedData: {}, runtimeData: {}, historyData: [] };
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Files",
+      model: "F012",
+      retGcodeFileInfo2: [
+        {
+          name: "3DBench_PLA_21m.gcode",
+          path: "/mnt/UDISK/printer_data/gcodes/3DBench_PLA_21m.gcode",
+          file_size: 2740121,
+          create_time: 1784086071,
+          timeCost: 1261,
+          consumables: 7468,
+          floorHeight: 25,
+          material: "PLA",
+          materialColors: "#00ff00",
+          materialUsed: "3734.44",
+          thumbnail: "/mnt/UDISK/creality/local_gcode/humbnail/3DBench_PLA_21m.png",
+          match: "T1A=T1B ",
+        },
+      ],
+    }), "203.0.113.31");
+
+    expect(printManagerMock.renderFileList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceProtocol: "retGcodeFileInfo2",
+        totalNum: 1,
+        entries: [
+          expect.objectContaining({
+            basename: "3DBench_PLA_21m.gcode",
+            filename: "/mnt/UDISK/printer_data/gcodes/3DBench_PLA_21m.gcode",
+            size: 2740121,
+            expect: 3734.44,
+            material: "PLA",
+            match: "T1A=T1B ",
+            sourceProtocol: "retGcodeFileInfo2",
+          }),
+        ],
+      }),
+      "http://203.0.113.31:80",
+      "K2Pro-Files"
+    );
+    const machine = dataMock.monitorData.machines["K2Pro-Files"];
+    expect(machine._cachedFileInfo).toMatchObject({
+      sourceProtocol: "retGcodeFileInfo2",
+      totalNum: 1,
+    });
   });
 
   it("F012でK2確定後はhostnameがK2 prefixでない疎なdeltaでもK2 shadowを維持する", () => {

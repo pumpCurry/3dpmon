@@ -54,6 +54,8 @@ managing printer connections. Open it from the title bar.
 2. In the modal, click **Add Connection** to register a new printer.
 3. Enter the printer's IP address or hostname. The port is selected
    automatically for supported models (K1 series: 9999, K2 series: 9999).
+   K2 series printers such as K2 Pro Combo are promoted from `/info` and
+   WS9999 evidence such as model `F012`.
 4. Click **Connect** to establish the WebSocket connection.
 5. Repeat for additional printers. Each printer connects independently.
 
@@ -63,7 +65,13 @@ connection is managed independently with its own reconnection logic.
 ### First Connection
 When launching the dashboard for the first time there is no saved
 network configuration. Use the connection manager to add your first
-printer. Camera images stream from port `8080` by default.
+printer. K1 camera images stream from the MJPEG service on port `8080`
+by default. K2 series printers store the camera service on port `8000`,
+but current K2 firmware exposes it as WebRTC/HTML rather than the K1
+MJPEG endpoint, so the camera panel shows an explicit unsupported state
+instead of retrying a false MJPEG connection. K2 print history and file
+lists are requested over WS9999 first and can fall back to the read-only
+HTTP API on port `4408`.
 
 ## Unlocking Audio
 Most browsers block audio playback until the user interacts with the

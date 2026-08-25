@@ -20,9 +20,9 @@
  * - {@link shouldMergeDeviceIdentity}：二つの識別候補を同一物理機として統合できるか判定
  * - {@link mergeDeviceIdentityCandidate}：二つの識別候補を決定的に統合
  *
- * @version 1.390.1337 (PR #432)
+ * @version 1.390.1391 (PR #432)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-09 01:40:00
+ * @lastModified 2026-08-26 02:02:52
  * -----------------------------------------------------------
  * @todo
  * - Gate 3 以降で authoritative deviceId 生成を hash ベースへ移行する
@@ -437,6 +437,8 @@ function mergeDeviceFingerprint(left, right) {
  * 【詳細説明】
  * - serial の一致は強い一致として統合可能にする。
  * - stableMachineId の一致も統合可能にする。
+ * - 片側がprovisionalで片側がserial/stableを持つ場合、同じendpoint addressで得た証跡なら
+ *   強いidentityへの昇格として統合可能にする。
  * - MAC の一致だけでは NIC 単位一致なので weak として返す。呼び出し側は同一物理機の補助証跡には
  *   使えるが、MAC 不一致だけで分割してはならない。
  * - 両方が provisional の場合は、seed 完全一致のみ統合可能にする。
@@ -478,6 +480,20 @@ export function shouldMergeDeviceIdentity(left, right) {
       merge: true,
       confidence: "strong",
       reason: "stable-machine-id-match",
+    };
+  }
+
+  const rankA = IDENTITY_STRENGTH_RANK[a.identityStrength] ?? IDENTITY_STRENGTH_RANK.unknown;
+  const rankB = IDENTITY_STRENGTH_RANK[b.identityStrength] ?? IDENTITY_STRENGTH_RANK.unknown;
+  const hasStrongSide = rankA >= IDENTITY_STRENGTH_RANK.serial || rankB >= IDENTITY_STRENGTH_RANK.serial;
+  const hasProvisionalSide = a.identityStrength === "provisional" || b.identityStrength === "provisional";
+  const leftAddresses = new Set(a.endpointAliases?.addresses || []);
+  const hasEndpointAddressOverlap = (b.endpointAliases?.addresses || []).some((address) => leftAddresses.has(address));
+  if (hasStrongSide && hasProvisionalSide && hasEndpointAddressOverlap) {
+    return {
+      merge: true,
+      confidence: "strong",
+      reason: "same-endpoint-strong-upgrade",
     };
   }
 
