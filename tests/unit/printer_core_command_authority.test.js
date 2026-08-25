@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1378 (PR #432)
+ * @version 1.390.1379 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-25 21:03:00
+ * @lastModified 2026-08-25 21:20:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -657,6 +657,74 @@ describe("Printer Core v3 command authority contract", () => {
       reason: "confirmed",
     });
     expect(result.postCommandObservation.correlationId).toMatch(/^cmd:/);
+  });
+
+  it("bound dispatcherでもtrusted proofがcommand/sessionへbindされていなければcorrelationを発行しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport: vi.fn().mockResolvedValue({ status: "acknowledged", protocolCommandId: "response:1" }),
+      observeState: vi.fn().mockResolvedValue({
+        observedState: {
+          light: {
+            enabled: true,
+          },
+        },
+        observedSequence: 11,
+        observedSessionId: "session:1",
+        trustedCorrelationProof: {
+          evidenceSource: "ws9999-response",
+          protocolCommandId: "response:1",
+        },
+      }),
+    });
+
+    const result = await dispatcher.dispatch(request);
+
+    expect(result.completed).toBe(false);
+    expect(result.postCommandObservation.commandCorrelated).toBe(false);
+    expect(result.postCommandObservation.reason).toBe("command-correlation-missing");
+  });
+
+  it("bound dispatcherはtransport response IDとproof IDが一致しなければcorrelationを発行しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport: vi.fn().mockResolvedValue({ status: "acknowledged", protocolCommandId: "response:transport" }),
+      observeState: vi.fn().mockResolvedValue({
+        observedState: {
+          light: {
+            enabled: true,
+          },
+        },
+        observedSequence: 11,
+        observedSessionId: "session:1",
+        trustedCorrelationProof: {
+          evidenceSource: "ws9999-response",
+          protocolCommandId: "response:other",
+          commandId: request.commandId,
+          sessionId: "session:1",
+        },
+      }),
+    });
+
+    const result = await dispatcher.dispatch(request);
+
+    expect(result.completed).toBe(false);
+    expect(result.postCommandObservation.commandCorrelated).toBe(false);
+    expect(result.postCommandObservation.reason).toBe("command-correlation-missing");
   });
 
   it("print-startはupload generationとfile identityを送信直前に照合する", async () => {

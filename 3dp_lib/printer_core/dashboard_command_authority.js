@@ -22,9 +22,9 @@
  * - {@link createBoundPrinterCommandDispatcher}：UIからcontext/transportを注入できないbound dispatcherを生成
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1378 (PR #432)
+ * @version 1.390.1379 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-25 21:03:00
+ * @lastModified 2026-08-25 21:20:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -936,22 +936,37 @@ function normalizeTrustedCommandCorrelationProof(proof) {
     return null;
   }
   const evidenceSource = String(proof.evidenceSource || proof.source || "").trim();
-  const protocolCommandId = String(
-    proof.protocolCommandId ||
-    proof.protocolResponseId ||
-    proof.responseId ||
-    proof.transitionId ||
-    ""
-  ).trim();
-  if (!evidenceSource || !protocolCommandId) {
+  const commandId = String(proof.commandId || "").trim();
+  const sessionId = String(proof.sessionId || "").trim();
+  const protocolCommandId = String(proof.protocolCommandId || proof.protocolResponseId || proof.responseId || "").trim();
+  const transitionId = String(proof.transitionId || "").trim();
+  const correlationBindingId = protocolCommandId || transitionId;
+  if (!evidenceSource || !commandId || !sessionId || !correlationBindingId) {
     return null;
   }
   return {
     evidenceSource,
-    protocolCommandId,
-    commandId: proof.commandId ? String(proof.commandId) : null,
-    sessionId: proof.sessionId ? String(proof.sessionId) : null,
+    protocolCommandId: correlationBindingId,
+    bindingKind: protocolCommandId ? "protocol-response" : "state-transition",
+    commandId,
+    sessionId,
   };
+}
+
+/**
+ * transport responseからprotocol command ID候補を取得する。
+ *
+ * 【詳細説明】
+ * - trusted proofがprotocol response IDを根拠にする場合、transportの戻り値と同じIDであることを検査する。
+ *
+ * @private
+ * @param {*} response - transport response
+ * @returns {string|null} protocol command ID、未観測ならnull
+ */
+function getTransportProtocolCommandId(response) {
+  const value = response?.protocolCommandId || response?.protocolResponseId || response?.responseId || response?.requestId || "";
+  const text = String(value).trim();
+  return text || null;
 }
 
 /**
@@ -966,10 +981,11 @@ function normalizeTrustedCommandCorrelationProof(proof) {
  * @param {object} context - dispatcher内部発行context
  * @param {object} observation - 正規化済みobservation
  * @param {number|null} sentSequence - 送信時sequence
+ * @param {*} transportResponse - transport response
  * @param {symbol=} issuerToken - trusted issuer token
  * @returns {object|null} command correlation evidence、またはnull
  */
-function createTrustedCommandCorrelationFromObservation(request, context, observation, sentSequence, issuerToken) {
+function createTrustedCommandCorrelationFromObservation(request, context, observation, sentSequence, transportResponse, issuerToken) {
   if (issuerToken !== TRUSTED_COMMAND_CORRELATION_ISSUER) {
     return null;
   }
@@ -985,10 +1001,17 @@ function createTrustedCommandCorrelationFromObservation(request, context, observ
   if (!observedSessionId || observedSessionId !== context.sessionId || observedSessionId !== request.sessionId) {
     return null;
   }
-  if (proof.commandId && proof.commandId !== request.commandId) {
+  if (proof.commandId !== request.commandId) {
     return null;
   }
-  if (proof.sessionId && proof.sessionId !== context.sessionId) {
+  if (proof.sessionId !== context.sessionId) {
+    return null;
+  }
+  const transportProtocolCommandId = getTransportProtocolCommandId(transportResponse);
+  if (
+    proof.bindingKind === "protocol-response" &&
+    (!transportProtocolCommandId || proof.protocolCommandId !== transportProtocolCommandId)
+  ) {
     return null;
   }
   try {
@@ -1128,6 +1151,7 @@ export async function dispatchPrinterCommand(request, options = {}) {
       context,
       normalizedObservation,
       sentSequence,
+      response,
       options.trustedCorrelationIssuer
     );
   return createPrinterCommandResult(request, {
