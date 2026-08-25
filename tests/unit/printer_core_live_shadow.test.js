@@ -3,9 +3,9 @@
  * @description
  * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
  *
- * @version 1.390.1350 (PR #432)
+ * @version 1.390.1368 (PR #432)
  * @since 1.390.1299 (PR #432)
- * @lastModified 2026-08-09 09:25:00
+ * @lastModified 2026-08-25 00:00:00
  *
  * @vitest-environment jsdom
  */
@@ -20,6 +20,7 @@ import {
   isRecoverableK1LiveShadowObserveError,
   observeK1LiveShadowFrame,
   observeK2LiveShadowFrame,
+  observeMoonrakerCfsMaterialProviderFrame,
   resolveK1LiveShadowDeviceId,
 } from "../../3dp_lib/printer_core/dashboard_live_shadow.js";
 import { PRINTER_FACADE_ERROR_CODES } from "../../3dp_lib/printer_core/dashboard_printer_facade.js";
@@ -457,6 +458,108 @@ describe("Printer Core v3 K1 live shadow", () => {
       printerFamily: "k2",
       sessionId,
       lastSequence: 2,
+    });
+  });
+
+  it("K2 CFS topologyの観測時刻はboxsInfo実受信時だけ更新し通常statusでは延命しない", () => {
+    const host = "K2Pro-Live-Freshness";
+    const deviceId = "host:K2Pro-Live-Freshness";
+    const sessionId = "k2-live:freshness";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    const materialRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        hostname: host,
+        model: "F012",
+        cfsConnect: 1,
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", name: "Silver PLA", percent: 54 },
+              ],
+            },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    expect(materialRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(materialRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+
+    const statusRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        nozzleTemp: "35.0",
+        printProgress: 10,
+      },
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    expect(statusRecord.lastObservedAt).toBe("2026-08-07T08:16:04.000Z");
+    expect(statusRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(statusRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(statusRecord.lastState.materials.sources[0].material.name).toBe("Silver PLA");
+  });
+
+  it("CFS-C secondary provider切断時はlast-known topologyを空にせずstale化する", () => {
+    const host = "K1C-CFSC-Live";
+    setMachine(host);
+
+    const observed = observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54, selected: 1 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:test",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    expect(observed.lastState.materials.sources[0]).toMatchObject({
+      sourceId: "cfs:1:slot:2",
+      material: {
+        name: "Silver PLA",
+      },
+    });
+
+    const stale = observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: null,
+      providerSessionId: "material-provider:test",
+      connected: false,
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    expect(stale.lastState.materials.sources[0]).toMatchObject({
+      sourceId: "cfs:1:slot:2",
+      material: {
+        name: "Silver PLA",
+      },
+    });
+    expect(stale.lastState.materials.cfs).toMatchObject({
+      connected: false,
+      topologyState: "stale",
     });
   });
 

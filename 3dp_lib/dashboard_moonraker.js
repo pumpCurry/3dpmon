@@ -752,6 +752,7 @@ export function translateK1CommandToMoonraker(method, params = {}) {
  * @param {function(string, string):void} [opts.onGcode] - gcode コンソール行 (line, resolvedHost)
  * @param {function(Object, string):void} [opts.onMaterial] - CFS-C material payload通知
  * @param {Object<string,(null|string[])>=} [opts.materialSubscribeObjects] - CFS-C追加subscribe object候補
+ * @param {boolean=} [opts.materialOnly=false] - material provider専用sessionとして通常状態/履歴取得を省くか
  * @param {string} [opts.httpBase] - サムネイル/ファイル取得用 "http://IP:PORT"
  * @param {function():boolean} opts.shouldReconnect - 再接続を許可するか判定する述語
  * @returns {{close: function():void, request: function(string, Object=):Promise<*>}}
@@ -768,13 +769,19 @@ export function createMoonrakerSession(opts) {
     onGcode = () => {},
     onMaterial = null,
     materialSubscribeObjects = null,
+    materialOnly = false,
     httpBase = "",
     shouldReconnect = () => false,
   } = opts || {};
-  const subscribeObjects = {
-    ...MOONRAKER_SUBSCRIBE_OBJECTS,
-    ...(materialSubscribeObjects && typeof materialSubscribeObjects === "object" ? materialSubscribeObjects : {}),
-  };
+  const materialObjectCandidates = materialSubscribeObjects && typeof materialSubscribeObjects === "object"
+    ? materialSubscribeObjects
+    : {};
+  const subscribeObjects = materialOnly
+    ? { ...materialObjectCandidates }
+    : {
+        ...MOONRAKER_SUBSCRIBE_OBJECTS,
+        ...materialObjectCandidates,
+      };
 
   /** @type {MoonrakerTranslateContext} 翻訳コンテキスト(再接続後も維持) */
   const ctx = {
@@ -849,6 +856,9 @@ export function createMoonrakerSession(opts) {
    * @returns {void}
    */
   const emit = () => {
+    if (materialOnly) {
+      return;
+    }
     try {
       const k1 = translateMoonrakerStatus(accStatus, ctx, Date.now());
       onData(k1);
@@ -986,13 +996,24 @@ export function createMoonrakerSession(opts) {
     if (msg.id != null && pending.has(msg.id)) {
       const tag = pending.get(msg.id);
       pending.delete(msg.id);
+      if (msg.error) {
+        onLog(`[moonraker] ${tag} RPC エラー: ${msg.error.message || "rpc error"}`, tag === "subscribe" ? "error" : "warn");
+        if (tag === "subscribe" || tag === "material-objects-list") {
+          onState("disconnected");
+        }
+        return;
+      }
       const result = msg.result;
       if (tag === "info" && result) {
         ctx.hostname = result.hostname || fallbackHost;
         onLog(`[moonraker] 機器ホスト名を取得: ${ctx.hostname}`, "info");
-        // 温度上限取得 → 状態購読 の順に開始
-        send("printer.objects.query", { objects: { configfile: ["settings"] } }, "config");
-        send("printer.objects.subscribe", { objects: subscribeObjects }, "subscribe");
+        if (materialOnly) {
+          send("printer.objects.list", {}, "material-objects-list");
+        } else {
+          // 温度上限取得 → 状態購読 の順に開始
+          send("printer.objects.query", { objects: { configfile: ["settings"] } }, "config");
+          send("printer.objects.subscribe", { objects: subscribeObjects }, "subscribe");
+        }
       } else if (tag === "config" && result?.status?.configfile?.settings) {
         const st = result.status.configfile.settings;
         const en = Number(st?.extruder?.max_temp);
@@ -1000,10 +1021,27 @@ export function createMoonrakerSession(opts) {
         if (Number.isFinite(en)) ctx.maxNozzleTemp = en;
         if (Number.isFinite(bn)) ctx.maxBedTemp = bn;
         onLog(`[moonraker] 温度上限 nozzle=${ctx.maxNozzleTemp} bed=${ctx.maxBedTemp}`, "info");
+      } else if (tag === "material-objects-list") {
+        const availableObjects = new Set(Array.isArray(result?.objects) ? result.objects : []);
+        const selectedObjects = {};
+        for (const [objectName, fields] of Object.entries(subscribeObjects)) {
+          if (availableObjects.has(objectName)) {
+            selectedObjects[objectName] = fields;
+          }
+        }
+        if (Object.keys(selectedObjects).length === 0) {
+          onLog("[moonraker] CFS-C material object が見つかりません", "warn");
+          onState("disconnected");
+          return;
+        }
+        send("printer.objects.subscribe", { objects: selectedObjects }, "subscribe");
       } else if (tag === "subscribe" && result?.status) {
         // 初期スナップショット
         mergeMoonrakerStatus(accStatus, result.status);
         emitMaterial(result.status);
+        if (materialOnly) {
+          return;
+        }
         maybeFetchMeta();
         // ★ 印刷中ジョブID(=開始時刻)の再採番防止:
         //   先に履歴を取得して進行中ジョブの「実 start_time」を ctx.job.startEpoch へ確定
@@ -1035,6 +1073,9 @@ export function createMoonrakerSession(opts) {
       const partialStatus = msg.params[0] || {};
       mergeMoonrakerStatus(accStatus, partialStatus);
       emitMaterial(partialStatus);
+      if (materialOnly) {
+        return;
+      }
       maybeFetchMeta();
       emit();
     } else if (msg.method === "notify_klippy_shutdown" || msg.method === "notify_klippy_disconnected") {

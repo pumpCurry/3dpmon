@@ -432,6 +432,7 @@ describe("Printer Core v3 identity dry-run", () => {
     expect(providerCall[0]).toMatchObject({
       url: "ws://198.51.100.20:80/websocket",
       fallbackHost: "K1C-CFSC",
+      materialOnly: true,
       materialSubscribeObjects: {
         boxsInfo: null,
         boxs_info: null,

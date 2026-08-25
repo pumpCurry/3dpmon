@@ -1,5 +1,25 @@
 /**
- * @fileoverview capture_protocol_fixture.mjs の単体テスト
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 capture_protocol_fixture CLI 単体テスト
+ * @file capture_protocol_fixture.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module capture_protocol_fixture_test
+ *
+ * 【機能内容サマリ】
+ * - capture_protocol_fixture.mjs の引数解析、marker処理、fixture書き込み契約を検証する。
+ * - Windows環境での一時fixture cleanup揺れを後始末問題として隔離する。
+ *
+ * 【公開関数一覧】
+ * - {@link removeTestPathBestEffort}：テスト用一時パスをbest-effortで削除する。
+ *
+ * @version 1.390.1368 (PR #432)
+ * @since   1.390.1368 (PR #432)
+ * @lastModified 2026-08-25 00:00:00
+ * -----------------------------------------------------------
+ * @todo
+ * - なし
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +37,31 @@ import {
   recordInteractiveMarkerLine,
   sendReadOnlyBoxsInfoProbe,
 } from "../../scripts/capture_protocol_fixture.mjs";
+
+/**
+ * テスト用一時ディレクトリを可能な範囲で削除する。
+ *
+ * 【詳細説明】
+ * - Windows 環境では失敗fixtureを書き込んだ直後に短時間だけファイルハンドルが残り、
+ *   検証自体は完了していても後始末の rmdir が EBUSY になることがある。
+ * - 後始末の失敗で capture contract のテスト結果を揺らさないため、EBUSY/EPERM だけは
+ *   best-effort cleanup として許容し、実装上の誤ったパス指定などは通常どおり再throwする。
+ *
+ * @function removeTestPathBestEffort
+ * @param {string} targetPath - 削除対象の一時ファイルまたは一時ディレクトリの絶対パス。
+ * @returns {void} - 削除できた場合、またはWindowsの一時ロックで削除を見送った場合に戻る。
+ * @throws {Error} - EBUSY/EPERM以外の削除失敗が発生した場合。
+ */
+function removeTestPathBestEffort(targetPath) {
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    if (error?.code === "EBUSY" || error?.code === "EPERM") {
+      return;
+    }
+    throw error;
+  }
+}
 
 describe("capture_protocol_fixture CLI helpers", () => {
   it("必須引数とskip系オプションを解析する", () => {
@@ -226,7 +271,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
     expect(result.failedOutDir).toBeNull();
     expect(fs.readFileSync(path.join(outDir, "capture.json"), "utf8")).toBe("{\"existing\":true}\n");
 
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTestPathBestEffort(root);
   });
 
   it("成功captureは3ファイルだけを置換しnotes.mdなどの付随ファイルを保持する", async () => {
@@ -294,7 +339,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
       },
     });
 
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTestPathBestEffort(root);
   });
 
   it("interactive markerのprovenanceを固定しparse errorへ入力断片を保存しない", () => {
@@ -391,7 +436,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
       missing: [],
     });
 
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTestPathBestEffort(root);
   });
 
   it("未発火の予約markerがあるcaptureは成功扱いにしない", async () => {
@@ -440,7 +485,7 @@ describe("capture_protocol_fixture CLI helpers", () => {
     const failedCapture = JSON.parse(fs.readFileSync(path.join(result.failedOutDir, "capture.json"), "utf8"));
     expect(failedCapture.metadata.validation.markers.missing).toEqual([{ index: 0, atMs: 200 }]);
 
-    fs.rmSync(result.failedOutDir, { recursive: true, force: true });
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTestPathBestEffort(result.failedOutDir);
+    removeTestPathBestEffort(root);
   });
 });

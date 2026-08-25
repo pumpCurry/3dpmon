@@ -8,6 +8,10 @@
  *
  * フィクスチャは実機 Ideaformer IR3 v2 (Klipper v2.0.1 / Moonraker v0.9.2,
  * 192.168.54.15) から取得した実データを使用する。
+ *
+ * @version 1.390.1368 (PR #432)
+ * @since 1.390.1119 (PR #385)
+ * @lastModified 2026-08-25 00:00:00
  */
 import { describe, it, expect } from 'vitest';
 
@@ -39,6 +43,7 @@ import {
   moonrakerHistoryToK1,
   moonrakerFilesToEntries,
   translateK1CommandToMoonraker,
+  createMoonrakerSession,
   MOONRAKER_DEFAULT_MAX_NOZZLE,
   MOONRAKER_DEFAULT_MAX_BED,
 } from '../../3dp_lib/dashboard_moonraker.js';
@@ -789,5 +794,128 @@ describe('translateMoonrakerStatus 機器情報(制限/速度/流量)', () => {
     );
     expect(bare.velocityLimits).toBeUndefined();
     expect(bare.curFeedratePct).toBeUndefined();
+  });
+});
+
+// =============================================================
+// CFS-C material-only Moonraker session
+// =============================================================
+
+class FakeMoonrakerWebSocket {
+  static OPEN = 1;
+  static instances = [];
+
+  constructor(url) {
+    this.url = url;
+    this.readyState = FakeMoonrakerWebSocket.OPEN;
+    this.sent = [];
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this.onclose = null;
+    FakeMoonrakerWebSocket.instances.push(this);
+  }
+
+  send(message) {
+    this.sent.push(JSON.parse(message));
+  }
+
+  close() {
+    this.readyState = 3;
+    if (typeof this.onclose === 'function') {
+      this.onclose();
+    }
+  }
+}
+
+/**
+ * Fake Moonraker websocketへRPC応答を注入する。
+ *
+ * @function replyMoonrakerRpc
+ * @param {FakeMoonrakerWebSocket} ws - fake websocket
+ * @param {number} id - JSON-RPC id
+ * @param {object} payload - result/errorを含む応答payload
+ * @returns {void}
+ */
+function replyMoonrakerRpc(ws, id, payload) {
+  ws.onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id, ...payload }) });
+}
+
+describe('createMoonrakerSession material-only provider', () => {
+  it('objects.listで存在するCFS-C material objectだけをsubscribeする', () => {
+    const originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = FakeMoonrakerWebSocket;
+    FakeMoonrakerWebSocket.instances = [];
+    const onMaterial = vi.fn();
+    try {
+      createMoonrakerSession({
+        url: 'ws://198.51.100.20:80/websocket',
+        fallbackHost: 'K1C-CFSC',
+        materialOnly: true,
+        materialSubscribeObjects: {
+          boxsInfo: null,
+          boxs_info: null,
+        },
+        onMaterial,
+        onState: vi.fn(),
+      });
+      const ws = FakeMoonrakerWebSocket.instances[0];
+      ws.onopen();
+      expect(ws.sent[0]).toMatchObject({ method: 'printer.info' });
+
+      replyMoonrakerRpc(ws, ws.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      expect(ws.sent[1]).toMatchObject({ method: 'printer.objects.list' });
+
+      replyMoonrakerRpc(ws, ws.sent[1].id, { result: { objects: ['extruder', 'boxs_info'] } });
+      expect(ws.sent[2]).toMatchObject({
+        method: 'printer.objects.subscribe',
+        params: {
+          objects: {
+            boxs_info: null,
+          },
+        },
+      });
+
+      replyMoonrakerRpc(ws, ws.sent[2].id, {
+        result: {
+          status: {
+            boxs_info: { materialBoxs: [] },
+          },
+        },
+      });
+      expect(onMaterial).toHaveBeenCalledWith({ materialBoxs: [] }, 'K1C-CFSC');
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it('material subscribe errorを無言で握りつぶさずdisconnected通知する', () => {
+    const originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = FakeMoonrakerWebSocket;
+    FakeMoonrakerWebSocket.instances = [];
+    const onState = vi.fn();
+    const onLog = vi.fn();
+    try {
+      createMoonrakerSession({
+        url: 'ws://198.51.100.21:80/websocket',
+        fallbackHost: 'K1C-CFSC',
+        materialOnly: true,
+        materialSubscribeObjects: {
+          boxsInfo: null,
+        },
+        onState,
+        onLog,
+      });
+      const ws = FakeMoonrakerWebSocket.instances[0];
+      ws.onopen();
+      replyMoonrakerRpc(ws, ws.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      replyMoonrakerRpc(ws, ws.sent[1].id, { result: { objects: ['boxsInfo'] } });
+      replyMoonrakerRpc(ws, ws.sent[2].id, { error: { message: 'unknown object' } });
+
+      expect(onLog).toHaveBeenCalledWith(expect.stringContaining('subscribe RPC エラー'), 'error');
+      expect(onState).toHaveBeenCalledWith('disconnected');
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
   });
 });

@@ -138,6 +138,35 @@ function emitMaterialTopologyUpdated(host) {
 }
 
 /**
+ * material topologyを表示用にstale化する。
+ *
+ * 【詳細説明】
+ * - provider切断やtransport終了は「新しい空topologyの観測」ではなく、
+ *   「最後に観測したtopologyの鮮度低下」として扱う。
+ *
+ * @private
+ * @param {object|null|undefined} topology - 直前のmaterial topology
+ * @returns {object|null} stale化したtopology、元topologyが無ければ null
+ */
+function markMaterialTopologyStale(topology) {
+  if (!topology || typeof topology !== "object") {
+    return null;
+  }
+  return {
+    ...topology,
+    cfs: {
+      ...(topology.cfs || {}),
+      connected: false,
+      topologyState: "stale",
+    },
+    provider: {
+      ...(topology.provider || {}),
+      freshness: "stale",
+    },
+  };
+}
+
+/**
  * live shadow 用 ID 部品を安全な文字列へ変換する。
  *
  * 【詳細説明】
@@ -1291,6 +1320,25 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
   const machine = getMachineForShadow(host);
   const previous = machine?.runtimeData?.printerCoreV3Shadow || {};
   const lastObservedAt = state.source?.receivedAt ?? options.receivedAt ?? new Date().toISOString();
+  const hasBoxsInfoFrame = hasOwn(options.frame, "boxsInfo") && options.frame?.boxsInfo && typeof options.frame.boxsInfo === "object";
+  const previousMaterialObservedAt = previous.materialProviderLastObservedAt ||
+    previous.lastState?.materials?.provider?.lastObservedAt ||
+    null;
+  const materialProviderLastObservedAt = hasBoxsInfoFrame
+    ? lastObservedAt
+    : previousMaterialObservedAt;
+  const materials = state.materials && materialProviderLastObservedAt
+    ? {
+        ...state.materials,
+        provider: {
+          ...(state.materials.provider || {}),
+          lastObservedAt: materialProviderLastObservedAt,
+        },
+      }
+    : state.materials;
+  const lastState = materials && materials !== state.materials
+    ? { ...state, materials }
+    : state;
   const record = {
     schemaVersion: PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION,
     enabled: true,
@@ -1305,16 +1353,17 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     lastDiffs: [],
     lastObservedAt,
     lastSequence: state.source?.sequence ?? null,
-    lastState: state,
-    cfsConnected: state.materials?.cfs?.connected ?? null,
-    cfsTopologyState: state.materials?.cfs?.topologyState ?? null,
-    cfsSourceCount: Array.isArray(state.materials?.sources) ? state.materials.sources.length : 0,
-    cfsAssignmentCount: Array.isArray(state.materials?.assignments) ? state.materials.assignments.length : 0,
+    lastState,
+    materialProviderLastObservedAt,
+    cfsConnected: materials?.cfs?.connected ?? null,
+    cfsTopologyState: materials?.cfs?.topologyState ?? null,
+    cfsSourceCount: Array.isArray(materials?.sources) ? materials.sources.length : 0,
+    cfsAssignmentCount: Array.isArray(materials?.assignments) ? materials.assignments.length : 0,
   };
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }
-  if (state.materials) {
+  if (materials) {
     emitMaterialTopologyUpdated(host);
   }
   if (monitorData.appSettings?.logLevel === "debug") {
@@ -1360,13 +1409,16 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
   const provider = dependencies.materialProvider || cfsMoonrakerMaterialProvider;
   const receivedAt = options.receivedAt || new Date().toISOString();
   const connected = options.connected !== false;
-  const topology = provider.createTopology(options.payload, {
-    connected,
-    receivedAt,
-  });
   const previousLastState = previous.lastState && typeof previous.lastState === "object"
     ? previous.lastState
     : {};
+  const hasPayload = options.payload && typeof options.payload === "object";
+  const topology = !connected && !hasPayload
+    ? markMaterialTopologyStale(previousLastState.materials)
+    : provider.createTopology(options.payload, {
+        connected,
+        receivedAt,
+      });
   const providerSessionId = String(options.providerSessionId || previous.providerSessionId || `material-provider:${host}`);
   const record = {
     ...previous,

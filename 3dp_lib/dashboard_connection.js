@@ -954,6 +954,7 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     fallbackHost: host,
     httpBase: `${httpProtocol}${endpoint}`,
     materialSubscribeObjects: CFS_C_MOONRAKER_MATERIAL_OBJECTS,
+    materialOnly: true,
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
     onState: (sessionState) => {
       if (sessionState === "disconnected") {
