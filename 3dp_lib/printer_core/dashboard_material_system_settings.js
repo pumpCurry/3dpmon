@@ -17,10 +17,11 @@
  * - {@link normalizeMaterialSystemSettings}：保存済み設定を安全なshapeへ正規化
  * - {@link resolveMaterialDisplayMode}：フィラメントパネルの表示方式を決定
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
+ * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1366 (PR #432)
+ * @version 1.390.1368 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 19:37:13
+ * @lastModified 2026-08-25 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -104,6 +105,17 @@ export const MATERIAL_SLOTS_PER_UNIT = 4;
  * @constant {number}
  */
 export const MATERIAL_EXTERNAL_SOURCE_LIMIT = 1;
+
+/**
+ * material topology を「現在値」と見なす最大経過時間。
+ *
+ * 【詳細説明】
+ * - CFS/CFS-Cの装填/選択/残量は人間が監視する情報なので、通信停止後もfresh表示のまま残すと
+ *   「現在選択中」と誤読される。45秒を超えた観測値は表示側でstaleへ落とす。
+ *
+ * @constant {number}
+ */
+export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 45_000;
 
 /**
  * 配列内の許可値に一致する文字列だけを返す。
@@ -202,6 +214,7 @@ export function createDefaultMaterialSystemSettings(printerType = "creality-k1")
       : MATERIAL_SYSTEM_MODE.SINGLE_SPOOL,
     displayMode: MATERIAL_DISPLAY_MODE.AUTO,
     provider: MATERIAL_PROVIDER_MODE.AUTO,
+    providerEndpoint: "",
     unitLimit: defaultUnitLimit,
     slotsPerUnit: MATERIAL_SLOTS_PER_UNIT,
     externalSourceLimit: MATERIAL_EXTERNAL_SOURCE_LIMIT,
@@ -244,12 +257,105 @@ export function normalizeMaterialSystemSettings(settings, printerType = "crealit
       Object.values(MATERIAL_PROVIDER_MODE),
       defaults.provider
     ),
+    providerEndpoint: typeof source.providerEndpoint === "string"
+      ? source.providerEndpoint.trim()
+      : defaults.providerEndpoint,
     unitLimit: normalizeUnitLimit(source.unitLimit, defaults.unitLimit),
     slotsPerUnit: Math.max(0, Math.min(MATERIAL_SLOTS_PER_UNIT, Number.isFinite(Number(source.slotsPerUnit)) ? Math.floor(Number(source.slotsPerUnit)) : defaults.slotsPerUnit)),
     externalSourceLimit: Math.max(0, Math.min(MATERIAL_EXTERNAL_SOURCE_LIMIT, Number.isFinite(Number(source.externalSourceLimit)) ? Math.floor(Number(source.externalSourceLimit)) : defaults.externalSourceLimit)),
     readOnly: true,
     canSendCommands: false,
     canDriveLedger: false,
+  };
+}
+
+/**
+ * material topologyの観測時刻をepoch msへ変換する。
+ *
+ * 【詳細説明】
+ * - live shadow recordの `lastObservedAt` と topology provider metadata の双方を扱う。
+ * - 日付文字列が不正な場合は `null` にし、fresh判定へ使わない。
+ *
+ * @private
+ * @param {*} value - ISO日時、epoch ms、または不正値
+ * @returns {number|null} epoch ms、判断不能なら null
+ */
+function parseObservedAtMs(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * runtime鮮度を反映した表示用material topologyを返す。
+ *
+ * 【詳細説明】
+ * - live shadowがclosed、または最後の観測からTTLを超えた場合、topology自体は残しつつ
+ *   `cfs.topologyState:"stale"` と診断を付ける。これにより「最後に観測したslot/残量」を
+ *   現在値と誤認しない表示へ切り替えられる。
+ * - 返値は表示専用の浅いcloneで、runtimeDataに保存された証拠topologyは書き換えない。
+ *
+ * @function resolveDisplayMaterialTopology
+ * @param {object} options - 表示用topology生成オプション
+ * @param {object|null|undefined} options.topology - runtimeData上のNormalized material topology
+ * @param {object|null|undefined} options.shadowRecord - runtimeData.printerCoreV3Shadow record
+ * @param {number=} options.nowMs - 現在時刻epoch ms
+ * @param {number=} options.ttlMs - freshと見なす最大経過時間
+ * @returns {object|null} 表示用topology、未観測なら null
+ * @example
+ * const displayTopology = resolveDisplayMaterialTopology({ topology, shadowRecord });
+ */
+export function resolveDisplayMaterialTopology({
+  topology = null,
+  shadowRecord = null,
+  nowMs = Date.now(),
+  ttlMs = MATERIAL_TOPOLOGY_FRESH_TTL_MS,
+} = {}) {
+  if (!topology || typeof topology !== "object") {
+    return null;
+  }
+  const observedAtMs = parseObservedAtMs(
+    topology.provider?.lastObservedAt ??
+    shadowRecord?.materialProviderLastObservedAt ??
+    topology.source?.receivedAt ??
+    shadowRecord?.lastObservedAt
+  );
+  const closed = shadowRecord?.state === "closed";
+  const expired = observedAtMs == null || (Number.isFinite(nowMs) && nowMs - observedAtMs > ttlMs);
+  const alreadyStale = topology.cfs?.topologyState === "stale";
+  if (!closed && !expired && !alreadyStale) {
+    return topology;
+  }
+  const diagnostics = Array.isArray(topology.diagnostics) ? topology.diagnostics.slice() : [];
+  const hasFreshnessDiagnostic = diagnostics.some((entry) => entry?.code === "material-topology-stale");
+  if (!hasFreshnessDiagnostic) {
+    diagnostics.push({
+      code: "material-topology-stale",
+      severity: "warn",
+      message: closed
+        ? "CFS/CFS-C connection is closed; values are last observed."
+        : "CFS/CFS-C topology observation is stale; values are last observed.",
+      lastObservedAt: observedAtMs != null ? new Date(observedAtMs).toISOString() : null,
+    });
+  }
+  return {
+    ...topology,
+    cfs: {
+      ...(topology.cfs || {}),
+      connected: false,
+      topologyState: "stale",
+    },
+    provider: {
+      ...(topology.provider || {}),
+      freshness: "stale",
+    },
+    diagnostics,
   };
 }
 

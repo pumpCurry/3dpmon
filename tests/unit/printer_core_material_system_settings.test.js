@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1366 (PR #432)
+ * @version 1.390.1368 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 19:37:13
+ * @lastModified 2026-08-25 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -26,8 +26,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MATERIAL_DISPLAY_MODE,
+  MATERIAL_PROVIDER_MODE,
   MATERIAL_SYSTEM_MODE,
   normalizeMaterialSystemSettings,
+  resolveDisplayMaterialTopology,
   resolveMaterialDisplayMode,
   resolveMaterialTopologyViewOptions,
 } from "../../3dp_lib/printer_core/dashboard_material_system_settings.js";
@@ -188,5 +190,59 @@ describe("Printer Core v3 material system settings", () => {
     expect(resolveMaterialTopologyViewOptions({ target, printerType: "creality-k1", topology })).toMatchObject({
       unitLimit: 3,
     });
+  });
+
+  it("CFS-C provider endpointを保存し、provider指定を維持する", () => {
+    const normalized = normalizeMaterialSystemSettings({
+      mode: MATERIAL_SYSTEM_MODE.CFS_C_READONLY,
+      provider: MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO,
+      providerEndpoint: " 192.168.54.150:80 ",
+      unitLimit: 2,
+    }, "creality-k1");
+
+    expect(normalized).toMatchObject({
+      mode: MATERIAL_SYSTEM_MODE.CFS_C_READONLY,
+      provider: MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO,
+      providerEndpoint: "192.168.54.150:80",
+      unitLimit: 2,
+      readOnly: true,
+      canSendCommands: false,
+      canDriveLedger: false,
+    });
+  });
+
+  it("closedなruntime recordはtopologyをstale表示へ落とす", () => {
+    const topology = createObservedTopology(1);
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology,
+      shadowRecord: {
+        state: "closed",
+        lastObservedAt: "2026-08-25T00:00:00.000Z",
+      },
+      nowMs: Date.parse("2026-08-25T00:00:01.000Z"),
+    });
+
+    expect(displayTopology).not.toBe(topology);
+    expect(displayTopology.cfs).toMatchObject({
+      connected: false,
+      topologyState: "stale",
+    });
+    expect(displayTopology.diagnostics.some((entry) => entry.code === "material-topology-stale")).toBe(true);
+  });
+
+  it("TTLを超えたruntime recordはfresh topologyでもstale表示へ落とす", () => {
+    const topology = createObservedTopology(1);
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology,
+      shadowRecord: {
+        state: "observed",
+        lastObservedAt: "2026-08-25T00:00:00.000Z",
+      },
+      nowMs: Date.parse("2026-08-25T00:02:00.000Z"),
+      ttlMs: 45_000,
+    });
+
+    expect(displayTopology.cfs.topologyState).toBe("stale");
+    expect(displayTopology.provider.freshness).toBe("stale");
   });
 });

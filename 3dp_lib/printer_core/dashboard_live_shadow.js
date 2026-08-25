@@ -19,12 +19,13 @@
  * - {@link beginK2LiveShadowSession}：K2 live shadow session を開始
  * - {@link observeK1LiveShadowFrame}：K1 live frame を v3 state へ反映し legacy differential を記録
  * - {@link observeK2LiveShadowFrame}：K2 live frame を v3 state へ反映し material topology を記録
+ * - {@link observeMoonrakerCfsMaterialProviderFrame}：K1C/CFS-C secondary provider frame を material topology へ反映
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1350 (PR #432)
+ * @version 1.390.1368 (PR #432)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-09 09:25:00
+ * @lastModified 2026-08-25 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -38,6 +39,9 @@ import {
   createK1PrinterFacade,
   createK2PrinterFacade,
 } from "./dashboard_printer_facade.js";
+import {
+  createCfsMoonrakerBoxMaterialProvider,
+} from "./dashboard_material_provider.js";
 
 /**
  * live shadow runtime record の schema version。
@@ -72,6 +76,17 @@ const k1LiveShadowFacade = createK1PrinterFacade();
 const k2LiveShadowFacade = createK2PrinterFacade();
 
 /**
+ * K1C/CFS-C secondary material provider。
+ *
+ * 【詳細説明】
+ * - K1本体のWebSocket identity/sessionとは分け、Moonraker由来のCFS-C boxsInfoだけを
+ *   read-only material topologyとしてruntimeDataへ合流させる。
+ *
+ * @constant {object}
+ */
+const cfsMoonrakerMaterialProvider = createCfsMoonrakerBoxMaterialProvider();
+
+/**
  * 同一 diff path の console warning を再出力する最短間隔。
  *
  * 【詳細説明】
@@ -94,6 +109,32 @@ const SHADOW_DIFF_WARN_INTERVAL_MS = 10_000;
  */
 function hasOwn(value, key) {
   return !!value && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+/**
+ * material topology更新をUIへ通知する。
+ *
+ * 【詳細説明】
+ * - フィラメントパネルがlegacy cardで起動したあとにCFS topologyが遅れて到着した場合、
+ *   パネル側が同じDOM内でmulti-slotへ切り替えるための軽量イベント。
+ * - Node/Vitest環境ではDOMが無い場合があるため、dispatch不可なら静かに無視する。
+ *
+ * @private
+ * @param {string} host - 更新対象ホスト名
+ * @returns {void}
+ */
+function emitMaterialTopologyUpdated(host) {
+  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
+    return;
+  }
+  try {
+    const event = typeof CustomEvent === "function"
+      ? new CustomEvent("printer-core-v3-material-topology-updated", { detail: { host } })
+      : Object.assign(new Event("printer-core-v3-material-topology-updated"), { detail: { host } });
+    window.dispatchEvent(event);
+  } catch {
+    /* UI通知は補助経路のため、古い環境で失敗してもshadow本体は継続する。 */
+  }
 }
 
 /**
@@ -1273,6 +1314,9 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }
+  if (state.materials) {
+    emitMaterialTopologyUpdated(host);
+  }
   if (monitorData.appSettings?.logLevel === "debug") {
     console.debug("[printer-core-v3 shadow] K2 frame observed", {
       host,
@@ -1281,6 +1325,75 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
       cfsTopologyState: record.cfsTopologyState,
     });
   }
+  return record;
+}
+
+/**
+ * Moonraker/CFS-C secondary provider frame を material topology として記録する。
+ *
+ * 【詳細説明】
+ * - K1C本体のPrinter Core v3 sessionとは別に、CFS-C boxsInfo相当のread-only payloadだけを
+ *   `runtimeData.printerCoreV3Shadow.lastState.materials` へ合流する。
+ * - printer identity / command authority / filament ledger には接続しない。UIが17巻構成を監視するための
+ *   一時runtime evidenceとして扱う。
+ *
+ * @function observeMoonrakerCfsMaterialProviderFrame
+ * @param {object} options - provider frame観測オプション
+ * @param {string} options.host - 表示対象ホスト名
+ * @param {object|null|undefined} options.payload - Moonraker/CFS-C payload
+ * @param {string=} options.receivedAt - 観測日時ISO文字列
+ * @param {string=} options.providerSessionId - secondary provider session id
+ * @param {boolean=} options.connected - provider transport が接続中なら true
+ * @param {object=} dependencies - テスト用依存差し替え
+ * @param {object=} dependencies.materialProvider - material provider実装
+ * @returns {object|null} 更新後runtime record、host不正なら null
+ * @example
+ * observeMoonrakerCfsMaterialProviderFrame({ host, payload: { boxsInfo } });
+ */
+export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependencies = {}) {
+  const host = String(options?.host || "").trim();
+  if (!host) {
+    return null;
+  }
+  const machine = getMachineForShadow(host);
+  const previous = machine?.runtimeData?.printerCoreV3Shadow || {};
+  const provider = dependencies.materialProvider || cfsMoonrakerMaterialProvider;
+  const receivedAt = options.receivedAt || new Date().toISOString();
+  const connected = options.connected !== false;
+  const topology = provider.createTopology(options.payload, {
+    connected,
+    receivedAt,
+  });
+  const previousLastState = previous.lastState && typeof previous.lastState === "object"
+    ? previous.lastState
+    : {};
+  const providerSessionId = String(options.providerSessionId || previous.providerSessionId || `material-provider:${host}`);
+  const record = {
+    ...previous,
+    schemaVersion: PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION,
+    enabled: true,
+    printerFamily: previous.printerFamily || "k1",
+    host,
+    deviceId: previous.deviceId || `material-provider:${encodeURIComponent(host)}`,
+    sessionId: previous.sessionId || providerSessionId,
+    state: connected ? (previous.state === "closed" ? "material-provider-observed" : (previous.state || "material-provider-observed")) : "material-provider-stale",
+    lastObservedAt: connected ? (previous.lastObservedAt || receivedAt) : previous.lastObservedAt || receivedAt,
+    materialProviderSessionId: providerSessionId,
+    materialProviderLastObservedAt: receivedAt,
+    materialProviderObservedFrames: Number(previous.materialProviderObservedFrames || 0) + 1,
+    lastState: {
+      ...previousLastState,
+      materials: topology,
+    },
+    cfsConnected: topology.cfs?.connected ?? connected,
+    cfsTopologyState: topology.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
+    cfsSourceCount: Array.isArray(topology.sources) ? topology.sources.length : 0,
+    cfsAssignmentCount: Array.isArray(topology.assignments) ? topology.assignments.length : 0,
+  };
+  if (machine) {
+    machine.runtimeData.printerCoreV3Shadow = record;
+  }
+  emitMaterialTopologyUpdated(host);
   return record;
 }
 
@@ -1360,6 +1473,7 @@ function endPrinterCoreV3LiveShadowSession(options) {
       state: "closed",
       closedAt: new Date().toISOString(),
     };
+    emitMaterialTopologyUpdated(host);
   }
   return ended;
 }

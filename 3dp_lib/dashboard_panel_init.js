@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1363 (PR #432)
+ * @version 1.390.1368 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-09 17:33:00
+ * @lastModified 2026-08-25 00:00:00
  * -----------------------------------------------------------
  */
 
@@ -86,6 +86,7 @@ import {
 } from "./printer_core/dashboard_material_topology_panel.js";
 import {
   MATERIAL_DISPLAY_MODE,
+  resolveDisplayMaterialTopology,
   resolveMaterialDisplayMode,
   resolveMaterialTopologyViewOptions,
 } from "./printer_core/dashboard_material_system_settings.js";
@@ -321,6 +322,10 @@ function initFilamentPanel(body, hostname) {
   const container = body.querySelector("#filament-preview");
   if (!container) return;
 
+  if (body._materialTopologyModeListener) {
+    window.removeEventListener("printer-core-v3-material-topology-updated", body._materialTopologyModeListener);
+    body._materialTopologyModeListener = null;
+  }
   if (body._materialTopologyRefreshTimer) {
     clearInterval(body._materialTopologyRefreshTimer);
     body._materialTopologyRefreshTimer = null;
@@ -331,13 +336,21 @@ function initFilamentPanel(body, hostname) {
   const machine = monitorData.machines[hostname] || {};
   const target = getConnectionTarget(hostname);
   const printerType = getPrinterType(hostname);
-  const topology = machine.runtimeData?.printerCoreV3Shadow?.lastState?.materials || null;
+  const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
+  const topology = resolveDisplayMaterialTopology({
+    topology: shadowRecord?.lastState?.materials || null,
+    shadowRecord,
+  });
   const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
   if (materialDisplayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
     body.classList.add("filament-panel-cfs-mode");
     const createViewModel = () => {
       const latestMachine = monitorData.machines[hostname] || {};
-      const latestTopology = latestMachine.runtimeData?.printerCoreV3Shadow?.lastState?.materials || null;
+      const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
+      const latestTopology = resolveDisplayMaterialTopology({
+        topology: latestShadowRecord?.lastState?.materials || null,
+        shadowRecord: latestShadowRecord,
+      });
       const latestTarget = getConnectionTarget(hostname);
       const viewOptions = resolveMaterialTopologyViewOptions({
         target: latestTarget,
@@ -393,6 +406,29 @@ function initFilamentPanel(body, hostname) {
   }
 
   body.classList.remove("filament-panel-cfs-mode");
+
+  body._materialTopologyModeListener = (event) => {
+    const eventHost = event?.detail?.host;
+    if (eventHost && eventHost !== hostname) {
+      return;
+    }
+    const latestMachine = monitorData.machines[hostname] || {};
+    const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
+    const latestTopology = resolveDisplayMaterialTopology({
+      topology: latestShadowRecord?.lastState?.materials || null,
+      shadowRecord: latestShadowRecord,
+    });
+    const latestTarget = getConnectionTarget(hostname);
+    const nextMode = resolveMaterialDisplayMode({
+      target: latestTarget,
+      printerType,
+      topology: latestTopology,
+    });
+    if (nextMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
+      initFilamentPanel(body, hostname);
+    }
+  };
+  window.addEventListener("printer-core-v3-material-topology-updated", body._materialTopologyModeListener);
 
   // フィラメントプレビューを生成（per-host・スプール情報反映）
   /** @type {ReturnType<typeof createFilamentPreview>|null} */
@@ -956,6 +992,10 @@ export function registerAllPanelInits() {
     }
   });
   registerPanelDestroy("filament", (body, hostname) => {
+    if (body._materialTopologyModeListener) {
+      window.removeEventListener("printer-core-v3-material-topology-updated", body._materialTopologyModeListener);
+      body._materialTopologyModeListener = null;
+    }
     if (body._materialTopologyRefreshTimer) {
       clearInterval(body._materialTopologyRefreshTimer);
       body._materialTopologyRefreshTimer = null;

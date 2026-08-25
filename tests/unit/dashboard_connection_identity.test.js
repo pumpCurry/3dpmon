@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1367 (PR #432)
+ * @version 1.390.1368 (PR #432)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-09 19:48:20
+ * @lastModified 2026-08-25 00:00:00
  *
  * @vitest-environment jsdom
  */
@@ -40,7 +40,7 @@ vi.mock("../../3dp_lib/dashboard_utils.js", () => ({ getCurrentTimestamp: vi.fn(
 vi.mock("../../3dp_lib/dashboard_panel_menu.js", () => ({ updatePanelMenuHosts: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_panel_factory.js", () => ({
   migratePanelsToHost: vi.fn(), renamePanelsHost: vi.fn(), ensureHostPanels: vi.fn(),
-  removePanelsForHost: vi.fn(), updateAllPanelHeaders: vi.fn(),
+  removePanelsForHost: vi.fn(), recreatePanelsForHost: vi.fn(), updateAllPanelHeaders: vi.fn(),
 }));
 vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({ showConfirmDialog: vi.fn() }));
@@ -56,6 +56,7 @@ vi.mock("../../3dp_lib/printer_core/dashboard_live_shadow.js", () => ({
   endK2LiveShadowSession: vi.fn(),
   observeK1LiveShadowFrame: vi.fn(),
   observeK2LiveShadowFrame: vi.fn(),
+  observeMoonrakerCfsMaterialProviderFrame: vi.fn(),
   resolvePrinterCoreV3LiveShadowDeviceId: vi.fn(({ identity, identityConflict, identityConflicts, host, dest }) => {
     const hasOpenConflict = identityConflict?.status === "open" ||
       (Array.isArray(identityConflicts) && identityConflicts.some((entry) => entry?.status === "open"));
@@ -404,6 +405,49 @@ describe("Printer Core v3 identity dry-run", () => {
     expect(shadowMock.observeK2LiveShadowFrame).not.toHaveBeenCalled();
   });
 
+  it("K1C+CFS-C設定ではsecondary Moonraker providerのmaterial payloadをread-only shadowへ流す", () => {
+    dataMock.monitorData.appSettings.connectionTargets = [
+      {
+        dest: "203.0.113.90:9999",
+        printerType: "creality-k1",
+        hostname: "",
+        materialSystem: {
+          mode: "cfs-c-readonly",
+          provider: "moonraker-boxsInfo",
+          providerEndpoint: "198.51.100.20:80",
+          unitLimit: 1,
+        },
+      },
+    ];
+    mod.connectWs("203.0.113.90:9999");
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K1C-CFSC",
+      model: "K1C",
+      printProgress: 0,
+    }), "203.0.113.90");
+
+    const providerCall = moonrakerMock.createMoonrakerSession.mock.calls.find((call) => call[0]?.onMaterial);
+    expect(providerCall).toBeTruthy();
+    expect(providerCall[0]).toMatchObject({
+      url: "ws://198.51.100.20:80/websocket",
+      fallbackHost: "K1C-CFSC",
+      materialSubscribeObjects: {
+        boxsInfo: null,
+        boxs_info: null,
+      },
+    });
+
+    providerCall[0].onMaterial({ materialBoxs: [] });
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenCalledWith({
+      host: "K1C-CFSC",
+      payload: { materialBoxs: [] },
+      providerSessionId: "material-provider:K1C-CFSC:198.51.100.20%3A80",
+      connected: true,
+      receivedAt: expect.any(String),
+    });
+  });
+
   it("K1 WS受信データをPrinter Core v3 live shadowへ分岐する", () => {
     mod.connectWithType("203.0.113.12:9999", "creality-k1");
     mod.simulateReceivedJson(JSON.stringify({
@@ -462,6 +506,14 @@ describe("Printer Core v3 identity dry-run", () => {
     });
     expect(shadowMock.observeK1LiveShadowFrame).not.toHaveBeenCalled();
     expect(ws.sentMessages).toContain(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
+    expect(dataMock.monitorData.appSettings.connectionTargets[0]).toMatchObject({
+      dest: "203.0.113.30:9999",
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "auto",
+        unitLimit: 1,
+      },
+    });
 
     ws.sentMessages.length = 0;
     mod.simulateReceivedJson(JSON.stringify({
@@ -549,6 +601,34 @@ describe("Printer Core v3 identity dry-run", () => {
 
     mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-MixedFrame");
     expect(ws.sentMessages).toEqual([]);
+  });
+
+  it("K2 CFS boxsInfoはpush後もrefresh間隔経過でread-only再取得する", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      mod.connectWithType("203.0.113.35:9999", "creality-k2");
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+      mod.simulateReceivedJson(JSON.stringify({
+        hostname: "K2Pro-Refresh",
+        model: "F012",
+        cfsConnect: 1,
+        boxsInfo: {
+          materialBoxs: [],
+        },
+      }), "203.0.113.35");
+      expect(ws.sentMessages).toEqual([]);
+
+      nowSpy.mockReturnValue(31_500);
+      mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-Refresh");
+
+      expect(ws.sentMessages).toEqual([
+        JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("identity conflictがopenの場合は旧deviceIdではなくendpoint暫定shadow IDを使う", () => {
