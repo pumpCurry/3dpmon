@@ -4,6 +4,8 @@ Last updated: 2026-08-26
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
+実機certificationの手順は `docs/develop/printer-core-v3-live-certification-runbook.md` を参照する。
+
 ## 未実装と分かっているもの
 
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
