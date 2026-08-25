@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1381 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-25 22:10:00
  * -----------------------------------------------------------
  */
 
@@ -85,6 +85,9 @@ import {
   renderMaterialTopologyPanel,
 } from "./printer_core/dashboard_material_topology_panel.js";
 import {
+  dispatchCfsControlIntent,
+} from "./printer_core/dashboard_cfs_command_integration.js";
+import {
   MATERIAL_DISPLAY_MODE,
   resolveDisplayMaterialTopology,
   resolveMaterialDisplayMode,
@@ -106,6 +109,64 @@ const _initMap = new Map();
  * @type {Map<string, (panelBody: HTMLElement, hostname: string) => void>}
  */
 const _destroyMap = new Map();
+
+/**
+ * CFS/CFS-C 操作候補で扱うUI action一覧。
+ *
+ * 【詳細説明】
+ * - material topology panel のボタン定義と同じaction名だけを通常パネル側から明示する。
+ * - ここでは候補表示用であり、実送信の許可ではない。
+ *
+ * @constant {string[]}
+ */
+const CFS_CONTROL_UI_ACTIONS = Object.freeze(["select", "load", "unload", "feed", "retract"]);
+
+/**
+ * production有効化前のCFS操作候補disabled理由。
+ *
+ * 【詳細説明】
+ * - 通常UIへ操作候補hookを渡しても、実機certificationとadapter transport接続が終わるまで
+ *   3dpmon側からのCFS操作は開かないことを利用者向けに示す。
+ *
+ * @constant {string}
+ */
+const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です";
+
+/**
+ * CFS/CFS-C操作候補用のrenderer control optionを生成する。
+ *
+ * 【詳細説明】
+ * - 通常フィラメントパネルからintegration scaffoldへのhook位置だけを固定する。
+ * - `canSendCommands:false` と `dispatchCfsControlIntent(..., { enabled:false })` の二重ロックにより、
+ *   production activation前にUI操作がtransportへ流れないようにする。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {object} renderMaterialTopologyPanelへ渡すcontrol option
+ */
+function createCfsControlRenderOptions(hostname) {
+  return {
+    showControls: true,
+    canSendCommands: false,
+    allowedActions: [...CFS_CONTROL_UI_ACTIONS],
+    disabledReason: CFS_CONTROL_DISABLED_REASON,
+    /**
+     * CFS/CFS-C操作候補intentをfail-closed integration scaffoldへ渡す。
+     *
+     * 【詳細説明】
+     * - 現段階では`enabled:false`固定のため、直接呼ばれてもdispatcherへは到達しない。
+     *
+     * @param {object} intent - material topology panelが生成した操作intent
+     * @returns {Promise<object>} fail-closed dispatch結果
+     */
+    onCommand(intent) {
+      return dispatchCfsControlIntent(intent, {
+        enabled: false,
+        hostname,
+      });
+    },
+  };
+}
 
 /**
  * registerPanelInit:
@@ -368,8 +429,12 @@ function initFilamentPanel(body, hostname) {
       diagnostics: viewModel.diagnostics,
     });
     const initialViewModel = createViewModel();
+    const cfsControlOptions = createCfsControlRenderOptions(hostname);
     let materialPanelSignature = createSignature(initialViewModel);
-    const materialPanel = renderMaterialTopologyPanel(container, initialViewModel, { hostname });
+    const materialPanel = renderMaterialTopologyPanel(container, initialViewModel, {
+      hostname,
+      control: cfsControlOptions,
+    });
     body._materialTopologyPanel = materialPanel;
     body._materialTopologyRefreshTimer = setInterval(() => {
       try {
