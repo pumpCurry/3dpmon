@@ -561,6 +561,13 @@ describe("Printer Core v3 K1 live shadow", () => {
       connected: false,
       topologyState: "stale",
     });
+    expect(stale.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(stale.materialProviderDisconnectedAt).toBe("2026-08-07T08:16:04.000Z");
+    expect(stale.lastState.materials.provider).toMatchObject({
+      lastObservedAt: "2026-08-07T08:15:04.000Z",
+      disconnectedAt: "2026-08-07T08:16:04.000Z",
+      freshness: "stale",
+    });
   });
 
   it("endK2LiveShadowSession はruntimeDataをclosedへ更新する", () => {

@@ -918,4 +918,43 @@ describe('createMoonrakerSession material-only provider', () => {
       globalThis.WebSocket = originalWebSocket;
     }
   });
+
+  it('material初期化RPC失敗時はsessionを閉じてbackoff再接続へ進む', () => {
+    const originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = FakeMoonrakerWebSocket;
+    FakeMoonrakerWebSocket.instances = [];
+    vi.useFakeTimers();
+    const onState = vi.fn();
+    const onLog = vi.fn();
+    try {
+      createMoonrakerSession({
+        url: 'ws://198.51.100.22:80/websocket',
+        fallbackHost: 'K1C-CFSC',
+        materialOnly: true,
+        materialSubscribeObjects: {
+          boxsInfo: null,
+        },
+        onState,
+        onLog,
+        shouldReconnect: () => true,
+      });
+      const ws = FakeMoonrakerWebSocket.instances[0];
+      ws.onopen();
+      replyMoonrakerRpc(ws, ws.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      replyMoonrakerRpc(ws, ws.sent[1].id, { result: { objects: ['boxsInfo'] } });
+      replyMoonrakerRpc(ws, ws.sent[2].id, { error: { message: 'temporary init failure' } });
+
+      expect(ws.readyState).toBe(3);
+      expect(onLog).toHaveBeenCalledWith(expect.stringContaining('subscribe RPC エラー'), 'error');
+      expect(onState).toHaveBeenCalledWith('disconnected');
+      expect(onState).toHaveBeenCalledWith('waiting');
+
+      vi.advanceTimersByTime(2000);
+      expect(FakeMoonrakerWebSocket.instances).toHaveLength(2);
+      expect(FakeMoonrakerWebSocket.instances[1].url).toBe('ws://198.51.100.22:80/websocket');
+    } finally {
+      vi.useRealTimers();
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
 });

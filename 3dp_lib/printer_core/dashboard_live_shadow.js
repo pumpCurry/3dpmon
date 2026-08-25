@@ -146,9 +146,11 @@ function emitMaterialTopologyUpdated(host) {
  *
  * @private
  * @param {object|null|undefined} topology - 直前のmaterial topology
+ * @param {string|null} disconnectedAt - provider切断を観測した日時ISO文字列
+ * @param {string|null} lastObservedAt - 最後にmaterial payloadを観測した日時ISO文字列
  * @returns {object|null} stale化したtopology、元topologyが無ければ null
  */
-function markMaterialTopologyStale(topology) {
+function markMaterialTopologyStale(topology, disconnectedAt = null, lastObservedAt = null) {
   if (!topology || typeof topology !== "object") {
     return null;
   }
@@ -162,6 +164,8 @@ function markMaterialTopologyStale(topology) {
     provider: {
       ...(topology.provider || {}),
       freshness: "stale",
+      lastObservedAt: topology.provider?.lastObservedAt ?? lastObservedAt,
+      disconnectedAt,
     },
   };
 }
@@ -1413,13 +1417,32 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     ? previous.lastState
     : {};
   const hasPayload = options.payload && typeof options.payload === "object";
-  const topology = !connected && !hasPayload
-    ? markMaterialTopologyStale(previousLastState.materials)
+  const previousMaterialObservedAt = previous.materialProviderLastObservedAt ||
+    previousLastState.materials?.provider?.lastObservedAt ||
+    null;
+  const materialProviderLastObservedAt = hasPayload
+    ? receivedAt
+    : previousMaterialObservedAt;
+  const observedTopology = !connected && !hasPayload
+    ? markMaterialTopologyStale(previousLastState.materials, receivedAt, materialProviderLastObservedAt)
     : provider.createTopology(options.payload, {
         connected,
         receivedAt,
       });
+  const topology = observedTopology || provider.createTopology(null, {
+    connected: false,
+    receivedAt,
+  });
   const providerSessionId = String(options.providerSessionId || previous.providerSessionId || `material-provider:${host}`);
+  const materialTopology = hasPayload && materialProviderLastObservedAt
+    ? {
+        ...topology,
+        provider: {
+          ...(topology.provider || {}),
+          lastObservedAt: materialProviderLastObservedAt,
+        },
+      }
+    : topology;
   const record = {
     ...previous,
     schemaVersion: PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION,
@@ -1431,16 +1454,17 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     state: connected ? (previous.state === "closed" ? "material-provider-observed" : (previous.state || "material-provider-observed")) : "material-provider-stale",
     lastObservedAt: connected ? (previous.lastObservedAt || receivedAt) : previous.lastObservedAt || receivedAt,
     materialProviderSessionId: providerSessionId,
-    materialProviderLastObservedAt: receivedAt,
+    materialProviderLastObservedAt,
+    materialProviderDisconnectedAt: connected ? null : receivedAt,
     materialProviderObservedFrames: Number(previous.materialProviderObservedFrames || 0) + 1,
     lastState: {
       ...previousLastState,
-      materials: topology,
+      materials: materialTopology,
     },
-    cfsConnected: topology.cfs?.connected ?? connected,
-    cfsTopologyState: topology.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
-    cfsSourceCount: Array.isArray(topology.sources) ? topology.sources.length : 0,
-    cfsAssignmentCount: Array.isArray(topology.assignments) ? topology.assignments.length : 0,
+    cfsConnected: materialTopology.cfs?.connected ?? connected,
+    cfsTopologyState: materialTopology.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
+    cfsSourceCount: Array.isArray(materialTopology.sources) ? materialTopology.sources.length : 0,
+    cfsAssignmentCount: Array.isArray(materialTopology.assignments) ? materialTopology.assignments.length : 0,
   };
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;

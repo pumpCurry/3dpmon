@@ -54,6 +54,7 @@ Last updated: 2026-08-25
 - K1C/CFS-C向けに `Moonraker boxsInfo` secondary provider endpointを接続設定へ保存できるようにした。設定時だけ別Moonraker sessionをread-onlyで開き、CFS-C material payloadをPrinter Core v3 runtime topologyへ流す。
 - CFS-C secondary providerが切断された場合、`payload:null` を新しい空topologyとして保存せず、last-known material topologyを保持したまま `stale / 最終観測` へ落とす。
 - CFS-C secondary providerはmaterial-only sessionとして起動し、通常Moonraker監視用の温度/履歴/ファイル/カメラ取得を行わない。`printer.objects.list` で存在するmaterial objectだけを購読し、subscribe errorは無言で握りつぶさず `disconnected` として通知する。
+- CFS-C secondary providerの初期化RPC失敗はWebSocketを閉じて既存backoff retryへ流す。runtimeでは `materialProviderLastObservedAt` と `materialProviderDisconnectedAt` を分け、last material observationとdisconnect observationを混同しない。
 
 ## Gate 18.5 後も残る実機確認項目
 

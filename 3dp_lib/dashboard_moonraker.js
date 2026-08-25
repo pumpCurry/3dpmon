@@ -890,6 +890,36 @@ export function createMoonrakerSession(opts) {
   };
 
   /**
+   * material-only 初期化RPC失敗時にstale通知と再接続を開始する。
+   *
+   * 【詳細説明】
+   * - CFS-C secondary providerでは、初期化中のobject list/subscribe失敗を単なるログだけで終えず、
+   *   runtime側をstaleへ倒したうえでWebSocketを閉じる。
+   * - WebSocket close後は既存のscheduleReconnect()へ流れるため、一時的なMoonraker RPC失敗から
+   *   同じbackoff policyで自己回復できる。
+   *
+   * @private
+   * @param {string} tag - 失敗した初期化RPCのタグ
+   * @returns {boolean} material-only初期化失敗として処理した場合 true
+   */
+  const restartMaterialOnlyAfterInitializationFailure = (tag) => {
+    if (!materialOnly || (tag !== "subscribe" && tag !== "material-objects-list")) {
+      return false;
+    }
+    onState("disconnected");
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      try {
+        ws.close();
+        return true;
+      } catch {
+        /* close失敗時も下のscheduleReconnectで回復を試みる。 */
+      }
+    }
+    scheduleReconnect();
+    return true;
+  };
+
+  /**
    * 現在印刷中ファイルが変わったら gcode メタ(残時間/レイヤー算出用)を取得する。
    * ファイル名が変化したときのみ RPC を投げ、同一ファイルでは再取得しない。
    * @private
@@ -998,9 +1028,7 @@ export function createMoonrakerSession(opts) {
       pending.delete(msg.id);
       if (msg.error) {
         onLog(`[moonraker] ${tag} RPC エラー: ${msg.error.message || "rpc error"}`, tag === "subscribe" ? "error" : "warn");
-        if (tag === "subscribe" || tag === "material-objects-list") {
-          onState("disconnected");
-        }
+        restartMaterialOnlyAfterInitializationFailure(tag);
         return;
       }
       const result = msg.result;
@@ -1031,7 +1059,7 @@ export function createMoonrakerSession(opts) {
         }
         if (Object.keys(selectedObjects).length === 0) {
           onLog("[moonraker] CFS-C material object が見つかりません", "warn");
-          onState("disconnected");
+          restartMaterialOnlyAfterInitializationFailure("material-objects-list");
           return;
         }
         send("printer.objects.subscribe", { objects: selectedObjects }, "subscribe");
