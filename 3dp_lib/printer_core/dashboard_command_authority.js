@@ -19,11 +19,12 @@
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
  * - {@link validatePrinterCommandSendTime}：command request と送信時 context の整合性を検査
+ * - {@link createBoundPrinterCommandDispatcher}：UIからcontext/transportを注入できないbound dispatcherを生成
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1375 (PR #432)
+ * @version 1.390.1378 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-25 20:18:00
+ * @lastModified 2026-08-25 21:03:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -82,6 +83,17 @@ const COMMAND_CORRELATION_EVIDENCE_SECRET = `printer-core-command-correlation:${
  * @constant {string}
  */
 const COMMAND_DISPATCH_CONTEXT_SECRET = `printer-core-command-dispatch:${Date.now()}:${Math.random()}`;
+
+/**
+ * trusted command correlation 発行をbound dispatcher経由に限定するmodule-private token。
+ *
+ * 【詳細説明】
+ * - 低レベルdispatcherのcallerがobservationへproof風objectを渡しても、このtokenが無ければ
+ *   command correlation evidenceを発行しない。
+ *
+ * @constant {symbol}
+ */
+const TRUSTED_COMMAND_CORRELATION_ISSUER = Symbol("printer-core-trusted-command-correlation-issuer");
 
 /**
  * Printer Core v3 command kind の分類。
@@ -368,6 +380,7 @@ function createCommandCorrelationSignature(evidence) {
       evidence.observedSequence,
       evidence.observedSessionId,
       evidence.evidenceSource,
+      evidence.protocolCommandId || "",
     ].join("|"),
     entropySource: () => evidence.correlationId,
   });
@@ -446,6 +459,7 @@ function hasTrustedDispatchContext(context) {
  * @param {number} options.observedSequence - 観測時 sequence
  * @param {string} options.observedSessionId - 観測 session ID
  * @param {string} options.evidenceSource - evidence source
+ * @param {string=} options.protocolCommandId - transport/protocol側の応答IDまたはtransition ID
  * @param {string=} options.observedJobId - 観測 job ID
  * @param {string=} options.fileIdentity - 観測 file identity
  * @returns {object} command correlation evidence
@@ -476,6 +490,7 @@ function createPrinterCommandCorrelationEvidence(request, options = {}) {
     observedSequence,
     observedSessionId,
     evidenceSource,
+    protocolCommandId: options.protocolCommandId || null,
     observedJobId: options.observedJobId || null,
     fileIdentity: options.fileIdentity || null,
     attestation: null,
@@ -901,7 +916,137 @@ function normalizeCommandObservation(observation, context) {
     observedJobId: observation?.observedJobId || observedState?.print?.jobId || null,
     fileIdentity: observation?.fileIdentity || context.fileIdentity || null,
     commandCorrelation: observation?.commandCorrelation || null,
+    trustedCorrelationProof: observation?.trustedCorrelationProof || observation?.protocolCorrelation || null,
   };
+}
+
+/**
+ * trusted command correlation proofを正規化する。
+ *
+ * 【詳細説明】
+ * - protocol応答ID、またはadapter/sessionが発行したtransition IDが無いproofは採用しない。
+ * - 単なるsequence進行だけでcorrelationを作らないための狭い入口にする。
+ *
+ * @private
+ * @param {*} proof - observation provider が返したtrusted proof候補
+ * @returns {object|null} 正規化済みproof、またはnull
+ */
+function normalizeTrustedCommandCorrelationProof(proof) {
+  if (!proof || typeof proof !== "object") {
+    return null;
+  }
+  const evidenceSource = String(proof.evidenceSource || proof.source || "").trim();
+  const protocolCommandId = String(
+    proof.protocolCommandId ||
+    proof.protocolResponseId ||
+    proof.responseId ||
+    proof.transitionId ||
+    ""
+  ).trim();
+  if (!evidenceSource || !protocolCommandId) {
+    return null;
+  }
+  return {
+    evidenceSource,
+    protocolCommandId,
+    commandId: proof.commandId ? String(proof.commandId) : null,
+    sessionId: proof.sessionId ? String(proof.sessionId) : null,
+  };
+}
+
+/**
+ * trusted observation proofからcommand correlation evidenceを生成する。
+ *
+ * 【詳細説明】
+ * - bound dispatcherだけが持つprivate tokenが無い場合は何も生成しない。
+ * - session、commandId、sequence進行を再検査し、trusted proofと現在観測が矛盾する場合はfail-closedでnullにする。
+ *
+ * @private
+ * @param {object} request - command request
+ * @param {object} context - dispatcher内部発行context
+ * @param {object} observation - 正規化済みobservation
+ * @param {number|null} sentSequence - 送信時sequence
+ * @param {symbol=} issuerToken - trusted issuer token
+ * @returns {object|null} command correlation evidence、またはnull
+ */
+function createTrustedCommandCorrelationFromObservation(request, context, observation, sentSequence, issuerToken) {
+  if (issuerToken !== TRUSTED_COMMAND_CORRELATION_ISSUER) {
+    return null;
+  }
+  const proof = normalizeTrustedCommandCorrelationProof(observation?.trustedCorrelationProof);
+  if (!proof) {
+    return null;
+  }
+  const observedSequence = normalizeSequence(observation?.observedSequence);
+  const observedSessionId = String(observation?.observedSessionId || "").trim();
+  if (sentSequence === null || observedSequence === null || observedSequence <= sentSequence) {
+    return null;
+  }
+  if (!observedSessionId || observedSessionId !== context.sessionId || observedSessionId !== request.sessionId) {
+    return null;
+  }
+  if (proof.commandId && proof.commandId !== request.commandId) {
+    return null;
+  }
+  if (proof.sessionId && proof.sessionId !== context.sessionId) {
+    return null;
+  }
+  try {
+    return createPrinterCommandCorrelationEvidence(request, {
+      sentSequence,
+      observedSequence,
+      observedSessionId,
+      evidenceSource: proof.evidenceSource,
+      protocolCommandId: proof.protocolCommandId,
+      observedJobId: observation?.observedJobId || undefined,
+      fileIdentity: observation?.fileIdentity?.fileHash || observation?.fileIdentity?.remotePath || undefined,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * UIへ安全に渡せるbound command dispatcherを生成する。
+ *
+ * 【詳細説明】
+ * - UIは返却された`dispatch(request)`だけを呼び出し、send-time context providerやtransportを差し替えられない。
+ * - trusted correlation proofはこのbound dispatcher経由の場合だけmodule-private token付きで評価される。
+ * - この関数自体は実transportを開かず、composition layerが信頼済みproviderを束ねるための境界を作る。
+ *
+ * @function createBoundPrinterCommandDispatcher
+ * @param {object} providers - trusted provider群
+ * @param {Function} providers.getSendTimeContext - 送信直前snapshot provider
+ * @param {Function} providers.sendTransport - transport送信provider
+ * @param {Function=} providers.observeState - trusted observation provider
+ * @param {Function=} providers.nowMs - epoch ms provider
+ * @param {number=} providers.contextTtlMs - context TTL ms
+ * @param {string=} providers.completedAt - 完了時刻ISO文字列
+ * @returns {object} bound dispatcher
+ * @example
+ * const dispatcher = createBoundPrinterCommandDispatcher({ getSendTimeContext, sendTransport });
+ * const result = await dispatcher.dispatch(request);
+ */
+export function createBoundPrinterCommandDispatcher(providers = {}) {
+  if (typeof providers.getSendTimeContext !== "function") {
+    throw new TypeError("Bound printer command dispatcher requires getSendTimeContext.");
+  }
+  if (typeof providers.sendTransport !== "function") {
+    throw new TypeError("Bound printer command dispatcher requires sendTransport.");
+  }
+  return Object.freeze({
+    dispatch(request) {
+      return dispatchPrinterCommand(request, {
+        getSendTimeContext: providers.getSendTimeContext,
+        sendTransport: providers.sendTransport,
+        observeState: providers.observeState,
+        nowMs: providers.nowMs,
+        contextTtlMs: providers.contextTtlMs,
+        completedAt: providers.completedAt,
+        trustedCorrelationIssuer: TRUSTED_COMMAND_CORRELATION_ISSUER,
+      });
+    },
+  });
 }
 
 /**
@@ -977,6 +1122,14 @@ export async function dispatchPrinterCommand(request, options = {}) {
   }
   const normalizedObservation = normalizeCommandObservation(observation, context);
   const sentSequence = normalizeSequence(context.stateSequence);
+  const commandCorrelation = normalizedObservation.commandCorrelation ||
+    createTrustedCommandCorrelationFromObservation(
+      request,
+      context,
+      normalizedObservation,
+      sentSequence,
+      options.trustedCorrelationIssuer
+    );
   return createPrinterCommandResult(request, {
     status: normalizeTransportStatus(response),
     response,
@@ -984,7 +1137,7 @@ export async function dispatchPrinterCommand(request, options = {}) {
     sentSequence,
     observedSequence: normalizedObservation.observedSequence,
     observedSessionId: normalizedObservation.observedSessionId,
-    commandCorrelation: normalizedObservation.commandCorrelation,
+    commandCorrelation,
     completedAt: options.completedAt || null,
   });
 }
