@@ -7,7 +7,7 @@ Last updated: 2026-08-25
 ## 未実装と分かっているもの
 
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
-- CFS/CFS-C の feed / retract / slot select / load / unload は本番UI/transportへ未接続。表示moduleにはfail-closedな操作候補ボタンを用意したが、通常画面ではread-only監視のままで、操作はプリンタ本体から行う。
+- CFS/CFS-C の feed / retract / slot select / load / unload は本番UI/transportへ未接続。表示moduleにはfail-closedな操作候補ボタン、intent -> command request -> bound dispatcher のintegration scaffoldを用意したが、通常画面ではread-only監視のままで、操作はプリンタ本体から行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。
 - Data Schema v3 の本番 write / migration は未完。dry-run contract はあるが、Device / Endpoint / CfsUnit / MaterialSource / Spool / Mount / Ledger の永続authorityはまだ切り替えていない。
 - command authority は未完。command id、result、expected-state confirmation、timeout、side-effect retry guard、production dispatcher の send-time 再検証 foundation、bound dispatcher foundation はあるが、UI操作の本番送信経路はまだ移していない。
@@ -19,7 +19,7 @@ Last updated: 2026-08-25
 
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
-- CFS/CFS-C の操作ボタンは通常UIへまだ接続しない。表示module内の操作候補ボタンは、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。
+- CFS/CFS-C の操作ボタンは通常UIへまだ接続しない。表示module内の操作候補ボタンは、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。scaffoldの`dispatchCfsControlIntent()`も`enabled:true`が明示されない限りbound dispatcherを呼ばない。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
 - CFS/CFS-C の残量値は表示するが、手動スプール台帳の残量へ自動反映しない。
 - stale / reconnect / runout / attach / detach のプロトコルイベントは表示できる形へ寄せたが、実機Gateで物理操作と最終対応付けする必要がある。
@@ -61,4 +61,4 @@ Last updated: 2026-08-25
 
 - K2 CFS / K1C+CFS-C のattach、detach、runout、slot選択、remaining変化は、UIに表示できる入口を得たが実機captureで物理操作との対応を最終確認する必要がある。
 - CFS-CのMoonraker object名は `boxsInfo` / `boxs_info` を代表候補とし、実際に存在するobjectだけを購読する。実機firmwareで別名が出た場合はsecondary providerのsubscribe候補だけを追加する。
-- feed、retract、load、unload、slot selectのCRUD/command authorityは引き続き未開放。read-only表示とは別Gateでactual UI -> dispatcher -> adapter transportを接続し、実機でcommand result、expected state、timeout、side-effect retry guardを満たしてから有効化する。
+- feed、retract、load、unload、slot selectのCRUD/command authorityは引き続き未開放。read-only表示とは別Gateでactual adapter transportを接続し、実機でcommand result、expected state、timeout、side-effect retry guardを満たしてから有効化する。
