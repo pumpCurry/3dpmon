@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1382 (PR #432)
+ * @version 1.390.1383 (PR #432)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-25 22:35:00
+ * @lastModified 2026-08-25 22:55:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -239,6 +239,13 @@ describe("dashboard_panel_init CFS control hook", () => {
         canSendCommands: false,
         allowedActions: [],
       },
+      units: [{
+        slots: [{
+          sourceId: "cfs:1:slot:2",
+          displaySlot: "1C",
+          presence: "loaded",
+        }],
+      }],
     });
     mockState.renderMaterialTopologyPanel.mockReturnValue({
       update: vi.fn(),
@@ -282,6 +289,23 @@ describe("dashboard_panel_init CFS control hook", () => {
       disabledReason: "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です",
     });
     expect(typeof options.control.onCommand).toBe("function");
+    expect(typeof options.control.validateCommandIntent).toBe("function");
+
+    expect(options.control.validateCommandIntent({
+      sourceId: "cfs:1:slot:2",
+      displaySlot: "1C",
+    })).toBeNull();
+
+    mockState.createMaterialTopologyViewModel.mockReturnValueOnce({
+      summary: {
+        topologyState: "stale",
+      },
+      units: [],
+    });
+    expect(options.control.validateCommandIntent({
+      sourceId: "cfs:1:slot:2",
+      displaySlot: "1C",
+    })).toBe("CFS情報が最新ではないため操作できません");
 
     const result = await options.control.onCommand({
       action: "select",

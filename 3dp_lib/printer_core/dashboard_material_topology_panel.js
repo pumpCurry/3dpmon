@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1376 (PR #432)
+ * @version 1.390.1383 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 20:35:00
+ * @lastModified 2026-08-25 22:55:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
@@ -251,6 +251,9 @@ function createControlPolicy(viewModel, options) {
     showControls: optionControl.showControls === true || authority.canSendCommands === true,
     allowedActions,
     onCommand: hasSendHook ? optionControl.onCommand : null,
+    validateCommandIntent: typeof optionControl.validateCommandIntent === "function"
+      ? optionControl.validateCommandIntent
+      : null,
     reason: canSendCommands
       ? null
       : (optionControl.disabledReason || authority.reason || "command-authority-not-enabled"),
@@ -347,10 +350,23 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy) {
       if (currentReason || typeof controlPolicy.onCommand !== "function") {
         return;
       }
+      const commandPayload = createControlCommandPayload(row, buttonConfig);
+      let freshReason = null;
+      if (typeof controlPolicy.validateCommandIntent === "function") {
+        try {
+          freshReason = await controlPolicy.validateCommandIntent(commandPayload);
+        } catch {
+          freshReason = "CFS情報の再確認に失敗したため操作できません";
+        }
+      }
+      if (freshReason) {
+        button.title = freshReason;
+        return;
+      }
       button.disabled = true;
       button.dataset.running = "true";
       try {
-        await controlPolicy.onCommand(createControlCommandPayload(row, buttonConfig));
+        await controlPolicy.onCommand(commandPayload);
       } finally {
         button.dataset.running = "false";
         button.disabled = false;
@@ -477,6 +493,7 @@ function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}) {
  * @param {boolean=} options.control.canSendCommands - renderer側で操作候補を有効化する場合true
  * @param {Array<string>=} options.control.allowedActions - renderer側で許可する操作action
  * @param {Function=} options.control.onCommand - 操作hook
+ * @param {Function=} options.control.validateCommandIntent - click時の最新状態再確認hook
  * @returns {{update: function(object): void, destroy: function(): void}} renderer handle
  * @example
  * const handle = renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });

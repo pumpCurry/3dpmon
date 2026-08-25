@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1382 (PR #432)
+ * @version 1.390.1383 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-25 22:35:00
+ * @lastModified 2026-08-25 22:55:00
  * -----------------------------------------------------------
  */
 
@@ -154,6 +154,9 @@ function createCfsControlRenderOptions(hostname) {
     canSendCommands: false,
     allowedActions: [...CFS_CONTROL_UI_ACTIONS],
     disabledReason: CFS_CONTROL_DISABLED_REASON,
+    validateCommandIntent(intent) {
+      return validateCfsControlIntentFreshness(hostname, intent);
+    },
     /**
      * CFS/CFS-C操作候補intentをfail-closed integration scaffoldへ渡す。
      *
@@ -167,6 +170,55 @@ function createCfsControlRenderOptions(hostname) {
       return integration.onCommand(intent);
     },
   };
+}
+
+/**
+ * CFS操作intentがclick時点の最新topologyでも有効かを再確認する。
+ *
+ * 【詳細説明】
+ * - 描画時点ではfreshだったslotが、再描画前にCFS切断/stale/slot変更される短い窓を閉じる。
+ * - この検査はUX上の一次防御であり、最終authorityはbound dispatcherのsend-time validationへ委ねる。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} intent - material topology panelが生成した操作intent
+ * @returns {string|null} 操作不可理由、またはnull
+ */
+function validateCfsControlIntentFreshness(hostname, intent) {
+  try {
+    const latestMachine = monitorData.machines[hostname] || {};
+    const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
+    const latestTopology = resolveDisplayMaterialTopology({
+      topology: latestShadowRecord?.lastState?.materials || null,
+      shadowRecord: latestShadowRecord,
+    });
+    const latestTarget = getConnectionTarget(hostname);
+    const latestPrinterType = getPrinterType(hostname);
+    const viewOptions = resolveMaterialTopologyViewOptions({
+      target: latestTarget,
+      printerType: latestPrinterType,
+      topology: latestTopology,
+    });
+    const viewModel = createMaterialTopologyViewModel(latestTopology, viewOptions);
+    if (viewModel?.summary?.topologyState !== "fresh") {
+      return "CFS情報が最新ではないため操作できません";
+    }
+    const currentRows = (Array.isArray(viewModel?.units) ? viewModel.units : [])
+      .flatMap((unit) => Array.isArray(unit?.slots) ? unit.slots : []);
+    const currentRow = currentRows.find((row) => row?.sourceId && row.sourceId === intent?.sourceId);
+    if (!currentRow) {
+      return "対象CFSスロットを現在の情報で再確認できません";
+    }
+    if (currentRow.presence !== "loaded") {
+      return "対象CFSスロットには現在フィラメントが装填されていません";
+    }
+    if (intent?.displaySlot && currentRow.displaySlot !== intent.displaySlot) {
+      return "対象CFSスロットの表示位置が最新状態と一致しません";
+    }
+    return null;
+  } catch {
+    return "CFS情報の再確認に失敗したため操作できません";
+  }
 }
 
 /**

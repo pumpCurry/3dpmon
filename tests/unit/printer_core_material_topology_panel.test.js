@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1376 (PR #432)
+ * @version 1.390.1383 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 20:35:00
+ * @lastModified 2026-08-25 22:55:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -255,6 +255,51 @@ describe("Printer Core v3 material topology panel", () => {
       protocolSlotId: 2,
     });
     expect(container.textContent).toContain("送信直前に再検証");
+  });
+
+  it("click時の最新状態再確認hookが拒否した場合は送信hookを呼ばない", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const onCommand = vi.fn().mockResolvedValue({ ok: true });
+    const validateCommandIntent = vi.fn().mockReturnValue("CFS情報が最新ではないため操作できません");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommand,
+        validateCommandIntent,
+      },
+    });
+
+    const selectButton = getSlotActionButton(container, "1C", "select");
+    expect(selectButton?.disabled).toBe(false);
+
+    selectButton?.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(validateCommandIntent).toHaveBeenCalledWith({
+      action: "select",
+      commandKind: "cfs-slot-select",
+      sourceId: "cfs:1:slot:2",
+      displaySlot: "1C",
+      unitIndex: 0,
+      slotIndex: 2,
+      boxId: 1,
+      protocolSlotId: 2,
+    });
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(selectButton?.title).toBe("CFS情報が最新ではないため操作できません");
   });
 
   it("renderer側allowedActions未指定ではViewModelが許可していてもCFS操作をdisabledにする", () => {
