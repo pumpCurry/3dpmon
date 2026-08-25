@@ -1,13 +1,14 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
 ## 未実装と分かっているもの
 
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
-- CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
+- K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
+- CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。
 - Data Schema v3 の本番 write / migration は未完。dry-run contract はあるが、Device / Endpoint / CfsUnit / MaterialSource / Spool / Mount / Ledger の永続authorityはまだ切り替えていない。
 - command authority は未完。command id、result、expected-state confirmation、timeout、side-effect retry guard、production dispatcher の send-time 再検証 foundation、bound dispatcher foundation はあるが、UI操作の本番送信経路はまだ移していない。
@@ -63,3 +64,17 @@ Last updated: 2026-08-25
 - K2 CFS / K1C+CFS-C のattach、detach、runout、slot選択、remaining変化は、UIに表示できる入口を得たが実機captureで物理操作との対応を最終確認する必要がある。
 - CFS-CのMoonraker object名は `boxsInfo` / `boxs_info` を代表候補とし、実際に存在するobjectだけを購読する。実機firmwareで別名が出た場合はsecondary providerのsubscribe候補だけを追加する。
 - feed、retract、load、unload、slot selectのCRUD/command authorityは引き続き未開放。read-only表示とは別Gateでactual adapter transportを接続し、実機でcommand result、expected state、timeout、side-effect retry guardを満たしてから有効化する。
+
+## Gate 20 追加で閉じた command transport 項目
+
+- K2/CFS print-start command requestを、公開OrcaSlicer実装と同じ `set colorMatch` -> `set multiColorPrint` の順序付きWS9999 frameへ変換するtransport planを追加した。
+- CFS sourceを使う場合に `opGcodeFile` fallbackを生成しないことをテストで固定した。
+- external spool source、material type/color証拠不足、未certifiedのslot操作はtransport plan生成前に拒否する。
+- send hookはconnection layer注入のままにし、transport module自身はWebSocketを所有しない。
+
+## Gate 20 後も残る command activation 項目
+
+- K2実機で `colorMatch` -> `multiColorPrint` を明示確認し、post-start selected CFS source、物理feed、消費量変化、完了状態を同一fixtureで証明する。
+- 実機certificationが終わるまで、通常フィラメントパネルのCFS操作ボタンは送信可能にしない。
+- slot select / load / unload / feed / retract は、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyを確定してからadapterへ追加する。
+- K1C+CFS-Cについては、Moonraker object経由のmaterial providerとは別に、操作commandのprovider/transport境界を実機で確認する。
