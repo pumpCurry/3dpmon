@@ -72,6 +72,9 @@ Last updated: 2026-08-26
 - external spool source、material type/color証拠不足、未certifiedのslot操作はtransport plan生成前に拒否する。
 - send hookはconnection layer注入のままにし、transport module自身はWebSocketを所有しない。
 - `scripts/capture_k2_cfs_print_start.mjs` を追加し、実機送信前に同じtransport planをCLIでdry-run確認できるようにした。`--send` が無い限りWS接続も送信も行わない。
+- `sendK2CfsCommandTransportPlan()` はframe responseを評価し、失敗/未知statusでは次frameへ進まない。`submitted` はlocal送信完了のみを意味し、protocol ackではない。
+- `protocolCommandId` はprofile/PrintPlan由来の合成IDを廃止し、transport responseに実IDがある場合だけ採用する。実IDが無い場合は `correlationEvidence.kind:"none"` としてauthority証跡へ昇格しない。
+- certification CLIのlive送信は `ws.send()` callbackをawaitし、WebSocket libraryが各frameを受け取る前に `sent:true` を返さない。
 
 ## Gate 20 後も残る command activation 項目
 

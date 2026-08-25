@@ -3,9 +3,9 @@
  * @description
  * - CLIが既定dry-runで、明示 `--send` なしに実機送信へ進まないことを検証する。
  *
- * @version 1.390.1385 (PR #432)
+ * @version 1.390.1386 (PR #432)
  * @since 1.390.1385 (PR #432)
- * @lastModified 2026-08-26 09:45:00
+ * @lastModified 2026-08-26 00:40:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -114,5 +114,47 @@ describe("capture_k2_cfs_print_start", () => {
         },
       },
     ]);
+  });
+
+  it("--send時はws.send callback完了を待ってからsubmittedとして返す", async () => {
+    const sentFrames = [];
+    let closeCalled = false;
+    const ws = {
+      send(payload, callback) {
+        sentFrames.push(JSON.parse(payload));
+        setTimeout(() => callback(), 1);
+      },
+      close() {
+        closeCalled = true;
+      },
+    };
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.21",
+        "--file-path",
+        "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+        "--assignment",
+        "T1C,cfs:1:slot:2,PLA,09ea7ae",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsPrintStartCertification(options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      sent: true,
+      dryRun: false,
+      response: {
+        status: "submitted",
+        sentFrameCount: 2,
+      },
+    });
+    expect(sentFrames).toHaveLength(2);
+    expect(sentFrames[0].params).toHaveProperty("colorMatch");
+    expect(sentFrames[1].params).toHaveProperty("multiColorPrint");
+    expect(closeCalled).toBe(true);
   });
 });

@@ -52,6 +52,19 @@ The mapper is deliberately narrow:
 injected send hook. It does not own the WebSocket and does not open new
 connections. This keeps the existing dispatcher/session ownership boundary.
 
+The transport summary distinguishes local submission from protocol
+acknowledgement:
+
+- `status:"submitted"` means each frame was handed to the local transport without
+  a local send error. It does not prove printer command acceptance.
+- `status:"acknowledged"` is reserved for hooks that evaluate a protocol
+  response and return an accepted/acknowledged/ok/success status.
+- `protocolCommandId` is never synthesized from profile or PrintPlan data. It is
+  populated only when the transport response itself reports a protocol response
+  ID. Otherwise `correlationEvidence.kind` remains `none`.
+- Any missing, unknown, rejected, failed, timeout, or error frame response stops
+  the sequence before later frames are sent.
+
 ## Consequences
 
 Gate 20 establishes the K2/CFS print-start transport mapping that is safe enough

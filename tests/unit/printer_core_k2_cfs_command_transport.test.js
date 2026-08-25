@@ -4,9 +4,9 @@
  * - K2/CFS print-start が `colorMatch` と `multiColorPrint` の明示frameへ変換されることを検証する。
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  *
- * @version 1.390.1384 (PR #432)
+ * @version 1.390.1386 (PR #432)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-26 09:20:00
+ * @lastModified 2026-08-26 00:40:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -182,6 +182,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
   it("transport planはcolorMatchからmultiColorPrintへ逐次送信する", async () => {
     const plan = createK2CfsCommandTransportPlan(createPrintStartRequest());
     const sendFrame = vi.fn(async (frame, meta) => ({
+      status: "submitted",
       frame,
       meta,
     }));
@@ -197,10 +198,48 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     });
     expect(sendFrame.mock.calls[1][0].params).toHaveProperty("multiColorPrint");
     expect(response).toMatchObject({
-      status: "acknowledged",
-      protocolCommandId: `${K2_CFS_PRINT_START_TRANSPORT_PROFILE}:print-plan:k2-cfs`,
+      status: "submitted",
+      protocolCommandId: null,
+      correlationEvidence: {
+        kind: "none",
+        reason: "no-protocol-response-id",
+      },
       sentFrameCount: 2,
     });
+  });
+
+  it("protocol response IDが実際に返った場合だけcorrelation evidenceへ採用する", async () => {
+    const plan = createK2CfsCommandTransportPlan(createPrintStartRequest());
+    const sendFrame = vi.fn(async (frame, meta) => ({
+      status: "acknowledged",
+      protocolResponseId: `response:${meta.index}`,
+      frame,
+    }));
+
+    const response = await sendK2CfsCommandTransportPlan(plan, sendFrame);
+
+    expect(response).toMatchObject({
+      status: "acknowledged",
+      protocolCommandId: null,
+      protocolFrameIds: ["response:0", "response:1"],
+      correlationEvidence: {
+        kind: "protocol-response",
+        complete: true,
+      },
+    });
+  });
+
+  it("frame responseが失敗または未知statusなら次frameへ進めない", async () => {
+    const plan = createK2CfsCommandTransportPlan(createPrintStartRequest());
+    const sendFrame = vi.fn(async () => ({
+      status: "failed",
+      error: "boom",
+    }));
+
+    await expect(sendK2CfsCommandTransportPlan(plan, sendFrame))
+      .rejects
+      .toThrow("frame-response-error");
+    expect(sendFrame).toHaveBeenCalledTimes(1);
   });
 
   it("拒否されたtransport planは送信hookを呼ばない", async () => {

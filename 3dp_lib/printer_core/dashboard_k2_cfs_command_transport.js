@@ -16,9 +16,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1384 (PR #432)
+ * @version 1.390.1386 (PR #432)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-26 09:20:00
+ * @lastModified 2026-08-26 00:40:00
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -46,6 +46,41 @@ export const K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION = 1;
  * @constant {string}
  */
 export const K2_CFS_PRINT_START_TRANSPORT_PROFILE = "k2-ws9999-color-match-multicolor-v1";
+
+/**
+ * frame送信hookが「ローカル送信またはprotocol受理」として扱えるstatus。
+ *
+ * 【詳細説明】
+ * - `sent` / `submitted` は WebSocket library への書き込み完了までで、プリンタのprotocol ackではない。
+ * - `accepted` / `acknowledged` / `ok` / `success` は transport hook がprotocol responseを評価した場合だけ返す。
+ *
+ * @constant {ReadonlySet<string>}
+ */
+const K2_CFS_FRAME_ACCEPTED_STATUSES = Object.freeze(new Set([
+  "sent",
+  "submitted",
+  "accepted",
+  "acknowledged",
+  "ok",
+  "success",
+]));
+
+/**
+ * frame送信hookが明示的な失敗として返すstatus。
+ *
+ * 【詳細説明】
+ * - 明示失敗は次frameへ進めず、certification結果をfalse-positiveにしない。
+ *
+ * @constant {ReadonlySet<string>}
+ */
+const K2_CFS_FRAME_REJECTED_STATUSES = Object.freeze(new Set([
+  "error",
+  "failed",
+  "rejected",
+  "timeout",
+  "transport-error",
+  "transient-error",
+]));
 
 /**
  * K2/CFSでまだ実機certificationが済んでいないcommand kind。
@@ -94,6 +129,86 @@ function toFiniteNumberOrNull(value) {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+/**
+ * frame送信hookの戻り値からstatus文字列を取り出す。
+ *
+ * 【詳細説明】
+ * - connection layerやCLIの戻り値shapeが少し違っても、status/result/codeを同じ判定へ寄せる。
+ *
+ * @private
+ * @param {*} response - frame送信hookの戻り値
+ * @returns {string} 正規化済みstatus文字列
+ */
+function normalizeFrameResponseStatus(response) {
+  return String(response?.status || response?.result || response?.code || "").trim().toLowerCase();
+}
+
+/**
+ * frame送信hookの戻り値が次frameへ進める内容か判定する。
+ *
+ * 【詳細説明】
+ * - `ok:false`、`error`、明示失敗statusは拒否する。
+ * - statusが無い戻り値は、送信完了証跡にならないため拒否する。
+ *
+ * @private
+ * @param {*} response - frame送信hookの戻り値
+ * @returns {{ok: boolean, status: string, reason: string|null}} 判定結果
+ */
+function validateFrameResponse(response) {
+  const status = normalizeFrameResponseStatus(response);
+  if (!response || typeof response !== "object") {
+    return { ok: false, status, reason: "missing-frame-response" };
+  }
+  if (response.ok === false || response.error) {
+    return { ok: false, status, reason: "frame-response-error" };
+  }
+  if (K2_CFS_FRAME_REJECTED_STATUSES.has(status)) {
+    return { ok: false, status, reason: "frame-response-rejected-status" };
+  }
+  if (K2_CFS_FRAME_ACCEPTED_STATUSES.has(status) || response.ok === true) {
+    return { ok: true, status: status || "ok", reason: null };
+  }
+  return { ok: false, status, reason: "unknown-frame-response-status" };
+}
+
+/**
+ * transport全体のstatusをframe response群から決める。
+ *
+ * 【詳細説明】
+ * - `sent` / `submitted` だけなら、protocol ackではなく local submitted として返す。
+ * - protocol受理statusだけで揃った場合だけ `acknowledged` へ昇格する。
+ *
+ * @private
+ * @param {object[]} responses - 正規化前のframe response一覧
+ * @returns {string} transport response status
+ */
+function deriveTransportStatus(responses) {
+  const statuses = responses.map((response) => normalizeFrameResponseStatus(response));
+  const hasOnlyProtocolAck = statuses.every((status) => ["accepted", "acknowledged", "ok", "success"].includes(status));
+  return hasOnlyProtocolAck ? "acknowledged" : "submitted";
+}
+
+/**
+ * response群からprotocol response ID候補を取り出す。
+ *
+ * 【詳細説明】
+ * - 合成IDは作らず、transport/protocolが実際に返したIDだけをcorrelation候補にする。
+ *
+ * @private
+ * @param {object[]} responses - frame response一覧
+ * @returns {string[]} protocol response ID一覧
+ */
+function extractProtocolFrameIds(responses) {
+  return responses
+    .map((response) => toNonEmptyString(
+      response?.protocolCommandId ||
+      response?.protocolResponseId ||
+      response?.responseId ||
+      response?.requestId
+    ))
+    .filter(Boolean);
 }
 
 /**
@@ -359,15 +474,38 @@ export async function sendK2CfsCommandTransportPlan(plan, sendFrame) {
   for (let index = 0; index < plan.frames.length; index += 1) {
     const frame = plan.frames[index];
     // colorMatchとmultiColorPrintの順序が意味を持つため、並列送信せず必ず逐次awaitする。
-    responses.push(await sendFrame(frame, {
+    const response = await sendFrame(frame, {
       index,
       profile: plan.profile,
       frameCount: plan.frames.length,
-    }));
+    });
+    const validation = validateFrameResponse(response);
+    if (!validation.ok) {
+      const error = new Error(`K2 CFS command frame ${index + 1} failed: ${validation.reason}`);
+      error.reason = validation.reason;
+      error.frameIndex = index;
+      error.frameStatus = validation.status;
+      error.frameResponse = response || null;
+      throw error;
+    }
+    responses.push(response);
   }
+  const protocolFrameIds = extractProtocolFrameIds(responses);
+  const uniqueProtocolFrameIds = [...new Set(protocolFrameIds)];
   return {
-    status: "acknowledged",
-    protocolCommandId: `${plan.profile}:${plan.details?.printPlanId || "print-start"}`,
+    status: deriveTransportStatus(responses),
+    protocolCommandId: uniqueProtocolFrameIds.length === 1 ? uniqueProtocolFrameIds[0] : null,
+    protocolFrameIds,
+    correlationEvidence: uniqueProtocolFrameIds.length > 0
+      ? {
+          kind: "protocol-response",
+          protocolFrameIds,
+          complete: protocolFrameIds.length === plan.frames.length,
+        }
+      : {
+          kind: "none",
+          reason: "no-protocol-response-id",
+        },
     profile: plan.profile,
     sentFrameCount: responses.length,
     responses,

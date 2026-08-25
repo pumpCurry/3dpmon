@@ -19,9 +19,9 @@
  * - {@link buildK2CfsPrintStartRequest}：transport plan用requestを生成
  * - {@link runK2CfsPrintStartCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1385 (PR #432)
+ * @version 1.390.1386 (PR #432)
  * @since   1.390.1385 (PR #432)
- * @lastModified 2026-08-26 09:45:00
+ * @lastModified 2026-08-26 00:40:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-start boxsInfo probeとscenario fixture保存を統合する
@@ -230,6 +230,33 @@ function openWs(host, port) {
 }
 
 /**
+ * WebSocketへ1frameを書き込み、library callback完了を待つ。
+ *
+ * 【詳細説明】
+ * - `ws.send()` はcallbackを待たないと、bufferへ渡す前にCLI結果が成功扱いになる可能性がある。
+ * - これはプリンタのprotocol ackではなく、ローカルtransport submitの証跡だけを意味する。
+ *
+ * @private
+ * @param {WebSocket} ws - OPEN済みWebSocket
+ * @param {object} frame - WS9999へ送るframe
+ * @returns {Promise<object>} local submit response
+ */
+function sendWsFrameAndWait(ws, frame) {
+  return new Promise((resolve, reject) => {
+    ws.send(JSON.stringify(frame), (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({
+        status: "submitted",
+        frame,
+      });
+    });
+  });
+}
+
+/**
  * K2/CFS print-start certificationを実行する。
  *
  * 【詳細説明】
@@ -238,6 +265,7 @@ function openWs(host, port) {
  *
  * @function runK2CfsPrintStartCertification
  * @param {object} options - parseArgs済みオプション
+ * @param {Function=} options.openWs - テスト用WebSocket factory override
  * @returns {Promise<object>} 実行結果
  * @example
  * const result = await runK2CfsPrintStartCertification(options);
@@ -262,14 +290,10 @@ export async function runK2CfsPrintStartCertification(options) {
       plan,
     };
   }
-  const ws = await openWs(options.host, options.wsPort);
+  const ws = await (options.openWs || openWs)(options.host, options.wsPort);
   try {
     const response = await sendK2CfsCommandTransportPlan(plan, async (frame) => {
-      ws.send(JSON.stringify(frame));
-      return {
-        status: "sent",
-        frame,
-      };
+      return sendWsFrameAndWait(ws, frame);
     });
     return {
       ok: true,
