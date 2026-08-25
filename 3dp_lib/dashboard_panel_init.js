@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1381 (PR #432)
+ * @version 1.390.1382 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-25 22:10:00
+ * @lastModified 2026-08-25 22:35:00
  * -----------------------------------------------------------
  */
 
@@ -85,7 +85,7 @@ import {
   renderMaterialTopologyPanel,
 } from "./printer_core/dashboard_material_topology_panel.js";
 import {
-  dispatchCfsControlIntent,
+  createBoundCfsControlIntegration,
 } from "./printer_core/dashboard_cfs_command_integration.js";
 import {
   MATERIAL_DISPLAY_MODE,
@@ -145,6 +145,10 @@ const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/
  * @returns {object} renderMaterialTopologyPanelへ渡すcontrol option
  */
 function createCfsControlRenderOptions(hostname) {
+  const integration = createBoundCfsControlIntegration({
+    enabled: false,
+    allowedActions: CFS_CONTROL_UI_ACTIONS,
+  });
   return {
     showControls: true,
     canSendCommands: false,
@@ -154,16 +158,13 @@ function createCfsControlRenderOptions(hostname) {
      * CFS/CFS-C操作候補intentをfail-closed integration scaffoldへ渡す。
      *
      * 【詳細説明】
-     * - 現段階では`enabled:false`固定のため、直接呼ばれてもdispatcherへは到達しない。
+     * - 現段階ではdisabled integration固定のため、直接呼ばれてもdispatcherへは到達しない。
      *
      * @param {object} intent - material topology panelが生成した操作intent
      * @returns {Promise<object>} fail-closed dispatch結果
      */
     onCommand(intent) {
-      return dispatchCfsControlIntent(intent, {
-        enabled: false,
-        hostname,
-      });
+      return integration.onCommand(intent);
     },
   };
 }

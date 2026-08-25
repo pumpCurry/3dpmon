@@ -20,11 +20,12 @@
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
  * - {@link validatePrinterCommandSendTime}：command request と送信時 context の整合性を検査
  * - {@link createBoundPrinterCommandDispatcher}：UIからcontext/transportを注入できないbound dispatcherを生成
+ * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1379 (PR #432)
+ * @version 1.390.1382 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-25 21:20:00
+ * @lastModified 2026-08-25 22:35:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -94,6 +95,17 @@ const COMMAND_DISPATCH_CONTEXT_SECRET = `printer-core-command-dispatch:${Date.no
  * @constant {symbol}
  */
 const TRUSTED_COMMAND_CORRELATION_ISSUER = Symbol("printer-core-trusted-command-correlation-issuer");
+
+/**
+ * createBoundPrinterCommandDispatcher() が生成したdispatcherだけを記録するWeakSet。
+ *
+ * 【詳細説明】
+ * - CFS integrationなど上位のcomposition layerが、任意の`{ dispatch() {} }`を
+ *   bound dispatcherとして誤採用しないよう、module-private証跡として使う。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_BOUND_PRINTER_COMMAND_DISPATCHERS = new WeakSet();
 
 /**
  * Printer Core v3 command kind の分類。
@@ -1057,7 +1069,7 @@ export function createBoundPrinterCommandDispatcher(providers = {}) {
   if (typeof providers.sendTransport !== "function") {
     throw new TypeError("Bound printer command dispatcher requires sendTransport.");
   }
-  return Object.freeze({
+  const dispatcher = Object.freeze({
     dispatch(request) {
       return dispatchPrinterCommand(request, {
         getSendTimeContext: providers.getSendTimeContext,
@@ -1070,6 +1082,32 @@ export function createBoundPrinterCommandDispatcher(providers = {}) {
       });
     },
   });
+  TRUSTED_BOUND_PRINTER_COMMAND_DISPATCHERS.add(dispatcher);
+  return dispatcher;
+}
+
+/**
+ * 対象objectがPrinter Core v3のbound dispatcherかを判定する。
+ *
+ * 【詳細説明】
+ * - 単に`dispatch()`を持つobjectではなく、`createBoundPrinterCommandDispatcher()`が生成した
+ *   objectだけをtrueにする。
+ * - rendererや任意callerがtransport/context providerを差し替えたdispatcher風objectを渡しても、
+ *   上位integrationでfail-closedにできる。
+ *
+ * @function isBoundPrinterCommandDispatcher
+ * @param {*} dispatcher - 判定対象
+ * @returns {boolean} bound dispatcher由来ならtrue
+ * @example
+ * const ok = isBoundPrinterCommandDispatcher(dispatcher);
+ */
+export function isBoundPrinterCommandDispatcher(dispatcher) {
+  return Boolean(
+    dispatcher &&
+    typeof dispatcher === "object" &&
+    typeof dispatcher.dispatch === "function" &&
+    TRUSTED_BOUND_PRINTER_COMMAND_DISPATCHERS.has(dispatcher)
+  );
 }
 
 /**

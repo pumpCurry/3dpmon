@@ -14,11 +14,12 @@
  *
  * 【公開関数一覧】
  * - {@link createCfsControlCommandRequest}：CFS操作intentからcommand requestを生成
+ * - {@link createBoundCfsControlIntegration}：CFS操作intentのbound integrationを生成
  * - {@link dispatchCfsControlIntent}：CFS操作intentをbound dispatcherへ渡す
  *
- * @version 1.390.1380 (PR #432)
+ * @version 1.390.1382 (PR #432)
  * @since   1.390.1380 (PR #432)
- * @lastModified 2026-08-25 21:34:00
+ * @lastModified 2026-08-25 22:35:00
  * -----------------------------------------------------------
  * @todo
  * - actual adapter transport mapping と実機certificationが完了するまで production UI では enabled にしない
@@ -28,6 +29,7 @@
 
 import {
   createPrinterCommandRequest,
+  isBoundPrinterCommandDispatcher,
 } from "./dashboard_command_authority.js";
 
 /**
@@ -46,6 +48,38 @@ const CFS_ACTION_COMMAND_KIND = Object.freeze({
   feed: "cfs-feed",
   retract: "cfs-retract",
 });
+
+/**
+ * CFS操作integrationで既定候補として扱うaction一覧。
+ *
+ * 【詳細説明】
+ * - disabled UI候補では全actionを表示できるが、production有効化時は
+ *   createBoundCfsControlIntegration() の allowedActions でaction単位に絞る。
+ *
+ * @constant {string[]}
+ */
+const DEFAULT_CFS_CONTROL_ACTIONS = Object.freeze(Object.keys(CFS_ACTION_COMMAND_KIND));
+
+/**
+ * createBoundCfsControlIntegration() が生成したintegrationを記録するWeakSet。
+ *
+ * 【詳細説明】
+ * - dispatchCfsControlIntent() にper-call optionsでdispatcher/context/enabledを注入できないよう、
+ *   module-privateなcomposition済みobjectだけを受け付ける。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_CFS_CONTROL_INTEGRATIONS = new WeakSet();
+
+/**
+ * trusted integrationごとのcomposition-time設定。
+ *
+ * 【詳細説明】
+ * - UI clickごとにenabledやdispatcherを渡せないよう、生成時に束縛した設定をWeakMapへ保持する。
+ *
+ * @constant {WeakMap<object, object>}
+ */
+const CFS_CONTROL_INTEGRATION_CONFIG = new WeakMap();
 
 /**
  * 任意値を空でない文字列へ正規化する。
@@ -141,7 +175,7 @@ function normalizeCommandRequestContext(context = {}) {
   return {
     deviceId,
     sessionId,
-    transportKind: toNonEmptyString(context.transportKind) || "ws9999",
+    transportKind: toNonEmptyString(context.transportKind) || "pending-adapter",
     idempotencyKey: toNonEmptyString(context.idempotencyKey),
     createdAt: toNonEmptyString(context.createdAt),
     entropySource: typeof context.entropySource === "function" ? context.entropySource : undefined,
@@ -209,36 +243,119 @@ export function createCfsControlCommandRequest(intent = {}, context = {}) {
 }
 
 /**
- * CFS操作intentをbound dispatcherへ渡す。
+ * CFS操作action許可リストを正規化する。
  *
  * 【詳細説明】
- * - 既定では`enabled:true`が無い限り送信しない。これにより、scaffoldを読み込んでもproduction操作は開かない。
- * - UIやrendererはcontext provider / transport providerを渡さず、composition layerが用意したbound dispatcherだけを使う。
+ * - production有効化時はaction単位certificationに合わせて明示許可されたactionだけを通す。
+ * - disabled候補表示では既定actionを使えるようにするが、送信は別途enabledで閉じる。
+ *
+ * @private
+ * @param {*} actions - action候補
+ * @param {boolean=} useDefaultWhenEmpty - trueなら空時に既定actionを返す
+ * @returns {Set<string>} 許可action set
+ */
+function normalizeAllowedActions(actions, useDefaultWhenEmpty = false) {
+  const source = Array.isArray(actions) ? actions : [];
+  const allowed = new Set();
+  for (const action of source) {
+    const normalizedAction = toNonEmptyString(action);
+    if (CFS_ACTION_COMMAND_KIND[normalizedAction]) {
+      allowed.add(normalizedAction);
+    }
+  }
+  if (allowed.size === 0 && useDefaultWhenEmpty) {
+    return new Set(DEFAULT_CFS_CONTROL_ACTIONS);
+  }
+  return allowed;
+}
+
+/**
+ * CFS操作intent用のbound integrationを生成する。
+ *
+ * 【詳細説明】
+ * - composition layerがdispatcher/context/enabled/allowedActionsを一度だけ束縛する。
+ * - UIには返却objectの`onCommand(intent)`だけを渡し、clickごとにdispatcherやenabledを差し替えさせない。
+ * - production有効化時は`createBoundPrinterCommandDispatcher()`由来のdispatcherだけを受け付ける。
+ *
+ * @function createBoundCfsControlIntegration
+ * @param {object=} options - integration生成オプション
+ * @param {boolean=} options.enabled - trueの場合だけrequest生成とdispatchを実行する
+ * @param {Array<string>=} options.allowedActions - composition時に許可するaction一覧
+ * @param {object=} options.dispatcher - `createBoundPrinterCommandDispatcher()` が返すbound dispatcher
+ * @param {Function=} options.getCommandContext - request生成用context provider
+ * @returns {object} UIへ渡せるbound CFS integration
+ * @example
+ * const integration = createBoundCfsControlIntegration({ enabled, dispatcher, getCommandContext });
+ * await integration.onCommand(intent);
+ */
+export function createBoundCfsControlIntegration(options = {}) {
+  const enabled = options.enabled === true;
+  if (enabled && !isBoundPrinterCommandDispatcher(options.dispatcher)) {
+    throw new TypeError("CFS control integration requires a bound printer command dispatcher when enabled.");
+  }
+  if (enabled && typeof options.getCommandContext !== "function") {
+    throw new TypeError("CFS control integration requires getCommandContext when enabled.");
+  }
+  const allowedActions = normalizeAllowedActions(options.allowedActions, !enabled);
+  const integration = Object.freeze({
+    /**
+     * CFS操作intentをcomposition-bound設定で処理する。
+     *
+     * 【詳細説明】
+     * - dispatcher/context/enabledはfactory生成時に束縛済みで、UI clickごとには変更できない。
+     *
+     * @param {object} intent - CFS操作intent
+     * @returns {Promise<object>} dispatch結果ラッパ
+     */
+    onCommand(intent) {
+      return dispatchCfsControlIntent(intent, integration);
+    },
+  });
+  TRUSTED_CFS_CONTROL_INTEGRATIONS.add(integration);
+  CFS_CONTROL_INTEGRATION_CONFIG.set(integration, {
+    enabled,
+    allowedActions,
+    dispatcher: enabled ? options.dispatcher : null,
+    getCommandContext: enabled ? options.getCommandContext : null,
+  });
+  return integration;
+}
+
+/**
+ * CFS操作intentをcomposition-bound integration経由で処理する。
+ *
+ * 【詳細説明】
+ * - per-call optionsは受け付けず、`createBoundCfsControlIntegration()`で生成されたobjectだけを使う。
+ * - UIやrendererはcontext provider / transport providerを渡さず、composition layerが用意したbound integrationだけを使う。
  *
  * @function dispatchCfsControlIntent
  * @param {object} intent - CFS操作intent
- * @param {object=} options - dispatch options
- * @param {boolean=} options.enabled - trueの場合だけrequest生成とdispatchを実行する
- * @param {object} options.dispatcher - `createBoundPrinterCommandDispatcher()` が返すbound dispatcher
- * @param {Function} options.getCommandContext - request生成用context provider
+ * @param {object} integration - {@link createBoundCfsControlIntegration} の返り値
  * @returns {Promise<object>} dispatch結果ラッパ
  * @example
- * const result = await dispatchCfsControlIntent(intent, { enabled: true, dispatcher, getCommandContext });
+ * const result = await dispatchCfsControlIntent(intent, integration);
  */
-export async function dispatchCfsControlIntent(intent = {}, options = {}) {
-  if (options.enabled !== true) {
+export async function dispatchCfsControlIntent(intent = {}, integration = null) {
+  if (!TRUSTED_CFS_CONTROL_INTEGRATIONS.has(integration)) {
+    return {
+      accepted: false,
+      reason: "untrusted-cfs-control-integration",
+    };
+  }
+  const config = CFS_CONTROL_INTEGRATION_CONFIG.get(integration) || {};
+  if (config.enabled !== true) {
     return {
       accepted: false,
       reason: "cfs-command-integration-disabled",
     };
   }
-  if (!options.dispatcher || typeof options.dispatcher.dispatch !== "function") {
+  if (!isBoundPrinterCommandDispatcher(config.dispatcher)) {
     return {
       accepted: false,
       reason: "missing-bound-dispatcher",
     };
   }
-  if (typeof options.getCommandContext !== "function") {
+  if (typeof config.getCommandContext !== "function") {
     return {
       accepted: false,
       reason: "missing-command-context-provider",
@@ -246,7 +363,14 @@ export async function dispatchCfsControlIntent(intent = {}, options = {}) {
   }
   let request;
   try {
-    request = createCfsControlCommandRequest(intent, await options.getCommandContext(intent));
+    const normalizedIntent = normalizeCfsControlIntent(intent);
+    if (!config.allowedActions?.has(normalizedIntent.action)) {
+      return {
+        accepted: false,
+        reason: "cfs-command-action-not-enabled",
+      };
+    }
+    request = createCfsControlCommandRequest(normalizedIntent, await config.getCommandContext(normalizedIntent));
   } catch (error) {
     return {
       accepted: false,
@@ -259,6 +383,6 @@ export async function dispatchCfsControlIntent(intent = {}, options = {}) {
   return {
     accepted: true,
     request,
-    result: await options.dispatcher.dispatch(request),
+    result: await config.dispatcher.dispatch(request),
   };
 }

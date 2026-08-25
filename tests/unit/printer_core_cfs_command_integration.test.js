@@ -3,16 +3,20 @@
  * @description
  * - CFS操作intentがfail-closedにcommand requestへ変換され、bound dispatcherだけへ渡されることを検証する。
  *
- * @version 1.390.1380 (PR #432)
+ * @version 1.390.1382 (PR #432)
  * @since 1.390.1380 (PR #432)
- * @lastModified 2026-08-25 21:34:00
+ * @lastModified 2026-08-25 22:35:00
  */
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  createBoundCfsControlIntegration,
   createCfsControlCommandRequest,
   dispatchCfsControlIntent,
 } from "../../3dp_lib/printer_core/dashboard_cfs_command_integration.js";
+import {
+  createBoundPrinterCommandDispatcher,
+} from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 
 /**
  * 代表的なCFS slot操作intentを返す。
@@ -56,6 +60,36 @@ function createRequestContext() {
   };
 }
 
+/**
+ * CFS制御capabilityとfresh topologyを返す送信直前contextを生成する。
+ *
+ * 【詳細説明】
+ * - production dispatcherのsend-time validationを通すため、現在source bindingを明示する。
+ *
+ * @function createSendTimeContext
+ * @returns {object} dispatch context生成用raw context
+ */
+function createSendTimeContext() {
+  return {
+    deviceId: "serial:k2-pro",
+    sessionId: "session:live",
+    transportKind: "ws9999",
+    active: true,
+    capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+    materialTopology: {
+      cfsConnected: true,
+      topologyState: "fresh",
+      sources: [{
+        sourceId: "cfs:1:slot:2",
+        kind: "cfs-slot",
+        boxId: 1,
+        slotId: 2,
+        presence: "loaded",
+      }],
+    },
+  };
+}
+
 describe("Printer Core v3 CFS command integration scaffold", () => {
   it("CFS slot select intentをPrinter Core command requestへ変換する", () => {
     const request = createCfsControlCommandRequest(createSlotIntent(), createRequestContext());
@@ -96,6 +130,16 @@ describe("Printer Core v3 CFS command integration scaffold", () => {
     expect(request.expectedStateRequired).toBe(true);
   });
 
+  it("transport未指定時はCFS-Cも見据えてpending-adapterを使う", () => {
+    const request = createCfsControlCommandRequest(createSlotIntent(), {
+      deviceId: "serial:k2-pro",
+      sessionId: "session:live",
+      entropySource: () => "unit",
+    });
+
+    expect(request.transportKind).toBe("pending-adapter");
+  });
+
   it("actionとcommandKindが矛盾するintentはrequest生成前に拒否する", () => {
     expect(() => createCfsControlCommandRequest(
       createSlotIntent({ action: "select", commandKind: "cfs-feed" }),
@@ -104,56 +148,101 @@ describe("Printer Core v3 CFS command integration scaffold", () => {
   });
 
   it("既定ではenabledでないためbound dispatcherを呼ばない", async () => {
-    const dispatcher = {
-      dispatch: vi.fn(),
-    };
+    const integration = createBoundCfsControlIntegration();
 
-    const result = await dispatchCfsControlIntent(createSlotIntent(), {
-      dispatcher,
-      getCommandContext: () => createRequestContext(),
-    });
+    const result = await dispatchCfsControlIntent(createSlotIntent(), integration);
 
     expect(result).toEqual({
       accepted: false,
       reason: "cfs-command-integration-disabled",
     });
-    expect(dispatcher.dispatch).not.toHaveBeenCalled();
   });
 
-  it("enabled時はrequestだけをbound dispatcherへ渡す", async () => {
-    const dispatcher = {
-      dispatch: vi.fn().mockResolvedValue({ status: "acknowledged" }),
-    };
+  it("per-call optionsでenabledや偽dispatcherを渡しても拒否する", async () => {
     const result = await dispatchCfsControlIntent(createSlotIntent(), {
       enabled: true,
-      dispatcher,
+      dispatcher: { dispatch: vi.fn() },
       getCommandContext: () => createRequestContext(),
     });
 
+    expect(result).toEqual({
+      accepted: false,
+      reason: "untrusted-cfs-control-integration",
+    });
+  });
+
+  it("enabledなbound integration生成時は本物のbound dispatcherだけを受け付ける", () => {
+    expect(() => createBoundCfsControlIntegration({
+      enabled: true,
+      allowedActions: ["select"],
+      dispatcher: { dispatch: vi.fn() },
+      getCommandContext: () => createRequestContext(),
+    })).toThrow(/bound printer command dispatcher/);
+  });
+
+  it("enabled時はcomposition-bound integrationからrequestだけをbound dispatcherへ渡す", async () => {
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createSendTimeContext(),
+      sendTransport,
+    });
+    const integration = createBoundCfsControlIntegration({
+      enabled: true,
+      allowedActions: ["select"],
+      dispatcher,
+      getCommandContext: () => createRequestContext(),
+    });
+    const result = await integration.onCommand(createSlotIntent());
+
     expect(result.accepted).toBe(true);
-    expect(result.result).toEqual({ status: "acknowledged" });
-    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatcher.dispatch.mock.calls[0][0]).toMatchObject({
+    expect(sendTransport).toHaveBeenCalledTimes(1);
+    expect(sendTransport.mock.calls[0][0]).toMatchObject({
       commandKind: "cfs-slot-select",
       payload: {
         sourceId: "cfs:1:slot:2",
       },
     });
-    expect(dispatcher.dispatch.mock.calls[0]).toHaveLength(1);
+    expect(sendTransport.mock.calls[0]).toHaveLength(2);
+    expect(result.request.commandKind).toBe("cfs-slot-select");
   });
 
-  it("sourceId欠落はdispatch前にinvalid intentとして返す", async () => {
-    const dispatcher = {
-      dispatch: vi.fn(),
-    };
-    const result = await dispatchCfsControlIntent(createSlotIntent({ sourceId: "" }), {
+  it("composition時のallowedActionsでaction単位に拒否する", async () => {
+    const sendTransport = vi.fn();
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createSendTimeContext(),
+      sendTransport,
+    });
+    const integration = createBoundCfsControlIntegration({
       enabled: true,
+      allowedActions: ["select"],
       dispatcher,
       getCommandContext: () => createRequestContext(),
     });
 
+    const result = await integration.onCommand(createSlotIntent({ action: "feed", commandKind: "cfs-feed" }));
+
+    expect(result).toEqual({
+      accepted: false,
+      reason: "cfs-command-action-not-enabled",
+    });
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("sourceId欠落はdispatch前にinvalid intentとして返す", async () => {
+    const sendTransport = vi.fn();
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createSendTimeContext(),
+      sendTransport,
+    });
+    const integration = createBoundCfsControlIntegration({
+      enabled: true,
+      dispatcher,
+      getCommandContext: () => createRequestContext(),
+    });
+    const result = await integration.onCommand(createSlotIntent({ sourceId: "" }));
+
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe("invalid-cfs-command-intent");
-    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(sendTransport).not.toHaveBeenCalled();
   });
 });

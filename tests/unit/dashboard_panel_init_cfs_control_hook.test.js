@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1381 (PR #432)
+ * @version 1.390.1382 (PR #432)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-25 22:10:00
+ * @lastModified 2026-08-25 22:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -27,12 +27,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockState = vi.hoisted(() => ({
-  dispatchCfsControlIntent: vi.fn(),
   renderMaterialTopologyPanel: vi.fn(),
   createMaterialTopologyViewModel: vi.fn(),
   resolveDisplayMaterialTopology: vi.fn(),
   resolveMaterialDisplayMode: vi.fn(),
   resolveMaterialTopologyViewOptions: vi.fn(),
+  createBoundCfsControlIntegration: vi.fn(),
+  boundOnCommand: vi.fn(),
   panelDestroy: vi.fn(),
   monitorData: {
     machines: {},
@@ -168,7 +169,7 @@ vi.mock("../../3dp_lib/printer_core/dashboard_material_topology_panel.js", () =>
 }));
 
 vi.mock("../../3dp_lib/printer_core/dashboard_cfs_command_integration.js", () => ({
-  dispatchCfsControlIntent: mockState.dispatchCfsControlIntent,
+  createBoundCfsControlIntegration: mockState.createBoundCfsControlIntegration,
 }));
 
 /**
@@ -194,12 +195,13 @@ function createFilamentPanelBody() {
 describe("dashboard_panel_init CFS control hook", () => {
   beforeEach(() => {
     vi.resetModules();
-    mockState.dispatchCfsControlIntent.mockReset();
     mockState.renderMaterialTopologyPanel.mockReset();
     mockState.createMaterialTopologyViewModel.mockReset();
     mockState.resolveDisplayMaterialTopology.mockReset();
     mockState.resolveMaterialDisplayMode.mockReset();
     mockState.resolveMaterialTopologyViewOptions.mockReset();
+    mockState.createBoundCfsControlIntegration.mockReset();
+    mockState.boundOnCommand.mockReset();
     mockState.panelDestroy.mockReset();
     mockState.monitorData.machines = {
       K2Pro: {
@@ -242,9 +244,12 @@ describe("dashboard_panel_init CFS control hook", () => {
       update: vi.fn(),
       destroy: mockState.panelDestroy,
     });
-    mockState.dispatchCfsControlIntent.mockResolvedValue({
+    mockState.boundOnCommand.mockResolvedValue({
       accepted: false,
       reason: "cfs-command-integration-disabled",
+    });
+    mockState.createBoundCfsControlIntegration.mockReturnValue({
+      onCommand: mockState.boundOnCommand,
     });
     document.body.innerHTML = "";
   });
@@ -263,6 +268,10 @@ describe("dashboard_panel_init CFS control hook", () => {
     expect(body.classList.contains("filament-panel-cfs-mode")).toBe(true);
     expect(body.querySelector("#filament-change-btn")?.disabled).toBe(true);
     expect(body.querySelector("#filament-remove-btn")?.disabled).toBe(true);
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
+      enabled: false,
+      allowedActions: ["select", "load", "unload", "feed", "retract"],
+    });
     expect(mockState.renderMaterialTopologyPanel).toHaveBeenCalledTimes(1);
     const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
     expect(options.hostname).toBe("K2Pro");
@@ -284,15 +293,11 @@ describe("dashboard_panel_init CFS control hook", () => {
       accepted: false,
       reason: "cfs-command-integration-disabled",
     });
-    expect(mockState.dispatchCfsControlIntent).toHaveBeenCalledWith(
+    expect(mockState.boundOnCommand).toHaveBeenCalledWith(
       {
         action: "select",
         commandKind: "cfs-slot-select",
         sourceId: "cfs:1:slot:2",
-      },
-      {
-        enabled: false,
-        hostname: "K2Pro",
       }
     );
 
