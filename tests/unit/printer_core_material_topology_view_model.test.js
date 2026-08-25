@@ -11,13 +11,14 @@
  * - K2/CFS と K1C/CFS-C の read-only material topology を同じ表示モデルへ変換できることを検証
  * - 外部スプール1本とCFS/CFS-C最大16スロットの固定表示契約を検証
  * - selected、残量、空/未観測/装填状態、assignment、provider metadata を表示境界で保持することを検証
+ * - CFS操作候補authorityが既定read-onlyで、明示時だけ表示モデルへ反映されることを検証
  *
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1363 (PR #432)
+ * @version 1.390.1374 (PR #432)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-09 17:36:00
+ * @lastModified 2026-08-25 19:58:02
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -185,6 +186,8 @@ describe("Printer Core v3 material topology view model", () => {
       mode: "read-only-view",
       canDriveLedger: false,
       canSendCommands: false,
+      allowedActions: [],
+      reason: "command-authority-not-enabled",
       sourceAuthority: "unknown",
     });
     expect(viewModel.limits).toEqual({
@@ -441,6 +444,33 @@ describe("Printer Core v3 material topology view model", () => {
       externalSourceCount: 1,
       cfsObservedSlotCount: 4,
       selectedSourceCount: 1,
+    });
+  });
+
+  it("commandAuthorityが明示された場合だけCFS操作候補を表示モデルへ反映する", () => {
+    const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
+    const readOnlyViewModel = createMaterialTopologyViewModel(topology);
+    const commandViewModel = createMaterialTopologyViewModel(topology, {
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "feed", "unknown"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+
+    expect(readOnlyViewModel.authority).toMatchObject({
+      mode: "read-only-view",
+      canSendCommands: false,
+      canDriveLedger: false,
+      reason: "command-authority-not-enabled",
+    });
+    expect(commandViewModel.authority).toMatchObject({
+      mode: "command-candidate-view",
+      canSendCommands: true,
+      canDriveLedger: false,
+      allowedActions: ["select", "feed"],
+      reason: null,
+      sourceAuthority: "printer-core-command-dispatcher",
     });
   });
 });

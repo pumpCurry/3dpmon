@@ -11,19 +11,37 @@
  * - Printer Core v3 material topology view model をフィラメントパネルへread-only描画
  * - 外部スプール1本とCFS/CFS-Cの設定台数分slotを同一UIで表示
  * - selected、残量、材料色、装填状態、assignment、fresh/staleを表示する
+ * - 明示的なcommand authority候補と送信hookが揃った場合だけ、CFS操作ボタンを有効化する
  *
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1366 (PR #432)
+ * @version 1.390.1374 (PR #432)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-09 19:37:13
+ * @lastModified 2026-08-25 19:58:02
  * -----------------------------------------------------------
  * @todo
- * - command authority Gateで、Core経由の安全なfeed/retract/select操作だけを別UIとして追加する
+ * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
  */
 
 "use strict";
+
+/**
+ * CFS操作ボタン定義。
+ *
+ * 【詳細説明】
+ * - action はUI内部名、commandKind は Printer Core v3 command authority の command kind。
+ * - 表示ラベルは短くし、詳細はtitle/aria-labelへ逃がす。
+ *
+ * @constant {Array<object>}
+ */
+const MATERIAL_CONTROL_BUTTONS = Object.freeze([
+  Object.freeze({ action: "select", commandKind: "cfs-slot-select", label: "選択", title: "このCFSスロットを選択します" }),
+  Object.freeze({ action: "load", commandKind: "cfs-load", label: "装填", title: "このCFSスロットのフィラメントを装填します" }),
+  Object.freeze({ action: "unload", commandKind: "cfs-unload", label: "取外", title: "このCFSスロットのフィラメントを取り外します" }),
+  Object.freeze({ action: "feed", commandKind: "cfs-feed", label: "送出", title: "このCFSスロットのフィラメントを送ります" }),
+  Object.freeze({ action: "retract", commandKind: "cfs-retract", label: "巻戻", title: "このCFSスロットのフィラメントを戻します" }),
+]);
 
 /**
  * HTMLテキストとして安全に表示する文字列を返す。
@@ -205,6 +223,146 @@ function createElement(documentRef, tagName, className = "", text = "") {
 }
 
 /**
+ * renderer option と view model authority から操作方針を生成する。
+ *
+ * 【詳細説明】
+ * - ViewModelだけ、またはrenderer optionだけでは操作を許可しない。
+ * - 実送信前にはcommand dispatcherが再検証するため、ここはUI上の一次disabled判定に限定する。
+ *
+ * @private
+ * @param {object} viewModel - material topology view model
+ * @param {object} options - renderer options
+ * @returns {object} 操作方針
+ */
+function createControlPolicy(viewModel, options) {
+  const authority = viewModel?.authority || {};
+  const optionControl = options?.control && typeof options.control === "object" ? options.control : {};
+  const authorityActions = new Set(Array.isArray(authority.allowedActions) ? authority.allowedActions : []);
+  const optionActions = Array.isArray(optionControl.allowedActions) && optionControl.allowedActions.length > 0
+    ? new Set(optionControl.allowedActions)
+    : authorityActions;
+  const allowedActions = new Set([...authorityActions].filter((action) => optionActions.has(action)));
+  const hasSendHook = typeof optionControl.onCommand === "function";
+  const canSendCommands = authority.canSendCommands === true &&
+    optionControl.canSendCommands === true &&
+    hasSendHook &&
+    allowedActions.size > 0;
+  return {
+    canSendCommands,
+    showControls: optionControl.showControls === true || authority.canSendCommands === true,
+    allowedActions,
+    onCommand: hasSendHook ? optionControl.onCommand : null,
+    reason: canSendCommands
+      ? null
+      : (optionControl.disabledReason || authority.reason || "command-authority-not-enabled"),
+  };
+}
+
+/**
+ * CFS操作ボタンのdisabled理由を返す。
+ *
+ * 【詳細説明】
+ * - stale/未観測/未装填/外部スプールでは操作を許可しない。
+ * - 理由文字列がnullならUI上は操作可能候補とするが、実送信時の最終判断はdispatcherへ委ねる。
+ *
+ * @private
+ * @param {object} row - ViewModel source row
+ * @param {boolean} isStale - topologyがstaleならtrue
+ * @param {object} controlPolicy - 操作方針
+ * @param {object} buttonConfig - 操作ボタン定義
+ * @returns {string|null} disabled理由、またはnull
+ */
+function getControlDisabledReason(row, isStale, controlPolicy, buttonConfig) {
+  if (row?.kind !== "cfs-slot") {
+    return "外部スプールはこの操作の対象外です";
+  }
+  if (!controlPolicy.canSendCommands) {
+    return controlPolicy.reason || "CFS操作権限がありません";
+  }
+  if (!controlPolicy.allowedActions.has(buttonConfig.action)) {
+    return "この操作は現在許可されていません";
+  }
+  if (isStale) {
+    return "CFS情報が最終観測状態のため操作できません";
+  }
+  if (!row?.sourceId) {
+    return "このスロットはまだ観測されていません";
+  }
+  if (row?.presence !== "loaded") {
+    return "このスロットにはフィラメントが装填されていません";
+  }
+  return null;
+}
+
+/**
+ * slot操作イベントpayloadを生成する。
+ *
+ * 【詳細説明】
+ * - rendererは直接command requestを作らず、slot/sourceの識別情報だけを送信hookへ渡す。
+ *
+ * @private
+ * @param {object} row - ViewModel source row
+ * @param {object} buttonConfig - 操作ボタン定義
+ * @returns {object} 操作hook payload
+ */
+function createControlCommandPayload(row, buttonConfig) {
+  return {
+    action: buttonConfig.action,
+    commandKind: buttonConfig.commandKind,
+    sourceId: row?.sourceId || null,
+    displaySlot: row?.displaySlot || null,
+    unitIndex: row?.unitIndex ?? null,
+    slotIndex: row?.slotIndex ?? null,
+    boxId: row?.boxId ?? null,
+    protocolSlotId: row?.protocolSlotId ?? null,
+  };
+}
+
+/**
+ * CFS slot 操作ボタン群を描画する。
+ *
+ * 【詳細説明】
+ * - disabled状態でもボタンを表示し、なぜ操作できないかをtitleで示す。
+ * - 実行中は二重クリックを避けるため、対象ボタンだけ一時disabledにする。
+ *
+ * @private
+ * @param {Document} documentRef - DOM document
+ * @param {object} row - ViewModel source row
+ * @param {boolean} isStale - topologyがstaleならtrue
+ * @param {object} controlPolicy - 操作方針
+ * @returns {HTMLElement} 操作ボタンコンテナ
+ */
+function renderSlotControls(documentRef, row, isStale, controlPolicy) {
+  const controls = createElement(documentRef, "div", "mtv-controls");
+  for (const buttonConfig of MATERIAL_CONTROL_BUTTONS) {
+    const reason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
+    const button = createElement(documentRef, "button", "mtv-control-btn", buttonConfig.label);
+    button.type = "button";
+    button.dataset.action = buttonConfig.action;
+    button.dataset.commandKind = buttonConfig.commandKind;
+    button.disabled = Boolean(reason);
+    button.title = reason || buttonConfig.title;
+    button.setAttribute("aria-label", `${displayText(row?.displaySlot)} ${buttonConfig.title}`);
+    button.addEventListener("click", async () => {
+      const currentReason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
+      if (currentReason || typeof controlPolicy.onCommand !== "function") {
+        return;
+      }
+      button.disabled = true;
+      button.dataset.running = "true";
+      try {
+        await controlPolicy.onCommand(createControlCommandPayload(row, buttonConfig));
+      } finally {
+        button.dataset.running = "false";
+        button.disabled = false;
+      }
+    });
+    controls.appendChild(button);
+  }
+  return controls;
+}
+
+/**
  * material source rowをslotカードとして描画する。
  *
  * 【詳細説明】
@@ -214,9 +372,10 @@ function createElement(documentRef, tagName, className = "", text = "") {
  * @param {Document} documentRef - DOM document
  * @param {object} row - ViewModel source row
  * @param {boolean=} isStale - trueなら最終観測値として描画する
+ * @param {object=} controlPolicy - 操作方針
  * @returns {HTMLElement} slot要素
  */
-function renderSourceSlot(documentRef, row, isStale = false) {
+function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {}) {
   const presence = normalizePresenceClass(row?.presence);
   const slot = createElement(documentRef, "div", `mtv-slot mtv-presence-${presence}`);
   slot.dataset.slot = row?.displaySlot || "";
@@ -255,6 +414,9 @@ function renderSourceSlot(documentRef, row, isStale = false) {
   if (assignmentText) {
     slot.appendChild(createElement(documentRef, "div", "mtv-assignment", assignmentText));
   }
+  if (controlPolicy.showControls && row?.kind === "cfs-slot") {
+    slot.appendChild(renderSlotControls(documentRef, row, isStale, controlPolicy));
+  }
   return slot;
 }
 
@@ -268,9 +430,10 @@ function renderSourceSlot(documentRef, row, isStale = false) {
  * @param {Document} documentRef - DOM document
  * @param {object} unit - ViewModel unit row
  * @param {boolean=} isStale - trueなら最終観測値として描画する
+ * @param {object=} controlPolicy - 操作方針
  * @returns {HTMLElement} unit要素
  */
-function renderUnit(documentRef, unit, isStale = false) {
+function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}) {
   const unitEl = createElement(documentRef, "section", "mtv-unit");
   if (!unit?.observed) {
     unitEl.classList.add("mtv-unit-unobserved");
@@ -292,7 +455,7 @@ function renderUnit(documentRef, unit, isStale = false) {
 
   const slots = createElement(documentRef, "div", "mtv-slots");
   for (const row of Array.isArray(unit?.slots) ? unit.slots : []) {
-    slots.appendChild(renderSourceSlot(documentRef, row, isStale));
+    slots.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy));
   }
   unitEl.appendChild(slots);
   return unitEl;
@@ -310,6 +473,11 @@ function renderUnit(documentRef, unit, isStale = false) {
  * @param {object} viewModel - {@link createMaterialTopologyViewModel} の返り値
  * @param {object=} options - 描画オプション
  * @param {string=} options.hostname - 対象ホスト名
+ * @param {object=} options.control - CFS操作候補設定
+ * @param {boolean=} options.control.showControls - 操作候補ボタンを表示する場合true
+ * @param {boolean=} options.control.canSendCommands - renderer側で操作候補を有効化する場合true
+ * @param {Array<string>=} options.control.allowedActions - renderer側で許可する操作action
+ * @param {Function=} options.control.onCommand - 操作hook
  * @returns {{update: function(object): void, destroy: function(): void}} renderer handle
  * @example
  * const handle = renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
@@ -339,6 +507,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const header = createElement(documentRef, "div", "mtv-header");
     const topologyState = currentViewModel?.summary?.topologyState || "unobserved";
     const isStale = topologyState === "stale";
+    const controlPolicy = createControlPolicy(currentViewModel, options);
     root.classList.add(`mtv-root-${topologyState}`);
     header.appendChild(createElement(documentRef, "span", "mtv-title", "フィラメント供給"));
     header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState)));
@@ -366,20 +535,22 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
       const external = createElement(documentRef, "section", "mtv-external");
       external.appendChild(createElement(documentRef, "div", "mtv-section-title", "外部スプール"));
       for (const row of externalRows) {
-        external.appendChild(renderSourceSlot(documentRef, row, isStale));
+        external.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy));
       }
       root.appendChild(external);
     }
 
     const units = createElement(documentRef, "div", "mtv-units");
     for (const unit of Array.isArray(currentViewModel?.units) ? currentViewModel.units : []) {
-      units.appendChild(renderUnit(documentRef, unit, isStale));
+      units.appendChild(renderUnit(documentRef, unit, isStale, controlPolicy));
     }
     root.appendChild(units);
 
     const footer = createElement(documentRef, "div", "mtv-readonly-note");
     const host = options.hostname ? `${options.hostname}: ` : "";
-    footer.textContent = `${host}🔒 CFS/CFS-Cは現在監視のみです。フィラメント操作はプリンタ本体から行ってください。`;
+    footer.textContent = controlPolicy.canSendCommands
+      ? `${host}CFS/CFS-C操作はPrinter Core v3 dispatcherで送信直前に再検証されます。`
+      : `${host}🔒 CFS/CFS-Cは現在監視のみです。フィラメント操作はプリンタ本体から行ってください。`;
     root.appendChild(footer);
     container.appendChild(root);
   }

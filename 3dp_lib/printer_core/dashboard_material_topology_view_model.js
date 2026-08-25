@@ -11,13 +11,14 @@
  * - Printer Core v3 の read-only material topology を UI 表示用の固定スロット構造へ変換
  * - CFS/CFS-C を4スロット単位で最大4ユニット、外部スプール1本を加えた最大16+1表示へ整形
  * - selected、残量、物理状態、assignment、fresh/staleを表示専用の値としてまとめる
+ * - 明示的な command authority 証跡がある場合だけ、CFS操作UI用の候補権限を表示モデルへ写す
  *
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1363 (PR #432)
+ * @version 1.390.1374 (PR #432)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-09 17:18:00
+ * @lastModified 2026-08-25 19:58:02
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -76,6 +77,16 @@ export const DEFAULT_EXTERNAL_SOURCE_LIMIT = 1;
 const SLOT_SUFFIXES = Object.freeze(["A", "B", "C", "D"]);
 
 /**
+ * material topology panel で扱うCFS操作action一覧。
+ *
+ * 【詳細説明】
+ * - action名はUI内部名で、command authorityのcommandKindとはrenderer境界で対応付ける。
+ *
+ * @constant {string[]}
+ */
+const MATERIAL_CONTROL_ACTIONS = Object.freeze(["select", "load", "unload", "feed", "retract"]);
+
+/**
  * 任意値を有限 number へ変換する。
  *
  * 【詳細説明】
@@ -113,6 +124,33 @@ function toNullableBoolean(value) {
   }
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue === 1 : null;
+}
+
+/**
+ * command authority view を安全側へ正規化する。
+ *
+ * 【詳細説明】
+ * - 既定では必ずread-onlyにし、明示的な`commandAuthority.canSendCommands=true`がある場合だけ候補権限を返す。
+ * - ここで返す値はUI表示/disabled判定用であり、実送信時の最終権限はcommand dispatcher側で再検証する。
+ *
+ * @private
+ * @param {object|null|undefined} commandAuthority - 呼び出し側が明示したcommand authority候補
+ * @returns {object} 表示用command authority
+ */
+function normalizeCommandAuthorityView(commandAuthority) {
+  const source = commandAuthority && typeof commandAuthority === "object" ? commandAuthority : {};
+  const allowedActions = new Set(Array.isArray(source.allowedActions) ? source.allowedActions : []);
+  const canSendCommands = source.canSendCommands === true;
+  return {
+    mode: canSendCommands ? "command-candidate-view" : "read-only-view",
+    canDriveLedger: false,
+    canSendCommands,
+    allowedActions: MATERIAL_CONTROL_ACTIONS.filter((action) => allowedActions.has(action)),
+    reason: canSendCommands
+      ? (source.reason || null)
+      : (source.reason || "command-authority-not-enabled"),
+    sourceAuthority: source.sourceAuthority || source.source || null,
+  };
 }
 
 /**
@@ -481,7 +519,9 @@ function createSummary(externalRows, cfsUnits, topology) {
  *
  * 【詳細説明】
  * - 入力は Printer Core v3 の NormalizedState `materials` または MaterialProvider topology を想定する。
- * - 返り値はread-only表示専用で、spool mount、ledger、load/unload/select command の authority にはしない。
+ * - 既定の返り値はread-only表示専用で、spool mount、ledger、load/unload/select command の authority にはしない。
+ * - `options.commandAuthority` が明示された場合だけ、UIの操作候補表示に使うauthority情報を同梱する。
+ *   ただし実送信可否は送信直前dispatcherで再検証する。
  * - CFS/CFS-C は最大4unit x 4slot、外部スプールは既定1本の固定枠として表示できる。
  *
  * @function createMaterialTopologyViewModel
@@ -490,6 +530,7 @@ function createSummary(externalRows, cfsUnits, topology) {
  * @param {number=} options.unitLimit - 最大CFS unit数
  * @param {number=} options.slotsPerUnit - CFS 1unitあたりslot数
  * @param {number=} options.externalSourceLimit - 外部スプール表示数
+ * @param {object=} options.commandAuthority - UI操作候補用command authority
  * @returns {object} material topology 表示用 view model
  * @example
  * const viewModel = createMaterialTopologyViewModel(state.materials);
@@ -501,13 +542,12 @@ export function createMaterialTopologyViewModel(topology, options = {}) {
   const externalSourceLimit = Math.max(0, Math.min(1, Math.floor(toFiniteNumber(options.externalSourceLimit, DEFAULT_EXTERNAL_SOURCE_LIMIT) ?? DEFAULT_EXTERNAL_SOURCE_LIMIT)));
   const externalRows = createExternalRows(safeTopology, externalSourceLimit);
   const cfsUnits = createCfsUnitRows(safeTopology, { unitLimit, slotsPerUnit });
+  const commandAuthority = normalizeCommandAuthorityView(options.commandAuthority);
   return {
     schemaVersion: MATERIAL_TOPOLOGY_VIEW_MODEL_SCHEMA_VERSION,
     authority: {
-      mode: "read-only-view",
-      canDriveLedger: false,
-      canSendCommands: false,
-      sourceAuthority: safeTopology.authority?.mode || "unknown",
+      ...commandAuthority,
+      sourceAuthority: commandAuthority.sourceAuthority || safeTopology.authority?.mode || "unknown",
     },
     limits: {
       externalSourceLimit,
