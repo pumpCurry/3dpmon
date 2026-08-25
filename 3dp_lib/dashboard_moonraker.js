@@ -1028,7 +1028,12 @@ export function createMoonrakerSession(opts) {
       pending.delete(msg.id);
       if (msg.error) {
         onLog(`[moonraker] ${tag} RPC エラー: ${msg.error.message || "rpc error"}`, tag === "subscribe" ? "error" : "warn");
-        restartMaterialOnlyAfterInitializationFailure(tag);
+        if (restartMaterialOnlyAfterInitializationFailure(tag)) {
+          return;
+        }
+        if (tag === "subscribe") {
+          onState("disconnected");
+        }
         return;
       }
       const result = msg.result;

@@ -957,4 +957,36 @@ describe('createMoonrakerSession material-only provider', () => {
       globalThis.WebSocket = originalWebSocket;
     }
   });
+
+  it('通常Moonraker sessionのsubscribe errorは従来どおりdisconnected通知する', () => {
+    const originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = FakeMoonrakerWebSocket;
+    FakeMoonrakerWebSocket.instances = [];
+    const onState = vi.fn();
+    const onLog = vi.fn();
+    try {
+      createMoonrakerSession({
+        url: 'ws://198.51.100.23:80/websocket',
+        fallbackHost: 'IR3V2',
+        materialOnly: false,
+        onState,
+        onLog,
+        shouldReconnect: () => true,
+      });
+      const ws = FakeMoonrakerWebSocket.instances[0];
+      ws.onopen();
+      replyMoonrakerRpc(ws, ws.sent[0].id, { result: { hostname: 'IR3V2' } });
+      expect(ws.sent[1]).toMatchObject({ method: 'printer.objects.query' });
+      expect(ws.sent[2]).toMatchObject({ method: 'printer.objects.subscribe' });
+
+      replyMoonrakerRpc(ws, ws.sent[2].id, { error: { message: 'subscription failed' } });
+
+      expect(onLog).toHaveBeenCalledWith(expect.stringContaining('subscribe RPC エラー'), 'error');
+      expect(onState).toHaveBeenCalledWith('disconnected');
+      expect(ws.readyState).toBe(FakeMoonrakerWebSocket.OPEN);
+      expect(FakeMoonrakerWebSocket.instances).toHaveLength(1);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
 });
