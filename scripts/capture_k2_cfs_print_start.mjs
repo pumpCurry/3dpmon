@@ -19,9 +19,9 @@
  * - {@link buildK2CfsPrintStartRequest}：transport plan用requestを生成
  * - {@link runK2CfsPrintStartCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1386 (PR #432)
+ * @version 1.390.1387 (PR #432)
  * @since   1.390.1385 (PR #432)
- * @lastModified 2026-08-26 00:40:00
+ * @lastModified 2026-08-26 00:50:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-start boxsInfo probeとscenario fixture保存を統合する
@@ -57,6 +57,8 @@ Options:
   --assignment <a,s,t,c>          Tool alias, material source id, material type, color. Repeatable.
   --enable-self-test <0|1>        K2 enableSelfTest value. Default: 0.
   --send                          Actually send frames to the printer. Default is dry-run.
+  --confirm-live                  Required with --send to acknowledge live printer motion.
+  --confirm-host <ip-or-host>      Required with --send and must match --host exactly.
   --pretty                        Pretty-print JSON result.
   --help                          Show this help.
 `;
@@ -97,6 +99,8 @@ export function parseArgs(argv = []) {
     assignments: [],
     enableSelfTest: 0,
     send: false,
+    confirmLive: false,
+    confirmHost: "",
     pretty: false,
     help: false,
   };
@@ -116,6 +120,8 @@ export function parseArgs(argv = []) {
     else if (arg === "--assignment") options.assignments.push(parseToolAssignmentOption(next()));
     else if (arg === "--enable-self-test") options.enableSelfTest = Number(next());
     else if (arg === "--send") options.send = true;
+    else if (arg === "--confirm-live") options.confirmLive = true;
+    else if (arg === "--confirm-host") options.confirmHost = next();
     else if (arg === "--pretty") options.pretty = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -133,6 +139,12 @@ export function parseArgs(argv = []) {
   }
   if (options.send && !toNonEmptyString(options.host)) {
     throw new Error("--host is required when --send is used.");
+  }
+  if (options.send && options.confirmLive !== true) {
+    throw new Error("--confirm-live is required when --send is used.");
+  }
+  if (options.send && toNonEmptyString(options.confirmHost) !== toNonEmptyString(options.host)) {
+    throw new Error("--confirm-host must exactly match --host when --send is used.");
   }
   return options;
 }

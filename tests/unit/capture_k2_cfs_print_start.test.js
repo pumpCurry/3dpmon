@@ -3,9 +3,9 @@
  * @description
  * - CLIが既定dry-runで、明示 `--send` なしに実機送信へ進まないことを検証する。
  *
- * @version 1.390.1386 (PR #432)
+ * @version 1.390.1387 (PR #432)
  * @since 1.390.1385 (PR #432)
- * @lastModified 2026-08-26 00:40:00
+ * @lastModified 2026-08-26 00:50:00
  */
 
 import { describe, expect, it } from "vitest";
@@ -60,6 +60,51 @@ describe("capture_k2_cfs_print_start", () => {
       "--assignment",
       "T1A,cfs:1:slot:0,PLA,ffffff",
     ])).toThrow("--host is required");
+  });
+
+  it("--send指定時はlive確認とhost一致確認も必須にする", () => {
+    const baseArgs = [
+      "--send",
+      "--host",
+      "192.168.54.21",
+      "--file-path",
+      "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+      "--assignment",
+      "T1A,cfs:1:slot:0,PLA,ffffff",
+    ];
+
+    expect(() => parseArgs(baseArgs)).toThrow("--confirm-live is required");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.22",
+    ])).toThrow("--confirm-host must exactly match --host");
+    expect(parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.21",
+    ])).toMatchObject({
+      send: true,
+      confirmLive: true,
+      confirmHost: "192.168.54.21",
+    });
+  });
+
+  it("dry-runではlive確認とhost一致確認を要求しない", () => {
+    const options = parseArgs([
+      "--file-path",
+      "/mnt/UDISK/printer_data/gcodes/benchy.gcode",
+      "--assignment",
+      "T1A,cfs:1:slot:0,PLA,ffffff",
+    ]);
+
+    expect(options).toMatchObject({
+      send: false,
+      confirmLive: false,
+      confirmHost: "",
+    });
   });
 
   it("external source assignmentはdry-run段階でも拒否結果になる", async () => {
@@ -132,6 +177,9 @@ describe("capture_k2_cfs_print_start", () => {
       ...parseArgs([
         "--send",
         "--host",
+        "192.168.54.21",
+        "--confirm-live",
+        "--confirm-host",
         "192.168.54.21",
         "--file-path",
         "/mnt/UDISK/printer_data/gcodes/benchy.gcode",

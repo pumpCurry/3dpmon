@@ -75,11 +75,12 @@ Last updated: 2026-08-26
 - `sendK2CfsCommandTransportPlan()` はframe responseを評価し、失敗/未知statusでは次frameへ進まない。`submitted` はlocal送信完了のみを意味し、protocol ackではない。
 - `protocolCommandId` はprofile/PrintPlan由来の合成IDを廃止し、transport responseに実IDがある場合だけ採用する。実IDが無い場合は `correlationEvidence.kind:"none"` としてauthority証跡へ昇格しない。
 - certification CLIのlive送信は `ws.send()` callbackをawaitし、WebSocket libraryが各frameを受け取る前に `sent:true` を返さない。
+- certification CLIの実送信は `--send` に加えて `--confirm-live --confirm-host <host>` を必須にし、dry-run確認後の明示操作だけをlive境界として扱う。
 
 ## Gate 20 後も残る command activation 項目
 
 - K2実機で `colorMatch` -> `multiColorPrint` を明示確認し、post-start selected CFS source、物理feed、消費量変化、完了状態を同一fixtureで証明する。
-- certification CLIで実送信する場合は、dry-run出力を確認したうえでoperatorが明示的に `--send` を付ける。Codex側からlive送信する場合も、その直前にユーザー確認を取る。
+- certification CLIで実送信する場合は、dry-run出力を確認したうえでoperatorが明示的に `--send --confirm-live --confirm-host <host>` を付ける。Codex側からlive送信する場合も、その直前にユーザー確認を取る。
 - 実機certificationが終わるまで、通常フィラメントパネルのCFS操作ボタンは送信可能にしない。
 - slot select / load / unload / feed / retract は、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyを確定してからadapterへ追加する。
 - K1C+CFS-Cについては、Moonraker object経由のmaterial providerとは別に、操作commandのprovider/transport境界を実機で確認する。
