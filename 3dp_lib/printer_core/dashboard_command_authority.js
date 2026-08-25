@@ -18,10 +18,13 @@
  * - {@link shouldRetryPrinterCommand}：command retry 可否を判定
  * - {@link evaluateExpectedStateConfirmation}：NormalizedState に対する期待状態確認を評価
  * - {@link validatePrinterCommandRequest}：command request の整合性を検査
+ * - {@link createPrinterCommandDispatchContext}：送信直前再検証用 context を生成
+ * - {@link validatePrinterCommandSendTime}：command request と送信時 context の整合性を検査
+ * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1350 (PR #432)
+ * @version 1.390.1373 (PR #432)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-09 09:25:00
+ * @lastModified 2026-08-25 19:30:32
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -38,6 +41,16 @@
  * @constant {number}
  */
 export const PRINTER_COMMAND_SCHEMA_VERSION = 1;
+
+/**
+ * Printer Core v3 production dispatcher context の schema version。
+ *
+ * 【詳細説明】
+ * - command request とは別に、送信直前に再取得した active session / capability / topology の証跡を表す。
+ *
+ * @constant {number}
+ */
+export const PRINTER_COMMAND_DISPATCH_CONTEXT_SCHEMA_VERSION = 1;
 
 /**
  * 既定 command timeout。
@@ -59,6 +72,17 @@ export const DEFAULT_PRINTER_COMMAND_TIMEOUT_MS = 30000;
  * @constant {string}
  */
 const COMMAND_CORRELATION_EVIDENCE_SECRET = `printer-core-command-correlation:${Date.now()}:${Math.random()}`;
+
+/**
+ * send-time context attestation 用の module-private secret。
+ *
+ * 【詳細説明】
+ * - caller が `active:true` や `canSend:true` を手書きしても production dispatcher を通過できないようにする。
+ * - 実接続時は、接続層が現在のWebSocket session/capability/topologyからこのcontextを発行する。
+ *
+ * @constant {string}
+ */
+const COMMAND_DISPATCH_CONTEXT_SECRET = `printer-core-command-dispatch:${Date.now()}:${Math.random()}`;
 
 /**
  * Printer Core v3 command kind の分類。
@@ -110,6 +134,40 @@ export const PRINTER_COMMAND_KIND_CONTRACTS = Object.freeze({
     idempotent: false,
     expectedStateRequired: true,
   }),
+  "cfs-slot-select": Object.freeze({
+    sideEffect: true,
+    idempotent: false,
+    expectedStateRequired: true,
+  }),
+  "cfs-feed": Object.freeze({
+    sideEffect: true,
+    idempotent: false,
+    expectedStateRequired: true,
+  }),
+  "cfs-retract": Object.freeze({
+    sideEffect: true,
+    idempotent: false,
+    expectedStateRequired: true,
+  }),
+});
+
+/**
+ * command kind ごとに送信直前で必要な capability。
+ *
+ * 【詳細説明】
+ * - Gate 19 では CFS 操作を、単なる CFS topology 観測ではなく明示的な制御 capability がある時だけ許可する。
+ *
+ * @constant {object}
+ */
+const PRINTER_COMMAND_REQUIRED_CAPABILITIES = Object.freeze({
+  "print-start": Object.freeze(["command.print-start"]),
+  "print-stop": Object.freeze(["command.print-stop"]),
+  "file-delete": Object.freeze(["command.file-delete"]),
+  "cfs-load": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
+  "cfs-unload": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
+  "cfs-slot-select": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
+  "cfs-feed": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
+  "cfs-retract": Object.freeze(["material.cfs", "material.cfsTopology", "command.cfs-control"]),
 });
 
 /**
@@ -234,6 +292,38 @@ function normalizeSequence(value) {
 }
 
 /**
+ * capability 候補を Set へ正規化する。
+ *
+ * 【詳細説明】
+ * - NormalizedState の `capabilities.values`、単純配列、Set のいずれも受け付ける。
+ * - 送信時検証では存在確認だけを行うため、値は文字列化して重複排除する。
+ *
+ * @private
+ * @param {*} value - capability 候補
+ * @returns {Set<string>} capability set
+ */
+function normalizeCapabilitySet(value) {
+  const rawValues = value instanceof Set
+    ? Array.from(value)
+    : (Array.isArray(value) ? value : (Array.isArray(value?.values) ? value.values : []));
+  return new Set(rawValues.map((entry) => String(entry || "").trim()).filter(Boolean));
+}
+
+/**
+ * command kind に必要な capability を返す。
+ *
+ * 【詳細説明】
+ * - 未登録 command は未知のside-effect commandとして扱うが、capability名は推測せず空配列を返す。
+ *
+ * @private
+ * @param {string} commandKind - command 種別
+ * @returns {string[]} 必須 capability 名配列
+ */
+function getRequiredCommandCapabilities(commandKind) {
+  return Array.from(PRINTER_COMMAND_REQUIRED_CAPABILITIES[commandKind] || []);
+}
+
+/**
  * command correlation evidence signature を生成する。
  *
  * 【詳細説明】
@@ -258,6 +348,60 @@ function createCommandCorrelationSignature(evidence) {
     ].join("|"),
     entropySource: () => evidence.correlationId,
   });
+}
+
+/**
+ * command dispatch context の attestation signature を生成する。
+ *
+ * 【詳細説明】
+ * - context の active/session/capability/topology/upload identity を署名対象に含める。
+ * - caller が context を手書きしても module-private secret が無いため検証に失敗する。
+ *
+ * @private
+ * @param {object} context - dispatch context
+ * @returns {string} attestation signature
+ */
+function createCommandDispatchContextSignature(context) {
+  return createCommandId({
+    deviceId: context.deviceId,
+    sessionId: context.sessionId,
+    commandKind: "dispatch-context",
+    idempotencyKey: [
+      COMMAND_DISPATCH_CONTEXT_SECRET,
+      context.contextId,
+      context.transportKind,
+      context.active === true ? "active" : "inactive",
+      (context.capabilities || []).join(","),
+      context.materialTopology?.cfsConnected === true ? "cfs-connected" : "cfs-not-connected",
+      context.materialTopology?.topologyState || "",
+      context.uploadGeneration || "",
+      context.fileIdentity?.remotePath || "",
+      context.fileIdentity?.fileHash || "",
+      context.stateSequence ?? "",
+      context.createdAt || "",
+    ].join("|"),
+    entropySource: () => context.contextId,
+  });
+}
+
+/**
+ * command dispatch context が dispatcher 発行の証跡を持つか検査する。
+ *
+ * 【詳細説明】
+ * - `authority.canSend=true` のような単純フラグだけでは信頼しない。
+ *
+ * @private
+ * @param {object|null|undefined} context - dispatch context
+ * @returns {boolean} 正しい attestation を持つ場合 true
+ */
+function hasTrustedDispatchContext(context) {
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  const expected = createCommandDispatchContextSignature(context);
+  return context.authority?.source === "printer-core-command-dispatcher" &&
+    context.authority?.canSend === true &&
+    context.authority?.attestation === expected;
 }
 
 /**
@@ -378,6 +522,397 @@ export function createPrinterCommandRequest(options = {}) {
     throw new TypeError(`Invalid printer command request: ${validation.errors.join(",")}`);
   }
   return request;
+}
+
+/**
+ * Printer Core v3 production dispatcher 用の送信直前 context を生成する。
+ *
+ * 【詳細説明】
+ * - request 作成時点の古い判断ではなく、送信直前に再取得した active session / capability / topology を固定する。
+ * - 生成した context は module-private attestation を持ち、`validatePrinterCommandSendTime()` で偽装を検出できる。
+ * - context は永続保存する authority ではなく、現在の接続sessionにだけ有効な一時証跡として扱う。
+ *
+ * @function createPrinterCommandDispatchContext
+ * @param {object} options - dispatch context 生成オプション
+ * @param {string} options.deviceId - 現在接続中の device ID
+ * @param {string} options.sessionId - 現在接続中の session ID
+ * @param {string=} options.transportKind - 送信 transport 種別
+ * @param {boolean=} options.active - 現在のsessionが送信可能なら true
+ * @param {Array<string>|Set<string>|object=} options.capabilities - 現在のcapability set
+ * @param {object=} options.materialTopology - 現在のmaterial topology summary
+ * @param {boolean=} options.materialTopology.cfsConnected - CFS/CFS-Cが現在接続中なら true
+ * @param {string=} options.materialTopology.topologyState - `fresh` / `stale` 等のtopology鮮度
+ * @param {string=} options.uploadGeneration - remote file の現在upload generation
+ * @param {object=} options.fileIdentity - remote file identity
+ * @param {string=} options.fileIdentity.remotePath - remote path
+ * @param {string=} options.fileIdentity.fileHash - content hash
+ * @param {number=} options.stateSequence - 送信前に観測済みのstate sequence
+ * @param {object=} options.observedState - 送信前のNormalizedState
+ * @param {string=} options.createdAt - context生成時刻ISO文字列
+ * @param {Function=} options.entropySource - contextId生成用source
+ * @returns {object} dispatch context
+ * @example
+ * const context = createPrinterCommandDispatchContext({ deviceId, sessionId, active: true });
+ */
+export function createPrinterCommandDispatchContext(options = {}) {
+  const deviceId = requireNonEmptyString(options.deviceId, "deviceId");
+  const sessionId = requireNonEmptyString(options.sessionId, "sessionId");
+  const capabilities = Array.from(normalizeCapabilitySet(options.capabilities)).sort();
+  const materialTopology = options.materialTopology && typeof options.materialTopology === "object"
+    ? {
+        cfsConnected: options.materialTopology.cfsConnected === true,
+        topologyState: String(options.materialTopology.topologyState || "unobserved"),
+        sourceCount: Number.isFinite(Number(options.materialTopology.sourceCount))
+          ? Number(options.materialTopology.sourceCount)
+          : null,
+      }
+    : {
+        cfsConnected: false,
+        topologyState: "unobserved",
+        sourceCount: null,
+      };
+  const fileIdentity = options.fileIdentity && typeof options.fileIdentity === "object"
+    ? {
+        remotePath: String(options.fileIdentity.remotePath || options.fileIdentity.path || "").trim() || null,
+        fileHash: String(options.fileIdentity.fileHash || options.fileIdentity.contentHash || options.fileIdentity.sha256 || "").trim() || null,
+      }
+    : {
+        remotePath: null,
+        fileHash: null,
+      };
+  const contextId = createCommandId({
+    deviceId,
+    sessionId,
+    commandKind: "dispatch-context",
+    idempotencyKey: options.uploadGeneration || null,
+    entropySource: options.entropySource,
+  });
+  const context = {
+    schemaVersion: PRINTER_COMMAND_DISPATCH_CONTEXT_SCHEMA_VERSION,
+    contextId,
+    deviceId,
+    sessionId,
+    transportKind: options.transportKind || "unknown",
+    active: options.active === true,
+    capabilities,
+    materialTopology,
+    uploadGeneration: String(options.uploadGeneration || "").trim() || null,
+    fileIdentity,
+    stateSequence: normalizeSequence(options.stateSequence ?? options.sequence),
+    observedState: cloneJsonValue(options.observedState || null),
+    createdAt: options.createdAt || null,
+    authority: {
+      source: "printer-core-command-dispatcher",
+      canSend: true,
+      attestation: null,
+    },
+  };
+  context.authority.attestation = createCommandDispatchContextSignature(context);
+  return context;
+}
+
+/**
+ * print-start command の送信時 file/upload binding を検査する。
+ *
+ * 【詳細説明】
+ * - upload receipt / file identity が古いまま再利用されると別fileを開始する危険があるため、
+ *   command payload と送信時contextのidentityを照合する。
+ *
+ * @private
+ * @param {object} request - command request
+ * @param {object} context - dispatch context
+ * @returns {string[]} 検査エラー
+ */
+function collectPrintStartSendTimeErrors(request, context) {
+  if (request.commandKind !== "print-start") {
+    return [];
+  }
+  const errors = [];
+  const requestUploadGeneration = String(request.payload?.startContext?.uploadGeneration || "").trim();
+  const contextUploadGeneration = String(context.uploadGeneration || "").trim();
+  if (!requestUploadGeneration || !contextUploadGeneration || requestUploadGeneration !== contextUploadGeneration) {
+    errors.push("upload-generation-mismatch");
+  }
+  const requestRemotePath = String(request.payload?.asset?.path || request.payload?.asset?.remotePath || "").trim();
+  const contextRemotePath = String(context.fileIdentity?.remotePath || "").trim();
+  if (!requestRemotePath || !contextRemotePath || requestRemotePath !== contextRemotePath) {
+    errors.push("file-identity-path-mismatch");
+  }
+  const requestFileHash = String(request.payload?.asset?.fileHash || "").trim();
+  const contextFileHash = String(context.fileIdentity?.fileHash || "").trim();
+  if (!requestFileHash || !contextFileHash || requestFileHash !== contextFileHash) {
+    errors.push("file-identity-hash-mismatch");
+  }
+  return errors;
+}
+
+/**
+ * CFS command の送信時 topology を検査する。
+ *
+ * 【詳細説明】
+ * - CFS操作は最後に観測した古いtopologyではなく、現在freshかつconnectedなtopologyを要求する。
+ *
+ * @private
+ * @param {object} request - command request
+ * @param {object} context - dispatch context
+ * @returns {string[]} 検査エラー
+ */
+function collectCfsSendTimeErrors(request, context) {
+  if (!String(request.commandKind || "").startsWith("cfs-")) {
+    return [];
+  }
+  const errors = [];
+  if (context.materialTopology?.cfsConnected !== true) {
+    errors.push("cfs-not-connected");
+  }
+  if (context.materialTopology?.topologyState !== "fresh") {
+    errors.push("cfs-topology-not-fresh");
+  }
+  return errors;
+}
+
+/**
+ * command request を送信直前contextで再検証する。
+ *
+ * 【詳細説明】
+ * - request生成時点の判断を信用せず、active session / capability / material topology / upload identity を再確認する。
+ * - contextはdispatcher発行のattestationを要求し、永続保存された古いauthorityやcaller手書きcontextを拒否する。
+ *
+ * @function validatePrinterCommandSendTime
+ * @param {object|null|undefined} request - command request
+ * @param {object|null|undefined} context - dispatch context
+ * @returns {{ok: boolean, errors: string[]}} 検査結果
+ * @example
+ * const validation = validatePrinterCommandSendTime(request, context);
+ */
+export function validatePrinterCommandSendTime(request, context) {
+  const errors = [];
+  const requestValidation = validatePrinterCommandRequest(request);
+  if (!requestValidation.ok) {
+    errors.push(...requestValidation.errors.map((error) => `request:${error}`));
+  }
+  if (!context || typeof context !== "object") {
+    return { ok: false, errors: [...errors, "missing-dispatch-context"] };
+  }
+  if (context.schemaVersion !== PRINTER_COMMAND_DISPATCH_CONTEXT_SCHEMA_VERSION) {
+    errors.push("unexpected-dispatch-context-schema-version");
+  }
+  if (!hasTrustedDispatchContext(context)) {
+    errors.push("untrusted-dispatch-context");
+  }
+  if (context.active !== true) {
+    errors.push("dispatch-context-not-active");
+  }
+  if (request?.deviceId && context.deviceId !== request.deviceId) {
+    errors.push("device-mismatch");
+  }
+  if (request?.sessionId && context.sessionId !== request.sessionId) {
+    errors.push("session-mismatch");
+  }
+  if (
+    request?.transportKind &&
+    request.transportKind !== "unknown" &&
+    request.transportKind !== "pending-adapter" &&
+    context.transportKind !== "unknown" &&
+    context.transportKind !== request.transportKind
+  ) {
+    errors.push("transport-kind-mismatch");
+  }
+  const capabilities = normalizeCapabilitySet(context.capabilities);
+  for (const capability of getRequiredCommandCapabilities(request?.commandKind)) {
+    if (!capabilities.has(capability)) {
+      errors.push(`missing-capability:${capability}`);
+    }
+  }
+  errors.push(...collectCfsSendTimeErrors(request || {}, context));
+  errors.push(...collectPrintStartSendTimeErrors(request || {}, context));
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * validation failure 用の command result を生成する。
+ *
+ * 【詳細説明】
+ * - request自体が壊れている場合でも、dispatcher caller が同じshapeで失敗を扱えるようにする。
+ *
+ * @private
+ * @param {object|null|undefined} request - command request
+ * @param {string[]} errors - validation errors
+ * @returns {object} rejected result
+ */
+function createRejectedCommandResult(request, errors) {
+  return {
+    schemaVersion: PRINTER_COMMAND_SCHEMA_VERSION,
+    commandId: request?.commandId || null,
+    deviceId: request?.deviceId || null,
+    sessionId: request?.sessionId || null,
+    commandKind: request?.commandKind || null,
+    status: "rejected",
+    transportAccepted: false,
+    completed: false,
+    response: null,
+    error: {
+      code: "send-time-validation-failed",
+      errors: cloneJsonValue(errors),
+    },
+    confirmation: {
+      checked: false,
+      confirmed: false,
+      checks: [],
+    },
+    postCommandObservation: {
+      required: Boolean(request?.expectedStateRequired),
+      confirmed: false,
+      reason: "send-time-validation-failed",
+    },
+    completedAt: null,
+  };
+}
+
+/**
+ * transport response から result status を正規化する。
+ *
+ * 【詳細説明】
+ * - 既存 `sendCommand()` は fire-and-forget で `null` を返すため、例外なく戻った場合は acknowledged とする。
+ *
+ * @private
+ * @param {*} response - transport response
+ * @returns {string} command result status
+ */
+function normalizeTransportStatus(response) {
+  const status = String(response?.status || response?.result || "").trim();
+  return status || "acknowledged";
+}
+
+/**
+ * observeState hook の戻り値から観測情報を取り出す。
+ *
+ * 【詳細説明】
+ * - test / connection layer / future PrinterSession のどれからでも使えるよう、複数aliasを受け付ける。
+ *
+ * @private
+ * @param {*} observation - observeState hook の戻り値
+ * @param {object} context - dispatch context
+ * @returns {object} command result 用の観測情報
+ */
+function normalizeCommandObservation(observation, context) {
+  const observedState = observation?.observedState || observation?.state || context.observedState || null;
+  const observedSequence = normalizeSequence(
+    observation?.observedSequence ??
+    observation?.sequence ??
+    observedState?.source?.sequence
+  );
+  const observedSessionId = String(
+    observation?.observedSessionId ||
+    observation?.sessionId ||
+    observedState?.source?.sessionId ||
+    context.sessionId ||
+    ""
+  ).trim();
+  return {
+    observedState,
+    observedSequence,
+    observedSessionId,
+    observedJobId: observation?.observedJobId || observedState?.print?.jobId || null,
+    fileIdentity: observation?.fileIdentity || context.fileIdentity || null,
+  };
+}
+
+/**
+ * Printer Core v3 command を production dispatcher 経由で実行する。
+ *
+ * 【詳細説明】
+ * - 送信前に `validatePrinterCommandSendTime()` を必ず通し、失敗時はtransportを呼ばず rejected result を返す。
+ * - transport成功後も、expected-state required command は観測state、sequence進行、session一致、command correlation が揃うまで completed にしない。
+ * - side-effect command の blind retry はここでも実行せず、callerには result と `shouldRetryPrinterCommand()` の判定を委ねる。
+ *
+ * @function dispatchPrinterCommand
+ * @param {object} request - command request
+ * @param {object=} options - dispatcher options
+ * @param {object|Function=} options.context - dispatch context、またはrequestからcontextを返す関数
+ * @param {Function=} options.getSendTimeContext - dispatch context 取得hook
+ * @param {Function} options.sendTransport - transport送信hook `(request, context) => Promise<*>`
+ * @param {Function=} options.observeState - expected-state確認用観測hook `(request, context, response) => Promise<object>`
+ * @param {string=} options.completedAt - result完了時刻ISO文字列
+ * @returns {Promise<object>} command result
+ * @example
+ * const result = await dispatchPrinterCommand(request, { context, sendTransport, observeState });
+ */
+export async function dispatchPrinterCommand(request, options = {}) {
+  const contextSource = options.context || options.getSendTimeContext;
+  const context = typeof contextSource === "function"
+    ? await contextSource(request)
+    : contextSource;
+  const sendTimeValidation = validatePrinterCommandSendTime(request, context);
+  if (!sendTimeValidation.ok) {
+    return createRejectedCommandResult(request, sendTimeValidation.errors);
+  }
+  if (typeof options.sendTransport !== "function") {
+    return createRejectedCommandResult(request, ["missing-send-transport"]);
+  }
+  let response;
+  try {
+    response = await options.sendTransport(request, context);
+  } catch (error) {
+    return createPrinterCommandResult(request, {
+      status: "transport-error",
+      error: {
+        code: "transport-error",
+        message: error?.message || String(error),
+      },
+      completedAt: options.completedAt || null,
+    });
+  }
+  let observation;
+  try {
+    observation = typeof options.observeState === "function"
+      ? await options.observeState(request, context, response)
+      : null;
+  } catch (error) {
+    return createPrinterCommandResult(request, {
+      status: "confirmation-error",
+      response,
+      error: {
+        code: "confirmation-error",
+        message: error?.message || String(error),
+      },
+      completedAt: options.completedAt || null,
+    });
+  }
+  const normalizedObservation = normalizeCommandObservation(observation, context);
+  const sentSequence = normalizeSequence(context.stateSequence);
+  let commandCorrelation = null;
+  if (
+    sentSequence !== null &&
+    normalizedObservation.observedSequence !== null &&
+    normalizedObservation.observedSessionId
+  ) {
+    try {
+      commandCorrelation = createPrinterCommandCorrelationEvidence(request, {
+        sentSequence,
+        observedSequence: normalizedObservation.observedSequence,
+        observedSessionId: normalizedObservation.observedSessionId,
+        evidenceSource: "printer-core-command-dispatcher",
+        observedJobId: normalizedObservation.observedJobId || undefined,
+        fileIdentity: normalizedObservation.fileIdentity?.fileHash || normalizedObservation.fileIdentity?.remotePath || undefined,
+      });
+    } catch {
+      commandCorrelation = null;
+    }
+  }
+  return createPrinterCommandResult(request, {
+    status: normalizeTransportStatus(response),
+    response,
+    observedState: normalizedObservation.observedState,
+    sentSequence,
+    observedSequence: normalizedObservation.observedSequence,
+    observedSessionId: normalizedObservation.observedSessionId,
+    commandCorrelation,
+    completedAt: options.completedAt || null,
+  });
 }
 
 /**
