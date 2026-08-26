@@ -231,6 +231,127 @@ describe("registerCameraPanel — entry 構造", () => {
     expect(body.querySelector(".camera-status-sub")?.textContent).toContain("http://192.168.1.10:8000/call/webrtc_local");
     global.RTCPeerConnection = oldPeerConnection;
   });
+
+  it("K2 WebRTC signalling timeoutは再接続待機へ遷移する", async () => {
+    mockPrinterTypes["host-A"] = "creality-k2";
+    mockMonitorData.appSettings.connectionTargets = [
+      {
+        dest: "192.168.1.10:9999",
+        hostname: "host-A",
+        printerType: "creality-k2",
+        cameraPort: 8000,
+        cameraProtocol: "k2-webrtc",
+      },
+    ];
+    global.fetch = vi.fn((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    }));
+    class TimeoutPeerConnection extends EventTarget {
+      constructor() {
+        super();
+        this.iceGatheringState = "complete";
+        this.iceConnectionState = "new";
+        this.connectionState = "new";
+        this.localDescription = null;
+      }
+      addTransceiver() {}
+      createOffer() { return Promise.resolve({ type: "offer", sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96" }); }
+      setLocalDescription(offer) { this.localDescription = offer; return Promise.resolve(); }
+      close() { this.connectionState = "closed"; }
+    }
+    global.RTCPeerConnection = TimeoutPeerConnection;
+    const img = createMockImg();
+    const body = createMockBody();
+    registerCameraPanel("host-A", img, body, null);
+
+    startCameraStream("host-A");
+    flushCameraStart();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5000);
+    await Promise.resolve();
+
+    expect(body.querySelector(".camera-status-label")?.textContent).toBe("再接続待機");
+    expect(body.querySelector(".camera-status-sub")?.textContent).toContain("再試行まで");
+  });
+
+  it("K2 WebRTC接続後のfailed状態は再接続待機へ遷移する", async () => {
+    mockPrinterTypes["host-A"] = "creality-k2";
+    mockMonitorData.appSettings.connectionTargets = [
+      {
+        dest: "192.168.1.10:9999",
+        hostname: "host-A",
+        printerType: "creality-k2",
+        cameraPort: 8000,
+        cameraProtocol: "k2-webrtc",
+      },
+    ];
+    const answer = {
+      type: "answer",
+      sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000",
+    };
+    global.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(btoa(JSON.stringify(answer))),
+    }));
+    global.MediaStream = class MediaStream {
+      constructor(tracks = []) { this._tracks = tracks; }
+      getTracks() { return this._tracks; }
+    };
+    let lastPeerConnection = null;
+    class RecoverPeerConnection extends EventTarget {
+      constructor() {
+        super();
+        this.iceGatheringState = "complete";
+        this.iceConnectionState = "new";
+        this.connectionState = "new";
+        this.localDescription = null;
+        lastPeerConnection = this;
+      }
+      addTransceiver() {}
+      createOffer() { return Promise.resolve({ type: "offer", sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96" }); }
+      setLocalDescription(offer) { this.localDescription = offer; return Promise.resolve(); }
+      setRemoteDescription() {
+        this.iceConnectionState = "connected";
+        this.connectionState = "connected";
+        const track = { kind: "video", readyState: "live", muted: false, stop: vi.fn() };
+        const event = new Event("track");
+        Object.defineProperty(event, "track", { value: track });
+        Object.defineProperty(event, "streams", { value: [new MediaStream([track])] });
+        this.dispatchEvent(event);
+        this.dispatchEvent(new Event("iceconnectionstatechange"));
+        this.dispatchEvent(new Event("connectionstatechange"));
+        return Promise.resolve();
+      }
+      close() { this.connectionState = "closed"; }
+    }
+    global.RTCPeerConnection = RecoverPeerConnection;
+    HTMLMediaElement.prototype.play = vi.fn(() => Promise.resolve());
+    const img = createMockImg();
+    const body = createMockBody();
+    registerCameraPanel("host-A", img, body, null);
+
+    startCameraStream("host-A");
+    flushCameraStart();
+    await Promise.resolve();
+    await Promise.resolve();
+    const video = body.querySelector("video.camera-webrtc-stream");
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+
+    expect(body.querySelector(".camera-status")?.classList.contains("hidden")).toBe(true);
+    lastPeerConnection.iceConnectionState = "failed";
+    lastPeerConnection.connectionState = "failed";
+    lastPeerConnection.dispatchEvent(new Event("iceconnectionstatechange"));
+
+    expect(body.querySelector(".camera-status-label")?.textContent).toBe("再接続待機");
+  });
 });
 
 // ======================================================================

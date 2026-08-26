@@ -23,9 +23,9 @@
  * - {@link stopAllCameraStreams}：全ホストのカメラを停止
  * - {@link handleCameraError}：接続エラー処理（互換用）
  *
- * @version 1.390.1391 (PR #432)
+ * @version 1.390.1392 (PR #432)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-26 10:08:30
+ * @lastModified 2026-08-26 10:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,6 +60,10 @@ const CAMERA_USER_RESTART_DEBOUNCE_MS = 750;
 const CAMERA_SERVICE_PROBE_TIMEOUT_MS = 3000;
 /** @constant {number} K2 WebRTC 接続確立待ちタイムアウト (ms) */
 const K2_WEBRTC_CONNECTION_TIMEOUT_MS = 15000;
+/** @constant {number} K2 WebRTC ICE candidate 収集待ちタイムアウト (ms) */
+const K2_WEBRTC_ICE_GATHERING_TIMEOUT_MS = 10000;
+/** @constant {number} K2 WebRTC signalling HTTP POST タイムアウト (ms) */
+const K2_WEBRTC_SIGNALING_TIMEOUT_MS = 5000;
 /** @constant {number} K2 WebRTC 初回フレーム待ちタイムアウト (ms) */
 const K2_WEBRTC_FRAME_TIMEOUT_MS = 20000;
 
@@ -517,10 +521,10 @@ function _stopDuplicateTargetStreams(keepEntry, target) {
     if (other.userStopped) continue;
     if (other.streamTarget !== target) continue;
     _cancelTimers(other);
-    _stopK2WebRtcPipeline(other);
     other._generation = (other._generation || 0) + 1; // 旧 async コールバックを stale 化
     other.userStopped = true;
     other.desiredEnabled = false;
+    _stopK2WebRtcPipeline(other);
     other.streamTarget = null;
     _releaseImagePipeline(other, { replace: true });
     _updateUI(other, "disconnected");
@@ -572,19 +576,76 @@ function _decodeK2WebRtcAnswer(text) {
  *
  * @private
  * @param {RTCPeerConnection} pc - 接続対象PeerConnection
+ * @param {number} timeoutMs - timeout milliseconds
  * @returns {Promise<void>} ICE gathering完了で解決
  */
-function _waitForK2IceGatheringComplete(pc) {
+function _waitForK2IceGatheringComplete(pc, timeoutMs) {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
-  return new Promise((resolvePromise) => {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      rejectPromise(new Error("K2 WebRTC ICE gathering timeout"));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      pc.removeEventListener("icegatheringstatechange", onState);
+    };
     const onState = () => {
       if (pc.iceGatheringState === "complete") {
-        pc.removeEventListener("icegatheringstatechange", onState);
+        cleanup();
         resolvePromise();
       }
     };
     pc.addEventListener("icegatheringstatechange", onState);
   });
+}
+
+/**
+ * K2 WebRTC signalling endpointへofferをPOSTする。
+ *
+ * 【詳細説明】
+ * - HTTP POSTが無期限にhangするとUIが接続中のまま残るため、AbortControllerで明示的に打ち切る。
+ * - 成功時はbody textを返し、HTTPエラーやtimeoutは例外としてretry経路へ渡す。
+ *
+ * @private
+ * @param {string} url - K2 WebRTC signalling URL
+ * @param {string} body - base64 encoded offer body
+ * @param {number} timeoutMs - timeout milliseconds
+ * @returns {Promise<string>} response text
+ */
+async function _postK2WebRtcOffer(url, body, timeoutMs) {
+  const controller = typeof globalThis.AbortController === "function"
+    ? new globalThis.AbortController()
+    : null;
+  let timedOut = false;
+  let timeoutId = null;
+  try {
+    const request = fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "plain/text" },
+      body,
+      signal: controller?.signal,
+    }).then(async (response) => {
+      const responseText = await response.text();
+      if (!response.ok) throw new Error(`K2 WebRTC signalling HTTP ${response.status}`);
+      return responseText;
+    });
+    const timeout = new Promise((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        if (controller) controller.abort();
+        reject(new Error("K2 WebRTC signalling timeout"));
+      }, timeoutMs);
+    });
+    return await Promise.race([request, timeout]);
+  } catch (error) {
+    if (timedOut || error?.name === "AbortError") {
+      throw new Error("K2 WebRTC signalling timeout");
+    }
+    throw error;
+  } finally {
+    if (timeoutId != null) clearTimeout(timeoutId);
+  }
 }
 
 /**
@@ -719,6 +780,16 @@ function _connectK2WebRtcStream(entry, host, gen = entry._generation) {
     return;
   }
 
+  if (entry.attempts >= CAMERA_MAX_RETRY) {
+    entry.userStopped = true;
+    _cancelTimers(entry);
+    _stopK2WebRtcPipeline(entry);
+    _updateUI(entry, "disconnected");
+    pushLog(`K2 WebRTCカメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました`, "error", false, entry.hostname);
+    notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
+    return;
+  }
+
   entry.attempts++;
   _updateUI(entry, "connecting", { attempt: entry.attempts, max: CAMERA_MAX_RETRY });
   pushLog(`K2 WebRTCカメラ接続試行 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "info", false, entry.hostname);
@@ -730,6 +801,18 @@ function _connectK2WebRtcStream(entry, host, gen = entry._generation) {
   entry.streamTarget = `${host}:${entry.cameraPort || DEFAULT_K2_WEBRTC_PORT}:webrtc`;
   _stopDuplicateTargetStreams(entry, entry.streamTarget);
   entry.img?.classList.add("off");
+  let connectionAccepted = false;
+  let failureHandled = false;
+  const handlePostConnectFailure = () => {
+    if (!connectionAccepted || failureHandled || !_canUseEntry(entry, gen)) return;
+    if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState) ||
+        ["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+      failureHandled = true;
+      _scheduleK2WebRtcRetry(entry, host, gen, `ice=${pc.iceConnectionState} pc=${pc.connectionState}`);
+    }
+  };
+  pc.addEventListener("iceconnectionstatechange", handlePostConnectFailure);
+  pc.addEventListener("connectionstatechange", handlePostConnectFailure);
 
   pc.addEventListener("track", (event) => {
     if (!_canUseEntry(entry, gen)) return;
@@ -742,19 +825,18 @@ function _connectK2WebRtcStream(entry, host, gen = entry._generation) {
       pc.addTransceiver("video", { direction: "sendrecv" });
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await _waitForK2IceGatheringComplete(pc);
+      await _waitForK2IceGatheringComplete(pc, K2_WEBRTC_ICE_GATHERING_TIMEOUT_MS);
       if (!_canUseEntry(entry, gen)) return;
 
-      const response = await fetch(entry.streamUrl, {
-        method: "POST",
-        headers: { "Content-Type": "plain/text" },
-        body: _encodeK2WebRtcOffer(pc.localDescription || offer),
-      });
-      const responseText = await response.text();
-      if (!response.ok) throw new Error(`K2 WebRTC signalling HTTP ${response.status}`);
+      const responseText = await _postK2WebRtcOffer(
+        entry.streamUrl,
+        _encodeK2WebRtcOffer(pc.localDescription || offer),
+        K2_WEBRTC_SIGNALING_TIMEOUT_MS
+      );
       const answer = _decodeK2WebRtcAnswer(responseText);
       await pc.setRemoteDescription(answer);
       await _waitForK2WebRtcConnection(pc, K2_WEBRTC_CONNECTION_TIMEOUT_MS);
+      connectionAccepted = true;
       await video.play().catch(() => {});
       await _waitForK2VideoFrame(video, K2_WEBRTC_FRAME_TIMEOUT_MS);
       if (!_canUseEntry(entry, gen)) return;
@@ -767,12 +849,69 @@ function _connectK2WebRtcStream(entry, host, gen = entry._generation) {
       notificationManager.notify("cameraConnected", { hostname: entry.hostname });
     } catch (error) {
       if (!_canUseEntry(entry, gen)) return;
-      _stopK2WebRtcPipeline(entry);
-      _updateUI(entry, "unsupported", { reason: error.message, url: entry.streamUrl });
-      pushLog(`K2 WebRTCカメラ接続失敗: ${error.message}`, "error", false, entry.hostname);
-      notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
+      if (failureHandled) return;
+      failureHandled = true;
+      _scheduleK2WebRtcRetry(entry, host, gen, error.message);
     }
   })();
+}
+
+/**
+ * K2 WebRTC cameraの再接続をスケジュールする。
+ *
+ * 【詳細説明】
+ * - K1/MJPEGと同じ最大試行回数と指数backoffを使う。
+ * - signalling失敗、ICE失敗、初回frame timeout、接続後disconnectを同じretry経路へ集約する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @param {string} host - IPアドレス（ポートなし）
+ * @param {number} gen - callbackが捕捉した世代
+ * @param {string} reason - retry理由
+ * @returns {void}
+ */
+function _scheduleK2WebRtcRetry(entry, host, gen, reason) {
+  if (!_canUseEntry(entry, gen)) return;
+  _stopK2WebRtcPipeline(entry);
+  if (entry.attempts >= CAMERA_MAX_RETRY) {
+    entry.userStopped = true;
+    _cancelTimers(entry);
+    _updateUI(entry, "disconnected");
+    pushLog(`K2 WebRTCカメラ自動リトライ上限(${CAMERA_MAX_RETRY})に達しました: ${reason}`, "error", false, entry.hostname);
+    notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
+    return;
+  }
+
+  const retryStep = Math.max(entry.attempts, 1);
+  const delayMs = DEFAULT_RETRY_DELAY * Math.pow(2, retryStep - 1);
+  const waitSec = Math.ceil(delayMs / 1000);
+  _updateUI(entry, "retrying", {
+    attempt: entry.attempts + 1,
+    max: CAMERA_MAX_RETRY,
+    wait: waitSec
+  });
+  pushLog(`K2 WebRTCカメラ切断検知 (${entry.attempts}/${CAMERA_MAX_RETRY}): ${reason}`, "warn", false, entry.hostname);
+
+  let remaining = waitSec;
+  entry.countdownTimer = setInterval(() => {
+    remaining--;
+    if (remaining > 0) {
+      _updateUI(entry, "retrying", {
+        attempt: entry.attempts + 1,
+        max: CAMERA_MAX_RETRY,
+        wait: remaining
+      });
+    } else {
+      clearInterval(entry.countdownTimer);
+      entry.countdownTimer = null;
+    }
+  }, 1000);
+
+  entry.retryTimeout = setTimeout(() => {
+    entry.retryTimeout = null;
+    if (!_canUseEntry(entry, gen)) return;
+    _connectK2WebRtcStream(entry, host, gen);
+  }, delayMs);
 }
 
 /**
