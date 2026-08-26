@@ -19,9 +19,9 @@
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1402 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-26 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -194,6 +194,31 @@ function countObservedMaterialUnits(topology) {
 }
 
 /**
+ * material topology が表示可能な実観測sourceを持つか判定する。
+ *
+ * 【詳細説明】
+ * - K2/CFSでは `provider.lastObservedAt` が古いfixtureや一部runtimeで欠ける場合がある。
+ * - 時刻メタデータが無いだけで、active session中にsource/unit実体を持つtopologyを即staleへ落とすと、
+ *   初回probe応答が見えているのに「確認不能」と表示されるため、表示可能な実体の有無を別に判定する。
+ *
+ * @private
+ * @param {object|null|undefined} topology - Normalized material topology
+ * @returns {boolean} 実観測sourceまたはunitを持つ場合 true
+ */
+function hasObservedMaterialEvidence(topology) {
+  if (!topology || typeof topology !== "object") {
+    return false;
+  }
+  const hasSources = Array.isArray(topology.sources) && topology.sources.some((source) => {
+    return source && typeof source === "object" && Boolean(source.sourceId || source.kind);
+  });
+  const hasUnits = Array.isArray(topology.units) && topology.units.some((unit) => {
+    return unit && typeof unit === "object" && Boolean(unit.unitId || (unit.boxId !== null && unit.boxId !== undefined));
+  });
+  return hasSources || hasUnits;
+}
+
+/**
  * プリンタ種別に対応するmaterial system既定値を返す。
  *
  * 【詳細説明】
@@ -327,7 +352,10 @@ export function resolveDisplayMaterialTopology({
     shadowRecord?.lastObservedAt
   );
   const closed = shadowRecord?.state === "closed";
-  const expired = observedAtMs == null || (Number.isFinite(nowMs) && nowMs - observedAtMs > ttlMs);
+  const hasEvidence = hasObservedMaterialEvidence(topology);
+  const expired = observedAtMs == null
+    ? !hasEvidence
+    : (Number.isFinite(nowMs) && nowMs - observedAtMs > ttlMs);
   const alreadyStale = topology.cfs?.topologyState === "stale";
   if (!closed && !expired && !alreadyStale) {
     return topology;

@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1312 (PR #432)
+ * @version 1.390.1402 (PR #434)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-08 07:32:05
+ * @lastModified 2026-08-26 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -581,7 +581,7 @@ function createMaterialSourceId(box, material) {
  *
  * @private
  * @param {*} value - protocol color 値
- * @returns {{raw: ?string, normalized: ?string}} 色表現
+ * @returns {{raw: ?string, normalized: ?string, displayHex: ?string}} 色表現
  */
 function normalizeProtocolColor(value) {
   const raw = toNullableString(value);
@@ -589,11 +589,17 @@ function normalizeProtocolColor(value) {
     return {
       raw,
       normalized: raw,
+      displayHex: raw,
     };
   }
+  const normalized = raw.replace(/^#/u, "").toLowerCase();
+  const displayHex = /^0[0-9a-f]{6}$/u.test(normalized)
+    ? normalized.slice(1)
+    : normalized;
   return {
     raw,
-    normalized: raw.replace(/^#/u, "").toLowerCase(),
+    normalized,
+    displayHex,
   };
 }
 

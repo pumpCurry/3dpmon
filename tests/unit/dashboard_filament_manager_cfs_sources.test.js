@@ -1,0 +1,252 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 フィラメント管理CFS供給源表示単体テスト
+ * @file dashboard_filament_manager_cfs_sources.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_filament_manager_cfs_sources_test
+ *
+ * 【機能内容サマリ】
+ * - フィラメント管理ダッシュボードで外部スプールとCFSスロットを別欄として表示することを検証
+ * - CFS 1台構成で外部1本+1A-1Dの5 sourceを同時に扱う表示契約を固定
+ * - CFS sourceを3DPmon台帳の単一装着スプールへ混ぜないread-only表示を検証
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1402 (PR #434)
+ * @since   1.390.1402 (PR #434)
+ * @lastModified 2026-08-26 22:30:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ *
+ * @vitest-environment jsdom
+ */
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { monitorData } from "../../3dp_lib/dashboard_data.js";
+import {
+  createFilamentManagerMaterialSupplySection,
+} from "../../3dp_lib/dashboard_filament_manager.js";
+import {
+  normalizeK2BoxsInfo,
+} from "../../3dp_lib/printer_core/dashboard_normalized_state.js";
+
+const mockState = vi.hoisted(() => ({
+  monitorData: {
+    appSettings: { connectionTargets: [] },
+    machines: {},
+  },
+  target: null,
+}));
+
+vi.mock("../../3dp_lib/dashboard_data.js", () => ({
+  monitorData: mockState.monitorData,
+  PLACEHOLDER_HOSTNAME: "__placeholder__",
+}));
+
+vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
+  getConnectionState: vi.fn(() => "connected"),
+  getConnectionTarget: vi.fn(() => mockState.target),
+  getPrinterType: vi.fn(() => "creality-k2"),
+}));
+
+vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
+  SPOOL_STATE: { MOUNTED: "mounted", STORED: "stored", DISCARDED: "discarded", INVENTORY: "inventory" },
+  SPOOL_BALANCE_STATE: { OVERDRAWN: "overdrawn" },
+  getCurrentSpool: vi.fn(() => null),
+  getCurrentSpoolId: vi.fn(() => null),
+  getSpools: vi.fn(() => []),
+  addSpool: vi.fn(),
+  updateSpool: vi.fn(),
+  addSpoolFromPreset: vi.fn(),
+  deleteSpool: vi.fn(),
+  setCurrentSpoolId: vi.fn(() => true),
+  restoreSpool: vi.fn(),
+  getSpoolState: vi.fn(() => "inventory"),
+  getSpoolStateLabel: vi.fn(() => "未使用"),
+  getSpoolBalanceState: vi.fn(() => "unknown"),
+  getSpoolBalanceStateLabel: vi.fn(() => "残量不明"),
+  formatSpoolDisplayId: vi.fn(() => "#001"),
+  formatFilamentAmount: vi.fn(() => ({ display: "0m" })),
+  formatRemainingFilamentAmount: vi.fn(() => ({ display: "0m" })),
+  displayRemainingLengthMm: vi.fn((value) => value),
+  buildSpoolAnalytics: vi.fn(() => null),
+  buildWasteReport: vi.fn(() => null),
+  getSpoolById: vi.fn(() => null),
+  confirmInferredSpool: vi.fn(),
+  revertInferredSpool: vi.fn(),
+  mountNewSpoolFromPreset: vi.fn(),
+}));
+
+vi.mock("../../3dp_lib/dashboard_filament_inventory.js", () => ({
+  getInventory: vi.fn(() => []),
+  setInventoryQuantity: vi.fn(),
+  adjustInventory: vi.fn(),
+  setMinStockAlert: vi.fn(),
+  isLowStock: vi.fn(() => false),
+  getLowStockPresets: vi.fn(() => []),
+}));
+
+vi.mock("../../3dp_lib/dashboard_filament_presets.js", () => ({
+  FILAMENT_PRESETS: [],
+  getAllPresets: vi.fn(() => []),
+  addUserPreset: vi.fn(),
+  updateUserPreset: vi.fn(),
+  deleteUserPreset: vi.fn(),
+  isHiddenPreset: vi.fn(() => false),
+  togglePresetVisibility: vi.fn(),
+  exportUserPresets: vi.fn(),
+  importUserPresets: vi.fn(),
+}));
+
+vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
+  saveUnifiedStorage: vi.fn(),
+}));
+
+vi.mock("../../3dp_lib/dashboard_filament_view.js", () => ({
+  createFilamentPreview: vi.fn(),
+}));
+
+vi.mock("../../3dp_lib/dashboard_filament_remaining_model.js", () => ({
+  buildFilamentRemainingModel: vi.fn(() => ({ confirmedRemainingMm: 0, hasPendingInferredUsage: false })),
+}));
+
+vi.mock("../../3dp_lib/dashboard_inferred_candidate_ui.js", () => ({
+  createInferredCandidateCenterContent: vi.fn(() => document.createElement("div")),
+}));
+
+vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({
+  showAlert: vi.fn(),
+}));
+
+vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({
+  showConfirmDialog: vi.fn(() => Promise.resolve(true)),
+}));
+
+vi.mock("../../3dp_lib/dashboard_ui_components.js", () => ({
+  createEmptyState: vi.fn(() => document.createElement("div")),
+}));
+
+vi.mock("../../3dp_lib/dashboard_filament_change.js", () => ({
+  showFilamentChangeDialog: vi.fn(),
+}));
+
+/**
+ * K2 Pro Comboの外部スプールとCFS 1台を含むboxsInfoを返す。
+ *
+ * 【詳細説明】
+ * - 1Cをselectedにし、外部sourceとCFS slot sourceが同時に表示される契約を確認する。
+ *
+ * @function createK2CfsBoxsInfo
+ * @returns {Object} テスト用boxsInfo payload。
+ */
+function createK2CfsBoxsInfo() {
+  return {
+    enable: 1,
+    materialBoxs: [
+      {
+        id: 0,
+        type: 1,
+        state: 1,
+        materials: [
+          { id: 0, state: 1, type: "PLA", name: "External PLA", color: "#0ffffff", selected: 0, percent: 100 },
+        ],
+      },
+      {
+        id: 1,
+        type: 0,
+        state: 1,
+        temp: 28,
+        humidity: 55,
+        materials: [
+          { id: 0, state: 1, type: "PLA", name: "White PLA", color: "#0ffffff", selected: 0, percent: 100 },
+          { id: 1, state: 1, type: "PLA", name: "Green PLA", color: "#072a530", selected: 0, percent: 100 },
+          { id: 2, state: 1, type: "PLA", name: "Silver PLA", color: "#09ea7ae", selected: 1, percent: 100 },
+          { id: 3, state: 0, type: "", name: "", color: "", selected: 0, percent: 0 },
+        ],
+      },
+    ],
+    colorMatch: [
+      { id: "T1A", boxId: 1, materialId: 0 },
+      { id: "T1B", boxId: 1, materialId: 1 },
+      { id: "T1C", boxId: 1, materialId: 2 },
+    ],
+  };
+}
+
+/**
+ * テスト用monitorDataを初期化する。
+ *
+ * 【詳細説明】
+ * - dashboard_filament_managerは実monitorDataを参照するため、各テストで必要最小限の接続先と
+ *   runtime material topologyだけを入れる。
+ *
+ * @function setupK2Runtime
+ * @returns {void}
+ */
+function setupK2Runtime() {
+  const observedAt = new Date().toISOString();
+  const topology = normalizeK2BoxsInfo(createK2CfsBoxsInfo(), { connected: true });
+  topology.provider = {
+    ...(topology.provider || {}),
+    lastObservedAt: observedAt,
+  };
+  mockState.target = {
+    dest: "192.168.54.153:9999",
+    hostname: "K2Pro-69E7",
+    printerType: "creality-k2",
+    materialSystem: {
+      mode: "auto",
+      displayMode: "auto",
+      unitLimit: 1,
+      externalSourceLimit: 1,
+    },
+  };
+  monitorData.appSettings ??= {};
+  monitorData.appSettings.connectionTargets = [mockState.target];
+  monitorData.machines = {
+    "K2Pro-69E7": {
+      runtimeData: {
+        printerCoreV3Shadow: {
+          state: "observed",
+          lastObservedAt: observedAt,
+          materialProviderLastObservedAt: observedAt,
+          lastState: {
+            materials: topology,
+          },
+        },
+      },
+    },
+  };
+}
+
+afterEach(() => {
+  monitorData.appSettings.connectionTargets = [];
+  monitorData.machines = {};
+  mockState.target = null;
+});
+
+describe("filament manager CFS material source section", () => {
+  it("CFS 1台構成では外部スプールと1A-1Dを別欄の5 sourceとして表示する", () => {
+    setupK2Runtime();
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+
+    expect(section).not.toBeNull();
+    expect(section?.textContent).toContain("機器側フィラメント供給");
+    expect(section?.querySelectorAll(".fm-material-source-chip")).toHaveLength(5);
+    expect(section?.querySelector("fieldset legend")?.textContent).toBe("外部スプール");
+    expect([...(section?.querySelectorAll(".fm-material-source-head strong") || [])].map((el) => el.textContent)).toEqual([
+      "external",
+      "1A",
+      "1B",
+      "1C",
+      "1D",
+    ]);
+    expect(section?.querySelector(".fm-material-source-chip.is-selected strong")?.textContent).toBe("1C");
+    expect(section?.textContent).toContain("3DPmon台帳スプールとは自動で混ぜません");
+  });
+});

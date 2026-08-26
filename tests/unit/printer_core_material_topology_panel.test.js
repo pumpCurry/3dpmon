@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1383 (PR #432)
+ * @version 1.390.1402 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 22:55:00
+ * @lastModified 2026-08-26 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -123,6 +123,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.textContent).toContain("Silver PLA");
     expect(container.textContent).toContain("残量 54%");
     expect(container.textContent).toContain("現在選択中");
+    expect(container.textContent).toContain("外部スプール（CFSとは別管理）");
     expect(container.textContent).toContain("監視のみ");
     expect(container.querySelectorAll(".mtv-control-btn")).toHaveLength(0);
   });
@@ -149,7 +150,8 @@ describe("Printer Core v3 material topology panel", () => {
       { hostname: "K2Pro" }
     );
 
-    expect(container.textContent).toContain("未観測");
+    expect(container.textContent).toContain("状態: 取得待ち");
+    expect(container.textContent).toContain("CFS/CFS-C情報を取得中です");
 
     handle.update(createMaterialTopologyViewModel(topology, { unitLimit: 1 }));
 
@@ -184,6 +186,24 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.textContent).toContain("CFS情報を現在取得できません");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:選択中");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
+  });
+
+  it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {
+    const payload = createOneUnitBoxsInfo();
+    payload.materialBoxs[1].materials[2].color = "#09ea7ae";
+    const topology = normalizeK2BoxsInfo(payload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    const selectedSwatch = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-swatch');
+    expect(viewModel.units[0].slots[2].material.color).toMatchObject({
+      raw: "#09ea7ae",
+      normalized: "09ea7ae",
+      displayHex: "9ea7ae",
+    });
+    expect(selectedSwatch?.style.backgroundColor).toBe("rgb(158, 167, 174)");
   });
 
   it("CFS操作ボタンは既定では表示されてもdisabledで送信hookを呼ばない", () => {
