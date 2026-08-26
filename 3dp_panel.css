@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1366
+  Version 1.390.1404
 */
 
 /* ===============================================================
@@ -3671,6 +3671,70 @@ body.panel-mode .notification-container {
   font-size: var(--font-sm, 12px);
   font-weight: bold;
   white-space: nowrap;
+}
+.pm-cfs-print-assignment {
+  border: 1px solid var(--color-border);
+}
+.pm-cfs-print-assignment-note {
+  color: var(--color-text-muted);
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+.pm-cfs-print-assignment-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+.pm-cfs-print-assignment-row {
+  display: grid;
+  grid-template-columns: minmax(52px, auto) minmax(80px, 1fr) minmax(130px, 1.2fr);
+  gap: var(--space-2);
+  align-items: center;
+}
+.pm-cfs-print-tool {
+  font-weight: bold;
+}
+.pm-cfs-print-material {
+  color: var(--color-text-muted);
+  font-size: var(--font-sm);
+  overflow-wrap: anywhere;
+}
+.pm-cfs-print-source-select {
+  min-width: 0;
+  width: 100%;
+}
+.pm-cfs-print-source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+}
+.pm-cfs-print-source-chip {
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-size: var(--font-sm);
+}
+.pm-cfs-print-source-chip span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-cfs-print-swatch {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+}
+.pm-cfs-print-swatch-empty {
+  background: var(--color-bg-tertiary);
 }
 
 /* ===============================================================

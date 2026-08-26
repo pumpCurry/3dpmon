@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1401 (PR #433)
+* @version 1.390.1404 (PR #434)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 13:59:04
+* @lastModified 2026-08-26 23:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -78,6 +78,10 @@ import {
   resolveMaterialTopologyViewOptions
 } from "./printer_core/dashboard_material_system_settings.js";
 import { createMaterialTopologyViewModel } from "./printer_core/dashboard_material_topology_view_model.js";
+import {
+  createK2CfsCommandTransportPlan,
+  sendK2CfsCommandTransportPlan
+} from "./printer_core/dashboard_k2_cfs_command_transport.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -710,6 +714,404 @@ function formatMaterialSourceRowLabel(row) {
 }
 
 /**
+ * 任意値を空でない文字列へ正規化する。
+ *
+ * 【詳細説明】
+ * - K2/CFS print-start では path、tool alias、sourceId が空のまま送信されると
+ *   `colorMatch` が意味を失うため、UI境界で空文字を null に寄せる。
+ *
+ * @private
+ * @param {*} value - 文字列候補
+ * @returns {string|null} 空でない文字列、または null
+ */
+function toPrintManagerNonEmptyString(value) {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
+/**
+ * プロトコル色値を `colorMatch` へ渡せる文字列へ正規化する。
+ *
+ * 【詳細説明】
+ * - K2の `boxsInfo` は `#0ffffff` のような7桁HEXを返すことがある。
+ * - Printer Core側の正規化済み `normalized/displayHex` があればそれを優先し、
+ *   無ければ raw から `#` だけを除いて送信用証拠にする。
+ *
+ * @private
+ * @param {*} color - material color 候補
+ * @returns {string|null} `colorMatch.list[].color` に載せる色文字列
+ */
+function normalizeK2CfsProtocolColor(color) {
+  if (!color || typeof color !== "object") {
+    const text = toPrintManagerNonEmptyString(color);
+    return text ? text.replace(/^#/u, "") : null;
+  }
+  return toPrintManagerNonEmptyString(color.normalized || color.displayHex || color.raw)
+    ?.replace(/^#/u) || null;
+}
+
+/**
+ * セミコロン/カンマ区切りのG-code材料メタ値を配列へ分解する。
+ *
+ * 【詳細説明】
+ * - K2 `retGcodeFileInfo2` は `material` や `materialColors` を `;` 区切りで返す。
+ * - 古いキャッシュや別firmwareに備え、`,` 区切りも読み取れるようにする。
+ *
+ * @private
+ * @param {*} value - 区切り文字列
+ * @returns {string[]} 空要素を除いた文字列配列
+ */
+function splitK2CfsMaterialList(value) {
+  return String(value || "")
+    .split(/[;,]/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/**
+ * K2 file entry の `match` 文字列を tool alias 対応へ変換する。
+ *
+ * 【詳細説明】
+ * - `T1A=T1B` は「G-code側T1Aを現在のCreality割当T1Bへ寄せる」観測値として扱う。
+ * - 送信時は右辺aliasから直接slotを推測せず、同じaliasを持つ観測済みCFS sourceを既定選択に使う。
+ *
+ * @private
+ * @param {*} matchText - K2 `retGcodeFileInfo2.match`
+ * @returns {Map<string,string>} 左辺tool alias -> 右辺alias
+ */
+function parseK2CfsMatchMap(matchText) {
+  const map = new Map();
+  for (const part of String(matchText || "").split(/\s+/u)) {
+    const [left, right] = part.split("=").map((value) => toPrintManagerNonEmptyString(value));
+    if (left && right) {
+      map.set(left, right);
+    }
+  }
+  return map;
+}
+
+/**
+ * K2 G-codeファイルから印刷に必要な logical tool alias 一覧を推定する。
+ *
+ * 【詳細説明】
+ * - `match` の左辺が最も具体的なので優先する。
+ * - `material` / `materialColors` からtool数だけが分かる場合は `T1A` から順に補完する。
+ * - 何も分からない単色ファイルは `T1A` だけを要求する。
+ *
+ * @private
+ * @param {object} raw - ファイル一覧または履歴の行データ
+ * @returns {string[]} logical tool alias一覧
+ */
+function deriveK2CfsToolAliases(raw) {
+  const matchMap = parseK2CfsMatchMap(raw?.match || raw?.raw?.match);
+  const fromMatch = [...matchMap.keys()];
+  if (fromMatch.length > 0) {
+    return fromMatch;
+  }
+  const materialCount = Math.max(
+    splitK2CfsMaterialList(raw?.material || raw?.raw?.material).length,
+    splitK2CfsMaterialList(raw?.materialColors || raw?.raw?.materialColors).length,
+    1
+  );
+  return Array.from({ length: materialCount }, (_, index) => `T1${String.fromCharCode(65 + index)}`);
+}
+
+/**
+ * CFS slot row の表示色を取得する。
+ *
+ * 【詳細説明】
+ * - UIのスウォッチ表示だけに使い、送信payloadは別途 `normalizeK2CfsProtocolColor()` で正規化する。
+ *
+ * @private
+ * @param {object|null|undefined} row - CFS source row
+ * @returns {string|null} CSS color 候補
+ */
+function getK2CfsRowCssColor(row) {
+  const color = row?.material?.color;
+  const text = color && typeof color === "object"
+    ? toPrintManagerNonEmptyString(color.displayHex || color.normalized || color.raw)
+    : toPrintManagerNonEmptyString(color);
+  if (!text) {
+    return null;
+  }
+  const hex = text.replace(/^#/u, "");
+  return /^[0-9a-f]{6}$/iu.test(hex) ? `#${hex}` : null;
+}
+
+/**
+ * source row に紐付いた Creality assignment alias を取得する。
+ *
+ * 【詳細説明】
+ * - `boxsInfo.colorMatch[]` から正規化された assignmentId は、現在そのslotへ割り当てられている
+ *   `T1A` などのprotocol aliasとしてUI既定選択に使える。
+ *
+ * @private
+ * @param {object|null|undefined} row - CFS source row
+ * @returns {string[]} assignment alias一覧
+ */
+function getK2CfsRowAssignmentAliases(row) {
+  return (Array.isArray(row?.assignments) ? row.assignments : [])
+    .map((assignment) => toPrintManagerNonEmptyString(assignment?.assignmentId))
+    .filter(Boolean);
+}
+
+/**
+ * K2/CFS印刷確認で選択できるCFS slot候補を抽出する。
+ *
+ * 【詳細説明】
+ * - 外部スプールはCFS印刷開始transportでは扱わないため、ここではCFS slotだけを返す。
+ * - 未装填slotは選択候補から除外し、空走りにつながる割当をUI段階で防ぐ。
+ *
+ * @private
+ * @param {object} materialContext - {@link createMaterialPrintContext} の戻り値
+ * @returns {object[]} 装填済みCFS source row一覧
+ */
+function getLoadedK2CfsRows(materialContext) {
+  return (Array.isArray(materialContext?.loadedRows) ? materialContext.loadedRows : [])
+    .filter((row) => row?.kind === "cfs-slot" && row?.presence === "loaded" && row?.sourceId);
+}
+
+/**
+ * K2/CFS tool alias に対する既定sourceIdを決定する。
+ *
+ * 【詳細説明】
+ * - file entry の `match` 右辺が現在のCFS assignmentに一致する場合はそのslotを既定にする。
+ * - 一致しない場合は実機でselectedのslot、それも無ければ最初の装填済みslotに倒す。
+ * - 倒し先はUI表示の既定値であり、ユーザーは確認画面で変更できる。
+ *
+ * @private
+ * @param {string} toolAlias - logical tool alias
+ * @param {object[]} cfsRows - 装填済みCFS row一覧
+ * @param {Map<string,string>} matchMap - raw.match 由来の割当map
+ * @returns {string} 既定sourceId
+ */
+function resolveDefaultK2CfsSourceId(toolAlias, cfsRows, matchMap) {
+  const matchedAlias = matchMap.get(toolAlias);
+  if (matchedAlias) {
+    const matchedRow = cfsRows.find((row) => getK2CfsRowAssignmentAliases(row).includes(matchedAlias));
+    if (matchedRow?.sourceId) {
+      return matchedRow.sourceId;
+    }
+  }
+  const selectedRow = cfsRows.find((row) => row.selected === true);
+  return selectedRow?.sourceId || cfsRows[0]?.sourceId || "";
+}
+
+/**
+ * K2/CFS印刷確認ダイアログ用のslot選択UIを構築する。
+ *
+ * 【詳細説明】
+ * - logical tool aliasごとにCFS sourceを選ぶselectを出す。
+ * - CrealityPrint同様に「T1Aなどのファイル側材料」と「1Aなどの物理slot」を明確に分ける。
+ *
+ * @private
+ * @param {object} raw - ファイル一覧または履歴の行データ
+ * @param {object} materialContext - CFS材料文脈
+ * @returns {{html:string, selectIds:string[], toolAliases:string[], rows:object[], defaults:Map<string,string>, disabledReason:string|null}} UI構築結果
+ */
+function createK2CfsPrintAssignmentDialogModel(raw, materialContext) {
+  const rows = getLoadedK2CfsRows(materialContext);
+  const toolAliases = deriveK2CfsToolAliases(raw);
+  const matchMap = parseK2CfsMatchMap(raw?.match || raw?.raw?.match);
+  if (materialContext?.stale) {
+    return {
+      html: `<div class="pm-print-section pm-print-danger-section"><div class="pm-print-section-title">CFS割当不可</div><div>CFS情報が最終観測値のため、印刷開始前に最新状態を取得してください。</div></div>`,
+      selectIds: [],
+      toolAliases,
+      rows,
+      defaults: new Map(),
+      disabledReason: "cfs-topology-stale",
+    };
+  }
+  if (rows.length === 0) {
+    return {
+      html: `<div class="pm-print-section pm-print-danger-section"><div class="pm-print-section-title">CFS割当不可</div><div>装填済みCFSスロットが観測できないため、CFS印刷を開始できません。</div></div>`,
+      selectIds: [],
+      toolAliases,
+      rows,
+      defaults: new Map(),
+      disabledReason: "cfs-loaded-source-missing",
+    };
+  }
+  const selectIds = [];
+  const defaults = new Map();
+  let html = `<div class="pm-print-section pm-print-info-section pm-cfs-print-assignment">`;
+  html += `<div class="pm-print-section-title">CFSスロット割当</div>`;
+  html += `<div class="pm-cfs-print-assignment-note">ファイル側の材料(T1Aなど)ごとに、使用するCFS物理スロットを指定します。</div>`;
+  html += `<div class="pm-cfs-print-assignment-list">`;
+  toolAliases.forEach((toolAlias, index) => {
+    const selectId = `pm-cfs-print-source-${Date.now()}-${index}`;
+    const materialTypes = splitK2CfsMaterialList(raw?.material || raw?.raw?.material);
+    const materialColors = splitK2CfsMaterialList(raw?.materialColors || raw?.raw?.materialColors);
+    const expectedType = materialTypes[index] || materialTypes[0] || "";
+    const expectedColor = materialColors[index] || materialColors[0] || "";
+    const defaultSourceId = resolveDefaultK2CfsSourceId(toolAlias, rows, matchMap);
+    selectIds.push(selectId);
+    defaults.set(toolAlias, defaultSourceId);
+    html += `<label class="pm-cfs-print-assignment-row" for="${selectId}">`;
+    html += `<span class="pm-cfs-print-tool">${escapePrintDialogHtml(toolAlias)}</span>`;
+    html += `<span class="pm-cfs-print-material">${escapePrintDialogHtml([expectedType, expectedColor].filter(Boolean).join(" / ") || "材料")}</span>`;
+    html += `<select id="${selectId}" class="pm-cfs-print-source-select" data-tool-alias="${escapePrintDialogHtml(toolAlias)}">`;
+    for (const row of rows) {
+      const label = formatMaterialSourceRowLabel(row);
+      const selected = row.sourceId === defaultSourceId ? " selected" : "";
+      html += `<option value="${escapePrintDialogHtml(row.sourceId)}"${selected}>${escapePrintDialogHtml(label)}</option>`;
+    }
+    html += `</select>`;
+    html += `</label>`;
+  });
+  html += `</div>`;
+  html += `<div class="pm-cfs-print-source-grid">`;
+  for (const row of rows) {
+    const color = getK2CfsRowCssColor(row);
+    const swatch = color ? `<span class="pm-cfs-print-swatch" style="background:${color}"></span>` : `<span class="pm-cfs-print-swatch pm-cfs-print-swatch-empty"></span>`;
+    html += `<div class="pm-cfs-print-source-chip">${swatch}<strong>${escapePrintDialogHtml(row.displaySlot || "")}</strong><span>${escapePrintDialogHtml(formatMaterialSourceRowLabel(row))}</span></div>`;
+  }
+  html += `</div>`;
+  html += `<div class="pm-cfs-print-assignment-note">CFS印刷では旧opGcodeFile直投げを使わず、colorMatchを送ってからmultiColorPrintを開始します。</div>`;
+  html += `</div>`;
+  return {
+    html,
+    selectIds,
+    toolAliases,
+    rows,
+    defaults,
+    disabledReason: null,
+  };
+}
+
+/**
+ * ダイアログDOMからK2/CFS source選択を読み取る。
+ *
+ * 【詳細説明】
+ * - `showConfirmDialog()` は resolve 後すぐにはDOMを破棄しないため、await直後にselect値を取得できる。
+ * - selectが見つからない場合はdialog modelの既定値へ倒すが、sourceIdが候補に存在しない場合は拒否する。
+ *
+ * @private
+ * @param {object} dialogModel - {@link createK2CfsPrintAssignmentDialogModel} の戻り値
+ * @returns {Array<{toolAlias:string, sourceId:string}>} ユーザーが確定した割当
+ */
+function readK2CfsPrintAssignmentsFromDialog(dialogModel) {
+  const rowIds = new Set(dialogModel.rows.map((row) => row.sourceId));
+  return dialogModel.toolAliases.map((toolAlias, index) => {
+    const selectId = dialogModel.selectIds[index];
+    const selectedValue = toPrintManagerNonEmptyString(document.getElementById(selectId)?.value);
+    const fallbackValue = dialogModel.defaults.get(toolAlias) || "";
+    const sourceId = selectedValue || fallbackValue;
+    if (!rowIds.has(sourceId)) {
+      throw new Error(`invalid-cfs-print-source:${toolAlias}`);
+    }
+    return { toolAlias, sourceId };
+  });
+}
+
+/**
+ * sourceIdからCFS表示rowを検索する。
+ *
+ * 【詳細説明】
+ * - 送信payloadには、選択されたsourceIdのtype/color/boxId/materialId証拠を同じUI snapshotから載せる。
+ *
+ * @private
+ * @param {object[]} rows - CFS source row一覧
+ * @param {string} sourceId - material source ID
+ * @returns {object|null} 対応row
+ */
+function findK2CfsRowBySourceId(rows, sourceId) {
+  return (Array.isArray(rows) ? rows : []).find((row) => row?.sourceId === sourceId) || null;
+}
+
+/**
+ * K2/CFS印刷開始requestをUI選択から構築する。
+ *
+ * 【詳細説明】
+ * - ここではPrintPlan authority全体を解放せず、K2/CFS transport mapperが必要とする
+ *   command request shapeだけを作る。
+ * - 外部スプールや未装填slotはdialogModelの候補に入らないため、`opGcodeFile` fallbackへ落ちない。
+ *
+ * @private
+ * @param {object} options - 構築オプション
+ * @param {string} options.hostname - 対象ホスト名
+ * @param {object} options.raw - ファイル一覧または履歴の行データ
+ * @param {object} options.dialogModel - CFS割当UI model
+ * @param {Array<{toolAlias:string, sourceId:string}>} options.assignments - 確定割当
+ * @returns {object} Printer Core command request風object
+ */
+function createK2CfsPrintStartRequestFromUi(options) {
+  const target = toPrintManagerNonEmptyString(options.raw?.rawFilename ?? options.raw?.filename);
+  if (!target) {
+    throw new Error("missing-k2-cfs-gcode-path");
+  }
+  const fileMaterialTypes = splitK2CfsMaterialList(options.raw?.material || options.raw?.raw?.material);
+  const toolAssignments = options.assignments.map((assignment, index) => {
+    const row = findK2CfsRowBySourceId(options.dialogModel.rows, assignment.sourceId);
+    const material = row?.material || {};
+    const materialType = toPrintManagerNonEmptyString(material.type) || fileMaterialTypes[index] || fileMaterialTypes[0] || null;
+    const color = normalizeK2CfsProtocolColor(material.color);
+    if (!row || !materialType || !color) {
+      throw new Error(`missing-k2-cfs-material-evidence:${assignment.toolAlias}`);
+    }
+    return {
+      toolId: index,
+      protocolToolAlias: assignment.toolAlias,
+      materialSourceId: assignment.sourceId,
+      protocol: {
+        type: materialType,
+        color,
+      },
+      material: {
+        type: materialType,
+        name: material.name || null,
+        color: material.color || null,
+      },
+    };
+  });
+  return {
+    commandKind: "print-start",
+    transportKind: "ws9999",
+    payload: {
+      printPlanId: `ui-k2-cfs:${options.hostname}:${target}:${Date.now()}`,
+      planKind: toolAssignments.length > 1 ? "multicolor-cfs" : "single-color",
+      asset: {
+        path: target,
+      },
+      toolAssignments,
+      materialSourceIds: [...new Set(toolAssignments.map((assignment) => assignment.materialSourceId))],
+      startOptions: {
+        enableSelfTest: 0,
+      },
+    },
+  };
+}
+
+/**
+ * K2/CFS印刷開始transportを送信する。
+ *
+ * 【詳細説明】
+ * - `createK2CfsCommandTransportPlan()` が拒否した場合はプリンタへ何も送らない。
+ * - `sendCommand()` はK1/K2 WebSocketのfire-and-forget APIなので、transport hookでは
+ *   ローカル投入完了を `submitted` として返す。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} request - Printer Core command request風object
+ * @returns {Promise<object>} transport送信結果
+ */
+async function sendK2CfsPrintStartRequest(hostname, request) {
+  const plan = createK2CfsCommandTransportPlan(request);
+  if (!plan.ok) {
+    throw new Error(`k2-cfs-print-plan-rejected:${plan.reason}`);
+  }
+  return sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
+    await sendCommand(frame.method, frame.params, hostname);
+    return {
+      status: "submitted",
+      frame,
+      meta,
+    };
+  });
+}
+
+/**
  * CFS/CFS-C観測状態から印刷確認用の材料文脈を作る。
  *
  * 【詳細説明】
@@ -727,6 +1129,7 @@ function formatMaterialSourceRowLabel(row) {
  *   hasCfsSupply:boolean,
  *   selectedRow:object|null,
  *   loadedRows:Array<object>,
+ *   viewModel:object|null,
  *   selectedLabel:string,
  *   stale:boolean
  * }} 印刷確認用のCFS材料文脈
@@ -748,6 +1151,7 @@ function createMaterialPrintContext(hostname) {
       hasCfsSupply: false,
       selectedRow: null,
       loadedRows: [],
+      viewModel: null,
       selectedLabel: "",
       stale: false,
     };
@@ -763,6 +1167,7 @@ function createMaterialPrintContext(hostname) {
     hasCfsSupply: loadedRows.length > 0,
     selectedRow,
     loadedRows,
+    viewModel,
     selectedLabel: formatMaterialSourceRowLabel(selectedRow),
     stale: viewModel.cfs.topologyState === "stale",
   };
@@ -2242,7 +2647,12 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   const usedSec        = Number(raw.usagetime || 0);
   const spool          = getCurrentSpool(hostname);
   const materialContext = createMaterialPrintContext(hostname);
-  const hasCfsSupply  = !spool && materialContext.hasCfsSupply;
+  const hasCfsSupply  = materialContext.hasCfsSupply;
+  const useK2CfsPrintStart = getPrinterType(hostname) === "creality-k2" &&
+    materialContext.displayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT;
+  const k2CfsAssignmentModel = useK2CfsPrintStart
+    ? createK2CfsPrintAssignmentDialogModel(raw, materialContext)
+    : null;
   const remaining      = spool?.remainingLengthMm ?? 0;
 
   // ファイル別の過去実績
@@ -2322,16 +2732,19 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
 
   // スプール未装着警告。CFS/CFS-Cの実機slotが観測済みの場合は、台帳スプール未装着を
   // 物理フィラメント未装着として扱わず、read-only CFS観測として別表示にする。
-  if (!spool && !hasCfsSupply) {
+  if (!spool && !hasCfsSupply && !useK2CfsPrintStart) {
     html += `<div class="pm-print-section pm-print-warn-section">`;
     html += `<div class="pm-print-section-title">⚠ スプール未装着</div>`;
     html += `<div>フィラメント管理でスプールを装着してから印刷することを推奨します。</div>`;
     html += `<div>消費量の追跡・残量計算ができません。</div>`;
     html += `</div>`;
-  } else if (hasCfsSupply) {
+  } else if (hasCfsSupply || useK2CfsPrintStart) {
     const sectionClass = materialContext.stale ? "pm-print-warn-section" : "pm-print-info-section";
     html += `<div class="pm-print-section ${sectionClass}">`;
-    html += `<div class="pm-print-section-title">${materialContext.stale ? "⚠ " : ""}CFS/CFS-C供給を観測</div>`;
+    const cfsSectionTitle = hasCfsSupply
+      ? `${materialContext.stale ? "⚠ " : ""}CFS/CFS-C供給を観測`
+      : "CFS/CFS-C供給を取得待ち";
+    html += `<div class="pm-print-section-title">${cfsSectionTitle}</div>`;
     if (materialContext.selectedLabel) {
       html += `<div>選択中: <strong>${escapePrintDialogHtml(materialContext.selectedLabel)}</strong></div>`;
     } else {
@@ -2342,6 +2755,9 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
     }
     html += `<div>3DPmon台帳スプールは未連携のため、正確な残量台帳計算は後続Gateで扱います。</div>`;
     html += `</div>`;
+    if (k2CfsAssignmentModel) {
+      html += k2CfsAssignmentModel.html;
+    }
   }
 
   // 素材ミスマッチ警告
@@ -2460,7 +2876,13 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   // ダイアログレベルと確認ボタンを危険度に応じて変更
   let dialogLevel = "info";
   let confirmLabel = "印刷する";
-  if (materialMismatch) {
+  if (k2CfsAssignmentModel?.disabledReason) {
+    dialogLevel = "warnRed";
+    confirmLabel = "OK";
+  } else if (useK2CfsPrintStart) {
+    dialogLevel = "info";
+    confirmLabel = "CFS割当で印刷する";
+  } else if (materialMismatch) {
     dialogLevel = "warnRed";
     confirmLabel = "🚨 素材不一致 — それでも印刷する";
   } else if (isShort) {
@@ -2482,13 +2904,38 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
     cancelText:  "キャンセル"
   });
   if (!ok) return;
+  if (k2CfsAssignmentModel?.disabledReason) {
+    return;
+  }
 
-  if (spool) {
+  if (spool && !useK2CfsPrintStart) {
     useFilament(materialNeeded, "", hostname);
   }
 
   // 実際にプリントコマンドを送信
   const target = raw.rawFilename ?? raw.filename;
+  if (useK2CfsPrintStart && k2CfsAssignmentModel) {
+    try {
+      const assignments = readK2CfsPrintAssignmentsFromDialog(k2CfsAssignmentModel);
+      const request = createK2CfsPrintStartRequestFromUi({
+        hostname,
+        raw,
+        dialogModel: k2CfsAssignmentModel,
+        assignments,
+      });
+      await sendK2CfsPrintStartRequest(hostname, request);
+      pushLog("K2/CFS印刷開始: colorMatch → multiColorPrint を送信しました", "send", false, hostname);
+    } catch (error) {
+      pushLog(`K2/CFS印刷開始を中止しました: ${error.message}`, "error", false, hostname);
+      await showConfirmDialog({
+        level: "error",
+        title: "CFS印刷開始失敗",
+        message: error.message,
+        confirmText: "OK",
+      });
+    }
+    return;
+  }
   sendCommand(
     "set",
     { opGcodeFile: `printprt:${target}` },
