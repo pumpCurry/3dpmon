@@ -50,6 +50,11 @@ const {
   stopCameraStream
 } = await import("../../3dp_lib/dashboard_camera_ctrl.js");
 
+const nativeFetch = global.fetch;
+const nativePeerConnection = global.RTCPeerConnection;
+const nativeMediaStream = global.MediaStream;
+const nativeVideoPlay = HTMLMediaElement.prototype.play;
+
 // ── ヘルパー ──
 function createMockImg() {
   const img = document.createElement("img");
@@ -93,6 +98,12 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  global.fetch = nativeFetch || vi.fn(() => Promise.resolve({ ok: true }));
+  if (nativePeerConnection) global.RTCPeerConnection = nativePeerConnection;
+  else delete global.RTCPeerConnection;
+  if (nativeMediaStream) global.MediaStream = nativeMediaStream;
+  else delete global.MediaStream;
+  HTMLMediaElement.prototype.play = nativeVideoPlay;
   // レジストリをクリーンアップ
   unregisterCameraPanel("host-A");
   unregisterCameraPanel("host-B");
@@ -116,7 +127,7 @@ describe("registerCameraPanel — entry 構造", () => {
     stopCameraStream("host-A");
   });
 
-  it("K2 WebRTCカメラはK1 MJPEG URLへ誤接続せず未対応表示にする", () => {
+  it("K2 WebRTCカメラはK1 MJPEG URLへ誤接続せずWebRTC videoへ接続する", async () => {
     mockPrinterTypes["host-A"] = "creality-k2";
     mockMonitorData.appSettings.connectionTargets = [
       {
@@ -127,6 +138,87 @@ describe("registerCameraPanel — entry 構造", () => {
         cameraProtocol: "k2-webrtc",
       },
     ];
+    const answer = {
+      type: "answer",
+      sdp: [
+        "v=0",
+        "m=video 9 UDP/TLS/RTP/SAVPF 96",
+        "a=rtpmap:96 H264/90000",
+      ].join("\r\n"),
+    };
+    global.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(btoa(JSON.stringify(answer))),
+    }));
+    global.MediaStream = class MediaStream {
+      constructor(tracks = []) { this._tracks = tracks; }
+      getTracks() { return this._tracks; }
+    };
+    class FakePeerConnection extends EventTarget {
+      constructor() {
+        super();
+        this.iceGatheringState = "complete";
+        this.iceConnectionState = "new";
+        this.connectionState = "new";
+        this.localDescription = null;
+      }
+      addTransceiver() {}
+      createOffer() { return Promise.resolve({ type: "offer", sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96" }); }
+      setLocalDescription(offer) { this.localDescription = offer; return Promise.resolve(); }
+      setRemoteDescription() {
+        this.iceConnectionState = "connected";
+        this.connectionState = "connected";
+        const track = { kind: "video", readyState: "live", muted: false, stop: vi.fn() };
+        const event = new Event("track");
+        Object.defineProperty(event, "track", { value: track });
+        Object.defineProperty(event, "streams", { value: [new MediaStream([track])] });
+        this.dispatchEvent(event);
+        this.dispatchEvent(new Event("iceconnectionstatechange"));
+        this.dispatchEvent(new Event("connectionstatechange"));
+        return Promise.resolve();
+      }
+      close() { this.connectionState = "closed"; }
+    }
+    global.RTCPeerConnection = FakePeerConnection;
+    HTMLMediaElement.prototype.play = vi.fn(() => Promise.resolve());
+    const img = createMockImg();
+    const body = createMockBody();
+    registerCameraPanel("host-A", img, body, null);
+
+    startCameraStream("host-A");
+    flushCameraStart();
+    await Promise.resolve();
+    await Promise.resolve();
+    const video = body.querySelector("video.camera-webrtc-stream");
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(img.getAttribute("src")).toBeNull();
+    expect(video).toBeTruthy();
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://192.168.1.10:8000/call/webrtc_local",
+      expect.objectContaining({ method: "POST", headers: { "Content-Type": "plain/text" } })
+    );
+    expect(body.querySelector(".camera-status")?.classList.contains("hidden")).toBe(true);
+  });
+
+  it("K2 WebRTCカメラはRTCPeerConnection非対応環境では明示的に未対応表示にする", () => {
+    mockPrinterTypes["host-A"] = "creality-k2";
+    mockMonitorData.appSettings.connectionTargets = [
+      {
+        dest: "192.168.1.10:9999",
+        hostname: "host-A",
+        printerType: "creality-k2",
+        cameraPort: 8000,
+        cameraProtocol: "k2-webrtc",
+      },
+    ];
+    const oldPeerConnection = global.RTCPeerConnection;
+    delete global.RTCPeerConnection;
     const img = createMockImg();
     const body = createMockBody();
     registerCameraPanel("host-A", img, body, null);
@@ -134,10 +226,10 @@ describe("registerCameraPanel — entry 構造", () => {
     startCameraStream("host-A");
     flushCameraStart();
 
-    expect(img.getAttribute("src")).toBeNull();
     expect(body.querySelector(".no-signal-main")?.textContent).toBe("K2 CAMERA");
     expect(body.querySelector(".camera-status-label")?.textContent).toBe("WebRTCカメラ未対応");
-    expect(body.querySelector(".camera-status-sub")?.textContent).toContain("http://192.168.1.10:8000/");
+    expect(body.querySelector(".camera-status-sub")?.textContent).toContain("http://192.168.1.10:8000/call/webrtc_local");
+    global.RTCPeerConnection = oldPeerConnection;
   });
 });
 

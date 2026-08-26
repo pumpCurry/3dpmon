@@ -74,7 +74,8 @@ Last updated: 2026-08-26
 - 接続後はhostname `K2Pro-69E7`、printerType `creality-k2`、state `0`、progress `0`、`cfsConnect:1`、Printer Core v3 shadow `observed`、material topology `fresh` を確認した。
 - CFS topologyは外部スプール空、CFS 1台、1A/1B/1C loaded、1D emptyとして観測できた。selected sourceは未選択のため、CFS print-start guardの実機条件として引き続き監視対象にする。
 - 印刷履歴はWS9999 `reqHistory` で35件を取得できた。ファイル一覧はWS9999 `retGcodeFileInfo2` を既存file renderer用entriesへ変換して13件を表示できた。WS応答が遅い場合に備え、K2 read-only HTTP API `http://host:4408/server/history/list` と `http://host:4408/server/files/list?root=gcodes` から補完するfallbackを追加した。
-- カメラについては `http://host:8000/` のcamera serviceは到達可能だが、K1 MJPEG endpointではなくWebRTC/HTML方式として振る舞う。現行カメラパネルはMJPEG `<img>` 前提なので、K2では接続リトライせず `WebRTCカメラ未対応` と表示する。K2カメラ映像の実描画はWebRTC viewer実装の別作業として残す。
+- カメラについては `http://host:8000/` のcamera serviceが到達可能で、K1 MJPEG endpointではなくWebRTC signalling方式として振る舞う。`/info.videoPort=443` はMJPEG portとしては扱わず、K2 camera viewerは `http://host:8000/call/webrtc_local` へbase64 JSON SDP offerをPOSTし、answer取得、ICE接続、ontrack、1280x720 video frame取得までを独立probeで確認した。証跡は `tmp/k2-webrtc-probe/2026-08-26T01-04-49-961Z` に保存した。
+- 現行カメラパネルはK2系のみWebRTC `<video>` viewerを使い、K1/Moonrakerは従来のMJPEG/snapshot経路を維持する。RTCPeerConnectionが利用できない環境ではMJPEGへ誤フォールバックせず、`WebRTCカメラ未対応` と明示する。
 
 ## Gate 20 追加で閉じた command transport 項目
 

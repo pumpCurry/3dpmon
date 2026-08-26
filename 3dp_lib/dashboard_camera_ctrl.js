@@ -13,6 +13,7 @@
  * - 接続状態に応じた NO SIGNAL / CONNECTING / RETRYING UI
  * - Exponential Backoff による再接続（最大5回）
  * - 配信サービス停止時は一度だけエラー通知
+ * - K2系WebRTCカメラの直接表示
  *
  * 【公開関数一覧】
  * - {@link registerCameraPanel}：カメラパネルを登録
@@ -24,7 +25,7 @@
  *
  * @version 1.390.1391 (PR #432)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-26 02:02:52
+ * @lastModified 2026-08-26 10:08:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -57,6 +58,10 @@ const RELAY_CAMERA_MIN_INTERVAL_MS = 1000;
 const CAMERA_USER_RESTART_DEBOUNCE_MS = 750;
 /** @constant {number} カメラサービス疎通確認 fetch の明示タイムアウト (ms) */
 const CAMERA_SERVICE_PROBE_TIMEOUT_MS = 3000;
+/** @constant {number} K2 WebRTC 接続確立待ちタイムアウト (ms) */
+const K2_WEBRTC_CONNECTION_TIMEOUT_MS = 15000;
+/** @constant {number} K2 WebRTC 初回フレーム待ちタイムアウト (ms) */
+const K2_WEBRTC_FRAME_TIMEOUT_MS = 20000;
 
 /**
  * 現在のレンダラーがリレー子（readonly/satellite）かどうかを返す。
@@ -138,6 +143,8 @@ function _resolveK2CameraPort(host) {
  * @property {number|null} pollTimeout    - setTimeout ID (リレー子 snapshot ポーリング)
  * @property {number|null} userRestartTimer - ユーザーON要求を合流する debounce タイマー
  * @property {AbortController|null} serviceProbeAbortController - サービス疎通確認 fetch の中断制御
+ * @property {RTCPeerConnection|null} webrtcPeerConnection - K2 WebRTC camera のPeerConnection
+ * @property {HTMLVideoElement|null} webrtcVideo - K2 WebRTC camera 表示用video要素
  * @property {boolean} desiredEnabled     - UI/設定上のカメラ有効希望状態
  * @property {number}   _generation       - stale 検出用 epoch カウンタ
  *                                          各非同期コールバックはクロージャでこの値をキャプチャし
@@ -175,6 +182,7 @@ export function registerCameraPanel(hostname, img, body, toggle) {
     // 2. generation インクリメントで suspend 中の async onerror を stale 化
     prev._generation = (prev._generation || 0) + 1;
     // 3. 旧 img の MJPEG デコードパイプラインを完全解放
+    _stopK2WebRtcPipeline(prev);
     _releaseImagePipeline(prev, { replace: false });
     // 4. リトライ抑制フラグ
     prev.userStopped = true;
@@ -192,6 +200,8 @@ export function registerCameraPanel(hostname, img, body, toggle) {
     pollTimeout: null,
     userRestartTimer: null,
     serviceProbeAbortController: null,
+    webrtcPeerConnection: null,
+    webrtcVideo: null,
     streamTarget: null,
     desiredEnabled: false,
     _generation: 0,
@@ -217,6 +227,7 @@ export function unregisterCameraPanel(hostname) {
   entry.userStopped = true;
   entry.desiredEnabled = false;
   _cancelTimers(entry);
+  _stopK2WebRtcPipeline(entry);
   entry.attempts = 0;
   entry.streamTarget = null;
   entry._activeStreamUrl = null;
@@ -348,24 +359,16 @@ function _startCameraStreamNow(host, entry, gen) {
   }
 
   /* ★ K2系: 現時点の実機はWebRTC/HTML camera serviceで、K1のMJPEG <img> endpointではない。
-     `http://ip:8000/` は応答するが `/?action=stream` 画像ではないため、ここでK1方式へ
-     フォールバックするとリトライを繰り返し、ユーザーに「故障」または「接続済み」と誤認させる。
-     Printer Core側でWebRTC viewerを実装するまでは、明示的な未対応状態として表示する。 */
+     `http://ip:8000/call/webrtc_local` へSDP offerをPOSTし、ChromiumのRTCPeerConnectionで受信する。
+     K1のMJPEG <img> へフォールバックすると誤ったリトライになるため、K2は専用経路だけを使う。 */
   if (getPrinterType(host) === "creality-k2") {
     const port = _resolveK2CameraPort(host);
-    entry.streamUrl = `http://${extractHost(ip)}:${port}/`;
+    entry.streamUrl = `http://${extractHost(ip)}:${port}/call/webrtc_local`;
     entry.attempts = 0;
     entry.cameraPort = port;
     entry.streamTarget = `${extractHost(ip)}:${port}`;
     _cancelTimers(entry);
-    _updateUI(entry, "unsupported", {
-      reason: "K2 camera uses WebRTC",
-      url: entry.streamUrl,
-    });
-    pushLog(
-      `K2カメラはWebRTC方式のため、現在のMJPEGカメラパネルでは未対応です (${entry.streamUrl})`,
-      "warn", false, host
-    );
+    _connectK2WebRtcStream(entry, extractHost(ip), gen);
     return;
   }
 
@@ -490,6 +493,7 @@ function _clearWatchdog(entry) {
  */
 function _stopEntry(entry) {
   _cancelTimers(entry);
+  _stopK2WebRtcPipeline(entry);
   entry.attempts = 0;
   entry.streamTarget = null;
   entry._activeStreamUrl = null;   // ★ 冪等化用の配信URL記録もクリア（再開時に再接続させる）
@@ -513,6 +517,7 @@ function _stopDuplicateTargetStreams(keepEntry, target) {
     if (other.userStopped) continue;
     if (other.streamTarget !== target) continue;
     _cancelTimers(other);
+    _stopK2WebRtcPipeline(other);
     other._generation = (other._generation || 0) + 1; // 旧 async コールバックを stale 化
     other.userStopped = true;
     other.desiredEnabled = false;
@@ -524,6 +529,250 @@ function _stopDuplicateTargetStreams(keepEntry, target) {
       "warn", false, other.hostname
     );
   }
+}
+
+/**
+ * K2 WebRTC signalling用のofferをbase64文字列へ変換する。
+ *
+ * 【詳細説明】
+ * - K2 camera serviceは `plain/text` bodyとしてbase64化したJSON offerを期待する。
+ * - ブラウザ実装では `btoa` を使い、非ブラウザテスト環境では `Buffer` へフォールバックする。
+ *
+ * @private
+ * @param {RTCSessionDescriptionInit} description - local offer description
+ * @returns {string} base64 encoded offer JSON
+ */
+function _encodeK2WebRtcOffer(description) {
+  const payload = JSON.stringify({ type: description.type, sdp: description.sdp });
+  if (typeof btoa === "function") return btoa(payload);
+  return globalThis.Buffer.from(payload, "utf8").toString("base64");
+}
+
+/**
+ * K2 WebRTC signalling応答をanswerへ変換する。
+ *
+ * 【詳細説明】
+ * - 実機はbase64化したJSON answerを `text/plain` で返す。
+ * - 不正応答は例外として上位の接続失敗処理へ渡す。
+ *
+ * @private
+ * @param {string} text - signalling response body
+ * @returns {RTCSessionDescriptionInit} remote answer description
+ */
+function _decodeK2WebRtcAnswer(text) {
+  const trimmed = String(text || "").trim();
+  const decoded = typeof atob === "function"
+    ? atob(trimmed)
+    : globalThis.Buffer.from(trimmed, "base64").toString("utf8");
+  return JSON.parse(decoded);
+}
+
+/**
+ * RTCPeerConnectionのICE gathering完了を待つ。
+ *
+ * @private
+ * @param {RTCPeerConnection} pc - 接続対象PeerConnection
+ * @returns {Promise<void>} ICE gathering完了で解決
+ */
+function _waitForK2IceGatheringComplete(pc) {
+  if (pc.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolvePromise) => {
+    const onState = () => {
+      if (pc.iceGatheringState === "complete") {
+        pc.removeEventListener("icegatheringstatechange", onState);
+        resolvePromise();
+      }
+    };
+    pc.addEventListener("icegatheringstatechange", onState);
+  });
+}
+
+/**
+ * RTCPeerConnectionの接続確立を待つ。
+ *
+ * @private
+ * @param {RTCPeerConnection} pc - 接続対象PeerConnection
+ * @param {number} timeoutMs - timeout milliseconds
+ * @returns {Promise<void>} connected/completedで解決
+ */
+function _waitForK2WebRtcConnection(pc, timeoutMs) {
+  if (["connected", "completed"].includes(pc.iceConnectionState) || pc.connectionState === "connected") {
+    return Promise.resolve();
+  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      rejectPromise(new Error("K2 WebRTC connection timeout"));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      pc.removeEventListener("iceconnectionstatechange", onState);
+      pc.removeEventListener("connectionstatechange", onState);
+    };
+    const onState = () => {
+      if (["connected", "completed"].includes(pc.iceConnectionState) || pc.connectionState === "connected") {
+        cleanup();
+        resolvePromise();
+      } else if (["failed", "closed"].includes(pc.iceConnectionState) || ["failed", "closed"].includes(pc.connectionState)) {
+        cleanup();
+        rejectPromise(new Error(`K2 WebRTC failed: ice=${pc.iceConnectionState} pc=${pc.connectionState}`));
+      }
+    };
+    pc.addEventListener("iceconnectionstatechange", onState);
+    pc.addEventListener("connectionstatechange", onState);
+  });
+}
+
+/**
+ * K2 WebRTC videoの初回フレームを待つ。
+ *
+ * @private
+ * @param {HTMLVideoElement} video - 表示用video要素
+ * @param {number} timeoutMs - timeout milliseconds
+ * @returns {Promise<void>} video dimension観測で解決
+ */
+function _waitForK2VideoFrame(video, timeoutMs) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        clearInterval(timer);
+        resolvePromise();
+      } else if (Date.now() - startedAt > timeoutMs) {
+        clearInterval(timer);
+        rejectPromise(new Error("K2 WebRTC video frame timeout"));
+      }
+    }, 100);
+  });
+}
+
+/**
+ * K2 WebRTC表示用video要素を取得または作成する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @returns {HTMLVideoElement} 表示用video要素
+ */
+function _ensureK2WebRtcVideo(entry) {
+  if (entry.webrtcVideo?.isConnected) return entry.webrtcVideo;
+  const video = document.createElement("video");
+  video.className = "camera-webrtc-stream";
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.setAttribute("playsinline", "");
+  const anchor = entry.img;
+  if (anchor?.parentNode) {
+    anchor.parentNode.insertBefore(video, anchor.nextSibling);
+  } else {
+    entry.body?.appendChild(video);
+  }
+  entry.webrtcVideo = video;
+  return video;
+}
+
+/**
+ * K2 WebRTC pipelineを停止してDOM/PeerConnectionを解放する。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @returns {void}
+ */
+function _stopK2WebRtcPipeline(entry) {
+  const pc = entry?.webrtcPeerConnection;
+  if (pc) {
+    try { pc.close(); } catch { /* noop */ }
+  }
+  entry.webrtcPeerConnection = null;
+  const video = entry?.webrtcVideo;
+  if (video) {
+    const stream = video.srcObject;
+    if (stream && typeof stream.getTracks === "function") {
+      for (const track of stream.getTracks()) {
+        try { track.stop(); } catch { /* noop */ }
+      }
+    }
+    video.srcObject = null;
+    video.remove();
+  }
+  entry.webrtcVideo = null;
+}
+
+/**
+ * K2 WebRTC camera streamへ接続する。
+ *
+ * 【詳細説明】
+ * - 実機probeで確認した `RTCPeerConnection → offer → HTTP POST → answer → ontrack → video frame` の順序を本体へ移植する。
+ * - 失敗時はK1/MJPEGへフォールバックせず、WebRTC専用の失敗としてUIへ表示し、誤ったリトライ地獄を避ける。
+ *
+ * @private
+ * @param {CameraPanelEntry} entry - カメラ状態
+ * @param {string} host - IPアドレス（ポートなし）
+ * @param {number} gen - start要求時点の世代番号
+ * @returns {void}
+ */
+function _connectK2WebRtcStream(entry, host, gen = entry._generation) {
+  if (!_canUseEntry(entry, gen)) return;
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    _updateUI(entry, "unsupported", { reason: "RTCPeerConnection unavailable", url: entry.streamUrl });
+    pushLog("K2 WebRTCカメラを表示できません: RTCPeerConnectionが利用できません", "warn", false, entry.hostname);
+    return;
+  }
+
+  entry.attempts++;
+  _updateUI(entry, "connecting", { attempt: entry.attempts, max: CAMERA_MAX_RETRY });
+  pushLog(`K2 WebRTCカメラ接続試行 (${entry.attempts}/${CAMERA_MAX_RETRY})`, "info", false, entry.hostname);
+  _stopK2WebRtcPipeline(entry);
+
+  const pc = new globalThis.RTCPeerConnection({ iceServers: [] });
+  const video = _ensureK2WebRtcVideo(entry);
+  entry.webrtcPeerConnection = pc;
+  entry.streamTarget = `${host}:${entry.cameraPort || DEFAULT_K2_WEBRTC_PORT}:webrtc`;
+  _stopDuplicateTargetStreams(entry, entry.streamTarget);
+  entry.img?.classList.add("off");
+
+  pc.addEventListener("track", (event) => {
+    if (!_canUseEntry(entry, gen)) return;
+    const stream = event.streams && event.streams[0] ? event.streams[0] : new globalThis.MediaStream([event.track]);
+    video.srcObject = stream;
+  });
+
+  (async () => {
+    try {
+      pc.addTransceiver("video", { direction: "sendrecv" });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await _waitForK2IceGatheringComplete(pc);
+      if (!_canUseEntry(entry, gen)) return;
+
+      const response = await fetch(entry.streamUrl, {
+        method: "POST",
+        headers: { "Content-Type": "plain/text" },
+        body: _encodeK2WebRtcOffer(pc.localDescription || offer),
+      });
+      const responseText = await response.text();
+      if (!response.ok) throw new Error(`K2 WebRTC signalling HTTP ${response.status}`);
+      const answer = _decodeK2WebRtcAnswer(responseText);
+      await pc.setRemoteDescription(answer);
+      await _waitForK2WebRtcConnection(pc, K2_WEBRTC_CONNECTION_TIMEOUT_MS);
+      await video.play().catch(() => {});
+      await _waitForK2VideoFrame(video, K2_WEBRTC_FRAME_TIMEOUT_MS);
+      if (!_canUseEntry(entry, gen)) return;
+
+      entry.firstConnected = true;
+      entry.attempts = 0;
+      entry._activeStreamUrl = entry.streamUrl;
+      _updateUI(entry, "connected");
+      pushLog("K2 WebRTCカメラ接続成功", "success", false, entry.hostname);
+      notificationManager.notify("cameraConnected", { hostname: entry.hostname });
+    } catch (error) {
+      if (!_canUseEntry(entry, gen)) return;
+      _stopK2WebRtcPipeline(entry);
+      _updateUI(entry, "unsupported", { reason: error.message, url: entry.streamUrl });
+      pushLog(`K2 WebRTCカメラ接続失敗: ${error.message}`, "error", false, entry.hostname);
+      notificationManager.notify("cameraConnectionFailed", { hostname: entry.hostname });
+    }
+  })();
 }
 
 /**
