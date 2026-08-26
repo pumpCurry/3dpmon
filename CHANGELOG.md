@@ -6,7 +6,7 @@
 - **K2/CFS print authority**: explicit CFS print starts now pass through the production command dispatcher, with send-time session, file identity, and fresh loaded-slot revalidation before any `colorMatch` / `multiColorPrint` frame is sent.
 - **K2 file thumbnails**: printer-local thumbnail paths from `retGcodeFileInfo2` are normalized to `/downloads/humbnail/...`, matching the path that K2 exposes over HTTP.
 - **File/history tables**: file list and print history tables now keep enough intrinsic width for horizontal scrolling on K2 panels.
-- 検証: targeted K2/CFS command/material UI tests 77件PASS、full Vitest 98 files / 1543 tests PASS、
+- 検証: targeted K2/CFS command/material UI tests 78件PASS、full Vitest 98 files / 1544 tests PASS、
   Electron E2E 3/3、GitHub Actions lint/smoke/test PASS。Windows installer/portable build成功
   (`C:/Users/pcb/AppData/Local/Temp/3dpmon-pr434-build`)。
 

@@ -25,7 +25,7 @@
  *
  * @version 1.390.1409 (PR #434)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-26 16:18:02
+ * @lastModified 2026-08-26 16:42:18
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -207,11 +207,13 @@ const PRINTER_COMMAND_DISPATCHABLE_KINDS = Object.freeze(new Set(Object.keys(PRI
  * command が transport level で受理されたとみなせる status。
  *
  * 【詳細説明】
+ * - `submitted` は protocol ACK ではなくローカル送信完了だが、transport failureではない。
  * - `unknown`、`transport-error`、`transient-error` は expected-state が偶然一致しても完了扱いにしない。
  *
  * @constant {ReadonlySet<string>}
  */
 const COMMAND_TRANSPORT_ACCEPTED_STATUSES = Object.freeze(new Set([
+  "submitted",
   "accepted",
   "acknowledged",
   "ok",
@@ -687,8 +689,45 @@ function normalizeMaterialTopologySources(sources) {
     kind: String(source?.kind || "").trim() || null,
     boxId: normalizeSequence(source?.boxId),
     slotId: normalizeSequence(source?.slotId ?? source?.protocolSlotId),
-    presence: String(source?.presence || source?.status?.presence || "").trim() || null,
+    presence: normalizeMaterialSourcePresence(source),
   })).filter((source) => source.sourceId);
+}
+
+/**
+ * material source の装填状態をsend-time validation用へ正規化する。
+ *
+ * 【詳細説明】
+ * - UI view model由来の `presence` を最優先する。
+ * - 実runtimeのNormalized MaterialSourceには `presence` が無い場合があるため、
+ *   `status.stateCode` と材料証拠から表示側と同じ保守的なloaded/empty/unknown判定を再現する。
+ *
+ * @private
+ * @param {object|null|undefined} source - material source候補
+ * @returns {string|null} `loaded` / `empty` / `unknown` / `unobserved`、またはnull
+ */
+function normalizeMaterialSourcePresence(source) {
+  const explicitPresence = String(source?.presence || source?.status?.presence || "").trim();
+  if (explicitPresence) {
+    return explicitPresence;
+  }
+  if (!source) {
+    return "unobserved";
+  }
+  const stateCode = normalizeSequence(source?.status?.stateCode);
+  const material = source.material && typeof source.material === "object" ? source.material : {};
+  const hasMaterialEvidence = Boolean(
+    String(material.type || "").trim() ||
+    String(material.name || "").trim() ||
+    String(material.color?.normalized || material.color?.raw || "").trim() ||
+    String(material.rfid || "").trim()
+  );
+  if (stateCode === 0 && !hasMaterialEvidence) {
+    return "empty";
+  }
+  if (stateCode === null && !hasMaterialEvidence) {
+    return "unknown";
+  }
+  return "loaded";
 }
 
 /**

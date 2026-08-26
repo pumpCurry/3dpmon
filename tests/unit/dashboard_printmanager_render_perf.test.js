@@ -18,7 +18,7 @@
  *
  * @version 1.390.1409 (PR #434)
  * @since   1.390.1365 (PR #432)
- * @lastModified 2026-08-26 16:18:02
+ * @lastModified 2026-08-26 16:42:18
  *
  * @vitest-environment jsdom
  */
@@ -329,7 +329,6 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                     name: "White PLA",
                     color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
                   },
-                  presence: "loaded",
                   status: { stateCode: 1, selected: false },
                 },
                 {
@@ -343,7 +342,6 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                     name: "Green PLA",
                     color: { raw: "#072a530", normalized: "72a530", displayHex: "72a530" },
                   },
-                  presence: "loaded",
                   status: { stateCode: 1, selected: true },
                 },
               ],
@@ -410,7 +408,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     expect(JSON.stringify(connectionMod.sendCommand.mock.calls)).not.toContain("opGcodeFile");
   });
 
-  it("K2/CFSファイル印刷は確認後にtopologyがstale化したらdispatcherで送信しない", async () => {
+  it("K2/CFSファイル印刷は確認後にtopology観測TTLが切れたらdispatcherで送信しない", async () => {
     table = makeTable("file-list-table");
     scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
     const nowIso = new Date().toISOString();
@@ -428,7 +426,10 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
       },
     });
     confirmMod.showConfirmDialog.mockImplementationOnce(async () => {
-      monitorData.machines[HOST].runtimeData.printerCoreV3Shadow.lastState.materials.cfs.topologyState = "stale";
+      const oldObservedAt = new Date(Date.now() - 120_000).toISOString();
+      const shadow = monitorData.machines[HOST].runtimeData.printerCoreV3Shadow;
+      shadow.materialProviderLastObservedAt = oldObservedAt;
+      shadow.lastState.materials.provider.lastObservedAt = oldObservedAt;
       return true;
     });
     monitorData.machines[HOST] = {
@@ -465,7 +466,6 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                   name: "White PLA",
                   color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
                 },
-                presence: "loaded",
                 status: { stateCode: 1, selected: true },
               }],
               assignments: [],
@@ -548,7 +548,6 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                   name: "White PLA",
                   color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
                 },
-                presence: "loaded",
                 status: { stateCode: 1, selected: true },
               }],
               assignments: [],

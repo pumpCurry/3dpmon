@@ -24,7 +24,7 @@
  *
 * @version 1.390.1409 (PR #434)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 16:18:02
+* @lastModified 2026-08-26 16:42:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1143,6 +1143,55 @@ function createK2CfsPrintFileIdentity(row) {
 }
 
 /**
+ * K2/CFS print-startのsend-time material topologyを作る。
+ *
+ * 【詳細説明】
+ * - runtime上のlastStateを直接信用せず、表示用と同じTTL freshness判定を通したtopologyを使う。
+ * - MaterialSourceの `presence` はNormalizedState rawではなくview modelで導出済みの値を渡し、
+ *   実機の `status.stateCode` 由来slotが送信直前に未装填扱いへ化けないようにする。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {object|null|undefined} shadowRecord - runtimeData.printerCoreV3Shadow record
+ * @returns {{cfsConnected:boolean,topologyState:string,sourceCount:number|null,sources:Array<object>}} send-time material topology
+ */
+function createK2CfsPrintSendTimeMaterialTopology(hostname, shadowRecord) {
+  const rawTopology = shadowRecord?.lastState?.materials || null;
+  const displayTopology = resolveDisplayMaterialTopology({
+    topology: rawTopology,
+    shadowRecord,
+  });
+  if (!displayTopology) {
+    return {
+      cfsConnected: false,
+      topologyState: "unobserved",
+      sourceCount: null,
+      sources: [],
+    };
+  }
+  const target = getConnectionTarget(hostname);
+  const printerType = getPrinterType(hostname);
+  const viewOptions = resolveMaterialTopologyViewOptions({ target, printerType, topology: displayTopology });
+  const viewModel = createMaterialTopologyViewModel(displayTopology, viewOptions);
+  const cfsRows = viewModel.units.flatMap((unit) => unit.slots || []);
+  const sources = cfsRows
+    .filter((row) => row?.sourceId)
+    .map((row) => ({
+      sourceId: row.sourceId,
+      kind: row.kind,
+      boxId: row.boxId,
+      slotId: row.protocolSlotId,
+      presence: row.presence,
+    }));
+  return {
+    cfsConnected: displayTopology.cfs?.connected === true,
+    topologyState: displayTopology.cfs?.topologyState || "unobserved",
+    sourceCount: sources.length,
+    sources,
+  };
+}
+
+/**
  * K2/CFS print-startの送信直前contextを作る。
  *
  * 【詳細説明】
@@ -1164,19 +1213,14 @@ function createK2CfsPrintSendTimeContext(hostname, request) {
     fileHash: "",
     uploadGeneration: "",
   };
-  const materials = shadowRecord?.lastState?.materials || null;
+  const materialTopology = createK2CfsPrintSendTimeMaterialTopology(hostname, shadowRecord);
   return {
     deviceId: shadowRecord?.deviceId || "",
     sessionId: shadowRecord?.sessionId || "",
     transportKind: "ws9999",
     active: getConnectionState(hostname) === "connected" && shadowRecord?.state !== "closed",
     capabilities: ["command.print-start", "material.cfs", "material.cfsTopology"],
-    materialTopology: {
-      cfsConnected: materials?.cfs?.connected === true,
-      topologyState: materials?.cfs?.topologyState || "unobserved",
-      sourceCount: Array.isArray(materials?.sources) ? materials.sources.length : null,
-      sources: Array.isArray(materials?.sources) ? materials.sources : [],
-    },
+    materialTopology,
     uploadGeneration: fileIdentity.uploadGeneration,
     fileIdentity: {
       remotePath: fileIdentity.path,

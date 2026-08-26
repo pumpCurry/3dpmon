@@ -5,7 +5,7 @@
  *
  * @version 1.390.1409 (PR #434)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-26 16:18:02
+ * @lastModified 2026-08-26 16:42:18
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -201,6 +201,31 @@ describe("Printer Core v3 command authority contract", () => {
     expect(result.transportAccepted).toBe(false);
     expect(result.confirmation.confirmed).toBe(true);
     expect(result.completed).toBe(false);
+  });
+
+  it("submittedはtransport失敗ではなく送信済み確認待ちとして扱う", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      expectedState: {
+        path: "print.stateLabel",
+        expected: "printing",
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "submitted",
+      sentSequence: 10,
+      observedSequence: 10,
+      observedSessionId: "session:1",
+    });
+
+    expect(result).toMatchObject({
+      status: "submitted",
+      transportAccepted: true,
+      completed: false,
+      error: null,
+    });
+    expect(result.postCommandObservation.reason).toContain("sequence-not-advanced");
+    expect(shouldRetryPrinterCommand(request, result)).toBe(false);
   });
 
   it("command前から成立していたexpected-stateは完了証拠にしない", () => {
