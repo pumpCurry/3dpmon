@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1382 (PR #432)
+ * @version 1.390.1409 (PR #434)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-25 22:35:00
+ * @lastModified 2026-08-26 16:18:02
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -722,6 +722,30 @@ function collectPrintStartSendTimeErrors(request, context) {
   const contextFileHash = String(context.fileIdentity?.fileHash || "").trim();
   if (!requestFileHash || !contextFileHash || requestFileHash !== contextFileHash) {
     errors.push("file-identity-hash-mismatch");
+  }
+  const materialSourceIds = Array.isArray(request.payload?.materialSourceIds)
+    ? request.payload.materialSourceIds.map((sourceId) => String(sourceId || "").trim()).filter(Boolean)
+    : [];
+  if (materialSourceIds.length > 0) {
+    if (context.materialTopology?.cfsConnected !== true) {
+      errors.push("print-start-cfs-not-connected");
+    }
+    if (context.materialTopology?.topologyState !== "fresh") {
+      errors.push("print-start-cfs-topology-not-fresh");
+    }
+    const currentSources = Array.isArray(context.materialTopology?.sources)
+      ? context.materialTopology.sources
+      : [];
+    for (const sourceId of materialSourceIds) {
+      const currentSource = currentSources.find((source) => source.sourceId === sourceId);
+      if (!currentSource) {
+        errors.push(`print-start-material-source-not-current:${sourceId}`);
+      } else if (currentSource.kind !== "cfs-slot") {
+        errors.push(`print-start-material-source-not-cfs-slot:${sourceId}`);
+      } else if (currentSource.presence !== "loaded") {
+        errors.push(`print-start-material-source-not-loaded:${sourceId}`);
+      }
+    }
   }
   return errors;
 }

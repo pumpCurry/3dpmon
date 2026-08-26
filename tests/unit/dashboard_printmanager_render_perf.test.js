@@ -16,9 +16,9 @@
  *         リスナは 1 本のみ＝二重バインドしない）
  *   (C) 委譲ディスパッチが正しい行データで該当ハンドラへ届く
  *
- * @version 1.390.1404 (PR #434)
+ * @version 1.390.1409 (PR #434)
  * @since   1.390.1365 (PR #432)
- * @lastModified 2026-08-26 23:45:00
+ * @lastModified 2026-08-26 16:18:02
  *
  * @vitest-environment jsdom
  */
@@ -217,6 +217,9 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
       runtimeData: {
         printerCoreV3Shadow: {
           state: "observed",
+          deviceId: "serial:k2-pro-69e7",
+          sessionId: "session:k2-pro-69e7:1",
+          lastSequence: 44,
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
@@ -292,9 +295,21 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
       return true;
     });
     monitorData.machines[HOST] = {
+      _cachedFileInfo: {
+        entries: [{
+          filename: "/mnt/UDISK/printer_data/gcodes/single.gcode",
+          size: 1234,
+          filemd5: "md5:single",
+          mtime: new Date(1700000000000),
+          sourceProtocol: "retGcodeFileInfo2",
+        }],
+      },
       runtimeData: {
         printerCoreV3Shadow: {
           state: "observed",
+          deviceId: "serial:k2-pro-69e7",
+          sessionId: "session:k2-pro-69e7:1",
+          lastSequence: 44,
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
@@ -314,6 +329,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                     name: "White PLA",
                     color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
                   },
+                  presence: "loaded",
                   status: { stateCode: 1, selected: false },
                 },
                 {
@@ -327,6 +343,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                     name: "Green PLA",
                     color: { raw: "#072a530", normalized: "72a530", displayHex: "72a530" },
                   },
+                  presence: "loaded",
                   status: { stateCode: 1, selected: true },
                 },
               ],
@@ -353,6 +370,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
         thumbUrl: "",
         layer: 10,
         size: 1234,
+        filemd5: "md5:single",
         mtime: new Date(),
         expect: 200,
         printCount: 0,
@@ -392,6 +410,101 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     expect(JSON.stringify(connectionMod.sendCommand.mock.calls)).not.toContain("opGcodeFile");
   });
 
+  it("K2/CFSファイル印刷は確認後にtopologyがstale化したらdispatcherで送信しない", async () => {
+    table = makeTable("file-list-table");
+    scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
+    const nowIso = new Date().toISOString();
+    spoolMod.getCurrentSpool.mockReturnValue(null);
+    connectionMod.getPrinterType.mockReturnValue("creality-k2");
+    connectionMod.getConnectionTarget.mockReturnValue({
+      hostname: HOST,
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        displayMode: "auto",
+        unitLimit: 1,
+        slotsPerUnit: 4,
+        externalSourceLimit: 1,
+      },
+    });
+    confirmMod.showConfirmDialog.mockImplementationOnce(async () => {
+      monitorData.machines[HOST].runtimeData.printerCoreV3Shadow.lastState.materials.cfs.topologyState = "stale";
+      return true;
+    });
+    monitorData.machines[HOST] = {
+      _cachedFileInfo: {
+        entries: [{
+          filename: "/mnt/UDISK/printer_data/gcodes/send-time-stale.gcode",
+          size: 1234,
+          filemd5: "md5:send-time-stale",
+          mtime: new Date(1700000000000),
+          sourceProtocol: "retGcodeFileInfo2",
+        }],
+      },
+      runtimeData: {
+        printerCoreV3Shadow: {
+          state: "observed",
+          deviceId: "serial:k2-pro-69e7",
+          sessionId: "session:k2-pro-69e7:1",
+          lastSequence: 44,
+          lastObservedAt: nowIso,
+          materialProviderLastObservedAt: nowIso,
+          lastState: {
+            materials: {
+              cfs: { connected: true, enabled: true, topologyState: "fresh" },
+              provider: { lastObservedAt: nowIso },
+              units: [{ unitId: "cfs:1", boxId: 1, observedSlotCount: 4 }],
+              sources: [{
+                sourceId: "cfs:1:slot:0",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 0,
+                material: {
+                  type: "PLA",
+                  name: "White PLA",
+                  color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
+                },
+                presence: "loaded",
+                status: { stateCode: 1, selected: true },
+              }],
+              assignments: [],
+            },
+          },
+        },
+      },
+    };
+
+    renderFileList({
+      totalNum: 1,
+      entries: [{
+        number: 1,
+        filename: "/mnt/UDISK/printer_data/gcodes/send-time-stale.gcode",
+        basename: "send-time-stale.gcode",
+        thumbUrl: "",
+        layer: 10,
+        size: 1234,
+        filemd5: "md5:send-time-stale",
+        mtime: new Date(),
+        expect: 200,
+        printCount: 0,
+        material: "PLA",
+        materialColors: "#ffffff",
+        match: "T1A=T1A ",
+        sourceProtocol: "retGcodeFileInfo2",
+      }],
+    }, "http://127.0.0.1", HOST);
+    const btn = table.querySelector("tbody tr.file-row .cmd-print");
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await flushAsyncPrintClick();
+
+    expect(connectionMod.sendCommand).not.toHaveBeenCalled();
+    expect(confirmMod.showConfirmDialog.mock.calls.at(-1)?.[0]).toMatchObject({
+      title: "CFS印刷開始失敗",
+      message: expect.stringContaining("print-start-cfs-topology-not-fresh"),
+    });
+  });
+
   it("K2/CFSがstaleなら印刷開始frameを送らない", async () => {
     table = makeTable("file-list-table");
     scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
@@ -414,6 +527,9 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
       runtimeData: {
         printerCoreV3Shadow: {
           state: "observed",
+          deviceId: "serial:k2-pro-69e7",
+          sessionId: "session:k2-pro-69e7:1",
+          lastSequence: 44,
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
@@ -432,6 +548,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                   name: "White PLA",
                   color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
                 },
+                presence: "loaded",
                 status: { stateCode: 1, selected: true },
               }],
               assignments: [],
@@ -450,6 +567,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
         thumbUrl: "",
         layer: 10,
         size: 1234,
+        filemd5: "md5:stale",
         mtime: new Date(),
         expect: 200,
         printCount: 0,

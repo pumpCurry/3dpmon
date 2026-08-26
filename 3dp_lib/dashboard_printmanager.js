@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1404 (PR #434)
+* @version 1.390.1409 (PR #434)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 23:45:00
+* @lastModified 2026-08-26 16:18:02
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -82,6 +82,10 @@ import {
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan
 } from "./printer_core/dashboard_k2_cfs_command_transport.js";
+import {
+  createBoundPrinterCommandDispatcher,
+  createPrinterCommandRequest
+} from "./printer_core/dashboard_command_authority.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -1021,6 +1025,190 @@ function findK2CfsRowBySourceId(rows, sourceId) {
 }
 
 /**
+ * K2/CFS print-start対象ファイルのprinter-local pathを正規化する。
+ *
+ * 【詳細説明】
+ * - `printprt:` prefixはtransport直前で使う旧API表現なので、command authorityのfile identityでは
+ *   プリンタ内pathそのものへ寄せる。
+ * - 空pathはsend-time validation以前に危険な推測へ落ちないようnullにする。
+ *
+ * @private
+ * @param {*} value - raw filename候補
+ * @returns {string|null} 正規化済みpath
+ */
+function normalizeK2CfsPrintFilePath(value) {
+  const path = toPrintManagerNonEmptyString(value);
+  if (!path) {
+    return null;
+  }
+  return path.startsWith("printprt:") ? path.slice("printprt:".length) : path;
+}
+
+/**
+ * K2 file rowから送信時照合用のfile identity hashを作る。
+ *
+ * 【詳細説明】
+ * - `filemd5` がある場合はプリンタ報告値として最優先する。
+ * - K2 file listではMD5が欠落する場合があるため、size/createTime/sourceProtocolから作る
+ *   一覧観測fingerprintを次善のfile identityとして使う。
+ * - この値はsend-timeに現在キャッシュから再計算し、一致しなければdispatcherで拒否する。
+ *
+ * @private
+ * @param {object|null|undefined} row - file list / history row
+ * @returns {string|null} file identity hash相当値
+ */
+function deriveK2CfsFileIdentityHash(row) {
+  const md5 = toPrintManagerNonEmptyString(row?.filemd5 || row?.raw?.filemd5);
+  if (md5) {
+    return md5;
+  }
+  const size = Number(row?.size ?? row?.file_size ?? row?.raw?.file_size ?? row?.raw?.size);
+  const createTimeValue = row?.create_time ?? row?.ctime ?? row?.mtime ?? row?.raw?.create_time ?? row?.raw?.ctime ?? row?.raw?.mtime;
+  const createTime = createTimeValue instanceof Date
+    ? Math.floor(createTimeValue.getTime() / 1000)
+    : Number(createTimeValue);
+  const sourceProtocol = toPrintManagerNonEmptyString(row?.sourceProtocol || row?.raw?.sourceProtocol) || "unknown";
+  if (Number.isFinite(size) && size > 0 && Number.isFinite(createTime) && createTime > 0) {
+    return `k2-file-list:${sourceProtocol}:${Math.floor(size)}:${Math.floor(createTime)}`;
+  }
+  return null;
+}
+
+/**
+ * K2/CFS print-start用のupload generation相当IDを作る。
+ *
+ * 【詳細説明】
+ * - 既存remote file開始ではupload receiptが存在しないため、現在のfile identity snapshotにbindした
+ *   generation IDを使う。
+ * - dispatcherは送信直前に同じpath/hashを現在キャッシュから再計算して一致を要求する。
+ *
+ * @private
+ * @param {string} path - printer-local gcode path
+ * @param {string} fileHash - file identity hash
+ * @returns {string} upload generation相当ID
+ */
+function createK2CfsExistingFileGeneration(path, fileHash) {
+  return `k2-existing-file:${encodeURIComponent(path)}:${encodeURIComponent(fileHash)}`;
+}
+
+/**
+ * 現在キャッシュされているK2 file rowをpathで検索する。
+ *
+ * 【詳細説明】
+ * - UIのraw行だけを信用せず、send-time snapshotでは接続層が最後に受けたfile list cacheを見直す。
+ * - basename一致だけでは別ディレクトリの同名fileと衝突するため、まずprinter-local path完全一致を要求する。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {string} path - printer-local gcode path
+ * @returns {object|null} 現在キャッシュ上のfile row
+ */
+function findCurrentK2CfsFileRow(hostname, path) {
+  const machine = monitorData.machines?.[hostname] || null;
+  const targetPath = normalizeK2CfsPrintFilePath(path);
+  if (!machine || !targetPath) {
+    return null;
+  }
+  const entries = Array.isArray(machine._cachedFileInfo?.entries)
+    ? machine._cachedFileInfo.entries
+    : [];
+  return entries.find((entry) => normalizeK2CfsPrintFilePath(entry?.rawFilename ?? entry?.filename ?? entry?.path) === targetPath) || null;
+}
+
+/**
+ * K2/CFS print-start request用のfile identityを作る。
+ *
+ * 【詳細説明】
+ * - request作成時とsend-time context作成時の両方で同じ関数を使い、path/hash/generationの意味を揃える。
+ *
+ * @private
+ * @param {object|null|undefined} row - file list / history row
+ * @returns {{path:string,fileHash:string,uploadGeneration:string}} file identity
+ * @throws {Error} pathまたはidentity hashを作れない場合
+ */
+function createK2CfsPrintFileIdentity(row) {
+  const path = normalizeK2CfsPrintFilePath(row?.rawFilename ?? row?.filename ?? row?.path ?? row?.raw?.path);
+  const fileHash = deriveK2CfsFileIdentityHash(row);
+  if (!path) {
+    throw new Error("missing-k2-cfs-gcode-path");
+  }
+  if (!fileHash) {
+    throw new Error("missing-k2-cfs-file-identity");
+  }
+  return {
+    path,
+    fileHash,
+    uploadGeneration: createK2CfsExistingFileGeneration(path, fileHash),
+  };
+}
+
+/**
+ * K2/CFS print-startの送信直前contextを作る。
+ *
+ * 【詳細説明】
+ * - active session、command capability、現在file identity、現在CFS topologyをdispatcherへ渡す。
+ * - callerが持っていた古いraw行ではなく、送信直前のruntime/cacheから再構築する。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} request - command request
+ * @returns {object} command authority send-time snapshot
+ */
+function createK2CfsPrintSendTimeContext(hostname, request) {
+  const machine = monitorData.machines?.[hostname] || null;
+  const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || null;
+  const requestedPath = normalizeK2CfsPrintFilePath(request?.payload?.asset?.path);
+  const currentFile = findCurrentK2CfsFileRow(hostname, requestedPath);
+  const fileIdentity = currentFile ? createK2CfsPrintFileIdentity(currentFile) : {
+    path: requestedPath || "",
+    fileHash: "",
+    uploadGeneration: "",
+  };
+  const materials = shadowRecord?.lastState?.materials || null;
+  return {
+    deviceId: shadowRecord?.deviceId || "",
+    sessionId: shadowRecord?.sessionId || "",
+    transportKind: "ws9999",
+    active: getConnectionState(hostname) === "connected" && shadowRecord?.state !== "closed",
+    capabilities: ["command.print-start", "material.cfs", "material.cfsTopology"],
+    materialTopology: {
+      cfsConnected: materials?.cfs?.connected === true,
+      topologyState: materials?.cfs?.topologyState || "unobserved",
+      sourceCount: Array.isArray(materials?.sources) ? materials.sources.length : null,
+      sources: Array.isArray(materials?.sources) ? materials.sources : [],
+    },
+    uploadGeneration: fileIdentity.uploadGeneration,
+    fileIdentity: {
+      remotePath: fileIdentity.path,
+      fileHash: fileIdentity.fileHash,
+    },
+    stateSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
+    observedState: shadowRecord?.lastState || null,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * K2/CFS print-start後の観測snapshotを返す。
+ *
+ * 【詳細説明】
+ * - 現段階ではprotocol correlation proofを偽造しない。
+ * - 送信直後に既に新stateが観測されていなければ、command resultはcompleted:falseのままになる。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {object} command authority observation
+ */
+function observeK2CfsPrintCommandState(hostname) {
+  const shadowRecord = monitorData.machines?.[hostname]?.runtimeData?.printerCoreV3Shadow || null;
+  return {
+    observedState: shadowRecord?.lastState || null,
+    observedSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
+    observedSessionId: shadowRecord?.sessionId || "",
+  };
+}
+
+/**
  * K2/CFS印刷開始requestをUI選択から構築する。
  *
  * 【詳細説明】
@@ -1037,9 +1225,11 @@ function findK2CfsRowBySourceId(rows, sourceId) {
  * @returns {object} Printer Core command request風object
  */
 function createK2CfsPrintStartRequestFromUi(options) {
-  const target = toPrintManagerNonEmptyString(options.raw?.rawFilename ?? options.raw?.filename);
-  if (!target) {
-    throw new Error("missing-k2-cfs-gcode-path");
+  const machine = monitorData.machines?.[options.hostname] || null;
+  const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || null;
+  const fileIdentity = createK2CfsPrintFileIdentity(options.raw);
+  if (!shadowRecord?.deviceId || !shadowRecord?.sessionId) {
+    throw new Error("missing-k2-cfs-shadow-session");
   }
   const fileMaterialTypes = splitK2CfsMaterialList(options.raw?.material || options.raw?.raw?.material);
   const toolAssignments = options.assignments.map((assignment, index) => {
@@ -1065,22 +1255,38 @@ function createK2CfsPrintStartRequestFromUi(options) {
       },
     };
   });
-  return {
+  return createPrinterCommandRequest({
+    deviceId: shadowRecord.deviceId,
+    sessionId: shadowRecord.sessionId,
     commandKind: "print-start",
     transportKind: "ws9999",
     payload: {
-      printPlanId: `ui-k2-cfs:${options.hostname}:${target}:${Date.now()}`,
+      printPlanId: `ui-k2-cfs:${options.hostname}:${fileIdentity.path}:${fileIdentity.fileHash}`,
       planKind: toolAssignments.length > 1 ? "multicolor-cfs" : "single-color",
       asset: {
-        path: target,
+        path: fileIdentity.path,
+        fileHash: fileIdentity.fileHash,
       },
       toolAssignments,
       materialSourceIds: [...new Set(toolAssignments.map((assignment) => assignment.materialSourceId))],
       startOptions: {
         enableSelfTest: 0,
       },
+      startContext: {
+        sessionId: shadowRecord.sessionId,
+        uploadGeneration: fileIdentity.uploadGeneration,
+        receiptId: null,
+      },
     },
-  };
+    expectedState: [{
+      path: "print.stateLabel",
+      operator: "oneOf",
+      expected: ["checking", "heating", "printing"],
+    }],
+    timeoutMs: 60_000,
+    idempotencyKey: `ui-k2-cfs:${options.hostname}:${fileIdentity.path}:${fileIdentity.fileHash}`,
+    createdAt: new Date().toISOString(),
+  });
 }
 
 /**
@@ -1097,18 +1303,31 @@ function createK2CfsPrintStartRequestFromUi(options) {
  * @returns {Promise<object>} transport送信結果
  */
 async function sendK2CfsPrintStartRequest(hostname, request) {
-  const plan = createK2CfsCommandTransportPlan(request);
-  if (!plan.ok) {
-    throw new Error(`k2-cfs-print-plan-rejected:${plan.reason}`);
-  }
-  return sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
-    await sendCommand(frame.method, frame.params, hostname);
-    return {
-      status: "submitted",
-      frame,
-      meta,
-    };
+  const dispatcher = createBoundPrinterCommandDispatcher({
+    getSendTimeContext: (currentRequest) => createK2CfsPrintSendTimeContext(hostname, currentRequest),
+    sendTransport: async (currentRequest) => {
+      const plan = createK2CfsCommandTransportPlan(currentRequest);
+      if (!plan.ok) {
+        throw new Error(`k2-cfs-print-plan-rejected:${plan.reason}`);
+      }
+      const transportResponse = await sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
+        await sendCommand(frame.method, frame.params, hostname);
+        return {
+          status: "submitted",
+          frame,
+          meta,
+        };
+      });
+      return transportResponse;
+    },
+    observeState: () => observeK2CfsPrintCommandState(hostname),
   });
+  const result = await dispatcher.dispatch(request);
+  if (!result.transportAccepted) {
+    const errors = Array.isArray(result.error?.errors) ? result.error.errors.join(",") : (result.error?.message || result.status);
+    throw new Error(`k2-cfs-print-dispatch-rejected:${errors}`);
+  }
+  return result;
 }
 
 /**

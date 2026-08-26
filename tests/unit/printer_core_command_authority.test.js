@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1379 (PR #432)
+ * @version 1.390.1409 (PR #434)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-25 21:20:00
+ * @lastModified 2026-08-26 16:18:02
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -781,6 +781,108 @@ describe("Printer Core v3 command authority contract", () => {
     expect(mismatchedSendTransport).not.toHaveBeenCalled();
     expect(matchedResult.status).toBe("acknowledged");
     expect(matchedSendTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("print-startは指定material sourceを送信直前のfreshなCFS topologyへbindする", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      payload: {
+        asset: {
+          path: "printprt:/usr/data/benchy.gcode",
+          fileHash: "sha256:benchy",
+        },
+        materialSourceIds: ["cfs:1:slot:2"],
+        startContext: {
+          uploadGeneration: "upload:42",
+        },
+      },
+      expectedState: {
+        path: "print.stateLabel",
+        operator: "oneOf",
+        expected: ["printing", "checking"],
+      },
+    });
+    const staleSnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "stale",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+        }],
+      },
+    });
+    const unloadedSnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "fresh",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "empty",
+        }],
+      },
+    });
+    const readySnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "fresh",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+        }],
+      },
+    });
+    const staleSendTransport = vi.fn();
+    const unloadedSendTransport = vi.fn();
+    const readySendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const staleResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => staleSnapshot,
+      sendTransport: staleSendTransport,
+    });
+    const unloadedResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => unloadedSnapshot,
+      sendTransport: unloadedSendTransport,
+    });
+    const readyResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => readySnapshot,
+      sendTransport: readySendTransport,
+    });
+
+    expect(staleResult.status).toBe("rejected");
+    expect(staleResult.error.errors).toContain("print-start-cfs-topology-not-fresh");
+    expect(staleSendTransport).not.toHaveBeenCalled();
+    expect(unloadedResult.status).toBe("rejected");
+    expect(unloadedResult.error.errors).toContain("print-start-material-source-not-loaded:cfs:1:slot:2");
+    expect(unloadedSendTransport).not.toHaveBeenCalled();
+    expect(readyResult.status).toBe("acknowledged");
+    expect(readySendTransport).toHaveBeenCalledTimes(1);
   });
 
   it("transport例外はtransport-errorとして返しside-effect commandをblind retryしない", async () => {
