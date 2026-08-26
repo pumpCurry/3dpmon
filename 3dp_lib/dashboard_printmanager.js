@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1400 (PR #433)
+* @version 1.390.1401 (PR #433)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 13:47:18
+* @lastModified 2026-08-26 13:59:04
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -756,13 +756,11 @@ function createMaterialPrintContext(hostname) {
   const viewModel = createMaterialTopologyViewModel(topology, viewOptions);
   const cfsRows = viewModel.units.flatMap((unit) => unit.slots || []);
   const loadedRows = cfsRows.filter((row) => row?.presence === "loaded");
-  const selectedRow = cfsRows.find((row) => row?.selected === true && row?.presence === "loaded") ||
-    cfsRows.find((row) => row?.selected === true) ||
-    null;
+  const selectedRow = cfsRows.find((row) => row?.selected === true && row?.presence === "loaded") || null;
   return {
     displayMode,
     topologyState: viewModel.cfs.topologyState || "unobserved",
-    hasCfsSupply: Boolean(selectedRow || loadedRows.length > 0),
+    hasCfsSupply: loadedRows.length > 0,
     selectedRow,
     loadedRows,
     selectedLabel: formatMaterialSourceRowLabel(selectedRow),

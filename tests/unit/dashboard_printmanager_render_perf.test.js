@@ -254,6 +254,59 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     expect(dialogArg?.confirmText).toBe("印刷する");
   });
 
+  it("K2/CFSでselectedのみ観測されloadedではないslotは供給あり扱いしない", async () => {
+    const nowIso = new Date().toISOString();
+    spoolMod.getCurrentSpool.mockReturnValue(null);
+    connectionMod.getPrinterType.mockReturnValue("creality-k2");
+    connectionMod.getConnectionTarget.mockReturnValue({
+      hostname: HOST,
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        displayMode: "auto",
+        unitLimit: 1,
+        slotsPerUnit: 4,
+        externalSourceLimit: 1,
+      },
+    });
+    monitorData.machines[HOST] = {
+      runtimeData: {
+        printerCoreV3Shadow: {
+          state: "observed",
+          lastObservedAt: nowIso,
+          materialProviderLastObservedAt: nowIso,
+          lastState: {
+            materials: {
+              cfs: { connected: true, enabled: true, topologyState: "fresh" },
+              provider: { lastObservedAt: nowIso },
+              units: [{ unitId: "cfs:1", boxId: 1, observedSlotCount: 4 }],
+              sources: [{
+                sourceId: "cfs:1:slot:2",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 2,
+                material: {},
+                status: { selected: true },
+              }],
+              assignments: [],
+            },
+          },
+        },
+      },
+    };
+
+    renderHistoryTable(makeHistoryRows(1), "http://127.0.0.1", HOST);
+    const btn = table.querySelector("tbody tr.history-row .cmd-print");
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+
+    const dialogArg = confirmMod.showConfirmDialog.mock.calls.at(-1)?.[0];
+    expect(dialogArg?.html).toContain("スプール未装着");
+    expect(dialogArg?.html).not.toContain("CFS/CFS-C供給を観測");
+    expect(dialogArg?.confirmText).toBe("スプール未装着のまま印刷する");
+  });
+
   it("(C) 行（ボタン以外）クリックでドリルダウン領域が生成・表示される", () => {
     renderHistoryTable(makeHistoryRows(3), "http://127.0.0.1", HOST);
     const drill = table.parentElement.querySelector(".job-drilldown");
