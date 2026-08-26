@@ -27,11 +27,12 @@
  * - {@link migratePanelsToHost}：shared パネルを指定ホストに移行
  * - {@link renamePanelsHost}：旧ホスト名パネルを新ホスト名に移行（IP→機器名）
  * - {@link ensureHostPanels}：ホスト用デフォルトパネルを生成
+ * - {@link recreatePanelsForHost}：指定ホスト/種別のパネルを同じ位置で再生成
  * - {@link updateAllPanelHeaders}：全パネルヘッダーの色・ホスト名を再描画
  *
- * @version 1.390.783 (PR #366)
+ * @version 1.390.1365 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-03-10 21:00:00
+ * @lastModified 2026-08-09 16:21:02
  * -----------------------------------------------------------
  * @todo
  * - パネルのタブ化（同一セル内に複数パネルを重ねる）
@@ -842,6 +843,67 @@ export function getActivePanelEntries() {
  */
 export function getGrid() {
   return grid;
+}
+
+/**
+ * 指定ホスト/種別のパネルを同じGridStack位置で再生成する。
+ *
+ * 【詳細説明】
+ * - 接続設定変更など、パネル初期化時にだけ評価する表示モードを即時反映するために使う。
+ * - DOMを丸ごと作り直すため、既存ボタンのイベントリスナー重複やscoped id再利用の問題を避けられる。
+ * - 対象パネルが無い場合は何もせず0を返す。
+ *
+ * @function recreatePanelsForHost
+ * @param {string} typeId - パネル種別ID
+ * @param {string} hostname - 対象ホスト名
+ * @returns {number} 再生成したパネル数
+ * @example
+ * recreatePanelsForHost("filament", "K2Pro-69E7");
+ */
+export function recreatePanelsForHost(typeId, hostname) {
+  if (!typeId || !hostname) {
+    return 0;
+  }
+  const targets = [];
+  for (const [panelId, entry] of activePanels) {
+    if (entry.type !== typeId || entry.host !== hostname) {
+      continue;
+    }
+    const node = entry.widget?.gridstackNode || {};
+    targets.push({
+      panelId,
+      position: {
+        x: node.x,
+        y: node.y,
+        w: node.w,
+        h: node.h,
+      },
+      locked: Boolean(node.noMove),
+      fontSize: entry.element?.style.fontSize || "",
+    });
+  }
+  for (const target of targets) {
+    removePanel(target.panelId);
+    const recreatedPanelId = addPanel(typeId, hostname, target.position);
+    const recreatedEntry = recreatedPanelId ? activePanels.get(recreatedPanelId) : null;
+    if (target.fontSize && recreatedEntry?.element) {
+      recreatedEntry.element.style.fontSize = target.fontSize;
+    }
+    if (target.locked && recreatedEntry?.widget) {
+      grid.update(recreatedEntry.widget, { noMove: true, noResize: true });
+      recreatedEntry.element?.classList.add("panel-locked");
+      const lockBtn = recreatedEntry.element?.querySelector(".panel-lock-btn");
+      if (lockBtn) {
+        lockBtn.textContent = "🔒";
+        lockBtn.title = "このパネルの固定を解除";
+      }
+    }
+  }
+  if (targets.length > 0) {
+    /* fontSize や個別ロックを復元し終えた最終状態を永続化し、再起動後も見た目を維持する。 */
+    saveLayout();
+  }
+  return targets.length;
 }
 
 /**

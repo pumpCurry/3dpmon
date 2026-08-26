@@ -1,0 +1,312 @@
+<!doctype html>
+<!--
+  K2 Pro Combo WebRTC camera probe harness.
+
+  This file is loaded by scripts/probe_k2_webrtc_camera.mjs inside Electron.
+  It intentionally contains no printer-side mutation: it only creates a browser
+  RTCPeerConnection, POSTs an SDP offer to the printer's read-only camera
+  signalling endpoint, waits for ICE/video evidence, and reports the result.
+-->
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' http: https: data: blob: 'unsafe-inline'; connect-src *; media-src * blob:;">
+  <title>K2 WebRTC Probe</title>
+  <style>
+    body {
+      background: #111827;
+      color: #f9fafb;
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 16px;
+    }
+
+    video {
+      background: #000;
+      border: 1px solid #374151;
+      height: 360px;
+      width: 480px;
+    }
+
+    pre {
+      background: #020617;
+      border: 1px solid #334155;
+      max-height: 40vh;
+      overflow: auto;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>K2 WebRTC Probe</h1>
+  <video id="probe-video" autoplay muted playsinline></video>
+  <pre id="probe-log">starting...</pre>
+  <script>
+    const startedAt = new Date().toISOString();
+    const params = new URLSearchParams(location.search);
+    const host = params.get("host") || "192.168.54.153";
+    const signalingUrl = params.get("signalingUrl") || `http://${host}:8000/call/webrtc_local`;
+    const timeoutMs = Math.max(5000, Number(params.get("timeoutMs")) || 30000);
+    const logEl = document.getElementById("probe-log");
+    const videoEl = document.getElementById("probe-video");
+    const phases = [];
+    let trackInfo = { received: false, kind: null, readyState: null, muted: null, settings: {} };
+    let remoteAnswer = null;
+    let localOffer = null;
+
+    function addPhase(name, details = {}) {
+      const event = {
+        name,
+        atMs: Math.round(performance.now()),
+        ...details,
+      };
+      phases.push(event);
+      logEl.textContent = JSON.stringify({ host, signalingUrl, phases }, null, 2);
+      console.log("[k2-webrtc-probe]", name, details);
+      return event;
+    }
+
+    function encodeOffer(description) {
+      return btoa(JSON.stringify({ type: description.type, sdp: description.sdp }));
+    }
+
+    function decodeAnswer(text) {
+      const trimmed = String(text || "").trim();
+      const decoded = atob(trimmed);
+      return JSON.parse(decoded);
+    }
+
+    function waitForEventOrTimeout(target, eventName, timeout, predicate = null) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          target.removeEventListener(eventName, listener);
+          reject(new Error(`${eventName} timeout`));
+        }, timeout);
+        function listener(event) {
+          if (predicate && !predicate(event)) {
+            return;
+          }
+          clearTimeout(timer);
+          target.removeEventListener(eventName, listener);
+          resolve(event);
+        }
+        target.addEventListener(eventName, listener);
+      });
+    }
+
+    function waitForIceGatheringComplete(pc, timeout) {
+      if (pc.iceGatheringState === "complete") {
+        return Promise.resolve("already-complete");
+      }
+      return waitForEventOrTimeout(
+        pc,
+        "icegatheringstatechange",
+        timeout,
+        () => pc.iceGatheringState === "complete"
+      ).then(() => "complete");
+    }
+
+    function waitForConnection(pc, timeout) {
+      if (["connected", "completed"].includes(pc.iceConnectionState) ||
+          pc.connectionState === "connected") {
+        return Promise.resolve("already-connected");
+      }
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("connection timeout"));
+        }, timeout);
+        function cleanup() {
+          clearTimeout(timer);
+          pc.removeEventListener("iceconnectionstatechange", onState);
+          pc.removeEventListener("connectionstatechange", onState);
+        }
+        function onState() {
+          if (["connected", "completed"].includes(pc.iceConnectionState) ||
+              pc.connectionState === "connected") {
+            cleanup();
+            resolve("connected");
+          }
+          if (["failed", "closed"].includes(pc.iceConnectionState) ||
+              ["failed", "closed"].includes(pc.connectionState)) {
+            cleanup();
+            reject(new Error(`connection failed: ice=${pc.iceConnectionState} pc=${pc.connectionState}`));
+          }
+        }
+        pc.addEventListener("iceconnectionstatechange", onState);
+        pc.addEventListener("connectionstatechange", onState);
+      });
+    }
+
+    function waitForVideoFrame(video, timeout) {
+      return new Promise((resolve, reject) => {
+        const started = performance.now();
+        const timer = setInterval(() => {
+          if (video.videoWidth > 0 && video.videoHeight > 0 && video.currentTime >= 0) {
+            clearInterval(timer);
+            resolve({
+              width: video.videoWidth,
+              height: video.videoHeight,
+              currentTime: video.currentTime,
+              elapsedMs: Math.round(performance.now() - started),
+            });
+          }
+          if (performance.now() - started > timeout) {
+            clearInterval(timer);
+            reject(new Error("video frame timeout"));
+          }
+        }, 100);
+      });
+    }
+
+    function summarizeSdp(sdp) {
+      const text = String(sdp || "");
+      const videoLine = text.split(/\r?\n/).find((line) => line.startsWith("m=video")) || "";
+      const codecs = text.split(/\r?\n/)
+        .filter((line) => line.startsWith("a=rtpmap:"))
+        .filter((line) => /H264|VP8|VP9|AV1|rtx/i.test(line))
+        .map((line) => line.trim());
+      return {
+        sdpLength: text.length,
+        videoLine,
+        videoCodecs: codecs,
+        hasFingerprint: /a=fingerprint:/i.test(text),
+        hasIceCandidate: /a=candidate:/i.test(text),
+      };
+    }
+
+    async function runProbe() {
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      const result = {
+        host,
+        signalingUrl,
+        startedAt,
+        localOffer: null,
+        signaling: null,
+        remoteAnswer: null,
+        peerConnection: {},
+        track: trackInfo,
+        video: { playing: false, width: 0, height: 0, currentTime: 0 },
+        phases,
+        result: "unknown",
+        error: null,
+      };
+      window.__k2ProbePeerConnection = pc;
+      window.__k2ProbeResult = result;
+
+      try {
+        pc.addEventListener("icegatheringstatechange", () => {
+          addPhase("ice-gathering-state", { state: pc.iceGatheringState });
+        });
+        pc.addEventListener("iceconnectionstatechange", () => {
+          addPhase("ice-connection-state", { state: pc.iceConnectionState });
+        });
+        pc.addEventListener("connectionstatechange", () => {
+          addPhase("connection-state", { state: pc.connectionState });
+        });
+        pc.addEventListener("track", (event) => {
+          const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+          videoEl.srcObject = stream;
+          trackInfo = {
+            received: true,
+            kind: event.track.kind,
+            readyState: event.track.readyState,
+            muted: event.track.muted,
+            settings: typeof event.track.getSettings === "function" ? event.track.getSettings() : {},
+          };
+          result.track = trackInfo;
+          addPhase("track", trackInfo);
+        });
+
+        addPhase("peer-created");
+        pc.addTransceiver("video", { direction: "sendrecv" });
+        addPhase("video-transceiver-added");
+        const offer = await pc.createOffer();
+        localOffer = offer;
+        result.localOffer = summarizeSdp(offer.sdp);
+        addPhase("offer-created", result.localOffer);
+        await pc.setLocalDescription(offer);
+        addPhase("local-description-set");
+        await waitForIceGatheringComplete(pc, Math.min(timeoutMs, 10000));
+        result.localOffer = summarizeSdp(pc.localDescription?.sdp || offer.sdp);
+        addPhase("ice-gathering-complete", result.localOffer);
+
+        const body = encodeOffer(pc.localDescription || offer);
+        const response = await fetch(signalingUrl, {
+          method: "POST",
+          headers: { "Content-Type": "plain/text" },
+          body,
+        });
+        const responseText = await response.text();
+        result.signaling = {
+          httpStatus: response.status,
+          ok: response.ok,
+          contentType: response.headers.get("content-type") || "",
+          responseLength: responseText.length,
+        };
+        addPhase("signaling-response", result.signaling);
+        if (!response.ok) {
+          throw new Error(`signaling HTTP ${response.status}`);
+        }
+
+        remoteAnswer = decodeAnswer(responseText);
+        result.remoteAnswer = {
+          type: remoteAnswer.type,
+          ...summarizeSdp(remoteAnswer.sdp),
+        };
+        addPhase("answer-decoded", result.remoteAnswer);
+        await pc.setRemoteDescription(remoteAnswer);
+        addPhase("remote-description-set");
+        await waitForConnection(pc, Math.min(timeoutMs, 15000));
+        addPhase("peer-connected", {
+          iceConnectionState: pc.iceConnectionState,
+          connectionState: pc.connectionState,
+        });
+        await videoEl.play().catch((error) => {
+          addPhase("video-play-warning", { message: error.message });
+        });
+        const frame = await waitForVideoFrame(videoEl, Math.min(timeoutMs, 20000));
+        result.video = {
+          playing: !videoEl.paused,
+          width: frame.width,
+          height: frame.height,
+          currentTime: videoEl.currentTime,
+        };
+        addPhase("video-frame", result.video);
+        result.result = "success";
+      } catch (error) {
+        result.error = { message: error.message, stack: error.stack };
+        if (!result.signaling) {
+          result.result = "signaling-failed";
+        } else if (!result.remoteAnswer) {
+          result.result = "signaling-answer-invalid";
+        } else if (!trackInfo.received) {
+          result.result = "answer-received-but-no-track";
+        } else if (!result.video.width) {
+          result.result = "track-received-but-no-decodable-frame";
+        } else {
+          result.result = "failed-after-video";
+        }
+        addPhase("error", { result: result.result, message: error.message });
+      } finally {
+        result.peerConnection = {
+          signalingState: pc.signalingState,
+          iceGatheringState: pc.iceGatheringState,
+          iceConnectionState: pc.iceConnectionState,
+          connectionState: pc.connectionState,
+        };
+        result.completedAt = new Date().toISOString();
+        result.offerSdp = localOffer?.sdp || pc.localDescription?.sdp || "";
+        result.answerSdp = remoteAnswer?.sdp || "";
+        logEl.textContent = JSON.stringify(result, null, 2);
+        if (window.k2ProbeApi && typeof window.k2ProbeApi.complete === "function") {
+          window.k2ProbeApi.complete(result);
+        }
+      }
+    }
+
+    runProbe();
+  </script>
+</body>
+</html>

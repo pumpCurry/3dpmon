@@ -1,0 +1,65 @@
+{
+  "fixtureVersion": 1,
+  "captureId": "capture_afff4598-cb09-4a50-bbd1-242e4574e818",
+  "startedAt": 1786024941390,
+  "stoppedAt": 1786024944416,
+  "durationMs": 3026,
+  "metadata": {
+    "fixtureVersion": 1,
+    "device": {
+      "model": "ir3v2",
+      "reportedModel": null,
+      "reportedHostname": null,
+      "firmwareVersion": "unknown",
+      "cfsFirmwareVersion": null,
+      "attachment": "unknown"
+    },
+    "capture": {
+      "capturedAt": "2026-08-06T14:02:21.390Z",
+      "scenario": "http-connectivity-baseline",
+      "operatorNotes": "Gate 0 HTTP connectivity attempt; ICMP did not respond"
+    },
+    "endpoints": [
+      {
+        "address": "<IP_001>",
+        "httpPort": 80,
+        "wsPort": 9999
+      }
+    ],
+    "redaction": {
+      "ip": true,
+      "mac": true,
+      "serial": true,
+      "credential": true,
+      "ssid": true,
+      "hostname": true,
+      "id": true,
+      "fileName": true,
+      "rfid": true
+    }
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "atMs": 2,
+      "direction": "event",
+      "channel": "http-info",
+      "kind": "transport",
+      "type": "request",
+      "details": {
+        "url": "http://<IP_001>:80/info"
+      }
+    },
+    {
+      "sequence": 2,
+      "atMs": 3026,
+      "direction": "event",
+      "channel": "http-info",
+      "kind": "transport",
+      "type": "error",
+      "details": {
+        "message": "HTTP timeout after 3000ms"
+      }
+    }
+  ]
+}

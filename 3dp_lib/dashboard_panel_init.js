@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1173 (PR #404)
+ * @version 1.390.1383 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-07-11 11:08:28
+ * @lastModified 2026-08-25 22:55:00
  * -----------------------------------------------------------
  */
 
@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -78,6 +78,21 @@ import {
   initPauseHome,
   initXYUnlock
 } from "./dashboard_send_command.js";
+import {
+  createMaterialTopologyViewModel,
+} from "./printer_core/dashboard_material_topology_view_model.js";
+import {
+  renderMaterialTopologyPanel,
+} from "./printer_core/dashboard_material_topology_panel.js";
+import {
+  createBoundCfsControlIntegration,
+} from "./printer_core/dashboard_cfs_command_integration.js";
+import {
+  MATERIAL_DISPLAY_MODE,
+  resolveDisplayMaterialTopology,
+  resolveMaterialDisplayMode,
+  resolveMaterialTopologyViewOptions,
+} from "./printer_core/dashboard_material_system_settings.js";
 
 // ==============================
 // レジストリ
@@ -94,6 +109,117 @@ const _initMap = new Map();
  * @type {Map<string, (panelBody: HTMLElement, hostname: string) => void>}
  */
 const _destroyMap = new Map();
+
+/**
+ * CFS/CFS-C 操作候補で扱うUI action一覧。
+ *
+ * 【詳細説明】
+ * - material topology panel のボタン定義と同じaction名だけを通常パネル側から明示する。
+ * - ここでは候補表示用であり、実送信の許可ではない。
+ *
+ * @constant {string[]}
+ */
+const CFS_CONTROL_UI_ACTIONS = Object.freeze(["select", "load", "unload", "feed", "retract"]);
+
+/**
+ * production有効化前のCFS操作候補disabled理由。
+ *
+ * 【詳細説明】
+ * - 通常UIへ操作候補hookを渡しても、実機certificationとadapter transport接続が終わるまで
+ *   3dpmon側からのCFS操作は開かないことを利用者向けに示す。
+ *
+ * @constant {string}
+ */
+const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です";
+
+/**
+ * CFS/CFS-C操作候補用のrenderer control optionを生成する。
+ *
+ * 【詳細説明】
+ * - 通常フィラメントパネルからintegration scaffoldへのhook位置だけを固定する。
+ * - `canSendCommands:false` と `dispatchCfsControlIntent(..., { enabled:false })` の二重ロックにより、
+ *   production activation前にUI操作がtransportへ流れないようにする。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {object} renderMaterialTopologyPanelへ渡すcontrol option
+ */
+function createCfsControlRenderOptions(hostname) {
+  const integration = createBoundCfsControlIntegration({
+    enabled: false,
+    allowedActions: CFS_CONTROL_UI_ACTIONS,
+  });
+  return {
+    showControls: true,
+    canSendCommands: false,
+    allowedActions: [...CFS_CONTROL_UI_ACTIONS],
+    disabledReason: CFS_CONTROL_DISABLED_REASON,
+    validateCommandIntent(intent) {
+      return validateCfsControlIntentFreshness(hostname, intent);
+    },
+    /**
+     * CFS/CFS-C操作候補intentをfail-closed integration scaffoldへ渡す。
+     *
+     * 【詳細説明】
+     * - 現段階ではdisabled integration固定のため、直接呼ばれてもdispatcherへは到達しない。
+     *
+     * @param {object} intent - material topology panelが生成した操作intent
+     * @returns {Promise<object>} fail-closed dispatch結果
+     */
+    onCommand(intent) {
+      return integration.onCommand(intent);
+    },
+  };
+}
+
+/**
+ * CFS操作intentがclick時点の最新topologyでも有効かを再確認する。
+ *
+ * 【詳細説明】
+ * - 描画時点ではfreshだったslotが、再描画前にCFS切断/stale/slot変更される短い窓を閉じる。
+ * - この検査はUX上の一次防御であり、最終authorityはbound dispatcherのsend-time validationへ委ねる。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} intent - material topology panelが生成した操作intent
+ * @returns {string|null} 操作不可理由、またはnull
+ */
+function validateCfsControlIntentFreshness(hostname, intent) {
+  try {
+    const latestMachine = monitorData.machines[hostname] || {};
+    const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
+    const latestTopology = resolveDisplayMaterialTopology({
+      topology: latestShadowRecord?.lastState?.materials || null,
+      shadowRecord: latestShadowRecord,
+    });
+    const latestTarget = getConnectionTarget(hostname);
+    const latestPrinterType = getPrinterType(hostname);
+    const viewOptions = resolveMaterialTopologyViewOptions({
+      target: latestTarget,
+      printerType: latestPrinterType,
+      topology: latestTopology,
+    });
+    const viewModel = createMaterialTopologyViewModel(latestTopology, viewOptions);
+    if (viewModel?.summary?.topologyState !== "fresh") {
+      return "CFS情報が最新ではないため操作できません";
+    }
+    const currentRows = (Array.isArray(viewModel?.units) ? viewModel.units : [])
+      .flatMap((unit) => Array.isArray(unit?.slots) ? unit.slots : []);
+    const currentRow = currentRows.find((row) => row?.sourceId && row.sourceId === intent?.sourceId);
+    if (!currentRow) {
+      return "対象CFSスロットを現在の情報で再確認できません";
+    }
+    if (currentRow.presence !== "loaded") {
+      return "対象CFSスロットには現在フィラメントが装填されていません";
+    }
+    if (intent?.displaySlot && currentRow.displaySlot !== intent.displaySlot) {
+      return "対象CFSスロットの表示位置が最新状態と一致しません";
+    }
+    return null;
+  } catch {
+    return "CFS情報の再確認に失敗したため操作できません";
+  }
+}
 
 /**
  * registerPanelInit:
@@ -136,7 +262,7 @@ export function initializePanel(panelType, panelBody, hostname) {
       console.error(`[panel-init] ${panelType} の初期化に失敗:`, e);
     }
   }
-  // プリンタ種別に応じて K1 専用 UI を出し分ける（全パネル共通）
+  // プリンタ種別に応じて機種専用 UI を出し分ける（全パネル共通）
   try {
     _applyMachineTypeVisibility(panelBody, hostname);
   } catch (e) {
@@ -149,7 +275,7 @@ export function initializePanel(panelType, panelBody, hostname) {
  * 表示/非表示にする。
  *
  * 【詳細説明】
- * - `data-machine-type="k1-only"`: Creality K1 系のみ表示（Moonraker 機では非表示）。
+ * - `data-machine-type="k1-only"`: Creality K1 系のみ表示（K2 / Moonraker 機では非表示）。
  *   箱内温度・側面/背面FAN・LED・AI 機能・K1 専用コマンドボタン等が対象。
  * - `data-machine-type="moonraker-only"`: Moonraker 機のみ表示。
  * - 属性なしの要素は常に表示（両機種共通 UI）。
@@ -163,11 +289,12 @@ function _applyMachineTypeVisibility(panelBody, hostname) {
   if (!panelBody || !hostname || hostname === "shared") return;
   const type = getPrinterType(hostname);
   const isK1 = type === "creality-k1";
+  const isMoonraker = type === "moonraker";
   panelBody.querySelectorAll('[data-machine-type="k1-only"]').forEach((el) => {
     el.classList.toggle("hidden", !isK1);
   });
   panelBody.querySelectorAll('[data-machine-type="moonraker-only"]').forEach((el) => {
-    el.classList.toggle("hidden", isK1);
+    el.classList.toggle("hidden", !isMoonraker);
   });
 }
 
@@ -309,12 +436,123 @@ function initFilamentPanel(body, hostname) {
   const container = body.querySelector("#filament-preview");
   if (!container) return;
 
+  if (body._materialTopologyModeListener) {
+    window.removeEventListener("printer-core-v3-material-topology-updated", body._materialTopologyModeListener);
+    body._materialTopologyModeListener = null;
+  }
+  if (body._materialTopologyRefreshTimer) {
+    clearInterval(body._materialTopologyRefreshTimer);
+    body._materialTopologyRefreshTimer = null;
+  }
+  body._materialTopologyPanel?.destroy?.();
+  body._materialTopologyPanel = null;
+
+  const machine = monitorData.machines[hostname] || {};
+  const target = getConnectionTarget(hostname);
+  const printerType = getPrinterType(hostname);
+  const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
+  const topology = resolveDisplayMaterialTopology({
+    topology: shadowRecord?.lastState?.materials || null,
+    shadowRecord,
+  });
+  const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
+  if (materialDisplayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
+    body.classList.add("filament-panel-cfs-mode");
+    const createViewModel = () => {
+      const latestMachine = monitorData.machines[hostname] || {};
+      const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
+      const latestTopology = resolveDisplayMaterialTopology({
+        topology: latestShadowRecord?.lastState?.materials || null,
+        shadowRecord: latestShadowRecord,
+      });
+      const latestTarget = getConnectionTarget(hostname);
+      const viewOptions = resolveMaterialTopologyViewOptions({
+        target: latestTarget,
+        printerType,
+        topology: latestTopology,
+      });
+      return createMaterialTopologyViewModel(latestTopology, viewOptions);
+    };
+    const createSignature = (viewModel) => JSON.stringify({
+      limits: viewModel.limits,
+      cfs: viewModel.cfs,
+      external: viewModel.external,
+      units: viewModel.units,
+      summary: viewModel.summary,
+      diagnostics: viewModel.diagnostics,
+    });
+    const initialViewModel = createViewModel();
+    const cfsControlOptions = createCfsControlRenderOptions(hostname);
+    let materialPanelSignature = createSignature(initialViewModel);
+    const materialPanel = renderMaterialTopologyPanel(container, initialViewModel, {
+      hostname,
+      control: cfsControlOptions,
+    });
+    body._materialTopologyPanel = materialPanel;
+    body._materialTopologyRefreshTimer = setInterval(() => {
+      try {
+        const nextViewModel = createViewModel();
+        const nextSignature = createSignature(nextViewModel);
+        if (nextSignature !== materialPanelSignature) {
+          materialPanel.update(nextViewModel);
+          materialPanelSignature = nextSignature;
+        }
+      } catch (e) {
+        console.warn("[panel-init] material topology 更新エラー:", e);
+      }
+    }, 1000);
+
+    const changeBtn = body.querySelector("#filament-change-btn");
+    if (changeBtn) {
+      changeBtn.disabled = true;
+      changeBtn.title = "CFS/CFS-C read-only表示ではスプール交換操作はまだ未対応です";
+    }
+    const removeBtn = body.querySelector("#filament-remove-btn");
+    if (removeBtn) {
+      removeBtn.disabled = true;
+      removeBtn.title = "CFS/CFS-C read-only表示ではスプール取り外し操作はまだ未対応です";
+    }
+    const listBtn = body.querySelector("#filament-list-btn");
+    if (listBtn) {
+      listBtn.addEventListener("click", () => {
+        try { showFilamentManager(0, hostname); } catch (e) {
+          console.warn("[panel-init] filament manager エラー:", e);
+        }
+      });
+    }
+    return;
+  }
+
+  body.classList.remove("filament-panel-cfs-mode");
+
+  body._materialTopologyModeListener = (event) => {
+    const eventHost = event?.detail?.host;
+    if (eventHost && eventHost !== hostname) {
+      return;
+    }
+    const latestMachine = monitorData.machines[hostname] || {};
+    const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
+    const latestTopology = resolveDisplayMaterialTopology({
+      topology: latestShadowRecord?.lastState?.materials || null,
+      shadowRecord: latestShadowRecord,
+    });
+    const latestTarget = getConnectionTarget(hostname);
+    const nextMode = resolveMaterialDisplayMode({
+      target: latestTarget,
+      printerType,
+      topology: latestTopology,
+    });
+    if (nextMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
+      initFilamentPanel(body, hostname);
+    }
+  };
+  window.addEventListener("printer-core-v3-material-topology-updated", body._materialTopologyModeListener);
+
   // フィラメントプレビューを生成（per-host・スプール情報反映）
   /** @type {ReturnType<typeof createFilamentPreview>|null} */
   let preview = null;
   let autoRotateFooterButton = null;
   try {
-    const machine = monitorData.machines[hostname] || {};
     const spool = getCurrentSpool(hostname);
     // スプール未装着の場合はデフォルト満タン表示（0% 表示を防止）
     const defaultTotal = 330000;
@@ -872,6 +1110,16 @@ export function registerAllPanelInits() {
     }
   });
   registerPanelDestroy("filament", (body, hostname) => {
+    if (body._materialTopologyModeListener) {
+      window.removeEventListener("printer-core-v3-material-topology-updated", body._materialTopologyModeListener);
+      body._materialTopologyModeListener = null;
+    }
+    if (body._materialTopologyRefreshTimer) {
+      clearInterval(body._materialTopologyRefreshTimer);
+      body._materialTopologyRefreshTimer = null;
+    }
+    body._materialTopologyPanel?.destroy?.();
+    body._materialTopologyPanel = null;
     if (body._filamentResizeObserver) {
       body._filamentResizeObserver.disconnect();
       body._filamentResizeObserver = null;

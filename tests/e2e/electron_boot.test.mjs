@@ -4,9 +4,13 @@
  *
  * 実行方法: node tests/e2e/electron_boot.test.mjs
  * （vitest ではなく直接実行 — Electron は Node.js プロセスとして起動する必要がある）
+ *
+ * @version 1.390.1390 (PR #432)
+ * @since 1.390.0 (Initial)
+ * @lastModified 2026-08-26 01:15:00
  */
 
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -43,6 +47,31 @@ function spawnElectron(args = [], envOverrides = {}) {
   });
 }
 
+/**
+ * Electronテスト用プロセスを子プロセスごと終了する。
+ *
+ * 【詳細説明】
+ * - Windowsでは `.cmd` 経由やElectron本体が子プロセスとして残りやすいため、`taskkill /T` を使う。
+ * - PASS判定後にプロセスが残るとnpm scriptが終了しないため、テストrunnerのcleanupとして実行する。
+ *
+ * @function terminateProcessTree
+ * @param {import("child_process").ChildProcess|null|undefined} proc - 終了対象プロセス
+ * @returns {void}
+ */
+function terminateProcessTree(proc) {
+  if (!proc || proc.killed) {
+    return;
+  }
+  if (process.platform === "win32" && proc.pid) {
+    spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
+      stdio: "ignore",
+      shell: false
+    });
+    return;
+  }
+  proc.kill();
+}
+
 // ======================================================================
 //  テスト実行
 // ======================================================================
@@ -60,7 +89,7 @@ await test("Electron が起動しウィンドウが表示される (30秒以内)
     const timer = setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        proc.kill();
+        terminateProcessTree(proc);
         // タイムアウト = 起動はしたがマーカーが出なかった
         // stdout/stderr を見てエラーの有無を判断
         if (stderr.includes("Error") || stderr.includes("Cannot find module")) {
@@ -81,7 +110,7 @@ await test("Electron が起動しウィンドウが表示される (30秒以内)
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          proc.kill();
+          terminateProcessTree(proc);
           resolve();
         }
       }
@@ -96,7 +125,7 @@ await test("Electron が起動しウィンドウが表示される (30秒以内)
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          proc.kill();
+          terminateProcessTree(proc);
           reject(new Error(`モジュールエラー:\n${stderr.slice(0, 500)}`));
         }
       }
@@ -138,7 +167,7 @@ await test("全モジュールの import が解決される", () => {
     const timer = setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        proc.kill();
+        terminateProcessTree(proc);
         // エラーがなければ成功
         if (stderr.includes("is not exported") || stderr.includes("does not provide an export")) {
           rejectP(new Error(`Export エラー:\n${stderr.slice(0, 500)}`));
@@ -154,7 +183,7 @@ await test("全モジュールの import が解決される", () => {
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          proc.kill();
+          terminateProcessTree(proc);
           rejectP(new Error(`Export エラー:\n${stderr.slice(0, 500)}`));
         }
       }

@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link bootPanelSystem}：パネルシステムを起動
  *
- * @version 1.390.1119 (PR #385)
+ * @version 1.390.1368 (PR #432)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-06-16 21:00:00
+ * @lastModified 2026-08-25 00:00:00
  * -----------------------------------------------------------
  * @todo
  * - テンプレート抽出の自動化改善
@@ -517,14 +517,14 @@ function _initTopMenuBar() {
       const ip = document.getElementById("conn-modal-ip")?.value.trim();
       if (!ip) return;
 
-      /* プリンタ種別（K1系 / Moonraker）。未取得時は K1 系を既定とする。 */
+      /* プリンタ種別（K1系 / K2系 / Moonraker）。未取得時は K1 系を既定とする。 */
       const printerType = document.getElementById("conn-modal-type")?.value || "creality-k1";
 
       /* 設定を同期 */
       _syncModalSettings();
 
       /* connectWithType は printerType を connectionTargets に保存してから connectWs を呼ぶ。
-         connectWs は printerType を見て K1 / Moonraker の接続経路を分岐する。
+         connectWs は printerType を見て K1 / K2 / Moonraker の接続経路を分岐する。
          ★ wsDest は廃止済み。connectionTargets のみが権威。 */
       connectWithType(ip, printerType);
 

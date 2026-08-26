@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1283
+  Version 1.390.1366
 */
 
 /* ===============================================================
@@ -1146,6 +1146,14 @@ body.panel-mode .notification-container {
   padding: 2px 8px;
   min-height: 24px;
 }
+.panel-body.filament-panel-cfs-mode .filament-preview-area {
+  touch-action: auto;
+  overflow: auto;
+}
+.panel-body.filament-panel-cfs-mode .filament-panel-footer .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 /* グループ内は折り返さない */
 .fil-footer-group {
   display: inline-flex;
@@ -1161,6 +1169,185 @@ body.panel-mode .notification-container {
   margin: 2px 2px;
   flex-shrink: 0;
   min-height: 14px;
+}
+
+/* ---------------------------------------------------------------
+   Material topology read-only view: CFS/CFS-C slot layout
+--------------------------------------------------------------- */
+.mtv-root {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  padding: 6px;
+  color: var(--color-text-primary);
+  background: var(--color-panel-bg);
+}
+.mtv-header,
+.mtv-summary,
+.mtv-unit-header,
+.mtv-slot-header,
+.mtv-material-line {
+  display: flex;
+  align-items: center;
+}
+.mtv-header,
+.mtv-unit-header,
+.mtv-slot-header {
+  justify-content: space-between;
+  gap: 6px;
+}
+.mtv-title,
+.mtv-section-title,
+.mtv-unit-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+.mtv-topology-state,
+.mtv-summary,
+.mtv-unit-meta,
+.mtv-readonly-note,
+.mtv-slot-state,
+.mtv-remaining,
+.mtv-assignment {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+.mtv-summary {
+  margin-top: 2px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.mtv-stale-banner {
+  margin-top: 5px;
+  margin-bottom: 6px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  padding: 5px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.mtv-external,
+.mtv-unit {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  padding: 5px;
+  margin-bottom: 6px;
+}
+.mtv-unit-unobserved {
+  background: var(--color-surface-alt);
+}
+.mtv-units {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px;
+}
+.mtv-slots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 5px;
+}
+.mtv-slot {
+  min-width: 0;
+  min-height: 78px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  padding: 5px;
+}
+.mtv-slot.mtv-selected {
+  border-color: var(--color-success);
+  box-shadow: inset 0 0 0 1px var(--color-success);
+}
+.mtv-root-stale .mtv-slot.mtv-selected {
+  border-color: var(--color-warning);
+  box-shadow: inset 0 0 0 1px var(--color-warning);
+}
+.mtv-root-stale .mtv-slot {
+  background: var(--color-surface-alt);
+}
+.mtv-presence-empty,
+.mtv-presence-unobserved {
+  opacity: 0.72;
+}
+.mtv-slot-label {
+  font-weight: 700;
+  font-size: 12px;
+}
+.mtv-slot-state {
+  text-transform: lowercase;
+}
+.mtv-material-line {
+  gap: 5px;
+  margin-top: 5px;
+  min-width: 0;
+}
+.mtv-swatch {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+}
+.mtv-material-name,
+.mtv-remaining,
+.mtv-assignment {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mtv-material-name {
+  font-size: 11px;
+  min-width: 0;
+}
+.mtv-remaining,
+.mtv-assignment {
+  margin-top: 3px;
+}
+.mtv-remaining-invalid {
+  color: var(--color-danger-text);
+  font-weight: 700;
+}
+.mtv-remaining-stale {
+  color: var(--color-warning-text);
+}
+.mtv-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: 5px;
+}
+.mtv-control-btn {
+  min-width: 0;
+  min-height: 20px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 9px;
+  line-height: 1.1;
+  padding: 2px 1px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+.mtv-control-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+.mtv-control-btn[data-running="true"] {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+.mtv-readonly-note {
+  margin-top: 6px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 5px;
 }
 
 /* ---------------------------------------------------------------
@@ -1515,7 +1702,8 @@ body.panel-mode .notification-container {
    元CSSの #camera-feed { object-fit: cover } はIDセレクタで詳細度が高いため
    !important で確実に上書きする。
    display も元CSSの #camera-feed.off { display:none!important } を打ち消す。 */
-.panel-wrapper[data-panel-type="camera"] .camera-wrapper > img {
+.panel-wrapper[data-panel-type="camera"] .camera-wrapper > img,
+.panel-wrapper[data-panel-type="camera"] .camera-wrapper > video.camera-webrtc-stream {
   position: absolute !important;
   top: 0 !important;
   left: 0 !important;
@@ -2522,6 +2710,16 @@ body.panel-mode .notification-container {
 .conn-detail-sub .conn-ports {
   color: var(--color-text-muted);
 }
+.conn-edit-grid select {
+  width: 100%;
+  box-sizing: border-box;
+}
+.conn-edit-note {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+  line-height: 1.45;
+}
 .conn-color-picker {
   width: 24px; height: 20px;
   border: 1px solid var(--color-input-border);
@@ -2604,6 +2802,12 @@ body.panel-mode .notification-container {
 }
 .conn-edit-grid input[type="number"] {
   width: 6em;
+}
+.conn-edit-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-primary);
 }
 
 /* ---------------------------------------------------------------

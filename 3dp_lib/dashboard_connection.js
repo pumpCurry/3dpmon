@@ -11,6 +11,8 @@
  * - WebSocket 接続と再接続処理
  * - Heartbeat 管理と定期更新トリガー
  * - UI 更新通知および aggregator 起動
+ * - Printer Core v3 identity の dry-run 記録
+ * - Printer Core v3 K1/K2 live shadow の read-only 観測
  *
  * 【公開関数一覧】
  * - {@link fetchStoredData}：サーバーからデータ取得
@@ -27,12 +29,13 @@
  * - {@link cleanupConnection}：接続情報の完全破棄
  * - {@link getConnectionMap}：接続中ホスト一覧取得
  * - {@link getConnectionState}：指定ホストの接続状態取得
- * - {@link connectWithType}：プリンタ種別指定で接続（K1 / Moonraker）
+ * - {@link connectWithType}：プリンタ種別指定で接続（K1 / K2 / Moonraker）
+ * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1119 (PR #385)
+ * @version 1.390.1391 (PR #432)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-06-16 21:00:00
+ * @lastModified 2026-08-26 02:02:52
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,11 +63,38 @@ import { showAlert } from "./dashboard_notification_manager.js";
 import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
-import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
+import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, recreatePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
-import { createMoonrakerSession, translateK1CommandToMoonraker } from "./dashboard_moonraker.js";
+import {
+  createMoonrakerSession,
+  moonrakerFilesToEntries,
+  moonrakerHistoryToK1,
+  translateK1CommandToMoonraker,
+} from "./dashboard_moonraker.js";
 import { parseDest, normalizeDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
+import {
+  recordPrinterCoreV3Identity,
+  transferPrinterCoreV3IdentityRecords,
+} from "./printer_core/dashboard_device_identity_repository.js";
+import {
+  beginK1LiveShadowSession,
+  beginK2LiveShadowSession,
+  createPrinterCoreV3ShadowSessionId,
+  endK1LiveShadowSession,
+  endK2LiveShadowSession,
+  observeK1LiveShadowFrame,
+  observeK2LiveShadowFrame,
+  observeMoonrakerCfsMaterialProviderFrame,
+  resolvePrinterCoreV3LiveShadowDeviceId,
+} from "./printer_core/dashboard_live_shadow.js";
+import {
+  MATERIAL_DISPLAY_MODE,
+  MATERIAL_PROVIDER_MODE,
+  MATERIAL_SYSTEM_MODE,
+  createDefaultMaterialSystemSettings,
+  normalizeMaterialSystemSettings,
+} from "./printer_core/dashboard_material_system_settings.js";
 
 // ---------------------------------------------------------------------------
 // 複数プリンタ接続に対応するため、接続状態をホスト名ごとに保持するマップを用意
@@ -78,6 +108,21 @@ import { parseDest, normalizeDest, isIpLiteral, extractHost } from "./dashboard_
  */
 const DEFAULT_WS_PORT = 9999;
 const DEFAULT_CAMERA_PORT = 8080;
+const DEFAULT_HTTP_INFO_PORT = 80;
+/** @constant {number} K2系Fluidd/Moonraker互換read-only APIの既定ポート */
+const DEFAULT_K2_MOONRAKER_HTTP_PORT = 4408;
+/**
+ * K2系のローカルWebRTCカメラページ既定ポート。
+ *
+ * 【詳細説明】
+ * - K1のMJPEGは8080だが、K2 Pro Combo実機では8080は閉じており、8000がWebRTC/HTML
+ *   camera serviceとして応答する。
+ * - `/info.videoPort` はF012実機で443を返すが、これは従来 `<img>` MJPEG endpointではないため、
+ *   connectionTargets[].videoPort へ証跡として保存し、UI用 cameraPort は8000を既定にする。
+ *
+ * @constant {number}
+ */
+const DEFAULT_K2_WEBRTC_CAMERA_PORT = 8000;
 
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
@@ -100,6 +145,28 @@ const connectionMap = {};
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
  * @property {string}         dest          - 接続先(IP:PORT)
+ * @property {string|null}    printerCoreV3ShadowSessionId
+ *                                        - Printer Core v3 live shadow 用の接続 session ID
+ * @property {string|null}    printerCoreV3ShadowDeviceId
+ *                                        - Printer Core v3 live shadow 用の deviceId
+ * @property {"k1"|"k2"|null} printerCoreV3ShadowFamily
+ *                                        - Printer Core v3 live shadow 用の printer family
+ * @property {boolean}        printerCoreV3K2BoxsInfoProbeSent
+ *                                        - K2 CFS boxsInfo read-only probe を送信済みか
+ * @property {boolean}        printerCoreV3K2BoxsInfoReceived
+ *                                        - K2 CFS boxsInfo を受信済みか
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeLastSentAt
+ *                                        - K2 CFS boxsInfo refresh/probe を最後に観測または送信した epoch ms
+ * @property {boolean|null}   printerCoreV3K2CfsConnected
+ *                                        - K2 CFS 接続状態の直近観測
+ * @property {number}         printerCoreV3K2CfsEpoch
+ *                                        - K2 CFS 接続 epoch
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeSentEpoch
+ *                                        - K2 CFS boxsInfo probe を送信した epoch
+ * @property {number|null}    printerCoreV3K2BoxsInfoReceivedEpoch
+ *                                        - K2 CFS boxsInfo を受信した epoch
+ * @property {{close:function():void}|null} [printerCoreV3MaterialProviderSession]
+ *                                        - K1/K1C 用 secondary material provider session
  * @property {{close:function():void}|null} [_extSession]
  *                                        - 外部プロトコル(Moonraker 等)セッション。
  *                                          生 WebSocket は st.ws に載せず、ここで保持して
@@ -110,6 +177,32 @@ const connectionMap = {};
 
 /** 再接続上限回数 */
 const MAX_RECONNECT = 5;
+
+/**
+ * K2/CFS `boxsInfo` read-only refresh の最短間隔。
+ *
+ * 【詳細説明】
+ * - firmware push が実機Gateで完全証明されるまでは、heartbeatやstatus frameに同居して
+ *   低頻度の read-only refresh を行い、slot抜差し/remaining/selected の取りこぼしを減らす。
+ *
+ * @constant {number}
+ */
+const K2_BOXS_INFO_REFRESH_INTERVAL_MS = 30_000;
+
+/**
+ * K1C/CFS-C secondary material provider の既定subscribe候補。
+ *
+ * 【詳細説明】
+ * - 実機firmware差分に備え、Moonraker object名の代表揺れだけを追加購読する。
+ * - 存在しないobjectはMoonraker側で無視/エラーになる可能性があるため、本体Moonraker監視とは
+ *   分けたsecondary provider sessionでのみ使う。
+ *
+ * @constant {Object<string,null>}
+ */
+const CFS_C_MOONRAKER_MATERIAL_OBJECTS = Object.freeze({
+  boxsInfo: null,
+  boxs_info: null,
+});
 
 /* ─── 接続先リスト永続化ヘルパー ─── */
 
@@ -131,6 +224,89 @@ function _addConnectionTarget(dest) {
 }
 
 /**
+ * 接続先targetのstrong identity seedを取得する。
+ *
+ * 【詳細説明】
+ * - hostname は人間向け/legacy識別子であり、同名の別機体が存在し得る。
+ * - DHCP統合は serial/stableMachineId 由来の deviceIdSeed が一致する場合だけ許可する。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @returns {string} strong identity seed。無い場合は空文字
+ */
+function _getConnectionTargetStrongIdentitySeed(target) {
+  const identity = target?.printerCoreV3Identity;
+  if (identity?.identityStrength === "serial" || identity?.identityStrength === "stable-machine-id") {
+    return String(identity.deviceIdSeed || "").trim();
+  }
+  const fingerprint = target?.printerCoreV3DeviceFingerprint;
+  if (fingerprint?.identityStrength === "serial" || fingerprint?.identityStrength === "stable-machine-id") {
+    return String(fingerprint.deviceIdSeed || "").trim();
+  }
+  return "";
+}
+
+/**
+ * hostname一致の旧targetをDHCP統合してよいか判定する。
+ *
+ * 【詳細説明】
+ * - 旧実装は hostname を安定IDとして扱っていたが、K2/K1ともhostname重複や変更があり得る。
+ * - strong identity seed が双方にあり一致する場合だけ同一機体のendpoint移動とみなす。
+ * - strong evidence が無い場合は旧targetを保持し、設定転送や削除を行わない。
+ *
+ * @private
+ * @param {object} currentTarget - 現在の connection target
+ * @param {object} staleTarget - hostname が一致した旧 connection target
+ * @returns {boolean} DHCP統合してよい場合 true
+ */
+function _canMergeConnectionTargetsByStrongIdentity(currentTarget, staleTarget) {
+  const currentSeed = _getConnectionTargetStrongIdentitySeed(currentTarget);
+  const staleSeed = _getConnectionTargetStrongIdentitySeed(staleTarget);
+  return !!(currentSeed && staleSeed && currentSeed === staleSeed);
+}
+
+/**
+ * strong identity が一致する hostname 重複targetを現在targetへ統合する。
+ *
+ * 【詳細説明】
+ * - hostname解決はidentity記録より先に走るため、初回判定時にcurrent側のstrong seedが未取得のことがある。
+ * - identity記録後にも同じhelperを呼び、同一serialのDHCP移動だけを遅延統合できるようにする。
+ *
+ * @private
+ * @param {object} currentTarget - 現在の connection target
+ * @param {string} hostname - 解決済み hostname
+ * @returns {boolean} 1件以上統合した場合 true
+ */
+function _mergeStrongHostnameDuplicateTargets(currentTarget, hostname) {
+  const targets = monitorData.appSettings.connectionTargets ??= [];
+  const staleEntries = targets.filter(e =>
+    e !== currentTarget && e.hostname === hostname && e.dest !== currentTarget.dest
+  );
+  let merged = false;
+  for (const stale of staleEntries) {
+    if (!_canMergeConnectionTargetsByStrongIdentity(currentTarget, stale)) {
+      stale.identityStatus = stale.identityStatus || "hostname-duplicate-pending-identity";
+      currentTarget.identityStatus = currentTarget.identityStatus || "hostname-duplicate-pending-identity";
+      console.warn(`[_setConnectionTargetHostname] hostname重複をstrong identity未確認のため統合保留: hostname="${hostname}", current="${currentTarget.dest}", stale="${stale.dest}"`);
+      continue;
+    }
+    const idx = targets.indexOf(stale);
+    if (idx >= 0) {
+      console.info(`[_setConnectionTargetHostname] DHCP統合(strong identity一致): 旧エントリ dest="${stale.dest}" (hostname="${hostname}") を削除 → 現在の dest="${currentTarget.dest}" に統合`);
+      if (stale.color && !currentTarget.color) currentTarget.color = stale.color;
+      if (stale.label && !currentTarget.label) currentTarget.label = stale.label;
+      if (stale.cameraPort && !currentTarget.cameraPort) currentTarget.cameraPort = stale.cameraPort;
+      if (stale.httpPort && !currentTarget.httpPort) currentTarget.httpPort = stale.httpPort;
+      transferPrinterCoreV3IdentityRecords(currentTarget, stale);
+      targets.splice(idx, 1);
+      if (currentTarget.identityStatus === "hostname-duplicate-pending-identity") delete currentTarget.identityStatus;
+      merged = true;
+    }
+  }
+  return merged;
+}
+
+/**
  * 接続先設定にホスト名を紐づける。
  * ホスト名解決後に呼び出してラベル表示等に利用する。
  *
@@ -144,26 +320,10 @@ function _setConnectionTargetHostname(dest, hostname) {
   if (!t) return;
   if (t.hostname === hostname && t.dest === dest) return; // 変更なし
 
-  // ★ DHCP対策: 同じ hostname を持つ旧エントリ（異なるdest）があれば統合
-  //   hostname は機器の安定ID。dest(IP:PORT) は DHCP で変わりうる。
-  //   旧IPのエントリを削除し、現在のIPに統合する。
-  const staleEntries = targets.filter(e =>
-    e !== t && e.hostname === hostname && e.dest !== dest
-  );
-  if (staleEntries.length > 0) {
-    for (const stale of staleEntries) {
-      const idx = targets.indexOf(stale);
-      if (idx >= 0) {
-        console.info(`[_setConnectionTargetHostname] DHCP統合: 旧エントリ dest="${stale.dest}" (hostname="${hostname}") を削除 → 現在の dest="${dest}" に統合`);
-        // 旧エントリの設定（色、ラベル等）を現在エントリに引き継ぎ
-        if (stale.color && !t.color) t.color = stale.color;
-        if (stale.label && !t.label) t.label = stale.label;
-        if (stale.cameraPort && !t.cameraPort) t.cameraPort = stale.cameraPort;
-        if (stale.httpPort && !t.httpPort) t.httpPort = stale.httpPort;
-        targets.splice(idx, 1);
-      }
-    }
-  }
+  // ★ DHCP対策: 同じ hostname を持つ旧エントリ（異なるdest）があっても、
+  //   hostname だけでは統合しない。serial/stableMachineId 由来の strong identity が
+  //   双方で一致する場合だけ、同一機体の endpoint 移動として旧IPエントリを統合する。
+  _mergeStrongHostnameDuplicateTargets(t, hostname);
 
   if (t.hostname && t.hostname !== hostname) {
     // ★ 同じ dest(IP:PORT) で別の hostname が返ってきた → IP再利用（別機器がこのIPを取得）。
@@ -221,6 +381,11 @@ async function _resolveAndSaveMac(dest, hostname) {
         console.warn(`[MAC] IP再利用検出: ${ip} の MAC が ${t.macAddress} → ${mac} に変化（${hostname}）`);
       }
       t.macAddress = mac;
+      _recordPrinterCoreV3Identity(hostname || dest, {
+        hostname,
+        mac,
+        endpointAddress: ip,
+      });
       saveUnifiedStorage(true);
       console.info(`[MAC] ${hostname} (${ip}) → ${mac}`);
     }
@@ -281,6 +446,718 @@ function _findConnectionTarget(destOrHost) {
   }
   /* 3) ホスト名での検索（connectWs からの逆引き用） */
   return targets.find(t => t.hostname === destOrHost) || null;
+}
+
+/**
+ * 保存済み接続先設定を取得する。
+ *
+ * 【詳細説明】
+ * - dest完全一致、ポート補完、ホスト名一致の順で既存の検索ルールを使う。
+ * - 返り値はconnectionTargets内の実オブジェクト参照であり、編集UIやパネル初期化で共有する。
+ *
+ * @function getConnectionTarget
+ * @param {string} destOrHost - "IP:PORT" 形式の接続先、またはホスト名
+ * @returns {object|null} connectionTargets 内のエントリ、または null
+ * @example
+ * const target = getConnectionTarget("192.168.54.21:9999");
+ */
+export function getConnectionTarget(destOrHost) {
+  return _findConnectionTarget(destOrHost);
+}
+
+/**
+ * WebSocket や ARP から得た情報を Printer Core v3 identity dry-run として保存する。
+ *
+ * 【詳細説明】
+ * - Gate 1 では既存 v2 接続ロジックを変えず、`connectionTargets[].printerCoreV3Identity` へ
+ *   観測結果を同居させる。
+ * - serial / stable machine id は物理機体の強い識別材料として採用する。
+ * - MAC は有線/無線で異なる可能性があるため、deviceId seed ではなく endpoint alias として
+ *   保存する。
+ * - serial 矛盾など強い conflict は `printerCoreV3IdentityConflict` に残し、既存値を上書きしない。
+ * - Moonraker/IR3 V2 は別protocolの既存compatibility pathなので、このK1/K2向けdry-runには入れない。
+ *
+ * @private
+ * @param {string} hostOrDest - 接続キー、hostname、または dest
+ * @param {object} evidence - WebSocket 受信データまたは ARP 解決結果
+ * @returns {object|null} 保存結果と evidence 一式、または対象なしの場合 null
+ */
+function _recordPrinterCoreV3Identity(hostOrDest, evidence) {
+  const state = connectionMap[hostOrDest] || {};
+  const target = _findConnectionTarget(state.dest || hostOrDest) || _findConnectionTarget(hostOrDest);
+  if (!target) return null;
+  if (target.printerType === "moonraker") return null;
+  const dest = target.dest || state.dest || hostOrDest;
+  const result = recordPrinterCoreV3Identity(target, evidence, {
+    hostOrDest,
+    endpointAddress: _extractIp(dest),
+  });
+  if (result.changed) {
+    saveUnifiedStorage(true);
+  }
+  return {
+    ...result,
+    conflict: result.conflict || target.printerCoreV3IdentityConflict || null,
+    pending: result.pending || target.printerCoreV3PendingIdentityCandidate || null,
+    conflicts: Array.isArray(target.printerCoreV3IdentityConflicts) ? target.printerCoreV3IdentityConflicts : [],
+    pendings: Array.isArray(target.printerCoreV3PendingIdentityCandidates) ? target.printerCoreV3PendingIdentityCandidates : [],
+  };
+}
+
+/**
+ * 受信証拠からCreality printer familyを推定する。
+ *
+ * 【詳細説明】
+ * - `printerType` の永続昇格に使うため、Moonraker/IR3系では呼び出し側で除外する。
+ * - F012 は実機K2 Pro Comboで観測済みの model code としてK2 familyへ分類する。
+ * - K2 Plus / K2 Pro / K2 系variantは同じUI/runtime familyとして `creality-k2` に寄せる。
+ *
+ * @private
+ * @param {object|null|undefined} evidence - `/info` または WS9999 受信payload
+ * @param {string=} host - hostname または接続キー
+ * @returns {"creality-k1"|"creality-k2"|null} 推定family、判断不能なら null
+ */
+function _inferCrealityPrinterTypeFromEvidence(evidence, host = "") {
+  const model = String(evidence?.model || evidence?.reportedModel || "").trim().toUpperCase();
+  const hostname = String(evidence?.hostname || evidence?.deviceName || evidence?.reportedHostname || host || "").trim().toUpperCase();
+  if (model === "F012" || model.startsWith("K2") || hostname.startsWith("K2")) {
+    return "creality-k2";
+  }
+  if (model.startsWith("K1") || hostname.startsWith("K1")) {
+    return "creality-k1";
+  }
+  return null;
+}
+
+/**
+ * port候補を接続設定へ保存できる正の整数へ正規化する。
+ *
+ * 【詳細説明】
+ * - `/info` や手入力値は文字列になる可能性があるため、保存境界で 1-65535 の整数だけを採用する。
+ * - 0、NaN、配列、object は null にし、既存の手動設定を壊さない。
+ *
+ * @private
+ * @param {*} value - port候補
+ * @returns {?number} 採用できるport番号、または null
+ */
+function _normalizePositivePort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return null;
+  }
+  return port;
+}
+
+/**
+ * HTTP `/info` などから得たtransport hintをconnectionTargetへ保存する。
+ *
+ * 【詳細説明】
+ * - `wssPort` / `videoPort` はPrinter Core v3 identity evidenceにも保存されるが、UIの接続設定からも
+ *   確認できるようtarget直下へread-only hintとして残す。
+ * - K2 Pro Combo(F012)ではK1の8080 MJPEGではなく8000番のWebRTC/HTML camera serviceが開くため、
+ *   cameraPort未設定時だけ8000を既定値として補う。
+ * - `videoPort` は実機で443を返すが、これは従来の `<img src=".../?action=stream">` 互換ではないため、
+ *   cameraPortへそのまま流用せず `videoPort` 証跡として分離する。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @param {object|null|undefined} evidence - `/info` またはWS9999由来の証跡
+ * @param {"creality-k1"|"creality-k2"|null} inferredType - 推定printerType
+ * @returns {boolean} targetを変更した場合 true
+ */
+function _applyConnectionTargetTransportHints(target, evidence, inferredType) {
+  if (!target || target.printerType === "moonraker") {
+    return false;
+  }
+  let changed = false;
+  const wssPort = _normalizePositivePort(evidence?.wssPort);
+  const videoPort = _normalizePositivePort(evidence?.videoPort);
+  if (wssPort !== null && target.wssPort !== wssPort) {
+    target.wssPort = wssPort;
+    changed = true;
+  }
+  if (videoPort !== null && target.videoPort !== videoPort) {
+    target.videoPort = videoPort;
+    changed = true;
+  }
+  if (inferredType === "creality-k2") {
+    if (!target.cameraPort) {
+      target.cameraPort = DEFAULT_K2_WEBRTC_CAMERA_PORT;
+      changed = true;
+    }
+    if (!target.k2MoonrakerHttpPort) {
+      target.k2MoonrakerHttpPort = DEFAULT_K2_MOONRAKER_HTTP_PORT;
+      changed = true;
+    }
+    if (target.cameraProtocol !== "k2-webrtc") {
+      target.cameraProtocol = "k2-webrtc";
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * trusted evidence に基づいて保存済み接続先のprinterTypeを昇格する。
+ *
+ * 【詳細説明】
+ * - 通常UIからK2をK1として登録してしまった場合でも、HTTP `/info` またはWS9999でK2と確定したら
+ *   `connectionTargets[].printerType` を `creality-k2` へ寄せ、shadow familyとUI設定の二重状態を解消する。
+ * - operatorが明示変更したCFS設定を壊さないよう、K1既定の単一スプール設定だけをK2既定へ置き換える。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @param {"creality-k1"|"creality-k2"|null} inferredType - 推定printerType
+ * @returns {boolean} target を変更した場合 true
+ */
+function _promoteConnectionTargetPrinterType(target, inferredType) {
+  if (!target || inferredType !== "creality-k2" || target.printerType === "moonraker") {
+    return false;
+  }
+  if (target.printerType === "creality-k2") {
+    return false;
+  }
+  const previousMaterialSystem = normalizeMaterialSystemSettings(target.materialSystem, target.printerType || "creality-k1");
+  const previousWasK1Default =
+    (target.printerType || "creality-k1") === "creality-k1" &&
+    previousMaterialSystem.mode === MATERIAL_SYSTEM_MODE.SINGLE_SPOOL &&
+    previousMaterialSystem.displayMode === MATERIAL_DISPLAY_MODE.AUTO &&
+    previousMaterialSystem.unitLimit === 0 &&
+    previousMaterialSystem.provider === MATERIAL_PROVIDER_MODE.AUTO;
+  target.printerType = "creality-k2";
+  target.materialSystem = previousWasK1Default
+    ? createDefaultMaterialSystemSettings("creality-k2")
+    : normalizeMaterialSystemSettings(target.materialSystem, "creality-k2");
+  if (!target.cameraPort) {
+    target.cameraPort = DEFAULT_K2_WEBRTC_CAMERA_PORT;
+  }
+  if (!target.k2MoonrakerHttpPort) {
+    target.k2MoonrakerHttpPort = DEFAULT_K2_MOONRAKER_HTTP_PORT;
+  }
+  if (!target.cameraProtocol) {
+    target.cameraProtocol = "k2-webrtc";
+  }
+  return true;
+}
+
+/**
+ * connection target昇格後に保存とUI更新を行う。
+ *
+ * 【詳細説明】
+ * - `/info` やWS9999 payloadからK2と分かった時点で、保存済みprinterTypeとフィラメント表示設定を
+ *   K2側へ寄せる。panel再生成は対象hostが分かる場合だけ実施する。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @param {"creality-k1"|"creality-k2"|null} inferredType - 推定printerType
+ * @param {string} panelHost - 再生成対象host候補
+ * @returns {boolean} 保存済みtargetを変更した場合 true
+ */
+function _applyInferredConnectionTargetPrinterType(target, inferredType, panelHost) {
+  const promoted = _promoteConnectionTargetPrinterType(target, inferredType);
+  if (!promoted) {
+    return false;
+  }
+  saveUnifiedStorage(true);
+  try { updatePrinterListUI(); } catch { /* 初期化前テスト環境では無視する。 */ }
+  if (panelHost) {
+    try { recreatePanelsForHost("filament", panelHost); } catch { /* panel system未初期化時は無視する。 */ }
+  }
+  return true;
+}
+
+/**
+ * CFS-C secondary provider endpointをdest形式へ正規化する。
+ *
+ * 【詳細説明】
+ * - 設定画面では `192.168.54.xxx` のようなIPだけの入力も許可し、Moonraker既定の80番へ補完する。
+ * - endpoint未設定なら空文字を返し、K1C本体監視だけを継続する。
+ *
+ * @private
+ * @param {string} endpoint - 保存済みprovider endpoint
+ * @returns {string} "host:port" 形式、または空文字
+ */
+function _normalizeMaterialProviderEndpoint(endpoint) {
+  const raw = String(endpoint || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const normalized = normalizeDest(raw, { defaultPort: 80 });
+  return normalized.ok && normalized.normalizedDest ? normalized.normalizedDest : raw;
+}
+
+/**
+ * K2 `retGcodeFileInfo2` entry のmaterials使用量を数値へ丸める。
+ *
+ * 【詳細説明】
+ * - K2は `materialUsed:"1.0,2.0"` のような複数tool文字列を返すことがある。
+ * - ファイル一覧UIの予定使用量は単一数値を期待するため、カンマ区切り値を合算して表示用の概算値にする。
+ * - 変換不能な場合は `consumables` をフォールバックに使い、どちらも不明なら0にする。
+ *
+ * @private
+ * @param {object|null|undefined} entry - K2 file entry
+ * @returns {number} 表示用の予定使用量
+ */
+function _estimateK2GcodeUsage(entry) {
+  const materialUsed = String(entry?.materialUsed || "").trim();
+  if (materialUsed) {
+    const total = materialUsed
+      .split(",")
+      .map((part) => Number(part.trim()))
+      .filter((value) => Number.isFinite(value))
+      .reduce((sum, value) => sum + value, 0);
+    if (total > 0) {
+      return total;
+    }
+  }
+  const consumables = Number(entry?.consumables);
+  return Number.isFinite(consumables) && consumables > 0 ? consumables : 0;
+}
+
+/**
+ * K2 `retGcodeFileInfo2` を既存ファイル一覧rendererが扱えるentries形式へ変換する。
+ *
+ * 【詳細説明】
+ * - K1互換の `retGcodeFileInfo.fileInfo` 文字列ではなく、K2は配列の `retGcodeFileInfo2` を返す。
+ * - 既存 `renderFileList()` は `entries` 配列なら機種非依存で描画できるため、接続層で最小限のfield名を揃える。
+ * - thumbnail/preview はプリンタ内絶対パスのまま保持し、後続のthumbnail resolverが扱える範囲に留める。
+ *
+ * @private
+ * @param {Array<object>} files - K2 `retGcodeFileInfo2` 配列
+ * @returns {object} `renderFileList()` へ渡すfile info object
+ */
+function _createK2RenderableFileInfo(files) {
+  const entries = (Array.isArray(files) ? files : []).map((entry) => {
+    const filename = String(entry?.path || entry?.filename || entry?.name || "").trim();
+    const basename = String(entry?.name || filename.split(/[\\/]/).pop() || filename).trim();
+    const createTime = Number(entry?.create_time ?? entry?.ctime ?? entry?.mtime);
+    return {
+      basename,
+      filename,
+      size: Number(entry?.file_size ?? entry?.size) || 0,
+      layer: Number(entry?.layer ?? entry?.floorHeight) || 0,
+      mtime: Number.isFinite(createTime) && createTime > 0 ? new Date(createTime * 1000) : null,
+      expect: _estimateK2GcodeUsage(entry),
+      thumbUrl: entry?.thumbnail || entry?.preview || "",
+      filemd5: entry?.filemd5 || "",
+      printCount: 0,
+      usagetime: Number(entry?.timeCost ?? entry?.usagetime) || 0,
+      material: entry?.material || "",
+      materialColors: entry?.materialColors || "",
+      materialIds: entry?.materialIds || "",
+      materialUsed: entry?.materialUsed || "",
+      match: entry?.match || "",
+      sourceProtocol: "retGcodeFileInfo2",
+      raw: entry,
+    };
+  });
+  return {
+    entries,
+    totalNum: entries.length,
+    sourceProtocol: "retGcodeFileInfo2",
+  };
+}
+
+/**
+ * material system設定がK1/K1C用secondary providerを必要とするか判定する。
+ *
+ * 【詳細説明】
+ * - CFS-CはK1本体WebSocketとは別transportでboxsInfoを読む想定のため、Provider endpointが
+ *   明示されている場合だけsecondary Moonraker sessionを開く。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @returns {boolean} secondary provider sessionが必要な場合 true
+ */
+function _shouldUseSecondaryMaterialProvider(target) {
+  const settings = normalizeMaterialSystemSettings(target?.materialSystem, target?.printerType || "creality-k1");
+  return settings.mode === MATERIAL_SYSTEM_MODE.CFS_C_READONLY &&
+    settings.provider === MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO &&
+    !!_normalizeMaterialProviderEndpoint(settings.providerEndpoint);
+}
+
+/**
+ * host 名を HTTP URL の authority へ安全に埋め込む。
+ *
+ * 【詳細説明】
+ * - IPv6 literal は URL 上で角括弧が必要になるため、`extractHost()` 後の値をここで補正する。
+ * - IPv4 / hostname はそのまま返し、既存の接続先表記を変えない。
+ *
+ * @private
+ * @param {string} host - IP literal または hostname
+ * @returns {string} HTTP URL 用 host
+ */
+function _formatHttpInfoHost(host) {
+  const value = String(host || "").trim();
+  if (!value) return "";
+  if (value.startsWith("[") && value.endsWith("]")) return value;
+  const parsed = parseDest(value);
+  return parsed.ok && parsed.isIPv6 ? `[${parsed.host}]` : value;
+}
+
+/**
+ * Printer Core v3 identity 用に HTTP /info を read-only probe する。
+ *
+ * 【詳細説明】
+ * - Gate 11 では `/info` を command authority ではなく識別証拠としてだけ扱う。
+ * - 失敗、CORS、timeout、非 JSON 応答は接続失敗にせず、WS9999 の既存パスを継続する。
+ * - 成功時は `source:"http-info"` を明示し、repository が firmware/port provenance を保持できるようにする。
+ *
+ * @private
+ * @param {string} dest - "IP:PORT" 形式の接続先
+ * @param {string} hostOrDest - 接続キーまたは hostname
+ * @returns {Promise<void>} probe 完了
+ */
+async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
+  if (typeof window === "undefined" || typeof window.fetch !== "function") {
+    return;
+  }
+  const target = _findConnectionTarget(dest) || _findConnectionTarget(hostOrDest);
+  if (target?.printerType === "moonraker") {
+    return;
+  }
+  const endpointAddress = _extractIp(dest);
+  const httpHost = _formatHttpInfoHost(endpointAddress);
+  const httpPort = Number(target?.httpPort || monitorData.appSettings?.httpPort || DEFAULT_HTTP_INFO_PORT);
+  if (!httpHost || !Number.isFinite(httpPort) || httpPort <= 0) {
+    return;
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
+  try {
+    const response = await window.fetch(`http://${httpHost}:${httpPort}/info`, {
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+    if (!response || !response.ok || typeof response.json !== "function") {
+      return;
+    }
+    const body = await response.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return;
+    }
+    _recordPrinterCoreV3Identity(hostOrDest || dest, {
+      ...body,
+      source: "http-info",
+      endpointAddress,
+    });
+    const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
+    const transportChanged = _applyConnectionTargetTransportHints(target, body, inferredType);
+    _applyInferredConnectionTargetPrinterType(
+      target,
+      inferredType,
+      _resolveHostForPanelRefresh(target, dest)
+    );
+    if (transportChanged) {
+      saveUnifiedStorage(true);
+      try { updatePrinterListUI(); } catch { /* 初期化前テスト環境では無視する。 */ }
+    }
+  } catch (error) {
+    console.debug(`[PrinterCoreV3] /info probe skipped (${dest}):`, error?.message || String(error));
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Printer Core v3 live shadow の printer family を判定する。
+ *
+ * 【詳細説明】
+ * - Moonraker は別プロトコルで除外する。
+ * - K2 Pro Combo は現fixture/実機で `model:"F012"` を返すため、既存UIの printerType が未更新でも K2 shadow に分岐できる。
+ *
+ * @private
+ * @param {string} host - 解決済みホスト名
+ * @param {object|null|undefined} data - 受信 payload
+ * @param {ConnectionState|null|undefined} state - 接続状態
+ * @returns {"k1"|"k2"|null} shadow family、または対象外 null
+ */
+function _resolvePrinterCoreV3ShadowFamily(host, data, state) {
+  const printerType = getPrinterType(host);
+  if (printerType === "moonraker") {
+    return null;
+  }
+  if (state?.printerCoreV3ShadowFamily === "k2") {
+    return "k2";
+  }
+  if (printerType === "creality-k2") {
+    return "k2";
+  }
+  const model = String(data?.model || data?.reportedModel || "").trim().toUpperCase();
+  const hostname = String(data?.hostname || data?.deviceName || host || "").trim().toUpperCase();
+  if (model === "F012" || hostname.startsWith("K2")) {
+    return "k2";
+  }
+  return "k1";
+}
+
+/**
+ * Printer Core v3 live shadow session を開始済みにする。
+ *
+ * 【詳細説明】
+ * - WebSocket open 時点では hostname / identity / printer family が未確定のことがあるため、初回 JSON 受信時にも遅延開始できる。
+ * - deviceId は session 中に固定し、後続 frame で identity が強くなっても同一 WebSocket session 内では混線防止を優先する。
+ * - K2 判定へ切り替わった場合は、open 時点で仮生成した K1 session ID を破棄して K2 session ID を作り直す。
+ *
+ * @private
+ * @param {string} host - 解決済みホスト名
+ * @param {ConnectionState} state - 接続状態
+ * @param {object|null} identityResult - Printer Core v3 identity dry-run 保存結果
+ * @param {"k1"|"k2"} family - shadow printer family
+ * @returns {{deviceId:string, sessionId:string}|null} shadow session 情報
+ */
+function _ensurePrinterCoreV3LiveShadowSession(host, state, identityResult, family) {
+  if (!host || !state) return null;
+  if (state.printerCoreV3ShadowFamily && state.printerCoreV3ShadowFamily !== family) {
+    _endPrinterCoreV3LiveShadowSession(host, state);
+    state.printerCoreV3ShadowSessionId = null;
+    state.printerCoreV3ShadowDeviceId = null;
+    state.printerCoreV3ShadowFamily = null;
+  }
+  if (!state.printerCoreV3ShadowSessionId) {
+    state.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
+      family,
+      host,
+      dest: state.dest || host,
+    });
+    state.printerCoreV3ShadowFamily = family;
+  }
+  if (!state.printerCoreV3ShadowDeviceId) {
+    state.printerCoreV3ShadowDeviceId = resolvePrinterCoreV3LiveShadowDeviceId({
+      identity: identityResult?.identity || null,
+      identityConflict: identityResult?.conflict || null,
+      identityConflicts: identityResult?.conflicts || [],
+      host,
+      dest: state.dest || host,
+    });
+    const beginSession = family === "k2" ? beginK2LiveShadowSession : beginK1LiveShadowSession;
+    beginSession({
+      host,
+      deviceId: state.printerCoreV3ShadowDeviceId,
+      sessionId: state.printerCoreV3ShadowSessionId,
+    });
+  }
+  return {
+    deviceId: state.printerCoreV3ShadowDeviceId,
+    sessionId: state.printerCoreV3ShadowSessionId,
+    family: state.printerCoreV3ShadowFamily,
+  };
+}
+
+/**
+ * Printer Core v3 live shadow session を終了する。
+ *
+ * 【詳細説明】
+ * - WebSocket close / cleanup と同じタイミングで呼び、旧 session の adapterState が再接続後へ残らないようにする。
+ *
+ * @private
+ * @param {string} host - ホスト名
+ * @param {ConnectionState|null|undefined} state - 接続状態
+ * @returns {boolean} shadow session を終了した場合 true
+ */
+function _endPrinterCoreV3LiveShadowSession(host, state) {
+  if (!state?.printerCoreV3ShadowSessionId || !state?.printerCoreV3ShadowDeviceId) {
+    if (state) {
+      state.printerCoreV3ShadowSessionId = null;
+      state.printerCoreV3ShadowDeviceId = null;
+      state.printerCoreV3ShadowFamily = null;
+    }
+    return false;
+  }
+  const family = state.printerCoreV3ShadowFamily === "k2" ? "k2" : "k1";
+  const endSession = family === "k2" ? endK2LiveShadowSession : endK1LiveShadowSession;
+  const ended = endSession({
+    host,
+    deviceId: state.printerCoreV3ShadowDeviceId,
+    sessionId: state.printerCoreV3ShadowSessionId,
+  });
+  state.printerCoreV3ShadowSessionId = null;
+  state.printerCoreV3ShadowDeviceId = null;
+  state.printerCoreV3ShadowFamily = null;
+  return ended;
+}
+
+/**
+ * K2 Pro Combo + CFS の read-only `boxsInfo` probe を必要に応じて送る。
+ *
+ * 【詳細説明】
+ * - Gate 5 では CFS topology を観測するため、`cfsConnect=1` を見た K2 接続にだけ非破壊の get request を1回送る。
+ * - command authority とは分離し、`sendCommand()` の id 待ちにも載せない。応答は通常の WebSocket 受信として K2Adapter が処理する。
+ *
+ * @private
+ * @param {string} host - 解決済みホスト名
+ * @param {ConnectionState} state - 接続状態
+ * @param {object} data - 受信 payload
+ * @returns {boolean} probe を送信した場合 true
+ */
+function _requestK2CfsBoxsInfoProbe(host, state, data) {
+  if (!state?.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  const hasCfsConnect = Object.prototype.hasOwnProperty.call(data || {}, "cfsConnect");
+  const cfsConnectValue = hasCfsConnect ? Number(data.cfsConnect) : null;
+  const hasBoxsInfo = data?.boxsInfo && typeof data.boxsInfo === "object";
+  if (hasCfsConnect && cfsConnectValue === 0) {
+    if (state.printerCoreV3K2CfsConnected !== false) {
+      state.printerCoreV3K2CfsEpoch = Number(state.printerCoreV3K2CfsEpoch || 0) + 1;
+    }
+    state.printerCoreV3K2CfsConnected = false;
+    state.printerCoreV3K2BoxsInfoProbeSent = false;
+    state.printerCoreV3K2BoxsInfoReceived = false;
+    state.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
+    return false;
+  }
+  if (hasCfsConnect && cfsConnectValue === 1 && state.printerCoreV3K2CfsConnected !== true) {
+    state.printerCoreV3K2CfsEpoch = Number(state.printerCoreV3K2CfsEpoch || 0) + 1;
+    state.printerCoreV3K2BoxsInfoProbeSent = false;
+    state.printerCoreV3K2BoxsInfoReceived = false;
+    state.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
+  }
+  if (hasCfsConnect && cfsConnectValue === 1) {
+    state.printerCoreV3K2CfsConnected = true;
+  }
+  const epoch = Number(state.printerCoreV3K2CfsEpoch || 0);
+  if (hasBoxsInfo) {
+    state.printerCoreV3K2BoxsInfoReceived = true;
+    state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
+    state.printerCoreV3K2BoxsInfoProbeLastSentAt = Date.now();
+    return false;
+  }
+  if (!hasCfsConnect || cfsConnectValue !== 1) {
+    return false;
+  }
+  const nowMs = Date.now();
+  const lastSentAt = Number(state.printerCoreV3K2BoxsInfoProbeLastSentAt || 0);
+  const refreshDue = lastSentAt <= 0 || nowMs - lastSentAt >= K2_BOXS_INFO_REFRESH_INTERVAL_MS;
+  const alreadyHandledThisEpoch =
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch === epoch ||
+    state.printerCoreV3K2BoxsInfoReceivedEpoch === epoch;
+  if (alreadyHandledThisEpoch && !refreshDue) {
+    return false;
+  }
+  try {
+    state.ws.send(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
+    state.printerCoreV3K2BoxsInfoProbeSent = true;
+    state.printerCoreV3K2BoxsInfoProbeSentEpoch = epoch;
+    state.printerCoreV3K2BoxsInfoProbeLastSentAt = nowMs;
+    pushLog("[Printer Core v3] K2 CFS boxsInfo read-only probe を送信しました", "info", false, host);
+    return true;
+  } catch (e) {
+    pushLog(`[Printer Core v3] K2 CFS boxsInfo probe 送信エラー: ${e.message}`, "warn", false, host);
+    return false;
+  }
+}
+
+/**
+ * secondary material provider sessionを閉じる。
+ *
+ * 【詳細説明】
+ * - K1/K1C本体WebSocketの切断・cleanup時にCFS-C側の購読も停止し、read-only topologyを
+ *   staleとしてUIへ通知する。
+ *
+ * @private
+ * @param {string} host - 対象ホスト名
+ * @param {ConnectionState|null|undefined} state - 接続状態
+ * @returns {void}
+ */
+function _closeSecondaryMaterialProviderSession(host, state) {
+  if (!state?.printerCoreV3MaterialProviderSession) {
+    return;
+  }
+  try {
+    state.printerCoreV3MaterialProviderSession.close();
+  } catch (e) {
+    console.debug(`[PrinterCoreV3] secondary material provider close skipped (${host}):`, e?.message || String(e));
+  }
+  state.printerCoreV3MaterialProviderSession = null;
+  observeMoonrakerCfsMaterialProviderFrame({
+    host,
+    payload: null,
+    connected: false,
+    receivedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * K1/K1C用secondary material provider sessionを必要に応じて開始する。
+ *
+ * 【詳細説明】
+ * - CFS-CはK1本体のWS9999から直接boxsInfoが取れない構成を想定し、接続設定にProvider endpointが
+ *   明示された場合だけMoonraker read-only購読を開く。
+ * - provider sessionはCFS-C topologyだけをruntimeDataへ流し、K1本体のlegacy processData、
+ *   Printer Core v3 identity、command authorityには影響させない。
+ *
+ * @private
+ * @param {string} host - K1/K1C本体ホスト名
+ * @param {ConnectionState} state - 本体接続状態
+ * @returns {boolean} sessionを開始または維持した場合 true
+ */
+function _ensureSecondaryMaterialProviderSession(host, state) {
+  if (!host || !state || state.printerCoreV3ShadowFamily === "k2") {
+    return false;
+  }
+  if (!(state.ws && state.ws.readyState === WebSocket.OPEN) && state.state !== "connected") {
+    _closeSecondaryMaterialProviderSession(host, state);
+    return false;
+  }
+  const target = _findConnectionTarget(state.dest || host) || _findConnectionTarget(host);
+  if (!_shouldUseSecondaryMaterialProvider(target)) {
+    _closeSecondaryMaterialProviderSession(host, state);
+    return false;
+  }
+  const settings = normalizeMaterialSystemSettings(target.materialSystem, target.printerType || "creality-k1");
+  const endpoint = _normalizeMaterialProviderEndpoint(settings.providerEndpoint);
+  if (!endpoint) {
+    _closeSecondaryMaterialProviderSession(host, state);
+    return false;
+  }
+  if (state.printerCoreV3MaterialProviderSession?.endpoint === endpoint &&
+      state.printerCoreV3MaterialProviderSession?.host === host) {
+    return true;
+  }
+  _closeSecondaryMaterialProviderSession(host, state);
+  const protocol = location.protocol === "https:" ? "wss://" : "ws://";
+  const httpProtocol = location.protocol === "https:" ? "https://" : "http://";
+  const providerSessionId = `material-provider:${encodeURIComponent(host)}:${encodeURIComponent(endpoint)}`;
+  state.printerCoreV3MaterialProviderSession = createMoonrakerSession({
+    url: `${protocol}${endpoint}/websocket`,
+    fallbackHost: host,
+    httpBase: `${httpProtocol}${endpoint}`,
+    materialSubscribeObjects: CFS_C_MOONRAKER_MATERIAL_OBJECTS,
+    materialOnly: true,
+    onLog: (msg, level = "info") => pushLog(msg, level, false, host),
+    onState: (sessionState) => {
+      if (sessionState === "disconnected") {
+        observeMoonrakerCfsMaterialProviderFrame({
+          host,
+          payload: null,
+          providerSessionId,
+          connected: false,
+          receivedAt: new Date().toISOString(),
+        });
+      }
+    },
+    onData: () => {
+      /* CFS-C provider sessionではK1互換状態をUIへ流さず、material payloadだけを使う。 */
+    },
+    onMaterial: (payload) => {
+      observeMoonrakerCfsMaterialProviderFrame({
+        host,
+        payload,
+        providerSessionId,
+        connected: true,
+        receivedAt: new Date().toISOString(),
+      });
+    },
+    shouldReconnect: () => !state.userDisc,
+  });
+  state.printerCoreV3MaterialProviderSession.endpoint = endpoint;
+  state.printerCoreV3MaterialProviderSession.host = host;
+  return true;
 }
 
 /**
@@ -393,6 +1270,17 @@ const placeholderState = {
   buffer: [],
   latest: null,
   dest: "",
+  printerCoreV3ShadowSessionId: null,
+  printerCoreV3ShadowDeviceId: null,
+  printerCoreV3ShadowFamily: null,
+  printerCoreV3K2BoxsInfoProbeSent: false,
+  printerCoreV3K2BoxsInfoReceived: false,
+  printerCoreV3K2BoxsInfoProbeLastSentAt: null,
+  printerCoreV3K2CfsConnected: null,
+  printerCoreV3K2CfsEpoch: 0,
+  printerCoreV3K2BoxsInfoProbeSentEpoch: null,
+  printerCoreV3K2BoxsInfoReceivedEpoch: null,
+  printerCoreV3MaterialProviderSession: null,
   state: "disconnected"
 };
 
@@ -428,6 +1316,17 @@ function getState(host) {
       buffer: [],
       latest: null,
       dest: "",
+      printerCoreV3ShadowSessionId: null,
+      printerCoreV3ShadowDeviceId: null,
+      printerCoreV3ShadowFamily: null,
+      printerCoreV3K2BoxsInfoProbeSent: false,
+      printerCoreV3K2BoxsInfoReceived: false,
+      printerCoreV3K2BoxsInfoProbeLastSentAt: null,
+      printerCoreV3K2CfsConnected: null,
+      printerCoreV3K2CfsEpoch: 0,
+      printerCoreV3K2BoxsInfoProbeSentEpoch: null,
+      printerCoreV3K2BoxsInfoReceivedEpoch: null,
+      printerCoreV3MaterialProviderSession: null,
       state: "disconnected"
     };
   }
@@ -861,6 +1760,7 @@ export function connectWs(hostOrDest) {
 
   /* 接続先を永続リストに保存 */
   _addConnectionTarget(dest);
+  _probePrinterCoreV3HttpInfo(dest, host);
 
   if (state.userDisc) {
     state.reconnect = 0;
@@ -894,6 +1794,8 @@ export function connectWs(hostOrDest) {
     if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) {
       try {
         stOld.ws.onopen = stOld.ws.onmessage = stOld.ws.onerror = stOld.ws.onclose = null;
+        _endPrinterCoreV3LiveShadowSession(key, stOld);
+        _closeSecondaryMaterialProviderSession(key, stOld);
         stOld.ws.close();
         _closedStale++;
       } catch (e) {
@@ -1066,11 +1968,11 @@ function connectMoonraker(dest, host) {
  * - dest にポートが無ければ種別に応じた既定ポートを補完する
  *   （K1: {@link DEFAULT_WS_PORT}=9999 / Moonraker: 80=nginx・Fluidd と同口）。
  * - connectionTargets に printerType を保存してから {@link connectWs} を呼ぶ。
- *   connectWs は printerType を見て K1 / Moonraker のいずれの経路かを分岐する。
+ *   connectWs は printerType を見て Creality WS9999 / Moonraker のいずれの経路かを分岐する。
  *
  * @function connectWithType
  * @param {string} dest - "IP" もしくは "IP:PORT"
- * @param {"creality-k1"|"moonraker"} [printerType="creality-k1"] - プリンタ種別
+ * @param {"creality-k1"|"creality-k2"|"moonraker"} [printerType="creality-k1"] - プリンタ種別
  * @returns {void}
  * @example
  * connectWithType("192.168.54.15", "moonraker"); // → "192.168.54.15:80" として接続
@@ -1090,6 +1992,18 @@ export function connectWithType(dest, printerType = "creality-k1") {
     targets.push(t);
   }
   t.printerType = printerType;
+  t.materialSystem = normalizeMaterialSystemSettings(t.materialSystem, printerType);
+  if (printerType === "creality-k2") {
+    if (!t.cameraPort) {
+      t.cameraPort = DEFAULT_K2_WEBRTC_CAMERA_PORT;
+    }
+    if (!t.k2MoonrakerHttpPort) {
+      t.k2MoonrakerHttpPort = DEFAULT_K2_MOONRAKER_HTTP_PORT;
+    }
+    if (!t.cameraProtocol) {
+      t.cameraProtocol = "k2-webrtc";
+    }
+  }
   saveUnifiedStorage();
 
   connectWs(d);
@@ -1107,9 +2021,25 @@ function handleSocketOpen(host) {
   const st = getState(host);
   st.reconnect = 0;
   st.userDisc = false;
+  const initialShadowFamily = getPrinterType(host) === "creality-k2" ? "k2" : "k1";
+  st.printerCoreV3ShadowSessionId = createPrinterCoreV3ShadowSessionId({
+    family: initialShadowFamily,
+    host,
+    dest: st.dest || host,
+  });
+  st.printerCoreV3ShadowDeviceId = null;
+  st.printerCoreV3ShadowFamily = initialShadowFamily;
+  st.printerCoreV3K2BoxsInfoProbeSent = false;
+  st.printerCoreV3K2BoxsInfoReceived = false;
+  st.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+  st.printerCoreV3K2CfsConnected = null;
+  st.printerCoreV3K2CfsEpoch = 0;
+  st.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
+  st.printerCoreV3K2BoxsInfoReceivedEpoch = null;
 
   // Heartbeat開始（30秒おき）
   startHeartbeat(st.ws, 30_000, host);
+  _ensureSecondaryMaterialProviderSession(host, st);
 
   // 接続中ホストが1台でもあれば集計ループを維持
   restartAggregatorTimer(500);
@@ -1242,6 +2172,25 @@ function handleSocketMessage(event, host) {
 
     let st = getState(hostKey);
     st.latest = data;
+    const printerCoreV3Identity = _recordPrinterCoreV3Identity(hostKey, data);
+    const resolvedTarget = _findConnectionTarget(st.dest || hostKey);
+    const inferredPrinterType = _inferCrealityPrinterTypeFromEvidence(data, hostKey);
+    _applyInferredConnectionTargetPrinterType(resolvedTarget, inferredPrinterType, resolvedTarget?.hostname || hostKey);
+    if (
+      inferredPrinterType === "creality-k2" &&
+      resolvedTarget &&
+      !resolvedTarget.wssPort &&
+      st.printerCoreV3HttpInfoRetryAfterK2Status !== true
+    ) {
+      st.printerCoreV3HttpInfoRetryAfterK2Status = true;
+      _probePrinterCoreV3HttpInfo(st.dest || resolvedTarget.dest || hostKey, resolvedTarget.hostname || hostKey);
+    }
+    if (resolvedTarget?.hostname) {
+      const merged = _mergeStrongHostnameDuplicateTargets(resolvedTarget, resolvedTarget.hostname);
+      if (merged) {
+        saveUnifiedStorage();
+      }
+    }
 
     // ★ currentHostname / restoreLegacyStoredData / cleanupLegacy は廃止済み
     //   per-host 処理は processData の _initializedHosts で管理
@@ -1252,6 +2201,25 @@ function handleSocketMessage(event, host) {
     const resolvedHost = data?.hostname || hostKey;
     ensureMachineData(resolvedHost);
     processData(data, resolvedHost);
+    _ensureSecondaryMaterialProviderSession(resolvedHost, st);
+    const shadowFamily = _resolvePrinterCoreV3ShadowFamily(hostKey, data, st);
+    if (shadowFamily) {
+      const shadowSession = _ensurePrinterCoreV3LiveShadowSession(resolvedHost, st, printerCoreV3Identity, shadowFamily);
+      if (shadowSession) {
+        const observeShadowFrame = shadowSession.family === "k2"
+          ? observeK2LiveShadowFrame
+          : observeK1LiveShadowFrame;
+        observeShadowFrame({
+          host: resolvedHost,
+          deviceId: shadowSession.deviceId,
+          sessionId: shadowSession.sessionId,
+          frame: data,
+        });
+        if (shadowSession.family === "k2") {
+          _requestK2CfsBoxsInfoProbe(resolvedHost, st, data);
+        }
+      }
+    }
   } catch (e) {
     pushLog("handleMessage処理中にエラーが発生: " + e.message, "error", false, hostKey);
     console.error("[ws.onmessage] handleMessage処理エラー:", e);
@@ -1286,13 +2254,17 @@ function handleSocketMessage(event, host) {
 
 // 7) ファイル一覧の保存・再描画
   try {
-    if (hostReady && data.retGcodeFileInfo) {
+    const k2RenderableFileInfo = Array.isArray(data.retGcodeFileInfo2)
+      ? _createK2RenderableFileInfo(data.retGcodeFileInfo2)
+      : null;
+    const renderableFileInfo = k2RenderableFileInfo || data.retGcodeFileInfo || null;
+    if (hostReady && renderableFileInfo) {
       pushLog("retGcodeFileInfo を受信しました", "info", false, hostKey);
       const baseUrlHttp = `http://${ip}:${httpPort}`;
       /* キャッシュ: パネル未生成時でも後から initHistoryPanel で描画可能にする */
       const machine = monitorData.machines[hostKey];
-      if (machine) machine._cachedFileInfo = data.retGcodeFileInfo;
-      printManager.renderFileList(data.retGcodeFileInfo, baseUrlHttp, hostKey);
+      if (machine) machine._cachedFileInfo = renderableFileInfo;
+      printManager.renderFileList(renderableFileInfo, baseUrlHttp, hostKey);
       /* ファイル一覧受信完了フラグ → reqHistory 送出を許可する */
       const stFile = getState(hostKey);
       stFile.fileInfoReceived = true;
@@ -1337,6 +2309,8 @@ function handleSocketClose(host) {
  // 切断直後は該当ホストの通知を抑制する（他ホストには影響しない）
   setNotificationSuppressed(true, host);
   const st = getState(host);
+  _endPrinterCoreV3LiveShadowSession(host, st);
+  _closeSecondaryMaterialProviderSession(host, st);
 
   // ホスト名待ちポーリングが残っていれば解除
   if (st.fetchTimer !== null) {
@@ -1475,6 +2449,9 @@ export function startHeartbeat(socket, intervalMs = 30_000, host) {
         msg: getCurrentTimestamp()
       };
       st.ws.send(JSON.stringify(payload));
+      if (st.printerCoreV3ShadowFamily === "k2" && st.printerCoreV3K2CfsConnected === true) {
+        _requestK2CfsBoxsInfoProbe(host, st, { cfsConnect: 1 });
+      }
     }
   }, intervalMs);
 }
@@ -1529,9 +2506,12 @@ export function disconnectWs(host) {
     try { st._extSession.close(); } catch { /* noop */ }
     st._extSession = null;
   }
+  _closeSecondaryMaterialProviderSession(host, st);
 
   // 再接続カウント初期化
   st.reconnect = 0;
+  _endPrinterCoreV3LiveShadowSession(host, st);
+  _closeSecondaryMaterialProviderSession(host, st);
 
   // 入力欄を再度書き換え可に
   // UIを切断状態に更新
@@ -1736,6 +2716,180 @@ let _printerListTimer = null;
 
 /** 接続先リストの再描画をブロックするフラグ (色ピッカー操作中等) */
 let _printerListUpdateBlocked = false;
+
+/**
+ * select option HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - 接続設定ダイアログの値はユーザー操作後に保存されるため、表示値は必ずescapeしてinnerHTMLへ埋め込む。
+ *
+ * @private
+ * @param {string} value - option値
+ * @param {string} label - 表示ラベル
+ * @param {string} currentValue - 現在値
+ * @returns {string} option HTML
+ */
+function _optionHtml(value, label, currentValue) {
+  return `<option value="${_escAttr(value)}" ${value === currentValue ? "selected" : ""}>${_escAttr(label)}</option>`;
+}
+
+/**
+ * material system設定から利用者向けの供給構成select値を生成する。
+ *
+ * 【詳細説明】
+ * - mode/displayMode/unitLimitを個別に露出すると矛盾設定を作れるため、
+ *   UIでは「通常スプール」「CFS n台」「CFS-C n台」「自動検出」の単一selectへ畳み込む。
+ *
+ * @private
+ * @function _materialSupplyValue
+ * @param {object} materialSettings - 正規化済みmaterial system設定
+ * @returns {string} supply select値
+ */
+export function _materialSupplyValue(materialSettings) {
+  const unitLimit = Math.max(0, Math.min(4, Number(materialSettings?.unitLimit) || 0));
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.AUTO) {
+    return "auto";
+  }
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.CFS_C_READONLY && unitLimit > 0) {
+    return `cfsc-${unitLimit}`;
+  }
+  if (materialSettings?.mode === MATERIAL_SYSTEM_MODE.CFS_READONLY && unitLimit > 0) {
+    return `cfs-${unitLimit}`;
+  }
+  return "single";
+}
+
+/**
+ * 供給構成selectのoption HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - 実運用で選ぶ単位をそのまま表示し、台数と表示モードを別々に触らせない。
+ *
+ * @private
+ * @param {object} materialSettings - 正規化済みmaterial system設定
+ * @returns {string} option HTML
+ */
+function _materialSupplyOptionsHtml(materialSettings) {
+  const currentValue = _materialSupplyValue(materialSettings);
+  const options = [
+    ["auto", "自動検出"],
+    ["single", "通常スプール（手動1巻）"],
+    ["cfs-1", "CFS 1台"],
+    ["cfs-2", "CFS 2台"],
+    ["cfs-3", "CFS 3台"],
+    ["cfs-4", "CFS 4台"],
+    ["cfsc-1", "CFS-C 1台"],
+    ["cfsc-2", "CFS-C 2台"],
+    ["cfsc-3", "CFS-C 3台"],
+    ["cfsc-4", "CFS-C 4台"],
+  ];
+  return options.map(([value, label]) => _optionHtml(value, label, currentValue)).join("");
+}
+
+/**
+ * 供給構成select値を保存用material system設定へ変換する。
+ *
+ * 【詳細説明】
+ * - 保存時もread-only/権限なしを固定し、表示設定がcommand/ledger authorityを開かないようにする。
+ * - 外部スプール表示はCFS/CFS-C監視パネル内の追加1枠として扱い、0/1へ丸める。
+ *
+ * @private
+ * @function _materialSystemFromSupplyValue
+ * @param {string} supplyValue - supply select値
+ * @param {boolean} externalEnabled - 外部スプール表示を有効にするか
+ * @param {object} currentMaterialSystem - 現在の正規化済みmaterial system設定
+ * @returns {object} normalizeMaterialSystemSettingsへ渡す保存候補
+ */
+export function _materialSystemFromSupplyValue(supplyValue, externalEnabled, currentMaterialSystem) {
+  const base = {
+    provider: currentMaterialSystem.provider,
+    providerEndpoint: currentMaterialSystem.providerEndpoint,
+    slotsPerUnit: currentMaterialSystem.slotsPerUnit,
+    externalSourceLimit: externalEnabled ? 1 : 0,
+    readOnly: true,
+    canSendCommands: false,
+    canDriveLedger: false,
+  };
+  if (supplyValue === "single") {
+    return {
+      ...base,
+      mode: MATERIAL_SYSTEM_MODE.SINGLE_SPOOL,
+      displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+      unitLimit: 0,
+    };
+  }
+  const cfsMatch = /^cfs-(\d)$/.exec(supplyValue || "");
+  if (cfsMatch) {
+    return {
+      ...base,
+      mode: MATERIAL_SYSTEM_MODE.CFS_READONLY,
+      displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+      unitLimit: Number(cfsMatch[1]),
+    };
+  }
+  const cfscMatch = /^cfsc-(\d)$/.exec(supplyValue || "");
+  if (cfscMatch) {
+    return {
+      ...base,
+      mode: MATERIAL_SYSTEM_MODE.CFS_C_READONLY,
+      provider: MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO,
+      displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+      unitLimit: Number(cfscMatch[1]),
+    };
+  }
+  return {
+    ...base,
+    mode: MATERIAL_SYSTEM_MODE.AUTO,
+    displayMode: MATERIAL_DISPLAY_MODE.AUTO,
+    unitLimit: currentMaterialSystem.unitLimit,
+  };
+}
+
+/**
+ * 接続設定ダイアログ用のmaterial system設定HTMLを生成する。
+ *
+ * 【詳細説明】
+ * - ここで設定する値は表示とread-only provider選択だけで、feed/retract/selectなどの操作権限は開かない。
+ *
+ * @private
+ * @param {object} materialSettings - 正規化済みmaterial system設定
+ * @returns {string} ダイアログHTML断片
+ */
+function _materialSystemSettingsHtml(materialSettings) {
+  const providerOptions = [
+    [MATERIAL_PROVIDER_MODE.AUTO, "自動"],
+    [MATERIAL_PROVIDER_MODE.K2_BOXS_INFO, "K2 boxsInfo"],
+    [MATERIAL_PROVIDER_MODE.MOONRAKER_BOXS_INFO, "Moonraker boxsInfo"],
+    [MATERIAL_PROVIDER_MODE.NONE, "なし"],
+  ].map(([value, label]) => _optionHtml(value, label, materialSettings.provider)).join("");
+  const externalChecked = materialSettings.externalSourceLimit > 0 ? "checked" : "";
+  return `
+              <label>フィラメント供給:</label>
+              <select id="edit-material-supply">${_materialSupplyOptionsHtml(materialSettings)}</select>
+              <label>外部スプール:</label>
+              <label class="conn-edit-check"><input type="checkbox" id="edit-material-external-enabled" ${externalChecked}> 表示する</label>
+              <label>Provider:</label>
+              <select id="edit-material-provider" title="CFS-CはMoonraker boxsInfoを指定し、endpointを入力してください">${providerOptions}</select>
+              <label>Provider endpoint:</label>
+              <input type="text" id="edit-material-provider-endpoint" value="${_escAttr(materialSettings.providerEndpoint || "")}" placeholder="例: 192.168.54.150:80">`;
+}
+
+/**
+ * 接続先設定から、再描画対象にする現在のhostキーを解決する。
+ *
+ * 【詳細説明】
+ * - パネルはhostname確定後のキーで作られることが多いが、初回接続前後ではdest/IPキーの可能性も残る。
+ * - connectionMapのdest一致を優先し、見つからない場合は保存済みhostname、最後にdestのhost部へフォールバックする。
+ *
+ * @private
+ * @param {object} target - connectionTargets内の接続先設定
+ * @param {string} dest - 接続先dest
+ * @returns {string} 再描画対象host候補
+ */
+function _resolveHostForPanelRefresh(target, dest) {
+  const connectedHost = Object.keys(connectionMap).find((host) => connectionMap[host]?.dest === dest);
+  return connectedHost || target?.hostname || _extractIp(dest) || dest;
+}
 
 export function updatePrinterListUI() {
   const sel  = document.getElementById("printer-select");
@@ -1985,9 +3139,14 @@ export function updatePrinterListUI() {
         const currentCam = tgt.cameraPort || monitorData.appSettings.cameraPort || DEFAULT_CAMERA_PORT;
         const currentHttp = tgt.httpPort || monitorData.appSettings.httpPort || 80;
         const currentLabel = tgt.label || tgt.hostname || "";
+        const currentMaterialSystem = normalizeMaterialSystemSettings(tgt.materialSystem, tgt.printerType);
         // ★ ④: 機器報告ホスト名（内部管理キー）＋機種設定を変更不可で明示する。
         const hnText = tgt.hostname ? tgt.hostname : "(未取得)";
-        const ptText = tgt.printerType === "moonraker" ? "Moonraker (Fluidd/Klipper)" : "Creality K1系";
+        const ptText = tgt.printerType === "moonraker"
+          ? "Moonraker (Fluidd/Klipper)"
+          : tgt.printerType === "creality-k2"
+            ? "Creality K2系"
+            : "Creality K1系";
 
         const dlgPromise = showConfirmDialog({
           level: "info",
@@ -2004,9 +3163,11 @@ export function updatePrinterListUI() {
               <input type="text" value="${_escAttr(hnText)}" disabled title="機器報告値（内部管理キー）">
               <label>機種設定:</label>
               <input type="text" value="${_escAttr(ptText)}" disabled>
+${_materialSystemSettingsHtml(currentMaterialSystem)}
             </div>
-            <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.45;">
+            <div class="conn-edit-note">
               機器ホスト名は<strong>機器から報告された名前で内部管理</strong>されます。機器側で名称を変更すると<strong>別機器として扱われ</strong>、履歴・設定が分かれます。
+              CFS/CFS-Cはread-only表示のみで、Feed/Retract/slot選択などの操作権限はまだ開きません。
             </div>`,
           confirmText: "保存",
           cancelText: "キャンセル"
@@ -2017,15 +3178,31 @@ export function updatePrinterListUI() {
         const labelEl = document.getElementById("edit-label");
         const camEl = document.getElementById("edit-cam-port");
         const httpEl = document.getElementById("edit-http-port");
+        const materialSupplyEl = document.getElementById("edit-material-supply");
+        const materialExternalEnabledEl = document.getElementById("edit-material-external-enabled");
+        const materialProviderEl = document.getElementById("edit-material-provider");
+        const materialProviderEndpointEl = document.getElementById("edit-material-provider-endpoint");
         const result = await dlgPromise;
         if (!result) return;
         if (labelEl) tgt.label = labelEl.value.trim();
         if (camEl) tgt.cameraPort = parseInt(camEl.value, 10) || currentCam;
         if (httpEl) tgt.httpPort = parseInt(httpEl.value, 10) || currentHttp;
+        const materialDraft = _materialSystemFromSupplyValue(
+          materialSupplyEl?.value ?? _materialSupplyValue(currentMaterialSystem),
+          materialExternalEnabledEl ? materialExternalEnabledEl.checked : currentMaterialSystem.externalSourceLimit > 0,
+          {
+            ...currentMaterialSystem,
+            provider: materialProviderEl?.value ?? currentMaterialSystem.provider,
+            providerEndpoint: materialProviderEndpointEl?.value ?? currentMaterialSystem.providerEndpoint,
+          }
+        );
+        tgt.materialSystem = normalizeMaterialSystemSettings(materialDraft, tgt.printerType);
+        _ensureSecondaryMaterialProviderSession(_resolveHostForPanelRefresh(tgt, dest), getState(_resolveHostForPanelRefresh(tgt, dest)));
         saveUnifiedStorage();
         updatePrinterListUI();
         // 表示名(label)/色はパネルヘッダーにも反映されるため即時更新する
         updateAllPanelHeaders();
+        recreatePanelsForHost("filament", _resolveHostForPanelRefresh(tgt, dest));
       });
     });
 
@@ -2127,6 +3304,7 @@ export function cleanupConnection(host) {
     }
     st._extSession = null;
   }
+  _closeSecondaryMaterialProviderSession(host, st);
 
   // 全タイマーを停止
   if (st.hbInterval !== null) {
@@ -2149,6 +3327,8 @@ export function cleanupConnection(host) {
   // バッファクリア
   st.buffer.length = 0;
   st.latest = null;
+  _endPrinterCoreV3LiveShadowSession(host, st);
+  _closeSecondaryMaterialProviderSession(host, st);
 
   // connectionMap から削除
   delete connectionMap[host];
@@ -2168,6 +3348,140 @@ export function cleanupConnection(host) {
  */
 export function getConnectionMap() {
   return Object.keys(connectionMap).filter(h => h !== PLACEHOLDER_HOSTNAME);
+}
+
+/**
+ * K2補助HTTP API用のbase URLを生成する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo実機は通常の `/info` が80、Fluidd/Moonraker互換APIが4408で応答する。
+ * - K1/Moonraker本体経路へ誤って入れないよう、呼び出し側で `getPrinterType(host)==="creality-k2"` を確認してから使う。
+ *
+ * @private
+ * @param {string} host - hostname または接続キー
+ * @returns {string} K2補助HTTP API base URL、解決不能なら空文字
+ */
+function _getK2MoonrakerFallbackBaseUrl(host) {
+  const ip = getDeviceIp(host);
+  if (!ip) {
+    return "";
+  }
+  const st = connectionMap[host];
+  const target = _findConnectionTarget(st?.dest || host) || _findConnectionTarget(host);
+  const port = _normalizePositivePort(target?.k2MoonrakerHttpPort) || DEFAULT_K2_MOONRAKER_HTTP_PORT;
+  return `http://${ip}:${port}`;
+}
+
+/**
+ * timeout付きでJSON endpointを取得する。
+ *
+ * 【詳細説明】
+ * - Electron renderer / browser の `fetch` を使い、CORSや到達不能時は呼び出し側でfallback失敗として扱う。
+ * - 制御系commandは一切送らず、GET read-only endpointに限定する。
+ *
+ * @private
+ * @param {string} url - 取得URL
+ * @param {number=} timeoutMs - timeout milliseconds
+ * @returns {Promise<object|null>} JSON object、取得不能なら null
+ */
+async function _fetchJsonWithTimeout(url, timeoutMs = 5000) {
+  if (typeof window === "undefined" || typeof window.fetch !== "function") {
+    return null;
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await window.fetch(url, {
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+    if (!response?.ok || typeof response.json !== "function") {
+      return null;
+    }
+    const body = await response.json();
+    return body && typeof body === "object" ? body : null;
+  } catch {
+    return null;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * K2のWS履歴取得が返らない場合にMoonraker互換APIから履歴を補完する。
+ *
+ * 【詳細説明】
+ * - K2 Pro Combo実機では `http://host:4408/server/history/list` がread-onlyで応答する。
+ * - 既存の履歴UIはK1形のraw historyを受け取るため、Moonraker変換関数を再利用してから渡す。
+ *
+ * @private
+ * @param {string} host - hostname
+ * @returns {Promise<boolean>} 補完できた場合 true
+ */
+async function _fetchK2MoonrakerHistoryFallback(host) {
+  if (getPrinterType(host) !== "creality-k2") {
+    return false;
+  }
+  const baseUrl = _getK2MoonrakerFallbackBaseUrl(host);
+  if (!baseUrl) {
+    return false;
+  }
+  const body = await _fetchJsonWithTimeout(`${baseUrl}/server/history/list`);
+  const jobs = body?.result?.jobs;
+  if (!Array.isArray(jobs)) {
+    return false;
+  }
+  const history = moonrakerHistoryToK1(jobs, baseUrl);
+  printManager.updateHistoryList(history, baseUrl, "print-current-container", host);
+  const st = connectionMap[host];
+  if (st) {
+    st.historyReceived = true;
+  }
+  pushLog(`K2履歴をMoonraker互換APIから補完しました (${history.length}件)`, "info", false, host);
+  return true;
+}
+
+/**
+ * K2のWSファイル一覧取得が返らない場合にMoonraker互換APIからファイル一覧を補完する。
+ *
+ * 【詳細説明】
+ * - `retGcodeFileInfo2` がWS9999から返る個体/タイミングを優先し、timeout後だけHTTP fallbackへ入る。
+ * - metadata個別取得までは行わず、`server/files/list` のpath/size/modifiedだけで一覧表示できる最小entriesを生成する。
+ *
+ * @private
+ * @param {string} host - hostname
+ * @returns {Promise<boolean>} 補完できた場合 true
+ */
+async function _fetchK2MoonrakerFileListFallback(host) {
+  if (getPrinterType(host) !== "creality-k2") {
+    return false;
+  }
+  const baseUrl = _getK2MoonrakerFallbackBaseUrl(host);
+  if (!baseUrl) {
+    return false;
+  }
+  const body = await _fetchJsonWithTimeout(`${baseUrl}/server/files/list?root=gcodes`);
+  const files = body?.result;
+  if (!Array.isArray(files)) {
+    return false;
+  }
+  const entries = moonrakerFilesToEntries(files, {}, baseUrl);
+  const fileInfo = {
+    entries,
+    totalNum: entries.length,
+    sourceProtocol: "k2-moonraker-files-list",
+  };
+  const machine = monitorData.machines[host];
+  if (machine) {
+    machine._cachedFileInfo = fileInfo;
+  }
+  printManager.renderFileList(fileInfo, baseUrl, host);
+  const st = connectionMap[host];
+  if (st) {
+    st.fileInfoReceived = true;
+  }
+  pushLog(`K2ファイル一覧をMoonraker互換APIから補完しました (${entries.length}件)`, "info", false, host);
+  return true;
 }
 
 /**
@@ -2235,18 +3549,24 @@ function _fetchWithRetry(host) {
 
   // reqHistory → reqGcodeFileInfo の順に送出（500ms 遅延後に開始）
   setTimeout(async () => {
-    await attempt(
+    const historyOk = await attempt(
       "reqHistory", { reqHistory: 1 },
       () => st.historyReceived,
       () => st.historyReqRetry,
       (n) => { st.historyReqRetry = n; }
     );
-    await attempt(
+    if (!historyOk) {
+      await _fetchK2MoonrakerHistoryFallback(host);
+    }
+    const fileOk = await attempt(
       "reqGcodeFile", { reqGcodeFile: 1 },
       () => st.fileInfoReceived,
       () => st.fileReqRetry,
       (n) => { st.fileReqRetry = n; }
     );
+    if (!fileOk) {
+      await _fetchK2MoonrakerFileListFallback(host);
+    }
   }, 500);
 }
 
@@ -2271,7 +3591,7 @@ export function getConnectionState(host) {
  *
  * @function getPrinterType
  * @param {string} host - ホスト名(または IP)
- * @returns {"creality-k1"|"moonraker"} プリンタ種別
+ * @returns {"creality-k1"|"creality-k2"|"moonraker"} プリンタ種別
  */
 export function getPrinterType(host) {
   const st = connectionMap[host];

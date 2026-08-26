@@ -1,0 +1,2 @@
+{"sequence":1,"atMs":2,"direction":"event","channel":"http-info","kind":"transport","type":"request","details":{"url":"http://<IP_001>:80/info"}}
+{"sequence":2,"atMs":3026,"direction":"event","channel":"http-info","kind":"transport","type":"error","details":{"message":"HTTP timeout after 3000ms"}}
