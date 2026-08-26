@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1411 (PR #434)
+ * @version 1.390.1412 (PR #434)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-26 17:18:47
+ * @lastModified 2026-08-26 17:30:15
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -817,6 +817,7 @@ describe("Printer Core v3 command authority contract", () => {
           fileHash: "sha256:benchy",
         },
         materialSourceIds: ["cfs:1:slot:2"],
+        transportProfile: "k2-ws9999-color-match-multicolor-v1",
         startContext: {
           uploadGeneration: "upload:42",
         },
@@ -829,6 +830,7 @@ describe("Printer Core v3 command authority contract", () => {
     });
     const staleSnapshot = createBaseSendTimeSnapshot({
       capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
       uploadGeneration: "upload:42",
       fileIdentity: {
         remotePath: "printprt:/usr/data/benchy.gcode",
@@ -848,6 +850,7 @@ describe("Printer Core v3 command authority contract", () => {
     });
     const unloadedSnapshot = createBaseSendTimeSnapshot({
       capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
       uploadGeneration: "upload:42",
       fileIdentity: {
         remotePath: "printprt:/usr/data/benchy.gcode",
@@ -867,6 +870,7 @@ describe("Printer Core v3 command authority contract", () => {
     });
     const readySnapshot = createBaseSendTimeSnapshot({
       capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
       uploadGeneration: "upload:42",
       fileIdentity: {
         remotePath: "printprt:/usr/data/benchy.gcode",
@@ -910,6 +914,46 @@ describe("Printer Core v3 command authority contract", () => {
     expect(readySendTransport).toHaveBeenCalledTimes(1);
   });
 
+  it("print-startは要求transport profileがsend-time contextに無ければ拒否する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      payload: {
+        asset: {
+          path: "printprt:/usr/data/benchy.gcode",
+          fileHash: "sha256:benchy",
+        },
+        materialSourceIds: ["cfs:1:slot:2"],
+        transportProfile: "k2-ws9999-color-match-multicolor-v1",
+        startContext: {
+          uploadGeneration: "upload:42",
+        },
+      },
+      expectedState: {
+        path: "print.stateLabel",
+        operator: "oneOf",
+        expected: ["printing", "checking"],
+      },
+    });
+    const snapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      transportProfiles: ["other-profile"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => snapshot,
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("print-start-transport-profile-not-certified:k2-ws9999-color-match-multicolor-v1");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
   it("print-startは同じsourceIdでも送信直前の材料type/colorが変わっていたら拒否する", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("print-start"),
@@ -919,6 +963,7 @@ describe("Printer Core v3 command authority contract", () => {
           fileHash: "sha256:benchy",
         },
         materialSourceIds: ["cfs:1:slot:2"],
+        transportProfile: "k2-ws9999-color-match-multicolor-v1",
         toolAssignments: [{
           toolId: 0,
           protocolToolAlias: "T1A",
@@ -940,6 +985,7 @@ describe("Printer Core v3 command authority contract", () => {
     });
     const driftSnapshot = createBaseSendTimeSnapshot({
       capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
       uploadGeneration: "upload:42",
       fileIdentity: {
         remotePath: "printprt:/usr/data/benchy.gcode",

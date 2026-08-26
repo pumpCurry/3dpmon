@@ -16,9 +16,9 @@
  *         リスナは 1 本のみ＝二重バインドしない）
  *   (C) 委譲ディスパッチが正しい行データで該当ハンドラへ届く
  *
- * @version 1.390.1411 (PR #434)
+ * @version 1.390.1412 (PR #434)
  * @since   1.390.1365 (PR #432)
- * @lastModified 2026-08-26 17:18:47
+ * @lastModified 2026-08-26 17:30:15
  *
  * @vitest-environment jsdom
  */
@@ -508,7 +508,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     });
   });
 
-  it("K2/CFSファイル印刷はsend-timeで未認定profileなら送信しない", async () => {
+  it("K2/CFSファイル印刷はsend-timeで未認定model/profileなら送信しない", async () => {
     table = makeTable("file-list-table");
     scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
     const nowIso = new Date().toISOString();
@@ -545,7 +545,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
-            identity: { reportedModel: "F999", reportedHostname: "K2Variant" },
+            identity: { reportedModel: "F999", reportedHostname: "K2Pro-Variant" },
             materials: {
               cfs: { connected: true, enabled: true, topologyState: "fresh" },
               provider: { lastObservedAt: nowIso },

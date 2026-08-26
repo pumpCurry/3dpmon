@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1411 (PR #434)
+ * @version 1.390.1412 (PR #434)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-26 17:18:47
+ * @lastModified 2026-08-26 17:30:15
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -345,6 +345,23 @@ function normalizeCapabilitySet(value) {
 }
 
 /**
+ * transport profile 候補を比較用配列へ正規化する。
+ *
+ * 【詳細説明】
+ * - command capability と同じく、送信時contextのprofile証拠は重複を除いた文字列配列として保持する。
+ *
+ * @private
+ * @param {*} value - transport profile 候補
+ * @returns {string[]} 正規化済みtransport profile一覧
+ */
+function normalizeTransportProfiles(value) {
+  const rawValues = value instanceof Set
+    ? Array.from(value)
+    : (Array.isArray(value) ? value : []);
+  return Array.from(new Set(rawValues.map((entry) => String(entry || "").trim()).filter(Boolean))).sort();
+}
+
+/**
  * command kind に必要な capability を返す。
  *
  * 【詳細説明】
@@ -420,6 +437,7 @@ function createCommandDispatchContextSignature(context) {
       COMMAND_DISPATCH_CONTEXT_SECRET,
       context.contextId,
       context.transportKind,
+      (context.transportProfiles || []).join(","),
       context.active === true ? "active" : "inactive",
       (context.capabilities || []).join(","),
       context.materialTopology?.cfsConnected === true ? "cfs-connected" : "cfs-not-connected",
@@ -600,6 +618,7 @@ export function createPrinterCommandRequest(options = {}) {
  * @param {string} options.deviceId - 現在接続中の device ID
  * @param {string} options.sessionId - 現在接続中の session ID
  * @param {string=} options.transportKind - 送信 transport 種別
+ * @param {(Array<string>|Set<string>)=} options.transportProfiles - 現在認定済みのtransport profile証拠
  * @param {boolean=} options.active - 現在のsessionが送信可能なら true
  * @param {Array<string>|Set<string>|object=} options.capabilities - 現在のcapability set
  * @param {object=} options.materialTopology - 現在のmaterial topology summary
@@ -660,6 +679,7 @@ function createPrinterCommandDispatchContext(options = {}) {
     deviceId,
     sessionId,
     transportKind: options.transportKind || "unknown",
+    transportProfiles: normalizeTransportProfiles(options.transportProfiles),
     active: options.active === true,
     capabilities,
     materialTopology,
@@ -854,10 +874,17 @@ function collectPrintStartSendTimeErrors(request, context) {
   if (!requestFileHash || !contextFileHash || requestFileHash !== contextFileHash) {
     errors.push("file-identity-hash-mismatch");
   }
+  const requestTransportProfile = String(request.payload?.transportProfile || "").trim();
+  const contextTransportProfiles = normalizeTransportProfiles(context.transportProfiles);
   const materialSourceIds = Array.isArray(request.payload?.materialSourceIds)
     ? request.payload.materialSourceIds.map((sourceId) => String(sourceId || "").trim()).filter(Boolean)
     : [];
   if (materialSourceIds.length > 0) {
+    if (!requestTransportProfile) {
+      errors.push("print-start-transport-profile-missing");
+    } else if (!contextTransportProfiles.includes(requestTransportProfile)) {
+      errors.push(`print-start-transport-profile-not-certified:${requestTransportProfile}`);
+    }
     if (context.materialTopology?.cfsConnected !== true) {
       errors.push("print-start-cfs-not-connected");
     }

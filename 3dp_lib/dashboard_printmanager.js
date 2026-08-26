@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1411 (PR #434)
+* @version 1.390.1412 (PR #434)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 17:18:47
+* @lastModified 2026-08-26 17:30:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1207,7 +1207,7 @@ function createK2CfsPrintSendTimeMaterialTopology(hostname, shadowRecord) {
  * 【詳細説明】
  * - command capability はprinterTypeだけから固定発行せず、現在sessionのNormalizedStateと
  *   実機certified済みprofileの一致を確認してから付与する。
- * - 現公開候補では F012 / K2 Pro 系のWS9999 `colorMatch` -> `multiColorPrint` profileだけを認める。
+ * - 現公開候補では F012 のWS9999 `colorMatch` -> `multiColorPrint` profileだけを認める。
  *
  * @private
  * @param {object|null|undefined} shadowRecord - runtimeData.printerCoreV3Shadow record
@@ -1217,14 +1217,8 @@ function createK2CfsPrintSendTimeMaterialTopology(hostname, shadowRecord) {
 function isK2CfsPrintStartTransportProfileCertified(shadowRecord, materialTopology) {
   const state = shadowRecord?.lastState || null;
   const reportedModel = String(state?.identity?.reportedModel || "").trim().toUpperCase();
-  const reportedHostname = String(state?.identity?.reportedHostname || "").trim().toUpperCase();
-  const deviceId = String(shadowRecord?.deviceId || state?.identity?.deviceId || "").trim().toLowerCase();
-  const hasCertifiedModel = reportedModel === "F012" ||
-    reportedModel.includes("K2 PRO") ||
-    reportedHostname.startsWith("K2PRO") ||
-    deviceId.includes("k2-pro");
   return Boolean(
-    hasCertifiedModel &&
+    reportedModel === "F012" &&
     shadowRecord?.state !== "closed" &&
     materialTopology?.cfsConnected === true &&
     materialTopology?.topologyState === "fresh" &&
@@ -1382,6 +1376,7 @@ function createK2CfsPrintStartRequestFromUi(options) {
     payload: {
       printPlanId: `ui-k2-cfs:${options.hostname}:${fileIdentity.path}:${fileIdentity.fileHash}`,
       planKind: toolAssignments.length > 1 ? "multicolor-cfs" : "single-color",
+      transportProfile: K2_CFS_PRINT_START_TRANSPORT_PROFILE,
       asset: {
         path: fileIdentity.path,
         fileHash: fileIdentity.fileHash,
