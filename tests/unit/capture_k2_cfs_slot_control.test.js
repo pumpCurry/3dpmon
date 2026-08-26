@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1415 (PR #435)
+ * @version 1.390.1419 (PR #435)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-27 05:45:00
+ * @lastModified 2026-08-27 06:18:00
  */
 
 import { EventEmitter } from "node:events";
@@ -99,6 +99,20 @@ describe("capture_k2_cfs_slot_control", () => {
       "--boxsinfo-timeout-ms",
       "999",
     ])).toThrow("--boxsinfo-timeout-ms must be between 1000 and 60000");
+    expect(() => parseArgs([
+      "--send",
+      "--host",
+      "192.168.54.153",
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-feed",
+      "--command",
+      "cfs-feed",
+      "--source",
+      "cfs:1:slot:0",
+    ])).toThrow("--send is currently limited to cfs-load and cfs-unload");
     expect(parseArgs([
       ...baseArgs,
       "--confirm-live",

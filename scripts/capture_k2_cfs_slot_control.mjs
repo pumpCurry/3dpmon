@@ -20,9 +20,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1415 (PR #435)
+ * @version 1.390.1419 (PR #435)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-27 05:45:00
+ * @lastModified 2026-08-27 06:18:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -82,6 +82,20 @@ const SUPPORTED_SLOT_CONTROL_COMMANDS = Object.freeze(new Set([
   "cfs-unload",
   "cfs-feed",
   "cfs-retract",
+]));
+
+/**
+ * F012 live certificationで送信候補として扱うCFS command kind一覧。
+ *
+ * 【詳細説明】
+ * - 公開CrealityPrint bundle上で `feedInOrOut` との関係が最も強いload/unloadだけを初期live対象にする。
+ * - select/feed/retractはdry-run候補としてshape確認だけ許し、実機送信は別途capture根拠が揃うまで閉じる。
+ *
+ * @constant {ReadonlySet<string>}
+ */
+const LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS = Object.freeze(new Set([
+  "cfs-load",
+  "cfs-unload",
 ]));
 
 /**
@@ -189,6 +203,9 @@ export function parseArgs(argv = []) {
   }
   if (options.send && toNonEmptyString(options.confirmCommand) !== command) {
     throw new Error("--confirm-command must exactly match --command when --send is used.");
+  }
+  if (options.send && !LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS.has(command)) {
+    throw new Error("--send is currently limited to cfs-load and cfs-unload for F012 live certification.");
   }
   return options;
 }

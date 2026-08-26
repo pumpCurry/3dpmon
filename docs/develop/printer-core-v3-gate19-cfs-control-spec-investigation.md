@@ -124,6 +124,8 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
+- 初期live certificationの送信対象は `cfs-load` / `cfs-unload` だけに限定する。
+  `cfs-slot-select` / `cfs-feed` / `cfs-retract` はshape確認用dry-run候補に留め、追加capture根拠なしには送信しない。
 - 同CLIは `--probe-before` / `--probe-after` 指定時だけ、同じWS9999 sessionでread-only `get { boxsInfo: 1 }` を送る。
   これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
 

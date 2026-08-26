@@ -17,9 +17,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1415 (PR #435)
+ * @version 1.390.1419 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-27 05:32:29
+ * @lastModified 2026-08-27 06:18:00
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -125,30 +125,35 @@ const CFS_SLOT_CONTROL_CANDIDATE_DEFINITIONS = Object.freeze({
     candidateOperation: "feed-in-or-select",
     expectedObservation: "selected-source-may-change",
     semanticStatus: "uncertified",
+    liveCertificationAllowed: false,
   }),
   "cfs-load": Object.freeze({
     isFeed: 1,
     candidateOperation: "feed-in-or-load",
     expectedObservation: "selected-source-or-feed-state-may-change",
     semanticStatus: "uncertified",
+    liveCertificationAllowed: true,
   }),
   "cfs-unload": Object.freeze({
     isFeed: 0,
     candidateOperation: "feed-out-or-unload",
     expectedObservation: "selected-source-or-feed-state-may-change",
     semanticStatus: "uncertified",
+    liveCertificationAllowed: true,
   }),
   "cfs-feed": Object.freeze({
     isFeed: 1,
     candidateOperation: "feed-in",
     expectedObservation: "physical-feed-state-may-change",
     semanticStatus: "uncertified",
+    liveCertificationAllowed: false,
   }),
   "cfs-retract": Object.freeze({
     isFeed: 0,
     candidateOperation: "feed-out-or-retract",
     expectedObservation: "physical-feed-state-may-change",
     semanticStatus: "uncertified",
+    liveCertificationAllowed: false,
   }),
 });
 
@@ -576,6 +581,7 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
       candidateOperation: definition.candidateOperation,
       expectedObservation: definition.expectedObservation,
       semanticStatus: definition.semanticStatus,
+      liveCertificationAllowed: definition.liveCertificationAllowed,
       safetyBoundary: "certification-only",
       productionEnabled: false,
     },
@@ -628,6 +634,7 @@ export function createK2CfsCommandTransportPlan(request, options = {}) {
  * @param {Function} sendFrame - frame送信hook
  * @param {object=} options - 送信option
  * @param {boolean=} options.allowCertificationOnly - certification-only planの送信可否
+ * @param {boolean=} options.allowExperimentalSlotSemantics - select/feed/retractなどlive意味未確定candidateの送信可否
  * @returns {Promise<object>} transport response summary
  * @throws {Error} plan不正またはsend hook不正の場合
  * @example
@@ -639,6 +646,11 @@ export async function sendK2CfsCommandTransportPlan(plan, sendFrame, options = {
   }
   if (plan.certificationOnly === true && options?.allowCertificationOnly !== true) {
     throw new Error("K2 CFS certification-only transport plan requires allowCertificationOnly.");
+  }
+  if (plan.certificationOnly === true &&
+      plan.details?.liveCertificationAllowed === false &&
+      options?.allowExperimentalSlotSemantics !== true) {
+    throw new Error("K2 CFS experimental slot semantics require allowExperimentalSlotSemantics.");
   }
   if (typeof sendFrame !== "function") {
     throw new TypeError("K2 CFS command transport requires a sendFrame hook.");

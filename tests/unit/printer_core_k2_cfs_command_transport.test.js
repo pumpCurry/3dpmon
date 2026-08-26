@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1415 (PR #435)
+ * @version 1.390.1419 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-27 05:32:29
+ * @lastModified 2026-08-27 06:18:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -226,6 +226,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         materialId: 2,
         candidateOperation: "feed-in-or-load",
         semanticStatus: "uncertified",
+        liveCertificationAllowed: true,
         productionEnabled: false,
       },
     });
@@ -261,6 +262,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         candidateOperation: "feed-out-or-retract",
         boxId: 3,
         materialId: 1,
+        liveCertificationAllowed: false,
       },
     });
     expect(plan.frames[0].params.feedInOrOut).toEqual({
@@ -392,6 +394,40 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     expect(response).toMatchObject({
       status: "submitted",
       profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+      sentFrameCount: 1,
+    });
+  });
+
+  it("select/feed/retractなどlive意味未確定candidateは追加opt-inなしに送信しない", async () => {
+    const sendFrame = vi.fn(async () => ({ status: "submitted" }));
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-feed",
+      payload: {
+        sourceId: "cfs:1:slot:0",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      certificationOnly: true,
+      details: {
+        commandKind: "cfs-feed",
+        liveCertificationAllowed: false,
+      },
+    });
+    await expect(sendK2CfsCommandTransportPlan(plan, sendFrame, {
+      allowCertificationOnly: true,
+    })).rejects.toThrow("allowExperimentalSlotSemantics");
+    expect(sendFrame).not.toHaveBeenCalled();
+
+    const response = await sendK2CfsCommandTransportPlan(plan, sendFrame, {
+      allowCertificationOnly: true,
+      allowExperimentalSlotSemantics: true,
+    });
+    expect(response).toMatchObject({
+      status: "submitted",
       sentFrameCount: 1,
     });
   });
