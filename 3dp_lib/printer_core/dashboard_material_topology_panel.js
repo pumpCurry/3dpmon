@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1383 (PR #432)
+ * @version 1.390.1402 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 22:55:00
+ * @lastModified 2026-08-26 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
@@ -93,7 +93,7 @@ function formatTopologyState(value) {
   if (value === "stale") {
     return "状態: 最終観測";
   }
-  return "状態: 未観測";
+  return "状態: 取得待ち";
 }
 
 /**
@@ -130,9 +130,12 @@ function formatPresenceState(presence) {
  * @returns {string|null} CSS色値、またはnull
  */
 function resolveMaterialColor(material) {
+  const displayHex = String(material?.color?.displayHex || "").trim();
   const normalized = String(material?.color?.normalized || "").trim();
   const raw = String(material?.color?.raw || "").trim();
-  const candidate = normalized ? `#${normalized.replace(/^#/, "")}` : raw;
+  const candidate = displayHex
+    ? `#${displayHex.replace(/^#/, "")}`
+    : (normalized ? `#${normalized.replace(/^#/, "")}` : raw);
   return /^#[0-9a-fA-F]{6}$/.test(candidate) ? candidate : null;
 }
 
@@ -536,6 +539,13 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
         "mtv-stale-banner",
         "⚠ CFS情報を現在取得できません。以下は最後に観測した状態です。"
       ));
+    } else if (topologyState === "unobserved") {
+      root.appendChild(createElement(
+        documentRef,
+        "div",
+        "mtv-observing-banner",
+        "CFS/CFS-C情報を取得中です。外部スプールとCFSスロットは観測でき次第、別々の欄に表示します。"
+      ));
     }
 
     const summary = currentViewModel?.summary || {};
@@ -549,7 +559,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const externalRows = Array.isArray(currentViewModel?.external) ? currentViewModel.external : [];
     if (externalRows.length > 0) {
       const external = createElement(documentRef, "section", "mtv-external");
-      external.appendChild(createElement(documentRef, "div", "mtv-section-title", "外部スプール"));
+      external.appendChild(createElement(documentRef, "div", "mtv-section-title", "外部スプール（CFSとは別管理）"));
       for (const row of externalRows) {
         external.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy));
       }

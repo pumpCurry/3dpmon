@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.1042 (2026-08-26) — Hotfix: K2/CFS print authority binding
+
+- **K2/CFS print authority**: explicit CFS print starts now pass through the production command dispatcher, with send-time session, strict F012 certified transport profile evidence, file identity, fresh loaded-slot, and material type/color revalidation before any `colorMatch` / `multiColorPrint` frame is sent.
+- **K2/CFS assignment safety**: CFS-backed print start requests now bind the selected material source, type, color, file identity, upload generation, session, and certified transport profile at dispatch time so stale dialog state cannot silently send a mismatched assignment.
+- **Command semantics**: `submitted` remains send-completed / confirmation-pending evidence rather than protocol acknowledgement, with no `opGcodeFile` fallback and no blind retry.
+- 検証: targeted K2/CFS command/material UI tests 82件PASS、full Vitest 98 files / 1548 tests PASS、
+  Electron E2E 3/3、GitHub Actions lint/smoke/test PASS。Windows installer/portable build成功
+  (`C:/Users/pcb/AppData/Local/Temp/3dpmon-pr434-build-1042`)。
+
 ## v2.2.1041 (2026-08-26) — Hotfix: K2/CFS print dialog and file thumbnails
 
 - **K2/CFS print confirmation**: CFS/CFS-C slots observed by Printer Core v3 are now shown as material supply in the print confirmation dialog, instead of being mistaken for an unmounted local 3DPmon spool.

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1402 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-26 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -244,5 +244,23 @@ describe("Printer Core v3 material system settings", () => {
 
     expect(displayTopology.cfs.topologyState).toBe("stale");
     expect(displayTopology.provider.freshness).toBe("stale");
+  });
+
+  it("active sessionでも観測時刻metadataが欠落したtopologyは取得待ちへ倒す", () => {
+    const topology = {
+      cfs: { topologyState: "fresh", connected: true },
+      units: [{ unitId: "cfs:1", boxId: 1 }],
+      sources: [{ sourceId: "cfs:1:slot:2", kind: "cfs-slot", unitId: "cfs:1", boxId: 1, slotId: 2 }],
+    };
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology,
+      shadowRecord: {
+        state: "observed",
+      },
+      nowMs: Date.parse("2026-08-25T00:02:00.000Z"),
+      ttlMs: 45_000,
+    });
+
+    expect(displayTopology).toBeNull();
   });
 });

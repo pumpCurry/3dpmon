@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1379 (PR #432)
+ * @version 1.390.1412 (PR #434)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-25 21:20:00
+ * @lastModified 2026-08-26 17:30:15
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -201,6 +201,31 @@ describe("Printer Core v3 command authority contract", () => {
     expect(result.transportAccepted).toBe(false);
     expect(result.confirmation.confirmed).toBe(true);
     expect(result.completed).toBe(false);
+  });
+
+  it("submittedはtransport失敗ではなく送信済み確認待ちとして扱う", () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      expectedState: {
+        path: "print.stateLabel",
+        expected: "printing",
+      },
+    });
+    const result = createPrinterCommandResult(request, {
+      status: "submitted",
+      sentSequence: 10,
+      observedSequence: 10,
+      observedSessionId: "session:1",
+    });
+
+    expect(result).toMatchObject({
+      status: "submitted",
+      transportAccepted: true,
+      completed: false,
+      error: null,
+    });
+    expect(result.postCommandObservation.reason).toContain("sequence-not-advanced");
+    expect(shouldRetryPrinterCommand(request, result)).toBe(false);
   });
 
   it("command前から成立していたexpected-stateは完了証拠にしない", () => {
@@ -781,6 +806,217 @@ describe("Printer Core v3 command authority contract", () => {
     expect(mismatchedSendTransport).not.toHaveBeenCalled();
     expect(matchedResult.status).toBe("acknowledged");
     expect(matchedSendTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("print-startは指定material sourceを送信直前のfreshなCFS topologyへbindする", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      payload: {
+        asset: {
+          path: "printprt:/usr/data/benchy.gcode",
+          fileHash: "sha256:benchy",
+        },
+        materialSourceIds: ["cfs:1:slot:2"],
+        transportProfile: "k2-ws9999-color-match-multicolor-v1",
+        startContext: {
+          uploadGeneration: "upload:42",
+        },
+      },
+      expectedState: {
+        path: "print.stateLabel",
+        operator: "oneOf",
+        expected: ["printing", "checking"],
+      },
+    });
+    const staleSnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "stale",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+        }],
+      },
+    });
+    const unloadedSnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "fresh",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "empty",
+        }],
+      },
+    });
+    const readySnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "fresh",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+        }],
+      },
+    });
+    const staleSendTransport = vi.fn();
+    const unloadedSendTransport = vi.fn();
+    const readySendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const staleResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => staleSnapshot,
+      sendTransport: staleSendTransport,
+    });
+    const unloadedResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => unloadedSnapshot,
+      sendTransport: unloadedSendTransport,
+    });
+    const readyResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => readySnapshot,
+      sendTransport: readySendTransport,
+    });
+
+    expect(staleResult.status).toBe("rejected");
+    expect(staleResult.error.errors).toContain("print-start-cfs-topology-not-fresh");
+    expect(staleSendTransport).not.toHaveBeenCalled();
+    expect(unloadedResult.status).toBe("rejected");
+    expect(unloadedResult.error.errors).toContain("print-start-material-source-not-loaded:cfs:1:slot:2");
+    expect(unloadedSendTransport).not.toHaveBeenCalled();
+    expect(readyResult.status).toBe("acknowledged");
+    expect(readySendTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("print-startは要求transport profileがsend-time contextに無ければ拒否する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      payload: {
+        asset: {
+          path: "printprt:/usr/data/benchy.gcode",
+          fileHash: "sha256:benchy",
+        },
+        materialSourceIds: ["cfs:1:slot:2"],
+        transportProfile: "k2-ws9999-color-match-multicolor-v1",
+        startContext: {
+          uploadGeneration: "upload:42",
+        },
+      },
+      expectedState: {
+        path: "print.stateLabel",
+        operator: "oneOf",
+        expected: ["printing", "checking"],
+      },
+    });
+    const snapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      transportProfiles: ["other-profile"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => snapshot,
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("print-start-transport-profile-not-certified:k2-ws9999-color-match-multicolor-v1");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("print-startは同じsourceIdでも送信直前の材料type/colorが変わっていたら拒否する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      payload: {
+        asset: {
+          path: "printprt:/usr/data/benchy.gcode",
+          fileHash: "sha256:benchy",
+        },
+        materialSourceIds: ["cfs:1:slot:2"],
+        transportProfile: "k2-ws9999-color-match-multicolor-v1",
+        toolAssignments: [{
+          toolId: 0,
+          protocolToolAlias: "T1A",
+          materialSourceId: "cfs:1:slot:2",
+          protocol: {
+            type: "PLA",
+            color: "72a530",
+          },
+        }],
+        startContext: {
+          uploadGeneration: "upload:42",
+        },
+      },
+      expectedState: {
+        path: "print.stateLabel",
+        operator: "oneOf",
+        expected: ["printing", "checking"],
+      },
+    });
+    const driftSnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      transportProfiles: ["k2-ws9999-color-match-multicolor-v1"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "fresh",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+          material: {
+            type: "ABS",
+            color: { raw: "#ff0000", normalized: "ff0000" },
+          },
+        }],
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => driftSnapshot,
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("print-start-material-type-mismatch:cfs:1:slot:2");
+    expect(result.error.errors).toContain("print-start-material-color-mismatch:cfs:1:slot:2");
+    expect(sendTransport).not.toHaveBeenCalled();
   });
 
   it("transport例外はtransport-errorとして返しside-effect commandをblind retryしない", async () => {

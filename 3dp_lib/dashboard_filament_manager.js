@@ -15,13 +15,14 @@
  * - 使用履歴（種別フィルタ付き）
  * - 集計レポート
  * - 推定 candidate の確認・否認・再割当て
+ * - CFS/CFS-C搭載機の外部スプールとCFSスロットを別欄でread-only表示
  *
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1283 (PR #428)
+* @version 1.390.1402 (PR #434)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-04 15:22:00
+* @lastModified 2026-08-26 22:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -30,7 +31,7 @@
 "use strict";
 
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
-import { getConnectionState } from "./dashboard_connection.js";
+import { getConnectionState, getConnectionTarget, getPrinterType } from "./dashboard_connection.js";
 import {
   getCurrentSpool,
   getCurrentSpoolId,
@@ -85,6 +86,15 @@ import { showAlert } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
 import { showFilamentChangeDialog } from "./dashboard_filament_change.js";
+import {
+  MATERIAL_DISPLAY_MODE,
+  resolveDisplayMaterialTopology,
+  resolveMaterialDisplayMode,
+  resolveMaterialTopologyViewOptions
+} from "./printer_core/dashboard_material_system_settings.js";
+import {
+  createMaterialTopologyViewModel
+} from "./printer_core/dashboard_material_topology_view_model.js";
 
 let styleInjected = false;
 
@@ -331,6 +341,206 @@ function getActiveHosts() {
   );
 }
 
+/**
+ * CFS/CFS-C source row の表示用材料名を返す。
+ *
+ * 【詳細説明】
+ * - 機器観測topologyの材料名は空文字の場合があるため、name/type/vendorを順に使い、
+ *   どれも無い場合は未装填/未観測の表示を優先できるよう `--` を返す。
+ *
+ * @private
+ * @function getMaterialSourceDisplayName
+ * @param {Object} row - material topology view model の source row。
+ * @returns {string} 表示用材料名。
+ */
+function getMaterialSourceDisplayName(row) {
+  const material = row?.material || {};
+  return String(material.name || material.type || material.vendor || "--").trim() || "--";
+}
+
+/**
+ * CFS/CFS-C source row の表示用残量テキストを返す。
+ *
+ * 【詳細説明】
+ * - invalid値は0%へ丸めず、不明として扱う。
+ * - stale中は現在値ではなく最終観測値であることを明示する。
+ *
+ * @private
+ * @function getMaterialSourceRemainingText
+ * @param {Object} row - material topology view model の source row。
+ * @param {boolean} isStale - topology が stale の場合 true。
+ * @returns {string} 表示用残量テキスト。
+ */
+function getMaterialSourceRemainingText(row, isStale) {
+  const remaining = row?.status?.remaining || {};
+  if (remaining.valid === false) {
+    return "残量 不明";
+  }
+  const percent = Number(remaining.displayPercent);
+  if (!Number.isFinite(percent)) {
+    return "残量 未観測";
+  }
+  return `${isStale ? "最終観測" : "残量"} ${Math.round(percent)}%`;
+}
+
+/**
+ * material source の表示用CSS色を返す。
+ *
+ * 【詳細説明】
+ * - K2/CFS firmware は `#09ea7ae` のような7桁HEXを返すため、normalized層が提供する
+ *   displayHexを優先し、CSSに渡せる6桁HEXだけを採用する。
+ *
+ * @private
+ * @function getMaterialSourceCssColor
+ * @param {Object} row - material topology view model の source row。
+ * @returns {string|null} CSS色、または null。
+ */
+function getMaterialSourceCssColor(row) {
+  const color = row?.material?.color || {};
+  const candidate = String(color.displayHex || color.normalized || color.raw || "").trim().replace(/^#/u, "");
+  return /^[0-9a-fA-F]{6}$/u.test(candidate) ? `#${candidate}` : null;
+}
+
+/**
+ * material source chip を生成する。
+ *
+ * 【詳細説明】
+ * - CFSスロットと外部スプールは同じ小型表示部品を使うが、kind/classを保持して混同を避ける。
+ * - この表示は機器観測のread-only summaryであり、3DPmonの装着スプール台帳を変更しない。
+ *
+ * @private
+ * @function createMaterialSourceChip
+ * @param {Object} row - material topology view model の source row。
+ * @param {boolean} isStale - topology が stale の場合 true。
+ * @returns {HTMLElement} source chip 要素。
+ */
+function createMaterialSourceChip(row, isStale) {
+  const chip = document.createElement("div");
+  chip.className = `fm-material-source-chip fm-material-source-${row?.kind || "unknown"}`;
+  chip.dataset.sourceId = row?.sourceId || "";
+  chip.dataset.presence = row?.presence || "unknown";
+  if (row?.selected === true) {
+    chip.classList.add("is-selected");
+  }
+
+  const head = document.createElement("div");
+  head.className = "fm-material-source-head";
+  const slot = document.createElement("strong");
+  slot.textContent = row?.displaySlot || "--";
+  const state = document.createElement("span");
+  state.textContent = row?.selected === true
+    ? (isStale ? "最終観測:選択中" : "現在選択中")
+    : (row?.presence === "loaded" ? "装填中" : row?.presence === "empty" ? "未装填" : "未観測");
+  head.append(slot, state);
+  chip.appendChild(head);
+
+  const materialLine = document.createElement("div");
+  materialLine.className = "fm-material-source-material";
+  const swatch = document.createElement("span");
+  swatch.className = "fm-material-source-swatch";
+  const cssColor = getMaterialSourceCssColor(row);
+  if (cssColor) {
+    swatch.style.backgroundColor = cssColor;
+  }
+  const name = document.createElement("span");
+  name.textContent = getMaterialSourceDisplayName(row);
+  materialLine.append(swatch, name);
+  chip.appendChild(materialLine);
+
+  const remaining = document.createElement("div");
+  remaining.className = "fm-material-source-remaining";
+  remaining.textContent = getMaterialSourceRemainingText(row, isStale);
+  chip.appendChild(remaining);
+
+  const assignments = (Array.isArray(row?.assignments) ? row.assignments : [])
+    .map((assignment) => assignment?.assignmentId)
+    .filter(Boolean);
+  if (assignments.length > 0) {
+    const assignmentLine = document.createElement("div");
+    assignmentLine.className = "fm-material-source-assignment";
+    assignmentLine.textContent = assignments.join(", ");
+    chip.appendChild(assignmentLine);
+  }
+  return chip;
+}
+
+/**
+ * CFS/CFS-C搭載機向けの機器観測フィラメント供給セクションを生成する。
+ *
+ * 【詳細説明】
+ * - 既存の `hostSpoolMap` / 3DPmon台帳スプールとは別に、Printer Core v3 material topology を
+ *   read-only summaryとして表示する。
+ * - 外部スプールとCFS/CFS-C slotを別fieldsetへ分け、CFS 1台構成なら外部1本+1A-1Dの5 sourceを
+ *   同時に見られるようにする。
+ * - ここでは装着、交換、残量台帳書き込みを行わない。CFS sourceを単一スプールとして誤帰属させないため。
+ *
+ * @function createFilamentManagerMaterialSupplySection
+ * @param {string} host - 表示対象ホスト名。
+ * @returns {HTMLElement|null} 表示セクション、対象外なら null。
+ */
+export function createFilamentManagerMaterialSupplySection(host) {
+  const machine = monitorData.machines?.[host] || {};
+  const target = getConnectionTarget(host);
+  const printerType = getPrinterType(host);
+  const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
+  const topology = resolveDisplayMaterialTopology({
+    topology: shadowRecord?.lastState?.materials || null,
+    shadowRecord,
+  });
+  const displayMode = resolveMaterialDisplayMode({ target, printerType, topology });
+  if (displayMode !== MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
+    return null;
+  }
+  const viewOptions = resolveMaterialTopologyViewOptions({ target, printerType, topology });
+  const viewModel = createMaterialTopologyViewModel(topology, viewOptions);
+  const topologyState = viewModel.summary?.topologyState || "unobserved";
+  const isStale = topologyState === "stale";
+
+  const section = document.createElement("div");
+  section.className = `fm-material-supply-section fm-material-supply-${topologyState}`;
+  const title = document.createElement("div");
+  title.className = "fm-material-supply-title";
+  title.textContent = "機器側フィラメント供給（外部スプール + CFS/CFS-C）";
+  section.appendChild(title);
+
+  const note = document.createElement("div");
+  note.className = "fm-material-supply-note";
+  note.textContent = isStale
+    ? "CFS情報は最終観測です。現在値として台帳へ反映しません。"
+    : "外部スプールとCFSスロットは別々の供給源として監視します。3DPmon台帳スプールとは自動で混ぜません。";
+  section.appendChild(note);
+
+  if (Array.isArray(viewModel.external) && viewModel.external.length > 0) {
+    const external = document.createElement("fieldset");
+    external.className = "fm-material-source-group";
+    const legend = document.createElement("legend");
+    legend.textContent = "外部スプール";
+    external.appendChild(legend);
+    const grid = document.createElement("div");
+    grid.className = "fm-material-source-grid";
+    viewModel.external.forEach((row) => grid.appendChild(createMaterialSourceChip(row, isStale)));
+    external.appendChild(grid);
+    section.appendChild(external);
+  }
+
+  for (const unit of Array.isArray(viewModel.units) ? viewModel.units : []) {
+    const unitField = document.createElement("fieldset");
+    unitField.className = "fm-material-source-group";
+    const legend = document.createElement("legend");
+    legend.textContent = `CFS ${unit.displayUnit}`;
+    unitField.appendChild(legend);
+    const grid = document.createElement("div");
+    grid.className = "fm-material-source-grid";
+    (Array.isArray(unit.slots) ? unit.slots : []).forEach((row) => {
+      grid.appendChild(createMaterialSourceChip(row, isStale));
+    });
+    unitField.appendChild(grid);
+    section.appendChild(unitField);
+  }
+
+  return section;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Tab 0: ダッシュボード
 // ═══════════════════════════════════════════════════════════════
@@ -409,6 +619,7 @@ function createDashboardContent(hostname, switchTab) {
 
       const spoolId = getCurrentSpoolId(host);
       const spool = spoolId ? allSpools.find(s => s.id === spoolId && !s.deleted) : null;
+      const materialSupplySection = createFilamentManagerMaterialSupplySection(host);
 
       if (spool) {
         // 装着中スプールの表示
@@ -493,6 +704,10 @@ function createDashboardContent(hostname, switchTab) {
           actionLabel: "スプール一覧を表示",
           onAction: () => switchTab(2)
         }));
+      }
+
+      if (materialSupplySection) {
+        section.appendChild(materialSupplySection);
       }
 
       div.appendChild(section);
