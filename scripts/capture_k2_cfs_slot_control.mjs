@@ -12,15 +12,17 @@
  * - Gate19 K2/CFS slot control candidate transport plan をCLIからdry-run確認する
  * - `--send` が明示された場合だけWS9999へcertification-only `feedInOrOut` candidateを送る
  * - live送信にはhost一致、command一致、live確認を必須にし、UI本番操作とは分離する
+ * - live certification時に任意で前後のread-only `boxsInfo` probeを行い、観測差分の材料を残す
  *
  * 【公開関数一覧】
  * - {@link parseArgs}：CLI引数を解析
  * - {@link buildK2CfsSlotControlRequest}：transport plan用requestを生成
+ * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
  * @version 1.390.1415 (PR #435)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-27 05:32:29
+ * @lastModified 2026-08-27 05:45:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -58,6 +60,9 @@ Options:
   --confirm-live                  Required with --send to acknowledge live CFS motion.
   --confirm-host <ip-or-host>      Required with --send and must match --host exactly.
   --confirm-command <kind>         Required with --send and must match --command exactly.
+  --probe-before                  With --send, read boxsInfo before the command.
+  --probe-after                   With --send, read boxsInfo after the command.
+  --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
   --pretty                        Pretty-print JSON result.
   --help                          Show this help.
 `;
@@ -78,6 +83,17 @@ const SUPPORTED_SLOT_CONTROL_COMMANDS = Object.freeze(new Set([
   "cfs-feed",
   "cfs-retract",
 ]));
+
+/**
+ * boxsInfo probe の既定待ち時間。
+ *
+ * 【詳細説明】
+ * - 実機certificationでは送信直後の状態更新に少し遅延があるため、短すぎる待ち時間にしない。
+ * - 一方でCLIが無限待ちになると危険なので、既定は5秒に固定する。
+ *
+ * @constant {number}
+ */
+const DEFAULT_BOXSINFO_TIMEOUT_MS = 5000;
 
 /**
  * 任意値を空でない文字列へ正規化する。
@@ -117,6 +133,9 @@ export function parseArgs(argv = []) {
     confirmLive: false,
     confirmHost: "",
     confirmCommand: "",
+    probeBefore: false,
+    probeAfter: false,
+    boxsInfoTimeoutMs: DEFAULT_BOXSINFO_TIMEOUT_MS,
     pretty: false,
     help: false,
   };
@@ -138,11 +157,19 @@ export function parseArgs(argv = []) {
     else if (arg === "--confirm-live") options.confirmLive = true;
     else if (arg === "--confirm-host") options.confirmHost = next();
     else if (arg === "--confirm-command") options.confirmCommand = next();
+    else if (arg === "--probe-before") options.probeBefore = true;
+    else if (arg === "--probe-after") options.probeAfter = true;
+    else if (arg === "--boxsinfo-timeout-ms") options.boxsInfoTimeoutMs = Number(next());
     else if (arg === "--pretty") options.pretty = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (!Number.isInteger(options.wsPort) || options.wsPort <= 0 || options.wsPort > 65535) {
     throw new Error("--ws-port must be a valid TCP port.");
+  }
+  if (!Number.isInteger(options.boxsInfoTimeoutMs) ||
+      options.boxsInfoTimeoutMs < 1000 ||
+      options.boxsInfoTimeoutMs > 60000) {
+    throw new Error("--boxsinfo-timeout-ms must be between 1000 and 60000.");
   }
   const command = toNonEmptyString(options.command);
   if (!options.help && !SUPPORTED_SLOT_CONTROL_COMMANDS.has(command)) {
@@ -188,6 +215,60 @@ export function buildK2CfsSlotControlRequest(options) {
       certificationIntentId: `live-certification:${Date.now()}`,
     },
   };
+}
+
+/**
+ * 受信payload内から `boxsInfo` を再帰的に探す。
+ *
+ * 【詳細説明】
+ * - WS9999の応答はroot直下、`result`、`data`、`params`など複数のenvelopeを取り得る。
+ * - CLI certificationではschemaを固定せず、どこに現れたかと値を観測証拠として返す。
+ *
+ * @function findBoxsInfoEvidence
+ * @param {*} value - 探索対象payload
+ * @param {string=} pathPrefix - 再帰探索中のpath
+ * @returns {object|null} `boxsInfo` を含む証拠、無い場合null
+ * @example
+ * const evidence = findBoxsInfoEvidence({ result: { boxsInfo: {} } });
+ */
+export function findBoxsInfoEvidence(value, pathPrefix = "$") {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "boxsInfo")) {
+    return {
+      path: `${pathPrefix}.boxsInfo`,
+      value: value.boxsInfo,
+    };
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const evidence = findBoxsInfoEvidence(child, `${pathPrefix}.${key}`);
+    if (evidence) {
+      return evidence;
+    }
+  }
+  return null;
+}
+
+/**
+ * WebSocket message payloadをJSON候補として解析する。
+ *
+ * 【詳細説明】
+ * - `ws` はBuffer/stringの両方を返し得るため、JSON parse可能なtextだけを採用する。
+ * - parse不能なheartbeat等はprobe応答として扱わず、待機を継続する。
+ *
+ * @private
+ * @param {*} data - WebSocket message data
+ * @returns {object|null} JSON object、またはnull
+ */
+function parseJsonMessage(data) {
+  const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data ?? "");
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -248,6 +329,81 @@ function sendWsFrameAndWait(ws, frame) {
 }
 
 /**
+ * read-only `boxsInfo` probeを送信し、応答を待つ。
+ *
+ * 【詳細説明】
+ * - 送るframeは `get { boxsInfo: 1 }` のみで、CFS操作や印刷開始は含めない。
+ * - listenerをprobeごとに付け外しし、timeout時にも残留listenerを作らない。
+ * - これは実機状態の観測補助であり、command成功証明そのものではない。
+ *
+ * @function sendBoxsInfoProbeAndWait
+ * @param {WebSocket} ws - OPEN済みWebSocket
+ * @param {object=} options - probe option
+ * @param {string=} options.probeMode - `before` または `after` などの観測ラベル
+ * @param {number=} options.timeoutMs - 応答待ちtimeout
+ * @returns {Promise<object>} boxsInfo観測結果
+ * @example
+ * const probe = await sendBoxsInfoProbeAndWait(ws, { probeMode: "before" });
+ */
+export function sendBoxsInfoProbeAndWait(ws, options = {}) {
+  const timeoutMs = options.timeoutMs || DEFAULT_BOXSINFO_TIMEOUT_MS;
+  const probeMode = toNonEmptyString(options.probeMode) || "manual";
+  const request = { method: "get", params: { boxsInfo: 1 } };
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      if (typeof ws.off === "function") {
+        ws.off("message", handleMessage);
+        ws.off("error", handleError);
+      } else if (typeof ws.removeListener === "function") {
+        ws.removeListener("message", handleMessage);
+        ws.removeListener("error", handleError);
+      }
+      clearTimeout(timer);
+    };
+    const settle = (fn, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const handleError = (error) => {
+      settle(reject, error);
+    };
+    const handleMessage = (data) => {
+      const payload = parseJsonMessage(data);
+      const evidence = findBoxsInfoEvidence(payload);
+      if (!evidence) {
+        return;
+      }
+      settle(resolve, {
+        status: "observed",
+        probeMode,
+        elapsedMs: Date.now() - startedAt,
+        request,
+        evidence,
+        payload,
+      });
+    };
+    const timer = setTimeout(() => {
+      settle(reject, new Error(`boxsInfo probe timeout after ${timeoutMs}ms.`));
+    }, timeoutMs);
+    if (typeof ws.on === "function") {
+      ws.on("message", handleMessage);
+      ws.on("error", handleError);
+    }
+    ws.send(JSON.stringify(request), (error) => {
+      if (error) {
+        settle(reject, error);
+      }
+    });
+  });
+}
+
+/**
  * K2/CFS slot control certificationを実行する。
  *
  * 【詳細説明】
@@ -281,15 +437,36 @@ export async function runK2CfsSlotControlCertification(options) {
       dryRun: true,
       request,
       plan,
+      probePlan: {
+        before: Boolean(options.probeBefore),
+        after: Boolean(options.probeAfter),
+        boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
+      },
     };
   }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
   try {
+    const probes = {
+      before: null,
+      after: null,
+    };
+    if (options.probeBefore) {
+      probes.before = await sendBoxsInfoProbeAndWait(ws, {
+        probeMode: "before",
+        timeoutMs: options.boxsInfoTimeoutMs,
+      });
+    }
     const response = await sendK2CfsCommandTransportPlan(plan, async (frame) => {
       return sendWsFrameAndWait(ws, frame);
     }, {
       allowCertificationOnly: true,
     });
+    if (options.probeAfter) {
+      probes.after = await sendBoxsInfoProbeAndWait(ws, {
+        probeMode: "after",
+        timeoutMs: options.boxsInfoTimeoutMs,
+      });
+    }
     return {
       ok: true,
       sent: true,
@@ -297,6 +474,7 @@ export async function runK2CfsSlotControlCertification(options) {
       request,
       plan,
       response,
+      probes,
     };
   } finally {
     ws.close();

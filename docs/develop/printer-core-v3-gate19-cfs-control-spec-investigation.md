@@ -124,6 +124,8 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
+- 同CLIは `--probe-before` / `--probe-after` 指定時だけ、同じWS9999 sessionでread-only `get { boxsInfo: 1 }` を送る。
+  これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
 
 このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
 
