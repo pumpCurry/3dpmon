@@ -113,6 +113,18 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 6. expected stateが確認できない場合は `timeout` または `unconfirmed` とし、成功扱いにしない。
 7. UIはGate 19.5までdisabledのままにし、Gate 19のlive evidenceが揃った操作だけを段階的に有効化する。
 
+## Branch Implementation Cut
+
+`codex/k2-cfs-command-spec-gate19` では、最初の実装cutとして次だけを許可する。
+
+- 通常の `createK2CfsCommandTransportPlan(request)` は、従来どおり `cfs-slot-select` / `cfs-load` / `cfs-unload` / `cfs-feed` / `cfs-retract` を `uncertified-cfs-slot-command` で拒否する。
+- Gate 19 certification用に `allowUncertifiedCfsSlotCommandCandidates:true` を明示した場合だけ、`feedInOrOut` のcandidate planを生成する。
+- candidate planには `certificationOnly:true` と `requiresLiveConfirmation:true` を付け、`productionEnabled:false` をdetailsへ残す。
+- `sendK2CfsCommandTransportPlan()` は、candidate planを `allowCertificationOnly:true` なしでは送信しない。
+- sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
+
+このcutはUI操作有効化ではない。live certification CLIやUI button enableは、レビュワー回答とF012実機captureを待ってから別commitで進める。
+
 ## Required Live Evidence
 
 K2 Pro Combo F012 + CFS-A1 (`192.168.54.153`) で最低限以下を取得する。

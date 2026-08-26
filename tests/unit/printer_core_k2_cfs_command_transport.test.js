@@ -3,15 +3,17 @@
  * @description
  * - K2/CFS print-start が `colorMatch` と `multiColorPrint` の明示frameへ変換されることを検証する。
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
+ * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1388 (PR #432)
+ * @version 1.390.1415 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-26 01:05:00
+ * @lastModified 2026-08-27 05:32:29
  */
 
 import { describe, expect, it, vi } from "vitest";
 import {
   K2_CFS_PRINT_START_TRANSPORT_PROFILE,
+  K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
 } from "../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
@@ -202,6 +204,92 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     expect(plan.frames).toEqual([]);
   });
 
+  it("Gate 19明示opt-in時だけfeedInOrOutのcertification-only planを生成する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+      certificationOnly: true,
+      requiresLiveConfirmation: true,
+      details: {
+        commandKind: "cfs-load",
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        materialId: 2,
+        candidateOperation: "feed-in-or-load",
+        semanticStatus: "uncertified",
+        productionEnabled: false,
+      },
+    });
+    expect(plan.frames).toEqual([
+      {
+        method: "set",
+        params: {
+          feedInOrOut: {
+            boxId: 1,
+            materialId: 2,
+            isFeed: 1,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("Gate 19 certification-only unload/retract候補はisFeed=0としてdry-runできる", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-retract",
+      payload: {
+        materialSourceId: "cfs:3:slot:1",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      certificationOnly: true,
+      details: {
+        commandKind: "cfs-retract",
+        candidateOperation: "feed-out-or-retract",
+        boxId: 3,
+        materialId: 1,
+      },
+    });
+    expect(plan.frames[0].params.feedInOrOut).toEqual({
+      boxId: 3,
+      materialId: 1,
+      isFeed: 0,
+    });
+  });
+
+  it("Gate 19 certification-onlyでも外部スプールや不正sourceは拒否する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "external:0:slot:0",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-control-source-id",
+      details: {
+        sourceKind: "external-spool",
+      },
+    });
+    expect(plan.frames).toEqual([]);
+  });
+
   it("transport planはcolorMatchからmultiColorPrintへ逐次送信する", async () => {
     const plan = createK2CfsCommandTransportPlan(createPrintStartRequest());
     const sendFrame = vi.fn(async (frame, meta) => ({
@@ -278,5 +366,33 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       .rejects
       .toThrow("uncertified-cfs-slot-command");
     expect(sendFrame).not.toHaveBeenCalled();
+  });
+
+  it("certification-only planは明示許可なしでは送信しない", async () => {
+    const sendFrame = vi.fn(async () => ({ status: "submitted" }));
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:0",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    await expect(sendK2CfsCommandTransportPlan(plan, sendFrame))
+      .rejects
+      .toThrow("allowCertificationOnly");
+    expect(sendFrame).not.toHaveBeenCalled();
+
+    const response = await sendK2CfsCommandTransportPlan(plan, sendFrame, {
+      allowCertificationOnly: true,
+    });
+
+    expect(sendFrame).toHaveBeenCalledTimes(1);
+    expect(response).toMatchObject({
+      status: "submitted",
+      profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+      sentFrameCount: 1,
+    });
   });
 });

@@ -11,14 +11,15 @@
  * - Printer Core v3 command request を K2 WS9999 の送信frame候補へ変換
  * - CFS print-start では `colorMatch` と `multiColorPrint` の明示割当だけを扱う
  * - 未certifiedのslot操作や外部スプールfallbackをfail-closedに拒否する
+ * - Gate 19 certification専用に、明示opt-in時だけCFS slot操作候補のdry-run planを生成する
  *
  * 【公開関数一覧】
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1388 (PR #432)
+ * @version 1.390.1415 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-26 01:05:00
+ * @lastModified 2026-08-27 05:32:29
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -46,6 +47,17 @@ export const K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION = 1;
  * @constant {string}
  */
 export const K2_CFS_PRINT_START_TRANSPORT_PROFILE = "k2-ws9999-color-match-multicolor-v1";
+
+/**
+ * K2/CFS slot操作候補で採用するWS9999 transport profile名。
+ *
+ * 【詳細説明】
+ * - CrealityPrint device UI bundleで観測した `feedInOrOut` 形を、Gate 19のdry-run/live certification候補として扱う。
+ * - まだproduction authorityではないため、通常のtransport plan生成ではこのprofileを返さない。
+ *
+ * @constant {string}
+ */
+export const K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE = "k2-ws9999-feed-in-or-out-candidate-v1";
 
 /**
  * frame送信hookが「ローカル送信またはprotocol受理」として扱えるstatus。
@@ -97,6 +109,48 @@ const UNCERTIFIED_CFS_SLOT_COMMAND_KINDS = Object.freeze(new Set([
   "cfs-feed",
   "cfs-retract",
 ]));
+
+/**
+ * 未certified CFS slot commandを `feedInOrOut` 候補へ写す定義。
+ *
+ * 【詳細説明】
+ * - `isFeed:1` と `isFeed:0` の物理意味はGate 19 live captureで確定する。
+ * - UI表示語としてのFeed/RetractとCFS装填語としてのLoad/Unloadは同一視しない。
+ *
+ * @constant {Object<string, object>}
+ */
+const CFS_SLOT_CONTROL_CANDIDATE_DEFINITIONS = Object.freeze({
+  "cfs-slot-select": Object.freeze({
+    isFeed: 1,
+    candidateOperation: "feed-in-or-select",
+    expectedObservation: "selected-source-may-change",
+    semanticStatus: "uncertified",
+  }),
+  "cfs-load": Object.freeze({
+    isFeed: 1,
+    candidateOperation: "feed-in-or-load",
+    expectedObservation: "selected-source-or-feed-state-may-change",
+    semanticStatus: "uncertified",
+  }),
+  "cfs-unload": Object.freeze({
+    isFeed: 0,
+    candidateOperation: "feed-out-or-unload",
+    expectedObservation: "selected-source-or-feed-state-may-change",
+    semanticStatus: "uncertified",
+  }),
+  "cfs-feed": Object.freeze({
+    isFeed: 1,
+    candidateOperation: "feed-in",
+    expectedObservation: "physical-feed-state-may-change",
+    semanticStatus: "uncertified",
+  }),
+  "cfs-retract": Object.freeze({
+    isFeed: 0,
+    candidateOperation: "feed-out-or-retract",
+    expectedObservation: "physical-feed-state-may-change",
+    semanticStatus: "uncertified",
+  }),
+});
 
 /**
  * 任意値を空でない文字列へ正規化する。
@@ -465,24 +519,95 @@ function createK2CfsPrintStartPlan(request) {
 }
 
 /**
+ * K2/CFS slot操作候補用のcertification-only transport frame列を生成する。
+ *
+ * 【詳細説明】
+ * - このplanはGate 19のdry-run/live certification専用で、production UI操作には使わない。
+ * - `feedInOrOut` は公開CrealityPrint device UI bundleから得た候補であり、F012実機captureで意味を確定するまで
+ *   `certificationOnly:true` と `requiresLiveConfirmation:true` を必ず付ける。
+ * - source locationはNormalizedStateのsourceIdだけから決め、caller supplied boxId/materialIdを採用しない。
+ *
+ * @private
+ * @param {object} request - Printer Core command request
+ * @param {string} commandKind - 正規化済みcommand kind
+ * @returns {object} certification-only transport plan
+ */
+function createK2CfsSlotControlCertificationPlan(request, commandKind) {
+  const definition = CFS_SLOT_CONTROL_CANDIDATE_DEFINITIONS[commandKind];
+  if (!definition) {
+    return createRejectedTransportPlan("unsupported-cfs-slot-control-candidate", { commandKind });
+  }
+  const payload = request?.payload && typeof request.payload === "object" ? request.payload : {};
+  const sourceId = toNonEmptyString(payload.sourceId || payload.materialSourceId || payload.source?.sourceId);
+  const location = parseMaterialSourceLocation(sourceId);
+  if (location.kind !== "cfs-slot") {
+    return createRejectedTransportPlan("invalid-cfs-control-source-id", {
+      commandKind,
+      sourceId,
+      sourceKind: location.kind,
+    });
+  }
+  return {
+    schemaVersion: K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION,
+    ok: true,
+    reason: null,
+    transportKind: "ws9999",
+    profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+    certificationOnly: true,
+    requiresLiveConfirmation: true,
+    frames: [
+      {
+        method: "set",
+        params: {
+          feedInOrOut: {
+            boxId: location.boxId,
+            materialId: location.materialId,
+            isFeed: definition.isFeed,
+          },
+        },
+      },
+    ],
+    details: {
+      commandKind,
+      sourceId,
+      sourceKind: location.kind,
+      boxId: location.boxId,
+      materialId: location.materialId,
+      candidateOperation: definition.candidateOperation,
+      expectedObservation: definition.expectedObservation,
+      semanticStatus: definition.semanticStatus,
+      safetyBoundary: "certification-only",
+      productionEnabled: false,
+    },
+  };
+}
+
+/**
  * Printer Core command request から K2/CFS transport plan を生成する。
  *
  * 【詳細説明】
  * - `print-start` 以外のCFS操作は、LAN command keyが未certifiedなので拒否する。
  * - `print-start` でもCFS明示割当が足りない場合は拒否する。
+ * - Gate 19のcertificationでは、`allowUncertifiedCfsSlotCommandCandidates:true` を明示した場合だけ
+ *   `feedInOrOut` 候補planを返す。通常callerはこのoptionを渡さない。
  *
  * @function createK2CfsCommandTransportPlan
  * @param {object|null|undefined} request - Printer Core command request
+ * @param {object=} options - transport plan生成option
+ * @param {boolean=} options.allowUncertifiedCfsSlotCommandCandidates - 未certified slot操作候補のdry-run生成可否
  * @returns {object} K2/CFS transport plan
  * @example
  * const plan = createK2CfsCommandTransportPlan(request);
  */
-export function createK2CfsCommandTransportPlan(request) {
+export function createK2CfsCommandTransportPlan(request, options = {}) {
   const commandKind = toNonEmptyString(request?.commandKind);
   if (!commandKind) {
     return createRejectedTransportPlan("missing-command-kind");
   }
   if (UNCERTIFIED_CFS_SLOT_COMMAND_KINDS.has(commandKind)) {
+    if (options?.allowUncertifiedCfsSlotCommandCandidates === true) {
+      return createK2CfsSlotControlCertificationPlan(request, commandKind);
+    }
     return createRejectedTransportPlan("uncertified-cfs-slot-command", { commandKind });
   }
   if (commandKind !== "print-start") {
@@ -501,14 +626,19 @@ export function createK2CfsCommandTransportPlan(request) {
  * @function sendK2CfsCommandTransportPlan
  * @param {object} plan - {@link createK2CfsCommandTransportPlan} の戻り値
  * @param {Function} sendFrame - frame送信hook
+ * @param {object=} options - 送信option
+ * @param {boolean=} options.allowCertificationOnly - certification-only planの送信可否
  * @returns {Promise<object>} transport response summary
  * @throws {Error} plan不正またはsend hook不正の場合
  * @example
  * await sendK2CfsCommandTransportPlan(plan, (frame) => sendCommand(frame.method, frame.params, host));
  */
-export async function sendK2CfsCommandTransportPlan(plan, sendFrame) {
+export async function sendK2CfsCommandTransportPlan(plan, sendFrame, options = {}) {
   if (!plan?.ok) {
     throw new Error(`K2 CFS command transport plan rejected: ${plan?.reason || "unknown"}`);
+  }
+  if (plan.certificationOnly === true && options?.allowCertificationOnly !== true) {
+    throw new Error("K2 CFS certification-only transport plan requires allowCertificationOnly.");
   }
   if (typeof sendFrame !== "function") {
     throw new TypeError("K2 CFS command transport requires a sendFrame hook.");
