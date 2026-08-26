@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1409 (PR #434)
+* @version 1.390.1411 (PR #434)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 16:42:18
+* @lastModified 2026-08-26 17:18:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -80,12 +80,17 @@ import {
 import { createMaterialTopologyViewModel } from "./printer_core/dashboard_material_topology_view_model.js";
 import {
   createK2CfsCommandTransportPlan,
+  K2_CFS_PRINT_START_TRANSPORT_PROFILE,
   sendK2CfsCommandTransportPlan
 } from "./printer_core/dashboard_k2_cfs_command_transport.js";
 import {
   createBoundPrinterCommandDispatcher,
   createPrinterCommandRequest
 } from "./printer_core/dashboard_command_authority.js";
+import {
+  mergeCapabilitySets,
+  PRINTER_CAPABILITIES
+} from "./printer_core/dashboard_capabilities.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -1182,12 +1187,80 @@ function createK2CfsPrintSendTimeMaterialTopology(hostname, shadowRecord) {
       boxId: row.boxId,
       slotId: row.protocolSlotId,
       presence: row.presence,
+      material: {
+        type: row.material?.type ?? null,
+        name: row.material?.name ?? null,
+        color: row.material?.color || null,
+      },
     }));
   return {
     cfsConnected: displayTopology.cfs?.connected === true,
     topologyState: displayTopology.cfs?.topologyState || "unobserved",
     sourceCount: sources.length,
     sources,
+  };
+}
+
+/**
+ * K2/CFS print-start transport profile を現在の観測証拠から認定する。
+ *
+ * 【詳細説明】
+ * - command capability はprinterTypeだけから固定発行せず、現在sessionのNormalizedStateと
+ *   実機certified済みprofileの一致を確認してから付与する。
+ * - 現公開候補では F012 / K2 Pro 系のWS9999 `colorMatch` -> `multiColorPrint` profileだけを認める。
+ *
+ * @private
+ * @param {object|null|undefined} shadowRecord - runtimeData.printerCoreV3Shadow record
+ * @param {object} materialTopology - send-time material topology
+ * @returns {boolean} 現在sessionでK2/CFS print-startを送信してよいprofileならtrue
+ */
+function isK2CfsPrintStartTransportProfileCertified(shadowRecord, materialTopology) {
+  const state = shadowRecord?.lastState || null;
+  const reportedModel = String(state?.identity?.reportedModel || "").trim().toUpperCase();
+  const reportedHostname = String(state?.identity?.reportedHostname || "").trim().toUpperCase();
+  const deviceId = String(shadowRecord?.deviceId || state?.identity?.deviceId || "").trim().toLowerCase();
+  const hasCertifiedModel = reportedModel === "F012" ||
+    reportedModel.includes("K2 PRO") ||
+    reportedHostname.startsWith("K2PRO") ||
+    deviceId.includes("k2-pro");
+  return Boolean(
+    hasCertifiedModel &&
+    shadowRecord?.state !== "closed" &&
+    materialTopology?.cfsConnected === true &&
+    materialTopology?.topologyState === "fresh" &&
+    Array.isArray(materialTopology.sources) &&
+    materialTopology.sources.some((source) => source.kind === "cfs-slot")
+  );
+}
+
+/**
+ * K2/CFS print-startのsend-time capability setを作る。
+ *
+ * 【詳細説明】
+ * - Adapterが観測したcapabilityを基礎にし、certified transport profileが現在証拠に一致した場合だけ
+ *   `command.print-start` を追加する。
+ * - profile名はcontext内の監査証拠として残し、後続レビューで「どのtransport契約を許可したか」を確認できる。
+ *
+ * @private
+ * @param {object|null|undefined} shadowRecord - runtimeData.printerCoreV3Shadow record
+ * @param {object} materialTopology - send-time material topology
+ * @returns {{capabilities:string[], transportProfiles:string[]}} capability と認定profile
+ */
+function createK2CfsPrintSendTimeCapabilities(shadowRecord, materialTopology) {
+  const observedCapabilities = shadowRecord?.lastState?.capabilities || [];
+  const transportProfiles = [];
+  let capabilities = mergeCapabilitySets(observedCapabilities).values;
+  if (isK2CfsPrintStartTransportProfileCertified(shadowRecord, materialTopology)) {
+    transportProfiles.push(K2_CFS_PRINT_START_TRANSPORT_PROFILE);
+    capabilities = mergeCapabilitySets(capabilities, [
+      PRINTER_CAPABILITIES.COMMAND_PRINT_START,
+      PRINTER_CAPABILITIES.MATERIAL_CFS,
+      PRINTER_CAPABILITIES.MATERIAL_CFS_TOPOLOGY,
+    ]).values;
+  }
+  return {
+    capabilities,
+    transportProfiles,
   };
 }
 
@@ -1214,12 +1287,14 @@ function createK2CfsPrintSendTimeContext(hostname, request) {
     uploadGeneration: "",
   };
   const materialTopology = createK2CfsPrintSendTimeMaterialTopology(hostname, shadowRecord);
+  const sendTimeCapabilities = createK2CfsPrintSendTimeCapabilities(shadowRecord, materialTopology);
   return {
     deviceId: shadowRecord?.deviceId || "",
     sessionId: shadowRecord?.sessionId || "",
     transportKind: "ws9999",
     active: getConnectionState(hostname) === "connected" && shadowRecord?.state !== "closed",
-    capabilities: ["command.print-start", "material.cfs", "material.cfsTopology"],
+    capabilities: sendTimeCapabilities.capabilities,
+    transportProfiles: sendTimeCapabilities.transportProfiles,
     materialTopology,
     uploadGeneration: fileIdentity.uploadGeneration,
     fileIdentity: {

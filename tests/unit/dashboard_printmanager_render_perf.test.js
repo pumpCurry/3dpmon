@@ -16,9 +16,9 @@
  *         リスナは 1 本のみ＝二重バインドしない）
  *   (C) 委譲ディスパッチが正しい行データで該当ハンドラへ届く
  *
- * @version 1.390.1409 (PR #434)
+ * @version 1.390.1411 (PR #434)
  * @since   1.390.1365 (PR #432)
- * @lastModified 2026-08-26 16:42:18
+ * @lastModified 2026-08-26 17:18:47
  *
  * @vitest-environment jsdom
  */
@@ -223,6 +223,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
+            identity: { reportedModel: "F012", reportedHostname: "K2Pro-69E7" },
             materials: {
               cfs: { connected: true, enabled: true, topologyState: "fresh" },
               provider: { lastObservedAt: nowIso },
@@ -313,6 +314,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
+            identity: { reportedModel: "F012", reportedHostname: "K2Pro-69E7" },
             materials: {
               cfs: { connected: true, enabled: true, topologyState: "fresh" },
               provider: { lastObservedAt: nowIso },
@@ -451,6 +453,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
+            identity: { reportedModel: "F012", reportedHostname: "K2Pro-69E7" },
             materials: {
               cfs: { connected: true, enabled: true, topologyState: "fresh" },
               provider: { lastObservedAt: nowIso },
@@ -505,6 +508,210 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     });
   });
 
+  it("K2/CFSファイル印刷はsend-timeで未認定profileなら送信しない", async () => {
+    table = makeTable("file-list-table");
+    scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
+    const nowIso = new Date().toISOString();
+    spoolMod.getCurrentSpool.mockReturnValue(null);
+    connectionMod.getPrinterType.mockReturnValue("creality-k2");
+    connectionMod.getConnectionTarget.mockReturnValue({
+      hostname: HOST,
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        displayMode: "auto",
+        unitLimit: 1,
+        slotsPerUnit: 4,
+        externalSourceLimit: 1,
+      },
+    });
+    confirmMod.showConfirmDialog.mockResolvedValueOnce(true);
+    monitorData.machines[HOST] = {
+      _cachedFileInfo: {
+        entries: [{
+          filename: "/mnt/UDISK/printer_data/gcodes/uncertified.gcode",
+          size: 1234,
+          filemd5: "md5:uncertified",
+          mtime: new Date(1700000000000),
+          sourceProtocol: "retGcodeFileInfo2",
+        }],
+      },
+      runtimeData: {
+        printerCoreV3Shadow: {
+          state: "observed",
+          deviceId: "serial:unknown-k2",
+          sessionId: "session:unknown-k2:1",
+          lastSequence: 44,
+          lastObservedAt: nowIso,
+          materialProviderLastObservedAt: nowIso,
+          lastState: {
+            identity: { reportedModel: "F999", reportedHostname: "K2Variant" },
+            materials: {
+              cfs: { connected: true, enabled: true, topologyState: "fresh" },
+              provider: { lastObservedAt: nowIso },
+              units: [{ unitId: "cfs:1", boxId: 1, observedSlotCount: 4 }],
+              sources: [{
+                sourceId: "cfs:1:slot:0",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 0,
+                material: {
+                  type: "PLA",
+                  name: "White PLA",
+                  color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
+                },
+                status: { stateCode: 1, selected: true },
+              }],
+              assignments: [],
+            },
+          },
+        },
+      },
+    };
+
+    renderFileList({
+      totalNum: 1,
+      entries: [{
+        number: 1,
+        filename: "/mnt/UDISK/printer_data/gcodes/uncertified.gcode",
+        basename: "uncertified.gcode",
+        thumbUrl: "",
+        layer: 10,
+        size: 1234,
+        filemd5: "md5:uncertified",
+        mtime: new Date(),
+        expect: 200,
+        printCount: 0,
+        material: "PLA",
+        materialColors: "#ffffff",
+        match: "T1A=T1A ",
+        sourceProtocol: "retGcodeFileInfo2",
+      }],
+    }, "http://127.0.0.1", HOST);
+    const btn = table.querySelector("tbody tr.file-row .cmd-print");
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await flushAsyncPrintClick();
+
+    expect(connectionMod.sendCommand).not.toHaveBeenCalled();
+    expect(confirmMod.showConfirmDialog.mock.calls.at(-1)?.[0]).toMatchObject({
+      title: "CFS印刷開始失敗",
+      message: expect.stringContaining("missing-capability:command.print-start"),
+    });
+  });
+
+  it("K2/CFSファイル印刷は確認後に同じslotの材料type/colorが変わったら送信しない", async () => {
+    table = makeTable("file-list-table");
+    scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
+    const nowIso = new Date().toISOString();
+    spoolMod.getCurrentSpool.mockReturnValue(null);
+    connectionMod.getPrinterType.mockReturnValue("creality-k2");
+    connectionMod.getConnectionTarget.mockReturnValue({
+      hostname: HOST,
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        displayMode: "auto",
+        unitLimit: 1,
+        slotsPerUnit: 4,
+        externalSourceLimit: 1,
+      },
+    });
+    confirmMod.showConfirmDialog.mockImplementationOnce(async () => {
+      const source = monitorData.machines[HOST].runtimeData.printerCoreV3Shadow.lastState.materials.sources[0];
+      source.material = {
+        type: "ABS",
+        name: "Red ABS",
+        color: { raw: "#ff0000", normalized: "ff0000", displayHex: "ff0000" },
+      };
+      source.status = { stateCode: 1, selected: true };
+      monitorData.machines[HOST].runtimeData.printerCoreV3Shadow.materialProviderLastObservedAt = new Date().toISOString();
+      monitorData.machines[HOST].runtimeData.printerCoreV3Shadow.lastState.materials.provider.lastObservedAt = new Date().toISOString();
+      return true;
+    });
+    monitorData.machines[HOST] = {
+      _cachedFileInfo: {
+        entries: [{
+          filename: "/mnt/UDISK/printer_data/gcodes/material-drift.gcode",
+          size: 1234,
+          filemd5: "md5:material-drift",
+          mtime: new Date(1700000000000),
+          sourceProtocol: "retGcodeFileInfo2",
+        }],
+      },
+      runtimeData: {
+        printerCoreV3Shadow: {
+          state: "observed",
+          deviceId: "serial:k2-pro-69e7",
+          sessionId: "session:k2-pro-69e7:1",
+          lastSequence: 44,
+          lastObservedAt: nowIso,
+          materialProviderLastObservedAt: nowIso,
+          lastState: {
+            identity: { reportedModel: "F012", reportedHostname: "K2Pro-69E7" },
+            materials: {
+              cfs: { connected: true, enabled: true, topologyState: "fresh" },
+              provider: { lastObservedAt: nowIso },
+              units: [{ unitId: "cfs:1", boxId: 1, observedSlotCount: 4 }],
+              sources: [{
+                sourceId: "cfs:1:slot:1",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 1,
+                material: {
+                  type: "PLA",
+                  name: "Green PLA",
+                  color: { raw: "#072a530", normalized: "72a530", displayHex: "72a530" },
+                },
+                status: { stateCode: 1, selected: true },
+              }],
+              assignments: [
+                {
+                  assignmentId: "T1B",
+                  namespace: "creality-color-match",
+                  sourceId: "cfs:1:slot:1",
+                  resolution: "resolved",
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    renderFileList({
+      totalNum: 1,
+      entries: [{
+        number: 1,
+        filename: "/mnt/UDISK/printer_data/gcodes/material-drift.gcode",
+        basename: "material-drift.gcode",
+        thumbUrl: "",
+        layer: 10,
+        size: 1234,
+        filemd5: "md5:material-drift",
+        mtime: new Date(),
+        expect: 200,
+        printCount: 0,
+        material: "PLA",
+        materialColors: "#72a530",
+        match: "T1A=T1B ",
+        sourceProtocol: "retGcodeFileInfo2",
+      }],
+    }, "http://127.0.0.1", HOST);
+    const btn = table.querySelector("tbody tr.file-row .cmd-print");
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await flushAsyncPrintClick();
+
+    expect(connectionMod.sendCommand).not.toHaveBeenCalled();
+    expect(confirmMod.showConfirmDialog.mock.calls.at(-1)?.[0]).toMatchObject({
+      title: "CFS印刷開始失敗",
+      message: expect.stringContaining("print-start-material-type-mismatch:cfs:1:slot:1"),
+    });
+    expect(confirmMod.showConfirmDialog.mock.calls.at(-1)?.[0].message)
+      .toContain("print-start-material-color-mismatch:cfs:1:slot:1");
+  });
+
   it("K2/CFSがstaleなら印刷開始frameを送らない", async () => {
     table = makeTable("file-list-table");
     scopedById.mockImplementation((id) => (id === "file-list-table" ? table : null));
@@ -533,6 +740,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
+            identity: { reportedModel: "F012", reportedHostname: "K2Pro-69E7" },
             materials: {
               cfs: { connected: true, enabled: true, topologyState: "fresh" },
               provider: { lastObservedAt: nowIso },
@@ -608,6 +816,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
           lastState: {
+            identity: { reportedModel: "F012", reportedHostname: "K2Pro-69E7" },
             materials: {
               cfs: { connected: true, enabled: true, topologyState: "fresh" },
               provider: { lastObservedAt: nowIso },

@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1409 (PR #434)
+ * @version 1.390.1411 (PR #434)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-26 16:42:18
+ * @lastModified 2026-08-26 17:18:47
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -908,6 +908,69 @@ describe("Printer Core v3 command authority contract", () => {
     expect(unloadedSendTransport).not.toHaveBeenCalled();
     expect(readyResult.status).toBe("acknowledged");
     expect(readySendTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("print-startは同じsourceIdでも送信直前の材料type/colorが変わっていたら拒否する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("print-start"),
+      payload: {
+        asset: {
+          path: "printprt:/usr/data/benchy.gcode",
+          fileHash: "sha256:benchy",
+        },
+        materialSourceIds: ["cfs:1:slot:2"],
+        toolAssignments: [{
+          toolId: 0,
+          protocolToolAlias: "T1A",
+          materialSourceId: "cfs:1:slot:2",
+          protocol: {
+            type: "PLA",
+            color: "72a530",
+          },
+        }],
+        startContext: {
+          uploadGeneration: "upload:42",
+        },
+      },
+      expectedState: {
+        path: "print.stateLabel",
+        operator: "oneOf",
+        expected: ["printing", "checking"],
+      },
+    });
+    const driftSnapshot = createBaseSendTimeSnapshot({
+      capabilities: ["command.print-start"],
+      uploadGeneration: "upload:42",
+      fileIdentity: {
+        remotePath: "printprt:/usr/data/benchy.gcode",
+        fileHash: "sha256:benchy",
+      },
+      materialTopology: {
+        cfsConnected: true,
+        topologyState: "fresh",
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          slotId: 2,
+          presence: "loaded",
+          material: {
+            type: "ABS",
+            color: { raw: "#ff0000", normalized: "ff0000" },
+          },
+        }],
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => driftSnapshot,
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("print-start-material-type-mismatch:cfs:1:slot:2");
+    expect(result.error.errors).toContain("print-start-material-color-mismatch:cfs:1:slot:2");
+    expect(sendTransport).not.toHaveBeenCalled();
   });
 
   it("transport例外はtransport-errorとして返しside-effect commandをblind retryしない", async () => {

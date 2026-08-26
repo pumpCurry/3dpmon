@@ -19,9 +19,9 @@
  * - {@link inferK1Capabilities}：K1 系 payload から capability set を推定
  * - {@link inferK2Capabilities}：K2 系 payload から capability set を推定
  *
- * @version 1.390.1312 (PR #432)
+ * @version 1.390.1411 (PR #434)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-08 07:32:05
+ * @lastModified 2026-08-26 17:18:47
  * -----------------------------------------------------------
  * @todo
  * - CFS-C 実機 fixture 取得後に CFS-C 固有 capability を追加する
@@ -51,6 +51,7 @@ export const PRINTER_CAPABILITY_SCHEMA_VERSION = 1;
 export const PRINTER_CAPABILITIES = Object.freeze({
   CAMERA_MJPEG: "camera.mjpeg",
   CAMERA_WEBRTC: "camera.webrtc",
+  COMMAND_PRINT_START: "command.print-start",
   COMMAND_LED: "command.led",
   MATERIAL_CFS: "material.cfs",
   MATERIAL_CFS_TOPOLOGY: "material.cfsTopology",

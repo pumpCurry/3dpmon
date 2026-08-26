@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1409 (PR #434)
+ * @version 1.390.1411 (PR #434)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-26 16:42:18
+ * @lastModified 2026-08-26 17:18:47
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -425,7 +425,14 @@ function createCommandDispatchContextSignature(context) {
       context.materialTopology?.cfsConnected === true ? "cfs-connected" : "cfs-not-connected",
       context.materialTopology?.topologyState || "",
       (context.materialTopology?.sources || [])
-        .map((source) => [source.sourceId, source.kind, source.boxId ?? "", source.slotId ?? ""].join(":"))
+        .map((source) => [
+          source.sourceId,
+          source.kind,
+          source.boxId ?? "",
+          source.slotId ?? "",
+          source.material?.type ?? "",
+          source.material?.color ?? "",
+        ].join(":"))
         .join(","),
       context.uploadGeneration || "",
       context.fileIdentity?.remotePath || "",
@@ -690,7 +697,27 @@ function normalizeMaterialTopologySources(sources) {
     boxId: normalizeSequence(source?.boxId),
     slotId: normalizeSequence(source?.slotId ?? source?.protocolSlotId),
     presence: normalizeMaterialSourcePresence(source),
+    material: normalizeMaterialSourceEvidence(source?.material),
   })).filter((source) => source.sourceId);
+}
+
+/**
+ * material source の材料証拠をsend-time照合用へ正規化する。
+ *
+ * 【詳細説明】
+ * - sourceIdはCFSの物理locationなので、slot内の材料が入れ替わっても変わらない。
+ * - そのためtype/colorをcontextへ残し、request作成時の割当と送信直前の現在値を照合できるようにする。
+ *
+ * @private
+ * @param {object|null|undefined} material - material evidence
+ * @returns {{type:string|null,color:string|null}} 正規化済み材料証拠
+ */
+function normalizeMaterialSourceEvidence(material) {
+  const safeMaterial = material && typeof material === "object" ? material : {};
+  return {
+    type: normalizeMaterialTypeEvidence(safeMaterial.type),
+    color: normalizeMaterialColorEvidence(safeMaterial.color),
+  };
 }
 
 /**
@@ -728,6 +755,71 @@ function normalizeMaterialSourcePresence(source) {
     return "unknown";
   }
   return "loaded";
+}
+
+/**
+ * material type を比較用へ正規化する。
+ *
+ * 【詳細説明】
+ * - firmware / slicer 間で大文字小文字の揺れがあっても同一材料として扱う。
+ *
+ * @private
+ * @param {*} value - material type 候補
+ * @returns {string|null} 比較用material type
+ */
+function normalizeMaterialTypeEvidence(value) {
+  const text = String(value ?? "").trim();
+  return text ? text.toUpperCase() : null;
+}
+
+/**
+ * material color を比較用へ正規化する。
+ *
+ * 【詳細説明】
+ * - K2実機は `#0ffffff` のような7桁HEX風のraw値を返すことがあるため、
+ *   先頭の `#` とCreality由来の余分な先頭0を除いて6桁HEXへ寄せる。
+ *
+ * @private
+ * @param {*} value - color 候補
+ * @returns {string|null} 比較用color
+ */
+function normalizeMaterialColorEvidence(value) {
+  const rawValue = value && typeof value === "object"
+    ? (value.normalized ?? value.displayHex ?? value.raw)
+    : value;
+  const text = String(rawValue ?? "").trim().replace(/^#/u, "").toLowerCase();
+  if (!text) {
+    return null;
+  }
+  if (/^0[0-9a-f]{6}$/u.test(text)) {
+    return text.slice(1);
+  }
+  return text;
+}
+
+/**
+ * tool assignment の材料protocol証拠を比較用へ正規化する。
+ *
+ * 【詳細説明】
+ * - request payload内の `protocol` と `material` の両方を候補にし、
+ *   transportへ渡す予定のtype/colorが現在sourceと一致するか確認する。
+ *
+ * @private
+ * @param {object|null|undefined} assignment - tool assignment
+ * @returns {{type:string|null,color:string|null}} 比較用材料証拠
+ */
+function normalizeToolAssignmentMaterialEvidence(assignment) {
+  return {
+    type: normalizeMaterialTypeEvidence(
+      assignment?.protocol?.materialType ??
+      assignment?.protocol?.type ??
+      assignment?.material?.type
+    ),
+    color: normalizeMaterialColorEvidence(
+      assignment?.protocol?.color ??
+      assignment?.material?.color
+    ),
+  };
 }
 
 /**
@@ -783,6 +875,25 @@ function collectPrintStartSendTimeErrors(request, context) {
         errors.push(`print-start-material-source-not-cfs-slot:${sourceId}`);
       } else if (currentSource.presence !== "loaded") {
         errors.push(`print-start-material-source-not-loaded:${sourceId}`);
+      }
+    }
+    const assignments = Array.isArray(request.payload?.toolAssignments) ? request.payload.toolAssignments : [];
+    for (const assignment of assignments) {
+      const sourceId = String(assignment?.materialSourceId || "").trim();
+      if (!sourceId) {
+        continue;
+      }
+      const currentSource = currentSources.find((source) => source.sourceId === sourceId);
+      if (!currentSource) {
+        continue;
+      }
+      const requestMaterial = normalizeToolAssignmentMaterialEvidence(assignment);
+      const currentMaterial = normalizeMaterialSourceEvidence(currentSource.material);
+      if (!requestMaterial.type || !currentMaterial.type || requestMaterial.type !== currentMaterial.type) {
+        errors.push(`print-start-material-type-mismatch:${sourceId}`);
+      }
+      if (!requestMaterial.color || !currentMaterial.color || requestMaterial.color !== currentMaterial.color) {
+        errors.push(`print-start-material-color-mismatch:${sourceId}`);
       }
     }
   }
