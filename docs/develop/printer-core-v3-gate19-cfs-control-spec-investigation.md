@@ -122,8 +122,10 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - candidate planには `certificationOnly:true` と `requiresLiveConfirmation:true` を付け、`productionEnabled:false` をdetailsへ残す。
 - `sendK2CfsCommandTransportPlan()` は、candidate planを `allowCertificationOnly:true` なしでは送信しない。
 - sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
+- `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
+  `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
 
-このcutはUI操作有効化ではない。live certification CLIやUI button enableは、レビュワー回答とF012実機captureを待ってから別commitで進める。
+このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
 
 ## Required Live Evidence
 
