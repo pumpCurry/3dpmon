@@ -131,6 +131,52 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 
 ## Required Live Evidence
 
+### Slot Control Certification Runbook
+
+F012 K2 Pro Combo実機では、live操作前に必ず現在のread-only topologyを取得する。2026-08-27時点の観測では、
+`192.168.54.153` は `/info.model = F012`、CFS box `id=1/type=0`、外部box `id=0/type=1` を返し、
+slot `1A/1B/1C` が装填済み、`1A` がselected、`colorMatch` は `T1A -> boxId:1/materialId:0` だった。
+
+live certificationは次の順で進める。
+
+1. dry-runで送信frameを確認する。
+
+   ```bash
+   node scripts/capture_k2_cfs_slot_control.mjs \
+     --command cfs-load \
+     --source cfs:1:slot:0 \
+     --probe-before \
+     --probe-after \
+     --pretty
+   ```
+
+2. read-only `boxsInfo` を別途確認し、対象sourceが現在もfresh/loadedであることを確認する。
+
+3. 最初のlive候補は、すでにselectedなsource（例: `cfs:1:slot:0`）だけに限定する。
+   これは「別slotへ切り替える」前に、`feedInOrOut` がF012で受理されるか、前後probeが取れるかを確認する段階である。
+
+   ```bash
+   node scripts/capture_k2_cfs_slot_control.mjs \
+     --host 192.168.54.153 \
+     --command cfs-load \
+     --source cfs:1:slot:0 \
+     --send \
+     --confirm-live \
+     --confirm-host 192.168.54.153 \
+     --confirm-command cfs-load \
+     --probe-before \
+     --probe-after \
+     --pretty
+   ```
+
+4. 1回のlive送信ごとに停止して、人間の目視、CFS本体状態、前後`boxsInfo`の差分を確認する。
+   side-effect commandなので、timeoutや不明応答時に同じcommandを自動再送してはならない。
+
+5. selected source変更、load/unload/feed/retractの意味確定は、レビュワーPASSと上記1回目の成功後に別stepとして扱う。
+
+このrunbookはcertification専用であり、UI操作有効化条件ではない。UIに開くには、少なくとも command kindごとの実機意味、
+expected-state条件、timeout時の表示、stale時disable、send-time capability revalidation が揃っている必要がある。
+
 K2 Pro Combo F012 + CFS-A1 (`192.168.54.153`) で最低限以下を取得する。
 
 - `feedInOrOut.isFeed=1` をCFS 1A/1B/1Cのいずれかへ送った場合、該当slotの `selected`、CFS feed状態、物理ロードがどう変化するか。
