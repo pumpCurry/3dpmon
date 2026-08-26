@@ -126,6 +126,17 @@ Result: PASS.
 This behavior matches the stale/fresh safety contract: restored last-known CFS
 data is not shown as current until a new topology observation arrives.
 
+Non-RFID filament observation:
+
+- Third-party filament can be loaded without RFID-backed remaining data.
+- In that case the printer reports material usage during/after the print, but it
+  does not provide an authoritative spool remaining value for 3DPmon to display.
+- 3DPmon must therefore treat CFS slot `percent` as device observation only and
+  map non-RFID CFS slots to the same app-owned spool ledger model used for K1
+  remaining management before release-level material accounting can be certified.
+- This is a ledger/assignment authority task rather than a K2 read-only camera or
+  print-start blocker.
+
 ## K2 WebRTC Camera
 
 Result: PASS.
@@ -135,6 +146,10 @@ Result: PASS.
 - The built app displayed a WebRTC `<video>` stream for `K2Pro-69E7`.
 - Observed app video dimensions: `1280 x 720`.
 - Observed app video state: `readyState = 4`, playing, display `inline`.
+- Manual UI inspection confirmed that the stream connected, but also found that
+  the initial WebRTC `<video>` element rendered at native pixel size inside the
+  camera card. The CSS was updated after the run so WebRTC video uses the same
+  card-bounded `object-fit: contain` behavior as the MJPEG image path.
 
 The K2 camera path uses `http://<host>:8000/call/webrtc_local`; `/info`
 `videoPort:443` remains identity/firmware evidence and was not needed for the

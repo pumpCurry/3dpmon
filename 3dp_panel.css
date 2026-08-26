@@ -1702,7 +1702,8 @@ body.panel-mode .notification-container {
    元CSSの #camera-feed { object-fit: cover } はIDセレクタで詳細度が高いため
    !important で確実に上書きする。
    display も元CSSの #camera-feed.off { display:none!important } を打ち消す。 */
-.panel-wrapper[data-panel-type="camera"] .camera-wrapper > img {
+.panel-wrapper[data-panel-type="camera"] .camera-wrapper > img,
+.panel-wrapper[data-panel-type="camera"] .camera-wrapper > video.camera-webrtc-stream {
   position: absolute !important;
   top: 0 !important;
   left: 0 !important;
