@@ -111,11 +111,12 @@ export const MATERIAL_EXTERNAL_SOURCE_LIMIT = 1;
  *
  * 【詳細説明】
  * - CFS/CFS-Cの装填/選択/残量は人間が監視する情報なので、通信停止後もfresh表示のまま残すと
- *   「現在選択中」と誤読される。45秒を超えた観測値は表示側でstaleへ落とす。
+ *   「現在選択中」と誤読される。K2のboxsInfo probeは30秒周期のため、1回分の遅延を吸収できる
+ *   90秒を超えた観測値は表示側でstaleへ落とす。
  *
  * @constant {number}
  */
-export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 45_000;
+export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 90_000;
 
 /**
  * 配列内の許可値に一致する文字列だけを返す。
@@ -191,31 +192,6 @@ function countObservedMaterialUnits(topology) {
     return maxPhysicalUnitIndex;
   }
   return Math.min(MAX_MATERIAL_UNIT_COUNT, unitIds.size);
-}
-
-/**
- * material topology が表示可能な実観測sourceを持つか判定する。
- *
- * 【詳細説明】
- * - K2/CFSでは `provider.lastObservedAt` が古いfixtureや一部runtimeで欠ける場合がある。
- * - 時刻メタデータが無いだけで、active session中にsource/unit実体を持つtopologyを即staleへ落とすと、
- *   初回probe応答が見えているのに「確認不能」と表示されるため、表示可能な実体の有無を別に判定する。
- *
- * @private
- * @param {object|null|undefined} topology - Normalized material topology
- * @returns {boolean} 実観測sourceまたはunitを持つ場合 true
- */
-function hasObservedMaterialEvidence(topology) {
-  if (!topology || typeof topology !== "object") {
-    return false;
-  }
-  const hasSources = Array.isArray(topology.sources) && topology.sources.some((source) => {
-    return source && typeof source === "object" && Boolean(source.sourceId || source.kind);
-  });
-  const hasUnits = Array.isArray(topology.units) && topology.units.some((unit) => {
-    return unit && typeof unit === "object" && Boolean(unit.unitId || (unit.boxId !== null && unit.boxId !== undefined));
-  });
-  return hasSources || hasUnits;
 }
 
 /**
@@ -351,12 +327,12 @@ export function resolveDisplayMaterialTopology({
     topology.source?.receivedAt ??
     shadowRecord?.lastObservedAt
   );
-  const closed = shadowRecord?.state === "closed";
-  const hasEvidence = hasObservedMaterialEvidence(topology);
-  const expired = observedAtMs == null
-    ? !hasEvidence
-    : (Number.isFinite(nowMs) && nowMs - observedAtMs > ttlMs);
   const alreadyStale = topology.cfs?.topologyState === "stale";
+  const closed = shadowRecord?.state === "closed";
+  if (observedAtMs == null && !closed && !alreadyStale) {
+    return null;
+  }
+  const expired = observedAtMs == null || (Number.isFinite(nowMs) && nowMs - observedAtMs > ttlMs);
   if (!closed && !expired && !alreadyStale) {
     return topology;
   }

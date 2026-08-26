@@ -246,7 +246,7 @@ describe("Printer Core v3 material system settings", () => {
     expect(displayTopology.provider.freshness).toBe("stale");
   });
 
-  it("active sessionでsource/unit実体がある場合は観測時刻metadata欠落だけでstale化しない", () => {
+  it("active sessionでも観測時刻metadataが欠落したtopologyは取得待ちへ倒す", () => {
     const topology = {
       cfs: { topologyState: "fresh", connected: true },
       units: [{ unitId: "cfs:1", boxId: 1 }],
@@ -261,7 +261,6 @@ describe("Printer Core v3 material system settings", () => {
       ttlMs: 45_000,
     });
 
-    expect(displayTopology).toBe(topology);
-    expect(displayTopology.cfs.topologyState).toBe("fresh");
+    expect(displayTopology).toBeNull();
   });
 });
