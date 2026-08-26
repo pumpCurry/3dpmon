@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1278 (PR #426)
+* @version 1.390.1401 (PR #433)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-04 09:22:41
+* @lastModified 2026-08-26 13:59:04
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -64,13 +64,20 @@ import {
   getAttributionIssueIdsForHost,
   countUnattributedArchiveForHost
 } from "./dashboard_spool.js";
-import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType } from "./dashboard_connection.js";
+import { sendCommand, fetchStoredData, getDeviceIp, getDisplayBaseUrl, getConnectionState, getPrinterType, getConnectionTarget } from "./dashboard_connection.js";
 import { recomputeSpoolFromManualEdit } from "./dashboard_filament_ledger.js";
 import { showVideoOverlay } from "./dashboard_video_player.js";
 import { showSpoolDialog, showSpoolSelectDialog } from "./dashboard_spool_ui.js";
 import { showHistoryFilamentDialog, updatePreview as updateFilamentPreview } from "./dashboard_filament_change.js";
 import { PRINT_STATE_CODE } from "./dashboard_ui_mapping.js";
 import { getCurrentPrintID } from "./dashboard_aggregator.js";
+import {
+  MATERIAL_DISPLAY_MODE,
+  resolveDisplayMaterialTopology,
+  resolveMaterialDisplayMode,
+  resolveMaterialTopologyViewOptions
+} from "./printer_core/dashboard_material_system_settings.js";
+import { createMaterialTopologyViewModel } from "./printer_core/dashboard_material_topology_view_model.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -559,6 +566,89 @@ const THUMB_PLACEHOLDER = "data:image/svg+xml;utf8," + encodeURIComponent(
 );
 
 /**
+ * 確認ダイアログ用のHTML文字列へ埋め込む値をエスケープする。
+ *
+ * 【詳細説明】
+ * - 印刷履歴ファイル名、G-codeメタ、CFS material名はいずれもプリンタまたはG-code由来である。
+ * - `showConfirmDialog()` の `html` へ連結する前に特殊文字を無害化し、意図しないタグ解釈を防ぐ。
+ *
+ * @private
+ * @param {*} value - 表示候補値
+ * @returns {string} HTML特殊文字をエスケープした文字列
+ */
+function escapePrintDialogHtml(value) {
+  return String(value ?? "")
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&#39;");
+}
+
+/**
+ * 文字列がブラウザでそのまま描画できるURLか判定する。
+ *
+ * 【詳細説明】
+ * - K2の `retGcodeFileInfo2.thumbnail` は `/mnt/UDISK/...` のプリンタ内パスを返す。
+ * - その値を `<img src>` へ直接渡すとローカルファイルパス扱いになり、ファイル一覧だけ
+ *   プレースホルダになるため、HTTP/data/blob URLだけを「そのまま使える」値として扱う。
+ *
+ * @private
+ * @param {*} value - URL候補
+ * @returns {boolean} ブラウザでそのまま利用できるURLなら true
+ */
+function isRenderableThumbUrl(value) {
+  return /^(https?:|data:|blob:)/iu.test(String(value || "").trim());
+}
+
+/**
+ * プリンタ内サムネイルパスから画像ファイル名だけを取り出す。
+ *
+ * 【詳細説明】
+ * - K2は `thumbnail:"/mnt/UDISK/creality/local_gcode/humbnail/foo.png"` のように
+ *   printer-local absolute pathを返すが、実際に画像として取得できる既存UI互換のURLは
+ *   `http://host/downloads/humbnail/foo.png` である。
+ * - `preview/original` しか無い場合も最後のファイル名を使えるよう、パス種別に依存せず末尾名だけ返す。
+ *
+ * @private
+ * @param {*} value - raw thumbnail/preview path
+ * @returns {string} ファイル名、または空文字
+ */
+function extractThumbBasename(value) {
+  return String(value || "").trim().split(/[\\/]/u).pop() || "";
+}
+
+/**
+ * K2/K1のサムネイル候補を既存downloads/humbnail URLへ正規化する。
+ *
+ * 【詳細説明】
+ * - K1互換の履歴サムネは従来どおり `downloads/humbnail/{gcodeBase}.png` を使う。
+ * - K2のファイル一覧は `retGcodeFileInfo2.thumbnail` がプリンタ内絶対パスで届くため、
+ *   そのbasenameを `downloads/humbnail/` に載せ替える。
+ * - 既にHTTP/data/blob URLなら変換せず、Moonraker等の外部メタ由来URLを壊さない。
+ *
+ * @private
+ * @param {string} baseUrl - 表示用ベースURL
+ * @param {string} filename - G-codeファイル名またはフルパス
+ * @param {string=} explicit - プリンタ/メタ由来のサムネイル候補
+ * @returns {string} 表示に使うサムネイルURL
+ */
+function normalizeThumbUrl(baseUrl, filename, explicit = "") {
+  const raw = String(explicit || "").trim();
+  if (isRenderableThumbUrl(raw)) {
+    return raw;
+  }
+  if (raw.startsWith("/downloads/")) {
+    return `${baseUrl}${raw}`;
+  }
+  const rawBase = extractThumbBasename(raw);
+  if (rawBase && /\.(png|jpe?g|webp|gif)$/iu.test(rawBase)) {
+    return `${baseUrl}/downloads/humbnail/${rawBase}`;
+  }
+  return makeThumbUrl(baseUrl, filename) || THUMB_PLACEHOLDER;
+}
+
+/**
  * ホスト種別に応じてサムネイル URL を解決する。
  *
  * 【詳細説明】
@@ -575,15 +665,107 @@ const THUMB_PLACEHOLDER = "data:image/svg+xml;utf8," + encodeURIComponent(
  * @returns {string} 表示に使える URL（不明時は data-URI 代替）
  */
 function resolveThumbUrl(host, filename, explicit) {
-  if (explicit) return explicit;
-  if (getPrinterType(host) === "moonraker") {
+  const baseUrl = getDisplayBaseUrl(host);
+  const printerType = getPrinterType(host);
+  if (explicit && printerType === "moonraker") {
+    return explicit;
+  }
+  if (explicit) return normalizeThumbUrl(baseUrl, filename, explicit);
+  if (printerType === "moonraker") {
     const m = monitorData.machines[host];
     const bn = String(filename || "").split("/").pop();
     const entries = m?._cachedFileInfo?.entries || [];
     const hit = entries.find(e => String(e.filename || "").split("/").pop() === bn);
     return hit?.thumbUrl || THUMB_PLACEHOLDER;
   }
-  return makeThumbUrl(getDisplayBaseUrl(host), filename) || THUMB_PLACEHOLDER;
+  return normalizeThumbUrl(baseUrl, filename);
+}
+
+/**
+ * MaterialTopologyの表示行から人間向けの材料ラベルを作る。
+ *
+ * 【詳細説明】
+ * - CFS/CFS-Cの印刷確認では、3DPmon台帳の単一スプールではなく、実機から観測したslotを表示する。
+ * - material名が欠落するfirmwareでも、slot名だけは必ず残して「未装着」と誤表示しない。
+ *
+ * @private
+ * @param {object|null|undefined} row - material topology view model のsource row
+ * @returns {string} 例: "1C Silver PLA (PLA)"
+ */
+function formatMaterialSourceRowLabel(row) {
+  if (!row) {
+    return "";
+  }
+  const material = row.material || {};
+  const parts = [row.displaySlot || ""];
+  const name = String(material.name || "").trim();
+  const type = String(material.type || "").trim();
+  if (name) {
+    parts.push(name);
+  }
+  if (type && type !== name) {
+    parts.push(`(${type})`);
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+/**
+ * CFS/CFS-C観測状態から印刷確認用の材料文脈を作る。
+ *
+ * 【詳細説明】
+ * - 既存の印刷確認ダイアログは `getCurrentSpool()` の単一スプール装着だけを見ていた。
+ *   K2/CFSでは3DPmon台帳スプールが未装着でも、実機CFS側には選択中/装填済みslotがある。
+ * - ここではruntimeDataのPrinter Core v3 material topologyを表示専用に解決し、
+ *   CFS slotが観測済みなら「スプール未装着」ではなく「CFS供給を観測」として扱う。
+ * - この結果は印刷確認UIの誤表示防止だけに使い、ledger authorityや送信authorityにはしない。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {{
+ *   displayMode:string,
+ *   topologyState:string,
+ *   hasCfsSupply:boolean,
+ *   selectedRow:object|null,
+ *   loadedRows:Array<object>,
+ *   selectedLabel:string,
+ *   stale:boolean
+ * }} 印刷確認用のCFS材料文脈
+ */
+function createMaterialPrintContext(hostname) {
+  const machine = monitorData.machines?.[hostname] || null;
+  const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || null;
+  const topology = resolveDisplayMaterialTopology({
+    topology: shadowRecord?.lastState?.materials || null,
+    shadowRecord,
+  });
+  const printerType = getPrinterType(hostname);
+  const target = getConnectionTarget(hostname);
+  const displayMode = resolveMaterialDisplayMode({ target, printerType, topology });
+  if (displayMode !== MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
+    return {
+      displayMode,
+      topologyState: "legacy",
+      hasCfsSupply: false,
+      selectedRow: null,
+      loadedRows: [],
+      selectedLabel: "",
+      stale: false,
+    };
+  }
+  const viewOptions = resolveMaterialTopologyViewOptions({ target, printerType, topology });
+  const viewModel = createMaterialTopologyViewModel(topology, viewOptions);
+  const cfsRows = viewModel.units.flatMap((unit) => unit.slots || []);
+  const loadedRows = cfsRows.filter((row) => row?.presence === "loaded");
+  const selectedRow = cfsRows.find((row) => row?.selected === true && row?.presence === "loaded") || null;
+  return {
+    displayMode,
+    topologyState: viewModel.cfs.topologyState || "unobserved",
+    hasCfsSupply: loadedRows.length > 0,
+    selectedRow,
+    loadedRows,
+    selectedLabel: formatMaterialSourceRowLabel(selectedRow),
+    stale: viewModel.cfs.topologyState === "stale",
+  };
 }
 
 
@@ -2059,11 +2241,15 @@ function _renderJobDrilldown(container, raw, baseUrl, hostname) {
 async function handlePrintClick(raw, thumbUrl, hostname) {
   const usedSec        = Number(raw.usagetime || 0);
   const spool          = getCurrentSpool(hostname);
+  const materialContext = createMaterialPrintContext(hostname);
+  const hasCfsSupply  = !spool && materialContext.hasCfsSupply;
   const remaining      = spool?.remainingLengthMm ?? 0;
 
   // ファイル別の過去実績
   const insight = buildFileInsight(raw.filename || raw.rawFilename || "", hostname);
   const filename = (raw.filename || "").split("/").pop();
+  const safeFilename = escapePrintDialogHtml(filename);
+  const safeThumbUrl = escapePrintDialogHtml(thumbUrl || THUMB_PLACEHOLDER);
 
   // GCode メタデータ (アップロード時に抽出済み)
   // ★ per-host キャッシュ: ホスト名プレフィックス付きで取得（同名ファイルのメタデータ混在を防止）
@@ -2131,15 +2317,30 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
 
   // --- ダイアログ HTML 構築 ---
   let html = `<div class="pm-print-header">`;
-  html += `<img src="${thumbUrl}" class="pm-print-thumb" onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'">`;
-  html += `<div><strong class="pm-print-filename">${filename}</strong></div></div>`;
+  html += `<img src="${safeThumbUrl}" class="pm-print-thumb" onerror="this.onerror=null;this.src='${THUMB_PLACEHOLDER}'">`;
+  html += `<div><strong class="pm-print-filename">${safeFilename}</strong></div></div>`;
 
-  // スプール未装着警告
-  if (!spool) {
+  // スプール未装着警告。CFS/CFS-Cの実機slotが観測済みの場合は、台帳スプール未装着を
+  // 物理フィラメント未装着として扱わず、read-only CFS観測として別表示にする。
+  if (!spool && !hasCfsSupply) {
     html += `<div class="pm-print-section pm-print-warn-section">`;
     html += `<div class="pm-print-section-title">⚠ スプール未装着</div>`;
     html += `<div>フィラメント管理でスプールを装着してから印刷することを推奨します。</div>`;
     html += `<div>消費量の追跡・残量計算ができません。</div>`;
+    html += `</div>`;
+  } else if (hasCfsSupply) {
+    const sectionClass = materialContext.stale ? "pm-print-warn-section" : "pm-print-info-section";
+    html += `<div class="pm-print-section ${sectionClass}">`;
+    html += `<div class="pm-print-section-title">${materialContext.stale ? "⚠ " : ""}CFS/CFS-C供給を観測</div>`;
+    if (materialContext.selectedLabel) {
+      html += `<div>選択中: <strong>${escapePrintDialogHtml(materialContext.selectedLabel)}</strong></div>`;
+    } else {
+      html += `<div>装填済みスロット: <strong>${materialContext.loadedRows.length}</strong>件</div>`;
+    }
+    if (materialContext.stale) {
+      html += `<div>現在のCFS情報は最終観測値です。プリンタ本体の表示も確認してください。</div>`;
+    }
+    html += `<div>3DPmon台帳スプールは未連携のため、正確な残量台帳計算は後続Gateで扱います。</div>`;
     html += `</div>`;
   }
 
@@ -2147,8 +2348,8 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   if (materialMismatch) {
     html += `<div class="pm-print-section pm-print-danger-section">`;
     html += `<div class="pm-print-section-title">🚨 素材不一致</div>`;
-    html += `<div>GCode 指定: <strong>${gcodeMaterial}</strong></div>`;
-    html += `<div>装着スプール: <strong>${spoolMaterial}</strong></div>`;
+    html += `<div>GCode 指定: <strong>${escapePrintDialogHtml(gcodeMaterial)}</strong></div>`;
+    html += `<div>装着スプール: <strong>${escapePrintDialogHtml(spoolMaterial)}</strong></div>`;
     html += `<div>素材が異なると印刷品質に重大な影響があります。</div>`;
     html += `</div>`;
   }
@@ -2265,9 +2466,12 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   } else if (isShort) {
     dialogLevel = "warnRed";
     confirmLabel = "⚠ 不足の可能性あり — それでも印刷する";
-  } else if (!spool) {
+  } else if (!spool && !hasCfsSupply) {
     dialogLevel = "warn";
     confirmLabel = "スプール未装着のまま印刷する";
+  } else if (materialContext.stale) {
+    dialogLevel = "warn";
+    confirmLabel = "最終観測CFS情報のまま印刷する";
   }
 
   const ok = await showConfirmDialog({
@@ -3110,6 +3314,7 @@ export function renderFileList(info, baseUrl, hostname) {
   // 履歴から印刷回数と実使用時間を取得
   const stats = buildHistoryStats(hostname);
   arr.forEach(item => {
+    item.thumbUrl = resolveThumbUrl(hostname, item.filename || item.basename, item.thumbUrl);
     const st = stats.get(item.filename);
     if (st) {
       item.filemd5 = st.md5;

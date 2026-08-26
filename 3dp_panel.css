@@ -1983,6 +1983,10 @@ body.panel-mode .notification-container {
   border-spacing: 0;
   width: 100%;
 }
+.history-table,
+.filelist-table {
+  min-width: 1080px;
+}
 .sortable-table th {
   background: var(--color-table-header);
   padding: var(--space-1) 6px;
