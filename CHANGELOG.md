@@ -6,7 +6,8 @@
 - **K2 file thumbnails**: printer-local thumbnail paths from `retGcodeFileInfo2` are normalized to `/downloads/humbnail/...`, matching the path that K2 exposes over HTTP.
 - **File/history tables**: file list and print history tables now keep enough intrinsic width for horizontal scrolling on K2 panels.
 - 検証: targeted K2/CFS material-source UI tests 52件PASS、full Vitest 98 files / 1541 tests PASS、
-  GitHub Actions lint/smoke/test PASS。Windows installer/portable buildはアプリ終了後に最終実行予定。
+  GitHub Actions lint/smoke/test PASS。Windows installer/portable build成功
+  (`C:/Users/pcb/AppData/Local/Temp/3dpmon-pr434-build`)。
 
 ## v2.2.1040 (2026-08-26) — Release Candidate: Printer Core v3 / K2+CFS monitoring and certification
 
