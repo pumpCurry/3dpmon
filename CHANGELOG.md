@@ -13,8 +13,10 @@
   live shadow、scenario analyzer、command safety boundary、UI cutover readinessを統合。
 - **K2 Pro Combo + CFS**: `/info` fingerprint、WS9999、CFS topology observation、explicit
   `colorMatch` + `multiColorPrint` print-start flow、file list/history、restart recoveryを確認。
-- **Camera**: K1 MJPEGとK2 WebRTCを分離し、K2 `/info.videoPort`を使うWebRTC接続に対応。
-  retry/watchdog/timeoutは有限化し、K2 WebRTC映像がカード外へはみ出さないよう調整。
+- **Camera**: K1 MJPEGとK2 WebRTCを分離し、K2は `http://<host>:8000/call/webrtc_local`
+  のnative WebRTC接続に対応。`/info.videoPort` はtransport evidenceとして保持し、
+  camera endpointには流用しない。retry/watchdog/timeoutは有限化し、K2 WebRTC映像が
+  カード外へはみ出さないよう調整。
 - **Material UI**: 0-4台のCFS/CFS-Cと外部スプールを表示構成に応じて切り替え。stale状態や
   invalid remainingを現在値として誤認しないfail-closed表示へ調整。
 - **Live certification evidence**: K1 Max 2台のupload routing/overwrite、K2 Pro Comboの
