@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.2.1041 (2026-08-26) — Hotfix: K2/CFS print dialog and file thumbnails
+
+- **K2/CFS print confirmation**: CFS/CFS-C slots observed by Printer Core v3 are now shown as material supply in the print confirmation dialog, instead of being mistaken for an unmounted local 3DPmon spool.
+- **K2 file thumbnails**: printer-local thumbnail paths from `retGcodeFileInfo2` are normalized to `/downloads/humbnail/...`, matching the path that K2 exposes over HTTP.
+- **File/history tables**: file list and print history tables now keep enough intrinsic width for horizontal scrolling on K2 panels.
+- 検証: targeted dashboard print manager tests 66件PASS、full Vitest 1534件PASS。
+
 ## v2.2.1040 (2026-08-26) — Release Candidate: Printer Core v3 / K2+CFS monitoring and certification
 
 ### Printer Core v3 release-candidate integration

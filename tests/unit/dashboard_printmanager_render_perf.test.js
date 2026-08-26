@@ -70,6 +70,7 @@ vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   getDisplayBaseUrl: vi.fn(() => "http://127.0.0.1"),
   getConnectionState: vi.fn(() => "connected"),
   getPrinterType: vi.fn(() => "creality-k1"),
+  getConnectionTarget: vi.fn(() => null),
 }));
 vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
   recomputeSpoolFromManualEdit: vi.fn(),
@@ -92,6 +93,8 @@ const { renderHistoryTable, renderFileList } =
 const { scopedById, monitorData } = await import("../../3dp_lib/dashboard_data.js");
 const spoolMod = await import("../../3dp_lib/dashboard_spool.js");
 const aggMod = await import("../../3dp_lib/dashboard_aggregator.js");
+const confirmMod = await import("../../3dp_lib/dashboard_ui_confirm.js");
+const connectionMod = await import("../../3dp_lib/dashboard_connection.js");
 
 /** スコープ付きテーブル（thead+tbody+親）を生成して scopedById に登録する */
 function makeTable(tableId) {
@@ -143,6 +146,8 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
   beforeEach(() => {
     document.body.innerHTML = "";
     vi.clearAllMocks();
+    monitorData.machines = {};
+    monitorData.appSettings = { filamentUnit: "m" };
     table = makeTable("print-history-table");
     scopedById.mockImplementation((id) => (id === "print-history-table" ? table : null));
   });
@@ -181,6 +186,72 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
     btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     // handlePrintClick の冒頭で getCurrentSpool(host) を呼ぶ＝委譲ディスパッチ到達の証跡
     expect(spoolMod.getCurrentSpool).toHaveBeenCalledWith(HOST);
+  });
+
+  it("K2/CFS観測済みなら台帳スプール未装着を物理未装着として警告しない", async () => {
+    const nowIso = new Date().toISOString();
+    spoolMod.getCurrentSpool.mockReturnValue(null);
+    connectionMod.getPrinterType.mockReturnValue("creality-k2");
+    connectionMod.getConnectionTarget.mockReturnValue({
+      hostname: HOST,
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        displayMode: "auto",
+        unitLimit: 1,
+        slotsPerUnit: 4,
+        externalSourceLimit: 1,
+      },
+    });
+    monitorData.machines[HOST] = {
+      runtimeData: {
+        printerCoreV3Shadow: {
+          state: "observed",
+          lastObservedAt: nowIso,
+          materialProviderLastObservedAt: nowIso,
+          lastState: {
+            materials: {
+              cfs: { connected: true, enabled: true, topologyState: "fresh" },
+              provider: { lastObservedAt: nowIso },
+              units: [{ unitId: "cfs:1", boxId: 1, observedSlotCount: 4 }],
+              sources: [{
+                sourceId: "cfs:1:slot:2",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 2,
+                material: {
+                  type: "PLA",
+                  name: "Silver PLA",
+                  color: { raw: "#A7ADB1", normalized: "a7adb1" },
+                },
+                status: {
+                  stateCode: 1,
+                  selected: true,
+                  remaining: {
+                    rawPercent: 54,
+                    normalizedPercent: 54,
+                    valid: true,
+                  },
+                },
+              }],
+              assignments: [],
+            },
+          },
+        },
+      },
+    };
+
+    renderHistoryTable(makeHistoryRows(1), "http://127.0.0.1", HOST);
+    const btn = table.querySelector("tbody tr.history-row .cmd-print");
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+
+    const dialogArg = confirmMod.showConfirmDialog.mock.calls.at(-1)?.[0];
+    expect(dialogArg?.html).toContain("CFS/CFS-C供給を観測");
+    expect(dialogArg?.html).toContain("1C Silver PLA (PLA)");
+    expect(dialogArg?.html).not.toContain("スプール未装着");
+    expect(dialogArg?.confirmText).toBe("印刷する");
   });
 
   it("(C) 行（ボタン以外）クリックでドリルダウン領域が生成・表示される", () => {
@@ -265,6 +336,8 @@ describe("renderFileList — 描画律速対策（lazy画像＋イベント委�
   beforeEach(() => {
     document.body.innerHTML = "";
     vi.clearAllMocks();
+    monitorData.machines = {};
+    monitorData.appSettings = { filamentUnit: "m" };
     table = makeTable("file-list-table");
     scopedById.mockImplementation((id) =>
       id === "file-list-table" ? table : (id === "file-list-total" ? document.createElement("span") : null));
@@ -278,6 +351,48 @@ describe("renderFileList — 描画律速対策（lazy画像＋イベント委�
       expect(img.getAttribute("loading")).toBe("lazy");
       expect(img.getAttribute("decoding")).toBe("async");
     });
+  });
+
+  it("K2 retGcodeFileInfo2 のprinter-local thumbnail pathをdownloads/humbnail URLへ正規化する", () => {
+    connectionMod.getPrinterType.mockReturnValue("creality-k2");
+    renderFileList({
+      totalNum: 1,
+      entries: [{
+        number: 1,
+        filename: "/mnt/UDISK/printer_data/gcodes/3DBench_PLA_21m.gcode",
+        basename: "3DBench_PLA_21m.gcode",
+        thumbUrl: "/mnt/UDISK/creality/local_gcode/humbnail/3DBench_PLA_21m.png",
+        layer: 25,
+        size: 2740121,
+        mtime: new Date(1700000000000),
+        expect: 7468,
+        printCount: 0,
+      }],
+    }, "http://127.0.0.1", HOST);
+
+    const img = table.querySelector("td.col-thumb img");
+    expect(img?.getAttribute("src")).toBe("http://127.0.0.1/downloads/humbnail/3DBench_PLA_21m.png");
+  });
+
+  it("Moonraker/IR3の既存thumbUrlはK2用downloads/humbnail正規化に巻き込まない", () => {
+    connectionMod.getPrinterType.mockReturnValue("moonraker");
+    renderFileList({
+      totalNum: 1,
+      entries: [{
+        number: 1,
+        filename: "gcodes/ir3_sample.gcode",
+        basename: "ir3_sample.gcode",
+        thumbUrl: "server/files/gcodes/.thumbs/ir3_sample.png",
+        layer: 10,
+        size: 1200,
+        mtime: new Date(1700000000000),
+        expect: 120,
+        printCount: 0,
+      }],
+    }, "http://127.0.0.1", HOST);
+
+    const img = table.querySelector("td.col-thumb img");
+    expect(img?.getAttribute("src")).toBe("server/files/gcodes/.thumbs/ir3_sample.png");
   });
 
   it("(B) 各行に data-row-index・tbody委譲1本のみ（再描画で二重バインドなし）", () => {

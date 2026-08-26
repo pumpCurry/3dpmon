@@ -35,6 +35,8 @@ vi.mock('../../3dp_lib/dashboard_spool.js', () => ({
 vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
   sendCommand: vi.fn(), fetchStoredData: vi.fn(),
   getDeviceIp: vi.fn(() => '192.168.1.10'), getConnectionState: vi.fn(() => 'connected'),
+  getDisplayBaseUrl: vi.fn(() => 'http://192.168.1.10'), getPrinterType: vi.fn(() => 'creality-k1'),
+  getConnectionTarget: vi.fn(() => null),
 }));
 vi.mock('../../3dp_lib/dashboard_video_player.js', () => ({ showVideoOverlay: vi.fn() }));
 vi.mock('../../3dp_lib/dashboard_spool_ui.js', () => ({

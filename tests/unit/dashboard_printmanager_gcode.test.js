@@ -40,6 +40,7 @@ vi.mock('../../3dp_lib/dashboard_connection.js', () => ({
   sendCommand: vi.fn(), fetchStoredData: vi.fn(),
   getDeviceIp: vi.fn(), getConnectionState: vi.fn(),
   getDisplayBaseUrl: vi.fn(() => ''), getPrinterType: vi.fn(() => 'creality-k1'),
+  getConnectionTarget: vi.fn(() => null),
 }));
 vi.mock('../../3dp_lib/dashboard_video_player.js', () => ({ showVideoOverlay: vi.fn() }));
 vi.mock('../../3dp_lib/dashboard_spool_ui.js', () => ({
