@@ -1,0 +1,146 @@
+# Printer Core v3 Gate 19 CFS Control Spec Investigation
+
+Last updated: 2026-08-27
+
+このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
+
+## Current 3DPmon Boundary
+
+現行3DPmonは、K2/CFSの印刷開始についてだけ、次の順序付きWS9999 frameを本番transport候補として実装済み。
+
+```json
+{"method":"set","params":{"colorMatch":{"path":"<gcode-path>","list":[...]}}}
+{"method":"set","params":{"multiColorPrint":{"gcode":"<gcode-path>","enableSelfTest":0}}}
+```
+
+一方、単独のCFS操作は意図的に閉じている。
+
+```text
+cfs-slot-select
+cfs-load
+cfs-unload
+cfs-feed
+cfs-retract
+```
+
+これらは `dashboard_k2_cfs_command_transport.js` で `uncertified-cfs-slot-command` として拒否される。通常フィラメントパネルには操作候補hookとcommand request scaffoldがあるが、transportが未certifiedのため、UI authorityへはまだ接続しない。
+
+## Public Source Evidence
+
+### OrcaSlicer
+
+調査対象:
+
+```text
+tmp/external-repos/OrcaSlicer
+HEAD 5552ed6cf1383a58321b2196317fe0c69a78b1a6
+```
+
+主な確認箇所:
+
+```text
+src/slic3r/Utils/CrealityPrint.cpp
+src/slic3r/Utils/CrealityPrintAgent.cpp
+src/slic3r/GUI/PrintHostDialogs.cpp
+```
+
+確認できたこと:
+
+- `query_boxes_info()` はWS9999へ `{"method":"get","params":{"boxsInfo":1}}` を送る。
+- 送信ダイアログは `boxsInfo.materialBoxs[]` から外部スプールとCFS slotを読み、G-code側材料 `T1A`, `T1B` などを `boxId/materialId` へ割り当てる。
+- CFSを使う印刷開始は `set colorMatch` の後に `set multiColorPrint` を送る。
+- 外部スプールを使う場合は `opGcodeFile:"printprt:<path>"` へ分岐する。
+- `T1A` はCFS物理slot名ではなく、G-code/スライサ側の材料ID。物理slotは `boxId/materialId` で指定される。
+
+OrcaSlicer側では、単独のslot select/load/unload/feed/retractのLAN送信実装は印刷開始経路からは確認できなかった。したがって、単独操作はOrcaSlicerのprint-start evidenceだけではcertifyしない。
+
+### CrealityPrint
+
+調査対象:
+
+```text
+tmp/external-repos/CrealityPrint
+HEAD 24b9395c131a9849724c5bf098cba140a207e877
+```
+
+確認できたLAN/Device UI側候補:
+
+```json
+{"method":"set","params":{"feedInOrOut":{"boxId":1,"materialId":0,"isFeed":1}}}
+{"method":"set","params":{"feedInOrOut":{"boxId":1,"materialId":0,"isFeed":0}}}
+{"method":"set","params":{"modifyMaterial":{"boxId":1,"id":0,"rfid":"","type":"PLA","vendor":"Generic","name":"Generic PLA","color":"#0RRGGBB","minTemp":190.00000001,"maxTemp":240.00000001,"pressure":0.04}}}
+{"method":"set","params":{"refreshBox":{"boxId":1,"materialId":0}}}
+{"method":"set","params":{"boxConfig":{"autoRefill":1,"cAutoFeed":1,"cSelfTest":1}}}
+```
+
+確認できたCloud twoway候補:
+
+```json
+{"method":"set","params":{"feedStateTemp2":0,"feed":1,"cId":"<cloud-cfs-port-id>"}}
+{"method":"set","params":{"cId":"<cloud-cfs-port-id>","filamentsColor":"#FFRRGGBB","filamentType":"PLA","nozzleTempMin":190,"nozzleTempMax":240,"cPressureAdvance":0.04,"cBrandName":"Generic","name":"Generic PLA"}}
+{"method":"get","params":{"cfsInfo":1}}
+{"method":"set","params":{"cAutoFeed":1}}
+{"method":"set","params":{"cSelfTest":1}}
+{"method":"set","params":{"autoRefill":1}}
+```
+
+この2経路は混ぜない。3DPmonのローカルK2操作候補はWS9999の `feedInOrOut` / `modifyMaterial` / `boxConfig` / `refreshBox` を優先して検証し、Cloud APIの `feedStateTemp2/feed/cId` はK2 LAN control authorityの根拠にしない。
+
+### Reverse-engineered Reference
+
+`DaviBe92/k2-websocket-re` も `feedInOrOut`, `modifyMaterial`, `boxConfig`, `colorMatch`, `multiColorPrint` をK2 WS9999 commandとして記載している。ただし公式ソースではなく、検証firmwareも限定されるため、設計上は補助証拠に留める。実装のproduction enable条件には、3DPmon自身のF012実機captureを必須とする。
+
+## Operation Mapping Hypothesis
+
+| UI operation | Candidate K2 WS9999 command | Production status |
+| --- | --- | --- |
+| CFS slot select / load | `feedInOrOut.isFeed = 1` | 未certified。実機captureでselected/feedState/materialStatusを確認するまでdisabled |
+| CFS unload / retract | `feedInOrOut.isFeed = 0` | 未certified。物理unloadと短いretractの意味差が未確定 |
+| Material metadata edit | `modifyMaterial` | 未certified。RFID材料とGeneric材料で可否差があるためread-onlyから開始 |
+| RFID refresh | `refreshBox` | 未certified。副作用が小さいが物理状態変化を伴うためUI開放は別判断 |
+| CFS settings | `boxConfig` | 未certified。autoRefill/cAutoFeed/cSelfTest/ignoreColorAutoFeedの対象firmware差を確認する |
+| CFS print start | `colorMatch` -> `multiColorPrint` | transport実装済み。live certificationが完了するまでauthority昇格は保留 |
+
+## Gate 19 Design Direction
+
+Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順で進める。
+
+1. `feedInOrOut` / `modifyMaterial` / `boxConfig` / `refreshBox` をtransport candidateとして型定義し、デフォルトはdry-run onlyにする。
+2. certification CLIを追加し、`--dry-run` では送信frame、expected observation、disable reasonを出す。
+3. live送信には `--send --confirm-live --confirm-host <host>` と、操作種別ごとの追加confirmationを必須にする。
+4. 送信前にactive session、fresh topology、対象sourceがCFS sourceであること、loaded状態、プリンタがprintingでないことを再検証する。
+5. 送信後は `boxsInfo` refreshを要求し、同一session内でexpected stateを確認する。
+6. expected stateが確認できない場合は `timeout` または `unconfirmed` とし、成功扱いにしない。
+7. UIはGate 19.5までdisabledのままにし、Gate 19のlive evidenceが揃った操作だけを段階的に有効化する。
+
+## Required Live Evidence
+
+K2 Pro Combo F012 + CFS-A1 (`192.168.54.153`) で最低限以下を取得する。
+
+- `feedInOrOut.isFeed=1` をCFS 1A/1B/1Cのいずれかへ送った場合、該当slotの `selected`、CFS feed状態、物理ロードがどう変化するか。
+- `feedInOrOut.isFeed=0` が「アンロード」なのか「短い巻戻」なのか、UIのRetract相当なのか。
+- `feedInOrOut` 実行中に再送すると安全か、またはside-effect commandとしてblind retry禁止にすべきか。
+- `modifyMaterial` がGeneric材料で反映されるか、RFID材料で拒否されるか。
+- `boxConfig` の各fieldが `boxConfig` / `cfsInfo` / `boxsInfo` のどこへ反映されるか。
+- CFS disconnected/stale中はすべての操作が送信前に拒否されること。
+- 印刷中、paused中、error中、runout中のdisable reasonが人間に分かること。
+
+## Reviewer Questions
+
+レビュワーには次を確認してもらう。
+
+- F012 K2 Pro Comboで `feedInOrOut` をslot select/loadとして扱ってよいか。
+- UI上の「Feed」「Retract」と、CFSの「Load」「Unload」が同じ操作として扱えるか。違うなら3DPmon UIではどの語を使うべきか。
+- `modifyMaterial.id` と `materialId` の呼び分けを3DPmon内部でどう正規化すべきか。
+- `boxConfig` とCloud側 `cfsInfo` のfield対応をどう扱うべきか。
+- 実機capture前に実装してよい範囲はdry-run transportまでか、hidden feature flag付きlive CLIまで含めてよいか。
+
+## Release Boundary
+
+2.2.1042はread-only/print-start guard版として公開済み。K2/CFSを3DPmon UIから操作できる版は、少なくとも次を満たすまで別リリース候補にしない。
+
+- Gate 19: transport candidate + dry-run + live certification CLI
+- Gate 19.5: UI操作ボタンの実行中/成功/失敗/timeout/stale disable
+- Gate 20: restart recovery後もfresh topology再観測と操作再有効化が成立
+- Gate 10/12: K2実機とK1C+CFS-C実機で物理certification
+- Gate 21: release certification

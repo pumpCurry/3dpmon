@@ -6,6 +6,9 @@ Last updated: 2026-08-26
 
 実機certificationの手順は `docs/develop/printer-core-v3-live-certification-runbook.md` を参照する。
 
+K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界は
+`docs/develop/printer-core-v3-gate19-cfs-control-spec-investigation.md` を参照する。
+
 ## 未実装と分かっているもの
 
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
