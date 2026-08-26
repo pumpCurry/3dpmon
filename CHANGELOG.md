@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.2.1040 (2026-08-26) — Release Candidate: Printer Core v3 / K2+CFS monitoring and certification
+
+### Printer Core v3 release-candidate integration
+
+> **注意**: 本版は **Release Candidate** です。K2 Pro Combo + CFS-A1 の登録、監視、カメラ、
+> ファイル操作、CFS指定print-start、再起動復旧は実機で確認済みです。一方で、K1C+CFS-Cの
+> 実機certification、CFS detach/reconnectやslot入替の長時間実機証跡、非RFIDフィラメントの
+> 3DPmon台帳authority化は後続Gateとして残しています。
+
+- **Printer Core v3 Gate 0-18.5**: protocol recorder、identity dry-run、K1/K2 adapter、
+  live shadow、scenario analyzer、command safety boundary、UI cutover readinessを統合。
+- **K2 Pro Combo + CFS**: `/info` fingerprint、WS9999、CFS topology observation、explicit
+  `colorMatch` + `multiColorPrint` print-start flow、file list/history、restart recoveryを確認。
+- **Camera**: K1 MJPEGとK2 WebRTCを分離し、K2 `/info.videoPort`を使うWebRTC接続に対応。
+  retry/watchdog/timeoutは有限化し、K2 WebRTC映像がカード外へはみ出さないよう調整。
+- **Material UI**: 0-4台のCFS/CFS-Cと外部スプールを表示構成に応じて切り替え。stale状態や
+  invalid remainingを現在値として誤認しないfail-closed表示へ調整。
+- **Live certification evidence**: K1 Max 2台のupload routing/overwrite、K2 Pro Comboの
+  CFS-A1 print start-completion、camera、file history、restart recoveryを記録。
+- **Known limitations for this RC**: 非RFIDフィラメントの正確な残量管理は装置authorityではなく、
+  後続のFilament Ledger / assignment authorityで扱う。K1C+CFS-Cおよび長時間soakは未certified。
+- 検証: 全**1532**テスト緑、Electron E2E **3/3**、Windows installer/portable build成功。
+
 ## v2.2.1039 (2026-08-06) — ⚠ 実機検証候補（フィラメント inferred-continuity スタック統合 #409–#428）
 
 ### フィラメント帰属の大規模改修スタック（親権威／inferred-continuity／O5–O9）を main へ統合
