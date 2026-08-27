@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1422 (PR #435)
+ * @version 1.390.1423 (PR #435)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-27 23:06:11
+ * @lastModified 2026-08-28 00:31:12
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -45,6 +45,7 @@ import {
 import {
   createEmptyMaterialSourceObservations,
   recordMaterialTopologyObservation,
+  rekeyMaterialSourceObservationDevice,
 } from "./dashboard_material_source_observation.js";
 
 /**
@@ -207,10 +208,53 @@ function ensureMaterialSourceObservationStore() {
  */
 function deriveObservationIdentityStrength(deviceId) {
   const text = String(deviceId || "").trim();
-  if (/^(serial|sn|mac):/i.test(text)) {
+  if (/^(serial|sn|machine):/i.test(text)) {
     return "stable";
   }
   return "provisional";
+}
+
+/**
+ * 同一hostのprovisional観測をstable device recordへ昇格する。
+ *
+ * 【詳細説明】
+ * - live shadowはsession開始時にdeviceIdを固定するため、再接続後にserial/machine IDが得られると
+ *   以前のendpoint由来観測が別deviceとして残り得る。
+ * - command authorityへは使わないread-only証跡だが、履歴を物理機ごとに追えるよう、hostが一致する
+ *   provisional recordだけをstable recordへ移す。
+ *
+ * @private
+ * @function rekeyProvisionalObservationForStableDevice
+ * @param {object} store - material source観測ストア。
+ * @param {object} options - rekey候補。
+ * @param {string} options.host - 表示host。
+ * @param {string} options.deviceId - 今回のdevice ID。
+ * @param {string} options.identityStrength - 今回のidentity強度。
+ * @param {string=} options.observedAt - 観測日時。
+ * @returns {object|null} rekey結果、またはnull。
+ */
+function rekeyProvisionalObservationForStableDevice(store, options = {}) {
+  const host = String(options.host || "").trim();
+  const deviceId = String(options.deviceId || "").trim();
+  if (!host || !deviceId || options.identityStrength !== "stable") {
+    return null;
+  }
+  const byDeviceId = store?.byDeviceId && typeof store.byDeviceId === "object" ? store.byDeviceId : {};
+  for (const [candidateId, record] of Object.entries(byDeviceId)) {
+    if (candidateId === deviceId || !record || record.identityStrength !== "provisional") {
+      continue;
+    }
+    if (String(record.host || "").trim() !== host) {
+      continue;
+    }
+    return rekeyMaterialSourceObservationDevice(store, {
+      fromDeviceId: candidateId,
+      toDeviceId: deviceId,
+      observedAt: options.observedAt,
+      identityConflict: false,
+    });
+  }
+  return null;
 }
 
 /**
@@ -231,6 +275,7 @@ function deriveObservationIdentityStrength(deviceId) {
  * @param {string=} options.providerGeneration - provider世代。
  * @param {number=} options.sequence - 観測sequence。
  * @param {string=} options.snapshotCompleteness - complete/partial。
+ * @param {string=} options.identityStrength - identity repository由来またはdeviceId由来のidentity強度。
  * @returns {Object|null} 観測記録結果。
  */
 function recordMaterialSourceObservationForShadow(options) {
@@ -238,10 +283,18 @@ function recordMaterialSourceObservationForShadow(options) {
     return null;
   }
   const providerId = options.topology.provider?.providerId || options.providerId || null;
-  return recordMaterialTopologyObservation(ensureMaterialSourceObservationStore(), {
+  const store = ensureMaterialSourceObservationStore();
+  const identityStrength = options.identityStrength || deriveObservationIdentityStrength(options.deviceId);
+  rekeyProvisionalObservationForStableDevice(store, {
     host: options.host,
     deviceId: options.deviceId,
-    identityStrength: deriveObservationIdentityStrength(options.deviceId),
+    identityStrength,
+    observedAt: options.observedAt,
+  });
+  return recordMaterialTopologyObservation(store, {
+    host: options.host,
+    deviceId: options.deviceId,
+    identityStrength,
     sessionId: options.sessionId,
     providerId,
     providerGeneration: options.providerGeneration || options.sessionId || null,
@@ -1498,6 +1551,7 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
  * @param {string=} options.receivedAt - 観測日時ISO文字列
  * @param {string=} options.providerSessionId - secondary provider session id
  * @param {boolean=} options.connected - provider transport が接続中なら true
+ * @param {"complete"|"partial"=} options.snapshotCompleteness - 初期subscribeはcomplete、notify deltaはpartial
  * @param {object=} dependencies - テスト用依存差し替え
  * @param {object=} dependencies.materialProvider - material provider実装
  * @returns {object|null} 更新後runtime record、host不正なら null
@@ -1518,6 +1572,7 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     ? previous.lastState
     : {};
   const hasPayload = options.payload && typeof options.payload === "object";
+  const snapshotCompleteness = options.snapshotCompleteness === "complete" ? "complete" : "partial";
   const previousMaterialObservedAt = previous.materialProviderLastObservedAt ||
     previousLastState.materials?.provider?.lastObservedAt ||
     null;
@@ -1582,7 +1637,7 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
         observedAt: hasPayload ? materialProviderLastObservedAt || receivedAt : receivedAt,
         providerGeneration: providerSessionId,
         sequence: record.materialProviderObservedFrames,
-        snapshotCompleteness: hasPayload ? "complete" : "partial",
+        snapshotCompleteness: hasPayload ? snapshotCompleteness : "partial",
       })
     : null;
   record.materialSourceObservationStatus = materialObservation

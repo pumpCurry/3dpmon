@@ -105,6 +105,9 @@ vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
 }));
 
 const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await import('../../3dp_lib/dashboard_storage.js');
+const {
+  deriveMaterialSourceObservationFreshness,
+} = await import('../../3dp_lib/printer_core/dashboard_material_source_observation.js');
 
 beforeEach(() => {
   globalThis.localStorage.clear();
@@ -256,6 +259,26 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
             { observationId: "mso:1", changeKind: "source-observed", sourceId: "cfs:1:slot:2", authority: "observation-only" },
           ],
         },
+        "serial:fresh-before-restore": {
+          schemaVersion: 1,
+          deviceId: "serial:fresh-before-restore",
+          identityStrength: "stable",
+          host: "K2Pro-FreshBeforeRestore",
+          authority: "observation-only",
+          lastObservedAt: "2026-08-27T12:00:00.000Z",
+          providerDisconnectedAt: null,
+          latestBySourceId: {
+            "cfs:1:slot:0": {
+              sourceId: "cfs:1:slot:0",
+              kind: "cfs-slot",
+              presence: "loaded",
+              selected: true,
+              authority: "observation-only",
+              remaining: { rawPercent: 100, normalizedPercent: 100, valid: true, authority: "observation-only" },
+            },
+          },
+          events: [],
+        },
       },
     };
 
@@ -266,11 +289,14 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "managed-spool-031" });
     expect(monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"]).toMatchObject({
       authority: "observation-only",
+      restoredFromStorage: true,
+      restoredAt: expect.any(String),
       providerDisconnectedAt: "2026-08-27T12:05:00.000Z",
       latestBySourceId: {
         "cfs:1:slot:2": {
           selected: true,
           authority: "observation-only",
+          restoredFromStorage: true,
           material: {
             rfid: "",
             color: { raw: "#09ea7ae", displayHex: "9ea7ae", cssColor: "#9ea7ae" },
@@ -279,6 +305,14 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
         },
       },
     });
+    expect(deriveMaterialSourceObservationFreshness(
+      monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"],
+      { now: "2026-08-27T12:00:10.000Z", freshTtlMs: 60_000 }
+    )).toMatchObject({ state: "stale", reason: "provider-disconnected" });
+    expect(deriveMaterialSourceObservationFreshness(
+      monitorData.materialSourceObservations.byDeviceId["serial:fresh-before-restore"],
+      { now: "2026-08-27T12:00:10.000Z", freshTtlMs: 60_000 }
+    )).toMatchObject({ state: "stale", reason: "restored-last-known" });
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {

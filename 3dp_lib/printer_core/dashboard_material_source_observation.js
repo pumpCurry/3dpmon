@@ -18,9 +18,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1422 (PR #435)
+ * @version 1.390.1423 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-27 22:50:33
+ * @lastModified 2026-08-28 00:26:41
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -80,6 +80,9 @@ function toNullableString(value) {
  * @returns {?number} 有限数、またはfallback。
  */
 function toFiniteNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -179,8 +182,11 @@ function ensureDeviceRecord(store, options) {
       providerId: null,
       sessionId: null,
       providerGeneration: null,
+      retiredProviderGenerations: [],
       lastSequence: null,
       providerDisconnectedAt: null,
+      restoredFromStorage: false,
+      restoredAt: null,
       authority: "observation-only",
     };
   }
@@ -204,18 +210,18 @@ function ensureDeviceRecord(store, options) {
  * @returns {?string} source ID。
  */
 function resolveSourceId(source) {
-  const explicit = String(source?.sourceId || "").trim();
+  const explicit = String(source?.sourceId ?? "").trim();
   if (explicit) {
     return explicit;
   }
   const kind = String(source?.kind || "").trim();
-  const slotId = toFiniteNumber(source?.slotId, 0);
+  const slotId = toFiniteNumber(source?.slotId);
   if (kind === "external-spool") {
-    return `external:${slotId ?? 0}`;
+    return slotId === null ? null : `external:${slotId}`;
   }
   if (kind === "cfs-slot") {
-    const boxId = toFiniteNumber(source?.boxId, toFiniteNumber(source?.unitIndex, 0));
-    return `cfs:${boxId ?? 0}:slot:${slotId ?? 0}`;
+    const boxId = toFiniteNumber(source?.boxId, toFiniteNumber(source?.unitIndex));
+    return boxId === null || slotId === null ? null : `cfs:${boxId}:slot:${slotId}`;
   }
   return null;
 }
@@ -466,6 +472,13 @@ function rejectStaleBatch(record, options) {
   if (!record.lastObservedAt) {
     return null;
   }
+  const retiredGenerations = new Set(Array.isArray(record.retiredProviderGenerations)
+    ? record.retiredProviderGenerations.map((value) => String(value))
+    : []);
+  const incomingGeneration = options.providerGeneration ? String(options.providerGeneration) : null;
+  if (incomingGeneration && retiredGenerations.has(incomingGeneration)) {
+    return { accepted: false, reason: "stale-provider-generation", record };
+  }
   const nextTime = new Date(options.observedAt).getTime();
   const prevTime = new Date(record.lastObservedAt).getTime();
   if (Number.isFinite(nextTime) && Number.isFinite(prevTime) && nextTime < prevTime) {
@@ -482,6 +495,38 @@ function rejectStaleBatch(record, options) {
     }
   }
   return null;
+}
+
+/**
+ * provider generationの切替を退役リストへ反映する。
+ *
+ * 【詳細説明】
+ * - 再接続後に旧WebSocket/Moonraker callbackが遅れて到着しても、時刻が新しいという理由で
+ *   最新snapshotを巻き戻せないようにする。
+ *
+ * @private
+ * @function updateProviderGenerationLifecycle
+ * @param {Object} record - device観測レコード。
+ * @param {?string} nextGeneration - 今回受理するprovider generation。
+ * @returns {void}
+ */
+function updateProviderGenerationLifecycle(record, nextGeneration) {
+  const next = nextGeneration ? String(nextGeneration) : null;
+  if (!next) {
+    return;
+  }
+  const current = record.providerGeneration ? String(record.providerGeneration) : null;
+  if (!current || current === next) {
+    record.providerGeneration = next;
+    return;
+  }
+  const retired = new Set(Array.isArray(record.retiredProviderGenerations)
+    ? record.retiredProviderGenerations.map((value) => String(value))
+    : []);
+  retired.add(current);
+  retired.delete(next);
+  record.retiredProviderGenerations = Array.from(retired).slice(-16);
+  record.providerGeneration = next;
 }
 
 /**
@@ -545,20 +590,23 @@ export function recordMaterialTopologyObservation(store, options = {}) {
   }
   const observedAt = toIsoDateTimeString(options.observedAt);
   const snapshotCompleteness = options.snapshotCompleteness === "complete" ? "complete" : "partial";
+  const existingRecord = targetStore.byDeviceId[deviceId] || null;
+  if (existingRecord) {
+    const stale = rejectStaleBatch(existingRecord, {
+      observedAt,
+      providerGeneration: options.providerGeneration || null,
+      sequence: options.sequence ?? null,
+    });
+    if (stale) {
+      return stale;
+    }
+  }
   const record = ensureDeviceRecord(targetStore, {
     deviceId,
     identityStrength: options.identityStrength || "provisional",
     host: options.host || null,
     observedAt,
   });
-  const stale = rejectStaleBatch(record, {
-    observedAt,
-    providerGeneration: options.providerGeneration || null,
-    sequence: options.sequence ?? null,
-  });
-  if (stale) {
-    return stale;
-  }
 
   const topology = options.topology && typeof options.topology === "object" ? options.topology : {};
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
@@ -655,11 +703,13 @@ export function recordMaterialTopologyObservation(store, options = {}) {
   }
   record.providerId = options.providerId || topology.provider?.providerId || record.providerId || null;
   record.sessionId = options.sessionId || record.sessionId || null;
-  record.providerGeneration = options.providerGeneration || record.providerGeneration || null;
+  updateProviderGenerationLifecycle(record, options.providerGeneration || null);
   record.lastSequence = options.sequence ?? record.lastSequence ?? null;
   record.providerDisconnectedAt = topology.cfs?.topologyState === "stale"
     ? (topology.provider?.disconnectedAt || observedAt)
     : null;
+  record.restoredFromStorage = false;
+  record.restoredAt = null;
   record.snapshotCompleteness = snapshotCompleteness;
   record.diagnostics = diagnostics;
   record.events.push(...changes);
@@ -767,6 +817,9 @@ export function deriveMaterialSourceObservationFreshness(record, options = {}) {
   }
   if (record.providerDisconnectedAt) {
     return { state: "stale", reason: "provider-disconnected", ageMs: null };
+  }
+  if (record.restoredFromStorage === true) {
+    return { state: "stale", reason: "restored-last-known", ageMs: null };
   }
   const nowMs = new Date(options.now || Date.now()).getTime();
   const observedMs = new Date(record.lastObservedAt || 0).getTime();

@@ -3,9 +3,9 @@
  * @description
  * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1423 (PR #435)
  * @since 1.390.1299 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-28 00:46:55
  *
  * @vitest-environment jsdom
  */
@@ -599,6 +599,72 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(JSON.stringify(monitorData.filamentSpools)).toBe(untouched.filamentSpools);
   });
 
+  it("K2 material observationはMACをstable扱いせず、同一hostのprovisional履歴をserialへrekeyする", () => {
+    const host = "K2Pro-Rekey";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999", sessionId: "k2-live:provisional" });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      sessionId: "k2-live:provisional",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            { id: 1, state: 1, type: 0, materials: [{ id: 0, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 }] },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    expect(monitorData.materialSourceObservations.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"]).toMatchObject({
+      identityStrength: "provisional",
+    });
+
+    beginK2LiveShadowSession({ host, deviceId: "serial:905251280E69E7", sessionId: "k2-live:stable" });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId: "serial:905251280E69E7",
+      sessionId: "k2-live:stable",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            { id: 1, state: 1, type: 0, materials: [{ id: 0, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 }] },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    expect(monitorData.materialSourceObservations.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"]).toBeUndefined();
+    expect(monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"]).toMatchObject({
+      identityStrength: "stable",
+      aliases: ["provisional-shadow:endpoint:192.168.54.153%3A9999"],
+    });
+
+    setMachine("K2Pro-Mac");
+    beginK2LiveShadowSession({ host: "K2Pro-Mac", deviceId: "mac:58:41:46:cf:fa:99", sessionId: "k2-live:mac" });
+    observeK2LiveShadowFrame({
+      host: "K2Pro-Mac",
+      deviceId: "mac:58:41:46:cf:fa:99",
+      sessionId: "k2-live:mac",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            { id: 1, state: 1, type: 0, materials: [{ id: 0, vendor: "Generic", type: "PLA" }] },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:17:04.000Z",
+    });
+    expect(monitorData.materialSourceObservations.byDeviceId["mac:58:41:46:cf:fa:99"]).toMatchObject({
+      identityStrength: "provisional",
+    });
+  });
+
   it("CFS-C secondary provider切断時はlast-known topologyを空にせずstale化する", () => {
     const host = "K1C-CFSC-Live";
     setMachine(host);
@@ -713,6 +779,65 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(monitorData.hostSpoolMap).toEqual({ [host]: "k1-managed-spool" });
     expect(monitorData.mountHistory).toEqual([]);
     expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it("CFS-C notify deltaはpartial観測として扱い、payloadに無いslotをtombstone化しない", () => {
+    const host = "K1C-CFSC-Delta";
+    setMachine(host);
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 80 },
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:delta",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 53 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:delta",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:14.000Z",
+      snapshotCompleteness: "partial",
+    });
+
+    const observation = monitorData.materialSourceObservations.byDeviceId["material-provider:K1C-CFSC-Delta"];
+    expect(observation.latestBySourceId["cfs:1:slot:0"]).toMatchObject({
+      presence: "loaded",
+      material: { name: "White PLA" },
+      lastObservedAt: "2026-08-07T08:15:04.000Z",
+    });
+    expect(observation.latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      presence: "loaded",
+      remaining: { rawPercent: 53 },
+      lastObservedAt: "2026-08-07T08:15:14.000Z",
+    });
+    expect(observation.events.some((event) => event.sourceId === "cfs:1:slot:0" && event.changeKind === "source-disappeared")).toBe(false);
   });
 
   it("endK2LiveShadowSession はruntimeDataをclosedへ更新する", () => {

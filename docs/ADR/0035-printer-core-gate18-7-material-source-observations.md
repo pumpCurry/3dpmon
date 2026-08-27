@@ -19,8 +19,18 @@ external spool/CFS slot state across restart without mixing it into the
   and remaining raw/normalized/valid fields.
 - Add bounded semantic change events. Heartbeat-only observations update
   `lastObservedAt` but do not create new change events.
+- Treat `null`, `undefined`, and empty numeric protocol fields as unobserved,
+  not as numeric zero. Missing source identity is reported as a diagnostic
+  instead of being collapsed to slot `0`.
+- Track provider generations. When a newer generation is accepted, the previous
+  generation is retired so delayed callbacks from old sessions cannot roll the
+  snapshot back.
+- Treat K2 `boxsInfo` responses as complete snapshots. Treat CFS-C Moonraker
+  `notify_status_update` material payloads as partial snapshots unless the
+  initial subscribe response explicitly marks them complete.
 - Persist the observation store through localStorage and IndexedDB shared
-  storage as last-known read-only evidence.
+  storage as last-known read-only evidence. Restored records start as
+  `restored-last-known` / stale until a fresh provider observation arrives.
 
 ## Non-Authority Boundary
 

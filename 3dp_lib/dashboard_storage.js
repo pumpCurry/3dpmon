@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1422 (PR #435)
+* @version 1.390.1423 (PR #435)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-27 23:08:42
+* @lastModified 2026-08-28 00:39:17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1166,6 +1166,36 @@ function cloneStorageJsonValue(value) {
 }
 
 /**
+ * 復元したmaterial source観測をlast-known evidenceとして印付けする。
+ *
+ * 【詳細説明】
+ * - localStorage/IndexedDBから戻した観測は「現在取得できた値」ではなく、保存時点のread-only証跡である。
+ * - live providerから新しい観測を受けるまではfresh表示しないよう、record単位で復元理由を持たせる。
+ *
+ * @private
+ * @function markRestoredMaterialSourceObservationRecord
+ * @param {Object} record - 復元したdevice観測レコード。
+ * @param {string} restoredAt - 復元日時ISO文字列。
+ * @returns {Object} last-known印付きの観測レコード。
+ */
+function markRestoredMaterialSourceObservationRecord(record, restoredAt) {
+  const restored = cloneStorageJsonValue(record) || {};
+  restored.restoredFromStorage = true;
+  restored.restoredAt = restoredAt;
+  restored.authority = "observation-only";
+  if (restored.latestBySourceId && typeof restored.latestBySourceId === "object") {
+    for (const snapshot of Object.values(restored.latestBySourceId)) {
+      if (snapshot && typeof snapshot === "object") {
+        snapshot.restoredFromStorage = true;
+        snapshot.restoredAt = restoredAt;
+        snapshot.authority = "observation-only";
+      }
+    }
+  }
+  return restored;
+}
+
+/**
  * データソースから monitorData を復元する内部ヘルパー。
  * IndexedDB と localStorage の両方から使用される。
  *
@@ -1514,10 +1544,12 @@ function _restoreFromData(shared, machines) {
       monitorData.materialSourceObservations.byDeviceId = {};
     }
     const restoredByDevice = shared.materialSourceObservations.byDeviceId;
+    const restoredAt = new Date().toISOString();
     if (restoredByDevice && typeof restoredByDevice === "object" && !Array.isArray(restoredByDevice)) {
       for (const [deviceId, record] of Object.entries(restoredByDevice)) {
         if (record && typeof record === "object" && !monitorData.materialSourceObservations.byDeviceId[deviceId]) {
-          monitorData.materialSourceObservations.byDeviceId[deviceId] = cloneStorageJsonValue(record);
+          monitorData.materialSourceObservations.byDeviceId[deviceId] =
+            markRestoredMaterialSourceObservationRecord(record, restoredAt);
         }
       }
     }

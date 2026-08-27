@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1423 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-27 15:45:53
+ * @lastModified 2026-08-28 00:36:02
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1235,13 +1235,14 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     onData: () => {
       /* CFS-C provider sessionではK1互換状態をUIへ流さず、material payloadだけを使う。 */
     },
-    onMaterial: (payload) => {
+    onMaterial: (payload, _materialHost, snapshotCompleteness = "partial") => {
       observeMoonrakerCfsMaterialProviderFrame({
         host,
         payload,
         providerSessionId,
         connected: true,
         receivedAt: new Date().toISOString(),
+        snapshotCompleteness,
       });
     },
     shouldReconnect: () => !state.userDisc,

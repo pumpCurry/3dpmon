@@ -30,9 +30,9 @@
  * - {@link extractMoonrakerMaterialPayloadFromStatus}：Moonraker statusからCFS-C material payload候補を抽出
  * - {@link createMoonrakerSession}：WebSocket セッション(接続/購読/再接続)生成
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1423 (PR #435)
  * @since   1.390.1119 (PR #385)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-28 00:34:28
  * -----------------------------------------------------------
  * @todo
  * - Phase 1: 履歴(server/history)/ファイル(server/files)取り込み、カメラ(webcams/list)URL対応
@@ -872,9 +872,10 @@ export function createMoonrakerSession(opts) {
    *
    * @private
    * @param {Object|null|undefined} status - Moonraker status snapshot/delta
+   * @param {"complete"|"partial"} snapshotCompleteness - 初期snapshotか差分pushかを示す種別
    * @returns {void}
    */
-  const emitMaterial = (status) => {
+  const emitMaterial = (status, snapshotCompleteness = "partial") => {
     if (typeof onMaterial !== "function") {
       return;
     }
@@ -883,7 +884,7 @@ export function createMoonrakerSession(opts) {
       return;
     }
     try {
-      onMaterial(payload, ctx.hostname);
+      onMaterial(payload, ctx.hostname, snapshotCompleteness);
     } catch (e) {
       onLog(`[moonraker] CFS-C material通知エラー: ${e.message}`, "warn");
     }
@@ -1071,7 +1072,7 @@ export function createMoonrakerSession(opts) {
       } else if (tag === "subscribe" && result?.status) {
         // 初期スナップショット
         mergeMoonrakerStatus(accStatus, result.status);
-        emitMaterial(result.status);
+        emitMaterial(result.status, "complete");
         if (materialOnly) {
           return;
         }
@@ -1105,7 +1106,7 @@ export function createMoonrakerSession(opts) {
     if (msg.method === "notify_status_update" && Array.isArray(msg.params)) {
       const partialStatus = msg.params[0] || {};
       mergeMoonrakerStatus(accStatus, partialStatus);
-      emitMaterial(partialStatus);
+      emitMaterial(partialStatus, "partial");
       if (materialOnly) {
         return;
       }

@@ -9,9 +9,9 @@
  * フィクスチャは実機 Ideaformer IR3 v2 (Klipper v2.0.1 / Moonraker v0.9.2,
  * 192.168.54.15) から取得した実データを使用する。
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1423 (PR #435)
  * @since 1.390.1119 (PR #385)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-28 00:56:16
  */
 import { describe, it, expect } from 'vitest';
 
@@ -883,7 +883,7 @@ describe('createMoonrakerSession material-only provider', () => {
           },
         },
       });
-      expect(onMaterial).toHaveBeenCalledWith({ materialBoxs: [] }, 'K1C-CFSC');
+      expect(onMaterial).toHaveBeenCalledWith({ materialBoxs: [] }, 'K1C-CFSC', 'complete');
     } finally {
       globalThis.WebSocket = originalWebSocket;
     }

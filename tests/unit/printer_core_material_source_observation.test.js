@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1422 (PR #435)
+ * @version 1.390.1423 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-27 23:12:24
+ * @lastModified 2026-08-28 00:43:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -334,5 +334,148 @@ describe("MaterialSourceObservationStore", () => {
 
     expect(rejected).toMatchObject({ accepted: false, reason: "stale-provider-generation" });
     expect(store.byDeviceId["serial:905251280E69E7"].latestBySourceId["cfs:1:slot:2"]).toBeTruthy();
+  });
+
+  it("nullや空文字を0へ変換せず、source ID欠落はdiagnosticへ逃がす", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const result = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-null",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-null",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({
+        sources: [
+          {
+            sourceId: "cfs:1:slot:null-state",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: "null-state",
+            material: { vendor: "", type: "", name: "", color: null, rfid: null },
+            status: { stateCode: null, selected: null, remaining: { rawPercent: null, normalizedPercent: null, valid: null } },
+          },
+          {
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: null,
+            material: { vendor: "Generic", type: "PLA" },
+            status: { stateCode: 1 },
+          },
+          {
+            kind: "external-spool",
+            slotId: "",
+            material: { vendor: "Generic", type: "PLA" },
+            status: { stateCode: 1 },
+          },
+        ],
+      }),
+      snapshotCompleteness: "complete",
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.record.latestBySourceId["cfs:1:slot:null-state"]).toMatchObject({
+      presence: "unknown",
+      status: {
+        stateCode: null,
+      },
+    });
+    expect(result.record.latestBySourceId["cfs:1:slot:0"]).toBeUndefined();
+    expect(result.record.latestBySourceId["external:0"]).toBeUndefined();
+    expect(result.record.diagnostics.map((entry) => entry.reason)).toEqual([
+      "source-id-missing",
+      "source-id-missing",
+    ]);
+  });
+
+  it("新しいprovider generationを受理した後は退役generationの遅延frameを時刻に関係なく拒否する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology(),
+    });
+    const advanced = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-b",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-2",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: createTopology(),
+    });
+    const staleLater = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:20.000Z",
+      topology: createTopology({ sources: [] }),
+      snapshotCompleteness: "complete",
+    });
+
+    expect(advanced.accepted).toBe(true);
+    expect(advanced.record.providerGeneration).toBe("ws-2");
+    expect(advanced.record.retiredProviderGenerations).toEqual(["ws-1"]);
+    expect(staleLater).toMatchObject({ accepted: false, reason: "stale-provider-generation" });
+    expect(store.byDeviceId["serial:905251280E69E7"].providerGeneration).toBe("ws-2");
+    expect(store.byDeviceId["serial:905251280E69E7"].latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      presence: "loaded",
+    });
+  });
+
+  it("復元済みrecordはTTL内でもlast-known staleとして扱い、新しいlive観測でfreshへ戻る", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const result = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology(),
+    });
+    result.record.restoredFromStorage = true;
+    result.record.restoredAt = "2026-08-27T12:00:10.000Z";
+
+    expect(deriveMaterialSourceObservationFreshness(result.record, {
+      now: "2026-08-27T12:00:20.000Z",
+      freshTtlMs: 60_000,
+    })).toMatchObject({ state: "stale", reason: "restored-last-known" });
+
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:30.000Z",
+      topology: createTopology(),
+    });
+
+    expect(result.record.restoredFromStorage).toBe(false);
+    expect(deriveMaterialSourceObservationFreshness(result.record, {
+      now: "2026-08-27T12:00:40.000Z",
+      freshTtlMs: 60_000,
+    })).toMatchObject({ state: "fresh", reason: "within-ttl" });
   });
 });
