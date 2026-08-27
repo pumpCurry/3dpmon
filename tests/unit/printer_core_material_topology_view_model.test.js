@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1374 (PR #432)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-25 19:58:02
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -218,13 +218,30 @@ describe("Printer Core v3 material topology view model", () => {
 
   it("K2 Pro Comboの1C銀色PLA selected/残量/assignmentを表示モデルへ保持する", () => {
     const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
-    const viewModel = createMaterialTopologyViewModel(topology);
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      observation: {
+        lastObservedAt: "2026-08-27T03:34:56.000Z",
+        request: {
+          state: "in-flight",
+          startedAt: "2026-08-27T03:35:01.000Z",
+          startedAtMs: Date.parse("2026-08-27T03:35:01.000Z"),
+        },
+        nowMs: Date.parse("2026-08-27T03:35:14.000Z"),
+      },
+    });
     const selectedSlot = viewModel.units[0].slots[2];
 
     expect(viewModel.cfs).toMatchObject({
       connected: true,
       enabled: true,
       topologyState: "fresh",
+    });
+    expect(viewModel.observation).toMatchObject({
+      lastObservedAt: "2026-08-27T03:34:56.000Z",
+      request: {
+        state: "in-flight",
+        elapsedSeconds: 13,
+      },
     });
     expect(viewModel.external[0]).toMatchObject({
       kind: "external-spool",

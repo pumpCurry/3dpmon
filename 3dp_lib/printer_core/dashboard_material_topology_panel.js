@@ -18,7 +18,7 @@
  *
  * @version 1.390.1420 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-27 12:22:38
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
@@ -78,24 +78,60 @@ function normalizePresenceClass(value) {
 }
 
 /**
+ * 日時を `yyyy-mm-dd hh:mm:ss` へ変換する。
+ *
+ * 【詳細説明】
+ * - CFSの観測鮮度は「最新/最終観測」だけでは判断しづらいため、利用者のローカル時刻で表示する。
+ *
+ * @private
+ * @param {*} value - 日時候補
+ * @returns {string|null} 表示用日時、またはnull
+ */
+function formatLocalDateTime(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  const pad = (numberValue) => String(numberValue).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + " " + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(":");
+}
+
+/**
  * topology stateを利用者向けの日本語表示へ変換する。
  *
  * 【詳細説明】
- * - protocol内部語のfresh/staleをそのまま出すと現在値/過去値の判断が難しいため、
- *   監視画面では「最新」「最終観測」などの運用語へ置き換える。
+ * - fresh/staleの語だけでは「いつの値か」が分からないため、観測済みなら常に日時を表示する。
+ * - 通信中は状態表示の前に `(📡: xx秒)` を付け、probe応答待ちであることを明示する。
  *
  * @private
  * @param {*} value - topology state候補
+ * @param {object=} observation - ViewModelの観測情報
  * @returns {string} 利用者向け状態ラベル
  */
-function formatTopologyState(value) {
-  if (value === "fresh") {
-    return "状態: 最新";
+function formatTopologyState(value, observation = {}) {
+  const observedAtText = formatLocalDateTime(observation?.lastObservedAt);
+  const request = observation?.request && typeof observation.request === "object" ? observation.request : {};
+  const requestPrefix = request.state === "in-flight" && Number.isFinite(Number(request.elapsedSeconds))
+    ? `(📡: ${Math.max(0, Number(request.elapsedSeconds))}秒) `
+    : "";
+  if (observedAtText) {
+    return `${requestPrefix}状態: ${observedAtText}`;
   }
   if (value === "stale") {
-    return "状態: 最終観測";
+    return `${requestPrefix}状態: 最終観測時刻不明`;
   }
-  return "状態: 取得待ち";
+  return `${requestPrefix}状態: 取得待ち`;
 }
 
 /**
@@ -195,6 +231,21 @@ function formatAssignments(assignments) {
     .map((assignment) => assignment.assignmentId)
     .filter(Boolean);
   return values.length > 0 ? values.join(", ") : "";
+}
+
+/**
+ * assignmentを利用者向けの短い説明へ変換する。
+ *
+ * 【詳細説明】
+ * - `T1A` は物理slot名ではなくG-code/slicer側のtool aliasなので、裸表示せず「割当:」を付ける。
+ *
+ * @private
+ * @param {Array<object>} assignments - assignment一覧
+ * @returns {string} 表示文字列
+ */
+function formatAssignmentLabel(assignments) {
+  const assignmentText = formatAssignments(assignments);
+  return assignmentText ? `割当: ${assignmentText}` : "";
 }
 
 /**
@@ -394,6 +445,9 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {})
   const slot = createElement(documentRef, "div", `mtv-slot mtv-presence-${presence}`);
   slot.dataset.slot = row?.displaySlot || "";
   slot.dataset.presence = presence;
+  if (Array.isArray(row?.assignments) && row.assignments.length > 0) {
+    slot.classList.add("mtv-assigned");
+  }
   if (row?.selected === true) {
     slot.classList.add("mtv-selected");
   }
@@ -424,7 +478,7 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {})
   }
   slot.appendChild(remaining);
 
-  const assignmentText = formatAssignments(row?.assignments);
+  const assignmentText = formatAssignmentLabel(row?.assignments);
   if (assignmentText) {
     slot.appendChild(createElement(documentRef, "div", "mtv-assignment", assignmentText));
   }
@@ -525,7 +579,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const controlPolicy = createControlPolicy(currentViewModel, options);
     root.classList.add(`mtv-root-${topologyState}`);
     header.appendChild(createElement(documentRef, "span", "mtv-title", "フィラメント供給"));
-    header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState)));
+    header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState, currentViewModel?.observation)));
     root.appendChild(header);
 
     if (isStale) {

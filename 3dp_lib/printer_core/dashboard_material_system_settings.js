@@ -19,9 +19,9 @@
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -111,12 +111,12 @@ export const MATERIAL_EXTERNAL_SOURCE_LIMIT = 1;
  *
  * 【詳細説明】
  * - CFS/CFS-Cの装填/選択/残量は人間が監視する情報なので、通信停止後もfresh表示のまま残すと
- *   「現在選択中」と誤読される。K2のboxsInfo probeは30秒周期のため、1回分の遅延を吸収できる
- *   90秒を超えた観測値は表示側でstaleへ落とす。
+ *   「現在選択中」と誤読される。K2のboxsInfo probeは10秒周期、応答待ちtimeoutは25秒なので、
+ *   stale表示へ落ちる前に複数回の取得機会を持てる45秒を採用する。
  *
  * @constant {number}
  */
-export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 90_000;
+export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 45_000;
 
 /**
  * 配列内の許可値に一致する文字列だけを返す。

@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -112,7 +112,10 @@ function getSlotActionButton(root, slot, action) {
 describe("Printer Core v3 material topology panel", () => {
   it("1台CFS設定では外部1本と1A-1Dだけを描画する", () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
-    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: { lastObservedAt: "2026-08-27T03:34:56.000Z" },
+    });
     const container = document.createElement("div");
 
     renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
@@ -123,6 +126,8 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.textContent).toContain("Silver PLA");
     expect(container.textContent).toContain("残量 54%");
     expect(container.textContent).toContain("現在選択中");
+    expect(container.textContent).toContain("状態: 2026-08-27");
+    expect(container.textContent).not.toContain("状態: 最新");
     expect(container.textContent).toContain("外部スプール（CFSとは別管理）");
     expect(container.textContent).toContain("監視のみ");
     expect(container.querySelectorAll(".mtv-control-btn")).toHaveLength(0);
@@ -177,15 +182,54 @@ describe("Printer Core v3 material topology panel", () => {
 
   it("stale topologyではbannerと最終観測表示で現在値との誤認を防ぐ", () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: false });
-    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: { lastObservedAt: "2026-08-27T03:34:56.000Z" },
+    });
     const container = document.createElement("div");
 
     renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
 
     expect(container.querySelector(".mtv-root")?.classList.contains("mtv-root-stale")).toBe(true);
     expect(container.textContent).toContain("CFS情報を現在取得できません");
+    expect(container.textContent).toContain("状態: 2026-08-27");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:選択中");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
+  });
+
+  it("通信中は状態表示の前に通信開始からの秒数を表示する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-27T03:34:56.000Z",
+        request: {
+          state: "in-flight",
+          startedAt: "2026-08-27T03:35:01.000Z",
+          startedAtMs: Date.parse("2026-08-27T03:35:01.000Z"),
+        },
+        nowMs: Date.parse("2026-08-27T03:35:14.000Z"),
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    expect(container.querySelector(".mtv-topology-state")?.textContent).toContain("(📡: 13秒) 状態:");
+  });
+
+  it("assignmentは裸のT1Aではなく割当バッジとして表示し、選択中slotを強調する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    const selectedSlot = container.querySelector('.mtv-slot[data-slot="1C"]');
+    const assignment = selectedSlot?.querySelector(".mtv-assignment");
+    expect(selectedSlot?.classList.contains("mtv-selected")).toBe(true);
+    expect(selectedSlot?.classList.contains("mtv-assigned")).toBe(true);
+    expect(assignment?.textContent).toBe("割当: T1C");
   });
 
   it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {

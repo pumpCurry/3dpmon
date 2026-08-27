@@ -22,7 +22,7 @@
  *
 * @version 1.390.1420 (PR #434)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-27 12:22:38
+* @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -491,7 +491,14 @@ export function createFilamentManagerMaterialSupplySection(host) {
     return null;
   }
   const viewOptions = resolveMaterialTopologyViewOptions({ target, printerType, topology });
-  const viewModel = createMaterialTopologyViewModel(topology, viewOptions);
+  const viewModel = createMaterialTopologyViewModel(topology, {
+    ...viewOptions,
+    observation: {
+      lastObservedAt: shadowRecord?.materialProviderLastObservedAt || topology?.provider?.lastObservedAt || null,
+      request: shadowRecord?.materialProviderRequest || null,
+      nowMs: Date.now(),
+    },
+  });
   const topologyState = viewModel.summary?.topologyState || "unobserved";
   const isStale = topologyState === "stale";
 

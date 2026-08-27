@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1391 (PR #432)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-26 02:02:52
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -157,6 +157,12 @@ const connectionMap = {};
  *                                        - K2 CFS boxsInfo を受信済みか
  * @property {number|null}    printerCoreV3K2BoxsInfoProbeLastSentAt
  *                                        - K2 CFS boxsInfo refresh/probe を最後に観測または送信した epoch ms
+ * @property {boolean}        printerCoreV3K2BoxsInfoProbeInFlight
+ *                                        - K2 CFS boxsInfo probe 応答待ち中か
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeStartedAt
+ *                                        - K2 CFS boxsInfo probe 応答待ち開始 epoch ms
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeDeadlineAt
+ *                                        - K2 CFS boxsInfo probe timeout 判定 epoch ms
  * @property {boolean|null}   printerCoreV3K2CfsConnected
  *                                        - K2 CFS 接続状態の直近観測
  * @property {number}         printerCoreV3K2CfsEpoch
@@ -187,7 +193,18 @@ const MAX_RECONNECT = 5;
  *
  * @constant {number}
  */
-const K2_BOXS_INFO_REFRESH_INTERVAL_MS = 30_000;
+const K2_BOXS_INFO_REFRESH_INTERVAL_MS = 10_000;
+
+/**
+ * K2/CFS `boxsInfo` read-only probe の応答待ちtimeout。
+ *
+ * 【詳細説明】
+ * - 表示上のfresh TTLより短くし、stale表示へ落ちる前に次のprobeを準備できるようにする。
+ * - 応答待ち中は同じprobeを重ねず、UIへ「通信中 xx秒」を出すための状態だけ更新する。
+ *
+ * @constant {number}
+ */
+const K2_BOXS_INFO_PROBE_TIMEOUT_MS = 25_000;
 
 /**
  * K1C/CFS-C secondary material provider の既定subscribe候補。
@@ -978,6 +995,47 @@ function _endPrinterCoreV3LiveShadowSession(host, state) {
 }
 
 /**
+ * K2/CFS boxsInfo probe の通信状態をruntimeDataへ反映する。
+ *
+ * 【詳細説明】
+ * - フィラメントパネルは通信中だけ `(📡: xx秒)` を表示するため、probe送信/受信/timeoutの
+ *   揮発状態を shadow record に保存する。
+ * - 既存の lastState / material topology は書き換えず、観測証跡と通信中表示だけを分離する。
+ *
+ * @private
+ * @param {string} host - 対象ホスト名
+ * @param {ConnectionState} state - 接続状態
+ * @param {"in-flight"|"idle"|"timeout"|"error"} requestState - probe通信状態
+ * @param {number=} nowMs - 現在時刻epoch ms
+ * @returns {void}
+ */
+function _recordK2CfsBoxsInfoProbeRuntime(host, state, requestState, nowMs = Date.now()) {
+  const machine = monitorData.machines?.[host];
+  if (!machine) {
+    return;
+  }
+  machine.runtimeData ??= {};
+  const previous = machine.runtimeData.printerCoreV3Shadow || {};
+  const startedAt = state?.printerCoreV3K2BoxsInfoProbeStartedAt || null;
+  machine.runtimeData.printerCoreV3Shadow = {
+    ...previous,
+    materialProviderRequest: {
+      ...(previous.materialProviderRequest || {}),
+      state: requestState,
+      startedAt: requestState === "in-flight" && startedAt ? new Date(startedAt).toISOString() : null,
+      startedAtMs: requestState === "in-flight" ? startedAt : null,
+      lastSentAt: state?.printerCoreV3K2BoxsInfoProbeLastSentAt
+        ? new Date(state.printerCoreV3K2BoxsInfoProbeLastSentAt).toISOString()
+        : previous.materialProviderRequest?.lastSentAt ?? null,
+      deadlineAt: requestState === "in-flight" && state?.printerCoreV3K2BoxsInfoProbeDeadlineAt
+        ? new Date(state.printerCoreV3K2BoxsInfoProbeDeadlineAt).toISOString()
+        : null,
+      updatedAt: new Date(nowMs).toISOString(),
+    },
+  };
+}
+
+/**
  * K2 Pro Combo + CFS の read-only `boxsInfo` probe を必要に応じて送る。
  *
  * 【詳細説明】
@@ -1005,8 +1063,12 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoProbeSent = false;
     state.printerCoreV3K2BoxsInfoReceived = false;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
     state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "idle");
     return false;
   }
   if (hasCfsConnect && cfsConnectValue === 1 && state.printerCoreV3K2CfsConnected !== true) {
@@ -1014,6 +1076,9 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoProbeSent = false;
     state.printerCoreV3K2BoxsInfoReceived = false;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
     state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
   }
@@ -1025,12 +1090,30 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoReceived = true;
     state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = Date.now();
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "idle");
     return false;
   }
   if (!hasCfsConnect || cfsConnectValue !== 1) {
     return false;
   }
   const nowMs = Date.now();
+  const inFlightStartedAt = Number(state.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
+  const probeInFlight = state.printerCoreV3K2BoxsInfoProbeInFlight === true &&
+    inFlightStartedAt > 0 &&
+    nowMs - inFlightStartedAt < K2_BOXS_INFO_PROBE_TIMEOUT_MS;
+  if (probeInFlight) {
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "in-flight", nowMs);
+    return false;
+  }
+  if (state.printerCoreV3K2BoxsInfoProbeInFlight === true && inFlightStartedAt > 0) {
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "timeout", nowMs);
+  }
   const lastSentAt = Number(state.printerCoreV3K2BoxsInfoProbeLastSentAt || 0);
   const refreshDue = lastSentAt <= 0 || nowMs - lastSentAt >= K2_BOXS_INFO_REFRESH_INTERVAL_MS;
   const alreadyHandledThisEpoch =
@@ -1044,9 +1127,17 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoProbeSent = true;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = epoch;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = nowMs;
+    state.printerCoreV3K2BoxsInfoProbeInFlight = true;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = nowMs;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = nowMs + K2_BOXS_INFO_PROBE_TIMEOUT_MS;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "in-flight", nowMs);
     pushLog("[Printer Core v3] K2 CFS boxsInfo read-only probe を送信しました", "info", false, host);
     return true;
   } catch (e) {
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "error");
     pushLog(`[Printer Core v3] K2 CFS boxsInfo probe 送信エラー: ${e.message}`, "warn", false, host);
     return false;
   }
@@ -1276,6 +1367,9 @@ const placeholderState = {
   printerCoreV3K2BoxsInfoProbeSent: false,
   printerCoreV3K2BoxsInfoReceived: false,
   printerCoreV3K2BoxsInfoProbeLastSentAt: null,
+  printerCoreV3K2BoxsInfoProbeInFlight: false,
+  printerCoreV3K2BoxsInfoProbeStartedAt: null,
+  printerCoreV3K2BoxsInfoProbeDeadlineAt: null,
   printerCoreV3K2CfsConnected: null,
   printerCoreV3K2CfsEpoch: 0,
   printerCoreV3K2BoxsInfoProbeSentEpoch: null,
@@ -1322,6 +1416,9 @@ function getState(host) {
       printerCoreV3K2BoxsInfoProbeSent: false,
       printerCoreV3K2BoxsInfoReceived: false,
       printerCoreV3K2BoxsInfoProbeLastSentAt: null,
+      printerCoreV3K2BoxsInfoProbeInFlight: false,
+      printerCoreV3K2BoxsInfoProbeStartedAt: null,
+      printerCoreV3K2BoxsInfoProbeDeadlineAt: null,
       printerCoreV3K2CfsConnected: null,
       printerCoreV3K2CfsEpoch: 0,
       printerCoreV3K2BoxsInfoProbeSentEpoch: null,
@@ -2032,6 +2129,9 @@ function handleSocketOpen(host) {
   st.printerCoreV3K2BoxsInfoProbeSent = false;
   st.printerCoreV3K2BoxsInfoReceived = false;
   st.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+  st.printerCoreV3K2BoxsInfoProbeInFlight = false;
+  st.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+  st.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
   st.printerCoreV3K2CfsConnected = null;
   st.printerCoreV3K2CfsEpoch = 0;
   st.printerCoreV3K2BoxsInfoProbeSentEpoch = null;

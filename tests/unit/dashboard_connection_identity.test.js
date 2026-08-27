@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1391 (PR #432)
+ * @version 1.390.1420 (PR #434)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-26 02:02:52
+ * @lastModified 2026-08-27 15:45:53
  *
  * @vitest-environment jsdom
  */
@@ -704,6 +704,48 @@ describe("Printer Core v3 identity dry-run", () => {
       expect(ws.sentMessages).toEqual([
         JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
       ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("K2 CFS boxsInfo probe応答待ちは通信中状態をruntimeDataへ記録しtimeout前に重複送信しない", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      mod.connectWithType("203.0.113.36:9999", "creality-k2");
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      dataMock.monitorData.machines["K2Pro-InFlight"] = { runtimeData: {} };
+
+      mod.simulateReceivedJson(JSON.stringify({
+        hostname: "K2Pro-InFlight",
+        model: "F012",
+        cfsConnect: 1,
+      }), "203.0.113.36");
+
+      expect(ws.sentMessages).toEqual([
+        JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
+      ]);
+      expect(dataMock.monitorData.machines["K2Pro-InFlight"].runtimeData.printerCoreV3Shadow.materialProviderRequest).toMatchObject({
+        state: "in-flight",
+        startedAtMs: 1_000,
+      });
+
+      nowSpy.mockReturnValue(12_000);
+      mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-InFlight");
+      expect(ws.sentMessages).toHaveLength(1);
+      expect(dataMock.monitorData.machines["K2Pro-InFlight"].runtimeData.printerCoreV3Shadow.materialProviderRequest).toMatchObject({
+        state: "in-flight",
+        startedAtMs: 1_000,
+      });
+
+      nowSpy.mockReturnValue(26_500);
+      mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-InFlight");
+      expect(ws.sentMessages).toHaveLength(2);
+      expect(dataMock.monitorData.machines["K2Pro-InFlight"].runtimeData.printerCoreV3Shadow.materialProviderRequest).toMatchObject({
+        state: "in-flight",
+        startedAtMs: 26_500,
+      });
     } finally {
       nowSpy.mockRestore();
     }

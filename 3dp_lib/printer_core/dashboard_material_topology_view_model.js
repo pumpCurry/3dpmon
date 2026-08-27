@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1376 (PR #432)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-25 20:35:00
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -124,6 +124,25 @@ function toNullableBoolean(value) {
   }
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue === 1 : null;
+}
+
+/**
+ * ISO日時やepoch msを表示用ISO文字列へ正規化する。
+ *
+ * 【詳細説明】
+ * - ViewModelはDOM描画前の境界なので、日時の妥当性だけを確認してISO文字列へ寄せる。
+ * - null/不正値はnullにし、rendererが「未観測」と表示できるようにする。
+ *
+ * @private
+ * @param {*} value - 日時候補
+ * @returns {string|null} ISO日時、またはnull
+ */
+function toIsoDateTimeString(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 /**
@@ -516,6 +535,42 @@ function createSummary(externalRows, cfsUnits, topology) {
 }
 
 /**
+ * material topology の観測・通信状態を表示用に正規化する。
+ *
+ * 【詳細説明】
+ * - provider.lastObservedAt は「現在値/最終観測値がいつのものか」を利用者へ示すため必ずViewModelへ渡す。
+ * - materialProviderRequest は通信中表示専用であり、slot情報や台帳authorityとは分離する。
+ *
+ * @private
+ * @param {object} topology - normalized material topology
+ * @param {object|null|undefined} observation - runtimeData由来の観測補助情報
+ * @returns {object} 表示用観測情報
+ */
+function createObservationView(topology, observation) {
+  const request = observation?.request && typeof observation.request === "object"
+    ? observation.request
+    : {};
+  const requestStartedAtMs = toFiniteNumber(request.startedAtMs);
+  const nowMs = toFiniteNumber(observation?.nowMs, Date.now());
+  const requestElapsedSeconds = request.state === "in-flight" && requestStartedAtMs !== null
+    ? Math.max(0, Math.floor(((nowMs ?? Date.now()) - requestStartedAtMs) / 1000))
+    : null;
+  return {
+    lastObservedAt: toIsoDateTimeString(
+      topology?.provider?.lastObservedAt ??
+      observation?.lastObservedAt
+    ),
+    request: {
+      state: request.state || "idle",
+      startedAt: toIsoDateTimeString(request.startedAt),
+      startedAtMs: requestStartedAtMs,
+      elapsedSeconds: requestElapsedSeconds,
+      updatedAt: toIsoDateTimeString(request.updatedAt),
+    },
+  };
+}
+
+/**
  * material topology から表示用 view model を生成する。
  *
  * 【詳細説明】
@@ -532,6 +587,7 @@ function createSummary(externalRows, cfsUnits, topology) {
  * @param {number=} options.slotsPerUnit - CFS 1unitあたりslot数
  * @param {number=} options.externalSourceLimit - 外部スプール表示数
  * @param {object=} options.commandAuthority - UI操作候補用command authority
+ * @param {object=} options.observation - runtimeData由来の観測・通信補助情報
  * @returns {object} material topology 表示用 view model
  * @example
  * const viewModel = createMaterialTopologyViewModel(state.materials);
@@ -562,6 +618,7 @@ export function createMaterialTopologyViewModel(topology, options = {}) {
       topologyState: safeTopology.cfs?.topologyState || "unobserved",
       provider: safeTopology.provider || null,
     },
+    observation: createObservationView(safeTopology, options.observation),
     external: externalRows,
     units: cfsUnits,
     diagnostics: Array.isArray(safeTopology.diagnostics) ? [...safeTopology.diagnostics] : [],

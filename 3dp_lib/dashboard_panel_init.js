@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1383 (PR #432)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-25 22:55:00
+ * @lastModified 2026-08-27 15:45:53
  * -----------------------------------------------------------
  */
 
@@ -471,7 +471,14 @@ function initFilamentPanel(body, hostname) {
         printerType,
         topology: latestTopology,
       });
-      return createMaterialTopologyViewModel(latestTopology, viewOptions);
+      return createMaterialTopologyViewModel(latestTopology, {
+        ...viewOptions,
+        observation: {
+          lastObservedAt: latestShadowRecord?.materialProviderLastObservedAt || latestTopology?.provider?.lastObservedAt || null,
+          request: latestShadowRecord?.materialProviderRequest || null,
+          nowMs: Date.now(),
+        },
+      });
     };
     const createSignature = (viewModel) => JSON.stringify({
       limits: viewModel.limits,
@@ -479,6 +486,7 @@ function initFilamentPanel(body, hostname) {
       external: viewModel.external,
       units: viewModel.units,
       summary: viewModel.summary,
+      observation: viewModel.observation,
       diagnostics: viewModel.diagnostics,
     });
     const initialViewModel = createViewModel();

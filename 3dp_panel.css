@@ -1266,11 +1266,17 @@ body.panel-mode .notification-container {
 }
 .mtv-slot.mtv-selected {
   border-color: var(--color-success);
-  box-shadow: inset 0 0 0 1px var(--color-success);
+  border-width: 2px;
+  background: var(--color-success-bg);
+  box-shadow: inset 0 0 0 2px var(--color-success);
+}
+.mtv-slot.mtv-assigned:not(.mtv-selected) {
+  border-color: var(--color-info);
 }
 .mtv-root-stale .mtv-slot.mtv-selected {
   border-color: var(--color-warning);
-  box-shadow: inset 0 0 0 1px var(--color-warning);
+  background: var(--color-warning-bg);
+  box-shadow: inset 0 0 0 2px var(--color-warning);
 }
 .mtv-root-stale .mtv-slot {
   background: var(--color-surface-alt);
@@ -1313,6 +1319,22 @@ body.panel-mode .notification-container {
 .mtv-remaining,
 .mtv-assignment {
   margin-top: 3px;
+}
+.mtv-assignment {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-sm);
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  padding: 1px 4px;
+  font-weight: 700;
+}
+.mtv-slot.mtv-selected .mtv-assignment {
+  border-color: var(--color-success);
+  background: var(--color-bg-primary);
+  color: var(--color-success-text);
 }
 .mtv-remaining-invalid {
   color: var(--color-danger-text);
