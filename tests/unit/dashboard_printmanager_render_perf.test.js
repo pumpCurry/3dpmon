@@ -16,9 +16,9 @@
  *         リスナは 1 本のみ＝二重バインドしない）
  *   (C) 委譲ディスパッチが正しい行データで該当ハンドラへ届く
  *
- * @version 1.390.1412 (PR #434)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1365 (PR #432)
- * @lastModified 2026-08-26 17:30:15
+ * @lastModified 2026-08-27 12:22:38
  *
  * @vitest-environment jsdom
  */
@@ -329,7 +329,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                   material: {
                     type: "PLA",
                     name: "White PLA",
-                    color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
+                    color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
                   },
                   status: { stateCode: 1, selected: false },
                 },
@@ -342,7 +342,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                   material: {
                     type: "PLA",
                     name: "Green PLA",
-                    color: { raw: "#072a530", normalized: "72a530", displayHex: "72a530" },
+                    color: { raw: "#072a530", normalized: "072a530", displayHex: "72a530", cssColor: "#72a530" },
                   },
                   status: { stateCode: 1, selected: true },
                 },
@@ -391,7 +391,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
         colorMatch: {
           path: "/mnt/UDISK/printer_data/gcodes/single.gcode",
           list: [
-            { id: "T1A", type: "PLA", color: "72a530", boxId: 1, materialId: 1 },
+            { id: "T1A", type: "PLA", color: "072a530", boxId: 1, materialId: 1 },
           ],
         },
       },
@@ -467,7 +467,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                 material: {
                   type: "PLA",
                   name: "White PLA",
-                  color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
+                  color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
                 },
                 status: { stateCode: 1, selected: true },
               }],
@@ -559,7 +559,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                 material: {
                   type: "PLA",
                   name: "White PLA",
-                  color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
+                  color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
                 },
                 status: { stateCode: 1, selected: true },
               }],
@@ -662,7 +662,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                 material: {
                   type: "PLA",
                   name: "Green PLA",
-                  color: { raw: "#072a530", normalized: "72a530", displayHex: "72a530" },
+                  color: { raw: "#072a530", normalized: "072a530", displayHex: "72a530", cssColor: "#72a530" },
                 },
                 status: { stateCode: 1, selected: true },
               }],
@@ -754,7 +754,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
                 material: {
                   type: "PLA",
                   name: "White PLA",
-                  color: { raw: "#0ffffff", normalized: "ffffff", displayHex: "ffffff" },
+                  color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
                 },
                 status: { stateCode: 1, selected: true },
               }],

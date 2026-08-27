@@ -23,15 +23,17 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1412 (PR #434)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-26 17:30:15
+ * @lastModified 2026-08-27 12:22:38
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
  */
 
 "use strict";
+
+import { getComparableMaterialColor } from "./dashboard_material_color.js";
 
 /**
  * Printer Core v3 command contract の schema version。
@@ -804,17 +806,7 @@ function normalizeMaterialTypeEvidence(value) {
  * @returns {string|null} 比較用color
  */
 function normalizeMaterialColorEvidence(value) {
-  const rawValue = value && typeof value === "object"
-    ? (value.normalized ?? value.displayHex ?? value.raw)
-    : value;
-  const text = String(rawValue ?? "").trim().replace(/^#/u, "").toLowerCase();
-  if (!text) {
-    return null;
-  }
-  if (/^0[0-9a-f]{6}$/u.test(text)) {
-    return text.slice(1);
-  }
-  return text;
+  return getComparableMaterialColor(value);
 }
 
 /**

@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1412 (PR #434)
+* @version 1.390.1420 (PR #434)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-26 17:30:15
+* @lastModified 2026-08-27 12:22:38
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -78,6 +78,7 @@ import {
   resolveMaterialTopologyViewOptions
 } from "./printer_core/dashboard_material_system_settings.js";
 import { createMaterialTopologyViewModel } from "./printer_core/dashboard_material_topology_view_model.js";
+import { getMaterialCssColor, getMaterialProtocolColor } from "./printer_core/dashboard_material_color.js";
 import {
   createK2CfsCommandTransportPlan,
   K2_CFS_PRINT_START_TRANSPORT_PROFILE,
@@ -751,12 +752,7 @@ function toPrintManagerNonEmptyString(value) {
  * @returns {string|null} `colorMatch.list[].color` に載せる色文字列
  */
 function normalizeK2CfsProtocolColor(color) {
-  if (!color || typeof color !== "object") {
-    const text = toPrintManagerNonEmptyString(color);
-    return text ? text.replace(/^#/u, "") : null;
-  }
-  return toPrintManagerNonEmptyString(color.normalized || color.displayHex || color.raw)
-    ?.replace(/^#/u) || null;
+  return getMaterialProtocolColor(color);
 }
 
 /**
@@ -836,15 +832,7 @@ function deriveK2CfsToolAliases(raw) {
  * @returns {string|null} CSS color 候補
  */
 function getK2CfsRowCssColor(row) {
-  const color = row?.material?.color;
-  const text = color && typeof color === "object"
-    ? toPrintManagerNonEmptyString(color.displayHex || color.normalized || color.raw)
-    : toPrintManagerNonEmptyString(color);
-  if (!text) {
-    return null;
-  }
-  const hex = text.replace(/^#/u, "");
-  return /^[0-9a-f]{6}$/iu.test(hex) ? `#${hex}` : null;
+  return getMaterialCssColor(row?.material?.color);
 }
 
 /**

@@ -17,15 +17,17 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1419 (PR #435)
+ * @version 1.390.1420 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-27 06:18:00
+ * @lastModified 2026-08-27 12:22:38
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
  */
 
 "use strict";
+
+import { getMaterialProtocolColor } from "./dashboard_material_color.js";
 
 /**
  * このmoduleで扱うK2/CFS transport plan schema version。
@@ -415,9 +417,8 @@ function createColorMatchEntry(assignment) {
     { path: "assignment.material.type", value: assignment?.material?.type },
   ]);
   const colorEvidence = pickMaterialProtocolValue([
-    { path: "assignment.protocol.color", value: assignment?.protocol?.color },
-    { path: "assignment.material.color.normalized", value: assignment?.material?.color?.normalized },
-    { path: "assignment.material.color.raw", value: assignment?.material?.color?.raw },
+    { path: "assignment.protocol.color", value: getMaterialProtocolColor(assignment?.protocol?.color) },
+    { path: "assignment.material.color", value: getMaterialProtocolColor(assignment?.material?.color) },
   ]);
   const type = typeEvidence.value;
   const color = colorEvidence.value;

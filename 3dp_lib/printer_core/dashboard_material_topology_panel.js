@@ -16,15 +16,17 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-27 12:22:38
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
  */
 
 "use strict";
+
+import { getMaterialCssColor } from "./dashboard_material_color.js";
 
 /**
  * CFS操作ボタン定義。
@@ -130,13 +132,7 @@ function formatPresenceState(presence) {
  * @returns {string|null} CSS色値、またはnull
  */
 function resolveMaterialColor(material) {
-  const displayHex = String(material?.color?.displayHex || "").trim();
-  const normalized = String(material?.color?.normalized || "").trim();
-  const raw = String(material?.color?.raw || "").trim();
-  const candidate = displayHex
-    ? `#${displayHex.replace(/^#/, "")}`
-    : (normalized ? `#${normalized.replace(/^#/, "")}` : raw);
-  return /^#[0-9a-fA-F]{6}$/.test(candidate) ? candidate : null;
+  return getMaterialCssColor(material?.color);
 }
 
 /**

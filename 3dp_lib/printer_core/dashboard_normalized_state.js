@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1420 (PR #434)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-27 12:22:38
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -32,6 +32,7 @@
 "use strict";
 
 import { EMPTY_CAPABILITY_SET } from "./dashboard_capabilities.js";
+import { normalizeMaterialColor } from "./dashboard_material_color.js";
 
 /**
  * NormalizedPrinterState の schema version。
@@ -573,37 +574,6 @@ function createMaterialSourceId(box, material) {
 }
 
 /**
- * protocol color 値を raw と比較用 normalized へ分ける。
- *
- * 【詳細説明】
- * - K2 firmware は `#0ffffff` と `0ffffff` のように表記揺れした色を返すため、raw 表現を残しつつ
- *   比較用の正規形を別 field にする。
- *
- * @private
- * @param {*} value - protocol color 値
- * @returns {{raw: ?string, normalized: ?string, displayHex: ?string}} 色表現
- */
-function normalizeProtocolColor(value) {
-  const raw = toNullableString(value);
-  if (raw === null || raw === "") {
-    return {
-      raw,
-      normalized: raw,
-      displayHex: raw,
-    };
-  }
-  const normalized = raw.replace(/^#/u, "").toLowerCase();
-  const displayHex = /^0[0-9a-f]{6}$/u.test(normalized)
-    ? normalized.slice(1)
-    : normalized;
-  return {
-    raw,
-    normalized,
-    displayHex,
-  };
-}
-
-/**
  * K2 `materialBoxs[]` の1件を CFS unit へ正規化する。
  *
  * 【詳細説明】
@@ -661,7 +631,7 @@ function normalizeMaterialSource(box, material) {
       vendor: toNullableString(material?.vendor),
       type: toNullableString(material?.type),
       name: toNullableString(material?.name),
-      color: normalizeProtocolColor(material?.color),
+      color: normalizeMaterialColor(material?.color, { source: "boxsInfo.materialBoxs[].materials[].color", vendor: "creality" }),
       rfid: toNullableString(material?.rfid),
       minTemp: toFiniteNumber(material?.minTemp),
       maxTemp: toFiniteNumber(material?.maxTemp),
@@ -850,7 +820,7 @@ function normalizeSameMaterialGroups(groups, sourceIndex) {
       return `unresolved:${ref.boxId ?? "unknown"}:${ref.slotId ?? "unknown"}`;
     }).sort();
     const materialCode = toNullableString(entry?.[0]);
-    const color = normalizeProtocolColor(entry?.[1]);
+    const color = normalizeMaterialColor(entry?.[1], { source: "boxsInfo.same_material[][1]", vendor: "creality" });
     const materialType = toNullableString(entry?.[3]);
     const groupKey = [
       materialType || "unknown",

@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1402 (PR #434)
+* @version 1.390.1420 (PR #434)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-26 22:30:00
+* @lastModified 2026-08-27 12:22:38
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -95,6 +95,7 @@ import {
 import {
   createMaterialTopologyViewModel
 } from "./printer_core/dashboard_material_topology_view_model.js";
+import { getMaterialCssColor } from "./printer_core/dashboard_material_color.js";
 
 let styleInjected = false;
 
@@ -396,9 +397,7 @@ function getMaterialSourceRemainingText(row, isStale) {
  * @returns {string|null} CSS色、または null。
  */
 function getMaterialSourceCssColor(row) {
-  const color = row?.material?.color || {};
-  const candidate = String(color.displayHex || color.normalized || color.raw || "").trim().replace(/^#/u, "");
-  return /^[0-9a-fA-F]{6}$/u.test(candidate) ? `#${candidate}` : null;
+  return getMaterialCssColor(row?.material?.color);
 }
 
 /**
