@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1420 (PR #434)
+* @version 1.390.1422 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-27 15:45:53
+* @lastModified 2026-08-27 23:10:29
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -428,7 +428,7 @@ function createMaterialSourceChip(row, isStale) {
   slot.textContent = row?.displaySlot || "--";
   const state = document.createElement("span");
   state.textContent = row?.selected === true
-    ? (isStale ? "最終観測:選択中" : "現在選択中")
+    ? (isStale ? "最終観測:機器選択" : "機器選択観測")
     : (row?.presence === "loaded" ? "装填中" : row?.presence === "empty" ? "未装填" : "未観測");
   head.append(slot, state);
   chip.appendChild(head);
@@ -457,7 +457,7 @@ function createMaterialSourceChip(row, isStale) {
   if (assignments.length > 0) {
     const assignmentLine = document.createElement("div");
     assignmentLine.className = "fm-material-source-assignment";
-    assignmentLine.textContent = assignments.join(", ");
+    assignmentLine.textContent = `割当観測: ${assignments.join(", ")}`;
     chip.appendChild(assignmentLine);
   }
   return chip;
@@ -506,14 +506,14 @@ export function createFilamentManagerMaterialSupplySection(host) {
   section.className = `fm-material-supply-section fm-material-supply-${topologyState}`;
   const title = document.createElement("div");
   title.className = "fm-material-supply-title";
-  title.textContent = "機器側フィラメント供給（外部スプール + CFS/CFS-C）";
+  title.textContent = "機器観測フィラメント（外部スプール + CFS/CFS-C）";
   section.appendChild(title);
 
   const note = document.createElement("div");
   note.className = "fm-material-supply-note";
   note.textContent = isStale
-    ? "CFS情報は最終観測です。現在値として台帳へ反映しません。"
-    : "外部スプールとCFSスロットは別々の供給源として監視します。3DPmon台帳スプールとは自動で混ぜません。";
+    ? "管理中スプールとは別情報です。CFS情報は最終観測であり、現在値として台帳へ反映しません。"
+    : "管理中スプールとは別情報です。外部スプールとCFSスロットは別々の供給源として監視し、3DPmon台帳へ自動で混ぜません。";
   section.appendChild(note);
 
   if (Array.isArray(viewModel.external) && viewModel.external.length > 0) {

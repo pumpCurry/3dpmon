@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1279 (PR #426)
+* @version 1.390.1422 (PR #435)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 11:50:46
+* @lastModified 2026-08-27 23:08:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -353,6 +353,14 @@ export const monitorData = {
    * @type {Object.<string, Object>}
    */
   filamentEventContext: {},
+  /**
+   * Gate 18.7: CFS/CFS-C/外部スプールの機器観測フィラメントストア。
+   * これは3DPmon管理スプールの装着状態ではなく、Printer Core v3がread-onlyで見た
+   * material source snapshot/change logである。hostSpoolMap / mountHistory / usageHistory の
+   * 権威へ自動反映しない。
+   * @type {{schemaVersion:number, byDeviceId:Object.<string, Object>}}
+   */
+  materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。

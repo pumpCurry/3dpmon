@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1279 (PR #426)
+* @version 1.390.1422 (PR #435)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 11:50:46
+* @lastModified 2026-08-27 23:08:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -736,6 +736,8 @@ const LS_GLOBAL_FIELDS = [
   "ledgerRepairRequired",
   // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
   "filamentEventContext",
+  // ★ Gate 18.7: CFS/CFS-C/外部スプールのread-only機器観測フィラメント履歴。
+  "materialSourceObservations",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -994,6 +996,8 @@ function _flushStorage() {
       queueSharedWrite("ledgerRepairRequired",            monitorData.ledgerRepairRequired);
       // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
+      // ★ Gate 18.7: 機器観測フィラメントはread-only evidenceとして保存し、台帳権威へは混ぜない。
+      queueSharedWrite("materialSourceObservations", monitorData.materialSourceObservations);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1140,6 +1144,25 @@ function _reconcileAfterRestore() {
   } catch (e) {
     console.warn("[restoreUnifiedStorage] initLedgerAnchors 失敗:", e?.message || e);
   }
+}
+
+/**
+ * JSON互換値を復元用にcloneする。
+ *
+ * 【詳細説明】
+ * - sharedストレージのobject参照をmonitorDataへそのまま貼ると、後続のmergeやテストで
+ *   保存キャッシュ側まで変更され得るため、read-only観測ストアも復元時にcloneする。
+ *
+ * @private
+ * @function cloneStorageJsonValue
+ * @param {*} value - clone対象。
+ * @returns {*} clone後の値。
+ */
+function cloneStorageJsonValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
 }
 
 /**
@@ -1475,6 +1498,31 @@ function _restoreFromData(shared, machines) {
         monitorData.filamentEventContext[host] = ctx;
       }
     }
+  }
+
+  // ★ Gate 18.7: CFS/CFS-C/外部スプールの機器観測フィラメントを復元する。
+  //   これは「最後に観測したread-only evidence」であり、復元時にhostSpoolMapや台帳へ投影しない。
+  if (shared?.materialSourceObservations && typeof shared.materialSourceObservations === "object") {
+    if (!monitorData.materialSourceObservations
+        || typeof monitorData.materialSourceObservations !== "object"
+        || Array.isArray(monitorData.materialSourceObservations)) {
+      monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
+    }
+    if (!monitorData.materialSourceObservations.byDeviceId
+        || typeof monitorData.materialSourceObservations.byDeviceId !== "object"
+        || Array.isArray(monitorData.materialSourceObservations.byDeviceId)) {
+      monitorData.materialSourceObservations.byDeviceId = {};
+    }
+    const restoredByDevice = shared.materialSourceObservations.byDeviceId;
+    if (restoredByDevice && typeof restoredByDevice === "object" && !Array.isArray(restoredByDevice)) {
+      for (const [deviceId, record] of Object.entries(restoredByDevice)) {
+        if (record && typeof record === "object" && !monitorData.materialSourceObservations.byDeviceId[deviceId]) {
+          monitorData.materialSourceObservations.byDeviceId[deviceId] = cloneStorageJsonValue(record);
+        }
+      }
+    }
+    monitorData.materialSourceObservations.schemaVersion =
+      Number(shared.materialSourceObservations.schemaVersion) || monitorData.materialSourceObservations.schemaVersion || 1;
   }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）

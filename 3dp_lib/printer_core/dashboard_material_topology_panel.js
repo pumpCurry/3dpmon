@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1422 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-27 15:45:53
+ * @lastModified 2026-08-27 23:10:29
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
@@ -237,7 +237,7 @@ function formatAssignments(assignments) {
  * assignmentを利用者向けの短い説明へ変換する。
  *
  * 【詳細説明】
- * - `T1A` は物理slot名ではなくG-code/slicer側のtool aliasなので、裸表示せず「割当:」を付ける。
+ * - `T1A` は物理slot名ではなくG-code/slicer側のtool aliasなので、裸表示せず「割当観測:」を付ける。
  *
  * @private
  * @param {Array<object>} assignments - assignment一覧
@@ -245,7 +245,7 @@ function formatAssignments(assignments) {
  */
 function formatAssignmentLabel(assignments) {
   const assignmentText = formatAssignments(assignments);
-  return assignmentText ? `割当: ${assignmentText}` : "";
+  return assignmentText ? `割当観測: ${assignmentText}` : "";
 }
 
 /**
@@ -455,7 +455,7 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {})
   const header = createElement(documentRef, "div", "mtv-slot-header");
   header.appendChild(createElement(documentRef, "span", "mtv-slot-label", displayText(row?.displaySlot)));
   const stateLabel = row?.selected === true
-    ? (isStale ? "最終観測:選択中" : "現在選択中")
+    ? (isStale ? "最終観測:機器選択" : "機器選択観測")
     : formatPresenceState(presence);
   header.appendChild(createElement(documentRef, "span", "mtv-slot-state", stateLabel));
   slot.appendChild(header);
@@ -578,7 +578,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const isStale = topologyState === "stale";
     const controlPolicy = createControlPolicy(currentViewModel, options);
     root.classList.add(`mtv-root-${topologyState}`);
-    header.appendChild(createElement(documentRef, "span", "mtv-title", "フィラメント供給"));
+    header.appendChild(createElement(documentRef, "span", "mtv-title", "機器観測フィラメント"));
     header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState, currentViewModel?.observation)));
     root.appendChild(header);
 

@@ -42,6 +42,7 @@ describe("Printer Core v3 K1 live shadow", () => {
   beforeEach(() => {
     monitorData.machines = {};
     monitorData.appSettings = { logLevel: "info" };
+    monitorData.materialSourceObservations = undefined;
     vi.restoreAllMocks();
   });
 
@@ -513,6 +514,91 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(statusRecord.lastState.materials.sources[0].material.name).toBe("Silver PLA");
   });
 
+  it("K2 CFS topologyはread-only観測台帳へ保存し、管理スプールや台帳には書き込まない", () => {
+    const host = "K2Pro-Observation";
+    const deviceId = "serial:905251280E69E7";
+    const sessionId = "k2-live:observation";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+    monitorData.hostSpoolMap = { [host]: "spool-managed" };
+    monitorData.mountHistory = [{ evId: "mount-1", host, spoolId: "spool-managed" }];
+    monitorData.usageHistory = [{ usageId: "usage-1", host, spoolId: "spool-managed" }];
+    monitorData.filamentSpools = [{ id: "spool-managed", remainingLengthMm: 1000 }];
+    const untouched = {
+      hostSpoolMap: JSON.stringify(monitorData.hostSpoolMap),
+      mountHistory: JSON.stringify(monitorData.mountHistory),
+      usageHistory: JSON.stringify(monitorData.usageHistory),
+      filamentSpools: JSON.stringify(monitorData.filamentSpools),
+    };
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 0,
+              state: 1,
+              type: 1,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", name: "External PLA", percent: null, rfid: "" },
+              ],
+            },
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", name: "Silver PLA", percent: -5, selected: 1, rfid: "" },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    const observations = monitorData.materialSourceObservations;
+    expect(observations.byDeviceId[deviceId]).toMatchObject({
+      authority: "observation-only",
+      identityStrength: "stable",
+      providerId: "creality-cfs-boxs-info",
+      sessionId,
+      snapshotCompleteness: "complete",
+    });
+    expect(observations.byDeviceId[deviceId].latestBySourceId["external:0:slot:0"]).toMatchObject({
+      kind: "external-spool",
+      material: { rfid: "" },
+      authority: "observation-only",
+    });
+    expect(observations.byDeviceId[deviceId].latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      selected: true,
+      assignments: [{ assignmentId: "T1A" }],
+      material: {
+        rfid: "",
+        color: {
+          raw: "#09ea7ae",
+          displayHex: "9ea7ae",
+          cssColor: "#9ea7ae",
+        },
+      },
+      remaining: {
+        rawPercent: -5,
+        normalizedPercent: 0,
+        valid: false,
+        authority: "observation-only",
+      },
+    });
+    expect(JSON.stringify(monitorData.hostSpoolMap)).toBe(untouched.hostSpoolMap);
+    expect(JSON.stringify(monitorData.mountHistory)).toBe(untouched.mountHistory);
+    expect(JSON.stringify(monitorData.usageHistory)).toBe(untouched.usageHistory);
+    expect(JSON.stringify(monitorData.filamentSpools)).toBe(untouched.filamentSpools);
+  });
+
   it("CFS-C secondary provider切断時はlast-known topologyを空にせずstale化する", () => {
     const host = "K1C-CFSC-Live";
     setMachine(host);
@@ -568,6 +654,65 @@ describe("Printer Core v3 K1 live shadow", () => {
       disconnectedAt: "2026-08-07T08:16:04.000Z",
       freshness: "stale",
     });
+  });
+
+  it("CFS-C secondary providerもread-only観測台帳へ保存し、切断時はlast-knownをstaleとして残す", () => {
+    const host = "K1C-CFSC-Observation";
+    setMachine(host);
+    monitorData.hostSpoolMap = { [host]: "k1-managed-spool" };
+    monitorData.mountHistory = [];
+    monitorData.usageHistory = [];
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54, selected: 1, rfid: null },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:test",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: null,
+      providerSessionId: "material-provider:test",
+      connected: false,
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    const deviceId = "material-provider:K1C-CFSC-Observation";
+    expect(monitorData.materialSourceObservations.byDeviceId[deviceId]).toMatchObject({
+      authority: "observation-only",
+      identityStrength: "provisional",
+      providerId: "creality-cfs-moonraker-box",
+      providerDisconnectedAt: "2026-08-07T08:16:04.000Z",
+      latestBySourceId: {
+        "cfs:1:slot:2": {
+          presence: "loaded",
+          selected: true,
+          lastObservedAt: "2026-08-07T08:15:04.000Z",
+          material: { rfid: null },
+          remaining: {
+            rawPercent: 54,
+            normalizedPercent: 54,
+            valid: true,
+            authority: "observation-only",
+          },
+        },
+      },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ [host]: "k1-managed-spool" });
+    expect(monitorData.mountHistory).toEqual([]);
+    expect(monitorData.usageHistory).toEqual([]);
   });
 
   it("endK2LiveShadowSession はruntimeDataをclosedへ更新する", () => {

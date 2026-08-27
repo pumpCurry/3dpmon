@@ -236,7 +236,7 @@ describe("filament manager CFS material source section", () => {
     const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
 
     expect(section).not.toBeNull();
-    expect(section?.textContent).toContain("機器側フィラメント供給");
+    expect(section?.textContent).toContain("機器観測フィラメント");
     expect(section?.querySelectorAll(".fm-material-source-chip")).toHaveLength(5);
     expect(section?.querySelector("fieldset legend")?.textContent).toBe("外部スプール");
     expect([...(section?.querySelectorAll(".fm-material-source-head strong") || [])].map((el) => el.textContent)).toEqual([
@@ -247,6 +247,8 @@ describe("filament manager CFS material source section", () => {
       "1D",
     ]);
     expect(section?.querySelector(".fm-material-source-chip.is-selected strong")?.textContent).toBe("1C");
-    expect(section?.textContent).toContain("3DPmon台帳スプールとは自動で混ぜません");
+    expect(section?.querySelector(".fm-material-source-chip.is-selected")?.textContent).toContain("機器選択観測");
+    expect(section?.querySelector(".fm-material-source-assignment")?.textContent).toBe("割当観測: T1A");
+    expect(section?.textContent).toContain("管理中スプールとは別情報です");
   });
 });

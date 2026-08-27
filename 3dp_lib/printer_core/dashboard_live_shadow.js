@@ -11,7 +11,7 @@
  * - K1/K2 系 live WebSocket 受信を Printer Core v3 へ shadow 入力する
  * - 既存 processData() 後の storedData と NormalizedPrinterState を runtime differential として比較
  * - K2 Pro Combo + CFS の read-only 観測結果を runtimeData に保持
- * - UI authority / command path / persistent storage を変更しない read-only shadow として動作
+ * - UI authority / command path を変更せず、CFS material source 観測だけを read-only 台帳へ蓄積
  *
  * 【公開関数一覧】
  * - {@link createPrinterCoreV3ShadowSessionId}：WebSocket 接続ごとの shadow session ID を生成
@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1422 (PR #435)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-27 23:06:11
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -42,6 +42,10 @@ import {
 import {
   createCfsMoonrakerBoxMaterialProvider,
 } from "./dashboard_material_provider.js";
+import {
+  createEmptyMaterialSourceObservations,
+  recordMaterialTopologyObservation,
+} from "./dashboard_material_source_observation.js";
 
 /**
  * live shadow runtime record の schema version。
@@ -168,6 +172,84 @@ function markMaterialTopologyStale(topology, disconnectedAt = null, lastObserved
       disconnectedAt,
     },
   };
+}
+
+/**
+ * material source観測ストアをmonitorData上に用意する。
+ *
+ * 【詳細説明】
+ * - live shadowはruntimeDataへ最新状態を置くが、CFS slot/外部スプールの観測履歴は
+ *   `materialSourceObservations` に分離して保存する。
+ * - このストアはread-only evidence専用であり、hostSpoolMapやfilament ledgerの権威にはしない。
+ *
+ * @private
+ * @function ensureMaterialSourceObservationStore
+ * @returns {object} material source観測ストア。
+ */
+function ensureMaterialSourceObservationStore() {
+  if (!monitorData.materialSourceObservations || typeof monitorData.materialSourceObservations !== "object") {
+    monitorData.materialSourceObservations = createEmptyMaterialSourceObservations();
+  }
+  return monitorData.materialSourceObservations;
+}
+
+/**
+ * shadow deviceIdのidentity強度を保守的に判定する。
+ *
+ * 【詳細説明】
+ * - `serial:` などの強いIDだけをstable扱いにし、endpoint/host/material-provider由来はprovisionalとして扱う。
+ * - これによりDHCP再利用やprovider単独接続時の観測を、後段のstable device authorityへ自動昇格しない。
+ *
+ * @private
+ * @function deriveObservationIdentityStrength
+ * @param {string} deviceId - shadowまたはprovider由来のdevice ID。
+ * @returns {string} `"stable"` または `"provisional"`。
+ */
+function deriveObservationIdentityStrength(deviceId) {
+  const text = String(deviceId || "").trim();
+  if (/^(serial|sn|mac):/i.test(text)) {
+    return "stable";
+  }
+  return "provisional";
+}
+
+/**
+ * material topologyをread-only観測台帳へ反映する。
+ *
+ * 【詳細説明】
+ * - UI表示用runtime recordとは別に、source単位のsemantic changeだけを保存する。
+ * - 失敗してもプリンタ接続・legacy UIを止めず、diagnosticとしてruntime recordへ残すための結果を返す。
+ *
+ * @private
+ * @function recordMaterialSourceObservationForShadow
+ * @param {Object} options - 観測記録オプション。
+ * @param {string} options.host - 表示host。
+ * @param {string} options.deviceId - device ID。
+ * @param {string} options.sessionId - session ID。
+ * @param {Object} options.topology - Normalized material topology。
+ * @param {string} options.observedAt - 観測日時ISO文字列。
+ * @param {string=} options.providerGeneration - provider世代。
+ * @param {number=} options.sequence - 観測sequence。
+ * @param {string=} options.snapshotCompleteness - complete/partial。
+ * @returns {Object|null} 観測記録結果。
+ */
+function recordMaterialSourceObservationForShadow(options) {
+  if (!options?.topology || typeof options.topology !== "object") {
+    return null;
+  }
+  const providerId = options.topology.provider?.providerId || options.providerId || null;
+  return recordMaterialTopologyObservation(ensureMaterialSourceObservationStore(), {
+    host: options.host,
+    deviceId: options.deviceId,
+    identityStrength: deriveObservationIdentityStrength(options.deviceId),
+    sessionId: options.sessionId,
+    providerId,
+    providerGeneration: options.providerGeneration || options.sessionId || null,
+    sequence: options.sequence ?? null,
+    observedAt: options.observedAt,
+    topology: options.topology,
+    snapshotCompleteness: options.snapshotCompleteness,
+  });
 }
 
 /**
@@ -1364,6 +1446,25 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     cfsSourceCount: Array.isArray(materials?.sources) ? materials.sources.length : 0,
     cfsAssignmentCount: Array.isArray(materials?.assignments) ? materials.assignments.length : 0,
   };
+  const materialObservation = hasBoxsInfoFrame && materials
+    ? recordMaterialSourceObservationForShadow({
+        host,
+        deviceId,
+        sessionId,
+        topology: materials,
+        observedAt: materialProviderLastObservedAt || lastObservedAt,
+        providerGeneration: sessionId,
+        sequence: record.lastSequence,
+        snapshotCompleteness: "complete",
+      })
+    : null;
+  record.materialSourceObservationStatus = materialObservation
+    ? {
+        accepted: materialObservation.accepted === true,
+        reason: materialObservation.reason || null,
+        changedCount: Array.isArray(materialObservation.changes) ? materialObservation.changes.length : 0,
+      }
+    : previous.materialSourceObservationStatus || null;
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }
@@ -1466,6 +1567,31 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     cfsSourceCount: Array.isArray(materialTopology.sources) ? materialTopology.sources.length : 0,
     cfsAssignmentCount: Array.isArray(materialTopology.assignments) ? materialTopology.assignments.length : 0,
   };
+  const materialObservation = materialTopology
+    ? recordMaterialSourceObservationForShadow({
+        host,
+        deviceId: record.deviceId,
+        sessionId: providerSessionId,
+        topology: hasPayload
+          ? materialTopology
+          : {
+              ...materialTopology,
+              sources: [],
+              assignments: [],
+            },
+        observedAt: hasPayload ? materialProviderLastObservedAt || receivedAt : receivedAt,
+        providerGeneration: providerSessionId,
+        sequence: record.materialProviderObservedFrames,
+        snapshotCompleteness: hasPayload ? "complete" : "partial",
+      })
+    : null;
+  record.materialSourceObservationStatus = materialObservation
+    ? {
+        accepted: materialObservation.accepted === true,
+        reason: materialObservation.reason || null,
+        changedCount: Array.isArray(materialObservation.changes) ? materialObservation.changes.length : 0,
+      }
+    : previous.materialSourceObservationStatus || null;
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }

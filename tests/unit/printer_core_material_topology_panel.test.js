@@ -125,7 +125,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
     expect(container.textContent).toContain("Silver PLA");
     expect(container.textContent).toContain("残量 54%");
-    expect(container.textContent).toContain("現在選択中");
+    expect(container.textContent).toContain("機器選択観測");
     expect(container.textContent).toContain("状態: 2026-08-27");
     expect(container.textContent).not.toContain("状態: 最新");
     expect(container.textContent).toContain("外部スプール（CFSとは別管理）");
@@ -193,7 +193,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-root")?.classList.contains("mtv-root-stale")).toBe(true);
     expect(container.textContent).toContain("CFS情報を現在取得できません");
     expect(container.textContent).toContain("状態: 2026-08-27");
-    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:選択中");
+    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:機器選択");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
   });
 
@@ -218,7 +218,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-topology-state")?.textContent).toContain("(📡: 13秒) 状態:");
   });
 
-  it("assignmentは裸のT1Aではなく割当バッジとして表示し、選択中slotを強調する", () => {
+  it("assignmentは裸のT1Aではなく割当観測バッジとして表示し、選択中slotを強調する", () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
     const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
     const container = document.createElement("div");
@@ -229,7 +229,8 @@ describe("Printer Core v3 material topology panel", () => {
     const assignment = selectedSlot?.querySelector(".mtv-assignment");
     expect(selectedSlot?.classList.contains("mtv-selected")).toBe(true);
     expect(selectedSlot?.classList.contains("mtv-assigned")).toBe(true);
-    expect(assignment?.textContent).toBe("割当: T1C");
+    expect(selectedSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("機器選択観測");
+    expect(assignment?.textContent).toBe("割当観測: T1C");
   });
 
   it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {

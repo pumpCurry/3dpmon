@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.1274 (PR #424)
+ * @version 1.390.1422 (PR #435)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-08-02 18:33:44
+ * @lastModified 2026-08-27 23:08:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -117,6 +117,8 @@ const SHARED_KEYS = [
   "pendingUnattributedUsageArchive",
   // ★ RR-2: 台帳修復要求フラグ
   "ledgerRepairRequired",
+  // ★ Gate 18.7: 機器観測フィラメントはread-only evidenceとしてsharedに保存する。
+  "materialSourceObservations",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",
