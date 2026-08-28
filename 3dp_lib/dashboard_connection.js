@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1448 (PR #435)
+ * @version 1.390.1449 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 20:35:00
+ * @lastModified 2026-08-28 12:21:00
  * -----------------------------------------------------------
  * @todo
  * - none

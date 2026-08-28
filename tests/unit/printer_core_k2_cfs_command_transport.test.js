@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1448 (PR #435)
+ * @version 1.390.1449 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-28 20:35:00
+ * @lastModified 2026-08-28 12:21:00
  */
 
 import { describe, expect, it, vi } from "vitest";

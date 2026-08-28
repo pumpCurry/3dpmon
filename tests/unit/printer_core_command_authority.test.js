@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1448 (PR #435)
+ * @version 1.390.1449 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 20:35:00
+ * @lastModified 2026-08-28 12:21:00
  */
 
 import { describe, expect, it, vi } from "vitest";

@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1448 (PR #435)
+ * @version 1.390.1449 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 20:35:00
+ * @lastModified 2026-08-28 12:21:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
