@@ -128,7 +128,8 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - `certificationEvidence` は空objectや配列を証跡として扱わない。production昇格には最低限、
   `schemaVersion:1`、`status:"certified"`、対象 `commandKinds`、`transportProfile`、`printerType:"creality-k2"`、
   `model`、`firmwareVersion`、`fixtureId`、`captureId`、`certifiedAt` を要求する。
-  現在target/runtimeでmodel/firmwareを観測済みの場合は証跡scopeとの一致も要求する。
+  現在target/runtimeで `printerType/model/firmware` を観測し、証跡scopeと一致する場合だけ有効化する。
+  model/firmwareが未観測のtargetへ、F012実機で得た証跡を流用してはならない。
 - UI composition層は `certifiedCfsSlotControlCommands` だけをproduction allow-listとして読み、
   legacy aliasの `commandKinds` / `certifiedCommandKinds` では有効化しない。
 - K2用 `feedInOrOut` production profileは `printerType:"creality-k2"` のtargetに限定する。
@@ -136,7 +137,11 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
 - send-time context生成時とtransport plan生成直前の両方で、現在targetのcertification設定を再検証する。
   設定が削除・無効化・scope不一致になっていれば、UI初期化時に有効だったbuttonからでも送信しない。
-- CFS physical commandは印刷中、pause中、heating/checking/busy状態では送信しない。
+- `sendK2CfsCommandTransportPlan()` は `createK2CfsCommandTransportPlan()` が生成したplanだけを受け付ける。
+  callerがplain objectで `ok:true` / `certificationOnly:false` を偽装しても、send hookへは到達しない。
+- CFS physical commandは印刷中、pause中、heating/checking/busy/running状態では送信しない。
+  `print.stateLabel` だけでなく、K2 firmware差異で `device.stateLabel` / `status.stateLabel` に出る状態も確認する。
+  また送信直前に対象sourceが `presence:"loaded"` でなければ送信しない。
   CFSのmaterial path共有を前提に、実機で並列安全性が証明されるまでは1 printerにつき1 commandだけを許可する。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
@@ -157,10 +162,11 @@ UIでCFS/CFS-C操作を表示する場合、実行状態はDOM要素ではなく
 - `running`: dispatcherへ送信中。同一printerの全CFS physical commandをdisableする。
 - `submitted`: transportは受理されたが、`completed:false`、`confirmation.confirmed:false`、
   または `postCommandObservation.confirmed:false` のため観測確認が未完了。同一printerの再操作を抑止する。
+  次のmaterial provider観測で観測時刻が進んだ場合は、人間が最新状態を再判断できるようmutexを解除する。
 - `confirmed`: `completed:true` のみ。成功表示にして操作mutexを解除してよい。
 - `rejected`: send-time validationなど送信前拒否。transport side-effectは起きていないためmutexを解除してよい。
 - `unknown`: timeout、transport-error、confirmation-errorなど、物理side-effect有無が不明な状態。
-  blind retryを避けるため、最新観測や明示resetが入るまで再操作を許可しない。
+  blind retryを避けるため、自動解除せず明示的な状態確認/再描画方針が入るまで再操作を許可しない。
 
 最初のUI実装では、slot単位ではなくprinter単位mutexを採用する。
 将来、別CFS unit間などの並列安全性を実機証跡で確認できた場合だけ、lock domainを狭める。

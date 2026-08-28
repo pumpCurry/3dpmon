@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1435 (PR #435)
+ * @version 1.390.1437 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 10:26:51
+ * @lastModified 2026-08-28 10:48:25
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -595,6 +595,77 @@ describe("Printer Core v3 command authority contract", () => {
     expect(pausedResult.status).toBe("rejected");
     expect(pausedResult.error.errors).toContain("cfs-control-printer-busy");
     expect(pausedSendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはdeviceState系のbusy/heating/running表示でも送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const heatingSendTransport = vi.fn();
+    const runningSendTransport = vi.fn();
+    const heatingResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          device: {
+            stateLabel: "heating",
+          },
+        },
+      }),
+      sendTransport: heatingSendTransport,
+    });
+    const runningResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          status: {
+            stateLabel: "running",
+          },
+        },
+      }),
+      sendTransport: runningSendTransport,
+    });
+
+    expect(heatingResult.status).toBe("rejected");
+    expect(heatingResult.error.errors).toContain("cfs-control-printer-busy");
+    expect(heatingSendTransport).not.toHaveBeenCalled();
+    expect(runningResult.status).toBe("rejected");
+    expect(runningResult.error.errors).toContain("cfs-control-printer-busy");
+    expect(runningSendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは送信直前に対象sourceがloadedでなければ送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        materialTopology: {
+          cfsConnected: true,
+          topologyState: "fresh",
+          sources: [{
+            sourceId: "cfs:1:slot:2",
+            kind: "cfs-slot",
+            boxId: 1,
+            slotId: 2,
+            presence: "empty",
+          }],
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-target-source-not-loaded");
+    expect(sendTransport).not.toHaveBeenCalled();
   });
 
   it("dispatcherは送信時snapshotを内部context化し、correlationが無ければ完了扱いにしない", async () => {

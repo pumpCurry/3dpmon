@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1435 (PR #435)
+ * @version 1.390.1437 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-28 10:26:51
+ * @lastModified 2026-08-28 10:48:25
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -282,6 +282,11 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     }, {
       certifiedCfsSlotControlCommands: ["cfs-load"],
       certificationEvidence: createCertifiedCfsEvidence(),
+      certificationScope: {
+        printerType: "creality-k2",
+        model: "F012",
+        firmwareVersion: "1.0.0",
+      },
     });
 
     expect(plan).toMatchObject({
@@ -325,6 +330,30 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         },
       },
     ]);
+  });
+
+  it("production昇格は現在targetのprinter/model/firmware scopeが未観測なら拒否する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence(),
+      certificationScope: {
+        printerType: "creality-k2",
+      },
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+    expect(plan.details.errors).toEqual(expect.arrayContaining([
+      "model-scope-missing-or-mismatch",
+      "firmware-scope-missing-or-mismatch",
+    ]));
   });
 
   it("production昇格は空objectや配列のcertification evidenceを拒否する", () => {
@@ -525,6 +554,36 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     await expect(sendK2CfsCommandTransportPlan(plan, sendFrame))
       .rejects
       .toThrow("uncertified-cfs-slot-command");
+    expect(sendFrame).not.toHaveBeenCalled();
+  });
+
+  it("低レベルsenderはfactory外で偽装されたproduction planを送信しない", async () => {
+    const sendFrame = vi.fn();
+    const forgedPlan = {
+      schemaVersion: 1,
+      ok: true,
+      reason: null,
+      transportKind: "ws9999",
+      profile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+      certificationOnly: false,
+      frames: [{
+        method: "set",
+        params: {
+          feedInOrOut: {
+            boxId: 1,
+            materialId: 2,
+            isFeed: 1,
+          },
+        },
+      }],
+      details: {
+        safetyBoundary: "production-certified",
+      },
+    };
+
+    await expect(sendK2CfsCommandTransportPlan(forgedPlan, sendFrame))
+      .rejects
+      .toThrow("must be created by createK2CfsCommandTransportPlan");
     expect(sendFrame).not.toHaveBeenCalled();
   });
 

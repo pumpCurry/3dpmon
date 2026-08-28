@@ -18,9 +18,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1435 (PR #435)
+ * @version 1.390.1437 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 10:26:51
+ * @lastModified 2026-08-28 10:48:25
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -125,6 +125,17 @@ const UNCERTIFIED_CFS_SLOT_COMMAND_KINDS = Object.freeze(new Set([
 ]));
 
 /**
+ * このmodule内のfactoryで生成したtransport planだけを記録するWeakSet。
+ *
+ * 【詳細説明】
+ * - 低レベルsenderへcallerが `{ok:true, certificationOnly:false}` 風のplain objectを渡しても、
+ *   certification検証済みplanとして扱わないためのmodule-private証跡。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_K2_CFS_TRANSPORT_PLANS = new WeakSet();
+
+/**
  * 未certified CFS slot commandを `feedInOrOut` 候補へ写す定義。
  *
  * 【詳細説明】
@@ -223,6 +234,24 @@ function cloneJsonValue(value) {
 }
 
 /**
+ * module factory由来のtransport planとして記録する。
+ *
+ * 【詳細説明】
+ * - non-enumerableな印ではなくWeakSetを使い、JSON保存・diff・テストの表示shapeを汚さない。
+ *
+ * @private
+ * @function createTrustedTransportPlan
+ * @param {object} plan - transport plan
+ * @returns {object} 同じtransport plan
+ */
+function createTrustedTransportPlan(plan) {
+  if (plan && typeof plan === "object") {
+    TRUSTED_K2_CFS_TRANSPORT_PLANS.add(plan);
+  }
+  return plan;
+}
+
+/**
  * certification evidence 内のcommand kind一覧を正規化する。
  *
  * 【詳細説明】
@@ -245,7 +274,7 @@ function normalizeCertificationEvidenceCommandKinds(evidence) {
  *
  * 【詳細説明】
  * - 証跡側は単一 `model` または複数 `models` を許可する。
- * - 現在runtimeのmodelが未観測なら証跡にmodel scopeがあることだけを要求し、比較は行わない。
+ * - 現在runtime/targetのmodelが未観測なら一致を証明できないため拒否する。
  *
  * @private
  * @param {object} evidence - certification evidence
@@ -263,7 +292,7 @@ function matchesCertificationModelScope(evidence, currentModel) {
     return false;
   }
   const normalizedCurrent = toNonEmptyString(currentModel)?.toUpperCase();
-  return normalizedCurrent ? normalizedModels.has(normalizedCurrent) : true;
+  return normalizedCurrent ? normalizedModels.has(normalizedCurrent) : false;
 }
 
 /**
@@ -271,7 +300,7 @@ function matchesCertificationModelScope(evidence, currentModel) {
  *
  * 【詳細説明】
  * - 証跡側は単一 `firmwareVersion` または複数 `firmwareVersions` を許可する。
- * - 現在runtimeのfirmwareが未観測なら証跡にfirmware scopeがあることだけを要求し、比較は行わない。
+ * - 現在runtime/targetのfirmwareが未観測なら一致を証明できないため拒否する。
  *
  * @private
  * @param {object} evidence - certification evidence
@@ -289,7 +318,7 @@ function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
     return false;
   }
   const normalizedCurrent = toNonEmptyString(currentFirmwareVersion);
-  return normalizedCurrent ? normalizedVersions.has(normalizedCurrent) : true;
+  return normalizedCurrent ? normalizedVersions.has(normalizedCurrent) : false;
 }
 
 /**
@@ -298,7 +327,7 @@ function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
  * 【詳細説明】
  * - 空objectや配列を「証跡あり」と見なさず、command kind・transport profile・K2 printer scope・
  *   model/firmware/capture metadata が揃った場合だけproduction昇格へ使う。
- * - runtime側でmodel/firmwareが未観測の場合は、証跡がscopeを持つことだけを要求し、観測済みなら一致も要求する。
+ * - runtime/target側でprinterType/model/firmwareが未観測の場合は、証跡の流用を防ぐため拒否する。
  *
  * @function validateK2CfsSlotControlCertificationEvidence
  * @param {*} evidence - 検証対象のcertification evidence
@@ -329,7 +358,7 @@ export function validateK2CfsSlotControlCertificationEvidence(evidence, commandK
     errors.push("printer-type-not-k2");
   }
   const currentPrinterType = toNonEmptyString(scope?.printerType);
-  if (currentPrinterType && currentPrinterType !== "creality-k2") {
+  if (currentPrinterType !== "creality-k2") {
     errors.push("current-printer-type-not-k2");
   }
   const certifiedCommands = normalizeCertificationEvidenceCommandKinds(evidence);
@@ -505,7 +534,7 @@ function pickMaterialProtocolValue(candidates) {
  * @returns {object} 失敗transport plan
  */
 function createRejectedTransportPlan(reason, details = {}) {
-  return {
+  return createTrustedTransportPlan({
     schemaVersion: K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION,
     ok: false,
     reason,
@@ -515,7 +544,7 @@ function createRejectedTransportPlan(reason, details = {}) {
     details: {
       ...details,
     },
-  };
+  });
 }
 
 /**
@@ -682,7 +711,7 @@ function createK2CfsPrintStartPlan(request) {
     colorMatchList.push(result.entry);
     assignmentEvidence.push(result.evidence);
   }
-  return {
+  return createTrustedTransportPlan({
     schemaVersion: K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION,
     ok: true,
     reason: null,
@@ -715,7 +744,7 @@ function createK2CfsPrintStartPlan(request) {
       assignmentCount: colorMatchList.length,
       assignmentEvidence,
     },
-  };
+  });
 }
 
 /**
@@ -747,7 +776,7 @@ function createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, options = {
       sourceKind: location.kind,
     });
   }
-  return {
+  return createTrustedTransportPlan({
     schemaVersion: K2_CFS_COMMAND_TRANSPORT_PLAN_SCHEMA_VERSION,
     ok: true,
     reason: null,
@@ -785,7 +814,7 @@ function createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, options = {
         ? cloneJsonValue(options.certificationEvidence || null)
         : undefined,
     },
-  };
+  });
 }
 
 /**
@@ -897,6 +926,9 @@ export function createK2CfsCommandTransportPlan(request, options = {}) {
  * await sendK2CfsCommandTransportPlan(plan, (frame) => sendCommand(frame.method, frame.params, host));
  */
 export async function sendK2CfsCommandTransportPlan(plan, sendFrame, options = {}) {
+  if (!TRUSTED_K2_CFS_TRANSPORT_PLANS.has(plan)) {
+    throw new Error("K2 CFS command transport plan must be created by createK2CfsCommandTransportPlan.");
+  }
   if (!plan?.ok) {
     throw new Error(`K2 CFS command transport plan rejected: ${plan?.reason || "unknown"}`);
   }

@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1435 (PR #435)
+ * @version 1.390.1437 (PR #435)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-28 10:26:51
+ * @lastModified 2026-08-28 10:48:25
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -920,6 +920,38 @@ function collectPrintStartSendTimeErrors(request, context) {
 }
 
 /**
+ * NormalizedState上の稼働状態ラベル候補を収集する。
+ *
+ * 【詳細説明】
+ * - K2 firmwareやAdapterの段階差により、busy/heating/runningが`print.stateLabel`ではなく
+ *   `device.stateLabel`や`status.stateLabel`側に出る可能性があるため、CFS物理操作前は広めに確認する。
+ *
+ * @private
+ * @function collectPrinterActivityLabels
+ * @param {object|null|undefined} observedState - send-time observed state
+ * @returns {Set<string>} 小文字化した状態ラベル集合
+ */
+function collectPrinterActivityLabels(observedState) {
+  const labels = new Set();
+  const paths = [
+    "print.stateLabel",
+    "print.state",
+    "device.stateLabel",
+    "device.state",
+    "status.stateLabel",
+    "status.state",
+  ];
+  for (const path of paths) {
+    const value = getPathValue(observedState, path);
+    const label = String(value ?? "").trim().toLowerCase();
+    if (label) {
+      labels.add(label);
+    }
+  }
+  return labels;
+}
+
+/**
  * CFS command の送信時 topology を検査する。
  *
  * 【詳細説明】
@@ -935,10 +967,8 @@ function collectCfsSendTimeErrors(request, context) {
     return [];
   }
   const errors = [];
-  const printStateLabel = String(context.observedState?.print?.stateLabel || context.observedState?.print?.state || "")
-    .trim()
-    .toLowerCase();
-  if (["printing", "paused", "busy", "heating", "checking", "running"].includes(printStateLabel)) {
+  const activityLabels = collectPrinterActivityLabels(context.observedState);
+  if (["printing", "paused", "busy", "heating", "checking", "running"].some((label) => activityLabels.has(label))) {
     errors.push("cfs-control-printer-busy");
   }
   if (context.materialTopology?.cfsConnected !== true) {
@@ -960,6 +990,9 @@ function collectCfsSendTimeErrors(request, context) {
   }
   if (currentSource.kind !== "cfs-slot") {
     errors.push("cfs-target-not-cfs-slot");
+  }
+  if (currentSource.presence !== "loaded") {
+    errors.push("cfs-target-source-not-loaded");
   }
   const requestBoxId = normalizeSequence(request.payload?.boxId);
   if (requestBoxId !== null && currentSource.boxId !== null && requestBoxId !== currentSource.boxId) {

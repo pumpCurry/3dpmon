@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1435 (PR #435)
+ * @version 1.390.1437 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 10:26:51
+ * @lastModified 2026-08-28 10:48:25
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -361,6 +361,38 @@ function isUnconfirmedCommandResult(result) {
 }
 
 /**
+ * CFS command hookの戻り値を表示判定用CommandResultへ正規化する。
+ *
+ * 【詳細説明】
+ * - integration層は `{ accepted:true, result }` のenvelopeを返すため、rendererが外側だけを見ると
+ *   内側の `completed:false` を見落として成功表示してしまう。表示判定では内側CommandResultを優先する。
+ * - integration自体が拒否した場合は、CommandResult風のrejected objectへ寄せて既存失敗表示へ流す。
+ *
+ * @private
+ * @function normalizeCommandHookResult
+ * @param {*} result - command hook の戻り値
+ * @returns {object|null} 表示判定用CommandResult風object
+ */
+function normalizeCommandHookResult(result) {
+  if (!result || typeof result !== "object") {
+    return result || null;
+  }
+  if (result.accepted === true && result.result && typeof result.result === "object") {
+    return result.result;
+  }
+  if (result.accepted === false) {
+    return {
+      status: "rejected",
+      reason: result.reason || "cfs-command-rejected",
+      error: result.error || {
+        code: result.reason || "cfs-command-rejected",
+      },
+    };
+  }
+  return result;
+}
+
+/**
  * command resultから利用者へ見せる失敗理由を取り出す。
  *
  * @private
@@ -392,8 +424,53 @@ function createCommandExecutionState() {
     commandKind: null,
     message: "",
     statusClass: "idle",
+    baselineObservationKey: null,
     refreshers: new Set(),
   };
+}
+
+/**
+ * view modelの観測進行を比較するためのkeyを返す。
+ *
+ * 【詳細説明】
+ * - submitted状態は「送信は受理されたが観測確認が未完了」のため、次のmaterial provider観測が来たら
+ *   人間が再判断できるようprinter単位mutexを解除する。日時が無い環境では勝手に解除しない。
+ *
+ * @private
+ * @function getViewModelObservationKey
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @returns {string|null} 観測比較key
+ */
+function getViewModelObservationKey(viewModel) {
+  return displayText(viewModel?.observation?.lastObservedAt, "") ||
+    displayText(viewModel?.cfs?.provider?.lastObservedAt, "") ||
+    null;
+}
+
+/**
+ * 未確認command状態を新しい観測でreconcileする。
+ *
+ * 【詳細説明】
+ * - `submitted` はtransport受理後の観測待ちなので、観測時刻が進んだら操作mutexを解除する。
+ * - `unknown` はtimeout/transport-error等で実機状態が不明なため、自動解除せず人間の再確認を要求する。
+ *
+ * @private
+ * @function reconcileCommandExecutionState
+ * @param {object} executionState - command execution state
+ * @param {object|null|undefined} viewModel - 最新view model
+ * @returns {void}
+ */
+function reconcileCommandExecutionState(executionState, viewModel) {
+  if (executionState?.state !== "submitted") {
+    return;
+  }
+  const currentObservationKey = getViewModelObservationKey(viewModel);
+  if (!currentObservationKey || !executionState.baselineObservationKey || currentObservationKey === executionState.baselineObservationKey) {
+    return;
+  }
+  executionState.state = "idle";
+  executionState.statusClass = "warning";
+  executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信したため再操作できます。`;
 }
 
 /**
@@ -528,6 +605,7 @@ function createControlPolicy(viewModel, options) {
       ? optionControl.validateCommandIntent
       : null,
     commandTimeoutMs: normalizeControlTimeoutMs(optionControl.commandTimeoutMs),
+    observationKey: getViewModelObservationKey(viewModel),
     reason: canSendCommands
       ? null
       : (optionControl.disabledReason || authority.reason || "command-authority-not-enabled"),
@@ -685,14 +763,16 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
       executionState.commandKind = buttonConfig.commandKind;
       executionState.statusClass = "running";
       executionState.message = `${actionLabel}を送信中...`;
+      executionState.baselineObservationKey = controlPolicy.observationKey || null;
       refreshAllCommandButtons(executionState, true);
       button.dataset.running = "true";
       setCommandStatus(statusElement, "running", executionState.message);
       try {
-        const result = await waitForCommandWithTimeout(
+        const resultEnvelope = await waitForCommandWithTimeout(
           Promise.resolve(controlPolicy.onCommand(commandPayload)),
           controlPolicy.commandTimeoutMs
         );
+        const result = normalizeCommandHookResult(resultEnvelope);
         if (isFailedCommandResult(result)) {
           const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`;
           const status = String(result?.status || result?.result || "").trim().toLowerCase();
@@ -886,6 +966,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
    * @returns {void}
    */
   function draw(currentViewModel) {
+    reconcileCommandExecutionState(commandExecutionState, currentViewModel);
     container.replaceChildren();
     commandExecutionState.refreshers.clear();
     const root = createElement(documentRef, "div", "mtv-root");

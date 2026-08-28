@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1435 (PR #435)
+ * @version 1.390.1437 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 10:26:51
+ * @lastModified 2026-08-28 10:48:25
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -608,6 +608,103 @@ describe("Printer Core v3 material topology panel", () => {
     expect(status?.textContent).toContain("観測確認は未完了");
     expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
     expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
+  });
+
+  it("CFS操作hookがintegration envelopeを返した場合も内側CommandResultで表示状態を判定する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(status?.textContent).toContain("観測確認は未完了");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+    expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
+  });
+
+  it("観測未確認のsubmitted CFS操作は次のmaterial観測を受けたらmutexを解除する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const updatedViewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+    expect(getSlotActionButton(container, "1A", "load")?.disabled).toBe(true);
+
+    handle.update(updatedViewModel);
+
+    const selectButton = getSlotActionButton(container, "1C", "select");
+    const loadButton = getSlotActionButton(container, "1A", "load");
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(selectButton?.disabled).toBe(false);
+    expect(loadButton?.disabled).toBe(false);
+    expect(status?.textContent).toContain("最新観測を受信したため再操作できます");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
   });
 
   it("CFS操作失敗後は失敗理由を対象slotへ表示する", async () => {
