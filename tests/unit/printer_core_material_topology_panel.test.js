@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1460 (PR #435)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 17:12:00
+ * @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -266,7 +266,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.textContent).toContain("CFS情報を現在取得できません");
     expect(container.textContent).toContain("最終観測: 2026-08-27");
     const staleSlot = container.querySelector('.mtv-slot[data-slot="1C"]');
-    expect(staleSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("装填中");
+    expect(staleSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("最終観測: 装填中");
     expect(staleSlot?.querySelector(".mtv-selected-badge")?.textContent).toBe("最終観測: 機器選択");
     expect(staleSlot?.querySelector(".mtv-assignment")?.textContent).toBe("最終観測: 印刷割当 T1C");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
@@ -307,7 +307,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(selectedSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("装填中");
     expect(selectedSlot?.querySelector(".mtv-selected-badge")?.textContent).toBe("機器選択中");
     expect(assignment?.textContent).toBe("印刷割当 T1C");
-    expect(assignment?.getAttribute("title")).toContain("物理スロット名ではなく");
+    expect(assignment?.getAttribute("title")).toBe("T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。");
   });
 
   it("unknownとunobservedを別のpresence文言として表示する", () => {

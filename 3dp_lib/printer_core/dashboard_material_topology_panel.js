@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1460 (PR #435)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 17:12:00
+ * @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -274,7 +274,7 @@ function formatAssignmentLabel(assignments, isStale = false) {
  * @returns {string} assignment badge 用 title
  */
 function getAssignmentTitle() {
-  return "T1A は物理スロット名ではなく、G-code/スライサ側のツール割当です。";
+  return "T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。";
 }
 
 /**
@@ -950,7 +950,13 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
 
   const header = createElement(documentRef, "div", "mtv-slot-header");
   header.appendChild(createElement(documentRef, "span", "mtv-slot-label", displayText(row?.displaySlot)));
-  header.appendChild(createElement(documentRef, "span", "mtv-slot-state", formatPresenceState(presence)));
+  const presenceText = formatPresenceState(presence);
+  header.appendChild(createElement(
+    documentRef,
+    "span",
+    "mtv-slot-state",
+    isStale ? `最終観測: ${presenceText}` : presenceText
+  ));
   slot.appendChild(header);
 
   if (row?.selected === true) {

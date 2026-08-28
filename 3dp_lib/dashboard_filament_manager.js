@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1460 (PR #435)
+* @version 1.390.1462 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-28 17:12:00
+* @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -521,7 +521,8 @@ function createMaterialSourceChip(row, isStale) {
   slot.textContent = row?.displaySlot || "--";
   const state = document.createElement("span");
   state.className = "fm-material-source-state";
-  state.textContent = getMaterialSourcePresenceText(row);
+  const presenceText = getMaterialSourcePresenceText(row);
+  state.textContent = isStale ? `最終観測: ${presenceText}` : presenceText;
   head.append(slot, state);
   chip.appendChild(head);
 
@@ -557,7 +558,7 @@ function createMaterialSourceChip(row, isStale) {
     const assignmentLine = document.createElement("div");
     assignmentLine.className = "fm-material-source-assignment";
     assignmentLine.textContent = `${isStale ? "最終観測: " : ""}印刷割当 ${assignments.join(", ")}`;
-    assignmentLine.title = "T1A は物理スロット名ではなく、G-code/スライサ側のツール割当です。";
+    assignmentLine.title = "T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。";
     chip.appendChild(assignmentLine);
   }
   return chip;

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1460 (PR #435)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-28 17:12:00
+ * @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -253,7 +253,7 @@ describe("filament manager CFS material source section", () => {
     expect(section?.querySelector(".fm-material-source-chip.is-selected .fm-material-source-selected")?.textContent).toBe("機器選択中");
     const assignment = section?.querySelector(".fm-material-source-assignment");
     expect(assignment?.textContent).toBe("印刷割当 T1A");
-    expect(assignment?.getAttribute("title")).toContain("物理スロット名ではなく");
+    expect(assignment?.getAttribute("title")).toBe("T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。");
     expect(section?.textContent).toContain("管理中スプールとは別情報です");
   });
 
@@ -280,6 +280,7 @@ describe("filament manager CFS material source section", () => {
     const meta = section?.querySelector(".fm-material-supply-meta");
     expect(meta?.textContent).toContain("最終観測: 2026-08-27 12:34:56");
     expect(meta?.textContent).not.toContain("状態: 2026-08-27 12:34:56");
+    expect(section?.querySelector('[data-source-id="cfs:1:slot:2"] .fm-material-source-state')?.textContent).toBe("最終観測: 装填中");
   });
 
   it("フィラメント管理内でもunknownとunobservedを別のpresence文言として表示する", () => {
