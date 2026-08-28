@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1438 (PR #435)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 18:58:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,6 +43,7 @@ const mockState = vi.hoisted(() => ({
     printerCoreV3Info: {
       model: "F012",
       version: "1.0.0",
+      probeSessionId: "test-runtime-probe-session",
     },
     materialSystem: {
       mode: "cfs-readonly",
@@ -127,6 +128,7 @@ vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   getConnectionState: vi.fn(() => "connected"),
   getPrinterType: vi.fn(() => "creality-k2"),
   getConnectionTarget: vi.fn(() => mockState.connectionTarget),
+  getPrinterCoreV3RuntimeProbeSessionId: vi.fn(() => "test-runtime-probe-session"),
 }));
 
 vi.mock("../../3dp_lib/dashboard_printmanager.js", () => ({
@@ -219,6 +221,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       printerCoreV3Info: {
         model: "F012",
         version: "1.0.0",
+        probeSessionId: "test-runtime-probe-session",
       },
       materialSystem: {
         mode: "cfs-readonly",
@@ -358,6 +361,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       printerCoreV3Info: {
         model: "F012",
         version: "1.0.0",
+        probeSessionId: "test-runtime-probe-session",
       },
       materialSystem: {
         mode: "cfs-readonly",
@@ -431,6 +435,56 @@ describe("dashboard_panel_init CFS control hook", () => {
   it("certificationEvidenceだけで現在targetのmodel/firmwareが無い場合はproduction CFS controlを有効化しない", async () => {
     mockState.connectionTarget = {
       printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load"],
+          certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
+            gate: "Gate 19",
+            commandKinds: ["cfs-load"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
+          },
+        },
+      },
+    };
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("filament", body, "K2Pro");
+
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
+      enabled: false,
+      allowedActions: ["select", "load", "unload", "feed", "retract"],
+    });
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(options.control.canSendCommands).toBe(false);
+  });
+
+  it("Gate20: 再起動前のprinterCoreV3Infoだけではre-probe前にproduction CFS controlを有効化しない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      printerCoreV3Info: {
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: "previous-runtime-probe-session",
+        observedAt: "2026-08-28T01:00:00.000Z",
+      },
       materialSystem: {
         mode: "cfs-readonly",
         unitLimit: 1,
@@ -596,6 +650,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       printerCoreV3Info: {
         model: "F012",
         version: "1.0.0",
+        probeSessionId: "test-runtime-probe-session",
       },
       materialSystem: {
         mode: "cfs-readonly",

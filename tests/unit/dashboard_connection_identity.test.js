@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1438 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-08-28 18:58:10
  *
  * @vitest-environment jsdom
  */
@@ -392,6 +392,12 @@ describe("Printer Core v3 identity dry-run", () => {
       cameraProtocol: "k2-webrtc",
       wssPort: 443,
       videoPort: 443,
+      printerCoreV3Info: {
+        source: "http-info",
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: mod.getPrinterCoreV3RuntimeProbeSessionId(),
+      },
     });
     expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual([
       "66:77:88:99:aa:bb",

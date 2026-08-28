@@ -434,8 +434,8 @@ function createCommandExecutionState() {
  * CFS commandの未確認状態をUIでどうreconcileできるかを返す。
  *
  * 【詳細説明】
- * - `cfs-slot-select` はNormalizedState上のselected sourceで確認できるため、次観測で対象slotが
- *   選択中になった場合だけprinter単位mutexを解除する。
+ * - `cfs-slot-select` はNormalizedState上のselected sourceで確認できるため、送信前は未選択だったslotが
+ *   次観測で選択中になった場合だけprinter単位mutexを解除する。
  * - `load/unload/feed/retract` は現時点では物理状態の権威的なexpected-stateが未確定なので、
  *   単に観測時刻が進んだだけでは再操作可能にしない。
  *
@@ -443,13 +443,15 @@ function createCommandExecutionState() {
  * @function createSubmittedCommandReconciliation
  * @param {object} commandPayload - rendererからcommand hookへ渡したpayload
  * @param {object} buttonConfig - CFS操作ボタン定義
+ * @param {object|null|undefined} row - ViewModel source row
  * @returns {object} submitted状態のreconcile方針
  */
-function createSubmittedCommandReconciliation(commandPayload, buttonConfig) {
+function createSubmittedCommandReconciliation(commandPayload, buttonConfig, row = null) {
   if (buttonConfig?.commandKind === "cfs-slot-select" && commandPayload?.sourceId) {
     return {
       kind: "selected-source",
       expectedSourceId: commandPayload.sourceId,
+      wasSelectedAtSubmit: row?.selected === true,
     };
   }
   return {
@@ -530,6 +532,12 @@ function reconcileCommandExecutionState(executionState, viewModel) {
   }
   const reconciliation = executionState.reconciliation || {};
   if (reconciliation.kind === "selected-source") {
+    if (reconciliation.wasSelectedAtSubmit === true) {
+      executionState.baselineObservationKey = currentObservationKey;
+      executionState.statusClass = "warning";
+      executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 送信前から選択済みだったため再操作を保留しています。`;
+      return;
+    }
     if (!isSourceSelectedInViewModel(viewModel, reconciliation.expectedSourceId)) {
       executionState.baselineObservationKey = currentObservationKey;
       executionState.statusClass = "warning";
@@ -864,7 +872,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
           executionState.state = "submitted";
           executionState.statusClass = "warning";
           executionState.message = `${actionLabel}を送信しました。観測確認は未完了です。状態更新を確認してください。`;
-          executionState.reconciliation = createSubmittedCommandReconciliation(commandPayload, buttonConfig);
+          executionState.reconciliation = createSubmittedCommandReconciliation(commandPayload, buttonConfig, row);
           setCommandStatus(statusElement, "warning", executionState.message);
         } else {
           executionState.state = "idle";

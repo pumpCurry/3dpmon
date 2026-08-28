@@ -1,13 +1,35 @@
 # Printer Core v3 Live Certification Runbook
 
-Last updated: 2026-08-26
+Last updated: 2026-08-28
 
 This runbook defines the operator-controlled steps for the remaining physical
 evidence gates. It intentionally separates dry-run evidence, live command
 submission, protocol observation, physical observation, restart recovery, and
 release certification.
 
-## Gate 20: K2/CFS Print-Start Certification
+## Gate 20: Restart Recovery
+
+Goal: prove that saved material settings survive restart, but production CFS
+control stays fail-closed until the app re-probes the current printer and
+re-observes material topology in the new runtime session.
+
+Required sequence:
+
+- Configure filament supply mode, CFS/CFS-C unit count, external spool setting,
+  and optional provider endpoint.
+- Save settings and quit the app.
+- Start the built app again.
+- Confirm the connection target restores the same material settings.
+- Confirm old saved `/info` evidence is displayed only as saved evidence and
+  does not enable CFS command control before re-probe.
+- Confirm `/info` re-probe records a new current probe session ID for K2.
+- Confirm K2 `boxsInfo` or CFS-C provider re-observes material topology.
+- Confirm stale state is shown until material topology is actually observed.
+- Confirm operation buttons remain disabled unless matching production
+  certification, current model/firmware scope, active session, fresh topology,
+  and send-time loaded source validation are all present.
+
+## K2/CFS Print-Start Live Certification
 
 Goal: prove that the K2/CFS `colorMatch` -> `multiColorPrint` transport can
 start a CFS-backed print only when the selected material assignment is explicit
@@ -76,8 +98,8 @@ Observation checklist:
 - Fixture stores markers for operator action, observed printing, observed feed,
   observed extrusion, and completion.
 
-Gate 20 can be code/tooling closed before this live run, but production command
-authority remains blocked until this physical evidence is attached.
+Restart recovery can be code/tooling closed before this live run, but production
+print-start authority remains blocked until this physical evidence is attached.
 
 ## Gate 10: K2 CFS Topology Certification
 
@@ -106,24 +128,6 @@ Required evidence:
 - Provider object discovery subscribes only to existing material objects.
 - Attach/detach and stale/reconnect are visible as material topology changes.
 - K1 printer identity remains stable when CFS-C provider attaches or detaches.
-
-## Restart Recovery Gate
-
-Goal: prove that saved material settings survive restart and re-probe before any
-CFS control can be considered usable.
-
-Required sequence:
-
-- Configure filament supply mode, CFS/CFS-C unit count, external spool setting,
-  and optional provider endpoint.
-- Save settings and quit the app.
-- Start the built app again.
-- Confirm the connection target restores the same material settings.
-- Confirm `/info` or WS payload reclassifies K2 when applicable.
-- Confirm K2 `boxsInfo` or CFS-C provider re-observes material topology.
-- Confirm stale state is shown until material topology is actually observed.
-- Confirm operation buttons remain disabled unless a future certified production
-  command integration explicitly enables them.
 
 ## Gate 21: Release Certification
 

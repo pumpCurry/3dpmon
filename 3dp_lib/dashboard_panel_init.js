@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1438 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 18:58:10
  * -----------------------------------------------------------
  */
 
@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget, getConnectionState } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget, getConnectionState, getPrinterCoreV3RuntimeProbeSessionId } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -182,11 +182,31 @@ function normalizeCertifiedCfsCommandSet(value) {
 }
 
 /**
+ * connection targetに保存された`/info`証跡が現在起動中のre-probe結果か判定する。
+ *
+ * 【詳細説明】
+ * - `printerCoreV3Info` はconnectionTargetsと一緒に永続化されるため、再起動前の値を
+ *   command authorityの現在scopeとして使うと、re-probe前にCFS controlが復活してしまう。
+ * - Gate 20では`dashboard_connection.js`が付与した現在のprobe session IDと一致する場合だけ採用する。
+ *
+ * @private
+ * @function isCurrentPrinterCoreV3Info
+ * @param {object|null|undefined} info - `printerCoreV3Info`候補
+ * @returns {boolean} 現在起動中の`/info` probe証跡ならtrue
+ */
+function isCurrentPrinterCoreV3Info(info) {
+  if (!info || typeof info !== "object") {
+    return false;
+  }
+  return String(info.probeSessionId || "") === getPrinterCoreV3RuntimeProbeSessionId();
+}
+
+/**
  * target/runtimeからCFS control certification用のscopeを作る。
  *
  * 【詳細説明】
- * - `/info` 由来のmodel/versionがtargetに保存されていれば優先し、無ければPrinter Core identityや
- *   legacy storedDataから取れる範囲を補う。
+ * - `/info` 由来のmodel/versionは、現在起動中のre-probeで観測したものだけを採用する。
+ * - 永続identityやlegacy storedDataは古い可能性があるため、production command scopeには使わない。
  * - model/firmwareが現在観測できない環境では、validator側でproduction有効化を拒否する。
  *
  * @private
@@ -195,23 +215,17 @@ function normalizeCertifiedCfsCommandSet(value) {
  * @returns {object} certification scope
  */
 function createCfsControlCertificationScope(target, machine) {
-  const identity = target?.printerCoreV3Identity || {};
-  const info = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
+  const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
+  const info = isCurrentPrinterCoreV3Info(rawInfo) ? rawInfo : {};
   const shadowState = machine?.runtimeData?.printerCoreV3Shadow?.lastState || {};
   return {
     printerType: target?.printerType || null,
     model: info.model ||
       info.reportedModel ||
-      identity.model ||
-      identity.reportedModel ||
       shadowState.identity?.reportedModel ||
-      machine?.storedData?.model?.rawValue ||
       null,
     firmwareVersion: info.version ||
       info.firmwareVersion ||
-      identity.version ||
-      identity.firmwareVersion ||
-      identity.reportedFirmwareVersion ||
       shadowState.identity?.firmwareVersion ||
       shadowState.identity?.version ||
       null,

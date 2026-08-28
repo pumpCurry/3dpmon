@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1438 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-08-28 18:58:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -124,8 +124,37 @@ const DEFAULT_K2_MOONRAKER_HTTP_PORT = 4408;
  */
 const DEFAULT_K2_WEBRTC_CAMERA_PORT = 8000;
 
+/**
+ * 現在のアプリ起動中に実施したPrinter Core v3 `/info` probeを識別する揮発session ID。
+ *
+ * 【詳細説明】
+ * - connectionTargetsは永続化されるため、前回起動時の`/info`結果をそのままcommand authorityの
+ *   現在scopeとして使ってはいけない。
+ * - Gate 20では再起動後にre-probeされるまでCFS controlをfail-closedにするため、
+ *   probe成功時にこのIDを証跡へ付与し、UI側で現在起動中の観測だけを採用する。
+ *
+ * @constant {string}
+ */
+const PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID = `pcv3-probe:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
+
+/**
+ * 現在のアプリ起動中に使うPrinter Core v3 `/info` probe session IDを返す。
+ *
+ * 【詳細説明】
+ * - UI composition層は保存済み`printerCoreV3Info.probeSessionId`とこの値を比較し、
+ *   再起動前の古い`/info`証跡でproduction CFS controlが復活しないようにする。
+ *
+ * @function getPrinterCoreV3RuntimeProbeSessionId
+ * @returns {string} 現在起動中の`/info` probe session ID
+ * @example
+ * const sessionId = getPrinterCoreV3RuntimeProbeSessionId();
+ */
+export function getPrinterCoreV3RuntimeProbeSessionId() {
+  return PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID;
+}
 
 /**
  * @typedef {Object} ConnectionState
@@ -566,6 +595,45 @@ function _normalizePositivePort(value) {
 }
 
 /**
+ * `/info` 応答から現在起動中のscope証跡だけをconnection targetへ残す。
+ *
+ * 【詳細説明】
+ * - command authorityで必要なmodel/firmware/transport hintだけを保存し、MACやserialは既存の
+ *   identity repositoryへ任せる。
+ * - `probeSessionId` はアプリ再起動で変わるため、古い永続`/info`結果はUI側で現在scopeとして扱われない。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @param {object|null|undefined} evidence - `/info` 応答
+ * @param {string} observedAt - 観測時刻ISO文字列
+ * @returns {boolean} targetを変更した場合true
+ */
+function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt) {
+  if (!target || target.printerType === "moonraker" || !evidence || typeof evidence !== "object") {
+    return false;
+  }
+  const model = String(evidence.model || evidence.reportedModel || "").trim() || null;
+  const version = String(evidence.version || evidence.firmwareVersion || "").trim() || null;
+  const nextInfo = {
+    source: "http-info",
+    model,
+    reportedModel: model,
+    version,
+    firmwareVersion: version,
+    wssPort: _normalizePositivePort(evidence.wssPort),
+    videoPort: _normalizePositivePort(evidence.videoPort),
+    observedAt,
+    probeSessionId: PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID,
+  };
+  const previous = target.printerCoreV3Info || {};
+  const changed = JSON.stringify(previous) !== JSON.stringify(nextInfo);
+  if (changed) {
+    target.printerCoreV3Info = nextInfo;
+  }
+  return changed;
+}
+
+/**
  * HTTP `/info` などから得たtransport hintをconnectionTargetへ保存する。
  *
  * 【詳細説明】
@@ -842,6 +910,7 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
   try {
+    const observedAt = new Date().toISOString();
     const response = await window.fetch(`http://${httpHost}:${httpPort}/info`, {
       cache: "no-store",
       signal: controller?.signal,
@@ -859,13 +928,14 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
       endpointAddress,
     });
     const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
+    const infoChanged = _recordCurrentPrinterCoreV3Info(target, body, observedAt);
     const transportChanged = _applyConnectionTargetTransportHints(target, body, inferredType);
     _applyInferredConnectionTargetPrinterType(
       target,
       inferredType,
       _resolveHostForPanelRefresh(target, dest)
     );
-    if (transportChanged) {
+    if (infoChanged || transportChanged) {
       saveUnifiedStorage(true);
       try { updatePrinterListUI(); } catch { /* 初期化前テスト環境では無視する。 */ }
     }

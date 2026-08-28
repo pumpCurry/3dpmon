@@ -105,5 +105,6 @@ without matching production certification and current send-time revalidation.
 When a standalone slot action returns only `submitted` / `completed:false`, the
 UI must not unlock every physical CFS action just because the material provider
 timestamp advanced. `cfs-slot-select` may unlock after a later observation shows
-the requested source selected, but load, unload, feed, and retract remain locked
-until their physical expected-state contract is certified.
+the requested source changed from unselected to selected, but load, unload,
+feed, and retract remain locked until their physical expected-state contract is
+certified.
