@@ -23,7 +23,7 @@ jobs:
           node-version: 20
       - run: npm ci
       - name: electron boot e2e
-        run: npm run test:e2e
+        run: xvfb-run -a npm run test:e2e
 
   version-sync:
     runs-on: ubuntu-latest
