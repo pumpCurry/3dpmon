@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1458 (PR #435)
+* @version 1.390.1460 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-28 17:06:12
+* @lastModified 2026-08-28 17:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -385,6 +385,30 @@ function getMaterialSourceRemainingText(row, isStale) {
 }
 
 /**
+ * CFS/CFS-C source row のpresenceを利用者向け日本語へ変換する。
+ *
+ * 【詳細説明】
+ * - unknownは装置から存在確認できていない状態、unobservedはsource自体が未観測の状態として分けて表示する。
+ *
+ * @private
+ * @function getMaterialSourcePresenceText
+ * @param {Object} row - material topology view model の source row。
+ * @returns {string} presence表示テキスト。
+ */
+function getMaterialSourcePresenceText(row) {
+  if (row?.presence === "loaded") {
+    return "装填中";
+  }
+  if (row?.presence === "empty") {
+    return "未装填";
+  }
+  if (row?.presence === "unknown") {
+    return "装填状態 不明";
+  }
+  return "未観測";
+}
+
+/**
  * 日時を利用者向けの `yyyy-mm-dd hh:mm:ss` へ変換する。
  *
  * 【詳細説明】
@@ -434,7 +458,10 @@ function createMaterialSupplyMeta(viewModel) {
   meta.className = "fm-material-supply-meta";
   const summary = viewModel?.summary || {};
   const observedAt = formatMaterialSupplyObservedAt(viewModel?.observation?.lastObservedAt);
-  const stateText = observedAt ? `状態: ${observedAt}` : "状態: 観測時刻不明";
+  const isStale = summary.topologyState === "stale";
+  const stateText = observedAt
+    ? `${isStale ? "最終観測" : "状態"}: ${observedAt}`
+    : `${isStale ? "最終観測" : "状態"}: 観測時刻不明`;
   const cfsObserved = Number.isFinite(Number(summary.cfsUnitCount)) ? Number(summary.cfsUnitCount) : 0;
   const cfsLimit = Number.isFinite(Number(viewModel?.limits?.cfsUnitLimit)) ? Number(viewModel.limits.cfsUnitLimit) : cfsObserved;
   const externalCount = Number.isFinite(Number(summary.externalSourceCount)) ? Number(summary.externalSourceCount) : 0;
@@ -493,11 +520,17 @@ function createMaterialSourceChip(row, isStale) {
   const slot = document.createElement("strong");
   slot.textContent = row?.displaySlot || "--";
   const state = document.createElement("span");
-  state.textContent = row?.selected === true
-    ? (isStale ? "最終観測:機器選択" : "機器選択観測")
-    : (row?.presence === "loaded" ? "装填中" : row?.presence === "empty" ? "未装填" : "未観測");
+  state.className = "fm-material-source-state";
+  state.textContent = getMaterialSourcePresenceText(row);
   head.append(slot, state);
   chip.appendChild(head);
+
+  if (row?.selected === true) {
+    const selected = document.createElement("div");
+    selected.className = "fm-material-source-selected";
+    selected.textContent = isStale ? "最終観測: 機器選択" : "機器選択中";
+    chip.appendChild(selected);
+  }
 
   const materialLine = document.createElement("div");
   materialLine.className = "fm-material-source-material";
@@ -523,7 +556,7 @@ function createMaterialSourceChip(row, isStale) {
   if (assignments.length > 0) {
     const assignmentLine = document.createElement("div");
     assignmentLine.className = "fm-material-source-assignment";
-    assignmentLine.textContent = `印刷割当 ${assignments.join(", ")}`;
+    assignmentLine.textContent = `${isStale ? "最終観測: " : ""}印刷割当 ${assignments.join(", ")}`;
     assignmentLine.title = "T1A は物理スロット名ではなく、G-code/スライサ側のツール割当です。";
     chip.appendChild(assignmentLine);
   }

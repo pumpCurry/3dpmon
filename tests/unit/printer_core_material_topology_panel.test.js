@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1458 (PR #435)
+ * @version 1.390.1460 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 17:06:12
+ * @lastModified 2026-08-28 17:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -154,7 +154,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
     expect(container.textContent).toContain("Silver PLA");
     expect(container.textContent).toContain("残量 54%");
-    expect(container.textContent).toContain("機器選択観測");
+    expect(container.textContent).toContain("機器選択中");
     expect(container.textContent).toContain("状態: 2026-08-27");
     expect(container.textContent).not.toContain("状態: 最新");
     expect(container.textContent).toContain("外部スプール（CFSとは別管理）");
@@ -264,8 +264,11 @@ describe("Printer Core v3 material topology panel", () => {
 
     expect(container.querySelector(".mtv-root")?.classList.contains("mtv-root-stale")).toBe(true);
     expect(container.textContent).toContain("CFS情報を現在取得できません");
-    expect(container.textContent).toContain("状態: 2026-08-27");
-    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:機器選択");
+    expect(container.textContent).toContain("最終観測: 2026-08-27");
+    const staleSlot = container.querySelector('.mtv-slot[data-slot="1C"]');
+    expect(staleSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("装填中");
+    expect(staleSlot?.querySelector(".mtv-selected-badge")?.textContent).toBe("最終観測: 機器選択");
+    expect(staleSlot?.querySelector(".mtv-assignment")?.textContent).toBe("最終観測: 印刷割当 T1C");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
   });
 
@@ -301,9 +304,23 @@ describe("Printer Core v3 material topology panel", () => {
     const assignment = selectedSlot?.querySelector(".mtv-assignment");
     expect(selectedSlot?.classList.contains("mtv-selected")).toBe(true);
     expect(selectedSlot?.classList.contains("mtv-assigned")).toBe(true);
-    expect(selectedSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("機器選択観測");
+    expect(selectedSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("装填中");
+    expect(selectedSlot?.querySelector(".mtv-selected-badge")?.textContent).toBe("機器選択中");
     expect(assignment?.textContent).toBe("印刷割当 T1C");
     expect(assignment?.getAttribute("title")).toContain("物理スロット名ではなく");
+  });
+
+  it("unknownとunobservedを別のpresence文言として表示する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    topology.sources.find((source) => source.sourceId === "cfs:1:slot:1").presence = "unknown";
+    topology.sources.find((source) => source.sourceId === "cfs:1:slot:3").presence = "unobserved";
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    expect(container.querySelector('.mtv-slot[data-slot="1B"] .mtv-slot-state')?.textContent).toBe("装填状態 不明");
+    expect(container.querySelector('.mtv-slot[data-slot="1D"] .mtv-slot-state')?.textContent).toBe("未観測");
   });
 
   it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {

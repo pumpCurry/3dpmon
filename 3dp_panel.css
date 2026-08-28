@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1422
+  Version 1.390.1460
 */
 
 /* ===============================================================
@@ -1292,6 +1292,26 @@ body.panel-mode .notification-container {
 .mtv-slot-state {
   text-transform: lowercase;
 }
+.mtv-selected-badge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 3px;
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-sm);
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  padding: 1px 4px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mtv-root-stale .mtv-selected-badge {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
 .mtv-material-line {
   gap: 5px;
   margin-top: 5px;
@@ -1486,6 +1506,7 @@ body.panel-mode .notification-container {
 }
 .fm-material-source-head span,
 .fm-material-source-remaining,
+.fm-material-source-selected,
 .fm-material-source-assignment {
   font-size: 10px;
   color: var(--color-text-secondary);
@@ -1506,8 +1527,28 @@ body.panel-mode .notification-container {
   white-space: nowrap;
 }
 .fm-material-source-remaining,
+.fm-material-source-selected,
 .fm-material-source-assignment {
   margin-top: 2px;
+}
+.fm-material-source-selected {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-sm);
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  padding: 1px 4px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-material-supply-stale .fm-material-source-selected {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
 }
 
 /* ---------------------------------------------------------------

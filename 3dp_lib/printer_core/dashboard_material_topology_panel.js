@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1458 (PR #435)
+ * @version 1.390.1460 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 17:06:12
+ * @lastModified 2026-08-28 17:12:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -137,7 +137,7 @@ function formatTopologyState(value, observation = {}) {
     ? `(📡: ${Math.max(0, Number(request.elapsedSeconds))}秒) `
     : "";
   if (observedAtText) {
-    return `${requestPrefix}状態: ${observedAtText}`;
+    return `${requestPrefix}${value === "stale" ? "最終観測" : "状態"}: ${observedAtText}`;
   }
   if (value === "stale") {
     return `${requestPrefix}状態: 最終観測時刻不明`;
@@ -165,7 +165,7 @@ function formatPresenceState(presence) {
   if (presence === "unobserved") {
     return "未観測";
   }
-  return "不明";
+  return "装填状態 不明";
 }
 
 /**
@@ -252,11 +252,15 @@ function formatAssignments(assignments) {
  *
  * @private
  * @param {Array<object>} assignments - assignment一覧
+ * @param {boolean=} isStale - trueなら最終観測値として表示する
  * @returns {string} 表示文字列
  */
-function formatAssignmentLabel(assignments) {
+function formatAssignmentLabel(assignments, isStale = false) {
   const assignmentText = formatAssignments(assignments);
-  return assignmentText ? `印刷割当 ${assignmentText}` : "";
+  if (!assignmentText) {
+    return "";
+  }
+  return `${isStale ? "最終観測: " : ""}印刷割当 ${assignmentText}`;
 }
 
 /**
@@ -946,11 +950,17 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
 
   const header = createElement(documentRef, "div", "mtv-slot-header");
   header.appendChild(createElement(documentRef, "span", "mtv-slot-label", displayText(row?.displaySlot)));
-  const stateLabel = row?.selected === true
-    ? (isStale ? "最終観測:機器選択" : "機器選択観測")
-    : formatPresenceState(presence);
-  header.appendChild(createElement(documentRef, "span", "mtv-slot-state", stateLabel));
+  header.appendChild(createElement(documentRef, "span", "mtv-slot-state", formatPresenceState(presence)));
   slot.appendChild(header);
+
+  if (row?.selected === true) {
+    slot.appendChild(createElement(
+      documentRef,
+      "div",
+      "mtv-selected-badge",
+      isStale ? "最終観測: 機器選択" : "機器選択中"
+    ));
+  }
 
   const materialLine = createElement(documentRef, "div", "mtv-material-line");
   const swatch = createElement(documentRef, "span", "mtv-swatch");
@@ -970,7 +980,7 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
   }
   slot.appendChild(remaining);
 
-  const assignmentText = formatAssignmentLabel(row?.assignments);
+  const assignmentText = formatAssignmentLabel(row?.assignments, isStale);
   if (assignmentText) {
     const assignment = createElement(documentRef, "div", "mtv-assignment", assignmentText);
     assignment.title = getAssignmentTitle();
