@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1456 (PR #435)
+* @version 1.390.1458 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-28 16:53:00
+* @lastModified 2026-08-28 17:06:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -523,7 +523,8 @@ function createMaterialSourceChip(row, isStale) {
   if (assignments.length > 0) {
     const assignmentLine = document.createElement("div");
     assignmentLine.className = "fm-material-source-assignment";
-    assignmentLine.textContent = `割当観測: ${assignments.join(", ")}`;
+    assignmentLine.textContent = `印刷割当 ${assignments.join(", ")}`;
+    assignmentLine.title = "T1A は物理スロット名ではなく、G-code/スライサ側のツール割当です。";
     chip.appendChild(assignmentLine);
   }
   return chip;

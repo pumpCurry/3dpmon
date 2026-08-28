@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1456 (PR #435)
+ * @version 1.390.1458 (PR #435)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-28 16:53:00
+ * @lastModified 2026-08-28 17:06:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -250,7 +250,9 @@ describe("filament manager CFS material source section", () => {
     ]);
     expect(section?.querySelector(".fm-material-source-chip.is-selected strong")?.textContent).toBe("1C");
     expect(section?.querySelector(".fm-material-source-chip.is-selected")?.textContent).toContain("機器選択観測");
-    expect(section?.querySelector(".fm-material-source-assignment")?.textContent).toBe("割当観測: T1A");
+    const assignment = section?.querySelector(".fm-material-source-assignment");
+    expect(assignment?.textContent).toBe("印刷割当 T1A");
+    expect(assignment?.getAttribute("title")).toContain("物理スロット名ではなく");
     expect(section?.textContent).toContain("管理中スプールとは別情報です");
   });
 

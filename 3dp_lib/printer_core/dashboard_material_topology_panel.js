@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1458 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 17:06:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -248,7 +248,7 @@ function formatAssignments(assignments) {
  * assignmentを利用者向けの短い説明へ変換する。
  *
  * 【詳細説明】
- * - `T1A` は物理slot名ではなくG-code/slicer側のtool aliasなので、裸表示せず「割当観測:」を付ける。
+ * - `T1A` は物理slot名ではなくG-code/slicer側のtool aliasなので、裸表示せず「印刷割当」を付ける。
  *
  * @private
  * @param {Array<object>} assignments - assignment一覧
@@ -256,7 +256,21 @@ function formatAssignments(assignments) {
  */
 function formatAssignmentLabel(assignments) {
   const assignmentText = formatAssignments(assignments);
-  return assignmentText ? `割当観測: ${assignmentText}` : "";
+  return assignmentText ? `印刷割当 ${assignmentText}` : "";
+}
+
+/**
+ * assignment badge の補足説明を返す。
+ *
+ * 【詳細説明】
+ * - タッチ環境ではtooltipを見られない場合もあるが、desktopでは `T1A` を物理スロット名と誤読しないための補助にする。
+ *
+ * @private
+ * @function getAssignmentTitle
+ * @returns {string} assignment badge 用 title
+ */
+function getAssignmentTitle() {
+  return "T1A は物理スロット名ではなく、G-code/スライサ側のツール割当です。";
 }
 
 /**
@@ -958,7 +972,9 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
 
   const assignmentText = formatAssignmentLabel(row?.assignments);
   if (assignmentText) {
-    slot.appendChild(createElement(documentRef, "div", "mtv-assignment", assignmentText));
+    const assignment = createElement(documentRef, "div", "mtv-assignment", assignmentText);
+    assignment.title = getAssignmentTitle();
+    slot.appendChild(assignment);
   }
   if (controlPolicy.showControls && row?.kind === "cfs-slot") {
     slot.appendChild(renderSlotControls(documentRef, row, isStale, controlPolicy, executionState));

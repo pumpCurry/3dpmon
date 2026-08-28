@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1458 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 17:06:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -290,7 +290,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-topology-state")?.textContent).toContain("(📡: 13秒) 状態:");
   });
 
-  it("assignmentは裸のT1Aではなく割当観測バッジとして表示し、選択中slotを強調する", () => {
+  it("assignmentは裸のT1Aではなく印刷割当バッジとして表示し、選択中slotを強調する", () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
     const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
     const container = document.createElement("div");
@@ -302,7 +302,8 @@ describe("Printer Core v3 material topology panel", () => {
     expect(selectedSlot?.classList.contains("mtv-selected")).toBe(true);
     expect(selectedSlot?.classList.contains("mtv-assigned")).toBe(true);
     expect(selectedSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("機器選択観測");
-    expect(assignment?.textContent).toBe("割当観測: T1C");
+    expect(assignment?.textContent).toBe("印刷割当 T1C");
+    expect(assignment?.getAttribute("title")).toContain("物理スロット名ではなく");
   });
 
   it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {
