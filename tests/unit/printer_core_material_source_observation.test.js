@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1457 (PR #435)
+ * @version 1.390.1461 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 16:58:45
+ * @lastModified 2026-08-28 17:18:49
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -637,6 +637,119 @@ describe("MaterialSourceObservationStore", () => {
       assignments: [
         { assignmentId: "T1C" },
       ],
+    });
+  });
+
+  it("presenceだけを明示観測したpartial deltaは前回presenceで上書きしない", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const first = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-presence-only",
+      providerId: "test-presence-provider",
+      providerGeneration: "ws-presence",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({
+        sources: [
+          {
+            sourceId: "cfs:1:slot:0",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 0,
+            presence: "loaded",
+            presenceEvidence: {
+              sourceProtocol: "test",
+              reason: "initial-presence",
+            },
+            material: { type: "PLA", name: "White PLA" },
+            status: { stateCode: null, selected: false },
+          },
+        ],
+      }),
+      snapshotCompleteness: "complete",
+    });
+    const second = recordMaterialTopologyObservation(first.store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-presence-only",
+      providerId: "test-presence-provider",
+      providerGeneration: "ws-presence",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: createTopology({
+        sources: [
+          {
+            sourceId: "cfs:1:slot:0",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 0,
+            presence: "empty",
+            presenceEvidence: {
+              sourceProtocol: "test",
+              reason: "presence-only-update",
+            },
+            observedFields: {
+              status: { presence: true },
+            },
+          },
+        ],
+      }),
+      snapshotCompleteness: "partial",
+    });
+
+    expect(second.record.latestBySourceId["cfs:1:slot:0"]).toMatchObject({
+      presence: "empty",
+      presenceEvidence: {
+        sourceProtocol: "test",
+        reason: "presence-only-update",
+      },
+      material: { name: "White PLA" },
+    });
+  });
+
+  it("providerが明示したpresenceEvidenceをmaterial source snapshotへ保持する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const result = recordMaterialTopologyObservation(store, {
+      host: "K1C-CFSC",
+      deviceId: "material-provider:K1C-CFSC",
+      identityStrength: "provisional",
+      sessionId: "session-presence-evidence",
+      providerId: "creality-cfs-moonraker-box",
+      providerGeneration: "moonraker-presence",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({
+        sources: [
+          {
+            sourceId: "cfs:1:slot:2",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 2,
+            presence: "loaded",
+            presenceEvidence: {
+              sourceProtocol: "creality-moonraker-boxsInfo",
+              reason: "observed-material-entry-without-state-code",
+            },
+            material: { type: "PLA", name: "Silver PLA" },
+            status: { stateCode: null, selected: true },
+          },
+        ],
+      }),
+      snapshotCompleteness: "complete",
+    });
+
+    expect(result.record.latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      presence: "loaded",
+      presenceEvidence: {
+        sourceProtocol: "creality-moonraker-boxsInfo",
+        reason: "observed-material-entry-without-state-code",
+      },
     });
   });
 

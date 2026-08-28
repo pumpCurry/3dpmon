@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1457 (PR #435)
+ * @version 1.390.1461 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 16:58:45
+ * @lastModified 2026-08-28 17:18:49
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -613,6 +613,7 @@ function createSourceSnapshot(options) {
     hasOwn(status, "remaining") || hasOwn(status, "percent")
   );
   const stateCodeObserved = isMaskedFieldObserved(statusMask, "stateCode", hasOwn(status, "stateCode"));
+  const presenceObserved = isMaskedFieldObserved(statusMask, "presence", hasOwn(source, "presence"));
   const editStatusObserved = isMaskedFieldObserved(statusMask, "editStatusCode", hasOwn(status, "editStatusCode"));
   const scrapObserved = isMaskedFieldObserved(statusMask, "scrap", hasOwn(status, "scrap"));
   const selectedObserved = isMaskedFieldObserved(statusMask, "selected", hasOwn(status, "selected"));
@@ -628,6 +629,7 @@ function createSourceSnapshot(options) {
     slotId: source?.slotId ?? previous?.slotId ?? null,
     protocolSlotId: source?.slotId ?? previous?.protocolSlotId ?? null,
     presence: derivePresence(source),
+    presenceEvidence: cloneJsonValue(source.presenceEvidence || null),
     selected: source?.status?.selected === undefined || source?.status?.selected === null
       ? null
       : source.status.selected === true || Number(source.status.selected) === 1,
@@ -681,14 +683,16 @@ function createSourceSnapshot(options) {
     if (!assignmentsObserved) {
       snapshot.assignments = cloneJsonValue(previous.assignments) || [];
     }
-    if (!materialObserved && !stateCodeObserved) {
+    if (!presenceObserved && !materialObserved && !stateCodeObserved) {
       snapshot.presence = previous.presence || snapshot.presence;
-    } else if (!materialObserved || !stateCodeObserved) {
+      snapshot.presenceEvidence = cloneJsonValue(previous.presenceEvidence) || snapshot.presenceEvidence;
+    } else if (!presenceObserved && (!materialObserved || !stateCodeObserved)) {
       snapshot.presence = derivePresence({
         presence: snapshot.presence,
         material: snapshot.material,
         status: { stateCode: snapshot.status.stateCode },
       });
+      snapshot.presenceEvidence = null;
     }
   }
   return snapshot;
@@ -713,6 +717,7 @@ function createSemanticSignature(snapshot) {
     boxId: snapshot.boxId,
     slotId: snapshot.slotId,
     presence: snapshot.presence,
+    presenceEvidence: snapshot.presenceEvidence,
     selected: snapshot.selected,
     material: snapshot.material,
     remaining: snapshot.remaining,
