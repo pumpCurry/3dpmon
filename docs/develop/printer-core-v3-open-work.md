@@ -14,6 +14,7 @@ K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界�
 | Gate / Area | Code | Tests | Live | Production |
 | --- | --- | --- | --- | --- |
 | Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
+| Gate 18.8 Material Observation UX / Evidence | CLOSED | CLOSED | partial | read-only |
 | Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
@@ -64,6 +65,9 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 - CFS/CFS-C read-onlyであることを常時footerに表示する。
 - 接続設定は `フィラメント供給` の単一selectへ集約し、mode / displayMode / unitLimit の矛盾設定を作りにくくした。
 - 外部スプール枠の表示ON/OFFを設定できるようにした。
+- 物理slot、装填状態、機器選択状態、印刷割当を別表示に分離し、`T1A`などの割当識別子を物理CFS slot名として見せない。
+- stale中のslot presenceも `最終観測: 装填中` のように表示し、slot単体で現在値と誤認しない。
+- CFS-C provider由来の `presence` / `presenceEvidence` はObservation Storeへ保存し、providerが明示presenceを注釈した場合は `observedFields.status.presence` も同時に伝える。
 
 ## Gate 18.5 追加で閉じた read-only operational readiness 項目
 

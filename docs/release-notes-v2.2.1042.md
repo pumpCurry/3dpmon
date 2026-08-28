@@ -32,6 +32,15 @@
 - ローカル: `node scripts/write-release-manifest.mjs --dist <dist-dir>`
 - GitHub Actions: lint / smoke / test / e2e / version-sync
 
+### ビルド成果物
+
+- `3dpmon-2.2.1042-setup.exe`
+- `3dpmon-2.2.1042-portable.exe`
+- `3dpmon-2.2.1042-setup.exe.blockmap`
+- `release-manifest-2.2.1042.json`
+
+公開時は `release-manifest-2.2.1042.json` を添付し、最終commit、build日時、各成果物のSHA256をmanifestで確認できるようにします。
+
 ## English
 
 3dpmon v2.2.1042 is a release-candidate build focused on Printer Core v3 monitoring, K2 Pro Combo / CFS support, guarded CFS-aware print start, and safer command-readiness foundations.
@@ -63,3 +72,12 @@
 - Local: `npm run build`
 - Local: `node scripts/write-release-manifest.mjs --dist <dist-dir>`
 - GitHub Actions: lint / smoke / test / e2e / version-sync
+
+### Build Artifacts
+
+- `3dpmon-2.2.1042-setup.exe`
+- `3dpmon-2.2.1042-portable.exe`
+- `3dpmon-2.2.1042-setup.exe.blockmap`
+- `release-manifest-2.2.1042.json`
+
+The release will include `release-manifest-2.2.1042.json` so the final commit, build timestamp, and SHA256 for each artifact can be verified from the manifest.
