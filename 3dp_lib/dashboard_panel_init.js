@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1433 (PR #435)
+ * @version 1.390.1435 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-28 10:02:18
+ * @lastModified 2026-08-28 10:26:51
  * -----------------------------------------------------------
  */
 
@@ -94,6 +94,7 @@ import {
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
+  validateK2CfsSlotControlCertificationEvidence,
 } from "./printer_core/dashboard_k2_cfs_command_transport.js";
 import {
   MATERIAL_DISPLAY_MODE,
@@ -181,6 +182,39 @@ function normalizeCertifiedCfsCommandSet(value) {
 }
 
 /**
+ * target/runtimeからCFS control certification用のscopeを作る。
+ *
+ * 【詳細説明】
+ * - `/info` 由来のmodel/versionがtargetに保存されていれば優先し、無ければPrinter Core identityや
+ *   legacy storedDataから取れる範囲を補う。
+ * - firmware未観測の環境でも、validator側で証跡にfirmware scopeがあることは要求する。
+ *
+ * @private
+ * @param {object|null|undefined} target - 接続target設定
+ * @param {object|null|undefined} machine - runtime machine data
+ * @returns {object} certification scope
+ */
+function createCfsControlCertificationScope(target, machine) {
+  const identity = target?.printerCoreV3Identity || {};
+  const info = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
+  return {
+    printerType: target?.printerType || null,
+    model: info.model ||
+      info.reportedModel ||
+      identity.model ||
+      identity.reportedModel ||
+      machine?.storedData?.model?.rawValue ||
+      null,
+    firmwareVersion: info.version ||
+      info.firmwareVersion ||
+      identity.version ||
+      identity.firmwareVersion ||
+      identity.reportedFirmwareVersion ||
+      null,
+  };
+}
+
+/**
  * CFS control production設定を接続targetから読み取る。
  *
  * 【詳細説明】
@@ -197,10 +231,11 @@ function resolveCfsControlProductionSettings(target) {
   if (!control || control.enabled !== true) {
     return null;
   }
+  if (target?.printerType !== "creality-k2") {
+    return null;
+  }
   const certifiedCommandKinds = normalizeCertifiedCfsCommandSet(
-    control.certifiedCfsSlotControlCommands ||
-    control.certifiedCommandKinds ||
-    control.commandKinds
+    control.certifiedCfsSlotControlCommands
   );
   const requestedActions = Array.isArray(control.allowedActions)
     ? control.allowedActions.map((action) => String(action || "").trim()).filter(Boolean)
@@ -209,16 +244,21 @@ function resolveCfsControlProductionSettings(target) {
     const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
     return commandKind && certifiedCommandKinds.has(commandKind);
   });
-  const evidence = control.certificationEvidence && typeof control.certificationEvidence === "object"
-    ? control.certificationEvidence
-    : null;
-  if (allowedActions.length === 0 || !evidence) {
+  const evidence = control.certificationEvidence;
+  const scope = createCfsControlCertificationScope(target, null);
+  const certifiedAllowedActions = allowedActions.filter((action) => {
+    const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
+    const validation = validateK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
+    return validation.ok;
+  });
+  if (certifiedAllowedActions.length === 0) {
     return null;
   }
   return {
-    allowedActions,
-    certifiedCommandKinds: Array.from(certifiedCommandKinds),
+    allowedActions: certifiedAllowedActions,
+    certifiedCommandKinds: certifiedAllowedActions.map((action) => CFS_CONTROL_ACTION_COMMAND_KIND[action]),
     certificationEvidence: evidence,
+    certificationScope: scope,
   };
 }
 
@@ -258,8 +298,14 @@ function createCfsControlSendTimeMaterialTopology(topology) {
  * @param {object} productionSettings - production CFS control設定
  * @returns {object} command authority send-time snapshot
  */
-function createCfsControlSendTimeContext(hostname, productionSettings) {
+function createCfsControlSendTimeContext(hostname, productionSettings, request) {
+  const currentTarget = getConnectionTarget(hostname);
   const machine = monitorData.machines[hostname] || {};
+  const currentProductionSettings = resolveCfsControlProductionSettings(currentTarget);
+  const commandKind = String(request?.commandKind || "").trim();
+  if (!currentProductionSettings || !currentProductionSettings.certifiedCommandKinds.includes(commandKind)) {
+    throw new Error("cfs-control-certification-revoked");
+  }
   const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
   const runtimeTopology = shadowRecord?.lastState?.materials || null;
   const materialTopology = createCfsControlSendTimeMaterialTopology(runtimeTopology);
@@ -279,7 +325,8 @@ function createCfsControlSendTimeContext(hostname, productionSettings) {
     stateSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
     observedState: shadowRecord?.lastState || null,
     createdAt: new Date().toISOString(),
-    certificationEvidence: productionSettings.certificationEvidence,
+    certificationEvidence: currentProductionSettings.certificationEvidence,
+    certificationScope: createCfsControlCertificationScope(currentTarget, machine),
   };
 }
 
@@ -309,11 +356,17 @@ function observeCfsControlCommandState(hostname) {
  */
 function createCfsControlDispatcher(hostname, productionSettings) {
   return createBoundPrinterCommandDispatcher({
-    getSendTimeContext: () => createCfsControlSendTimeContext(hostname, productionSettings),
+    getSendTimeContext: (request) => createCfsControlSendTimeContext(hostname, productionSettings, request),
     sendTransport: async (request) => {
+      const currentTarget = getConnectionTarget(hostname);
+      const currentSettings = resolveCfsControlProductionSettings(currentTarget);
+      if (!currentSettings || !currentSettings.certifiedCommandKinds.includes(String(request?.commandKind || "").trim())) {
+        throw new Error("cfs-control-certification-revoked");
+      }
       const plan = createK2CfsCommandTransportPlan(request, {
-        certifiedCfsSlotControlCommands: productionSettings.certifiedCommandKinds,
-        certificationEvidence: productionSettings.certificationEvidence,
+        certifiedCfsSlotControlCommands: currentSettings.certifiedCommandKinds,
+        certificationEvidence: currentSettings.certificationEvidence,
+        certificationScope: currentSettings.certificationScope,
       });
       if (!plan.ok) {
         throw new Error(`k2-cfs-control-plan-rejected:${plan.reason}`);

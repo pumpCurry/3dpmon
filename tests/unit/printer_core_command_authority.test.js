@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1412 (PR #434)
+ * @version 1.390.1435 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-26 17:30:15
+ * @lastModified 2026-08-28 10:26:51
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -555,6 +555,46 @@ describe("Printer Core v3 command authority contract", () => {
     expect(result.status).toBe("rejected");
     expect(result.error.errors).toContain("cfs-target-source-not-current");
     expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは印刷中または一時停止中のprinterへ送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const printingSendTransport = vi.fn();
+    const pausedSendTransport = vi.fn();
+    const printingResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          print: {
+            stateLabel: "printing",
+          },
+        },
+      }),
+      sendTransport: printingSendTransport,
+    });
+    const pausedResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          print: {
+            stateLabel: "paused",
+          },
+        },
+      }),
+      sendTransport: pausedSendTransport,
+    });
+
+    expect(printingResult.status).toBe("rejected");
+    expect(printingResult.error.errors).toContain("cfs-control-printer-busy");
+    expect(printingSendTransport).not.toHaveBeenCalled();
+    expect(pausedResult.status).toBe("rejected");
+    expect(pausedResult.error.errors).toContain("cfs-control-printer-busy");
+    expect(pausedSendTransport).not.toHaveBeenCalled();
   });
 
   it("dispatcherは送信時snapshotを内部context化し、correlationが無ければ完了扱いにしない", async () => {

@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1433 (PR #435)
+ * @version 1.390.1435 (PR #435)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-28 10:02:18
+ * @lastModified 2026-08-28 10:26:51
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -25,6 +25,9 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPrinterCommandRequest,
+} from "../../3dp_lib/printer_core/dashboard_command_authority.js";
 
 const mockState = vi.hoisted(() => ({
   renderMaterialTopologyPanel: vi.fn(),
@@ -353,8 +356,17 @@ describe("dashboard_panel_init CFS control hook", () => {
           allowedActions: ["load", "unload"],
           certifiedCfsSlotControlCommands: ["cfs-load", "cfs-unload"],
           certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
             gate: "Gate 19",
+            commandKinds: ["cfs-load", "cfs-unload"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
             fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
           },
         },
       },
@@ -402,5 +414,179 @@ describe("dashboard_panel_init CFS control hook", () => {
       allowedActions: ["load", "unload"],
       disabledReason: null,
     });
+  });
+
+  it("certificationEvidenceが空objectの場合はproduction CFS controlを有効化しない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load"],
+          certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationEvidence: {},
+        },
+      },
+    };
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("filament", body, "K2Pro");
+
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
+      enabled: false,
+      allowedActions: ["select", "load", "unload", "feed", "retract"],
+    });
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(options.control.canSendCommands).toBe(false);
+  });
+
+  it("legacy aliasのcommandKindsだけではproduction CFS controlを有効化しない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load"],
+          commandKinds: ["cfs-load"],
+          certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
+            gate: "Gate 19",
+            commandKinds: ["cfs-load"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
+          },
+        },
+      },
+    };
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("filament", body, "K2Pro");
+
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
+      enabled: false,
+      allowedActions: ["select", "load", "unload", "feed", "retract"],
+    });
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(options.control.canSendCommands).toBe(false);
+  });
+
+  it("K2以外のtargetではcertified CFS control設定があってもproduction有効化しない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k1",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load"],
+          certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
+            gate: "Gate 19",
+            commandKinds: ["cfs-load"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
+          },
+        },
+      },
+    };
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("filament", body, "K2Pro");
+
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
+      enabled: false,
+      allowedActions: ["select", "load", "unload", "feed", "retract"],
+    });
+  });
+
+  it("production CFS controlはsend-time context生成時にも現在targetのcertificationを再検証して送信しない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load"],
+          certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
+            gate: "Gate 19",
+            commandKinds: ["cfs-load"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
+          },
+        },
+      },
+    };
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("filament", body, "K2Pro");
+
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    mockState.connectionTarget.materialSystem.cfsControl.enabled = false;
+    const request = createPrinterCommandRequest({
+      deviceId: "serial:k2",
+      sessionId: "session:k2",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+      entropySource: () => "unit",
+      createdAt: "2026-08-28T12:01:00.000+09:00",
+    });
+    const result = await integrationOptions.dispatcher.dispatch(request);
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("invalid-send-time-context");
+    expect(mockState.sendCommand).not.toHaveBeenCalled();
   });
 });

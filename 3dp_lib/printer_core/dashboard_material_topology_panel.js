@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1433 (PR #435)
+ * @version 1.390.1435 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 10:18:42
+ * @lastModified 2026-08-28 10:26:51
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -322,7 +322,7 @@ function normalizeControlTimeoutMs(value) {
  * @returns {boolean} 失敗表示すべき場合true
  */
 function isFailedCommandResult(result) {
-  const status = String(result?.status || result?.result || "").trim();
+  const status = String(result?.status || result?.result || "").trim().toLowerCase();
   return [
     "rejected",
     "failed",
@@ -331,6 +331,33 @@ function isFailedCommandResult(result) {
     "confirmation-error",
     "timeout",
   ].includes(status) || Boolean(result?.error);
+}
+
+/**
+ * command resultがtransport受理のみで観測未確認か判定する。
+ *
+ * 【詳細説明】
+ * - Printer Core CommandResultでは、transportAcceptedでもexpected-state/correlationが未確認なら
+ *   `completed:false` になる。UIではこれを成功色にせず、観測待ちとして扱う。
+ *
+ * @private
+ * @param {*} result - command hookの戻り値
+ * @returns {boolean} 観測未確認として扱う場合true
+ */
+function isUnconfirmedCommandResult(result) {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  if (result.completed === false) {
+    return true;
+  }
+  if (result.postCommandObservation?.confirmed === false) {
+    return true;
+  }
+  if (result.confirmation?.checked === true && result.confirmation?.confirmed !== true) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -345,6 +372,82 @@ function formatCommandFailureReason(result) {
   const errors = Array.isArray(result?.error?.errors) ? result.error.errors.join(", ") : "";
   const message = displayText(result?.error?.message, "");
   return [code, errors, message].filter(Boolean).join(" / ") || "理由不明";
+}
+
+/**
+ * CFS command実行状態を生成する。
+ *
+ * 【詳細説明】
+ * - 再描画でDOMが作り直されても、非冪等commandのrunning/submitted/unknown状態を失わないため、
+ *   renderer handleのclosureに保持する。
+ *
+ * @private
+ * @returns {object} command execution state
+ */
+function createCommandExecutionState() {
+  return {
+    state: "idle",
+    sourceId: null,
+    action: null,
+    commandKind: null,
+    message: "",
+    statusClass: "idle",
+    refreshers: new Set(),
+  };
+}
+
+/**
+ * CFS command実行状態がprinter単位の操作mutexを要求するか判定する。
+ *
+ * 【詳細説明】
+ * - CFSのmaterial pathを共有する可能性があるため、slot単位ではなくpanel/printer単位で停止する。
+ *
+ * @private
+ * @param {object} executionState - command execution state
+ * @returns {boolean} 同一printerのCFS操作を止める場合true
+ */
+function isCommandMutexActive(executionState) {
+  return ["running", "submitted", "unknown"].includes(executionState?.state);
+}
+
+/**
+ * 再描画時にslotへ表示すべきcommand statusを返す。
+ *
+ * 【詳細説明】
+ * - 実行したslotだけにstatus文言を復元し、他slotはprinter単位mutexによるdisabledだけを反映する。
+ *
+ * @private
+ * @param {object} row - ViewModel source row
+ * @param {object} executionState - command execution state
+ * @returns {{state: string, message: string}|null} 表示対象status
+ */
+function getVisibleExecutionStatusForRow(row, executionState) {
+  if (!executionState?.message || executionState.sourceId !== row?.sourceId) {
+    return null;
+  }
+  return {
+    state: executionState.statusClass || "idle",
+    message: executionState.message,
+  };
+}
+
+/**
+ * 現在描画中のCFS操作ボタンをすべて再評価する。
+ *
+ * 【詳細説明】
+ * - running/submitted/unknownはprinter単位mutexなので、クリックしたslotだけでなく同じpanel内の
+ *   全slotのbutton状態を即時に揃える。
+ *
+ * @private
+ * @param {object} executionState - command execution state
+ * @param {boolean=} busy - 明示busy
+ * @returns {void}
+ */
+function refreshAllCommandButtons(executionState, busy = false) {
+  if (!executionState?.refreshers || typeof executionState.refreshers.forEach !== "function") {
+    return;
+  }
+  executionState.refreshers.forEach((refresh) => refresh(busy));
 }
 
 /**
@@ -496,39 +599,49 @@ function createControlCommandPayload(row, buttonConfig) {
  *
  * 【詳細説明】
  * - disabled状態でもボタンを表示し、なぜ操作できないかをtitleで示す。
- * - 実行中は二重クリックを避けるため、対象ボタンだけ一時disabledにする。
+ * - 実行中や結果不明時は、CFSの共有material pathへ別操作を重ねないようprinter単位で一時停止する。
  *
  * @private
  * @param {Document} documentRef - DOM document
  * @param {object} row - ViewModel source row
  * @param {boolean} isStale - topologyがstaleならtrue
  * @param {object} controlPolicy - 操作方針
+ * @param {object=} executionState - renderer handleで保持するcommand実行状態
  * @returns {HTMLElement} 操作ボタンコンテナ
  */
-function renderSlotControls(documentRef, row, isStale, controlPolicy) {
+function renderSlotControls(documentRef, row, isStale, controlPolicy, executionState = createCommandExecutionState()) {
   const controls = createElement(documentRef, "div", "mtv-controls");
   const statusElement = createElement(documentRef, "div", "mtv-command-status", "");
   const buttonEntries = [];
   statusElement.setAttribute("aria-live", "polite");
-  statusElement.hidden = true;
+  const restoredStatus = getVisibleExecutionStatusForRow(row, executionState);
+  if (restoredStatus) {
+    setCommandStatus(statusElement, restoredStatus.state, restoredStatus.message);
+  } else {
+    statusElement.hidden = true;
+  }
 
   /**
    * slot内の操作ボタン状態を再評価する。
    *
    * 【詳細説明】
-   * - 1つのCFS操作を送信している間に、同じslotへ別操作を重ねて送らないよう全ボタンを止める。
+   * - 1つのCFS操作を送信している間に、同じprinterへ別操作を重ねて送らないよう全ボタンを止める。
    *
    * @private
-   * @param {boolean=} busy - trueならslot内の全操作を一時停止する
+   * @param {boolean=} busy - trueならprinter内の全操作を一時停止する
    * @returns {void}
    */
   function refreshButtonStates(busy = false) {
+    const mutexBusy = busy || isCommandMutexActive(executionState);
     for (const entry of buttonEntries) {
       const reason = getControlDisabledReason(row, isStale, controlPolicy, entry.buttonConfig);
-      entry.button.disabled = busy || Boolean(reason);
-      entry.button.title = busy ? "CFS操作を送信中です" : (reason || entry.buttonConfig.title);
-      entry.button.dataset.busy = busy ? "true" : "false";
+      entry.button.disabled = mutexBusy || Boolean(reason);
+      entry.button.title = mutexBusy ? "CFS操作の結果確認中です" : (reason || entry.buttonConfig.title);
+      entry.button.dataset.busy = mutexBusy ? "true" : "false";
     }
+  }
+  if (executionState?.refreshers && typeof executionState.refreshers.add === "function") {
+    executionState.refreshers.add(refreshButtonStates);
   }
 
   for (const buttonConfig of MATERIAL_CONTROL_BUTTONS) {
@@ -537,11 +650,16 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy) {
     button.type = "button";
     button.dataset.action = buttonConfig.action;
     button.dataset.commandKind = buttonConfig.commandKind;
-    button.disabled = Boolean(reason);
-    button.title = reason || buttonConfig.title;
+    button.disabled = isCommandMutexActive(executionState) || Boolean(reason);
+    button.title = isCommandMutexActive(executionState) ? "CFS操作の結果確認中です" : (reason || buttonConfig.title);
+    button.dataset.busy = isCommandMutexActive(executionState) ? "true" : "false";
     button.setAttribute("aria-label", `${displayText(row?.displaySlot)} ${buttonConfig.title}`);
     buttonEntries.push({ button, buttonConfig });
     button.addEventListener("click", async () => {
+      if (isCommandMutexActive(executionState)) {
+        setCommandStatus(statusElement, executionState.statusClass || "running", executionState.message || "CFS操作の結果確認中です。");
+        return;
+      }
       const currentReason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
       if (currentReason || typeof controlPolicy.onCommand !== "function") {
         return;
@@ -560,36 +678,59 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy) {
         setCommandStatus(statusElement, "warning", freshReason);
         return;
       }
-      refreshButtonStates(true);
-      button.dataset.running = "true";
       const actionLabel = formatControlActionLabel(buttonConfig.action);
-      setCommandStatus(statusElement, "running", `${actionLabel}を送信中...`);
+      executionState.state = "running";
+      executionState.sourceId = row?.sourceId || null;
+      executionState.action = buttonConfig.action;
+      executionState.commandKind = buttonConfig.commandKind;
+      executionState.statusClass = "running";
+      executionState.message = `${actionLabel}を送信中...`;
+      refreshAllCommandButtons(executionState, true);
+      button.dataset.running = "true";
+      setCommandStatus(statusElement, "running", executionState.message);
       try {
         const result = await waitForCommandWithTimeout(
           Promise.resolve(controlPolicy.onCommand(commandPayload)),
           controlPolicy.commandTimeoutMs
         );
         if (isFailedCommandResult(result)) {
+          const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`;
+          const status = String(result?.status || result?.result || "").trim().toLowerCase();
+          const shouldKeepLocked = ["timeout", "transport-error", "confirmation-error"].includes(status);
+          executionState.state = shouldKeepLocked ? "unknown" : "idle";
+          executionState.statusClass = "error";
+          executionState.message = failureMessage;
           setCommandStatus(
             statusElement,
             "error",
-            `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`
+            failureMessage
           );
+        } else if (isUnconfirmedCommandResult(result)) {
+          executionState.state = "submitted";
+          executionState.statusClass = "warning";
+          executionState.message = `${actionLabel}を送信しました。観測確認は未完了です。状態更新を確認してください。`;
+          setCommandStatus(statusElement, "warning", executionState.message);
         } else {
-          setCommandStatus(statusElement, "success", `${actionLabel}を送信しました。観測状態の更新を待っています。`);
+          executionState.state = "idle";
+          executionState.statusClass = "success";
+          executionState.message = `${actionLabel}を送信しました。観測状態の更新を待っています。`;
+          setCommandStatus(statusElement, "success", executionState.message);
         }
       } catch (error) {
         const isTimeout = error?.code === "cfs-command-timeout" || error?.message === "cfs-command-timeout";
+        executionState.state = "unknown";
+        executionState.statusClass = isTimeout ? "timeout" : "error";
+        executionState.message = isTimeout
+          ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。`
+          : `${actionLabel}に失敗しました: ${error?.message || String(error)}`;
         setCommandStatus(
           statusElement,
-          isTimeout ? "timeout" : "error",
-          isTimeout
-            ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。`
-            : `${actionLabel}に失敗しました: ${error?.message || String(error)}`
+          executionState.statusClass,
+          executionState.message
         );
       } finally {
         button.dataset.running = "false";
-        refreshButtonStates(false);
+        refreshAllCommandButtons(executionState, false);
       }
     });
     controls.appendChild(button);
@@ -609,9 +750,10 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy) {
  * @param {object} row - ViewModel source row
  * @param {boolean=} isStale - trueなら最終観測値として描画する
  * @param {object=} controlPolicy - 操作方針
+ * @param {object=} executionState - renderer handleで保持するcommand実行状態
  * @returns {HTMLElement} slot要素
  */
-function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {}) {
+function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {}, executionState = null) {
   const presence = normalizePresenceClass(row?.presence);
   const slot = createElement(documentRef, "div", `mtv-slot mtv-presence-${presence}`);
   slot.dataset.slot = row?.displaySlot || "";
@@ -654,7 +796,7 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {})
     slot.appendChild(createElement(documentRef, "div", "mtv-assignment", assignmentText));
   }
   if (controlPolicy.showControls && row?.kind === "cfs-slot") {
-    slot.appendChild(renderSlotControls(documentRef, row, isStale, controlPolicy));
+    slot.appendChild(renderSlotControls(documentRef, row, isStale, controlPolicy, executionState));
   }
   return slot;
 }
@@ -670,9 +812,10 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {})
  * @param {object} unit - ViewModel unit row
  * @param {boolean=} isStale - trueなら最終観測値として描画する
  * @param {object=} controlPolicy - 操作方針
+ * @param {object=} executionState - renderer handleで保持するcommand実行状態
  * @returns {HTMLElement} unit要素
  */
-function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}) {
+function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}, executionState = null) {
   const unitEl = createElement(documentRef, "section", "mtv-unit");
   if (!unit?.observed) {
     unitEl.classList.add("mtv-unit-unobserved");
@@ -694,7 +837,7 @@ function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}) {
 
   const slots = createElement(documentRef, "div", "mtv-slots");
   for (const row of Array.isArray(unit?.slots) ? unit.slots : []) {
-    slots.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy));
+    slots.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy, executionState));
   }
   unitEl.appendChild(slots);
   return unitEl;
@@ -730,6 +873,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     };
   }
   const documentRef = container.ownerDocument || document;
+  const commandExecutionState = createCommandExecutionState();
 
   /**
    * 現在のview modelをcontainerへ描画する。
@@ -743,6 +887,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
    */
   function draw(currentViewModel) {
     container.replaceChildren();
+    commandExecutionState.refreshers.clear();
     const root = createElement(documentRef, "div", "mtv-root");
     const header = createElement(documentRef, "div", "mtv-header");
     const topologyState = currentViewModel?.summary?.topologyState || "unobserved";
@@ -782,14 +927,14 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
       const external = createElement(documentRef, "section", "mtv-external");
       external.appendChild(createElement(documentRef, "div", "mtv-section-title", "外部スプール（CFSとは別管理）"));
       for (const row of externalRows) {
-        external.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy));
+        external.appendChild(renderSourceSlot(documentRef, row, isStale, controlPolicy, commandExecutionState));
       }
       root.appendChild(external);
     }
 
     const units = createElement(documentRef, "div", "mtv-units");
     for (const unit of Array.isArray(currentViewModel?.units) ? currentViewModel.units : []) {
-      units.appendChild(renderUnit(documentRef, unit, isStale, controlPolicy));
+      units.appendChild(renderUnit(documentRef, unit, isStale, controlPolicy, commandExecutionState));
     }
     root.appendChild(units);
 

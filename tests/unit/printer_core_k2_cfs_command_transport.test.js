@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1431 (PR #435)
+ * @version 1.390.1435 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-28 09:36:01
+ * @lastModified 2026-08-28 10:26:51
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +18,34 @@ import {
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
 } from "../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
+
+/**
+ * Gate 19 production CFS slot control 用の実機certification evidenceを生成する。
+ *
+ * 【詳細説明】
+ * - transport profile、command kind、機種、firmware、capture ID を明示し、空objectや別profileを
+ *   production昇格へ使えないことを検証しやすくする。
+ *
+ * @function createCertifiedCfsEvidence
+ * @param {object=} overrides - evidence override
+ * @returns {object} certification evidence
+ */
+function createCertifiedCfsEvidence(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    status: "certified",
+    gate: "Gate 19",
+    commandKinds: ["cfs-load"],
+    transportProfile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+    printerType: "creality-k2",
+    model: "F012",
+    firmwareVersion: "1.0.0",
+    fixtureId: "k2-f012-feed-in-or-out-20260828",
+    captureId: "capture:k2-f012-cfs-load-1c-20260828",
+    certifiedAt: "2026-08-28T12:00:00.000+09:00",
+    ...overrides,
+  };
+}
 
 /**
  * K2/CFS print-start request を生成する。
@@ -253,10 +281,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       },
     }, {
       certifiedCfsSlotControlCommands: ["cfs-load"],
-      certificationEvidence: {
-        gate: "Gate 19",
-        fixtureId: "k2-f012-cfs-load-1c-20260828",
-      },
+      certificationEvidence: createCertifiedCfsEvidence(),
     });
 
     expect(plan).toMatchObject({
@@ -274,8 +299,17 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         liveCertificationAllowed: true,
         productionEnabled: true,
         certificationEvidence: {
+          schemaVersion: 1,
+          status: "certified",
           gate: "Gate 19",
-          fixtureId: "k2-f012-cfs-load-1c-20260828",
+          commandKinds: ["cfs-load"],
+          transportProfile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+          printerType: "creality-k2",
+          model: "F012",
+          firmwareVersion: "1.0.0",
+          fixtureId: "k2-f012-feed-in-or-out-20260828",
+          captureId: "capture:k2-f012-cfs-load-1c-20260828",
+          certifiedAt: "2026-08-28T12:00:00.000+09:00",
         },
       },
     });
@@ -291,6 +325,61 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         },
       },
     ]);
+  });
+
+  it("production昇格は空objectや配列のcertification evidenceを拒否する", () => {
+    const createPlan = (certificationEvidence) => createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence,
+    });
+
+    expect(createPlan({})).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+    expect(createPlan([])).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+  });
+
+  it("production昇格はcommand kindとtransport profileが一致するcertification evidenceだけ許可する", () => {
+    const wrongCommandPlan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence({
+        commandKinds: ["cfs-unload"],
+      }),
+    });
+    const wrongProfilePlan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence({
+        transportProfile: "k2-ws9999-other-profile",
+      }),
+    });
+
+    expect(wrongCommandPlan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+    expect(wrongProfilePlan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
   });
 
   it("certified registryに無いslot操作はproduction option付きでも拒否を維持する", () => {

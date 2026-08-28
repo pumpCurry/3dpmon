@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1435 (PR #435)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-27 12:22:38
+ * @lastModified 2026-08-28 10:26:51
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -935,6 +935,12 @@ function collectCfsSendTimeErrors(request, context) {
     return [];
   }
   const errors = [];
+  const printStateLabel = String(context.observedState?.print?.stateLabel || context.observedState?.print?.state || "")
+    .trim()
+    .toLowerCase();
+  if (["printing", "paused", "busy", "heating", "checking", "running"].includes(printStateLabel)) {
+    errors.push("cfs-control-printer-busy");
+  }
   if (context.materialTopology?.cfsConnected !== true) {
     errors.push("cfs-not-connected");
   }

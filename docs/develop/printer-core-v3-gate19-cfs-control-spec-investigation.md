@@ -125,7 +125,19 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `certifiedCfsSlotControlCommands` のcommand kind allow-listと `certificationEvidence` を明示する。
   この場合だけ `k2-ws9999-feed-in-or-out-certified-v1` profileのproduction planを生成する。
   registryが空または対象commandが未登録なら、従来どおり `uncertified-cfs-slot-command` で拒否する。
+- `certificationEvidence` は空objectや配列を証跡として扱わない。production昇格には最低限、
+  `schemaVersion:1`、`status:"certified"`、対象 `commandKinds`、`transportProfile`、`printerType:"creality-k2"`、
+  `model`、`firmwareVersion`、`fixtureId`、`captureId`、`certifiedAt` を要求する。
+  現在target/runtimeでmodel/firmwareを観測済みの場合は証跡scopeとの一致も要求する。
+- UI composition層は `certifiedCfsSlotControlCommands` だけをproduction allow-listとして読み、
+  legacy aliasの `commandKinds` / `certifiedCommandKinds` では有効化しない。
+- K2用 `feedInOrOut` production profileは `printerType:"creality-k2"` のtargetに限定する。
+  K1C/CFS-Cは後続Gateで別profileとしてcertificationする。
 - sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
+- send-time context生成時とtransport plan生成直前の両方で、現在targetのcertification設定を再検証する。
+  設定が削除・無効化・scope不一致になっていれば、UI初期化時に有効だったbuttonからでも送信しない。
+- CFS physical commandは印刷中、pause中、heating/checking/busy状態では送信しない。
+  CFSのmaterial path共有を前提に、実機で並列安全性が証明されるまでは1 printerにつき1 commandだけを許可する。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
 - 初期live certificationの送信対象は `cfs-load` / `cfs-unload` だけに限定する。
@@ -134,6 +146,24 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
 
 このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
+
+## Gate 19.5 UI Command State Contract
+
+UIでCFS/CFS-C操作を表示する場合、実行状態はDOM要素ではなくrenderer handleの外側状態として保持する。
+`handle.update()` でtopology panelを再描画しても、未完了commandのbusy/statusを失ってはならない。
+
+状態は次の意味に分ける。
+
+- `running`: dispatcherへ送信中。同一printerの全CFS physical commandをdisableする。
+- `submitted`: transportは受理されたが、`completed:false`、`confirmation.confirmed:false`、
+  または `postCommandObservation.confirmed:false` のため観測確認が未完了。同一printerの再操作を抑止する。
+- `confirmed`: `completed:true` のみ。成功表示にして操作mutexを解除してよい。
+- `rejected`: send-time validationなど送信前拒否。transport side-effectは起きていないためmutexを解除してよい。
+- `unknown`: timeout、transport-error、confirmation-errorなど、物理side-effect有無が不明な状態。
+  blind retryを避けるため、最新観測や明示resetが入るまで再操作を許可しない。
+
+最初のUI実装では、slot単位ではなくprinter単位mutexを採用する。
+将来、別CFS unit間などの並列安全性を実機証跡で確認できた場合だけ、lock domainを狭める。
 
 ## Required Live Evidence
 

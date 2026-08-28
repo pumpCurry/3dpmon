@@ -14,12 +14,13 @@
  * - Gate 19 certification専用に、明示opt-in時だけCFS slot操作候補のdry-run planを生成する
  *
  * 【公開関数一覧】
+ * - {@link validateK2CfsSlotControlCertificationEvidence}：production CFS slot操作の実機証跡を検証
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1431 (PR #435)
+ * @version 1.390.1435 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 09:36:01
+ * @lastModified 2026-08-28 10:26:51
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -219,6 +220,144 @@ function cloneJsonValue(value) {
     return value;
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * certification evidence 内のcommand kind一覧を正規化する。
+ *
+ * 【詳細説明】
+ * - schemaは `commandKinds` を推奨するが、単一commandの証跡だけを簡潔に書けるよう `commandKind` も読む。
+ * - 空文字や重複は比較前に取り除き、production判定へ曖昧な値を残さない。
+ *
+ * @private
+ * @param {object} evidence - certification evidence
+ * @returns {Set<string>} command kind set
+ */
+function normalizeCertificationEvidenceCommandKinds(evidence) {
+  const commandKinds = Array.isArray(evidence?.commandKinds)
+    ? evidence.commandKinds
+    : [evidence?.commandKind];
+  return new Set(commandKinds.map((entry) => toNonEmptyString(entry)).filter(Boolean));
+}
+
+/**
+ * certification evidence のmodel scopeを検査する。
+ *
+ * 【詳細説明】
+ * - 証跡側は単一 `model` または複数 `models` を許可する。
+ * - 現在runtimeのmodelが未観測なら証跡にmodel scopeがあることだけを要求し、比較は行わない。
+ *
+ * @private
+ * @param {object} evidence - certification evidence
+ * @param {string|null} currentModel - 現在target/runtimeで観測したmodel
+ * @returns {boolean} scopeが満たされる場合true
+ */
+function matchesCertificationModelScope(evidence, currentModel) {
+  const evidenceModels = Array.isArray(evidence?.models)
+    ? evidence.models
+    : [evidence?.model];
+  const normalizedModels = new Set(evidenceModels
+    .map((entry) => toNonEmptyString(entry)?.toUpperCase())
+    .filter(Boolean));
+  if (normalizedModels.size === 0) {
+    return false;
+  }
+  const normalizedCurrent = toNonEmptyString(currentModel)?.toUpperCase();
+  return normalizedCurrent ? normalizedModels.has(normalizedCurrent) : true;
+}
+
+/**
+ * certification evidence のfirmware scopeを検査する。
+ *
+ * 【詳細説明】
+ * - 証跡側は単一 `firmwareVersion` または複数 `firmwareVersions` を許可する。
+ * - 現在runtimeのfirmwareが未観測なら証跡にfirmware scopeがあることだけを要求し、比較は行わない。
+ *
+ * @private
+ * @param {object} evidence - certification evidence
+ * @param {string|null} currentFirmwareVersion - 現在target/runtimeで観測したfirmware version
+ * @returns {boolean} scopeが満たされる場合true
+ */
+function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
+  const evidenceVersions = Array.isArray(evidence?.firmwareVersions)
+    ? evidence.firmwareVersions
+    : [evidence?.firmwareVersion];
+  const normalizedVersions = new Set(evidenceVersions
+    .map((entry) => toNonEmptyString(entry))
+    .filter(Boolean));
+  if (normalizedVersions.size === 0) {
+    return false;
+  }
+  const normalizedCurrent = toNonEmptyString(currentFirmwareVersion);
+  return normalizedCurrent ? normalizedVersions.has(normalizedCurrent) : true;
+}
+
+/**
+ * K2/CFS slot操作のproduction certification evidenceを検証する。
+ *
+ * 【詳細説明】
+ * - 空objectや配列を「証跡あり」と見なさず、command kind・transport profile・K2 printer scope・
+ *   model/firmware/capture metadata が揃った場合だけproduction昇格へ使う。
+ * - runtime側でmodel/firmwareが未観測の場合は、証跡がscopeを持つことだけを要求し、観測済みなら一致も要求する。
+ *
+ * @function validateK2CfsSlotControlCertificationEvidence
+ * @param {*} evidence - 検証対象のcertification evidence
+ * @param {string} commandKind - production昇格したいcommand kind
+ * @param {object=} scope - 現在target/runtimeから得たscope
+ * @param {string=} scope.printerType - 現在のprinterType
+ * @param {string=} scope.model - 現在のmodel code
+ * @param {string=} scope.firmwareVersion - 現在のfirmware version
+ * @returns {{ok: boolean, errors: string[]}} 検証結果
+ * @example
+ * const result = validateK2CfsSlotControlCertificationEvidence(evidence, "cfs-load", { printerType: "creality-k2" });
+ */
+export function validateK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope = {}) {
+  const errors = [];
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return { ok: false, errors: ["evidence-not-object"] };
+  }
+  if (Number(evidence.schemaVersion) !== 1) {
+    errors.push("schema-version-missing");
+  }
+  if (toNonEmptyString(evidence.status) !== "certified") {
+    errors.push("status-not-certified");
+  }
+  if (toNonEmptyString(evidence.transportProfile) !== K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE) {
+    errors.push("transport-profile-mismatch");
+  }
+  if (toNonEmptyString(evidence.printerType) !== "creality-k2") {
+    errors.push("printer-type-not-k2");
+  }
+  const currentPrinterType = toNonEmptyString(scope?.printerType);
+  if (currentPrinterType && currentPrinterType !== "creality-k2") {
+    errors.push("current-printer-type-not-k2");
+  }
+  const certifiedCommands = normalizeCertificationEvidenceCommandKinds(evidence);
+  if (!certifiedCommands.has(commandKind)) {
+    errors.push("command-kind-not-certified");
+  }
+  if (!matchesCertificationModelScope(evidence, scope?.model || scope?.reportedModel)) {
+    errors.push("model-scope-missing-or-mismatch");
+  }
+  if (!matchesCertificationFirmwareScope(evidence, scope?.firmwareVersion || scope?.version || scope?.reportedFirmwareVersion)) {
+    errors.push("firmware-scope-missing-or-mismatch");
+  }
+  if (!toNonEmptyString(evidence.gate)) {
+    errors.push("gate-missing");
+  }
+  if (!toNonEmptyString(evidence.fixtureId)) {
+    errors.push("fixture-id-missing");
+  }
+  if (!toNonEmptyString(evidence.captureId)) {
+    errors.push("capture-id-missing");
+  }
+  if (!toNonEmptyString(evidence.certifiedAt)) {
+    errors.push("certified-at-missing");
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
 }
 
 /**
@@ -683,6 +822,17 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
  * @returns {object} production transport plan
  */
 function createK2CfsSlotControlProductionPlan(request, commandKind, options = {}) {
+  const evidenceValidation = validateK2CfsSlotControlCertificationEvidence(
+    options.certificationEvidence,
+    commandKind,
+    options.certificationScope || {}
+  );
+  if (!evidenceValidation.ok) {
+    return createRejectedTransportPlan("invalid-cfs-slot-certification-evidence", {
+      commandKind,
+      errors: evidenceValidation.errors,
+    });
+  }
   return createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, {
     production: true,
     certificationEvidence: options.certificationEvidence || null,
