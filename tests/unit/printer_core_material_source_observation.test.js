@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1433 (PR #435)
+ * @version 1.390.1436 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 10:36:12
+ * @lastModified 2026-08-28 10:37:51
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -707,6 +707,89 @@ describe("MaterialSourceObservationStore", () => {
       type: "PLA",
       name: "PLA",
     });
+  });
+
+  it("raw partial colorMatchのみの観測でも既存sourceのassignmentを更新またはclearする", () => {
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: normalizeK2BoxsInfo({
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 2, state: 1, selected: 1, type: "PLA", name: "PLA", percent: 80 },
+            ],
+          },
+        ],
+        colorMatch: [
+          { id: "T1C", boxId: 1, materialId: 2 },
+        ],
+      }, { connected: true }),
+      snapshotCompleteness: "complete",
+    });
+
+    const updateResult = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: normalizeK2BoxsInfo({
+        enable: 1,
+        colorMatch: [
+          { id: "T1A", boxId: 1, materialId: 2 },
+        ],
+      }, { connected: true }),
+      snapshotCompleteness: "partial",
+    });
+
+    expect(updateResult.accepted).toBe(true);
+    expect(updateResult.record.latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      material: {
+        type: "PLA",
+        name: "PLA",
+      },
+      remaining: {
+        normalizedPercent: 80,
+      },
+      assignments: [
+        { assignmentId: "T1A" },
+      ],
+    });
+
+    const clearResult = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 3,
+      observedAt: "2026-08-27T12:00:20.000Z",
+      topology: normalizeK2BoxsInfo({
+        enable: 1,
+        colorMatch: [],
+      }, { connected: true }),
+      snapshotCompleteness: "partial",
+    });
+
+    expect(clearResult.accepted).toBe(true);
+    expect(clearResult.record.latestBySourceId["cfs:1:slot:2"].assignments).toEqual([]);
+    expect(clearResult.record.latestBySourceId["cfs:1:slot:2"].remaining.normalizedPercent).toBe(80);
   });
 
   it("古いprovider generationやsequenceはsnapshotを巻き戻さない", () => {

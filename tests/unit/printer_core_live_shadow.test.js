@@ -3,9 +3,9 @@
  * @description
  * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1436 (PR #435)
  * @since 1.390.1299 (PR #432)
- * @lastModified 2026-08-28 01:39:12
+ * @lastModified 2026-08-28 10:37:51
  *
  * @vitest-environment jsdom
  */
@@ -440,6 +440,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         },
       },
       receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
     });
 
     expect(record).toMatchObject({
@@ -492,6 +493,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         },
       },
       receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
     });
 
     expect(materialRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
@@ -512,6 +514,164 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(statusRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
     expect(statusRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
     expect(statusRecord.lastState.materials.sources[0].material.name).toBe("Silver PLA");
+  });
+
+  it("K2 runtime material topologyはpartial source deltaでも未観測material/remaining/assignmentを保持する", () => {
+    const host = "K2Pro-Live-Partial-Source";
+    const deviceId = "host:K2Pro-Live-Partial-Source";
+    const sessionId = "k2-live:partial-source";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", name: "Silver PLA", selected: 1, percent: 54, state: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    const partialRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              materials: [
+                { id: 2, selected: 0 },
+              ],
+            },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:14.000Z",
+    });
+
+    const source = partialRecord.lastState.materials.sources.find((entry) => entry.sourceId === "cfs:1:slot:2");
+    expect(source).toMatchObject({
+      material: {
+        type: "PLA",
+        name: "Silver PLA",
+        color: {
+          raw: "#09ea7ae",
+          displayHex: "9ea7ae",
+        },
+      },
+      status: {
+        selected: false,
+        remaining: {
+          normalizedPercent: 54,
+          valid: true,
+        },
+        stateCode: 1,
+      },
+    });
+    expect(partialRecord.lastState.materials.assignments).toEqual([
+      expect.objectContaining({ assignmentId: "T1C", sourceId: "cfs:1:slot:2" }),
+    ]);
+  });
+
+  it("K2 runtime material topologyはcolorMatchのみのpartial deltaで既存source assignmentを置換またはclearする", () => {
+    const host = "K2Pro-Live-Partial-Assignment";
+    const deviceId = "host:K2Pro-Live-Partial-Assignment";
+    const sessionId = "k2-live:partial-assignment";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", name: "Silver PLA", selected: 1, percent: 54, state: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    const updateRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:14.000Z",
+    });
+
+    expect(updateRecord.lastState.materials.sources.find((entry) => entry.sourceId === "cfs:1:slot:2")).toMatchObject({
+      material: {
+        name: "Silver PLA",
+      },
+      status: {
+        remaining: {
+          normalizedPercent: 54,
+        },
+      },
+    });
+    expect(updateRecord.lastState.materials.assignments).toEqual([
+      expect.objectContaining({ assignmentId: "T1A", sourceId: "cfs:1:slot:2" }),
+    ]);
+
+    const clearRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          colorMatch: [],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:24.000Z",
+    });
+
+    expect(clearRecord.lastState.materials.assignments).toEqual([]);
+    expect(clearRecord.lastState.materials.sources.find((entry) => entry.sourceId === "cfs:1:slot:2")).toMatchObject({
+      material: {
+        name: "Silver PLA",
+      },
+      status: {
+        remaining: {
+          normalizedPercent: 54,
+        },
+      },
+    });
   });
 
   it("K2 CFS topologyはread-only観測台帳へ保存し、管理スプールや台帳には書き込まない", () => {
@@ -560,6 +720,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         },
       },
       receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
     });
 
     const observations = monitorData.materialSourceObservations;

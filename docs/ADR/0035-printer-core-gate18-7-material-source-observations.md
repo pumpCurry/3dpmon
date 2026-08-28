@@ -41,18 +41,23 @@ external spool/CFS slot state across restart without mixing it into the
   disconnected observations immediately. A provider only becomes fresh again
   after a new material payload is observed, not merely because a socket is
   opening.
-- Treat K2 `boxsInfo` responses as complete snapshots. Treat CFS-C Moonraker
-  `notify_status_update` material payloads as partial snapshots unless the
-  initial subscribe response explicitly marks them complete.
+- Treat K2 `boxsInfo` and CFS-C Moonraker material payloads as partial snapshots
+  unless the caller explicitly marks a known initial subscribe/poll response as
+  complete. Partial-by-default prevents a selected-only or assignment-only delta
+  from erasing material, remaining, or slot state that was not observed in that
+  frame.
 - Normalized material topology carries `observationMask.sections` and each
   normalized source carries `observedFields`. Partial observation merging uses
   this mask instead of normalized object shape, because the normalizer fills
   unobserved protocol fields with `null` to preserve a stable API. Missing
   `colorMatch` does not clear assignments; an explicitly observed empty
-  `colorMatch: []` does.
-- Merge CFS-C partial snapshots into the runtime UI topology for display while
-  still writing the partial batch to the observation store. This keeps slots not
-  present in a Moonraker delta visible as last-known values.
+  `colorMatch: []` does. A `colorMatch`-only partial delta is applied as an
+  assignment-section update and can resolve existing source IDs from the
+  previous source location index.
+- Merge K2 and CFS-C partial snapshots into the runtime UI topology for display
+  while still writing the partial batch to the observation store. This keeps
+  slots not present in a delta visible as last-known values and applies the same
+  mask semantics to runtime display that the persistent observation store uses.
 - Persist the observation store through localStorage and IndexedDB shared
   storage as last-known read-only evidence. Restored records start as
   `restored-last-known` / stale until a fresh provider observation arrives.
@@ -95,6 +100,12 @@ external spool/CFS slot state across restart without mixing it into the
 Future command and PrintPlan gates may use fresh topology as one piece of
 send-time evidence, but they must revalidate session, capability, freshness, and
 expected state at dispatch time.
+
+`observationMask` and per-source `observedFields` are provenance metadata. They
+describe which protocol fields were present in a provider frame; they are not
+domain truth, material identity, ledger authority, or proof that a physical slot
+is loaded. Ordering and rollback checks remain provider-scoped so one transport
+cannot invalidate another provider's newer observation.
 
 ## UI Contract
 

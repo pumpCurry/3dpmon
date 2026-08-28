@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1433 (PR #435)
+ * @version 1.390.1436 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 10:36:12
+ * @lastModified 2026-08-28 10:37:51
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -221,6 +221,63 @@ function isTopologySectionObserved(topology, sectionName, fallback) {
     return fallback;
   }
   return sections[sectionName] === true;
+}
+
+/**
+ * 既存source snapshotからbox/slot参照indexを生成する。
+ *
+ * 【詳細説明】
+ * - `colorMatch` だけのpartial deltaではincoming sourcesが無いため、前回観測済みsourceの
+ *   boxId/slotIdを使ってassignmentをsourceIdへ解決する。
+ *
+ * @private
+ * @function createPreviousSourceLocationIndex
+ * @param {Object<string,Object>} latestBySourceId - 既存source snapshot map。
+ * @returns {Map<string,string>} `boxId:slotId` から sourceId へのindex。
+ */
+function createPreviousSourceLocationIndex(latestBySourceId) {
+  const index = new Map();
+  for (const [sourceId, snapshot] of Object.entries(latestBySourceId || {})) {
+    const boxId = snapshot?.boxId ?? null;
+    const slotId = snapshot?.slotId ?? snapshot?.protocolSlotId ?? null;
+    if (sourceId && boxId !== null && boxId !== undefined && slotId !== null && slotId !== undefined) {
+      index.set(`${boxId}:${slotId}`, sourceId);
+    }
+  }
+  return index;
+}
+
+/**
+ * assignment listを既存source snapshotで補完する。
+ *
+ * 【詳細説明】
+ * - Normalizerは同じraw payload内にsourceが無い場合、`colorMatch` のsourceIdを未解決にする。
+ * - Observation storeでは前回source locationを持っているため、assignment sectionが観測済みなら
+ *   既存sourceへ再解決してからsource snapshotへ適用する。
+ *
+ * @private
+ * @function resolveAssignmentsAgainstPreviousSources
+ * @param {Array<Object>} assignments - incoming assignment list。
+ * @param {Object<string,Object>} latestBySourceId - 既存source snapshot map。
+ * @returns {Array<Object>} sourceId補完済みassignment list。
+ */
+function resolveAssignmentsAgainstPreviousSources(assignments, latestBySourceId) {
+  const locationIndex = createPreviousSourceLocationIndex(latestBySourceId);
+  return (Array.isArray(assignments) ? assignments : []).map((assignment) => {
+    if (assignment?.sourceId) {
+      return cloneJsonValue(assignment);
+    }
+    const boxId = assignment?.boxId ?? null;
+    const slotId = assignment?.slotId ?? assignment?.protocolSlotId ?? null;
+    const resolvedSourceId = boxId !== null && boxId !== undefined && slotId !== null && slotId !== undefined
+      ? locationIndex.get(`${boxId}:${slotId}`) || null
+      : null;
+    return {
+      ...cloneJsonValue(assignment),
+      sourceId: resolvedSourceId,
+      resolution: resolvedSourceId ? "resolved-from-previous-source" : (assignment?.resolution || "unresolved"),
+    };
+  });
 }
 
 /**
@@ -1017,6 +1074,12 @@ export function recordMaterialTopologyObservation(store, options = {}) {
 
   const topology = options.topology && typeof options.topology === "object" ? options.topology : {};
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
+  const assignmentSectionExplicitlyObserved = hasObservedFieldMask(topology.observationMask?.sections)
+    && isTopologySectionObserved(topology, "assignments", false);
+  const assignmentsObserved = isTopologySectionObserved(topology, "assignments", Array.isArray(topology.assignments));
+  const resolvedAssignments = assignmentsObserved
+    ? resolveAssignmentsAgainstPreviousSources(assignments, record.latestBySourceId)
+    : assignments;
   const nextSnapshots = {};
   const diagnostics = [];
   for (const source of Array.isArray(topology.sources) ? topology.sources : []) {
@@ -1031,7 +1094,7 @@ export function recordMaterialTopologyObservation(store, options = {}) {
     }
     nextSnapshots[sourceId] = createSourceSnapshot({
       source,
-      assignments,
+      assignments: resolvedAssignments,
       deviceId,
       host: options.host || record.host || null,
       identityStrength: options.identityStrength || record.identityStrength || "provisional",
@@ -1041,9 +1104,32 @@ export function recordMaterialTopologyObservation(store, options = {}) {
       providerGeneration: options.providerGeneration || null,
       sequence: options.sequence ?? null,
       snapshotCompleteness,
-      assignmentsObserved: isTopologySectionObserved(topology, "assignments", Array.isArray(topology.assignments)),
+      assignmentsObserved,
       previous: record.latestBySourceId[sourceId] || null,
     });
+  }
+
+  if (snapshotCompleteness !== "complete" && assignmentSectionExplicitlyObserved) {
+    for (const [sourceId, previous] of Object.entries(record.latestBySourceId || {})) {
+      if (nextSnapshots[sourceId]) {
+        continue;
+      }
+      nextSnapshots[sourceId] = createSourceSnapshot({
+        source: { sourceId },
+        assignments: resolvedAssignments,
+        deviceId,
+        host: options.host || record.host || null,
+        identityStrength: options.identityStrength || record.identityStrength || "provisional",
+        observedAt,
+        providerId: options.providerId || topology.provider?.providerId || null,
+        sessionId: options.sessionId || null,
+        providerGeneration: options.providerGeneration || null,
+        sequence: options.sequence ?? null,
+        snapshotCompleteness,
+        assignmentsObserved,
+        previous,
+      });
+    }
   }
 
   if (snapshotCompleteness === "complete") {
