@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1383 (PR #432)
+ * @version 1.390.1433 (PR #435)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-25 22:55:00
+ * @lastModified 2026-08-28 10:02:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -35,6 +35,15 @@ const mockState = vi.hoisted(() => ({
   createBoundCfsControlIntegration: vi.fn(),
   boundOnCommand: vi.fn(),
   panelDestroy: vi.fn(),
+  connectionTarget: {
+    printerType: "creality-k2",
+    materialSystem: {
+      mode: "cfs-readonly",
+      unitLimit: 1,
+      externalSourceLimit: 1,
+    },
+  },
+  sendCommand: vi.fn(),
   monitorData: {
     machines: {},
     appSettings: {
@@ -107,16 +116,10 @@ vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   getDeviceIp: vi.fn(),
   getDisplayBaseUrl: vi.fn(),
-  sendCommand: vi.fn(),
+  sendCommand: mockState.sendCommand,
+  getConnectionState: vi.fn(() => "connected"),
   getPrinterType: vi.fn(() => "creality-k2"),
-  getConnectionTarget: vi.fn(() => ({
-    printerType: "creality-k2",
-    materialSystem: {
-      mode: "cfs-readonly",
-      unitLimit: 1,
-      externalSourceLimit: 1,
-    },
-  })),
+  getConnectionTarget: vi.fn(() => mockState.connectionTarget),
 }));
 
 vi.mock("../../3dp_lib/dashboard_printmanager.js", () => ({
@@ -203,6 +206,15 @@ describe("dashboard_panel_init CFS control hook", () => {
     mockState.createBoundCfsControlIntegration.mockReset();
     mockState.boundOnCommand.mockReset();
     mockState.panelDestroy.mockReset();
+    mockState.sendCommand.mockReset();
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+      },
+    };
     mockState.monitorData.machines = {
       K2Pro: {
         runtimeData: {
@@ -327,5 +339,68 @@ describe("dashboard_panel_init CFS control hook", () => {
 
     destroyPanel("filament", body, "K2Pro");
     expect(mockState.panelDestroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("certified CFS control設定がある場合だけproduction候補hookを有効化する", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load", "unload"],
+          certifiedCfsSlotControlCommands: ["cfs-load", "cfs-unload"],
+          certificationEvidence: {
+            gate: "Gate 19",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+          },
+        },
+      },
+    };
+    mockState.createMaterialTopologyViewModel.mockReturnValue({
+      summary: {
+        topologyState: "fresh",
+      },
+      authority: {
+        canSendCommands: true,
+        allowedActions: ["load", "unload"],
+      },
+      units: [{
+        slots: [{
+          sourceId: "cfs:1:slot:2",
+          displaySlot: "1C",
+          presence: "loaded",
+        }],
+      }],
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("filament", body, "K2Pro");
+
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true,
+      allowedActions: ["load", "unload"],
+      dispatcher: expect.any(Object),
+      getCommandContext: expect.any(Function),
+    }));
+    expect(mockState.renderMaterialTopologyPanel).toHaveBeenCalledTimes(1);
+    const [, viewModel, options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(viewModel.authority).toMatchObject({
+      canSendCommands: true,
+      allowedActions: ["load", "unload"],
+    });
+    expect(options.control).toMatchObject({
+      showControls: true,
+      canSendCommands: true,
+      allowedActions: ["load", "unload"],
+      disabledReason: null,
+    });
   });
 });
