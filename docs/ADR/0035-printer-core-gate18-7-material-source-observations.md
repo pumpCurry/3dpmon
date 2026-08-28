@@ -46,9 +46,11 @@ external spool/CFS slot state across restart without mixing it into the
   complete. Partial-by-default prevents a selected-only or assignment-only delta
   from erasing material, remaining, or slot state that was not observed in that
   frame.
-- K2 WS9999 production handling marks only the response to 3DPmon's own
-  in-flight read-only `get { boxsInfo: 1 }` probe as a complete snapshot.
-  Spontaneous `boxsInfo` pushes and timeout-late responses remain partial.
+- K2 WS9999 production handling marks only a complete-shaped response to
+  3DPmon's own in-flight read-only `get { boxsInfo: 1 }` probe as a complete
+  snapshot. The complete-shaped evidence currently requires `materialBoxs`,
+  `colorMatch`, and `same_material` at the `boxsInfo` root. Spontaneous
+  `boxsInfo` pushes, sparse deltas, and timeout-late responses remain partial.
 - Normalized material topology carries `observationMask.sections` and each
   normalized source carries `observedFields`. Partial observation merging uses
   this mask instead of normalized object shape, because the normalizer fills

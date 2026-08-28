@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1439 (PR #435)
+ * @version 1.390.1440 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 19:28:20
+ * @lastModified 2026-08-28 19:44:15
  *
  * @vitest-environment jsdom
  */
@@ -604,7 +604,19 @@ describe("Printer Core v3 identity dry-run", () => {
     ws.sentMessages.length = 0;
     mod.simulateReceivedJson(JSON.stringify({
       boxsInfo: {
-        materialBoxs: [],
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+        same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
       },
     }), "K2Pro-69E7");
 
@@ -615,12 +627,69 @@ describe("Printer Core v3 identity dry-run", () => {
       sessionId: "k2-live:test-session",
       frame: {
         boxsInfo: {
-          materialBoxs: [],
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              state: 1,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+          same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
         },
       },
       snapshotCompleteness: "complete",
     });
     expect(ws.sentMessages).toEqual([]);
+  });
+
+  it("K2 CFS boxsInfo probe待ち中でも疎なpush deltaはcomplete snapshot扱いしない", () => {
+    mod.connectWithType("203.0.113.30:9999", "creality-k1");
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Sparse",
+      model: "F012",
+      cfsConnect: 1,
+    }), "203.0.113.30");
+    expect(ws.sentMessages).toContain(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
+
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            materials: [
+              { id: 2, selected: 1 },
+            ],
+          },
+        ],
+      },
+    }), "K2Pro-Sparse");
+
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-Sparse",
+      deviceId: "provisional:f012:k2pro-sparse",
+      sessionId: "k2-live:test-session",
+      frame: {
+        boxsInfo: {
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              materials: [
+                { id: 2, selected: 1 },
+              ],
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("K2 retGcodeFileInfo2を既存ファイル一覧rendererのentries形式へ橋渡しする", () => {

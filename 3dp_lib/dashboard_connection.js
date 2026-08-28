@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1439 (PR #435)
+ * @version 1.390.1440 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 19:31:35
+ * @lastModified 2026-08-28 19:46:05
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1106,6 +1106,28 @@ function _recordK2CfsBoxsInfoProbeRuntime(host, state, requestState, nowMs = Dat
 }
 
 /**
+ * K2 `boxsInfo` がcomplete snapshotとして扱える形状か判定する。
+ *
+ * 【詳細説明】
+ * - WS9999の`boxsInfo`には、CFS全体を返すpoll応答と、selectedやassignmentだけを含む疎なpush deltaがあり得る。
+ * - 応答IDが無い現状ではin-flight状態だけでは相関証拠が弱いため、実機pollで観測済みの
+ *   `materialBoxs` / `colorMatch` / `same_material` が揃う場合だけcomplete候補にする。
+ * - この条件を満たさないpayloadは、既存sourceを削除しないpartialとして扱う。
+ *
+ * @private
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @returns {boolean} complete snapshot候補ならtrue
+ */
+function _isK2CompleteBoxsInfoSnapshotCandidate(boxsInfo) {
+  if (!boxsInfo || typeof boxsInfo !== "object") {
+    return false;
+  }
+  return Array.isArray(boxsInfo.materialBoxs) &&
+    Array.isArray(boxsInfo.colorMatch) &&
+    Array.isArray(boxsInfo.same_material);
+}
+
+/**
  * K2 `boxsInfo` frame のsnapshot完全性をproduction caller側で分類する。
  *
  * 【詳細説明】
@@ -1124,6 +1146,9 @@ function _recordK2CfsBoxsInfoProbeRuntime(host, state, requestState, nowMs = Dat
 function _classifyK2BoxsInfoSnapshotCompleteness(state, data, nowMs = Date.now()) {
   const hasBoxsInfo = data?.boxsInfo && typeof data.boxsInfo === "object";
   if (!hasBoxsInfo) {
+    return "partial";
+  }
+  if (!_isK2CompleteBoxsInfoSnapshotCandidate(data.boxsInfo)) {
     return "partial";
   }
   const inFlightStartedAt = Number(state?.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
