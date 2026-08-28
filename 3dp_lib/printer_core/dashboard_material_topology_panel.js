@@ -16,12 +16,12 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1422 (PR #435)
+ * @version 1.390.1433 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-27 23:10:29
+ * @lastModified 2026-08-28 10:18:42
  * -----------------------------------------------------------
  * @todo
- * - Gate 19.5後続で、実接続層のproduction dispatcherへ操作hookを接続する
+ * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
  */
 
 "use strict";
@@ -44,6 +44,17 @@ const MATERIAL_CONTROL_BUTTONS = Object.freeze([
   Object.freeze({ action: "feed", commandKind: "cfs-feed", label: "送出", title: "このCFSスロットのフィラメントを送ります" }),
   Object.freeze({ action: "retract", commandKind: "cfs-retract", label: "巻戻", title: "このCFSスロットのフィラメントを戻します" }),
 ]);
+
+/**
+ * CFS/CFS-C操作の既定timeout ms。
+ *
+ * 【詳細説明】
+ * - UIはPrinter Core dispatcherの戻りを待つが、transportや通信層が返らない場合に
+ *   ボタンが押下中のまま固着しないよう、表示境界でtimeoutを設ける。
+ *
+ * @constant {number}
+ */
+const DEFAULT_CFS_CONTROL_TIMEOUT_MS = 15000;
 
 /**
  * HTMLテキストとして安全に表示する文字列を返す。
@@ -273,6 +284,115 @@ function createElement(documentRef, tagName, className = "", text = "") {
 }
 
 /**
+ * CFS操作actionの利用者向けラベルを返す。
+ *
+ * @private
+ * @param {string} action - CFS操作action
+ * @returns {string} 利用者向け短縮ラベル
+ */
+function formatControlActionLabel(action) {
+  const match = MATERIAL_CONTROL_BUTTONS.find((button) => button.action === action);
+  return match?.label || displayText(action, "操作");
+}
+
+/**
+ * CFS操作timeoutを有限な正数へ正規化する。
+ *
+ * @private
+ * @param {*} value - timeout ms候補
+ * @returns {number} timeout ms
+ */
+function normalizeControlTimeoutMs(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return Math.max(100, Math.floor(numeric));
+  }
+  return DEFAULT_CFS_CONTROL_TIMEOUT_MS;
+}
+
+/**
+ * command resultが失敗系かを判定する。
+ *
+ * 【詳細説明】
+ * - CommandResultのstatusはtransport層により少し揺れるため、失敗として利用者へ表示すべき値だけを
+ *   明示的に列挙する。
+ *
+ * @private
+ * @param {*} result - command hookの戻り値
+ * @returns {boolean} 失敗表示すべき場合true
+ */
+function isFailedCommandResult(result) {
+  const status = String(result?.status || result?.result || "").trim();
+  return [
+    "rejected",
+    "failed",
+    "error",
+    "transport-error",
+    "confirmation-error",
+    "timeout",
+  ].includes(status) || Boolean(result?.error);
+}
+
+/**
+ * command resultから利用者へ見せる失敗理由を取り出す。
+ *
+ * @private
+ * @param {*} result - command hookの戻り値
+ * @returns {string} 表示用失敗理由
+ */
+function formatCommandFailureReason(result) {
+  const code = displayText(result?.error?.code || result?.reason || result?.status, "");
+  const errors = Array.isArray(result?.error?.errors) ? result.error.errors.join(", ") : "";
+  const message = displayText(result?.error?.message, "");
+  return [code, errors, message].filter(Boolean).join(" / ") || "理由不明";
+}
+
+/**
+ * slot操作ステータス行を更新する。
+ *
+ * @private
+ * @param {HTMLElement} statusElement - ステータス表示DOM
+ * @param {string} state - running/success/error/timeout/warning/idle
+ * @param {string} message - 表示文
+ * @returns {void}
+ */
+function setCommandStatus(statusElement, state, message) {
+  if (!statusElement) {
+    return;
+  }
+  statusElement.className = `mtv-command-status mtv-command-status-${state}`;
+  statusElement.textContent = message || "";
+  statusElement.hidden = !message;
+}
+
+/**
+ * Promiseをtimeout付きで待つ。
+ *
+ * 【詳細説明】
+ * - rendererはtransportの再試行や成功判定を行わないが、UI固着だけは防止する。
+ *
+ * @private
+ * @param {Promise<*>} promise - command hook promise
+ * @param {number} timeoutMs - timeout ms
+ * @returns {Promise<*>} command hook結果
+ */
+function waitForCommandWithTimeout(promise, timeoutMs) {
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error("cfs-command-timeout");
+      error.code = "cfs-command-timeout";
+      reject(error);
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
+/**
  * renderer option と view model authority から操作方針を生成する。
  *
  * 【詳細説明】
@@ -304,6 +424,7 @@ function createControlPolicy(viewModel, options) {
     validateCommandIntent: typeof optionControl.validateCommandIntent === "function"
       ? optionControl.validateCommandIntent
       : null,
+    commandTimeoutMs: normalizeControlTimeoutMs(optionControl.commandTimeoutMs),
     reason: canSendCommands
       ? null
       : (optionControl.disabledReason || authority.reason || "command-authority-not-enabled"),
@@ -386,6 +507,30 @@ function createControlCommandPayload(row, buttonConfig) {
  */
 function renderSlotControls(documentRef, row, isStale, controlPolicy) {
   const controls = createElement(documentRef, "div", "mtv-controls");
+  const statusElement = createElement(documentRef, "div", "mtv-command-status", "");
+  const buttonEntries = [];
+  statusElement.setAttribute("aria-live", "polite");
+  statusElement.hidden = true;
+
+  /**
+   * slot内の操作ボタン状態を再評価する。
+   *
+   * 【詳細説明】
+   * - 1つのCFS操作を送信している間に、同じslotへ別操作を重ねて送らないよう全ボタンを止める。
+   *
+   * @private
+   * @param {boolean=} busy - trueならslot内の全操作を一時停止する
+   * @returns {void}
+   */
+  function refreshButtonStates(busy = false) {
+    for (const entry of buttonEntries) {
+      const reason = getControlDisabledReason(row, isStale, controlPolicy, entry.buttonConfig);
+      entry.button.disabled = busy || Boolean(reason);
+      entry.button.title = busy ? "CFS操作を送信中です" : (reason || entry.buttonConfig.title);
+      entry.button.dataset.busy = busy ? "true" : "false";
+    }
+  }
+
   for (const buttonConfig of MATERIAL_CONTROL_BUTTONS) {
     const reason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
     const button = createElement(documentRef, "button", "mtv-control-btn", buttonConfig.label);
@@ -395,6 +540,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy) {
     button.disabled = Boolean(reason);
     button.title = reason || buttonConfig.title;
     button.setAttribute("aria-label", `${displayText(row?.displaySlot)} ${buttonConfig.title}`);
+    buttonEntries.push({ button, buttonConfig });
     button.addEventListener("click", async () => {
       const currentReason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
       if (currentReason || typeof controlPolicy.onCommand !== "function") {
@@ -411,19 +557,44 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy) {
       }
       if (freshReason) {
         button.title = freshReason;
+        setCommandStatus(statusElement, "warning", freshReason);
         return;
       }
-      button.disabled = true;
+      refreshButtonStates(true);
       button.dataset.running = "true";
+      const actionLabel = formatControlActionLabel(buttonConfig.action);
+      setCommandStatus(statusElement, "running", `${actionLabel}を送信中...`);
       try {
-        await controlPolicy.onCommand(commandPayload);
+        const result = await waitForCommandWithTimeout(
+          Promise.resolve(controlPolicy.onCommand(commandPayload)),
+          controlPolicy.commandTimeoutMs
+        );
+        if (isFailedCommandResult(result)) {
+          setCommandStatus(
+            statusElement,
+            "error",
+            `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`
+          );
+        } else {
+          setCommandStatus(statusElement, "success", `${actionLabel}を送信しました。観測状態の更新を待っています。`);
+        }
+      } catch (error) {
+        const isTimeout = error?.code === "cfs-command-timeout" || error?.message === "cfs-command-timeout";
+        setCommandStatus(
+          statusElement,
+          isTimeout ? "timeout" : "error",
+          isTimeout
+            ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。`
+            : `${actionLabel}に失敗しました: ${error?.message || String(error)}`
+        );
       } finally {
         button.dataset.running = "false";
-        button.disabled = false;
+        refreshButtonStates(false);
       }
     });
     controls.appendChild(button);
   }
+  controls.appendChild(statusElement);
   return controls;
 }
 
