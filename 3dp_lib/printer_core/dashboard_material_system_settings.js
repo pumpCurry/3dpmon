@@ -19,9 +19,9 @@
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1430 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 09:29:56
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -355,7 +355,7 @@ function resolveObservationRecordForDisplay(observationStore, options = {}) {
       }
       return (parseObservedAtMs(b.lastObservedAt) || 0) - (parseObservedAtMs(a.lastObservedAt) || 0);
     });
-  return candidates[0] || null;
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 /**
@@ -418,6 +418,7 @@ function createLastKnownTopologyFromObservationRecord(record) {
       unitId: snapshot.unitId ?? null,
       boxId: snapshot.boxId ?? null,
       slotId: snapshot.slotId ?? null,
+      presence: isTombstone ? "unobserved" : snapshot.presence ?? null,
       material: isTombstone ? {} : cloneJsonValue(snapshot.material || {}),
       status: {
         selected: isTombstone ? null : snapshot.selected ?? null,
@@ -484,6 +485,7 @@ function createLastKnownTopologyFromObservationRecord(record) {
  * @param {object|null|undefined} options.shadowRecord - runtimeData.printerCoreV3Shadow record
  * @param {object|null|undefined} options.observationStore - monitorData.materialSourceObservations
  * @param {object|null|undefined} options.observationRecord - 直接指定するmaterial observation record
+ * @param {boolean=} options.allowPersistentLastKnown - 保存済みlast-knownを表示fallbackに使う場合true
  * @param {string=} options.deviceId - 表示対象device ID
  * @param {string=} options.host - 表示対象host
  * @param {number=} options.nowMs - 現在時刻epoch ms
@@ -497,15 +499,18 @@ export function resolveDisplayMaterialTopology({
   shadowRecord = null,
   observationStore = null,
   observationRecord = null,
+  allowPersistentLastKnown = false,
   deviceId = null,
   host = null,
   nowMs = Date.now(),
   ttlMs = MATERIAL_TOPOLOGY_FRESH_TTL_MS,
 } = {}) {
-  const fallbackObservationRecord = observationRecord || resolveObservationRecordForDisplay(observationStore, {
-    deviceId: deviceId || shadowRecord?.deviceId || null,
-    host,
-  });
+  const fallbackObservationRecord = allowPersistentLastKnown === true
+    ? (observationRecord || resolveObservationRecordForDisplay(observationStore, {
+        deviceId: deviceId || shadowRecord?.deviceId || null,
+        host,
+      }))
+    : null;
   const fallbackTopology = createLastKnownTopologyFromObservationRecord(fallbackObservationRecord);
   if (!topology || typeof topology !== "object") {
     return fallbackTopology;

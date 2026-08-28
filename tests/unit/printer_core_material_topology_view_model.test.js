@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-28 01:39:44
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -457,6 +457,46 @@ describe("Printer Core v3 material topology view model", () => {
       selectedSourceCount: 1,
       invalidRemainingCount: 1,
     });
+  });
+
+  it("source presenceが明示されている場合はstateCodeより優先して表示する", () => {
+    const viewModel = createMaterialTopologyViewModel({
+      cfs: {
+        connected: false,
+        topologyState: "stale",
+      },
+      units: [{ unitId: "cfs:1", boxId: 1 }],
+      sources: [
+        {
+          sourceId: "cfs:1:slot:0",
+          kind: "cfs-slot",
+          unitId: "cfs:1",
+          boxId: 1,
+          slotId: 0,
+          presence: "unobserved",
+          material: {},
+          status: {
+            stateCode: 0,
+            selected: null,
+            remaining: {
+              rawPercent: null,
+              normalizedPercent: null,
+              valid: null,
+            },
+          },
+        },
+      ],
+      assignments: [],
+    });
+
+    expect(viewModel.units[0].slots[0]).toMatchObject({
+      displaySlot: "1A",
+      presence: "unobserved",
+      status: {
+        stateCode: 0,
+      },
+    });
+    expect(viewModel.summary.loadedSourceCount).toBe(0);
   });
 
   it("K1C/CFS-C Moonraker provider由来のtopologyも同じ表示モデルへ変換する", () => {

@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1429 (PR #435)
+* @version 1.390.1432 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-28 09:21:47
+* @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -486,6 +486,7 @@ export function createFilamentManagerMaterialSupplySection(host) {
     topology: shadowRecord?.lastState?.materials || null,
     shadowRecord,
     observationStore: monitorData.materialSourceObservations || null,
+    allowPersistentLastKnown: true,
     host,
   });
   const displayMode = resolveMaterialDisplayMode({ target, printerType, topology });

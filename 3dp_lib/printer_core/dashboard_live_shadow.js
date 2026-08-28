@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-28 01:46:52
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -251,6 +251,7 @@ function rekeyProvisionalObservationForStableDevice(store, options = {}) {
       fromDeviceId: candidateId,
       toDeviceId: deviceId,
       observedAt: options.observedAt,
+      mergeIfTargetExists: true,
       identityConflict: false,
     });
   }

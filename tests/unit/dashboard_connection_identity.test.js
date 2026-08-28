@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 01:49:21
+ * @lastModified 2026-08-28 09:40:48
  *
  * @vitest-environment jsdom
  */
@@ -472,6 +472,57 @@ describe("Printer Core v3 identity dry-run", () => {
       connected: true,
       receivedAt: expect.any(String),
       snapshotCompleteness: "partial",
+    });
+  });
+
+  it("secondary Moonraker providerのwaiting/connecting/disconnectedはmaterial topologyを即stale化する", () => {
+    dataMock.monitorData.appSettings.connectionTargets = [
+      {
+        dest: "203.0.113.91:9999",
+        printerType: "creality-k1",
+        hostname: "",
+        materialSystem: {
+          mode: "cfs-c-readonly",
+          provider: "moonraker-boxsInfo",
+          providerEndpoint: "198.51.100.21:80",
+          unitLimit: 1,
+        },
+      },
+    ];
+    mod.connectWs("203.0.113.91:9999");
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K1C-CFSC",
+      model: "K1C",
+      printProgress: 0,
+    }), "203.0.113.91");
+
+    const providerCall = moonrakerMock.createMoonrakerSession.mock.calls.find((call) => call[0]?.onState);
+    expect(providerCall).toBeTruthy();
+
+    providerCall[0].onState("connected", { transportGeneration: "provider-gen-1" });
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).not.toHaveBeenCalled();
+
+    providerCall[0].onState("waiting", { transportGeneration: "provider-gen-1" });
+    providerCall[0].onState("connecting", { transportGeneration: "provider-gen-2" });
+    providerCall[0].onState("disconnected", { transportGeneration: "provider-gen-2" });
+
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenCalledTimes(3);
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenNthCalledWith(1, {
+      host: "K1C-CFSC",
+      payload: null,
+      providerSessionId: "material-provider:K1C-CFSC:198.51.100.21%3A80",
+      providerGeneration: "provider-gen-1",
+      connected: false,
+      receivedAt: expect.any(String),
+    });
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenNthCalledWith(3, {
+      host: "K1C-CFSC",
+      payload: null,
+      providerSessionId: "material-provider:K1C-CFSC:198.51.100.21%3A80",
+      providerGeneration: "provider-gen-2",
+      connected: false,
+      receivedAt: expect.any(String),
     });
   });
 

@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1429 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-28 09:21:47
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  */
 
@@ -191,6 +191,9 @@ function validateCfsControlIntentFreshness(hostname, intent) {
     const latestTopology = resolveDisplayMaterialTopology({
       topology: latestShadowRecord?.lastState?.materials || null,
       shadowRecord: latestShadowRecord,
+      observationStore: monitorData.materialSourceObservations || null,
+      allowPersistentLastKnown: true,
+      host: hostname,
     });
     const latestTarget = getConnectionTarget(hostname);
     const latestPrinterType = getPrinterType(hostname);
@@ -455,6 +458,7 @@ function initFilamentPanel(body, hostname) {
     topology: shadowRecord?.lastState?.materials || null,
     shadowRecord,
     observationStore: monitorData.materialSourceObservations || null,
+    allowPersistentLastKnown: true,
     host: hostname,
   });
   const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
@@ -467,6 +471,7 @@ function initFilamentPanel(body, hostname) {
         topology: latestShadowRecord?.lastState?.materials || null,
         shadowRecord: latestShadowRecord,
         observationStore: monitorData.materialSourceObservations || null,
+        allowPersistentLastKnown: true,
         host: hostname,
       });
       const latestTarget = getConnectionTarget(hostname);
@@ -548,6 +553,7 @@ function initFilamentPanel(body, hostname) {
       topology: latestShadowRecord?.lastState?.materials || null,
       shadowRecord: latestShadowRecord,
       observationStore: monitorData.materialSourceObservations || null,
+      allowPersistentLastKnown: true,
       host: hostname,
     });
     const latestTarget = getConnectionTarget(hostname);

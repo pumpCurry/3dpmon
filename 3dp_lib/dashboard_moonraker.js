@@ -30,9 +30,9 @@
  * - {@link extractMoonrakerMaterialPayloadFromStatus}：Moonraker statusからCFS-C material payload候補を抽出
  * - {@link createMoonrakerSession}：WebSocket セッション(接続/購読/再接続)生成
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1119 (PR #385)
- * @lastModified 2026-08-28 01:47:36
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - Phase 1: 履歴(server/history)/ファイル(server/files)取り込み、カメラ(webcams/list)URL対応
@@ -811,8 +811,16 @@ export function createMoonrakerSession(opts) {
   let transportEpoch = 0;
   /** @type {?string} 現在のWebSocket接続世代ID */
   let currentTransportGeneration = null;
-  /** @type {string} material provider generation生成用の安定seed */
-  const transportGenerationBase = String(materialProviderSessionId || url || "moonraker-material-provider");
+  /** @type {string} material provider generation生成用のsession-local seed */
+  const transportGenerationSeed = String(materialProviderSessionId || url || "moonraker-material-provider");
+  /** @type {string} material-only providerのプロセス再起動相当の再利用を防ぐrun token */
+  const transportRunToken = materialOnly
+    ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    : "";
+  /** @type {string} material provider generation生成用の基底ID */
+  const transportGenerationBase = materialOnly
+    ? `${transportGenerationSeed}:run:${transportRunToken}`
+    : transportGenerationSeed;
 
   /** RPC id → 用途("info"|"config"|"subscribe"|"meta") の対応 */
   const pending = new Map();
@@ -1165,7 +1173,7 @@ export function createMoonrakerSession(opts) {
     }
     reconnectCount++;
     const delayMs = 2000 * Math.pow(2, reconnectCount - 1);
-    onState("waiting");
+    onState("waiting", { transportGeneration: currentTransportGeneration });
     onLog(`[moonraker] 切断。${Math.ceil(delayMs / 1000)}秒後に再試行します...(${reconnectCount}/${MOONRAKER_MAX_RECONNECT})`, "warn");
     retryTimer = setTimeout(open, delayMs);
   };
@@ -1177,7 +1185,7 @@ export function createMoonrakerSession(opts) {
    */
   function open() {
     if (closed) return;
-    onState("connecting");
+    onState("connecting", { transportGeneration: currentTransportGeneration });
     try {
       ws = new WebSocket(url);
     } catch (e) {
@@ -1191,7 +1199,7 @@ export function createMoonrakerSession(opts) {
       reconnectCount = 0;
       accStatus = {};
       lastMetaFile = null; // 再接続時にメタ再取得を許可
-      onState("connected");
+      onState("connected", { transportGeneration: currentTransportGeneration });
       onLog(`[moonraker] 接続確立: ${url}`, "info");
       // まずホスト名を取得(その応答内で config 取得→購読を連鎖実行)
       send("printer.info", {}, "info");

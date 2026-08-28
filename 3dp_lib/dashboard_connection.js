@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 01:48:10
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1231,7 +1231,7 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     materialOnly: true,
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
     onState: (sessionState, meta = {}) => {
-      if (sessionState === "disconnected") {
+      if (["waiting", "connecting", "disconnected"].includes(sessionState)) {
         state.printerCoreV3MaterialProviderTransportGeneration =
           meta.transportGeneration || state.printerCoreV3MaterialProviderTransportGeneration || null;
         observeMoonrakerCfsMaterialProviderFrame({

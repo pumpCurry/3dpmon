@@ -9,9 +9,9 @@
  * フィクスチャは実機 Ideaformer IR3 v2 (Klipper v2.0.1 / Moonraker v0.9.2,
  * 192.168.54.15) から取得した実データを使用する。
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since 1.390.1119 (PR #385)
- * @lastModified 2026-08-28 01:39:28
+ * @lastModified 2026-08-28 09:40:48
  */
 import { describe, it, expect } from 'vitest';
 
@@ -958,7 +958,10 @@ describe('createMoonrakerSession material-only provider', () => {
         'disconnected',
         expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:1') })
       );
-      expect(onState).toHaveBeenCalledWith('waiting');
+      expect(onState).toHaveBeenCalledWith(
+        'waiting',
+        expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:1') })
+      );
 
       vi.advanceTimersByTime(2000);
       expect(FakeMoonrakerWebSocket.instances).toHaveLength(2);
@@ -1061,6 +1064,56 @@ describe('createMoonrakerSession material-only provider', () => {
       );
     } finally {
       vi.useRealTimers();
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it('material-only providerのtransportGenerationはsession作成ごとにrun tokenを変える', () => {
+    const originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = FakeMoonrakerWebSocket;
+    FakeMoonrakerWebSocket.instances = [];
+    const onMaterialA = vi.fn();
+    const onMaterialB = vi.fn();
+    try {
+      createMoonrakerSession({
+        url: 'ws://198.51.100.25:80/websocket',
+        fallbackHost: 'K1C-CFSC',
+        materialProviderSessionId: 'material-provider:K1C-CFSC:198.51.100.25%3A80',
+        materialOnly: true,
+        materialSubscribeObjects: {
+          boxsInfo: null,
+        },
+        onMaterial: onMaterialA,
+        onState: vi.fn(),
+      });
+      createMoonrakerSession({
+        url: 'ws://198.51.100.25:80/websocket',
+        fallbackHost: 'K1C-CFSC',
+        materialProviderSessionId: 'material-provider:K1C-CFSC:198.51.100.25%3A80',
+        materialOnly: true,
+        materialSubscribeObjects: {
+          boxsInfo: null,
+        },
+        onMaterial: onMaterialB,
+        onState: vi.fn(),
+      });
+      const ws1 = FakeMoonrakerWebSocket.instances[0];
+      const ws2 = FakeMoonrakerWebSocket.instances[1];
+      ws1.onopen();
+      ws2.onopen();
+      replyMoonrakerRpc(ws1, ws1.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      replyMoonrakerRpc(ws2, ws2.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      replyMoonrakerRpc(ws1, ws1.sent[1].id, { result: { objects: ['boxsInfo'] } });
+      replyMoonrakerRpc(ws2, ws2.sent[1].id, { result: { objects: ['boxsInfo'] } });
+      replyMoonrakerRpc(ws1, ws1.sent[2].id, { result: { status: { boxsInfo: { materialBoxs: [] } } } });
+      replyMoonrakerRpc(ws2, ws2.sent[2].id, { result: { status: { boxsInfo: { materialBoxs: [] } } } });
+
+      const generationA = onMaterialA.mock.calls[0][3].transportGeneration;
+      const generationB = onMaterialB.mock.calls[0][3].transportGeneration;
+      expect(generationA).toContain(':run:');
+      expect(generationB).toContain(':run:');
+      expect(generationA).not.toBe(generationB);
+    } finally {
       globalThis.WebSocket = originalWebSocket;
     }
   });

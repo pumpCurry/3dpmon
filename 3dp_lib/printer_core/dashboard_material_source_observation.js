@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1427 (PR #435)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 09:16:08
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -138,6 +138,23 @@ function cloneJsonValue(value) {
     return value;
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * object自身が指定propertyを持つかを判定する。
+ *
+ * 【詳細説明】
+ * - `undefined`値を「観測されていない」と区別するため、truthy判定ではなく
+ *   hasOwnPropertyでpayload上の存在だけを確認する。
+ *
+ * @private
+ * @function hasOwn
+ * @param {*} value - 判定対象。
+ * @param {string} propertyName - property名。
+ * @returns {boolean} 自身のpropertyとして存在する場合true。
+ */
+function hasOwn(value, propertyName) {
+  return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, propertyName));
 }
 
 /**
@@ -457,31 +474,42 @@ function createSourceSnapshot(options) {
   if (!sourceId) {
     return null;
   }
-  return {
+  const source = options.source && typeof options.source === "object" ? options.source : {};
+  const previous = options.previous && typeof options.previous === "object" ? options.previous : null;
+  const status = source.status && typeof source.status === "object" ? source.status : {};
+  const isPartial = options.snapshotCompleteness !== "complete";
+  const materialObserved = hasOwn(source, "material");
+  const remainingObserved = hasOwn(status, "remaining") || hasOwn(status, "percent");
+  const stateCodeObserved = hasOwn(status, "stateCode");
+  const editStatusObserved = hasOwn(status, "editStatusCode");
+  const scrapObserved = hasOwn(status, "scrap");
+  const selectedObserved = hasOwn(status, "selected");
+  const assignmentsObserved = options.assignmentsObserved === true;
+  const snapshot = {
     sourceId,
     deviceId: options.deviceId,
     host: options.host || null,
     identityStrength: options.identityStrength || "provisional",
-    kind: options.source?.kind || "unknown",
-    unitId: options.source?.unitId ?? null,
-    boxId: options.source?.boxId ?? null,
-    slotId: options.source?.slotId ?? null,
-    protocolSlotId: options.source?.slotId ?? null,
-    presence: derivePresence(options.source),
-    selected: options.source?.status?.selected === undefined || options.source?.status?.selected === null
+    kind: source?.kind || previous?.kind || "unknown",
+    unitId: source?.unitId ?? previous?.unitId ?? null,
+    boxId: source?.boxId ?? previous?.boxId ?? null,
+    slotId: source?.slotId ?? previous?.slotId ?? null,
+    protocolSlotId: source?.slotId ?? previous?.protocolSlotId ?? null,
+    presence: derivePresence(source),
+    selected: source?.status?.selected === undefined || source?.status?.selected === null
       ? null
-      : options.source.status.selected === true || Number(options.source.status.selected) === 1,
-    material: normalizeMaterialEvidence(options.source),
-    remaining: normalizeRemainingEvidence(options.source),
+      : source.status.selected === true || Number(source.status.selected) === 1,
+    material: normalizeMaterialEvidence(source),
+    remaining: normalizeRemainingEvidence(source),
     status: {
-      stateCode: toFiniteNumber(options.source?.status?.stateCode),
-      editStatusCode: toFiniteNumber(options.source?.status?.editStatusCode),
-      scrap: toFiniteNumber(options.source?.status?.scrap),
+      stateCode: toFiniteNumber(source?.status?.stateCode),
+      editStatusCode: toFiniteNumber(source?.status?.editStatusCode),
+      scrap: toFiniteNumber(source?.status?.scrap),
     },
     assignments: normalizeAssignmentsForSource(options.assignments, sourceId),
-    firstObservedAt: options.previous?.firstObservedAt || options.observedAt,
+    firstObservedAt: previous?.firstObservedAt || options.observedAt,
     lastObservedAt: options.observedAt,
-    lastChangedAt: options.previous?.lastChangedAt || options.observedAt,
+    lastChangedAt: previous?.lastChangedAt || options.observedAt,
     providerId: options.providerId || null,
     sessionId: options.sessionId || null,
     providerGeneration: options.providerGeneration || null,
@@ -489,6 +517,38 @@ function createSourceSnapshot(options) {
     snapshotCompleteness: options.snapshotCompleteness || "partial",
     authority: "observation-only",
   };
+  if (isPartial && previous) {
+    if (!materialObserved) {
+      snapshot.material = cloneJsonValue(previous.material);
+    }
+    if (!remainingObserved) {
+      snapshot.remaining = cloneJsonValue(previous.remaining);
+    }
+    if (!stateCodeObserved) {
+      snapshot.status.stateCode = previous.status?.stateCode ?? null;
+    }
+    if (!editStatusObserved) {
+      snapshot.status.editStatusCode = previous.status?.editStatusCode ?? null;
+    }
+    if (!scrapObserved) {
+      snapshot.status.scrap = previous.status?.scrap ?? null;
+    }
+    if (!selectedObserved) {
+      snapshot.selected = previous.selected ?? null;
+    }
+    if (!assignmentsObserved) {
+      snapshot.assignments = cloneJsonValue(previous.assignments) || [];
+    }
+    if (!materialObserved && !stateCodeObserved) {
+      snapshot.presence = previous.presence || snapshot.presence;
+    } else if (!materialObserved || !stateCodeObserved) {
+      snapshot.presence = derivePresence({
+        material: snapshot.material,
+        status: { stateCode: snapshot.status.stateCode },
+      });
+    }
+  }
+  return snapshot;
 }
 
 /**
@@ -517,6 +577,45 @@ function createSemanticSignature(snapshot) {
     assignments: snapshot.assignments,
     authority: snapshot.authority,
   });
+}
+
+/**
+ * snapshotのlastObservedAtを比較用epoch msへ変換する。
+ *
+ * @private
+ * @function snapshotObservedTime
+ * @param {Object|null|undefined} snapshot - source snapshot。
+ * @returns {?number} 有効なepoch ms、またはnull。
+ */
+function snapshotObservedTime(snapshot) {
+  const time = new Date(snapshot?.lastObservedAt || 0).getTime();
+  return Number.isFinite(time) && time > 0 ? time : null;
+}
+
+/**
+ * rekey merge時の同一source競合を評価する。
+ *
+ * 【詳細説明】
+ * - incomingが新しければ、provisional側で最後に観測した値をstable recordへ昇格する。
+ * - 同時刻かつ意味が異なる場合は自動上書きせず、source単位のmerge conflict証跡として残す。
+ *
+ * @private
+ * @function classifySourceMerge
+ * @param {Object} existingSnapshot - merge先snapshot。
+ * @param {Object} incomingSnapshot - merge元snapshot。
+ * @returns {string} "replace"|"skip"|"conflict" のいずれか。
+ */
+function classifySourceMerge(existingSnapshot, incomingSnapshot) {
+  const existingTime = snapshotObservedTime(existingSnapshot);
+  const incomingTime = snapshotObservedTime(incomingSnapshot);
+  if (incomingTime !== null && (existingTime === null || incomingTime > existingTime)) {
+    return "replace";
+  }
+  if (incomingTime !== null && existingTime !== null && incomingTime === existingTime &&
+      createSemanticSignature(existingSnapshot) !== createSemanticSignature(incomingSnapshot)) {
+    return "conflict";
+  }
+  return "skip";
 }
 
 /**
@@ -589,33 +688,40 @@ function trimDeviceEvents(record, limits) {
  * @returns {Object|null} reject結果、またはnull。
  */
 function rejectStaleBatch(record, options) {
-  if (!record.lastObservedAt) {
-    return null;
-  }
   const providerKey = String(options.providerId || "__default__");
   const providerState = record.providerStates?.[providerKey] && typeof record.providerStates[providerKey] === "object"
     ? record.providerStates[providerKey]
     : null;
-  const retiredGenerations = new Set([
-    ...(Array.isArray(providerState?.retiredGenerations) ? providerState.retiredGenerations : []),
-    ...(Array.isArray(record.retiredProviderGenerations) ? record.retiredProviderGenerations : []),
-  ].map((value) => String(value)));
+  const retiredSource = providerState
+    ? providerState.retiredGenerations
+    : record.retiredProviderGenerations;
+  const retiredGenerations = new Set((Array.isArray(retiredSource) ? retiredSource : []).map((value) => String(value)));
   const incomingGeneration = options.providerGeneration ? String(options.providerGeneration) : null;
   if (incomingGeneration && retiredGenerations.has(incomingGeneration)) {
     return { accepted: false, reason: "stale-provider-generation", record };
   }
+  const hasProviderState = Boolean(providerState);
+  const hasExplicitProvider = Boolean(options.providerId);
+  const previousObservedAt = hasProviderState
+    ? providerState.lastObservedAt
+    : (hasExplicitProvider ? null : record.lastObservedAt);
+  if (!previousObservedAt) {
+    return null;
+  }
   const nextTime = new Date(options.observedAt).getTime();
-  const prevTime = new Date(record.lastObservedAt).getTime();
+  const prevTime = new Date(previousObservedAt).getTime();
   if (Number.isFinite(nextTime) && Number.isFinite(prevTime) && nextTime < prevTime) {
-    const activeGeneration = providerState?.activeGeneration || record.providerGeneration || null;
+    const activeGeneration = hasProviderState ? providerState.activeGeneration : record.providerGeneration || null;
     if (activeGeneration && options.providerGeneration && activeGeneration !== options.providerGeneration) {
       return { accepted: false, reason: "stale-provider-generation", record };
     }
     return { accepted: false, reason: "stale-observation", record };
   }
-  const activeGeneration = providerState?.activeGeneration || record.providerGeneration || null;
+  const activeGeneration = hasProviderState ? providerState.activeGeneration : (hasExplicitProvider ? null : record.providerGeneration || null);
   if (activeGeneration && options.providerGeneration && activeGeneration === options.providerGeneration) {
-    const previousSequence = toFiniteNumber(providerState?.lastSequence, toFiniteNumber(record.lastSequence));
+    const previousSequence = hasProviderState
+      ? toFiniteNumber(providerState.lastSequence)
+      : toFiniteNumber(record.lastSequence);
     const nextSequence = toFiniteNumber(options.sequence);
     if (previousSequence !== null && nextSequence !== null && nextSequence < previousSequence) {
       return { accepted: false, reason: "stale-sequence", record };
@@ -852,6 +958,7 @@ export function recordMaterialTopologyObservation(store, options = {}) {
       providerGeneration: options.providerGeneration || null,
       sequence: options.sequence ?? null,
       snapshotCompleteness,
+      assignmentsObserved: Array.isArray(topology.assignments),
       previous: record.latestBySourceId[sourceId] || null,
     });
   }
@@ -992,13 +1099,48 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
     }
     const mergedSourceIds = [];
     const skippedSourceIds = [];
+    const conflictSourceIds = [];
+    if (!existing.latestBySourceId || typeof existing.latestBySourceId !== "object" || Array.isArray(existing.latestBySourceId)) {
+      existing.latestBySourceId = {};
+    }
+    const conflictEvents = [];
     for (const [sourceId, snapshot] of Object.entries(from.latestBySourceId || {})) {
-      if (existing.latestBySourceId?.[sourceId]) {
+      const existingSnapshot = existing.latestBySourceId[sourceId] || null;
+      if (existingSnapshot) {
+        const mergeAction = classifySourceMerge(existingSnapshot, snapshot);
+        if (mergeAction === "replace") {
+          existing.latestBySourceId[sourceId] = {
+            ...cloneJsonValue(snapshot),
+            deviceId: toDeviceId,
+            identityStrength: "stable",
+          };
+          mergedSourceIds.push(sourceId);
+          continue;
+        }
         skippedSourceIds.push(sourceId);
+        if (mergeAction === "conflict") {
+          conflictSourceIds.push(sourceId);
+          conflictEvents.push(createSourceChangeEvent({
+            deviceId: toDeviceId,
+            sourceId,
+            observedAt,
+            changeKind: "source-merge-conflict",
+            before: existingSnapshot,
+            after: {
+              incoming: {
+                ...cloneJsonValue(snapshot),
+                deviceId: toDeviceId,
+                identityStrength: "stable",
+              },
+            },
+            revision: Number(existing.observationRevision || 0) + 1,
+            sessionId: existing.sessionId || from.sessionId || null,
+            providerId: existing.providerId || from.providerId || null,
+            providerGeneration: existing.providerGeneration || from.providerGeneration || null,
+            sequence: existing.lastSequence ?? from.lastSequence ?? null,
+          }));
+        }
         continue;
-      }
-      if (!existing.latestBySourceId || typeof existing.latestBySourceId !== "object" || Array.isArray(existing.latestBySourceId)) {
-        existing.latestBySourceId = {};
       }
       existing.latestBySourceId[sourceId] = {
         ...cloneJsonValue(snapshot),
@@ -1041,13 +1183,14 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
     existing.events = [
       ...(Array.isArray(existing.events) ? existing.events : []),
       ...importedEvents,
+      ...conflictEvents,
       createSourceChangeEvent({
         deviceId: toDeviceId,
         sourceId: null,
         observedAt,
         changeKind: "device-merged",
         before: { deviceId: fromDeviceId },
-        after: { deviceId: toDeviceId, mergedSourceIds, skippedSourceIds },
+        after: { deviceId: toDeviceId, mergedSourceIds, skippedSourceIds, conflictSourceIds },
         revision,
         sessionId: existing.sessionId || null,
         providerId: existing.providerId || null,
@@ -1057,7 +1200,7 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
     ];
     trimDeviceEvents(existing, options.limits || {});
     delete targetStore.byDeviceId[fromDeviceId];
-    return { accepted: true, reason: "merged", record: existing, mergedSourceIds, skippedSourceIds };
+    return { accepted: true, reason: "merged", record: existing, mergedSourceIds, skippedSourceIds, conflictSourceIds };
   }
   delete targetStore.byDeviceId[fromDeviceId];
   from.deviceId = toDeviceId;

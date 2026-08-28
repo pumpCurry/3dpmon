@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-27 15:45:53
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -228,6 +228,10 @@ function createRemainingView(source) {
 function derivePresenceState(source) {
   if (!source) {
     return "unobserved";
+  }
+  const explicitPresence = String(source.presence || "").trim();
+  if (["loaded", "empty", "unknown", "unobserved"].includes(explicitPresence)) {
+    return explicitPresence;
   }
   const stateCode = toFiniteNumber(source.status?.stateCode);
   const material = source.material && typeof source.material === "object" ? source.material : {};
