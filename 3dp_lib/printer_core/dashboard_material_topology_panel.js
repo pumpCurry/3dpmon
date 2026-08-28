@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1438 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 18:45:30
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -425,7 +425,36 @@ function createCommandExecutionState() {
     message: "",
     statusClass: "idle",
     baselineObservationKey: null,
+    reconciliation: null,
     refreshers: new Set(),
+  };
+}
+
+/**
+ * CFS commandの未確認状態をUIでどうreconcileできるかを返す。
+ *
+ * 【詳細説明】
+ * - `cfs-slot-select` はNormalizedState上のselected sourceで確認できるため、次観測で対象slotが
+ *   選択中になった場合だけprinter単位mutexを解除する。
+ * - `load/unload/feed/retract` は現時点では物理状態の権威的なexpected-stateが未確定なので、
+ *   単に観測時刻が進んだだけでは再操作可能にしない。
+ *
+ * @private
+ * @function createSubmittedCommandReconciliation
+ * @param {object} commandPayload - rendererからcommand hookへ渡したpayload
+ * @param {object} buttonConfig - CFS操作ボタン定義
+ * @returns {object} submitted状態のreconcile方針
+ */
+function createSubmittedCommandReconciliation(commandPayload, buttonConfig) {
+  if (buttonConfig?.commandKind === "cfs-slot-select" && commandPayload?.sourceId) {
+    return {
+      kind: "selected-source",
+      expectedSourceId: commandPayload.sourceId,
+    };
+  }
+  return {
+    kind: "manual-physical-confirmation",
+    expectedSourceId: commandPayload?.sourceId || null,
   };
 }
 
@@ -448,10 +477,41 @@ function getViewModelObservationKey(viewModel) {
 }
 
 /**
+ * ViewModel内で指定sourceIdがselectedとして観測されているか判定する。
+ *
+ * 【詳細説明】
+ * - 外部スプールとCFS unit slotの両方を同じsource rowとして扱い、sourceId一致とselected=trueを確認する。
+ * - ここはUI mutex解除の補助判定であり、command authorityのpost-command correlationを代替しない。
+ *
+ * @private
+ * @function isSourceSelectedInViewModel
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @param {string|null|undefined} expectedSourceId - 期待sourceId
+ * @returns {boolean} 指定sourceがselectedとして観測された場合true
+ */
+function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
+  const sourceId = displayText(expectedSourceId, "");
+  if (!sourceId) {
+    return false;
+  }
+  const rows = [];
+  if (Array.isArray(viewModel?.external)) {
+    rows.push(...viewModel.external);
+  }
+  for (const unit of Array.isArray(viewModel?.units) ? viewModel.units : []) {
+    if (Array.isArray(unit?.slots)) {
+      rows.push(...unit.slots);
+    }
+  }
+  return rows.some((row) => row?.sourceId === sourceId && row?.selected === true);
+}
+
+/**
  * 未確認command状態を新しい観測でreconcileする。
  *
  * 【詳細説明】
- * - `submitted` はtransport受理後の観測待ちなので、観測時刻が進んだら操作mutexを解除する。
+ * - `submitted` はtransport受理後の観測待ちだが、観測時刻だけでは非冪等な物理操作の結果を確定できない。
+ * - selected-sourceをexpected-stateとして確認できる操作だけ、対象sourceのselected観測後にmutexを解除する。
  * - `unknown` はtimeout/transport-error等で実機状態が不明なため、自動解除せず人間の再確認を要求する。
  *
  * @private
@@ -468,9 +528,23 @@ function reconcileCommandExecutionState(executionState, viewModel) {
   if (!currentObservationKey || !executionState.baselineObservationKey || currentObservationKey === executionState.baselineObservationKey) {
     return;
   }
-  executionState.state = "idle";
+  const reconciliation = executionState.reconciliation || {};
+  if (reconciliation.kind === "selected-source") {
+    if (!isSourceSelectedInViewModel(viewModel, reconciliation.expectedSourceId)) {
+      executionState.baselineObservationKey = currentObservationKey;
+      executionState.statusClass = "warning";
+      executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、対象スロットの選択はまだ確認できません。`;
+      return;
+    }
+    executionState.state = "idle";
+    executionState.statusClass = "warning";
+    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測で対象スロットの選択を確認したため再操作できます。`;
+    executionState.reconciliation = null;
+    return;
+  }
+  executionState.baselineObservationKey = currentObservationKey;
   executionState.statusClass = "warning";
-  executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信したため再操作できます。`;
+  executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、物理状態の確認方法が未確定のため再操作を保留しています。`;
 }
 
 /**
@@ -780,6 +854,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
           executionState.state = shouldKeepLocked ? "unknown" : "idle";
           executionState.statusClass = "error";
           executionState.message = failureMessage;
+          executionState.reconciliation = null;
           setCommandStatus(
             statusElement,
             "error",
@@ -789,11 +864,13 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
           executionState.state = "submitted";
           executionState.statusClass = "warning";
           executionState.message = `${actionLabel}を送信しました。観測確認は未完了です。状態更新を確認してください。`;
+          executionState.reconciliation = createSubmittedCommandReconciliation(commandPayload, buttonConfig);
           setCommandStatus(statusElement, "warning", executionState.message);
         } else {
           executionState.state = "idle";
           executionState.statusClass = "success";
           executionState.message = `${actionLabel}を送信しました。観測状態の更新を待っています。`;
+          executionState.reconciliation = null;
           setCommandStatus(statusElement, "success", executionState.message);
         }
       } catch (error) {

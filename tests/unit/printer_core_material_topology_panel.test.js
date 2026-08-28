@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1438 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 18:42:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -649,7 +649,7 @@ describe("Printer Core v3 material topology panel", () => {
     expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
   });
 
-  it("観測未確認のsubmitted CFS操作は次のmaterial観測を受けたらmutexを解除する", async () => {
+  it("観測未確認のselect CFS操作は対象slot選択を次のmaterial観測で確認できた場合だけmutexを解除する", async () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
     const viewModel = createMaterialTopologyViewModel(topology, {
       unitLimit: 1,
@@ -703,7 +703,67 @@ describe("Printer Core v3 material topology panel", () => {
     const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
     expect(selectButton?.disabled).toBe(false);
     expect(loadButton?.disabled).toBe(false);
-    expect(status?.textContent).toContain("最新観測を受信したため再操作できます");
+    expect(status?.textContent).toContain("最新観測で対象スロットの選択を確認したため再操作できます");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+  });
+
+  it("期待状態が未定義のload CFS操作は次のmaterial観測だけではmutexを解除しない", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const updatedViewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "load")?.click();
+    await flushRealUiTick();
+    expect(getSlotActionButton(container, "1A", "select")?.disabled).toBe(true);
+
+    handle.update(updatedViewModel);
+
+    const loadButton = getSlotActionButton(container, "1C", "load");
+    const selectButton = getSlotActionButton(container, "1A", "select");
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(loadButton?.disabled).toBe(true);
+    expect(loadButton?.dataset.busy).toBe("true");
+    expect(selectButton?.disabled).toBe(true);
+    expect(selectButton?.dataset.busy).toBe("true");
+    expect(status?.textContent).toContain("物理状態の確認方法が未確定のため再操作を保留しています");
     expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
   });
 

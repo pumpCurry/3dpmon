@@ -162,7 +162,9 @@ UIでCFS/CFS-C操作を表示する場合、実行状態はDOM要素ではなく
 - `running`: dispatcherへ送信中。同一printerの全CFS physical commandをdisableする。
 - `submitted`: transportは受理されたが、`completed:false`、`confirmation.confirmed:false`、
   または `postCommandObservation.confirmed:false` のため観測確認が未完了。同一printerの再操作を抑止する。
-  次のmaterial provider観測で観測時刻が進んだ場合は、人間が最新状態を再判断できるようmutexを解除する。
+  `cfs-slot-select` のようにUI側でもselected sourceを確認できる操作だけ、次のmaterial provider観測で
+  対象sourceがselectedになった場合にmutexを解除する。`load/unload/feed/retract` は物理状態の
+  expected-stateが未確定のため、観測時刻が進んだだけでは自動解除しない。
 - `confirmed`: `completed:true` のみ。成功表示にして操作mutexを解除してよい。
 - `rejected`: send-time validationなど送信前拒否。transport side-effectは起きていないためmutexを解除してよい。
 - `unknown`: timeout、transport-error、confirmation-errorなど、物理side-effect有無が不明な状態。
