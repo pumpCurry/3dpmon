@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1440 (PR #435)
+ * @version 1.390.1441 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 19:44:15
+ * @lastModified 2026-08-28 20:00:15
  *
  * @vitest-environment jsdom
  */
@@ -690,6 +690,48 @@ describe("Printer Core v3 identity dry-run", () => {
         },
       },
     });
+
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", percent: 54, state: 1, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+        same_material: [["000002", "09ea7ae", [{ boxId: 1, materialId: 2 }], "PLA"]],
+      },
+    }), "K2Pro-Sparse");
+
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-Sparse",
+      deviceId: "provisional:f012:k2pro-sparse",
+      sessionId: "k2-live:test-session",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              state: 1,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", percent: 54, state: 1, selected: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+          same_material: [["000002", "09ea7ae", [{ boxId: 1, materialId: 2 }], "PLA"]],
+        },
+      },
+      snapshotCompleteness: "complete",
+    });
   });
 
   it("K2 retGcodeFileInfo2を既存ファイル一覧rendererのentries形式へ橋渡しする", () => {
@@ -811,7 +853,19 @@ describe("Printer Core v3 identity dry-run", () => {
       model: "F012",
       cfsConnect: 1,
       boxsInfo: {
-        materialBoxs: [],
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+        same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
       },
     }), "203.0.113.34");
     expect(ws.sentMessages).toEqual([]);
@@ -824,7 +878,19 @@ describe("Printer Core v3 identity dry-run", () => {
         model: "F012",
         cfsConnect: 1,
         boxsInfo: {
-          materialBoxs: [],
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              state: 1,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+          same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
         },
       },
     });

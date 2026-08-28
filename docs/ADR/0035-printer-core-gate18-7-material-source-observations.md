@@ -51,6 +51,11 @@ external spool/CFS slot state across restart without mixing it into the
   snapshot. The complete-shaped evidence currently requires `materialBoxs`,
   `colorMatch`, and `same_material` at the `boxsInfo` root. Spontaneous
   `boxsInfo` pushes, sparse deltas, and timeout-late responses remain partial.
+  Sparse partial frames also do not consume the in-flight probe; the caller keeps
+  waiting for a complete-shaped response or timeout. A complete-shaped
+  spontaneous push may satisfy the scheduler for the current epoch, but it is not
+  upgraded to a complete observation-store snapshot unless it was correlated with
+  the in-flight probe.
 - Normalized material topology carries `observationMask.sections` and each
   normalized source carries `observedFields`. Partial observation merging uses
   this mask instead of normalized object shape, because the normalizer fills

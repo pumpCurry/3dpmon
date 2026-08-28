@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1440 (PR #435)
+ * @version 1.390.1441 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 19:46:05
+ * @lastModified 2026-08-28 20:02:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1211,20 +1211,40 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2CfsConnected = true;
   }
   const epoch = Number(state.printerCoreV3K2CfsEpoch || 0);
+  const nowMs = Date.now();
   if (hasBoxsInfo) {
-    state.printerCoreV3K2BoxsInfoReceived = true;
-    state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
-    state.printerCoreV3K2BoxsInfoProbeLastSentAt = Date.now();
-    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
-    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
-    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
-    _recordK2CfsBoxsInfoProbeRuntime(host, state, "idle");
+    const snapshotCompleteness = _classifyK2BoxsInfoSnapshotCompleteness(state, data, nowMs);
+    const fullShapedSnapshotObserved = _isK2CompleteBoxsInfoSnapshotCandidate(data.boxsInfo);
+    if (snapshotCompleteness === "complete" || fullShapedSnapshotObserved) {
+      state.printerCoreV3K2BoxsInfoReceived = true;
+      state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
+      state.printerCoreV3K2BoxsInfoProbeLastSentAt = nowMs;
+      state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+      state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+      state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+      _recordK2CfsBoxsInfoProbeRuntime(host, state, "idle", nowMs);
+      return false;
+    }
+    const inFlightStartedAt = Number(state.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
+    const probeStillInFlight = state.printerCoreV3K2BoxsInfoProbeInFlight === true &&
+      inFlightStartedAt > 0 &&
+      nowMs - inFlightStartedAt < K2_BOXS_INFO_PROBE_TIMEOUT_MS;
+    if (probeStillInFlight) {
+      _recordK2CfsBoxsInfoProbeRuntime(host, state, "in-flight", nowMs);
+      return false;
+    }
+    if (state.printerCoreV3K2BoxsInfoProbeInFlight === true && inFlightStartedAt > 0) {
+      state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+      state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+      state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+      _recordK2CfsBoxsInfoProbeRuntime(host, state, "timeout", nowMs);
+      return false;
+    }
     return false;
   }
   if (!hasCfsConnect || cfsConnectValue !== 1) {
     return false;
   }
-  const nowMs = Date.now();
   const inFlightStartedAt = Number(state.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
   const probeInFlight = state.printerCoreV3K2BoxsInfoProbeInFlight === true &&
     inFlightStartedAt > 0 &&
