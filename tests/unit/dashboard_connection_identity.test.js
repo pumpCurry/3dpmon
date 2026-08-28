@@ -409,6 +409,52 @@ describe("Printer Core v3 identity dry-run", () => {
     ]);
   });
 
+  it("遅延した古いHTTP /info応答を新しい接続世代へ誤bindしない", async () => {
+    const pendingFetches = [];
+    window.fetch = vi.fn(() => new Promise((resolve) => {
+      pendingFetches.push(resolve);
+    }));
+
+    mod.connectWithType("203.0.113.22:9999", "creality-k1");
+    mod.connectWithType("203.0.113.22:9999", "creality-k1");
+    expect(window.fetch).toHaveBeenCalledTimes(2);
+
+    pendingFetches[0]({
+      ok: true,
+      json: async () => ({
+        model: "F011",
+        version: "stale-response",
+        wssPort: 443,
+      }),
+    });
+    await flushAsyncProbe();
+
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    expect(target.printerCoreV3Info).toBeUndefined();
+    expect(target.printerCoreV3Identity).toBeUndefined();
+
+    pendingFetches[1]({
+      ok: true,
+      json: async () => ({
+        model: "F012",
+        version: "1.0.0",
+        wssPort: 443,
+      }),
+    });
+    await flushAsyncProbe();
+
+    expect(target.printerCoreV3Info).toMatchObject({
+      model: "F012",
+      version: "1.0.0",
+      connectionGeneration: 2,
+      connectionDest: "203.0.113.22:9999",
+    });
+    expect(target.printerCoreV3Identity.deviceFingerprint.reported).toMatchObject({
+      model: "F012",
+      firmwareVersion: "1.0.0",
+    });
+  });
+
   it("Moonraker/IR3翻訳フレームはlegacy processDataへ流すがPrinter Core v3 identity/shadowへ入れない", () => {
     mod.connectWithType("203.0.113.40", "moonraker");
     expect(moonrakerMock.createMoonrakerSession).toHaveBeenCalledTimes(1);

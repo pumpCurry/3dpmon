@@ -682,6 +682,54 @@ function _findConnectionStateEntry(hostOrDest, target = null) {
 }
 
 /**
+ * `/info` probe開始時の接続scopeを取得する。
+ *
+ * 【詳細説明】
+ * - HTTP応答はWebSocket再接続より遅れて届くことがあるため、応答時に現在generationを読み直すと
+ *   旧probe応答を新connectionへ誤bindできる。
+ * - 開始時点のstate objectとgenerationを保持し、応答処理ではこのscopeがまだ同じ接続を指す場合だけ採用する。
+ *
+ * @private
+ * @function _captureHttpInfoProbeConnectionScope
+ * @param {string} dest - probe対象dest
+ * @param {string} hostOrDest - 接続キーまたはhostname
+ * @param {object|null|undefined} target - connection target候補
+ * @returns {{state:ConnectionState|null,connectionGeneration:number,connectionDest:string,connectionHost:string}} probe開始scope
+ */
+function _captureHttpInfoProbeConnectionScope(dest, hostOrDest, target) {
+  const stateEntry = _findConnectionStateEntry(hostOrDest || dest, target);
+  return {
+    state: stateEntry?.state || null,
+    connectionGeneration: Number(stateEntry?.state?.printerCoreV3ConnectionGeneration) || 0,
+    connectionDest: String(target?.dest || dest || "").trim(),
+    connectionHost: String(stateEntry?.key || hostOrDest || target?.hostname || "").trim(),
+  };
+}
+
+/**
+ * `/info` probe開始時のscopeが応答時にも同じ接続を指しているか判定する。
+ *
+ * 【詳細説明】
+ * - 同じstate objectでも `connectWs()` が再実行されるとgenerationが進むため、旧HTTP応答は破棄する。
+ * - state objectが別物に差し替わった場合も、endpoint入替やhostname移行のraceとして破棄する。
+ *
+ * @private
+ * @function _isHttpInfoProbeConnectionScopeCurrent
+ * @param {object} scope - {@link _captureHttpInfoProbeConnectionScope} の戻り値
+ * @returns {boolean} 応答を現在scopeとして採用できる場合true
+ */
+function _isHttpInfoProbeConnectionScopeCurrent(scope) {
+  if (!scope?.state || !scope.connectionGeneration) {
+    return false;
+  }
+  const target = _findConnectionTarget(scope.connectionDest || scope.connectionHost);
+  const currentEntry = _findConnectionStateEntry(scope.connectionHost || scope.connectionDest, target);
+  return currentEntry?.state === scope.state &&
+    Number(currentEntry.state?.printerCoreV3ConnectionGeneration) === Number(scope.connectionGeneration) &&
+    String(currentEntry.state?.dest || "").trim() === String(scope.connectionDest || "").trim();
+}
+
+/**
  * 指定host/destに対応する現在のPrinter Core v3接続世代を返す。
  *
  * 【詳細説明】
@@ -978,6 +1026,7 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
   if (!httpHost || !Number.isFinite(httpPort) || httpPort <= 0) {
     return;
   }
+  const probeScope = _captureHttpInfoProbeConnectionScope(dest, hostOrDest, target);
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
   try {
@@ -993,17 +1042,19 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return;
     }
+    if (!_isHttpInfoProbeConnectionScopeCurrent(probeScope)) {
+      return;
+    }
     _recordPrinterCoreV3Identity(hostOrDest || dest, {
       ...body,
       source: "http-info",
       endpointAddress,
     });
     const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
-    const stateEntry = _findConnectionStateEntry(hostOrDest || dest, target);
     const infoChanged = _recordCurrentPrinterCoreV3Info(target, body, observedAt, {
-      connectionGeneration: stateEntry?.state?.printerCoreV3ConnectionGeneration || 0,
-      connectionDest: target?.dest || dest,
-      connectionHost: stateEntry?.key || hostOrDest || target?.hostname || "",
+      connectionGeneration: probeScope.connectionGeneration,
+      connectionDest: probeScope.connectionDest,
+      connectionHost: probeScope.connectionHost,
     });
     const transportChanged = _applyConnectionTargetTransportHints(target, body, inferredType);
     _applyInferredConnectionTargetPrinterType(
