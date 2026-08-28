@@ -18,9 +18,9 @@
  * - {@link createCfsBoxsInfoMaterialProvider}：K2 `boxsInfo` 用 read-only material provider を生成
  * - {@link createCfsMoonrakerBoxMaterialProvider}：K1C/CFS-C `boxsInfo` 用 read-only material provider を生成
  *
- * @version 1.390.1459 (PR #435)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1312 (PR #432)
- * @lastModified 2026-08-28 17:09:10
+ * @lastModified 2026-08-28 17:30:03
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の MaterialSource store と接続する際に provider event 化する
@@ -245,6 +245,38 @@ function hasMoonrakerMaterialEntryPresenceEvidence(source) {
 }
 
 /**
+ * provider由来のpresence明示観測maskを付与する。
+ *
+ * 【詳細説明】
+ * - CFS-C providerは`materials[]` entryの存在をprovider境界でpresenceへ解釈するため、
+ *   下流のObservation Storeにも「presenceを明示観測した」ことを伝える必要がある。
+ * - 既存のobservedFieldsを壊さず、status.presenceだけを追加する。
+ *
+ * @private
+ * @function markPresenceObserved
+ * @param {object} source - 正規化済みmaterial source
+ * @returns {object} presence observed maskを付与したmaterial source
+ */
+function markPresenceObserved(source) {
+  const observedFields = source.observedFields && typeof source.observedFields === "object"
+    ? source.observedFields
+    : {};
+  const status = observedFields.status && typeof observedFields.status === "object"
+    ? observedFields.status
+    : {};
+  return {
+    ...source,
+    observedFields: {
+      ...observedFields,
+      status: {
+        ...status,
+        presence: true,
+      },
+    },
+  };
+}
+
+/**
  * Moonraker/CFS-C material entry由来のpresenceを明示する。
  *
  * 【詳細説明】
@@ -277,14 +309,14 @@ function annotateMoonrakerMaterialEntryPresence(topology) {
       if (!hasMoonrakerMaterialEntryPresenceEvidence(source)) {
         return source;
       }
-      return {
+      return markPresenceObserved({
         ...source,
         presence: "loaded",
         presenceEvidence: {
           sourceProtocol: "creality-moonraker-boxsInfo",
           reason: "observed-material-entry-without-state-code",
         },
-      };
+      });
     }),
   };
 }
