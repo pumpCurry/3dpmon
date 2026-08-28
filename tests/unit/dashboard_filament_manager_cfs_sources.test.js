@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1456 (PR #435)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-28 16:53:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -185,10 +185,12 @@ function createK2CfsBoxsInfo() {
  *   runtime material topologyだけを入れる。
  *
  * @function setupK2Runtime
+ * @param {Object=} options - テスト用オプション。
+ * @param {string=} options.observedAt - 固定観測日時。
  * @returns {void}
  */
-function setupK2Runtime() {
-  const observedAt = new Date().toISOString();
+function setupK2Runtime(options = {}) {
+  const observedAt = options.observedAt || new Date().toISOString();
   const topology = normalizeK2BoxsInfo(createK2CfsBoxsInfo(), { connected: true });
   topology.provider = {
     ...(topology.provider || {}),
@@ -250,5 +252,19 @@ describe("filament manager CFS material source section", () => {
     expect(section?.querySelector(".fm-material-source-chip.is-selected")?.textContent).toContain("機器選択観測");
     expect(section?.querySelector(".fm-material-source-assignment")?.textContent).toBe("割当観測: T1A");
     expect(section?.textContent).toContain("管理中スプールとは別情報です");
+  });
+
+  it("フィラメント管理内でもCFS観測時刻とsource集計を表示する", () => {
+    setupK2Runtime({ observedAt: "2026-08-27T12:34:56" });
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+
+    const meta = section?.querySelector(".fm-material-supply-meta");
+    expect(meta).not.toBeNull();
+    expect(meta?.textContent).toContain("状態: 2026-08-27 12:34:56");
+    expect(meta?.textContent).toContain("装填 4");
+    expect(meta?.textContent).toContain("選択中 1");
+    expect(meta?.textContent).toContain("CFS 1/1台");
+    expect(meta?.textContent).toContain("外部 1");
   });
 });

@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1432 (PR #435)
+* @version 1.390.1456 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-28 09:40:48
+* @lastModified 2026-08-28 16:53:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -385,6 +385,72 @@ function getMaterialSourceRemainingText(row, isStale) {
 }
 
 /**
+ * 日時を利用者向けの `yyyy-mm-dd hh:mm:ss` へ変換する。
+ *
+ * 【詳細説明】
+ * - dashboard内のCFSパネルと同じく、「最新」や「最終観測」という抽象語だけではなく、
+ *   実際にいつ観測した値かをフィラメント管理モーダル内でも確認できるようにする。
+ * - ISO文字列、epoch ms、Dateを受け付け、不正値はnullとして呼び出し側にfallbackさせる。
+ *
+ * @private
+ * @function formatMaterialSupplyObservedAt
+ * @param {*} value - 観測日時候補。
+ * @returns {string|null} 表示用日時、またはnull。
+ */
+function formatMaterialSupplyObservedAt(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  const pad = (numberValue) => String(numberValue).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + " " + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(":");
+}
+
+/**
+ * フィラメント管理内のCFS観測meta行を生成する。
+ *
+ * 【詳細説明】
+ * - フィラメント管理モーダルは台帳スプールと機器観測sourceを同じ画面に並べるため、
+ *   CFS欄の先頭でread-only観測の鮮度と件数を明示し、台帳値との誤読を避ける。
+ *
+ * @private
+ * @function createMaterialSupplyMeta
+ * @param {Object} viewModel - material topology view model。
+ * @returns {HTMLElement} meta行要素。
+ */
+function createMaterialSupplyMeta(viewModel) {
+  const meta = document.createElement("div");
+  meta.className = "fm-material-supply-meta";
+  const summary = viewModel?.summary || {};
+  const observedAt = formatMaterialSupplyObservedAt(viewModel?.observation?.lastObservedAt);
+  const stateText = observedAt ? `状態: ${observedAt}` : "状態: 観測時刻不明";
+  const cfsObserved = Number.isFinite(Number(summary.cfsUnitCount)) ? Number(summary.cfsUnitCount) : 0;
+  const cfsLimit = Number.isFinite(Number(viewModel?.limits?.cfsUnitLimit)) ? Number(viewModel.limits.cfsUnitLimit) : cfsObserved;
+  const externalCount = Number.isFinite(Number(summary.externalSourceCount)) ? Number(summary.externalSourceCount) : 0;
+  const loadedCount = Number.isFinite(Number(summary.loadedSourceCount)) ? Number(summary.loadedSourceCount) : 0;
+  const selectedCount = Number.isFinite(Number(summary.selectedSourceCount)) ? Number(summary.selectedSourceCount) : 0;
+  meta.textContent = [
+    stateText,
+    `装填 ${loadedCount}`,
+    `選択中 ${selectedCount}`,
+    `CFS ${cfsObserved}/${cfsLimit}台`,
+    `外部 ${externalCount}`,
+  ].join(" / ");
+  return meta;
+}
+
+/**
  * material source の表示用CSS色を返す。
  *
  * 【詳細説明】
@@ -511,6 +577,7 @@ export function createFilamentManagerMaterialSupplySection(host) {
   title.className = "fm-material-supply-title";
   title.textContent = "機器観測フィラメント（外部スプール + CFS/CFS-C）";
   section.appendChild(title);
+  section.appendChild(createMaterialSupplyMeta(viewModel));
 
   const note = document.createElement("div");
   note.className = "fm-material-supply-note";
