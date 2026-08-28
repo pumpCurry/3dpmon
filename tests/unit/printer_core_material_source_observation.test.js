@@ -264,6 +264,11 @@ describe("MaterialSourceObservationStore", () => {
       "external:0": { kind: "external-spool" },
       "cfs:1:slot:2": { kind: "cfs-slot", deviceId: "serial:905251280E69E7" },
     });
+    expect(store.byDeviceId["serial:905251280E69E7"].providerStates["k2-ws9999-boxsInfo"]).toMatchObject({
+      activeGeneration: "ws-provisional",
+      lastSequence: 1,
+      retiredGenerations: ["ws-stable"],
+    });
     expect(store.byDeviceId["serial:905251280E69E7"].events.some((event) => event.changeKind === "device-merged")).toBe(true);
   });
 
@@ -547,6 +552,66 @@ describe("MaterialSourceObservationStore", () => {
     expect(providerAHeartbeat.record.providerStates).toMatchObject({
       "provider-a": { activeGeneration: "provider-a:transport:1" },
       "provider-b": { activeGeneration: "provider-b:transport:1" },
+    });
+  });
+
+  it("sequenceの巻き戻し判定はproviderId単位のlastSequenceを優先する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-a",
+      providerId: "provider-a",
+      providerGeneration: "provider-a:transport:1",
+      sequence: 100,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({ provider: { providerId: "provider-a" } }),
+      snapshotCompleteness: "complete",
+    });
+    const providerBInitial = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-b",
+      providerId: "provider-b",
+      providerGeneration: "provider-b:transport:1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: createTopology({ provider: { providerId: "provider-b" } }),
+      snapshotCompleteness: "partial",
+    });
+    const providerBAdvanced = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-b",
+      providerId: "provider-b",
+      providerGeneration: "provider-b:transport:1",
+      sequence: 3,
+      observedAt: "2026-08-27T12:00:20.000Z",
+      topology: createTopology({ provider: { providerId: "provider-b" } }),
+      snapshotCompleteness: "partial",
+    });
+    const providerBStale = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-b",
+      providerId: "provider-b",
+      providerGeneration: "provider-b:transport:1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:30.000Z",
+      topology: createTopology({ provider: { providerId: "provider-b" } }),
+      snapshotCompleteness: "partial",
+    });
+
+    expect(providerBInitial.accepted).toBe(true);
+    expect(providerBAdvanced.accepted).toBe(true);
+    expect(providerBStale).toMatchObject({ accepted: false, reason: "stale-sequence" });
+    expect(store.byDeviceId["serial:905251280E69E7"].providerStates).toMatchObject({
+      "provider-a": { lastSequence: 100 },
+      "provider-b": { lastSequence: 3 },
     });
   });
 

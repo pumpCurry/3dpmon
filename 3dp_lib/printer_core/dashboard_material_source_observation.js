@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1427 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 01:44:10
+ * @lastModified 2026-08-28 09:16:08
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -615,7 +615,7 @@ function rejectStaleBatch(record, options) {
   }
   const activeGeneration = providerState?.activeGeneration || record.providerGeneration || null;
   if (activeGeneration && options.providerGeneration && activeGeneration === options.providerGeneration) {
-    const previousSequence = toFiniteNumber(record.lastSequence);
+    const previousSequence = toFiniteNumber(providerState?.lastSequence, toFiniteNumber(record.lastSequence));
     const nextSequence = toFiniteNumber(options.sequence);
     if (previousSequence !== null && nextSequence !== null && nextSequence < previousSequence) {
       return { accepted: false, reason: "stale-sequence", record };
@@ -654,6 +654,7 @@ function updateProviderGenerationLifecycle(record, providerId, nextGeneration) {
   if (!current || current === next) {
     providerState.activeGeneration = next;
     providerState.lastObservedAt = record.lastObservedAt || null;
+    providerState.lastSequence = record.lastSequence ?? providerState.lastSequence ?? null;
     providerState.disconnectedAt = null;
     record.providerStates[providerKey] = providerState;
     record.providerGeneration = next;
@@ -667,6 +668,7 @@ function updateProviderGenerationLifecycle(record, providerId, nextGeneration) {
   providerState.activeGeneration = next;
   providerState.retiredGenerations = Array.from(retired).slice(-16);
   providerState.lastObservedAt = record.lastObservedAt || null;
+  providerState.lastSequence = record.lastSequence ?? null;
   providerState.disconnectedAt = null;
   record.providerStates[providerKey] = providerState;
   record.retiredProviderGenerations = Array.from(new Set([
@@ -674,6 +676,71 @@ function updateProviderGenerationLifecycle(record, providerId, nextGeneration) {
     ...providerState.retiredGenerations,
   ])).slice(-16);
   record.providerGeneration = next;
+}
+
+/**
+ * rekey merge時にprovider別状態を統合する。
+ *
+ * 【詳細説明】
+ * - stable recordへprovisional recordを吸収する際、source snapshot/eventだけでなく、
+ *   provider generationのactive/retired状態も保持して再接続診断の証跡を失わない。
+ * - 同じproviderIdが両recordにある場合はlastObservedAtが新しい側のactiveGenerationを採用し、
+ *   置き換えられたactiveGenerationはretiredGenerationsへ移す。
+ *
+ * @private
+ * @function mergeProviderStatesForRekey
+ * @param {Object} existing - merge先のstable device観測レコード。
+ * @param {Object} incoming - merge元のprovisional device観測レコード。
+ * @returns {void}
+ */
+function mergeProviderStatesForRekey(existing, incoming) {
+  if (!existing.providerStates || typeof existing.providerStates !== "object" || Array.isArray(existing.providerStates)) {
+    existing.providerStates = {};
+  }
+  const incomingStates = incoming.providerStates && typeof incoming.providerStates === "object" && !Array.isArray(incoming.providerStates)
+    ? incoming.providerStates
+    : {};
+  for (const [providerId, incomingState] of Object.entries(incomingStates)) {
+    if (!incomingState || typeof incomingState !== "object" || Array.isArray(incomingState)) {
+      continue;
+    }
+    const key = String(providerId || "__default__");
+    const currentState = existing.providerStates[key] && typeof existing.providerStates[key] === "object"
+      ? existing.providerStates[key]
+      : null;
+    if (!currentState) {
+      existing.providerStates[key] = cloneJsonValue(incomingState);
+      continue;
+    }
+    const currentTime = new Date(currentState.lastObservedAt || 0).getTime();
+    const incomingTime = new Date(incomingState.lastObservedAt || 0).getTime();
+    const incomingIsNewer = Number.isFinite(incomingTime) &&
+      (!Number.isFinite(currentTime) || incomingTime > currentTime);
+    const winner = incomingIsNewer ? incomingState : currentState;
+    const retired = new Set([
+      ...(Array.isArray(currentState.retiredGenerations) ? currentState.retiredGenerations : []),
+      ...(Array.isArray(incomingState.retiredGenerations) ? incomingState.retiredGenerations : []),
+    ].map((value) => String(value)));
+    const currentGeneration = currentState.activeGeneration ? String(currentState.activeGeneration) : null;
+    const incomingGeneration = incomingState.activeGeneration ? String(incomingState.activeGeneration) : null;
+    const winnerGeneration = winner.activeGeneration ? String(winner.activeGeneration) : null;
+    for (const generation of [currentGeneration, incomingGeneration]) {
+      if (generation && generation !== winnerGeneration) {
+        retired.add(generation);
+      }
+    }
+    retired.delete(winnerGeneration);
+    existing.providerStates[key] = {
+      ...cloneJsonValue(currentState),
+      ...cloneJsonValue(winner),
+      providerId: key,
+      activeGeneration: winnerGeneration,
+      retiredGenerations: Array.from(retired).slice(-16),
+      lastObservedAt: winner.lastObservedAt || currentState.lastObservedAt || incomingState.lastObservedAt || null,
+      lastSequence: winner.lastSequence ?? currentState.lastSequence ?? incomingState.lastSequence ?? null,
+      disconnectedAt: winner.disconnectedAt ?? null,
+    };
+  }
 }
 
 /**
@@ -861,6 +928,7 @@ export function recordMaterialTopologyObservation(store, options = {}) {
     : null;
   if (record.providerId && record.providerStates?.[record.providerId]) {
     record.providerStates[record.providerId].lastObservedAt = observedAt;
+    record.providerStates[record.providerId].lastSequence = record.lastSequence;
     record.providerStates[record.providerId].disconnectedAt = record.providerDisconnectedAt;
   }
   record.restoredFromStorage = false;
@@ -957,9 +1025,12 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
     existing.providerId = existing.providerId || from.providerId || null;
     existing.sessionId = existing.sessionId || from.sessionId || null;
     existing.providerGeneration = existing.providerGeneration || from.providerGeneration || null;
+    mergeProviderStatesForRekey(existing, from);
     existing.retiredProviderGenerations = [...new Set([
       ...(Array.isArray(existing.retiredProviderGenerations) ? existing.retiredProviderGenerations : []),
       ...(Array.isArray(from.retiredProviderGenerations) ? from.retiredProviderGenerations : []),
+      ...Object.values(existing.providerStates || {})
+        .flatMap((providerState) => Array.isArray(providerState?.retiredGenerations) ? providerState.retiredGenerations : []),
     ])].slice(-16);
     const importedEvents = Array.isArray(from.events)
       ? from.events.map((event) => ({
