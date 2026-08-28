@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1436 (PR #435)
+ * @version 1.390.1457 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 10:37:51
+ * @lastModified 2026-08-28 16:58:45
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -489,6 +489,10 @@ function resolveSourceId(source) {
 /**
  * material sourceの装填状態を保守的に導出する。
  *
+ * 【詳細説明】
+ * - CFS/CFS-Cはフィラメント取り外し後もmaterial名・色・RFIDの残留metadataを返す可能性がある。
+ * - 観測snapshotではそれらをprotocol evidenceとして保持するが、物理presenceの根拠には使わない。
+ *
  * @private
  * @function derivePresence
  * @param {Object|null|undefined} source - material source。
@@ -498,23 +502,21 @@ function derivePresence(source) {
   if (!source) {
     return "unobserved";
   }
+  const explicitPresence = String(source.presence || "").trim();
+  if (["loaded", "empty", "unknown", "unobserved"].includes(explicitPresence)) {
+    return explicitPresence;
+  }
   const stateCode = toFiniteNumber(source.status?.stateCode);
-  const material = source.material && typeof source.material === "object" ? source.material : {};
-  const color = material.color && typeof material.color === "object" ? material.color : {};
-  const hasMaterialEvidence = Boolean(
-    String(material.vendor || "").trim() ||
-    String(material.type || "").trim() ||
-    String(material.name || "").trim() ||
-    String(color.normalized ?? color.raw ?? "").trim() ||
-    material.rfid !== null && material.rfid !== undefined && String(material.rfid).trim() !== ""
-  );
-  if (stateCode === 0 && !hasMaterialEvidence) {
+  if (stateCode === 1) {
+    return "loaded";
+  }
+  if (stateCode === 0) {
     return "empty";
   }
-  if (stateCode === null && !hasMaterialEvidence) {
+  if (stateCode === null) {
     return "unknown";
   }
-  return "loaded";
+  return "unknown";
 }
 
 /**
@@ -683,6 +685,7 @@ function createSourceSnapshot(options) {
       snapshot.presence = previous.presence || snapshot.presence;
     } else if (!materialObserved || !stateCodeObserved) {
       snapshot.presence = derivePresence({
+        presence: snapshot.presence,
         material: snapshot.material,
         status: { stateCode: snapshot.status.stateCode },
       });

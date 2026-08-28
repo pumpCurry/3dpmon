@@ -18,9 +18,9 @@
  * - {@link createCfsBoxsInfoMaterialProvider}：K2 `boxsInfo` 用 read-only material provider を生成
  * - {@link createCfsMoonrakerBoxMaterialProvider}：K1C/CFS-C `boxsInfo` 用 read-only material provider を生成
  *
- * @version 1.390.1340 (PR #432)
+ * @version 1.390.1457 (PR #435)
  * @since   1.390.1312 (PR #432)
- * @lastModified 2026-08-09 01:26:08
+ * @lastModified 2026-08-28 16:58:45
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の MaterialSource store と接続する際に provider event 化する
@@ -196,6 +196,48 @@ export function extractMoonrakerBoxsInfoPayload(payload) {
 }
 
 /**
+ * Moonraker/CFS-C material entry由来のpresenceを明示する。
+ *
+ * 【詳細説明】
+ * - K2 `boxsInfo` はslot `state` を持つため、material名・色・RFIDだけで装填を推測しない。
+ * - K1C/CFS-C Moonraker providerでは、`materials[]` に現れたentry自体を観測済みsourceとして扱う既存契約がある。
+ * - 下流の観測ストアやViewModelがmetadataから装填を推測しないよう、provider境界で `presence:"loaded"` を明示する。
+ * - explicitな `state` がある場合はnormalizer側の物理stateを優先し、providerで上書きしない。
+ *
+ * @private
+ * @function annotateMoonrakerMaterialEntryPresence
+ * @param {object} topology - 正規化済み material topology
+ * @returns {object} Moonraker material entry presence を明示した topology
+ */
+function annotateMoonrakerMaterialEntryPresence(topology) {
+  const sourceTopology = topology && typeof topology === "object" ? topology : normalizeK2BoxsInfo(null);
+  const sources = Array.isArray(sourceTopology.sources) ? sourceTopology.sources : [];
+  return {
+    ...sourceTopology,
+    sources: sources.map((source) => {
+      if (!source || typeof source !== "object" || source.sourceIdentity?.valid === false) {
+        return source;
+      }
+      const explicitPresence = String(source.presence || "").trim();
+      if (explicitPresence) {
+        return source;
+      }
+      if (source.observedFields?.status?.stateCode === true) {
+        return source;
+      }
+      return {
+        ...source,
+        presence: "loaded",
+        presenceEvidence: {
+          sourceProtocol: "creality-moonraker-boxsInfo",
+          reason: "observed-material-entry-without-state-code",
+        },
+      };
+    }),
+  };
+}
+
+/**
  * K1C/CFS-C Moonraker 用 read-only material provider を生成する。
  *
  * 【詳細説明】
@@ -240,7 +282,10 @@ export function createCfsMoonrakerBoxMaterialProvider(options = {}) {
      * @returns {object} provider metadata 付き material topology
      */
     createTopology(payload, topologyOptions = {}) {
-      return attachMaterialProviderMetadata(normalizeBoxsInfo(extractBoxsInfo(payload), topologyOptions), provider);
+      return attachMaterialProviderMetadata(
+        annotateMoonrakerMaterialEntryPresence(normalizeBoxsInfo(extractBoxsInfo(payload), topologyOptions)),
+        provider
+      );
     },
   };
   return provider;

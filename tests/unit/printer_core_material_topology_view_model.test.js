@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1457 (PR #435)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-08-28 16:58:45
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -495,6 +495,65 @@ describe("Printer Core v3 material topology view model", () => {
       status: {
         stateCode: 0,
       },
+    });
+    expect(viewModel.summary.loadedSourceCount).toBe(0);
+  });
+
+  it("残留metadataだけではCFS slotを装填中と表示しない", () => {
+    const viewModel = createMaterialTopologyViewModel({
+      cfs: {
+        connected: true,
+        topologyState: "fresh",
+      },
+      units: [{ unitId: "cfs:1", boxId: 1 }],
+      sources: [
+        {
+          sourceId: "cfs:1:slot:0",
+          kind: "cfs-slot",
+          unitId: "cfs:1",
+          boxId: 1,
+          slotId: 0,
+          material: {
+            vendor: "Generic",
+            type: "PLA",
+            name: "Removed PLA",
+            color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
+          },
+          status: {
+            stateCode: 0,
+            selected: false,
+            remaining: { rawPercent: 100, normalizedPercent: 100, valid: true },
+          },
+        },
+        {
+          sourceId: "cfs:1:slot:1",
+          kind: "cfs-slot",
+          unitId: "cfs:1",
+          boxId: 1,
+          slotId: 1,
+          material: {
+            vendor: "Generic",
+            type: "PLA",
+            name: "Metadata Only PLA",
+            color: { raw: "#072a530", normalized: "072a530", displayHex: "72a530", cssColor: "#72a530" },
+          },
+          status: {
+            stateCode: null,
+            selected: null,
+            remaining: { rawPercent: null, normalizedPercent: null, valid: null },
+          },
+        },
+      ],
+      assignments: [],
+    }, { unitLimit: 1 });
+
+    expect(viewModel.units[0].slots[0]).toMatchObject({
+      displaySlot: "1A",
+      presence: "empty",
+    });
+    expect(viewModel.units[0].slots[1]).toMatchObject({
+      displaySlot: "1B",
+      presence: "unknown",
     });
     expect(viewModel.summary.loadedSourceCount).toBe(0);
   });

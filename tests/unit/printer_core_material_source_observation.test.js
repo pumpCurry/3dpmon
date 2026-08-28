@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1436 (PR #435)
+ * @version 1.390.1457 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 10:37:51
+ * @lastModified 2026-08-28 16:58:45
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -878,6 +878,75 @@ describe("MaterialSourceObservationStore", () => {
       "source-id-missing",
       "source-id-missing",
     ]);
+  });
+
+  it("残留metadataだけではmaterial source snapshotをloaded扱いしない", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const result = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-residual-metadata",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-residual",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({
+        sources: [
+          {
+            sourceId: "cfs:1:slot:0",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 0,
+            material: {
+              vendor: "Generic",
+              type: "PLA",
+              name: "Removed PLA",
+              color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
+              rfid: "old-rfid",
+            },
+            status: {
+              stateCode: 0,
+              selected: false,
+              remaining: { rawPercent: 100, normalizedPercent: 100, valid: true },
+            },
+          },
+          {
+            sourceId: "cfs:1:slot:1",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 1,
+            material: {
+              vendor: "Generic",
+              type: "PLA",
+              name: "Metadata Only PLA",
+              color: { raw: "#072a530", normalized: "072a530", displayHex: "72a530", cssColor: "#72a530" },
+              rfid: "",
+            },
+            status: {
+              stateCode: null,
+              selected: null,
+              remaining: { rawPercent: null, normalizedPercent: null, valid: null },
+            },
+          },
+        ],
+      }),
+      snapshotCompleteness: "complete",
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.record.latestBySourceId["cfs:1:slot:0"]).toMatchObject({
+      presence: "empty",
+      material: { name: "Removed PLA" },
+      status: { stateCode: 0 },
+    });
+    expect(result.record.latestBySourceId["cfs:1:slot:1"]).toMatchObject({
+      presence: "unknown",
+      material: { name: "Metadata Only PLA" },
+      status: { stateCode: null },
+    });
   });
 
   it("明示observedAtが不正な観測は現在時刻へ化けさせず拒否する", () => {
