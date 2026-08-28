@@ -19,9 +19,9 @@
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1429 (PR #435)
+ * @version 1.390.1430 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 09:21:47
+ * @lastModified 2026-08-28 09:29:56
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -317,8 +317,8 @@ function cloneJsonValue(value) {
  *
  * 【詳細説明】
  * - deviceIdが分かる場合はそれを優先する。
- * - 再起動直後などruntime deviceIdがまだ無い場合はhost一致のstable/provisional観測を探し、
- *   UIにlast-knownとして表示できる入口を作る。
+ * - 再起動直後などruntime deviceIdがまだ無い場合はhost一致のstable観測だけを探し、
+ *   DHCP再利用やprovisional identity混線で別機体のlast-known CFSを表示しないようにする。
  *
  * @private
  * @function resolveObservationRecordForDisplay
@@ -343,7 +343,10 @@ function resolveObservationRecordForDisplay(observationStore, options = {}) {
     return null;
   }
   const candidates = Object.values(byDeviceId)
-    .filter((record) => record && typeof record === "object" && String(record.host || "").trim() === host)
+    .filter((record) => record &&
+      typeof record === "object" &&
+      record.identityStrength === "stable" &&
+      String(record.host || "").trim() === host)
     .sort((a, b) => {
       const aStrong = a.identityStrength === "stable" ? 1 : 0;
       const bStrong = b.identityStrength === "stable" ? 1 : 0;
@@ -418,7 +421,7 @@ function createLastKnownTopologyFromObservationRecord(record) {
       material: isTombstone ? {} : cloneJsonValue(snapshot.material || {}),
       status: {
         selected: isTombstone ? null : snapshot.selected ?? null,
-        stateCode: isTombstone ? 0 : snapshot.status?.stateCode ?? null,
+        stateCode: isTombstone ? null : snapshot.status?.stateCode ?? null,
         editStatusCode: isTombstone ? null : snapshot.status?.editStatusCode ?? null,
         scrap: isTombstone ? null : snapshot.status?.scrap ?? null,
         remaining: isTombstone ? {

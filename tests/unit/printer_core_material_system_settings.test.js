@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1429 (PR #435)
+ * @version 1.390.1430 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 09:21:47
+ * @lastModified 2026-08-28 09:29:56
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -343,6 +343,86 @@ describe("Printer Core v3 material system settings", () => {
       sourceId: "cfs:1:slot:2",
       materialSourceId: "cfs:1:slot:2",
     }]);
+  });
+
+  it("last-known復元ではtombstoneを空スロットとして表示しない", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      observationRecord: {
+        deviceId: "serial:905251280E69E7",
+        identityStrength: "stable",
+        host: "K2Pro-69E7",
+        providerId: "k2-ws9999-boxsInfo",
+        lastObservedAt: "2026-08-27T12:00:00.000Z",
+        latestBySourceId: {
+          "cfs:1:slot:3": {
+            sourceId: "cfs:1:slot:3",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 3,
+            selected: true,
+            material: {
+              type: "PLA",
+              name: "Removed PLA",
+            },
+            remaining: {
+              rawPercent: 0,
+              normalizedPercent: 0,
+              valid: true,
+            },
+            tombstoneAt: "2026-08-27T12:05:00.000Z",
+          },
+        },
+      },
+    });
+
+    const tombstoneSource = displayTopology.sources.find((source) => source.sourceId === "cfs:1:slot:3");
+
+    expect(tombstoneSource).toMatchObject({
+      status: {
+        selected: null,
+        stateCode: null,
+      },
+    });
+    expect(tombstoneSource.status.remaining).toMatchObject({
+      normalizedPercent: null,
+      valid: null,
+    });
+    expect(tombstoneSource.authority).toMatchObject({
+      mode: "observation-only",
+      source: "materialSourceObservations",
+    });
+  });
+
+  it("host一致だけのlast-known復元ではprovisional identityを採用しない", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      host: "192.168.54.153",
+      observationStore: {
+        byDeviceId: {
+          "provisional:192.168.54.153": {
+            deviceId: "provisional:192.168.54.153",
+            identityStrength: "provisional",
+            host: "192.168.54.153",
+            providerId: "k2-ws9999-boxsInfo",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:0": {
+                sourceId: "cfs:1:slot:0",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 0,
+                material: { type: "PLA" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(displayTopology).toBeNull();
   });
 
   it("runtime topologyがfreshなら保存済みobservationよりlive topologyを優先する", () => {
