@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1450 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 14:14:54
  *
  * @vitest-environment jsdom
  */
@@ -453,6 +453,29 @@ describe("Printer Core v3 identity dry-run", () => {
       model: "F012",
       firmwareVersion: "1.0.0",
     });
+  });
+
+  it("cleanup後に同一destへ再接続してもPrinter Core v3接続世代を再利用しない", async () => {
+    window.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        model: "F012",
+        version: "1.0.0",
+        wssPort: 443,
+      }),
+    }));
+
+    mod.connectWithType("203.0.113.23:9999", "creality-k2");
+    await flushAsyncProbe();
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    const firstGeneration = target.printerCoreV3Info.connectionGeneration;
+    expect(firstGeneration).toBeGreaterThan(0);
+
+    expect(mod.cleanupConnection("203.0.113.23")).toBe(true);
+    mod.connectWithType("203.0.113.23:9999", "creality-k2");
+    await flushAsyncProbe();
+
+    expect(target.printerCoreV3Info.connectionGeneration).toBeGreaterThan(firstGeneration);
   });
 
   it("Moonraker/IR3翻訳フレームはlegacy processDataへ流すがPrinter Core v3 identity/shadowへ入れない", () => {

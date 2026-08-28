@@ -16,12 +16,13 @@
  * 【公開関数一覧】
  * - {@link validateK2CfsSlotControlCertificationEvidence}：production CFS slot操作の実機証跡を検証
  * - {@link validateRegisteredK2CfsSlotControlCertificationEvidence}：registry登録済みproduction証跡を検証
+ * - {@link createImmutableK2CfsSlotControlCertificationRegistry}：registry entryを再帰的に不変化
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1450 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 14:14:54
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -135,19 +136,6 @@ const UNCERTIFIED_CFS_SLOT_COMMAND_KINDS = Object.freeze(new Set([
  * @constant {WeakSet<object>}
  */
 const TRUSTED_K2_CFS_TRANSPORT_PLANS = new WeakSet();
-
-/**
- * production CFS slot操作を許可するmodule-owned certification registry。
- *
- * 【詳細説明】
- * - connection targetやUI設定に保存された証跡だけでproduction commandを有効化しないため、
- *   実機certificationをコードレビュー済みのimmutable registryとして保持する。
- * - 現時点ではGate 10/12の物理certificationが未完了のため空配列にし、slot操作はfail-closedを維持する。
- * - 将来certificationを追加する場合は、この配列へ完全な証跡を追加し、reviewとlive testを通す。
- *
- * @constant {ReadonlyArray<object>}
- */
-export const K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY = Object.freeze([]);
 
 /**
  * 未certified CFS slot commandを `feedInOrOut` 候補へ写す定義。
@@ -274,6 +262,42 @@ function deepFreezeJsonValue(value, seen = new WeakSet()) {
   }
   return Object.freeze(value);
 }
+
+/**
+ * production CFS slot操作registryを再帰的に不変化して生成する。
+ *
+ * 【詳細説明】
+ * - Gate 10/12で最初の実機certification entryを追加した際、outer arrayだけでなく
+ *   commandKindsやreview hash配列などのnested evidenceも後続コードから変更できないようにする。
+ * - caller supplied objectをそのままfreezeするとテストや生成処理側の参照も固まるため、JSON cloneしてから
+ *   freezeし、module-owned registryとして独立したimmutable evidenceにする。
+ *
+ * @function createImmutableK2CfsSlotControlCertificationRegistry
+ * @param {Array<object>} entries - certification evidence entry配列
+ * @returns {ReadonlyArray<object>} 再帰的にfreezeされたregistry
+ * @example
+ * const registry = createImmutableK2CfsSlotControlCertificationRegistry([{ commandKinds: ["cfs-load"] }]);
+ */
+export function createImmutableK2CfsSlotControlCertificationRegistry(entries) {
+  const normalizedEntries = Array.isArray(entries)
+    ? entries.map((entry) => cloneJsonValue(entry))
+    : [];
+  return deepFreezeJsonValue(normalizedEntries);
+}
+
+/**
+ * production CFS slot操作を許可するmodule-owned certification registry。
+ *
+ * 【詳細説明】
+ * - connection targetやUI設定に保存された証跡だけでproduction commandを有効化しないため、
+ *   実機certificationをコードレビュー済みのimmutable registryとして保持する。
+ * - 現時点ではGate 10/12の物理certificationが未完了のため空配列にし、slot操作はfail-closedを維持する。
+ * - 将来certificationを追加する場合は、このfactory経由で完全な証跡を追加し、reviewとlive testを通す。
+ *
+ * @constant {ReadonlyArray<object>}
+ */
+export const K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY =
+  createImmutableK2CfsSlotControlCertificationRegistry([]);
 
 /**
  * JSON互換値をkey順に正規化して文字列化する。

@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1450 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 14:14:54
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
   K2_CFS_PRINT_START_TRANSPORT_PROFILE,
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+  createImmutableK2CfsSlotControlCertificationRegistry,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
 } from "../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
@@ -344,6 +345,27 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       "model-scope-missing-or-mismatch",
       "firmware-scope-missing-or-mismatch",
     ]));
+  });
+
+  it("certification registry factoryは将来追加するentryも再帰的にfreezeする", () => {
+    const registry = createImmutableK2CfsSlotControlCertificationRegistry([
+      createCertifiedCfsEvidence({
+        commandKinds: ["cfs-load", "cfs-unload"],
+        review: {
+          reviewer: "gate10-live",
+          hashes: ["sha256:test-fixture"],
+        },
+      }),
+    ]);
+
+    expect(Object.isFrozen(registry)).toBe(true);
+    expect(Object.isFrozen(registry[0])).toBe(true);
+    expect(Object.isFrozen(registry[0].commandKinds)).toBe(true);
+    expect(Object.isFrozen(registry[0].review)).toBe(true);
+    expect(Object.isFrozen(registry[0].review.hashes)).toBe(true);
+    expect(() => {
+      registry[0].review.hashes.push("sha256:mutated");
+    }).toThrow(TypeError);
   });
 
   it("production昇格は空objectや配列のcertification evidenceを拒否する", () => {

@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1450 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 14:14:54
  * -----------------------------------------------------------
  */
 
@@ -226,24 +226,15 @@ function isCurrentPrinterCoreV3Info(info, target = null) {
  *
  * @private
  * @param {object|null|undefined} target - 接続target設定
- * @param {object|null|undefined} machine - runtime machine data
  * @returns {object} certification scope
  */
-function createCfsControlCertificationScope(target, machine) {
+function createCfsControlCertificationScope(target) {
   const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
   const info = isCurrentPrinterCoreV3Info(rawInfo, target) ? rawInfo : {};
-  const shadowState = machine?.runtimeData?.printerCoreV3Shadow?.lastState || {};
   return {
     printerType: target?.printerType || null,
-    model: info.model ||
-      info.reportedModel ||
-      shadowState.identity?.reportedModel ||
-      null,
-    firmwareVersion: info.version ||
-      info.firmwareVersion ||
-      shadowState.identity?.firmwareVersion ||
-      shadowState.identity?.version ||
-      null,
+    model: info.model || info.reportedModel || null,
+    firmwareVersion: info.version || info.firmwareVersion || null,
   };
 }
 
@@ -257,10 +248,9 @@ function createCfsControlCertificationScope(target, machine) {
  *
  * @private
  * @param {object|null|undefined} target - 接続target設定
- * @param {object|null|undefined} machine - runtime machine data
  * @returns {object|null} production CFS control設定、またはnull
  */
-function resolveCfsControlProductionSettings(target, machine = null) {
+function resolveCfsControlProductionSettings(target) {
   const control = target?.materialSystem?.cfsControl;
   if (!control || control.enabled !== true) {
     return null;
@@ -279,7 +269,7 @@ function resolveCfsControlProductionSettings(target, machine = null) {
     return commandKind && certifiedCommandKinds.has(commandKind);
   });
   const evidence = control.certificationEvidence;
-  const scope = createCfsControlCertificationScope(target, machine);
+  const scope = createCfsControlCertificationScope(target);
   const certifiedAllowedActions = allowedActions.filter((action) => {
     const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
     const validation = validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
@@ -333,14 +323,13 @@ function createCfsControlSendTimeMaterialTopology(topology) {
  *
  * @private
  * @param {string} hostname - 対象ホスト名
- * @param {object} productionSettings - production CFS control設定
  * @param {object} request - 送信直前に検証するcommand request
  * @returns {object} command authority send-time snapshot
  */
-function createCfsControlSendTimeContext(hostname, productionSettings, request) {
+function createCfsControlSendTimeContext(hostname, request) {
   const currentTarget = getConnectionTarget(hostname);
   const machine = monitorData.machines[hostname] || {};
-  const currentProductionSettings = resolveCfsControlProductionSettings(currentTarget, machine);
+  const currentProductionSettings = resolveCfsControlProductionSettings(currentTarget);
   const commandKind = String(request?.commandKind || "").trim();
   if (!currentProductionSettings || !currentProductionSettings.certifiedCommandKinds.includes(commandKind)) {
     throw new Error("cfs-control-certification-revoked");
@@ -365,7 +354,7 @@ function createCfsControlSendTimeContext(hostname, productionSettings, request) 
     observedState: shadowRecord?.lastState || null,
     createdAt: new Date().toISOString(),
     certificationEvidence: currentProductionSettings.certificationEvidence,
-    certificationScope: createCfsControlCertificationScope(currentTarget, machine),
+    certificationScope: createCfsControlCertificationScope(currentTarget),
   };
 }
 
@@ -390,15 +379,14 @@ function observeCfsControlCommandState(hostname) {
  *
  * @private
  * @param {string} hostname - 対象ホスト名
- * @param {object} productionSettings - production CFS control設定
  * @returns {object} bound printer command dispatcher
  */
-function createCfsControlDispatcher(hostname, productionSettings) {
+function createCfsControlDispatcher(hostname) {
   return createBoundPrinterCommandDispatcher({
-    getSendTimeContext: (request) => createCfsControlSendTimeContext(hostname, productionSettings, request),
+    getSendTimeContext: (request) => createCfsControlSendTimeContext(hostname, request),
     sendTransport: async (request) => {
       const currentTarget = getConnectionTarget(hostname);
-      const currentSettings = resolveCfsControlProductionSettings(currentTarget, monitorData.machines[hostname] || {});
+      const currentSettings = resolveCfsControlProductionSettings(currentTarget);
       if (!currentSettings || !currentSettings.certifiedCommandKinds.includes(String(request?.commandKind || "").trim())) {
         throw new Error("cfs-control-certification-revoked");
       }
@@ -438,9 +426,9 @@ function createCfsControlDispatcher(hostname, productionSettings) {
 function createCfsControlRenderOptions(hostname) {
   const target = getConnectionTarget(hostname);
   const machine = monitorData.machines[hostname] || {};
-  const productionSettings = resolveCfsControlProductionSettings(target, machine);
+  const productionSettings = resolveCfsControlProductionSettings(target);
   if (productionSettings) {
-    const dispatcher = createCfsControlDispatcher(hostname, productionSettings);
+    const dispatcher = createCfsControlDispatcher(hostname);
     const integration = createBoundCfsControlIntegration({
       enabled: true,
       allowedActions: productionSettings.allowedActions,

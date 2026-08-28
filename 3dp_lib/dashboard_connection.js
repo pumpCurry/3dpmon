@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1450 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-28 14:14:54
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -136,6 +136,19 @@ const DEFAULT_K2_WEBRTC_CAMERA_PORT = 8000;
  * @constant {string}
  */
 const PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID = `pcv3-probe:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+/**
+ * 現在のアプリ起動中に割り当てたPrinter Core v3接続instance通番。
+ *
+ * 【詳細説明】
+ * - `connectionMap` のstate objectはcleanupで削除されるため、state-localな `+1` 採番だけでは
+ *   同一runtime内でgeneration番号を再利用し得る。
+ * - `/info`応答と現在WS接続の結び付けは「同じ番号」ではなく「同じ接続instance」を意味するため、
+ *   module runtime全体で単調増加させ、cleanup/recreate後も古いprobe応答を新接続へ誤bindしない。
+ *
+ * @type {number}
+ */
+let printerCoreV3ConnectionSequence = 0;
 
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
@@ -607,8 +620,9 @@ function _normalizePositivePort(value) {
  * @private
  * @param {object|null|undefined} target - connection target
  * @param {object|null|undefined} evidence - `/info` 応答
- * @param {string} observedAt - 観測時刻ISO文字列
+ * @param {string} observedAt - 応答JSONを採用した時刻ISO文字列
  * @param {object=} scope - 現在接続scope
+ * @param {string=} scope.requestedAt - HTTP request開始時刻
  * @param {number=} scope.connectionGeneration - 現在WS接続世代
  * @param {string=} scope.connectionDest - 現在接続dest
  * @param {string=} scope.connectionHost - 現在接続host key
@@ -628,6 +642,7 @@ function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt, scope = {
     firmwareVersion: version,
     wssPort: _normalizePositivePort(evidence.wssPort),
     videoPort: _normalizePositivePort(evidence.videoPort),
+    requestedAt: String(scope.requestedAt || "").trim() || null,
     observedAt,
     probeSessionId: PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID,
     connectionGeneration: Number(scope.connectionGeneration) || 0,
@@ -1030,7 +1045,7 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
   try {
-    const observedAt = new Date().toISOString();
+    const requestedAt = new Date().toISOString();
     const response = await window.fetch(`http://${httpHost}:${httpPort}/info`, {
       cache: "no-store",
       signal: controller?.signal,
@@ -1045,6 +1060,7 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
     if (!_isHttpInfoProbeConnectionScopeCurrent(probeScope)) {
       return;
     }
+    const observedAt = new Date().toISOString();
     _recordPrinterCoreV3Identity(hostOrDest || dest, {
       ...body,
       source: "http-info",
@@ -1052,6 +1068,7 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
     });
     const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
     const infoChanged = _recordCurrentPrinterCoreV3Info(target, body, observedAt, {
+      requestedAt,
       connectionGeneration: probeScope.connectionGeneration,
       connectionDest: probeScope.connectionDest,
       connectionHost: probeScope.connectionHost,
@@ -2143,7 +2160,7 @@ export function connectWs(hostOrDest) {
   //   per-host 処理は processData 内の _initializedHosts で管理する。
   const state = getState(host);
   state.dest = dest;
-  state.printerCoreV3ConnectionGeneration = (Number(state.printerCoreV3ConnectionGeneration) || 0) + 1;
+  state.printerCoreV3ConnectionGeneration = ++printerCoreV3ConnectionSequence;
   state.historyReceived = false;
   state.hostReadyAt = null;
 

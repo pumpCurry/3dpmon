@@ -1,6 +1,6 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-08-26
+Last updated: 2026-08-28
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
@@ -8,6 +8,21 @@ Last updated: 2026-08-26
 
 K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界は
 `docs/develop/printer-core-v3-gate19-cfs-control-spec-investigation.md` を参照する。
+
+## Gate status matrix
+
+| Gate / Area | Code | Tests | Live | Production |
+| --- | --- | --- | --- | --- |
+| Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
+| Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
+| Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
+| Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
+| K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
+| K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
+
+現時点のv2.2.1042では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
+のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
+UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
 
 ## 未実装と分かっているもの
 
@@ -100,3 +115,15 @@ K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界�
 - 実機certificationが終わるまで、通常フィラメントパネルのCFS操作ボタンは送信可能にしない。
 - slot select / load / unload / feed / retract は、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyを確定してからadapterへ追加する。
 - K1C+CFS-Cについては、Moonraker object経由のmaterial providerとは別に、操作commandのprovider/transport境界を実機で確認する。
+
+## Registry追加前に必ず閉じる項目
+
+- standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
+- `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
+- side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
+- Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
+
+## Release certification helper
+
+- PR CIではunit test、E2E boot、version sync、smokeをgatingにする。既存ESLint/Stylelint/Prettier debtが残るため、lint jobは当面advisoryとして維持し、完全gating化はlint debt整理PRで行う。
+- release artifact作成前に `npm run verify:release` を実行し、`dist/release-manifest-<version>.json` のSHA256とreview済みcommitをrelease noteへ転記する。
