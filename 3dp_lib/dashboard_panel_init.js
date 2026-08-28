@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1383 (PR #432)
+ * @version 1.390.1452 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-25 22:55:00
+ * @lastModified 2026-08-28 14:28:57
  * -----------------------------------------------------------
  */
 
@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget, getConnectionState, getPrinterCoreV3RuntimeProbeSessionId, getPrinterCoreV3ConnectionGeneration } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -87,6 +87,15 @@ import {
 import {
   createBoundCfsControlIntegration,
 } from "./printer_core/dashboard_cfs_command_integration.js";
+import {
+  createBoundPrinterCommandDispatcher,
+} from "./printer_core/dashboard_command_authority.js";
+import {
+  K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+  createK2CfsCommandTransportPlan,
+  sendK2CfsCommandTransportPlan,
+  validateRegisteredK2CfsSlotControlCertificationEvidence,
+} from "./printer_core/dashboard_k2_cfs_command_transport.js";
 import {
   MATERIAL_DISPLAY_MODE,
   resolveDisplayMaterialTopology,
@@ -122,6 +131,23 @@ const _destroyMap = new Map();
 const CFS_CONTROL_UI_ACTIONS = Object.freeze(["select", "load", "unload", "feed", "retract"]);
 
 /**
+ * CFS/CFS-C UI action と Printer Core command kind の対応表。
+ *
+ * 【詳細説明】
+ * - integration module内部にも同じ対応があるが、panel composition層ではtarget設定から
+ *   認証済みcommand kindをaction許可へ戻す必要があるため、表示境界用に明示する。
+ *
+ * @constant {Object<string,string>}
+ */
+const CFS_CONTROL_ACTION_COMMAND_KIND = Object.freeze({
+  select: "cfs-slot-select",
+  load: "cfs-load",
+  unload: "cfs-unload",
+  feed: "cfs-feed",
+  retract: "cfs-retract",
+});
+
+/**
  * production有効化前のCFS操作候補disabled理由。
  *
  * 【詳細説明】
@@ -131,6 +157,259 @@ const CFS_CONTROL_UI_ACTIONS = Object.freeze(["select", "load", "unload", "feed"
  * @constant {string}
  */
 const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です";
+
+/**
+ * 配列/Set/map形式のcommand kind allow-listをSetへ正規化する。
+ *
+ * @private
+ * @param {*} value - allow-list候補
+ * @returns {Set<string>} 正規化済みcommand kind set
+ */
+function normalizeCertifiedCfsCommandSet(value) {
+  if (value instanceof Set) {
+    return new Set(Array.from(value).map((entry) => String(entry || "").trim()).filter(Boolean));
+  }
+  if (Array.isArray(value)) {
+    return new Set(value.map((entry) => String(entry || "").trim()).filter(Boolean));
+  }
+  if (value && typeof value === "object") {
+    return new Set(Object.entries(value)
+      .filter(([, enabled]) => enabled === true)
+      .map(([commandKind]) => String(commandKind || "").trim())
+      .filter(Boolean));
+  }
+  return new Set();
+}
+
+/**
+ * connection targetに保存された`/info`証跡が現在起動中のre-probe結果か判定する。
+ *
+ * 【詳細説明】
+ * - `printerCoreV3Info` はconnectionTargetsと一緒に永続化されるため、再起動前の値を
+ *   command authorityの現在scopeとして使うと、re-probe前にCFS controlが復活してしまう。
+ * - Gate 20では`dashboard_connection.js`が付与した現在のprobe session IDと一致する場合だけ採用する。
+ *
+ * @private
+ * @function isCurrentPrinterCoreV3Info
+ * @param {object|null|undefined} info - `printerCoreV3Info`候補
+ * @param {object|null|undefined} target - 現在のconnection target
+ * @returns {boolean} 現在起動中の`/info` probe証跡ならtrue
+ */
+function isCurrentPrinterCoreV3Info(info, target = null) {
+  if (!info || typeof info !== "object") {
+    return false;
+  }
+  if (String(info.probeSessionId || "") !== getPrinterCoreV3RuntimeProbeSessionId()) {
+    return false;
+  }
+  const storedGeneration = Number(info.connectionGeneration) || 0;
+  if (!storedGeneration) {
+    return false;
+  }
+  const targetDest = String(target?.dest || "").trim();
+  const infoDest = String(info.connectionDest || "").trim();
+  if (targetDest && infoDest && targetDest !== infoDest) {
+    return false;
+  }
+  const lookupKey = target?.hostname || target?.dest || info.connectionHost || info.connectionDest || "";
+  const currentGeneration = getPrinterCoreV3ConnectionGeneration(lookupKey);
+  return storedGeneration === currentGeneration;
+}
+
+/**
+ * target/runtimeからCFS control certification用のscopeを作る。
+ *
+ * 【詳細説明】
+ * - `/info` 由来のmodel/versionは、現在起動中のre-probeで観測したものだけを採用する。
+ * - 永続identityやlegacy storedDataは古い可能性があるため、production command scopeには使わない。
+ * - model/firmwareが現在観測できない環境では、validator側でproduction有効化を拒否する。
+ *
+ * @private
+ * @param {object|null|undefined} target - 接続target設定
+ * @returns {object} certification scope
+ */
+function createCfsControlCertificationScope(target) {
+  const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
+  const info = isCurrentPrinterCoreV3Info(rawInfo, target) ? rawInfo : {};
+  return {
+    printerType: target?.printerType || null,
+    model: info.model || info.reportedModel || null,
+    firmwareVersion: info.version || info.firmwareVersion || null,
+  };
+}
+
+/**
+ * CFS control production設定を接続targetから読み取る。
+ *
+ * 【詳細説明】
+ * - 既定では必ずnullを返し、既存ユーザーのCFS監視UIをread-onlyのまま保つ。
+ * - `materialSystem.cfsControl.enabled === true`、認証済みcommand kind、certificationEvidenceが
+ *   揃った場合だけ、composition層でbound dispatcherを生成する。
+ *
+ * @private
+ * @param {object|null|undefined} target - 接続target設定
+ * @returns {object|null} production CFS control設定、またはnull
+ */
+function resolveCfsControlProductionSettings(target) {
+  const control = target?.materialSystem?.cfsControl;
+  if (!control || control.enabled !== true) {
+    return null;
+  }
+  if (target?.printerType !== "creality-k2") {
+    return null;
+  }
+  const certifiedCommandKinds = normalizeCertifiedCfsCommandSet(
+    control.certifiedCfsSlotControlCommands
+  );
+  const requestedActions = Array.isArray(control.allowedActions)
+    ? control.allowedActions.map((action) => String(action || "").trim()).filter(Boolean)
+    : CFS_CONTROL_UI_ACTIONS;
+  const allowedActions = requestedActions.filter((action) => {
+    const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
+    return commandKind && certifiedCommandKinds.has(commandKind);
+  });
+  const evidence = control.certificationEvidence;
+  const scope = createCfsControlCertificationScope(target);
+  const certifiedAllowedActions = allowedActions.filter((action) => {
+    const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
+    const validation = validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
+    return validation.ok;
+  });
+  if (certifiedAllowedActions.length === 0) {
+    return null;
+  }
+  return {
+    allowedActions: certifiedAllowedActions,
+    certifiedCommandKinds: certifiedAllowedActions.map((action) => CFS_CONTROL_ACTION_COMMAND_KIND[action]),
+    certificationEvidence: evidence,
+    certificationScope: scope,
+  };
+}
+
+/**
+ * CFS command send-time用のmaterial topology summaryを生成する。
+ *
+ * @private
+ * @param {object|null|undefined} topology - runtime material topology
+ * @returns {object} command dispatcher用topology summary
+ */
+function createCfsControlSendTimeMaterialTopology(topology) {
+  const sources = Array.isArray(topology?.sources) ? topology.sources : [];
+  return {
+    cfsConnected: topology?.cfs?.connected === true,
+    topologyState: String(topology?.cfs?.topologyState || "unobserved"),
+    sourceCount: sources.length,
+    sources: sources.map((source) => ({
+      sourceId: source?.sourceId || null,
+      kind: source?.kind || null,
+      boxId: source?.boxId ?? null,
+      slotId: source?.slotId ?? source?.protocolSlotId ?? null,
+      presence: source?.presence || source?.status?.presence || null,
+      status: {
+        presence: source?.status?.presence || null,
+        stateCode: source?.status?.stateCode ?? source?.stateCode ?? null,
+      },
+      material: source?.material || null,
+    })),
+  };
+}
+
+/**
+ * CFS command送信直前contextを現在runtimeから生成する。
+ *
+ * 【詳細説明】
+ * - 保存済みlast-known fallbackは使わず、現在sessionのruntime topologyだけをauthority入力にする。
+ * - `command.cfs-control` capabilityはproduction設定があるcompositionからのみ付与する。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} request - 送信直前に検証するcommand request
+ * @returns {object} command authority send-time snapshot
+ */
+function createCfsControlSendTimeContext(hostname, request) {
+  const currentTarget = getConnectionTarget(hostname);
+  const machine = monitorData.machines[hostname] || {};
+  const currentProductionSettings = resolveCfsControlProductionSettings(currentTarget);
+  const commandKind = String(request?.commandKind || "").trim();
+  if (!currentProductionSettings || !currentProductionSettings.certifiedCommandKinds.includes(commandKind)) {
+    throw new Error("cfs-control-certification-revoked");
+  }
+  const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
+  const runtimeTopology = shadowRecord?.lastState?.materials || null;
+  const materialTopology = createCfsControlSendTimeMaterialTopology(runtimeTopology);
+  const capabilities = [
+    "material.cfs",
+    "material.cfsTopology",
+    "command.cfs-control",
+  ];
+  return {
+    deviceId: shadowRecord?.deviceId || "",
+    sessionId: shadowRecord?.sessionId || "",
+    transportKind: "ws9999",
+    active: getConnectionState(hostname) === "connected" && shadowRecord?.state !== "closed",
+    capabilities,
+    transportProfiles: [K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE],
+    materialTopology,
+    stateSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
+    observedState: shadowRecord?.lastState || null,
+    createdAt: new Date().toISOString(),
+    certificationEvidence: currentProductionSettings.certificationEvidence,
+    certificationScope: createCfsControlCertificationScope(currentTarget),
+  };
+}
+
+/**
+ * CFS command送信後の観測snapshotを返す。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {object} command result用観測snapshot
+ */
+function observeCfsControlCommandState(hostname) {
+  const shadowRecord = monitorData.machines[hostname]?.runtimeData?.printerCoreV3Shadow || null;
+  return {
+    observedState: shadowRecord?.lastState || null,
+    observedSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
+    observedSessionId: shadowRecord?.sessionId || "",
+  };
+}
+
+/**
+ * production CFS control用のbound dispatcherを生成する。
+ *
+ * @private
+ * @param {string} hostname - 対象ホスト名
+ * @returns {object} bound printer command dispatcher
+ */
+function createCfsControlDispatcher(hostname) {
+  return createBoundPrinterCommandDispatcher({
+    getSendTimeContext: (request) => createCfsControlSendTimeContext(hostname, request),
+    sendTransport: async (request) => {
+      const currentTarget = getConnectionTarget(hostname);
+      const currentSettings = resolveCfsControlProductionSettings(currentTarget);
+      if (!currentSettings || !currentSettings.certifiedCommandKinds.includes(String(request?.commandKind || "").trim())) {
+        throw new Error("cfs-control-certification-revoked");
+      }
+      const plan = createK2CfsCommandTransportPlan(request, {
+        certifiedCfsSlotControlCommands: currentSettings.certifiedCommandKinds,
+        certificationEvidence: currentSettings.certificationEvidence,
+        certificationScope: currentSettings.certificationScope,
+      });
+      if (!plan.ok) {
+        throw new Error(`k2-cfs-control-plan-rejected:${plan.reason}`);
+      }
+      return sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
+        await sendCommand(frame.method, frame.params, hostname);
+        return {
+          status: "submitted",
+          frame,
+          meta,
+        };
+      });
+    },
+    observeState: () => observeCfsControlCommandState(hostname),
+  });
+}
 
 /**
  * CFS/CFS-C操作候補用のrenderer control optionを生成する。
@@ -145,6 +424,53 @@ const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/
  * @returns {object} renderMaterialTopologyPanelへ渡すcontrol option
  */
 function createCfsControlRenderOptions(hostname) {
+  const target = getConnectionTarget(hostname);
+  const machine = monitorData.machines[hostname] || {};
+  const productionSettings = resolveCfsControlProductionSettings(target);
+  if (productionSettings) {
+    const dispatcher = createCfsControlDispatcher(hostname);
+    const integration = createBoundCfsControlIntegration({
+      enabled: true,
+      allowedActions: productionSettings.allowedActions,
+      dispatcher,
+      getCommandContext: () => {
+        const machine = monitorData.machines[hostname] || {};
+        const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
+        if (!shadowRecord?.deviceId || !shadowRecord?.sessionId) {
+          throw new Error("missing-cfs-command-shadow-session");
+        }
+        return {
+          deviceId: shadowRecord.deviceId,
+          sessionId: shadowRecord.sessionId,
+          transportKind: "ws9999",
+          idempotencyKey: `cfs-control:${hostname}:${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        };
+      },
+    });
+    return {
+      showControls: true,
+      canSendCommands: true,
+      allowedActions: productionSettings.allowedActions,
+      disabledReason: null,
+      validateCommandIntent(intent) {
+        return validateCfsControlIntentFreshness(hostname, intent);
+      },
+      /**
+       * production CFS/CFS-C操作intentをbound integrationへ渡す。
+       *
+       * 【詳細説明】
+       * - 送信直前のsession/capability/topology再検証とtransport certification allow-listは
+       *   bound dispatcher内部で再確認される。
+       *
+       * @param {object} intent - material topology panelが生成した操作intent
+       * @returns {Promise<object>} dispatch結果
+       */
+      onCommand(intent) {
+        return integration.onCommand(intent);
+      },
+    };
+  }
   const integration = createBoundCfsControlIntegration({
     enabled: false,
     allowedActions: CFS_CONTROL_UI_ACTIONS,
@@ -191,6 +517,9 @@ function validateCfsControlIntentFreshness(hostname, intent) {
     const latestTopology = resolveDisplayMaterialTopology({
       topology: latestShadowRecord?.lastState?.materials || null,
       shadowRecord: latestShadowRecord,
+      observationStore: monitorData.materialSourceObservations || null,
+      allowPersistentLastKnown: true,
+      host: hostname,
     });
     const latestTarget = getConnectionTarget(hostname);
     const latestPrinterType = getPrinterType(hostname);
@@ -454,16 +783,22 @@ function initFilamentPanel(body, hostname) {
   const topology = resolveDisplayMaterialTopology({
     topology: shadowRecord?.lastState?.materials || null,
     shadowRecord,
+    observationStore: monitorData.materialSourceObservations || null,
+    allowPersistentLastKnown: true,
+    host: hostname,
   });
   const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
   if (materialDisplayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
     body.classList.add("filament-panel-cfs-mode");
-    const createViewModel = () => {
+    const createRenderablePanelState = () => {
       const latestMachine = monitorData.machines[hostname] || {};
       const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
       const latestTopology = resolveDisplayMaterialTopology({
         topology: latestShadowRecord?.lastState?.materials || null,
         shadowRecord: latestShadowRecord,
+        observationStore: monitorData.materialSourceObservations || null,
+        allowPersistentLastKnown: true,
+        host: hostname,
       });
       const latestTarget = getConnectionTarget(hostname);
       const viewOptions = resolveMaterialTopologyViewOptions({
@@ -471,7 +806,24 @@ function initFilamentPanel(body, hostname) {
         printerType,
         topology: latestTopology,
       });
-      return createMaterialTopologyViewModel(latestTopology, viewOptions);
+      const cfsControlOptions = createCfsControlRenderOptions(hostname);
+      const viewModel = createMaterialTopologyViewModel(latestTopology, {
+        ...viewOptions,
+        observation: {
+          lastObservedAt: latestShadowRecord?.materialProviderLastObservedAt || latestTopology?.provider?.lastObservedAt || null,
+          request: latestShadowRecord?.materialProviderRequest || null,
+          nowMs: Date.now(),
+        },
+        commandAuthority: {
+          canSendCommands: cfsControlOptions.canSendCommands === true,
+          allowedActions: cfsControlOptions.allowedActions,
+          reason: cfsControlOptions.disabledReason,
+          sourceAuthority: cfsControlOptions.canSendCommands === true
+            ? "printer-core-cfs-control-production-settings"
+            : "printer-core-cfs-control-disabled",
+        },
+      });
+      return { viewModel, controlOptions: cfsControlOptions };
     };
     const createSignature = (viewModel) => JSON.stringify({
       limits: viewModel.limits,
@@ -479,22 +831,25 @@ function initFilamentPanel(body, hostname) {
       external: viewModel.external,
       units: viewModel.units,
       summary: viewModel.summary,
+      authority: viewModel.authority,
+      observation: viewModel.observation,
       diagnostics: viewModel.diagnostics,
     });
-    const initialViewModel = createViewModel();
-    const cfsControlOptions = createCfsControlRenderOptions(hostname);
-    let materialPanelSignature = createSignature(initialViewModel);
-    const materialPanel = renderMaterialTopologyPanel(container, initialViewModel, {
+    const initialPanelState = createRenderablePanelState();
+    let materialPanelSignature = createSignature(initialPanelState.viewModel);
+    const materialPanel = renderMaterialTopologyPanel(container, initialPanelState.viewModel, {
       hostname,
-      control: cfsControlOptions,
+      control: initialPanelState.controlOptions,
     });
     body._materialTopologyPanel = materialPanel;
     body._materialTopologyRefreshTimer = setInterval(() => {
       try {
-        const nextViewModel = createViewModel();
-        const nextSignature = createSignature(nextViewModel);
+        const nextPanelState = createRenderablePanelState();
+        const nextSignature = createSignature(nextPanelState.viewModel);
         if (nextSignature !== materialPanelSignature) {
-          materialPanel.update(nextViewModel);
+          materialPanel.update(nextPanelState.viewModel, {
+            control: nextPanelState.controlOptions,
+          });
           materialPanelSignature = nextSignature;
         }
       } catch (e) {
@@ -535,6 +890,9 @@ function initFilamentPanel(body, hostname) {
     const latestTopology = resolveDisplayMaterialTopology({
       topology: latestShadowRecord?.lastState?.materials || null,
       shadowRecord: latestShadowRecord,
+      observationStore: monitorData.materialSourceObservations || null,
+      allowPersistentLastKnown: true,
+      host: hostname,
     });
     const latestTarget = getConnectionTarget(hostname);
     const nextMode = resolveMaterialDisplayMode({

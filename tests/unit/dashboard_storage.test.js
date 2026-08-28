@@ -66,14 +66,14 @@ describe("LS_GLOBAL_FIELDS 完全性", () => {
   const LS_GLOBAL_FIELDS = [
     "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
     "userPresets", "hiddenPresets", "filamentInventory", "currentSpoolId",
-    "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
+    "materialSourceObservations", "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
   ];
 
   it("IndexedDB の queueSharedWrite 対象を全て含む", () => {
     // _flushStorage で queueSharedWrite される全キー
     const idbWriteKeys = [
       "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
-      "filamentInventory", "currentSpoolId", "hostSpoolMap",
+      "filamentInventory", "currentSpoolId", "materialSourceObservations", "hostSpoolMap",
       "hostCameraToggle", "spoolSerialCounter"
     ];
     idbWriteKeys.forEach(key => {
@@ -85,6 +85,7 @@ describe("LS_GLOBAL_FIELDS 完全性", () => {
     expect(LS_GLOBAL_FIELDS).toContain("userPresets");
     expect(LS_GLOBAL_FIELDS).toContain("hiddenPresets");
     expect(LS_GLOBAL_FIELDS).toContain("hostSpoolMap");
+    expect(LS_GLOBAL_FIELDS).toContain("materialSourceObservations");
     expect(LS_GLOBAL_FIELDS).toContain("hostCameraToggle");
   });
 });

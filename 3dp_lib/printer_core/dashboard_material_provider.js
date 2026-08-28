@@ -18,9 +18,9 @@
  * - {@link createCfsBoxsInfoMaterialProvider}：K2 `boxsInfo` 用 read-only material provider を生成
  * - {@link createCfsMoonrakerBoxMaterialProvider}：K1C/CFS-C `boxsInfo` 用 read-only material provider を生成
  *
- * @version 1.390.1340 (PR #432)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1312 (PR #432)
- * @lastModified 2026-08-09 01:26:08
+ * @lastModified 2026-08-28 17:30:03
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の MaterialSource store と接続する際に provider event 化する
@@ -196,6 +196,132 @@ export function extractMoonrakerBoxsInfoPayload(payload) {
 }
 
 /**
+ * objectが指定propertyを自身で持つか判定する。
+ *
+ * 【詳細説明】
+ * - payload由来objectはprototypeを信用せず、Object.prototype経由で安全に確認する。
+ *
+ * @private
+ * @function hasOwn
+ * @param {object|null|undefined} object - 確認対象object
+ * @param {string} propertyName - property名
+ * @returns {boolean} 自身のpropertyとして存在する場合true
+ */
+function hasOwn(object, propertyName) {
+  return Object.prototype.hasOwnProperty.call(object || {}, propertyName);
+}
+
+/**
+ * Moonraker/CFS-C source entryがloaded注釈に足る観測値を持つか判定する。
+ *
+ * 【詳細説明】
+ * - `materials[]` の空placeholder `{id}` だけをloaded扱いしないため、location以外の材料・残量・選択観測を見る。
+ * - `selected:false` は空slotにも現れ得るため、presence evidenceとしては扱わない。
+ *
+ * @private
+ * @function hasMoonrakerMaterialEntryPresenceEvidence
+ * @param {object|null|undefined} source - 正規化済み material source
+ * @returns {boolean} loaded注釈に足る観測値がある場合true
+ */
+function hasMoonrakerMaterialEntryPresenceEvidence(source) {
+  const material = source?.material && typeof source.material === "object" ? source.material : {};
+  const color = material.color && typeof material.color === "object" ? material.color : {};
+  const remaining = source?.status?.remaining && typeof source.status.remaining === "object"
+    ? source.status.remaining
+    : {};
+  return Boolean(
+    String(material.vendor || "").trim() ||
+    String(material.type || "").trim() ||
+    String(material.name || "").trim() ||
+    String(color.normalized || color.raw || "").trim() ||
+    hasOwn(material, "rfid") && material.rfid !== null && material.rfid !== undefined && String(material.rfid).trim() !== "" ||
+    hasOwn(remaining, "rawPercent") &&
+      remaining.rawPercent !== null &&
+      remaining.rawPercent !== undefined &&
+      remaining.rawPercent !== "" &&
+      Number.isFinite(Number(remaining.rawPercent)) ||
+    source?.status?.selected === true
+  );
+}
+
+/**
+ * provider由来のpresence明示観測maskを付与する。
+ *
+ * 【詳細説明】
+ * - CFS-C providerは`materials[]` entryの存在をprovider境界でpresenceへ解釈するため、
+ *   下流のObservation Storeにも「presenceを明示観測した」ことを伝える必要がある。
+ * - 既存のobservedFieldsを壊さず、status.presenceだけを追加する。
+ *
+ * @private
+ * @function markPresenceObserved
+ * @param {object} source - 正規化済みmaterial source
+ * @returns {object} presence observed maskを付与したmaterial source
+ */
+function markPresenceObserved(source) {
+  const observedFields = source.observedFields && typeof source.observedFields === "object"
+    ? source.observedFields
+    : {};
+  const status = observedFields.status && typeof observedFields.status === "object"
+    ? observedFields.status
+    : {};
+  return {
+    ...source,
+    observedFields: {
+      ...observedFields,
+      status: {
+        ...status,
+        presence: true,
+      },
+    },
+  };
+}
+
+/**
+ * Moonraker/CFS-C material entry由来のpresenceを明示する。
+ *
+ * 【詳細説明】
+ * - K2 `boxsInfo` はslot `state` を持つため、material名・色・RFIDだけで装填を推測しない。
+ * - K1C/CFS-C Moonraker providerでは、`materials[]` に現れたentry自体を観測済みsourceとして扱う既存契約がある。
+ * - 下流の観測ストアやViewModelがmetadataから装填を推測しないよう、provider境界で `presence:"loaded"` を明示する。
+ * - explicitな `state` がある場合はnormalizer側の物理stateを優先し、providerで上書きしない。
+ *
+ * @private
+ * @function annotateMoonrakerMaterialEntryPresence
+ * @param {object} topology - 正規化済み material topology
+ * @returns {object} Moonraker material entry presence を明示した topology
+ */
+function annotateMoonrakerMaterialEntryPresence(topology) {
+  const sourceTopology = topology && typeof topology === "object" ? topology : normalizeK2BoxsInfo(null);
+  const sources = Array.isArray(sourceTopology.sources) ? sourceTopology.sources : [];
+  return {
+    ...sourceTopology,
+    sources: sources.map((source) => {
+      if (!source || typeof source !== "object" || source.sourceIdentity?.valid === false) {
+        return source;
+      }
+      const explicitPresence = String(source.presence || "").trim();
+      if (explicitPresence) {
+        return source;
+      }
+      if (source.observedFields?.status?.stateCode === true) {
+        return source;
+      }
+      if (!hasMoonrakerMaterialEntryPresenceEvidence(source)) {
+        return source;
+      }
+      return markPresenceObserved({
+        ...source,
+        presence: "loaded",
+        presenceEvidence: {
+          sourceProtocol: "creality-moonraker-boxsInfo",
+          reason: "observed-material-entry-without-state-code",
+        },
+      });
+    }),
+  };
+}
+
+/**
  * K1C/CFS-C Moonraker 用 read-only material provider を生成する。
  *
  * 【詳細説明】
@@ -240,7 +366,10 @@ export function createCfsMoonrakerBoxMaterialProvider(options = {}) {
      * @returns {object} provider metadata 付き material topology
      */
     createTopology(payload, topologyOptions = {}) {
-      return attachMaterialProviderMetadata(normalizeBoxsInfo(extractBoxsInfo(payload), topologyOptions), provider);
+      return attachMaterialProviderMetadata(
+        annotateMoonrakerMaterialEntryPresence(normalizeBoxsInfo(extractBoxsInfo(payload), topologyOptions)),
+        provider
+      );
     },
   };
   return provider;

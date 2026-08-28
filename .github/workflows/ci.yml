@@ -13,6 +13,30 @@ jobs:
       - name: unit tests
         run: npm test
 
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: electron boot e2e
+        run: xvfb-run -a npm run test:e2e
+
+  version-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: version sync is committed
+        run: npm run check:version-sync
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -1,10 +1,29 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-08-26
+Last updated: 2026-08-28
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
 実機certificationの手順は `docs/develop/printer-core-v3-live-certification-runbook.md` を参照する。
+
+K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界は
+`docs/develop/printer-core-v3-gate19-cfs-control-spec-investigation.md` を参照する。
+
+## Gate status matrix
+
+| Gate / Area | Code | Tests | Live | Production |
+| --- | --- | --- | --- | --- |
+| Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
+| Gate 18.8 Material Observation UX / Evidence | CLOSED | CLOSED | partial | read-only |
+| Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
+| Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
+| Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
+| K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
+| K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
+
+現時点のv2.2.1043では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
+のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
+UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
 
 ## 未実装と分かっているもの
 
@@ -22,7 +41,7 @@ Last updated: 2026-08-26
 
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
-- CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。scaffoldは`createBoundCfsControlIntegration()`生成時の設定だけを使い、UI clickごとのdispatcher/context/enabled注入を受け付けない。
+- CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。production有効化には、現在接続世代へbindされた`/info`、fresh topology、module-owned immutable certification registry登録済み証跡が必要で、保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけでは有効化しない。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
 - CFS/CFS-C の残量値は表示するが、手動スプール台帳の残量へ自動反映しない。
 - stale / reconnect / runout / attach / detach のプロトコルイベントは表示できる形へ寄せたが、実機Gateで物理操作と最終対応付けする必要がある。
@@ -46,6 +65,9 @@ Last updated: 2026-08-26
 - CFS/CFS-C read-onlyであることを常時footerに表示する。
 - 接続設定は `フィラメント供給` の単一selectへ集約し、mode / displayMode / unitLimit の矛盾設定を作りにくくした。
 - 外部スプール枠の表示ON/OFFを設定できるようにした。
+- 物理slot、装填状態、機器選択状態、印刷割当を別表示に分離し、`T1A`などの割当識別子を物理CFS slot名として見せない。
+- stale中のslot presenceも `最終観測: 装填中` のように表示し、slot単体で現在値と誤認しない。
+- CFS-C provider由来の `presence` / `presenceEvidence` はObservation Storeへ保存し、providerが明示presenceを注釈した場合は `observedFields.status.presence` も同時に伝える。
 
 ## Gate 18.5 追加で閉じた read-only operational readiness 項目
 
@@ -97,3 +119,15 @@ Last updated: 2026-08-26
 - 実機certificationが終わるまで、通常フィラメントパネルのCFS操作ボタンは送信可能にしない。
 - slot select / load / unload / feed / retract は、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyを確定してからadapterへ追加する。
 - K1C+CFS-Cについては、Moonraker object経由のmaterial providerとは別に、操作commandのprovider/transport境界を実機で確認する。
+
+## Registry追加前に必ず閉じる項目
+
+- standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
+- `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
+- side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
+- Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
+
+## Release certification helper
+
+- PR CIではunit test、E2E boot、version sync、smokeをgatingにする。既存ESLint/Stylelint/Prettier debtが残るため、lint jobは当面advisoryとして維持し、完全gating化はlint debt整理PRで行う。
+- release artifact作成前に `npm run verify:release` を実行し、`dist/release-manifest-<version>.json` のSHA256とreview済みcommitをrelease noteへ転記する。

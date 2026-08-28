@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -109,10 +109,42 @@ function getSlotActionButton(root, slot, action) {
   return root.querySelector(`.mtv-slot[data-slot="${slot}"] .mtv-control-btn[data-action="${action}"]`);
 }
 
+/**
+ * Promise queueを数回進める。
+ *
+ * 【詳細説明】
+ * - click handler内のasync処理をDOM assertion前に反映させるため、テスト専用にmicrotaskを進める。
+ *
+ * @function flushAsyncUi
+ * @returns {Promise<void>} microtask処理完了
+ */
+async function flushAsyncUi() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+/**
+ * 実timerのevent loopを1回進める。
+ *
+ * 【詳細説明】
+ * - DOM click listener内のPromise.race/finallyまで完了させるため、fake timerを使わないテストでだけ使う。
+ *
+ * @function flushRealUiTick
+ * @returns {Promise<void>} event loop処理完了
+ */
+async function flushRealUiTick() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await flushAsyncUi();
+}
+
 describe("Printer Core v3 material topology panel", () => {
   it("1台CFS設定では外部1本と1A-1Dだけを描画する", () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
-    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: { lastObservedAt: "2026-08-27T03:34:56.000Z" },
+    });
     const container = document.createElement("div");
 
     renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
@@ -122,7 +154,9 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
     expect(container.textContent).toContain("Silver PLA");
     expect(container.textContent).toContain("残量 54%");
-    expect(container.textContent).toContain("現在選択中");
+    expect(container.textContent).toContain("機器選択中");
+    expect(container.textContent).toContain("状態: 2026-08-27");
+    expect(container.textContent).not.toContain("状態: 最新");
     expect(container.textContent).toContain("外部スプール（CFSとは別管理）");
     expect(container.textContent).toContain("監視のみ");
     expect(container.querySelectorAll(".mtv-control-btn")).toHaveLength(0);
@@ -159,6 +193,49 @@ describe("Printer Core v3 material topology panel", () => {
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
   });
 
+  it("updateへ渡したcontrol optionで既存panelの操作可否を再描画する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: false,
+        allowedActions: [],
+        sourceAuthority: "printer-core-cfs-control-disabled",
+      },
+    });
+    const enabledViewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["load"],
+        sourceAuthority: "printer-core-cfs-control-production-settings",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        showControls: true,
+        canSendCommands: false,
+        allowedActions: ["load"],
+      },
+    });
+
+    expect(getSlotActionButton(container, "1C", "load")?.disabled).toBe(true);
+
+    handle.update(enabledViewModel, {
+      control: {
+        showControls: true,
+        canSendCommands: true,
+        allowedActions: ["load"],
+        onCommand: vi.fn(),
+      },
+    });
+
+    expect(getSlotActionButton(container, "1C", "load")?.disabled).toBe(false);
+    expect(container.textContent).toContain("送信直前に再検証");
+  });
+
   it("invalid remainingを0%として見せず報告値異常の不明表示にする", () => {
     const payload = createOneUnitBoxsInfo();
     payload.materialBoxs[1].materials[2].percent = -5;
@@ -177,15 +254,73 @@ describe("Printer Core v3 material topology panel", () => {
 
   it("stale topologyではbannerと最終観測表示で現在値との誤認を防ぐ", () => {
     const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: false });
-    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: { lastObservedAt: "2026-08-27T03:34:56.000Z" },
+    });
     const container = document.createElement("div");
 
     renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
 
     expect(container.querySelector(".mtv-root")?.classList.contains("mtv-root-stale")).toBe(true);
     expect(container.textContent).toContain("CFS情報を現在取得できません");
-    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-slot-state')?.textContent).toBe("最終観測:選択中");
+    expect(container.textContent).toContain("最終観測: 2026-08-27");
+    const staleSlot = container.querySelector('.mtv-slot[data-slot="1C"]');
+    expect(staleSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("最終観測: 装填中");
+    expect(staleSlot?.querySelector(".mtv-selected-badge")?.textContent).toBe("最終観測: 機器選択");
+    expect(staleSlot?.querySelector(".mtv-assignment")?.textContent).toBe("最終観測: 印刷割当 T1C");
     expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-remaining')?.textContent).toBe("最終観測 54%");
+  });
+
+  it("通信中は状態表示の前に通信開始からの秒数を表示する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-27T03:34:56.000Z",
+        request: {
+          state: "in-flight",
+          startedAt: "2026-08-27T03:35:01.000Z",
+          startedAtMs: Date.parse("2026-08-27T03:35:01.000Z"),
+        },
+        nowMs: Date.parse("2026-08-27T03:35:14.000Z"),
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    expect(container.querySelector(".mtv-topology-state")?.textContent).toContain("(📡: 13秒) 状態:");
+  });
+
+  it("assignmentは裸のT1Aではなく印刷割当バッジとして表示し、選択中slotを強調する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    const selectedSlot = container.querySelector('.mtv-slot[data-slot="1C"]');
+    const assignment = selectedSlot?.querySelector(".mtv-assignment");
+    expect(selectedSlot?.classList.contains("mtv-selected")).toBe(true);
+    expect(selectedSlot?.classList.contains("mtv-assigned")).toBe(true);
+    expect(selectedSlot?.querySelector(".mtv-slot-state")?.textContent).toBe("装填中");
+    expect(selectedSlot?.querySelector(".mtv-selected-badge")?.textContent).toBe("機器選択中");
+    expect(assignment?.textContent).toBe("印刷割当 T1C");
+    expect(assignment?.getAttribute("title")).toBe("T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。");
+  });
+
+  it("unknownとunobservedを別のpresence文言として表示する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    topology.sources.find((source) => source.sourceId === "cfs:1:slot:1").presence = "unknown";
+    topology.sources.find((source) => source.sourceId === "cfs:1:slot:3").presence = "unobserved";
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    expect(container.querySelector('.mtv-slot[data-slot="1B"] .mtv-slot-state')?.textContent).toBe("装填状態 不明");
+    expect(container.querySelector('.mtv-slot[data-slot="1D"] .mtv-slot-state')?.textContent).toBe("未観測");
   });
 
   it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {
@@ -283,7 +418,7 @@ describe("Printer Core v3 material topology panel", () => {
       unitLimit: 1,
       commandAuthority: {
         canSendCommands: true,
-        allowedActions: ["select"],
+        allowedActions: ["select", "load"],
         sourceAuthority: "printer-core-command-dispatcher",
       },
     });
@@ -381,5 +516,450 @@ describe("Printer Core v3 material topology panel", () => {
     expect(selectButton?.title).toContain("最終観測状態");
     selectButton?.click();
     expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("CFS操作中は対象slotに送信中ステータスを表示し二重押下を抑止する", async () => {
+    let resolveCommand;
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const onCommand = vi.fn(() => new Promise((resolve) => {
+      resolveCommand = resolve;
+    }));
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand,
+      },
+    });
+
+    const selectButton = getSlotActionButton(container, "1C", "select");
+    const loadButton = getSlotActionButton(container, "1C", "load");
+    selectButton?.click();
+    await flushAsyncUi();
+
+    expect(selectButton?.disabled).toBe(true);
+    expect(loadButton?.disabled).toBe(true);
+    expect(selectButton?.dataset.running).toBe("true");
+    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status')?.textContent)
+      .toContain("選択を送信中");
+
+    resolveCommand({ status: "acknowledged" });
+    await flushRealUiTick();
+    await flushRealUiTick();
+
+    expect(selectButton?.disabled).toBe(false);
+    expect(selectButton?.dataset.running).toBe("false");
+  });
+
+  it("未完了CFS操作中は再描画後も同一printerの全CFS操作をbusyとして保持する", async () => {
+    let resolveCommand;
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const onCommand = vi.fn(() => new Promise((resolve) => {
+      resolveCommand = resolve;
+    }));
+
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand,
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushAsyncUi();
+    handle.update(viewModel);
+
+    const redrawnSelectButton = getSlotActionButton(container, "1C", "select");
+    const otherSlotLoadButton = getSlotActionButton(container, "1A", "load");
+    expect(redrawnSelectButton?.disabled).toBe(true);
+    expect(redrawnSelectButton?.dataset.busy).toBe("true");
+    expect(otherSlotLoadButton?.disabled).toBe(true);
+    expect(otherSlotLoadButton?.dataset.busy).toBe("true");
+    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status')?.textContent)
+      .toContain("選択を送信中");
+
+    resolveCommand({ status: "acknowledged", completed: true });
+    await flushRealUiTick();
+    await flushRealUiTick();
+  });
+
+  it("CFS操作成功後は送信済みステータスを利用者向けに表示する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommand: vi.fn().mockResolvedValue({ status: "acknowledged", completed: true }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(status?.textContent).toContain("選択を送信しました");
+    expect(status?.classList.contains("mtv-command-status-success")).toBe(true);
+  });
+
+  it("CFS操作がtransport受理のみで観測未確認なら成功ではなく観測待ちとして表示する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommand: vi.fn().mockResolvedValue({
+          status: "acknowledged",
+          completed: false,
+          postCommandObservation: {
+            confirmed: false,
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(status?.textContent).toContain("選択を送信しました");
+    expect(status?.textContent).toContain("観測確認は未完了");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+    expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
+  });
+
+  it("CFS操作hookがintegration envelopeを返した場合も内側CommandResultで表示状態を判定する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(status?.textContent).toContain("観測確認は未完了");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+    expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
+  });
+
+  it("観測未確認のselect CFS操作は対象slotへの選択遷移を次のmaterial観測で確認できた場合だけmutexを解除する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const selected1BPayload = createOneUnitBoxsInfo();
+    selected1BPayload.materialBoxs[1].materials.forEach((material, index) => {
+      material.selected = index === 1 ? 1 : 0;
+    });
+    const selected1BTopology = normalizeK2BoxsInfo(selected1BPayload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const updatedViewModel = createMaterialTopologyViewModel(selected1BTopology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1B", "select")?.click();
+    await flushRealUiTick();
+    expect(getSlotActionButton(container, "1A", "load")?.disabled).toBe(true);
+
+    handle.update(updatedViewModel);
+
+    const selectButton = getSlotActionButton(container, "1B", "select");
+    const loadButton = getSlotActionButton(container, "1A", "load");
+    const status = container.querySelector('.mtv-slot[data-slot="1B"] .mtv-command-status');
+    expect(selectButton?.disabled).toBe(false);
+    expect(loadButton?.disabled).toBe(false);
+    expect(status?.textContent).toContain("最新観測で対象スロットの選択を確認したため再操作できます");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+  });
+
+  it("開始時点ですでにselectedだったselect CFS操作は観測時刻だけではmutexを解除しない", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const updatedViewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+
+    handle.update(updatedViewModel);
+
+    const selectButton = getSlotActionButton(container, "1C", "select");
+    const loadButton = getSlotActionButton(container, "1A", "load");
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(selectButton?.disabled).toBe(true);
+    expect(selectButton?.dataset.busy).toBe("true");
+    expect(loadButton?.disabled).toBe(true);
+    expect(status?.textContent).toContain("送信前から選択済みだったため再操作を保留しています");
+  });
+
+  it("期待状態が未定義のload CFS操作は次のmaterial観測だけではmutexを解除しない", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const updatedViewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "load")?.click();
+    await flushRealUiTick();
+    expect(getSlotActionButton(container, "1A", "select")?.disabled).toBe(true);
+
+    handle.update(updatedViewModel);
+
+    const loadButton = getSlotActionButton(container, "1C", "load");
+    const selectButton = getSlotActionButton(container, "1A", "select");
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(loadButton?.disabled).toBe(true);
+    expect(loadButton?.dataset.busy).toBe("true");
+    expect(selectButton?.disabled).toBe(true);
+    expect(selectButton?.dataset.busy).toBe("true");
+    expect(status?.textContent).toContain("物理状態の確認方法が未確定のため再操作を保留しています");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+  });
+
+  it("CFS操作失敗後は失敗理由を対象slotへ表示する", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommand: vi.fn().mockResolvedValue({
+          status: "rejected",
+          error: { code: "send-time-validation-failed" },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "select")?.click();
+    await flushRealUiTick();
+
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    expect(status?.textContent).toContain("選択に失敗しました");
+    expect(status?.textContent).toContain("send-time-validation-failed");
+    expect(status?.classList.contains("mtv-command-status-error")).toBe(true);
+  });
+
+  it("CFS操作がtimeoutした場合は結果不明として再操作を抑止する", async () => {
+    vi.useFakeTimers();
+    try {
+      const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+      const viewModel = createMaterialTopologyViewModel(topology, {
+        unitLimit: 1,
+        commandAuthority: {
+          canSendCommands: true,
+          allowedActions: ["select"],
+          sourceAuthority: "printer-core-command-dispatcher",
+        },
+      });
+      const container = document.createElement("div");
+
+      renderMaterialTopologyPanel(container, viewModel, {
+        hostname: "K2Pro",
+        control: {
+          canSendCommands: true,
+          allowedActions: ["select"],
+          commandTimeoutMs: 100,
+          onCommand: vi.fn(() => new Promise(() => {})),
+        },
+      });
+
+      const selectButton = getSlotActionButton(container, "1C", "select");
+      selectButton?.click();
+      await flushAsyncUi();
+      await vi.advanceTimersByTimeAsync(101);
+      await flushAsyncUi();
+
+      const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+      expect(selectButton?.disabled).toBe(true);
+      expect(selectButton?.dataset.busy).toBe("true");
+      expect(status?.textContent).toContain("選択がタイムアウトしました");
+      expect(status?.classList.contains("mtv-command-status-timeout")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

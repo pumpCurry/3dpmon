@@ -46,11 +46,16 @@ The mapper is deliberately narrow:
 - It strips a leading `printprt:` prefix before writing `colorMatch.path` and
   `multiColorPrint.gcode`.
 - It rejects standalone `cfs-slot-select`, `cfs-load`, `cfs-unload`,
-  `cfs-feed`, and `cfs-retract` with `uncertified-cfs-slot-command`.
+  `cfs-feed`, and `cfs-retract` with `uncertified-cfs-slot-command` unless a
+  later production-certified slot-control profile is explicitly enabled for the
+  current printer model and firmware.
 
 `sendK2CfsCommandTransportPlan()` sends the frame list sequentially through an
 injected send hook. It does not own the WebSocket and does not open new
-connections. This keeps the existing dispatcher/session ownership boundary.
+connections. This keeps the existing dispatcher/session ownership boundary. The
+sender accepts only plans produced by `createK2CfsCommandTransportPlan()`; a
+caller-forged plain object cannot mark itself as production-certified and reach
+the send hook.
 
 The transport summary distinguishes local submission from protocol
 acknowledgement:
@@ -72,8 +77,21 @@ acknowledgement:
 ## Consequences
 
 Gate 20 establishes the K2/CFS print-start transport mapping that is safe enough
-to bring into live certification. It does not yet enable UI command buttons or
-certify physical extrusion.
+to bring into live certification. Gate 19/19.5 later added a separate
+production-certified path for standalone CFS slot operations. That path remains
+closed by default and opens only when all of the following are true:
+
+- `materialSystem.cfsControl.enabled === true` on the current connection target.
+- `certifiedCfsSlotControlCommands[]` explicitly allows the command kind.
+- `certificationEvidence` uses schema version 1, certified status, the
+  production feed-in-or-out profile, and capture/fixture metadata.
+- The same certification evidence is present in the module-owned immutable
+  slot-control certification registry. Caller supplied target settings alone
+  cannot make a standalone CFS slot action production-certified.
+- The current target/runtime reports `printerType:"creality-k2"` and the same
+  model/firmware scope as the certification evidence.
+- Send-time validation still sees an active session, fresh connected topology,
+  a loaded CFS slot target, and a non-busy printer state.
 
 The next live gates must verify:
 
@@ -82,7 +100,17 @@ The next live gates must verify:
 - command result and expected-state confirmation bind to the same active
   session.
 - standalone select/load/unload/feed/retract LAN keys are captured before those
-  UI actions are enabled.
+  UI actions are enabled for any additional model, firmware, or transport
+  profile.
 
 The existing CFS control panel remains disabled for standalone slot actions
-until a later certification gate supplies the missing transport evidence.
+without matching production certification and current send-time revalidation.
+Generated transport plans are deep-frozen before they are trusted by the sender,
+so a caller cannot mutate frames, certification details, or safety flags after
+the factory validation step.
+When a standalone slot action returns only `submitted` / `completed:false`, the
+UI must not unlock every physical CFS action just because the material provider
+timestamp advanced. `cfs-slot-select` may unlock after a later observation shows
+the requested source changed from unselected to selected, but load, unload,
+feed, and retract remain locked until their physical expected-state contract is
+certified.

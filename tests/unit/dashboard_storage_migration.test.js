@@ -47,6 +47,7 @@ const monitorData = {
   inferredRecoveryEvents: [],
   ledgerRepairRequired: {},
   filamentEventContext: {},
+  materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
   hostSpoolMap: {},
   hostCameraToggle: {},
   spoolSerialCounter: 0,
@@ -74,6 +75,7 @@ function resetMonitorData() {
   monitorData.inferredRecoveryEvents = [];
   monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
+  monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
   monitorData.hostCameraToggle = {};
   monitorData.spoolSerialCounter = 0;
 }
@@ -103,6 +105,9 @@ vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
 }));
 
 const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await import('../../3dp_lib/dashboard_storage.js');
+const {
+  deriveMaterialSourceObservationFreshness,
+} = await import('../../3dp_lib/printer_core/dashboard_material_source_observation.js');
 
 beforeEach(() => {
   globalThis.localStorage.clear();
@@ -211,6 +216,147 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.inferredRecoveryEvents).toEqual([
       { eventId: "ir-a", type: "decision-recovery-cleared", createdAt: 130, actor: "operator" },
     ]);
+  });
+
+  it('Gate18.7: materialSourceObservations はread-only最終観測として往復しhostSpoolMapへ混ざらない', () => {
+    monitorData.filamentSpools = [{ id: "managed-spool-031", remainingLengthMm: 336000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K2Pro-69E7": "managed-spool-031" };
+    monitorData.materialSourceObservations = {
+      schemaVersion: 1,
+      byDeviceId: {
+        "serial:905251280E69E7": {
+          schemaVersion: 1,
+          deviceId: "serial:905251280E69E7",
+          identityStrength: "stable",
+          host: "K2Pro-69E7",
+          authority: "observation-only",
+          lastObservedAt: "2026-08-27T12:00:00.000Z",
+          providerDisconnectedAt: "2026-08-27T12:05:00.000Z",
+          latestBySourceId: {
+            "external:0:slot:0": {
+              sourceId: "external:0:slot:0",
+              kind: "external-spool",
+              presence: "empty",
+              selected: false,
+              authority: "observation-only",
+              remaining: { rawPercent: null, normalizedPercent: null, valid: null, authority: "observation-only" },
+            },
+            "cfs:1:slot:2": {
+              sourceId: "cfs:1:slot:2",
+              kind: "cfs-slot",
+              presence: "loaded",
+              selected: true,
+              authority: "observation-only",
+              material: {
+                rfid: "",
+                color: { raw: "#09ea7ae", normalized: "09ea7ae", displayHex: "9ea7ae", cssColor: "#9ea7ae" },
+              },
+              remaining: { rawPercent: -5, normalizedPercent: 0, valid: false, authority: "observation-only" },
+              assignments: [{ assignmentId: "T1A", namespace: "creality-tool", resolution: "observed" }],
+            },
+          },
+          events: [
+            { observationId: "mso:1", changeKind: "source-observed", sourceId: "cfs:1:slot:2", authority: "observation-only" },
+          ],
+        },
+        "serial:fresh-before-restore": {
+          schemaVersion: 1,
+          deviceId: "serial:fresh-before-restore",
+          identityStrength: "stable",
+          host: "K2Pro-FreshBeforeRestore",
+          authority: "observation-only",
+          lastObservedAt: "2026-08-27T12:00:00.000Z",
+          providerDisconnectedAt: null,
+          latestBySourceId: {
+            "cfs:1:slot:0": {
+              sourceId: "cfs:1:slot:0",
+              kind: "cfs-slot",
+              presence: "loaded",
+              selected: true,
+              authority: "observation-only",
+              remaining: { rawPercent: 100, normalizedPercent: 100, valid: true, authority: "observation-only" },
+            },
+          },
+          events: [],
+        },
+      },
+    };
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "managed-spool-031" });
+    expect(monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"]).toMatchObject({
+      authority: "observation-only",
+      restoredFromStorage: true,
+      restoredAt: expect.any(String),
+      providerDisconnectedAt: "2026-08-27T12:05:00.000Z",
+      latestBySourceId: {
+        "cfs:1:slot:2": {
+          selected: true,
+          authority: "observation-only",
+          restoredFromStorage: true,
+          material: {
+            rfid: "",
+            color: { raw: "#09ea7ae", displayHex: "9ea7ae", cssColor: "#9ea7ae" },
+          },
+          remaining: { rawPercent: -5, normalizedPercent: 0, valid: false },
+        },
+      },
+    });
+    expect(deriveMaterialSourceObservationFreshness(
+      monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"],
+      { now: "2026-08-27T12:00:10.000Z", freshTtlMs: 60_000 }
+    )).toMatchObject({ state: "stale", reason: "provider-disconnected" });
+    expect(deriveMaterialSourceObservationFreshness(
+      monitorData.materialSourceObservations.byDeviceId["serial:fresh-before-restore"],
+      { now: "2026-08-27T12:00:10.000Z", freshTtlMs: 60_000 }
+    )).toMatchObject({ state: "stale", reason: "restored-last-known" });
+  });
+
+  it('Gate18.7: importAllData はmaterialSourceObservationsをread-only evidenceとしてマージする', async () => {
+    monitorData.hostSpoolMap = { "K2Pro-69E7": "managed-spool-031" };
+    await importAllData({
+      materialSourceObservations: {
+        schemaVersion: 1,
+        byDeviceId: {
+          "serial:905251280E69E7": {
+            schemaVersion: 1,
+            deviceId: "serial:905251280E69E7",
+            identityStrength: "stable",
+            host: "K2Pro-69E7",
+            authority: "observation-only",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:2": {
+                sourceId: "cfs:1:slot:2",
+                kind: "cfs-slot",
+                presence: "loaded",
+                selected: true,
+                authority: "observation-only",
+                remaining: { rawPercent: 54, normalizedPercent: 54, valid: true, authority: "observation-only" },
+              },
+            },
+            events: [
+              { observationId: "mso:slot2", changeKind: "source-observed", sourceId: "cfs:1:slot:2", authority: "observation-only" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "managed-spool-031" });
+    expect(monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"]).toMatchObject({
+      authority: "observation-only",
+      restoredFromStorage: true,
+      latestBySourceId: {
+        "cfs:1:slot:2": {
+          selected: true,
+          authority: "observation-only",
+        },
+      },
+    });
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {

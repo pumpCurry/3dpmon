@@ -19,9 +19,9 @@
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
@@ -111,12 +111,12 @@ export const MATERIAL_EXTERNAL_SOURCE_LIMIT = 1;
  *
  * 【詳細説明】
  * - CFS/CFS-Cの装填/選択/残量は人間が監視する情報なので、通信停止後もfresh表示のまま残すと
- *   「現在選択中」と誤読される。K2のboxsInfo probeは30秒周期のため、1回分の遅延を吸収できる
- *   90秒を超えた観測値は表示側でstaleへ落とす。
+ *   「現在選択中」と誤読される。K2のboxsInfo probeは10秒周期、応答待ちtimeoutは25秒なので、
+ *   stale表示へ落ちる前に複数回の取得機会を持てる45秒を採用する。
  *
  * @constant {number}
  */
-export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 90_000;
+export const MATERIAL_TOPOLOGY_FRESH_TTL_MS = 45_000;
 
 /**
  * 配列内の許可値に一致する文字列だけを返す。
@@ -294,18 +294,200 @@ function parseObservedAtMs(value) {
 }
 
 /**
+ * JSON化可能な値をcloneする。
+ *
+ * 【詳細説明】
+ * - 保存済みObservation recordを表示用read modelへ移すとき、元の証拠snapshotをUI側で
+ *   誤って変更しないようにする。
+ *
+ * @private
+ * @function cloneJsonValue
+ * @param {*} value - clone対象。
+ * @returns {*} clone結果。
+ */
+function cloneJsonValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * 表示fallbackに使うmaterial source observation recordを解決する。
+ *
+ * 【詳細説明】
+ * - deviceIdが分かる場合はそれを優先する。
+ * - 再起動直後などruntime deviceIdがまだ無い場合はhost一致のstable観測だけを探し、
+ *   DHCP再利用やprovisional identity混線で別機体のlast-known CFSを表示しないようにする。
+ *
+ * @private
+ * @function resolveObservationRecordForDisplay
+ * @param {object|null|undefined} observationStore - monitorData.materialSourceObservations。
+ * @param {object=} options - 検索条件。
+ * @param {string=} options.deviceId - stable/provisional device ID。
+ * @param {string=} options.host - 表示対象host。
+ * @returns {object|null} 表示fallbackに使う観測record。
+ */
+function resolveObservationRecordForDisplay(observationStore, options = {}) {
+  const byDeviceId = observationStore?.byDeviceId &&
+    typeof observationStore.byDeviceId === "object" &&
+    !Array.isArray(observationStore.byDeviceId)
+    ? observationStore.byDeviceId
+    : {};
+  const deviceId = String(options.deviceId || "").trim();
+  if (deviceId && byDeviceId[deviceId]) {
+    return byDeviceId[deviceId];
+  }
+  const host = String(options.host || "").trim();
+  if (!host) {
+    return null;
+  }
+  const candidates = Object.values(byDeviceId)
+    .filter((record) => record &&
+      typeof record === "object" &&
+      record.identityStrength === "stable" &&
+      String(record.host || "").trim() === host)
+    .sort((a, b) => {
+      const aStrong = a.identityStrength === "stable" ? 1 : 0;
+      const bStrong = b.identityStrength === "stable" ? 1 : 0;
+      if (aStrong !== bStrong) {
+        return bStrong - aStrong;
+      }
+      return (parseObservedAtMs(b.lastObservedAt) || 0) - (parseObservedAtMs(a.lastObservedAt) || 0);
+    });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * material source observation recordを表示専用topologyへ変換する。
+ *
+ * 【詳細説明】
+ * - 保存済み観測は現在通信で得た値ではないため、常に `topologyState:"stale"` として返す。
+ * - snapshotの `remaining` はview modelが読む `status.remaining` へ写し、CFS sourceと外部sourceを
+ *   混ぜずに同時表示できるshapeへ戻す。
+ *
+ * @private
+ * @function createLastKnownTopologyFromObservationRecord
+ * @param {object|null|undefined} record - materialSourceObservations のdevice record。
+ * @returns {object|null} 表示専用last-known topology。
+ */
+function createLastKnownTopologyFromObservationRecord(record) {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+  const snapshots = Object.values(record.latestBySourceId || {})
+    .filter((snapshot) => snapshot && typeof snapshot === "object" && snapshot.sourceId);
+  if (snapshots.length === 0) {
+    return null;
+  }
+  const unitMap = new Map();
+  const assignments = [];
+  const sources = snapshots.map((snapshot) => {
+    const sourceId = String(snapshot.sourceId);
+    const isTombstone = Boolean(snapshot.tombstoneAt);
+    if (snapshot.kind === "cfs-slot") {
+      const boxId = snapshot.boxId ?? snapshot.unitIndex ?? null;
+      const unitId = snapshot.unitId || (boxId !== null && boxId !== undefined ? `cfs:${boxId}` : null);
+      if (unitId && !unitMap.has(unitId)) {
+        unitMap.set(unitId, {
+          unitId,
+          boxId,
+          status: {
+            topologyState: "stale",
+            authority: "observation-only",
+          },
+        });
+      }
+    }
+    for (const assignment of Array.isArray(snapshot.assignments) ? snapshot.assignments : []) {
+      assignments.push({
+        ...cloneJsonValue(assignment),
+        sourceId,
+        materialSourceId: sourceId,
+        protocolToolAlias: assignment.assignmentId ?? null,
+      });
+    }
+    return {
+      sourceId,
+      sourceIdentity: {
+        valid: true,
+        sourceId,
+        authority: "observation-only",
+      },
+      kind: snapshot.kind || "unknown",
+      unitId: snapshot.unitId ?? null,
+      boxId: snapshot.boxId ?? null,
+      slotId: snapshot.slotId ?? null,
+      presence: isTombstone ? "unobserved" : snapshot.presence ?? null,
+      material: isTombstone ? {} : cloneJsonValue(snapshot.material || {}),
+      status: {
+        selected: isTombstone ? null : snapshot.selected ?? null,
+        stateCode: isTombstone ? null : snapshot.status?.stateCode ?? null,
+        editStatusCode: isTombstone ? null : snapshot.status?.editStatusCode ?? null,
+        scrap: isTombstone ? null : snapshot.status?.scrap ?? null,
+        remaining: isTombstone ? {
+          rawPercent: null,
+          normalizedPercent: null,
+          valid: null,
+          confidence: "unknown",
+          authority: "observation-only",
+          provenance: null,
+        } : cloneJsonValue(snapshot.remaining || {}),
+      },
+      authority: {
+        mode: "observation-only",
+        source: "materialSourceObservations",
+      },
+    };
+  });
+  return {
+    cfs: {
+      enabled: sources.some((source) => source.kind === "cfs-slot"),
+      connected: false,
+      topologyState: "stale",
+    },
+    provider: {
+      providerId: record.providerId || null,
+      source: "materialSourceObservations",
+      freshness: "stale",
+      lastObservedAt: record.lastObservedAt || null,
+    },
+    authority: {
+      mode: "observation-only",
+      source: "materialSourceObservations",
+    },
+    units: Array.from(unitMap.values()),
+    sources,
+    assignments,
+    diagnostics: [{
+      code: "material-topology-last-known",
+      severity: "info",
+      message: "Material topology is restored from persistent read-only observation evidence.",
+      lastObservedAt: record.lastObservedAt || null,
+    }],
+  };
+}
+
+/**
  * runtime鮮度を反映した表示用material topologyを返す。
  *
  * 【詳細説明】
  * - live shadowがclosed、または最後の観測からTTLを超えた場合、topology自体は残しつつ
  *   `cfs.topologyState:"stale"` と診断を付ける。これにより「最後に観測したslot/残量」を
  *   現在値と誤認しない表示へ切り替えられる。
+ * - runtime topologyがまだ無い場合のみ、保存済みobservation storeからlast-known topologyを生成する。
+ *   このfallbackはUI/diagnostics専用であり、command dispatchのfreshness判定には使わない。
  * - 返値は表示専用の浅いcloneで、runtimeDataに保存された証拠topologyは書き換えない。
  *
  * @function resolveDisplayMaterialTopology
  * @param {object} options - 表示用topology生成オプション
  * @param {object|null|undefined} options.topology - runtimeData上のNormalized material topology
  * @param {object|null|undefined} options.shadowRecord - runtimeData.printerCoreV3Shadow record
+ * @param {object|null|undefined} options.observationStore - monitorData.materialSourceObservations
+ * @param {object|null|undefined} options.observationRecord - 直接指定するmaterial observation record
+ * @param {boolean=} options.allowPersistentLastKnown - 保存済みlast-knownを表示fallbackに使う場合true
+ * @param {string=} options.deviceId - 表示対象device ID
+ * @param {string=} options.host - 表示対象host
  * @param {number=} options.nowMs - 現在時刻epoch ms
  * @param {number=} options.ttlMs - freshと見なす最大経過時間
  * @returns {object|null} 表示用topology、未観測なら null
@@ -315,11 +497,23 @@ function parseObservedAtMs(value) {
 export function resolveDisplayMaterialTopology({
   topology = null,
   shadowRecord = null,
+  observationStore = null,
+  observationRecord = null,
+  allowPersistentLastKnown = false,
+  deviceId = null,
+  host = null,
   nowMs = Date.now(),
   ttlMs = MATERIAL_TOPOLOGY_FRESH_TTL_MS,
 } = {}) {
+  const fallbackObservationRecord = allowPersistentLastKnown === true
+    ? (observationRecord || resolveObservationRecordForDisplay(observationStore, {
+        deviceId: deviceId || shadowRecord?.deviceId || null,
+        host,
+      }))
+    : null;
+  const fallbackTopology = createLastKnownTopologyFromObservationRecord(fallbackObservationRecord);
   if (!topology || typeof topology !== "object") {
-    return null;
+    return fallbackTopology;
   }
   const observedAtMs = parseObservedAtMs(
     topology.provider?.lastObservedAt ??
@@ -330,7 +524,7 @@ export function resolveDisplayMaterialTopology({
   const alreadyStale = topology.cfs?.topologyState === "stale";
   const closed = shadowRecord?.state === "closed";
   if (observedAtMs == null && !closed && !alreadyStale) {
-    return null;
+    return fallbackTopology;
   }
   const expired = observedAtMs == null || (Number.isFinite(nowMs) && nowMs - observedAtMs > ttlMs);
   if (!closed && !expired && !alreadyStale) {

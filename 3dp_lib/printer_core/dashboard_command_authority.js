@@ -23,15 +23,17 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1412 (PR #434)
+ * @version 1.390.1449 (PR #435)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-26 17:30:15
+ * @lastModified 2026-08-28 12:21:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
  */
 
 "use strict";
+
+import { getComparableMaterialColor } from "./dashboard_material_color.js";
 
 /**
  * Printer Core v3 command contract の schema version。
@@ -745,8 +747,9 @@ function normalizeMaterialSourceEvidence(material) {
  *
  * 【詳細説明】
  * - UI view model由来の `presence` を最優先する。
- * - 実runtimeのNormalized MaterialSourceには `presence` が無い場合があるため、
- *   `status.stateCode` と材料証拠から表示側と同じ保守的なloaded/empty/unknown判定を再現する。
+ * - 実runtimeのNormalized MaterialSourceには `presence` が無い場合があるため、明示的な
+ *   `status.stateCode` だけをfallbackとして採用する。
+ * - 材料名・色・RFIDの残留metadataだけでは装填を証明せず、送信直前の物理操作はfail-closedにする。
  *
  * @private
  * @param {object|null|undefined} source - material source候補
@@ -761,20 +764,16 @@ function normalizeMaterialSourcePresence(source) {
     return "unobserved";
   }
   const stateCode = normalizeSequence(source?.status?.stateCode);
-  const material = source.material && typeof source.material === "object" ? source.material : {};
-  const hasMaterialEvidence = Boolean(
-    String(material.type || "").trim() ||
-    String(material.name || "").trim() ||
-    String(material.color?.normalized || material.color?.raw || "").trim() ||
-    String(material.rfid || "").trim()
-  );
-  if (stateCode === 0 && !hasMaterialEvidence) {
+  if (stateCode === 1) {
+    return "loaded";
+  }
+  if (stateCode === 0) {
     return "empty";
   }
-  if (stateCode === null && !hasMaterialEvidence) {
+  if (stateCode === null) {
     return "unknown";
   }
-  return "loaded";
+  return "unknown";
 }
 
 /**
@@ -804,17 +803,7 @@ function normalizeMaterialTypeEvidence(value) {
  * @returns {string|null} 比較用color
  */
 function normalizeMaterialColorEvidence(value) {
-  const rawValue = value && typeof value === "object"
-    ? (value.normalized ?? value.displayHex ?? value.raw)
-    : value;
-  const text = String(rawValue ?? "").trim().replace(/^#/u, "").toLowerCase();
-  if (!text) {
-    return null;
-  }
-  if (/^0[0-9a-f]{6}$/u.test(text)) {
-    return text.slice(1);
-  }
-  return text;
+  return getComparableMaterialColor(value);
 }
 
 /**
@@ -928,6 +917,38 @@ function collectPrintStartSendTimeErrors(request, context) {
 }
 
 /**
+ * NormalizedState上の稼働状態ラベル候補を収集する。
+ *
+ * 【詳細説明】
+ * - K2 firmwareやAdapterの段階差により、busy/heating/runningが`print.stateLabel`ではなく
+ *   `device.stateLabel`や`status.stateLabel`側に出る可能性があるため、CFS物理操作前は広めに確認する。
+ *
+ * @private
+ * @function collectPrinterActivityLabels
+ * @param {object|null|undefined} observedState - send-time observed state
+ * @returns {Set<string>} 小文字化した状態ラベル集合
+ */
+function collectPrinterActivityLabels(observedState) {
+  const labels = new Set();
+  const paths = [
+    "print.stateLabel",
+    "print.state",
+    "device.stateLabel",
+    "device.state",
+    "status.stateLabel",
+    "status.state",
+  ];
+  for (const path of paths) {
+    const value = getPathValue(observedState, path);
+    const label = String(value ?? "").trim().toLowerCase();
+    if (label) {
+      labels.add(label);
+    }
+  }
+  return labels;
+}
+
+/**
  * CFS command の送信時 topology を検査する。
  *
  * 【詳細説明】
@@ -943,6 +964,10 @@ function collectCfsSendTimeErrors(request, context) {
     return [];
   }
   const errors = [];
+  const activityLabels = collectPrinterActivityLabels(context.observedState);
+  if (["printing", "paused", "busy", "heating", "checking", "running"].some((label) => activityLabels.has(label))) {
+    errors.push("cfs-control-printer-busy");
+  }
   if (context.materialTopology?.cfsConnected !== true) {
     errors.push("cfs-not-connected");
   }
@@ -962,6 +987,9 @@ function collectCfsSendTimeErrors(request, context) {
   }
   if (currentSource.kind !== "cfs-slot") {
     errors.push("cfs-target-not-cfs-slot");
+  }
+  if (currentSource.presence !== "loaded") {
+    errors.push("cfs-target-source-not-loaded");
   }
   const requestBoxId = normalizeSequence(request.payload?.boxId);
   if (requestBoxId !== null && currentSource.boxId !== null && requestBoxId !== currentSource.boxId) {

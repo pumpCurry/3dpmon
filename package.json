@@ -1,6 +1,6 @@
 {
   "name": "3dpmon",
-  "version": "2.2.1042",
+  "version": "2.2.1043",
   "description": "3Dプリンタ監視ダッシュボード - Electron版",
   "main": "electron/main.js",
   "scripts": {
@@ -11,6 +11,9 @@
     "prebuild": "node scripts/sync-version.js",
     "build": "electron-builder --win",
     "build:dir": "electron-builder --win --dir",
+    "release:manifest": "node scripts/write-release-manifest.mjs",
+    "check:version-sync": "npm run sync-version && git diff --exit-code -- 3dp_monitor.html package-lock.json",
+    "verify:release": "npm run check:version-sync && npm run test:all && npm run build && npm run release:manifest",
     "test": "vitest run",
     "test:e2e": "node tests/e2e/electron_boot.test.mjs",
     "test:all": "vitest run && node tests/e2e/electron_boot.test.mjs",

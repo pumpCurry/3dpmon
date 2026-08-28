@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1462 (PR #435)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -185,10 +185,12 @@ function createK2CfsBoxsInfo() {
  *   runtime material topologyだけを入れる。
  *
  * @function setupK2Runtime
+ * @param {Object=} options - テスト用オプション。
+ * @param {string=} options.observedAt - 固定観測日時。
  * @returns {void}
  */
-function setupK2Runtime() {
-  const observedAt = new Date().toISOString();
+function setupK2Runtime(options = {}) {
+  const observedAt = options.observedAt || new Date().toISOString();
   const topology = normalizeK2BoxsInfo(createK2CfsBoxsInfo(), { connected: true });
   topology.provider = {
     ...(topology.provider || {}),
@@ -236,7 +238,7 @@ describe("filament manager CFS material source section", () => {
     const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
 
     expect(section).not.toBeNull();
-    expect(section?.textContent).toContain("機器側フィラメント供給");
+    expect(section?.textContent).toContain("機器観測フィラメント");
     expect(section?.querySelectorAll(".fm-material-source-chip")).toHaveLength(5);
     expect(section?.querySelector("fieldset legend")?.textContent).toBe("外部スプール");
     expect([...(section?.querySelectorAll(".fm-material-source-head strong") || [])].map((el) => el.textContent)).toEqual([
@@ -247,6 +249,50 @@ describe("filament manager CFS material source section", () => {
       "1D",
     ]);
     expect(section?.querySelector(".fm-material-source-chip.is-selected strong")?.textContent).toBe("1C");
-    expect(section?.textContent).toContain("3DPmon台帳スプールとは自動で混ぜません");
+    expect(section?.querySelector(".fm-material-source-chip.is-selected .fm-material-source-state")?.textContent).toBe("装填中");
+    expect(section?.querySelector(".fm-material-source-chip.is-selected .fm-material-source-selected")?.textContent).toBe("機器選択中");
+    const assignment = section?.querySelector(".fm-material-source-assignment");
+    expect(assignment?.textContent).toBe("印刷割当 T1A");
+    expect(assignment?.getAttribute("title")).toBe("T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。");
+    expect(section?.textContent).toContain("管理中スプールとは別情報です");
+  });
+
+  it("フィラメント管理内でもCFS観測時刻とsource集計を表示する", () => {
+    setupK2Runtime({ observedAt: new Date().toISOString() });
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+
+    const meta = section?.querySelector(".fm-material-supply-meta");
+    expect(meta).not.toBeNull();
+    expect(meta?.textContent).toMatch(/状態: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+    expect(meta?.textContent).toContain("装填 4");
+    expect(meta?.textContent).toContain("選択中 1");
+    expect(meta?.textContent).toContain("CFS 1/1台");
+    expect(meta?.textContent).toContain("外部 1");
+  });
+
+  it("staleなCFS情報は状態ではなく最終観測時刻として表示する", () => {
+    setupK2Runtime({ observedAt: "2026-08-27T12:34:56" });
+    monitorData.machines["K2Pro-69E7"].runtimeData.printerCoreV3Shadow.lastState.materials.cfs.topologyState = "stale";
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+
+    const meta = section?.querySelector(".fm-material-supply-meta");
+    expect(meta?.textContent).toContain("最終観測: 2026-08-27 12:34:56");
+    expect(meta?.textContent).not.toContain("状態: 2026-08-27 12:34:56");
+    expect(section?.querySelector('[data-source-id="cfs:1:slot:2"] .fm-material-source-state')?.textContent).toBe("最終観測: 装填中");
+  });
+
+  it("フィラメント管理内でもunknownとunobservedを別のpresence文言として表示する", () => {
+    setupK2Runtime();
+    const machine = monitorData.machines["K2Pro-69E7"];
+    const sources = machine.runtimeData.printerCoreV3Shadow.lastState.materials.sources;
+    sources.find((source) => source.sourceId === "cfs:1:slot:1").presence = "unknown";
+    sources.find((source) => source.sourceId === "cfs:1:slot:3").presence = "unobserved";
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+
+    expect(section?.querySelector('[data-source-id="cfs:1:slot:1"] .fm-material-source-state')?.textContent).toBe("装填状態 不明");
+    expect(section?.querySelector('[data-source-id="cfs:1:slot:3"] .fm-material-source-state')?.textContent).toBe("未観測");
   });
 });

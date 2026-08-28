@@ -3,9 +3,9 @@
  * @description
  * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1436 (PR #435)
  * @since 1.390.1299 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-28 10:37:51
  *
  * @vitest-environment jsdom
  */
@@ -42,6 +42,7 @@ describe("Printer Core v3 K1 live shadow", () => {
   beforeEach(() => {
     monitorData.machines = {};
     monitorData.appSettings = { logLevel: "info" };
+    monitorData.materialSourceObservations = undefined;
     vi.restoreAllMocks();
   });
 
@@ -439,6 +440,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         },
       },
       receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
     });
 
     expect(record).toMatchObject({
@@ -491,6 +493,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         },
       },
       receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
     });
 
     expect(materialRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
@@ -511,6 +514,316 @@ describe("Printer Core v3 K1 live shadow", () => {
     expect(statusRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
     expect(statusRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
     expect(statusRecord.lastState.materials.sources[0].material.name).toBe("Silver PLA");
+  });
+
+  it("K2 runtime material topologyはpartial source deltaでも未観測material/remaining/assignmentを保持する", () => {
+    const host = "K2Pro-Live-Partial-Source";
+    const deviceId = "host:K2Pro-Live-Partial-Source";
+    const sessionId = "k2-live:partial-source";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", name: "Silver PLA", selected: 1, percent: 54, state: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    const partialRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              materials: [
+                { id: 2, selected: 0 },
+              ],
+            },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:14.000Z",
+    });
+
+    const source = partialRecord.lastState.materials.sources.find((entry) => entry.sourceId === "cfs:1:slot:2");
+    expect(source).toMatchObject({
+      material: {
+        type: "PLA",
+        name: "Silver PLA",
+        color: {
+          raw: "#09ea7ae",
+          displayHex: "9ea7ae",
+        },
+      },
+      status: {
+        selected: false,
+        remaining: {
+          normalizedPercent: 54,
+          valid: true,
+        },
+        stateCode: 1,
+      },
+    });
+    expect(partialRecord.lastState.materials.assignments).toEqual([
+      expect.objectContaining({ assignmentId: "T1C", sourceId: "cfs:1:slot:2" }),
+    ]);
+  });
+
+  it("K2 runtime material topologyはcolorMatchのみのpartial deltaで既存source assignmentを置換またはclearする", () => {
+    const host = "K2Pro-Live-Partial-Assignment";
+    const deviceId = "host:K2Pro-Live-Partial-Assignment";
+    const sessionId = "k2-live:partial-assignment";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", name: "Silver PLA", selected: 1, percent: 54, state: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    const updateRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:14.000Z",
+    });
+
+    expect(updateRecord.lastState.materials.sources.find((entry) => entry.sourceId === "cfs:1:slot:2")).toMatchObject({
+      material: {
+        name: "Silver PLA",
+      },
+      status: {
+        remaining: {
+          normalizedPercent: 54,
+        },
+      },
+    });
+    expect(updateRecord.lastState.materials.assignments).toEqual([
+      expect.objectContaining({ assignmentId: "T1A", sourceId: "cfs:1:slot:2" }),
+    ]);
+
+    const clearRecord = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          colorMatch: [],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:24.000Z",
+    });
+
+    expect(clearRecord.lastState.materials.assignments).toEqual([]);
+    expect(clearRecord.lastState.materials.sources.find((entry) => entry.sourceId === "cfs:1:slot:2")).toMatchObject({
+      material: {
+        name: "Silver PLA",
+      },
+      status: {
+        remaining: {
+          normalizedPercent: 54,
+        },
+      },
+    });
+  });
+
+  it("K2 CFS topologyはread-only観測台帳へ保存し、管理スプールや台帳には書き込まない", () => {
+    const host = "K2Pro-Observation";
+    const deviceId = "serial:905251280E69E7";
+    const sessionId = "k2-live:observation";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId });
+    monitorData.hostSpoolMap = { [host]: "spool-managed" };
+    monitorData.mountHistory = [{ evId: "mount-1", host, spoolId: "spool-managed" }];
+    monitorData.usageHistory = [{ usageId: "usage-1", host, spoolId: "spool-managed" }];
+    monitorData.filamentSpools = [{ id: "spool-managed", remainingLengthMm: 1000 }];
+    const untouched = {
+      hostSpoolMap: JSON.stringify(monitorData.hostSpoolMap),
+      mountHistory: JSON.stringify(monitorData.mountHistory),
+      usageHistory: JSON.stringify(monitorData.usageHistory),
+      filamentSpools: JSON.stringify(monitorData.filamentSpools),
+    };
+
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 0,
+              state: 1,
+              type: 1,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", name: "External PLA", percent: null, rfid: "" },
+              ],
+            },
+            {
+              id: 1,
+              state: 1,
+              type: 0,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", name: "Silver PLA", percent: -5, selected: 1, rfid: "" },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 2 }],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    const observations = monitorData.materialSourceObservations;
+    expect(observations.byDeviceId[deviceId]).toMatchObject({
+      authority: "observation-only",
+      identityStrength: "stable",
+      providerId: "creality-cfs-boxs-info",
+      sessionId,
+      snapshotCompleteness: "complete",
+    });
+    expect(observations.byDeviceId[deviceId].latestBySourceId["external:0:slot:0"]).toMatchObject({
+      kind: "external-spool",
+      material: { rfid: "" },
+      authority: "observation-only",
+    });
+    expect(observations.byDeviceId[deviceId].latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      selected: true,
+      assignments: [{ assignmentId: "T1A" }],
+      material: {
+        rfid: "",
+        color: {
+          raw: "#09ea7ae",
+          displayHex: "9ea7ae",
+          cssColor: "#9ea7ae",
+        },
+      },
+      remaining: {
+        rawPercent: -5,
+        normalizedPercent: 0,
+        valid: false,
+        authority: "observation-only",
+      },
+    });
+    expect(JSON.stringify(monitorData.hostSpoolMap)).toBe(untouched.hostSpoolMap);
+    expect(JSON.stringify(monitorData.mountHistory)).toBe(untouched.mountHistory);
+    expect(JSON.stringify(monitorData.usageHistory)).toBe(untouched.usageHistory);
+    expect(JSON.stringify(monitorData.filamentSpools)).toBe(untouched.filamentSpools);
+  });
+
+  it("K2 material observationはMACをstable扱いせず、同一hostのprovisional履歴をserialへrekeyする", () => {
+    const host = "K2Pro-Rekey";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999", sessionId: "k2-live:provisional" });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      sessionId: "k2-live:provisional",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            { id: 1, state: 1, type: 0, materials: [{ id: 0, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 }] },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+
+    expect(monitorData.materialSourceObservations.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"]).toMatchObject({
+      identityStrength: "provisional",
+    });
+
+    beginK2LiveShadowSession({ host, deviceId: "serial:905251280E69E7", sessionId: "k2-live:stable" });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId: "serial:905251280E69E7",
+      sessionId: "k2-live:stable",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            { id: 1, state: 1, type: 0, materials: [{ id: 0, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 }] },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    expect(monitorData.materialSourceObservations.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"]).toBeUndefined();
+    expect(monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"]).toMatchObject({
+      identityStrength: "stable",
+      aliases: ["provisional-shadow:endpoint:192.168.54.153%3A9999"],
+    });
+
+    setMachine("K2Pro-Mac");
+    beginK2LiveShadowSession({ host: "K2Pro-Mac", deviceId: "mac:58:41:46:cf:fa:99", sessionId: "k2-live:mac" });
+    observeK2LiveShadowFrame({
+      host: "K2Pro-Mac",
+      deviceId: "mac:58:41:46:cf:fa:99",
+      sessionId: "k2-live:mac",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            { id: 1, state: 1, type: 0, materials: [{ id: 0, vendor: "Generic", type: "PLA" }] },
+          ],
+        },
+      },
+      receivedAt: "2026-08-07T08:17:04.000Z",
+    });
+    expect(monitorData.materialSourceObservations.byDeviceId["mac:58:41:46:cf:fa:99"]).toMatchObject({
+      identityStrength: "provisional",
+    });
   });
 
   it("CFS-C secondary provider切断時はlast-known topologyを空にせずstale化する", () => {
@@ -567,6 +880,243 @@ describe("Printer Core v3 K1 live shadow", () => {
       lastObservedAt: "2026-08-07T08:15:04.000Z",
       disconnectedAt: "2026-08-07T08:16:04.000Z",
       freshness: "stale",
+    });
+  });
+
+  it("CFS-C secondary providerもread-only観測台帳へ保存し、切断時はlast-knownをstaleとして残す", () => {
+    const host = "K1C-CFSC-Observation";
+    setMachine(host);
+    monitorData.hostSpoolMap = { [host]: "k1-managed-spool" };
+    monitorData.mountHistory = [];
+    monitorData.usageHistory = [];
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54, selected: 1, rfid: null },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:test",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+    });
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: null,
+      providerSessionId: "material-provider:test",
+      connected: false,
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    const deviceId = "material-provider:K1C-CFSC-Observation";
+    expect(monitorData.materialSourceObservations.byDeviceId[deviceId]).toMatchObject({
+      authority: "observation-only",
+      identityStrength: "provisional",
+      providerId: "creality-cfs-moonraker-box",
+      providerDisconnectedAt: "2026-08-07T08:16:04.000Z",
+      latestBySourceId: {
+        "cfs:1:slot:2": {
+          presence: "loaded",
+          selected: true,
+          lastObservedAt: "2026-08-07T08:15:04.000Z",
+          material: { rfid: null },
+          remaining: {
+            rawPercent: 54,
+            normalizedPercent: 54,
+            valid: true,
+            authority: "observation-only",
+          },
+        },
+      },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ [host]: "k1-managed-spool" });
+    expect(monitorData.mountHistory).toEqual([]);
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it("CFS-C notify deltaはpartial観測として扱い、payloadに無いslotをtombstone化しない", () => {
+    const host = "K1C-CFSC-Delta";
+    setMachine(host);
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 80 },
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:delta",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 53 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:delta",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:14.000Z",
+      snapshotCompleteness: "partial",
+    });
+
+    const observation = monitorData.materialSourceObservations.byDeviceId["material-provider:K1C-CFSC-Delta"];
+    expect(observation.latestBySourceId["cfs:1:slot:0"]).toMatchObject({
+      presence: "loaded",
+      material: { name: "White PLA" },
+      lastObservedAt: "2026-08-07T08:15:04.000Z",
+    });
+    expect(observation.latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      presence: "loaded",
+      remaining: { rawPercent: 53 },
+      lastObservedAt: "2026-08-07T08:15:14.000Z",
+    });
+    expect(observation.events.some((event) => event.sourceId === "cfs:1:slot:0" && event.changeKind === "source-disappeared")).toBe(false);
+  });
+
+  it("CFS-C provider close/reopenで同じendpoint generationを自己退役扱いにしない", () => {
+    const host = "K1C-CFSC-Reopen";
+    setMachine(host);
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 80 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:reopen",
+      providerGeneration: "material-provider:reopen:transport:1",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: null,
+      connected: false,
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    const reopened = observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 79 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:reopen",
+      providerGeneration: "material-provider:reopen:transport:2",
+      connected: true,
+      receivedAt: "2026-08-07T08:17:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    expect(reopened.materialSourceObservationStatus).toMatchObject({
+      accepted: true,
+    });
+    expect(
+      monitorData.materialSourceObservations.byDeviceId["material-provider:K1C-CFSC-Reopen"].latestBySourceId["cfs:1:slot:0"].remaining.rawPercent
+    ).toBe(79);
+  });
+
+  it("CFS-C notify deltaはruntime表示用topologyでも既存slotを保持する", () => {
+    const host = "K1C-CFSC-Runtime-Delta";
+    setMachine(host);
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 80 },
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:runtime-delta",
+      providerGeneration: "material-provider:runtime-delta:transport:1",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    const updated = observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 53 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:runtime-delta",
+      providerGeneration: "material-provider:runtime-delta:transport:1",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:14.000Z",
+      snapshotCompleteness: "partial",
+    });
+
+    const runtimeSources = new Map(updated.lastState.materials.sources.map((source) => [source.sourceId, source]));
+    expect(runtimeSources.get("cfs:1:slot:0")).toMatchObject({
+      material: { name: "White PLA" },
+      status: { remaining: { rawPercent: 80 } },
+    });
+    expect(runtimeSources.get("cfs:1:slot:2")).toMatchObject({
+      material: { name: "Silver PLA" },
+      status: { remaining: { rawPercent: 53 } },
     });
   });
 

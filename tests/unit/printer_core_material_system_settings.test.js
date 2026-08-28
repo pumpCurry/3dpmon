@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1432 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-28 09:40:48
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -262,5 +262,282 @@ describe("Printer Core v3 material system settings", () => {
     });
 
     expect(displayTopology).toBeNull();
+  });
+
+  it("runtime topologyが無い場合は保存済みobservationをlast-known staleとして表示用に復元する", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      shadowRecord: null,
+      host: "K2Pro-69E7",
+      allowPersistentLastKnown: true,
+      observationStore: {
+        byDeviceId: {
+          "serial:905251280E69E7": {
+            deviceId: "serial:905251280E69E7",
+            identityStrength: "stable",
+            host: "K2Pro-69E7",
+            providerId: "k2-ws9999-boxsInfo",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "external:0": {
+                sourceId: "external:0",
+                kind: "external-spool",
+                selected: false,
+                material: {},
+                remaining: {
+                  rawPercent: null,
+                  normalizedPercent: null,
+                  valid: null,
+                  confidence: "unknown",
+                  authority: "observation-only",
+                },
+              },
+              "cfs:1:slot:2": {
+                sourceId: "cfs:1:slot:2",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 2,
+                selected: true,
+                material: {
+                  vendor: "Generic",
+                  type: "PLA",
+                  name: "Silver PLA",
+                  color: { raw: "#0bbbbbb", normalized: "0bbbbbb", displayHex: "bbbbbb" },
+                },
+                remaining: {
+                  rawPercent: 54,
+                  normalizedPercent: 54,
+                  valid: true,
+                  confidence: "device-reported",
+                  authority: "observation-only",
+                },
+                assignments: [{ assignmentId: "T1A", namespace: "creality", resolution: "observed" }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(displayTopology.cfs).toMatchObject({
+      connected: false,
+      topologyState: "stale",
+    });
+    expect(displayTopology.provider).toMatchObject({
+      source: "materialSourceObservations",
+      freshness: "stale",
+      lastObservedAt: "2026-08-27T12:00:00.000Z",
+    });
+    expect(displayTopology.sources).toHaveLength(2);
+    expect(displayTopology.units).toMatchObject([{ unitId: "cfs:1", boxId: 1 }]);
+    expect(displayTopology.sources.find((source) => source.sourceId === "cfs:1:slot:2")).toMatchObject({
+      status: {
+        selected: true,
+        remaining: {
+          normalizedPercent: 54,
+        },
+      },
+    });
+    expect(displayTopology.assignments).toMatchObject([{
+      assignmentId: "T1A",
+      sourceId: "cfs:1:slot:2",
+      materialSourceId: "cfs:1:slot:2",
+    }]);
+  });
+
+  it("保存済みlast-known fallbackは明示許可なしでは使わない", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      host: "K2Pro-69E7",
+      observationStore: {
+        byDeviceId: {
+          "serial:905251280E69E7": {
+            deviceId: "serial:905251280E69E7",
+            identityStrength: "stable",
+            host: "K2Pro-69E7",
+            providerId: "k2-ws9999-boxsInfo",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:2": {
+                sourceId: "cfs:1:slot:2",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 2,
+                material: { type: "PLA" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(displayTopology).toBeNull();
+  });
+
+  it("host一致stable候補が複数あるlast-known fallbackは曖昧として採用しない", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      host: "K2Pro-69E7",
+      allowPersistentLastKnown: true,
+      observationStore: {
+        byDeviceId: {
+          "serial:905251280E69E7": {
+            deviceId: "serial:905251280E69E7",
+            identityStrength: "stable",
+            host: "K2Pro-69E7",
+            providerId: "k2-ws9999-boxsInfo",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:0": {
+                sourceId: "cfs:1:slot:0",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 0,
+                material: { type: "PLA" },
+              },
+            },
+          },
+          "serial:OTHER": {
+            deviceId: "serial:OTHER",
+            identityStrength: "stable",
+            host: "K2Pro-69E7",
+            providerId: "k2-ws9999-boxsInfo",
+            lastObservedAt: "2026-08-27T12:10:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:1": {
+                sourceId: "cfs:1:slot:1",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 1,
+                material: { type: "PLA" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(displayTopology).toBeNull();
+  });
+
+  it("last-known復元ではtombstoneを空スロットとして表示しない", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      allowPersistentLastKnown: true,
+      observationRecord: {
+        deviceId: "serial:905251280E69E7",
+        identityStrength: "stable",
+        host: "K2Pro-69E7",
+        providerId: "k2-ws9999-boxsInfo",
+        lastObservedAt: "2026-08-27T12:00:00.000Z",
+        latestBySourceId: {
+          "cfs:1:slot:3": {
+            sourceId: "cfs:1:slot:3",
+            kind: "cfs-slot",
+            unitId: "cfs:1",
+            boxId: 1,
+            slotId: 3,
+            selected: true,
+            material: {
+              type: "PLA",
+              name: "Removed PLA",
+            },
+            remaining: {
+              rawPercent: 0,
+              normalizedPercent: 0,
+              valid: true,
+            },
+            tombstoneAt: "2026-08-27T12:05:00.000Z",
+          },
+        },
+      },
+    });
+
+    const tombstoneSource = displayTopology.sources.find((source) => source.sourceId === "cfs:1:slot:3");
+
+    expect(tombstoneSource).toMatchObject({
+      presence: "unobserved",
+      status: {
+        selected: null,
+        stateCode: null,
+      },
+    });
+    expect(tombstoneSource.status.remaining).toMatchObject({
+      normalizedPercent: null,
+      valid: null,
+    });
+    expect(tombstoneSource.authority).toMatchObject({
+      mode: "observation-only",
+      source: "materialSourceObservations",
+    });
+  });
+
+  it("host一致だけのlast-known復元ではprovisional identityを採用しない", () => {
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: null,
+      host: "192.168.54.153",
+      allowPersistentLastKnown: true,
+      observationStore: {
+        byDeviceId: {
+          "provisional:192.168.54.153": {
+            deviceId: "provisional:192.168.54.153",
+            identityStrength: "provisional",
+            host: "192.168.54.153",
+            providerId: "k2-ws9999-boxsInfo",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:0": {
+                sourceId: "cfs:1:slot:0",
+                kind: "cfs-slot",
+                unitId: "cfs:1",
+                boxId: 1,
+                slotId: 0,
+                material: { type: "PLA" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(displayTopology).toBeNull();
+  });
+
+  it("runtime topologyがfreshなら保存済みobservationよりlive topologyを優先する", () => {
+    const liveTopology = {
+      ...createObservedTopology(1),
+      provider: { lastObservedAt: "2026-08-27T12:00:30.000Z" },
+      sources: [{
+        sourceId: "cfs:1:slot:0",
+        kind: "cfs-slot",
+        unitId: "cfs:1",
+        boxId: 1,
+        slotId: 0,
+        material: { type: "PLA", name: "Live PLA" },
+        status: { selected: true, remaining: { normalizedPercent: 80, rawPercent: 80, valid: true } },
+      }],
+    };
+    const displayTopology = resolveDisplayMaterialTopology({
+      topology: liveTopology,
+      shadowRecord: { state: "observed", materialProviderLastObservedAt: "2026-08-27T12:00:30.000Z" },
+      observationStore: {
+        byDeviceId: {
+          "serial:905251280E69E7": {
+            host: "K2Pro-69E7",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {},
+          },
+        },
+      },
+      host: "K2Pro-69E7",
+      nowMs: Date.parse("2026-08-27T12:00:31.000Z"),
+    });
+
+    expect(displayTopology).toBe(liveTopology);
+    expect(displayTopology.provider.source).toBeUndefined();
   });
 });

@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1402 (PR #434)
+ * @version 1.390.1433 (PR #435)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-26 22:30:00
+ * @lastModified 2026-08-28 10:36:12
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -32,6 +32,7 @@
 "use strict";
 
 import { EMPTY_CAPABILITY_SET } from "./dashboard_capabilities.js";
+import { normalizeMaterialColor } from "./dashboard_material_color.js";
 
 /**
  * NormalizedPrinterState の schema version。
@@ -561,46 +562,18 @@ function normalizeAi(payload, options = {}) {
  * @private
  * @param {object} box - `materialBoxs[]` の box object
  * @param {object} material - `materials[]` の material object
- * @returns {string} sourceId
+ * @returns {?string} sourceId、location欠落時はnull
  */
 function createMaterialSourceId(box, material) {
-  const boxId = String(box?.id ?? "unknown");
-  const slotId = String(material?.id ?? "unknown");
-  if (Number(box?.id) === 0 || Number(box?.type) === 1) {
+  const boxId = toFiniteNumber(box?.id);
+  const slotId = toFiniteNumber(material?.id);
+  if (boxId === null || slotId === null) {
+    return null;
+  }
+  if (boxId === 0 || Number(box?.type) === 1) {
     return `external:${boxId}:slot:${slotId}`;
   }
   return `cfs:${boxId}:slot:${slotId}`;
-}
-
-/**
- * protocol color 値を raw と比較用 normalized へ分ける。
- *
- * 【詳細説明】
- * - K2 firmware は `#0ffffff` と `0ffffff` のように表記揺れした色を返すため、raw 表現を残しつつ
- *   比較用の正規形を別 field にする。
- *
- * @private
- * @param {*} value - protocol color 値
- * @returns {{raw: ?string, normalized: ?string, displayHex: ?string}} 色表現
- */
-function normalizeProtocolColor(value) {
-  const raw = toNullableString(value);
-  if (raw === null || raw === "") {
-    return {
-      raw,
-      normalized: raw,
-      displayHex: raw,
-    };
-  }
-  const normalized = raw.replace(/^#/u, "").toLowerCase();
-  const displayHex = /^0[0-9a-f]{6}$/u.test(normalized)
-    ? normalized.slice(1)
-    : normalized;
-  return {
-    raw,
-    normalized,
-    displayHex,
-  };
 }
 
 /**
@@ -631,6 +604,40 @@ function normalizeCfsUnit(box) {
 }
 
 /**
+ * K2 CFS material source の観測field maskを生成する。
+ *
+ * 【詳細説明】
+ * - Normalized sourceは常に同じshapeを返すため、raw payload上で本当に観測されたfieldを
+ *   別maskとして保持し、partial update時に未観測nullで前回値を消さないようにする。
+ *
+ * @private
+ * @param {object|null|undefined} material - raw `materials[]` entry
+ * @returns {object} 観測field mask
+ */
+function createMaterialSourceObservedFields(material) {
+  return {
+    material: {
+      vendor: hasOwn(material, "vendor"),
+      type: hasOwn(material, "type"),
+      name: hasOwn(material, "name"),
+      color: hasOwn(material, "color"),
+      rfid: hasOwn(material, "rfid"),
+      minTemp: hasOwn(material, "minTemp"),
+      maxTemp: hasOwn(material, "maxTemp"),
+      pressure: hasOwn(material, "pressure"),
+    },
+    status: {
+      selected: hasOwn(material, "selected"),
+      percent: hasOwn(material, "percent"),
+      remaining: hasOwn(material, "percent"),
+      stateCode: hasOwn(material, "state"),
+      editStatusCode: hasOwn(material, "editStatus"),
+      scrap: hasOwn(material, "scrap"),
+    },
+  };
+}
+
+/**
  * K2 CFS material を MaterialSource へ正規化する。
  *
  * 【詳細説明】
@@ -649,19 +656,25 @@ function normalizeMaterialSource(box, material) {
   const rawPercent = toFiniteNumber(material?.percent);
   const normalizedPercent = toPercentNumber(material?.percent);
   const percentValid = rawPercent !== null && rawPercent >= 0 && rawPercent <= 100;
+  const sourceId = createMaterialSourceId(box, material);
   return {
-    sourceId: createMaterialSourceId(box, material),
+    sourceId,
+    sourceIdentity: {
+      valid: Boolean(sourceId),
+      reason: sourceId ? "observed-location" : "material-source-location-incomplete",
+    },
     kind: isExternal ? "external-spool" : "cfs-slot",
     unitId: isExternal ? null : `cfs:${boxId}`,
     boxId,
     slotId,
     boxStateCode: toFiniteNumber(box?.state),
     boxTypeCode: toFiniteNumber(box?.type),
+    observedFields: createMaterialSourceObservedFields(material),
     material: {
       vendor: toNullableString(material?.vendor),
       type: toNullableString(material?.type),
       name: toNullableString(material?.name),
-      color: normalizeProtocolColor(material?.color),
+      color: normalizeMaterialColor(material?.color, { source: "boxsInfo.materialBoxs[].materials[].color", vendor: "creality" }),
       rfid: toNullableString(material?.rfid),
       minTemp: toFiniteNumber(material?.minTemp),
       maxTemp: toFiniteNumber(material?.maxTemp),
@@ -698,6 +711,9 @@ function normalizeMaterialSource(box, material) {
 function createMaterialSourceIndex(sources) {
   const index = new Map();
   for (const source of Array.isArray(sources) ? sources : []) {
+    if (!source?.sourceId || source?.sourceIdentity?.valid === false) {
+      continue;
+    }
     const key = `${source.boxId}:${source.slotId}`;
     if (!index.has(key)) {
       index.set(key, source.sourceId);
@@ -725,6 +741,17 @@ function createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGro
   const diagnostics = [];
   const locationMap = new Map();
   for (const source of Array.isArray(sources) ? sources : []) {
+    if (!source?.sourceId || source?.sourceIdentity?.valid === false) {
+      diagnostics.push({
+        severity: "warning",
+        code: "material-source-identity-invalid",
+        sourceId: source?.sourceId || null,
+        boxId: source?.boxId ?? null,
+        slotId: source?.slotId ?? null,
+        reason: source?.sourceIdentity?.reason || "source-id-missing",
+      });
+      continue;
+    }
     if (source.boxId === null || source.slotId === null) {
       diagnostics.push({
         severity: "warning",
@@ -850,7 +877,7 @@ function normalizeSameMaterialGroups(groups, sourceIndex) {
       return `unresolved:${ref.boxId ?? "unknown"}:${ref.slotId ?? "unknown"}`;
     }).sort();
     const materialCode = toNullableString(entry?.[0]);
-    const color = normalizeProtocolColor(entry?.[1]);
+    const color = normalizeMaterialColor(entry?.[1], { source: "boxsInfo.same_material[][1]", vendor: "creality" });
     const materialType = toNullableString(entry?.[3]);
     const groupKey = [
       materialType || "unknown",
@@ -916,6 +943,13 @@ export function normalizeK2BoxsInfo(boxsInfo, options = {}) {
     sources,
     assignments,
     sameMaterialGroups,
+    observationMask: {
+      sections: {
+        materialBoxs: hasOwn(boxsInfo, "materialBoxs"),
+        assignments: hasOwn(boxsInfo, "colorMatch"),
+        sameMaterialGroups: hasOwn(boxsInfo, "same_material"),
+      },
+    },
     diagnostics: createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGroups),
   };
 }

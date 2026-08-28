@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1279 (PR #426)
+* @version 1.390.1424 (PR #435)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 11:50:46
+* @lastModified 2026-08-28 01:48:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,6 +43,7 @@ import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
+import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -140,11 +141,11 @@ export async function exportAllData() {
  * 同一IDのデータが存在する場合は新しい方を採用する。
  *
  * @param {Object} data - インポートするデータ
- * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number, panels: number }}
+ * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number, panels: number, observations: number }}
  *          各カテゴリの追加件数
  */
 export async function importAllData(data) {
-  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0, panels: 0 };
+  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0, panels: 0, observations: 0 };
 
   // ── スプール: id ベースでマージ ──
   if (Array.isArray(data.filamentSpools)) {
@@ -369,6 +370,39 @@ export async function importAllData(data) {
         }
       }
     }
+  }
+
+  // ── Gate 18.7: materialSourceObservations はread-only evidenceとしてimportする ──
+  //   管理スプール装着・使用履歴・台帳へ投影せず、機器観測の最後の状態としてだけ復元する。
+  if (data.materialSourceObservations && typeof data.materialSourceObservations === "object") {
+    const restored = normalizeStoredMaterialSourceObservations(data.materialSourceObservations, {
+      restoredAt: new Date().toISOString(),
+    });
+    if (!monitorData.materialSourceObservations
+        || typeof monitorData.materialSourceObservations !== "object"
+        || Array.isArray(monitorData.materialSourceObservations)) {
+      monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
+    }
+    if (!monitorData.materialSourceObservations.byDeviceId
+        || typeof monitorData.materialSourceObservations.byDeviceId !== "object"
+        || Array.isArray(monitorData.materialSourceObservations.byDeviceId)) {
+      monitorData.materialSourceObservations.byDeviceId = {};
+    }
+    if (restored.retainedUnsupportedStore) {
+      monitorData.materialSourceObservations.retainedUnsupportedStore = restored.retainedUnsupportedStore;
+      monitorData.materialSourceObservations.migrationStatus = restored.migrationStatus;
+    }
+    for (const [deviceId, record] of Object.entries(restored.byDeviceId || {})) {
+      const existing = monitorData.materialSourceObservations.byDeviceId[deviceId];
+      const existingMs = new Date(existing?.lastObservedAt || 0).getTime();
+      const incomingMs = new Date(record?.lastObservedAt || 0).getTime();
+      if (!existing || !Number.isFinite(existingMs) || (Number.isFinite(incomingMs) && incomingMs >= existingMs)) {
+        monitorData.materialSourceObservations.byDeviceId[deviceId] = record;
+        stats.observations++;
+      }
+    }
+    monitorData.materialSourceObservations.schemaVersion = 1;
+    monitorData.materialSourceObservations.authority = "observation-only";
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -736,6 +770,8 @@ const LS_GLOBAL_FIELDS = [
   "ledgerRepairRequired",
   // ★ ADR-0005: フィラメント切れ/一時停止イベント文脈（状態認識つき帰属の遡及判定用）
   "filamentEventContext",
+  // ★ Gate 18.7: CFS/CFS-C/外部スプールのread-only機器観測フィラメント履歴。
+  "materialSourceObservations",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -994,6 +1030,8 @@ function _flushStorage() {
       queueSharedWrite("ledgerRepairRequired",            monitorData.ledgerRepairRequired);
       // ★ ADR-0005: フィラメントイベント文脈（per-host・遡及帰属判定用）
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
+      // ★ Gate 18.7: 機器観測フィラメントはread-only evidenceとして保存し、台帳権威へは混ぜない。
+      queueSharedWrite("materialSourceObservations", monitorData.materialSourceObservations);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1475,6 +1513,38 @@ function _restoreFromData(shared, machines) {
         monitorData.filamentEventContext[host] = ctx;
       }
     }
+  }
+
+  // ★ Gate 18.7: CFS/CFS-C/外部スプールの機器観測フィラメントを復元する。
+  //   これは「最後に観測したread-only evidence」であり、復元時にhostSpoolMapや台帳へ投影しない。
+  if (shared?.materialSourceObservations && typeof shared.materialSourceObservations === "object") {
+    const restoredStore = normalizeStoredMaterialSourceObservations(shared.materialSourceObservations, {
+      restoredAt: new Date().toISOString(),
+    });
+    if (!monitorData.materialSourceObservations
+        || typeof monitorData.materialSourceObservations !== "object"
+        || Array.isArray(monitorData.materialSourceObservations)) {
+      monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
+    }
+    if (!monitorData.materialSourceObservations.byDeviceId
+        || typeof monitorData.materialSourceObservations.byDeviceId !== "object"
+        || Array.isArray(monitorData.materialSourceObservations.byDeviceId)) {
+      monitorData.materialSourceObservations.byDeviceId = {};
+    }
+    if (restoredStore.retainedUnsupportedStore) {
+      monitorData.materialSourceObservations.retainedUnsupportedStore = restoredStore.retainedUnsupportedStore;
+      monitorData.materialSourceObservations.migrationStatus = restoredStore.migrationStatus;
+    }
+    const restoredByDevice = restoredStore.byDeviceId;
+    if (restoredByDevice && typeof restoredByDevice === "object" && !Array.isArray(restoredByDevice)) {
+      for (const [deviceId, record] of Object.entries(restoredByDevice)) {
+        if (record && typeof record === "object" && !monitorData.materialSourceObservations.byDeviceId[deviceId]) {
+          monitorData.materialSourceObservations.byDeviceId[deviceId] = record;
+        }
+      }
+    }
+    monitorData.materialSourceObservations.schemaVersion = 1;
+    monitorData.materialSourceObservations.authority = "observation-only";
   }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）

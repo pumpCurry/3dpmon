@@ -5,9 +5,9 @@
  * 実行方法: node tests/e2e/electron_boot.test.mjs
  * （vitest ではなく直接実行 — Electron は Node.js プロセスとして起動する必要がある）
  *
- * @version 1.390.1390 (PR #432)
+ * @version 1.390.1454 (PR #435)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-08-26 01:15:00
+ * @lastModified 2026-08-28 14:34:17
  */
 
 import { spawn, spawnSync } from "child_process";
@@ -39,11 +39,13 @@ function test(name, fn) {
 function spawnElectron(args = [], envOverrides = {}) {
   const electronPath = resolve(PROJECT_ROOT, "node_modules/.bin/electron");
   const mainJs = resolve(PROJECT_ROOT, "electron/main.js");
-  return spawn(electronPath, [mainJs, ...args], {
+  const linuxCiArgs = process.platform === "linux" && process.env.CI ? ["--no-sandbox"] : [];
+  return spawn(electronPath, [...linuxCiArgs, mainJs, ...args], {
     cwd: PROJECT_ROOT,
     env: { ...process.env, ELECTRON_DISABLE_GPU: "1", ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"],
-    shell: true
+    shell: process.platform === "win32",
+    detached: process.platform !== "win32"
   });
 }
 
@@ -69,7 +71,15 @@ function terminateProcessTree(proc) {
     });
     return;
   }
-  proc.kill();
+  if (proc.pid) {
+    try {
+      process.kill(-proc.pid, "SIGTERM");
+      return;
+    } catch {
+      // プロセスグループ終了に失敗した場合だけ、通常の単体killへフォールバックする。
+    }
+  }
+  proc.kill("SIGTERM");
 }
 
 // ======================================================================

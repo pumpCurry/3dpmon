@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1391 (PR #432)
+ * @version 1.390.1452 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-26 02:02:52
+ * @lastModified 2026-08-28 14:28:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -124,8 +124,50 @@ const DEFAULT_K2_MOONRAKER_HTTP_PORT = 4408;
  */
 const DEFAULT_K2_WEBRTC_CAMERA_PORT = 8000;
 
+/**
+ * 現在のアプリ起動中に実施したPrinter Core v3 `/info` probeを識別する揮発session ID。
+ *
+ * 【詳細説明】
+ * - connectionTargetsは永続化されるため、前回起動時の`/info`結果をそのままcommand authorityの
+ *   現在scopeとして使ってはいけない。
+ * - Gate 20では再起動後にre-probeされるまでCFS controlをfail-closedにするため、
+ *   probe成功時にこのIDを証跡へ付与し、UI側で現在起動中の観測だけを採用する。
+ *
+ * @constant {string}
+ */
+const PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID = `pcv3-probe:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+/**
+ * 現在のアプリ起動中に割り当てたPrinter Core v3接続instance通番。
+ *
+ * 【詳細説明】
+ * - `connectionMap` のstate objectはcleanupで削除されるため、state-localな `+1` 採番だけでは
+ *   同一runtime内でgeneration番号を再利用し得る。
+ * - `/info`応答と現在WS接続の結び付けは「同じ番号」ではなく「同じ接続instance」を意味するため、
+ *   module runtime全体で単調増加させ、cleanup/recreate後も古いprobe応答を新接続へ誤bindしない。
+ *
+ * @type {number}
+ */
+let printerCoreV3ConnectionSequence = 0;
+
 /** @type {Record<string, ConnectionState>} */
 const connectionMap = {};
+
+/**
+ * 現在のアプリ起動中に使うPrinter Core v3 `/info` probe session IDを返す。
+ *
+ * 【詳細説明】
+ * - UI composition層は保存済み`printerCoreV3Info.probeSessionId`とこの値を比較し、
+ *   再起動前の古い`/info`証跡でproduction CFS controlが復活しないようにする。
+ *
+ * @function getPrinterCoreV3RuntimeProbeSessionId
+ * @returns {string} 現在起動中の`/info` probe session ID
+ * @example
+ * const sessionId = getPrinterCoreV3RuntimeProbeSessionId();
+ */
+export function getPrinterCoreV3RuntimeProbeSessionId() {
+  return PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID;
+}
 
 /**
  * @typedef {Object} ConnectionState
@@ -145,6 +187,8 @@ const connectionMap = {};
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
  * @property {string}         dest          - 接続先(IP:PORT)
+ * @property {number}         printerCoreV3ConnectionGeneration
+ *                                        - Printer Core v3 `/info` scope を現在のWS接続世代へbindする番号
  * @property {string|null}    printerCoreV3ShadowSessionId
  *                                        - Printer Core v3 live shadow 用の接続 session ID
  * @property {string|null}    printerCoreV3ShadowDeviceId
@@ -157,6 +201,12 @@ const connectionMap = {};
  *                                        - K2 CFS boxsInfo を受信済みか
  * @property {number|null}    printerCoreV3K2BoxsInfoProbeLastSentAt
  *                                        - K2 CFS boxsInfo refresh/probe を最後に観測または送信した epoch ms
+ * @property {boolean}        printerCoreV3K2BoxsInfoProbeInFlight
+ *                                        - K2 CFS boxsInfo probe 応答待ち中か
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeStartedAt
+ *                                        - K2 CFS boxsInfo probe 応答待ち開始 epoch ms
+ * @property {number|null}    printerCoreV3K2BoxsInfoProbeDeadlineAt
+ *                                        - K2 CFS boxsInfo probe timeout 判定 epoch ms
  * @property {boolean|null}   printerCoreV3K2CfsConnected
  *                                        - K2 CFS 接続状態の直近観測
  * @property {number}         printerCoreV3K2CfsEpoch
@@ -187,7 +237,18 @@ const MAX_RECONNECT = 5;
  *
  * @constant {number}
  */
-const K2_BOXS_INFO_REFRESH_INTERVAL_MS = 30_000;
+const K2_BOXS_INFO_REFRESH_INTERVAL_MS = 10_000;
+
+/**
+ * K2/CFS `boxsInfo` read-only probe の応答待ちtimeout。
+ *
+ * 【詳細説明】
+ * - 表示上のfresh TTLより短くし、stale表示へ落ちる前に次のprobeを準備できるようにする。
+ * - 応答待ち中は同じprobeを重ねず、UIへ「通信中 xx秒」を出すための状態だけ更新する。
+ *
+ * @constant {number}
+ */
+const K2_BOXS_INFO_PROBE_TIMEOUT_MS = 25_000;
 
 /**
  * K1C/CFS-C secondary material provider の既定subscribe候補。
@@ -549,6 +610,164 @@ function _normalizePositivePort(value) {
 }
 
 /**
+ * `/info` 応答から現在起動中のscope証跡だけをconnection targetへ残す。
+ *
+ * 【詳細説明】
+ * - command authorityで必要なmodel/firmware/transport hintだけを保存し、MACやserialは既存の
+ *   identity repositoryへ任せる。
+ * - `probeSessionId` はアプリ再起動で変わるため、古い永続`/info`結果はUI側で現在scopeとして扱われない。
+ *
+ * @private
+ * @param {object|null|undefined} target - connection target
+ * @param {object|null|undefined} evidence - `/info` 応答
+ * @param {string} observedAt - 応答JSONを採用した時刻ISO文字列
+ * @param {object=} scope - 現在接続scope
+ * @param {string=} scope.requestedAt - HTTP request開始時刻
+ * @param {number=} scope.connectionGeneration - 現在WS接続世代
+ * @param {string=} scope.connectionDest - 現在接続dest
+ * @param {string=} scope.connectionHost - 現在接続host key
+ * @returns {boolean} targetを変更した場合true
+ */
+function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt, scope = {}) {
+  if (!target || target.printerType === "moonraker" || !evidence || typeof evidence !== "object") {
+    return false;
+  }
+  const model = String(evidence.model || evidence.reportedModel || "").trim() || null;
+  const version = String(evidence.version || evidence.firmwareVersion || "").trim() || null;
+  const nextInfo = {
+    source: "http-info",
+    model,
+    reportedModel: model,
+    version,
+    firmwareVersion: version,
+    wssPort: _normalizePositivePort(evidence.wssPort),
+    videoPort: _normalizePositivePort(evidence.videoPort),
+    requestedAt: String(scope.requestedAt || "").trim() || null,
+    observedAt,
+    probeSessionId: PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID,
+    connectionGeneration: Number(scope.connectionGeneration) || 0,
+    connectionDest: String(scope.connectionDest || target.dest || "").trim() || null,
+    connectionHost: String(scope.connectionHost || target.hostname || "").trim() || null,
+  };
+  const previous = target.printerCoreV3Info || {};
+  const changed = JSON.stringify(previous) !== JSON.stringify(nextInfo);
+  if (changed) {
+    target.printerCoreV3Info = nextInfo;
+  }
+  return changed;
+}
+
+/**
+ * connection target またはhost文字列から現在の接続state entryを探す。
+ *
+ * 【詳細説明】
+ * - `/info` probeはIPキーで開始し、最初のWS frame後にhostnameキーへ移行するため、
+ *   host名完全一致だけでは現在の接続世代を取りこぼす。
+ * - dest完全一致、hostname、IP literalの順に候補を広げるが、新しいstateは作らず既存mapだけを見る。
+ *
+ * @private
+ * @function _findConnectionStateEntry
+ * @param {string} hostOrDest - host名、IP、またはdest候補
+ * @param {object|null|undefined} target - connection target候補
+ * @returns {{key:string,state:ConnectionState}|null} 見つかったstate entry、またはnull
+ */
+function _findConnectionStateEntry(hostOrDest, target = null) {
+  const candidates = new Set();
+  const addCandidate = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    candidates.add(text);
+    const ip = _extractIp(text);
+    if (ip) candidates.add(ip);
+  };
+  addCandidate(hostOrDest);
+  addCandidate(target?.hostname);
+  addCandidate(target?.dest);
+  for (const [key, state] of Object.entries(connectionMap)) {
+    if (!state) continue;
+    if (candidates.has(key) || candidates.has(state.dest)) {
+      return { key, state };
+    }
+    const stateIp = _extractIp(state.dest || "");
+    if (stateIp && candidates.has(stateIp)) {
+      return { key, state };
+    }
+  }
+  return null;
+}
+
+/**
+ * `/info` probe開始時の接続scopeを取得する。
+ *
+ * 【詳細説明】
+ * - HTTP応答はWebSocket再接続より遅れて届くことがあるため、応答時に現在generationを読み直すと
+ *   旧probe応答を新connectionへ誤bindできる。
+ * - 開始時点のstate objectとgenerationを保持し、応答処理ではこのscopeがまだ同じ接続を指す場合だけ採用する。
+ *
+ * @private
+ * @function _captureHttpInfoProbeConnectionScope
+ * @param {string} dest - probe対象dest
+ * @param {string} hostOrDest - 接続キーまたはhostname
+ * @param {object|null|undefined} target - connection target候補
+ * @returns {{state:ConnectionState|null,connectionGeneration:number,connectionDest:string,connectionHost:string}} probe開始scope
+ */
+function _captureHttpInfoProbeConnectionScope(dest, hostOrDest, target) {
+  const stateEntry = _findConnectionStateEntry(hostOrDest || dest, target);
+  return {
+    state: stateEntry?.state || null,
+    connectionGeneration: Number(stateEntry?.state?.printerCoreV3ConnectionGeneration) || 0,
+    connectionDest: String(target?.dest || dest || "").trim(),
+    connectionHost: String(stateEntry?.key || hostOrDest || target?.hostname || "").trim(),
+  };
+}
+
+/**
+ * `/info` probe開始時のscopeが応答時にも同じ接続を指しているか判定する。
+ *
+ * 【詳細説明】
+ * - 同じstate objectでも `connectWs()` が再実行されるとgenerationが進むため、旧HTTP応答は破棄する。
+ * - state objectが別物に差し替わった場合も、endpoint入替やhostname移行のraceとして破棄する。
+ *
+ * @private
+ * @function _isHttpInfoProbeConnectionScopeCurrent
+ * @param {object} scope - {@link _captureHttpInfoProbeConnectionScope} の戻り値
+ * @returns {boolean} 応答を現在scopeとして採用できる場合true
+ */
+function _isHttpInfoProbeConnectionScopeCurrent(scope) {
+  if (!scope?.state || !scope.connectionGeneration) {
+    return false;
+  }
+  const target = _findConnectionTarget(scope.connectionDest || scope.connectionHost);
+  const currentEntry = _findConnectionStateEntry(scope.connectionHost || scope.connectionDest, target);
+  return currentEntry?.state === scope.state &&
+    Number(currentEntry.state?.printerCoreV3ConnectionGeneration) === Number(scope.connectionGeneration) &&
+    String(currentEntry.state?.dest || "").trim() === String(scope.connectionDest || "").trim();
+}
+
+/**
+ * 指定host/destに対応する現在のPrinter Core v3接続世代を返す。
+ *
+ * 【詳細説明】
+ * - Panel composition側が永続`printerCoreV3Info`を現在のWebSocket接続へbindするために使う。
+ * - 0は「現在接続世代を確認できない、または接続中ではない」ことを示し、
+ *   production command scopeでは採用しない。
+ *
+ * @function getPrinterCoreV3ConnectionGeneration
+ * @param {string} hostOrDest - host名、IP、またはdest候補
+ * @returns {number} 現在の接続世代。未接続、切断済み、または不明なら0
+ * @example
+ * const generation = getPrinterCoreV3ConnectionGeneration("K2Pro-69E7");
+ */
+export function getPrinterCoreV3ConnectionGeneration(hostOrDest) {
+  const target = _findConnectionTarget(hostOrDest);
+  const entry = _findConnectionStateEntry(hostOrDest, target);
+  if (entry?.state?.state !== "connected") {
+    return 0;
+  }
+  return Number(entry?.state?.printerCoreV3ConnectionGeneration) || 0;
+}
+
+/**
  * HTTP `/info` などから得たtransport hintをconnectionTargetへ保存する。
  *
  * 【詳細説明】
@@ -822,9 +1041,11 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
   if (!httpHost || !Number.isFinite(httpPort) || httpPort <= 0) {
     return;
   }
+  const probeScope = _captureHttpInfoProbeConnectionScope(dest, hostOrDest, target);
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
   try {
+    const requestedAt = new Date().toISOString();
     const response = await window.fetch(`http://${httpHost}:${httpPort}/info`, {
       cache: "no-store",
       signal: controller?.signal,
@@ -836,19 +1057,29 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return;
     }
+    if (!_isHttpInfoProbeConnectionScopeCurrent(probeScope)) {
+      return;
+    }
+    const observedAt = new Date().toISOString();
     _recordPrinterCoreV3Identity(hostOrDest || dest, {
       ...body,
       source: "http-info",
       endpointAddress,
     });
     const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
+    const infoChanged = _recordCurrentPrinterCoreV3Info(target, body, observedAt, {
+      requestedAt,
+      connectionGeneration: probeScope.connectionGeneration,
+      connectionDest: probeScope.connectionDest,
+      connectionHost: probeScope.connectionHost,
+    });
     const transportChanged = _applyConnectionTargetTransportHints(target, body, inferredType);
     _applyInferredConnectionTargetPrinterType(
       target,
       inferredType,
       _resolveHostForPanelRefresh(target, dest)
     );
-    if (transportChanged) {
+    if (infoChanged || transportChanged) {
       saveUnifiedStorage(true);
       try { updatePrinterListUI(); } catch { /* 初期化前テスト環境では無視する。 */ }
     }
@@ -978,6 +1209,102 @@ function _endPrinterCoreV3LiveShadowSession(host, state) {
 }
 
 /**
+ * K2/CFS boxsInfo probe の通信状態をruntimeDataへ反映する。
+ *
+ * 【詳細説明】
+ * - フィラメントパネルは通信中だけ `(📡: xx秒)` を表示するため、probe送信/受信/timeoutの
+ *   揮発状態を shadow record に保存する。
+ * - 既存の lastState / material topology は書き換えず、観測証跡と通信中表示だけを分離する。
+ *
+ * @private
+ * @param {string} host - 対象ホスト名
+ * @param {ConnectionState} state - 接続状態
+ * @param {"in-flight"|"idle"|"timeout"|"error"} requestState - probe通信状態
+ * @param {number=} nowMs - 現在時刻epoch ms
+ * @returns {void}
+ */
+function _recordK2CfsBoxsInfoProbeRuntime(host, state, requestState, nowMs = Date.now()) {
+  const machine = monitorData.machines?.[host];
+  if (!machine) {
+    return;
+  }
+  machine.runtimeData ??= {};
+  const previous = machine.runtimeData.printerCoreV3Shadow || {};
+  const startedAt = state?.printerCoreV3K2BoxsInfoProbeStartedAt || null;
+  machine.runtimeData.printerCoreV3Shadow = {
+    ...previous,
+    materialProviderRequest: {
+      ...(previous.materialProviderRequest || {}),
+      state: requestState,
+      startedAt: requestState === "in-flight" && startedAt ? new Date(startedAt).toISOString() : null,
+      startedAtMs: requestState === "in-flight" ? startedAt : null,
+      lastSentAt: state?.printerCoreV3K2BoxsInfoProbeLastSentAt
+        ? new Date(state.printerCoreV3K2BoxsInfoProbeLastSentAt).toISOString()
+        : previous.materialProviderRequest?.lastSentAt ?? null,
+      deadlineAt: requestState === "in-flight" && state?.printerCoreV3K2BoxsInfoProbeDeadlineAt
+        ? new Date(state.printerCoreV3K2BoxsInfoProbeDeadlineAt).toISOString()
+        : null,
+      updatedAt: new Date(nowMs).toISOString(),
+    },
+  };
+}
+
+/**
+ * K2 `boxsInfo` がcomplete snapshotとして扱える形状か判定する。
+ *
+ * 【詳細説明】
+ * - WS9999の`boxsInfo`には、CFS全体を返すpoll応答と、selectedやassignmentだけを含む疎なpush deltaがあり得る。
+ * - 応答IDが無い現状ではin-flight状態だけでは相関証拠が弱いため、実機pollで観測済みの
+ *   `materialBoxs` / `colorMatch` / `same_material` が揃う場合だけcomplete候補にする。
+ * - この条件を満たさないpayloadは、既存sourceを削除しないpartialとして扱う。
+ *
+ * @private
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @returns {boolean} complete snapshot候補ならtrue
+ */
+function _isK2CompleteBoxsInfoSnapshotCandidate(boxsInfo) {
+  if (!boxsInfo || typeof boxsInfo !== "object") {
+    return false;
+  }
+  return Array.isArray(boxsInfo.materialBoxs) &&
+    Array.isArray(boxsInfo.colorMatch) &&
+    Array.isArray(boxsInfo.same_material);
+}
+
+/**
+ * K2 `boxsInfo` frame のsnapshot完全性をproduction caller側で分類する。
+ *
+ * 【詳細説明】
+ * - Gate 18.7では`boxsInfo`をpartial-by-defaultにして、selected-onlyやassignment-onlyの疎なdeltaで
+ *   既存slot情報を消さない契約にした。
+ * - ただし3DPmon自身が直前に送ったread-only `get { boxsInfo: 1 }` の応答は、CFS全体の明示poll結果として
+ *   扱えるため、live shadow / observation storeへ`complete`として渡す。
+ * - timeout後に遅れて届いたpayloadや自発pushは、明示poll応答としての鮮度を証明できないので`partial`のままにする。
+ *
+ * @private
+ * @param {ConnectionState|null|undefined} state - 接続状態
+ * @param {object|null|undefined} data - 受信 payload
+ * @param {number=} nowMs - 判定時刻 epoch milliseconds
+ * @returns {"complete"|"partial"} snapshot完全性
+ */
+function _classifyK2BoxsInfoSnapshotCompleteness(state, data, nowMs = Date.now()) {
+  const hasBoxsInfo = data?.boxsInfo && typeof data.boxsInfo === "object";
+  if (!hasBoxsInfo) {
+    return "partial";
+  }
+  if (!_isK2CompleteBoxsInfoSnapshotCandidate(data.boxsInfo)) {
+    return "partial";
+  }
+  const inFlightStartedAt = Number(state?.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
+  const deadlineAt = Number(state?.printerCoreV3K2BoxsInfoProbeDeadlineAt || 0);
+  const probeInFlight = state?.printerCoreV3K2BoxsInfoProbeInFlight === true &&
+    inFlightStartedAt > 0 &&
+    nowMs - inFlightStartedAt < K2_BOXS_INFO_PROBE_TIMEOUT_MS &&
+    (!deadlineAt || nowMs <= deadlineAt);
+  return probeInFlight ? "complete" : "partial";
+}
+
+/**
  * K2 Pro Combo + CFS の read-only `boxsInfo` probe を必要に応じて送る。
  *
  * 【詳細説明】
@@ -1005,8 +1332,12 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoProbeSent = false;
     state.printerCoreV3K2BoxsInfoReceived = false;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
     state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "idle");
     return false;
   }
   if (hasCfsConnect && cfsConnectValue === 1 && state.printerCoreV3K2CfsConnected !== true) {
@@ -1014,6 +1345,9 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoProbeSent = false;
     state.printerCoreV3K2BoxsInfoReceived = false;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
     state.printerCoreV3K2BoxsInfoReceivedEpoch = null;
   }
@@ -1021,16 +1355,54 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2CfsConnected = true;
   }
   const epoch = Number(state.printerCoreV3K2CfsEpoch || 0);
+  const nowMs = Date.now();
   if (hasBoxsInfo) {
-    state.printerCoreV3K2BoxsInfoReceived = true;
-    state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
-    state.printerCoreV3K2BoxsInfoProbeLastSentAt = Date.now();
+    const snapshotCompleteness = _classifyK2BoxsInfoSnapshotCompleteness(state, data, nowMs);
+    const fullShapedSnapshotObserved = _isK2CompleteBoxsInfoSnapshotCandidate(data.boxsInfo);
+    if (snapshotCompleteness === "complete" || fullShapedSnapshotObserved) {
+      state.printerCoreV3K2BoxsInfoReceived = true;
+      state.printerCoreV3K2BoxsInfoReceivedEpoch = epoch;
+      state.printerCoreV3K2BoxsInfoProbeLastSentAt = nowMs;
+      state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+      state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+      state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+      _recordK2CfsBoxsInfoProbeRuntime(host, state, "idle", nowMs);
+      return false;
+    }
+    const inFlightStartedAt = Number(state.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
+    const probeStillInFlight = state.printerCoreV3K2BoxsInfoProbeInFlight === true &&
+      inFlightStartedAt > 0 &&
+      nowMs - inFlightStartedAt < K2_BOXS_INFO_PROBE_TIMEOUT_MS;
+    if (probeStillInFlight) {
+      _recordK2CfsBoxsInfoProbeRuntime(host, state, "in-flight", nowMs);
+      return false;
+    }
+    if (state.printerCoreV3K2BoxsInfoProbeInFlight === true && inFlightStartedAt > 0) {
+      state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+      state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+      state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+      _recordK2CfsBoxsInfoProbeRuntime(host, state, "timeout", nowMs);
+      return false;
+    }
     return false;
   }
   if (!hasCfsConnect || cfsConnectValue !== 1) {
     return false;
   }
-  const nowMs = Date.now();
+  const inFlightStartedAt = Number(state.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
+  const probeInFlight = state.printerCoreV3K2BoxsInfoProbeInFlight === true &&
+    inFlightStartedAt > 0 &&
+    nowMs - inFlightStartedAt < K2_BOXS_INFO_PROBE_TIMEOUT_MS;
+  if (probeInFlight) {
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "in-flight", nowMs);
+    return false;
+  }
+  if (state.printerCoreV3K2BoxsInfoProbeInFlight === true && inFlightStartedAt > 0) {
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "timeout", nowMs);
+  }
   const lastSentAt = Number(state.printerCoreV3K2BoxsInfoProbeLastSentAt || 0);
   const refreshDue = lastSentAt <= 0 || nowMs - lastSentAt >= K2_BOXS_INFO_REFRESH_INTERVAL_MS;
   const alreadyHandledThisEpoch =
@@ -1044,9 +1416,17 @@ function _requestK2CfsBoxsInfoProbe(host, state, data) {
     state.printerCoreV3K2BoxsInfoProbeSent = true;
     state.printerCoreV3K2BoxsInfoProbeSentEpoch = epoch;
     state.printerCoreV3K2BoxsInfoProbeLastSentAt = nowMs;
+    state.printerCoreV3K2BoxsInfoProbeInFlight = true;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = nowMs;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = nowMs + K2_BOXS_INFO_PROBE_TIMEOUT_MS;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "in-flight", nowMs);
     pushLog("[Printer Core v3] K2 CFS boxsInfo read-only probe を送信しました", "info", false, host);
     return true;
   } catch (e) {
+    state.printerCoreV3K2BoxsInfoProbeInFlight = false;
+    state.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+    state.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
+    _recordK2CfsBoxsInfoProbeRuntime(host, state, "error");
     pushLog(`[Printer Core v3] K2 CFS boxsInfo probe 送信エラー: ${e.message}`, "warn", false, host);
     return false;
   }
@@ -1068,6 +1448,12 @@ function _closeSecondaryMaterialProviderSession(host, state) {
   if (!state?.printerCoreV3MaterialProviderSession) {
     return;
   }
+  const providerSessionId = state.printerCoreV3MaterialProviderSession.providerSessionId
+    || state.printerCoreV3MaterialProviderSession.materialProviderSessionId
+    || null;
+  const providerGeneration = state.printerCoreV3MaterialProviderTransportGeneration
+    || state.printerCoreV3MaterialProviderSession.transportGeneration
+    || null;
   try {
     state.printerCoreV3MaterialProviderSession.close();
   } catch (e) {
@@ -1077,6 +1463,8 @@ function _closeSecondaryMaterialProviderSession(host, state) {
   observeMoonrakerCfsMaterialProviderFrame({
     host,
     payload: null,
+    providerSessionId,
+    providerGeneration,
     connected: false,
     receivedAt: new Date().toISOString(),
   });
@@ -1127,15 +1515,19 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     url: `${protocol}${endpoint}/websocket`,
     fallbackHost: host,
     httpBase: `${httpProtocol}${endpoint}`,
+    materialProviderSessionId: providerSessionId,
     materialSubscribeObjects: CFS_C_MOONRAKER_MATERIAL_OBJECTS,
     materialOnly: true,
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
-    onState: (sessionState) => {
-      if (sessionState === "disconnected") {
+    onState: (sessionState, meta = {}) => {
+      if (["waiting", "connecting", "disconnected"].includes(sessionState)) {
+        state.printerCoreV3MaterialProviderTransportGeneration =
+          meta.transportGeneration || state.printerCoreV3MaterialProviderTransportGeneration || null;
         observeMoonrakerCfsMaterialProviderFrame({
           host,
           payload: null,
           providerSessionId,
+          providerGeneration: state.printerCoreV3MaterialProviderTransportGeneration,
           connected: false,
           receivedAt: new Date().toISOString(),
         });
@@ -1144,19 +1536,24 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     onData: () => {
       /* CFS-C provider sessionではK1互換状態をUIへ流さず、material payloadだけを使う。 */
     },
-    onMaterial: (payload) => {
+    onMaterial: (payload, _materialHost, snapshotCompleteness = "partial", meta = {}) => {
+      state.printerCoreV3MaterialProviderTransportGeneration =
+        meta.transportGeneration || state.printerCoreV3MaterialProviderTransportGeneration || providerSessionId;
       observeMoonrakerCfsMaterialProviderFrame({
         host,
         payload,
         providerSessionId,
+        providerGeneration: state.printerCoreV3MaterialProviderTransportGeneration,
         connected: true,
         receivedAt: new Date().toISOString(),
+        snapshotCompleteness,
       });
     },
     shouldReconnect: () => !state.userDisc,
   });
   state.printerCoreV3MaterialProviderSession.endpoint = endpoint;
   state.printerCoreV3MaterialProviderSession.host = host;
+  state.printerCoreV3MaterialProviderSession.providerSessionId = providerSessionId;
   return true;
 }
 
@@ -1270,12 +1667,16 @@ const placeholderState = {
   buffer: [],
   latest: null,
   dest: "",
+  printerCoreV3ConnectionGeneration: 0,
   printerCoreV3ShadowSessionId: null,
   printerCoreV3ShadowDeviceId: null,
   printerCoreV3ShadowFamily: null,
   printerCoreV3K2BoxsInfoProbeSent: false,
   printerCoreV3K2BoxsInfoReceived: false,
   printerCoreV3K2BoxsInfoProbeLastSentAt: null,
+  printerCoreV3K2BoxsInfoProbeInFlight: false,
+  printerCoreV3K2BoxsInfoProbeStartedAt: null,
+  printerCoreV3K2BoxsInfoProbeDeadlineAt: null,
   printerCoreV3K2CfsConnected: null,
   printerCoreV3K2CfsEpoch: 0,
   printerCoreV3K2BoxsInfoProbeSentEpoch: null,
@@ -1316,12 +1717,16 @@ function getState(host) {
       buffer: [],
       latest: null,
       dest: "",
+      printerCoreV3ConnectionGeneration: 0,
       printerCoreV3ShadowSessionId: null,
       printerCoreV3ShadowDeviceId: null,
       printerCoreV3ShadowFamily: null,
       printerCoreV3K2BoxsInfoProbeSent: false,
       printerCoreV3K2BoxsInfoReceived: false,
       printerCoreV3K2BoxsInfoProbeLastSentAt: null,
+      printerCoreV3K2BoxsInfoProbeInFlight: false,
+      printerCoreV3K2BoxsInfoProbeStartedAt: null,
+      printerCoreV3K2BoxsInfoProbeDeadlineAt: null,
       printerCoreV3K2CfsConnected: null,
       printerCoreV3K2CfsEpoch: 0,
       printerCoreV3K2BoxsInfoProbeSentEpoch: null,
@@ -1755,6 +2160,7 @@ export function connectWs(hostOrDest) {
   //   per-host 処理は processData 内の _initializedHosts で管理する。
   const state = getState(host);
   state.dest = dest;
+  state.printerCoreV3ConnectionGeneration = ++printerCoreV3ConnectionSequence;
   state.historyReceived = false;
   state.hostReadyAt = null;
 
@@ -2032,6 +2438,9 @@ function handleSocketOpen(host) {
   st.printerCoreV3K2BoxsInfoProbeSent = false;
   st.printerCoreV3K2BoxsInfoReceived = false;
   st.printerCoreV3K2BoxsInfoProbeLastSentAt = null;
+  st.printerCoreV3K2BoxsInfoProbeInFlight = false;
+  st.printerCoreV3K2BoxsInfoProbeStartedAt = null;
+  st.printerCoreV3K2BoxsInfoProbeDeadlineAt = null;
   st.printerCoreV3K2CfsConnected = null;
   st.printerCoreV3K2CfsEpoch = 0;
   st.printerCoreV3K2BoxsInfoProbeSentEpoch = null;
@@ -2209,12 +2618,19 @@ function handleSocketMessage(event, host) {
         const observeShadowFrame = shadowSession.family === "k2"
           ? observeK2LiveShadowFrame
           : observeK1LiveShadowFrame;
-        observeShadowFrame({
+        const shadowFrameOptions = {
           host: resolvedHost,
           deviceId: shadowSession.deviceId,
           sessionId: shadowSession.sessionId,
           frame: data,
-        });
+        };
+        if (shadowSession.family === "k2") {
+          const snapshotCompleteness = _classifyK2BoxsInfoSnapshotCompleteness(st, data);
+          if (snapshotCompleteness === "complete") {
+            shadowFrameOptions.snapshotCompleteness = snapshotCompleteness;
+          }
+        }
+        observeShadowFrame(shadowFrameOptions);
         if (shadowSession.family === "k2") {
           _requestK2CfsBoxsInfoProbe(resolvedHost, st, data);
         }

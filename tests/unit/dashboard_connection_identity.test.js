@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1391 (PR #432)
+ * @version 1.390.1452 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-26 02:02:52
+ * @lastModified 2026-08-28 14:28:57
  *
  * @vitest-environment jsdom
  */
@@ -392,11 +392,90 @@ describe("Printer Core v3 identity dry-run", () => {
       cameraProtocol: "k2-webrtc",
       wssPort: 443,
       videoPort: 443,
+      printerCoreV3Info: {
+        source: "http-info",
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: mod.getPrinterCoreV3RuntimeProbeSessionId(),
+        connectionGeneration: 1,
+        connectionDest: "203.0.113.21:9999",
+        connectionHost: "203.0.113.21",
+      },
     });
+    expect(mod.getPrinterCoreV3ConnectionGeneration("K2Pro-Test")).toBe(0);
     expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual([
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",
     ]);
+  });
+
+  it("遅延した古いHTTP /info応答を新しい接続世代へ誤bindしない", async () => {
+    const pendingFetches = [];
+    window.fetch = vi.fn(() => new Promise((resolve) => {
+      pendingFetches.push(resolve);
+    }));
+
+    mod.connectWithType("203.0.113.22:9999", "creality-k1");
+    mod.connectWithType("203.0.113.22:9999", "creality-k1");
+    expect(window.fetch).toHaveBeenCalledTimes(2);
+
+    pendingFetches[0]({
+      ok: true,
+      json: async () => ({
+        model: "F011",
+        version: "stale-response",
+        wssPort: 443,
+      }),
+    });
+    await flushAsyncProbe();
+
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    expect(target.printerCoreV3Info).toBeUndefined();
+    expect(target.printerCoreV3Identity).toBeUndefined();
+
+    pendingFetches[1]({
+      ok: true,
+      json: async () => ({
+        model: "F012",
+        version: "1.0.0",
+        wssPort: 443,
+      }),
+    });
+    await flushAsyncProbe();
+
+    expect(target.printerCoreV3Info).toMatchObject({
+      model: "F012",
+      version: "1.0.0",
+      connectionGeneration: 2,
+      connectionDest: "203.0.113.22:9999",
+    });
+    expect(target.printerCoreV3Identity.deviceFingerprint.reported).toMatchObject({
+      model: "F012",
+      firmwareVersion: "1.0.0",
+    });
+  });
+
+  it("cleanup後に同一destへ再接続してもPrinter Core v3接続世代を再利用しない", async () => {
+    window.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        model: "F012",
+        version: "1.0.0",
+        wssPort: 443,
+      }),
+    }));
+
+    mod.connectWithType("203.0.113.23:9999", "creality-k2");
+    await flushAsyncProbe();
+    const target = dataMock.monitorData.appSettings.connectionTargets[0];
+    const firstGeneration = target.printerCoreV3Info.connectionGeneration;
+    expect(firstGeneration).toBeGreaterThan(0);
+
+    expect(mod.cleanupConnection("203.0.113.23")).toBe(true);
+    mod.connectWithType("203.0.113.23:9999", "creality-k2");
+    await flushAsyncProbe();
+
+    expect(target.printerCoreV3Info.connectionGeneration).toBeGreaterThan(firstGeneration);
   });
 
   it("Moonraker/IR3翻訳フレームはlegacy processDataへ流すがPrinter Core v3 identity/shadowへ入れない", () => {
@@ -468,7 +547,60 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K1C-CFSC",
       payload: { materialBoxs: [] },
       providerSessionId: "material-provider:K1C-CFSC:198.51.100.20%3A80",
+      providerGeneration: "material-provider:K1C-CFSC:198.51.100.20%3A80",
       connected: true,
+      receivedAt: expect.any(String),
+      snapshotCompleteness: "partial",
+    });
+  });
+
+  it("secondary Moonraker providerのwaiting/connecting/disconnectedはmaterial topologyを即stale化する", () => {
+    dataMock.monitorData.appSettings.connectionTargets = [
+      {
+        dest: "203.0.113.91:9999",
+        printerType: "creality-k1",
+        hostname: "",
+        materialSystem: {
+          mode: "cfs-c-readonly",
+          provider: "moonraker-boxsInfo",
+          providerEndpoint: "198.51.100.21:80",
+          unitLimit: 1,
+        },
+      },
+    ];
+    mod.connectWs("203.0.113.91:9999");
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K1C-CFSC",
+      model: "K1C",
+      printProgress: 0,
+    }), "203.0.113.91");
+
+    const providerCall = moonrakerMock.createMoonrakerSession.mock.calls.find((call) => call[0]?.onState);
+    expect(providerCall).toBeTruthy();
+
+    providerCall[0].onState("connected", { transportGeneration: "provider-gen-1" });
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).not.toHaveBeenCalled();
+
+    providerCall[0].onState("waiting", { transportGeneration: "provider-gen-1" });
+    providerCall[0].onState("connecting", { transportGeneration: "provider-gen-2" });
+    providerCall[0].onState("disconnected", { transportGeneration: "provider-gen-2" });
+
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenCalledTimes(3);
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenNthCalledWith(1, {
+      host: "K1C-CFSC",
+      payload: null,
+      providerSessionId: "material-provider:K1C-CFSC:198.51.100.21%3A80",
+      providerGeneration: "provider-gen-1",
+      connected: false,
+      receivedAt: expect.any(String),
+    });
+    expect(shadowMock.observeMoonrakerCfsMaterialProviderFrame).toHaveBeenNthCalledWith(3, {
+      host: "K1C-CFSC",
+      payload: null,
+      providerSessionId: "material-provider:K1C-CFSC:198.51.100.21%3A80",
+      providerGeneration: "provider-gen-2",
+      connected: false,
       receivedAt: expect.any(String),
     });
   });
@@ -545,12 +677,134 @@ describe("Printer Core v3 identity dry-run", () => {
     ws.sentMessages.length = 0;
     mod.simulateReceivedJson(JSON.stringify({
       boxsInfo: {
-        materialBoxs: [],
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+        same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
       },
     }), "K2Pro-69E7");
 
     expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledTimes(2);
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-69E7",
+      deviceId: "provisional:f012:k2pro-69e7",
+      sessionId: "k2-live:test-session",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              state: 1,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+          same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
+        },
+      },
+      snapshotCompleteness: "complete",
+    });
     expect(ws.sentMessages).toEqual([]);
+  });
+
+  it("K2 CFS boxsInfo probe待ち中でも疎なpush deltaはcomplete snapshot扱いしない", () => {
+    mod.connectWithType("203.0.113.30:9999", "creality-k1");
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+    mod.simulateReceivedJson(JSON.stringify({
+      hostname: "K2Pro-Sparse",
+      model: "F012",
+      cfsConnect: 1,
+    }), "203.0.113.30");
+    expect(ws.sentMessages).toContain(JSON.stringify({ method: "get", params: { boxsInfo: 1 } }));
+
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            materials: [
+              { id: 2, selected: 1 },
+            ],
+          },
+        ],
+      },
+    }), "K2Pro-Sparse");
+
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-Sparse",
+      deviceId: "provisional:f012:k2pro-sparse",
+      sessionId: "k2-live:test-session",
+      frame: {
+        boxsInfo: {
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              materials: [
+                { id: 2, selected: 1 },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    mod.simulateReceivedJson(JSON.stringify({
+      boxsInfo: {
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", percent: 54, state: 1, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+        same_material: [["000002", "09ea7ae", [{ boxId: 1, materialId: 2 }], "PLA"]],
+      },
+    }), "K2Pro-Sparse");
+
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-Sparse",
+      deviceId: "provisional:f012:k2pro-sparse",
+      sessionId: "k2-live:test-session",
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              state: 1,
+              materials: [
+                { id: 2, vendor: "Generic", type: "PLA", color: "#09ea7ae", percent: 54, state: 1, selected: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1C", boxId: 1, materialId: 2 }],
+          same_material: [["000002", "09ea7ae", [{ boxId: 1, materialId: 2 }], "PLA"]],
+        },
+      },
+      snapshotCompleteness: "complete",
+    });
   });
 
   it("K2 retGcodeFileInfo2を既存ファイル一覧rendererのentries形式へ橋渡しする", () => {
@@ -672,10 +926,47 @@ describe("Printer Core v3 identity dry-run", () => {
       model: "F012",
       cfsConnect: 1,
       boxsInfo: {
-        materialBoxs: [],
+        enable: 1,
+        materialBoxs: [
+          {
+            id: 1,
+            type: 0,
+            state: 1,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+            ],
+          },
+        ],
+        colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+        same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
       },
     }), "203.0.113.34");
     expect(ws.sentMessages).toEqual([]);
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-MixedFrame",
+      deviceId: "provisional:f012:k2pro-mixedframe",
+      sessionId: "k2-live:test-session",
+      frame: {
+        hostname: "K2Pro-MixedFrame",
+        model: "F012",
+        cfsConnect: 1,
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [
+            {
+              id: 1,
+              type: 0,
+              state: 1,
+              materials: [
+                { id: 0, vendor: "Generic", type: "PLA", color: "#0ffffff", percent: 100, state: 1, selected: 1 },
+              ],
+            },
+          ],
+          colorMatch: [{ id: "T1A", boxId: 1, materialId: 0 }],
+          same_material: [["000001", "0ffffff", [{ boxId: 1, materialId: 0 }], "PLA"]],
+        },
+      },
+    });
 
     mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-MixedFrame");
     expect(ws.sentMessages).toEqual([]);
@@ -704,6 +995,48 @@ describe("Printer Core v3 identity dry-run", () => {
       expect(ws.sentMessages).toEqual([
         JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
       ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("K2 CFS boxsInfo probe応答待ちは通信中状態をruntimeDataへ記録しtimeout前に重複送信しない", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      mod.connectWithType("203.0.113.36:9999", "creality-k2");
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      dataMock.monitorData.machines["K2Pro-InFlight"] = { runtimeData: {} };
+
+      mod.simulateReceivedJson(JSON.stringify({
+        hostname: "K2Pro-InFlight",
+        model: "F012",
+        cfsConnect: 1,
+      }), "203.0.113.36");
+
+      expect(ws.sentMessages).toEqual([
+        JSON.stringify({ method: "get", params: { boxsInfo: 1 } }),
+      ]);
+      expect(dataMock.monitorData.machines["K2Pro-InFlight"].runtimeData.printerCoreV3Shadow.materialProviderRequest).toMatchObject({
+        state: "in-flight",
+        startedAtMs: 1_000,
+      });
+
+      nowSpy.mockReturnValue(12_000);
+      mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-InFlight");
+      expect(ws.sentMessages).toHaveLength(1);
+      expect(dataMock.monitorData.machines["K2Pro-InFlight"].runtimeData.printerCoreV3Shadow.materialProviderRequest).toMatchObject({
+        state: "in-flight",
+        startedAtMs: 1_000,
+      });
+
+      nowSpy.mockReturnValue(26_500);
+      mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-InFlight");
+      expect(ws.sentMessages).toHaveLength(2);
+      expect(dataMock.monitorData.machines["K2Pro-InFlight"].runtimeData.printerCoreV3Shadow.materialProviderRequest).toMatchObject({
+        state: "in-flight",
+        startedAtMs: 26_500,
+      });
     } finally {
       nowSpy.mockRestore();
     }

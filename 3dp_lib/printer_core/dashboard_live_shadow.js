@@ -11,7 +11,7 @@
  * - K1/K2 系 live WebSocket 受信を Printer Core v3 へ shadow 入力する
  * - 既存 processData() 後の storedData と NormalizedPrinterState を runtime differential として比較
  * - K2 Pro Combo + CFS の read-only 観測結果を runtimeData に保持
- * - UI authority / command path / persistent storage を変更しない read-only shadow として動作
+ * - UI authority / command path を変更せず、CFS material source 観測だけを read-only 台帳へ蓄積
  *
  * 【公開関数一覧】
  * - {@link createPrinterCoreV3ShadowSessionId}：WebSocket 接続ごとの shadow session ID を生成
@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1436 (PR #435)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-28 10:37:51
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -42,6 +42,11 @@ import {
 import {
   createCfsMoonrakerBoxMaterialProvider,
 } from "./dashboard_material_provider.js";
+import {
+  createEmptyMaterialSourceObservations,
+  recordMaterialTopologyObservation,
+  rekeyMaterialSourceObservationDevice,
+} from "./dashboard_material_source_observation.js";
 
 /**
  * live shadow runtime record の schema version。
@@ -167,6 +172,411 @@ function markMaterialTopologyStale(topology, disconnectedAt = null, lastObserved
       lastObservedAt: topology.provider?.lastObservedAt ?? lastObservedAt,
       disconnectedAt,
     },
+  };
+}
+
+/**
+ * JSON化可能な値をcloneする。
+ *
+ * @private
+ * @function cloneJsonValue
+ * @param {*} value - clone対象
+ * @returns {*} clone結果
+ */
+function cloneJsonValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * observedFields maskが明示されているか判定する。
+ *
+ * @private
+ * @function hasObservedFieldMask
+ * @param {*} mask - observedFields候補
+ * @returns {boolean} mask objectならtrue
+ */
+function hasObservedFieldMask(mask) {
+  return Boolean(mask && typeof mask === "object" && !Array.isArray(mask));
+}
+
+/**
+ * mask内のfieldが観測済みかを返す。
+ *
+ * @private
+ * @function isMaskedFieldObserved
+ * @param {*} mask - field mask object
+ * @param {string} fieldName - field名
+ * @param {boolean} fallback - maskが無い場合の判定
+ * @returns {boolean} 観測済みならtrue
+ */
+function isMaskedFieldObserved(mask, fieldName, fallback) {
+  if (!hasObservedFieldMask(mask)) {
+    return fallback;
+  }
+  return mask[fieldName] === true;
+}
+
+/**
+ * mask内に観測済みfieldが1つでもあるかを返す。
+ *
+ * @private
+ * @function hasAnyMaskedFieldObserved
+ * @param {*} mask - field mask object
+ * @param {boolean} fallback - maskが無い場合の判定
+ * @returns {boolean} いずれかのfieldが観測済みならtrue
+ */
+function hasAnyMaskedFieldObserved(mask, fallback) {
+  if (!hasObservedFieldMask(mask)) {
+    return fallback;
+  }
+  return Object.values(mask).some((value) => value === true);
+}
+
+/**
+ * topology sectionが観測済みかを返す。
+ *
+ * @private
+ * @function isTopologySectionObserved
+ * @param {Object} topology - Normalized material topology
+ * @param {string} sectionName - section名
+ * @param {boolean} fallback - maskが無い場合の判定
+ * @returns {boolean} sectionが観測済みならtrue
+ */
+function isTopologySectionObserved(topology, sectionName, fallback) {
+  const sections = topology?.observationMask?.sections;
+  if (!hasObservedFieldMask(sections)) {
+    return fallback;
+  }
+  return sections[sectionName] === true;
+}
+
+/**
+ * 既存runtime sourceからbox/slot参照indexを生成する。
+ *
+ * @private
+ * @function createRuntimeSourceLocationIndex
+ * @param {Map<string,Object>} sourceMap - 既存source map
+ * @returns {Map<string,string>} `boxId:slotId` からsourceIdへのindex
+ */
+function createRuntimeSourceLocationIndex(sourceMap) {
+  const index = new Map();
+  for (const [sourceId, source] of sourceMap.entries()) {
+    const boxId = source?.boxId ?? null;
+    const slotId = source?.slotId ?? source?.protocolSlotId ?? null;
+    if (sourceId && boxId !== null && boxId !== undefined && slotId !== null && slotId !== undefined) {
+      index.set(`${boxId}:${slotId}`, sourceId);
+    }
+  }
+  return index;
+}
+
+/**
+ * incoming assignmentを既存runtime sourceへ解決する。
+ *
+ * 【詳細説明】
+ * - `colorMatch` だけのpartial deltaではincoming sourcesが空になるため、前回runtime topologyの
+ *   box/slot locationからsourceIdを補完する。
+ *
+ * @private
+ * @function resolveRuntimeAssignments
+ * @param {Array<Object>} assignments - incoming assignment list
+ * @param {Map<string,Object>} sourceMap - 既存source map
+ * @returns {Array<Object>} sourceId補完済みassignment list
+ */
+function resolveRuntimeAssignments(assignments, sourceMap) {
+  const locationIndex = createRuntimeSourceLocationIndex(sourceMap);
+  return (Array.isArray(assignments) ? assignments : []).map((assignment) => {
+    if (assignment?.sourceId) {
+      return cloneJsonValue(assignment);
+    }
+    const boxId = assignment?.boxId ?? null;
+    const slotId = assignment?.slotId ?? assignment?.protocolSlotId ?? null;
+    const sourceId = boxId !== null && boxId !== undefined && slotId !== null && slotId !== undefined
+      ? locationIndex.get(`${boxId}:${slotId}`) || null
+      : null;
+    return {
+      ...cloneJsonValue(assignment),
+      sourceId,
+      resolution: sourceId ? "resolved-from-previous-runtime-source" : (assignment?.resolution || "unresolved"),
+    };
+  });
+}
+
+/**
+ * 1つのruntime material sourceをobservedFieldsに従ってmergeする。
+ *
+ * 【詳細説明】
+ * - incoming normalized sourceには未観測fieldがnullとして存在することがあるため、maskがある場合は
+ *   field単位で前回値を保持する。
+ *
+ * @private
+ * @function mergeRuntimeMaterialSource
+ * @param {Object|null} previous - 直前source
+ * @param {Object} incoming - incoming source
+ * @returns {Object} merge済みsource
+ */
+function mergeRuntimeMaterialSource(previous, incoming) {
+  if (!previous || !incoming || typeof incoming !== "object") {
+    return incoming;
+  }
+  const observedFields = incoming.observedFields && typeof incoming.observedFields === "object" ? incoming.observedFields : null;
+  const materialMask = observedFields?.material;
+  const statusMask = observedFields?.status;
+  const materialObserved = hasAnyMaskedFieldObserved(materialMask, hasOwn(incoming, "material"));
+  const stateCodeObserved = isMaskedFieldObserved(statusMask, "stateCode", hasOwn(incoming.status, "stateCode"));
+  const merged = {
+    ...cloneJsonValue(previous),
+    ...cloneJsonValue(incoming),
+    material: {
+      ...(previous.material || {}),
+      ...(incoming.material || {}),
+    },
+    status: {
+      ...(previous.status || {}),
+      ...(incoming.status || {}),
+    },
+  };
+  if (hasObservedFieldMask(materialMask)) {
+    for (const key of ["vendor", "type", "name", "color", "rfid", "minTemp", "maxTemp", "pressure"]) {
+      if (materialMask[key] !== true && previous.material && hasOwn(previous.material, key)) {
+        merged.material[key] = cloneJsonValue(previous.material[key]);
+      }
+    }
+  } else if (!materialObserved) {
+    merged.material = cloneJsonValue(previous.material);
+  }
+  for (const key of ["remaining", "stateCode", "editStatusCode", "scrap", "selected"]) {
+    const observed = isMaskedFieldObserved(statusMask, key, hasOwn(incoming.status, key));
+    if (!observed && previous.status && hasOwn(previous.status, key)) {
+      merged.status[key] = cloneJsonValue(previous.status[key]);
+    }
+  }
+  if (!materialObserved && !stateCodeObserved) {
+    merged.presence = previous.presence || merged.presence;
+  }
+  return merged;
+}
+
+/**
+ * material source観測ストアをmonitorData上に用意する。
+ *
+ * 【詳細説明】
+ * - live shadowはruntimeDataへ最新状態を置くが、CFS slot/外部スプールの観測履歴は
+ *   `materialSourceObservations` に分離して保存する。
+ * - このストアはread-only evidence専用であり、hostSpoolMapやfilament ledgerの権威にはしない。
+ *
+ * @private
+ * @function ensureMaterialSourceObservationStore
+ * @returns {object} material source観測ストア。
+ */
+function ensureMaterialSourceObservationStore() {
+  if (!monitorData.materialSourceObservations || typeof monitorData.materialSourceObservations !== "object") {
+    monitorData.materialSourceObservations = createEmptyMaterialSourceObservations();
+  }
+  return monitorData.materialSourceObservations;
+}
+
+/**
+ * shadow deviceIdのidentity強度を保守的に判定する。
+ *
+ * 【詳細説明】
+ * - `serial:` などの強いIDだけをstable扱いにし、endpoint/host/material-provider由来はprovisionalとして扱う。
+ * - これによりDHCP再利用やprovider単独接続時の観測を、後段のstable device authorityへ自動昇格しない。
+ *
+ * @private
+ * @function deriveObservationIdentityStrength
+ * @param {string} deviceId - shadowまたはprovider由来のdevice ID。
+ * @returns {string} `"stable"` または `"provisional"`。
+ */
+function deriveObservationIdentityStrength(deviceId) {
+  const text = String(deviceId || "").trim();
+  if (/^(serial|sn|machine):/i.test(text)) {
+    return "stable";
+  }
+  return "provisional";
+}
+
+/**
+ * 同一hostのprovisional観測をstable device recordへ昇格する。
+ *
+ * 【詳細説明】
+ * - live shadowはsession開始時にdeviceIdを固定するため、再接続後にserial/machine IDが得られると
+ *   以前のendpoint由来観測が別deviceとして残り得る。
+ * - command authorityへは使わないread-only証跡だが、履歴を物理機ごとに追えるよう、hostが一致する
+ *   provisional recordだけをstable recordへ移す。
+ *
+ * @private
+ * @function rekeyProvisionalObservationForStableDevice
+ * @param {object} store - material source観測ストア。
+ * @param {object} options - rekey候補。
+ * @param {string} options.host - 表示host。
+ * @param {string} options.deviceId - 今回のdevice ID。
+ * @param {string} options.identityStrength - 今回のidentity強度。
+ * @param {string=} options.observedAt - 観測日時。
+ * @returns {object|null} rekey結果、またはnull。
+ */
+function rekeyProvisionalObservationForStableDevice(store, options = {}) {
+  const host = String(options.host || "").trim();
+  const deviceId = String(options.deviceId || "").trim();
+  if (!host || !deviceId || options.identityStrength !== "stable") {
+    return null;
+  }
+  const byDeviceId = store?.byDeviceId && typeof store.byDeviceId === "object" ? store.byDeviceId : {};
+  for (const [candidateId, record] of Object.entries(byDeviceId)) {
+    if (candidateId === deviceId || !record || record.identityStrength !== "provisional") {
+      continue;
+    }
+    if (String(record.host || "").trim() !== host) {
+      continue;
+    }
+    return rekeyMaterialSourceObservationDevice(store, {
+      fromDeviceId: candidateId,
+      toDeviceId: deviceId,
+      observedAt: options.observedAt,
+      mergeIfTargetExists: true,
+      identityConflict: false,
+    });
+  }
+  return null;
+}
+
+/**
+ * material topologyをread-only観測台帳へ反映する。
+ *
+ * 【詳細説明】
+ * - UI表示用runtime recordとは別に、source単位のsemantic changeだけを保存する。
+ * - 失敗してもプリンタ接続・legacy UIを止めず、diagnosticとしてruntime recordへ残すための結果を返す。
+ *
+ * @private
+ * @function recordMaterialSourceObservationForShadow
+ * @param {Object} options - 観測記録オプション。
+ * @param {string} options.host - 表示host。
+ * @param {string} options.deviceId - device ID。
+ * @param {string} options.sessionId - session ID。
+ * @param {Object} options.topology - Normalized material topology。
+ * @param {string} options.observedAt - 観測日時ISO文字列。
+ * @param {string=} options.providerGeneration - provider世代。
+ * @param {number=} options.sequence - 観測sequence。
+ * @param {string=} options.snapshotCompleteness - complete/partial。
+ * @param {string=} options.identityStrength - identity repository由来またはdeviceId由来のidentity強度。
+ * @returns {Object|null} 観測記録結果。
+ */
+function recordMaterialSourceObservationForShadow(options) {
+  if (!options?.topology || typeof options.topology !== "object") {
+    return null;
+  }
+  const providerId = options.topology.provider?.providerId || options.providerId || null;
+  const store = ensureMaterialSourceObservationStore();
+  const identityStrength = options.identityStrength || deriveObservationIdentityStrength(options.deviceId);
+  rekeyProvisionalObservationForStableDevice(store, {
+    host: options.host,
+    deviceId: options.deviceId,
+    identityStrength,
+    observedAt: options.observedAt,
+  });
+  return recordMaterialTopologyObservation(store, {
+    host: options.host,
+    deviceId: options.deviceId,
+    identityStrength,
+    sessionId: options.sessionId,
+    providerId,
+    providerGeneration: options.providerGeneration || options.sessionId || null,
+    sequence: options.sequence ?? null,
+    observedAt: options.observedAt,
+    topology: options.topology,
+    snapshotCompleteness: options.snapshotCompleteness,
+  });
+}
+
+/**
+ * sourceId/assignment単位でmaterial topologyを表示用にmergeする。
+ *
+ * 【詳細説明】
+ * - Providerから届いたpartial deltaは永続Observation storeへはpartialとして渡す。
+ * - UI表示用runtime topologyでは、payloadに含まれないslotを未観測へ落とさないよう、前回topologyを保持して
+ *   受信分だけ上書きする。complete snapshotの場合だけ全置換する。
+ *
+ * @private
+ * @function mergeMaterialTopologyForRuntimeDisplay
+ * @param {Object|null|undefined} previousTopology - 直前のruntime material topology。
+ * @param {Object|null|undefined} incomingTopology - 今回providerが生成したmaterial topology。
+ * @param {"complete"|"partial"} snapshotCompleteness - snapshot完全性。
+ * @returns {Object|null} 表示用material topology。
+ */
+function mergeMaterialTopologyForRuntimeDisplay(previousTopology, incomingTopology, snapshotCompleteness) {
+  if (!incomingTopology || typeof incomingTopology !== "object") {
+    return previousTopology && typeof previousTopology === "object" ? previousTopology : null;
+  }
+  if (snapshotCompleteness === "complete" || !previousTopology || typeof previousTopology !== "object") {
+    return incomingTopology;
+  }
+  const sourceMap = new Map();
+  for (const source of Array.isArray(previousTopology.sources) ? previousTopology.sources : []) {
+    if (source?.sourceId) {
+      sourceMap.set(source.sourceId, source);
+    }
+  }
+  for (const source of Array.isArray(incomingTopology.sources) ? incomingTopology.sources : []) {
+    if (source?.sourceId) {
+      sourceMap.set(source.sourceId, mergeRuntimeMaterialSource(sourceMap.get(source.sourceId) || null, source));
+    }
+  }
+  const unitMap = new Map();
+  for (const unit of Array.isArray(previousTopology.units) ? previousTopology.units : []) {
+    if (unit?.unitId) {
+      unitMap.set(unit.unitId, unit);
+    }
+  }
+  for (const unit of Array.isArray(incomingTopology.units) ? incomingTopology.units : []) {
+    if (unit?.unitId) {
+      unitMap.set(unit.unitId, unit);
+    }
+  }
+  const assignmentSectionHasMask = hasObservedFieldMask(incomingTopology?.observationMask?.sections);
+  const assignmentsObserved = assignmentSectionHasMask &&
+    isTopologySectionObserved(incomingTopology, "assignments", false);
+  const resolvedIncomingAssignments = assignmentsObserved
+    ? resolveRuntimeAssignments(incomingTopology.assignments, sourceMap)
+    : (Array.isArray(incomingTopology.assignments) ? incomingTopology.assignments : []);
+  const assignmentMap = new Map();
+  const putAssignment = (assignment) => {
+    const key = String(assignment?.assignmentId || assignment?.sourceId || "");
+    if (key) {
+      assignmentMap.set(key, assignment);
+    }
+  };
+  const baseAssignments = assignmentsObserved ? [] : (Array.isArray(previousTopology.assignments) ? previousTopology.assignments : []);
+  for (const assignment of baseAssignments) {
+    putAssignment(assignment);
+  }
+  for (const assignment of resolvedIncomingAssignments) {
+    putAssignment(assignment);
+  }
+  return {
+    ...previousTopology,
+    ...incomingTopology,
+    cfs: {
+      ...(previousTopology.cfs || {}),
+      ...(incomingTopology.cfs || {}),
+    },
+    provider: {
+      ...(previousTopology.provider || {}),
+      ...(incomingTopology.provider || {}),
+    },
+    authority: {
+      ...(previousTopology.authority || {}),
+      ...(incomingTopology.authority || {}),
+    },
+    units: Array.from(unitMap.values()),
+    sources: Array.from(sourceMap.values()),
+    assignments: Array.from(assignmentMap.values()),
+    diagnostics: [
+      ...(Array.isArray(previousTopology.diagnostics) ? previousTopology.diagnostics : []),
+      ...(Array.isArray(incomingTopology.diagnostics) ? incomingTopology.diagnostics : []),
+    ],
   };
 }
 
@@ -1005,6 +1415,7 @@ function createLiveShadowObserveRejection(options) {
  * @param {string} options.sessionId - shadow sessionId
  * @param {object|null|undefined} options.frame - raw frame
  * @param {string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @param {"complete"|"partial"=} options.snapshotCompleteness - boxsInfoをcomplete snapshotとして扱う場合だけ`complete`。
  * @returns {{state:(object|null), terminal:(object|null)}} state または最終レスポンス
  */
 function observePrinterCoreV3ShadowFrameWithRecovery(options) {
@@ -1364,6 +1775,37 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     cfsSourceCount: Array.isArray(materials?.sources) ? materials.sources.length : 0,
     cfsAssignmentCount: Array.isArray(materials?.assignments) ? materials.assignments.length : 0,
   };
+  const snapshotCompleteness = options.snapshotCompleteness === "complete" ? "complete" : "partial";
+  const runtimeMaterials = hasBoxsInfoFrame && materials
+    ? mergeMaterialTopologyForRuntimeDisplay(previous.lastState?.materials || null, materials, snapshotCompleteness)
+    : materials;
+  const runtimeLastState = runtimeMaterials && runtimeMaterials !== state.materials
+    ? { ...state, materials: runtimeMaterials }
+    : lastState;
+  record.lastState = runtimeLastState;
+  record.cfsConnected = runtimeMaterials?.cfs?.connected ?? null;
+  record.cfsTopologyState = runtimeMaterials?.cfs?.topologyState ?? null;
+  record.cfsSourceCount = Array.isArray(runtimeMaterials?.sources) ? runtimeMaterials.sources.length : 0;
+  record.cfsAssignmentCount = Array.isArray(runtimeMaterials?.assignments) ? runtimeMaterials.assignments.length : 0;
+  const materialObservation = hasBoxsInfoFrame && materials
+    ? recordMaterialSourceObservationForShadow({
+        host,
+        deviceId,
+        sessionId,
+        topology: materials,
+        observedAt: materialProviderLastObservedAt || lastObservedAt,
+        providerGeneration: sessionId,
+        sequence: record.lastSequence,
+        snapshotCompleteness,
+      })
+    : null;
+  record.materialSourceObservationStatus = materialObservation
+    ? {
+        accepted: materialObservation.accepted === true,
+        reason: materialObservation.reason || null,
+        changedCount: Array.isArray(materialObservation.changes) ? materialObservation.changes.length : 0,
+      }
+    : previous.materialSourceObservationStatus || null;
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }
@@ -1396,7 +1838,9 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
  * @param {object|null|undefined} options.payload - Moonraker/CFS-C payload
  * @param {string=} options.receivedAt - 観測日時ISO文字列
  * @param {string=} options.providerSessionId - secondary provider session id
+ * @param {string=} options.providerGeneration - secondary provider transport generation
  * @param {boolean=} options.connected - provider transport が接続中なら true
+ * @param {"complete"|"partial"=} options.snapshotCompleteness - 初期subscribeはcomplete、notify deltaはpartial
  * @param {object=} dependencies - テスト用依存差し替え
  * @param {object=} dependencies.materialProvider - material provider実装
  * @returns {object|null} 更新後runtime record、host不正なら null
@@ -1417,6 +1861,7 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     ? previous.lastState
     : {};
   const hasPayload = options.payload && typeof options.payload === "object";
+  const snapshotCompleteness = options.snapshotCompleteness === "complete" ? "complete" : "partial";
   const previousMaterialObservedAt = previous.materialProviderLastObservedAt ||
     previousLastState.materials?.provider?.lastObservedAt ||
     null;
@@ -1433,8 +1878,9 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     connected: false,
     receivedAt,
   });
-  const providerSessionId = String(options.providerSessionId || previous.providerSessionId || `material-provider:${host}`);
-  const materialTopology = hasPayload && materialProviderLastObservedAt
+  const providerSessionId = String(options.providerSessionId || previous.materialProviderSessionId || `material-provider:${host}`);
+  const providerGeneration = String(options.providerGeneration || previous.materialProviderGeneration || providerSessionId);
+  const observedMaterialTopology = hasPayload && materialProviderLastObservedAt
     ? {
         ...topology,
         provider: {
@@ -1443,6 +1889,9 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
         },
       }
     : topology;
+  const materialTopology = hasPayload
+    ? mergeMaterialTopologyForRuntimeDisplay(previousLastState.materials, observedMaterialTopology, snapshotCompleteness)
+    : observedMaterialTopology;
   const record = {
     ...previous,
     schemaVersion: PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION,
@@ -1454,6 +1903,7 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     state: connected ? (previous.state === "closed" ? "material-provider-observed" : (previous.state || "material-provider-observed")) : "material-provider-stale",
     lastObservedAt: connected ? (previous.lastObservedAt || receivedAt) : previous.lastObservedAt || receivedAt,
     materialProviderSessionId: providerSessionId,
+    materialProviderGeneration: providerGeneration,
     materialProviderLastObservedAt,
     materialProviderDisconnectedAt: connected ? null : receivedAt,
     materialProviderObservedFrames: Number(previous.materialProviderObservedFrames || 0) + 1,
@@ -1461,11 +1911,36 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
       ...previousLastState,
       materials: materialTopology,
     },
-    cfsConnected: materialTopology.cfs?.connected ?? connected,
-    cfsTopologyState: materialTopology.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
-    cfsSourceCount: Array.isArray(materialTopology.sources) ? materialTopology.sources.length : 0,
-    cfsAssignmentCount: Array.isArray(materialTopology.assignments) ? materialTopology.assignments.length : 0,
+    cfsConnected: materialTopology?.cfs?.connected ?? connected,
+    cfsTopologyState: materialTopology?.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
+    cfsSourceCount: Array.isArray(materialTopology?.sources) ? materialTopology.sources.length : 0,
+    cfsAssignmentCount: Array.isArray(materialTopology?.assignments) ? materialTopology.assignments.length : 0,
   };
+  const materialObservation = observedMaterialTopology
+    ? recordMaterialSourceObservationForShadow({
+        host,
+        deviceId: record.deviceId,
+        sessionId: providerSessionId,
+        topology: hasPayload
+          ? observedMaterialTopology
+          : {
+              ...observedMaterialTopology,
+              sources: [],
+              assignments: [],
+            },
+        observedAt: hasPayload ? materialProviderLastObservedAt || receivedAt : receivedAt,
+        providerGeneration,
+        sequence: record.materialProviderObservedFrames,
+        snapshotCompleteness: hasPayload ? snapshotCompleteness : "partial",
+      })
+    : null;
+  record.materialSourceObservationStatus = materialObservation
+    ? {
+        accepted: materialObservation.accepted === true,
+        reason: materialObservation.reason || null,
+        changedCount: Array.isArray(materialObservation.changes) ? materialObservation.changes.length : 0,
+      }
+    : previous.materialSourceObservationStatus || null;
   if (machine) {
     machine.runtimeData.printerCoreV3Shadow = record;
   }

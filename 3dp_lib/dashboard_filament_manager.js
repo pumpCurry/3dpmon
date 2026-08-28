@@ -20,9 +20,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1402 (PR #434)
+* @version 1.390.1462 (PR #435)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-26 22:30:00
+* @lastModified 2026-08-28 17:23:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -95,6 +95,7 @@ import {
 import {
   createMaterialTopologyViewModel
 } from "./printer_core/dashboard_material_topology_view_model.js";
+import { getMaterialCssColor } from "./printer_core/dashboard_material_color.js";
 
 let styleInjected = false;
 
@@ -384,6 +385,99 @@ function getMaterialSourceRemainingText(row, isStale) {
 }
 
 /**
+ * CFS/CFS-C source row のpresenceを利用者向け日本語へ変換する。
+ *
+ * 【詳細説明】
+ * - unknownは装置から存在確認できていない状態、unobservedはsource自体が未観測の状態として分けて表示する。
+ *
+ * @private
+ * @function getMaterialSourcePresenceText
+ * @param {Object} row - material topology view model の source row。
+ * @returns {string} presence表示テキスト。
+ */
+function getMaterialSourcePresenceText(row) {
+  if (row?.presence === "loaded") {
+    return "装填中";
+  }
+  if (row?.presence === "empty") {
+    return "未装填";
+  }
+  if (row?.presence === "unknown") {
+    return "装填状態 不明";
+  }
+  return "未観測";
+}
+
+/**
+ * 日時を利用者向けの `yyyy-mm-dd hh:mm:ss` へ変換する。
+ *
+ * 【詳細説明】
+ * - dashboard内のCFSパネルと同じく、「最新」や「最終観測」という抽象語だけではなく、
+ *   実際にいつ観測した値かをフィラメント管理モーダル内でも確認できるようにする。
+ * - ISO文字列、epoch ms、Dateを受け付け、不正値はnullとして呼び出し側にfallbackさせる。
+ *
+ * @private
+ * @function formatMaterialSupplyObservedAt
+ * @param {*} value - 観測日時候補。
+ * @returns {string|null} 表示用日時、またはnull。
+ */
+function formatMaterialSupplyObservedAt(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  const pad = (numberValue) => String(numberValue).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + " " + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(":");
+}
+
+/**
+ * フィラメント管理内のCFS観測meta行を生成する。
+ *
+ * 【詳細説明】
+ * - フィラメント管理モーダルは台帳スプールと機器観測sourceを同じ画面に並べるため、
+ *   CFS欄の先頭でread-only観測の鮮度と件数を明示し、台帳値との誤読を避ける。
+ *
+ * @private
+ * @function createMaterialSupplyMeta
+ * @param {Object} viewModel - material topology view model。
+ * @returns {HTMLElement} meta行要素。
+ */
+function createMaterialSupplyMeta(viewModel) {
+  const meta = document.createElement("div");
+  meta.className = "fm-material-supply-meta";
+  const summary = viewModel?.summary || {};
+  const observedAt = formatMaterialSupplyObservedAt(viewModel?.observation?.lastObservedAt);
+  const isStale = summary.topologyState === "stale";
+  const stateText = observedAt
+    ? `${isStale ? "最終観測" : "状態"}: ${observedAt}`
+    : `${isStale ? "最終観測" : "状態"}: 観測時刻不明`;
+  const cfsObserved = Number.isFinite(Number(summary.cfsUnitCount)) ? Number(summary.cfsUnitCount) : 0;
+  const cfsLimit = Number.isFinite(Number(viewModel?.limits?.cfsUnitLimit)) ? Number(viewModel.limits.cfsUnitLimit) : cfsObserved;
+  const externalCount = Number.isFinite(Number(summary.externalSourceCount)) ? Number(summary.externalSourceCount) : 0;
+  const loadedCount = Number.isFinite(Number(summary.loadedSourceCount)) ? Number(summary.loadedSourceCount) : 0;
+  const selectedCount = Number.isFinite(Number(summary.selectedSourceCount)) ? Number(summary.selectedSourceCount) : 0;
+  meta.textContent = [
+    stateText,
+    `装填 ${loadedCount}`,
+    `選択中 ${selectedCount}`,
+    `CFS ${cfsObserved}/${cfsLimit}台`,
+    `外部 ${externalCount}`,
+  ].join(" / ");
+  return meta;
+}
+
+/**
  * material source の表示用CSS色を返す。
  *
  * 【詳細説明】
@@ -396,9 +490,7 @@ function getMaterialSourceRemainingText(row, isStale) {
  * @returns {string|null} CSS色、または null。
  */
 function getMaterialSourceCssColor(row) {
-  const color = row?.material?.color || {};
-  const candidate = String(color.displayHex || color.normalized || color.raw || "").trim().replace(/^#/u, "");
-  return /^[0-9a-fA-F]{6}$/u.test(candidate) ? `#${candidate}` : null;
+  return getMaterialCssColor(row?.material?.color);
 }
 
 /**
@@ -428,11 +520,18 @@ function createMaterialSourceChip(row, isStale) {
   const slot = document.createElement("strong");
   slot.textContent = row?.displaySlot || "--";
   const state = document.createElement("span");
-  state.textContent = row?.selected === true
-    ? (isStale ? "最終観測:選択中" : "現在選択中")
-    : (row?.presence === "loaded" ? "装填中" : row?.presence === "empty" ? "未装填" : "未観測");
+  state.className = "fm-material-source-state";
+  const presenceText = getMaterialSourcePresenceText(row);
+  state.textContent = isStale ? `最終観測: ${presenceText}` : presenceText;
   head.append(slot, state);
   chip.appendChild(head);
+
+  if (row?.selected === true) {
+    const selected = document.createElement("div");
+    selected.className = "fm-material-source-selected";
+    selected.textContent = isStale ? "最終観測: 機器選択" : "機器選択中";
+    chip.appendChild(selected);
+  }
 
   const materialLine = document.createElement("div");
   materialLine.className = "fm-material-source-material";
@@ -458,7 +557,8 @@ function createMaterialSourceChip(row, isStale) {
   if (assignments.length > 0) {
     const assignmentLine = document.createElement("div");
     assignmentLine.className = "fm-material-source-assignment";
-    assignmentLine.textContent = assignments.join(", ");
+    assignmentLine.textContent = `${isStale ? "最終観測: " : ""}印刷割当 ${assignments.join(", ")}`;
+    assignmentLine.title = "T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。";
     chip.appendChild(assignmentLine);
   }
   return chip;
@@ -486,13 +586,23 @@ export function createFilamentManagerMaterialSupplySection(host) {
   const topology = resolveDisplayMaterialTopology({
     topology: shadowRecord?.lastState?.materials || null,
     shadowRecord,
+    observationStore: monitorData.materialSourceObservations || null,
+    allowPersistentLastKnown: true,
+    host,
   });
   const displayMode = resolveMaterialDisplayMode({ target, printerType, topology });
   if (displayMode !== MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
     return null;
   }
   const viewOptions = resolveMaterialTopologyViewOptions({ target, printerType, topology });
-  const viewModel = createMaterialTopologyViewModel(topology, viewOptions);
+  const viewModel = createMaterialTopologyViewModel(topology, {
+    ...viewOptions,
+    observation: {
+      lastObservedAt: shadowRecord?.materialProviderLastObservedAt || topology?.provider?.lastObservedAt || null,
+      request: shadowRecord?.materialProviderRequest || null,
+      nowMs: Date.now(),
+    },
+  });
   const topologyState = viewModel.summary?.topologyState || "unobserved";
   const isStale = topologyState === "stale";
 
@@ -500,14 +610,15 @@ export function createFilamentManagerMaterialSupplySection(host) {
   section.className = `fm-material-supply-section fm-material-supply-${topologyState}`;
   const title = document.createElement("div");
   title.className = "fm-material-supply-title";
-  title.textContent = "機器側フィラメント供給（外部スプール + CFS/CFS-C）";
+  title.textContent = "機器観測フィラメント（外部スプール + CFS/CFS-C）";
   section.appendChild(title);
+  section.appendChild(createMaterialSupplyMeta(viewModel));
 
   const note = document.createElement("div");
   note.className = "fm-material-supply-note";
   note.textContent = isStale
-    ? "CFS情報は最終観測です。現在値として台帳へ反映しません。"
-    : "外部スプールとCFSスロットは別々の供給源として監視します。3DPmon台帳スプールとは自動で混ぜません。";
+    ? "管理中スプールとは別情報です。CFS情報は最終観測であり、現在値として台帳へ反映しません。"
+    : "管理中スプールとは別情報です。外部スプールとCFSスロットは別々の供給源として監視し、3DPmon台帳へ自動で混ぜません。";
   section.appendChild(note);
 
   if (Array.isArray(viewModel.external) && viewModel.external.length > 0) {

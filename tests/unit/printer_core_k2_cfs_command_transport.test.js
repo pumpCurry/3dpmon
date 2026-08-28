@@ -3,18 +3,50 @@
  * @description
  * - K2/CFS print-start が `colorMatch` と `multiColorPrint` の明示frameへ変換されることを検証する。
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
+ * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1388 (PR #432)
+ * @version 1.390.1452 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-26 01:05:00
+ * @lastModified 2026-08-28 14:28:57
  */
 
 import { describe, expect, it, vi } from "vitest";
 import {
   K2_CFS_PRINT_START_TRANSPORT_PROFILE,
+  K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+  K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+  createImmutableK2CfsSlotControlCertificationRegistry,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
 } from "../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
+
+/**
+ * Gate 19 production CFS slot control 用の実機certification evidenceを生成する。
+ *
+ * 【詳細説明】
+ * - transport profile、command kind、機種、firmware、capture ID を明示し、空objectや別profileを
+ *   production昇格へ使えないことを検証しやすくする。
+ *
+ * @function createCertifiedCfsEvidence
+ * @param {object=} overrides - evidence override
+ * @returns {object} certification evidence
+ */
+function createCertifiedCfsEvidence(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    status: "certified",
+    gate: "Gate 19",
+    commandKinds: ["cfs-load"],
+    transportProfile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+    printerType: "creality-k2",
+    model: "F012",
+    firmwareVersion: "1.0.0",
+    fixtureId: "k2-f012-feed-in-or-out-20260828",
+    captureId: "capture:k2-f012-cfs-load-1c-20260828",
+    certifiedAt: "2026-08-28T12:00:00.000+09:00",
+    ...overrides,
+  };
+}
 
 /**
  * K2/CFS print-start request を生成する。
@@ -202,6 +234,263 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     expect(plan.frames).toEqual([]);
   });
 
+  it("Gate 19明示opt-in時だけfeedInOrOutのcertification-only planを生成する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+      certificationOnly: true,
+      requiresLiveConfirmation: true,
+      details: {
+        commandKind: "cfs-load",
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        materialId: 2,
+        candidateOperation: "feed-in-or-load",
+        semanticStatus: "uncertified",
+        liveCertificationAllowed: true,
+        productionEnabled: false,
+      },
+    });
+    expect(plan.frames).toEqual([
+      {
+        method: "set",
+        params: {
+          feedInOrOut: {
+            boxId: 1,
+            materialId: 2,
+            isFeed: 1,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("caller supplied evidenceだけではslot操作をproduction planへ昇格しない", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence(),
+      certificationScope: {
+        printerType: "creality-k2",
+        model: "F012",
+        firmwareVersion: "1.0.0",
+      },
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+      details: {
+        commandKind: "cfs-load",
+      },
+    });
+    expect(plan.details.errors).toContain("certification-evidence-not-registered");
+    expect(plan.frames).toEqual([]);
+  });
+
+  it("factoryが返すtransport planは生成後にframeやdetailsを書き換えられない", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan.ok).toBe(true);
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.frames)).toBe(true);
+    expect(Object.isFrozen(plan.frames[0])).toBe(true);
+    expect(Object.isFrozen(plan.frames[0].params.feedInOrOut)).toBe(true);
+    expect(Object.isFrozen(plan.details)).toBe(true);
+    expect(() => {
+      plan.frames[0].params.feedInOrOut.isFeed = 0;
+    }).toThrow(TypeError);
+    expect(plan.frames[0].params.feedInOrOut.isFeed).toBe(1);
+  });
+
+  it("production昇格は現在targetのprinter/model/firmware scopeが未観測なら拒否する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence(),
+      certificationScope: {
+        printerType: "creality-k2",
+      },
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+    expect(plan.details.errors).toEqual(expect.arrayContaining([
+      "model-scope-missing-or-mismatch",
+      "firmware-scope-missing-or-mismatch",
+    ]));
+  });
+
+  it("certification registry factoryは将来追加するentryも再帰的にfreezeする", () => {
+    const registry = createImmutableK2CfsSlotControlCertificationRegistry([
+      createCertifiedCfsEvidence({
+        commandKinds: ["cfs-load", "cfs-unload"],
+        review: {
+          reviewer: "gate10-live",
+          hashes: ["sha256:test-fixture"],
+        },
+      }),
+    ]);
+
+    expect(Object.isFrozen(registry)).toBe(true);
+    expect(Object.isFrozen(registry[0])).toBe(true);
+    expect(Object.isFrozen(registry[0].commandKinds)).toBe(true);
+    expect(Object.isFrozen(registry[0].review)).toBe(true);
+    expect(Object.isFrozen(registry[0].review.hashes)).toBe(true);
+    expect(() => {
+      registry[0].review.hashes.push("sha256:mutated");
+    }).toThrow(TypeError);
+  });
+
+  it("production昇格は空objectや配列のcertification evidenceを拒否する", () => {
+    const createPlan = (certificationEvidence) => createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence,
+    });
+
+    expect(createPlan({})).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+    expect(createPlan([])).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+  });
+
+  it("production昇格はcommand kindとtransport profileが一致するcertification evidenceだけ許可する", () => {
+    const wrongCommandPlan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence({
+        commandKinds: ["cfs-unload"],
+      }),
+    });
+    const wrongProfilePlan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: createCertifiedCfsEvidence({
+        transportProfile: "k2-ws9999-other-profile",
+      }),
+    });
+
+    expect(wrongCommandPlan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+    expect(wrongProfilePlan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
+    });
+  });
+
+  it("certified registryに無いslot操作はproduction option付きでも拒否を維持する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-unload",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "uncertified-cfs-slot-command",
+      details: {
+        commandKind: "cfs-unload",
+      },
+    });
+    expect(plan.frames).toEqual([]);
+  });
+
+  it("Gate 19 certification-only unload/retract候補はisFeed=0としてdry-runできる", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-retract",
+      payload: {
+        materialSourceId: "cfs:3:slot:1",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      certificationOnly: true,
+      details: {
+        commandKind: "cfs-retract",
+        candidateOperation: "feed-out-or-retract",
+        boxId: 3,
+        materialId: 1,
+        liveCertificationAllowed: false,
+      },
+    });
+    expect(plan.frames[0].params.feedInOrOut).toEqual({
+      boxId: 3,
+      materialId: 1,
+      isFeed: 0,
+    });
+  });
+
+  it("Gate 19 certification-onlyでも外部スプールや不正sourceは拒否する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "external:0:slot:0",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "invalid-cfs-control-source-id",
+      details: {
+        sourceKind: "external-spool",
+      },
+    });
+    expect(plan.frames).toEqual([]);
+  });
+
   it("transport planはcolorMatchからmultiColorPrintへ逐次送信する", async () => {
     const plan = createK2CfsCommandTransportPlan(createPrintStartRequest());
     const sendFrame = vi.fn(async (frame, meta) => ({
@@ -278,5 +567,97 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       .rejects
       .toThrow("uncertified-cfs-slot-command");
     expect(sendFrame).not.toHaveBeenCalled();
+  });
+
+  it("低レベルsenderはfactory外で偽装されたproduction planを送信しない", async () => {
+    const sendFrame = vi.fn();
+    const forgedPlan = {
+      schemaVersion: 1,
+      ok: true,
+      reason: null,
+      transportKind: "ws9999",
+      profile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+      certificationOnly: false,
+      frames: [{
+        method: "set",
+        params: {
+          feedInOrOut: {
+            boxId: 1,
+            materialId: 2,
+            isFeed: 1,
+          },
+        },
+      }],
+      details: {
+        safetyBoundary: "production-certified",
+      },
+    };
+
+    await expect(sendK2CfsCommandTransportPlan(forgedPlan, sendFrame))
+      .rejects
+      .toThrow("must be created by createK2CfsCommandTransportPlan");
+    expect(sendFrame).not.toHaveBeenCalled();
+  });
+
+  it("certification-only planは明示許可なしでは送信しない", async () => {
+    const sendFrame = vi.fn(async () => ({ status: "submitted" }));
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:0",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    await expect(sendK2CfsCommandTransportPlan(plan, sendFrame))
+      .rejects
+      .toThrow("allowCertificationOnly");
+    expect(sendFrame).not.toHaveBeenCalled();
+
+    const response = await sendK2CfsCommandTransportPlan(plan, sendFrame, {
+      allowCertificationOnly: true,
+    });
+
+    expect(sendFrame).toHaveBeenCalledTimes(1);
+    expect(response).toMatchObject({
+      status: "submitted",
+      profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+      sentFrameCount: 1,
+    });
+  });
+
+  it("select/feed/retractなどlive意味未確定candidateは追加opt-inなしに送信しない", async () => {
+    const sendFrame = vi.fn(async () => ({ status: "submitted" }));
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-feed",
+      payload: {
+        sourceId: "cfs:1:slot:0",
+      },
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      certificationOnly: true,
+      details: {
+        commandKind: "cfs-feed",
+        liveCertificationAllowed: false,
+      },
+    });
+    await expect(sendK2CfsCommandTransportPlan(plan, sendFrame, {
+      allowCertificationOnly: true,
+    })).rejects.toThrow("allowExperimentalSlotSemantics");
+    expect(sendFrame).not.toHaveBeenCalled();
+
+    const response = await sendK2CfsCommandTransportPlan(plan, sendFrame, {
+      allowCertificationOnly: true,
+      allowExperimentalSlotSemantics: true,
+    });
+    expect(response).toMatchObject({
+      status: "submitted",
+      sentFrameCount: 1,
+    });
   });
 });

@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1374 (PR #432)
+ * @version 1.390.1457 (PR #435)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-25 19:58:02
+ * @lastModified 2026-08-28 16:58:45
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -179,6 +179,37 @@ function createFourUnitBoxsInfo() {
 }
 
 describe("Printer Core v3 material topology view model", () => {
+  it("box/slot ID欠落sourceはunknown入りsourceIdではなくinvalid診断へ落とす", () => {
+    const topology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: null, state: 1, vendor: "Generic", type: "PLA", name: "Broken Slot" },
+          ],
+        },
+        {
+          id: null,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: 0, state: 1, vendor: "Generic", type: "PLA", name: "Broken Box" },
+          ],
+        },
+      ],
+    }, { connected: true });
+
+    expect(topology.sources.map((source) => source.sourceId)).not.toContain("cfs:1:slot:unknown");
+    expect(topology.sources.map((source) => source.sourceId)).not.toContain("cfs:unknown:slot:0");
+    expect(topology.sources.every((source) => source.sourceIdentity?.valid === false)).toBe(true);
+    expect(topology.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "material-source-identity-invalid" }),
+    ]));
+  });
+
   it("未観測topologyでも外部1本とCFS最大16slotのread-only固定枠を返す", () => {
     const viewModel = createMaterialTopologyViewModel(null);
 
@@ -218,13 +249,30 @@ describe("Printer Core v3 material topology view model", () => {
 
   it("K2 Pro Comboの1C銀色PLA selected/残量/assignmentを表示モデルへ保持する", () => {
     const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
-    const viewModel = createMaterialTopologyViewModel(topology);
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      observation: {
+        lastObservedAt: "2026-08-27T03:34:56.000Z",
+        request: {
+          state: "in-flight",
+          startedAt: "2026-08-27T03:35:01.000Z",
+          startedAtMs: Date.parse("2026-08-27T03:35:01.000Z"),
+        },
+        nowMs: Date.parse("2026-08-27T03:35:14.000Z"),
+      },
+    });
     const selectedSlot = viewModel.units[0].slots[2];
 
     expect(viewModel.cfs).toMatchObject({
       connected: true,
       enabled: true,
       topologyState: "fresh",
+    });
+    expect(viewModel.observation).toMatchObject({
+      lastObservedAt: "2026-08-27T03:34:56.000Z",
+      request: {
+        state: "in-flight",
+        elapsedSeconds: 13,
+      },
     });
     expect(viewModel.external[0]).toMatchObject({
       kind: "external-spool",
@@ -409,6 +457,105 @@ describe("Printer Core v3 material topology view model", () => {
       selectedSourceCount: 1,
       invalidRemainingCount: 1,
     });
+  });
+
+  it("source presenceが明示されている場合はstateCodeより優先して表示する", () => {
+    const viewModel = createMaterialTopologyViewModel({
+      cfs: {
+        connected: false,
+        topologyState: "stale",
+      },
+      units: [{ unitId: "cfs:1", boxId: 1 }],
+      sources: [
+        {
+          sourceId: "cfs:1:slot:0",
+          kind: "cfs-slot",
+          unitId: "cfs:1",
+          boxId: 1,
+          slotId: 0,
+          presence: "unobserved",
+          material: {},
+          status: {
+            stateCode: 0,
+            selected: null,
+            remaining: {
+              rawPercent: null,
+              normalizedPercent: null,
+              valid: null,
+            },
+          },
+        },
+      ],
+      assignments: [],
+    });
+
+    expect(viewModel.units[0].slots[0]).toMatchObject({
+      displaySlot: "1A",
+      presence: "unobserved",
+      status: {
+        stateCode: 0,
+      },
+    });
+    expect(viewModel.summary.loadedSourceCount).toBe(0);
+  });
+
+  it("残留metadataだけではCFS slotを装填中と表示しない", () => {
+    const viewModel = createMaterialTopologyViewModel({
+      cfs: {
+        connected: true,
+        topologyState: "fresh",
+      },
+      units: [{ unitId: "cfs:1", boxId: 1 }],
+      sources: [
+        {
+          sourceId: "cfs:1:slot:0",
+          kind: "cfs-slot",
+          unitId: "cfs:1",
+          boxId: 1,
+          slotId: 0,
+          material: {
+            vendor: "Generic",
+            type: "PLA",
+            name: "Removed PLA",
+            color: { raw: "#0ffffff", normalized: "0ffffff", displayHex: "ffffff", cssColor: "#ffffff" },
+          },
+          status: {
+            stateCode: 0,
+            selected: false,
+            remaining: { rawPercent: 100, normalizedPercent: 100, valid: true },
+          },
+        },
+        {
+          sourceId: "cfs:1:slot:1",
+          kind: "cfs-slot",
+          unitId: "cfs:1",
+          boxId: 1,
+          slotId: 1,
+          material: {
+            vendor: "Generic",
+            type: "PLA",
+            name: "Metadata Only PLA",
+            color: { raw: "#072a530", normalized: "072a530", displayHex: "72a530", cssColor: "#72a530" },
+          },
+          status: {
+            stateCode: null,
+            selected: null,
+            remaining: { rawPercent: null, normalizedPercent: null, valid: null },
+          },
+        },
+      ],
+      assignments: [],
+    }, { unitLimit: 1 });
+
+    expect(viewModel.units[0].slots[0]).toMatchObject({
+      displaySlot: "1A",
+      presence: "empty",
+    });
+    expect(viewModel.units[0].slots[1]).toMatchObject({
+      displaySlot: "1B",
+      presence: "unknown",
+    });
+    expect(viewModel.summary.loadedSourceCount).toBe(0);
   });
 
   it("K1C/CFS-C Moonraker provider由来のtopologyも同じ表示モデルへ変換する", () => {

@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
     pendingUnattributedUsageArchive: {},
     ledgerRepairRequired: {},
     filamentEventContext: {},
+    materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
     hostSpoolMap: {},
     hostCameraToggle: {},
     spoolSerialCounter: 0
@@ -83,6 +84,10 @@ beforeEach(async () => {
   mocks.monitorData.inferredRecoveryOperationRecoveryRequired = { operation: "clearLedgerRepairRequired", reason: "rollback_durable_save_failed" };
   mocks.monitorData.inferredRecoveryEvents = [{ eventId: "ir-a", type: "recovery-durable-save-retried" }];
   mocks.monitorData.hostObservationWatermark = { k1: { observationSequence: 1 } };
+  mocks.monitorData.materialSourceObservations = {
+    schemaVersion: 1,
+    byDeviceId: { "serial:test": { deviceId: "serial:test", authority: "observation-only" } },
+  };
   mocks.queueSharedWrite.mockClear();
   mocks.queueMachineWrite.mockClear();
   mocks.flushIdb.mockClear();
@@ -100,6 +105,7 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredRecoveryOperationRecoveryRequired", mocks.monitorData.inferredRecoveryOperationRecoveryRequired);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredRecoveryEvents", mocks.monitorData.inferredRecoveryEvents);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
+    expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialSourceObservations", mocks.monitorData.materialSourceObservations);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);
     expect(mocks.events[mocks.events.length - 1]).toBe("flush");
   });
