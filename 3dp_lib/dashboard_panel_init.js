@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1429 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-27 15:45:53
+ * @lastModified 2026-08-28 09:21:47
  * -----------------------------------------------------------
  */
 
@@ -454,6 +454,8 @@ function initFilamentPanel(body, hostname) {
   const topology = resolveDisplayMaterialTopology({
     topology: shadowRecord?.lastState?.materials || null,
     shadowRecord,
+    observationStore: monitorData.materialSourceObservations || null,
+    host: hostname,
   });
   const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
   if (materialDisplayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
@@ -464,6 +466,8 @@ function initFilamentPanel(body, hostname) {
       const latestTopology = resolveDisplayMaterialTopology({
         topology: latestShadowRecord?.lastState?.materials || null,
         shadowRecord: latestShadowRecord,
+        observationStore: monitorData.materialSourceObservations || null,
+        host: hostname,
       });
       const latestTarget = getConnectionTarget(hostname);
       const viewOptions = resolveMaterialTopologyViewOptions({
@@ -543,6 +547,8 @@ function initFilamentPanel(body, hostname) {
     const latestTopology = resolveDisplayMaterialTopology({
       topology: latestShadowRecord?.lastState?.materials || null,
       shadowRecord: latestShadowRecord,
+      observationStore: monitorData.materialSourceObservations || null,
+      host: hostname,
     });
     const latestTarget = getConnectionTarget(hostname);
     const nextMode = resolveMaterialDisplayMode({

@@ -42,6 +42,11 @@ external spool/CFS slot state across restart without mixing it into the
 - Persist the observation store through localStorage and IndexedDB shared
   storage as last-known read-only evidence. Restored records start as
   `restored-last-known` / stale until a fresh provider observation arrives.
+- Use `resolveDisplayMaterialTopology()` as the display read-model boundary.
+  UI panels may fall back to `materialSourceObservations` only as stale
+  last-known evidence when live runtime topology is missing. Print dispatch and
+  command authority do not pass this fallback store and must continue to require
+  live send-time validation.
 - Restore and import the observation store through a schema-aware normalization
   boundary. Future schema versions are retained as unsupported evidence instead
   of being relabeled as the current schema.
@@ -87,6 +92,7 @@ current truth.
   store.
 - Gate 19+ command authority must continue to treat this store as observation
   evidence, not as a direct source of material or ledger authority.
-- A later read-model cleanup should let panels intentionally choose between
-  fresh runtime topology and restored last-known observation evidence. Print
-  dispatch must keep using live send-time validation, not restored evidence.
+- A later read-model cleanup may split this helper into a richer explicit
+  `resolveMaterialSourceReadModel()` if command/UI separation needs more fields.
+  The current display boundary already keeps restored evidence out of print
+  dispatch and command eligibility.
