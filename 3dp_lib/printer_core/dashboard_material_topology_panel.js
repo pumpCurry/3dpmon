@@ -16,7 +16,7 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1445 (PR #435)
+ * @version 1.390.1448 (PR #435)
  * @since   1.390.1362 (PR #432)
  * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------

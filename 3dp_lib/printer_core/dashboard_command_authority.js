@@ -23,7 +23,7 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1445 (PR #435)
+ * @version 1.390.1448 (PR #435)
  * @since   1.390.1342 (PR #432)
  * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
