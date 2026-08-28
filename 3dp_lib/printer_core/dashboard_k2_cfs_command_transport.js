@@ -20,9 +20,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1450 (PR #435)
+ * @version 1.390.1452 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 14:14:54
+ * @lastModified 2026-08-28 14:28:57
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する

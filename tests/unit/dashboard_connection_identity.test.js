@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1450 (PR #435)
+ * @version 1.390.1452 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 14:14:54
+ * @lastModified 2026-08-28 14:28:57
  *
  * @vitest-environment jsdom
  */
