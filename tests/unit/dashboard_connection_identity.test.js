@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1438 (PR #435)
+ * @version 1.390.1439 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 18:58:10
+ * @lastModified 2026-08-28 19:28:20
  *
  * @vitest-environment jsdom
  */
@@ -609,6 +609,17 @@ describe("Printer Core v3 identity dry-run", () => {
     }), "K2Pro-69E7");
 
     expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledTimes(2);
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-69E7",
+      deviceId: "provisional:f012:k2pro-69e7",
+      sessionId: "k2-live:test-session",
+      frame: {
+        boxsInfo: {
+          materialBoxs: [],
+        },
+      },
+      snapshotCompleteness: "complete",
+    });
     expect(ws.sentMessages).toEqual([]);
   });
 
@@ -735,6 +746,19 @@ describe("Printer Core v3 identity dry-run", () => {
       },
     }), "203.0.113.34");
     expect(ws.sentMessages).toEqual([]);
+    expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenLastCalledWith({
+      host: "K2Pro-MixedFrame",
+      deviceId: "provisional:f012:k2pro-mixedframe",
+      sessionId: "k2-live:test-session",
+      frame: {
+        hostname: "K2Pro-MixedFrame",
+        model: "F012",
+        cfsConnect: 1,
+        boxsInfo: {
+          materialBoxs: [],
+        },
+      },
+    });
 
     mod.simulateReceivedJson(JSON.stringify({ cfsConnect: 1 }), "K2Pro-MixedFrame");
     expect(ws.sentMessages).toEqual([]);

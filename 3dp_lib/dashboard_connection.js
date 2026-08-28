@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1438 (PR #435)
+ * @version 1.390.1439 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 18:58:10
+ * @lastModified 2026-08-28 19:31:35
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1103,6 +1103,36 @@ function _recordK2CfsBoxsInfoProbeRuntime(host, state, requestState, nowMs = Dat
       updatedAt: new Date(nowMs).toISOString(),
     },
   };
+}
+
+/**
+ * K2 `boxsInfo` frame のsnapshot完全性をproduction caller側で分類する。
+ *
+ * 【詳細説明】
+ * - Gate 18.7では`boxsInfo`をpartial-by-defaultにして、selected-onlyやassignment-onlyの疎なdeltaで
+ *   既存slot情報を消さない契約にした。
+ * - ただし3DPmon自身が直前に送ったread-only `get { boxsInfo: 1 }` の応答は、CFS全体の明示poll結果として
+ *   扱えるため、live shadow / observation storeへ`complete`として渡す。
+ * - timeout後に遅れて届いたpayloadや自発pushは、明示poll応答としての鮮度を証明できないので`partial`のままにする。
+ *
+ * @private
+ * @param {ConnectionState|null|undefined} state - 接続状態
+ * @param {object|null|undefined} data - 受信 payload
+ * @param {number=} nowMs - 判定時刻 epoch milliseconds
+ * @returns {"complete"|"partial"} snapshot完全性
+ */
+function _classifyK2BoxsInfoSnapshotCompleteness(state, data, nowMs = Date.now()) {
+  const hasBoxsInfo = data?.boxsInfo && typeof data.boxsInfo === "object";
+  if (!hasBoxsInfo) {
+    return "partial";
+  }
+  const inFlightStartedAt = Number(state?.printerCoreV3K2BoxsInfoProbeStartedAt || 0);
+  const deadlineAt = Number(state?.printerCoreV3K2BoxsInfoProbeDeadlineAt || 0);
+  const probeInFlight = state?.printerCoreV3K2BoxsInfoProbeInFlight === true &&
+    inFlightStartedAt > 0 &&
+    nowMs - inFlightStartedAt < K2_BOXS_INFO_PROBE_TIMEOUT_MS &&
+    (!deadlineAt || nowMs <= deadlineAt);
+  return probeInFlight ? "complete" : "partial";
 }
 
 /**
@@ -2396,12 +2426,19 @@ function handleSocketMessage(event, host) {
         const observeShadowFrame = shadowSession.family === "k2"
           ? observeK2LiveShadowFrame
           : observeK1LiveShadowFrame;
-        observeShadowFrame({
+        const shadowFrameOptions = {
           host: resolvedHost,
           deviceId: shadowSession.deviceId,
           sessionId: shadowSession.sessionId,
           frame: data,
-        });
+        };
+        if (shadowSession.family === "k2") {
+          const snapshotCompleteness = _classifyK2BoxsInfoSnapshotCompleteness(st, data);
+          if (snapshotCompleteness === "complete") {
+            shadowFrameOptions.snapshotCompleteness = snapshotCompleteness;
+          }
+        }
+        observeShadowFrame(shadowFrameOptions);
         if (shadowSession.family === "k2") {
           _requestK2CfsBoxsInfoProbe(resolvedHost, st, data);
         }
