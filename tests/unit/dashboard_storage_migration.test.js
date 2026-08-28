@@ -315,6 +315,50 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     )).toMatchObject({ state: "stale", reason: "restored-last-known" });
   });
 
+  it('Gate18.7: importAllData はmaterialSourceObservationsをread-only evidenceとしてマージする', async () => {
+    monitorData.hostSpoolMap = { "K2Pro-69E7": "managed-spool-031" };
+    await importAllData({
+      materialSourceObservations: {
+        schemaVersion: 1,
+        byDeviceId: {
+          "serial:905251280E69E7": {
+            schemaVersion: 1,
+            deviceId: "serial:905251280E69E7",
+            identityStrength: "stable",
+            host: "K2Pro-69E7",
+            authority: "observation-only",
+            lastObservedAt: "2026-08-27T12:00:00.000Z",
+            latestBySourceId: {
+              "cfs:1:slot:2": {
+                sourceId: "cfs:1:slot:2",
+                kind: "cfs-slot",
+                presence: "loaded",
+                selected: true,
+                authority: "observation-only",
+                remaining: { rawPercent: 54, normalizedPercent: 54, valid: true, authority: "observation-only" },
+              },
+            },
+            events: [
+              { observationId: "mso:slot2", changeKind: "source-observed", sourceId: "cfs:1:slot:2", authority: "observation-only" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "managed-spool-031" });
+    expect(monitorData.materialSourceObservations.byDeviceId["serial:905251280E69E7"]).toMatchObject({
+      authority: "observation-only",
+      restoredFromStorage: true,
+      latestBySourceId: {
+        "cfs:1:slot:2": {
+          selected: true,
+          authority: "observation-only",
+        },
+      },
+    });
+  });
+
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {
     monitorData.inferredCandidateStore = {
       "ic-a": { candidateHash: "ic-a", status: "pending", usedMm: 100, updatedAt: 20 },

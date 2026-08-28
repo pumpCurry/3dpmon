@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1423 (PR #435)
+* @version 1.390.1424 (PR #435)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-28 00:39:17
+* @lastModified 2026-08-28 01:48:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,6 +43,7 @@ import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
+import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -140,11 +141,11 @@ export async function exportAllData() {
  * 同一IDのデータが存在する場合は新しい方を採用する。
  *
  * @param {Object} data - インポートするデータ
- * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number, panels: number }}
+ * @returns {{ spools: number, history: number, presets: number, inventory: number, machines: number, panels: number, observations: number }}
  *          各カテゴリの追加件数
  */
 export async function importAllData(data) {
-  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0, panels: 0 };
+  const stats = { spools: 0, history: 0, presets: 0, inventory: 0, machines: 0, panels: 0, observations: 0 };
 
   // ── スプール: id ベースでマージ ──
   if (Array.isArray(data.filamentSpools)) {
@@ -369,6 +370,39 @@ export async function importAllData(data) {
         }
       }
     }
+  }
+
+  // ── Gate 18.7: materialSourceObservations はread-only evidenceとしてimportする ──
+  //   管理スプール装着・使用履歴・台帳へ投影せず、機器観測の最後の状態としてだけ復元する。
+  if (data.materialSourceObservations && typeof data.materialSourceObservations === "object") {
+    const restored = normalizeStoredMaterialSourceObservations(data.materialSourceObservations, {
+      restoredAt: new Date().toISOString(),
+    });
+    if (!monitorData.materialSourceObservations
+        || typeof monitorData.materialSourceObservations !== "object"
+        || Array.isArray(monitorData.materialSourceObservations)) {
+      monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
+    }
+    if (!monitorData.materialSourceObservations.byDeviceId
+        || typeof monitorData.materialSourceObservations.byDeviceId !== "object"
+        || Array.isArray(monitorData.materialSourceObservations.byDeviceId)) {
+      monitorData.materialSourceObservations.byDeviceId = {};
+    }
+    if (restored.retainedUnsupportedStore) {
+      monitorData.materialSourceObservations.retainedUnsupportedStore = restored.retainedUnsupportedStore;
+      monitorData.materialSourceObservations.migrationStatus = restored.migrationStatus;
+    }
+    for (const [deviceId, record] of Object.entries(restored.byDeviceId || {})) {
+      const existing = monitorData.materialSourceObservations.byDeviceId[deviceId];
+      const existingMs = new Date(existing?.lastObservedAt || 0).getTime();
+      const incomingMs = new Date(record?.lastObservedAt || 0).getTime();
+      if (!existing || !Number.isFinite(existingMs) || (Number.isFinite(incomingMs) && incomingMs >= existingMs)) {
+        monitorData.materialSourceObservations.byDeviceId[deviceId] = record;
+        stats.observations++;
+      }
+    }
+    monitorData.materialSourceObservations.schemaVersion = 1;
+    monitorData.materialSourceObservations.authority = "observation-only";
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -1147,55 +1181,6 @@ function _reconcileAfterRestore() {
 }
 
 /**
- * JSON互換値を復元用にcloneする。
- *
- * 【詳細説明】
- * - sharedストレージのobject参照をmonitorDataへそのまま貼ると、後続のmergeやテストで
- *   保存キャッシュ側まで変更され得るため、read-only観測ストアも復元時にcloneする。
- *
- * @private
- * @function cloneStorageJsonValue
- * @param {*} value - clone対象。
- * @returns {*} clone後の値。
- */
-function cloneStorageJsonValue(value) {
-  if (value === null || value === undefined) {
-    return value;
-  }
-  return JSON.parse(JSON.stringify(value));
-}
-
-/**
- * 復元したmaterial source観測をlast-known evidenceとして印付けする。
- *
- * 【詳細説明】
- * - localStorage/IndexedDBから戻した観測は「現在取得できた値」ではなく、保存時点のread-only証跡である。
- * - live providerから新しい観測を受けるまではfresh表示しないよう、record単位で復元理由を持たせる。
- *
- * @private
- * @function markRestoredMaterialSourceObservationRecord
- * @param {Object} record - 復元したdevice観測レコード。
- * @param {string} restoredAt - 復元日時ISO文字列。
- * @returns {Object} last-known印付きの観測レコード。
- */
-function markRestoredMaterialSourceObservationRecord(record, restoredAt) {
-  const restored = cloneStorageJsonValue(record) || {};
-  restored.restoredFromStorage = true;
-  restored.restoredAt = restoredAt;
-  restored.authority = "observation-only";
-  if (restored.latestBySourceId && typeof restored.latestBySourceId === "object") {
-    for (const snapshot of Object.values(restored.latestBySourceId)) {
-      if (snapshot && typeof snapshot === "object") {
-        snapshot.restoredFromStorage = true;
-        snapshot.restoredAt = restoredAt;
-        snapshot.authority = "observation-only";
-      }
-    }
-  }
-  return restored;
-}
-
-/**
  * データソースから monitorData を復元する内部ヘルパー。
  * IndexedDB と localStorage の両方から使用される。
  *
@@ -1533,6 +1518,9 @@ function _restoreFromData(shared, machines) {
   // ★ Gate 18.7: CFS/CFS-C/外部スプールの機器観測フィラメントを復元する。
   //   これは「最後に観測したread-only evidence」であり、復元時にhostSpoolMapや台帳へ投影しない。
   if (shared?.materialSourceObservations && typeof shared.materialSourceObservations === "object") {
+    const restoredStore = normalizeStoredMaterialSourceObservations(shared.materialSourceObservations, {
+      restoredAt: new Date().toISOString(),
+    });
     if (!monitorData.materialSourceObservations
         || typeof monitorData.materialSourceObservations !== "object"
         || Array.isArray(monitorData.materialSourceObservations)) {
@@ -1543,18 +1531,20 @@ function _restoreFromData(shared, machines) {
         || Array.isArray(monitorData.materialSourceObservations.byDeviceId)) {
       monitorData.materialSourceObservations.byDeviceId = {};
     }
-    const restoredByDevice = shared.materialSourceObservations.byDeviceId;
-    const restoredAt = new Date().toISOString();
+    if (restoredStore.retainedUnsupportedStore) {
+      monitorData.materialSourceObservations.retainedUnsupportedStore = restoredStore.retainedUnsupportedStore;
+      monitorData.materialSourceObservations.migrationStatus = restoredStore.migrationStatus;
+    }
+    const restoredByDevice = restoredStore.byDeviceId;
     if (restoredByDevice && typeof restoredByDevice === "object" && !Array.isArray(restoredByDevice)) {
       for (const [deviceId, record] of Object.entries(restoredByDevice)) {
         if (record && typeof record === "object" && !monitorData.materialSourceObservations.byDeviceId[deviceId]) {
-          monitorData.materialSourceObservations.byDeviceId[deviceId] =
-            markRestoredMaterialSourceObservationRecord(record, restoredAt);
+          monitorData.materialSourceObservations.byDeviceId[deviceId] = record;
         }
       }
     }
-    monitorData.materialSourceObservations.schemaVersion =
-      Number(shared.materialSourceObservations.schemaVersion) || monitorData.materialSourceObservations.schemaVersion || 1;
+    monitorData.materialSourceObservations.schemaVersion = 1;
+    monitorData.materialSourceObservations.authority = "observation-only";
   }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）

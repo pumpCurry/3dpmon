@@ -30,9 +30,9 @@
  * - {@link extractMoonrakerMaterialPayloadFromStatus}：Moonraker statusからCFS-C material payload候補を抽出
  * - {@link createMoonrakerSession}：WebSocket セッション(接続/購読/再接続)生成
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.1119 (PR #385)
- * @lastModified 2026-08-28 00:34:28
+ * @lastModified 2026-08-28 01:47:36
  * -----------------------------------------------------------
  * @todo
  * - Phase 1: 履歴(server/history)/ファイル(server/files)取り込み、カメラ(webcams/list)URL対応
@@ -744,15 +744,16 @@ export function translateK1CommandToMoonraker(method, params = {}) {
  * @param {string} opts.url - 接続先 WebSocket URL("ws://IP:PORT/websocket")
  * @param {string} opts.fallbackHost - printer.info 失敗時に使うホスト名(通常 IP)
  * @param {function(string, string=):void} opts.onLog - ログ出力 (message, level)
- * @param {function("connecting"|"connected"|"waiting"|"disconnected"):void} opts.onState - 状態通知
+ * @param {function("connecting"|"connected"|"waiting"|"disconnected", Object=):void} opts.onState - 状態通知
  * @param {function(Object):void} opts.onData - 翻訳済み K1 形データの通知
  * @param {function(Object, string):void} [opts.onAux] - 履歴/ファイル一覧の通知
  *   (aux: {historyList?, fileEntries?, fileTotal?}, resolvedHost) を渡す。
  *   Date 等を保つため JSON を経由せず直接渡す。
  * @param {function(string, string):void} [opts.onGcode] - gcode コンソール行 (line, resolvedHost)
- * @param {function(Object, string):void} [opts.onMaterial] - CFS-C material payload通知
+ * @param {function(Object, string, "complete"|"partial", Object=):void} [opts.onMaterial] - CFS-C material payload通知
  * @param {Object<string,(null|string[])>=} [opts.materialSubscribeObjects] - CFS-C追加subscribe object候補
  * @param {boolean=} [opts.materialOnly=false] - material provider専用sessionとして通常状態/履歴取得を省くか
+ * @param {string=} [opts.materialProviderSessionId] - material provider論理session ID
  * @param {string} [opts.httpBase] - サムネイル/ファイル取得用 "http://IP:PORT"
  * @param {function():boolean} opts.shouldReconnect - 再接続を許可するか判定する述語
  * @returns {{close: function():void, request: function(string, Object=):Promise<*>}}
@@ -770,6 +771,7 @@ export function createMoonrakerSession(opts) {
     onMaterial = null,
     materialSubscribeObjects = null,
     materialOnly = false,
+    materialProviderSessionId = "",
     httpBase = "",
     shouldReconnect = () => false,
   } = opts || {};
@@ -805,6 +807,12 @@ export function createMoonrakerSession(opts) {
   let retryTimer = null;
   /** @type {number} JSON-RPC id 採番カウンタ */
   let rpcId = 0;
+  /** @type {number} WebSocket接続世代(material-only providerの遅延frame拒否用) */
+  let transportEpoch = 0;
+  /** @type {?string} 現在のWebSocket接続世代ID */
+  let currentTransportGeneration = null;
+  /** @type {string} material provider generation生成用の安定seed */
+  const transportGenerationBase = String(materialProviderSessionId || url || "moonraker-material-provider");
 
   /** RPC id → 用途("info"|"config"|"subscribe"|"meta") の対応 */
   const pending = new Map();
@@ -884,7 +892,9 @@ export function createMoonrakerSession(opts) {
       return;
     }
     try {
-      onMaterial(payload, ctx.hostname, snapshotCompleteness);
+      onMaterial(payload, ctx.hostname, snapshotCompleteness, {
+        transportGeneration: currentTransportGeneration,
+      });
     } catch (e) {
       onLog(`[moonraker] CFS-C material通知エラー: ${e.message}`, "warn");
     }
@@ -907,7 +917,7 @@ export function createMoonrakerSession(opts) {
     if (!materialOnly || (tag !== "subscribe" && tag !== "material-objects-list")) {
       return false;
     }
-    onState("disconnected");
+    onState("disconnected", { transportGeneration: currentTransportGeneration });
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       try {
         ws.close();
@@ -1145,11 +1155,11 @@ export function createMoonrakerSession(opts) {
    */
   const scheduleReconnect = () => {
     if (closed || !shouldReconnect()) {
-      onState("disconnected");
+      onState("disconnected", { transportGeneration: currentTransportGeneration });
       return;
     }
     if (reconnectCount >= MOONRAKER_MAX_RECONNECT) {
-      onState("disconnected");
+      onState("disconnected", { transportGeneration: currentTransportGeneration });
       onLog(`[moonraker] 自動接続リトライが上限(${MOONRAKER_MAX_RECONNECT})に達しました。`, "error");
       return;
     }
@@ -1176,6 +1186,8 @@ export function createMoonrakerSession(opts) {
       return;
     }
     ws.onopen = () => {
+      transportEpoch += 1;
+      currentTransportGeneration = `${transportGenerationBase}:transport:${transportEpoch}`;
       reconnectCount = 0;
       accStatus = {};
       lastMetaFile = null; // 再接続時にメタ再取得を許可

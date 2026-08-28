@@ -3,9 +3,9 @@
  * @description
  * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since 1.390.1299 (PR #432)
- * @lastModified 2026-08-28 00:46:55
+ * @lastModified 2026-08-28 01:39:12
  *
  * @vitest-environment jsdom
  */
@@ -838,6 +838,125 @@ describe("Printer Core v3 K1 live shadow", () => {
       lastObservedAt: "2026-08-07T08:15:14.000Z",
     });
     expect(observation.events.some((event) => event.sourceId === "cfs:1:slot:0" && event.changeKind === "source-disappeared")).toBe(false);
+  });
+
+  it("CFS-C provider close/reopenで同じendpoint generationを自己退役扱いにしない", () => {
+    const host = "K1C-CFSC-Reopen";
+    setMachine(host);
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 80 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:reopen",
+      providerGeneration: "material-provider:reopen:transport:1",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: null,
+      connected: false,
+      receivedAt: "2026-08-07T08:16:04.000Z",
+    });
+
+    const reopened = observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 79 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:reopen",
+      providerGeneration: "material-provider:reopen:transport:2",
+      connected: true,
+      receivedAt: "2026-08-07T08:17:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    expect(reopened.materialSourceObservationStatus).toMatchObject({
+      accepted: true,
+    });
+    expect(
+      monitorData.materialSourceObservations.byDeviceId["material-provider:K1C-CFSC-Reopen"].latestBySourceId["cfs:1:slot:0"].remaining.rawPercent
+    ).toBe(79);
+  });
+
+  it("CFS-C notify deltaはruntime表示用topologyでも既存slotを保持する", () => {
+    const host = "K1C-CFSC-Runtime-Delta";
+    setMachine(host);
+
+    observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 0, vendor: "Generic", type: "PLA", color: "#0aaaaaa", name: "White PLA", percent: 80 },
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 54 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:runtime-delta",
+      providerGeneration: "material-provider:runtime-delta:transport:1",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:04.000Z",
+      snapshotCompleteness: "complete",
+    });
+
+    const updated = observeMoonrakerCfsMaterialProviderFrame({
+      host,
+      payload: {
+        materialBoxs: [
+          {
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [
+              { id: 2, vendor: "Generic", type: "PLA", color: "#0bbbbbb", name: "Silver PLA", percent: 53 },
+            ],
+          },
+        ],
+      },
+      providerSessionId: "material-provider:runtime-delta",
+      providerGeneration: "material-provider:runtime-delta:transport:1",
+      connected: true,
+      receivedAt: "2026-08-07T08:15:14.000Z",
+      snapshotCompleteness: "partial",
+    });
+
+    const runtimeSources = new Map(updated.lastState.materials.sources.map((source) => [source.sourceId, source]));
+    expect(runtimeSources.get("cfs:1:slot:0")).toMatchObject({
+      material: { name: "White PLA" },
+      status: { remaining: { rawPercent: 80 } },
+    });
+    expect(runtimeSources.get("cfs:1:slot:2")).toMatchObject({
+      material: { name: "Silver PLA" },
+      status: { remaining: { rawPercent: 53 } },
+    });
   });
 
   it("endK2LiveShadowSession はruntimeDataをclosedへ更新する", () => {

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.1279 (PR #426)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.198 (PR #89)
- * @lastModified 2026-08-04 11:50:46
+ * @lastModified 2026-08-28 01:50:17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -373,6 +373,7 @@ function doImport(toast) {
         if (stats.inventory > 0) parts.push(`在庫 ${stats.inventory}件`);
         if (stats.machines > 0) parts.push(`印刷履歴 ${stats.machines}件`);
         if (stats.panels > 0) parts.push(`パネル配置 ${stats.panels}件`);
+        if (stats.observations > 0) parts.push(`機器観測 ${stats.observations}件`);
         const summary = parts.length > 0 ? parts.join(", ") : "新規データなし";
         toast(`マージインポート完了 (${version} 形式): ${summary}。ページを再読み込みします。`);
         setTimeout(() => location.reload(), 1500);

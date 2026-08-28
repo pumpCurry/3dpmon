@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-27 15:45:53
+ * @lastModified 2026-08-28 01:39:44
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -179,6 +179,37 @@ function createFourUnitBoxsInfo() {
 }
 
 describe("Printer Core v3 material topology view model", () => {
+  it("box/slot ID欠落sourceはunknown入りsourceIdではなくinvalid診断へ落とす", () => {
+    const topology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: null, state: 1, vendor: "Generic", type: "PLA", name: "Broken Slot" },
+          ],
+        },
+        {
+          id: null,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: 0, state: 1, vendor: "Generic", type: "PLA", name: "Broken Box" },
+          ],
+        },
+      ],
+    }, { connected: true });
+
+    expect(topology.sources.map((source) => source.sourceId)).not.toContain("cfs:1:slot:unknown");
+    expect(topology.sources.map((source) => source.sourceId)).not.toContain("cfs:unknown:slot:0");
+    expect(topology.sources.every((source) => source.sourceIdentity?.valid === false)).toBe(true);
+    expect(topology.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "material-source-identity-invalid" }),
+    ]));
+  });
+
   it("未観測topologyでも外部1本とCFS最大16slotのread-only固定枠を返す", () => {
     const viewModel = createMaterialTopologyViewModel(null);
 

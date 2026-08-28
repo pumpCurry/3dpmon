@@ -9,9 +9,9 @@
  * フィクスチャは実機 Ideaformer IR3 v2 (Klipper v2.0.1 / Moonraker v0.9.2,
  * 192.168.54.15) から取得した実データを使用する。
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since 1.390.1119 (PR #385)
- * @lastModified 2026-08-28 00:56:16
+ * @lastModified 2026-08-28 01:39:28
  */
 import { describe, it, expect } from 'vitest';
 
@@ -883,7 +883,12 @@ describe('createMoonrakerSession material-only provider', () => {
           },
         },
       });
-      expect(onMaterial).toHaveBeenCalledWith({ materialBoxs: [] }, 'K1C-CFSC', 'complete');
+      expect(onMaterial).toHaveBeenCalledWith(
+        { materialBoxs: [] },
+        'K1C-CFSC',
+        'complete',
+        expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:1') })
+      );
     } finally {
       globalThis.WebSocket = originalWebSocket;
     }
@@ -913,7 +918,10 @@ describe('createMoonrakerSession material-only provider', () => {
       replyMoonrakerRpc(ws, ws.sent[2].id, { error: { message: 'unknown object' } });
 
       expect(onLog).toHaveBeenCalledWith(expect.stringContaining('subscribe RPC エラー'), 'error');
-      expect(onState).toHaveBeenCalledWith('disconnected');
+      expect(onState).toHaveBeenCalledWith(
+        'disconnected',
+        expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:1') })
+      );
     } finally {
       globalThis.WebSocket = originalWebSocket;
     }
@@ -946,7 +954,10 @@ describe('createMoonrakerSession material-only provider', () => {
 
       expect(ws.readyState).toBe(3);
       expect(onLog).toHaveBeenCalledWith(expect.stringContaining('subscribe RPC エラー'), 'error');
-      expect(onState).toHaveBeenCalledWith('disconnected');
+      expect(onState).toHaveBeenCalledWith(
+        'disconnected',
+        expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:1') })
+      );
       expect(onState).toHaveBeenCalledWith('waiting');
 
       vi.advanceTimersByTime(2000);
@@ -986,6 +997,70 @@ describe('createMoonrakerSession material-only provider', () => {
       expect(ws.readyState).toBe(FakeMoonrakerWebSocket.OPEN);
       expect(FakeMoonrakerWebSocket.instances).toHaveLength(1);
     } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it('material-only providerはWebSocket再接続ごとにtransportGenerationを更新する', () => {
+    const originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = FakeMoonrakerWebSocket;
+    FakeMoonrakerWebSocket.instances = [];
+    vi.useFakeTimers();
+    const onMaterial = vi.fn();
+    try {
+      createMoonrakerSession({
+        url: 'ws://198.51.100.24:80/websocket',
+        fallbackHost: 'K1C-CFSC',
+        materialOnly: true,
+        materialSubscribeObjects: {
+          boxsInfo: null,
+        },
+        onMaterial,
+        onState: vi.fn(),
+        shouldReconnect: () => true,
+      });
+      const ws1 = FakeMoonrakerWebSocket.instances[0];
+      ws1.onopen();
+      replyMoonrakerRpc(ws1, ws1.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      replyMoonrakerRpc(ws1, ws1.sent[1].id, { result: { objects: ['boxsInfo'] } });
+      replyMoonrakerRpc(ws1, ws1.sent[2].id, {
+        result: {
+          status: {
+            boxsInfo: { materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, percent: 80 }] }] },
+          },
+        },
+      });
+      ws1.close();
+      vi.advanceTimersByTime(2000);
+
+      const ws2 = FakeMoonrakerWebSocket.instances[1];
+      ws2.onopen();
+      replyMoonrakerRpc(ws2, ws2.sent[0].id, { result: { hostname: 'K1C-CFSC' } });
+      replyMoonrakerRpc(ws2, ws2.sent[1].id, { result: { objects: ['boxsInfo'] } });
+      replyMoonrakerRpc(ws2, ws2.sent[2].id, {
+        result: {
+          status: {
+            boxsInfo: { materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, percent: 79 }] }] },
+          },
+        },
+      });
+
+      expect(onMaterial).toHaveBeenNthCalledWith(
+        1,
+        { materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, percent: 80 }] }] },
+        'K1C-CFSC',
+        'complete',
+        expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:1') })
+      );
+      expect(onMaterial).toHaveBeenNthCalledWith(
+        2,
+        { materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, percent: 79 }] }] },
+        'K1C-CFSC',
+        'complete',
+        expect.objectContaining({ transportGeneration: expect.stringContaining(':transport:2') })
+      );
+    } finally {
+      vi.useRealTimers();
       globalThis.WebSocket = originalWebSocket;
     }
   });

@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 00:36:02
+ * @lastModified 2026-08-28 01:48:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1159,6 +1159,12 @@ function _closeSecondaryMaterialProviderSession(host, state) {
   if (!state?.printerCoreV3MaterialProviderSession) {
     return;
   }
+  const providerSessionId = state.printerCoreV3MaterialProviderSession.providerSessionId
+    || state.printerCoreV3MaterialProviderSession.materialProviderSessionId
+    || null;
+  const providerGeneration = state.printerCoreV3MaterialProviderTransportGeneration
+    || state.printerCoreV3MaterialProviderSession.transportGeneration
+    || null;
   try {
     state.printerCoreV3MaterialProviderSession.close();
   } catch (e) {
@@ -1168,6 +1174,8 @@ function _closeSecondaryMaterialProviderSession(host, state) {
   observeMoonrakerCfsMaterialProviderFrame({
     host,
     payload: null,
+    providerSessionId,
+    providerGeneration,
     connected: false,
     receivedAt: new Date().toISOString(),
   });
@@ -1218,15 +1226,19 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     url: `${protocol}${endpoint}/websocket`,
     fallbackHost: host,
     httpBase: `${httpProtocol}${endpoint}`,
+    materialProviderSessionId: providerSessionId,
     materialSubscribeObjects: CFS_C_MOONRAKER_MATERIAL_OBJECTS,
     materialOnly: true,
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
-    onState: (sessionState) => {
+    onState: (sessionState, meta = {}) => {
       if (sessionState === "disconnected") {
+        state.printerCoreV3MaterialProviderTransportGeneration =
+          meta.transportGeneration || state.printerCoreV3MaterialProviderTransportGeneration || null;
         observeMoonrakerCfsMaterialProviderFrame({
           host,
           payload: null,
           providerSessionId,
+          providerGeneration: state.printerCoreV3MaterialProviderTransportGeneration,
           connected: false,
           receivedAt: new Date().toISOString(),
         });
@@ -1235,11 +1247,14 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
     onData: () => {
       /* CFS-C provider sessionではK1互換状態をUIへ流さず、material payloadだけを使う。 */
     },
-    onMaterial: (payload, _materialHost, snapshotCompleteness = "partial") => {
+    onMaterial: (payload, _materialHost, snapshotCompleteness = "partial", meta = {}) => {
+      state.printerCoreV3MaterialProviderTransportGeneration =
+        meta.transportGeneration || state.printerCoreV3MaterialProviderTransportGeneration || providerSessionId;
       observeMoonrakerCfsMaterialProviderFrame({
         host,
         payload,
         providerSessionId,
+        providerGeneration: state.printerCoreV3MaterialProviderTransportGeneration,
         connected: true,
         receivedAt: new Date().toISOString(),
         snapshotCompleteness,
@@ -1249,6 +1264,7 @@ function _ensureSecondaryMaterialProviderSession(host, state) {
   });
   state.printerCoreV3MaterialProviderSession.endpoint = endpoint;
   state.printerCoreV3MaterialProviderSession.host = host;
+  state.printerCoreV3MaterialProviderSession.providerSessionId = providerSessionId;
   return true;
 }
 

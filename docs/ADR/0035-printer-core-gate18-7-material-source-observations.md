@@ -25,12 +25,25 @@ external spool/CFS slot state across restart without mixing it into the
 - Track provider generations. When a newer generation is accepted, the previous
   generation is retired so delayed callbacks from old sessions cannot roll the
   snapshot back.
+- Separate the logical material provider session from the actual transport
+  generation. CFS-C Moonraker reconnects keep the same provider session but
+  increment transport generation so late frames from the previous socket can be
+  rejected without self-locking the endpoint.
 - Treat K2 `boxsInfo` responses as complete snapshots. Treat CFS-C Moonraker
   `notify_status_update` material payloads as partial snapshots unless the
   initial subscribe response explicitly marks them complete.
+- Merge CFS-C partial snapshots into the runtime UI topology for display while
+  still writing the partial batch to the observation store. This keeps slots not
+  present in a Moonraker delta visible as last-known values.
 - Persist the observation store through localStorage and IndexedDB shared
   storage as last-known read-only evidence. Restored records start as
   `restored-last-known` / stale until a fresh provider observation arrives.
+- Restore and import the observation store through a schema-aware normalization
+  boundary. Future schema versions are retained as unsupported evidence instead
+  of being relabeled as the current schema.
+- Reject invalid explicit `observedAt` values instead of converting them to the
+  current time. Missing `observedAt` still means the app received the observation
+  now.
 
 ## Non-Authority Boundary
 
@@ -66,3 +79,6 @@ current truth.
   store.
 - Gate 19+ command authority must continue to treat this store as observation
   evidence, not as a direct source of material or ledger authority.
+- A later read-model cleanup should let panels intentionally choose between
+  fresh runtime topology and restored last-known observation evidence. Print
+  dispatch must keep using live send-time validation, not restored evidence.

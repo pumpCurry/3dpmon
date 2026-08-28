@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1420 (PR #434)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-27 12:22:38
+ * @lastModified 2026-08-28 01:45:18
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -562,12 +562,15 @@ function normalizeAi(payload, options = {}) {
  * @private
  * @param {object} box - `materialBoxs[]` の box object
  * @param {object} material - `materials[]` の material object
- * @returns {string} sourceId
+ * @returns {?string} sourceId、location欠落時はnull
  */
 function createMaterialSourceId(box, material) {
-  const boxId = String(box?.id ?? "unknown");
-  const slotId = String(material?.id ?? "unknown");
-  if (Number(box?.id) === 0 || Number(box?.type) === 1) {
+  const boxId = toFiniteNumber(box?.id);
+  const slotId = toFiniteNumber(material?.id);
+  if (boxId === null || slotId === null) {
+    return null;
+  }
+  if (boxId === 0 || Number(box?.type) === 1) {
     return `external:${boxId}:slot:${slotId}`;
   }
   return `cfs:${boxId}:slot:${slotId}`;
@@ -619,8 +622,13 @@ function normalizeMaterialSource(box, material) {
   const rawPercent = toFiniteNumber(material?.percent);
   const normalizedPercent = toPercentNumber(material?.percent);
   const percentValid = rawPercent !== null && rawPercent >= 0 && rawPercent <= 100;
+  const sourceId = createMaterialSourceId(box, material);
   return {
-    sourceId: createMaterialSourceId(box, material),
+    sourceId,
+    sourceIdentity: {
+      valid: Boolean(sourceId),
+      reason: sourceId ? "observed-location" : "material-source-location-incomplete",
+    },
     kind: isExternal ? "external-spool" : "cfs-slot",
     unitId: isExternal ? null : `cfs:${boxId}`,
     boxId,
@@ -668,6 +676,9 @@ function normalizeMaterialSource(box, material) {
 function createMaterialSourceIndex(sources) {
   const index = new Map();
   for (const source of Array.isArray(sources) ? sources : []) {
+    if (!source?.sourceId || source?.sourceIdentity?.valid === false) {
+      continue;
+    }
     const key = `${source.boxId}:${source.slotId}`;
     if (!index.has(key)) {
       index.set(key, source.sourceId);
@@ -695,6 +706,17 @@ function createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGro
   const diagnostics = [];
   const locationMap = new Map();
   for (const source of Array.isArray(sources) ? sources : []) {
+    if (!source?.sourceId || source?.sourceIdentity?.valid === false) {
+      diagnostics.push({
+        severity: "warning",
+        code: "material-source-identity-invalid",
+        sourceId: source?.sourceId || null,
+        boxId: source?.boxId ?? null,
+        slotId: source?.slotId ?? null,
+        reason: source?.sourceIdentity?.reason || "source-id-missing",
+      });
+      continue;
+    }
     if (source.boxId === null || source.slotId === null) {
       diagnostics.push({
         severity: "warning",

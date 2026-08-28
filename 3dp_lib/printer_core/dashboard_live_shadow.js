@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-28 00:31:12
+ * @lastModified 2026-08-28 01:46:52
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -303,6 +303,88 @@ function recordMaterialSourceObservationForShadow(options) {
     topology: options.topology,
     snapshotCompleteness: options.snapshotCompleteness,
   });
+}
+
+/**
+ * sourceId/assignment単位でmaterial topologyを表示用にmergeする。
+ *
+ * 【詳細説明】
+ * - Providerから届いたpartial deltaは永続Observation storeへはpartialとして渡す。
+ * - UI表示用runtime topologyでは、payloadに含まれないslotを未観測へ落とさないよう、前回topologyを保持して
+ *   受信分だけ上書きする。complete snapshotの場合だけ全置換する。
+ *
+ * @private
+ * @function mergeMaterialTopologyForRuntimeDisplay
+ * @param {Object|null|undefined} previousTopology - 直前のruntime material topology。
+ * @param {Object|null|undefined} incomingTopology - 今回providerが生成したmaterial topology。
+ * @param {"complete"|"partial"} snapshotCompleteness - snapshot完全性。
+ * @returns {Object|null} 表示用material topology。
+ */
+function mergeMaterialTopologyForRuntimeDisplay(previousTopology, incomingTopology, snapshotCompleteness) {
+  if (!incomingTopology || typeof incomingTopology !== "object") {
+    return previousTopology && typeof previousTopology === "object" ? previousTopology : null;
+  }
+  if (snapshotCompleteness === "complete" || !previousTopology || typeof previousTopology !== "object") {
+    return incomingTopology;
+  }
+  const sourceMap = new Map();
+  for (const source of Array.isArray(previousTopology.sources) ? previousTopology.sources : []) {
+    if (source?.sourceId) {
+      sourceMap.set(source.sourceId, source);
+    }
+  }
+  for (const source of Array.isArray(incomingTopology.sources) ? incomingTopology.sources : []) {
+    if (source?.sourceId) {
+      sourceMap.set(source.sourceId, source);
+    }
+  }
+  const unitMap = new Map();
+  for (const unit of Array.isArray(previousTopology.units) ? previousTopology.units : []) {
+    if (unit?.unitId) {
+      unitMap.set(unit.unitId, unit);
+    }
+  }
+  for (const unit of Array.isArray(incomingTopology.units) ? incomingTopology.units : []) {
+    if (unit?.unitId) {
+      unitMap.set(unit.unitId, unit);
+    }
+  }
+  const assignmentMap = new Map();
+  const putAssignment = (assignment) => {
+    const key = String(assignment?.assignmentId || assignment?.sourceId || "");
+    if (key) {
+      assignmentMap.set(key, assignment);
+    }
+  };
+  for (const assignment of Array.isArray(previousTopology.assignments) ? previousTopology.assignments : []) {
+    putAssignment(assignment);
+  }
+  for (const assignment of Array.isArray(incomingTopology.assignments) ? incomingTopology.assignments : []) {
+    putAssignment(assignment);
+  }
+  return {
+    ...previousTopology,
+    ...incomingTopology,
+    cfs: {
+      ...(previousTopology.cfs || {}),
+      ...(incomingTopology.cfs || {}),
+    },
+    provider: {
+      ...(previousTopology.provider || {}),
+      ...(incomingTopology.provider || {}),
+    },
+    authority: {
+      ...(previousTopology.authority || {}),
+      ...(incomingTopology.authority || {}),
+    },
+    units: Array.from(unitMap.values()),
+    sources: Array.from(sourceMap.values()),
+    assignments: Array.from(assignmentMap.values()),
+    diagnostics: [
+      ...(Array.isArray(previousTopology.diagnostics) ? previousTopology.diagnostics : []),
+      ...(Array.isArray(incomingTopology.diagnostics) ? incomingTopology.diagnostics : []),
+    ],
+  };
 }
 
 /**
@@ -1550,6 +1632,7 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
  * @param {object|null|undefined} options.payload - Moonraker/CFS-C payload
  * @param {string=} options.receivedAt - 観測日時ISO文字列
  * @param {string=} options.providerSessionId - secondary provider session id
+ * @param {string=} options.providerGeneration - secondary provider transport generation
  * @param {boolean=} options.connected - provider transport が接続中なら true
  * @param {"complete"|"partial"=} options.snapshotCompleteness - 初期subscribeはcomplete、notify deltaはpartial
  * @param {object=} dependencies - テスト用依存差し替え
@@ -1589,8 +1672,9 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     connected: false,
     receivedAt,
   });
-  const providerSessionId = String(options.providerSessionId || previous.providerSessionId || `material-provider:${host}`);
-  const materialTopology = hasPayload && materialProviderLastObservedAt
+  const providerSessionId = String(options.providerSessionId || previous.materialProviderSessionId || `material-provider:${host}`);
+  const providerGeneration = String(options.providerGeneration || previous.materialProviderGeneration || providerSessionId);
+  const observedMaterialTopology = hasPayload && materialProviderLastObservedAt
     ? {
         ...topology,
         provider: {
@@ -1599,6 +1683,9 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
         },
       }
     : topology;
+  const materialTopology = hasPayload
+    ? mergeMaterialTopologyForRuntimeDisplay(previousLastState.materials, observedMaterialTopology, snapshotCompleteness)
+    : observedMaterialTopology;
   const record = {
     ...previous,
     schemaVersion: PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION,
@@ -1610,6 +1697,7 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
     state: connected ? (previous.state === "closed" ? "material-provider-observed" : (previous.state || "material-provider-observed")) : "material-provider-stale",
     lastObservedAt: connected ? (previous.lastObservedAt || receivedAt) : previous.lastObservedAt || receivedAt,
     materialProviderSessionId: providerSessionId,
+    materialProviderGeneration: providerGeneration,
     materialProviderLastObservedAt,
     materialProviderDisconnectedAt: connected ? null : receivedAt,
     materialProviderObservedFrames: Number(previous.materialProviderObservedFrames || 0) + 1,
@@ -1617,25 +1705,25 @@ export function observeMoonrakerCfsMaterialProviderFrame(options = {}, dependenc
       ...previousLastState,
       materials: materialTopology,
     },
-    cfsConnected: materialTopology.cfs?.connected ?? connected,
-    cfsTopologyState: materialTopology.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
-    cfsSourceCount: Array.isArray(materialTopology.sources) ? materialTopology.sources.length : 0,
-    cfsAssignmentCount: Array.isArray(materialTopology.assignments) ? materialTopology.assignments.length : 0,
+    cfsConnected: materialTopology?.cfs?.connected ?? connected,
+    cfsTopologyState: materialTopology?.cfs?.topologyState ?? (connected ? "fresh" : "stale"),
+    cfsSourceCount: Array.isArray(materialTopology?.sources) ? materialTopology.sources.length : 0,
+    cfsAssignmentCount: Array.isArray(materialTopology?.assignments) ? materialTopology.assignments.length : 0,
   };
-  const materialObservation = materialTopology
+  const materialObservation = observedMaterialTopology
     ? recordMaterialSourceObservationForShadow({
         host,
         deviceId: record.deviceId,
         sessionId: providerSessionId,
         topology: hasPayload
-          ? materialTopology
+          ? observedMaterialTopology
           : {
-              ...materialTopology,
+              ...observedMaterialTopology,
               sources: [],
               assignments: [],
             },
         observedAt: hasPayload ? materialProviderLastObservedAt || receivedAt : receivedAt,
-        providerGeneration: providerSessionId,
+        providerGeneration,
         sequence: record.materialProviderObservedFrames,
         snapshotCompleteness: hasPayload ? snapshotCompleteness : "partial",
       })

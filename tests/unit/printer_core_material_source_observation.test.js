@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 00:43:09
+ * @lastModified 2026-08-28 01:40:02
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import {
   createEmptyMaterialSourceObservations,
   deriveMaterialSourceObservationFreshness,
+  normalizeStoredMaterialSourceObservations,
   recordMaterialTopologyObservation,
   rekeyMaterialSourceObservationDevice,
 } from "../../3dp_lib/printer_core/dashboard_material_source_observation.js";
@@ -221,6 +222,51 @@ describe("MaterialSourceObservationStore", () => {
     expect(store.byDeviceId["serial:905251280E69E7"].events.some((event) => event.changeKind === "device-rekeyed")).toBe(true);
   });
 
+  it("明示merge rekeyは既存stable recordへprovisional source履歴を統合する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const baseTopology = createTopology();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-stable",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-stable",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({ sources: [baseTopology.sources[0]] }),
+      snapshotCompleteness: "complete",
+    });
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      identityStrength: "provisional",
+      sessionId: "session-provisional",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-provisional",
+      sequence: 1,
+      observedAt: "2026-08-27T12:01:00.000Z",
+      topology: createTopology({ sources: [baseTopology.sources[2]] }),
+      snapshotCompleteness: "complete",
+    });
+
+    const merged = rekeyMaterialSourceObservationDevice(store, {
+      fromDeviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      toDeviceId: "serial:905251280E69E7",
+      observedAt: "2026-08-27T12:02:00.000Z",
+      mergeIfTargetExists: true,
+      identityConflict: false,
+    });
+
+    expect(merged).toMatchObject({ accepted: true, reason: "merged" });
+    expect(store.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"]).toBeUndefined();
+    expect(store.byDeviceId["serial:905251280E69E7"].latestBySourceId).toMatchObject({
+      "external:0": { kind: "external-spool" },
+      "cfs:1:slot:2": { kind: "cfs-slot", deviceId: "serial:905251280E69E7" },
+    });
+    expect(store.byDeviceId["serial:905251280E69E7"].events.some((event) => event.changeKind === "device-merged")).toBe(true);
+  });
+
   it("stale freshnessは保存値ではなく時刻とprovider状態から導出する", () => {
     const store = createEmptyMaterialSourceObservations();
     const result = recordMaterialTopologyObservation(store, {
@@ -392,6 +438,25 @@ describe("MaterialSourceObservationStore", () => {
     ]);
   });
 
+  it("明示observedAtが不正な観測は現在時刻へ化けさせず拒否する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const result = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-invalid-time",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-invalid-time",
+      sequence: 1,
+      observedAt: "not-a-date",
+      topology: createTopology(),
+      snapshotCompleteness: "complete",
+    });
+
+    expect(result).toMatchObject({ accepted: false, reason: "invalid-observed-at" });
+    expect(store.byDeviceId["serial:905251280E69E7"]).toBeUndefined();
+  });
+
   it("新しいprovider generationを受理した後は退役generationの遅延frameを時刻に関係なく拒否する", () => {
     const store = createEmptyMaterialSourceObservations();
     recordMaterialTopologyObservation(store, {
@@ -439,6 +504,52 @@ describe("MaterialSourceObservationStore", () => {
     });
   });
 
+  it("provider generationはproviderId単位で管理し、別providerの切替で互いを退役扱いにしない", () => {
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-a",
+      providerId: "provider-a",
+      providerGeneration: "provider-a:transport:1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({ provider: { providerId: "provider-a" } }),
+      snapshotCompleteness: "complete",
+    });
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-b",
+      providerId: "provider-b",
+      providerGeneration: "provider-b:transport:1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: createTopology({ provider: { providerId: "provider-b" } }),
+      snapshotCompleteness: "partial",
+    });
+    const providerAHeartbeat = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-provider-a",
+      providerId: "provider-a",
+      providerGeneration: "provider-a:transport:1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:20.000Z",
+      topology: createTopology({ provider: { providerId: "provider-a" } }),
+      snapshotCompleteness: "partial",
+    });
+
+    expect(providerAHeartbeat.accepted).toBe(true);
+    expect(providerAHeartbeat.record.providerStates).toMatchObject({
+      "provider-a": { activeGeneration: "provider-a:transport:1" },
+      "provider-b": { activeGeneration: "provider-b:transport:1" },
+    });
+  });
+
   it("復元済みrecordはTTL内でもlast-known staleとして扱い、新しいlive観測でfreshへ戻る", () => {
     const store = createEmptyMaterialSourceObservations();
     const result = recordMaterialTopologyObservation(store, {
@@ -477,5 +588,46 @@ describe("MaterialSourceObservationStore", () => {
       now: "2026-08-27T12:00:40.000Z",
       freshTtlMs: 60_000,
     })).toMatchObject({ state: "fresh", reason: "within-ttl" });
+  });
+
+  it("stored observation storeはschema-awareに正規化しfuture versionをfail-closedで保持する", () => {
+    const legacy = normalizeStoredMaterialSourceObservations({
+      byDeviceId: {
+        "serial:legacy": {
+          deviceId: "serial:legacy",
+          latestBySourceId: {},
+          events: [],
+        },
+      },
+    }, { restoredAt: "2026-08-27T12:10:00.000Z" });
+
+    expect(legacy).toMatchObject({
+      schemaVersion: 1,
+      migrationStatus: "current",
+      byDeviceId: {
+        "serial:legacy": {
+          restoredFromStorage: true,
+          authority: "observation-only",
+        },
+      },
+    });
+
+    const future = normalizeStoredMaterialSourceObservations({
+      schemaVersion: 99,
+      byDeviceId: {
+        "serial:future": {
+          deviceId: "serial:future",
+          latestBySourceId: {},
+          events: [],
+        },
+      },
+    }, { restoredAt: "2026-08-27T12:10:00.000Z" });
+
+    expect(future).toMatchObject({
+      schemaVersion: 99,
+      migrationStatus: "future-version-unsupported",
+      byDeviceId: {},
+      retainedUnsupportedStore: expect.objectContaining({ schemaVersion: 99 }),
+    });
   });
 });

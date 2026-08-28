@@ -14,13 +14,14 @@
  *
  * 【公開関数一覧】
  * - {@link createEmptyMaterialSourceObservations}：空のmaterial source観測ストアを生成
+ * - {@link normalizeStoredMaterialSourceObservations}：保存済み観測ストアをschema-awareに復元
  * - {@link recordMaterialTopologyObservation}：material topologyをatomic batchとして観測ストアへ反映
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1423 (PR #435)
+ * @version 1.390.1424 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 00:26:41
+ * @lastModified 2026-08-28 01:44:10
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -105,6 +106,26 @@ function toIsoDateTimeString(value) {
 }
 
 /**
+ * 明示指定された観測日時が有効かを確認する。
+ *
+ * 【詳細説明】
+ * - `observedAt`未指定はアプリ側受信時刻を採番するため有効扱いにする。
+ * - 文字列などが明示されていて日時として壊れている場合は、現在時刻へ化けさせず観測batchを拒否する。
+ *
+ * @private
+ * @function isValidExplicitObservedAt
+ * @param {*} value - 観測日時候補。
+ * @returns {boolean} 未指定または有効日時ならtrue。
+ */
+function isValidExplicitObservedAt(value) {
+  if (value === null || value === undefined || value === "") {
+    return true;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime());
+}
+
+/**
  * JSON化可能な値をcloneする。
  *
  * @private
@@ -152,6 +173,98 @@ function ensureObservationStore(store) {
 }
 
 /**
+ * 復元したmaterial source観測recordへlast-known印を付ける。
+ *
+ * 【詳細説明】
+ * - 保存済みの観測は現在通信で得た値ではないため、live providerから新しい観測が来るまでは
+ *   fresh/current扱いしない。
+ * - snapshot側にも同じ印を付け、UIや診断がsource単位でも最終観測値と識別できるようにする。
+ *
+ * @private
+ * @function markRestoredObservationRecord
+ * @param {Object} record - 保存済みdevice観測record。
+ * @param {string} restoredAt - 復元日時ISO文字列。
+ * @returns {Object} 復元印付きrecord。
+ */
+function markRestoredObservationRecord(record, restoredAt) {
+  const restored = cloneJsonValue(record) || {};
+  restored.restoredFromStorage = true;
+  restored.restoredAt = restoredAt;
+  restored.authority = "observation-only";
+  if (restored.latestBySourceId && typeof restored.latestBySourceId === "object") {
+    for (const snapshot of Object.values(restored.latestBySourceId)) {
+      if (snapshot && typeof snapshot === "object") {
+        snapshot.restoredFromStorage = true;
+        snapshot.restoredAt = restoredAt;
+        snapshot.authority = "observation-only";
+      }
+    }
+  }
+  if (!Array.isArray(restored.events)) {
+    restored.events = [];
+  }
+  if (!restored.latestBySourceId || typeof restored.latestBySourceId !== "object" || Array.isArray(restored.latestBySourceId)) {
+    restored.latestBySourceId = {};
+  }
+  return restored;
+}
+
+/**
+ * 保存済みmaterial source観測ストアをschema-awareに正規化する。
+ *
+ * 【詳細説明】
+ * - version未記録/現行v1はlast-known evidenceとして安全に復元する。
+ * - future schemaは現行コードで意味変換せず、unsupported storeとして保持するだけにして
+ *   誤った再ラベルや上書きを防ぐ。
+ *
+ * @function normalizeStoredMaterialSourceObservations
+ * @param {Object|null|undefined} stored - 保存済み観測ストア候補。
+ * @param {Object=} options - 復元オプション。
+ * @param {string=} options.restoredAt - 復元日時ISO文字列。
+ * @returns {Object} 正規化済み観測ストア。
+ * @example
+ * const restored = normalizeStoredMaterialSourceObservations(rawStore);
+ */
+export function normalizeStoredMaterialSourceObservations(stored, options = {}) {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+    return createEmptyMaterialSourceObservations();
+  }
+  const rawVersion = toFiniteNumber(stored.schemaVersion, MATERIAL_SOURCE_OBSERVATION_SCHEMA_VERSION);
+  const schemaVersion = rawVersion === null ? MATERIAL_SOURCE_OBSERVATION_SCHEMA_VERSION : rawVersion;
+  if (schemaVersion > MATERIAL_SOURCE_OBSERVATION_SCHEMA_VERSION) {
+    return {
+      schemaVersion,
+      migrationStatus: "future-version-unsupported",
+      byDeviceId: {},
+      retainedUnsupportedStore: cloneJsonValue(stored),
+      authority: "observation-only",
+    };
+  }
+  const restoredAt = toIsoDateTimeString(options.restoredAt);
+  const normalized = {
+    schemaVersion: MATERIAL_SOURCE_OBSERVATION_SCHEMA_VERSION,
+    migrationStatus: "current",
+    byDeviceId: {},
+    authority: "observation-only",
+  };
+  const byDeviceId = stored.byDeviceId && typeof stored.byDeviceId === "object" && !Array.isArray(stored.byDeviceId)
+    ? stored.byDeviceId
+    : {};
+  for (const [deviceId, record] of Object.entries(byDeviceId)) {
+    const key = String(deviceId || record?.deviceId || "").trim();
+    if (!key || !record || typeof record !== "object" || Array.isArray(record)) {
+      continue;
+    }
+    normalized.byDeviceId[key] = markRestoredObservationRecord({
+      ...record,
+      schemaVersion: MATERIAL_SOURCE_OBSERVATION_SCHEMA_VERSION,
+      deviceId: record.deviceId || key,
+    }, restoredAt);
+  }
+  return normalized;
+}
+
+/**
  * device観測レコードを取得または生成する。
  *
  * @private
@@ -180,6 +293,7 @@ function ensureDeviceRecord(store, options) {
       lastObservedAt: options.observedAt,
       lastChangedAt: options.observedAt,
       providerId: null,
+      providerStates: {},
       sessionId: null,
       providerGeneration: null,
       retiredProviderGenerations: [],
@@ -210,8 +324,14 @@ function ensureDeviceRecord(store, options) {
  * @returns {?string} source ID。
  */
 function resolveSourceId(source) {
+  if (source?.sourceIdentity && source.sourceIdentity.valid === false) {
+    return null;
+  }
   const explicit = String(source?.sourceId ?? "").trim();
   if (explicit) {
+    if (/(^|:)unknown(?=:|$)/i.test(explicit)) {
+      return null;
+    }
     return explicit;
   }
   const kind = String(source?.kind || "").trim();
@@ -472,9 +592,14 @@ function rejectStaleBatch(record, options) {
   if (!record.lastObservedAt) {
     return null;
   }
-  const retiredGenerations = new Set(Array.isArray(record.retiredProviderGenerations)
-    ? record.retiredProviderGenerations.map((value) => String(value))
-    : []);
+  const providerKey = String(options.providerId || "__default__");
+  const providerState = record.providerStates?.[providerKey] && typeof record.providerStates[providerKey] === "object"
+    ? record.providerStates[providerKey]
+    : null;
+  const retiredGenerations = new Set([
+    ...(Array.isArray(providerState?.retiredGenerations) ? providerState.retiredGenerations : []),
+    ...(Array.isArray(record.retiredProviderGenerations) ? record.retiredProviderGenerations : []),
+  ].map((value) => String(value)));
   const incomingGeneration = options.providerGeneration ? String(options.providerGeneration) : null;
   if (incomingGeneration && retiredGenerations.has(incomingGeneration)) {
     return { accepted: false, reason: "stale-provider-generation", record };
@@ -482,12 +607,14 @@ function rejectStaleBatch(record, options) {
   const nextTime = new Date(options.observedAt).getTime();
   const prevTime = new Date(record.lastObservedAt).getTime();
   if (Number.isFinite(nextTime) && Number.isFinite(prevTime) && nextTime < prevTime) {
-    if (record.providerGeneration && options.providerGeneration && record.providerGeneration !== options.providerGeneration) {
+    const activeGeneration = providerState?.activeGeneration || record.providerGeneration || null;
+    if (activeGeneration && options.providerGeneration && activeGeneration !== options.providerGeneration) {
       return { accepted: false, reason: "stale-provider-generation", record };
     }
     return { accepted: false, reason: "stale-observation", record };
   }
-  if (record.providerGeneration && options.providerGeneration && record.providerGeneration === options.providerGeneration) {
+  const activeGeneration = providerState?.activeGeneration || record.providerGeneration || null;
+  if (activeGeneration && options.providerGeneration && activeGeneration === options.providerGeneration) {
     const previousSequence = toFiniteNumber(record.lastSequence);
     const nextSequence = toFiniteNumber(options.sequence);
     if (previousSequence !== null && nextSequence !== null && nextSequence < previousSequence) {
@@ -507,25 +634,45 @@ function rejectStaleBatch(record, options) {
  * @private
  * @function updateProviderGenerationLifecycle
  * @param {Object} record - device観測レコード。
+ * @param {?string} providerId - provider ID。
  * @param {?string} nextGeneration - 今回受理するprovider generation。
  * @returns {void}
  */
-function updateProviderGenerationLifecycle(record, nextGeneration) {
+function updateProviderGenerationLifecycle(record, providerId, nextGeneration) {
   const next = nextGeneration ? String(nextGeneration) : null;
   if (!next) {
     return;
   }
-  const current = record.providerGeneration ? String(record.providerGeneration) : null;
+  const providerKey = String(providerId || "__default__");
+  if (!record.providerStates || typeof record.providerStates !== "object" || Array.isArray(record.providerStates)) {
+    record.providerStates = {};
+  }
+  const providerState = record.providerStates[providerKey] && typeof record.providerStates[providerKey] === "object"
+    ? record.providerStates[providerKey]
+    : { providerId: providerKey, activeGeneration: null, retiredGenerations: [] };
+  const current = providerState.activeGeneration ? String(providerState.activeGeneration) : null;
   if (!current || current === next) {
+    providerState.activeGeneration = next;
+    providerState.lastObservedAt = record.lastObservedAt || null;
+    providerState.disconnectedAt = null;
+    record.providerStates[providerKey] = providerState;
     record.providerGeneration = next;
     return;
   }
-  const retired = new Set(Array.isArray(record.retiredProviderGenerations)
-    ? record.retiredProviderGenerations.map((value) => String(value))
+  const retired = new Set(Array.isArray(providerState.retiredGenerations)
+    ? providerState.retiredGenerations.map((value) => String(value))
     : []);
   retired.add(current);
   retired.delete(next);
-  record.retiredProviderGenerations = Array.from(retired).slice(-16);
+  providerState.activeGeneration = next;
+  providerState.retiredGenerations = Array.from(retired).slice(-16);
+  providerState.lastObservedAt = record.lastObservedAt || null;
+  providerState.disconnectedAt = null;
+  record.providerStates[providerKey] = providerState;
+  record.retiredProviderGenerations = Array.from(new Set([
+    ...(Array.isArray(record.retiredProviderGenerations) ? record.retiredProviderGenerations : []),
+    ...providerState.retiredGenerations,
+  ])).slice(-16);
   record.providerGeneration = next;
 }
 
@@ -588,12 +735,16 @@ export function recordMaterialTopologyObservation(store, options = {}) {
   if (!deviceId) {
     return { accepted: false, reason: "device-id-missing" };
   }
+  if (!isValidExplicitObservedAt(options.observedAt)) {
+    return { accepted: false, reason: "invalid-observed-at" };
+  }
   const observedAt = toIsoDateTimeString(options.observedAt);
   const snapshotCompleteness = options.snapshotCompleteness === "complete" ? "complete" : "partial";
   const existingRecord = targetStore.byDeviceId[deviceId] || null;
   if (existingRecord) {
     const stale = rejectStaleBatch(existingRecord, {
       observedAt,
+      providerId: options.providerId || options.topology?.provider?.providerId || null,
       providerGeneration: options.providerGeneration || null,
       sequence: options.sequence ?? null,
     });
@@ -703,11 +854,15 @@ export function recordMaterialTopologyObservation(store, options = {}) {
   }
   record.providerId = options.providerId || topology.provider?.providerId || record.providerId || null;
   record.sessionId = options.sessionId || record.sessionId || null;
-  updateProviderGenerationLifecycle(record, options.providerGeneration || null);
+  updateProviderGenerationLifecycle(record, record.providerId, options.providerGeneration || null);
   record.lastSequence = options.sequence ?? record.lastSequence ?? null;
   record.providerDisconnectedAt = topology.cfs?.topologyState === "stale"
     ? (topology.provider?.disconnectedAt || observedAt)
     : null;
+  if (record.providerId && record.providerStates?.[record.providerId]) {
+    record.providerStates[record.providerId].lastObservedAt = observedAt;
+    record.providerStates[record.providerId].disconnectedAt = record.providerDisconnectedAt;
+  }
   record.restoredFromStorage = false;
   record.restoredAt = null;
   record.snapshotCompleteness = snapshotCompleteness;
@@ -737,6 +892,7 @@ export function recordMaterialTopologyObservation(store, options = {}) {
  * @param {string} options.fromDeviceId - 旧device ID。
  * @param {string} options.toDeviceId - 新device ID。
  * @param {string=} options.observedAt - rekey日時。
+ * @param {boolean=} options.mergeIfTargetExists - 移行先recordが存在する場合に明示mergeするならtrue。
  * @param {boolean=} options.identityConflict - identity conflict中ならtrue。
  * @returns {Object} rekey結果。
  * @example
@@ -763,7 +919,74 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
   const observedAt = toIsoDateTimeString(options.observedAt);
   const existing = targetStore.byDeviceId[toDeviceId];
   if (existing && existing !== from) {
-    return { accepted: false, reason: "target-device-exists" };
+    if (options.mergeIfTargetExists !== true) {
+      return { accepted: false, reason: "target-device-exists" };
+    }
+    const mergedSourceIds = [];
+    const skippedSourceIds = [];
+    for (const [sourceId, snapshot] of Object.entries(from.latestBySourceId || {})) {
+      if (existing.latestBySourceId?.[sourceId]) {
+        skippedSourceIds.push(sourceId);
+        continue;
+      }
+      if (!existing.latestBySourceId || typeof existing.latestBySourceId !== "object" || Array.isArray(existing.latestBySourceId)) {
+        existing.latestBySourceId = {};
+      }
+      existing.latestBySourceId[sourceId] = {
+        ...cloneJsonValue(snapshot),
+        deviceId: toDeviceId,
+        identityStrength: "stable",
+      };
+      mergedSourceIds.push(sourceId);
+    }
+    const revision = Number(existing.observationRevision || 0) + 1;
+    existing.observationRevision = revision;
+    existing.identityStrength = "stable";
+    existing.aliases = [...new Set([
+      ...(Array.isArray(existing.aliases) ? existing.aliases : []),
+      fromDeviceId,
+      ...(Array.isArray(from.aliases) ? from.aliases : []),
+    ])];
+    existing.host = existing.host || from.host || null;
+    existing.firstObservedAt = existing.firstObservedAt || from.firstObservedAt || observedAt;
+    existing.lastObservedAt = [existing.lastObservedAt, from.lastObservedAt]
+      .filter(Boolean)
+      .sort()
+      .at(-1) || observedAt;
+    existing.lastChangedAt = observedAt;
+    existing.providerId = existing.providerId || from.providerId || null;
+    existing.sessionId = existing.sessionId || from.sessionId || null;
+    existing.providerGeneration = existing.providerGeneration || from.providerGeneration || null;
+    existing.retiredProviderGenerations = [...new Set([
+      ...(Array.isArray(existing.retiredProviderGenerations) ? existing.retiredProviderGenerations : []),
+      ...(Array.isArray(from.retiredProviderGenerations) ? from.retiredProviderGenerations : []),
+    ])].slice(-16);
+    const importedEvents = Array.isArray(from.events)
+      ? from.events.map((event) => ({
+          ...cloneJsonValue(event),
+          canonicalDeviceId: toDeviceId,
+        }))
+      : [];
+    existing.events = [
+      ...(Array.isArray(existing.events) ? existing.events : []),
+      ...importedEvents,
+      createSourceChangeEvent({
+        deviceId: toDeviceId,
+        sourceId: null,
+        observedAt,
+        changeKind: "device-merged",
+        before: { deviceId: fromDeviceId },
+        after: { deviceId: toDeviceId, mergedSourceIds, skippedSourceIds },
+        revision,
+        sessionId: existing.sessionId || null,
+        providerId: existing.providerId || null,
+        providerGeneration: existing.providerGeneration || null,
+        sequence: existing.lastSequence ?? null,
+      }),
+    ];
+    trimDeviceEvents(existing, options.limits || {});
+    delete targetStore.byDeviceId[fromDeviceId];
+    return { accepted: true, reason: "merged", record: existing, mergedSourceIds, skippedSourceIds };
   }
   delete targetStore.byDeviceId[fromDeviceId];
   from.deviceId = toDeviceId;
