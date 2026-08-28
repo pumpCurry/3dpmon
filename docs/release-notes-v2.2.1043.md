@@ -1,4 +1,4 @@
-# 3dpmon v2.2.1043 リリースノート案
+# 3dpmon v2.2.1043 リリースノート
 
 ## 日本語
 
@@ -27,20 +27,27 @@
 
 ### 検証
 
-- ローカル: `npx vitest run --reporter=dot --silent`
-- ローカル: `npm run test:e2e`
-- ローカル: `npm run build`
-- ローカル: `node scripts/write-release-manifest.mjs --dist <dist-dir>`
+- ローカル: `npx vitest run --reporter=dot`
+- ローカル: `npm run verify:release`
+  - `check:version-sync` PASS
+  - Vitest 102 files / 1656 tests PASS
+  - Electron E2E 3 passed
+  - Windows build PASS
+  - `release-manifest-2.2.1043.json` 生成
 - GitHub Actions: lint / smoke / test / e2e / version-sync
 
 ### ビルド成果物
 
 - `3dpmon-2.2.1043-setup.exe`
+  - SHA256: `d0547ae71da4b2a7d666d363c53963366d1751232b5c1db3616c50a30f818146`
 - `3dpmon-2.2.1043-portable.exe`
+  - SHA256: `4a92b9edacf833a14893c227cdc15bff0f1dbb2676aa27cf6606694aac821eaf`
 - `3dpmon-2.2.1043-setup.exe.blockmap`
+  - SHA256: `b51ca32846b9a49475126ade04fbeff8941bdf0fc4f47dde73b39c31245c4469`
 - `release-manifest-2.2.1043.json`
+  - SHA256: `fb9161ee3a5610966e8358bec9f273e4733b081cfe3b6c3dffa276ca7ce1fe15`
 
-公開時は `release-manifest-2.2.1043.json` を添付し、最終commit、build日時、各成果物のSHA256をmanifestで確認できるようにします。
+公開時は `release-manifest-2.2.1043.json` を添付し、最終commit `31c6f8df9b243014e737a889e404880e7edf2feb`、build日時、各成果物のSHA256をmanifestで確認できるようにします。
 
 ## English
 
@@ -69,17 +76,24 @@
 
 ### Verification
 
-- Local: `npx vitest run --reporter=dot --silent`
-- Local: `npm run test:e2e`
-- Local: `npm run build`
-- Local: `node scripts/write-release-manifest.mjs --dist <dist-dir>`
+- Local: `npx vitest run --reporter=dot`
+- Local: `npm run verify:release`
+  - `check:version-sync` PASS
+  - Vitest 102 files / 1656 tests PASS
+  - Electron E2E 3 passed
+  - Windows build PASS
+  - `release-manifest-2.2.1043.json` generated
 - GitHub Actions: lint / smoke / test / e2e / version-sync
 
 ### Build Artifacts
 
 - `3dpmon-2.2.1043-setup.exe`
+  - SHA256: `d0547ae71da4b2a7d666d363c53963366d1751232b5c1db3616c50a30f818146`
 - `3dpmon-2.2.1043-portable.exe`
+  - SHA256: `4a92b9edacf833a14893c227cdc15bff0f1dbb2676aa27cf6606694aac821eaf`
 - `3dpmon-2.2.1043-setup.exe.blockmap`
+  - SHA256: `b51ca32846b9a49475126ade04fbeff8941bdf0fc4f47dde73b39c31245c4469`
 - `release-manifest-2.2.1043.json`
+  - SHA256: `fb9161ee3a5610966e8358bec9f273e4733b081cfe3b6c3dffa276ca7ce1fe15`
 
-The release will include `release-manifest-2.2.1043.json` so the final commit, build timestamp, and SHA256 for each artifact can be verified from the manifest.
+The release will include `release-manifest-2.2.1043.json` so the final commit `31c6f8df9b243014e737a889e404880e7edf2feb`, build timestamp, and SHA256 for each artifact can be verified from the manifest.
