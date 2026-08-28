@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1438 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 18:45:30
+ * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -1026,7 +1026,7 @@ function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}, exec
  * @param {Array<string>=} options.control.allowedActions - renderer側で許可する操作action
  * @param {Function=} options.control.onCommand - 操作hook
  * @param {Function=} options.control.validateCommandIntent - click時の最新状態再確認hook
- * @returns {{update: function(object): void, destroy: function(): void}} renderer handle
+ * @returns {{update: function(object, object=): void, destroy: function(): void}} renderer handle
  * @example
  * const handle = renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
  */
@@ -1039,6 +1039,10 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
   }
   const documentRef = container.ownerDocument || document;
   const commandExecutionState = createCommandExecutionState();
+  let activeOptions = {
+    ...options,
+    control: options?.control || null,
+  };
 
   /**
    * 現在のview modelをcontainerへ描画する。
@@ -1058,7 +1062,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const header = createElement(documentRef, "div", "mtv-header");
     const topologyState = currentViewModel?.summary?.topologyState || "unobserved";
     const isStale = topologyState === "stale";
-    const controlPolicy = createControlPolicy(currentViewModel, options);
+    const controlPolicy = createControlPolicy(currentViewModel, activeOptions);
     root.classList.add(`mtv-root-${topologyState}`);
     header.appendChild(createElement(documentRef, "span", "mtv-title", "機器観測フィラメント"));
     header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState, currentViewModel?.observation)));
@@ -1105,7 +1109,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     root.appendChild(units);
 
     const footer = createElement(documentRef, "div", "mtv-readonly-note");
-    const host = options.hostname ? `${options.hostname}: ` : "";
+    const host = activeOptions.hostname ? `${activeOptions.hostname}: ` : "";
     footer.textContent = controlPolicy.canSendCommands
       ? `${host}CFS/CFS-C操作はPrinter Core v3 dispatcherで送信直前に再検証されます。`
       : `${host}🔒 CFS/CFS-Cは現在監視のみです。フィラメント操作はプリンタ本体から行ってください。`;
@@ -1115,7 +1119,16 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
 
   draw(viewModel);
   return {
-    update(nextViewModel) {
+    update(nextViewModel, nextOptions = null) {
+      if (nextOptions && typeof nextOptions === "object") {
+        activeOptions = {
+          ...activeOptions,
+          ...nextOptions,
+          control: Object.prototype.hasOwnProperty.call(nextOptions, "control")
+            ? nextOptions.control
+            : activeOptions.control,
+        };
+      }
       draw(nextViewModel);
     },
     destroy() {

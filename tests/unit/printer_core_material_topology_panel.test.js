@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1438 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 18:42:10
+ * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -191,6 +191,49 @@ describe("Printer Core v3 material topology panel", () => {
 
     expect(getSlotLabels(container)).toEqual(["external", "1A", "1B", "1C", "1D"]);
     expect(container.querySelector(".mtv-selected")?.dataset.slot).toBe("1C");
+  });
+
+  it("updateへ渡したcontrol optionで既存panelの操作可否を再描画する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: false,
+        allowedActions: [],
+        sourceAuthority: "printer-core-cfs-control-disabled",
+      },
+    });
+    const enabledViewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["load"],
+        sourceAuthority: "printer-core-cfs-control-production-settings",
+      },
+    });
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        showControls: true,
+        canSendCommands: false,
+        allowedActions: ["load"],
+      },
+    });
+
+    expect(getSlotActionButton(container, "1C", "load")?.disabled).toBe(true);
+
+    handle.update(enabledViewModel, {
+      control: {
+        showControls: true,
+        canSendCommands: true,
+        allowedActions: ["load"],
+        onCommand: vi.fn(),
+      },
+    });
+
+    expect(getSlotActionButton(container, "1C", "load")?.disabled).toBe(false);
+    expect(container.textContent).toContain("送信直前に再検証");
   });
 
   it("invalid remainingを0%として見せず報告値異常の不明表示にする", () => {

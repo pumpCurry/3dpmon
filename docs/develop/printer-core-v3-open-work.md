@@ -25,7 +25,7 @@ K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界�
 
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
-- CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。scaffoldは`createBoundCfsControlIntegration()`生成時の設定だけを使い、UI clickごとのdispatcher/context/enabled注入を受け付けない。
+- CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。production有効化には、現在接続世代へbindされた`/info`、fresh topology、module-owned immutable certification registry登録済み証跡が必要で、保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけでは有効化しない。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
 - CFS/CFS-C の残量値は表示するが、手動スプール台帳の残量へ自動反映しない。
 - stale / reconnect / runout / attach / detach のプロトコルイベントは表示できる形へ寄せたが、実機Gateで物理操作と最終対応付けする必要がある。

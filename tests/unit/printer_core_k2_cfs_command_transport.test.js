@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 20:35:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -273,7 +273,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     ]);
   });
 
-  it("Gate 19 certified registryで明示されたslot操作だけproduction planへ昇格する", () => {
+  it("caller supplied evidenceだけではslot操作をproduction planへ昇格しない", () => {
     const plan = createK2CfsCommandTransportPlan({
       commandKind: "cfs-load",
       payload: {
@@ -290,46 +290,36 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     });
 
     expect(plan).toMatchObject({
-      ok: true,
-      profile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
-      certificationOnly: false,
-      requiresLiveConfirmation: false,
+      ok: false,
+      reason: "invalid-cfs-slot-certification-evidence",
       details: {
         commandKind: "cfs-load",
-        sourceId: "cfs:1:slot:2",
-        boxId: 1,
-        materialId: 2,
-        candidateOperation: "feed-in-or-load",
-        semanticStatus: "certified",
-        liveCertificationAllowed: true,
-        productionEnabled: true,
-        certificationEvidence: {
-          schemaVersion: 1,
-          status: "certified",
-          gate: "Gate 19",
-          commandKinds: ["cfs-load"],
-          transportProfile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
-          printerType: "creality-k2",
-          model: "F012",
-          firmwareVersion: "1.0.0",
-          fixtureId: "k2-f012-feed-in-or-out-20260828",
-          captureId: "capture:k2-f012-cfs-load-1c-20260828",
-          certifiedAt: "2026-08-28T12:00:00.000+09:00",
-        },
       },
     });
-    expect(plan.frames).toEqual([
-      {
-        method: "set",
-        params: {
-          feedInOrOut: {
-            boxId: 1,
-            materialId: 2,
-            isFeed: 1,
-          },
-        },
+    expect(plan.details.errors).toContain("certification-evidence-not-registered");
+    expect(plan.frames).toEqual([]);
+  });
+
+  it("factoryが返すtransport planは生成後にframeやdetailsを書き換えられない", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
       },
-    ]);
+    }, {
+      allowUncertifiedCfsSlotCommandCandidates: true,
+    });
+
+    expect(plan.ok).toBe(true);
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.frames)).toBe(true);
+    expect(Object.isFrozen(plan.frames[0])).toBe(true);
+    expect(Object.isFrozen(plan.frames[0].params.feedInOrOut)).toBe(true);
+    expect(Object.isFrozen(plan.details)).toBe(true);
+    expect(() => {
+      plan.frames[0].params.feedInOrOut.isFeed = 0;
+    }).toThrow(TypeError);
+    expect(plan.frames[0].params.feedInOrOut.isFeed).toBe(1);
   });
 
   it("production昇格は現在targetのprinter/model/firmware scopeが未観測なら拒否する", () => {

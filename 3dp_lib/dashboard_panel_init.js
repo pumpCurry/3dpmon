@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1438 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-28 18:58:10
+ * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
  */
 
@@ -60,7 +60,7 @@ import { initLogAutoScroll, initLogRenderer } from "./dashboard_log_util.js";
 import { monitorData } from "./dashboard_data.js";
 import { getCurrentSpool, setCurrentSpoolId, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { showAlert } from "./dashboard_notification_manager.js";
-import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget, getConnectionState, getPrinterCoreV3RuntimeProbeSessionId } from "./dashboard_connection.js";
+import { getDeviceIp, getDisplayBaseUrl, sendCommand, getPrinterType, getConnectionTarget, getConnectionState, getPrinterCoreV3RuntimeProbeSessionId, getPrinterCoreV3ConnectionGeneration } from "./dashboard_connection.js";
 import * as printManager from "./dashboard_printmanager.js";
 import {
   buildFleetSummary, buildDailyProductionReport, buildEstimateVsActual,
@@ -94,7 +94,7 @@ import {
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
-  validateK2CfsSlotControlCertificationEvidence,
+  validateRegisteredK2CfsSlotControlCertificationEvidence,
 } from "./printer_core/dashboard_k2_cfs_command_transport.js";
 import {
   MATERIAL_DISPLAY_MODE,
@@ -192,13 +192,28 @@ function normalizeCertifiedCfsCommandSet(value) {
  * @private
  * @function isCurrentPrinterCoreV3Info
  * @param {object|null|undefined} info - `printerCoreV3Info`候補
+ * @param {object|null|undefined} target - 現在のconnection target
  * @returns {boolean} 現在起動中の`/info` probe証跡ならtrue
  */
-function isCurrentPrinterCoreV3Info(info) {
+function isCurrentPrinterCoreV3Info(info, target = null) {
   if (!info || typeof info !== "object") {
     return false;
   }
-  return String(info.probeSessionId || "") === getPrinterCoreV3RuntimeProbeSessionId();
+  if (String(info.probeSessionId || "") !== getPrinterCoreV3RuntimeProbeSessionId()) {
+    return false;
+  }
+  const storedGeneration = Number(info.connectionGeneration) || 0;
+  if (!storedGeneration) {
+    return false;
+  }
+  const targetDest = String(target?.dest || "").trim();
+  const infoDest = String(info.connectionDest || "").trim();
+  if (targetDest && infoDest && targetDest !== infoDest) {
+    return false;
+  }
+  const lookupKey = target?.hostname || target?.dest || info.connectionHost || info.connectionDest || "";
+  const currentGeneration = getPrinterCoreV3ConnectionGeneration(lookupKey);
+  return storedGeneration === currentGeneration;
 }
 
 /**
@@ -216,7 +231,7 @@ function isCurrentPrinterCoreV3Info(info) {
  */
 function createCfsControlCertificationScope(target, machine) {
   const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
-  const info = isCurrentPrinterCoreV3Info(rawInfo) ? rawInfo : {};
+  const info = isCurrentPrinterCoreV3Info(rawInfo, target) ? rawInfo : {};
   const shadowState = machine?.runtimeData?.printerCoreV3Shadow?.lastState || {};
   return {
     printerType: target?.printerType || null,
@@ -267,7 +282,7 @@ function resolveCfsControlProductionSettings(target, machine = null) {
   const scope = createCfsControlCertificationScope(target, machine);
   const certifiedAllowedActions = allowedActions.filter((action) => {
     const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
-    const validation = validateK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
+    const validation = validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
     return validation.ok;
   });
   if (certifiedAllowedActions.length === 0) {
@@ -300,6 +315,10 @@ function createCfsControlSendTimeMaterialTopology(topology) {
       boxId: source?.boxId ?? null,
       slotId: source?.slotId ?? source?.protocolSlotId ?? null,
       presence: source?.presence || source?.status?.presence || null,
+      status: {
+        presence: source?.status?.presence || null,
+        stateCode: source?.status?.stateCode ?? source?.stateCode ?? null,
+      },
       material: source?.material || null,
     })),
   };
@@ -315,6 +334,7 @@ function createCfsControlSendTimeMaterialTopology(topology) {
  * @private
  * @param {string} hostname - 対象ホスト名
  * @param {object} productionSettings - production CFS control設定
+ * @param {object} request - 送信直前に検証するcommand request
  * @returns {object} command authority send-time snapshot
  */
 function createCfsControlSendTimeContext(hostname, productionSettings, request) {
@@ -782,8 +802,7 @@ function initFilamentPanel(body, hostname) {
   const materialDisplayMode = resolveMaterialDisplayMode({ target, printerType, topology });
   if (materialDisplayMode === MATERIAL_DISPLAY_MODE.MULTI_SLOT) {
     body.classList.add("filament-panel-cfs-mode");
-    const cfsControlOptions = createCfsControlRenderOptions(hostname);
-    const createViewModel = () => {
+    const createRenderablePanelState = () => {
       const latestMachine = monitorData.machines[hostname] || {};
       const latestShadowRecord = latestMachine.runtimeData?.printerCoreV3Shadow || null;
       const latestTopology = resolveDisplayMaterialTopology({
@@ -799,7 +818,8 @@ function initFilamentPanel(body, hostname) {
         printerType,
         topology: latestTopology,
       });
-      return createMaterialTopologyViewModel(latestTopology, {
+      const cfsControlOptions = createCfsControlRenderOptions(hostname);
+      const viewModel = createMaterialTopologyViewModel(latestTopology, {
         ...viewOptions,
         observation: {
           lastObservedAt: latestShadowRecord?.materialProviderLastObservedAt || latestTopology?.provider?.lastObservedAt || null,
@@ -815,6 +835,7 @@ function initFilamentPanel(body, hostname) {
             : "printer-core-cfs-control-disabled",
         },
       });
+      return { viewModel, controlOptions: cfsControlOptions };
     };
     const createSignature = (viewModel) => JSON.stringify({
       limits: viewModel.limits,
@@ -826,19 +847,21 @@ function initFilamentPanel(body, hostname) {
       observation: viewModel.observation,
       diagnostics: viewModel.diagnostics,
     });
-    const initialViewModel = createViewModel();
-    let materialPanelSignature = createSignature(initialViewModel);
-    const materialPanel = renderMaterialTopologyPanel(container, initialViewModel, {
+    const initialPanelState = createRenderablePanelState();
+    let materialPanelSignature = createSignature(initialPanelState.viewModel);
+    const materialPanel = renderMaterialTopologyPanel(container, initialPanelState.viewModel, {
       hostname,
-      control: cfsControlOptions,
+      control: initialPanelState.controlOptions,
     });
     body._materialTopologyPanel = materialPanel;
     body._materialTopologyRefreshTimer = setInterval(() => {
       try {
-        const nextViewModel = createViewModel();
-        const nextSignature = createSignature(nextViewModel);
+        const nextPanelState = createRenderablePanelState();
+        const nextSignature = createSignature(nextPanelState.viewModel);
         if (nextSignature !== materialPanelSignature) {
-          materialPanel.update(nextViewModel);
+          materialPanel.update(nextPanelState.viewModel, {
+            control: nextPanelState.controlOptions,
+          });
           materialPanelSignature = nextSignature;
         }
       } catch (e) {

@@ -15,12 +15,13 @@
  *
  * 【公開関数一覧】
  * - {@link validateK2CfsSlotControlCertificationEvidence}：production CFS slot操作の実機証跡を検証
+ * - {@link validateRegisteredK2CfsSlotControlCertificationEvidence}：registry登録済みproduction証跡を検証
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -136,6 +137,19 @@ const UNCERTIFIED_CFS_SLOT_COMMAND_KINDS = Object.freeze(new Set([
 const TRUSTED_K2_CFS_TRANSPORT_PLANS = new WeakSet();
 
 /**
+ * production CFS slot操作を許可するmodule-owned certification registry。
+ *
+ * 【詳細説明】
+ * - connection targetやUI設定に保存された証跡だけでproduction commandを有効化しないため、
+ *   実機certificationをコードレビュー済みのimmutable registryとして保持する。
+ * - 現時点ではGate 10/12の物理certificationが未完了のため空配列にし、slot操作はfail-closedを維持する。
+ * - 将来certificationを追加する場合は、この配列へ完全な証跡を追加し、reviewとlive testを通す。
+ *
+ * @constant {ReadonlyArray<object>}
+ */
+export const K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY = Object.freeze([]);
+
+/**
  * 未certified CFS slot commandを `feedInOrOut` 候補へ写す定義。
  *
  * 【詳細説明】
@@ -234,6 +248,61 @@ function cloneJsonValue(value) {
 }
 
 /**
+ * object/arrayを再帰的にfreezeする。
+ *
+ * 【詳細説明】
+ * - transport planはWeakSetでfactory由来を識別しているが、callerが生成後にframesやdetailsを
+ *   書き換えるとsend-time validation後の意味が変わってしまう。
+ * - 循環参照は想定しないが、防御としてseenを保持し、同じobjectを二度処理しない。
+ *
+ * @private
+ * @function deepFreezeJsonValue
+ * @param {*} value - freeze対象
+ * @param {WeakSet<object>=} seen - 処理済みobject
+ * @returns {*} freeze後の同じ値
+ */
+function deepFreezeJsonValue(value, seen = new WeakSet()) {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const child of Object.values(value)) {
+    deepFreezeJsonValue(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+/**
+ * JSON互換値をkey順に正規化して文字列化する。
+ *
+ * 【詳細説明】
+ * - module-owned registryとcaller supplied evidenceの比較で、object property順だけが違う証跡を
+ *   誤って別物扱いしないために使う。
+ * - undefinedや関数はcertification evidenceとして扱わない前提で、JSON.stringifyと同等に落とす。
+ *
+ * @private
+ * @function stableJsonStringify
+ * @param {*} value - JSON互換値
+ * @returns {string} key順を安定化したJSON文字列
+ */
+function stableJsonStringify(value) {
+  return JSON.stringify(value, (key, entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return entry;
+    }
+    return Object.keys(entry)
+      .sort()
+      .reduce((result, entryKey) => {
+        result[entryKey] = entry[entryKey];
+        return result;
+      }, {});
+  });
+}
+
+/**
  * module factory由来のtransport planとして記録する。
  *
  * 【詳細説明】
@@ -246,6 +315,7 @@ function cloneJsonValue(value) {
  */
 function createTrustedTransportPlan(plan) {
   if (plan && typeof plan === "object") {
+    deepFreezeJsonValue(plan);
     TRUSTED_K2_CFS_TRANSPORT_PLANS.add(plan);
   }
   return plan;
@@ -390,6 +460,34 @@ export function validateK2CfsSlotControlCertificationEvidence(evidence, commandK
 }
 
 /**
+ * K2/CFS slot操作をproductionへ昇格してよいregistry登録済み証跡か検証する。
+ *
+ * 【詳細説明】
+ * - {@link validateK2CfsSlotControlCertificationEvidence} でshape/scopeを検証したうえで、
+ *   module-owned immutable registryへ登録済みの証跡だけをproduction commandへ使う。
+ * - connection targetやUI設定が同じshapeのobjectを持っていても、registry未登録なら拒否する。
+ *
+ * @function validateRegisteredK2CfsSlotControlCertificationEvidence
+ * @param {*} evidence - 検証対象のcertification evidence
+ * @param {string} commandKind - production昇格したいcommand kind
+ * @param {object=} scope - 現在target/runtimeから得たscope
+ * @returns {{ok: boolean, errors: string[]}} registry境界を含む検証結果
+ * @example
+ * const result = validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, "cfs-load", scope);
+ */
+export function validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope = {}) {
+  const validation = validateK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
+  const errors = [...validation.errors];
+  if (validation.ok && !isRegisteredCfsSlotControlCertificationEvidence(evidence, commandKind)) {
+    errors.push("certification-evidence-not-registered");
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
+
+/**
  * 指定command kindが実機certification済みとして明示されているか判定する。
  *
  * 【詳細説明】
@@ -413,6 +511,32 @@ function isCertifiedCfsSlotControlCommand(commandKind, options = {}) {
     return registry[commandKind] === true;
   }
   return false;
+}
+
+/**
+ * certification evidenceがmodule-owned registryに登録済みか判定する。
+ *
+ * 【詳細説明】
+ * - caller supplied evidenceは現在scopeとの整合性検証だけでなく、コード内registryとの完全一致を要求する。
+ * - command kindはregistry entryの`commandKinds`/`commandKind`にも含まれている必要がある。
+ *
+ * @private
+ * @function isRegisteredCfsSlotControlCertificationEvidence
+ * @param {object|null|undefined} evidence - caller supplied certification evidence
+ * @param {string} commandKind - production昇格したいcommand kind
+ * @returns {boolean} registryに同一証跡がある場合true
+ */
+function isRegisteredCfsSlotControlCertificationEvidence(evidence, commandKind) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return false;
+  }
+  const candidate = stableJsonStringify(evidence);
+  return K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY.some((entry) => {
+    if (!normalizeCertificationEvidenceCommandKinds(entry).has(commandKind)) {
+      return false;
+    }
+    return stableJsonStringify(entry) === candidate;
+  });
 }
 
 /**
@@ -851,7 +975,7 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
  * @returns {object} production transport plan
  */
 function createK2CfsSlotControlProductionPlan(request, commandKind, options = {}) {
-  const evidenceValidation = validateK2CfsSlotControlCertificationEvidence(
+  const evidenceValidation = validateRegisteredK2CfsSlotControlCertificationEvidence(
     options.certificationEvidence,
     commandKind,
     options.certificationScope || {}

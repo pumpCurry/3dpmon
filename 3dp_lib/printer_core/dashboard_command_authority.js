@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -747,8 +747,9 @@ function normalizeMaterialSourceEvidence(material) {
  *
  * 【詳細説明】
  * - UI view model由来の `presence` を最優先する。
- * - 実runtimeのNormalized MaterialSourceには `presence` が無い場合があるため、
- *   `status.stateCode` と材料証拠から表示側と同じ保守的なloaded/empty/unknown判定を再現する。
+ * - 実runtimeのNormalized MaterialSourceには `presence` が無い場合があるため、明示的な
+ *   `status.stateCode` だけをfallbackとして採用する。
+ * - 材料名・色・RFIDの残留metadataだけでは装填を証明せず、送信直前の物理操作はfail-closedにする。
  *
  * @private
  * @param {object|null|undefined} source - material source候補
@@ -763,20 +764,16 @@ function normalizeMaterialSourcePresence(source) {
     return "unobserved";
   }
   const stateCode = normalizeSequence(source?.status?.stateCode);
-  const material = source.material && typeof source.material === "object" ? source.material : {};
-  const hasMaterialEvidence = Boolean(
-    String(material.type || "").trim() ||
-    String(material.name || "").trim() ||
-    String(material.color?.normalized || material.color?.raw || "").trim() ||
-    String(material.rfid || "").trim()
-  );
-  if (stateCode === 0 && !hasMaterialEvidence) {
+  if (stateCode === 1) {
+    return "loaded";
+  }
+  if (stateCode === 0) {
     return "empty";
   }
-  if (stateCode === null && !hasMaterialEvidence) {
+  if (stateCode === null) {
     return "unknown";
   }
-  return "loaded";
+  return "unknown";
 }
 
 /**

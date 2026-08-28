@@ -85,6 +85,9 @@ closed by default and opens only when all of the following are true:
 - `certifiedCfsSlotControlCommands[]` explicitly allows the command kind.
 - `certificationEvidence` uses schema version 1, certified status, the
   production feed-in-or-out profile, and capture/fixture metadata.
+- The same certification evidence is present in the module-owned immutable
+  slot-control certification registry. Caller supplied target settings alone
+  cannot make a standalone CFS slot action production-certified.
 - The current target/runtime reports `printerType:"creality-k2"` and the same
   model/firmware scope as the certification evidence.
 - Send-time validation still sees an active session, fresh connected topology,
@@ -102,6 +105,9 @@ The next live gates must verify:
 
 The existing CFS control panel remains disabled for standalone slot actions
 without matching production certification and current send-time revalidation.
+Generated transport plans are deep-frozen before they are trusted by the sender,
+so a caller cannot mutate frames, certification details, or safety flags after
+the factory validation step.
 When a standalone slot action returns only `submitted` / `completed:false`, the
 UI must not unlock every physical CFS action just because the material provider
 timestamp advanced. `cfs-slot-select` may unlock after a later observation shows

@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1437 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 10:48:25
+ * @lastModified 2026-08-28 20:35:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -657,6 +657,44 @@ describe("Printer Core v3 command authority contract", () => {
             boxId: 1,
             slotId: 2,
             presence: "empty",
+          }],
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-target-source-not-loaded");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは材料metadataだけではloadedとみなさない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        materialTopology: {
+          cfsConnected: true,
+          topologyState: "fresh",
+          sources: [{
+            sourceId: "cfs:1:slot:2",
+            kind: "cfs-slot",
+            boxId: 1,
+            slotId: 2,
+            material: {
+              type: "PLA",
+              color: {
+                raw: "#09ea7ae",
+                normalized: "09ea7ae",
+              },
+              rfid: "tag-from-previous-observation",
+            },
           }],
         },
       }),

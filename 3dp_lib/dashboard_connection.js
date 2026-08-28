@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1441 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 20:02:10
+ * @lastModified 2026-08-28 20:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -174,6 +174,8 @@ export function getPrinterCoreV3RuntimeProbeSessionId() {
  * @property {Array<Object>}  buffer        - ホスト確定前に受信したデータ
  * @property {Object|null}    latest        - 最新受信データ
  * @property {string}         dest          - 接続先(IP:PORT)
+ * @property {number}         printerCoreV3ConnectionGeneration
+ *                                        - Printer Core v3 `/info` scope を現在のWS接続世代へbindする番号
  * @property {string|null}    printerCoreV3ShadowSessionId
  *                                        - Printer Core v3 live shadow 用の接続 session ID
  * @property {string|null}    printerCoreV3ShadowDeviceId
@@ -606,9 +608,13 @@ function _normalizePositivePort(value) {
  * @param {object|null|undefined} target - connection target
  * @param {object|null|undefined} evidence - `/info` 応答
  * @param {string} observedAt - 観測時刻ISO文字列
+ * @param {object=} scope - 現在接続scope
+ * @param {number=} scope.connectionGeneration - 現在WS接続世代
+ * @param {string=} scope.connectionDest - 現在接続dest
+ * @param {string=} scope.connectionHost - 現在接続host key
  * @returns {boolean} targetを変更した場合true
  */
-function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt) {
+function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt, scope = {}) {
   if (!target || target.printerType === "moonraker" || !evidence || typeof evidence !== "object") {
     return false;
   }
@@ -624,6 +630,9 @@ function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt) {
     videoPort: _normalizePositivePort(evidence.videoPort),
     observedAt,
     probeSessionId: PRINTER_CORE_V3_RUNTIME_PROBE_SESSION_ID,
+    connectionGeneration: Number(scope.connectionGeneration) || 0,
+    connectionDest: String(scope.connectionDest || target.dest || "").trim() || null,
+    connectionHost: String(scope.connectionHost || target.hostname || "").trim() || null,
   };
   const previous = target.printerCoreV3Info || {};
   const changed = JSON.stringify(previous) !== JSON.stringify(nextInfo);
@@ -631,6 +640,68 @@ function _recordCurrentPrinterCoreV3Info(target, evidence, observedAt) {
     target.printerCoreV3Info = nextInfo;
   }
   return changed;
+}
+
+/**
+ * connection target またはhost文字列から現在の接続state entryを探す。
+ *
+ * 【詳細説明】
+ * - `/info` probeはIPキーで開始し、最初のWS frame後にhostnameキーへ移行するため、
+ *   host名完全一致だけでは現在の接続世代を取りこぼす。
+ * - dest完全一致、hostname、IP literalの順に候補を広げるが、新しいstateは作らず既存mapだけを見る。
+ *
+ * @private
+ * @function _findConnectionStateEntry
+ * @param {string} hostOrDest - host名、IP、またはdest候補
+ * @param {object|null|undefined} target - connection target候補
+ * @returns {{key:string,state:ConnectionState}|null} 見つかったstate entry、またはnull
+ */
+function _findConnectionStateEntry(hostOrDest, target = null) {
+  const candidates = new Set();
+  const addCandidate = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    candidates.add(text);
+    const ip = _extractIp(text);
+    if (ip) candidates.add(ip);
+  };
+  addCandidate(hostOrDest);
+  addCandidate(target?.hostname);
+  addCandidate(target?.dest);
+  for (const [key, state] of Object.entries(connectionMap)) {
+    if (!state) continue;
+    if (candidates.has(key) || candidates.has(state.dest)) {
+      return { key, state };
+    }
+    const stateIp = _extractIp(state.dest || "");
+    if (stateIp && candidates.has(stateIp)) {
+      return { key, state };
+    }
+  }
+  return null;
+}
+
+/**
+ * 指定host/destに対応する現在のPrinter Core v3接続世代を返す。
+ *
+ * 【詳細説明】
+ * - Panel composition側が永続`printerCoreV3Info`を現在のWebSocket接続へbindするために使う。
+ * - 0は「現在接続世代を確認できない、または接続中ではない」ことを示し、
+ *   production command scopeでは採用しない。
+ *
+ * @function getPrinterCoreV3ConnectionGeneration
+ * @param {string} hostOrDest - host名、IP、またはdest候補
+ * @returns {number} 現在の接続世代。未接続、切断済み、または不明なら0
+ * @example
+ * const generation = getPrinterCoreV3ConnectionGeneration("K2Pro-69E7");
+ */
+export function getPrinterCoreV3ConnectionGeneration(hostOrDest) {
+  const target = _findConnectionTarget(hostOrDest);
+  const entry = _findConnectionStateEntry(hostOrDest, target);
+  if (entry?.state?.state !== "connected") {
+    return 0;
+  }
+  return Number(entry?.state?.printerCoreV3ConnectionGeneration) || 0;
 }
 
 /**
@@ -928,7 +999,12 @@ async function _probePrinterCoreV3HttpInfo(dest, hostOrDest) {
       endpointAddress,
     });
     const inferredType = _inferCrealityPrinterTypeFromEvidence(body, hostOrDest || dest);
-    const infoChanged = _recordCurrentPrinterCoreV3Info(target, body, observedAt);
+    const stateEntry = _findConnectionStateEntry(hostOrDest || dest, target);
+    const infoChanged = _recordCurrentPrinterCoreV3Info(target, body, observedAt, {
+      connectionGeneration: stateEntry?.state?.printerCoreV3ConnectionGeneration || 0,
+      connectionDest: target?.dest || dest,
+      connectionHost: stateEntry?.key || hostOrDest || target?.hostname || "",
+    });
     const transportChanged = _applyConnectionTargetTransportHints(target, body, inferredType);
     _applyInferredConnectionTargetPrinterType(
       target,
@@ -1523,6 +1599,7 @@ const placeholderState = {
   buffer: [],
   latest: null,
   dest: "",
+  printerCoreV3ConnectionGeneration: 0,
   printerCoreV3ShadowSessionId: null,
   printerCoreV3ShadowDeviceId: null,
   printerCoreV3ShadowFamily: null,
@@ -1572,6 +1649,7 @@ function getState(host) {
       buffer: [],
       latest: null,
       dest: "",
+      printerCoreV3ConnectionGeneration: 0,
       printerCoreV3ShadowSessionId: null,
       printerCoreV3ShadowDeviceId: null,
       printerCoreV3ShadowFamily: null,
@@ -2014,6 +2092,7 @@ export function connectWs(hostOrDest) {
   //   per-host 処理は processData 内の _initializedHosts で管理する。
   const state = getState(host);
   state.dest = dest;
+  state.printerCoreV3ConnectionGeneration = (Number(state.printerCoreV3ConnectionGeneration) || 0) + 1;
   state.historyReceived = false;
   state.hostReadyAt = null;
 

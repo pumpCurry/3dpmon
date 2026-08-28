@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1441 (PR #435)
+ * @version 1.390.1445 (PR #435)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 20:00:15
+ * @lastModified 2026-08-28 20:35:00
  *
  * @vitest-environment jsdom
  */
@@ -397,8 +397,12 @@ describe("Printer Core v3 identity dry-run", () => {
         model: "F012",
         version: "1.0.0",
         probeSessionId: mod.getPrinterCoreV3RuntimeProbeSessionId(),
+        connectionGeneration: 1,
+        connectionDest: "203.0.113.21:9999",
+        connectionHost: "203.0.113.21",
       },
     });
+    expect(mod.getPrinterCoreV3ConnectionGeneration("K2Pro-Test")).toBe(0);
     expect(target.printerCoreV3Identity.endpointAliases.macs).toEqual([
       "66:77:88:99:aa:bb",
       "aa:11:22:33:44:55",

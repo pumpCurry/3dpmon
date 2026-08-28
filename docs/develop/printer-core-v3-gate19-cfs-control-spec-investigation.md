@@ -121,10 +121,12 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - Gate 19 certification用に `allowUncertifiedCfsSlotCommandCandidates:true` を明示した場合だけ、`feedInOrOut` のcandidate planを生成する。
 - candidate planには `certificationOnly:true` と `requiresLiveConfirmation:true` を付け、`productionEnabled:false` をdetailsへ残す。
 - `sendK2CfsCommandTransportPlan()` は、candidate planを `allowCertificationOnly:true` なしでは送信しない。
-- 実機certification後にproductionへ昇格する場合は、通常callerが暗黙に通すのではなく、
-  `certifiedCfsSlotControlCommands` のcommand kind allow-listと `certificationEvidence` を明示する。
-  この場合だけ `k2-ws9999-feed-in-or-out-certified-v1` profileのproduction planを生成する。
-  registryが空または対象commandが未登録なら、従来どおり `uncertified-cfs-slot-command` で拒否する。
+- 実機certification後にproductionへ昇格する場合でも、通常callerが暗黙に通すのではなく、
+  `certifiedCfsSlotControlCommands` のcommand kind allow-list、`certificationEvidence`、および
+  `dashboard_k2_cfs_command_transport.js` 内のmodule-owned immutable registry登録をすべて要求する。
+  この3条件が揃った場合だけ `k2-ws9999-feed-in-or-out-certified-v1` profileのproduction planを生成する。
+  registryが空または対象commandの証跡が未登録なら、shape/scopeが正しい証跡でも
+  `invalid-cfs-slot-certification-evidence` / `certification-evidence-not-registered` で拒否する。
 - `certificationEvidence` は空objectや配列を証跡として扱わない。production昇格には最低限、
   `schemaVersion:1`、`status:"certified"`、対象 `commandKinds`、`transportProfile`、`printerType:"creality-k2"`、
   `model`、`firmwareVersion`、`fixtureId`、`captureId`、`certifiedAt` を要求する。
@@ -139,9 +141,11 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   設定が削除・無効化・scope不一致になっていれば、UI初期化時に有効だったbuttonからでも送信しない。
 - `sendK2CfsCommandTransportPlan()` は `createK2CfsCommandTransportPlan()` が生成したplanだけを受け付ける。
   callerがplain objectで `ok:true` / `certificationOnly:false` を偽装しても、send hookへは到達しない。
+  生成済みplanはdeep freezeされるため、factory通過後にframeやdetailsを書き換えることもできない。
 - CFS physical commandは印刷中、pause中、heating/checking/busy/running状態では送信しない。
   `print.stateLabel` だけでなく、K2 firmware差異で `device.stateLabel` / `status.stateLabel` に出る状態も確認する。
-  また送信直前に対象sourceが `presence:"loaded"` でなければ送信しない。
+  また送信直前に対象sourceが `presence:"loaded"` または明示的な `status.stateCode` でloadedと確認できなければ
+  送信しない。材料名・色・RFIDなどの残留metadataだけではloadedとは扱わない。
   CFSのmaterial path共有を前提に、実機で並列安全性が証明されるまでは1 printerにつき1 commandだけを許可する。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
