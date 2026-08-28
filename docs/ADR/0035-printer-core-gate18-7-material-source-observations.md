@@ -22,9 +22,13 @@ external spool/CFS slot state across restart without mixing it into the
 - Treat `null`, `undefined`, and empty numeric protocol fields as unobserved,
   not as numeric zero. Missing source identity is reported as a diagnostic
   instead of being collapsed to slot `0`.
-- Track provider generations. When a newer generation is accepted, the previous
+- Track provider generations per provider ID. `providerStates[providerId]`
+  stores the active transport generation, retired generations, last sequence,
+  and disconnected time. When a newer generation is accepted, the previous
   generation is retired so delayed callbacks from old sessions cannot roll the
-  snapshot back.
+  snapshot back. Sequence rollback checks use the provider-scoped
+  `lastSequence` first, so independent material providers do not invalidate one
+  another.
 - Separate the logical material provider session from the actual transport
   generation. CFS-C Moonraker reconnects keep the same provider session but
   increment transport generation so late frames from the previous socket can be
@@ -44,6 +48,10 @@ external spool/CFS slot state across restart without mixing it into the
 - Reject invalid explicit `observedAt` values instead of converting them to the
   current time. Missing `observedAt` still means the app received the observation
   now.
+- Rekey from a provisional observation device to an existing stable device is an
+  explicit merge operation. It preserves source snapshots, aliases, canonical
+  event evidence, and provider generation state instead of silently dropping the
+  provisional record. Strong identity conflict still fails closed.
 
 ## Non-Authority Boundary
 
