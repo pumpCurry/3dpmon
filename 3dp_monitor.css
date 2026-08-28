@@ -1,6 +1,6 @@
-/* 
+/*
   3dp_monitor.css
-  Version 1.390.1173
+  Version 1.390.1425
 */
 
 /* ---------------------------------------------------------------
@@ -354,6 +354,18 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* K2 WebRTCカメラは img ではなく video 要素で描画される。
+   旧カード互換レイアウトでもコンテナ内へ収め、等倍表示でカード外へはみ出さないようにする。 */
+.camera-wrapper > video.camera-webrtc-stream {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--color-camera-bg);
 }
 
 /* off 時は見えないように */
@@ -1166,6 +1178,22 @@ input:checked + .slider:before {
 }
 
 .scrollable-body { max-height:30em; overflow:auto; }
+
+/* 印刷履歴/ファイル一覧はK1/K2/IR3 V2で列数が共通でも、ファイル名やCFS関連情報の
+   長さによって横幅が膨らむ。旧カード表示でも横方向をcontainerへ逃がし、K2だけ
+   テーブル全体が縮んで横スクロールバーを失う状態を避ける。 */
+#print-history-body,
+.filelist-container {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#print-history-table,
+#file-list-table {
+  min-width: 1080px;
+}
 
 /* -------------------------------
    印刷履歴テーブル用：ストライプ＆フォント
