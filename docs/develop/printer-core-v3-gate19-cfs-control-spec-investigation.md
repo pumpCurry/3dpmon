@@ -247,7 +247,7 @@ K2 Pro Combo F012 + CFS-A1 (`192.168.54.153`) で最低限以下を取得する�
 
 ## Release Boundary
 
-2.2.1042はread-only/print-start guard版として公開済み。K2/CFSを3DPmon UIから操作できる版は、少なくとも次を満たすまで別リリース候補にしない。
+2.2.1042は既存pre-releaseとして残し、PR #435のread-only/print-start guard版は2.2.1043 RCとして扱う。K2/CFSを3DPmon UIから操作できる版は、少なくとも次を満たすまで別リリース候補にしない。
 
 - Gate 19: transport candidate + dry-run + live certification CLI
 - Gate 19.5: UI操作ボタンの実行中/成功/失敗/timeout/stale disable
