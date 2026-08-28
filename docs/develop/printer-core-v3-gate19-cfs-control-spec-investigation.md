@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 19 CFS Control Spec Investigation
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
 
@@ -121,6 +121,10 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - Gate 19 certification用に `allowUncertifiedCfsSlotCommandCandidates:true` を明示した場合だけ、`feedInOrOut` のcandidate planを生成する。
 - candidate planには `certificationOnly:true` と `requiresLiveConfirmation:true` を付け、`productionEnabled:false` をdetailsへ残す。
 - `sendK2CfsCommandTransportPlan()` は、candidate planを `allowCertificationOnly:true` なしでは送信しない。
+- 実機certification後にproductionへ昇格する場合は、通常callerが暗黙に通すのではなく、
+  `certifiedCfsSlotControlCommands` のcommand kind allow-listと `certificationEvidence` を明示する。
+  この場合だけ `k2-ws9999-feed-in-or-out-certified-v1` profileのproduction planを生成する。
+  registryが空または対象commandが未登録なら、従来どおり `uncertified-cfs-slot-command` で拒否する。
 - sourceは `cfs:<boxId>:slot:<slotId>` だけを受け付け、外部スプールやcaller supplied `boxId/materialId` は採用しない。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。

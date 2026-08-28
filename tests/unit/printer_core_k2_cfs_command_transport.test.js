@@ -5,14 +5,15 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1419 (PR #435)
+ * @version 1.390.1431 (PR #435)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-27 06:18:00
+ * @lastModified 2026-08-28 09:36:01
  */
 
 import { describe, expect, it, vi } from "vitest";
 import {
   K2_CFS_PRINT_START_TRANSPORT_PROFILE,
+  K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
@@ -242,6 +243,74 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         },
       },
     ]);
+  });
+
+  it("Gate 19 certified registryで明示されたslot操作だけproduction planへ昇格する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+      certificationEvidence: {
+        gate: "Gate 19",
+        fixtureId: "k2-f012-cfs-load-1c-20260828",
+      },
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      profile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+      certificationOnly: false,
+      requiresLiveConfirmation: false,
+      details: {
+        commandKind: "cfs-load",
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        materialId: 2,
+        candidateOperation: "feed-in-or-load",
+        semanticStatus: "certified",
+        liveCertificationAllowed: true,
+        productionEnabled: true,
+        certificationEvidence: {
+          gate: "Gate 19",
+          fixtureId: "k2-f012-cfs-load-1c-20260828",
+        },
+      },
+    });
+    expect(plan.frames).toEqual([
+      {
+        method: "set",
+        params: {
+          feedInOrOut: {
+            boxId: 1,
+            materialId: 2,
+            isFeed: 1,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("certified registryに無いslot操作はproduction option付きでも拒否を維持する", () => {
+    const plan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-unload",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    }, {
+      certifiedCfsSlotControlCommands: ["cfs-load"],
+    });
+
+    expect(plan).toMatchObject({
+      ok: false,
+      reason: "uncertified-cfs-slot-command",
+      details: {
+        commandKind: "cfs-unload",
+      },
+    });
+    expect(plan.frames).toEqual([]);
   });
 
   it("Gate 19 certification-only unload/retract候補はisFeed=0としてdry-runできる", () => {

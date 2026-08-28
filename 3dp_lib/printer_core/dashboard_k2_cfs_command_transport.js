@@ -17,9 +17,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1420 (PR #435)
+ * @version 1.390.1431 (PR #435)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-27 12:22:38
+ * @lastModified 2026-08-28 09:36:01
  * -----------------------------------------------------------
  * @todo
  * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
@@ -60,6 +60,17 @@ export const K2_CFS_PRINT_START_TRANSPORT_PROFILE = "k2-ws9999-color-match-multi
  * @constant {string}
  */
 export const K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE = "k2-ws9999-feed-in-or-out-candidate-v1";
+
+/**
+ * 実機certification済みCFS slot操作で採用するWS9999 transport profile名。
+ *
+ * 【詳細説明】
+ * - `feedInOrOut` をproduction commandとして使う場合は、command kindごとの実機証跡を
+ *   `certifiedCfsSlotControlCommands` と `certificationEvidence` で明示した時だけこのprofileへ昇格する。
+ *
+ * @constant {string}
+ */
+export const K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE = "k2-ws9999-feed-in-or-out-certified-v1";
 
 /**
  * frame送信hookが「ローカル送信またはprotocol受理」として扱えるstatus。
@@ -190,6 +201,50 @@ function toFiniteNumberOrNull(value) {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+/**
+ * JSONとして安全に保持できる値をcloneする。
+ *
+ * 【詳細説明】
+ * - certification evidenceをtransport plan detailsへ写す際、caller側objectの後続変更が
+ *   送信計画の監査証跡を書き換えないようにする。
+ *
+ * @private
+ * @param {*} value - clone対象
+ * @returns {*} clone結果
+ */
+function cloneJsonValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * 指定command kindが実機certification済みとして明示されているか判定する。
+ *
+ * 【詳細説明】
+ * - 既定では常にfalseに倒し、単独CFS操作が暗黙にproductionへ昇格しないようにする。
+ * - optionは配列/Set/object mapを受けるが、どれも呼び出し側が明示したallow-listとしてのみ扱う。
+ *
+ * @private
+ * @param {string} commandKind - 正規化済みcommand kind
+ * @param {object=} options - transport plan生成option
+ * @returns {boolean} 実機certification済みとして扱う場合true
+ */
+function isCertifiedCfsSlotControlCommand(commandKind, options = {}) {
+  const registry = options?.certifiedCfsSlotControlCommands;
+  if (Array.isArray(registry)) {
+    return registry.includes(commandKind);
+  }
+  if (registry instanceof Set) {
+    return registry.has(commandKind);
+  }
+  if (registry && typeof registry === "object") {
+    return registry[commandKind] === true;
+  }
+  return false;
 }
 
 /**
@@ -538,7 +593,7 @@ function createK2CfsPrintStartPlan(request) {
  * @param {string} commandKind - 正規化済みcommand kind
  * @returns {object} certification-only transport plan
  */
-function createK2CfsSlotControlCertificationPlan(request, commandKind) {
+function createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, options = {}) {
   const definition = CFS_SLOT_CONTROL_CANDIDATE_DEFINITIONS[commandKind];
   if (!definition) {
     return createRejectedTransportPlan("unsupported-cfs-slot-control-candidate", { commandKind });
@@ -558,9 +613,11 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
     ok: true,
     reason: null,
     transportKind: "ws9999",
-    profile: K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
-    certificationOnly: true,
-    requiresLiveConfirmation: true,
+    profile: options.production === true
+      ? K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE
+      : K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+    certificationOnly: options.production === true ? false : true,
+    requiresLiveConfirmation: options.production === true ? false : true,
     frames: [
       {
         method: "set",
@@ -581,12 +638,55 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
       materialId: location.materialId,
       candidateOperation: definition.candidateOperation,
       expectedObservation: definition.expectedObservation,
-      semanticStatus: definition.semanticStatus,
+      semanticStatus: options.production === true ? "certified" : definition.semanticStatus,
       liveCertificationAllowed: definition.liveCertificationAllowed,
-      safetyBoundary: "certification-only",
-      productionEnabled: false,
+      safetyBoundary: options.production === true ? "production-certified" : "certification-only",
+      productionEnabled: options.production === true,
+      certificationEvidence: options.production === true
+        ? cloneJsonValue(options.certificationEvidence || null)
+        : undefined,
     },
   };
+}
+
+/**
+ * K2/CFS slot操作候補用のcertification-only transport frame列を生成する。
+ *
+ * 【詳細説明】
+ * - このplanはGate 19のdry-run/live certification専用で、production UI操作には使わない。
+ * - `feedInOrOut` は公開CrealityPrint device UI bundleから得た候補であり、F012実機captureで意味を確定するまで
+ *   `certificationOnly:true` と `requiresLiveConfirmation:true` を必ず付ける。
+ * - source locationはNormalizedStateのsourceIdだけから決め、caller supplied boxId/materialIdを採用しない。
+ *
+ * @private
+ * @param {object} request - Printer Core command request
+ * @param {string} commandKind - 正規化済みcommand kind
+ * @returns {object} certification-only transport plan
+ */
+function createK2CfsSlotControlCertificationPlan(request, commandKind) {
+  return createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, {
+    production: false,
+  });
+}
+
+/**
+ * 実機certification済みCFS slot操作用のproduction transport frame列を生成する。
+ *
+ * 【詳細説明】
+ * - command kindごとのallow-listを通過した場合だけ使う。
+ * - 送信直前のsession/capability/topology確認はdispatcher層が担当し、この関数はWS9999 frame shapeだけを固定する。
+ *
+ * @private
+ * @param {object} request - Printer Core command request
+ * @param {string} commandKind - 正規化済みcommand kind
+ * @param {object=} options - transport plan生成option
+ * @returns {object} production transport plan
+ */
+function createK2CfsSlotControlProductionPlan(request, commandKind, options = {}) {
+  return createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, {
+    production: true,
+    certificationEvidence: options.certificationEvidence || null,
+  });
 }
 
 /**
@@ -602,6 +702,8 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
  * @param {object|null|undefined} request - Printer Core command request
  * @param {object=} options - transport plan生成option
  * @param {boolean=} options.allowUncertifiedCfsSlotCommandCandidates - 未certified slot操作候補のdry-run生成可否
+ * @param {Array<string>|Set<string>|Object<string,boolean>=} options.certifiedCfsSlotControlCommands - 実機certification済みslot操作allow-list
+ * @param {object=} options.certificationEvidence - production昇格の実機証跡metadata
  * @returns {object} K2/CFS transport plan
  * @example
  * const plan = createK2CfsCommandTransportPlan(request);
@@ -612,6 +714,9 @@ export function createK2CfsCommandTransportPlan(request, options = {}) {
     return createRejectedTransportPlan("missing-command-kind");
   }
   if (UNCERTIFIED_CFS_SLOT_COMMAND_KINDS.has(commandKind)) {
+    if (isCertifiedCfsSlotControlCommand(commandKind, options)) {
+      return createK2CfsSlotControlProductionPlan(request, commandKind, options);
+    }
     if (options?.allowUncertifiedCfsSlotCommandCandidates === true) {
       return createK2CfsSlotControlCertificationPlan(request, commandKind);
     }
