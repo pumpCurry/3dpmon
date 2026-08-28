@@ -33,9 +33,23 @@ external spool/CFS slot state across restart without mixing it into the
   generation. CFS-C Moonraker reconnects keep the same provider session but
   increment transport generation so late frames from the previous socket can be
   rejected without self-locking the endpoint.
+- CFS-C Moonraker transport generations include a run-local token in addition
+  to the transport epoch. A process restart therefore cannot recreate the same
+  generation ID and lock itself out through previously persisted retired
+  generations.
+- Mark `waiting`, `connecting`, and `disconnected` provider states as
+  disconnected observations immediately. A provider only becomes fresh again
+  after a new material payload is observed, not merely because a socket is
+  opening.
 - Treat K2 `boxsInfo` responses as complete snapshots. Treat CFS-C Moonraker
   `notify_status_update` material payloads as partial snapshots unless the
   initial subscribe response explicitly marks them complete.
+- Normalized material topology carries `observationMask.sections` and each
+  normalized source carries `observedFields`. Partial observation merging uses
+  this mask instead of normalized object shape, because the normalizer fills
+  unobserved protocol fields with `null` to preserve a stable API. Missing
+  `colorMatch` does not clear assignments; an explicitly observed empty
+  `colorMatch: []` does.
 - Merge CFS-C partial snapshots into the runtime UI topology for display while
   still writing the partial batch to the observation store. This keeps slots not
   present in a Moonraker delta visible as last-known values.
@@ -44,9 +58,10 @@ external spool/CFS slot state across restart without mixing it into the
   `restored-last-known` / stale until a fresh provider observation arrives.
 - Use `resolveDisplayMaterialTopology()` as the display read-model boundary.
   UI panels may fall back to `materialSourceObservations` only as stale
-  last-known evidence when live runtime topology is missing. Print dispatch and
-  command authority do not pass this fallback store and must continue to require
-  live send-time validation.
+  last-known evidence when live runtime topology is missing, and only when the
+  caller explicitly opts in with `allowPersistentLastKnown: true`. Print
+  dispatch and command authority do not pass this fallback store and must
+  continue to require live send-time validation.
 - Restore and import the observation store through a schema-aware normalization
   boundary. Future schema versions are retained as unsupported evidence instead
   of being relabeled as the current schema.
@@ -57,6 +72,14 @@ external spool/CFS slot state across restart without mixing it into the
   explicit merge operation. It preserves source snapshots, aliases, canonical
   event evidence, and provider generation state instead of silently dropping the
   provisional record. Strong identity conflict still fails closed.
+- Rekey merge of the same source ID uses newer `lastObservedAt` as the winner.
+  If the timestamps are equal but semantic content differs, the stable record is
+  left unchanged and a `source-merge-conflict` event records the conflict.
+- Missing live sources in a complete snapshot become explicit
+  `presence: "unobserved"` tombstones, not `empty` slots.
+- Stable host fallback is used only when exactly one stable observation record
+  matches the host. Ambiguous stable candidates are rejected instead of merged
+  or displayed as current evidence.
 
 ## Non-Authority Boundary
 

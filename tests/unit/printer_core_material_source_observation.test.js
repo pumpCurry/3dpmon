@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1433 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-08-28 10:36:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,9 @@ import {
   recordMaterialTopologyObservation,
   rekeyMaterialSourceObservationDevice,
 } from "../../3dp_lib/printer_core/dashboard_material_source_observation.js";
+import {
+  normalizeK2BoxsInfo,
+} from "../../3dp_lib/printer_core/dashboard_normalized_state.js";
 
 function createTopology(overrides = {}) {
   return {
@@ -528,6 +531,181 @@ describe("MaterialSourceObservationStore", () => {
       status: { stateCode: 1 },
       assignments: [{ assignmentId: "T1A" }],
       lastObservedAt: "2026-08-27T12:00:10.000Z",
+    });
+  });
+
+  it("raw partial boxsInfoはNormalizerのmask経由で未観測material/remaining/assignmentを保持する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const completeRaw = {
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            {
+              id: 2,
+              state: 1,
+              selected: 1,
+              vendor: "Generic",
+              type: "PLA",
+              name: "Generic PLA-Silk",
+              color: "#09ea7ae",
+              percent: 54,
+            },
+          ],
+        },
+      ],
+      colorMatch: [
+        { id: "T1C", boxId: 1, materialId: 2 },
+      ],
+    };
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: normalizeK2BoxsInfo(completeRaw, { connected: true }),
+      snapshotCompleteness: "complete",
+    });
+
+    const partialRaw = {
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            {
+              id: 2,
+              selected: 0,
+            },
+          ],
+        },
+      ],
+    };
+    const partialTopology = normalizeK2BoxsInfo(partialRaw, { connected: true });
+
+    expect(partialTopology.observationMask.sections.assignments).toBe(false);
+    expect(partialTopology.sources[0].observedFields).toMatchObject({
+      material: {
+        type: false,
+        color: false,
+      },
+      status: {
+        selected: true,
+        remaining: false,
+        stateCode: false,
+      },
+    });
+
+    const partial = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: partialTopology,
+      snapshotCompleteness: "partial",
+    });
+
+    expect(partial.accepted).toBe(true);
+    expect(partial.record.latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      selected: false,
+      presence: "loaded",
+      material: {
+        type: "PLA",
+        name: "Generic PLA-Silk",
+        color: {
+          raw: "#09ea7ae",
+          displayHex: "9ea7ae",
+        },
+      },
+      remaining: {
+        normalizedPercent: 54,
+        valid: true,
+      },
+      assignments: [
+        { assignmentId: "T1C" },
+      ],
+    });
+  });
+
+  it("raw partial boxsInfoでもcolorMatch空配列が明示観測された場合はassignmentをclearする", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const completeRaw = {
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: 2, state: 1, selected: 1, type: "PLA", name: "PLA", percent: 80 },
+          ],
+        },
+      ],
+      colorMatch: [
+        { id: "T1C", boxId: 1, materialId: 2 },
+      ],
+    };
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 1,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: normalizeK2BoxsInfo(completeRaw, { connected: true }),
+      snapshotCompleteness: "complete",
+    });
+
+    const clearAssignmentTopology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: 2, selected: 1 },
+          ],
+        },
+      ],
+      colorMatch: [],
+    }, { connected: true });
+
+    expect(clearAssignmentTopology.observationMask.sections.assignments).toBe(true);
+
+    const result = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-a",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 2,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: clearAssignmentTopology,
+      snapshotCompleteness: "partial",
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.record.latestBySourceId["cfs:1:slot:2"].assignments).toEqual([]);
+    expect(result.record.latestBySourceId["cfs:1:slot:2"].material).toMatchObject({
+      type: "PLA",
+      name: "PLA",
     });
   });
 

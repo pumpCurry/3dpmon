@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1433 (PR #435)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-28 01:45:18
+ * @lastModified 2026-08-28 10:36:12
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -604,6 +604,40 @@ function normalizeCfsUnit(box) {
 }
 
 /**
+ * K2 CFS material source の観測field maskを生成する。
+ *
+ * 【詳細説明】
+ * - Normalized sourceは常に同じshapeを返すため、raw payload上で本当に観測されたfieldを
+ *   別maskとして保持し、partial update時に未観測nullで前回値を消さないようにする。
+ *
+ * @private
+ * @param {object|null|undefined} material - raw `materials[]` entry
+ * @returns {object} 観測field mask
+ */
+function createMaterialSourceObservedFields(material) {
+  return {
+    material: {
+      vendor: hasOwn(material, "vendor"),
+      type: hasOwn(material, "type"),
+      name: hasOwn(material, "name"),
+      color: hasOwn(material, "color"),
+      rfid: hasOwn(material, "rfid"),
+      minTemp: hasOwn(material, "minTemp"),
+      maxTemp: hasOwn(material, "maxTemp"),
+      pressure: hasOwn(material, "pressure"),
+    },
+    status: {
+      selected: hasOwn(material, "selected"),
+      percent: hasOwn(material, "percent"),
+      remaining: hasOwn(material, "percent"),
+      stateCode: hasOwn(material, "state"),
+      editStatusCode: hasOwn(material, "editStatus"),
+      scrap: hasOwn(material, "scrap"),
+    },
+  };
+}
+
+/**
  * K2 CFS material を MaterialSource へ正規化する。
  *
  * 【詳細説明】
@@ -635,6 +669,7 @@ function normalizeMaterialSource(box, material) {
     slotId,
     boxStateCode: toFiniteNumber(box?.state),
     boxTypeCode: toFiniteNumber(box?.type),
+    observedFields: createMaterialSourceObservedFields(material),
     material: {
       vendor: toNullableString(material?.vendor),
       type: toNullableString(material?.type),
@@ -908,6 +943,13 @@ export function normalizeK2BoxsInfo(boxsInfo, options = {}) {
     sources,
     assignments,
     sameMaterialGroups,
+    observationMask: {
+      sections: {
+        materialBoxs: hasOwn(boxsInfo, "materialBoxs"),
+        assignments: hasOwn(boxsInfo, "colorMatch"),
+        sameMaterialGroups: hasOwn(boxsInfo, "same_material"),
+      },
+    },
     diagnostics: createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGroups),
   };
 }

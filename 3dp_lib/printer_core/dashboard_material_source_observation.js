@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1433 (PR #435)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-08-28 10:36:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -155,6 +155,72 @@ function cloneJsonValue(value) {
  */
 function hasOwn(value, propertyName) {
   return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, propertyName));
+}
+
+/**
+ * observedFields maskが明示されているか判定する。
+ *
+ * @private
+ * @function hasObservedFieldMask
+ * @param {*} mask - observedFields候補。
+ * @returns {boolean} mask objectならtrue。
+ */
+function hasObservedFieldMask(mask) {
+  return Boolean(mask && typeof mask === "object" && !Array.isArray(mask));
+}
+
+/**
+ * mask内のfieldが観測済みかを返す。
+ *
+ * 【詳細説明】
+ * - maskが無い旧Normalized topologyではfallback判定を使い、後方互換を維持する。
+ *
+ * @private
+ * @function isMaskedFieldObserved
+ * @param {*} mask - field mask object。
+ * @param {string} fieldName - field名。
+ * @param {boolean} fallback - maskが無い場合の判定。
+ * @returns {boolean} 観測済みならtrue。
+ */
+function isMaskedFieldObserved(mask, fieldName, fallback) {
+  if (!hasObservedFieldMask(mask)) {
+    return fallback;
+  }
+  return mask[fieldName] === true;
+}
+
+/**
+ * mask内に観測済みfieldが1つでもあるかを返す。
+ *
+ * @private
+ * @function hasAnyMaskedFieldObserved
+ * @param {*} mask - field mask object。
+ * @param {boolean} fallback - maskが無い場合の判定。
+ * @returns {boolean} いずれかのfieldが観測済みならtrue。
+ */
+function hasAnyMaskedFieldObserved(mask, fallback) {
+  if (!hasObservedFieldMask(mask)) {
+    return fallback;
+  }
+  return Object.values(mask).some((value) => value === true);
+}
+
+/**
+ * topology sectionが観測済みかを返す。
+ *
+ * @private
+ * @function isTopologySectionObserved
+ * @param {Object} topology - Normalized material topology。
+ * @param {string} sectionName - section名。
+ * @param {boolean} fallback - maskが無い場合の判定。
+ * @returns {boolean} sectionが観測済みならtrue。
+ */
+function isTopologySectionObserved(topology, sectionName, fallback) {
+  const sections = topology?.observationMask?.sections;
+  if (!hasObservedFieldMask(sections)) {
+    return fallback;
+  }
+  return sections[sectionName] === true;
 }
 
 /**
@@ -478,12 +544,19 @@ function createSourceSnapshot(options) {
   const previous = options.previous && typeof options.previous === "object" ? options.previous : null;
   const status = source.status && typeof source.status === "object" ? source.status : {};
   const isPartial = options.snapshotCompleteness !== "complete";
-  const materialObserved = hasOwn(source, "material");
-  const remainingObserved = hasOwn(status, "remaining") || hasOwn(status, "percent");
-  const stateCodeObserved = hasOwn(status, "stateCode");
-  const editStatusObserved = hasOwn(status, "editStatusCode");
-  const scrapObserved = hasOwn(status, "scrap");
-  const selectedObserved = hasOwn(status, "selected");
+  const observedFields = source.observedFields && typeof source.observedFields === "object" ? source.observedFields : null;
+  const materialMask = observedFields?.material;
+  const statusMask = observedFields?.status;
+  const materialObserved = hasAnyMaskedFieldObserved(materialMask, hasOwn(source, "material"));
+  const remainingObserved = isMaskedFieldObserved(
+    statusMask,
+    "remaining",
+    hasOwn(status, "remaining") || hasOwn(status, "percent")
+  );
+  const stateCodeObserved = isMaskedFieldObserved(statusMask, "stateCode", hasOwn(status, "stateCode"));
+  const editStatusObserved = isMaskedFieldObserved(statusMask, "editStatusCode", hasOwn(status, "editStatusCode"));
+  const scrapObserved = isMaskedFieldObserved(statusMask, "scrap", hasOwn(status, "scrap"));
+  const selectedObserved = isMaskedFieldObserved(statusMask, "selected", hasOwn(status, "selected"));
   const assignmentsObserved = options.assignmentsObserved === true;
   const snapshot = {
     sourceId,
@@ -518,7 +591,17 @@ function createSourceSnapshot(options) {
     authority: "observation-only",
   };
   if (isPartial && previous) {
-    if (!materialObserved) {
+    if (hasObservedFieldMask(materialMask)) {
+      const mergedMaterial = {
+        ...cloneJsonValue(snapshot.material),
+      };
+      for (const key of ["vendor", "type", "name", "color", "rfid", "minTemp", "maxTemp", "pressure"]) {
+        if (materialMask[key] !== true && previous.material && hasOwn(previous.material, key)) {
+          mergedMaterial[key] = cloneJsonValue(previous.material[key]);
+        }
+      }
+      snapshot.material = mergedMaterial;
+    } else if (!materialObserved) {
       snapshot.material = cloneJsonValue(previous.material);
     }
     if (!remainingObserved) {
@@ -958,7 +1041,7 @@ export function recordMaterialTopologyObservation(store, options = {}) {
       providerGeneration: options.providerGeneration || null,
       sequence: options.sequence ?? null,
       snapshotCompleteness,
-      assignmentsObserved: Array.isArray(topology.assignments),
+      assignmentsObserved: isTopologySectionObserved(topology, "assignments", Array.isArray(topology.assignments)),
       previous: record.latestBySourceId[sourceId] || null,
     });
   }
