@@ -1,6 +1,19 @@
 # Changelog
 
+このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。v2.2.1044 はPR #436のRelease Candidate候補であり、tag/release公開後に最終成果物のSHAを確定します。
+
+This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. v2.2.1044 is the PR #436 release-candidate version; final artifact hashes are fixed after the tag/release is published.
+
 ## v2.2.1044 (2026-08-29) — Release Candidate: K2/CFS monitoring, guarded print start, and camera spinner fix
+
+### 日本語
+
+- **リリース番号**: v2.2.1043 は既存pre-releaseと重なるため、PR #436 のRelease Candidateは v2.2.1044 として公開します。
+- **K2/CFS監視とguarded print-start**: Printer Core v3 のread-only CFS topology UI、CFS-aware print-start guard、再起動後fail-closed、standalone CFS/CFS-C操作無効化を維持します。
+- **カメラUI**: 狭いカメラカードや日本語接続ステータス内でも、接続中スピナーが正円で表示されるよう修正しました。
+- **リリースノート**: 日本語/English併記の詳細は `docs/release-notes-v2.2.1044.md` を参照してください。
+
+### English
 
 - **Release numbering**: v2.2.1043 overlaps with an existing pre-release, so the PR #436 release candidate is published as v2.2.1044.
 - **K2/CFS monitoring and guarded print start**: preserves the Printer Core v3 read-only CFS topology UI, CFS-aware print-start guard, restart fail-closed behavior, and disabled standalone CFS/CFS-C controls until live certification evidence is registered.
@@ -9,6 +22,15 @@
 
 ## v2.2.1043 (2026-08-28) — Pre-release: Printer Core v3 / K2+CFS RC
 
+### 日本語
+
+- **履歴用pre-release**: v2.2.1043 は PR #436 より前にGitHub pre-releaseとして公開済みです。既存tag/releaseは保持し、PR #436 のRelease Candidateには再利用しません。
+- **K2/CFS監視**: Printer Core v3 によるK2/CFS read-only material observationと、guarded print-start準備を含みます。
+- **CFS操作境界**: standalone CFS/CFS-C load / unload / feed / retract / slot select は無効のままです。
+- **後続RC**: PR #436 の後続Release Candidateは v2.2.1044 です。
+
+### English
+
 - **Historical pre-release**: v2.2.1043 was published as a GitHub pre-release before PR #436. The existing tag/release is retained and is not reused for the PR #436 release candidate.
 - **K2/CFS monitoring**: included Printer Core v3 K2/CFS read-only material observation and guarded print-start preparation.
 - **CFS operation boundary**: standalone CFS/CFS-C load, unload, feed, retract, and slot select remained disabled.
@@ -16,20 +38,38 @@
 
 ## v2.2.1042 (2026-08-26) — Hotfix: K2/CFS print authority binding
 
-- **K2/CFS print authority**: explicit CFS print starts now pass through the production command dispatcher, with send-time session, strict F012 certified transport profile evidence, file identity, fresh loaded-slot, and material type/color revalidation before any `colorMatch` / `multiColorPrint` frame is sent.
-- **K2/CFS assignment safety**: CFS-backed print start requests now bind the selected material source, type, color, file identity, upload generation, session, and certified transport profile at dispatch time so stale dialog state cannot silently send a mismatched assignment.
-- **Command semantics**: `submitted` remains send-completed / confirmation-pending evidence rather than protocol acknowledgement, with no `opGcodeFile` fallback and no blind retry.
-- 検証: targeted K2/CFS command/material UI tests 82件PASS、full Vitest 98 files / 1548 tests PASS、
+### 日本語
+
+- **K2/CFS print authority**: explicit CFS print-startをproduction command dispatcherへ通し、送信時session、F012 certified transport profile evidence、file identity、fresh loaded-slot、material type/color再検証が揃うまで `colorMatch` / `multiColorPrint` を送らないようにしました。
+- **K2/CFS assignment safety**: CFS-backed print-startは、選択material source、type、color、file identity、upload generation、session、certified transport profileをdispatch時点で束縛し、古いdialog状態による誤assignment送信を防ぎます。
+- **Command semantics**: `submitted` はprotocol acknowledgementではなく、send-completed / confirmation-pending evidenceのままです。`opGcodeFile` fallbackとblind retryは行いません。
+- **検証**: targeted K2/CFS command/material UI tests 82件PASS、full Vitest 98 files / 1548 tests PASS、
   Electron E2E 3/3、GitHub Actions lint/smoke/test PASS。Windows installer/portable build成功
   (`C:/Users/pcb/AppData/Local/Temp/3dpmon-pr434-build-1042`)。
 
+### English
+
+- **K2/CFS print authority**: explicit CFS print starts now pass through the production command dispatcher, with send-time session, strict F012 certified transport profile evidence, file identity, fresh loaded-slot, and material type/color revalidation before any `colorMatch` / `multiColorPrint` frame is sent.
+- **K2/CFS assignment safety**: CFS-backed print start requests now bind the selected material source, type, color, file identity, upload generation, session, and certified transport profile at dispatch time so stale dialog state cannot silently send a mismatched assignment.
+- **Command semantics**: `submitted` remains send-completed / confirmation-pending evidence rather than protocol acknowledgement, with no `opGcodeFile` fallback and no blind retry.
+- **Verification**: targeted K2/CFS command/material UI tests 82 PASS, full Vitest 98 files / 1548 tests PASS, Electron E2E 3/3, GitHub Actions lint/smoke/test PASS, Windows installer/portable build succeeded.
+
 ## v2.2.1041 (2026-08-26) — Hotfix: K2/CFS print dialog and file thumbnails
+
+### 日本語
+
+- **K2/CFS印刷確認**: Printer Core v3で観測したCFS/CFS-C slotを、未装着のlocal 3DPmon spoolではなく、印刷確認dialog内のmaterial supplyとして表示するようにしました。
+- **K2ファイルサムネイル**: `retGcodeFileInfo2` のprinter-local thumbnail pathを、K2がHTTP公開する `/downloads/humbnail/...` へ正規化します。
+- **ファイル/履歴テーブル**: K2 panelでも横スクロールが出るよう、ファイル一覧と印刷履歴テーブルのintrinsic widthを確保しました。
+- **検証**: targeted dashboard print manager tests 68件PASS、full Vitest 97 files / 1536 tests PASS、
+  Electron E2E 3/3、Windows installer/portable build成功。
+
+### English
 
 - **K2/CFS print confirmation**: CFS/CFS-C slots observed by Printer Core v3 are now shown as material supply in the print confirmation dialog, instead of being mistaken for an unmounted local 3DPmon spool.
 - **K2 file thumbnails**: printer-local thumbnail paths from `retGcodeFileInfo2` are normalized to `/downloads/humbnail/...`, matching the path that K2 exposes over HTTP.
 - **File/history tables**: file list and print history tables now keep enough intrinsic width for horizontal scrolling on K2 panels.
-- 検証: targeted dashboard print manager tests 68件PASS、full Vitest 97 files / 1536 tests PASS、
-  Electron E2E 3/3、Windows installer/portable build成功。
+- **Verification**: targeted dashboard print manager tests 68 PASS, full Vitest 97 files / 1536 tests PASS, Electron E2E 3/3, Windows installer/portable build succeeded.
 
 ## v2.2.1040 (2026-08-26) — Release Candidate: Printer Core v3 / K2+CFS monitoring and certification
 
@@ -257,6 +297,22 @@
 
 #### テスト
 - 全711テスト緑（ItemKeeper 連携 +8: state 正規化/`_attachState`/files 整形/空スキップ/サムネIPC/sendSnapshot 分岐、外部連携モーダル +2: 新トグル描画・保存）。spec §2.1/4.5/4.6 更新。
+
+---
+
+## v2.2.1028 (2026-06-18)
+
+### 印刷中ジョブの履歴表示と Moonraker 履歴/ファイル更新
+
+- **印刷中ジョブの表示維持**: K1履歴の再取得時に、進行中ジョブが `▶` から未確定表示へ戻る問題を修正しました。
+- **成否誤計上の防止**: 完了していないジョブを成功/失敗として早期に確定しないよう、履歴の in-progress 正規化を強化しました。
+- **Moonraker履歴/ファイル更新**: Moonraker系の履歴とファイル一覧の再取得経路を調整しました。
+
+### English
+
+- **In-progress job display**: fixed a K1 history refresh path where an active job could lose its `▶` in-progress marker.
+- **Result accounting**: hardened in-progress history normalization so unfinished jobs are not counted as success or failure too early.
+- **Moonraker history/files**: adjusted the refresh path for Moonraker-family history and file lists.
 
 ---
 
@@ -572,10 +628,41 @@ ADR-0005 を2弾で実装（v2.2.1015 第1弾＋本リリースの第2弾を統�
 
 ## v2.2.003 (2026-04-18)
 
-### 印刷中UI改善 + 旧データ構造サポート終了
+### メンテナンス版番号更新
 
-- 印刷開始直後の ✗ 表示を解消（`printfinish=0` は印刷中▶）。印刷中の行を薄い黄色背景で強調。`endtime` あり+printfinish≠1→失敗(✗)。確認ダイアログの警告文を改善。
-- 旧データ構造（v1.x/v2.0）サポート完全終了、レガシーコード266行削除。旧版からは [v2.1.017 LTS](https://github.com/pumpCurry/3dpmon/releases/tag/v2.1.017-LTS) 経由でアップグレード。
+- v2.2.002 の印刷中UI改善後に行った版番号更新です。機能差分は v2.2.002 と v2.2.004 の項目を参照してください。
+
+---
+
+## v2.2.002 (2026-04-18)
+
+### 印刷中UI改善
+
+- 印刷開始直後の ✗ 表示を解消しました。K1 Max が印刷中に返す `printfinish=0` を失敗ではなく印刷中 `▶` として扱います。
+- 印刷中の履歴行に薄い黄色背景を追加し、`printfinish=0/null` かつ `endtime` ありの未確定終了は `?` として表示します。
+- 印刷確認ダイアログの説明を、「失敗時の部分消費値」ではなく、初回/成功実績なしの参考値として読める文言へ修正しました。
+
+### English
+
+- Fixed the immediate `✗` display after print start by treating K1 Max `printfinish=0` as in-progress `▶`, not failure.
+- Added a subtle highlight for in-progress history rows and kept unfinished rows with `endtime` as unknown `?`.
+- Clarified print-confirmation wording so first-run or no-success estimates are presented as reference values.
+
+---
+
+## v2.2.0 (2026-04-12)
+
+### 旧データ構造サポート完全終了
+
+- v1.x / v2.0 旧フォーマットの直接インポートを終了し、関連するレガシーコード266行を削除しました。
+- 旧バージョンからアップグレードする場合は、[v2.1.017 LTS](https://github.com/pumpCurry/3dpmon/releases/tag/v2.1.017-LTS) を経由してください。
+- レガシー駆除テスト36件を追加し、合計257テスト通過を確認しました。
+
+### English
+
+- Ended direct import support for legacy v1.x / v2.0 storage formats and removed 266 lines of legacy compatibility code.
+- Upgrade older installations through [v2.1.017 LTS](https://github.com/pumpCurry/3dpmon/releases/tag/v2.1.017-LTS).
+- Added 36 legacy-purge tests and verified 257 total passing tests.
 
 ---
 
@@ -742,6 +829,20 @@ v2.1.018 以降で単一機器時代のデータ構造サポート（v1.x/v2.0 �
 #### バージョン自動反映
 - タイトルバーに `package.json` のバージョンを自動表示
 - Electron IPC (`get-app-version`) + preload API 追加
+
+---
+
+## v2.1.009 (2026-04-04)
+
+### フィラメント交換ダイアログ起動不具合修正
+
+- フィラメント交換ダイアログが `activeTab` の初期化前参照で開けない問題を修正しました。
+- フィラメント管理画面から交換操作へ進む基本導線を復旧しました。
+
+### English
+
+- Fixed a crash where the filament change dialog could not open because `activeTab` was used before initialization.
+- Restored the main workflow from filament management to spool replacement.
 
 ---
 

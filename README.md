@@ -1,12 +1,22 @@
 # 3dpmon
 
-[![安定版をダウンロード](https://img.shields.io/github/v/release/pumpCurry/3dpmon?style=for-the-badge&label=Stable%20release&color=2f86eb)](https://github.com/pumpCurry/3dpmon/releases/latest)
+[![Stable release](https://img.shields.io/github/v/release/pumpCurry/3dpmon?style=for-the-badge&label=Stable%20release&color=2f86eb)](https://github.com/pumpCurry/3dpmon/releases/latest)
 
-3dpmon は、複数台の3Dプリンタを一つのダッシュボードで監視・管理するブラウザ / Electron アプリです。Creality K1系の既存監視に加え、Printer Core v3 では K2 Pro Combo / CFS の監視、外部スプールとCFSスロットを分離した read-only フィラメント表示、K2 WebRTCカメラ、CFS割当つき print-start guard を段階的に統合しています。
+3dpmon は、LAN上の複数の3Dプリンタを1つの画面から監視・管理する Windows Electron / ブラウザ ダッシュボードです。Creality K1 / K2 系、Moonraker / IR3 V2 系を同時に扱い、カメラ、温度、印刷状態、ファイル、履歴、フィラメント在庫と消費量をプリンタごとに確認できます。
 
-Moonraker / IR3 V2 系は、K1/K2固有の identity / control path へ混ぜず、別protocol pathとして扱います。
+English follows the Japanese section.
 
 ## 日本語
+
+### できること
+
+- 複数プリンタを同時に接続し、プリンタごとの独立パネルで監視できます。
+- ライブカメラ、温度、ファン、LED、ヘッド位置、印刷進捗、残り時間を表示できます。
+- G-code のアップロード、削除、印刷開始、pause / resume / stop などの対応済み操作を対象プリンタへ送れます。
+- 印刷履歴、サムネイル、所要時間、使用量、成功率をプリンタ別に確認できます。
+- フィラメントの在庫、装着中スプール、消費履歴、推定/確定残量を管理できます。
+- K2 Pro Combo / CFS では、外部スプールと CFS スロットを分けて read-only 監視できます。
+- Moonraker / IR3 V2 は、Creality K1/K2 の identity / control path とは別の protocol path で扱います。
 
 ### 現在の対応範囲
 
@@ -20,21 +30,21 @@ Moonraker / IR3 V2 系は、K1/K2固有の identity / control path へ混ぜず�
 ### v2.2.1044 Release Candidate
 
 > [!IMPORTANT]
-> v2.2.1044 は Release Candidate / pre-release です。CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は guarded / certification continuing として扱います。
+> v2.2.1044 は Release Candidate / pre-release です。CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測と割当証跡が揃う場合だけ進む guarded path です。
 
 v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTCカメラ、K2ファイル一覧 / 印刷履歴互換、CFS割当つき印刷開始ガード、Hybrid Filament UI / CFS Debug・Certification panel を統合しています。詳細は [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md) と [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ### 既知の制限
 
 - CFS/CFS-C の load / unload / feed / retract / slot select は、実機certificationを module-owned registry へ追加するまでproduction操作へ昇格しません。
-- Creality純正RFIDフィラメント以外では、機器から残量が報告されない場合があります。その場合、3DPmon側の台帳管理で残量を扱う必要があります。
+- Creality純正RFIDフィラメント以外では、機器から残量が報告されない場合があります。その場合、3DPmon側のスプール台帳で残量を管理します。
 - K1C + CFS-C の実機certification、K2/CFS attach / detach / runout / reconnect の長時間確認は継続作業です。
 - v2.2.0 以降は v1.x / v2.0 旧フォーマットのインポートをサポートしません。旧バージョンからアップグレードする場合は [v2.1.017 LTS](https://github.com/pumpCurry/3dpmon/releases/tag/v2.1.017-LTS) を経由してください。
 
 ### ダウンロード
 
 - 安定版: [最新安定リリース](https://github.com/pumpCurry/3dpmon/releases/latest)
-- Release Candidate: [v2.2.1044 pre-release](https://github.com/pumpCurry/3dpmon/releases/tag/v2.2.1044)
+- Release Candidate: [リリース一覧](https://github.com/pumpCurry/3dpmon/releases/) から v2.2.1044 pre-release を確認してください。
 - すべてのバージョン一覧: <https://github.com/pumpCurry/3dpmon/releases/>
 
 ### インストール版（Windows・推奨）
@@ -69,24 +79,33 @@ v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTC�
 ### ドキュメント
 
 - [docs/index.md](docs/index.md): ドキュメント索引
+- [docs/ja/dashboard_usage.md](docs/ja/dashboard_usage.md): 基本的な使い方
+- [docs/ja/feature_filament_management.md](docs/ja/feature_filament_management.md): フィラメント管理
+- [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md): v2.2.1044 リリースノート
 - [docs/future.md](docs/future.md): 将来計画
 - [docs/develop/printer-core-v3-open-work.md](docs/develop/printer-core-v3-open-work.md): Printer Core v3 の残作業
 
 ### ライセンス
 
-3dpmon は **修正 BSD License (3 条項 BSD ライセンス)** の下で公開されています。著作権は *5r4ce2* の **pumpCurry** が保有します。詳細は [https://542.jp/](https://542.jp/) を参照してください。連絡先は X(Twitter) の [@pcb](https://twitter.com/pcb) です。
+3dpmon は **修正 BSD License (3 条項 BSD ライセンス)** の下で公開されています。著作権は *5r4ce2* の **pumpCurry** が保有します。詳細は [LICENSE](LICENSE) を参照してください。連絡先は X(Twitter) の [@pcb](https://twitter.com/pcb) です。
 
 ---
 
 # 3dpmon
 
-[![Download stable release](https://img.shields.io/github/v/release/pumpCurry/3dpmon?style=for-the-badge&label=Stable%20release&color=2f86eb)](https://github.com/pumpCurry/3dpmon/releases/latest)
-
-3dpmon is a browser / Electron dashboard for monitoring and managing multiple 3D printers. In addition to the existing Creality K1-family monitoring path, Printer Core v3 is gradually integrating K2 Pro Combo / CFS monitoring, read-only filament display that keeps the external spool separate from CFS slots, K2 WebRTC camera support, and guarded CFS-aware print start.
-
-Moonraker / IR3 V2 devices stay on a separate protocol path and are not mixed into the K1/K2-specific identity or control authority.
+3dpmon is a Windows Electron / browser dashboard for monitoring and managing multiple 3D printers on a LAN. It supports Creality K1 / K2-family printers and Moonraker / IR3 V2-family printers through separated protocol paths, with camera views, temperatures, print status, file operations, print history, and filament inventory/usage tracking per printer.
 
 ## English
+
+### What You Can Do
+
+- Monitor multiple printers at the same time with independent per-printer panels.
+- View live camera, temperatures, fans, LEDs, head position, print progress, and remaining time.
+- Send supported operations such as G-code upload, delete, print start, pause, resume, and stop to the selected printer.
+- Review print history, thumbnails, elapsed time, material usage, and success rate per printer.
+- Manage filament inventory, mounted spools, usage history, and estimated/confirmed remaining material.
+- Observe K2 Pro Combo / CFS material sources read-only while keeping the external spool separate from CFS slots.
+- Keep Moonraker / IR3 V2 devices on a separate protocol path from Creality K1/K2 identity and control authority.
 
 ### Current Support Scope
 
@@ -100,21 +119,21 @@ Moonraker / IR3 V2 devices stay on a separate protocol path and are not mixed in
 ### v2.2.1044 Release Candidate
 
 > [!IMPORTANT]
-> v2.2.1044 is a Release Candidate / pre-release. Standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start is treated as guarded / certification continuing.
+> v2.2.1044 is a Release Candidate / pre-release. Standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation and assignment evidence are available.
 
 v2.2.1044 RC integrates K2 Pro Combo / CFS monitoring, CFS slot observation, K2 WebRTC camera support, K2 file-list / print-history compatibility, guarded CFS-assigned print start, and the Hybrid Filament UI / CFS Debug and Certification panel. See [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md) and [CHANGELOG.md](CHANGELOG.md) for details.
 
 ### Known Limitations
 
 - CFS/CFS-C load, unload, feed, retract, and slot select cannot become production operations until live certification evidence is added to the module-owned registry.
-- Non-RFID third-party filament may not report remaining percentage from the printer. In that case, remaining material should be managed by the 3DPmon spool ledger.
+- Non-RFID third-party filament may not report remaining percentage from the printer. In that case, remaining material is managed by the 3DPmon spool ledger.
 - K1C + CFS-C live certification and longer K2/CFS attach, detach, runout, and reconnect certification remain ongoing work.
 - v2.2.0 and later do not support importing legacy v1.x / v2.0 storage formats. When upgrading from older releases, migrate through [v2.1.017 LTS](https://github.com/pumpCurry/3dpmon/releases/tag/v2.1.017-LTS).
 
 ### Downloads
 
 - Stable: [Latest stable release](https://github.com/pumpCurry/3dpmon/releases/latest)
-- Release Candidate: [v2.2.1044 pre-release](https://github.com/pumpCurry/3dpmon/releases/tag/v2.2.1044)
+- Release Candidate: check [All releases](https://github.com/pumpCurry/3dpmon/releases/) for the v2.2.1044 pre-release.
 - All releases: <https://github.com/pumpCurry/3dpmon/releases/>
 
 ### Installer (Windows, recommended)
@@ -149,9 +168,12 @@ v2.2.1044 RC integrates K2 Pro Combo / CFS monitoring, CFS slot observation, K2 
 ### Documentation
 
 - [docs/index.md](docs/index.md): documentation index
+- [docs/en/dashboard_usage.md](docs/en/dashboard_usage.md): basic usage
+- [docs/en/feature_filament_management.md](docs/en/feature_filament_management.md): filament management
+- [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md): v2.2.1044 release notes
 - [docs/future.md](docs/future.md): future plans
 - [docs/develop/printer-core-v3-open-work.md](docs/develop/printer-core-v3-open-work.md): Printer Core v3 open work
 
 ### License
 
-3dpmon is distributed under the **Modified BSD License (3-clause BSD License)**. Copyright is held by **pumpCurry** of *5r4ce2*. For details, visit [https://542.jp/](https://542.jp/). You can reach out via X (Twitter) at [@pcb](https://twitter.com/pcb).
+3dpmon is distributed under the **Modified BSD License (3-clause BSD License)**. Copyright is held by **pumpCurry** of *5r4ce2*. See [LICENSE](LICENSE) for details. You can reach out via X (Twitter) at [@pcb](https://twitter.com/pcb).
