@@ -23,9 +23,9 @@
  * - {@link stopAllCameraStreams}：全ホストのカメラを停止
  * - {@link handleCameraError}：接続エラー処理（互換用）
  *
- * @version 1.390.1392 (PR #432)
+ * @version 1.390.1474 (PR #436)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-26 10:42:00
+ * @lastModified 2026-08-29 21:42:06
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1357,7 +1357,8 @@ function _updateUI(entry, state, opt = {}) {
                     || statusBox?.querySelector(".camera-status-label");
   const subEl        = statusBox?.querySelector("[id$='camera-status-sub']")
                     || statusBox?.querySelector(".camera-status-sub");
-  const spinner      = statusBox?.querySelector("[id$='camera-spinner']")
+  const spinner      = statusBox?.querySelector(".camera-connection-spinner")
+                    || statusBox?.querySelector("[id$='camera-spinner']")
                     || statusBox?.querySelector(".spinner");
   const cancelBtn    = body.querySelector(".camera-cancel-btn")
                     || body.querySelector("[id$='camera-cancel-button']");

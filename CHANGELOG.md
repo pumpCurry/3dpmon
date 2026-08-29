@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.2.1044 (2026-08-29) — Release Candidate: K2/CFS monitoring, guarded print start, and camera spinner fix
+
+- **Release numbering**: v2.2.1043 overlaps with an existing pre-release, so the PR #436 release candidate is published as v2.2.1044.
+- **K2/CFS monitoring and guarded print start**: preserves the Printer Core v3 read-only CFS topology UI, CFS-aware print-start guard, restart fail-closed behavior, and disabled standalone CFS/CFS-C controls until live certification evidence is registered.
+- **Camera UI**: fixes the camera connection spinner so it stays circular inside narrow camera cards and Japanese connection-status text.
+- **Release notes**: bilingual Japanese/English notes are available in `docs/release-notes-v2.2.1044.md`.
+
 ## v2.2.1042 (2026-08-26) — Hotfix: K2/CFS print authority binding
 
 - **K2/CFS print authority**: explicit CFS print starts now pass through the production command dispatcher, with send-time session, strict F012 certified transport profile evidence, file identity, fresh loaded-slot, and material type/color revalidation before any `colorMatch` / `multiColorPrint` frame is sent.

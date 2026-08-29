@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1469
+  Version 1.390.1474
 */
 
 /* ===============================================================
@@ -2104,6 +2104,22 @@ body.panel-mode .notification-container {
 }
 .panel-wrapper[data-panel-type="camera"] .camera-wrapper > img.off ~ .no-signal {
   display: block;
+}
+.camera-connection-spinner {
+  display: inline-block;
+  inline-size: 14px;
+  block-size: 14px;
+  min-inline-size: 14px;
+  min-block-size: 14px;
+  max-inline-size: 14px;
+  max-block-size: 14px;
+  aspect-ratio: 1 / 1;
+  flex: 0 0 14px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-text-secondary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
 .no-signal-main {
   font-size: var(--font-xl);

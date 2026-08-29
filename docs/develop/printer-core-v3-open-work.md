@@ -21,7 +21,7 @@ K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界�
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
-現時点のv2.2.1043では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
+現時点のv2.2.1044では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
 のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
 UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
 
