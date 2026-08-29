@@ -3,7 +3,9 @@
 ## Operating Specifications
 - Dashboard for monitoring Creality K1/K2-family, K2 Pro Combo / CFS, and Moonraker / IR3 V2-family 3D printers
 - Supports simultaneous monitoring of multiple printers with per-host data isolation
-- Communicates with each printer via WebSocket on port 9999
+- Creality K1/K2-family printers use the Creality WebSocket path,
+  normally on port `9999`
+- Moonraker / IR3 V2 use a separate Moonraker JSON-RPC/WebSocket path
 - Displays camera stream, temperature chart and print status in real time per printer
 - Includes remote commands, file management and notification system
 - GridStack-based panel system with drag-and-drop layout customization
@@ -43,6 +45,11 @@
 > **Note:** The Electron app provides full functionality including native
 > window management. The browser mode is available as a lightweight
 > alternative but may have limitations with certain features.
+
+> **Important:** In v2.2.1044 RC, standalone CFS/CFS-C load, unload,
+> feed, retract and slot select are disabled. K2/CFS print start uses a
+> guarded path and the CFS Debug / Certification panel LIVE SEND is not
+> enabled as a production command.
 
 ## Connecting to Printers
 
