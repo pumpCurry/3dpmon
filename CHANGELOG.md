@@ -1,21 +1,21 @@
 # Changelog
 
-このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。v2.2.1044 はPR #436のRelease Candidate予定版であり、tag/release公開後に最終成果物のSHAを確定します。
+このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。PR #436のRelease Candidate版は v2.2.1044 であり、tag/release公開後に最終成果物のSHAを確定します。
 
-This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. v2.2.1044 is the planned PR #436 release-candidate version; final artifact hashes are fixed after the tag/release is published.
+This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. The PR #436 release-candidate version is v2.2.1044; final artifact hashes are fixed after the tag/release is published.
 
 ## v2.2.1044 (2026-08-29) — Release Candidate: K2/CFS monitoring, guarded print start, and camera spinner fix
 
 ### 日本語
 
-- **リリース番号**: v2.2.1043 は既存pre-releaseと重なるため、PR #436 のRelease Candidateは v2.2.1044 として公開予定です。
+- **リリース番号**: v2.2.1043 は既存pre-releaseと重なるため、PR #436 のRelease Candidate版は v2.2.1044 です。
 - **K2/CFS監視とguarded print-start**: Printer Core v3 のread-only CFS topology UI、CFS-aware print-start guard、再起動後fail-closed、standalone CFS/CFS-C操作無効化を維持します。
 - **カメラUI**: 狭いカメラカードや日本語接続ステータス内でも、接続中スピナーが正円で表示されるよう修正しました。
 - **リリースノート**: 日本語/English併記の詳細は `docs/release-notes-v2.2.1044.md` を参照してください。
 
 ### English
 
-- **Release numbering**: v2.2.1043 overlaps with an existing pre-release, so the PR #436 release candidate will be published as v2.2.1044.
+- **Release numbering**: v2.2.1043 overlaps with an existing pre-release, so the PR #436 release-candidate version is v2.2.1044.
 - **K2/CFS monitoring and guarded print start**: preserves the Printer Core v3 read-only CFS topology UI, CFS-aware print-start guard, restart fail-closed behavior, and disabled standalone CFS/CFS-C controls until live certification evidence is registered.
 - **Camera UI**: fixes the camera connection spinner so it stays circular inside narrow camera cards and Japanese connection-status text.
 - **Release notes**: bilingual Japanese/English notes are available in `docs/release-notes-v2.2.1044.md`.
