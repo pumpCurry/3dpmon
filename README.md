@@ -33,7 +33,7 @@ v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTC�
 
 ### ダウンロード
 
-- 安定版: [v2.2.1039 最新安定リリース](https://github.com/pumpCurry/3dpmon/releases/latest)
+- 安定版: [最新安定リリース](https://github.com/pumpCurry/3dpmon/releases/latest)
 - Release Candidate: [v2.2.1044 pre-release](https://github.com/pumpCurry/3dpmon/releases/tag/v2.2.1044)
 - すべてのバージョン一覧: <https://github.com/pumpCurry/3dpmon/releases/>
 
@@ -113,7 +113,7 @@ v2.2.1044 RC integrates K2 Pro Combo / CFS monitoring, CFS slot observation, K2 
 
 ### Downloads
 
-- Stable: [v2.2.1039 latest stable release](https://github.com/pumpCurry/3dpmon/releases/latest)
+- Stable: [Latest stable release](https://github.com/pumpCurry/3dpmon/releases/latest)
 - Release Candidate: [v2.2.1044 pre-release](https://github.com/pumpCurry/3dpmon/releases/tag/v2.2.1044)
 - All releases: <https://github.com/pumpCurry/3dpmon/releases/>
 
