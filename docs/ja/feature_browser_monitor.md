@@ -1,4 +1,4 @@
-# ブラウザ / Electron から Creality シリーズを監視する
+# ブラウザ / Electron から 3Dプリンタを監視する
 
 このドキュメントでは、3dpmon を利用して Creality シリーズ、K2 Pro Combo / CFS、Moonraker / IR3 V2 系の 3D プリンタをブラウザまたは Electron アプリ上で監視する方法を説明します。
 

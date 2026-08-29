@@ -1,4 +1,4 @@
-# Monitoring Creality Printers from Your Browser or Electron
+# Monitoring 3D Printers from Your Browser or Electron
 
 This page explains how to monitor Creality-series, K2 Pro Combo / CFS, and Moonraker / IR3 V2 printers with 3dpmon in a browser or in the Electron desktop app.
 

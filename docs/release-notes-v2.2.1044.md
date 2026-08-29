@@ -4,6 +4,14 @@
 
 3dpmon v2.2.1044 は、K2 Pro Combo / CFS を中心に、Printer Core v3 の監視、CFS対応印刷開始ガード、安全な操作準備、K2 WebRTCカメラ表示をまとめたリリース候補です。v2.2.1043 は既存pre-releaseと重なるため、本リリース候補は v2.2.1044 として扱います。
 
+### 対応状態
+
+- **K2 Pro Combo / CFS**: 監視、WebRTCカメラ、外部スプールとCFSスロットのread-only観測に対応しています。CFS-aware print startはguarded / certification continuingです。
+- **CFS/CFS-C standalone操作**: load / unload / feed / retract / slot select は v2.2.1044 では無効です。
+- **K1C + CFS-C**: read-only providerの実装土台がありますが、実機certificationは継続中です。
+- **CFS Debug / Certification panel**: 開発者・テスター向けです。LIVE SENDはproduction commandとして有効化されておらず、timeout / unknown後のside-effect commandを自動retryしません。
+- **Moonraker / IR3 V2**: K1/K2固有のidentity・CFS command authorityとは分離された別protocol pathとして扱います。
+
 ### 主な変更
 
 - K2 Pro Combo / CFS の `/info`、WS9999、`boxsInfo`、WebRTCカメラ検出を強化しました。
@@ -45,6 +53,14 @@
 ## English
 
 3dpmon v2.2.1044 is a release-candidate build focused on Printer Core v3 monitoring, K2 Pro Combo / CFS support, guarded CFS-aware print start, safer command-readiness foundations, and K2 WebRTC camera display. Because v2.2.1043 overlaps with an existing pre-release, this release candidate is published as v2.2.1044.
+
+### Support Status
+
+- **K2 Pro Combo / CFS**: Monitoring, WebRTC camera, and read-only observation of the external spool and CFS slots are supported. CFS-aware print start remains guarded / certification continuing.
+- **Standalone CFS/CFS-C operations**: load, unload, feed, retract, and slot select are disabled in v2.2.1044.
+- **K1C + CFS-C**: A read-only provider foundation is implemented, while live hardware certification remains ongoing.
+- **CFS Debug / Certification panel**: This is a developer/tester-facing tool. LIVE SEND is not production-enabled, and side-effect commands are not automatically retried after timeout or unknown results.
+- **Moonraker / IR3 V2**: These remain on a separate protocol path and are outside the K1/K2-specific identity and CFS command authority.
 
 ### Highlights
 
