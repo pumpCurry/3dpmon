@@ -27,12 +27,12 @@ English follows the Japanese section.
 | K1C + CFS-C | 実装土台あり / 実機certification待ち | 機種依存 | read-only provider土台あり | certification待ち | 無効 |
 | Moonraker / IR3 V2 | 別protocol pathで対応 | Moonraker系経路 | K1/K2 CFS authorityとは分離 | 別経路 | 対象外 |
 
-### v2.2.1044 Release Candidate
+### v2.2.1045 Release Candidate
 
 > [!IMPORTANT]
-> v2.2.1044 は Release Candidate / pre-release です。CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測と割当証跡が揃う場合だけ進む guarded path です。
+> v2.2.1045 は Release Candidate / pre-release です。CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測と割当証跡が揃う場合だけ進む guarded path です。
 
-v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTCカメラ、K2ファイル一覧 / 印刷履歴互換、CFS割当つき印刷開始ガード、Hybrid Filament UI / CFS Debug・Certification panel を統合しています。詳細は [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md) と [CHANGELOG.md](CHANGELOG.md) を参照してください。
+v2.2.1045 RC では、v2.2.1044 のK2 Pro Combo / CFS監視、CFS slot観測、K2 WebRTCカメラ、CFS割当つき印刷開始ガード、Hybrid Filament UI / CFS Debug・Certification panel に加えて、K1 numeric / Creality OS / CFS のエラーコードを分けて扱う namespace-aware error catalog を追加しています。K2/CFSで `errcode=1001,key=2843` を受け取った場合、K1の「使用できないファイル形式」ではなく `FS2843 — RFIDを読み取れません` と表示します。詳細は [docs/release-notes-v2.2.1045.md](docs/release-notes-v2.2.1045.md) と [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ### 既知の制限
 
@@ -44,7 +44,7 @@ v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTC�
 ### ダウンロード
 
 - 安定版: [最新安定リリース](https://github.com/pumpCurry/3dpmon/releases/latest)
-- Release Candidate: [リリース一覧](https://github.com/pumpCurry/3dpmon/releases/) から v2.2.1044 pre-release を確認してください。
+- Release Candidate: [リリース一覧](https://github.com/pumpCurry/3dpmon/releases/) から v2.2.1045 pre-release を確認してください。
 - すべてのバージョン一覧: <https://github.com/pumpCurry/3dpmon/releases/>
 
 ### インストール版（Windows・推奨）
@@ -81,7 +81,7 @@ v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTC�
 - [docs/index.md](docs/index.md): ドキュメント索引
 - [docs/ja/dashboard_usage.md](docs/ja/dashboard_usage.md): 基本的な使い方
 - [docs/ja/feature_filament_management.md](docs/ja/feature_filament_management.md): フィラメント管理
-- [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md): v2.2.1044 リリースノート
+- [docs/release-notes-v2.2.1045.md](docs/release-notes-v2.2.1045.md): v2.2.1045 リリースノート
 - [docs/future.md](docs/future.md): 将来計画
 - [docs/develop/printer-core-v3-open-work.md](docs/develop/printer-core-v3-open-work.md): Printer Core v3 の残作業
 
@@ -116,12 +116,12 @@ v2.2.1044 RC では、K2 Pro Combo / CFS の監視、CFS slot観測、K2 WebRTC�
 | K1C + CFS-C | Implementation foundation / live certification pending | Model dependent | Read-only provider foundation | Certification pending | Disabled |
 | Moonraker / IR3 V2 | Supported through a separate protocol path | Moonraker-family path | Separate from K1/K2 CFS authority | Separate path | N/A |
 
-### v2.2.1044 Release Candidate
+### v2.2.1045 Release Candidate
 
 > [!IMPORTANT]
-> v2.2.1044 is a Release Candidate / pre-release. Standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation and assignment evidence are available.
+> v2.2.1045 is a Release Candidate / pre-release. Standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation and assignment evidence are available.
 
-v2.2.1044 RC integrates K2 Pro Combo / CFS monitoring, CFS slot observation, K2 WebRTC camera support, K2 file-list / print-history compatibility, guarded CFS-assigned print start, and the Hybrid Filament UI / CFS Debug and Certification panel. See [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md) and [CHANGELOG.md](CHANGELOG.md) for details.
+v2.2.1045 RC keeps the v2.2.1044 K2 Pro Combo / CFS monitoring, CFS slot observation, K2 WebRTC camera support, guarded CFS-assigned print start, and the Hybrid Filament UI / CFS Debug and Certification panel, and adds a namespace-aware Creality error catalog for K1 numeric, Creality OS, and CFS errors. When K2/CFS reports `errcode=1001,key=2843`, 3dpmon now shows `FS2843 — RFID cannot be read` instead of the K1-only unsupported-file-format message. See [docs/release-notes-v2.2.1045.md](docs/release-notes-v2.2.1045.md) and [CHANGELOG.md](CHANGELOG.md) for details.
 
 ### Known Limitations
 
@@ -133,7 +133,7 @@ v2.2.1044 RC integrates K2 Pro Combo / CFS monitoring, CFS slot observation, K2 
 ### Downloads
 
 - Stable: [Latest stable release](https://github.com/pumpCurry/3dpmon/releases/latest)
-- Release Candidate: check [All releases](https://github.com/pumpCurry/3dpmon/releases/) for the v2.2.1044 pre-release.
+- Release Candidate: check [All releases](https://github.com/pumpCurry/3dpmon/releases/) for the v2.2.1045 pre-release.
 - All releases: <https://github.com/pumpCurry/3dpmon/releases/>
 
 ### Installer (Windows, recommended)
@@ -170,7 +170,7 @@ v2.2.1044 RC integrates K2 Pro Combo / CFS monitoring, CFS slot observation, K2 
 - [docs/index.md](docs/index.md): documentation index
 - [docs/en/dashboard_usage.md](docs/en/dashboard_usage.md): basic usage
 - [docs/en/feature_filament_management.md](docs/en/feature_filament_management.md): filament management
-- [docs/release-notes-v2.2.1044.md](docs/release-notes-v2.2.1044.md): v2.2.1044 release notes
+- [docs/release-notes-v2.2.1045.md](docs/release-notes-v2.2.1045.md): v2.2.1045 release notes
 - [docs/future.md](docs/future.md): future plans
 - [docs/develop/printer-core-v3-open-work.md](docs/develop/printer-core-v3-open-work.md): Printer Core v3 open work
 

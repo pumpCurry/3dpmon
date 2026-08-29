@@ -1,8 +1,26 @@
 # Changelog
 
-このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。PR #436のRelease Candidate版は v2.2.1044 であり、最終成果物のSHA256はactual main commitから再生成・検証した後、GitHub Releaseへ記録します。
+このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。PR #437のRelease Candidate版は v2.2.1045 であり、最終成果物のSHA256はactual main commitから再生成・検証した後、GitHub Releaseへ記録します。
 
-This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. The PR #436 release-candidate version is v2.2.1044; final artifact SHA256 values are generated and verified from the actual main commit before being recorded in the GitHub Release.
+This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. The PR #437 release-candidate version is v2.2.1045; final artifact SHA256 values are generated and verified from the actual main commit before being recorded in the GitHub Release.
+
+## v2.2.1045 (2026-08-30) — Release Candidate: namespace-aware Creality error catalog
+
+### 日本語
+
+- **Crealityエラーコード辞書差し替え**: K1 numeric / Creality OS / CFS を同じ数値辞書に潰さず、namespace-aware resolverで解決する `error_catalog` を追加しました。
+- **K2/CFS誤表示修正**: K2 Pro Combo + CFSで観測した `errcode=1001,key=2843` を、K1の「使用できないファイル形式」ではなく `FS2843 — RFIDを読み取れません` と表示します。
+- **raw evidence保持**: 機器から受け取った `errcode/key/value` はcanonical表示とは別に保持し、未分類時もraw値を表示します。
+- **fail-safe**: 機種不明時にK1辞書へ自動fallbackしないようにしました。K1 legacy mapは、明示的にK1系と分かる場合だけ互換fallbackとして使います。
+- **リリースノート**: 日本語/English併記の詳細は `docs/release-notes-v2.2.1045.md` を参照してください。
+
+### English
+
+- **Creality error catalog replacement**: adds a namespace-aware `error_catalog` resolver instead of merging K1 numeric, Creality OS, and CFS codes into one numeric map.
+- **K2/CFS display fix**: the observed K2 Pro Combo + CFS payload `errcode=1001,key=2843` now resolves to `FS2843 — RFID cannot be read`, not the K1-only unsupported-file-format message.
+- **Raw evidence preserved**: raw `errcode/key/value` stay separate from canonical display codes, and unknown cases still show the raw values.
+- **Fail-safe behavior**: unknown printer types no longer fall back to the K1 dictionary. The legacy K1 map is used only when the printer is explicitly known to be K1-family.
+- **Release notes**: bilingual Japanese/English notes are available in `docs/release-notes-v2.2.1045.md`.
 
 ## v2.2.1044 (2026-08-29) — Release Candidate: K2/CFS monitoring, guarded print start, and camera spinner fix
 
