@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1472 (PR #436)
+ * @version 1.390.1473 (PR #436)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:19:45
+ * @lastModified 2026-08-29 21:30:05
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -408,7 +408,7 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  * 【詳細説明】
  * - disabled tooltipが`dry-run-ok`のような正常理由にならないよう、ARM、dry-run、preflight、認証の順に
  *   実際にブロックしている理由だけを返す。
- * - preflightのwarnは診断情報として残し、failだけをhard gateにする。
+ * - preflightのwarnは原則blockingとし、実機semantics待ちのselected-sourceだけ診断情報として扱う。
  *
  * @private
  * @function createLiveSendReadiness
@@ -425,18 +425,19 @@ function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certif
   if (!dryRunValidation.valid) {
     return { enabled: false, reason: dryRunValidation.reason };
   }
-  const failedPreflightKeys = (Array.isArray(preflight) ? preflight : [])
-    .filter((item) => item?.state === "fail")
-    .map((item) => item.key || item.label || "unknown")
-    .filter(Boolean);
-  if (failedPreflightKeys.length > 0) {
-    return {
-      enabled: false,
-      reason: `preflight-failed:${failedPreflightKeys.join(",")}`,
-    };
-  }
   if (certificationStatus !== "certified") {
     return { enabled: false, reason: "certification-uncertified" };
+  }
+  const blockingPreflightKeys = (Array.isArray(preflight) ? preflight : [])
+    .filter((item) => item?.key !== "certification-status")
+    .filter((item) => item?.state === "fail" || (item?.state !== "ok" && item?.key !== "selected-source"))
+    .map((item) => item.key || item.label || "unknown")
+    .filter(Boolean);
+  if (blockingPreflightKeys.length > 0) {
+    return {
+      enabled: false,
+      reason: `preflight-failed:${blockingPreflightKeys.join(",")}`,
+    };
   }
   return { enabled: true, reason: "ready" };
 }
