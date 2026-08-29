@@ -18,9 +18,9 @@
  * - {@link redactProtocolValue}：任意値を recorder と同じ規則で秘匿化
  * - {@link toFixtureNdjson}：fixture イベント配列を NDJSON 文字列へ変換
  *
- * @version 1.390.1294 (PR #432)
+ * @version 1.390.1471 (PR #436)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-07 08:36:00
+ * @lastModified 2026-08-29 21:07:18
  * -----------------------------------------------------------
  * @todo
  * - Gate 0 実機キャプチャ UI との接続
@@ -156,11 +156,11 @@ const IP_KEY_PATTERN = /(?:ip|address|addr|host|hostname|url|endpoint)/i;
  * hostname 系キーを判定する正規表現。
  *
  * 【詳細説明】
- * - WebSocket hostname や `/info` の device name は個人環境の命名規則を含むため値全体を秘匿する。
+ * - WebSocket hostname や `/info` の device name、UI向けdisplayNameは個人環境の命名規則を含むため値全体を秘匿する。
  *
  * @constant {RegExp}
  */
-const HOSTNAME_KEY_PATTERN = /(?:^hostname$|reportedHostname|deviceName|printerName)/i;
+const HOSTNAME_KEY_PATTERN = /(?:^hostname$|reportedHostname|deviceName|printerName|displayName)/i;
 
 /**
  * 印刷ジョブや機体固有 ID 系キーを判定する正規表現。

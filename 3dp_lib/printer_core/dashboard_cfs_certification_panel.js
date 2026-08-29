@@ -17,15 +17,17 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1469 (PR #436)
+ * @version 1.390.1471 (PR #436)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 18:20:00
+ * @lastModified 2026-08-29 21:07:18
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
  */
 
 "use strict";
+
+import { redactProtocolValue } from "./dashboard_protocol_recorder.js";
 
 /**
  * CFS Certification パネルViewModelのschema version。
@@ -252,6 +254,7 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
   const printerState = toText(printer?.printState || printer?.state, "");
   const printerIdleKnown = Boolean(printerState);
   const printerIdle = ["idle", "standby", "ready", "completed", "complete"].includes(printerState.toLowerCase());
+  const selectedState = targetSource?.selected === true ? "ok" : "warn";
   return [
     {
       key: "active-session",
@@ -276,6 +279,14 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
       label: "Target loaded",
       state: targetSource?.presence === "loaded" ? "ok" : "fail",
       detail: targetSource?.displaySlot ? `${targetSource.displaySlot} ${targetSource.presence || "unknown"}` : "対象slot未選択",
+    },
+    {
+      key: "selected-source",
+      label: "Selected source",
+      state: selectedState,
+      detail: targetSource?.displaySlot
+        ? (targetSource.selected === true ? `機器選択中: ${targetSource.displaySlot}` : `${targetSource.displaySlot} は機器未選択`)
+        : "選択source未観測",
     },
     {
       key: "certification-status",
@@ -303,9 +314,10 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
  * @param {object} printer - printer情報
  * @param {object|null} targetSource - 対象source
  * @param {string} commandKind - command kind
+ * @param {number=} nowMs - 現在時刻のepoch milliseconds
  * @returns {{valid: boolean, reason: string}} 判定結果
  */
-function validateArmBinding(arm, printer, targetSource, commandKind) {
+function validateArmBinding(arm, printer, targetSource, commandKind, nowMs = Date.now()) {
   if (!isTrue(arm?.armed)) {
     return { valid: false, reason: "未ARM" };
   }
@@ -325,7 +337,55 @@ function validateArmBinding(arm, printer, targetSource, commandKind) {
   if (mismatches.length > 0) {
     return { valid: false, reason: `${mismatches.join("/") }変更` };
   }
+  const expiresAtMs = Date.parse(arm.expiresAt || "");
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+    return { valid: false, reason: "ARM期限切れ" };
+  }
   return { valid: true, reason: "ARM有効" };
+}
+
+/**
+ * dry-run planが現在対象source/commandと一致するか判定する。
+ *
+ * 【詳細説明】
+ * - ViewModel生成時点でdry-runが成功していても、command kindやsourceIdが現在のtargetと違うplanはLIVE送信候補にしない。
+ *
+ * @private
+ * @function validateDryRunPlan
+ * @param {object|null|undefined} dryRunPlan - dry-run transport plan
+ * @param {string} commandKind - 現在のcommand kind
+ * @param {object|null|undefined} targetSource - 現在対象source
+ * @returns {{valid: boolean, status: string, reason: string}} dry-run整合性
+ */
+function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
+  if (!dryRunPlan || dryRunPlan.ok !== true) {
+    return {
+      valid: false,
+      status: "rejected",
+      reason: dryRunPlan?.reason || "dry-run-plan-rejected",
+    };
+  }
+  const planCommandKind = toText(dryRunPlan.details?.commandKind, commandKind);
+  const planSourceId = toText(dryRunPlan.details?.sourceId, targetSource?.sourceId || "");
+  const mismatches = [];
+  if (planCommandKind !== commandKind) {
+    mismatches.push("command");
+  }
+  if (planSourceId !== toText(targetSource?.sourceId)) {
+    mismatches.push("source");
+  }
+  if (mismatches.length > 0) {
+    return {
+      valid: false,
+      status: "mismatch",
+      reason: `dry-run-${mismatches.join("/")}-mismatch`,
+    };
+  }
+  return {
+    valid: true,
+    status: "ok",
+    reason: "dry-run-ok",
+  };
 }
 
 /**
@@ -431,11 +491,13 @@ function createEvidenceTimeline(evidence = {}, execution = {}) {
  * @param {object=} options.arm - live arm状態
  * @param {object=} options.evidence - evidence入力
  * @param {object=} options.execution - command実行状態
+ * @param {number=} options.nowMs - ARM期限判定に使う現在時刻のepoch milliseconds
  * @returns {object} Certificationパネル用ViewModel
  * @example
  * const vm = createCfsCertificationPanelViewModel({ printer, materialViewModel });
  */
 export function createCfsCertificationPanelViewModel(options = {}) {
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const printer = {
     displayName: toText(options.printer?.displayName, "--"),
     model: toText(options.printer?.model, "--"),
@@ -450,7 +512,8 @@ export function createCfsCertificationPanelViewModel(options = {}) {
   const targetSource = resolveTargetSource(materialViewModel, options.targetSource);
   const commandKind = toText(options.command?.commandKind, DEFAULT_COMMAND_KIND);
   const dryRunPlan = options.dryRunPlan || null;
-  const dryRunStatus = dryRunPlan?.ok === true ? "ok" : "rejected";
+  const dryRunValidation = validateDryRunPlan(dryRunPlan, commandKind, targetSource);
+  const dryRunStatus = dryRunValidation.status;
   const certificationStatus = toText(
     options.command?.certificationStatus ||
     dryRunPlan?.details?.semanticStatus,
@@ -473,9 +536,10 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     boundSourceId: toText(options.arm?.boundSourceId),
     boundCommandKind: toText(options.arm?.boundCommandKind),
   };
-  const armBinding = validateArmBinding(arm, printer, targetSource, commandKind);
+  const armBinding = validateArmBinding(arm, printer, targetSource, commandKind, nowMs);
   const liveSendEnabled = preflight.every((item) => item.state === "ok") &&
     armBinding.valid &&
+    dryRunValidation.valid &&
     certificationStatus === "certified";
   return {
     schemaVersion: CFS_CERTIFICATION_PANEL_SCHEMA_VERSION,
@@ -510,6 +574,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     },
     dryRun: {
       status: dryRunStatus,
+      reason: dryRunValidation.reason,
       plan: cloneJson(dryRunPlan),
       payloadPreview: cloneJson(dryRunPlan?.frames || dryRunPlan?.payloadPreview || []),
     },
@@ -521,7 +586,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     },
     liveSend: {
       enabled: liveSendEnabled,
-      reason: liveSendEnabled ? "ready" : (armBinding.valid ? "preflight-or-certification-ng" : armBinding.reason),
+      reason: liveSendEnabled ? "ready" : (armBinding.valid ? dryRunValidation.reason || "preflight-or-certification-ng" : armBinding.reason),
     },
     execution: {
       status: toText(execution.status, "idle"),
@@ -561,18 +626,22 @@ export function createCfsCertificationPanelViewModel(options = {}) {
  * const bundle = createCfsCertificationExportBundle(viewModel);
  */
 export function createCfsCertificationExportBundle(viewModel) {
-  return {
+  const rawEvidence = cloneJson(viewModel?.evidence?.raw) || {};
+  const protocolEvents = Array.isArray(rawEvidence.events) ? rawEvidence.events : [];
+  const bundle = {
     manifest: {
       panel: CERTIFICATION_PANEL_NAME,
       schemaVersion: CFS_CERTIFICATION_PANEL_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
       printer: cloneJson(viewModel?.printer) || {},
+      captureId: viewModel?.export?.captureId || "",
+      fixtureId: viewModel?.export?.fixtureId || "",
       sourceId: viewModel?.command?.sourceId || "",
       displaySlot: viewModel?.command?.displaySlot || "",
       commandKind: viewModel?.command?.commandKind || "",
       dryRunStatus: viewModel?.dryRun?.status || "unknown",
       liveSendEnabled: viewModel?.liveSend?.enabled === true,
-      redactionApplied: viewModel?.export?.redactionApplied !== false,
+      redactionApplied: false,
     },
     summary: {
       material: cloneJson(viewModel?.material) || {},
@@ -582,9 +651,16 @@ export function createCfsCertificationExportBundle(viewModel) {
       execution: cloneJson(viewModel?.execution) || {},
     },
     dryRunPlan: cloneJson(viewModel?.dryRun?.plan) || null,
-    evidence: cloneJson(viewModel?.evidence?.raw) || {},
-    events: cloneJson(viewModel?.evidence?.timeline) || [],
+    evidence: rawEvidence,
+    events: cloneJson(protocolEvents) || [],
+    summaryTimeline: cloneJson(viewModel?.evidence?.timeline) || [],
   };
+  const redacted = redactProtocolValue(bundle);
+  redacted.manifest = {
+    ...(redacted.manifest || {}),
+    redactionApplied: true,
+  };
+  return redacted;
 }
 
 /**

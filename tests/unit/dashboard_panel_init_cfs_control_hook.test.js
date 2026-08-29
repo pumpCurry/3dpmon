@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1471 (PR #436)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-08-29 21:07:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -554,6 +554,41 @@ describe("dashboard_panel_init CFS control hook", () => {
     });
     const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
     expect(options.control.canSendCommands).toBe(false);
+  });
+
+  it("Gate19 debug: 古いprinterCoreV3InfoをCertificationパネルのcurrent model表示へ使わない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      dest: "192.0.2.10:9999",
+      printerCoreV3Info: {
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: "previous-runtime-probe-session",
+        connectionGeneration: 7,
+        connectionDest: "192.0.2.10:9999",
+        connectionHost: "K2Pro",
+        observedAt: "2026-08-28T01:00:00.000Z",
+      },
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+      },
+    };
+    const body = document.createElement("div");
+    const {
+      destroyPanel,
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("cfs-certification", body, "K2Pro");
+
+    expect(body.textContent).toContain("K2Pro / --");
+    expect(body.textContent).not.toContain("K2Pro / F012");
+
+    destroyPanel("cfs-certification", body, "K2Pro");
   });
 
   it("Gate20: 同じruntime probeでも接続世代が古いprinterCoreV3Infoはproduction scopeに使わない", async () => {

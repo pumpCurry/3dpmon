@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1469 (PR #436)
+ * @version 1.390.1471 (PR #436)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 18:20:00
+ * @lastModified 2026-08-29 21:07:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -27,6 +27,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCfsCertificationExportBundle,
   createCfsCertificationPanelViewModel,
   renderCfsCertificationPanel,
 } from "../../3dp_lib/printer_core/dashboard_cfs_certification_panel.js";
@@ -212,5 +213,99 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(container.textContent).toContain("ARM無効");
     expect(container.textContent).toContain("session/source変更");
     expect(container.querySelector('[data-action="live-send"]').disabled).toBe(true);
+  });
+
+  it("export bundleはraw /infoやRFIDをredactionし、canonical protocol eventsをNDJSON対象にする", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+      },
+      materialViewModel: createMaterialViewModel(),
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "uncertified",
+        },
+      },
+      evidence: {
+        info: {
+          observedAt: "2026-08-29T10:00:00.000Z",
+          payload: {
+            mac: "FCEE280E69E7",
+            sn: "905251280E69E7",
+            ip: "192.168.54.153",
+            hostname: "K2Pro-69E7",
+          },
+        },
+        events: [
+          { kind: "outbound", payload: { url: "ws://192.168.54.153:9999", rfid: "ABCDEF123456" } },
+          { kind: "marker", name: "operator-cfs-load" },
+        ],
+      },
+    });
+
+    const bundle = createCfsCertificationExportBundle(viewModel);
+    const serialized = JSON.stringify(bundle);
+
+    expect(bundle.manifest.redactionApplied).toBe(true);
+    expect(bundle.events).toHaveLength(2);
+    expect(bundle.summaryTimeline[0]).toMatchObject({ label: "証跡未記録" });
+    expect(serialized).not.toContain("FCEE280E69E7");
+    expect(serialized).not.toContain("905251280E69E7");
+    expect(serialized).not.toContain("192.168.54.153");
+    expect(serialized).not.toContain("K2Pro-69E7");
+    expect(serialized).not.toContain("ABCDEF123456");
+    expect(serialized).toContain("<MAC_001>");
+    expect(serialized).toContain("<SERIAL_001>");
+    expect(serialized).toContain("<IP_001>");
+    expect(serialized).toContain("<HOSTNAME_001>");
+    expect(serialized).toContain("<RFID_001>");
+  });
+
+  it("selected sourceをPreflight診断へ出し、期限切れARMとdry-run不整合ではLIVE不可にする", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-unload",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T09:59:59.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    expect(viewModel.preflight.map((item) => item.key)).toContain("selected-source");
+    expect(viewModel.arm.valid).toBe(false);
+    expect(viewModel.arm.reason).toContain("ARM期限切れ");
+    expect(viewModel.dryRun.status).toBe("mismatch");
+    expect(viewModel.liveSend.enabled).toBe(false);
   });
 });

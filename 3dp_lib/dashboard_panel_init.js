@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1469 (PR #436)
+ * @version 1.390.1471 (PR #436)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-29 18:20:00
+ * @lastModified 2026-08-29 21:07:18
  * -----------------------------------------------------------
  */
 
@@ -885,11 +885,12 @@ function createCfsCertificationRenderableState(hostname) {
   const commandKind = target?.materialSystem?.cfsCertification?.commandKind || "cfs-load";
   const dryRunPlan = createCfsCertificationDryRunPlan(targetSource, shadowRecord, commandKind);
   const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
+  const currentInfo = isCurrentPrinterCoreV3Info(rawInfo, target) ? rawInfo : {};
   const viewModel = createCfsCertificationPanelViewModel({
     printer: {
       displayName: hostname,
-      model: rawInfo.model || rawInfo.reportedModel || target?.model || "",
-      firmwareVersion: rawInfo.version || rawInfo.firmwareVersion || "",
+      model: currentInfo.model || currentInfo.reportedModel || "",
+      firmwareVersion: currentInfo.version || currentInfo.firmwareVersion || "",
       deviceId: shadowRecord?.deviceId || "",
       sessionId: shadowRecord?.sessionId || "",
       transportKind: "ws9999",
