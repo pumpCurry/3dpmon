@@ -17,9 +17,9 @@
  * - {@link PRINT_STATE_EVENT}：状態イベント表
  * - {@link dashboardMapping}：フィールドマッピング
  *
-* @version 1.390.1290 (PR #432)
+* @version 1.390.1486 (PR #437)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-06 22:53:37
+* @lastModified 2026-08-30 02:21:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -29,6 +29,7 @@
 
 import * as utils from "./dashboard_utils.js";
 import { showAlert } from "./dashboard_notification_manager.js";
+import { formatCrealityError } from "./error_catalog/creality_error_resolver.js";
 
 /* ==========================================================================
  * 変換ユーティリティ関数群
@@ -92,6 +93,15 @@ function mapValue(map, v) {
 function formatErrorStatus(v) {
   if (!v || (v.errcode == null && v.key == null)) {
     return { value: "---XXX", unit: "" };
+  }
+  if (v.resolvedError) {
+    return {
+      value: formatCrealityError({
+        raw: v,
+        resolution: v.resolvedError,
+      }),
+      unit: ""
+    };
   }
   return {
     value: `コード${v.errcode}, キー${v.key}`,

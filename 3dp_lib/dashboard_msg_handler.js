@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1119 (PR #385)
+* @version 1.390.1486 (PR #437)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-06-16 22:00:00
+* @lastModified 2026-08-30 02:21:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,7 +33,10 @@
  * ----------------------------------------------------------- */
 "use strict";
 
-import errorMap from "./3dp_errorcode.js";
+import {
+  formatCrealityError,
+  resolveCrealityError,
+} from "./error_catalog/creality_error_resolver.js";
 import {
   monitorData,
   ensureMachineData,
@@ -69,9 +72,53 @@ import {
 } from "./dashboard_aggregator.js";
 import { restorePrintResume, persistPrintResume } from "./3dp_dashboard_init.js";
 import * as printManager from "./dashboard_printmanager.js";
-import { getDeviceIp, getHttpPort } from "./dashboard_connection.js";
+import { getConnectionTarget, getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 import { getCurrentSpool, formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { recordPrintLifecycle, getPrintLifecycleMetrics, resetPrintLifecycle } from "./dashboard_print_lifecycle.js";
+
+/**
+ * Creality error resolver へ渡す文脈を構築する。
+ *
+ * 【詳細説明】
+ * - `getPrinterType()` は後方互換のため未設定時に K1 を返すが、エラー解決では使用しない。
+ * - connectionTargets に明示保存された printerType、payloadのmodel、CFS観測値だけを渡す。
+ * - K2/CFSで `errcode=1001,key=2843` をK1の1001へ誤解釈しないため、unknownはunknownのままにする。
+ *
+ * @private
+ * @function buildCrealityErrorContext
+ * @param {string} host - 対象ホスト名
+ * @param {Object} data - WebSocket受信payload
+ * @returns {{printerType:string, model:string|null, firmware:string|null, features:string[]}} resolver文脈
+ */
+function buildCrealityErrorContext(host, data) {
+  let target = null;
+  try {
+    target = getConnectionTarget(host);
+  } catch {
+    target = null;
+  }
+  const features = new Set();
+  if (Array.isArray(data?.features)) {
+    data.features.forEach((feature) => {
+      if (typeof feature === "string" && feature.trim()) {
+        features.add(feature.trim().toLowerCase());
+      }
+    });
+  }
+  if (Number(data?.cfsConnect) === 1 || data?.boxsInfo || data?.materialSources) {
+    features.add("cfs");
+  }
+  const materialSystemMode = String(target?.materialSystem?.mode || "").toLowerCase();
+  if (materialSystemMode.includes("cfs")) {
+    features.add("cfs");
+  }
+  return {
+    printerType: typeof target?.printerType === "string" ? target.printerType : "unknown",
+    model: data?.model == null ? null : String(data.model),
+    firmware: data?.modelVersion == null ? null : String(data.modelVersion),
+    features: [...features],
+  };
+}
 
 /**
  * Webhook 通知用の共通ペイロードを構築する。
@@ -531,19 +578,40 @@ export function processData(data, hostname) {
   if (data.err) {
     const { errcode, key } = data.err;
     const prev = machine.runtimeData.lastError;
-    const isSame = prev && prev.errcode === errcode && prev.key === key;
-    machine.runtimeData.lastError = { errcode, key };
+    const isSame = prev && prev.errcode === errcode && prev.key === key && prev.value === data.err.value;
+    const errorContext = buildCrealityErrorContext(host, data);
+    const resolvedError = resolveCrealityError({
+      raw: data.err,
+      ...errorContext,
+    });
+    const storedError = { errcode, key };
+    if (data.err.value !== undefined) {
+      storedError.value = data.err.value;
+    }
+    if (resolvedError.active && resolvedError.printerType !== "creality-k1") {
+      storedError.resolvedError = resolvedError;
+    }
+    machine.runtimeData.lastError = {
+      errcode,
+      key,
+      value: data.err.value,
+      resolvedError,
+    };
     if (!isSame) {
       // 状態パネル「エラー状況」(data-field="errorStatus") 表示用に storedData へ反映する。
-      // err は _WS_SKIP_KEYS によりバルク反映 (2.7.3) から除外されるため、ここで全ホスト分を
-      // 明示的に格納する。dashboardMapping["err"] → formatErrorStatus が {errcode,key} を期待。
+      // err は _WS_SKIP_KEYS によりバルク反映 (2.7.3) から除外されるため、ここでホスト別に
+      // 明示的に格納する。raw errcode/key/value と canonical 解決結果は分けて保持し、
+      // K2/CFS の raw errcode=1001 を K1 の 1001 として誤表示しない。
       // 変更時のみ更新するので、毎メッセージでの再描画(青フラッシュ)は発生しない。
-      _set("err", { errcode, key }, true, true);
+      _set("err", storedError, true, true);
       if (errcode === 0 && key === 0) {
         pushLog("エラーが解消しました。", "info", false, host);
         notificationManager.notify("errorResolved", { hostname: host });
       } else {
-        const msg = processError(data.err);
+        const msg = processError(data.err, {
+          ...errorContext,
+          resolvedError,
+        });
         pushLog(msg, "error", false, host);
         notificationManager.notify("errorOccurred", {
           hostname: host, error_code: errcode,
@@ -1055,19 +1123,20 @@ export function processData(data, hostname) {
 
 /**
  * processError:
- * (3) errorMap 参照 → 日本語メッセージ生成
+ * (3) Creality error resolver 参照 → 日本語メッセージ生成
  *
- * @param {{errcode:number, key:number}} param
+ * @function processError
+ * @param {{errcode:number, key:number, value?:string}} param - raw error object
+ * @param {{printerType?:string, model?:string, firmware?:string, features?:string[], resolvedError?:Object}=} context - error resolver文脈
  * @returns {string} 日本語エラーメッセージ
  */
-export function processError({ errcode, key }) {
-  let msg = `エラー コード${errcode}, キー${key}: `;
-  msg += typeof errorMap[errcode] === "function"
-      ? errorMap[errcode]([errcode])
-      : `不明なコード:${errcode}`;
-  msg += " ";
-  msg += typeof errorMap[key] === "function"
-      ? errorMap[key]([key])
-      : `不明なキー:${key}`;
-  return msg.trim();
+export function processError({ errcode, key, value } = {}, context = {}) {
+  return formatCrealityError({
+    raw: { errcode, key, value },
+    printerType: context.printerType,
+    model: context.model,
+    firmware: context.firmware,
+    features: context.features,
+    resolution: context.resolvedError,
+  });
 }
