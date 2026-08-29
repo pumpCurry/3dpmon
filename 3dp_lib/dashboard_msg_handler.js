@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1486 (PR #437)
+* @version 1.390.1487 (PR #437)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-08-30 02:21:10
+* @lastModified 2026-08-30 03:06:29
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -118,6 +118,39 @@ function buildCrealityErrorContext(host, data) {
     firmware: data?.modelVersion == null ? null : String(data.modelVersion),
     features: [...features],
   };
+}
+
+/**
+ * Creality error解決結果の表示更新用signatureを作る。
+ *
+ * 【詳細説明】
+ * - raw errcode/key/value が同じでも、/infoやmodel確定によりunknownからK2/CFSへ解釈が変わる場合がある。
+ * - 通知重複防止はraw値で判定し、状態パネル表示だけはこのsignature変化でも更新する。
+ * - 巨大なrecord全体ではなく、画面表示と判断に必要な識別子だけを連結する。
+ *
+ * @private
+ * @function buildCrealityErrorResolutionSignature
+ * @param {Object|null|undefined} resolvedError - {@link resolveCrealityError} の戻り値
+ * @returns {string} 表示更新判定用signature
+ */
+function buildCrealityErrorResolutionSignature(resolvedError) {
+  if (!resolvedError || typeof resolvedError !== "object") {
+    return "missing";
+  }
+  const candidateCodes = Array.isArray(resolvedError.candidates)
+    ? resolvedError.candidates
+      .map((candidate) => candidate?.canonicalCode || candidate?.id || "")
+      .filter(Boolean)
+      .join("|")
+    : "";
+  return [
+    resolvedError.printerType || "unknown",
+    resolvedError.status || "unknown",
+    resolvedError.canonicalCode || "",
+    resolvedError.reason || "",
+    resolvedError.record?.id || "",
+    candidateCodes,
+  ].join("::");
 }
 
 /**
@@ -578,12 +611,14 @@ export function processData(data, hostname) {
   if (data.err) {
     const { errcode, key } = data.err;
     const prev = machine.runtimeData.lastError;
-    const isSame = prev && prev.errcode === errcode && prev.key === key && prev.value === data.err.value;
+    const isSameRawError = prev && prev.errcode === errcode && prev.key === key && prev.value === data.err.value;
     const errorContext = buildCrealityErrorContext(host, data);
     const resolvedError = resolveCrealityError({
       raw: data.err,
       ...errorContext,
     });
+    const resolutionSignature = buildCrealityErrorResolutionSignature(resolvedError);
+    const shouldUpdateStoredError = !isSameRawError || prev?.resolutionSignature !== resolutionSignature;
     const storedError = { errcode, key };
     if (data.err.value !== undefined) {
       storedError.value = data.err.value;
@@ -596,14 +631,17 @@ export function processData(data, hostname) {
       key,
       value: data.err.value,
       resolvedError,
+      resolutionSignature,
     };
-    if (!isSame) {
+    if (shouldUpdateStoredError) {
       // 状態パネル「エラー状況」(data-field="errorStatus") 表示用に storedData へ反映する。
       // err は _WS_SKIP_KEYS によりバルク反映 (2.7.3) から除外されるため、ここでホスト別に
       // 明示的に格納する。raw errcode/key/value と canonical 解決結果は分けて保持し、
       // K2/CFS の raw errcode=1001 を K1 の 1001 として誤表示しない。
-      // 変更時のみ更新するので、毎メッセージでの再描画(青フラッシュ)は発生しない。
+      // raw値が同じでも機種文脈の確定で解決結果が変わった場合は、通知を重複させず表示だけ更新する。
       _set("err", storedError, true, true);
+    }
+    if (!isSameRawError) {
       if (errcode === 0 && key === 0) {
         pushLog("エラーが解消しました。", "info", false, host);
         notificationManager.notify("errorResolved", { hostname: host });

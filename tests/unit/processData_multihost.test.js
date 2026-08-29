@@ -169,4 +169,26 @@ describe("processData マルチホスト behavioral (omission検出)", () => {
       expect(monitorData.machines[h].storedData.err.rawValue).toEqual({ errcode: i, key: i });
     });
   });
+
+  it("(B) 同じrawエラーでもK2文脈が後から確定した場合は表示用解決結果を更新する", () => {
+    const host = "K2Pro-B5";
+    ensureMachineData(host);
+
+    processData(makeK1Status(host, {
+      model: "Unknown",
+      cfsConnect: 0,
+      err: { errcode: 1001, key: 2843, value: "" },
+    }), host);
+    expect(renderErrorStatus(host).value).toContain("未分類のCrealityエラー");
+
+    processData(makeK1Status(host, {
+      model: "F012",
+      cfsConnect: 1,
+      boxsInfo: { materialBoxs: [] },
+      err: { errcode: 1001, key: 2843, value: "" },
+    }), host);
+
+    expect(renderErrorStatus(host).value).toContain("FS2843");
+    expect(renderErrorStatus(host).value).toContain("RFIDを読み取れません");
+  });
 });

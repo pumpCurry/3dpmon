@@ -16,9 +16,9 @@
  * - {@link resolveCrealityError}：raw error と機種文脈から canonical error を解決
  * - {@link formatCrealityError}：解決結果をユーザー向け日本語表示へ整形
  *
- * @version 1.390.1486 (PR #437)
+ * @version 1.390.1487 (PR #437)
  * @since   1.390.1486 (PR #437)
- * @lastModified 2026-08-30 02:21:10
+ * @lastModified 2026-08-30 03:06:29
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -103,6 +103,30 @@ function inferPrinterTypeFromModel(model) {
   if (text === "f012" || text.includes("k2")) return "creality-k2";
   if (text.includes("k1")) return "creality-k1";
   return "unknown";
+}
+
+/**
+ * 明示printerTypeとmodel由来のprinter familyを統合する。
+ *
+ * 【詳細説明】
+ * - connection target に古いprinterTypeが残っていても、F012/K2などpayload側の強い機種証拠を優先する。
+ * - Moonraker/IR3 V2 はCreality OS error resolverの対象外なので、明示moonrakerは上書きしない。
+ * - どちらか片方だけが判明している場合は判明している値を使い、両方不明ならunknownを返す。
+ *
+ * @private
+ * @function resolveEffectivePrinterType
+ * @param {"creality-k1"|"creality-k2"|"moonraker"|"unknown"} explicitType - connection設定などから得た明示printerType
+ * @param {"creality-k1"|"creality-k2"|"unknown"} inferredType - payload modelから推定したprinterType
+ * @returns {"creality-k1"|"creality-k2"|"moonraker"|"unknown"} resolverで採用するprinterType
+ */
+function resolveEffectivePrinterType(explicitType, inferredType) {
+  if (explicitType === "moonraker") {
+    return "moonraker";
+  }
+  if (inferredType !== "unknown" && explicitType !== "unknown" && inferredType !== explicitType) {
+    return inferredType;
+  }
+  return explicitType !== "unknown" ? explicitType : inferredType;
 }
 
 /**
@@ -320,7 +344,7 @@ export function resolveCrealityError(input = {}) {
 
   const explicitType = normalizePrinterType(input.printerType);
   const inferredType = inferPrinterTypeFromModel(input.model);
-  const printerType = explicitType !== "unknown" ? explicitType : inferredType;
+  const printerType = resolveEffectivePrinterType(explicitType, inferredType);
   const features = normalizeFeatureSet(input.features);
   const canonicalCode = normalizeCanonicalCode(input.canonicalCode) || normalizeCanonicalCode(value);
   if (canonicalCode) {

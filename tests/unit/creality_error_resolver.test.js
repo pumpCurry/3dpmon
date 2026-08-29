@@ -46,6 +46,24 @@ describe("Creality error catalog resolver", () => {
     expect(formatCrealityError({ resolution: result })).not.toContain("使用できないファイル形式");
   });
 
+  it("uses strong K2 model evidence instead of a stale K1 printerType for CFS key errors", () => {
+    const result = resolveCrealityError({
+      printerType: "creality-k1",
+      model: "F012",
+      features: ["cfs"],
+      raw: {
+        errcode: 1001,
+        key: 2843,
+        value: "",
+      },
+    });
+
+    expect(result.status).toBe("resolved");
+    expect(result.printerType).toBe("creality-k2");
+    expect(result.canonicalCode).toBe("FS2843");
+    expect(formatCrealityError({ resolution: result })).not.toContain("使用できないファイル形式");
+  });
+
   it("keeps the legacy K1 numeric path available for K1 status errors", () => {
     const result = resolveCrealityError({
       printerType: "creality-k1",
