@@ -30,9 +30,9 @@
  * - {@link recreatePanelsForHost}：指定ホスト/種別のパネルを同じ位置で再生成
  * - {@link updateAllPanelHeaders}：全パネルヘッダーの色・ホスト名を再描画
  *
- * @version 1.390.1365 (PR #432)
+ * @version 1.390.1469 (PR #436)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-09 16:21:02
+ * @lastModified 2026-08-29 18:20:00
  * -----------------------------------------------------------
  * @todo
  * - パネルのタブ化（同一セル内に複数パネルを重ねる）
@@ -103,6 +103,7 @@ const PANEL_TYPES = [
   { id: "camera",        label: "カメラ",           templateId: "panel-tpl-camera",        defaultW: 16, defaultH: 20, minW: 4, minH: 6,  perHost: true },
   { id: "head-preview",  label: "ヘッド位置プレビュー", templateId: "panel-tpl-head-preview", defaultW: 12, defaultH: 24, minW: 4, minH: 8,  perHost: true },
   { id: "filament",      label: "フィラメント",      templateId: "panel-tpl-filament",      defaultW: 12, defaultH: 16, minW: 4, minH: 6,  perHost: true },
+  { id: "cfs-certification", label: "CFS認証",       templateId: "panel-tpl-cfs-certification", defaultW: 32, defaultH: 24, minW: 8, minH: 10, perHost: true },
   { id: "status",        label: "状態",             templateId: "panel-tpl-status",         defaultW: 16, defaultH: 24, minW: 4, minH: 8,  perHost: true },
   { id: "control-cmd",   label: "操作ボタン",        templateId: "panel-tpl-control-cmd",   defaultW: 12, defaultH: 12, minW: 4, minH: 6,  perHost: true },
   { id: "control-temp",  label: "温度・ファン制御",   templateId: "panel-tpl-control-temp",  defaultW: 24, defaultH: 24, minW: 6, minH: 8,  perHost: true },

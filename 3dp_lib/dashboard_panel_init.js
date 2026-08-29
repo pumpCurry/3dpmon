@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1469 (PR #436)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-08-29 18:20:00
  * -----------------------------------------------------------
  */
 
@@ -84,6 +84,11 @@ import {
 import {
   renderMaterialTopologyPanel,
 } from "./printer_core/dashboard_material_topology_panel.js";
+import {
+  createCfsCertificationExportBundle,
+  createCfsCertificationPanelViewModel,
+  renderCfsCertificationPanel,
+} from "./printer_core/dashboard_cfs_certification_panel.js";
 import {
   createBoundCfsControlIntegration,
 } from "./printer_core/dashboard_cfs_command_integration.js";
@@ -754,6 +759,310 @@ function initHeadPreviewPanel(body, hostname) {
   if (btn45) btn45.addEventListener("click", () => setTilt45View(hostname));
   if (btnOblique) btnOblique.addEventListener("click", () => setObliqueView(hostname));
   if (btnSpin) btnSpin.addEventListener("click", () => toggleZSpin(hostname));
+}
+
+/**
+ * material topology view model からCFS slot行を平坦化する。
+ *
+ * 【詳細説明】
+ * - CFS Debug / Certificationパネルのdry-run対象を選ぶため、表示済みの固定slot行を再利用する。
+ * - 外部スプールはslot control対象ではないので、この関数ではCFS slotだけを返す。
+ *
+ * @private
+ * @function flattenCfsCertificationSlots
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @returns {Array<object>} CFS slot表示行
+ */
+function flattenCfsCertificationSlots(viewModel) {
+  const units = Array.isArray(viewModel?.units) ? viewModel.units : [];
+  return units.flatMap((unit) => Array.isArray(unit?.slots) ? unit.slots : [])
+    .filter((row) => row?.kind === "cfs-slot" && row.sourceId);
+}
+
+/**
+ * CFS Debug / Certificationパネルの対象slotを選ぶ。
+ *
+ * 【詳細説明】
+ * - 現時点ではGUI上のslot pickerをまだ持たないため、現在selectedのCFS slotを第一候補にする。
+ * - selectedが無ければloaded slot、さらに観測済みslotへfallbackし、dry-run plan生成可否をパネル上で確認できるようにする。
+ *
+ * @private
+ * @function selectCfsCertificationTargetSource
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @returns {object|null} 対象source row
+ */
+function selectCfsCertificationTargetSource(viewModel) {
+  const rows = flattenCfsCertificationSlots(viewModel);
+  return rows.find((row) => row.selected === true)
+    || rows.find((row) => row.presence === "loaded")
+    || rows[0]
+    || null;
+}
+
+/**
+ * CFS Debug / Certificationパネル用のdry-run transport planを生成する。
+ *
+ * 【詳細説明】
+ * - `allowUncertifiedCfsSlotCommandCandidates:true` を明示し、未certified candidateを送信せずpayload previewだけに使う。
+ * - sourceが未観測の場合は拒否plan風の表示objectを返し、rendererで原因を見えるようにする。
+ *
+ * @private
+ * @function createCfsCertificationDryRunPlan
+ * @param {object|null} targetSource - 対象source row
+ * @param {object|null} shadowRecord - Printer Core v3 shadow runtime
+ * @param {string} commandKind - command kind
+ * @returns {object} dry-run transport plan
+ */
+function createCfsCertificationDryRunPlan(targetSource, shadowRecord, commandKind) {
+  if (!targetSource?.sourceId) {
+    return {
+      ok: false,
+      reason: "missing-cfs-certification-target-source",
+      frames: [],
+      details: {
+        commandKind,
+        semanticStatus: "uncertified",
+      },
+    };
+  }
+  return createK2CfsCommandTransportPlan({
+    deviceId: shadowRecord?.deviceId || "",
+    sessionId: shadowRecord?.sessionId || "",
+    transportKind: "ws9999",
+    commandKind,
+    payload: {
+      sourceId: targetSource.sourceId,
+      displaySlot: targetSource.displaySlot,
+      unitIndex: targetSource.unitIndex,
+      slotIndex: targetSource.slotIndex,
+      boxId: targetSource.boxId,
+      protocolSlotId: targetSource.protocolSlotId,
+    },
+    createdAt: new Date().toISOString(),
+  }, {
+    allowUncertifiedCfsSlotCommandCandidates: true,
+  });
+}
+
+/**
+ * CFS Debug / Certificationパネル用の描画snapshotを生成する。
+ *
+ * 【詳細説明】
+ * - 通常フィラメントパネルと同じMaterialTopology ViewModelを使い、監視UIとDebug UIで見ているslotがずれないようにする。
+ * - LIVE送信可否はrendererへ渡すだけでなく、production dispatcher側でも別途send-time検証される。
+ *
+ * @private
+ * @function createCfsCertificationRenderableState
+ * @param {string} hostname - 対象ホスト名
+ * @returns {object} Certification renderer state
+ */
+function createCfsCertificationRenderableState(hostname) {
+  const machine = monitorData.machines[hostname] || {};
+  const target = getConnectionTarget(hostname);
+  const printerType = getPrinterType(hostname);
+  const shadowRecord = machine.runtimeData?.printerCoreV3Shadow || null;
+  const topology = resolveDisplayMaterialTopology({
+    topology: shadowRecord?.lastState?.materials || null,
+    shadowRecord,
+    observationStore: monitorData.materialSourceObservations || null,
+    allowPersistentLastKnown: true,
+    host: hostname,
+  });
+  const viewOptions = resolveMaterialTopologyViewOptions({
+    target,
+    printerType,
+    topology,
+  });
+  const materialViewModel = createMaterialTopologyViewModel(topology, {
+    ...viewOptions,
+    observation: {
+      lastObservedAt: shadowRecord?.materialProviderLastObservedAt || topology?.provider?.lastObservedAt || null,
+      request: shadowRecord?.materialProviderRequest || null,
+      nowMs: Date.now(),
+    },
+  });
+  const targetSource = selectCfsCertificationTargetSource(materialViewModel);
+  const commandKind = target?.materialSystem?.cfsCertification?.commandKind || "cfs-load";
+  const dryRunPlan = createCfsCertificationDryRunPlan(targetSource, shadowRecord, commandKind);
+  const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
+  const viewModel = createCfsCertificationPanelViewModel({
+    printer: {
+      displayName: hostname,
+      model: rawInfo.model || rawInfo.reportedModel || target?.model || "",
+      firmwareVersion: rawInfo.version || rawInfo.firmwareVersion || "",
+      deviceId: shadowRecord?.deviceId || "",
+      sessionId: shadowRecord?.sessionId || "",
+      transportKind: "ws9999",
+      active: getConnectionState(hostname) === "connected" && shadowRecord?.state !== "closed",
+      state: shadowRecord?.lastState?.status?.printState || shadowRecord?.lastState?.print?.state || "",
+    },
+    materialViewModel,
+    targetSource,
+    command: {
+      commandKind,
+      certificationStatus: dryRunPlan?.details?.semanticStatus || "uncertified",
+    },
+    dryRunPlan,
+    execution: machine.runtimeData?.cfsCertificationExecution || {},
+    evidence: machine.runtimeData?.cfsCertificationEvidence || {},
+    export: {
+      captureId: machine.runtimeData?.cfsCertificationCaptureId || "",
+      fixtureId: machine.runtimeData?.cfsCertificationFixtureId || "",
+    },
+  });
+  return {
+    materialViewModel,
+    targetSource,
+    dryRunPlan,
+    viewModel,
+  };
+}
+
+/**
+ * CFS Certificationパネルの再描画判定signatureを生成する。
+ *
+ * 【詳細説明】
+ * - ViewModelの `generatedAt` はsnapshot生成時刻で毎秒変わるため、差分判定から除外して不要なDOM再描画を抑える。
+ * - 通信中elapsedSecondsや観測値は `material.observation` / preflight側に残るため、利用者に必要な変化は保持される。
+ *
+ * @private
+ * @function createCfsCertificationPanelSignature
+ * @param {object} viewModel - Certificationパネル用ViewModel
+ * @returns {string} 再描画判定signature
+ */
+function createCfsCertificationPanelSignature(viewModel) {
+  return JSON.stringify({
+    printer: viewModel?.printer,
+    material: viewModel?.material,
+    command: viewModel?.command,
+    dryRun: viewModel?.dryRun,
+    preflight: viewModel?.preflight,
+    arm: viewModel?.arm,
+    liveSend: viewModel?.liveSend,
+    execution: viewModel?.execution,
+    evidence: viewModel?.evidence,
+    export: viewModel?.export,
+  });
+}
+
+/**
+ * Certification証跡bundleをファイルとして保存する。
+ *
+ * 【詳細説明】
+ * - reviewerへ渡すJSON/NDJSONをUIから取り出せるようにする。ZIPは将来実装のため、この関数ではJSON系だけを扱う。
+ *
+ * @private
+ * @function downloadCfsCertificationExportBundle
+ * @param {string} hostname - 対象ホスト名
+ * @param {string} format - export形式
+ * @param {object} bundle - export bundle
+ * @returns {void}
+ */
+function downloadCfsCertificationExportBundle(hostname, format, bundle) {
+  if (format === "zip") {
+    showAlert("ZIPエクスポートは未実装です。JSONまたはNDJSONを使用してください。", "info");
+    return;
+  }
+  const safeHost = String(hostname || "printer").replace(/[^a-zA-Z0-9_-]+/g, "_");
+  const payload = format === "ndjson"
+    ? (Array.isArray(bundle?.events) ? bundle.events : []).map((event) => JSON.stringify(event)).join("\n")
+    : JSON.stringify(bundle || {}, null, 2);
+  const blob = new Blob([payload], { type: format === "ndjson" ? "application/x-ndjson" : "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${safeHost}-cfs-certification.${format === "ndjson" ? "ndjson" : "json"}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * CFS Debug / Certificationパネルを初期化する。
+ *
+ * 【詳細説明】
+ * - B Hybrid案に従い、日常監視用フィラメントカードとは別に、read-only probe / dry-run / evidence exportを広く表示する。
+ * - LIVE送信handlerは未接続のままにし、実機certification登録前に物理操作が走らない状態を維持する。
+ *
+ * @private
+ * @function initCfsCertificationPanel
+ * @param {HTMLElement} body - パネル本体
+ * @param {string} hostname - 対象ホスト名
+ * @returns {void}
+ */
+function initCfsCertificationPanel(body, hostname) {
+  if (!body || !hostname) return;
+  let container = body.querySelector(".cfs-cert-panel-root");
+  if (!container) {
+    container = document.createElement("div");
+    container.className = "cfs-cert-panel-root";
+    body.replaceChildren(container);
+  }
+
+  if (body._cfsCertificationRefreshTimer) {
+    clearInterval(body._cfsCertificationRefreshTimer);
+    body._cfsCertificationRefreshTimer = null;
+  }
+  body._cfsCertificationPanel?.destroy?.();
+  body._cfsCertificationPanel = null;
+
+  const renderOptions = {
+    onProbeBoxsInfo: async () => {
+      try {
+        await sendCommand("get", { boxsInfo: 1 }, hostname);
+        showAlert("boxsInfo取得を要求しました。応答は監視パネルへ反映されます。", "info");
+      } catch (error) {
+        showAlert(`boxsInfo取得に失敗しました: ${error?.message || error}`, "error");
+      }
+    },
+    onProbeInfo: async () => {
+      const baseUrl = getDisplayBaseUrl(hostname) || (getDeviceIp(hostname) ? `http://${getDeviceIp(hostname)}` : "");
+      if (!baseUrl) {
+        showAlert("/info取得先URLを解決できません。", "error");
+        return;
+      }
+      try {
+        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/info`, { method: "GET" });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        const machine = monitorData.machines[hostname] ||= {};
+        machine.runtimeData ||= {};
+        machine.runtimeData.cfsCertificationEvidence ||= {};
+        machine.runtimeData.cfsCertificationEvidence.info = {
+          observedAt: new Date().toISOString(),
+          payload,
+        };
+        showAlert("/infoを取得しました。Certification証跡へ反映します。", "success");
+      } catch (error) {
+        showAlert(`/info取得に失敗しました: ${error?.message || error}`, "error");
+      }
+    },
+    onExport: (format, bundle) => {
+      downloadCfsCertificationExportBundle(hostname, format, bundle || createCfsCertificationExportBundle(
+        createCfsCertificationRenderableState(hostname).viewModel
+      ));
+    },
+  };
+
+  const initialState = createCfsCertificationRenderableState(hostname);
+  let signature = createCfsCertificationPanelSignature(initialState.viewModel);
+  const panel = renderCfsCertificationPanel(container, initialState.viewModel, renderOptions);
+  body._cfsCertificationPanel = panel;
+  body._cfsCertificationRefreshTimer = setInterval(() => {
+    try {
+      const nextState = createCfsCertificationRenderableState(hostname);
+      const nextSignature = createCfsCertificationPanelSignature(nextState.viewModel);
+      if (nextSignature !== signature) {
+        panel.update(nextState.viewModel);
+        signature = nextSignature;
+      }
+    } catch (error) {
+      console.warn("[panel-init] CFS certification panel 更新エラー:", error);
+    }
+  }, 1000);
 }
 
 /**
@@ -1434,6 +1743,7 @@ export function registerAllPanelInits() {
   registerPanelInit("camera", initCameraPanel);
   registerPanelInit("head-preview", initHeadPreviewPanel);
   registerPanelInit("filament", initFilamentPanel);
+  registerPanelInit("cfs-certification", initCfsCertificationPanel);
   registerPanelInit("status", initStatusPanel);
   registerPanelInit("control-cmd", initControlCmdPanel);
   registerPanelInit("control-temp", initControlTempPanel);
@@ -1486,6 +1796,14 @@ export function registerAllPanelInits() {
     preview?.destroy?.();
     if (window._filamentPreviews) window._filamentPreviews.delete(hostname);
     body._filamentPreview = null;
+  });
+  registerPanelDestroy("cfs-certification", (body) => {
+    if (body._cfsCertificationRefreshTimer) {
+      clearInterval(body._cfsCertificationRefreshTimer);
+      body._cfsCertificationRefreshTimer = null;
+    }
+    body._cfsCertificationPanel?.destroy?.();
+    body._cfsCertificationPanel = null;
   });
   registerPanelDestroy("file-list", (body, hostname) => {
     /* アップロード UI レジストリから解除し detached DOM 参照を残さない */

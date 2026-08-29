@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - {@link createGridStackMock}：GridStack の最小モックを生成
  *
- * @version 1.390.1365 (PR #432)
+ * @version 1.390.1469 (PR #436)
  * @since   1.390.1365 (PR #432)
- * @lastModified 2026-08-09 16:21:02
+ * @lastModified 2026-08-29 18:20:00
  * -----------------------------------------------------------
  * @todo
  * - なし
@@ -182,5 +182,22 @@ describe("dashboard_panel_factory recreatePanelsForHost", () => {
       fontSize: "14px",
     });
     expect(mockState.monitorData.appSettings.panelLayout[0].fontSize).toBe("14px");
+  });
+
+  it("CFS Debug / Certificationパネルをper-hostの追加候補として公開する", async () => {
+    const { getPanelTypes } = await import("../../3dp_lib/dashboard_panel_factory.js");
+
+    const cfsPanelType = getPanelTypes().find((panelType) => panelType.id === "cfs-certification");
+
+    expect(cfsPanelType).toMatchObject({
+      id: "cfs-certification",
+      label: "CFS認証",
+      templateId: "panel-tpl-cfs-certification",
+      defaultW: 32,
+      defaultH: 24,
+      minW: 8,
+      minH: 10,
+      perHost: true,
+    });
   });
 });
