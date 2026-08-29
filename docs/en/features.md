@@ -3,12 +3,24 @@
 This document describes each component of the 3dpmon dashboard and
 highlights what can be controlled or managed from each section.
 
+## Current Support Scope
+
+| Family | Monitoring | Camera | Filament Supply | Print Start | Standalone CFS Control |
+| --- | --- | --- | --- | --- | --- |
+| Creality K1 / K1C / K1 Max family | Supported | MJPEG | External spool | Existing path | N/A |
+| K2 Pro Combo / CFS | Supported | WebRTC | External spool + 0-4 CFS units, read-only | Guarded CFS-aware path | Disabled |
+| K1C + CFS-C | Implementation foundation / live certification pending | Model dependent | Read-only provider foundation | Certification pending | Disabled |
+| Moonraker / IR3 V2 | Supported through a separate protocol path | Moonraker-family path | Separate from K1/K2 CFS authority | Separate path | N/A |
+
+> [!IMPORTANT]
+> In v2.2.1044 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation and assignment evidence are available.
+
 ## Electron App
 
 3dpmon runs as an Electron desktop application. This provides native
-window management, automatic dependency handling via `start.bat`, and
+window management, startup through `npm run start` or the packaged installer, and
 full access to local file system features. A browser-based mode via
-HTTP server is also supported as an alternative.
+`npm run start:http` is also supported as an alternative.
 
 ## Multi-Printer Support
 
@@ -62,6 +74,8 @@ A modal dialog for managing all printer connections:
 Displays the live camera stream and current status indicators per
 printer. Buttons are available to pause, resume or stop the active job.
 Nozzle or bed temperature adjustments can also be made here.
+K1-family printers use MJPEG, while K2-family printers use the observed
+WebRTC camera service for live video.
 
 ## Head Preview
 
@@ -74,6 +88,9 @@ Shows the remaining filament on a 3D spool diagram. The amount is
 updated automatically after each print and warns when running low.
 Each printer can have a different spool mounted via per-host spool
 tracking.
+For K2/CFS and K1C/CFS-C, 3dpmon also shows read-only device-observed
+material sources separately from the manual spool ledger, keeping the
+external spool distinct from CFS slots.
 
 ## Status
 
@@ -144,13 +161,19 @@ automatically and low inventory warnings are displayed.
   spool via `hostSpoolMap`.
 - Usage consumption is correctly attributed to each printer based on
   the hostname.
+- CFS/CFS-C loaded state, color, remaining percentage, printer-selected
+  state, and assignment evidence are saved as read-only
+  `materialSourceObservations`; they do not automatically update manual
+  spool mounts or confirmed usage history.
 
 ## Storage Settings
 
 Data is stored in IndexedDB (preferred) with a localStorage fallback.
-Full data export in v2.00 format and import supporting both v1.40 and
-v2.00 formats are available. Storage writes are throttled with a
-2-second interval, and video history is capped at 500 entries.
+Full data export and import are available for the current storage format.
+3dpmon v2.2.0 and later do not directly import legacy v1.x / v2.0 storage
+formats; migrate through v2.1.017 LTS when upgrading from older releases.
+Storage writes are throttled with a 2-second interval, and video history
+is capped at 500 entries.
 
 ## Command Palette
 

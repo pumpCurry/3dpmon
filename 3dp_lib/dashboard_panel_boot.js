@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link bootPanelSystem}：パネルシステムを起動
  *
- * @version 1.390.1368 (PR #432)
+ * @version 1.390.1469 (PR #436)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-25 00:00:00
+ * @lastModified 2026-08-29 18:20:00
  * -----------------------------------------------------------
  * @todo
  * - テンプレート抽出の自動化改善
@@ -163,7 +163,8 @@ function _convertCardsToTemplates() {
     ["panel-tpl-production", "production-panel-root"],
     ["panel-tpl-job-cost", "stats-panel-root"],
     ["panel-tpl-host-ranking", "stats-panel-root"],
-    ["panel-tpl-material-report", "stats-panel-root"]
+    ["panel-tpl-material-report", "stats-panel-root"],
+    ["panel-tpl-cfs-certification", "cfs-cert-panel-root"]
   ]) {
     if (!document.getElementById(tplId)) {
       const tpl = document.createElement("template");

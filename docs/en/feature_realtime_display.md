@@ -4,9 +4,14 @@ This section describes the real-time monitoring features in 3dpmon. By combining
 
 ## Main Features
 - Stream each printer's built-in camera in its own panel
+- Use MJPEG for K1-family printers and the observed WebRTC camera service
+  for K2-family printers. K2 `/info` camera values are retained as
+  identity/transport evidence rather than treated as a K1-style MJPEG URL.
 - Plot nozzle and bed temperatures with live line charts, isolated per printer
 - Charts retain history so you can review changes over time
 - All displays update on a 500ms aggregator cycle for smooth, low-overhead rendering
+- Camera connection failures show retry/cancel state instead of spinning
+  indefinitely.
 
 ## Per-Host Data Isolation
 

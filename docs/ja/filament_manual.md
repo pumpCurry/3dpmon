@@ -7,6 +7,10 @@
 - **在庫管理**: フィラメント種別ごとに未使用スプール数を記録し、交換時に自動で残数を更新します。
 - **プリセット管理**: よく使うフィラメントをプリセットとして登録し、交換操作や在庫管理に活用します。
 - **per-host スプール装着**: 複数プリンタ環境で、各プリンタに異なるスプールを装着・管理します。
+- **機器観測フィラメント**: K2/CFS や K1C/CFS-C が報告する外部スプール、CFS unit、CFS slot を read-only 情報として表示します。
+
+> [!IMPORTANT]
+> `hostSpoolMap` は3DPmonが残量台帳として管理する手動スプールの装着情報です。K2/CFS や K1C/CFS-C から取得した機器観測フィラメントは `materialSourceObservations` に保存し、通常スプールとして自動装着したり、使用履歴へ自動確定したりしません。
 
 ## 2. データ構造
 
@@ -18,7 +22,8 @@ monitorData = {
   usageHistory: [ /* 印刷ごとの使用履歴 */ ],
   filamentPresets: [ /* プリセット定義 */ ],
   filamentInventory: [ /* 未使用在庫数 */ ],
-  hostSpoolMap: { /* per-host 装着スプール */ }
+  hostSpoolMap: { /* per-host 装着スプール */ },
+  materialSourceObservations: { /* 機器観測フィラメントの最終read-only観測 */ }
 };
 ```
 
@@ -29,6 +34,7 @@ monitorData = {
 | `filamentPresets` | グローバル | メーカー・材料・色のテンプレート。全プリンタで共有 |
 | `filamentInventory` | グローバル | プリセットIDごとの在庫本数。全プリンタで共有 |
 | `hostSpoolMap` | **per-host** | プリンタごとの装着スプールID |
+| `materialSourceObservations` | **per-device observation** | K2/CFS・K1C/CFS-C の外部スプール/CFS slot最終観測。台帳authorityではない |
 
 ### hostSpoolMap (per-host スプール装着)
 `hostSpoolMap` はプリンタのホスト名をキー、装着中のスプールIDを値とするマッピングです。
@@ -44,6 +50,7 @@ monitorData.hostSpoolMap = {
 - 旧バージョンのグローバル `currentSpoolId` からの自動移行に対応しています
 - `hostSpoolMap` に未登録のホストは `null` (スプール未装着) として扱われます
 - スプール交換操作は対象プリンタの hostname を指定して行います
+- K2/CFS や K1C/CFS-C の CFS slot表示は `hostSpoolMap` とは別枠であり、手動スプール未装着でも機器観測フィラメントとして表示される場合があります
 
 ### 各フィールドの詳細
 - **filamentSpools**: スプールID、色、材質、残量などを保持します。どのプリンタに装着されているかは `hostSpoolMap` で管理します。

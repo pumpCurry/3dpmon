@@ -1,5 +1,8 @@
 # 3dpmon v2.2.1043 リリースノート
 
+> [!NOTE]
+> この文書は v2.2.1043 pre-release の履歴用リリースノートです。v2.2.1043 のtag/releaseは変更せず保持しています。PR #436 の後続Release Candidateは v2.2.1044 です。
+
 ## 日本語
 
 3dpmon v2.2.1043 は、K2 Pro Combo / CFS を中心に、Printer Core v3 の監視・CFS対応印刷開始ガード・安全な操作準備を進めたリリース候補です。
@@ -43,9 +46,12 @@
 - `3dpmon-2.2.1043-setup.exe.blockmap`
 - `release-manifest-2.2.1043.json`
 
-公開時は `release-manifest-2.2.1043.json` を添付し、最終commit、build日時、各成果物のSHA256をmanifestで確認できるようにします。
+公開Releaseには `release-manifest-2.2.1043.json` を添付済みです。最終commit、build日時、各成果物のSHA256はmanifestで確認できます。
 
 ## English
+
+> [!NOTE]
+> This document is the historical release note for the v2.2.1043 pre-release. The v2.2.1043 tag/release is retained as-is. The subsequent Release Candidate for PR #436 is v2.2.1044.
 
 3dpmon v2.2.1043 is a release-candidate build focused on Printer Core v3 monitoring, K2 Pro Combo / CFS support, guarded CFS-aware print start, and safer command-readiness foundations.
 
@@ -88,4 +94,4 @@
 - `3dpmon-2.2.1043-setup.exe.blockmap`
 - `release-manifest-2.2.1043.json`
 
-The release will include `release-manifest-2.2.1043.json` so the final commit, build timestamp, and SHA256 for each artifact can be verified from the manifest.
+The published release includes `release-manifest-2.2.1043.json` so the final commit, build timestamp, and SHA256 for each artifact can be verified from the manifest.

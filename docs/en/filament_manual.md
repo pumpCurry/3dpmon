@@ -10,6 +10,10 @@ help track spool changes, remaining stock and per-printer consumption.
 - **Inventory**: Tracks the number of unused spools by material and updates the count automatically when switching spools.
 - **Presets**: Stores commonly used filament types for quick selection and stock management.
 - **Per-Host Mounting**: Each printer tracks its currently mounted spool independently via `hostSpoolMap`.
+- **Device-Observed Materials**: K2/CFS and K1C/CFS-C can report the external spool, CFS units, and CFS slots as read-only material observations.
+
+> [!IMPORTANT]
+> `hostSpoolMap` is the manual spool mount ledger managed by 3DPmon. Device-observed materials from K2/CFS or K1C/CFS-C are stored in `materialSourceObservations`; they are not automatically mounted as normal spools and are not automatically committed to usage history.
 
 ## 2. Data Structure
 
@@ -20,7 +24,8 @@ monitorData = {
   usageHistory: [ /* job history */ ],
   filamentPresets: [ /* preset definitions */ ],
   filamentInventory: [ /* available stock */ ],
-  hostSpoolMap: { /* per-host spool assignments */ }
+  hostSpoolMap: { /* per-host spool assignments */ },
+  materialSourceObservations: { /* last read-only material observations from devices */ }
 };
 ```
 
@@ -43,6 +48,9 @@ printers:
 - **hostSpoolMap** -- Maps each printer hostname to its currently
   mounted spool ID. This allows different printers to have different
   spools loaded simultaneously.
+- **materialSourceObservations** -- Stores the last read-only observation
+  of external spools and CFS slots reported by K2/CFS or K1C/CFS-C. This
+  is monitoring evidence, not ledger authority.
 
 ```javascript
 // Example hostSpoolMap
@@ -55,6 +63,10 @@ monitorData.hostSpoolMap = {
 When a print job finishes, the filament consumption is deducted from
 the spool assigned to that specific printer in `hostSpoolMap`, ensuring
 accurate per-host usage tracking.
+
+For K2/CFS and K1C/CFS-C, CFS slot display is separate from
+`hostSpoolMap`. A printer can show device-observed material sources even
+when no manual 3DPmon spool is mounted.
 
 ## 3. Operation
 

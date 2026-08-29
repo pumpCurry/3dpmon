@@ -1,9 +1,11 @@
 # 3dpmon Operation Guide
 
 ## Operating Specifications
-- Dashboard for monitoring Creality K1/K2 series 3D printers
+- Dashboard for monitoring Creality K1/K2-family, K2 Pro Combo / CFS, and Moonraker / IR3 V2-family 3D printers
 - Supports simultaneous monitoring of multiple printers with per-host data isolation
-- Communicates with each printer via WebSocket on port 9999
+- Creality K1/K2-family printers use the Creality WebSocket path,
+  normally on port `9999`
+- Moonraker / IR3 V2 use a separate Moonraker JSON-RPC/WebSocket path
 - Displays camera stream, temperature chart and print status in real time per printer
 - Includes remote commands, file management and notification system
 - GridStack-based panel system with drag-and-drop layout customization
@@ -44,6 +46,11 @@
 > window management. The browser mode is available as a lightweight
 > alternative but may have limitations with certain features.
 
+> **Important:** In v2.2.1044 RC, standalone CFS/CFS-C load, unload,
+> feed, retract and slot select are disabled. K2/CFS print start uses a
+> guarded path and the CFS Debug / Certification panel LIVE SEND is not
+> enabled as a production command.
+
 ## Connecting to Printers
 
 ### Connection Manager
@@ -66,12 +73,11 @@ connection is managed independently with its own reconnection logic.
 When launching the dashboard for the first time there is no saved
 network configuration. Use the connection manager to add your first
 printer. K1 camera images stream from the MJPEG service on port `8080`
-by default. K2 series printers store the camera service on port `8000`,
-but current K2 firmware exposes it as WebRTC/HTML rather than the K1
-MJPEG endpoint, so the camera panel shows an explicit unsupported state
-instead of retrying a false MJPEG connection. K2 print history and file
-lists are requested over WS9999 first and can fall back to the read-only
-HTTP API on port `4408`.
+by default. K2 series printers keep `/info` camera values as identity and
+transport evidence, while the camera panel connects to the observed
+WebRTC camera service for live video. K2 print history and file lists are
+requested over WS9999 first and can fall back to the read-only HTTP API
+on port `4408`.
 
 ## Unlocking Audio
 Most browsers block audio playback until the user interacts with the
@@ -149,6 +155,11 @@ sub-modal accessible from its connection entry:
   can have a different spool mounted simultaneously.
 - Filament spool definitions, presets and inventory are shared globally
   across all printers.
+- Device-observed material sources from K2/CFS and K1C/CFS-C are shown
+  separately from the manual spool ledger. CFS slot color, remaining
+  percentage, loaded state, and printer-selected state are visible, but
+  those observations do not automatically mount a 3DPmon spool or commit
+  ledger usage.
 
 ```html
 <div id="filament-preview"></div>
