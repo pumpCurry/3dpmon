@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1472 (PR #436)
+ * @version 1.390.1477 (PR #436)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-29 21:19:45
+ * @lastModified 2026-08-29 22:41:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -24,7 +24,7 @@
  * @vitest-environment jsdom
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockState = vi.hoisted(() => ({
   renderMaterialTopologyPanel: vi.fn(),
@@ -216,7 +216,45 @@ function createFilamentPanelBody() {
   return body;
 }
 
+const activePanelRecords = [];
+
+/**
+ * 初期化したパネルをテスト終了時の自動破棄対象として登録する。
+ *
+ * 【詳細説明】
+ * - フィラメントパネルは1秒周期の再描画timerを持つため、テスト内で明示破棄を忘れると
+ *   後続テストの一回限りmockを先に消費してしまう。
+ * - 実アプリではパネル破棄時にtimerを止めるため、unit testでも同じライフサイクルを再現する。
+ *
+ * @function initializeTrackedPanel
+ * @param {Function} initializePanel - dashboard_panel_init が公開する初期化関数
+ * @param {string} panelType - 初期化するパネル種別
+ * @param {HTMLElement} panelBody - 初期化対象のパネルbody
+ * @param {string} hostname - 対象ホスト名
+ * @returns {void}
+ */
+function initializeTrackedPanel(initializePanel, panelType, panelBody, hostname) {
+  initializePanel(panelType, panelBody, hostname);
+  activePanelRecords.push({
+    panelType,
+    panelBody,
+    hostname,
+  });
+}
+
 describe("dashboard_panel_init CFS control hook", () => {
+  afterEach(async () => {
+    if (activePanelRecords.length > 0) {
+      const { destroyPanel } = await import("../../3dp_lib/dashboard_panel_init.js");
+      const records = activePanelRecords.splice(0).reverse();
+      records.forEach((record) => {
+        destroyPanel(record.panelType, record.panelBody, record.hostname);
+      });
+    }
+    vi.useRealTimers();
+    document.body.innerHTML = "";
+  });
+
   beforeEach(() => {
     vi.resetModules();
     mockState.renderMaterialTopologyPanel.mockReset();
@@ -324,7 +362,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(body.classList.contains("filament-panel-cfs-mode")).toBe(true);
     expect(body.querySelector("#filament-change-btn")?.disabled).toBe(true);
@@ -442,7 +480,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -496,7 +534,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -546,7 +584,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -583,7 +621,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("cfs-certification", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "cfs-certification", body, "K2Pro");
 
     expect(body.textContent).toContain("K2Pro / --");
     expect(body.textContent).not.toContain("K2Pro / F012");
@@ -625,7 +663,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("cfs-certification", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "cfs-certification", body, "K2Pro");
 
     expect(body.textContent).toContain("K2Pro / F012");
     expect(body.textContent).not.toContain("STALE_MODEL");
@@ -677,7 +715,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -738,7 +776,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -775,7 +813,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -819,7 +857,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -863,7 +901,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
       enabled: false,
@@ -914,7 +952,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     } = await import("../../3dp_lib/dashboard_panel_init.js");
 
     registerAllPanelInits();
-    initializePanel("filament", body, "K2Pro");
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
     const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
     expect(integrationOptions).toEqual({
@@ -993,7 +1031,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       } = await import("../../3dp_lib/dashboard_panel_init.js");
 
       registerAllPanelInits();
-      initializePanel("filament", body, "K2Pro");
+      initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
 
       const [, initialViewModel, initialOptions] = mockState.renderMaterialTopologyPanel.mock.calls[0];
       expect(initialViewModel.authority.canSendCommands).toBe(false);
