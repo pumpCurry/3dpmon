@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1471 (PR #436)
+ * @version 1.390.1472 (PR #436)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:07:18
+ * @lastModified 2026-08-29 21:19:45
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -307,5 +307,130 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(viewModel.arm.reason).toContain("ARM期限切れ");
     expect(viewModel.dryRun.status).toBe("mismatch");
     expect(viewModel.liveSend.enabled).toBe(false);
+  });
+
+  it.each([
+    ["commandKind欠落", { sourceId: "cfs:1:slot:2", semanticStatus: "certified" }, "dry-run-command-missing"],
+    ["sourceId欠落", { commandKind: "cfs-load", semanticStatus: "certified" }, "dry-run-source-missing"],
+    ["commandKind/sourceId欠落", { semanticStatus: "certified" }, "dry-run-command/source-missing"],
+  ])("dry-run detailsの%sは現在値fallbackで補わずLIVE不可にする", (_label, details, expectedReason) => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details,
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    expect(viewModel.dryRun.status).toBe("missing");
+    expect(viewModel.dryRun.reason).toBe(expectedReason);
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe(expectedReason);
+  });
+
+  it("ARMとdry-runがOKでもpreflight fail時はdry-run-okではなく失敗項目をLIVE不可理由にする", () => {
+    const staleViewModel = createMaterialViewModel();
+    staleViewModel.summary.topologyState = "stale";
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: staleViewModel,
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    expect(viewModel.arm.valid).toBe(true);
+    expect(viewModel.dryRun.status).toBe("ok");
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:topology-fresh");
+  });
+
+  it("selected-source WARNだけでは将来の認証済みLIVE候補をhard gateしない", () => {
+    const materialViewModel = createMaterialViewModel();
+    materialViewModel.units[0].slots[1].selected = false;
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel,
+      targetSource: materialViewModel.units[0].slots[1],
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    expect(viewModel.preflight.find((item) => item.key === "selected-source")).toMatchObject({
+      state: "warn",
+    });
+    expect(viewModel.liveSend.enabled).toBe(true);
   });
 });

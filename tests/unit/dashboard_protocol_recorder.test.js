@@ -1,5 +1,25 @@
 /**
- * @fileoverview dashboard_protocol_recorder.js の単体テスト
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Printer Core v3 プロトコル記録単体テスト
+ * @file dashboard_protocol_recorder.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_protocol_recorder_test
+ *
+ * 【機能内容サマリ】
+ * - Protocol Recorder のfixture exportとredaction契約を検証
+ * - runtime session IDと公開fixture provenance IDの秘匿境界を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1472 (PR #436)
+ * @since   1.390.1290 (PR #432)
+ * @lastModified 2026-08-29 21:19:45
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -101,6 +121,8 @@ describe("ProtocolRecorder", () => {
       ssid: "factory-lab",
       hostname: "K2Pro-69E7",
       printId: 123456789,
+      sessionId: "session-runtime-001",
+      probeSessionId: "probe-runtime-001",
       rfid: "RFID-RAW-001",
       fileName: "customer-part.gcode",
       console: "seen 58:41:46:CF:FA:99 at fe80::5841:46ff:fecf:fa99 printing nested-demo.gcode",
@@ -123,6 +145,8 @@ describe("ProtocolRecorder", () => {
     expect(text).not.toContain("factory-lab");
     expect(text).not.toContain("K2Pro-69E7");
     expect(text).not.toContain("123456789");
+    expect(text).not.toContain("session-runtime-001");
+    expect(text).not.toContain("probe-runtime-001");
     expect(text).not.toContain("RFID-RAW-001");
     expect(text).not.toContain("customer-part.gcode");
     expect(text).not.toContain("nested-demo.gcode");
@@ -134,6 +158,8 @@ describe("ProtocolRecorder", () => {
     expect(text).toContain("<SSID_001>");
     expect(text).toContain("<HOSTNAME_001>");
     expect(text).toContain("<ID_001>");
+    expect(text).toContain("<ID_002>");
+    expect(text).toContain("<ID_003>");
     expect(text).toContain("<RFID_001>");
     expect(text).toContain("<FILE_001>.gcode");
     expect(fixture.events[0].payload.url).toBe("http://<IP_001>/upload/<FILE_001>.gcode");

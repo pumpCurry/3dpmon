@@ -18,9 +18,9 @@
  * - {@link redactProtocolValue}：任意値を recorder と同じ規則で秘匿化
  * - {@link toFixtureNdjson}：fixture イベント配列を NDJSON 文字列へ変換
  *
- * @version 1.390.1471 (PR #436)
+ * @version 1.390.1472 (PR #436)
  * @since   1.390.1290 (PR #432)
- * @lastModified 2026-08-29 21:07:18
+ * @lastModified 2026-08-29 21:19:45
  * -----------------------------------------------------------
  * @todo
  * - Gate 0 実機キャプチャ UI との接続
@@ -166,11 +166,11 @@ const HOSTNAME_KEY_PATTERN = /(?:^hostname$|reportedHostname|deviceName|printerN
  * 印刷ジョブや機体固有 ID 系キーを判定する正規表現。
  *
  * 【詳細説明】
- * - 数値だけの printId / jobId / token も string に変換して秘匿する。
+ * - 数値だけの printId / jobId / token や、runtime session ID も string に変換して秘匿する。
  *
  * @constant {RegExp}
  */
-const UNIQUE_ID_KEY_PATTERN = /(?:^printId$|^jobId$|^taskId$|^deviceId$|^machineId$|^uid$|^uuid$)/i;
+const UNIQUE_ID_KEY_PATTERN = /(?:^printId$|^jobId$|^taskId$|^deviceId$|^machineId$|^uid$|^uuid$|^sessionId$|probeSessionId|connectionSessionId)/i;
 
 /**
  * RFID 系キーを判定する正規表現。

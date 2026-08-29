@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1471 (PR #436)
+ * @version 1.390.1472 (PR #436)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-29 21:07:18
+ * @lastModified 2026-08-29 21:19:45
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -587,6 +587,48 @@ describe("dashboard_panel_init CFS control hook", () => {
 
     expect(body.textContent).toContain("K2Pro / --");
     expect(body.textContent).not.toContain("K2Pro / F012");
+
+    destroyPanel("cfs-certification", body, "K2Pro");
+  });
+
+  it("Gate19 debug: staleな第一候補infoがcurrentな第二候補infoを隠さない", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      dest: "192.0.2.10:9999",
+      printerCoreV3Info: {
+        model: "STALE_MODEL",
+        version: "0.0.1",
+        probeSessionId: "previous-runtime-probe-session",
+        connectionGeneration: 7,
+        connectionDest: "192.0.2.10:9999",
+        connectionHost: "K2Pro",
+      },
+      printerCoreV3HttpInfo: {
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: "test-runtime-probe-session",
+        connectionGeneration: 7,
+        connectionDest: "192.0.2.10:9999",
+        connectionHost: "K2Pro",
+      },
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+      },
+    };
+    const body = document.createElement("div");
+    const {
+      destroyPanel,
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializePanel("cfs-certification", body, "K2Pro");
+
+    expect(body.textContent).toContain("K2Pro / F012");
+    expect(body.textContent).not.toContain("STALE_MODEL");
 
     destroyPanel("cfs-certification", body, "K2Pro");
   });

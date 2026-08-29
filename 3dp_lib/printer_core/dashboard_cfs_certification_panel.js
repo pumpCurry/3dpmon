@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1471 (PR #436)
+ * @version 1.390.1472 (PR #436)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:07:18
+ * @lastModified 2026-08-29 21:19:45
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -365,8 +365,22 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
       reason: dryRunPlan?.reason || "dry-run-plan-rejected",
     };
   }
-  const planCommandKind = toText(dryRunPlan.details?.commandKind, commandKind);
-  const planSourceId = toText(dryRunPlan.details?.sourceId, targetSource?.sourceId || "");
+  const planCommandKind = toText(dryRunPlan.details?.commandKind);
+  const planSourceId = toText(dryRunPlan.details?.sourceId);
+  const missing = [];
+  if (!planCommandKind) {
+    missing.push("command");
+  }
+  if (!planSourceId) {
+    missing.push("source");
+  }
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      status: "missing",
+      reason: `dry-run-${missing.join("/")}-missing`,
+    };
+  }
   const mismatches = [];
   if (planCommandKind !== commandKind) {
     mismatches.push("command");
@@ -386,6 +400,45 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
     status: "ok",
     reason: "dry-run-ok",
   };
+}
+
+/**
+ * LIVE送信の有効化可否と無効理由を生成する。
+ *
+ * 【詳細説明】
+ * - disabled tooltipが`dry-run-ok`のような正常理由にならないよう、ARM、dry-run、preflight、認証の順に
+ *   実際にブロックしている理由だけを返す。
+ * - preflightのwarnは診断情報として残し、failだけをhard gateにする。
+ *
+ * @private
+ * @function createLiveSendReadiness
+ * @param {Array<object>} preflight - preflight行一覧
+ * @param {{valid: boolean, reason: string}} armBinding - ARM判定結果
+ * @param {{valid: boolean, reason: string}} dryRunValidation - dry-run判定結果
+ * @param {string} certificationStatus - certification状態
+ * @returns {{enabled: boolean, reason: string}} LIVE送信readiness
+ */
+function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus) {
+  if (!armBinding.valid) {
+    return { enabled: false, reason: armBinding.reason };
+  }
+  if (!dryRunValidation.valid) {
+    return { enabled: false, reason: dryRunValidation.reason };
+  }
+  const failedPreflightKeys = (Array.isArray(preflight) ? preflight : [])
+    .filter((item) => item?.state === "fail")
+    .map((item) => item.key || item.label || "unknown")
+    .filter(Boolean);
+  if (failedPreflightKeys.length > 0) {
+    return {
+      enabled: false,
+      reason: `preflight-failed:${failedPreflightKeys.join(",")}`,
+    };
+  }
+  if (certificationStatus !== "certified") {
+    return { enabled: false, reason: "certification-uncertified" };
+  }
+  return { enabled: true, reason: "ready" };
 }
 
 /**
@@ -537,10 +590,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     boundCommandKind: toText(options.arm?.boundCommandKind),
   };
   const armBinding = validateArmBinding(arm, printer, targetSource, commandKind, nowMs);
-  const liveSendEnabled = preflight.every((item) => item.state === "ok") &&
-    armBinding.valid &&
-    dryRunValidation.valid &&
-    certificationStatus === "certified";
+  const liveSend = createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus);
   return {
     schemaVersion: CFS_CERTIFICATION_PANEL_SCHEMA_VERSION,
     panel: CERTIFICATION_PANEL_NAME,
@@ -585,8 +635,8 @@ export function createCfsCertificationPanelViewModel(options = {}) {
       reason: armBinding.reason,
     },
     liveSend: {
-      enabled: liveSendEnabled,
-      reason: liveSendEnabled ? "ready" : (armBinding.valid ? dryRunValidation.reason || "preflight-or-certification-ng" : armBinding.reason),
+      enabled: liveSend.enabled,
+      reason: liveSend.reason,
     },
     execution: {
       status: toText(execution.status, "idle"),

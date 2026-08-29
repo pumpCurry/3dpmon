@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1471 (PR #436)
+ * @version 1.390.1472 (PR #436)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-29 21:07:18
+ * @lastModified 2026-08-29 21:19:45
  * -----------------------------------------------------------
  */
 
@@ -222,6 +222,27 @@ function isCurrentPrinterCoreV3Info(info, target = null) {
 }
 
 /**
+ * connection targetから現在起動中の`/info`証跡を選択する。
+ *
+ * 【詳細説明】
+ * - `printerCoreV3Info`が永続化由来で古い場合でも、後続候補に現在probeのHTTP情報があればそれを採用する。
+ * - どの候補も現在scopeに一致しない場合は空objectを返し、authority/表示の両方をfail-closedにする。
+ *
+ * @private
+ * @function selectCurrentPrinterCoreV3Info
+ * @param {object|null|undefined} target - 接続target設定
+ * @returns {object} 現在起動中の`/info`証跡、または空object
+ */
+function selectCurrentPrinterCoreV3Info(target) {
+  const candidates = [
+    target?.printerCoreV3Info,
+    target?.printerCoreV3HttpInfo,
+    target?.httpInfo,
+  ];
+  return candidates.find((info) => isCurrentPrinterCoreV3Info(info, target)) || {};
+}
+
+/**
  * target/runtimeからCFS control certification用のscopeを作る。
  *
  * 【詳細説明】
@@ -234,8 +255,7 @@ function isCurrentPrinterCoreV3Info(info, target = null) {
  * @returns {object} certification scope
  */
 function createCfsControlCertificationScope(target) {
-  const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
-  const info = isCurrentPrinterCoreV3Info(rawInfo, target) ? rawInfo : {};
+  const info = selectCurrentPrinterCoreV3Info(target);
   return {
     printerType: target?.printerType || null,
     model: info.model || info.reportedModel || null,
@@ -884,8 +904,7 @@ function createCfsCertificationRenderableState(hostname) {
   const targetSource = selectCfsCertificationTargetSource(materialViewModel);
   const commandKind = target?.materialSystem?.cfsCertification?.commandKind || "cfs-load";
   const dryRunPlan = createCfsCertificationDryRunPlan(targetSource, shadowRecord, commandKind);
-  const rawInfo = target?.printerCoreV3Info || target?.printerCoreV3HttpInfo || target?.httpInfo || {};
-  const currentInfo = isCurrentPrinterCoreV3Info(rawInfo, target) ? rawInfo : {};
+  const currentInfo = selectCurrentPrinterCoreV3Info(target);
   const viewModel = createCfsCertificationPanelViewModel({
     printer: {
       displayName: hostname,
