@@ -15,12 +15,14 @@
 - K2カメラのWebRTC表示とパネル内の映像収まりを改善しました。
 - カメラ接続中表示のスピナーがカード幅や文字折り返しで楕円に歪まないよう、カメラ専用スピナーとして正方形寸法を固定しました。
 - K2のファイル一覧、印刷履歴、サムネイル表示の互換性を改善しました。
+- 通常のフィラメント監視カードとは別に、開発者/テスター向けの CFS Debug / Certification panel を追加しました。read-only probe、preflight、dry-run payload、ARM状態、before/after evidence、protocol event export を分離して確認できます。
 - Printer Core v3 のCFS操作UI状態を追加しました。ただし v2.2.1044 では、CFS/CFS-C の standalone load / unload / feed / retract / slot select はすべて無効です。
 - 再起動後は、保存済みの古い `/info` やCFS観測だけでCFS操作を復活させず、現在起動中の再probeと新しいCFS観測が揃うまで操作を無効化します。
 
 ### 注意事項
 
 - v2.2.1044 の module-owned certification registry は空です。保存済み設定やUI表示だけで、CFS/CFS-C の standalone load / unload / feed / retract / slot select が有効になることはありません。
+- CFS Debug / Certification panel の LIVE SEND は、v2.2.1044 ではproduction commandとして有効化されません。timeout / unknown時のside-effect command自動retryも行いません。
 - K2/CFS print-start は guarded / certification continuing として扱います。実機での print-start、CFS feed、押出、完了までの証跡は継続してGate 21で確認します。
 - Creality純正RFIDフィラメント以外では、機器から残量が報告されない場合があります。その場合、3DPmon側の台帳管理で残量を扱う必要があります。
 - K1C + CFS-C の実機certification、K2/CFS attach / detach / runout / reconnect の長時間確認は継続作業です。
@@ -55,12 +57,14 @@
 - Improves K2 WebRTC camera display and video fitting inside dashboard panels.
 - Keeps the camera connection spinner circular by using a dedicated fixed-size camera spinner class that cannot be stretched by card width or text wrapping.
 - Improves compatibility for K2 file lists, print history, and thumbnail paths.
+- Adds a developer/tester-facing CFS Debug / Certification panel separate from the regular filament monitoring card. It separates read-only probe, preflight, dry-run payload, ARM state, before/after evidence, and protocol event export.
 - Adds Printer Core v3 CFS command UI states. In v2.2.1044, standalone CFS/CFS-C load, unload, feed, retract, and slot select operations are all disabled.
 - After restart, production CFS controls stay disabled until the current runtime re-probes `/info` and observes fresh CFS topology; stale persisted evidence alone is not enough to re-enable control.
 
 ### Notes
 
 - The v2.2.1044 module-owned certification registry is empty. Saved settings or visible UI state cannot enable standalone CFS/CFS-C load, unload, feed, retract, or slot select operations.
+- LIVE SEND in the CFS Debug / Certification panel is not enabled as a production command in v2.2.1044. Side-effect commands are not retried automatically after timeout or unknown results.
 - K2/CFS print start is treated as guarded / certification continuing. Gate 21 will continue collecting evidence for print start, CFS feed, extrusion, and job completion on real hardware.
 - Non-RFID third-party filament may not report remaining percentage from the printer. In that case, remaining material should be managed by the 3DPmon spool ledger.
 - K1C + CFS-C live certification and longer K2/CFS attach, detach, runout, and reconnect certification remain ongoing work.

@@ -7,6 +7,13 @@
 - **Camera UI**: fixes the camera connection spinner so it stays circular inside narrow camera cards and Japanese connection-status text.
 - **Release notes**: bilingual Japanese/English notes are available in `docs/release-notes-v2.2.1044.md`.
 
+## v2.2.1043 (2026-08-28) — Pre-release: Printer Core v3 / K2+CFS RC
+
+- **Historical pre-release**: v2.2.1043 was published as a GitHub pre-release before PR #436. The existing tag/release is retained and is not reused for the PR #436 release candidate.
+- **K2/CFS monitoring**: included Printer Core v3 K2/CFS read-only material observation and guarded print-start preparation.
+- **CFS operation boundary**: standalone CFS/CFS-C load, unload, feed, retract, and slot select remained disabled.
+- **Superseding RC**: v2.2.1044 is the subsequent PR #436 release candidate.
+
 ## v2.2.1042 (2026-08-26) — Hotfix: K2/CFS print authority binding
 
 - **K2/CFS print authority**: explicit CFS print starts now pass through the production command dispatcher, with send-time session, strict F012 certified transport profile evidence, file identity, fresh loaded-slot, and material type/color revalidation before any `colorMatch` / `multiColorPrint` frame is sent.

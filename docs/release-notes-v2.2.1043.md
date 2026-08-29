@@ -1,5 +1,8 @@
 # 3dpmon v2.2.1043 リリースノート
 
+> [!NOTE]
+> この文書は v2.2.1043 pre-release の履歴用リリースノートです。v2.2.1043 のtag/releaseは変更せず保持しています。PR #436 以降の現在のRelease Candidateは v2.2.1044 です。
+
 ## 日本語
 
 3dpmon v2.2.1043 は、K2 Pro Combo / CFS を中心に、Printer Core v3 の監視・CFS対応印刷開始ガード・安全な操作準備を進めたリリース候補です。
@@ -46,6 +49,9 @@
 公開時は `release-manifest-2.2.1043.json` を添付し、最終commit、build日時、各成果物のSHA256をmanifestで確認できるようにします。
 
 ## English
+
+> [!NOTE]
+> This document is the historical release note for the v2.2.1043 pre-release. The v2.2.1043 tag/release is retained as-is. The active Release Candidate for PR #436 and later work is v2.2.1044.
 
 3dpmon v2.2.1043 is a release-candidate build focused on Printer Core v3 monitoring, K2 Pro Combo / CFS support, guarded CFS-aware print start, and safer command-readiness foundations.
 
