@@ -1,8 +1,8 @@
 # Changelog
 
-このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。PR #436のRelease Candidate版は v2.2.1044 であり、tag/release公開後に最終成果物のSHAを確定します。
+このCHANGELOGは、公開tag/releaseと、単独tagを持たない内部開発snapshotの両方を含みます。公開ユーザー向けの最新リリースでは、日本語の要約を先に置き、その後にEnglish summaryを続けます。PR #436のRelease Candidate版は v2.2.1044 であり、最終成果物のSHA256はactual main commitから再生成・検証した後、GitHub Releaseへ記録します。
 
-This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. The PR #436 release-candidate version is v2.2.1044; final artifact hashes are fixed after the tag/release is published.
+This changelog includes both published tags/releases and internal development snapshots that did not receive standalone tags. For current user-facing releases, each entry starts with Japanese notes followed by an English summary. The PR #436 release-candidate version is v2.2.1044; final artifact SHA256 values are generated and verified from the actual main commit before being recorded in the GitHub Release.
 
 ## v2.2.1044 (2026-08-29) — Release Candidate: K2/CFS monitoring, guarded print start, and camera spinner fix
 
