@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1527 (PR #439)
+ * @version 1.390.1530 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 16:50:28
+ * @lastModified 2026-08-31 17:09:29
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -66,6 +66,8 @@ Options:
   --probe-after                   With --send, read boxsInfo after the command.
   --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
   --probe-after-delay-ms <number>  Delay before post-command probe. Default: 1500.
+  --probe-after-count <number>     Number of post-command probes. Default: 1.
+  --probe-after-interval-ms <number> Interval between post-command probes. Default: 1000.
   --output-dir <path>             Write certification-result.json under a timestamped directory.
   --pretty                        Pretty-print JSON result.
   --help                          Show this help.
@@ -125,6 +127,27 @@ const DEFAULT_BOXSINFO_TIMEOUT_MS = 5000;
 const DEFAULT_POST_COMMAND_PROBE_DELAY_MS = 1500;
 
 /**
+ * command送信後に実行するafter-probe回数の既定値。
+ *
+ * 【詳細説明】
+ * - 既定は後方互換のため1回にする。
+ * - 実機debug時は複数回に増やし、CFS commandを再送せずread-only観測だけを時系列化できる。
+ *
+ * @constant {number}
+ */
+const DEFAULT_POST_COMMAND_PROBE_COUNT = 1;
+
+/**
+ * 複数after-probe間の既定待機時間。
+ *
+ * 【詳細説明】
+ * - command後の状態変化が段階的に届く場合に備え、連続read-only probeの間隔を明示する。
+ *
+ * @constant {number}
+ */
+const DEFAULT_POST_COMMAND_PROBE_INTERVAL_MS = 1000;
+
+/**
  * 任意値を空でない文字列へ正規化する。
  *
  * 【詳細説明】
@@ -166,6 +189,8 @@ export function parseArgs(argv = []) {
     probeAfter: false,
     boxsInfoTimeoutMs: DEFAULT_BOXSINFO_TIMEOUT_MS,
     postCommandProbeDelayMs: DEFAULT_POST_COMMAND_PROBE_DELAY_MS,
+    postCommandProbeCount: DEFAULT_POST_COMMAND_PROBE_COUNT,
+    postCommandProbeIntervalMs: DEFAULT_POST_COMMAND_PROBE_INTERVAL_MS,
     outputDir: "",
     pretty: false,
     help: false,
@@ -192,6 +217,8 @@ export function parseArgs(argv = []) {
     else if (arg === "--probe-after") options.probeAfter = true;
     else if (arg === "--boxsinfo-timeout-ms") options.boxsInfoTimeoutMs = Number(next());
     else if (arg === "--probe-after-delay-ms") options.postCommandProbeDelayMs = Number(next());
+    else if (arg === "--probe-after-count") options.postCommandProbeCount = Number(next());
+    else if (arg === "--probe-after-interval-ms") options.postCommandProbeIntervalMs = Number(next());
     else if (arg === "--output-dir") options.outputDir = next();
     else if (arg === "--pretty") options.pretty = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -208,6 +235,16 @@ export function parseArgs(argv = []) {
       options.postCommandProbeDelayMs < 0 ||
       options.postCommandProbeDelayMs > 60000) {
     throw new Error("--probe-after-delay-ms must be between 0 and 60000.");
+  }
+  if (!Number.isInteger(options.postCommandProbeCount) ||
+      options.postCommandProbeCount < 1 ||
+      options.postCommandProbeCount > 60) {
+    throw new Error("--probe-after-count must be between 1 and 60.");
+  }
+  if (!Number.isInteger(options.postCommandProbeIntervalMs) ||
+      options.postCommandProbeIntervalMs < 100 ||
+      options.postCommandProbeIntervalMs > 60000) {
+    throw new Error("--probe-after-interval-ms must be between 100 and 60000.");
   }
   const command = toNonEmptyString(options.command);
   if (!options.help && !SUPPORTED_SLOT_CONTROL_COMMANDS.has(command)) {
@@ -278,6 +315,8 @@ function createProbePlanSummary(options) {
     after: Boolean(options.probeAfter),
     boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
     postCommandProbeDelayMs: options.postCommandProbeDelayMs,
+    postCommandProbeCount: options.postCommandProbeCount,
+    postCommandProbeIntervalMs: options.postCommandProbeIntervalMs,
   };
 }
 
@@ -790,6 +829,7 @@ export async function runK2CfsSlotControlCertification(options) {
     const probes = {
       before: null,
       after: null,
+      afterSeries: [],
     };
     if (options.probeBefore) {
       probes.before = await runStructuredBoxsInfoProbe(ws, {
@@ -848,11 +888,21 @@ export async function runK2CfsSlotControlCertification(options) {
     }
     if (options.probeAfter) {
       await delayMs(options.postCommandProbeDelayMs);
-      probes.after = await runStructuredBoxsInfoProbe(ws, {
-        probeMode: "after",
-        timeoutMs: options.boxsInfoTimeoutMs,
-        targetSourceId: request.payload.sourceId,
-      });
+      for (let index = 0; index < options.postCommandProbeCount; index += 1) {
+        if (index > 0) {
+          await delayMs(options.postCommandProbeIntervalMs);
+        }
+        const probe = await runStructuredBoxsInfoProbe(ws, {
+          probeMode: options.postCommandProbeCount === 1 ? "after" : `after:${index + 1}`,
+          timeoutMs: options.boxsInfoTimeoutMs,
+          targetSourceId: request.payload.sourceId,
+        });
+        probes.afterSeries.push(probe);
+        probes.after = probe;
+        if (probe.status !== "observed") {
+          break;
+        }
+      }
       if (probes.after.status !== "observed") {
         return finalizeCertificationResult({
           ok: false,

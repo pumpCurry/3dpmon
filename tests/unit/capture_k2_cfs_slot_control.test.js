@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1527 (PR #439)
+ * @version 1.390.1530 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 16:50:28
+ * @lastModified 2026-08-31 17:09:29
  */
 
 import { EventEmitter } from "node:events";
@@ -63,6 +63,8 @@ describe("capture_k2_cfs_slot_control", () => {
       after: false,
       boxsInfoTimeoutMs: 5000,
       postCommandProbeDelayMs: 1500,
+      postCommandProbeCount: 1,
+      postCommandProbeIntervalMs: 1000,
     });
   });
 
@@ -110,6 +112,16 @@ describe("capture_k2_cfs_slot_control", () => {
       "-1",
     ])).toThrow("--probe-after-delay-ms must be between 0 and 60000");
     expect(() => parseArgs([
+      ...baseArgs,
+      "--probe-after-count",
+      "0",
+    ])).toThrow("--probe-after-count must be between 1 and 60");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--probe-after-interval-ms",
+      "99",
+    ])).toThrow("--probe-after-interval-ms must be between 100 and 60000");
+    expect(() => parseArgs([
       "--send",
       "--host",
       "192.168.54.153",
@@ -143,6 +155,8 @@ describe("capture_k2_cfs_slot_control", () => {
       probeAfter: true,
       boxsInfoTimeoutMs: 1500,
       postCommandProbeDelayMs: 1500,
+      postCommandProbeCount: 1,
+      postCommandProbeIntervalMs: 1000,
     });
     expect(parseArgs([
       "--command",
@@ -151,8 +165,14 @@ describe("capture_k2_cfs_slot_control", () => {
       "cfs:1:slot:0",
       "--probe-after-delay-ms",
       "2500",
+      "--probe-after-count",
+      "3",
+      "--probe-after-interval-ms",
+      "750",
     ])).toMatchObject({
       postCommandProbeDelayMs: 2500,
+      postCommandProbeCount: 3,
+      postCommandProbeIntervalMs: 750,
     });
   });
 
@@ -531,6 +551,90 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(ws.sentFrames).toHaveLength(3);
     expect(ws.sentFrames[2]).toEqual({ method: "get", params: { boxsInfo: 1 } });
     expect(ws.sentAt[2] - ws.sentAt[1]).toBeGreaterThanOrEqual(20);
+  });
+
+  it("post-command probe count指定時はcommand再送なしでafter観測を複数回採る", async () => {
+    class AfterSeriesProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          const percent = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length * 10;
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [{ id: 0, state: 1, percent }],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+    const ws = new AfterSeriesProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-after",
+        "--probe-after-delay-ms",
+        "0",
+        "--probe-after-count",
+        "3",
+        "--probe-after-interval-ms",
+        "100",
+        "--boxsinfo-timeout-ms",
+        "1000",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "confirmed",
+      probes: {
+        afterSeries: [
+          { status: "observed", probeMode: "after:1" },
+          { status: "observed", probeMode: "after:2" },
+          { status: "observed", probeMode: "after:3" },
+        ],
+        after: {
+          status: "observed",
+          probeMode: "after:3",
+        },
+      },
+    });
+    expect(ws.sentFrames).toEqual([
+      { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
   });
 
   it("command送信後のprobe timeoutは送信証跡を保持したunknown結果として返す", async () => {
