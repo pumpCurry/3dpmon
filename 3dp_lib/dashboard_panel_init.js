@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1567 (PR #439)
+ * @version 1.390.1568 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 21:36:36
+ * @lastModified 2026-08-31 21:52:20
  * -----------------------------------------------------------
  */
 
@@ -353,23 +353,93 @@ function createCfsControlSendTimeMaterialTopology(topology) {
 }
 
 /**
+ * CFS command requestに対してsend-timeで確認する復旧ラッチcommand ID候補を抽出する。
+ *
+ * 【詳細説明】
+ * - 現在送信しようとしているcommandIdだけでなく、同じdeviceに残る古いCFS物理commandの未解決recordも
+ *   同じmaterial pathを共有する危険として扱う。
+ * - conflict済みIDはdevice scopeを直接持たないため、初期productionでは全体block候補として保守的に扱う。
+ *
+ * @private
+ * @function collectCfsControlRecoveryBlockerCommandIds
+ * @param {object|null|undefined} request - 送信予定command request
+ * @param {object|null|undefined} store - 復旧ラッチstore候補
+ * @param {object=} scope - 現在のdevice scope
+ * @param {string=} scope.deviceId - 現在sessionのPrinter Core v3 deviceId
+ * @returns {Array<string>} 重複排除済みcommand ID候補
+ */
+function collectCfsControlRecoveryBlockerCommandIds(request, store, scope = {}) {
+  const candidates = [];
+  const currentDeviceId = String(scope.deviceId ?? request?.deviceId ?? "").trim();
+  const addCandidate = (value) => {
+    const text = String(value ?? "").trim();
+    if (text && !candidates.includes(text)) {
+      candidates.push(text);
+    }
+  };
+  const isCfsRecoveryRecord = (record) => {
+    const commandKind = String(record?.commandKind ?? "").trim();
+    return commandKind.startsWith("cfs-");
+  };
+  const matchesCurrentDevice = (record) => {
+    const recordDeviceId = String(record?.deviceId ?? "").trim();
+    return !currentDeviceId || !recordDeviceId || recordDeviceId === currentDeviceId;
+  };
+  addCandidate(request?.commandId);
+  if (!store || typeof store !== "object") {
+    return candidates;
+  }
+  if (store.unresolvedByCommandId && typeof store.unresolvedByCommandId === "object") {
+    Object.values(store.unresolvedByCommandId).forEach((record) => {
+      if (isCfsRecoveryRecord(record) && matchesCurrentDevice(record)) {
+        addCandidate(record?.commandId);
+      }
+    });
+  }
+  if (Array.isArray(store.retainedUnsupportedEntries)) {
+    store.retainedUnsupportedEntries.forEach((entry) => {
+      if (matchesCurrentDevice(entry)) {
+        addCandidate(entry?.commandId);
+        addCandidate(entry?.storageKey);
+      }
+    });
+  }
+  if (Array.isArray(store.conflictedCommandIds)) {
+    store.conflictedCommandIds.forEach(addCandidate);
+  }
+  return candidates;
+}
+
+/**
  * CFS command requestに対する現在の物理復旧blockerを判定する。
  *
  * 【詳細説明】
  * - 物理commandは失敗・timeout・状態不明のあと自動再送してはいけないため、send-time context生成時点で
  *   recovery latch storeを確認する。
+ * - 現在commandIdだけでなく、同じdeviceの古い未解決CFS commandが残る場合も全CFS物理操作を止める。
  * - `isPhysicalCommandRecoveryBlocked()` 側で未解決、conflict、integrity quarantineを一元判定する。
  *
  * @private
  * @function createCfsControlRecoveryBlocker
  * @param {object|null|undefined} request - 送信予定command request
+ * @param {object=} scope - 現在のdevice scope
+ * @param {string=} scope.deviceId - 現在sessionのPrinter Core v3 deviceId
  * @returns {object} recovery blocker判定
  */
-function createCfsControlRecoveryBlocker(request) {
-  return isPhysicalCommandRecoveryBlocked(
-    monitorData.physicalCommandRecoveryLatch,
-    request?.commandId
-  );
+function createCfsControlRecoveryBlocker(request, scope = {}) {
+  const store = monitorData.physicalCommandRecoveryLatch;
+  const commandIds = collectCfsControlRecoveryBlockerCommandIds(request, store, scope);
+  for (const commandId of commandIds) {
+    const blocker = isPhysicalCommandRecoveryBlocked(store, commandId);
+    if (blocker?.blocked === true) {
+      return blocker;
+    }
+  }
+  return {
+    blocked: false,
+    reason: "not-blocked",
+    commandId: "",
+  };
 }
 
 /**
@@ -595,7 +665,9 @@ function createCfsControlSendTimeContext(hostname, request) {
     materialTopology,
     stateSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
     observedState: shadowRecord?.lastState || null,
-    recoveryBlocker: createCfsControlRecoveryBlocker(request),
+    recoveryBlocker: createCfsControlRecoveryBlocker(request, {
+      deviceId: shadowRecord?.deviceId || "",
+    }),
     createdAt: new Date().toISOString(),
     certificationEvidence: currentProductionSettings.certificationEvidence,
     certificationScope: createCfsControlCertificationScope(currentTarget),
