@@ -852,6 +852,20 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
               digest: "fnv1a128:before-load",
             },
           }),
+          "command:k2-load-1b": createPhysicalCommandRecoveryLatchRecord({
+            commandId: "command:k2-load-1b",
+            commandKind: "cfs-slot-load",
+            deviceId: "serial:k2pro-69e7",
+            sessionId: "session:live-003",
+            connectionGeneration: 44,
+            status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.POST_OBSERVED,
+            sentAt: "2026-08-31T09:35:00.000Z",
+            materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-b",
+            preObservation: {
+              sequence: 181,
+              digest: "fnv1a128:before-load-b",
+            },
+          }),
           "command:broken": {
             commandId: "command:broken",
             commandKind: "",
@@ -867,6 +881,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
 
     expect(Object.keys(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId)).toEqual([
       "command:k2-load-1a",
+      "command:k2-load-1b",
     ]);
     expect(monitorData.physicalCommandRecoveryLatch.invariants).toMatchObject({
       autoReplay: false,

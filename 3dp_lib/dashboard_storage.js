@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1536 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 18:37:00
+ * @lastModified 2026-08-31 19:41:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -225,7 +225,7 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
  * 物理コマンド復旧ラッチstoreを現在のmonitorDataへ安全にマージする。
  *
  * 【詳細説明】
- * - 復旧ラッチはGate 19 production command activation前の安全装置であり、submitted/unknownの
+ * - 復旧ラッチはGate 19 production command activation前の安全装置であり、submitted/post-observed/unknownの
  *   未解決証跡だけを保持する。
  * - 復元/import時もcommand frameやRPC payloadは保存せず、自動再送は行わない。
  * - 同一commandIdで異なるdigestが来た場合は既存recordを優先し、incoming側を隔離して人間確認へ回す。
@@ -642,7 +642,7 @@ export async function importAllData(data) {
   }
 
   // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
-  //    submitted/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
+  //    submitted/post-observed/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
   if (data.physicalCommandRecoveryLatch && typeof data.physicalCommandRecoveryLatch === "object") {
     _mergePhysicalCommandRecoveryLatchStore(data.physicalCommandRecoveryLatch);
   }

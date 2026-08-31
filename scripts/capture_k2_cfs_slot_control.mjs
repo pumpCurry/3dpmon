@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1538 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:21:00
+ * @lastModified 2026-08-31 19:43:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -1583,7 +1583,8 @@ export async function runK2CfsSlotControlCertification(options) {
         findLastObservedAfterProbe(probes.afterSeries),
         request.payload.sourceId
       );
-      if (lastAfterProbe?.status !== "observed") {
+      const hasFailedAfterProbe = probes.afterSeries.some((probe) => probe?.status !== "observed");
+      if (hasFailedAfterProbe || lastAfterProbe?.status !== "observed") {
         return finalizeCertificationResult({
           ok: false,
           sent: true,

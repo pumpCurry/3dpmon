@@ -8,7 +8,7 @@
  * @module dashboard_physical_command_recovery_latch
  *
  * 【機能内容サマリ】
- * - CFS/CFS-Cなど物理状態を変えるコマンドがsubmitted/unknownで終わった場合の復旧証跡を保持
+ * - CFS/CFS-Cなど物理状態を変えるコマンドがsubmitted/post-observed/unknownで終わった場合の復旧証跡を保持
  * - 再起動後も未解決コマンドを自動再送せず、operator確認または後続観測でのみ解決する契約を固定
  * - 保存済みstoreをfail-closedに正規化し、壊れたentryや衝突entryを隔離する
  *
@@ -18,12 +18,12 @@
  * - {@link appendPhysicalCommandRecoveryLatchRecord}：未解決候補recordをstoreへ冪等追加
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1536 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 18:33:00
+ * @lastModified 2026-08-31 19:39:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 19 production command dispatcherへ接続し、unknown/submitted resultを永続保存する
+ * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
  */
 
 "use strict";
@@ -47,6 +47,7 @@ export const PHYSICAL_COMMAND_RECOVERY_LATCH_SCHEMA_VERSION = 1;
  */
 export const PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS = Object.freeze({
   SUBMITTED: "submitted",
+  POST_OBSERVED: "post-observed",
   UNKNOWN: "unknown",
   COMPLETED: "completed",
   REJECTED: "rejected",
@@ -62,6 +63,7 @@ export const PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS = Object.freeze({
  */
 const UNRESOLVED_STATUSES = Object.freeze(new Set([
   PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
+  PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.POST_OBSERVED,
   PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
 ]));
 
@@ -320,7 +322,7 @@ function validateRecoveryRecord(value) {
  *
  * 【詳細説明】
  * - commandFrame/RPC payloadなど再送に使える情報は意図的に保存しない。
- * - submitted/unknown以外の状態もrecord化はできるが、append時には未解決一覧へ入れずaudit eventのみ残す。
+ * - submitted/post-observed/unknown以外の状態もrecord化はできるが、append時には未解決一覧へ入れずaudit eventのみ残す。
  *
  * @function createPhysicalCommandRecoveryLatchRecord
  * @param {Object} input - コマンド送信結果。
@@ -329,7 +331,7 @@ function validateRecoveryRecord(value) {
  * @param {string} input.deviceId - Printer Core v3 deviceId。
  * @param {string} input.sessionId - 送信時sessionId。
  * @param {number=} input.connectionGeneration - 接続世代番号。
- * @param {string} input.status - submitted/unknown/completed/rejectedなどの結果状態。
+ * @param {string} input.status - submitted/post-observed/unknown/completed/rejectedなどの結果状態。
  * @param {string|Date} input.sentAt - 送信時刻。
  * @param {?string=} input.materialSourceId - 対象MaterialSource ID。
  * @param {?string=} input.certificationId - 利用したcertification ID。
@@ -359,7 +361,7 @@ export function createPhysicalCommandRecoveryLatchRecord(input) {
  *
  * 【詳細説明】
  * - 保存値が改ざん・破損していても、autoReplayやcommandFramePersistenceは必ずfalseへ戻す。
- * - 未解決一覧にはsubmitted/unknownだけを残し、壊れたrecordや解決済みrecordはretainedUnsupportedEntriesへ隔離する。
+ * - 未解決一覧にはsubmitted/post-observed/unknownだけを残し、壊れたrecordや解決済みrecordはretainedUnsupportedEntriesへ隔離する。
  *
  * @function normalizeStoredPhysicalCommandRecoveryLatchStore
  * @param {Object|null|undefined} input - 保存済みstore候補。
@@ -393,6 +395,15 @@ export function normalizeStoredPhysicalCommandRecoveryLatchStore(input) {
       });
       continue;
     }
+    if (validation.record.commandId !== toTrimmedString(key)) {
+      retainedUnsupportedEntries.push({
+        commandId: validation.record.commandId,
+        storageKey: toTrimmedString(key),
+        reason: "command-id-storage-key-mismatch",
+        status: validation.record.status,
+      });
+      continue;
+    }
     unresolvedByCommandId[validation.record.commandId] = validation.record;
   }
 
@@ -412,7 +423,7 @@ export function normalizeStoredPhysicalCommandRecoveryLatchStore(input) {
  * 復旧ラッチrecordをstoreへ追加する。
  *
  * 【詳細説明】
- * - submitted/unknownのみ未解決一覧へ入れる。
+ * - submitted/post-observed/unknownのみ未解決一覧へ入れる。
  * - 同一commandIdかつ同一digestは冪等追加として扱い、異なるdigestは既存recordを保持したまま隔離する。
  * - この関数は再起動後の復旧UIに必要な証跡だけを更新し、実コマンドの再送は行わない。
  *

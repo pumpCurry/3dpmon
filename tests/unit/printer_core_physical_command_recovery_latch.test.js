@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1536 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 18:31:00
+ * @lastModified 2026-08-31 19:37:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -68,27 +68,40 @@ function createCommandInput(overrides = {}) {
 }
 
 describe("dashboard_physical_command_recovery_latch", () => {
-  it("submitted/unknownの物理コマンドだけを未解決ラッチとして保持し、command frameは保存しない", () => {
+  it("submitted/unknown/post-observedの物理コマンドだけを未解決ラッチとして保持し、command frameは保存しない", () => {
     const unknownRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput());
     const submittedRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput({
       commandId: "command:k2-load-1a",
       commandKind: "cfs-slot-load",
       status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
     }));
+    const postObservedRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput({
+      commandId: "command:k2-load-1b",
+      commandKind: "cfs-slot-load",
+      status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.POST_OBSERVED,
+    }));
 
     const store = appendPhysicalCommandRecoveryLatchRecord(
-      appendPhysicalCommandRecoveryLatchRecord(null, unknownRecord).store,
-      submittedRecord
+      appendPhysicalCommandRecoveryLatchRecord(
+        appendPhysicalCommandRecoveryLatchRecord(null, unknownRecord).store,
+        submittedRecord
+      ).store,
+      postObservedRecord
     ).store;
 
     expect(Object.keys(store.unresolvedByCommandId)).toEqual([
       "command:k2-select-1a",
       "command:k2-load-1a",
+      "command:k2-load-1b",
     ]);
     expect(store.unresolvedByCommandId["command:k2-select-1a"]).toMatchObject({
       commandKind: "cfs-slot-select",
       status: "unknown",
       materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+    });
+    expect(store.unresolvedByCommandId["command:k2-load-1b"]).toMatchObject({
+      commandKind: "cfs-slot-load",
+      status: "post-observed",
     });
     expect(JSON.stringify(store)).not.toContain("multi.machine.material_box.select");
     expect(store.invariants).toMatchObject({
@@ -180,6 +193,26 @@ describe("dashboard_physical_command_recovery_latch", () => {
       expect.objectContaining({
         commandId: "command:broken",
         reason: "invalid-recovery-record",
+      }),
+    ]);
+  });
+
+  it("保存keyとrecord.commandIdが一致しない未解決entryは復元時に隔離する", () => {
+    const restored = normalizeStoredPhysicalCommandRecoveryLatchStore({
+      unresolvedByCommandId: {
+        "command:visible-key": createPhysicalCommandRecoveryLatchRecord(createCommandInput({
+          commandId: "command:payload-key",
+          status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
+        })),
+      },
+    });
+
+    expect(restored.unresolvedByCommandId).toEqual({});
+    expect(restored.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        commandId: "command:payload-key",
+        storageKey: "command:visible-key",
+        reason: "command-id-storage-key-mismatch",
       }),
     ]);
   });

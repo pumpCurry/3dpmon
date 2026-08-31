@@ -169,7 +169,7 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   after probeへの `targetSourceDelta` を保存する。これはtelemetry差分のレビュー補助であり、expected-state confirmationではない。
 - 現場目視メモは `--operator-marker <text>` で `operatorMarker.source="operator-cli"` として保存できる。
   これは人間が何を見たかをJSONへ同梱するための欄であり、単独で物理成功を確定するauthorityにはしない。
-- side-effect commandが `submitted` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
+- side-effect commandが `submitted` / `post-observed` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
   shared storageへ永続化する。このstoreは `commandId`、`commandKind`、`deviceId`、`sessionId`、送信時刻、
   certification ID、送信前観測digest/sequenceだけを保持し、command frameやRPC payloadは保存しない。
   再起動後も自動replayせず、fresh observationまたはoperator確認でのみ解決する。

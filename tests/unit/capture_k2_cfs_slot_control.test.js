@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1538 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:18:00
+ * @lastModified 2026-08-31 19:38:00
  */
 
 import { EventEmitter } from "node:events";
@@ -1265,6 +1265,90 @@ describe("capture_k2_cfs_slot_control", () => {
       { method: "get", params: { boxsInfo: 1 } },
       { method: "get", params: { boxsInfo: 1 } },
     ]);
+  });
+
+  it("post-command probe seriesで途中timeout後に復帰してもunknownのままにする", async () => {
+    class RecoveredAfterTimeoutProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        const boxsInfoProbeCount = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length;
+        if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount !== 3) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [{ id: 0, state: 1, percent: boxsInfoProbeCount }],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+    const ws = new RecoveredAfterTimeoutProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--probe-after-delay-ms",
+        "0",
+        "--probe-after-count",
+        "3",
+      ]),
+      boxsInfoTimeoutMs: 5,
+      postCommandProbeIntervalMs: 0,
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: true,
+      status: "unknown",
+      reason: "post-command-observation-failed",
+      probes: {
+        afterSeries: [
+          { status: "observed", probeMode: "after:1" },
+          { status: "timeout", probeMode: "after:2" },
+          { status: "observed", probeMode: "after:3" },
+        ],
+      },
+      probeAttemptCount: 4,
+      observedProbeCount: 3,
+      failedProbeCount: 1,
+    });
+    expect(result.targetSourceDelta).toMatchObject({
+      observed: true,
+      afterProbe: "after:3",
+      changedFields: ["percent"],
+    });
+    expect(ws.sentFrames.filter((frame) => frame?.method === "set")).toHaveLength(1);
   });
 
   it("command送信後のprobe timeoutは送信証跡を保持したunknown結果として返す", async () => {
