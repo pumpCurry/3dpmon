@@ -19,12 +19,12 @@
  * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1558 (PR #439)
+ * @version 1.390.1562 (PR #439)
  * @since   1.390.1536 (PR #439)
  * @lastModified 2026-08-31 20:19:55
  * -----------------------------------------------------------
  * @todo
- * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
+ * - Gate 19.5以降でoperator確認/後続観測からresolvePhysicalCommandRecoveryLatchRecord()を実UIへ接続する
  */
 
 "use strict";
