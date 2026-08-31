@@ -17,9 +17,9 @@
  * - {@link normalizeStoredMaterialAccountingMigrationJournal}：保存済みjournalを復元用に正規化
  * - {@link recordMaterialAccountingMigrationDryRunPlan}：valid dry-run planをjournalへ記録
  *
- * @version 1.390.1511 (PR #438)
+ * @version 1.390.1512 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 13:30:00
+ * @lastModified 2026-08-31 14:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B後続でIndexedDB物理migrationJournal storeへ接続する
@@ -266,7 +266,7 @@ function createLatestRevisionBySubjectIndex(entriesByMigrationId) {
         planRevisionId: entry.plan?.planRevisionId || null,
         sourceChecksum: entry.sourceChecksum,
         planDigest: entry.planDigest,
-        migrationStatus: entry.migrationStatus,
+        migrationStatus: planEntry.migrationStatus,
         recordedAt: entry.recordedAt,
       };
     }

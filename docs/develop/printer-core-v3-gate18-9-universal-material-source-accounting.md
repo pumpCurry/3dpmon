@@ -371,7 +371,41 @@ non-array planned write fields, and broken `mountCandidates` shapes.
 
 ## Gate 18.9C Scope
 
-Gate 18.9C connects usage attribution:
+Gate 18.9C starts with a pure shadow preflight evaluator before any production
+repository write is enabled.
+
+The evaluator takes:
+
+- a dry-run migration journal
+- an entry-level `migrationSubjectId`
+- an execution-time `currentPlan` generated from current legacy state
+- optional read-only `MaterialSourceRegistry` and `SpoolMountRepository` APIs
+
+It must not trust a stored `READY` journal entry by itself. It first resolves
+the latest valid revision for the requested subject, then compares that journal
+entry with the current dry-run plan. Because `createdAt` and freshness are part
+of the plan revision evidence, `derivedFromPlanRevisionId` and
+`evaluatedPlanRevisionId` are allowed to differ. The required continuity is:
+
+- same entry-level `migrationSubjectId`
+- latest journal revision unless a newer revision is explicitly handled by UI
+- requested entry is `READY`
+- current entry is still `READY`
+- same resolved `deviceId`
+- same `spoolId`
+- same `FilamentUnit`
+- same `MaterialSource`
+- same mount intent source/spool mapping
+- stable current source identity
+- no current MaterialSource registry locator/identity conflict
+- no current open mount conflict for the source or spool
+
+The preflight result may return `mountIntents`, but it must not mint
+`openedAt`, `mountOperationId`, production `SpoolMount`, or ledger events. Those
+execution fields belong to the later persistent shadow transaction adapter.
+
+After this pure preflight is accepted, the rest of Gate 18.9C connects usage
+attribution:
 
 - trusted print-start material binding snapshot issuer/repository
 - `JobMaterialSegment`
@@ -472,6 +506,14 @@ Gate 18.9B tests:
 
 Gate 18.9C tests:
 
+- latest READY journal and current READY plan with the same entry mapping return a pure shadow plan
+- preflight returns `derivedFromPlanRevisionId` and `evaluatedPlanRevisionId` without requiring them to be equal
+- preflight never mints `openedAt` or `mountOperationId`
+- a requested migration that is no longer the latest subject revision is blocked
+- a stale/current non-READY re-plan blocks journal READY from advancing
+- a same host/spool subject with a changed Device identity is blocked
+- existing open mount conflicts block before repository write
+- existing registry locator conflicts block before repository write
 - `1A=3210mm`, `1B=6543mm`, `1D=1234mm` debit separate mounts
 - `1C=0mm` is confirmed only with a complete source-specific result set
 - incomplete result set leaves `1C` as unknown

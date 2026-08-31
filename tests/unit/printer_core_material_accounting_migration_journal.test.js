@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1511 (PR #438)
+ * @version 1.390.1512 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 13:30:00
+ * @lastModified 2026-08-31 14:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -25,6 +25,10 @@
 
 import { describe, expect, it } from "vitest";
 
+import {
+  MATERIAL_ACCOUNTING_MIGRATION_STATUS,
+  MATERIAL_SOURCE_KIND,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
 import {
   createMaterialAccountingMigrationDryRunPlan,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_migration_planner.js";
@@ -84,6 +88,73 @@ function createReadyPlan(host = "K1Max-4A1B") {
       ],
     },
   }, planOptions);
+}
+
+/**
+ * READY entryとBLOCKED entryが混在するdry-run plan fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - journal subject indexがplan全体statusではなくentry statusを保持することを検証する。
+ *
+ * @function createMixedStatusPlan
+ * @returns {Object} mixed status migration dry-run plan。
+ */
+function createMixedStatusPlan() {
+  return createMaterialAccountingMigrationDryRunPlan({
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: "K1Max-4A1B",
+          printerType: "k1",
+          printerCoreV3Identity: {
+            deviceIdSeed: "serial:k1max-4a1b",
+            identityStrength: "serial",
+          },
+        },
+        {
+          hostname: "K2Pro-69E7",
+          printerType: "creality-k2",
+          printerCoreV3Identity: {
+            deviceIdSeed: "serial:k2pro-69e7",
+            identityStrength: "serial",
+          },
+        },
+      ],
+    },
+    machines: {
+      "K1Max-4A1B": { printerType: "k1" },
+      "K2Pro-69E7": { printerType: "creality-k2" },
+    },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+      { id: "spool-032", name: "CC3D Silver", remainingLengthMm: 280000 },
+    ],
+    hostSpoolMap: {
+      "K1Max-4A1B": "spool-031",
+      "K2Pro-69E7": "spool-032",
+    },
+    materialSourceObservations: {
+      schemaVersion: 1,
+      byDeviceId: {
+        "serial:k1max-4a1b": {
+          deviceId: "serial:k1max-4a1b",
+          snapshotCompleteness: "complete",
+          lastObservedAt: "2026-08-31T03:40:00.000Z",
+          latestBySourceId: {
+            "direct:0": {
+              sourceId: "direct:0",
+              kind: MATERIAL_SOURCE_KIND.DIRECT_FEED,
+              index: 0,
+              sourceIdentityStrength: "stable",
+            },
+          },
+        },
+      },
+    },
+  }, {
+    createdAt: "2026-08-31T03:40:30.000Z",
+    freshTtlMs: 60_000,
+  });
 }
 
 describe("Material accounting migration journal", () => {
@@ -148,6 +219,25 @@ describe("Material accounting migration journal", () => {
     const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
 
     expect(journal.latestRevisionBySubject).toEqual(recorded.journal.latestRevisionBySubject);
+  });
+
+  it("latestRevisionBySubjectはplan全体ではなくentry単位のmigrationStatusを保持する", () => {
+    const plan = createMixedStatusPlan();
+    const readyEntry = plan.entries.find((entry) => entry.host === "K1Max-4A1B");
+    const blockedEntry = plan.entries.find((entry) => entry.host === "K2Pro-69E7");
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(readyEntry.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY);
+    expect(blockedEntry.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(recorded.journal.latestRevisionBySubject[readyEntry.migrationSubjectId]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+    });
+    expect(recorded.journal.latestRevisionBySubject[blockedEntry.migrationSubjectId]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+    });
   });
 
   it("同一migrationIdかつ同一checksumの再保存はeventを重複させず冪等に扱う", () => {

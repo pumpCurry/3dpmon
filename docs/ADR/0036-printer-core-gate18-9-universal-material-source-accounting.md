@@ -319,13 +319,30 @@ Gate 18.9A:
 
 Gate 18.9B:
 
+- dry-run migration planner
+- evidence-only migration journal
+- entry-level migration subject/revision binding
+- plan digest and latest valid revision index
+- no production storage, UI, or debit behavior change
+
+Gate 18.9C:
+
+- pure shadow preflight evaluator
+- latest journal revision lookup by entry subject
+- execution-time current plan revalidation
+- Device/source/spool/mount-intent continuity check
+- read-only MaterialSource/SpoolMount repository conflict check
+- no production storage, UI, execution-field minting, or debit behavior change
+
+Gate 18.9D:
+
 - source-aware print-start binding snapshots
 - JobMaterialSegment contract
 - append-only FilamentLedger events
 - pending/unattributed usage isolation
 - idempotent debit eligibility evaluation
 
-Gate 18.9C:
+Gate 18.9E:
 
 - MaterialSourceAccountingView read model
 - legacy compatibility projection
