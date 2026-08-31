@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1504 (PR #438)
+ * @version 1.390.1505 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 11:58:00
+ * @lastModified 2026-08-31 12:07:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A review後にIndexedDB backed migration journalへ接続する
@@ -231,22 +231,32 @@ function findConnectionTargetForHost(targets, host) {
 }
 
 /**
- * target/machineからdeviceIdを解決する。
+ * target/machineからdevice identity証拠を解決する。
  *
  * 【詳細説明】
  * - Printer Core v3 identityがある場合はそれを優先する。
- * - legacy-only K1ではhost keyをprovisional deviceとして使い、migration dry-runを止めない。
+ * - legacy-only host keyはmigration candidateの追跡用に残すが、READY条件ではstable扱いしない。
  *
  * @private
- * @function resolveDeviceId
+ * @function resolveDeviceIdentityEvidence
  * @param {string} host - legacy host key。
  * @param {?Object} target - connection target。
- * @returns {string} device ID。
+ * @returns {{deviceId:string, identityStrength:string}} device identity証拠。
  */
-function resolveDeviceId(host, target) {
-  return toTrimmedString(target?.printerCoreV3Identity?.deviceIdSeed) ||
-    toTrimmedString(target?.printerCoreV3Identity?.deviceId) ||
+function resolveDeviceIdentityEvidence(host, target) {
+  const identity = target?.printerCoreV3Identity || {};
+  const deviceId = toTrimmedString(identity.deviceIdSeed) ||
+    toTrimmedString(identity.deviceId) ||
     `legacy-host:${host}`;
+  const rawStrength = toTrimmedString(identity.identityStrength).toLowerCase();
+  const identityStrength = rawStrength === "serial" ||
+    rawStrength === "stable-machine-id" ||
+    rawStrength === "stable" ||
+    deviceId.startsWith("serial:") ||
+    deviceId.startsWith("stable-machine-id:")
+    ? MATERIAL_IDENTITY_STRENGTH.STABLE
+    : MATERIAL_IDENTITY_STRENGTH.PROVISIONAL;
+  return { deviceId, identityStrength };
 }
 
 /**
@@ -363,6 +373,78 @@ function isSingleDirectLikeSourceKind(kind) {
 }
 
 /**
+ * observation sourceがstable identityとしてmigrationへ使えるか判定する。
+ *
+ * 【詳細説明】
+ * - observation側がidentityStrengthを明示しない旧read-only snapshotは、READYの証拠としては不足扱いにする。
+ * - legacy hostSpoolMapをsource-aware mountへ変換する時点で、provisional sourceをstableとして再発行しない。
+ *
+ * @private
+ * @function hasStableObservedSourceIdentity
+ * @param {?Object} source - observed source snapshot。
+ * @returns {boolean} stable source identityならtrue。
+ */
+function hasStableObservedSourceIdentity(source) {
+  return source?.identityStrength === MATERIAL_IDENTITY_STRENGTH.STABLE ||
+    source?.identityStrength === "stable";
+}
+
+/**
+ * observation sourceにREADY判定可能なlocator証拠があるか判定する。
+ *
+ * 【詳細説明】
+ * - sourceIdや表示labelだけでは物理sourceの位置証拠として足りない。
+ * - direct/externalはindex、CFS/CFS-CはunitIndexとslotIndexを必須にする。
+ *
+ * @private
+ * @function hasCompleteObservedSourceLocator
+ * @param {?Object} source - observed source snapshot。
+ * @returns {boolean} locatorがcompleteならtrue。
+ */
+function hasCompleteObservedSourceLocator(source) {
+  const locator = source?.locator && typeof source.locator === "object" ? source.locator : null;
+  if (!locator) {
+    return false;
+  }
+  const kind = resolveObservedSourceKind(source);
+  if (kind === MATERIAL_SOURCE_KIND.DIRECT_FEED || kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL) {
+    return Number.isFinite(Number(locator.index));
+  }
+  if (kind === MATERIAL_SOURCE_KIND.CFS_SLOT || kind === MATERIAL_SOURCE_KIND.CFS_C_SLOT) {
+    return Number.isFinite(Number(locator.unitIndex)) && Number.isFinite(Number(locator.slotIndex));
+  }
+  return false;
+}
+
+/**
+ * legacyData内に対象deviceのopen Universal conflictがあるか判定する。
+ *
+ * 【詳細説明】
+ * - Gate18.9Aでは実Universal storeはまだ無いが、dry-run journalやpure registry snapshotを
+ *   呼び出し側が渡した場合に、既存conflictを無視して新規mount候補を出さないための境界。
+ *
+ * @private
+ * @function hasOpenUniversalSourceConflict
+ * @param {Object} legacyData - legacy monitorData。
+ * @param {string} deviceId - device ID。
+ * @returns {boolean} 未解決conflictがある場合true。
+ */
+function hasOpenUniversalSourceConflict(legacyData, deviceId) {
+  const registry = legacyData?.materialAccounting?.materialSourceRegistry ||
+    legacyData?.printerCoreV3MaterialSourceRegistry ||
+    legacyData?.materialSourceRegistry;
+  const conflicts = Array.isArray(registry?.conflicts) ? registry.conflicts : [];
+  return conflicts.some((conflict) => {
+    if (!conflict || typeof conflict !== "object") {
+      return false;
+    }
+    const status = toTrimmedString(conflict.status || "open");
+    const conflictDeviceId = toTrimmedString(conflict.deviceId);
+    return status !== "resolved" && (!conflictDeviceId || conflictDeviceId === deviceId);
+  });
+}
+
+/**
  * observed sourceからMaterialSource kindを解決する。
  *
  * @private
@@ -399,6 +481,16 @@ function resolveObservedSourceKind(source) {
 function createSingleSourcePlannedRecords(input) {
   const observedSource = input.observedSource || null;
   const sourceKind = observedSource ? resolveObservedSourceKind(observedSource) : MATERIAL_SOURCE_KIND.DIRECT_FEED;
+  const sourceLocator = observedSource?.locator && typeof observedSource.locator === "object"
+    ? createMaterialSourceLocator({
+      kind: sourceKind,
+      index: observedSource.locator.index,
+      unitIndex: observedSource.locator.unitIndex,
+      boxId: observedSource.locator.boxId,
+      slotIndex: observedSource.locator.slotIndex,
+      protocolSlotId: observedSource.locator.protocolSlotId,
+    })
+    : createMaterialSourceLocator({ kind: sourceKind, index: 0 });
   const unit = createFilamentUnitRecord({
     deviceId: input.deviceId,
     kind: FILAMENT_UNIT_KIND.PRINTER_DIRECT,
@@ -410,12 +502,13 @@ function createSingleSourcePlannedRecords(input) {
     deviceId: input.deviceId,
     unitId: unit.unitId,
     kind: sourceKind,
-    locator: createMaterialSourceLocator({ kind: sourceKind, index: 0 }),
+    locator: sourceLocator,
     identity: createMaterialSourceIdentity({
       deviceId: input.deviceId,
       unitId: unit.unitId,
       kind: sourceKind,
-      index: 0,
+      slotIndex: sourceLocator.slotIndex,
+      index: sourceLocator.index,
     }),
     identityStrength: MATERIAL_IDENTITY_STRENGTH.STABLE,
     displayLabel: observedSource?.displayLabel || (sourceKind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL ? "外部スプール" : "通常スプール"),
@@ -476,7 +569,8 @@ function createHostMigrationEntry(input) {
   const target = findConnectionTargetForHost(targets, input.host);
   const machines = asPlainObject(input.legacyData?.machines);
   const machine = machines[input.host] || {};
-  const deviceId = resolveDeviceId(input.host, target);
+  const deviceIdentity = resolveDeviceIdentityEvidence(input.host, target);
+  const deviceId = deviceIdentity.deviceId;
   const observation = findObservationRecord(input.legacyData, input.host, deviceId);
   const observedSources = listObservedSources(observation);
   const hasFreshCompleteObservation = isFreshCompleteTopologyObservation(observation, {
@@ -494,6 +588,30 @@ function createHostMigrationEntry(input) {
       spoolId: input.spoolId,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MISSING],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  if (deviceIdentity.identityStrength !== MATERIAL_IDENTITY_STRENGTH.STABLE) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.DEVICE_IDENTITY_INSUFFICIENT],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  if (hasOpenUniversalSourceConflict(input.legacyData, deviceId)) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_CONFLICT],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
     };
@@ -530,6 +648,30 @@ function createHostMigrationEntry(input) {
       spoolId: input.spoolId,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  if (observedSources.length === 1 && !hasStableObservedSourceIdentity(observedSources[0])) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_INSUFFICIENT],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  if (observedSources.length === 1 && !hasCompleteObservedSourceLocator(observedSources[0])) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_SOURCE_LOCATOR_INCOMPLETE],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
     };
@@ -755,11 +897,34 @@ export function validateMaterialAccountingMigrationDryRunPlan(plan) {
   if (!Array.isArray(plan.entries)) {
     errors.push("entries-not-array");
   } else {
+    const expectedStatus = summarizeMigrationStatus(plan.entries);
+    const expectedSummary = summarizeEntries(plan.entries);
+    if (plan.migrationStatus !== expectedStatus) {
+      errors.push("migrationStatus-summary-mismatch");
+    }
+    for (const countName of ["ready", "candidate", "blocked"]) {
+      if (plan.summary?.[countName] !== expectedSummary[countName]) {
+        errors.push(`summary-${countName}-count-mismatch`);
+      }
+    }
+    for (const writeName of ["filamentUnits", "materialSources", "spoolMounts"]) {
+      if (plan.summary?.plannedWrites?.[writeName] !== expectedSummary.plannedWrites[writeName]) {
+        errors.push(`summary-${writeName}-write-count-mismatch`);
+      }
+    }
     for (const entry of plan.entries) {
       if (!enumValues(MATERIAL_ACCOUNTING_MIGRATION_STATUS).has(entry?.migrationStatus)) {
         errors.push("entry-invalid-migrationStatus");
       } else if (!DRY_RUN_DECISION_STATUSES.has(entry.migrationStatus)) {
         errors.push("entry-status-not-dry-run-decision");
+      }
+      if (entry?.migrationStatus !== MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY &&
+          (entry?.plannedWrites?.filamentUnits || []).length > 0) {
+        errors.push("non-ready-entry-has-filamentUnit-write");
+      }
+      if (entry?.migrationStatus !== MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY &&
+          (entry?.plannedWrites?.materialSources || []).length > 0) {
+        errors.push("non-ready-entry-has-materialSource-write");
       }
       if (entry?.migrationStatus !== MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY &&
           (entry?.plannedWrites?.spoolMounts || []).length > 0) {

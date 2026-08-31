@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1503 (PR #438)
+ * @version 1.390.1505 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 11:52:00
+ * @lastModified 2026-08-31 12:09:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -75,6 +75,8 @@ describe("Universal MaterialSource accounting contract", () => {
       OPEN_MOUNT_CONFLICT: "open-mount-conflict",
       LEGACY_INTERVAL_CONFLICT: "legacy-interval-conflict",
       SOURCE_IDENTITY_CONFLICT: "source-identity-conflict",
+      SOURCE_IDENTITY_INSUFFICIENT: "source-identity-insufficient",
+      MATERIAL_SOURCE_LOCATOR_INCOMPLETE: "material-source-locator-incomplete",
     });
     expect(Object.isFrozen(MATERIAL_ACCOUNTING_MIGRATION_BLOCKER)).toBe(true);
   });

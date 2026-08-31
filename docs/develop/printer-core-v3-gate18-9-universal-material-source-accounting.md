@@ -129,19 +129,29 @@ execution or cutover transaction results. The planner also must not use
 `MaterialAccountingCutoverRecord` as its primary return shape; cutover records are
 created later by the execution/readiness boundary.
 
-`READY` requires a valid legacy spool record plus either explicit `single-spool`
-configuration or a fresh `complete` material topology observation with exactly
-one direct/external source. K1/K1 Max are not blindly assumed to be single-source
-if the saved target does not state that topology. A partial, stale, restored, or
-disconnected observation is evidence that migration needs a new read, not
-authority to create a migrated mount.
+`READY` requires a valid legacy spool record, stable device identity, no open
+Universal MaterialSource conflict for that device, and either explicit
+`single-spool` configuration or a fresh `complete` material topology observation
+with exactly one direct/external source. K1/K1 Max are not blindly assumed to be
+single-source if the saved target does not state that topology. A partial,
+stale, restored, disconnected, locator-incomplete, or provisional/unknown source
+observation is evidence that migration needs a new read or operator decision,
+not authority to create a migrated mount.
 
 Migration blocker/reason strings are owned by
 `MATERIAL_ACCOUNTING_MIGRATION_BLOCKER`; planner branches and UI copy must not
 invent ad-hoc reason identifiers. The initial fixed reasons include multi-source
 legacy ambiguity, source confirmation requirement, missing material topology,
-open mount conflict, legacy interval conflict, source identity conflict, device
-identity insufficiency, and missing legacy spool evidence.
+open mount conflict, legacy interval conflict, source identity conflict, source
+identity insufficiency, material source locator incompleteness, device identity
+insufficiency, and missing legacy spool evidence.
+
+The dry-run validator recomputes `migrationStatus`, `summary.ready`,
+`summary.candidate`, `summary.blocked`, and all `summary.plannedWrites` counts
+from `entries[]`. Non-`READY` entries must not contain planned
+`filamentUnits`, `materialSources`, or `spoolMounts`. This keeps persisted
+dry-run journal entries self-checking when Gate 18.9B introduces IndexedDB
+journaling.
 
 Migration lifecycle transitions are fixed by
 `canTransitionMaterialAccountingMigrationStatus()`:
@@ -319,6 +329,11 @@ Gate 18.9A tests:
 - migration dry-run planner leaves K2/CFS multi-source `hostSpoolMap` as a candidate without spoolMount writes
 - migration dry-run planner blocks K2 hosts without material topology observations instead of assuming direct-only
 - migration dry-run planner rejects `shadow` / `failed` / `sealed` as direct planner decisions
+- migration dry-run planner blocks provisional device identity even with explicit single-spool settings
+- migration dry-run planner blocks provisional/unknown observed source identity instead of promoting it to stable
+- migration dry-run planner blocks single source observations with incomplete locator evidence
+- migration dry-run planner blocks hosts with open Universal MaterialSource registry conflicts
+- migration dry-run validator recomputes summary/status/write counts and rejects non-READY planned writes
 
 Gate 18.9B tests:
 

@@ -151,6 +151,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 
 - standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
 - `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
+- Gate 18.9A migration planner は stable device identity、stable observed source identity、complete locator、既存Universal conflictなしをREADY条件に含める。次はこのdry-run plan/evidenceだけをIndexedDB journalへ保存し、MaterialSource/SpoolMount authority writeはまだ行わない。
 - side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
 - Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
 

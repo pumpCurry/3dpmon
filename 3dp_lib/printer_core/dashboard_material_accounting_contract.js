@@ -29,9 +29,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1503 (PR #438)
+ * @version 1.390.1505 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 11:52:00
+ * @lastModified 2026-08-31 12:07:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -198,6 +198,8 @@ export const MATERIAL_ACCOUNTING_MIGRATION_BLOCKER = Object.freeze({
   OPEN_MOUNT_CONFLICT: "open-mount-conflict",
   LEGACY_INTERVAL_CONFLICT: "legacy-interval-conflict",
   SOURCE_IDENTITY_CONFLICT: "source-identity-conflict",
+  SOURCE_IDENTITY_INSUFFICIENT: "source-identity-insufficient",
+  MATERIAL_SOURCE_LOCATOR_INCOMPLETE: "material-source-locator-incomplete",
   DEVICE_IDENTITY_INSUFFICIENT: "device-identity-insufficient",
   LEGACY_SPOOL_MISSING: "legacy-spool-missing",
 });
