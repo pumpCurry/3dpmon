@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1528 (PR #439)
+ * @version 1.390.1529 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 16:54:16
+ * @lastModified 2026-08-31 17:04:14
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -654,6 +654,10 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     evidence: {
       timeline: createEvidenceTimeline(options.evidence, execution),
       raw: cloneJson(options.evidence || {}),
+      probeSummaries: {
+        before: extractProbeSummaryForExport(options.evidence?.beforeBoxsInfo),
+        after: extractProbeSummaryForExport(options.evidence?.afterBoxsInfo),
+      },
     },
     export: {
       captureId: toText(options.export?.captureId, ""),
@@ -687,6 +691,44 @@ function extractProbeSummaryForExport(probe) {
     observedAt: probe.observedAt || probe.createdAt || null,
     ...cloneJson(probe.summary),
   };
+}
+
+/**
+ * probe summaryからselected source表示を生成する。
+ *
+ * 【詳細説明】
+ * - selectedSourceIdsは複数あり得るため、空なら未観測、複数ならカンマ区切りで表示する。
+ *
+ * @private
+ * @function formatProbeSelectedSources
+ * @param {object|null|undefined} probeSummary - probe summary
+ * @returns {string} selected source表示
+ */
+function formatProbeSelectedSources(probeSummary) {
+  const ids = Array.isArray(probeSummary?.selectedSourceIds) ? probeSummary.selectedSourceIds : [];
+  return ids.length > 0 ? ids.join(", ") : "--";
+}
+
+/**
+ * probe summaryからtarget source表示を生成する。
+ *
+ * 【詳細説明】
+ * - targetSourceはCLIで指定したsourceに対応する観測summaryであり、slot表示とsourceIdを併記する。
+ *
+ * @private
+ * @function formatProbeTargetSource
+ * @param {object|null|undefined} probeSummary - probe summary
+ * @returns {string} target source表示
+ */
+function formatProbeTargetSource(probeSummary) {
+  const targetSource = probeSummary?.targetSource || null;
+  if (!targetSource) {
+    return "--";
+  }
+  return [
+    toText(targetSource.displaySlot, "--"),
+    toText(targetSource.sourceId, "--"),
+  ].join(" / ");
 }
 
 /**
@@ -937,6 +979,21 @@ export function renderCfsCertificationPanel(container, viewModel, options = {}) 
   probeActions.appendChild(boxsButton);
   probeActions.appendChild(infoButton);
   probeSection.appendChild(probeActions);
+
+  const probeSummary = viewModel.evidence?.probeSummaries || {};
+  if (probeSummary.before || probeSummary.after) {
+    const probeSummarySection = appendSection(grid, "Probe summary");
+    if (probeSummary.before) {
+      appendKeyValue(probeSummarySection, "before selected", formatProbeSelectedSources(probeSummary.before));
+      appendKeyValue(probeSummarySection, "before target", formatProbeTargetSource(probeSummary.before));
+      appendKeyValue(probeSummarySection, "before loaded", String(probeSummary.before.loadedSourceCount ?? "--"));
+    }
+    if (probeSummary.after) {
+      appendKeyValue(probeSummarySection, "after selected", formatProbeSelectedSources(probeSummary.after));
+      appendKeyValue(probeSummarySection, "after target", formatProbeTargetSource(probeSummary.after));
+      appendKeyValue(probeSummarySection, "after loaded", String(probeSummary.after.loadedSourceCount ?? "--"));
+    }
+  }
 
   const preflightSection = appendSection(grid, "Preflight");
   renderPreflight(preflightSection, viewModel.preflight);

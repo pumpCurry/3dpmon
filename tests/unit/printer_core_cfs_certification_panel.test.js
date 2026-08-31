@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1528 (PR #439)
+ * @version 1.390.1529 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 16:54:16
+ * @lastModified 2026-08-31 17:04:14
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -314,6 +314,48 @@ describe("dashboard_cfs_certification_panel", () => {
         loadedSourceCount: 3,
       },
     });
+  });
+
+  it("boxsInfo probe summaryをCertificationパネル上にも表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+      },
+      materialViewModel: createMaterialViewModel(),
+      evidence: {
+        beforeBoxsInfo: {
+          observedAt: "2026-08-31T07:00:00.000Z",
+          summary: {
+            selectedSourceIds: ["cfs:1:slot:0"],
+            targetSource: { sourceId: "cfs:1:slot:2", displaySlot: "1C" },
+            loadedSourceCount: 3,
+          },
+        },
+        afterBoxsInfo: {
+          observedAt: "2026-08-31T07:00:03.000Z",
+          summary: {
+            selectedSourceIds: ["cfs:1:slot:2"],
+            targetSource: { sourceId: "cfs:1:slot:2", displaySlot: "1C" },
+            loadedSourceCount: 3,
+          },
+        },
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(container.textContent).toContain("Probe summary");
+    expect(container.textContent).toContain("before selected");
+    expect(container.textContent).toContain("cfs:1:slot:0");
+    expect(container.textContent).toContain("after selected");
+    expect(container.textContent).toContain("cfs:1:slot:2");
+    expect(container.textContent).toContain("target");
+    expect(container.textContent).toContain("1C / cfs:1:slot:2");
   });
 
   it("selected sourceをPreflight診断へ出し、期限切れARMとdry-run不整合ではLIVE不可にする", () => {
