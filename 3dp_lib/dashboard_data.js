@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1515 (PR #438)
-* @since   1.390.193 (PR #86)
-* @lastModified 2026-08-31 14:10:00
+ * @version 1.390.1516 (PR #438)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-08-31 14:38:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -403,6 +403,27 @@ export const monitorData = {
       legacyCutoverSealed: false,
       materialSourceRepositoryWrites: "shadow-only",
       spoolMountRepositoryWrites: "shadow-only",
+    },
+  },
+  /**
+   * Gate 18.9E: MaterialSource print binding shadow store。
+   * print-start時点のMaterialSource/SpoolMount snapshotとsource-specific usage attributionを
+   * 保持する。これはまだlegacy usageHistoryやspool残量を更新するauthorityではない。
+   * @type {{schemaVersion:number, authority:string, printStartSnapshots:Array<Object>, usageEvidence:Array<Object>, jobMaterialSegments:Array<Object>, ledgerEvents:Array<Object>, unattributedUsage:Array<Object>, operationsById:Object, invariants:Object}}
+   */
+  materialAccountingPrintBindingStore: {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    invariants: {
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      materialSourceLedgerWrites: "shadow-only",
     },
   },
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。

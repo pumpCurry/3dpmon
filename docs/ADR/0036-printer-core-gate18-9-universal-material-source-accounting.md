@@ -366,10 +366,11 @@ Gate 18.9D-2:
 Gate 18.9E:
 
 - source-aware print-start binding snapshots
-- JobMaterialSegment contract
-- append-only FilamentLedger events
+- source-specific JobMaterialSegment shadow records
+- append-only shadow FilamentLedger event candidates
 - pending/unattributed usage isolation
 - idempotent debit eligibility evaluation
+- restart recovery for shadow print binding records without legacy debit
 
 Gate 18.9F:
 

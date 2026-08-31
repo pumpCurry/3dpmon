@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1515 (PR #438)
-* @since   1.390.193 (PR #86)
-* @lastModified 2026-08-31 14:10:00
+ * @version 1.390.1516 (PR #438)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-08-31 14:39:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -46,6 +46,7 @@ import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
 import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
+import { normalizeStoredMaterialAccountingPrintBindingStore } from "./printer_core/dashboard_material_accounting_print_binding.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -186,6 +187,34 @@ function _mergeMaterialAccountingMigrationShadowStore(incomingStore) {
   const restoredStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(incomingStore);
   monitorData.materialAccountingMigrationShadowStore =
     (restoredStore.events || []).length >= (currentStore.events || []).length
+      ? restoredStore
+      : currentStore;
+  return true;
+}
+
+/**
+ * MaterialSource print binding shadow storeを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - print binding storeはGate 18.9E時点ではsource-aware attribution evidenceであり、
+ *   legacy usageHistoryやspool残量へ自動投影しない。
+ * - 既存storeとincoming storeが両方ある場合はledger event数が多い方を採用し、復元時の単純な情報喪失を避ける。
+ *
+ * @private
+ * @function _mergeMaterialAccountingPrintBindingStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされたprint binding store候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredMaterialAccountingPrintBindingStore(
+    monitorData.materialAccountingPrintBindingStore
+  );
+  const restoredStore = normalizeStoredMaterialAccountingPrintBindingStore(incomingStore);
+  monitorData.materialAccountingPrintBindingStore =
+    (restoredStore.ledgerEvents || []).length >= (currentStore.ledgerEvents || []).length
       ? restoredStore
       : currentStore;
   return true;
@@ -531,6 +560,12 @@ export async function importAllData(data) {
   //   durable shadow evidenceだけを保持し、legacy装着やledger debitへは投影しない。
   if (data.materialAccountingMigrationShadowStore && typeof data.materialAccountingMigrationShadowStore === "object") {
     _mergeMaterialAccountingMigrationShadowStore(data.materialAccountingMigrationShadowStore);
+  }
+
+  // ── Gate 18.9E: print-start binding / source-aware usage shadow storeをimportする ──
+  //    importしてもlegacy usageHistoryやspool残量へは投影しない。
+  if (data.materialAccountingPrintBindingStore && typeof data.materialAccountingPrintBindingStore === "object") {
+    _mergeMaterialAccountingPrintBindingStore(data.materialAccountingPrintBindingStore);
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -902,6 +937,7 @@ const LS_GLOBAL_FIELDS = [
   "materialSourceObservations",
   "materialAccountingMigrationJournal",
   "materialAccountingMigrationShadowStore",
+  "materialAccountingPrintBindingStore",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -1166,6 +1202,8 @@ function _flushStorage() {
       queueSharedWrite("materialAccountingMigrationJournal", monitorData.materialAccountingMigrationJournal);
       // ★ Gate 18.9D-2: durable shadow commit storeを証跡として保存する。
       queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
+      // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
+      queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1698,6 +1736,16 @@ function _restoreFromData(shared, machines) {
   } else {
     monitorData.materialAccountingMigrationShadowStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(
       monitorData.materialAccountingMigrationShadowStore
+    );
+  }
+
+  // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを復元する。
+  //   復元してもlegacy usageHistoryやspool残量へは投影しない。
+  if (shared?.materialAccountingPrintBindingStore && typeof shared.materialAccountingPrintBindingStore === "object") {
+    _mergeMaterialAccountingPrintBindingStore(shared.materialAccountingPrintBindingStore);
+  } else {
+    monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
+      monitorData.materialAccountingPrintBindingStore
     );
   }
 

@@ -79,6 +79,21 @@ const monitorData = {
       spoolMountRepositoryWrites: "shadow-only",
     },
   },
+  materialAccountingPrintBindingStore: {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    invariants: {
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      materialSourceLedgerWrites: "shadow-only",
+    },
+  },
   hostSpoolMap: {},
   hostCameraToggle: {},
   spoolSerialCounter: 0,
@@ -136,6 +151,21 @@ function resetMonitorData() {
       legacyCutoverSealed: false,
       materialSourceRepositoryWrites: "shadow-only",
       spoolMountRepositoryWrites: "shadow-only",
+    },
+  };
+  monitorData.materialAccountingPrintBindingStore = {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    invariants: {
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      materialSourceLedgerWrites: "shadow-only",
     },
   };
   monitorData.hostCameraToggle = {};
@@ -633,6 +663,85 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.materialAccountingMigrationShadowStore.events).toHaveLength(1);
     expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "legacy-spool-031" });
     expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate18.9E: materialAccountingPrintBindingStore はsource-aware shadow usageとして往復しlegacy usageへ投影しない', () => {
+    monitorData.filamentSpools = [{ id: "legacy-single-spool", remainingLengthMm: 1000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K2Pro-69E7": "legacy-single-spool" };
+    monitorData.usageHistory = [{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }];
+    monitorData.materialAccountingPrintBindingStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: [
+        {
+          snapshotId: "snapshot:1a",
+          deviceId: "serial:k2pro-69e7",
+          printJobId: "job:4color",
+          printPlanId: "plan:4color",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          spoolId: "spool:1a",
+          capturedAt: "2026-08-31T05:00:00.000Z",
+        },
+      ],
+      usageEvidence: [
+        {
+          evidenceId: "usage:1a",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          snapshotId: "snapshot:1a",
+          printJobId: "job:4color",
+          usedLengthMm: 3210,
+        },
+      ],
+      jobMaterialSegments: [
+        {
+          segmentId: "segment:1a",
+          printJobId: "job:4color",
+          printPlanId: "plan:4color",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+        },
+      ],
+      ledgerEvents: [
+        {
+          ledgerEventId: "ledger:1a",
+          eventType: "material-consumption",
+          printJobId: "job:4color",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+        },
+      ],
+      unattributedUsage: [],
+      operationsById: {
+        "usage:4color": { operationId: "usage:4color", digest: "digest:4color" },
+      },
+      invariants: {
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        materialSourceLedgerWrites: "shadow-only",
+      },
+    };
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingPrintBindingStore).toMatchObject({
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: [{ snapshotId: "snapshot:1a", materialSourceId: "source:1a" }],
+      jobMaterialSegments: [{ segmentId: "segment:1a", usedLengthMm: 3210 }],
+      ledgerEvents: [{ ledgerEventId: "ledger:1a", usedLengthMm: 3210 }],
+      invariants: {
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        materialSourceLedgerWrites: "shadow-only",
+      },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "legacy-single-spool" });
+    expect(monitorData.usageHistory).toEqual([{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }]);
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {

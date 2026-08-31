@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.1515 (PR #438)
-* @since   1.390.787 (PR #366)
-* @lastModified 2026-08-31 14:10:00
+ * @version 1.390.1516 (PR #438)
+ * @since   1.390.787 (PR #366)
+ * @lastModified 2026-08-31 14:40:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -123,6 +123,8 @@ const SHARED_KEYS = [
   "materialAccountingMigrationJournal",
   // ★ Gate 18.9D-2: durable shadow commit storeをshadow evidenceとして保存する。
   "materialAccountingMigrationShadowStore",
+  // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを保存する。
+  "materialAccountingPrintBindingStore",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",

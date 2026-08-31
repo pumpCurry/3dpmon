@@ -452,14 +452,14 @@ commit/recovery:
 
 After the staged and persistent shadow transaction boundaries are accepted,
 Gate 18.9E connects
-usage attribution:
+usage attribution as a shadow-only repository:
 
 - trusted print-start material binding snapshot issuer/repository
-- `JobMaterialSegment`
+- source-specific `JobMaterialSegment` shadow records
 - trusted source-aware usage evidence issuer/repository
-- append-only `FilamentLedgerEvent`
-- pending/unattributed isolation
-- idempotent debit evaluation
+- append-only shadow `FilamentLedgerEvent` candidates
+- pending/unattributed isolation for total-only multi-source usage
+- idempotent debit evaluation without legacy inventory mutation
 
 Completion handling must use the print-start snapshot, not the current mount at
 completion time.
@@ -598,12 +598,15 @@ Gate 18.9D-2 tests:
 
 Gate 18.9E planned tests:
 
-- `1A=3210mm`, `1B=6543mm`, `1D=1234mm` debit separate mounts
+- `1A=3210mm`, `1B=6543mm`, `1D=1234mm` attribute to separate
+  source/mount/spool bindings
 - `1C=0mm` is confirmed only with a complete source-specific result set
 - incomplete result set leaves `1C` as unknown
 - total-only multi-source usage becomes pending/unattributed
 - print-start snapshot keeps attribution stable after current mount changes
 - duplicate completion is idempotent
+- saved print binding store restores after restart without legacy usage or
+  remaining projection
 
 Gate 18.9F tests:
 

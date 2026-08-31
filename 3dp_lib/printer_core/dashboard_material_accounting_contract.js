@@ -21,6 +21,7 @@
  * - {@link createSpoolMountRecord}：SpoolMount record を生成
  * - {@link createMaterialAccountingCutoverRecord}：legacy cutover record を生成
  * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
+ * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
  * - {@link validateFilamentUnit}：FilamentUnit record を検証
@@ -29,9 +30,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1509 (PR #438)
+ * @version 1.390.1516 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 15:35:00
+ * @lastModified 2026-08-31 14:34:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -40,6 +41,18 @@
 "use strict";
 
 import { createPrinterCoreV3DeterministicId } from "./dashboard_data_schema_v3.js";
+import {
+  MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
+  MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
+  createMaterialAccountingPrintBindingRepositoryWithIssuer,
+  normalizeStoredMaterialAccountingPrintBindingStore,
+} from "./dashboard_material_accounting_print_binding_repository.js";
+
+export {
+  MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
+  MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
+  normalizeStoredMaterialAccountingPrintBindingStore,
+};
 
 /**
  * Universal MaterialSource accounting contract version。
@@ -869,6 +882,32 @@ function createSourceSpecificUsageEvidenceSignature(evidence) {
 }
 
 /**
+ * trusted print-start material snapshot signature を生成する。
+ *
+ * 【詳細説明】
+ * - print-start時点のMaterialSource/SpoolMount bindingを、completion時のcurrent mountとは別の証跡として固定する。
+ * - module-private secretを含め、caller が plain object を手書きしてもtrusted snapshotにならないようにする。
+ *
+ * @private
+ * @function createPrintStartMaterialSnapshotSignature
+ * @param {Object} snapshot - print-start snapshot。
+ * @returns {string} deterministic signature。
+ */
+function createPrintStartMaterialSnapshotSignature(snapshot) {
+  return createPrinterCoreV3DeterministicId("material-print-start-snapshot", [
+    SOURCE_SPECIFIC_USAGE_EVIDENCE_SECRET,
+    snapshot.snapshotId,
+    snapshot.deviceId,
+    snapshot.printJobId,
+    snapshot.printPlanId,
+    snapshot.materialSourceId,
+    snapshot.mountId,
+    snapshot.spoolId,
+    snapshot.capturedAt,
+  ]);
+}
+
+/**
  * source-specific material usage evidence shapeを生成する。
  *
  * 【詳細説明】
@@ -954,6 +993,139 @@ export function createSourceSpecificMaterialUsageEvidence(input = {}) {
     attestation: null,
   };
   return deepFreezeJson(evidence);
+}
+
+/**
+ * trusted source-specific material usage evidenceを契約モジュール内部で発行する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9E の print binding repository が、source-specific completion観測をdebit評価へ渡すための狭い発行境界。
+ * - public shape factoryと異なり、module-private WeakSetとsignatureへ登録してからfreeze済みrecordを返す。
+ * - この関数自体は旧`usageHistory`やspool残量を更新しない。実debitは後続repositoryのidempotent commitでのみ行う。
+ *
+ * @private
+ * @function createTrustedSourceSpecificMaterialUsageEvidence
+ * @param {Object} input - usage evidence入力。
+ * @returns {Object} trusted source-specific usage evidence。
+ * @throws {TypeError} 必須値不足、不正な使用量、未許可source/methodの場合。
+ * @example
+ * const trustedUsage = createTrustedSourceSpecificMaterialUsageEvidence({ materialSourceId, mountId, snapshotId, printJobId, deviceId, usedLengthMm: 3210, source: "firmware-source-specific", measurementMethod: "firmware-source" });
+ */
+function createTrustedSourceSpecificMaterialUsageEvidence(input = {}) {
+  const baseEvidence = createSourceSpecificMaterialUsageEvidence(input);
+  const trustedEvidence = {
+    ...baseEvidence,
+    trusted: true,
+    authority: {
+      mode: "trusted-source-specific-evidence",
+      canDebit: true,
+    },
+    attestation: null,
+  };
+  trustedEvidence.attestation = createSourceSpecificUsageEvidenceSignature(trustedEvidence);
+  const frozenEvidence = deepFreezeJson(trustedEvidence);
+  TRUSTED_SOURCE_SPECIFIC_USAGE_EVIDENCE.add(frozenEvidence);
+  return frozenEvidence;
+}
+
+/**
+ * trusted print-start material binding snapshotを契約モジュール内部で発行する。
+ *
+ * 【詳細説明】
+ * - 印刷開始時点のsource/mount/spool bindingを固定し、印刷完了時に現在mountを参照して誤帰属する経路を防ぐ。
+ * - snapshotはsource単位で発行し、CFSの1A/1B/1C/1Dや外部スプールを同じ形式で扱う。
+ * - この関数はsnapshot証跡を作るだけで、legacy spool mapやledgerへは書き込まない。
+ *
+ * @private
+ * @function createTrustedPrintStartMaterialSnapshot
+ * @param {Object} input - snapshot入力。
+ * @param {string=} input.snapshotId - snapshot ID。未指定ならprintJob/source/mountから決定的に生成。
+ * @param {string} input.deviceId - Device ID。
+ * @param {string} input.printJobId - PrintJob ID。
+ * @param {string} input.printPlanId - PrintPlan ID。
+ * @param {string} input.materialSourceId - MaterialSource ID。
+ * @param {string} input.mountId - SpoolMount ID。
+ * @param {string} input.spoolId - Spool ID。
+ * @param {string} input.capturedAt - print-start capture time。
+ * @param {Object=} input.materialSource - MaterialSource snapshot。
+ * @param {Object=} input.spoolMount - SpoolMount snapshot。
+ * @param {string=} input.bindingOperationId - binding operation ID。
+ * @returns {Object} trusted print-start snapshot。
+ * @throws {TypeError} 必須値不足や時刻不正の場合。
+ * @example
+ * const snapshot = createTrustedPrintStartMaterialSnapshot({ deviceId, printJobId, printPlanId, materialSourceId, mountId, spoolId, capturedAt });
+ */
+function createTrustedPrintStartMaterialSnapshot(input = {}) {
+  const deviceId = requireNonEmptyString(input.deviceId, "snapshot.deviceId");
+  const printJobId = requireNonEmptyString(input.printJobId, "snapshot.printJobId");
+  const printPlanId = requireNonEmptyString(input.printPlanId, "snapshot.printPlanId");
+  const materialSourceId = requireNonEmptyString(input.materialSourceId, "snapshot.materialSourceId");
+  const mountId = requireNonEmptyString(input.mountId, "snapshot.mountId");
+  const spoolId = requireNonEmptyString(input.spoolId, "snapshot.spoolId");
+  const capturedAt = normalizeOptionalIsoTime(input.capturedAt);
+  if (!capturedAt) {
+    throw new TypeError("Material accounting contract requires a valid snapshot.capturedAt.");
+  }
+  const snapshotId = toTrimmedString(input.snapshotId) ||
+    createPrinterCoreV3DeterministicId("material-print-start-snapshot", [
+      deviceId,
+      printJobId,
+      printPlanId,
+      materialSourceId,
+      mountId,
+    ]);
+  const snapshot = {
+    schemaVersion: MATERIAL_ACCOUNTING_CONTRACT_VERSION,
+    snapshotId,
+    deviceId,
+    printJobId,
+    printPlanId,
+    materialSourceId,
+    mountId,
+    spoolId,
+    capturedAt,
+    materialSource: cloneJsonValue(input.materialSource || null),
+    spoolMount: cloneJsonValue(input.spoolMount || null),
+    bindingOperationId: toTrimmedString(input.bindingOperationId) || null,
+    trusted: true,
+    authority: {
+      mode: "trusted-print-start-material-snapshot",
+      canBindUsage: true,
+    },
+    provenance: {
+      source: "printer-core-material-binding-repository",
+      attestation: null,
+    },
+  };
+  snapshot.provenance.attestation = createPrintStartMaterialSnapshotSignature(snapshot);
+  const frozenSnapshot = deepFreezeJson(snapshot);
+  TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.add(frozenSnapshot);
+  return frozenSnapshot;
+}
+
+/**
+ * MaterialSource print binding repositoryを生成する。
+ *
+ * 【詳細説明】
+ * - Gate18.9Eのsource-aware print-start bindingとusage attributionを扱うrepositoryを生成する。
+ * - trusted snapshot/usage evidence issuerはこの契約モジュール内部のprivate関数だけを注入する。
+ * - callerはrepository APIを通じてshadow evidenceを記録できるが、trusted objectを任意にmintできない。
+ * - このrepositoryはshadow-onlyであり、legacy `usageHistory` やspool残量は更新しない。
+ *
+ * @function createMaterialAccountingPrintBindingRepository
+ * @param {Object=} initialStore - 復元用store。
+ * @returns {Object} repository API。
+ * @example
+ * const repository = createMaterialAccountingPrintBindingRepository();
+ */
+export function createMaterialAccountingPrintBindingRepository(initialStore = {}) {
+  return createMaterialAccountingPrintBindingRepositoryWithIssuer({
+    createTrustedPrintStartMaterialSnapshot,
+    createTrustedSourceSpecificMaterialUsageEvidence,
+    evaluateMaterialDebitEligibility,
+    validateMaterialSource,
+    validateSpoolMount,
+  }, initialStore);
 }
 
 /**
@@ -1300,6 +1472,11 @@ function validatePrintStartSnapshotForDebit(snapshot, mount, materialSource) {
     reasons.push("print-start-snapshot-time-required");
   }
   if (!TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.has(snapshot)) {
+    reasons.push("untrusted-print-start-snapshot");
+  } else if (
+    snapshot?.provenance?.source !== "printer-core-material-binding-repository" ||
+    snapshot?.provenance?.attestation !== createPrintStartMaterialSnapshotSignature(snapshot)
+  ) {
     reasons.push("untrusted-print-start-snapshot");
   }
   return reasons;

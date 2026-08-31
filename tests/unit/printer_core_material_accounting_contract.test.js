@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1505 (PR #438)
+ * @version 1.390.1516 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 12:09:00
+ * @lastModified 2026-08-31 15:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -25,6 +25,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import * as materialAccountingContract from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
 import {
   DEBIT_ELIGIBILITY_STATUS,
   FILAMENT_UNIT_KIND,
@@ -39,6 +40,7 @@ import {
   createDirectFeedUnitIdentity,
   createFilamentUnitRecord,
   createMaterialAccountingCutoverRecord,
+  createMaterialAccountingPrintBindingRepository,
   createMaterialSourceAccountingView,
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
@@ -65,6 +67,12 @@ describe("Universal MaterialSource accounting contract", () => {
     measurementMethod: "source-counter",
     observedAt: "2026-08-31T01:00:00.000Z",
     ...overrides,
+  });
+
+  it("trusted evidence issuerは公開APIから直接呼び出せない", () => {
+    expect(materialAccountingContract.createTrustedSourceSpecificMaterialUsageEvidence).toBeUndefined();
+    expect(materialAccountingContract.createTrustedPrintStartMaterialSnapshot).toBeUndefined();
+    expect(typeof createMaterialAccountingPrintBindingRepository).toBe("function");
   });
 
   it("migration blocker vocabularyを定数として固定する", () => {
