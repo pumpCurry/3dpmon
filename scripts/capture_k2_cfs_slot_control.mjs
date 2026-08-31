@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1544 (PR #439)
+ * @version 1.390.1552 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:29:18
+ * @lastModified 2026-08-31 19:54:18
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -833,6 +833,58 @@ function summarizeMaterialPresence(stateCode) {
 }
 
 /**
+ * material.selected値をreview evidence用に分類する。
+ *
+ * 【詳細説明】
+ * - K2実機調査では `selected` が0/1以外になった場合、未選択と同義にしてしまうと原因調査が難しくなる。
+ * - 未観測、明示selected、明示unselected、不正値を分け、送信前guardとreview summaryの両方で同じ意味を使う。
+ *
+ * @private
+ * @function classifyMaterialSelection
+ * @param {*} selectedRaw - material.selected raw値
+ * @returns {{selected:boolean, selectedObserved:boolean, selectionState:string, selectionValid:(boolean|null), selectionRaw:*}} 分類結果
+ * @example
+ * const selection = classifyMaterialSelection(1);
+ */
+function classifyMaterialSelection(selectedRaw) {
+  const selectedObserved = selectedRaw !== undefined && selectedRaw !== null && selectedRaw !== "";
+  if (!selectedObserved) {
+    return {
+      selected: false,
+      selectedObserved: false,
+      selectionState: "unobserved",
+      selectionValid: null,
+      selectionRaw: selectedRaw,
+    };
+  }
+  if (selectedRaw === true || selectedRaw === 1 || selectedRaw === "1") {
+    return {
+      selected: true,
+      selectedObserved: true,
+      selectionState: "selected",
+      selectionValid: true,
+      selectionRaw: selectedRaw,
+    };
+  }
+  if (selectedRaw === false || selectedRaw === 0 || selectedRaw === "0") {
+    return {
+      selected: false,
+      selectedObserved: true,
+      selectionState: "unselected",
+      selectionValid: true,
+      selectionRaw: selectedRaw,
+    };
+  }
+  return {
+    selected: false,
+    selectedObserved: true,
+    selectionState: "invalid",
+    selectionValid: false,
+    selectionRaw: selectedRaw,
+  };
+}
+
+/**
  * certification summary diagnosticを追加する。
  *
  * 【詳細説明】
@@ -933,10 +985,10 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
       }
       const sourceId = formatBoxsInfoSourceId(boxId, materialId, external);
       const stateCode = material?.state ?? null;
-      const selectedObserved = material?.selected !== undefined &&
-        material?.selected !== null &&
-        material?.selected !== "";
-      const selected = material?.selected === true || material?.selected === 1 || material?.selected === "1";
+      const selection = classifyMaterialSelection(material?.selected);
+      if (selection.selectionState === "invalid") {
+        pushBoxsInfoDiagnostic(diagnostics, "selected-value-invalid", `${materialPath}.selected`, material?.selected);
+      }
       materialCandidates.push({
         materialPath,
         sourceId,
@@ -950,9 +1002,11 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
         displaySlot: formatSourceDisplaySlot(boxId, materialId, external),
         stateCode,
         presence: summarizeMaterialPresence(stateCode),
-        selected,
-        selectedObserved,
-        selectionState: selected ? "selected" : (selectedObserved ? "unselected" : "unobserved"),
+        selected: selection.selected,
+        selectedObserved: selection.selectedObserved,
+        selectionState: selection.selectionState,
+        selectionValid: selection.selectionValid,
+        selectionRaw: selection.selectionRaw,
         percent: material?.percent ?? null,
         materialType: material?.type || "",
         materialName: material?.name || "",
@@ -1133,6 +1187,8 @@ function createComparableTargetSourceSnapshot(source) {
     selected: Boolean(source.selected),
     selectedObserved: Boolean(source.selectedObserved),
     selectionState: source.selectionState || "unobserved",
+    selectionValid: source.selectionValid ?? null,
+    selectionRaw: source.selectionRaw,
     percent: source.percent,
     materialType: source.materialType,
     materialName: source.materialName,
@@ -1193,6 +1249,8 @@ function createTargetSourceDelta(beforeProbe, afterProbe, sourceId) {
     "selected",
     "selectedObserved",
     "selectionState",
+    "selectionValid",
+    "selectionRaw",
     "percent",
     "materialType",
     "materialName",

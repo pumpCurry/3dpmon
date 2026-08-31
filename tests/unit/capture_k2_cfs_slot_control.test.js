@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1544 (PR #439)
+ * @version 1.390.1552 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:29:18
+ * @lastModified 2026-08-31 19:54:18
  */
 
 import { EventEmitter } from "node:events";
@@ -1054,6 +1054,44 @@ describe("capture_k2_cfs_slot_control", () => {
       ["NullSelected", false, false, "unobserved"],
     ]);
     expect(summary.selectedSourceIds).toEqual(["cfs:1:slot:0"]);
+  });
+
+  it("boxsInfo summaryは不正なselected値をunselectedへ潰さずdiagnosticsへ残す", () => {
+    const summary = summarizeBoxsInfoEvidence({
+      materialBoxs: [{
+        id: 1,
+        type: 0,
+        materials: [
+          { id: 0, state: 1, selected: 2, name: "MalformedNumericSelected" },
+          { id: 1, state: 1, selected: "yes", name: "MalformedStringSelected" },
+        ],
+      }],
+    });
+
+    expect(summary.sources.map((source) => [
+      source.materialName,
+      source.selected,
+      source.selectedObserved,
+      source.selectionState,
+      source.selectionValid,
+      source.selectionRaw,
+    ])).toEqual([
+      ["MalformedNumericSelected", false, true, "invalid", false, 2],
+      ["MalformedStringSelected", false, true, "invalid", false, "yes"],
+    ]);
+    expect(summary.selectedSourceIds).toEqual([]);
+    expect(summary.diagnostics).toEqual([
+      {
+        reason: "selected-value-invalid",
+        path: "materialBoxs[0].materials[0].selected",
+        value: 2,
+      },
+      {
+        reason: "selected-value-invalid",
+        path: "materialBoxs[0].materials[1].selected",
+        value: "yes",
+      },
+    ]);
   });
 
   it("boxsInfo summaryは明示state codeだけをpresenceへ採用する", () => {
