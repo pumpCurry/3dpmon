@@ -17,12 +17,13 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1556 (PR #439)
+ * @version 1.390.1563 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 20:30:21
+ * @lastModified 2026-08-31 21:18:40
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
+ * - Gate 19.5以降でfresh observationによる復旧ラッチ自動解決を接続する
  */
 
 "use strict";
@@ -1053,6 +1054,7 @@ function renderEvidenceTimeline(parent, timeline) {
  * @param {Function=} options.onProbeBoxsInfo - boxsInfo read-only probe handler
  * @param {Function=} options.onProbeInfo - /info read-only probe handler
  * @param {Function=} options.onLiveSend - LIVE送信handler
+ * @param {Function=} options.onResolveRecoveryBlocker - operator確認済み復旧ラッチ解決handler
  * @param {Function=} options.onExport - export handler
  * @returns {object} renderer handle
  * @example
@@ -1124,6 +1126,34 @@ export function renderCfsCertificationPanel(container, viewModel, options = {}) 
 
   const preflightSection = appendSection(grid, "Preflight");
   renderPreflight(preflightSection, viewModel.preflight);
+
+  if (viewModel.recoveryBlocker?.blocked === true) {
+    const recoverySection = appendSection(grid, "復旧確認");
+    appendKeyValue(recoverySection, "状態", viewModel.recoveryBlocker.detail);
+    const canResolveByOperator = viewModel.recoveryBlocker.reason === "unresolved-recovery"
+      && Boolean(viewModel.recoveryBlocker.commandId)
+      && typeof options.onResolveRecoveryBlocker === "function";
+    const recoveryActions = createElement(documentRef, "div", "fc-actions");
+    const resolveButton = createElement(documentRef, "button", "fc-button", "物理確認済みとして解除");
+    resolveButton.type = "button";
+    resolveButton.dataset.action = "resolve-recovery-blocker";
+    resolveButton.disabled = !canResolveByOperator;
+    resolveButton.title = canResolveByOperator
+      ? "プリンタ本体の物理状態を確認済みとして、この未解決ラッチを解決済みにします"
+      : "conflict/quarantineは自動または通常のoperator確認では解除できません";
+    resolveButton.addEventListener("click", () => {
+      if (!canResolveByOperator) {
+        return;
+      }
+      options.onResolveRecoveryBlocker({
+        commandId: viewModel.recoveryBlocker.commandId,
+        resolution: "operator-cleared",
+        viewModel,
+      });
+    });
+    recoveryActions.appendChild(resolveButton);
+    recoverySection.appendChild(recoveryActions);
+  }
 
   const dryRunSection = appendSection(grid, "Dry-run");
   appendKeyValue(dryRunSection, "Command", viewModel.command.commandKind);

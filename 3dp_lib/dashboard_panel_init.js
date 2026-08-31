@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1560 (PR #439)
+ * @version 1.390.1563 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-08-31 21:18:40
  * -----------------------------------------------------------
  */
 
@@ -112,6 +112,7 @@ import {
   appendPhysicalCommandRecoveryLatchRecord,
   createPhysicalCommandRecoveryLatchRecord,
   isPhysicalCommandRecoveryBlocked,
+  resolvePhysicalCommandRecoveryLatchRecord,
 } from "./printer_core/dashboard_physical_command_recovery_latch.js";
 
 // ==============================
@@ -441,6 +442,43 @@ function createCfsCertificationRecoveryBlocker() {
     reason: "not-blocked",
     commandId: "",
   };
+}
+
+/**
+ * operator確認済みのCFS復旧ラッチを解決済みにして永続保存する。
+ *
+ * 【詳細説明】
+ * - Debug / Certificationパネルの手動確認ボタンから呼ばれ、未解決ラッチを自動再送せずに閉じる。
+ * - conflict/quarantineは `resolvePhysicalCommandRecoveryLatchRecord()` 側でnot-found/invalidになるため、ここでは
+ *   store更新と通知だけを責務にする。
+ *
+ * @private
+ * @function resolveCfsCertificationRecoveryBlocker
+ * @param {object} request - rendererから渡された解決要求
+ * @param {string} request.commandId - 解決対象command ID
+ * @param {string=} request.resolution - 解決種別
+ * @returns {object} 解決結果
+ */
+function resolveCfsCertificationRecoveryBlocker(request) {
+  const result = resolvePhysicalCommandRecoveryLatchRecord(
+    monitorData.physicalCommandRecoveryLatch,
+    {
+      commandId: request?.commandId,
+      resolution: request?.resolution || "operator-cleared",
+      resolvedAt: new Date().toISOString(),
+    }
+  );
+  if (result?.ok === true && result.store) {
+    monitorData.physicalCommandRecoveryLatch = result.store;
+    saveUnifiedStorage(true);
+    showAlert("CFS復旧確認を解決済みにしました。", "success");
+  } else {
+    const reason = Array.isArray(result?.reasons) && result.reasons.length > 0
+      ? result.reasons.join(", ")
+      : (result?.status || "unknown");
+    showAlert(`CFS復旧確認を解決できませんでした: ${reason}`, "error");
+  }
+  return result;
 }
 
 /**
@@ -1281,6 +1319,7 @@ function initCfsCertificationPanel(body, hostname) {
         createCfsCertificationRenderableState(hostname).viewModel
       ));
     },
+    onResolveRecoveryBlocker: (request) => resolveCfsCertificationRecoveryBlocker(request),
   };
 
   const initialState = createCfsCertificationRenderableState(hostname);

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1556 (PR #439)
+ * @version 1.390.1563 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 20:28:44
+ * @lastModified 2026-08-31 21:18:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -701,6 +701,57 @@ describe("dashboard_cfs_certification_panel", () => {
     });
     expect(container.textContent).toContain("Recovery blocker");
     expect(container.textContent).toContain("復旧確認待ち: integrity-quarantine / command:k2-load-1c / command-id-digest-mismatch");
+  });
+
+  it("復旧ラッチblockerがある場合はoperator確認用ボタンからcommandIdを渡せる", () => {
+    const onResolveRecoveryBlocker = vi.fn();
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      recoveryBlocker: {
+        blocked: true,
+        reason: "unresolved-recovery",
+        commandId: "command:k2-load-1c",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel, {
+      onResolveRecoveryBlocker,
+    });
+    const button = container.querySelector('[data-action="resolve-recovery-blocker"]');
+
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toContain("物理確認済みとして解除");
+
+    button.click();
+
+    expect(onResolveRecoveryBlocker).toHaveBeenCalledWith({
+      commandId: "command:k2-load-1c",
+      resolution: "operator-cleared",
+      viewModel,
+    });
   });
 
   it("printer idle未観測WARNはselected-sourceと違いLIVE送信をblockingする", () => {

@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1560 (PR #439)
+ * @version 1.390.1563 (PR #439)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-08-31 21:18:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -38,6 +38,7 @@ const mockState = vi.hoisted(() => ({
   sendK2CfsCommandTransportPlan: vi.fn(),
   createPhysicalCommandRecoveryLatchRecord: vi.fn(),
   appendPhysicalCommandRecoveryLatchRecord: vi.fn(),
+  resolvePhysicalCommandRecoveryLatchRecord: vi.fn(),
   isPhysicalCommandRecoveryBlocked: vi.fn(),
   saveUnifiedStorage: vi.fn(),
   boundOnCommand: vi.fn(),
@@ -212,6 +213,7 @@ vi.mock("../../3dp_lib/printer_core/dashboard_physical_command_recovery_latch.js
   },
   appendPhysicalCommandRecoveryLatchRecord: mockState.appendPhysicalCommandRecoveryLatchRecord,
   createPhysicalCommandRecoveryLatchRecord: mockState.createPhysicalCommandRecoveryLatchRecord,
+  resolvePhysicalCommandRecoveryLatchRecord: mockState.resolvePhysicalCommandRecoveryLatchRecord,
   isPhysicalCommandRecoveryBlocked: mockState.isPhysicalCommandRecoveryBlocked,
 }));
 
@@ -287,6 +289,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     mockState.sendK2CfsCommandTransportPlan.mockReset();
     mockState.createPhysicalCommandRecoveryLatchRecord.mockReset();
     mockState.appendPhysicalCommandRecoveryLatchRecord.mockReset();
+    mockState.resolvePhysicalCommandRecoveryLatchRecord.mockReset();
     mockState.isPhysicalCommandRecoveryBlocked.mockReset();
     mockState.saveUnifiedStorage.mockReset();
     mockState.boundOnCommand.mockReset();
@@ -401,6 +404,21 @@ describe("dashboard_panel_init CFS control hook", () => {
         events: [...(store?.events || [])],
       },
       record,
+      reasons: [],
+    }));
+    mockState.resolvePhysicalCommandRecoveryLatchRecord.mockImplementation((store) => ({
+      ok: true,
+      status: "resolved",
+      store: {
+        unresolvedByCommandId: {},
+        conflictedCommandIds: [...(store?.conflictedCommandIds || [])],
+        retainedUnsupportedEntries: [...(store?.retainedUnsupportedEntries || [])],
+        events: [...(store?.events || []), {
+          type: "physical-command-recovery-resolved",
+          commandId: "cmd:k2-load-1c",
+        }],
+      },
+      record: store?.unresolvedByCommandId?.["cmd:k2-load-1c"] || null,
       reasons: [],
     }));
     mockState.createBoundCfsControlIntegration.mockReturnValue({
@@ -759,6 +777,56 @@ describe("dashboard_panel_init CFS control hook", () => {
       mockState.monitorData.physicalCommandRecoveryLatch,
       "cmd:k2-load-1c"
     );
+
+    destroyPanel("cfs-certification", body, "K2Pro");
+  });
+
+  it("Gate19.5 debug: operator確認で未解決復旧ラッチを解決済みにして保存する", async () => {
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-1c": {
+          commandId: "cmd:k2-load-1c",
+          status: "submitted",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.isPhysicalCommandRecoveryBlocked.mockReturnValue({
+      blocked: true,
+      reason: "unresolved-recovery",
+      commandId: "cmd:k2-load-1c",
+    });
+    const body = document.createElement("div");
+    const {
+      destroyPanel,
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "cfs-certification", body, "K2Pro");
+
+    const button = body.querySelector('[data-action="resolve-recovery-blocker"]');
+    expect(button).not.toBeNull();
+    button.click();
+
+    expect(mockState.resolvePhysicalCommandRecoveryLatchRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unresolvedByCommandId: {
+          "cmd:k2-load-1c": expect.objectContaining({
+            commandId: "cmd:k2-load-1c",
+          }),
+        },
+      }),
+      expect.objectContaining({
+        commandId: "cmd:k2-load-1c",
+        resolution: "operator-cleared",
+      })
+    );
+    expect(mockState.monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
+    expect(mockState.saveUnifiedStorage).toHaveBeenCalledWith(true);
 
     destroyPanel("cfs-certification", body, "K2Pro");
   });
