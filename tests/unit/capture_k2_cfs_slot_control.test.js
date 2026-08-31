@@ -5,12 +5,15 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1419 (PR #435)
+ * @version 1.390.1523 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-27 06:18:00
+ * @lastModified 2026-08-31 16:32:06
  */
 
 import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildK2CfsSlotControlRequest,
@@ -219,6 +222,8 @@ describe("capture_k2_cfs_slot_control", () => {
       ok: true,
       sent: true,
       dryRun: false,
+      status: "submitted",
+      reason: "post-command-observation-not-requested",
       response: {
         status: "submitted",
         sentFrameCount: 1,
@@ -352,6 +357,8 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(result).toMatchObject({
       ok: true,
       sent: true,
+      status: "confirmed",
+      reason: null,
       probes: {
         before: {
           status: "observed",
@@ -374,5 +381,192 @@ describe("capture_k2_cfs_slot_control", () => {
     ]);
     expect(ws.closed).toBe(true);
     expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("command送信後のprobe timeoutは送信証跡を保持したunknown結果として返す", async () => {
+    class TimeoutAfterProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1 && this.sentFrames.length === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{ id: 1, state: 1 }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new TimeoutAfterProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--boxsinfo-timeout-ms",
+        "1000",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: true,
+      dryRun: false,
+      status: "unknown",
+      reason: "post-command-observation-failed",
+      blindRetryAllowed: false,
+      response: {
+        status: "submitted",
+        sentFrameCount: 1,
+      },
+      probes: {
+        before: {
+          status: "observed",
+        },
+        after: {
+          status: "timeout",
+          probeMode: "after",
+        },
+      },
+    });
+    expect(result.probes.after.message).toContain("boxsInfo probe timeout");
+    expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+    expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("command送信前のprobe timeoutではCFS操作frameを送らない", async () => {
+    class TimeoutBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        this.sentFrames.push(JSON.parse(payload));
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new TimeoutBeforeProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+      ]),
+      boxsInfoTimeoutMs: 5,
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-observation-failed",
+      blindRetryAllowed: false,
+      response: null,
+      probes: {
+        before: {
+          status: "timeout",
+          probeMode: "before",
+        },
+        after: null,
+      },
+    });
+    expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+    expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("--output-dir指定時はcertification resultをtimestamp付きdirectoryへ保存する", async () => {
+    const outputRoot = await mkdtemp(path.join(os.tmpdir(), "3dpmon-cfs-cert-"));
+    try {
+      const options = {
+        ...parseArgs([
+          "--command",
+          "cfs-load",
+          "--source",
+          "cfs:1:slot:0",
+          "--output-dir",
+          outputRoot,
+        ]),
+      };
+
+      const result = await runK2CfsSlotControlCertification(options);
+
+      expect(result.evidence).toMatchObject({
+        written: true,
+      });
+      expect(result.evidence.directory).toContain(outputRoot);
+      expect(result.evidence.files).toEqual(["certification-result.json"]);
+      const saved = JSON.parse(await readFile(
+        path.join(result.evidence.directory, "certification-result.json"),
+        "utf8",
+      ));
+      expect(saved).toMatchObject({
+        ok: true,
+        sent: false,
+        dryRun: true,
+        evidence: {
+          written: true,
+        },
+      });
+      expect(saved.evidence.directory).toBe(result.evidence.directory);
+    } finally {
+      await rm(outputRoot, { recursive: true, force: true });
+    }
   });
 });

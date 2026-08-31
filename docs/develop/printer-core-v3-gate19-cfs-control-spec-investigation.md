@@ -195,6 +195,7 @@ live certificationは次の順で進める。
      --source cfs:1:slot:0 \
      --probe-before \
      --probe-after \
+     --output-dir tmp/k2-cfs-slot-control-captures \
      --pretty
    ```
 
@@ -214,11 +215,34 @@ live certificationは次の順で進める。
      --confirm-command cfs-load \
      --probe-before \
      --probe-after \
+     --output-dir tmp/k2-cfs-slot-control-captures \
      --pretty
    ```
 
 4. 1回のlive送信ごとに停止して、人間の目視、CFS本体状態、前後`boxsInfo`の差分を確認する。
    side-effect commandなので、timeoutや不明応答時に同じcommandを自動再送してはならない。
+
+   CLI結果は次のように解釈する。
+
+   ```text
+   status:"submitted" / reason:"post-command-observation-not-requested"
+     → command frameはWebSocketへlocal submitされたが、送信後のboxsInfo観測は要求されていない。
+       これは成功確認ではないため、production certification evidenceには単独で使わない。
+
+   status:"confirmed"
+     → command frame送信と指定されたpost-command read-only probeが完了した。
+       ただし物理load/unload成功そのものは人間の目視とcapture markerで別途確認する。
+
+   status:"rejected" / reason:"pre-command-observation-failed"
+     → command送信前のboxsInfo観測に失敗したため、CFS操作frameは送られていない。
+
+   status:"unknown" / reason:"post-command-observation-failed"
+     → command frameは送信済みだが、送信後のboxsInfo観測がtimeout/errorになった。
+       物理side-effect有無が不明なので、blind retryせず人間がCFSとプリンタ画面を確認する。
+   ```
+
+   `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
+   dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
 
 5. selected source変更、load/unload/feed/retractの意味確定は、レビュワーPASSと上記1回目の成功後に別stepとして扱う。
 

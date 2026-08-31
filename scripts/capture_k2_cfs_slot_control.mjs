@@ -20,15 +20,16 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1419 (PR #435)
+ * @version 1.390.1523 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-27 06:18:00
+ * @lastModified 2026-08-31 16:32:06
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
  */
 
 import { WebSocket } from "ws";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -63,6 +64,7 @@ Options:
   --probe-before                  With --send, read boxsInfo before the command.
   --probe-after                   With --send, read boxsInfo after the command.
   --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
+  --output-dir <path>             Write certification-result.json under a timestamped directory.
   --pretty                        Pretty-print JSON result.
   --help                          Show this help.
 `;
@@ -150,6 +152,7 @@ export function parseArgs(argv = []) {
     probeBefore: false,
     probeAfter: false,
     boxsInfoTimeoutMs: DEFAULT_BOXSINFO_TIMEOUT_MS,
+    outputDir: "",
     pretty: false,
     help: false,
   };
@@ -174,6 +177,7 @@ export function parseArgs(argv = []) {
     else if (arg === "--probe-before") options.probeBefore = true;
     else if (arg === "--probe-after") options.probeAfter = true;
     else if (arg === "--boxsinfo-timeout-ms") options.boxsInfoTimeoutMs = Number(next());
+    else if (arg === "--output-dir") options.outputDir = next();
     else if (arg === "--pretty") options.pretty = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -206,6 +210,9 @@ export function parseArgs(argv = []) {
   }
   if (options.send && !LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS.has(command)) {
     throw new Error("--send is currently limited to cfs-load and cfs-unload for F012 live certification.");
+  }
+  if (toNonEmptyString(options.outputDir)) {
+    options.outputDir = path.resolve(options.outputDir);
   }
   return options;
 }
@@ -421,11 +428,125 @@ export function sendBoxsInfoProbeAndWait(ws, options = {}) {
 }
 
 /**
+ * Error objectをcertification JSONへ残せる形へ変換する。
+ *
+ * 【詳細説明】
+ * - live command後の観測失敗はside-effect有無が不明なため、CLI processの例外表示だけで捨てず、
+ *   `unknown` resultの一部としてmessage/reason/statusを保持する。
+ *
+ * @private
+ * @function serializeCertificationError
+ * @param {*} error - 例外または失敗値
+ * @returns {object} JSON保存用のerror summary
+ */
+function serializeCertificationError(error) {
+  return {
+    message: error?.message || String(error),
+    reason: error?.reason || null,
+    status: error?.frameStatus || error?.status || null,
+    frameIndex: Number.isInteger(error?.frameIndex) ? error.frameIndex : null,
+  };
+}
+
+/**
+ * boxsInfo probeを実行し、失敗も構造化resultとして返す。
+ *
+ * 【詳細説明】
+ * - command送信前probeの失敗はcommand未送信として扱う。
+ * - command送信後probeの失敗は、物理side-effectが起きた可能性を残すためthrowせず呼び出し元へ返す。
+ *
+ * @private
+ * @function runStructuredBoxsInfoProbe
+ * @param {WebSocket} ws - OPEN済みWebSocket
+ * @param {object} options - probe option
+ * @param {string} options.probeMode - `before` または `after`
+ * @param {number} options.timeoutMs - 応答待ちtimeout
+ * @returns {Promise<object>} observed/timeout/errorのprobe result
+ */
+async function runStructuredBoxsInfoProbe(ws, options) {
+  try {
+    return await sendBoxsInfoProbeAndWait(ws, options);
+  } catch (error) {
+    const summary = serializeCertificationError(error);
+    return {
+      status: summary.message.includes("timeout") ? "timeout" : "error",
+      probeMode: toNonEmptyString(options?.probeMode) || "manual",
+      elapsedMs: null,
+      request: { method: "get", params: { boxsInfo: 1 } },
+      evidence: null,
+      message: summary.message,
+      error: summary,
+    };
+  }
+}
+
+/**
+ * certification result JSONをtimestamp付きdirectoryへ保存する。
+ *
+ * 【詳細説明】
+ * - stdoutだけでは実機作業後のレビュー証跡が失われやすいため、明示 `--output-dir` 指定時だけ保存する。
+ * - 保存するJSONには保存先summary自体も含め、reviewerへ渡した単体fileから由来directoryを追えるようにする。
+ *
+ * @private
+ * @function writeCertificationResultEvidence
+ * @param {object} result - certification実行結果
+ * @param {string} outputDir - 保存先root directory
+ * @returns {Promise<object>} 保存先summary
+ */
+async function writeCertificationResultEvidence(result, outputDir) {
+  const rootDir = path.resolve(outputDir);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const runDir = path.join(rootDir, stamp);
+  const evidence = {
+    written: true,
+    directory: runDir,
+    files: ["certification-result.json"],
+  };
+  await mkdir(runDir, { recursive: true });
+  const savedResult = {
+    ...result,
+    evidence,
+  };
+  await writeFile(
+    path.join(runDir, "certification-result.json"),
+    `${JSON.stringify(savedResult, null, 2)}\n`,
+    "utf8",
+  );
+  return evidence;
+}
+
+/**
+ * 必要に応じてcertification resultへ保存証跡を付与する。
+ *
+ * 【詳細説明】
+ * - `--output-dir` 未指定時は副作用なしでresultをそのまま返す。
+ * - 保存失敗はCLIの成功/失敗判定を曖昧にしないため例外として呼び出し元へ返す。
+ *
+ * @private
+ * @function finalizeCertificationResult
+ * @param {object} result - certification実行結果
+ * @param {object} options - CLIオプション
+ * @returns {Promise<object>} evidence情報を付与したresult
+ */
+async function finalizeCertificationResult(result, options) {
+  const outputDir = toNonEmptyString(options?.outputDir);
+  if (!outputDir) {
+    return result;
+  }
+  const evidence = await writeCertificationResultEvidence(result, outputDir);
+  return {
+    ...result,
+    evidence,
+  };
+}
+
+/**
  * K2/CFS slot control certificationを実行する。
  *
  * 【詳細説明】
  * - dry-runではtransport planだけを返し、WSへ接続しない。
  * - `send:true` のときだけWebSocketへ接続し、certification-only planの送信を明示許可する。
+ * - command送信後の観測失敗は、送信済みの可能性を保持した `unknown` resultとして返す。
  *
  * @function runK2CfsSlotControlCertification
  * @param {object} options - parseArgs済みオプション
@@ -439,16 +560,18 @@ export async function runK2CfsSlotControlCertification(options) {
   const plan = createK2CfsCommandTransportPlan(request, {
     allowUncertifiedCfsSlotCommandCandidates: true,
   });
+  const startedAt = new Date().toISOString();
+  const startedAtMs = Date.now();
   if (!plan.ok) {
-    return {
+    return finalizeCertificationResult({
       ok: false,
       sent: false,
       request,
       plan,
-    };
+    }, options);
   }
   if (!options.send) {
-    return {
+    return finalizeCertificationResult({
       ok: true,
       sent: false,
       dryRun: true,
@@ -459,7 +582,7 @@ export async function runK2CfsSlotControlCertification(options) {
         after: Boolean(options.probeAfter),
         boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
       },
-    };
+    }, options);
   }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
   try {
@@ -468,31 +591,100 @@ export async function runK2CfsSlotControlCertification(options) {
       after: null,
     };
     if (options.probeBefore) {
-      probes.before = await sendBoxsInfoProbeAndWait(ws, {
+      probes.before = await runStructuredBoxsInfoProbe(ws, {
         probeMode: "before",
         timeoutMs: options.boxsInfoTimeoutMs,
       });
+      if (probes.before.status !== "observed") {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: false,
+          dryRun: false,
+          status: "rejected",
+          reason: "pre-command-observation-failed",
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          response: null,
+          probes,
+        }, options);
+      }
     }
-    const response = await sendK2CfsCommandTransportPlan(plan, async (frame) => {
-      return sendWsFrameAndWait(ws, frame);
-    }, {
-      allowCertificationOnly: true,
-    });
+    let response = null;
+    try {
+      response = await sendK2CfsCommandTransportPlan(plan, async (frame) => {
+        return sendWsFrameAndWait(ws, frame);
+      }, {
+        allowCertificationOnly: true,
+      });
+    } catch (error) {
+      return finalizeCertificationResult({
+        ok: false,
+        sent: false,
+        dryRun: false,
+        status: "rejected",
+        reason: "command-submit-failed",
+        blindRetryAllowed: false,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedAtMs,
+        host: options.host,
+        wsPort: options.wsPort,
+        request,
+        plan,
+        response: null,
+        probes,
+        error: serializeCertificationError(error),
+      }, options);
+    }
     if (options.probeAfter) {
-      probes.after = await sendBoxsInfoProbeAndWait(ws, {
+      probes.after = await runStructuredBoxsInfoProbe(ws, {
         probeMode: "after",
         timeoutMs: options.boxsInfoTimeoutMs,
       });
+      if (probes.after.status !== "observed") {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: true,
+          dryRun: false,
+          status: "unknown",
+          reason: "post-command-observation-failed",
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          response,
+          probes,
+        }, options);
+      }
     }
-    return {
+    const postCommandObserved = options.probeAfter === true && probes.after?.status === "observed";
+    return finalizeCertificationResult({
       ok: true,
       sent: true,
       dryRun: false,
+      status: postCommandObserved ? "confirmed" : "submitted",
+      reason: postCommandObserved ? null : "post-command-observation-not-requested",
+      blindRetryAllowed: false,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      host: options.host,
+      wsPort: options.wsPort,
       request,
       plan,
       response,
       probes,
-    };
+    }, options);
   } finally {
     ws.close();
   }
