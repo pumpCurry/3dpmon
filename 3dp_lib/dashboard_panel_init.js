@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1566 (PR #439)
+ * @version 1.390.1567 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 21:24:10
+ * @lastModified 2026-08-31 21:36:36
  * -----------------------------------------------------------
  */
 
@@ -835,10 +835,18 @@ function createCfsControlRenderOptions(hostname) {
       onCommandReconciled(request) {
         const currentMachine = monitorData.machines[hostname] || {};
         const currentShadowRecord = currentMachine.runtimeData?.printerCoreV3Shadow || null;
+        const commandId = String(request?.commandId || "").trim();
+        const currentRecoveryStore = monitorData.physicalCommandRecoveryLatch || null;
+        const currentRecoveryRecord = commandId
+          ? currentRecoveryStore?.unresolvedByCommandId?.[commandId] || null
+          : null;
         return resolveCfsCertificationRecoveryBlocker({
           ...request,
           resolution: request?.resolution || "observed-confirmed",
-          expectedDeviceId: request?.expectedDeviceId || currentShadowRecord?.deviceId || null,
+          expectedDeviceId: request?.expectedDeviceId || currentShadowRecord?.deviceId || currentRecoveryRecord?.deviceId || null,
+          expectedDigest: request?.expectedDigest || currentRecoveryRecord?.digest || null,
+          expectedCommandKind: request?.expectedCommandKind || request?.commandKind || currentRecoveryRecord?.commandKind || null,
+          expectedMaterialSourceId: request?.expectedMaterialSourceId || request?.sourceId || currentRecoveryRecord?.materialSourceId || null,
           resolutionSource: request?.resolutionSource || "material-topology-panel",
         });
       },

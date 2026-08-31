@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1566 (PR #439)
+ * @version 1.390.1567 (PR #439)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-31 21:24:10
+ * @lastModified 2026-08-31 21:36:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1721,7 +1721,12 @@ describe("dashboard_panel_init CFS control hook", () => {
       unresolvedByCommandId: {
         "cmd:k2-select-1b": {
           commandId: "cmd:k2-select-1b",
+          commandKind: "cfs-slot-select",
+          deviceId: "device-k2",
+          sessionId: "session-1",
+          materialSourceId: "cfs:1:slot:1",
           status: "post-observed",
+          digest: "fnv1a128:select-record",
         },
       },
       conflictedCommandIds: [],
@@ -1764,6 +1769,11 @@ describe("dashboard_panel_init CFS control hook", () => {
       expect.objectContaining({
         commandId: "cmd:k2-select-1b",
         resolution: "observed-confirmed",
+        expectedDeviceId: "device-k2",
+        expectedDigest: "fnv1a128:select-record",
+        expectedCommandKind: "cfs-slot-select",
+        expectedMaterialSourceId: "cfs:1:slot:1",
+        resolutionSource: "material-topology-panel",
         postObservation: expect.objectContaining({
           digest: "material-topology-observation:2026-08-28T01:00:05.000Z",
         }),

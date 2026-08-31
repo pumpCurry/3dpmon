@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1564 (PR #439)
+ * @version 1.390.1567 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 21:31:42
+ * @lastModified 2026-08-31 21:36:36
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -570,23 +570,18 @@ function notifyCommandReconciled(executionState, viewModel, controlPolicy, resol
 }
 
 /**
- * ViewModel内で指定sourceIdがselectedとして観測されているか判定する。
+ * ViewModel内のmaterial source行を平坦化する。
  *
  * 【詳細説明】
- * - 外部スプールとCFS unit slotの両方を同じsource rowとして扱い、sourceId一致とselected=trueを確認する。
- * - ここはUI mutex解除の補助判定であり、command authorityのpost-command correlationを代替しない。
+ * - 外部スプールとCFS unit slotの両方を同じsource rowとして扱い、観測確認の共通入力にする。
+ * - 表示専用の未観測slotも含むため、呼び出し側でsourceIdや状態を必ず再確認する。
  *
  * @private
- * @function isSourceSelectedInViewModel
+ * @function collectViewModelSourceRows
  * @param {object|null|undefined} viewModel - material topology view model
- * @param {string|null|undefined} expectedSourceId - 期待sourceId
- * @returns {boolean} 指定sourceがselectedとして観測された場合true
+ * @returns {Array<object>} source row一覧
  */
-function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
-  const sourceId = displayText(expectedSourceId, "");
-  if (!sourceId) {
-    return false;
-  }
+function collectViewModelSourceRows(viewModel) {
   const rows = [];
   if (Array.isArray(viewModel?.external)) {
     rows.push(...viewModel.external);
@@ -596,7 +591,70 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
       rows.push(...unit.slots);
     }
   }
-  return rows.some((row) => row?.sourceId === sourceId && row?.selected === true);
+  return rows;
+}
+
+/**
+ * CFS select commandを後続観測だけで解決してよいか評価する。
+ *
+ * 【詳細説明】
+ * - 自動解決は人間確認を介さず永続復旧ラッチを閉じるため、freshな現在観測だけを根拠にする。
+ * - selected=trueのsourceが複数ある、selectionValid=falseが含まれる、またはtarget sourceと一致しない場合は
+ *   物理状態が曖昧なためprobingを維持する。
+ * - この判定はselect専用であり、load/unload/feed/retractの物理成功確認には使わない。
+ *
+ * @private
+ * @function evaluateSelectedSourceObservation
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @param {string|null|undefined} expectedSourceId - 期待sourceId
+ * @returns {{confirmed:boolean, reason:string|null, message:string}} 観測評価結果
+ */
+function evaluateSelectedSourceObservation(viewModel, expectedSourceId) {
+  const sourceId = displayText(expectedSourceId, "");
+  if (!sourceId) {
+    return {
+      confirmed: false,
+      reason: "missing-source-id",
+      message: "対象スロットを特定できないため再操作を保留しています。",
+    };
+  }
+  if (viewModel?.summary?.topologyState !== "fresh") {
+    return {
+      confirmed: false,
+      reason: "stale-topology",
+      message: "CFS情報が現在値として確認できません。再操作を保留しています。",
+    };
+  }
+  const rows = collectViewModelSourceRows(viewModel).filter((row) => row?.sourceId);
+  if (rows.some((row) => row?.status?.selectionValid === false || row?.status?.selectionState === "invalid")) {
+    return {
+      confirmed: false,
+      reason: "invalid-selection-state",
+      message: "機器の選択状態が有効ではありません。再操作を保留しています。",
+    };
+  }
+  const selectedRows = rows.filter((row) => row?.selected === true && row?.status?.selectionValid === true);
+  if (selectedRows.length !== 1) {
+    return {
+      confirmed: false,
+      reason: "ambiguous-selected-source",
+      message: selectedRows.length > 1
+        ? "機器の選択状態が一意ではありません。再操作を保留しています。"
+        : "対象スロットの選択はまだ確認できません。",
+    };
+  }
+  if (selectedRows[0]?.sourceId !== sourceId) {
+    return {
+      confirmed: false,
+      reason: "target-source-not-selected",
+      message: "対象スロットの選択はまだ確認できません。",
+    };
+  }
+  return {
+    confirmed: true,
+    reason: null,
+    message: "最新観測で対象スロットの選択を確認しました。再操作できます。",
+  };
 }
 
 /**
@@ -631,16 +689,17 @@ function reconcileCommandExecutionState(executionState, viewModel, controlPolicy
       executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 送信前から選択済みだったため再操作を保留しています。`;
       return;
     }
-    if (!isSourceSelectedInViewModel(viewModel, reconciliation.expectedSourceId)) {
+    const selectedObservation = evaluateSelectedSourceObservation(viewModel, reconciliation.expectedSourceId);
+    if (!selectedObservation.confirmed) {
       executionState.state = "probing";
       executionState.baselineObservationKey = currentObservationKey;
       executionState.statusClass = "warning";
-      executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、対象スロットの選択はまだ確認できません。`;
+      executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、${selectedObservation.message}`;
       return;
     }
     executionState.state = "confirmed";
     executionState.statusClass = "success";
-    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測で対象スロットの選択を確認しました。再操作できます。`;
+    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} ${selectedObservation.message}`;
     notifyCommandReconciled(executionState, viewModel, controlPolicy, "observed-confirmed");
     executionState.reconciliation = null;
     return;
