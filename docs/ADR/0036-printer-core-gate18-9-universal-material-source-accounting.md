@@ -161,14 +161,17 @@ A job may debit a managed spool only when all of the following are true:
 - the usage is attributed to exactly one material source, or the result set is
   complete enough to mark a source as confirmed unused
 - print-start captured an immutable mount snapshot
+- the usage evidence and print-start snapshot were issued by a trusted
+  provider/repository boundary
 - the snapshot references an open verified SpoolMount
 - the source is not in a hard-blocked identity or discontinuity state
 - the same job has not already been debited by legacy or universal accounting
 
 For provisional CFS/CFS-C sources, manual SpoolMount assignment is allowed. Auto
-debit is allowed only after print-start revalidation proves source continuity.
-Restart or reconnect does not close the mount, but fresh source observation is
-required before a new automatic debit.
+debit is allowed only after print-start revalidation proves source continuity
+and a trusted issuer has created source-specific usage and print-start binding
+evidence. Restart or reconnect does not close the mount, but fresh source
+observation is required before a new automatic debit.
 
 Multi-source jobs with total-only usage are never split by color, material,
 source count, elapsed time, or display order. They are recorded as pending or
@@ -212,6 +215,10 @@ Gate 18.9A includes legacy accounting cutover safety. When a device moves to
 universal accounting, its legacy mount interval must be sealed at the last
 legacy-completed print ID before cutover. Future jobs must not be included in
 that legacy interval.
+
+Starting `universal-shadow` observation is not an accounting authority cutover.
+It must not seal the legacy interval. A sealed cutover is valid only when the
+target backend is `universal-authoritative`.
 
 The cutover record carries:
 

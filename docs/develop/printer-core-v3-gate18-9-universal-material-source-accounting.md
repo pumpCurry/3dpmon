@@ -87,6 +87,14 @@ Required debit policy helper:
 
 - `evaluateMaterialDebitEligibility(input)`
 
+Optional shape helper:
+
+- `createSourceSpecificMaterialUsageEvidence(input)`
+
+This helper normalizes source-specific usage evidence fields only. It does not
+issue debit authority. Gate 18.9A intentionally has no public trusted usage or
+trusted print-start snapshot issuer.
+
 ## Identity Rules
 
 `materialSourceId` is an accounting identity. `locator` is where the source was
@@ -102,7 +110,8 @@ The contract must represent:
 - provisional endpoint/location evidence
 
 Provisional CFS sources may have manual SpoolMount records. They may debit only
-after print-start continuity is revalidated.
+after print-start continuity is revalidated and after a later repository-owned
+issuer has created trusted usage and trusted print-start binding evidence.
 
 ## SpoolMount Continuity Rules
 
@@ -156,6 +165,10 @@ correction ledger event with explicit provenance.
 Before a device becomes universal-authoritative, its legacy mount interval must
 be sealed with the last legacy completed print ID.
 
+Starting universal-shadow observation is not a cutover and must not seal the
+legacy interval. Sealing legacy accounting is valid only as part of an
+authority cutover to `universal-authoritative`.
+
 Future jobs after the cutover must not be included in legacy derivation.
 
 `hostSpoolMap` remains a compatibility projection while migration is incomplete.
@@ -165,9 +178,9 @@ It is not a debit authority for multi-source devices.
 
 Gate 18.9B connects usage attribution:
 
-- print-start material binding snapshot
+- trusted print-start material binding snapshot issuer/repository
 - `JobMaterialSegment`
-- source-aware usage evidence
+- trusted source-aware usage evidence issuer/repository
 - append-only `FilamentLedgerEvent`
 - pending/unattributed isolation
 - idempotent debit evaluation
@@ -201,6 +214,9 @@ Gate 18.9A tests:
 - RFID `null` does not block continuity
 - RFID mismatch blocks debit
 - provisional source after restart requires fresh revalidation before debit
+- public usage evidence shape factory does not mint debit authority
+- plain print-start snapshot does not mint debit authority
+- sealed legacy-to-shadow cutover is invalid
 
 Gate 18.9B tests:
 

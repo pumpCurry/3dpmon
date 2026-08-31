@@ -20,7 +20,7 @@
  * - {@link createMaterialSourceRecord}：MaterialSource record を生成
  * - {@link createSpoolMountRecord}：SpoolMount record を生成
  * - {@link createMaterialAccountingCutoverRecord}：legacy cutover record を生成
- * - {@link createSourceSpecificMaterialUsageEvidence}：source-specific usage evidence を生成
+ * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link validateFilamentUnit}：FilamentUnit record を検証
  * - {@link validateMaterialSource}：MaterialSource record を検証
@@ -28,9 +28,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1493 (PR #438)
+ * @version 1.390.1494 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 10:03:00
+ * @lastModified 2026-08-31 10:20:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -66,17 +66,28 @@ const SOURCE_SPECIFIC_USAGE_EVIDENCE_SECRET = `printer-core-material-usage:${Dat
 const TRUSTED_SOURCE_SPECIFIC_USAGE_EVIDENCE = new WeakSet();
 
 /**
+ * trusted print-start material snapshot の参照集合。
+ *
+ * 【詳細説明】
+ * - Gate18.9Aではpublic issuerを持たず、plain objectのsnapshotをauthorityとして扱わない。
+ * - Gate18.9Bでprint-start composition/repositoryが接続された時点で、発行境界を追加する。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS = new WeakSet();
+
+/**
  * source-specific usage evidence のsource/method policy。
  *
  * 【詳細説明】
- * - 任意のsource/methodがsource-specific authorityを名乗ることを防ぐため、初期contractでは既知の実測系だけを許す。
+ * - 任意のsource/methodがsource-specific authorityを名乗ることを防ぐため、初期contractでは既知の実測系だけをshapeとして許す。
+ * - ここで許可されても未信頼evidenceであり、debit authorityはGate18.9Bのissuer/repositoryまで昇格しない。
  *
  * @constant {Readonly<object>}
  */
 const SOURCE_SPECIFIC_USAGE_EVIDENCE_POLICY = Object.freeze({
   "trusted-physical-counter:source-counter": "exact",
   "firmware-source-specific:firmware-source": "high",
-  "printer-core-fixture:source-specific": "high",
 });
 
 /**
@@ -274,6 +285,29 @@ function normalizeEnumValue(value, allowed, fallback) {
 }
 
 /**
+ * authority identity用enum値を厳密に検証する。
+ *
+ * 【詳細説明】
+ * - unknown topologyをdirect-onlyへ誤変換しないため、identity factoryではfallbackしない。
+ * - UI設定の正規化とは異なり、missing/invalidは呼び出し側の契約違反として例外にする。
+ *
+ * @private
+ * @function requireEnumValue
+ * @param {*} value - enum候補。
+ * @param {ReadonlySet<string>} allowed - 許可値。
+ * @param {string} name - エラー表示用の項目名。
+ * @returns {string} 検証済みenum値。
+ * @throws {TypeError} 許可値ではない場合。
+ */
+function requireEnumValue(value, allowed, name) {
+  const text = toTrimmedString(value);
+  if (!allowed.has(text)) {
+    throw new TypeError(`Material accounting contract invalid ${name}.`);
+  }
+  return text;
+}
+
+/**
  * 任意値を有限数またはnullへ正規化する。
  *
  * @private
@@ -343,17 +377,16 @@ function normalizeStringArray(value) {
  * @function createDirectFeedUnitIdentity
  * @param {Object} input - identity生成入力。
  * @param {string} input.deviceId - Device ID。
- * @param {string=} input.protocolFamily - printer protocol family。
+ * @param {string=} input.protocolFamily - printer protocol family。identityには含めずprovenance用途に留める。
  * @returns {Object} direct feed unit identity。
  * @example
  * const identity = createDirectFeedUnitIdentity({ deviceId: "serial:k1", protocolFamily: "creality-k1" });
  */
 export function createDirectFeedUnitIdentity(input = {}) {
   const deviceId = requireNonEmptyString(input.deviceId, "deviceId");
-  const protocolFamily = toTrimmedString(input.protocolFamily || "unknown");
   return deepFreezeJson({
     namespace: "filament-unit:printer-direct",
-    parts: [deviceId, protocolFamily],
+    parts: [deviceId, "printer-direct", 0],
   });
 }
 
@@ -376,10 +409,10 @@ export function createDirectFeedUnitIdentity(input = {}) {
  * const locator = createMaterialSourceLocator({ kind: "cfs-slot", unitIndex: 1, slotIndex: 0 });
  */
 export function createMaterialSourceLocator(input = {}) {
-  const kind = normalizeEnumValue(
+  const kind = requireEnumValue(
     input.kind,
     enumValues(MATERIAL_SOURCE_KIND),
-    MATERIAL_SOURCE_KIND.DIRECT_FEED
+    "kind"
   );
   return deepFreezeJson({
     kind,
@@ -412,10 +445,10 @@ export function createMaterialSourceLocator(input = {}) {
 export function createMaterialSourceIdentity(input = {}) {
   const deviceId = requireNonEmptyString(input.deviceId, "deviceId");
   const unitId = requireNonEmptyString(input.unitId, "unitId");
-  const kind = normalizeEnumValue(
+  const kind = requireEnumValue(
     input.kind,
     enumValues(MATERIAL_SOURCE_KIND),
-    MATERIAL_SOURCE_KIND.DIRECT_FEED
+    "kind"
   );
   return deepFreezeJson({
     namespace: "material-source",
@@ -451,7 +484,7 @@ export function createMaterialSourceIdentity(input = {}) {
  */
 export function createFilamentUnitRecord(input = {}) {
   const deviceId = requireNonEmptyString(input.deviceId, "deviceId");
-  const kind = normalizeEnumValue(input.kind, enumValues(FILAMENT_UNIT_KIND), FILAMENT_UNIT_KIND.PRINTER_DIRECT);
+  const kind = requireEnumValue(input.kind, enumValues(FILAMENT_UNIT_KIND), "kind");
   const identity = cloneJsonValue(input.identity || {
     namespace: "filament-unit",
     parts: [deviceId, kind, toFiniteNumberOrNull(input.unitIndex)],
@@ -504,7 +537,7 @@ export function createFilamentUnitRecord(input = {}) {
 export function createMaterialSourceRecord(input = {}) {
   const deviceId = requireNonEmptyString(input.deviceId, "deviceId");
   const unitId = requireNonEmptyString(input.unitId, "unitId");
-  const kind = normalizeEnumValue(input.kind, enumValues(MATERIAL_SOURCE_KIND), MATERIAL_SOURCE_KIND.DIRECT_FEED);
+  const kind = requireEnumValue(input.kind, enumValues(MATERIAL_SOURCE_KIND), "kind");
   const locator = cloneJsonValue(input.locator || createMaterialSourceLocator({ kind, index: 0 }));
   const identity = cloneJsonValue(input.identity || createMaterialSourceIdentity({
     deviceId,
@@ -553,6 +586,7 @@ export function createMaterialSourceRecord(input = {}) {
  * @param {string=} input.verification - 確認方法。
  * @param {string=} input.sourceIdentityStrengthAtOpen - mount開始時のsource identity強度。
  * @param {string=} input.expectedRfid - operator確認済みRFID。
+ * @param {string=} input.mountOperationId - mount操作の冪等identity。
  * @param {string=} input.openedAt - mount開始日時。
  * @param {string=} input.closedAt - mount終了日時。
  * @param {string=} input.openedBy - mount開始者。
@@ -566,11 +600,17 @@ export function createSpoolMountRecord(input = {}) {
   const spoolId = requireNonEmptyString(input.spoolId, "spoolId");
   const openedAt = normalizeOptionalIsoTime(input.openedAt);
   const status = normalizeEnumValue(input.status, enumValues(SPOOL_MOUNT_STATUS), SPOOL_MOUNT_STATUS.OPEN);
+  const mountOperationId = toTrimmedString(input.mountOperationId);
+  const explicitMountId = toTrimmedString(input.mountId);
+  if (!explicitMountId && !mountOperationId) {
+    throw new TypeError("Material accounting contract requires mountOperationId when mountId is not supplied.");
+  }
   const mountId = toTrimmedString(input.mountId) ||
-    createPrinterCoreV3DeterministicId("spool-mount", [materialSourceId, spoolId, openedAt || "open"]);
+    createPrinterCoreV3DeterministicId("spool-mount", [materialSourceId, spoolId, mountOperationId]);
   return deepFreezeJson({
     schemaVersion: MATERIAL_ACCOUNTING_CONTRACT_VERSION,
     mountId,
+    mountOperationId: mountOperationId || null,
     materialSourceId,
     spoolId,
     status,
@@ -681,11 +721,11 @@ function createSourceSpecificUsageEvidenceSignature(evidence) {
 }
 
 /**
- * source-specific material usage evidenceを生成する。
+ * source-specific material usage evidence shapeを生成する。
  *
  * 【詳細説明】
- * - source-aware debitに使えるusage evidenceを、許可されたsource/method policyから生成する。
- * - 戻り値はmodule-private WeakSetへ登録され、plain objectでは`evaluateMaterialDebitEligibility()`を通過できない。
+ * - source-aware debit候補のshapeを、許可されたsource/method policyから生成する。
+ * - public factoryはauthority attestationを発行しないため、戻り値だけでは`evaluateMaterialDebitEligibility()`を通過できない。
  *
  * @function createSourceSpecificMaterialUsageEvidence
  * @param {Object} input - usage evidence入力。
@@ -693,21 +733,26 @@ function createSourceSpecificUsageEvidenceSignature(evidence) {
  * @param {string} input.mountId - SpoolMount ID。
  * @param {string} input.snapshotId - print-start snapshot ID。
  * @param {string} input.printJobId - PrintJob ID。
+ * @param {string} input.deviceId - Device ID。
+ * @param {string=} input.usageSegmentId - source-specific usage segment ID。
+ * @param {string=} input.providerEventId - provider event ID。
+ * @param {number=} input.segmentOrdinal - source内segment ordinal。
  * @param {number|string} input.usedLengthMm - 使用量mm。
  * @param {string} input.source - evidence source。
  * @param {string} input.measurementMethod - measurement method。
  * @param {string=} input.observedAt - 観測日時。
  * @param {string=} input.idempotencyKey - 冪等key。
- * @returns {Object} trusted source-specific usage evidence。
+ * @returns {Object} untrusted source-specific usage evidence。
  * @throws {TypeError} 必須値不足、不正な使用量、未許可source/methodの場合。
  * @example
- * const usage = createSourceSpecificMaterialUsageEvidence({ materialSourceId, mountId, snapshotId, printJobId, usedLengthMm: 3210, source: "trusted-physical-counter", measurementMethod: "source-counter" });
+ * const usage = createSourceSpecificMaterialUsageEvidence({ materialSourceId, mountId, snapshotId, printJobId, deviceId, usageSegmentId: "segment:0", usedLengthMm: 3210, source: "trusted-physical-counter", measurementMethod: "source-counter" });
  */
 export function createSourceSpecificMaterialUsageEvidence(input = {}) {
   const materialSourceId = requireNonEmptyString(input.materialSourceId, "materialSourceId");
   const mountId = requireNonEmptyString(input.mountId, "mountId");
   const snapshotId = requireNonEmptyString(input.snapshotId, "snapshotId");
   const printJobId = requireNonEmptyString(input.printJobId, "printJobId");
+  const deviceId = requireNonEmptyString(input.deviceId, "deviceId");
   const usedLengthMm = normalizeNonNegativeMm(input.usedLengthMm);
   if (usedLengthMm === null) {
     throw new TypeError("Material accounting contract requires a non-negative usedLengthMm.");
@@ -719,21 +764,20 @@ export function createSourceSpecificMaterialUsageEvidence(input = {}) {
     throw new TypeError("Material accounting contract usage evidence source/method is not trusted.");
   }
   const observedAt = normalizeOptionalIsoTime(input.observedAt);
+  const normalizedSegmentOrdinal = toFiniteNumberOrNull(input.segmentOrdinal);
+  const usageSegmentId = toTrimmedString(input.usageSegmentId) ||
+    toTrimmedString(input.providerEventId) ||
+    (normalizedSegmentOrdinal !== null ? `segment:${normalizedSegmentOrdinal}` : "segment:0");
   const idempotencyKey = toTrimmedString(input.idempotencyKey) ||
     createPrinterCoreV3DeterministicId("material-source-usage-idempotency", [
       materialSourceId,
-      mountId,
       snapshotId,
       printJobId,
-      usedLengthMm,
-      source,
-      measurementMethod,
-      observedAt || "",
+      usageSegmentId,
     ]);
   const evidenceId = toTrimmedString(input.evidenceId) ||
     createPrinterCoreV3DeterministicId("material-source-usage-evidence", [
       materialSourceId,
-      mountId,
       snapshotId,
       printJobId,
       idempotencyKey,
@@ -745,6 +789,8 @@ export function createSourceSpecificMaterialUsageEvidence(input = {}) {
     mountId,
     snapshotId,
     printJobId,
+    deviceId,
+    usageSegmentId,
     usedLengthMm,
     attribution: "source-specific",
     confidence,
@@ -752,12 +798,14 @@ export function createSourceSpecificMaterialUsageEvidence(input = {}) {
     measurementMethod,
     observedAt,
     idempotencyKey,
+    trusted: false,
+    authority: {
+      mode: "normalized-evidence-only",
+      canDebit: false,
+    },
     attestation: null,
   };
-  evidence.attestation = createSourceSpecificUsageEvidenceSignature(evidence);
-  const trustedEvidence = deepFreezeJson(evidence);
-  TRUSTED_SOURCE_SPECIFIC_USAGE_EVIDENCE.add(trustedEvidence);
-  return trustedEvidence;
+  return deepFreezeJson(evidence);
 }
 
 /**
@@ -900,6 +948,7 @@ export function validateSpoolMount(record) {
     return { ok: false, errors: ["record-not-object"] };
   }
   requireField(errors, record, "mountId");
+  requireField(errors, record, "mountOperationId");
   requireField(errors, record, "materialSourceId");
   requireField(errors, record, "spoolId");
   if (!enumValues(SPOOL_MOUNT_STATUS).has(record.status)) {
@@ -941,6 +990,11 @@ export function validateMaterialAccountingCutover(record) {
   if (record.fromBackend === record.toBackend) {
     errors.push("backend-not-changing");
   }
+  if (record.fromBackend === MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE &&
+      record.toBackend === MATERIAL_ACCOUNTING_BACKEND.UNIVERSAL_SHADOW &&
+      record.migrationStatus === "sealed") {
+    errors.push("sealed-shadow-cutover-forbidden");
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -971,11 +1025,14 @@ function validateUsageEvidenceForDebit(usageEvidence, mount, materialSource, sna
   const usageMountId = toTrimmedString(usageEvidence?.mountId);
   const usageSnapshotId = toTrimmedString(usageEvidence?.snapshotId);
   const usagePrintJobId = toTrimmedString(usageEvidence?.printJobId);
+  const usageDeviceId = toTrimmedString(usageEvidence?.deviceId);
   const mountSourceId = toTrimmedString(mount?.materialSourceId);
   const sourceId = toTrimmedString(materialSource?.materialSourceId);
+  const sourceDeviceId = toTrimmedString(materialSource?.deviceId);
   const mountId = toTrimmedString(mount?.mountId);
   const snapshotId = toTrimmedString(snapshot?.snapshotId);
   const snapshotPrintJobId = toTrimmedString(snapshot?.printJobId);
+  const snapshotDeviceId = toTrimmedString(snapshot?.deviceId);
   if (!usageSourceId) {
     reasons.push("usage-evidence-source-required");
   } else if ((sourceId && usageSourceId !== sourceId) || (mountSourceId && usageSourceId !== mountSourceId)) {
@@ -996,7 +1053,13 @@ function validateUsageEvidenceForDebit(usageEvidence, mount, materialSource, sna
   } else if (snapshotPrintJobId && usagePrintJobId !== snapshotPrintJobId) {
     reasons.push("usage-evidence-job-mismatch");
   }
-  if (!TRUSTED_SOURCE_SPECIFIC_USAGE_EVIDENCE.has(usageEvidence) ||
+  if (!usageDeviceId) {
+    reasons.push("usage-evidence-device-required");
+  } else if ((sourceDeviceId && usageDeviceId !== sourceDeviceId) || (snapshotDeviceId && usageDeviceId !== snapshotDeviceId)) {
+    reasons.push("usage-evidence-device-mismatch");
+  }
+  if (usageEvidence?.trusted !== true ||
+      !TRUSTED_SOURCE_SPECIFIC_USAGE_EVIDENCE.has(usageEvidence) ||
       usageEvidence?.attestation !== createSourceSpecificUsageEvidenceSignature(usageEvidence)) {
     reasons.push("untrusted-usage-evidence");
   }
@@ -1039,7 +1102,10 @@ function validatePrintStartSnapshotForDebit(snapshot, mount, materialSource) {
   }
   if (!snapshotDeviceId) {
     reasons.push("print-start-snapshot-device-required");
-  } else if (sourceDeviceId && snapshotDeviceId !== sourceDeviceId) {
+  }
+  if (!sourceDeviceId) {
+    reasons.push("material-source-device-required");
+  } else if (snapshotDeviceId && snapshotDeviceId !== sourceDeviceId) {
     reasons.push("print-start-snapshot-device-mismatch");
   }
   if (!snapshotPrintJobId) {
@@ -1063,7 +1129,49 @@ function validatePrintStartSnapshotForDebit(snapshot, mount, materialSource) {
   if (!snapshotCapturedAt) {
     reasons.push("print-start-snapshot-time-required");
   }
+  if (!TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.has(snapshot)) {
+    reasons.push("untrusted-print-start-snapshot");
+  }
   return reasons;
+}
+
+/**
+ * print-start時点でmount intervalが有効だったかを検査する。
+ *
+ * 【詳細説明】
+ * - 印刷完了後にoperatorがmountを閉じても、print-start時点でopenなら帰属候補として扱う。
+ * - 逆にsnapshot取得時点より前に閉じたmountは、現在statusだけではなく時間区間で拒否する。
+ *
+ * @private
+ * @function validateMountIntervalForSnapshot
+ * @param {Object|null|undefined} mount - SpoolMount record。
+ * @param {Object|null|undefined} snapshot - print-start snapshot候補。
+ * @returns {string[]} reason一覧。
+ */
+function validateMountIntervalForSnapshot(mount, snapshot) {
+  if (!mount || typeof mount !== "object") {
+    return [];
+  }
+  if (mount.status === SPOOL_MOUNT_STATUS.BLOCKED) {
+    return ["mount-not-open"];
+  }
+  const capturedAt = normalizeOptionalIsoTime(snapshot?.capturedAt);
+  const openedAt = normalizeOptionalIsoTime(mount.openedAt);
+  const closedAt = normalizeOptionalIsoTime(mount.closedAt);
+  if (!capturedAt) {
+    return [];
+  }
+  if (!openedAt) {
+    return ["mount-open-time-required"];
+  }
+  const capturedTime = Date.parse(capturedAt);
+  if (Date.parse(openedAt) > capturedTime) {
+    return ["mount-not-open-at-print-start"];
+  }
+  if (closedAt && Date.parse(closedAt) <= capturedTime) {
+    return ["mount-not-open-at-print-start"];
+  }
+  return [];
 }
 
 /**
@@ -1118,16 +1226,14 @@ export function evaluateMaterialDebitEligibility(input = {}) {
     if (!mountValidation.ok) {
       blocked.push(...mountValidation.errors);
     }
-    if (mount.status !== SPOOL_MOUNT_STATUS.OPEN) {
-      blocked.push("mount-not-open");
-    }
+    blocked.push(...validateMountIntervalForSnapshot(mount, input.printStartSnapshot));
     if (mount.verification === SPOOL_MOUNT_VERIFICATION.UNVERIFIED) {
       blocked.push("mount-verification-required");
     }
     if (mount.verification === SPOOL_MOUNT_VERIFICATION.LEGACY_PROJECTED) {
       blocked.push("legacy-projection-not-debit-authority");
     }
-    if (mount.verification === SPOOL_MOUNT_VERIFICATION.MIGRATED && continuity.trustedMigrationEvidence !== true) {
+    if (mount.verification === SPOOL_MOUNT_VERIFICATION.MIGRATED) {
       blocked.push("trusted-migration-evidence-required");
     }
   }
@@ -1140,6 +1246,9 @@ export function evaluateMaterialDebitEligibility(input = {}) {
       blocked.push("material-source-id-required");
     } else if (mount?.materialSourceId && mount.materialSourceId !== materialSourceId) {
       blocked.push("material-source-mismatch");
+    }
+    if (!toTrimmedString(materialSource.deviceId)) {
+      blocked.push("material-source-device-required");
     }
   }
 
@@ -1188,7 +1297,7 @@ export function evaluateMaterialDebitEligibility(input = {}) {
     return deepFreezeJson({
       status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
       canDebit: false,
-      reasons: [...new Set(blocked)],
+      reasons: [...new Set([...blocked, ...pending])],
     });
   }
   if (pending.length > 0) {
