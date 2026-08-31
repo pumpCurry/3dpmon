@@ -3,9 +3,9 @@
  * @description
  * - CFS操作intentがfail-closedにcommand requestへ変換され、bound dispatcherだけへ渡されることを検証する。
  *
- * @version 1.390.1382 (PR #432)
+ * @version 1.390.1560 (PR #439)
  * @since 1.390.1380 (PR #432)
- * @lastModified 2026-08-25 22:35:00
+ * @lastModified 2026-08-31 20:19:55
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -85,7 +85,22 @@ function createSendTimeContext() {
         boxId: 1,
         slotId: 2,
         presence: "loaded",
+        selected: true,
+        selectionState: "selected",
+        selectionValid: true,
+        status: {
+          presence: "loaded",
+          stateCode: 1,
+          selected: true,
+          selectionState: "selected",
+          selectionValid: true,
+        },
       }],
+    },
+    observedState: {
+      print: {
+        stateLabel: "idle",
+      },
     },
   };
 }

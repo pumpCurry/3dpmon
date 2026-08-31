@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1472 (PR #436)
+ * @version 1.390.1560 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-29 21:19:45
+ * @lastModified 2026-08-31 20:19:55
  * -----------------------------------------------------------
  */
 
@@ -107,6 +107,9 @@ import {
   resolveMaterialDisplayMode,
   resolveMaterialTopologyViewOptions,
 } from "./printer_core/dashboard_material_system_settings.js";
+import {
+  isPhysicalCommandRecoveryBlocked,
+} from "./printer_core/dashboard_physical_command_recovery_latch.js";
 
 // ==============================
 // レジストリ
@@ -330,12 +333,110 @@ function createCfsControlSendTimeMaterialTopology(topology) {
       boxId: source?.boxId ?? null,
       slotId: source?.slotId ?? source?.protocolSlotId ?? null,
       presence: source?.presence || source?.status?.presence || null,
+      selected: typeof source?.selected === "boolean" ? source.selected : (typeof source?.status?.selected === "boolean" ? source.status.selected : null),
+      selectionState: source?.selectionState || source?.status?.selectionState || null,
+      selectionValid: typeof source?.selectionValid === "boolean" ? source.selectionValid : (typeof source?.status?.selectionValid === "boolean" ? source.status.selectionValid : null),
       status: {
         presence: source?.status?.presence || null,
         stateCode: source?.status?.stateCode ?? source?.stateCode ?? null,
+        selected: typeof source?.status?.selected === "boolean" ? source.status.selected : null,
+        selectionState: source?.status?.selectionState || null,
+        selectionValid: typeof source?.status?.selectionValid === "boolean" ? source.status.selectionValid : null,
       },
       material: source?.material || null,
     })),
+  };
+}
+
+/**
+ * CFS command requestに対する現在の物理復旧blockerを判定する。
+ *
+ * 【詳細説明】
+ * - 物理commandは失敗・timeout・状態不明のあと自動再送してはいけないため、send-time context生成時点で
+ *   recovery latch storeを確認する。
+ * - `isPhysicalCommandRecoveryBlocked()` 側で未解決、conflict、integrity quarantineを一元判定する。
+ *
+ * @private
+ * @function createCfsControlRecoveryBlocker
+ * @param {object|null|undefined} request - 送信予定command request
+ * @returns {object} recovery blocker判定
+ */
+function createCfsControlRecoveryBlocker(request) {
+  return isPhysicalCommandRecoveryBlocked(
+    monitorData.physicalCommandRecoveryLatch,
+    request?.commandId
+  );
+}
+
+/**
+ * 復旧ラッチstoreからCertificationパネルで表示すべきcommandId候補を抽出する。
+ *
+ * 【詳細説明】
+ * - Debug / Certificationパネルはまだ特定のproduction requestを持たないため、store内の未解決・衝突・隔離entryを
+ *   代表blocker候補として走査する。
+ * - `command-id-storage-key-mismatch` のようにpayload側commandIdとstorage keyが食い違う場合も、両方を候補に入れて
+ *   `isPhysicalCommandRecoveryBlocked()` 側のfail-closed判定へ委ねる。
+ *
+ * @private
+ * @function collectCfsCertificationRecoveryBlockerCommandIds
+ * @param {object|null|undefined} store - 復旧ラッチstore候補
+ * @returns {Array<string>} 重複排除済みcommandId候補
+ */
+function collectCfsCertificationRecoveryBlockerCommandIds(store) {
+  const candidates = [];
+  const addCandidate = (value) => {
+    const text = String(value ?? "").trim();
+    if (text && !candidates.includes(text)) {
+      candidates.push(text);
+    }
+  };
+  if (!store || typeof store !== "object") {
+    return candidates;
+  }
+  if (store.unresolvedByCommandId && typeof store.unresolvedByCommandId === "object") {
+    Object.keys(store.unresolvedByCommandId).forEach(addCandidate);
+    Object.values(store.unresolvedByCommandId).forEach((record) => {
+      addCandidate(record?.commandId);
+    });
+  }
+  if (Array.isArray(store.conflictedCommandIds)) {
+    store.conflictedCommandIds.forEach(addCandidate);
+  }
+  if (Array.isArray(store.retainedUnsupportedEntries)) {
+    store.retainedUnsupportedEntries.forEach((entry) => {
+      addCandidate(entry?.commandId);
+      addCandidate(entry?.storageKey);
+    });
+  }
+  return candidates;
+}
+
+/**
+ * CFS Debug / Certificationパネルへ表示する復旧ラッチblockerを生成する。
+ *
+ * 【詳細説明】
+ * - 実送信時は個別requestのcommandIdで再判定するが、パネルではstore内に物理操作の未解決証跡が残っていることを
+ *   人間へ先に見せる必要がある。
+ * - 候補が無い場合は明示的にclearを返し、空commandIdを `isPhysicalCommandRecoveryBlocked()` へ渡して
+ *   `missing-command-id` 扱いになることを避ける。
+ *
+ * @private
+ * @function createCfsCertificationRecoveryBlocker
+ * @returns {object} Certificationパネル用recovery blocker判定
+ */
+function createCfsCertificationRecoveryBlocker() {
+  const store = monitorData.physicalCommandRecoveryLatch;
+  const commandIds = collectCfsCertificationRecoveryBlockerCommandIds(store);
+  for (const commandId of commandIds) {
+    const blocker = isPhysicalCommandRecoveryBlocked(store, commandId);
+    if (blocker?.blocked === true) {
+      return blocker;
+    }
+  }
+  return {
+    blocked: false,
+    reason: "not-blocked",
+    commandId: "",
   };
 }
 
@@ -377,6 +478,7 @@ function createCfsControlSendTimeContext(hostname, request) {
     materialTopology,
     stateSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
     observedState: shadowRecord?.lastState || null,
+    recoveryBlocker: createCfsControlRecoveryBlocker(request),
     createdAt: new Date().toISOString(),
     certificationEvidence: currentProductionSettings.certificationEvidence,
     certificationScope: createCfsControlCertificationScope(currentTarget),
@@ -905,6 +1007,7 @@ function createCfsCertificationRenderableState(hostname) {
   const commandKind = target?.materialSystem?.cfsCertification?.commandKind || "cfs-load";
   const dryRunPlan = createCfsCertificationDryRunPlan(targetSource, shadowRecord, commandKind);
   const currentInfo = selectCurrentPrinterCoreV3Info(target);
+  const recoveryBlocker = createCfsCertificationRecoveryBlocker();
   const viewModel = createCfsCertificationPanelViewModel({
     printer: {
       displayName: hostname,
@@ -925,6 +1028,7 @@ function createCfsCertificationRenderableState(hostname) {
     dryRunPlan,
     execution: machine.runtimeData?.cfsCertificationExecution || {},
     evidence: machine.runtimeData?.cfsCertificationEvidence || {},
+    recoveryBlocker,
     export: {
       captureId: machine.runtimeData?.cfsCertificationCaptureId || "",
       fixtureId: machine.runtimeData?.cfsCertificationFixtureId || "",
