@@ -1,6 +1,6 @@
 # 開発ドキュメント索引
 
-本ディレクトリには 3dpmon の開発に関する設計書・仕様書を集約しています。v2.2.1044 RC 時点では、従来のマルチプリンタ監視に加えて Printer Core v3、K2/CFS、Hybrid Filament UI、CFS command certification の設計資料を含みます。
+本ディレクトリには 3dpmon の開発に関する設計書・仕様書を集約しています。v2.2.1045 RC 時点では、従来のマルチプリンタ監視に加えて Printer Core v3、K2/CFS、Hybrid Filament UI、CFS command certification の設計資料を含みます。
 
 ## アーキテクチャ・設計
 

@@ -1,6 +1,6 @@
 # Filament Spool Management and Inventory Tracking
 
-This document introduces the filament management features in 3dpmon that help you track remaining spool length and maintain inventory across multiple printers. In v2.2.1044 RC, 3dpmon also displays read-only device-observed material sources from K2/CFS and K1C/CFS-C separately from the manual spool ledger.
+This document introduces the filament management features in 3dpmon that help you track remaining spool length and maintain inventory across multiple printers. In v2.2.1045 RC, 3dpmon also displays read-only device-observed material sources from K2/CFS and K1C/CFS-C separately from the manual spool ledger.
 
 ## Registering Spools
 - Click **Add** in the filament management panel to register a spool.
@@ -22,7 +22,7 @@ For K2/CFS and K1C/CFS-C, 3dpmon can show material sources reported by the print
 These records are saved as read-only `materialSourceObservations`. They do not automatically update `hostSpoolMap`, mount history, usage history, or inventory counts. Non-RFID third-party filament may not report remaining percentage from the printer; manage remaining material through the 3DPmon spool ledger in that case.
 
 > [!IMPORTANT]
-> In v2.2.1044 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. The CFS display is for monitoring; operate filament from the printer itself or from a later certified build.
+> In v2.2.1045 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. The CFS display is for monitoring; operate filament from the printer itself or from a later certified build.
 
 ## Global vs Per-Host Data
 

@@ -12,7 +12,7 @@ This page details 3dpmon's remote control capabilities, file handling tools and 
   evidence are available.
 
 > [!IMPORTANT]
-> In v2.2.1044 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. LIVE SEND in the CFS Debug / Certification panel is not enabled as a production command.
+> In v2.2.1045 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. LIVE SEND in the CFS Debug / Certification panel is not enabled as a production command.
 
 ### Per-Host Command Routing
 

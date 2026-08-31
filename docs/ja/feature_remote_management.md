@@ -11,7 +11,7 @@
 - K2/CFS のファイル印刷では、CFS slotの観測と割当証跡が揃う場合だけ、`colorMatch` から `multiColorPrint` へ進む guarded path を使います。
 
 > [!IMPORTANT]
-> v2.2.1044 RC では、CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。CFS Debug / Certification panel の LIVE SEND もproduction commandとしては無効です。
+> v2.2.1045 RC では、CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。CFS Debug / Certification panel の LIVE SEND もproduction commandとしては無効です。
 
 ### Per-host コマンドルーティング
 コマンドは各パネルが紐付いているホストに対して送信されます。操作パネルから送ったコマンドは、そのパネルが表示しているプリンタにのみ届きます。異なるプリンタへの誤送信を避けるため、送信直前にも接続先、session、ファイル、CFS観測状態を再検証します。

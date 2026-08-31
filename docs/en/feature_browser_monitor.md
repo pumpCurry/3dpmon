@@ -12,7 +12,7 @@ This page explains how to monitor Creality-series, K2 Pro Combo / CFS, and Moonr
 | Moonraker / IR3 V2 | Supported through a separate protocol path | Moonraker-family path | Separate from K1/K2 CFS authority | Separate path | N/A |
 
 > [!IMPORTANT]
-> In v2.2.1044 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation and assignment evidence are available.
+> In v2.2.1045 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation, assignment evidence, complete selection evidence, and a clear recovery latch are available.
 
 ## Execution Environments
 
@@ -41,7 +41,7 @@ This page explains how to monitor Creality-series, K2 Pro Combo / CFS, and Moonr
 
 Monitoring data is shown as GridStack panels. Panels can be dragged and resized freely, and layouts are saved automatically. Add panels from the panel menu.
 
-For K2/CFS, the Hybrid Filament UI and CFS Debug / Certification panel separate read-only probes, preflight, dry-run payloads, ARM state, before/after evidence, and protocol event export. LIVE SEND and standalone CFS operations do not become production operations until live certification is complete.
+For K2/CFS, the Hybrid Filament UI and CFS Debug / Certification panel separate read-only probes, preflight, dry-run payloads, ARM state, before/after evidence, and protocol event export. The Certification panel also surfaces unresolved physical-command recovery blockers, CFS slot selection evidence, and F012 certification evidence. LIVE SEND and standalone CFS operations do not become production operations until live certification is complete.
 
 ## Troubleshooting
 

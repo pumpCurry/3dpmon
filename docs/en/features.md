@@ -13,7 +13,7 @@ highlights what can be controlled or managed from each section.
 | Moonraker / IR3 V2 | Supported through a separate protocol path | Moonraker-family path | Separate from K1/K2 CFS authority | Separate path | N/A |
 
 > [!IMPORTANT]
-> In v2.2.1044 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation and assignment evidence are available.
+> In v2.2.1045 RC, standalone CFS/CFS-C load, unload, feed, retract, and slot select are not enabled. K2/CFS print start uses a guarded path and proceeds only when CFS slot observation, assignment evidence, complete selection evidence, and a clear recovery latch are available.
 
 ## Electron App
 

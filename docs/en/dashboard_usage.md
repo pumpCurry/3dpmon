@@ -46,10 +46,11 @@
 > window management. The browser mode is available as a lightweight
 > alternative but may have limitations with certain features.
 
-> **Important:** In v2.2.1044 RC, standalone CFS/CFS-C load, unload,
+> **Important:** In v2.2.1045 RC, standalone CFS/CFS-C load, unload,
 > feed, retract and slot select are disabled. K2/CFS print start uses a
-> guarded path and the CFS Debug / Certification panel LIVE SEND is not
-> enabled as a production command.
+> guarded path that requires CFS slot observation, assignment evidence,
+> complete selection evidence, and a clear recovery latch. The CFS Debug /
+> Certification panel LIVE SEND is not enabled as a production command.
 
 ## Connecting to Printers
 

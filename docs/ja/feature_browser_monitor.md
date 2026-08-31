@@ -12,7 +12,7 @@
 | Moonraker / IR3 V2 | 別protocol pathで対応 | Moonraker系経路 | K1/K2 CFS authorityとは分離 | 別経路 | 対象外 |
 
 > [!IMPORTANT]
-> v2.2.1044 RC では、CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測と割当証跡が揃う場合だけ進む guarded path です。
+> v2.2.1045 RC では、CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測、割当証跡、選択状態の完全性、未解決復旧ラッチがないことを確認できる場合だけ進む guarded path です。
 
 ## 実行環境
 
@@ -41,7 +41,7 @@
 
 監視情報は GridStack ベースのパネルとして表示されます。パネルは自由にドラッグ・リサイズでき、レイアウトは自動保存されます。パネルの追加はパネルメニューから行います。
 
-K2/CFS では、通常のフィラメントカードに加えて、Hybrid Filament UI と CFS Debug / Certification panel により、read-only probe、preflight、dry-run payload、ARM状態、before/after evidence、protocol event export を分離して確認できます。ただし、LIVE SEND やCFS単体操作は実機certificationが完了するまでproduction操作として有効化されません。
+K2/CFS では、通常のフィラメントカードに加えて、Hybrid Filament UI と CFS Debug / Certification panel により、read-only probe、preflight、dry-run payload、ARM状態、before/after evidence、protocol event export を分離して確認できます。Certification panel では、未解決の物理コマンド復旧ラッチ、CFS slot の選択状態、F012 certification evidence などをまとめて確認できます。ただし、LIVE SEND やCFS単体操作は実機certificationが完了するまでproduction操作として有効化されません。
 
 ## 接続がうまくいかない場合
 
