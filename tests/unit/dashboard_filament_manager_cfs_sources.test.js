@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1521 (PR #438)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-31 15:24:00
+ * @lastModified 2026-08-31 16:41:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -246,6 +246,7 @@ function setupK2Runtime(options = {}) {
       runtimeData: {
         printerCoreV3Shadow: {
           state: "observed",
+          deviceId: "serial:k2pro-69e7",
           lastObservedAt: observedAt,
           materialProviderLastObservedAt: observedAt,
           lastState: {
@@ -388,6 +389,7 @@ describe("filament manager CFS material source section", () => {
       segmentId: "segment:job-1:1c",
       printJobId: "job:4c-benchy",
       printPlanId: "plan:4c-benchy",
+      deviceId: "serial:k2pro-69e7",
       materialSourceId,
       mountId: "mount:1c",
       spoolId: "spool:1c",
@@ -398,6 +400,7 @@ describe("filament manager CFS material source section", () => {
     monitorData.materialAccountingPrintBindingStore.ledgerEvents.push({
       ledgerEventId: "ledger:job-1:1c",
       segmentId: "segment:job-1:1c",
+      deviceId: "serial:k2pro-69e7",
       materialSourceId,
       spoolId: "spool:1c",
       usedLengthMm: 3210,
@@ -411,5 +414,44 @@ describe("filament manager CFS material source section", () => {
     expect(chip?.querySelector(".fm-material-source-managed-remaining")?.textContent).toContain("3DPmon残量 268800mm / 80%");
     expect(chip?.querySelector(".fm-material-source-usage")?.textContent).toContain("直近使用 3210mm");
     expect(chip?.textContent).toContain("機器残量 100%");
+  });
+
+  it("deviceIdが未確定のCFS表示では別機体のaccounting履歴を合流しない", () => {
+    setupK2Runtime({ observedAt: "2026-08-27T12:34:56.000Z" });
+    monitorData.machines["K2Pro-69E7"].runtimeData.printerCoreV3Shadow.deviceId = null;
+    monitorData.machines["K2Pro-69E7"].runtimeData.printerCoreV3Shadow.lastState.identity = {};
+    monitorData.materialAccountingPrintBindingStore.printStartSnapshots.push({
+      snapshotId: "snapshot:other-device:1c",
+      deviceId: "serial:other-k2",
+      printJobId: "job:other-device",
+      printPlanId: "plan:other-device",
+      materialSourceId: "material-source:other-k2:cfs-1c",
+      mountId: "mount:other-1c",
+      spoolId: "spool:other-1c",
+      capturedAt: "2026-08-27T12:00:00.000Z",
+      materialSource: {
+        materialSourceId: "material-source:other-k2:cfs-1c",
+        aliases: ["cfs:1:slot:2"],
+        locator: {
+          kind: "cfs-slot",
+          unitIndex: 1,
+          boxId: 1,
+          slotIndex: 2,
+          protocolSlotId: "1C",
+        },
+      },
+      spoolMount: {
+        mountId: "mount:other-1c",
+        materialSourceId: "material-source:other-k2:cfs-1c",
+        spoolId: "spool:other-1c",
+        status: "open",
+      },
+    });
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const chip = section?.querySelector('[data-source-id="cfs:1:slot:2"]');
+
+    expect(chip?.querySelector(".fm-material-source-managed-spool")).toBeNull();
+    expect(chip?.textContent).not.toContain("3DPmon管理");
   });
 });

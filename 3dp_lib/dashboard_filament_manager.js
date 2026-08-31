@@ -21,9 +21,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1519 (PR #438)
+* @version 1.390.1521 (PR #438)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-31 15:24:00
+* @lastModified 2026-08-31 16:41:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -558,10 +558,13 @@ function resolveManagedSpoolForMaterialSource(spoolId) {
 function createMaterialSupplyAccountingView(options = {}) {
   const store = monitorData.materialAccountingPrintBindingStore || {};
   const deviceId = toTrimmedText(options.deviceId);
+  if (!deviceId) {
+    return null;
+  }
   const snapshotsBySourceId = new Map();
   const segmentsBySourceId = new Map();
   for (const snapshot of Array.isArray(store.printStartSnapshots) ? store.printStartSnapshots : []) {
-    if (deviceId && toTrimmedText(snapshot?.deviceId) !== deviceId) {
+    if (toTrimmedText(snapshot?.deviceId) !== deviceId) {
       continue;
     }
     const sourceId = toTrimmedText(snapshot?.materialSourceId);
@@ -582,7 +585,7 @@ function createMaterialSupplyAccountingView(options = {}) {
     }
   }
   for (const segment of Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : []) {
-    if (deviceId && toTrimmedText(segment?.deviceId) !== deviceId) {
+    if (toTrimmedText(segment?.deviceId) !== deviceId) {
       continue;
     }
     const sourceId = toTrimmedText(segment?.materialSourceId);
@@ -608,7 +611,7 @@ function createMaterialSupplyAccountingView(options = {}) {
     return null;
   }
   return createMaterialSourceAccountingView({
-    deviceId: deviceId || "unknown-device",
+    deviceId,
     sources: sourceIds.map((sourceId) => {
       const snapshot = snapshotsBySourceId.get(sourceId) || {};
       const segment = segmentsBySourceId.get(sourceId) || {};

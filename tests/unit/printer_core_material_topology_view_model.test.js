@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1521 (PR #438)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-31 15:24:00
+ * @lastModified 2026-08-31 16:41:00
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -373,6 +373,38 @@ describe("Printer Core v3 material topology view model", () => {
         state: "confirmed-used",
         usedLengthMm: 3210,
       },
+    });
+  });
+
+  it("同じ観測source keyに複数のaccounting sourceが衝突する場合は合流せずdiagnosticを残す", () => {
+    const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      accountingView: {
+        deviceId: "serial:k2pro-69e7",
+        sources: [
+          {
+            materialSourceId: "material-source:k2pro-69e7:cfs-1c-a",
+            aliases: ["cfs:1:slot:2"],
+            mount: { spoolId: "spool:a" },
+          },
+          {
+            materialSourceId: "material-source:k2pro-69e7:cfs-1c-b",
+            aliases: ["cfs:1:slot:2"],
+            mount: { spoolId: "spool:b" },
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.units[0].slots[2]).toMatchObject({
+      sourceId: "cfs:1:slot:2",
+      accounting: null,
+      diagnostics: [
+        {
+          code: "ambiguous-accounting-source",
+          severity: "warning",
+        },
+      ],
     });
   });
 

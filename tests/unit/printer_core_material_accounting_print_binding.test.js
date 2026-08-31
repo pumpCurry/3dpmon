@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1520 (PR #438)
+ * @version 1.390.1521 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 15:34:00
+ * @lastModified 2026-08-31 16:41:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -230,6 +230,96 @@ describe("MaterialSource print binding repository", () => {
       "shadow-print-start-material-snapshot",
       "shadow-print-start-material-snapshot",
     ]);
+  });
+
+  it("print-start時にMaterialSourceがPrintPlanと別deviceならbindingを拒否する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    const mismatchedSources = materialSources.map((source, index) => (
+      index === 0
+        ? { ...source, deviceId: "serial:other-printer" }
+        : source
+    ));
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:source-device-mismatch",
+      materialSources: mismatchedSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:source-device-mismatch",
+    });
+
+    expect(start).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["material-source-device-mismatch"],
+    });
+    expect(repository.toJSON().printStartSnapshots).toEqual([]);
+  });
+
+  it("print-start時刻でactiveなopen mountが複数あるsourceはambiguousとして拒否する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    const duplicateMount = createSpoolMountRecord({
+      materialSourceId: materialSources[0].materialSourceId,
+      spoolId: spoolMounts[0].spoolId,
+      mountOperationId: "mount:1a-duplicate",
+      openedAt: "2026-08-31T04:45:00.000Z",
+      openedBy: "operator",
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.STABLE,
+    });
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:ambiguous-mount",
+      materialSources,
+      spoolMounts: [duplicateMount, ...spoolMounts],
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:ambiguous-mount",
+    });
+
+    expect(start).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["spool-mount-ambiguous-at-print-start"],
+    });
+    expect(repository.toJSON().printStartSnapshots).toEqual([]);
+  });
+
+  it("print-start時刻でactiveではないopen mountはbindingに使わない", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    const futureMounts = spoolMounts.map((mount, index) => (
+      index === 0
+        ? createSpoolMountRecord({
+          ...mount,
+          mountOperationId: "mount:1a-future",
+          openedAt: "2026-08-31T05:10:00.000Z",
+        })
+        : mount
+    ));
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:inactive-mount",
+      materialSources,
+      spoolMounts: futureMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:inactive-mount",
+    });
+
+    expect(start).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["spool-mount-not-active-at-print-start"],
+    });
+    expect(repository.toJSON().printStartSnapshots).toEqual([]);
   });
 
   it("callerのcomplete宣言だけでは未出現sourceをconfirmed-unusedにしない", () => {
@@ -941,6 +1031,80 @@ describe("MaterialSource print binding repository", () => {
       ["usageEvidence", "cross-record-mismatch"],
       ["jobMaterialSegment", "cross-record-mismatch"],
       ["ledgerEvent", "cross-record-mismatch"],
+    ]);
+  });
+
+  it("保存済みstore復元時にduplicate semantic IDのpayload conflictを隔離する", () => {
+    const snapshot = {
+      snapshotId: "snapshot:duplicate",
+      deviceId: "serial:k2pro-69e7",
+      printJobId: "job:duplicate",
+      printPlanId: "plan:duplicate",
+      materialSourceId: "source:1a",
+      mountId: "mount:1a",
+      spoolId: "spool:1a",
+      capturedAt: "2026-08-31T05:00:00.000Z",
+    };
+    const conflictingSnapshot = {
+      ...snapshot,
+      materialSourceId: "source:1b",
+    };
+
+    const restored = normalizeStoredMaterialAccountingPrintBindingStore({
+      printStartSnapshots: [snapshot, { ...snapshot }, conflictingSnapshot],
+    });
+
+    expect(restored.printStartSnapshots).toEqual([snapshot]);
+    expect(restored.retainedUnsupportedEntries.map((entry) => [
+      entry.recordType,
+      entry.reason,
+      entry.record.materialSourceId,
+    ])).toContainEqual([
+      "printStartSnapshot",
+      "duplicate-semantic-id-conflict",
+      "source:1b",
+    ]);
+  });
+
+  it("保存済みoperationは復元済みauthority recordを参照するものだけ再利用する", () => {
+    const snapshot = {
+      snapshotId: "snapshot:operation-valid",
+      deviceId: "serial:k2pro-69e7",
+      printJobId: "job:operation",
+      printPlanId: "plan:operation",
+      materialSourceId: "source:1a",
+      mountId: "mount:1a",
+      spoolId: "spool:1a",
+      capturedAt: "2026-08-31T05:00:00.000Z",
+    };
+    const restored = normalizeStoredMaterialAccountingPrintBindingStore({
+      printStartSnapshots: [snapshot],
+      operationsById: {
+        "operation:valid": {
+          operationId: "operation:valid",
+          digest: "digest:valid",
+          result: {
+            ok: true,
+            status: "recorded",
+            snapshots: [{ snapshotId: "snapshot:operation-valid" }],
+          },
+        },
+        "operation:orphan": {
+          operationId: "operation:orphan",
+          digest: "digest:orphan",
+          result: {
+            ok: true,
+            status: "recorded",
+            snapshots: [{ snapshotId: "snapshot:missing" }],
+          },
+        },
+      },
+    });
+
+    expect(Object.keys(restored.operationsById)).toEqual(["operation:valid"]);
+    expect(restored.retainedUnsupportedEntries.map((entry) => [entry.recordType, entry.reason])).toContainEqual([
+      "operationRecord",
+      "operation-authority-record-mismatch",
     ]);
   });
 });

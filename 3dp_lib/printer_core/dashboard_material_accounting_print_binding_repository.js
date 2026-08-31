@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1520 (PR #438)
+ * @version 1.390.1521 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 15:34:00
+ * @lastModified 2026-08-31 16:41:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -195,18 +195,20 @@ function mapById(records, key) {
 }
 
 /**
- * sourceに対応するopen mountを探す。
+ * sourceに対応するprint-start時点のactive open mountを解決する。
  *
  * @private
  * @function findMountForAssignment
  * @param {Object} assignment - PrintPlan tool assignment。
  * @param {Object[]} spoolMounts - SpoolMount配列。
- * @returns {Object|null} 対応mount。
+ * @param {string} capturedAt - print-start時刻。
+ * @returns {{mount:Object|null,reason:string|null}} 対応mountと失敗理由。
  */
-function findMountForAssignment(assignment, spoolMounts) {
+function findMountForAssignment(assignment, spoolMounts, capturedAt) {
   const sourceId = toTrimmedString(assignment?.materialSourceId);
   const assignmentSpoolId = toTrimmedString(assignment?.spoolId);
-  return (Array.isArray(spoolMounts) ? spoolMounts : []).find((mount) => {
+  const capturedEpoch = Date.parse(capturedAt);
+  const candidateMounts = (Array.isArray(spoolMounts) ? spoolMounts : []).filter((mount) => {
     if (toTrimmedString(mount?.materialSourceId) !== sourceId) {
       return false;
     }
@@ -214,7 +216,24 @@ function findMountForAssignment(assignment, spoolMounts) {
       return false;
     }
     return mount?.status === "open";
-  }) || null;
+  });
+  if (candidateMounts.length === 0) {
+    return { mount: null, reason: "spool-mount-required" };
+  }
+  const activeMounts = candidateMounts.filter((mount) => {
+    const openedAt = normalizeIsoTime(mount?.openedAt);
+    const closedAt = normalizeIsoTime(mount?.closedAt);
+    const openedEpoch = openedAt ? Date.parse(openedAt) : Number.NEGATIVE_INFINITY;
+    const closedEpoch = closedAt ? Date.parse(closedAt) : Number.POSITIVE_INFINITY;
+    return openedEpoch <= capturedEpoch && capturedEpoch < closedEpoch;
+  });
+  if (activeMounts.length === 0) {
+    return { mount: null, reason: "spool-mount-not-active-at-print-start" };
+  }
+  if (activeMounts.length > 1) {
+    return { mount: null, reason: "spool-mount-ambiguous-at-print-start" };
+  }
+  return { mount: activeMounts[0], reason: null };
 }
 
 /**
@@ -566,14 +585,32 @@ function isRestorableLedgerEvent(event) {
  * @param {Object[]} input.records - record候補配列。
  * @param {string} input.recordType - record種別。
  * @param {Function} input.predicate - 復元可否判定。
+ * @param {string} input.idKey - semantic ID field。
  * @param {Object[]} input.retainedUnsupportedEntries - unsupported退避先。
  * @returns {Object[]} 復元可能record配列。
  */
-function restoreRecordArray({ records, recordType, predicate, retainedUnsupportedEntries }) {
+function restoreRecordArray({ records, recordType, predicate, idKey, retainedUnsupportedEntries }) {
   const restored = [];
+  const seenById = new Map();
   for (const [index, record] of (Array.isArray(records) ? records : []).entries()) {
     if (predicate(record)) {
-      restored.push(cloneJsonValue(record));
+      const candidate = cloneJsonValue(record);
+      const recordId = toTrimmedString(candidate?.[idKey]);
+      const serialized = stableStringifyPrinterCoreV3Value(candidate);
+      const seen = seenById.get(recordId);
+      if (!seen) {
+        seenById.set(recordId, serialized);
+        restored.push(candidate);
+        continue;
+      }
+      if (seen !== serialized) {
+        retainedUnsupportedEntries.push({
+          recordType,
+          index,
+          record: candidate,
+          reason: "duplicate-semantic-id-conflict",
+        });
+      }
     } else {
       retainedUnsupportedEntries.push({
         recordType,
@@ -832,6 +869,103 @@ function validateRestoredStoreCrossRecords(restored, retainedUnsupportedEntries)
 }
 
 /**
+ * authority配列からoperation result内recordをサニタイズする。
+ *
+ * 【詳細説明】
+ * - 保存済みoperationsByIdはcaller supplied JSONなので、その中のsnapshot/segment/ledger payloadを信頼しない。
+ * - 復元済みauthority配列に存在するIDだけを許し、返却payloadはauthority側recordへ差し替える。
+ *
+ * @private
+ * @function sanitizeOperationRecordArray
+ * @param {Object} result - operation result候補。
+ * @param {string} field - result内配列field。
+ * @param {string} idKey - record ID field。
+ * @param {Map<string,Object>} acceptedById - 復元済みauthority record map。
+ * @returns {{ok:boolean,records:Object[]}} サニタイズ結果。
+ */
+function sanitizeOperationRecordArray(result, field, idKey, acceptedById) {
+  const records = Array.isArray(result?.[field]) ? result[field] : [];
+  const sanitized = [];
+  for (const record of records) {
+    const recordId = toTrimmedString(record?.[idKey]);
+    const accepted = acceptedById.get(recordId);
+    if (!recordId || !accepted) {
+      return { ok: false, records: [] };
+    }
+    sanitized.push(cloneJsonValue(accepted));
+  }
+  return { ok: true, records: sanitized };
+}
+
+/**
+ * 保存済みoperation recordを復元済みauthority recordへ照合して復元する。
+ *
+ * 【詳細説明】
+ * - operation replayは冪等性維持のために使うが、保存済みoperation内のpayloadはauthorityではない。
+ * - 参照先が復元済みrecordに無いoperationは隔離し、参照がある場合もpayloadはaccepted recordで置換する。
+ *
+ * @private
+ * @function restoreOperationRecords
+ * @param {*} operationsById - 保存済みoperation map候補。
+ * @param {Object} validatedRecords - 復元済みauthority record群。
+ * @param {Object[]} retainedUnsupportedEntries - unsupported退避先。
+ * @returns {Object} 復元可能operation map。
+ */
+function restoreOperationRecords(operationsById, validatedRecords, retainedUnsupportedEntries) {
+  if (!operationsById || typeof operationsById !== "object" || Array.isArray(operationsById)) {
+    return {};
+  }
+  const acceptedMaps = {
+    snapshots: mapById(validatedRecords.printStartSnapshots, "snapshotId"),
+    usageEvidence: mapById(validatedRecords.usageEvidence, "evidenceId"),
+    segments: mapById(validatedRecords.jobMaterialSegments, "segmentId"),
+    ledgerEvents: mapById(validatedRecords.ledgerEvents, "ledgerEventId"),
+  };
+  const restored = {};
+  for (const [key, record] of Object.entries(operationsById)) {
+    const operationId = toTrimmedString(record?.operationId);
+    const digest = toTrimmedString(record?.digest);
+    const result = record?.result && typeof record.result === "object" && !Array.isArray(record.result)
+      ? record.result
+      : null;
+    if (!operationId || operationId !== key || !digest || !result) {
+      retainedUnsupportedEntries.push({
+        recordType: "operationRecord",
+        index: key,
+        record: cloneJsonValue(record),
+        reason: "invalid-stored-record",
+      });
+      continue;
+    }
+    const snapshots = sanitizeOperationRecordArray(result, "snapshots", "snapshotId", acceptedMaps.snapshots);
+    const usageEvidence = sanitizeOperationRecordArray(result, "usageEvidence", "evidenceId", acceptedMaps.usageEvidence);
+    const segments = sanitizeOperationRecordArray(result, "segments", "segmentId", acceptedMaps.segments);
+    const ledgerEvents = sanitizeOperationRecordArray(result, "ledgerEvents", "ledgerEventId", acceptedMaps.ledgerEvents);
+    if (!snapshots.ok || !usageEvidence.ok || !segments.ok || !ledgerEvents.ok) {
+      retainedUnsupportedEntries.push({
+        recordType: "operationRecord",
+        index: key,
+        record: cloneJsonValue(record),
+        reason: "operation-authority-record-mismatch",
+      });
+      continue;
+    }
+    restored[key] = cloneJsonValue({
+      operationId,
+      digest,
+      result: {
+        ...cloneJsonValue(result),
+        snapshots: snapshots.records,
+        usageEvidence: usageEvidence.records,
+        segments: segments.records,
+        ledgerEvents: ledgerEvents.records,
+      },
+    });
+  }
+  return restored;
+}
+
+/**
  * stored repositoryを正規化する。
  *
  * @function normalizeStoredMaterialAccountingPrintBindingStore
@@ -850,28 +984,33 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
       records: source.printStartSnapshots,
       recordType: "printStartSnapshot",
       predicate: isRestorablePrintStartSnapshot,
+      idKey: "snapshotId",
       retainedUnsupportedEntries,
     }),
     usageEvidence: restoreRecordArray({
       records: source.usageEvidence,
       recordType: "usageEvidence",
       predicate: isRestorableUsageEvidence,
+      idKey: "evidenceId",
       retainedUnsupportedEntries,
     }),
     jobMaterialSegments: restoreRecordArray({
       records: source.jobMaterialSegments,
       recordType: "jobMaterialSegment",
       predicate: isRestorableJobMaterialSegment,
+      idKey: "segmentId",
       retainedUnsupportedEntries,
     }),
     ledgerEvents: restoreRecordArray({
       records: source.ledgerEvents,
       recordType: "ledgerEvent",
       predicate: isRestorableLedgerEvent,
+      idKey: "ledgerEventId",
       retainedUnsupportedEntries,
     }),
   };
   const validatedRecords = validateRestoredStoreCrossRecords(restoredRecords, retainedUnsupportedEntries);
+  const operationsById = restoreOperationRecords(source.operationsById, validatedRecords, retainedUnsupportedEntries);
   return {
     schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
     authority: "material-accounting-print-binding-shadow-store",
@@ -882,9 +1021,7 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
     unattributedUsage: Array.isArray(source.unattributedUsage)
       ? source.unattributedUsage.map((usage) => cloneJsonValue(usage))
       : [],
-    operationsById: source.operationsById && typeof source.operationsById === "object"
-      ? cloneJsonValue(source.operationsById)
-      : {},
+    operationsById,
     invariants: {
       legacyUsageHistoryWrites: false,
       legacySpoolRemainingWrites: false,
@@ -1067,13 +1204,18 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     if (reasons.length === 0) {
       for (const assignment of printPlan.toolAssignments) {
         const source = sourceMap.get(assignment.materialSourceId);
-        const mount = findMountForAssignment(assignment, input.spoolMounts);
+        const mountResolution = findMountForAssignment(assignment, input.spoolMounts, capturedAt);
+        const mount = mountResolution.mount;
         if (!source || !validateMaterialSource(source).ok) {
           reasons.push("material-source-required");
           continue;
         }
+        if (toTrimmedString(source.deviceId) !== toTrimmedString(printPlan.deviceId)) {
+          reasons.push("material-source-device-mismatch");
+          continue;
+        }
         if (!mount || !validateSpoolMount(mount).ok) {
-          reasons.push("spool-mount-required");
+          reasons.push(mountResolution.reason || "spool-mount-required");
           continue;
         }
         plannedSnapshots.push(createShadowPrintStartMaterialSnapshot({

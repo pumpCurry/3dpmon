@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1521 (PR #438)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-31 15:24:00
+ * @lastModified 2026-08-31 16:41:00
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -284,10 +284,10 @@ function toTrimmedText(value) {
 }
 
 /**
- * accounting mapへ重複なしでkeyを追加する。
+ * accounting mapへkeyを追加し、衝突時は曖昧状態として保持する。
  *
  * 【詳細説明】
- * - 同じ観測sourceに複数の候補keyがあるため、最初に見つけたaccounting sourceを保持する。
+ * - 同じ観測source keyに複数のMaterialSourceが紐付く場合は、先勝ちで誤った残量を表示せず曖昧として扱う。
  *
  * @private
  * @function addAccountingLookupKey
@@ -298,9 +298,25 @@ function toTrimmedText(value) {
  */
 function addAccountingLookupKey(map, key, source) {
   const normalizedKey = toTrimmedText(key);
-  if (normalizedKey && !map.has(normalizedKey)) {
-    map.set(normalizedKey, source);
+  const sourceId = toTrimmedText(source?.materialSourceId);
+  if (!normalizedKey || !sourceId) {
+    return;
   }
+  const current = map.get(normalizedKey);
+  if (!current) {
+    map.set(normalizedKey, {
+      status: "unique",
+      source,
+      sourceIds: new Set([sourceId]),
+    });
+    return;
+  }
+  if (current.sourceIds.has(sourceId)) {
+    return;
+  }
+  current.status = "ambiguous";
+  current.source = null;
+  current.sourceIds.add(sourceId);
 }
 
 /**
@@ -443,20 +459,34 @@ function createAccountingSourceMap(accountingView) {
  * @function resolveAccountingSourceForRow
  * @param {object|null|undefined} source - normalized material source候補
  * @param {object} options - 表示行オプション
- * @returns {object|null} accounting source、またはnull
+ * @returns {{accounting:object|null,diagnostics:object[]}} accounting解決結果。
  */
 function resolveAccountingSourceForRow(source, options) {
   const accountingBySourceId = options.accountingBySourceId;
   if (!accountingBySourceId || !source) {
-    return null;
+    return { accounting: null, diagnostics: [] };
   }
   for (const key of collectObservedSourceLookupKeys(source, options)) {
-    const accounting = accountingBySourceId.get(key);
-    if (accounting) {
-      return accounting;
+    const entry = accountingBySourceId.get(key);
+    if (!entry) {
+      continue;
     }
+    if (entry.status === "ambiguous") {
+      return {
+        accounting: null,
+        diagnostics: [
+          {
+            code: "ambiguous-accounting-source",
+            severity: "warning",
+            key,
+            materialSourceIds: [...entry.sourceIds],
+          },
+        ],
+      };
+    }
+    return { accounting: entry.source || null, diagnostics: [] };
   }
-  return null;
+  return { accounting: null, diagnostics: [] };
 }
 
 /**
@@ -481,6 +511,7 @@ function createSourceRow(options) {
   const sourceAssignments = findAssignmentsForSource(options.assignments, source?.sourceId);
   const material = source?.material && typeof source.material === "object" ? source.material : {};
   const remaining = createRemainingView(source);
+  const accountingResolution = resolveAccountingSourceForRow(source, options);
   return {
     rowId: source?.sourceId || `${options.kind}:${options.displaySlot}`,
     sourceId: source?.sourceId || null,
@@ -513,7 +544,8 @@ function createSourceRow(options) {
       namespace: assignment.namespace ?? null,
       resolution: assignment.resolution ?? "unknown",
     })),
-    accounting: resolveAccountingSourceForRow(source, options),
+    accounting: accountingResolution.accounting,
+    diagnostics: accountingResolution.diagnostics,
   };
 }
 
