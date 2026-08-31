@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createSpoolMountRepository}：SpoolMount repositoryを生成
  *
- * @version 1.390.1498 (PR #438)
+ * @version 1.390.1500 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 11:35:00
+ * @lastModified 2026-08-31 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -179,7 +179,6 @@ function createMountCreationFingerprint(mount) {
     verification: mount.verification,
     sourceIdentityStrengthAtOpen: mount.sourceIdentityStrengthAtOpen,
     expectedRfid: mount.expectedRfid || null,
-    status: mount.status,
   });
 }
 

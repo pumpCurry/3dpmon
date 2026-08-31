@@ -17,9 +17,9 @@
  * - {@link createMaterialSourceLocatorKey}：Device内locator keyを生成
  * - {@link createMaterialSourceIdentityKey}：Device内identity keyを生成
  *
- * @version 1.390.1498 (PR #438)
+ * @version 1.390.1500 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 11:35:00
+ * @lastModified 2026-08-31 12:00:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -28,6 +28,7 @@
 "use strict";
 
 import {
+  MATERIAL_SOURCE_KIND,
   MATERIAL_IDENTITY_STRENGTH,
   createMaterialSourceLocator,
   validateMaterialSource,
@@ -191,8 +192,9 @@ function canonicalizeMaterialSourceLocator(locator) {
  */
 function getRegistrySourceErrors(source) {
   const errors = [];
+  let canonicalLocator = null;
   try {
-    canonicalizeMaterialSourceLocator(source?.locator);
+    canonicalLocator = canonicalizeMaterialSourceLocator(source?.locator);
   } catch (error) {
     errors.push("invalid-locator");
   }
@@ -208,6 +210,22 @@ function getRegistrySourceErrors(source) {
       }
       if (source.identity.parts[2] !== source.kind) {
         errors.push("identity-kind-mismatch");
+      }
+      if (
+        (source.kind === MATERIAL_SOURCE_KIND.CFS_SLOT ||
+          source.kind === MATERIAL_SOURCE_KIND.CFS_C_SLOT) &&
+        canonicalLocator &&
+        (source.identity.parts[3] ?? null) !== (canonicalLocator.slotIndex ?? null)
+      ) {
+        errors.push("identity-locator-slot-mismatch");
+      }
+      if (
+        (source.kind === MATERIAL_SOURCE_KIND.DIRECT_FEED ||
+          source.kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL) &&
+        canonicalLocator &&
+        (source.identity.parts[4] ?? null) !== (canonicalLocator.index ?? null)
+      ) {
+        errors.push("identity-locator-index-mismatch");
       }
     }
   }

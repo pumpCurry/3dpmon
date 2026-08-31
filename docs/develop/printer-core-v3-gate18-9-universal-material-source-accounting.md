@@ -237,12 +237,14 @@ Gate 18.9A tests:
 - MaterialSourceRegistry canonicalizes equivalent locator shapes before indexing
 - MaterialSourceRegistry returns invalid results, not thrown exceptions, for stable sources without identity evidence
 - MaterialSourceRegistry rejects identity evidence that disagrees with the source device, unit, or kind
+- MaterialSourceRegistry rejects identity/locator slot or index mismatches
 - SpoolMountRepository limits open mount per source to one
 - SpoolMountRepository limits open mount per spool to one across devices
 - SpoolMountRepository treats same `mountOperationId` + same payload as idempotent
 - SpoolMountRepository treats same `mountOperationId` + different payload as conflict
 - SpoolMountRepository closes an open interval only through a dedicated close API
 - SpoolMountRepository keeps mount creation idempotency stable after the mount is later closed
+- SpoolMountRepository keeps mount creation idempotency stable after repository snapshot restore
 - SpoolMountRepository rejects `BLOCKED -> CLOSED` transitions through `closeMount()`
 - SpoolMountRepository treats `closeOperationId` retries as idempotent only for the same semantic close payload
 - SpoolMountRepository rejects overlapping historical intervals for the same source or spool
