@@ -164,8 +164,9 @@ A job may debit a managed spool only when all of the following are true:
 - a valid print job exists
 - actual usage evidence exists
 - usage evidence has a stable idempotency key
-- the usage is attributed to exactly one material source, or the result set is
-  complete enough to mark a source as confirmed unused
+- the usage is attributed to exactly one material source, or a trusted
+  repository-owned result set is complete enough to mark a source as confirmed
+  unused
 - print-start captured an immutable mount snapshot
 - the usage evidence and print-start snapshot were issued by a trusted
   provider/repository boundary
@@ -183,9 +184,10 @@ Multi-source jobs with total-only usage are never split by color, material,
 source count, elapsed time, or display order. They are recorded as pending or
 unattributed usage until source-specific evidence exists.
 
-`0mm` and `unknown` are different. A source may be stored as confirmed unused
-only when the source-specific result set is complete and the print plan proves
-that source was not used. Otherwise its usage remains unknown.
+`0mm` and `unknown` are different. In the current read-only repository, a source
+may be stored as confirmed unused only when explicit source-specific 0mm usage
+is observed. A caller-declared complete result set is not sufficient. Otherwise
+its usage remains unknown until a later trusted result-set registry is added.
 
 ## Remaining Provenance
 
@@ -355,8 +357,12 @@ Gate 18.9D-2:
 
 - persistent shadow commit store
 - trusted in-process prepared transaction attestation
-- base MaterialSource/SpoolMount snapshot digest CAS
-- durable write callback boundary; failed durable write returns the previous store
+- base MaterialSource/SpoolMount snapshot digests embedded in the prepared
+  transaction
+- CAS compares those embedded base digests with the current shadow commit store
+  snapshots, not caller supplied current snapshots
+- durable write callback boundary requires `casApplied:true`; failed durable
+  write or missing atomic CAS evidence returns the previous store
 - restart/recovery from durable shadow commit records
 - `SHADOW` lifecycle transition only after durable commit success
 - same `shadowOperationId` and same transaction payload is idempotent
@@ -365,11 +371,15 @@ Gate 18.9D-2:
 
 Gate 18.9E:
 
-- source-aware print-start binding snapshots
+- source-aware print-start binding snapshots with tool/source assignment
+  metadata
 - source-specific JobMaterialSegment shadow records
 - append-only shadow FilamentLedger event candidates
-- pending/unattributed usage isolation
-- idempotent debit eligibility evaluation
+- read-only usage evidence; the public print binding repository does not mint
+  trusted debit-capable usage evidence
+- pending/unattributed usage isolation for total-only and residual multi-source
+  observations
+- stable semantic idempotency independent from caller operation IDs
 - restart recovery for shadow print binding records without legacy debit
 
 Gate 18.9F:

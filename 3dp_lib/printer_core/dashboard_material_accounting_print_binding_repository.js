@@ -16,12 +16,12 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1517 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 14:36:00
+ * @lastModified 2026-08-31 23:14:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9F でsource-aware残量read model/UIへ接続する
+ * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
  */
 
 "use strict";
@@ -194,23 +194,320 @@ function findMountForAssignment(assignment, spoolMounts) {
 }
 
 /**
- * tool assignmentに対応するusage entryを探す。
+ * usage entryのmm値を正規化する。
  *
  * @private
- * @function findUsageEntryForAssignment
- * @param {Object} assignment - PrintPlan tool assignment。
- * @param {Object[]} materialUsages - usage entry配列。
- * @returns {Object|null} 対応usage entry。
+ * @function getUsageEntryLengthMm
+ * @param {Object|null|undefined} entry - usage entry候補。
+ * @returns {number|null} 正規化済みmm。
  */
-function findUsageEntryForAssignment(assignment, materialUsages) {
-  const toolId = Number(assignment?.toolId);
-  const protocolToolAlias = toTrimmedString(assignment?.protocolToolAlias || assignment?.toolAlias);
-  const materialSourceId = toTrimmedString(assignment?.materialSourceId);
-  const entries = Array.isArray(materialUsages) ? materialUsages : [];
-  return entries.find((entry) => Number(entry?.toolId) === toolId) ||
-    entries.find((entry) => protocolToolAlias && toTrimmedString(entry?.protocolToolAlias || entry?.toolAlias) === protocolToolAlias) ||
-    entries.find((entry) => materialSourceId && toTrimmedString(entry?.materialSourceId) === materialSourceId) ||
-    null;
+function getUsageEntryLengthMm(entry) {
+  return normalizeNonNegativeMm(
+    entry?.usedLengthMm ?? entry?.usedMm ?? entry?.materialUsedMm ?? entry?.deltaUsedMm
+  );
+}
+
+/**
+ * usage entryの識別子を正規化する。
+ *
+ * 【詳細説明】
+ * - toolId / protocolToolAlias / materialSourceId は同じMaterialSource snapshotを指して初めて帰属可能とする。
+ * - 一部だけ一致し、別の識別子が別sourceを指すpayloadは、誤帰属を防ぐためblockedにする。
+ *
+ * @private
+ * @function normalizeUsageEntryIdentifiers
+ * @param {Object|null|undefined} entry - usage entry候補。
+ * @returns {{toolId:?number,protocolToolAlias:string,materialSourceId:string}} 正規化済み識別子。
+ */
+function normalizeUsageEntryIdentifiers(entry) {
+  const toolId = Number(entry?.toolId);
+  return {
+    toolId: Number.isFinite(toolId) ? toolId : null,
+    protocolToolAlias: toTrimmedString(entry?.protocolToolAlias || entry?.toolAlias),
+    materialSourceId: toTrimmedString(entry?.materialSourceId),
+  };
+}
+
+/**
+ * snapshotに保存されたprint-start assignment識別子を正規化する。
+ *
+ * @private
+ * @function normalizeSnapshotAssignmentIdentifiers
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @returns {{toolId:?number,protocolToolAlias:string,materialSourceId:string}} 正規化済み識別子。
+ */
+function normalizeSnapshotAssignmentIdentifiers(snapshot) {
+  const toolId = Number(snapshot?.toolId);
+  return {
+    toolId: Number.isFinite(toolId) ? toolId : null,
+    protocolToolAlias: toTrimmedString(snapshot?.protocolToolAlias || snapshot?.toolAlias),
+    materialSourceId: toTrimmedString(snapshot?.materialSourceId),
+  };
+}
+
+/**
+ * usage entryがsnapshot識別子と矛盾しないかを判定する。
+ *
+ * @private
+ * @function compareUsageEntryToSnapshot
+ * @param {Object} entryIdentifiers - usage entry識別子。
+ * @param {Object} snapshotIdentifiers - snapshot識別子。
+ * @returns {{matches:boolean,conflicts:boolean,hasIdentifier:boolean}} 比較結果。
+ */
+function compareUsageEntryToSnapshot(entryIdentifiers, snapshotIdentifiers) {
+  const checks = [
+    ["toolId", entryIdentifiers.toolId, snapshotIdentifiers.toolId],
+    ["protocolToolAlias", entryIdentifiers.protocolToolAlias, snapshotIdentifiers.protocolToolAlias],
+    ["materialSourceId", entryIdentifiers.materialSourceId, snapshotIdentifiers.materialSourceId],
+  ];
+  let matched = false;
+  let hasIdentifier = false;
+  let conflicts = false;
+  for (const [, entryValue, snapshotValue] of checks) {
+    if (entryValue === null || entryValue === "") {
+      continue;
+    }
+    hasIdentifier = true;
+    if (snapshotValue === null || snapshotValue === "" || entryValue !== snapshotValue) {
+      conflicts = true;
+    } else {
+      matched = true;
+    }
+  }
+  return {
+    matches: hasIdentifier && matched && !conflicts,
+    conflicts,
+    hasIdentifier,
+  };
+}
+
+/**
+ * print-start snapshot配列に対してusage entryを厳密に対応付ける。
+ *
+ * 【詳細説明】
+ * - completion時のPrintPlanではなく、保存済みsnapshotのtool/source bindingを基準にする。
+ * - 1つのentryが複数snapshotに一致する、または同一snapshotに複数entryが来る場合はblockedにする。
+ *
+ * @private
+ * @function resolveUsageEntriesForSnapshots
+ * @param {Object[]} snapshots - print-start snapshot配列。
+ * @param {Object[]} materialUsages - source-specific usage観測。
+ * @returns {{reasons:string[],entriesBySnapshotId:Map<string,Object>,sourceSpecificTotalMm:number}} 解決結果。
+ */
+function resolveUsageEntriesForSnapshots(snapshots, materialUsages) {
+  const reasons = [];
+  const entriesBySnapshotId = new Map();
+  let sourceSpecificTotalMm = 0;
+  for (const entry of Array.isArray(materialUsages) ? materialUsages : []) {
+    const entryIdentifiers = normalizeUsageEntryIdentifiers(entry);
+    const usedLengthMm = getUsageEntryLengthMm(entry);
+    if (usedLengthMm === null) {
+      reasons.push("usage-length-invalid");
+      continue;
+    }
+    const matches = [];
+    let sawConflict = false;
+    for (const snapshot of snapshots) {
+      const comparison = compareUsageEntryToSnapshot(
+        entryIdentifiers,
+        normalizeSnapshotAssignmentIdentifiers(snapshot),
+      );
+      if (comparison.conflicts && comparison.hasIdentifier && comparison.matches === false) {
+        sawConflict = true;
+      }
+      if (comparison.matches) {
+        matches.push(snapshot);
+      }
+    }
+    if (matches.length !== 1) {
+      reasons.push(sawConflict ? "usage-identifier-conflict" : "usage-entry-unmatched");
+      continue;
+    }
+    const snapshotId = matches[0].snapshotId;
+    if (entriesBySnapshotId.has(snapshotId)) {
+      reasons.push("usage-entry-duplicate");
+      continue;
+    }
+    entriesBySnapshotId.set(snapshotId, entry);
+    sourceSpecificTotalMm += usedLengthMm;
+  }
+  return { reasons: [...new Set(reasons)], entriesBySnapshotId, sourceSpecificTotalMm };
+}
+
+/**
+ * read-only shadow usage evidenceを生成する。
+ *
+ * 【詳細説明】
+ * - public repository APIからtrusted usage evidenceを発行しないためのplain evidence。
+ * - UIのsource-aware表示やfixture比較には使えるが、残量debit authorityとしては常に無効にする。
+ *
+ * @private
+ * @function createShadowSourceSpecificMaterialUsageEvidence
+ * @param {Object} input - usage evidence入力。
+ * @returns {Object} shadow usage evidence。
+ */
+function createShadowSourceSpecificMaterialUsageEvidence(input = {}) {
+  const evidence = {
+    schemaVersion: 1,
+    evidenceId: toTrimmedString(input.evidenceId) ||
+      createPrinterCoreV3DeterministicId("material-source-usage-evidence-shadow", [
+        input.materialSourceId,
+        input.snapshotId,
+        input.printJobId,
+        input.idempotencyKey,
+      ]),
+    materialSourceId: toTrimmedString(input.materialSourceId),
+    mountId: toTrimmedString(input.mountId),
+    snapshotId: toTrimmedString(input.snapshotId),
+    printJobId: toTrimmedString(input.printJobId),
+    deviceId: toTrimmedString(input.deviceId),
+    usageSegmentId: toTrimmedString(input.usageSegmentId) || "segment:0",
+    usedLengthMm: normalizeNonNegativeMm(input.usedLengthMm),
+    attribution: "source-specific",
+    confidence: toTrimmedString(input.confidence) || "shadow-observed",
+    source: toTrimmedString(input.source) || "firmware-source-specific",
+    measurementMethod: toTrimmedString(input.measurementMethod) || "firmware-source",
+    observedAt: normalizeIsoTime(input.observedAt),
+    idempotencyKey: toTrimmedString(input.idempotencyKey),
+    trusted: false,
+    authority: {
+      mode: "shadow-normalized-evidence-only",
+      canDebit: false,
+    },
+    attestation: null,
+  };
+  return deepFreezeJson(evidence);
+}
+
+/**
+ * 非空文字列フィールドを持つかを判定する。
+ *
+ * @private
+ * @function hasRecordString
+ * @param {Object|null|undefined} record - record候補。
+ * @param {string} key - field名。
+ * @returns {boolean} 非空文字列ならtrue。
+ */
+function hasRecordString(record, key) {
+  return toTrimmedString(record?.[key]) !== "";
+}
+
+/**
+ * print-start snapshot recordを復元してよいか検査する。
+ *
+ * @private
+ * @function isRestorablePrintStartSnapshot
+ * @param {Object|null|undefined} snapshot - snapshot候補。
+ * @returns {boolean} 復元可能ならtrue。
+ */
+function isRestorablePrintStartSnapshot(snapshot) {
+  return !!snapshot &&
+    typeof snapshot === "object" &&
+    !Array.isArray(snapshot) &&
+    hasRecordString(snapshot, "snapshotId") &&
+    hasRecordString(snapshot, "deviceId") &&
+    hasRecordString(snapshot, "printJobId") &&
+    hasRecordString(snapshot, "printPlanId") &&
+    hasRecordString(snapshot, "materialSourceId") &&
+    hasRecordString(snapshot, "mountId") &&
+    hasRecordString(snapshot, "spoolId") &&
+    normalizeIsoTime(snapshot.capturedAt) !== null;
+}
+
+/**
+ * usage evidence recordを復元してよいか検査する。
+ *
+ * @private
+ * @function isRestorableUsageEvidence
+ * @param {Object|null|undefined} evidence - usage evidence候補。
+ * @returns {boolean} 復元可能ならtrue。
+ */
+function isRestorableUsageEvidence(evidence) {
+  return !!evidence &&
+    typeof evidence === "object" &&
+    !Array.isArray(evidence) &&
+    hasRecordString(evidence, "evidenceId") &&
+    hasRecordString(evidence, "materialSourceId") &&
+    hasRecordString(evidence, "mountId") &&
+    hasRecordString(evidence, "snapshotId") &&
+    hasRecordString(evidence, "printJobId") &&
+    hasRecordString(evidence, "deviceId") &&
+    evidence.attribution === "source-specific" &&
+    normalizeNonNegativeMm(evidence.usedLengthMm) !== null;
+}
+
+/**
+ * JobMaterialSegment recordを復元してよいか検査する。
+ *
+ * @private
+ * @function isRestorableJobMaterialSegment
+ * @param {Object|null|undefined} segment - segment候補。
+ * @returns {boolean} 復元可能ならtrue。
+ */
+function isRestorableJobMaterialSegment(segment) {
+  const usageState = toTrimmedString(segment?.usageState);
+  return !!segment &&
+    typeof segment === "object" &&
+    !Array.isArray(segment) &&
+    hasRecordString(segment, "segmentId") &&
+    hasRecordString(segment, "printJobId") &&
+    hasRecordString(segment, "printPlanId") &&
+    hasRecordString(segment, "deviceId") &&
+    hasRecordString(segment, "materialSourceId") &&
+    ["observed-used", "confirmed-unused", "unknown"].includes(usageState) &&
+    (usageState === "unknown" || normalizeNonNegativeMm(segment.usedLengthMm) !== null);
+}
+
+/**
+ * ledger event recordを復元してよいか検査する。
+ *
+ * @private
+ * @function isRestorableLedgerEvent
+ * @param {Object|null|undefined} event - ledger event候補。
+ * @returns {boolean} 復元可能ならtrue。
+ */
+function isRestorableLedgerEvent(event) {
+  const usageState = toTrimmedString(event?.usageState);
+  return !!event &&
+    typeof event === "object" &&
+    !Array.isArray(event) &&
+    hasRecordString(event, "ledgerEventId") &&
+    event.eventType === "material-consumption" &&
+    hasRecordString(event, "segmentId") &&
+    hasRecordString(event, "printJobId") &&
+    hasRecordString(event, "deviceId") &&
+    hasRecordString(event, "materialSourceId") &&
+    (usageState === "unknown" || normalizeNonNegativeMm(event.usedLengthMm) !== null) &&
+    normalizeIsoTime(event.createdAt) !== null;
+}
+
+/**
+ * 保存済みrecord配列を検査し、壊れたrecordをunsupported evidenceへ退避する。
+ *
+ * @private
+ * @function restoreRecordArray
+ * @param {Object} input - 復元入力。
+ * @param {Object[]} input.records - record候補配列。
+ * @param {string} input.recordType - record種別。
+ * @param {Function} input.predicate - 復元可否判定。
+ * @param {Object[]} input.retainedUnsupportedEntries - unsupported退避先。
+ * @returns {Object[]} 復元可能record配列。
+ */
+function restoreRecordArray({ records, recordType, predicate, retainedUnsupportedEntries }) {
+  const restored = [];
+  for (const [index, record] of (Array.isArray(records) ? records : []).entries()) {
+    if (predicate(record)) {
+      restored.push(cloneJsonValue(record));
+    } else {
+      retainedUnsupportedEntries.push({
+        recordType,
+        index,
+        record: cloneJsonValue(record),
+        reason: "invalid-stored-record",
+      });
+    }
+  }
+  return restored;
 }
 
 /**
@@ -224,21 +521,36 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
   const source = stored && typeof stored === "object" && !Array.isArray(stored)
     ? stored
     : {};
+  const retainedUnsupportedEntries = Array.isArray(source.retainedUnsupportedEntries)
+    ? source.retainedUnsupportedEntries.map((entry) => cloneJsonValue(entry))
+    : [];
   return {
     schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
     authority: "material-accounting-print-binding-shadow-store",
-    printStartSnapshots: Array.isArray(source.printStartSnapshots)
-      ? source.printStartSnapshots.map((snapshot) => cloneJsonValue(snapshot))
-      : [],
-    usageEvidence: Array.isArray(source.usageEvidence)
-      ? source.usageEvidence.map((evidence) => cloneJsonValue(evidence))
-      : [],
-    jobMaterialSegments: Array.isArray(source.jobMaterialSegments)
-      ? source.jobMaterialSegments.map((segment) => cloneJsonValue(segment))
-      : [],
-    ledgerEvents: Array.isArray(source.ledgerEvents)
-      ? source.ledgerEvents.map((event) => cloneJsonValue(event))
-      : [],
+    printStartSnapshots: restoreRecordArray({
+      records: source.printStartSnapshots,
+      recordType: "printStartSnapshot",
+      predicate: isRestorablePrintStartSnapshot,
+      retainedUnsupportedEntries,
+    }),
+    usageEvidence: restoreRecordArray({
+      records: source.usageEvidence,
+      recordType: "usageEvidence",
+      predicate: isRestorableUsageEvidence,
+      retainedUnsupportedEntries,
+    }),
+    jobMaterialSegments: restoreRecordArray({
+      records: source.jobMaterialSegments,
+      recordType: "jobMaterialSegment",
+      predicate: isRestorableJobMaterialSegment,
+      retainedUnsupportedEntries,
+    }),
+    ledgerEvents: restoreRecordArray({
+      records: source.ledgerEvents,
+      recordType: "ledgerEvent",
+      predicate: isRestorableLedgerEvent,
+      retainedUnsupportedEntries,
+    }),
     unattributedUsage: Array.isArray(source.unattributedUsage)
       ? source.unattributedUsage.map((usage) => cloneJsonValue(usage))
       : [],
@@ -250,6 +562,7 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
       legacySpoolRemainingWrites: false,
       materialSourceLedgerWrites: "shadow-only",
     },
+    retainedUnsupportedEntries,
   };
 }
 
@@ -355,6 +668,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
   const store = normalizeStoredMaterialAccountingPrintBindingStore(initialStore);
   const snapshotsById = mapById(store.printStartSnapshots, "snapshotId");
   const snapshotsByPlanSource = new Map();
+  const snapshotsByPlanKey = new Map();
   const operationRecords = new Map(Object.entries(store.operationsById));
 
   for (const snapshot of store.printStartSnapshots) {
@@ -362,6 +676,10 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
       `${snapshot.printJobId}:${snapshot.printPlanId}:${snapshot.materialSourceId}`,
       snapshot,
     );
+    const planKey = `${snapshot.printJobId}:${snapshot.printPlanId}`;
+    const snapshots = snapshotsByPlanKey.get(planKey) || [];
+    snapshots.push(snapshot);
+    snapshotsByPlanKey.set(planKey, snapshots);
   }
 
   /**
@@ -437,6 +755,9 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           materialSourceId: source.materialSourceId,
           mountId: mount.mountId,
           spoolId: mount.spoolId,
+          toolId: assignment.toolId,
+          protocolToolAlias: assignment.protocolToolAlias || assignment.toolAlias,
+          order: Number.isFinite(Number(assignment.order)) ? Number(assignment.order) : plannedSnapshots.length,
           capturedAt,
           materialSource: source,
           spoolMount: mount,
@@ -450,6 +771,18 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
       capturedAt,
       snapshotIds: plannedSnapshots.map((snapshot) => snapshot.snapshotId),
     });
+    const hasSnapshotPayloadConflict = plannedSnapshots.some((snapshot) => {
+      const existing = snapshotsById.get(snapshot.snapshotId);
+      return existing && stableStringifyPrinterCoreV3Value(existing) !== stableStringifyPrinterCoreV3Value(snapshot);
+    });
+    if (hasSnapshotPayloadConflict) {
+      return createResult({
+        ok: false,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
+        action: "conflict",
+        reasons: ["print-start-snapshot-payload-conflict"],
+      });
+    }
     const existing = operationRecords.get(operationId);
     if (existing && existing.digest !== digest) {
       return createResult({
@@ -483,6 +816,12 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         `${snapshot.printJobId}:${snapshot.printPlanId}:${snapshot.materialSourceId}`,
         snapshot,
       );
+      const planKey = `${snapshot.printJobId}:${snapshot.printPlanId}`;
+      const snapshots = snapshotsByPlanKey.get(planKey) || [];
+      if (!snapshots.some((entry) => entry.snapshotId === snapshot.snapshotId)) {
+        snapshots.push(snapshot);
+      }
+      snapshotsByPlanKey.set(planKey, snapshots);
     }
     const result = createResult({
       ok: true,
@@ -515,7 +854,10 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const completedAt = normalizeIsoTime(input.completedAt);
     const operationId = toTrimmedString(input.attributionOperationId);
     const materialUsages = Array.isArray(input.materialUsages) ? input.materialUsages : [];
-    const resultSetCompleteness = input.resultSetCompleteness === "complete" ? "complete" : "partial";
+    const resultSetCompleteness = input.trustedResultSetCompleteness === true &&
+      input.resultSetCompleteness === "complete"
+      ? "complete"
+      : "partial";
     const totalUsedLengthMm = normalizeNonNegativeMm(input.totalUsedLengthMm);
     const digest = createOperationDigest("material-usage-attribution-operation", {
       printJobId,
@@ -543,10 +885,15 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
       });
     }
 
-    const planValidation = validatePrintPlan(printPlan);
     const reasons = [];
-    if (!planValidation.ok) {
-      reasons.push(...planValidation.errors);
+    if (!printPlan || typeof printPlan !== "object" || Array.isArray(printPlan)) {
+      reasons.push("print-plan-required");
+    }
+    if (!toTrimmedString(printPlan?.printPlanId)) {
+      reasons.push("print-plan-id-required");
+    }
+    if (!toTrimmedString(printPlan?.deviceId)) {
+      reasons.push("print-plan-device-required");
     }
     if (!printJobId) {
       reasons.push("print-job-id-required");
@@ -557,11 +904,32 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     if (!operationId) {
       reasons.push("attribution-operation-id-required");
     }
-    const hasSourceSpecificUsage = materialUsages.some((entry) => normalizeNonNegativeMm(
-      entry?.usedLengthMm ?? entry?.usedMm ?? entry?.materialUsedMm ?? entry?.deltaUsedMm
-    ) !== null);
+    const planKey = `${printJobId}:${printPlan?.printPlanId || ""}`;
+    const plannedSnapshots = (snapshotsByPlanKey.get(planKey) || [])
+      .map((snapshot) => snapshot)
+      .sort((a, b) => {
+        const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 0;
+        const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
+        return orderA - orderB;
+      });
+    const usageResolution = resolveUsageEntriesForSnapshots(plannedSnapshots, materialUsages);
+    if (plannedSnapshots.length === 1 &&
+        totalUsedLengthMm !== null &&
+        usageResolution.entriesBySnapshotId.size === 0 &&
+        usageResolution.reasons.length === 0) {
+      const snapshot = plannedSnapshots[0];
+      usageResolution.entriesBySnapshotId.set(snapshot.snapshotId, {
+        toolId: snapshot.toolId,
+        protocolToolAlias: snapshot.protocolToolAlias,
+        materialSourceId: snapshot.materialSourceId,
+        usedLengthMm: totalUsedLengthMm,
+        source: "firmware-total-single-source",
+      });
+      usageResolution.sourceSpecificTotalMm = totalUsedLengthMm;
+    }
+    const hasSourceSpecificUsage = usageResolution.entriesBySnapshotId.size > 0;
     const unattributedUsage = [];
-    if (printPlan?.materialSourceIds?.length > 1 && totalUsedLengthMm !== null && !hasSourceSpecificUsage) {
+    if (plannedSnapshots.length > 1 && totalUsedLengthMm !== null && !hasSourceSpecificUsage) {
       unattributedUsage.push({
         printJobId,
         printPlanId: printPlan.printPlanId,
@@ -570,6 +938,28 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         reason: "multi-source-total-only",
       });
     }
+    if (plannedSnapshots.length > 1 &&
+        totalUsedLengthMm !== null &&
+        hasSourceSpecificUsage &&
+        totalUsedLengthMm > usageResolution.sourceSpecificTotalMm) {
+      unattributedUsage.push({
+        printJobId,
+        printPlanId: printPlan.printPlanId,
+        deviceId: printPlan.deviceId,
+        usedLengthMm: totalUsedLengthMm - usageResolution.sourceSpecificTotalMm,
+        reason: "multi-source-total-residual",
+      });
+    }
+    if (plannedSnapshots.length > 1 &&
+        totalUsedLengthMm !== null &&
+        hasSourceSpecificUsage &&
+        totalUsedLengthMm < usageResolution.sourceSpecificTotalMm) {
+      reasons.push("total-usage-less-than-source-specific");
+    }
+    if (plannedSnapshots.length === 0) {
+      reasons.push("print-start-snapshots-required");
+    }
+    reasons.push(...usageResolution.reasons);
     if (reasons.length > 0) {
       return createResult({
         ok: false,
@@ -580,72 +970,65 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     }
 
     const usageEvidence = [];
-    const segments = printPlan.toolAssignments.map((assignment, index) => {
-      const snapshot = snapshotsByPlanSource.get(`${printJobId}:${printPlan.printPlanId}:${assignment.materialSourceId}`);
-      const usageEntry = findUsageEntryForAssignment(assignment, materialUsages);
-      const entryLength = normalizeNonNegativeMm(
-        usageEntry?.usedLengthMm ?? usageEntry?.usedMm ?? usageEntry?.materialUsedMm ?? usageEntry?.deltaUsedMm
-      );
+    const segments = plannedSnapshots.map((snapshot, index) => {
+      const usageEntry = usageResolution.entriesBySnapshotId.get(snapshot.snapshotId) || null;
+      const entryLength = getUsageEntryLengthMm(usageEntry);
       const usageState = entryLength !== null
         ? (entryLength > 0 ? "observed-used" : "confirmed-unused")
         : (resultSetCompleteness === "complete" ? "confirmed-unused" : "unknown");
       const usedLengthMm = entryLength !== null
         ? entryLength
         : (usageState === "confirmed-unused" ? 0 : null);
-      const source = snapshot?.materialSource || null;
-      const mount = snapshot?.spoolMount || null;
       const evidence = usedLengthMm !== null && snapshot
-        ? createTrustedSourceSpecificMaterialUsageEvidence({
+        ? createShadowSourceSpecificMaterialUsageEvidence({
           materialSourceId: snapshot.materialSourceId,
           mountId: snapshot.mountId,
           snapshotId: snapshot.snapshotId,
           printJobId,
           deviceId: printPlan.deviceId,
-          usageSegmentId: `segment:${assignment.toolId}`,
+          usageSegmentId: `segment:${snapshot.toolId}`,
           usedLengthMm,
           source: "firmware-source-specific",
           measurementMethod: "firmware-source",
           observedAt: completedAt,
           idempotencyKey: createPrinterCoreV3DeterministicId("material-usage-attribution", [
-            operationId,
-            assignment.toolId,
+            printJobId,
+            printPlan.printPlanId,
+            snapshot.toolId,
             snapshot.snapshotId,
           ]),
         })
         : null;
-      const debit = evidence && snapshot
-        ? evaluateMaterialDebitEligibility({
-          mount,
-          materialSource: source,
-          usageEvidence: evidence,
-          printStartSnapshot: snapshot,
-          continuity: input.continuityBySourceId?.[snapshot.materialSourceId] || {},
-        })
-        : { status: "blocked", canDebit: false, reasons: ["print-start-snapshot-required"] };
+      const debit = {
+        status: "blocked",
+        canDebit: false,
+        reasons: ["shadow-only-attribution-not-debit-authority"],
+      };
       if (evidence) {
         usageEvidence.push(evidence);
       }
+      const toolId = Number.isFinite(Number(snapshot.toolId)) ? Number(snapshot.toolId) : index;
       return {
         schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
         segmentId: createPrinterCoreV3DeterministicId("material-accounting-job-segment", [
           printJobId,
           printPlan.printPlanId,
-          assignment.toolId,
-          assignment.materialSourceId,
+          toolId,
+          snapshot.materialSourceId,
         ]),
         printJobId,
         printPlanId: printPlan.printPlanId,
         deviceId: printPlan.deviceId,
-        toolId: assignment.toolId,
-        protocolToolAlias: assignment.protocolToolAlias,
-        materialSourceId: snapshot?.materialSourceId || assignment.materialSourceId,
+        toolId,
+        protocolToolAlias: snapshot.protocolToolAlias,
+        materialSourceId: snapshot?.materialSourceId || null,
         mountId: snapshot?.mountId || null,
-        spoolId: snapshot?.spoolId || assignment.spoolId || null,
+        spoolId: snapshot?.spoolId || null,
         usedLengthMm,
         usageState,
         confidence: evidence?.confidence || "unknown",
         sourceSnapshotId: snapshot?.snapshotId || null,
-        order: Number.isFinite(Number(assignment.order)) ? Number(assignment.order) : index,
+        order: Number.isFinite(Number(snapshot.order)) ? Number(snapshot.order) : index,
         evidence: evidence ? { usageEvidenceId: evidence.evidenceId } : {},
         debit: {
           status: debit.status,
@@ -653,15 +1036,54 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           reasons: debit.reasons,
         },
         authority: {
-          mode: "shadow-attribution",
+          mode: "shadow-attribution-read-only",
           canDebitLegacyInventory: false,
         },
       };
     });
     const ledgerEvents = segments.map((segment) => createLedgerEvent(segment, completedAt));
+
+    const existingSegmentsById = mapById(store.jobMaterialSegments, "segmentId");
+    const existingLedgerEventsById = mapById(store.ledgerEvents, "ledgerEventId");
+    const hasExistingDifferentSegment = segments.some((segment) => {
+      const existing = existingSegmentsById.get(segment.segmentId);
+      return existing && stableStringifyPrinterCoreV3Value(existing) !== stableStringifyPrinterCoreV3Value(segment);
+    });
+    const allSegmentsAlreadyRecorded = segments.length > 0 &&
+      segments.every((segment) => {
+        const existing = existingSegmentsById.get(segment.segmentId);
+        return existing && stableStringifyPrinterCoreV3Value(existing) === stableStringifyPrinterCoreV3Value(segment);
+      }) &&
+      ledgerEvents.every((event) => existingLedgerEventsById.has(event.ledgerEventId));
+    if (hasExistingDifferentSegment) {
+      return createResult({
+        ok: false,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
+        action: "conflict",
+        reasons: ["usage-segment-payload-conflict"],
+      });
+    }
+    if (allSegmentsAlreadyRecorded) {
+      const result = createResult({
+        ok: true,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
+        action: "idempotent",
+        segments,
+        usageEvidence,
+        ledgerEvents,
+        unattributedUsage,
+      });
+      recordOperation(operationId, digest, result);
+      return result;
+    }
+
     store.usageEvidence.push(...usageEvidence.map((evidence) => cloneJsonValue(evidence)));
-    store.jobMaterialSegments.push(...segments.map((segment) => cloneJsonValue(segment)));
-    store.ledgerEvents.push(...ledgerEvents.map((event) => cloneJsonValue(event)));
+    store.jobMaterialSegments.push(...segments
+      .filter((segment) => !existingSegmentsById.has(segment.segmentId))
+      .map((segment) => cloneJsonValue(segment)));
+    store.ledgerEvents.push(...ledgerEvents
+      .filter((event) => !existingLedgerEventsById.has(event.ledgerEventId))
+      .map((event) => cloneJsonValue(event)));
     store.unattributedUsage.push(...unattributedUsage.map((usage) => cloneJsonValue(usage)));
 
     const result = createResult({

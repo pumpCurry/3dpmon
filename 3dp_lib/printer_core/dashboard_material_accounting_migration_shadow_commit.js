@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingMigrationShadowCommitStore}：保存済みshadow commit storeを正規化
  * - {@link commitMaterialAccountingMigrationShadowTransaction}：prepared transactionをshadow storeへcommit
  *
- * @version 1.390.1515 (PR #438)
+ * @version 1.390.1517 (PR #438)
  * @since   1.390.1515 (PR #438)
- * @lastModified 2026-08-31 14:08:00
+ * @lastModified 2026-08-31 23:05:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9D-2後続でdashboard_storageの実IndexedDB transaction adapterへ接続する
@@ -354,29 +354,48 @@ function collectTransactionReasons(transaction) {
       !Array.isArray(transaction.repositorySnapshots?.spoolMounts?.conflicts)) {
     reasons.push("transaction-spoolMountRepositorySnapshot-required");
   }
+  if (!transaction.baseRepositoryDigests ||
+      typeof transaction.baseRepositoryDigests !== "object" ||
+      !toTrimmedString(transaction.baseRepositoryDigests.materialSourceRegistry) ||
+      !toTrimmedString(transaction.baseRepositoryDigests.spoolMountRepository)) {
+    reasons.push("transaction-baseRepositoryDigests-required");
+  }
+  if (!Array.isArray(transaction.baseRepositorySnapshots?.materialSources?.sources) ||
+      !Array.isArray(transaction.baseRepositorySnapshots?.materialSources?.conflicts)) {
+    reasons.push("transaction-baseMaterialSourceRepositorySnapshot-required");
+  }
+  if (!Array.isArray(transaction.baseRepositorySnapshots?.spoolMounts?.mounts) ||
+      !Array.isArray(transaction.baseRepositorySnapshots?.spoolMounts?.conflicts)) {
+    reasons.push("transaction-baseSpoolMountRepositorySnapshot-required");
+  }
   return reasons;
 }
 
 /**
- * base/current snapshotのCAS理由を収集する。
+ * store current snapshotに対するCAS理由を収集する。
  *
  * @private
  * @function collectCasReasons
- * @param {Object} input - CAS入力。
- * @param {*} input.baseMaterialSourceRegistrySnapshot - preflight/stage時のMaterialSource base snapshot。
- * @param {*} input.baseSpoolMountRepositorySnapshot - preflight/stage時のSpoolMount base snapshot。
- * @param {*} input.currentMaterialSourceRegistrySnapshot - commit直前のMaterialSource durable snapshot。
- * @param {*} input.currentSpoolMountRepositorySnapshot - commit直前のSpoolMount durable snapshot。
+ * @param {Object} store - 正規化済みshadow commit store。
+ * @param {Object} transaction - trusted prepared transaction。
  * @returns {string[]} block理由。
  */
-function collectCasReasons(input) {
+function collectCasReasons(store, transaction) {
   const reasons = [];
-  if (createSnapshotDigest("material-source-registry-base", input.baseMaterialSourceRegistrySnapshot) !==
-      createSnapshotDigest("material-source-registry-base", input.currentMaterialSourceRegistrySnapshot)) {
+  const expectedMaterialSourceDigest = toTrimmedString(transaction?.baseRepositoryDigests?.materialSourceRegistry);
+  const expectedSpoolMountDigest = toTrimmedString(transaction?.baseRepositoryDigests?.spoolMountRepository);
+  const currentMaterialSourceDigest = createSnapshotDigest(
+    "material-source-registry-base",
+    store.materialSourceRegistrySnapshot,
+  );
+  const currentSpoolMountDigest = createSnapshotDigest(
+    "spool-mount-repository-base",
+    store.spoolMountRepositorySnapshot,
+  );
+  if (!expectedMaterialSourceDigest || expectedMaterialSourceDigest !== currentMaterialSourceDigest) {
     reasons.push("base-material-source-snapshot-changed");
   }
-  if (createSnapshotDigest("spool-mount-repository-base", input.baseSpoolMountRepositorySnapshot) !==
-      createSnapshotDigest("spool-mount-repository-base", input.currentSpoolMountRepositorySnapshot)) {
+  if (!expectedSpoolMountDigest || expectedSpoolMountDigest !== currentSpoolMountDigest) {
     reasons.push("base-spool-mount-snapshot-changed");
   }
   return reasons;
@@ -493,7 +512,8 @@ function createCommittedStore({ store, transaction, committedAt }) {
  * prepared shadow transactionを永続shadow storeへcommitする。
  *
  * 【詳細説明】
- * - `base*Snapshot`と`current*Snapshot`をdigest CASで比較し、stale baseなら保存前に止める。
+ * - transactionに固定済みのbase digestとstore current snapshotを比較し、stale baseなら保存前に止める。
+ * - durable writerには同一transaction内でCASを適用したことを`casApplied:true`で返すことを要求する。
  * - 同じ`shadowOperationId`/transaction payloadの再送はidempotentとして既存storeを返す。
  * - `persist(nextStore)`が成功を返した場合だけ、返却resultでもSHADOW lifecycleへ進める。
  * - ledger debitやlegacy cutover sealはこのGateでは行わない。
@@ -502,12 +522,8 @@ function createCommittedStore({ store, transaction, committedAt }) {
  * @param {Object} input - commit入力。
  * @param {Object|null|undefined} input.store - 既存shadow commit store。
  * @param {Object} input.transaction - prepared shadow transaction。
- * @param {Object} input.baseMaterialSourceRegistrySnapshot - transaction準備時のMaterialSource base snapshot。
- * @param {Object} input.baseSpoolMountRepositorySnapshot - transaction準備時のSpoolMount base snapshot。
- * @param {Object} input.currentMaterialSourceRegistrySnapshot - commit直前のMaterialSource durable snapshot。
- * @param {Object} input.currentSpoolMountRepositorySnapshot - commit直前のSpoolMount durable snapshot。
  * @param {string|Date} input.committedAt - commit日時。
- * @param {Function} input.persist - durable write callback。
+ * @param {Function} input.persist - durable write callback。同一永続transactionでCASを行い`casApplied:true`を返す。
  * @returns {Promise<Object>} commit result。
  * @example
  * const result = await commitMaterialAccountingMigrationShadowTransaction({ store, transaction, persist });
@@ -546,7 +562,7 @@ export async function commitMaterialAccountingMigrationShadowTransaction(input =
       });
     }
   }
-  reasons.push(...collectCasReasons(input));
+  reasons.push(...collectCasReasons(store, transaction));
   if (reasons.length > 0) {
     return createCommitResult({
       ok: false,
@@ -564,12 +580,26 @@ export async function commitMaterialAccountingMigrationShadowTransaction(input =
   });
 
   try {
-    const durable = await input.persist(committed.store);
+    const durable = await input.persist(committed.store, {
+      requireAtomicCompareAndSwap: true,
+      expectedCurrentRepositoryDigests: cloneJsonValue(transaction.baseRepositoryDigests),
+      transactionId: transaction.transactionId,
+      shadowOperationId: transaction.shadowOperationId,
+    });
     if (!durable || durable.ok !== true) {
       return createCommitResult({
         ok: false,
         status: MATERIAL_ACCOUNTING_SHADOW_COMMIT_STATUS.BLOCKED,
         reasons: ["durable-write-failed"],
+        store,
+        event: null,
+      });
+    }
+    if (durable.casApplied !== true) {
+      return createCommitResult({
+        ok: false,
+        status: MATERIAL_ACCOUNTING_SHADOW_COMMIT_STATUS.BLOCKED,
+        reasons: ["durable-cas-not-applied"],
         store,
         event: null,
       });

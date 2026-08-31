@@ -30,9 +30,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1517 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 14:34:00
+ * @lastModified 2026-08-31 23:08:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -1049,6 +1049,9 @@ function createTrustedSourceSpecificMaterialUsageEvidence(input = {}) {
  * @param {string} input.capturedAt - print-start capture time。
  * @param {Object=} input.materialSource - MaterialSource snapshot。
  * @param {Object=} input.spoolMount - SpoolMount snapshot。
+ * @param {number|string=} input.toolId - print-start時点のlogical tool ID。
+ * @param {string=} input.protocolToolAlias - print-start時点のprotocol tool alias。
+ * @param {number|string=} input.order - print-start時点のassignment order。
  * @param {string=} input.bindingOperationId - binding operation ID。
  * @returns {Object} trusted print-start snapshot。
  * @throws {TypeError} 必須値不足や時刻不正の場合。
@@ -1083,6 +1086,9 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
     materialSourceId,
     mountId,
     spoolId,
+    toolId: toFiniteNumberOrNull(input.toolId),
+    protocolToolAlias: toTrimmedString(input.protocolToolAlias || input.toolAlias) || null,
+    order: toFiniteNumberOrNull(input.order),
     capturedAt,
     materialSource: cloneJsonValue(input.materialSource || null),
     spoolMount: cloneJsonValue(input.spoolMount || null),

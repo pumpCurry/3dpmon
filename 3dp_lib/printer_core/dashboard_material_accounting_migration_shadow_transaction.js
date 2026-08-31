@@ -16,9 +16,9 @@
  * - {@link prepareMaterialAccountingMigrationShadowTransaction}：shadow transaction候補を準備
  * - {@link isTrustedMaterialAccountingMigrationShadowTransaction}：trusted transactionかを判定
  *
- * @version 1.390.1515 (PR #438)
+ * @version 1.390.1517 (PR #438)
  * @since   1.390.1513 (PR #438)
- * @lastModified 2026-08-31 14:10:00
+ * @lastModified 2026-08-31 23:02:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9D 後続でstaged snapshotをIndexedDB transactionへ接続し、commit/rollback境界を実装する
@@ -26,7 +26,10 @@
 
 "use strict";
 
-import { createPrinterCoreV3DeterministicId } from "./dashboard_data_schema_v3.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./dashboard_data_schema_v3.js";
 import {
   MATERIAL_ACCOUNTING_MIGRATION_STATUS,
   SPOOL_MOUNT_STATUS,
@@ -62,6 +65,25 @@ function cloneJsonValue(value) {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * repository snapshotのCAS digestを生成する。
+ *
+ * 【詳細説明】
+ * - commit層がcaller supplied current snapshotを信じず、prepared時点のbaseとdurable store上のcurrentを比較できるようにする。
+ * - namespaceをcommit層と揃え、transaction内に固定したdigestだけをCAS権威として扱う。
+ *
+ * @private
+ * @function createRepositorySnapshotDigest
+ * @param {string} namespace - digest namespace。
+ * @param {*} snapshot - digest対象snapshot。
+ * @returns {string} deterministic digest。
+ */
+function createRepositorySnapshotDigest(namespace, snapshot) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(namespace, [
+    stableStringifyPrinterCoreV3Value(snapshot),
+  ]).split(":")[1]}`;
 }
 
 /**
@@ -211,6 +233,40 @@ function listSnapshotMounts(snapshot) {
   return Array.isArray(snapshot?.mounts)
     ? snapshot.mounts.map((mount) => cloneJsonValue(mount))
     : [];
+}
+
+/**
+ * MaterialSource registry snapshotをcommit CAS用shapeへ正規化する。
+ *
+ * @private
+ * @function normalizeMaterialSourceRegistrySnapshotForTransaction
+ * @param {*} snapshot - snapshot候補。
+ * @returns {{sources:Object[],conflicts:Object[]}} 正規化済みsnapshot。
+ */
+function normalizeMaterialSourceRegistrySnapshotForTransaction(snapshot) {
+  return {
+    sources: listSnapshotSources(snapshot),
+    conflicts: Array.isArray(snapshot?.conflicts)
+      ? snapshot.conflicts.map((conflict) => cloneJsonValue(conflict))
+      : [],
+  };
+}
+
+/**
+ * SpoolMount repository snapshotをcommit CAS用shapeへ正規化する。
+ *
+ * @private
+ * @function normalizeSpoolMountRepositorySnapshotForTransaction
+ * @param {*} snapshot - snapshot候補。
+ * @returns {{mounts:Object[],conflicts:Object[]}} 正規化済みsnapshot。
+ */
+function normalizeSpoolMountRepositorySnapshotForTransaction(snapshot) {
+  return {
+    mounts: listSnapshotMounts(snapshot),
+    conflicts: Array.isArray(snapshot?.conflicts)
+      ? snapshot.conflicts.map((conflict) => cloneJsonValue(conflict))
+      : [],
+  };
 }
 
 /**
@@ -573,6 +629,12 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
       transaction: null,
     });
   }
+  const baseMaterialSourceRegistrySnapshot = normalizeMaterialSourceRegistrySnapshotForTransaction(
+    input.materialSourceRegistrySnapshot,
+  );
+  const baseSpoolMountRepositorySnapshot = normalizeSpoolMountRepositorySnapshotForTransaction(
+    input.spoolMountRepositorySnapshot,
+  );
 
   const transaction = {
     schemaVersion: 1,
@@ -598,6 +660,20 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
       filamentUnits: cloneJsonValue(preflightPlan.plannedWrites.filamentUnits || []),
       materialSources,
       spoolMounts,
+    },
+    baseRepositorySnapshots: {
+      materialSources: baseMaterialSourceRegistrySnapshot,
+      spoolMounts: baseSpoolMountRepositorySnapshot,
+    },
+    baseRepositoryDigests: {
+      materialSourceRegistry: createRepositorySnapshotDigest(
+        "material-source-registry-base",
+        baseMaterialSourceRegistrySnapshot,
+      ),
+      spoolMountRepository: createRepositorySnapshotDigest(
+        "spool-mount-repository-base",
+        baseSpoolMountRepositorySnapshot,
+      ),
     },
     repositorySnapshots: {
       materialSources: sourceStage.snapshot,

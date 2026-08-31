@@ -439,8 +439,11 @@ commit/recovery:
 - base MaterialSource/SpoolMount snapshot digest is checked at commit time
 - the commit boundary accepts only the exact in-process trusted prepared
   transaction issued by the transaction module
-- commit uses compare-and-swap against the current durable repository state
+- commit uses the base repository digests embedded in the trusted prepared
+  transaction and compares them with the current shadow commit store snapshots
 - stale base revision requires re-preflight and re-stage
+- durable writers must apply the same compare-and-swap inside their persistence
+  transaction and return `casApplied:true`
 - only successful durable commit may emit the `SHADOW` lifecycle transition
 - durable write failure keeps the previous shadow store and emits no lifecycle
   transition
@@ -454,20 +457,29 @@ After the staged and persistent shadow transaction boundaries are accepted,
 Gate 18.9E connects
 usage attribution as a shadow-only repository:
 
-- trusted print-start material binding snapshot issuer/repository
+- print-start material binding snapshots with tool/source assignment metadata
 - source-specific `JobMaterialSegment` shadow records
-- trusted source-aware usage evidence issuer/repository
+- read-only source-aware usage evidence; the public repository does not mint
+  debit-capable trusted usage evidence
 - append-only shadow `FilamentLedgerEvent` candidates
-- pending/unattributed isolation for total-only multi-source usage
-- idempotent debit evaluation without legacy inventory mutation
+- pending/unattributed isolation for total-only multi-source usage and
+  source-specific/total residuals
+- stable semantic idempotency without legacy inventory mutation
 
 Completion handling must use the print-start snapshot, not the current mount at
-completion time.
+completion time. Completion-supplied `PrintPlan.toolAssignments` are not used as
+assignment authority; the saved print-start binding is.
 
 When a repository sees the same stable usage idempotency identity again, it must
 treat an identical payload as duplicate/no-op. If the same idempotency identity
 arrives with a different usage payload, the repository must not overwrite the
 existing event; it must create conflict/correction evidence instead.
+
+Gate 18.9E remains shadow/read-only. Automatic spool debit requires a later
+trusted result-set registry and live certification. A caller-declared
+`resultSetCompleteness:"complete"` is not enough to mark an unobserved source as
+`confirmed-unused`; the source must have explicit 0mm source-specific usage, or
+the source remains `unknown`.
 
 ## Gate 18.9F Scope
 
@@ -590,7 +602,9 @@ Gate 18.9D-2 tests:
 
 - durable write success commits MaterialSource/SpoolMount shadow snapshots and
   advances subject lifecycle to `shadow`
-- current durable snapshot change blocks before persist
+- store current durable snapshot change blocks before persist even if a caller
+  supplies a matching stale current snapshot
+- durable writer without atomic CAS evidence blocks after persist response
 - durable write failure keeps the previous store and does not advance lifecycle
 - same transaction retry is idempotent and does not duplicate events
 - plain or cloned prepared transaction is rejected as untrusted
@@ -602,11 +616,18 @@ Gate 18.9E planned tests:
 
 - `1A=3210mm`, `1B=6543mm`, `1D=1234mm` attribute to separate
   source/mount/spool bindings
-- `1C=0mm` is confirmed only with a complete source-specific result set
-- incomplete result set leaves `1C` as unknown
+- `1C=0mm` is confirmed only with explicit source-specific 0mm usage
+- caller-declared complete result set alone leaves unobserved sources as unknown
+- incomplete result set leaves unobserved sources as unknown
 - total-only multi-source usage becomes pending/unattributed
+- source-specific plus larger total usage keeps the residual as
+  pending/unattributed
+- single-source total-only usage becomes a read-only source segment
 - print-start snapshot keeps attribution stable after current mount changes
-- duplicate completion is idempotent
+- completion-time PrintPlan assignment changes do not change saved print-start
+  attribution
+- conflicting tool/alias/source identifiers block attribution
+- duplicate semantic completion is idempotent even with a different operation ID
 - saved print binding store restores after restart without legacy usage or
   remaining projection
 

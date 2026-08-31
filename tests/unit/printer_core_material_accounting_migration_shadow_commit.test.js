@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1515 (PR #438)
+ * @version 1.390.1517 (PR #438)
  * @since   1.390.1515 (PR #438)
- * @lastModified 2026-08-31 14:05:00
+ * @lastModified 2026-08-31 22:54:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -128,15 +128,11 @@ function createReadyShadowTransaction() {
 describe("Material accounting migration shadow commit", () => {
   it("durable write成功後だけshadow storeへcommitし、migration lifecycleをSHADOWへ進める", async () => {
     const fixture = createReadyShadowTransaction();
-    const persist = vi.fn(async () => ({ ok: true, backend: "indexedDB", reason: "saved" }));
+    const persist = vi.fn(async () => ({ ok: true, backend: "indexedDB", reason: "saved", casApplied: true }));
 
     const result = await commitMaterialAccountingMigrationShadowTransaction({
       store: null,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:02:01.000Z",
       persist,
     });
@@ -166,19 +162,28 @@ describe("Material accounting migration shadow commit", () => {
     expect(persist).toHaveBeenCalledTimes(1);
     expect(persist.mock.calls[0][0].lifecycleBySubject[fixture.transaction.migrationSubjectId].migrationStatus)
       .toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW);
+    expect(persist.mock.calls[0][1]).toMatchObject({
+      requireAtomicCompareAndSwap: true,
+      expectedCurrentRepositoryDigests: fixture.transaction.baseRepositoryDigests,
+    });
   });
 
-  it("current durable snapshotがbaseから変化していればCASでcommitを止める", async () => {
+  it("store上のcurrent durable snapshotがbaseから変化していればcaller currentに関係なくCASでcommitを止める", async () => {
     const fixture = createReadyShadowTransaction();
     const persist = vi.fn(async () => ({ ok: true }));
+    const staleStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore({
+      materialSourceRegistrySnapshot: {
+        sources: fixture.transaction.records.materialSources,
+        conflicts: [],
+      },
+      spoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
+    });
 
     const result = await commitMaterialAccountingMigrationShadowTransaction({
-      store: null,
+      store: staleStore,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       currentMaterialSourceRegistrySnapshot: {
-        sources: fixture.transaction.records.materialSources,
+        sources: [],
         conflicts: [],
       },
       currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
@@ -195,6 +200,25 @@ describe("Material accounting migration shadow commit", () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it("durable writerがatomic CAS適用を返さない場合はcommitを止める", async () => {
+    const fixture = createReadyShadowTransaction();
+    const persist = vi.fn(async () => ({ ok: true, backend: "indexedDB" }));
+
+    const result = await commitMaterialAccountingMigrationShadowTransaction({
+      store: null,
+      transaction: fixture.transaction,
+      committedAt: "2026-08-31T03:02:01.000Z",
+      persist,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["durable-cas-not-applied"],
+    });
+    expect(result.store.lifecycleBySubject).toEqual({});
+  });
+
   it("plain objectへcloneされたprepared transactionはcommit authorityとして扱わない", async () => {
     const fixture = createReadyShadowTransaction();
     const persist = vi.fn(async () => ({ ok: true }));
@@ -202,10 +226,6 @@ describe("Material accounting migration shadow commit", () => {
     const result = await commitMaterialAccountingMigrationShadowTransaction({
       store: null,
       transaction: { ...fixture.transaction },
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:02:01.000Z",
       persist,
     });
@@ -221,15 +241,11 @@ describe("Material accounting migration shadow commit", () => {
 
   it("durable write失敗時はSHADOW lifecycleへ進まず、入力storeを保持する", async () => {
     const fixture = createReadyShadowTransaction();
-    const persist = vi.fn(async () => ({ ok: false, backend: "indexedDB", reason: "quota" }));
+    const persist = vi.fn(async () => ({ ok: false, backend: "indexedDB", reason: "quota", casApplied: true }));
 
     const result = await commitMaterialAccountingMigrationShadowTransaction({
       store: null,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:02:01.000Z",
       persist,
     });
@@ -251,22 +267,14 @@ describe("Material accounting migration shadow commit", () => {
     const first = await commitMaterialAccountingMigrationShadowTransaction({
       store: null,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:02:01.000Z",
-      persist: async () => ({ ok: true }),
+      persist: async () => ({ ok: true, casApplied: true }),
     });
     const retryPersist = vi.fn(async () => ({ ok: true }));
 
     const second = await commitMaterialAccountingMigrationShadowTransaction({
       store: first.store,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: first.store.materialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: first.store.spoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:05:01.000Z",
       persist: retryPersist,
     });
@@ -285,12 +293,8 @@ describe("Material accounting migration shadow commit", () => {
     const first = await commitMaterialAccountingMigrationShadowTransaction({
       store: null,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:02:01.000Z",
-      persist: async () => ({ ok: true }),
+      persist: async () => ({ ok: true, casApplied: true }),
     });
     const conflicting = {
       ...fixture.transaction,
@@ -309,10 +313,6 @@ describe("Material accounting migration shadow commit", () => {
     const second = await commitMaterialAccountingMigrationShadowTransaction({
       store: first.store,
       transaction: conflicting,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: first.store.materialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: first.store.spoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:05:01.000Z",
       persist: async () => ({ ok: true }),
     });
@@ -329,12 +329,8 @@ describe("Material accounting migration shadow commit", () => {
     const committed = await commitMaterialAccountingMigrationShadowTransaction({
       store: null,
       transaction: fixture.transaction,
-      baseMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      baseSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
-      currentMaterialSourceRegistrySnapshot: fixture.baseMaterialSourceRegistrySnapshot,
-      currentSpoolMountRepositorySnapshot: fixture.baseSpoolMountRepositorySnapshot,
       committedAt: "2026-08-31T03:02:01.000Z",
-      persist: async () => ({ ok: true }),
+      persist: async () => ({ ok: true, casApplied: true }),
     });
 
     const restored = normalizeStoredMaterialAccountingMigrationShadowCommitStore({
