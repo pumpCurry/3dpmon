@@ -129,6 +129,13 @@ execution or cutover transaction results. The planner also must not use
 `MaterialAccountingCutoverRecord` as its primary return shape; cutover records are
 created later by the execution/readiness boundary.
 
+`READY` requires a valid legacy spool record plus either explicit `single-spool`
+configuration or a fresh `complete` material topology observation with exactly
+one direct/external source. K1/K1 Max are not blindly assumed to be single-source
+if the saved target does not state that topology. A partial, stale, restored, or
+disconnected observation is evidence that migration needs a new read, not
+authority to create a migrated mount.
+
 Migration blocker/reason strings are owned by
 `MATERIAL_ACCOUNTING_MIGRATION_BLOCKER`; planner branches and UI copy must not
 invent ad-hoc reason identifiers. The initial fixed reasons include multi-source

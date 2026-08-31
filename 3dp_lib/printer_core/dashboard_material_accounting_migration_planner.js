@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1503 (PR #438)
+ * @version 1.390.1504 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 11:52:00
+ * @lastModified 2026-08-31 11:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A review後にIndexedDB backed migration journalへ接続する
@@ -69,6 +69,13 @@ const DRY_RUN_DECISION_STATUSES = Object.freeze(new Set([
   MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
   MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
 ]));
+
+/**
+ * migration plannerがfresh topologyとして扱う既定TTL。
+ *
+ * @constant {number}
+ */
+const DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS = 60_000;
 
 /**
  * JSON互換値をcloneする。
@@ -135,6 +142,23 @@ function normalizeOptionalIsoTime(value) {
   }
   const date = value instanceof Date ? value : new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+/**
+ * 有限数へ正規化する。
+ *
+ * @private
+ * @function toFiniteNumber
+ * @param {*} value - 数値候補。
+ * @param {?number} fallback - fallback値。
+ * @returns {?number} 有限数、またはfallback。
+ */
+function toFiniteNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
 /**
@@ -244,6 +268,69 @@ function findObservationRecord(legacyData, host, deviceId) {
     return record && typeof record === "object" &&
       (record.deviceId === deviceId || record.host === host);
   }) || null;
+}
+
+/**
+ * legacy spool IDが現在のspool一覧に存在するか判定する。
+ *
+ * @private
+ * @function hasLegacySpoolRecord
+ * @param {Object} legacyData - legacy monitorData。
+ * @param {string} spoolId - spool ID。
+ * @returns {boolean} spool実体が存在する場合true。
+ */
+function hasLegacySpoolRecord(legacyData, spoolId) {
+  const spools = Array.isArray(legacyData?.filamentSpools) ? legacyData.filamentSpools : [];
+  return spools.some((spool) => toTrimmedString(spool?.id) === spoolId);
+}
+
+/**
+ * target/machineが明示的にsingle-spool構成を宣言しているか判定する。
+ *
+ * @private
+ * @function hasExplicitSingleSpoolConfiguration
+ * @param {?Object} target - connection target。
+ * @param {Object} machine - machine record。
+ * @returns {boolean} 明示single-spoolならtrue。
+ */
+function hasExplicitSingleSpoolConfiguration(target, machine) {
+  const targetMode = toTrimmedString(target?.materialSystem?.mode);
+  const machineMode = toTrimmedString(machine?.materialSystem?.mode);
+  return targetMode === "single-spool" || machineMode === "single-spool";
+}
+
+/**
+ * observation recordがREADY判定に使えるfresh complete topologyか判定する。
+ *
+ * 【詳細説明】
+ * - partial delta、復元済みlast-known、provider切断、TTL切れは現在の物理topology証拠として扱わない。
+ * - READYは後続repositoryへ適用可能な候補なので、単一source観測であってもfresh completeでなければBLOCKEDにする。
+ *
+ * @private
+ * @function isFreshCompleteTopologyObservation
+ * @param {?Object} observationRecord - material source observation record。
+ * @param {Object} input - 判定入力。
+ * @param {string} input.createdAt - plan作成日時。
+ * @param {number} input.freshTtlMs - fresh扱いTTL。
+ * @returns {boolean} fresh complete observationならtrue。
+ */
+function isFreshCompleteTopologyObservation(observationRecord, input) {
+  if (!observationRecord || typeof observationRecord !== "object") {
+    return false;
+  }
+  if (observationRecord.restoredFromStorage === true || observationRecord.providerDisconnectedAt) {
+    return false;
+  }
+  if (observationRecord.snapshotCompleteness !== "complete") {
+    return false;
+  }
+  const observedMs = Date.parse(observationRecord.lastObservedAt || "");
+  const createdMs = Date.parse(input.createdAt || "");
+  if (!Number.isFinite(observedMs) || !Number.isFinite(createdMs)) {
+    return false;
+  }
+  const ttl = Math.max(1, Math.floor(toFiniteNumber(input.freshTtlMs, DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS) ?? DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS));
+  return Math.max(0, createdMs - observedMs) <= ttl;
 }
 
 /**
@@ -381,6 +468,7 @@ function createEmptyPlannedWrites() {
  * @param {string} input.host - legacy host key。
  * @param {string} input.spoolId - spool ID。
  * @param {string} input.createdAt - migration作成時刻。
+ * @param {number=} input.freshTtlMs - fresh扱いTTL。
  * @returns {Object} migration entry。
  */
 function createHostMigrationEntry(input) {
@@ -391,8 +479,37 @@ function createHostMigrationEntry(input) {
   const deviceId = resolveDeviceId(input.host, target);
   const observation = findObservationRecord(input.legacyData, input.host, deviceId);
   const observedSources = listObservedSources(observation);
+  const hasFreshCompleteObservation = isFreshCompleteTopologyObservation(observation, {
+    createdAt: input.createdAt,
+    freshTtlMs: input.freshTtlMs,
+  });
   const printerType = normalizePrinterType(target?.printerType || machine?.printerType);
   const isK2Like = printerType === "k2" || printerType.includes("k2");
+  const isExplicitSingleSpool = hasExplicitSingleSpoolConfiguration(target, machine);
+
+  if (!hasLegacySpoolRecord(input.legacyData, input.spoolId)) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MISSING],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  if (observedSources.length > 0 && !hasFreshCompleteObservation) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
 
   if (observedSources.length > 1) {
     return {
@@ -419,6 +536,18 @@ function createHostMigrationEntry(input) {
   }
 
   if (observedSources.length === 0 && isK2Like) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
+      candidateSources: [],
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  if (observedSources.length === 0 && !isExplicitSingleSpool) {
     return {
       host: input.host,
       deviceId,
@@ -513,13 +642,15 @@ function summarizeEntries(entries) {
  * @param {Object|null|undefined} legacyData - legacy monitorData互換データ。
  * @param {Object=} options - plan生成オプション。
  * @param {string=} options.createdAt - plan作成日時。
+ * @param {number=} options.freshTtlMs - fresh扱いTTL。
  * @returns {Object} dry-run migration plan。
  * @example
  * const plan = createMaterialAccountingMigrationDryRunPlan(monitorData, { createdAt: new Date().toISOString() });
  */
 export function createMaterialAccountingMigrationDryRunPlan(legacyData, options = {}) {
   const source = legacyData && typeof legacyData === "object" ? legacyData : {};
-  const createdAt = normalizeOptionalIsoTime(options.createdAt);
+  const createdAt = normalizeOptionalIsoTime(options.createdAt) || new Date().toISOString();
+  const freshTtlMs = Math.max(1, Math.floor(toFiniteNumber(options.freshTtlMs, DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS) ?? DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS));
   const hostSpoolMap = asPlainObject(source.hostSpoolMap);
   const entries = Object.entries(hostSpoolMap)
     .filter(([host, spoolId]) => toTrimmedString(host) && toTrimmedString(spoolId))
@@ -528,10 +659,13 @@ export function createMaterialAccountingMigrationDryRunPlan(legacyData, options 
       host: toTrimmedString(host),
       spoolId: toTrimmedString(spoolId),
       createdAt,
+      freshTtlMs,
     }));
   const sourceChecksum = `fnv1a128:${createPrinterCoreV3DeterministicId("legacy-material-accounting-source", [
     stableStringifyPrinterCoreV3Value({
       hostSpoolMap,
+      connectionTargets: getConnectionTargets(source),
+      machines: asPlainObject(source.machines),
       materialSourceObservations: source.materialSourceObservations || null,
     }),
   ]).split(":")[1]}`;
