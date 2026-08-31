@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1541 (PR #439)
+ * @version 1.390.1542 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 18:53:54
+ * @lastModified 2026-08-31 19:04:50
  */
 
 import { EventEmitter } from "node:events";
@@ -23,6 +23,60 @@ import {
   sendBoxsInfoProbeAndWait,
   summarizeBoxsInfoEvidence,
 } from "../../scripts/capture_k2_cfs_slot_control.mjs";
+
+/**
+ * Gate19 live certificationで最低限必要な確認済みCLI引数を生成する。
+ *
+ * 【詳細説明】
+ * - CFS物理操作を伴うテストでは、host/command/source/model/probeの確認条件を毎回明示する。
+ * - 個別テストはこの配列に追加・上書きすることで、runnerの安全境界を崩さず差分だけを検証する。
+ *
+ * @function createConfirmedF012LiveArgs
+ * @param {Array<string>=} extraArgs - 追加CLI引数
+ * @param {object=} overrides - command/source/hostの上書き
+ * @returns {Array<string>} F012 live certification用CLI引数
+ */
+function createConfirmedF012LiveArgs(extraArgs = [], overrides = {}) {
+  const command = overrides.command || "cfs-load";
+  const source = overrides.source || "cfs:1:slot:0";
+  const host = overrides.host || "192.168.54.153";
+  return [
+    "--send",
+    "--host",
+    host,
+    "--confirm-live",
+    "--confirm-host",
+    host,
+    "--confirm-command",
+    command,
+    "--confirm-source",
+    source,
+    "--command",
+    command,
+    "--source",
+    source,
+    "--probe-before",
+    "--probe-after",
+    "--probe-info",
+    "--require-info-model",
+    "F012",
+    ...extraArgs,
+  ];
+}
+
+/**
+ * `/info` のF012成功応答を返すテスト用fetch関数を生成する。
+ *
+ * @function createF012InfoFetch
+ * @returns {Function} F012 `/info` 応答を返すfetch互換関数
+ */
+function createF012InfoFetch() {
+  return async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ model: "F012", version: "1.0.0" }),
+  });
+}
 
 describe("capture_k2_cfs_slot_control", () => {
   it("既定ではdry-runとして送信せずfeedInOrOut candidate planだけを返す", async () => {
@@ -63,6 +117,7 @@ describe("capture_k2_cfs_slot_control", () => {
       after: false,
       info: false,
       requireInfoModel: null,
+      confirmSource: null,
       requirePrinterIdle: false,
       boxsInfoTimeoutMs: 5000,
       printerStatusTimeoutMs: 5000,
@@ -166,6 +221,31 @@ describe("capture_k2_cfs_slot_control", () => {
       "cfs-load",
       "--probe-after",
     ])).toThrow("--probe-before and --probe-after are required when --send is used");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+      "--probe-before",
+      "--probe-after",
+      "--probe-info",
+      "--require-info-model",
+      "F012",
+    ])).toThrow("--confirm-source must exactly match --source");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+      "--confirm-source",
+      "cfs:1:slot:0",
+      "--probe-before",
+      "--probe-after",
+    ])).toThrow("--probe-info and --require-info-model F012 are required");
     expect(parseArgs([
       ...baseArgs,
       "--confirm-live",
@@ -173,6 +253,8 @@ describe("capture_k2_cfs_slot_control", () => {
       "192.168.54.153",
       "--confirm-command",
       "cfs-load",
+      "--confirm-source",
+      "cfs:1:slot:0",
       "--probe-before",
       "--probe-after",
       "--boxsinfo-timeout-ms",
@@ -190,6 +272,7 @@ describe("capture_k2_cfs_slot_control", () => {
       confirmLive: true,
       confirmHost: "192.168.54.153",
       confirmCommand: "cfs-load",
+      confirmSource: "cfs:1:slot:0",
       probeBefore: true,
       probeAfter: true,
       probeInfo: true,
@@ -202,22 +285,7 @@ describe("capture_k2_cfs_slot_control", () => {
       postCommandProbeCount: 6,
       postCommandProbeIntervalMs: 5000,
     });
-    const liveDefault = parseArgs([
-      "--send",
-      "--host",
-      "192.168.54.153",
-      "--confirm-live",
-      "--confirm-host",
-      "192.168.54.153",
-      "--confirm-command",
-      "cfs-load",
-      "--command",
-      "cfs-load",
-      "--source",
-      "cfs:1:slot:0",
-      "--probe-before",
-      "--probe-after",
-    ]);
+    const liveDefault = parseArgs(createConfirmedF012LiveArgs());
 
     expect(liveDefault).toMatchObject({
       probeBefore: true,
@@ -249,25 +317,7 @@ describe("capture_k2_cfs_slot_control", () => {
 
   it("/info model requirement不一致時はWebSocketを開く前にlive送信を拒否する", async () => {
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
-        "--probe-info",
-        "--require-info-model",
-        "F012",
-      ]),
+      ...parseArgs(createConfirmedF012LiveArgs()),
       fetchInfo: async () => ({
         ok: true,
         status: 200,
@@ -311,6 +361,9 @@ describe("capture_k2_cfs_slot_control", () => {
       host: "192.168.54.153",
       confirmHost: "192.168.54.153",
       confirmCommand: "cfs-load",
+      confirmSource: "cfs:1:slot:0",
+      probeInfo: true,
+      requireInfoModel: "F012",
       openWs: async () => {
         throw new Error("runner guard should reject before opening websocket");
       },
@@ -324,6 +377,74 @@ describe("capture_k2_cfs_slot_control", () => {
       dryRun: false,
       status: "rejected",
       reason: "live-certification-probes-required",
+      blindRetryAllowed: false,
+    });
+  });
+
+  it("programmatic callerでもlive確認不一致時はrunner本体でWebSocketを開かず拒否する", async () => {
+    const options = {
+      ...parseArgs([
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+      ]),
+      send: true,
+      confirmLive: false,
+      host: "192.168.54.153",
+      confirmHost: "192.168.54.153",
+      confirmCommand: "cfs-load",
+      confirmSource: "cfs:1:slot:0",
+      probeBefore: true,
+      probeAfter: true,
+      probeInfo: true,
+      requireInfoModel: "F012",
+      openWs: async () => {
+        throw new Error("runner guard should reject before opening websocket");
+      },
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "live-certification-confirm-live-required",
+      blindRetryAllowed: false,
+    });
+  });
+
+  it("programmatic callerでもF012 /info必須条件なしではrunner本体でWebSocketを開かず拒否する", async () => {
+    const options = {
+      ...parseArgs([
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+      ]),
+      send: true,
+      confirmLive: true,
+      host: "192.168.54.153",
+      confirmHost: "192.168.54.153",
+      confirmCommand: "cfs-load",
+      confirmSource: "cfs:1:slot:0",
+      probeBefore: true,
+      probeAfter: true,
+      openWs: async () => {
+        throw new Error("runner guard should reject before opening websocket");
+      },
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "live-certification-f012-info-required",
       blindRetryAllowed: false,
     });
   });
@@ -360,23 +481,10 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new ActivePrinterStatusWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--require-printer-idle",
-      ]),
+      ])),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -484,7 +592,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1, selected: 1 }] }],
                 },
               },
             }));
@@ -499,24 +607,11 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new SubmittedProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-unload",
-        "--command",
-        "cfs-unload",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-count",
         "1",
-      ]),
+      ], { command: "cfs-unload" })),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -564,7 +659,6 @@ describe("capture_k2_cfs_slot_control", () => {
         this.sentFrames.push(frame);
         if (frame?.params?.boxsInfo === 1) {
           this.getCount += 1;
-          const selected = this.getCount > 1 ? 1 : 0;
           const percent = this.getCount > 1 ? 99 : 100;
           setTimeout(() => {
             this.emit("message", JSON.stringify({
@@ -575,7 +669,7 @@ describe("capture_k2_cfs_slot_control", () => {
                       id: 1,
                       type: 0,
                       materials: [
-                        { id: 0, state: 1, selected, percent, name: "Generic PLA" },
+                        { id: 0, state: 1, selected: 1, percent, name: "Generic PLA" },
                       ],
                     },
                   ],
@@ -593,29 +687,12 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new DeltaProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
-        "--probe-info",
-        "--require-info-model",
-        "F012",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--operator-marker",
         "observed-cfs-load-motion",
         "--probe-after-count",
         "1",
-      ]),
+      ])),
       fetchInfo: async (url) => ({
         ok: true,
         status: 200,
@@ -657,7 +734,7 @@ describe("capture_k2_cfs_slot_control", () => {
         afterProbe: "after",
         before: {
           presence: "loaded",
-          selected: false,
+          selected: true,
           percent: 100,
         },
         after: {
@@ -665,7 +742,7 @@ describe("capture_k2_cfs_slot_control", () => {
           selected: true,
           percent: 99,
         },
-        changedFields: ["selected", "percent"],
+        changedFields: ["percent"],
       },
     });
   });
@@ -686,7 +763,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1, selected: 1 }] }],
                 },
               },
             }));
@@ -703,24 +780,11 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new ErroringCommandSendWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-count",
         "1",
-      ]),
+      ])),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -945,22 +1009,8 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new DuplicateBeforeProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
-      ]),
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -977,6 +1027,66 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(result.probes.before.summary.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: "box-id-duplicate" }),
     ]));
+    expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeでtarget sourceがloadedでも未選択ならCFS操作frameを送らない", async () => {
+    class UnselectedBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 0, name: "Target" },
+                      { id: 1, state: 1, selected: 1, name: "SelectedOther" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new UnselectedBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-target-source-not-selected",
+      blindRetryAllowed: false,
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:1"]);
     expect(ws.sentFrames).toEqual([
       { method: "get", params: { boxsInfo: 1 } },
     ]);
@@ -1042,7 +1152,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, state: 1, materials: [{ id: 0, state: 1 }] }],
+                  materialBoxs: [{ id: 1, type: 0, state: 1, materials: [{ id: 0, state: 1, selected: 1 }] }],
                 },
               },
             }));
@@ -1057,28 +1167,15 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new ProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-delay-ms",
         "0",
         "--probe-after-count",
         "1",
         "--boxsinfo-timeout-ms",
         "1000",
-      ]),
+      ])),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1131,7 +1228,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1, selected: 1 }] }],
                 },
               },
             }));
@@ -1146,28 +1243,15 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new DelayedAfterProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-delay-ms",
         "25",
         "--probe-after-count",
         "1",
         "--boxsinfo-timeout-ms",
         "1000",
-      ]),
+      ])),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1204,7 +1288,7 @@ describe("capture_k2_cfs_slot_control", () => {
                   materialBoxs: [{
                     id: 1,
                     type: 0,
-                    materials: [{ id: 0, state: 1, percent }],
+                    materials: [{ id: 0, state: 1, selected: 1, percent }],
                   }],
                 },
               },
@@ -1218,21 +1302,7 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new AfterSeriesProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-delay-ms",
         "0",
         "--probe-after-count",
@@ -1241,7 +1311,8 @@ describe("capture_k2_cfs_slot_control", () => {
         "100",
         "--boxsinfo-timeout-ms",
         "1000",
-      ]),
+      ])),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1296,7 +1367,7 @@ describe("capture_k2_cfs_slot_control", () => {
                   materialBoxs: [{
                     id: 1,
                     type: 0,
-                    materials: [{ id: 0, state: 1, percent: 10 }],
+                    materials: [{ id: 0, state: 1, selected: 1, percent: 10 }],
                   }],
                 },
               },
@@ -1310,28 +1381,15 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new PartialTimeoutAfterSeriesProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-delay-ms",
         "0",
         "--probe-after-count",
         "3",
-      ]),
+      ])),
       boxsInfoTimeoutMs: 5,
       postCommandProbeIntervalMs: 0,
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1387,7 +1445,7 @@ describe("capture_k2_cfs_slot_control", () => {
                   materialBoxs: [{
                     id: 1,
                     type: 0,
-                    materials: [{ id: 0, state: 1, percent: boxsInfoProbeCount }],
+                    materials: [{ id: 0, state: 1, selected: 1, percent: boxsInfoProbeCount }],
                   }],
                 },
               },
@@ -1401,28 +1459,15 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new RecoveredAfterTimeoutProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-delay-ms",
         "0",
         "--probe-after-count",
         "3",
-      ]),
+      ])),
       boxsInfoTimeoutMs: 5,
       postCommandProbeIntervalMs: 0,
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1468,7 +1513,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, state: 1, materials: [{ id: 0, state: 1 }] }],
+                  materialBoxs: [{ id: 1, type: 0, state: 1, materials: [{ id: 0, state: 1, selected: 1 }] }],
                 },
               },
             }));
@@ -1483,28 +1528,15 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new TimeoutAfterProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
+      ...parseArgs(createConfirmedF012LiveArgs([
         "--probe-after-delay-ms",
         "0",
         "--boxsinfo-timeout-ms",
         "1000",
         "--probe-after-count",
         "1",
-      ]),
+      ])),
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1560,23 +1592,9 @@ describe("capture_k2_cfs_slot_control", () => {
     }
     const ws = new TimeoutBeforeProbeWs();
     const options = {
-      ...parseArgs([
-        "--send",
-        "--host",
-        "192.168.54.153",
-        "--confirm-live",
-        "--confirm-host",
-        "192.168.54.153",
-        "--confirm-command",
-        "cfs-load",
-        "--command",
-        "cfs-load",
-        "--source",
-        "cfs:1:slot:0",
-        "--probe-before",
-        "--probe-after",
-      ]),
+      ...parseArgs(createConfirmedF012LiveArgs()),
       boxsInfoTimeoutMs: 5,
+      fetchInfo: createF012InfoFetch(),
       openWs: async () => ws,
     };
 
@@ -1659,7 +1677,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1, selected: 1 }] }],
                 },
               },
             }));
@@ -1676,26 +1694,13 @@ describe("capture_k2_cfs_slot_control", () => {
       await writeFile(fileAsOutputDir, "blocks mkdir", "utf8");
       const ws = new SubmittedCommandWs();
       const options = {
-        ...parseArgs([
-          "--send",
-          "--host",
-          "192.168.54.153",
-          "--confirm-live",
-          "--confirm-host",
-          "192.168.54.153",
-          "--confirm-command",
-          "cfs-load",
-          "--command",
-          "cfs-load",
-          "--source",
-          "cfs:1:slot:0",
-          "--probe-before",
-          "--probe-after",
+        ...parseArgs(createConfirmedF012LiveArgs([
           "--probe-after-count",
           "1",
           "--output-dir",
           fileAsOutputDir,
-        ]),
+        ])),
+        fetchInfo: createF012InfoFetch(),
         openWs: async () => ws,
       };
 

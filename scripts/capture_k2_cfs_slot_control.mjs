@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1541 (PR #439)
+ * @version 1.390.1542 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 18:53:54
+ * @lastModified 2026-08-31 19:04:50
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -63,6 +63,7 @@ Options:
   --confirm-live                  Required with --send to acknowledge live CFS motion.
   --confirm-host <ip-or-host>      Required with --send and must match --host exactly.
   --confirm-command <kind>         Required with --send and must match --command exactly.
+  --confirm-source <source-id>     Required with --send and must match --source exactly.
   --probe-before                  Required with --send. Read boxsInfo before the command.
   --probe-after                   Required with --send. Read boxsInfo after the command.
   --probe-info                    With --send, read http://<host>/info before opening WS9999.
@@ -235,6 +236,7 @@ export function parseArgs(argv = []) {
     confirmLive: false,
     confirmHost: "",
     confirmCommand: "",
+    confirmSource: "",
     probeBefore: false,
     probeAfter: false,
     probeInfo: false,
@@ -269,6 +271,7 @@ export function parseArgs(argv = []) {
     else if (arg === "--confirm-live") options.confirmLive = true;
     else if (arg === "--confirm-host") options.confirmHost = next();
     else if (arg === "--confirm-command") options.confirmCommand = next();
+    else if (arg === "--confirm-source") options.confirmSource = next();
     else if (arg === "--probe-before") options.probeBefore = true;
     else if (arg === "--probe-after") options.probeAfter = true;
     else if (arg === "--probe-info") options.probeInfo = true;
@@ -328,28 +331,93 @@ export function parseArgs(argv = []) {
   if (!options.help && !toNonEmptyString(options.source)) {
     throw new Error("--source is required.");
   }
-  if (options.send && !toNonEmptyString(options.host)) {
-    throw new Error("--host is required when --send is used.");
-  }
-  if (options.send && options.confirmLive !== true) {
-    throw new Error("--confirm-live is required when --send is used.");
-  }
-  if (options.send && toNonEmptyString(options.confirmHost) !== toNonEmptyString(options.host)) {
-    throw new Error("--confirm-host must exactly match --host when --send is used.");
-  }
-  if (options.send && toNonEmptyString(options.confirmCommand) !== command) {
-    throw new Error("--confirm-command must exactly match --command when --send is used.");
-  }
-  if (options.send && !LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS.has(command)) {
-    throw new Error("--send is currently limited to cfs-load and cfs-unload for F012 live certification.");
-  }
-  if (options.send && (options.probeBefore !== true || options.probeAfter !== true)) {
-    throw new Error("--probe-before and --probe-after are required when --send is used.");
+  const liveValidation = validateLiveCertificationOptions(options);
+  if (!liveValidation.ok) {
+    throw new Error(liveValidation.message);
   }
   if (toNonEmptyString(options.outputDir)) {
     options.outputDir = path.resolve(options.outputDir);
   }
   return options;
+}
+
+/**
+ * live certification送信時の安全条件を検査する。
+ *
+ * 【詳細説明】
+ * - CLI引数の検証とexported runner直呼びの検証を同じ関数へ集約する。
+ * - 物理side-effectを伴う `--send` は、host/command/sourceの明示確認、F012 `/info`、前後probeが揃う場合だけ許可する。
+ * - printer idleやboxsInfo内のloaded/selectedは、WS接続後のread-only観測で別途fail-closedにする。
+ *
+ * @private
+ * @function validateLiveCertificationOptions
+ * @param {object} options - CLIまたはprogrammatic runner option
+ * @returns {{ok:boolean, reason:?string, message:string}} live送信option検査結果
+ */
+function validateLiveCertificationOptions(options) {
+  if (options?.send !== true) {
+    return { ok: true, reason: null, message: "" };
+  }
+  const command = toNonEmptyString(options.command);
+  const source = toNonEmptyString(options.source);
+  const host = toNonEmptyString(options.host);
+  if (!host) {
+    return {
+      ok: false,
+      reason: "live-certification-host-required",
+      message: "--host is required when --send is used.",
+    };
+  }
+  if (options.confirmLive !== true) {
+    return {
+      ok: false,
+      reason: "live-certification-confirm-live-required",
+      message: "--confirm-live is required when --send is used.",
+    };
+  }
+  if (toNonEmptyString(options.confirmHost) !== host) {
+    return {
+      ok: false,
+      reason: "live-certification-confirm-host-mismatch",
+      message: "--confirm-host must exactly match --host when --send is used.",
+    };
+  }
+  if (toNonEmptyString(options.confirmCommand) !== command) {
+    return {
+      ok: false,
+      reason: "live-certification-confirm-command-mismatch",
+      message: "--confirm-command must exactly match --command when --send is used.",
+    };
+  }
+  if (!LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS.has(command)) {
+    return {
+      ok: false,
+      reason: "live-certification-command-not-live-certifiable",
+      message: "--send is currently limited to cfs-load and cfs-unload for F012 live certification.",
+    };
+  }
+  if (options.probeBefore !== true || options.probeAfter !== true) {
+    return {
+      ok: false,
+      reason: "live-certification-probes-required",
+      message: "--probe-before and --probe-after are required when --send is used.",
+    };
+  }
+  if (toNonEmptyString(options.confirmSource) !== source) {
+    return {
+      ok: false,
+      reason: "live-certification-confirm-source-mismatch",
+      message: "--confirm-source must exactly match --source when --send is used.",
+    };
+  }
+  if (options.probeInfo !== true || toNonEmptyString(options.requireInfoModel) !== "F012") {
+    return {
+      ok: false,
+      reason: "live-certification-f012-info-required",
+      message: "--probe-info and --require-info-model F012 are required when --send is used.",
+    };
+  }
+  return { ok: true, reason: null, message: "" };
 }
 
 /**
@@ -393,6 +461,7 @@ function createProbePlanSummary(options) {
     after: Boolean(options.probeAfter),
     info: Boolean(options.probeInfo || toNonEmptyString(options.requireInfoModel)),
     requireInfoModel: toNonEmptyString(options.requireInfoModel) || null,
+    confirmSource: toNonEmptyString(options.confirmSource) || null,
     requirePrinterIdle: Boolean(options.requirePrinterIdle),
     boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
     printerStatusTimeoutMs: options.printerStatusTimeoutMs,
@@ -974,7 +1043,7 @@ function hasDuplicateLocatorDiagnostic(summary) {
  *
  * 【詳細説明】
  * - certification runnerは、通信応答があっただけでは送信してよいとは扱わない。
- * - 対象sourceが一意で、duplicate locatorがなく、明示loadedである場合だけCFS操作frameを送る。
+ * - 対象sourceが一意で、duplicate locatorがなく、明示loadedかつselectedが一意である場合だけCFS操作frameを送る。
  *
  * @private
  * @function validatePreCommandProbeSummary
@@ -995,6 +1064,14 @@ function validatePreCommandProbeSummary(summary, targetSourceId) {
   }
   if (targetSources[0].presence !== "loaded") {
     return { ok: false, reason: "pre-command-target-source-not-loaded" };
+  }
+  if (targetSources[0].selected !== true) {
+    return { ok: false, reason: "pre-command-target-source-not-selected" };
+  }
+  if (!Array.isArray(summary.selectedSourceIds) ||
+      summary.selectedSourceIds.length !== 1 ||
+      summary.selectedSourceIds[0] !== targetSourceId) {
+    return { ok: false, reason: "pre-command-selected-source-ambiguous" };
   }
   return { ok: true, reason: null };
 }
@@ -1655,13 +1732,14 @@ export async function runK2CfsSlotControlCertification(options) {
       probePlan: createProbePlanSummary(options),
     }, options);
   }
-  if (options.probeBefore !== true || options.probeAfter !== true) {
+  const liveValidation = validateLiveCertificationOptions(options);
+  if (!liveValidation.ok) {
     return finalizeCertificationResult({
       ok: false,
       sent: false,
       dryRun: false,
       status: "rejected",
-      reason: "live-certification-probes-required",
+      reason: liveValidation.reason,
       blindRetryAllowed: false,
       startedAt,
       completedAt: new Date().toISOString(),

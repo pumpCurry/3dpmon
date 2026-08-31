@@ -148,15 +148,16 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   送信しない。材料名・色・RFIDなどの残留metadataだけではloadedとは扱わない。
   CFSのmaterial path共有を前提に、実機で並列安全性が証明されるまでは1 printerにつき1 commandだけを許可する。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
-  `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
+  `--send --confirm-live --confirm-host <host> --confirm-command <command> --confirm-source <source>` を必須にする。
 - 初期live certificationの送信対象は `cfs-load` / `cfs-unload` だけに限定する。
   `cfs-slot-select` / `cfs-feed` / `cfs-retract` はshape確認用dry-run候補に留め、追加capture根拠なしには送信しない。
 - 同CLIは `--send` 時に `--probe-before` / `--probe-after` を必須とし、同じWS9999 sessionでread-only
   `get { boxsInfo: 1 }` を送る。これはCLI引数だけでなく `runK2CfsSlotControlCertification()` 本体でも
   再検証する。これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
-- 送信前probeでは、対象sourceがexactly one、duplicate box/source locator診断なし、かつ明示loadedであることを要求する。
+- 送信前probeでは、対象sourceがexactly one、duplicate box/source locator診断なし、明示loaded、
+  かつ対象sourceだけがselectedであることを要求する。
   duplicateが見つかった場合はfirst-winせず、該当locator全体をcertification候補から外してCFS操作frameを送らない。
-- live送信では必要に応じて `--probe-info --require-info-model F012` を併用し、WS9999接続前に
+- live送信では `--probe-info --require-info-model F012` を必須とし、WS9999接続前に
   `http://<host>/info` のmodel/version/transport hintをcertification resultへ保存する。
   `/info` のMACは有線/無線で一致しないことがあるためidentity authorityにはしないが、F012実機へ送っている証跡として扱う。
 - live送信では `--require-printer-idle` を併用し、WS9999のread-only `get` で `state` / `deviceState` /
@@ -239,12 +240,13 @@ live certificationは次の順で進める。
      --confirm-live \
      --confirm-host 192.168.54.153 \
      --confirm-command cfs-load \
+     --confirm-source cfs:1:slot:0 \
      --probe-before \
      --probe-after \
      --probe-info \
      --require-info-model F012 \
      --require-printer-idle \
-     --operator-marker observed-cfs-load-motion \
+     --operator-marker "preflight: operator present / printer idle / CFS visually checked" \
      --probe-after-delay-ms 1500 \
      --probe-after-count 6 \
      --probe-after-interval-ms 5000 \
@@ -282,7 +284,7 @@ live certificationは次の順で進める。
 
    `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
    dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
-   `probePlan` には `info`、`requireInfoModel`、`requirePrinterIdle`、`boxsInfoTimeoutMs`、
+   `probePlan` には `info`、`requireInfoModel`、`confirmSource`、`requirePrinterIdle`、`boxsInfoTimeoutMs`、
    `printerStatusTimeoutMs`、`infoTimeoutMs`、`postCommandProbeDelayMs`、`postCommandProbeCount`、
    `postCommandProbeIntervalMs` を保存するため、後から
    「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
