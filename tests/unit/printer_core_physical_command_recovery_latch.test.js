@@ -293,4 +293,48 @@ describe("dashboard_physical_command_recovery_latch", () => {
     ]);
     expect(JSON.stringify(resolved.store)).not.toContain("params");
   });
+
+  it("未解決recordは許可されたresolutionだけで解除し、observed系は観測digestと時刻を必須にする", () => {
+    const record = createPhysicalCommandRecoveryLatchRecord(createCommandInput());
+    const store = appendPhysicalCommandRecoveryLatchRecord(null, record).store;
+
+    const arbitrary = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "whatever",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+    });
+    const observedWithoutEvidence = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "observed-confirmed",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+      postObservation: {
+        sequence: 144,
+      },
+    });
+    const observedResolved = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "observed-confirmed",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+      postObservation: {
+        sequence: 144,
+        digest: "fnv1a128:after",
+        observedAt: "2026-08-31T09:24:59.000Z",
+      },
+    });
+
+    expect(arbitrary).toMatchObject({
+      ok: false,
+      status: "invalid",
+      reasons: ["unsupported-resolution"],
+    });
+    expect(arbitrary.store.unresolvedByCommandId).toHaveProperty("command:k2-select-1a");
+    expect(observedWithoutEvidence).toMatchObject({
+      ok: false,
+      status: "invalid",
+      reasons: ["missing-post-observation-digest", "missing-post-observation-observed-at"],
+    });
+    expect(observedWithoutEvidence.store.unresolvedByCommandId).toHaveProperty("command:k2-select-1a");
+    expect(observedResolved.status).toBe("resolved");
+    expect(observedResolved.store.unresolvedByCommandId).toEqual({});
+  });
 });

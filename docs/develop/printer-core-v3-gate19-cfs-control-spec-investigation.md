@@ -191,6 +191,7 @@ UIでCFS/CFS-C操作を表示する場合、実行状態はDOM要素ではなく
   expected-stateが未確定のため、観測時刻が進んだだけでは自動解除しない。
 - `post-observed`: command frame送信後に指定されたpost-command read-only telemetryを観測できた状態。
   物理load/unload成功を意味しないため、成功表示やproduction certificationへ単独では使わない。
+  UIとrecovery latchでは未解決状態として扱い、operator確認またはcommand-specific expected-state confirmationまで再操作を抑止する。
 - `confirmed`: command-specific expected-state confirmationが成立した場合のみ。成功表示にして操作mutexを解除してよい。
 - `rejected`: send-time validationなど送信前拒否。transport side-effectは起きていないためmutexを解除してよい。
 - `unknown`: timeout、transport-error、confirmation-errorなど、物理side-effect有無が不明な状態。
@@ -257,9 +258,11 @@ live certificationは次の順で進める。
      → command frameはWebSocketへlocal submitされたが、送信後のboxsInfo観測は要求されていない。
        これは成功確認ではないため、production certification evidenceには単独で使わない。
 
-   status:"post-observed"
+  status:"post-observed"
      → command frame送信と指定されたpost-command read-only probeが完了した。
        ただし物理load/unload成功そのものは人間の目視とcapture markerで別途確認する。
+       `physicalCommandRecoveryLatch` では未解決として保持し、自動再送せず、operator-cleared /
+       observed-confirmed / observed-rejected のいずれかでのみ解除する。
 
    status:"rejected" / reason:"pre-command-observation-failed"
      → command送信前のboxsInfo観測に失敗したため、CFS操作frameは送られていない。

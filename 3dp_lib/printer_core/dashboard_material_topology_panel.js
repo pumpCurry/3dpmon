@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1532 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 17:24:20
+ * @lastModified 2026-08-31 19:50:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -357,6 +357,7 @@ function isFailedCommandResult(result) {
  * 【詳細説明】
  * - Printer Core CommandResultでは、transportAcceptedでもexpected-state/correlationが未確認なら
  *   `completed:false` になる。UIではこれを成功色にせず、観測待ちとして扱う。
+ * - `post-observed` はtelemetry取得済みを意味するだけで物理成功ではないため、同じく未確認として扱う。
  *
  * @private
  * @param {*} result - command hookの戻り値
@@ -367,6 +368,9 @@ function isUnconfirmedCommandResult(result) {
     return false;
   }
   if (result.completed === false) {
+    return true;
+  }
+  if (String(result.status || "").trim().toLowerCase() === "post-observed") {
     return true;
   }
   if (result.postCommandObservation?.confirmed === false) {
@@ -530,7 +534,7 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
  * 未確認command状態を新しい観測でreconcileする。
  *
  * 【詳細説明】
- * - `submitted` はtransport受理後の観測待ちだが、観測時刻だけでは非冪等な物理操作の結果を確定できない。
+ * - `submitted` / `post-observed` はtransport受理後の観測待ちだが、観測時刻だけでは非冪等な物理操作の結果を確定できない。
  * - selected-sourceをexpected-stateとして確認できる操作だけ、対象sourceのselected観測後にmutexを解除する。
  * - `unknown` はtimeout/transport-error等で実機状態が不明なため、自動解除せず人間の再確認を要求する。
  *
@@ -541,7 +545,7 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
  * @returns {void}
  */
 function reconcileCommandExecutionState(executionState, viewModel) {
-  if (!["submitted", "probing"].includes(executionState?.state)) {
+  if (!["submitted", "post-observed", "probing"].includes(executionState?.state)) {
     return;
   }
   const currentObservationKey = getViewModelObservationKey(viewModel);
@@ -587,7 +591,7 @@ function reconcileCommandExecutionState(executionState, viewModel) {
  * @returns {boolean} 同一printerのCFS操作を止める場合true
  */
 function isCommandMutexActive(executionState) {
-  return ["running", "submitting", "submitted", "settling", "probing", "unknown"].includes(executionState?.state);
+  return ["running", "submitting", "submitted", "post-observed", "settling", "probing", "unknown"].includes(executionState?.state);
 }
 
 /**
@@ -903,9 +907,13 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
             executionState.state
           );
         } else if (isUnconfirmedCommandResult(result)) {
-          executionState.state = "submitted";
+          const normalizedResultStatus = String(result?.status || "").trim().toLowerCase();
+          const isPostObserved = normalizedResultStatus === "post-observed";
+          executionState.state = isPostObserved ? "post-observed" : "submitted";
           executionState.statusClass = "warning";
-          executionState.message = `${actionLabel}を送信しました。CFS状態反映待ちです。最新観測で確認します。`;
+          executionState.message = isPostObserved
+            ? `${actionLabel}を送信しました。CFS状態は観測済みですが、物理確認待ちです。`
+            : `${actionLabel}を送信しました。CFS状態反映待ちです。最新観測で確認します。`;
           executionState.reconciliation = createSubmittedCommandReconciliation(commandPayload, buttonConfig, row);
           setCommandStatus(statusElement, "warning", executionState.message, executionState.state);
         } else {

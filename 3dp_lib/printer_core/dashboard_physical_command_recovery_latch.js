@@ -68,6 +68,18 @@ const UNRESOLVED_STATUSES = Object.freeze(new Set([
 ]));
 
 /**
+ * 復旧ラッチを解除できるresolution一覧。
+ *
+ * @private
+ * @constant {ReadonlySet<string>}
+ */
+const SUPPORTED_RESOLUTIONS = Object.freeze(new Set([
+  "operator-cleared",
+  "observed-confirmed",
+  "observed-rejected",
+]));
+
+/**
  * JSON互換値をcloneする。
  *
  * @private
@@ -568,7 +580,13 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
   const reasons = [];
   if (!commandId) reasons.push("missing-command-id");
   if (!resolution) reasons.push("missing-resolution");
+  if (resolution && !SUPPORTED_RESOLUTIONS.has(resolution)) reasons.push("unsupported-resolution");
   if (!resolvedAt) reasons.push("missing-resolved-at");
+  const postObservation = normalizeObservationReference(resolutionInput?.postObservation);
+  if (resolution.startsWith("observed-")) {
+    if (!postObservation?.digest) reasons.push("missing-post-observation-digest");
+    if (!postObservation?.observedAt) reasons.push("missing-post-observation-observed-at");
+  }
   if (reasons.length > 0) {
     return deepFreezeJson({
       ok: false,
@@ -606,7 +624,7 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
     materialSourceId: record.materialSourceId,
     resolution,
     resolvedAt,
-    postObservation: normalizeObservationReference(resolutionInput?.postObservation),
+    postObservation,
   };
 
   return deepFreezeJson({

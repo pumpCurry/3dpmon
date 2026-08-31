@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1532 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 17:24:20
+ * @lastModified 2026-08-31 19:46:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -751,6 +751,45 @@ describe("Printer Core v3 material topology panel", () => {
     expect(status?.dataset.executionState).toBe("submitted");
     expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
     expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
+  });
+
+  it("CFS操作hookがpost-observedを返しても成功扱いせず物理確認待ちでロックする", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          result: {
+            status: "post-observed",
+            reason: "post-command-telemetry-observed",
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1C", "load")?.click();
+    await flushRealUiTick();
+
+    const status = container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status');
+    const otherButton = getSlotActionButton(container, "1A", "load");
+    expect(status?.textContent).toContain("CFS状態は観測済みですが、物理確認待ちです");
+    expect(status?.dataset.executionState).toBe("post-observed");
+    expect(status?.classList.contains("mtv-command-status-warning")).toBe(true);
+    expect(status?.classList.contains("mtv-command-status-success")).toBe(false);
+    expect(otherButton?.disabled).toBe(true);
   });
 
   it("観測未確認のselect CFS操作は対象slotへの選択遷移を次のmaterial観測で確認できた場合だけmutexを解除する", async () => {

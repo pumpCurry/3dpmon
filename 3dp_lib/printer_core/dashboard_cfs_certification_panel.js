@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1534 (PR #439)
+ * @version 1.390.1539 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 17:47:12
+ * @lastModified 2026-08-31 19:49:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -409,7 +409,7 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  * - disabled tooltipが`dry-run-ok`のような正常理由にならないよう、ARM、dry-run、preflight、認証の順に
  *   実際にブロックしている理由だけを返す。
  * - preflightのwarnは原則blockingとし、実機semantics待ちのselected-sourceだけ診断情報として扱う。
- * - unknown/submittedなどの未解決executionは、物理結果の人間確認まで再送信をhard disableする。
+ * - unknown/submitted/post-observedなどの未解決executionは、物理結果の人間確認まで再送信をhard disableする。
  *
  * @private
  * @function createLiveSendReadiness
@@ -422,7 +422,7 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  */
 function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus, execution = {}) {
   const executionStatus = toText(execution?.status, "idle");
-  if (["running", "submitting", "submitted", "sent", "probing", "unknown", "timeout"].includes(executionStatus)) {
+  if (["running", "submitting", "submitted", "sent", "probing", "post-observed", "unknown", "timeout"].includes(executionStatus)) {
     return { enabled: false, reason: `execution-unresolved:${executionStatus}` };
   }
   if (!armBinding.valid) {
@@ -452,7 +452,7 @@ function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certif
  * 実行状態を利用者向けに整形する。
  *
  * 【詳細説明】
- * - `submitted` は成功ではなく、物理状態確認待ちとして表示する。
+ * - `submitted` と `post-observed` は成功ではなく、物理状態確認待ちとして表示する。
  *
  * @private
  * @param {object|null|undefined} execution - command実行状態
@@ -462,6 +462,9 @@ function formatExecutionStatus(execution) {
   const status = toText(execution?.status, "idle");
   if (status === "submitted" || status === "sent") {
     return "送信済み / 物理確認待ち";
+  }
+  if (status === "post-observed") {
+    return "観測済み / 物理確認待ち";
   }
   if (status === "unknown") {
     return "結果不明 / 物理確認が必要";
