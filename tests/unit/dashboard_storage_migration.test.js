@@ -161,7 +161,7 @@ function createStorageReadyMaterialMigrationPlan(host = "K1Max-4A1B") {
         {
           hostname: host,
           printerType: "k1",
-          materialSystem: { mode: "single-spool", unitLimit: 0 },
+          materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
           printerCoreV3Identity: { deviceIdSeed: `serial:${host.toLowerCase()}` },
         },
       ],

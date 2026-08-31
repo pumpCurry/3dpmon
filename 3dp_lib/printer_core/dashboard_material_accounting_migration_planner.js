@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1506 (PR #438)
+ * @version 1.390.1507 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 12:22:00
+ * @lastModified 2026-08-31 13:45:00
  * -----------------------------------------------------------
  * @todo
  * - trusted print-start material binding snapshotとsource-specific usage evidenceは後続Gateで接続する
@@ -39,7 +39,6 @@ import {
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
   createMaterialSourceRecord,
-  createSpoolMountRecord,
   validateMaterialSource,
   validateSpoolMount,
 } from "./dashboard_material_accounting_contract.js";
@@ -76,6 +75,23 @@ const DRY_RUN_DECISION_STATUSES = Object.freeze(new Set([
  * @constant {number}
  */
 const DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS = 60_000;
+
+/**
+ * material topology観測時刻がplan作成時刻より未来に見える場合の既定許容clock skew。
+ *
+ * @constant {number}
+ */
+const DEFAULT_ALLOWED_CLOCK_SKEW_MS = 5_000;
+
+/**
+ * migration planner policy revision。
+ *
+ * 【詳細説明】
+ * - READY判定に使う入力やポリシーが変わったとき、dry-run journalのchecksumが必ず変わるようにする。
+ *
+ * @constant {number}
+ */
+const MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION = 2;
 
 /**
  * JSON互換値をcloneする。
@@ -295,15 +311,38 @@ function hasLegacySpoolRecord(legacyData, spoolId) {
 }
 
 /**
- * target/machineが明示的にsingle-spool構成を宣言しているか判定する。
+ * target/machineがoperator確認済みsingle-spool構成を宣言しているか判定する。
  *
  * @private
- * @function hasExplicitSingleSpoolConfiguration
+ * @function hasOperatorConfirmedSingleSpoolConfiguration
  * @param {?Object} target - connection target。
  * @param {Object} machine - machine record。
- * @returns {boolean} 明示single-spoolならtrue。
+ * @returns {boolean} operator確認済みsingle-spoolならtrue。
  */
-function hasExplicitSingleSpoolConfiguration(target, machine) {
+function hasOperatorConfirmedSingleSpoolConfiguration(target, machine) {
+  const targetMode = toTrimmedString(target?.materialSystem?.mode);
+  const machineMode = toTrimmedString(machine?.materialSystem?.mode);
+  const system = targetMode === "single-spool"
+    ? target?.materialSystem
+    : (machineMode === "single-spool" ? machine?.materialSystem : null);
+  return Boolean(system && (
+    system.accountingTopologyConfirmed === true ||
+    system.sourceAccountingConfirmed === true ||
+    system.operatorConfirmed === true ||
+    system.operatorConfirmedSingleSpool === true
+  ));
+}
+
+/**
+ * target/machineがsingle-spool構成を示しているか判定する。
+ *
+ * @private
+ * @function hasSingleSpoolConfiguration
+ * @param {?Object} target - connection target。
+ * @param {Object} machine - machine record。
+ * @returns {boolean} single-spool構成ならtrue。
+ */
+function hasSingleSpoolConfiguration(target, machine) {
   const targetMode = toTrimmedString(target?.materialSystem?.mode);
   const machineMode = toTrimmedString(machine?.materialSystem?.mode);
   return targetMode === "single-spool" || machineMode === "single-spool";
@@ -322,6 +361,7 @@ function hasExplicitSingleSpoolConfiguration(target, machine) {
  * @param {Object} input - 判定入力。
  * @param {string} input.createdAt - plan作成日時。
  * @param {number} input.freshTtlMs - fresh扱いTTL。
+ * @param {number} input.allowedClockSkewMs - 未来観測の許容clock skew。
  * @returns {boolean} fresh complete observationならtrue。
  */
 function isFreshCompleteTopologyObservation(observationRecord, input) {
@@ -339,6 +379,10 @@ function isFreshCompleteTopologyObservation(observationRecord, input) {
   if (!Number.isFinite(observedMs) || !Number.isFinite(createdMs)) {
     return false;
   }
+  const allowedClockSkewMs = Math.max(0, Math.floor(toFiniteNumber(input.allowedClockSkewMs, DEFAULT_ALLOWED_CLOCK_SKEW_MS) ?? DEFAULT_ALLOWED_CLOCK_SKEW_MS));
+  if (observedMs - createdMs > allowedClockSkewMs) {
+    return false;
+  }
   const ttl = Math.max(1, Math.floor(toFiniteNumber(input.freshTtlMs, DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS) ?? DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS));
   return Math.max(0, createdMs - observedMs) <= ttl;
 }
@@ -353,7 +397,18 @@ function isFreshCompleteTopologyObservation(observationRecord, input) {
  */
 function listObservedSources(observationRecord) {
   return Object.values(asPlainObject(observationRecord?.latestBySourceId))
-    .filter((source) => source && typeof source === "object")
+    .filter((source) => {
+      if (!source || typeof source !== "object") {
+        return false;
+      }
+      if (source.tombstoneAt) {
+        return false;
+      }
+      if (toTrimmedString(source.presence) === "unobserved") {
+        return false;
+      }
+      return true;
+    })
     .map((source) => cloneJsonValue(source));
 }
 
@@ -502,6 +557,44 @@ function hasOpenUniversalSourceConflict(legacyData, deviceId) {
 }
 
 /**
+ * legacyData内に対象source/spoolのopen Universal SpoolMount conflictがあるか判定する。
+ *
+ * 【詳細説明】
+ * - dry-run plannerはまだ本番repositoryを書かないが、既存repository snapshotが入力された場合、
+ *   既にopenな同一source/spoolへ別mount候補を出してはならない。
+ *
+ * @private
+ * @function hasOpenUniversalSpoolMountConflict
+ * @param {Object} legacyData - legacy monitorData。
+ * @param {Object} input - conflict判定入力。
+ * @param {string} input.spoolId - managed spool ID。
+ * @param {?string} input.materialSourceId - MaterialSource ID候補。
+ * @returns {boolean} open mount conflictがある場合true。
+ */
+function hasOpenUniversalSpoolMountConflict(legacyData, input) {
+  const repository = legacyData?.materialAccounting?.spoolMountRepository ||
+    legacyData?.printerCoreV3SpoolMountRepository ||
+    legacyData?.spoolMountRepository;
+  const mounts = Array.isArray(repository?.mounts)
+    ? repository.mounts
+    : (Array.isArray(legacyData?.materialAccounting?.spoolMounts)
+      ? legacyData.materialAccounting.spoolMounts
+      : []);
+  const spoolId = toTrimmedString(input.spoolId);
+  const materialSourceId = toTrimmedString(input.materialSourceId);
+  return mounts.some((mount) => {
+    if (!mount || typeof mount !== "object") {
+      return false;
+    }
+    if (toTrimmedString(mount.status || SPOOL_MOUNT_STATUS.OPEN) !== SPOOL_MOUNT_STATUS.OPEN) {
+      return false;
+    }
+    return toTrimmedString(mount.spoolId) === spoolId ||
+      (materialSourceId && toTrimmedString(mount.materialSourceId) === materialSourceId);
+  });
+}
+
+/**
  * observed sourceからMaterialSource kindを解決する。
  *
  * @private
@@ -565,25 +658,20 @@ function createSingleSourcePlannedRecords(input) {
     displayLabel: observedSource?.displayLabel || (sourceKind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL ? "外部スプール" : "通常スプール"),
     aliases: observedSource?.sourceId ? [observedSource.sourceId] : [],
   });
-  const mount = createSpoolMountRecord({
+  const mountCandidate = {
     materialSourceId: source.materialSourceId,
     spoolId: input.spoolId,
-    status: SPOOL_MOUNT_STATUS.OPEN,
     verification: SPOOL_MOUNT_VERIFICATION.MIGRATED,
     sourceIdentityStrengthAtOpen: source.identityStrength,
-    mountOperationId: createPrinterCoreV3DeterministicId("material-migration-mount-operation", [
-      input.deviceId,
-      input.host,
-      input.spoolId,
-      source.materialSourceId,
-    ]),
-    openedAt: input.createdAt,
-    openedBy: "migration-dry-run",
-  });
+    openedAtPolicy: "shadow-execution-time",
+    operationIdPolicy: "shadow-execution-time",
+    openedBy: "migration-shadow-executor",
+  };
   return {
     filamentUnits: [unit],
     materialSources: [source],
-    spoolMounts: [mount],
+    spoolMounts: [],
+    mountCandidates: [deepFreezeJson(mountCandidate)],
   };
 }
 
@@ -599,6 +687,7 @@ function createEmptyPlannedWrites() {
     filamentUnits: [],
     materialSources: [],
     spoolMounts: [],
+    mountCandidates: [],
   };
 }
 
@@ -613,6 +702,7 @@ function createEmptyPlannedWrites() {
  * @param {string} input.spoolId - spool ID。
  * @param {string} input.createdAt - migration作成時刻。
  * @param {number=} input.freshTtlMs - fresh扱いTTL。
+ * @param {number=} input.allowedClockSkewMs - 未来観測の許容clock skew。
  * @returns {Object} migration entry。
  */
 function createHostMigrationEntry(input) {
@@ -627,10 +717,12 @@ function createHostMigrationEntry(input) {
   const hasFreshCompleteObservation = isFreshCompleteTopologyObservation(observation, {
     createdAt: input.createdAt,
     freshTtlMs: input.freshTtlMs,
+    allowedClockSkewMs: input.allowedClockSkewMs,
   });
   const printerType = normalizePrinterType(target?.printerType || machine?.printerType);
   const isK2Like = printerType === "k2" || printerType.includes("k2");
-  const isExplicitSingleSpool = hasExplicitSingleSpoolConfiguration(target, machine);
+  const hasSingleSpool = hasSingleSpoolConfiguration(target, machine);
+  const isConfirmedSingleSpool = hasOperatorConfirmedSingleSpoolConfiguration(target, machine);
 
   if (!hasLegacySpoolRecord(input.legacyData, input.spoolId)) {
     return {
@@ -657,6 +749,19 @@ function createHostMigrationEntry(input) {
   }
 
   if (hasOpenUniversalSourceConflict(input.legacyData, deviceId)) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_CONFLICT],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  const observationDeviceId = toTrimmedString(observation?.deviceId);
+  if (observation && observationDeviceId && observationDeviceId !== deviceId) {
     return {
       host: input.host,
       deviceId,
@@ -740,7 +845,7 @@ function createHostMigrationEntry(input) {
     };
   }
 
-  if (observedSources.length === 0 && !isExplicitSingleSpool) {
+  if (observedSources.length === 0 && !hasSingleSpool) {
     return {
       host: input.host,
       deviceId,
@@ -752,6 +857,40 @@ function createHostMigrationEntry(input) {
     };
   }
 
+  if (observedSources.length === 0 && hasSingleSpool && !isConfirmedSingleSpool) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION],
+      candidateSources: [],
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
+  const plannedWrites = createSingleSourcePlannedRecords({
+    deviceId,
+    spoolId: input.spoolId,
+    host: input.host,
+    createdAt: input.createdAt,
+    observedSource: observedSources[0] || null,
+  });
+  if (hasOpenUniversalSpoolMountConflict(input.legacyData, {
+    spoolId: input.spoolId,
+    materialSourceId: plannedWrites.materialSources[0]?.materialSourceId || null,
+  })) {
+    return {
+      host: input.host,
+      deviceId,
+      spoolId: input.spoolId,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.OPEN_MOUNT_CONFLICT],
+      candidateSources: observedSources,
+      plannedWrites: createEmptyPlannedWrites(),
+    };
+  }
+
   return {
     host: input.host,
     deviceId,
@@ -759,13 +898,7 @@ function createHostMigrationEntry(input) {
     migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
     reasons: [],
     candidateSources: observedSources,
-    plannedWrites: createSingleSourcePlannedRecords({
-      deviceId,
-      spoolId: input.spoolId,
-      host: input.host,
-      createdAt: input.createdAt,
-      observedSource: observedSources[0] || null,
-    }),
+    plannedWrites,
   };
 }
 
@@ -810,6 +943,7 @@ function summarizeEntries(entries) {
     summary.plannedWrites.filamentUnits += entry.plannedWrites.filamentUnits.length;
     summary.plannedWrites.materialSources += entry.plannedWrites.materialSources.length;
     summary.plannedWrites.spoolMounts += entry.plannedWrites.spoolMounts.length;
+    summary.plannedWrites.mountCandidates += entry.plannedWrites.mountCandidates.length;
     return summary;
   }, {
     ready: 0,
@@ -819,6 +953,7 @@ function summarizeEntries(entries) {
       filamentUnits: 0,
       materialSources: 0,
       spoolMounts: 0,
+      mountCandidates: 0,
     },
   });
 }
@@ -836,6 +971,7 @@ function summarizeEntries(entries) {
  * @param {Object=} options - plan生成オプション。
  * @param {string=} options.createdAt - plan作成日時。
  * @param {number=} options.freshTtlMs - fresh扱いTTL。
+ * @param {number=} options.allowedClockSkewMs - 未来観測の許容clock skew。
  * @returns {Object} dry-run migration plan。
  * @example
  * const plan = createMaterialAccountingMigrationDryRunPlan(monitorData, { createdAt: new Date().toISOString() });
@@ -844,6 +980,7 @@ export function createMaterialAccountingMigrationDryRunPlan(legacyData, options 
   const source = legacyData && typeof legacyData === "object" ? legacyData : {};
   const createdAt = normalizeOptionalIsoTime(options.createdAt) || new Date().toISOString();
   const freshTtlMs = Math.max(1, Math.floor(toFiniteNumber(options.freshTtlMs, DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS) ?? DEFAULT_MIGRATION_TOPOLOGY_FRESH_TTL_MS));
+  const allowedClockSkewMs = Math.max(0, Math.floor(toFiniteNumber(options.allowedClockSkewMs, DEFAULT_ALLOWED_CLOCK_SKEW_MS) ?? DEFAULT_ALLOWED_CLOCK_SKEW_MS));
   const hostSpoolMap = asPlainObject(source.hostSpoolMap);
   const entries = Object.entries(hostSpoolMap)
     .filter(([host, spoolId]) => toTrimmedString(host) && toTrimmedString(spoolId))
@@ -853,13 +990,24 @@ export function createMaterialAccountingMigrationDryRunPlan(legacyData, options 
       spoolId: toTrimmedString(spoolId),
       createdAt,
       freshTtlMs,
+      allowedClockSkewMs,
     }));
   const sourceChecksum = `fnv1a128:${createPrinterCoreV3DeterministicId("legacy-material-accounting-source", [
     stableStringifyPrinterCoreV3Value({
+      plannerPolicyRevision: MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION,
+      planSchemaVersion: MATERIAL_ACCOUNTING_MIGRATION_PLAN_SCHEMA_VERSION,
+      freshTtlMs,
+      allowedClockSkewMs,
       hostSpoolMap,
       connectionTargets: getConnectionTargets(source),
       machines: asPlainObject(source.machines),
+      filamentSpools: Array.isArray(source.filamentSpools) ? source.filamentSpools : [],
       materialSourceObservations: source.materialSourceObservations || null,
+      materialAccounting: source.materialAccounting || null,
+      printerCoreV3MaterialSourceRegistry: source.printerCoreV3MaterialSourceRegistry || null,
+      materialSourceRegistry: source.materialSourceRegistry || null,
+      printerCoreV3SpoolMountRepository: source.printerCoreV3SpoolMountRepository || null,
+      spoolMountRepository: source.spoolMountRepository || null,
     }),
   ]).split(":")[1]}`;
   return deepFreezeJson({
@@ -871,6 +1019,9 @@ export function createMaterialAccountingMigrationDryRunPlan(legacyData, options 
     source: {
       schema: "legacy-monitorData-v2",
       checksum: sourceChecksum,
+      plannerPolicyRevision: MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION,
+      freshTtlMs,
+      allowedClockSkewMs,
     },
     entries,
     summary: summarizeEntries(entries),
@@ -905,6 +1056,25 @@ function validatePlannedWrites(entry) {
     const validation = validateSpoolMount(mount);
     if (!validation.ok) {
       errors.push(...validation.errors.map((error) => `spoolMount:${error}`));
+    }
+  }
+  for (const candidate of entry.plannedWrites?.mountCandidates || []) {
+    if (!candidate || typeof candidate !== "object") {
+      errors.push("mountCandidate:not-object");
+      continue;
+    }
+    if (!toTrimmedString(candidate.materialSourceId)) {
+      errors.push("mountCandidate:materialSourceId-required");
+    }
+    if (!toTrimmedString(candidate.spoolId)) {
+      errors.push("mountCandidate:spoolId-required");
+    }
+    if (candidate.openedAt !== undefined || candidate.mountOperationId !== undefined) {
+      errors.push("mountCandidate:execution-fields-forbidden");
+    }
+    if (candidate.openedAtPolicy !== "shadow-execution-time" ||
+        candidate.operationIdPolicy !== "shadow-execution-time") {
+      errors.push("mountCandidate:execution-policy-required");
     }
   }
   return errors;
@@ -958,7 +1128,7 @@ export function validateMaterialAccountingMigrationDryRunPlan(plan) {
         errors.push(`summary-${countName}-count-mismatch`);
       }
     }
-    for (const writeName of ["filamentUnits", "materialSources", "spoolMounts"]) {
+    for (const writeName of ["filamentUnits", "materialSources", "spoolMounts", "mountCandidates"]) {
       if (plan.summary?.plannedWrites?.[writeName] !== expectedSummary.plannedWrites[writeName]) {
         errors.push(`summary-${writeName}-write-count-mismatch`);
       }
@@ -980,6 +1150,10 @@ export function validateMaterialAccountingMigrationDryRunPlan(plan) {
       if (entry?.migrationStatus !== MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY &&
           (entry?.plannedWrites?.spoolMounts || []).length > 0) {
         errors.push("non-ready-entry-has-spoolMount-write");
+      }
+      if (entry?.migrationStatus !== MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY &&
+          (entry?.plannedWrites?.mountCandidates || []).length > 0) {
+        errors.push("non-ready-entry-has-mountCandidate-write");
       }
       errors.push(...validatePlannedWrites(entry));
     }

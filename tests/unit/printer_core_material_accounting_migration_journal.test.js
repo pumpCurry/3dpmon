@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1506 (PR #438)
+ * @version 1.390.1507 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 12:12:00
+ * @lastModified 2026-08-31 13:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -48,7 +48,7 @@ function createReadyPlan(host = "K1Max-4A1B") {
         {
           hostname: host,
           printerType: "k1",
-          materialSystem: { mode: "single-spool", unitLimit: 0 },
+          materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
           printerCoreV3Identity: { deviceIdSeed: `serial:${host.toLowerCase()}` },
         },
       ],

@@ -112,7 +112,9 @@ universal writes.
 The dry-run planner classifies each legacy host spool assignment:
 
 - `READY`: a known single source can be represented as one `FilamentUnit`, one
-  `MaterialSource`, and one migrated `SpoolMount`.
+  `MaterialSource`, and one shadow-execution `mountCandidate`. The dry-run
+  planner never creates a production `SpoolMount` or fixes `openedAt` /
+  `mountOperationId`; those fields are minted only by the later shadow executor.
 - `CANDIDATE`: multiple material sources are observed, so the legacy host-level
   spool assignment needs an operator/source decision before it can become a
   source-aware mount.
@@ -130,11 +132,13 @@ execution or cutover transaction results. The planner also must not use
 created later by the execution/readiness boundary.
 
 `READY` requires a valid legacy spool record, stable device identity, no open
-Universal MaterialSource conflict for that device, and either explicit
+Universal MaterialSource conflict for that device, no open Universal SpoolMount
+conflict for the target spool/source, and either operator-confirmed
 `single-spool` configuration or a fresh `complete` material topology observation
 with exactly one direct/external source. K1/K1 Max are not blindly assumed to be
 single-source if the saved target does not state that topology. A partial,
-stale, restored, disconnected, locator-incomplete, or provisional/unknown source
+stale, restored, disconnected, future-dated beyond the allowed clock skew,
+locator-incomplete, tombstoned/unobserved, or provisional/unknown source
 observation is evidence that migration needs a new read or operator decision,
 not authority to create a migrated mount.
 
@@ -149,9 +153,17 @@ insufficiency, and missing legacy spool evidence.
 The dry-run validator recomputes `migrationStatus`, `summary.ready`,
 `summary.candidate`, `summary.blocked`, and all `summary.plannedWrites` counts
 from `entries[]`. Non-`READY` entries must not contain planned
-`filamentUnits`, `materialSources`, or `spoolMounts`. This keeps persisted
-dry-run journal entries self-checking when Gate 18.9B introduces IndexedDB
-journaling.
+`filamentUnits`, `materialSources`, `spoolMounts`, or `mountCandidates`.
+READY `mountCandidates` must carry `openedAtPolicy:
+shadow-execution-time` and `operationIdPolicy: shadow-execution-time`, and must
+not carry execution fields. This keeps persisted dry-run journal entries
+self-checking when Gate 18.9B introduces IndexedDB journaling.
+
+The source checksum includes the planner policy revision, schema version, TTL /
+clock-skew policy, legacy spool map, connection targets, machines, filament
+spool records, material observations, and existing Universal MaterialSource /
+SpoolMount repository snapshots. Any dependency that can change a READY/CANDIDATE
+/BLOCKED decision must change the checksum.
 
 Migration lifecycle transitions are fixed by
 `canTransitionMaterialAccountingMigrationStatus()`:
@@ -354,7 +366,7 @@ Gate 18.9A tests:
 - plain print-start snapshot does not mint debit authority
 - migration lifecycle status is fixed by enum and unknown status is invalid
 - sealed legacy-to-shadow cutover is invalid
-- migration dry-run planner maps K1 direct-only `hostSpoolMap` to one direct source and one migrated mount
+- migration dry-run planner maps operator-confirmed K1 direct-only `hostSpoolMap` to one direct source and one shadow-execution mount candidate
 - migration dry-run planner leaves K2/CFS multi-source `hostSpoolMap` as a candidate without spoolMount writes
 - migration dry-run planner blocks K2 hosts without material topology observations instead of assuming direct-only
 - migration dry-run planner rejects `shadow` / `failed` / `sealed` as direct planner decisions
@@ -362,6 +374,10 @@ Gate 18.9A tests:
 - migration dry-run planner blocks provisional/unknown observed source identity instead of promoting it to stable
 - migration dry-run planner blocks single source observations with incomplete locator evidence
 - migration dry-run planner blocks hosts with open Universal MaterialSource registry conflicts
+- migration dry-run planner blocks hosts with open Universal SpoolMount repository conflicts
+- migration dry-run planner treats future-dated observations beyond clock skew as not fresh
+- migration dry-run planner excludes tombstoned/unobserved sources from migration cardinality
+- migration dry-run planner changes source checksum when policy, spool inventory, observation, or repository evidence changes
 - migration dry-run validator recomputes summary/status/write counts and rejects non-READY planned writes
 
 Gate 18.9B tests:
