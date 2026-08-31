@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1569 (PR #439)
+ * @version 1.390.1570 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-01 07:56:16
+ * @lastModified 2026-09-01 08:10:05
  * -----------------------------------------------------------
  */
 
@@ -169,6 +169,17 @@ const CFS_CONTROL_ACTION_COMMAND_KIND = Object.freeze({
  * @constant {string}
  */
 const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です";
+
+/**
+ * CFS物理commandの同一device同時実行を止めるin-memory single-flight map。
+ *
+ * 【詳細説明】
+ * - durable recovery latchへ到達する前の短い窓で、同一deviceの2 commandが同時にsend-time clearを読む事故を防ぐ。
+ * - lock自体は再起動後のauthorityではなく、process内の競合窓を塞ぐ補助ガードとして扱う。
+ *
+ * @constant {Map<string, symbol>}
+ */
+const CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE = new Map();
 
 /**
  * 配列/Set/map形式のcommand kind allow-listをSetへ正規化する。
@@ -787,6 +798,86 @@ async function reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, 
 }
 
 /**
+ * 同一deviceのCFS物理command single-flight lock keyを生成する。
+ *
+ * 【詳細説明】
+ * - Printer Core v3 deviceIdを優先し、欠落時はhostnameへ落とす。
+ * - deviceId欠落時も同一panel内の並行実行を止めるため、空keyにはしない。
+ *
+ * @private
+ * @function createCfsPhysicalCommandFlightKey
+ * @param {string} hostname - 対象ホスト名
+ * @param {object|null|undefined} request - command request
+ * @returns {string} single-flight lock key
+ */
+function createCfsPhysicalCommandFlightKey(hostname, request) {
+  const deviceId = String(request?.deviceId || "").trim();
+  return deviceId ? `device:${deviceId}` : `host:${hostname}`;
+}
+
+/**
+ * 同一deviceのCFS物理command single-flight lockを取得する。
+ *
+ * 【詳細説明】
+ * - lock取得はawaitを挟まず同期的に行い、2つのdispatchが同時にreservation前へ進む窓を閉じる。
+ * - 取得できない場合は例外でsendTransportを止め、dispatcher側でtransport-errorとしてUIへ返す。
+ *
+ * @private
+ * @function acquireCfsPhysicalCommandFlightLock
+ * @param {string} hostname - 対象ホスト名
+ * @param {object|null|undefined} request - command request
+ * @returns {{key:string,token:symbol}} lock release用token
+ * @throws {Error} 同一deviceで別CFS物理commandが進行中の場合
+ */
+function acquireCfsPhysicalCommandFlightLock(hostname, request) {
+  const key = createCfsPhysicalCommandFlightKey(hostname, request);
+  if (CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE.has(key)) {
+    throw new Error("cfs-control-command-in-flight");
+  }
+  const token = Symbol("cfs-physical-command-flight");
+  CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE.set(key, token);
+  return { key, token };
+}
+
+/**
+ * CFS物理command single-flight lockを解放する。
+ *
+ * 【詳細説明】
+ * - 古いfinallyが新しいlockを消さないよう、取得時tokenが一致する場合だけ解放する。
+ *
+ * @private
+ * @function releaseCfsPhysicalCommandFlightLock
+ * @param {{key:string,token:symbol}|null|undefined} lock - acquire結果
+ * @returns {void}
+ */
+function releaseCfsPhysicalCommandFlightLock(lock) {
+  if (lock?.key && CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE.get(lock.key) === lock.token) {
+    CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE.delete(lock.key);
+  }
+}
+
+/**
+ * single-flight lock内で現在のrecovery blockerを再確認する。
+ *
+ * 【詳細説明】
+ * - send-time context取得後に別dispatchが未解決recordを作った場合でも、durable reservation前に止める。
+ *
+ * @private
+ * @function assertNoCfsControlRecoveryBlockerInFlight
+ * @param {object|null|undefined} request - command request
+ * @returns {void}
+ * @throws {Error} 現在store上でCFS recovery blockerがある場合
+ */
+function assertNoCfsControlRecoveryBlockerInFlight(request) {
+  const blocker = createCfsControlRecoveryBlocker(request, {
+    deviceId: request?.deviceId || "",
+  });
+  if (blocker?.blocked === true) {
+    throw new Error(`cfs-recovery-blocked:${blocker.reason || "blocked"}`);
+  }
+}
+
+/**
  * 未解決の物理CFS command結果を復旧ラッチstoreへ保存する。
  *
  * 【詳細説明】
@@ -893,15 +984,21 @@ function createCfsControlDispatcher(hostname) {
       if (!plan.ok) {
         throw new Error(`k2-cfs-control-plan-rejected:${plan.reason}`);
       }
-      await reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, context);
-      return sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
-        await sendCommand(frame.method, frame.params, hostname);
-        return {
-          status: "submitted",
-          frame,
-          meta,
-        };
-      });
+      const flightLock = acquireCfsPhysicalCommandFlightLock(hostname, request);
+      try {
+        assertNoCfsControlRecoveryBlockerInFlight(request);
+        await reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, context);
+        return await sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
+          await sendCommand(frame.method, frame.params, hostname);
+          return {
+            status: "submitted",
+            frame,
+            meta,
+          };
+        });
+      } finally {
+        releaseCfsPhysicalCommandFlightLock(flightLock);
+      }
     },
     observeState: () => observeCfsControlCommandState(hostname),
   });

@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1569 (PR #439)
+ * @version 1.390.1570 (PR #439)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-09-01 07:56:16
+ * @lastModified 2026-09-01 08:10:05
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1651,6 +1651,155 @@ describe("dashboard_panel_init CFS control hook", () => {
     expect(mockState.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
     expect(mockState.createK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
     expect(mockState.sendK2CfsCommandTransportPlan).not.toHaveBeenCalled();
+  });
+
+  it("production dispatcherは同じdeviceのCFS物理commandをsingle-flight化して並行送信を止める", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      printerCoreV3Info: {
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: "test-runtime-probe-session",
+        connectionGeneration: 7,
+        connectionDest: "192.0.2.10:9999",
+        connectionHost: "K2Pro",
+      },
+      dest: "192.0.2.10:9999",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["load"],
+          certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
+            gate: "Gate 19",
+            commandKinds: ["cfs-load"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
+          },
+        },
+      },
+    };
+    mockState.monitorData.machines.K2Pro.runtimeData.printerCoreV3Shadow = {
+      state: "observed",
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      lastSequence: 10,
+      lastState: {
+        print: {
+          stateLabel: "idle",
+        },
+        materials: {
+          cfs: {
+            connected: true,
+            topologyState: "fresh",
+          },
+          sources: [{
+            sourceId: "cfs:1:slot:2",
+            kind: "cfs-slot",
+            boxId: 1,
+            protocolSlotId: 2,
+            presence: "loaded",
+            selected: true,
+            status: {
+              presence: "loaded",
+              stateCode: 1,
+              selectionState: "selected",
+              selectionValid: true,
+            },
+          }],
+        },
+      },
+    };
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.createK2CfsCommandTransportPlan.mockReturnValue({
+      ok: true,
+      frames: [],
+      details: {
+        semanticStatus: "certified",
+      },
+    });
+    let releaseDurableSave;
+    const durableSaveGate = new Promise((resolve) => {
+      releaseDurableSave = resolve;
+    });
+    mockState.saveUnifiedStorageDurably.mockImplementationOnce(() => durableSaveGate);
+    mockState.sendK2CfsCommandTransportPlan.mockResolvedValue({
+      status: "acknowledged",
+    });
+    const body = createFilamentPanelBody();
+    const {
+      createPrinterCommandRequest,
+    } = await import("../../3dp_lib/printer_core/dashboard_command_authority.js");
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    const firstRequest = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      idempotencyKey: "load-1c-concurrent-a",
+      createdAt: "2026-09-01T08:10:05.000+09:00",
+      entropySource: () => "concurrent-a",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+    });
+    const secondRequest = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      idempotencyKey: "load-1c-concurrent-b",
+      createdAt: "2026-09-01T08:10:06.000+09:00",
+      entropySource: () => "concurrent-b",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+    });
+    const firstDispatch = integrationOptions.dispatcher.dispatch(firstRequest);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockState.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+
+    const secondResult = await integrationOptions.dispatcher.dispatch(secondRequest);
+    expect(secondResult.status).toBe("transport-error");
+    expect(secondResult.error.message).toContain("cfs-control-command-in-flight");
+    expect(mockState.appendPhysicalCommandRecoveryLatchRecord).toHaveBeenCalledTimes(1);
+    expect(mockState.sendK2CfsCommandTransportPlan).not.toHaveBeenCalled();
+
+    releaseDurableSave({
+      ok: true,
+      backend: "indexedDB",
+      reason: "flushed",
+    });
+    const firstResult = await firstDispatch;
+
+    expect(firstResult.status).toBe("acknowledged");
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
   });
 
   it("production controlはsubmittedで戻った物理CFS commandを復旧ラッチへ保存する", async () => {
