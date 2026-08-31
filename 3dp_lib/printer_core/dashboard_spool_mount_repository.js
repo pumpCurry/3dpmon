@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createSpoolMountRepository}：SpoolMount repositoryを生成
  *
- * @version 1.390.1501 (PR #438)
+ * @version 1.390.1502 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 12:35:00
+ * @lastModified 2026-08-31 11:37:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -264,6 +264,7 @@ export function createSpoolMountRepository(initialMounts = []) {
   const mountIdByOperationId = new Map();
   const mountCreationFingerprintByOperationId = new Map();
   const mountCloseFingerprintByOperationId = new Map();
+  const mountIdByCloseOperationId = new Map();
   const conflicts = [];
 
   /**
@@ -325,7 +326,50 @@ export function createSpoolMountRepository(initialMounts = []) {
           reason: mount.closeReason || null,
         }, mount),
       );
+      mountIdByCloseOperationId.set(mount.closeOperationId, mount.mountId);
     }
+  }
+
+  /**
+   * historical CLOSED mountのclose operation ID重複を検査する。
+   *
+   * 【詳細説明】
+   * - `closeMount()`経由ではなく、永続store復元・import・migration入力としてCLOSED mountが直接入る経路を守る。
+   * - `indexMount()`は検証済みrecordだけを索引化する前提にし、silent overwriteをここで防ぐ。
+   *
+   * @private
+   * @function collectHistoricalCloseOperationConflicts
+   * @param {Object} mount - 検査対象のCLOSED SpoolMount record。
+   * @returns {Array<Object>} conflict record配列。
+   */
+  function collectHistoricalCloseOperationConflicts(mount) {
+    if (mount.status !== SPOOL_MOUNT_STATUS.CLOSED || !mount.closeOperationId) {
+      return [];
+    }
+
+    const existingFingerprint = mountCloseFingerprintByOperationId.get(mount.closeOperationId);
+    if (!existingFingerprint) {
+      return [];
+    }
+
+    const candidateFingerprint = createMountCloseFingerprint({
+      closeOperationId: mount.closeOperationId,
+      reason: mount.closeReason || null,
+    }, mount);
+    if (existingFingerprint === candidateFingerprint) {
+      return [];
+    }
+
+    const existingMountId = mountIdByCloseOperationId.get(mount.closeOperationId);
+    const existingMount = mountsById.get(existingMountId) || mount;
+    return [
+      createMountConflict({
+        type: "close-operation-payload-conflict",
+        reason: "same-close-operation-different-payload",
+        existingMount,
+        candidateMount: mount,
+      }),
+    ];
   }
 
   /**
@@ -439,6 +483,16 @@ export function createSpoolMountRepository(initialMounts = []) {
         action: "conflict",
         record: existingById,
         conflicts: [conflict],
+      });
+    }
+
+    const historicalCloseConflicts = collectHistoricalCloseOperationConflicts(mount);
+    if (historicalCloseConflicts.length > 0) {
+      conflicts.push(...historicalCloseConflicts);
+      return createRepositoryResult({
+        ok: false,
+        action: "conflict",
+        conflicts: historicalCloseConflicts,
       });
     }
 
@@ -602,6 +656,7 @@ export function createSpoolMountRepository(initialMounts = []) {
     mountsById.set(existingMount.mountId, storedClosedMount);
     if (closeOperationId) {
       mountCloseFingerprintByOperationId.set(closeOperationId, closeFingerprint);
+      mountIdByCloseOperationId.set(closeOperationId, storedClosedMount.mountId);
     }
     return createRepositoryResult({
       ok: true,

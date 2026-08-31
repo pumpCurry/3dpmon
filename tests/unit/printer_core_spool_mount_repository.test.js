@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1501 (PR #438)
+ * @version 1.390.1502 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 12:35:00
+ * @lastModified 2026-08-31 11:37:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -363,6 +363,74 @@ describe("SpoolMountRepository", () => {
     });
 
     expect(retry).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "close-operation-payload-conflict",
+          reason: "same-close-operation-different-payload",
+        }),
+      ],
+    });
+  });
+
+  it("initialMounts内の重複closeOperationIdは復元時にconflictとして拒否する", () => {
+    const firstMount = createMount({
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      mountOperationId: "mount-op:closed-a",
+      materialSourceId: "material-source:1a",
+      spoolId: "spool:silver",
+      closeOperationId: "close-op:duplicate",
+      closeReason: "operator-swap",
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+    });
+    const secondMount = createMount({
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      mountOperationId: "mount-op:closed-b",
+      materialSourceId: "material-source:1b",
+      spoolId: "spool:white",
+      closeOperationId: "close-op:duplicate",
+      closeReason: "operator-swap",
+      openedAt: "2026-08-31T02:10:00.000Z",
+      closedAt: "2026-08-31T02:20:00.000Z",
+      closedBy: "operator",
+    });
+
+    expect(() => createSpoolMountRepository([
+      firstMount,
+      secondMount,
+    ])).toThrow(/same-close-operation-different-payload/);
+  });
+
+  it("historical CLOSED mount追加時も重複closeOperationIdはconflictにする", () => {
+    const repository = createSpoolMountRepository();
+    const firstMount = createMount({
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      mountOperationId: "mount-op:closed-a",
+      materialSourceId: "material-source:1a",
+      spoolId: "spool:silver",
+      closeOperationId: "close-op:duplicate",
+      closeReason: "operator-swap",
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+    });
+    const secondMount = createMount({
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      mountOperationId: "mount-op:closed-b",
+      materialSourceId: "material-source:1b",
+      spoolId: "spool:white",
+      closeOperationId: "close-op:duplicate",
+      closeReason: "operator-swap",
+      openedAt: "2026-08-31T02:10:00.000Z",
+      closedAt: "2026-08-31T02:20:00.000Z",
+      closedBy: "operator",
+    });
+
+    expect(repository.recordMount(firstMount)).toMatchObject({ ok: true, action: "insert" });
+    const result = repository.recordMount(secondMount);
+
+    expect(result).toMatchObject({
       ok: false,
       action: "conflict",
       conflicts: [

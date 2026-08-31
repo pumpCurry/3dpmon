@@ -28,9 +28,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1499 (PR #438)
+ * @version 1.390.1502 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 11:45:00
+ * @lastModified 2026-08-31 11:37:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -635,6 +635,8 @@ export function createMaterialSourceRecord(input = {}) {
  * @param {string=} input.closedAt - mount終了日時。
  * @param {string=} input.openedBy - mount開始者。
  * @param {string=} input.closedBy - mount終了者。
+ * @param {string=} input.closeOperationId - mount終了操作の冪等identity。
+ * @param {string=} input.closeReason - mount終了理由。
  * @returns {Object} SpoolMount record。
  * @example
  * const mount = createSpoolMountRecord({ materialSourceId, spoolId, openedBy: "operator" });
@@ -685,6 +687,8 @@ export function createSpoolMountRecord(input = {}) {
     closedAt,
     openedBy: toTrimmedString(input.openedBy) || null,
     closedBy: toTrimmedString(input.closedBy) || null,
+    closeOperationId: toTrimmedString(input.closeOperationId) || null,
+    closeReason: toTrimmedString(input.closeReason) || null,
     authority: {
       mode: "contract-only",
       canDebitRemaining: false,

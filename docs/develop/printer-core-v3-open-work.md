@@ -41,6 +41,8 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   canonical locator/identity validation、identityとlocatorのslot/index整合、
   provisional rekey boundary、open mount最大1、close lifecycle、restart-safe operation
   idempotency、interval overlap conflictを固定しながら、永続化やcutoverへ段階的に接続する。
+  migration planner dry-runは追加済みで、K1 direct-onlyはsource-aware候補を生成する一方、
+  K2/CFS multi-sourceやtopology未観測K2はblind migrationせずcandidate/blockedへ留める。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。

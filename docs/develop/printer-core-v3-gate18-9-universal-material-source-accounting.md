@@ -101,6 +101,34 @@ This helper normalizes source-specific usage evidence fields only. It does not
 issue debit authority. Gate 18.9A intentionally has no public trusted usage or
 trusted print-start snapshot issuer.
 
+## Gate 18.9A Migration Planner Dry-Run
+
+Create `3dp_lib/printer_core/dashboard_material_accounting_migration_planner.js`
+as a pure module after the repository baseline is hardened. The planner reads
+legacy `hostSpoolMap` and read-only `materialSourceObservations`, but it must not
+write IndexedDB, mutate `monitorData`, close legacy mount intervals, or activate
+universal writes.
+
+The dry-run planner classifies each legacy host spool assignment:
+
+- `READY`: a known single source can be represented as one `FilamentUnit`, one
+  `MaterialSource`, and one migrated `SpoolMount`.
+- `CANDIDATE`: multiple material sources are observed, so the legacy host-level
+  spool assignment needs an operator/source decision before it can become a
+  source-aware mount.
+- `BLOCKED`: the device is known to require topology evidence, but no material
+  topology observation is available.
+
+K2/CFS and K1C/CFS-C devices must not be treated as direct-only merely because a
+legacy `hostSpoolMap` entry exists. For multi-source devices, `hostSpoolMap` is a
+compatibility projection and never a source-aware debit authority.
+
+The dry-run planner may recommend only `planned`, `candidate`, `ready`, or
+`blocked`. It must not emit `shadow`, `failed`, or `sealed`, because those are
+execution or cutover transaction results. The planner also must not use
+`MaterialAccountingCutoverRecord` as its primary return shape; cutover records are
+created later by the execution/readiness boundary.
+
 ## Identity Rules
 
 `materialSourceId` is an accounting identity. `locator` is where the source was
@@ -256,6 +284,10 @@ Gate 18.9A tests:
 - plain print-start snapshot does not mint debit authority
 - migration lifecycle status is fixed by enum and unknown status is invalid
 - sealed legacy-to-shadow cutover is invalid
+- migration dry-run planner maps K1 direct-only `hostSpoolMap` to one direct source and one migrated mount
+- migration dry-run planner leaves K2/CFS multi-source `hostSpoolMap` as a candidate without spoolMount writes
+- migration dry-run planner blocks K2 hosts without material topology observations instead of assuming direct-only
+- migration dry-run planner rejects `shadow` / `failed` / `sealed` as direct planner decisions
 
 Gate 18.9B tests:
 
