@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1462 (PR #435)
+ * @version 1.390.1532 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 17:23:15
+ * @lastModified 2026-08-31 17:24:20
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -428,7 +428,7 @@ function formatCommandFailureReason(result) {
  * CFS command実行状態を生成する。
  *
  * 【詳細説明】
- * - 再描画でDOMが作り直されても、非冪等commandのrunning/submitted/unknown状態を失わないため、
+ * - 再描画でDOMが作り直されても、非冪等commandのsubmitting/submitted/probing/unknown状態を失わないため、
  *   renderer handleのclosureに保持する。
  *
  * @private
@@ -541,7 +541,7 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
  * @returns {void}
  */
 function reconcileCommandExecutionState(executionState, viewModel) {
-  if (executionState?.state !== "submitted") {
+  if (!["submitted", "probing"].includes(executionState?.state)) {
     return;
   }
   const currentObservationKey = getViewModelObservationKey(viewModel);
@@ -551,23 +551,26 @@ function reconcileCommandExecutionState(executionState, viewModel) {
   const reconciliation = executionState.reconciliation || {};
   if (reconciliation.kind === "selected-source") {
     if (reconciliation.wasSelectedAtSubmit === true) {
+      executionState.state = "unknown";
       executionState.baselineObservationKey = currentObservationKey;
       executionState.statusClass = "warning";
       executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 送信前から選択済みだったため再操作を保留しています。`;
       return;
     }
     if (!isSourceSelectedInViewModel(viewModel, reconciliation.expectedSourceId)) {
+      executionState.state = "probing";
       executionState.baselineObservationKey = currentObservationKey;
       executionState.statusClass = "warning";
       executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、対象スロットの選択はまだ確認できません。`;
       return;
     }
-    executionState.state = "idle";
-    executionState.statusClass = "warning";
-    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測で対象スロットの選択を確認したため再操作できます。`;
+    executionState.state = "confirmed";
+    executionState.statusClass = "success";
+    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測で対象スロットの選択を確認しました。再操作できます。`;
     executionState.reconciliation = null;
     return;
   }
+  executionState.state = "probing";
   executionState.baselineObservationKey = currentObservationKey;
   executionState.statusClass = "warning";
   executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、物理状態の確認方法が未確定のため再操作を保留しています。`;
@@ -584,7 +587,7 @@ function reconcileCommandExecutionState(executionState, viewModel) {
  * @returns {boolean} 同一printerのCFS操作を止める場合true
  */
 function isCommandMutexActive(executionState) {
-  return ["running", "submitted", "unknown"].includes(executionState?.state);
+  return ["running", "submitting", "submitted", "settling", "probing", "unknown"].includes(executionState?.state);
 }
 
 /**
@@ -596,7 +599,7 @@ function isCommandMutexActive(executionState) {
  * @private
  * @param {object} row - ViewModel source row
  * @param {object} executionState - command execution state
- * @returns {{state: string, message: string}|null} 表示対象status
+ * @returns {{state: string, message: string, executionState: string}|null} 表示対象status
  */
 function getVisibleExecutionStatusForRow(row, executionState) {
   if (!executionState?.message || executionState.sourceId !== row?.sourceId) {
@@ -605,6 +608,7 @@ function getVisibleExecutionStatusForRow(row, executionState) {
   return {
     state: executionState.statusClass || "idle",
     message: executionState.message,
+    executionState: executionState.state || "idle",
   };
 }
 
@@ -612,7 +616,7 @@ function getVisibleExecutionStatusForRow(row, executionState) {
  * 現在描画中のCFS操作ボタンをすべて再評価する。
  *
  * 【詳細説明】
- * - running/submitted/unknownはprinter単位mutexなので、クリックしたslotだけでなく同じpanel内の
+ * - submitting/submitted/probing/unknownはprinter単位mutexなので、クリックしたslotだけでなく同じpanel内の
  *   全slotのbutton状態を即時に揃える。
  *
  * @private
@@ -634,14 +638,20 @@ function refreshAllCommandButtons(executionState, busy = false) {
  * @param {HTMLElement} statusElement - ステータス表示DOM
  * @param {string} state - running/success/error/timeout/warning/idle
  * @param {string} message - 表示文
+ * @param {string=} executionState - UI操作の段階状態
  * @returns {void}
  */
-function setCommandStatus(statusElement, state, message) {
+function setCommandStatus(statusElement, state, message, executionState = "") {
   if (!statusElement) {
     return;
   }
   statusElement.className = `mtv-command-status mtv-command-status-${state}`;
   statusElement.textContent = message || "";
+  if (message && executionState) {
+    statusElement.dataset.executionState = executionState;
+  } else {
+    delete statusElement.dataset.executionState;
+  }
   statusElement.hidden = !message;
 }
 
@@ -794,7 +804,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
   statusElement.setAttribute("aria-live", "polite");
   const restoredStatus = getVisibleExecutionStatusForRow(row, executionState);
   if (restoredStatus) {
-    setCommandStatus(statusElement, restoredStatus.state, restoredStatus.message);
+    setCommandStatus(statusElement, restoredStatus.state, restoredStatus.message, restoredStatus.executionState);
   } else {
     statusElement.hidden = true;
   }
@@ -835,7 +845,12 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
     buttonEntries.push({ button, buttonConfig });
     button.addEventListener("click", async () => {
       if (isCommandMutexActive(executionState)) {
-        setCommandStatus(statusElement, executionState.statusClass || "running", executionState.message || "CFS操作の結果確認中です。");
+        setCommandStatus(
+          statusElement,
+          executionState.statusClass || "running",
+          executionState.message || "CFS操作の結果確認中です。",
+          executionState.state || "submitting"
+        );
         return;
       }
       const currentReason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
@@ -853,11 +868,11 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
       }
       if (freshReason) {
         button.title = freshReason;
-        setCommandStatus(statusElement, "warning", freshReason);
+        setCommandStatus(statusElement, "warning", freshReason, "rejected");
         return;
       }
       const actionLabel = formatControlActionLabel(buttonConfig.action);
-      executionState.state = "running";
+      executionState.state = "submitting";
       executionState.sourceId = row?.sourceId || null;
       executionState.action = buttonConfig.action;
       executionState.commandKind = buttonConfig.commandKind;
@@ -866,7 +881,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
       executionState.baselineObservationKey = controlPolicy.observationKey || null;
       refreshAllCommandButtons(executionState, true);
       button.dataset.running = "true";
-      setCommandStatus(statusElement, "running", executionState.message);
+      setCommandStatus(statusElement, "running", executionState.message, executionState.state);
       try {
         const resultEnvelope = await waitForCommandWithTimeout(
           Promise.resolve(controlPolicy.onCommand(commandPayload)),
@@ -877,31 +892,32 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
           const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`;
           const status = String(result?.status || result?.result || "").trim().toLowerCase();
           const shouldKeepLocked = ["timeout", "transport-error", "confirmation-error"].includes(status);
-          executionState.state = shouldKeepLocked ? "unknown" : "idle";
+          executionState.state = shouldKeepLocked ? "unknown" : "rejected";
           executionState.statusClass = "error";
           executionState.message = failureMessage;
           executionState.reconciliation = null;
           setCommandStatus(
             statusElement,
             "error",
-            failureMessage
+            failureMessage,
+            executionState.state
           );
         } else if (isUnconfirmedCommandResult(result)) {
           executionState.state = "submitted";
           executionState.statusClass = "warning";
-          executionState.message = `${actionLabel}を送信しました。観測確認は未完了です。状態更新を確認してください。`;
+          executionState.message = `${actionLabel}を送信しました。CFS状態反映待ちです。最新観測で確認します。`;
           executionState.reconciliation = createSubmittedCommandReconciliation(commandPayload, buttonConfig, row);
-          setCommandStatus(statusElement, "warning", executionState.message);
+          setCommandStatus(statusElement, "warning", executionState.message, executionState.state);
         } else {
-          executionState.state = "idle";
+          executionState.state = "confirmed";
           executionState.statusClass = "success";
-          executionState.message = `${actionLabel}を送信しました。観測状態の更新を待っています。`;
+          executionState.message = `${actionLabel}を送信しました。確認済みです。`;
           executionState.reconciliation = null;
-          setCommandStatus(statusElement, "success", executionState.message);
+          setCommandStatus(statusElement, "success", executionState.message, executionState.state);
         }
       } catch (error) {
         const isTimeout = error?.code === "cfs-command-timeout" || error?.message === "cfs-command-timeout";
-        executionState.state = "unknown";
+        executionState.state = isTimeout ? "unknown" : "rejected";
         executionState.statusClass = isTimeout ? "timeout" : "error";
         executionState.message = isTimeout
           ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。`
@@ -909,7 +925,8 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
         setCommandStatus(
           statusElement,
           executionState.statusClass,
-          executionState.message
+          executionState.message,
+          executionState.state
         );
       } finally {
         button.dataset.running = "false";
