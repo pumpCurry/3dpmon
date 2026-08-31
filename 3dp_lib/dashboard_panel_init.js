@@ -108,6 +108,9 @@ import {
   resolveMaterialTopologyViewOptions,
 } from "./printer_core/dashboard_material_system_settings.js";
 import {
+  PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS,
+  appendPhysicalCommandRecoveryLatchRecord,
+  createPhysicalCommandRecoveryLatchRecord,
   isPhysicalCommandRecoveryBlocked,
 } from "./printer_core/dashboard_physical_command_recovery_latch.js";
 
@@ -502,6 +505,114 @@ function observeCfsControlCommandState(hostname) {
 }
 
 /**
+ * CommandResultから復旧ラッチへ保存する未解決statusを決定する。
+ *
+ * 【詳細説明】
+ * - completed/rejectedは未解決物理操作ではないため保存しない。
+ * - transport acceptedでもexpected-stateやpost-command correlationが未確認なら、物理状態が変わった可能性を
+ *   人間が確認するまで再送させないため未解決ラッチへ残す。
+ * - transport/confirmation errorは実機側で副作用が起きた可能性を否定できないためunknown扱いに寄せる。
+ *
+ * @private
+ * @function resolveCfsControlRecoveryLatchStatus
+ * @param {object|null|undefined} result - Printer Core command result
+ * @returns {string|null} 復旧ラッチへ保存するstatus、または保存不要ならnull
+ */
+function resolveCfsControlRecoveryLatchStatus(result) {
+  if (!result || typeof result !== "object" || result.completed === true || result.status === "rejected") {
+    return null;
+  }
+  const status = String(result.status || "").trim();
+  if (status === PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED ||
+      status === PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.POST_OBSERVED ||
+      status === PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN) {
+    return status;
+  }
+  if (["transport-error", "confirmation-error", "timeout", "transient-error"].includes(status)) {
+    return PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN;
+  }
+  if (result.transportAccepted === true &&
+      result.postCommandObservation?.required === true &&
+      result.postCommandObservation?.confirmed !== true) {
+    const observedSequence = Number(result.postCommandObservation.observedSequence);
+    return Number.isFinite(observedSequence)
+      ? PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.POST_OBSERVED
+      : PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED;
+  }
+  return null;
+}
+
+/**
+ * 未解決の物理CFS command結果を復旧ラッチstoreへ保存する。
+ *
+ * 【詳細説明】
+ * - renderer/integrationから返ったdispatch結果だけを入力にし、command frameやRPC payloadは保存しない。
+ * - append結果がconflictでもstoreは重要な隔離証跡を含むため、monitorDataへ反映して永続化する。
+ * - 保存エラーはUI操作結果を例外で落とさず、`recoveryLatch` diagnosticsとして返す。
+ *
+ * @private
+ * @function persistCfsControlRecoveryLatchIfNeeded
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} dispatchOutput - CFS command integrationの戻り値
+ * @returns {object} recoveryLatch diagnosticsを付加したdispatchOutput
+ */
+function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
+  const result = dispatchOutput?.result || null;
+  const request = dispatchOutput?.request || null;
+  const latchStatus = resolveCfsControlRecoveryLatchStatus(result);
+  if (!request || !latchStatus) {
+    return dispatchOutput;
+  }
+  try {
+    const target = getConnectionTarget(hostname);
+    const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
+    const postObservation = result.postCommandObservation || {};
+    const record = createPhysicalCommandRecoveryLatchRecord({
+      commandId: request.commandId,
+      commandKind: request.commandKind,
+      deviceId: request.deviceId,
+      sessionId: request.sessionId,
+      connectionGeneration: getPrinterCoreV3ConnectionGeneration(hostname),
+      status: latchStatus,
+      sentAt: request.createdAt || new Date().toISOString(),
+      materialSourceId: request.payload?.sourceId || null,
+      certificationId: evidence.certificationId || evidence.captureId || evidence.fixtureId || null,
+      preObservation: {
+        sequence: postObservation.sentSequence ?? null,
+        digest: postObservation.correlationId || result.commandCorrelation?.correlationId || null,
+        observedAt: request.createdAt || null,
+      },
+    });
+    const appendResult = appendPhysicalCommandRecoveryLatchRecord(
+      monitorData.physicalCommandRecoveryLatch,
+      record
+    );
+    if (appendResult?.store && ["appended", "conflict"].includes(appendResult.status)) {
+      monitorData.physicalCommandRecoveryLatch = appendResult.store;
+      saveUnifiedStorage(true);
+    }
+    return {
+      ...dispatchOutput,
+      recoveryLatch: {
+        ok: appendResult?.ok === true,
+        status: appendResult?.status || "unknown",
+        commandId: record.commandId,
+        latchStatus,
+      },
+    };
+  } catch (error) {
+    return {
+      ...dispatchOutput,
+      recoveryLatch: {
+        ok: false,
+        status: "error",
+        reason: error?.message || String(error),
+      },
+    };
+  }
+}
+
+/**
  * production CFS control用のbound dispatcherを生成する。
  *
  * @private
@@ -593,8 +704,9 @@ function createCfsControlRenderOptions(hostname) {
        * @param {object} intent - material topology panelが生成した操作intent
        * @returns {Promise<object>} dispatch結果
        */
-      onCommand(intent) {
-        return integration.onCommand(intent);
+      async onCommand(intent) {
+        const dispatchOutput = await integration.onCommand(intent);
+        return persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput);
       },
     };
   }
