@@ -4,9 +4,9 @@
  * - K2/F012 live certification前に、/info、printer status、boxsInfoを副作用なしで観測することを検証する。
  * - read-only calibrationがCFS操作frameを送らず、複数probe結果をJSONへ保持することを検証する。
  *
- * @version 1.390.1545 (PR #439)
+ * @version 1.390.1547 (PR #439)
  * @since 1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:34:44
+ * @lastModified 2026-08-31 19:39:05
  */
 
 import { EventEmitter } from "node:events";
@@ -188,6 +188,74 @@ describe("capture_k2_cfs_readonly_calibration", () => {
     ]);
     expect(ws.sentFrames.filter((frame) => frame?.method === "set")).toHaveLength(0);
     expect(ws.closed).toBe(true);
+  });
+
+  it("一部probeがtimeoutした場合は観測証跡を保持しつつpartialとして返す", async () => {
+    class PartiallyTimingOutWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.statusProbeCount = 0;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          this.statusProbeCount += 1;
+          if (this.statusProbeCount === 1) {
+            setTimeout(() => {
+              this.emit("message", JSON.stringify({ state: 2, deviceState: 0, printJobTime: 613 }));
+            }, 1);
+          }
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ boxsInfo: { materialBoxs: [] } }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+
+    const result = await runK2CfsReadOnlyCalibration({
+      ...parseArgs([
+        "--host",
+        "192.168.54.153",
+        "--probe-timeout-ms",
+        "1000",
+        "--status-probe-count",
+        "2",
+        "--status-probe-interval-ms",
+        "0",
+        "--boxsinfo-probe-count",
+        "1",
+        "--require-info-model",
+        "F012",
+      ]),
+      fetchInfo: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ model: "F012", version: "1.0.0" }),
+      }),
+      openWs: async () => new PartiallyTimingOutWs(),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      status: "partial",
+      reason: "read-only-calibration-incomplete",
+      blindRetryAllowed: false,
+      statusProbeCount: 2,
+      observedStatusProbeCount: 1,
+      failedStatusProbeCount: 1,
+      boxsInfoProbeCount: 1,
+      observedBoxsInfoProbeCount: 1,
+      failedBoxsInfoProbeCount: 0,
+    });
+    expect(result.printerStatusSeries.map((probe) => probe.status)).toEqual(["observed", "timeout"]);
   });
 
   it("output-dir指定時はcalibration resultを保存する", async () => {

@@ -234,6 +234,7 @@ live certificationは次の順で進める。
 
    2026-08-31のF012実機観測では、`/info` と `boxsInfo` は取得できた一方で、printer statusは
    1回目だけ即応答し、同一WS session内の連続status probeはtimeoutすることがあった。
+   この場合CLI結果は `ok:false` / `status:"partial"` とし、`failedStatusProbeCount` を証跡に残す。
    これはside-effect command失敗ではなく、live送信前のidle predicate調整対象として扱う。
 
 2. dry-runで送信frameを確認する。

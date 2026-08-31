@@ -16,9 +16,9 @@
  * - {@link parseArgs}：CLI引数を解析
  * - {@link runK2CfsReadOnlyCalibration}：read-only calibrationを実行
  *
- * @version 1.390.1545 (PR #439)
+ * @version 1.390.1547 (PR #439)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:34:44
+ * @lastModified 2026-08-31 19:39:05
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -411,9 +411,13 @@ export async function runK2CfsReadOnlyCalibration(options) {
     }
   }
   const infoOk = !options.requireInfoModel || printerInfo?.modelMatched === true;
-  const statusObserved = printerStatusSeries.some((probe) => probe.status === "observed");
-  const boxsInfoObserved = boxsInfoSeries.some((probe) => probe.status === "observed");
-  const ok = printerInfo?.status === "observed" && infoOk && statusObserved && boxsInfoObserved;
+  const observedStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "observed").length;
+  const observedBoxsInfoProbeCount = boxsInfoSeries.filter((probe) => probe.status === "observed").length;
+  const failedStatusProbeCount = printerStatusSeries.length - observedStatusProbeCount;
+  const failedBoxsInfoProbeCount = boxsInfoSeries.length - observedBoxsInfoProbeCount;
+  const allRequestedProbesObserved = observedStatusProbeCount === options.statusProbeCount
+    && observedBoxsInfoProbeCount === options.boxsInfoProbeCount;
+  const ok = printerInfo?.status === "observed" && infoOk && allRequestedProbesObserved;
   const result = {
     ok,
     sent: false,
@@ -430,9 +434,11 @@ export async function runK2CfsReadOnlyCalibration(options) {
     printerStatusSeries,
     boxsInfoSeries,
     statusProbeCount: printerStatusSeries.length,
-    observedStatusProbeCount: printerStatusSeries.filter((probe) => probe.status === "observed").length,
+    observedStatusProbeCount,
+    failedStatusProbeCount,
     boxsInfoProbeCount: boxsInfoSeries.length,
-    observedBoxsInfoProbeCount: boxsInfoSeries.filter((probe) => probe.status === "observed").length,
+    observedBoxsInfoProbeCount,
+    failedBoxsInfoProbeCount,
   };
   if (toNonEmptyString(options.outputDir)) {
     result.evidence = await writeCalibrationEvidence(result, options.outputDir);
