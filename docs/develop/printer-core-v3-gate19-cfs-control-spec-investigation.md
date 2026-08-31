@@ -217,7 +217,26 @@ slot `1A/1B/1C` が装填済み、`1A` がselected、`colorMatch` は `T1A -> bo
 
 live certificationは次の順で進める。
 
-1. dry-runで送信frameを確認する。
+1. read-only calibrationで `/info`、printer status、`boxsInfo` を副作用なしで取得する。
+   この段階では `set` frameを送らず、`sent:false` / `blindRetryAllowed:false` のJSON証跡だけを保存する。
+
+   ```bash
+   node scripts/capture_k2_cfs_readonly_calibration.mjs \
+     --host 192.168.54.153 \
+     --require-info-model F012 \
+     --status-probe-count 5 \
+     --status-probe-interval-ms 1000 \
+     --boxsinfo-probe-count 2 \
+     --boxsinfo-probe-interval-ms 1000 \
+     --output-dir tmp/k2-cfs-readonly-calibration \
+     --pretty
+   ```
+
+   2026-08-31のF012実機観測では、`/info` と `boxsInfo` は取得できた一方で、printer statusは
+   1回目だけ即応答し、同一WS session内の連続status probeはtimeoutすることがあった。
+   これはside-effect command失敗ではなく、live送信前のidle predicate調整対象として扱う。
+
+2. dry-runで送信frameを確認する。
 
    ```bash
    node scripts/capture_k2_cfs_slot_control.mjs \
@@ -229,9 +248,9 @@ live certificationは次の順で進める。
      --pretty
    ```
 
-2. read-only `boxsInfo` を別途確認し、対象sourceが現在もfresh/loadedであることを確認する。
+3. read-only `boxsInfo` を別途確認し、対象sourceが現在もfresh/loadedであることを確認する。
 
-3. 最初のlive候補は、すでにselectedなsource（例: `cfs:1:slot:0`）だけに限定する。
+4. 最初のlive候補は、すでにselectedなsource（例: `cfs:1:slot:0`）だけに限定する。
    これは「別slotへ切り替える」前に、`feedInOrOut` がF012で受理されるか、前後probeが取れるかを確認する段階である。
 
    ```bash
@@ -257,7 +276,7 @@ live certificationは次の順で進める。
      --pretty
    ```
 
-4. 1回のlive送信ごとに停止して、人間の目視、CFS本体状態、前後`boxsInfo`の差分を確認する。
+5. 1回のlive送信ごとに停止して、人間の目視、CFS本体状態、前後`boxsInfo`の差分を確認する。
    side-effect commandなので、timeoutや不明応答時に同じcommandを自動再送してはならない。
 
    CLI結果は次のように解釈する。
