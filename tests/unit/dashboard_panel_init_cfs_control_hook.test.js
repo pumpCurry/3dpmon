@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1563 (PR #439)
+ * @version 1.390.1564 (PR #439)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-31 21:18:40
+ * @lastModified 2026-08-31 21:31:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1555,6 +1555,97 @@ describe("dashboard_panel_init CFS control hook", () => {
         commandKind: "cfs-load",
         status: "submitted",
       });
+  });
+
+  it("production controlは次観測で確認されたselectの復旧ラッチをobserved-confirmedで解決する", async () => {
+    mockState.connectionTarget = {
+      printerType: "creality-k2",
+      printerCoreV3Info: {
+        model: "F012",
+        version: "1.0.0",
+        probeSessionId: "test-runtime-probe-session",
+        connectionGeneration: 7,
+        connectionDest: "192.0.2.10:9999",
+        connectionHost: "K2Pro",
+      },
+      dest: "192.0.2.10:9999",
+      materialSystem: {
+        mode: "cfs-readonly",
+        unitLimit: 1,
+        externalSourceLimit: 1,
+        cfsControl: {
+          enabled: true,
+          allowedActions: ["select"],
+          certifiedCfsSlotControlCommands: ["cfs-slot-select"],
+          certificationEvidence: {
+            schemaVersion: 1,
+            status: "certified",
+            gate: "Gate 19",
+            commandKinds: ["cfs-slot-select"],
+            transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+            printerType: "creality-k2",
+            model: "F012",
+            firmwareVersion: "1.0.0",
+            fixtureId: "k2-f012-feed-in-or-out-20260828",
+            captureId: "capture:k2-f012-feed-in-or-out-20260828",
+            certifiedAt: "2026-08-28T12:00:00.000+09:00",
+          },
+        },
+      },
+    };
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      unresolvedByCommandId: {
+        "cmd:k2-select-1b": {
+          commandId: "cmd:k2-select-1b",
+          status: "post-observed",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    options.control.onCommandReconciled({
+      commandId: "cmd:k2-select-1b",
+      resolution: "observed-confirmed",
+      sourceId: "cfs:1:slot:1",
+      postObservation: {
+        sequence: 12,
+        digest: "material-topology-observation:2026-08-28T01:00:05.000Z",
+        observedAt: "2026-08-28T01:00:05.000Z",
+      },
+    });
+
+    expect(mockState.resolvePhysicalCommandRecoveryLatchRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unresolvedByCommandId: {
+          "cmd:k2-select-1b": expect.objectContaining({
+            commandId: "cmd:k2-select-1b",
+          }),
+        },
+      }),
+      expect.objectContaining({
+        commandId: "cmd:k2-select-1b",
+        resolution: "observed-confirmed",
+        postObservation: expect.objectContaining({
+          digest: "material-topology-observation:2026-08-28T01:00:05.000Z",
+        }),
+      })
+    );
+    expect(mockState.saveUnifiedStorage).toHaveBeenCalledWith(true);
   });
 
   it("production dispatcherはsend-time recovery blockerをtransport前に反映する", async () => {

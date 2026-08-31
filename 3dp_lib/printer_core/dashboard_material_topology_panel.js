@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1557 (PR #439)
+ * @version 1.390.1564 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 20:40:33
+ * @lastModified 2026-08-31 21:31:42
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -441,6 +441,7 @@ function formatCommandFailureReason(result) {
 function createCommandExecutionState() {
   return {
     state: "idle",
+    commandId: null,
     sourceId: null,
     action: null,
     commandKind: null,
@@ -448,6 +449,7 @@ function createCommandExecutionState() {
     statusClass: "idle",
     baselineObservationKey: null,
     reconciliation: null,
+    reconciliationNotified: false,
     refreshers: new Set(),
   };
 }
@@ -501,6 +503,73 @@ function getViewModelObservationKey(viewModel) {
 }
 
 /**
+ * ViewModelの現在観測を復旧ラッチ解決に使う最小参照へ変換する。
+ *
+ * 【詳細説明】
+ * - 復旧ラッチはraw topologyを保持しないため、rendererからは観測時刻に基づくdigest参照だけを渡す。
+ * - sequenceがViewModelに無い場合はnullのままにし、resolver側の観測必須条件はdigest/observedAtで満たす。
+ *
+ * @private
+ * @function createViewModelObservationReference
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @returns {object|null} 復旧ラッチ解決用の観測参照
+ */
+function createViewModelObservationReference(viewModel) {
+  const observedAt = getViewModelObservationKey(viewModel);
+  if (!observedAt) {
+    return null;
+  }
+  const sequence = Number(viewModel?.observation?.sequence ?? viewModel?.source?.sequence);
+  return {
+    sequence: Number.isFinite(sequence) ? Math.trunc(sequence) : null,
+    digest: `material-topology-observation:${observedAt}`,
+    observedAt,
+  };
+}
+
+/**
+ * 観測により確認できたcommand reconciliationをrenderer外へ通知する。
+ *
+ * 【詳細説明】
+ * - UI mutex解除だけでは永続復旧ラッチが残り、次回send-timeで再度blockされるため、
+ *   source selectionのように観測で確認できるケースだけ上位へ通知する。
+ * - 通知失敗は表示更新を壊さずconsole警告に留め、物理commandの再送は行わない。
+ *
+ * @private
+ * @function notifyCommandReconciled
+ * @param {object} executionState - command execution state
+ * @param {object|null|undefined} viewModel - 最新view model
+ * @param {object} controlPolicy - 操作方針
+ * @param {string} resolution - observed-confirmed等の解決種別
+ * @returns {void}
+ */
+function notifyCommandReconciled(executionState, viewModel, controlPolicy, resolution) {
+  if (executionState.reconciliationNotified || typeof controlPolicy?.onCommandReconciled !== "function") {
+    return;
+  }
+  if (!executionState.commandId) {
+    return;
+  }
+  const postObservation = createViewModelObservationReference(viewModel);
+  if (!postObservation) {
+    return;
+  }
+  executionState.reconciliationNotified = true;
+  try {
+    controlPolicy.onCommandReconciled({
+      commandId: executionState.commandId,
+      commandKind: executionState.commandKind,
+      sourceId: executionState.sourceId,
+      action: executionState.action,
+      resolution,
+      postObservation,
+    });
+  } catch (error) {
+    console.warn("[material-topology] CFS操作の観測解決通知に失敗:", error);
+  }
+}
+
+/**
  * ViewModel内で指定sourceIdがselectedとして観測されているか判定する。
  *
  * 【詳細説明】
@@ -542,9 +611,10 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
  * @function reconcileCommandExecutionState
  * @param {object} executionState - command execution state
  * @param {object|null|undefined} viewModel - 最新view model
+ * @param {object=} controlPolicy - 操作方針
  * @returns {void}
  */
-function reconcileCommandExecutionState(executionState, viewModel) {
+function reconcileCommandExecutionState(executionState, viewModel, controlPolicy = {}) {
   if (!["submitted", "post-observed", "probing"].includes(executionState?.state)) {
     return;
   }
@@ -571,6 +641,7 @@ function reconcileCommandExecutionState(executionState, viewModel) {
     executionState.state = "confirmed";
     executionState.statusClass = "success";
     executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測で対象スロットの選択を確認しました。再操作できます。`;
+    notifyCommandReconciled(executionState, viewModel, controlPolicy, "observed-confirmed");
     executionState.reconciliation = null;
     return;
   }
@@ -717,6 +788,9 @@ function createControlPolicy(viewModel, options) {
     onCommand: hasSendHook ? optionControl.onCommand : null,
     validateCommandIntent: typeof optionControl.validateCommandIntent === "function"
       ? optionControl.validateCommandIntent
+      : null,
+    onCommandReconciled: typeof optionControl.onCommandReconciled === "function"
+      ? optionControl.onCommandReconciled
       : null,
     commandTimeoutMs: normalizeControlTimeoutMs(optionControl.commandTimeoutMs),
     observationKey: getViewModelObservationKey(viewModel),
@@ -883,12 +957,14 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
       }
       const actionLabel = formatControlActionLabel(buttonConfig.action);
       executionState.state = "submitting";
+      executionState.commandId = null;
       executionState.sourceId = row?.sourceId || null;
       executionState.action = buttonConfig.action;
       executionState.commandKind = buttonConfig.commandKind;
       executionState.statusClass = "running";
       executionState.message = `${actionLabel}を送信中...`;
       executionState.baselineObservationKey = controlPolicy.observationKey || null;
+      executionState.reconciliationNotified = false;
       refreshAllCommandButtons(executionState, true);
       button.dataset.running = "true";
       setCommandStatus(statusElement, "running", executionState.message, executionState.state);
@@ -898,6 +974,10 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
           controlPolicy.commandTimeoutMs
         );
         const result = normalizeCommandHookResult(resultEnvelope);
+        executionState.commandId = displayText(
+          result?.commandId || resultEnvelope?.request?.commandId || resultEnvelope?.recoveryLatch?.commandId,
+          ""
+        );
         if (isFailedCommandResult(result)) {
           const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`;
           const status = String(result?.status || result?.result || "").trim().toLowerCase();
@@ -1096,6 +1176,7 @@ function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}, exec
  * @param {Array<string>=} options.control.allowedActions - renderer側で許可する操作action
  * @param {Function=} options.control.onCommand - 操作hook
  * @param {Function=} options.control.validateCommandIntent - click時の最新状態再確認hook
+ * @param {Function=} options.control.onCommandReconciled - 観測確認済みcommand解決hook
  * @returns {{update: function(object, object=): void, destroy: function(): void}} renderer handle
  * @example
  * const handle = renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
@@ -1125,14 +1206,14 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
    * @returns {void}
    */
   function draw(currentViewModel) {
-    reconcileCommandExecutionState(commandExecutionState, currentViewModel);
+    const controlPolicy = createControlPolicy(currentViewModel, activeOptions);
+    reconcileCommandExecutionState(commandExecutionState, currentViewModel, controlPolicy);
     container.replaceChildren();
     commandExecutionState.refreshers.clear();
     const root = createElement(documentRef, "div", "mtv-root");
     const header = createElement(documentRef, "div", "mtv-header");
     const topologyState = currentViewModel?.summary?.topologyState || "unobserved";
     const isStale = topologyState === "stale";
-    const controlPolicy = createControlPolicy(currentViewModel, activeOptions);
     root.classList.add(`mtv-root-${topologyState}`);
     header.appendChild(createElement(documentRef, "span", "mtv-title", "機器観測フィラメント"));
     header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState, currentViewModel?.observation)));

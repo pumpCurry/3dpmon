@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1563 (PR #439)
+ * @version 1.390.1564 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 21:18:40
+ * @lastModified 2026-08-31 21:31:42
  * -----------------------------------------------------------
  */
 
@@ -448,7 +448,8 @@ function createCfsCertificationRecoveryBlocker() {
  * operator確認済みのCFS復旧ラッチを解決済みにして永続保存する。
  *
  * 【詳細説明】
- * - Debug / Certificationパネルの手動確認ボタンから呼ばれ、未解決ラッチを自動再送せずに閉じる。
+ * - Debug / Certificationパネルの手動確認ボタン、または通常フィラメントパネルの安全な観測確認から呼ばれ、
+ *   未解決ラッチを自動再送せずに閉じる。
  * - conflict/quarantineは `resolvePhysicalCommandRecoveryLatchRecord()` 側でnot-found/invalidになるため、ここでは
  *   store更新と通知だけを責務にする。
  *
@@ -457,6 +458,7 @@ function createCfsCertificationRecoveryBlocker() {
  * @param {object} request - rendererから渡された解決要求
  * @param {string} request.commandId - 解決対象command ID
  * @param {string=} request.resolution - 解決種別
+ * @param {object=} request.postObservation - 観測解決の根拠となる後続観測参照
  * @returns {object} 解決結果
  */
 function resolveCfsCertificationRecoveryBlocker(request) {
@@ -466,6 +468,7 @@ function resolveCfsCertificationRecoveryBlocker(request) {
       commandId: request?.commandId,
       resolution: request?.resolution || "operator-cleared",
       resolvedAt: new Date().toISOString(),
+      postObservation: request?.postObservation || null,
     }
   );
   if (result?.ok === true && result.store) {
@@ -745,6 +748,22 @@ function createCfsControlRenderOptions(hostname) {
       async onCommand(intent) {
         const dispatchOutput = await integration.onCommand(intent);
         return persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput);
+      },
+      /**
+       * 観測で確認できたCFS操作を永続復旧ラッチへ反映する。
+       *
+       * 【詳細説明】
+       * - `cfs-slot-select` のように次のmaterial観測でexpected stateを確認できる場合だけrendererから呼ばれる。
+       * - load/unload/feed/retractは現時点で観測だけでは物理成功を確定しないため、このhookへは到達しない。
+       *
+       * @param {object} request - 観測解決要求
+       * @returns {object} 復旧ラッチ解決結果
+       */
+      onCommandReconciled(request) {
+        return resolveCfsCertificationRecoveryBlocker({
+          ...request,
+          resolution: request?.resolution || "observed-confirmed",
+        });
       },
     };
   }

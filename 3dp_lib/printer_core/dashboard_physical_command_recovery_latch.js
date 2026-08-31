@@ -19,12 +19,12 @@
  * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1563 (PR #439)
+ * @version 1.390.1564 (PR #439)
  * @since   1.390.1536 (PR #439)
  * @lastModified 2026-08-31 20:19:55
  * -----------------------------------------------------------
  * @todo
- * - Gate 19.5以降で後続fresh observationからresolvePhysicalCommandRecoveryLatchRecord()を自動接続する
+ * - Gate 19.5以降でload/unload/feed/retractの実機semantics確定後に観測自動解決条件を追加する
  */
 
 "use strict";

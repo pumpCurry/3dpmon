@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1557 (PR #439)
+ * @version 1.390.1564 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 20:39:28
+ * @lastModified 2026-08-31 21:31:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -914,6 +914,78 @@ describe("Printer Core v3 material topology panel", () => {
     expect(status?.textContent).toContain("最新観測で対象スロットの選択を確認しました");
     expect(status?.dataset.executionState).toBe("confirmed");
     expect(status?.classList.contains("mtv-command-status-success")).toBe(true);
+  });
+
+  it("Gate19.5: 観測未確認selectが次観測でconfirmedになった場合は復旧ラッチ解決通知を一度だけ出す", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const selected1BPayload = createOneUnitBoxsInfo();
+    selected1BPayload.materialBoxs[1].materials.forEach((material, index) => {
+      material.selected = index === 1 ? 1 : 0;
+    });
+    const selected1BTopology = normalizeK2BoxsInfo(selected1BPayload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const updatedViewModel = createMaterialTopologyViewModel(selected1BTopology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const onCommandReconciled = vi.fn();
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select"],
+        onCommandReconciled,
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          request: {
+            commandId: "cmd:k2-select-1b",
+          },
+          result: {
+            commandId: "cmd:k2-select-1b",
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1B", "select")?.click();
+    await flushRealUiTick();
+
+    handle.update(updatedViewModel);
+    handle.update(updatedViewModel);
+
+    expect(onCommandReconciled).toHaveBeenCalledTimes(1);
+    expect(onCommandReconciled).toHaveBeenCalledWith(expect.objectContaining({
+      commandId: "cmd:k2-select-1b",
+      resolution: "observed-confirmed",
+      sourceId: "cfs:1:slot:1",
+      postObservation: expect.objectContaining({
+        digest: "material-topology-observation:2026-08-28T01:00:05.000Z",
+        observedAt: "2026-08-28T01:00:05.000Z",
+      }),
+    }));
   });
 
   it("Gate19.5: 観測未確認selectは次観測で未確認ならprobingとして保持する", async () => {
