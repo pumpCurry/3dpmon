@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1530 (PR #439)
+ * @version 1.390.1531 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:09:29
+ * @lastModified 2026-08-31 17:15:38
  */
 
 import { EventEmitter } from "node:events";
@@ -356,6 +356,65 @@ describe("capture_k2_cfs_slot_control", () => {
     }));
   });
 
+  it("boxsInfo summaryは明示state codeだけをpresenceへ採用する", () => {
+    const summary = summarizeBoxsInfoEvidence({
+      materialBoxs: [{
+        id: 1,
+        type: 0,
+        materials: [
+          { id: 0, state: null, name: "NullState PLA" },
+          { id: 1, state: "", name: "EmptyString PLA" },
+          { id: 2, name: "MissingState PLA" },
+          { id: 3, state: "0", name: "StringEmpty PLA" },
+          { id: 4, state: 0, name: "NumericEmpty PLA" },
+          { id: 5, state: "1", name: "StringLoaded PLA" },
+          { id: 6, state: 1, name: "NumericLoaded PLA" },
+          { id: 7, state: "01", name: "PaddedLoaded PLA" },
+        ],
+      }],
+    });
+
+    expect(summary.sources.map((source) => [source.materialName, source.presence])).toEqual([
+      ["NullState PLA", "unknown"],
+      ["EmptyString PLA", "unknown"],
+      ["MissingState PLA", "unknown"],
+      ["StringEmpty PLA", "empty"],
+      ["NumericEmpty PLA", "empty"],
+      ["StringLoaded PLA", "loaded"],
+      ["NumericLoaded PLA", "loaded"],
+      ["PaddedLoaded PLA", "unknown"],
+    ]);
+    expect(summary.loadedSourceCount).toBe(2);
+  });
+
+  it("boxsInfo summaryはbox/material locator欠落をsourceIdへ補完せずdiagnosticsへ残す", () => {
+    const summary = summarizeBoxsInfoEvidence({
+      materialBoxs: [
+        { type: 0, materials: [{ id: 0, state: 1, name: "MissingBox" }] },
+        { id: 2, materials: [{ id: 0, state: 1, name: "MissingType" }] },
+        { id: 3, type: 0, materials: [{ state: 1, name: "MissingMaterial" }] },
+        { id: 4, type: 0, materials: [{ id: "A", state: 1, name: "BadMaterial" }] },
+        { id: 5, type: 0, materials: [{ id: 1, state: 1, name: "Valid" }] },
+      ],
+      colorMatch: [
+        { id: "T1A", boxId: 3 },
+        { id: "T1B", boxId: 5, materialId: 1 },
+      ],
+    });
+
+    expect(summary.sources.map((source) => source.sourceId)).toEqual(["cfs:5:slot:1"]);
+    expect(summary.colorMatches).toEqual([
+      { assignmentId: "T1B", sourceId: "cfs:5:slot:1", boxId: 5, materialId: 1 },
+    ]);
+    expect(summary.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: "box-id-missing", path: "materialBoxs[0]" }),
+      expect.objectContaining({ reason: "box-type-missing", path: "materialBoxs[1]" }),
+      expect.objectContaining({ reason: "material-id-missing", path: "materialBoxs[2].materials[0]" }),
+      expect.objectContaining({ reason: "material-id-invalid", path: "materialBoxs[3].materials[0]" }),
+      expect.objectContaining({ reason: "color-match-material-id-missing", path: "colorMatch[0]" }),
+    ]));
+  });
+
   it("read-only boxsInfo probeは応答を待ち、timeout時はlistenerを残さない", async () => {
     class MockWs extends EventEmitter {
       send(payload, callback) {
@@ -364,7 +423,7 @@ describe("capture_k2_cfs_slot_control", () => {
           this.emit("message", JSON.stringify({
             result: {
               boxsInfo: {
-                materialBoxs: [{ id: 1, materials: [] }],
+                materialBoxs: [{ id: 1, type: 0, materials: [] }],
               },
             },
           }));
@@ -414,7 +473,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, state: 1 }],
+                  materialBoxs: [{ id: 1, type: 0, state: 1 }],
                 },
               },
             }));
@@ -653,7 +712,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, state: 1 }],
+                  materialBoxs: [{ id: 1, type: 0, state: 1 }],
                 },
               },
             }));

@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1530 (PR #439)
+ * @version 1.390.1531 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:09:29
+ * @lastModified 2026-08-31 17:15:38
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -420,6 +420,51 @@ function formatBoxsInfoSourceId(boxId, materialId, external) {
 }
 
 /**
+ * K2/CFS locator用の非負整数を厳密に解析する。
+ *
+ * 【詳細説明】
+ * - `Number()` による暗黙変換を使うと `null` や空文字が 0 になり、存在しないslotを
+ *   正常な `cfs:<boxId>:slot:<materialId>` と誤認してしまう。
+ * - Gate19 certificationでは、protocolに明示された整数または10進数文字列だけを採用する。
+ * - `01` のようなゼロ埋め文字列は、firmware差異か壊れた値かをここでは判断できないため無効扱いにする。
+ *
+ * @private
+ * @function parseStrictNonNegativeInteger
+ * @param {*} value - 解析対象値
+ * @returns {number|null} 正常な非負整数、またはnull
+ * @example
+ * const id = parseStrictNonNegativeInteger("1");
+ */
+function parseStrictNonNegativeInteger(value) {
+  if (Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^(0|[1-9]\d*)$/u.test(value)) {
+    return Number(value);
+  }
+  return null;
+}
+
+/**
+ * K2/CFS box typeを厳密に解析する。
+ *
+ * 【詳細説明】
+ * - 現時点でreview evidenceとして扱うbox typeは、CFS unitの0と外部スプールendpointの1だけに限定する。
+ * - 欠落や未知値はdiagnosticsへ逃がし、後続のsource id生成へ混ぜない。
+ *
+ * @private
+ * @function parseStrictBoxType
+ * @param {*} value - box.type 候補
+ * @returns {number|null} 0または1、もしくはnull
+ * @example
+ * const boxType = parseStrictBoxType("1");
+ */
+function parseStrictBoxType(value) {
+  const numericValue = parseStrictNonNegativeInteger(value);
+  return numericValue === 0 || numericValue === 1 ? numericValue : null;
+}
+
+/**
  * K2 material state codeから存在状態を推定する。
  *
  * 【詳細説明】
@@ -432,14 +477,38 @@ function formatBoxsInfoSourceId(boxId, materialId, external) {
  * @returns {string} loaded/empty/unknown
  */
 function summarizeMaterialPresence(stateCode) {
-  const numericState = Number(stateCode);
-  if (numericState === 1) {
+  if (stateCode === 1 || stateCode === "1") {
     return "loaded";
   }
-  if (numericState === 0) {
+  if (stateCode === 0 || stateCode === "0") {
     return "empty";
   }
   return "unknown";
+}
+
+/**
+ * certification summary diagnosticを追加する。
+ *
+ * 【詳細説明】
+ * - 壊れたlocatorをsource idへ補完せず、reviewer/operatorがあとからraw payloadへ戻れるように
+ *   reason/path/valueを証跡として残す。
+ *
+ * @private
+ * @function pushBoxsInfoDiagnostic
+ * @param {Array<object>} diagnostics - 追加先diagnostics配列
+ * @param {string} reason - diagnostic reason
+ * @param {string} path - payload内の位置
+ * @param {*} value - 問題になった値
+ * @returns {void}
+ * @example
+ * pushBoxsInfoDiagnostic(diagnostics, "box-id-missing", "materialBoxs[0]", undefined);
+ */
+function pushBoxsInfoDiagnostic(diagnostics, reason, path, value) {
+  const diagnostic = { reason, path };
+  if (value !== undefined) {
+    diagnostic.value = value;
+  }
+  diagnostics.push(diagnostic);
 }
 
 /**
@@ -461,19 +530,49 @@ function summarizeMaterialPresence(stateCode) {
 export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
   const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
   const sources = [];
-  for (const box of boxes) {
-    const boxId = box?.id ?? "";
-    const external = Number(box?.type) === 1;
+  const diagnostics = [];
+  const validBoxes = [];
+  for (const [boxIndex, box] of boxes.entries()) {
+    const boxPath = `materialBoxs[${boxIndex}]`;
+    const boxId = parseStrictNonNegativeInteger(box?.id);
+    const boxType = parseStrictBoxType(box?.type);
+    if (box?.id === undefined || box?.id === null || box?.id === "") {
+      pushBoxsInfoDiagnostic(diagnostics, "box-id-missing", boxPath, box?.id);
+      continue;
+    }
+    if (boxId === null) {
+      pushBoxsInfoDiagnostic(diagnostics, "box-id-invalid", boxPath, box?.id);
+      continue;
+    }
+    if (box?.type === undefined || box?.type === null || box?.type === "") {
+      pushBoxsInfoDiagnostic(diagnostics, "box-type-missing", boxPath, box?.type);
+      continue;
+    }
+    if (boxType === null) {
+      pushBoxsInfoDiagnostic(diagnostics, "box-type-invalid", boxPath, box?.type);
+      continue;
+    }
+    const external = boxType === 1;
+    validBoxes.push({ box, boxId, boxType, external });
     const materials = Array.isArray(box?.materials) ? box.materials : [];
-    for (const material of materials) {
-      const materialId = material?.id ?? 0;
+    for (const [materialIndex, material] of materials.entries()) {
+      const materialPath = `${boxPath}.materials[${materialIndex}]`;
+      const materialId = parseStrictNonNegativeInteger(material?.id);
+      if (material?.id === undefined || material?.id === null || material?.id === "") {
+        pushBoxsInfoDiagnostic(diagnostics, "material-id-missing", materialPath, material?.id);
+        continue;
+      }
+      if (materialId === null) {
+        pushBoxsInfoDiagnostic(diagnostics, "material-id-invalid", materialPath, material?.id);
+        continue;
+      }
       const sourceId = formatBoxsInfoSourceId(boxId, materialId, external);
       const stateCode = material?.state ?? null;
       sources.push({
         sourceId,
         kind: external ? "external-spool" : "cfs-slot",
         boxId,
-        boxType: box?.type ?? null,
+        boxType,
         boxState: box?.state ?? null,
         boxTemp: box?.temp ?? box?.boxTemp ?? box?.temperature ?? null,
         humidity: box?.humidity ?? box?.boxHumidity ?? null,
@@ -481,7 +580,7 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
         displaySlot: formatSourceDisplaySlot(boxId, materialId, external),
         stateCode,
         presence: summarizeMaterialPresence(stateCode),
-        selected: material?.selected === true || Number(material?.selected) === 1,
+        selected: material?.selected === true || material?.selected === 1 || material?.selected === "1",
         percent: material?.percent ?? null,
         materialType: material?.type || "",
         materialName: material?.name || "",
@@ -490,30 +589,62 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
       });
     }
   }
-  const colorMatches = (Array.isArray(boxsInfo?.colorMatch) ? boxsInfo.colorMatch : [])
-    .map((assignment) => {
-      const box = boxes.find((entry) => Number(entry?.id) === Number(assignment?.boxId));
-      const external = Number(box?.type) === 1;
-      return {
-        assignmentId: assignment?.id || "",
-        sourceId: formatBoxsInfoSourceId(assignment?.boxId, assignment?.materialId, external),
-        boxId: assignment?.boxId ?? null,
-        materialId: assignment?.materialId ?? null,
-      };
-    })
-    .filter((assignment) => assignment.assignmentId);
+  const sourceIdSet = new Set(sources.map((source) => source.sourceId));
+  const colorMatches = [];
+  for (const [assignmentIndex, assignment] of (Array.isArray(boxsInfo?.colorMatch) ? boxsInfo.colorMatch : []).entries()) {
+    const assignmentPath = `colorMatch[${assignmentIndex}]`;
+    const assignmentId = assignment?.id || "";
+    if (!assignmentId) {
+      continue;
+    }
+    const boxId = parseStrictNonNegativeInteger(assignment?.boxId);
+    const materialId = parseStrictNonNegativeInteger(assignment?.materialId);
+    if (assignment?.boxId === undefined || assignment?.boxId === null || assignment?.boxId === "") {
+      pushBoxsInfoDiagnostic(diagnostics, "color-match-box-id-missing", assignmentPath, assignment?.boxId);
+      continue;
+    }
+    if (boxId === null) {
+      pushBoxsInfoDiagnostic(diagnostics, "color-match-box-id-invalid", assignmentPath, assignment?.boxId);
+      continue;
+    }
+    if (assignment?.materialId === undefined || assignment?.materialId === null || assignment?.materialId === "") {
+      pushBoxsInfoDiagnostic(diagnostics, "color-match-material-id-missing", assignmentPath, assignment?.materialId);
+      continue;
+    }
+    if (materialId === null) {
+      pushBoxsInfoDiagnostic(diagnostics, "color-match-material-id-invalid", assignmentPath, assignment?.materialId);
+      continue;
+    }
+    const matchedBox = validBoxes.find((entry) => entry.boxId === boxId);
+    if (!matchedBox) {
+      pushBoxsInfoDiagnostic(diagnostics, "color-match-box-unresolved", assignmentPath, assignment?.boxId);
+      continue;
+    }
+    const sourceId = formatBoxsInfoSourceId(boxId, materialId, matchedBox.external);
+    if (!sourceIdSet.has(sourceId)) {
+      pushBoxsInfoDiagnostic(diagnostics, "color-match-source-unresolved", assignmentPath, sourceId);
+      continue;
+    }
+    colorMatches.push({
+      assignmentId,
+      sourceId,
+      boxId,
+      materialId,
+    });
+  }
   const selectedSourceIds = sources
     .filter((source) => source.selected)
     .map((source) => source.sourceId);
   return {
     boxCount: boxes.length,
-    cfsUnitCount: boxes.filter((box) => Number(box?.type) !== 1).length,
-    externalEndpointCount: boxes.filter((box) => Number(box?.type) === 1).length,
+    cfsUnitCount: validBoxes.filter((entry) => entry.boxType !== 1).length,
+    externalEndpointCount: validBoxes.filter((entry) => entry.boxType === 1).length,
     loadedSourceCount: sources.filter((source) => source.presence === "loaded").length,
     selectedSourceIds,
     targetSource: sources.find((source) => source.sourceId === targetSourceId) || null,
     sources,
     colorMatches,
+    diagnostics,
   };
 }
 

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1529 (PR #439)
+ * @version 1.390.1531 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 17:04:14
+ * @lastModified 2026-08-31 17:15:38
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -282,6 +282,7 @@ describe("dashboard_cfs_certification_panel", () => {
         beforeBoxsInfo: {
           observedAt: "2026-08-31T07:00:00.000Z",
           summary: {
+            observedAt: "1999-01-01T00:00:00.000Z",
             selectedSourceIds: ["cfs:1:slot:0"],
             targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
             loadedSourceCount: 3,
@@ -290,6 +291,7 @@ describe("dashboard_cfs_certification_panel", () => {
         afterBoxsInfo: {
           observedAt: "2026-08-31T07:00:03.000Z",
           summary: {
+            observedAt: "1999-01-01T00:00:01.000Z",
             selectedSourceIds: ["cfs:1:slot:2"],
             targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
             loadedSourceCount: 3,
