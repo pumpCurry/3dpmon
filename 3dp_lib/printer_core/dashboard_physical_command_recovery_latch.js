@@ -19,9 +19,9 @@
  * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1564 (PR #439)
+ * @version 1.390.1565 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-08-31 21:12:57
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5以降でload/unload/feed/retractの実機semantics確定後に観測自動解決条件を追加する
@@ -722,6 +722,10 @@ export function isPhysicalCommandRecoveryBlocked(storeInput, commandIdInput) {
  * @param {string} resolutionInput.commandId - 解決するコマンドID。
  * @param {string} resolutionInput.resolution - 解決種別。
  * @param {string|Date} resolutionInput.resolvedAt - 解決時刻。
+ * @param {?string=} resolutionInput.expectedDeviceId - UI表示時に束縛したdeviceId。
+ * @param {?string=} resolutionInput.expectedDigest - UI表示時に束縛したrecord digest。
+ * @param {?string=} resolutionInput.expectedCommandKind - UI表示時に束縛したcommand kind。
+ * @param {?string=} resolutionInput.expectedMaterialSourceId - UI表示時に束縛したmaterial source ID。
  * @param {?Object=} resolutionInput.postObservation - 解決根拠となる後続観測参照。
  * @returns {{ok:boolean, status:string, store:Object, record:?Object, reasons:Array<string>}} 解決結果。
  * @example
@@ -736,6 +740,10 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
   const commandId = toTrimmedString(resolutionInput?.commandId);
   const resolution = toTrimmedString(resolutionInput?.resolution);
   const resolvedAt = normalizeIsoTime(resolutionInput?.resolvedAt);
+  const expectedDeviceId = toTrimmedString(resolutionInput?.expectedDeviceId);
+  const expectedDigest = toTrimmedString(resolutionInput?.expectedDigest);
+  const expectedCommandKind = toTrimmedString(resolutionInput?.expectedCommandKind);
+  const expectedMaterialSourceId = toTrimmedString(resolutionInput?.expectedMaterialSourceId);
   const reasons = [];
   if (!commandId) reasons.push("missing-command-id");
   if (!resolution) reasons.push("missing-resolution");
@@ -764,6 +772,28 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
       store,
       record: null,
       reasons: ["command-not-found"],
+    });
+  }
+  const mismatchReasons = [];
+  if (expectedDeviceId && record.deviceId !== expectedDeviceId) {
+    mismatchReasons.push("expected-device-id-mismatch");
+  }
+  if (expectedDigest && record.digest !== expectedDigest) {
+    mismatchReasons.push("expected-digest-mismatch");
+  }
+  if (expectedCommandKind && record.commandKind !== expectedCommandKind) {
+    mismatchReasons.push("expected-command-kind-mismatch");
+  }
+  if (expectedMaterialSourceId && record.materialSourceId !== expectedMaterialSourceId) {
+    mismatchReasons.push("expected-material-source-id-mismatch");
+  }
+  if (mismatchReasons.length > 0) {
+    return deepFreezeJson({
+      ok: false,
+      status: "mismatch",
+      store,
+      record,
+      reasons: mismatchReasons,
     });
   }
 

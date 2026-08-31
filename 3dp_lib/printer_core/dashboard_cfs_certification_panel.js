@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1563 (PR #439)
+ * @version 1.390.1565 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:18:40
+ * @lastModified 2026-08-31 21:12:57
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -317,7 +317,7 @@ function createSelectionEvidencePreflightDetail(materialViewModel) {
  * @private
  * @function normalizeRecoveryBlockerForPanel
  * @param {object|null|undefined} recoveryBlocker - 復旧ラッチblocker判定
- * @returns {{blocked:boolean, reason:string, commandId:string, quarantineReason:string, detail:string}} 表示用blocker
+ * @returns {{blocked:boolean, reason:string, commandId:string, quarantineReason:string, detail:string, commandKind:string, deviceId:string, sessionId:string, materialSourceId:string, status:string, sentAt:string, recordDigest:string, operatorResolvable:boolean}} 表示用blocker
  */
 function normalizeRecoveryBlockerForPanel(recoveryBlocker) {
   const blocked = recoveryBlocker?.blocked === true;
@@ -330,6 +330,14 @@ function normalizeRecoveryBlockerForPanel(recoveryBlocker) {
     reason,
     commandId,
     quarantineReason,
+    commandKind: toText(recoveryBlocker?.commandKind, ""),
+    deviceId: toText(recoveryBlocker?.deviceId, ""),
+    sessionId: toText(recoveryBlocker?.sessionId, ""),
+    materialSourceId: toText(recoveryBlocker?.materialSourceId, ""),
+    status: toText(recoveryBlocker?.status, ""),
+    sentAt: toText(recoveryBlocker?.sentAt, ""),
+    recordDigest: toText(recoveryBlocker?.recordDigest, ""),
+    operatorResolvable: recoveryBlocker?.operatorResolvable === true,
     detail: blocked ? `復旧確認待ち: ${suffix}` : "未解決の復旧ラッチなし",
   };
 }
@@ -1130,8 +1138,16 @@ export function renderCfsCertificationPanel(container, viewModel, options = {}) 
   if (viewModel.recoveryBlocker?.blocked === true) {
     const recoverySection = appendSection(grid, "復旧確認");
     appendKeyValue(recoverySection, "状態", viewModel.recoveryBlocker.detail);
+    appendKeyValue(recoverySection, "Command", viewModel.recoveryBlocker.commandKind || "--");
+    appendKeyValue(recoverySection, "Source", viewModel.recoveryBlocker.materialSourceId || "--");
+    appendKeyValue(recoverySection, "Device", viewModel.recoveryBlocker.deviceId || "--");
+    appendKeyValue(recoverySection, "Session", viewModel.recoveryBlocker.sessionId || "--");
+    appendKeyValue(recoverySection, "Status", viewModel.recoveryBlocker.status || "--");
+    appendKeyValue(recoverySection, "Sent", formatLocalDateTime(viewModel.recoveryBlocker.sentAt));
+    appendKeyValue(recoverySection, "Digest", viewModel.recoveryBlocker.recordDigest || "--");
     const canResolveByOperator = viewModel.recoveryBlocker.reason === "unresolved-recovery"
       && Boolean(viewModel.recoveryBlocker.commandId)
+      && viewModel.recoveryBlocker.operatorResolvable === true
       && typeof options.onResolveRecoveryBlocker === "function";
     const recoveryActions = createElement(documentRef, "div", "fc-actions");
     const resolveButton = createElement(documentRef, "button", "fc-button", "物理確認済みとして解除");
@@ -1148,6 +1164,10 @@ export function renderCfsCertificationPanel(container, viewModel, options = {}) 
       options.onResolveRecoveryBlocker({
         commandId: viewModel.recoveryBlocker.commandId,
         resolution: "operator-cleared",
+        expectedDeviceId: viewModel.recoveryBlocker.deviceId,
+        expectedDigest: viewModel.recoveryBlocker.recordDigest,
+        expectedCommandKind: viewModel.recoveryBlocker.commandKind,
+        expectedMaterialSourceId: viewModel.recoveryBlocker.materialSourceId,
         viewModel,
       });
     });

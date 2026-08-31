@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1564 (PR #439)
+ * @version 1.390.1565 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 21:31:42
+ * @lastModified 2026-08-31 21:12:57
  * -----------------------------------------------------------
  */
 
@@ -384,35 +384,88 @@ function createCfsControlRecoveryBlocker(request) {
  * @private
  * @function collectCfsCertificationRecoveryBlockerCommandIds
  * @param {object|null|undefined} store - 復旧ラッチstore候補
+ * @param {object=} scope - 現在パネルのdevice scope
+ * @param {string=} scope.deviceId - 現在パネルが表示しているPrinter Core v3 deviceId
  * @returns {Array<string>} 重複排除済みcommandId候補
  */
-function collectCfsCertificationRecoveryBlockerCommandIds(store) {
+function collectCfsCertificationRecoveryBlockerCommandIds(store, scope = {}) {
   const candidates = [];
+  const currentDeviceId = String(scope.deviceId ?? "").trim();
   const addCandidate = (value) => {
     const text = String(value ?? "").trim();
     if (text && !candidates.includes(text)) {
       candidates.push(text);
     }
   };
+  const matchesCurrentDevice = (value) => {
+    const recordDeviceId = String(value?.deviceId ?? "").trim();
+    return !currentDeviceId || !recordDeviceId || recordDeviceId === currentDeviceId;
+  };
   if (!store || typeof store !== "object") {
     return candidates;
   }
   if (store.unresolvedByCommandId && typeof store.unresolvedByCommandId === "object") {
-    Object.keys(store.unresolvedByCommandId).forEach(addCandidate);
     Object.values(store.unresolvedByCommandId).forEach((record) => {
-      addCandidate(record?.commandId);
+      if (matchesCurrentDevice(record)) {
+        addCandidate(record?.commandId);
+      }
     });
   }
   if (Array.isArray(store.conflictedCommandIds)) {
-    store.conflictedCommandIds.forEach(addCandidate);
+    if (!currentDeviceId) {
+      store.conflictedCommandIds.forEach(addCandidate);
+    }
   }
   if (Array.isArray(store.retainedUnsupportedEntries)) {
     store.retainedUnsupportedEntries.forEach((entry) => {
-      addCandidate(entry?.commandId);
-      addCandidate(entry?.storageKey);
+      if (matchesCurrentDevice(entry)) {
+        addCandidate(entry?.commandId);
+        addCandidate(entry?.storageKey);
+      }
     });
   }
   return candidates;
+}
+
+/**
+ * Certificationパネル用blockerへ、operatorが確認すべきrecord情報を付与する。
+ *
+ * 【詳細説明】
+ * - `isPhysicalCommandRecoveryBlocked()` はcommandId単位の最小判定だけを返すため、UI解除には
+ *   store内recordのdevice/digest/sourceを別途束縛する。
+ * - conflict/quarantineは通常operator解除対象ではないため、表示できる情報だけを付けて
+ *   `operatorResolvable:false` にする。
+ *
+ * @private
+ * @function enrichCfsCertificationRecoveryBlocker
+ * @param {object} blocker - commandId単位のblocker判定
+ * @param {object|null|undefined} store - 復旧ラッチstore候補
+ * @param {object=} scope - 現在パネルのdevice scope
+ * @param {string=} scope.deviceId - 現在パネルが表示しているPrinter Core v3 deviceId
+ * @returns {object} 表示/解除用に拡張したblocker
+ */
+function enrichCfsCertificationRecoveryBlocker(blocker, store, scope = {}) {
+  const commandId = String(blocker?.commandId ?? "").trim();
+  const currentDeviceId = String(scope.deviceId ?? "").trim();
+  const record = commandId && store?.unresolvedByCommandId
+    ? store.unresolvedByCommandId[commandId] || null
+    : null;
+  const recordDeviceId = String(record?.deviceId ?? "").trim();
+  const isSameDevice = Boolean(currentDeviceId && recordDeviceId && currentDeviceId === recordDeviceId);
+  const operatorResolvable = blocker?.reason === "unresolved-recovery"
+    && isSameDevice
+    && Boolean(record?.digest);
+  return {
+    ...blocker,
+    commandKind: record?.commandKind || "",
+    deviceId: recordDeviceId,
+    sessionId: record?.sessionId || "",
+    materialSourceId: record?.materialSourceId || "",
+    status: record?.status || "",
+    sentAt: record?.sentAt || "",
+    recordDigest: record?.digest || "",
+    operatorResolvable,
+  };
 }
 
 /**
@@ -426,15 +479,17 @@ function collectCfsCertificationRecoveryBlockerCommandIds(store) {
  *
  * @private
  * @function createCfsCertificationRecoveryBlocker
+ * @param {object=} scope - 現在パネルのdevice scope
+ * @param {string=} scope.deviceId - 現在パネルが表示しているPrinter Core v3 deviceId
  * @returns {object} Certificationパネル用recovery blocker判定
  */
-function createCfsCertificationRecoveryBlocker() {
+function createCfsCertificationRecoveryBlocker(scope = {}) {
   const store = monitorData.physicalCommandRecoveryLatch;
-  const commandIds = collectCfsCertificationRecoveryBlockerCommandIds(store);
+  const commandIds = collectCfsCertificationRecoveryBlockerCommandIds(store, scope);
   for (const commandId of commandIds) {
     const blocker = isPhysicalCommandRecoveryBlocked(store, commandId);
     if (blocker?.blocked === true) {
-      return blocker;
+      return enrichCfsCertificationRecoveryBlocker(blocker, store, scope);
     }
   }
   return {
@@ -458,16 +513,28 @@ function createCfsCertificationRecoveryBlocker() {
  * @param {object} request - rendererから渡された解決要求
  * @param {string} request.commandId - 解決対象command ID
  * @param {string=} request.resolution - 解決種別
+ * @param {string=} request.expectedDeviceId - 表示時点で束縛したdeviceId
+ * @param {string=} request.expectedDigest - 表示時点で束縛したrecord digest
+ * @param {string=} request.expectedCommandKind - 表示時点で束縛したcommand kind
+ * @param {string=} request.expectedMaterialSourceId - 表示時点で束縛したmaterial source ID
  * @param {object=} request.postObservation - 観測解決の根拠となる後続観測参照
  * @returns {object} 解決結果
  */
 function resolveCfsCertificationRecoveryBlocker(request) {
+  const requestedResolution = String(request?.resolution ?? "").trim();
+  const resolution = requestedResolution.startsWith("observed-")
+    ? requestedResolution
+    : "operator-cleared";
   const result = resolvePhysicalCommandRecoveryLatchRecord(
     monitorData.physicalCommandRecoveryLatch,
     {
       commandId: request?.commandId,
-      resolution: request?.resolution || "operator-cleared",
+      resolution,
       resolvedAt: new Date().toISOString(),
+      expectedDeviceId: request?.expectedDeviceId || null,
+      expectedDigest: request?.expectedDigest || null,
+      expectedCommandKind: request?.expectedCommandKind || null,
+      expectedMaterialSourceId: request?.expectedMaterialSourceId || null,
       postObservation: request?.postObservation || null,
     }
   );
@@ -760,9 +827,12 @@ function createCfsControlRenderOptions(hostname) {
        * @returns {object} 復旧ラッチ解決結果
        */
       onCommandReconciled(request) {
+        const currentMachine = monitorData.machines[hostname] || {};
+        const currentShadowRecord = currentMachine.runtimeData?.printerCoreV3Shadow || null;
         return resolveCfsCertificationRecoveryBlocker({
           ...request,
           resolution: request?.resolution || "observed-confirmed",
+          expectedDeviceId: request?.expectedDeviceId || currentShadowRecord?.deviceId || null,
         });
       },
     };
@@ -1176,7 +1246,9 @@ function createCfsCertificationRenderableState(hostname) {
   const commandKind = target?.materialSystem?.cfsCertification?.commandKind || "cfs-load";
   const dryRunPlan = createCfsCertificationDryRunPlan(targetSource, shadowRecord, commandKind);
   const currentInfo = selectCurrentPrinterCoreV3Info(target);
-  const recoveryBlocker = createCfsCertificationRecoveryBlocker();
+  const recoveryBlocker = createCfsCertificationRecoveryBlocker({
+    deviceId: shadowRecord?.deviceId || "",
+  });
   const viewModel = createCfsCertificationPanelViewModel({
     printer: {
       displayName: hostname,

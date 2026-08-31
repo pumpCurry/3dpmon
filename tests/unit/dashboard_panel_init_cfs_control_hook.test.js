@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1564 (PR #439)
+ * @version 1.390.1565 (PR #439)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-31 21:31:42
+ * @lastModified 2026-08-31 21:12:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -316,6 +316,8 @@ describe("dashboard_panel_init CFS control hook", () => {
       K2Pro: {
         runtimeData: {
           printerCoreV3Shadow: {
+            deviceId: "device-k2",
+            sessionId: "session-1",
             lastState: {
               materials: {
                 cfs: {
@@ -786,7 +788,13 @@ describe("dashboard_panel_init CFS control hook", () => {
       unresolvedByCommandId: {
         "cmd:k2-load-1c": {
           commandId: "cmd:k2-load-1c",
+          commandKind: "cfs-load",
+          deviceId: "device-k2",
+          sessionId: "session-1",
+          materialSourceId: "cfs:1:slot:2",
           status: "submitted",
+          sentAt: "2026-08-31T07:00:00.000Z",
+          digest: "fnv1a128:record-a",
         },
       },
       conflictedCommandIds: [],
@@ -823,10 +831,123 @@ describe("dashboard_panel_init CFS control hook", () => {
       expect.objectContaining({
         commandId: "cmd:k2-load-1c",
         resolution: "operator-cleared",
+        expectedDeviceId: "device-k2",
+        expectedDigest: "fnv1a128:record-a",
+        expectedCommandKind: "cfs-load",
+        expectedMaterialSourceId: "cfs:1:slot:2",
       })
     );
     expect(mockState.monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
     expect(mockState.saveUnifiedStorage).toHaveBeenCalledWith(true);
+
+    destroyPanel("cfs-certification", body, "K2Pro");
+  });
+
+  it("Gate19.5 debug: 別deviceの未解決復旧ラッチは現在panelからoperator解除できない", async () => {
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-other": {
+          commandId: "cmd:k2-load-other",
+          commandKind: "cfs-load",
+          deviceId: "device-other",
+          sessionId: "session-other",
+          materialSourceId: "cfs:1:slot:0",
+          status: "submitted",
+          sentAt: "2026-08-31T07:00:00.000Z",
+          digest: "fnv1a128:record-other",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    const body = document.createElement("div");
+    const {
+      destroyPanel,
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "cfs-certification", body, "K2Pro");
+
+    expect(body.textContent).toContain("未解決の復旧ラッチなし");
+    expect(body.querySelector('[data-action="resolve-recovery-blocker"]')).toBeNull();
+    expect(mockState.resolvePhysicalCommandRecoveryLatchRecord).not.toHaveBeenCalled();
+    expect(mockState.saveUnifiedStorage).not.toHaveBeenCalled();
+
+    destroyPanel("cfs-certification", body, "K2Pro");
+  });
+
+  it("Gate19.5 debug: 表示後に同commandIdのrecord digestが変わった場合は古い解除要求を保存しない", async () => {
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-1c": {
+          commandId: "cmd:k2-load-1c",
+          commandKind: "cfs-load",
+          deviceId: "device-k2",
+          sessionId: "session-1",
+          materialSourceId: "cfs:1:slot:2",
+          status: "submitted",
+          sentAt: "2026-08-31T07:00:00.000Z",
+          digest: "fnv1a128:record-old",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.isPhysicalCommandRecoveryBlocked.mockReturnValue({
+      blocked: true,
+      reason: "unresolved-recovery",
+      commandId: "cmd:k2-load-1c",
+    });
+    mockState.resolvePhysicalCommandRecoveryLatchRecord.mockImplementation((store, resolution) => ({
+      ok: false,
+      status: "mismatch",
+      store,
+      record: store?.unresolvedByCommandId?.[resolution?.commandId] || null,
+      reasons: ["expected-digest-mismatch"],
+    }));
+    const body = document.createElement("div");
+    const {
+      destroyPanel,
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "cfs-certification", body, "K2Pro");
+
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      ...mockState.monitorData.physicalCommandRecoveryLatch,
+      unresolvedByCommandId: {
+        "cmd:k2-load-1c": {
+          ...mockState.monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId["cmd:k2-load-1c"],
+          digest: "fnv1a128:record-new",
+        },
+      },
+    };
+
+    const button = body.querySelector('[data-action="resolve-recovery-blocker"]');
+    expect(button).not.toBeNull();
+    button.click();
+
+    expect(mockState.resolvePhysicalCommandRecoveryLatchRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unresolvedByCommandId: {
+          "cmd:k2-load-1c": expect.objectContaining({
+            digest: "fnv1a128:record-new",
+          }),
+        },
+      }),
+      expect.objectContaining({
+        commandId: "cmd:k2-load-1c",
+        expectedDeviceId: "device-k2",
+        expectedDigest: "fnv1a128:record-old",
+      })
+    );
+    expect(mockState.saveUnifiedStorage).not.toHaveBeenCalled();
 
     destroyPanel("cfs-certification", body, "K2Pro");
   });

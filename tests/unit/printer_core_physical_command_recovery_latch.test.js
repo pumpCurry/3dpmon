@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1558 (PR #439)
+ * @version 1.390.1565 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-08-31 21:12:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -471,5 +471,47 @@ describe("dashboard_physical_command_recovery_latch", () => {
     expect(observedWithoutEvidence.store.unresolvedByCommandId).toHaveProperty("command:k2-select-1a");
     expect(observedResolved.status).toBe("resolved");
     expect(observedResolved.store.unresolvedByCommandId).toEqual({});
+  });
+
+  it("期待deviceIdやdigestが現在recordと一致しない解除要求は拒否し、未解決recordを保持する", () => {
+    const record = createPhysicalCommandRecoveryLatchRecord(createCommandInput());
+    const store = appendPhysicalCommandRecoveryLatchRecord(null, record).store;
+
+    const wrongDevice = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "operator-cleared",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+      expectedDeviceId: "serial:other-k2",
+      expectedDigest: record.digest,
+    });
+    const wrongDigest = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "operator-cleared",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+      expectedDeviceId: "serial:k2pro-69e7",
+      expectedDigest: "fnv1a128:stale-panel-digest",
+    });
+    const matched = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "operator-cleared",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+      expectedDeviceId: "serial:k2pro-69e7",
+      expectedDigest: record.digest,
+    });
+
+    expect(wrongDevice).toMatchObject({
+      ok: false,
+      status: "mismatch",
+      reasons: ["expected-device-id-mismatch"],
+    });
+    expect(wrongDevice.store.unresolvedByCommandId).toHaveProperty("command:k2-select-1a");
+    expect(wrongDigest).toMatchObject({
+      ok: false,
+      status: "mismatch",
+      reasons: ["expected-digest-mismatch"],
+    });
+    expect(wrongDigest.store.unresolvedByCommandId).toHaveProperty("command:k2-select-1a");
+    expect(matched.status).toBe("resolved");
+    expect(matched.store.unresolvedByCommandId).toEqual({});
   });
 });

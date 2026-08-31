@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1563 (PR #439)
+ * @version 1.390.1565 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:18:40
+ * @lastModified 2026-08-31 21:12:57
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -732,6 +732,14 @@ describe("dashboard_cfs_certification_panel", () => {
         blocked: true,
         reason: "unresolved-recovery",
         commandId: "command:k2-load-1c",
+        commandKind: "cfs-load",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        materialSourceId: "cfs:1:slot:2",
+        status: "submitted",
+        sentAt: "2026-08-31T07:00:00.000Z",
+        recordDigest: "fnv1a128:displayed-record",
+        operatorResolvable: true,
       },
     });
 
@@ -744,14 +752,59 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(button).not.toBeNull();
     expect(button.disabled).toBe(false);
     expect(button.textContent).toContain("物理確認済みとして解除");
+    expect(container.textContent).toContain("Command");
+    expect(container.textContent).toContain("cfs-load");
+    expect(container.textContent).toContain("Source");
+    expect(container.textContent).toContain("cfs:1:slot:2");
+    expect(container.textContent).toContain("Digest");
+    expect(container.textContent).toContain("fnv1a128:displayed-record");
 
     button.click();
 
     expect(onResolveRecoveryBlocker).toHaveBeenCalledWith({
       commandId: "command:k2-load-1c",
       resolution: "operator-cleared",
+      expectedDeviceId: "device-k2",
+      expectedDigest: "fnv1a128:displayed-record",
+      expectedCommandKind: "cfs-load",
+      expectedMaterialSourceId: "cfs:1:slot:2",
       viewModel,
     });
+  });
+
+  it.each([
+    ["conflict", "conflicted-recovery"],
+    ["quarantine", "integrity-quarantine"],
+  ])("%s blockerは通常operator解除ボタンを無効にする", (_label, reason) => {
+    const onResolveRecoveryBlocker = vi.fn();
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      recoveryBlocker: {
+        blocked: true,
+        reason,
+        commandId: "command:k2-load-1c",
+        quarantineReason: reason === "integrity-quarantine" ? "command-id-digest-mismatch" : "",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel, {
+      onResolveRecoveryBlocker,
+    });
+    const button = container.querySelector('[data-action="resolve-recovery-blocker"]');
+
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(onResolveRecoveryBlocker).not.toHaveBeenCalled();
   });
 
   it("printer idle未観測WARNはselected-sourceと違いLIVE送信をblockingする", () => {
