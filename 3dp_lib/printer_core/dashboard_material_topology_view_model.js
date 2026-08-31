@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1521 (PR #438)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-31 16:41:00
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -537,6 +537,9 @@ function createSourceRow(options) {
       stateCode: toFiniteNumber(source?.status?.stateCode),
       editStatusCode: toFiniteNumber(source?.status?.editStatusCode),
       scrap: toFiniteNumber(source?.status?.scrap),
+      selectionState: source?.status?.selectionState || "unobserved",
+      selectionValid: source?.status?.selectionValid ?? null,
+      selectionRaw: source?.status?.selectionRaw,
       remaining,
     },
     assignments: sourceAssignments.map((assignment) => ({
@@ -755,6 +758,7 @@ function createSummary(externalRows, cfsUnits, topology) {
     cfsObservedSlotCount: cfsRows.filter((row) => row.sourceId).length,
     loadedSourceCount: allRows.filter((row) => row.presence === "loaded").length,
     selectedSourceCount: allRows.filter((row) => row.selected === true).length,
+    invalidSelectionCount: allRows.filter((row) => row.status.selectionValid === false).length,
     invalidRemainingCount: allRows.filter((row) => row.status.remaining.valid === false).length,
     assignmentCount: allRows.reduce((count, row) => count + row.assignments.length, 0),
     topologyState: topology?.cfs?.topologyState || "unobserved",

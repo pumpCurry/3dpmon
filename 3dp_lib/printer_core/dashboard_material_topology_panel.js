@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 19:50:00
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -972,6 +972,9 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
   if (row?.selected === true) {
     slot.classList.add("mtv-selected");
   }
+  if (row?.status?.selectionState === "invalid") {
+    slot.classList.add("mtv-selection-invalid");
+  }
 
   const header = createElement(documentRef, "div", "mtv-slot-header");
   header.appendChild(createElement(documentRef, "span", "mtv-slot-label", displayText(row?.displaySlot)));
@@ -991,6 +994,10 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
       "mtv-selected-badge",
       isStale ? "最終観測: 機器選択" : "機器選択中"
     ));
+  } else if (row?.status?.selectionState === "invalid") {
+    const badge = createElement(documentRef, "div", "mtv-selected-badge mtv-selected-badge-warning", "機器選択値 不明");
+    badge.title = `装置報告値: ${displayText(row?.status?.selectionRaw, "不明")}（0/1以外のため選択状態を判定できません）`;
+    slot.appendChild(badge);
   }
 
   const materialLine = createElement(documentRef, "div", "mtv-material-line");
@@ -1145,6 +1152,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const summaryText = [
       `装填 ${summary.loadedSourceCount ?? 0}`,
       `選択中 ${summary.selectedSourceCount ?? 0}`,
+      ...(summary.invalidSelectionCount > 0 ? [`選択値異常 ${summary.invalidSelectionCount}`] : []),
       `CFS ${summary.cfsUnitCount ?? 0}/${currentViewModel?.limits?.cfsUnitLimit ?? 0}台`,
     ].join(" / ");
     root.appendChild(createElement(documentRef, "div", "mtv-summary", summaryText));

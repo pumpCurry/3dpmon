@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1517
+  Version 1.390.1553
 */
 
 /* ===============================================================
@@ -1273,6 +1273,10 @@ body.panel-mode .notification-container {
 .mtv-slot.mtv-assigned:not(.mtv-selected) {
   border-color: var(--color-info);
 }
+.mtv-slot.mtv-selection-invalid {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
 .mtv-root-stale .mtv-slot.mtv-selected {
   border-color: var(--color-warning);
   background: var(--color-warning-bg);
@@ -1308,6 +1312,11 @@ body.panel-mode .notification-container {
   white-space: nowrap;
 }
 .mtv-root-stale .mtv-selected-badge {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+.mtv-selected-badge-warning {
   border-color: var(--color-warning);
   background: var(--color-warning-bg);
   color: var(--color-warning-text);

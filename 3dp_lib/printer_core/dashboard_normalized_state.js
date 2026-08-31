@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1433 (PR #435)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-28 10:36:12
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -245,6 +245,53 @@ function omitEmpty(value) {
 function toBooleanFlag(value) {
   const numberValue = toFiniteNumber(value);
   return numberValue === null ? null : numberValue === 1;
+}
+
+/**
+ * CFS material.selected を選択状態として分類する。
+ *
+ * 【詳細説明】
+ * - `selected` はCFS印刷・slot操作の判断に関わるため、0/1以外の値をfalseへ丸めない。
+ * - invalid値はread-only診断へ残し、UIや後続Gateのpreflightが「未選択」と誤読しないようにする。
+ *
+ * @private
+ * @function classifyMaterialSelection
+ * @param {*} value - material.selected raw値
+ * @returns {{selected:?boolean, selectionState:string, selectionValid:?boolean, selectionRaw:*}} 選択状態
+ * @example
+ * const selection = classifyMaterialSelection(1);
+ */
+function classifyMaterialSelection(value) {
+  if (value === null || value === undefined || value === "") {
+    return {
+      selected: null,
+      selectionState: "unobserved",
+      selectionValid: null,
+      selectionRaw: value,
+    };
+  }
+  if (value === true || value === 1 || value === "1") {
+    return {
+      selected: true,
+      selectionState: "selected",
+      selectionValid: true,
+      selectionRaw: value,
+    };
+  }
+  if (value === false || value === 0 || value === "0") {
+    return {
+      selected: false,
+      selectionState: "unselected",
+      selectionValid: true,
+      selectionRaw: value,
+    };
+  }
+  return {
+    selected: null,
+    selectionState: "invalid",
+    selectionValid: false,
+    selectionRaw: value,
+  };
 }
 
 /**
@@ -657,6 +704,7 @@ function normalizeMaterialSource(box, material) {
   const normalizedPercent = toPercentNumber(material?.percent);
   const percentValid = rawPercent !== null && rawPercent >= 0 && rawPercent <= 100;
   const sourceId = createMaterialSourceId(box, material);
+  const selection = classifyMaterialSelection(material?.selected);
   return {
     sourceId,
     sourceIdentity: {
@@ -681,7 +729,10 @@ function normalizeMaterialSource(box, material) {
       pressure: toFiniteNumber(material?.pressure),
     },
     status: {
-      selected: toBooleanFlag(material?.selected),
+      selected: selection.selected,
+      selectionState: selection.selectionState,
+      selectionValid: selection.selectionValid,
+      selectionRaw: selection.selectionRaw,
       percent: normalizedPercent,
       remaining: {
         rawPercent,
@@ -759,6 +810,16 @@ function createMaterialTopologyDiagnostics(sources, assignments, sameMaterialGro
         sourceId: source.sourceId,
         boxId: source.boxId,
         slotId: source.slotId,
+      });
+    }
+    if (source?.status?.selectionValid === false) {
+      diagnostics.push({
+        severity: "warning",
+        code: "material-source-selection-invalid",
+        sourceId: source.sourceId,
+        boxId: source.boxId,
+        slotId: source.slotId,
+        rawValue: source.status.selectionRaw,
       });
     }
     const locationKey = `${source.boxId}:${source.slotId}`;

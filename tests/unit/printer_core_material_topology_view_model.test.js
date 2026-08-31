@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1521 (PR #438)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-31 16:41:00
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -538,6 +538,49 @@ describe("Printer Core v3 material topology view model", () => {
       loadedSourceCount: 2,
       selectedSourceCount: 1,
       invalidRemainingCount: 1,
+    });
+  });
+
+  it("不正なselected値は未選択に潰さずinvalid selectionとして表示モデルへ保持する", () => {
+    const topology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: 0, state: 1, type: "PLA", name: "Malformed Selected", selected: 2, percent: 54 },
+          ],
+        },
+      ],
+    }, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+
+    expect(topology.sources[0].status).toMatchObject({
+      selected: null,
+      selectionState: "invalid",
+      selectionValid: false,
+      selectionRaw: 2,
+    });
+    expect(topology.diagnostics).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      code: "material-source-selection-invalid",
+      sourceId: "cfs:1:slot:0",
+      rawValue: 2,
+    }));
+    expect(viewModel.units[0].slots[0]).toMatchObject({
+      displaySlot: "1A",
+      selected: null,
+      status: {
+        selectionState: "invalid",
+        selectionValid: false,
+        selectionRaw: 2,
+      },
+    });
+    expect(viewModel.summary).toMatchObject({
+      selectedSourceCount: 0,
+      invalidSelectionCount: 1,
     });
   });
 

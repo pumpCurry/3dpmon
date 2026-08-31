@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 19:46:00
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -321,6 +321,23 @@ describe("Printer Core v3 material topology panel", () => {
 
     expect(container.querySelector('.mtv-slot[data-slot="1B"] .mtv-slot-state')?.textContent).toBe("装填状態 不明");
     expect(container.querySelector('.mtv-slot[data-slot="1D"] .mtv-slot-state')?.textContent).toBe("未観測");
+  });
+
+  it("不正なselected値は機器未選択ではなく選択値不明として表示する", () => {
+    const payload = createOneUnitBoxsInfo();
+    payload.materialBoxs[1].materials[2].selected = 2;
+    const topology = normalizeK2BoxsInfo(payload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
+
+    const slot = container.querySelector('.mtv-slot[data-slot="1C"]');
+    expect(slot?.classList.contains("mtv-selected")).toBe(false);
+    expect(slot?.classList.contains("mtv-selection-invalid")).toBe(true);
+    expect(slot?.querySelector(".mtv-selected-badge")?.textContent).toBe("機器選択値 不明");
+    expect(slot?.querySelector(".mtv-selected-badge")?.getAttribute("title")).toContain("装置報告値: 2");
+    expect(container.querySelector(".mtv-summary")?.textContent).toContain("選択値異常 1");
   });
 
   it("K2/CFSの7桁HEX色はrawを残したまま表示用6桁色でswatchへ反映する", () => {
