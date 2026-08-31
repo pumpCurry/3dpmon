@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1510 (PR #438)
+ * @version 1.390.1511 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 13:22:00
+ * @lastModified 2026-08-31 13:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1389,6 +1389,26 @@ describe("Material accounting migration dry-run planner", () => {
         "plan-status-not-dry-run-decision",
         "entry-status-not-dry-run-decision",
       ]),
+    });
+  });
+
+  it("validatorはMATERIAL_ACCOUNTING_MIGRATION_BLOCKER外のentry reasonを拒否する", () => {
+    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+      hostSpoolMap: { "K1Max-4A1B": "spool-031" },
+    }), { createdAt: "2026-08-31T03:28:00.000Z" });
+    const invalid = {
+      ...plan,
+      entries: [
+        {
+          ...plan.entries[0],
+          reasons: ["unknown-reviewer-only-reason"],
+        },
+      ],
+    };
+
+    expect(validateMaterialAccountingMigrationDryRunPlan(invalid)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining(["entry-reason-invalid"]),
     });
   });
 

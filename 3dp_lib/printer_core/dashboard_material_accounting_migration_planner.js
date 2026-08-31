@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1510 (PR #438)
+ * @version 1.390.1511 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 13:22:00
+ * @lastModified 2026-08-31 13:30:00
  * -----------------------------------------------------------
  * @todo
  * - trusted print-start material binding snapshotとsource-specific usage evidenceは後続Gateで接続する
@@ -1656,6 +1656,16 @@ export function validateMaterialAccountingMigrationDryRunPlan(plan) {
         errors.push("entry-invalid-migrationStatus");
       } else if (!DRY_RUN_DECISION_STATUSES.has(entry.migrationStatus)) {
         errors.push("entry-status-not-dry-run-decision");
+      }
+      if (!Array.isArray(entry?.reasons)) {
+        errors.push("entry-reasons-not-array");
+      } else {
+        const validReasons = enumValues(MATERIAL_ACCOUNTING_MIGRATION_BLOCKER);
+        for (const reason of entry.reasons) {
+          if (!validReasons.has(reason)) {
+            errors.push("entry-reason-invalid");
+          }
+        }
       }
       if (entry?.migrationStatus !== MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY &&
           (entry?.plannedWrites?.filamentUnits || []).length > 0) {

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1510 (PR #438)
+ * @version 1.390.1511 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 13:22:00
+ * @lastModified 2026-08-31 13:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -110,6 +110,16 @@ describe("Material accounting migration journal", () => {
       invariants: { activateUniversalWrites: false },
     });
     expect(result.journal.byMigrationId[plan.migrationId].planDigest).toMatch(/^fnv1a128:/);
+    expect(result.journal.latestRevisionBySubject).toEqual({
+      [plan.entries[0].migrationSubjectId]: {
+        migrationId: plan.migrationId,
+        planRevisionId: plan.planRevisionId,
+        sourceChecksum: plan.source.checksum,
+        planDigest: result.journal.byMigrationId[plan.migrationId].planDigest,
+        migrationStatus: plan.migrationStatus,
+        recordedAt: "2026-08-31T03:41:00.000Z",
+      },
+    });
     expect(result.journal.events).toEqual([
       expect.objectContaining({
         type: "migration-dry-run-recorded",
@@ -118,6 +128,26 @@ describe("Material accounting migration journal", () => {
         recordedAt: "2026-08-31T03:41:00.000Z",
       }),
     ]);
+  });
+
+  it("復元時にlatestRevisionBySubjectをvalid entryから再構築する", () => {
+    const plan = createReadyPlan();
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      ...recorded.journal,
+      latestRevisionBySubject: {
+        [plan.entries[0].migrationSubjectId]: {
+          migrationId: "material-accounting-migration:stale",
+          planRevisionId: "material-accounting-plan-revision:stale",
+        },
+      },
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.latestRevisionBySubject).toEqual(recorded.journal.latestRevisionBySubject);
   });
 
   it("同一migrationIdかつ同一checksumの再保存はeventを重複させず冪等に扱う", () => {

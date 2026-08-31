@@ -17,9 +17,9 @@
  * - {@link normalizeStoredMaterialAccountingMigrationJournal}：保存済みjournalを復元用に正規化
  * - {@link recordMaterialAccountingMigrationDryRunPlan}：valid dry-run planをjournalへ記録
  *
- * @version 1.390.1510 (PR #438)
+ * @version 1.390.1511 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 13:22:00
+ * @lastModified 2026-08-31 13:30:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B後続でIndexedDB物理migrationJournal storeへ接続する
@@ -158,6 +158,7 @@ function createEmptyJournalShape() {
     schemaVersion: MATERIAL_ACCOUNTING_MIGRATION_JOURNAL_SCHEMA_VERSION,
     authority: "migration-dry-run-journal",
     latestMigrationId: null,
+    latestRevisionBySubject: {},
     byMigrationId: {},
     events: [],
     retainedUnsupportedEntries: [],
@@ -231,6 +232,46 @@ function createRecordedEvent(entry) {
     planDigest: entry.planDigest,
     recordedAt: entry.recordedAt,
   };
+}
+
+/**
+ * journal entryをsubject別最新revision indexへ投影する。
+ *
+ * 【詳細説明】
+ * - 1つのdry-run planは複数entry subjectを含む可能性があるため、plan内entryを走査してsubjectごとの最新revisionを作る。
+ * - 保存済みjournal復元時はstored側のindexを信用せず、valid entryだけから再構築する。
+ *
+ * @private
+ * @function createLatestRevisionBySubjectIndex
+ * @param {Object} entriesByMigrationId - valid journal entry map。
+ * @returns {Object} subject IDごとの最新revision index。
+ */
+function createLatestRevisionBySubjectIndex(entriesByMigrationId) {
+  const index = {};
+  const entries = Object.values(entriesByMigrationId || {})
+    .filter((entry) => entry && typeof entry === "object")
+    .sort((a, b) => {
+      const timeCompare = String(a.recordedAt || "").localeCompare(String(b.recordedAt || ""));
+      return timeCompare || String(a.migrationId || "").localeCompare(String(b.migrationId || ""));
+    });
+  for (const entry of entries) {
+    const planEntries = Array.isArray(entry.plan?.entries) ? entry.plan.entries : [];
+    for (const planEntry of planEntries) {
+      const migrationSubjectId = toTrimmedString(planEntry?.migrationSubjectId);
+      if (!migrationSubjectId) {
+        continue;
+      }
+      index[migrationSubjectId] = {
+        migrationId: entry.migrationId,
+        planRevisionId: entry.plan?.planRevisionId || null,
+        sourceChecksum: entry.sourceChecksum,
+        planDigest: entry.planDigest,
+        migrationStatus: entry.migrationStatus,
+        recordedAt: entry.recordedAt,
+      };
+    }
+  }
+  return index;
 }
 
 /**
@@ -359,6 +400,7 @@ export function normalizeStoredMaterialAccountingMigrationJournal(stored) {
   journal.events = (Array.isArray(source.events) ? source.events : [])
     .filter((event) => isSupportedJournalEvent(event, journal.byMigrationId))
     .map((event) => cloneJsonValue(event));
+  journal.latestRevisionBySubject = createLatestRevisionBySubjectIndex(journal.byMigrationId);
 
   const requestedLatest = toTrimmedString(source.latestMigrationId);
   if (requestedLatest && journal.byMigrationId[requestedLatest]) {
@@ -445,6 +487,7 @@ export function recordMaterialAccountingMigrationDryRunPlan(journalInput, plan, 
   journal.byMigrationId[migrationId] = entry;
   journal.latestMigrationId = migrationId;
   journal.events.push(createRecordedEvent(entry));
+  journal.latestRevisionBySubject = createLatestRevisionBySubjectIndex(journal.byMigrationId);
 
   return createJournalResult({
     ok: true,

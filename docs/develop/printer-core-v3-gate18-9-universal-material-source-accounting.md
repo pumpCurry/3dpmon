@@ -190,6 +190,9 @@ The dry-run validator recomputes `migrationStatus`, `summary.ready`,
 `summary.candidate`, `summary.blocked`, and all `summary.plannedWrites` counts
 from `entries[]`. Non-`READY` entries must not contain planned
 `filamentUnits`, `materialSources`, `spoolMounts`, or `mountCandidates`.
+Each entry's `reasons[]` must use identifiers from
+`MATERIAL_ACCOUNTING_MIGRATION_BLOCKER`; unknown ad-hoc blocker names are
+rejected during validation instead of being preserved as migration authority.
 READY entries must contain exactly one planned `FilamentUnit`, exactly one
 planned `MaterialSource`, zero production `SpoolMount` writes, and exactly one
 shadow-execution `mountCandidate`. The validator runs the shared
@@ -357,6 +360,11 @@ present, must match the inner plan. Stored events are retained only when their
 `eventId` match an accepted entry. A restored journal therefore cannot stitch a
 valid plan to a different checksum/status/body/event trail.
 
+The journal also exposes `latestRevisionBySubject`, rebuilt only from valid
+entries during normalization. Stored copies of this index are treated as cache
+data, not authority, so a corrupted or stale subject index cannot point the next
+migration step at a plan that failed validation.
+
 Malformed imported entries are quarantined in `retainedUnsupportedEntries`
 without throwing. This includes `null` entries, missing `plannedWrites`,
 non-array planned write fields, and broken `mountCandidates` shapes.
@@ -442,7 +450,9 @@ Gate 18.9A tests:
 - migration dry-run planner changes source checksum when createdAt, policy, spool inventory, observation, accepted confirmation evidence, or repository evidence changes
 - migration dry-run planner requires single-spool confirmations to bind to the migration subject and confirmation evidence checksum
 - migration dry-run planner blocks duplicate strong devices and open device identity conflicts for a legacy host
+- migration dry-run validator rejects unknown entry reason identifiers
 - migration dry-run validator recomputes summary/status/write counts, rejects non-READY planned writes, and checks plan revision/source/migration ID binding
+- migration dry-run validator rebuilds and validates the READY entry artifact graph as one unit / one source / zero mounts / one candidate
 - migration dry-run validator requires READY mountCandidates to reference the entry spool and a planned MaterialSource
 
 Gate 18.9B tests:
@@ -454,6 +464,7 @@ Gate 18.9B tests:
 - stored entry checksum/status/planDigest mismatches are retained as unsupported evidence
 - duplicate `migrationId` + same checksum but different planDigest is a journal conflict
 - stored events are restored only when checksum, planDigest, recordedAt, and eventId match an accepted entry
+- subject latest-revision index is rebuilt from valid entries during journal restore
 - malformed stored entries do not throw during restore and are retained as unsupported evidence
 - localStorage round-trip keeps the journal without projecting it to spool/mount observations
 - IndexedDB durable save queues the journal as a shared dry-run evidence key
