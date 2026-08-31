@@ -17,10 +17,11 @@
  * 【公開関数一覧】
  * - {@link parseArgs}：CLI引数を解析
  * - {@link buildK2CfsSlotControlRequest}：transport plan用requestを生成
+ * - {@link summarizeBoxsInfoEvidence}：boxsInfoからsource summaryを生成
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1523 (PR #439)
+ * @version 1.390.1526 (PR #439)
  * @since   1.390.1415 (PR #435)
  * @lastModified 2026-08-31 16:32:06
  * -----------------------------------------------------------
@@ -275,6 +276,150 @@ export function findBoxsInfoEvidence(value, pathPrefix = "$") {
 }
 
 /**
+ * box/material idから表示slot名を生成する。
+ *
+ * 【詳細説明】
+ * - K2/CFSではboxId 1 + materialId 0 を 1A と表示する。
+ * - 外部スプールはCFS slotと混ぜず `external` として扱う。
+ *
+ * @private
+ * @function formatSourceDisplaySlot
+ * @param {number|string|null} boxId - box id
+ * @param {number|string|null} materialId - material id
+ * @param {boolean} external - 外部スプールの場合true
+ * @returns {string} 表示slot名
+ */
+function formatSourceDisplaySlot(boxId, materialId, external) {
+  if (external) {
+    return "external";
+  }
+  const numericSlot = Number(materialId);
+  const suffix = Number.isInteger(numericSlot) && numericSlot >= 0 && numericSlot < 26
+    ? String.fromCharCode(65 + numericSlot)
+    : String(materialId ?? "?");
+  return `${boxId}${suffix}`;
+}
+
+/**
+ * box/material idからNormalized MaterialSource idを生成する。
+ *
+ * 【詳細説明】
+ * - CFS slot control対象は `cfs:<boxId>:slot:<materialId>` に限定する。
+ * - 外部スプールは観測summaryでは `external:<boxId>` とし、CFS sourceと衝突しないようにする。
+ *
+ * @private
+ * @function formatBoxsInfoSourceId
+ * @param {number|string|null} boxId - box id
+ * @param {number|string|null} materialId - material id
+ * @param {boolean} external - 外部スプールの場合true
+ * @returns {string} source id
+ */
+function formatBoxsInfoSourceId(boxId, materialId, external) {
+  if (external) {
+    return `external:${boxId}`;
+  }
+  return `cfs:${boxId}:slot:${materialId}`;
+}
+
+/**
+ * K2 material state codeから存在状態を推定する。
+ *
+ * 【詳細説明】
+ * - Gate19 certificationでは材料名や色などの残留metadataでloaded推測しない。
+ * - 明示state codeだけを使い、不明値はunknownに倒す。
+ *
+ * @private
+ * @function summarizeMaterialPresence
+ * @param {*} stateCode - material.state 候補
+ * @returns {string} loaded/empty/unknown
+ */
+function summarizeMaterialPresence(stateCode) {
+  const numericState = Number(stateCode);
+  if (numericState === 1) {
+    return "loaded";
+  }
+  if (numericState === 0) {
+    return "empty";
+  }
+  return "unknown";
+}
+
+/**
+ * K2 `boxsInfo` payloadからCFS/external source summaryを生成する。
+ *
+ * 【詳細説明】
+ * - 実機certificationでraw payloadを全て読まなくても、前後のloaded/selected/percent/color/RFID有無を
+ *   すばやく比較できるようにする。
+ * - 外部スプールとCFS slotは別kind/sourceIdとして保持し、CFS操作対象へ混ざらないようにする。
+ * - このsummaryはreview evidenceであり、production authorityや自動debitの根拠にはしない。
+ *
+ * @function summarizeBoxsInfoEvidence
+ * @param {object|null|undefined} boxsInfo - K2 `boxsInfo` payload
+ * @param {string=} targetSourceId - 注目source id
+ * @returns {object} boxsInfo summary
+ * @example
+ * const summary = summarizeBoxsInfoEvidence(boxsInfo, "cfs:1:slot:2");
+ */
+export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
+  const boxes = Array.isArray(boxsInfo?.materialBoxs) ? boxsInfo.materialBoxs : [];
+  const sources = [];
+  for (const box of boxes) {
+    const boxId = box?.id ?? "";
+    const external = Number(box?.type) === 1;
+    const materials = Array.isArray(box?.materials) ? box.materials : [];
+    for (const material of materials) {
+      const materialId = material?.id ?? 0;
+      const sourceId = formatBoxsInfoSourceId(boxId, materialId, external);
+      const stateCode = material?.state ?? null;
+      sources.push({
+        sourceId,
+        kind: external ? "external-spool" : "cfs-slot",
+        boxId,
+        boxType: box?.type ?? null,
+        boxState: box?.state ?? null,
+        boxTemp: box?.temp ?? box?.boxTemp ?? box?.temperature ?? null,
+        humidity: box?.humidity ?? box?.boxHumidity ?? null,
+        materialId,
+        displaySlot: formatSourceDisplaySlot(boxId, materialId, external),
+        stateCode,
+        presence: summarizeMaterialPresence(stateCode),
+        selected: material?.selected === true || Number(material?.selected) === 1,
+        percent: material?.percent ?? null,
+        materialType: material?.type || "",
+        materialName: material?.name || "",
+        color: material?.color || "",
+        rfidPresent: Boolean(toNonEmptyString(material?.rfid)),
+      });
+    }
+  }
+  const colorMatches = (Array.isArray(boxsInfo?.colorMatch) ? boxsInfo.colorMatch : [])
+    .map((assignment) => {
+      const box = boxes.find((entry) => Number(entry?.id) === Number(assignment?.boxId));
+      const external = Number(box?.type) === 1;
+      return {
+        assignmentId: assignment?.id || "",
+        sourceId: formatBoxsInfoSourceId(assignment?.boxId, assignment?.materialId, external),
+        boxId: assignment?.boxId ?? null,
+        materialId: assignment?.materialId ?? null,
+      };
+    })
+    .filter((assignment) => assignment.assignmentId);
+  const selectedSourceIds = sources
+    .filter((source) => source.selected)
+    .map((source) => source.sourceId);
+  return {
+    boxCount: boxes.length,
+    cfsUnitCount: boxes.filter((box) => Number(box?.type) !== 1).length,
+    externalEndpointCount: boxes.filter((box) => Number(box?.type) === 1).length,
+    loadedSourceCount: sources.filter((source) => source.presence === "loaded").length,
+    selectedSourceIds,
+    targetSource: sources.find((source) => source.sourceId === targetSourceId) || null,
+    sources,
+    colorMatches,
+  };
+}
+
+/**
  * WebSocket message payloadをJSON候補として解析する。
  *
  * 【詳細説明】
@@ -409,6 +554,7 @@ export function sendBoxsInfoProbeAndWait(ws, options = {}) {
         elapsedMs: Date.now() - startedAt,
         request,
         evidence,
+        summary: summarizeBoxsInfoEvidence(evidence.value, options.targetSourceId),
         payload,
       });
     };
@@ -594,6 +740,7 @@ export async function runK2CfsSlotControlCertification(options) {
       probes.before = await runStructuredBoxsInfoProbe(ws, {
         probeMode: "before",
         timeoutMs: options.boxsInfoTimeoutMs,
+        targetSourceId: request.payload.sourceId,
       });
       if (probes.before.status !== "observed") {
         return finalizeCertificationResult({
@@ -646,6 +793,7 @@ export async function runK2CfsSlotControlCertification(options) {
       probes.after = await runStructuredBoxsInfoProbe(ws, {
         probeMode: "after",
         timeoutMs: options.boxsInfoTimeoutMs,
+        targetSourceId: request.payload.sourceId,
       });
       if (probes.after.status !== "observed") {
         return finalizeCertificationResult({

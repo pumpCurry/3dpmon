@@ -17,7 +17,7 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1523 (PR #439)
+ * @version 1.390.1526 (PR #439)
  * @since   1.390.1469 (PR #436)
  * @lastModified 2026-08-31 16:39:17
  * -----------------------------------------------------------

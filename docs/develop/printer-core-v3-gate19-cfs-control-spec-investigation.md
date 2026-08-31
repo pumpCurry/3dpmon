@@ -243,6 +243,22 @@ live certificationは次の順で進める。
 
    `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
    dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
+   `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
+
+   ```text
+   boxCount
+   cfsUnitCount
+   externalEndpointCount
+   loadedSourceCount
+   selectedSourceIds[]
+   targetSource
+   sources[]
+   colorMatches[]
+   ```
+
+   `targetSource` と `sources[]` は外部スプールを `external:<boxId>`、CFS slotを
+   `cfs:<boxId>:slot:<materialId>` として分離する。ここでも材料名・色・RFIDだけではloaded推測せず、
+   material `state` codeが `1` の場合だけ `presence:"loaded"` とする。
 
 5. selected source変更、load/unload/feed/retractの意味確定は、レビュワーPASSと上記1回目の成功後に別stepとして扱う。
 

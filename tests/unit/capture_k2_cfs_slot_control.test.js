@@ -5,7 +5,7 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1523 (PR #439)
+ * @version 1.390.1526 (PR #439)
  * @since 1.390.1415 (PR #435)
  * @lastModified 2026-08-31 16:32:06
  */
@@ -21,6 +21,7 @@ import {
   parseArgs,
   runK2CfsSlotControlCertification,
   sendBoxsInfoProbeAndWait,
+  summarizeBoxsInfoEvidence,
 } from "../../scripts/capture_k2_cfs_slot_control.mjs";
 
 describe("capture_k2_cfs_slot_control", () => {
@@ -262,6 +263,62 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(findBoxsInfoEvidence({ result: { state: 1 } })).toBeNull();
   });
 
+  it("boxsInfo evidenceから外部/CFS source summaryとtarget sourceを抽出する", () => {
+    const summary = summarizeBoxsInfoEvidence({
+      materialBoxs: [
+        {
+          id: 0,
+          type: 1,
+          state: 0,
+          materials: [{ id: 0, state: 0, selected: 0, percent: 100 }],
+        },
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          temp: 27,
+          humidity: 55,
+          materials: [
+            { id: 0, state: 1, selected: 0, percent: 95, type: "PLA", name: "White", color: "#0ffffff", rfid: "" },
+            { id: 2, state: 1, selected: 1, percent: 54, type: "PLA", name: "Silver", color: "#09ea7ae", rfid: "ABC" },
+          ],
+        },
+      ],
+      colorMatch: [
+        { id: "T1A", boxId: 1, materialId: 0 },
+        { id: "T1C", boxId: 1, materialId: 2 },
+      ],
+    }, "cfs:1:slot:2");
+
+    expect(summary).toMatchObject({
+      boxCount: 2,
+      cfsUnitCount: 1,
+      externalEndpointCount: 1,
+      loadedSourceCount: 2,
+      selectedSourceIds: ["cfs:1:slot:2"],
+      targetSource: {
+        sourceId: "cfs:1:slot:2",
+        displaySlot: "1C",
+        presence: "loaded",
+        selected: true,
+        percent: 54,
+        materialType: "PLA",
+        materialName: "Silver",
+        color: "#09ea7ae",
+        rfidPresent: true,
+      },
+      colorMatches: [
+        { assignmentId: "T1A", sourceId: "cfs:1:slot:0", boxId: 1, materialId: 0 },
+        { assignmentId: "T1C", sourceId: "cfs:1:slot:2", boxId: 1, materialId: 2 },
+      ],
+    });
+    expect(summary.sources).toContainEqual(expect.objectContaining({
+      sourceId: "external:0",
+      kind: "external-spool",
+      presence: "empty",
+    }));
+  });
+
   it("read-only boxsInfo probeは応答を待ち、timeout時はlistenerを残さない", async () => {
     class MockWs extends EventEmitter {
       send(payload, callback) {
@@ -289,6 +346,10 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(result.status).toBe("observed");
     expect(result.probeMode).toBe("before");
     expect(result.evidence.path).toBe("$.result.boxsInfo");
+    expect(result.summary).toMatchObject({
+      boxCount: 1,
+      cfsUnitCount: 1,
+    });
     expect(ws.listenerCount("message")).toBe(0);
 
     const timeoutWs = new EventEmitter();
