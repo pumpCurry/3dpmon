@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1542 (PR #439)
+ * @version 1.390.1544 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:04:50
+ * @lastModified 2026-08-31 19:29:18
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -346,8 +346,8 @@ export function parseArgs(argv = []) {
  *
  * 【詳細説明】
  * - CLI引数の検証とexported runner直呼びの検証を同じ関数へ集約する。
- * - 物理side-effectを伴う `--send` は、host/command/sourceの明示確認、F012 `/info`、前後probeが揃う場合だけ許可する。
- * - printer idleやboxsInfo内のloaded/selectedは、WS接続後のread-only観測で別途fail-closedにする。
+ * - 物理side-effectを伴う `--send` は、host/command/sourceの明示確認、F012 `/info`、printer idle guard、前後probeが揃う場合だけ許可する。
+ * - boxsInfo内のloaded/selectedは、WS接続後のread-only観測で別途fail-closedにする。
  *
  * @private
  * @function validateLiveCertificationOptions
@@ -415,6 +415,13 @@ function validateLiveCertificationOptions(options) {
       ok: false,
       reason: "live-certification-f012-info-required",
       message: "--probe-info and --require-info-model F012 are required when --send is used.",
+    };
+  }
+  if (options.requirePrinterIdle !== true) {
+    return {
+      ok: false,
+      reason: "live-certification-printer-idle-required",
+      message: "--require-printer-idle is required when --send is used.",
     };
   }
   return { ok: true, reason: null, message: "" };
@@ -926,6 +933,10 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
       }
       const sourceId = formatBoxsInfoSourceId(boxId, materialId, external);
       const stateCode = material?.state ?? null;
+      const selectedObserved = material?.selected !== undefined &&
+        material?.selected !== null &&
+        material?.selected !== "";
+      const selected = material?.selected === true || material?.selected === 1 || material?.selected === "1";
       materialCandidates.push({
         materialPath,
         sourceId,
@@ -939,7 +950,9 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
         displaySlot: formatSourceDisplaySlot(boxId, materialId, external),
         stateCode,
         presence: summarizeMaterialPresence(stateCode),
-        selected: material?.selected === true || material?.selected === 1 || material?.selected === "1",
+        selected,
+        selectedObserved,
+        selectionState: selected ? "selected" : (selectedObserved ? "unselected" : "unobserved"),
         percent: material?.percent ?? null,
         materialType: material?.type || "",
         materialName: material?.name || "",
@@ -1118,6 +1131,8 @@ function createComparableTargetSourceSnapshot(source) {
     presence: source.presence,
     stateCode: source.stateCode,
     selected: Boolean(source.selected),
+    selectedObserved: Boolean(source.selectedObserved),
+    selectionState: source.selectionState || "unobserved",
     percent: source.percent,
     materialType: source.materialType,
     materialName: source.materialName,
@@ -1176,6 +1191,8 @@ function createTargetSourceDelta(beforeProbe, afterProbe, sourceId) {
     "presence",
     "stateCode",
     "selected",
+    "selectedObserved",
+    "selectionState",
     "percent",
     "materialType",
     "materialName",
@@ -1257,7 +1274,17 @@ function extractPrinterStatusPayload(payload) {
  * @returns {number|null} 有限数、またはnull
  */
 function toFiniteNumberOrNull(value) {
-  const numberValue = Number(value);
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  const numberValue = Number(trimmed);
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 

@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1542 (PR #439)
+ * @version 1.390.1544 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:04:50
+ * @lastModified 2026-08-31 19:29:18
  */
 
 import { EventEmitter } from "node:events";
@@ -60,9 +60,69 @@ function createConfirmedF012LiveArgs(extraArgs = [], overrides = {}) {
     "--probe-info",
     "--require-info-model",
     "F012",
+    "--require-printer-idle",
     ...extraArgs,
   ];
 }
+
+/**
+ * printer status guardが送るread-only GET frameかを判定する。
+ *
+ * 【詳細説明】
+ * - live certificationの全mockで同じ判定を使い、CFS boxsInfo probeとprinter idle probeを混同しない。
+ *
+ * @function isPrinterStatusProbeFrame
+ * @param {object} frame - JSON parse済みWebSocket frame
+ * @returns {boolean} printer status probe frameならtrue
+ */
+function isPrinterStatusProbeFrame(frame) {
+  return frame?.method === "get" &&
+    frame?.params?.state === 1 &&
+    frame?.params?.deviceState === 1 &&
+    frame?.params?.boxsInfo !== 1;
+}
+
+/**
+ * live certification mockへidle状態のprinter statusを返す。
+ *
+ * 【詳細説明】
+ * - 実機送信前guardの通過条件を満たすため、state/deviceStateおよび活動指標をすべて0で返す。
+ *
+ * @function emitIdlePrinterStatus
+ * @param {EventEmitter} ws - テスト用WebSocket mock
+ * @returns {void}
+ */
+function emitIdlePrinterStatus(ws) {
+  setTimeout(() => {
+    ws.emit("message", JSON.stringify({
+      state: 0,
+      deviceState: 0,
+      printProgress: 0,
+      printJobTime: 0,
+      printLeftTime: 0,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+      printFileName: "",
+      printId: "",
+    }));
+  }, 1);
+}
+
+const PRINTER_STATUS_GET_FRAME = {
+  method: "get",
+  params: {
+    state: 1,
+    deviceState: 1,
+    printProgress: 1,
+    printJobTime: 1,
+    printLeftTime: 1,
+    printFileName: 1,
+    fileName: 1,
+    printId: 1,
+    targetNozzleTemp: 1,
+    targetBedTemp0: 1,
+  },
+};
 
 /**
  * `/info` のF012成功応答を返すテスト用fetch関数を生成する。
@@ -128,7 +188,7 @@ describe("capture_k2_cfs_slot_control", () => {
     });
   });
 
-  it("--send指定時だけhost/live/host一致/command一致を必須にする", () => {
+  it("--send指定時だけhost/live/host一致/command一致/printer idle確認を必須にする", () => {
     const baseArgs = [
       "--send",
       "--host",
@@ -245,6 +305,21 @@ describe("capture_k2_cfs_slot_control", () => {
       "cfs:1:slot:0",
       "--probe-before",
       "--probe-after",
+      "--probe-info",
+      "--require-info-model",
+      "F012",
+    ])).toThrow("--require-printer-idle is required when --send is used");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+      "--confirm-source",
+      "cfs:1:slot:0",
+      "--probe-before",
+      "--probe-after",
     ])).toThrow("--probe-info and --require-info-model F012 are required");
     expect(parseArgs([
       ...baseArgs,
@@ -290,7 +365,7 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(liveDefault).toMatchObject({
       probeBefore: true,
       probeAfter: true,
-      requirePrinterIdle: false,
+      requirePrinterIdle: true,
       boxsInfoTimeoutMs: 5000,
       printerStatusTimeoutMs: 5000,
       postCommandProbeDelayMs: 1500,
@@ -508,23 +583,80 @@ describe("capture_k2_cfs_slot_control", () => {
       },
       response: null,
     });
-    expect(ws.sentFrames).toEqual([
-      {
-        method: "get",
-        params: {
-          state: 1,
-          deviceState: 1,
-          printProgress: 1,
-          printJobTime: 1,
-          printLeftTime: 1,
-          printFileName: 1,
-          fileName: 1,
-          printId: 1,
-          targetNozzleTemp: 1,
-          targetBedTemp0: 1,
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("--require-printer-idle指定時はnull/空文字のprinter statusをidle根拠にしない", async () => {
+    class UnknownPrinterStatusWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.state === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              state: null,
+              deviceState: "",
+              printProgress: "",
+              printJobTime: "",
+              printLeftTime: null,
+              targetNozzleTemp: "",
+              targetBedTemp0: null,
+            }));
+          }, 1);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              boxsInfo: {
+                cfsConnect: 1,
+                materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1, selected: 1 }] }],
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new UnknownPrinterStatusWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs([
+        "--require-printer-idle",
+      ])),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-printer-not-idle",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "observed",
+        summary: {
+          idle: false,
+          active: true,
+          state: null,
+          deviceState: null,
         },
       },
-    ]);
+      response: null,
+    });
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
     expect(ws.closed).toBe(true);
   });
 
@@ -587,7 +719,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -629,6 +763,7 @@ describe("capture_k2_cfs_slot_control", () => {
       },
     });
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
       {
         method: "set",
@@ -657,7 +792,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           this.getCount += 1;
           const percent = this.getCount > 1 ? 99 : 100;
           setTimeout(() => {
@@ -689,7 +826,7 @@ describe("capture_k2_cfs_slot_control", () => {
     const options = {
       ...parseArgs(createConfirmedF012LiveArgs([
         "--operator-marker",
-        "observed-cfs-load-motion",
+        "preflight: operator present / printer idle / CFS visually checked",
         "--probe-after-count",
         "1",
       ])),
@@ -725,7 +862,7 @@ describe("capture_k2_cfs_slot_control", () => {
       },
       operatorMarker: {
         source: "operator-cli",
-        value: "observed-cfs-load-motion",
+        value: "preflight: operator present / printer idle / CFS visually checked",
       },
       targetSourceDelta: {
         sourceId: "cfs:1:slot:0",
@@ -758,7 +895,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -804,6 +943,7 @@ describe("capture_k2_cfs_slot_control", () => {
       },
     });
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
     ]);
@@ -866,6 +1006,8 @@ describe("capture_k2_cfs_slot_control", () => {
         displaySlot: "1C",
         presence: "loaded",
         selected: true,
+        selectedObserved: true,
+        selectionState: "selected",
         percent: 54,
         materialType: "PLA",
         materialName: "Silver",
@@ -881,7 +1023,37 @@ describe("capture_k2_cfs_slot_control", () => {
       sourceId: "external:0",
       kind: "external-spool",
       presence: "empty",
+      selectedObserved: true,
+      selectionState: "unselected",
     }));
+  });
+
+  it("boxsInfo summaryはselected=falseとselected未観測を分けて残す", () => {
+    const summary = summarizeBoxsInfoEvidence({
+      materialBoxs: [{
+        id: 1,
+        type: 0,
+        materials: [
+          { id: 0, state: 1, selected: 1, name: "Selected" },
+          { id: 1, state: 1, selected: 0, name: "Unselected" },
+          { id: 2, state: 1, name: "Unobserved" },
+          { id: 3, state: 1, selected: null, name: "NullSelected" },
+        ],
+      }],
+    });
+
+    expect(summary.sources.map((source) => [
+      source.materialName,
+      source.selected,
+      source.selectedObserved,
+      source.selectionState,
+    ])).toEqual([
+      ["Selected", true, true, "selected"],
+      ["Unselected", false, true, "unselected"],
+      ["Unobserved", false, false, "unobserved"],
+      ["NullSelected", false, false, "unobserved"],
+    ]);
+    expect(summary.selectedSourceIds).toEqual(["cfs:1:slot:0"]);
   });
 
   it("boxsInfo summaryは明示state codeだけをpresenceへ採用する", () => {
@@ -986,7 +1158,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1028,6 +1202,7 @@ describe("capture_k2_cfs_slot_control", () => {
       expect.objectContaining({ reason: "box-id-duplicate" }),
     ]));
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
     ]);
     expect(ws.closed).toBe(true);
@@ -1044,7 +1219,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1088,6 +1265,7 @@ describe("capture_k2_cfs_slot_control", () => {
     });
     expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:1"]);
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
     ]);
     expect(ws.closed).toBe(true);
@@ -1147,7 +1325,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1202,6 +1382,7 @@ describe("capture_k2_cfs_slot_control", () => {
       },
     });
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
       { method: "get", params: { boxsInfo: 1 } },
@@ -1223,7 +1404,9 @@ describe("capture_k2_cfs_slot_control", () => {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
         this.sentAt.push(Date.now());
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1264,9 +1447,9 @@ describe("capture_k2_cfs_slot_control", () => {
         postCommandProbeDelayMs: 25,
       },
     });
-    expect(ws.sentFrames).toHaveLength(3);
-    expect(ws.sentFrames[2]).toEqual({ method: "get", params: { boxsInfo: 1 } });
-    expect(ws.sentAt[2] - ws.sentAt[1]).toBeGreaterThanOrEqual(20);
+    expect(ws.sentFrames).toHaveLength(4);
+    expect(ws.sentFrames[3]).toEqual({ method: "get", params: { boxsInfo: 1 } });
+    expect(ws.sentAt[3] - ws.sentAt[2]).toBeGreaterThanOrEqual(20);
   });
 
   it("post-command probe count指定時はcommand再送なしでafter観測を複数回採る", async () => {
@@ -1279,7 +1462,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           const percent = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length * 10;
           setTimeout(() => {
             this.emit("message", JSON.stringify({
@@ -1340,6 +1525,7 @@ describe("capture_k2_cfs_slot_control", () => {
         expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
       ]);
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
       { method: "get", params: { boxsInfo: 1 } },
@@ -1359,7 +1545,9 @@ describe("capture_k2_cfs_slot_control", () => {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
         const boxsInfoProbeCount = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length;
-        if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount <= 2) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount <= 2) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1418,6 +1606,7 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(result.probes.afterSeries[1].completedAt)
       .toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u));
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
       { method: "get", params: { boxsInfo: 1 } },
@@ -1437,7 +1626,9 @@ describe("capture_k2_cfs_slot_control", () => {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
         const boxsInfoProbeCount = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length;
-        if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount !== 3) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount !== 3) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1508,7 +1699,10 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1 && this.sentFrames.length === 1) {
+        const boxsInfoProbeCount = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length;
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1565,6 +1759,7 @@ describe("capture_k2_cfs_slot_control", () => {
     });
     expect(result.probes.after.message).toContain("boxsInfo probe timeout");
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
       { method: "get", params: { boxsInfo: 1 } },
@@ -1582,7 +1777,11 @@ describe("capture_k2_cfs_slot_control", () => {
       }
 
       send(payload, callback) {
-        this.sentFrames.push(JSON.parse(payload));
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        }
         setTimeout(() => callback(), 1);
       }
 
@@ -1617,6 +1816,7 @@ describe("capture_k2_cfs_slot_control", () => {
       },
     });
     expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
     ]);
     expect(ws.closed).toBe(true);
@@ -1672,7 +1872,9 @@ describe("capture_k2_cfs_slot_control", () => {
       send(payload, callback) {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
-        if (frame?.params?.boxsInfo === 1) {
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -1724,6 +1926,7 @@ describe("capture_k2_cfs_slot_control", () => {
       });
       expect(result.evidence.error.message).toMatch(/ENOTDIR|EEXIST|not a directory|file already exists/iu);
       expect(ws.sentFrames).toEqual([
+        PRINTER_STATUS_GET_FRAME,
         { method: "get", params: { boxsInfo: 1 } },
         { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
         { method: "get", params: { boxsInfo: 1 } },

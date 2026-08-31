@@ -160,9 +160,10 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - live送信では `--probe-info --require-info-model F012` を必須とし、WS9999接続前に
   `http://<host>/info` のmodel/version/transport hintをcertification resultへ保存する。
   `/info` のMACは有線/無線で一致しないことがあるためidentity authorityにはしないが、F012実機へ送っている証跡として扱う。
-- live送信では `--require-printer-idle` を併用し、WS9999のread-only `get` で `state` / `deviceState` /
+- live送信では `--require-printer-idle` を必須とし、WS9999のread-only `get` で `state` / `deviceState` /
   `printJobTime` / `printLeftTime` / target温度を確認する。プリンタ本体が印刷/加熱/前ジョブ残存を示す場合は、
   `pre-command-printer-not-idle` としてCFS操作frameを送らない。
+  `null`、空文字、空白文字、未観測値はJavaScriptの暗黙変換で0にせず、idle根拠としては扱わない。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
@@ -171,6 +172,8 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   途中でtimeout/errorがあってもCFS操作frameは再送せず、残り回数のread-only probeを継続して証跡を残す。
 - resultには `probeAttemptCount` / `observedProbeCount` / `failedProbeCount` と、before probeから最後に観測できた
   after probeへの `targetSourceDelta` を保存する。これはtelemetry差分のレビュー補助であり、expected-state confirmationではない。
+  source summaryには `selected` に加えて `selectedObserved` / `selectionState` を含め、`selected:false` と
+  `selected` field未観測を区別する。`colorMatch` はG-code材料IDからsourceへのassignment証跡であり、selected authorityの代替にはしない。
 - 現場目視メモは `--operator-marker <text>` で `operatorMarker.source="operator-cli"` として保存できる。
   これは人間が何を見たかをJSONへ同梱するための欄であり、単独で物理成功を確定するauthorityにはしない。
 - side-effect commandが `submitted` / `post-observed` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
