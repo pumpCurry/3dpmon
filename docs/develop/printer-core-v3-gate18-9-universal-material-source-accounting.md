@@ -109,6 +109,19 @@ legacy `hostSpoolMap` and read-only `materialSourceObservations`, but it must no
 write IndexedDB, mutate `monitorData`, close legacy mount intervals, or activate
 universal writes.
 
+Each plan separates the long-lived migration case from the exact evidence
+revision:
+
+- `migrationSubjectId`: stable subject for the same legacy host-to-spool
+  migration case
+- `planRevisionId`: evidence/checksum revision for the exact dry-run decision
+- `migrationId`: compatibility revision ID derived from `planRevisionId`
+
+The decision checksum includes `createdAt` because topology freshness is decided
+against the plan creation time. A later re-plan with the same legacy assignment
+but stale topology therefore creates a new revision instead of reusing an older
+READY journal entry.
+
 The dry-run planner classifies each legacy host spool assignment:
 
 - `READY`: a known single source can be represented as one `FilamentUnit`, one
@@ -131,12 +144,16 @@ execution or cutover transaction results. The planner also must not use
 `MaterialAccountingCutoverRecord` as its primary return shape; cutover records are
 created later by the execution/readiness boundary.
 
-`READY` requires a valid legacy spool record, stable device identity, no open
-Universal MaterialSource conflict for that device, no open Universal SpoolMount
-conflict for the target spool/source, and either operator-confirmed
-`single-spool` configuration or a fresh `complete` material topology observation
-with exactly one direct/external source. K1/K1 Max are not blindly assumed to be
-single-source if the saved target does not state that topology. A partial,
+`READY` requires a valid legacy spool record, stable device identity, unique
+host-to-device resolution, no open `printerCoreV3IdentityConflict` /
+`printerCoreV3IdentityConflicts[]` evidence, no open Universal MaterialSource
+conflict for that device, no open Universal SpoolMount conflict for the target
+spool/source, and either migration-specific operator confirmation for
+`single-spool` or a fresh `complete` material topology observation with exactly
+one direct/external source. K1/K1 Max are not blindly assumed to be single-source
+if the saved target does not state that topology. Saved `materialSystem.mode` and
+old materialSystem boolean flags such as `accountingTopologyConfirmed` are not
+migration authority. A partial,
 stale, restored, disconnected, future-dated beyond the allowed clock skew,
 locator-incomplete, tombstoned/unobserved, or provisional/unknown source
 observation is evidence that migration needs a new read or operator decision,
@@ -148,7 +165,8 @@ invent ad-hoc reason identifiers. The initial fixed reasons include multi-source
 legacy ambiguity, source confirmation requirement, missing material topology,
 open mount conflict, legacy interval conflict, source identity conflict, source
 identity insufficiency, material source locator incompleteness, device identity
-insufficiency, and missing legacy spool evidence.
+insufficiency, ambiguous legacy host/device evidence, and missing legacy spool
+evidence.
 
 The dry-run validator recomputes `migrationStatus`, `summary.ready`,
 `summary.candidate`, `summary.blocked`, and all `summary.plannedWrites` counts
@@ -156,14 +174,18 @@ from `entries[]`. Non-`READY` entries must not contain planned
 `filamentUnits`, `materialSources`, `spoolMounts`, or `mountCandidates`.
 READY `mountCandidates` must carry `openedAtPolicy:
 shadow-execution-time` and `operationIdPolicy: shadow-execution-time`, and must
-not carry execution fields. This keeps persisted dry-run journal entries
-self-checking when Gate 18.9B introduces IndexedDB journaling.
+not carry execution fields. They must also reference the entry spool and a
+planned MaterialSource from the same entry. The validator additionally checks
+`migrationSubjectId`, `planRevisionId`, `migrationId`, and `source` bindings.
+This keeps persisted dry-run journal entries self-checking when Gate 18.9B
+introduces IndexedDB journaling.
 
-The source checksum includes the planner policy revision, schema version, TTL /
-clock-skew policy, legacy spool map, connection targets, machines, filament
-spool records, material observations, and existing Universal MaterialSource /
-SpoolMount repository snapshots. Any dependency that can change a READY/CANDIDATE
-/BLOCKED decision must change the checksum.
+The source checksum includes the planner policy revision, schema version,
+`createdAt`, TTL / clock-skew policy, migration confirmations, legacy spool map,
+connection targets, machines, filament spool records, material observations, and
+existing Universal MaterialSource / SpoolMount repository snapshots. Any
+dependency that can change a READY/CANDIDATE/BLOCKED decision must change the
+checksum.
 
 Migration lifecycle transitions are fixed by
 `canTransitionMaterialAccountingMigrationStatus()`:
@@ -295,9 +317,10 @@ spoolMountRepositoryWrites = false
 migrationJournalIsEvidenceOnly = true
 ```
 
-When a stored journal contains the same `migrationId` with a different
-`sourceChecksum`, the incoming entry is retained as unsupported evidence rather
-than overwriting the reviewed dry-run entry.
+Because `migrationId` is revision-derived, a fresh re-plan for the same
+`migrationSubjectId` records a separate revision instead of overwriting a prior
+decision. A malformed plan that tampers with `migrationId`, `planRevisionId`, or
+source checksum is rejected before journal conflict handling.
 
 Stored journal restoration validates cross-binding before an entry is accepted:
 the outer entry `sourceChecksum` and `migrationStatus`, when present, must match
@@ -305,6 +328,10 @@ the inner plan. Stored events are retained only when their `migrationId`,
 `sourceChecksum`, `recordedAt`, and deterministic `eventId` match an accepted
 entry. A restored journal therefore cannot stitch a valid plan to a different
 checksum/status/event trail.
+
+Malformed imported entries are quarantined in `retainedUnsupportedEntries`
+without throwing. This includes `null` entries, missing `plannedWrites`,
+non-array planned write fields, and broken `mountCandidates` shapes.
 
 ## Gate 18.9C Scope
 
@@ -384,17 +411,20 @@ Gate 18.9A tests:
 - migration dry-run planner blocks hosts with open Universal SpoolMount repository conflicts
 - migration dry-run planner treats future-dated observations beyond clock skew as not fresh
 - migration dry-run planner excludes tombstoned/unobserved sources from migration cardinality
-- migration dry-run planner changes source checksum when policy, spool inventory, observation, or repository evidence changes
-- migration dry-run validator recomputes summary/status/write counts and rejects non-READY planned writes
+- migration dry-run planner changes source checksum when createdAt, policy, spool inventory, observation, confirmation, or repository evidence changes
+- migration dry-run planner blocks duplicate strong devices and open device identity conflicts for a legacy host
+- migration dry-run validator recomputes summary/status/write counts, rejects non-READY planned writes, and checks plan revision/source/migration ID binding
+- migration dry-run validator requires READY mountCandidates to reference the entry spool and a planned MaterialSource
 
 Gate 18.9B tests:
 
 - valid dry-run plan is recorded without enabling authority writes
 - duplicate `migrationId` + same checksum is idempotent and does not duplicate events
-- duplicate `migrationId` + different checksum is rejected as a journal conflict
+- malformed `migrationId` / revision / checksum binding is rejected before journal conflict handling
 - invalid stored journal entries are retained as unsupported evidence
 - stored entry checksum/status mismatches are retained as unsupported evidence
 - stored events are restored only when checksum, recordedAt, and eventId match an accepted entry
+- malformed stored entries do not throw during restore and are retained as unsupported evidence
 - localStorage round-trip keeps the journal without projecting it to spool/mount observations
 - IndexedDB durable save queues the journal as a shared dry-run evidence key
 - import/export restores the journal through normalization and keeps `hostSpoolMap` untouched

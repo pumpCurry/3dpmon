@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1508 (PR #438)
+ * @version 1.390.1509 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 14:05:00
+ * @lastModified 2026-08-31 15:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -123,7 +123,7 @@ describe("Material accounting migration journal", () => {
     expect(result.journal.byMigrationId).toEqual({});
   });
 
-  it("同じmigrationIdで異なるchecksumのplanはconflictとして拒否する", () => {
+  it("migrationIdとrevision bindingが壊れたplanはjournal conflict前にinvalidとして拒否する", () => {
     const plan = createReadyPlan();
     const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
       recordedAt: "2026-08-31T03:41:00.000Z",
@@ -138,8 +138,8 @@ describe("Material accounting migration journal", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      action: "conflict",
-      reason: "migration-journal-plan-conflict",
+      action: "invalid-plan",
+      reason: "migrationId-planRevisionId-mismatch",
     });
     expect(result.journal.events).toHaveLength(1);
     expect(result.journal.byMigrationId[plan.migrationId].plan.source.checksum).toBe(plan.source.checksum);
@@ -173,6 +173,77 @@ describe("Material accounting migration journal", () => {
     ]);
     expect(journal.events).toEqual([
       expect.objectContaining({ eventId: validRecorded.journal.events[0].eventId, migrationId: plan.migrationId }),
+    ]);
+  });
+
+  it("保存済みjournalのmalformed entryはthrowせずretainedUnsupportedEntriesへ隔離する", () => {
+    const stored = {
+      schemaVersion: 1,
+      byMigrationId: {
+        nullEntry: null,
+        emptyEntry: {},
+        missingWrites: {
+          migrationId: "missingWrites",
+          sourceChecksum: "fnv1a128:missing",
+          migrationStatus: "ready",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+          plan: {
+            schemaVersion: 1,
+            status: "dry-run",
+            migrationStatus: "ready",
+            migrationId: "missingWrites",
+            createdAt: "2026-08-31T03:40:00.000Z",
+            source: { checksum: "fnv1a128:missing" },
+            entries: [
+              {
+                host: "K1Max-Broken",
+                spoolId: "spool-031",
+                deviceId: "serial:k1max-broken",
+                migrationStatus: "ready",
+                plannedWrites: null,
+              },
+            ],
+            summary: { ready: 1, candidate: 0, blocked: 0, plannedWrites: {} },
+            invariants: { activateUniversalWrites: false, preserveHostSpoolMap: true },
+          },
+        },
+        brokenCandidates: {
+          migrationId: "brokenCandidates",
+          sourceChecksum: "fnv1a128:broken-candidates",
+          migrationStatus: "ready",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+          plan: {
+            schemaVersion: 1,
+            status: "dry-run",
+            migrationStatus: "ready",
+            migrationId: "brokenCandidates",
+            createdAt: "2026-08-31T03:40:00.000Z",
+            source: { checksum: "fnv1a128:broken-candidates" },
+            entries: [
+              {
+                host: "K1Max-Broken",
+                spoolId: "spool-031",
+                deviceId: "serial:k1max-broken",
+                migrationStatus: "ready",
+                plannedWrites: { filamentUnits: [], materialSources: [], spoolMounts: [], mountCandidates: "broken" },
+              },
+            ],
+            summary: { ready: 1, candidate: 0, blocked: 0, plannedWrites: { filamentUnits: 0, materialSources: 0, spoolMounts: 0, mountCandidates: 1 } },
+            invariants: { activateUniversalWrites: false, preserveHostSpoolMap: true },
+          },
+        },
+      },
+      events: [],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.byMigrationId).toEqual({});
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({ migrationId: "nullEntry", reason: "plan-not-object-or-invalid" }),
+      expect.objectContaining({ migrationId: "emptyEntry", reason: "plan-not-object-or-invalid" }),
+      expect.objectContaining({ migrationId: "missingWrites", reason: "plan-not-object-or-invalid" }),
+      expect.objectContaining({ migrationId: "brokenCandidates", reason: "plan-not-object-or-invalid" }),
     ]);
   });
 

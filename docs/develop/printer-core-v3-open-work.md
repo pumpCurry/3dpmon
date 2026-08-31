@@ -22,7 +22,7 @@ Gate 18.9 の Universal MaterialSource accounting 仕様は
 | Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
-| Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, and journal hardening started | contract CLOSED / repository+planner+journal tests partial | pending | disabled |
+| Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, and evidence-only journal hardened | contract CLOSED / repository+planner+journal tests passing | pending | disabled |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -41,7 +41,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   canonical locator/identity validation、identityとlocatorのslot/index整合、
   provisional rekey boundary、open mount最大1、close lifecycle、restart-safe operation
   idempotency、interval overlap conflictを固定しながら、永続化やcutoverへ段階的に接続する。
-  migration planner dry-runは追加済みで、operator確認済みK1 direct-onlyはsource-aware候補を生成する一方、
+  migration planner dry-runは追加済みで、migration専用operator確認済みK1 direct-onlyはsource-aware候補を生成する一方、
   K2/CFS multi-source、未確認single-spool、topology未観測K2、future-dated/stale/incomplete観測は
   blind migrationせずcandidate/blockedへ留める。
   Gate 18.9Bでは、このdry-run plan/evidenceだけを`materialAccountingMigrationJournal`
@@ -49,6 +49,10 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   MaterialSource/SpoolMount authority writeやlegacy ledger debitはまだ有効化しない。
   dry-runは本番`SpoolMount`ではなく`mountCandidates`だけを返し、`openedAt`と
   `mountOperationId`は後続のshadow executorが実行時に発行する。
+  `migrationSubjectId`と`planRevisionId`を分離し、plan作成時刻、confirmation、identity、
+  topology freshness、repository snapshotが変わると別revisionになる。legacy hostが複数strong
+  deviceへ解決される場合、またはopen device identity conflictが残る場合はfirst-matchせずBLOCKする。
+  保存済みjournalの壊れたentryは起動時にthrowせず`retainedUnsupportedEntries`へ隔離する。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
@@ -157,7 +161,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 
 - standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
 - `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
-- Gate 18.9A/B migration planner は stable device identity、operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。dry-run journal保存までは追加済み。次はjournalを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
+- Gate 18.9A/B migration planner は stable device identity、unique host/device resolution、open device identity conflictなし、migration専用operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。dry-run journal保存までは追加済み。次はjournalを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
 - side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
 - Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
 
