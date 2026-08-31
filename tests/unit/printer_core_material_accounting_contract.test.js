@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1492 (PR #438)
+ * @version 1.390.1493 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 09:53:00
+ * @lastModified 2026-08-31 10:03:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -40,6 +40,7 @@ import {
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
   createMaterialSourceRecord,
+  createSourceSpecificMaterialUsageEvidence,
   createSpoolMountRecord,
   evaluateMaterialDebitEligibility,
   validateFilamentUnit,
@@ -49,6 +50,18 @@ import {
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
 
 describe("Universal MaterialSource accounting contract", () => {
+  const createUsageEvidence = (overrides = {}) => createSourceSpecificMaterialUsageEvidence({
+    materialSourceId: "material-source:cfs-1a",
+    mountId: "spool-mount:test",
+    snapshotId: "snapshot:test",
+    printJobId: "print:test",
+    usedLengthMm: 1000,
+    source: "trusted-physical-counter",
+    measurementMethod: "source-counter",
+    observedAt: "2026-08-31T01:00:00.000Z",
+    ...overrides,
+  });
+
   it("K1 direct spoolを1つのprinter-direct unitと1つのsourceとして表現する", () => {
     const unitIdentity = createDirectFeedUnitIdentity({
       deviceId: "serial:k1max-4a1b",
@@ -219,38 +232,68 @@ describe("Universal MaterialSource accounting contract", () => {
     const pending = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1a", identityStrength: "provisional" },
-      usageEvidence: {
+      usageEvidence: createUsageEvidence({
         materialSourceId: "material-source:cfs-1a",
         mountId: mount.mountId,
+        snapshotId: "snapshot:1",
+        printJobId: "print:1",
         usedLengthMm: 3210,
-        attribution: "source-specific",
         idempotencyKey: "usage:1",
-      },
+      }),
       printStartSnapshot: {
         snapshotId: "snapshot:1",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:1",
         materialSourceId: "material-source:cfs-1a",
         mountId: mount.mountId,
         spoolId: "spool:silver",
+        capturedAt: "2026-08-31T01:01:00.000Z",
       },
       continuity: { freshTopology: false, sourceContinuity: true },
     });
     const accepted = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1a", identityStrength: "provisional" },
-      usageEvidence: {
+      usageEvidence: createUsageEvidence({
         materialSourceId: "material-source:cfs-1a",
         mountId: mount.mountId,
+        snapshotId: "snapshot:1",
+        printJobId: "print:1",
         usedLengthMm: 3210,
-        attribution: "source-specific",
         idempotencyKey: "usage:1",
-      },
+      }),
       printStartSnapshot: {
         snapshotId: "snapshot:1",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:1",
         materialSourceId: "material-source:cfs-1a",
         mountId: mount.mountId,
         spoolId: "spool:silver",
+        capturedAt: "2026-08-31T01:01:00.000Z",
       },
       continuity: { freshTopology: true, sourceContinuity: true },
+    });
+    const missingContinuity = evaluateMaterialDebitEligibility({
+      mount,
+      materialSource: { materialSourceId: "material-source:cfs-1a", identityStrength: "provisional" },
+      usageEvidence: createUsageEvidence({
+        materialSourceId: "material-source:cfs-1a",
+        mountId: mount.mountId,
+        snapshotId: "snapshot:1",
+        printJobId: "print:1",
+        usedLengthMm: 3210,
+        idempotencyKey: "usage:1",
+      }),
+      printStartSnapshot: {
+        snapshotId: "snapshot:1",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:1",
+        materialSourceId: "material-source:cfs-1a",
+        mountId: mount.mountId,
+        spoolId: "spool:silver",
+        capturedAt: "2026-08-31T01:01:00.000Z",
+      },
+      continuity: { freshTopology: true },
     });
 
     expect(validateSpoolMount(mount)).toEqual({ ok: true, errors: [] });
@@ -263,6 +306,11 @@ describe("Universal MaterialSource accounting contract", () => {
       status: DEBIT_ELIGIBILITY_STATUS.ELIGIBLE,
       canDebit: true,
       reasons: [],
+    });
+    expect(missingContinuity).toMatchObject({
+      status: DEBIT_ELIGIBILITY_STATUS.PENDING,
+      canDebit: false,
+      reasons: ["source-continuity-required"],
     });
   });
 
@@ -279,18 +327,22 @@ describe("Universal MaterialSource accounting contract", () => {
     const blocked = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1c", identityStrength: "provisional" },
-      usageEvidence: {
+      usageEvidence: createUsageEvidence({
         materialSourceId: "material-source:cfs-1c",
         mountId: mount.mountId,
+        snapshotId: "snapshot:2",
+        printJobId: "print:2",
         usedLengthMm: 1200,
-        attribution: "source-specific",
         idempotencyKey: "usage:2",
-      },
+      }),
       printStartSnapshot: {
         snapshotId: "snapshot:2",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:2",
         materialSourceId: "material-source:cfs-1c",
         mountId: mount.mountId,
         spoolId: "spool:silk",
+        capturedAt: "2026-08-31T01:02:00.000Z",
       },
       continuity: { freshTopology: true, sourceContinuity: true, physicalDiscontinuity: "explicit-empty" },
     });
@@ -318,36 +370,44 @@ describe("Universal MaterialSource accounting contract", () => {
     const missing = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1b", identityStrength: "stable" },
-      usageEvidence: {
+      usageEvidence: createUsageEvidence({
         materialSourceId: "material-source:cfs-1b",
         mountId: mount.mountId,
+        snapshotId: "snapshot:3",
+        printJobId: "print:3",
         usedLengthMm: 6543,
-        attribution: "source-specific",
         idempotencyKey: "usage:3",
-      },
+      }),
       printStartSnapshot: {
         snapshotId: "snapshot:3",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:3",
         materialSourceId: "material-source:cfs-1b",
         mountId: mount.mountId,
         spoolId: "spool:rfid",
+        capturedAt: "2026-08-31T01:03:00.000Z",
       },
       continuity: { freshTopology: true, sourceContinuity: true, observedRfid: null },
     });
     const mismatch = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1b", identityStrength: "stable" },
-      usageEvidence: {
+      usageEvidence: createUsageEvidence({
         materialSourceId: "material-source:cfs-1b",
         mountId: mount.mountId,
+        snapshotId: "snapshot:4",
+        printJobId: "print:4",
         usedLengthMm: 6543,
-        attribution: "source-specific",
         idempotencyKey: "usage:4",
-      },
+      }),
       printStartSnapshot: {
         snapshotId: "snapshot:4",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:4",
         materialSourceId: "material-source:cfs-1b",
         mountId: mount.mountId,
         spoolId: "spool:rfid",
+        capturedAt: "2026-08-31T01:04:00.000Z",
       },
       continuity: { freshTopology: true, sourceContinuity: true, observedRfid: "rfid-B" },
     });
@@ -371,18 +431,54 @@ describe("Universal MaterialSource accounting contract", () => {
         materialSourceId: "material-source:cfs-1a",
         identityStrength: MATERIAL_IDENTITY_STRENGTH.UNKNOWN,
       },
-      usageEvidence: {
+      usageEvidence: createUsageEvidence({
         materialSourceId: "material-source:cfs-1a",
         mountId: unverifiedMount.mountId,
+        snapshotId: "snapshot:unverified",
+        printJobId: "print:unverified",
         usedLengthMm: 1000,
-        attribution: "source-specific",
         idempotencyKey: "usage:unverified",
-      },
+      }),
       printStartSnapshot: {
         snapshotId: "snapshot:unverified",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:unverified",
         materialSourceId: "material-source:cfs-1a",
         mountId: unverifiedMount.mountId,
         spoolId: "spool:silver",
+        capturedAt: "2026-08-31T01:05:00.000Z",
+      },
+      continuity: { freshTopology: true, sourceContinuity: true },
+    });
+    const confirmedMount = createSpoolMountRecord({
+      materialSourceId: "material-source:cfs-1a",
+      spoolId: "spool:silver",
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      openedAt: "2026-08-31T01:06:00.000Z",
+      openedBy: "operator",
+    });
+    const missingSourceIdentity = evaluateMaterialDebitEligibility({
+      mount: confirmedMount,
+      materialSource: {
+        materialSourceId: "material-source:cfs-1a",
+      },
+      usageEvidence: createUsageEvidence({
+        materialSourceId: "material-source:cfs-1a",
+        mountId: confirmedMount.mountId,
+        snapshotId: "snapshot:missing-source-identity",
+        printJobId: "print:missing-source-identity",
+        idempotencyKey: "usage:missing-source-identity",
+      }),
+      printStartSnapshot: {
+        snapshotId: "snapshot:missing-source-identity",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:missing-source-identity",
+        materialSourceId: "material-source:cfs-1a",
+        mountId: confirmedMount.mountId,
+        spoolId: "spool:silver",
+        capturedAt: "2026-08-31T01:06:00.000Z",
       },
       continuity: { freshTopology: true, sourceContinuity: true },
     });
@@ -392,6 +488,7 @@ describe("Universal MaterialSource accounting contract", () => {
       canDebit: false,
       reasons: ["mount-verification-required", "source-identity-required"],
     });
+    expect(missingSourceIdentity.reasons).toContain("source-identity-required");
   });
 
   it("print-start snapshotとusage evidenceがmount/sourceへbindされていない場合はdebitを拒否する", () => {
@@ -408,6 +505,7 @@ describe("Universal MaterialSource accounting contract", () => {
       mount,
       materialSource: {
         materialSourceId: "material-source:cfs-1d",
+        deviceId: "serial:k2pro-69e7",
         identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
       },
       usageEvidence: {
@@ -422,20 +520,26 @@ describe("Universal MaterialSource accounting contract", () => {
       mount,
       materialSource: {
         materialSourceId: "material-source:cfs-1d",
+        deviceId: "serial:k2pro-69e7",
         identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
       },
       usageEvidence: {
         materialSourceId: "material-source:cfs-1c",
         mountId: "spool-mount:other",
+        snapshotId: "snapshot:other",
+        printJobId: "print:usage-other",
         usedLengthMm: 1234,
         attribution: "source-specific",
         idempotencyKey: "usage:mismatched-bindings",
       },
       printStartSnapshot: {
         snapshotId: "snapshot:mismatched-bindings",
+        deviceId: "serial:other-device",
+        printJobId: "print:other",
         materialSourceId: "material-source:cfs-1c",
         mountId: "spool-mount:other",
         spoolId: "spool:other",
+        capturedAt: "2026-08-31T01:10:00.000Z",
       },
       continuity: { freshTopology: true, sourceContinuity: true },
     });
@@ -443,24 +547,107 @@ describe("Universal MaterialSource accounting contract", () => {
     expect(missingBindings).toMatchObject({
       status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
       canDebit: false,
-      reasons: [
+      reasons: expect.arrayContaining([
         "print-start-snapshot-mount-required",
         "print-start-snapshot-source-required",
         "print-start-snapshot-spool-required",
+        "print-start-snapshot-device-required",
+        "print-start-snapshot-job-required",
+        "print-start-snapshot-time-required",
         "usage-evidence-source-required",
         "usage-evidence-mount-required",
-      ],
+        "usage-evidence-snapshot-required",
+        "usage-evidence-job-required",
+        "untrusted-usage-evidence",
+      ]),
     });
     expect(mismatchedBindings).toMatchObject({
       status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
       canDebit: false,
-      reasons: [
+      reasons: expect.arrayContaining([
         "print-start-snapshot-mount-mismatch",
+        "print-start-snapshot-device-mismatch",
         "print-start-snapshot-source-mismatch",
         "print-start-snapshot-spool-mismatch",
         "usage-evidence-source-mismatch",
         "usage-evidence-mount-mismatch",
-      ],
+        "usage-evidence-snapshot-mismatch",
+        "usage-evidence-job-mismatch",
+        "untrusted-usage-evidence",
+      ]),
+    });
+  });
+
+  it("legacy projectionや証跡不足のmigration mountはdebit authorityにしない", () => {
+    const legacyMount = createSpoolMountRecord({
+      materialSourceId: "material-source:legacy",
+      spoolId: "spool:legacy",
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      verification: SPOOL_MOUNT_VERIFICATION.LEGACY_PROJECTED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.STABLE,
+      openedAt: "2026-08-31T01:15:00.000Z",
+    });
+    const migratedMount = createSpoolMountRecord({
+      materialSourceId: "material-source:migrated",
+      spoolId: "spool:migrated",
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      verification: SPOOL_MOUNT_VERIFICATION.MIGRATED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.STABLE,
+      openedAt: "2026-08-31T01:16:00.000Z",
+    });
+
+    const legacy = evaluateMaterialDebitEligibility({
+      mount: legacyMount,
+      materialSource: { materialSourceId: "material-source:legacy", identityStrength: "stable" },
+      usageEvidence: createUsageEvidence({
+        materialSourceId: "material-source:legacy",
+        mountId: legacyMount.mountId,
+        snapshotId: "snapshot:legacy",
+        printJobId: "print:legacy",
+        idempotencyKey: "usage:legacy",
+      }),
+      printStartSnapshot: {
+        snapshotId: "snapshot:legacy",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:legacy",
+        materialSourceId: "material-source:legacy",
+        mountId: legacyMount.mountId,
+        spoolId: "spool:legacy",
+        capturedAt: "2026-08-31T01:17:00.000Z",
+      },
+      continuity: { freshTopology: true, sourceContinuity: true },
+    });
+    const migratedWithoutProof = evaluateMaterialDebitEligibility({
+      mount: migratedMount,
+      materialSource: { materialSourceId: "material-source:migrated", identityStrength: "stable" },
+      usageEvidence: createUsageEvidence({
+        materialSourceId: "material-source:migrated",
+        mountId: migratedMount.mountId,
+        snapshotId: "snapshot:migrated",
+        printJobId: "print:migrated",
+        idempotencyKey: "usage:migrated",
+      }),
+      printStartSnapshot: {
+        snapshotId: "snapshot:migrated",
+        deviceId: "serial:k2pro-69e7",
+        printJobId: "print:migrated",
+        materialSourceId: "material-source:migrated",
+        mountId: migratedMount.mountId,
+        spoolId: "spool:migrated",
+        capturedAt: "2026-08-31T01:18:00.000Z",
+      },
+      continuity: { freshTopology: true, sourceContinuity: true },
+    });
+
+    expect(legacy).toMatchObject({
+      status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
+      canDebit: false,
+      reasons: ["legacy-projection-not-debit-authority"],
+    });
+    expect(migratedWithoutProof).toMatchObject({
+      status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
+      canDebit: false,
+      reasons: ["trusted-migration-evidence-required"],
     });
   });
 
