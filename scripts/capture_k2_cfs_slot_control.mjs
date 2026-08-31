@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1552 (PR #439)
+ * @version 1.390.1554 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:54:18
+ * @lastModified 2026-08-31 20:08:31
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -1106,6 +1106,29 @@ function hasDuplicateLocatorDiagnostic(summary) {
 }
 
 /**
+ * live送信前にselection観測が不完全なsourceを抽出する。
+ *
+ * 【詳細説明】
+ * - CFS物理操作では「targetだけが選択中」と証明できることを前提にする。
+ * - 明示emptyのsourceは選択対象外として扱えるが、loaded/unknownのsourceはselection値が0/1系として観測済みでなければ不定である。
+ * - 不定sourceを無視すると、target以外が実際にはselectedである可能性を消せないため、pre-command段階でfail-closedする。
+ *
+ * @private
+ * @function findPreCommandIndeterminateSelectionSources
+ * @param {object|null|undefined} summary - pre-command boxsInfo summary
+ * @returns {Array<object>} selection authorityが不定なsource一覧
+ */
+function findPreCommandIndeterminateSelectionSources(summary) {
+  const sources = Array.isArray(summary?.sources) ? summary.sources : [];
+  return sources.filter((source) => {
+    if (!source || source.presence === "empty") {
+      return false;
+    }
+    return source.selectionValid !== true;
+  });
+}
+
+/**
  * live送信前のboxsInfo probe summaryを検査する。
  *
  * 【詳細説明】
@@ -1134,6 +1157,13 @@ function validatePreCommandProbeSummary(summary, targetSourceId) {
   }
   if (targetSources[0].selected !== true) {
     return { ok: false, reason: "pre-command-target-source-not-selected" };
+  }
+  const indeterminateSelectionSources = findPreCommandIndeterminateSelectionSources(summary);
+  if (indeterminateSelectionSources.some((source) => source?.selectionValid === false)) {
+    return { ok: false, reason: "pre-command-selected-value-invalid" };
+  }
+  if (indeterminateSelectionSources.length > 0) {
+    return { ok: false, reason: "pre-command-selected-source-observation-incomplete" };
   }
   if (!Array.isArray(summary.selectedSourceIds) ||
       summary.selectedSourceIds.length !== 1 ||

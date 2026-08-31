@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1552 (PR #439)
+ * @version 1.390.1554 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:54:18
+ * @lastModified 2026-08-31 20:06:12
  */
 
 import { EventEmitter } from "node:events";
@@ -1302,6 +1302,147 @@ describe("capture_k2_cfs_slot_control", () => {
       blindRetryAllowed: false,
     });
     expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:1"]);
+    expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeでtarget以外のloaded sourceにinvalid selectedがある場合はCFS操作frameを送らない", async () => {
+    class InvalidNonTargetSelectionBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 1, name: "Target" },
+                      { id: 1, state: 1, selected: 2, name: "MalformedOther" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new InvalidNonTargetSelectionBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-selected-value-invalid",
+      blindRetryAllowed: false,
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:0"]);
+    expect(result.probes.before.summary.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceId: "cfs:1:slot:1",
+        selectionState: "invalid",
+        selectionValid: false,
+        selectionRaw: 2,
+      }),
+    ]));
+    expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeでtarget以外のloaded sourceがselection未観測の場合はCFS操作frameを送らない", async () => {
+    class UnobservedNonTargetSelectionBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 1, name: "Target" },
+                      { id: 1, state: 1, name: "UnobservedOther" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new UnobservedNonTargetSelectionBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-selected-source-observation-incomplete",
+      blindRetryAllowed: false,
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:0"]);
+    expect(result.probes.before.summary.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceId: "cfs:1:slot:1",
+        selectionState: "unobserved",
+        selectionValid: null,
+      }),
+    ]));
     expect(ws.sentFrames).toEqual([
       PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
