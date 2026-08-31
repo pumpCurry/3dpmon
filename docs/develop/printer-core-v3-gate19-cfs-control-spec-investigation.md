@@ -156,12 +156,19 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   再検証する。これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
 - 送信前probeでは、対象sourceがexactly one、duplicate box/source locator診断なし、かつ明示loadedであることを要求する。
   duplicateが見つかった場合はfirst-winせず、該当locator全体をcertification候補から外してCFS操作frameを送らない。
+- live送信では必要に応じて `--probe-info --require-info-model F012` を併用し、WS9999接続前に
+  `http://<host>/info` のmodel/version/transport hintをcertification resultへ保存する。
+  `/info` のMACは有線/無線で一致しないことがあるためidentity authorityにはしないが、F012実機へ送っている証跡として扱う。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
 - post-command観測は既定で `--probe-after-count 6` / `--probe-after-interval-ms 5000` のbounded polling
   windowを使う。この場合もCFS操作frameは1回だけで、追加されるのはread-only `boxsInfo` probeだけである。
   途中でtimeout/errorがあってもCFS操作frameは再送せず、残り回数のread-only probeを継続して証跡を残す。
+- resultには `probeAttemptCount` / `observedProbeCount` / `failedProbeCount` と、before probeから最後に観測できた
+  after probeへの `targetSourceDelta` を保存する。これはtelemetry差分のレビュー補助であり、expected-state confirmationではない。
+- 現場目視メモは `--operator-marker <text>` で `operatorMarker.source="operator-cli"` として保存できる。
+  これは人間が何を見たかをJSONへ同梱するための欄であり、単独で物理成功を確定するauthorityにはしない。
 - side-effect commandが `submitted` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
   shared storageへ永続化する。このstoreは `commandId`、`commandKind`、`deviceId`、`sessionId`、送信時刻、
   certification ID、送信前観測digest/sequenceだけを保持し、command frameやRPC payloadは保存しない。
@@ -230,6 +237,9 @@ live certificationは次の順で進める。
      --confirm-command cfs-load \
      --probe-before \
      --probe-after \
+     --probe-info \
+     --require-info-model F012 \
+     --operator-marker observed-cfs-load-motion \
      --probe-after-delay-ms 1500 \
      --probe-after-count 6 \
      --probe-after-interval-ms 5000 \
@@ -261,9 +271,11 @@ live certificationは次の順で進める。
 
    `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
    dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
-   `probePlan` には `boxsInfoTimeoutMs`、`postCommandProbeDelayMs`、`postCommandProbeCount`、
+   `probePlan` には `info`、`requireInfoModel`、`boxsInfoTimeoutMs`、`infoTimeoutMs`、`postCommandProbeDelayMs`、`postCommandProbeCount`、
    `postCommandProbeIntervalMs` を保存するため、後から
    「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
+   `printerInfo` には `/info` のmodel/version/port hintと観測時刻、期待modelとの一致結果を保存する。
+   `targetSourceDelta` には対象sourceのpresence/stateCode/selected/percent/material/color/RFID有無の前後差分を保存する。
    `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
 
    ```text

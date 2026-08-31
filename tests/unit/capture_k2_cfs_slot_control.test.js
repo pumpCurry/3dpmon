@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1537 (PR #439)
+ * @version 1.390.1538 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 18:49:00
+ * @lastModified 2026-08-31 19:18:00
  */
 
 import { EventEmitter } from "node:events";
@@ -61,7 +61,10 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(result.probePlan).toEqual({
       before: false,
       after: false,
+      info: false,
+      requireInfoModel: null,
       boxsInfoTimeoutMs: 5000,
+      infoTimeoutMs: 5000,
       postCommandProbeDelayMs: 1500,
       postCommandProbeCount: 6,
       postCommandProbeIntervalMs: 5000,
@@ -172,6 +175,11 @@ describe("capture_k2_cfs_slot_control", () => {
       "--probe-after",
       "--boxsinfo-timeout-ms",
       "1500",
+      "--probe-info",
+      "--require-info-model",
+      "F012",
+      "--operator-marker",
+      "observed-cfs-load-motion",
     ])).toMatchObject({
       send: true,
       confirmLive: true,
@@ -179,6 +187,9 @@ describe("capture_k2_cfs_slot_control", () => {
       confirmCommand: "cfs-load",
       probeBefore: true,
       probeAfter: true,
+      probeInfo: true,
+      requireInfoModel: "F012",
+      operatorMarker: "observed-cfs-load-motion",
       boxsInfoTimeoutMs: 1500,
       postCommandProbeDelayMs: 1500,
       postCommandProbeCount: 6,
@@ -224,6 +235,57 @@ describe("capture_k2_cfs_slot_control", () => {
       postCommandProbeDelayMs: 2500,
       postCommandProbeCount: 3,
       postCommandProbeIntervalMs: 750,
+    });
+  });
+
+  it("/info model requirement不一致時はWebSocketを開く前にlive送信を拒否する", async () => {
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--probe-info",
+        "--require-info-model",
+        "F012",
+      ]),
+      fetchInfo: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ model: "F013", version: "1.0.0" }),
+      }),
+      openWs: async () => {
+        throw new Error("model mismatch must reject before websocket open");
+      },
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "printer-info-model-mismatch",
+      printerInfo: {
+        status: "observed",
+        expectedModel: "F012",
+        modelMatched: false,
+        info: {
+          model: "F013",
+          version: "1.0.0",
+        },
+      },
     });
   });
 
@@ -385,6 +447,126 @@ describe("capture_k2_cfs_slot_control", () => {
       { method: "get", params: { boxsInfo: 1 } },
     ]);
     expect(ws.closed).toBe(true);
+  });
+
+  it("live送信resultに/info証跡、operator marker、target source前後差分を残す", async () => {
+    class DeltaProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+        this.getCount = 0;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          this.getCount += 1;
+          const selected = this.getCount > 1 ? 1 : 0;
+          const percent = this.getCount > 1 ? 99 : 100;
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [
+                    {
+                      id: 1,
+                      type: 0,
+                      materials: [
+                        { id: 0, state: 1, selected, percent, name: "Generic PLA" },
+                      ],
+                    },
+                  ],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new DeltaProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--probe-info",
+        "--require-info-model",
+        "F012",
+        "--operator-marker",
+        "observed-cfs-load-motion",
+        "--probe-after-count",
+        "1",
+      ]),
+      fetchInfo: async (url) => ({
+        ok: true,
+        status: 200,
+        url,
+        json: async () => ({
+          mac: "redacted",
+          model: "F012",
+          version: "1.0.0",
+          wssPort: 443,
+        }),
+      }),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      sent: true,
+      status: "post-observed",
+      printerInfo: {
+        status: "observed",
+        expectedModel: "F012",
+        modelMatched: true,
+        info: {
+          model: "F012",
+          version: "1.0.0",
+          wssPort: 443,
+        },
+      },
+      operatorMarker: {
+        source: "operator-cli",
+        value: "observed-cfs-load-motion",
+      },
+      targetSourceDelta: {
+        sourceId: "cfs:1:slot:0",
+        observed: true,
+        beforeProbe: "before",
+        afterProbe: "after",
+        before: {
+          presence: "loaded",
+          selected: false,
+          percent: 100,
+        },
+        after: {
+          presence: "loaded",
+          selected: true,
+          percent: 99,
+        },
+        changedFields: ["selected", "percent"],
+      },
+    });
   });
 
   it("CFS command frameのws.send callback errorは未送信断定にせずunknown証跡として残す", async () => {

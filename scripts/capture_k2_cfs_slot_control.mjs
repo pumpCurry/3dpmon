@@ -13,6 +13,7 @@
  * - `--send` が明示された場合だけWS9999へcertification-only `feedInOrOut` candidateを送る
  * - live送信にはhost一致、command一致、live確認を必須にし、UI本番操作とは分離する
  * - live certification時に任意で前後のread-only `boxsInfo` probeを行い、観測差分の材料を残す
+ * - live certification時に任意で `/info` を取得し、F012などの機種証跡をWS接続前に固定する
  *
  * 【公開関数一覧】
  * - {@link parseArgs}：CLI引数を解析
@@ -21,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1537 (PR #439)
+ * @version 1.390.1538 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 18:50:00
+ * @lastModified 2026-08-31 19:21:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -64,7 +65,11 @@ Options:
   --confirm-command <kind>         Required with --send and must match --command exactly.
   --probe-before                  Required with --send. Read boxsInfo before the command.
   --probe-after                   Required with --send. Read boxsInfo after the command.
+  --probe-info                    With --send, read http://<host>/info before opening WS9999.
+  --require-info-model <model>     With --send, reject unless /info.model exactly matches this value.
+  --operator-marker <text>         Add an operator observation marker to the certification result.
   --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
+  --info-timeout-ms <number>       /info response timeout. Default: 5000.
   --probe-after-delay-ms <number>  Delay before post-command probe. Default: 1500.
   --probe-after-count <number>     Number of post-command probes. Default: 6.
   --probe-after-interval-ms <number> Interval between post-command probes. Default: 5000.
@@ -114,6 +119,17 @@ const LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS = Object.freeze(new Set([
  * @constant {number}
  */
 const DEFAULT_BOXSINFO_TIMEOUT_MS = 5000;
+
+/**
+ * `/info` probe の既定待ち時間。
+ *
+ * 【詳細説明】
+ * - WS9999接続前に機種確認を固定するためのHTTP timeout。
+ * - CFS物理操作の前段guardなので、無限待ちは許さずboxsInfoと同じ5秒にする。
+ *
+ * @constant {number}
+ */
+const DEFAULT_INFO_TIMEOUT_MS = 5000;
 
 /**
  * command送信後、after-probeを開始するまでの既定待機時間。
@@ -186,7 +202,11 @@ export function parseArgs(argv = []) {
     confirmCommand: "",
     probeBefore: false,
     probeAfter: false,
+    probeInfo: false,
+    requireInfoModel: "",
+    operatorMarker: "",
     boxsInfoTimeoutMs: DEFAULT_BOXSINFO_TIMEOUT_MS,
+    infoTimeoutMs: DEFAULT_INFO_TIMEOUT_MS,
     postCommandProbeDelayMs: DEFAULT_POST_COMMAND_PROBE_DELAY_MS,
     postCommandProbeCount: DEFAULT_POST_COMMAND_PROBE_COUNT,
     postCommandProbeIntervalMs: DEFAULT_POST_COMMAND_PROBE_INTERVAL_MS,
@@ -214,7 +234,14 @@ export function parseArgs(argv = []) {
     else if (arg === "--confirm-command") options.confirmCommand = next();
     else if (arg === "--probe-before") options.probeBefore = true;
     else if (arg === "--probe-after") options.probeAfter = true;
+    else if (arg === "--probe-info") options.probeInfo = true;
+    else if (arg === "--require-info-model") {
+      options.requireInfoModel = next();
+      options.probeInfo = true;
+    }
+    else if (arg === "--operator-marker") options.operatorMarker = next();
     else if (arg === "--boxsinfo-timeout-ms") options.boxsInfoTimeoutMs = Number(next());
+    else if (arg === "--info-timeout-ms") options.infoTimeoutMs = Number(next());
     else if (arg === "--probe-after-delay-ms") options.postCommandProbeDelayMs = Number(next());
     else if (arg === "--probe-after-count") options.postCommandProbeCount = Number(next());
     else if (arg === "--probe-after-interval-ms") options.postCommandProbeIntervalMs = Number(next());
@@ -229,6 +256,11 @@ export function parseArgs(argv = []) {
       options.boxsInfoTimeoutMs < 1000 ||
       options.boxsInfoTimeoutMs > 60000) {
     throw new Error("--boxsinfo-timeout-ms must be between 1000 and 60000.");
+  }
+  if (!Number.isInteger(options.infoTimeoutMs) ||
+      options.infoTimeoutMs < 1000 ||
+      options.infoTimeoutMs > 60000) {
+    throw new Error("--info-timeout-ms must be between 1000 and 60000.");
   }
   if (!Number.isInteger(options.postCommandProbeDelayMs) ||
       options.postCommandProbeDelayMs < 0 ||
@@ -315,7 +347,10 @@ function createProbePlanSummary(options) {
   return {
     before: Boolean(options.probeBefore),
     after: Boolean(options.probeAfter),
+    info: Boolean(options.probeInfo || toNonEmptyString(options.requireInfoModel)),
+    requireInfoModel: toNonEmptyString(options.requireInfoModel) || null,
     boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
+    infoTimeoutMs: options.infoTimeoutMs,
     postCommandProbeDelayMs: options.postCommandProbeDelayMs,
     postCommandProbeCount: options.postCommandProbeCount,
     postCommandProbeIntervalMs: options.postCommandProbeIntervalMs,
@@ -340,6 +375,193 @@ function delayMs(milliseconds) {
     return Promise.resolve();
   }
   return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+/**
+ * `/info` endpoint URLを生成する。
+ *
+ * 【詳細説明】
+ * - CLIではhostにIP/hostnameだけを渡す運用を基本にする。
+ * - 既にhttp/https URLが渡された場合は、末尾を `/info` へ正規化して事故を避ける。
+ *
+ * @private
+ * @function buildPrinterInfoUrl
+ * @param {string} host - プリンタhostまたはURL
+ * @returns {string} `/info` endpoint URL
+ */
+function buildPrinterInfoUrl(host) {
+  const text = toNonEmptyString(host);
+  if (/^https?:\/\//iu.test(text)) {
+    const url = new URL(text);
+    url.pathname = "/info";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  }
+  return `http://${text}/info`;
+}
+
+/**
+ * `/info` 応答を安全な証跡objectへ正規化する。
+ *
+ * 【詳細説明】
+ * - `/info` のMACは有線/無線で一致しないことがあるため、ここではidentity authorityへ昇格しない。
+ * - live certification前の機種・firmware・transport hint確認に必要な最小情報だけを保持する。
+ *
+ * @private
+ * @function normalizePrinterInfoPayload
+ * @param {*} value - `/info` JSON payload
+ * @returns {object|null} 正規化済みpayload、または不正値ならnull
+ */
+function normalizePrinterInfoPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return {
+    mac: toNonEmptyString(value.mac),
+    model: toNonEmptyString(value.model),
+    sn: toNonEmptyString(value.sn),
+    version: toNonEmptyString(value.version),
+    videoPort: Number.isInteger(value.videoPort) ? value.videoPort : null,
+    wssPort: Number.isInteger(value.wssPort) ? value.wssPort : null,
+  };
+}
+
+/**
+ * HTTP responseからJSON payloadを読み取る。
+ *
+ * 【詳細説明】
+ * - テストdoubleでは `json()` だけ、実fetchでは `text()` だけを使いたい場合があるため両方に対応する。
+ * - JSON parse不能時は呼び出し元で構造化errorへ変換する。
+ *
+ * @private
+ * @function readPrinterInfoJson
+ * @param {object} response - fetch response風object
+ * @returns {Promise<object>} JSON payload
+ */
+async function readPrinterInfoJson(response) {
+  if (typeof response?.json === "function") {
+    return response.json();
+  }
+  if (typeof response?.text === "function") {
+    return JSON.parse(await response.text());
+  }
+  return {};
+}
+
+/**
+ * `/info` を取得し、certification用の機種証跡を生成する。
+ *
+ * 【詳細説明】
+ * - side-effect command送信前に実行し、機種不一致ならWS9999を開く前に拒否できるようにする。
+ * - timeout/errorはthrowせず構造化resultとして返し、result JSONへ残せる形にする。
+ *
+ * @private
+ * @function fetchPrinterInfoEvidence
+ * @param {object} options - CLIオプション
+ * @returns {Promise<object>} `/info` 観測結果
+ */
+async function fetchPrinterInfoEvidence(options) {
+  const url = buildPrinterInfoUrl(options.host);
+  const requestedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  const expectedModel = toNonEmptyString(options.requireInfoModel) || null;
+  const fetcher = options.fetchInfo || globalThis.fetch;
+  if (typeof fetcher !== "function") {
+    return {
+      status: "error",
+      url,
+      requestedAt,
+      observedAt: null,
+      elapsedMs: Date.now() - startedAt,
+      expectedModel,
+      modelMatched: false,
+      info: null,
+      error: { message: "fetch API is not available." },
+    };
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), options.infoTimeoutMs || DEFAULT_INFO_TIMEOUT_MS)
+    : null;
+  try {
+    const response = await fetcher(url, controller ? { signal: controller.signal } : {});
+    const payload = normalizePrinterInfoPayload(await readPrinterInfoJson(response));
+    const modelMatched = expectedModel ? payload?.model === expectedModel : null;
+    return {
+      status: response?.ok === false || !payload ? "error" : "observed",
+      url,
+      requestedAt,
+      observedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      httpStatus: Number.isInteger(response?.status) ? response.status : null,
+      expectedModel,
+      modelMatched,
+      info: payload,
+      error: payload ? null : { message: "Invalid /info JSON payload." },
+    };
+  } catch (error) {
+    const serialized = serializeCertificationError(error);
+    return {
+      status: error?.name === "AbortError" ? "timeout" : "error",
+      url,
+      requestedAt,
+      observedAt: null,
+      elapsedMs: Date.now() - startedAt,
+      expectedModel,
+      modelMatched: false,
+      info: null,
+      error: serialized,
+    };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * `/info` 機種必須条件を検査する。
+ *
+ * @private
+ * @function validatePrinterInfoRequirement
+ * @param {object|null|undefined} printerInfo - `/info` 観測結果
+ * @param {string} expectedModel - 期待するmodel
+ * @returns {{ok:boolean, reason:?string}} 検査結果
+ */
+function validatePrinterInfoRequirement(printerInfo, expectedModel) {
+  const model = toNonEmptyString(expectedModel);
+  if (!model) {
+    return { ok: true, reason: null };
+  }
+  if (printerInfo?.status !== "observed") {
+    return { ok: false, reason: "printer-info-observation-failed" };
+  }
+  if (printerInfo?.info?.model !== model) {
+    return { ok: false, reason: "printer-info-model-mismatch" };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * operator markerをcertification resultへ入れる形へ正規化する。
+ *
+ * @private
+ * @function createOperatorMarkerEvidence
+ * @param {string} marker - operator marker文字列
+ * @param {string} capturedAt - result開始時刻
+ * @returns {object|null} marker evidence、またはnull
+ */
+function createOperatorMarkerEvidence(marker, capturedAt) {
+  const value = toNonEmptyString(marker);
+  if (!value) {
+    return null;
+  }
+  return {
+    source: "operator-cli",
+    value,
+    capturedAt,
+  };
 }
 
 /**
@@ -753,6 +975,103 @@ function summarizeProbeAttempts(probes) {
 }
 
 /**
+ * target source比較用の小さなsnapshotを生成する。
+ *
+ * 【詳細説明】
+ * - raw `boxsInfo` 全体はprobe evidenceへ残るため、ここではレビューで見たいslot状態だけを抜き出す。
+ * - source固有の使用/選択/残量変化を追う目的なので、box温湿度などsource外の値は含めない。
+ *
+ * @private
+ * @function createComparableTargetSourceSnapshot
+ * @param {object|null|undefined} source - summary内のtarget source
+ * @returns {object|null} 比較用snapshot
+ */
+function createComparableTargetSourceSnapshot(source) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  return {
+    sourceId: source.sourceId,
+    presence: source.presence,
+    stateCode: source.stateCode,
+    selected: Boolean(source.selected),
+    percent: source.percent,
+    materialType: source.materialType,
+    materialName: source.materialName,
+    color: source.color,
+    rfidPresent: Boolean(source.rfidPresent),
+  };
+}
+
+/**
+ * 最後に観測できたafter probeを取得する。
+ *
+ * @private
+ * @function findLastObservedAfterProbe
+ * @param {Array<object>} afterSeries - after probe配列
+ * @returns {object|null} 最後のobserved probe
+ */
+function findLastObservedAfterProbe(afterSeries) {
+  for (let index = (afterSeries || []).length - 1; index >= 0; index -= 1) {
+    if (afterSeries[index]?.status === "observed") {
+      return afterSeries[index];
+    }
+  }
+  return null;
+}
+
+/**
+ * command前後のtarget source差分を生成する。
+ *
+ * 【詳細説明】
+ * - post-command telemetryは物理成功の証明ではないが、対象sourceの変化をreviewer/operatorが追えるようにする。
+ * - beforeまたはafterが欠ける場合も `observed:false` とreasonで返し、JSON shapeを安定させる。
+ *
+ * @private
+ * @function createTargetSourceDelta
+ * @param {object|null|undefined} beforeProbe - before probe result
+ * @param {object|null|undefined} afterProbe - after probe result
+ * @param {string} sourceId - 操作対象source id
+ * @returns {object} target source差分summary
+ */
+function createTargetSourceDelta(beforeProbe, afterProbe, sourceId) {
+  const before = createComparableTargetSourceSnapshot(beforeProbe?.summary?.targetSource);
+  const after = createComparableTargetSourceSnapshot(afterProbe?.summary?.targetSource);
+  if (!before || !after) {
+    return {
+      sourceId,
+      observed: false,
+      beforeProbe: beforeProbe?.probeMode || null,
+      afterProbe: afterProbe?.probeMode || null,
+      before,
+      after,
+      changedFields: [],
+      reason: before ? "after-target-source-missing" : "before-target-source-missing",
+    };
+  }
+  const comparableFields = [
+    "presence",
+    "stateCode",
+    "selected",
+    "percent",
+    "materialType",
+    "materialName",
+    "color",
+    "rfidPresent",
+  ];
+  const changedFields = comparableFields.filter((field) => before[field] !== after[field]);
+  return {
+    sourceId,
+    observed: true,
+    beforeProbe: beforeProbe?.probeMode || null,
+    afterProbe: afterProbe?.probeMode || null,
+    before,
+    after,
+    changedFields,
+  };
+}
+
+/**
  * WebSocket message payloadをJSON候補として解析する。
  *
  * 【詳細説明】
@@ -1064,6 +1383,7 @@ export async function runK2CfsSlotControlCertification(options) {
   });
   const startedAt = new Date().toISOString();
   const startedAtMs = Date.now();
+  const operatorMarker = createOperatorMarkerEvidence(options.operatorMarker, startedAt);
   if (!plan.ok) {
     return finalizeCertificationResult({
       ok: false,
@@ -1104,7 +1424,42 @@ export async function runK2CfsSlotControlCertification(options) {
         after: null,
         afterSeries: [],
       },
+      printerInfo: null,
+      operatorMarker,
+      targetSourceDelta: null,
     }, options);
+  }
+  let printerInfo = null;
+  if (options.probeInfo || toNonEmptyString(options.requireInfoModel)) {
+    printerInfo = await fetchPrinterInfoEvidence(options);
+    const printerInfoValidation = validatePrinterInfoRequirement(printerInfo, options.requireInfoModel);
+    if (!printerInfoValidation.ok) {
+      return finalizeCertificationResult({
+        ok: false,
+        sent: false,
+        dryRun: false,
+        status: "rejected",
+        reason: printerInfoValidation.reason,
+        blindRetryAllowed: false,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedAtMs,
+        host: options.host,
+        wsPort: options.wsPort,
+        request,
+        plan,
+        probePlan: createProbePlanSummary(options),
+        response: null,
+        probes: {
+          before: null,
+          after: null,
+          afterSeries: [],
+        },
+        printerInfo,
+        operatorMarker,
+        targetSourceDelta: null,
+      }, options);
+    }
   }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
   try {
@@ -1137,6 +1492,10 @@ export async function runK2CfsSlotControlCertification(options) {
           probePlan: createProbePlanSummary(options),
           response: null,
           probes,
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta: null,
+          ...summarizeProbeAttempts(probes),
         }, options);
       }
       const preCommandValidation = validatePreCommandProbeSummary(
@@ -1161,6 +1520,9 @@ export async function runK2CfsSlotControlCertification(options) {
           probePlan: createProbePlanSummary(options),
           response: null,
           probes,
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta: null,
           ...summarizeProbeAttempts(probes),
         }, options);
       }
@@ -1191,9 +1553,13 @@ export async function runK2CfsSlotControlCertification(options) {
         probePlan: createProbePlanSummary(options),
         response: null,
         probes,
+        printerInfo,
+        operatorMarker,
+        targetSourceDelta: null,
         error: serializeCertificationError(error),
       }, options);
     }
+    let targetSourceDelta = null;
     if (options.probeAfter) {
       await delayMs(options.postCommandProbeDelayMs);
       let lastAfterProbe = null;
@@ -1212,6 +1578,11 @@ export async function runK2CfsSlotControlCertification(options) {
         }
         lastAfterProbe = probe;
       }
+      targetSourceDelta = createTargetSourceDelta(
+        probes.before,
+        findLastObservedAfterProbe(probes.afterSeries),
+        request.payload.sourceId
+      );
       if (lastAfterProbe?.status !== "observed") {
         return finalizeCertificationResult({
           ok: false,
@@ -1230,6 +1601,9 @@ export async function runK2CfsSlotControlCertification(options) {
           probePlan: createProbePlanSummary(options),
           response,
           probes,
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta,
           ...summarizeProbeAttempts(probes),
         }, options);
       }
@@ -1254,6 +1628,9 @@ export async function runK2CfsSlotControlCertification(options) {
       probePlan: createProbePlanSummary(options),
       response,
       probes,
+      printerInfo,
+      operatorMarker,
+      targetSourceDelta,
       ...summarizeProbeAttempts(probes),
     }, options);
   } finally {
