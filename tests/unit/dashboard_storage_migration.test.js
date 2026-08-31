@@ -949,6 +949,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     });
 
     expect(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
+    expect(monitorData.physicalCommandRecoveryLatch.conflictedCommandIds).toEqual(["command:k2-load-1a"]);
     expect(monitorData.physicalCommandRecoveryLatch.retainedUnsupportedEntries).toEqual([
       expect.objectContaining({
         commandId: "command:k2-load-1a",

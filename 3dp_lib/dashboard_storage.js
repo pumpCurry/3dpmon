@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1540 (PR #439)
+ * @version 1.390.1543 (PR #439)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 18:41:08
+ * @lastModified 2026-08-31 19:10:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -244,6 +244,10 @@ function _mergePhysicalCommandRecoveryLatchStore(incomingStore) {
   );
   const restoredStore = normalizeStoredPhysicalCommandRecoveryLatchStore(incomingStore);
   const unresolvedByCommandId = { ...currentStore.unresolvedByCommandId };
+  const conflictedCommandIds = new Set([
+    ...(currentStore.conflictedCommandIds || []),
+    ...(restoredStore.conflictedCommandIds || []),
+  ]);
   const retainedUnsupportedEntries = [
     ...(currentStore.retainedUnsupportedEntries || []),
     ...(restoredStore.retainedUnsupportedEntries || []),
@@ -257,6 +261,7 @@ function _mergePhysicalCommandRecoveryLatchStore(incomingStore) {
     }
     if (existing.digest !== record.digest) {
       delete unresolvedByCommandId[commandId];
+      conflictedCommandIds.add(commandId);
       retainedUnsupportedEntries.push({
         commandId,
         reason: "command-id-digest-conflict",
@@ -289,6 +294,7 @@ function _mergePhysicalCommandRecoveryLatchStore(incomingStore) {
     schemaVersion: 1,
     authority: "physical-command-recovery-latch",
     unresolvedByCommandId,
+    conflictedCommandIds: [...conflictedCommandIds].sort(),
     events,
     retainedUnsupportedEntries,
     invariants: {

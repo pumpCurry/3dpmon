@@ -18,9 +18,9 @@
  * - {@link appendPhysicalCommandRecoveryLatchRecord}：未解決候補recordをstoreへ冪等追加
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1540 (PR #439)
+ * @version 1.390.1543 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 18:41:08
+ * @lastModified 2026-08-31 19:10:36
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
@@ -266,6 +266,7 @@ function createEmptyStore() {
     schemaVersion: PHYSICAL_COMMAND_RECOVERY_LATCH_SCHEMA_VERSION,
     authority: "physical-command-recovery-latch",
     unresolvedByCommandId: {},
+    conflictedCommandIds: [],
     events: [],
     retainedUnsupportedEntries: [],
     invariants: {
@@ -274,6 +275,41 @@ function createEmptyStore() {
       physicalCommandAuthority: "recovery-latch-only",
     },
   };
+}
+
+/**
+ * 復旧ラッチstoreのconflict command ID索引を正規化する。
+ *
+ * 【詳細説明】
+ * - `retainedUnsupportedEntries` は監査ログ、`conflictedCommandIds` はUI/dispatcherが即座にhard blockを判断する索引として分ける。
+ * - 旧storeに索引が無い場合でも、retained側の `command-id-digest-conflict` から復元する。
+ *
+ * @private
+ * @function normalizeConflictedCommandIds
+ * @param {*} value - 保存済みconflictedCommandIds候補。
+ * @param {Array<Object>} retainedUnsupportedEntries - 正規化済みretained entries。
+ * @returns {Array<string>} 重複排除済みcommandId一覧。
+ */
+function normalizeConflictedCommandIds(value, retainedUnsupportedEntries) {
+  const ids = new Set();
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const commandId = toTrimmedString(entry);
+      if (commandId) {
+        ids.add(commandId);
+      }
+    }
+  }
+  for (const entry of retainedUnsupportedEntries || []) {
+    if (entry?.reason !== "command-id-digest-conflict") {
+      continue;
+    }
+    const commandId = toTrimmedString(entry.commandId);
+    if (commandId) {
+      ids.add(commandId);
+    }
+  }
+  return [...ids].sort();
 }
 
 /**
@@ -404,6 +440,10 @@ export function normalizeStoredPhysicalCommandRecoveryLatchStore(input) {
   const retainedUnsupportedEntries = Array.isArray(input.retainedUnsupportedEntries)
     ? sanitizeAuditValue(cloneJsonValue(input.retainedUnsupportedEntries))
     : [];
+  const conflictedCommandIds = normalizeConflictedCommandIds(
+    input.conflictedCommandIds,
+    retainedUnsupportedEntries
+  );
   const sourceEntries = input.unresolvedByCommandId && typeof input.unresolvedByCommandId === "object"
     && !Array.isArray(input.unresolvedByCommandId)
     ? Object.entries(input.unresolvedByCommandId)
@@ -449,6 +489,7 @@ export function normalizeStoredPhysicalCommandRecoveryLatchStore(input) {
   return deepFreezeJson({
     ...emptyStore,
     unresolvedByCommandId,
+    conflictedCommandIds,
     events,
     retainedUnsupportedEntries,
   });
@@ -484,6 +525,7 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
 
   const record = validation.record;
   const unresolvedByCommandId = { ...store.unresolvedByCommandId };
+  const conflictedCommandIds = new Set(store.conflictedCommandIds || []);
   const events = [...store.events];
   const retainedUnsupportedEntries = [...store.retainedUnsupportedEntries];
 
@@ -504,6 +546,7 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
       store: {
         ...createEmptyStore(),
         unresolvedByCommandId,
+        conflictedCommandIds: [...conflictedCommandIds].sort(),
         events,
         retainedUnsupportedEntries,
       },
@@ -524,6 +567,7 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
       });
     }
     delete unresolvedByCommandId[record.commandId];
+    conflictedCommandIds.add(record.commandId);
     retainedUnsupportedEntries.push({
       commandId: record.commandId,
       reason: "command-id-digest-conflict",
@@ -542,6 +586,7 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
       store: {
         ...createEmptyStore(),
         unresolvedByCommandId,
+        conflictedCommandIds: [...conflictedCommandIds].sort(),
         events,
         retainedUnsupportedEntries,
       },
@@ -572,6 +617,7 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
     store: {
       ...createEmptyStore(),
       unresolvedByCommandId,
+      conflictedCommandIds: [...conflictedCommandIds].sort(),
       events,
       retainedUnsupportedEntries,
     },
@@ -663,6 +709,7 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
     store: {
       ...createEmptyStore(),
       unresolvedByCommandId,
+      conflictedCommandIds: [...(store.conflictedCommandIds || [])],
       events: [...store.events, event],
       retainedUnsupportedEntries: [...store.retainedUnsupportedEntries],
     },

@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1543 (PR #439)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 19:40:00
+ * @lastModified 2026-08-31 19:10:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -431,12 +431,13 @@ export const monitorData = {
    * CFS select/load/unloadなど物理状態を変えるコマンドがsubmitted/post-observed/unknownで終わった場合に、
    * 再起動後も「確認が必要な未解決証跡」として保持する。command frameやRPC payloadは保存せず、
    * 自動再送も絶対に行わない。
-   * @type {{schemaVersion:number, authority:string, unresolvedByCommandId:Object.<string, Object>, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   * @type {{schemaVersion:number, authority:string, unresolvedByCommandId:Object.<string, Object>, conflictedCommandIds:Array<string>, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
    */
   physicalCommandRecoveryLatch: {
     schemaVersion: 1,
     authority: "physical-command-recovery-latch",
     unresolvedByCommandId: {},
+    conflictedCommandIds: [],
     events: [],
     retainedUnsupportedEntries: [],
     invariants: {

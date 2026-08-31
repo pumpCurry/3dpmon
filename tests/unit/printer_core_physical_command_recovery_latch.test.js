@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1540 (PR #439)
+ * @version 1.390.1543 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 18:41:08
+ * @lastModified 2026-08-31 19:10:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -150,6 +150,7 @@ describe("dashboard_physical_command_recovery_latch", () => {
     expect(duplicate.status).toBe("idempotent");
     expect(conflict.status).toBe("conflict");
     expect(conflict.store.unresolvedByCommandId).toEqual({});
+    expect(conflict.store.conflictedCommandIds).toEqual(["command:k2-select-1a"]);
     expect(conflict.store.retainedUnsupportedEntries).toEqual([
       expect.objectContaining({
         commandId: "command:k2-select-1a",
@@ -178,6 +179,7 @@ describe("dashboard_physical_command_recovery_latch", () => {
     });
 
     expect(restored.unresolvedByCommandId).toEqual({});
+    expect(restored.conflictedCommandIds).toEqual([]);
     expect(restored.retainedUnsupportedEntries).toEqual([
       expect.objectContaining({
         commandId: "command:valid",
