@@ -16,9 +16,9 @@
  * - {@link parseArgs}：CLI引数を解析
  * - {@link runK2CfsReadOnlyCalibration}：read-only calibrationを実行
  *
- * @version 1.390.1547 (PR #439)
+ * @version 1.390.1551 (PR #439)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:42:52
+ * @lastModified 2026-08-31 19:51:15
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -470,6 +470,36 @@ async function writeCalibrationEvidence(result, outputDir) {
 }
 
 /**
+ * calibration evidenceを保存し、失敗時も観測resultを保持する。
+ *
+ * 【詳細説明】
+ * - 実機calibrationでは通信観測そのものが最重要証跡になる。
+ * - 保存先pathや権限の問題でJSON保存に失敗しても、観測済みstatus/boxsInfo/timelineを呼び出し側へ返す。
+ * - 失敗は `evidenceWriteFailed` と `evidence.written=false` で明示し、正常保存と混同しない。
+ *
+ * @private
+ * @function attachCalibrationEvidence
+ * @param {object} result - calibration result
+ * @param {string} outputDir - 保存先root
+ * @returns {Promise<object>} evidence情報を付与したcalibration result
+ */
+async function attachCalibrationEvidence(result, outputDir) {
+  try {
+    result.evidence = await writeCalibrationEvidence(result, outputDir);
+  } catch (error) {
+    result.evidenceWriteFailed = true;
+    result.evidence = {
+      written: false,
+      reason: "evidence-write-failed",
+      directory: path.resolve(outputDir),
+      files: ["readonly-calibration-result.json"],
+      error: { message: error?.message || String(error) },
+    };
+  }
+  return result;
+}
+
+/**
  * K2 CFS read-only calibrationを実行する。
  *
  * 【詳細説明】
@@ -536,7 +566,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
       error: { message: error?.message || String(error) },
     };
     if (toNonEmptyString(options.outputDir)) {
-      result.evidence = await writeCalibrationEvidence(result, options.outputDir);
+      await attachCalibrationEvidence(result, options.outputDir);
     }
     return result;
   } finally {
@@ -576,7 +606,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
     failedBoxsInfoProbeCount,
   };
   if (toNonEmptyString(options.outputDir)) {
-    result.evidence = await writeCalibrationEvidence(result, options.outputDir);
+    await attachCalibrationEvidence(result, options.outputDir);
   }
   return result;
 }

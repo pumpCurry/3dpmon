@@ -4,13 +4,13 @@
  * - K2/F012 live certification前に、/info、printer status、boxsInfoを副作用なしで観測することを検証する。
  * - read-only calibrationがCFS操作frameを送らず、複数probe結果をJSONへ保持することを検証する。
  *
- * @version 1.390.1547 (PR #439)
+ * @version 1.390.1551 (PR #439)
  * @since 1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:39:05
+ * @lastModified 2026-08-31 19:51:15
  */
 
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -342,6 +342,69 @@ describe("capture_k2_cfs_readonly_calibration", () => {
       });
     } finally {
       await rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("evidence書き込みに失敗しても観測済みcalibration resultは返す", async () => {
+    class CalibrationWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ state: 0, deviceState: 0 }));
+          }, 1);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ boxsInfo: { materialBoxs: [] } }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+    const outputRoot = path.join(os.tmpdir(), `3dpmon-k2-cfs-readonly-file-${Date.now()}.json`);
+    await writeFile(outputRoot, "not a directory", "utf8");
+    try {
+      const result = await runK2CfsReadOnlyCalibration({
+        ...parseArgs([
+          "--host",
+          "192.168.54.153",
+          "--status-probe-count",
+          "1",
+          "--boxsinfo-probe-count",
+          "1",
+          "--output-dir",
+          outputRoot,
+        ]),
+        fetchInfo: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({ model: "F012", version: "1.0.0" }),
+        }),
+        openWs: async () => new CalibrationWs(),
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        sent: false,
+        evidenceWriteFailed: true,
+        evidence: {
+          written: false,
+          reason: "evidence-write-failed",
+        },
+      });
+      expect(result.printerStatusSeries).toHaveLength(1);
+      expect(result.boxsInfoSeries).toHaveLength(1);
+      expect(result.evidence.error.message).toEqual(expect.any(String));
+    } finally {
+      await rm(outputRoot, { force: true });
     }
   });
 });
