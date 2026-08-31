@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1541 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:38:00
+ * @lastModified 2026-08-31 18:53:54
  */
 
 import { EventEmitter } from "node:events";
@@ -63,7 +63,9 @@ describe("capture_k2_cfs_slot_control", () => {
       after: false,
       info: false,
       requireInfoModel: null,
+      requirePrinterIdle: false,
       boxsInfoTimeoutMs: 5000,
+      printerStatusTimeoutMs: 5000,
       infoTimeoutMs: 5000,
       postCommandProbeDelayMs: 1500,
       postCommandProbeCount: 6,
@@ -180,6 +182,9 @@ describe("capture_k2_cfs_slot_control", () => {
       "F012",
       "--operator-marker",
       "observed-cfs-load-motion",
+      "--require-printer-idle",
+      "--printer-status-timeout-ms",
+      "2500",
     ])).toMatchObject({
       send: true,
       confirmLive: true,
@@ -190,7 +195,9 @@ describe("capture_k2_cfs_slot_control", () => {
       probeInfo: true,
       requireInfoModel: "F012",
       operatorMarker: "observed-cfs-load-motion",
+      requirePrinterIdle: true,
       boxsInfoTimeoutMs: 1500,
+      printerStatusTimeoutMs: 2500,
       postCommandProbeDelayMs: 1500,
       postCommandProbeCount: 6,
       postCommandProbeIntervalMs: 5000,
@@ -215,7 +222,9 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(liveDefault).toMatchObject({
       probeBefore: true,
       probeAfter: true,
+      requirePrinterIdle: false,
       boxsInfoTimeoutMs: 5000,
+      printerStatusTimeoutMs: 5000,
       postCommandProbeDelayMs: 1500,
       postCommandProbeCount: 6,
       postCommandProbeIntervalMs: 5000,
@@ -317,6 +326,98 @@ describe("capture_k2_cfs_slot_control", () => {
       reason: "live-certification-probes-required",
       blindRetryAllowed: false,
     });
+  });
+
+  it("--require-printer-idle指定時は印刷活動中のK2へCFS操作frameを送らない", async () => {
+    class ActivePrinterStatusWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.state === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              state: 2,
+              deviceState: 0,
+              printProgress: 100,
+              printJobTime: 613,
+              printLeftTime: 0,
+              printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new ActivePrinterStatusWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--require-printer-idle",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-printer-not-idle",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "observed",
+        summary: {
+          idle: false,
+          active: true,
+          state: 2,
+          printJobTime: 613,
+        },
+      },
+      response: null,
+    });
+    expect(ws.sentFrames).toEqual([
+      {
+        method: "get",
+        params: {
+          state: 1,
+          deviceState: 1,
+          printProgress: 1,
+          printJobTime: 1,
+          printLeftTime: 1,
+          printFileName: 1,
+          fileName: 1,
+          printId: 1,
+          targetNozzleTemp: 1,
+          targetBedTemp0: 1,
+        },
+      },
+    ]);
+    expect(ws.closed).toBe(true);
   });
 
   it("unsupported commandはdry-run段階で拒否する", () => {

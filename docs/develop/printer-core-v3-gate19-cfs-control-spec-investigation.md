@@ -159,6 +159,9 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - live送信では必要に応じて `--probe-info --require-info-model F012` を併用し、WS9999接続前に
   `http://<host>/info` のmodel/version/transport hintをcertification resultへ保存する。
   `/info` のMACは有線/無線で一致しないことがあるためidentity authorityにはしないが、F012実機へ送っている証跡として扱う。
+- live送信では `--require-printer-idle` を併用し、WS9999のread-only `get` で `state` / `deviceState` /
+  `printJobTime` / `printLeftTime` / target温度を確認する。プリンタ本体が印刷/加熱/前ジョブ残存を示す場合は、
+  `pre-command-printer-not-idle` としてCFS操作frameを送らない。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
@@ -240,6 +243,7 @@ live certificationは次の順で進める。
      --probe-after \
      --probe-info \
      --require-info-model F012 \
+     --require-printer-idle \
      --operator-marker observed-cfs-load-motion \
      --probe-after-delay-ms 1500 \
      --probe-after-count 6 \
@@ -267,6 +271,10 @@ live certificationは次の順で進める。
    status:"rejected" / reason:"pre-command-observation-failed"
      → command送信前のboxsInfo観測に失敗したため、CFS操作frameは送られていない。
 
+   status:"rejected" / reason:"pre-command-printer-not-idle"
+     → command送信前のprinter status観測で、state/deviceState/job time/target温度のいずれかが
+       印刷・加熱・前ジョブ残存を示したため、CFS操作frameは送られていない。
+
    status:"unknown" / reason:"post-command-observation-failed"
      → command frameは送信済みだが、送信後のboxsInfo観測がtimeout/errorになった。
        物理side-effect有無が不明なので、blind retryせず人間がCFSとプリンタ画面を確認する。
@@ -274,10 +282,12 @@ live certificationは次の順で進める。
 
    `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
    dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
-   `probePlan` には `info`、`requireInfoModel`、`boxsInfoTimeoutMs`、`infoTimeoutMs`、`postCommandProbeDelayMs`、`postCommandProbeCount`、
+   `probePlan` には `info`、`requireInfoModel`、`requirePrinterIdle`、`boxsInfoTimeoutMs`、
+   `printerStatusTimeoutMs`、`infoTimeoutMs`、`postCommandProbeDelayMs`、`postCommandProbeCount`、
    `postCommandProbeIntervalMs` を保存するため、後から
    「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
    `printerInfo` には `/info` のmodel/version/port hintと観測時刻、期待modelとの一致結果を保存する。
+   `printerStatus` には送信前のread-only status probe結果を保存し、`idle:false` の場合は送信前rejectの根拠として扱う。
    `targetSourceDelta` には対象sourceのpresence/stateCode/selected/percent/material/color/RFID有無の前後差分を保存する。
    `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
 

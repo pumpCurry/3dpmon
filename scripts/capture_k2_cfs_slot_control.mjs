@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1541 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 19:43:00
+ * @lastModified 2026-08-31 18:53:54
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -67,8 +67,10 @@ Options:
   --probe-after                   Required with --send. Read boxsInfo after the command.
   --probe-info                    With --send, read http://<host>/info before opening WS9999.
   --require-info-model <model>     With --send, reject unless /info.model exactly matches this value.
+  --require-printer-idle           With --send, reject unless read-only printer status shows idle before CFS motion.
   --operator-marker <text>         Add an operator observation marker to the certification result.
   --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
+  --printer-status-timeout-ms <number> Printer status probe timeout. Default: 5000.
   --info-timeout-ms <number>       /info response timeout. Default: 5000.
   --probe-after-delay-ms <number>  Delay before post-command probe. Default: 1500.
   --probe-after-count <number>     Number of post-command probes. Default: 6.
@@ -119,6 +121,39 @@ const LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS = Object.freeze(new Set([
  * @constant {number}
  */
 const DEFAULT_BOXSINFO_TIMEOUT_MS = 5000;
+
+/**
+ * printer status probe の既定待ち時間。
+ *
+ * 【詳細説明】
+ * - CFS物理操作の直前にK2本体が印刷/加熱/ジョブ中ではないことを確認するためのread-only timeout。
+ * - 実機が応答しない場合は送信せずfail-closedに倒すため、boxsInfoと同じ5秒にする。
+ *
+ * @constant {number}
+ */
+const DEFAULT_PRINTER_STATUS_TIMEOUT_MS = 5000;
+
+/**
+ * K2 printer status probeで取得するroot scalar一覧。
+ *
+ * 【詳細説明】
+ * - `state`/`deviceState`/時間/target温度を保守的なidle判定に使う。
+ * - `printProgress`はidle時に0または100のstale値を返し得るため、単独ではactive根拠にしない。
+ *
+ * @constant {ReadonlyArray<string>}
+ */
+const PRINTER_STATUS_KEYS = Object.freeze([
+  "state",
+  "deviceState",
+  "printProgress",
+  "printJobTime",
+  "printLeftTime",
+  "printFileName",
+  "fileName",
+  "printId",
+  "targetNozzleTemp",
+  "targetBedTemp0",
+]);
 
 /**
  * `/info` probe の既定待ち時間。
@@ -204,8 +239,10 @@ export function parseArgs(argv = []) {
     probeAfter: false,
     probeInfo: false,
     requireInfoModel: "",
+    requirePrinterIdle: false,
     operatorMarker: "",
     boxsInfoTimeoutMs: DEFAULT_BOXSINFO_TIMEOUT_MS,
+    printerStatusTimeoutMs: DEFAULT_PRINTER_STATUS_TIMEOUT_MS,
     infoTimeoutMs: DEFAULT_INFO_TIMEOUT_MS,
     postCommandProbeDelayMs: DEFAULT_POST_COMMAND_PROBE_DELAY_MS,
     postCommandProbeCount: DEFAULT_POST_COMMAND_PROBE_COUNT,
@@ -235,12 +272,14 @@ export function parseArgs(argv = []) {
     else if (arg === "--probe-before") options.probeBefore = true;
     else if (arg === "--probe-after") options.probeAfter = true;
     else if (arg === "--probe-info") options.probeInfo = true;
+    else if (arg === "--require-printer-idle") options.requirePrinterIdle = true;
     else if (arg === "--require-info-model") {
       options.requireInfoModel = next();
       options.probeInfo = true;
     }
     else if (arg === "--operator-marker") options.operatorMarker = next();
     else if (arg === "--boxsinfo-timeout-ms") options.boxsInfoTimeoutMs = Number(next());
+    else if (arg === "--printer-status-timeout-ms") options.printerStatusTimeoutMs = Number(next());
     else if (arg === "--info-timeout-ms") options.infoTimeoutMs = Number(next());
     else if (arg === "--probe-after-delay-ms") options.postCommandProbeDelayMs = Number(next());
     else if (arg === "--probe-after-count") options.postCommandProbeCount = Number(next());
@@ -256,6 +295,11 @@ export function parseArgs(argv = []) {
       options.boxsInfoTimeoutMs < 1000 ||
       options.boxsInfoTimeoutMs > 60000) {
     throw new Error("--boxsinfo-timeout-ms must be between 1000 and 60000.");
+  }
+  if (!Number.isInteger(options.printerStatusTimeoutMs) ||
+      options.printerStatusTimeoutMs < 1000 ||
+      options.printerStatusTimeoutMs > 60000) {
+    throw new Error("--printer-status-timeout-ms must be between 1000 and 60000.");
   }
   if (!Number.isInteger(options.infoTimeoutMs) ||
       options.infoTimeoutMs < 1000 ||
@@ -349,7 +393,9 @@ function createProbePlanSummary(options) {
     after: Boolean(options.probeAfter),
     info: Boolean(options.probeInfo || toNonEmptyString(options.requireInfoModel)),
     requireInfoModel: toNonEmptyString(options.requireInfoModel) || null,
+    requirePrinterIdle: Boolean(options.requirePrinterIdle),
     boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
+    printerStatusTimeoutMs: options.printerStatusTimeoutMs,
     infoTimeoutMs: options.infoTimeoutMs,
     postCommandProbeDelayMs: options.postCommandProbeDelayMs,
     postCommandProbeCount: options.postCommandProbeCount,
@@ -1093,6 +1139,99 @@ function parseJsonMessage(data) {
 }
 
 /**
+ * WebSocket payloadからprinter status scalar候補を取り出す。
+ *
+ * 【詳細説明】
+ * - K2はroot直下、`params`、`data`、`result`のいずれかへ状態値を返す可能性があるため、
+ *   shallow envelopeだけを順番に調べる。
+ * - printer status probeはCFS操作前の安全確認専用なので、`boxsInfo`だけの応答は採用しない。
+ *
+ * @private
+ * @function extractPrinterStatusPayload
+ * @param {object|null|undefined} payload - JSON parse済みWS payload
+ * @returns {object|null} status scalarを含むpayload、またはnull
+ */
+function extractPrinterStatusPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const candidates = [payload, payload.params, payload.data, payload.result]
+    .filter((candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate));
+  for (const candidate of candidates) {
+    const status = {};
+    for (const key of PRINTER_STATUS_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(candidate, key)) {
+        status[key] = candidate[key];
+      }
+    }
+    if (Object.keys(status).length > 0) {
+      return status;
+    }
+  }
+  return null;
+}
+
+/**
+ * 任意値を有限数へ正規化する。
+ *
+ * @private
+ * @function toFiniteNumberOrNull
+ * @param {*} value - 数値候補
+ * @returns {number|null} 有限数、またはnull
+ */
+function toFiniteNumberOrNull(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+/**
+ * printer status scalarから保守的なidle summaryを生成する。
+ *
+ * 【詳細説明】
+ * - CFS物理操作の直前guardなので、不明値を成功根拠には使わない。
+ * - `printProgress`はidle時にも0/100のstale値があり得るため、単独ではactive判定に使わない。
+ * - `state/deviceState`、ジョブ時間、残り時間、target温度のいずれかが活動を示す場合はidleではない。
+ *
+ * @private
+ * @function summarizePrinterStatusPayload
+ * @param {object} statusPayload - printer status scalar
+ * @returns {object} idle判定summary
+ */
+function summarizePrinterStatusPayload(statusPayload) {
+  const state = toFiniteNumberOrNull(statusPayload?.state);
+  const deviceState = toFiniteNumberOrNull(statusPayload?.deviceState);
+  const printProgress = toFiniteNumberOrNull(statusPayload?.printProgress);
+  const printJobTime = toFiniteNumberOrNull(statusPayload?.printJobTime);
+  const printLeftTime = toFiniteNumberOrNull(statusPayload?.printLeftTime);
+  const targetNozzleTemp = toFiniteNumberOrNull(statusPayload?.targetNozzleTemp);
+  const targetBedTemp0 = toFiniteNumberOrNull(statusPayload?.targetBedTemp0);
+  const printFileName = toNonEmptyString(statusPayload?.printFileName) ||
+    toNonEmptyString(statusPayload?.fileName);
+  const printId = toNonEmptyString(statusPayload?.printId);
+  const active = state !== 0 ||
+    deviceState !== 0 ||
+    (printJobTime !== null && printJobTime > 0) ||
+    (printLeftTime !== null && printLeftTime > 0) ||
+    (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
+    (targetBedTemp0 !== null && targetBedTemp0 > 0);
+  const hasCoreState = state !== null && deviceState !== null;
+  return {
+    observed: true,
+    idle: hasCoreState && !active,
+    active,
+    state,
+    deviceState,
+    printProgress,
+    printJobTime,
+    printLeftTime,
+    targetNozzleTemp,
+    targetBedTemp0,
+    printFileName,
+    printId,
+  };
+}
+
+/**
  * WebSocketを開く。
  *
  * 【詳細説明】
@@ -1118,6 +1257,83 @@ function openWs(host, port) {
     ws.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
+    });
+  });
+}
+
+/**
+ * read-only printer status probeを送信し、応答を待つ。
+ *
+ * 【詳細説明】
+ * - CFS load/unloadなどの物理操作前に、K2本体が印刷/加熱/ジョブ中ではないことを確認する。
+ * - 送るframeはroot scalar取得だけで、CFS操作や印刷開始は含めない。
+ * - timeout/error時は呼び出し側で送信前rejectへ変換する。
+ *
+ * @function sendPrinterStatusProbeAndWait
+ * @param {WebSocket} ws - OPEN済みWebSocket
+ * @param {object=} options - probe option
+ * @param {string=} options.probeMode - 観測ラベル
+ * @param {number=} options.timeoutMs - 応答待ちtimeout
+ * @returns {Promise<object>} printer status観測結果
+ */
+export function sendPrinterStatusProbeAndWait(ws, options = {}) {
+  const timeoutMs = options.timeoutMs || DEFAULT_PRINTER_STATUS_TIMEOUT_MS;
+  const probeMode = toNonEmptyString(options.probeMode) || "printer-status";
+  const request = {
+    method: "get",
+    params: Object.fromEntries(PRINTER_STATUS_KEYS.map((key) => [key, 1])),
+  };
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      if (typeof ws.off === "function") {
+        ws.off("message", handleMessage);
+        ws.off("error", handleError);
+      } else if (typeof ws.removeListener === "function") {
+        ws.removeListener("message", handleMessage);
+        ws.removeListener("error", handleError);
+      }
+      clearTimeout(timer);
+    };
+    const settle = (fn, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const handleError = (error) => {
+      settle(reject, error);
+    };
+    const handleMessage = (data) => {
+      const payload = parseJsonMessage(data);
+      const statusPayload = extractPrinterStatusPayload(payload);
+      if (!statusPayload) {
+        return;
+      }
+      settle(resolve, {
+        status: "observed",
+        probeMode,
+        observedAt: new Date().toISOString(),
+        elapsedMs: Date.now() - startedAt,
+        request,
+        summary: summarizePrinterStatusPayload(statusPayload),
+        payload,
+      });
+    };
+    const timer = setTimeout(() => {
+      settle(reject, new Error(`printer status probe timeout after ${timeoutMs}ms.`));
+    }, timeoutMs);
+    if (typeof ws.on === "function") {
+      ws.on("message", handleMessage);
+      ws.on("error", handleError);
+    }
+    ws.send(JSON.stringify(request), (error) => {
+      if (error) {
+        settle(reject, error);
+      }
     });
   });
 }
@@ -1275,6 +1491,43 @@ async function runStructuredBoxsInfoProbe(ws, options) {
       elapsedMs: null,
       request: { method: "get", params: { boxsInfo: 1 } },
       evidence: null,
+      message: summary.message,
+      error: summary,
+    };
+  }
+}
+
+/**
+ * printer status probeを実行し、失敗も構造化resultとして返す。
+ *
+ * 【詳細説明】
+ * - `--require-printer-idle` の送信前guardで利用する。
+ * - timeout/error時はCFS操作を送らず、result JSONへ失敗理由を残す。
+ *
+ * @private
+ * @function runStructuredPrinterStatusProbe
+ * @param {WebSocket} ws - OPEN済みWebSocket
+ * @param {object} options - probe option
+ * @param {string} options.probeMode - 観測ラベル
+ * @param {number} options.timeoutMs - 応答待ちtimeout
+ * @returns {Promise<object>} observed/timeout/errorのprinter status probe result
+ */
+async function runStructuredPrinterStatusProbe(ws, options) {
+  try {
+    return await sendPrinterStatusProbeAndWait(ws, options);
+  } catch (error) {
+    const summary = serializeCertificationError(error);
+    return {
+      status: summary.message.includes("timeout") ? "timeout" : "error",
+      probeMode: toNonEmptyString(options?.probeMode) || "printer-status",
+      observedAt: null,
+      completedAt: new Date().toISOString(),
+      elapsedMs: null,
+      request: {
+        method: "get",
+        params: Object.fromEntries(PRINTER_STATUS_KEYS.map((key) => [key, 1])),
+      },
+      summary: null,
       message: summary.message,
       error: summary,
     };
@@ -1463,6 +1716,69 @@ export async function runK2CfsSlotControlCertification(options) {
   }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
   try {
+    let printerStatus = null;
+    if (options.requirePrinterIdle === true) {
+      printerStatus = await runStructuredPrinterStatusProbe(ws, {
+        probeMode: "pre-command-printer-status",
+        timeoutMs: options.printerStatusTimeoutMs,
+      });
+      if (printerStatus.status !== "observed") {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: false,
+          dryRun: false,
+          status: "rejected",
+          reason: "pre-command-printer-status-observation-failed",
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          probePlan: createProbePlanSummary(options),
+          response: null,
+          printerStatus,
+          probes: {
+            before: null,
+            after: null,
+            afterSeries: [],
+          },
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta: null,
+        }, options);
+      }
+      if (printerStatus.summary?.idle !== true) {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: false,
+          dryRun: false,
+          status: "rejected",
+          reason: "pre-command-printer-not-idle",
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          probePlan: createProbePlanSummary(options),
+          response: null,
+          printerStatus,
+          probes: {
+            before: null,
+            after: null,
+            afterSeries: [],
+          },
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta: null,
+        }, options);
+      }
+    }
     const probes = {
       before: null,
       after: null,
@@ -1491,6 +1807,7 @@ export async function runK2CfsSlotControlCertification(options) {
           plan,
           probePlan: createProbePlanSummary(options),
           response: null,
+          printerStatus,
           probes,
           printerInfo,
           operatorMarker,
@@ -1519,6 +1836,7 @@ export async function runK2CfsSlotControlCertification(options) {
           plan,
           probePlan: createProbePlanSummary(options),
           response: null,
+          printerStatus,
           probes,
           printerInfo,
           operatorMarker,
@@ -1552,6 +1870,7 @@ export async function runK2CfsSlotControlCertification(options) {
         plan,
         probePlan: createProbePlanSummary(options),
         response: null,
+        printerStatus,
         probes,
         printerInfo,
         operatorMarker,
@@ -1601,6 +1920,7 @@ export async function runK2CfsSlotControlCertification(options) {
           plan,
           probePlan: createProbePlanSummary(options),
           response,
+          printerStatus,
           probes,
           printerInfo,
           operatorMarker,
@@ -1628,6 +1948,7 @@ export async function runK2CfsSlotControlCertification(options) {
       plan,
       probePlan: createProbePlanSummary(options),
       response,
+      printerStatus,
       probes,
       printerInfo,
       operatorMarker,
