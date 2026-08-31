@@ -377,6 +377,8 @@ Gate 18.9F:
 - MaterialSourceAccountingView read model
 - legacy compatibility projection
 - N=1 familiar card and N>1 source card UI cutover
+- read-only projection of saved print binding store into CFS/external source rows
+- separate display for device-reported remaining, 3dpmon-managed remaining, and source-specific recent usage
 
 Gate 20 extension:
 

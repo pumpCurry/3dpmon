@@ -471,12 +471,14 @@ existing event; it must create conflict/correction evidence instead.
 
 ## Gate 18.9F Scope
 
-Gate 18.9F adds the read model and UI cutover:
+Gate 18.9F connects the source-aware read model to the existing read-only UI lane:
 
 - `MaterialSourceAccountingView`
 - legacy compatibility projection for `N=1`
 - multi-source cards for `N>1`
 - source-specific remaining and usage display
+- saved print binding store projection into source rows
+- device-reported remaining and 3DPmon-managed remaining displayed as separate values
 
 The same domain model feeds both layouts.
 
@@ -614,6 +616,8 @@ Gate 18.9F tests:
 - N>1 renders source-aware cards
 - stale observation is last-known, not current
 - device remaining and ledger remaining are visually distinct
+- CFS source rows show the latest 3DPmon-managed spool and source-specific usage
+- source rows keep device observation and 3DPmon accounting as separate read-only facts
 
 ## Review Boundaries
 

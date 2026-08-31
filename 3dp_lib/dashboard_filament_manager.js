@@ -16,13 +16,14 @@
  * - 集計レポート
  * - 推定 candidate の確認・否認・再割当て
  * - CFS/CFS-C搭載機の外部スプールとCFSスロットを別欄でread-only表示
+ * - CFS/CFS-C sourceごとの3DPmon管理スプール残量とsource別使用量候補を表示
  *
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1462 (PR #435)
+* @version 1.390.1517 (PR #438)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-28 17:23:15
+* @lastModified 2026-08-31 15:30:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -95,6 +96,9 @@ import {
 import {
   createMaterialTopologyViewModel
 } from "./printer_core/dashboard_material_topology_view_model.js";
+import {
+  createMaterialSourceAccountingView
+} from "./printer_core/dashboard_material_accounting_contract.js";
 import { getMaterialCssColor } from "./printer_core/dashboard_material_color.js";
 
 let styleInjected = false;
@@ -379,9 +383,9 @@ function getMaterialSourceRemainingText(row, isStale) {
   }
   const percent = Number(remaining.displayPercent);
   if (!Number.isFinite(percent)) {
-    return "残量 未観測";
+    return "機器残量 未観測";
   }
-  return `${isStale ? "最終観測" : "残量"} ${Math.round(percent)}%`;
+  return `${isStale ? "最終観測: 機器残量" : "機器残量"} ${Math.round(percent)}%`;
 }
 
 /**
@@ -478,6 +482,171 @@ function createMaterialSupplyMeta(viewModel) {
 }
 
 /**
+ * 文字列をtrimして返す。
+ *
+ * 【詳細説明】
+ * - フィラメント管理UIのread-only表示では、空文字とnull/undefinedを同じ未設定として扱う。
+ *
+ * @private
+ * @function toTrimmedText
+ * @param {*} value - 文字列候補。
+ * @returns {string} trim済み文字列。
+ */
+function toTrimmedText(value) {
+  return String(value ?? "").trim();
+}
+
+/**
+ * CFS sourceに紐づく最新recordを時刻順で選ぶ。
+ *
+ * 【詳細説明】
+ * - print binding store はappend-only候補を蓄積するため、表示では最も新しい時刻を持つrecordを採用する。
+ * - 時刻が無い古いrecord同士では後勝ちにし、保存順の末尾を最新候補として扱う。
+ *
+ * @private
+ * @function chooseLatestMaterialSourceRecord
+ * @param {Object|null} current - 現在の候補。
+ * @param {Object} candidate - 新しい候補。
+ * @param {string[]} timeKeys - 比較に使う時刻key候補。
+ * @returns {Object} 最新候補。
+ */
+function chooseLatestMaterialSourceRecord(current, candidate, timeKeys) {
+  if (!current) {
+    return candidate;
+  }
+  const candidateTime = Math.max(0, ...timeKeys.map((key) => Date.parse(candidate?.[key] || "")));
+  const currentTime = Math.max(0, ...timeKeys.map((key) => Date.parse(current?.[key] || "")));
+  return candidateTime >= currentTime ? candidate : current;
+}
+
+/**
+ * スプールIDから3DPmon管理スプールを取得する。
+ *
+ * 【詳細説明】
+ * - テストではgetSpoolByIdがmockされるためまず公開APIを使い、取得できない場合だけmonitorDataの配列を読む。
+ *
+ * @private
+ * @function resolveManagedSpoolForMaterialSource
+ * @param {string} spoolId - スプールID。
+ * @returns {Object|null} 管理スプール、またはnull。
+ */
+function resolveManagedSpoolForMaterialSource(spoolId) {
+  const id = toTrimmedText(spoolId);
+  if (!id) {
+    return null;
+  }
+  return getSpoolById(id) ||
+    (Array.isArray(monitorData.filamentSpools)
+      ? monitorData.filamentSpools.find((spool) => spool?.id === id && !spool?.deleted) || null
+      : null);
+}
+
+/**
+ * 保存済みprint binding storeからsource別accounting viewを生成する。
+ *
+ * 【詳細説明】
+ * - この関数は表示用read modelだけを生成し、legacy hostSpoolMap、usageHistory、spool残量を更新しない。
+ * - deviceIdが取得できる場合は同一機体のrecordだけに絞り、複数K2で同じ `cfs:1:slot:*` が衝突することを避ける。
+ * - 直近のprint-start snapshotから管理スプールを、直近のJobMaterialSegmentからsource別使用量候補を表示へ渡す。
+ *
+ * @private
+ * @function createMaterialSupplyAccountingView
+ * @param {Object} options - 生成オプション。
+ * @param {string|null} options.deviceId - 表示対象device ID。
+ * @returns {Object|null} MaterialSourceAccountingView、またはrecord無しの場合null。
+ */
+function createMaterialSupplyAccountingView(options = {}) {
+  const store = monitorData.materialAccountingPrintBindingStore || {};
+  const deviceId = toTrimmedText(options.deviceId);
+  const snapshotsBySourceId = new Map();
+  const segmentsBySourceId = new Map();
+  for (const snapshot of Array.isArray(store.printStartSnapshots) ? store.printStartSnapshots : []) {
+    if (deviceId && toTrimmedText(snapshot?.deviceId) !== deviceId) {
+      continue;
+    }
+    const sourceId = toTrimmedText(snapshot?.materialSourceId);
+    if (!sourceId) {
+      continue;
+    }
+    snapshotsBySourceId.set(sourceId, chooseLatestMaterialSourceRecord(
+      snapshotsBySourceId.get(sourceId) || null,
+      snapshot,
+      ["capturedAt"]
+    ));
+  }
+  const ledgerEventsBySegmentId = new Map();
+  for (const event of Array.isArray(store.ledgerEvents) ? store.ledgerEvents : []) {
+    const segmentId = toTrimmedText(event?.segmentId);
+    if (segmentId) {
+      ledgerEventsBySegmentId.set(segmentId, event);
+    }
+  }
+  for (const segment of Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : []) {
+    if (deviceId && toTrimmedText(segment?.deviceId) !== deviceId) {
+      continue;
+    }
+    const sourceId = toTrimmedText(segment?.materialSourceId);
+    if (!sourceId) {
+      continue;
+    }
+    const ledgerEvent = ledgerEventsBySegmentId.get(toTrimmedText(segment.segmentId)) || null;
+    const candidate = {
+      ...segment,
+      observedAt: ledgerEvent?.createdAt || segment.observedAt || null,
+    };
+    segmentsBySourceId.set(sourceId, chooseLatestMaterialSourceRecord(
+      segmentsBySourceId.get(sourceId) || null,
+      candidate,
+      ["observedAt"]
+    ));
+  }
+  const sourceIds = [...new Set([
+    ...snapshotsBySourceId.keys(),
+    ...segmentsBySourceId.keys(),
+  ])];
+  if (sourceIds.length === 0) {
+    return null;
+  }
+  return createMaterialSourceAccountingView({
+    deviceId: deviceId || "unknown-device",
+    sources: sourceIds.map((sourceId) => {
+      const snapshot = snapshotsBySourceId.get(sourceId) || {};
+      const segment = segmentsBySourceId.get(sourceId) || {};
+      const spoolId = toTrimmedText(snapshot.spoolId || segment.spoolId);
+      const spool = resolveManagedSpoolForMaterialSource(spoolId);
+      return {
+        materialSourceId: sourceId,
+        displayLabel: sourceId,
+        observation: {
+          printJobId: segment.printJobId || snapshot.printJobId || null,
+          printPlanId: segment.printPlanId || snapshot.printPlanId || null,
+          observedAt: segment.observedAt || snapshot.capturedAt || null,
+          source: "material-accounting-print-binding-store",
+        },
+        mount: {
+          ...(snapshot.spoolMount || {}),
+          mountId: snapshot.mountId || segment.mountId || null,
+          spoolId: spoolId || null,
+          spool: spool ? {
+            id: spool.id,
+            name: spool.name || "",
+            materialName: spool.materialName || spool.material || "",
+            colorName: spool.colorName || "",
+            totalLengthMm: spool.totalLengthMm ?? null,
+            remainingLengthMm: spool.remainingLengthMm ?? null,
+          } : null,
+        },
+        usage: {
+          state: segment.usageState === "observed-used" ? "confirmed-used" : (segment.usageState || "unknown"),
+          usedLengthMm: segment.usedLengthMm ?? null,
+          confidence: segment.confidence || "unknown",
+        },
+      };
+    }),
+  });
+}
+
+/**
  * material source の表示用CSS色を返す。
  *
  * 【詳細説明】
@@ -551,6 +720,46 @@ function createMaterialSourceChip(row, isStale) {
   remaining.textContent = getMaterialSourceRemainingText(row, isStale);
   chip.appendChild(remaining);
 
+  const accounting = row?.accounting && typeof row.accounting === "object" ? row.accounting : null;
+  const managedSpool = accounting?.mount?.spool || null;
+  if (managedSpool || accounting?.mount?.spoolId) {
+    const managedLine = document.createElement("div");
+    managedLine.className = "fm-material-source-managed-spool";
+    const spoolLabel = managedSpool
+      ? `${formatSpoolDisplayId(managedSpool)} ${managedSpool.name || ""}`.trim()
+      : accounting.mount.spoolId;
+    managedLine.textContent = `3DPmon管理 ${spoolLabel}`;
+    chip.appendChild(managedLine);
+
+    if (managedSpool) {
+      const totalLengthMm = Number(managedSpool.totalLengthMm);
+      const remainingLengthMm = Number(managedSpool.remainingLengthMm);
+      const remainingLine = document.createElement("div");
+      remainingLine.className = "fm-material-source-managed-remaining";
+      const remainingText = Number.isFinite(remainingLengthMm)
+        ? formatRemainingFilamentAmount(remainingLengthMm, managedSpool).display
+        : "不明";
+      const percent = Number.isFinite(totalLengthMm) && totalLengthMm > 0 && Number.isFinite(remainingLengthMm)
+        ? ` / ${Math.max(0, Math.min(100, Math.round((remainingLengthMm / totalLengthMm) * 100)))}%`
+        : "";
+      remainingLine.textContent = `3DPmon残量 ${remainingText}${percent}`;
+      chip.appendChild(remainingLine);
+    }
+  }
+
+  if (accounting?.usage?.state && accounting.usage.state !== "unknown") {
+    const usageLine = document.createElement("div");
+    usageLine.className = "fm-material-source-usage";
+    const usedLength = Number(accounting.usage.usedLengthMm);
+    const usedText = Number.isFinite(usedLength)
+      ? formatFilamentAmount(usedLength, managedSpool || {}).display
+      : "不明";
+    usageLine.textContent = accounting.usage.state === "confirmed-unused"
+      ? `直近使用 0mm (${isStale ? "最終観測" : "未使用確認"})`
+      : `直近使用 ${usedText}`;
+    chip.appendChild(usageLine);
+  }
+
   const assignments = (Array.isArray(row?.assignments) ? row.assignments : [])
     .map((assignment) => assignment?.assignmentId)
     .filter(Boolean);
@@ -595,8 +804,12 @@ export function createFilamentManagerMaterialSupplySection(host) {
     return null;
   }
   const viewOptions = resolveMaterialTopologyViewOptions({ target, printerType, topology });
+  const accountingView = createMaterialSupplyAccountingView({
+    deviceId: shadowRecord?.deviceId || topology?.identity?.deviceId || null,
+  });
   const viewModel = createMaterialTopologyViewModel(topology, {
     ...viewOptions,
+    accountingView,
     observation: {
       lastObservedAt: shadowRecord?.materialProviderLastObservedAt || topology?.provider?.lastObservedAt || null,
       request: shadowRecord?.materialProviderRequest || null,
