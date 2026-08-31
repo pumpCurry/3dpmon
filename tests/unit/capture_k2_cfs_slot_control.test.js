@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1535 (PR #439)
+ * @version 1.390.1537 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:58:06
+ * @lastModified 2026-08-31 18:49:00
  */
 
 import { EventEmitter } from "node:events";
@@ -227,6 +227,36 @@ describe("capture_k2_cfs_slot_control", () => {
     });
   });
 
+  it("programmatic callerでもsend時はbefore/after probe必須としてrunner本体で拒否する", async () => {
+    const options = {
+      ...parseArgs([
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+      ]),
+      send: true,
+      confirmLive: true,
+      host: "192.168.54.153",
+      confirmHost: "192.168.54.153",
+      confirmCommand: "cfs-load",
+      openWs: async () => {
+        throw new Error("runner guard should reject before opening websocket");
+      },
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "live-certification-probes-required",
+      blindRetryAllowed: false,
+    });
+  });
+
   it("unsupported commandはdry-run段階で拒否する", () => {
     expect(() => parseArgs([
       "--command",
@@ -333,8 +363,8 @@ describe("capture_k2_cfs_slot_control", () => {
       ok: true,
       sent: true,
       dryRun: false,
-      status: "confirmed",
-      reason: null,
+      status: "post-observed",
+      reason: "post-command-telemetry-observed",
       response: {
         status: "submitted",
         sentFrameCount: 1,
@@ -587,19 +617,87 @@ describe("capture_k2_cfs_slot_control", () => {
       ],
     });
 
-    expect(summary.sources.map((source) => source.sourceId)).toEqual([
-      "cfs:1:slot:0",
-      "cfs:2:slot:0",
-    ]);
-    expect(summary.colorMatches).toEqual([
-      { assignmentId: "T1A", sourceId: "cfs:1:slot:0", boxId: 1, materialId: 0 },
-      { assignmentId: "T1C", sourceId: "cfs:2:slot:0", boxId: 2, materialId: 0 },
-    ]);
+    expect(summary.sources.map((source) => source.sourceId)).toEqual([]);
+    expect(summary.colorMatches).toEqual([]);
     expect(summary.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: "box-id-duplicate", path: "materialBoxs[1]" }),
       expect.objectContaining({ reason: "source-id-duplicate", path: "materialBoxs[2].materials[1]" }),
-      expect.objectContaining({ reason: "color-match-source-unresolved", path: "colorMatch[1]" }),
+      expect.objectContaining({ reason: "color-match-box-unresolved", path: "colorMatch[1]" }),
+      expect.objectContaining({ reason: "color-match-box-unresolved", path: "colorMatch[0]" }),
+      expect.objectContaining({ reason: "color-match-source-unresolved", path: "colorMatch[2]" }),
     ]));
+  });
+
+  it("pre-command probeでduplicate locatorが観測された場合はCFS操作frameを送らない", async () => {
+    class DuplicateBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [
+                    { id: 1, type: 0, materials: [{ id: 0, state: 1, name: "Primary" }] },
+                    { id: 1, type: 0, materials: [{ id: 0, state: 1, name: "Duplicate" }] },
+                  ],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new DuplicateBeforeProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-target-source-ambiguous",
+      blindRetryAllowed: false,
+    });
+    expect(result.probes.before.summary.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: "box-id-duplicate" }),
+    ]));
+    expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
   });
 
   it("read-only boxsInfo probeは応答を待ち、timeout時はlistenerを残さない", async () => {
@@ -661,7 +759,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, state: 1 }],
+                  materialBoxs: [{ id: 1, type: 0, state: 1, materials: [{ id: 0, state: 1 }] }],
                 },
               },
             }));
@@ -706,8 +804,8 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(result).toMatchObject({
       ok: true,
       sent: true,
-      status: "confirmed",
-      reason: null,
+      status: "post-observed",
+      reason: "post-command-telemetry-observed",
       probes: {
         before: {
           status: "observed",
@@ -794,7 +892,7 @@ describe("capture_k2_cfs_slot_control", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: "confirmed",
+      status: "post-observed",
       probePlan: {
         postCommandProbeDelayMs: 25,
       },
@@ -868,7 +966,7 @@ describe("capture_k2_cfs_slot_control", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: "confirmed",
+      status: "post-observed",
       probes: {
         afterSeries: [
           { status: "observed", probeMode: "after:1" },
@@ -896,7 +994,7 @@ describe("capture_k2_cfs_slot_control", () => {
     ]);
   });
 
-  it("post-command probe series途中timeoutはafter互換をfirstに保ったままunknownへ倒す", async () => {
+  it("post-command probe series途中timeoutでもcommand再送なしで残りのread-only probeを続ける", async () => {
     class PartialTimeoutAfterSeriesProbeWs extends EventEmitter {
       constructor() {
         super();
@@ -969,11 +1067,22 @@ describe("capture_k2_cfs_slot_control", () => {
         afterSeries: [
           { status: "observed", probeMode: "after:1" },
           { status: "timeout", probeMode: "after:2", observedAt: null },
+          { status: "timeout", probeMode: "after:3", observedAt: null },
         ],
       },
+      probeAttemptCount: 4,
+      observedProbeCount: 2,
+      failedProbeCount: 2,
     });
     expect(result.probes.afterSeries[1].completedAt)
       .toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u));
+    expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
   });
 
   it("command送信後のprobe timeoutは送信証跡を保持したunknown結果として返す", async () => {
@@ -992,7 +1101,7 @@ describe("capture_k2_cfs_slot_control", () => {
             this.emit("message", JSON.stringify({
               result: {
                 boxsInfo: {
-                  materialBoxs: [{ id: 1, type: 0, state: 1 }],
+                  materialBoxs: [{ id: 1, type: 0, state: 1, materials: [{ id: 0, state: 1 }] }],
                 },
               },
             }));
@@ -1026,6 +1135,8 @@ describe("capture_k2_cfs_slot_control", () => {
         "0",
         "--boxsinfo-timeout-ms",
         "1000",
+        "--probe-after-count",
+        "1",
       ]),
       openWs: async () => ws,
     };
@@ -1049,7 +1160,7 @@ describe("capture_k2_cfs_slot_control", () => {
         },
         after: {
           status: "timeout",
-          probeMode: "after:1",
+          probeMode: "after",
         },
       },
     });
@@ -1227,7 +1338,7 @@ describe("capture_k2_cfs_slot_control", () => {
         ok: false,
         sent: true,
         dryRun: false,
-        status: "confirmed",
+        status: "post-observed",
         evidenceWriteFailed: true,
         evidence: {
           written: false,
@@ -1235,8 +1346,8 @@ describe("capture_k2_cfs_slot_control", () => {
         commandResult: {
           ok: true,
           sent: true,
-          status: "confirmed",
-          reason: null,
+          status: "post-observed",
+          reason: "post-command-telemetry-observed",
         },
       });
       expect(result.evidence.error.message).toMatch(/ENOTDIR|EEXIST|not a directory|file already exists/iu);

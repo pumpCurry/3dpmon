@@ -152,13 +152,16 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
 - 初期live certificationの送信対象は `cfs-load` / `cfs-unload` だけに限定する。
   `cfs-slot-select` / `cfs-feed` / `cfs-retract` はshape確認用dry-run候補に留め、追加capture根拠なしには送信しない。
 - 同CLIは `--send` 時に `--probe-before` / `--probe-after` を必須とし、同じWS9999 sessionでread-only
-  `get { boxsInfo: 1 }` を送る。これは操作frame前後の観測差分を残すための補助であり、command成功の証明や
-  blind retryには使わない。
+  `get { boxsInfo: 1 }` を送る。これはCLI引数だけでなく `runK2CfsSlotControlCertification()` 本体でも
+  再検証する。これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
+- 送信前probeでは、対象sourceがexactly one、duplicate box/source locator診断なし、かつ明示loadedであることを要求する。
+  duplicateが見つかった場合はfirst-winせず、該当locator全体をcertification候補から外してCFS操作frameを送らない。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
 - post-command観測は既定で `--probe-after-count 6` / `--probe-after-interval-ms 5000` のbounded polling
   windowを使う。この場合もCFS操作frameは1回だけで、追加されるのはread-only `boxsInfo` probeだけである。
+  途中でtimeout/errorがあってもCFS操作frameは再送せず、残り回数のread-only probeを継続して証跡を残す。
 - side-effect commandが `submitted` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
   shared storageへ永続化する。このstoreは `commandId`、`commandKind`、`deviceId`、`sessionId`、送信時刻、
   certification ID、送信前観測digest/sequenceだけを保持し、command frameやRPC payloadは保存しない。
@@ -179,7 +182,9 @@ UIでCFS/CFS-C操作を表示する場合、実行状態はDOM要素ではなく
   `cfs-slot-select` のようにUI側でもselected sourceを確認できる操作だけ、送信前は未選択だった
   対象sourceが次のmaterial provider観測でselectedになった場合にmutexを解除する。`load/unload/feed/retract` は物理状態の
   expected-stateが未確定のため、観測時刻が進んだだけでは自動解除しない。
-- `confirmed`: `completed:true` のみ。成功表示にして操作mutexを解除してよい。
+- `post-observed`: command frame送信後に指定されたpost-command read-only telemetryを観測できた状態。
+  物理load/unload成功を意味しないため、成功表示やproduction certificationへ単独では使わない。
+- `confirmed`: command-specific expected-state confirmationが成立した場合のみ。成功表示にして操作mutexを解除してよい。
 - `rejected`: send-time validationなど送信前拒否。transport side-effectは起きていないためmutexを解除してよい。
 - `unknown`: timeout、transport-error、confirmation-errorなど、物理side-effect有無が不明な状態。
   blind retryを避けるため、自動解除せず明示的な状態確認/再描画方針が入るまで再操作を許可しない。
@@ -242,7 +247,7 @@ live certificationは次の順で進める。
      → command frameはWebSocketへlocal submitされたが、送信後のboxsInfo観測は要求されていない。
        これは成功確認ではないため、production certification evidenceには単独で使わない。
 
-   status:"confirmed"
+   status:"post-observed"
      → command frame送信と指定されたpost-command read-only probeが完了した。
        ただし物理load/unload成功そのものは人間の目視とcapture markerで別途確認する。
 

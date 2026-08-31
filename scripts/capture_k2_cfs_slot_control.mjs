@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1535 (PR #439)
+ * @version 1.390.1537 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:58:06
+ * @lastModified 2026-08-31 18:50:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -534,8 +534,10 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
   const sources = [];
   const diagnostics = [];
   const validBoxes = [];
-  const observedBoxIds = new Set();
-  const observedSourceIds = new Set();
+  const boxCandidates = [];
+  const boxIdCounts = new Map();
+  const materialCandidates = [];
+  const sourceIdCounts = new Map();
   for (const [boxIndex, box] of boxes.entries()) {
     const boxPath = `materialBoxs[${boxIndex}]`;
     const boxId = parseStrictNonNegativeInteger(box?.id);
@@ -556,12 +558,22 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
       pushBoxsInfoDiagnostic(diagnostics, "box-type-invalid", boxPath, box?.type);
       continue;
     }
-    if (observedBoxIds.has(boxId)) {
-      pushBoxsInfoDiagnostic(diagnostics, "box-id-duplicate", boxPath, boxId);
+    const external = boxType === 1;
+    boxCandidates.push({ box, boxId, boxType, external, boxPath });
+    boxIdCounts.set(boxId, (boxIdCounts.get(boxId) || 0) + 1);
+  }
+  const duplicateBoxIds = new Set([...boxIdCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([boxId]) => boxId));
+  const reportedDuplicateBoxIds = new Set();
+  for (const { box, boxId, boxType, external, boxPath } of boxCandidates) {
+    if (duplicateBoxIds.has(boxId)) {
+      if (reportedDuplicateBoxIds.has(boxId)) {
+        pushBoxsInfoDiagnostic(diagnostics, "box-id-duplicate", boxPath, boxId);
+      }
+      reportedDuplicateBoxIds.add(boxId);
       continue;
     }
-    observedBoxIds.add(boxId);
-    const external = boxType === 1;
     validBoxes.push({ box, boxId, boxType, external });
     const materials = Array.isArray(box?.materials) ? box.materials : [];
     for (const [materialIndex, material] of materials.entries()) {
@@ -576,13 +588,9 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
         continue;
       }
       const sourceId = formatBoxsInfoSourceId(boxId, materialId, external);
-      if (observedSourceIds.has(sourceId)) {
-        pushBoxsInfoDiagnostic(diagnostics, "source-id-duplicate", materialPath, sourceId);
-        continue;
-      }
-      observedSourceIds.add(sourceId);
       const stateCode = material?.state ?? null;
-      sources.push({
+      materialCandidates.push({
+        materialPath,
         sourceId,
         kind: external ? "external-spool" : "cfs-slot",
         boxId,
@@ -601,7 +609,23 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
         color: material?.color || "",
         rfidPresent: Boolean(toNonEmptyString(material?.rfid)),
       });
+      sourceIdCounts.set(sourceId, (sourceIdCounts.get(sourceId) || 0) + 1);
     }
+  }
+  const duplicateSourceIds = new Set([...sourceIdCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([sourceId]) => sourceId));
+  const reportedDuplicateSourceIds = new Set();
+  for (const candidate of materialCandidates) {
+    if (duplicateSourceIds.has(candidate.sourceId)) {
+      if (reportedDuplicateSourceIds.has(candidate.sourceId)) {
+        pushBoxsInfoDiagnostic(diagnostics, "source-id-duplicate", candidate.materialPath, candidate.sourceId);
+      }
+      reportedDuplicateSourceIds.add(candidate.sourceId);
+      continue;
+    }
+    const { materialPath: _materialPath, ...source } = candidate;
+    sources.push(source);
   }
   const sourceIdSet = new Set(sources.map((source) => source.sourceId));
   const colorMatches = [];
@@ -656,9 +680,75 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
     loadedSourceCount: sources.filter((source) => source.presence === "loaded").length,
     selectedSourceIds,
     targetSource: sources.find((source) => source.sourceId === targetSourceId) || null,
+    targetSourceCandidateCount: sources.filter((source) => source.sourceId === targetSourceId).length,
     sources,
     colorMatches,
     diagnostics,
+  };
+}
+
+/**
+ * boxsInfo summary内にduplicate locator診断があるか判定する。
+ *
+ * @private
+ * @function hasDuplicateLocatorDiagnostic
+ * @param {object|null|undefined} summary - boxsInfo summary
+ * @returns {boolean} duplicate診断がある場合はtrue
+ */
+function hasDuplicateLocatorDiagnostic(summary) {
+  return (summary?.diagnostics || []).some((diagnostic) => {
+    return diagnostic?.reason === "box-id-duplicate" || diagnostic?.reason === "source-id-duplicate";
+  });
+}
+
+/**
+ * live送信前のboxsInfo probe summaryを検査する。
+ *
+ * 【詳細説明】
+ * - certification runnerは、通信応答があっただけでは送信してよいとは扱わない。
+ * - 対象sourceが一意で、duplicate locatorがなく、明示loadedである場合だけCFS操作frameを送る。
+ *
+ * @private
+ * @function validatePreCommandProbeSummary
+ * @param {object|null|undefined} summary - pre-command boxsInfo summary
+ * @param {string} targetSourceId - 操作対象source ID
+ * @returns {{ok:boolean, reason:?string}} 検査結果
+ */
+function validatePreCommandProbeSummary(summary, targetSourceId) {
+  if (!summary || typeof summary !== "object") {
+    return { ok: false, reason: "pre-command-observation-failed" };
+  }
+  if (hasDuplicateLocatorDiagnostic(summary)) {
+    return { ok: false, reason: "pre-command-target-source-ambiguous" };
+  }
+  const targetSources = (summary.sources || []).filter((source) => source?.sourceId === targetSourceId);
+  if (targetSources.length !== 1) {
+    return { ok: false, reason: "pre-command-target-source-missing" };
+  }
+  if (targetSources[0].presence !== "loaded") {
+    return { ok: false, reason: "pre-command-target-source-not-loaded" };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * before/after probeの実行数summaryを生成する。
+ *
+ * @private
+ * @function summarizeProbeAttempts
+ * @param {object} probes - probe collection
+ * @returns {{probeAttemptCount:number, observedProbeCount:number, failedProbeCount:number}} probe集計
+ */
+function summarizeProbeAttempts(probes) {
+  const allProbes = [
+    probes?.before,
+    ...(Array.isArray(probes?.afterSeries) ? probes.afterSeries : []),
+  ].filter(Boolean);
+  const observedProbeCount = allProbes.filter((probe) => probe?.status === "observed").length;
+  return {
+    probeAttemptCount: allProbes.length,
+    observedProbeCount,
+    failedProbeCount: allProbes.length - observedProbeCount,
   };
 }
 
@@ -992,6 +1082,30 @@ export async function runK2CfsSlotControlCertification(options) {
       probePlan: createProbePlanSummary(options),
     }, options);
   }
+  if (options.probeBefore !== true || options.probeAfter !== true) {
+    return finalizeCertificationResult({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "live-certification-probes-required",
+      blindRetryAllowed: false,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      host: options.host,
+      wsPort: options.wsPort,
+      request,
+      plan,
+      probePlan: createProbePlanSummary(options),
+      response: null,
+      probes: {
+        before: null,
+        after: null,
+        afterSeries: [],
+      },
+    }, options);
+  }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
   try {
     const probes = {
@@ -1023,6 +1137,31 @@ export async function runK2CfsSlotControlCertification(options) {
           probePlan: createProbePlanSummary(options),
           response: null,
           probes,
+        }, options);
+      }
+      const preCommandValidation = validatePreCommandProbeSummary(
+        probes.before.summary,
+        request.payload.sourceId
+      );
+      if (!preCommandValidation.ok) {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: false,
+          dryRun: false,
+          status: "rejected",
+          reason: preCommandValidation.reason,
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          probePlan: createProbePlanSummary(options),
+          response: null,
+          probes,
+          ...summarizeProbeAttempts(probes),
         }, options);
       }
     }
@@ -1072,9 +1211,6 @@ export async function runK2CfsSlotControlCertification(options) {
           probes.after = probe;
         }
         lastAfterProbe = probe;
-        if (probe.status !== "observed") {
-          break;
-        }
       }
       if (lastAfterProbe?.status !== "observed") {
         return finalizeCertificationResult({
@@ -1094,6 +1230,7 @@ export async function runK2CfsSlotControlCertification(options) {
           probePlan: createProbePlanSummary(options),
           response,
           probes,
+          ...summarizeProbeAttempts(probes),
         }, options);
       }
     }
@@ -1104,8 +1241,8 @@ export async function runK2CfsSlotControlCertification(options) {
       ok: true,
       sent: true,
       dryRun: false,
-      status: postCommandObserved ? "confirmed" : "submitted",
-      reason: postCommandObserved ? null : "post-command-observation-not-requested",
+      status: postCommandObserved ? "post-observed" : "submitted",
+      reason: postCommandObserved ? "post-command-telemetry-observed" : "post-command-observation-not-requested",
       blindRetryAllowed: false,
       startedAt,
       completedAt: new Date().toISOString(),
@@ -1117,6 +1254,7 @@ export async function runK2CfsSlotControlCertification(options) {
       probePlan: createProbePlanSummary(options),
       response,
       probes,
+      ...summarizeProbeAttempts(probes),
     }, options);
   } finally {
     ws.close();
