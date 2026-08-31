@@ -19,9 +19,9 @@
  * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1546 (PR #439)
+ * @version 1.390.1550 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:36:46
+ * @lastModified 2026-08-31 19:48:53
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
@@ -78,6 +78,22 @@ const SUPPORTED_RESOLUTIONS = Object.freeze(new Set([
   "operator-cleared",
   "observed-confirmed",
   "observed-rejected",
+]));
+
+/**
+ * commandIdを特定できる場合に再送blockへ昇格するintegrity quarantine理由。
+ *
+ * 【詳細説明】
+ * - 保存済みrecordのdigestやstorage keyが壊れている場合、物理commandが送信済みだった可能性を否定できない。
+ * - UI/dispatcherが未解決一覧だけを見て再送する事故を避けるため、commandIdが残っているものはblocker APIで停止する。
+ *
+ * @private
+ * @constant {ReadonlySet<string>}
+ */
+const BLOCKING_QUARANTINE_REASONS = Object.freeze(new Set([
+  "command-id-digest-mismatch",
+  "command-id-storage-key-mismatch",
+  "command-id-digest-conflict",
 ]));
 
 /**
@@ -647,7 +663,7 @@ export function isPhysicalCommandRecoveryBlocked(storeInput, commandIdInput) {
   const commandId = toTrimmedString(commandIdInput);
   if (!commandId) {
     return deepFreezeJson({
-      blocked: false,
+      blocked: true,
       reason: "missing-command-id",
       commandId: "",
     });
@@ -665,6 +681,18 @@ export function isPhysicalCommandRecoveryBlocked(storeInput, commandIdInput) {
       blocked: true,
       reason: "conflicted-recovery",
       commandId,
+    });
+  }
+  const quarantine = (store.retainedUnsupportedEntries || []).find((entry) => (
+    toTrimmedString(entry?.commandId) === commandId &&
+    BLOCKING_QUARANTINE_REASONS.has(toTrimmedString(entry?.reason))
+  ));
+  if (quarantine) {
+    return deepFreezeJson({
+      blocked: true,
+      reason: "integrity-quarantine",
+      commandId,
+      quarantineReason: toTrimmedString(quarantine.reason),
     });
   }
   return deepFreezeJson({

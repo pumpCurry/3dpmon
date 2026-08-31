@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1546 (PR #439)
+ * @version 1.390.1550 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:36:46
+ * @lastModified 2026-08-31 19:48:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -196,9 +196,51 @@ describe("dashboard_physical_command_recovery_latch", () => {
       commandId: "command:k2-unload-1c",
     });
     expect(isPhysicalCommandRecoveryBlocked(store, "   ")).toEqual({
-      blocked: false,
+      blocked: true,
       reason: "missing-command-id",
       commandId: "",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(store, null)).toEqual({
+      blocked: true,
+      reason: "missing-command-id",
+      commandId: "",
+    });
+  });
+
+  it("blocker APIはcommandIdが特定できるintegrity quarantineもblock扱いにする", () => {
+    const store = normalizeStoredPhysicalCommandRecoveryLatchStore({
+      retainedUnsupportedEntries: [
+        {
+          commandId: "command:k2-select-tampered",
+          reason: "command-id-digest-mismatch",
+        },
+        {
+          commandId: "command:k2-select-wrong-key",
+          reason: "command-id-storage-key-mismatch",
+        },
+        {
+          commandId: "command:k2-broken-shape",
+          reason: "invalid-recovery-record",
+        },
+      ],
+    });
+
+    expect(isPhysicalCommandRecoveryBlocked(store, "command:k2-select-tampered")).toMatchObject({
+      blocked: true,
+      reason: "integrity-quarantine",
+      commandId: "command:k2-select-tampered",
+      quarantineReason: "command-id-digest-mismatch",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(store, "command:k2-select-wrong-key")).toMatchObject({
+      blocked: true,
+      reason: "integrity-quarantine",
+      commandId: "command:k2-select-wrong-key",
+      quarantineReason: "command-id-storage-key-mismatch",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(store, "command:k2-broken-shape")).toEqual({
+      blocked: false,
+      reason: "not-blocked",
+      commandId: "command:k2-broken-shape",
     });
   });
 
