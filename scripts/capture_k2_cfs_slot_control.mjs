@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1534 (PR #439)
+ * @version 1.390.1535 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:47:12
+ * @lastModified 2026-08-31 17:58:06
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -62,12 +62,12 @@ Options:
   --confirm-live                  Required with --send to acknowledge live CFS motion.
   --confirm-host <ip-or-host>      Required with --send and must match --host exactly.
   --confirm-command <kind>         Required with --send and must match --command exactly.
-  --probe-before                  With --send, read boxsInfo before the command.
-  --probe-after                   With --send, read boxsInfo after the command.
+  --probe-before                  Required with --send. Read boxsInfo before the command.
+  --probe-after                   Required with --send. Read boxsInfo after the command.
   --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
   --probe-after-delay-ms <number>  Delay before post-command probe. Default: 1500.
-  --probe-after-count <number>     Number of post-command probes. Default: 1.
-  --probe-after-interval-ms <number> Interval between post-command probes. Default: 1000.
+  --probe-after-count <number>     Number of post-command probes. Default: 6.
+  --probe-after-interval-ms <number> Interval between post-command probes. Default: 5000.
   --output-dir <path>             Write certification-result.json under a timestamped directory.
   --pretty                        Pretty-print JSON result.
   --help                          Show this help.
@@ -130,12 +130,11 @@ const DEFAULT_POST_COMMAND_PROBE_DELAY_MS = 1500;
  * command送信後に実行するafter-probe回数の既定値。
  *
  * 【詳細説明】
- * - 既定は後方互換のため1回にする。
- * - 実機debug時は複数回に増やし、CFS commandを再送せずread-only観測だけを時系列化できる。
+ * - 実機debug時にCFS commandを再送せずread-only観測だけを時系列化できるよう、既定を複数回にする。
  *
  * @constant {number}
  */
-const DEFAULT_POST_COMMAND_PROBE_COUNT = 1;
+const DEFAULT_POST_COMMAND_PROBE_COUNT = 6;
 
 /**
  * 複数after-probe間の既定待機時間。
@@ -145,7 +144,7 @@ const DEFAULT_POST_COMMAND_PROBE_COUNT = 1;
  *
  * @constant {number}
  */
-const DEFAULT_POST_COMMAND_PROBE_INTERVAL_MS = 1000;
+const DEFAULT_POST_COMMAND_PROBE_INTERVAL_MS = 5000;
 
 /**
  * 任意値を空でない文字列へ正規化する。
@@ -267,6 +266,9 @@ export function parseArgs(argv = []) {
   }
   if (options.send && !LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS.has(command)) {
     throw new Error("--send is currently limited to cfs-load and cfs-unload for F012 live certification.");
+  }
+  if (options.send && (options.probeBefore !== true || options.probeAfter !== true)) {
+    throw new Error("--probe-before and --probe-after are required when --send is used.");
   }
   if (toNonEmptyString(options.outputDir)) {
     options.outputDir = path.resolve(options.outputDir);

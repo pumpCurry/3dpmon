@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1534 (PR #439)
+ * @version 1.390.1535 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:47:12
+ * @lastModified 2026-08-31 17:58:06
  */
 
 import { EventEmitter } from "node:events";
@@ -63,8 +63,8 @@ describe("capture_k2_cfs_slot_control", () => {
       after: false,
       boxsInfoTimeoutMs: 5000,
       postCommandProbeDelayMs: 1500,
-      postCommandProbeCount: 1,
-      postCommandProbeIntervalMs: 1000,
+      postCommandProbeCount: 6,
+      postCommandProbeIntervalMs: 5000,
     });
   });
 
@@ -135,6 +135,32 @@ describe("capture_k2_cfs_slot_control", () => {
       "--source",
       "cfs:1:slot:0",
     ])).toThrow("--send is currently limited to cfs-load and cfs-unload");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+    ])).toThrow("--probe-before and --probe-after are required when --send is used");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+      "--probe-before",
+    ])).toThrow("--probe-before and --probe-after are required when --send is used");
+    expect(() => parseArgs([
+      ...baseArgs,
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+      "--probe-after",
+    ])).toThrow("--probe-before and --probe-after are required when --send is used");
     expect(parseArgs([
       ...baseArgs,
       "--confirm-live",
@@ -155,8 +181,33 @@ describe("capture_k2_cfs_slot_control", () => {
       probeAfter: true,
       boxsInfoTimeoutMs: 1500,
       postCommandProbeDelayMs: 1500,
-      postCommandProbeCount: 1,
-      postCommandProbeIntervalMs: 1000,
+      postCommandProbeCount: 6,
+      postCommandProbeIntervalMs: 5000,
+    });
+    const liveDefault = parseArgs([
+      "--send",
+      "--host",
+      "192.168.54.153",
+      "--confirm-live",
+      "--confirm-host",
+      "192.168.54.153",
+      "--confirm-command",
+      "cfs-load",
+      "--command",
+      "cfs-load",
+      "--source",
+      "cfs:1:slot:0",
+      "--probe-before",
+      "--probe-after",
+    ]);
+
+    expect(liveDefault).toMatchObject({
+      probeBefore: true,
+      probeAfter: true,
+      boxsInfoTimeoutMs: 5000,
+      postCommandProbeDelayMs: 1500,
+      postCommandProbeCount: 6,
+      postCommandProbeIntervalMs: 5000,
     });
     expect(parseArgs([
       "--command",
@@ -225,17 +276,35 @@ describe("capture_k2_cfs_slot_control", () => {
   });
 
   it("--send時はws.send callback完了を待ち、certification-only送信を明示許可する", async () => {
-    const sentFrames = [];
-    let closeCalled = false;
-    const ws = {
+    class SubmittedProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
       send(payload, callback) {
-        sentFrames.push(JSON.parse(payload));
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                },
+              },
+            }));
+          }, 1);
+        }
         setTimeout(() => callback(), 1);
-      },
+      }
+
       close() {
-        closeCalled = true;
-      },
-    };
+        this.closed = true;
+      }
+    }
+    const ws = new SubmittedProbeWs();
     const options = {
       ...parseArgs([
         "--send",
@@ -250,6 +319,10 @@ describe("capture_k2_cfs_slot_control", () => {
         "cfs-unload",
         "--source",
         "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--probe-after-count",
+        "1",
       ]),
       openWs: async () => ws,
     };
@@ -260,14 +333,15 @@ describe("capture_k2_cfs_slot_control", () => {
       ok: true,
       sent: true,
       dryRun: false,
-      status: "submitted",
-      reason: "post-command-observation-not-requested",
+      status: "confirmed",
+      reason: null,
       response: {
         status: "submitted",
         sentFrameCount: 1,
       },
     });
-    expect(sentFrames).toEqual([
+    expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
       {
         method: "set",
         params: {
@@ -278,19 +352,35 @@ describe("capture_k2_cfs_slot_control", () => {
           },
         },
       },
+      { method: "get", params: { boxsInfo: 1 } },
     ]);
-    expect(closeCalled).toBe(true);
+    expect(ws.closed).toBe(true);
   });
 
   it("CFS command frameのws.send callback errorは未送信断定にせずunknown証跡として残す", async () => {
-    class ErroringCommandSendWs {
+    class ErroringCommandSendWs extends EventEmitter {
       constructor() {
+        super();
         this.sentFrames = [];
         this.closed = false;
       }
 
       send(payload, callback) {
-        this.sentFrames.push(JSON.parse(payload));
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                },
+              },
+            }));
+          }, 1);
+          setTimeout(() => callback(), 1);
+          return;
+        }
         setTimeout(() => callback(new Error("socket write failed after enqueue")), 1);
       }
 
@@ -313,6 +403,10 @@ describe("capture_k2_cfs_slot_control", () => {
         "cfs-load",
         "--source",
         "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--probe-after-count",
+        "1",
       ]),
       openWs: async () => ws,
     };
@@ -333,6 +427,7 @@ describe("capture_k2_cfs_slot_control", () => {
       },
     });
     expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
     ]);
     expect(ws.closed).toBe(true);
@@ -598,6 +693,8 @@ describe("capture_k2_cfs_slot_control", () => {
         "--probe-after",
         "--probe-after-delay-ms",
         "0",
+        "--probe-after-count",
+        "1",
         "--boxsinfo-timeout-ms",
         "1000",
       ]),
@@ -685,6 +782,8 @@ describe("capture_k2_cfs_slot_control", () => {
         "--probe-after",
         "--probe-after-delay-ms",
         "25",
+        "--probe-after-count",
+        "1",
         "--boxsinfo-timeout-ms",
         "1000",
       ]),
@@ -751,6 +850,7 @@ describe("capture_k2_cfs_slot_control", () => {
         "cfs-load",
         "--source",
         "cfs:1:slot:0",
+        "--probe-before",
         "--probe-after",
         "--probe-after-delay-ms",
         "0",
@@ -788,6 +888,7 @@ describe("capture_k2_cfs_slot_control", () => {
         expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
       ]);
     expect(ws.sentFrames).toEqual([
+      { method: "get", params: { boxsInfo: 1 } },
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
       { method: "get", params: { boxsInfo: 1 } },
       { method: "get", params: { boxsInfo: 1 } },
@@ -806,7 +907,7 @@ describe("capture_k2_cfs_slot_control", () => {
         const frame = JSON.parse(payload);
         this.sentFrames.push(frame);
         const boxsInfoProbeCount = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length;
-        if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount === 1) {
+        if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount <= 2) {
           setTimeout(() => {
             this.emit("message", JSON.stringify({
               result: {
@@ -841,6 +942,7 @@ describe("capture_k2_cfs_slot_control", () => {
         "cfs-load",
         "--source",
         "cfs:1:slot:0",
+        "--probe-before",
         "--probe-after",
         "--probe-after-delay-ms",
         "0",
@@ -947,7 +1049,7 @@ describe("capture_k2_cfs_slot_control", () => {
         },
         after: {
           status: "timeout",
-          probeMode: "after",
+          probeMode: "after:1",
         },
       },
     });
@@ -994,6 +1096,7 @@ describe("capture_k2_cfs_slot_control", () => {
         "--source",
         "cfs:1:slot:0",
         "--probe-before",
+        "--probe-after",
       ]),
       boxsInfoTimeoutMs: 5,
       openWs: async () => ws,
@@ -1064,13 +1167,26 @@ describe("capture_k2_cfs_slot_control", () => {
   });
 
   it("command送信後のoutput-dir保存失敗は物理command結果を保持したままevidence失敗として返す", async () => {
-    class SubmittedCommandWs {
+    class SubmittedCommandWs extends EventEmitter {
       constructor() {
+        super();
         this.sentFrames = [];
       }
 
       send(payload, callback) {
-        this.sentFrames.push(JSON.parse(payload));
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                },
+              },
+            }));
+          }, 1);
+        }
         setTimeout(() => callback(), 1);
       }
 
@@ -1095,6 +1211,10 @@ describe("capture_k2_cfs_slot_control", () => {
           "cfs-load",
           "--source",
           "cfs:1:slot:0",
+          "--probe-before",
+          "--probe-after",
+          "--probe-after-count",
+          "1",
           "--output-dir",
           fileAsOutputDir,
         ]),
@@ -1107,7 +1227,7 @@ describe("capture_k2_cfs_slot_control", () => {
         ok: false,
         sent: true,
         dryRun: false,
-        status: "submitted",
+        status: "confirmed",
         evidenceWriteFailed: true,
         evidence: {
           written: false,
@@ -1115,13 +1235,15 @@ describe("capture_k2_cfs_slot_control", () => {
         commandResult: {
           ok: true,
           sent: true,
-          status: "submitted",
-          reason: "post-command-observation-not-requested",
+          status: "confirmed",
+          reason: null,
         },
       });
       expect(result.evidence.error.message).toMatch(/ENOTDIR|EEXIST|not a directory|file already exists/iu);
       expect(ws.sentFrames).toEqual([
+        { method: "get", params: { boxsInfo: 1 } },
         { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+        { method: "get", params: { boxsInfo: 1 } },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

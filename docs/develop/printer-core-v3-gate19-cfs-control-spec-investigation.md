@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 19 CFS Control Spec Investigation
 
-Last updated: 2026-08-28
+Last updated: 2026-08-31
 
 このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
 
@@ -151,13 +151,14 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
 - 初期live certificationの送信対象は `cfs-load` / `cfs-unload` だけに限定する。
   `cfs-slot-select` / `cfs-feed` / `cfs-retract` はshape確認用dry-run候補に留め、追加capture根拠なしには送信しない。
-- 同CLIは `--probe-before` / `--probe-after` 指定時だけ、同じWS9999 sessionでread-only `get { boxsInfo: 1 }` を送る。
-  これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
+- 同CLIは `--send` 時に `--probe-before` / `--probe-after` を必須とし、同じWS9999 sessionでread-only
+  `get { boxsInfo: 1 }` を送る。これは操作frame前後の観測差分を残すための補助であり、command成功の証明や
+  blind retryには使わない。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
-- post-command観測を時系列で追いたい場合は、`--probe-after-count` と `--probe-after-interval-ms` で
-  after-probeを複数回取得する。この場合もCFS操作frameは1回だけで、追加されるのはread-only `boxsInfo` probeだけである。
+- post-command観測は既定で `--probe-after-count 6` / `--probe-after-interval-ms 5000` のbounded polling
+  windowを使う。この場合もCFS操作frameは1回だけで、追加されるのはread-only `boxsInfo` probeだけである。
 
 このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
 
@@ -221,8 +222,8 @@ live certificationは次の順で進める。
      --probe-before \
      --probe-after \
      --probe-after-delay-ms 1500 \
-     --probe-after-count 3 \
-     --probe-after-interval-ms 1000 \
+     --probe-after-count 6 \
+     --probe-after-interval-ms 5000 \
      --output-dir tmp/k2-cfs-slot-control-captures \
      --pretty
    ```
