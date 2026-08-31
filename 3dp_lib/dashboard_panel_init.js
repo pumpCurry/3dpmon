@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1568 (PR #439)
+ * @version 1.390.1569 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 21:52:20
+ * @lastModified 2026-09-01 07:56:16
  * -----------------------------------------------------------
  */
 
@@ -67,7 +67,7 @@ import {
   buildJobCostReport, buildHostRanking, buildMaterialReport
 } from "./dashboard_production.js";
 import { weightFromLength } from "./dashboard_spool.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { saveUnifiedStorage, saveUnifiedStorageDurably } from "./dashboard_storage.js";
 import { createEmptyState } from "./dashboard_ui_components.js";
 import {
   initializeCommandPalette,
@@ -729,6 +729,64 @@ function resolveCfsControlRecoveryLatchStatus(result) {
 }
 
 /**
+ * CFS物理command送信前に復旧ラッチrecordをdurable保存する。
+ *
+ * 【詳細説明】
+ * - load/unload/feed/retract/selectはいずれも実機側の物理状態を変え得るため、transportへ到達する前に
+ *   未解決recordを保存してから送信する。
+ * - IndexedDB利用時は `saveUnifiedStorageDurably()` でflush完了まで待ち、保存できない場合は送信を中止する。
+ * - 保存する内容は復旧判断に必要な証跡だけで、RPC frameや再送可能payloadは保存しない。
+ *
+ * @private
+ * @function reserveCfsControlRecoveryLatchBeforeTransport
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} request - 送信予定command request
+ * @param {object} context - send-time dispatch context
+ * @returns {Promise<object>} reservation結果
+ * @throws {Error} reservationまたはdurable保存に失敗した場合
+ */
+async function reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, context) {
+  const target = getConnectionTarget(hostname);
+  const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
+  const record = createPhysicalCommandRecoveryLatchRecord({
+    commandId: request.commandId,
+    commandKind: request.commandKind,
+    deviceId: request.deviceId,
+    sessionId: request.sessionId,
+    connectionGeneration: getPrinterCoreV3ConnectionGeneration(hostname),
+    status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
+    sentAt: request.createdAt || context?.createdAt || new Date().toISOString(),
+    materialSourceId: request.payload?.sourceId || null,
+    certificationId: evidence.certificationId || evidence.captureId || evidence.fixtureId || null,
+    preObservation: {
+      sequence: context?.stateSequence ?? null,
+      digest: context?.contextId || null,
+      observedAt: context?.createdAt || request.createdAt || null,
+    },
+  });
+  const appendResult = appendPhysicalCommandRecoveryLatchRecord(
+    monitorData.physicalCommandRecoveryLatch,
+    record
+  );
+  if (appendResult?.store && ["appended", "idempotent", "conflict"].includes(appendResult.status)) {
+    monitorData.physicalCommandRecoveryLatch = appendResult.store;
+  }
+  const durableResult = await saveUnifiedStorageDurably();
+  if (!durableResult?.ok) {
+    throw new Error(`cfs-control-recovery-reservation-save-failed:${durableResult?.reason || "unknown"}`);
+  }
+  if (appendResult?.ok !== true || appendResult.status === "conflict") {
+    throw new Error(`cfs-control-recovery-reservation-${appendResult?.status || "failed"}`);
+  }
+  return {
+    ok: true,
+    status: appendResult.status,
+    commandId: record.commandId,
+    latchStatus: record.status,
+  };
+}
+
+/**
  * 未解決の物理CFS command結果を復旧ラッチstoreへ保存する。
  *
  * 【詳細説明】
@@ -750,6 +808,19 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
     return dispatchOutput;
   }
   try {
+    const existingRecord = monitorData.physicalCommandRecoveryLatch
+      ?.unresolvedByCommandId?.[request.commandId] || null;
+    if (existingRecord) {
+      return {
+        ...dispatchOutput,
+        recoveryLatch: {
+          ok: true,
+          status: "already-reserved",
+          commandId: existingRecord.commandId,
+          latchStatus: existingRecord.status,
+        },
+      };
+    }
     const target = getConnectionTarget(hostname);
     const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
     const postObservation = result.postCommandObservation || {};
@@ -808,7 +879,7 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
 function createCfsControlDispatcher(hostname) {
   return createBoundPrinterCommandDispatcher({
     getSendTimeContext: (request) => createCfsControlSendTimeContext(hostname, request),
-    sendTransport: async (request) => {
+    sendTransport: async (request, context) => {
       const currentTarget = getConnectionTarget(hostname);
       const currentSettings = resolveCfsControlProductionSettings(currentTarget);
       if (!currentSettings || !currentSettings.certifiedCommandKinds.includes(String(request?.commandKind || "").trim())) {
@@ -822,6 +893,7 @@ function createCfsControlDispatcher(hostname) {
       if (!plan.ok) {
         throw new Error(`k2-cfs-control-plan-rejected:${plan.reason}`);
       }
+      await reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, context);
       return sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
         await sendCommand(frame.method, frame.params, hostname);
         return {

@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1567 (PR #439)
+ * @version 1.390.1569 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 21:36:36
+ * @lastModified 2026-09-01 07:56:16
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -595,12 +595,33 @@ function collectViewModelSourceRows(viewModel) {
 }
 
 /**
+ * select自動解決で選択状態の完全性確認が必要な実sourceか判定する。
+ *
+ * 【詳細説明】
+ * - sourceIdを持たない固定placeholderは物理sourceとして扱わない。
+ * - 明示empty sourceは選択対象外として扱い、選択状態が未観測でも自動解決の妨げにしない。
+ * - loaded/unknownの実sourceは、他slotが選ばれていないことまで証明する必要があるため
+ *   `selectionValid === true` を必須にする。
+ *
+ * @private
+ * @function isSelectionCompletenessRelevantSource
+ * @param {object|null|undefined} row - material topology view model source row
+ * @returns {boolean} 選択状態の完全性確認対象ならtrue
+ */
+function isSelectionCompletenessRelevantSource(row) {
+  if (!row?.sourceId) {
+    return false;
+  }
+  return row?.presence !== "empty";
+}
+
+/**
  * CFS select commandを後続観測だけで解決してよいか評価する。
  *
  * 【詳細説明】
  * - 自動解決は人間確認を介さず永続復旧ラッチを閉じるため、freshな現在観測だけを根拠にする。
- * - selected=trueのsourceが複数ある、selectionValid=falseが含まれる、またはtarget sourceと一致しない場合は
- *   物理状態が曖昧なためprobingを維持する。
+ * - selected=trueのsourceが複数ある、selectionValid=falseが含まれる、他の実sourceのselection状態が未観測、
+ *   またはtarget sourceと一致しない場合は物理状態が曖昧なためprobingを維持する。
  * - この判定はselect専用であり、load/unload/feed/retractの物理成功確認には使わない。
  *
  * @private
@@ -631,6 +652,13 @@ function evaluateSelectedSourceObservation(viewModel, expectedSourceId) {
       confirmed: false,
       reason: "invalid-selection-state",
       message: "機器の選択状態が有効ではありません。再操作を保留しています。",
+    };
+  }
+  if (rows.some((row) => isSelectionCompletenessRelevantSource(row) && row?.status?.selectionValid !== true)) {
+    return {
+      confirmed: false,
+      reason: "selection-observation-incomplete",
+      message: "すべての装填候補スロットの選択状態を確認できません。再操作を保留しています。",
     };
   }
   const selectedRows = rows.filter((row) => row?.selected === true && row?.status?.selectionValid === true);

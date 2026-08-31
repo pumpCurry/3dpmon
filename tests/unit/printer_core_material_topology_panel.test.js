@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1567 (PR #439)
+ * @version 1.390.1569 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 21:36:36
+ * @lastModified 2026-09-01 07:56:16
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1178,6 +1178,75 @@ describe("Printer Core v3 material topology panel", () => {
     expect(onCommandReconciled).not.toHaveBeenCalled();
     expect(status?.dataset.executionState).toBe("probing");
     expect(status?.textContent).toContain("選択状態が有効ではありません");
+  });
+
+  it("Gate19.5: 対象slotがselectedでも他の装填sourceのselection未観測なら復旧ラッチ解決通知を出さない", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const incompletePayload = createOneUnitBoxsInfo();
+    incompletePayload.materialBoxs[1].materials.forEach((material, index) => {
+      if (index === 0) {
+        delete material.selected;
+      } else {
+        material.selected = index === 1 ? 1 : 0;
+      }
+    });
+    const incompleteTopology = normalizeK2BoxsInfo(incompletePayload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:00.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const incompleteViewModel = createMaterialTopologyViewModel(incompleteTopology, {
+      unitLimit: 1,
+      observation: {
+        lastObservedAt: "2026-08-28T01:00:05.000Z",
+      },
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const onCommandReconciled = vi.fn();
+    const container = document.createElement("div");
+    const handle = renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommandReconciled,
+        onCommand: vi.fn().mockResolvedValue({
+          accepted: true,
+          request: {
+            commandId: "cmd:k2-select-1b",
+          },
+          result: {
+            commandId: "cmd:k2-select-1b",
+            status: "acknowledged",
+            completed: false,
+            postCommandObservation: {
+              confirmed: false,
+            },
+          },
+        }),
+      },
+    });
+
+    getSlotActionButton(container, "1B", "select")?.click();
+    await flushRealUiTick();
+    handle.update(incompleteViewModel);
+
+    const status = container.querySelector('.mtv-slot[data-slot="1B"] .mtv-command-status');
+    expect(onCommandReconciled).not.toHaveBeenCalled();
+    expect(status?.dataset.executionState).toBe("probing");
+    expect(status?.textContent).toContain("すべての装填候補スロットの選択状態を確認できません");
+    expect(getSlotActionButton(container, "1A", "load")?.disabled).toBe(true);
   });
 
   it("Gate19.5: 観測未確認selectは次観測で未確認ならprobingとして保持する", async () => {
