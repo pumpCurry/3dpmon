@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1550 (PR #439)
+ * @version 1.390.1558 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:48:53
+ * @lastModified 2026-08-31 20:19:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -326,6 +326,30 @@ describe("dashboard_physical_command_recovery_latch", () => {
         reason: "command-id-storage-key-mismatch",
       }),
     ]);
+  });
+
+  it("保存keyとrecord.commandIdが一致しない隔離entryは両方のIDでblockする", () => {
+    const restored = normalizeStoredPhysicalCommandRecoveryLatchStore({
+      unresolvedByCommandId: {
+        "command:visible-key": createPhysicalCommandRecoveryLatchRecord(createCommandInput({
+          commandId: "command:payload-key",
+          status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
+        })),
+      },
+    });
+
+    expect(isPhysicalCommandRecoveryBlocked(restored, "command:payload-key")).toMatchObject({
+      blocked: true,
+      reason: "integrity-quarantine",
+      commandId: "command:payload-key",
+      quarantineReason: "command-id-storage-key-mismatch",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(restored, "command:visible-key")).toMatchObject({
+      blocked: true,
+      reason: "integrity-quarantine",
+      commandId: "command:visible-key",
+      quarantineReason: "command-id-storage-key-mismatch",
+    });
   });
 
   it("保存済みevents/retainedUnsupportedEntriesに紛れたcommand frameも復旧storeから除去する", () => {

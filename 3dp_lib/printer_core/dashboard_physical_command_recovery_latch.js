@@ -19,9 +19,9 @@
  * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1550 (PR #439)
+ * @version 1.390.1558 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:48:53
+ * @lastModified 2026-08-31 20:19:55
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
@@ -683,10 +683,17 @@ export function isPhysicalCommandRecoveryBlocked(storeInput, commandIdInput) {
       commandId,
     });
   }
-  const quarantine = (store.retainedUnsupportedEntries || []).find((entry) => (
-    toTrimmedString(entry?.commandId) === commandId &&
-    BLOCKING_QUARANTINE_REASONS.has(toTrimmedString(entry?.reason))
-  ));
+  const quarantine = (store.retainedUnsupportedEntries || []).find((entry) => {
+    const reason = toTrimmedString(entry?.reason);
+    const entryCommandId = toTrimmedString(entry?.commandId);
+    const entryStorageKey = toTrimmedString(entry?.storageKey);
+    const matchesCommandId = entryCommandId === commandId;
+    const matchesStorageKey = reason === "command-id-storage-key-mismatch"
+      && entryStorageKey === commandId;
+
+    return BLOCKING_QUARANTINE_REASONS.has(reason)
+      && (matchesCommandId || matchesStorageKey);
+  });
   if (quarantine) {
     return deepFreezeJson({
       blocked: true,
