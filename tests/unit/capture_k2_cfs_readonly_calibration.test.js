@@ -188,6 +188,17 @@ describe("capture_k2_cfs_readonly_calibration", () => {
     ]);
     expect(ws.sentFrames.filter((frame) => frame?.method === "set")).toHaveLength(0);
     expect(ws.closed).toBe(true);
+    expect(result.wsTimeline.map((entry) => entry.direction)).toEqual([
+      "out",
+      "in",
+      "out",
+      "in",
+      "out",
+      "in",
+      "out",
+      "in",
+    ]);
+    expect(result.wsTimeline.filter((entry) => entry.method === "set")).toHaveLength(0);
   });
 
   it("一部probeがtimeoutした場合は観測証跡を保持しつつpartialとして返す", async () => {
@@ -256,6 +267,17 @@ describe("capture_k2_cfs_readonly_calibration", () => {
       failedBoxsInfoProbeCount: 0,
     });
     expect(result.printerStatusSeries.map((probe) => probe.status)).toEqual(["observed", "timeout"]);
+    expect(result.wsTimeline.map((entry) => ({
+      direction: entry.direction,
+      kind: entry.kind,
+      probe: entry.probe,
+    }))).toEqual([
+      { direction: "out", kind: "printer-status-get", probe: 1 },
+      { direction: "in", kind: "printer-status", probe: 1 },
+      { direction: "out", kind: "printer-status-get", probe: 2 },
+      { direction: "out", kind: "boxsInfo-get", probe: 1 },
+      { direction: "in", kind: "boxsInfo", probe: 1 },
+    ]);
   });
 
   it("output-dir指定時はcalibration resultを保存する", async () => {

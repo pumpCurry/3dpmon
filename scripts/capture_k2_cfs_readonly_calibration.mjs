@@ -18,7 +18,7 @@
  *
  * @version 1.390.1547 (PR #439)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:39:05
+ * @lastModified 2026-08-31 19:42:52
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -284,6 +284,127 @@ function sleep(milliseconds) {
 }
 
 /**
+ * JSON文字列を安全にparseする。
+ *
+ * @private
+ * @function parseJsonSafely
+ * @param {*} payload - WebSocket payload候補。
+ * @returns {?Object} parse済みobject、またはnull。
+ */
+function parseJsonSafely(payload) {
+  try {
+    const text = Buffer.isBuffer(payload) ? payload.toString("utf8") : String(payload ?? "");
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * outbound WebSocket frame種別を分類する。
+ *
+ * @private
+ * @function classifyOutboundFrame
+ * @param {?Object} frame - parse済みoutbound frame。
+ * @returns {string} timeline用kind。
+ */
+function classifyOutboundFrame(frame) {
+  if (frame?.method === "get" && frame?.params?.boxsInfo === 1) {
+    return "boxsInfo-get";
+  }
+  if (frame?.method === "get" && frame?.params?.state === 1) {
+    return "printer-status-get";
+  }
+  return frame?.method ? `${frame.method}-frame` : "ws-out";
+}
+
+/**
+ * inbound WebSocket frame種別を分類する。
+ *
+ * @private
+ * @function classifyInboundFrame
+ * @param {?Object} frame - parse済みinbound frame。
+ * @returns {string} timeline用kind。
+ */
+function classifyInboundFrame(frame) {
+  const root = frame?.result && typeof frame.result === "object" ? frame.result : frame;
+  if (root?.boxsInfo) {
+    return "boxsInfo";
+  }
+  if (Object.prototype.hasOwnProperty.call(root || {}, "state") ||
+      Object.prototype.hasOwnProperty.call(root || {}, "deviceState")) {
+    return "printer-status";
+  }
+  return "ws-in";
+}
+
+/**
+ * WebSocket送受信timeline recorderを作成する。
+ *
+ * 【詳細説明】
+ * - CFS操作frameやraw payloadを保存せず、read-only calibration中の送受信順序だけを記録する。
+ * - probe番号を付けることで、timeout後の遅延応答が次probe windowへ紛れた可能性をレビューできる。
+ *
+ * @private
+ * @function createWsTimelineRecorder
+ * @param {Object} ws - OPEN済みWebSocket。
+ * @returns {{timeline:Array<Object>, beginProbe:Function}} timeline recorder。
+ */
+function createWsTimelineRecorder(ws) {
+  const timeline = [];
+  let activeProbe = null;
+  const originalSend = typeof ws?.send === "function" ? ws.send.bind(ws) : null;
+  if (originalSend) {
+    ws.send = (payload, ...args) => {
+      const frame = parseJsonSafely(payload);
+      timeline.push({
+        at: new Date().toISOString(),
+        direction: "out",
+        kind: classifyOutboundFrame(frame),
+        probe: activeProbe?.index ?? null,
+        probeKind: activeProbe?.kind ?? null,
+        method: frame?.method || null,
+        paramKeys: frame?.params && typeof frame.params === "object" && !Array.isArray(frame.params)
+          ? Object.keys(frame.params).sort()
+          : [],
+        byteLength: Buffer.byteLength(String(payload ?? ""), "utf8"),
+      });
+      return originalSend(payload, ...args);
+    };
+  }
+  if (typeof ws?.on === "function") {
+    ws.on("message", (payload) => {
+      const frame = parseJsonSafely(payload);
+      const root = frame?.result && typeof frame.result === "object" ? frame.result : frame;
+      timeline.push({
+        at: new Date().toISOString(),
+        direction: "in",
+        kind: classifyInboundFrame(frame),
+        probe: activeProbe?.index ?? null,
+        probeKind: activeProbe?.kind ?? null,
+        method: frame?.method || null,
+        payloadKeys: root && typeof root === "object" && !Array.isArray(root)
+          ? Object.keys(root).sort()
+          : [],
+        byteLength: Buffer.byteLength(Buffer.isBuffer(payload) ? payload : String(payload ?? ""), "utf8"),
+      });
+    });
+  }
+  return {
+    timeline,
+    beginProbe(kind, index) {
+      activeProbe = { kind, index };
+      return () => {
+        if (activeProbe?.kind === kind && activeProbe?.index === index) {
+          activeProbe = null;
+        }
+      };
+    },
+  };
+}
+
+/**
  * probeを失敗込みのJSON resultへ変換して実行する。
  *
  * @private
@@ -291,9 +412,15 @@ function sleep(milliseconds) {
  * @param {Function} probeFn - read-only probe関数
  * @param {object} ws - OPEN済みWebSocket
  * @param {object} options - probe option
+ * @param {?Object=} recorder - timeline recorder。
+ * @param {string=} timelineKind - timeline用probe種別。
+ * @param {number=} timelineIndex - timeline用probe番号。
  * @returns {Promise<object>} observed/timeout/error result
  */
-async function runProbeSafely(probeFn, ws, options) {
+async function runProbeSafely(probeFn, ws, options, recorder = null, timelineKind = "", timelineIndex = null) {
+  const finishProbe = recorder?.beginProbe
+    ? recorder.beginProbe(timelineKind || options.probeMode || "probe", timelineIndex)
+    : null;
   try {
     return await probeFn(ws, options);
   } catch (error) {
@@ -309,6 +436,10 @@ async function runProbeSafely(probeFn, ws, options) {
       message: error?.message || String(error),
       error: { message: error?.message || String(error) },
     };
+  } finally {
+    if (typeof finishProbe === "function") {
+      finishProbe();
+    }
   }
 }
 
@@ -360,9 +491,11 @@ export async function runK2CfsReadOnlyCalibration(options) {
   let wsOpen = false;
   const printerStatusSeries = [];
   const boxsInfoSeries = [];
+  let timelineRecorder = { timeline: [] };
   try {
     ws = await (options.openWs || openWs)(options.host, options.wsPort);
     wsOpen = true;
+    timelineRecorder = createWsTimelineRecorder(ws);
     for (let index = 0; index < options.statusProbeCount; index += 1) {
       if (index > 0) {
         await sleep(options.statusProbeIntervalMs);
@@ -370,7 +503,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
       printerStatusSeries.push(await runProbeSafely(sendPrinterStatusProbeAndWait, ws, {
         probeMode: `printer-status:${index + 1}`,
         timeoutMs: options.probeTimeoutMs,
-      }));
+      }, timelineRecorder, "printer-status", index + 1));
     }
     for (let index = 0; index < options.boxsInfoProbeCount; index += 1) {
       if (index > 0) {
@@ -379,7 +512,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
       boxsInfoSeries.push(await runProbeSafely(sendBoxsInfoProbeAndWait, ws, {
         probeMode: `boxsInfo:${index + 1}`,
         timeoutMs: options.probeTimeoutMs,
-      }));
+      }, timelineRecorder, "boxsInfo", index + 1));
     }
   } catch (error) {
     const result = {
@@ -395,6 +528,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
       wsPort: options.wsPort,
       printerInfo,
       wsOpen,
+      wsTimeline: timelineRecorder.timeline,
       printerStatusSeries,
       boxsInfoSeries,
       statusProbeCount: printerStatusSeries.length,
@@ -431,6 +565,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
     wsPort: options.wsPort,
     printerInfo,
     wsOpen,
+    wsTimeline: timelineRecorder.timeline,
     printerStatusSeries,
     boxsInfoSeries,
     statusProbeCount: printerStatusSeries.length,
