@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1540 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:37:00
+ * @lastModified 2026-08-31 18:41:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -131,7 +131,7 @@ describe("dashboard_physical_command_recovery_latch", () => {
     ]);
   });
 
-  it("同一commandIdかつ同一digestの追加は冪等に扱い、異なるdigestは隔離する", () => {
+  it("同一commandIdかつ同一digestの追加は冪等に扱い、異なるdigestは全て隔離する", () => {
     const firstRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput());
     const duplicateRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput());
     const conflictingRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput({
@@ -149,11 +149,41 @@ describe("dashboard_physical_command_recovery_latch", () => {
 
     expect(duplicate.status).toBe("idempotent");
     expect(conflict.status).toBe("conflict");
-    expect(Object.keys(conflict.store.unresolvedByCommandId)).toEqual(["command:k2-select-1a"]);
+    expect(conflict.store.unresolvedByCommandId).toEqual({});
     expect(conflict.store.retainedUnsupportedEntries).toEqual([
       expect.objectContaining({
         commandId: "command:k2-select-1a",
         reason: "command-id-digest-conflict",
+        conflictedDigest: firstRecord.digest,
+      }),
+      expect.objectContaining({
+        commandId: "command:k2-select-1a",
+        reason: "command-id-digest-conflict",
+        conflictedDigest: conflictingRecord.digest,
+      }),
+    ]);
+  });
+
+  it("保存済みdigestがcanonical recordから再計算した値と異なる場合は未解決authorityから隔離する", () => {
+    const validRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput({
+      commandId: "command:valid",
+    }));
+    const restored = normalizeStoredPhysicalCommandRecoveryLatchStore({
+      unresolvedByCommandId: {
+        "command:valid": {
+          ...validRecord,
+          digest: "fnv1a128:tampered",
+        },
+      },
+    });
+
+    expect(restored.unresolvedByCommandId).toEqual({});
+    expect(restored.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        commandId: "command:valid",
+        reason: "command-id-digest-mismatch",
+        persistedDigest: "fnv1a128:tampered",
+        recomputedDigest: validRecord.digest,
       }),
     ]);
   });

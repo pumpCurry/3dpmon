@@ -897,6 +897,71 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.usageHistory).toEqual([]);
   });
 
+  it('Gate19 prep: importAllData は同一commandIdのdigest衝突を全て隔離し未解決authorityへ残さない', async () => {
+    monitorData.physicalCommandRecoveryLatch = {
+      schemaVersion: 1,
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {
+        "command:k2-load-1a": createPhysicalCommandRecoveryLatchRecord({
+          commandId: "command:k2-load-1a",
+          commandKind: "cfs-slot-load",
+          deviceId: "serial:k2pro-69e7",
+          sessionId: "session:live-002",
+          connectionGeneration: 43,
+          status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
+          sentAt: "2026-08-31T09:30:00.000Z",
+          materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+          preObservation: {
+            sequence: 180,
+            digest: "fnv1a128:before-load",
+          },
+        }),
+      },
+      events: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+        physicalCommandAuthority: "recovery-latch-only",
+      },
+    };
+
+    await importAllData({
+      physicalCommandRecoveryLatch: {
+        schemaVersion: 1,
+        unresolvedByCommandId: {
+          "command:k2-load-1a": createPhysicalCommandRecoveryLatchRecord({
+            commandId: "command:k2-load-1a",
+            commandKind: "cfs-slot-load",
+            deviceId: "serial:k2pro-69e7",
+            sessionId: "session:live-003",
+            connectionGeneration: 44,
+            status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
+            sentAt: "2026-08-31T09:31:00.000Z",
+            materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+            preObservation: {
+              sequence: 181,
+              digest: "fnv1a128:before-load-conflict",
+            },
+          }),
+        },
+      },
+    });
+
+    expect(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
+    expect(monitorData.physicalCommandRecoveryLatch.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        commandId: "command:k2-load-1a",
+        reason: "command-id-digest-conflict",
+      }),
+      expect.objectContaining({
+        commandId: "command:k2-load-1a",
+        reason: "command-id-digest-conflict",
+      }),
+    ]);
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {
     monitorData.inferredCandidateStore = {
       "ic-a": { candidateHash: "ic-a", status: "pending", usedMm: 100, updatedAt: 20 },

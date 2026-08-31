@@ -18,9 +18,9 @@
  * - {@link appendPhysicalCommandRecoveryLatchRecord}：未解決候補recordをstoreへ冪等追加
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1540 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:39:00
+ * @lastModified 2026-08-31 18:41:08
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
@@ -282,11 +282,17 @@ function createEmptyStore() {
  * @private
  * @function validateRecoveryRecord
  * @param {*} value - record候補。
- * @returns {{ok:boolean, reasons:Array<string>, record:?Object}} 検査結果。
+ * @returns {{ok:boolean, reasons:Array<string>, record:?Object, persistedDigest:?string, recomputedDigest:?string}} 検査結果。
  */
 function validateRecoveryRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { ok: false, reasons: ["record-not-object"], record: null };
+    return {
+      ok: false,
+      reasons: ["record-not-object"],
+      record: null,
+      persistedDigest: null,
+      recomputedDigest: null,
+    };
   }
   const commandId = toTrimmedString(value.commandId);
   const commandKind = toTrimmedString(value.commandKind);
@@ -315,8 +321,13 @@ function validateRecoveryRecord(value) {
     certificationId: toTrimmedString(value.certificationId) || null,
     preObservation: normalizeObservationReference(value.preObservation),
   };
-  const digest = toTrimmedString(value.digest) || createRecoveryRecordDigest(record);
-  record.digest = digest;
+  const persistedDigest = toTrimmedString(value.digest) || null;
+  const recomputedDigest = createRecoveryRecordDigest(record);
+  if (persistedDigest && persistedDigest !== recomputedDigest) {
+    reasons.push("command-id-digest-mismatch");
+  }
+  // 保存済みdigestは信頼境界外なので、record本体は常にcanonical fieldsから再計算した値へ寄せる。
+  record.digest = recomputedDigest;
   record.recoveryId = record.recoveryId || createPrinterCoreV3DeterministicId("physical-command-recovery", [
     record.commandId,
     record.digest,
@@ -326,6 +337,8 @@ function validateRecoveryRecord(value) {
     ok: reasons.length === 0,
     reasons,
     record,
+    persistedDigest,
+    recomputedDigest,
   };
 }
 
@@ -399,12 +412,22 @@ export function normalizeStoredPhysicalCommandRecoveryLatchStore(input) {
   for (const [key, value] of sourceEntries) {
     const validation = validateRecoveryRecord(value);
     if (!validation.ok || !UNRESOLVED_STATUSES.has(validation.record.status)) {
-      retainedUnsupportedEntries.push({
-        commandId: toTrimmedString(value?.commandId) || toTrimmedString(key) || null,
-        reason: "invalid-recovery-record",
-        validationReasons: validation.reasons,
-        status: toTrimmedString(value?.status) || null,
-      });
+      if (validation.reasons.includes("command-id-digest-mismatch")) {
+        retainedUnsupportedEntries.push({
+          commandId: validation.record?.commandId || toTrimmedString(value?.commandId) || toTrimmedString(key) || null,
+          reason: "command-id-digest-mismatch",
+          persistedDigest: validation.persistedDigest,
+          recomputedDigest: validation.recomputedDigest,
+          status: validation.record?.status || toTrimmedString(value?.status) || null,
+        });
+      } else {
+        retainedUnsupportedEntries.push({
+          commandId: toTrimmedString(value?.commandId) || toTrimmedString(key) || null,
+          reason: "invalid-recovery-record",
+          validationReasons: validation.reasons,
+          status: toTrimmedString(value?.status) || null,
+        });
+      }
       continue;
     }
     if (validation.record.commandId !== toTrimmedString(key)) {
@@ -500,11 +523,18 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
         reasons: [],
       });
     }
+    delete unresolvedByCommandId[record.commandId];
     retainedUnsupportedEntries.push({
       commandId: record.commandId,
       reason: "command-id-digest-conflict",
-      existingDigest: existing.digest,
-      incomingDigest: record.digest,
+      conflictedDigest: existing.digest,
+      status: existing.status,
+    });
+    retainedUnsupportedEntries.push({
+      commandId: record.commandId,
+      reason: "command-id-digest-conflict",
+      conflictedDigest: record.digest,
+      status: record.status,
     });
     return deepFreezeJson({
       ok: false,

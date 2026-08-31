@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1540 (PR #439)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 19:41:00
+ * @lastModified 2026-08-31 18:41:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -228,7 +228,7 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
  * - 復旧ラッチはGate 19 production command activation前の安全装置であり、submitted/post-observed/unknownの
  *   未解決証跡だけを保持する。
  * - 復元/import時もcommand frameやRPC payloadは保存せず、自動再送は行わない。
- * - 同一commandIdで異なるdigestが来た場合は既存recordを優先し、incoming側を隔離して人間確認へ回す。
+ * - 同一commandIdで異なるdigestが来た場合は勝者を作らず、両recordを隔離して人間確認へ回す。
  *
  * @private
  * @function _mergePhysicalCommandRecoveryLatchStore
@@ -256,11 +256,18 @@ function _mergePhysicalCommandRecoveryLatchStore(incomingStore) {
       continue;
     }
     if (existing.digest !== record.digest) {
+      delete unresolvedByCommandId[commandId];
       retainedUnsupportedEntries.push({
         commandId,
         reason: "command-id-digest-conflict",
-        existingDigest: existing.digest,
-        incomingDigest: record.digest,
+        conflictedDigest: existing.digest,
+        status: existing.status,
+      });
+      retainedUnsupportedEntries.push({
+        commandId,
+        reason: "command-id-digest-conflict",
+        conflictedDigest: record.digest,
+        status: record.status,
       });
     }
   }
