@@ -353,10 +353,14 @@ Gate 18.9D-1:
 
 Gate 18.9D-2:
 
-- persistent atomic shadow commit
-- base MaterialSource/SpoolMount snapshot revision or digest CAS
-- restart/recovery from durable shadow records
-- `SHADOW` lifecycle transition only after commit success
+- persistent shadow commit store
+- trusted in-process prepared transaction attestation
+- base MaterialSource/SpoolMount snapshot digest CAS
+- durable write callback boundary; failed durable write returns the previous store
+- restart/recovery from durable shadow commit records
+- `SHADOW` lifecycle transition only after durable commit success
+- same `shadowOperationId` and same transaction payload is idempotent
+- same `shadowOperationId` with different transaction payload is blocked
 - no ledger debit behavior change
 
 Gate 18.9E:

@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1506 (PR #438)
+* @version 1.390.1515 (PR #438)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-31 12:18:00
+* @lastModified 2026-08-31 14:10:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -379,6 +379,30 @@ export const monitorData = {
       materialSourceRepositoryWrites: false,
       spoolMountRepositoryWrites: false,
       migrationJournalIsEvidenceOnly: true,
+    },
+  },
+  /**
+   * Gate 18.9D-2: Universal MaterialSource移行shadow commit store。
+   * prepared shadow transactionがdurable commitに成功した後のMaterialSource/SpoolMount
+   * snapshotとmigration lifecycleを保持する。これはまだledger debitやlegacy cutover sealの
+   * authorityではなく、再起動後のshadow observation/retryを復元するための永続storeである。
+   * @type {{schemaVersion:number, authority:string, materialSourceRegistrySnapshot:Object, spoolMountRepositorySnapshot:Object, committedTransactionsById:Object, committedOperationsById:Object, lifecycleBySubject:Object, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  materialAccountingMigrationShadowStore: {
+    schemaVersion: 1,
+    authority: "migration-shadow-commit-store",
+    materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+    spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    committedTransactionsById: {},
+    committedOperationsById: {},
+    lifecycleBySubject: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      ledgerWrites: false,
+      legacyCutoverSealed: false,
+      materialSourceRepositoryWrites: "shadow-only",
+      spoolMountRepositoryWrites: "shadow-only",
     },
   },
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。

@@ -436,11 +436,18 @@ transaction:
 Gate 18.9D-2 then connects the staged candidate to persistent atomic shadow
 commit/recovery:
 
-- base MaterialSource/SpoolMount snapshot revision or digest is recorded in the
-  transaction
+- base MaterialSource/SpoolMount snapshot digest is checked at commit time
+- the commit boundary accepts only the exact in-process trusted prepared
+  transaction issued by the transaction module
 - commit uses compare-and-swap against the current durable repository state
 - stale base revision requires re-preflight and re-stage
 - only successful durable commit may emit the `SHADOW` lifecycle transition
+- durable write failure keeps the previous shadow store and emits no lifecycle
+  transition
+- `materialAccountingMigrationShadowStore` is persisted and restored as shadow
+  evidence without projecting into legacy `hostSpoolMap` or ledger debit
+- same `shadowOperationId` and same transaction payload is idempotent, while the
+  same operation ID with a different transaction payload is blocked
 - restart/recovery restores durable shadow records without ledger debit
 
 After the staged and persistent shadow transaction boundaries are accepted,
@@ -576,6 +583,18 @@ Gate 18.9D-1 tests:
 - invalid repository snapshot records are returned as blocked results rather than thrown exceptions
 - `executedAt` before preflight `evaluatedAt` is blocked
 - invalid `executedAt` or missing operation ID blocks before staging
+
+Gate 18.9D-2 tests:
+
+- durable write success commits MaterialSource/SpoolMount shadow snapshots and
+  advances subject lifecycle to `shadow`
+- current durable snapshot change blocks before persist
+- durable write failure keeps the previous store and does not advance lifecycle
+- same transaction retry is idempotent and does not duplicate events
+- plain or cloned prepared transaction is rejected as untrusted
+- same `shadowOperationId` with different payload is blocked
+- saved shadow commit store restores after restart without legacy mount or
+  ledger projection
 
 Gate 18.9E planned tests:
 

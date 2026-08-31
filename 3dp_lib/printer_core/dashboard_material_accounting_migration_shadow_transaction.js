@@ -14,10 +14,11 @@
  *
  * 【公開関数一覧】
  * - {@link prepareMaterialAccountingMigrationShadowTransaction}：shadow transaction候補を準備
+ * - {@link isTrustedMaterialAccountingMigrationShadowTransaction}：trusted transactionかを判定
  *
- * @version 1.390.1514 (PR #438)
+ * @version 1.390.1515 (PR #438)
  * @since   1.390.1513 (PR #438)
- * @lastModified 2026-08-31 13:59:00
+ * @lastModified 2026-08-31 14:10:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9D 後続でstaged snapshotをIndexedDB transactionへ接続し、commit/rollback境界を実装する
@@ -37,6 +38,13 @@ import {
 } from "./dashboard_material_accounting_migration_shadow_executor.js";
 import { createMaterialSourceRegistry } from "./dashboard_material_source_registry.js";
 import { createSpoolMountRepository } from "./dashboard_spool_mount_repository.js";
+
+/**
+ * trusted shadow transaction の参照集合。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_SHADOW_TRANSACTIONS = new WeakSet();
 
 /**
  * JSON互換値をcloneする。
@@ -137,7 +145,7 @@ function createTransactionResult({
   reasons,
   transaction = null,
 }) {
-  return deepFreezeJson({
+  const result = deepFreezeJson({
     ok,
     status,
     reasons: [...new Set((reasons || []).map((reason) => toTrimmedString(reason)).filter(Boolean))],
@@ -150,6 +158,31 @@ function createTransactionResult({
       ledgerWrites: false,
     },
   });
+  if (result.ok === true && result.status === "prepared" && result.transaction) {
+    TRUSTED_SHADOW_TRANSACTIONS.add(result.transaction);
+  }
+  return result;
+}
+
+/**
+ * transactionがこのモジュールで発行されたtrusted prepared resultかを判定する。
+ *
+ * 【詳細説明】
+ * - plain objectやcloneされたtransactionをcommit境界へ進ませないため、runtime-only WeakSetで参照同一性を確認する。
+ * - restart/reconnect後はpreflightとstagingを再実行する前提なので、永続transaction attestationは発行しない。
+ *
+ * @function isTrustedMaterialAccountingMigrationShadowTransaction
+ * @param {*} value - transaction候補。
+ * @returns {boolean} trusted prepared transactionならtrue。
+ * @example
+ * const trusted = isTrustedMaterialAccountingMigrationShadowTransaction(transaction);
+ */
+export function isTrustedMaterialAccountingMigrationShadowTransaction(value) {
+  return !!value &&
+    typeof value === "object" &&
+    TRUSTED_SHADOW_TRANSACTIONS.has(value) &&
+    value.transactionStatus === "prepared" &&
+    value.proposedMigrationStatus === MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW;
 }
 
 /**

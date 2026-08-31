@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1506 (PR #438)
+* @version 1.390.1515 (PR #438)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-31 12:18:00
+* @lastModified 2026-08-31 14:10:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -45,6 +45,7 @@ import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_fil
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
+import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -157,6 +158,36 @@ function _mergeMaterialAccountingMigrationJournal(incomingJournal) {
     },
   });
 
+  return true;
+}
+
+/**
+ * Universal MaterialSource移行shadow commit storeを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - shadow commit storeはGate 18.9D-2のdurable shadow evidenceであり、legacy hostSpoolMapや
+ *   使用量ledgerへ自動投影しない。
+ * - import/restore時は正規化されたstoreだけを保持し、壊れた未知shapeをauthorityとして扱わない。
+ * - 既存storeとincoming storeが両方ある場合は、commit event数が多い方を採用する。完全な双方向
+ *   merge/CASは後続のpersistent adapterで扱うため、ここでは復元時の単純な情報喪失を避ける。
+ *
+ * @private
+ * @function _mergeMaterialAccountingMigrationShadowStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされたshadow commit store候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingMigrationShadowStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(
+    monitorData.materialAccountingMigrationShadowStore
+  );
+  const restoredStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(incomingStore);
+  monitorData.materialAccountingMigrationShadowStore =
+    (restoredStore.events || []).length >= (currentStore.events || []).length
+      ? restoredStore
+      : currentStore;
   return true;
 }
 
@@ -494,6 +525,12 @@ export async function importAllData(data) {
   //   移行計画の証跡だけを保持し、管理スプール装着・使用履歴・台帳へは投影しない。
   if (data.materialAccountingMigrationJournal && typeof data.materialAccountingMigrationJournal === "object") {
     _mergeMaterialAccountingMigrationJournal(data.materialAccountingMigrationJournal);
+  }
+
+  // ── Gate 18.9D-2: Universal MaterialSource移行shadow commit storeをimportする ──
+  //   durable shadow evidenceだけを保持し、legacy装着やledger debitへは投影しない。
+  if (data.materialAccountingMigrationShadowStore && typeof data.materialAccountingMigrationShadowStore === "object") {
+    _mergeMaterialAccountingMigrationShadowStore(data.materialAccountingMigrationShadowStore);
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -864,6 +901,7 @@ const LS_GLOBAL_FIELDS = [
   // ★ Gate 18.7: CFS/CFS-C/外部スプールのread-only機器観測フィラメント履歴。
   "materialSourceObservations",
   "materialAccountingMigrationJournal",
+  "materialAccountingMigrationShadowStore",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -1126,6 +1164,8 @@ function _flushStorage() {
       queueSharedWrite("materialSourceObservations", monitorData.materialSourceObservations);
       // ★ Gate 18.9B: Universal MaterialSource移行dry-run journalを証跡として保存する。
       queueSharedWrite("materialAccountingMigrationJournal", monitorData.materialAccountingMigrationJournal);
+      // ★ Gate 18.9D-2: durable shadow commit storeを証跡として保存する。
+      queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1648,6 +1688,16 @@ function _restoreFromData(shared, machines) {
   } else {
     monitorData.materialAccountingMigrationJournal = normalizeStoredMaterialAccountingMigrationJournal(
       monitorData.materialAccountingMigrationJournal
+    );
+  }
+
+  // ★ Gate 18.9D-2: Universal MaterialSource移行shadow commit storeを復元する。
+  //   これはcommit済みshadow evidenceの復元であり、復元時にlegacy装着やledgerへ投影しない。
+  if (shared?.materialAccountingMigrationShadowStore && typeof shared.materialAccountingMigrationShadowStore === "object") {
+    _mergeMaterialAccountingMigrationShadowStore(shared.materialAccountingMigrationShadowStore);
+  } else {
+    monitorData.materialAccountingMigrationShadowStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(
+      monitorData.materialAccountingMigrationShadowStore
     );
   }
 

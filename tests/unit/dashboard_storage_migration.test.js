@@ -62,6 +62,23 @@ const monitorData = {
       migrationJournalIsEvidenceOnly: true,
     },
   },
+  materialAccountingMigrationShadowStore: {
+    schemaVersion: 1,
+    authority: "migration-shadow-commit-store",
+    materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+    spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    committedTransactionsById: {},
+    committedOperationsById: {},
+    lifecycleBySubject: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      ledgerWrites: false,
+      legacyCutoverSealed: false,
+      materialSourceRepositoryWrites: "shadow-only",
+      spoolMountRepositoryWrites: "shadow-only",
+    },
+  },
   hostSpoolMap: {},
   hostCameraToggle: {},
   spoolSerialCounter: 0,
@@ -102,6 +119,23 @@ function resetMonitorData() {
       materialSourceRepositoryWrites: false,
       spoolMountRepositoryWrites: false,
       migrationJournalIsEvidenceOnly: true,
+    },
+  };
+  monitorData.materialAccountingMigrationShadowStore = {
+    schemaVersion: 1,
+    authority: "migration-shadow-commit-store",
+    materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+    spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    committedTransactionsById: {},
+    committedOperationsById: {},
+    lifecycleBySubject: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      ledgerWrites: false,
+      legacyCutoverSealed: false,
+      materialSourceRepositoryWrites: "shadow-only",
+      spoolMountRepositoryWrites: "shadow-only",
     },
   };
   monitorData.hostCameraToggle = {};
@@ -489,6 +523,116 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       migrationJournalIsEvidenceOnly: true,
     });
     expect(monitorData.hostSpoolMap).toEqual({});
+  });
+
+  it('Gate18.9D-2: materialAccountingMigrationShadowStore はshadow evidenceとして往復しlegacy装着へ投影しない', () => {
+    monitorData.filamentSpools = [{ id: "legacy-spool-031", remainingLengthMm: 336000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "legacy-spool-031" };
+    monitorData.materialAccountingMigrationShadowStore = {
+      schemaVersion: 1,
+      authority: "migration-shadow-commit-store",
+      materialSourceRegistrySnapshot: {
+        sources: [
+          {
+            materialSourceId: "material-source:direct-0",
+            deviceId: "serial:k1max-4a1b",
+            unitId: "filament-unit:direct",
+            kind: "direct-feed",
+            locator: { kind: "direct-feed", index: 0, unitIndex: null, boxId: null, slotIndex: null, protocolSlotId: null },
+            identityStrength: "stable",
+          },
+        ],
+        conflicts: [],
+      },
+      spoolMountRepositorySnapshot: {
+        mounts: [
+          {
+            mountId: "spool-mount:031",
+            mountOperationId: "shadow-mount:031",
+            materialSourceId: "material-source:direct-0",
+            spoolId: "spool-031",
+            status: "open",
+            verification: "migrated",
+            sourceIdentityStrengthAtOpen: "stable",
+            expectedRfid: null,
+            openedAt: "2026-08-31T03:02:00.000Z",
+            openedBy: "operator",
+            closedAt: null,
+            closedBy: null,
+            closeOperationId: null,
+            closeReason: null,
+          },
+        ],
+        conflicts: [],
+      },
+      committedTransactionsById: {
+        "shadow-tx:031": {
+          transactionId: "shadow-tx:031",
+          shadowOperationId: "shadow-op:031",
+          transactionDigest: "fnv1a128:031",
+          committedAt: "2026-08-31T03:02:01.000Z",
+        },
+      },
+      committedOperationsById: {
+        "shadow-op:031": {
+          shadowOperationId: "shadow-op:031",
+          transactionId: "shadow-tx:031",
+          transactionDigest: "fnv1a128:031",
+          committedAt: "2026-08-31T03:02:01.000Z",
+        },
+      },
+      lifecycleBySubject: {
+        "migration-subject:k1max-4a1b": {
+          migrationSubjectId: "migration-subject:k1max-4a1b",
+          migrationId: "migration:031",
+          transactionId: "shadow-tx:031",
+          migrationStatus: "shadow",
+          committedAt: "2026-08-31T03:02:01.000Z",
+        },
+      },
+      events: [
+        {
+          eventId: "shadow-event:031",
+          type: "material-accounting-shadow-committed",
+          transactionId: "shadow-tx:031",
+          shadowOperationId: "shadow-op:031",
+          migrationSubjectId: "migration-subject:k1max-4a1b",
+          migrationId: "migration:031",
+          transactionDigest: "fnv1a128:031",
+          committedAt: "2026-08-31T03:02:01.000Z",
+          migrationStatus: "shadow",
+        },
+      ],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        ledgerWrites: false,
+        legacyCutoverSealed: false,
+        materialSourceRepositoryWrites: "shadow-only",
+        spoolMountRepositoryWrites: "shadow-only",
+      },
+    };
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingMigrationShadowStore).toMatchObject({
+      authority: "migration-shadow-commit-store",
+      materialSourceRegistrySnapshot: { sources: [expect.any(Object)], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [expect.any(Object)], conflicts: [] },
+      lifecycleBySubject: {
+        "migration-subject:k1max-4a1b": {
+          migrationStatus: "shadow",
+        },
+      },
+      invariants: {
+        ledgerWrites: false,
+        legacyCutoverSealed: false,
+      },
+    });
+    expect(monitorData.materialAccountingMigrationShadowStore.events).toHaveLength(1);
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "legacy-spool-031" });
+    expect(monitorData.usageHistory).toEqual([]);
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {
