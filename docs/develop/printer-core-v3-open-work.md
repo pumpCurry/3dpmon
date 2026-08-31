@@ -58,11 +58,11 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `retainedUnsupportedEntries`へ隔離する。Gate 18.9Cでは、journalのREADY entryをそのまま信頼せず、
   `latestRevisionBySubject`でentry subjectの最新revisionを解決し、実行直前に再生成したcurrent planと
   device/source/spool/mount intentの同一性を再検査するpure shadow preflightを追加した。このpreflightは
-  read-only repository APIだけを参照し、MaterialSource/SpoolMount/ledgerへwriteせず、`openedAt`や
-  `mountOperationId`も採番しない。Gate 18.9Dでは、READY preflightだけを入力権威として、
+  対象entryのstatusをplan全体statusと混同せず、`evaluatedAt`とcurrent plan `createdAt`の近接性、MaterialSource/SpoolMount repository facadeが明示的に渡されていることを必須にする。read-only repository APIだけを参照し、MaterialSource/SpoolMount/ledgerへwriteせず、`openedAt`や
+  `mountOperationId`も採番しない。Gate 18.9D-1では、モジュールが発行したtrusted READY preflightだけを入力権威として、
   `shadowOperationId`と`executedAt`からstaged transaction候補を作る。ここで初めて`openedAt`と
-  `mountOperationId`を採番するが、既存snapshotから作ったstaged repositoryへ全recordを検証投入できた場合だけ
-  transactionを返し、conflict時はpartial transactionを返さない。これはまだproduction storage/ledger authorityではない。
+  `mountOperationId`を採番するが、prepared transactionと`SHADOW` lifecycle statusは分離する。MaterialSource/SpoolMount snapshotを明示入力として必須化し、snapshot未指定を空の本番状態として扱わない。snapshot内の既存conflictはstaged repository再構築前にblockedへ落とし、`executedAt`がpreflight `evaluatedAt`より前なら拒否する。既存snapshotから作ったstaged repositoryへ全recordを検証投入できた場合だけ
+  transactionを返し、conflict時はpartial transactionを返さない。これはまだproduction storage/ledger authorityではない。Gate 18.9D-2ではpersistent atomic shadow commit、base snapshot CAS、restart/recoveryを実装してからusage attributionへ進む。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。

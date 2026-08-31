@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link prepareMaterialAccountingMigrationShadowTransaction}：shadow transaction候補を準備
  *
- * @version 1.390.1513 (PR #438)
+ * @version 1.390.1514 (PR #438)
  * @since   1.390.1513 (PR #438)
- * @lastModified 2026-08-31 14:55:00
+ * @lastModified 2026-08-31 13:59:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9D 後続でstaged snapshotをIndexedDB transactionへ接続し、commit/rollback境界を実装する
@@ -33,6 +33,7 @@ import {
 } from "./dashboard_material_accounting_contract.js";
 import {
   MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS,
+  isTrustedMaterialAccountingMigrationShadowPreflightResult,
 } from "./dashboard_material_accounting_migration_shadow_executor.js";
 import { createMaterialSourceRegistry } from "./dashboard_material_source_registry.js";
 import { createSpoolMountRepository } from "./dashboard_spool_mount_repository.js";
@@ -103,6 +104,22 @@ function normalizeRequiredIsoTime(value) {
 }
 
 /**
+ * ISO日時文字列をmillisecondsへ変換する。
+ *
+ * @private
+ * @function toTimeMs
+ * @param {?string} value - ISO日時。
+ * @returns {?number} milliseconds。無効な場合はnull。
+ */
+function toTimeMs(value) {
+  if (!value) {
+    return null;
+  }
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
+
+/**
  * transaction resultを生成する。
  *
  * @private
@@ -164,6 +181,53 @@ function listSnapshotMounts(snapshot) {
 }
 
 /**
+ * repository snapshotの外形と既存conflictを検査する。
+ *
+ * 【詳細説明】
+ * - transaction層はproduction commit直前の候補であり、snapshot未指定を「空の本番状態」と解釈しない。
+ * - 既存conflict evidenceがsnapshotに残っている場合、staged repository生成で消える前にblockedへ落とす。
+ *
+ * @private
+ * @function collectSnapshotReasons
+ * @param {Object} input - 検査入力。
+ * @param {*} input.materialSourceRegistrySnapshot - MaterialSource registry snapshot。
+ * @param {*} input.spoolMountRepositorySnapshot - SpoolMount repository snapshot。
+ * @returns {string[]} block理由。
+ */
+function collectSnapshotReasons({
+  materialSourceRegistrySnapshot,
+  spoolMountRepositorySnapshot,
+}) {
+  const reasons = [];
+  if (!materialSourceRegistrySnapshot || typeof materialSourceRegistrySnapshot !== "object") {
+    reasons.push("materialSourceRegistrySnapshot-required");
+  } else {
+    if (!Array.isArray(materialSourceRegistrySnapshot.sources)) {
+      reasons.push("materialSourceRegistrySnapshot-sources-required");
+    }
+    if (!Array.isArray(materialSourceRegistrySnapshot.conflicts)) {
+      reasons.push("materialSourceRegistrySnapshot-conflicts-required");
+    } else if (materialSourceRegistrySnapshot.conflicts.length > 0) {
+      reasons.push("materialSourceRegistrySnapshot-conflicts-present");
+    }
+  }
+
+  if (!spoolMountRepositorySnapshot || typeof spoolMountRepositorySnapshot !== "object") {
+    reasons.push("spoolMountRepositorySnapshot-required");
+  } else {
+    if (!Array.isArray(spoolMountRepositorySnapshot.mounts)) {
+      reasons.push("spoolMountRepositorySnapshot-mounts-required");
+    }
+    if (!Array.isArray(spoolMountRepositorySnapshot.conflicts)) {
+      reasons.push("spoolMountRepositorySnapshot-conflicts-required");
+    } else if (spoolMountRepositorySnapshot.conflicts.length > 0) {
+      reasons.push("spoolMountRepositorySnapshot-conflicts-present");
+    }
+  }
+  return reasons;
+}
+
+/**
  * preflight resultがtransaction準備可能かを検査する。
  *
  * @private
@@ -180,6 +244,12 @@ function collectPreflightReasons(preflightResult) {
       preflightResult.status !== MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.READY ||
       !preflightResult.shadowExecutionPlan) {
     reasons.push("preflight-not-ready");
+  }
+  if (preflightResult.ok === true &&
+      preflightResult.status === MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.READY &&
+      preflightResult.shadowExecutionPlan &&
+      !isTrustedMaterialAccountingMigrationShadowPreflightResult(preflightResult)) {
+    reasons.push("preflight-result-untrusted");
   }
   const executionPlan = preflightResult.shadowExecutionPlan;
   if (executionPlan?.authority?.canWriteRepositories !== false ||
@@ -319,6 +389,54 @@ function stageSpoolMounts(repository, spoolMounts) {
 }
 
 /**
+ * staged MaterialSource registryを安全に生成する。
+ *
+ * @private
+ * @function createStagedMaterialSourceRegistryResult
+ * @param {Object} snapshot - MaterialSource registry snapshot。
+ * @returns {{ok:boolean,reasons:string[],registry:?Object}} 生成結果。
+ */
+function createStagedMaterialSourceRegistryResult(snapshot) {
+  try {
+    return {
+      ok: true,
+      reasons: [],
+      registry: createMaterialSourceRegistry(listSnapshotSources(snapshot)),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reasons: ["materialSourceRegistrySnapshot-invalid"],
+      registry: null,
+    };
+  }
+}
+
+/**
+ * staged SpoolMount repositoryを安全に生成する。
+ *
+ * @private
+ * @function createStagedSpoolMountRepositoryResult
+ * @param {Object} snapshot - SpoolMount repository snapshot。
+ * @returns {{ok:boolean,reasons:string[],repository:?Object}} 生成結果。
+ */
+function createStagedSpoolMountRepositoryResult(snapshot) {
+  try {
+    return {
+      ok: true,
+      reasons: [],
+      repository: createSpoolMountRepository(listSnapshotMounts(snapshot)),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reasons: ["spoolMountRepositorySnapshot-invalid"],
+      repository: null,
+    };
+  }
+}
+
+/**
  * shadow transaction候補を準備する。
  *
  * 【詳細説明】
@@ -332,8 +450,8 @@ function stageSpoolMounts(repository, spoolMounts) {
  * @param {string} input.shadowOperationId - operator/session由来の冪等operation ID。
  * @param {string} input.executedAt - transaction準備日時。
  * @param {string=} input.executedBy - 実行者。
- * @param {Object=} input.materialSourceRegistrySnapshot - 既存MaterialSource registry snapshot。
- * @param {Object=} input.spoolMountRepositorySnapshot - 既存SpoolMount repository snapshot。
+ * @param {Object} input.materialSourceRegistrySnapshot - 既存MaterialSource registry snapshot。
+ * @param {Object} input.spoolMountRepositorySnapshot - 既存SpoolMount repository snapshot。
  * @returns {Object} prepared/blocked result。
  * @example
  * const result = prepareMaterialAccountingMigrationShadowTransaction({ preflightResult, shadowOperationId, executedAt });
@@ -341,6 +459,7 @@ function stageSpoolMounts(repository, spoolMounts) {
 export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) {
   const shadowOperationId = toTrimmedString(input.shadowOperationId);
   const executedAt = normalizeRequiredIsoTime(input.executedAt);
+  const preflightEvaluatedAt = normalizeRequiredIsoTime(input.preflightResult?.evaluatedAt);
   const preflightReasons = collectPreflightReasons(input.preflightResult);
   const inputReasons = [];
   if (!shadowOperationId) {
@@ -348,6 +467,11 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
   }
   if (!executedAt) {
     inputReasons.push("executedAt-invalid");
+  }
+  if (!preflightEvaluatedAt) {
+    inputReasons.push("preflight-evaluatedAt-required");
+  } else if (executedAt && toTimeMs(executedAt) < toTimeMs(preflightEvaluatedAt)) {
+    inputReasons.push("executedAt-before-preflight-evaluatedAt");
   }
   const preflightPlan = input.preflightResult?.shadowExecutionPlan || null;
   const materialSources = Array.isArray(preflightPlan?.plannedWrites?.materialSources)
@@ -363,7 +487,11 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
     inputReasons.push("mountIntents-required");
   }
 
-  const reasons = [...preflightReasons, ...inputReasons];
+  const snapshotReasons = collectSnapshotReasons({
+    materialSourceRegistrySnapshot: input.materialSourceRegistrySnapshot,
+    spoolMountRepositorySnapshot: input.spoolMountRepositorySnapshot,
+  });
+  const reasons = [...preflightReasons, ...inputReasons, ...snapshotReasons];
   if (reasons.length > 0) {
     return createTransactionResult({
       ok: false,
@@ -373,9 +501,21 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
     });
   }
 
-  const stagedSourceRegistry = createMaterialSourceRegistry(listSnapshotSources(input.materialSourceRegistrySnapshot));
-  const stagedMountRepository = createSpoolMountRepository(listSnapshotMounts(input.spoolMountRepositorySnapshot));
-  const sourceStage = stageMaterialSources(stagedSourceRegistry, materialSources);
+  const stagedSourceRegistry = createStagedMaterialSourceRegistryResult(input.materialSourceRegistrySnapshot);
+  const stagedMountRepository = createStagedSpoolMountRepositoryResult(input.spoolMountRepositorySnapshot);
+  if (!stagedSourceRegistry.ok || !stagedMountRepository.ok) {
+    return createTransactionResult({
+      ok: false,
+      status: "blocked",
+      reasons: [
+        ...stagedSourceRegistry.reasons,
+        ...stagedMountRepository.reasons,
+      ],
+      transaction: null,
+    });
+  }
+
+  const sourceStage = stageMaterialSources(stagedSourceRegistry.registry, materialSources);
   if (!sourceStage.ok) {
     return createTransactionResult({
       ok: false,
@@ -391,7 +531,7 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
     executedAt,
     executedBy: toTrimmedString(input.executedBy) || "migration-shadow-executor",
   }));
-  const mountStage = stageSpoolMounts(stagedMountRepository, spoolMounts);
+  const mountStage = stageSpoolMounts(stagedMountRepository.repository, spoolMounts);
   if (!mountStage.ok) {
     return createTransactionResult({
       ok: false,
@@ -415,7 +555,8 @@ export function prepareMaterialAccountingMigrationShadowTransaction(input = {}) 
     migrationId: preflightPlan.migrationId,
     derivedFromPlanRevisionId: preflightPlan.derivedFromPlanRevisionId,
     evaluatedPlanRevisionId: preflightPlan.evaluatedPlanRevisionId,
-    migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW,
+    transactionStatus: "prepared",
+    proposedMigrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW,
     deviceId: preflightPlan.deviceId,
     spoolId: preflightPlan.spoolId,
     executedAt,

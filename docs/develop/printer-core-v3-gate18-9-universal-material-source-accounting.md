@@ -397,28 +397,54 @@ of the plan revision evidence, `derivedFromPlanRevisionId` and
 - same `MaterialSource`
 - same mount intent source/spool mapping
 - stable current source identity
+- subject latest status matches the requested entry status, not the aggregate
+  plan status
+- `evaluatedAt` is required and the current plan `createdAt` must be within the
+  preflight freshness window
 - no current MaterialSource registry locator/identity conflict
 - no current open mount conflict for the source or spool
+- MaterialSourceRegistry and SpoolMountRepository facades are mandatory; omitted
+  facades mean the conflict check was not performed and therefore block
 
 The preflight result may return `mountIntents`, but it must not mint
 `openedAt`, `mountOperationId`, production `SpoolMount`, or ledger events. Those
 execution fields belong to the later persistent shadow transaction adapter.
 
-After this pure preflight is accepted, Gate 18.9D prepares a staged shadow
+After this pure preflight is accepted, Gate 18.9D-1 prepares a staged shadow
 transaction:
 
-- the preflight result is the only input authority
+- the preflight result is the only input authority and must be the exact
+  in-process trusted result issued by the preflight module
 - `shadowOperationId` and `executedAt` are required
 - `openedAt` and `mountOperationId` are minted only in this layer
+- the returned object uses `transactionStatus: "prepared"` and
+  `proposedMigrationStatus: "shadow"`; it does not claim the migration lifecycle
+  is already `SHADOW`
+- existing MaterialSource and SpoolMount snapshots are mandatory inputs; missing
+  snapshots are not treated as empty production state
+- snapshots that already contain registry/repository conflict evidence are
+  blocked before staging so conflict evidence is not dropped by reconstruction
+- `executedAt` must not be earlier than the preflight `evaluatedAt`
 - existing MaterialSource and SpoolMount snapshots are loaded into staged
-  repositories
+  repositories only after these snapshot guards pass
 - all source and mount records must stage successfully before a transaction is
   returned
 - failed staging returns no partial transaction
 - the transaction still has no production store authority and no ledger debit
   authority
 
-After the staged shadow transaction boundary is accepted, Gate 18.9E connects
+Gate 18.9D-2 then connects the staged candidate to persistent atomic shadow
+commit/recovery:
+
+- base MaterialSource/SpoolMount snapshot revision or digest is recorded in the
+  transaction
+- commit uses compare-and-swap against the current durable repository state
+- stale base revision requires re-preflight and re-stage
+- only successful durable commit may emit the `SHADOW` lifecycle transition
+- restart/recovery restores durable shadow records without ledger debit
+
+After the staged and persistent shadow transaction boundaries are accepted,
+Gate 18.9E connects
 usage attribution:
 
 - trusted print-start material binding snapshot issuer/repository
@@ -521,6 +547,10 @@ Gate 18.9B tests:
 Gate 18.9C tests:
 
 - latest READY journal and current READY plan with the same entry mapping return a pure shadow plan
+- mixed aggregate plan with a READY target entry stays preflight READY for that
+  target entry
+- stale reused current plan is blocked by `evaluatedAt` / `createdAt`
+  freshness
 - preflight returns `derivedFromPlanRevisionId` and `evaluatedPlanRevisionId` without requiring them to be equal
 - preflight never mints `openedAt` or `mountOperationId`
 - a requested migration that is no longer the latest subject revision is blocked
@@ -528,15 +558,23 @@ Gate 18.9C tests:
 - a same host/spool subject with a changed Device identity is blocked
 - existing open mount conflicts block before repository write
 - existing registry locator conflicts block before repository write
+- missing repository facades block because conflicts were not checked
 
-Gate 18.9D tests:
+Gate 18.9D-1 tests:
 
 - READY preflight prepares staged MaterialSource and SpoolMount snapshots
+- plain or cloned preflight result is rejected as untrusted
 - `openedAt` and `mountOperationId` are minted at shadow transaction time
+- prepared transaction status is not the same thing as `SHADOW` lifecycle
+  status
 - same `shadowOperationId` and same payload produce the same transaction and mount operation IDs
 - blocked preflight never becomes a transaction
 - staged MaterialSource registry conflict blocks without creating a transaction
 - staged SpoolMount repository conflict blocks without returning a partial transaction
+- missing repository snapshots are blocked instead of becoming empty staged repositories
+- repository snapshots with existing conflicts are blocked before reconstruction
+- invalid repository snapshot records are returned as blocked results rather than thrown exceptions
+- `executedAt` before preflight `evaluatedAt` is blocked
 - invalid `executedAt` or missing operation ID blocks before staging
 
 Gate 18.9E planned tests:

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1513 (PR #438)
+ * @version 1.390.1514 (PR #438)
  * @since   1.390.1513 (PR #438)
- * @lastModified 2026-08-31 14:55:00
+ * @lastModified 2026-08-31 13:59:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,6 +43,8 @@ import {
 import {
   prepareMaterialAccountingMigrationShadowTransaction,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_migration_shadow_transaction.js";
+import { createMaterialSourceRegistry } from "../../3dp_lib/printer_core/dashboard_material_source_registry.js";
+import { createSpoolMountRepository } from "../../3dp_lib/printer_core/dashboard_spool_mount_repository.js";
 
 /**
  * observed direct sourceを持つlegacy fixtureを生成する。
@@ -110,6 +112,9 @@ function createReadyPreflight() {
       journal: recorded.journal,
       migrationSubjectId: plan.entries[0].migrationSubjectId,
       currentPlan: plan,
+      evaluatedAt: "2026-08-31T03:00:31.000Z",
+      materialSourceRegistry: createMaterialSourceRegistry([]),
+      spoolMountRepository: createSpoolMountRepository([]),
     }),
   };
 }
@@ -123,6 +128,8 @@ describe("Material accounting migration shadow transaction", () => {
       shadowOperationId: "shadow-op:001",
       executedAt: "2026-08-31T03:02:00.000Z",
       executedBy: "operator",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
     });
 
     expect(result).toMatchObject({
@@ -149,6 +156,9 @@ describe("Material accounting migration shadow transaction", () => {
         },
       },
     });
+    expect(result.transaction.transactionStatus).toBe("prepared");
+    expect(result.transaction.proposedMigrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW);
+    expect(result.transaction).not.toHaveProperty("migrationStatus");
     expect(result.transaction.records.spoolMounts[0].mountOperationId).toMatch(/^material-accounting-shadow-mount:/);
     expect(result.transaction.repositorySnapshots.materialSources.sources).toHaveLength(1);
     expect(result.transaction.repositorySnapshots.spoolMounts.mounts).toHaveLength(1);
@@ -160,11 +170,15 @@ describe("Material accounting migration shadow transaction", () => {
       preflightResult: preflight,
       shadowOperationId: "shadow-op:retry",
       executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
     });
     const second = prepareMaterialAccountingMigrationShadowTransaction({
       preflightResult: preflight,
       shadowOperationId: "shadow-op:retry",
       executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
     });
 
     expect(first.ok).toBe(true);
@@ -179,12 +193,33 @@ describe("Material accounting migration shadow transaction", () => {
       preflightResult: { ...preflight, ok: false, status: "blocked", reasons: ["evaluated-entry-not-ready"] },
       shadowOperationId: "shadow-op:blocked",
       executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
     });
 
     expect(result).toMatchObject({
       ok: false,
       status: "blocked",
       reasons: ["preflight-not-ready"],
+      transaction: null,
+    });
+  });
+
+  it("手作りまたはcloneされたplain preflight resultはtrusted authorityとして扱わない", () => {
+    const { preflight } = createReadyPreflight();
+
+    const result = prepareMaterialAccountingMigrationShadowTransaction({
+      preflightResult: { ...preflight },
+      shadowOperationId: "shadow-op:plain-preflight",
+      executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["preflight-result-untrusted"],
       transaction: null,
     });
   });
@@ -198,7 +233,9 @@ describe("Material accounting migration shadow transaction", () => {
       executedAt: "2026-08-31T03:02:00.000Z",
       materialSourceRegistrySnapshot: {
         sources: [{ ...source, materialSourceId: "material-source:other" }],
+        conflicts: [],
       },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
     });
 
     expect(result).toMatchObject({
@@ -223,8 +260,10 @@ describe("Material accounting migration shadow transaction", () => {
       preflightResult: preflight,
       shadowOperationId: "shadow-op:mount-conflict",
       executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
       spoolMountRepositorySnapshot: {
         mounts: [existingMount],
+        conflicts: [],
       },
     });
 
@@ -242,10 +281,110 @@ describe("Material accounting migration shadow transaction", () => {
     expect(prepareMaterialAccountingMigrationShadowTransaction({
       preflightResult: preflight,
       executedAt: "bad-date",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
     })).toMatchObject({
       ok: false,
       status: "blocked",
       reasons: ["shadowOperationId-required", "executedAt-invalid"],
+      transaction: null,
+    });
+  });
+
+  it("repository snapshotsが省略された場合は空repositoryとして扱わずblockedにする", () => {
+    const { preflight } = createReadyPreflight();
+
+    const result = prepareMaterialAccountingMigrationShadowTransaction({
+      preflightResult: preflight,
+      shadowOperationId: "shadow-op:missing-snapshots",
+      executedAt: "2026-08-31T03:02:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: [
+        "materialSourceRegistrySnapshot-required",
+        "spoolMountRepositorySnapshot-required",
+      ],
+      transaction: null,
+    });
+  });
+
+  it("repository snapshot内に既存conflictがある場合はstaging前にblockedにする", () => {
+    const { preflight } = createReadyPreflight();
+
+    const result = prepareMaterialAccountingMigrationShadowTransaction({
+      preflightResult: preflight,
+      shadowOperationId: "shadow-op:existing-conflict",
+      executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: {
+        sources: [],
+        conflicts: [{ type: "locator-conflict", reason: "same-device-locator-different-source" }],
+      },
+      spoolMountRepositorySnapshot: {
+        mounts: [],
+        conflicts: [{ type: "source-open-mount-conflict", reason: "material-source-already-has-open-mount" }],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: [
+        "materialSourceRegistrySnapshot-conflicts-present",
+        "spoolMountRepositorySnapshot-conflicts-present",
+      ],
+      transaction: null,
+    });
+  });
+
+  it("repository snapshot内の壊れたrecordは例外ではなくblocked resultへ畳む", () => {
+    const { preflight } = createReadyPreflight();
+
+    const result = prepareMaterialAccountingMigrationShadowTransaction({
+      preflightResult: preflight,
+      shadowOperationId: "shadow-op:invalid-snapshot-record",
+      executedAt: "2026-08-31T03:02:00.000Z",
+      materialSourceRegistrySnapshot: {
+        sources: [{ materialSourceId: "material-source:broken" }],
+        conflicts: [],
+      },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["materialSourceRegistrySnapshot-invalid"],
+      transaction: null,
+    });
+  });
+
+  it("preflight evaluatedAtをresultに保持しtransactionへ時刻境界を渡す", () => {
+    const { preflight } = createReadyPreflight();
+
+    expect(preflight).toMatchObject({
+      ok: true,
+      evaluatedAt: "2026-08-31T03:00:31.000Z",
+    });
+  });
+
+  it("executedAtがpreflight evaluatedAtより前ならblockedにする", () => {
+    const { preflight } = createReadyPreflight();
+
+    const result = prepareMaterialAccountingMigrationShadowTransaction({
+      preflightResult: preflight,
+      shadowOperationId: "shadow-op:before-preflight",
+      executedAt: "2026-08-31T03:00:30.999Z",
+      materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["executedAt-before-preflight-evaluatedAt"],
       transaction: null,
     });
   });

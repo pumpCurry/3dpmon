@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link evaluateMaterialAccountingMigrationShadowPreflight}：migration shadow preflightを評価
  *
- * @version 1.390.1512 (PR #438)
+ * @version 1.390.1514 (PR #438)
  * @since   1.390.1512 (PR #438)
- * @lastModified 2026-08-31 14:25:00
+ * @lastModified 2026-08-31 13:59:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9C 後続でpersistent transaction adapterへ接続し、ここでは生成しないopenedAt/mountOperationIdを実行時に採番する
@@ -42,6 +42,20 @@ export const MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS = Object.freeze({
   READY: "ready",
   BLOCKED: "blocked",
 });
+
+/**
+ * trusted shadow preflight result の参照集合。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_SHADOW_PREFLIGHT_RESULTS = new WeakSet();
+
+/**
+ * current plan作成時刻とpreflight評価時刻の許容差。
+ *
+ * @constant {number}
+ */
+const DEFAULT_CURRENT_PLAN_MAX_AGE_MS = 5_000;
 
 /**
  * JSON互換値をcloneする。
@@ -90,6 +104,38 @@ function deepFreezeJson(value) {
  */
 function toTrimmedString(value) {
   return value === null || value === undefined ? "" : String(value).trim();
+}
+
+/**
+ * ISO日時文字列を正規化する。
+ *
+ * @private
+ * @function normalizeOptionalIsoTime
+ * @param {*} value - 日時候補。
+ * @returns {?string} 有効なISO日時、またはnull。
+ */
+function normalizeOptionalIsoTime(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+/**
+ * ISO日時文字列をmillisecondsへ変換する。
+ *
+ * @private
+ * @function toTimeMs
+ * @param {?string} value - ISO日時。
+ * @returns {?number} milliseconds。無効な場合はnull。
+ */
+function toTimeMs(value) {
+  if (!value) {
+    return null;
+  }
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
 }
 
 /**
@@ -145,6 +191,7 @@ function getSafePlannedWrites(entry) {
  * @param {?Object=} input.requested - 要求revision情報。
  * @param {?Object=} input.evaluated - 評価revision情報。
  * @param {?Object=} input.shadowExecutionPlan - shadow execution候補。
+ * @param {?string=} input.evaluatedAt - preflight評価日時。
  * @returns {Object} preflight result。
  */
 function createPreflightResult({
@@ -154,10 +201,12 @@ function createPreflightResult({
   requested = null,
   evaluated = null,
   shadowExecutionPlan = null,
+  evaluatedAt = null,
 }) {
-  return deepFreezeJson({
+  const result = deepFreezeJson({
     ok,
     status,
+    evaluatedAt: normalizeOptionalIsoTime(evaluatedAt),
     reasons: [...new Set(reasons.map((reason) => toTrimmedString(reason)).filter(Boolean))],
     requested: requested ? cloneJsonValue(requested) : null,
     evaluated: evaluated ? cloneJsonValue(evaluated) : null,
@@ -170,6 +219,33 @@ function createPreflightResult({
       executionFieldsMinted: false,
     },
   });
+  if (result.ok === true &&
+      result.status === MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.READY &&
+      result.shadowExecutionPlan) {
+    TRUSTED_SHADOW_PREFLIGHT_RESULTS.add(result);
+  }
+  return result;
+}
+
+/**
+ * preflight resultがこのモジュールで発行されたtrusted READY resultかを判定する。
+ *
+ * 【詳細説明】
+ * - plain objectやcloneされたresultをauthority chainへ進めないため、runtime-only WeakSetで参照同一性を確認する。
+ * - restart/reconnect後はpreflightを再実行する前提なので、永続attestationはここでは発行しない。
+ *
+ * @function isTrustedMaterialAccountingMigrationShadowPreflightResult
+ * @param {*} value - preflight result候補。
+ * @returns {boolean} trusted READY resultならtrue。
+ * @example
+ * const trusted = isTrustedMaterialAccountingMigrationShadowPreflightResult(result);
+ */
+export function isTrustedMaterialAccountingMigrationShadowPreflightResult(value) {
+  return !!value &&
+    typeof value === "object" &&
+    TRUSTED_SHADOW_PREFLIGHT_RESULTS.has(value) &&
+    value.ok === true &&
+    value.status === MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.READY;
 }
 
 /**
@@ -228,7 +304,7 @@ function getSingleFilamentUnit(entry) {
  *
  * 【詳細説明】
  * - `upsertSource()`は呼ばず、get/resolve系APIだけを使って既存衝突を調べる。
- * - registryが渡されていない場合は、後続層の検査に委ねるためここでは通過させる。
+ * - registryが渡されていない場合は、conflict未検査としてblockedへ落とす。
  *
  * @private
  * @function collectMaterialSourceRegistryReasons
@@ -238,26 +314,29 @@ function getSingleFilamentUnit(entry) {
  */
 function collectMaterialSourceRegistryReasons(registry, materialSource) {
   const reasons = [];
-  if (!registry || typeof registry !== "object" || !materialSource) {
+  if (!registry || typeof registry !== "object") {
+    return ["materialSourceRegistry-required"];
+  }
+  if (typeof registry.getSource !== "function" ||
+      typeof registry.resolveByLocator !== "function" ||
+      typeof registry.resolveByIdentity !== "function") {
+    return ["materialSourceRegistry-api-invalid"];
+  }
+  if (!materialSource) {
     return reasons;
   }
 
-  const existingById = typeof registry.getSource === "function"
-    ? registry.getSource(materialSource.materialSourceId)
-    : null;
+  const existingById = registry.getSource(materialSource.materialSourceId);
   if (existingById && stableStringify(existingById) !== stableStringify(materialSource)) {
     reasons.push("material-source-registry-id-conflict");
   }
 
-  const existingByLocator = typeof registry.resolveByLocator === "function"
-    ? registry.resolveByLocator(materialSource.deviceId, materialSource.locator)
-    : null;
+  const existingByLocator = registry.resolveByLocator(materialSource.deviceId, materialSource.locator);
   if (existingByLocator && existingByLocator.materialSourceId !== materialSource.materialSourceId) {
     reasons.push("material-source-registry-locator-conflict");
   }
 
-  const existingByIdentity = materialSource.identityStrength === MATERIAL_IDENTITY_STRENGTH.STABLE &&
-    typeof registry.resolveByIdentity === "function"
+  const existingByIdentity = materialSource.identityStrength === MATERIAL_IDENTITY_STRENGTH.STABLE
     ? registry.resolveByIdentity(materialSource.deviceId, materialSource.identity)
     : null;
   if (existingByIdentity && existingByIdentity.materialSourceId !== materialSource.materialSourceId) {
@@ -278,20 +357,23 @@ function collectMaterialSourceRegistryReasons(registry, materialSource) {
  */
 function collectSpoolMountRepositoryReasons(repository, candidate) {
   const reasons = [];
-  if (!repository || typeof repository !== "object" || !candidate) {
+  if (!repository || typeof repository !== "object") {
+    return ["spoolMountRepository-required"];
+  }
+  if (typeof repository.getOpenMountForSource !== "function" ||
+      typeof repository.getOpenMountForSpool !== "function") {
+    return ["spoolMountRepository-api-invalid"];
+  }
+  if (!candidate) {
     return reasons;
   }
 
-  const openBySource = typeof repository.getOpenMountForSource === "function"
-    ? repository.getOpenMountForSource(candidate.materialSourceId)
-    : null;
+  const openBySource = repository.getOpenMountForSource(candidate.materialSourceId);
   if (openBySource && openBySource.spoolId !== candidate.spoolId) {
     reasons.push("material-source-open-mount-conflict");
   }
 
-  const openBySpool = typeof repository.getOpenMountForSpool === "function"
-    ? repository.getOpenMountForSpool(candidate.spoolId)
-    : null;
+  const openBySpool = repository.getOpenMountForSpool(candidate.spoolId);
   if (openBySpool && openBySpool.materialSourceId !== candidate.materialSourceId) {
     reasons.push("spool-open-mount-conflict");
   }
@@ -307,10 +389,16 @@ function collectSpoolMountRepositoryReasons(repository, candidate) {
  * @param {Object} input - 検査入力。
  * @param {Object} input.latest - subject index entry。
  * @param {Object} input.journalEntry - journal entry。
+ * @param {?Object} input.requestedEntry - journal内の対象subject entry。
  * @param {?string=} input.requestedMigrationId - 呼び出し側が指定したmigration ID。
  * @returns {string[]} block理由。
  */
-function collectLatestRevisionReasons({ latest, journalEntry, requestedMigrationId = null }) {
+function collectLatestRevisionReasons({
+  latest,
+  journalEntry,
+  requestedEntry,
+  requestedMigrationId = null,
+}) {
   const reasons = [];
   const requested = toTrimmedString(requestedMigrationId);
   if (requested && requested !== latest.migrationId) {
@@ -328,8 +416,42 @@ function collectLatestRevisionReasons({ latest, journalEntry, requestedMigration
   if (latest.planDigest !== journalEntry.planDigest) {
     reasons.push("latest-revision-planDigest-mismatch");
   }
-  if (latest.migrationStatus !== journalEntry.migrationStatus) {
+  if (latest.migrationStatus !== requestedEntry?.migrationStatus) {
     reasons.push("latest-revision-status-mismatch");
+  }
+  return reasons;
+}
+
+/**
+ * current planがpreflight評価時点に近いかを検査する。
+ *
+ * @private
+ * @function collectCurrentPlanTimeReasons
+ * @param {Object} input - 検査入力。
+ * @param {?Object} input.currentPlan - current plan候補。
+ * @param {?string} input.evaluatedAt - preflight評価日時。
+ * @param {number=} input.maxCurrentPlanAgeMs - 許容差。
+ * @returns {string[]} block理由。
+ */
+function collectCurrentPlanTimeReasons({
+  currentPlan,
+  evaluatedAt,
+  maxCurrentPlanAgeMs = DEFAULT_CURRENT_PLAN_MAX_AGE_MS,
+}) {
+  const reasons = [];
+  const evaluatedMs = toTimeMs(evaluatedAt);
+  const createdMs = toTimeMs(currentPlan?.createdAt);
+  if (evaluatedMs === null) {
+    reasons.push("evaluatedAt-required");
+  }
+  if (createdMs === null) {
+    reasons.push("current-plan-createdAt-required");
+  }
+  if (evaluatedMs !== null && createdMs !== null) {
+    const ageMs = evaluatedMs - createdMs;
+    if (ageMs < 0 || ageMs > maxCurrentPlanAgeMs) {
+      reasons.push("current-plan-not-fresh-for-preflight");
+    }
   }
   return reasons;
 }
@@ -448,19 +570,23 @@ function createShadowExecutionPlan({ migrationSubjectId, journalEntry, currentPl
  * @param {string} input.migrationSubjectId - entry migration subject ID。
  * @param {Object} input.currentPlan - 実行直前に再生成したdry-run plan。
  * @param {string=} input.requestedMigrationId - 明示要求されたmigration ID。
- * @param {Object=} input.materialSourceRegistry - read-only参照するMaterialSource registry API。
- * @param {Object=} input.spoolMountRepository - read-only参照するSpoolMount repository API。
+ * @param {Object} input.materialSourceRegistry - read-only参照するMaterialSource registry API。
+ * @param {Object} input.spoolMountRepository - read-only参照するSpoolMount repository API。
+ * @param {string|Date} input.evaluatedAt - preflight評価日時。
+ * @param {number=} input.maxCurrentPlanAgeMs - current plan作成時刻とpreflight評価時刻の許容差。
  * @returns {Object} preflight result。
  * @example
  * const result = evaluateMaterialAccountingMigrationShadowPreflight({ journal, migrationSubjectId, currentPlan });
  */
 export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
+  const evaluatedAt = normalizeOptionalIsoTime(input.evaluatedAt);
   const migrationSubjectId = toTrimmedString(input.migrationSubjectId);
   if (!migrationSubjectId) {
     return createPreflightResult({
       ok: false,
       status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.BLOCKED,
       reasons: ["migrationSubjectId-required"],
+      evaluatedAt,
     });
   }
 
@@ -472,6 +598,7 @@ export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
       status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.BLOCKED,
       reasons: ["journal-subject-revision-not-found"],
       requested: { migrationSubjectId },
+      evaluatedAt,
     });
   }
 
@@ -482,18 +609,25 @@ export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
       status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.BLOCKED,
       reasons: ["journal-entry-not-found"],
       requested: { migrationSubjectId, ...cloneJsonValue(latest) },
+      evaluatedAt,
     });
   }
 
   const currentValidation = validateMaterialAccountingMigrationDryRunPlan(input.currentPlan);
+  const currentEntry = findEntryBySubject(input.currentPlan, migrationSubjectId);
+  const requestedEntry = findEntryBySubject(journalEntry.plan, migrationSubjectId);
   const latestReasons = collectLatestRevisionReasons({
     latest,
     journalEntry,
+    requestedEntry,
     requestedMigrationId: input.requestedMigrationId,
   });
-  const currentEntry = findEntryBySubject(input.currentPlan, migrationSubjectId);
-  const requestedEntry = findEntryBySubject(journalEntry.plan, migrationSubjectId);
   const continuityReasons = collectEntryContinuityReasons(requestedEntry, currentEntry);
+  const timeReasons = collectCurrentPlanTimeReasons({
+    currentPlan: input.currentPlan,
+    evaluatedAt,
+    maxCurrentPlanAgeMs: input.maxCurrentPlanAgeMs,
+  });
   const materialSourceReasons = collectMaterialSourceRegistryReasons(
     input.materialSourceRegistry,
     getSingleMaterialSource(currentEntry),
@@ -505,6 +639,7 @@ export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
   const reasons = [
     ...latestReasons,
     ...(!currentValidation.ok ? currentValidation.errors.map((error) => `current-plan:${error}`) : []),
+    ...timeReasons,
     ...continuityReasons,
     ...materialSourceReasons,
     ...spoolMountReasons,
@@ -516,13 +651,13 @@ export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
     planRevisionId: journalEntry.plan?.planRevisionId || null,
     sourceChecksum: journalEntry.sourceChecksum,
     planDigest: journalEntry.planDigest,
-    migrationStatus: journalEntry.migrationStatus,
+    migrationStatus: requestedEntry?.migrationStatus || null,
   };
   const evaluated = {
     migrationSubjectId,
     migrationId: input.currentPlan?.migrationId || null,
     planRevisionId: input.currentPlan?.planRevisionId || null,
-    migrationStatus: input.currentPlan?.migrationStatus || null,
+    migrationStatus: currentEntry?.migrationStatus || null,
   };
 
   if (reasons.length > 0) {
@@ -532,6 +667,7 @@ export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
       reasons,
       requested,
       evaluated,
+      evaluatedAt,
     });
   }
 
@@ -541,6 +677,7 @@ export function evaluateMaterialAccountingMigrationShadowPreflight(input = {}) {
     reasons: [],
     requested,
     evaluated,
+    evaluatedAt,
     shadowExecutionPlan: createShadowExecutionPlan({
       migrationSubjectId,
       journalEntry,

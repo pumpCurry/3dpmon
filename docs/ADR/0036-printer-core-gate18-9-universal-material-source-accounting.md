@@ -330,17 +330,34 @@ Gate 18.9C:
 - pure shadow preflight evaluator
 - latest journal revision lookup by entry subject
 - execution-time current plan revalidation
+- latest subject status is compared to the requested entry status, not the plan
+  aggregate status
+- `evaluatedAt` is required and must be close to the current plan `createdAt`
 - Device/source/spool/mount-intent continuity check
-- read-only MaterialSource/SpoolMount repository conflict check
+- read-only MaterialSource/SpoolMount repository conflict check is mandatory
 - no production storage, UI, execution-field minting, or debit behavior change
 
-Gate 18.9D:
+Gate 18.9D-1:
 
 - staged shadow transaction preparation
+- trusted in-process preflight result attestation
 - execution-time `openedAt` and `mountOperationId` minting
+- prepared transaction status is separate from proposed `SHADOW` migration
+  status
+- explicit MaterialSource/SpoolMount repository snapshots are required
+- repository snapshots with existing conflict evidence are blocked before staging
+- `executedAt` must be at or after the preflight `evaluatedAt`
 - staged MaterialSource/SpoolMount repository validation
 - no partial transaction result on staged conflict
 - no production storage or ledger debit behavior change
+
+Gate 18.9D-2:
+
+- persistent atomic shadow commit
+- base MaterialSource/SpoolMount snapshot revision or digest CAS
+- restart/recovery from durable shadow records
+- `SHADOW` lifecycle transition only after commit success
+- no ledger debit behavior change
 
 Gate 18.9E:
 

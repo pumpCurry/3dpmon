@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1512 (PR #438)
+ * @version 1.390.1514 (PR #438)
  * @since   1.390.1512 (PR #438)
- * @lastModified 2026-08-31 14:25:00
+ * @lastModified 2026-08-31 13:59:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -118,6 +118,83 @@ function recordReadyPlan(plan, recordedAt = "2026-08-31T03:01:00.000Z", journal 
   return recordMaterialAccountingMigrationDryRunPlan(journal, plan, { recordedAt });
 }
 
+/**
+ * 空だが明示済みのrepository facadeを生成する。
+ *
+ * @function createEmptyRepositories
+ * @returns {{materialSourceRegistry:Object,spoolMountRepository:Object}} repository facade群。
+ */
+function createEmptyRepositories() {
+  return {
+    materialSourceRegistry: createMaterialSourceRegistry([]),
+    spoolMountRepository: createSpoolMountRepository([]),
+  };
+}
+
+/**
+ * READY entryとBLOCKED entryが混在するdry-run plan fixtureを生成する。
+ *
+ * @function createMixedStatusPlan
+ * @returns {Object} mixed status migration dry-run plan。
+ */
+function createMixedStatusPlan() {
+  return createMaterialAccountingMigrationDryRunPlan({
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: "K1Max-4A1B",
+          printerType: "k1",
+          printerCoreV3Identity: {
+            deviceIdSeed: "serial:k1max-4a1b",
+            identityStrength: "serial",
+          },
+        },
+        {
+          hostname: "K2Pro-69E7",
+          printerType: "creality-k2",
+          printerCoreV3Identity: {
+            deviceIdSeed: "serial:k2pro-69e7",
+            identityStrength: "serial",
+          },
+        },
+      ],
+    },
+    machines: {
+      "K1Max-4A1B": { printerType: "k1" },
+      "K2Pro-69E7": { printerType: "creality-k2" },
+    },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+      { id: "spool-032", name: "CC3D Silver", remainingLengthMm: 280000 },
+    ],
+    hostSpoolMap: {
+      "K1Max-4A1B": "spool-031",
+      "K2Pro-69E7": "spool-032",
+    },
+    materialSourceObservations: {
+      schemaVersion: 1,
+      byDeviceId: {
+        "serial:k1max-4a1b": {
+          deviceId: "serial:k1max-4a1b",
+          snapshotCompleteness: "complete",
+          lastObservedAt: "2026-08-31T03:40:00.000Z",
+          latestBySourceId: {
+            "direct:0": {
+              sourceId: "direct:0",
+              kind: MATERIAL_SOURCE_KIND.DIRECT_FEED,
+              index: 0,
+              sourceIdentityStrength: "stable",
+            },
+          },
+        },
+      },
+    },
+  }, {
+    createdAt: "2026-08-31T03:40:30.000Z",
+    freshTtlMs: 60_000,
+  });
+}
+
 describe("Material accounting migration shadow preflight", () => {
   it("latest READY journalとcurrent READY planが同じentry mappingならshadow planを返す", () => {
     const journalPlan = createMaterialAccountingMigrationDryRunPlan(createObservedDirectFixture(), {
@@ -135,11 +212,14 @@ describe("Material accounting migration shadow preflight", () => {
       journal: recorded.journal,
       migrationSubjectId,
       currentPlan,
+      evaluatedAt: "2026-08-31T03:00:46.000Z",
+      ...createEmptyRepositories(),
     });
 
     expect(result).toMatchObject({
       ok: true,
       status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.READY,
+      evaluatedAt: "2026-08-31T03:00:46.000Z",
       reasons: [],
       requested: {
         migrationSubjectId,
@@ -178,6 +258,84 @@ describe("Material accounting migration shadow preflight", () => {
     expect(result.shadowExecutionPlan.plannedWrites.mountIntents[0]).not.toHaveProperty("mountOperationId");
   });
 
+  it("mixed planでは対象entryがREADYならaggregate BLOCKEDでもpreflight READYにする", () => {
+    const plan = createMixedStatusPlan();
+    const readyEntry = plan.entries.find((entry) => entry.host === "K1Max-4A1B");
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    const result = evaluateMaterialAccountingMigrationShadowPreflight({
+      journal: recorded.journal,
+      migrationSubjectId: readyEntry.migrationSubjectId,
+      currentPlan: plan,
+      evaluatedAt: "2026-08-31T03:40:31.000Z",
+      ...createEmptyRepositories(),
+    });
+
+    expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(result).toMatchObject({
+      ok: true,
+      status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.READY,
+      requested: {
+        migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+      },
+      evaluated: {
+        migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+      },
+    });
+  });
+
+  it("currentPlan.createdAtがpreflight evaluatedAtから離れすぎている場合は古いplan再利用としてblockedにする", () => {
+    const journalPlan = createMaterialAccountingMigrationDryRunPlan(createObservedDirectFixture(), {
+      createdAt: "2026-08-31T03:00:30.000Z",
+      freshTtlMs: 60_000,
+    });
+    const currentPlan = createMaterialAccountingMigrationDryRunPlan(createObservedDirectFixture(), {
+      createdAt: "2026-08-31T03:00:45.000Z",
+      freshTtlMs: 60_000,
+    });
+    const recorded = recordReadyPlan(journalPlan);
+
+    const result = evaluateMaterialAccountingMigrationShadowPreflight({
+      journal: recorded.journal,
+      migrationSubjectId: journalPlan.entries[0].migrationSubjectId,
+      currentPlan,
+      evaluatedAt: "2026-08-31T03:10:00.000Z",
+      ...createEmptyRepositories(),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.BLOCKED,
+    });
+    expect(result.reasons).toContain("current-plan-not-fresh-for-preflight");
+  });
+
+  it("repository facade未指定ではconflict未検査としてblockedにする", () => {
+    const plan = createMaterialAccountingMigrationDryRunPlan(createObservedDirectFixture(), {
+      createdAt: "2026-08-31T03:00:30.000Z",
+      freshTtlMs: 60_000,
+    });
+    const recorded = recordReadyPlan(plan);
+
+    const result = evaluateMaterialAccountingMigrationShadowPreflight({
+      journal: recorded.journal,
+      migrationSubjectId: plan.entries[0].migrationSubjectId,
+      currentPlan: plan,
+      evaluatedAt: "2026-08-31T03:00:31.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: MATERIAL_ACCOUNTING_SHADOW_PREFLIGHT_STATUS.BLOCKED,
+      reasons: [
+        "materialSourceRegistry-required",
+        "spoolMountRepository-required",
+      ],
+    });
+  });
+
   it("requested migrationがsubject最新でなければ古いjournal entryをshadowへ進めない", () => {
     const firstPlan = createMaterialAccountingMigrationDryRunPlan(createObservedDirectFixture(), {
       createdAt: "2026-08-31T03:00:30.000Z",
@@ -195,6 +353,8 @@ describe("Material accounting migration shadow preflight", () => {
       migrationSubjectId: firstPlan.entries[0].migrationSubjectId,
       requestedMigrationId: firstPlan.migrationId,
       currentPlan: secondPlan,
+      evaluatedAt: "2026-08-31T03:00:46.000Z",
+      ...createEmptyRepositories(),
     });
 
     expect(result).toMatchObject({
@@ -219,6 +379,8 @@ describe("Material accounting migration shadow preflight", () => {
       journal: recorded.journal,
       migrationSubjectId: journalPlan.entries[0].migrationSubjectId,
       currentPlan,
+      evaluatedAt: "2026-08-31T03:02:31.000Z",
+      ...createEmptyRepositories(),
     });
 
     expect(currentPlan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
@@ -246,6 +408,8 @@ describe("Material accounting migration shadow preflight", () => {
       journal: recorded.journal,
       migrationSubjectId: journalPlan.entries[0].migrationSubjectId,
       currentPlan,
+      evaluatedAt: "2026-08-31T03:00:46.000Z",
+      ...createEmptyRepositories(),
     });
 
     expect(result.reasons).toContain("entry-device-mismatch");
@@ -272,6 +436,8 @@ describe("Material accounting migration shadow preflight", () => {
       journal: recorded.journal,
       migrationSubjectId: plan.entries[0].migrationSubjectId,
       currentPlan: plan,
+      evaluatedAt: "2026-08-31T03:00:31.000Z",
+      materialSourceRegistry: createMaterialSourceRegistry([]),
       spoolMountRepository: repository,
     });
 
@@ -300,7 +466,9 @@ describe("Material accounting migration shadow preflight", () => {
       journal: recorded.journal,
       migrationSubjectId: plan.entries[0].migrationSubjectId,
       currentPlan: plan,
+      evaluatedAt: "2026-08-31T03:00:31.000Z",
       materialSourceRegistry: registry,
+      spoolMountRepository: createSpoolMountRepository([]),
     });
 
     expect(result).toMatchObject({
