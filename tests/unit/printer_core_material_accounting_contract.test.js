@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1490 (PR #438)
+ * @version 1.390.1492 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 09:39:54
+ * @lastModified 2026-08-31 09:53:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -219,15 +219,37 @@ describe("Universal MaterialSource accounting contract", () => {
     const pending = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1a", identityStrength: "provisional" },
-      usageEvidence: { usedLengthMm: 3210, attribution: "source-specific", idempotencyKey: "usage:1" },
-      printStartSnapshot: { snapshotId: "snapshot:1", mountId: mount.mountId },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1a",
+        mountId: mount.mountId,
+        usedLengthMm: 3210,
+        attribution: "source-specific",
+        idempotencyKey: "usage:1",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:1",
+        materialSourceId: "material-source:cfs-1a",
+        mountId: mount.mountId,
+        spoolId: "spool:silver",
+      },
       continuity: { freshTopology: false, sourceContinuity: true },
     });
     const accepted = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1a", identityStrength: "provisional" },
-      usageEvidence: { usedLengthMm: 3210, attribution: "source-specific", idempotencyKey: "usage:1" },
-      printStartSnapshot: { snapshotId: "snapshot:1", mountId: mount.mountId },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1a",
+        mountId: mount.mountId,
+        usedLengthMm: 3210,
+        attribution: "source-specific",
+        idempotencyKey: "usage:1",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:1",
+        materialSourceId: "material-source:cfs-1a",
+        mountId: mount.mountId,
+        spoolId: "spool:silver",
+      },
       continuity: { freshTopology: true, sourceContinuity: true },
     });
 
@@ -257,8 +279,19 @@ describe("Universal MaterialSource accounting contract", () => {
     const blocked = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1c", identityStrength: "provisional" },
-      usageEvidence: { usedLengthMm: 1200, attribution: "source-specific", idempotencyKey: "usage:2" },
-      printStartSnapshot: { snapshotId: "snapshot:2", mountId: mount.mountId },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1c",
+        mountId: mount.mountId,
+        usedLengthMm: 1200,
+        attribution: "source-specific",
+        idempotencyKey: "usage:2",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:2",
+        materialSourceId: "material-source:cfs-1c",
+        mountId: mount.mountId,
+        spoolId: "spool:silk",
+      },
       continuity: { freshTopology: true, sourceContinuity: true, physicalDiscontinuity: "explicit-empty" },
     });
 
@@ -285,20 +318,150 @@ describe("Universal MaterialSource accounting contract", () => {
     const missing = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1b", identityStrength: "stable" },
-      usageEvidence: { usedLengthMm: 6543, attribution: "source-specific", idempotencyKey: "usage:3" },
-      printStartSnapshot: { snapshotId: "snapshot:3", mountId: mount.mountId },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1b",
+        mountId: mount.mountId,
+        usedLengthMm: 6543,
+        attribution: "source-specific",
+        idempotencyKey: "usage:3",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:3",
+        materialSourceId: "material-source:cfs-1b",
+        mountId: mount.mountId,
+        spoolId: "spool:rfid",
+      },
       continuity: { freshTopology: true, sourceContinuity: true, observedRfid: null },
     });
     const mismatch = evaluateMaterialDebitEligibility({
       mount,
       materialSource: { materialSourceId: "material-source:cfs-1b", identityStrength: "stable" },
-      usageEvidence: { usedLengthMm: 6543, attribution: "source-specific", idempotencyKey: "usage:4" },
-      printStartSnapshot: { snapshotId: "snapshot:4", mountId: mount.mountId },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1b",
+        mountId: mount.mountId,
+        usedLengthMm: 6543,
+        attribution: "source-specific",
+        idempotencyKey: "usage:4",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:4",
+        materialSourceId: "material-source:cfs-1b",
+        mountId: mount.mountId,
+        spoolId: "spool:rfid",
+      },
       continuity: { freshTopology: true, sourceContinuity: true, observedRfid: "rfid-B" },
     });
 
     expect(missing).toMatchObject({ status: "eligible", canDebit: true, reasons: [] });
     expect(mismatch).toMatchObject({ status: "blocked", canDebit: false, reasons: ["rfid-mismatch"] });
+  });
+
+  it("未確認mountやunknown identityではsource-aware debitを許可しない", () => {
+    const unverifiedMount = createSpoolMountRecord({
+      materialSourceId: "material-source:cfs-1a",
+      spoolId: "spool:silver",
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      verification: SPOOL_MOUNT_VERIFICATION.UNVERIFIED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.UNKNOWN,
+      openedAt: "2026-08-31T01:05:00.000Z",
+    });
+    const result = evaluateMaterialDebitEligibility({
+      mount: unverifiedMount,
+      materialSource: {
+        materialSourceId: "material-source:cfs-1a",
+        identityStrength: MATERIAL_IDENTITY_STRENGTH.UNKNOWN,
+      },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1a",
+        mountId: unverifiedMount.mountId,
+        usedLengthMm: 1000,
+        attribution: "source-specific",
+        idempotencyKey: "usage:unverified",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:unverified",
+        materialSourceId: "material-source:cfs-1a",
+        mountId: unverifiedMount.mountId,
+        spoolId: "spool:silver",
+      },
+      continuity: { freshTopology: true, sourceContinuity: true },
+    });
+
+    expect(result).toMatchObject({
+      status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
+      canDebit: false,
+      reasons: ["mount-verification-required", "source-identity-required"],
+    });
+  });
+
+  it("print-start snapshotとusage evidenceがmount/sourceへbindされていない場合はdebitを拒否する", () => {
+    const mount = createSpoolMountRecord({
+      materialSourceId: "material-source:cfs-1d",
+      spoolId: "spool:yellow",
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      openedAt: "2026-08-31T01:10:00.000Z",
+      openedBy: "operator",
+    });
+    const missingBindings = evaluateMaterialDebitEligibility({
+      mount,
+      materialSource: {
+        materialSourceId: "material-source:cfs-1d",
+        identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      },
+      usageEvidence: {
+        usedLengthMm: 1234,
+        attribution: "source-specific",
+        idempotencyKey: "usage:missing-bindings",
+      },
+      printStartSnapshot: { snapshotId: "snapshot:missing-bindings" },
+      continuity: { freshTopology: true, sourceContinuity: true },
+    });
+    const mismatchedBindings = evaluateMaterialDebitEligibility({
+      mount,
+      materialSource: {
+        materialSourceId: "material-source:cfs-1d",
+        identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      },
+      usageEvidence: {
+        materialSourceId: "material-source:cfs-1c",
+        mountId: "spool-mount:other",
+        usedLengthMm: 1234,
+        attribution: "source-specific",
+        idempotencyKey: "usage:mismatched-bindings",
+      },
+      printStartSnapshot: {
+        snapshotId: "snapshot:mismatched-bindings",
+        materialSourceId: "material-source:cfs-1c",
+        mountId: "spool-mount:other",
+        spoolId: "spool:other",
+      },
+      continuity: { freshTopology: true, sourceContinuity: true },
+    });
+
+    expect(missingBindings).toMatchObject({
+      status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
+      canDebit: false,
+      reasons: [
+        "print-start-snapshot-mount-required",
+        "print-start-snapshot-source-required",
+        "print-start-snapshot-spool-required",
+        "usage-evidence-source-required",
+        "usage-evidence-mount-required",
+      ],
+    });
+    expect(mismatchedBindings).toMatchObject({
+      status: DEBIT_ELIGIBILITY_STATUS.BLOCKED,
+      canDebit: false,
+      reasons: [
+        "print-start-snapshot-mount-mismatch",
+        "print-start-snapshot-source-mismatch",
+        "print-start-snapshot-spool-mismatch",
+        "usage-evidence-source-mismatch",
+        "usage-evidence-mount-mismatch",
+      ],
+    });
   });
 
   it("legacy accounting cutover recordは旧intervalを最終legacy jobで封印する", () => {

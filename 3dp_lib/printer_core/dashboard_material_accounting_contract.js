@@ -27,9 +27,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1490 (PR #438)
+ * @version 1.390.1492 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 09:39:54
+ * @lastModified 2026-08-31 09:53:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -799,9 +799,11 @@ export function validateMaterialAccountingCutover(record) {
  * @private
  * @function validateUsageEvidenceForDebit
  * @param {Object|null|undefined} usageEvidence - usage evidence候補。
+ * @param {Object|null|undefined} mount - SpoolMount record。
+ * @param {Object|null|undefined} materialSource - MaterialSource recordまたは最小source情報。
  * @returns {string[]} error/reason一覧。
  */
-function validateUsageEvidenceForDebit(usageEvidence) {
+function validateUsageEvidenceForDebit(usageEvidence, mount, materialSource) {
   const reasons = [];
   const usedLengthMm = toFiniteNumberOrNull(usageEvidence?.usedLengthMm);
   if (usedLengthMm === null || usedLengthMm < 0) {
@@ -812,6 +814,69 @@ function validateUsageEvidenceForDebit(usageEvidence) {
   }
   if (!toTrimmedString(usageEvidence?.idempotencyKey)) {
     reasons.push("idempotency-key-required");
+  }
+  const usageSourceId = toTrimmedString(usageEvidence?.materialSourceId);
+  const usageMountId = toTrimmedString(usageEvidence?.mountId);
+  const mountSourceId = toTrimmedString(mount?.materialSourceId);
+  const sourceId = toTrimmedString(materialSource?.materialSourceId);
+  const mountId = toTrimmedString(mount?.mountId);
+  if (!usageSourceId) {
+    reasons.push("usage-evidence-source-required");
+  } else if ((sourceId && usageSourceId !== sourceId) || (mountSourceId && usageSourceId !== mountSourceId)) {
+    reasons.push("usage-evidence-source-mismatch");
+  }
+  if (!usageMountId) {
+    reasons.push("usage-evidence-mount-required");
+  } else if (mountId && usageMountId !== mountId) {
+    reasons.push("usage-evidence-mount-mismatch");
+  }
+  return reasons;
+}
+
+/**
+ * print-start snapshot がSpoolMount/MaterialSourceへbindされているかを検査する。
+ *
+ * 【詳細説明】
+ * - 印刷完了時のcurrent mount参照による事後帰属を防ぐため、snapshotにはmount/source/spoolの固定値を必須にする。
+ * - snapshotの値が現在入力と矛盾する場合は、自動debitの前提が崩れるためblockerとして返す。
+ *
+ * @private
+ * @function validatePrintStartSnapshotForDebit
+ * @param {Object|null|undefined} snapshot - print-start immutable snapshot候補。
+ * @param {Object|null|undefined} mount - SpoolMount record。
+ * @param {Object|null|undefined} materialSource - MaterialSource recordまたは最小source情報。
+ * @returns {string[]} error/reason一覧。
+ */
+function validatePrintStartSnapshotForDebit(snapshot, mount, materialSource) {
+  const reasons = [];
+  if (!snapshot || typeof snapshot !== "object") {
+    return ["print-start-snapshot-required"];
+  }
+  const snapshotId = toTrimmedString(snapshot.snapshotId);
+  const snapshotMountId = toTrimmedString(snapshot.mountId);
+  const snapshotSourceId = toTrimmedString(snapshot.materialSourceId);
+  const snapshotSpoolId = toTrimmedString(snapshot.spoolId);
+  const mountId = toTrimmedString(mount?.mountId);
+  const mountSourceId = toTrimmedString(mount?.materialSourceId);
+  const sourceId = toTrimmedString(materialSource?.materialSourceId);
+  const mountSpoolId = toTrimmedString(mount?.spoolId);
+  if (!snapshotId) {
+    reasons.push("print-start-snapshot-id-required");
+  }
+  if (!snapshotMountId) {
+    reasons.push("print-start-snapshot-mount-required");
+  } else if (mountId && snapshotMountId !== mountId) {
+    reasons.push("print-start-snapshot-mount-mismatch");
+  }
+  if (!snapshotSourceId) {
+    reasons.push("print-start-snapshot-source-required");
+  } else if ((sourceId && snapshotSourceId !== sourceId) || (mountSourceId && snapshotSourceId !== mountSourceId)) {
+    reasons.push("print-start-snapshot-source-mismatch");
+  }
+  if (!snapshotSpoolId) {
+    reasons.push("print-start-snapshot-spool-required");
+  } else if (mountSpoolId && snapshotSpoolId !== mountSpoolId) {
+    reasons.push("print-start-snapshot-spool-mismatch");
   }
   return reasons;
 }
@@ -871,21 +936,25 @@ export function evaluateMaterialDebitEligibility(input = {}) {
     if (mount.status !== SPOOL_MOUNT_STATUS.OPEN) {
       blocked.push("mount-not-open");
     }
+    if (mount.verification === SPOOL_MOUNT_VERIFICATION.UNVERIFIED) {
+      blocked.push("mount-verification-required");
+    }
   }
 
   if (!materialSource || typeof materialSource !== "object") {
     blocked.push("material-source-required");
-  } else if (mount?.materialSourceId && materialSource.materialSourceId && mount.materialSourceId !== materialSource.materialSourceId) {
-    blocked.push("material-source-mismatch");
+  } else {
+    const materialSourceId = toTrimmedString(materialSource.materialSourceId);
+    if (!materialSourceId) {
+      blocked.push("material-source-id-required");
+    } else if (mount?.materialSourceId && mount.materialSourceId !== materialSourceId) {
+      blocked.push("material-source-mismatch");
+    }
   }
 
-  if (!input.printStartSnapshot || typeof input.printStartSnapshot !== "object") {
-    blocked.push("print-start-snapshot-required");
-  } else if (mount?.mountId && input.printStartSnapshot.mountId && input.printStartSnapshot.mountId !== mount.mountId) {
-    blocked.push("print-start-snapshot-mount-mismatch");
-  }
+  blocked.push(...validatePrintStartSnapshotForDebit(input.printStartSnapshot, mount, materialSource));
 
-  blocked.push(...validateUsageEvidenceForDebit(input.usageEvidence));
+  blocked.push(...validateUsageEvidenceForDebit(input.usageEvidence, mount, materialSource));
 
   if (continuity.identityConflict === true) {
     blocked.push("identity-conflict");
@@ -901,6 +970,10 @@ export function evaluateMaterialDebitEligibility(input = {}) {
   }
 
   const sourceStrength = materialSource?.identityStrength || mount?.sourceIdentityStrengthAtOpen;
+  if (!enumValues(MATERIAL_IDENTITY_STRENGTH).has(sourceStrength) ||
+      sourceStrength === MATERIAL_IDENTITY_STRENGTH.UNKNOWN) {
+    blocked.push("source-identity-required");
+  }
   if (sourceStrength === MATERIAL_IDENTITY_STRENGTH.PROVISIONAL && continuity.freshTopology !== true) {
     pending.push("fresh-topology-required");
   }
