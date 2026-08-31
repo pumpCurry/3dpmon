@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1555 (PR #439)
+ * @version 1.390.1556 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 20:19:32
+ * @lastModified 2026-08-31 20:30:21
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -257,10 +257,29 @@ function getSourceSelectionValid(source) {
 }
 
 /**
+ * selection証跡の完全性確認が必要なsource rowか判定する。
+ *
+ * 【詳細説明】
+ * - `loaded` は物理的に材料があるため、選択状態が不定なら一意selectedを証明できない。
+ * - `unknown` は装填有無が不明な実観測sourceとして扱い、安全側でselection証跡を要求する。
+ * - `unobserved` は固定枠placeholderとして生成されることがあり、CLIの実boxsInfo sourceには出ないため、このpanelではfalse-blockingを避ける。
+ *
+ * @private
+ * @function requiresSelectionEvidence
+ * @param {object|null|undefined} row - source row
+ * @returns {boolean} selection証跡確認対象ならtrue
+ */
+function requiresSelectionEvidence(row) {
+  const presence = toText(row?.presence, "unobserved");
+  return presence === "loaded" || presence === "unknown";
+}
+
+/**
  * live送信前に表示すべきselection証跡問題を生成する。
  *
  * 【詳細説明】
- * - CLI側のpre-command guardと同じ考え方で、明示empty以外は選択状態が0/1系として観測済みであることを要求する。
+ * - CLI側のpre-command guardと同じ考え方で、実観測されたloaded/unknown sourceは選択状態が0/1系として観測済みであることを要求する。
+ * - 固定枠として生成されたunobserved placeholderは、boxsInfo由来の実sourceではないため判定対象から外す。
  * - invalidは装置値の意味が壊れているため専用文言にし、missing/nullは観測不足として区別する。
  *
  * @private
@@ -270,7 +289,7 @@ function getSourceSelectionValid(source) {
  */
 function createSelectionEvidencePreflightDetail(materialViewModel) {
   const rows = flattenMaterialRows(materialViewModel)
-    .filter((row) => row?.presence !== "empty");
+    .filter((row) => requiresSelectionEvidence(row));
   const invalidRows = rows.filter((row) => getSourceSelectionValid(row) === false);
   if (invalidRows.length > 0) {
     const slots = invalidRows.map((row) => toText(row.displaySlot || row.sourceId, "--")).join(", ");
@@ -288,6 +307,33 @@ function createSelectionEvidencePreflightDetail(materialViewModel) {
 }
 
 /**
+ * 復旧ラッチblockerを表示用に正規化する。
+ *
+ * 【詳細説明】
+ * - recovery latchは将来のproduction dispatcher側で送信前に再評価するが、debug panelでも同じ危険境界を人間に見せる。
+ * - commandIdやquarantineReasonが欠けても文言shapeを崩さず、未指定部分は省略して表示する。
+ *
+ * @private
+ * @function normalizeRecoveryBlockerForPanel
+ * @param {object|null|undefined} recoveryBlocker - 復旧ラッチblocker判定
+ * @returns {{blocked:boolean, reason:string, commandId:string, quarantineReason:string, detail:string}} 表示用blocker
+ */
+function normalizeRecoveryBlockerForPanel(recoveryBlocker) {
+  const blocked = recoveryBlocker?.blocked === true;
+  const reason = toText(recoveryBlocker?.reason, blocked ? "blocked" : "clear");
+  const commandId = toText(recoveryBlocker?.commandId, "");
+  const quarantineReason = toText(recoveryBlocker?.quarantineReason, "");
+  const suffix = [reason, commandId, quarantineReason].filter(Boolean).join(" / ");
+  return {
+    blocked,
+    reason,
+    commandId,
+    quarantineReason,
+    detail: blocked ? `復旧確認待ち: ${suffix}` : "未解決の復旧ラッチなし",
+  };
+}
+
+/**
  * Preflight項目を生成する。
  *
  * 【詳細説明】
@@ -300,9 +346,10 @@ function createSelectionEvidencePreflightDetail(materialViewModel) {
  * @param {object|null} options.targetSource - 対象source
  * @param {string} options.certificationStatus - certification状態
  * @param {object} options.execution - 実行状態
+ * @param {object} options.recoveryBlocker - 復旧ラッチblocker表示
  * @returns {Array<object>} preflight行一覧
  */
-function createPreflightItems({ printer, materialViewModel, targetSource, certificationStatus, execution }) {
+function createPreflightItems({ printer, materialViewModel, targetSource, certificationStatus, execution, recoveryBlocker }) {
   const topologyState = toText(materialViewModel?.summary?.topologyState, "unobserved");
   const printerState = toText(printer?.printState || printer?.state, "");
   const printerIdleKnown = Boolean(printerState);
@@ -353,6 +400,12 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
       label: "Certification status",
       state: certificationStatus === "certified" ? "ok" : "fail",
       detail: certificationStatus === "certified" ? "実機証跡登録済み" : "未認証",
+    },
+    {
+      key: "recovery-blocker",
+      label: "Recovery blocker",
+      state: recoveryBlocker?.blocked === true ? "fail" : "ok",
+      detail: recoveryBlocker?.detail || "未解決の復旧ラッチなし",
     },
     {
       key: "mutex-available",
@@ -617,6 +670,7 @@ function createEvidenceTimeline(evidence = {}, execution = {}) {
  * @param {object=} options.arm - live arm状態
  * @param {object=} options.evidence - evidence入力
  * @param {object=} options.execution - command実行状態
+ * @param {object=} options.recoveryBlocker - 復旧ラッチblocker判定
  * @param {number=} options.nowMs - ARM期限判定に使う現在時刻のepoch milliseconds
  * @returns {object} Certificationパネル用ViewModel
  * @example
@@ -646,12 +700,14 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     "uncertified"
   );
   const execution = options.execution || {};
+  const recoveryBlocker = normalizeRecoveryBlockerForPanel(options.recoveryBlocker);
   const preflight = createPreflightItems({
     printer,
     materialViewModel,
     targetSource,
     certificationStatus,
     execution,
+    recoveryBlocker,
   });
   const arm = {
     armed: isTrue(options.arm?.armed),
@@ -702,6 +758,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
       payloadPreview: cloneJson(dryRunPlan?.frames || dryRunPlan?.payloadPreview || []),
     },
     preflight,
+    recoveryBlocker,
     arm: {
       ...arm,
       valid: armBinding.valid,
@@ -838,6 +895,7 @@ export function createCfsCertificationExportBundle(viewModel) {
       material: cloneJson(viewModel?.material) || {},
       command: cloneJson(viewModel?.command) || {},
       preflight: cloneJson(viewModel?.preflight) || [],
+      recoveryBlocker: cloneJson(viewModel?.recoveryBlocker) || {},
       arm: cloneJson(viewModel?.arm) || {},
       execution: cloneJson(viewModel?.execution) || {},
       probeSummaries,

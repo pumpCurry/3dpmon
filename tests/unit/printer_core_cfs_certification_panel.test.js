@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1555 (PR #439)
+ * @version 1.390.1556 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 20:18:09
+ * @lastModified 2026-08-31 20:28:44
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -584,6 +584,123 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(viewModel.liveSend.reason).toBe("preflight-failed:selection-complete");
     expect(container.textContent).toContain("Selection evidence");
     expect(container.textContent).toContain("選択状態未観測: 1A");
+  });
+
+  it("固定枠の未観測placeholderはselection証跡不完全としてLIVE不可にしない", () => {
+    const materialViewModel = createMaterialViewModel();
+    materialViewModel.units[0].slots.push({
+      sourceId: "cfs:1:slot:3",
+      displaySlot: "1D",
+      kind: "cfs-slot",
+      boxId: 1,
+      slotIndex: 3,
+      protocolSlotId: 3,
+      presence: "unobserved",
+      selected: null,
+      assignments: [],
+      material: { type: null, name: null },
+      status: {
+        remaining: { displayPercent: null, valid: null },
+        selectionState: "unobserved",
+        selectionValid: null,
+      },
+    });
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel,
+      targetSource: materialViewModel.units[0].slots[1],
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    expect(viewModel.preflight.find((item) => item.key === "selection-complete")).toMatchObject({
+      state: "ok",
+      detail: "選択証跡OK: 2 sources",
+    });
+    expect(viewModel.liveSend.enabled).toBe(true);
+  });
+
+  it("復旧ラッチblockerがある場合はCertificationパネルのpreflightでLIVE送信不可として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+      recoveryBlocker: {
+        blocked: true,
+        reason: "integrity-quarantine",
+        commandId: "command:k2-load-1c",
+        quarantineReason: "command-id-digest-mismatch",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.preflight.find((item) => item.key === "recovery-blocker")).toMatchObject({
+      state: "fail",
+      detail: "復旧確認待ち: integrity-quarantine / command:k2-load-1c / command-id-digest-mismatch",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:recovery-blocker");
+    expect(viewModel.recoveryBlocker).toMatchObject({
+      blocked: true,
+      reason: "integrity-quarantine",
+    });
+    expect(container.textContent).toContain("Recovery blocker");
+    expect(container.textContent).toContain("復旧確認待ち: integrity-quarantine / command:k2-load-1c / command-id-digest-mismatch");
   });
 
   it("printer idle未観測WARNはselected-sourceと違いLIVE送信をblockingする", () => {
