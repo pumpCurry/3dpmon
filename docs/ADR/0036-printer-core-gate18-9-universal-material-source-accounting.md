@@ -397,6 +397,11 @@ Gate 18.9E:
 - restart recovery for shadow print binding records without legacy debit, with
   cross-record validation before restored snapshot/evidence/segment/ledger
   records return to authority arrays
+- persisted operation caches are not restored; operation idempotency after
+  restart is recovered from deterministic semantic record IDs, not saved result
+  payloads
+- duplicate semantic IDs with conflicting payloads quarantine the full conflict
+  set instead of preserving whichever record appeared first
 
 Gate 18.9F:
 

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1522 (PR #438)
+ * @version 1.390.1523 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:58:00
+ * @lastModified 2026-08-31 16:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1082,7 +1082,7 @@ describe("MaterialSource print binding repository", () => {
     ]);
   });
 
-  it("保存済みstore復元時にduplicate semantic IDのpayload conflictを隔離する", () => {
+  it("保存済みstore復元時にduplicate semantic IDのpayload conflictがあれば同ID全recordをauthorityから除外する", () => {
     const snapshot = {
       snapshotId: "snapshot:duplicate",
       deviceId: "serial:k2pro-69e7",
@@ -1102,19 +1102,19 @@ describe("MaterialSource print binding repository", () => {
       printStartSnapshots: [snapshot, { ...snapshot }, conflictingSnapshot],
     });
 
-    expect(restored.printStartSnapshots).toEqual([snapshot]);
+    expect(restored.printStartSnapshots).toEqual([]);
     expect(restored.retainedUnsupportedEntries.map((entry) => [
       entry.recordType,
       entry.reason,
       entry.record.materialSourceId,
-    ])).toContainEqual([
-      "printStartSnapshot",
-      "duplicate-semantic-id-conflict",
-      "source:1b",
+    ])).toEqual([
+      ["printStartSnapshot", "duplicate-semantic-id-conflict", "source:1a"],
+      ["printStartSnapshot", "duplicate-semantic-id-conflict", "source:1a"],
+      ["printStartSnapshot", "duplicate-semantic-id-conflict", "source:1b"],
     ]);
   });
 
-  it("保存済みoperationは復元済みauthority recordを参照するものだけ再利用する", () => {
+  it("保存済みoperation cacheはrestart後のidempotent shortcutに使わず全件隔離する", () => {
     const snapshot = {
       snapshotId: "snapshot:operation-valid",
       deviceId: "serial:k2pro-69e7",
@@ -1149,10 +1149,10 @@ describe("MaterialSource print binding repository", () => {
       },
     });
 
-    expect(Object.keys(restored.operationsById)).toEqual(["operation:valid"]);
-    expect(restored.retainedUnsupportedEntries.map((entry) => [entry.recordType, entry.reason])).toContainEqual([
-      "operationRecord",
-      "operation-authority-record-mismatch",
+    expect(Object.keys(restored.operationsById)).toEqual([]);
+    expect(restored.retainedUnsupportedEntries.map((entry) => [entry.recordType, entry.reason])).toEqual([
+      ["operationRecord", "operation-cache-dropped-on-restore"],
+      ["operationRecord", "operation-cache-dropped-on-restore"],
     ]);
   });
 });

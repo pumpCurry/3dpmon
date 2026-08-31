@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1521 (PR #438)
+ * @version 1.390.1523 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:41:00
+ * @lastModified 2026-08-31 16:16:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -579,6 +579,11 @@ function isRestorableLedgerEvent(event) {
 /**
  * 保存済みrecord配列を検査し、壊れたrecordをunsupported evidenceへ退避する。
  *
+ * 【詳細説明】
+ * - 同じsemantic IDかつ同じpayloadの重複は1件へ畳み込む。
+ * - 同じsemantic IDでpayloadが異なる場合は、入力順でどちらかを勝者にせず、そのIDの全recordを隔離する。
+ * - persisted/imported corruptionでは配列順に意味が無いため、first-record survivalを避けてfail-closedにする。
+ *
  * @private
  * @function restoreRecordArray
  * @param {Object} input - 復元入力。
@@ -591,32 +596,37 @@ function isRestorableLedgerEvent(event) {
  */
 function restoreRecordArray({ records, recordType, predicate, idKey, retainedUnsupportedEntries }) {
   const restored = [];
-  const seenById = new Map();
+  const entriesById = new Map();
   for (const [index, record] of (Array.isArray(records) ? records : []).entries()) {
     if (predicate(record)) {
       const candidate = cloneJsonValue(record);
       const recordId = toTrimmedString(candidate?.[idKey]);
       const serialized = stableStringifyPrinterCoreV3Value(candidate);
-      const seen = seenById.get(recordId);
-      if (!seen) {
-        seenById.set(recordId, serialized);
-        restored.push(candidate);
-        continue;
+      if (!entriesById.has(recordId)) {
+        entriesById.set(recordId, []);
       }
-      if (seen !== serialized) {
-        retainedUnsupportedEntries.push({
-          recordType,
-          index,
-          record: candidate,
-          reason: "duplicate-semantic-id-conflict",
-        });
-      }
+      entriesById.get(recordId).push({ index, record: candidate, serialized });
     } else {
       retainedUnsupportedEntries.push({
         recordType,
         index,
         record: cloneJsonValue(record),
         reason: "invalid-stored-record",
+      });
+    }
+  }
+  for (const entries of entriesById.values()) {
+    const payloads = new Set(entries.map((entry) => entry.serialized));
+    if (payloads.size === 1) {
+      restored.push(entries[0].record);
+      continue;
+    }
+    for (const entry of entries) {
+      retainedUnsupportedEntries.push({
+        recordType,
+        index: entry.index,
+        record: entry.record,
+        reason: "duplicate-semantic-id-conflict",
       });
     }
   }
@@ -869,100 +879,34 @@ function validateRestoredStoreCrossRecords(restored, retainedUnsupportedEntries)
 }
 
 /**
- * authority配列からoperation result内recordをサニタイズする。
+ * 保存済みoperation cacheをrestart後のauthorityから隔離する。
  *
  * 【詳細説明】
- * - 保存済みoperationsByIdはcaller supplied JSONなので、その中のsnapshot/segment/ledger payloadを信頼しない。
- * - 復元済みauthority配列に存在するIDだけを許し、返却payloadはauthority側recordへ差し替える。
- *
- * @private
- * @function sanitizeOperationRecordArray
- * @param {Object} result - operation result候補。
- * @param {string} field - result内配列field。
- * @param {string} idKey - record ID field。
- * @param {Map<string,Object>} acceptedById - 復元済みauthority record map。
- * @returns {{ok:boolean,records:Object[]}} サニタイズ結果。
- */
-function sanitizeOperationRecordArray(result, field, idKey, acceptedById) {
-  const records = Array.isArray(result?.[field]) ? result[field] : [];
-  const sanitized = [];
-  for (const record of records) {
-    const recordId = toTrimmedString(record?.[idKey]);
-    const accepted = acceptedById.get(recordId);
-    if (!recordId || !accepted) {
-      return { ok: false, records: [] };
-    }
-    sanitized.push(cloneJsonValue(accepted));
-  }
-  return { ok: true, records: sanitized };
-}
-
-/**
- * 保存済みoperation recordを復元済みauthority recordへ照合して復元する。
- *
- * 【詳細説明】
- * - operation replayは冪等性維持のために使うが、保存済みoperation内のpayloadはauthorityではない。
- * - 参照先が復元済みrecordに無いoperationは隔離し、参照がある場合もpayloadはaccepted recordで置換する。
+ * - operationsByIdはprocess lifetime内の冪等shortcutとしてのみ扱い、永続storeからは復元しない。
+ * - snapshot/usage/segment/ledger本体はdeterministic semantic IDで復元されるため、operation result全文を再利用する必要は無い。
+ * - Gate20でrestart replayが必要になった場合は、result全文ではなくtyped OperationReplayRecordとして再設計する。
  *
  * @private
  * @function restoreOperationRecords
  * @param {*} operationsById - 保存済みoperation map候補。
  * @param {Object} validatedRecords - 復元済みauthority record群。
  * @param {Object[]} retainedUnsupportedEntries - unsupported退避先。
- * @returns {Object} 復元可能operation map。
+ * @returns {Object} 空のoperation cache。
  */
 function restoreOperationRecords(operationsById, validatedRecords, retainedUnsupportedEntries) {
+  void validatedRecords;
   if (!operationsById || typeof operationsById !== "object" || Array.isArray(operationsById)) {
     return {};
   }
-  const acceptedMaps = {
-    snapshots: mapById(validatedRecords.printStartSnapshots, "snapshotId"),
-    usageEvidence: mapById(validatedRecords.usageEvidence, "evidenceId"),
-    segments: mapById(validatedRecords.jobMaterialSegments, "segmentId"),
-    ledgerEvents: mapById(validatedRecords.ledgerEvents, "ledgerEventId"),
-  };
-  const restored = {};
   for (const [key, record] of Object.entries(operationsById)) {
-    const operationId = toTrimmedString(record?.operationId);
-    const digest = toTrimmedString(record?.digest);
-    const result = record?.result && typeof record.result === "object" && !Array.isArray(record.result)
-      ? record.result
-      : null;
-    if (!operationId || operationId !== key || !digest || !result) {
-      retainedUnsupportedEntries.push({
-        recordType: "operationRecord",
-        index: key,
-        record: cloneJsonValue(record),
-        reason: "invalid-stored-record",
-      });
-      continue;
-    }
-    const snapshots = sanitizeOperationRecordArray(result, "snapshots", "snapshotId", acceptedMaps.snapshots);
-    const usageEvidence = sanitizeOperationRecordArray(result, "usageEvidence", "evidenceId", acceptedMaps.usageEvidence);
-    const segments = sanitizeOperationRecordArray(result, "segments", "segmentId", acceptedMaps.segments);
-    const ledgerEvents = sanitizeOperationRecordArray(result, "ledgerEvents", "ledgerEventId", acceptedMaps.ledgerEvents);
-    if (!snapshots.ok || !usageEvidence.ok || !segments.ok || !ledgerEvents.ok) {
-      retainedUnsupportedEntries.push({
-        recordType: "operationRecord",
-        index: key,
-        record: cloneJsonValue(record),
-        reason: "operation-authority-record-mismatch",
-      });
-      continue;
-    }
-    restored[key] = cloneJsonValue({
-      operationId,
-      digest,
-      result: {
-        ...cloneJsonValue(result),
-        snapshots: snapshots.records,
-        usageEvidence: usageEvidence.records,
-        segments: segments.records,
-        ledgerEvents: ledgerEvents.records,
-      },
+    retainedUnsupportedEntries.push({
+      recordType: "operationRecord",
+      index: key,
+      record: cloneJsonValue(record),
+      reason: "operation-cache-dropped-on-restore",
     });
   }
-  return restored;
+  return {};
 }
 
 /**

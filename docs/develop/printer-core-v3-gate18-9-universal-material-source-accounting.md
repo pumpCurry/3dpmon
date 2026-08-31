@@ -499,6 +499,17 @@ matching accepted segment. Records that pass shape validation but fail these
 cross-record checks are quarantined in `retainedUnsupportedEntries` instead of
 being returned to authority arrays.
 
+Persisted operation caches are not restored. `operationsById` is a process
+lifetime idempotency shortcut only; after restart, idempotency is recovered from
+the deterministic semantic IDs of accepted snapshots, usage evidence, segments,
+and ledger event candidates. Stored operation entries are retained only as
+unsupported evidence so a forged digest/result cannot suppress a future retry.
+
+If a stored semantic ID appears with conflicting payloads, no record with that
+ID returns to an authority array. Exact duplicate payloads are deduplicated, but
+conflicting groups are quarantined as a full bundle because persisted/imported
+array order is not trusted evidence.
+
 ## Gate 18.9F Scope
 
 Gate 18.9F connects the source-aware read model to the existing read-only UI lane:
@@ -675,8 +686,11 @@ Gate 18.9E planned tests:
   attribution
 - conflicting tool/alias/source identifiers block attribution
 - duplicate semantic completion is idempotent even with a different operation ID
+- persisted duplicate semantic ID conflicts quarantine every record with that ID
 - saved print binding store restores after restart without legacy usage or
   remaining projection
+- persisted operationsById is dropped on restore and cannot become a restart
+  idempotent shortcut
 
 Gate 18.9F tests:
 
