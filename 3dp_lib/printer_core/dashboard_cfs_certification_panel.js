@@ -17,12 +17,13 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1473 (PR #436)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:30:05
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
+ * - Gate 19.5以降でfresh observationによる復旧ラッチ自動解決を接続する
  */
 
 "use strict";
@@ -235,6 +236,113 @@ function formatRemaining(source) {
 }
 
 /**
+ * source rowのselection妥当性を取得する。
+ *
+ * 【詳細説明】
+ * - MaterialTopology ViewModelでは `status.selectionValid` に保持する。
+ * - 古いfixtureやテスト補助値が直接 `selectionValid` を持つ場合も読み、debug panelの表示境界で吸収する。
+ *
+ * @private
+ * @function getSourceSelectionValid
+ * @param {object|null|undefined} source - source row
+ * @returns {boolean|null|undefined} selection妥当性
+ */
+function getSourceSelectionValid(source) {
+  if (!source || typeof source !== "object") {
+    return undefined;
+  }
+  if (source.status && Object.prototype.hasOwnProperty.call(source.status, "selectionValid")) {
+    return source.status.selectionValid;
+  }
+  return source.selectionValid;
+}
+
+/**
+ * selection証跡の完全性確認が必要なsource rowか判定する。
+ *
+ * 【詳細説明】
+ * - `loaded` は物理的に材料があるため、選択状態が不定なら一意selectedを証明できない。
+ * - `unknown` は装填有無が不明な実観測sourceとして扱い、安全側でselection証跡を要求する。
+ * - `unobserved` は固定枠placeholderとして生成されることがあり、CLIの実boxsInfo sourceには出ないため、このpanelではfalse-blockingを避ける。
+ *
+ * @private
+ * @function requiresSelectionEvidence
+ * @param {object|null|undefined} row - source row
+ * @returns {boolean} selection証跡確認対象ならtrue
+ */
+function requiresSelectionEvidence(row) {
+  const presence = toText(row?.presence, "unobserved");
+  return presence === "loaded" || presence === "unknown";
+}
+
+/**
+ * live送信前に表示すべきselection証跡問題を生成する。
+ *
+ * 【詳細説明】
+ * - CLI側のpre-command guardと同じ考え方で、実観測されたloaded/unknown sourceは選択状態が0/1系として観測済みであることを要求する。
+ * - 固定枠として生成されたunobserved placeholderは、boxsInfo由来の実sourceではないため判定対象から外す。
+ * - invalidは装置値の意味が壊れているため専用文言にし、missing/nullは観測不足として区別する。
+ *
+ * @private
+ * @function createSelectionEvidencePreflightDetail
+ * @param {object|null|undefined} materialViewModel - material topology view model
+ * @returns {{state:string, detail:string}} preflight表示
+ */
+function createSelectionEvidencePreflightDetail(materialViewModel) {
+  const rows = flattenMaterialRows(materialViewModel)
+    .filter((row) => requiresSelectionEvidence(row));
+  const invalidRows = rows.filter((row) => getSourceSelectionValid(row) === false);
+  if (invalidRows.length > 0) {
+    const slots = invalidRows.map((row) => toText(row.displaySlot || row.sourceId, "--")).join(", ");
+    return { state: "fail", detail: `選択値異常: ${slots}` };
+  }
+  const incompleteRows = rows.filter((row) => getSourceSelectionValid(row) !== true);
+  if (incompleteRows.length > 0) {
+    const slots = incompleteRows.map((row) => toText(row.displaySlot || row.sourceId, "--")).join(", ");
+    return { state: "fail", detail: `選択状態未観測: ${slots}` };
+  }
+  return {
+    state: "ok",
+    detail: rows.length > 0 ? `選択証跡OK: ${rows.length} sources` : "対象sourceなし",
+  };
+}
+
+/**
+ * 復旧ラッチblockerを表示用に正規化する。
+ *
+ * 【詳細説明】
+ * - recovery latchは将来のproduction dispatcher側で送信前に再評価するが、debug panelでも同じ危険境界を人間に見せる。
+ * - commandIdやquarantineReasonが欠けても文言shapeを崩さず、未指定部分は省略して表示する。
+ *
+ * @private
+ * @function normalizeRecoveryBlockerForPanel
+ * @param {object|null|undefined} recoveryBlocker - 復旧ラッチblocker判定
+ * @returns {{blocked:boolean, reason:string, commandId:string, quarantineReason:string, detail:string, commandKind:string, deviceId:string, sessionId:string, materialSourceId:string, status:string, sentAt:string, recordDigest:string, operatorResolvable:boolean}} 表示用blocker
+ */
+function normalizeRecoveryBlockerForPanel(recoveryBlocker) {
+  const blocked = recoveryBlocker?.blocked === true;
+  const reason = toText(recoveryBlocker?.reason, blocked ? "blocked" : "clear");
+  const commandId = toText(recoveryBlocker?.commandId, "");
+  const quarantineReason = toText(recoveryBlocker?.quarantineReason, "");
+  const suffix = [reason, commandId, quarantineReason].filter(Boolean).join(" / ");
+  return {
+    blocked,
+    reason,
+    commandId,
+    quarantineReason,
+    commandKind: toText(recoveryBlocker?.commandKind, ""),
+    deviceId: toText(recoveryBlocker?.deviceId, ""),
+    sessionId: toText(recoveryBlocker?.sessionId, ""),
+    materialSourceId: toText(recoveryBlocker?.materialSourceId, ""),
+    status: toText(recoveryBlocker?.status, ""),
+    sentAt: toText(recoveryBlocker?.sentAt, ""),
+    recordDigest: toText(recoveryBlocker?.recordDigest, ""),
+    operatorResolvable: recoveryBlocker?.operatorResolvable === true,
+    detail: blocked ? `復旧確認待ち: ${suffix}` : "未解決の復旧ラッチなし",
+  };
+}
+
+/**
  * Preflight項目を生成する。
  *
  * 【詳細説明】
@@ -247,14 +355,16 @@ function formatRemaining(source) {
  * @param {object|null} options.targetSource - 対象source
  * @param {string} options.certificationStatus - certification状態
  * @param {object} options.execution - 実行状態
+ * @param {object} options.recoveryBlocker - 復旧ラッチblocker表示
  * @returns {Array<object>} preflight行一覧
  */
-function createPreflightItems({ printer, materialViewModel, targetSource, certificationStatus, execution }) {
+function createPreflightItems({ printer, materialViewModel, targetSource, certificationStatus, execution, recoveryBlocker }) {
   const topologyState = toText(materialViewModel?.summary?.topologyState, "unobserved");
   const printerState = toText(printer?.printState || printer?.state, "");
   const printerIdleKnown = Boolean(printerState);
   const printerIdle = ["idle", "standby", "ready", "completed", "complete"].includes(printerState.toLowerCase());
   const selectedState = targetSource?.selected === true ? "ok" : "warn";
+  const selectionEvidence = createSelectionEvidencePreflightDetail(materialViewModel);
   return [
     {
       key: "active-session",
@@ -289,10 +399,22 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
         : "選択source未観測",
     },
     {
+      key: "selection-complete",
+      label: "Selection evidence",
+      state: selectionEvidence.state,
+      detail: selectionEvidence.detail,
+    },
+    {
       key: "certification-status",
       label: "Certification status",
       state: certificationStatus === "certified" ? "ok" : "fail",
       detail: certificationStatus === "certified" ? "実機証跡登録済み" : "未認証",
+    },
+    {
+      key: "recovery-blocker",
+      label: "Recovery blocker",
+      state: recoveryBlocker?.blocked === true ? "fail" : "ok",
+      detail: recoveryBlocker?.detail || "未解決の復旧ラッチなし",
     },
     {
       key: "mutex-available",
@@ -409,6 +531,7 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  * - disabled tooltipが`dry-run-ok`のような正常理由にならないよう、ARM、dry-run、preflight、認証の順に
  *   実際にブロックしている理由だけを返す。
  * - preflightのwarnは原則blockingとし、実機semantics待ちのselected-sourceだけ診断情報として扱う。
+ * - unknown/submitted/post-observedなどの未解決executionは、物理結果の人間確認まで再送信をhard disableする。
  *
  * @private
  * @function createLiveSendReadiness
@@ -416,9 +539,14 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  * @param {{valid: boolean, reason: string}} armBinding - ARM判定結果
  * @param {{valid: boolean, reason: string}} dryRunValidation - dry-run判定結果
  * @param {string} certificationStatus - certification状態
+ * @param {object=} execution - 実行状態
  * @returns {{enabled: boolean, reason: string}} LIVE送信readiness
  */
-function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus) {
+function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus, execution = {}) {
+  const executionStatus = toText(execution?.status, "idle");
+  if (["running", "submitting", "submitted", "sent", "probing", "post-observed", "unknown", "timeout"].includes(executionStatus)) {
+    return { enabled: false, reason: `execution-unresolved:${executionStatus}` };
+  }
   if (!armBinding.valid) {
     return { enabled: false, reason: armBinding.reason };
   }
@@ -446,7 +574,7 @@ function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certif
  * 実行状態を利用者向けに整形する。
  *
  * 【詳細説明】
- * - `submitted` は成功ではなく、物理状態確認待ちとして表示する。
+ * - `submitted` と `post-observed` は成功ではなく、物理状態確認待ちとして表示する。
  *
  * @private
  * @param {object|null|undefined} execution - command実行状態
@@ -456,6 +584,12 @@ function formatExecutionStatus(execution) {
   const status = toText(execution?.status, "idle");
   if (status === "submitted" || status === "sent") {
     return "送信済み / 物理確認待ち";
+  }
+  if (status === "post-observed") {
+    return "観測済み / 物理確認待ち";
+  }
+  if (status === "unknown") {
+    return "結果不明 / 物理確認が必要";
   }
   if (status === "timeout") {
     return "timeout / 結果不明";
@@ -545,6 +679,7 @@ function createEvidenceTimeline(evidence = {}, execution = {}) {
  * @param {object=} options.arm - live arm状態
  * @param {object=} options.evidence - evidence入力
  * @param {object=} options.execution - command実行状態
+ * @param {object=} options.recoveryBlocker - 復旧ラッチblocker判定
  * @param {number=} options.nowMs - ARM期限判定に使う現在時刻のepoch milliseconds
  * @returns {object} Certificationパネル用ViewModel
  * @example
@@ -574,12 +709,14 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     "uncertified"
   );
   const execution = options.execution || {};
+  const recoveryBlocker = normalizeRecoveryBlockerForPanel(options.recoveryBlocker);
   const preflight = createPreflightItems({
     printer,
     materialViewModel,
     targetSource,
     certificationStatus,
     execution,
+    recoveryBlocker,
   });
   const arm = {
     armed: isTrue(options.arm?.armed),
@@ -591,7 +728,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     boundCommandKind: toText(options.arm?.boundCommandKind),
   };
   const armBinding = validateArmBinding(arm, printer, targetSource, commandKind, nowMs);
-  const liveSend = createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus);
+  const liveSend = createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus, execution);
   return {
     schemaVersion: CFS_CERTIFICATION_PANEL_SCHEMA_VERSION,
     panel: CERTIFICATION_PANEL_NAME,
@@ -630,6 +767,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
       payloadPreview: cloneJson(dryRunPlan?.frames || dryRunPlan?.payloadPreview || []),
     },
     preflight,
+    recoveryBlocker,
     arm: {
       ...arm,
       valid: armBinding.valid,
@@ -651,6 +789,10 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     evidence: {
       timeline: createEvidenceTimeline(options.evidence, execution),
       raw: cloneJson(options.evidence || {}),
+      probeSummaries: {
+        before: extractProbeSummaryForExport(options.evidence?.beforeBoxsInfo),
+        after: extractProbeSummaryForExport(options.evidence?.afterBoxsInfo),
+      },
     },
     export: {
       captureId: toText(options.export?.captureId, ""),
@@ -662,6 +804,66 @@ export function createCfsCertificationPanelViewModel(options = {}) {
       eventCount: Array.isArray(options.evidence?.events) ? options.evidence.events.length : 0,
     },
   };
+}
+
+/**
+ * boxsInfo probe summaryをexport向けに抽出する。
+ *
+ * 【詳細説明】
+ * - raw evidence全体は別枠で保持しつつ、reviewerがsource差分だけを読めるsummaryを作る。
+ * - observedAtはprobe本体の時刻を採用し、summary内のprotocol情報と観測時刻を同じ単位で確認できるようにする。
+ *
+ * @private
+ * @function extractProbeSummaryForExport
+ * @param {object|null|undefined} probe - before/after boxsInfo probe evidence
+ * @returns {object|null} export用probe summary、またはnull
+ */
+function extractProbeSummaryForExport(probe) {
+  if (!probe?.summary || typeof probe.summary !== "object") {
+    return null;
+  }
+  return {
+    ...cloneJson(probe.summary),
+    observedAt: probe.observedAt || probe.createdAt || null,
+  };
+}
+
+/**
+ * probe summaryからselected source表示を生成する。
+ *
+ * 【詳細説明】
+ * - selectedSourceIdsは複数あり得るため、空なら未観測、複数ならカンマ区切りで表示する。
+ *
+ * @private
+ * @function formatProbeSelectedSources
+ * @param {object|null|undefined} probeSummary - probe summary
+ * @returns {string} selected source表示
+ */
+function formatProbeSelectedSources(probeSummary) {
+  const ids = Array.isArray(probeSummary?.selectedSourceIds) ? probeSummary.selectedSourceIds : [];
+  return ids.length > 0 ? ids.join(", ") : "--";
+}
+
+/**
+ * probe summaryからtarget source表示を生成する。
+ *
+ * 【詳細説明】
+ * - targetSourceはCLIで指定したsourceに対応する観測summaryであり、slot表示とsourceIdを併記する。
+ *
+ * @private
+ * @function formatProbeTargetSource
+ * @param {object|null|undefined} probeSummary - probe summary
+ * @returns {string} target source表示
+ */
+function formatProbeTargetSource(probeSummary) {
+  const targetSource = probeSummary?.targetSource || null;
+  if (!targetSource) {
+    return "--";
+  }
+  return [
+    toText(targetSource.displaySlot, "--"),
+    toText(targetSource.sourceId, "--"),
+  ].join(" / ");
 }
 
 /**
@@ -679,6 +881,10 @@ export function createCfsCertificationPanelViewModel(options = {}) {
 export function createCfsCertificationExportBundle(viewModel) {
   const rawEvidence = cloneJson(viewModel?.evidence?.raw) || {};
   const protocolEvents = Array.isArray(rawEvidence.events) ? rawEvidence.events : [];
+  const probeSummaries = {
+    before: extractProbeSummaryForExport(rawEvidence.beforeBoxsInfo),
+    after: extractProbeSummaryForExport(rawEvidence.afterBoxsInfo),
+  };
   const bundle = {
     manifest: {
       panel: CERTIFICATION_PANEL_NAME,
@@ -698,8 +904,10 @@ export function createCfsCertificationExportBundle(viewModel) {
       material: cloneJson(viewModel?.material) || {},
       command: cloneJson(viewModel?.command) || {},
       preflight: cloneJson(viewModel?.preflight) || [],
+      recoveryBlocker: cloneJson(viewModel?.recoveryBlocker) || {},
       arm: cloneJson(viewModel?.arm) || {},
       execution: cloneJson(viewModel?.execution) || {},
+      probeSummaries,
     },
     dryRunPlan: cloneJson(viewModel?.dryRun?.plan) || null,
     evidence: rawEvidence,
@@ -854,6 +1062,7 @@ function renderEvidenceTimeline(parent, timeline) {
  * @param {Function=} options.onProbeBoxsInfo - boxsInfo read-only probe handler
  * @param {Function=} options.onProbeInfo - /info read-only probe handler
  * @param {Function=} options.onLiveSend - LIVE送信handler
+ * @param {Function=} options.onResolveRecoveryBlocker - operator確認済み復旧ラッチ解決handler
  * @param {Function=} options.onExport - export handler
  * @returns {object} renderer handle
  * @example
@@ -908,8 +1117,66 @@ export function renderCfsCertificationPanel(container, viewModel, options = {}) 
   probeActions.appendChild(infoButton);
   probeSection.appendChild(probeActions);
 
+  const probeSummary = viewModel.evidence?.probeSummaries || {};
+  if (probeSummary.before || probeSummary.after) {
+    const probeSummarySection = appendSection(grid, "Probe summary");
+    if (probeSummary.before) {
+      appendKeyValue(probeSummarySection, "before selected", formatProbeSelectedSources(probeSummary.before));
+      appendKeyValue(probeSummarySection, "before target", formatProbeTargetSource(probeSummary.before));
+      appendKeyValue(probeSummarySection, "before loaded", String(probeSummary.before.loadedSourceCount ?? "--"));
+    }
+    if (probeSummary.after) {
+      appendKeyValue(probeSummarySection, "after selected", formatProbeSelectedSources(probeSummary.after));
+      appendKeyValue(probeSummarySection, "after target", formatProbeTargetSource(probeSummary.after));
+      appendKeyValue(probeSummarySection, "after loaded", String(probeSummary.after.loadedSourceCount ?? "--"));
+    }
+  }
+
   const preflightSection = appendSection(grid, "Preflight");
   renderPreflight(preflightSection, viewModel.preflight);
+
+  if (viewModel.recoveryBlocker?.blocked === true) {
+    const recoverySection = appendSection(grid, "復旧確認");
+    appendKeyValue(recoverySection, "状態", viewModel.recoveryBlocker.detail);
+    appendKeyValue(recoverySection, "Command", viewModel.recoveryBlocker.commandKind || "--");
+    appendKeyValue(recoverySection, "Source", viewModel.recoveryBlocker.materialSourceId || "--");
+    appendKeyValue(recoverySection, "Device", viewModel.recoveryBlocker.deviceId || "--");
+    appendKeyValue(recoverySection, "Session", viewModel.recoveryBlocker.sessionId || "--");
+    appendKeyValue(recoverySection, "Status", viewModel.recoveryBlocker.status || "--");
+    appendKeyValue(recoverySection, "Sent", formatLocalDateTime(viewModel.recoveryBlocker.sentAt));
+    appendKeyValue(recoverySection, "Digest", viewModel.recoveryBlocker.recordDigest || "--");
+    const canResolveByOperator = viewModel.recoveryBlocker.reason === "unresolved-recovery"
+      && Boolean(viewModel.recoveryBlocker.commandId)
+      && viewModel.recoveryBlocker.operatorResolvable === true
+      && typeof options.onResolveRecoveryBlocker === "function";
+    const recoveryActions = createElement(documentRef, "div", "fc-actions");
+    const resolveButton = createElement(documentRef, "button", "fc-button", "物理確認済みとして解除");
+    resolveButton.type = "button";
+    resolveButton.dataset.action = "resolve-recovery-blocker";
+    resolveButton.disabled = !canResolveByOperator;
+    resolveButton.title = canResolveByOperator
+      ? "プリンタ本体の物理状態を確認済みとして、この未解決ラッチを解決済みにします"
+      : "conflict/quarantineは自動または通常のoperator確認では解除できません";
+    resolveButton.addEventListener("click", () => {
+      if (!canResolveByOperator) {
+        return;
+      }
+      options.onResolveRecoveryBlocker({
+        commandId: viewModel.recoveryBlocker.commandId,
+        resolution: "operator-cleared",
+        expectedDeviceId: viewModel.recoveryBlocker.deviceId,
+        expectedDigest: viewModel.recoveryBlocker.recordDigest,
+        expectedCommandKind: viewModel.recoveryBlocker.commandKind,
+        expectedMaterialSourceId: viewModel.recoveryBlocker.materialSourceId,
+        resolutionSource: "cfs-certification-panel",
+        operatorAcknowledged: true,
+        panelDeviceId: viewModel.printer?.deviceId || "",
+        viewModel,
+      });
+    });
+    recoveryActions.appendChild(resolveButton);
+    recoverySection.appendChild(recoveryActions);
+  }
 
   const dryRunSection = appendSection(grid, "Dry-run");
   appendKeyValue(dryRunSection, "Command", viewModel.command.commandKind);

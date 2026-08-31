@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1424 (PR #435)
-* @since   1.390.193 (PR #86)
-* @lastModified 2026-08-28 01:48:55
+ * @version 1.390.1543 (PR #439)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-08-31 19:10:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -44,6 +44,10 @@ import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
+import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
+import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
+import { normalizeStoredMaterialAccountingPrintBindingStore } from "./printer_core/dashboard_material_accounting_print_binding.js";
+import { normalizeStoredPhysicalCommandRecoveryLatchStore } from "./printer_core/dashboard_physical_command_recovery_latch.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -74,6 +78,233 @@ const MAX_VIDEOS = 500;
 
 /** IndexedDB 初期化済みフラグ */
 let _idbInitialized = false;
+
+/**
+ * Universal MaterialSource移行dry-run journalを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - journalはGate 18.9B時点ではdry-run evidenceであり、本番MaterialSource/SpoolMountへ投影しない。
+ * - 既存journalと復元/importされたjournalをmigrationId単位でマージし、同一migrationIdでchecksumが違う
+ *   entryは破棄せずretainedUnsupportedEntriesへ隔離する。
+ * - eventsはmigrationIdが有効なentryだけを保持し、同一eventIdは重複登録しない。
+ *
+ * @private
+ * @function _mergeMaterialAccountingMigrationJournal
+ * @param {Object|null|undefined} incomingJournal - 復元またはimportされたjournal候補。
+ * @returns {boolean} 有効なjournal候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingMigrationJournal(incomingJournal) {
+  if (!incomingJournal || typeof incomingJournal !== "object" || Array.isArray(incomingJournal)) {
+    return false;
+  }
+
+  const currentJournal = normalizeStoredMaterialAccountingMigrationJournal(
+    monitorData.materialAccountingMigrationJournal
+  );
+  const restoredJournal = normalizeStoredMaterialAccountingMigrationJournal(incomingJournal);
+  const mergedByMigrationId = { ...currentJournal.byMigrationId };
+  const retainedUnsupportedEntries = [
+    ...(currentJournal.retainedUnsupportedEntries || []),
+    ...(restoredJournal.retainedUnsupportedEntries || []),
+  ];
+
+  for (const [migrationId, entry] of Object.entries(restoredJournal.byMigrationId || {})) {
+    const existing = mergedByMigrationId[migrationId];
+    if (!existing) {
+      mergedByMigrationId[migrationId] = entry;
+      continue;
+    }
+    if (existing.sourceChecksum !== entry.sourceChecksum) {
+      retainedUnsupportedEntries.push({
+        migrationId,
+        reason: "migration-journal-plan-conflict",
+        currentSourceChecksum: existing.sourceChecksum,
+        incomingSourceChecksum: entry.sourceChecksum,
+      });
+    }
+  }
+
+  const validMigrationIds = new Set(Object.keys(mergedByMigrationId));
+  const mergedEvents = [];
+  const seenEventIds = new Set();
+  for (const event of [
+    ...(currentJournal.events || []),
+    ...(restoredJournal.events || []),
+  ]) {
+    if (!event || typeof event !== "object") continue;
+    if (!validMigrationIds.has(event.migrationId)) continue;
+    const eventId = event.eventId || `${event.type}:${event.migrationId}:${event.recordedAt || ""}`;
+    if (seenEventIds.has(eventId)) continue;
+    seenEventIds.add(eventId);
+    mergedEvents.push(event);
+  }
+
+  const latestMigrationId = validMigrationIds.has(restoredJournal.latestMigrationId)
+    ? restoredJournal.latestMigrationId
+    : (validMigrationIds.has(currentJournal.latestMigrationId)
+      ? currentJournal.latestMigrationId
+      : (mergedEvents[mergedEvents.length - 1]?.migrationId || null));
+
+  monitorData.materialAccountingMigrationJournal = normalizeStoredMaterialAccountingMigrationJournal({
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId,
+    byMigrationId: mergedByMigrationId,
+    events: mergedEvents,
+    retainedUnsupportedEntries,
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  });
+
+  return true;
+}
+
+/**
+ * Universal MaterialSource移行shadow commit storeを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - shadow commit storeはGate 18.9D-2のdurable shadow evidenceであり、legacy hostSpoolMapや
+ *   使用量ledgerへ自動投影しない。
+ * - import/restore時は正規化されたstoreだけを保持し、壊れた未知shapeをauthorityとして扱わない。
+ * - 既存storeとincoming storeが両方ある場合は、commit event数が多い方を採用する。完全な双方向
+ *   merge/CASは後続のpersistent adapterで扱うため、ここでは復元時の単純な情報喪失を避ける。
+ *
+ * @private
+ * @function _mergeMaterialAccountingMigrationShadowStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされたshadow commit store候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingMigrationShadowStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(
+    monitorData.materialAccountingMigrationShadowStore
+  );
+  const restoredStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(incomingStore);
+  monitorData.materialAccountingMigrationShadowStore =
+    (restoredStore.events || []).length >= (currentStore.events || []).length
+      ? restoredStore
+      : currentStore;
+  return true;
+}
+
+/**
+ * MaterialSource print binding shadow storeを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - print binding storeはGate 18.9E時点ではsource-aware attribution evidenceであり、
+ *   legacy usageHistoryやspool残量へ自動投影しない。
+ * - 既存storeとincoming storeが両方ある場合はledger event数が多い方を採用し、復元時の単純な情報喪失を避ける。
+ *
+ * @private
+ * @function _mergeMaterialAccountingPrintBindingStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされたprint binding store候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredMaterialAccountingPrintBindingStore(
+    monitorData.materialAccountingPrintBindingStore
+  );
+  const restoredStore = normalizeStoredMaterialAccountingPrintBindingStore(incomingStore);
+  monitorData.materialAccountingPrintBindingStore =
+    (restoredStore.ledgerEvents || []).length >= (currentStore.ledgerEvents || []).length
+      ? restoredStore
+      : currentStore;
+  return true;
+}
+
+/**
+ * 物理コマンド復旧ラッチstoreを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - 復旧ラッチはGate 19 production command activation前の安全装置であり、submitted/post-observed/unknownの
+ *   未解決証跡だけを保持する。
+ * - 復元/import時もcommand frameやRPC payloadは保存せず、自動再送は行わない。
+ * - 同一commandIdで異なるdigestが来た場合は勝者を作らず、両recordを隔離して人間確認へ回す。
+ *
+ * @private
+ * @function _mergePhysicalCommandRecoveryLatchStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされた復旧ラッチstore候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergePhysicalCommandRecoveryLatchStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredPhysicalCommandRecoveryLatchStore(
+    monitorData.physicalCommandRecoveryLatch
+  );
+  const restoredStore = normalizeStoredPhysicalCommandRecoveryLatchStore(incomingStore);
+  const unresolvedByCommandId = { ...currentStore.unresolvedByCommandId };
+  const conflictedCommandIds = new Set([
+    ...(currentStore.conflictedCommandIds || []),
+    ...(restoredStore.conflictedCommandIds || []),
+  ]);
+  const retainedUnsupportedEntries = [
+    ...(currentStore.retainedUnsupportedEntries || []),
+    ...(restoredStore.retainedUnsupportedEntries || []),
+  ];
+
+  for (const [commandId, record] of Object.entries(restoredStore.unresolvedByCommandId || {})) {
+    const existing = unresolvedByCommandId[commandId];
+    if (!existing) {
+      unresolvedByCommandId[commandId] = record;
+      continue;
+    }
+    if (existing.digest !== record.digest) {
+      delete unresolvedByCommandId[commandId];
+      conflictedCommandIds.add(commandId);
+      retainedUnsupportedEntries.push({
+        commandId,
+        reason: "command-id-digest-conflict",
+        conflictedDigest: existing.digest,
+        status: existing.status,
+      });
+      retainedUnsupportedEntries.push({
+        commandId,
+        reason: "command-id-digest-conflict",
+        conflictedDigest: record.digest,
+        status: record.status,
+      });
+    }
+  }
+
+  const events = [];
+  const seenEventIds = new Set();
+  for (const event of [
+    ...(currentStore.events || []),
+    ...(restoredStore.events || []),
+  ]) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+    const eventId = event.eventId || `${event.type || "event"}:${event.commandId || ""}:${event.recordedAt || event.resolvedAt || ""}`;
+    if (seenEventIds.has(eventId)) continue;
+    seenEventIds.add(eventId);
+    events.push(event);
+  }
+
+  monitorData.physicalCommandRecoveryLatch = normalizeStoredPhysicalCommandRecoveryLatchStore({
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId,
+    conflictedCommandIds: [...conflictedCommandIds].sort(),
+    events,
+    retainedUnsupportedEntries,
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  });
+  return true;
+}
 
 /**
  * ストレージバックエンドを初期化する。
@@ -403,6 +634,30 @@ export async function importAllData(data) {
     }
     monitorData.materialSourceObservations.schemaVersion = 1;
     monitorData.materialSourceObservations.authority = "observation-only";
+  }
+
+  // ── Gate 18.9B: Universal MaterialSource移行dry-run journalをimportする ──
+  //   移行計画の証跡だけを保持し、管理スプール装着・使用履歴・台帳へは投影しない。
+  if (data.materialAccountingMigrationJournal && typeof data.materialAccountingMigrationJournal === "object") {
+    _mergeMaterialAccountingMigrationJournal(data.materialAccountingMigrationJournal);
+  }
+
+  // ── Gate 18.9D-2: Universal MaterialSource移行shadow commit storeをimportする ──
+  //   durable shadow evidenceだけを保持し、legacy装着やledger debitへは投影しない。
+  if (data.materialAccountingMigrationShadowStore && typeof data.materialAccountingMigrationShadowStore === "object") {
+    _mergeMaterialAccountingMigrationShadowStore(data.materialAccountingMigrationShadowStore);
+  }
+
+  // ── Gate 18.9E: print-start binding / source-aware usage shadow storeをimportする ──
+  //    importしてもlegacy usageHistoryやspool残量へは投影しない。
+  if (data.materialAccountingPrintBindingStore && typeof data.materialAccountingPrintBindingStore === "object") {
+    _mergeMaterialAccountingPrintBindingStore(data.materialAccountingPrintBindingStore);
+  }
+
+  // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
+  //    submitted/post-observed/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
+  if (data.physicalCommandRecoveryLatch && typeof data.physicalCommandRecoveryLatch === "object") {
+    _mergePhysicalCommandRecoveryLatchStore(data.physicalCommandRecoveryLatch);
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -772,6 +1027,10 @@ const LS_GLOBAL_FIELDS = [
   "filamentEventContext",
   // ★ Gate 18.7: CFS/CFS-C/外部スプールのread-only機器観測フィラメント履歴。
   "materialSourceObservations",
+  "materialAccountingMigrationJournal",
+  "materialAccountingMigrationShadowStore",
+  "materialAccountingPrintBindingStore",
+  "physicalCommandRecoveryLatch",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -1032,6 +1291,14 @@ function _flushStorage() {
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ Gate 18.7: 機器観測フィラメントはread-only evidenceとして保存し、台帳権威へは混ぜない。
       queueSharedWrite("materialSourceObservations", monitorData.materialSourceObservations);
+      // ★ Gate 18.9B: Universal MaterialSource移行dry-run journalを証跡として保存する。
+      queueSharedWrite("materialAccountingMigrationJournal", monitorData.materialAccountingMigrationJournal);
+      // ★ Gate 18.9D-2: durable shadow commit storeを証跡として保存する。
+      queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
+      // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
+      queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
+      // ★ Gate 19 prep: 物理コマンド復旧ラッチは未解決確認の証跡のみ保存し、自動再送材料は保存しない。
+      queueSharedWrite("physicalCommandRecoveryLatch", monitorData.physicalCommandRecoveryLatch);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1545,6 +1812,46 @@ function _restoreFromData(shared, machines) {
     }
     monitorData.materialSourceObservations.schemaVersion = 1;
     monitorData.materialSourceObservations.authority = "observation-only";
+  }
+
+  // ★ Gate 18.9B: Universal MaterialSource移行dry-run journalを復元する。
+  //   復元してもMaterialSource/SpoolMount/usage ledgerへの本番書き込みは有効化しない。
+  if (shared?.materialAccountingMigrationJournal && typeof shared.materialAccountingMigrationJournal === "object") {
+    _mergeMaterialAccountingMigrationJournal(shared.materialAccountingMigrationJournal);
+  } else {
+    monitorData.materialAccountingMigrationJournal = normalizeStoredMaterialAccountingMigrationJournal(
+      monitorData.materialAccountingMigrationJournal
+    );
+  }
+
+  // ★ Gate 18.9D-2: Universal MaterialSource移行shadow commit storeを復元する。
+  //   これはcommit済みshadow evidenceの復元であり、復元時にlegacy装着やledgerへ投影しない。
+  if (shared?.materialAccountingMigrationShadowStore && typeof shared.materialAccountingMigrationShadowStore === "object") {
+    _mergeMaterialAccountingMigrationShadowStore(shared.materialAccountingMigrationShadowStore);
+  } else {
+    monitorData.materialAccountingMigrationShadowStore = normalizeStoredMaterialAccountingMigrationShadowCommitStore(
+      monitorData.materialAccountingMigrationShadowStore
+    );
+  }
+
+  // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを復元する。
+  //   復元してもlegacy usageHistoryやspool残量へは投影しない。
+  if (shared?.materialAccountingPrintBindingStore && typeof shared.materialAccountingPrintBindingStore === "object") {
+    _mergeMaterialAccountingPrintBindingStore(shared.materialAccountingPrintBindingStore);
+  } else {
+    monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
+      monitorData.materialAccountingPrintBindingStore
+    );
+  }
+
+  // ★ Gate 19 prep: 物理コマンド復旧ラッチを復元する。
+  //   復元してもcommand frame再送・CFS操作・legacy ledger投影は行わず、人間確認が必要な証跡だけを残す。
+  if (shared?.physicalCommandRecoveryLatch && typeof shared.physicalCommandRecoveryLatch === "object") {
+    _mergePhysicalCommandRecoveryLatchStore(shared.physicalCommandRecoveryLatch);
+  } else {
+    monitorData.physicalCommandRecoveryLatch = normalizeStoredPhysicalCommandRecoveryLatchStore(
+      monitorData.physicalCommandRecoveryLatch
+    );
   }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）

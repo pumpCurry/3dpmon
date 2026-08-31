@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1560 (PR #439)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-31 20:19:55
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -450,10 +450,17 @@ function createCommandDispatchContextSignature(context) {
           source.kind,
           source.boxId ?? "",
           source.slotId ?? "",
+          source.selected === true ? "selected" : (source.selected === false ? "unselected" : "selection-unknown"),
+          source.selectionState ?? "",
+          source.selectionValid === true ? "valid" : (source.selectionValid === false ? "invalid" : "selection-unobserved"),
           source.material?.type ?? "",
           source.material?.color ?? "",
         ].join(":"))
         .join(","),
+      context.recoveryBlocker?.blocked === true ? "recovery-blocked" : "recovery-clear",
+      context.recoveryBlocker?.reason || "",
+      context.recoveryBlocker?.commandId || "",
+      context.recoveryBlocker?.quarantineReason || "",
       context.uploadGeneration || "",
       context.fileIdentity?.remotePath || "",
       context.fileIdentity?.fileHash || "",
@@ -685,6 +692,7 @@ function createPrinterCommandDispatchContext(options = {}) {
     active: options.active === true,
     capabilities,
     materialTopology,
+    recoveryBlocker: normalizeSendTimeRecoveryBlocker(options.recoveryBlocker),
     uploadGeneration: String(options.uploadGeneration || "").trim() || null,
     fileIdentity,
     stateSequence: normalizeSequence(options.stateSequence ?? options.sequence),
@@ -713,14 +721,85 @@ function createPrinterCommandDispatchContext(options = {}) {
  * @returns {Array<object>} 正規化済みsource一覧
  */
 function normalizeMaterialTopologySources(sources) {
-  return (Array.isArray(sources) ? sources : []).map((source) => ({
-    sourceId: String(source?.sourceId || "").trim() || null,
-    kind: String(source?.kind || "").trim() || null,
-    boxId: normalizeSequence(source?.boxId),
-    slotId: normalizeSequence(source?.slotId ?? source?.protocolSlotId),
-    presence: normalizeMaterialSourcePresence(source),
-    material: normalizeMaterialSourceEvidence(source?.material),
-  })).filter((source) => source.sourceId);
+  return (Array.isArray(sources) ? sources : []).map((source) => {
+    const selection = normalizeMaterialSourceSelectionEvidence(source);
+    return {
+      sourceId: String(source?.sourceId || "").trim() || null,
+      kind: String(source?.kind || "").trim() || null,
+      boxId: normalizeSequence(source?.boxId),
+      slotId: normalizeSequence(source?.slotId ?? source?.protocolSlotId),
+      presence: normalizeMaterialSourcePresence(source),
+      selected: selection.selected,
+      selectionState: selection.selectionState,
+      selectionValid: selection.selectionValid,
+      material: normalizeMaterialSourceEvidence(source?.material),
+    };
+  }).filter((source) => source.sourceId);
+}
+
+/**
+ * send-time context 用の復旧blockerを正規化する。
+ *
+ * 【詳細説明】
+ * - dispatcher手前で復旧ラッチが未解決の場合、transport plan生成前に必ず止める。
+ * - callerが空objectや壊れた値を渡した場合はclear扱いにして、実際のblock判定はcomposition層の
+ *   module-owned recovery storeから生成した値だけに委ねる。
+ *
+ * @private
+ * @function normalizeSendTimeRecoveryBlocker
+ * @param {object|null|undefined} recoveryBlocker - 復旧blocker候補
+ * @returns {{blocked:boolean,reason:string,commandId:string,quarantineReason:string|null}} 正規化済みblocker
+ */
+function normalizeSendTimeRecoveryBlocker(recoveryBlocker) {
+  if (!recoveryBlocker || typeof recoveryBlocker !== "object") {
+    return {
+      blocked: false,
+      reason: "not-blocked",
+      commandId: "",
+      quarantineReason: null,
+    };
+  }
+  const blocked = recoveryBlocker.blocked === true;
+  return {
+    blocked,
+    reason: String(recoveryBlocker.reason || (blocked ? "blocked" : "not-blocked")).trim(),
+    commandId: String(recoveryBlocker.commandId || "").trim(),
+    quarantineReason: String(recoveryBlocker.quarantineReason || "").trim() || null,
+  };
+}
+
+/**
+ * CFS source の選択証跡をsend-time検証用へ正規化する。
+ *
+ * 【詳細説明】
+ * - Printer Core v3 のNormalizedStateやMaterialTopology ViewModelでは、`selected` と
+ *   `selectionValid` が分離されている。物理操作前は「未選択」と「未観測」を混同しない。
+ * - `selectionValid:true` かつ `selected:true/false` の組だけを現在選択状態の証明として扱う。
+ *
+ * @private
+ * @function normalizeMaterialSourceSelectionEvidence
+ * @param {object|null|undefined} source - material source候補
+ * @returns {{selected:(boolean|null),selectionState:string,selectionValid:(boolean|null)}} 正規化済み選択証跡
+ */
+function normalizeMaterialSourceSelectionEvidence(source) {
+  const status = source?.status && typeof source.status === "object" ? source.status : {};
+  const rawSelected = source?.selected ?? status.selected;
+  const selected = typeof rawSelected === "boolean" ? rawSelected : null;
+  const rawSelectionValid = source?.selectionValid ?? status.selectionValid;
+  const selectionValid = typeof rawSelectionValid === "boolean"
+    ? rawSelectionValid
+    : (selected !== null ? true : null);
+  const rawSelectionState = String(source?.selectionState || status.selectionState || "").trim();
+  const selectionState = rawSelectionState || (
+    selectionValid === false
+      ? "invalid"
+      : (selected === true ? "selected" : (selected === false ? "unselected" : "unobserved"))
+  );
+  return {
+    selected,
+    selectionState,
+    selectionValid,
+  };
 }
 
 /**
@@ -949,6 +1028,38 @@ function collectPrinterActivityLabels(observedState) {
 }
 
 /**
+ * CFS物理操作前に安全なidle状態が明示観測されているかを判定する。
+ *
+ * 【詳細説明】
+ * - `completed` や未知stateは「busyではない」だけであり、CFS slot操作可能なidle証跡としては扱わない。
+ * - K2 firmware semanticsが実機certificationで固定されるまでは、明示的なidle/ready/standbyのみを許す。
+ *
+ * @private
+ * @function hasExplicitSafeCfsIdleLabel
+ * @param {Set<string>} activityLabels - 小文字化済み状態ラベル集合
+ * @returns {boolean} 安全なidle証跡がある場合true
+ */
+function hasExplicitSafeCfsIdleLabel(activityLabels) {
+  return ["idle", "ready", "standby"].some((label) => activityLabels.has(label));
+}
+
+/**
+ * CFS物理操作対象として選択証跡を要求するsourceか判定する。
+ *
+ * 【詳細説明】
+ * - 空slotは選択状態が未観測でも操作対象外として扱う。
+ * - loaded / unknown source は、機器がどのslotを選択しているか判断に関係するため証跡を必須にする。
+ *
+ * @private
+ * @function requiresCfsSelectionEvidence
+ * @param {object|null|undefined} source - material source
+ * @returns {boolean} 選択証跡が必要ならtrue
+ */
+function requiresCfsSelectionEvidence(source) {
+  return source?.presence === "loaded" || source?.presence === "unknown";
+}
+
+/**
  * CFS command の送信時 topology を検査する。
  *
  * 【詳細説明】
@@ -968,6 +1079,13 @@ function collectCfsSendTimeErrors(request, context) {
   if (["printing", "paused", "busy", "heating", "checking", "running"].some((label) => activityLabels.has(label))) {
     errors.push("cfs-control-printer-busy");
   }
+  if (!hasExplicitSafeCfsIdleLabel(activityLabels)) {
+    errors.push("cfs-control-printer-idle-not-confirmed");
+  }
+  if (context.recoveryBlocker?.blocked === true) {
+    const reason = String(context.recoveryBlocker.reason || "blocked").trim() || "blocked";
+    errors.push(`cfs-recovery-blocked:${reason}`);
+  }
   if (context.materialTopology?.cfsConnected !== true) {
     errors.push("cfs-not-connected");
   }
@@ -979,8 +1097,8 @@ function collectCfsSendTimeErrors(request, context) {
     errors.push("cfs-target-source-missing");
     return errors;
   }
-  const currentSource = (Array.isArray(context.materialTopology?.sources) ? context.materialTopology.sources : [])
-    .find((source) => source.sourceId === targetSourceId);
+  const currentSources = Array.isArray(context.materialTopology?.sources) ? context.materialTopology.sources : [];
+  const currentSource = currentSources.find((source) => source.sourceId === targetSourceId);
   if (!currentSource) {
     errors.push("cfs-target-source-not-current");
     return errors;
@@ -990,6 +1108,29 @@ function collectCfsSendTimeErrors(request, context) {
   }
   if (currentSource.presence !== "loaded") {
     errors.push("cfs-target-source-not-loaded");
+  }
+  const selectableSources = currentSources.filter((source) => requiresCfsSelectionEvidence(source));
+  const selectedSources = [];
+  for (const source of selectableSources) {
+    if (source.selectionValid === false || source.selectionState === "invalid") {
+      errors.push(`cfs-selection-source-invalid:${source.sourceId}`);
+      continue;
+    }
+    if (source.selectionValid !== true) {
+      errors.push(`cfs-selection-source-observation-incomplete:${source.sourceId}`);
+      continue;
+    }
+    if (source.selected === true) {
+      selectedSources.push(source);
+    }
+  }
+  if (currentSource.selected !== true) {
+    errors.push("cfs-target-source-not-selected");
+  }
+  if (selectedSources.length !== 1) {
+    errors.push("cfs-selected-source-not-unique");
+  } else if (selectedSources[0].sourceId !== targetSourceId) {
+    errors.push(`cfs-selected-source-mismatch:${selectedSources[0].sourceId}`);
   }
   const requestBoxId = normalizeSequence(request.payload?.boxId);
   if (requestBoxId !== null && currentSource.boxId !== null && requestBoxId !== currentSource.boxId) {

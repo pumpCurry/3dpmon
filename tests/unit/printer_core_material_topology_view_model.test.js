@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1457 (PR #435)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-28 16:58:45
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -326,6 +326,88 @@ describe("Printer Core v3 material topology view model", () => {
     });
   });
 
+  it("stable MaterialSource IDと観測sourceIdが異なる場合もalias/locatorでsource集計を合流する", () => {
+    const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      accountingView: {
+        deviceId: "serial:k2pro-69e7",
+        sources: [
+          {
+            materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+            displayLabel: "CFS 1C",
+            observation: {
+              materialSource: {
+                materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+                aliases: ["cfs:1:slot:2"],
+                locator: {
+                  kind: "cfs-slot",
+                  unitIndex: 1,
+                  boxId: 1,
+                  slotIndex: 2,
+                  protocolSlotId: "1C",
+                },
+              },
+            },
+            mount: {
+              mountId: "mount:k2pro-69e7:1c",
+              materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+              spoolId: "spool:1c",
+            },
+            usage: {
+              state: "confirmed-used",
+              usedLengthMm: 3210,
+              confidence: "high",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.units[0].slots[2].sourceId).toBe("cfs:1:slot:2");
+    expect(viewModel.units[0].slots[2].accounting).toMatchObject({
+      materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+      mount: {
+        spoolId: "spool:1c",
+      },
+      usage: {
+        state: "confirmed-used",
+        usedLengthMm: 3210,
+      },
+    });
+  });
+
+  it("同じ観測source keyに複数のaccounting sourceが衝突する場合は合流せずdiagnosticを残す", () => {
+    const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      accountingView: {
+        deviceId: "serial:k2pro-69e7",
+        sources: [
+          {
+            materialSourceId: "material-source:k2pro-69e7:cfs-1c-a",
+            aliases: ["cfs:1:slot:2"],
+            mount: { spoolId: "spool:a" },
+          },
+          {
+            materialSourceId: "material-source:k2pro-69e7:cfs-1c-b",
+            aliases: ["cfs:1:slot:2"],
+            mount: { spoolId: "spool:b" },
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.units[0].slots[2]).toMatchObject({
+      sourceId: "cfs:1:slot:2",
+      accounting: null,
+      diagnostics: [
+        {
+          code: "ambiguous-accounting-source",
+          severity: "warning",
+        },
+      ],
+    });
+  });
+
   it("物理boxIdに欠番があってもdisplay unit番号へcompactしない", () => {
     const topology = normalizeK2BoxsInfo({
       enable: 1,
@@ -456,6 +538,49 @@ describe("Printer Core v3 material topology view model", () => {
       loadedSourceCount: 2,
       selectedSourceCount: 1,
       invalidRemainingCount: 1,
+    });
+  });
+
+  it("不正なselected値は未選択に潰さずinvalid selectionとして表示モデルへ保持する", () => {
+    const topology = normalizeK2BoxsInfo({
+      enable: 1,
+      materialBoxs: [
+        {
+          id: 1,
+          type: 0,
+          state: 1,
+          materials: [
+            { id: 0, state: 1, type: "PLA", name: "Malformed Selected", selected: 2, percent: 54 },
+          ],
+        },
+      ],
+    }, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, { unitLimit: 1 });
+
+    expect(topology.sources[0].status).toMatchObject({
+      selected: null,
+      selectionState: "invalid",
+      selectionValid: false,
+      selectionRaw: 2,
+    });
+    expect(topology.diagnostics).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      code: "material-source-selection-invalid",
+      sourceId: "cfs:1:slot:0",
+      rawValue: 2,
+    }));
+    expect(viewModel.units[0].slots[0]).toMatchObject({
+      displaySlot: "1A",
+      selected: null,
+      status: {
+        selectionState: "invalid",
+        selectionValid: false,
+        selectionRaw: 2,
+      },
+    });
+    expect(viewModel.summary).toMatchObject({
+      selectedSourceCount: 0,
+      invalidSelectionCount: 1,
     });
   });
 

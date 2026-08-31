@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1422 (PR #435)
-* @since   1.390.193 (PR #86)
-* @lastModified 2026-08-27 23:08:42
+ * @version 1.390.1543 (PR #439)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-08-31 19:10:36
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -361,6 +361,91 @@ export const monitorData = {
    * @type {{schemaVersion:number, byDeviceId:Object.<string, Object>}}
    */
   materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  /**
+   * Gate 18.9B: Universal MaterialSource移行dry-run journal。
+   * READY/CANDIDATE/BLOCKEDの移行計画と検証証跡を保持するが、ここから
+   * MaterialSource / SpoolMount / usage ledger の本番権威へ自動反映しない。
+   * @type {{schemaVersion:number, authority:string, latestMigrationId:?string, byMigrationId:Object.<string, Object>, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  materialAccountingMigrationJournal: {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: null,
+    byMigrationId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  },
+  /**
+   * Gate 18.9D-2: Universal MaterialSource移行shadow commit store。
+   * prepared shadow transactionがdurable commitに成功した後のMaterialSource/SpoolMount
+   * snapshotとmigration lifecycleを保持する。これはまだledger debitやlegacy cutover sealの
+   * authorityではなく、再起動後のshadow observation/retryを復元するための永続storeである。
+   * @type {{schemaVersion:number, authority:string, materialSourceRegistrySnapshot:Object, spoolMountRepositorySnapshot:Object, committedTransactionsById:Object, committedOperationsById:Object, lifecycleBySubject:Object, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  materialAccountingMigrationShadowStore: {
+    schemaVersion: 1,
+    authority: "migration-shadow-commit-store",
+    materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+    spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    committedTransactionsById: {},
+    committedOperationsById: {},
+    lifecycleBySubject: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      ledgerWrites: false,
+      legacyCutoverSealed: false,
+      materialSourceRepositoryWrites: "shadow-only",
+      spoolMountRepositoryWrites: "shadow-only",
+    },
+  },
+  /**
+   * Gate 18.9E: MaterialSource print binding shadow store。
+   * print-start時点のMaterialSource/SpoolMount snapshotとsource-specific usage attributionを
+   * 保持する。これはまだlegacy usageHistoryやspool残量を更新するauthorityではない。
+   * @type {{schemaVersion:number, authority:string, printStartSnapshots:Array<Object>, usageEvidence:Array<Object>, jobMaterialSegments:Array<Object>, ledgerEvents:Array<Object>, unattributedUsage:Array<Object>, operationsById:Object, invariants:Object}}
+   */
+  materialAccountingPrintBindingStore: {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    invariants: {
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      materialSourceLedgerWrites: "shadow-only",
+    },
+  },
+   /**
+   * Gate 19 prep: 物理コマンド復旧ラッチ。
+   * CFS select/load/unloadなど物理状態を変えるコマンドがsubmitted/post-observed/unknownで終わった場合に、
+   * 再起動後も「確認が必要な未解決証跡」として保持する。command frameやRPC payloadは保存せず、
+   * 自動再送も絶対に行わない。
+   * @type {{schemaVersion:number, authority:string, unresolvedByCommandId:Object.<string, Object>, conflictedCommandIds:Array<string>, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  physicalCommandRecoveryLatch: {
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId: {},
+    conflictedCommandIds: [],
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  },
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。

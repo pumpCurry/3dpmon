@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 19 CFS Control Spec Investigation
 
-Last updated: 2026-08-28
+Last updated: 2026-08-31
 
 このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
 
@@ -148,11 +148,38 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   送信しない。材料名・色・RFIDなどの残留metadataだけではloadedとは扱わない。
   CFSのmaterial path共有を前提に、実機で並列安全性が証明されるまでは1 printerにつき1 commandだけを許可する。
 - `scripts/capture_k2_cfs_slot_control.mjs` は同じcandidate planをCLIでdry-run確認する。live送信には
-  `--send --confirm-live --confirm-host <host> --confirm-command <command>` を必須にする。
+  `--send --confirm-live --confirm-host <host> --confirm-command <command> --confirm-source <source>` を必須にする。
 - 初期live certificationの送信対象は `cfs-load` / `cfs-unload` だけに限定する。
   `cfs-slot-select` / `cfs-feed` / `cfs-retract` はshape確認用dry-run候補に留め、追加capture根拠なしには送信しない。
-- 同CLIは `--probe-before` / `--probe-after` 指定時だけ、同じWS9999 sessionでread-only `get { boxsInfo: 1 }` を送る。
-  これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
+- 同CLIは `--send` 時に `--probe-before` / `--probe-after` を必須とし、同じWS9999 sessionでread-only
+  `get { boxsInfo: 1 }` を送る。これはCLI引数だけでなく `runK2CfsSlotControlCertification()` 本体でも
+  再検証する。これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
+- 送信前probeでは、対象sourceがexactly one、duplicate box/source locator診断なし、明示loaded、
+  かつ対象sourceだけがselectedであることを要求する。
+  duplicateが見つかった場合はfirst-winせず、該当locator全体をcertification候補から外してCFS操作frameを送らない。
+- live送信では `--probe-info --require-info-model F012` を必須とし、WS9999接続前に
+  `http://<host>/info` のmodel/version/transport hintをcertification resultへ保存する。
+  `/info` のMACは有線/無線で一致しないことがあるためidentity authorityにはしないが、F012実機へ送っている証跡として扱う。
+- live送信では `--require-printer-idle` を必須とし、WS9999のread-only `get` で `state` / `deviceState` /
+  `printJobTime` / `printLeftTime` / target温度を確認する。プリンタ本体が印刷/加熱/前ジョブ残存を示す場合は、
+  `pre-command-printer-not-idle` としてCFS操作frameを送らない。
+  `null`、空文字、空白文字、未観測値はJavaScriptの暗黙変換で0にせず、idle根拠としては扱わない。
+- `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
+  `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
+  実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
+- post-command観測は既定で `--probe-after-count 6` / `--probe-after-interval-ms 5000` のbounded polling
+  windowを使う。この場合もCFS操作frameは1回だけで、追加されるのはread-only `boxsInfo` probeだけである。
+  途中でtimeout/errorがあってもCFS操作frameは再送せず、残り回数のread-only probeを継続して証跡を残す。
+- resultには `probeAttemptCount` / `observedProbeCount` / `failedProbeCount` と、before probeから最後に観測できた
+  after probeへの `targetSourceDelta` を保存する。これはtelemetry差分のレビュー補助であり、expected-state confirmationではない。
+  source summaryには `selected` に加えて `selectedObserved` / `selectionState` を含め、`selected:false` と
+  `selected` field未観測を区別する。`colorMatch` はG-code材料IDからsourceへのassignment証跡であり、selected authorityの代替にはしない。
+- 現場目視メモは `--operator-marker <text>` で `operatorMarker.source="operator-cli"` として保存できる。
+  これは人間が何を見たかをJSONへ同梱するための欄であり、単独で物理成功を確定するauthorityにはしない。
+- side-effect commandが `submitted` / `post-observed` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
+  shared storageへ永続化する。このstoreは `commandId`、`commandKind`、`deviceId`、`sessionId`、送信時刻、
+  certification ID、送信前観測digest/sequenceだけを保持し、command frameやRPC payloadは保存しない。
+  再起動後も自動replayせず、fresh observationまたはoperator確認でのみ解決する。
 
 このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
 
@@ -169,7 +196,10 @@ UIでCFS/CFS-C操作を表示する場合、実行状態はDOM要素ではなく
   `cfs-slot-select` のようにUI側でもselected sourceを確認できる操作だけ、送信前は未選択だった
   対象sourceが次のmaterial provider観測でselectedになった場合にmutexを解除する。`load/unload/feed/retract` は物理状態の
   expected-stateが未確定のため、観測時刻が進んだだけでは自動解除しない。
-- `confirmed`: `completed:true` のみ。成功表示にして操作mutexを解除してよい。
+- `post-observed`: command frame送信後に指定されたpost-command read-only telemetryを観測できた状態。
+  物理load/unload成功を意味しないため、成功表示やproduction certificationへ単独では使わない。
+  UIとrecovery latchでは未解決状態として扱い、operator確認またはcommand-specific expected-state confirmationまで再操作を抑止する。
+- `confirmed`: command-specific expected-state confirmationが成立した場合のみ。成功表示にして操作mutexを解除してよい。
 - `rejected`: send-time validationなど送信前拒否。transport side-effectは起きていないためmutexを解除してよい。
 - `unknown`: timeout、transport-error、confirmation-errorなど、物理side-effect有無が不明な状態。
   blind retryを避けるため、自動解除せず明示的な状態確認/再描画方針が入るまで再操作を許可しない。
@@ -187,7 +217,29 @@ slot `1A/1B/1C` が装填済み、`1A` がselected、`colorMatch` は `T1A -> bo
 
 live certificationは次の順で進める。
 
-1. dry-runで送信frameを確認する。
+1. read-only calibrationで `/info`、printer status、`boxsInfo` を副作用なしで取得する。
+   この段階では `set` frameを送らず、`sent:false` / `blindRetryAllowed:false` のJSON証跡だけを保存する。
+
+   ```bash
+   node scripts/capture_k2_cfs_readonly_calibration.mjs \
+     --host 192.168.54.153 \
+     --require-info-model F012 \
+     --status-probe-count 5 \
+     --status-probe-interval-ms 1000 \
+     --boxsinfo-probe-count 2 \
+     --boxsinfo-probe-interval-ms 1000 \
+     --output-dir tmp/k2-cfs-readonly-calibration \
+     --pretty
+   ```
+
+   2026-08-31のF012実機観測では、`/info` と `boxsInfo` は取得できた一方で、printer statusは
+   1回目だけ即応答し、同一WS session内の連続status probeはtimeoutすることがあった。
+   この場合CLI結果は `ok:false` / `status:"partial"` とし、`failedStatusProbeCount` を証跡に残す。
+   `wsTimeline` にはraw payloadではなく送受信方向、probe番号、frame種別、key一覧だけを保存し、
+   timeout後の遅延応答やsubscription風の部分frameがどのprobe windowで届いたかを確認する。
+   これはside-effect command失敗ではなく、live送信前のidle predicate調整対象として扱う。
+
+2. dry-runで送信frameを確認する。
 
    ```bash
    node scripts/capture_k2_cfs_slot_control.mjs \
@@ -195,12 +247,13 @@ live certificationは次の順で進める。
      --source cfs:1:slot:0 \
      --probe-before \
      --probe-after \
+     --output-dir tmp/k2-cfs-slot-control-captures \
      --pretty
    ```
 
-2. read-only `boxsInfo` を別途確認し、対象sourceが現在もfresh/loadedであることを確認する。
+3. read-only `boxsInfo` を別途確認し、対象sourceが現在もfresh/loadedであることを確認する。
 
-3. 最初のlive候補は、すでにselectedなsource（例: `cfs:1:slot:0`）だけに限定する。
+4. 最初のlive候補は、すでにselectedなsource（例: `cfs:1:slot:0`）だけに限定する。
    これは「別slotへ切り替える」前に、`feedInOrOut` がF012で受理されるか、前後probeが取れるかを確認する段階である。
 
    ```bash
@@ -212,13 +265,77 @@ live certificationは次の順で進める。
      --confirm-live \
      --confirm-host 192.168.54.153 \
      --confirm-command cfs-load \
+     --confirm-source cfs:1:slot:0 \
      --probe-before \
      --probe-after \
+     --probe-info \
+     --require-info-model F012 \
+     --require-printer-idle \
+     --operator-marker "preflight: operator present / printer idle / CFS visually checked" \
+     --probe-after-delay-ms 1500 \
+     --probe-after-count 6 \
+     --probe-after-interval-ms 5000 \
+     --output-dir tmp/k2-cfs-slot-control-captures \
      --pretty
    ```
 
-4. 1回のlive送信ごとに停止して、人間の目視、CFS本体状態、前後`boxsInfo`の差分を確認する。
+5. 1回のlive送信ごとに停止して、人間の目視、CFS本体状態、前後`boxsInfo`の差分を確認する。
    side-effect commandなので、timeoutや不明応答時に同じcommandを自動再送してはならない。
+
+   CLI結果は次のように解釈する。
+
+   ```text
+   status:"submitted" / reason:"post-command-observation-not-requested"
+     → command frameはWebSocketへlocal submitされたが、送信後のboxsInfo観測は要求されていない。
+       これは成功確認ではないため、production certification evidenceには単独で使わない。
+
+  status:"post-observed"
+     → command frame送信と指定されたpost-command read-only probeが完了した。
+       ただし物理load/unload成功そのものは人間の目視とcapture markerで別途確認する。
+       `physicalCommandRecoveryLatch` では未解決として保持し、自動再送せず、operator-cleared /
+       observed-confirmed / observed-rejected のいずれかでのみ解除する。
+
+   status:"rejected" / reason:"pre-command-observation-failed"
+     → command送信前のboxsInfo観測に失敗したため、CFS操作frameは送られていない。
+
+   status:"rejected" / reason:"pre-command-printer-not-idle"
+     → command送信前のprinter status観測で、state/deviceState/job time/target温度のいずれかが
+       印刷・加熱・前ジョブ残存を示したため、CFS操作frameは送られていない。
+
+   status:"unknown" / reason:"post-command-observation-failed"
+     → command frameは送信済みだが、送信後のboxsInfo観測がtimeout/errorになった。
+       物理side-effect有無が不明なので、blind retryせず人間がCFSとプリンタ画面を確認する。
+   ```
+
+   `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
+   dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
+   `probePlan` には `info`、`requireInfoModel`、`confirmSource`、`requirePrinterIdle`、`boxsInfoTimeoutMs`、
+   `printerStatusTimeoutMs`、`infoTimeoutMs`、`postCommandProbeDelayMs`、`postCommandProbeCount`、
+   `postCommandProbeIntervalMs` を保存するため、後から
+   「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
+   `printerInfo` には `/info` のmodel/version/port hintと観測時刻、期待modelとの一致結果を保存する。
+   `printerStatus` には送信前のread-only status probe結果を保存し、`idle:false` の場合は送信前rejectの根拠として扱う。
+   `targetSourceDelta` には対象sourceのpresence/stateCode/selected/percent/material/color/RFID有無の前後差分を保存する。
+   `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
+
+   ```text
+   boxCount
+   cfsUnitCount
+   externalEndpointCount
+   loadedSourceCount
+   selectedSourceIds[]
+   targetSource
+   sources[]
+   colorMatches[]
+   ```
+
+   `targetSource` と `sources[]` は外部スプールを `external:<boxId>`、CFS slotを
+   `cfs:<boxId>:slot:<materialId>` として分離する。ここでも材料名・色・RFIDだけではloaded推測せず、
+   material `state` codeが `1` の場合だけ `presence:"loaded"` とする。
+
+   Certification panelのJSON exportでは、raw evidenceとは別に `summary.probeSummaries.before/after` へ
+   上記summaryを抽出する。これにより、reviewerへ渡すJSONから、raw payload全体を掘らずに
+   selected source、target source、loaded source count、external/CFS分離を確認できる。
 
 5. selected source変更、load/unload/feed/retractの意味確定は、レビュワーPASSと上記1回目の成功後に別stepとして扱う。
 

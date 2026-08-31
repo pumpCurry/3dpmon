@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1474
+  Version 1.390.1553
 */
 
 /* ===============================================================
@@ -1273,6 +1273,10 @@ body.panel-mode .notification-container {
 .mtv-slot.mtv-assigned:not(.mtv-selected) {
   border-color: var(--color-info);
 }
+.mtv-slot.mtv-selection-invalid {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
 .mtv-root-stale .mtv-slot.mtv-selected {
   border-color: var(--color-warning);
   background: var(--color-warning-bg);
@@ -1308,6 +1312,11 @@ body.panel-mode .notification-container {
   white-space: nowrap;
 }
 .mtv-root-stale .mtv-selected-badge {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+.mtv-selected-badge-warning {
   border-color: var(--color-warning);
   background: var(--color-warning-bg);
   color: var(--color-warning-text);
@@ -1680,7 +1689,10 @@ body.panel-mode .notification-container {
 .fm-material-source-head span,
 .fm-material-source-remaining,
 .fm-material-source-selected,
-.fm-material-source-assignment {
+.fm-material-source-assignment,
+.fm-material-source-managed-spool,
+.fm-material-source-managed-remaining,
+.fm-material-source-usage {
   font-size: 10px;
   color: var(--color-text-secondary);
 }
@@ -1694,15 +1706,30 @@ body.panel-mode .notification-container {
 }
 .fm-material-source-material span:last-child,
 .fm-material-source-remaining,
-.fm-material-source-assignment {
+.fm-material-source-assignment,
+.fm-material-source-managed-spool,
+.fm-material-source-managed-remaining,
+.fm-material-source-usage {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .fm-material-source-remaining,
 .fm-material-source-selected,
-.fm-material-source-assignment {
+.fm-material-source-assignment,
+.fm-material-source-managed-spool,
+.fm-material-source-managed-remaining,
+.fm-material-source-usage {
   margin-top: 2px;
+}
+.fm-material-source-managed-spool {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.fm-material-source-managed-remaining,
+.fm-material-source-usage {
+  padding-left: 4px;
+  border-left: 2px solid var(--color-border-strong);
 }
 .fm-material-source-selected {
   display: inline-flex;

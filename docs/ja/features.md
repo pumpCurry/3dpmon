@@ -13,7 +13,7 @@
 | Moonraker / IR3 V2 | 別protocol pathで対応 | Moonraker系経路 | K1/K2 CFS authorityとは分離 | 別経路 | 対象外 |
 
 > [!IMPORTANT]
-> v2.2.1044 RC では、CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測と割当証跡が揃う場合だけ進む guarded path です。
+> v2.2.1045 RC では、CFS/CFS-C の standalone load / unload / feed / retract / slot select は有効ではありません。K2/CFS print-start は、CFS slot観測、割当証跡、選択状態の完全性、未解決復旧ラッチがないことを確認できる場合だけ進む guarded path です。
 
 ## パネルシステム (GridStack)
 GridStack ベースのパネルシステムにより、ダッシュボードのレイアウトを自由にカスタマイズできます。

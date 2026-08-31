@@ -1,0 +1,538 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Universal MaterialSource migration journal 単体テスト
+ * @file printer_core_material_accounting_migration_journal.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_material_accounting_migration_journal_test
+ *
+ * 【機能内容サマリ】
+ * - Gate 18.9B のdry-run migration journalがauthority writeを持たないことを検証
+ * - valid planだけを保存し、同一plan再保存を冪等化する境界を固定
+ * - 破損済み保存値をUniversal repositoryへ投影せず隔離する境界を固定
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1512 (PR #438)
+ * @since   1.390.1506 (PR #438)
+ * @lastModified 2026-08-31 14:35:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
+
+import { describe, expect, it } from "vitest";
+
+import {
+  MATERIAL_ACCOUNTING_MIGRATION_STATUS,
+  MATERIAL_SOURCE_KIND,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
+import {
+  createMaterialAccountingMigrationDryRunPlan,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_migration_planner.js";
+import {
+  createMaterialAccountingMigrationJournal,
+  normalizeStoredMaterialAccountingMigrationJournal,
+  recordMaterialAccountingMigrationDryRunPlan,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_migration_journal.js";
+
+/**
+ * READYなdry-run plan fixtureを生成する。
+ *
+ * @function createReadyPlan
+ * @param {string=} host - legacy host key。
+ * @returns {Object} migration dry-run plan。
+ */
+function createReadyPlan(host = "K1Max-4A1B") {
+  const legacyData = {
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: host,
+          printerType: "k1",
+          materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
+          printerCoreV3Identity: {
+            deviceIdSeed: `serial:${host.toLowerCase()}`,
+            identityStrength: "serial",
+          },
+        },
+      ],
+    },
+    machines: { [host]: { printerType: "k1" } },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+    ],
+    hostSpoolMap: { [host]: "spool-031" },
+    materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  };
+  const planOptions = { createdAt: "2026-08-31T03:40:00.000Z" };
+  const preview = createMaterialAccountingMigrationDryRunPlan(legacyData, planOptions);
+  const entry = preview.entries[0];
+  return createMaterialAccountingMigrationDryRunPlan({
+    ...legacyData,
+    materialAccounting: {
+      migrationTopologyConfirmations: [
+        {
+          confirmationId: `confirmation:${host.toLowerCase()}-single-spool`,
+          deviceId: entry.deviceId,
+          host: entry.host,
+          mode: "single-spool",
+          confirmedBy: "operator",
+          confirmedAt: "2026-08-31T03:39:00.000Z",
+          migrationSubjectId: entry.migrationSubjectId,
+          evidenceChecksum: entry.confirmationEvidenceChecksum,
+          planRevisionId: entry.confirmationRevisionId,
+        },
+      ],
+    },
+  }, planOptions);
+}
+
+/**
+ * READY entryとBLOCKED entryが混在するdry-run plan fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - journal subject indexがplan全体statusではなくentry statusを保持することを検証する。
+ *
+ * @function createMixedStatusPlan
+ * @returns {Object} mixed status migration dry-run plan。
+ */
+function createMixedStatusPlan() {
+  return createMaterialAccountingMigrationDryRunPlan({
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: "K1Max-4A1B",
+          printerType: "k1",
+          printerCoreV3Identity: {
+            deviceIdSeed: "serial:k1max-4a1b",
+            identityStrength: "serial",
+          },
+        },
+        {
+          hostname: "K2Pro-69E7",
+          printerType: "creality-k2",
+          printerCoreV3Identity: {
+            deviceIdSeed: "serial:k2pro-69e7",
+            identityStrength: "serial",
+          },
+        },
+      ],
+    },
+    machines: {
+      "K1Max-4A1B": { printerType: "k1" },
+      "K2Pro-69E7": { printerType: "creality-k2" },
+    },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+      { id: "spool-032", name: "CC3D Silver", remainingLengthMm: 280000 },
+    ],
+    hostSpoolMap: {
+      "K1Max-4A1B": "spool-031",
+      "K2Pro-69E7": "spool-032",
+    },
+    materialSourceObservations: {
+      schemaVersion: 1,
+      byDeviceId: {
+        "serial:k1max-4a1b": {
+          deviceId: "serial:k1max-4a1b",
+          snapshotCompleteness: "complete",
+          lastObservedAt: "2026-08-31T03:40:00.000Z",
+          latestBySourceId: {
+            "direct:0": {
+              sourceId: "direct:0",
+              kind: MATERIAL_SOURCE_KIND.DIRECT_FEED,
+              index: 0,
+              sourceIdentityStrength: "stable",
+            },
+          },
+        },
+      },
+    },
+  }, {
+    createdAt: "2026-08-31T03:40:30.000Z",
+    freshTtlMs: 60_000,
+  });
+}
+
+describe("Material accounting migration journal", () => {
+  it("valid dry-run planをjournalへ保存し、authority writeを有効化しない", () => {
+    const plan = createReadyPlan();
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(result).toMatchObject({ ok: true, action: "insert" });
+    expect(result.journal).toMatchObject({
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: plan.migrationId,
+      invariants: {
+        activateUniversalWrites: false,
+        materialSourceRepositoryWrites: false,
+        spoolMountRepositoryWrites: false,
+      },
+    });
+    expect(result.journal.byMigrationId[plan.migrationId].plan).toMatchObject({
+      migrationId: plan.migrationId,
+      status: "dry-run",
+      invariants: { activateUniversalWrites: false },
+    });
+    expect(result.journal.byMigrationId[plan.migrationId].planDigest).toMatch(/^fnv1a128:/);
+    expect(result.journal.latestRevisionBySubject).toEqual({
+      [plan.entries[0].migrationSubjectId]: {
+        migrationId: plan.migrationId,
+        planRevisionId: plan.planRevisionId,
+        sourceChecksum: plan.source.checksum,
+        planDigest: result.journal.byMigrationId[plan.migrationId].planDigest,
+        migrationStatus: plan.migrationStatus,
+        recordedAt: "2026-08-31T03:41:00.000Z",
+      },
+    });
+    expect(result.journal.events).toEqual([
+      expect.objectContaining({
+        type: "migration-dry-run-recorded",
+        migrationId: plan.migrationId,
+        planDigest: result.journal.byMigrationId[plan.migrationId].planDigest,
+        recordedAt: "2026-08-31T03:41:00.000Z",
+      }),
+    ]);
+  });
+
+  it("復元時にlatestRevisionBySubjectをvalid entryから再構築する", () => {
+    const plan = createReadyPlan();
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      ...recorded.journal,
+      latestRevisionBySubject: {
+        [plan.entries[0].migrationSubjectId]: {
+          migrationId: "material-accounting-migration:stale",
+          planRevisionId: "material-accounting-plan-revision:stale",
+        },
+      },
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.latestRevisionBySubject).toEqual(recorded.journal.latestRevisionBySubject);
+  });
+
+  it("latestRevisionBySubjectはplan全体ではなくentry単位のmigrationStatusを保持する", () => {
+    const plan = createMixedStatusPlan();
+    const readyEntry = plan.entries.find((entry) => entry.host === "K1Max-4A1B");
+    const blockedEntry = plan.entries.find((entry) => entry.host === "K2Pro-69E7");
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(readyEntry.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY);
+    expect(blockedEntry.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(recorded.journal.latestRevisionBySubject[readyEntry.migrationSubjectId]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+    });
+    expect(recorded.journal.latestRevisionBySubject[blockedEntry.migrationSubjectId]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+    });
+  });
+
+  it("同一migrationIdかつ同一checksumの再保存はeventを重複させず冪等に扱う", () => {
+    const plan = createReadyPlan();
+    const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const second = recordMaterialAccountingMigrationDryRunPlan(first.journal, plan, {
+      recordedAt: "2026-08-31T03:42:00.000Z",
+    });
+
+    expect(second).toMatchObject({ ok: true, action: "noop" });
+    expect(second.journal.events).toHaveLength(1);
+    expect(second.journal.byMigrationId[plan.migrationId].recordedAt).toBe("2026-08-31T03:41:00.000Z");
+  });
+
+  it("同一migrationId/checksumでもplan本文digestが異なる再保存はconflictにする", () => {
+    const plan = createReadyPlan();
+    const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const tampered = {
+      ...plan,
+      source: {
+        ...plan.source,
+        reviewerOnlyMutation: "same-checksum-different-body",
+      },
+    };
+    const second = recordMaterialAccountingMigrationDryRunPlan(first.journal, tampered, {
+      recordedAt: "2026-08-31T03:42:00.000Z",
+    });
+
+    expect(second).toMatchObject({
+      ok: false,
+      action: "conflict",
+      reason: "migration-journal-plan-digest-conflict",
+    });
+    expect(second.journal.events).toHaveLength(1);
+    expect(second.journal.byMigrationId[plan.migrationId].plan.source).not.toHaveProperty("reviewerOnlyMutation");
+  });
+
+  it("invalid planはjournalへ保存しない", () => {
+    const plan = createReadyPlan();
+    const invalid = { ...plan, status: "apply" };
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, invalid, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "invalid-plan",
+      reason: "plan-status-not-dry-run",
+    });
+    expect(result.journal.byMigrationId).toEqual({});
+  });
+
+  it("migrationIdとrevision bindingが壊れたplanはjournal conflict前にinvalidとして拒否する", () => {
+    const plan = createReadyPlan();
+    const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const conflicting = {
+      ...createReadyPlan("K1Max-Other"),
+      migrationId: plan.migrationId,
+    };
+    const result = recordMaterialAccountingMigrationDryRunPlan(first.journal, conflicting, {
+      recordedAt: "2026-08-31T03:42:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "invalid-plan",
+      reason: "migrationId-planRevisionId-mismatch",
+    });
+    expect(result.journal.events).toHaveLength(1);
+    expect(result.journal.byMigrationId[plan.migrationId].plan.source.checksum).toBe(plan.source.checksum);
+  });
+
+  it("保存済みjournalの壊れたentryはretainedUnsupportedEntriesへ隔離する", () => {
+    const plan = createReadyPlan();
+    const validRecorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: "broken",
+      byMigrationId: {
+        [plan.migrationId]: validRecorded.journal.byMigrationId[plan.migrationId],
+        broken: { migrationId: "broken", sourceChecksum: "x", plan: { status: "apply" } },
+      },
+      events: [
+        validRecorded.journal.events[0],
+        { eventId: "bad", type: "migration-dry-run-recorded", migrationId: "broken" },
+      ],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(Object.keys(journal.byMigrationId)).toEqual([plan.migrationId]);
+    expect(journal.latestMigrationId).toBe(plan.migrationId);
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({ migrationId: "broken", reason: "plan-not-object-or-invalid" }),
+    ]);
+    expect(journal.events).toEqual([
+      expect.objectContaining({ eventId: validRecorded.journal.events[0].eventId, migrationId: plan.migrationId }),
+    ]);
+  });
+
+  it("保存済みjournalのmalformed entryはthrowせずretainedUnsupportedEntriesへ隔離する", () => {
+    const stored = {
+      schemaVersion: 1,
+      byMigrationId: {
+        nullEntry: null,
+        emptyEntry: {},
+        missingWrites: {
+          migrationId: "missingWrites",
+          sourceChecksum: "fnv1a128:missing",
+          migrationStatus: "ready",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+          plan: {
+            schemaVersion: 1,
+            status: "dry-run",
+            migrationStatus: "ready",
+            migrationId: "missingWrites",
+            createdAt: "2026-08-31T03:40:00.000Z",
+            source: { checksum: "fnv1a128:missing" },
+            entries: [
+              {
+                host: "K1Max-Broken",
+                spoolId: "spool-031",
+                deviceId: "serial:k1max-broken",
+                migrationStatus: "ready",
+                plannedWrites: null,
+              },
+            ],
+            summary: { ready: 1, candidate: 0, blocked: 0, plannedWrites: {} },
+            invariants: { activateUniversalWrites: false, preserveHostSpoolMap: true },
+          },
+        },
+        brokenCandidates: {
+          migrationId: "brokenCandidates",
+          sourceChecksum: "fnv1a128:broken-candidates",
+          migrationStatus: "ready",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+          plan: {
+            schemaVersion: 1,
+            status: "dry-run",
+            migrationStatus: "ready",
+            migrationId: "brokenCandidates",
+            createdAt: "2026-08-31T03:40:00.000Z",
+            source: { checksum: "fnv1a128:broken-candidates" },
+            entries: [
+              {
+                host: "K1Max-Broken",
+                spoolId: "spool-031",
+                deviceId: "serial:k1max-broken",
+                migrationStatus: "ready",
+                plannedWrites: { filamentUnits: [], materialSources: [], spoolMounts: [], mountCandidates: "broken" },
+              },
+            ],
+            summary: { ready: 1, candidate: 0, blocked: 0, plannedWrites: { filamentUnits: 0, materialSources: 0, spoolMounts: 0, mountCandidates: 1 } },
+            invariants: { activateUniversalWrites: false, preserveHostSpoolMap: true },
+          },
+        },
+      },
+      events: [],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.byMigrationId).toEqual({});
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({ migrationId: "nullEntry", reason: "plan-not-object-or-invalid" }),
+      expect.objectContaining({ migrationId: "emptyEntry", reason: "plan-not-object-or-invalid" }),
+      expect.objectContaining({ migrationId: "missingWrites", reason: "plan-not-object-or-invalid" }),
+      expect.objectContaining({ migrationId: "brokenCandidates", reason: "plan-not-object-or-invalid" }),
+    ]);
+  });
+
+  it("保存済みjournal entryのchecksum/statusがplanと食い違う場合は隔離する", () => {
+    const plan = createReadyPlan();
+    const stored = {
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: plan.migrationId,
+      byMigrationId: {
+        [plan.migrationId]: {
+          migrationId: plan.migrationId,
+          sourceChecksum: "fnv1a128:tampered",
+          migrationStatus: "blocked",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+          plan,
+        },
+      },
+      events: [
+        {
+          eventId: "event-for-tampered-entry",
+          type: "migration-dry-run-recorded",
+          migrationId: plan.migrationId,
+          sourceChecksum: "fnv1a128:tampered",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+        },
+      ],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.byMigrationId).toEqual({});
+    expect(journal.latestMigrationId).toBeNull();
+    expect(journal.events).toEqual([]);
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        migrationId: plan.migrationId,
+        reason: "entry-plan-cross-binding-mismatch",
+        errors: expect.arrayContaining([
+          "entry-sourceChecksum-plan-mismatch",
+          "entry-migrationStatus-plan-mismatch",
+        ]),
+      }),
+    ]);
+  });
+
+  it("保存済みjournal entryのplanDigestがplan本文と食い違う場合は隔離する", () => {
+    const plan = createReadyPlan();
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      ...result.journal,
+      byMigrationId: {
+        [plan.migrationId]: {
+          ...result.journal.byMigrationId[plan.migrationId],
+          planDigest: "fnv1a128:tampered",
+        },
+      },
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.byMigrationId).toEqual({});
+    expect(journal.events).toEqual([]);
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        migrationId: plan.migrationId,
+        reason: "entry-plan-cross-binding-mismatch",
+        errors: expect.arrayContaining(["entry-planDigest-plan-mismatch"]),
+      }),
+    ]);
+  });
+
+  it("保存済みjournal eventはentryのchecksum/recordedAt/eventIdと一致する場合だけ復元する", () => {
+    const plan = createReadyPlan();
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      ...result.journal,
+      events: [
+        result.journal.events[0],
+        {
+          ...result.journal.events[0],
+          eventId: "wrong-checksum-event",
+          sourceChecksum: "fnv1a128:tampered",
+        },
+        {
+          ...result.journal.events[0],
+          eventId: "wrong-time-event",
+          recordedAt: "2026-08-31T03:42:00.000Z",
+        },
+        {
+          ...result.journal.events[0],
+          eventId: "wrong-plan-digest-event",
+          planDigest: "fnv1a128:tampered",
+        },
+      ],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.events).toEqual([result.journal.events[0]]);
+    expect(journal.latestMigrationId).toBe(plan.migrationId);
+    expect(journal.retainedUnsupportedEntries).toEqual([]);
+  });
+
+  it("createMaterialAccountingMigrationJournalは呼び出し側mutationから内部snapshotを守る", () => {
+    const plan = createReadyPlan();
+    const journal = createMaterialAccountingMigrationJournal();
+    const result = recordMaterialAccountingMigrationDryRunPlan(journal, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(() => {
+      result.journal.latestMigrationId = "mutated";
+    }).toThrow();
+    expect(result.journal.latestMigrationId).toBe(plan.migrationId);
+  });
+});

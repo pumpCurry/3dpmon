@@ -1,6 +1,6 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-08-28
+Last updated: 2026-08-31
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
@@ -9,24 +9,62 @@ Last updated: 2026-08-28
 K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界は
 `docs/develop/printer-core-v3-gate19-cfs-control-spec-investigation.md` を参照する。
 
+Gate 18.9 の Universal MaterialSource accounting 仕様は
+`docs/ADR/0036-printer-core-gate18-9-universal-material-source-accounting.md` と
+`docs/develop/printer-core-v3-gate18-9-universal-material-source-accounting.md` を参照する。
+
 ## Gate status matrix
 
 | Gate / Area | Code | Tests | Live | Production |
 | --- | --- | --- | --- | --- |
 | Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
 | Gate 18.8 Material Observation UX / Evidence | CLOSED | CLOSED | partial | read-only |
-| Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
-| Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
+| Gate 19 Slot Control Spec | scaffold CLOSED / recovery latch schema+storage added | CLOSED | pending | disabled |
+| Gate 19.5 UI Control Lifecycle | scaffold CLOSED / selection evidence + recovery blocker UI added | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
+| Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
-現時点のv2.2.1044では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
+現時点のv2.2.1045では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
 のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
 UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
 
 ## 未実装と分かっているもの
 
+- Gate 18.9 Universal MaterialSource accounting は、K1/K2を別会計にせず
+  `Device -> FilamentUnit -> MaterialSource -> SpoolMount` へ統一する次の実装対象。
+  K1 direct spoolはsourceが1つだけのケース、K2/CFSやK1C/CFS-Cはsourceが複数のケースとして扱う。
+  `hostSpoolMap` は最終authorityではなくlegacy compatibility projectionへ降格する。
+  Gate 18.9A contract baselineは`4ff7b06`でACCEPT済み。pure
+  `MaterialSourceRegistry` / `SpoolMountRepository`は開始済みで、source ID immutability、
+  canonical locator/identity validation、identityとlocatorのslot/index整合、
+  provisional rekey boundary、open mount最大1、close lifecycle、restart-safe operation
+  idempotency、interval overlap conflictを固定しながら、永続化やcutoverへ段階的に接続する。
+  migration planner dry-runは追加済みで、migration専用operator確認済みK1 direct-onlyはsource-aware候補を生成する一方、
+  K2/CFS multi-source、未確認single-spool、topology未観測K2、future-dated/stale/incomplete観測は
+  blind migrationせずcandidate/blockedへ留める。
+  Gate 18.9Bでは、このdry-run plan/evidenceだけを`materialAccountingMigrationJournal`
+  として保存・復元・importできるようにした。journalは証跡専用であり、
+  MaterialSource/SpoolMount authority writeやlegacy ledger debitはまだ有効化しない。
+  dry-runは本番`SpoolMount`ではなく`mountCandidates`だけを返し、`openedAt`と
+  `mountOperationId`は後続のpersistent shadow transaction adapterが実行時に発行する。
+  plan全体の`migrationBatchId`、entry単位の`migrationSubjectId`、`planRevisionId`を分離し、
+  plan作成時刻、accepted confirmation evidence、identity、topology freshness、repository snapshotが
+  変わると別revisionになる。confirmationはentry単位のconfirmation前`confirmationEvidenceChecksum`へbindし、
+  final `source.checksum`は受理済みconfirmation投影を含めるため、checksum循環を作らず証拠変更時に再確認を要求できる。legacy hostが
+  複数strong deviceへ解決される場合、またはopen device identity conflictが残る場合はfirst-matchせずBLOCKする。
+  保存済みjournalの壊れたentry、または`planDigest`が本文と一致しないentryは起動時にthrowせず
+  `retainedUnsupportedEntries`へ隔離する。Gate 18.9Cでは、journalのREADY entryをそのまま信頼せず、
+  `latestRevisionBySubject`でentry subjectの最新revisionを解決し、実行直前に再生成したcurrent planと
+  device/source/spool/mount intentの同一性を再検査するpure shadow preflightを追加した。このpreflightは
+  対象entryのstatusをplan全体statusと混同せず、`evaluatedAt`とcurrent plan `createdAt`の近接性、MaterialSource/SpoolMount repository facadeが明示的に渡されていることを必須にする。read-only repository APIだけを参照し、MaterialSource/SpoolMount/ledgerへwriteせず、`openedAt`や
+  `mountOperationId`も採番しない。Gate 18.9D-1では、モジュールが発行したtrusted READY preflightだけを入力権威として、
+  `shadowOperationId`と`executedAt`からstaged transaction候補を作る。ここで初めて`openedAt`と
+  `mountOperationId`を採番するが、prepared transactionと`SHADOW` lifecycle statusは分離する。MaterialSource/SpoolMount snapshotを明示入力として必須化し、snapshot未指定を空の本番状態として扱わない。snapshot内の既存conflictはstaged repository再構築前にblockedへ落とし、`executedAt`がpreflight `evaluatedAt`より前なら拒否する。既存snapshotから作ったstaged repositoryへ全recordを検証投入できた場合だけ
+  transactionを返し、conflict時はpartial transactionを返さない。これはまだproduction storage/ledger authorityではない。Gate 18.9D-2では、trusted prepared transaction、persistent shadow commit store、transactionに固定したbase snapshot digest CAS、durable write callback境界、restart/recovery round-tripを追加した。durable writerは同じ永続transaction内でCASを適用したことを`casApplied:true`で返す必要があり、durable write成功後だけsubject lifecycleを`shadow`へ進め、失敗時は旧storeを返す。同じ`shadowOperationId`と同じpayloadは冪等、同じoperation IDで異なるpayloadはblockedにする。Gate 18.9Eでは、print-start時点のMaterialSource/SpoolMount/tool binding snapshotをsource単位で保存し、completion時のsource-specific usageを各source/mount/spoolへ帰属するread-only shadow repositoryを追加した。callerのcomplete宣言やtrusted風booleanだけでは未観測sourceを0mm確定せず、明示0mm usageがある場合だけconfirmed-unusedにする。multi-source total-only usageやsource-specific/total residualはpending/unattributedへ隔離し、single-source total-only usageだけはread-only source segmentとして扱う。public repositoryはtrusted usage evidence、trusted result-set completeness evidence、debit authorityをmintしない。復元時は同一semantic IDのpayload conflictがあれば勝者を残さず全件隔離し、`operationsById`はprocess lifetime cacheとして扱ってrestart後には復元しない。Gate 18.9Fでは、保存済みprint binding storeをフィラメント管理のCFS source行へread-only投影し、機器reported remainingと3DPmon管理スプール残量、source-specific直近使用量を別行として表示する。print binding storeも再起動後に復元されるが、ledger debitとlegacy cutover sealはまだ行わない。
+- Gate 18.9E/F hardeningでは、public print binding repositoryがtrusted print-start snapshotもmintしない境界へ戻し、module-owned result-set completeness evidenceが無い限りcomplete扱いにしない。復元時はsnapshot/usageEvidence/segment/ledgerのcross-record整合を検査し、孤立recordを`retainedUnsupportedEntries`へ隔離する。UIのsource-aware accounting joinはraw `sourceId`一致だけでなく、Universal MaterialSource ID、alias、locatorで合流する。
+- Gate 18.9Gでは、result-set completeness registryをpublic callerからのtrusted発行経路としてはfail-closedにした。registryはmodule-owned evidenceの検証境界だけを残し、provider/session/generation/result digestにbindされたissuerが未接続のあいだは、未出現sourceをtrusted `confirmed-unused`へ昇格しない。production spool debit、legacy `usageHistory`、spool残量更新はまだ行わない。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
@@ -37,11 +75,23 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 - command correlation は、低レベルcallerがproof風objectを渡しても発行されず、bound dispatcherがtrusted observation providerから受け取ったcommandId/sessionId付きprotocol response ID / transition ID proofを内部検証した場合だけattested evidenceを作る。protocol response IDを根拠にする場合はtransport response側のIDとも一致させる。
 - single-color / multicolor print authority は未完。PrintPlan contract と selected material guard はあるが、UIからの印刷開始authorityはまだ完全にはCoreへ移していない。
 - Filament Ledger authority は未完。CFS観測残量は ledger authority ではなく observation-only として扱う。
+- Gate 18.9Bまでは、multi-source deviceのtotal-only usageをsource数・色・material名で推測分割しない。
+  source-specific usageとprint-start mount snapshotが揃わない消費はpending/unattributedへ隔離する。
 - UI authority cutover は未完。既存UIの主要表示はまだlegacy raw stateと共存しており、NormalizedStateのみを見る状態には切り替えていない。
+
+## Gate 18.9 で固定する accounting 境界
+
+- `SpoolMount` は3DPmon上のoperator-managed装着状態であり、restart / reconnect / stale / detach / selected変更 / RFID未取得だけでは自動closeしない。
+- `Debit eligibility` は各jobのprint-start時点で別途検査する。SpoolMountがOPENでも、fresh topology、source continuity、RFID mismatch無し、source-specific usageなどが揃わなければ自動debitしない。
+- `loaded` / `empty` / `unobserved` / `selected` / `T1A` などのdevice observationは、SpoolMountやledgerへ直接逆流しない。
+- RFIDや機器reported remainingは表示・診断・operator correction候補であり、3DPmonのledger remainingを自動上書きしない。
+- N=1 deviceでは従来のフィラメントカード体験を維持できるが、N>1 deviceをlegacy `getCurrentSpool(host)` へfallbackしてdebitしてはいけない。
+- Universal accountingへcutoverするdeviceでは、旧legacy mount intervalをcutover直前の最終完了jobで封印し、以後のjobをlegacy derive対象に含めない。
 
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
 - CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。production有効化には、現在接続世代へbindされた`/info`、fresh topology、module-owned immutable certification registry登録済み証跡が必要で、保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけでは有効化しない。
+- CFS Debug / Certification panel は、選択状態の完全性と未解決physical command recovery blockerをpreflightとして表示する。保存済み復旧ラッチで `unresolvedByCommandId` のkeyとrecord内commandIdが食い違う場合は、どちらのIDで問い合わせてもintegrity quarantineとしてblockする。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
 - CFS/CFS-C の残量値は表示するが、手動スプール台帳の残量へ自動反映しない。
 - stale / reconnect / runout / attach / detach のプロトコルイベントは表示できる形へ寄せたが、実機Gateで物理操作と最終対応付けする必要がある。
@@ -124,7 +174,8 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 
 - standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
 - `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
-- side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
+- Gate 18.9A/B/C migration planner は stable device identity、unique host/device resolution、open device identity conflictなし、migration専用operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。plan全体は`migrationBatchId`、host-to-spool単位はentry側`migrationSubjectId`で分離し、single-spool confirmationはentry subjectとentry confirmation前evidence checksumへbindする。READY entry validatorは1 FilamentUnit / 1 MaterialSource / 0 SpoolMount / 1 mountCandidateだけを許し、MaterialSourceのdevice/unit bindingと既知reason IDも検証する。journalはsource checksumに加えてplan body digestも検証し、`latestRevisionBySubject`をvalid entryから再構築する。Gate 18.9Cのpure shadow preflightはlatest journal revisionとcurrent planの同一entry mappingだけをshadow候補にし、古いrequested revision、stale/non-READY current plan、Device入替、registry/mount conflictをwrite前に拒否する。次はjournal/preflightを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
+- side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化するschema/store/storage経路を追加済み。Gate 19 production dispatcherのUI操作経路も、同一deviceのCFS physical commandをprocess内single-flightで1本化し、送信前にsubmitted reservationをstoreへappendし、`saveUnifiedStorageDurably()` のflush成功後だけphysical transportへ進む。submitted / post-observed / unknown相当の結果はstoreへappendし、再起動後に自動replayしないところまで接続済み。send-time recovery blockerは現在command IDだけでなく、同じdeviceに残る古い未解決CFS physical commandも全CFS操作のblockerとして扱う。operator confirmationはCFS Debug / Certificationパネルから `resolvePhysicalCommandRecoveryLatchRecord()` へ接続済み。`cfs-slot-select` は次のmaterial observationがfreshで、すべてのloaded/unknown実sourceのselectionValid=trueが揃い、selected sourceが一意かつ対象sourceと一致し、現在store上の同一recovery record digest/source/deviceへ束縛できる場合だけ `observed-confirmed` として自動解決する。load/unload/feed/retractは実機semantics確定までoperator confirmationが必要。
 - Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
 
 ## Release certification helper

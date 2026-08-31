@@ -11,14 +11,15 @@
  * - Printer Core v3 の read-only material topology を UI 表示用の固定スロット構造へ変換
  * - CFS/CFS-C を4スロット単位で最大4ユニット、外部スプール1本を加えた最大16+1表示へ整形
  * - selected、残量、物理状態、assignment、fresh/staleを表示専用の値としてまとめる
+ * - source-aware accounting read model がある場合は、機器観測と3DPmon管理スプール情報を同じ行へ併記
  * - 明示的な command UI candidate hint がある場合だけ、CFS操作UI用の候補権限を表示モデルへ写す
  *
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1457 (PR #435)
+ * @version 1.390.1553 (PR #439)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-28 16:58:45
+ * @lastModified 2026-08-31 19:58:16
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -268,6 +269,227 @@ function findAssignmentsForSource(assignments, sourceId) {
 }
 
 /**
+ * 任意値を空白除去済み文字列へ変換する。
+ *
+ * 【詳細説明】
+ * - accounting read model は保存済みstoreやmigration由来の値を含むため、表示境界でも空文字を除外する。
+ *
+ * @private
+ * @function toTrimmedText
+ * @param {*} value - 文字列候補
+ * @returns {string} 空白除去済み文字列。不正値は空文字。
+ */
+function toTrimmedText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * accounting mapへkeyを追加し、衝突時は曖昧状態として保持する。
+ *
+ * 【詳細説明】
+ * - 同じ観測source keyに複数のMaterialSourceが紐付く場合は、先勝ちで誤った残量を表示せず曖昧として扱う。
+ *
+ * @private
+ * @function addAccountingLookupKey
+ * @param {Map<string, object>} map - key別accounting source map
+ * @param {*} key - 追加候補key
+ * @param {object} source - accounting source
+ * @returns {void}
+ */
+function addAccountingLookupKey(map, key, source) {
+  const normalizedKey = toTrimmedText(key);
+  const sourceId = toTrimmedText(source?.materialSourceId);
+  if (!normalizedKey || !sourceId) {
+    return;
+  }
+  const current = map.get(normalizedKey);
+  if (!current) {
+    map.set(normalizedKey, {
+      status: "unique",
+      source,
+      sourceIds: new Set([sourceId]),
+    });
+    return;
+  }
+  if (current.sourceIds.has(sourceId)) {
+    return;
+  }
+  current.status = "ambiguous";
+  current.source = null;
+  current.sourceIds.add(sourceId);
+}
+
+/**
+ * locatorからsource照合用keyを生成する。
+ *
+ * 【詳細説明】
+ * - Universal MaterialSource IDはstable ID、observed sourceIdはprotocol locator由来IDになり得る。
+ * - そのため表示合流では、同じ物理slotを示すlocator keyをsourceIdとは別に生成する。
+ *
+ * @private
+ * @function createLocatorLookupKeys
+ * @param {object|null|undefined} locator - MaterialSource locator候補
+ * @returns {string[]} 照合用locator key一覧
+ */
+function createLocatorLookupKeys(locator) {
+  const source = locator && typeof locator === "object" ? locator : {};
+  const kind = toTrimmedText(source.kind);
+  const keys = [];
+  if (!kind) {
+    return keys;
+  }
+  const index = toFiniteNumber(source.index);
+  const unitIndex = toFiniteNumber(source.unitIndex);
+  const boxId = toFiniteNumber(source.boxId);
+  const slotIndex = toFiniteNumber(source.slotIndex);
+  const protocolSlotId = toTrimmedText(source.protocolSlotId);
+  if (Number.isInteger(index)) {
+    keys.push(`locator:${kind}:index:${index}`);
+  }
+  if (Number.isInteger(unitIndex) && Number.isInteger(slotIndex)) {
+    keys.push(`locator:${kind}:unit:${unitIndex}:slot:${slotIndex}`);
+  }
+  if (Number.isInteger(boxId) && Number.isInteger(slotIndex)) {
+    keys.push(`locator:${kind}:box:${boxId}:slot:${slotIndex}`);
+  }
+  if (protocolSlotId) {
+    keys.push(`locator:${kind}:protocol:${protocolSlotId.toLowerCase()}`);
+  }
+  return keys;
+}
+
+/**
+ * accounting sourceから照合keyを列挙する。
+ *
+ * 【詳細説明】
+ * - canonical materialSourceId、snapshot内MaterialSource、mount、alias、locatorをすべて候補にする。
+ * - UIは7桁色やlocator意味を解釈せず、ここでsource合流だけを担当する。
+ *
+ * @private
+ * @function collectAccountingLookupKeys
+ * @param {object|null|undefined} source - accounting source候補
+ * @returns {string[]} 照合用key一覧
+ */
+function collectAccountingLookupKeys(source) {
+  const observationMaterialSource = source?.observation?.materialSource &&
+    typeof source.observation.materialSource === "object"
+    ? source.observation.materialSource
+    : {};
+  const keys = [
+    toTrimmedText(source?.materialSourceId),
+    toTrimmedText(source?.mount?.materialSourceId),
+    toTrimmedText(observationMaterialSource.materialSourceId),
+  ];
+  for (const alias of [
+    ...(Array.isArray(source?.aliases) ? source.aliases : []),
+    ...(Array.isArray(source?.observation?.aliases) ? source.observation.aliases : []),
+    ...(Array.isArray(observationMaterialSource.aliases) ? observationMaterialSource.aliases : []),
+  ]) {
+    keys.push(toTrimmedText(alias));
+  }
+  keys.push(...createLocatorLookupKeys(source?.locator));
+  keys.push(...createLocatorLookupKeys(source?.observation?.locator));
+  keys.push(...createLocatorLookupKeys(observationMaterialSource.locator));
+  return keys.filter(Boolean);
+}
+
+/**
+ * 観測source rowからaccounting照合keyを列挙する。
+ *
+ * 【詳細説明】
+ * - normalized topologyのsourceId、将来追加されるmaterialSourceId/alias、物理slot locatorを順に候補にする。
+ * - CFS表示ではboxId/slotIdと表示slot名の両方をkey化し、`1C` と `cfs:1:slot:2` の橋渡しを行う。
+ *
+ * @private
+ * @function collectObservedSourceLookupKeys
+ * @param {object|null|undefined} source - normalized material source候補
+ * @param {object} options - 表示行オプション
+ * @returns {string[]} 照合用key一覧
+ */
+function collectObservedSourceLookupKeys(source, options) {
+  if (!source) {
+    return [];
+  }
+  const keys = [
+    toTrimmedText(source.sourceId),
+    toTrimmedText(source.materialSourceId),
+    ...(Array.isArray(source.aliases) ? source.aliases.map((alias) => toTrimmedText(alias)) : []),
+  ];
+  const locator = {
+    kind: source.kind || options.kind,
+    index: source.kind === "external-spool" ? source.slotId : undefined,
+    unitIndex: options.unitIndex !== null && options.unitIndex !== undefined ? options.unitIndex + 1 : undefined,
+    boxId: source.boxId,
+    slotIndex: source.slotId ?? options.slotIndex,
+    protocolSlotId: source.protocolSlotId || source.slotIdLabel || options.displaySlot,
+  };
+  keys.push(...createLocatorLookupKeys(locator));
+  return keys.filter(Boolean);
+}
+
+/**
+ * source-aware accounting view を sourceId map へ変換する。
+ *
+ * 【詳細説明】
+ * - accounting view は3DPmon内のスプール管理・使用量候補であり、機器観測topologyとは別authorityである。
+ * - ViewModelではsourceId、alias、locator一致だけで表示へ合流し、残量やdebitの権威化は行わない。
+ *
+ * @private
+ * @function createAccountingSourceMap
+ * @param {object|null|undefined} accountingView - MaterialSourceAccountingView候補
+ * @returns {Map<string, object>} 照合keyからaccounting rowへのMap
+ */
+function createAccountingSourceMap(accountingView) {
+  const map = new Map();
+  for (const source of Array.isArray(accountingView?.sources) ? accountingView.sources : []) {
+    for (const key of collectAccountingLookupKeys(source)) {
+      addAccountingLookupKey(map, key, source);
+    }
+  }
+  return map;
+}
+
+/**
+ * source rowに対応するaccounting sourceを取得する。
+ *
+ * 【詳細説明】
+ * - raw sourceId一致を第一候補にしつつ、Universal MaterialSource ID導入後のalias/locator一致へfallbackする。
+ *
+ * @private
+ * @function resolveAccountingSourceForRow
+ * @param {object|null|undefined} source - normalized material source候補
+ * @param {object} options - 表示行オプション
+ * @returns {{accounting:object|null,diagnostics:object[]}} accounting解決結果。
+ */
+function resolveAccountingSourceForRow(source, options) {
+  const accountingBySourceId = options.accountingBySourceId;
+  if (!accountingBySourceId || !source) {
+    return { accounting: null, diagnostics: [] };
+  }
+  for (const key of collectObservedSourceLookupKeys(source, options)) {
+    const entry = accountingBySourceId.get(key);
+    if (!entry) {
+      continue;
+    }
+    if (entry.status === "ambiguous") {
+      return {
+        accounting: null,
+        diagnostics: [
+          {
+            code: "ambiguous-accounting-source",
+            severity: "warning",
+            key,
+            materialSourceIds: [...entry.sourceIds],
+          },
+        ],
+      };
+    }
+    return { accounting: entry.source || null, diagnostics: [] };
+  }
+  return { accounting: null, diagnostics: [] };
+}
+
+/**
  * material source を表示行へ変換する。
  *
  * 【詳細説明】
@@ -281,6 +503,7 @@ function findAssignmentsForSource(assignments, sourceId) {
  * @param {string} options.displaySlot - 表示スロット名
  * @param {?number} options.unitIndex - 表示ユニットindex
  * @param {?number} options.slotIndex - 表示スロットindex
+ * @param {Map<string, object>=} options.accountingBySourceId - sourceId別accounting view。
  * @returns {object} 表示行
  */
 function createSourceRow(options) {
@@ -288,6 +511,7 @@ function createSourceRow(options) {
   const sourceAssignments = findAssignmentsForSource(options.assignments, source?.sourceId);
   const material = source?.material && typeof source.material === "object" ? source.material : {};
   const remaining = createRemainingView(source);
+  const accountingResolution = resolveAccountingSourceForRow(source, options);
   return {
     rowId: source?.sourceId || `${options.kind}:${options.displaySlot}`,
     sourceId: source?.sourceId || null,
@@ -313,6 +537,9 @@ function createSourceRow(options) {
       stateCode: toFiniteNumber(source?.status?.stateCode),
       editStatusCode: toFiniteNumber(source?.status?.editStatusCode),
       scrap: toFiniteNumber(source?.status?.scrap),
+      selectionState: source?.status?.selectionState || "unobserved",
+      selectionValid: source?.status?.selectionValid ?? null,
+      selectionRaw: source?.status?.selectionRaw,
       remaining,
     },
     assignments: sourceAssignments.map((assignment) => ({
@@ -320,6 +547,8 @@ function createSourceRow(options) {
       namespace: assignment.namespace ?? null,
       resolution: assignment.resolution ?? "unknown",
     })),
+    accounting: accountingResolution.accounting,
+    diagnostics: accountingResolution.diagnostics,
   };
 }
 
@@ -434,7 +663,7 @@ function createCfsSourceMap(sources) {
  * @param {number} limit - 外部スプール表示数
  * @returns {Array<object>} 外部スプール表示行
  */
-function createExternalRows(topology, limit) {
+function createExternalRows(topology, limit, accountingBySourceId) {
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
   const externalSources = (Array.isArray(topology.sources) ? topology.sources : [])
     .filter((source) => source?.kind === "external-spool")
@@ -450,6 +679,7 @@ function createExternalRows(topology, limit) {
       displaySlot: index === 0 ? "external" : `external-${index + 1}`,
       unitIndex: null,
       slotIndex: index,
+      accountingBySourceId,
     }));
   }
   return rows;
@@ -468,7 +698,7 @@ function createExternalRows(topology, limit) {
  * @param {number} options.slotsPerUnit - 1unitあたりslot数
  * @returns {Array<object>} CFS unit 表示行
  */
-function createCfsUnitRows(topology, options) {
+function createCfsUnitRows(topology, options, accountingBySourceId) {
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
   const sourceMap = createCfsSourceMap(topology.sources);
   const units = placeUnitsByDisplayIndex(collectUnits(topology), options.unitLimit);
@@ -487,6 +717,7 @@ function createCfsUnitRows(topology, options) {
         displaySlot: `${displayUnitNumber}${suffix}`,
         unitIndex,
         slotIndex,
+        accountingBySourceId,
       }));
     }
     rows.push({
@@ -527,6 +758,7 @@ function createSummary(externalRows, cfsUnits, topology) {
     cfsObservedSlotCount: cfsRows.filter((row) => row.sourceId).length,
     loadedSourceCount: allRows.filter((row) => row.presence === "loaded").length,
     selectedSourceCount: allRows.filter((row) => row.selected === true).length,
+    invalidSelectionCount: allRows.filter((row) => row.status.selectionValid === false).length,
     invalidRemainingCount: allRows.filter((row) => row.status.remaining.valid === false).length,
     assignmentCount: allRows.reduce((count, row) => count + row.assignments.length, 0),
     topologyState: topology?.cfs?.topologyState || "unobserved",
@@ -589,6 +821,7 @@ function createObservationView(topology, observation) {
  * @param {number=} options.externalSourceLimit - 外部スプール表示数
  * @param {object=} options.commandAuthority - UI操作候補用command authority
  * @param {object=} options.observation - runtimeData由来の観測・通信補助情報
+ * @param {object=} options.accountingView - source-aware accounting read model
  * @returns {object} material topology 表示用 view model
  * @example
  * const viewModel = createMaterialTopologyViewModel(state.materials);
@@ -598,8 +831,9 @@ export function createMaterialTopologyViewModel(topology, options = {}) {
   const unitLimit = Math.max(0, Math.min(4, Math.floor(toFiniteNumber(options.unitLimit, DEFAULT_CFS_UNIT_LIMIT) ?? DEFAULT_CFS_UNIT_LIMIT)));
   const slotsPerUnit = Math.max(0, Math.min(4, Math.floor(toFiniteNumber(options.slotsPerUnit, DEFAULT_CFS_SLOTS_PER_UNIT) ?? DEFAULT_CFS_SLOTS_PER_UNIT)));
   const externalSourceLimit = Math.max(0, Math.min(1, Math.floor(toFiniteNumber(options.externalSourceLimit, DEFAULT_EXTERNAL_SOURCE_LIMIT) ?? DEFAULT_EXTERNAL_SOURCE_LIMIT)));
-  const externalRows = createExternalRows(safeTopology, externalSourceLimit);
-  const cfsUnits = createCfsUnitRows(safeTopology, { unitLimit, slotsPerUnit });
+  const accountingBySourceId = createAccountingSourceMap(options.accountingView);
+  const externalRows = createExternalRows(safeTopology, externalSourceLimit, accountingBySourceId);
+  const cfsUnits = createCfsUnitRows(safeTopology, { unitLimit, slotsPerUnit }, accountingBySourceId);
   const commandAuthority = normalizeCommandAuthorityView(options.commandAuthority);
   return {
     schemaVersion: MATERIAL_TOPOLOGY_VIEW_MODEL_SCHEMA_VERSION,

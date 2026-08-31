@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1473 (PR #436)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:30:05
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -83,7 +83,11 @@ function createMaterialViewModel() {
             selected: false,
             assignments: [{ assignmentId: "T1A" }],
             material: { type: "PLA", name: "White PLA" },
-            status: { remaining: { displayPercent: 95, valid: true } },
+            status: {
+              remaining: { displayPercent: 95, valid: true },
+              selectionState: "unselected",
+              selectionValid: true,
+            },
           },
           {
             sourceId: "cfs:1:slot:2",
@@ -96,7 +100,11 @@ function createMaterialViewModel() {
             selected: true,
             assignments: [{ assignmentId: "T1C" }],
             material: { type: "PLA", name: "Silver PLA" },
-            status: { remaining: { displayPercent: 54, valid: true } },
+            status: {
+              remaining: { displayPercent: 54, valid: true },
+              selectionState: "selected",
+              selectionValid: true,
+            },
           },
         ],
       },
@@ -268,6 +276,98 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(serialized).toContain("<RFID_001>");
   });
 
+  it("export bundleはboxsInfo probe summaryをraw evidenceとは別に抽出する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+      },
+      materialViewModel: createMaterialViewModel(),
+      evidence: {
+        beforeBoxsInfo: {
+          observedAt: "2026-08-31T07:00:00.000Z",
+          summary: {
+            observedAt: "1999-01-01T00:00:00.000Z",
+            selectedSourceIds: ["cfs:1:slot:0"],
+            targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+            loadedSourceCount: 3,
+          },
+        },
+        afterBoxsInfo: {
+          observedAt: "2026-08-31T07:00:03.000Z",
+          summary: {
+            observedAt: "1999-01-01T00:00:01.000Z",
+            selectedSourceIds: ["cfs:1:slot:2"],
+            targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+            loadedSourceCount: 3,
+          },
+        },
+      },
+    });
+
+    const bundle = createCfsCertificationExportBundle(viewModel);
+
+    expect(bundle.summary.probeSummaries).toEqual({
+      before: {
+        observedAt: "2026-08-31T07:00:00.000Z",
+        selectedSourceIds: ["cfs:1:slot:0"],
+        targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+        loadedSourceCount: 3,
+      },
+      after: {
+        observedAt: "2026-08-31T07:00:03.000Z",
+        selectedSourceIds: ["cfs:1:slot:2"],
+        targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+        loadedSourceCount: 3,
+      },
+    });
+  });
+
+  it("boxsInfo probe summaryをCertificationパネル上にも表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+      },
+      materialViewModel: createMaterialViewModel(),
+      evidence: {
+        beforeBoxsInfo: {
+          observedAt: "2026-08-31T07:00:00.000Z",
+          summary: {
+            selectedSourceIds: ["cfs:1:slot:0"],
+            targetSource: { sourceId: "cfs:1:slot:2", displaySlot: "1C" },
+            loadedSourceCount: 3,
+          },
+        },
+        afterBoxsInfo: {
+          observedAt: "2026-08-31T07:00:03.000Z",
+          summary: {
+            selectedSourceIds: ["cfs:1:slot:2"],
+            targetSource: { sourceId: "cfs:1:slot:2", displaySlot: "1C" },
+            loadedSourceCount: 3,
+          },
+        },
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(container.textContent).toContain("Probe summary");
+    expect(container.textContent).toContain("before selected");
+    expect(container.textContent).toContain("cfs:1:slot:0");
+    expect(container.textContent).toContain("after selected");
+    expect(container.textContent).toContain("cfs:1:slot:2");
+    expect(container.textContent).toContain("target");
+    expect(container.textContent).toContain("1C / cfs:1:slot:2");
+  });
+
   it("selected sourceをPreflight診断へ出し、期限切れARMとdry-run不整合ではLIVE不可にする", () => {
     const viewModel = createCfsCertificationPanelViewModel({
       nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
@@ -394,6 +494,7 @@ describe("dashboard_cfs_certification_panel", () => {
   it("selected-source WARNだけでは将来の認証済みLIVE候補をhard gateしない", () => {
     const materialViewModel = createMaterialViewModel();
     materialViewModel.units[0].slots[1].selected = false;
+    materialViewModel.units[0].slots[1].status.selectionState = "unselected";
     const viewModel = createCfsCertificationPanelViewModel({
       nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
       printer: {
@@ -432,6 +533,281 @@ describe("dashboard_cfs_certification_panel", () => {
       state: "warn",
     });
     expect(viewModel.liveSend.enabled).toBe(true);
+  });
+
+  it("loaded sourceのselection証跡が不完全ならCertificationパネルでもLIVE不可理由として表示する", () => {
+    const materialViewModel = createMaterialViewModel();
+    materialViewModel.units[0].slots[0].status.selectionState = "unobserved";
+    materialViewModel.units[0].slots[0].status.selectionValid = null;
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel,
+      targetSource: materialViewModel.units[0].slots[1],
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.preflight.find((item) => item.key === "selection-complete")).toMatchObject({
+      state: "fail",
+      detail: "選択状態未観測: 1A",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:selection-complete");
+    expect(container.textContent).toContain("Selection evidence");
+    expect(container.textContent).toContain("選択状態未観測: 1A");
+  });
+
+  it("固定枠の未観測placeholderはselection証跡不完全としてLIVE不可にしない", () => {
+    const materialViewModel = createMaterialViewModel();
+    materialViewModel.units[0].slots.push({
+      sourceId: "cfs:1:slot:3",
+      displaySlot: "1D",
+      kind: "cfs-slot",
+      boxId: 1,
+      slotIndex: 3,
+      protocolSlotId: 3,
+      presence: "unobserved",
+      selected: null,
+      assignments: [],
+      material: { type: null, name: null },
+      status: {
+        remaining: { displayPercent: null, valid: null },
+        selectionState: "unobserved",
+        selectionValid: null,
+      },
+    });
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel,
+      targetSource: materialViewModel.units[0].slots[1],
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    expect(viewModel.preflight.find((item) => item.key === "selection-complete")).toMatchObject({
+      state: "ok",
+      detail: "選択証跡OK: 2 sources",
+    });
+    expect(viewModel.liveSend.enabled).toBe(true);
+  });
+
+  it("復旧ラッチblockerがある場合はCertificationパネルのpreflightでLIVE送信不可として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+      recoveryBlocker: {
+        blocked: true,
+        reason: "integrity-quarantine",
+        commandId: "command:k2-load-1c",
+        quarantineReason: "command-id-digest-mismatch",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.preflight.find((item) => item.key === "recovery-blocker")).toMatchObject({
+      state: "fail",
+      detail: "復旧確認待ち: integrity-quarantine / command:k2-load-1c / command-id-digest-mismatch",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:recovery-blocker");
+    expect(viewModel.recoveryBlocker).toMatchObject({
+      blocked: true,
+      reason: "integrity-quarantine",
+    });
+    expect(container.textContent).toContain("Recovery blocker");
+    expect(container.textContent).toContain("復旧確認待ち: integrity-quarantine / command:k2-load-1c / command-id-digest-mismatch");
+  });
+
+  it("復旧ラッチblockerがある場合はoperator確認用ボタンからcommandIdを渡せる", () => {
+    const onResolveRecoveryBlocker = vi.fn();
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      recoveryBlocker: {
+        blocked: true,
+        reason: "unresolved-recovery",
+        commandId: "command:k2-load-1c",
+        commandKind: "cfs-load",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        materialSourceId: "cfs:1:slot:2",
+        status: "submitted",
+        sentAt: "2026-08-31T07:00:00.000Z",
+        recordDigest: "fnv1a128:displayed-record",
+        operatorResolvable: true,
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel, {
+      onResolveRecoveryBlocker,
+    });
+    const button = container.querySelector('[data-action="resolve-recovery-blocker"]');
+
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toContain("物理確認済みとして解除");
+    expect(container.textContent).toContain("Command");
+    expect(container.textContent).toContain("cfs-load");
+    expect(container.textContent).toContain("Source");
+    expect(container.textContent).toContain("cfs:1:slot:2");
+    expect(container.textContent).toContain("Digest");
+    expect(container.textContent).toContain("fnv1a128:displayed-record");
+
+    button.click();
+
+    expect(onResolveRecoveryBlocker).toHaveBeenCalledWith({
+      commandId: "command:k2-load-1c",
+      resolution: "operator-cleared",
+      expectedDeviceId: "device-k2",
+      expectedDigest: "fnv1a128:displayed-record",
+      expectedCommandKind: "cfs-load",
+      expectedMaterialSourceId: "cfs:1:slot:2",
+      resolutionSource: "cfs-certification-panel",
+      operatorAcknowledged: true,
+      panelDeviceId: "device-k2",
+      viewModel,
+    });
+  });
+
+  it.each([
+    ["conflict", "conflicted-recovery"],
+    ["quarantine", "integrity-quarantine"],
+  ])("%s blockerは通常operator解除ボタンを無効にする", (_label, reason) => {
+    const onResolveRecoveryBlocker = vi.fn();
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      recoveryBlocker: {
+        blocked: true,
+        reason,
+        commandId: "command:k2-load-1c",
+        quarantineReason: reason === "integrity-quarantine" ? "command-id-digest-mismatch" : "",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel, {
+      onResolveRecoveryBlocker,
+    });
+    const button = container.querySelector('[data-action="resolve-recovery-blocker"]');
+
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(onResolveRecoveryBlocker).not.toHaveBeenCalled();
   });
 
   it("printer idle未観測WARNはselected-sourceと違いLIVE送信をblockingする", () => {
@@ -511,5 +887,149 @@ describe("dashboard_cfs_certification_panel", () => {
 
     expect(viewModel.liveSend.enabled).toBe(false);
     expect(viewModel.liveSend.reason).toBe("certification-uncertified");
+  });
+
+  it("post-command observation失敗のunknown実行状態は待機中ではなく結果不明として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "uncertified",
+        },
+      },
+      execution: {
+        status: "unknown",
+        reason: "post-command-observation-failed",
+        startedAt: "2026-08-31T07:00:00.000Z",
+        completedAt: "2026-08-31T07:00:05.000Z",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.execution.displayStatus).toBe("結果不明 / 物理確認が必要");
+    expect(viewModel.evidence.timeline).toContainEqual(expect.objectContaining({
+      key: "execution",
+      label: "結果不明 / 物理確認が必要",
+      status: "unknown",
+      observedAt: "2026-08-31T07:00:05.000Z",
+    }));
+    expect(container.textContent).toContain("結果不明 / 物理確認が必要");
+  });
+
+  it("post-observed実行状態は成功ではなく物理確認待ちとしてLIVE再送をhard disableする", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+      execution: {
+        status: "post-observed",
+        reason: "post-command-telemetry-observed",
+        startedAt: "2026-08-31T07:00:00.000Z",
+        completedAt: "2026-08-31T07:00:05.000Z",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.execution.displayStatus).toBe("観測済み / 物理確認待ち");
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("execution-unresolved:post-observed");
+    expect(viewModel.evidence.timeline).toContainEqual(expect.objectContaining({
+      key: "execution",
+      label: "観測済み / 物理確認待ち",
+      status: "post-observed",
+      observedAt: "2026-08-31T07:00:05.000Z",
+    }));
+    expect(container.textContent).toContain("観測済み / 物理確認待ち");
+  });
+
+  it("unknown実行状態が残る間はpreflight/ARMがOKでもLIVE再送をhard disableする", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+      execution: {
+        status: "unknown",
+        mutexOwner: null,
+        completedAt: "2026-08-31T07:00:05.000Z",
+      },
+    });
+
+    expect(viewModel.arm.valid).toBe(true);
+    expect(viewModel.dryRun.status).toBe("ok");
+    expect(viewModel.preflight.every((item) => item.state !== "fail")).toBe(true);
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("execution-unresolved:unknown");
   });
 });

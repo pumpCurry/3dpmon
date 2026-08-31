@@ -48,6 +48,64 @@ const monitorData = {
   ledgerRepairRequired: {},
   filamentEventContext: {},
   materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  materialAccountingMigrationJournal: {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: null,
+    byMigrationId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  },
+  materialAccountingMigrationShadowStore: {
+    schemaVersion: 1,
+    authority: "migration-shadow-commit-store",
+    materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+    spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    committedTransactionsById: {},
+    committedOperationsById: {},
+    lifecycleBySubject: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      ledgerWrites: false,
+      legacyCutoverSealed: false,
+      materialSourceRepositoryWrites: "shadow-only",
+      spoolMountRepositoryWrites: "shadow-only",
+    },
+  },
+  materialAccountingPrintBindingStore: {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    invariants: {
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      materialSourceLedgerWrites: "shadow-only",
+    },
+  },
+  physicalCommandRecoveryLatch: {
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  },
   hostSpoolMap: {},
   hostCameraToggle: {},
   spoolSerialCounter: 0,
@@ -76,6 +134,64 @@ function resetMonitorData() {
   monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
   monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
+  monitorData.materialAccountingMigrationJournal = {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: null,
+    byMigrationId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  };
+  monitorData.materialAccountingMigrationShadowStore = {
+    schemaVersion: 1,
+    authority: "migration-shadow-commit-store",
+    materialSourceRegistrySnapshot: { sources: [], conflicts: [] },
+    spoolMountRepositorySnapshot: { mounts: [], conflicts: [] },
+    committedTransactionsById: {},
+    committedOperationsById: {},
+    lifecycleBySubject: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      ledgerWrites: false,
+      legacyCutoverSealed: false,
+      materialSourceRepositoryWrites: "shadow-only",
+      spoolMountRepositoryWrites: "shadow-only",
+    },
+  };
+  monitorData.materialAccountingPrintBindingStore = {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    invariants: {
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      materialSourceLedgerWrites: "shadow-only",
+    },
+  };
+  monitorData.physicalCommandRecoveryLatch = {
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  };
   monitorData.hostCameraToggle = {};
   monitorData.spoolSerialCounter = 0;
 }
@@ -108,6 +224,48 @@ const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await impor
 const {
   deriveMaterialSourceObservationFreshness,
 } = await import('../../3dp_lib/printer_core/dashboard_material_source_observation.js');
+const {
+  createMaterialAccountingMigrationDryRunPlan,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_migration_planner.js');
+const {
+  recordMaterialAccountingMigrationDryRunPlan,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_migration_journal.js');
+const {
+  PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS,
+  createPhysicalCommandRecoveryLatchRecord,
+} = await import('../../3dp_lib/printer_core/dashboard_physical_command_recovery_latch.js');
+
+/**
+ * storage round-tripで使用するREADYなUniversal MaterialSource移行dry-run planを生成する。
+ *
+ * 【詳細説明】
+ * - legacy single-spool hostをUniversal MaterialSourceへ移行できる最小構成を作る。
+ * - journalが保存・復元されても、hostSpoolMapやfilamentSpoolsへ追加投影されないことを検証する。
+ *
+ * @function createStorageReadyMaterialMigrationPlan
+ * @param {string=} host - 移行対象のlegacy host。
+ * @returns {Object} dry-run migration plan。
+ */
+function createStorageReadyMaterialMigrationPlan(host = "K1Max-4A1B") {
+  return createMaterialAccountingMigrationDryRunPlan({
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: host,
+          printerType: "k1",
+          materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
+          printerCoreV3Identity: { deviceIdSeed: `serial:${host.toLowerCase()}` },
+        },
+      ],
+    },
+    machines: { [host]: { printerType: "k1" } },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+    ],
+    hostSpoolMap: { [host]: "spool-031" },
+    materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  }, { createdAt: "2026-08-31T03:50:00.000Z" });
+}
 
 beforeEach(() => {
   globalThis.localStorage.clear();
@@ -357,6 +515,452 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
         },
       },
     });
+  });
+
+  it('Gate18.9B: materialAccountingMigrationJournal はdry-run evidenceとして往復し台帳へ投影しない', () => {
+    monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 336000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
+    const plan = createStorageReadyMaterialMigrationPlan();
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:51:00.000Z",
+    });
+    monitorData.materialAccountingMigrationJournal = recorded.journal;
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingMigrationJournal).toMatchObject({
+      authority: "migration-dry-run-journal",
+      latestMigrationId: plan.migrationId,
+      invariants: {
+        activateUniversalWrites: false,
+        materialSourceRepositoryWrites: false,
+        spoolMountRepositoryWrites: false,
+      },
+    });
+    expect(monitorData.materialAccountingMigrationJournal.byMigrationId[plan.migrationId].plan).toMatchObject({
+      status: "dry-run",
+      invariants: { activateUniversalWrites: false },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
+    expect(monitorData.filamentSpools).toHaveLength(1);
+    expect(monitorData.filamentSpools[0]).toMatchObject({
+      id: "spool-031",
+      remainingLengthMm: 336000,
+      updatedAt: 100,
+    });
+    expect(monitorData.materialSourceObservations).toMatchObject({
+      schemaVersion: 1,
+      authority: "observation-only",
+      byDeviceId: {},
+    });
+  });
+
+  it('Gate18.9B: importAllData はmaterialAccountingMigrationJournalを正規化してdry-run evidenceとして保持する', async () => {
+    const plan = createStorageReadyMaterialMigrationPlan();
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:51:00.000Z",
+    });
+
+    await importAllData({
+      materialAccountingMigrationJournal: recorded.journal,
+    });
+
+    expect(monitorData.materialAccountingMigrationJournal.latestMigrationId).toBe(plan.migrationId);
+    expect(monitorData.materialAccountingMigrationJournal.events).toEqual([
+      expect.objectContaining({
+        type: "migration-dry-run-recorded",
+        migrationId: plan.migrationId,
+      }),
+    ]);
+    expect(monitorData.materialAccountingMigrationJournal.invariants).toMatchObject({
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    });
+    expect(monitorData.hostSpoolMap).toEqual({});
+  });
+
+  it('Gate18.9D-2: materialAccountingMigrationShadowStore はshadow evidenceとして往復しlegacy装着へ投影しない', () => {
+    monitorData.filamentSpools = [{ id: "legacy-spool-031", remainingLengthMm: 336000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "legacy-spool-031" };
+    monitorData.materialAccountingMigrationShadowStore = {
+      schemaVersion: 1,
+      authority: "migration-shadow-commit-store",
+      materialSourceRegistrySnapshot: {
+        sources: [
+          {
+            materialSourceId: "material-source:direct-0",
+            deviceId: "serial:k1max-4a1b",
+            unitId: "filament-unit:direct",
+            kind: "direct-feed",
+            locator: { kind: "direct-feed", index: 0, unitIndex: null, boxId: null, slotIndex: null, protocolSlotId: null },
+            identityStrength: "stable",
+          },
+        ],
+        conflicts: [],
+      },
+      spoolMountRepositorySnapshot: {
+        mounts: [
+          {
+            mountId: "spool-mount:031",
+            mountOperationId: "shadow-mount:031",
+            materialSourceId: "material-source:direct-0",
+            spoolId: "spool-031",
+            status: "open",
+            verification: "migrated",
+            sourceIdentityStrengthAtOpen: "stable",
+            expectedRfid: null,
+            openedAt: "2026-08-31T03:02:00.000Z",
+            openedBy: "operator",
+            closedAt: null,
+            closedBy: null,
+            closeOperationId: null,
+            closeReason: null,
+          },
+        ],
+        conflicts: [],
+      },
+      committedTransactionsById: {
+        "shadow-tx:031": {
+          transactionId: "shadow-tx:031",
+          shadowOperationId: "shadow-op:031",
+          transactionDigest: "fnv1a128:031",
+          committedAt: "2026-08-31T03:02:01.000Z",
+        },
+      },
+      committedOperationsById: {
+        "shadow-op:031": {
+          shadowOperationId: "shadow-op:031",
+          transactionId: "shadow-tx:031",
+          transactionDigest: "fnv1a128:031",
+          committedAt: "2026-08-31T03:02:01.000Z",
+        },
+      },
+      lifecycleBySubject: {
+        "migration-subject:k1max-4a1b": {
+          migrationSubjectId: "migration-subject:k1max-4a1b",
+          migrationId: "migration:031",
+          transactionId: "shadow-tx:031",
+          migrationStatus: "shadow",
+          committedAt: "2026-08-31T03:02:01.000Z",
+        },
+      },
+      events: [
+        {
+          eventId: "shadow-event:031",
+          type: "material-accounting-shadow-committed",
+          transactionId: "shadow-tx:031",
+          shadowOperationId: "shadow-op:031",
+          migrationSubjectId: "migration-subject:k1max-4a1b",
+          migrationId: "migration:031",
+          transactionDigest: "fnv1a128:031",
+          committedAt: "2026-08-31T03:02:01.000Z",
+          migrationStatus: "shadow",
+        },
+      ],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        ledgerWrites: false,
+        legacyCutoverSealed: false,
+        materialSourceRepositoryWrites: "shadow-only",
+        spoolMountRepositoryWrites: "shadow-only",
+      },
+    };
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingMigrationShadowStore).toMatchObject({
+      authority: "migration-shadow-commit-store",
+      materialSourceRegistrySnapshot: { sources: [expect.any(Object)], conflicts: [] },
+      spoolMountRepositorySnapshot: { mounts: [expect.any(Object)], conflicts: [] },
+      lifecycleBySubject: {
+        "migration-subject:k1max-4a1b": {
+          migrationStatus: "shadow",
+        },
+      },
+      invariants: {
+        ledgerWrites: false,
+        legacyCutoverSealed: false,
+      },
+    });
+    expect(monitorData.materialAccountingMigrationShadowStore.events).toHaveLength(1);
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "legacy-spool-031" });
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate18.9E: materialAccountingPrintBindingStore はsource-aware shadow usageとして往復しlegacy usageへ投影しない', () => {
+    monitorData.filamentSpools = [{ id: "legacy-single-spool", remainingLengthMm: 1000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K2Pro-69E7": "legacy-single-spool" };
+    monitorData.usageHistory = [{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }];
+    monitorData.materialAccountingPrintBindingStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: [
+        {
+          snapshotId: "snapshot:1a",
+          deviceId: "serial:k2pro-69e7",
+          printJobId: "job:4color",
+          printPlanId: "plan:4color",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          spoolId: "spool:1a",
+          capturedAt: "2026-08-31T05:00:00.000Z",
+        },
+      ],
+      usageEvidence: [
+        {
+          evidenceId: "usage:1a",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          snapshotId: "snapshot:1a",
+          printJobId: "job:4color",
+          deviceId: "serial:k2pro-69e7",
+          usedLengthMm: 3210,
+          attribution: "source-specific",
+        },
+      ],
+      jobMaterialSegments: [
+        {
+          segmentId: "segment:1a",
+          printJobId: "job:4color",
+          printPlanId: "plan:4color",
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+          usageState: "observed-used",
+        },
+      ],
+      ledgerEvents: [
+        {
+          ledgerEventId: "ledger:1a",
+          eventType: "material-consumption",
+          segmentId: "segment:1a",
+          printJobId: "job:4color",
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+          createdAt: "2026-08-31T05:30:00.000Z",
+        },
+      ],
+      unattributedUsage: [],
+      operationsById: {
+        "usage:4color": { operationId: "usage:4color", digest: "digest:4color" },
+      },
+      invariants: {
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        materialSourceLedgerWrites: "shadow-only",
+      },
+    };
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingPrintBindingStore).toMatchObject({
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: [{ snapshotId: "snapshot:1a", materialSourceId: "source:1a" }],
+      jobMaterialSegments: [{ segmentId: "segment:1a", usedLengthMm: 3210 }],
+      ledgerEvents: [{ ledgerEventId: "ledger:1a", usedLengthMm: 3210 }],
+      invariants: {
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        materialSourceLedgerWrites: "shadow-only",
+      },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "legacy-single-spool" });
+    expect(monitorData.usageHistory).toEqual([{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }]);
+  });
+
+  it('Gate19 prep: physicalCommandRecoveryLatch は再起動後も未解決証跡を保持し自動再送材料を保存しない', () => {
+    monitorData.physicalCommandRecoveryLatch = {
+      schemaVersion: 1,
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {
+        "command:k2-select-1a": createPhysicalCommandRecoveryLatchRecord({
+          commandId: "command:k2-select-1a",
+          commandKind: "cfs-slot-select",
+          deviceId: "serial:k2pro-69e7",
+          sessionId: "session:live-001",
+          connectionGeneration: 42,
+          status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
+          sentAt: "2026-08-31T09:20:00.000Z",
+          materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+          certificationId: "cert:k2-slot-control-f012",
+          preObservation: {
+            sequence: 128,
+            digest: "fnv1a128:before",
+            observedAt: "2026-08-31T09:19:59.000Z",
+          },
+        }),
+      },
+      events: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+        physicalCommandAuthority: "recovery-latch-only",
+      },
+    };
+
+    saveUnifiedStorage(true);
+    const savedJson = localStorage.getItem("3dpmon-global") || "";
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(savedJson).not.toContain("multi.machine.material_box.select");
+    expect(monitorData.physicalCommandRecoveryLatch).toMatchObject({
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {
+        "command:k2-select-1a": {
+          commandKind: "cfs-slot-select",
+          status: "unknown",
+          materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+        },
+      },
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+      },
+    });
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate19 prep: importAllData はphysicalCommandRecoveryLatchを正規化しlegacy ledgerへ投影しない', async () => {
+    await importAllData({
+      physicalCommandRecoveryLatch: {
+        schemaVersion: 999,
+        unresolvedByCommandId: {
+          "command:k2-load-1a": createPhysicalCommandRecoveryLatchRecord({
+            commandId: "command:k2-load-1a",
+            commandKind: "cfs-slot-load",
+            deviceId: "serial:k2pro-69e7",
+            sessionId: "session:live-002",
+            connectionGeneration: 43,
+            status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
+            sentAt: "2026-08-31T09:30:00.000Z",
+            materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+            preObservation: {
+              sequence: 180,
+              digest: "fnv1a128:before-load",
+            },
+          }),
+          "command:k2-load-1b": createPhysicalCommandRecoveryLatchRecord({
+            commandId: "command:k2-load-1b",
+            commandKind: "cfs-slot-load",
+            deviceId: "serial:k2pro-69e7",
+            sessionId: "session:live-003",
+            connectionGeneration: 44,
+            status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.POST_OBSERVED,
+            sentAt: "2026-08-31T09:35:00.000Z",
+            materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-b",
+            preObservation: {
+              sequence: 181,
+              digest: "fnv1a128:before-load-b",
+            },
+          }),
+          "command:broken": {
+            commandId: "command:broken",
+            commandKind: "",
+            status: "unknown",
+          },
+        },
+        invariants: {
+          autoReplay: true,
+          commandFramePersistence: true,
+        },
+      },
+    });
+
+    expect(Object.keys(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId)).toEqual([
+      "command:k2-load-1a",
+      "command:k2-load-1b",
+    ]);
+    expect(monitorData.physicalCommandRecoveryLatch.invariants).toMatchObject({
+      autoReplay: false,
+      commandFramePersistence: false,
+    });
+    expect(monitorData.physicalCommandRecoveryLatch.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        commandId: "command:broken",
+        reason: "invalid-recovery-record",
+      }),
+    ]);
+    expect(monitorData.hostSpoolMap).toEqual({});
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate19 prep: importAllData は同一commandIdのdigest衝突を全て隔離し未解決authorityへ残さない', async () => {
+    monitorData.physicalCommandRecoveryLatch = {
+      schemaVersion: 1,
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {
+        "command:k2-load-1a": createPhysicalCommandRecoveryLatchRecord({
+          commandId: "command:k2-load-1a",
+          commandKind: "cfs-slot-load",
+          deviceId: "serial:k2pro-69e7",
+          sessionId: "session:live-002",
+          connectionGeneration: 43,
+          status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
+          sentAt: "2026-08-31T09:30:00.000Z",
+          materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+          preObservation: {
+            sequence: 180,
+            digest: "fnv1a128:before-load",
+          },
+        }),
+      },
+      events: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+        physicalCommandAuthority: "recovery-latch-only",
+      },
+    };
+
+    await importAllData({
+      physicalCommandRecoveryLatch: {
+        schemaVersion: 1,
+        unresolvedByCommandId: {
+          "command:k2-load-1a": createPhysicalCommandRecoveryLatchRecord({
+            commandId: "command:k2-load-1a",
+            commandKind: "cfs-slot-load",
+            deviceId: "serial:k2pro-69e7",
+            sessionId: "session:live-003",
+            connectionGeneration: 44,
+            status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
+            sentAt: "2026-08-31T09:31:00.000Z",
+            materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+            preObservation: {
+              sequence: 181,
+              digest: "fnv1a128:before-load-conflict",
+            },
+          }),
+        },
+      },
+    });
+
+    expect(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
+    expect(monitorData.physicalCommandRecoveryLatch.conflictedCommandIds).toEqual(["command:k2-load-1a"]);
+    expect(monitorData.physicalCommandRecoveryLatch.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        commandId: "command:k2-load-1a",
+        reason: "command-id-digest-conflict",
+      }),
+      expect.objectContaining({
+        commandId: "command:k2-load-1a",
+        reason: "command-id-digest-conflict",
+      }),
+    ]);
+    expect(monitorData.usageHistory).toEqual([]);
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {

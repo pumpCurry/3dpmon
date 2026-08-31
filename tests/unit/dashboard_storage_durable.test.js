@@ -42,6 +42,20 @@ const mocks = vi.hoisted(() => ({
     ledgerRepairRequired: {},
     filamentEventContext: {},
     materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+    materialAccountingMigrationJournal: {
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: null,
+      byMigrationId: {},
+      events: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        activateUniversalWrites: false,
+        materialSourceRepositoryWrites: false,
+        spoolMountRepositoryWrites: false,
+        migrationJournalIsEvidenceOnly: true,
+      },
+    },
     hostSpoolMap: {},
     hostCameraToggle: {},
     spoolSerialCounter: 0
@@ -88,6 +102,20 @@ beforeEach(async () => {
     schemaVersion: 1,
     byDeviceId: { "serial:test": { deviceId: "serial:test", authority: "observation-only" } },
   };
+  mocks.monitorData.materialAccountingMigrationJournal = {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: "migration:test",
+    byMigrationId: { "migration:test": { migrationId: "migration:test", sourceChecksum: "checksum:test" } },
+    events: [{ eventId: "event:test", type: "migration-dry-run-recorded", migrationId: "migration:test" }],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  };
   mocks.queueSharedWrite.mockClear();
   mocks.queueMachineWrite.mockClear();
   mocks.flushIdb.mockClear();
@@ -106,6 +134,7 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("inferredRecoveryEvents", mocks.monitorData.inferredRecoveryEvents);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialSourceObservations", mocks.monitorData.materialSourceObservations);
+    expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingMigrationJournal", mocks.monitorData.materialAccountingMigrationJournal);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);
     expect(mocks.events[mocks.events.length - 1]).toBe("flush");
   });

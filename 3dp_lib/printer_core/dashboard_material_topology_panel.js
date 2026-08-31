@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1462 (PR #435)
+ * @version 1.390.1569 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 17:23:15
+ * @lastModified 2026-09-01 07:56:16
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -357,6 +357,7 @@ function isFailedCommandResult(result) {
  * 【詳細説明】
  * - Printer Core CommandResultでは、transportAcceptedでもexpected-state/correlationが未確認なら
  *   `completed:false` になる。UIではこれを成功色にせず、観測待ちとして扱う。
+ * - `post-observed` はtelemetry取得済みを意味するだけで物理成功ではないため、同じく未確認として扱う。
  *
  * @private
  * @param {*} result - command hookの戻り値
@@ -367,6 +368,9 @@ function isUnconfirmedCommandResult(result) {
     return false;
   }
   if (result.completed === false) {
+    return true;
+  }
+  if (String(result.status || "").trim().toLowerCase() === "post-observed") {
     return true;
   }
   if (result.postCommandObservation?.confirmed === false) {
@@ -428,7 +432,7 @@ function formatCommandFailureReason(result) {
  * CFS command実行状態を生成する。
  *
  * 【詳細説明】
- * - 再描画でDOMが作り直されても、非冪等commandのrunning/submitted/unknown状態を失わないため、
+ * - 再描画でDOMが作り直されても、非冪等commandのsubmitting/submitted/probing/unknown状態を失わないため、
  *   renderer handleのclosureに保持する。
  *
  * @private
@@ -437,6 +441,7 @@ function formatCommandFailureReason(result) {
 function createCommandExecutionState() {
   return {
     state: "idle",
+    commandId: null,
     sourceId: null,
     action: null,
     commandKind: null,
@@ -444,6 +449,7 @@ function createCommandExecutionState() {
     statusClass: "idle",
     baselineObservationKey: null,
     reconciliation: null,
+    reconciliationNotified: false,
     refreshers: new Set(),
   };
 }
@@ -497,23 +503,85 @@ function getViewModelObservationKey(viewModel) {
 }
 
 /**
- * ViewModel内で指定sourceIdがselectedとして観測されているか判定する。
+ * ViewModelの現在観測を復旧ラッチ解決に使う最小参照へ変換する。
  *
  * 【詳細説明】
- * - 外部スプールとCFS unit slotの両方を同じsource rowとして扱い、sourceId一致とselected=trueを確認する。
- * - ここはUI mutex解除の補助判定であり、command authorityのpost-command correlationを代替しない。
+ * - 復旧ラッチはraw topologyを保持しないため、rendererからは観測時刻に基づくdigest参照だけを渡す。
+ * - sequenceがViewModelに無い場合はnullのままにし、resolver側の観測必須条件はdigest/observedAtで満たす。
  *
  * @private
- * @function isSourceSelectedInViewModel
+ * @function createViewModelObservationReference
  * @param {object|null|undefined} viewModel - material topology view model
- * @param {string|null|undefined} expectedSourceId - 期待sourceId
- * @returns {boolean} 指定sourceがselectedとして観測された場合true
+ * @returns {object|null} 復旧ラッチ解決用の観測参照
  */
-function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
-  const sourceId = displayText(expectedSourceId, "");
-  if (!sourceId) {
-    return false;
+function createViewModelObservationReference(viewModel) {
+  const observedAt = getViewModelObservationKey(viewModel);
+  if (!observedAt) {
+    return null;
   }
+  const sequence = Number(viewModel?.observation?.sequence ?? viewModel?.source?.sequence);
+  return {
+    sequence: Number.isFinite(sequence) ? Math.trunc(sequence) : null,
+    digest: `material-topology-observation:${observedAt}`,
+    observedAt,
+  };
+}
+
+/**
+ * 観測により確認できたcommand reconciliationをrenderer外へ通知する。
+ *
+ * 【詳細説明】
+ * - UI mutex解除だけでは永続復旧ラッチが残り、次回send-timeで再度blockされるため、
+ *   source selectionのように観測で確認できるケースだけ上位へ通知する。
+ * - 通知失敗は表示更新を壊さずconsole警告に留め、物理commandの再送は行わない。
+ *
+ * @private
+ * @function notifyCommandReconciled
+ * @param {object} executionState - command execution state
+ * @param {object|null|undefined} viewModel - 最新view model
+ * @param {object} controlPolicy - 操作方針
+ * @param {string} resolution - observed-confirmed等の解決種別
+ * @returns {void}
+ */
+function notifyCommandReconciled(executionState, viewModel, controlPolicy, resolution) {
+  if (executionState.reconciliationNotified || typeof controlPolicy?.onCommandReconciled !== "function") {
+    return;
+  }
+  if (!executionState.commandId) {
+    return;
+  }
+  const postObservation = createViewModelObservationReference(viewModel);
+  if (!postObservation) {
+    return;
+  }
+  executionState.reconciliationNotified = true;
+  try {
+    controlPolicy.onCommandReconciled({
+      commandId: executionState.commandId,
+      commandKind: executionState.commandKind,
+      sourceId: executionState.sourceId,
+      action: executionState.action,
+      resolution,
+      postObservation,
+    });
+  } catch (error) {
+    console.warn("[material-topology] CFS操作の観測解決通知に失敗:", error);
+  }
+}
+
+/**
+ * ViewModel内のmaterial source行を平坦化する。
+ *
+ * 【詳細説明】
+ * - 外部スプールとCFS unit slotの両方を同じsource rowとして扱い、観測確認の共通入力にする。
+ * - 表示専用の未観測slotも含むため、呼び出し側でsourceIdや状態を必ず再確認する。
+ *
+ * @private
+ * @function collectViewModelSourceRows
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @returns {Array<object>} source row一覧
+ */
+function collectViewModelSourceRows(viewModel) {
   const rows = [];
   if (Array.isArray(viewModel?.external)) {
     rows.push(...viewModel.external);
@@ -523,14 +591,105 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
       rows.push(...unit.slots);
     }
   }
-  return rows.some((row) => row?.sourceId === sourceId && row?.selected === true);
+  return rows;
+}
+
+/**
+ * select自動解決で選択状態の完全性確認が必要な実sourceか判定する。
+ *
+ * 【詳細説明】
+ * - sourceIdを持たない固定placeholderは物理sourceとして扱わない。
+ * - 明示empty sourceは選択対象外として扱い、選択状態が未観測でも自動解決の妨げにしない。
+ * - loaded/unknownの実sourceは、他slotが選ばれていないことまで証明する必要があるため
+ *   `selectionValid === true` を必須にする。
+ *
+ * @private
+ * @function isSelectionCompletenessRelevantSource
+ * @param {object|null|undefined} row - material topology view model source row
+ * @returns {boolean} 選択状態の完全性確認対象ならtrue
+ */
+function isSelectionCompletenessRelevantSource(row) {
+  if (!row?.sourceId) {
+    return false;
+  }
+  return row?.presence !== "empty";
+}
+
+/**
+ * CFS select commandを後続観測だけで解決してよいか評価する。
+ *
+ * 【詳細説明】
+ * - 自動解決は人間確認を介さず永続復旧ラッチを閉じるため、freshな現在観測だけを根拠にする。
+ * - selected=trueのsourceが複数ある、selectionValid=falseが含まれる、他の実sourceのselection状態が未観測、
+ *   またはtarget sourceと一致しない場合は物理状態が曖昧なためprobingを維持する。
+ * - この判定はselect専用であり、load/unload/feed/retractの物理成功確認には使わない。
+ *
+ * @private
+ * @function evaluateSelectedSourceObservation
+ * @param {object|null|undefined} viewModel - material topology view model
+ * @param {string|null|undefined} expectedSourceId - 期待sourceId
+ * @returns {{confirmed:boolean, reason:string|null, message:string}} 観測評価結果
+ */
+function evaluateSelectedSourceObservation(viewModel, expectedSourceId) {
+  const sourceId = displayText(expectedSourceId, "");
+  if (!sourceId) {
+    return {
+      confirmed: false,
+      reason: "missing-source-id",
+      message: "対象スロットを特定できないため再操作を保留しています。",
+    };
+  }
+  if (viewModel?.summary?.topologyState !== "fresh") {
+    return {
+      confirmed: false,
+      reason: "stale-topology",
+      message: "CFS情報が現在値として確認できません。再操作を保留しています。",
+    };
+  }
+  const rows = collectViewModelSourceRows(viewModel).filter((row) => row?.sourceId);
+  if (rows.some((row) => row?.status?.selectionValid === false || row?.status?.selectionState === "invalid")) {
+    return {
+      confirmed: false,
+      reason: "invalid-selection-state",
+      message: "機器の選択状態が有効ではありません。再操作を保留しています。",
+    };
+  }
+  if (rows.some((row) => isSelectionCompletenessRelevantSource(row) && row?.status?.selectionValid !== true)) {
+    return {
+      confirmed: false,
+      reason: "selection-observation-incomplete",
+      message: "すべての装填候補スロットの選択状態を確認できません。再操作を保留しています。",
+    };
+  }
+  const selectedRows = rows.filter((row) => row?.selected === true && row?.status?.selectionValid === true);
+  if (selectedRows.length !== 1) {
+    return {
+      confirmed: false,
+      reason: "ambiguous-selected-source",
+      message: selectedRows.length > 1
+        ? "機器の選択状態が一意ではありません。再操作を保留しています。"
+        : "対象スロットの選択はまだ確認できません。",
+    };
+  }
+  if (selectedRows[0]?.sourceId !== sourceId) {
+    return {
+      confirmed: false,
+      reason: "target-source-not-selected",
+      message: "対象スロットの選択はまだ確認できません。",
+    };
+  }
+  return {
+    confirmed: true,
+    reason: null,
+    message: "最新観測で対象スロットの選択を確認しました。再操作できます。",
+  };
 }
 
 /**
  * 未確認command状態を新しい観測でreconcileする。
  *
  * 【詳細説明】
- * - `submitted` はtransport受理後の観測待ちだが、観測時刻だけでは非冪等な物理操作の結果を確定できない。
+ * - `submitted` / `post-observed` はtransport受理後の観測待ちだが、観測時刻だけでは非冪等な物理操作の結果を確定できない。
  * - selected-sourceをexpected-stateとして確認できる操作だけ、対象sourceのselected観測後にmutexを解除する。
  * - `unknown` はtimeout/transport-error等で実機状態が不明なため、自動解除せず人間の再確認を要求する。
  *
@@ -538,10 +697,11 @@ function isSourceSelectedInViewModel(viewModel, expectedSourceId) {
  * @function reconcileCommandExecutionState
  * @param {object} executionState - command execution state
  * @param {object|null|undefined} viewModel - 最新view model
+ * @param {object=} controlPolicy - 操作方針
  * @returns {void}
  */
-function reconcileCommandExecutionState(executionState, viewModel) {
-  if (executionState?.state !== "submitted") {
+function reconcileCommandExecutionState(executionState, viewModel, controlPolicy = {}) {
+  if (!["submitted", "post-observed", "probing"].includes(executionState?.state)) {
     return;
   }
   const currentObservationKey = getViewModelObservationKey(viewModel);
@@ -551,23 +711,28 @@ function reconcileCommandExecutionState(executionState, viewModel) {
   const reconciliation = executionState.reconciliation || {};
   if (reconciliation.kind === "selected-source") {
     if (reconciliation.wasSelectedAtSubmit === true) {
+      executionState.state = "unknown";
       executionState.baselineObservationKey = currentObservationKey;
       executionState.statusClass = "warning";
       executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 送信前から選択済みだったため再操作を保留しています。`;
       return;
     }
-    if (!isSourceSelectedInViewModel(viewModel, reconciliation.expectedSourceId)) {
+    const selectedObservation = evaluateSelectedSourceObservation(viewModel, reconciliation.expectedSourceId);
+    if (!selectedObservation.confirmed) {
+      executionState.state = "probing";
       executionState.baselineObservationKey = currentObservationKey;
       executionState.statusClass = "warning";
-      executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、対象スロットの選択はまだ確認できません。`;
+      executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、${selectedObservation.message}`;
       return;
     }
-    executionState.state = "idle";
-    executionState.statusClass = "warning";
-    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測で対象スロットの選択を確認したため再操作できます。`;
+    executionState.state = "confirmed";
+    executionState.statusClass = "success";
+    executionState.message = `${executionState.message || "CFS操作は送信済みです。"} ${selectedObservation.message}`;
+    notifyCommandReconciled(executionState, viewModel, controlPolicy, "observed-confirmed");
     executionState.reconciliation = null;
     return;
   }
+  executionState.state = "probing";
   executionState.baselineObservationKey = currentObservationKey;
   executionState.statusClass = "warning";
   executionState.message = `${executionState.message || "CFS操作は送信済みです。"} 最新観測を受信しましたが、物理状態の確認方法が未確定のため再操作を保留しています。`;
@@ -584,7 +749,7 @@ function reconcileCommandExecutionState(executionState, viewModel) {
  * @returns {boolean} 同一printerのCFS操作を止める場合true
  */
 function isCommandMutexActive(executionState) {
-  return ["running", "submitted", "unknown"].includes(executionState?.state);
+  return ["running", "submitting", "submitted", "post-observed", "settling", "probing", "unknown"].includes(executionState?.state);
 }
 
 /**
@@ -596,7 +761,7 @@ function isCommandMutexActive(executionState) {
  * @private
  * @param {object} row - ViewModel source row
  * @param {object} executionState - command execution state
- * @returns {{state: string, message: string}|null} 表示対象status
+ * @returns {{state: string, message: string, executionState: string}|null} 表示対象status
  */
 function getVisibleExecutionStatusForRow(row, executionState) {
   if (!executionState?.message || executionState.sourceId !== row?.sourceId) {
@@ -605,6 +770,7 @@ function getVisibleExecutionStatusForRow(row, executionState) {
   return {
     state: executionState.statusClass || "idle",
     message: executionState.message,
+    executionState: executionState.state || "idle",
   };
 }
 
@@ -612,7 +778,7 @@ function getVisibleExecutionStatusForRow(row, executionState) {
  * 現在描画中のCFS操作ボタンをすべて再評価する。
  *
  * 【詳細説明】
- * - running/submitted/unknownはprinter単位mutexなので、クリックしたslotだけでなく同じpanel内の
+ * - submitting/submitted/probing/unknownはprinter単位mutexなので、クリックしたslotだけでなく同じpanel内の
  *   全slotのbutton状態を即時に揃える。
  *
  * @private
@@ -634,14 +800,20 @@ function refreshAllCommandButtons(executionState, busy = false) {
  * @param {HTMLElement} statusElement - ステータス表示DOM
  * @param {string} state - running/success/error/timeout/warning/idle
  * @param {string} message - 表示文
+ * @param {string=} executionState - UI操作の段階状態
  * @returns {void}
  */
-function setCommandStatus(statusElement, state, message) {
+function setCommandStatus(statusElement, state, message, executionState = "") {
   if (!statusElement) {
     return;
   }
   statusElement.className = `mtv-command-status mtv-command-status-${state}`;
   statusElement.textContent = message || "";
+  if (message && executionState) {
+    statusElement.dataset.executionState = executionState;
+  } else {
+    delete statusElement.dataset.executionState;
+  }
   statusElement.hidden = !message;
 }
 
@@ -704,6 +876,9 @@ function createControlPolicy(viewModel, options) {
     validateCommandIntent: typeof optionControl.validateCommandIntent === "function"
       ? optionControl.validateCommandIntent
       : null,
+    onCommandReconciled: typeof optionControl.onCommandReconciled === "function"
+      ? optionControl.onCommandReconciled
+      : null,
     commandTimeoutMs: normalizeControlTimeoutMs(optionControl.commandTimeoutMs),
     observationKey: getViewModelObservationKey(viewModel),
     reason: canSendCommands
@@ -744,6 +919,12 @@ function getControlDisabledReason(row, isStale, controlPolicy, buttonConfig) {
   }
   if (row?.presence !== "loaded") {
     return "このスロットにはフィラメントが装填されていません";
+  }
+  if (row?.status?.selectionValid === false || row?.status?.selectionState === "invalid") {
+    return "機器の選択状態を確認できないため操作できません";
+  }
+  if (row?.status?.selectionValid !== true) {
+    return "機器の選択状態が未観測のため操作できません";
   }
   return null;
 }
@@ -794,7 +975,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
   statusElement.setAttribute("aria-live", "polite");
   const restoredStatus = getVisibleExecutionStatusForRow(row, executionState);
   if (restoredStatus) {
-    setCommandStatus(statusElement, restoredStatus.state, restoredStatus.message);
+    setCommandStatus(statusElement, restoredStatus.state, restoredStatus.message, restoredStatus.executionState);
   } else {
     statusElement.hidden = true;
   }
@@ -835,7 +1016,12 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
     buttonEntries.push({ button, buttonConfig });
     button.addEventListener("click", async () => {
       if (isCommandMutexActive(executionState)) {
-        setCommandStatus(statusElement, executionState.statusClass || "running", executionState.message || "CFS操作の結果確認中です。");
+        setCommandStatus(
+          statusElement,
+          executionState.statusClass || "running",
+          executionState.message || "CFS操作の結果確認中です。",
+          executionState.state || "submitting"
+        );
         return;
       }
       const currentReason = getControlDisabledReason(row, isStale, controlPolicy, buttonConfig);
@@ -853,55 +1039,66 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
       }
       if (freshReason) {
         button.title = freshReason;
-        setCommandStatus(statusElement, "warning", freshReason);
+        setCommandStatus(statusElement, "warning", freshReason, "rejected");
         return;
       }
       const actionLabel = formatControlActionLabel(buttonConfig.action);
-      executionState.state = "running";
+      executionState.state = "submitting";
+      executionState.commandId = null;
       executionState.sourceId = row?.sourceId || null;
       executionState.action = buttonConfig.action;
       executionState.commandKind = buttonConfig.commandKind;
       executionState.statusClass = "running";
       executionState.message = `${actionLabel}を送信中...`;
       executionState.baselineObservationKey = controlPolicy.observationKey || null;
+      executionState.reconciliationNotified = false;
       refreshAllCommandButtons(executionState, true);
       button.dataset.running = "true";
-      setCommandStatus(statusElement, "running", executionState.message);
+      setCommandStatus(statusElement, "running", executionState.message, executionState.state);
       try {
         const resultEnvelope = await waitForCommandWithTimeout(
           Promise.resolve(controlPolicy.onCommand(commandPayload)),
           controlPolicy.commandTimeoutMs
         );
         const result = normalizeCommandHookResult(resultEnvelope);
+        executionState.commandId = displayText(
+          result?.commandId || resultEnvelope?.request?.commandId || resultEnvelope?.recoveryLatch?.commandId,
+          ""
+        );
         if (isFailedCommandResult(result)) {
           const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`;
           const status = String(result?.status || result?.result || "").trim().toLowerCase();
           const shouldKeepLocked = ["timeout", "transport-error", "confirmation-error"].includes(status);
-          executionState.state = shouldKeepLocked ? "unknown" : "idle";
+          executionState.state = shouldKeepLocked ? "unknown" : "rejected";
           executionState.statusClass = "error";
           executionState.message = failureMessage;
           executionState.reconciliation = null;
           setCommandStatus(
             statusElement,
             "error",
-            failureMessage
+            failureMessage,
+            executionState.state
           );
         } else if (isUnconfirmedCommandResult(result)) {
-          executionState.state = "submitted";
+          const normalizedResultStatus = String(result?.status || "").trim().toLowerCase();
+          const isPostObserved = normalizedResultStatus === "post-observed";
+          executionState.state = isPostObserved ? "post-observed" : "submitted";
           executionState.statusClass = "warning";
-          executionState.message = `${actionLabel}を送信しました。観測確認は未完了です。状態更新を確認してください。`;
+          executionState.message = isPostObserved
+            ? `${actionLabel}を送信しました。CFS状態は観測済みですが、物理確認待ちです。`
+            : `${actionLabel}を送信しました。CFS状態反映待ちです。最新観測で確認します。`;
           executionState.reconciliation = createSubmittedCommandReconciliation(commandPayload, buttonConfig, row);
-          setCommandStatus(statusElement, "warning", executionState.message);
+          setCommandStatus(statusElement, "warning", executionState.message, executionState.state);
         } else {
-          executionState.state = "idle";
+          executionState.state = "confirmed";
           executionState.statusClass = "success";
-          executionState.message = `${actionLabel}を送信しました。観測状態の更新を待っています。`;
+          executionState.message = `${actionLabel}を送信しました。確認済みです。`;
           executionState.reconciliation = null;
-          setCommandStatus(statusElement, "success", executionState.message);
+          setCommandStatus(statusElement, "success", executionState.message, executionState.state);
         }
       } catch (error) {
         const isTimeout = error?.code === "cfs-command-timeout" || error?.message === "cfs-command-timeout";
-        executionState.state = "unknown";
+        executionState.state = isTimeout ? "unknown" : "rejected";
         executionState.statusClass = isTimeout ? "timeout" : "error";
         executionState.message = isTimeout
           ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。`
@@ -909,7 +1106,8 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
         setCommandStatus(
           statusElement,
           executionState.statusClass,
-          executionState.message
+          executionState.message,
+          executionState.state
         );
       } finally {
         button.dataset.running = "false";
@@ -947,6 +1145,9 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
   if (row?.selected === true) {
     slot.classList.add("mtv-selected");
   }
+  if (row?.status?.selectionState === "invalid") {
+    slot.classList.add("mtv-selection-invalid");
+  }
 
   const header = createElement(documentRef, "div", "mtv-slot-header");
   header.appendChild(createElement(documentRef, "span", "mtv-slot-label", displayText(row?.displaySlot)));
@@ -966,6 +1167,10 @@ function renderSourceSlot(documentRef, row, isStale = false, controlPolicy = {},
       "mtv-selected-badge",
       isStale ? "最終観測: 機器選択" : "機器選択中"
     ));
+  } else if (row?.status?.selectionState === "invalid") {
+    const badge = createElement(documentRef, "div", "mtv-selected-badge mtv-selected-badge-warning", "機器選択値 不明");
+    badge.title = `装置報告値: ${displayText(row?.status?.selectionRaw, "不明")}（0/1以外のため選択状態を判定できません）`;
+    slot.appendChild(badge);
   }
 
   const materialLine = createElement(documentRef, "div", "mtv-material-line");
@@ -1058,6 +1263,7 @@ function renderUnit(documentRef, unit, isStale = false, controlPolicy = {}, exec
  * @param {Array<string>=} options.control.allowedActions - renderer側で許可する操作action
  * @param {Function=} options.control.onCommand - 操作hook
  * @param {Function=} options.control.validateCommandIntent - click時の最新状態再確認hook
+ * @param {Function=} options.control.onCommandReconciled - 観測確認済みcommand解決hook
  * @returns {{update: function(object, object=): void, destroy: function(): void}} renderer handle
  * @example
  * const handle = renderMaterialTopologyPanel(container, viewModel, { hostname: "K2Pro" });
@@ -1087,14 +1293,14 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
    * @returns {void}
    */
   function draw(currentViewModel) {
-    reconcileCommandExecutionState(commandExecutionState, currentViewModel);
+    const controlPolicy = createControlPolicy(currentViewModel, activeOptions);
+    reconcileCommandExecutionState(commandExecutionState, currentViewModel, controlPolicy);
     container.replaceChildren();
     commandExecutionState.refreshers.clear();
     const root = createElement(documentRef, "div", "mtv-root");
     const header = createElement(documentRef, "div", "mtv-header");
     const topologyState = currentViewModel?.summary?.topologyState || "unobserved";
     const isStale = topologyState === "stale";
-    const controlPolicy = createControlPolicy(currentViewModel, activeOptions);
     root.classList.add(`mtv-root-${topologyState}`);
     header.appendChild(createElement(documentRef, "span", "mtv-title", "機器観測フィラメント"));
     header.appendChild(createElement(documentRef, "span", "mtv-topology-state", formatTopologyState(topologyState, currentViewModel?.observation)));
@@ -1120,6 +1326,7 @@ export function renderMaterialTopologyPanel(container, viewModel, options = {}) 
     const summaryText = [
       `装填 ${summary.loadedSourceCount ?? 0}`,
       `選択中 ${summary.selectedSourceCount ?? 0}`,
+      ...(summary.invalidSelectionCount > 0 ? [`選択値異常 ${summary.invalidSelectionCount}`] : []),
       `CFS ${summary.cfsUnitCount ?? 0}/${currentViewModel?.limits?.cfsUnitLimit ?? 0}台`,
     ].join(" / ");
     root.appendChild(createElement(documentRef, "div", "mtv-summary", summaryText));

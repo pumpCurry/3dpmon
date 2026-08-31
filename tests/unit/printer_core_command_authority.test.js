@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1449 (PR #435)
+ * @version 1.390.1560 (PR #439)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 12:21:00
+ * @lastModified 2026-08-31 20:19:55
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -59,6 +59,11 @@ function createBaseSendTimeSnapshot(overrides = {}) {
     active: true,
     stateSequence: 10,
     createdAt: "2026-08-25T19:30:32.000+09:00",
+    observedState: {
+      print: {
+        stateLabel: "idle",
+      },
+    },
     materialTopology: {
       cfsConnected: true,
       topologyState: "fresh",
@@ -69,6 +74,11 @@ function createBaseSendTimeSnapshot(overrides = {}) {
           boxId: 1,
           slotId: 2,
           presence: "loaded",
+          selected: true,
+          status: {
+            selectionState: "selected",
+            selectionValid: true,
+          },
         },
       ],
     },
@@ -635,6 +645,251 @@ describe("Printer Core v3 command authority contract", () => {
     expect(runningResult.status).toBe("rejected");
     expect(runningResult.error.errors).toContain("cfs-control-printer-busy");
     expect(runningSendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは明示idleが観測できなければ送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const unknownStateTransport = vi.fn();
+    const completedStateTransport = vi.fn();
+    const unknownStateResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {},
+      }),
+      sendTransport: unknownStateTransport,
+    });
+    const completedStateResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          print: {
+            stateLabel: "completed",
+          },
+        },
+      }),
+      sendTransport: completedStateTransport,
+    });
+
+    expect(unknownStateResult.status).toBe("rejected");
+    expect(unknownStateResult.error.errors).toContain("cfs-control-printer-idle-not-confirmed");
+    expect(unknownStateTransport).not.toHaveBeenCalled();
+    expect(completedStateResult.status).toBe("rejected");
+    expect(completedStateResult.error.errors).toContain("cfs-control-printer-idle-not-confirmed");
+    expect(completedStateTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはtargetが選択済みと確認できなければ送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        materialTopology: {
+          cfsConnected: true,
+          topologyState: "fresh",
+          sources: [{
+            sourceId: "cfs:1:slot:2",
+            kind: "cfs-slot",
+            boxId: 1,
+            slotId: 2,
+            presence: "loaded",
+            selected: false,
+            status: {
+              selectionState: "unselected",
+              selectionValid: true,
+            },
+          }],
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-target-source-not-selected");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは他の装填sourceの選択状態が不明なら送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        materialTopology: {
+          cfsConnected: true,
+          topologyState: "fresh",
+          sources: [
+            {
+              sourceId: "cfs:1:slot:2",
+              kind: "cfs-slot",
+              boxId: 1,
+              slotId: 2,
+              presence: "loaded",
+              selected: true,
+              status: {
+                selectionState: "selected",
+                selectionValid: true,
+              },
+            },
+            {
+              sourceId: "cfs:1:slot:1",
+              kind: "cfs-slot",
+              boxId: 1,
+              slotId: 1,
+              presence: "loaded",
+              status: {
+                selectionState: "unobserved",
+                selectionValid: null,
+              },
+            },
+          ],
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-selection-source-observation-incomplete:cfs:1:slot:1");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは複数選択sourceがある場合は送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        materialTopology: {
+          cfsConnected: true,
+          topologyState: "fresh",
+          sources: [
+            {
+              sourceId: "cfs:1:slot:2",
+              kind: "cfs-slot",
+              boxId: 1,
+              slotId: 2,
+              presence: "loaded",
+              selected: true,
+              status: {
+                selectionState: "selected",
+                selectionValid: true,
+              },
+            },
+            {
+              sourceId: "cfs:1:slot:1",
+              kind: "cfs-slot",
+              boxId: 1,
+              slotId: 1,
+              presence: "loaded",
+              selected: true,
+              status: {
+                selectionState: "selected",
+                selectionValid: true,
+              },
+            },
+          ],
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-selected-source-not-unique");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandは未解決recovery blockerがあれば送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        recoveryBlocker: {
+          blocked: true,
+          reason: "integrity-quarantine",
+          commandId: request.commandId,
+          quarantineReason: "command-id-storage-key-mismatch",
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-recovery-blocked:integrity-quarantine");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはempty sourceの未観測selectionを無視する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const result = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        materialTopology: {
+          cfsConnected: true,
+          topologyState: "fresh",
+          sources: [
+            {
+              sourceId: "cfs:1:slot:2",
+              kind: "cfs-slot",
+              boxId: 1,
+              slotId: 2,
+              presence: "loaded",
+              selected: true,
+              status: {
+                selectionState: "selected",
+                selectionValid: true,
+              },
+            },
+            {
+              sourceId: "cfs:1:slot:3",
+              kind: "cfs-slot",
+              boxId: 1,
+              slotId: 3,
+              presence: "empty",
+              status: {
+                selectionState: "unobserved",
+                selectionValid: null,
+              },
+            },
+          ],
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("acknowledged");
+    expect(sendTransport).toHaveBeenCalledTimes(1);
   });
 
   it("CFS physical commandは送信直前に対象sourceがloadedでなければ送信しない", async () => {
