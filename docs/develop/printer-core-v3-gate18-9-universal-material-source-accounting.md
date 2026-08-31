@@ -65,6 +65,7 @@ Required enums:
 - `SPOOL_MOUNT_STATUS`
 - `SPOOL_MOUNT_VERIFICATION`
 - `MATERIAL_ACCOUNTING_BACKEND`
+- `MATERIAL_ACCOUNTING_MIGRATION_STATUS`
 - `DEBIT_ELIGIBILITY_STATUS`
 
 Required factories:
@@ -251,6 +252,7 @@ Gate 18.9A tests:
 - provisional source after restart requires fresh revalidation before debit
 - public usage evidence shape factory does not mint debit authority
 - plain print-start snapshot does not mint debit authority
+- migration lifecycle status is fixed by enum and unknown status is invalid
 - sealed legacy-to-shadow cutover is invalid
 
 Gate 18.9B tests:

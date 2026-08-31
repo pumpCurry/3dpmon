@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1495 (PR #438)
+ * @version 1.390.1499 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 10:38:00
+ * @lastModified 2026-08-31 11:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -29,6 +29,7 @@ import {
   DEBIT_ELIGIBILITY_STATUS,
   FILAMENT_UNIT_KIND,
   MATERIAL_ACCOUNTING_BACKEND,
+  MATERIAL_ACCOUNTING_MIGRATION_STATUS,
   MATERIAL_IDENTITY_STRENGTH,
   MATERIAL_SOURCE_KIND,
   SPOOL_MOUNT_STATUS,
@@ -1101,6 +1102,37 @@ describe("Universal MaterialSource accounting contract", () => {
       authority: { mode: "contract-only", canActivateWrites: false },
     });
     expect(validateMaterialAccountingCutover(cutover)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("migration lifecycle statusをenumで固定し未知statusをinvalidにする", () => {
+    const planned = createMaterialAccountingCutoverRecord({
+      deviceId: "serial:k2pro-69e7",
+      cutoverAt: "2026-08-31T01:00:00.000Z",
+      cutoverPrintId: "print:legacy-last",
+      fromBackend: MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE,
+      toBackend: MATERIAL_ACCOUNTING_BACKEND.UNIVERSAL_SHADOW,
+    });
+    const blocked = createMaterialAccountingCutoverRecord({
+      deviceId: "serial:k2pro-69e7",
+      cutoverAt: "2026-08-31T01:00:00.000Z",
+      cutoverPrintId: "print:legacy-last",
+      fromBackend: MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE,
+      toBackend: MATERIAL_ACCOUNTING_BACKEND.BLOCKED_SOURCE_ATTRIBUTION,
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+    });
+    const invalid = {
+      ...planned,
+      migrationStatus: "future-version-unsupported",
+    };
+
+    expect(planned.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.PLANNED);
+    expect(blocked.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(validateMaterialAccountingCutover(planned)).toEqual({ ok: true, errors: [] });
+    expect(validateMaterialAccountingCutover(blocked)).toEqual({ ok: true, errors: [] });
+    expect(validateMaterialAccountingCutover(invalid)).toEqual({
+      ok: false,
+      errors: ["invalid-migrationStatus"],
+    });
   });
 
   it("legacyからuniversal-shadowへのsealed cutoverは許可しない", () => {

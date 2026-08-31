@@ -28,9 +28,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1495 (PR #438)
+ * @version 1.390.1499 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 10:38:00
+ * @lastModified 2026-08-31 11:45:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -160,6 +160,25 @@ export const MATERIAL_ACCOUNTING_BACKEND = Object.freeze({
   UNIVERSAL_SHADOW: "universal-shadow",
   UNIVERSAL_AUTHORITATIVE: "universal-authoritative",
   BLOCKED_SOURCE_ATTRIBUTION: "blocked-source-attribution",
+});
+
+/**
+ * Universal accounting migration lifecycle status。
+ *
+ * 【詳細説明】
+ * - migration plannerやrepositoryが独自のstatus語彙を増やさないよう、Gate18.9Aでlifecycleを固定する。
+ * - `SEALED`はlegacy-single-sourceからuniversal-authoritativeへのatomic cutover完了時だけ有効にする。
+ *
+ * @constant {Readonly<object>}
+ */
+export const MATERIAL_ACCOUNTING_MIGRATION_STATUS = Object.freeze({
+  PLANNED: "planned",
+  CANDIDATE: "candidate",
+  READY: "ready",
+  SHADOW: "shadow",
+  BLOCKED: "blocked",
+  FAILED: "failed",
+  SEALED: "sealed",
 });
 
 /**
@@ -723,7 +742,13 @@ export function createMaterialAccountingCutoverRecord(input = {}) {
     cutoverPrintId,
     fromBackend,
     toBackend,
-    migrationStatus: toTrimmedString(input.migrationStatus) || "planned",
+    migrationStatus: input.migrationStatus
+      ? requireEnumValue(
+        input.migrationStatus,
+        enumValues(MATERIAL_ACCOUNTING_MIGRATION_STATUS),
+        "migrationStatus"
+      )
+      : MATERIAL_ACCOUNTING_MIGRATION_STATUS.PLANNED,
     reason: toTrimmedString(input.reason) || null,
     authority: {
       mode: "contract-only",
@@ -1043,7 +1068,10 @@ export function validateMaterialAccountingCutover(record) {
   if (record.fromBackend === record.toBackend) {
     errors.push("backend-not-changing");
   }
-  if (record.migrationStatus === "sealed") {
+  if (!enumValues(MATERIAL_ACCOUNTING_MIGRATION_STATUS).has(record.migrationStatus)) {
+    errors.push("invalid-migrationStatus");
+  }
+  if (record.migrationStatus === MATERIAL_ACCOUNTING_MIGRATION_STATUS.SEALED) {
     if (record.fromBackend !== MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE) {
       errors.push("sealed-cutover-source-required");
     }
