@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1533 (PR #439)
+ * @version 1.390.1534 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:28:40
+ * @lastModified 2026-08-31 17:47:12
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -910,7 +910,7 @@ async function writeCertificationResultEvidence(result, outputDir) {
  *
  * 【詳細説明】
  * - `--output-dir` 未指定時は副作用なしでresultをそのまま返す。
- * - 保存失敗はCLIの成功/失敗判定を曖昧にしないため例外として呼び出し元へ返す。
+ * - 保存失敗時も物理command結果を失わないよう、result本体へevidence write failureを畳み込む。
  *
  * @private
  * @function finalizeCertificationResult
@@ -923,11 +923,31 @@ async function finalizeCertificationResult(result, options) {
   if (!outputDir) {
     return result;
   }
-  const evidence = await writeCertificationResultEvidence(result, outputDir);
-  return {
-    ...result,
-    evidence,
-  };
+  try {
+    const evidence = await writeCertificationResultEvidence(result, outputDir);
+    return {
+      ...result,
+      evidence,
+    };
+  } catch (error) {
+    return {
+      ...result,
+      ok: false,
+      evidenceWriteFailed: true,
+      evidence: {
+        written: false,
+        directory: path.resolve(outputDir),
+        files: [],
+        error: serializeCertificationError(error),
+      },
+      commandResult: {
+        ok: result?.ok === true,
+        sent: result?.sent === true,
+        status: result?.status || null,
+        reason: result?.reason || null,
+      },
+    };
+  }
 }
 
 /**
@@ -1014,10 +1034,11 @@ export async function runK2CfsSlotControlCertification(options) {
     } catch (error) {
       return finalizeCertificationResult({
         ok: false,
-        sent: false,
+        sent: true,
+        sendAttempted: true,
         dryRun: false,
-        status: "rejected",
-        reason: "command-submit-failed",
+        status: "unknown",
+        reason: "command-submit-outcome-unknown",
         blindRetryAllowed: false,
         startedAt,
         completedAt: new Date().toISOString(),

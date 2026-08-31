@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1531 (PR #439)
+ * @version 1.390.1534 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 17:15:38
+ * @lastModified 2026-08-31 17:47:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -409,6 +409,7 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  * - disabled tooltipが`dry-run-ok`のような正常理由にならないよう、ARM、dry-run、preflight、認証の順に
  *   実際にブロックしている理由だけを返す。
  * - preflightのwarnは原則blockingとし、実機semantics待ちのselected-sourceだけ診断情報として扱う。
+ * - unknown/submittedなどの未解決executionは、物理結果の人間確認まで再送信をhard disableする。
  *
  * @private
  * @function createLiveSendReadiness
@@ -416,9 +417,14 @@ function validateDryRunPlan(dryRunPlan, commandKind, targetSource) {
  * @param {{valid: boolean, reason: string}} armBinding - ARM判定結果
  * @param {{valid: boolean, reason: string}} dryRunValidation - dry-run判定結果
  * @param {string} certificationStatus - certification状態
+ * @param {object=} execution - 実行状態
  * @returns {{enabled: boolean, reason: string}} LIVE送信readiness
  */
-function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus) {
+function createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus, execution = {}) {
+  const executionStatus = toText(execution?.status, "idle");
+  if (["running", "submitting", "submitted", "sent", "probing", "unknown", "timeout"].includes(executionStatus)) {
+    return { enabled: false, reason: `execution-unresolved:${executionStatus}` };
+  }
   if (!armBinding.valid) {
     return { enabled: false, reason: armBinding.reason };
   }
@@ -594,7 +600,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     boundCommandKind: toText(options.arm?.boundCommandKind),
   };
   const armBinding = validateArmBinding(arm, printer, targetSource, commandKind, nowMs);
-  const liveSend = createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus);
+  const liveSend = createLiveSendReadiness(preflight, armBinding, dryRunValidation, certificationStatus, execution);
   return {
     schemaVersion: CFS_CERTIFICATION_PANEL_SCHEMA_VERSION,
     panel: CERTIFICATION_PANEL_NAME,

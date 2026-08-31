@@ -5,13 +5,13 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1533 (PR #439)
+ * @version 1.390.1534 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:28:40
+ * @lastModified 2026-08-31 17:47:12
  */
 
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -280,6 +280,62 @@ describe("capture_k2_cfs_slot_control", () => {
       },
     ]);
     expect(closeCalled).toBe(true);
+  });
+
+  it("CFS command frameのws.send callback errorは未送信断定にせずunknown証跡として残す", async () => {
+    class ErroringCommandSendWs {
+      constructor() {
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        this.sentFrames.push(JSON.parse(payload));
+        setTimeout(() => callback(new Error("socket write failed after enqueue")), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new ErroringCommandSendWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: true,
+      sendAttempted: true,
+      dryRun: false,
+      status: "unknown",
+      reason: "command-submit-outcome-unknown",
+      blindRetryAllowed: false,
+      response: null,
+      error: {
+        message: "socket write failed after enqueue",
+      },
+    });
+    expect(ws.sentFrames).toEqual([
+      { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+    ]);
+    expect(ws.closed).toBe(true);
   });
 
   it("boxsInfo evidenceはnested envelopeから取り出せる", () => {
@@ -1004,6 +1060,71 @@ describe("capture_k2_cfs_slot_control", () => {
       expect(saved.evidence.directory).toBe(result.evidence.directory);
     } finally {
       await rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("command送信後のoutput-dir保存失敗は物理command結果を保持したままevidence失敗として返す", async () => {
+    class SubmittedCommandWs {
+      constructor() {
+        this.sentFrames = [];
+      }
+
+      send(payload, callback) {
+        this.sentFrames.push(JSON.parse(payload));
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "3dpmon-cfs-cert-evidence-fail-"));
+    try {
+      const fileAsOutputDir = path.join(root, "not-a-directory");
+      await writeFile(fileAsOutputDir, "blocks mkdir", "utf8");
+      const ws = new SubmittedCommandWs();
+      const options = {
+        ...parseArgs([
+          "--send",
+          "--host",
+          "192.168.54.153",
+          "--confirm-live",
+          "--confirm-host",
+          "192.168.54.153",
+          "--confirm-command",
+          "cfs-load",
+          "--command",
+          "cfs-load",
+          "--source",
+          "cfs:1:slot:0",
+          "--output-dir",
+          fileAsOutputDir,
+        ]),
+        openWs: async () => ws,
+      };
+
+      const result = await runK2CfsSlotControlCertification(options);
+
+      expect(result).toMatchObject({
+        ok: false,
+        sent: true,
+        dryRun: false,
+        status: "submitted",
+        evidenceWriteFailed: true,
+        evidence: {
+          written: false,
+        },
+        commandResult: {
+          ok: true,
+          sent: true,
+          status: "submitted",
+          reason: "post-command-observation-not-requested",
+        },
+      });
+      expect(result.evidence.error.message).toMatch(/ENOTDIR|EEXIST|not a directory|file already exists/iu);
+      expect(ws.sentFrames).toEqual([
+        { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

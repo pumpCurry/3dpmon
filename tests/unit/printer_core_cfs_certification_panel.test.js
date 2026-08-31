@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1531 (PR #439)
+ * @version 1.390.1534 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 17:15:38
+ * @lastModified 2026-08-31 17:47:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -646,5 +646,51 @@ describe("dashboard_cfs_certification_panel", () => {
       observedAt: "2026-08-31T07:00:05.000Z",
     }));
     expect(container.textContent).toContain("結果不明 / 物理確認が必要");
+  });
+
+  it("unknown実行状態が残る間はpreflight/ARMがOKでもLIVE再送をhard disableする", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+      execution: {
+        status: "unknown",
+        mutexOwner: null,
+        completedAt: "2026-08-31T07:00:05.000Z",
+      },
+    });
+
+    expect(viewModel.arm.valid).toBe(true);
+    expect(viewModel.dryRun.status).toBe("ok");
+    expect(viewModel.preflight.every((item) => item.state !== "fail")).toBe(true);
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("execution-unresolved:unknown");
   });
 });
