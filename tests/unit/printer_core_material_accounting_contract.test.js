@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1493 (PR #438)
+ * @version 1.390.1495 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 10:03:00
+ * @lastModified 2026-08-31 10:38:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -273,6 +273,53 @@ describe("Universal MaterialSource accounting contract", () => {
     expect(firstOperation.mountId).toBe(firstRetry.mountId);
     expect(firstOperation.mountId).not.toBe(secondOperation.mountId);
     expect(firstOperation.mountOperationId).toBe("mount-op:001");
+  });
+
+  it("SpoolMount factoryはmountId指定時もmountOperationIdを必須にする", () => {
+    expect(() => createSpoolMountRecord({
+      mountId: "spool-mount:legacy-shape",
+      materialSourceId: "material-source:cfs-1a",
+      spoolId: "spool:silver",
+    })).toThrow("mountOperationId");
+  });
+
+  it("SpoolMount status typoをOPENへfallbackしない", () => {
+    expect(createSpoolMountRecord({
+      materialSourceId: "material-source:cfs-1a",
+      spoolId: "spool:silver",
+      mountOperationId: "mount-op:default-open",
+    }).status).toBe(SPOOL_MOUNT_STATUS.OPEN);
+    expect(() => createSpoolMountRecord({
+      materialSourceId: "material-source:cfs-1a",
+      spoolId: "spool:silver",
+      mountOperationId: "mount-op:status-typo",
+      status: "clsoed",
+    })).toThrow("invalid status");
+  });
+
+  it("SpoolMountのopenedAt/closedAtはvalid intervalとして検証する", () => {
+    const validBase = {
+      mountId: "spool-mount:raw",
+      mountOperationId: "mount-op:raw",
+      materialSourceId: "material-source:cfs-1a",
+      spoolId: "spool:silver",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      openedAt: "2026-08-31T01:00:00.000Z",
+      closedAt: "2026-08-31T02:00:00.000Z",
+    };
+
+    expect(validateSpoolMount({ ...validBase, openedAt: "broken-date" }).errors)
+      .toContain("invalid-mount-open-time");
+    expect(validateSpoolMount({ ...validBase, closedAt: "broken-date" }).errors)
+      .toContain("invalid-mount-close-time");
+    expect(validateSpoolMount({ ...validBase, closedAt: "2026-08-31T00:59:00.000Z" }).errors)
+      .toContain("invalid-mount-interval");
+    expect(validateSpoolMount({
+      ...validBase,
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      closedAt: "2026-08-31T02:00:00.000Z",
+    }).errors).toContain("mount-status-time-conflict");
   });
 
   it("provisional sourceへのmanual SpoolMountは許可し、fresh continuityなしのdebitはpendingにする", () => {
@@ -1076,9 +1123,39 @@ describe("Universal MaterialSource accounting contract", () => {
 
     expect(validateMaterialAccountingCutover(shadowCutover)).toEqual({
       ok: false,
-      errors: ["sealed-shadow-cutover-forbidden"],
+      errors: ["sealed-cutover-target-required"],
     });
     expect(validateMaterialAccountingCutover(authoritativeCutover)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("sealed cutoverはlegacyからuniversal-authoritativeへの移行だけをvalidにする", () => {
+    expect(() => createMaterialAccountingCutoverRecord({
+      deviceId: "serial:k2pro-69e7",
+      cutoverAt: "2026-08-31T01:00:00.000Z",
+      cutoverPrintId: "print:legacy-last",
+    })).toThrow("fromBackend");
+
+    const legacyToBlocked = createMaterialAccountingCutoverRecord({
+      deviceId: "serial:k2pro-69e7",
+      cutoverAt: "2026-08-31T01:00:00.000Z",
+      cutoverPrintId: "print:legacy-last",
+      fromBackend: MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE,
+      toBackend: MATERIAL_ACCOUNTING_BACKEND.BLOCKED_SOURCE_ATTRIBUTION,
+      migrationStatus: "sealed",
+    });
+    const shadowToBlocked = createMaterialAccountingCutoverRecord({
+      deviceId: "serial:k2pro-69e7",
+      cutoverAt: "2026-08-31T01:00:00.000Z",
+      cutoverPrintId: "print:legacy-last",
+      fromBackend: MATERIAL_ACCOUNTING_BACKEND.UNIVERSAL_SHADOW,
+      toBackend: MATERIAL_ACCOUNTING_BACKEND.BLOCKED_SOURCE_ATTRIBUTION,
+      migrationStatus: "sealed",
+    });
+
+    expect(validateMaterialAccountingCutover(legacyToBlocked).errors)
+      .toContain("sealed-cutover-target-required");
+    expect(validateMaterialAccountingCutover(shadowToBlocked).errors)
+      .toContain("sealed-cutover-source-required");
   });
 
   it("usage idempotency identityは使用量と観測時刻の差で変化しない", () => {

@@ -28,9 +28,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1494 (PR #438)
+ * @version 1.390.1495 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 10:20:00
+ * @lastModified 2026-08-31 10:38:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -340,6 +340,31 @@ function normalizeOptionalIsoTime(value) {
 }
 
 /**
+ * 空値を許すISO日時を厳密に正規化する。
+ *
+ * 【詳細説明】
+ * - persisted authority recordで壊れた日時をnull扱いすると、閉じたmountが開いているように見える。
+ * - factory入力では日時が与えられた時点でvalid ISOへ正規化できることを要求する。
+ *
+ * @private
+ * @function normalizeOptionalIsoTimeStrict
+ * @param {*} value - 日時候補。
+ * @param {string} name - エラー表示用の項目名。
+ * @returns {?string} ISO日時文字列、またはnull。
+ * @throws {TypeError} 空でない不正日時の場合。
+ */
+function normalizeOptionalIsoTimeStrict(value, name) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const normalized = normalizeOptionalIsoTime(value);
+  if (!normalized) {
+    throw new TypeError(`Material accounting contract requires a valid ${name}.`);
+  }
+  return normalized;
+}
+
+/**
  * 非負mm値を正規化する。
  *
  * @private
@@ -598,12 +623,24 @@ export function createMaterialSourceRecord(input = {}) {
 export function createSpoolMountRecord(input = {}) {
   const materialSourceId = requireNonEmptyString(input.materialSourceId, "materialSourceId");
   const spoolId = requireNonEmptyString(input.spoolId, "spoolId");
-  const openedAt = normalizeOptionalIsoTime(input.openedAt);
-  const status = normalizeEnumValue(input.status, enumValues(SPOOL_MOUNT_STATUS), SPOOL_MOUNT_STATUS.OPEN);
+  const openedAt = normalizeOptionalIsoTimeStrict(input.openedAt, "openedAt");
+  const rawStatus = toTrimmedString(input.status);
+  const status = rawStatus
+    ? requireEnumValue(rawStatus, enumValues(SPOOL_MOUNT_STATUS), "status")
+    : SPOOL_MOUNT_STATUS.OPEN;
   const mountOperationId = toTrimmedString(input.mountOperationId);
-  const explicitMountId = toTrimmedString(input.mountId);
-  if (!explicitMountId && !mountOperationId) {
-    throw new TypeError("Material accounting contract requires mountOperationId when mountId is not supplied.");
+  if (!mountOperationId) {
+    throw new TypeError("Material accounting contract requires mountOperationId.");
+  }
+  const closedAt = normalizeOptionalIsoTimeStrict(input.closedAt, "closedAt");
+  if (status === SPOOL_MOUNT_STATUS.OPEN && closedAt) {
+    throw new TypeError("Material accounting contract mount-status-time-conflict.");
+  }
+  if (status === SPOOL_MOUNT_STATUS.CLOSED && !closedAt) {
+    throw new TypeError("Material accounting contract requires closedAt for closed mount.");
+  }
+  if (openedAt && closedAt && Date.parse(closedAt) <= Date.parse(openedAt)) {
+    throw new TypeError("Material accounting contract invalid mount interval.");
   }
   const mountId = toTrimmedString(input.mountId) ||
     createPrinterCoreV3DeterministicId("spool-mount", [materialSourceId, spoolId, mountOperationId]);
@@ -626,7 +663,7 @@ export function createSpoolMountRecord(input = {}) {
     ),
     expectedRfid: toTrimmedString(input.expectedRfid) || null,
     openedAt,
-    closedAt: normalizeOptionalIsoTime(input.closedAt),
+    closedAt,
     openedBy: toTrimmedString(input.openedBy) || null,
     closedBy: toTrimmedString(input.closedBy) || null,
     authority: {
@@ -662,15 +699,15 @@ export function createMaterialAccountingCutoverRecord(input = {}) {
   const cutoverAt = normalizeOptionalIsoTime(input.cutoverAt) ||
     (() => { throw new TypeError("Material accounting contract requires a valid cutoverAt."); })();
   const cutoverPrintId = requireNonEmptyString(input.cutoverPrintId, "cutoverPrintId");
-  const fromBackend = normalizeEnumValue(
+  const fromBackend = requireEnumValue(
     input.fromBackend,
     enumValues(MATERIAL_ACCOUNTING_BACKEND),
-    MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE
+    "fromBackend"
   );
-  const toBackend = normalizeEnumValue(
+  const toBackend = requireEnumValue(
     input.toBackend,
     enumValues(MATERIAL_ACCOUNTING_BACKEND),
-    MATERIAL_ACCOUNTING_BACKEND.UNIVERSAL_SHADOW
+    "toBackend"
   );
   return deepFreezeJson({
     schemaVersion: MATERIAL_ACCOUNTING_CONTRACT_VERSION,
@@ -957,8 +994,24 @@ export function validateSpoolMount(record) {
   if (!enumValues(SPOOL_MOUNT_VERIFICATION).has(record.verification)) {
     errors.push("invalid-verification");
   }
-  if (record.status === SPOOL_MOUNT_STATUS.CLOSED && !record.closedAt) {
+  const hasOpenedAt = record.openedAt !== null && record.openedAt !== undefined && record.openedAt !== "";
+  const hasClosedAt = record.closedAt !== null && record.closedAt !== undefined && record.closedAt !== "";
+  const openedAt = normalizeOptionalIsoTime(record.openedAt);
+  const closedAt = normalizeOptionalIsoTime(record.closedAt);
+  if (hasOpenedAt && !openedAt) {
+    errors.push("invalid-mount-open-time");
+  }
+  if (hasClosedAt && !closedAt) {
+    errors.push("invalid-mount-close-time");
+  }
+  if (record.status === SPOOL_MOUNT_STATUS.CLOSED && !hasClosedAt) {
     errors.push("closedAt-required");
+  }
+  if (record.status === SPOOL_MOUNT_STATUS.OPEN && hasClosedAt) {
+    errors.push("mount-status-time-conflict");
+  }
+  if (openedAt && closedAt && Date.parse(closedAt) <= Date.parse(openedAt)) {
+    errors.push("invalid-mount-interval");
   }
   return { ok: errors.length === 0, errors };
 }
@@ -990,10 +1043,13 @@ export function validateMaterialAccountingCutover(record) {
   if (record.fromBackend === record.toBackend) {
     errors.push("backend-not-changing");
   }
-  if (record.fromBackend === MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE &&
-      record.toBackend === MATERIAL_ACCOUNTING_BACKEND.UNIVERSAL_SHADOW &&
-      record.migrationStatus === "sealed") {
-    errors.push("sealed-shadow-cutover-forbidden");
+  if (record.migrationStatus === "sealed") {
+    if (record.fromBackend !== MATERIAL_ACCOUNTING_BACKEND.LEGACY_SINGLE_SOURCE) {
+      errors.push("sealed-cutover-source-required");
+    }
+    if (record.toBackend !== MATERIAL_ACCOUNTING_BACKEND.UNIVERSAL_AUTHORITATIVE) {
+      errors.push("sealed-cutover-target-required");
+    }
   }
   return { ok: errors.length === 0, errors };
 }
@@ -1158,8 +1214,16 @@ function validateMountIntervalForSnapshot(mount, snapshot) {
   const capturedAt = normalizeOptionalIsoTime(snapshot?.capturedAt);
   const openedAt = normalizeOptionalIsoTime(mount.openedAt);
   const closedAt = normalizeOptionalIsoTime(mount.closedAt);
+  const hasOpenedAt = mount.openedAt !== null && mount.openedAt !== undefined && mount.openedAt !== "";
+  const hasClosedAt = mount.closedAt !== null && mount.closedAt !== undefined && mount.closedAt !== "";
   if (!capturedAt) {
     return [];
+  }
+  if (hasOpenedAt && !openedAt) {
+    return ["invalid-mount-open-time"];
+  }
+  if (hasClosedAt && !closedAt) {
+    return ["invalid-mount-close-time"];
   }
   if (!openedAt) {
     return ["mount-open-time-required"];

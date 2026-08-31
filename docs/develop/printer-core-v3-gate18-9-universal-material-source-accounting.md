@@ -141,6 +141,11 @@ confirmation:
 - complete topology source disappearance
 - explicit physical empty/unloaded discontinuity
 
+`SpoolMount` status `BLOCKED` is an accounting quarantine state owned by the
+repository/operator. Provider stale, RFID unavailable, unknown remaining, or a
+normal unloaded observation must not be converted into `BLOCKED`; those signals
+only suspend debit eligibility until continuity is revalidated.
+
 This is the key rule:
 
 ```text
@@ -169,6 +174,10 @@ Starting universal-shadow observation is not a cutover and must not seal the
 legacy interval. Sealing legacy accounting is valid only as part of an
 authority cutover to `universal-authoritative`.
 
+`createMaterialAccountingCutoverRecord(input)` requires explicit `fromBackend`
+and `toBackend`. A sealed cutover is valid only for
+`legacy-single-source -> universal-authoritative`.
+
 Future jobs after the cutover must not be included in legacy derivation.
 
 `hostSpoolMap` remains a compatibility projection while migration is incomplete.
@@ -187,6 +196,11 @@ Gate 18.9B connects usage attribution:
 
 Completion handling must use the print-start snapshot, not the current mount at
 completion time.
+
+When a repository sees the same stable usage idempotency identity again, it must
+treat an identical payload as duplicate/no-op. If the same idempotency identity
+arrives with a different usage payload, the repository must not overwrite the
+existing event; it must create conflict/correction evidence instead.
 
 ## Gate 18.9C Scope
 

@@ -136,6 +136,12 @@ The following events do not automatically close a SpoolMount:
 Some events block future automatic debit until revalidated. A mount may remain
 open while debit eligibility becomes pending.
 
+`SpoolMount` status `BLOCKED` is reserved for repository-owned accounting
+quarantine, such as detected corruption or an operator-forced hold on a mount
+record. It must not be used as a synonym for provider stale, RFID unavailable,
+unknown remaining, or a normal unloaded observation; those conditions affect
+debit eligibility without rewriting mount continuity.
+
 Hard blockers for automatic debit include:
 
 - no fresh topology at print start for a provisional source
@@ -220,6 +226,11 @@ Starting `universal-shadow` observation is not an accounting authority cutover.
 It must not seal the legacy interval. A sealed cutover is valid only when the
 target backend is `universal-authoritative`.
 
+Cutover records must explicitly state both `fromBackend` and `toBackend`. A
+sealed cutover is valid only for
+`legacy-single-source -> universal-authoritative`; all other sealed transitions
+are invalid.
+
 The cutover record carries:
 
 - `deviceId`
@@ -232,6 +243,11 @@ The cutover record carries:
 
 This prevents legacy derivation from later collecting universal jobs and
 double-debiting or misattributing them.
+
+Usage idempotency identifies the physical/job/source usage event, not the
+reported quantity or observation time. Replaying the same completion with a
+different `usedLengthMm` or `observedAt` must not append a second debit or
+overwrite the existing event; it must become conflict or correction evidence.
 
 ## Migration Rules
 
