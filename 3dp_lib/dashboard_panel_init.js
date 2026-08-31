@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1565 (PR #439)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-08-31 21:12:57
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  */
 
@@ -517,6 +517,9 @@ function createCfsCertificationRecoveryBlocker(scope = {}) {
  * @param {string=} request.expectedDigest - 表示時点で束縛したrecord digest
  * @param {string=} request.expectedCommandKind - 表示時点で束縛したcommand kind
  * @param {string=} request.expectedMaterialSourceId - 表示時点で束縛したmaterial source ID
+ * @param {string=} request.resolutionSource - 解決操作を発行したUI/観測導線
+ * @param {boolean=} request.operatorAcknowledged - operatorが物理確認した場合true
+ * @param {string=} request.panelDeviceId - 解決操作時に表示していたpanel側deviceId
  * @param {object=} request.postObservation - 観測解決の根拠となる後続観測参照
  * @returns {object} 解決結果
  */
@@ -535,6 +538,9 @@ function resolveCfsCertificationRecoveryBlocker(request) {
       expectedDigest: request?.expectedDigest || null,
       expectedCommandKind: request?.expectedCommandKind || null,
       expectedMaterialSourceId: request?.expectedMaterialSourceId || null,
+      resolutionSource: request?.resolutionSource || null,
+      operatorAcknowledged: request?.operatorAcknowledged === true,
+      panelDeviceId: request?.panelDeviceId || null,
       postObservation: request?.postObservation || null,
     }
   );
@@ -833,6 +839,7 @@ function createCfsControlRenderOptions(hostname) {
           ...request,
           resolution: request?.resolution || "observed-confirmed",
           expectedDeviceId: request?.expectedDeviceId || currentShadowRecord?.deviceId || null,
+          resolutionSource: request?.resolutionSource || "material-topology-panel",
         });
       },
     };

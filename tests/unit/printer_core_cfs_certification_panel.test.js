@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1565 (PR #439)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:12:57
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -768,6 +768,9 @@ describe("dashboard_cfs_certification_panel", () => {
       expectedDigest: "fnv1a128:displayed-record",
       expectedCommandKind: "cfs-load",
       expectedMaterialSourceId: "cfs:1:slot:2",
+      resolutionSource: "cfs-certification-panel",
+      operatorAcknowledged: true,
+      panelDeviceId: "device-k2",
       viewModel,
     });
   });

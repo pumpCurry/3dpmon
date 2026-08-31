@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1565 (PR #439)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-08-31 21:12:57
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -835,6 +835,9 @@ describe("dashboard_panel_init CFS control hook", () => {
         expectedDigest: "fnv1a128:record-a",
         expectedCommandKind: "cfs-load",
         expectedMaterialSourceId: "cfs:1:slot:2",
+        resolutionSource: "cfs-certification-panel",
+        operatorAcknowledged: true,
+        panelDeviceId: "device-k2",
       })
     );
     expect(mockState.monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1565 (PR #439)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 21:12:57
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -513,5 +513,31 @@ describe("dashboard_physical_command_recovery_latch", () => {
     expect(wrongDigest.store.unresolvedByCommandId).toHaveProperty("command:k2-select-1a");
     expect(matched.status).toBe("resolved");
     expect(matched.store.unresolvedByCommandId).toEqual({});
+  });
+
+  it("operator解除eventには解除導線とpanel deviceの監査provenanceを残す", () => {
+    const record = createPhysicalCommandRecoveryLatchRecord(createCommandInput());
+    const store = appendPhysicalCommandRecoveryLatchRecord(null, record).store;
+
+    const resolved = resolvePhysicalCommandRecoveryLatchRecord(store, {
+      commandId: "command:k2-select-1a",
+      resolution: "operator-cleared",
+      resolvedAt: "2026-08-31T09:25:00.000Z",
+      expectedDeviceId: "serial:k2pro-69e7",
+      expectedDigest: record.digest,
+      resolutionSource: "cfs-certification-panel",
+      operatorAcknowledged: true,
+      panelDeviceId: "serial:k2pro-69e7",
+    });
+
+    expect(resolved.status).toBe("resolved");
+    expect(resolved.store.events).toContainEqual(expect.objectContaining({
+      type: "physical-command-recovery-resolved",
+      commandId: "command:k2-select-1a",
+      resolution: "operator-cleared",
+      resolutionSource: "cfs-certification-panel",
+      operatorAcknowledged: true,
+      panelDeviceId: "serial:k2pro-69e7",
+    }));
   });
 });

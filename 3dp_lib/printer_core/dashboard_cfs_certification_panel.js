@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1565 (PR #439)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:12:57
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -1168,6 +1168,9 @@ export function renderCfsCertificationPanel(container, viewModel, options = {}) 
         expectedDigest: viewModel.recoveryBlocker.recordDigest,
         expectedCommandKind: viewModel.recoveryBlocker.commandKind,
         expectedMaterialSourceId: viewModel.recoveryBlocker.materialSourceId,
+        resolutionSource: "cfs-certification-panel",
+        operatorAcknowledged: true,
+        panelDeviceId: viewModel.printer?.deviceId || "",
         viewModel,
       });
     });

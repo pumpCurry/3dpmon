@@ -19,9 +19,9 @@
  * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1565 (PR #439)
+ * @version 1.390.1566 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 21:12:57
+ * @lastModified 2026-08-31 21:24:10
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5以降でload/unload/feed/retractの実機semantics確定後に観測自動解決条件を追加する
@@ -726,6 +726,9 @@ export function isPhysicalCommandRecoveryBlocked(storeInput, commandIdInput) {
  * @param {?string=} resolutionInput.expectedDigest - UI表示時に束縛したrecord digest。
  * @param {?string=} resolutionInput.expectedCommandKind - UI表示時に束縛したcommand kind。
  * @param {?string=} resolutionInput.expectedMaterialSourceId - UI表示時に束縛したmaterial source ID。
+ * @param {?string=} resolutionInput.resolutionSource - 解決操作を発行したUI/観測導線。
+ * @param {boolean=} resolutionInput.operatorAcknowledged - operatorが物理確認した場合true。
+ * @param {?string=} resolutionInput.panelDeviceId - 解決操作時に表示していたpanel側deviceId。
  * @param {?Object=} resolutionInput.postObservation - 解決根拠となる後続観測参照。
  * @returns {{ok:boolean, status:string, store:Object, record:?Object, reasons:Array<string>}} 解決結果。
  * @example
@@ -744,6 +747,9 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
   const expectedDigest = toTrimmedString(resolutionInput?.expectedDigest);
   const expectedCommandKind = toTrimmedString(resolutionInput?.expectedCommandKind);
   const expectedMaterialSourceId = toTrimmedString(resolutionInput?.expectedMaterialSourceId);
+  const resolutionSource = toTrimmedString(resolutionInput?.resolutionSource);
+  const panelDeviceId = toTrimmedString(resolutionInput?.panelDeviceId);
+  const operatorAcknowledged = resolutionInput?.operatorAcknowledged === true;
   const reasons = [];
   if (!commandId) reasons.push("missing-command-id");
   if (!resolution) reasons.push("missing-resolution");
@@ -814,6 +820,9 @@ export function resolvePhysicalCommandRecoveryLatchRecord(storeInput, resolution
     resolution,
     resolvedAt,
     postObservation,
+    resolutionSource: resolutionSource || null,
+    operatorAcknowledged,
+    panelDeviceId: panelDeviceId || null,
   };
 
   return deepFreezeJson({
