@@ -1,6 +1,6 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-08-28
+Last updated: 2026-08-31
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
@@ -8,6 +8,10 @@ Last updated: 2026-08-28
 
 K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界は
 `docs/develop/printer-core-v3-gate19-cfs-control-spec-investigation.md` を参照する。
+
+Gate 18.9 の Universal MaterialSource accounting 仕様は
+`docs/ADR/0036-printer-core-gate18-9-universal-material-source-accounting.md` と
+`docs/develop/printer-core-v3-gate18-9-universal-material-source-accounting.md` を参照する。
 
 ## Gate status matrix
 
@@ -18,6 +22,7 @@ K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界�
 | Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
+| Gate 18.9 Universal MaterialSource Accounting | design accepted | contract pending | pending | disabled |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -27,6 +32,10 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 
 ## 未実装と分かっているもの
 
+- Gate 18.9 Universal MaterialSource accounting は、K1/K2を別会計にせず
+  `Device -> FilamentUnit -> MaterialSource -> SpoolMount` へ統一する次の実装対象。
+  K1 direct spoolはsourceが1つだけのケース、K2/CFSやK1C/CFS-Cはsourceが複数のケースとして扱う。
+  `hostSpoolMap` は最終authorityではなくlegacy compatibility projectionへ降格する。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
@@ -37,7 +46,18 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 - command correlation は、低レベルcallerがproof風objectを渡しても発行されず、bound dispatcherがtrusted observation providerから受け取ったcommandId/sessionId付きprotocol response ID / transition ID proofを内部検証した場合だけattested evidenceを作る。protocol response IDを根拠にする場合はtransport response側のIDとも一致させる。
 - single-color / multicolor print authority は未完。PrintPlan contract と selected material guard はあるが、UIからの印刷開始authorityはまだ完全にはCoreへ移していない。
 - Filament Ledger authority は未完。CFS観測残量は ledger authority ではなく observation-only として扱う。
+- Gate 18.9Bまでは、multi-source deviceのtotal-only usageをsource数・色・material名で推測分割しない。
+  source-specific usageとprint-start mount snapshotが揃わない消費はpending/unattributedへ隔離する。
 - UI authority cutover は未完。既存UIの主要表示はまだlegacy raw stateと共存しており、NormalizedStateのみを見る状態には切り替えていない。
+
+## Gate 18.9 で固定する accounting 境界
+
+- `SpoolMount` は3DPmon上のoperator-managed装着状態であり、restart / reconnect / stale / detach / selected変更 / RFID未取得だけでは自動closeしない。
+- `Debit eligibility` は各jobのprint-start時点で別途検査する。SpoolMountがOPENでも、fresh topology、source continuity、RFID mismatch無し、source-specific usageなどが揃わなければ自動debitしない。
+- `loaded` / `empty` / `unobserved` / `selected` / `T1A` などのdevice observationは、SpoolMountやledgerへ直接逆流しない。
+- RFIDや機器reported remainingは表示・診断・operator correction候補であり、3DPmonのledger remainingを自動上書きしない。
+- N=1 deviceでは従来のフィラメントカード体験を維持できるが、N>1 deviceをlegacy `getCurrentSpool(host)` へfallbackしてdebitしてはいけない。
+- Universal accountingへcutoverするdeviceでは、旧legacy mount intervalをcutover直前の最終完了jobで封印し、以後のjobをlegacy derive対象に含めない。
 
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 

@@ -1,0 +1,241 @@
+# Printer Core v3 Gate 18.9 Universal Material Source Accounting
+
+Gate 18.9 introduces the source-aware accounting model that sits between the
+Gate 18.7 read-only material source observation store and later production
+ledger/UI authority.
+
+The authoritative decision is ADR-0036. This document is the implementation
+spec and review checklist.
+
+## Goal
+
+All FDM printers use the same accounting shape:
+
+```text
+Device -> FilamentUnit -> MaterialSource -> SpoolMount -> Ledger
+```
+
+K1 direct spool operation is `sources.length === 1`. K2/CFS and K1C/CFS-C are
+multi-source topologies. The accounting code must not special-case printer type
+as the reason a device has one or many sources.
+
+## Non-Goals
+
+Gate 18.9 does not certify unknown LAN commands for CFS standalone slot
+operation. It does not make read-only device observations into ledger authority.
+It does not auto-correct 3dpmon spool inventory from RFID or device remaining
+values.
+
+## Gate 18.9A Scope
+
+Gate 18.9A defines the universal topology and SpoolMount authority contracts.
+
+Initial review commits are intentionally narrow:
+
+1. Documentation only: ADR-0036, this spec, and open-work updates.
+2. Pure contract module and unit tests only.
+
+The first code commit must not change IndexedDB version, `hostSpoolMap`,
+`mountHistory`, `usageHistory`, `dashboard_spool.js`, aggregator debit paths, or
+UI behavior.
+
+## Gate 18.9A Contract Surface
+
+Create `3dp_lib/printer_core/dashboard_material_accounting_contract.js` with
+pure functions and frozen enums only.
+
+The contract module is allowed to import only pure helpers. It must not import:
+
+- `dashboard_data.js`
+- `dashboard_storage.js`
+- `dashboard_storage_idb.js`
+- `dashboard_spool.js`
+- DOM/UI modules
+
+Required enums:
+
+- `FILAMENT_UNIT_KIND`
+- `MATERIAL_SOURCE_KIND`
+- `MATERIAL_IDENTITY_STRENGTH`
+- `SPOOL_MOUNT_STATUS`
+- `SPOOL_MOUNT_VERIFICATION`
+- `MATERIAL_ACCOUNTING_BACKEND`
+- `DEBIT_ELIGIBILITY_STATUS`
+
+Required factories:
+
+- `createFilamentUnitRecord(input)`
+- `createMaterialSourceRecord(input)`
+- `createSpoolMountRecord(input)`
+- `createMaterialAccountingCutoverRecord(input)`
+- `createMaterialSourceAccountingView(input)`
+
+Required validation:
+
+- `validateFilamentUnit(record)`
+- `validateMaterialSource(record)`
+- `validateSpoolMount(record)`
+- `validateMaterialAccountingCutover(record)`
+
+Required identity helpers:
+
+- `createDirectFeedUnitIdentity(input)`
+- `createMaterialSourceIdentity(input)`
+- `createMaterialSourceLocator(input)`
+
+Required debit policy helper:
+
+- `evaluateMaterialDebitEligibility(input)`
+
+## Identity Rules
+
+`materialSourceId` is an accounting identity. `locator` is where the source was
+found. UI labels are labels only.
+
+The contract must represent:
+
+- K1/K1 Max/IR3 direct source
+- K2 external-only source
+- K2 external plus one to four CFS units
+- CFS-C provider sources
+- stable device/unit evidence
+- provisional endpoint/location evidence
+
+Provisional CFS sources may have manual SpoolMount records. They may debit only
+after print-start continuity is revalidated.
+
+## SpoolMount Continuity Rules
+
+SpoolMount is operator-managed state. It is not automatically closed by device
+observation.
+
+These observations keep the mount open:
+
+- restart
+- reconnect
+- provider stale
+- temporary detach
+- selected source change
+- tool assignment change
+- RFID unavailable
+- source unobserved
+- explicit empty/unloaded state
+
+However, the following block auto debit until revalidation or operator
+confirmation:
+
+- no fresh topology for provisional source
+- source ambiguity
+- source identity conflict
+- stable RFID mismatch
+- different stable CFS unit
+- complete topology source disappearance
+- explicit physical empty/unloaded discontinuity
+
+This is the key rule:
+
+```text
+SpoolMount continuity != Debit eligibility
+```
+
+## Remaining Provenance
+
+The UI and ledger must keep these streams separate:
+
+- device-reported remaining
+- 3dpmon confirmed ledger remaining
+- projected remaining
+- actual usage evidence
+
+Device remaining is display/diagnostic evidence. It cannot directly mutate
+managed spool remaining. If the operator accepts it, a later gate must append a
+correction ledger event with explicit provenance.
+
+## Legacy Cutover Rules
+
+Before a device becomes universal-authoritative, its legacy mount interval must
+be sealed with the last legacy completed print ID.
+
+Future jobs after the cutover must not be included in legacy derivation.
+
+`hostSpoolMap` remains a compatibility projection while migration is incomplete.
+It is not a debit authority for multi-source devices.
+
+## Gate 18.9B Scope
+
+Gate 18.9B connects usage attribution:
+
+- print-start material binding snapshot
+- `JobMaterialSegment`
+- source-aware usage evidence
+- append-only `FilamentLedgerEvent`
+- pending/unattributed isolation
+- idempotent debit evaluation
+
+Completion handling must use the print-start snapshot, not the current mount at
+completion time.
+
+## Gate 18.9C Scope
+
+Gate 18.9C adds the read model and UI cutover:
+
+- `MaterialSourceAccountingView`
+- legacy compatibility projection for `N=1`
+- multi-source cards for `N>1`
+- source-specific remaining and usage display
+
+The same domain model feeds both layouts.
+
+## Test Matrix
+
+Gate 18.9A tests:
+
+- direct K1 source creates one `printer-direct` unit and one source
+- K2 external-only creates one source
+- K2 plus four CFS units and external source can represent 17 sources
+- duplicate source IDs fail validation
+- source locator and source ID are distinct
+- open mount per source is limited to one by repository tests in later commits
+- open mount per spool is limited to one by repository tests in later commits
+- physical empty/unloaded evidence does not close a mount but blocks debit
+- RFID `null` does not block continuity
+- RFID mismatch blocks debit
+- provisional source after restart requires fresh revalidation before debit
+
+Gate 18.9B tests:
+
+- `1A=3210mm`, `1B=6543mm`, `1D=1234mm` debit separate mounts
+- `1C=0mm` is confirmed only with a complete source-specific result set
+- incomplete result set leaves `1C` as unknown
+- total-only multi-source usage becomes pending/unattributed
+- print-start snapshot keeps attribution stable after current mount changes
+- duplicate completion is idempotent
+
+Gate 18.9C tests:
+
+- N=1 keeps familiar K1 spool card behavior
+- N>1 renders source-aware cards
+- stale observation is last-known, not current
+- device remaining and ledger remaining are visually distinct
+
+## Review Boundaries
+
+First review request:
+
+```text
+Base: main f6b8f6ce
+Head: <contract commit>
+Scope:
+- ADR-0036
+- Gate 18.9 implementation spec
+- pure Universal MaterialSource accounting contracts
+- no storage, UI, ledger, or legacy debit behavior changes
+```
+
+Expected outcome:
+
+- current v2 behavior remains unchanged
+- no IndexedDB schema change
+- no hostSpoolMap write change
+- no debit path change
+- P0/P1 invariants are represented in contracts and tests
