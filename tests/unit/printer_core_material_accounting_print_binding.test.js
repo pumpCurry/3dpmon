@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1517 (PR #438)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 22:58:00
+ * @lastModified 2026-08-31 15:04:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -205,6 +205,32 @@ describe("MaterialSource print binding repository", () => {
     expect(completion.unattributedUsage).toEqual([]);
   });
 
+  it("public repositoryのprint-start snapshotはtrusted debit authorityを持たない", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:shadow-snapshot",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:shadow-snapshot",
+    });
+
+    expect(start.ok).toBe(true);
+    expect(start.snapshots).toHaveLength(4);
+    expect(start.snapshots.every((snapshot) => snapshot.trusted === false)).toBe(true);
+    expect(start.snapshots.every((snapshot) => snapshot.authority.canBindUsage === false)).toBe(true);
+    expect(start.snapshots.map((snapshot) => snapshot.authority.mode)).toEqual([
+      "shadow-print-start-material-snapshot",
+      "shadow-print-start-material-snapshot",
+      "shadow-print-start-material-snapshot",
+      "shadow-print-start-material-snapshot",
+    ]);
+  });
+
   it("callerのcomplete宣言だけでは未出現sourceをconfirmed-unusedにしない", () => {
     const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
     const printPlan = createPlan(deviceId, materialSources, spoolMounts);
@@ -224,6 +250,40 @@ describe("MaterialSource print binding repository", () => {
       completedAt: "2026-08-31T05:30:00.000Z",
       attributionOperationId: "usage:untrusted-complete",
       resultSetCompleteness: "complete",
+      materialUsages: [
+        { protocolToolAlias: "T1A", materialSourceId: materialSources[0].materialSourceId, usedLengthMm: 3210 },
+      ],
+    });
+
+    expect(completion.ok).toBe(true);
+    expect(completion.segments.map((segment) => [segment.protocolToolAlias, segment.usedLengthMm, segment.usageState])).toEqual([
+      ["T1A", 3210, "observed-used"],
+      ["T1B", null, "unknown"],
+      ["T1C", null, "unknown"],
+      ["T1D", null, "unknown"],
+    ]);
+  });
+
+  it("callerがtrusted complete flagを直接渡しても未出現sourceをconfirmed-unusedにしない", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:forged-trusted-complete",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:forged-trusted-complete",
+    });
+
+    const completion = repository.recordUsageAttribution({
+      printPlan,
+      printJobId: "job:forged-trusted-complete",
+      completedAt: "2026-08-31T05:30:00.000Z",
+      attributionOperationId: "usage:forged-trusted-complete",
+      resultSetCompleteness: "complete",
+      trustedResultSetCompleteness: true,
       materialUsages: [
         { protocolToolAlias: "T1A", materialSourceId: materialSources[0].materialSourceId, usedLengthMm: 3210 },
       ],
@@ -514,6 +574,42 @@ describe("MaterialSource print binding repository", () => {
     });
   });
 
+  it("completion時のPrintPlan deviceId差し替えではprint-start snapshotを別deviceへ帰属しない", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:device-swap",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:device-swap",
+    });
+    const swappedDevicePlan = {
+      ...printPlan,
+      deviceId: "serial:other-printer",
+    };
+
+    const completion = repository.recordUsageAttribution({
+      printPlan: swappedDevicePlan,
+      printJobId: "job:device-swap",
+      completedAt: "2026-08-31T05:30:00.000Z",
+      attributionOperationId: "usage:device-swap",
+      materialUsages: [
+        { toolId: 0, protocolToolAlias: "T1A", materialSourceId: materialSources[0].materialSourceId, usedLengthMm: 3210 },
+      ],
+    });
+
+    expect(completion).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["print-plan-device-mismatch"],
+    });
+    expect(repository.toJSON().jobMaterialSegments).toEqual([]);
+    expect(repository.toJSON().ledgerEvents).toEqual([]);
+  });
+
   it("usage entryのtool/alias/source識別子が矛盾する場合は帰属を止める", () => {
     const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
     const printPlan = createPlan(deviceId, materialSources, spoolMounts);
@@ -542,6 +638,37 @@ describe("MaterialSource print binding repository", () => {
       status: "blocked",
       reasons: ["usage-identifier-conflict"],
     });
+  });
+
+  it("空文字toolIdだけのusage entryをtool 0として誤帰属しない", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:blank-tool",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:blank-tool",
+    });
+
+    const completion = repository.recordUsageAttribution({
+      printPlan,
+      printJobId: "job:blank-tool",
+      completedAt: "2026-08-31T05:30:00.000Z",
+      attributionOperationId: "usage:blank-tool",
+      materialUsages: [
+        { toolId: "", usedLengthMm: 3210 },
+      ],
+    });
+
+    expect(completion).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["usage-entry-unmatched"],
+    });
+    expect(repository.toJSON().jobMaterialSegments).toEqual([]);
   });
 
   it("同じcompletion payloadのretryはidempotentでledger eventを重複させない", () => {
@@ -674,5 +801,104 @@ describe("MaterialSource print binding repository", () => {
     expect(restored.ledgerEvents).toHaveLength(1);
     expect(restored.usageEvidence).toHaveLength(1);
     expect(restored.retainedUnsupportedEntries).toHaveLength(4);
+  });
+
+  it("保存済みstore復元時にcross-record不整合をauthority配列へ戻さない", () => {
+    const restored = normalizeStoredMaterialAccountingPrintBindingStore({
+      printStartSnapshots: [
+        {
+          snapshotId: "snapshot:valid",
+          deviceId: "serial:k2pro-69e7",
+          printJobId: "job:valid",
+          printPlanId: "plan:valid",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          spoolId: "spool:1a",
+          capturedAt: "2026-08-31T05:00:00.000Z",
+        },
+      ],
+      usageEvidence: [
+        {
+          evidenceId: "evidence:valid",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          snapshotId: "snapshot:valid",
+          printJobId: "job:valid",
+          deviceId: "serial:k2pro-69e7",
+          usedLengthMm: 3210,
+          attribution: "source-specific",
+        },
+        {
+          evidenceId: "evidence:orphan",
+          materialSourceId: "source:1a",
+          mountId: "mount:1a",
+          snapshotId: "snapshot:missing",
+          printJobId: "job:valid",
+          deviceId: "serial:k2pro-69e7",
+          usedLengthMm: 3210,
+          attribution: "source-specific",
+        },
+      ],
+      jobMaterialSegments: [
+        {
+          segmentId: "segment:valid",
+          printJobId: "job:valid",
+          printPlanId: "plan:valid",
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+          usageState: "observed-used",
+          sourceSnapshotId: "snapshot:valid",
+          evidence: { usageEvidenceId: "evidence:valid" },
+        },
+        {
+          segmentId: "segment:orphan",
+          printJobId: "job:valid",
+          printPlanId: "plan:valid",
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+          usageState: "observed-used",
+          sourceSnapshotId: "snapshot:missing",
+        },
+      ],
+      ledgerEvents: [
+        {
+          ledgerEventId: "ledger:valid",
+          eventType: "material-consumption",
+          segmentId: "segment:valid",
+          printJobId: "job:valid",
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+          usageState: "observed-used",
+          createdAt: "2026-08-31T05:30:00.000Z",
+        },
+        {
+          ledgerEventId: "ledger:orphan",
+          eventType: "material-consumption",
+          segmentId: "segment:missing",
+          printJobId: "job:valid",
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "source:1a",
+          spoolId: "spool:1a",
+          usedLengthMm: 3210,
+          usageState: "observed-used",
+          createdAt: "2026-08-31T05:30:00.000Z",
+        },
+      ],
+    });
+
+    expect(restored.usageEvidence).toEqual([expect.objectContaining({ evidenceId: "evidence:valid" })]);
+    expect(restored.jobMaterialSegments).toEqual([expect.objectContaining({ segmentId: "segment:valid" })]);
+    expect(restored.ledgerEvents).toEqual([expect.objectContaining({ ledgerEventId: "ledger:valid" })]);
+    expect(restored.retainedUnsupportedEntries.map((entry) => [entry.recordType, entry.reason])).toEqual([
+      ["usageEvidence", "cross-record-mismatch"],
+      ["jobMaterialSegment", "cross-record-mismatch"],
+      ["ledgerEvent", "cross-record-mismatch"],
+    ]);
   });
 });

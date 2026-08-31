@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialTopologyViewModel}：material topology から表示用 view model を生成
  *
- * @version 1.390.1517 (PR #438)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-31 15:28:00
+ * @lastModified 2026-08-31 15:24:00
  * -----------------------------------------------------------
  * @todo
  * - command authority Gateで、表示slotと安全なCore command contractを接続する
@@ -269,26 +269,194 @@ function findAssignmentsForSource(assignments, sourceId) {
 }
 
 /**
+ * 任意値を空白除去済み文字列へ変換する。
+ *
+ * 【詳細説明】
+ * - accounting read model は保存済みstoreやmigration由来の値を含むため、表示境界でも空文字を除外する。
+ *
+ * @private
+ * @function toTrimmedText
+ * @param {*} value - 文字列候補
+ * @returns {string} 空白除去済み文字列。不正値は空文字。
+ */
+function toTrimmedText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * accounting mapへ重複なしでkeyを追加する。
+ *
+ * 【詳細説明】
+ * - 同じ観測sourceに複数の候補keyがあるため、最初に見つけたaccounting sourceを保持する。
+ *
+ * @private
+ * @function addAccountingLookupKey
+ * @param {Map<string, object>} map - key別accounting source map
+ * @param {*} key - 追加候補key
+ * @param {object} source - accounting source
+ * @returns {void}
+ */
+function addAccountingLookupKey(map, key, source) {
+  const normalizedKey = toTrimmedText(key);
+  if (normalizedKey && !map.has(normalizedKey)) {
+    map.set(normalizedKey, source);
+  }
+}
+
+/**
+ * locatorからsource照合用keyを生成する。
+ *
+ * 【詳細説明】
+ * - Universal MaterialSource IDはstable ID、observed sourceIdはprotocol locator由来IDになり得る。
+ * - そのため表示合流では、同じ物理slotを示すlocator keyをsourceIdとは別に生成する。
+ *
+ * @private
+ * @function createLocatorLookupKeys
+ * @param {object|null|undefined} locator - MaterialSource locator候補
+ * @returns {string[]} 照合用locator key一覧
+ */
+function createLocatorLookupKeys(locator) {
+  const source = locator && typeof locator === "object" ? locator : {};
+  const kind = toTrimmedText(source.kind);
+  const keys = [];
+  if (!kind) {
+    return keys;
+  }
+  const index = toFiniteNumber(source.index);
+  const unitIndex = toFiniteNumber(source.unitIndex);
+  const boxId = toFiniteNumber(source.boxId);
+  const slotIndex = toFiniteNumber(source.slotIndex);
+  const protocolSlotId = toTrimmedText(source.protocolSlotId);
+  if (Number.isInteger(index)) {
+    keys.push(`locator:${kind}:index:${index}`);
+  }
+  if (Number.isInteger(unitIndex) && Number.isInteger(slotIndex)) {
+    keys.push(`locator:${kind}:unit:${unitIndex}:slot:${slotIndex}`);
+  }
+  if (Number.isInteger(boxId) && Number.isInteger(slotIndex)) {
+    keys.push(`locator:${kind}:box:${boxId}:slot:${slotIndex}`);
+  }
+  if (protocolSlotId) {
+    keys.push(`locator:${kind}:protocol:${protocolSlotId.toLowerCase()}`);
+  }
+  return keys;
+}
+
+/**
+ * accounting sourceから照合keyを列挙する。
+ *
+ * 【詳細説明】
+ * - canonical materialSourceId、snapshot内MaterialSource、mount、alias、locatorをすべて候補にする。
+ * - UIは7桁色やlocator意味を解釈せず、ここでsource合流だけを担当する。
+ *
+ * @private
+ * @function collectAccountingLookupKeys
+ * @param {object|null|undefined} source - accounting source候補
+ * @returns {string[]} 照合用key一覧
+ */
+function collectAccountingLookupKeys(source) {
+  const observationMaterialSource = source?.observation?.materialSource &&
+    typeof source.observation.materialSource === "object"
+    ? source.observation.materialSource
+    : {};
+  const keys = [
+    toTrimmedText(source?.materialSourceId),
+    toTrimmedText(source?.mount?.materialSourceId),
+    toTrimmedText(observationMaterialSource.materialSourceId),
+  ];
+  for (const alias of [
+    ...(Array.isArray(source?.aliases) ? source.aliases : []),
+    ...(Array.isArray(source?.observation?.aliases) ? source.observation.aliases : []),
+    ...(Array.isArray(observationMaterialSource.aliases) ? observationMaterialSource.aliases : []),
+  ]) {
+    keys.push(toTrimmedText(alias));
+  }
+  keys.push(...createLocatorLookupKeys(source?.locator));
+  keys.push(...createLocatorLookupKeys(source?.observation?.locator));
+  keys.push(...createLocatorLookupKeys(observationMaterialSource.locator));
+  return keys.filter(Boolean);
+}
+
+/**
+ * 観測source rowからaccounting照合keyを列挙する。
+ *
+ * 【詳細説明】
+ * - normalized topologyのsourceId、将来追加されるmaterialSourceId/alias、物理slot locatorを順に候補にする。
+ * - CFS表示ではboxId/slotIdと表示slot名の両方をkey化し、`1C` と `cfs:1:slot:2` の橋渡しを行う。
+ *
+ * @private
+ * @function collectObservedSourceLookupKeys
+ * @param {object|null|undefined} source - normalized material source候補
+ * @param {object} options - 表示行オプション
+ * @returns {string[]} 照合用key一覧
+ */
+function collectObservedSourceLookupKeys(source, options) {
+  if (!source) {
+    return [];
+  }
+  const keys = [
+    toTrimmedText(source.sourceId),
+    toTrimmedText(source.materialSourceId),
+    ...(Array.isArray(source.aliases) ? source.aliases.map((alias) => toTrimmedText(alias)) : []),
+  ];
+  const locator = {
+    kind: source.kind || options.kind,
+    index: source.kind === "external-spool" ? source.slotId : undefined,
+    unitIndex: options.unitIndex !== null && options.unitIndex !== undefined ? options.unitIndex + 1 : undefined,
+    boxId: source.boxId,
+    slotIndex: source.slotId ?? options.slotIndex,
+    protocolSlotId: source.protocolSlotId || source.slotIdLabel || options.displaySlot,
+  };
+  keys.push(...createLocatorLookupKeys(locator));
+  return keys.filter(Boolean);
+}
+
+/**
  * source-aware accounting view を sourceId map へ変換する。
  *
  * 【詳細説明】
  * - accounting view は3DPmon内のスプール管理・使用量候補であり、機器観測topologyとは別authorityである。
- * - ViewModelではsourceId一致だけで表示へ合流し、残量やdebitの権威化は行わない。
+ * - ViewModelではsourceId、alias、locator一致だけで表示へ合流し、残量やdebitの権威化は行わない。
  *
  * @private
  * @function createAccountingSourceMap
- * @param {object|null|undefined} accountingView - MaterialSourceAccountingView候補。
- * @returns {Map<string, object>} materialSourceIdからaccounting rowへのMap。
+ * @param {object|null|undefined} accountingView - MaterialSourceAccountingView候補
+ * @returns {Map<string, object>} 照合keyからaccounting rowへのMap
  */
 function createAccountingSourceMap(accountingView) {
   const map = new Map();
   for (const source of Array.isArray(accountingView?.sources) ? accountingView.sources : []) {
-    const sourceId = typeof source?.materialSourceId === "string" ? source.materialSourceId.trim() : "";
-    if (sourceId && !map.has(sourceId)) {
-      map.set(sourceId, source);
+    for (const key of collectAccountingLookupKeys(source)) {
+      addAccountingLookupKey(map, key, source);
     }
   }
   return map;
+}
+
+/**
+ * source rowに対応するaccounting sourceを取得する。
+ *
+ * 【詳細説明】
+ * - raw sourceId一致を第一候補にしつつ、Universal MaterialSource ID導入後のalias/locator一致へfallbackする。
+ *
+ * @private
+ * @function resolveAccountingSourceForRow
+ * @param {object|null|undefined} source - normalized material source候補
+ * @param {object} options - 表示行オプション
+ * @returns {object|null} accounting source、またはnull
+ */
+function resolveAccountingSourceForRow(source, options) {
+  const accountingBySourceId = options.accountingBySourceId;
+  if (!accountingBySourceId || !source) {
+    return null;
+  }
+  for (const key of collectObservedSourceLookupKeys(source, options)) {
+    const accounting = accountingBySourceId.get(key);
+    if (accounting) {
+      return accounting;
+    }
+  }
+  return null;
 }
 
 /**
@@ -345,9 +513,7 @@ function createSourceRow(options) {
       namespace: assignment.namespace ?? null,
       resolution: assignment.resolution ?? "unknown",
     })),
-    accounting: source?.sourceId
-      ? (options.accountingBySourceId?.get(source.sourceId) || null)
-      : null,
+    accounting: resolveAccountingSourceForRow(source, options),
   };
 }
 

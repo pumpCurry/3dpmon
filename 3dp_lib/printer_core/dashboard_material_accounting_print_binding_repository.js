@@ -8,7 +8,7 @@
  * @module dashboard_material_accounting_print_binding_repository
  *
  * 【機能内容サマリ】
- * - Gate 18.9E の trusted print-start material binding snapshot を保持する内部実装を提供
+ * - Gate 18.9E の shadow print-start material binding snapshot を保持する内部実装を提供
  * - source-specific usage observation をMaterialSource/SpoolMount単位へ帰属
  * - total-only multi-source usageをpending/unattributedとして隔離
  *
@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1517 (PR #438)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 23:14:00
+ * @lastModified 2026-08-31 15:24:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -117,6 +117,30 @@ function normalizeNonNegativeMm(value) {
   }
   const numberValue = typeof value === "string" ? Number(value.trim()) : value;
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
+}
+
+/**
+ * logical tool IDを厳密に正規化する。
+ *
+ * 【詳細説明】
+ * - `Number("") === 0` のJavaScript暗黙変換で、未指定toolがT0へ誤帰属することを防ぐ。
+ * - 空値は未指定としてnullにし、0以上の整数だけをtool IDとして扱う。
+ *
+ * @private
+ * @function normalizeToolId
+ * @param {*} value - tool ID候補。
+ * @returns {number|null} 正規化済みtool ID。不正または未指定の場合null。
+ */
+function normalizeToolId(value) {
+  if (value === undefined || value === null || typeof value === "boolean" || Array.isArray(value) ||
+      (typeof value === "object" && value !== null)) {
+    return null;
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isInteger(numberValue) && numberValue >= 0 ? numberValue : null;
 }
 
 /**
@@ -220,9 +244,8 @@ function getUsageEntryLengthMm(entry) {
  * @returns {{toolId:?number,protocolToolAlias:string,materialSourceId:string}} 正規化済み識別子。
  */
 function normalizeUsageEntryIdentifiers(entry) {
-  const toolId = Number(entry?.toolId);
   return {
-    toolId: Number.isFinite(toolId) ? toolId : null,
+    toolId: normalizeToolId(entry?.toolId),
     protocolToolAlias: toTrimmedString(entry?.protocolToolAlias || entry?.toolAlias),
     materialSourceId: toTrimmedString(entry?.materialSourceId),
   };
@@ -237,9 +260,8 @@ function normalizeUsageEntryIdentifiers(entry) {
  * @returns {{toolId:?number,protocolToolAlias:string,materialSourceId:string}} 正規化済み識別子。
  */
 function normalizeSnapshotAssignmentIdentifiers(snapshot) {
-  const toolId = Number(snapshot?.toolId);
   return {
-    toolId: Number.isFinite(toolId) ? toolId : null,
+    toolId: normalizeToolId(snapshot?.toolId),
     protocolToolAlias: toTrimmedString(snapshot?.protocolToolAlias || snapshot?.toolAlias),
     materialSourceId: toTrimmedString(snapshot?.materialSourceId),
   };
@@ -380,6 +402,60 @@ function createShadowSourceSpecificMaterialUsageEvidence(input = {}) {
 }
 
 /**
+ * read-only print-start material snapshotを生成する。
+ *
+ * 【詳細説明】
+ * - public print binding repositoryがtrusted debit authorityをmintしないためのshadow snapshot。
+ * - completion時のsource/mount/spool/tool対応を固定するが、debit eligibilityのtrusted snapshotとしては扱わない。
+ *
+ * @private
+ * @function createShadowPrintStartMaterialSnapshot
+ * @param {Object} input - snapshot入力。
+ * @returns {Object} read-only shadow print-start snapshot。
+ */
+function createShadowPrintStartMaterialSnapshot(input = {}) {
+  const deviceId = toTrimmedString(input.deviceId);
+  const printJobId = toTrimmedString(input.printJobId);
+  const printPlanId = toTrimmedString(input.printPlanId);
+  const materialSourceId = toTrimmedString(input.materialSourceId);
+  const mountId = toTrimmedString(input.mountId);
+  const snapshotId = toTrimmedString(input.snapshotId) ||
+    createPrinterCoreV3DeterministicId("material-print-start-snapshot-shadow", [
+      deviceId,
+      printJobId,
+      printPlanId,
+      materialSourceId,
+      mountId,
+    ]);
+  return deepFreezeJson({
+    schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
+    snapshotId,
+    deviceId,
+    printJobId,
+    printPlanId,
+    materialSourceId,
+    mountId,
+    spoolId: toTrimmedString(input.spoolId),
+    toolId: normalizeToolId(input.toolId),
+    protocolToolAlias: toTrimmedString(input.protocolToolAlias || input.toolAlias) || null,
+    order: normalizeToolId(input.order),
+    capturedAt: normalizeIsoTime(input.capturedAt),
+    materialSource: cloneJsonValue(input.materialSource || null),
+    spoolMount: cloneJsonValue(input.spoolMount || null),
+    bindingOperationId: toTrimmedString(input.bindingOperationId) || null,
+    trusted: false,
+    authority: {
+      mode: "shadow-print-start-material-snapshot",
+      canBindUsage: false,
+    },
+    provenance: {
+      source: "material-print-binding-shadow-repository",
+      attestation: null,
+    },
+  });
+}
+
+/**
  * 非空文字列フィールドを持つかを判定する。
  *
  * @private
@@ -511,6 +587,251 @@ function restoreRecordArray({ records, recordType, predicate, retainedUnsupporte
 }
 
 /**
+ * cross-record不整合recordをunsupported evidenceへ退避する。
+ *
+ * 【詳細説明】
+ * - 保存済みstoreでは個別recordのshapeが正しくても、参照先snapshot/segmentが欠落している場合がある。
+ * - authority配列へ戻す前に、参照整合性を失ったrecordを隔離してrestart後の誤debitを防ぐ。
+ *
+ * @private
+ * @function retainCrossRecordMismatch
+ * @param {Object[]} retainedUnsupportedEntries - unsupported退避先。
+ * @param {string} recordType - record種別。
+ * @param {number} index - 元配列上のindex。
+ * @param {Object} record - 退避対象record。
+ * @returns {void}
+ */
+function retainCrossRecordMismatch(retainedUnsupportedEntries, recordType, index, record) {
+  retainedUnsupportedEntries.push({
+    recordType,
+    index,
+    record: cloneJsonValue(record),
+    reason: "cross-record-mismatch",
+  });
+}
+
+/**
+ * 文字列fieldが一致するかを検査する。
+ *
+ * 【詳細説明】
+ * - 欠落値を空文字へ正規化し、明示field同士のsemantic一致だけを見る。
+ *
+ * @private
+ * @function hasMatchingStringField
+ * @param {Object} left - 比較元record。
+ * @param {Object} right - 比較先record。
+ * @param {string} key - field名。
+ * @returns {boolean} 正規化後の文字列が一致する場合true。
+ */
+function hasMatchingStringField(left, right, key) {
+  return toTrimmedString(left?.[key]) === toTrimmedString(right?.[key]);
+}
+
+/**
+ * 使用量数値が一致するかを検査する。
+ *
+ * 【詳細説明】
+ * - unknown usageでは数値確定していないため比較対象外にする。
+ * - observed/confirmedな使用量はmm単位で一致していることを要求する。
+ *
+ * @private
+ * @function hasMatchingUsageLength
+ * @param {Object} left - 比較元record。
+ * @param {Object} right - 比較先record。
+ * @returns {boolean} 使用量が一致、または比較不要ならtrue。
+ */
+function hasMatchingUsageLength(left, right) {
+  const leftLength = normalizeNonNegativeMm(left?.usedLengthMm);
+  const rightLength = normalizeNonNegativeMm(right?.usedLengthMm);
+  if (leftLength === null || rightLength === null) {
+    return true;
+  }
+  return leftLength === rightLength;
+}
+
+/**
+ * usage evidenceが参照するsnapshotと一致するかを検査する。
+ *
+ * 【詳細説明】
+ * - evidence単体がsource-specificでも、snapshot参照が失われている場合はdebit根拠へ戻さない。
+ *
+ * @private
+ * @function isUsageEvidenceCrossRecordConsistent
+ * @param {Object} evidence - 復元済みusage evidence。
+ * @param {Map<string, Object>} snapshotsById - snapshotId別snapshot map。
+ * @returns {boolean} 参照整合性がある場合true。
+ */
+function isUsageEvidenceCrossRecordConsistent(evidence, snapshotsById) {
+  const snapshot = snapshotsById.get(toTrimmedString(evidence?.snapshotId));
+  return !!snapshot &&
+    hasMatchingStringField(evidence, snapshot, "deviceId") &&
+    hasMatchingStringField(evidence, snapshot, "printJobId") &&
+    hasMatchingStringField(evidence, snapshot, "materialSourceId") &&
+    hasMatchingStringField(evidence, snapshot, "mountId");
+}
+
+/**
+ * segmentに対応するsnapshotを探す。
+ *
+ * 【詳細説明】
+ * - 新形式はsourceSnapshotIdで直接参照する。
+ * - 旧形式や移行途中recordではsourceSnapshotIdが無い場合があるため、device/job/plan/source/spool/mountで照合する。
+ *
+ * @private
+ * @function resolveSnapshotForSegment
+ * @param {Object} segment - 復元済みJobMaterialSegment。
+ * @param {Map<string, Object>} snapshotsById - snapshotId別snapshot map。
+ * @param {Object[]} snapshots - 復元済みsnapshot配列。
+ * @returns {Object|null} 対応snapshot、またはnull。
+ */
+function resolveSnapshotForSegment(segment, snapshotsById, snapshots) {
+  const sourceSnapshotId = toTrimmedString(segment?.sourceSnapshotId);
+  if (sourceSnapshotId) {
+    return snapshotsById.get(sourceSnapshotId) || null;
+  }
+  return snapshots.find((snapshot) => {
+    const spoolId = toTrimmedString(segment?.spoolId);
+    const mountId = toTrimmedString(segment?.mountId);
+    return hasMatchingStringField(segment, snapshot, "deviceId") &&
+      hasMatchingStringField(segment, snapshot, "printJobId") &&
+      hasMatchingStringField(segment, snapshot, "printPlanId") &&
+      hasMatchingStringField(segment, snapshot, "materialSourceId") &&
+      (!spoolId || hasMatchingStringField(segment, snapshot, "spoolId")) &&
+      (!mountId || hasMatchingStringField(segment, snapshot, "mountId"));
+  }) || null;
+}
+
+/**
+ * JobMaterialSegmentがsnapshot/evidenceと一致するかを検査する。
+ *
+ * 【詳細説明】
+ * - segmentは最終的にledgerへつながるため、復元時点でsource/mount/spool境界を再検査する。
+ * - evidence参照がある場合は、先に整合性確認済みのusage evidence配列に存在することも要求する。
+ *
+ * @private
+ * @function isJobMaterialSegmentCrossRecordConsistent
+ * @param {Object} segment - 復元済みJobMaterialSegment。
+ * @param {Map<string, Object>} snapshotsById - snapshotId別snapshot map。
+ * @param {Object[]} snapshots - 復元済みsnapshot配列。
+ * @param {Map<string, Object>} usageEvidenceById - evidenceId別usage evidence map。
+ * @returns {boolean} 参照整合性がある場合true。
+ */
+function isJobMaterialSegmentCrossRecordConsistent(segment, snapshotsById, snapshots, usageEvidenceById) {
+  const snapshot = resolveSnapshotForSegment(segment, snapshotsById, snapshots);
+  if (!snapshot ||
+      !hasMatchingStringField(segment, snapshot, "deviceId") ||
+      !hasMatchingStringField(segment, snapshot, "printJobId") ||
+      !hasMatchingStringField(segment, snapshot, "printPlanId") ||
+      !hasMatchingStringField(segment, snapshot, "materialSourceId")) {
+    return false;
+  }
+  const spoolId = toTrimmedString(segment?.spoolId);
+  const mountId = toTrimmedString(segment?.mountId);
+  if ((spoolId && !hasMatchingStringField(segment, snapshot, "spoolId")) ||
+      (mountId && !hasMatchingStringField(segment, snapshot, "mountId"))) {
+    return false;
+  }
+  const usageEvidenceId = toTrimmedString(segment?.evidence?.usageEvidenceId);
+  if (!usageEvidenceId) {
+    return true;
+  }
+  const evidence = usageEvidenceById.get(usageEvidenceId);
+  return !!evidence &&
+    hasMatchingStringField(evidence, segment, "deviceId") &&
+    hasMatchingStringField(evidence, segment, "printJobId") &&
+    hasMatchingStringField(evidence, segment, "materialSourceId") &&
+    (!mountId || hasMatchingStringField(evidence, segment, "mountId")) &&
+    (!toTrimmedString(evidence.snapshotId) || toTrimmedString(evidence.snapshotId) === toTrimmedString(snapshot.snapshotId)) &&
+    hasMatchingUsageLength(evidence, segment);
+}
+
+/**
+ * ledger eventがsegmentと一致するかを検査する。
+ *
+ * 【詳細説明】
+ * - ledger eventはappend-only候補なので、孤立eventや別sourceへつながるeventを復元しない。
+ *
+ * @private
+ * @function isLedgerEventCrossRecordConsistent
+ * @param {Object} event - 復元済みledger event。
+ * @param {Map<string, Object>} segmentsById - segmentId別JobMaterialSegment map。
+ * @returns {boolean} 参照整合性がある場合true。
+ */
+function isLedgerEventCrossRecordConsistent(event, segmentsById) {
+  const segment = segmentsById.get(toTrimmedString(event?.segmentId));
+  const spoolId = toTrimmedString(event?.spoolId);
+  return !!segment &&
+    hasMatchingStringField(event, segment, "deviceId") &&
+    hasMatchingStringField(event, segment, "printJobId") &&
+    hasMatchingStringField(event, segment, "materialSourceId") &&
+    (!spoolId || hasMatchingStringField(event, segment, "spoolId")) &&
+    hasMatchingUsageLength(event, segment);
+}
+
+/**
+ * 復元済みstoreのcross-record参照を検査する。
+ *
+ * 【詳細説明】
+ * - 個別shape検査を通ったrecordだけを対象に、authority配列として再利用できる参照関係かを確認する。
+ * - 不整合recordはretainedUnsupportedEntriesへ退避し、以後のdebit/表示集計から除外する。
+ *
+ * @private
+ * @function validateRestoredStoreCrossRecords
+ * @param {Object} restored - shape検査後のstore。
+ * @param {Object[]} retainedUnsupportedEntries - unsupported退避先。
+ * @returns {Object} cross-record検査後のauthority配列。
+ */
+function validateRestoredStoreCrossRecords(restored, retainedUnsupportedEntries) {
+  const snapshotsById = new Map(restored.printStartSnapshots.map((snapshot) => [
+    toTrimmedString(snapshot.snapshotId),
+    snapshot,
+  ]));
+  const usageEvidence = [];
+  for (const [index, evidence] of restored.usageEvidence.entries()) {
+    if (isUsageEvidenceCrossRecordConsistent(evidence, snapshotsById)) {
+      usageEvidence.push(evidence);
+    } else {
+      retainCrossRecordMismatch(retainedUnsupportedEntries, "usageEvidence", index, evidence);
+    }
+  }
+  const usageEvidenceById = new Map(usageEvidence.map((evidence) => [
+    toTrimmedString(evidence.evidenceId),
+    evidence,
+  ]));
+  const jobMaterialSegments = [];
+  for (const [index, segment] of restored.jobMaterialSegments.entries()) {
+    if (isJobMaterialSegmentCrossRecordConsistent(
+      segment,
+      snapshotsById,
+      restored.printStartSnapshots,
+      usageEvidenceById
+    )) {
+      jobMaterialSegments.push(segment);
+    } else {
+      retainCrossRecordMismatch(retainedUnsupportedEntries, "jobMaterialSegment", index, segment);
+    }
+  }
+  const segmentsById = new Map(jobMaterialSegments.map((segment) => [
+    toTrimmedString(segment.segmentId),
+    segment,
+  ]));
+  const ledgerEvents = [];
+  for (const [index, event] of restored.ledgerEvents.entries()) {
+    if (isLedgerEventCrossRecordConsistent(event, segmentsById)) {
+      ledgerEvents.push(event);
+    } else {
+      retainCrossRecordMismatch(retainedUnsupportedEntries, "ledgerEvent", index, event);
+    }
+  }
+  return {
+    printStartSnapshots: restored.printStartSnapshots,
+    usageEvidence,
+    jobMaterialSegments,
+    ledgerEvents,
+  };
+}
+
+/**
  * stored repositoryを正規化する。
  *
  * @function normalizeStoredMaterialAccountingPrintBindingStore
@@ -524,9 +845,7 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
   const retainedUnsupportedEntries = Array.isArray(source.retainedUnsupportedEntries)
     ? source.retainedUnsupportedEntries.map((entry) => cloneJsonValue(entry))
     : [];
-  return {
-    schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
-    authority: "material-accounting-print-binding-shadow-store",
+  const restoredRecords = {
     printStartSnapshots: restoreRecordArray({
       records: source.printStartSnapshots,
       recordType: "printStartSnapshot",
@@ -551,6 +870,15 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
       predicate: isRestorableLedgerEvent,
       retainedUnsupportedEntries,
     }),
+  };
+  const validatedRecords = validateRestoredStoreCrossRecords(restoredRecords, retainedUnsupportedEntries);
+  return {
+    schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
+    authority: "material-accounting-print-binding-shadow-store",
+    printStartSnapshots: validatedRecords.printStartSnapshots,
+    usageEvidence: validatedRecords.usageEvidence,
+    jobMaterialSegments: validatedRecords.jobMaterialSegments,
+    ledgerEvents: validatedRecords.ledgerEvents,
     unattributedUsage: Array.isArray(source.unattributedUsage)
       ? source.unattributedUsage.map((usage) => cloneJsonValue(usage))
       : [],
@@ -642,8 +970,8 @@ function createLedgerEvent(segment, createdAt) {
  *
  * @function createMaterialAccountingPrintBindingRepositoryWithIssuer
  * @param {Object} dependencies - 契約モジュールから注入されるissuer/validator。
- * @param {Function} dependencies.createTrustedPrintStartMaterialSnapshot - trusted snapshot issuer。
  * @param {Function} dependencies.createTrustedSourceSpecificMaterialUsageEvidence - trusted usage issuer。
+ * @param {Function} dependencies.validateTrustedResultSetCompletenessEvidence - trusted result-set completeness validator。
  * @param {Function} dependencies.evaluateMaterialDebitEligibility - debit eligibility evaluator。
  * @param {Function} dependencies.validateMaterialSource - MaterialSource validator。
  * @param {Function} dependencies.validateSpoolMount - SpoolMount validator。
@@ -653,13 +981,13 @@ function createLedgerEvent(segment, createdAt) {
  * const repository = createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies);
  */
 export function createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies = {}, initialStore = {}) {
-  const createTrustedPrintStartMaterialSnapshot = dependencies.createTrustedPrintStartMaterialSnapshot;
   const createTrustedSourceSpecificMaterialUsageEvidence = dependencies.createTrustedSourceSpecificMaterialUsageEvidence;
+  const validateTrustedResultSetCompletenessEvidence = dependencies.validateTrustedResultSetCompletenessEvidence;
   const evaluateMaterialDebitEligibility = dependencies.evaluateMaterialDebitEligibility;
   const validateMaterialSource = dependencies.validateMaterialSource;
   const validateSpoolMount = dependencies.validateSpoolMount;
-  if (typeof createTrustedPrintStartMaterialSnapshot !== "function" ||
-      typeof createTrustedSourceSpecificMaterialUsageEvidence !== "function" ||
+  if (typeof createTrustedSourceSpecificMaterialUsageEvidence !== "function" ||
+      typeof validateTrustedResultSetCompletenessEvidence !== "function" ||
       typeof evaluateMaterialDebitEligibility !== "function" ||
       typeof validateMaterialSource !== "function" ||
       typeof validateSpoolMount !== "function") {
@@ -748,7 +1076,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           reasons.push("spool-mount-required");
           continue;
         }
-        plannedSnapshots.push(createTrustedPrintStartMaterialSnapshot({
+        plannedSnapshots.push(createShadowPrintStartMaterialSnapshot({
           deviceId: printPlan.deviceId,
           printJobId,
           printPlanId: printPlan.printPlanId,
@@ -845,6 +1173,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
    * @param {Object[]} input.materialUsages - source-specific usage観測。
    * @param {number=} input.totalUsedLengthMm - total-only usage観測。
    * @param {"complete"|"partial"=} input.resultSetCompleteness - source-specific結果集合の完全性。
+   * @param {Object=} input.resultSetCompletenessEvidence - module-owned result-set completeness evidence。
    * @param {Object<string,Object>=} input.continuityBySourceId - source continuity evidence。
    * @returns {Object} repository result。
    */
@@ -854,8 +1183,13 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const completedAt = normalizeIsoTime(input.completedAt);
     const operationId = toTrimmedString(input.attributionOperationId);
     const materialUsages = Array.isArray(input.materialUsages) ? input.materialUsages : [];
-    const resultSetCompleteness = input.trustedResultSetCompleteness === true &&
-      input.resultSetCompleteness === "complete"
+    const requestedResultSetCompleteness = input.resultSetCompleteness === "complete" ? "complete" : "partial";
+    const resultSetCompleteness = requestedResultSetCompleteness === "complete" &&
+      validateTrustedResultSetCompletenessEvidence(input.resultSetCompletenessEvidence, {
+        deviceId: printPlan?.deviceId,
+        printJobId,
+        printPlanId: printPlan?.printPlanId,
+      })
       ? "complete"
       : "partial";
     const totalUsedLengthMm = normalizeNonNegativeMm(input.totalUsedLengthMm);
@@ -912,6 +1246,9 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
         return orderA - orderB;
       });
+    if (plannedSnapshots.some((snapshot) => toTrimmedString(snapshot.deviceId) !== toTrimmedString(printPlan?.deviceId))) {
+      reasons.push("print-plan-device-mismatch");
+    }
     const usageResolution = resolveUsageEntriesForSnapshots(plannedSnapshots, materialUsages);
     if (plannedSnapshots.length === 1 &&
         totalUsedLengthMm !== null &&
@@ -973,6 +1310,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const segments = plannedSnapshots.map((snapshot, index) => {
       const usageEntry = usageResolution.entriesBySnapshotId.get(snapshot.snapshotId) || null;
       const entryLength = getUsageEntryLengthMm(usageEntry);
+      const toolId = normalizeToolId(snapshot.toolId) ?? index;
       const usageState = entryLength !== null
         ? (entryLength > 0 ? "observed-used" : "confirmed-unused")
         : (resultSetCompleteness === "complete" ? "confirmed-unused" : "unknown");
@@ -994,7 +1332,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           idempotencyKey: createPrinterCoreV3DeterministicId("material-usage-attribution", [
             printJobId,
             printPlan.printPlanId,
-            snapshot.toolId,
+            toolId,
             snapshot.snapshotId,
           ]),
         })
@@ -1007,7 +1345,6 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
       if (evidence) {
         usageEvidence.push(evidence);
       }
-      const toolId = Number.isFinite(Number(snapshot.toolId)) ? Number(snapshot.toolId) : index;
       return {
         schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
         segmentId: createPrinterCoreV3DeterministicId("material-accounting-job-segment", [

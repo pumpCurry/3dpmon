@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 15:16:00
+ * @lastModified 2026-08-31 15:04:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -72,6 +72,8 @@ describe("Universal MaterialSource accounting contract", () => {
   it("trusted evidence issuerは公開APIから直接呼び出せない", () => {
     expect(materialAccountingContract.createTrustedSourceSpecificMaterialUsageEvidence).toBeUndefined();
     expect(materialAccountingContract.createTrustedPrintStartMaterialSnapshot).toBeUndefined();
+    expect(materialAccountingContract.createTrustedResultSetCompletenessEvidence).toBeUndefined();
+    expect(materialAccountingContract.validateTrustedResultSetCompletenessEvidence).toBeUndefined();
     expect(typeof createMaterialAccountingPrintBindingRepository).toBe("function");
   });
 

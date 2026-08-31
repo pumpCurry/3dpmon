@@ -21,9 +21,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1517 (PR #438)
+* @version 1.390.1519 (PR #438)
 * @since   1.390.228 (PR #102)
-* @lastModified 2026-08-31 15:30:00
+* @lastModified 2026-08-31 15:24:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -621,6 +621,7 @@ function createMaterialSupplyAccountingView(options = {}) {
           printJobId: segment.printJobId || snapshot.printJobId || null,
           printPlanId: segment.printPlanId || snapshot.printPlanId || null,
           observedAt: segment.observedAt || snapshot.capturedAt || null,
+          materialSource: snapshot.materialSource || null,
           source: "material-accounting-print-binding-store",
         },
         mount: {

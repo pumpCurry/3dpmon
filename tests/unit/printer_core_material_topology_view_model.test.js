@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1457 (PR #435)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1361 (PR #432)
- * @lastModified 2026-08-28 16:58:45
+ * @lastModified 2026-08-31 15:24:00
  * -----------------------------------------------------------
  * @todo
  * - 実UIへ接続した後、DOM表示のintegration testを追加する
@@ -323,6 +323,56 @@ describe("Printer Core v3 material topology view model", () => {
       loadedSourceCount: 5,
       selectedSourceCount: 1,
       assignmentCount: 4,
+    });
+  });
+
+  it("stable MaterialSource IDと観測sourceIdが異なる場合もalias/locatorでsource集計を合流する", () => {
+    const topology = normalizeK2BoxsInfo(createK2ProComboBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      accountingView: {
+        deviceId: "serial:k2pro-69e7",
+        sources: [
+          {
+            materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+            displayLabel: "CFS 1C",
+            observation: {
+              materialSource: {
+                materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+                aliases: ["cfs:1:slot:2"],
+                locator: {
+                  kind: "cfs-slot",
+                  unitIndex: 1,
+                  boxId: 1,
+                  slotIndex: 2,
+                  protocolSlotId: "1C",
+                },
+              },
+            },
+            mount: {
+              mountId: "mount:k2pro-69e7:1c",
+              materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+              spoolId: "spool:1c",
+            },
+            usage: {
+              state: "confirmed-used",
+              usedLengthMm: 3210,
+              confidence: "high",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.units[0].slots[2].sourceId).toBe("cfs:1:slot:2");
+    expect(viewModel.units[0].slots[2].accounting).toMatchObject({
+      materialSourceId: "material-source:k2pro-69e7:cfs-1c",
+      mount: {
+        spoolId: "spool:1c",
+      },
+      usage: {
+        state: "confirmed-used",
+        usedLengthMm: 3210,
+      },
     });
   });
 

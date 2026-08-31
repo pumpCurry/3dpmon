@@ -186,8 +186,9 @@ unattributed usage until source-specific evidence exists.
 
 `0mm` and `unknown` are different. In the current read-only repository, a source
 may be stored as confirmed unused only when explicit source-specific 0mm usage
-is observed. A caller-declared complete result set is not sufficient. Otherwise
-its usage remains unknown until a later trusted result-set registry is added.
+is observed. A caller-declared complete result set, or a forged trusted-complete
+boolean flag, is not sufficient. Otherwise its usage remains unknown until a
+later module-owned trusted result-set registry is added.
 
 ## Remaining Provenance
 
@@ -250,6 +251,10 @@ Usage idempotency identifies the physical/job/source usage event, not the
 reported quantity or observation time. Replaying the same completion with a
 different `usedLengthMm` or `observedAt` must not append a second debit or
 overwrite the existing event; it must become conflict or correction evidence.
+
+Completion attribution is scoped to the device captured by the print-start
+snapshot. A later completion payload with the same `printPlanId` but a different
+`deviceId` cannot re-home usage to another printer.
 
 ## Migration Rules
 
@@ -376,11 +381,13 @@ Gate 18.9E:
 - source-specific JobMaterialSegment shadow records
 - append-only shadow FilamentLedger event candidates
 - read-only usage evidence; the public print binding repository does not mint
-  trusted debit-capable usage evidence
+  trusted debit-capable usage evidence or trusted print-start snapshots
 - pending/unattributed usage isolation for total-only and residual multi-source
   observations
 - stable semantic idempotency independent from caller operation IDs
-- restart recovery for shadow print binding records without legacy debit
+- restart recovery for shadow print binding records without legacy debit, with
+  cross-record validation before restored snapshot/evidence/segment/ledger
+  records return to authority arrays
 
 Gate 18.9F:
 
@@ -389,6 +396,8 @@ Gate 18.9F:
 - N=1 familiar card and N>1 source card UI cutover
 - read-only projection of saved print binding store into CFS/external source rows
 - separate display for device-reported remaining, 3dpmon-managed remaining, and source-specific recent usage
+- source-aware accounting joins by canonical MaterialSource ID, aliases, and
+  physical/protocol locator, not by raw observed `sourceId` equality alone
 
 Gate 20 extension:
 

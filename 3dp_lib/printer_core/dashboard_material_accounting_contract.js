@@ -30,9 +30,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1517 (PR #438)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 23:08:00
+ * @lastModified 2026-08-31 15:24:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -89,6 +89,17 @@ const TRUSTED_SOURCE_SPECIFIC_USAGE_EVIDENCE = new WeakSet();
  * @constant {WeakSet<object>}
  */
 const TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS = new WeakSet();
+
+/**
+ * trusted result-set completeness evidence の参照集合。
+ *
+ * 【詳細説明】
+ * - caller supplied boolean だけで「未観測sourceは0mm」と確定される経路を防ぐ。
+ * - Gate18.9ではissuerを公開せず、将来のtrusted result registryだけが登録できる余地を残す。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_RESULT_SET_COMPLETENESS_EVIDENCE = new WeakSet();
 
 /**
  * source-specific usage evidence のsource/method policy。
@@ -908,6 +919,68 @@ function createPrintStartMaterialSnapshotSignature(snapshot) {
 }
 
 /**
+ * result-set completeness evidence signature を生成する。
+ *
+ * 【詳細説明】
+ * - 完了時のsource-specific result集合が完全であることは、caller宣言ではなくregistry証跡に束縛する。
+ * - device/job/plan/completenessを署名対象に含め、別jobの証跡流用を拒否できるようにする。
+ *
+ * @private
+ * @function createResultSetCompletenessEvidenceSignature
+ * @param {Object} evidence - result-set completeness evidence。
+ * @returns {string} deterministic signature。
+ */
+function createResultSetCompletenessEvidenceSignature(evidence) {
+  return createPrinterCoreV3DeterministicId("material-result-set-completeness", [
+    SOURCE_SPECIFIC_USAGE_EVIDENCE_SECRET,
+    evidence.evidenceId,
+    evidence.deviceId,
+    evidence.printJobId,
+    evidence.printPlanId,
+    evidence.completeness,
+    evidence.observedAt,
+  ]);
+}
+
+/**
+ * trusted result-set completeness evidence を検証する。
+ *
+ * 【詳細説明】
+ * - Gate18.9Eではpublic APIからcomplete結果集合を信頼しない。
+ * - 将来、transport/result registryがmodule-owned evidenceを発行した場合のみ、このvalidatorでcomplete扱いに昇格できる。
+ *
+ * @private
+ * @function validateTrustedResultSetCompletenessEvidence
+ * @param {Object|null|undefined} evidence - result-set completeness evidence候補。
+ * @param {Object=} scope - 検証scope。
+ * @param {string=} scope.deviceId - Device ID。
+ * @param {string=} scope.printJobId - PrintJob ID。
+ * @param {string=} scope.printPlanId - PrintPlan ID。
+ * @returns {boolean} module-owned trusted evidenceならtrue。
+ */
+function validateTrustedResultSetCompletenessEvidence(evidence, scope = {}) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return false;
+  }
+  if (!TRUSTED_RESULT_SET_COMPLETENESS_EVIDENCE.has(evidence)) {
+    return false;
+  }
+  if (evidence.trusted !== true || evidence.completeness !== "complete") {
+    return false;
+  }
+  if (toTrimmedString(scope.deviceId) && toTrimmedString(evidence.deviceId) !== toTrimmedString(scope.deviceId)) {
+    return false;
+  }
+  if (toTrimmedString(scope.printJobId) && toTrimmedString(evidence.printJobId) !== toTrimmedString(scope.printJobId)) {
+    return false;
+  }
+  if (toTrimmedString(scope.printPlanId) && toTrimmedString(evidence.printPlanId) !== toTrimmedString(scope.printPlanId)) {
+    return false;
+  }
+  return evidence.attestation === createResultSetCompletenessEvidenceSignature(evidence);
+}
+
+/**
  * source-specific material usage evidence shapeを生成する。
  *
  * 【詳細説明】
@@ -1126,8 +1199,8 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
  */
 export function createMaterialAccountingPrintBindingRepository(initialStore = {}) {
   return createMaterialAccountingPrintBindingRepositoryWithIssuer({
-    createTrustedPrintStartMaterialSnapshot,
     createTrustedSourceSpecificMaterialUsageEvidence,
+    validateTrustedResultSetCompletenessEvidence,
     evaluateMaterialDebitEligibility,
     validateMaterialSource,
     validateSpoolMount,

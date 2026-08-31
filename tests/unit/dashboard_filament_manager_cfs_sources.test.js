@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1517 (PR #438)
+ * @version 1.390.1519 (PR #438)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-31 15:32:00
+ * @lastModified 2026-08-31 15:24:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -348,6 +348,7 @@ describe("filament manager CFS material source section", () => {
     setupK2Runtime({ observedAt: "2026-08-27T12:34:56.000Z" });
     const source = monitorData.machines["K2Pro-69E7"].runtimeData.printerCoreV3Shadow.lastState.materials.sources
       .find((entry) => entry.sourceId === "cfs:1:slot:2");
+    const materialSourceId = "material-source:k2pro-69e7:cfs-1c";
     monitorData.filamentSpools = [{
       id: "spool:1c",
       name: "CC3D Sand Color",
@@ -361,13 +362,24 @@ describe("filament manager CFS material source section", () => {
       deviceId: "serial:k2pro-69e7",
       printJobId: "job:4c-benchy",
       printPlanId: "plan:4c-benchy",
-      materialSourceId: source.sourceId,
+      materialSourceId,
       mountId: "mount:1c",
       spoolId: "spool:1c",
       capturedAt: "2026-08-27T12:00:00.000Z",
+      materialSource: {
+        materialSourceId,
+        aliases: [source.sourceId],
+        locator: {
+          kind: "cfs-slot",
+          unitIndex: 1,
+          boxId: 1,
+          slotIndex: 2,
+          protocolSlotId: "1C",
+        },
+      },
       spoolMount: {
         mountId: "mount:1c",
-        materialSourceId: source.sourceId,
+        materialSourceId,
         spoolId: "spool:1c",
         status: "open",
       },
@@ -376,7 +388,7 @@ describe("filament manager CFS material source section", () => {
       segmentId: "segment:job-1:1c",
       printJobId: "job:4c-benchy",
       printPlanId: "plan:4c-benchy",
-      materialSourceId: source.sourceId,
+      materialSourceId,
       mountId: "mount:1c",
       spoolId: "spool:1c",
       usedLengthMm: 3210,
@@ -386,7 +398,7 @@ describe("filament manager CFS material source section", () => {
     monitorData.materialAccountingPrintBindingStore.ledgerEvents.push({
       ledgerEventId: "ledger:job-1:1c",
       segmentId: "segment:job-1:1c",
-      materialSourceId: source.sourceId,
+      materialSourceId,
       spoolId: "spool:1c",
       usedLengthMm: 3210,
       createdAt: "2026-08-27T13:00:00.000Z",

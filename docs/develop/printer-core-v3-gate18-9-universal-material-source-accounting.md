@@ -460,7 +460,7 @@ usage attribution as a shadow-only repository:
 - print-start material binding snapshots with tool/source assignment metadata
 - source-specific `JobMaterialSegment` shadow records
 - read-only source-aware usage evidence; the public repository does not mint
-  debit-capable trusted usage evidence
+  debit-capable trusted usage evidence or trusted print-start snapshots
 - append-only shadow `FilamentLedgerEvent` candidates
 - pending/unattributed isolation for total-only multi-source usage and
   source-specific/total residuals
@@ -468,7 +468,10 @@ usage attribution as a shadow-only repository:
 
 Completion handling must use the print-start snapshot, not the current mount at
 completion time. Completion-supplied `PrintPlan.toolAssignments` are not used as
-assignment authority; the saved print-start binding is.
+assignment authority; the saved print-start binding is. Completion-supplied
+`PrintPlan.deviceId` must also match the saved print-start snapshots; a payload
+with the same `printPlanId` and a different `deviceId` must not re-home source
+usage to another device.
 
 When a repository sees the same stable usage idempotency identity again, it must
 treat an identical payload as duplicate/no-op. If the same idempotency identity
@@ -478,8 +481,20 @@ existing event; it must create conflict/correction evidence instead.
 Gate 18.9E remains shadow/read-only. Automatic spool debit requires a later
 trusted result-set registry and live certification. A caller-declared
 `resultSetCompleteness:"complete"` is not enough to mark an unobserved source as
-`confirmed-unused`; the source must have explicit 0mm source-specific usage, or
-the source remains `unknown`.
+`confirmed-unused`. A caller-supplied boolean such as
+`trustedResultSetCompleteness:true` is also ignored unless it is backed by
+module-owned result-set completeness evidence. Until that registry exists, the
+source must have explicit 0mm source-specific usage, or the source remains
+`unknown`.
+
+Stored print binding records are revalidated across record boundaries during
+restart/re-hydration. A usage evidence record must still reference an existing
+print-start snapshot for the same device, job, source, and mount. A segment must
+resolve to a matching snapshot, either by `sourceSnapshotId` or by the legacy
+device/job/plan/source/spool locator fields. A ledger event must resolve to a
+matching accepted segment. Records that pass shape validation but fail these
+cross-record checks are quarantined in `retainedUnsupportedEntries` instead of
+being returned to authority arrays.
 
 ## Gate 18.9F Scope
 
@@ -491,6 +506,10 @@ Gate 18.9F connects the source-aware read model to the existing read-only UI lan
 - source-specific remaining and usage display
 - saved print binding store projection into source rows
 - device-reported remaining and 3DPmon-managed remaining displayed as separate values
+- source-aware accounting rows joined to observed material topology by canonical
+  MaterialSource ID, aliases, and locator keys. Raw `sourceId` equality remains a
+  fast path only, because Universal MaterialSource IDs may differ from protocol
+  observation IDs such as `cfs:1:slot:2`.
 
 The same domain model feeds both layouts.
 
@@ -617,7 +636,8 @@ Gate 18.9E planned tests:
 - `1A=3210mm`, `1B=6543mm`, `1D=1234mm` attribute to separate
   source/mount/spool bindings
 - `1C=0mm` is confirmed only with explicit source-specific 0mm usage
-- caller-declared complete result set alone leaves unobserved sources as unknown
+- caller-declared complete result set, including a forged trusted-complete flag,
+  leaves unobserved sources as unknown
 - incomplete result set leaves unobserved sources as unknown
 - total-only multi-source usage becomes pending/unattributed
 - source-specific plus larger total usage keeps the residual as
