@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1520 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 15:04:00
+ * @lastModified 2026-08-31 15:34:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,6 +41,8 @@ import {
   createFilamentUnitRecord,
   createMaterialAccountingCutoverRecord,
   createMaterialAccountingPrintBindingRepository,
+  createMaterialResultSetCompletenessEvidence,
+  createTrustedMaterialResultSetCompletenessRegistry,
   createMaterialSourceAccountingView,
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
@@ -75,6 +77,45 @@ describe("Universal MaterialSource accounting contract", () => {
     expect(materialAccountingContract.createTrustedResultSetCompletenessEvidence).toBeUndefined();
     expect(materialAccountingContract.validateTrustedResultSetCompletenessEvidence).toBeUndefined();
     expect(typeof createMaterialAccountingPrintBindingRepository).toBe("function");
+  });
+
+  it("trusted result-set completenessはregistry発行objectだけが検証を通過する", () => {
+    const registry = createTrustedMaterialResultSetCompletenessRegistry();
+    const scope = {
+      deviceId: "serial:k2pro-69e7",
+      printJobId: "job:4c",
+      printPlanId: "plan:4c",
+      materialSourceIds: ["source:1a", "source:1b"],
+    };
+    const forged = createMaterialResultSetCompletenessEvidence({
+      ...scope,
+      observedSourceIds: ["source:1a", "source:1b"],
+      observedAt: "2026-08-31T06:00:00.000Z",
+      source: "trusted-source-specific-result-registry",
+    });
+    const trusted = registry.certifyCompleteResultSet({
+      ...scope,
+      observedSourceIds: ["source:1b", "source:1a"],
+      observedAt: "2026-08-31T06:00:00.000Z",
+      source: "trusted-source-specific-result-registry",
+    });
+    const incomplete = registry.certifyCompleteResultSet({
+      ...scope,
+      observedSourceIds: ["source:1a"],
+      observedAt: "2026-08-31T06:00:00.000Z",
+      source: "trusted-source-specific-result-registry",
+    });
+
+    expect(forged.trusted).toBe(false);
+    expect(trusted.trusted).toBe(true);
+    expect(trusted.materialSourceIds).toEqual(["source:1a", "source:1b"]);
+    expect(trusted.observedSourceIds).toEqual(["source:1a", "source:1b"]);
+    expect(incomplete.ok).toBe(false);
+    expect(incomplete.reasons).toEqual(["result-set-source-coverage-incomplete"]);
+    expect(registry.validate(forged, scope)).toBe(false);
+    expect(registry.validate(trusted, scope)).toBe(true);
+    expect(registry.validate(trusted, { ...scope, printJobId: "job:other" })).toBe(false);
+    expect(registry.validate(trusted, { ...scope, materialSourceIds: ["source:1a"] })).toBe(false);
   });
 
   it("migration blocker vocabularyを定数として固定する", () => {

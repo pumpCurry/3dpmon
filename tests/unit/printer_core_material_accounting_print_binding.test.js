@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1520 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 15:04:00
+ * @lastModified 2026-08-31 15:34:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,6 +33,7 @@ import {
   SPOOL_MOUNT_STATUS,
   SPOOL_MOUNT_VERIFICATION,
   createFilamentUnitRecord,
+  createTrustedMaterialResultSetCompletenessRegistry,
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
   createMaterialSourceRecord,
@@ -296,6 +297,47 @@ describe("MaterialSource print binding repository", () => {
       ["T1C", null, "unknown"],
       ["T1D", null, "unknown"],
     ]);
+  });
+
+  it("別source集合で発行されたcomplete evidenceでは未出現sourceをconfirmed-unusedにしない", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    const registry = createTrustedMaterialResultSetCompletenessRegistry();
+    repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:subset-complete",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:subset-complete",
+    });
+    const subsetEvidence = registry.certifyCompleteResultSet({
+      deviceId,
+      printJobId: "job:subset-complete",
+      printPlanId: printPlan.printPlanId,
+      materialSourceIds: [materialSources[0].materialSourceId],
+      observedSourceIds: [materialSources[0].materialSourceId],
+      observedAt: "2026-08-31T05:30:00.000Z",
+      source: "trusted-source-specific-result-registry",
+    });
+
+    const completion = repository.recordUsageAttribution({
+      printPlan,
+      printJobId: "job:subset-complete",
+      completedAt: "2026-08-31T05:30:00.000Z",
+      attributionOperationId: "usage:subset-complete",
+      resultSetCompleteness: "complete",
+      resultSetCompletenessEvidence: subsetEvidence,
+      materialUsages: [
+        { materialSourceId: materialSources[0].materialSourceId, usedLengthMm: 3210 },
+      ],
+    });
+
+    expect(completion.ok).toBe(true);
+    expect(completion.segments.find((segment) => (
+      segment.materialSourceId === materialSources[1].materialSourceId
+    ))?.usageState).toBe("unknown");
   });
 
   it("incompleteなsource-specific result setでは未出現sourceをunknownに残す", () => {

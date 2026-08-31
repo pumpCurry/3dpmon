@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1520 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 15:24:00
+ * @lastModified 2026-08-31 15:34:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -1184,11 +1184,20 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const operationId = toTrimmedString(input.attributionOperationId);
     const materialUsages = Array.isArray(input.materialUsages) ? input.materialUsages : [];
     const requestedResultSetCompleteness = input.resultSetCompleteness === "complete" ? "complete" : "partial";
+    const planKey = `${printJobId}:${printPlan?.printPlanId || ""}`;
+    const plannedSnapshots = (snapshotsByPlanKey.get(planKey) || [])
+      .map((snapshot) => snapshot)
+      .sort((a, b) => {
+        const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 0;
+        const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
+        return orderA - orderB;
+      });
     const resultSetCompleteness = requestedResultSetCompleteness === "complete" &&
       validateTrustedResultSetCompletenessEvidence(input.resultSetCompletenessEvidence, {
         deviceId: printPlan?.deviceId,
         printJobId,
         printPlanId: printPlan?.printPlanId,
+        materialSourceIds: plannedSnapshots.map((snapshot) => snapshot.materialSourceId),
       })
       ? "complete"
       : "partial";
@@ -1238,14 +1247,6 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     if (!operationId) {
       reasons.push("attribution-operation-id-required");
     }
-    const planKey = `${printJobId}:${printPlan?.printPlanId || ""}`;
-    const plannedSnapshots = (snapshotsByPlanKey.get(planKey) || [])
-      .map((snapshot) => snapshot)
-      .sort((a, b) => {
-        const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 0;
-        const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
-        return orderA - orderB;
-      });
     if (plannedSnapshots.some((snapshot) => toTrimmedString(snapshot.deviceId) !== toTrimmedString(printPlan?.deviceId))) {
       reasons.push("print-plan-device-mismatch");
     }

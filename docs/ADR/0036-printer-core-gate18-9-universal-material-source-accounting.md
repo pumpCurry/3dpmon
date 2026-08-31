@@ -190,6 +190,14 @@ is observed. A caller-declared complete result set, or a forged trusted-complete
 boolean flag, is not sufficient. Otherwise its usage remains unknown until a
 later module-owned trusted result-set registry is added.
 
+Gate 18.9G adds that module-owned result-set completeness registry for
+shadow attribution only. The registry may issue trusted completeness evidence
+when the print-start material source set and the observed source-specific result
+set are an exact match for the same device, job, and print plan. That evidence
+may classify absent sources in the shadow print binding repository as
+`confirmed-unused`, but it still does not debit managed spool remaining or write
+legacy `usageHistory`.
+
 ## Remaining Provenance
 
 Device-reported remaining, 3dpmon ledger remaining, projected remaining, and
@@ -398,6 +406,14 @@ Gate 18.9F:
 - separate display for device-reported remaining, 3dpmon-managed remaining, and source-specific recent usage
 - source-aware accounting joins by canonical MaterialSource ID, aliases, and
   physical/protocol locator, not by raw observed `sourceId` equality alone
+
+Gate 18.9G:
+
+- module-owned trusted result-set completeness registry
+- source-set scope validation for complete result evidence
+- shadow attribution may mark absent sources as `confirmed-unused` only when
+  registry-issued evidence covers the same device/job/plan/source set
+- no production spool debit, legacy usage write, or remaining mutation
 
 Gate 20 extension:
 

@@ -21,6 +21,8 @@
  * - {@link createSpoolMountRecord}：SpoolMount record を生成
  * - {@link createMaterialAccountingCutoverRecord}：legacy cutover record を生成
  * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
+ * - {@link createMaterialResultSetCompletenessEvidence}：未信頼のresult-set completeness evidence shapeを生成
+ * - {@link createTrustedMaterialResultSetCompletenessRegistry}：trusted result-set completeness registryを生成
  * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
@@ -30,9 +32,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1519 (PR #438)
+ * @version 1.390.1520 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 15:24:00
+ * @lastModified 2026-08-31 15:34:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -937,9 +939,45 @@ function createResultSetCompletenessEvidenceSignature(evidence) {
     evidence.deviceId,
     evidence.printJobId,
     evidence.printPlanId,
+    evidence.materialSourceIds,
+    evidence.observedSourceIds,
     evidence.completeness,
     evidence.observedAt,
+    evidence.source,
   ]);
+}
+
+/**
+ * result-set source ID配列を安定順で正規化する。
+ *
+ * 【詳細説明】
+ * - complete証跡では順序ではなく集合一致を見たいので、空値除外・重複排除・辞書順へ揃える。
+ *
+ * @private
+ * @function normalizeResultSetSourceIds
+ * @param {*} value - source ID配列候補。
+ * @returns {string[]} 正規化済みsource ID集合。
+ */
+function normalizeResultSetSourceIds(value) {
+  return normalizeStringArray(value).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * result-set source集合が完全一致するかを判定する。
+ *
+ * 【詳細説明】
+ * - 欠落sourceだけでなく、余分なsourceが混ざる場合も別job/別deviceの結果混入として拒否する。
+ *
+ * @private
+ * @function hasExactResultSetSourceCoverage
+ * @param {string[]} materialSourceIds - 予定source ID集合。
+ * @param {string[]} observedSourceIds - 観測source ID集合。
+ * @returns {boolean} 同一集合ならtrue。
+ */
+function hasExactResultSetSourceCoverage(materialSourceIds, observedSourceIds) {
+  return materialSourceIds.length > 0 &&
+    materialSourceIds.length === observedSourceIds.length &&
+    materialSourceIds.every((sourceId, index) => sourceId === observedSourceIds[index]);
 }
 
 /**
@@ -968,6 +1006,15 @@ function validateTrustedResultSetCompletenessEvidence(evidence, scope = {}) {
   if (evidence.trusted !== true || evidence.completeness !== "complete") {
     return false;
   }
+  const scopedSourceIds = normalizeResultSetSourceIds(scope.materialSourceIds);
+  const evidenceSourceIds = normalizeResultSetSourceIds(evidence.materialSourceIds);
+  const observedSourceIds = normalizeResultSetSourceIds(evidence.observedSourceIds);
+  if (!hasExactResultSetSourceCoverage(evidenceSourceIds, observedSourceIds)) {
+    return false;
+  }
+  if (scopedSourceIds.length > 0 && !hasExactResultSetSourceCoverage(scopedSourceIds, evidenceSourceIds)) {
+    return false;
+  }
   if (toTrimmedString(scope.deviceId) && toTrimmedString(evidence.deviceId) !== toTrimmedString(scope.deviceId)) {
     return false;
   }
@@ -978,6 +1025,158 @@ function validateTrustedResultSetCompletenessEvidence(evidence, scope = {}) {
     return false;
   }
   return evidence.attestation === createResultSetCompletenessEvidenceSignature(evidence);
+}
+
+/**
+ * result-set completeness evidence shapeを生成する。
+ *
+ * 【詳細説明】
+ * - public factoryはresult-set completenessの形だけを正規化し、trusted registry証跡は発行しない。
+ * - 予定source集合と観測source集合は辞書順に正規化し、後続validatorで集合一致を検査できるようにする。
+ *
+ * @function createMaterialResultSetCompletenessEvidence
+ * @param {Object} input - result-set completeness evidence入力。
+ * @param {string} input.deviceId - Device ID。
+ * @param {string} input.printJobId - PrintJob ID。
+ * @param {string} input.printPlanId - PrintPlan ID。
+ * @param {string[]} input.materialSourceIds - print-start時点の予定source ID集合。
+ * @param {string[]} input.observedSourceIds - completion時にsource-specific resultとして観測したsource ID集合。
+ * @param {string=} input.observedAt - 観測時刻。
+ * @param {string=} input.source - 証跡発行元。
+ * @returns {Object} untrusted result-set completeness evidence。
+ * @throws {TypeError} 必須値不足や時刻不正の場合。
+ * @example
+ * const evidence = createMaterialResultSetCompletenessEvidence({ deviceId, printJobId, printPlanId, materialSourceIds, observedSourceIds });
+ */
+export function createMaterialResultSetCompletenessEvidence(input = {}) {
+  const deviceId = requireNonEmptyString(input.deviceId, "resultSet.deviceId");
+  const printJobId = requireNonEmptyString(input.printJobId, "resultSet.printJobId");
+  const printPlanId = requireNonEmptyString(input.printPlanId, "resultSet.printPlanId");
+  const materialSourceIds = normalizeResultSetSourceIds(input.materialSourceIds);
+  const observedSourceIds = normalizeResultSetSourceIds(input.observedSourceIds);
+  if (materialSourceIds.length === 0) {
+    throw new TypeError("Material accounting contract requires resultSet.materialSourceIds.");
+  }
+  const observedAt = normalizeOptionalIsoTime(input.observedAt) || new Date().toISOString();
+  const source = toTrimmedString(input.source) || "untrusted-result-set-completeness";
+  const completeness = input.completeness === "partial" ? "partial" : "complete";
+  const evidenceId = toTrimmedString(input.evidenceId) ||
+    createPrinterCoreV3DeterministicId("material-result-set-completeness-evidence", [
+      deviceId,
+      printJobId,
+      printPlanId,
+      materialSourceIds,
+      observedSourceIds,
+      completeness,
+      observedAt,
+      source,
+    ]);
+  return deepFreezeJson({
+    schemaVersion: MATERIAL_ACCOUNTING_CONTRACT_VERSION,
+    evidenceId,
+    deviceId,
+    printJobId,
+    printPlanId,
+    materialSourceIds,
+    observedSourceIds,
+    completeness,
+    observedAt,
+    source,
+    trusted: false,
+    authority: {
+      mode: "normalized-result-set-completeness-evidence-only",
+      canCertifyCompleteness: false,
+    },
+    attestation: null,
+  });
+}
+
+/**
+ * trusted result-set completeness evidenceを契約モジュール内部で発行する。
+ *
+ * 【詳細説明】
+ * - source-specific result集合が予定source集合を完全に覆っている場合だけtrusted evidenceへ昇格する。
+ * - private WeakSetとsignatureへ登録し、callerがplain objectを手書きしてもvalidatorを通過できないようにする。
+ *
+ * @private
+ * @function createTrustedResultSetCompletenessEvidence
+ * @param {Object} input - result-set completeness evidence入力。
+ * @returns {Object} trusted result-set completeness evidence。
+ * @throws {TypeError} source coverageが不完全な場合。
+ */
+function createTrustedResultSetCompletenessEvidence(input = {}) {
+  const baseEvidence = createMaterialResultSetCompletenessEvidence({
+    ...input,
+    completeness: "complete",
+  });
+  if (!hasExactResultSetSourceCoverage(baseEvidence.materialSourceIds, baseEvidence.observedSourceIds)) {
+    throw new TypeError("Material accounting contract requires complete result-set source coverage.");
+  }
+  const trustedEvidence = {
+    ...baseEvidence,
+    trusted: true,
+    authority: {
+      mode: "trusted-result-set-completeness",
+      canCertifyCompleteness: true,
+    },
+    attestation: null,
+  };
+  trustedEvidence.attestation = createResultSetCompletenessEvidenceSignature(trustedEvidence);
+  const frozenEvidence = deepFreezeJson(trustedEvidence);
+  TRUSTED_RESULT_SET_COMPLETENESS_EVIDENCE.add(frozenEvidence);
+  return frozenEvidence;
+}
+
+/**
+ * trusted result-set completeness registryを生成する。
+ *
+ * 【詳細説明】
+ * - registryはmodule-owned trusted evidenceを発行する唯一のpublic入口である。
+ * - source集合が完全一致しない場合はthrowせずblocked resultを返し、UI/CLIが理由を表示できるようにする。
+ * - ここで発行される証跡はprint binding repositoryのread-only shadow attribution用であり、spool残量を直接更新しない。
+ *
+ * @function createTrustedMaterialResultSetCompletenessRegistry
+ * @returns {Object} trusted result-set completeness registry API。
+ * @example
+ * const registry = createTrustedMaterialResultSetCompletenessRegistry();
+ */
+export function createTrustedMaterialResultSetCompletenessRegistry() {
+  return Object.freeze({
+    /**
+     * complete result-set evidenceを発行する。
+     *
+     * @param {Object} input - result-set completeness evidence入力。
+     * @returns {Object} trusted evidence、またはblocked result。
+     */
+    certifyCompleteResultSet(input = {}) {
+      const materialSourceIds = normalizeResultSetSourceIds(input.materialSourceIds);
+      const observedSourceIds = normalizeResultSetSourceIds(input.observedSourceIds);
+      if (!hasExactResultSetSourceCoverage(materialSourceIds, observedSourceIds)) {
+        return deepFreezeJson({
+          ok: false,
+          status: "blocked",
+          reasons: ["result-set-source-coverage-incomplete"],
+          evidence: null,
+        });
+      }
+      return createTrustedResultSetCompletenessEvidence({
+        ...input,
+        materialSourceIds,
+        observedSourceIds,
+      });
+    },
+
+    /**
+     * trusted result-set evidenceを検証する。
+     *
+     * @param {Object|null|undefined} evidence - result-set completeness evidence候補。
+     * @param {Object=} scope - 検証scope。
+     * @returns {boolean} registry発行済みのtrusted evidenceならtrue。
+     */
+    validate(evidence, scope = {}) {
+      return validateTrustedResultSetCompletenessEvidence(evidence, scope);
+    },
+  });
 }
 
 /**
