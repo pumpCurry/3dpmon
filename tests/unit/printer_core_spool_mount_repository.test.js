@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1500 (PR #438)
+ * @version 1.390.1501 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 12:00:00
+ * @lastModified 2026-08-31 12:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -292,6 +292,86 @@ describe("SpoolMountRepository", () => {
         reason: "same-close-operation-different-payload",
       }),
     ]);
+  });
+
+  it("repository復元後もcloseOperationIdの別mount再利用はconflictにする", () => {
+    const firstRepository = createSpoolMountRepository();
+    const firstMount = createMount({
+      mountOperationId: "mount-op:first",
+      materialSourceId: "material-source:1a",
+      spoolId: "spool:silver",
+    });
+    const secondMount = createMount({
+      mountOperationId: "mount-op:second",
+      materialSourceId: "material-source:1b",
+      spoolId: "spool:white",
+      openedAt: "2026-08-31T02:10:00.000Z",
+    });
+
+    expect(firstRepository.recordMount(firstMount)).toMatchObject({ ok: true, action: "insert" });
+    expect(firstRepository.closeMount({
+      mountId: firstMount.mountId,
+      closeOperationId: "close-op:shared",
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+      reason: "operator-swap",
+    })).toMatchObject({ ok: true, action: "close" });
+
+    const restoredRepository = createSpoolMountRepository(firstRepository.toJSON().mounts);
+    expect(restoredRepository.recordMount(secondMount)).toMatchObject({ ok: true, action: "insert" });
+
+    const result = restoredRepository.closeMount({
+      mountId: secondMount.mountId,
+      closeOperationId: "close-op:shared",
+      closedAt: "2026-08-31T02:20:00.000Z",
+      closedBy: "operator",
+      reason: "operator-swap",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "close-operation-payload-conflict",
+          reason: "same-close-operation-different-payload",
+        }),
+      ],
+    });
+  });
+
+  it("repository復元後も同一mountのcloseOperationId再送はreason差異をconflictにする", () => {
+    const firstRepository = createSpoolMountRepository();
+    const mount = createMount();
+
+    expect(firstRepository.recordMount(mount)).toMatchObject({ ok: true, action: "insert" });
+    expect(firstRepository.closeMount({
+      mountId: mount.mountId,
+      closeOperationId: "close-op:reason-sensitive",
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+      reason: "operator-swap",
+    })).toMatchObject({ ok: true, action: "close" });
+
+    const restoredRepository = createSpoolMountRepository(firstRepository.toJSON().mounts);
+    const retry = restoredRepository.closeMount({
+      mountId: mount.mountId,
+      closeOperationId: "close-op:reason-sensitive",
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+      reason: "different-reason",
+    });
+
+    expect(retry).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "close-operation-payload-conflict",
+          reason: "same-close-operation-different-payload",
+        }),
+      ],
+    });
   });
 
   it("BLOCKED mountはcloseMountでCLOSEDへ遷移させない", () => {

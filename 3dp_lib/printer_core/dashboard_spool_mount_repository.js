@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createSpoolMountRepository}：SpoolMount repositoryを生成
  *
- * @version 1.390.1500 (PR #438)
+ * @version 1.390.1501 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 12:00:00
+ * @lastModified 2026-08-31 12:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -192,12 +192,13 @@ function createMountCreationFingerprint(mount) {
  * @returns {string} close operation fingerprint。
  */
 function createMountCloseFingerprint(input, closedMount) {
+  const closeReason = input.reason || input.closeReason || closedMount.closeReason || null;
   return stableStringify({
     mountId: closedMount.mountId,
     closeOperationId: input.closeOperationId || null,
     closedAt: closedMount.closedAt || null,
     closedBy: closedMount.closedBy || null,
-    reason: input.reason || null,
+    reason: closeReason,
   });
 }
 
@@ -315,6 +316,15 @@ export function createSpoolMountRepository(initialMounts = []) {
     if (mount.status === SPOOL_MOUNT_STATUS.OPEN) {
       openMountIdBySource.set(mount.materialSourceId, mount.mountId);
       openMountIdBySpool.set(mount.spoolId, mount.mountId);
+    }
+    if (mount.status === SPOOL_MOUNT_STATUS.CLOSED && mount.closeOperationId) {
+      mountCloseFingerprintByOperationId.set(
+        mount.closeOperationId,
+        createMountCloseFingerprint({
+          closeOperationId: mount.closeOperationId,
+          reason: mount.closeReason || null,
+        }, mount),
+      );
     }
   }
 
@@ -525,6 +535,7 @@ export function createSpoolMountRepository(initialMounts = []) {
       ...cloneJsonValue(existingMount),
       status: SPOOL_MOUNT_STATUS.CLOSED,
       closeOperationId: input.closeOperationId || existingMount.closeOperationId || null,
+      closeReason: input.reason || input.closeReason || existingMount.closeReason || null,
       closedAt: input.closedAt,
       closedBy: input.closedBy || existingMount.closedBy || null,
     });
