@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1526 (PR #439)
+ * @version 1.390.1527 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 16:32:06
+ * @lastModified 2026-08-31 16:50:28
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -65,6 +65,7 @@ Options:
   --probe-before                  With --send, read boxsInfo before the command.
   --probe-after                   With --send, read boxsInfo after the command.
   --boxsinfo-timeout-ms <number>   Probe response timeout. Default: 5000.
+  --probe-after-delay-ms <number>  Delay before post-command probe. Default: 1500.
   --output-dir <path>             Write certification-result.json under a timestamped directory.
   --pretty                        Pretty-print JSON result.
   --help                          Show this help.
@@ -113,6 +114,17 @@ const LIVE_CERTIFIABLE_SLOT_CONTROL_COMMANDS = Object.freeze(new Set([
 const DEFAULT_BOXSINFO_TIMEOUT_MS = 5000;
 
 /**
+ * command送信後、after-probeを開始するまでの既定待機時間。
+ *
+ * 【詳細説明】
+ * - K2/CFSの物理状態反映は送信callback直後に完了するとは限らない。
+ * - timeout前に古い状態だけを拾ってunknown化しないよう、probe自体のtimeoutとは別にsettling timeを持つ。
+ *
+ * @constant {number}
+ */
+const DEFAULT_POST_COMMAND_PROBE_DELAY_MS = 1500;
+
+/**
  * 任意値を空でない文字列へ正規化する。
  *
  * 【詳細説明】
@@ -153,6 +165,7 @@ export function parseArgs(argv = []) {
     probeBefore: false,
     probeAfter: false,
     boxsInfoTimeoutMs: DEFAULT_BOXSINFO_TIMEOUT_MS,
+    postCommandProbeDelayMs: DEFAULT_POST_COMMAND_PROBE_DELAY_MS,
     outputDir: "",
     pretty: false,
     help: false,
@@ -178,6 +191,7 @@ export function parseArgs(argv = []) {
     else if (arg === "--probe-before") options.probeBefore = true;
     else if (arg === "--probe-after") options.probeAfter = true;
     else if (arg === "--boxsinfo-timeout-ms") options.boxsInfoTimeoutMs = Number(next());
+    else if (arg === "--probe-after-delay-ms") options.postCommandProbeDelayMs = Number(next());
     else if (arg === "--output-dir") options.outputDir = next();
     else if (arg === "--pretty") options.pretty = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -189,6 +203,11 @@ export function parseArgs(argv = []) {
       options.boxsInfoTimeoutMs < 1000 ||
       options.boxsInfoTimeoutMs > 60000) {
     throw new Error("--boxsinfo-timeout-ms must be between 1000 and 60000.");
+  }
+  if (!Number.isInteger(options.postCommandProbeDelayMs) ||
+      options.postCommandProbeDelayMs < 0 ||
+      options.postCommandProbeDelayMs > 60000) {
+    throw new Error("--probe-after-delay-ms must be between 0 and 60000.");
   }
   const command = toNonEmptyString(options.command);
   if (!options.help && !SUPPORTED_SLOT_CONTROL_COMMANDS.has(command)) {
@@ -240,6 +259,46 @@ export function buildK2CfsSlotControlRequest(options) {
       certificationIntentId: `live-certification:${Date.now()}`,
     },
   };
+}
+
+/**
+ * certification resultへ入れるprobe計画summaryを生成する。
+ *
+ * 【詳細説明】
+ * - dry-runとlive resultで同じ形の計画情報を返し、レビュー時にtimeoutとsettling delayを読み取れるようにする。
+ *
+ * @private
+ * @function createProbePlanSummary
+ * @param {object} options - CLIオプション
+ * @returns {object} probe計画summary
+ */
+function createProbePlanSummary(options) {
+  return {
+    before: Boolean(options.probeBefore),
+    after: Boolean(options.probeAfter),
+    boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
+    postCommandProbeDelayMs: options.postCommandProbeDelayMs,
+  };
+}
+
+/**
+ * 指定millisecondsだけ待機する。
+ *
+ * 【詳細説明】
+ * - 実機commandの物理反映待ちに使う。
+ * - 0以下の場合は即時resolveし、テストや緊急captureで遅延を外せるようにする。
+ *
+ * @private
+ * @function delayMs
+ * @param {number} milliseconds - 待機milliseconds
+ * @returns {Promise<void>} 待機完了でresolveするPromise
+ */
+function delayMs(milliseconds) {
+  const delay = Math.max(0, Number(milliseconds) || 0);
+  if (delay <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 /**
@@ -723,11 +782,7 @@ export async function runK2CfsSlotControlCertification(options) {
       dryRun: true,
       request,
       plan,
-      probePlan: {
-        before: Boolean(options.probeBefore),
-        after: Boolean(options.probeAfter),
-        boxsInfoTimeoutMs: options.boxsInfoTimeoutMs,
-      },
+      probePlan: createProbePlanSummary(options),
     }, options);
   }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
@@ -757,6 +812,7 @@ export async function runK2CfsSlotControlCertification(options) {
           wsPort: options.wsPort,
           request,
           plan,
+          probePlan: createProbePlanSummary(options),
           response: null,
           probes,
         }, options);
@@ -784,12 +840,14 @@ export async function runK2CfsSlotControlCertification(options) {
         wsPort: options.wsPort,
         request,
         plan,
+        probePlan: createProbePlanSummary(options),
         response: null,
         probes,
         error: serializeCertificationError(error),
       }, options);
     }
     if (options.probeAfter) {
+      await delayMs(options.postCommandProbeDelayMs);
       probes.after = await runStructuredBoxsInfoProbe(ws, {
         probeMode: "after",
         timeoutMs: options.boxsInfoTimeoutMs,
@@ -810,6 +868,7 @@ export async function runK2CfsSlotControlCertification(options) {
           wsPort: options.wsPort,
           request,
           plan,
+          probePlan: createProbePlanSummary(options),
           response,
           probes,
         }, options);
@@ -830,6 +889,7 @@ export async function runK2CfsSlotControlCertification(options) {
       wsPort: options.wsPort,
       request,
       plan,
+      probePlan: createProbePlanSummary(options),
       response,
       probes,
     }, options);

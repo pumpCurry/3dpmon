@@ -153,6 +153,9 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `cfs-slot-select` / `cfs-feed` / `cfs-retract` はshape確認用dry-run候補に留め、追加capture根拠なしには送信しない。
 - 同CLIは `--probe-before` / `--probe-after` 指定時だけ、同じWS9999 sessionでread-only `get { boxsInfo: 1 }` を送る。
   これは操作frame前後の観測差分を残すための補助であり、command成功の証明やblind retryには使わない。
+- `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
+  `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
+  実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
 
 このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
 
@@ -215,6 +218,7 @@ live certificationは次の順で進める。
      --confirm-command cfs-load \
      --probe-before \
      --probe-after \
+     --probe-after-delay-ms 1500 \
      --output-dir tmp/k2-cfs-slot-control-captures \
      --pretty
    ```
@@ -243,6 +247,8 @@ live certificationは次の順で進める。
 
    `--output-dir` を指定した場合は、timestamp付きdirectoryへ `certification-result.json` を保存する。
    dry-run/live/unknownのいずれも同じJSON shapeで保存されるため、このfileをreviewerへ渡す。
+   `probePlan` には `boxsInfoTimeoutMs` と `postCommandProbeDelayMs` の両方を保存するため、後から
+   「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
    `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
 
    ```text

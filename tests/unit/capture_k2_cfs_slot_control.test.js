@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1526 (PR #439)
+ * @version 1.390.1527 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 16:32:06
+ * @lastModified 2026-08-31 16:50:28
  */
 
 import { EventEmitter } from "node:events";
@@ -62,6 +62,7 @@ describe("capture_k2_cfs_slot_control", () => {
       before: false,
       after: false,
       boxsInfoTimeoutMs: 5000,
+      postCommandProbeDelayMs: 1500,
     });
   });
 
@@ -104,6 +105,11 @@ describe("capture_k2_cfs_slot_control", () => {
       "999",
     ])).toThrow("--boxsinfo-timeout-ms must be between 1000 and 60000");
     expect(() => parseArgs([
+      ...baseArgs,
+      "--probe-after-delay-ms",
+      "-1",
+    ])).toThrow("--probe-after-delay-ms must be between 0 and 60000");
+    expect(() => parseArgs([
       "--send",
       "--host",
       "192.168.54.153",
@@ -136,6 +142,17 @@ describe("capture_k2_cfs_slot_control", () => {
       probeBefore: true,
       probeAfter: true,
       boxsInfoTimeoutMs: 1500,
+      postCommandProbeDelayMs: 1500,
+    });
+    expect(parseArgs([
+      "--command",
+      "cfs-load",
+      "--source",
+      "cfs:1:slot:0",
+      "--probe-after-delay-ms",
+      "2500",
+    ])).toMatchObject({
+      postCommandProbeDelayMs: 2500,
     });
   });
 
@@ -407,6 +424,8 @@ describe("capture_k2_cfs_slot_control", () => {
         "cfs:1:slot:0",
         "--probe-before",
         "--probe-after",
+        "--probe-after-delay-ms",
+        "0",
         "--boxsinfo-timeout-ms",
         "1000",
       ]),
@@ -442,6 +461,76 @@ describe("capture_k2_cfs_slot_control", () => {
     ]);
     expect(ws.closed).toBe(true);
     expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("post-command probeは反映待ちdelay後に送信する", async () => {
+    class DelayedAfterProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.sentAt = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        this.sentAt.push(Date.now());
+        if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{ id: 1, type: 0, materials: [{ id: 0, state: 1 }] }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new DelayedAfterProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-before",
+        "--probe-after",
+        "--probe-after-delay-ms",
+        "25",
+        "--boxsinfo-timeout-ms",
+        "1000",
+      ]),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "confirmed",
+      probePlan: {
+        postCommandProbeDelayMs: 25,
+      },
+    });
+    expect(ws.sentFrames).toHaveLength(3);
+    expect(ws.sentFrames[2]).toEqual({ method: "get", params: { boxsInfo: 1 } });
+    expect(ws.sentAt[2] - ws.sentAt[1]).toBeGreaterThanOrEqual(20);
   });
 
   it("command送信後のprobe timeoutは送信証跡を保持したunknown結果として返す", async () => {
@@ -490,6 +579,8 @@ describe("capture_k2_cfs_slot_control", () => {
         "cfs:1:slot:0",
         "--probe-before",
         "--probe-after",
+        "--probe-after-delay-ms",
+        "0",
         "--boxsinfo-timeout-ms",
         "1000",
       ]),
