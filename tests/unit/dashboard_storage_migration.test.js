@@ -48,6 +48,20 @@ const monitorData = {
   ledgerRepairRequired: {},
   filamentEventContext: {},
   materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  materialAccountingMigrationJournal: {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: null,
+    byMigrationId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  },
   hostSpoolMap: {},
   hostCameraToggle: {},
   spoolSerialCounter: 0,
@@ -76,6 +90,20 @@ function resetMonitorData() {
   monitorData.ledgerRepairRequired = {};
   monitorData.hostSpoolMap = {};
   monitorData.materialSourceObservations = { schemaVersion: 1, byDeviceId: {} };
+  monitorData.materialAccountingMigrationJournal = {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: null,
+    byMigrationId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  };
   monitorData.hostCameraToggle = {};
   monitorData.spoolSerialCounter = 0;
 }
@@ -108,6 +136,44 @@ const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await impor
 const {
   deriveMaterialSourceObservationFreshness,
 } = await import('../../3dp_lib/printer_core/dashboard_material_source_observation.js');
+const {
+  createMaterialAccountingMigrationDryRunPlan,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_migration_planner.js');
+const {
+  recordMaterialAccountingMigrationDryRunPlan,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_migration_journal.js');
+
+/**
+ * storage round-tripで使用するREADYなUniversal MaterialSource移行dry-run planを生成する。
+ *
+ * 【詳細説明】
+ * - legacy single-spool hostをUniversal MaterialSourceへ移行できる最小構成を作る。
+ * - journalが保存・復元されても、hostSpoolMapやfilamentSpoolsへ追加投影されないことを検証する。
+ *
+ * @function createStorageReadyMaterialMigrationPlan
+ * @param {string=} host - 移行対象のlegacy host。
+ * @returns {Object} dry-run migration plan。
+ */
+function createStorageReadyMaterialMigrationPlan(host = "K1Max-4A1B") {
+  return createMaterialAccountingMigrationDryRunPlan({
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: host,
+          printerType: "k1",
+          materialSystem: { mode: "single-spool", unitLimit: 0 },
+          printerCoreV3Identity: { deviceIdSeed: `serial:${host.toLowerCase()}` },
+        },
+      ],
+    },
+    machines: { [host]: { printerType: "k1" } },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+    ],
+    hostSpoolMap: { [host]: "spool-031" },
+    materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  }, { createdAt: "2026-08-31T03:50:00.000Z" });
+}
 
 beforeEach(() => {
   globalThis.localStorage.clear();
@@ -357,6 +423,72 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
         },
       },
     });
+  });
+
+  it('Gate18.9B: materialAccountingMigrationJournal はdry-run evidenceとして往復し台帳へ投影しない', () => {
+    monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 336000, updatedAt: 100 }];
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
+    const plan = createStorageReadyMaterialMigrationPlan();
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:51:00.000Z",
+    });
+    monitorData.materialAccountingMigrationJournal = recorded.journal;
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingMigrationJournal).toMatchObject({
+      authority: "migration-dry-run-journal",
+      latestMigrationId: plan.migrationId,
+      invariants: {
+        activateUniversalWrites: false,
+        materialSourceRepositoryWrites: false,
+        spoolMountRepositoryWrites: false,
+      },
+    });
+    expect(monitorData.materialAccountingMigrationJournal.byMigrationId[plan.migrationId].plan).toMatchObject({
+      status: "dry-run",
+      invariants: { activateUniversalWrites: false },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
+    expect(monitorData.filamentSpools).toHaveLength(1);
+    expect(monitorData.filamentSpools[0]).toMatchObject({
+      id: "spool-031",
+      remainingLengthMm: 336000,
+      updatedAt: 100,
+    });
+    expect(monitorData.materialSourceObservations).toMatchObject({
+      schemaVersion: 1,
+      authority: "observation-only",
+      byDeviceId: {},
+    });
+  });
+
+  it('Gate18.9B: importAllData はmaterialAccountingMigrationJournalを正規化してdry-run evidenceとして保持する', async () => {
+    const plan = createStorageReadyMaterialMigrationPlan();
+    const recorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:51:00.000Z",
+    });
+
+    await importAllData({
+      materialAccountingMigrationJournal: recorded.journal,
+    });
+
+    expect(monitorData.materialAccountingMigrationJournal.latestMigrationId).toBe(plan.migrationId);
+    expect(monitorData.materialAccountingMigrationJournal.events).toEqual([
+      expect.objectContaining({
+        type: "migration-dry-run-recorded",
+        migrationId: plan.migrationId,
+      }),
+    ]);
+    expect(monitorData.materialAccountingMigrationJournal.invariants).toMatchObject({
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    });
+    expect(monitorData.hostSpoolMap).toEqual({});
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {

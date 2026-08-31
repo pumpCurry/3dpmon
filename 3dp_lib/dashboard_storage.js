@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
-* @version 1.390.1424 (PR #435)
+* @version 1.390.1506 (PR #438)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-28 01:48:55
+* @lastModified 2026-08-31 12:18:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -44,6 +44,7 @@ import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
+import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -74,6 +75,90 @@ const MAX_VIDEOS = 500;
 
 /** IndexedDB 初期化済みフラグ */
 let _idbInitialized = false;
+
+/**
+ * Universal MaterialSource移行dry-run journalを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - journalはGate 18.9B時点ではdry-run evidenceであり、本番MaterialSource/SpoolMountへ投影しない。
+ * - 既存journalと復元/importされたjournalをmigrationId単位でマージし、同一migrationIdでchecksumが違う
+ *   entryは破棄せずretainedUnsupportedEntriesへ隔離する。
+ * - eventsはmigrationIdが有効なentryだけを保持し、同一eventIdは重複登録しない。
+ *
+ * @private
+ * @function _mergeMaterialAccountingMigrationJournal
+ * @param {Object|null|undefined} incomingJournal - 復元またはimportされたjournal候補。
+ * @returns {boolean} 有効なjournal候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingMigrationJournal(incomingJournal) {
+  if (!incomingJournal || typeof incomingJournal !== "object" || Array.isArray(incomingJournal)) {
+    return false;
+  }
+
+  const currentJournal = normalizeStoredMaterialAccountingMigrationJournal(
+    monitorData.materialAccountingMigrationJournal
+  );
+  const restoredJournal = normalizeStoredMaterialAccountingMigrationJournal(incomingJournal);
+  const mergedByMigrationId = { ...currentJournal.byMigrationId };
+  const retainedUnsupportedEntries = [
+    ...(currentJournal.retainedUnsupportedEntries || []),
+    ...(restoredJournal.retainedUnsupportedEntries || []),
+  ];
+
+  for (const [migrationId, entry] of Object.entries(restoredJournal.byMigrationId || {})) {
+    const existing = mergedByMigrationId[migrationId];
+    if (!existing) {
+      mergedByMigrationId[migrationId] = entry;
+      continue;
+    }
+    if (existing.sourceChecksum !== entry.sourceChecksum) {
+      retainedUnsupportedEntries.push({
+        migrationId,
+        reason: "migration-journal-plan-conflict",
+        currentSourceChecksum: existing.sourceChecksum,
+        incomingSourceChecksum: entry.sourceChecksum,
+      });
+    }
+  }
+
+  const validMigrationIds = new Set(Object.keys(mergedByMigrationId));
+  const mergedEvents = [];
+  const seenEventIds = new Set();
+  for (const event of [
+    ...(currentJournal.events || []),
+    ...(restoredJournal.events || []),
+  ]) {
+    if (!event || typeof event !== "object") continue;
+    if (!validMigrationIds.has(event.migrationId)) continue;
+    const eventId = event.eventId || `${event.type}:${event.migrationId}:${event.recordedAt || ""}`;
+    if (seenEventIds.has(eventId)) continue;
+    seenEventIds.add(eventId);
+    mergedEvents.push(event);
+  }
+
+  const latestMigrationId = validMigrationIds.has(restoredJournal.latestMigrationId)
+    ? restoredJournal.latestMigrationId
+    : (validMigrationIds.has(currentJournal.latestMigrationId)
+      ? currentJournal.latestMigrationId
+      : (mergedEvents[mergedEvents.length - 1]?.migrationId || null));
+
+  monitorData.materialAccountingMigrationJournal = normalizeStoredMaterialAccountingMigrationJournal({
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId,
+    byMigrationId: mergedByMigrationId,
+    events: mergedEvents,
+    retainedUnsupportedEntries,
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  });
+
+  return true;
+}
 
 /**
  * ストレージバックエンドを初期化する。
@@ -403,6 +488,12 @@ export async function importAllData(data) {
     }
     monitorData.materialSourceObservations.schemaVersion = 1;
     monitorData.materialSourceObservations.authority = "observation-only";
+  }
+
+  // ── Gate 18.9B: Universal MaterialSource移行dry-run journalをimportする ──
+  //   移行計画の証跡だけを保持し、管理スプール装着・使用履歴・台帳へは投影しない。
+  if (data.materialAccountingMigrationJournal && typeof data.materialAccountingMigrationJournal === "object") {
+    _mergeMaterialAccountingMigrationJournal(data.materialAccountingMigrationJournal);
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -772,6 +863,7 @@ const LS_GLOBAL_FIELDS = [
   "filamentEventContext",
   // ★ Gate 18.7: CFS/CFS-C/外部スプールのread-only機器観測フィラメント履歴。
   "materialSourceObservations",
+  "materialAccountingMigrationJournal",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -1032,6 +1124,8 @@ function _flushStorage() {
       queueSharedWrite("filamentEventContext", monitorData.filamentEventContext);
       // ★ Gate 18.7: 機器観測フィラメントはread-only evidenceとして保存し、台帳権威へは混ぜない。
       queueSharedWrite("materialSourceObservations", monitorData.materialSourceObservations);
+      // ★ Gate 18.9B: Universal MaterialSource移行dry-run journalを証跡として保存する。
+      queueSharedWrite("materialAccountingMigrationJournal", monitorData.materialAccountingMigrationJournal);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1545,6 +1639,16 @@ function _restoreFromData(shared, machines) {
     }
     monitorData.materialSourceObservations.schemaVersion = 1;
     monitorData.materialSourceObservations.authority = "observation-only";
+  }
+
+  // ★ Gate 18.9B: Universal MaterialSource移行dry-run journalを復元する。
+  //   復元してもMaterialSource/SpoolMount/usage ledgerへの本番書き込みは有効化しない。
+  if (shared?.materialAccountingMigrationJournal && typeof shared.materialAccountingMigrationJournal === "object") {
+    _mergeMaterialAccountingMigrationJournal(shared.materialAccountingMigrationJournal);
+  } else {
+    monitorData.materialAccountingMigrationJournal = normalizeStoredMaterialAccountingMigrationJournal(
+      monitorData.materialAccountingMigrationJournal
+    );
   }
 
   // ★ userPresets / hiddenPresets の復元（Phase 2 で追加したが restore が漏れていた）

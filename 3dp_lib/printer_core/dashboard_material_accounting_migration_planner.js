@@ -16,12 +16,12 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1505 (PR #438)
+ * @version 1.390.1506 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 12:07:00
+ * @lastModified 2026-08-31 12:22:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9A review後にIndexedDB backed migration journalへ接続する
+ * - trusted print-start material binding snapshotとsource-specific usage evidenceは後続Gateで接続する
  */
 
 "use strict";
@@ -385,8 +385,60 @@ function isSingleDirectLikeSourceKind(kind) {
  * @returns {boolean} stable source identityならtrue。
  */
 function hasStableObservedSourceIdentity(source) {
-  return source?.identityStrength === MATERIAL_IDENTITY_STRENGTH.STABLE ||
-    source?.identityStrength === "stable";
+  const explicitStrength = toTrimmedString(
+    source?.sourceIdentityStrength ||
+    source?.materialSourceIdentityStrength ||
+    source?.identity?.identityStrength ||
+    source?.identity?.strength
+  ).toLowerCase();
+  return explicitStrength === MATERIAL_IDENTITY_STRENGTH.STABLE ||
+    explicitStrength === "stable";
+}
+
+/**
+ * observation sourceからlocator入力を抽出する。
+ *
+ * 【詳細説明】
+ * - Gate18.7のObservation Storeは`locator` objectだけでなく、top-levelの`boxId`、
+ *   `slotId`、`protocolSlotId`へprotocol位置証拠を保持する。
+ * - plannerはこの実shapeをMaterialSource locatorへ正規化し、index 0へ潰さない。
+ *
+ * @private
+ * @function resolveObservedSourceLocatorInput
+ * @param {?Object} source - observed source snapshot。
+ * @returns {?Object} locator入力、またはnull。
+ */
+function resolveObservedSourceLocatorInput(source) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const kind = resolveObservedSourceKind(source);
+  const locator = source.locator && typeof source.locator === "object" ? source.locator : {};
+  const slotLikeIndex = toFiniteNumber(
+    locator.index,
+    toFiniteNumber(source.index, toFiniteNumber(source.slotIndex, toFiniteNumber(source.slotId)))
+  );
+  const unitIndex = toFiniteNumber(
+    locator.unitIndex,
+    toFiniteNumber(source.unitIndex, toFiniteNumber(source.boxId))
+  );
+  const boxId = toFiniteNumber(locator.boxId, toFiniteNumber(source.boxId));
+  const slotIndex = toFiniteNumber(
+    locator.slotIndex,
+    toFiniteNumber(source.slotIndex, toFiniteNumber(source.slotId))
+  );
+  const protocolSlotId = toTrimmedString(
+    locator.protocolSlotId ?? source.protocolSlotId ?? source.slotId
+  ) || null;
+
+  return {
+    kind,
+    index: slotLikeIndex,
+    unitIndex,
+    boxId,
+    slotIndex,
+    protocolSlotId,
+  };
 }
 
 /**
@@ -402,16 +454,21 @@ function hasStableObservedSourceIdentity(source) {
  * @returns {boolean} locatorがcompleteならtrue。
  */
 function hasCompleteObservedSourceLocator(source) {
-  const locator = source?.locator && typeof source.locator === "object" ? source.locator : null;
+  const locator = resolveObservedSourceLocatorInput(source);
   if (!locator) {
     return false;
   }
   const kind = resolveObservedSourceKind(source);
   if (kind === MATERIAL_SOURCE_KIND.DIRECT_FEED || kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL) {
-    return Number.isFinite(Number(locator.index));
+    return locator.index !== null && locator.index !== undefined && Number.isFinite(Number(locator.index));
   }
   if (kind === MATERIAL_SOURCE_KIND.CFS_SLOT || kind === MATERIAL_SOURCE_KIND.CFS_C_SLOT) {
-    return Number.isFinite(Number(locator.unitIndex)) && Number.isFinite(Number(locator.slotIndex));
+    return locator.unitIndex !== null &&
+      locator.unitIndex !== undefined &&
+      locator.slotIndex !== null &&
+      locator.slotIndex !== undefined &&
+      Number.isFinite(Number(locator.unitIndex)) &&
+      Number.isFinite(Number(locator.slotIndex));
   }
   return false;
 }
@@ -481,15 +538,9 @@ function resolveObservedSourceKind(source) {
 function createSingleSourcePlannedRecords(input) {
   const observedSource = input.observedSource || null;
   const sourceKind = observedSource ? resolveObservedSourceKind(observedSource) : MATERIAL_SOURCE_KIND.DIRECT_FEED;
-  const sourceLocator = observedSource?.locator && typeof observedSource.locator === "object"
-    ? createMaterialSourceLocator({
-      kind: sourceKind,
-      index: observedSource.locator.index,
-      unitIndex: observedSource.locator.unitIndex,
-      boxId: observedSource.locator.boxId,
-      slotIndex: observedSource.locator.slotIndex,
-      protocolSlotId: observedSource.locator.protocolSlotId,
-    })
+  const observedLocator = resolveObservedSourceLocatorInput(observedSource);
+  const sourceLocator = observedLocator
+    ? createMaterialSourceLocator(observedLocator)
     : createMaterialSourceLocator({ kind: sourceKind, index: 0 });
   const unit = createFilamentUnitRecord({
     deviceId: input.deviceId,

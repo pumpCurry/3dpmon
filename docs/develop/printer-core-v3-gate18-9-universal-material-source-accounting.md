@@ -260,7 +260,36 @@ It is not a debit authority for multi-source devices.
 
 ## Gate 18.9B Scope
 
-Gate 18.9B connects usage attribution:
+Gate 18.9B persists the dry-run migration plan as evidence only:
+
+- `materialAccountingMigrationJournal`
+- localStorage round-trip for legacy/no-IDB environments
+- IndexedDB shared-store durability
+- import/export normalization
+- invalid or conflicting journal entry quarantine
+- self-checking dry-run plan validation before journal insertion
+
+The journal is not a production repository. It must not write
+`MaterialSource`, `SpoolMount`, `mountHistory`, `usageHistory`, or managed spool
+remaining values. It records only reviewed migration evidence so that restart,
+import, and later cutover planning can continue from the same dry-run facts.
+
+Journal invariants are:
+
+```text
+activateUniversalWrites = false
+materialSourceRepositoryWrites = false
+spoolMountRepositoryWrites = false
+migrationJournalIsEvidenceOnly = true
+```
+
+When a stored journal contains the same `migrationId` with a different
+`sourceChecksum`, the incoming entry is retained as unsupported evidence rather
+than overwriting the reviewed dry-run entry.
+
+## Gate 18.9C Scope
+
+Gate 18.9C connects usage attribution:
 
 - trusted print-start material binding snapshot issuer/repository
 - `JobMaterialSegment`
@@ -277,9 +306,9 @@ treat an identical payload as duplicate/no-op. If the same idempotency identity
 arrives with a different usage payload, the repository must not overwrite the
 existing event; it must create conflict/correction evidence instead.
 
-## Gate 18.9C Scope
+## Gate 18.9D Scope
 
-Gate 18.9C adds the read model and UI cutover:
+Gate 18.9D adds the read model and UI cutover:
 
 - `MaterialSourceAccountingView`
 - legacy compatibility projection for `N=1`
@@ -337,6 +366,16 @@ Gate 18.9A tests:
 
 Gate 18.9B tests:
 
+- valid dry-run plan is recorded without enabling authority writes
+- duplicate `migrationId` + same checksum is idempotent and does not duplicate events
+- duplicate `migrationId` + different checksum is rejected as a journal conflict
+- invalid stored journal entries are retained as unsupported evidence
+- localStorage round-trip keeps the journal without projecting it to spool/mount observations
+- IndexedDB durable save queues the journal as a shared dry-run evidence key
+- import/export restores the journal through normalization and keeps `hostSpoolMap` untouched
+
+Gate 18.9C tests:
+
 - `1A=3210mm`, `1B=6543mm`, `1D=1234mm` debit separate mounts
 - `1C=0mm` is confirmed only with a complete source-specific result set
 - incomplete result set leaves `1C` as unknown
@@ -344,7 +383,7 @@ Gate 18.9B tests:
 - print-start snapshot keeps attribution stable after current mount changes
 - duplicate completion is idempotent
 
-Gate 18.9C tests:
+Gate 18.9D tests:
 
 - N=1 keeps familiar K1 spool card behavior
 - N>1 renders source-aware cards

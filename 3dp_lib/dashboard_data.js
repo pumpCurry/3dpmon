@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
-* @version 1.390.1422 (PR #435)
+* @version 1.390.1506 (PR #438)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-27 23:08:42
+* @lastModified 2026-08-31 12:18:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -361,6 +361,26 @@ export const monitorData = {
    * @type {{schemaVersion:number, byDeviceId:Object.<string, Object>}}
    */
   materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  /**
+   * Gate 18.9B: Universal MaterialSource移行dry-run journal。
+   * READY/CANDIDATE/BLOCKEDの移行計画と検証証跡を保持するが、ここから
+   * MaterialSource / SpoolMount / usage ledger の本番権威へ自動反映しない。
+   * @type {{schemaVersion:number, authority:string, latestMigrationId:?string, byMigrationId:Object.<string, Object>, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  materialAccountingMigrationJournal: {
+    schemaVersion: 1,
+    authority: "migration-dry-run-journal",
+    latestMigrationId: null,
+    byMigrationId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      activateUniversalWrites: false,
+      materialSourceRepositoryWrites: false,
+      spoolMountRepositoryWrites: false,
+      migrationJournalIsEvidenceOnly: true,
+    },
+  },
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。
   /**
    * ホストごとの装着スプールIDマップ。

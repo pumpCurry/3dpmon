@@ -1,0 +1,188 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Universal MaterialSource migration journal 単体テスト
+ * @file printer_core_material_accounting_migration_journal.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_material_accounting_migration_journal_test
+ *
+ * 【機能内容サマリ】
+ * - Gate 18.9B のdry-run migration journalがauthority writeを持たないことを検証
+ * - valid planだけを保存し、同一plan再保存を冪等化する境界を固定
+ * - 破損済み保存値をUniversal repositoryへ投影せず隔離する境界を固定
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1506 (PR #438)
+ * @since   1.390.1506 (PR #438)
+ * @lastModified 2026-08-31 12:12:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
+
+import { describe, expect, it } from "vitest";
+
+import {
+  createMaterialAccountingMigrationDryRunPlan,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_migration_planner.js";
+import {
+  createMaterialAccountingMigrationJournal,
+  normalizeStoredMaterialAccountingMigrationJournal,
+  recordMaterialAccountingMigrationDryRunPlan,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_migration_journal.js";
+
+/**
+ * READYなdry-run plan fixtureを生成する。
+ *
+ * @function createReadyPlan
+ * @param {string=} host - legacy host key。
+ * @returns {Object} migration dry-run plan。
+ */
+function createReadyPlan(host = "K1Max-4A1B") {
+  return createMaterialAccountingMigrationDryRunPlan({
+    appSettings: {
+      connectionTargets: [
+        {
+          hostname: host,
+          printerType: "k1",
+          materialSystem: { mode: "single-spool", unitLimit: 0 },
+          printerCoreV3Identity: { deviceIdSeed: `serial:${host.toLowerCase()}` },
+        },
+      ],
+    },
+    machines: { [host]: { printerType: "k1" } },
+    filamentSpools: [
+      { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+    ],
+    hostSpoolMap: { [host]: "spool-031" },
+    materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
+  }, { createdAt: "2026-08-31T03:40:00.000Z" });
+}
+
+describe("Material accounting migration journal", () => {
+  it("valid dry-run planをjournalへ保存し、authority writeを有効化しない", () => {
+    const plan = createReadyPlan();
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(result).toMatchObject({ ok: true, action: "insert" });
+    expect(result.journal).toMatchObject({
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: plan.migrationId,
+      invariants: {
+        activateUniversalWrites: false,
+        materialSourceRepositoryWrites: false,
+        spoolMountRepositoryWrites: false,
+      },
+    });
+    expect(result.journal.byMigrationId[plan.migrationId].plan).toMatchObject({
+      migrationId: plan.migrationId,
+      status: "dry-run",
+      invariants: { activateUniversalWrites: false },
+    });
+    expect(result.journal.events).toEqual([
+      expect.objectContaining({
+        type: "migration-dry-run-recorded",
+        migrationId: plan.migrationId,
+        recordedAt: "2026-08-31T03:41:00.000Z",
+      }),
+    ]);
+  });
+
+  it("同一migrationIdかつ同一checksumの再保存はeventを重複させず冪等に扱う", () => {
+    const plan = createReadyPlan();
+    const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const second = recordMaterialAccountingMigrationDryRunPlan(first.journal, plan, {
+      recordedAt: "2026-08-31T03:42:00.000Z",
+    });
+
+    expect(second).toMatchObject({ ok: true, action: "noop" });
+    expect(second.journal.events).toHaveLength(1);
+    expect(second.journal.byMigrationId[plan.migrationId].recordedAt).toBe("2026-08-31T03:41:00.000Z");
+  });
+
+  it("invalid planはjournalへ保存しない", () => {
+    const plan = createReadyPlan();
+    const invalid = { ...plan, status: "apply" };
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, invalid, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "invalid-plan",
+      reason: "plan-status-not-dry-run",
+    });
+    expect(result.journal.byMigrationId).toEqual({});
+  });
+
+  it("同じmigrationIdで異なるchecksumのplanはconflictとして拒否する", () => {
+    const plan = createReadyPlan();
+    const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const conflicting = {
+      ...createReadyPlan("K1Max-Other"),
+      migrationId: plan.migrationId,
+    };
+    const result = recordMaterialAccountingMigrationDryRunPlan(first.journal, conflicting, {
+      recordedAt: "2026-08-31T03:42:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "conflict",
+      reason: "migration-journal-plan-conflict",
+    });
+    expect(result.journal.events).toHaveLength(1);
+    expect(result.journal.byMigrationId[plan.migrationId].plan.source.checksum).toBe(plan.source.checksum);
+  });
+
+  it("保存済みjournalの壊れたentryはretainedUnsupportedEntriesへ隔離する", () => {
+    const plan = createReadyPlan();
+    const stored = {
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: "broken",
+      byMigrationId: {
+        [plan.migrationId]: { migrationId: plan.migrationId, sourceChecksum: plan.source.checksum, plan },
+        broken: { migrationId: "broken", sourceChecksum: "x", plan: { status: "apply" } },
+      },
+      events: [
+        { eventId: "ok", type: "migration-dry-run-recorded", migrationId: plan.migrationId },
+        { eventId: "bad", type: "migration-dry-run-recorded", migrationId: "broken" },
+      ],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(Object.keys(journal.byMigrationId)).toEqual([plan.migrationId]);
+    expect(journal.latestMigrationId).toBe(plan.migrationId);
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({ migrationId: "broken", reason: "plan-not-object-or-invalid" }),
+    ]);
+    expect(journal.events).toEqual([
+      expect.objectContaining({ eventId: "ok", migrationId: plan.migrationId }),
+    ]);
+  });
+
+  it("createMaterialAccountingMigrationJournalは呼び出し側mutationから内部snapshotを守る", () => {
+    const plan = createReadyPlan();
+    const journal = createMaterialAccountingMigrationJournal();
+    const result = recordMaterialAccountingMigrationDryRunPlan(journal, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+
+    expect(() => {
+      result.journal.latestMigrationId = "mutated";
+    }).toThrow();
+    expect(result.journal.latestMigrationId).toBe(plan.migrationId);
+  });
+});

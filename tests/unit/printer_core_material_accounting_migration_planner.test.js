@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1505 (PR #438)
+ * @version 1.390.1506 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 12:09:00
+ * @lastModified 2026-08-31 12:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -370,7 +370,7 @@ describe("Material accounting migration dry-run planner", () => {
               "external:0": {
                 sourceId: "external:0",
                 kind: "external-spool",
-                identityStrength: "provisional",
+                sourceIdentityStrength: "provisional",
                 locator: { kind: "external-spool", index: 0 },
                 displayLabel: "外部スプール",
               },
@@ -420,7 +420,7 @@ describe("Material accounting migration dry-run planner", () => {
               "external:unknown": {
                 sourceId: "external:unknown",
                 kind: "external-spool",
-                identityStrength: "stable",
+                sourceIdentityStrength: "stable",
                 displayLabel: "外部スプール",
               },
             },
@@ -469,7 +469,7 @@ describe("Material accounting migration dry-run planner", () => {
               "external:1": {
                 sourceId: "external:1",
                 kind: "external-spool",
-                identityStrength: "stable",
+                sourceIdentityStrength: "stable",
                 locator: { kind: "external-spool", index: 1 },
                 displayLabel: "外部スプール 2",
               },
@@ -494,6 +494,111 @@ describe("Material accounting migration dry-run planner", () => {
           null,
           1,
         ],
+      },
+    });
+  });
+
+  it("Observation Store実shapeのboxId/slotIdをlocatorとして使い、source固有identityだけでREADYにする", () => {
+    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K2Pro-ObservedExternal",
+            printerType: "k2",
+            printerCoreV3Identity: {
+              deviceIdSeed: "serial:k2pro-observed-external",
+              identityStrength: "serial",
+            },
+          },
+        ],
+      },
+      hostSpoolMap: { "K2Pro-ObservedExternal": "spool-031" },
+      materialSourceObservations: {
+        schemaVersion: 1,
+        byDeviceId: {
+          "serial:k2pro-observed-external": {
+            deviceId: "serial:k2pro-observed-external",
+            host: "K2Pro-ObservedExternal",
+            snapshotCompleteness: "complete",
+            lastObservedAt: "2026-08-31T03:36:00.000Z",
+            restoredFromStorage: false,
+            latestBySourceId: {
+              "external:1": {
+                sourceId: "external:1",
+                kind: "external-spool",
+                identityStrength: "stable",
+                sourceIdentityStrength: "stable",
+                boxId: 0,
+                slotId: 1,
+                protocolSlotId: "1",
+                displayLabel: "外部スプール 2",
+              },
+            },
+          },
+        },
+      },
+    }), { createdAt: "2026-08-31T03:36:10.000Z" });
+
+    expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY);
+    expect(plan.entries[0].plannedWrites.materialSources[0]).toMatchObject({
+      kind: MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL,
+      locator: {
+        kind: MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL,
+        index: 1,
+        boxId: 0,
+        protocolSlotId: "1",
+      },
+    });
+  });
+
+  it("Observation Store由来のdevice identityStrengthだけではsource identity証拠としてREADYにしない", () => {
+    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K2Pro-DeviceOnlyIdentity",
+            printerType: "k2",
+            printerCoreV3Identity: {
+              deviceIdSeed: "serial:k2pro-device-only-identity",
+              identityStrength: "serial",
+            },
+          },
+        ],
+      },
+      hostSpoolMap: { "K2Pro-DeviceOnlyIdentity": "spool-031" },
+      materialSourceObservations: {
+        schemaVersion: 1,
+        byDeviceId: {
+          "serial:k2pro-device-only-identity": {
+            deviceId: "serial:k2pro-device-only-identity",
+            host: "K2Pro-DeviceOnlyIdentity",
+            snapshotCompleteness: "complete",
+            lastObservedAt: "2026-08-31T03:36:00.000Z",
+            restoredFromStorage: false,
+            latestBySourceId: {
+              "external:1": {
+                sourceId: "external:1",
+                kind: "external-spool",
+                identityStrength: "stable",
+                boxId: 0,
+                slotId: 1,
+                protocolSlotId: "1",
+                displayLabel: "外部スプール 2",
+              },
+            },
+          },
+        },
+      },
+    }), { createdAt: "2026-08-31T03:36:10.000Z" });
+
+    expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(plan.entries[0]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_INSUFFICIENT],
+      plannedWrites: {
+        filamentUnits: [],
+        materialSources: [],
+        spoolMounts: [],
       },
     });
   });

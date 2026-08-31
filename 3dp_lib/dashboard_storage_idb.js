@@ -23,9 +23,9 @@
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  *
- * @version 1.390.1422 (PR #435)
+ * @version 1.390.1506 (PR #438)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-08-27 23:08:42
+ * @lastModified 2026-08-31 12:18:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -119,6 +119,8 @@ const SHARED_KEYS = [
   "ledgerRepairRequired",
   // ★ Gate 18.7: 機器観測フィラメントはread-only evidenceとしてsharedに保存する。
   "materialSourceObservations",
+  // ★ Gate 18.9B: Universal MaterialSource移行dry-run journalはauthority書き込みなしの証跡として保存する。
+  "materialAccountingMigrationJournal",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",
