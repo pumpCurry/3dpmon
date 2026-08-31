@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest のテストケースのみを定義する
  *
- * @version 1.390.1543 (PR #439)
+ * @version 1.390.1546 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:10:36
+ * @lastModified 2026-08-31 19:36:46
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -28,6 +28,7 @@ import {
   PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS,
   appendPhysicalCommandRecoveryLatchRecord,
   createPhysicalCommandRecoveryLatchRecord,
+  isPhysicalCommandRecoveryBlocked,
   normalizeStoredPhysicalCommandRecoveryLatchStore,
   resolvePhysicalCommandRecoveryLatchRecord,
 } from "../../3dp_lib/printer_core/dashboard_physical_command_recovery_latch.js";
@@ -163,6 +164,42 @@ describe("dashboard_physical_command_recovery_latch", () => {
         conflictedDigest: conflictingRecord.digest,
       }),
     ]);
+  });
+
+  it("UI/dispatcher用blocker APIは未解決recordとconflict indexの両方をblock扱いにする", () => {
+    const firstRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput({
+      commandId: "command:k2-select-1a",
+    }));
+    const conflictedRecord = createPhysicalCommandRecoveryLatchRecord(createCommandInput({
+      commandId: "command:k2-load-1b",
+    }));
+    const store = normalizeStoredPhysicalCommandRecoveryLatchStore({
+      unresolvedByCommandId: {
+        [firstRecord.commandId]: firstRecord,
+      },
+      conflictedCommandIds: [conflictedRecord.commandId],
+    });
+
+    expect(isPhysicalCommandRecoveryBlocked(store, "command:k2-select-1a")).toMatchObject({
+      blocked: true,
+      reason: "unresolved-recovery",
+      commandId: "command:k2-select-1a",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(store, "command:k2-load-1b")).toMatchObject({
+      blocked: true,
+      reason: "conflicted-recovery",
+      commandId: "command:k2-load-1b",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(store, "command:k2-unload-1c")).toEqual({
+      blocked: false,
+      reason: "not-blocked",
+      commandId: "command:k2-unload-1c",
+    });
+    expect(isPhysicalCommandRecoveryBlocked(store, "   ")).toEqual({
+      blocked: false,
+      reason: "missing-command-id",
+      commandId: "",
+    });
   });
 
   it("保存済みdigestがcanonical recordから再計算した値と異なる場合は未解決authorityから隔離する", () => {

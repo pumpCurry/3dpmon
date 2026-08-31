@@ -16,11 +16,12 @@
  * - {@link normalizeStoredPhysicalCommandRecoveryLatchStore}：保存済み復旧ラッチstoreを正規化
  * - {@link createPhysicalCommandRecoveryLatchRecord}：送信結果から未解決候補recordを生成
  * - {@link appendPhysicalCommandRecoveryLatchRecord}：未解決候補recordをstoreへ冪等追加
+ * - {@link isPhysicalCommandRecoveryBlocked}：未解決またはconflict済みコマンドIDを一元判定
  * - {@link resolvePhysicalCommandRecoveryLatchRecord}：operator/観測結果で未解決recordを解決
  *
- * @version 1.390.1543 (PR #439)
+ * @version 1.390.1546 (PR #439)
  * @since   1.390.1536 (PR #439)
- * @lastModified 2026-08-31 19:10:36
+ * @lastModified 2026-08-31 19:36:46
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 production command dispatcherへ接続し、submitted/post-observed/unknown resultを永続保存する
@@ -623,6 +624,53 @@ export function appendPhysicalCommandRecoveryLatchRecord(storeInput, recordInput
     },
     record,
     reasons: [],
+  });
+}
+
+/**
+ * 物理コマンド復旧ラッチが指定commandIdをblockすべきか判定する。
+ *
+ * 【詳細説明】
+ * - Gate 19.5以降のUI/dispatcherが `unresolvedByCommandId` と `conflictedCommandIds` を個別に読むと、
+ *   片方だけを見落として再送を許す事故が起きやすい。
+ * - この関数は保存storeを正規化したうえで、未解決recordとconflict indexを同じfail-closed判定へ集約する。
+ * - conflict済みcommandIdは通常resolutionでは解除しないため、未解決recordが無くてもblock扱いにする。
+ *
+ * @function isPhysicalCommandRecoveryBlocked
+ * @param {Object|null|undefined} storeInput - 現在の復旧ラッチstore。
+ * @param {string} commandIdInput - 判定対象commandId。
+ * @returns {{blocked:boolean, reason:string, commandId:string}} block判定結果。
+ * @example
+ * const result = isPhysicalCommandRecoveryBlocked(store, "command:k2-load-1a");
+ */
+export function isPhysicalCommandRecoveryBlocked(storeInput, commandIdInput) {
+  const commandId = toTrimmedString(commandIdInput);
+  if (!commandId) {
+    return deepFreezeJson({
+      blocked: false,
+      reason: "missing-command-id",
+      commandId: "",
+    });
+  }
+  const store = normalizeStoredPhysicalCommandRecoveryLatchStore(storeInput);
+  if (store.unresolvedByCommandId[commandId]) {
+    return deepFreezeJson({
+      blocked: true,
+      reason: "unresolved-recovery",
+      commandId,
+    });
+  }
+  if ((store.conflictedCommandIds || []).includes(commandId)) {
+    return deepFreezeJson({
+      blocked: true,
+      reason: "conflicted-recovery",
+      commandId,
+    });
+  }
+  return deepFreezeJson({
+    blocked: false,
+    reason: "not-blocked",
+    commandId,
   });
 }
 
