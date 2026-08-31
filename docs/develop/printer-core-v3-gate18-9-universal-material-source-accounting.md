@@ -30,12 +30,17 @@ values.
 
 Gate 18.9A defines the universal topology and SpoolMount authority contracts.
 
-Initial review commits are intentionally narrow:
+Initial review commits were intentionally narrow:
 
 1. Documentation only: ADR-0036, this spec, and open-work updates.
 2. Pure contract module and unit tests only.
 
-The first code commit must not change IndexedDB version, `hostSpoolMap`,
+The accepted Gate 18.9A contract baseline is `4ff7b06`. Follow-up pure
+repository commits may add in-memory `MaterialSourceRegistry` and
+`SpoolMountRepository` modules, but must still avoid production storage,
+legacy debit, or UI behavior changes.
+
+The first production-connected code must not change IndexedDB version, `hostSpoolMap`,
 `mountHistory`, `usageHistory`, `dashboard_spool.js`, aggregator debit paths, or
 UI behavior.
 
@@ -222,8 +227,13 @@ Gate 18.9A tests:
 - K2 plus four CFS units and external source can represent 17 sources
 - duplicate source IDs fail validation
 - source locator and source ID are distinct
-- open mount per source is limited to one by repository tests in later commits
-- open mount per spool is limited to one by repository tests in later commits
+- MaterialSourceRegistry stores K1 direct `N=1` and K2/CFS `N>1` sources through the same API
+- MaterialSourceRegistry keeps locator keys separate from stable identity keys
+- MaterialSourceRegistry reports locator/stable identity conflicts without auto-overwriting records
+- SpoolMountRepository limits open mount per source to one
+- SpoolMountRepository limits open mount per spool to one across devices
+- SpoolMountRepository treats same `mountOperationId` + same payload as idempotent
+- SpoolMountRepository treats same `mountOperationId` + different payload as conflict
 - physical empty/unloaded evidence does not close a mount but blocks debit
 - RFID `null` does not block continuity
 - RFID mismatch blocks debit

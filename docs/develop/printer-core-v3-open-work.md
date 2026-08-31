@@ -22,11 +22,11 @@ Gate 18.9 の Universal MaterialSource accounting 仕様は
 | Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
-| Gate 18.9 Universal MaterialSource Accounting | design accepted | contract pending | pending | disabled |
+| Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories started | contract CLOSED / repository tests partial | pending | disabled |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
-現時点のv2.2.1044では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
+現時点のv2.2.1045では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
 のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
 UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
 
@@ -36,6 +36,8 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `Device -> FilamentUnit -> MaterialSource -> SpoolMount` へ統一する次の実装対象。
   K1 direct spoolはsourceが1つだけのケース、K2/CFSやK1C/CFS-Cはsourceが複数のケースとして扱う。
   `hostSpoolMap` は最終authorityではなくlegacy compatibility projectionへ降格する。
+  Gate 18.9A contract baselineは`4ff7b06`でACCEPT済み。後続ではpure
+  `MaterialSourceRegistry` / `SpoolMountRepository`から開始し、永続化やcutoverへ段階的に接続する。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
