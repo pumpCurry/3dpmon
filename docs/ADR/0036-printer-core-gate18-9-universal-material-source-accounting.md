@@ -190,13 +190,14 @@ is observed. A caller-declared complete result set, or a forged trusted-complete
 boolean flag, is not sufficient. Otherwise its usage remains unknown until a
 later module-owned trusted result-set registry is added.
 
-Gate 18.9G adds that module-owned result-set completeness registry for
-shadow attribution only. The registry may issue trusted completeness evidence
-when the print-start material source set and the observed source-specific result
-set are an exact match for the same device, job, and print plan. That evidence
-may classify absent sources in the shadow print binding repository as
-`confirmed-unused`, but it still does not debit managed spool remaining or write
-legacy `usageHistory`.
+Gate 18.9G keeps the result-set completeness trust boundary fail-closed for
+shadow attribution. The public registry can validate module-owned evidence, but
+it does not mint trusted completeness evidence from caller-supplied source
+coverage. A later issuer must bind provider/session/generation, result-set
+revision, expected source/tool digest, observed result digest, and observation
+time before absent sources can be classified as trusted `confirmed-unused`.
+This still does not debit managed spool remaining or write legacy
+`usageHistory`.
 
 ## Remaining Provenance
 
@@ -409,10 +410,11 @@ Gate 18.9F:
 
 Gate 18.9G:
 
-- module-owned trusted result-set completeness registry
-- source-set scope validation for complete result evidence
-- shadow attribution may mark absent sources as `confirmed-unused` only when
-  registry-issued evidence covers the same device/job/plan/source set
+- public result-set completeness registry kept fail-closed for trusted issuance
+- source-set scope validation preserved for future module-owned complete result evidence
+- shadow attribution may mark absent sources as `confirmed-unused` only after a
+  future provider/session-bound trusted issuer covers the same
+  device/job/plan/source set
 - no production spool debit, legacy usage write, or remaining mutation
 
 Gate 20 extension:

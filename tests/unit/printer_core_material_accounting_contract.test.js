@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1520 (PR #438)
+ * @version 1.390.1522 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 15:34:00
+ * @lastModified 2026-08-31 16:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -79,7 +79,7 @@ describe("Universal MaterialSource accounting contract", () => {
     expect(typeof createMaterialAccountingPrintBindingRepository).toBe("function");
   });
 
-  it("trusted result-set completenessはregistry発行objectだけが検証を通過する", () => {
+  it("public result-set registryはtrusted issuer未接続ではcomplete evidenceを発行しない", () => {
     const registry = createTrustedMaterialResultSetCompletenessRegistry();
     const scope = {
       deviceId: "serial:k2pro-69e7",
@@ -93,7 +93,7 @@ describe("Universal MaterialSource accounting contract", () => {
       observedAt: "2026-08-31T06:00:00.000Z",
       source: "trusted-source-specific-result-registry",
     });
-    const trusted = registry.certifyCompleteResultSet({
+    const blocked = registry.certifyCompleteResultSet({
       ...scope,
       observedSourceIds: ["source:1b", "source:1a"],
       observedAt: "2026-08-31T06:00:00.000Z",
@@ -107,15 +107,16 @@ describe("Universal MaterialSource accounting contract", () => {
     });
 
     expect(forged.trusted).toBe(false);
-    expect(trusted.trusted).toBe(true);
-    expect(trusted.materialSourceIds).toEqual(["source:1a", "source:1b"]);
-    expect(trusted.observedSourceIds).toEqual(["source:1a", "source:1b"]);
+    expect(blocked).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["trusted-result-set-issuer-unavailable"],
+      evidence: null,
+    });
     expect(incomplete.ok).toBe(false);
     expect(incomplete.reasons).toEqual(["result-set-source-coverage-incomplete"]);
     expect(registry.validate(forged, scope)).toBe(false);
-    expect(registry.validate(trusted, scope)).toBe(true);
-    expect(registry.validate(trusted, { ...scope, printJobId: "job:other" })).toBe(false);
-    expect(registry.validate(trusted, { ...scope, materialSourceIds: ["source:1a"] })).toBe(false);
+    expect(registry.validate(blocked, scope)).toBe(false);
   });
 
   it("migration blocker vocabularyを定数として固定する", () => {

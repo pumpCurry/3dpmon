@@ -518,20 +518,27 @@ The same domain model feeds both layouts.
 
 ## Gate 18.9G Scope
 
-Gate 18.9G introduces a contract-owned trusted result-set completeness registry:
+Gate 18.9G keeps the result-set completeness trust boundary fail-closed until a
+provider/session-bound issuer is implemented:
 
 - `createMaterialResultSetCompletenessEvidence()` creates an untrusted evidence
   shape for diagnostics, import/export, and tests.
-- `createTrustedMaterialResultSetCompletenessRegistry()` is the only public
-  factory that can issue WeakSet-registered trusted completeness evidence.
-- `certifyCompleteResultSet()` requires exact equality between the planned
-  `materialSourceIds[]` and the observed source-specific result IDs.
+- `createTrustedMaterialResultSetCompletenessRegistry()` exposes validation for
+  module-owned evidence but does not let public callers mint trusted evidence.
+- Public `certifyCompleteResultSet()` returns
+  `trusted-result-set-issuer-unavailable` even when the submitted source sets
+  match, because source coverage supplied by the caller is not an issuer.
+- A future issuer must bind at least provider/session/generation,
+  result-set identity/revision, expected snapshot/source/tool-set digest,
+  observed result digest, and `observedAt` before it can register trusted
+  completeness evidence.
 - `recordUsageAttribution()` validates trusted completeness evidence against the
   saved print-start snapshot source set, not just against device/job/plan IDs.
 
 This gate still does not mutate managed spool remaining, legacy `usageHistory`,
 or production ledger stores. It only lets the shadow print binding repository
-distinguish explicit `0mm`, trusted complete absence, and unknown source usage.
+distinguish explicit `0mm` and unknown source usage; trusted complete absence
+remains unavailable until the issuer is connected.
 
 ## Test Matrix
 
@@ -683,10 +690,11 @@ Gate 18.9F tests:
 Gate 18.9G tests:
 
 - public result-set completeness evidence shape does not validate as trusted
-- registry-issued evidence validates for the same device/job/plan/source set
+- public registry does not issue trusted evidence while no provider/session-bound
+  issuer is connected
 - incomplete source coverage returns a blocked registry result
-- trusted evidence scoped to a subset of sources cannot mark other print-start
-  sources as `confirmed-unused`
+- public blocked evidence cannot mark absent print-start sources as
+  `confirmed-unused`
 
 ## Review Boundaries
 

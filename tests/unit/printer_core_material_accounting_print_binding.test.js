@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1521 (PR #438)
+ * @version 1.390.1522 (PR #438)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:41:00
+ * @lastModified 2026-08-31 16:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -428,6 +428,54 @@ describe("MaterialSource print binding repository", () => {
     expect(completion.segments.find((segment) => (
       segment.materialSourceId === materialSources[1].materialSourceId
     ))?.usageState).toBe("unknown");
+  });
+
+  it("public registryのblocked complete evidenceでは未出現sourceをunknownに残す", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+    const registry = createTrustedMaterialResultSetCompletenessRegistry();
+    repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:public-registry-blocked",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:public-registry-blocked",
+    });
+    const blockedEvidence = registry.certifyCompleteResultSet({
+      deviceId,
+      printJobId: "job:public-registry-blocked",
+      printPlanId: printPlan.printPlanId,
+      materialSourceIds: materialSources.map((source) => source.materialSourceId),
+      observedSourceIds: materialSources.map((source) => source.materialSourceId),
+      observedAt: "2026-08-31T05:30:00.000Z",
+      source: "trusted-source-specific-result-registry",
+    });
+
+    const completion = repository.recordUsageAttribution({
+      printPlan,
+      printJobId: "job:public-registry-blocked",
+      completedAt: "2026-08-31T05:30:00.000Z",
+      attributionOperationId: "usage:public-registry-blocked",
+      resultSetCompleteness: "complete",
+      resultSetCompletenessEvidence: blockedEvidence,
+      materialUsages: [
+        { materialSourceId: materialSources[0].materialSourceId, usedLengthMm: 3210 },
+      ],
+    });
+
+    expect(blockedEvidence).toMatchObject({
+      ok: false,
+      reasons: ["trusted-result-set-issuer-unavailable"],
+    });
+    expect(completion.ok).toBe(true);
+    expect(completion.segments.map((segment) => [segment.materialSourceId, segment.usageState])).toEqual([
+      [materialSources[0].materialSourceId, "observed-used"],
+      [materialSources[1].materialSourceId, "unknown"],
+      [materialSources[2].materialSourceId, "unknown"],
+      [materialSources[3].materialSourceId, "unknown"],
+    ]);
   });
 
   it("incompleteなsource-specific result setでは未出現sourceをunknownに残す", () => {

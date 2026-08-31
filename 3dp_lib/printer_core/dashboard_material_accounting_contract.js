@@ -22,7 +22,7 @@
  * - {@link createMaterialAccountingCutoverRecord}：legacy cutover record を生成
  * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
  * - {@link createMaterialResultSetCompletenessEvidence}：未信頼のresult-set completeness evidence shapeを生成
- * - {@link createTrustedMaterialResultSetCompletenessRegistry}：trusted result-set completeness registryを生成
+ * - {@link createTrustedMaterialResultSetCompletenessRegistry}：trusted result-set completeness 検証用registryを生成
  * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
@@ -32,9 +32,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1520 (PR #438)
+ * @version 1.390.1522 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 15:34:00
+ * @lastModified 2026-08-31 16:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -1128,12 +1128,12 @@ function createTrustedResultSetCompletenessEvidence(input = {}) {
 }
 
 /**
- * trusted result-set completeness registryを生成する。
+ * trusted result-set completeness 検証用registryを生成する。
  *
  * 【詳細説明】
- * - registryはmodule-owned trusted evidenceを発行する唯一のpublic入口である。
- * - source集合が完全一致しない場合はthrowせずblocked resultを返し、UI/CLIが理由を表示できるようにする。
- * - ここで発行される証跡はprint binding repositoryのread-only shadow attribution用であり、spool残量を直接更新しない。
+ * - public callerが任意source集合をtrusted化する経路を避けるため、このregistryは検証だけをpublicにする。
+ * - trusted issuerが未接続の段階では、complete result-set発行要求をblocked resultとして返す。
+ * - Gate 18.9G以降で実issuerを追加する場合は、provider/session/generation/result digestを含むmodule-owned recordからだけ発行する。
  *
  * @function createTrustedMaterialResultSetCompletenessRegistry
  * @returns {Object} trusted result-set completeness registry API。
@@ -1143,10 +1143,10 @@ function createTrustedResultSetCompletenessEvidence(input = {}) {
 export function createTrustedMaterialResultSetCompletenessRegistry() {
   return Object.freeze({
     /**
-     * complete result-set evidenceを発行する。
+     * complete result-set evidence発行要求をfail-closedで拒否する。
      *
      * @param {Object} input - result-set completeness evidence入力。
-     * @returns {Object} trusted evidence、またはblocked result。
+     * @returns {Object} blocked result。
      */
     certifyCompleteResultSet(input = {}) {
       const materialSourceIds = normalizeResultSetSourceIds(input.materialSourceIds);
@@ -1159,10 +1159,11 @@ export function createTrustedMaterialResultSetCompletenessRegistry() {
           evidence: null,
         });
       }
-      return createTrustedResultSetCompletenessEvidence({
-        ...input,
-        materialSourceIds,
-        observedSourceIds,
+      return deepFreezeJson({
+        ok: false,
+        status: "blocked",
+        reasons: ["trusted-result-set-issuer-unavailable"],
+        evidence: null,
       });
     },
 
