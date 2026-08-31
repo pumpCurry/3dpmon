@@ -19,7 +19,7 @@ Gate 18.9 の Universal MaterialSource accounting 仕様は
 | --- | --- | --- | --- | --- |
 | Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
 | Gate 18.8 Material Observation UX / Evidence | CLOSED | CLOSED | partial | read-only |
-| Gate 19 Slot Control Spec | scaffold CLOSED | CLOSED | pending | disabled |
+| Gate 19 Slot Control Spec | scaffold CLOSED / recovery latch schema+storage added | CLOSED | pending | disabled |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
@@ -174,7 +174,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 - standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
 - `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
 - Gate 18.9A/B/C migration planner は stable device identity、unique host/device resolution、open device identity conflictなし、migration専用operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。plan全体は`migrationBatchId`、host-to-spool単位はentry側`migrationSubjectId`で分離し、single-spool confirmationはentry subjectとentry confirmation前evidence checksumへbindする。READY entry validatorは1 FilamentUnit / 1 MaterialSource / 0 SpoolMount / 1 mountCandidateだけを許し、MaterialSourceのdevice/unit bindingと既知reason IDも検証する。journalはsource checksumに加えてplan body digestも検証し、`latestRevisionBySubject`をvalid entryから再構築する。Gate 18.9Cのpure shadow preflightはlatest journal revisionとcurrent planの同一entry mappingだけをshadow候補にし、古いrequested revision、stale/non-READY current plan、Device入替、registry/mount conflictをwrite前に拒否する。次はjournal/preflightを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
-- side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
+- side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化するschema/store/storage経路を追加済み。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。Gate 19 production dispatcherへの実接続は未実装。
 - Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
 
 ## Release certification helper

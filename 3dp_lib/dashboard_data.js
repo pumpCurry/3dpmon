@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1536 (PR #439)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 14:38:00
+ * @lastModified 2026-08-31 18:36:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -424,6 +424,25 @@ export const monitorData = {
       legacyUsageHistoryWrites: false,
       legacySpoolRemainingWrites: false,
       materialSourceLedgerWrites: "shadow-only",
+    },
+  },
+  /**
+   * Gate 19 prep: 物理コマンド復旧ラッチ。
+   * CFS select/load/unloadなど物理状態を変えるコマンドがsubmitted/unknownで終わった場合に、
+   * 再起動後も「確認が必要な未解決証跡」として保持する。command frameやRPC payloadは保存せず、
+   * 自動再送も絶対に行わない。
+   * @type {{schemaVersion:number, authority:string, unresolvedByCommandId:Object.<string, Object>, events:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  physicalCommandRecoveryLatch: {
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
     },
   },
   // ★ currentSpoolId は廃止。hostSpoolMap が唯一の権威。

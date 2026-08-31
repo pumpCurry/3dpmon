@@ -27,9 +27,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1536 (PR #439)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 14:39:00
+ * @lastModified 2026-08-31 18:37:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,6 +47,7 @@ import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashbo
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
 import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
 import { normalizeStoredMaterialAccountingPrintBindingStore } from "./printer_core/dashboard_material_accounting_print_binding.js";
+import { normalizeStoredPhysicalCommandRecoveryLatchStore } from "./printer_core/dashboard_physical_command_recovery_latch.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -217,6 +218,78 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
     (restoredStore.ledgerEvents || []).length >= (currentStore.ledgerEvents || []).length
       ? restoredStore
       : currentStore;
+  return true;
+}
+
+/**
+ * 物理コマンド復旧ラッチstoreを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - 復旧ラッチはGate 19 production command activation前の安全装置であり、submitted/unknownの
+ *   未解決証跡だけを保持する。
+ * - 復元/import時もcommand frameやRPC payloadは保存せず、自動再送は行わない。
+ * - 同一commandIdで異なるdigestが来た場合は既存recordを優先し、incoming側を隔離して人間確認へ回す。
+ *
+ * @private
+ * @function _mergePhysicalCommandRecoveryLatchStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされた復旧ラッチstore候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergePhysicalCommandRecoveryLatchStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredPhysicalCommandRecoveryLatchStore(
+    monitorData.physicalCommandRecoveryLatch
+  );
+  const restoredStore = normalizeStoredPhysicalCommandRecoveryLatchStore(incomingStore);
+  const unresolvedByCommandId = { ...currentStore.unresolvedByCommandId };
+  const retainedUnsupportedEntries = [
+    ...(currentStore.retainedUnsupportedEntries || []),
+    ...(restoredStore.retainedUnsupportedEntries || []),
+  ];
+
+  for (const [commandId, record] of Object.entries(restoredStore.unresolvedByCommandId || {})) {
+    const existing = unresolvedByCommandId[commandId];
+    if (!existing) {
+      unresolvedByCommandId[commandId] = record;
+      continue;
+    }
+    if (existing.digest !== record.digest) {
+      retainedUnsupportedEntries.push({
+        commandId,
+        reason: "command-id-digest-conflict",
+        existingDigest: existing.digest,
+        incomingDigest: record.digest,
+      });
+    }
+  }
+
+  const events = [];
+  const seenEventIds = new Set();
+  for (const event of [
+    ...(currentStore.events || []),
+    ...(restoredStore.events || []),
+  ]) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+    const eventId = event.eventId || `${event.type || "event"}:${event.commandId || ""}:${event.recordedAt || event.resolvedAt || ""}`;
+    if (seenEventIds.has(eventId)) continue;
+    seenEventIds.add(eventId);
+    events.push(event);
+  }
+
+  monitorData.physicalCommandRecoveryLatch = normalizeStoredPhysicalCommandRecoveryLatchStore({
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId,
+    events,
+    retainedUnsupportedEntries,
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  });
   return true;
 }
 
@@ -566,6 +639,12 @@ export async function importAllData(data) {
   //    importしてもlegacy usageHistoryやspool残量へは投影しない。
   if (data.materialAccountingPrintBindingStore && typeof data.materialAccountingPrintBindingStore === "object") {
     _mergeMaterialAccountingPrintBindingStore(data.materialAccountingPrintBindingStore);
+  }
+
+  // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
+  //    submitted/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
+  if (data.physicalCommandRecoveryLatch && typeof data.physicalCommandRecoveryLatch === "object") {
+    _mergePhysicalCommandRecoveryLatchStore(data.physicalCommandRecoveryLatch);
   }
 
   // ── machines: 印刷履歴をマージ ──
@@ -938,6 +1017,7 @@ const LS_GLOBAL_FIELDS = [
   "materialAccountingMigrationJournal",
   "materialAccountingMigrationShadowStore",
   "materialAccountingPrintBindingStore",
+  "physicalCommandRecoveryLatch",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
 ];
@@ -1204,6 +1284,8 @@ function _flushStorage() {
       queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
       // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
       queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
+      // ★ Gate 19 prep: 物理コマンド復旧ラッチは未解決確認の証跡のみ保存し、自動再送材料は保存しない。
+      queueSharedWrite("physicalCommandRecoveryLatch", monitorData.physicalCommandRecoveryLatch);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
       queueSharedWrite("hostSpoolMap",       monitorData.hostSpoolMap);
       queueSharedWrite("hostCameraToggle",  monitorData.hostCameraToggle);
@@ -1746,6 +1828,16 @@ function _restoreFromData(shared, machines) {
   } else {
     monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
       monitorData.materialAccountingPrintBindingStore
+    );
+  }
+
+  // ★ Gate 19 prep: 物理コマンド復旧ラッチを復元する。
+  //   復元してもcommand frame再送・CFS操作・legacy ledger投影は行わず、人間確認が必要な証跡だけを残す。
+  if (shared?.physicalCommandRecoveryLatch && typeof shared.physicalCommandRecoveryLatch === "object") {
+    _mergePhysicalCommandRecoveryLatchStore(shared.physicalCommandRecoveryLatch);
+  } else {
+    monitorData.physicalCommandRecoveryLatch = normalizeStoredPhysicalCommandRecoveryLatchStore(
+      monitorData.physicalCommandRecoveryLatch
     );
   }
 

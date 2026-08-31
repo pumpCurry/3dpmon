@@ -94,6 +94,18 @@ const monitorData = {
       materialSourceLedgerWrites: "shadow-only",
     },
   },
+  physicalCommandRecoveryLatch: {
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  },
   hostSpoolMap: {},
   hostCameraToggle: {},
   spoolSerialCounter: 0,
@@ -168,6 +180,18 @@ function resetMonitorData() {
       materialSourceLedgerWrites: "shadow-only",
     },
   };
+  monitorData.physicalCommandRecoveryLatch = {
+    schemaVersion: 1,
+    authority: "physical-command-recovery-latch",
+    unresolvedByCommandId: {},
+    events: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      autoReplay: false,
+      commandFramePersistence: false,
+      physicalCommandAuthority: "recovery-latch-only",
+    },
+  };
   monitorData.hostCameraToggle = {};
   monitorData.spoolSerialCounter = 0;
 }
@@ -206,6 +230,10 @@ const {
 const {
   recordMaterialAccountingMigrationDryRunPlan,
 } = await import('../../3dp_lib/printer_core/dashboard_material_accounting_migration_journal.js');
+const {
+  PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS,
+  createPhysicalCommandRecoveryLatchRecord,
+} = await import('../../3dp_lib/printer_core/dashboard_physical_command_recovery_latch.js');
 
 /**
  * storage round-tripで使用するREADYなUniversal MaterialSource移行dry-run planを生成する。
@@ -749,6 +777,109 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     });
     expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "legacy-single-spool" });
     expect(monitorData.usageHistory).toEqual([{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }]);
+  });
+
+  it('Gate19 prep: physicalCommandRecoveryLatch は再起動後も未解決証跡を保持し自動再送材料を保存しない', () => {
+    monitorData.physicalCommandRecoveryLatch = {
+      schemaVersion: 1,
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {
+        "command:k2-select-1a": createPhysicalCommandRecoveryLatchRecord({
+          commandId: "command:k2-select-1a",
+          commandKind: "cfs-slot-select",
+          deviceId: "serial:k2pro-69e7",
+          sessionId: "session:live-001",
+          connectionGeneration: 42,
+          status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.UNKNOWN,
+          sentAt: "2026-08-31T09:20:00.000Z",
+          materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+          certificationId: "cert:k2-slot-control-f012",
+          preObservation: {
+            sequence: 128,
+            digest: "fnv1a128:before",
+            observedAt: "2026-08-31T09:19:59.000Z",
+          },
+        }),
+      },
+      events: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+        physicalCommandAuthority: "recovery-latch-only",
+      },
+    };
+
+    saveUnifiedStorage(true);
+    const savedJson = localStorage.getItem("3dpmon-global") || "";
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(savedJson).not.toContain("multi.machine.material_box.select");
+    expect(monitorData.physicalCommandRecoveryLatch).toMatchObject({
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {
+        "command:k2-select-1a": {
+          commandKind: "cfs-slot-select",
+          status: "unknown",
+          materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+        },
+      },
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+      },
+    });
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate19 prep: importAllData はphysicalCommandRecoveryLatchを正規化しlegacy ledgerへ投影しない', async () => {
+    await importAllData({
+      physicalCommandRecoveryLatch: {
+        schemaVersion: 999,
+        unresolvedByCommandId: {
+          "command:k2-load-1a": createPhysicalCommandRecoveryLatchRecord({
+            commandId: "command:k2-load-1a",
+            commandKind: "cfs-slot-load",
+            deviceId: "serial:k2pro-69e7",
+            sessionId: "session:live-002",
+            connectionGeneration: 43,
+            status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
+            sentAt: "2026-08-31T09:30:00.000Z",
+            materialSourceId: "material-source:k2pro-69e7:cfs-1:slot-a",
+            preObservation: {
+              sequence: 180,
+              digest: "fnv1a128:before-load",
+            },
+          }),
+          "command:broken": {
+            commandId: "command:broken",
+            commandKind: "",
+            status: "unknown",
+          },
+        },
+        invariants: {
+          autoReplay: true,
+          commandFramePersistence: true,
+        },
+      },
+    });
+
+    expect(Object.keys(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId)).toEqual([
+      "command:k2-load-1a",
+    ]);
+    expect(monitorData.physicalCommandRecoveryLatch.invariants).toMatchObject({
+      autoReplay: false,
+      commandFramePersistence: false,
+    });
+    expect(monitorData.physicalCommandRecoveryLatch.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        commandId: "command:broken",
+        reason: "invalid-recovery-record",
+      }),
+    ]);
+    expect(monitorData.hostSpoolMap).toEqual({});
+    expect(monitorData.usageHistory).toEqual([]);
   });
 
   it('#412-O4: import は candidateHash 単位で冪等マージし updatedAt が新しい方を採用する', async () => {

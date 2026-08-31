@@ -159,6 +159,10 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
 - post-command観測は既定で `--probe-after-count 6` / `--probe-after-interval-ms 5000` のbounded polling
   windowを使う。この場合もCFS操作frameは1回だけで、追加されるのはread-only `boxsInfo` probeだけである。
+- side-effect commandが `submitted` / `unknown` で終わった場合に備え、`physicalCommandRecoveryLatch` を
+  shared storageへ永続化する。このstoreは `commandId`、`commandKind`、`deviceId`、`sessionId`、送信時刻、
+  certification ID、送信前観測digest/sequenceだけを保持し、command frameやRPC payloadは保存しない。
+  再起動後も自動replayせず、fresh observationまたはoperator確認でのみ解決する。
 
 このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
 
