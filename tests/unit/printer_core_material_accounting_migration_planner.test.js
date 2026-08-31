@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1502 (PR #438)
+ * @version 1.390.1503 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 11:37:00
+ * @lastModified 2026-08-31 11:52:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -26,6 +26,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MATERIAL_ACCOUNTING_MIGRATION_BLOCKER,
   MATERIAL_ACCOUNTING_MIGRATION_STATUS,
   MATERIAL_SOURCE_KIND,
   SPOOL_MOUNT_STATUS,
@@ -158,7 +159,7 @@ describe("Material accounting migration dry-run planner", () => {
       host: "K2Pro-69E7",
       spoolId: "spool-031",
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
-      reasons: ["legacy-spool-map-ambiguous-for-multi-source"],
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_AMBIGUOUS_FOR_MULTI_SOURCE],
     });
     expect(plan.entries[0].candidateSources.map((source) => source.sourceId)).toEqual([
       "external:0",
@@ -188,7 +189,7 @@ describe("Material accounting migration dry-run planner", () => {
       host: "K2Pro-69E7",
       spoolId: "spool-031",
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
-      reasons: ["material-topology-observation-required"],
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
     });
     expect(plan.entries[0].plannedWrites.filamentUnits).toEqual([]);
     expect(plan.entries[0].plannedWrites.materialSources).toEqual([]);

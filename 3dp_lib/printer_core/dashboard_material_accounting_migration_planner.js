@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1502 (PR #438)
+ * @version 1.390.1503 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 11:37:00
+ * @lastModified 2026-08-31 11:52:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A review後にIndexedDB backed migration journalへ接続する
@@ -28,6 +28,7 @@
 
 import {
   FILAMENT_UNIT_KIND,
+  MATERIAL_ACCOUNTING_MIGRATION_BLOCKER,
   MATERIAL_ACCOUNTING_MIGRATION_STATUS,
   MATERIAL_IDENTITY_STRENGTH,
   MATERIAL_SOURCE_KIND,
@@ -399,7 +400,7 @@ function createHostMigrationEntry(input) {
       deviceId,
       spoolId: input.spoolId,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
-      reasons: ["legacy-spool-map-ambiguous-for-multi-source"],
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_AMBIGUOUS_FOR_MULTI_SOURCE],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
     };
@@ -411,7 +412,7 @@ function createHostMigrationEntry(input) {
       deviceId,
       spoolId: input.spoolId,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
-      reasons: ["legacy-spool-map-requires-source-confirmation"],
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
     };
@@ -423,7 +424,7 @@ function createHostMigrationEntry(input) {
       deviceId,
       spoolId: input.spoolId,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
-      reasons: ["material-topology-observation-required"],
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
       candidateSources: [],
       plannedWrites: createEmptyPlannedWrites(),
     };

@@ -22,15 +22,16 @@
  * - {@link createMaterialAccountingCutoverRecord}：legacy cutover record を生成
  * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
+ * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
  * - {@link validateFilamentUnit}：FilamentUnit record を検証
  * - {@link validateMaterialSource}：MaterialSource record を検証
  * - {@link validateSpoolMount}：SpoolMount record を検証
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1502 (PR #438)
+ * @version 1.390.1503 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 11:37:00
+ * @lastModified 2026-08-31 11:52:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -182,6 +183,63 @@ export const MATERIAL_ACCOUNTING_MIGRATION_STATUS = Object.freeze({
 });
 
 /**
+ * Universal accounting migration blocker/reason。
+ *
+ * 【詳細説明】
+ * - plannerやUIが同じblockerを別文字列で表現しないよう、Gate18.9Aで理由語彙を固定する。
+ * - legacy hostSpoolMapをmulti-source機器へblind migrationしないための判定理由をここへ集約する。
+ *
+ * @constant {Readonly<object>}
+ */
+export const MATERIAL_ACCOUNTING_MIGRATION_BLOCKER = Object.freeze({
+  LEGACY_SPOOL_MAP_AMBIGUOUS_FOR_MULTI_SOURCE: "legacy-spool-map-ambiguous-for-multi-source",
+  LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION: "legacy-spool-map-requires-source-confirmation",
+  MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED: "material-topology-observation-required",
+  OPEN_MOUNT_CONFLICT: "open-mount-conflict",
+  LEGACY_INTERVAL_CONFLICT: "legacy-interval-conflict",
+  SOURCE_IDENTITY_CONFLICT: "source-identity-conflict",
+  DEVICE_IDENTITY_INSUFFICIENT: "device-identity-insufficient",
+  LEGACY_SPOOL_MISSING: "legacy-spool-missing",
+});
+
+/**
+ * Universal accounting migration lifecycle transition table。
+ *
+ * @private
+ * @constant {Readonly<object>}
+ */
+const MATERIAL_ACCOUNTING_MIGRATION_TRANSITIONS = Object.freeze({
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.PLANNED]: Object.freeze([
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+  ]),
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE]: Object.freeze([
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+  ]),
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY]: Object.freeze([
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+  ]),
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW]: Object.freeze([
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.SEALED,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.FAILED,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+  ]),
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED]: Object.freeze([
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.FAILED,
+  ]),
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.FAILED]: Object.freeze([
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.PLANNED,
+    MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+  ]),
+  [MATERIAL_ACCOUNTING_MIGRATION_STATUS.SEALED]: Object.freeze([]),
+});
+
+/**
  * source-aware debit 可否。
  *
  * @constant {Readonly<object>}
@@ -268,6 +326,27 @@ function deepFreezeJson(value) {
  */
 function toTrimmedString(value) {
   return String(value ?? "").trim();
+}
+
+/**
+ * migration lifecycle statusを次状態へ遷移できるか判定する。
+ *
+ * 【詳細説明】
+ * - dry-run plannerの`planned/candidate/ready/blocked`と、execution結果の`shadow/failed/sealed`を混同しないための境界を提供する。
+ * - `SEALED`はauthority cutover完了後の終端状態として扱い、後続遷移を許可しない。
+ *
+ * @function canTransitionMaterialAccountingMigrationStatus
+ * @param {string} fromStatus - 現在のmigration status。
+ * @param {string} toStatus - 遷移先のmigration status。
+ * @returns {boolean} 許可された遷移ならtrue。
+ * @example
+ * const allowed = canTransitionMaterialAccountingMigrationStatus("ready", "shadow");
+ */
+export function canTransitionMaterialAccountingMigrationStatus(fromStatus, toStatus) {
+  const from = toTrimmedString(fromStatus);
+  const to = toTrimmedString(toStatus);
+  const allowed = MATERIAL_ACCOUNTING_MIGRATION_TRANSITIONS[from];
+  return Array.isArray(allowed) && allowed.includes(to);
 }
 
 /**

@@ -129,6 +129,30 @@ execution or cutover transaction results. The planner also must not use
 `MaterialAccountingCutoverRecord` as its primary return shape; cutover records are
 created later by the execution/readiness boundary.
 
+Migration blocker/reason strings are owned by
+`MATERIAL_ACCOUNTING_MIGRATION_BLOCKER`; planner branches and UI copy must not
+invent ad-hoc reason identifiers. The initial fixed reasons include multi-source
+legacy ambiguity, source confirmation requirement, missing material topology,
+open mount conflict, legacy interval conflict, source identity conflict, device
+identity insufficiency, and missing legacy spool evidence.
+
+Migration lifecycle transitions are fixed by
+`canTransitionMaterialAccountingMigrationStatus()`:
+
+| From | Allowed next states |
+| ---- | ------------------- |
+| `planned` | `candidate`, `ready`, `blocked` |
+| `candidate` | `ready`, `blocked` |
+| `ready` | `shadow`, `blocked` |
+| `shadow` | `sealed`, `failed`, `blocked` |
+| `blocked` | `candidate`, `ready`, `failed` |
+| `failed` | `planned`, `blocked` |
+| `sealed` | none |
+
+This table intentionally prevents `planned -> sealed` and `candidate -> shadow`
+shortcuts. `shadow`, `failed`, and `sealed` are produced by execution or
+cutover boundaries, not by dry-run analysis.
+
 ## Identity Rules
 
 `materialSourceId` is an accounting identity. `locator` is where the source was

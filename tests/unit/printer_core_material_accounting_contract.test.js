@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1499 (PR #438)
+ * @version 1.390.1503 (PR #438)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 11:45:00
+ * @lastModified 2026-08-31 11:52:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -29,11 +29,13 @@ import {
   DEBIT_ELIGIBILITY_STATUS,
   FILAMENT_UNIT_KIND,
   MATERIAL_ACCOUNTING_BACKEND,
+  MATERIAL_ACCOUNTING_MIGRATION_BLOCKER,
   MATERIAL_ACCOUNTING_MIGRATION_STATUS,
   MATERIAL_IDENTITY_STRENGTH,
   MATERIAL_SOURCE_KIND,
   SPOOL_MOUNT_STATUS,
   SPOOL_MOUNT_VERIFICATION,
+  canTransitionMaterialAccountingMigrationStatus,
   createDirectFeedUnitIdentity,
   createFilamentUnitRecord,
   createMaterialAccountingCutoverRecord,
@@ -63,6 +65,42 @@ describe("Universal MaterialSource accounting contract", () => {
     measurementMethod: "source-counter",
     observedAt: "2026-08-31T01:00:00.000Z",
     ...overrides,
+  });
+
+  it("migration blocker vocabularyを定数として固定する", () => {
+    expect(MATERIAL_ACCOUNTING_MIGRATION_BLOCKER).toMatchObject({
+      LEGACY_SPOOL_MAP_AMBIGUOUS_FOR_MULTI_SOURCE: "legacy-spool-map-ambiguous-for-multi-source",
+      LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION: "legacy-spool-map-requires-source-confirmation",
+      MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED: "material-topology-observation-required",
+      OPEN_MOUNT_CONFLICT: "open-mount-conflict",
+      LEGACY_INTERVAL_CONFLICT: "legacy-interval-conflict",
+      SOURCE_IDENTITY_CONFLICT: "source-identity-conflict",
+    });
+    expect(Object.isFrozen(MATERIAL_ACCOUNTING_MIGRATION_BLOCKER)).toBe(true);
+  });
+
+  it("migration lifecycle transitionはdry-run判定とexecution結果を混同しない", () => {
+    expect(canTransitionMaterialAccountingMigrationStatus(
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.PLANNED,
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY
+    )).toBe(true);
+    expect(canTransitionMaterialAccountingMigrationStatus(
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW
+    )).toBe(true);
+    expect(canTransitionMaterialAccountingMigrationStatus(
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW,
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.SEALED
+    )).toBe(true);
+    expect(canTransitionMaterialAccountingMigrationStatus(
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.PLANNED,
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.SEALED
+    )).toBe(false);
+    expect(canTransitionMaterialAccountingMigrationStatus(
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
+      MATERIAL_ACCOUNTING_MIGRATION_STATUS.SHADOW
+    )).toBe(false);
+    expect(canTransitionMaterialAccountingMigrationStatus("typo", MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY)).toBe(false);
   });
 
   it("K1 direct spoolを1つのprinter-direct unitと1つのsourceとして表現する", () => {
