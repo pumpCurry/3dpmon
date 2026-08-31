@@ -17,9 +17,9 @@
  * - {@link createMaterialSourceLocatorKey}：Device内locator keyを生成
  * - {@link createMaterialSourceIdentityKey}：Device内identity keyを生成
  *
- * @version 1.390.1497 (PR #438)
+ * @version 1.390.1498 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 10:50:00
+ * @lastModified 2026-08-31 11:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -29,6 +29,7 @@
 
 import {
   MATERIAL_IDENTITY_STRENGTH,
+  createMaterialSourceLocator,
   validateMaterialSource,
 } from "./dashboard_material_accounting_contract.js";
 
@@ -153,6 +154,73 @@ function createConflictRecord({
 }
 
 /**
+ * MaterialSource locatorをcanonical shapeへ正規化する。
+ *
+ * 【詳細説明】
+ * - 永続化済みrecordや手動生成recordでは、factory由来の`null`フィールドが欠ける場合がある。
+ * - locator keyは物理source同一性を判断するため、同じ意味のlocatorは同じshapeへ揃えてからkey化する。
+ *
+ * @private
+ * @function canonicalizeMaterialSourceLocator
+ * @param {Object} locator - MaterialSource locator。
+ * @returns {Object} canonical locator。
+ * @throws {TypeError} locatorが不正な場合。
+ */
+function canonicalizeMaterialSourceLocator(locator) {
+  return createMaterialSourceLocator({
+    kind: locator?.kind,
+    index: locator?.index,
+    unitIndex: locator?.unitIndex,
+    boxId: locator?.boxId,
+    slotIndex: locator?.slotIndex,
+    protocolSlotId: locator?.protocolSlotId,
+  });
+}
+
+/**
+ * registry固有のMaterialSource validation errorを取得する。
+ *
+ * 【詳細説明】
+ * - contract validationより一段強く、registry index生成時に例外へ落ちるrecordを事前にinvalidとして返す。
+ * - stable sourceはidentity indexへ入るため、identity objectを必須にする。
+ *
+ * @private
+ * @function getRegistrySourceErrors
+ * @param {Object} source - MaterialSource record。
+ * @returns {Array<string>} registry validation error。
+ */
+function getRegistrySourceErrors(source) {
+  const errors = [];
+  try {
+    canonicalizeMaterialSourceLocator(source?.locator);
+  } catch (error) {
+    errors.push("invalid-locator");
+  }
+  if (source?.identity && typeof source.identity === "object") {
+    if (source.identity.namespace !== "material-source" || !Array.isArray(source.identity.parts)) {
+      errors.push("invalid-identity");
+    } else {
+      if (source.identity.parts[0] !== source.deviceId) {
+        errors.push("identity-device-mismatch");
+      }
+      if (source.identity.parts[1] !== source.unitId) {
+        errors.push("identity-unit-mismatch");
+      }
+      if (source.identity.parts[2] !== source.kind) {
+        errors.push("identity-kind-mismatch");
+      }
+    }
+  }
+  if (
+    source?.identityStrength === MATERIAL_IDENTITY_STRENGTH.STABLE &&
+    (!source.identity || typeof source.identity !== "object")
+  ) {
+    errors.push("missing-identity");
+  }
+  return errors;
+}
+
+/**
  * Device内MaterialSource locator keyを生成する。
  *
  * 【詳細説明】
@@ -174,7 +242,7 @@ export function createMaterialSourceLocatorKey(deviceId, locator) {
   if (!locator || typeof locator !== "object") {
     throw new TypeError("locator is required");
   }
-  return `locator:${deviceId}:${stableStringify(locator)}`;
+  return `locator:${deviceId}:${stableStringify(canonicalizeMaterialSourceLocator(locator))}`;
 }
 
 /**
@@ -301,8 +369,16 @@ export function createMaterialSourceRegistry(initialSources = []) {
         errors: validation.errors,
       });
     }
-
     const existingById = sourcesById.get(source.materialSourceId);
+    const registryErrors = getRegistrySourceErrors(source);
+    if (registryErrors.includes("invalid-locator")) {
+      return createRegistryResult({
+        ok: false,
+        action: "invalid",
+        errors: registryErrors,
+      });
+    }
+
     const locatorKey = createMaterialSourceLocatorKey(source.deviceId, source.locator);
     const existingLocatorId = sourceIdByLocatorKey.get(locatorKey);
     const conflictRecords = [];
@@ -330,6 +406,50 @@ export function createMaterialSourceRegistry(initialSources = []) {
       }));
     }
 
+    if (existingById && existingById.unitId !== source.unitId) {
+      conflictRecords.push(createConflictRecord({
+        type: "source-id-immutability-conflict",
+        reason: "material-source-id-unit-changed",
+        existingSource: existingById,
+        candidateSource: source,
+        key: source.materialSourceId,
+      }));
+    }
+
+    if (existingById && existingById.kind !== source.kind) {
+      conflictRecords.push(createConflictRecord({
+        type: "source-id-immutability-conflict",
+        reason: "material-source-id-kind-changed",
+        existingSource: existingById,
+        candidateSource: source,
+        key: source.materialSourceId,
+      }));
+    }
+
+    if (existingById && existingById.identityStrength !== source.identityStrength) {
+      conflictRecords.push(createConflictRecord({
+        type: "source-id-immutability-conflict",
+        reason: "material-source-id-identity-strength-changed",
+        existingSource: existingById,
+        candidateSource: source,
+        key: source.materialSourceId,
+      }));
+    }
+
+    if (
+      existingById &&
+      existingById.identityStrength !== MATERIAL_IDENTITY_STRENGTH.STABLE &&
+      createMaterialSourceLocatorKey(existingById.deviceId, existingById.locator) !== locatorKey
+    ) {
+      conflictRecords.push(createConflictRecord({
+        type: "source-id-rekey-required",
+        reason: "provisional-source-locator-changed",
+        existingSource: existingById,
+        candidateSource: source,
+        key: source.materialSourceId,
+      }));
+    }
+
     if (existingLocatorId && existingLocatorId !== source.materialSourceId) {
       conflictRecords.push(createConflictRecord({
         type: "locator-conflict",
@@ -338,6 +458,24 @@ export function createMaterialSourceRegistry(initialSources = []) {
         candidateSource: source,
         key: locatorKey,
       }));
+    }
+
+    if (conflictRecords.length > 0) {
+      conflicts.push(...conflictRecords);
+      return createRegistryResult({
+        ok: false,
+        action: "conflict",
+        record: existingById || null,
+        conflicts: conflictRecords,
+      });
+    }
+
+    if (registryErrors.length > 0) {
+      return createRegistryResult({
+        ok: false,
+        action: "invalid",
+        errors: registryErrors,
+      });
     }
 
     if (source.identityStrength === MATERIAL_IDENTITY_STRENGTH.STABLE) {

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createSpoolMountRepository}：SpoolMount repositoryを生成
  *
- * @version 1.390.1497 (PR #438)
+ * @version 1.390.1498 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 10:50:00
+ * @lastModified 2026-08-31 11:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -157,6 +157,52 @@ function isSameMountPayload(left, right) {
 }
 
 /**
+ * mount作成operationのsemantic payload fingerprintを生成する。
+ *
+ * 【詳細説明】
+ * - OPEN mountが後でCLOSEDへ遷移しても、元の作成operation retryを冪等に扱うためにcurrent recordとは別に保持する。
+ * - 将来metadataが増えても作成意味が変わらない項目だけでfingerprintを作る。
+ *
+ * @private
+ * @function createMountCreationFingerprint
+ * @param {Object} mount - SpoolMount record。
+ * @returns {string} 作成operation fingerprint。
+ */
+function createMountCreationFingerprint(mount) {
+  return stableStringify({
+    mountId: mount.mountId,
+    mountOperationId: mount.mountOperationId,
+    materialSourceId: mount.materialSourceId,
+    spoolId: mount.spoolId,
+    openedAt: mount.openedAt || null,
+    openedBy: mount.openedBy || null,
+    verification: mount.verification,
+    sourceIdentityStrengthAtOpen: mount.sourceIdentityStrengthAtOpen,
+    expectedRfid: mount.expectedRfid || null,
+    status: mount.status,
+  });
+}
+
+/**
+ * close operationのsemantic payload fingerprintを生成する。
+ *
+ * @private
+ * @function createMountCloseFingerprint
+ * @param {Object} input - close入力。
+ * @param {Object} closedMount - close後mount record。
+ * @returns {string} close operation fingerprint。
+ */
+function createMountCloseFingerprint(input, closedMount) {
+  return stableStringify({
+    mountId: closedMount.mountId,
+    closeOperationId: input.closeOperationId || null,
+    closedAt: closedMount.closedAt || null,
+    closedBy: closedMount.closedBy || null,
+    reason: input.reason || null,
+  });
+}
+
+/**
  * ISO時刻をmillisecondsへ変換する。
  *
  * @private
@@ -216,6 +262,8 @@ export function createSpoolMountRepository(initialMounts = []) {
   const openMountIdBySource = new Map();
   const openMountIdBySpool = new Map();
   const mountIdByOperationId = new Map();
+  const mountCreationFingerprintByOperationId = new Map();
+  const mountCloseFingerprintByOperationId = new Map();
   const conflicts = [];
 
   /**
@@ -258,6 +306,12 @@ export function createSpoolMountRepository(initialMounts = []) {
     mountIdsBySpool.get(mount.spoolId).add(mount.mountId);
 
     mountIdByOperationId.set(mount.mountOperationId, mount.mountId);
+    if (!mountCreationFingerprintByOperationId.has(mount.mountOperationId)) {
+      mountCreationFingerprintByOperationId.set(
+        mount.mountOperationId,
+        createMountCreationFingerprint(mount),
+      );
+    }
 
     if (mount.status === SPOOL_MOUNT_STATUS.OPEN) {
       openMountIdBySource.set(mount.materialSourceId, mount.mountId);
@@ -341,7 +395,7 @@ export function createSpoolMountRepository(initialMounts = []) {
     const existingOperationMountId = mountIdByOperationId.get(mount.mountOperationId);
     if (existingOperationMountId) {
       const existingOperationMount = mountsById.get(existingOperationMountId);
-      if (isSameMountPayload(existingOperationMount, mount)) {
+      if (mountCreationFingerprintByOperationId.get(mount.mountOperationId) === createMountCreationFingerprint(mount)) {
         return createRepositoryResult({
           ok: true,
           action: "idempotent",
@@ -444,6 +498,7 @@ export function createSpoolMountRepository(initialMounts = []) {
    * @function closeMount
    * @param {Object} input - close入力。
    * @param {string} input.mountId - close対象mount ID。
+   * @param {string=} input.closeOperationId - close operation ID。
    * @param {string} input.closedAt - close時刻。
    * @param {string=} input.closedBy - close実行者。
    * @returns {Object} repository result。
@@ -458,10 +513,19 @@ export function createSpoolMountRepository(initialMounts = []) {
         errors: ["mount-not-found"],
       });
     }
+    if (existingMount.status === SPOOL_MOUNT_STATUS.BLOCKED) {
+      return createRepositoryResult({
+        ok: false,
+        action: "invalid",
+        record: existingMount,
+        errors: ["mount-not-open"],
+      });
+    }
 
     const closedMount = Object.freeze({
       ...cloneJsonValue(existingMount),
       status: SPOOL_MOUNT_STATUS.CLOSED,
+      closeOperationId: input.closeOperationId || existingMount.closeOperationId || null,
       closedAt: input.closedAt,
       closedBy: input.closedBy || existingMount.closedBy || null,
     });
@@ -472,6 +536,31 @@ export function createSpoolMountRepository(initialMounts = []) {
         action: "invalid",
         record: existingMount,
         errors: validation.errors,
+      });
+    }
+    const closeFingerprint = createMountCloseFingerprint(input, closedMount);
+    const closeOperationId = input.closeOperationId || null;
+    if (closeOperationId && mountCloseFingerprintByOperationId.has(closeOperationId)) {
+      const storedCloseFingerprint = mountCloseFingerprintByOperationId.get(closeOperationId);
+      if (storedCloseFingerprint === closeFingerprint) {
+        return createRepositoryResult({
+          ok: true,
+          action: "idempotent",
+          record: existingMount,
+        });
+      }
+      const conflict = createMountConflict({
+        type: "close-operation-payload-conflict",
+        reason: "same-close-operation-different-payload",
+        existingMount,
+        candidateMount: closedMount,
+      });
+      conflicts.push(conflict);
+      return createRepositoryResult({
+        ok: false,
+        action: "conflict",
+        record: existingMount,
+        conflicts: [conflict],
       });
     }
 
@@ -499,11 +588,15 @@ export function createSpoolMountRepository(initialMounts = []) {
     }
 
     deindexOpenMount(existingMount);
-    mountsById.set(existingMount.mountId, freezeClone(closedMount));
+    const storedClosedMount = freezeClone(closedMount);
+    mountsById.set(existingMount.mountId, storedClosedMount);
+    if (closeOperationId) {
+      mountCloseFingerprintByOperationId.set(closeOperationId, closeFingerprint);
+    }
     return createRepositoryResult({
       ok: true,
       action: "close",
-      record: closedMount,
+      record: storedClosedMount,
     });
   }
 
