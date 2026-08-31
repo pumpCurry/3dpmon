@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1496 (PR #438)
+ * @version 1.390.1497 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 10:37:00
+ * @lastModified 2026-08-31 10:50:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -259,7 +259,7 @@ describe("MaterialSourceRegistry", () => {
     expect(registry.resolveByIdentity(provisional.deviceId, provisional.identity)).toBeNull();
   });
 
-  it("同一materialSourceId更新時は古いlocator/identity indexを残さない", () => {
+  it("同一materialSourceId更新時は古いlocator indexを残さない", () => {
     const registry = createMaterialSourceRegistry();
     const source = createCfsSource({
       deviceId: "serial:k2pro-69e7",
@@ -275,12 +275,6 @@ describe("MaterialSourceRegistry", () => {
         boxId: 1,
         slotIndex: 2,
       }),
-      identity: createMaterialSourceIdentity({
-        deviceId: source.deviceId,
-        unitId: source.unitId,
-        kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
-        slotIndex: 2,
-      }),
       displayLabel: "1C",
     });
 
@@ -288,14 +282,60 @@ describe("MaterialSourceRegistry", () => {
     expect(registry.upsertSource(moved)).toMatchObject({ ok: true, action: "update" });
 
     expect(registry.resolveByLocator(source.deviceId, source.locator)).toBeNull();
-    expect(registry.resolveByIdentity(source.deviceId, source.identity)).toBeNull();
     expect(registry.resolveByLocator(moved.deviceId, moved.locator)).toMatchObject({
       materialSourceId: source.materialSourceId,
       displayLabel: "1C",
     });
-    expect(registry.resolveByIdentity(moved.deviceId, moved.identity)).toMatchObject({
+    expect(registry.resolveByIdentity(source.deviceId, source.identity)).toMatchObject({
       materialSourceId: source.materialSourceId,
     });
+  });
+
+  it("同一materialSourceIdでDeviceやidentityを変える更新は拒否する", () => {
+    const registry = createMaterialSourceRegistry();
+    const source = createCfsSource({
+      deviceId: "serial:k2pro-69e7",
+      unitIndex: 1,
+      slotIndex: 0,
+      identityStrength: MATERIAL_IDENTITY_STRENGTH.STABLE,
+    });
+    const changedIdentity = createMaterialSourceRecord({
+      ...source,
+      identity: createMaterialSourceIdentity({
+        deviceId: source.deviceId,
+        unitId: source.unitId,
+        kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+        slotIndex: 1,
+      }),
+    });
+    const changedDevice = {
+      ...source,
+      deviceId: "serial:k2pro-other",
+    };
+
+    expect(registry.upsertSource(source)).toMatchObject({ ok: true, action: "insert" });
+
+    expect(registry.upsertSource(changedIdentity)).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "source-id-immutability-conflict",
+          reason: "material-source-id-identity-changed",
+        }),
+      ],
+    });
+    expect(registry.upsertSource(changedDevice)).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "source-id-immutability-conflict",
+          reason: "material-source-id-device-changed",
+        }),
+      ],
+    });
+    expect(registry.getSource(source.materialSourceId).deviceId).toBe(source.deviceId);
   });
 
   it("invalid MaterialSourceはregistryへ保存せずvalidation errorを返す", () => {

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1496 (PR #438)
+ * @version 1.390.1497 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 10:37:00
+ * @lastModified 2026-08-31 10:50:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -153,12 +153,116 @@ describe("SpoolMountRepository", () => {
     });
     const open = createMount({
       mountOperationId: "mount-op:004",
+      openedAt: "2026-08-31T02:00:00.000Z",
     });
 
     expect(repository.recordMount(closed)).toMatchObject({ ok: true, action: "insert" });
     expect(repository.recordMount(open)).toMatchObject({ ok: true, action: "insert" });
     expect(repository.listMountsForSource("material-source:k2:1a")).toHaveLength(2);
     expect(repository.getOpenMountForSource("material-source:k2:1a")).toMatchObject({ mountId: open.mountId });
+  });
+
+  it("OPEN mountを専用APIでCLOSEDへ遷移し、次のopen mountを許可する", () => {
+    const repository = createSpoolMountRepository();
+    const mount = createMount();
+    const next = createMount({
+      spoolId: "spool:black-pla",
+      mountOperationId: "mount-op:004",
+      openedAt: "2026-08-31T02:00:00.000Z",
+    });
+
+    expect(repository.recordMount(mount)).toMatchObject({ ok: true, action: "insert" });
+    expect(repository.closeMount({
+      mountId: mount.mountId,
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+    })).toMatchObject({ ok: true, action: "close" });
+    expect(repository.getOpenMountForSource("material-source:k2:1a")).toBeNull();
+    expect(repository.recordMount(next)).toMatchObject({ ok: true, action: "insert" });
+    expect(repository.getOpenMountForSource("material-source:k2:1a")).toMatchObject({ mountId: next.mountId });
+  });
+
+  it("closeMountの再送は同一payloadなら冪等、差異があればconflictにする", () => {
+    const repository = createSpoolMountRepository();
+    const mount = createMount();
+
+    expect(repository.recordMount(mount)).toMatchObject({ ok: true, action: "insert" });
+    expect(repository.closeMount({
+      mountId: mount.mountId,
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+    })).toMatchObject({ ok: true, action: "close" });
+    expect(repository.closeMount({
+      mountId: mount.mountId,
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+    })).toMatchObject({ ok: true, action: "idempotent" });
+
+    const conflict = repository.closeMount({
+      mountId: mount.mountId,
+      closedAt: "2026-08-31T02:30:00.000Z",
+      closedBy: "operator",
+    });
+
+    expect(conflict).toMatchObject({ ok: false, action: "conflict" });
+    expect(conflict.conflicts).toEqual([
+      expect.objectContaining({
+        type: "close-payload-conflict",
+        reason: "same-mount-close-different-payload",
+      }),
+    ]);
+  });
+
+  it("同一sourceまたは同一spoolの履歴interval重複を拒否する", () => {
+    const repository = createSpoolMountRepository();
+    const closed = createMount({
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: "2026-08-31T02:00:00.000Z",
+      closedBy: "operator",
+    });
+    const overlappingSource = createMount({
+      spoolId: "spool:black-pla",
+      mountOperationId: "mount-op:005",
+      openedAt: "2026-08-31T01:30:00.000Z",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: "2026-08-31T03:00:00.000Z",
+    });
+    const overlappingSpool = createMount({
+      materialSourceId: "material-source:k2:1b",
+      mountOperationId: "mount-op:006",
+      openedAt: "2026-08-31T01:30:00.000Z",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: "2026-08-31T03:00:00.000Z",
+    });
+    const adjacent = createMount({
+      mountOperationId: "mount-op:007",
+      openedAt: "2026-08-31T02:00:00.000Z",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: "2026-08-31T03:00:00.000Z",
+    });
+
+    expect(repository.recordMount(closed)).toMatchObject({ ok: true, action: "insert" });
+    expect(repository.recordMount(overlappingSource)).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "source-interval-overlap-conflict",
+          reason: "material-source-mount-interval-overlap",
+        }),
+      ],
+    });
+    expect(repository.recordMount(overlappingSpool)).toMatchObject({
+      ok: false,
+      action: "conflict",
+      conflicts: [
+        expect.objectContaining({
+          type: "spool-interval-overlap-conflict",
+          reason: "spool-mount-interval-overlap",
+        }),
+      ],
+    });
+    expect(repository.recordMount(adjacent)).toMatchObject({ ok: true, action: "insert" });
   });
 
   it("invalid SpoolMountは保存しない", () => {

@@ -17,9 +17,9 @@
  * - {@link createMaterialSourceLocatorKey}：Device内locator keyを生成
  * - {@link createMaterialSourceIdentityKey}：Device内identity keyを生成
  *
- * @version 1.390.1496 (PR #438)
+ * @version 1.390.1497 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 10:37:00
+ * @lastModified 2026-08-31 10:50:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -306,6 +306,29 @@ export function createMaterialSourceRegistry(initialSources = []) {
     const locatorKey = createMaterialSourceLocatorKey(source.deviceId, source.locator);
     const existingLocatorId = sourceIdByLocatorKey.get(locatorKey);
     const conflictRecords = [];
+
+    if (existingById && existingById.deviceId !== source.deviceId) {
+      conflictRecords.push(createConflictRecord({
+        type: "source-id-immutability-conflict",
+        reason: "material-source-id-device-changed",
+        existingSource: existingById,
+        candidateSource: source,
+        key: source.materialSourceId,
+      }));
+    }
+
+    if (
+      existingById &&
+      stableStringify(existingById.identity) !== stableStringify(source.identity)
+    ) {
+      conflictRecords.push(createConflictRecord({
+        type: "source-id-immutability-conflict",
+        reason: "material-source-id-identity-changed",
+        existingSource: existingById,
+        candidateSource: source,
+        key: source.materialSourceId,
+      }));
+    }
 
     if (existingLocatorId && existingLocatorId !== source.materialSourceId) {
       conflictRecords.push(createConflictRecord({

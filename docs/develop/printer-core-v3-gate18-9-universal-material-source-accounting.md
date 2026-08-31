@@ -230,10 +230,13 @@ Gate 18.9A tests:
 - MaterialSourceRegistry stores K1 direct `N=1` and K2/CFS `N>1` sources through the same API
 - MaterialSourceRegistry keeps locator keys separate from stable identity keys
 - MaterialSourceRegistry reports locator/stable identity conflicts without auto-overwriting records
+- MaterialSourceRegistry rejects updates that reuse one `materialSourceId` for a different device or identity
 - SpoolMountRepository limits open mount per source to one
 - SpoolMountRepository limits open mount per spool to one across devices
 - SpoolMountRepository treats same `mountOperationId` + same payload as idempotent
 - SpoolMountRepository treats same `mountOperationId` + different payload as conflict
+- SpoolMountRepository closes an open interval only through a dedicated close API
+- SpoolMountRepository rejects overlapping historical intervals for the same source or spool
 - physical empty/unloaded evidence does not close a mount but blocks debit
 - RFID `null` does not block continuity
 - RFID mismatch blocks debit

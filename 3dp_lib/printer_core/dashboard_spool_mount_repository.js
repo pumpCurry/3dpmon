@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createSpoolMountRepository}：SpoolMount repositoryを生成
  *
- * @version 1.390.1496 (PR #438)
+ * @version 1.390.1497 (PR #438)
  * @since   1.390.1496 (PR #438)
- * @lastModified 2026-08-31 10:37:00
+ * @lastModified 2026-08-31 10:50:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9A 後続でIndexedDB backed repositoryへ同じcontractを接続する
@@ -157,6 +157,42 @@ function isSameMountPayload(left, right) {
 }
 
 /**
+ * ISO時刻をmillisecondsへ変換する。
+ *
+ * @private
+ * @function toTimeMs
+ * @param {string|null|undefined} value - ISO時刻。
+ * @returns {number|null} milliseconds。未指定ならnull。
+ */
+function toTimeMs(value) {
+  if (!value) {
+    return null;
+  }
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
+
+/**
+ * 2つのSpoolMount intervalが重なるか判定する。
+ *
+ * @private
+ * @function intervalsOverlap
+ * @param {Object} left - 左辺mount。
+ * @param {Object} right - 右辺mount。
+ * @returns {boolean} intervalが重なる場合true。
+ */
+function intervalsOverlap(left, right) {
+  const leftStart = toTimeMs(left.openedAt);
+  const rightStart = toTimeMs(right.openedAt);
+  if (leftStart === null || rightStart === null) {
+    return true;
+  }
+  const leftEnd = toTimeMs(left.closedAt) ?? Number.POSITIVE_INFINITY;
+  const rightEnd = toTimeMs(right.closedAt) ?? Number.POSITIVE_INFINITY;
+  return leftStart < rightEnd && rightStart < leftEnd;
+}
+
+/**
  * SpoolMount repositoryを生成する。
  *
  * 【詳細説明】
@@ -181,6 +217,26 @@ export function createSpoolMountRepository(initialMounts = []) {
   const openMountIdBySpool = new Map();
   const mountIdByOperationId = new Map();
   const conflicts = [];
+
+  /**
+   * open mount indexからmountを外す。
+   *
+   * @private
+   * @function deindexOpenMount
+   * @param {Object} mount - index解除対象mount。
+   * @returns {void}
+   */
+  function deindexOpenMount(mount) {
+    if (mount.status !== SPOOL_MOUNT_STATUS.OPEN) {
+      return;
+    }
+    if (openMountIdBySource.get(mount.materialSourceId) === mount.mountId) {
+      openMountIdBySource.delete(mount.materialSourceId);
+    }
+    if (openMountIdBySpool.get(mount.spoolId) === mount.mountId) {
+      openMountIdBySpool.delete(mount.spoolId);
+    }
+  }
 
   /**
    * mountをindexへ追加する。
@@ -210,6 +266,54 @@ export function createSpoolMountRepository(initialMounts = []) {
   }
 
   /**
+   * mountのrepository固有validation errorを取得する。
+   *
+   * @private
+   * @function getRepositoryMountErrors
+   * @param {Object} mount - SpoolMount record。
+   * @returns {Array<string>} repository validation error。
+   */
+  function getRepositoryMountErrors(mount) {
+    const errors = [];
+    if (!mount.openedAt) {
+      errors.push("openedAt-required-for-repository");
+    }
+    return errors;
+  }
+
+  /**
+   * mount interval conflictを検出する。
+   *
+   * @private
+   * @function collectIntervalConflicts
+   * @param {Object} mount - candidate mount。
+   * @returns {Array<Object>} conflict record配列。
+   */
+  function collectIntervalConflicts(mount) {
+    const conflictRecords = [];
+    for (const existingMount of mountsById.values()) {
+      if (existingMount.mountId === mount.mountId) {
+        continue;
+      }
+      const sameSource = existingMount.materialSourceId === mount.materialSourceId;
+      const sameSpool = existingMount.spoolId === mount.spoolId;
+      if (!sameSource && !sameSpool) {
+        continue;
+      }
+      if (!intervalsOverlap(existingMount, mount)) {
+        continue;
+      }
+      conflictRecords.push(createMountConflict({
+        type: sameSource ? "source-interval-overlap-conflict" : "spool-interval-overlap-conflict",
+        reason: sameSource ? "material-source-mount-interval-overlap" : "spool-mount-interval-overlap",
+        existingMount,
+        candidateMount: mount,
+      }));
+    }
+    return conflictRecords;
+  }
+
+  /**
    * mountをrepositoryへ記録する。
    *
    * @function recordMount
@@ -223,6 +327,14 @@ export function createSpoolMountRepository(initialMounts = []) {
         ok: false,
         action: "invalid",
         errors: validation.errors,
+      });
+    }
+    const repositoryErrors = getRepositoryMountErrors(mount);
+    if (repositoryErrors.length > 0) {
+      return createRepositoryResult({
+        ok: false,
+        action: "invalid",
+        errors: repositoryErrors,
       });
     }
 
@@ -301,6 +413,16 @@ export function createSpoolMountRepository(initialMounts = []) {
       }
     }
 
+    const intervalConflicts = collectIntervalConflicts(mount);
+    if (intervalConflicts.length > 0) {
+      conflicts.push(...intervalConflicts);
+      return createRepositoryResult({
+        ok: false,
+        action: "conflict",
+        conflicts: intervalConflicts,
+      });
+    }
+
     const stored = freezeClone(mount);
     mountsById.set(stored.mountId, stored);
     indexMount(stored);
@@ -309,6 +431,79 @@ export function createSpoolMountRepository(initialMounts = []) {
       ok: true,
       action: existingById ? "idempotent" : "insert",
       record: stored,
+    });
+  }
+
+  /**
+   * open SpoolMountをCLOSEDへ遷移する。
+   *
+   * 【詳細説明】
+   * - OPEN mountの記録とCLOSED遷移を同じ`recordMount()`に混ぜると、mountOperationId payload conflictになる。
+   * - そのためcloseは専用APIに分け、同一mountIdを保ったままclosedAt/closedByだけを確定する。
+   *
+   * @function closeMount
+   * @param {Object} input - close入力。
+   * @param {string} input.mountId - close対象mount ID。
+   * @param {string} input.closedAt - close時刻。
+   * @param {string=} input.closedBy - close実行者。
+   * @returns {Object} repository result。
+   */
+  function closeMount(input = {}) {
+    const mountId = input.mountId;
+    const existingMount = mountsById.get(mountId);
+    if (!existingMount) {
+      return createRepositoryResult({
+        ok: false,
+        action: "invalid",
+        errors: ["mount-not-found"],
+      });
+    }
+
+    const closedMount = Object.freeze({
+      ...cloneJsonValue(existingMount),
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: input.closedAt,
+      closedBy: input.closedBy || existingMount.closedBy || null,
+    });
+    const validation = validateSpoolMount(closedMount);
+    if (!validation.ok) {
+      return createRepositoryResult({
+        ok: false,
+        action: "invalid",
+        record: existingMount,
+        errors: validation.errors,
+      });
+    }
+
+    if (existingMount.status === SPOOL_MOUNT_STATUS.CLOSED) {
+      if (isSameMountPayload(existingMount, closedMount)) {
+        return createRepositoryResult({
+          ok: true,
+          action: "idempotent",
+          record: existingMount,
+        });
+      }
+      const conflict = createMountConflict({
+        type: "close-payload-conflict",
+        reason: "same-mount-close-different-payload",
+        existingMount,
+        candidateMount: closedMount,
+      });
+      conflicts.push(conflict);
+      return createRepositoryResult({
+        ok: false,
+        action: "conflict",
+        record: existingMount,
+        conflicts: [conflict],
+      });
+    }
+
+    deindexOpenMount(existingMount);
+    mountsById.set(existingMount.mountId, freezeClone(closedMount));
+    return createRepositoryResult({
+      ok: true,
+      action: "close",
+      record: closedMount,
     });
   }
 
@@ -410,6 +605,7 @@ export function createSpoolMountRepository(initialMounts = []) {
 
   return Object.freeze({
     recordMount,
+    closeMount,
     getMount,
     listMountsForSource,
     listMountsForSpool,
