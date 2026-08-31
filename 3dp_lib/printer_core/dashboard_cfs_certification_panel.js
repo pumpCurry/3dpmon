@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1473 (PR #436)
+ * @version 1.390.1523 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:30:05
+ * @lastModified 2026-08-31 16:39:17
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -456,6 +456,9 @@ function formatExecutionStatus(execution) {
   const status = toText(execution?.status, "idle");
   if (status === "submitted" || status === "sent") {
     return "送信済み / 物理確認待ち";
+  }
+  if (status === "unknown") {
+    return "結果不明 / 物理確認が必要";
   }
   if (status === "timeout") {
     return "timeout / 結果不明";

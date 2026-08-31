@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1473 (PR #436)
+ * @version 1.390.1523 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-29 21:30:05
+ * @lastModified 2026-08-31 16:39:17
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -511,5 +511,48 @@ describe("dashboard_cfs_certification_panel", () => {
 
     expect(viewModel.liveSend.enabled).toBe(false);
     expect(viewModel.liveSend.reason).toBe("certification-uncertified");
+  });
+
+  it("post-command observation失敗のunknown実行状態は待機中ではなく結果不明として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "uncertified",
+        },
+      },
+      execution: {
+        status: "unknown",
+        reason: "post-command-observation-failed",
+        startedAt: "2026-08-31T07:00:00.000Z",
+        completedAt: "2026-08-31T07:00:05.000Z",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.execution.displayStatus).toBe("結果不明 / 物理確認が必要");
+    expect(viewModel.evidence.timeline).toContainEqual(expect.objectContaining({
+      key: "execution",
+      label: "結果不明 / 物理確認が必要",
+      status: "unknown",
+      observedAt: "2026-08-31T07:00:05.000Z",
+    }));
+    expect(container.textContent).toContain("結果不明 / 物理確認が必要");
   });
 });
