@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1509 (PR #438)
+ * @version 1.390.1510 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 15:35:00
+ * @lastModified 2026-08-31 13:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -82,6 +82,7 @@ function createLegacyFixture(overrides = {}) {
  */
 function createSingleSpoolConfirmation(overrides = {}) {
   return {
+    confirmationId: "confirmation:k1max-4a1b-single-spool",
     deviceId: "serial:k1max-4a1b",
     mode: "single-spool",
     confirmedBy: "operator",
@@ -90,25 +91,64 @@ function createSingleSpoolConfirmation(overrides = {}) {
   };
 }
 
+/**
+ * migration subject/evidenceへbindしたsingle-spool確認つきfixtureを生成する。
+ *
+ * 【詳細説明】
+ * - confirmationはplan revisionそのものではなく、confirmation前のdecision evidenceへbindする。
+ * - これにより、confirmationがchecksumに含まれても循環参照を作らず、証拠が変わった場合は再確認が必要になる。
+ *
+ * @function createConfirmedSingleSpoolFixture
+ * @param {Object=} overrides - legacy fixture上書き。
+ * @param {Object=} planOptions - dry-run plan生成option。
+ * @param {Object=} confirmationOverrides - confirmation上書き。
+ * @returns {Object} migration confirmationを含むlegacy fixture。
+ */
+function createConfirmedSingleSpoolFixture(overrides = {}, planOptions = {}, confirmationOverrides = {}) {
+  const preview = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture(overrides), planOptions);
+  const firstEntry = preview.entries[0] || {};
+  const existingAccounting = overrides.materialAccounting && typeof overrides.materialAccounting === "object"
+    ? overrides.materialAccounting
+    : {};
+  const existingConfirmations = Array.isArray(existingAccounting.migrationTopologyConfirmations)
+    ? existingAccounting.migrationTopologyConfirmations
+    : [];
+  return createLegacyFixture({
+    ...overrides,
+    materialAccounting: {
+      ...existingAccounting,
+      migrationTopologyConfirmations: [
+        createSingleSpoolConfirmation({
+          deviceId: firstEntry.deviceId,
+          host: firstEntry.host,
+          migrationSubjectId: firstEntry.migrationSubjectId,
+          evidenceChecksum: firstEntry.confirmationEvidenceChecksum,
+          planRevisionId: firstEntry.confirmationRevisionId,
+          ...confirmationOverrides,
+        }),
+        ...existingConfirmations,
+      ],
+    },
+  });
+}
+
 describe("Material accounting migration dry-run planner", () => {
   it("K1 direct-only hostSpoolMapは1つのdirect sourceとmigrated mountへREADY分類する", () => {
-    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+    const planOptions = { createdAt: "2026-08-31T03:25:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
       machines: { "K1Max-4A1B": { printerType: "k1" } },
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
-      materialAccounting: {
-        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
-      },
-    }), { createdAt: "2026-08-31T03:25:00.000Z" });
+    }, planOptions), planOptions);
 
     expect(plan).toMatchObject({
       status: "dry-run",
@@ -163,7 +203,7 @@ describe("Material accounting migration dry-run planner", () => {
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
@@ -205,31 +245,29 @@ describe("Material accounting migration dry-run planner", () => {
   });
 
   it("同一evidenceの再planではmountCandidateを返し、openedAt/mountOperationIdをdry-runで固定しない", () => {
-    const legacyData = createLegacyFixture({
+    const planOptions = { createdAt: "2026-08-31T03:25:00.000Z" };
+    const legacyData = createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
-      materialAccounting: {
-        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
-      },
-    });
+    }, planOptions);
     const first = createMaterialAccountingMigrationDryRunPlan(legacyData, {
       createdAt: "2026-08-31T03:25:00.000Z",
     });
     const second = createMaterialAccountingMigrationDryRunPlan(legacyData, {
-      createdAt: "2026-08-31T03:30:00.000Z",
+      createdAt: "2026-08-31T03:25:00.000Z",
     });
 
     expect(first.migrationSubjectId).toBe(second.migrationSubjectId);
-    expect(first.migrationId).not.toBe(second.migrationId);
+    expect(first.migrationId).toBe(second.migrationId);
     expect(first.entries[0].plannedWrites.spoolMounts).toEqual([]);
     expect(second.entries[0].plannedWrites.spoolMounts).toEqual([]);
     expect(first.entries[0].plannedWrites.mountCandidates[0]).toMatchObject({
@@ -242,6 +280,178 @@ describe("Material accounting migration dry-run planner", () => {
     expect(validateMaterialAccountingMigrationDryRunPlan(second)).toEqual({ ok: true, errors: [] });
   });
 
+  it("migration subject/evidenceへbindされていないsingle-spool確認はREADYにしない", () => {
+    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K1Max-4A1B",
+            printerType: "k1",
+            materialSystem: { mode: "single-spool", unitLimit: 0 },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
+          },
+        ],
+      },
+      hostSpoolMap: { "K1Max-4A1B": "spool-031" },
+      materialAccounting: {
+        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
+      },
+    }), { createdAt: "2026-08-31T03:25:00.000Z" });
+
+    expect(plan).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
+      source: {
+        confirmationEvidenceChecksum: expect.stringMatching(/^fnv1a128:/),
+      },
+    });
+    expect(plan.entries[0]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION],
+    });
+  });
+
+  it("証拠snapshotが変わったsingle-spool確認は再利用せず再確認を要求する", () => {
+    const firstOptions = { createdAt: "2026-08-31T03:25:00.000Z" };
+    const staleOptions = { createdAt: "2026-08-31T03:30:00.000Z" };
+    const legacyData = createConfirmedSingleSpoolFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K1Max-4A1B",
+            printerType: "k1",
+            materialSystem: { mode: "single-spool", unitLimit: 0 },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
+          },
+        ],
+      },
+      hostSpoolMap: { "K1Max-4A1B": "spool-031" },
+    }, firstOptions);
+
+    const first = createMaterialAccountingMigrationDryRunPlan(legacyData, firstOptions);
+    const stale = createMaterialAccountingMigrationDryRunPlan(legacyData, staleOptions);
+
+    expect(first.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY);
+    expect(stale.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE);
+    expect(first.migrationSubjectId).toBe(stale.migrationSubjectId);
+    expect(first.source.confirmationEvidenceChecksum).not.toBe(stale.source.confirmationEvidenceChecksum);
+  });
+
+  it("entry migration subjectはplan全体ではなくhost-to-spool単位で安定する", () => {
+    const baseData = createLegacyFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K1Max-4A1B",
+            printerType: "k1",
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
+          },
+          {
+            hostname: "K1Max-03FA",
+            printerType: "k1",
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-03fa", identityStrength: "serial" },
+          },
+        ],
+      },
+      filamentSpools: [
+        { id: "spool-031", name: "CC3D Sand Color", remainingLengthMm: 336000 },
+        { id: "spool-032", name: "CC3D Bone Color", remainingLengthMm: 300000 },
+        { id: "spool-033", name: "CC3D Silver", remainingLengthMm: 280000 },
+      ],
+      hostSpoolMap: {
+        "K1Max-4A1B": "spool-031",
+        "K1Max-03FA": "spool-032",
+      },
+      materialSourceObservations: {
+        schemaVersion: 1,
+        byDeviceId: {
+          "serial:k1max-4a1b": {
+            deviceId: "serial:k1max-4a1b",
+            snapshotCompleteness: "complete",
+            lastObservedAt: "2026-08-31T03:37:00.000Z",
+            latestBySourceId: {
+              "direct:0": {
+                sourceId: "direct:0",
+                kind: MATERIAL_SOURCE_KIND.DIRECT_FEED,
+                index: 0,
+                sourceIdentityStrength: "stable",
+              },
+            },
+          },
+          "serial:k1max-03fa": {
+            deviceId: "serial:k1max-03fa",
+            snapshotCompleteness: "complete",
+            lastObservedAt: "2026-08-31T03:37:00.000Z",
+            latestBySourceId: {
+              "direct:0": {
+                sourceId: "direct:0",
+                kind: MATERIAL_SOURCE_KIND.DIRECT_FEED,
+                index: 0,
+                sourceIdentityStrength: "stable",
+              },
+            },
+          },
+        },
+      },
+    });
+    const changedData = {
+      ...baseData,
+      hostSpoolMap: {
+        "K1Max-4A1B": "spool-031",
+        "K1Max-03FA": "spool-033",
+      },
+    };
+
+    const base = createMaterialAccountingMigrationDryRunPlan(baseData, { createdAt: "2026-08-31T03:37:30.000Z" });
+    const changed = createMaterialAccountingMigrationDryRunPlan(changedData, { createdAt: "2026-08-31T03:37:30.000Z" });
+    const baseA = base.entries.find((entry) => entry.host === "K1Max-4A1B");
+    const changedA = changed.entries.find((entry) => entry.host === "K1Max-4A1B");
+    const baseB = base.entries.find((entry) => entry.host === "K1Max-03FA");
+    const changedB = changed.entries.find((entry) => entry.host === "K1Max-03FA");
+
+    expect(base.migrationBatchId).not.toBe(changed.migrationBatchId);
+    expect(baseA.migrationSubjectId).toBe(changedA.migrationSubjectId);
+    expect(baseB.migrationSubjectId).not.toBe(changedB.migrationSubjectId);
+  });
+
+  it("serial prefixだけのdeviceIdはstable proofとしてREADYにしない", () => {
+    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K1Max-PrefixOnly",
+            printerType: "k1",
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-prefix-only" },
+          },
+        ],
+      },
+      hostSpoolMap: { "K1Max-PrefixOnly": "spool-031" },
+      materialSourceObservations: {
+        schemaVersion: 1,
+        byDeviceId: {
+          "serial:k1max-prefix-only": {
+            deviceId: "serial:k1max-prefix-only",
+            snapshotCompleteness: "complete",
+            lastObservedAt: "2026-08-31T03:37:00.000Z",
+            latestBySourceId: {
+              "direct:0": {
+                sourceId: "direct:0",
+                kind: MATERIAL_SOURCE_KIND.DIRECT_FEED,
+                index: 0,
+                sourceIdentityStrength: "stable",
+              },
+            },
+          },
+        },
+      },
+    }), { createdAt: "2026-08-31T03:37:30.000Z" });
+
+    expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
+    expect(plan.entries[0]).toMatchObject({
+      migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
+      reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.DEVICE_IDENTITY_INSUFFICIENT],
+    });
+  });
+
   it("保存済みsingle-spool設定でもoperator確認が無ければREADYにしない", () => {
     const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
       appSettings: {
@@ -250,7 +460,7 @@ describe("Material accounting migration dry-run planner", () => {
             hostname: "K1Max-UnconfirmedSingle",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-unconfirmed-single" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-unconfirmed-single", identityStrength: "serial" },
           },
         ],
       },
@@ -278,7 +488,7 @@ describe("Material accounting migration dry-run planner", () => {
             hostname: "K1Max-LegacyBoolean",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-legacy-boolean" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-legacy-boolean", identityStrength: "serial" },
           },
         ],
       },
@@ -387,7 +597,7 @@ describe("Material accounting migration dry-run planner", () => {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
@@ -414,7 +624,7 @@ describe("Material accounting migration dry-run planner", () => {
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
@@ -466,7 +676,7 @@ describe("Material accounting migration dry-run planner", () => {
           {
             hostname: "K2Pro-69E7",
             printerType: "k2",
-            printerCoreV3Identity: { deviceIdSeed: "serial:905251280E69E7" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:905251280E69E7", identityStrength: "serial" },
           },
         ],
       },
@@ -513,7 +723,7 @@ describe("Material accounting migration dry-run planner", () => {
           {
             hostname: "K2Pro-69E7",
             printerType: "k2",
-            printerCoreV3Identity: { deviceIdSeed: "serial:905251280E69E7" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:905251280E69E7", identityStrength: "serial" },
           },
         ],
       },
@@ -545,7 +755,7 @@ describe("Material accounting migration dry-run planner", () => {
             {
               hostname: `K2Pro-${label}`,
               printerType: "k2",
-              printerCoreV3Identity: { deviceIdSeed: `serial:k2-${label}` },
+              printerCoreV3Identity: { deviceIdSeed: `serial:k2-${label}`, identityStrength: "serial" },
             },
           ],
         },
@@ -1029,7 +1239,8 @@ describe("Material accounting migration dry-run planner", () => {
   });
 
   it("既存Universal SpoolMount repositoryにopen mount conflictがあるhostはmigration READYにしない", () => {
-    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+    const planOptions = { createdAt: "2026-08-31T03:37:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
@@ -1045,9 +1256,6 @@ describe("Material accounting migration dry-run planner", () => {
       },
       hostSpoolMap: { "K1Max-MountConflict": "spool-031" },
       materialAccounting: {
-        migrationTopologyConfirmations: [
-          createSingleSpoolConfirmation({ deviceId: "serial:k1max-mount-conflict" }),
-        ],
         spoolMountRepository: {
           mounts: [
             {
@@ -1059,7 +1267,7 @@ describe("Material accounting migration dry-run planner", () => {
           ],
         },
       },
-    }), { createdAt: "2026-08-31T03:37:00.000Z" });
+    }, planOptions), planOptions);
 
     expect(plan.migrationStatus).toBe(MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED);
     expect(plan.entries[0]).toMatchObject({
@@ -1082,7 +1290,7 @@ describe("Material accounting migration dry-run planner", () => {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
@@ -1096,7 +1304,7 @@ describe("Material accounting migration dry-run planner", () => {
             hostname: "K1Max-4A1B",
             printerType: "k2",
             materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
@@ -1185,22 +1393,20 @@ describe("Material accounting migration dry-run planner", () => {
   });
 
   it("validatorはsummaryとentry statusの不一致を拒否する", () => {
-    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+    const planOptions = { createdAt: "2026-08-31T03:36:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
-      materialAccounting: {
-        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
-      },
-    }), { createdAt: "2026-08-31T03:36:00.000Z" });
+    }, planOptions), planOptions);
     const invalid = {
       ...plan,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
@@ -1222,22 +1428,20 @@ describe("Material accounting migration dry-run planner", () => {
   });
 
   it("validatorは非READY entryのplannedWrites混入を拒否する", () => {
-    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+    const planOptions = { createdAt: "2026-08-31T03:37:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
-      materialAccounting: {
-        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
-      },
-    }), { createdAt: "2026-08-31T03:37:00.000Z" });
+    }, planOptions), planOptions);
     const invalid = {
       ...plan,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
@@ -1268,22 +1472,20 @@ describe("Material accounting migration dry-run planner", () => {
   });
 
   it("READY entry内のmountCandidateはentry spoolとplanned MaterialSourceにbindされる", () => {
-    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+    const planOptions = { createdAt: "2026-08-31T03:37:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
           },
         ],
       },
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
-      materialAccounting: {
-        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
-      },
-    }), { createdAt: "2026-08-31T03:37:00.000Z" });
+    }, planOptions), planOptions);
     const invalid = {
       ...plan,
       entries: [
@@ -1312,23 +1514,78 @@ describe("Material accounting migration dry-run planner", () => {
     });
   });
 
-  it("validatorはplan revision/source/migrationIdのcross-binding不一致を拒否する", () => {
-    const plan = createMaterialAccountingMigrationDryRunPlan(createLegacyFixture({
+  it("READY entryは単一unit/source/candidate graphとしてentry deviceへbindされる", () => {
+    const planOptions = { createdAt: "2026-08-31T03:37:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
       appSettings: {
         connectionTargets: [
           {
             hostname: "K1Max-4A1B",
             printerType: "k1",
             materialSystem: { mode: "single-spool", unitLimit: 0 },
-            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b" },
+            printerCoreV3Identity: {
+              deviceIdSeed: "serial:k1max-4a1b",
+              identityStrength: "serial",
+            },
           },
         ],
       },
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
-      materialAccounting: {
-        migrationTopologyConfirmations: [createSingleSpoolConfirmation()],
+    }, planOptions), planOptions);
+    const readyEntry = plan.entries[0];
+    const invalid = {
+      ...plan,
+      entries: [
+        {
+          ...readyEntry,
+          plannedWrites: {
+            ...readyEntry.plannedWrites,
+            filamentUnits: [
+              ...readyEntry.plannedWrites.filamentUnits,
+              {
+                ...readyEntry.plannedWrites.filamentUnits[0],
+                unitId: "filament-unit:extra",
+                deviceId: "serial:other-device",
+              },
+            ],
+            materialSources: [
+              {
+                ...readyEntry.plannedWrites.materialSources[0],
+                deviceId: "serial:other-device",
+                unitId: "filament-unit:not-planned",
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(validateMaterialAccountingMigrationDryRunPlan(invalid)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "ready-entry-filamentUnit-count-invalid",
+        "filamentUnit:deviceId-entry-mismatch",
+        "materialSource:deviceId-entry-mismatch",
+        "materialSource:unitId-not-planned",
+      ]),
+    });
+  });
+
+  it("validatorはplan revision/source/migrationIdのcross-binding不一致を拒否する", () => {
+    const planOptions = { createdAt: "2026-08-31T03:37:00.000Z" };
+    const plan = createMaterialAccountingMigrationDryRunPlan(createConfirmedSingleSpoolFixture({
+      appSettings: {
+        connectionTargets: [
+          {
+            hostname: "K1Max-4A1B",
+            printerType: "k1",
+            materialSystem: { mode: "single-spool", unitLimit: 0 },
+            printerCoreV3Identity: { deviceIdSeed: "serial:k1max-4a1b", identityStrength: "serial" },
+          },
+        ],
       },
-    }), { createdAt: "2026-08-31T03:37:00.000Z" });
+      hostSpoolMap: { "K1Max-4A1B": "spool-031" },
+    }, planOptions), planOptions);
     const invalid = {
       ...plan,
       migrationSubjectId: "material-accounting-migration-subject:tampered",

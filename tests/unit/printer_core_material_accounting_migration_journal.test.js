@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1509 (PR #438)
+ * @version 1.390.1510 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 15:35:00
+ * @lastModified 2026-08-31 13:22:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -42,14 +42,17 @@ import {
  * @returns {Object} migration dry-run plan。
  */
 function createReadyPlan(host = "K1Max-4A1B") {
-  return createMaterialAccountingMigrationDryRunPlan({
+  const legacyData = {
     appSettings: {
       connectionTargets: [
         {
           hostname: host,
           printerType: "k1",
           materialSystem: { mode: "single-spool", unitLimit: 0, accountingTopologyConfirmed: true },
-          printerCoreV3Identity: { deviceIdSeed: `serial:${host.toLowerCase()}` },
+          printerCoreV3Identity: {
+            deviceIdSeed: `serial:${host.toLowerCase()}`,
+            identityStrength: "serial",
+          },
         },
       ],
     },
@@ -59,7 +62,28 @@ function createReadyPlan(host = "K1Max-4A1B") {
     ],
     hostSpoolMap: { [host]: "spool-031" },
     materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
-  }, { createdAt: "2026-08-31T03:40:00.000Z" });
+  };
+  const planOptions = { createdAt: "2026-08-31T03:40:00.000Z" };
+  const preview = createMaterialAccountingMigrationDryRunPlan(legacyData, planOptions);
+  const entry = preview.entries[0];
+  return createMaterialAccountingMigrationDryRunPlan({
+    ...legacyData,
+    materialAccounting: {
+      migrationTopologyConfirmations: [
+        {
+          confirmationId: `confirmation:${host.toLowerCase()}-single-spool`,
+          deviceId: entry.deviceId,
+          host: entry.host,
+          mode: "single-spool",
+          confirmedBy: "operator",
+          confirmedAt: "2026-08-31T03:39:00.000Z",
+          migrationSubjectId: entry.migrationSubjectId,
+          evidenceChecksum: entry.confirmationEvidenceChecksum,
+          planRevisionId: entry.confirmationRevisionId,
+        },
+      ],
+    },
+  }, planOptions);
 }
 
 describe("Material accounting migration journal", () => {
@@ -85,10 +109,12 @@ describe("Material accounting migration journal", () => {
       status: "dry-run",
       invariants: { activateUniversalWrites: false },
     });
+    expect(result.journal.byMigrationId[plan.migrationId].planDigest).toMatch(/^fnv1a128:/);
     expect(result.journal.events).toEqual([
       expect.objectContaining({
         type: "migration-dry-run-recorded",
         migrationId: plan.migrationId,
+        planDigest: result.journal.byMigrationId[plan.migrationId].planDigest,
         recordedAt: "2026-08-31T03:41:00.000Z",
       }),
     ]);
@@ -106,6 +132,31 @@ describe("Material accounting migration journal", () => {
     expect(second).toMatchObject({ ok: true, action: "noop" });
     expect(second.journal.events).toHaveLength(1);
     expect(second.journal.byMigrationId[plan.migrationId].recordedAt).toBe("2026-08-31T03:41:00.000Z");
+  });
+
+  it("同一migrationId/checksumでもplan本文digestが異なる再保存はconflictにする", () => {
+    const plan = createReadyPlan();
+    const first = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const tampered = {
+      ...plan,
+      source: {
+        ...plan.source,
+        reviewerOnlyMutation: "same-checksum-different-body",
+      },
+    };
+    const second = recordMaterialAccountingMigrationDryRunPlan(first.journal, tampered, {
+      recordedAt: "2026-08-31T03:42:00.000Z",
+    });
+
+    expect(second).toMatchObject({
+      ok: false,
+      action: "conflict",
+      reason: "migration-journal-plan-digest-conflict",
+    });
+    expect(second.journal.events).toHaveLength(1);
+    expect(second.journal.byMigrationId[plan.migrationId].plan.source).not.toHaveProperty("reviewerOnlyMutation");
   });
 
   it("invalid planはjournalへ保存しない", () => {
@@ -290,6 +341,34 @@ describe("Material accounting migration journal", () => {
     ]);
   });
 
+  it("保存済みjournal entryのplanDigestがplan本文と食い違う場合は隔離する", () => {
+    const plan = createReadyPlan();
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      ...result.journal,
+      byMigrationId: {
+        [plan.migrationId]: {
+          ...result.journal.byMigrationId[plan.migrationId],
+          planDigest: "fnv1a128:tampered",
+        },
+      },
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.byMigrationId).toEqual({});
+    expect(journal.events).toEqual([]);
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        migrationId: plan.migrationId,
+        reason: "entry-plan-cross-binding-mismatch",
+        errors: expect.arrayContaining(["entry-planDigest-plan-mismatch"]),
+      }),
+    ]);
+  });
+
   it("保存済みjournal eventはentryのchecksum/recordedAt/eventIdと一致する場合だけ復元する", () => {
     const plan = createReadyPlan();
     const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
@@ -308,6 +387,11 @@ describe("Material accounting migration journal", () => {
           ...result.journal.events[0],
           eventId: "wrong-time-event",
           recordedAt: "2026-08-31T03:42:00.000Z",
+        },
+        {
+          ...result.journal.events[0],
+          eventId: "wrong-plan-digest-event",
+          planDigest: "fnv1a128:tampered",
         },
       ],
     };

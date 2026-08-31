@@ -109,11 +109,17 @@ legacy `hostSpoolMap` and read-only `materialSourceObservations`, but it must no
 write IndexedDB, mutate `monitorData`, close legacy mount intervals, or activate
 universal writes.
 
-Each plan separates the long-lived migration case from the exact evidence
-revision:
+Each plan separates the full dry-run batch, each host-to-spool migration case,
+and the exact evidence revision:
 
-- `migrationSubjectId`: stable subject for the same legacy host-to-spool
+- `migrationBatchId`: stable batch identity for the full `hostSpoolMap`
+- `migrationSubjectId`: compatibility alias for the plan batch ID
+- `entries[].migrationSubjectId`: stable subject for one legacy host-to-spool
   migration case
+- `entries[].confirmationEvidenceChecksum`: confirmation-before-decision
+  evidence checksum for that one entry
+- `entries[].confirmationRevisionId`: revision ID derived from the entry
+  confirmation evidence checksum
 - `planRevisionId`: evidence/checksum revision for the exact dry-run decision
 - `migrationId`: compatibility revision ID derived from `planRevisionId`
 
@@ -121,6 +127,18 @@ The decision checksum includes `createdAt` because topology freshness is decided
 against the plan creation time. A later re-plan with the same legacy assignment
 but stale topology therefore creates a new revision instead of reusing an older
 READY journal entry.
+
+Single-spool operator confirmations are bound to
+`entries[].migrationSubjectId` and to that entry's
+`confirmationEvidenceChecksum`. The planner first computes the entry evidence
+checksum without migration confirmations, accepts only confirmations whose
+`migrationSubjectId` and `evidenceChecksum` match that projection, then computes
+the final `source.checksum` with the accepted confirmation projection. This
+avoids a checksum cycle while still forcing re-confirmation when freshness,
+device identity, topology, spool, or repository evidence changes. A confirmation
+for `K1Max-4A1B -> spool-031` therefore survives unrelated changes to
+`K1Max-03FA -> spool-032`, while the plan-level batch ID still changes for the
+full dry-run batch.
 
 The dry-run planner classifies each legacy host spool assignment:
 
@@ -172,20 +190,27 @@ The dry-run validator recomputes `migrationStatus`, `summary.ready`,
 `summary.candidate`, `summary.blocked`, and all `summary.plannedWrites` counts
 from `entries[]`. Non-`READY` entries must not contain planned
 `filamentUnits`, `materialSources`, `spoolMounts`, or `mountCandidates`.
-READY `mountCandidates` must carry `openedAtPolicy:
-shadow-execution-time` and `operationIdPolicy: shadow-execution-time`, and must
-not carry execution fields. They must also reference the entry spool and a
-planned MaterialSource from the same entry. The validator additionally checks
+READY entries must contain exactly one planned `FilamentUnit`, exactly one
+planned `MaterialSource`, zero production `SpoolMount` writes, and exactly one
+shadow-execution `mountCandidate`. The validator runs the shared
+`FilamentUnit` and `MaterialSource` validators, requires each planned
+MaterialSource to belong to the entry device and to a planned unit in that same
+entry, and requires READY `mountCandidates` to carry `openedAtPolicy:
+shadow-execution-time` and `operationIdPolicy: shadow-execution-time` without
+execution fields. They must also reference the entry spool and a planned
+MaterialSource from the same entry. The validator additionally checks plan-level
 `migrationSubjectId`, `planRevisionId`, `migrationId`, and `source` bindings.
 This keeps persisted dry-run journal entries self-checking when Gate 18.9B
 introduces IndexedDB journaling.
 
 The source checksum includes the planner policy revision, schema version,
-`createdAt`, TTL / clock-skew policy, migration confirmations, legacy spool map,
-connection targets, machines, filament spool records, material observations, and
-existing Universal MaterialSource / SpoolMount repository snapshots. Any
-dependency that can change a READY/CANDIDATE/BLOCKED decision must change the
-checksum.
+`createdAt`, TTL / clock-skew policy, accepted migration confirmation evidence,
+legacy spool map, connection targets, machines, filament spool records, material
+observations, and existing Universal MaterialSource / SpoolMount repository
+snapshots. The confirmation-before-decision checksum explicitly excludes raw
+`migrationTopologyConfirmations`; only the final source checksum contains the
+accepted confirmation projection. Any dependency that can change a
+READY/CANDIDATE/BLOCKED decision must change the checksum.
 
 Migration lifecycle transitions are fixed by
 `canTransitionMaterialAccountingMigrationStatus()`:
@@ -320,14 +345,17 @@ migrationJournalIsEvidenceOnly = true
 Because `migrationId` is revision-derived, a fresh re-plan for the same
 `migrationSubjectId` records a separate revision instead of overwriting a prior
 decision. A malformed plan that tampers with `migrationId`, `planRevisionId`, or
-source checksum is rejected before journal conflict handling.
+source checksum is rejected before journal conflict handling. The journal also
+stores a separate `planDigest` for the full plan body, so an imported or
+resubmitted plan with the same `migrationId` and source checksum but a different
+body is treated as a conflict instead of a no-op.
 
 Stored journal restoration validates cross-binding before an entry is accepted:
-the outer entry `sourceChecksum` and `migrationStatus`, when present, must match
-the inner plan. Stored events are retained only when their `migrationId`,
-`sourceChecksum`, `recordedAt`, and deterministic `eventId` match an accepted
-entry. A restored journal therefore cannot stitch a valid plan to a different
-checksum/status/event trail.
+the outer entry `sourceChecksum`, `planDigest`, and `migrationStatus`, when
+present, must match the inner plan. Stored events are retained only when their
+`migrationId`, `sourceChecksum`, `planDigest`, `recordedAt`, and deterministic
+`eventId` match an accepted entry. A restored journal therefore cannot stitch a
+valid plan to a different checksum/status/body/event trail.
 
 Malformed imported entries are quarantined in `retainedUnsupportedEntries`
 without throwing. This includes `null` entries, missing `plannedWrites`,
@@ -411,7 +439,8 @@ Gate 18.9A tests:
 - migration dry-run planner blocks hosts with open Universal SpoolMount repository conflicts
 - migration dry-run planner treats future-dated observations beyond clock skew as not fresh
 - migration dry-run planner excludes tombstoned/unobserved sources from migration cardinality
-- migration dry-run planner changes source checksum when createdAt, policy, spool inventory, observation, confirmation, or repository evidence changes
+- migration dry-run planner changes source checksum when createdAt, policy, spool inventory, observation, accepted confirmation evidence, or repository evidence changes
+- migration dry-run planner requires single-spool confirmations to bind to the migration subject and confirmation evidence checksum
 - migration dry-run planner blocks duplicate strong devices and open device identity conflicts for a legacy host
 - migration dry-run validator recomputes summary/status/write counts, rejects non-READY planned writes, and checks plan revision/source/migration ID binding
 - migration dry-run validator requires READY mountCandidates to reference the entry spool and a planned MaterialSource
@@ -422,8 +451,9 @@ Gate 18.9B tests:
 - duplicate `migrationId` + same checksum is idempotent and does not duplicate events
 - malformed `migrationId` / revision / checksum binding is rejected before journal conflict handling
 - invalid stored journal entries are retained as unsupported evidence
-- stored entry checksum/status mismatches are retained as unsupported evidence
-- stored events are restored only when checksum, recordedAt, and eventId match an accepted entry
+- stored entry checksum/status/planDigest mismatches are retained as unsupported evidence
+- duplicate `migrationId` + same checksum but different planDigest is a journal conflict
+- stored events are restored only when checksum, planDigest, recordedAt, and eventId match an accepted entry
 - malformed stored entries do not throw during restore and are retained as unsupported evidence
 - localStorage round-trip keeps the journal without projecting it to spool/mount observations
 - IndexedDB durable save queues the journal as a shared dry-run evidence key

@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingMigrationDryRunPlan}：legacy dataからdry-run planを生成
  * - {@link validateMaterialAccountingMigrationDryRunPlan}：dry-run planを検証
  *
- * @version 1.390.1509 (PR #438)
+ * @version 1.390.1510 (PR #438)
  * @since   1.390.1502 (PR #438)
- * @lastModified 2026-08-31 15:35:00
+ * @lastModified 2026-08-31 13:22:00
  * -----------------------------------------------------------
  * @todo
  * - trusted print-start material binding snapshotとsource-specific usage evidenceは後続Gateで接続する
@@ -39,6 +39,7 @@ import {
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
   createMaterialSourceRecord,
+  validateFilamentUnit,
   validateMaterialSource,
   validateSpoolMount,
 } from "./dashboard_material_accounting_contract.js";
@@ -91,7 +92,7 @@ const DEFAULT_ALLOWED_CLOCK_SKEW_MS = 5_000;
  *
  * @constant {number}
  */
-const MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION = 3;
+const MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION = 4;
 
 /**
  * JSON互換値をcloneする。
@@ -265,9 +266,8 @@ function resolveDeviceIdentityEvidence(host, target) {
   const rawStrength = toTrimmedString(identity.identityStrength).toLowerCase();
   const identityStrength = rawStrength === "serial" ||
     rawStrength === "stable-machine-id" ||
-    rawStrength === "stable" ||
-    deviceId.startsWith("serial:") ||
-    deviceId.startsWith("stable-machine-id:")
+    rawStrength === "machine" ||
+    rawStrength === "stable"
     ? MATERIAL_IDENTITY_STRENGTH.STABLE
     : MATERIAL_IDENTITY_STRENGTH.PROVISIONAL;
   return { deviceId, identityStrength };
@@ -409,8 +409,8 @@ function hasLegacySpoolRecord(legacyData, spoolId) {
  * @param {string} input.deviceId - device ID。
  * @param {string} input.host - legacy host key。
  * @param {string} input.migrationSubjectId - stable migration subject ID。
- * @param {string} input.planRevisionId - plan revision ID。
- * @param {string} input.sourceChecksum - evidence checksum。
+ * @param {string} input.confirmationEvidenceChecksum - confirmation前のdecision evidence checksum。
+ * @param {string} input.confirmationRevisionId - confirmation前のdecision revision ID。
  * @returns {boolean} operator確認済みsingle-spoolならtrue。
  */
 function hasOperatorConfirmedSingleSpoolConfiguration(input) {
@@ -427,23 +427,86 @@ function hasOperatorConfirmedSingleSpoolConfiguration(input) {
     if (toTrimmedString(confirmation.host) && toTrimmedString(confirmation.host) !== input.host) {
       return false;
     }
+    if (!toTrimmedString(confirmation.confirmationId)) {
+      return false;
+    }
+    if (!toTrimmedString(confirmation.confirmedBy)) {
+      return false;
+    }
     if (!normalizeOptionalIsoTime(confirmation.confirmedAt)) {
       return false;
     }
     const confirmationSubjectId = toTrimmedString(confirmation.migrationSubjectId);
-    if (confirmationSubjectId && confirmationSubjectId !== input.migrationSubjectId) {
+    if (!confirmationSubjectId || confirmationSubjectId !== input.migrationSubjectId) {
       return false;
     }
     const confirmationPlanRevisionId = toTrimmedString(confirmation.planRevisionId);
-    if (confirmationPlanRevisionId && confirmationPlanRevisionId !== input.planRevisionId) {
+    if (confirmationPlanRevisionId && confirmationPlanRevisionId !== input.confirmationRevisionId) {
       return false;
     }
     const confirmationEvidenceChecksum = toTrimmedString(confirmation.evidenceChecksum);
-    if (confirmationEvidenceChecksum && confirmationEvidenceChecksum !== input.sourceChecksum) {
+    if (!confirmationEvidenceChecksum || confirmationEvidenceChecksum !== input.confirmationEvidenceChecksum) {
       return false;
     }
     return true;
   });
+}
+
+/**
+ * decision checksumへ含めるmigration topology confirmation投影を生成する。
+ *
+ * 【詳細説明】
+ * - confirmation自身を最終planRevisionIdへbindするとchecksum循環が起きる。
+ * - そのため、confirmation前のevidence checksumへbindされた確認だけを抽出し、最終decision checksumへ含める。
+ *
+ * @private
+ * @function listAcceptedMigrationTopologyConfirmationEvidence
+ * @param {Array<Object>} confirmations - migration topology confirmation候補。
+ * @param {Object} input - 確認証跡のbind対象。
+ * @param {string} input.migrationSubjectId - stable migration subject ID。
+ * @param {string} input.confirmationEvidenceChecksum - confirmation前のdecision evidence checksum。
+ * @param {string} input.confirmationRevisionId - confirmation前のdecision revision ID。
+ * @returns {Array<Object>} checksum投入用に正規化したconfirmation一覧。
+ */
+function listAcceptedMigrationTopologyConfirmationEvidence(confirmations, input) {
+  return confirmations
+    .map((confirmation) => {
+      if (!confirmation || typeof confirmation !== "object") {
+        return null;
+      }
+      const confirmationId = toTrimmedString(confirmation.confirmationId);
+      const deviceId = toTrimmedString(confirmation.deviceId);
+      const host = toTrimmedString(confirmation.host);
+      const mode = toTrimmedString(confirmation.mode);
+      const confirmedBy = toTrimmedString(confirmation.confirmedBy);
+      const confirmedAt = normalizeOptionalIsoTime(confirmation.confirmedAt);
+      const migrationSubjectId = toTrimmedString(confirmation.migrationSubjectId);
+      const evidenceChecksum = toTrimmedString(confirmation.evidenceChecksum);
+      const planRevisionId = toTrimmedString(confirmation.planRevisionId);
+      if (!confirmationId || !deviceId || mode !== "single-spool" || !confirmedBy || !confirmedAt) {
+        return null;
+      }
+      if (migrationSubjectId !== input.migrationSubjectId ||
+          evidenceChecksum !== input.confirmationEvidenceChecksum) {
+        return null;
+      }
+      if (planRevisionId && planRevisionId !== input.confirmationRevisionId) {
+        return null;
+      }
+      return {
+        confirmationId,
+        deviceId,
+        host: host || null,
+        mode,
+        confirmedBy,
+        confirmedAt,
+        migrationSubjectId,
+        evidenceChecksum,
+        planRevisionId: planRevisionId || null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => stableStringifyPrinterCoreV3Value(a).localeCompare(stableStringifyPrinterCoreV3Value(b)));
 }
 
 /**
@@ -469,6 +532,162 @@ function listMigrationTopologyConfirmations(legacyData, options = {}) {
       ? legacyData.printerCoreV3MaterialAccountingMigrationTopologyConfirmations
       : []),
   ].map((confirmation) => cloneJsonValue(confirmation));
+}
+
+/**
+ * materialAccounting snapshotからmigration confirmationだけを除外する。
+ *
+ * 【詳細説明】
+ * - confirmationはdecisionを変える入力だが、confirmation前evidence checksum自身に含めると循環する。
+ * - repository snapshotなどの移行判定に必要な情報は残し、confirmation配列だけを別投影で扱う。
+ *
+ * @private
+ * @function createMaterialAccountingEvidenceProjection
+ * @param {*} materialAccounting - legacy materialAccounting候補。
+ * @returns {*} checksum用materialAccounting投影。
+ */
+function createMaterialAccountingEvidenceProjection(materialAccounting) {
+  if (!materialAccounting || typeof materialAccounting !== "object" || Array.isArray(materialAccounting)) {
+    return materialAccounting || null;
+  }
+  const projection = cloneJsonValue(materialAccounting);
+  delete projection.migrationTopologyConfirmations;
+  return Object.keys(projection).length > 0 ? projection : null;
+}
+
+/**
+ * migration decision checksum用の証拠projectionを生成する。
+ *
+ * 【詳細説明】
+ * - `confirmationEvidenceChecksum`生成時はaccepted confirmationsを空にする。
+ * - 最終`source.checksum`生成時は、confirmation前evidenceへbindされた受理済みconfirmationだけを含める。
+ *
+ * @private
+ * @function createDecisionEvidenceProjection
+ * @param {Object} source - legacy monitorData互換source。
+ * @param {Object} input - checksum生成入力。
+ * @param {string} input.migrationSubjectId - stable migration subject ID。
+ * @param {string} input.createdAt - plan作成日時。
+ * @param {number} input.freshTtlMs - topology fresh TTL。
+ * @param {number} input.allowedClockSkewMs - 未来観測許容clock skew。
+ * @param {Object} input.hostSpoolMap - legacy hostSpoolMap。
+ * @param {Array<Object>} input.acceptedMigrationTopologyConfirmations - 受理済みconfirmation投影。
+ * @param {?string=} input.confirmationEvidenceChecksum - confirmation前evidence checksum。
+ * @param {?string=} input.confirmationRevisionId - confirmation前evidence revision ID。
+ * @returns {Object} checksum用decision evidence projection。
+ */
+function createDecisionEvidenceProjection(source, input) {
+  return {
+    plannerPolicyRevision: MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION,
+    planSchemaVersion: MATERIAL_ACCOUNTING_MIGRATION_PLAN_SCHEMA_VERSION,
+    migrationSubjectId: input.migrationSubjectId,
+    createdAt: input.createdAt,
+    freshTtlMs: input.freshTtlMs,
+    allowedClockSkewMs: input.allowedClockSkewMs,
+    confirmationEvidenceChecksum: input.confirmationEvidenceChecksum || null,
+    confirmationRevisionId: input.confirmationRevisionId || null,
+    acceptedMigrationTopologyConfirmations: input.acceptedMigrationTopologyConfirmations,
+    hostSpoolMap: input.hostSpoolMap,
+    connectionTargets: getConnectionTargets(source),
+    machines: asPlainObject(source.machines),
+    filamentSpools: Array.isArray(source.filamentSpools) ? source.filamentSpools : [],
+    materialSourceObservations: source.materialSourceObservations || null,
+    materialAccounting: createMaterialAccountingEvidenceProjection(source.materialAccounting),
+    printerCoreV3MaterialSourceRegistry: source.printerCoreV3MaterialSourceRegistry || null,
+    materialSourceRegistry: source.materialSourceRegistry || null,
+    printerCoreV3SpoolMountRepository: source.printerCoreV3SpoolMountRepository || null,
+    spoolMountRepository: source.spoolMountRepository || null,
+  };
+}
+
+/**
+ * migration decision evidence projectionからchecksumを生成する。
+ *
+ * @private
+ * @function createMigrationSourceChecksum
+ * @param {Object} projection - decision evidence projection。
+ * @returns {string} `fnv1a128:` prefixつきchecksum。
+ */
+function createMigrationSourceChecksum(projection) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId("legacy-material-accounting-source", [
+    stableStringifyPrinterCoreV3Value(projection),
+  ]).split(":")[1]}`;
+}
+
+/**
+ * hostSpoolMap全体を表すmigration batch IDを生成する。
+ *
+ * 【詳細説明】
+ * - batch IDはdry-run plan全体の入力集合を表す。
+ * - operator確認の対象には使わず、entry単位のsubjectと分離する。
+ *
+ * @private
+ * @function createMigrationBatchId
+ * @param {Object} hostSpoolMap - legacy hostSpoolMap。
+ * @returns {string} plan全体のmigration batch ID。
+ */
+function createMigrationBatchId(hostSpoolMap) {
+  return createPrinterCoreV3DeterministicId("material-accounting-migration-batch", [
+    stableStringifyPrinterCoreV3Value({ hostSpoolMap }),
+  ]);
+}
+
+/**
+ * host-to-spool単位のmigration subject IDを生成する。
+ *
+ * 【詳細説明】
+ * - 別hostのspool割当が変わっても、同一host/spoolのoperator確認を無効化しないためのentry単位ID。
+ * - confirmationはこのIDとentry用evidence checksumへbindする。
+ *
+ * @private
+ * @function createEntryMigrationSubjectId
+ * @param {string} host - legacy host key。
+ * @param {string} spoolId - legacy spool ID。
+ * @returns {string} entry単位のmigration subject ID。
+ */
+function createEntryMigrationSubjectId(host, spoolId) {
+  return createPrinterCoreV3DeterministicId("material-accounting-migration-subject", [
+    stableStringifyPrinterCoreV3Value({ host, spoolId }),
+  ]);
+}
+
+/**
+ * entry confirmation用のdecision evidence bindingを生成する。
+ *
+ * 【詳細説明】
+ * - migration confirmationはplan全体ではなく、host-to-spool単位の証拠へbindする。
+ * - checksumはconfirmationを除いたsnapshotで生成し、revision IDはそのchecksumから派生させる。
+ *
+ * @private
+ * @function createEntryConfirmationEvidenceBinding
+ * @param {Object} source - legacy monitorData互換source。
+ * @param {Object} input - entry evidence入力。
+ * @param {string} input.host - legacy host key。
+ * @param {string} input.spoolId - spool ID。
+ * @param {string} input.createdAt - plan作成日時。
+ * @param {number} input.freshTtlMs - topology fresh TTL。
+ * @param {number} input.allowedClockSkewMs - 未来観測許容clock skew。
+ * @returns {{migrationSubjectId:string, confirmationEvidenceChecksum:string, confirmationRevisionId:string}} binding。
+ */
+function createEntryConfirmationEvidenceBinding(source, input) {
+  const migrationSubjectId = createEntryMigrationSubjectId(input.host, input.spoolId);
+  const confirmationEvidenceChecksum = createMigrationSourceChecksum(createDecisionEvidenceProjection(source, {
+    migrationSubjectId,
+    createdAt: input.createdAt,
+    freshTtlMs: input.freshTtlMs,
+    allowedClockSkewMs: input.allowedClockSkewMs,
+    acceptedMigrationTopologyConfirmations: [],
+    hostSpoolMap: { [input.host]: input.spoolId },
+  }));
+  const confirmationRevisionId = createPrinterCoreV3DeterministicId(
+    "material-accounting-confirmation-revision",
+    [confirmationEvidenceChecksum]
+  );
+  return {
+    migrationSubjectId,
+    confirmationEvidenceChecksum,
+    confirmationRevisionId,
+  };
 }
 
 /**
@@ -867,8 +1086,8 @@ function getSafePlannedWrites(entry) {
  * @param {number=} input.allowedClockSkewMs - 未来観測の許容clock skew。
  * @param {Array<Object>=} input.confirmations - migration topology confirmation配列。
  * @param {string} input.migrationSubjectId - stable migration subject ID。
- * @param {string} input.planRevisionId - plan revision ID。
- * @param {string} input.sourceChecksum - evidence checksum。
+ * @param {string} input.confirmationEvidenceChecksum - confirmation前のdecision evidence checksum。
+ * @param {string} input.confirmationRevisionId - confirmation前のdecision revision ID。
  * @returns {Object} migration entry。
  */
 function createHostMigrationEntry(input) {
@@ -894,191 +1113,158 @@ function createHostMigrationEntry(input) {
     deviceId,
     host: input.host,
     migrationSubjectId: input.migrationSubjectId,
-    planRevisionId: input.planRevisionId,
-    sourceChecksum: input.sourceChecksum,
+    confirmationEvidenceChecksum: input.confirmationEvidenceChecksum,
+    confirmationRevisionId: input.confirmationRevisionId,
+  });
+  const createEntryResult = (details) => ({
+    host: input.host,
+    deviceId,
+    spoolId: input.spoolId,
+    migrationSubjectId: input.migrationSubjectId,
+    confirmationEvidenceChecksum: input.confirmationEvidenceChecksum,
+    confirmationRevisionId: input.confirmationRevisionId,
+    ...details,
   });
 
   if (targetResolution.status === "ambiguous") {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_HOST_DEVICE_AMBIGUOUS],
       deviceCandidates: targetResolution.candidates,
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (targetResolution.hasOpenIdentityConflict) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_CONFLICT],
       deviceCandidates: targetResolution.candidates,
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (!hasLegacySpoolRecord(input.legacyData, input.spoolId)) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MISSING],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (deviceIdentity.identityStrength !== MATERIAL_IDENTITY_STRENGTH.STABLE) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.DEVICE_IDENTITY_INSUFFICIENT],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (hasOpenUniversalSourceConflict(input.legacyData, deviceId)) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_CONFLICT],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   const observationDeviceId = toTrimmedString(observation?.deviceId);
   if (observation && observationDeviceId && observationDeviceId !== deviceId) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_CONFLICT],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length > 0 && !hasFreshCompleteObservation) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length > 1) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_AMBIGUOUS_FOR_MULTI_SOURCE],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length === 1 && !isSingleDirectLikeSourceKind(observedSources[0].kind)) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length === 1 && !hasStableObservedSourceIdentity(observedSources[0])) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.SOURCE_IDENTITY_INSUFFICIENT],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length === 1 && !hasCompleteObservedSourceLocator(observedSources[0])) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_SOURCE_LOCATOR_INCOMPLETE],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length === 0 && isK2Like) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
       candidateSources: [],
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length === 0 && !hasSingleSpool) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.MATERIAL_TOPOLOGY_OBSERVATION_REQUIRED],
       candidateSources: [],
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   if (observedSources.length === 0 && hasSingleSpool && !isConfirmedSingleSpool) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.CANDIDATE,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.LEGACY_SPOOL_MAP_REQUIRES_SOURCE_CONFIRMATION],
       candidateSources: [],
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
   const plannedWrites = createSingleSourcePlannedRecords({
@@ -1092,28 +1278,22 @@ function createHostMigrationEntry(input) {
     spoolId: input.spoolId,
     materialSourceId: plannedWrites.materialSources[0]?.materialSourceId || null,
   })) {
-    return {
-      host: input.host,
-      deviceId,
-      spoolId: input.spoolId,
+    return createEntryResult({
       deviceCandidates: targetResolution.candidates,
       migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.BLOCKED,
       reasons: [MATERIAL_ACCOUNTING_MIGRATION_BLOCKER.OPEN_MOUNT_CONFLICT],
       candidateSources: observedSources,
       plannedWrites: createEmptyPlannedWrites(),
-    };
+    });
   }
 
-  return {
-    host: input.host,
-    deviceId,
-    spoolId: input.spoolId,
+  return createEntryResult({
     deviceCandidates: targetResolution.candidates,
     migrationStatus: MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY,
     reasons: [],
     candidateSources: observedSources,
     plannedWrites,
-  };
+  });
 }
 
 /**
@@ -1198,52 +1378,77 @@ export function createMaterialAccountingMigrationDryRunPlan(legacyData, options 
   const allowedClockSkewMs = Math.max(0, Math.floor(toFiniteNumber(options.allowedClockSkewMs, DEFAULT_ALLOWED_CLOCK_SKEW_MS) ?? DEFAULT_ALLOWED_CLOCK_SKEW_MS));
   const hostSpoolMap = asPlainObject(source.hostSpoolMap);
   const migrationTopologyConfirmations = listMigrationTopologyConfirmations(source, options);
-  const migrationSubjectId = createPrinterCoreV3DeterministicId("material-accounting-migration-subject", [
-    stableStringifyPrinterCoreV3Value({
-      hostSpoolMap,
-    }),
-  ]);
-  const sourceChecksum = `fnv1a128:${createPrinterCoreV3DeterministicId("legacy-material-accounting-source", [
-    stableStringifyPrinterCoreV3Value({
-      plannerPolicyRevision: MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION,
-      planSchemaVersion: MATERIAL_ACCOUNTING_MIGRATION_PLAN_SCHEMA_VERSION,
-      migrationSubjectId,
-      createdAt,
-      freshTtlMs,
-      allowedClockSkewMs,
-      migrationTopologyConfirmations,
-      hostSpoolMap,
-      connectionTargets: getConnectionTargets(source),
-      machines: asPlainObject(source.machines),
-      filamentSpools: Array.isArray(source.filamentSpools) ? source.filamentSpools : [],
-      materialSourceObservations: source.materialSourceObservations || null,
-      materialAccounting: source.materialAccounting || null,
-      printerCoreV3MaterialSourceRegistry: source.printerCoreV3MaterialSourceRegistry || null,
-      materialSourceRegistry: source.materialSourceRegistry || null,
-      printerCoreV3SpoolMountRepository: source.printerCoreV3SpoolMountRepository || null,
-      spoolMountRepository: source.spoolMountRepository || null,
-    }),
-  ]).split(":")[1]}`;
-  const planRevisionId = createPrinterCoreV3DeterministicId("material-accounting-plan-revision", [sourceChecksum]);
-  const entries = Object.entries(hostSpoolMap)
+  const migrationBatchId = createMigrationBatchId(hostSpoolMap);
+  const migrationSubjectId = migrationBatchId;
+  const entryEvidenceBindings = Object.entries(hostSpoolMap)
     .filter(([host, spoolId]) => toTrimmedString(host) && toTrimmedString(spoolId))
-    .map(([host, spoolId]) => createHostMigrationEntry({
-      legacyData: source,
+    .map(([host, spoolId]) => ({
       host: toTrimmedString(host),
       spoolId: toTrimmedString(spoolId),
+      ...createEntryConfirmationEvidenceBinding(source, {
+        host: toTrimmedString(host),
+        spoolId: toTrimmedString(spoolId),
+        createdAt,
+        freshTtlMs,
+        allowedClockSkewMs,
+      }),
+    }));
+  const acceptedMigrationTopologyConfirmationsBySubject = entryEvidenceBindings.reduce((accumulator, binding) => {
+    accumulator[binding.migrationSubjectId] = listAcceptedMigrationTopologyConfirmationEvidence(
+      migrationTopologyConfirmations,
+      {
+        migrationSubjectId: binding.migrationSubjectId,
+        confirmationEvidenceChecksum: binding.confirmationEvidenceChecksum,
+        confirmationRevisionId: binding.confirmationRevisionId,
+      }
+    );
+    return accumulator;
+  }, {});
+  const acceptedMigrationTopologyConfirmations = Object.values(acceptedMigrationTopologyConfirmationsBySubject)
+    .flat()
+    .sort((a, b) => stableStringifyPrinterCoreV3Value(a).localeCompare(stableStringifyPrinterCoreV3Value(b)));
+  const confirmationEvidenceChecksum = createMigrationSourceChecksum(createDecisionEvidenceProjection(source, {
+    migrationSubjectId,
+    createdAt,
+    freshTtlMs,
+    allowedClockSkewMs,
+    acceptedMigrationTopologyConfirmations: [],
+    hostSpoolMap,
+  }));
+  const confirmationRevisionId = createPrinterCoreV3DeterministicId(
+    "material-accounting-confirmation-revision",
+    [confirmationEvidenceChecksum]
+  );
+  const sourceChecksum = createMigrationSourceChecksum(createDecisionEvidenceProjection(source, {
+    migrationSubjectId,
+    createdAt,
+    freshTtlMs,
+    allowedClockSkewMs,
+    confirmationEvidenceChecksum,
+    confirmationRevisionId,
+    acceptedMigrationTopologyConfirmations,
+    hostSpoolMap,
+  }));
+  const planRevisionId = createPrinterCoreV3DeterministicId("material-accounting-plan-revision", [sourceChecksum]);
+  const entries = entryEvidenceBindings
+    .map((binding) => createHostMigrationEntry({
+      legacyData: source,
+      host: binding.host,
+      spoolId: binding.spoolId,
       createdAt,
       freshTtlMs,
       allowedClockSkewMs,
-      confirmations: migrationTopologyConfirmations,
-      migrationSubjectId,
-      planRevisionId,
-      sourceChecksum,
+      confirmations: acceptedMigrationTopologyConfirmationsBySubject[binding.migrationSubjectId] || [],
+      migrationSubjectId: binding.migrationSubjectId,
+      confirmationEvidenceChecksum: binding.confirmationEvidenceChecksum,
+      confirmationRevisionId: binding.confirmationRevisionId,
     }));
   return deepFreezeJson({
     schemaVersion: MATERIAL_ACCOUNTING_MIGRATION_PLAN_SCHEMA_VERSION,
     status: "dry-run",
     migrationStatus: summarizeMigrationStatus(entries),
     migrationSubjectId,
+    migrationBatchId,
     planRevisionId,
     migrationId: createPrinterCoreV3DeterministicId("material-accounting-migration", [planRevisionId]),
     createdAt,
@@ -1252,6 +1457,9 @@ export function createMaterialAccountingMigrationDryRunPlan(legacyData, options 
       checksum: sourceChecksum,
       migrationSubjectId,
       planRevisionId,
+      confirmationEvidenceChecksum,
+      confirmationRevisionId,
+      acceptedMigrationTopologyConfirmationCount: acceptedMigrationTopologyConfirmations.length,
       plannerPolicyRevision: MATERIAL_ACCOUNTING_MIGRATION_PLANNER_POLICY_REVISION,
       freshTtlMs,
       allowedClockSkewMs,
@@ -1290,14 +1498,47 @@ function validatePlannedWrites(entry) {
     }
   }
   const plannedWrites = getSafePlannedWrites(entry);
+  const plannedFilamentUnitIds = new Set(
+    plannedWrites.filamentUnits.map((unit) => toTrimmedString(unit?.unitId)).filter(Boolean)
+  );
   const plannedMaterialSourceIds = new Set(
     plannedWrites.materialSources.map((source) => toTrimmedString(source?.materialSourceId)).filter(Boolean)
   );
+  const entryDeviceId = toTrimmedString(entry?.deviceId);
   const entrySpoolId = toTrimmedString(entry?.spoolId);
+  if (entry?.migrationStatus === MATERIAL_ACCOUNTING_MIGRATION_STATUS.READY) {
+    if (plannedWrites.filamentUnits.length !== 1) {
+      errors.push("ready-entry-filamentUnit-count-invalid");
+    }
+    if (plannedWrites.materialSources.length !== 1) {
+      errors.push("ready-entry-materialSource-count-invalid");
+    }
+    if (plannedWrites.spoolMounts.length !== 0) {
+      errors.push("ready-entry-spoolMount-count-invalid");
+    }
+    if (plannedWrites.mountCandidates.length !== 1) {
+      errors.push("ready-entry-mountCandidate-count-invalid");
+    }
+  }
+  for (const unit of plannedWrites.filamentUnits) {
+    const validation = validateFilamentUnit(unit);
+    if (!validation.ok) {
+      errors.push(...validation.errors.map((error) => `filamentUnit:${error}`));
+    }
+    if (entryDeviceId && toTrimmedString(unit?.deviceId) && toTrimmedString(unit.deviceId) !== entryDeviceId) {
+      errors.push("filamentUnit:deviceId-entry-mismatch");
+    }
+  }
   for (const source of plannedWrites.materialSources) {
     const validation = validateMaterialSource(source);
     if (!validation.ok) {
       errors.push(...validation.errors.map((error) => `materialSource:${error}`));
+    }
+    if (entryDeviceId && toTrimmedString(source?.deviceId) && toTrimmedString(source.deviceId) !== entryDeviceId) {
+      errors.push("materialSource:deviceId-entry-mismatch");
+    }
+    if (toTrimmedString(source?.unitId) && !plannedFilamentUnitIds.has(toTrimmedString(source.unitId))) {
+      errors.push("materialSource:unitId-not-planned");
     }
   }
   for (const mount of plannedWrites.spoolMounts) {

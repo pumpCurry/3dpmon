@@ -49,10 +49,13 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   MaterialSource/SpoolMount authority writeやlegacy ledger debitはまだ有効化しない。
   dry-runは本番`SpoolMount`ではなく`mountCandidates`だけを返し、`openedAt`と
   `mountOperationId`は後続のshadow executorが実行時に発行する。
-  `migrationSubjectId`と`planRevisionId`を分離し、plan作成時刻、confirmation、identity、
-  topology freshness、repository snapshotが変わると別revisionになる。legacy hostが複数strong
-  deviceへ解決される場合、またはopen device identity conflictが残る場合はfirst-matchせずBLOCKする。
-  保存済みjournalの壊れたentryは起動時にthrowせず`retainedUnsupportedEntries`へ隔離する。
+  plan全体の`migrationBatchId`、entry単位の`migrationSubjectId`、`planRevisionId`を分離し、
+  plan作成時刻、accepted confirmation evidence、identity、topology freshness、repository snapshotが
+  変わると別revisionになる。confirmationはentry単位のconfirmation前`confirmationEvidenceChecksum`へbindし、
+  final `source.checksum`は受理済みconfirmation投影を含めるため、checksum循環を作らず証拠変更時に再確認を要求できる。legacy hostが
+  複数strong deviceへ解決される場合、またはopen device identity conflictが残る場合はfirst-matchせずBLOCKする。
+  保存済みjournalの壊れたentry、または`planDigest`が本文と一致しないentryは起動時にthrowせず
+  `retainedUnsupportedEntries`へ隔離する。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
@@ -161,7 +164,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 
 - standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
 - `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
-- Gate 18.9A/B migration planner は stable device identity、unique host/device resolution、open device identity conflictなし、migration専用operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。dry-run journal保存までは追加済み。次はjournalを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
+- Gate 18.9A/B migration planner は stable device identity、unique host/device resolution、open device identity conflictなし、migration専用operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。plan全体は`migrationBatchId`、host-to-spool単位はentry側`migrationSubjectId`で分離し、single-spool confirmationはentry subjectとentry confirmation前evidence checksumへbindする。READY entry validatorは1 FilamentUnit / 1 MaterialSource / 0 SpoolMount / 1 mountCandidateだけを許し、MaterialSourceのdevice/unit bindingも検証する。journalはsource checksumに加えてplan body digestも検証する。dry-run journal保存までは追加済み。次はjournalを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
 - side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化する。再起動後は自動replayせず、fresh observationでreconcileできない場合はoperator confirmationへ落とす。
 - Gate 10/12 certification fixtureは、fixture hash、before/after observation、operator marker、transport response、expected-state confirmationを同じ証跡として保存する。
 

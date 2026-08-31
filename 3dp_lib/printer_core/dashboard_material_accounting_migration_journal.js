@@ -17,9 +17,9 @@
  * - {@link normalizeStoredMaterialAccountingMigrationJournal}：保存済みjournalを復元用に正規化
  * - {@link recordMaterialAccountingMigrationDryRunPlan}：valid dry-run planをjournalへ記録
  *
- * @version 1.390.1508 (PR #438)
+ * @version 1.390.1510 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 14:05:00
+ * @lastModified 2026-08-31 13:22:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B後続でIndexedDB物理migrationJournal storeへ接続する
@@ -27,7 +27,10 @@
 
 "use strict";
 
-import { createPrinterCoreV3DeterministicId } from "./dashboard_data_schema_v3.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./dashboard_data_schema_v3.js";
 import { validateMaterialAccountingMigrationDryRunPlan } from "./dashboard_material_accounting_migration_planner.js";
 
 /**
@@ -112,6 +115,7 @@ function normalizeOptionalIsoTime(value) {
  * @param {Object} input - event入力。
  * @param {string} input.migrationId - migration ID。
  * @param {string} input.sourceChecksum - source checksum。
+ * @param {string} input.planDigest - plan body digest。
  * @param {string} input.recordedAt - 記録日時。
  * @returns {string} deterministic event ID。
  */
@@ -119,8 +123,27 @@ function createJournalEventId(input) {
   return createPrinterCoreV3DeterministicId("material-migration-journal-event", [
     input.migrationId,
     input.sourceChecksum,
+    input.planDigest,
     input.recordedAt,
   ]);
+}
+
+/**
+ * dry-run plan本文digestを生成する。
+ *
+ * 【詳細説明】
+ * - `source.checksum`はdecision evidenceのdigestであり、保存entryのplan本文そのものの改ざん検出には使い切れない。
+ * - journalでは同一checksumの再保存を冪等化するため、plan本文digestも別に保持してnoop/conflictを判断する。
+ *
+ * @private
+ * @function createPlanDigest
+ * @param {Object} plan - migration dry-run plan。
+ * @returns {string} `fnv1a128:` prefixつきplan digest。
+ */
+function createPlanDigest(plan) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId("material-migration-plan-digest", [
+    stableStringifyPrinterCoreV3Value(plan),
+  ]).split(":")[1]}`;
 }
 
 /**
@@ -184,6 +207,7 @@ function createJournalEntry(plan, recordedAt) {
   return {
     migrationId: plan.migrationId,
     sourceChecksum: plan.source?.checksum || null,
+    planDigest: createPlanDigest(plan),
     migrationStatus: plan.migrationStatus,
     recordedAt,
     plan: cloneJsonValue(plan),
@@ -204,6 +228,7 @@ function createRecordedEvent(entry) {
     type: "migration-dry-run-recorded",
     migrationId: entry.migrationId,
     sourceChecksum: entry.sourceChecksum,
+    planDigest: entry.planDigest,
     recordedAt: entry.recordedAt,
   };
 }
@@ -228,10 +253,15 @@ function validateJournalEntryPlanBinding(input) {
   const errors = [];
   const entryChecksum = toTrimmedString(input.entry?.sourceChecksum);
   const planChecksum = toTrimmedString(input.plan?.source?.checksum);
+  const entryPlanDigest = toTrimmedString(input.entry?.planDigest);
+  const expectedPlanDigest = createPlanDigest(input.plan);
   const entryStatus = toTrimmedString(input.entry?.migrationStatus);
   const planStatus = toTrimmedString(input.plan?.migrationStatus);
   if (entryChecksum && entryChecksum !== planChecksum) {
     errors.push("entry-sourceChecksum-plan-mismatch");
+  }
+  if (!entryPlanDigest || entryPlanDigest !== expectedPlanDigest) {
+    errors.push("entry-planDigest-plan-mismatch");
   }
   if (entryStatus && entryStatus !== planStatus) {
     errors.push("entry-migrationStatus-plan-mismatch");
@@ -255,17 +285,20 @@ function isSupportedJournalEvent(event, entriesByMigrationId) {
   const migrationId = toTrimmedString(event.migrationId);
   const entry = entriesByMigrationId[migrationId];
   const sourceChecksum = toTrimmedString(event.sourceChecksum);
+  const planDigest = toTrimmedString(event.planDigest);
   const recordedAt = normalizeOptionalIsoTime(event.recordedAt);
-  if (!migrationId || !entry || !sourceChecksum || !recordedAt) {
+  if (!migrationId || !entry || !sourceChecksum || !planDigest || !recordedAt) {
     return false;
   }
   if (sourceChecksum !== toTrimmedString(entry.sourceChecksum) ||
+      planDigest !== toTrimmedString(entry.planDigest) ||
       recordedAt !== normalizeOptionalIsoTime(entry.recordedAt)) {
     return false;
   }
   return toTrimmedString(event.eventId) === createJournalEventId({
     migrationId,
     sourceChecksum,
+    planDigest,
     recordedAt,
   });
 }
@@ -316,6 +349,7 @@ export function normalizeStoredMaterialAccountingMigrationJournal(stored) {
     journal.byMigrationId[migrationId] = {
       migrationId,
       sourceChecksum: plan.source?.checksum || value.sourceChecksum || null,
+      planDigest: createPlanDigest(plan),
       migrationStatus: plan.migrationStatus,
       recordedAt: normalizeOptionalIsoTime(value.recordedAt) || plan.createdAt || null,
       plan: cloneJsonValue(plan),
@@ -380,6 +414,7 @@ export function recordMaterialAccountingMigrationDryRunPlan(journalInput, plan, 
 
   const migrationId = toTrimmedString(plan.migrationId);
   const sourceChecksum = toTrimmedString(plan.source?.checksum);
+  const planDigest = createPlanDigest(plan);
   const existing = journal.byMigrationId[migrationId];
   if (existing) {
     if (existing.sourceChecksum !== sourceChecksum) {
@@ -387,6 +422,14 @@ export function recordMaterialAccountingMigrationDryRunPlan(journalInput, plan, 
         ok: false,
         action: "conflict",
         reason: "migration-journal-plan-conflict",
+        journal: deepFreezeJson(journal),
+      });
+    }
+    if (existing.planDigest !== planDigest) {
+      return createJournalResult({
+        ok: false,
+        action: "conflict",
+        reason: "migration-journal-plan-digest-conflict",
         journal: deepFreezeJson(journal),
       });
     }
