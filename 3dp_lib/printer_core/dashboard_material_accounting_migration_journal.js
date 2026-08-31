@@ -17,9 +17,9 @@
  * - {@link normalizeStoredMaterialAccountingMigrationJournal}：保存済みjournalを復元用に正規化
  * - {@link recordMaterialAccountingMigrationDryRunPlan}：valid dry-run planをjournalへ記録
  *
- * @version 1.390.1506 (PR #438)
+ * @version 1.390.1508 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 12:13:00
+ * @lastModified 2026-08-31 14:05:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B後続でIndexedDB物理migrationJournal storeへ接続する
@@ -209,19 +209,65 @@ function createRecordedEvent(entry) {
 }
 
 /**
+ * journal entryと内包planのcross-bindingを検証する。
+ *
+ * 【詳細説明】
+ * - 復元時はplan単体のvalidityだけでなく、外側entryが示すchecksum/statusが
+ *   内側planと一致していることを要求する。
+ * - 不一致を受け入れると、保存値改ざんや古いentry合成でreview済みplanとは別の
+ *   migration証跡として扱われるため、authority化前の境界として隔離する。
+ *
+ * @private
+ * @function validateJournalEntryPlanBinding
+ * @param {Object} input - 検証入力。
+ * @param {Object} input.entry - 保存済みjournal entry候補。
+ * @param {Object} input.plan - 検証済みdry-run plan。
+ * @returns {string[]} cross-binding error一覧。
+ */
+function validateJournalEntryPlanBinding(input) {
+  const errors = [];
+  const entryChecksum = toTrimmedString(input.entry?.sourceChecksum);
+  const planChecksum = toTrimmedString(input.plan?.source?.checksum);
+  const entryStatus = toTrimmedString(input.entry?.migrationStatus);
+  const planStatus = toTrimmedString(input.plan?.migrationStatus);
+  if (entryChecksum && entryChecksum !== planChecksum) {
+    errors.push("entry-sourceChecksum-plan-mismatch");
+  }
+  if (entryStatus && entryStatus !== planStatus) {
+    errors.push("entry-migrationStatus-plan-mismatch");
+  }
+  return errors;
+}
+
+/**
  * journalへ保持してよいeventか判定する。
  *
  * @private
  * @function isSupportedJournalEvent
  * @param {*} event - event候補。
- * @param {Set<string>} migrationIds - 有効なmigrationId集合。
+ * @param {Object} entriesByMigrationId - 有効なjournal entry map。
  * @returns {boolean} 保持可能なeventならtrue。
  */
-function isSupportedJournalEvent(event, migrationIds) {
-  return event && typeof event === "object" &&
-    toTrimmedString(event.eventId) &&
-    event.type === "migration-dry-run-recorded" &&
-    migrationIds.has(toTrimmedString(event.migrationId));
+function isSupportedJournalEvent(event, entriesByMigrationId) {
+  if (!event || typeof event !== "object" || event.type !== "migration-dry-run-recorded") {
+    return false;
+  }
+  const migrationId = toTrimmedString(event.migrationId);
+  const entry = entriesByMigrationId[migrationId];
+  const sourceChecksum = toTrimmedString(event.sourceChecksum);
+  const recordedAt = normalizeOptionalIsoTime(event.recordedAt);
+  if (!migrationId || !entry || !sourceChecksum || !recordedAt) {
+    return false;
+  }
+  if (sourceChecksum !== toTrimmedString(entry.sourceChecksum) ||
+      recordedAt !== normalizeOptionalIsoTime(entry.recordedAt)) {
+    return false;
+  }
+  return toTrimmedString(event.eventId) === createJournalEventId({
+    migrationId,
+    sourceChecksum,
+    recordedAt,
+  });
 }
 
 /**
@@ -257,6 +303,16 @@ export function normalizeStoredMaterialAccountingMigrationJournal(stored) {
       });
       continue;
     }
+    const bindingErrors = validateJournalEntryPlanBinding({ entry: value, plan });
+    if (bindingErrors.length > 0) {
+      journal.retainedUnsupportedEntries.push({
+        migrationId,
+        reason: "entry-plan-cross-binding-mismatch",
+        errors: bindingErrors,
+        entry: cloneJsonValue(value),
+      });
+      continue;
+    }
     journal.byMigrationId[migrationId] = {
       migrationId,
       sourceChecksum: plan.source?.checksum || value.sourceChecksum || null,
@@ -266,9 +322,8 @@ export function normalizeStoredMaterialAccountingMigrationJournal(stored) {
     };
   }
 
-  const validMigrationIds = new Set(Object.keys(journal.byMigrationId));
   journal.events = (Array.isArray(source.events) ? source.events : [])
-    .filter((event) => isSupportedJournalEvent(event, validMigrationIds))
+    .filter((event) => isSupportedJournalEvent(event, journal.byMigrationId))
     .map((event) => cloneJsonValue(event));
 
   const requestedLatest = toTrimmedString(source.latestMigrationId);

@@ -299,6 +299,13 @@ When a stored journal contains the same `migrationId` with a different
 `sourceChecksum`, the incoming entry is retained as unsupported evidence rather
 than overwriting the reviewed dry-run entry.
 
+Stored journal restoration validates cross-binding before an entry is accepted:
+the outer entry `sourceChecksum` and `migrationStatus`, when present, must match
+the inner plan. Stored events are retained only when their `migrationId`,
+`sourceChecksum`, `recordedAt`, and deterministic `eventId` match an accepted
+entry. A restored journal therefore cannot stitch a valid plan to a different
+checksum/status/event trail.
+
 ## Gate 18.9C Scope
 
 Gate 18.9C connects usage attribution:
@@ -386,6 +393,8 @@ Gate 18.9B tests:
 - duplicate `migrationId` + same checksum is idempotent and does not duplicate events
 - duplicate `migrationId` + different checksum is rejected as a journal conflict
 - invalid stored journal entries are retained as unsupported evidence
+- stored entry checksum/status mismatches are retained as unsupported evidence
+- stored events are restored only when checksum, recordedAt, and eventId match an accepted entry
 - localStorage round-trip keeps the journal without projecting it to spool/mount observations
 - IndexedDB durable save queues the journal as a shared dry-run evidence key
 - import/export restores the journal through normalization and keeps `hostSpoolMap` untouched

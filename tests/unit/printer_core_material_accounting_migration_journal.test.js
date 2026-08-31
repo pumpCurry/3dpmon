@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1507 (PR #438)
+ * @version 1.390.1508 (PR #438)
  * @since   1.390.1506 (PR #438)
- * @lastModified 2026-08-31 13:45:00
+ * @lastModified 2026-08-31 14:05:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -147,16 +147,19 @@ describe("Material accounting migration journal", () => {
 
   it("保存済みjournalの壊れたentryはretainedUnsupportedEntriesへ隔離する", () => {
     const plan = createReadyPlan();
+    const validRecorded = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
     const stored = {
       schemaVersion: 1,
       authority: "migration-dry-run-journal",
       latestMigrationId: "broken",
       byMigrationId: {
-        [plan.migrationId]: { migrationId: plan.migrationId, sourceChecksum: plan.source.checksum, plan },
+        [plan.migrationId]: validRecorded.journal.byMigrationId[plan.migrationId],
         broken: { migrationId: "broken", sourceChecksum: "x", plan: { status: "apply" } },
       },
       events: [
-        { eventId: "ok", type: "migration-dry-run-recorded", migrationId: plan.migrationId },
+        validRecorded.journal.events[0],
         { eventId: "bad", type: "migration-dry-run-recorded", migrationId: "broken" },
       ],
     };
@@ -169,8 +172,80 @@ describe("Material accounting migration journal", () => {
       expect.objectContaining({ migrationId: "broken", reason: "plan-not-object-or-invalid" }),
     ]);
     expect(journal.events).toEqual([
-      expect.objectContaining({ eventId: "ok", migrationId: plan.migrationId }),
+      expect.objectContaining({ eventId: validRecorded.journal.events[0].eventId, migrationId: plan.migrationId }),
     ]);
+  });
+
+  it("保存済みjournal entryのchecksum/statusがplanと食い違う場合は隔離する", () => {
+    const plan = createReadyPlan();
+    const stored = {
+      schemaVersion: 1,
+      authority: "migration-dry-run-journal",
+      latestMigrationId: plan.migrationId,
+      byMigrationId: {
+        [plan.migrationId]: {
+          migrationId: plan.migrationId,
+          sourceChecksum: "fnv1a128:tampered",
+          migrationStatus: "blocked",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+          plan,
+        },
+      },
+      events: [
+        {
+          eventId: "event-for-tampered-entry",
+          type: "migration-dry-run-recorded",
+          migrationId: plan.migrationId,
+          sourceChecksum: "fnv1a128:tampered",
+          recordedAt: "2026-08-31T03:41:00.000Z",
+        },
+      ],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.byMigrationId).toEqual({});
+    expect(journal.latestMigrationId).toBeNull();
+    expect(journal.events).toEqual([]);
+    expect(journal.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        migrationId: plan.migrationId,
+        reason: "entry-plan-cross-binding-mismatch",
+        errors: expect.arrayContaining([
+          "entry-sourceChecksum-plan-mismatch",
+          "entry-migrationStatus-plan-mismatch",
+        ]),
+      }),
+    ]);
+  });
+
+  it("保存済みjournal eventはentryのchecksum/recordedAt/eventIdと一致する場合だけ復元する", () => {
+    const plan = createReadyPlan();
+    const result = recordMaterialAccountingMigrationDryRunPlan(null, plan, {
+      recordedAt: "2026-08-31T03:41:00.000Z",
+    });
+    const stored = {
+      ...result.journal,
+      events: [
+        result.journal.events[0],
+        {
+          ...result.journal.events[0],
+          eventId: "wrong-checksum-event",
+          sourceChecksum: "fnv1a128:tampered",
+        },
+        {
+          ...result.journal.events[0],
+          eventId: "wrong-time-event",
+          recordedAt: "2026-08-31T03:42:00.000Z",
+        },
+      ],
+    };
+
+    const journal = normalizeStoredMaterialAccountingMigrationJournal(stored);
+
+    expect(journal.events).toEqual([result.journal.events[0]]);
+    expect(journal.latestMigrationId).toBe(plan.migrationId);
+    expect(journal.retainedUnsupportedEntries).toEqual([]);
   });
 
   it("createMaterialAccountingMigrationJournalは呼び出し側mutationから内部snapshotを守る", () => {
