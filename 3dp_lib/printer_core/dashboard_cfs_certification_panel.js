@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1555 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 19:49:00
+ * @lastModified 2026-08-31 20:19:32
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -235,6 +235,59 @@ function formatRemaining(source) {
 }
 
 /**
+ * source rowのselection妥当性を取得する。
+ *
+ * 【詳細説明】
+ * - MaterialTopology ViewModelでは `status.selectionValid` に保持する。
+ * - 古いfixtureやテスト補助値が直接 `selectionValid` を持つ場合も読み、debug panelの表示境界で吸収する。
+ *
+ * @private
+ * @function getSourceSelectionValid
+ * @param {object|null|undefined} source - source row
+ * @returns {boolean|null|undefined} selection妥当性
+ */
+function getSourceSelectionValid(source) {
+  if (!source || typeof source !== "object") {
+    return undefined;
+  }
+  if (source.status && Object.prototype.hasOwnProperty.call(source.status, "selectionValid")) {
+    return source.status.selectionValid;
+  }
+  return source.selectionValid;
+}
+
+/**
+ * live送信前に表示すべきselection証跡問題を生成する。
+ *
+ * 【詳細説明】
+ * - CLI側のpre-command guardと同じ考え方で、明示empty以外は選択状態が0/1系として観測済みであることを要求する。
+ * - invalidは装置値の意味が壊れているため専用文言にし、missing/nullは観測不足として区別する。
+ *
+ * @private
+ * @function createSelectionEvidencePreflightDetail
+ * @param {object|null|undefined} materialViewModel - material topology view model
+ * @returns {{state:string, detail:string}} preflight表示
+ */
+function createSelectionEvidencePreflightDetail(materialViewModel) {
+  const rows = flattenMaterialRows(materialViewModel)
+    .filter((row) => row?.presence !== "empty");
+  const invalidRows = rows.filter((row) => getSourceSelectionValid(row) === false);
+  if (invalidRows.length > 0) {
+    const slots = invalidRows.map((row) => toText(row.displaySlot || row.sourceId, "--")).join(", ");
+    return { state: "fail", detail: `選択値異常: ${slots}` };
+  }
+  const incompleteRows = rows.filter((row) => getSourceSelectionValid(row) !== true);
+  if (incompleteRows.length > 0) {
+    const slots = incompleteRows.map((row) => toText(row.displaySlot || row.sourceId, "--")).join(", ");
+    return { state: "fail", detail: `選択状態未観測: ${slots}` };
+  }
+  return {
+    state: "ok",
+    detail: rows.length > 0 ? `選択証跡OK: ${rows.length} sources` : "対象sourceなし",
+  };
+}
+
+/**
  * Preflight項目を生成する。
  *
  * 【詳細説明】
@@ -255,6 +308,7 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
   const printerIdleKnown = Boolean(printerState);
   const printerIdle = ["idle", "standby", "ready", "completed", "complete"].includes(printerState.toLowerCase());
   const selectedState = targetSource?.selected === true ? "ok" : "warn";
+  const selectionEvidence = createSelectionEvidencePreflightDetail(materialViewModel);
   return [
     {
       key: "active-session",
@@ -287,6 +341,12 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
       detail: targetSource?.displaySlot
         ? (targetSource.selected === true ? `機器選択中: ${targetSource.displaySlot}` : `${targetSource.displaySlot} は機器未選択`)
         : "選択source未観測",
+    },
+    {
+      key: "selection-complete",
+      label: "Selection evidence",
+      state: selectionEvidence.state,
+      detail: selectionEvidence.detail,
     },
     {
       key: "certification-status",

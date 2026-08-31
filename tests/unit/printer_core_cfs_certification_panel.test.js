@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1539 (PR #439)
+ * @version 1.390.1555 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 19:45:00
+ * @lastModified 2026-08-31 20:18:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -83,7 +83,11 @@ function createMaterialViewModel() {
             selected: false,
             assignments: [{ assignmentId: "T1A" }],
             material: { type: "PLA", name: "White PLA" },
-            status: { remaining: { displayPercent: 95, valid: true } },
+            status: {
+              remaining: { displayPercent: 95, valid: true },
+              selectionState: "unselected",
+              selectionValid: true,
+            },
           },
           {
             sourceId: "cfs:1:slot:2",
@@ -96,7 +100,11 @@ function createMaterialViewModel() {
             selected: true,
             assignments: [{ assignmentId: "T1C" }],
             material: { type: "PLA", name: "Silver PLA" },
-            status: { remaining: { displayPercent: 54, valid: true } },
+            status: {
+              remaining: { displayPercent: 54, valid: true },
+              selectionState: "selected",
+              selectionValid: true,
+            },
           },
         ],
       },
@@ -486,6 +494,7 @@ describe("dashboard_cfs_certification_panel", () => {
   it("selected-source WARNだけでは将来の認証済みLIVE候補をhard gateしない", () => {
     const materialViewModel = createMaterialViewModel();
     materialViewModel.units[0].slots[1].selected = false;
+    materialViewModel.units[0].slots[1].status.selectionState = "unselected";
     const viewModel = createCfsCertificationPanelViewModel({
       nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
       printer: {
@@ -524,6 +533,57 @@ describe("dashboard_cfs_certification_panel", () => {
       state: "warn",
     });
     expect(viewModel.liveSend.enabled).toBe(true);
+  });
+
+  it("loaded sourceのselection証跡が不完全ならCertificationパネルでもLIVE不可理由として表示する", () => {
+    const materialViewModel = createMaterialViewModel();
+    materialViewModel.units[0].slots[0].status.selectionState = "unobserved";
+    materialViewModel.units[0].slots[0].status.selectionValid = null;
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+      },
+      materialViewModel,
+      targetSource: materialViewModel.units[0].slots[1],
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(viewModel.preflight.find((item) => item.key === "selection-complete")).toMatchObject({
+      state: "fail",
+      detail: "選択状態未観測: 1A",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:selection-complete");
+    expect(container.textContent).toContain("Selection evidence");
+    expect(container.textContent).toContain("選択状態未観測: 1A");
   });
 
   it("printer idle未観測WARNはselected-sourceと違いLIVE送信をblockingする", () => {
