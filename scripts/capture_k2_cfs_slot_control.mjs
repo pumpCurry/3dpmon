@@ -21,9 +21,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1531 (PR #439)
+ * @version 1.390.1533 (PR #439)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:15:38
+ * @lastModified 2026-08-31 17:28:40
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -532,6 +532,8 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
   const sources = [];
   const diagnostics = [];
   const validBoxes = [];
+  const observedBoxIds = new Set();
+  const observedSourceIds = new Set();
   for (const [boxIndex, box] of boxes.entries()) {
     const boxPath = `materialBoxs[${boxIndex}]`;
     const boxId = parseStrictNonNegativeInteger(box?.id);
@@ -552,6 +554,11 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
       pushBoxsInfoDiagnostic(diagnostics, "box-type-invalid", boxPath, box?.type);
       continue;
     }
+    if (observedBoxIds.has(boxId)) {
+      pushBoxsInfoDiagnostic(diagnostics, "box-id-duplicate", boxPath, boxId);
+      continue;
+    }
+    observedBoxIds.add(boxId);
     const external = boxType === 1;
     validBoxes.push({ box, boxId, boxType, external });
     const materials = Array.isArray(box?.materials) ? box.materials : [];
@@ -567,6 +574,11 @@ export function summarizeBoxsInfoEvidence(boxsInfo, targetSourceId = "") {
         continue;
       }
       const sourceId = formatBoxsInfoSourceId(boxId, materialId, external);
+      if (observedSourceIds.has(sourceId)) {
+        pushBoxsInfoDiagnostic(diagnostics, "source-id-duplicate", materialPath, sourceId);
+        continue;
+      }
+      observedSourceIds.add(sourceId);
       const stateCode = material?.state ?? null;
       sources.push({
         sourceId,
@@ -780,6 +792,7 @@ export function sendBoxsInfoProbeAndWait(ws, options = {}) {
       settle(resolve, {
         status: "observed",
         probeMode,
+        observedAt: new Date().toISOString(),
         elapsedMs: Date.now() - startedAt,
         request,
         evidence,
@@ -846,6 +859,8 @@ async function runStructuredBoxsInfoProbe(ws, options) {
     return {
       status: summary.message.includes("timeout") ? "timeout" : "error",
       probeMode: toNonEmptyString(options?.probeMode) || "manual",
+      observedAt: null,
+      completedAt: new Date().toISOString(),
       elapsedMs: null,
       request: { method: "get", params: { boxsInfo: 1 } },
       evidence: null,
@@ -1019,6 +1034,7 @@ export async function runK2CfsSlotControlCertification(options) {
     }
     if (options.probeAfter) {
       await delayMs(options.postCommandProbeDelayMs);
+      let lastAfterProbe = null;
       for (let index = 0; index < options.postCommandProbeCount; index += 1) {
         if (index > 0) {
           await delayMs(options.postCommandProbeIntervalMs);
@@ -1029,12 +1045,15 @@ export async function runK2CfsSlotControlCertification(options) {
           targetSourceId: request.payload.sourceId,
         });
         probes.afterSeries.push(probe);
-        probes.after = probe;
+        if (!probes.after) {
+          probes.after = probe;
+        }
+        lastAfterProbe = probe;
         if (probe.status !== "observed") {
           break;
         }
       }
-      if (probes.after.status !== "observed") {
+      if (lastAfterProbe?.status !== "observed") {
         return finalizeCertificationResult({
           ok: false,
           sent: true,
@@ -1055,7 +1074,9 @@ export async function runK2CfsSlotControlCertification(options) {
         }, options);
       }
     }
-    const postCommandObserved = options.probeAfter === true && probes.after?.status === "observed";
+    const postCommandObserved = options.probeAfter === true &&
+      probes.afterSeries.length > 0 &&
+      probes.afterSeries.every((probe) => probe?.status === "observed");
     return finalizeCertificationResult({
       ok: true,
       sent: true,

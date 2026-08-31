@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1531 (PR #439)
+ * @version 1.390.1533 (PR #439)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 17:15:38
+ * @lastModified 2026-08-31 17:28:40
  */
 
 import { EventEmitter } from "node:events";
@@ -415,6 +415,42 @@ describe("capture_k2_cfs_slot_control", () => {
     ]));
   });
 
+  it("boxsInfo summaryは重複box/source locatorを曖昧なauthority候補にしない", () => {
+    const summary = summarizeBoxsInfoEvidence({
+      materialBoxs: [
+        { id: 1, type: 0, materials: [{ id: 0, state: 1, name: "Primary" }] },
+        { id: 1, type: 0, materials: [{ id: 1, state: 1, name: "DuplicateBox" }] },
+        {
+          id: 2,
+          type: 0,
+          materials: [
+            { id: 0, state: 1, name: "Slot0" },
+            { id: 0, state: 1, name: "DuplicateSlot0" },
+          ],
+        },
+      ],
+      colorMatch: [
+        { id: "T1A", boxId: 1, materialId: 0 },
+        { id: "T1B", boxId: 1, materialId: 1 },
+        { id: "T1C", boxId: 2, materialId: 0 },
+      ],
+    });
+
+    expect(summary.sources.map((source) => source.sourceId)).toEqual([
+      "cfs:1:slot:0",
+      "cfs:2:slot:0",
+    ]);
+    expect(summary.colorMatches).toEqual([
+      { assignmentId: "T1A", sourceId: "cfs:1:slot:0", boxId: 1, materialId: 0 },
+      { assignmentId: "T1C", sourceId: "cfs:2:slot:0", boxId: 2, materialId: 0 },
+    ]);
+    expect(summary.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: "box-id-duplicate", path: "materialBoxs[1]" }),
+      expect.objectContaining({ reason: "source-id-duplicate", path: "materialBoxs[2].materials[1]" }),
+      expect.objectContaining({ reason: "color-match-source-unresolved", path: "colorMatch[1]" }),
+    ]));
+  });
+
   it("read-only boxsInfo probeは応答を待ち、timeout時はlistenerを残さない", async () => {
     class MockWs extends EventEmitter {
       send(payload, callback) {
@@ -441,6 +477,7 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(JSON.parse(ws.sentPayload)).toEqual({ method: "get", params: { boxsInfo: 1 } });
     expect(result.status).toBe("observed");
     expect(result.probeMode).toBe("before");
+    expect(result.observedAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u));
     expect(result.evidence.path).toBe("$.result.boxsInfo");
     expect(result.summary).toMatchObject({
       boxCount: 1,
@@ -684,16 +721,101 @@ describe("capture_k2_cfs_slot_control", () => {
         ],
         after: {
           status: "observed",
-          probeMode: "after:3",
+          probeMode: "after:1",
         },
       },
     });
+    expect(result.probes.afterSeries.map((probe) => probe.observedAt))
+      .toEqual([
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+      ]);
     expect(ws.sentFrames).toEqual([
       { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
       { method: "get", params: { boxsInfo: 1 } },
       { method: "get", params: { boxsInfo: 1 } },
       { method: "get", params: { boxsInfo: 1 } },
     ]);
+  });
+
+  it("post-command probe series途中timeoutはafter互換をfirstに保ったままunknownへ倒す", async () => {
+    class PartialTimeoutAfterSeriesProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        const boxsInfoProbeCount = this.sentFrames.filter((sentFrame) => sentFrame?.params?.boxsInfo === 1).length;
+        if (frame?.params?.boxsInfo === 1 && boxsInfoProbeCount === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [{ id: 0, state: 1, percent: 10 }],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+    const ws = new PartialTimeoutAfterSeriesProbeWs();
+    const options = {
+      ...parseArgs([
+        "--send",
+        "--host",
+        "192.168.54.153",
+        "--confirm-live",
+        "--confirm-host",
+        "192.168.54.153",
+        "--confirm-command",
+        "cfs-load",
+        "--command",
+        "cfs-load",
+        "--source",
+        "cfs:1:slot:0",
+        "--probe-after",
+        "--probe-after-delay-ms",
+        "0",
+        "--probe-after-count",
+        "3",
+      ]),
+      boxsInfoTimeoutMs: 5,
+      postCommandProbeIntervalMs: 0,
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: true,
+      status: "unknown",
+      reason: "post-command-observation-failed",
+      probes: {
+        after: {
+          status: "observed",
+          probeMode: "after:1",
+        },
+        afterSeries: [
+          { status: "observed", probeMode: "after:1" },
+          { status: "timeout", probeMode: "after:2", observedAt: null },
+        ],
+      },
+    });
+    expect(result.probes.afterSeries[1].completedAt)
+      .toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u));
   });
 
   it("command送信後のprobe timeoutは送信証跡を保持したunknown結果として返す", async () => {
