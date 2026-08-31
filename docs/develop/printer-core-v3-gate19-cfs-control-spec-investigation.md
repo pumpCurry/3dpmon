@@ -266,6 +266,10 @@ live certificationは次の順で進める。
    `cfs:<boxId>:slot:<materialId>` として分離する。ここでも材料名・色・RFIDだけではloaded推測せず、
    material `state` codeが `1` の場合だけ `presence:"loaded"` とする。
 
+   Certification panelのJSON exportでは、raw evidenceとは別に `summary.probeSummaries.before/after` へ
+   上記summaryを抽出する。これにより、reviewerへ渡すJSONから、raw payload全体を掘らずに
+   selected source、target source、loaded source count、external/CFS分離を確認できる。
+
 5. selected source変更、load/unload/feed/retractの意味確定は、レビュワーPASSと上記1回目の成功後に別stepとして扱う。
 
 このrunbookはcertification専用であり、UI操作有効化条件ではない。UIに開くには、少なくとも command kindごとの実機意味、

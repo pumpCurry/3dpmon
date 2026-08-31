@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1526 (PR #439)
+ * @version 1.390.1528 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 16:39:17
+ * @lastModified 2026-08-31 16:54:16
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -266,6 +266,54 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(serialized).toContain("<IP_001>");
     expect(serialized).toContain("<HOSTNAME_001>");
     expect(serialized).toContain("<RFID_001>");
+  });
+
+  it("export bundleはboxsInfo probe summaryをraw evidenceとは別に抽出する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+      },
+      materialViewModel: createMaterialViewModel(),
+      evidence: {
+        beforeBoxsInfo: {
+          observedAt: "2026-08-31T07:00:00.000Z",
+          summary: {
+            selectedSourceIds: ["cfs:1:slot:0"],
+            targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+            loadedSourceCount: 3,
+          },
+        },
+        afterBoxsInfo: {
+          observedAt: "2026-08-31T07:00:03.000Z",
+          summary: {
+            selectedSourceIds: ["cfs:1:slot:2"],
+            targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+            loadedSourceCount: 3,
+          },
+        },
+      },
+    });
+
+    const bundle = createCfsCertificationExportBundle(viewModel);
+
+    expect(bundle.summary.probeSummaries).toEqual({
+      before: {
+        observedAt: "2026-08-31T07:00:00.000Z",
+        selectedSourceIds: ["cfs:1:slot:0"],
+        targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+        loadedSourceCount: 3,
+      },
+      after: {
+        observedAt: "2026-08-31T07:00:03.000Z",
+        selectedSourceIds: ["cfs:1:slot:2"],
+        targetSource: { sourceId: "cfs:1:slot:2", presence: "loaded" },
+        loadedSourceCount: 3,
+      },
+    });
   });
 
   it("selected sourceをPreflight診断へ出し、期限切れARMとdry-run不整合ではLIVE不可にする", () => {

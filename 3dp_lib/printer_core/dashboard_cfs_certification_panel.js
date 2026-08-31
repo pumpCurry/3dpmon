@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1526 (PR #439)
+ * @version 1.390.1528 (PR #439)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 16:39:17
+ * @lastModified 2026-08-31 16:54:16
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -668,6 +668,28 @@ export function createCfsCertificationPanelViewModel(options = {}) {
 }
 
 /**
+ * boxsInfo probe summaryをexport向けに抽出する。
+ *
+ * 【詳細説明】
+ * - raw evidence全体は別枠で保持しつつ、reviewerがsource差分だけを読めるsummaryを作る。
+ * - observedAtはprobe本体の時刻を採用し、summary内のprotocol情報と観測時刻を同じ単位で確認できるようにする。
+ *
+ * @private
+ * @function extractProbeSummaryForExport
+ * @param {object|null|undefined} probe - before/after boxsInfo probe evidence
+ * @returns {object|null} export用probe summary、またはnull
+ */
+function extractProbeSummaryForExport(probe) {
+  if (!probe?.summary || typeof probe.summary !== "object") {
+    return null;
+  }
+  return {
+    observedAt: probe.observedAt || probe.createdAt || null,
+    ...cloneJson(probe.summary),
+  };
+}
+
+/**
  * CFS Certification パネルの証跡export bundleを生成する。
  *
  * 【詳細説明】
@@ -682,6 +704,10 @@ export function createCfsCertificationPanelViewModel(options = {}) {
 export function createCfsCertificationExportBundle(viewModel) {
   const rawEvidence = cloneJson(viewModel?.evidence?.raw) || {};
   const protocolEvents = Array.isArray(rawEvidence.events) ? rawEvidence.events : [];
+  const probeSummaries = {
+    before: extractProbeSummaryForExport(rawEvidence.beforeBoxsInfo),
+    after: extractProbeSummaryForExport(rawEvidence.afterBoxsInfo),
+  };
   const bundle = {
     manifest: {
       panel: CERTIFICATION_PANEL_NAME,
@@ -703,6 +729,7 @@ export function createCfsCertificationExportBundle(viewModel) {
       preflight: cloneJson(viewModel?.preflight) || [],
       arm: cloneJson(viewModel?.arm) || {},
       execution: cloneJson(viewModel?.execution) || {},
+      probeSummaries,
     },
     dryRunPlan: cloneJson(viewModel?.dryRun?.plan) || null,
     evidence: rawEvidence,
