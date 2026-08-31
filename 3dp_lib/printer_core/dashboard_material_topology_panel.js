@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1553 (PR #439)
+ * @version 1.390.1557 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 19:58:16
+ * @lastModified 2026-08-31 20:40:33
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -758,6 +758,12 @@ function getControlDisabledReason(row, isStale, controlPolicy, buttonConfig) {
   }
   if (row?.presence !== "loaded") {
     return "このスロットにはフィラメントが装填されていません";
+  }
+  if (row?.status?.selectionValid === false || row?.status?.selectionState === "invalid") {
+    return "機器の選択状態を確認できないため操作できません";
+  }
+  if (row?.status?.selectionValid !== true) {
+    return "機器の選択状態が未観測のため操作できません";
   }
   return null;
 }

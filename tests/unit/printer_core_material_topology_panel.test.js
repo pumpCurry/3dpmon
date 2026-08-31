@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1553 (PR #439)
+ * @version 1.390.1557 (PR #439)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-31 19:58:16
+ * @lastModified 2026-08-31 20:39:28
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -427,6 +427,49 @@ describe("Printer Core v3 material topology panel", () => {
       protocolSlotId: 2,
     });
     expect(container.textContent).toContain("送信直前に再検証");
+  });
+
+  it.each([
+    ["invalid", 2, "機器の選択状態を確認できないため操作できません"],
+    ["unobserved", undefined, "機器の選択状態が未観測のため操作できません"],
+  ])("CFS操作ボタンはselection状態が%sの場合にauthorityがあってもdisabledにする", (_label, selectedValue, expectedReason) => {
+    const payload = createOneUnitBoxsInfo();
+    if (selectedValue === undefined) {
+      delete payload.materialBoxs[1].materials[2].selected;
+    } else {
+      payload.materialBoxs[1].materials[2].selected = selectedValue;
+    }
+    const topology = normalizeK2BoxsInfo(payload, { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const onCommand = vi.fn().mockResolvedValue({ ok: true });
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["select", "load"],
+        onCommand,
+      },
+    });
+
+    const selectButton = getSlotActionButton(container, "1C", "select");
+    const loadButton = getSlotActionButton(container, "1C", "load");
+    expect(selectButton?.disabled).toBe(true);
+    expect(loadButton?.disabled).toBe(true);
+    expect(selectButton?.title).toBe(expectedReason);
+
+    selectButton?.click();
+    loadButton?.click();
+
+    expect(onCommand).not.toHaveBeenCalled();
   });
 
   it("click時の最新状態再確認hookが拒否した場合は送信hookを呼ばない", async () => {
