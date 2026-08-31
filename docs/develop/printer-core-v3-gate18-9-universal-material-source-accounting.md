@@ -404,8 +404,22 @@ The preflight result may return `mountIntents`, but it must not mint
 `openedAt`, `mountOperationId`, production `SpoolMount`, or ledger events. Those
 execution fields belong to the later persistent shadow transaction adapter.
 
-After this pure preflight is accepted, the rest of Gate 18.9C connects usage
-attribution:
+After this pure preflight is accepted, Gate 18.9D prepares a staged shadow
+transaction:
+
+- the preflight result is the only input authority
+- `shadowOperationId` and `executedAt` are required
+- `openedAt` and `mountOperationId` are minted only in this layer
+- existing MaterialSource and SpoolMount snapshots are loaded into staged
+  repositories
+- all source and mount records must stage successfully before a transaction is
+  returned
+- failed staging returns no partial transaction
+- the transaction still has no production store authority and no ledger debit
+  authority
+
+After the staged shadow transaction boundary is accepted, Gate 18.9E connects
+usage attribution:
 
 - trusted print-start material binding snapshot issuer/repository
 - `JobMaterialSegment`
@@ -422,9 +436,9 @@ treat an identical payload as duplicate/no-op. If the same idempotency identity
 arrives with a different usage payload, the repository must not overwrite the
 existing event; it must create conflict/correction evidence instead.
 
-## Gate 18.9D Scope
+## Gate 18.9F Scope
 
-Gate 18.9D adds the read model and UI cutover:
+Gate 18.9F adds the read model and UI cutover:
 
 - `MaterialSourceAccountingView`
 - legacy compatibility projection for `N=1`
@@ -514,6 +528,19 @@ Gate 18.9C tests:
 - a same host/spool subject with a changed Device identity is blocked
 - existing open mount conflicts block before repository write
 - existing registry locator conflicts block before repository write
+
+Gate 18.9D tests:
+
+- READY preflight prepares staged MaterialSource and SpoolMount snapshots
+- `openedAt` and `mountOperationId` are minted at shadow transaction time
+- same `shadowOperationId` and same payload produce the same transaction and mount operation IDs
+- blocked preflight never becomes a transaction
+- staged MaterialSource registry conflict blocks without creating a transaction
+- staged SpoolMount repository conflict blocks without returning a partial transaction
+- invalid `executedAt` or missing operation ID blocks before staging
+
+Gate 18.9E planned tests:
+
 - `1A=3210mm`, `1B=6543mm`, `1D=1234mm` debit separate mounts
 - `1C=0mm` is confirmed only with a complete source-specific result set
 - incomplete result set leaves `1C` as unknown
@@ -521,7 +548,7 @@ Gate 18.9C tests:
 - print-start snapshot keeps attribution stable after current mount changes
 - duplicate completion is idempotent
 
-Gate 18.9D tests:
+Gate 18.9F tests:
 
 - N=1 keeps familiar K1 spool card behavior
 - N>1 renders source-aware cards

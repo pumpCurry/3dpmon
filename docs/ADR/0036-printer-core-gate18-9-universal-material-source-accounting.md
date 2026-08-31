@@ -336,13 +336,21 @@ Gate 18.9C:
 
 Gate 18.9D:
 
+- staged shadow transaction preparation
+- execution-time `openedAt` and `mountOperationId` minting
+- staged MaterialSource/SpoolMount repository validation
+- no partial transaction result on staged conflict
+- no production storage or ledger debit behavior change
+
+Gate 18.9E:
+
 - source-aware print-start binding snapshots
 - JobMaterialSegment contract
 - append-only FilamentLedger events
 - pending/unattributed usage isolation
 - idempotent debit eligibility evaluation
 
-Gate 18.9E:
+Gate 18.9F:
 
 - MaterialSourceAccountingView read model
 - legacy compatibility projection
