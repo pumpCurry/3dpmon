@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -497,12 +497,14 @@ describe("MaterialAccountingSpoolMountService", () => {
     const firstService = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a" }],
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
+      now: () => "2026-09-01T00:00:00.000Z",
     }));
     const first = await firstService.operatorMountSource(createMountInput({ operatorActionId: "action:repeat" }));
     const restoredService = createMaterialAccountingSpoolMountService(createServiceOptions({
       store: first.store,
       managedSpools: [{ id: "spool:a" }],
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
+      now: () => "2026-09-01T01:00:00.000Z",
     }));
 
     const retry = await restoredService.operatorMountSource(createMountInput({ operatorActionId: "action:repeat" }));
@@ -510,6 +512,27 @@ describe("MaterialAccountingSpoolMountService", () => {
     expect(retry).toMatchObject({ ok: true, action: "idempotent" });
     expect(retry.store.spoolMounts).toHaveLength(1);
     expect(retry.store.operationsById).toBeUndefined();
+  });
+
+  it("restart後の同operation再送は現在sourceが未観測でも既存operationを先に返す", async () => {
+    const firstService = createMaterialAccountingSpoolMountService(createServiceOptions({
+      managedSpools: [{ id: "spool:a" }],
+      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
+      now: () => "2026-09-01T00:00:00.000Z",
+    }));
+    const first = await firstService.operatorMountSource(createMountInput({ operatorActionId: "action:repeat:offline" }));
+    const restoredService = createMaterialAccountingSpoolMountService(createServiceOptions({
+      store: first.store,
+      managedSpools: [{ id: "spool:a" }],
+      resolveMaterialSource: vi.fn(() => null),
+      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
+      now: () => "2026-09-01T02:00:00.000Z",
+    }));
+
+    const retry = await restoredService.operatorMountSource(createMountInput({ operatorActionId: "action:repeat:offline" }));
+
+    expect(retry).toMatchObject({ ok: true, action: "idempotent" });
+    expect(restoredService.snapshot().spoolMounts).toEqual(first.store.spoolMounts);
   });
 
   it("restart後の同operation異payloadはconflictにする", async () => {

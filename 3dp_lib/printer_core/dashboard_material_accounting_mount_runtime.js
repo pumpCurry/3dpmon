@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingSpoolMountRuntime}：runtime service wrapperを生成
  * - {@link resolveObservedMaterialSourceRecord}：観測storeからMaterialSource recordを解決
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -75,7 +75,7 @@ function resolveFilamentUnitKind(sourceKind) {
  * @private
  * @function resolveObservedSourceKind
  * @param {Object} snapshot - read-only source snapshot。
- * @returns {string} MaterialSource kind。
+ * @returns {?string} MaterialSource kind。証明できない場合はnull。
  */
 function resolveObservedSourceKind(snapshot) {
   const kind = toTrimmedString(snapshot?.kind);
@@ -91,7 +91,33 @@ function resolveObservedSourceKind(snapshot) {
   if (toTrimmedString(snapshot?.type) === "external") {
     return MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL;
   }
-  return MATERIAL_SOURCE_KIND.DIRECT_FEED;
+  return null;
+}
+
+/**
+ * 観測snapshotからMaterialSource identity strengthを正規化する。
+ *
+ * @private
+ * @function resolveObservedIdentityStrength
+ * @param {Object} snapshot - read-only source snapshot。
+ * @param {Object} deviceRecord - device observation record。
+ * @returns {?string} identity strength。不正値ならnull。
+ */
+function resolveObservedIdentityStrength(snapshot, deviceRecord) {
+  const candidates = [
+    snapshot?.materialSourceIdentityStrength,
+    snapshot?.identityStrength,
+    deviceRecord?.identityStrength,
+  ];
+  const allowed = new Set(Object.values(MATERIAL_IDENTITY_STRENGTH));
+  for (const candidate of candidates) {
+    const value = toTrimmedString(candidate);
+    if (!value) {
+      continue;
+    }
+    return allowed.has(value) ? value : null;
+  }
+  return MATERIAL_IDENTITY_STRENGTH.UNKNOWN;
 }
 
 /**
@@ -162,14 +188,15 @@ export function resolveObservedMaterialSourceRecord(input = {}) {
   }
 
   const sourceKind = resolveObservedSourceKind(snapshot);
+  if (!sourceKind) {
+    return null;
+  }
   const unitKind = resolveFilamentUnitKind(sourceKind);
   const locator = createLocatorFromObservedSnapshot(snapshot, sourceKind);
-  const identityStrength = toTrimmedString(
-    snapshot.materialSourceIdentityStrength ||
-    snapshot.identityStrength ||
-    deviceRecord.identityStrength ||
-    MATERIAL_IDENTITY_STRENGTH.PROVISIONAL
-  );
+  const identityStrength = resolveObservedIdentityStrength(snapshot, deviceRecord);
+  if (!identityStrength) {
+    return null;
+  }
   const unitId = toTrimmedString(snapshot.unitId) || toTrimmedString(snapshot.providerId) ||
     `material-unit:${deviceId}:${unitKind}:${locator.unitIndex ?? locator.index ?? 0}`;
   const unit = createFilamentUnitRecord({

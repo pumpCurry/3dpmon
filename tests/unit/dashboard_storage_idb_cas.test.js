@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -104,7 +104,7 @@ function installFakeIndexedDb(initialShared = {}) {
           return {
             get: (key) => {
               const req = createFakeRequest();
-              queueMicrotask(() => {
+              globalThis.queueMicrotask(() => {
                 req.result = backing.get(key);
                 if (typeof req.onsuccess === "function") req.onsuccess();
                 scheduleTransactionComplete(tx);
@@ -113,7 +113,7 @@ function installFakeIndexedDb(initialShared = {}) {
             },
             getAll: () => {
               const req = createFakeRequest();
-              queueMicrotask(() => {
+              globalThis.queueMicrotask(() => {
                 req.result = Array.from(backing.values());
                 if (typeof req.onsuccess === "function") req.onsuccess();
                 scheduleTransactionComplete(tx);
@@ -137,7 +137,7 @@ function installFakeIndexedDb(initialShared = {}) {
   globalThis.indexedDB = {
     open: () => {
       const req = createFakeRequest();
-      queueMicrotask(() => {
+      globalThis.queueMicrotask(() => {
         req.result = db;
         if (typeof req.onupgradeneeded === "function") {
           req.onupgradeneeded({ target: req });
@@ -228,6 +228,38 @@ describe("compareAndSwapSharedValue", () => {
     const baseStore = createEmptyMaterialAccountingSpoolMountStore();
     const staleStore = normalizeStoredMaterialAccountingSpoolMountStore({ storeRevision: 2 });
     const casStore = normalizeStoredMaterialAccountingSpoolMountStore({ storeRevision: 3 });
+
+    await initIdb();
+    queueSharedWrite("materialAccountingSpoolMountStore", staleStore);
+    const result = await compareAndSwapSharedValue({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: baseStore.storeDigest,
+      createDigest: createMaterialAccountingSpoolMountStoreDigest,
+      nextValue: casStore,
+    });
+    await flushIdb();
+
+    expect(result).toMatchObject({ ok: true, casApplied: true });
+    await expect(exportAllIdb()).resolves.toMatchObject({
+      materialAccountingSpoolMountStore: casStore,
+    });
+  });
+
+  it("CAS保護keyは通常queueへ積まずCAS中の古いflushで上書きしない", async () => {
+    installFakeIndexedDb();
+    const {
+      initIdb,
+      queueSharedWrite,
+      compareAndSwapSharedValue,
+      flushIdb,
+      exportAllIdb,
+    } = await import("../../3dp_lib/dashboard_storage_idb.js");
+    const {
+      createMaterialAccountingSpoolMountStoreDigest,
+    } = await import("../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js");
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const staleStore = normalizeStoredMaterialAccountingSpoolMountStore({ storeRevision: 7 });
+    const casStore = normalizeStoredMaterialAccountingSpoolMountStore({ storeRevision: 8 });
 
     await initIdb();
     queueSharedWrite("materialAccountingSpoolMountStore", staleStore);

@@ -24,9 +24,9 @@
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  * - {@link compareAndSwapSharedValue}：shared keyを同一transaction内でCAS更新する
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -135,6 +135,20 @@ const SHARED_KEYS = [
 ];
 
 /**
+ * 通常flush queueでは保存せず、専用CASだけを成功境界にするshared key集合。
+ *
+ * 【詳細説明】
+ * - operator-managed SpoolMount storeはproduction authorityなので、throttled saveで古いsnapshotを
+ *   後から書き込むとCAS成功値を壊す危険がある。
+ * - export/import対象としてはSHARED_KEYSへ残しつつ、通常queueだけを拒否する。
+ *
+ * @constant {ReadonlySet<string>}
+ */
+const CAS_PROTECTED_SHARED_KEYS = Object.freeze(new Set([
+  "materialAccountingSpoolMountStore",
+]));
+
+/**
  * storedData 内で永続化不要な揮発性フィールド。
  * プリンタ再接続時に全フィールドが送信されるため、
  * 高頻度更新される温度・ファン等は保存対象から除外する。
@@ -227,6 +241,9 @@ export function getIdbCache() {
  * @param {any} value - 保存する値
  */
 export function queueSharedWrite(key, value) {
+  if (CAS_PROTECTED_SHARED_KEYS.has(String(key || "").trim())) {
+    return;
+  }
   _pendingShared.set(key, _cloneForStorageQueue(value));
   _scheduleFlush();
 }
@@ -267,7 +284,8 @@ export async function flushIdb() {
   if (!_db) return;
 
   // キューを取得してクリア
-  const sharedEntries  = [..._pendingShared.entries()];
+  const sharedEntries  = [..._pendingShared.entries()]
+    .filter(([key]) => !CAS_PROTECTED_SHARED_KEYS.has(String(key || "").trim()));
   const machineEntries = [..._pendingMachines.entries()];
   _pendingShared.clear();
   _pendingMachines.clear();

@@ -28,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -57,6 +57,13 @@ import {
   stableStringifyPrinterCoreV3Value,
 } from "./printer_core/dashboard_data_schema_v3.js";
 import { normalizeStoredPhysicalCommandRecoveryLatchStore } from "./printer_core/dashboard_physical_command_recovery_latch.js";
+import {
+  FILAMENT_UNIT_KIND,
+  MATERIAL_IDENTITY_STRENGTH,
+  MATERIAL_SOURCE_KIND,
+  createMaterialSourceIdentity,
+  createMaterialSourceLocator,
+} from "./printer_core/dashboard_material_accounting_contract.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -88,6 +95,9 @@ const MAX_VIDEOS = 500;
 
 /** IndexedDB 初期化済みフラグ */
 let _idbInitialized = false;
+
+/** SpoolMount production commit直列化用mutex */
+let _spoolMountCommitMutex = Promise.resolve();
 
 /**
  * Universal MaterialSource移行dry-run journalを現在のmonitorDataへ安全にマージする。
@@ -232,6 +242,95 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
 }
 
 /**
+ * 現在のlegacy/managed spool backendとSpoolMount storeのactive mountを照合する。
+ *
+ * 【詳細説明】
+ * - restore/importではUniversal SpoolMount storeをlegacy hostSpoolMapへ投影しない。
+ * - その代わり、同じmanaged spoolがlegacy hostSpoolMapで既に装着中ならUniversal側をactive authorityから隔離する。
+ * - 管理spoolが存在しない、または削除済みの場合もactiveに戻さず、後続UIで人間が修復できる証跡として保持する。
+ *
+ * @private
+ * @function _reconcileSpoolMountStoreWithCurrentBackends
+ * @param {Object} store - 正規化対象SpoolMount store。
+ * @returns {Object} backend整合性を反映した正規化済みstore。
+ */
+function _reconcileSpoolMountStoreWithCurrentBackends(store) {
+  const normalizedStore = normalizeStoredMaterialAccountingSpoolMountStore(store);
+  const managedSpools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+  const managedSpoolById = new Map(
+    managedSpools.map((spool) => [String(spool?.id || spool?.spoolId || "").trim(), spool])
+      .filter(([spoolId]) => spoolId)
+  );
+  const legacyOwnersBySpoolId = new Map();
+  const hostSpoolMap = monitorData.hostSpoolMap && typeof monitorData.hostSpoolMap === "object"
+    ? monitorData.hostSpoolMap
+    : {};
+  for (const [host, spoolIdValue] of Object.entries(hostSpoolMap)) {
+    const spoolId = String(spoolIdValue || "").trim();
+    if (!spoolId) {
+      continue;
+    }
+    const owners = legacyOwnersBySpoolId.get(spoolId) || [];
+    owners.push(host);
+    legacyOwnersBySpoolId.set(spoolId, owners);
+  }
+
+  const activeMounts = [];
+  const conflicts = [];
+  const retainedUnsupportedEntries = [];
+  for (const mount of normalizedStore.spoolMounts || []) {
+    const spoolId = String(mount?.spoolId || "").trim();
+    const managedSpool = managedSpoolById.get(spoolId);
+    if (!managedSpool || managedSpool.deleted === true || managedSpool.isDeleted === true) {
+      conflicts.push({
+        type: "spool-mount-cross-backend-conflict",
+        reason: !managedSpool ? "managed-spool-backend-missing" : "managed-spool-backend-deleted",
+        mountId: mount.mountId,
+        materialSourceId: mount.materialSourceId,
+        spoolId,
+      });
+      retainedUnsupportedEntries.push({
+        kind: "spoolMount",
+        reason: !managedSpool ? "managed-spool-backend-missing" : "managed-spool-backend-deleted",
+        record: mount,
+      });
+      continue;
+    }
+    const legacyOwners = legacyOwnersBySpoolId.get(spoolId) || [];
+    if (legacyOwners.length > 0) {
+      conflicts.push({
+        type: "spool-mount-cross-backend-conflict",
+        reason: "legacy-spool-backend-conflict",
+        mountId: mount.mountId,
+        materialSourceId: mount.materialSourceId,
+        spoolId,
+        legacyHosts: legacyOwners,
+      });
+      retainedUnsupportedEntries.push({
+        kind: "spoolMount",
+        reason: "legacy-spool-backend-conflict",
+        record: mount,
+      });
+      continue;
+    }
+    activeMounts.push(mount);
+  }
+
+  return normalizeStoredMaterialAccountingSpoolMountStore({
+    ...normalizedStore,
+    spoolMounts: activeMounts,
+    conflicts: [
+      ...(normalizedStore.conflicts || []),
+      ...conflicts,
+    ],
+    retainedUnsupportedEntries: [
+      ...(normalizedStore.retainedUnsupportedEntries || []),
+      ...retainedUnsupportedEntries,
+    ],
+  });
+}
+
+/**
  * operator-managed SpoolMount production storeを現在のmonitorDataへ安全にマージする。
  *
  * 【詳細説明】
@@ -253,7 +352,7 @@ function _mergeMaterialAccountingSpoolMountStore(incomingStore) {
   const currentStore = normalizeStoredMaterialAccountingSpoolMountStore(
     monitorData.materialAccountingSpoolMountStore
   );
-  const restoredStore = normalizeStoredMaterialAccountingSpoolMountStore(incomingStore);
+  const restoredStore = _reconcileSpoolMountStoreWithCurrentBackends(incomingStore);
   const currentDigest = createMaterialAccountingSpoolMountStoreDigest(currentStore);
   const restoredDigest = createMaterialAccountingSpoolMountStoreDigest(restoredStore);
   const currentIsEmpty = (currentStore.spoolMounts || []).length === 0
@@ -1314,6 +1413,184 @@ function _findCurrentLegacyOccupancyForPrecondition(spoolId, expectedDeviceId) {
 }
 
 /**
+ * MaterialSource kindからFilamentUnit kindを推定する。
+ *
+ * @private
+ * @function _resolveSpoolMountPreconditionUnitKind
+ * @param {string} sourceKind - MaterialSource kind。
+ * @returns {string} FilamentUnit kind。
+ */
+function _resolveSpoolMountPreconditionUnitKind(sourceKind) {
+  if (sourceKind === MATERIAL_SOURCE_KIND.CFS_C_SLOT) {
+    return FILAMENT_UNIT_KIND.CFS_C;
+  }
+  if (sourceKind === MATERIAL_SOURCE_KIND.CFS_SLOT) {
+    return FILAMENT_UNIT_KIND.CFS;
+  }
+  return FILAMENT_UNIT_KIND.PRINTER_DIRECT;
+}
+
+/**
+ * 現在観測snapshotからMaterialSource kindを解決する。
+ *
+ * @private
+ * @function _resolveSpoolMountPreconditionSourceKind
+ * @param {Object} snapshot - read-only source snapshot。
+ * @returns {?string} MaterialSource kind。
+ */
+function _resolveSpoolMountPreconditionSourceKind(snapshot) {
+  const kind = String(snapshot?.kind || "").trim();
+  if (kind === MATERIAL_SOURCE_KIND.CFS_SLOT ||
+      kind === MATERIAL_SOURCE_KIND.CFS_C_SLOT ||
+      kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL ||
+      kind === MATERIAL_SOURCE_KIND.DIRECT_FEED) {
+    return kind;
+  }
+  if (String(snapshot?.providerKind || "").trim() === "cfs-c") {
+    return MATERIAL_SOURCE_KIND.CFS_C_SLOT;
+  }
+  if (String(snapshot?.type || "").trim() === "external") {
+    return MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL;
+  }
+  return null;
+}
+
+/**
+ * 現在観測snapshotからidentity strengthを解決する。
+ *
+ * @private
+ * @function _resolveSpoolMountPreconditionIdentityStrength
+ * @param {Object} snapshot - read-only source snapshot。
+ * @param {Object} deviceRecord - device observation record。
+ * @returns {?string} identity strength。
+ */
+function _resolveSpoolMountPreconditionIdentityStrength(snapshot, deviceRecord) {
+  const allowed = new Set(Object.values(MATERIAL_IDENTITY_STRENGTH));
+  const candidates = [
+    snapshot?.materialSourceIdentityStrength,
+    snapshot?.identityStrength,
+    deviceRecord?.identityStrength,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (!value) {
+      continue;
+    }
+    return allowed.has(value) ? value : null;
+  }
+  return MATERIAL_IDENTITY_STRENGTH.UNKNOWN;
+}
+
+/**
+ * 現在観測storeからMaterialSource binding digestを再計算する。
+ *
+ * @private
+ * @function _createCurrentMaterialSourceBindingDigestForPrecondition
+ * @param {Object} precondition - materialSource precondition。
+ * @returns {?string} source identity digest。再計算不能ならnull。
+ */
+function _createCurrentMaterialSourceBindingDigestForPrecondition(precondition) {
+  const deviceId = String(precondition?.deviceId || "").trim();
+  const materialSourceId = String(precondition?.materialSourceId || "").trim();
+  const byDeviceId = monitorData.materialSourceObservations?.byDeviceId &&
+    typeof monitorData.materialSourceObservations.byDeviceId === "object"
+      ? monitorData.materialSourceObservations.byDeviceId
+      : {};
+  const deviceRecord = byDeviceId[deviceId];
+  const snapshot = materialSourceId ? deviceRecord?.latestBySourceId?.[materialSourceId] : null;
+  if (!deviceRecord || !snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+
+  const kind = _resolveSpoolMountPreconditionSourceKind(snapshot);
+  const identityStrength = _resolveSpoolMountPreconditionIdentityStrength(snapshot, deviceRecord);
+  if (!kind || !identityStrength) {
+    return null;
+  }
+
+  const rawLocator = snapshot.locator && typeof snapshot.locator === "object" ? snapshot.locator : {};
+  const locator = createMaterialSourceLocator({
+    kind,
+    index: rawLocator.index ?? snapshot.index ?? (kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL ? 0 : null),
+    unitIndex: rawLocator.unitIndex ?? snapshot.unitIndex ?? snapshot.boxIndex ?? snapshot.boxId ?? null,
+    boxId: rawLocator.boxId ?? snapshot.boxId ?? null,
+    slotIndex: rawLocator.slotIndex ?? snapshot.slotIndex ?? snapshot.slotId ?? snapshot.protocolSlotId ?? null,
+    protocolSlotId: rawLocator.protocolSlotId ?? snapshot.protocolSlotId ?? snapshot.slotId ?? null,
+  });
+  const unitKind = _resolveSpoolMountPreconditionUnitKind(kind);
+  const unitId = String(snapshot.unitId || "").trim() ||
+    String(snapshot.providerId || "").trim() ||
+    `material-unit:${deviceId}:${unitKind}:${locator.unitIndex ?? locator.index ?? 0}`;
+  const identity = createMaterialSourceIdentity({
+    deviceId,
+    unitId,
+    kind,
+    slotIndex: locator.slotIndex,
+    index: locator.index,
+  });
+
+  return createPrinterCoreV3DeterministicId("material-source-binding", [
+    deviceId,
+    materialSourceId,
+    unitId,
+    kind,
+    identityStrength,
+    identity,
+    locator,
+  ]);
+}
+
+/**
+ * operation eventがprecondition必須のoperator operationか判定する。
+ *
+ * @private
+ * @function _isSpoolMountPreconditionRequiredOperation
+ * @param {Object} operation - operation event。
+ * @returns {boolean} precondition必須ならtrue。
+ */
+function _isSpoolMountPreconditionRequiredOperation(operation) {
+  return ["operator-mount", "operator-replace"].includes(String(operation?.kind || "").trim());
+}
+
+/**
+ * 正規化済みnextStoreにoperationがactive evidenceとして残っているか検証する。
+ *
+ * @private
+ * @function _validateSpoolMountOperationInNextStore
+ * @param {Object} normalizedNextStore - 正規化済みnext store。
+ * @param {Object} operation - serviceが送信時に生成したoperation event。
+ * @returns {{ok:boolean, reason:string}} 検証結果。
+ */
+function _validateSpoolMountOperationInNextStore(normalizedNextStore, operation) {
+  const targetEventId = String(operation?.eventId || "").trim();
+  const activeEvent = (normalizedNextStore.events || [])
+    .find((event) => String(event?.eventId || "").trim() === targetEventId);
+  if (!activeEvent) {
+    return { ok: false, reason: "operation-not-active-in-next-store" };
+  }
+  for (const key of ["kind", "operatorActionId", "operationId", "payloadDigest"]) {
+    if (String(activeEvent[key] || "").trim() !== String(operation[key] || "").trim()) {
+      return { ok: false, reason: "operation-evidence-mismatch" };
+    }
+  }
+  const activePayloadDigest = _createSpoolMountAuthorityPreconditionDigest(
+    "material-accounting-spool-mount-operation-payload",
+    operation.payload || {},
+  );
+  if (String(operation.payloadDigest || "").trim() !== activePayloadDigest) {
+    return { ok: false, reason: "operation-payload-digest-mismatch" };
+  }
+  const recordRefs = Array.isArray(activeEvent.recordRefs)
+    ? activeEvent.recordRefs.map((ref) => String(ref || "").trim()).filter(Boolean)
+    : [];
+  if (["operator-mount", "operator-unmount", "operator-replace"].includes(String(activeEvent.kind || "").trim()) &&
+      recordRefs.length === 0) {
+    return { ok: false, reason: "operation-record-refs-required" };
+  }
+  return { ok: true, reason: "" };
+}
+
+/**
  * SpoolMount production commitの現在値preconditionを検証する。
  *
  * @private
@@ -1323,12 +1600,42 @@ function _findCurrentLegacyOccupancyForPrecondition(spoolId, expectedDeviceId) {
  */
 function _validateSpoolMountCommitPreconditions(preconditions) {
   if (!preconditions || typeof preconditions !== "object") {
-    return { ok: true, reason: "" };
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
+
+  const materialSource = preconditions.materialSource && typeof preconditions.materialSource === "object"
+    ? preconditions.materialSource
+    : null;
+  if (!materialSource ||
+      !String(materialSource.deviceId || "").trim() ||
+      !String(materialSource.materialSourceId || "").trim() ||
+      !String(materialSource.sourceIdentityDigest || "").trim()) {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
+  const currentSourceDigest = _createCurrentMaterialSourceBindingDigestForPrecondition(materialSource);
+  if (!currentSourceDigest) {
+    return {
+      ok: false,
+      reason: "material-source-precondition-missing",
+      currentDigest: null,
+      expectedDigest: materialSource.sourceIdentityDigest,
+    };
+  }
+  if (currentSourceDigest !== materialSource.sourceIdentityDigest) {
+    return {
+      ok: false,
+      reason: "material-source-precondition-changed",
+      currentDigest: currentSourceDigest,
+      expectedDigest: materialSource.sourceIdentityDigest,
+    };
   }
 
   const managedSpool = preconditions.managedSpool && typeof preconditions.managedSpool === "object"
     ? preconditions.managedSpool
     : null;
+  if (!managedSpool || !String(managedSpool.spoolId || "").trim() || !String(managedSpool.digest || "").trim()) {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
   if (managedSpool) {
     const currentSpool = _findCurrentManagedSpoolForPrecondition(managedSpool.spoolId);
     const currentDigest = _createSpoolMountAuthorityPreconditionDigest(
@@ -1356,6 +1663,9 @@ function _validateSpoolMountCommitPreconditions(preconditions) {
   const legacyOccupancy = preconditions.legacyOccupancy && typeof preconditions.legacyOccupancy === "object"
     ? preconditions.legacyOccupancy
     : null;
+  if (!legacyOccupancy || !String(legacyOccupancy.spoolId || "").trim() || !String(legacyOccupancy.digest || "").trim()) {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
   if (legacyOccupancy) {
     const currentOccupancy = _findCurrentLegacyOccupancyForPrecondition(
       legacyOccupancy.spoolId,
@@ -1399,6 +1709,20 @@ function _validateSpoolMountCommitPreconditions(preconditions) {
  * const result = await commitMaterialAccountingSpoolMountStoreDurably({ baseStoreDigest, nextStore, operation });
  */
 export async function commitMaterialAccountingSpoolMountStoreDurably(input = {}) {
+  const commitPromise = _spoolMountCommitMutex.then(() => _commitMaterialAccountingSpoolMountStoreDurably(input));
+  _spoolMountCommitMutex = commitPromise.catch(() => {});
+  return commitPromise;
+}
+
+/**
+ * SpoolMount store commitの実処理を行う。
+ *
+ * @private
+ * @function _commitMaterialAccountingSpoolMountStoreDurably
+ * @param {Object} input - commit入力。
+ * @returns {Promise<{ok:boolean, casApplied:boolean, backend:string, reason:string, key:string, currentDigest?:string, nextDigest?:string, error?:string}>} commit結果。
+ */
+async function _commitMaterialAccountingSpoolMountStoreDurably(input = {}) {
   const key = "materialAccountingSpoolMountStore";
   const baseStoreDigest = String(input.baseStoreDigest || "").trim();
   const operation = input.operation && typeof input.operation === "object" ? input.operation : null;
@@ -1413,7 +1737,19 @@ export async function commitMaterialAccountingSpoolMountStoreDurably(input = {})
   }
 
   const normalizedNextStore = normalizeStoredMaterialAccountingSpoolMountStore(input.nextStore);
-  const preconditionValidation = _validateSpoolMountCommitPreconditions(input.preconditions);
+  const operationValidation = _validateSpoolMountOperationInNextStore(normalizedNextStore, operation);
+  if (!operationValidation.ok) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: operationValidation.reason,
+    };
+  }
+  const preconditionValidation = _isSpoolMountPreconditionRequiredOperation(operation) || input.preconditions
+    ? _validateSpoolMountCommitPreconditions(input.preconditions)
+    : { ok: true, reason: "" };
   if (!preconditionValidation.ok) {
     return {
       ok: false,
@@ -1574,8 +1910,8 @@ function _flushStorage() {
       queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
       // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
       queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
-      // ★ Gate 18.9H: operator-managed SpoolMount storeを保存する。production成功判定は専用CASのみで行う。
-      queueSharedWrite("materialAccountingSpoolMountStore", monitorData.materialAccountingSpoolMountStore);
+      // ★ Gate 18.9H: operator-managed SpoolMount storeは通常queueへ積まない。
+      //   production成功判定とIndexedDB書き込みは専用CASだけで行い、localStorage backup/exportで可視性だけ維持する。
       // ★ Gate 19 prep: 物理コマンド復旧ラッチは未解決確認の証跡のみ保存し、自動再送材料は保存しない。
       queueSharedWrite("physicalCommandRecoveryLatch", monitorData.physicalCommandRecoveryLatch);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。

@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -24,10 +24,19 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import {
+  MATERIAL_IDENTITY_STRENGTH,
+  SPOOL_MOUNT_VERIFICATION,
+  createSpoolMountRecord,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
+import {
   createEmptyMaterialAccountingSpoolMountStore,
   createMaterialAccountingSpoolMountOperationPayloadDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "../../3dp_lib/printer_core/dashboard_data_schema_v3.js";
 
 class LocalStorageStub {
   constructor() { this._m = new Map(); }
@@ -214,7 +223,7 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialSourceObservations", mocks.monitorData.materialSourceObservations);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingMigrationJournal", mocks.monitorData.materialAccountingMigrationJournal);
-    expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingSpoolMountStore", mocks.monitorData.materialAccountingSpoolMountStore);
+    expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith("materialAccountingSpoolMountStore", mocks.monitorData.materialAccountingSpoolMountStore);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);
     expect(mocks.events[mocks.events.length - 1]).toBe("flush");
   });
@@ -256,18 +265,23 @@ describe("saveUnifiedStorageDurably", () => {
 
   it("SpoolMount production commitはCAS成功後だけmonitorDataを更新する", async () => {
     const baseStore = createEmptyMaterialAccountingSpoolMountStore();
-    const operation = createMountOperationEvent();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
     const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
       ...baseStore,
       storeRevision: 1,
+      spoolMounts: [mount],
       events: [operation],
     });
     mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
 
     const result = await commitMaterialAccountingSpoolMountStoreDurably({
       baseStoreDigest: baseStore.storeDigest,
       nextStore,
       operation,
+      preconditions: createDurablePreconditions(),
     });
 
     expect(result).toMatchObject({ ok: true, casApplied: true, reason: "cas-applied" });
@@ -279,25 +293,29 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(nextStore);
     expect(mocks.monitorData.hostSpoolMap).toEqual({});
     expect(mocks.monitorData.usageHistory).toEqual([]);
-    expect(mocks.monitorData.filamentSpools).toEqual([]);
+    expect(mocks.monitorData.filamentSpools).toEqual([{ id: "spool:a" }]);
   });
 
   it("SpoolMount production commitはmanaged spool preconditionが変わったらCAS前に拒否する", async () => {
     const baseStore = createEmptyMaterialAccountingSpoolMountStore();
-    const operation = createMountOperationEvent();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
     const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
       ...baseStore,
       storeRevision: 1,
+      spoolMounts: [mount],
       events: [operation],
     });
     mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
     mocks.monitorData.filamentSpools = [{ id: "spool:a", isDeleted: true }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
 
     const result = await commitMaterialAccountingSpoolMountStoreDurably({
       baseStoreDigest: baseStore.storeDigest,
       nextStore,
       operation,
       preconditions: {
+        ...createDurablePreconditions(),
         managedSpool: {
           spoolId: "spool:a",
           digest: "fnv1a128:stale-managed-spool",
@@ -313,20 +331,25 @@ describe("saveUnifiedStorageDurably", () => {
 
   it("SpoolMount production commitはlegacy occupancy preconditionが変わったらCAS前に拒否する", async () => {
     const baseStore = createEmptyMaterialAccountingSpoolMountStore();
-    const operation = createMountOperationEvent();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
     const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
       ...baseStore,
       storeRevision: 1,
+      spoolMounts: [mount],
       events: [operation],
     });
     mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
     mocks.monitorData.hostSpoolMap = { "K1Max-4A1B": "spool:a" };
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
 
     const result = await commitMaterialAccountingSpoolMountStoreDurably({
       baseStoreDigest: baseStore.storeDigest,
       nextStore,
       operation,
       preconditions: {
+        ...createDurablePreconditions(),
         legacyOccupancy: {
           spoolId: "spool:a",
           expectedDeviceId: "device:k2",
@@ -343,13 +366,17 @@ describe("saveUnifiedStorageDurably", () => {
 
   it("SpoolMount production commitはCAS不一致ならメモリを更新しない", async () => {
     const baseStore = createEmptyMaterialAccountingSpoolMountStore();
-    const operation = createMountOperationEvent();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
     const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
       ...baseStore,
       storeRevision: 1,
+      spoolMounts: [mount],
       events: [operation],
     });
     mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
     mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
       ok: false,
       casApplied: false,
@@ -364,6 +391,7 @@ describe("saveUnifiedStorageDurably", () => {
       baseStoreDigest: baseStore.storeDigest,
       nextStore,
       operation,
+      preconditions: createDurablePreconditions(),
     });
 
     expect(result).toMatchObject({ ok: false, casApplied: false, reason: "cas-mismatch" });
@@ -386,6 +414,78 @@ describe("saveUnifiedStorageDurably", () => {
       casApplied: false,
       reason: "production-cas-unavailable",
     });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("SpoolMount production commitはmount/replace operationのprecondition欠落を拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "operation-preconditions-required" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("SpoolMount production commitはoperationがactive nextStoreから復元できない場合に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [{ ...operation, recordRefs: [] }],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: createDurablePreconditions(),
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "operation-not-active-in-next-store" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("SpoolMount production commitはmaterial source preconditionが変わったらCAS前に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture({ identityStrength: "stable" });
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: createDurablePreconditions(),
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "material-source-precondition-changed" });
     expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
   });
 });
@@ -416,5 +516,115 @@ function createMountOperationEvent(overrides = {}) {
     recordRefs: overrides.recordRefs || [],
     createdAt: overrides.createdAt || "2026-09-01T04:40:00.000Z",
     actor: overrides.actor || "operator",
+  };
+}
+
+/**
+ * durable commit test用のSpoolMount recordを生成する。
+ *
+ * @function createDurableMountFixture
+ * @returns {Object} SpoolMount record。
+ */
+function createDurableMountFixture() {
+  return createSpoolMountRecord({
+    mountId: "mount:k2:1a:spool-a",
+    materialSourceId: "source:k2:cfs:1a",
+    spoolId: "spool:a",
+    mountOperationId: "operation:mount:test",
+    openedAt: "2026-09-01T04:40:00.000Z",
+    openedBy: "operator",
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+}
+
+/**
+ * durable commit test用のMaterialSource観測storeを生成する。
+ *
+ * @function createMaterialSourceObservationFixture
+ * @param {Object=} overrides - 上書き値。
+ * @returns {Object} materialSourceObservations store。
+ */
+function createMaterialSourceObservationFixture(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    byDeviceId: {
+      "device:k2": {
+        deviceId: "device:k2",
+        latestBySourceId: {
+          "source:k2:cfs:1a": {
+            sourceId: "source:k2:cfs:1a",
+            materialSourceId: "source:k2:cfs:1a",
+            kind: "cfs-slot",
+            unitId: "unit:k2:cfs:1",
+            unitIndex: 1,
+            boxId: 1,
+            slotId: 0,
+            identityStrength: overrides.identityStrength || "provisional",
+            materialSourceIdentityStrength: overrides.identityStrength || "provisional",
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * durable commit test用のprecondition群を生成する。
+ *
+ * @function createDurablePreconditions
+ * @returns {Object} precondition群。
+ */
+function createDurablePreconditions() {
+  const spool = { id: "spool:a" };
+  const noLegacyOccupancy = null;
+  const sourceBinding = {
+    deviceId: "device:k2",
+    materialSourceId: "source:k2:cfs:1a",
+    unitId: "unit:k2:cfs:1",
+    kind: "cfs-slot",
+    identityStrength: "provisional",
+    identity: {
+      namespace: "material-source",
+      parts: ["device:k2", "unit:k2:cfs:1", "cfs-slot", 0, null],
+    },
+    locator: {
+      kind: "cfs-slot",
+      index: null,
+      unitIndex: 1,
+      boxId: 1,
+      slotIndex: 0,
+      protocolSlotId: "0",
+    },
+  };
+  return {
+    materialSource: {
+      deviceId: "device:k2",
+      materialSourceId: "source:k2:cfs:1a",
+      sourceIdentityDigest: createPrinterCoreV3DeterministicId("material-source-binding", [
+        sourceBinding.deviceId,
+        sourceBinding.materialSourceId,
+        sourceBinding.unitId,
+        sourceBinding.kind,
+        sourceBinding.identityStrength,
+        sourceBinding.identity,
+        sourceBinding.locator,
+      ]),
+    },
+    managedSpool: {
+      spoolId: "spool:a",
+      digest: `fnv1a128:${createPrinterCoreV3DeterministicId("material-accounting-managed-spool-precondition", [
+        stableStringifyPrinterCoreV3Value(spool),
+      ])}`,
+      deleted: false,
+    },
+    legacyOccupancy: {
+      spoolId: "spool:a",
+      expectedDeviceId: "device:k2",
+      occupied: false,
+      digest: `fnv1a128:${createPrinterCoreV3DeterministicId("material-accounting-legacy-occupancy-precondition", [
+        stableStringifyPrinterCoreV3Value(noLegacyOccupancy),
+      ])}`,
+    },
   };
 }

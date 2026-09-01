@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -366,5 +366,64 @@ describe("MaterialAccountingSpoolMountStore", () => {
       expect.objectContaining({ kind: "spoolMount", record: overlap }),
     ]));
     expect(store.retainedUnsupportedEntries.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("連鎖したinterval conflictは入力順に依存せずconnected component全体を隔離する", () => {
+    const first = createMount({
+      mountId: "mount:chain:a",
+      mountOperationId: "mount-op:chain:a",
+      spoolId: "spool:a",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      openedAt: "2026-09-01T00:00:00.000Z",
+      closedAt: "2026-09-01T01:00:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:chain:a",
+    });
+    const bridge = createMount({
+      mountId: "mount:chain:b",
+      mountOperationId: "mount-op:chain:b",
+      spoolId: "spool:b",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      openedAt: "2026-09-01T00:30:00.000Z",
+      closedAt: "2026-09-01T01:30:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:chain:b",
+    });
+    const third = createMount({
+      mountId: "mount:chain:c",
+      mountOperationId: "mount-op:chain:c",
+      spoolId: "spool:c",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      openedAt: "2026-09-01T01:00:00.000Z",
+      closedAt: "2026-09-01T02:00:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:chain:c",
+    });
+
+    const forward = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [first, bridge, third],
+    });
+    const reverse = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [third, bridge, first],
+    });
+
+    expect(forward.spoolMounts).toEqual([]);
+    expect(reverse.spoolMounts).toEqual([]);
+    expect(forward.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "source-interval-overlap-conflict" }),
+    ]));
+    expect(reverse.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "source-interval-overlap-conflict" }),
+    ]));
+    expect(forward.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: first }),
+      expect.objectContaining({ kind: "spoolMount", record: bridge }),
+      expect.objectContaining({ kind: "spoolMount", record: third }),
+    ]));
+    expect(reverse.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: first }),
+      expect.objectContaining({ kind: "spoolMount", record: bridge }),
+      expect.objectContaining({ kind: "spoolMount", record: third }),
+    ]));
   });
 });

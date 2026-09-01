@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -127,6 +127,37 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
       materialSourceObservations: data.materialSourceObservations,
       deviceId: "serial:k2",
       materialSourceId: "source:k2:cfs:9z",
+    });
+
+    expect(source).toBeNull();
+  });
+
+  it("kindを証明できない観測sourceはdirect feedへfallbackせず拒否する", () => {
+    const data = createRuntimeData();
+    data.materialSourceObservations.byDeviceId["serial:k2"].latestBySourceId["source:k2:unknown"] = {
+      sourceId: "source:k2:unknown",
+      unitId: "unit:k2:unknown",
+      displayLabel: "unknown source",
+      materialSourceIdentityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    };
+
+    const source = resolveObservedMaterialSourceRecord({
+      materialSourceObservations: data.materialSourceObservations,
+      deviceId: "serial:k2",
+      materialSourceId: "source:k2:unknown",
+    });
+
+    expect(source).toBeNull();
+  });
+
+  it("identityStrengthが不正な観測sourceはprovisionalへ丸めず拒否する", () => {
+    const data = createRuntimeData();
+    data.materialSourceObservations.byDeviceId["serial:k2"].latestBySourceId["source:k2:cfs:1a"].materialSourceIdentityStrength = "firmware-ish";
+
+    const source = resolveObservedMaterialSourceRecord({
+      materialSourceObservations: data.materialSourceObservations,
+      deviceId: "serial:k2",
+      materialSourceId: "source:k2:cfs:1a",
     });
 
     expect(source).toBeNull();

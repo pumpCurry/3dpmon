@@ -19,9 +19,9 @@
  * - {@link createMaterialAccountingSpoolMountOperationPayloadDigest}：operation payload digestを生成
  * - {@link createMaterialAccountingSpoolMountStoreSnapshot}：store snapshotを生成
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -296,9 +296,7 @@ export function createEmptyMaterialAccountingSpoolMountStore(input = {}) {
  * @returns {{spoolMounts:Array<Object>, conflicts:Array<Object>, retainedUnsupportedEntries:Array<Object>}} 正規化結果。
  */
 function normalizeSpoolMounts(candidates) {
-  const repository = createSpoolMountRepository();
-  const acceptedById = new Map();
-  const acceptedOrder = [];
+  const validCandidates = [];
   const conflicts = [];
   const retainedUnsupportedEntries = [];
   const quarantineIds = new Set();
@@ -309,6 +307,61 @@ function normalizeSpoolMounts(candidates) {
       retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
         kind: "spoolMount",
         reason: `invalid:${validation.errors.join(",")}`,
+        record: candidate,
+      }));
+      continue;
+    }
+    validCandidates.push(cloneJsonValue(candidate));
+  }
+
+  for (let leftIndex = 0; leftIndex < validCandidates.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < validCandidates.length; rightIndex += 1) {
+      const pairRepository = createSpoolMountRepository();
+      pairRepository.recordMount(validCandidates[leftIndex]);
+      const pairResult = pairRepository.recordMount(validCandidates[rightIndex]);
+      if (!pairResult.ok) {
+        for (const conflict of pairResult.conflicts || []) {
+          conflicts.push(cloneJsonValue(conflict));
+          if (!isAuthorityAmbiguityConflict(conflict)) {
+            continue;
+          }
+          for (const id of collectConflictMountIds(conflict)) {
+            quarantineIds.add(id);
+          }
+        }
+      }
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const conflict of conflicts) {
+      if (!isAuthorityAmbiguityConflict(conflict)) {
+        continue;
+      }
+      const ids = collectConflictMountIds(conflict);
+      if (!ids.some((id) => quarantineIds.has(id))) {
+        continue;
+      }
+      for (const id of ids) {
+        if (!quarantineIds.has(id)) {
+          quarantineIds.add(id);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  const repository = createSpoolMountRepository();
+  const acceptedById = new Map();
+  const acceptedOrder = [];
+
+  for (const candidate of validCandidates) {
+    if (quarantineIds.has(candidate.mountId)) {
+      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+        kind: "spoolMount",
+        reason: "authority-conflict-quarantine",
         record: candidate,
       }));
       continue;
@@ -326,12 +379,6 @@ function normalizeSpoolMounts(candidates) {
 
     for (const conflict of result.conflicts || []) {
       conflicts.push(cloneJsonValue(conflict));
-      const ids = collectConflictMountIds(conflict);
-      for (const id of ids) {
-        if (isAuthorityAmbiguityConflict(conflict)) {
-          quarantineIds.add(id);
-        }
-      }
       retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
         kind: "spoolMount",
         reason: conflict.reason || "repository-conflict",
@@ -343,17 +390,6 @@ function normalizeSpoolMounts(candidates) {
         kind: "spoolMount",
         reason: `repository-${result.action || "rejected"}`,
         record: candidate,
-      }));
-    }
-  }
-
-  for (const id of quarantineIds) {
-    const accepted = acceptedById.get(id);
-    if (accepted) {
-      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
-        kind: "spoolMount",
-        reason: "authority-conflict-quarantine",
-        record: accepted,
       }));
     }
   }

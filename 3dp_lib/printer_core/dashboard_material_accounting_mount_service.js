@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountService}：SpoolMount serviceを生成
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -372,6 +372,56 @@ function evaluateExistingOperation(operationIndex, kind, operatorActionId, paylo
 }
 
 /**
+ * mount operationのsemantic payloadを生成する。
+ *
+ * @private
+ * @function createMountOperationPayload
+ * @param {Object} input - payload入力。
+ * @param {string} input.operatorActionId - operator action ID。
+ * @param {string} input.operationId - operation ID。
+ * @param {string} input.expectedDeviceId - 期待device ID。
+ * @param {string} input.materialSourceId - MaterialSource ID。
+ * @param {string} input.spoolId - managed spool ID。
+ * @returns {Object} semantic payload。
+ */
+function createMountOperationPayload(input = {}) {
+  return {
+    kind: "operator-mount",
+    operatorActionId: toTrimmedString(input.operatorActionId),
+    operationId: toTrimmedString(input.operationId),
+    expectedDeviceId: toTrimmedString(input.expectedDeviceId),
+    materialSourceId: toTrimmedString(input.materialSourceId),
+    spoolId: toTrimmedString(input.spoolId),
+  };
+}
+
+/**
+ * replace operationのsemantic payloadを生成する。
+ *
+ * @private
+ * @function createReplaceOperationPayload
+ * @param {Object} input - payload入力。
+ * @param {string} input.operatorActionId - operator action ID。
+ * @param {string} input.operationId - operation ID。
+ * @param {string} input.expectedDeviceId - 期待device ID。
+ * @param {string} input.materialSourceId - MaterialSource ID。
+ * @param {string} input.expectedOldMountId - 旧mount ID。
+ * @param {string} input.newSpoolId - 新managed spool ID。
+ * @returns {Object} semantic payload。
+ */
+function createReplaceOperationPayload(input = {}) {
+  return {
+    kind: "operator-replace",
+    operatorActionId: toTrimmedString(input.operatorActionId),
+    operationId: toTrimmedString(input.operationId),
+    expectedDeviceId: toTrimmedString(input.expectedDeviceId),
+    materialSourceId: toTrimmedString(input.materialSourceId),
+    expectedOldMountId: toTrimmedString(input.expectedOldMountId),
+    newSpoolId: toTrimmedString(input.newSpoolId),
+  };
+}
+
+/**
  * storeへeventを追加して正規化する。
  *
  * @private
@@ -630,6 +680,26 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     if (!operatorActionId) {
       return createServiceResult({ ok: false, action: "mount", reason: "operator-action-id-required", store: currentStore });
     }
+    const operationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
+      "mount",
+      operatorActionId,
+      materialSourceId,
+      spoolId,
+    ]);
+    const payload = createMountOperationPayload({
+      operatorActionId,
+      operationId,
+      expectedDeviceId,
+      materialSourceId,
+      spoolId,
+    });
+    const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-mount", operatorActionId, payload);
+    if (existingOperation.status === "idempotent") {
+      return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
+    }
+    if (existingOperation.status === "conflict") {
+      return createServiceResult({ ok: false, action: "mount", reason: "operator-action-payload-conflict", store: currentStore });
+    }
     const sourceResult = await resolveOperatorMaterialSource({
       ...request,
       materialSourceId,
@@ -663,28 +733,6 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     }
 
     const sourceBindingAtOpen = createSourceBindingAtOpen(source, createdAt);
-    const operationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
-      "mount",
-      operatorActionId,
-      source.materialSourceId,
-      spoolId,
-    ]);
-    const payload = {
-      kind: "operator-mount",
-      operatorActionId,
-      operationId,
-      expectedDeviceId,
-      materialSourceId: source.materialSourceId,
-      spoolId,
-      sourceBindingAtOpen,
-    };
-    const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-mount", operatorActionId, payload);
-    if (existingOperation.status === "idempotent") {
-      return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
-    }
-    if (existingOperation.status === "conflict") {
-      return createServiceResult({ ok: false, action: "mount", reason: "operator-action-payload-conflict", store: currentStore });
-    }
 
     const mount = deepFreezeJson({
       ...createSpoolMountRecord({
@@ -845,6 +893,28 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     if (!operatorActionId) {
       return createServiceResult({ ok: false, action: "replace", reason: "operator-action-id-required", store: currentStore });
     }
+    const replaceOperationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
+      "replace",
+      operatorActionId,
+      materialSourceId,
+      expectedOldMountId,
+      newSpoolId,
+    ]);
+    const payload = createReplaceOperationPayload({
+      operatorActionId,
+      operationId: replaceOperationId,
+      expectedDeviceId,
+      materialSourceId,
+      expectedOldMountId,
+      newSpoolId,
+    });
+    const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-replace", operatorActionId, payload);
+    if (existingOperation.status === "idempotent") {
+      return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
+    }
+    if (existingOperation.status === "conflict") {
+      return createServiceResult({ ok: false, action: "replace", reason: "operator-action-payload-conflict", store: currentStore });
+    }
     const sourceResult = await resolveOperatorMaterialSource({
       ...request,
       materialSourceId,
@@ -877,30 +947,6 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       return createServiceResult({ ok: false, action: "replace", reason: legacyResult.reason, store: currentStore });
     }
     const sourceBindingAtOpen = createSourceBindingAtOpen(source, createdAt);
-    const replaceOperationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
-      "replace",
-      operatorActionId,
-      source.materialSourceId,
-      expectedOldMountId,
-      newSpoolId,
-    ]);
-    const payload = {
-      kind: "operator-replace",
-      operatorActionId,
-      operationId: replaceOperationId,
-      expectedDeviceId,
-      materialSourceId: source.materialSourceId,
-      expectedOldMountId,
-      newSpoolId,
-      sourceBindingAtOpen,
-    };
-    const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-replace", operatorActionId, payload);
-    if (existingOperation.status === "idempotent") {
-      return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
-    }
-    if (existingOperation.status === "conflict") {
-      return createServiceResult({ ok: false, action: "replace", reason: "operator-action-payload-conflict", store: currentStore });
-    }
     const repository = createSpoolMountRepository(currentStore.spoolMounts);
     const currentMount = repository.getOpenMountForSource(source.materialSourceId);
     if (!currentMount) {

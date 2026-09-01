@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1581 (PR #440)
+ * @version 1.390.1582 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 14:58:00
+ * @lastModified 2026-09-01 15:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1028,6 +1028,47 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     ]));
     expect(monitorData.hostSpoolMap).toEqual({});
     expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate18.9H: importAllData はlegacy hostSpoolMapと衝突するUniversal mountをactive authorityから隔離する', async () => {
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
+    monitorData.filamentSpools = [
+      { id: "spool-031", remainingLengthMm: 235800 },
+      { id: "spool-002", remainingLengthMm: 330000 },
+    ];
+
+    await importAllData({
+      materialAccountingSpoolMountStore: createSpoolMountStorageFixture(),
+    });
+
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([
+      expect.objectContaining({
+        materialSourceId: "source:k2:cfs:1b",
+        spoolId: "spool-002",
+        status: SPOOL_MOUNT_STATUS.OPEN,
+      }),
+    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.events).toEqual([
+      expect.objectContaining({ operatorActionId: "action:k2:1b:002" }),
+    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "spool-mount-cross-backend-conflict",
+        reason: "legacy-spool-backend-conflict",
+        spoolId: "spool-031",
+      }),
+    ]));
+    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "legacy-spool-backend-conflict",
+      }),
+      expect.objectContaining({
+        kind: "event",
+        reason: "orphan-event-record-ref",
+      }),
+    ]));
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
   });
 
   it('Gate19 prep: physicalCommandRecoveryLatch は再起動後も未解決証跡を保持し自動再送材料を保存しない', () => {
