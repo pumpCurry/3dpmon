@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1592 (PR #440)
+ * @version 1.390.1621 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 18:47:47
+ * @lastModified 2026-09-02 02:08:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -826,6 +826,20 @@ export async function exportAllData() {
       // ★ v2.2.0: 旧 STORAGE_KEY フォールバックは削除
       data = {};
     }
+  }
+
+  // Gate 18.9H/I のCAS保護storeは通常flush queueへ載せないため、旧データや未操作環境では
+  // IndexedDB shared keyとしてまだ存在しない場合がある。exportはread-only可視化なので、
+  // 永続storeへ書き込まず、現在runtimeが保持する正規化済み空storeをJSONへ補完する。
+  if (!data.materialAccountingPrintBindingStore || typeof data.materialAccountingPrintBindingStore !== "object") {
+    data.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
+      monitorData.materialAccountingPrintBindingStore
+    );
+  }
+  if (!data.materialAccountingSpoolMountStore || typeof data.materialAccountingSpoolMountStore !== "object") {
+    data.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
+      monitorData.materialAccountingSpoolMountStore
+    );
   }
 
   // パネルレイアウトをエクスポートデータに含める

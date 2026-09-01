@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1585 (PR #440)
+ * @version 1.390.1621 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:51:00
+ * @lastModified 2026-09-02 02:08:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -270,7 +270,7 @@ vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   exportAllIdb: vi.fn(), importAllIdb: vi.fn(), compareAndSwapSharedValue: vi.fn(),
 }));
 
-const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await import('../../3dp_lib/dashboard_storage.js');
+const { saveUnifiedStorage, restoreUnifiedStorage, importAllData, exportAllData } = await import('../../3dp_lib/dashboard_storage.js');
 const {
   deriveMaterialSourceObservationFreshness,
 } = await import('../../3dp_lib/printer_core/dashboard_material_source_observation.js');
@@ -459,6 +459,29 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
 
     // runtimeData は永続化されない（復元後は ensureMachineData の空 {} 相当）
     expect(monitorData.machines['Ideaformer'].runtimeData?.lastError).toBeUndefined();
+  });
+
+  it('Gate18.9I: exportAllData は未保存のCAS保護storeもread-only exportへ補完する', async () => {
+    const exported = await exportAllData();
+
+    expect(exported.materialAccountingPrintBindingStore).toMatchObject({
+      authority: 'material-accounting-print-binding-shadow-store',
+      printStartSnapshots: [],
+      jobMaterialSegments: [],
+      invariants: {
+        legacyUsageHistoryWrites: false,
+      },
+    });
+    expect(exported.materialAccountingSpoolMountStore).toMatchObject({
+      authority: 'material-accounting-spool-mount-store',
+      spoolMounts: [],
+      events: [],
+      invariants: {
+        operatorManaged: true,
+        physicalCommandWrites: false,
+      },
+    });
+    expect(globalThis.localStorage.length).toBe(0);
   });
 
   it('P0-1: pendingUnattributedUsage / archive / mountHistorySeq が往復で保持される', () => {

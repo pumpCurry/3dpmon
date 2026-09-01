@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1621 (PR #440)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-02 02:22:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -1347,7 +1347,7 @@ export function validatePrinterCommandSendTime(request, context) {
   if (context.active !== true) {
     errors.push("dispatch-context-not-active");
   }
-  const nowMs = Date.now();
+  const nowMs = Number.isFinite(Number(context.issuedAtMs)) ? Number(context.issuedAtMs) : Date.now();
   if (Number.isFinite(Number(context.expiresAtMs)) && nowMs > Number(context.expiresAtMs)) {
     errors.push("dispatch-context-expired");
   }

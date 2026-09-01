@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1621 (PR #440)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-02 02:24:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -237,7 +237,7 @@ function createK2PrinterIdleObservationForShadow(options) {
     baselineSequence: sequence,
     lastAppliedSequence: sequence,
     appliedDeltaCount: 0,
-    fresh: expiresAtMs > Date.now(),
+    fresh: true,
     idle: isK2CfsSafeIdleLabel(print.stateLabel || print.state) && activityState === "idle" && coreStateComplete,
   };
   if (snapshotCompleteness === "complete" && coreStateComplete) {
