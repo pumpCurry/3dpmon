@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1595 (PR #440)
+ * @version 1.390.1596 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 19:17:01
+ * @lastModified 2026-09-01 19:56:42
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -376,37 +376,130 @@ function resolveObservedCompletedPrintJob(data, request) {
 }
 
 /**
- * K2/Creality形式のsource別使用量文字列をMaterialUsage配列へ変換する。
+ * 保存済みprint-start snapshotを安定順へ整列する。
+ *
+ * @private
+ * @function getOrderedPrintStartSnapshots
+ * @param {Object} store - print binding store。
+ * @param {Object} printPlan - PrintPlan。
+ * @param {string} printJobId - PrintJob ID。
+ * @returns {Object[]} order昇順のprint-start snapshot配列。
+ */
+function getOrderedPrintStartSnapshots(store, printPlan, printJobId) {
+  const planId = toTrimmedString(printPlan?.printPlanId);
+  return (Array.isArray(store?.printStartSnapshots) ? store.printStartSnapshots : [])
+    .filter((snapshot) =>
+      toTrimmedString(snapshot?.printJobId) === printJobId &&
+      toTrimmedString(snapshot?.printPlanId) === planId
+    )
+    .sort((a, b) => {
+      const orderA = Number.isFinite(Number(a?.order)) ? Number(a.order) : 0;
+      const orderB = Number.isFinite(Number(b?.order)) ? Number(b.order) : 0;
+      if (orderA !== orderB) return orderA - orderB;
+      return toTrimmedString(a?.snapshotId).localeCompare(toTrimmedString(b?.snapshotId));
+    });
+}
+
+/**
+ * K2/Creality形式のsource別使用量文字列を保存済みsnapshot基準のMaterialUsage配列へ変換する。
  *
  * 【詳細説明】
- * - `materialUsed:"3210,6543"` はlogical tool順の使用量として観測されるため、
- *   print-start時点のPrintPlan assignmentへ対応付けて`protocolToolAlias`を付け直す。
- * - 空値や不正値は返さず、runtime側で明示`materialUsages`やtotal-onlyへfallbackさせる。
+ * - `materialUsed:"3210,6543"` はprint-start時点で固定したsnapshot orderへ対応付ける。
+ * - completion時callerが渡すPrintPlan assignmentは、source mapping authorityとして採用しない。
+ * - CSV値数とsnapshot数が一致しない場合は、余剰値を黙って捨てずBLOCK理由を返す。
  *
  * @private
  * @function parseMaterialUsagesFromHistoryEntry
  * @param {Object|null|undefined} historyEntry - printStore.history entry。
- * @param {Object} printPlan - PrintPlan。
- * @returns {Object[]} source-specific usage候補。
+ * @param {Object[]} orderedSnapshots - order昇順のprint-start snapshot配列。
+ * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parserVersion:string,reasons:string[]}} source-specific usage候補。
  */
-function parseMaterialUsagesFromHistoryEntry(historyEntry, printPlan) {
+function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
   const raw = toTrimmedString(historyEntry?.materialUsed || historyEntry?.raw?.materialUsed);
+  const snapshots = Array.isArray(orderedSnapshots) ? orderedSnapshots : [];
+  const parserVersion = "k2-material-used-csv:snapshot-order:v1";
   if (!raw) {
-    return [];
+    return {
+      ok: false,
+      materialUsages: [],
+      rawMaterialUsed: "",
+      parserVersion,
+      reasons: snapshots.length > 1 ? ["observed-material-used-required"] : [],
+    };
   }
-  const assignments = Array.isArray(printPlan?.toolAssignments) ? printPlan.toolAssignments : [];
-  return raw
+  const parts = raw
     .split(",")
-    .map((part, index) => ({ part: part.trim(), assignment: assignments[index] }))
-    .filter(({ part, assignment }) => part !== "" && assignment)
-    .map(({ part, assignment }) => ({
-      toolId: assignment.toolId,
-      protocolToolAlias: assignment.protocolToolAlias || assignment.toolAlias,
-      materialSourceId: assignment.materialSourceId,
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  const reasons = [];
+  if (parts.length !== snapshots.length) {
+    reasons.push("material-used-source-count-mismatch");
+  }
+  const materialUsages = parts
+    .map((part, index) => ({ part, snapshot: snapshots[index] }))
+    .filter(({ snapshot }) => snapshot)
+    .map(({ part, snapshot }) => ({
+      toolId: snapshot.toolId,
+      protocolToolAlias: snapshot.protocolToolAlias || snapshot.toolAlias,
+      materialSourceId: snapshot.materialSourceId,
       usedLengthMm: Number(part),
       source: "firmware-source-specific",
     }))
-    .filter((entry) => Number.isFinite(entry.usedLengthMm) && entry.usedLengthMm >= 0);
+    .filter((entry) => {
+      const valid = Number.isFinite(entry.usedLengthMm) && entry.usedLengthMm >= 0;
+      if (!valid) {
+        reasons.push("usage-length-invalid");
+      }
+      return valid;
+    });
+  return {
+    ok: reasons.length === 0,
+    materialUsages,
+    rawMaterialUsed: raw,
+    parserVersion,
+    reasons: [...new Set(reasons)],
+  };
+}
+
+/**
+ * completion時点でruntime所有のsource continuity evidenceを作る。
+ *
+ * 【詳細説明】
+ * - caller supplied continuityをtrusted debit候補へ使わないため、現在のMaterialSource観測storeを読む。
+ * - provisional sourceは、同一device/sourceが最新観測に残っていてproviderがstaleでない場合だけ
+ *   `freshTopology/sourceContinuity`をtrueにする。
+ *
+ * @private
+ * @function buildRuntimeContinuityBySourceId
+ * @param {Object} data - monitorData互換データ。
+ * @param {Object[]} orderedSnapshots - print-start snapshot配列。
+ * @returns {Object<string,Object>} source ID別continuity evidence。
+ */
+function buildRuntimeContinuityBySourceId(data, orderedSnapshots) {
+  const continuityBySourceId = {};
+  for (const snapshot of Array.isArray(orderedSnapshots) ? orderedSnapshots : []) {
+    const sourceId = toTrimmedString(snapshot?.materialSourceId);
+    const deviceId = toTrimmedString(snapshot?.deviceId);
+    if (!sourceId || !deviceId) {
+      continue;
+    }
+    const deviceRecord = data?.materialSourceObservations?.byDeviceId?.[deviceId] || {};
+    const observedSource = resolveObservedMaterialSourceRecord({
+      materialSourceObservations: data?.materialSourceObservations,
+      deviceId,
+      materialSourceId: sourceId,
+    });
+    const freshTopology = !!observedSource &&
+      !deviceRecord.providerDisconnectedAt &&
+      deviceRecord.restoredFromStorage !== true;
+    continuityBySourceId[sourceId] = {
+      sourceContinuity: !!observedSource,
+      freshTopology,
+      observedAt: normalizeObservedTime(deviceRecord.lastObservedAt) || null,
+      source: "runtime-material-source-observation",
+    };
+  }
+  return continuityBySourceId;
 }
 
 /**
@@ -888,10 +981,10 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
    * @param {Object} request - 記録要求。
    * @param {Object} request.printPlan - 実行したPrintPlan。
    * @param {string=} request.printJobId - 完了したPrintJob ID。
-   * @param {Object[]=} request.materialUsages - source-specific usage観測。
-   * @param {number=} request.totalUsedLengthMm - total-only usage観測。
+   * @param {Object[]=} request.materialUsages - source-specific usage期待値またはテスト用観測候補。trusted authorityには採用しない。
+   * @param {number=} request.totalUsedLengthMm - total-only usage期待値。trusted authorityには採用しない。
    * @param {"complete"|"partial"=} request.resultSetCompleteness - source-specific結果集合の完全性。
-   * @param {Object<string,Object>=} request.continuityBySourceId - source continuity evidence。
+   * @param {Object<string,Object>=} request.continuityBySourceId - source continuity期待値。trusted authorityには採用しない。
    * @returns {Promise<Object>} runtime result。
    */
   async function recordObservedPrintCompletion(request = {}) {
@@ -915,9 +1008,16 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
     const printJobId = completionResolution.printJobId;
     const completedAt = completionResolution.completedAt;
     const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(previousStore);
-    const materialUsages = Array.isArray(request.materialUsages) && request.materialUsages.length > 0
-      ? request.materialUsages
-      : parseMaterialUsagesFromHistoryEntry(completionResolution.historyEntry, printPlan);
+    const orderedSnapshots = getOrderedPrintStartSnapshots(previousStore, printPlan, printJobId);
+    const usageSet = parseMaterialUsagesFromHistoryEntry(completionResolution.historyEntry, orderedSnapshots);
+    if (!usageSet.ok) {
+      return createBlockedResult(usageSet.reasons, previousStore, {
+        observedPrintJobIds: completionResolution.observedPrintJobIds,
+        rawMaterialUsed: usageSet.rawMaterialUsed,
+        parserVersion: usageSet.parserVersion,
+      });
+    }
+    const materialUsages = usageSet.materialUsages;
     const attributionOperationId = toTrimmedString(request.attributionOperationId) ||
       `usage:${createPrinterCoreV3DeterministicId("material-usage-attribution-runtime", [
         stableStringifyPrinterCoreV3Value({
@@ -926,10 +1026,13 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
           deviceId: printPlan?.deviceId || null,
         }),
       ])}`;
-    const totalUsedLengthMm = request.totalUsedLengthMm ??
-      completionResolution.historyEntry?.materialUsedMm ??
+    const totalUsedLengthMm = completionResolution.historyEntry?.materialUsedMm ??
       completionResolution.historyEntry?.usagematerial ??
       completionResolution.historyEntry?.usedMaterialLength;
+    const inferredResultSetCompleteness = materialUsages.length > 0 &&
+      materialUsages.length === orderedSnapshots.length
+      ? "complete"
+      : "partial";
     const result = repository.recordUsageAttribution({
       printPlan,
       printJobId,
@@ -937,9 +1040,9 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
       attributionOperationId,
       materialUsages,
       totalUsedLengthMm,
-      resultSetCompleteness: request.resultSetCompleteness,
+      resultSetCompleteness: request.resultSetCompleteness === "complete" ? inferredResultSetCompleteness : "partial",
       resultSetCompletenessEvidence: request.resultSetCompletenessEvidence,
-      continuityBySourceId: request.continuityBySourceId,
+      continuityBySourceId: buildRuntimeContinuityBySourceId(data, orderedSnapshots),
     });
     if (!result.ok && result.status !== MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.PENDING) {
       return {

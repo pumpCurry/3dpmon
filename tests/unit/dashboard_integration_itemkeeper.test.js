@@ -208,7 +208,7 @@ describe("buildFilaments", () => {
         materialSourceId: "source:1b",
         protocolToolAlias: "T1B",
         usedLengthMm: 6543,
-        usageState: "source-specific",
+        usageState: "observed-used",
         confidence: "high",
         order: 1
       },
@@ -220,7 +220,7 @@ describe("buildFilaments", () => {
         materialSourceId: "source:1a",
         protocolToolAlias: "T1A",
         usedLengthMm: 3210,
-        usageState: "source-specific",
+        usageState: "observed-used",
         confidence: "high",
         order: 0
       }
@@ -232,6 +232,63 @@ describe("buildFilaments", () => {
     expect(fil.map(f => [f.spoolId, f.usedMm, f.materialSourceId, f.protocolToolAlias])).toEqual([
       ["s1", 3210, "source:1a", "T1A"],
       ["s2", 6543, "source:1b", "T1B"]
+    ]);
+  });
+  it("print binding segmentは同じprintJobIdでもdeviceIdが違う機器へ混入しない", () => {
+    mockMonitorData.appSettings.connectionTargets = [
+      { dest: "192.168.1.5:9999", hostname: "k2-a", label: "K2 A", ikDeviceAlias: "K2 A" },
+      { dest: "192.168.1.6:9999", hostname: "k2-b", label: "K2 B", ikDeviceAlias: "K2 B" }
+    ];
+    mockMonitorData.machines["k2-a"] = {
+      runtimeData: { printerCoreV3Shadow: { deviceId: "serial:k2-a" } },
+      storedData: { model: { rawValue: "K2 Pro" } },
+      printStore: { history: [job({ id: 88, materialUsedMm: 3210, filamentInfo: [] })] }
+    };
+    mockMonitorData.machines["k2-b"] = {
+      runtimeData: { printerCoreV3Shadow: { deviceId: "serial:k2-b" } },
+      storedData: { model: { rawValue: "K2 Pro" } },
+      printStore: { history: [job({ id: 88, materialUsedMm: 6543, filamentInfo: [] })] }
+    };
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
+      {
+        segmentId: "seg:a",
+        printJobId: "88",
+        printPlanId: "plan:a",
+        deviceId: "serial:k2-a",
+        spoolId: "s1",
+        mountId: "mount:a",
+        materialSourceId: "source:a",
+        protocolToolAlias: "T1A",
+        usedLengthMm: 3210,
+        usageState: "observed-used",
+        confidence: "high",
+        order: 0
+      },
+      {
+        segmentId: "seg:b",
+        printJobId: "88",
+        printPlanId: "plan:b",
+        deviceId: "serial:k2-b",
+        spoolId: "s2",
+        mountId: "mount:b",
+        materialSourceId: "source:b",
+        protocolToolAlias: "T1A",
+        usedLengthMm: 6543,
+        usageState: "observed-used",
+        confidence: "high",
+        order: 0
+      }
+    );
+
+    const snap = ik.buildSnapshot("print.finished", "k2-a");
+    const deviceA = snap.devices.find(d => d.device.hostname === "k2-a");
+    const deviceB = snap.devices.find(d => d.device.hostname === "k2-b");
+
+    expect(deviceA.jobs[0].filaments.map(f => [f.spoolId, f.usedMm, f.materialSourceId])).toEqual([
+      ["s1", 3210, "source:a"]
+    ]);
+    expect(deviceB.jobs[0].filaments.map(f => [f.spoolId, f.usedMm, f.materialSourceId])).toEqual([
+      ["s2", 6543, "source:b"]
     ]);
   });
   it("§6.6 必須フィールドが揃う", () => {

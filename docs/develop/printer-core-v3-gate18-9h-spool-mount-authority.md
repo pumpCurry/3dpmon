@@ -310,9 +310,9 @@ multi-source job で total-only usage しかない場合は、source 数、色�
 ItemKeeper へ per-spool true usage として送らない。
 
 Gate 18.9I-3 では、`job.filamentInfo[]` が無いK2/CFS履歴でも、
-`materialAccountingPrintBindingStore.jobMaterialSegments[]` にsource-specificまたは
-confirmed-unused segmentが保存されていれば、ItemKeeper送信用 `jobs[].filaments[]`
-へread-only投影する。これは外部送信用のprojectionであり、legacy `usageHistory`、
+`materialAccountingPrintBindingStore.jobMaterialSegments[]` に同一device + printJobIdの
+observed-usedまたはconfirmed-unused segmentが保存されていれば、ItemKeeper送信用
+`jobs[].filaments[]` へread-only投影する。これは外部送信用のprojectionであり、legacy `usageHistory`、
 `filamentSpools.remainingLengthMm`、3DPmon管理スプール残量、CFS物理状態は更新しない。
 
 ## P0/P1 Tests
@@ -397,9 +397,12 @@ Gate 18.9I-2:
 - 完了時もcaller supplied `completedAt` やusage payloadだけをauthorityにせず、対象hostの
   `printStore.history` 上の完了entry、Printer Core v3 device/session、任意のconnection generation
   bindingを照合する。
-- K2/Creality履歴の `materialUsed:"3210,6543"` 形式は、print-start時点の
-  PrintPlan tool assignment順へ展開し、`T1A` / `T1B` などのprotocol aliasと
-  historical MaterialSource / SpoolMount snapshotへ対応付ける。
+- K2/Creality履歴の `materialUsed:"3210,6543"` 形式は、completion時callerの
+  PrintPlan assignmentではなく、保存済みprint-start snapshotの `order` 順へ展開し、
+  `T1A` / `T1B` などのprotocol aliasとhistorical MaterialSource / SpoolMount
+  snapshotへ対応付ける。
+- `materialUsed` CSVの要素数と保存済みsnapshot数が一致しない場合は
+  `material-used-source-count-mismatch` でBLOCKし、余剰値を黙って捨てない。
 - runtimeはcontract module内のtrusted print-start / source-specific usage issuer注入済み
   repositoryを使う。public repositoryは引き続きtrusted usage evidenceやdebit authorityをmintしない。
 - result-set completenessは、同一runtime内で保存済みtrusted print-start snapshotのsource setと
@@ -408,7 +411,9 @@ Gate 18.9I-2:
 - 同一process内でCAS保存済みtrusted print-start snapshotをJSON cloneから再読した場合は、
   module-owned attestationを再検証してdebit eligibility候補へ戻せる。restart/import後は
   process secretが異なるため、再確認されるまでfail-closedに落ちる。
-- source continuity / fresh topologyなどのdebit eligibilityはsegmentへ保存するが、この段階では
+- source continuity / fresh topologyなどのdebit eligibilityはruntime内の
+  MaterialSource observation resolverから作り、caller supplied continuity objectはtrusted
+  authorityへ採用しない。この段階では
   managed spool残量、legacy `usageHistory`、ItemKeeper projectionへは反映しない。
 - completion writeも専用CAS境界を必須とし、`casApplied:true` が無いpersist結果では
   runtime storeを進めない。
@@ -416,11 +421,14 @@ Gate 18.9I-2:
 Gate 18.9I-3:
 
 - ItemKeeper `buildFilaments()` は、既存 `job.filamentInfo[]` があるジョブでは従来通りそれを優先する。
-- `job.filamentInfo[]` が無いジョブでも、print binding storeに同じPrintJob IDの
-  source-specific / confirmed-unused `JobMaterialSegment` があれば、segment順で
-  `jobs[].filaments[]` へread-only投影する。
+- `job.filamentInfo[]` が無いジョブでも、print binding storeに同じPrintJob IDかつ
+  同じPrinter Core v3 device IDの `observed-used` / `confirmed-unused`
+  `JobMaterialSegment` があれば、segment順で `jobs[].filaments[]` へread-only投影する。
+- print binding storeは全機器共有なので、ItemKeeper projectionは `printJobId` だけを
+  global identityと見なさず、`buildSnapshot()`から渡した機器scopeでsegmentを絞り込む。
 - projectionは `spoolId` / `usedMm` に加えて、診断用に `materialSourceId`、
-  `mountId`、`protocolToolAlias`、`usageState`、`confidence` をadditive fieldとして送る。
+  `mountId`、`printPlanId`、`protocolToolAlias`、`usageState`、`confidence`、
+  `projectionSource`、`spoolRemainBasis` をadditive fieldとして送る。
 - total-only usageやspool未解決segmentは、per-spool true usageとしてItemKeeperへ送らない。
 - この接続は外部payload projectionだけであり、managed spool残量debit、legacy
   `usageHistory`、`filamentSpools.remainingLengthMm` は更新しない。
@@ -438,7 +446,7 @@ Gate 18.9I-4:
   current job / device / session / generation / CAS検査に委ねる。
 - `printStore.history` へ完了履歴が入った後、同じpending PrintPlanを
   `recordObservedPrintCompletion()` へ渡す。K2/Creality履歴の `materialUsed` CSVはruntime側で
-  PrintPlan assignment順にsource-specific usageへ展開する。
+  保存済みprint-start snapshot順にsource-specific usageへ展開する。
 - trusted print-start snapshotには `issuanceEvidence` として、runtimeが観測した
   `deviceId`、`sessionId`、`connectionGeneration`、`printJobId`、`firstObservedAt` を保存する。
 - I-4でもmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`

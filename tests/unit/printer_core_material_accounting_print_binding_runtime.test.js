@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1593 (PR #440)
+ * @version 1.390.1596 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 19:34:24
+ * @lastModified 2026-09-01 19:52:06
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -774,20 +774,13 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       completedAt: "2026-09-01T08:31:00.000Z",
       totalUsedLengthMm: 9753,
     });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
 
     const result = await runtime.recordObservedPrintCompletion({
       printPlan: plan,
       hostname,
       printJobId: "job:completion-source-specific",
       resultSetCompleteness: "complete",
-      materialUsages: [
-        { protocolToolAlias: "T1A", usedLengthMm: 3210 },
-        { protocolToolAlias: "T1B", usedLengthMm: 6543 },
-      ],
-      continuityBySourceId: Object.fromEntries(plan.toolAssignments.map((assignment) => [
-        assignment.materialSourceId,
-        { sourceContinuity: true, freshTopology: true },
-      ])),
     });
 
     expect(result.ok).toBe(true);
@@ -848,6 +841,113 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     ]);
   });
 
+  it("完了時のcaller PrintPlan assignment変更ではなく保存済みprint-start snapshot順へusageを帰属する", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-history-snapshot-order" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-snapshot-order" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-history-snapshot-order",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+    const swappedCompletionPlan = {
+      ...plan,
+      toolAssignments: [...plan.toolAssignments].reverse(),
+    };
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: swappedCompletionPlan,
+      hostname,
+      printJobId: "job:k2-history-snapshot-order",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.map((segment) => [
+      segment.protocolToolAlias,
+      segment.spoolId,
+      segment.usedLengthMm,
+    ])).toEqual([
+      ["T1A", "spool:a", 3210],
+      ["T1B", "spool:b", 6543],
+    ]);
+  });
+
+  it("K2履歴のmaterialUsed数がprint-start snapshot数と一致しない場合はsource別帰属をBLOCKする", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-history-extra-usage" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-extra-usage" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-history-extra-usage",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543,999";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-history-extra-usage",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("material-used-source-count-mismatch");
+    expect(data.materialAccountingPrintBindingStore.jobMaterialSegments).toEqual([]);
+  });
+
+  it("caller supplied materialUsagesだけではtrusted source別usageへ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:caller-usage-untrusted" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:caller-usage-untrusted" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:caller-usage-untrusted",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:caller-usage-untrusted",
+      resultSetCompleteness: "complete",
+      materialUsages: [
+        { protocolToolAlias: "T1A", usedLengthMm: 3210 },
+        { protocolToolAlias: "T1B", usedLengthMm: 6543 },
+      ],
+      continuityBySourceId: Object.fromEntries(plan.toolAssignments.map((assignment) => [
+        assignment.materialSourceId,
+        { sourceContinuity: true, freshTopology: true },
+      ])),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-material-used-required");
+    expect(data.materialAccountingPrintBindingStore.jobMaterialSegments).toEqual([]);
+  });
+
   it("完了時のCAS未適用ではsource-specific usageをruntime storeへ反映しない", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
@@ -863,13 +963,13 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:completion-cas-fail" });
     attachObservedCompletedPrintJob(data, { hostname, printJobId: "job:completion-cas-fail" });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
     const before = data.materialAccountingPrintBindingStore;
 
     const result = await runtime.recordObservedPrintCompletion({
       printPlan: plan,
       hostname,
       printJobId: "job:completion-cas-fail",
-      materialUsages: [{ protocolToolAlias: "T1A", usedLengthMm: 3210 }],
     });
 
     expect(result.ok).toBe(false);

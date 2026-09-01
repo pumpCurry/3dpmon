@@ -18,9 +18,9 @@
  *
  * @author pumpCurry
  * @license BSD-3-Clause
- * @version 1.390.1594 (PR #440)
+ * @version 1.390.1596 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-01 19:08:32
+ * @lastModified 2026-09-01 19:56:42
  */
 
 "use strict";
@@ -81,6 +81,30 @@ function escAttr(s) {
 function escHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * ItemKeeper projection用のPrinter Core v3 device IDを機器状態から取得する。
+ *
+ * 【詳細説明】
+ * - K2/CFSやK1+CFS-Cのprint binding storeは全機器共有なので、printJobIdだけでは
+ *   別機器の同一ID履歴へsource別segmentが混入する。
+ * - live shadowが保持するdeviceIdを優先し、未観測の古い機器では空文字を返して
+ *   従来の単一スプールfallbackを妨げない。
+ *
+ * @private
+ * @function resolveItemKeeperPrinterCoreDeviceId
+ * @param {Object|null|undefined} machine - monitorData.machines[hostname]。
+ * @returns {string} Printer Core v3 device ID。未観測時は空文字。
+ */
+function resolveItemKeeperPrinterCoreDeviceId(machine) {
+  const shadow = machine?.runtimeData?.printerCoreV3Shadow || {};
+  return String(
+    shadow.deviceId ||
+    shadow.printerCoreV3ShadowDeviceId ||
+    machine?.printerCoreV3Identity?.deviceId ||
+    ""
+  ).trim();
 }
 
 /**
@@ -236,19 +260,22 @@ export class ItemKeeperIntegration {
    * @private
    * @function _getPrintBindingSegmentsForJob
    * @param {Object|null|undefined} job - printStore.history のレコード。
+   * @param {{deviceId?:string,hostname?:string}=} context - 機器scope情報。
    * @returns {Array<Object>} 対象ジョブに対応するsource別usage segment。
    */
-  _getPrintBindingSegmentsForJob(job) {
+  _getPrintBindingSegmentsForJob(job, context = {}) {
     const jobId = String(job?.id ?? job?.printId ?? "").trim();
     if (!jobId) return [];
+    const expectedDeviceId = String(context?.deviceId || "").trim();
     const store = monitorData.materialAccountingPrintBindingStore || {};
     const segments = Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : [];
     return segments
       .filter(segment => {
         if (!segment || String(segment.printJobId ?? "").trim() !== jobId) return false;
+        if (expectedDeviceId && String(segment.deviceId || "").trim() !== expectedDeviceId) return false;
         if (!segment.spoolId) return false;
         const usageState = String(segment.usageState || "").trim();
-        return usageState === "source-specific" || usageState === "confirmed-unused";
+        return usageState === "observed-used" || usageState === "confirmed-unused";
       })
       .filter(segment => {
         const usedLengthMm = Number(segment.usedLengthMm);
@@ -274,10 +301,11 @@ export class ItemKeeperIntegration {
    * @private
    * @function _buildFilamentsFromPrintBinding
    * @param {Object|null|undefined} job - printStore.history のレコード。
+   * @param {{deviceId?:string,hostname?:string}=} context - 機器scope情報。
    * @returns {Array<Object>} ItemKeeper `filaments[]` 互換entry。
    */
-  _buildFilamentsFromPrintBinding(job) {
-    return this._getPrintBindingSegmentsForJob(job).map(segment => {
+  _buildFilamentsFromPrintBinding(job, context = {}) {
+    return this._getPrintBindingSegmentsForJob(job, context).map(segment => {
       const spool = getSpoolById(segment.spoolId);
       return {
         ...this._filamentEntry(
@@ -288,9 +316,12 @@ export class ItemKeeperIntegration {
         ),
         materialSourceId: segment.materialSourceId || "",
         mountId: segment.mountId || "",
+        printPlanId: segment.printPlanId || "",
         protocolToolAlias: segment.protocolToolAlias || "",
         usageState: segment.usageState || "",
-        confidence: segment.confidence || ""
+        confidence: segment.confidence || "",
+        projectionSource: "print-binding",
+        spoolRemainBasis: "current"
       };
     });
   }
@@ -300,9 +331,10 @@ export class ItemKeeperIntegration {
    * 真値は usedMm（mm）。usedGram は密度からの派生。spoolRemainMm は参考値。
    *
    * @param {object} job - printStore.history のレコード
+   * @param {{deviceId?:string,hostname?:string}=} context - 機器scope情報。
    * @returns {Array<object>} filaments[]
    */
-  buildFilaments(job) {
+  buildFilaments(job, context = {}) {
     const out = [];
     const fi = Array.isArray(job?.filamentInfo) ? job.filamentInfo : [];
     if (fi.length > 0) {
@@ -312,7 +344,7 @@ export class ItemKeeperIntegration {
         out.push(this._filamentEntry(f || {}, spool, usedMm, job));
       }
     } else {
-      const printBindingFilaments = this._buildFilamentsFromPrintBinding(job);
+      const printBindingFilaments = this._buildFilamentsFromPrintBinding(job, context);
       if (printBindingFilaments.length > 0) {
         return printBindingFilaments;
       }
@@ -369,9 +401,10 @@ export class ItemKeeperIntegration {
   /**
    * 履歴レコードを §4.2 のジョブ形式へ変換する。
    * @param {object} job - printStore.history のレコード
+   * @param {{deviceId?:string,hostname?:string}=} context - 機器scope情報。
    * @returns {object|null}
    */
-  buildJob(job) {
+  buildJob(job, context = {}) {
     if (!job || job.id == null) return null;
     const startMs = job.startTime ? Date.parse(job.startTime)
       : (job.startTimeSec ? Number(job.startTimeSec) * 1000 : NaN);
@@ -410,7 +443,7 @@ export class ItemKeeperIntegration {
       pausedSec:          job.pauseTime            != null ? Number(job.pauseTime)            : null,
       postProcessingSec:  job.postProcessingTime   != null ? Number(job.postProcessingTime)   : null,
       ...(job.moonrakerJobId != null && { moonrakerJobId: String(job.moonrakerJobId) }),
-      filaments: this.buildFilaments(job)
+      filaments: this.buildFilaments(job, context)
     };
   }
 
@@ -433,7 +466,10 @@ export class ItemKeeperIntegration {
       const host = t.hostname || "";
       const machine = host ? monitorData.machines[host] : null;
       const history = machine?.printStore?.history || [];
-      const jobs = this._selectJobs(history, scopeOverride).map(j => this.buildJob(j)).filter(Boolean);
+      const deviceId = resolveItemKeeperPrinterCoreDeviceId(machine);
+      const jobs = this._selectJobs(history, scopeOverride)
+        .map(j => this.buildJob(j, { hostname: host, deviceId }))
+        .filter(Boolean);
       const deviceKey = t.ikDeviceAlias || t.label || host || t.dest;
       if (!deviceKey) continue;
       devices.push({

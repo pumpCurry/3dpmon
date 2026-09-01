@@ -105,11 +105,14 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `retainedUnsupportedEntries` へ隔離する。
   Gate 18.9I-2では、完了済みPrintJobを `printStore.history` で観測できた場合だけ
   completion usage runtimeを実行し、保存済みtrusted print-start snapshotへsource-specific usageを
-  帰属する。K2/Creality履歴の `materialUsed` CSVはPrintPlan assignment順に展開して
-  `T1A` / `T1B` などのprotocol aliasへ対応付ける。caller supplied `completedAt` やusage payloadだけでは
-  完了扱いにせず、device/session/generation境界と専用CAS `casApplied:true` を要求する。
-  Gate 18.9I-3では、このshadow storeに保存されたsource-specific / confirmed-unused
-  `JobMaterialSegment` をItemKeeper送信用 `jobs[].filaments[]` へread-only投影する。
+  帰属する。K2/Creality履歴の `materialUsed` CSVは保存済みprint-start snapshotの
+  `order` 順に展開し、CSV数とsnapshot数が違う場合はBLOCKする。caller supplied
+  `completedAt`、usage payload、continuity objectだけでは完了usage authorityにせず、
+  device/session/generation境界、runtime MaterialSource observation resolver、専用CAS
+  `casApplied:true` を要求する。
+  Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
+  `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
+  `jobs[].filaments[]` へread-only投影する。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
   Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestを

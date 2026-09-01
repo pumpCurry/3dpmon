@@ -502,15 +502,21 @@ Gate 18.9 must cover:
 - completion binding accepting source-specific usage only after the completed
   job is observed in machine history with matching Printer Core v3
   device/session evidence and any caller-bound connection generation. Caller
-  supplied completion time or usage payload alone is insufficient.
-- K2/Creality `materialUsed` CSV is parsed in PrintPlan tool-assignment order
-  and stored as source-specific JobMaterialSegment / shadow ledger evidence.
+  supplied completion time, usage payload, total usage, or source continuity
+  object alone is insufficient.
+- K2/Creality `materialUsed` CSV is parsed in saved print-start snapshot order,
+  not completion-time caller PrintPlan assignment order. CSV cardinality must
+  match the saved source snapshot set; extra or missing values are blocked
+  instead of being silently dropped.
+- Runtime source continuity is resolved from module-owned MaterialSource
+  observations before debit-candidate evaluation, then stored only as
+  source-specific JobMaterialSegment / shadow ledger evidence.
   It does not mutate managed spool remaining or legacy `usageHistory` in
   Gate 18.9I-2.
-- ItemKeeper payload generation may read source-specific / confirmed-unused
-  JobMaterialSegment records as a projection source when `job.filamentInfo[]`
-  is absent. This projection sends per-spool `filaments[]` evidence without
-  mutating 3dpmon inventory state.
+- ItemKeeper payload generation may read same-device `observed-used` /
+  `confirmed-unused` JobMaterialSegment records as a projection source when
+  `job.filamentInfo[]` is absent. This projection sends per-spool
+  `filaments[]` evidence without mutating 3dpmon inventory state.
 - K2/CFS UI print-start sends register a pending PrintPlan immediately before
   transport dispatch, drop that pending record on dispatch failure, and only
   connect it to print binding runtime after machine-observed `printStartTime` /
