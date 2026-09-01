@@ -21,9 +21,9 @@
  * - {@link toFiniteNumber}：実機 payload の数値文字列を安全に number 化
  * - {@link parseK1Position}：`X:... Y:... Z:...` 形式の現在位置を分解
  *
- * @version 1.390.1553 (PR #439)
+ * @version 1.390.1619 (PR #440)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-08-31 19:58:16
+ * @lastModified 2026-09-02 00:17:00
  * -----------------------------------------------------------
  * @todo
  * - Data Schema v3 の DeviceEndpoint / MaterialSource store と接続する
@@ -70,6 +70,32 @@ const K1_PRINT_STATE_LABELS = Object.freeze({
   4: "failed",
   5: "paused",
 });
+
+/**
+ * K2 printer status probeでactivity判定に使うroot scalar key一覧。
+ *
+ * 【詳細説明】
+ * - K2はread-only status probeに対して`state/deviceState`を省いたdeltaだけを返すことがある。
+ * - 温度などが返っているdeltaは「通信あり」ではあるが、idle authorityへ昇格できないため、
+ *   観測keyをNormalizedStateに残してcommand preflightがfail-closedできるようにする。
+ *
+ * @constant {string[]}
+ */
+const K2_PRINTER_STATUS_SCALAR_KEYS = Object.freeze([
+  "state",
+  "deviceState",
+  "printProgress",
+  "dProgress",
+  "printJobTime",
+  "printLeftTime",
+  "nozzleTemp",
+  "bedTemp0",
+  "targetNozzleTemp",
+  "targetBedTemp0",
+  "printFileName",
+  "fileName",
+  "printId",
+]);
 
 /**
  * 実機 payload 値を有限 number へ変換する。
@@ -552,6 +578,66 @@ function createPrintPatch(payload, protocolState = payload) {
   setIfPresent(patch, "jobId", hasOwn(payload, "printId"), toNullableString(payload.printId));
   setIfPresent(patch, "startedAtSec", hasOwn(payload, "printStartTime"), toFiniteNumber(payload.printStartTime));
   return omitEmpty(patch);
+}
+
+/**
+ * K2 status frameで今回観測されたprinter scalar keyを列挙する。
+ *
+ * 【詳細説明】
+ * - `protocolState`ではなくraw payloadだけを見ることで、累積済みの古い`state/deviceState`を
+ *   今回frameのcomplete証拠として誤用しない。
+ * - 結果は表示やテストで比較しやすいよう辞書順へ揃える。
+ *
+ * @private
+ * @function listObservedK2PrinterStatusScalarKeys
+ * @param {object} payload - K2 WS9999 status payload
+ * @returns {string[]} 今回frameに含まれたprinter status scalar key
+ */
+function listObservedK2PrinterStatusScalarKeys(payload) {
+  return K2_PRINTER_STATUS_SCALAR_KEYS
+    .filter((key) => hasOwn(payload, key))
+    .sort();
+}
+
+/**
+ * K2 status frameのprint activity completeness metadataを生成する。
+ *
+ * 【詳細説明】
+ * - CFS物理commandのidle判定では、前回stateを保持したNormalizedStateだけでは不十分。
+ * - 今回frameに`state/deviceState`が両方あり有限数へ変換できる場合だけcompleteとし、
+ *   温度やjob時間だけのdeltaはpartial/unknown-core-stateとして明示する。
+ * - `printProgress`は0/100のstale値になりやすいため、単独ではactive根拠にしない。
+ *
+ * @private
+ * @function createK2PrinterStatusCompletenessPatch
+ * @param {object} payload - K2 WS9999 status payload
+ * @returns {object|undefined} print patchへ混ぜ込むmetadata、またはundefined
+ */
+function createK2PrinterStatusCompletenessPatch(payload) {
+  const observedScalarKeys = listObservedK2PrinterStatusScalarKeys(payload);
+  if (observedScalarKeys.length === 0) {
+    return undefined;
+  }
+  const state = hasOwn(payload, "state") ? toFiniteNumber(payload.state) : null;
+  const deviceState = hasOwn(payload, "deviceState") ? toFiniteNumber(payload.deviceState) : null;
+  const printJobTime = hasOwn(payload, "printJobTime") ? toFiniteNumber(payload.printJobTime) : null;
+  const printLeftTime = hasOwn(payload, "printLeftTime") ? toFiniteNumber(payload.printLeftTime) : null;
+  const targetNozzleTemp = hasOwn(payload, "targetNozzleTemp") ? toFiniteNumber(payload.targetNozzleTemp) : null;
+  const targetBedTemp0 = hasOwn(payload, "targetBedTemp0") ? toFiniteNumber(payload.targetBedTemp0) : null;
+  const coreStateComplete = state !== null && deviceState !== null;
+  const active = (state !== null && state !== 0) ||
+    (deviceState !== null && deviceState !== 0) ||
+    (printJobTime !== null && printJobTime > 0) ||
+    (printLeftTime !== null && printLeftTime > 0) ||
+    (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
+    (targetBedTemp0 !== null && targetBedTemp0 > 0);
+  return {
+    snapshotCompleteness: coreStateComplete ? "complete" : "partial",
+    activityState: coreStateComplete ? (active ? "active" : "idle") :
+      (active ? "active-without-core-state" : "unknown-core-state"),
+    coreStateComplete,
+    observedScalarKeys,
+  };
 }
 
 /**
@@ -1270,9 +1356,11 @@ export function createK2StatusPatch(payload, options = {}) {
     adapterId: options.adapterId ?? "creality-k2",
     protocol: options.protocol ?? "ws9999",
   });
-  if (patch.patch?.print) {
+  const statusCompleteness = createK2PrinterStatusCompletenessPatch(rawPayload);
+  if (patch.patch?.print || statusCompleteness) {
     patch.patch.print = {
-      ...patch.patch.print,
+      ...(patch.patch?.print || {}),
+      ...(statusCompleteness || {}),
       semantics: {
         family: "k2",
         mapping: "k1-compatible-provisional",

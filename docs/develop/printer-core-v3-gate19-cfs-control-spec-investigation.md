@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 19 CFS Control Spec Investigation
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
 
@@ -168,6 +168,8 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `snapshotCompleteness:"partial"`、`statusProbeStatus:"partial"`、`activityState:"unknown-core-state"`、
   または `coreStateComplete:false` を明示する場合は `cfs-control-printer-idle-observation-incomplete` として拒否する。
   これはdelta-only/timeout後に古いidle表示だけでphysical CFS commandを送らないためのGate19 idle predicateである。
+  `createK2StatusPatch()` はraw frame単位でこのmetadataを生成し、Facadeの累積 `shadowRecord.lastState.print` へ残す。
+  そのためCertification panelの合成入力だけでなく、実機WS9999から入ったproduction shadowでも同じpreflight境界を使える。
 - `scripts/capture_k2_cfs_readonly_calibration.mjs` は、複数のprinter status probeから
   `assembledPrinterStatus` を生成する。これはread-only certification用のprojectionであり、
   最初に `state` と `deviceState` を含むcomplete baselineを観測できた場合だけ、同一WS session内の

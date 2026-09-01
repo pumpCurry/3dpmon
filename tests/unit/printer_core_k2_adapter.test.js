@@ -14,7 +14,10 @@ import {
   extractK2Payload,
 } from "../../3dp_lib/printer_core/dashboard_k2_adapter.js";
 import { createK2PrinterFacade } from "../../3dp_lib/printer_core/dashboard_printer_facade.js";
-import { normalizeK2BoxsInfo } from "../../3dp_lib/printer_core/dashboard_normalized_state.js";
+import {
+  createK2StatusPatch,
+  normalizeK2BoxsInfo,
+} from "../../3dp_lib/printer_core/dashboard_normalized_state.js";
 
 const FIXTURE_K2_PRO_CFS = path.resolve("tests", "fixtures", "printers", "k2-pro-cfs", "events.ndjson");
 
@@ -85,6 +88,68 @@ describe("Printer Core v3 K2 read-only adapter", () => {
     expect(patch.patch.materials.cfs.connected).toBe(true);
     expect(hasCapability(patch.capabilities, PRINTER_CAPABILITIES.MATERIAL_CFS)).toBe(true);
     expect(hasCapability(patch.capabilities, PRINTER_CAPABILITIES.STATUS_TEMPERATURES)).toBe(true);
+  });
+
+  it("K2 status frame はcore stateを含む場合だけcompleteなprinter activity証拠として扱う", () => {
+    const patch = createK2StatusPatch({
+      state: 0,
+      deviceState: 0,
+      nozzleTemp: "28.400000",
+      bedTemp0: "27.800000",
+    }, {
+      deviceId: "fixture:k2-pro-cfs",
+      sessionId: "fixture-session-k2",
+      sequence: 10,
+      receivedAt: "2026-09-01T11:00:00.000Z",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateCode: 0,
+      stateLabel: "idle",
+      deviceStateCode: 0,
+      snapshotCompleteness: "complete",
+      activityState: "idle",
+      coreStateComplete: true,
+      observedScalarKeys: ["bedTemp0", "deviceState", "nozzleTemp", "state"],
+    });
+  });
+
+  it("K2 status deltaが温度だけを返した場合は前回idleを保ってもpartial/unknown-core-stateへ降格する", () => {
+    const facade = createK2PrinterFacade({
+      clock: () => new Date("2026-09-01T11:00:00.000Z"),
+    });
+    const deviceId = "fixture:k2-partial-status";
+    const sessionId = "fixture-session-k2-partial";
+
+    facade.beginSession({ deviceId, sessionId });
+    facade.observeFrame({
+      deviceId,
+      sessionId,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        nozzleTemp: "28.000000",
+        bedTemp0: "27.000000",
+      },
+    });
+    const deltaState = facade.observeFrame({
+      deviceId,
+      sessionId,
+      frame: {
+        nozzleTemp: "28.400000",
+        bedTemp0: "27.800000",
+      },
+    });
+
+    expect(deltaState.print).toMatchObject({
+      stateCode: 0,
+      stateLabel: "idle",
+      deviceStateCode: 0,
+      snapshotCompleteness: "partial",
+      activityState: "unknown-core-state",
+      coreStateComplete: false,
+      observedScalarKeys: ["bedTemp0", "nozzleTemp"],
+    });
   });
 
   it("K2 boxsInfo を CFS unit / source / tool assignment topology へ正規化する", () => {

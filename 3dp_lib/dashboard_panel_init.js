@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1570 (PR #439)
+ * @version 1.390.1619 (PR #440)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-01 08:10:05
+ * @lastModified 2026-09-02 00:17:00
  * -----------------------------------------------------------
  */
 
@@ -1514,7 +1514,13 @@ function createCfsCertificationRenderableState(hostname) {
       sessionId: shadowRecord?.sessionId || "",
       transportKind: "ws9999",
       active: getConnectionState(hostname) === "connected" && shadowRecord?.state !== "closed",
-      state: shadowRecord?.lastState?.status?.printState || shadowRecord?.lastState?.print?.state || "",
+      state: shadowRecord?.lastState?.status?.printState ||
+        shadowRecord?.lastState?.print?.stateLabel ||
+        shadowRecord?.lastState?.print?.state ||
+        "",
+      statusProbeStatus: shadowRecord?.lastState?.print?.snapshotCompleteness || "",
+      printActivityState: shadowRecord?.lastState?.print?.activityState || "",
+      coreStateComplete: shadowRecord?.lastState?.print?.coreStateComplete ?? null,
     },
     materialViewModel,
     targetSource,
