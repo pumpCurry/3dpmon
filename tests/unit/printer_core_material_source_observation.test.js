@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1608 (PR #440)
+ * @version 1.390.1609 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 22:07:00
+ * @lastModified 2026-09-01 22:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -319,7 +319,7 @@ describe("MaterialSourceObservationStore", () => {
     expect(second.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:05:00.000Z");
   });
 
-  it("source別event log trimでは削除されたsource eventの最遅時刻へcoverageを前進させる", () => {
+  it("source別event log trimでは削除されたsourceだけcoverageを前進させる", () => {
     const topology = createTopology();
     const store = createEmptyMaterialSourceObservations();
     recordMaterialTopologyObservation(store, {
@@ -371,9 +371,9 @@ describe("MaterialSourceObservationStore", () => {
       limits: { maxEventsPerSource: 1, maxEventsPerDevice: 8 },
     });
 
-    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
-    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
-    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageTrimmedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageTrimmedAt).toBeNull();
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:01:00.000Z");
   });
@@ -421,7 +421,7 @@ describe("MaterialSourceObservationStore", () => {
       limits: { maxEventsPerSource: 2, maxEventsPerDevice: 8 },
     });
 
-    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:01:00.000Z");
   });
@@ -477,7 +477,7 @@ describe("MaterialSourceObservationStore", () => {
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
   });
 
-  it("source event trimでは削除されたsource eventの最遅observedAtまでcoverageを前進させる", () => {
+  it("source event trimでは他sourceとdevice coverageを巻き込まず削除sourceだけ前進させる", () => {
     const topology = createTopology();
     const store = createEmptyMaterialSourceObservations();
     const first = recordMaterialTopologyObservation(store, {
@@ -524,7 +524,8 @@ describe("MaterialSourceObservationStore", () => {
       "cfs:1:slot:2:2026-08-27T12:00:00.000Z",
       "external:0:2026-08-27T12:11:00.000Z",
     ]);
-    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
     expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:10:00.000Z");
   });
