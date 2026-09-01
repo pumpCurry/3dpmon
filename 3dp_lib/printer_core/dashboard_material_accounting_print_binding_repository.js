@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1599 (PR #440)
+ * @version 1.390.1628 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 21:16:00
+ * @lastModified 2026-09-02 08:07:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -531,6 +531,7 @@ function createShadowPrintStartMaterialSnapshot(input = {}) {
     materialSourceId,
     mountId,
     spoolId: toTrimmedString(input.spoolId),
+    mountOpenedAt: normalizeIsoTime(input.mountOpenedAt || input.spoolMount?.openedAt || input.mount?.openedAt),
     toolId: normalizeToolId(input.toolId),
     protocolToolAlias: toTrimmedString(input.protocolToolAlias || input.toolAlias) || null,
     order: normalizeToolId(input.order),

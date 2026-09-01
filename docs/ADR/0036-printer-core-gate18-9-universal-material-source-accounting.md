@@ -622,7 +622,11 @@ Gate 18.9 must cover:
   generation. Completion success removes the pending record so the material
   binding cannot be re-bound to later manual jobs. Trusted print-start
   snapshots include durable issuance evidence for device ID, session ID,
-  connection generation, PrintJob ID, and first observed time.
+  connection generation, PrintJob ID, and first observed time. The SpoolMount
+  open time used as the source-continuity lower bound is saved as signed
+  top-level `mountOpenedAt`; embedded `spoolMount.openedAt` remains diagnostic
+  evidence and cannot move the debit continuity window after the snapshot is
+  issued.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.

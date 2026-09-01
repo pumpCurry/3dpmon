@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1599 (PR #440)
+ * @version 1.390.1628 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 21:16:00
+ * @lastModified 2026-09-02 08:18:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -229,6 +229,35 @@ describe("MaterialSource print binding repository", () => {
       "shadow-print-start-material-snapshot",
       "shadow-print-start-material-snapshot",
       "shadow-print-start-material-snapshot",
+    ]);
+  });
+
+  it("print-start snapshotはmount open時刻をtop-levelのsemantic fieldとして保存する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:snapshot-mount-opened-at",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:snapshot-mount-opened-at",
+    });
+
+    expect(start.ok).toBe(true);
+    expect(start.snapshots.map((snapshot) => snapshot.mountOpenedAt)).toEqual([
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+    ]);
+    expect(repository.toJSON().printStartSnapshots.map((snapshot) => snapshot.mountOpenedAt)).toEqual([
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
     ]);
   });
 

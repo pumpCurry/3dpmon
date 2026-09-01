@@ -479,6 +479,10 @@ Gate 18.9I-4:
   print-start snapshot順にsource-specific usageへ展開する。
 - trusted print-start snapshotには `issuanceEvidence` として、runtimeが観測した
   `deviceId`、`sessionId`、`connectionGeneration`、`printJobId`、`firstObservedAt` を保存する。
+- source continuity windowの下限に使うSpoolMount開始時刻は、trusted snapshotの
+  top-level `mountOpenedAt` に固定し、snapshot signatureへ含める。embedded
+  `spoolMount.openedAt` はreview/debug用の診断証跡であり、import/restore後の改変で
+  mount-open後print-start前のsource変更eventを検査範囲外へ追い出せない。
 - `MaterialBindingPlan`本体と`commandBinding`は、pending登録時にdevice/session/generation/file/source/spool/toolの
   semantic projectionで再照合する。module-attested planであっても、request Aのbindingを
   別source/fileのplanへ混ぜた場合は拒否する。

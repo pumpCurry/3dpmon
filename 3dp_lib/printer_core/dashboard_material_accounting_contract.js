@@ -34,9 +34,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1628 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-09-02 07:45:00
+ * @lastModified 2026-09-02 08:07:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -923,6 +923,7 @@ function createPrintStartMaterialSnapshotSignature(snapshot) {
     snapshot.materialSourceId,
     snapshot.mountId,
     snapshot.spoolId,
+    snapshot.mountOpenedAt,
     snapshot.capturedAt,
     stableStringifyPrinterCoreV3Value(snapshot.issuanceEvidence || null),
   ]);
@@ -1327,6 +1328,7 @@ function createTrustedSourceSpecificMaterialUsageEvidence(input = {}) {
  * @param {string} input.materialSourceId - MaterialSource ID。
  * @param {string} input.mountId - SpoolMount ID。
  * @param {string} input.spoolId - Spool ID。
+ * @param {string=} input.mountOpenedAt - print-start時点で署名対象にするSpoolMount開始時刻。
  * @param {string} input.capturedAt - print-start capture time。
  * @param {Object=} input.materialSource - MaterialSource snapshot。
  * @param {Object=} input.spoolMount - SpoolMount snapshot。
@@ -1351,6 +1353,7 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
   if (!capturedAt) {
     throw new TypeError("Material accounting contract requires a valid snapshot.capturedAt.");
   }
+  const mountOpenedAt = normalizeOptionalIsoTime(input.mountOpenedAt || input.spoolMount?.openedAt || input.mount?.openedAt);
   const snapshotId = toTrimmedString(input.snapshotId) ||
     createPrinterCoreV3DeterministicId("material-print-start-snapshot", [
       deviceId,
@@ -1368,6 +1371,7 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
     materialSourceId,
     mountId,
     spoolId,
+    mountOpenedAt,
     toolId: toFiniteNumberOrNull(input.toolId),
     protocolToolAlias: toTrimmedString(input.protocolToolAlias || input.toolAlias) || null,
     order: toFiniteNumberOrNull(input.order),

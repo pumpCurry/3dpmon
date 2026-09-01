@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1627 (PR #440)
+ * @version 1.390.1628 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 07:55:51
+ * @lastModified 2026-09-02 08:07:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -589,6 +589,8 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
  * 【詳細説明】
  * - source-specific debitは「mountを開いた後、印刷開始までに同じslotが入れ替わっていない」ことも
  *   必要なため、print-start受信時刻だけを下限にしない。
+ * - mount open時刻はtrusted snapshotのtop-level署名対象`mountOpenedAt`だけを使い、
+ *   nested `spoolMount.openedAt` の後付け改変で検査下限を後ろへずらさない。
  * - 将来operator再確認を許可する場合は、typed durable eventで証明された時刻だけを
  *   別関数で導出する。現時点ではimportされた任意fieldで検査下限を後ろへずらさない。
  * - print-startより後の候補はcompletion側の別検査範囲になるため、ここでは下限として採用しない。
@@ -605,9 +607,7 @@ function resolveMaterialSourceContinuityStartedAt(snapshot) {
     return null;
   }
   const candidates = [
-    snapshot?.spoolMount?.openedAt,
-    snapshot?.mount?.openedAt,
-    snapshot?.openedAt,
+    snapshot?.mountOpenedAt,
   ];
   const validCandidates = candidates
     .map(normalizeObservedTime)

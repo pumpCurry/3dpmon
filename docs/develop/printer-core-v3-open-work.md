@@ -182,6 +182,10 @@ source-aware mountとして扱わない。
   完了履歴が `printStore.history` に入った後で `recordObservedPrintCompletion()` へ接続し、
   成功後はpendingを削除する。transport送信失敗時はcommand ID付きでpendingを破棄する。
   saved trusted print-start snapshotには `issuanceEvidence` としてdevice/session/generation/job/timeを残す。
+  mount continuityの下限に使うSpoolMount開始時刻は、nested `spoolMount.openedAt` ではなく
+  top-levelの `mountOpenedAt` として保存し、trusted snapshot signatureへ含める。
+  nested `spoolMount` / `materialSource` はdiagnostic evidenceであり、後付け改変でdebit continuity
+  windowを後ろへずらすauthorityにはしない。
   print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。
