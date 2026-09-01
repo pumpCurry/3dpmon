@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1610 (PR #440)
+ * @version 1.390.1612 (PR #440)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-09-01 22:24:00
+ * @lastModified 2026-09-01 23:09:20
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -1406,19 +1406,24 @@ function summarizePrinterStatusPayload(statusPayload) {
   const printFileName = toNonEmptyString(statusPayload?.printFileName) ||
     toNonEmptyString(statusPayload?.fileName);
   const printId = toNonEmptyString(statusPayload?.printId);
-  const active = state !== 0 ||
-    deviceState !== 0 ||
+  const hasCoreState = state !== null && deviceState !== null;
+  const active = (state !== null && state !== 0) ||
+    (deviceState !== null && deviceState !== 0) ||
     (printJobTime !== null && printJobTime > 0) ||
     (printLeftTime !== null && printLeftTime > 0) ||
     (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
     (targetBedTemp0 !== null && targetBedTemp0 > 0);
-  const hasCoreState = state !== null && deviceState !== null;
+  const activityState = hasCoreState
+    ? (active ? "active" : "idle")
+    : (active ? "active-without-core-state" : "unknown-core-state");
   const observedScalarKeys = Object.keys(statusPayload || {}).sort();
   return {
     observed: true,
     complete: hasCoreState,
     idle: hasCoreState && !active,
     active,
+    activityState,
+    coreStateComplete: hasCoreState,
     state,
     deviceState,
     printProgress,

@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1610 (PR #440)
+ * @version 1.390.1612 (PR #440)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-09-01 22:24:00
+ * @lastModified 2026-09-01 23:09:20
  */
 
 import { EventEmitter } from "node:events";
@@ -653,7 +653,9 @@ describe("capture_k2_cfs_slot_control", () => {
         summary: {
           complete: false,
           idle: false,
-          active: true,
+          active: false,
+          activityState: "unknown-core-state",
+          coreStateComplete: false,
           state: null,
           deviceState: null,
         },
@@ -1525,7 +1527,9 @@ describe("capture_k2_cfs_slot_control", () => {
         observed: true,
         complete: false,
         idle: false,
-        active: true,
+        active: false,
+        activityState: "unknown-core-state",
+        coreStateComplete: false,
         state: null,
         deviceState: null,
         bedTemp0: 28.1,
