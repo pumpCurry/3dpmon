@@ -15,7 +15,7 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountService}：SpoolMount serviceを生成
  *
- * @version 1.390.1576 (PR #440)
+ * @version 1.390.1578 (PR #440)
  * @since   1.390.1576 (PR #440)
  * @lastModified 2026-09-01 13:22:00
  * -----------------------------------------------------------
@@ -34,9 +34,9 @@ import {
 } from "./dashboard_material_accounting_contract.js";
 import {
   createPrinterCoreV3DeterministicId,
-  stableStringifyPrinterCoreV3Value,
 } from "./dashboard_data_schema_v3.js";
 import {
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
   createMaterialAccountingSpoolMountStoreDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "./dashboard_material_accounting_mount_store.js";
@@ -134,10 +134,7 @@ function createServiceResult({
  * @returns {string} payload digest。
  */
 function createOperationPayloadDigest(payload) {
-  return `fnv1a128:${createPrinterCoreV3DeterministicId(
-    "material-accounting-spool-mount-operation-payload",
-    [stableStringifyPrinterCoreV3Value(payload)]
-  )}`;
+  return createMaterialAccountingSpoolMountOperationPayloadDigest(payload);
 }
 
 /**
@@ -150,6 +147,7 @@ function createOperationPayloadDigest(payload) {
  * @param {string} input.operatorActionId - operator action ID。
  * @param {string} input.operationId - operation ID。
  * @param {Object} input.payload - semantic payload。
+ * @param {Array<string>=} input.recordRefs - eventが参照するmount/operation ID。
  * @param {string} input.createdAt - 作成日時。
  * @param {string=} input.actor - actor。
  * @returns {Object} operation event。
@@ -172,6 +170,9 @@ function createOperationEvent(input = {}) {
     operationId,
     payloadDigest,
     payload,
+    recordRefs: Array.isArray(input.recordRefs)
+      ? input.recordRefs.map((ref) => toTrimmedString(ref)).filter(Boolean)
+      : [],
     createdAt: toTrimmedString(input.createdAt),
     actor: toTrimmedString(input.actor) || null,
   });
@@ -533,6 +534,7 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       operatorActionId,
       operationId,
       payload,
+      recordRefs: [mount.mountId, mount.mountOperationId],
       createdAt,
       actor: request.actor,
     });
@@ -609,6 +611,7 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       operatorActionId,
       operationId,
       payload,
+      recordRefs: [expectedMountId, operationId],
       createdAt,
       actor: request.actor,
     });
@@ -704,6 +707,7 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     if (!closeResult.ok) {
       return createServiceResult({ ok: false, action: "replace", reason: getRepositoryConflictReason(closeResult), store: currentStore, record: currentMount });
     }
+    const replaceCloseOperationId = closeResult.record.closeOperationId;
     const newMountOperationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
       "replace-open",
       replaceOperationId,
@@ -741,6 +745,12 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       operatorActionId,
       operationId: replaceOperationId,
       payload,
+      recordRefs: [
+        expectedOldMountId,
+        replaceCloseOperationId,
+        newMount.mountId,
+        newMount.mountOperationId,
+      ],
       createdAt,
       actor: request.actor,
     });

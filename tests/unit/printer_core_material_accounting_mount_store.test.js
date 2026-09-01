@@ -15,7 +15,7 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1575 (PR #440)
+ * @version 1.390.1578 (PR #440)
  * @since   1.390.1575 (PR #440)
  * @lastModified 2026-09-01 11:42:00
  * -----------------------------------------------------------
@@ -35,6 +35,7 @@ import {
   MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
   MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
   createMaterialAccountingSpoolMountStoreDigest,
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
 
@@ -56,6 +57,33 @@ function createMount(overrides = {}) {
     sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
     ...overrides,
   });
+}
+
+/**
+ * テスト用operation eventを生成する。
+ *
+ * @function createEvent
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} operation event。
+ */
+function createEvent(overrides = {}) {
+  const payload = overrides.payload || {
+    kind: "operator-mount",
+    operatorActionId: "action:mount:1",
+    materialSourceId: "material-source:k2:1a",
+    spoolId: "spool:silver-pla",
+  };
+  return {
+    eventId: overrides.eventId || "event:mount:1",
+    kind: overrides.kind || "operator-mount",
+    operatorActionId: overrides.operatorActionId || "action:mount:1",
+    operationId: overrides.operationId || "mount-op:001",
+    payloadDigest: overrides.payloadDigest || createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    payload,
+    recordRefs: overrides.recordRefs || ["mount-op:001"],
+    createdAt: overrides.createdAt || "2026-09-01T00:00:00.000Z",
+    actor: overrides.actor || "operator",
+  };
 }
 
 describe("MaterialAccountingSpoolMountStore", () => {
@@ -93,7 +121,7 @@ describe("MaterialAccountingSpoolMountStore", () => {
       storeRevision: 12,
       storeDigest: "tampered",
       spoolMounts: [mount],
-      events: [{ eventId: "event:mount:1", operationId: mount.mountOperationId, kind: "operator-mount" }],
+      events: [createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] })],
     };
 
     const store = normalizeStoredMaterialAccountingSpoolMountStore(stored);
@@ -103,6 +131,78 @@ describe("MaterialAccountingSpoolMountStore", () => {
     expect(store.events).toEqual(stored.events);
     expect(store.storeDigest).toBe(createMaterialAccountingSpoolMountStoreDigest(store));
     expect(store.storeDigest).not.toBe("tampered");
+  });
+
+  it("invalid eventはoperation index authorityに残さずretainedUnsupportedEntriesへ隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] }),
+        { eventId: "event:bad", kind: "operator-mount", payloadDigest: "tampered" },
+      ],
+    });
+
+    expect(store.events).toHaveLength(1);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: expect.stringContaining("invalid") }),
+    ]));
+  });
+
+  it("orphan event recordRefはactive eventから隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({
+          eventId: "event:orphan",
+          operationId: "mount-op:orphan",
+          recordRefs: ["mount-op:orphan"],
+        }),
+      ],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: "orphan-event-record-ref" }),
+    ]));
+  });
+
+  it("同じeventIdでpayload差異がある場合はfirst-winせず双方を隔離する", () => {
+    const mount = createMount();
+    const first = createEvent({
+      eventId: "event:duplicate",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+    });
+    const second = createEvent({
+      eventId: "event:duplicate",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+      payload: {
+        kind: "operator-mount",
+        operatorActionId: "action:mount:1",
+        materialSourceId: "material-source:k2:1a",
+        spoolId: "spool:changed",
+      },
+    });
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [first, second],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "event-id-payload-conflict",
+        reason: "same-event-id-different-payload",
+      }),
+    ]));
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", record: first }),
+      expect.objectContaining({ kind: "event", record: second }),
+    ]));
   });
 
   it("invalid mount recordはactive authorityから外しretainedUnsupportedEntriesへ隔離する", () => {

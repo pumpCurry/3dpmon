@@ -16,9 +16,10 @@
  * - {@link createEmptyMaterialAccountingSpoolMountStore}：空のSpoolMount storeを生成
  * - {@link normalizeStoredMaterialAccountingSpoolMountStore}：保存済みstoreを安全なshapeへ正規化
  * - {@link createMaterialAccountingSpoolMountStoreDigest}：store digestを生成
+ * - {@link createMaterialAccountingSpoolMountOperationPayloadDigest}：operation payload digestを生成
  * - {@link createMaterialAccountingSpoolMountStoreSnapshot}：store snapshotを生成
  *
- * @version 1.390.1575 (PR #440)
+ * @version 1.390.1578 (PR #440)
  * @since   1.390.1575 (PR #440)
  * @lastModified 2026-09-01 13:16:00
  * -----------------------------------------------------------
@@ -214,6 +215,26 @@ function createDigestInput(store) {
 }
 
 /**
+ * operation payload digestを生成する。
+ *
+ * 【詳細説明】
+ * - service層とstore復元層で同じpayload意味判定を使うため、store module側に集約する。
+ * - `operatorActionId`の同一payload再送と異payloadconflictの判定材料として使う。
+ *
+ * @function createMaterialAccountingSpoolMountOperationPayloadDigest
+ * @param {Object} payload - operation payload。
+ * @returns {string} payload digest。
+ * @example
+ * const digest = createMaterialAccountingSpoolMountOperationPayloadDigest(payload);
+ */
+export function createMaterialAccountingSpoolMountOperationPayloadDigest(payload) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(
+    "material-accounting-spool-mount-operation-payload",
+    [stableStringifyPrinterCoreV3Value(cloneJsonValue(payload || {}))]
+  )}`;
+}
+
+/**
  * MaterialAccounting SpoolMount store digestを生成する。
  *
  * 【詳細説明】
@@ -341,6 +362,166 @@ function normalizeSpoolMounts(candidates) {
 }
 
 /**
+ * store eventの参照可能record ID集合を生成する。
+ *
+ * @private
+ * @function createRecordRefSet
+ * @param {Array<Object>} mounts - active mount配列。
+ * @returns {Set<string>} eventから参照可能なID集合。
+ */
+function createRecordRefSet(mounts) {
+  const refs = new Set();
+  for (const mount of mounts || []) {
+    for (const value of [
+      mount.mountId,
+      mount.mountOperationId,
+      mount.closeOperationId,
+    ]) {
+      const text = toTrimmedString(value);
+      if (text) {
+        refs.add(text);
+      }
+    }
+  }
+  return refs;
+}
+
+/**
+ * operation eventのvalidation errorを取得する。
+ *
+ * @private
+ * @function validateOperationEvent
+ * @param {Object} event - event候補。
+ * @param {Set<string>} recordRefs - 参照可能record ID集合。
+ * @returns {Array<string>} validation error配列。
+ */
+function validateOperationEvent(event, recordRefs) {
+  const errors = [];
+  if (!event || typeof event !== "object") {
+    return ["event-not-object"];
+  }
+  for (const key of ["eventId", "kind", "operatorActionId", "operationId", "payloadDigest"]) {
+    if (!toTrimmedString(event[key])) {
+      errors.push(`missing-${key}`);
+    }
+  }
+  const payloadDigest = createMaterialAccountingSpoolMountOperationPayloadDigest(event.payload || {});
+  if (toTrimmedString(event.payloadDigest) && event.payloadDigest !== payloadDigest) {
+    errors.push("payload-digest-mismatch");
+  }
+  if (Array.isArray(event.recordRefs) && event.recordRefs.length > 0) {
+    const hasOrphanRef = event.recordRefs
+      .map((ref) => toTrimmedString(ref))
+      .filter(Boolean)
+      .some((ref) => !recordRefs.has(ref));
+    if (hasOrphanRef) {
+      errors.push("orphan-event-record-ref");
+    }
+  }
+  return errors;
+}
+
+/**
+ * operation event conflict recordを生成する。
+ *
+ * @private
+ * @function createEventConflict
+ * @param {Object} input - conflict入力。
+ * @param {string} input.type - conflict種別。
+ * @param {string} input.reason - conflict理由。
+ * @param {Object} input.existingEvent - 既存event。
+ * @param {Object} input.candidateEvent - 候補event。
+ * @returns {Object} event conflict record。
+ */
+function createEventConflict({ type, reason, existingEvent, candidateEvent }) {
+  return {
+    type,
+    reason,
+    existingEventId: existingEvent.eventId,
+    candidateEventId: candidateEvent.eventId,
+    operationId: candidateEvent.operationId || null,
+    operatorActionId: candidateEvent.operatorActionId || null,
+  };
+}
+
+/**
+ * 保存済みoperation event配列をactive eventsとquarantineへ分ける。
+ *
+ * @private
+ * @function normalizeOperationEvents
+ * @param {Array<Object>} candidates - 保存済みevent候補。
+ * @param {Array<Object>} mounts - active mount配列。
+ * @returns {{events:Array<Object>, conflicts:Array<Object>, retainedUnsupportedEntries:Array<Object>}} 正規化結果。
+ */
+function normalizeOperationEvents(candidates, mounts) {
+  const recordRefs = createRecordRefSet(mounts);
+  const acceptedById = new Map();
+  const acceptedOrder = [];
+  const conflicts = [];
+  const retainedUnsupportedEntries = [];
+  const quarantineIds = new Set();
+
+  for (const candidate of candidates) {
+    const errors = validateOperationEvent(candidate, recordRefs);
+    if (errors.length > 0) {
+      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+        kind: "event",
+        reason: errors.includes("orphan-event-record-ref")
+          ? "orphan-event-record-ref"
+          : `invalid:${errors.join(",")}`,
+        record: candidate,
+      }));
+      continue;
+    }
+
+    const event = cloneJsonValue(candidate);
+    const existing = acceptedById.get(event.eventId);
+    if (existing) {
+      if (stableStringifyPrinterCoreV3Value(existing) === stableStringifyPrinterCoreV3Value(event)) {
+        continue;
+      }
+      conflicts.push(createEventConflict({
+        type: "event-id-payload-conflict",
+        reason: "same-event-id-different-payload",
+        existingEvent: existing,
+        candidateEvent: event,
+      }));
+      quarantineIds.add(existing.eventId);
+      quarantineIds.add(event.eventId);
+      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+        kind: "event",
+        reason: "same-event-id-different-payload",
+        record: event,
+      }));
+      continue;
+    }
+
+    acceptedById.set(event.eventId, event);
+    acceptedOrder.push(event.eventId);
+  }
+
+  for (const id of quarantineIds) {
+    const accepted = acceptedById.get(id);
+    if (accepted) {
+      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+        kind: "event",
+        reason: "same-event-id-different-payload",
+        record: accepted,
+      }));
+    }
+  }
+
+  return {
+    events: acceptedOrder
+      .filter((id) => !quarantineIds.has(id))
+      .map((id) => acceptedById.get(id))
+      .filter(Boolean),
+    conflicts,
+    retainedUnsupportedEntries,
+  };
+}
+
+/**
  * 保存済みMaterialAccounting SpoolMount storeを正規化する。
  *
  * 【詳細説明】
@@ -357,20 +538,23 @@ function normalizeSpoolMounts(candidates) {
 export function normalizeStoredMaterialAccountingSpoolMountStore(stored) {
   const input = stored && typeof stored === "object" ? stored : {};
   const normalizedMounts = normalizeSpoolMounts(normalizeArray(input.spoolMounts));
+  const normalizedEvents = normalizeOperationEvents(normalizeArray(input.events), normalizedMounts.spoolMounts);
   const base = {
     schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
     authority: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
     storeRevision: normalizeNonNegativeInteger(input.storeRevision, 0),
     storeDigest: "",
     spoolMounts: normalizedMounts.spoolMounts,
-    events: normalizeArray(input.events),
+    events: normalizedEvents.events,
     conflicts: [
       ...normalizeArray(input.conflicts),
       ...normalizedMounts.conflicts,
+      ...normalizedEvents.conflicts,
     ],
     retainedUnsupportedEntries: [
       ...normalizeArray(input.retainedUnsupportedEntries),
       ...normalizedMounts.retainedUnsupportedEntries,
+      ...normalizedEvents.retainedUnsupportedEntries,
     ],
     invariants: { ...MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_INVARIANTS },
   };
