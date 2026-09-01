@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1554 (PR #439)
+ * @version 1.390.1610 (PR #440)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-08-31 20:08:31
+ * @lastModified 2026-09-01 22:24:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -139,6 +139,8 @@ const DEFAULT_PRINTER_STATUS_TIMEOUT_MS = 5000;
  *
  * 【詳細説明】
  * - `state`/`deviceState`/時間/target温度を保守的なidle判定に使う。
+ * - 実機ではfull status後に`bedTemp0`/`nozzleTemp`だけのdeltaが続くことがあるため、
+ *   delta-only応答も通信観測証跡として保持できるよう実温度も要求する。
  * - `printProgress`はidle時に0または100のstale値を返し得るため、単独ではactive根拠にしない。
  *
  * @constant {ReadonlyArray<string>}
@@ -152,6 +154,8 @@ const PRINTER_STATUS_KEYS = Object.freeze([
   "printFileName",
   "fileName",
   "printId",
+  "nozzleTemp",
+  "bedTemp0",
   "targetNozzleTemp",
   "targetBedTemp0",
 ]);
@@ -1395,6 +1399,8 @@ function summarizePrinterStatusPayload(statusPayload) {
   const printProgress = toFiniteNumberOrNull(statusPayload?.printProgress);
   const printJobTime = toFiniteNumberOrNull(statusPayload?.printJobTime);
   const printLeftTime = toFiniteNumberOrNull(statusPayload?.printLeftTime);
+  const nozzleTemp = toFiniteNumberOrNull(statusPayload?.nozzleTemp);
+  const bedTemp0 = toFiniteNumberOrNull(statusPayload?.bedTemp0);
   const targetNozzleTemp = toFiniteNumberOrNull(statusPayload?.targetNozzleTemp);
   const targetBedTemp0 = toFiniteNumberOrNull(statusPayload?.targetBedTemp0);
   const printFileName = toNonEmptyString(statusPayload?.printFileName) ||
@@ -1407,8 +1413,10 @@ function summarizePrinterStatusPayload(statusPayload) {
     (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
     (targetBedTemp0 !== null && targetBedTemp0 > 0);
   const hasCoreState = state !== null && deviceState !== null;
+  const observedScalarKeys = Object.keys(statusPayload || {}).sort();
   return {
     observed: true,
+    complete: hasCoreState,
     idle: hasCoreState && !active,
     active,
     state,
@@ -1416,10 +1424,13 @@ function summarizePrinterStatusPayload(statusPayload) {
     printProgress,
     printJobTime,
     printLeftTime,
+    nozzleTemp,
+    bedTemp0,
     targetNozzleTemp,
     targetBedTemp0,
     printFileName,
     printId,
+    observedScalarKeys,
   };
 }
 
@@ -1505,13 +1516,14 @@ export function sendPrinterStatusProbeAndWait(ws, options = {}) {
       if (!statusPayload) {
         return;
       }
+      const summary = summarizePrinterStatusPayload(statusPayload);
       settle(resolve, {
-        status: "observed",
+        status: summary.complete === true ? "observed" : "partial",
         probeMode,
         observedAt: new Date().toISOString(),
         elapsedMs: Date.now() - startedAt,
         request,
-        summary: summarizePrinterStatusPayload(statusPayload),
+        summary,
         payload,
       });
     };

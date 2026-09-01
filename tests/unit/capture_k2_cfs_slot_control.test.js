@@ -5,9 +5,9 @@
  * - certification-only planがlive確認なしに送信されないことを検証する。
  * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
  *
- * @version 1.390.1554 (PR #439)
+ * @version 1.390.1610 (PR #440)
  * @since 1.390.1415 (PR #435)
- * @lastModified 2026-08-31 20:06:12
+ * @lastModified 2026-09-01 22:24:00
  */
 
 import { EventEmitter } from "node:events";
@@ -21,6 +21,7 @@ import {
   parseArgs,
   runK2CfsSlotControlCertification,
   sendBoxsInfoProbeAndWait,
+  sendPrinterStatusProbeAndWait,
   summarizeBoxsInfoEvidence,
 } from "../../scripts/capture_k2_cfs_slot_control.mjs";
 
@@ -119,6 +120,8 @@ const PRINTER_STATUS_GET_FRAME = {
     printFileName: 1,
     fileName: 1,
     printId: 1,
+    nozzleTemp: 1,
+    bedTemp0: 1,
     targetNozzleTemp: 1,
     targetBedTemp0: 1,
   },
@@ -587,7 +590,7 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(ws.closed).toBe(true);
   });
 
-  it("--require-printer-idle指定時はnull/空文字のprinter statusをidle根拠にしない", async () => {
+  it("--require-printer-idle指定時はnull/空文字のprinter statusをcompleteなidle根拠にしない", async () => {
     class UnknownPrinterStatusWs extends EventEmitter {
       constructor() {
         super();
@@ -643,11 +646,12 @@ describe("capture_k2_cfs_slot_control", () => {
       sent: false,
       dryRun: false,
       status: "rejected",
-      reason: "pre-command-printer-not-idle",
+      reason: "pre-command-printer-status-observation-failed",
       blindRetryAllowed: false,
       printerStatus: {
-        status: "observed",
+        status: "partial",
         summary: {
+          complete: false,
           idle: false,
           active: true,
           state: null,
@@ -1491,6 +1495,95 @@ describe("capture_k2_cfs_slot_control", () => {
       timeoutMs: 5,
     })).rejects.toThrow("boxsInfo probe timeout");
     expect(timeoutWs.listenerCount("message")).toBe(0);
+  });
+
+  it("printer status probeはdelta-only応答をpartial観測として返しidle証明にはしない", async () => {
+    class DeltaOnlyPrinterStatusWs extends EventEmitter {
+      send(payload, callback) {
+        this.sentPayload = payload;
+        setTimeout(() => {
+          this.emit("message", JSON.stringify({
+            bedTemp0: 28.1,
+            nozzleTemp: 31.4,
+          }));
+          callback();
+        }, 1);
+      }
+    }
+    const ws = new DeltaOnlyPrinterStatusWs();
+
+    const result = await sendPrinterStatusProbeAndWait(ws, {
+      probeMode: "pre-command-printer-status",
+      timeoutMs: 1000,
+    });
+
+    expect(JSON.parse(ws.sentPayload)).toEqual(PRINTER_STATUS_GET_FRAME);
+    expect(result).toMatchObject({
+      status: "partial",
+      probeMode: "pre-command-printer-status",
+      summary: {
+        observed: true,
+        complete: false,
+        idle: false,
+        active: true,
+        state: null,
+        deviceState: null,
+        bedTemp0: 28.1,
+        nozzleTemp: 31.4,
+      },
+    });
+    expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("pre-command printer statusがdelta-only partialの場合はCFS操作frameを送らない", async () => {
+    class DeltaOnlyPreCommandStatusWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ bedTemp0: 28.1, nozzleTemp: 31.4 }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new DeltaOnlyPreCommandStatusWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-printer-status-observation-failed",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "partial",
+        summary: {
+          complete: false,
+          idle: false,
+        },
+      },
+    });
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
+    expect(ws.closed).toBe(true);
   });
 
   it("--probe-before/after指定時はcommand前後にread-only boxsInfoを観測する", async () => {
