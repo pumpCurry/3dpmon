@@ -26,6 +26,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
+| Gate 18.9I Print Binding Runtime | print-start binding runtime added; observed PrintJob ID and current source-specific OPEN SpoolMounts are required before saving snapshots | runtime tests added | pending | shadow binding only / no managed remaining debit |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -74,6 +75,11 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `deleteSpool()`、`revertInferredSpool()`、`updateSpool()`の削除/ID変更patchからも破壊できない。
   また、`inferred:true` / `isPending:true` の未確定スプールはH-2候補とservice/runtimeで拒否し、
   先にユーザー確認で実スプール化してからMaterialSourceへ割り当てる。
+- Gate 18.9I-1では、runtimeからprint-start binding repositoryを呼び出し、
+  実機で観測した `printJobId` とprint-start時点で現在 `OPEN` なsource別
+  SpoolMountが揃う場合だけ `materialAccountingPrintBindingStore` へsnapshotを保存する。
+  この段階ではcompletion usage observation、managed spool残量debit、
+  legacy `usageHistory`、ItemKeeper projectionへはまだ接続しない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。

@@ -353,6 +353,8 @@ Gate 18.9H-2 follow-up:
 Gate 18.9I-1:
 
 - runtime print-start から PrintPlan + production SpoolMount snapshot を保存する。
+  実機で観測した `printJobId` が無い場合は保存せず、現在 `OPEN` な
+  source別SpoolMountが揃わない場合もblockedにする。
 - completion observation を JobMaterialSegment / shadow ledger event へ接続する。
 - managed remaining はまだ減らさない。
 
