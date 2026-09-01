@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1602 (PR #440)
+ * @version 1.390.1603 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:27:00
+ * @lastModified 2026-09-01 21:31:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -317,6 +317,65 @@ describe("MaterialSourceObservationStore", () => {
     expect(first.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
     expect(second.record.latestBySourceId["cfs:1:slot:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
     expect(second.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:05:00.000Z");
+  });
+
+  it("source別event log trimでは該当sourceのcoverage開始だけをsource最古retained eventへ前進させる", () => {
+    const topology = createTopology();
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 10,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology,
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 8, maxEventsPerDevice: 8 },
+    });
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 11,
+      observedAt: "2026-08-27T12:01:00.000Z",
+      topology: createTopology({
+        sources: topology.sources.map((source) => source.sourceId === "cfs:1:slot:2"
+          ? { ...source, material: { ...source.material, name: "Generic PLA-Silk updated" } }
+          : source),
+      }),
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 8, maxEventsPerDevice: 8 },
+    });
+    const trimmed = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 12,
+      observedAt: "2026-08-27T12:02:00.000Z",
+      topology: createTopology({
+        sources: topology.sources.map((source) => source.sourceId === "cfs:1:slot:2"
+          ? { ...source, status: { ...source.status, selected: false } }
+          : source),
+        assignments: [],
+      }),
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 1, maxEventsPerDevice: 8 },
+    });
+
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageTrimmedAt).toBeNull();
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:02:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:02:00.000Z");
   });
 
   it("provisional deviceの履歴はstable deviceへ安全にrekeyでき、conflict中はmergeしない", () => {

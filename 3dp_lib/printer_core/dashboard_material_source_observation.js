@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1602 (PR #440)
+ * @version 1.390.1603 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:27:00
+ * @lastModified 2026-09-01 21:31:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -763,14 +763,15 @@ function createSourceSnapshot(options) {
  * @private
  * @function advanceSourceEventCoverageStarts
  * @param {Object} record - device観測レコード。
- * @param {string|null} retainedFromAt - trim後に保持されている最古event時刻。
+ * @param {string|null} retainedFromAt - device全体のcoverageが前進した場合の最古event時刻。
+ * @param {Map<string,string|null>=} retainedFromBySourceId - source別trim後の最古event時刻。
  * @returns {void}
  */
-function advanceSourceEventCoverageStarts(record, retainedFromAt) {
+function advanceSourceEventCoverageStarts(record, retainedFromAt, retainedFromBySourceId = new Map()) {
   if (!record?.latestBySourceId || typeof record.latestBySourceId !== "object") {
     return;
   }
-  for (const snapshot of Object.values(record.latestBySourceId)) {
+  for (const [sourceId, snapshot] of Object.entries(record.latestBySourceId)) {
     if (!snapshot || typeof snapshot !== "object") {
       continue;
     }
@@ -778,13 +779,67 @@ function advanceSourceEventCoverageStarts(record, retainedFromAt) {
       snapshot.eventCoverageStartedAt,
       retainedFromAt
     );
-    if (retainedFromAt) {
+    snapshot.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+      snapshot.eventCoverageStartedAt,
+      retainedFromBySourceId.get(sourceId)
+    );
+    const sourceRetainedFromAt = retainedFromBySourceId.get(sourceId);
+    const trimmedAt = pickLaterIsoDateTimeString(retainedFromAt, sourceRetainedFromAt);
+    if (trimmedAt) {
       snapshot.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
         snapshot.eventCoverageTrimmedAt,
-        retainedFromAt
+        trimmedAt
       );
     }
   }
+}
+
+/**
+ * source別trimでcoverage開始へ反映すべきsource単位の保持先頭を計算する。
+ *
+ * 【詳細説明】
+ * - `maxEventsPerSource`で特定sourceの古いeventだけが落ちた場合、device全体の最古eventを
+ *   そのsourceのcoverage開始として使うと、落ちたsource eventの区間を観測済みと誤認する。
+ * - source別にeventが削られた場合だけ、そのsourceの最古retained eventへcoverageを前進させる。
+ *
+ * @private
+ * @function createRetainedEventCoverageBySourceId
+ * @param {Object[]} originalEvents - trim前のevent配列。
+ * @param {Object[]} retainedEvents - trim後に保持するevent配列。
+ * @param {string|null} fallbackAt - source eventが全て落ちた場合に使う保守的時刻。
+ * @returns {Map<string,string|null>} source ID別coverage開始時刻。
+ */
+function createRetainedEventCoverageBySourceId(originalEvents, retainedEvents, fallbackAt) {
+  const originalCounts = new Map();
+  const retainedCounts = new Map();
+  const retainedFirstObservedAt = new Map();
+  for (const event of Array.isArray(originalEvents) ? originalEvents : []) {
+    const sourceId = toNullableString(event?.sourceId);
+    if (!sourceId) {
+      continue;
+    }
+    originalCounts.set(sourceId, (originalCounts.get(sourceId) || 0) + 1);
+  }
+  for (const event of Array.isArray(retainedEvents) ? retainedEvents : []) {
+    const sourceId = toNullableString(event?.sourceId);
+    if (!sourceId) {
+      continue;
+    }
+    retainedCounts.set(sourceId, (retainedCounts.get(sourceId) || 0) + 1);
+    const observedAt = normalizeOptionalIsoDateTimeString(event?.observedAt);
+    if (observedAt && !retainedFirstObservedAt.has(sourceId)) {
+      retainedFirstObservedAt.set(sourceId, observedAt);
+    }
+  }
+  const coverageBySourceId = new Map();
+  for (const [sourceId, originalCount] of originalCounts.entries()) {
+    const retainedCount = retainedCounts.get(sourceId) || 0;
+    if (retainedCount >= originalCount) {
+      continue;
+    }
+    coverageBySourceId.set(sourceId, retainedFirstObservedAt.get(sourceId) || fallbackAt || null);
+  }
+  return coverageBySourceId;
 }
 
 /**
@@ -900,11 +955,12 @@ function createSourceChangeEvent(options) {
 function trimDeviceEvents(record, limits) {
   const maxPerSource = Math.max(1, Math.floor(toFiniteNumber(limits?.maxEventsPerSource, DEFAULT_MAX_EVENTS_PER_SOURCE) ?? DEFAULT_MAX_EVENTS_PER_SOURCE));
   const maxPerDevice = Math.max(1, Math.floor(toFiniteNumber(limits?.maxEventsPerDevice, DEFAULT_MAX_EVENTS_PER_DEVICE) ?? DEFAULT_MAX_EVENTS_PER_DEVICE));
-  const originalLength = Array.isArray(record.events) ? record.events.length : 0;
+  const originalEvents = Array.isArray(record.events) ? record.events : [];
+  const originalLength = originalEvents.length;
   const sourceCounts = new Map();
   const keepBySource = [];
-  for (let index = record.events.length - 1; index >= 0; index -= 1) {
-    const event = record.events[index];
+  for (let index = originalEvents.length - 1; index >= 0; index -= 1) {
+    const event = originalEvents[index];
     const sourceId = event?.sourceId || "__device__";
     const count = sourceCounts.get(sourceId) || 0;
     if (count < maxPerSource) {
@@ -915,13 +971,24 @@ function trimDeviceEvents(record, limits) {
   keepBySource.reverse();
   const retainedEvents = keepBySource.slice(Math.max(0, keepBySource.length - maxPerDevice));
   if (retainedEvents.length !== originalLength) {
+    const previousEventCoverageStartedAt = normalizeOptionalIsoDateTimeString(record.eventCoverageStartedAt);
     const retainedObservedAt = retainedEvents
-      .map((event) => toIsoDateTimeString(event?.observedAt))
+      .map((event) => normalizeOptionalIsoDateTimeString(event?.observedAt))
       .filter(Boolean)
       .sort((a, b) => Date.parse(a) - Date.parse(b));
     record.eventCoverageStartedAt = retainedObservedAt[0] || record.lastObservedAt || null;
     record.eventCoverageTrimmedAt = record.lastObservedAt || null;
-    advanceSourceEventCoverageStarts(record, record.eventCoverageStartedAt);
+    const globalRetainedFromAt = pickLaterIsoDateTimeString(
+      previousEventCoverageStartedAt,
+      record.eventCoverageStartedAt
+    ) !== previousEventCoverageStartedAt
+      ? record.eventCoverageStartedAt
+      : null;
+    advanceSourceEventCoverageStarts(
+      record,
+      globalRetainedFromAt,
+      createRetainedEventCoverageBySourceId(originalEvents, retainedEvents, record.lastObservedAt || record.eventCoverageStartedAt || null)
+    );
   }
   record.events = retainedEvents;
 }
