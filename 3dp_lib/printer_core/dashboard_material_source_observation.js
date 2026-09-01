@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1603 (PR #440)
+ * @version 1.390.1606 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:31:00
+ * @lastModified 2026-09-01 21:55:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -827,7 +827,8 @@ function createRetainedEventCoverageBySourceId(originalEvents, retainedEvents, f
     }
     retainedCounts.set(sourceId, (retainedCounts.get(sourceId) || 0) + 1);
     const observedAt = normalizeOptionalIsoDateTimeString(event?.observedAt);
-    if (observedAt && !retainedFirstObservedAt.has(sourceId)) {
+    const previousObservedAt = retainedFirstObservedAt.get(sourceId);
+    if (observedAt && (!previousObservedAt || Date.parse(observedAt) < Date.parse(previousObservedAt))) {
       retainedFirstObservedAt.set(sourceId, observedAt);
     }
   }
