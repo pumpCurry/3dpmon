@@ -164,6 +164,10 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `printJobTime` / `printLeftTime` / target温度を確認する。プリンタ本体が印刷/加熱/前ジョブ残存を示す場合は、
   `pre-command-printer-not-idle` としてCFS操作frameを送らない。
   `null`、空文字、空白文字、未観測値はJavaScriptの暗黙変換で0にせず、idle根拠としては扱わない。
+  UI/dispatcher側でも同じ境界を持ち、`stateLabel:"idle"` が残っていても、send-time観測が
+  `snapshotCompleteness:"partial"`、`statusProbeStatus:"partial"`、`activityState:"unknown-core-state"`、
+  または `coreStateComplete:false` を明示する場合は `cfs-control-printer-idle-observation-incomplete` として拒否する。
+  これはdelta-only/timeout後に古いidle表示だけでphysical CFS commandを送らないためのGate19 idle predicateである。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。

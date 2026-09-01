@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1566 (PR #439)
+ * @version 1.390.1617 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:24:10
+ * @lastModified 2026-09-01 23:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -849,6 +849,56 @@ describe("dashboard_cfs_certification_panel", () => {
     });
     expect(viewModel.liveSend.enabled).toBe(false);
     expect(viewModel.liveSend.reason).toBe("preflight-failed:printer-idle");
+  });
+
+  it("printer stateがidleでもpartial/unknown-core-state観測ならLIVE不可理由として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+        statusProbeStatus: "partial",
+        printActivityState: "unknown-core-state",
+        coreStateComplete: false,
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    const printerIdle = viewModel.preflight.find((item) => item.key === "printer-idle");
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(printerIdle).toMatchObject({
+      state: "fail",
+      detail: "idle未証明: partial / unknown-core-state",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:printer-idle");
+    expect(container.textContent).toContain("idle未証明: partial / unknown-core-state");
   });
 
   it("認証未完了はpreflight項目名ではなくcertification-uncertifiedとしてLIVE不可理由にする", () => {

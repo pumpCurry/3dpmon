@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1560 (PR #439)
+ * @version 1.390.1617 (PR #440)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-09-01 23:59:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -1044,6 +1044,51 @@ function hasExplicitSafeCfsIdleLabel(activityLabels) {
 }
 
 /**
+ * CFS物理操作前のprinter idle観測が完全かを判定する。
+ *
+ * 【詳細説明】
+ * - `idle` ラベルが前回snapshotから残っていても、今回のsend-time観測がpartialやdelta-onlyであれば
+ *   物理操作可能なidle証明には使わない。
+ * - 明示的な不完全メタが無い既存contextは後方互換として許可し、Gate 19のprobeが渡す
+ *   `snapshotCompleteness` / `activityState` / `coreStateComplete` を見つけた場合だけ厳格化する。
+ *
+ * @private
+ * @function hasIncompleteCfsPrinterIdleObservation
+ * @param {object|null|undefined} observedState - send-time observed state
+ * @returns {boolean} idle観測が不完全と明示されている場合true
+ */
+function hasIncompleteCfsPrinterIdleObservation(observedState) {
+  if (!observedState || typeof observedState !== "object") {
+    return false;
+  }
+  const completenessCandidates = [
+    getPathValue(observedState, "source.snapshotCompleteness"),
+    getPathValue(observedState, "source.completeness"),
+    getPathValue(observedState, "print.snapshotCompleteness"),
+    getPathValue(observedState, "print.completeness"),
+    getPathValue(observedState, "status.snapshotCompleteness"),
+    getPathValue(observedState, "status.completeness"),
+  ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
+  if (completenessCandidates.includes("partial")) {
+    return true;
+  }
+  const activityCandidates = [
+    getPathValue(observedState, "print.activityState"),
+    getPathValue(observedState, "device.activityState"),
+    getPathValue(observedState, "status.activityState"),
+  ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
+  if (activityCandidates.includes("unknown-core-state") || activityCandidates.includes("active-without-core-state")) {
+    return true;
+  }
+  return [
+    getPathValue(observedState, "print.coreStateComplete"),
+    getPathValue(observedState, "device.coreStateComplete"),
+    getPathValue(observedState, "status.coreStateComplete"),
+    getPathValue(observedState, "source.coreStateComplete"),
+  ].some((value) => value === false);
+}
+
+/**
  * CFS物理操作対象として選択証跡を要求するsourceか判定する。
  *
  * 【詳細説明】
@@ -1078,6 +1123,9 @@ function collectCfsSendTimeErrors(request, context) {
   const activityLabels = collectPrinterActivityLabels(context.observedState);
   if (["printing", "paused", "busy", "heating", "checking", "running"].some((label) => activityLabels.has(label))) {
     errors.push("cfs-control-printer-busy");
+  }
+  if (hasIncompleteCfsPrinterIdleObservation(context.observedState)) {
+    errors.push("cfs-control-printer-idle-observation-incomplete");
   }
   if (!hasExplicitSafeCfsIdleLabel(activityLabels)) {
     errors.push("cfs-control-printer-idle-not-confirmed");

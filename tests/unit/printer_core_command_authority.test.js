@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1560 (PR #439)
+ * @version 1.390.1617 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-09-01 23:58:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -681,6 +681,51 @@ describe("Printer Core v3 command authority contract", () => {
     expect(completedStateResult.status).toBe("rejected");
     expect(completedStateResult.error.errors).toContain("cfs-control-printer-idle-not-confirmed");
     expect(completedStateTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはidle表示でもpartial printer statusなら送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const partialStatusTransport = vi.fn();
+    const unknownCoreStateTransport = vi.fn();
+    const partialStatusResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          source: {
+            snapshotCompleteness: "partial",
+          },
+          print: {
+            stateLabel: "idle",
+          },
+        },
+      }),
+      sendTransport: partialStatusTransport,
+    });
+    const unknownCoreStateResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          print: {
+            stateLabel: "idle",
+            activityState: "unknown-core-state",
+            coreStateComplete: false,
+          },
+        },
+      }),
+      sendTransport: unknownCoreStateTransport,
+    });
+
+    expect(partialStatusResult.status).toBe("rejected");
+    expect(partialStatusResult.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(partialStatusTransport).not.toHaveBeenCalled();
+    expect(unknownCoreStateResult.status).toBe("rejected");
+    expect(unknownCoreStateResult.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(unknownCoreStateTransport).not.toHaveBeenCalled();
   });
 
   it("CFS physical commandはtargetが選択済みと確認できなければ送信しない", async () => {

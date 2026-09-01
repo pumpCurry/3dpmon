@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1566 (PR #439)
+ * @version 1.390.1617 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:24:10
+ * @lastModified 2026-09-01 23:59:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -308,6 +308,54 @@ function createSelectionEvidencePreflightDetail(materialViewModel) {
 }
 
 /**
+ * printer idle preflightの詳細を生成する。
+ *
+ * 【詳細説明】
+ * - `idle` という表示ラベルがあっても、Gate 19のread-only probeがpartial / unknown-core-stateを示す場合は
+ *   物理操作可能なidle証明として扱わない。
+ * - 未観測はwarnとして残し、`createLiveSendReadiness()` 側で selected-source 以外のwarnをhard blockする。
+ *
+ * @private
+ * @function createPrinterIdlePreflightDetail
+ * @param {object|null|undefined} printer - printer/session情報
+ * @returns {{state:string, detail:string}} preflight表示
+ */
+function createPrinterIdlePreflightDetail(printer) {
+  const printerState = toText(printer?.printState || printer?.state, "");
+  const probeStatus = toText(printer?.statusProbeStatus || printer?.printStatusProbeStatus, "");
+  const activityState = toText(printer?.printActivityState || printer?.activityState, "");
+  const incompleteReasons = [];
+  if (["partial", "timeout"].includes(probeStatus.toLowerCase())) {
+    incompleteReasons.push(probeStatus.toLowerCase());
+  }
+  if (["unknown-core-state", "active-without-core-state"].includes(activityState.toLowerCase())) {
+    incompleteReasons.push(activityState.toLowerCase());
+  }
+  if (printer?.coreStateComplete === false || printer?.printCoreStateComplete === false) {
+    if (!incompleteReasons.includes("unknown-core-state")) {
+      incompleteReasons.push("unknown-core-state");
+    }
+  }
+  if (incompleteReasons.length > 0) {
+    return {
+      state: "fail",
+      detail: `idle未証明: ${[...new Set(incompleteReasons)].join(" / ")}`,
+    };
+  }
+  if (!printerState) {
+    return {
+      state: "warn",
+      detail: "印刷状態未観測",
+    };
+  }
+  const printerIdle = ["idle", "standby", "ready"].includes(printerState.toLowerCase());
+  return {
+    state: printerIdle ? "ok" : "fail",
+    detail: printerState,
+  };
+}
+
+/**
  * 復旧ラッチblockerを表示用に正規化する。
  *
  * 【詳細説明】
@@ -360,9 +408,7 @@ function normalizeRecoveryBlockerForPanel(recoveryBlocker) {
  */
 function createPreflightItems({ printer, materialViewModel, targetSource, certificationStatus, execution, recoveryBlocker }) {
   const topologyState = toText(materialViewModel?.summary?.topologyState, "unobserved");
-  const printerState = toText(printer?.printState || printer?.state, "");
-  const printerIdleKnown = Boolean(printerState);
-  const printerIdle = ["idle", "standby", "ready", "completed", "complete"].includes(printerState.toLowerCase());
+  const printerIdle = createPrinterIdlePreflightDetail(printer);
   const selectedState = targetSource?.selected === true ? "ok" : "warn";
   const selectionEvidence = createSelectionEvidencePreflightDetail(materialViewModel);
   return [
@@ -381,8 +427,8 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
     {
       key: "printer-idle",
       label: "Printer idle",
-      state: printerIdleKnown ? (printerIdle ? "ok" : "fail") : "warn",
-      detail: printerIdleKnown ? printerState : "印刷状態未観測",
+      state: printerIdle.state,
+      detail: printerIdle.detail,
     },
     {
       key: "target-loaded",
@@ -696,6 +742,9 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     transportKind: toText(options.printer?.transportKind, "ws9999"),
     active: isTrue(options.printer?.active),
     state: toText(options.printer?.state || options.printer?.printState, ""),
+    statusProbeStatus: toText(options.printer?.statusProbeStatus || options.printer?.printStatusProbeStatus, ""),
+    printActivityState: toText(options.printer?.printActivityState || options.printer?.activityState, ""),
+    coreStateComplete: options.printer?.coreStateComplete ?? options.printer?.printCoreStateComplete ?? null,
   };
   const materialViewModel = options.materialViewModel || {};
   const targetSource = resolveTargetSource(materialViewModel, options.targetSource);
