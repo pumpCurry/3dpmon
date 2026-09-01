@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1607 (PR #440)
+ * @version 1.390.1608 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:55:00
+ * @lastModified 2026-09-01 22:07:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -675,6 +675,131 @@ describe("MaterialSourceObservationStore", () => {
       material: { name: "New PLA" },
       selected: true,
       lastObservedAt: "2026-08-27T12:01:00.000Z",
+    });
+  });
+
+  it("明示merge rekeyで既存snapshotを残す場合もcoverage watermarkは両recordの遅い方へ合成する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const baseTopology = createTopology();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-stable",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-stable",
+      sequence: 1,
+      observedAt: "2026-08-27T12:05:00.000Z",
+      topology: createTopology({ sources: [baseTopology.sources[2]] }),
+      snapshotCompleteness: "complete",
+    });
+    recordMaterialTopologyObservation(store, {
+      host: "192.168.54.153",
+      deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      identityStrength: "provisional",
+      sessionId: "session-provisional",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-provisional",
+      sequence: 1,
+      observedAt: "2026-08-27T12:01:00.000Z",
+      topology: createTopology({ sources: [baseTopology.sources[2]] }),
+      snapshotCompleteness: "complete",
+    });
+    const stable = store.byDeviceId["serial:905251280E69E7"];
+    const provisional = store.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"];
+    stable.eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    stable.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    provisional.eventCoverageStartedAt = "2026-08-27T12:08:00.000Z";
+    provisional.eventCoverageTrimmedAt = "2026-08-27T12:08:00.000Z";
+    provisional.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt = "2026-08-27T12:08:00.000Z";
+    provisional.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt = "2026-08-27T12:08:00.000Z";
+
+    const merged = rekeyMaterialSourceObservationDevice(store, {
+      fromDeviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      toDeviceId: "serial:905251280E69E7",
+      observedAt: "2026-08-27T12:09:00.000Z",
+      mergeIfTargetExists: true,
+      identityConflict: false,
+    });
+
+    expect(merged).toMatchObject({
+      accepted: true,
+      reason: "merged",
+      mergedSourceIds: [],
+      skippedSourceIds: ["cfs:1:slot:2"],
+    });
+    expect(merged.record.eventCoverageStartedAt).toBe("2026-08-27T12:08:00.000Z");
+    expect(merged.record.eventCoverageTrimmedAt).toBe("2026-08-27T12:08:00.000Z");
+    expect(merged.record.latestBySourceId["cfs:1:slot:2"].lastObservedAt).toBe("2026-08-27T12:05:00.000Z");
+    expect(merged.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:08:00.000Z");
+    expect(merged.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:08:00.000Z");
+  });
+
+  it("明示merge rekeyでincoming snapshotへ置き換える場合も既存側coverage watermarkを保持する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    const baseTopology = createTopology();
+    const oldSource = {
+      ...baseTopology.sources[2],
+      material: { ...baseTopology.sources[2].material, name: "Old PLA" },
+    };
+    const newSource = {
+      ...baseTopology.sources[2],
+      material: { ...baseTopology.sources[2].material, name: "New PLA" },
+    };
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "session-stable",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-stable",
+      sequence: 1,
+      observedAt: "2026-08-27T12:01:00.000Z",
+      topology: createTopology({ sources: [oldSource] }),
+      snapshotCompleteness: "complete",
+    });
+    recordMaterialTopologyObservation(store, {
+      host: "192.168.54.153",
+      deviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      identityStrength: "provisional",
+      sessionId: "session-provisional",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-provisional",
+      sequence: 1,
+      observedAt: "2026-08-27T12:05:00.000Z",
+      topology: createTopology({ sources: [newSource] }),
+      snapshotCompleteness: "complete",
+    });
+    const stable = store.byDeviceId["serial:905251280E69E7"];
+    const provisional = store.byDeviceId["provisional-shadow:endpoint:192.168.54.153%3A9999"];
+    stable.eventCoverageStartedAt = "2026-08-27T12:08:00.000Z";
+    stable.eventCoverageTrimmedAt = "2026-08-27T12:08:00.000Z";
+    stable.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt = "2026-08-27T12:08:00.000Z";
+    stable.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt = "2026-08-27T12:08:00.000Z";
+    provisional.eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    provisional.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+
+    const merged = rekeyMaterialSourceObservationDevice(store, {
+      fromDeviceId: "provisional-shadow:endpoint:192.168.54.153%3A9999",
+      toDeviceId: "serial:905251280E69E7",
+      observedAt: "2026-08-27T12:09:00.000Z",
+      mergeIfTargetExists: true,
+      identityConflict: false,
+    });
+
+    expect(merged).toMatchObject({
+      accepted: true,
+      reason: "merged",
+      mergedSourceIds: ["cfs:1:slot:2"],
+      skippedSourceIds: [],
+    });
+    expect(merged.record.eventCoverageStartedAt).toBe("2026-08-27T12:08:00.000Z");
+    expect(merged.record.eventCoverageTrimmedAt).toBe("2026-08-27T12:08:00.000Z");
+    expect(merged.record.latestBySourceId["cfs:1:slot:2"]).toMatchObject({
+      material: { name: "New PLA" },
+      lastObservedAt: "2026-08-27T12:05:00.000Z",
+      eventCoverageStartedAt: "2026-08-27T12:08:00.000Z",
+      eventCoverageTrimmedAt: "2026-08-27T12:08:00.000Z",
     });
   });
 

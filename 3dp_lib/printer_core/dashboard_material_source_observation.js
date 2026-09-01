@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1607 (PR #440)
+ * @version 1.390.1608 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:55:00
+ * @lastModified 2026-09-01 22:07:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -932,6 +932,65 @@ function classifySourceMerge(existingSnapshot, incomingSnapshot) {
 }
 
 /**
+ * rekey merge時にsource snapshotのcoverage watermarkを単調に合成する。
+ *
+ * 【詳細説明】
+ * - snapshot本体はlastObservedAtが新しい側を採用しても、bounded event logのcoverageは
+ *   どちらか一方の古い値へ戻すと、削除済みeventを「存在しなかった」ように扱う危険がある。
+ * - そのためeventCoverageStartedAt / eventCoverageTrimmedAtは常に両snapshotの遅い方を保持する。
+ *
+ * @private
+ * @function mergeSourceCoverageWatermarks
+ * @param {Object|null|undefined} targetSnapshot - merge後に残すsource snapshot。
+ * @param {Object|null|undefined} leftSnapshot - 片方のsource snapshot。
+ * @param {Object|null|undefined} rightSnapshot - もう片方のsource snapshot。
+ * @returns {Object|null|undefined} coverageを合成したtargetSnapshot。
+ */
+function mergeSourceCoverageWatermarks(targetSnapshot, leftSnapshot, rightSnapshot) {
+  if (!targetSnapshot || typeof targetSnapshot !== "object") {
+    return targetSnapshot;
+  }
+  targetSnapshot.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+    leftSnapshot?.eventCoverageStartedAt,
+    rightSnapshot?.eventCoverageStartedAt
+  );
+  targetSnapshot.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+    leftSnapshot?.eventCoverageTrimmedAt,
+    rightSnapshot?.eventCoverageTrimmedAt
+  );
+  return targetSnapshot;
+}
+
+/**
+ * rekey merge時にdevice record全体のcoverage watermarkを単調に合成する。
+ *
+ * 【詳細説明】
+ * - stable/provisional recordを統合する時、どちらか片方でevent logがtrim済みなら、
+ *   統合後recordもそのtrim境界より前のevent coverageを主張してはいけない。
+ * - lastObservedAtやsource snapshotの勝者選択とは独立して、coverage証跡だけを遅い方へ進める。
+ *
+ * @private
+ * @function mergeRecordCoverageWatermarks
+ * @param {Object} targetRecord - merge後に残すdevice record。
+ * @param {Object|null|undefined} leftRecord - 片方のdevice record。
+ * @param {Object|null|undefined} rightRecord - もう片方のdevice record。
+ * @returns {void}
+ */
+function mergeRecordCoverageWatermarks(targetRecord, leftRecord, rightRecord) {
+  if (!targetRecord || typeof targetRecord !== "object") {
+    return;
+  }
+  targetRecord.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+    leftRecord?.eventCoverageStartedAt,
+    rightRecord?.eventCoverageStartedAt
+  );
+  targetRecord.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+    leftRecord?.eventCoverageTrimmedAt,
+    rightRecord?.eventCoverageTrimmedAt
+  );
+}
+
+/**
  * source change eventを作る。
  *
  * @private
@@ -1518,11 +1577,11 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
       if (existingSnapshot) {
         const mergeAction = classifySourceMerge(existingSnapshot, snapshot);
         if (mergeAction === "replace") {
-          existing.latestBySourceId[sourceId] = {
+          existing.latestBySourceId[sourceId] = mergeSourceCoverageWatermarks({
             ...cloneJsonValue(snapshot),
             deviceId: toDeviceId,
             identityStrength: "stable",
-          };
+          }, existingSnapshot, snapshot);
           mergedSourceIds.push(sourceId);
           continue;
         }
@@ -1549,6 +1608,7 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
             sequence: existing.lastSequence ?? from.lastSequence ?? null,
           }));
         }
+        mergeSourceCoverageWatermarks(existingSnapshot, existingSnapshot, snapshot);
         continue;
       }
       existing.latestBySourceId[sourceId] = {
@@ -1576,6 +1636,7 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
     existing.providerId = existing.providerId || from.providerId || null;
     existing.sessionId = existing.sessionId || from.sessionId || null;
     existing.providerGeneration = existing.providerGeneration || from.providerGeneration || null;
+    mergeRecordCoverageWatermarks(existing, existing, from);
     mergeProviderStatesForRekey(existing, from);
     existing.retiredProviderGenerations = [...new Set([
       ...(Array.isArray(existing.retiredProviderGenerations) ? existing.retiredProviderGenerations : []),
