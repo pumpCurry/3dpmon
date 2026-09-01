@@ -107,6 +107,22 @@ Goal: prove that a K2/CFS print can be linked to the 3DPmon-managed spool
 mounted on each MaterialSource, without writing managed remaining, legacy
 `usageHistory`, or ItemKeeper debit authority.
 
+Read-only export analysis:
+
+```powershell
+node scripts/analyze_material_accounting_export.mjs `
+  --export D:\Users\pcb\Downloads\3dpmon_export_YYYYMMDD-hhmmss.json `
+  --certification D:\Users\pcb\Downloads\K2Pro-69E7-cfs-certification.json `
+  --output tmp\material-accounting-export-report.json `
+  --pretty
+```
+
+Use this before and after a live accounting run. The analyzer must remain
+read-only: it reports observed MaterialSources, legacy `hostSpoolMap`
+compatibility, Universal `SpoolMount` coverage, print-start snapshots, and
+`JobMaterialSegment` counts, but it must not migrate mounts, debit spools, or
+enable physical CFS commands.
+
 Required sequence:
 
 - Mount 3DPmon-managed spools to every CFS source that may be used by the test
@@ -140,6 +156,12 @@ Pass criteria:
   unconfirmed unless result-set completeness evidence explicitly proves zero
   usage.
 - No managed spool remaining debit occurs during this certification gate.
+- `scripts/analyze_material_accounting_export.mjs` reports
+  `gate18_9I.status:"evidence-present"` only after source-specific segment
+  evidence exists. A K2/CFS export that still has only legacy `hostSpoolMap`
+  receives `legacy-single-spool-map-present-for-multi-source-device` and
+  `loaded-source-managed-mount-missing` warnings instead of being silently
+  treated as source-aware.
 
 ## Gate 10: K2 CFS Topology Certification
 

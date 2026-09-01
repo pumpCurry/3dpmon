@@ -26,7 +26,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
-| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence; command binding semantic cross-check and first local receipt freeze are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
+| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence; command binding semantic cross-check, first local receipt freeze, and read-only export analyzer are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition + export analyzer tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -41,6 +41,14 @@ delta-only frameを順序通り合成したassembled evidenceだけを根拠に�
 session不一致、connection generation不一致、partial / unknown-core-state、またはbusy状態では
 `cfs-control-printer-idle-*` reasonで送信前に拒否する。CFS `boxsInfo` だけのmaterial-only frameは
 printer idle観測を更新しない。
+
+Gate 18.9Iの実機export確認には `scripts/analyze_material_accounting_export.mjs` を使う。
+このanalyzerはread-onlyで、K2/CFSのMaterialSource観測、legacy `hostSpoolMap` 1本割当、
+Universal `SpoolMount`、print-start snapshot、`JobMaterialSegment`、ItemKeeper source usage
+projection可能性を分けてreportする。K2/CFSでloaded sourceがあるのにsource別mountが無い場合は
+`loaded-source-managed-mount-missing`、multi-source機にlegacy 1本割当だけが残る場合は
+`legacy-single-spool-map-present-for-multi-source-device` として警告し、legacy 1本割当を
+source-aware mountとして扱わない。
 
 ## 未実装と分かっているもの
 

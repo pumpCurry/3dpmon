@@ -18,6 +18,7 @@
     "test:e2e": "node tests/e2e/electron_boot.test.mjs",
     "test:all": "vitest run && node tests/e2e/electron_boot.test.mjs",
     "capture:protocol": "node scripts/capture_protocol_fixture.mjs",
+    "analyze:material-export": "node scripts/analyze_material_accounting_export.mjs",
     "test:watch": "vitest",
     "lint": "eslint 3dp_lib/",
     "lint:css": "stylelint \"*.css\"",
