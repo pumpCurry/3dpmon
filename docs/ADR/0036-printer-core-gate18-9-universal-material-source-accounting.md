@@ -180,6 +180,12 @@ and a trusted issuer has created source-specific usage and print-start binding
 evidence. Restart or reconnect does not close the mount, but fresh source
 observation is required before a new automatic debit.
 
+Manual SpoolMount assignment requires a confirmed 3dpmon managed spool. An
+`inferred:true` spool or an `isPending:true` spool is not assignable to a
+MaterialSource until the operator confirms it as a real managed spool. This
+prevents provisional legacy lifecycle flows from deleting or rewriting a spool
+that Universal SpoolMount already references.
+
 Multi-source jobs with total-only usage are never split by color, material,
 source count, elapsed time, or display order. They are recorded as pending or
 unattributed usage until source-specific evidence exists.
@@ -442,8 +448,12 @@ Gate 18.9H:
 - operator mount / replace require fresh current MaterialSource observation at
   send time, while unmount can remove an existing 3DPmon-managed mount without
   requiring fresh provider data
-- legacy spool deletion is blocked while a Universal `OPEN` mount or in-flight
+- legacy spool deletion and other destructive lifecycle mutations, including
+  `revertInferredSpool()` and `updateSpool()` patches that set deleted flags or
+  change spool identity, are blocked while a Universal `OPEN` mount or in-flight
   reservation still references the managed spool
+- inferred or pending managed spools are excluded from H-2 mount candidates and
+  rejected by the SpoolMount service as `managed-spool-not-confirmed`
 - device observations, RFID, selected state, empty/unloaded state, stale
   providers, and physical CFS commands do not close or rewrite SpoolMounts
 - no production spool debit, legacy usage write, physical command enable, or

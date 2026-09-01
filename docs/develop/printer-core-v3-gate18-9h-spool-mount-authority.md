@@ -99,8 +99,9 @@ cross-backend assignment and final-current import/restore reconciliation after
 
 - `monitorData.materialAccountingSpoolMountStore` は production mount store の runtime copy
   として追加済み。
-- 通常の throttled storage flush は backup / export 可視性のために同storeをqueueするが、
-  operator mount / unmount / replace のproduction成功判定には使わない。
+- 通常の throttled storage flush は `materialAccountingSpoolMountStore` を通常queueから除外する。
+  backup / export 可視性は専用store snapshotとimport/restore経路で扱い、
+  operator mount / unmount / replace のproduction成功判定には必ず専用CAS writerだけを使う。
 - production write は `commitMaterialAccountingSpoolMountStoreDurably()` だけを通り、
   IndexedDB の `compareAndSwapSharedValue()` が `casApplied:true` を返した場合のみ
   runtime store を更新する。
@@ -119,7 +120,9 @@ cross-backend assignment and final-current import/restore reconciliation after
 
 H-2 では、H-1b で永続化された `SpoolMount` をフィラメント管理UIへ接続する。
 
-Status: implemented and tested in PR #440 after `afc3d37`.
+Status: implemented and tested in PR #440 after `afc3d37`, then hardened after
+review to reject unconfirmed managed spools and guard all destructive spool
+lifecycle mutations against Universal `OPEN` mount / reservation conflicts.
 
 対象:
 
@@ -151,6 +154,12 @@ Status: implemented and tested in PR #440 after `afc3d37`.
   unmountは既存の3DPmon管理mountを外す操作なので、fresh観測を追加要求しない。
 - Universal `OPEN` mountまたはin-flight reservation中のmanaged spoolは、legacy deleteでも廃棄できない。
   先にMaterialSource割当を解除してから削除する必要がある。
+- `deleteSpool()` だけでなく、`revertInferredSpool()` や `updateSpool({deleted:true})` /
+  `updateSpool({isDeleted:true})` / ID変更patchのような別legacy lifecycle mutationも、
+  Universal `OPEN` mountまたはin-flight reservation中は拒否する。
+- H-2の管理スプール候補は `inferred:true` と `isPending:true` を除外し、
+  service/runtime境界でも `managed-spool-not-confirmed` として拒否する。推定・保留スプールは、
+  先にユーザーが確認して実スプール化してからMaterialSourceへ割り当てる。
 - 管理スプール割当UIはCFS本体を操作しない。slot select / load / unload / feed /
   retract のphysical commandは Gate 19 / 19.5 のcertification registryが有効になるまで
   productionへ昇格しない。

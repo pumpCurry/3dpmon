@@ -8,6 +8,10 @@
  * - weightFromLength / lengthFromWeight
  * - getMaterialDensity
  * - buildSpoolAnalytics
+ *
+ * @version 1.390.1586 (PR #440)
+ * @since   1.390.0 (Initial)
+ * @lastModified 2026-09-01 17:48:30
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -94,6 +98,7 @@ import {
   updateSpool,
   addSpool,
   deleteSpool,
+  revertInferredSpool,
   setCurrentSpoolId,
   getSpoolMountedLocationLabels,
 } from '../../3dp_lib/dashboard_spool.js';
@@ -220,6 +225,95 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
 
     try {
       deleteSpool('S1');
+    } finally {
+      reservation.release();
+    }
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+  });
+
+  it('Universal OPEN mount済みinferred spoolはrevertInferredSpoolで廃棄しない', () => {
+    monitorData.filamentSpools = [{
+      id: 'S1',
+      name: 'Inferred Spool',
+      inferred: true,
+      remainingLengthMm: 300000,
+      totalLengthMm: 330000,
+      hostname: 'K2Pro-69E7',
+      isActive: true,
+      isInUse: true,
+    }];
+    monitorData.hostSpoolMap = { 'K2Pro-69E7': 'S1' };
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
+      mountId: 'mount:k2:1a:S1',
+      materialSourceId: 'source:k2:cfs:1a',
+      spoolId: 'S1',
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      openedAt: '2026-09-01T04:00:00.000Z',
+      mountOperationId: 'operation:k2:1a:S1',
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    })];
+
+    const restored = revertInferredSpool('S1');
+
+    expect(restored).toBeNull();
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+    expect(monitorData.hostSpoolMap).toEqual({ 'K2Pro-69E7': 'S1' });
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts[0].status).toBe(SPOOL_MOUNT_STATUS.OPEN);
+  });
+
+  it('Universal OPEN mount済みspoolはupdateSpoolのdeleted patchで廃棄しない', () => {
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
+      mountId: 'mount:k2:1a:S1',
+      materialSourceId: 'source:k2:cfs:1a',
+      spoolId: 'S1',
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      openedAt: '2026-09-01T04:00:00.000Z',
+      mountOperationId: 'operation:k2:1a:S1',
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    })];
+
+    updateSpool('S1', { deleted: true, isDeleted: true, name: 'Renamed safely' });
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].name).toBe('Renamed safely');
+  });
+
+  it('Universal OPEN mount済みspoolはupdateSpoolのid patchで識別子を変更しない', () => {
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
+      mountId: 'mount:k2:1a:S1',
+      materialSourceId: 'source:k2:cfs:1a',
+      spoolId: 'S1',
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      openedAt: '2026-09-01T04:00:00.000Z',
+      mountOperationId: 'operation:k2:1a:S1',
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    })];
+
+    updateSpool('S1', { id: 'S1-renamed', spoolId: 'S1-renamed', name: 'Name can change' });
+
+    expect(monitorData.filamentSpools[0].id).toBe('S1');
+    expect(monitorData.filamentSpools[0].spoolId).toBeUndefined();
+    expect(monitorData.filamentSpools[0].name).toBe('Name can change');
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts[0].spoolId).toBe('S1');
+  });
+
+  it('Universal reservation中のspoolはupdateSpoolのdeleted patchで廃棄しない', () => {
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: 'S1',
+      ownerId: 'operation:k2:pending',
+      materialSourceId: 'source:k2:cfs:1a',
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      updateSpool('S1', { deleted: true, isDeleted: true });
     } finally {
       reservation.release();
     }

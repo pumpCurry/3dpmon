@@ -16,7 +16,7 @@
  *
  * @version 1.390.1586 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 17:02:15
+ * @lastModified 2026-09-01 17:48:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -325,6 +325,74 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
       ok: false,
       action: "mount",
       reason: "material-source-not-found",
+    });
+    expect(persist).not.toHaveBeenCalled();
+    expect(data.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+  });
+
+  it("runtime factoryはinferred spoolをMaterialSourceへmountしない", async () => {
+    const data = createRuntimeData();
+    data.filamentSpools.push({
+      id: "spool-inferred",
+      name: "Inferred candidate",
+      inferred: true,
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingSpoolMountStore = nextStore;
+      return { ok: true, casApplied: true, backend: "indexedDB", reason: "cas-applied" };
+    });
+    const runtime = createMaterialAccountingSpoolMountRuntime({
+      data,
+      persist,
+      now: () => "2026-09-01T05:00:00.000Z",
+    });
+
+    const result = await runtime.service.operatorMountSource({
+      operatorActionId: "action:mount:inferred",
+      expectedDeviceId: "serial:k2",
+      materialSourceId: "source:k2:cfs:1a",
+      spoolId: "spool-inferred",
+      actor: "operator",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "mount",
+      reason: "managed-spool-not-confirmed",
+    });
+    expect(persist).not.toHaveBeenCalled();
+    expect(data.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+  });
+
+  it("runtime factoryはpending spoolをMaterialSourceへmountしない", async () => {
+    const data = createRuntimeData();
+    data.filamentSpools.push({
+      id: "spool-pending",
+      name: "Pending spool",
+      isPending: true,
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingSpoolMountStore = nextStore;
+      return { ok: true, casApplied: true, backend: "indexedDB", reason: "cas-applied" };
+    });
+    const runtime = createMaterialAccountingSpoolMountRuntime({
+      data,
+      persist,
+      now: () => "2026-09-01T05:00:00.000Z",
+    });
+
+    const result = await runtime.service.operatorMountSource({
+      operatorActionId: "action:mount:pending",
+      expectedDeviceId: "serial:k2",
+      materialSourceId: "source:k2:cfs:1a",
+      spoolId: "spool-pending",
+      actor: "operator",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "mount",
+      reason: "managed-spool-not-confirmed",
     });
     expect(persist).not.toHaveBeenCalled();
     expect(data.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);

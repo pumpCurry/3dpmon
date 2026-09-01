@@ -15,12 +15,12 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountService}：SpoolMount serviceを生成
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 16:42:00
+ * @lastModified 2026-09-01 17:48:30
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
+ * - none
  */
 
 "use strict";
@@ -207,6 +207,25 @@ function buildOperationIndex(store) {
  */
 function isManagedSpoolDeleted(spool) {
   return spool?.deleted === true || spool?.isDeleted === true;
+}
+
+/**
+ * managed spoolがUniversal MaterialSourceへ割当可能な確定済みスプールかを判定する。
+ *
+ * 【詳細説明】
+ * - `inferred:true` はADR-0005由来の暫定推定であり、serialNo採番や在庫消費をまだ確定していない。
+ * - `isPending:true` はlegacy装着直後などの未使用・未確定状態として扱われるため、H-2の
+ *   MaterialSource mount authorityへそのまま持ち込むと、後続の取消/巻き戻し経路で
+ *   Universal OPEN mountを破壊できる。
+ * - そのため、このservice境界では「先に確認して実スプール化したもの」だけを割当対象にする。
+ *
+ * @private
+ * @function isManagedSpoolUnconfirmed
+ * @param {Object} spool - managed spool候補。
+ * @returns {boolean} 未確定で割当不可ならtrue。
+ */
+function isManagedSpoolUnconfirmed(spool) {
+  return spool?.inferred === true || spool?.isPending === true;
 }
 
 /**
@@ -662,6 +681,9 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     }
     if (isManagedSpoolDeleted(spool)) {
       return { ok: false, reason: "managed-spool-deleted", spool: null };
+    }
+    if (isManagedSpoolUnconfirmed(spool)) {
+      return { ok: false, reason: "managed-spool-not-confirmed", spool: null };
     }
     return { ok: true, reason: "", spool };
   }

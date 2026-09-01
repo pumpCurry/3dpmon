@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-09-01 16:39:00
+ * @lastModified 2026-09-01 17:48:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -321,6 +321,7 @@ function setupK2Runtime(options = {}) {
 }
 
 afterEach(() => {
+  document.body.innerHTML = "";
   monitorData.appSettings.connectionTargets = [];
   monitorData.machines = {};
   monitorData.filamentSpools = [];
@@ -647,6 +648,49 @@ describe("filament manager CFS material source section", () => {
     }));
     expect(mockState.operatorReplaceSourceMount).not.toHaveBeenCalled();
     expect(mockState.operatorUnmountSource).not.toHaveBeenCalled();
+  });
+
+  it("sourceカードの管理スプール候補にはinferred/pendingスプールを表示しない", async () => {
+    setupK2Runtime({ observedAt: "2026-09-01T07:00:00.000Z" });
+    monitorData.filamentSpools = [
+      {
+        id: "spool:confirmed",
+        serialNo: 1,
+        name: "Confirmed PLA",
+        materialName: "PLA",
+        totalLengthMm: 336000,
+        remainingLengthMm: 300000,
+      },
+      {
+        id: "spool:inferred",
+        name: "Inferred PLA",
+        materialName: "PLA",
+        inferred: true,
+        totalLengthMm: 336000,
+        remainingLengthMm: 336000,
+      },
+      {
+        id: "spool:pending",
+        serialNo: 3,
+        name: "Pending PLA",
+        materialName: "PLA",
+        isPending: true,
+        totalLengthMm: 336000,
+        remainingLengthMm: 336000,
+      },
+    ];
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const button = section?.querySelector('[data-source-id="cfs:1:slot:0"] .fm-material-source-actions button');
+
+    button?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const optionTexts = [...document.querySelectorAll(".fm-source-spool-select option")]
+      .map((option) => option.textContent || "");
+    expect(optionTexts.join("\n")).toContain("Confirmed PLA");
+    expect(optionTexts.join("\n")).not.toContain("Inferred PLA");
+    expect(optionTexts.join("\n")).not.toContain("Pending PLA");
   });
 
   it("sourceカードの割当解除ボタンはexpectedMountId付きでoperator unmount runtimeへ委譲する", async () => {

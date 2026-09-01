@@ -32,7 +32,7 @@
  *
  * @version 1.390.1586 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 17:02:15
+ * @lastModified 2026-09-01 17:48:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -196,6 +196,41 @@ function formatUniversalSpoolMountSourceLabel(locator, fallback) {
     return "direct";
   }
   return String(fallback || "").trim() || "--";
+}
+
+/**
+ * Universal SpoolMountが占有しているスプールへの破壊的ライフサイクル変更を検査する。
+ *
+ * 【詳細説明】
+ * - MaterialSource別の3DPmon管理割当は、legacy `deleted/isDeleted` とは別のauthorityで
+ *   OPEN区間を保持する。OPEN mountまたはin-flight reservationがあるスプールをlegacy側から
+ *   廃棄・ID変更すると、Universal storeだけが古いspool IDを参照し続ける壊れた状態になる。
+ * - `deleteSpool()`、`revertInferredSpool()`、`updateSpool()`のように経路が異なっても
+ *   同じ不変条件を適用できるよう、この検査を共通化する。
+ *
+ * @private
+ * @function findManagedSpoolDestructiveLifecycleConflict
+ * @param {string} spoolId - 変更対象のmanaged spool ID。
+ * @param {string} action - 呼び出し元操作名。
+ * @returns {Object|null} 衝突情報。衝突が無い場合はnull。
+ */
+function findManagedSpoolDestructiveLifecycleConflict(spoolId, action) {
+  const id = String(spoolId || "").trim();
+  if (!id) {
+    return null;
+  }
+  const universalConflict = findUniversalSpoolAssignmentConflict({
+    spoolId: id,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  if (!universalConflict) {
+    return null;
+  }
+  console.warn(
+    `[${action}] Universal MaterialSourceで装着中または予約中のためスプールの破壊的変更を拒否: ` +
+    `id=${id} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
+  );
+  return universalConflict;
 }
 
 /**
@@ -1462,6 +1497,9 @@ export function revertInferredSpool(id) {
   }
   const inferred = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!inferred) return null;
+  if (findManagedSpoolDestructiveLifecycleConflict(id, "revertInferredSpool")) {
+    return null;
+  }
   const sup = inferred._supersedes;
   const host = sup?.host || inferred.hostname || null;
   const nowTs = Date.now();
@@ -1554,6 +1592,18 @@ export function updateSpool(id, patch) {
   const remainingAdjustmentActor = applied.remainingAdjustmentActor;
   delete applied.remainingAdjustmentReason;
   delete applied.remainingAdjustmentActor;
+  const changesDeletedState = applied.deleted === true || applied.isDeleted === true;
+  const changesStableId = (
+    Object.prototype.hasOwnProperty.call(applied, "id") && String(applied.id || "").trim() !== String(id || "").trim()
+  ) || (
+    Object.prototype.hasOwnProperty.call(applied, "spoolId") && String(applied.spoolId || "").trim() !== String(s.spoolId || s.id || "").trim()
+  );
+  if ((changesDeletedState || changesStableId) && findManagedSpoolDestructiveLifecycleConflict(id, "updateSpool")) {
+    delete applied.deleted;
+    delete applied.isDeleted;
+    delete applied.id;
+    delete applied.spoolId;
+  }
   const beforeRemaining = Number(s.remainingLengthMm);
   Object.assign(s, applied);
   if ("remainingLengthMm" in applied) {
@@ -1586,15 +1636,7 @@ export function deleteSpool(id, hostname) {
     console.warn(`[deleteSpool] confirmed 残量を検証できないため廃棄を拒否: id=${id} reason=${discardGate.reason}`);
     return;
   }
-  const universalConflict = findUniversalSpoolAssignmentConflict({
-    spoolId: id,
-    store: monitorData.materialAccountingSpoolMountStore,
-  });
-  if (universalConflict) {
-    console.warn(
-      `[deleteSpool] Universal MaterialSourceで装着中または予約中のため廃棄を拒否: ` +
-      `id=${id} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
-    );
+  if (findManagedSpoolDestructiveLifecycleConflict(id, "deleteSpool")) {
     return;
   }
   if (host && Array.isArray(s.printIdRanges) && s.printIdRanges.length) {

@@ -21,9 +21,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.228 (PR #102)
- * @lastModified 2026-09-01 16:42:00
+ * @lastModified 2026-09-01 17:48:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -818,8 +818,8 @@ function createMaterialSourceOperatorActionId(action, sourceId) {
  * sourceへ装着できる候補スプールを取得する。
  *
  * 【詳細説明】
- * - 候補生成はUIの利便性であり、最終authorityではない。削除済みだけを除き、他source/legacyとの衝突は
- *   H-1 serviceとdurable boundaryのsend-time検証で拒否する。
+ * - 候補生成はUIの利便性であり、最終authorityではない。削除済み・推定・保留スプールを除き、
+ *   他source/legacyとの衝突はH-1 serviceとdurable boundaryのsend-time検証で拒否する。
  *
  * @private
  * @function getMaterialSourceMountCandidateSpools
@@ -830,7 +830,8 @@ function getMaterialSourceMountCandidateSpools(currentSpoolId) {
   const currentId = toTrimmedText(currentSpoolId);
   return getSpools(true).filter((spool) => {
     const spoolId = toTrimmedText(spool?.id || spool?.spoolId);
-    if (!spoolId || spool?.deleted === true || spool?.isDeleted === true) {
+    if (!spoolId || spool?.deleted === true || spool?.isDeleted === true ||
+        spool?.inferred === true || spool?.isPending === true) {
       return false;
     }
     return spoolId !== currentId;
