@@ -28,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1583 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 16:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -52,6 +52,9 @@ import {
   createMaterialAccountingSpoolMountStoreDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "./printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  reconcileCurrentOpenUniversalSpoolMountsAgainstBackends,
+} from "./printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
@@ -255,79 +258,29 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
  * @returns {Object} backend整合性を反映した正規化済みstore。
  */
 function _reconcileSpoolMountStoreWithCurrentBackends(store) {
-  const normalizedStore = normalizeStoredMaterialAccountingSpoolMountStore(store);
-  const managedSpools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
-  const managedSpoolById = new Map(
-    managedSpools.map((spool) => [String(spool?.id || spool?.spoolId || "").trim(), spool])
-      .filter(([spoolId]) => spoolId)
-  );
-  const legacyOwnersBySpoolId = new Map();
-  const hostSpoolMap = monitorData.hostSpoolMap && typeof monitorData.hostSpoolMap === "object"
-    ? monitorData.hostSpoolMap
-    : {};
-  for (const [host, spoolIdValue] of Object.entries(hostSpoolMap)) {
-    const spoolId = String(spoolIdValue || "").trim();
-    if (!spoolId) {
-      continue;
-    }
-    const owners = legacyOwnersBySpoolId.get(spoolId) || [];
-    owners.push(host);
-    legacyOwnersBySpoolId.set(spoolId, owners);
-  }
-
-  const activeMounts = [];
-  const conflicts = [];
-  const retainedUnsupportedEntries = [];
-  for (const mount of normalizedStore.spoolMounts || []) {
-    const spoolId = String(mount?.spoolId || "").trim();
-    const managedSpool = managedSpoolById.get(spoolId);
-    if (!managedSpool || managedSpool.deleted === true || managedSpool.isDeleted === true) {
-      conflicts.push({
-        type: "spool-mount-cross-backend-conflict",
-        reason: !managedSpool ? "managed-spool-backend-missing" : "managed-spool-backend-deleted",
-        mountId: mount.mountId,
-        materialSourceId: mount.materialSourceId,
-        spoolId,
-      });
-      retainedUnsupportedEntries.push({
-        kind: "spoolMount",
-        reason: !managedSpool ? "managed-spool-backend-missing" : "managed-spool-backend-deleted",
-        record: mount,
-      });
-      continue;
-    }
-    const legacyOwners = legacyOwnersBySpoolId.get(spoolId) || [];
-    if (legacyOwners.length > 0) {
-      conflicts.push({
-        type: "spool-mount-cross-backend-conflict",
-        reason: "legacy-spool-backend-conflict",
-        mountId: mount.mountId,
-        materialSourceId: mount.materialSourceId,
-        spoolId,
-        legacyHosts: legacyOwners,
-      });
-      retainedUnsupportedEntries.push({
-        kind: "spoolMount",
-        reason: "legacy-spool-backend-conflict",
-        record: mount,
-      });
-      continue;
-    }
-    activeMounts.push(mount);
-  }
-
-  return normalizeStoredMaterialAccountingSpoolMountStore({
-    ...normalizedStore,
-    spoolMounts: activeMounts,
-    conflicts: [
-      ...(normalizedStore.conflicts || []),
-      ...conflicts,
-    ],
-    retainedUnsupportedEntries: [
-      ...(normalizedStore.retainedUnsupportedEntries || []),
-      ...retainedUnsupportedEntries,
-    ],
+  return reconcileCurrentOpenUniversalSpoolMountsAgainstBackends({
+    store,
+    managedSpools: monitorData.filamentSpools,
+    hostSpoolMap: monitorData.hostSpoolMap,
   });
+}
+
+/**
+ * monitorData上の現在Universal SpoolMount authorityをbackend状態へ再照合する。
+ *
+ * 【詳細説明】
+ * - import/restoreではhostSpoolMapやfilamentSpoolsが先に確定し、その後にSpoolMount storeをマージする。
+ * - incoming storeが無いimportでも既存current Universal OPEN mountと新しいlegacy hostSpoolMapが衝突し得るため、
+ *   最終状態に対して必ずこの関数を呼ぶ。
+ *
+ * @private
+ * @function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends
+ * @returns {void}
+ */
+function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends() {
+  monitorData.materialAccountingSpoolMountStore = _reconcileSpoolMountStoreWithCurrentBackends(
+    monitorData.materialAccountingSpoolMountStore
+  );
 }
 
 /**
@@ -826,6 +779,7 @@ export async function importAllData(data) {
   if (data.materialAccountingSpoolMountStore && typeof data.materialAccountingSpoolMountStore === "object") {
     _mergeMaterialAccountingSpoolMountStore(data.materialAccountingSpoolMountStore);
   }
+  _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends();
 
   // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
   //    submitted/post-observed/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
@@ -2468,6 +2422,7 @@ function _restoreFromData(shared, machines) {
       monitorData.materialAccountingSpoolMountStore
     );
   }
+  _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends();
 
   // ★ Gate 19 prep: 物理コマンド復旧ラッチを復元する。
   //   復元してもcommand frame再送・CFS操作・legacy ledger投影は行わず、人間確認が必要な証跡だけを残す。

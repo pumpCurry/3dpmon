@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1583 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 16:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -987,6 +987,11 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
   });
 
   it('Gate18.9H: importAllData はdivergent non-empty SpoolMount storeをfirst-winせず隔離する', async () => {
+    monitorData.filamentSpools = [
+      { id: "spool-031", remainingLengthMm: 235800 },
+      { id: "spool-002", remainingLengthMm: 330000 },
+      { id: "spool-006", remainingLengthMm: 198000 },
+    ];
     monitorData.materialAccountingSpoolMountStore = createSpoolMountStorageFixture();
     const incomingStore = normalizeStoredMaterialAccountingSpoolMountStore({
       ...createSpoolMountStorageFixture(),
@@ -1069,6 +1074,71 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       }),
     ]));
     expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
+  });
+
+  it('Gate18.9H: restore/import reconciliation はCLOSED Universal mount履歴をlegacy現在装着と衝突扱いしない', async () => {
+    const closedMount = createSpoolMountRecord({
+      mountId: "mount:k2:closed:031",
+      materialSourceId: "source:k2:cfs:closed",
+      spoolId: "spool-031",
+      mountOperationId: "operation:mount:k2:closed:031",
+      openedAt: "2026-09-01T03:00:00.000Z",
+      closedAt: "2026-09-01T03:30:00.000Z",
+      closedByOperationId: "operation:unmount:k2:closed:031",
+      openedBy: "operator",
+      closedBy: "operator",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    });
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
+    monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 235800 }];
+
+    await importAllData({
+      materialAccountingSpoolMountStore: normalizeStoredMaterialAccountingSpoolMountStore({
+        schemaVersion: 1,
+        authority: "material-accounting-spool-mount-store",
+        spoolMounts: [closedMount],
+        events: [],
+      }),
+    });
+
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([
+      expect.objectContaining({
+        mountId: "mount:k2:closed:031",
+        spoolId: "spool-031",
+        status: SPOOL_MOUNT_STATUS.CLOSED,
+      }),
+    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reason: "legacy-spool-backend-conflict",
+        spoolId: "spool-031",
+      }),
+    ]));
+  });
+
+  it('Gate18.9H: importAllData はhostSpoolMap取込後に既存current Universal OPEN mountも再照合する', async () => {
+    monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 235800 }];
+    monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...createSpoolMountStorageFixture(),
+      spoolMounts: [createSpoolMountStorageFixture().spoolMounts[0]],
+      events: [createSpoolMountStorageFixture().events[0]],
+    });
+
+    await importAllData({
+      hostSpoolMap: { "K1Max-4A1B": "spool-031" },
+    });
+
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "spool-mount-cross-backend-conflict",
+        reason: "legacy-spool-backend-conflict",
+        spoolId: "spool-031",
+      }),
+    ]));
   });
 
   it('Gate19 prep: physicalCommandRecoveryLatch は再起動後も未解決証跡を保持し自動再送材料を保存しない', () => {

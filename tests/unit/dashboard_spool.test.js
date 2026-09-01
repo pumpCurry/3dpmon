@@ -16,7 +16,31 @@ vi.mock('../../3dp_lib/dashboard_data.js', () => ({
   monitorData: {
     machines: {},
     filamentSpools: [],
+    usageHistory: [],
+    mountHistory: [],
+    mountHistorySeq: 0,
+    filamentEventContext: {},
     hostSpoolMap: {},
+    materialAccountingSpoolMountStore: {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    },
   },
   setStoredDataForHost: vi.fn(),
 }));
@@ -69,6 +93,7 @@ import {
   countAttributionIssuesForHost,
   updateSpool,
   addSpool,
+  setCurrentSpoolId,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
@@ -76,6 +101,92 @@ import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.j
 const {
   buildInferredLedgerReconciliationReport
 } = await import('../../3dp_lib/dashboard_inferred_reconciliation.js');
+const {
+  createSpoolMountRecord,
+  SPOOL_MOUNT_STATUS,
+  SPOOL_MOUNT_VERIFICATION,
+  MATERIAL_IDENTITY_STRENGTH,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_contract.js');
+
+// =============================================
+// legacy hostSpoolMap と Universal SpoolMount の排他
+// =============================================
+describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monitorData.machines = {};
+    monitorData.filamentSpools = [
+      { id: 'S1', name: 'Spool 1', remainingLengthMm: 300000, totalLengthMm: 330000 },
+    ];
+    monitorData.usageHistory = [];
+    monitorData.mountHistory = [];
+    monitorData.mountHistorySeq = 0;
+    monitorData.filamentEventContext = {};
+    monitorData.hostSpoolMap = {};
+    monitorData.materialAccountingSpoolMountStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    };
+  });
+
+  it('Universal OPEN mount済みspoolはlegacy setCurrentSpoolIdで二重装着しない', () => {
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      ...createSpoolMountRecord({
+        mountId: 'mount:k2:1a:S1',
+        materialSourceId: 'source:k2:cfs:1a',
+        spoolId: 'S1',
+        status: SPOOL_MOUNT_STATUS.OPEN,
+        openedAt: '2026-09-01T04:00:00.000Z',
+        mountOperationId: 'operation:k2:1a:S1',
+        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+        sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      }),
+    }];
+
+    const ok = setCurrentSpoolId('S1', 'K1Max-4A1B');
+
+    expect(ok).toBe(false);
+    expect(monitorData.hostSpoolMap).toEqual({});
+  });
+
+  it('Universal CLOSED mount履歴だけならlegacy setCurrentSpoolIdを妨げない', () => {
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      ...createSpoolMountRecord({
+        mountId: 'mount:k2:closed:S1',
+        materialSourceId: 'source:k2:cfs:1a',
+        spoolId: 'S1',
+        status: SPOOL_MOUNT_STATUS.CLOSED,
+        openedAt: '2026-09-01T03:00:00.000Z',
+        closedAt: '2026-09-01T03:30:00.000Z',
+        mountOperationId: 'operation:k2:1a:S1',
+        closeOperationId: 'operation:k2:1a:S1:close',
+        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+        sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      }),
+    }];
+
+    const ok = setCurrentSpoolId('S1', 'K1Max-4A1B');
+
+    expect(ok).toBe(true);
+    expect(monitorData.hostSpoolMap).toEqual({ 'K1Max-4A1B': 'S1' });
+  });
+});
 
 // =============================================
 // getSpoolState

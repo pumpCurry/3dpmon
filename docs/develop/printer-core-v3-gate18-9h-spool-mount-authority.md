@@ -61,7 +61,9 @@ after `b178ce8`.
 
 H-1b では H-1a の contract を `monitorData` / shared storage / IndexedDB へ接続する。
 
-Status: implemented and tested in PR #440 after `335d287`.
+Status: implemented and tested in PR #440 after `335d287`, then hardened for
+cross-backend assignment and final-current import/restore reconciliation after
+`afc3d37`.
 
 対象:
 
@@ -83,6 +85,15 @@ Status: implemented and tested in PR #440 after `335d287`.
   conflict set 全体を外して quarantine する。
 - production CAS writer は service が渡した managed spool / legacy occupancy precondition を
   `monitorData` の現在値から再計算し、不一致ならIndexedDB CAS前に拒否する。
+- legacy `setCurrentSpoolId()` は Universal `OPEN` mount と process-local
+  in-flight reservation を read-only occupancy として検査し、同じ managed spool を
+  legacy `hostSpoolMap` へ二重装着しない。
+- Universal mount / replace runtime は durable CAS 完了まで対象spoolを予約し、
+  同時操作中にlegacy側が同じspoolを取得するraceを遮断する。
+- restore / import 後のbackend再照合は、final current stateに対して常に実行し、
+  `OPEN` mountだけを隔離対象にする。`CLOSED` mount履歴はlegacy現在装着と衝突扱いせず、
+  importが `hostSpoolMap` だけを追加する場合でも既存current Universal `OPEN` mountを
+  再照合する。
 
 実装境界:
 
@@ -102,7 +113,7 @@ Status: implemented and tested in PR #440 after `335d287`.
 
 H-2 では、H-1b で永続化された `SpoolMount` をフィラメント管理UIへ接続する。
 
-Status: pending.
+Status: implemented and tested in PR #440 after `afc3d37`.
 
 対象:
 
@@ -110,6 +121,20 @@ Status: pending.
 - restart / reconnect 後に、保存済みmountと現在観測sourceを照合して表示するread-only join。
 - conflict / stale / unknown / provisional source の警告表示。
 - 本番physical CFS command、ledger debit、ItemKeeper projectionはこの段階でも別Gateへ残す。
+
+実装境界:
+
+- source card は `設定` / `交換` / `割当解除` を表示する。
+- 操作は `createMaterialAccountingSpoolMountRuntime()` の
+  `operatorMountSource()` / `operatorReplaceSourceMount()` /
+  `operatorUnmountSource()` だけへ委譲する。
+- UIから渡す `materialSourceId` やspool候補は利便性の入力であり、service/runtime側が
+  送信時に現在観測source、managed spool、legacy occupancy、durable CAS preconditionを
+  再検証する。
+- stale topologyでは操作ボタンをdisabledにし、最終観測状態からoperator mountを変更しない。
+- 管理スプール割当UIはCFS本体を操作しない。slot select / load / unload / feed /
+  retract のphysical commandは Gate 19 / 19.5 のcertification registryが有効になるまで
+  productionへ昇格しない。
 
 ## Store Shape
 
@@ -260,6 +285,9 @@ H-1a/H-1b では最低限以下を固定する。
 - 同一 MaterialSource へ2本 open できない。
 - 同一 spool を別 source/device へ同時 open できない。
 - legacy `hostSpoolMap` で装着中の spool を Universal source へ open できない。
+- Universal `OPEN` mount済みspoolを legacy `hostSpoolMap` へ open できない。
+- Universal mount / replace のdurable write中は process-local reservation により、
+  legacy `setCurrentSpoolId()` と別Universal操作が同じspoolを取得できない。
 - 同じ `operatorActionId` と同じ payload は restart 後も idempotent。
 - 同じ `operatorActionId` と異なる payload は restart 後も conflict。
 - replace の new mount conflict / CAS mismatch / durable failure では old mount が
@@ -268,6 +296,9 @@ H-1a/H-1b では最低限以下を固定する。
 - concurrent stale-base write は CAS mismatch で止める。
 - corrupt / unsupported / conflicting imported records は quarantine される。
 - conflicting open mount は first-win で採用されない。
+- restore / import reconciliation は `CLOSED` mount履歴を現在装着conflictとして隔離しない。
+- importが `hostSpoolMap` だけを追加した場合でも、既存current Universal `OPEN` mountを
+  final current backend状態に対して再照合して隔離する。
 - `identityStrength: "unknown"` の source は mount できない。
 - provisional source は manual mount できるが、future debit は revalidation まで
   pending になる。
@@ -278,12 +309,12 @@ H-1a/H-1b では最低限以下を固定する。
 
 ## Follow-up Gates
 
-Gate 18.9H-2:
+Gate 18.9H-2 follow-up:
 
-- filament manager の source card に 3DPmon管理スプール設定 / 交換 / 割当解除 UI を追加する。
 - K2/CFS の legacy `hostSpoolMap` 1本割当を migration candidate として表示する。
 - source-aware read model で spool 一覧に `装着中: K2Pro-69E7 / CFS 1A` のような
   表示を出す。
+- H-2 UIで設定したsource別mountを、後続Gate 18.9Iのprint-start snapshotへ接続する。
 
 Gate 18.9I-1:
 

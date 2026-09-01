@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1583 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 16:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -29,6 +29,9 @@ import {
   MATERIAL_SOURCE_KIND,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
 import { createEmptyMaterialAccountingSpoolMountStore } from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  findUniversalSpoolAssignmentConflict,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 
 const mockMonitorData = {};
 
@@ -204,5 +207,53 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
     ]);
     expect(data.hostSpoolMap).toEqual({});
     expect(persist).toHaveBeenCalledTimes(2);
+  });
+
+  it("runtime factoryはdurable mount中のspoolをin-flight reservationとしてlegacy側へ見せる", async () => {
+    const data = createRuntimeData();
+    let releasePersist = null;
+    const persist = vi.fn(({ nextStore }) => new Promise((resolve) => {
+      releasePersist = () => {
+        data.materialAccountingSpoolMountStore = nextStore;
+        resolve({ ok: true, casApplied: true, backend: "indexedDB", reason: "cas-applied" });
+      };
+    }));
+    const runtime = createMaterialAccountingSpoolMountRuntime({
+      data,
+      persist,
+      now: () => "2026-09-01T05:00:00.000Z",
+    });
+
+    const pending = runtime.service.operatorMountSource({
+      operatorActionId: "action:mount:reserve",
+      expectedDeviceId: "serial:k2",
+      materialSourceId: "source:k2:cfs:1a",
+      spoolId: "spool-031",
+      actor: "operator",
+    });
+    await Promise.resolve();
+    for (let attempt = 0; attempt < 10 && typeof releasePersist !== "function"; attempt++) {
+      await Promise.resolve();
+    }
+
+    expect(findUniversalSpoolAssignmentConflict({
+      spoolId: "spool-031",
+      store: data.materialAccountingSpoolMountStore,
+    })).toMatchObject({
+      reason: "universal-spool-assignment-in-flight",
+      spoolId: "spool-031",
+      materialSourceId: "source:k2:cfs:1a",
+    });
+
+    releasePersist();
+    await expect(pending).resolves.toMatchObject({ ok: true, action: "mount" });
+    expect(findUniversalSpoolAssignmentConflict({
+      spoolId: "spool-031",
+      store: data.materialAccountingSpoolMountStore,
+    })).toMatchObject({
+      reason: "universal-spool-already-mounted",
+      spoolId: "spool-031",
+      materialSourceId: "source:k2:cfs:1a",
+    });
   });
 });

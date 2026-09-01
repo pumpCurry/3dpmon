@@ -30,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1281 (PR #427)
+* @version 1.390.1583 (PR #440)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 15:22:00
+* @lastModified 2026-09-01 16:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -68,6 +68,9 @@ import {
   getIrreversibleFilamentRemaining,
   IRREVERSIBLE_REMAINING_ACTION
 } from "./dashboard_filament_remaining_model.js";
+import {
+  findUniversalSpoolAssignmentConflict,
+} from "./printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -839,6 +842,14 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
     // 既に他ホストへ装着済みかは同期済みデータでローカル検査し、即時フィードバックする
     // （親側でも同じ検証が再実行される）
     if (id) {
+      const universalConflict = findUniversalSpoolAssignmentConflict({
+        spoolId: id,
+        store: monitorData.materialAccountingSpoolMountStore,
+      });
+      if (universalConflict) {
+        console.warn(`setCurrentSpoolId(relay): spool ${id} is already mounted by Universal MaterialSource ${universalConflict.materialSourceId || ""}`);
+        return false;
+      }
       for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
         if (spId === id && h !== hostname) {
           console.warn(`setCurrentSpoolId(relay): spool ${id} is already mounted on ${h}`);
@@ -873,6 +884,14 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
 
   // 同じスプールが別ホストに既に装着されていないかチェック
   if (id && host && newSpool) {
+    const universalConflict = findUniversalSpoolAssignmentConflict({
+      spoolId: id,
+      store: monitorData.materialAccountingSpoolMountStore,
+    });
+    if (universalConflict) {
+      console.warn(`setCurrentSpoolId: spool ${id} is already mounted by Universal MaterialSource ${universalConflict.materialSourceId || ""}`);
+      return false;
+    }
     for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
       if (spId === id && h !== host) {
         const m = monitorData.machines[h] || {};

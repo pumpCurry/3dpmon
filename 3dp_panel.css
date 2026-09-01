@@ -1731,6 +1731,32 @@ body.panel-mode .notification-container {
   padding-left: 4px;
   border-left: 2px solid var(--color-border-strong);
 }
+.fm-material-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.fm-source-spool-select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--font-sm);
+}
+.fm-source-mount-dialog-row,
+.fm-source-mount-dialog-note {
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
+}
+.fm-source-mount-dialog-note {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
 .fm-material-source-selected {
   display: inline-flex;
   width: fit-content;

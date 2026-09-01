@@ -21,9 +21,9 @@
  * 【公開関数一覧】
  * - {@link showFilamentManager}：管理モーダルを開く
  *
-* @version 1.390.1521 (PR #438)
-* @since   1.390.228 (PR #102)
-* @lastModified 2026-08-31 16:41:00
+ * @version 1.390.1583 (PR #440)
+ * @since   1.390.228 (PR #102)
+ * @lastModified 2026-09-01 16:08:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -99,6 +99,12 @@ import {
 import {
   createMaterialSourceAccountingView
 } from "./printer_core/dashboard_material_accounting_contract.js";
+import {
+  normalizeStoredMaterialAccountingSpoolMountStore
+} from "./printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  createMaterialAccountingSpoolMountRuntime
+} from "./printer_core/dashboard_material_accounting_mount_runtime.js";
 import { getMaterialCssColor } from "./printer_core/dashboard_material_color.js";
 
 let styleInjected = false;
@@ -520,6 +526,47 @@ function chooseLatestMaterialSourceRecord(current, candidate, timeKeys) {
 }
 
 /**
+ * source別の現在open SpoolMount mapを生成する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9HのSpoolMount storeは「現在このMaterialSourceへ3DPmon管理スプールを装着している」
+ *   というoperator-managed authorityであり、print bindingの過去snapshotとは意味が異なる。
+ * - 正規化済みstoreのopen mountだけを採用し、同一sourceへ複数候補がある場合はopenedAtが新しいものを表示へ渡す。
+ * - ここでは残量debitやlegacy hostSpoolMapへの投影は行わない。
+ *
+ * @private
+ * @function createOpenSpoolMountMapBySource
+ * @param {string} deviceId - 表示対象device ID。
+ * @returns {Map<string,Object>} materialSourceId別open mount map。
+ */
+function createOpenSpoolMountMapBySource(deviceId) {
+  const normalizedStore = normalizeStoredMaterialAccountingSpoolMountStore(
+    monitorData.materialAccountingSpoolMountStore
+  );
+  const map = new Map();
+  const expectedDeviceId = toTrimmedText(deviceId);
+  if (!expectedDeviceId) {
+    return map;
+  }
+  for (const mount of Array.isArray(normalizedStore.spoolMounts) ? normalizedStore.spoolMounts : []) {
+    if (mount?.status !== "open") {
+      continue;
+    }
+    const sourceId = toTrimmedText(mount.materialSourceId);
+    if (!sourceId) {
+      continue;
+    }
+    const bindingDeviceId = toTrimmedText(mount.sourceBindingAtOpen?.deviceId);
+    if (bindingDeviceId !== expectedDeviceId) {
+      continue;
+    }
+    const current = map.get(sourceId) || null;
+    map.set(sourceId, chooseLatestMaterialSourceRecord(current, mount, ["openedAt"]));
+  }
+  return map;
+}
+
+/**
  * スプールIDから3DPmon管理スプールを取得する。
  *
  * 【詳細説明】
@@ -563,6 +610,7 @@ function createMaterialSupplyAccountingView(options = {}) {
   }
   const snapshotsBySourceId = new Map();
   const segmentsBySourceId = new Map();
+  const openMountsBySourceId = createOpenSpoolMountMapBySource(deviceId);
   for (const snapshot of Array.isArray(store.printStartSnapshots) ? store.printStartSnapshots : []) {
     if (toTrimmedText(snapshot?.deviceId) !== deviceId) {
       continue;
@@ -606,6 +654,7 @@ function createMaterialSupplyAccountingView(options = {}) {
   const sourceIds = [...new Set([
     ...snapshotsBySourceId.keys(),
     ...segmentsBySourceId.keys(),
+    ...openMountsBySourceId.keys(),
   ])];
   if (sourceIds.length === 0) {
     return null;
@@ -615,29 +664,49 @@ function createMaterialSupplyAccountingView(options = {}) {
     sources: sourceIds.map((sourceId) => {
       const snapshot = snapshotsBySourceId.get(sourceId) || {};
       const segment = segmentsBySourceId.get(sourceId) || {};
-      const spoolId = toTrimmedText(snapshot.spoolId || segment.spoolId);
+      const openMount = openMountsBySourceId.get(sourceId) || null;
+      const spoolId = toTrimmedText(openMount?.spoolId || snapshot.spoolId || segment.spoolId);
       const spool = resolveManagedSpoolForMaterialSource(spoolId);
+      const materialSourceSnapshot = snapshot.materialSource ||
+        (openMount?.sourceBindingAtOpen
+          ? {
+              materialSourceId: sourceId,
+              aliases: [openMount.sourceBindingAtOpen.materialSourceId],
+              locator: openMount.sourceBindingAtOpen.locator || null,
+            }
+          : null);
       return {
         materialSourceId: sourceId,
         displayLabel: sourceId,
         observation: {
           printJobId: segment.printJobId || snapshot.printJobId || null,
           printPlanId: segment.printPlanId || snapshot.printPlanId || null,
-          observedAt: segment.observedAt || snapshot.capturedAt || null,
-          materialSource: snapshot.materialSource || null,
-          source: "material-accounting-print-binding-store",
+          observedAt: segment.observedAt || snapshot.capturedAt || openMount?.openedAt || null,
+          materialSource: materialSourceSnapshot,
+          source: openMount
+            ? "material-accounting-spool-mount-store"
+            : "material-accounting-print-binding-store",
         },
         mount: {
           ...(snapshot.spoolMount || {}),
-          mountId: snapshot.mountId || segment.mountId || null,
+          ...(openMount || {}),
+          mountId: openMount?.mountId || snapshot.mountId || segment.mountId || null,
           spoolId: spoolId || null,
           spool: spool ? {
             id: spool.id,
+            serialNo: spool.serialNo ?? null,
             name: spool.name || "",
             materialName: spool.materialName || spool.material || "",
+            material: spool.material || spool.materialName || "",
             colorName: spool.colorName || "",
+            filamentColor: spool.filamentColor || spool.color || "",
+            color: spool.color || spool.filamentColor || "",
             totalLengthMm: spool.totalLengthMm ?? null,
             remainingLengthMm: spool.remainingLengthMm ?? null,
+            filamentDiameter: spool.filamentDiameter ?? null,
+            density: spool.density ?? null,
+            purchasePrice: spool.purchasePrice ?? null,
+            currencySymbol: spool.currencySymbol || "",
           } : null,
         },
         usage: {
@@ -667,6 +736,226 @@ function getMaterialSourceCssColor(row) {
 }
 
 /**
+ * HTML属性値へ埋め込める文字列へエスケープする。
+ *
+ * 【詳細説明】
+ * - `showConfirmDialog()` はHTML文字列を受け取る既存UIなので、スプール名やIDをselectへ出す前に
+ *   最小限のHTMLエスケープを行い、管理スプール名がdialog DOM構造を壊さないようにする。
+ *
+ * @private
+ * @function escapeHtmlText
+ * @param {*} value - 表示文字列候補。
+ * @returns {string} HTMLエスケープ済み文字列。
+ */
+function escapeHtmlText(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/**
+ * operator mount UI用の一意なaction IDを生成する。
+ *
+ * 【詳細説明】
+ * - service側は同一operatorActionIdの再送を冪等化するため、UIの1クリックごとに新しいIDを発行する。
+ * - crypto.randomUUIDが使えない環境では時刻と乱数で十分なUI操作IDを作る。
+ *
+ * @private
+ * @function createMaterialSourceOperatorActionId
+ * @param {string} action - 操作名。
+ * @param {string} sourceId - MaterialSource ID。
+ * @returns {string} operator action ID。
+ */
+function createMaterialSourceOperatorActionId(action, sourceId) {
+  const cryptoApi = typeof window !== "undefined" ? window.crypto : null;
+  const randomId = cryptoApi && typeof cryptoApi.randomUUID === "function"
+    ? cryptoApi.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `ui:${action}:${sourceId}:${randomId}`;
+}
+
+/**
+ * sourceへ装着できる候補スプールを取得する。
+ *
+ * 【詳細説明】
+ * - 候補生成はUIの利便性であり、最終authorityではない。削除済みだけを除き、他source/legacyとの衝突は
+ *   H-1 serviceとdurable boundaryのsend-time検証で拒否する。
+ *
+ * @private
+ * @function getMaterialSourceMountCandidateSpools
+ * @param {string|null} currentSpoolId - 現在sourceへ装着済みのspool ID。
+ * @returns {Array<Object>} 候補スプール一覧。
+ */
+function getMaterialSourceMountCandidateSpools(currentSpoolId) {
+  const currentId = toTrimmedText(currentSpoolId);
+  return getSpools(true).filter((spool) => {
+    const spoolId = toTrimmedText(spool?.id || spool?.spoolId);
+    if (!spoolId || spool?.deleted === true || spool?.isDeleted === true) {
+      return false;
+    }
+    return spoolId !== currentId;
+  });
+}
+
+/**
+ * 管理スプール選択dialogを表示する。
+ *
+ * 【詳細説明】
+ * - MaterialSourceへ3DPmon管理スプールを割り当てるためのUI専用選択であり、CFS本体の
+ *   feed/load/unload/select commandは送らない。
+ *
+ * @private
+ * @function chooseManagedSpoolForMaterialSource
+ * @param {Object} row - material topology view model の source row。
+ * @param {string|null} currentSpoolId - 現在sourceへ装着済みのspool ID。
+ * @returns {Promise<string|null>} 選択されたspool ID、またはnull。
+ */
+async function chooseManagedSpoolForMaterialSource(row, currentSpoolId) {
+  const candidates = getMaterialSourceMountCandidateSpools(currentSpoolId);
+  if (candidates.length === 0) {
+    showAlert("割り当て可能な管理スプールがありません", "warn");
+    return null;
+  }
+  const selectId = `fm-source-spool-select-${Math.random().toString(36).slice(2)}`;
+  const optionsHtml = candidates.map((spool) => {
+    const spoolId = toTrimmedText(spool.id || spool.spoolId);
+    const label = [
+      formatSpoolDisplayId(spool),
+      spool.name || spool.reelName || "",
+      spool.colorName || "",
+      spool.materialName || spool.material || "",
+    ].map((part) => toTrimmedText(part)).filter(Boolean).join(" / ");
+    return `<option value="${escapeHtmlText(spoolId)}">${escapeHtmlText(label || spoolId)}</option>`;
+  }).join("");
+  const ok = await showConfirmDialog({
+    level: "info",
+    title: currentSpoolId ? "管理スプール交換" : "管理スプール設定",
+    html:
+      `<div class="fm-source-mount-dialog">` +
+      `<div class="fm-source-mount-dialog-row">対象: ${escapeHtmlText(row?.displaySlot || row?.sourceId || "--")}</div>` +
+      `<select id="${selectId}" class="fm-source-spool-select">${optionsHtml}</select>` +
+      `<div class="fm-source-mount-dialog-note">CFS本体は操作せず、3DPmonの管理台帳だけを更新します。</div>` +
+      `</div>`,
+    confirmText: currentSpoolId ? "交換" : "設定",
+    cancelText: "キャンセル",
+  });
+  if (!ok) {
+    return null;
+  }
+  return toTrimmedText(document.getElementById(selectId)?.value) || null;
+}
+
+/**
+ * sourceカードからH-1 runtimeへoperator mount操作を送る。
+ *
+ * 【詳細説明】
+ * - UI rowの表示値だけをauthorityにせず、runtime/service側が現在のMaterialSource観測、管理スプール、
+ *   legacy占有、durable CAS preconditionを送信時に再検証する。
+ *
+ * @private
+ * @function executeMaterialSourceMountUiAction
+ * @param {Object} input - 操作入力。
+ * @param {Object} input.row - material topology view model の source row。
+ * @param {string} input.deviceId - Device ID。
+ * @param {string|null} input.currentSpoolId - 現在sourceへ装着済みのspool ID。
+ * @param {string|null} input.expectedMountId - 現在sourceへ装着済みのmount ID。
+ * @param {Function=} input.onAfterChange - 成功後の再描画callback。
+ * @returns {Promise<void>} 完了promise。
+ */
+async function executeMaterialSourceMountUiAction(input = {}) {
+  const row = input.row || {};
+  const deviceId = toTrimmedText(input.deviceId);
+  const materialSourceId = toTrimmedText(row.sourceId);
+  if (!deviceId || !materialSourceId) {
+    showAlert("MaterialSourceが未観測のため管理スプールを設定できません", "warn");
+    return;
+  }
+  const spoolId = await chooseManagedSpoolForMaterialSource(row, input.currentSpoolId);
+  if (!spoolId) {
+    return;
+  }
+  const runtime = createMaterialAccountingSpoolMountRuntime();
+  const hasCurrentMount = Boolean(toTrimmedText(input.expectedMountId));
+  const result = hasCurrentMount
+    ? await runtime.service.operatorReplaceSourceMount({
+        operatorActionId: createMaterialSourceOperatorActionId("replace", materialSourceId),
+        expectedDeviceId: deviceId,
+        materialSourceId,
+        expectedOldMountId: input.expectedMountId,
+        newSpoolId: spoolId,
+        actor: "filament-manager-ui",
+      })
+    : await runtime.service.operatorMountSource({
+        operatorActionId: createMaterialSourceOperatorActionId("mount", materialSourceId),
+        expectedDeviceId: deviceId,
+        materialSourceId,
+        spoolId,
+        actor: "filament-manager-ui",
+      });
+  if (!result?.ok) {
+    showAlert(`管理スプール設定に失敗しました: ${result?.reason || "unknown"}`, "warn");
+    return;
+  }
+  showAlert(hasCurrentMount ? "管理スプールを交換しました" : "管理スプールを設定しました", "success");
+  if (typeof input.onAfterChange === "function") {
+    input.onAfterChange();
+  }
+}
+
+/**
+ * sourceカードからH-1 runtimeへoperator unmount操作を送る。
+ *
+ * 【詳細説明】
+ * - 割当解除は3DPmonのSpoolMount intervalを閉じるだけであり、CFSからフィラメントを抜く物理操作ではない。
+ *
+ * @private
+ * @function executeMaterialSourceUnmountUiAction
+ * @param {Object} input - 操作入力。
+ * @param {Object} input.row - material topology view model の source row。
+ * @param {string|null} input.expectedMountId - 現在sourceへ装着済みのmount ID。
+ * @param {Function=} input.onAfterChange - 成功後の再描画callback。
+ * @returns {Promise<void>} 完了promise。
+ */
+async function executeMaterialSourceUnmountUiAction(input = {}) {
+  const row = input.row || {};
+  const materialSourceId = toTrimmedText(row.sourceId);
+  const expectedMountId = toTrimmedText(input.expectedMountId);
+  if (!materialSourceId || !expectedMountId) {
+    showAlert("解除対象の管理スプール割当が見つかりません", "warn");
+    return;
+  }
+  const ok = await showConfirmDialog({
+    level: "warn",
+    title: "管理スプール割当解除",
+    message: `${row.displaySlot || materialSourceId} から3DPmon管理スプールの割当を解除しますか?`,
+    confirmText: "割当解除",
+    cancelText: "キャンセル",
+  });
+  if (!ok) {
+    return;
+  }
+  const runtime = createMaterialAccountingSpoolMountRuntime();
+  const result = await runtime.service.operatorUnmountSource({
+    operatorActionId: createMaterialSourceOperatorActionId("unmount", materialSourceId),
+    materialSourceId,
+    expectedMountId,
+    actor: "filament-manager-ui",
+    reason: "operator-unmount",
+  });
+  if (!result?.ok) {
+    showAlert(`管理スプール割当解除に失敗しました: ${result?.reason || "unknown"}`, "warn");
+    return;
+  }
+  showAlert("管理スプール割当を解除しました", "success");
+  if (typeof input.onAfterChange === "function") {
+    input.onAfterChange();
+  }
+}
+
+/**
  * material source chip を生成する。
  *
  * 【詳細説明】
@@ -677,9 +966,12 @@ function getMaterialSourceCssColor(row) {
  * @function createMaterialSourceChip
  * @param {Object} row - material topology view model の source row。
  * @param {boolean} isStale - topology が stale の場合 true。
+ * @param {Object=} options - operator mount UI用オプション。
+ * @param {string=} options.deviceId - Device ID。
+ * @param {Function=} options.onAfterChange - 成功後の再描画callback。
  * @returns {HTMLElement} source chip 要素。
  */
-function createMaterialSourceChip(row, isStale) {
+function createMaterialSourceChip(row, isStale, options = {}) {
   const chip = document.createElement("div");
   chip.className = `fm-material-source-chip fm-material-source-${row?.kind || "unknown"}`;
   chip.dataset.sourceId = row?.sourceId || "";
@@ -726,6 +1018,8 @@ function createMaterialSourceChip(row, isStale) {
 
   const accounting = row?.accounting && typeof row.accounting === "object" ? row.accounting : null;
   const managedSpool = accounting?.mount?.spool || null;
+  const currentMountId = toTrimmedText(accounting?.mount?.mountId);
+  const currentSpoolId = toTrimmedText(accounting?.mount?.spoolId);
   if (managedSpool || accounting?.mount?.spoolId) {
     const managedLine = document.createElement("div");
     managedLine.className = "fm-material-source-managed-spool";
@@ -774,6 +1068,49 @@ function createMaterialSourceChip(row, isStale) {
     assignmentLine.title = "T1A/T1B等は物理CFSスロット名ではなく、印刷/G-code側の割当識別子です。";
     chip.appendChild(assignmentLine);
   }
+  if (row?.sourceId) {
+    const actionLine = document.createElement("div");
+    actionLine.className = "fm-material-source-actions";
+    const mountBtn = document.createElement("button");
+    mountBtn.type = "button";
+    mountBtn.className = "btn-font-xs";
+    mountBtn.textContent = currentMountId ? "交換" : "設定";
+    mountBtn.disabled = isStale;
+    mountBtn.title = isStale
+      ? "CFS情報が最終観測のため、3DPmon管理スプールの変更はできません。"
+      : "CFS本体は操作せず、3DPmonの管理台帳だけを更新します。";
+    mountBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await executeMaterialSourceMountUiAction({
+        row,
+        deviceId: options.deviceId,
+        currentSpoolId,
+        expectedMountId: currentMountId,
+        onAfterChange: options.onAfterChange,
+      });
+    });
+    actionLine.appendChild(mountBtn);
+    if (currentMountId) {
+      const unmountBtn = document.createElement("button");
+      unmountBtn.type = "button";
+      unmountBtn.className = "btn-font-xs";
+      unmountBtn.textContent = "割当解除";
+      unmountBtn.disabled = isStale;
+      unmountBtn.title = isStale
+        ? "CFS情報が最終観測のため、3DPmon管理スプールの変更はできません。"
+        : "物理的な取り外しは行わず、3DPmon管理台帳の割当だけを閉じます。";
+      unmountBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await executeMaterialSourceUnmountUiAction({
+          row,
+          expectedMountId: currentMountId,
+          onAfterChange: options.onAfterChange,
+        });
+      });
+      actionLine.appendChild(unmountBtn);
+    }
+    chip.appendChild(actionLine);
+  }
   return chip;
 }
 
@@ -785,13 +1122,15 @@ function createMaterialSourceChip(row, isStale) {
  *   read-only summaryとして表示する。
  * - 外部スプールとCFS/CFS-C slotを別fieldsetへ分け、CFS 1台構成なら外部1本+1A-1Dの5 sourceを
  *   同時に見られるようにする。
- * - ここでは装着、交換、残量台帳書き込みを行わない。CFS sourceを単一スプールとして誤帰属させないため。
+ * - ここで行う設定/交換/割当解除は3DPmon管理台帳だけを対象とし、CFSの物理操作や残量debitは行わない。
  *
  * @function createFilamentManagerMaterialSupplySection
  * @param {string} host - 表示対象ホスト名。
+ * @param {Object=} options - 表示オプション。
+ * @param {Function=} options.onAfterChange - operator mount UI成功後の再描画callback。
  * @returns {HTMLElement|null} 表示セクション、対象外なら null。
  */
-export function createFilamentManagerMaterialSupplySection(host) {
+export function createFilamentManagerMaterialSupplySection(host, options = {}) {
   const machine = monitorData.machines?.[host] || {};
   const target = getConnectionTarget(host);
   const printerType = getPrinterType(host);
@@ -811,6 +1150,7 @@ export function createFilamentManagerMaterialSupplySection(host) {
   const accountingView = createMaterialSupplyAccountingView({
     deviceId: shadowRecord?.deviceId || topology?.identity?.deviceId || null,
   });
+  const deviceId = shadowRecord?.deviceId || topology?.identity?.deviceId || null;
   const viewModel = createMaterialTopologyViewModel(topology, {
     ...viewOptions,
     accountingView,
@@ -846,7 +1186,10 @@ export function createFilamentManagerMaterialSupplySection(host) {
     external.appendChild(legend);
     const grid = document.createElement("div");
     grid.className = "fm-material-source-grid";
-    viewModel.external.forEach((row) => grid.appendChild(createMaterialSourceChip(row, isStale)));
+    viewModel.external.forEach((row) => grid.appendChild(createMaterialSourceChip(row, isStale, {
+      deviceId,
+      onAfterChange: options.onAfterChange,
+    })));
     external.appendChild(grid);
     section.appendChild(external);
   }
@@ -860,7 +1203,10 @@ export function createFilamentManagerMaterialSupplySection(host) {
     const grid = document.createElement("div");
     grid.className = "fm-material-source-grid";
     (Array.isArray(unit.slots) ? unit.slots : []).forEach((row) => {
-      grid.appendChild(createMaterialSourceChip(row, isStale));
+      grid.appendChild(createMaterialSourceChip(row, isStale, {
+        deviceId,
+        onAfterChange: options.onAfterChange,
+      }));
     });
     unitField.appendChild(grid);
     section.appendChild(unitField);
@@ -947,7 +1293,7 @@ function createDashboardContent(hostname, switchTab) {
 
       const spoolId = getCurrentSpoolId(host);
       const spool = spoolId ? allSpools.find(s => s.id === spoolId && !s.deleted) : null;
-      const materialSupplySection = createFilamentManagerMaterialSupplySection(host);
+      const materialSupplySection = createFilamentManagerMaterialSupplySection(host, { onAfterChange: render });
 
       if (spool) {
         // 装着中スプールの表示

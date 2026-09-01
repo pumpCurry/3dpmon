@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1521 (PR #438)
+ * @version 1.390.1583 (PR #440)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-08-31 16:41:00
+ * @lastModified 2026-09-01 16:08:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -54,7 +54,38 @@ const mockState = vi.hoisted(() => ({
         materialSourceLedgerWrites: "shadow-only",
       },
     },
+    materialAccountingSpoolMountStore: {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    },
   },
+  operatorMountSource: vi.fn(async () => ({ ok: true, action: "mount" })),
+  operatorUnmountSource: vi.fn(async () => ({ ok: true, action: "unmount" })),
+  operatorReplaceSourceMount: vi.fn(async () => ({ ok: true, action: "replace" })),
+  showConfirmDialog: vi.fn(async (options = {}) => {
+    if (options.html && typeof document !== "undefined") {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = options.html;
+      document.body.appendChild(wrapper);
+    }
+    return true;
+  }),
   target: null,
 }));
 
@@ -85,7 +116,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   getSpoolStateLabel: vi.fn(() => "未使用"),
   getSpoolBalanceState: vi.fn(() => "unknown"),
   getSpoolBalanceStateLabel: vi.fn(() => "残量不明"),
-  formatSpoolDisplayId: vi.fn(() => "#001"),
+  formatSpoolDisplayId: vi.fn((spool) => `#${String(spool?.serialNo || 0).padStart(3, "0")}`),
   formatFilamentAmount: vi.fn((value) => ({ display: `${value}mm` })),
   formatRemainingFilamentAmount: vi.fn((value) => ({ display: `${value}mm` })),
   displayRemainingLengthMm: vi.fn((value) => value),
@@ -122,6 +153,16 @@ vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
   saveUnifiedStorage: vi.fn(),
 }));
 
+vi.mock("../../3dp_lib/printer_core/dashboard_material_accounting_mount_runtime.js", () => ({
+  createMaterialAccountingSpoolMountRuntime: vi.fn(() => ({
+    service: {
+      operatorMountSource: mockState.operatorMountSource,
+      operatorUnmountSource: mockState.operatorUnmountSource,
+      operatorReplaceSourceMount: mockState.operatorReplaceSourceMount,
+    },
+  })),
+}));
+
 vi.mock("../../3dp_lib/dashboard_filament_view.js", () => ({
   createFilamentPreview: vi.fn(),
 }));
@@ -139,7 +180,7 @@ vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({
 }));
 
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({
-  showConfirmDialog: vi.fn(() => Promise.resolve(true)),
+  showConfirmDialog: mockState.showConfirmDialog,
 }));
 
 vi.mock("../../3dp_lib/dashboard_ui_components.js", () => ({
@@ -241,6 +282,26 @@ function setupK2Runtime(options = {}) {
       materialSourceLedgerWrites: "shadow-only",
     },
   };
+  monitorData.materialAccountingSpoolMountStore = {
+    schemaVersion: 1,
+    authority: "material-accounting-spool-mount-store",
+    storeRevision: 0,
+    storeDigest: "",
+    spoolMounts: [],
+    events: [],
+    conflicts: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      operatorManaged: true,
+      deviceObservationWrites: false,
+      physicalCommandWrites: false,
+      legacyHostSpoolMapWrites: false,
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      filamentLedgerWrites: false,
+      printBindingWrites: false,
+    },
+  };
   monitorData.machines = {
     "K2Pro-69E7": {
       runtimeData: {
@@ -277,6 +338,30 @@ afterEach(() => {
       materialSourceLedgerWrites: "shadow-only",
     },
   };
+  monitorData.materialAccountingSpoolMountStore = {
+    schemaVersion: 1,
+    authority: "material-accounting-spool-mount-store",
+    storeRevision: 0,
+    storeDigest: "",
+    spoolMounts: [],
+    events: [],
+    conflicts: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      operatorManaged: true,
+      deviceObservationWrites: false,
+      physicalCommandWrites: false,
+      legacyHostSpoolMapWrites: false,
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      filamentLedgerWrites: false,
+      printBindingWrites: false,
+    },
+  };
+  mockState.operatorMountSource.mockClear();
+  mockState.operatorUnmountSource.mockClear();
+  mockState.operatorReplaceSourceMount.mockClear();
+  mockState.showConfirmDialog.mockClear();
   mockState.target = null;
 });
 
@@ -352,6 +437,7 @@ describe("filament manager CFS material source section", () => {
     const materialSourceId = "material-source:k2pro-69e7:cfs-1c";
     monitorData.filamentSpools = [{
       id: "spool:1c",
+      serialNo: 1,
       name: "CC3D Sand Color",
       materialName: "PLA+",
       totalLengthMm: 336000,
@@ -453,5 +539,186 @@ describe("filament manager CFS material source section", () => {
 
     expect(chip?.querySelector(".fm-material-source-managed-spool")).toBeNull();
     expect(chip?.textContent).not.toContain("3DPmon管理");
+  });
+
+  it("open SpoolMount storeからCFS複数sourceの3DPmon管理スプールを同時表示する", () => {
+    setupK2Runtime({ observedAt: "2026-09-01T07:00:00.000Z" });
+    monitorData.filamentSpools = [
+      {
+        id: "spool:1a",
+        serialNo: 1,
+        name: "Yellow PLA",
+        materialName: "PLA",
+        colorName: "Yellow",
+        totalLengthMm: 336000,
+        remainingLengthMm: 300000,
+        filamentColor: "#facc15",
+      },
+      {
+        id: "spool:1b",
+        serialNo: 2,
+        name: "Orange PLA",
+        materialName: "PLA",
+        colorName: "Orange",
+        totalLengthMm: 336000,
+        remainingLengthMm: 250000,
+        filamentColor: "#f97316",
+      },
+    ];
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [
+      {
+        mountId: "mount:1a",
+        mountOperationId: "operation:1a",
+        materialSourceId: "cfs:1:slot:0",
+        spoolId: "spool:1a",
+        status: "open",
+        openedAt: "2026-09-01T06:00:00.000Z",
+        verification: "operator-confirmed",
+        sourceIdentityStrengthAtOpen: "provisional",
+        sourceBindingAtOpen: {
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "cfs:1:slot:0",
+          locator: {
+            kind: "cfs-slot",
+            boxId: 1,
+            slotIndex: 0,
+            protocolSlotId: "1A",
+          },
+        },
+      },
+      {
+        mountId: "mount:1b",
+        mountOperationId: "operation:1b",
+        materialSourceId: "cfs:1:slot:1",
+        spoolId: "spool:1b",
+        status: "open",
+        openedAt: "2026-09-01T06:05:00.000Z",
+        verification: "operator-confirmed",
+        sourceIdentityStrengthAtOpen: "provisional",
+        sourceBindingAtOpen: {
+          deviceId: "serial:k2pro-69e7",
+          materialSourceId: "cfs:1:slot:1",
+          locator: {
+            kind: "cfs-slot",
+            boxId: 1,
+            slotIndex: 1,
+            protocolSlotId: "1B",
+          },
+        },
+      },
+    ];
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');
+    const chip1b = section?.querySelector('[data-source-id="cfs:1:slot:1"]');
+
+    expect(chip1a?.querySelector(".fm-material-source-managed-spool")?.textContent).toContain("3DPmon管理 #001 Yellow PLA");
+    expect(chip1a?.querySelector(".fm-material-source-managed-remaining")?.textContent).toContain("3DPmon残量 300000mm / 89%");
+    expect(chip1b?.querySelector(".fm-material-source-managed-spool")?.textContent).toContain("3DPmon管理 #002 Orange PLA");
+    expect(chip1b?.querySelector(".fm-material-source-managed-remaining")?.textContent).toContain("3DPmon残量 250000mm / 74%");
+  });
+
+  it("sourceカードの設定ボタンはCFS物理操作ではなくoperator mount runtimeへ委譲する", async () => {
+    setupK2Runtime({ observedAt: "2026-09-01T07:00:00.000Z" });
+    monitorData.filamentSpools = [{
+      id: "spool:1a",
+      serialNo: 1,
+      name: "Yellow PLA",
+      materialName: "PLA",
+      totalLengthMm: 336000,
+      remainingLengthMm: 300000,
+      filamentColor: "#facc15",
+    }];
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const button = section?.querySelector('[data-source-id="cfs:1:slot:0"] .fm-material-source-actions button');
+
+    button?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockState.operatorMountSource).toHaveBeenCalledWith(expect.objectContaining({
+      expectedDeviceId: "serial:k2pro-69e7",
+      materialSourceId: "cfs:1:slot:0",
+      spoolId: "spool:1a",
+      actor: "filament-manager-ui",
+    }));
+    expect(mockState.operatorReplaceSourceMount).not.toHaveBeenCalled();
+    expect(mockState.operatorUnmountSource).not.toHaveBeenCalled();
+  });
+
+  it("sourceカードの割当解除ボタンはexpectedMountId付きでoperator unmount runtimeへ委譲する", async () => {
+    setupK2Runtime({ observedAt: "2026-09-01T07:00:00.000Z" });
+    monitorData.filamentSpools = [{
+      id: "spool:1a",
+      serialNo: 1,
+      name: "Yellow PLA",
+      materialName: "PLA",
+      totalLengthMm: 336000,
+      remainingLengthMm: 300000,
+      filamentColor: "#facc15",
+    }];
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      mountId: "mount:1a",
+      mountOperationId: "operation:1a",
+      materialSourceId: "cfs:1:slot:0",
+      spoolId: "spool:1a",
+      status: "open",
+      openedAt: "2026-09-01T06:00:00.000Z",
+      verification: "operator-confirmed",
+      sourceIdentityStrengthAtOpen: "provisional",
+      sourceBindingAtOpen: {
+        deviceId: "serial:k2pro-69e7",
+        materialSourceId: "cfs:1:slot:0",
+        locator: { kind: "cfs-slot", boxId: 1, slotIndex: 0, protocolSlotId: "1A" },
+      },
+    }];
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const buttons = [...(section?.querySelectorAll('[data-source-id="cfs:1:slot:0"] .fm-material-source-actions button') || [])];
+    const unmountButton = buttons.find((buttonElement) => buttonElement.textContent === "割当解除");
+
+    unmountButton?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockState.operatorUnmountSource).toHaveBeenCalledWith(expect.objectContaining({
+      materialSourceId: "cfs:1:slot:0",
+      expectedMountId: "mount:1a",
+      actor: "filament-manager-ui",
+      reason: "operator-unmount",
+    }));
+    expect(mockState.operatorMountSource).not.toHaveBeenCalled();
+    expect(mockState.operatorReplaceSourceMount).not.toHaveBeenCalled();
+  });
+
+  it("open SpoolMount storeは同じsourceIdでも別deviceIdの装着を混入しない", () => {
+    setupK2Runtime({ observedAt: "2026-09-01T07:00:00.000Z" });
+    monitorData.filamentSpools = [{
+      id: "spool:other",
+      serialNo: 77,
+      name: "Other Device PLA",
+      materialName: "PLA",
+      totalLengthMm: 336000,
+      remainingLengthMm: 120000,
+    }];
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      mountId: "mount:other",
+      mountOperationId: "operation:other",
+      materialSourceId: "cfs:1:slot:0",
+      spoolId: "spool:other",
+      status: "open",
+      openedAt: "2026-09-01T06:00:00.000Z",
+      verification: "operator-confirmed",
+      sourceIdentityStrengthAtOpen: "provisional",
+      sourceBindingAtOpen: {
+        deviceId: "serial:other-k2",
+        materialSourceId: "cfs:1:slot:0",
+        locator: { kind: "cfs-slot", boxId: 1, slotIndex: 0, protocolSlotId: "1A" },
+      },
+    }];
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');
+
+    expect(chip1a?.querySelector(".fm-material-source-managed-spool")?.textContent || "").not.toContain("Other Device PLA");
   });
 });

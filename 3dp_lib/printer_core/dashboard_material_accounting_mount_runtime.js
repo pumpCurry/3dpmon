@@ -10,18 +10,18 @@
  * 【機能内容サマリ】
  * - Gate 18.9H-1b のoperator-managed SpoolMount serviceをmonitorDataへ接続
  * - read-only MaterialSource観測からtrusted MaterialSource recordを再構成
- * - IndexedDB CAS writerを注入し、UI未接続のruntime factoryとして提供
+ * - IndexedDB CAS writerを注入し、UIから呼べる管理台帳runtime factoryとして提供
  *
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountRuntime}：runtime service wrapperを生成
  * - {@link resolveObservedMaterialSourceRecord}：観測storeからMaterialSource recordを解決
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1583 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 16:17:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
+ * - none
  */
 
 "use strict";
@@ -38,6 +38,9 @@ import {
   createMaterialSourceRecord,
 } from "./dashboard_material_accounting_contract.js";
 import { createMaterialAccountingSpoolMountService } from "./dashboard_material_accounting_mount_service.js";
+import {
+  reserveUniversalSpoolAssignment,
+} from "./dashboard_material_accounting_spool_assignment_guard.js";
 
 /**
  * 値をtrim済み文字列へ変換する。
@@ -234,8 +237,10 @@ export function resolveObservedMaterialSourceRecord(input = {}) {
  *
  * 【詳細説明】
  * - service本体はpure moduleのまま保ち、runtime層だけがmonitorDataとstorage CAS writerを知る。
- * - UIからは`resolveMaterialSource()`で観測済みsource recordを取得し、そのrecordをH-1a serviceへ渡す。
- * - このfactory自体はUI未接続であり、H-2まではproduction UI操作を追加しない。
+ * - UIから渡される`materialSourceId`は利便性の入力に留め、runtime内の`resolveMaterialSource()`で
+ *   観測済みsource recordを送信時に再解決してからH-1a serviceへ渡す。
+ * - このfactoryが許可するのは3DPmon管理台帳のmount/unmount/replaceだけであり、
+ *   CFS physical commandやspool残量debitは別Gateまで実行しない。
  *
  * @function createMaterialAccountingSpoolMountRuntime
  * @param {Object=} input - runtime入力。
@@ -328,8 +333,66 @@ export function createMaterialAccountingSpoolMountRuntime(input = {}) {
     return service.snapshot();
   }
 
+  /**
+   * Universal mount/replace中にmanaged spoolを予約してlegacy装着を遮断する。
+   *
+   * @function withUniversalSpoolReservation
+   * @param {Object} request - operator request。
+   * @param {string} action - 操作種別。
+   * @param {string} spoolId - 予約対象managed spool ID。
+   * @param {Function} operation - 実行するservice operation。
+   * @returns {Promise<Object>} service result。
+   */
+  async function withUniversalSpoolReservation(request, action, spoolId, operation) {
+    const ownerId = toTrimmedString(request.operatorActionId) || `${action}:${toTrimmedString(request.materialSourceId)}`;
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId,
+      ownerId,
+      materialSourceId: request.materialSourceId || request.materialSource?.materialSourceId,
+    });
+    if (!reservation.ok) {
+      return {
+        ok: false,
+        action,
+        reason: reservation.reason,
+        conflict: reservation.conflict,
+        store: service.snapshot(),
+      };
+    }
+    try {
+      return await operation();
+    } finally {
+      reservation.release();
+    }
+  }
+
+  /**
+   * production runtime向けに予約境界を追加したservice facadeを生成する。
+   *
+   * @function createReservedRuntimeService
+   * @returns {Object} runtime service facade。
+   */
+  function createReservedRuntimeService() {
+    return Object.freeze({
+      snapshot,
+      operatorMountSource: (request = {}) => withUniversalSpoolReservation(
+        request,
+        "mount",
+        request.spoolId,
+        () => service.operatorMountSource(request)
+      ),
+      operatorUnmountSource: (request = {}) => service.operatorUnmountSource(request),
+      operatorReplaceSourceMount: (request = {}) => withUniversalSpoolReservation(
+        request,
+        "replace",
+        request.newSpoolId,
+        () => service.operatorReplaceSourceMount(request)
+      ),
+    });
+  }
+
   return Object.freeze({
-    service,
+    service: createReservedRuntimeService(),
     resolveMaterialSource,
     resolveManagedSpool,
     resolveLegacyOccupancy,
