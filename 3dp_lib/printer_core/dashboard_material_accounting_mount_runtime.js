@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingSpoolMountRuntime}：runtime service wrapperを生成
  * - {@link resolveObservedMaterialSourceRecord}：観測storeからMaterialSource recordを解決
  *
- * @version 1.390.1583 (PR #440)
+ * @version 1.390.1584 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:17:00
+ * @lastModified 2026-09-01 16:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -163,30 +163,23 @@ function findObservationDeviceRecord(store, deviceId) {
 }
 
 /**
- * read-only observation snapshotからMaterialSource recordを解決する。
+ * 観測snapshotをoperator mount用MaterialSource recordへ変換する。
  *
  * 【詳細説明】
- * - callerが渡した任意の文字列をそのままtrusted sourceとして扱わず、保存済み観測store内の
- *   `deviceId + materialSourceId` に一致するsnapshotからのみMaterialSource recordを再構成する。
- * - 観測snapshotのidentityStrengthがunknownの場合は、そのままunknownとして返し、service層で
- *   operator mount拒否へ進ませる。
+ * - 観測storeのキーや`sourceId`はtransport/localな検索キーとして扱い、durable
+ *   `materialSourceId`はMaterialSource identityから生成する。
+ * - raw sourceIdはaliasesへ保持し、UIやimport済み履歴との照合に利用できるようにする。
  *
- * @function resolveObservedMaterialSourceRecord
- * @param {Object} input - 解決入力。
- * @param {Object=} input.materialSourceObservations - 観測store。未指定ならmonitorDataを参照する。
- * @param {string} input.deviceId - Device ID。
- * @param {string} input.materialSourceId - MaterialSource ID。
- * @returns {?Object} MaterialSource record。見つからない場合はnull。
- * @example
- * const source = resolveObservedMaterialSourceRecord({ deviceId, materialSourceId });
+ * @private
+ * @function createObservedMaterialSourceRecord
+ * @param {Object} snapshot - read-only source snapshot。
+ * @param {Object} deviceRecord - device observation record。
+ * @param {string} deviceId - Device ID。
+ * @param {string} sourceLookupId - 観測storeで使った検索キー。
+ * @returns {?Object} MaterialSource record。検証できない場合はnull。
  */
-export function resolveObservedMaterialSourceRecord(input = {}) {
-  const store = input.materialSourceObservations || monitorData.materialSourceObservations;
-  const deviceId = toTrimmedString(input.deviceId);
-  const sourceId = toTrimmedString(input.materialSourceId || input.sourceId);
-  const deviceRecord = findObservationDeviceRecord(store, deviceId);
-  const snapshot = sourceId ? deviceRecord?.latestBySourceId?.[sourceId] : null;
-  if (!deviceRecord || !snapshot || typeof snapshot !== "object") {
+function createObservedMaterialSourceRecord(snapshot, deviceRecord, deviceId, sourceLookupId) {
+  if (!snapshot || typeof snapshot !== "object") {
     return null;
   }
 
@@ -224,12 +217,57 @@ export function resolveObservedMaterialSourceRecord(input = {}) {
       index: locator.index,
     }),
     identityStrength,
-    materialSourceId: sourceId,
-    displayLabel: snapshot.displayLabel || snapshot.label || sourceId,
-    aliases: [snapshot.sourceId, snapshot.materialSourceId, snapshot.id]
+    displayLabel: snapshot.displayLabel || snapshot.label || sourceLookupId,
+    aliases: [sourceLookupId, snapshot.sourceId, snapshot.materialSourceId, snapshot.id]
       .map((value) => toTrimmedString(value))
       .filter((value, index, list) => value && list.indexOf(value) === index),
   });
+}
+
+/**
+ * read-only observation snapshotからMaterialSource recordを解決する。
+ *
+ * 【詳細説明】
+ * - callerが渡した任意の文字列をそのままtrusted sourceとして扱わず、保存済み観測store内の
+ *   `deviceId + materialSourceId` に一致するsnapshotからのみMaterialSource recordを再構成する。
+ * - 観測snapshotのidentityStrengthがunknownの場合は、そのままunknownとして返し、service層で
+ *   operator mount拒否へ進ませる。
+ *
+ * @function resolveObservedMaterialSourceRecord
+ * @param {Object} input - 解決入力。
+ * @param {Object=} input.materialSourceObservations - 観測store。未指定ならmonitorDataを参照する。
+ * @param {string} input.deviceId - Device ID。
+ * @param {string} input.materialSourceId - MaterialSource ID。
+ * @returns {?Object} MaterialSource record。見つからない場合はnull。
+ * @example
+ * const source = resolveObservedMaterialSourceRecord({ deviceId, materialSourceId });
+ */
+export function resolveObservedMaterialSourceRecord(input = {}) {
+  const store = input.materialSourceObservations || monitorData.materialSourceObservations;
+  const deviceId = toTrimmedString(input.deviceId);
+  const sourceId = toTrimmedString(input.materialSourceId || input.sourceId);
+  const deviceRecord = findObservationDeviceRecord(store, deviceId);
+  const latestBySourceId = deviceRecord?.latestBySourceId && typeof deviceRecord.latestBySourceId === "object"
+    ? deviceRecord.latestBySourceId
+    : {};
+  const snapshot = sourceId ? latestBySourceId[sourceId] : null;
+  if (!deviceRecord || !sourceId) {
+    return null;
+  }
+  const directRecord = createObservedMaterialSourceRecord(snapshot, deviceRecord, deviceId, sourceId);
+  if (directRecord) {
+    return directRecord;
+  }
+  for (const [lookupId, candidateSnapshot] of Object.entries(latestBySourceId)) {
+    const candidateRecord = createObservedMaterialSourceRecord(candidateSnapshot, deviceRecord, deviceId, lookupId);
+    if (!candidateRecord) {
+      continue;
+    }
+    if (candidateRecord.materialSourceId === sourceId || candidateRecord.aliases.includes(sourceId)) {
+      return candidateRecord;
+    }
+  }
+  return null;
 }
 
 /**

@@ -28,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1583 (PR #440)
+ * @version 1.390.1584 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 16:12:00
+ * @lastModified 2026-09-01 16:39:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -266,21 +266,76 @@ function _reconcileSpoolMountStoreWithCurrentBackends(store) {
 }
 
 /**
- * monitorData上の現在Universal SpoolMount authorityをbackend状態へ再照合する。
+ * reconcile済みSpoolMount storeをCAS保護shared keyへ書き戻す。
  *
  * 【詳細説明】
- * - import/restoreではhostSpoolMapやfilamentSpoolsが先に確定し、その後にSpoolMount storeをマージする。
- * - incoming storeが無いimportでも既存current Universal OPEN mountと新しいlegacy hostSpoolMapが衝突し得るため、
- *   最終状態に対して必ずこの関数を呼ぶ。
+ * - operator-managed SpoolMount storeは通常flush対象外なので、restore/import後にreconcileで
+ *   active authorityが変わった場合だけ専用CASでIndexedDBへ反映する。
+ * - CAS mismatch時は値を書き換えず、次回operator操作もfail-closedするため、古い値でsilent overwriteしない。
+ *
+ * @private
+ * @function _persistReconciledMaterialAccountingSpoolMountStoreIfChanged
+ * @param {Object} previousStore - reconcile前の正規化候補store。
+ * @param {Object} nextStore - reconcile後の正規化候補store。
+ * @returns {Promise<Object|null>} CAS実行結果。変更なしまたはIndexedDB不可ならnull。
+ */
+async function _persistReconciledMaterialAccountingSpoolMountStoreIfChanged(previousStore, nextStore) {
+  const normalizedPrevious = normalizeStoredMaterialAccountingSpoolMountStore(previousStore);
+  const normalizedNext = normalizeStoredMaterialAccountingSpoolMountStore(nextStore);
+  const previousDigest = createMaterialAccountingSpoolMountStoreDigest(normalizedPrevious);
+  const nextDigest = createMaterialAccountingSpoolMountStoreDigest(normalizedNext);
+  if (previousDigest === nextDigest || !_idbInitialized || !isIdbAvailable()) {
+    return null;
+  }
+  return compareAndSwapSharedValue({
+    key: "materialAccountingSpoolMountStore",
+    expectedDigest: previousDigest,
+    createDigest: createMaterialAccountingSpoolMountStoreDigest,
+    nextValue: normalizedNext,
+  });
+}
+
+/**
+ * monitorData上の現在Universal SpoolMount authorityをbackend状態へ再照合し、必要ならCAS保護storeへ反映する。
+ *
+ * 【詳細説明】
+ * - SpoolMount storeは通常flushから除外されるため、restore/import後の隔離結果は専用CASで書き戻す。
+ * - importでは呼び出し元がawaitし、restoreでは起動を止めずに非同期で書き戻す。書き戻し完了前の
+ *   operator操作はCAS mismatchでfail-closedする。
  *
  * @private
  * @function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends
- * @returns {void}
+ * @param {Object=} options - 照合オプション。
+ * @param {boolean=} options.awaitDurable - CAS保護storeへの反映完了を待つ場合true。
+ * @returns {Promise<Object|null>|null} durable書き戻し結果、または非同期書き戻しを待たない場合null。
  */
-function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends() {
-  monitorData.materialAccountingSpoolMountStore = _reconcileSpoolMountStoreWithCurrentBackends(
+function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends(options = {}) {
+  const previousStore = normalizeStoredMaterialAccountingSpoolMountStore(
     monitorData.materialAccountingSpoolMountStore
   );
+  const reconciledStore = _reconcileSpoolMountStoreWithCurrentBackends(previousStore);
+  monitorData.materialAccountingSpoolMountStore = reconciledStore;
+  const persistPromise = _persistReconciledMaterialAccountingSpoolMountStoreIfChanged(previousStore, reconciledStore)
+    .catch((error) => {
+      console.warn("[SpoolMount reconcile] CAS保護storeへの書き戻しに失敗:", error?.message || error);
+      return {
+        ok: false,
+        casApplied: false,
+        backend: "indexedDB",
+        key: "materialAccountingSpoolMountStore",
+        reason: "reconcile-persist-threw",
+        error: error?.message || String(error),
+      };
+    });
+  if (options.awaitDurable === true) {
+    return persistPromise;
+  }
+  persistPromise.then((result) => {
+    if (result && result.ok !== true) {
+      console.warn("[SpoolMount reconcile] CAS保護storeへの書き戻しが未適用:", result.reason || result.error || result);
+    }
+  });
+  return null;
 }
 
 /**
@@ -779,7 +834,7 @@ export async function importAllData(data) {
   if (data.materialAccountingSpoolMountStore && typeof data.materialAccountingSpoolMountStore === "object") {
     _mergeMaterialAccountingSpoolMountStore(data.materialAccountingSpoolMountStore);
   }
-  _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends();
+  await _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends({ awaitDurable: true });
 
   // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
   //    submitted/post-observed/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。

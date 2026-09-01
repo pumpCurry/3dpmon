@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1583 (PR #440)
+ * @version 1.390.1584 (PR #440)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-09-01 16:08:00
+ * @lastModified 2026-09-01 16:39:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -116,6 +116,7 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
   getSpoolStateLabel: vi.fn(() => "未使用"),
   getSpoolBalanceState: vi.fn(() => "unknown"),
   getSpoolBalanceStateLabel: vi.fn(() => "残量不明"),
+  getSpoolMountedLocationLabels: vi.fn(() => []),
   formatSpoolDisplayId: vi.fn((spool) => `#${String(spool?.serialNo || 0).padStart(3, "0")}`),
   formatFilamentAmount: vi.fn((value) => ({ display: `${value}mm` })),
   formatRemainingFilamentAmount: vi.fn((value) => ({ display: `${value}mm` })),
@@ -500,6 +501,8 @@ describe("filament manager CFS material source section", () => {
     expect(chip?.querySelector(".fm-material-source-managed-remaining")?.textContent).toContain("3DPmon残量 268800mm / 80%");
     expect(chip?.querySelector(".fm-material-source-usage")?.textContent).toContain("直近使用 3210mm");
     expect(chip?.textContent).toContain("機器残量 100%");
+    expect(chip?.querySelector(".fm-material-source-actions")?.textContent).toContain("設定");
+    expect(chip?.querySelector(".fm-material-source-actions")?.textContent).not.toContain("割当解除");
   });
 
   it("deviceIdが未確定のCFS表示では別機体のaccounting履歴を合流しない", () => {
@@ -569,7 +572,7 @@ describe("filament manager CFS material source section", () => {
       {
         mountId: "mount:1a",
         mountOperationId: "operation:1a",
-        materialSourceId: "cfs:1:slot:0",
+        materialSourceId: "material-source:serial-k2pro-69e7:cfs-1:slot-0",
         spoolId: "spool:1a",
         status: "open",
         openedAt: "2026-09-01T06:00:00.000Z",
@@ -589,7 +592,7 @@ describe("filament manager CFS material source section", () => {
       {
         mountId: "mount:1b",
         mountOperationId: "operation:1b",
-        materialSourceId: "cfs:1:slot:1",
+        materialSourceId: "material-source:serial-k2pro-69e7:cfs-1:slot-1",
         spoolId: "spool:1b",
         status: "open",
         openedAt: "2026-09-01T06:05:00.000Z",
@@ -720,5 +723,53 @@ describe("filament manager CFS material source section", () => {
     const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');
 
     expect(chip1a?.querySelector(".fm-material-source-managed-spool")?.textContent || "").not.toContain("Other Device PLA");
+  });
+
+  it("durable MaterialSource IDのopen mountをsourceBinding aliasで現在sourceへ表示する", () => {
+    setupK2Runtime({ observedAt: "2026-09-01T07:00:00.000Z" });
+    monitorData.materialAccountingPrintBindingStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: [],
+      usageEvidence: [],
+      jobMaterialSegments: [],
+      ledgerEvents: [],
+      unattributedUsage: [],
+      operationsById: {},
+      invariants: {
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        materialSourceLedgerWrites: "shadow-only",
+      },
+    };
+    monitorData.filamentSpools = [{
+      id: "spool:1a",
+      serialNo: 1,
+      name: "Yellow PLA",
+      materialName: "PLA",
+      totalLengthMm: 336000,
+      remainingLengthMm: 300000,
+      filamentColor: "#facc15",
+    }];
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      mountId: "mount:1a",
+      mountOperationId: "operation:1a",
+      materialSourceId: "material-source:serial-k2pro-69e7:cfs-1:slot-0",
+      spoolId: "spool:1a",
+      status: "open",
+      openedAt: "2026-09-01T06:00:00.000Z",
+      verification: "operator-confirmed",
+      sourceIdentityStrengthAtOpen: "provisional",
+      sourceBindingAtOpen: {
+        deviceId: "serial:k2pro-69e7",
+        materialSourceId: "cfs:1:slot:0",
+        locator: { kind: "cfs-slot", boxId: 1, slotIndex: 0, protocolSlotId: "1A" },
+      },
+    }];
+
+    const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
+    const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');
+
+    expect(chip1a?.querySelector(".fm-material-source-managed-spool")?.textContent).toContain("3DPmon管理 #001 Yellow PLA");
   });
 });

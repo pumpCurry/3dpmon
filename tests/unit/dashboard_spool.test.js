@@ -94,6 +94,7 @@ import {
   updateSpool,
   addSpool,
   setCurrentSpoolId,
+  getSpoolMountedLocationLabels,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
@@ -207,6 +208,39 @@ describe('getSpoolState', () => {
 
   it('isActive=true → MOUNTED', () => {
     expect(getSpoolState({ isActive: true })).toBe(SPOOL_STATE.MOUNTED);
+  });
+
+  it('Universal OPEN mount中のスプールは装着中として扱う', () => {
+    monitorData.machines = {
+      'K2Pro-69E7': {
+        storedData: { hostname: { rawValue: 'K2Pro-69E7' } },
+        runtimeData: {
+          printerCoreV3Shadow: {
+            deviceId: 'serial:k2pro-69e7',
+          },
+        },
+      },
+    };
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      ...createSpoolMountRecord({
+        mountId: 'mount:k2:1a:S1',
+        materialSourceId: 'cfs:1:slot:0',
+        spoolId: 'S1',
+        status: SPOOL_MOUNT_STATUS.OPEN,
+        openedAt: '2026-09-01T04:00:00.000Z',
+        mountOperationId: 'operation:k2:1a:S1',
+        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+        sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      }),
+      sourceBindingAtOpen: {
+        deviceId: 'serial:k2pro-69e7',
+        materialSourceId: 'cfs:1:slot:0',
+        locator: { kind: 'cfs-slot', boxId: 1, slotIndex: 0, protocolSlotId: '1A' },
+      },
+    }];
+
+    expect(getSpoolState({ id: 'S1', remainingLengthMm: 300000 })).toBe(SPOOL_STATE.MOUNTED);
+    expect(getSpoolMountedLocationLabels({ id: 'S1' })).toEqual(['K2Pro-69E7 / 1A']);
   });
 
   it('負残量でも装着中ライフサイクル状態は MOUNTED のまま保持する', () => {

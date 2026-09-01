@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountService}：SpoolMount serviceを生成
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1584 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 16:42:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -250,6 +250,9 @@ function createSourceBindingAtOpen(source, resolvedAt) {
     identityStrength: source.identityStrength,
     identity: cloneJsonValue(source.identity || null),
     locator: cloneJsonValue(source.locator || null),
+    aliases: Array.isArray(source.aliases)
+      ? source.aliases.map((alias) => toTrimmedString(alias)).filter(Boolean)
+      : [],
     resolvedAt,
   };
   return deepFreezeJson({
@@ -509,6 +512,37 @@ function getRepositoryConflictReason(result) {
     toTrimmedString(result?.errors?.[0]) ||
     toTrimmedString(result?.action) ||
     "repository-conflict";
+}
+
+/**
+ * UI入力source IDが保存済みmountのsource bindingと一致するか判定する。
+ *
+ * 【詳細説明】
+ * - UIは現在観測行の一時sourceIdを持つが、SpoolMount storeはdevice-scopedなdurable
+ *   MaterialSource IDを保持する。解除操作ではexpectedMountIdを主キーにし、入力sourceIdが
+ *   durable IDまたはopen時binding aliasに一致する場合だけ同じsourceとして扱う。
+ *
+ * @private
+ * @function doesMountMatchSourceInput
+ * @param {Object} mount - 検査対象のSpoolMount record。
+ * @param {string} materialSourceId - UI入力またはdurable MaterialSource ID。
+ * @returns {boolean} 同一sourceとみなせる場合はtrue。
+ */
+function doesMountMatchSourceInput(mount, materialSourceId) {
+  const sourceId = toTrimmedString(materialSourceId);
+  if (!mount || !sourceId) {
+    return false;
+  }
+  const bindingAliases = [
+    mount.materialSourceId,
+    mount.sourceBindingAtOpen?.materialSourceId,
+    mount.sourceBindingAtOpen?.sourceId,
+    mount.sourceBindingAtOpen?.id,
+    ...(Array.isArray(mount.sourceBindingAtOpen?.aliases) ? mount.sourceBindingAtOpen.aliases : []),
+  ]
+    .map((value) => toTrimmedString(value))
+    .filter(Boolean);
+  return bindingAliases.includes(sourceId);
 }
 
 /**
@@ -830,9 +864,19 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       return createServiceResult({ ok: false, action: "unmount", reason: "operator-action-payload-conflict", store: currentStore });
     }
     const repository = createSpoolMountRepository(currentStore.spoolMounts);
-    const currentMount = repository.getOpenMountForSource(materialSourceId);
+    const currentMount = repository.getMount(expectedMountId);
     if (!currentMount) {
+      const sourceMount = repository.getOpenMountForSource(materialSourceId);
+      if (sourceMount) {
+        return createServiceResult({ ok: false, action: "unmount", reason: "expected-mount-mismatch", store: currentStore, record: sourceMount });
+      }
       return createServiceResult({ ok: false, action: "unmount", reason: "open-mount-not-found", store: currentStore });
+    }
+    if (currentMount.status !== "open") {
+      return createServiceResult({ ok: false, action: "unmount", reason: "open-mount-not-found", store: currentStore, record: currentMount });
+    }
+    if (!doesMountMatchSourceInput(currentMount, materialSourceId)) {
+      return createServiceResult({ ok: false, action: "unmount", reason: "material-source-mismatch", store: currentStore, record: currentMount });
     }
     if (currentMount.mountId !== expectedMountId) {
       return createServiceResult({ ok: false, action: "unmount", reason: "expected-mount-mismatch", store: currentStore, record: currentMount });

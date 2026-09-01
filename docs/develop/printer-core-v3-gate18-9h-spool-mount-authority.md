@@ -125,12 +125,20 @@ Status: implemented and tested in PR #440 after `afc3d37`.
 実装境界:
 
 - source card は `設定` / `交換` / `割当解除` を表示する。
+- スプール一覧は Universal `OPEN` mount を装着中として扱い、
+  `K2Pro-69E7 / 1A` のようなsource-aware装着先を表示する。
 - 操作は `createMaterialAccountingSpoolMountRuntime()` の
   `operatorMountSource()` / `operatorReplaceSourceMount()` /
   `operatorUnmountSource()` だけへ委譲する。
+- 過去のprint-start snapshot由来mountはread-onlyな履歴表示だけに使い、
+  現在`OPEN`なSpoolMountとして `交換` / `割当解除` の操作対象にしない。
 - UIから渡す `materialSourceId` やspool候補は利便性の入力であり、service/runtime側が
   送信時に現在観測source、managed spool、legacy occupancy、durable CAS preconditionを
   再検証する。
+- 観測sourceの `sourceId` / `materialSourceId` はtransport-local aliasとして扱う。
+  durable `MaterialSource.materialSourceId` は `deviceId + unit + locator` から生成し、
+  open mount の `sourceBindingAtOpen.aliases` にraw観測IDを残す。これにより複数K2で
+  `cfs:1:slot:0` のような同一一時IDが出ても、SpoolMount store上では衝突しない。
 - stale topologyでは操作ボタンをdisabledにし、最終観測状態からoperator mountを変更しない。
 - 管理スプール割当UIはCFS本体を操作しない。slot select / load / unload / feed /
   retract のphysical commandは Gate 19 / 19.5 のcertification registryが有効になるまで
@@ -299,6 +307,9 @@ H-1a/H-1b では最低限以下を固定する。
 - restore / import reconciliation は `CLOSED` mount履歴を現在装着conflictとして隔離しない。
 - importが `hostSpoolMap` だけを追加した場合でも、既存current Universal `OPEN` mountを
   final current backend状態に対して再照合して隔離する。
+- import経路ではreconcile後のactive storeをIndexedDB shared keyへCAS保護で書き戻す。
+  restore経路では起動を止めずに非同期CASを試み、完了前にoperator操作が入った場合は
+  storage digest preconditionでfail-closedする。
 - `identityStrength: "unknown"` の source は mount できない。
 - provisional source は manual mount できるが、future debit は revalidation まで
   pending になる。
@@ -306,14 +317,15 @@ H-1a/H-1b では最低限以下を固定する。
 - mount / unmount / replace は `hostSpoolMap`、`usageHistory`、
   `filamentSpools.remainingLengthMm`、`materialAccountingPrintBindingStore`、
   `physicalCommandRecoveryLatch` を変更しない。
+- print-start snapshot由来の過去mount表示だけでは、H-2 UIの `交換` /
+  `割当解除` を有効にしない。
+- Universal `OPEN` mount中のspoolはスプール一覧/状態フィルタで装着中として表示する。
 
 ## Follow-up Gates
 
 Gate 18.9H-2 follow-up:
 
 - K2/CFS の legacy `hostSpoolMap` 1本割当を migration candidate として表示する。
-- source-aware read model で spool 一覧に `装着中: K2Pro-69E7 / CFS 1A` のような
-  表示を出す。
 - H-2 UIで設定したsource別mountを、後続Gate 18.9Iのprint-start snapshotへ接続する。
 
 Gate 18.9I-1:

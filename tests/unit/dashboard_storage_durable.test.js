@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1584 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 16:39:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -156,6 +156,7 @@ vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
 
 const {
   initStorage,
+  importAllData,
   saveUnifiedStorageDurably,
   commitMaterialAccountingSpoolMountStoreDurably,
 } = await import("../../3dp_lib/dashboard_storage.js");
@@ -487,6 +488,38 @@ describe("saveUnifiedStorageDurably", () => {
 
     expect(result).toMatchObject({ ok: false, casApplied: false, reason: "material-source-precondition-changed" });
     expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("import後のcross-backend reconcile結果はCAS保護storeへ専用書き戻しする", async () => {
+    const openMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [createDurableMountFixture()],
+      events: [],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+    });
+
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "legacy-spool-backend-conflict",
+      }),
+    ]);
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: openMountStore.storeDigest,
+      nextValue: mocks.monitorData.materialAccountingSpoolMountStore,
+    }));
+    expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith(
+      "materialAccountingSpoolMountStore",
+      expect.anything()
+    );
   });
 });
 

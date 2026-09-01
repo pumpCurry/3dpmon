@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1553
+  Version 1.390.1584
 */
 
 /* ===============================================================
@@ -1756,6 +1756,19 @@ body.panel-mode .notification-container {
 .fm-source-mount-dialog-note {
   margin-top: 8px;
   margin-bottom: 0;
+}
+.fm-mounted-location {
+  margin-top: 1px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+.fm-source-unmount-hint {
+  display: inline-block;
+  margin-left: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  white-space: nowrap;
 }
 .fm-material-source-selected {
   display: inline-flex;

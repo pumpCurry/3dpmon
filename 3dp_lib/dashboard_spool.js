@@ -30,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1583 (PR #440)
+* @version 1.390.1584 (PR #440)
 * @since   1.390.193 (PR #86)
-* @lastModified 2026-09-01 16:12:00
+* @lastModified 2026-09-01 16:42:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -70,6 +70,7 @@ import {
 } from "./dashboard_filament_remaining_model.js";
 import {
   findUniversalSpoolAssignmentConflict,
+  listCurrentOpenUniversalSpoolMounts,
 } from "./printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 
 /**
@@ -170,6 +171,102 @@ export const SPOOL_BALANCE_STATE = Object.freeze({
 const EXHAUSTED_THRESHOLD_MM = 100;
 
 /**
+ * Universal SpoolMountのlocatorを利用者向けsource名へ変換する。
+ *
+ * 【詳細説明】
+ * - CFS slotは `1A` などのprotocolSlotIdを優先する。
+ * - external/directはsource種別を崩さず、スプール一覧の装着先補足として読める粒度に留める。
+ *
+ * @private
+ * @function formatUniversalSpoolMountSourceLabel
+ * @param {Object|null|undefined} locator - sourceBindingAtOpen.locator。
+ * @param {string} fallback - locatorが不足した場合のfallback。
+ * @returns {string} 表示用source名。
+ */
+function formatUniversalSpoolMountSourceLabel(locator, fallback) {
+  const protocolSlotId = String(locator?.protocolSlotId || "").trim();
+  if (protocolSlotId) {
+    return protocolSlotId;
+  }
+  const kind = String(locator?.kind || "").trim();
+  if (kind === "external") {
+    return "external";
+  }
+  if (kind === "direct") {
+    return "direct";
+  }
+  return String(fallback || "").trim() || "--";
+}
+
+/**
+ * deviceIdから現在の表示用プリンタ名を解決する。
+ *
+ * 【詳細説明】
+ * - Universal SpoolMountはhost名ではなくdeviceIdへbindするため、現在接続中のmachineから
+ *   同じdeviceIdを持つhostを探して、人間が見慣れた表示名へ変換する。
+ * - 一致するhostが無い場合はdeviceId自体を返し、履歴の証跡を隠さない。
+ *
+ * @private
+ * @function resolveDisplayNameForUniversalDeviceId
+ * @param {string} deviceId - Universal MaterialSourceのdevice ID。
+ * @returns {string} 表示用プリンタ名。
+ */
+function resolveDisplayNameForUniversalDeviceId(deviceId) {
+  const expectedDeviceId = String(deviceId || "").trim();
+  if (!expectedDeviceId) {
+    return "";
+  }
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || {};
+    const observedDeviceId = String(
+      shadowRecord.deviceId ||
+      shadowRecord.lastState?.identity?.deviceId ||
+      ""
+    ).trim();
+    if (observedDeviceId === expectedDeviceId) {
+      return String(machine?.storedData?.hostname?.rawValue || host).trim();
+    }
+  }
+  return expectedDeviceId;
+}
+
+/**
+ * スプールの現在装着先ラベルを列挙する。
+ *
+ * 【詳細説明】
+ * - legacy `hostSpoolMap` / `sp.hostname` と Universal SpoolMount の両方をread-onlyで表示へ投影する。
+ * - 同一ラベルは重複排除し、Universal側はOPEN mountだけを現在装着先として扱う。
+ *
+ * @function getSpoolMountedLocationLabels
+ * @param {Object|null|undefined} spool - スプールオブジェクト。
+ * @returns {Array<string>} 表示用装着先ラベル一覧。
+ * @example
+ * const labels = getSpoolMountedLocationLabels(spool);
+ */
+export function getSpoolMountedLocationLabels(spool) {
+  const spoolId = String(spool?.id || spool?.spoolId || "").trim();
+  if (!spoolId) {
+    return [];
+  }
+  const labels = [];
+  if (spool?.isActive && spool?.hostname) {
+    const host = String(spool.hostname).trim();
+    const machine = monitorData.machines?.[host] || {};
+    labels.push(String(machine.storedData?.hostname?.rawValue || host).trim());
+  }
+  for (const mount of listCurrentOpenUniversalSpoolMounts(monitorData.materialAccountingSpoolMountStore)) {
+    if (String(mount?.spoolId || "").trim() !== spoolId) {
+      continue;
+    }
+    const binding = mount.sourceBindingAtOpen || {};
+    const deviceName = resolveDisplayNameForUniversalDeviceId(binding.deviceId);
+    const sourceName = formatUniversalSpoolMountSourceLabel(binding.locator, mount.materialSourceId);
+    labels.push([deviceName, sourceName].filter(Boolean).join(" / "));
+  }
+  return labels.filter((label, index, list) => label && list.indexOf(label) === index);
+}
+
+/**
  * スプールオブジェクトの現在のライフサイクル状態を返す。
  * 既存のブーリアンフラグ群から状態を導出する。
  *
@@ -180,6 +277,12 @@ export function getSpoolState(spool) {
   if (!spool) return SPOOL_STATE.INVENTORY;
   if (spool.deleted || spool.isDeleted) return SPOOL_STATE.DISCARDED;
   if (spool.isActive) return SPOOL_STATE.MOUNTED;
+  const spoolId = String(spool.id || spool.spoolId || "").trim();
+  if (spoolId) {
+    if (getSpoolMountedLocationLabels(spool).length > 0) {
+      return SPOOL_STATE.MOUNTED;
+    }
+  }
   if (spool.removedAt) {
     return (spool.remainingLengthMm ?? 0) <= EXHAUSTED_THRESHOLD_MM
       ? SPOOL_STATE.EXHAUSTED

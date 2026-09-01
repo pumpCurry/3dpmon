@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1583 (PR #440)
+ * @version 1.390.1584 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:12:00
+ * @lastModified 2026-09-01 16:39:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -109,7 +109,6 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
 
     expect(source).toMatchObject({
       deviceId: "serial:k2",
-      materialSourceId: "source:k2:cfs:1a",
       unitId: "unit:k2:cfs:1",
       kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
       identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
@@ -121,6 +120,45 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
         slotIndex: 0,
       },
     });
+    expect(source.materialSourceId).not.toBe("source:k2:cfs:1a");
+    expect(source.aliases).toContain("source:k2:cfs:1a");
+  });
+
+  it("同じ一時sourceIdでも別deviceならdurable MaterialSource IDを分離する", () => {
+    const data = createRuntimeData();
+    data.materialSourceObservations.byDeviceId["serial:k2-b"] = {
+      deviceId: "serial:k2-b",
+      identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      latestBySourceId: {
+        "source:k2:cfs:1a": {
+          sourceId: "source:k2:cfs:1a",
+          kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+          unitId: "unit:k2-b:cfs:1",
+          unitIndex: 1,
+          boxId: 1,
+          slotId: 0,
+          displayLabel: "1A",
+          materialSourceIdentityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+        },
+      },
+    };
+
+    const first = resolveObservedMaterialSourceRecord({
+      materialSourceObservations: data.materialSourceObservations,
+      deviceId: "serial:k2",
+      materialSourceId: "source:k2:cfs:1a",
+    });
+    const second = resolveObservedMaterialSourceRecord({
+      materialSourceObservations: data.materialSourceObservations,
+      deviceId: "serial:k2-b",
+      materialSourceId: "source:k2:cfs:1a",
+    });
+
+    expect(first.materialSourceId).not.toBe("source:k2:cfs:1a");
+    expect(second.materialSourceId).not.toBe("source:k2:cfs:1a");
+    expect(first.materialSourceId).not.toBe(second.materialSourceId);
+    expect(first.aliases).toContain("source:k2:cfs:1a");
+    expect(second.aliases).toContain("source:k2:cfs:1a");
   });
 
   it("未観測sourceはtrusted MaterialSourceとして解決しない", () => {
@@ -201,10 +239,12 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
 
     expect(first).toMatchObject({ ok: true, action: "mount" });
     expect(second).toMatchObject({ ok: true, action: "mount" });
-    expect(runtime.snapshot().spoolMounts.map((mount) => [mount.materialSourceId, mount.spoolId])).toEqual([
-      ["source:k2:cfs:1a", "spool-031"],
-      ["source:k2:cfs:1b", "spool-002"],
+    const mountedPairs = runtime.snapshot().spoolMounts.map((mount) => [mount.spoolId, mount.sourceBindingAtOpen.aliases[0]]);
+    expect(mountedPairs).toEqual([
+      ["spool-031", "source:k2:cfs:1a"],
+      ["spool-002", "source:k2:cfs:1b"],
     ]);
+    expect(new Set(runtime.snapshot().spoolMounts.map((mount) => mount.materialSourceId)).size).toBe(2);
     expect(data.hostSpoolMap).toEqual({});
     expect(persist).toHaveBeenCalledTimes(2);
   });
@@ -253,7 +293,7 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
     })).toMatchObject({
       reason: "universal-spool-already-mounted",
       spoolId: "spool-031",
-      materialSourceId: "source:k2:cfs:1a",
+      materialSourceId: expect.stringMatching(/^material-source:/),
     });
   });
 });
