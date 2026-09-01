@@ -28,6 +28,8 @@ production authority を作ることである。
 H-1a では production storage へ接続せず、pure store / service contract と
 unit test だけを追加する。
 
+Status: implemented and tested in `719c69e` + `90ad774`.
+
 対象:
 
 - `3dp_lib/printer_core/dashboard_material_accounting_mount_store.js`
@@ -50,6 +52,8 @@ unit test だけを追加する。
 ### Gate 18.9H-1b: Durable Production Persistence
 
 H-1b では H-1a の contract を `monitorData` / shared storage / IndexedDB へ接続する。
+
+Status: pending.
 
 対象:
 

@@ -25,7 +25,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED / selection evidence + recovery blocker UI added | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
-| Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service and H-1b durable persistence split documented | pending | n/a | pending |
+| Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence pending | H-1a tested | n/a | H-1a pure only |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
