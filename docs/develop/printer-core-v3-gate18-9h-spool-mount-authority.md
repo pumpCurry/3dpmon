@@ -475,6 +475,13 @@ Gate 18.9I-4:
   print-start snapshot順にsource-specific usageへ展開する。
 - trusted print-start snapshotには `issuanceEvidence` として、runtimeが観測した
   `deviceId`、`sessionId`、`connectionGeneration`、`printJobId`、`firstObservedAt` を保存する。
+- `MaterialBindingPlan`本体と`commandBinding`は、pending登録時にdevice/session/generation/file/source/spool/toolの
+  semantic projectionで再照合する。module-attested planであっても、request Aのbindingを
+  別source/fileのplanへ混ぜた場合は拒否する。
+- start/completionのlocal receipt timeは、CAS/runtime retry後も初回値へ固定する。
+  retryでprint interval境界を後ろへ動かし、途中のsource/provider breaking eventを隠すことはできない。
+- print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
+  physical discontinuityとして扱い、debit候補へ昇格しない。
 - I-4でもmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みは行わない。
 

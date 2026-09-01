@@ -26,7 +26,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
-| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence | runtime + durable CAS + live bridge + MaterialBindingPlan composition tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
+| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence; command binding semantic cross-check and first local receipt freeze are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -142,11 +142,17 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   因果順序判定には使わない。さらにMaterialBindingPlanはtransport command requestから生成した
   `commandBinding` digestにbindし、command ID、device ID、session ID、connectionGeneration、
   remote path、file hash、material assignment digestが一致しないrequestではpending登録しない。
+  加えて、MaterialBindingPlan本体からdevice/session/generation/file/source/spool/toolの
+  semantic projectionを再生成し、plan本体・plan内`commandBinding`・実transport requestが
+  同じ印刷指示を意味する場合だけpending登録を許す。start/completionのlocal receipt timeは
+  CAS/runtime retry後も初回値へ固定し、retryでprint interval境界を後ろへ動かせない。
   MaterialSource aliasが複数canonical sourceへ衝突する場合はfirst-winせず
   `ambiguous-material-source-alias` としてprint-start bindingを拒否する。
   完了履歴が `printStore.history` に入った後で `recordObservedPrintCompletion()` へ接続し、
   成功後はpendingを削除する。transport送信失敗時はcommand ID付きでpendingを破棄する。
   saved trusted print-start snapshotには `issuanceEvidence` としてdevice/session/generation/job/timeを残す。
+  print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
+  physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
