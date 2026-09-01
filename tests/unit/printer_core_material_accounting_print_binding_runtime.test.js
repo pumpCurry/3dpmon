@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1601 (PR #440)
+ * @version 1.390.1602 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 21:03:29
+ * @lastModified 2026-09-01 21:27:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -121,6 +121,7 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
             protocolSlotId: "1A",
             displayLabel: "1A",
             materialSourceIdentityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+            eventCoverageStartedAt: "2026-09-01T08:00:00.000Z",
           },
           "source:k2:cfs:1b": {
             sourceId: "source:k2:cfs:1b",
@@ -132,6 +133,7 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
             protocolSlotId: "1B",
             displayLabel: "1B",
             materialSourceIdentityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+            eventCoverageStartedAt: "2026-09-01T08:00:00.000Z",
           },
         },
       },
@@ -1144,6 +1146,46 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(result.segments.every((segment) => segment.debit.canDebit === false)).toBe(true);
     expect(result.segments.every((segment) => segment.debit.reasons.includes("source-continuity-required"))).toBe(true);
     expect(result.segments.every((segment) => segment.debit.reasons.includes("fresh-topology-required"))).toBe(true);
+  });
+
+  it("source固有event coverageがprint-start以後からしか証明できない場合は該当sourceだけdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-source-event-coverage-gap" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-source-event-coverage-gap" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-source-event-coverage-gap",
+      completedAt: "2026-09-01T08:31:00.000Z",
+      observedReceivedAt: "2026-09-01T08:31:05.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
+    deviceRecord.eventCoverageStartedAt = "2026-09-01T08:00:00.000Z";
+    deviceRecord.latestBySourceId["source:k2:cfs:1a"].eventCoverageStartedAt = "2026-09-01T08:02:00.000Z";
+    deviceRecord.latestBySourceId["source:k2:cfs:1b"].eventCoverageStartedAt = "2026-09-01T08:00:00.000Z";
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-source-event-coverage-gap",
+      resultSetCompleteness: "complete",
+    });
+
+    const sourceA = result.segments.find((segment) => segment.protocolToolAlias === "T1A");
+    const sourceB = result.segments.find((segment) => segment.protocolToolAlias === "T1B");
+    expect(result.ok).toBe(true);
+    expect(sourceA.debit.canDebit).toBe(false);
+    expect(sourceA.debit.reasons).toContain("source-continuity-required");
+    expect(sourceA.debit.reasons).toContain("fresh-topology-required");
+    expect(sourceB.debit.canDebit).toBe(true);
   });
 
   it("完了後に観測されたfreshなMaterialSourceを完了時点のcontinuity証拠へ遡及利用しない", async () => {

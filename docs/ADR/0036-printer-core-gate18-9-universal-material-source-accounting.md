@@ -196,8 +196,10 @@ source-specific observation timestamp, never from a fresher device-level
 observation belonging to another source. The MaterialSource event log is
 bounded, so absence of a source change event is trusted only when the retained
 event coverage starts at or before the trusted print-start receipt time. If
-coverage is missing or starts after print-start, the usage evidence remains
-shadow evidence and does not become a managed remaining debit candidate.
+device-level coverage is missing, source-specific coverage is missing, or
+either coverage starts after print-start, the usage evidence remains shadow
+evidence and does not become a managed remaining debit candidate. A source first
+observed after print-start cannot borrow an older device-level coverage start.
 Device-level provider gaps also break provisional continuity:
 `provider-disconnected`, `provider-reconnected`, and provider generation changes
 observed during the print interval apply to every provisional source on that
@@ -569,8 +571,10 @@ Gate 18.9 must cover:
   provider generation change after print-start and before completion, the
   runtime marks the segment as a physical discontinuity and keeps
   `sourceContinuity:false`. The same check also requires retained event
-  coverage from at least the print-start time; old restored records or records
-  whose event log has already trimmed past print-start fail closed.
+  coverage from at least the print-start time at both the device-event-log level
+  and the individual MaterialSource snapshot level; old restored records,
+  sources first observed after print-start, or records whose event log has
+  already trimmed past print-start fail closed.
   Gate 18.9I-2 does not mutate managed spool remaining or legacy
   `usageHistory`.
 - ItemKeeper payload generation may read same-device `observed-used` /

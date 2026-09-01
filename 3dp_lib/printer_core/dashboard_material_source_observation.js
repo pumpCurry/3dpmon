@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1601 (PR #440)
+ * @version 1.390.1602 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:03:29
+ * @lastModified 2026-09-01 21:27:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -103,6 +103,47 @@ function toIsoDateTimeString(value) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
   const time = date.getTime();
   return Number.isFinite(time) ? date.toISOString() : new Date().toISOString();
+}
+
+/**
+ * 任意の日時候補を任意ISO文字列へ正規化する。
+ *
+ * 【詳細説明】
+ * - source固有coverageのようなfail-closed証跡は、不正値を現在時刻へ化けさせると
+ *   「観測できていた」証明に誤変換されるため、壊れた値はnullとして扱う。
+ *
+ * @private
+ * @function normalizeOptionalIsoDateTimeString
+ * @param {*} value - 日時候補。
+ * @returns {string|null} 有効なISO 8601日時、またはnull。
+ */
+function normalizeOptionalIsoDateTimeString(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+/**
+ * 2つのISO時刻のうち遅い方を返す。
+ *
+ * 【詳細説明】
+ * - bounded event logをtrimした場合、source固有coverageは保持範囲の先頭より前へ戻せない。
+ * - 既存sourceの初回観測時刻とdevice log保持開始時刻のうち、より保守的な遅い時刻を採用する。
+ *
+ * @private
+ * @function pickLaterIsoDateTimeString
+ * @param {string|null|undefined} left - 時刻候補。
+ * @param {string|null|undefined} right - 時刻候補。
+ * @returns {string|null} 遅いISO 8601日時、またはnull。
+ */
+function pickLaterIsoDateTimeString(left, right) {
+  const leftIso = normalizeOptionalIsoDateTimeString(left);
+  const rightIso = normalizeOptionalIsoDateTimeString(right);
+  if (!leftIso) return rightIso;
+  if (!rightIso) return leftIso;
+  return Date.parse(leftIso) >= Date.parse(rightIso) ? leftIso : rightIso;
 }
 
 /**
@@ -337,6 +378,8 @@ function markRestoredObservationRecord(record, restoredAt) {
         snapshot.restoredFromStorage = true;
         snapshot.restoredAt = restoredAt;
         snapshot.authority = "observation-only";
+        snapshot.eventCoverageStartedAt = normalizeOptionalIsoDateTimeString(snapshot.eventCoverageStartedAt);
+        snapshot.eventCoverageTrimmedAt = normalizeOptionalIsoDateTimeString(snapshot.eventCoverageTrimmedAt);
       }
     }
   }
@@ -650,6 +693,8 @@ function createSourceSnapshot(options) {
     },
     assignments: normalizeAssignmentsForSource(options.assignments, sourceId),
     firstObservedAt: previous?.firstObservedAt || options.observedAt,
+    eventCoverageStartedAt: normalizeOptionalIsoDateTimeString(previous?.eventCoverageStartedAt) || options.observedAt,
+    eventCoverageTrimmedAt: normalizeOptionalIsoDateTimeString(previous?.eventCoverageTrimmedAt),
     lastObservedAt: options.observedAt,
     lastChangedAt: previous?.lastChangedAt || options.observedAt,
     providerId: options.providerId || null,
@@ -704,6 +749,42 @@ function createSourceSnapshot(options) {
     }
   }
   return snapshot;
+}
+
+/**
+ * source snapshotごとのevent coverage開始時刻を保持範囲へ前進させる。
+ *
+ * 【詳細説明】
+ * - device event logはsource別履歴も同じ配列に保持するbounded logなので、trim後は
+ *   どのsourceについても保持範囲より前の「eventが無い」証明を使えない。
+ * - sourceが後から初観測された場合は、そのsource自身のcoverage開始時刻を優先し、device側の
+ *   早いcoverage開始で水増ししない。
+ *
+ * @private
+ * @function advanceSourceEventCoverageStarts
+ * @param {Object} record - device観測レコード。
+ * @param {string|null} retainedFromAt - trim後に保持されている最古event時刻。
+ * @returns {void}
+ */
+function advanceSourceEventCoverageStarts(record, retainedFromAt) {
+  if (!record?.latestBySourceId || typeof record.latestBySourceId !== "object") {
+    return;
+  }
+  for (const snapshot of Object.values(record.latestBySourceId)) {
+    if (!snapshot || typeof snapshot !== "object") {
+      continue;
+    }
+    snapshot.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+      snapshot.eventCoverageStartedAt,
+      retainedFromAt
+    );
+    if (retainedFromAt) {
+      snapshot.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+        snapshot.eventCoverageTrimmedAt,
+        retainedFromAt
+      );
+    }
+  }
 }
 
 /**
@@ -840,6 +921,7 @@ function trimDeviceEvents(record, limits) {
       .sort((a, b) => Date.parse(a) - Date.parse(b));
     record.eventCoverageStartedAt = retainedObservedAt[0] || record.lastObservedAt || null;
     record.eventCoverageTrimmedAt = record.lastObservedAt || null;
+    advanceSourceEventCoverageStarts(record, record.eventCoverageStartedAt);
   }
   record.events = retainedEvents;
 }

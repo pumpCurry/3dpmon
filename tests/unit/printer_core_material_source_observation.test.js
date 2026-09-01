@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1601 (PR #440)
+ * @version 1.390.1602 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-09-01 21:03:29
+ * @lastModified 2026-09-01 21:27:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -276,6 +276,47 @@ describe("MaterialSourceObservationStore", () => {
     expect(changed.record.events[0].changeKind).toBe("source-changed");
     expect(changed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
     expect(changed.record.eventCoverageTrimmedAt).toBe("2026-08-27T12:00:10.000Z");
+    expect(changed.record.latestBySourceId["cfs:1:slot:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
+    expect(changed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
+  });
+
+  it("source固有event coverage開始時刻をsourceごとの初回観測から保持する", () => {
+    const topology = createTopology();
+    const store = createEmptyMaterialSourceObservations();
+    const first = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 10,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology({
+        sources: [topology.sources[1]],
+        assignments: [],
+      }),
+      snapshotCompleteness: "complete",
+    });
+    const second = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 11,
+      observedAt: "2026-08-27T12:05:00.000Z",
+      topology: createTopology({
+        sources: [topology.sources[1], topology.sources[2]],
+        assignments: [],
+      }),
+      snapshotCompleteness: "partial",
+    });
+
+    expect(first.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(second.record.latestBySourceId["cfs:1:slot:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(second.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:05:00.000Z");
   });
 
   it("provisional deviceの履歴はstable deviceへ安全にrekeyでき、conflict中はmergeしない", () => {

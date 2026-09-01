@@ -119,9 +119,10 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
    `completedAt` はprinter clock evidenceとして保持し、MaterialSource `lastObservedAt` との
    continuity比較には使わない。source-specific freshnessは該当sourceの観測時刻だけで判定し、
    他sourceで更新されたdevice-level `lastObservedAt`へfallbackしない。
-   さらに、MaterialSource event logはboundedであるため、retained event coverageがprint-start以前から
-   残っていることを要求する。coverage欠落、またはtrim後にcoverage開始がprint-startより後ろへ進んだ
-   recordは、source-specific segmentを保存してもmanaged debit候補へ昇格しない。印刷区間中の
+   さらに、MaterialSource event logはboundedであるため、device-level event coverageと
+   source固有event coverageの両方がprint-start以前から残っていることを要求する。coverage欠落、
+   source初回観測がprint-start以後、またはtrim後にどちらかのcoverage開始がprint-startより後ろへ
+   進んだrecordは、source-specific segmentを保存してもmanaged debit候補へ昇格しない。印刷区間中の
    provider disconnect/reconnectやproviderGeneration変更は、同じslot/material状態へ戻った場合でも
    provisional source全体のphysical discontinuityとして扱う。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの

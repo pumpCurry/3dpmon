@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1601 (PR #440)
+ * @version 1.390.1602 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 21:03:29
+ * @lastModified 2026-09-01 21:27:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -583,6 +583,49 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
 }
 
 /**
+ * MaterialSource continuity判定用にsource固有event coverage開始時刻を解決する。
+ *
+ * 【詳細説明】
+ * - device-level event logがprint-start以前から残っていても、source自体が後から初観測された場合は
+ *   そのsourceについて「印刷開始時点からeventが無い」とは証明できない。
+ * - canonical source IDとtransport/local aliasの両方でraw latest snapshotを引き、もっとも新しい
+ *   coverage開始時刻を採用して保守的にfail-closedへ寄せる。
+ *
+ * @private
+ * @function resolveMaterialSourceEventCoverageStartedAt
+ * @param {Object} deviceRecord - MaterialSource observation device record。
+ * @param {Object} snapshot - print-start snapshot。
+ * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
+ * @returns {string|null} source固有event coverage開始時刻。
+ */
+function resolveMaterialSourceEventCoverageStartedAt(deviceRecord, snapshot, observedSource) {
+  const sourceIds = createMaterialSourceContinuityLookupIds(snapshot, observedSource);
+  const latestBySourceId = deviceRecord?.latestBySourceId && typeof deviceRecord.latestBySourceId === "object"
+    ? deviceRecord.latestBySourceId
+    : {};
+  const coverageTimes = [
+    observedSource?.eventCoverageStartedAt,
+  ];
+  for (const [lookupId, candidate] of Object.entries(latestBySourceId)) {
+    const candidateIds = [
+      lookupId,
+      candidate?.sourceId,
+      candidate?.materialSourceId,
+      candidate?.id,
+    ].map(toTrimmedString).filter(Boolean);
+    if (!candidateIds.some((candidateId) => sourceIds.has(candidateId))) {
+      continue;
+    }
+    coverageTimes.push(candidate?.eventCoverageStartedAt);
+  }
+  const normalizedTimes = coverageTimes
+    .map(normalizeObservedTime)
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b) - Date.parse(a));
+  return normalizedTimes[0] || null;
+}
+
+/**
  * print interval全体のMaterialSource event coverageを検査する。
  *
  * 【詳細説明】
@@ -595,27 +638,35 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
  * @function deriveMaterialSourceEventCoverage
  * @param {Object} deviceRecord - MaterialSource observation device record。
  * @param {Object} snapshot - print-start snapshot。
+ * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
  * @param {string|null} completedObservedAt - 完了を3DPmonが受信した時刻。
- * @returns {{ok:boolean,startedAt:string|null,reason:string}} event coverage判定。
+ * @returns {{ok:boolean,startedAt:string|null,sourceStartedAt:string|null,reason:string}} event coverage判定。
  */
-function deriveMaterialSourceEventCoverage(deviceRecord, snapshot, completedObservedAt) {
+function deriveMaterialSourceEventCoverage(deviceRecord, snapshot, observedSource, completedObservedAt) {
   const startedAt = normalizeObservedTime(
     deviceRecord?.eventCoverageStartedAt ||
     deviceRecord?.eventCoverageRetainedFromAt ||
     deviceRecord?.eventsRetainedFromAt
   );
+  const sourceStartedAt = resolveMaterialSourceEventCoverageStartedAt(deviceRecord, snapshot, observedSource);
   const startMs = Date.parse(resolvePrintStartObservedReceivedAt(snapshot) || "");
   const completedMs = Date.parse(completedObservedAt || "");
   if (!Number.isFinite(startMs) || !Number.isFinite(completedMs)) {
-    return { ok: false, startedAt, reason: "material-source-event-coverage-interval-required" };
+    return { ok: false, startedAt, sourceStartedAt, reason: "material-source-event-coverage-interval-required" };
   }
   if (!startedAt) {
-    return { ok: false, startedAt: null, reason: "material-source-event-coverage-required" };
+    return { ok: false, startedAt: null, sourceStartedAt, reason: "material-source-event-coverage-required" };
+  }
+  if (!sourceStartedAt) {
+    return { ok: false, startedAt, sourceStartedAt: null, reason: "material-source-event-coverage-required" };
   }
   if (Date.parse(startedAt) > startMs) {
-    return { ok: false, startedAt, reason: "material-source-event-coverage-gap" };
+    return { ok: false, startedAt, sourceStartedAt, reason: "material-source-event-coverage-gap" };
   }
-  return { ok: true, startedAt, reason: "covered" };
+  if (Date.parse(sourceStartedAt) > startMs) {
+    return { ok: false, startedAt, sourceStartedAt, reason: "material-source-event-coverage-gap" };
+  }
+  return { ok: true, startedAt, sourceStartedAt, reason: "covered" };
 }
 
 /**
@@ -764,7 +815,7 @@ function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = 
     });
     const sourceFreshness = deriveCompletionSourceFreshness(deviceRecord, sourceObservedAt, continuityNow);
     const continuityBreakEvents = findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, continuityNow);
-    const eventCoverage = deriveMaterialSourceEventCoverage(deviceRecord, snapshot, continuityNow);
+    const eventCoverage = deriveMaterialSourceEventCoverage(deviceRecord, snapshot, observedSource, continuityNow);
     const intervalObserved =
       isObservationWithinPrintInterval(deviceObservedAt, snapshot, continuityNow) &&
       isObservationWithinPrintInterval(sourceObservedAt, snapshot, continuityNow);
