@@ -509,20 +509,35 @@ Gate 18.9 must cover:
   match the saved source snapshot set; extra or missing values are blocked
   instead of being silently dropped.
 - Runtime source continuity is resolved from module-owned MaterialSource
-  observations before debit-candidate evaluation, then stored only as
-  source-specific JobMaterialSegment / shadow ledger evidence.
-  It does not mutate managed spool remaining or legacy `usageHistory` in
-  Gate 18.9I-2.
+  observations and the official freshness TTL before debit-candidate
+  evaluation. TTL-expired, provider-disconnected, or restored-last-known
+  observations may still produce source-specific JobMaterialSegment / shadow
+  ledger evidence, but they do not become managed remaining debit candidates.
+  Gate 18.9I-2 does not mutate managed spool remaining or legacy
+  `usageHistory`.
 - ItemKeeper payload generation may read same-device `observed-used` /
   `confirmed-unused` JobMaterialSegment records as a projection source when
   `job.filamentInfo[]` is absent. This projection sends per-spool
   `filaments[]` evidence without mutating 3dpmon inventory state.
-- K2/CFS UI print-start sends register a pending PrintPlan immediately before
-  transport dispatch, drop that pending record on dispatch failure, and only
-  connect it to print binding runtime after machine-observed `printStartTime` /
-  PrintJob ID and completed history are observed. Trusted print-start snapshots
-  include durable issuance evidence for device ID, session ID, connection
-  generation, PrintJob ID, and first observed time.
+- K2/CFS UI print-start sends create a module-attested MaterialBindingPlan
+  separate from the transport command request, register it as prepared pending
+  state immediately before transport dispatch, mark it submitted only after
+  transport send success, drop that pending record on dispatch failure, and
+  only connect it to print binding runtime after a new machine-observed
+  `printStartTime` / PrintJob ID and completed history are observed. The
+  MaterialBindingPlan attests tool/source/asset/session/generation binding;
+  `spoolId` is optional at this boundary so an unmounted 3dpmon spool does not
+  block physical K2/CFS print transport. The accounting runtime must still find
+  an active `OPEN` SpoolMount at print-start time before saving a managed spool
+  snapshot. Transport-local source IDs are aliases; repositories re-resolve
+  canonical MaterialSource IDs and aliases, then persist canonical
+  `materialSourceId` in snapshots. The
+  observed start must not match the pre-submit baseline job, must be observed at
+  or after `submittedAt`, and must match the same session and connection
+  generation. Completion success removes the pending record so the material
+  binding cannot be re-bound to later manual jobs. Trusted print-start
+  snapshots include durable issuance evidence for device ID, session ID,
+  connection generation, PrintJob ID, and first observed time.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.

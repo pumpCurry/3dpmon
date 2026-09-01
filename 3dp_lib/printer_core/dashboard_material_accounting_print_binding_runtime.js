@@ -16,7 +16,7 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1596 (PR #440)
+ * @version 1.390.1597 (PR #440)
  * @since   1.390.1587 (PR #440)
  * @lastModified 2026-09-01 19:56:42
  * -----------------------------------------------------------
@@ -41,6 +41,7 @@ import {
 import {
   resolveObservedMaterialSourceRecord,
 } from "./dashboard_material_accounting_mount_runtime.js";
+import { deriveMaterialSourceObservationFreshness } from "./dashboard_material_source_observation.js";
 
 /**
  * 値をtrim済み文字列へ変換する。
@@ -415,7 +416,14 @@ function getOrderedPrintStartSnapshots(store, printPlan, printJobId) {
  * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parserVersion:string,reasons:string[]}} source-specific usage候補。
  */
 function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
-  const raw = toTrimmedString(historyEntry?.materialUsed || historyEntry?.raw?.materialUsed);
+  const raw = toTrimmedString(
+    historyEntry?.materialUsed ||
+    historyEntry?.materialUsedSourceCsv ||
+    historyEntry?.sourceMaterialUsedCsv ||
+    historyEntry?.raw?.materialUsed ||
+    historyEntry?.materialUsedCsv ||
+    historyEntry?.sourceMaterialUsed
+  );
   const snapshots = Array.isArray(orderedSnapshots) ? orderedSnapshots : [];
   const parserVersion = "k2-material-used-csv:snapshot-order:v1";
   if (!raw) {
@@ -473,9 +481,10 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
  * @function buildRuntimeContinuityBySourceId
  * @param {Object} data - monitorData互換データ。
  * @param {Object[]} orderedSnapshots - print-start snapshot配列。
+ * @param {string|null=} completedAt - 完了観測時刻。
  * @returns {Object<string,Object>} source ID別continuity evidence。
  */
-function buildRuntimeContinuityBySourceId(data, orderedSnapshots) {
+function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = null) {
   const continuityBySourceId = {};
   for (const snapshot of Array.isArray(orderedSnapshots) ? orderedSnapshots : []) {
     const sourceId = toTrimmedString(snapshot?.materialSourceId);
@@ -489,17 +498,40 @@ function buildRuntimeContinuityBySourceId(data, orderedSnapshots) {
       deviceId,
       materialSourceId: sourceId,
     });
-    const freshTopology = !!observedSource &&
-      !deviceRecord.providerDisconnectedAt &&
-      deviceRecord.restoredFromStorage !== true;
+    const freshness = deriveMaterialSourceObservationFreshness(deviceRecord, {
+      now: completedAt || new Date().toISOString(),
+    });
+    const freshTopology = !!observedSource && freshness.state === "fresh";
     continuityBySourceId[sourceId] = {
-      sourceContinuity: !!observedSource,
+      sourceContinuity: freshTopology,
       freshTopology,
       observedAt: normalizeObservedTime(deviceRecord.lastObservedAt) || null,
+      freshness,
       source: "runtime-material-source-observation",
     };
   }
   return continuityBySourceId;
+}
+
+/**
+ * 完了履歴entryからtotal使用量を、観測済みの場合だけ取り出す。
+ *
+ * 【詳細説明】
+ * - `parseRawHistoryEntry()` は未観測totalを `materialUsedMm:0` として互換保持するため、
+ *   `materialUsedTotalObserved === false` の場合は0mm authorityとして扱わない。
+ *
+ * @private
+ * @function resolveObservedTotalUsedLengthMm
+ * @param {Object|null|undefined} historyEntry - 完了履歴entry。
+ * @returns {number|undefined} 観測済みtotal使用量、またはundefined。
+ */
+function resolveObservedTotalUsedLengthMm(historyEntry) {
+  if (historyEntry?.materialUsedTotalObserved === false) {
+    return undefined;
+  }
+  return historyEntry?.materialUsedMm ??
+    historyEntry?.usagematerial ??
+    historyEntry?.usedMaterialLength;
 }
 
 /**
@@ -1026,9 +1058,7 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
           deviceId: printPlan?.deviceId || null,
         }),
       ])}`;
-    const totalUsedLengthMm = completionResolution.historyEntry?.materialUsedMm ??
-      completionResolution.historyEntry?.usagematerial ??
-      completionResolution.historyEntry?.usedMaterialLength;
+    const totalUsedLengthMm = resolveObservedTotalUsedLengthMm(completionResolution.historyEntry);
     const inferredResultSetCompleteness = materialUsages.length > 0 &&
       materialUsages.length === orderedSnapshots.length
       ? "complete"
@@ -1042,7 +1072,7 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
       totalUsedLengthMm,
       resultSetCompleteness: request.resultSetCompleteness === "complete" ? inferredResultSetCompleteness : "partial",
       resultSetCompletenessEvidence: request.resultSetCompletenessEvidence,
-      continuityBySourceId: buildRuntimeContinuityBySourceId(data, orderedSnapshots),
+      continuityBySourceId: buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt),
     });
     if (!result.ok && result.status !== MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.PENDING) {
       return {

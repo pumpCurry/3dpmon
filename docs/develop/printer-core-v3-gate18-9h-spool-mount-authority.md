@@ -401,6 +401,10 @@ Gate 18.9I-2:
   PrintPlan assignmentではなく、保存済みprint-start snapshotの `order` 順へ展開し、
   `T1A` / `T1B` などのprotocol aliasとhistorical MaterialSource / SpoolMount
   snapshotへ対応付ける。
+- `parseRawHistoryEntry()` / `jobsToRaw()` はK2/CFSのsource-specific
+  `materialUsed` CSVを `materialUsedSourceCsv` / `materialUsed` としてlosslessに保存し、
+  total使用量は `materialUsedTotalObserved` と分離する。未観測totalの互換0は
+  source-specific runtimeのtotal authorityへ採用しない。
 - `materialUsed` CSVの要素数と保存済みsnapshot数が一致しない場合は
   `material-used-source-count-mismatch` でBLOCKし、余剰値を黙って捨てない。
 - runtimeはcontract module内のtrusted print-start / source-specific usage issuer注入済み
@@ -412,8 +416,10 @@ Gate 18.9I-2:
   module-owned attestationを再検証してdebit eligibility候補へ戻せる。restart/import後は
   process secretが異なるため、再確認されるまでfail-closedに落ちる。
 - source continuity / fresh topologyなどのdebit eligibilityはruntime内の
-  MaterialSource observation resolverから作り、caller supplied continuity objectはtrusted
-  authorityへ採用しない。この段階では
+  MaterialSource observation resolverと正式freshness TTL判定から作り、caller supplied
+  continuity objectはtrusted authorityへ採用しない。TTL切れ、provider disconnected、
+  restored last-knownでは `freshTopology:false` / `sourceContinuity:false` になり、
+  source-specific segmentは保存してもmanaged remaining debit候補には昇格しない。この段階では
   managed spool残量、legacy `usageHistory`、ItemKeeper projectionへは反映しない。
 - completion writeも専用CAS境界を必須とし、`casApplied:true` が無いpersist結果では
   runtime storeを進めない。
@@ -435,18 +441,31 @@ Gate 18.9I-3:
 
 Gate 18.9I-4:
 
-- K2/CFS印刷開始UIで生成したPrinter Core command requestを、実送信直前に
-  `dashboard_material_accounting_print_binding_live_bridge.js` へpending登録する。
-- pending登録は送信済みPrintPlanの保持だけであり、実機 `printStartTime` / `printJobId`
-  観測前にはprint binding runtimeを呼び出さない。
-- transport送信が失敗した場合はhostname単位でpendingを破棄し、未送信PrintPlanが後続観測へ
-  誤ってbindされないようにする。
-- WebSocket statusでK2 Printer Core v3 shadow付きmachineの `printStartTime` を観測した場合だけ、
-  pending PrintPlanを `recordObservedPrintStart()` へ渡す。採否はruntime側の
-  current job / device / session / generation / CAS検査に委ねる。
-- `printStore.history` へ完了履歴が入った後、同じpending PrintPlanを
-  `recordObservedPrintCompletion()` へ渡す。K2/Creality履歴の `materialUsed` CSVはruntime側で
-  保存済みprint-start snapshot順にsource-specific usageへ展開する。
+- K2/CFS印刷開始UIで生成したPrinter Core command requestとは別に、同じUI割当から
+  `dashboard_material_binding_plan.js` のmodule-attested `MaterialBindingPlan` を生成し、
+  実送信直前に `dashboard_material_accounting_print_binding_live_bridge.js` へpending登録する。
+  既存remote G-codeでは正式PrintPlan用のG-code content/upload receiptが無い場合があるため、
+  PrintPlan contractを弱めず材料割当専用contractへ分離する。
+- `MaterialBindingPlan` はtool/source/asset/session/generationの割当証跡であり、
+  `spoolId` 自体は任意である。3DPmon管理スプールが未割当でもK2/CFS transport送信は妨げず、
+  print-start binding runtimeが同時刻の `OPEN` SpoolMount を見つけられない場合だけ
+  `spool-mount-required` として会計snapshot保存を拒否する。
+- transport-local source IDはaliasとして扱う。repositoryはMaterialSourceをcanonical IDとaliasで再解決し、
+  OPEN mount探索でもcanonical IDとaliasの両方を候補にするが、保存snapshotにはcanonical
+  `materialSourceId` を残す。
+- pending登録は `prepared` stateであり、実機 `printStartTime` / `printJobId`
+  観測前、かつtransport送信成功前にはprint binding runtimeを呼び出さない。
+- transport送信が失敗した場合はpendingを破棄する。送信成功時だけ
+  `markMaterialAccountingPrintStartRequestSubmitted()` で `submittedAt` とcommand IDを固定する。
+- WebSocket statusでK2 Printer Core v3 shadow付きmachineの `printStartTime` を観測した場合、
+  `observedFirstObservedAt >= submittedAt`、同じsession/generation、かつ
+  `baselinePrintJobId` と異なる新jobである場合だけpending MaterialBindingPlanを
+  `recordObservedPrintStart()` へ渡す。送信成功前に観測が先着した場合はqueued observationとして
+  保留し、submitted後に再評価する。
+- `printStore.history` へ完了履歴が入った後、同じpending MaterialBindingPlanを
+  `recordObservedPrintCompletion()` へ渡す。成功完了後はpendingを削除し、後続の手動/別jobへ
+  旧planを再bindしない。K2/Creality履歴の `materialUsed` CSVはruntime側で保存済み
+  print-start snapshot順にsource-specific usageへ展開する。
 - trusted print-start snapshotには `issuanceEvidence` として、runtimeが観測した
   `deviceId`、`sessionId`、`connectionGeneration`、`printJobId`、`firstObservedAt` を保存する。
 - I-4でもmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`

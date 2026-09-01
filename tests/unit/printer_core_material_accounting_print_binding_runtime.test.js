@@ -154,6 +154,26 @@ function createRuntimeData() {
 }
 
 /**
+ * MaterialSource観測storeの最終観測時刻を更新する。
+ *
+ * 【詳細説明】
+ * - source continuityはTTL付きfreshnessで判定するため、debit可を期待するテストでは
+ *   完了直前の観測へ更新し、stale検査では古い観測をあえて残す。
+ *
+ * @function markMaterialSourcesObservedAt
+ * @param {Object} data - runtime data。
+ * @param {string} observedAt - 最終観測時刻。
+ * @returns {void}
+ */
+function markMaterialSourcesObservedAt(data, observedAt) {
+  const record = data.materialSourceObservations.byDeviceId["serial:k2"];
+  record.lastObservedAt = observedAt;
+  for (const source of Object.values(record.latestBySourceId)) {
+    source.lastObservedAt = observedAt;
+  }
+}
+
+/**
  * runtime用monitorDataへ実機観測済み印刷ジョブを設定する。
  *
  * @function attachObservedPrintJob
@@ -774,6 +794,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       completedAt: "2026-09-01T08:31:00.000Z",
       totalUsedLengthMm: 9753,
     });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
     data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
 
     const result = await runtime.recordObservedPrintCompletion({
@@ -817,6 +838,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       printJobId: "job:k2-history-material-used",
       completedAt: "2026-09-01T08:31:00.000Z",
     });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
     data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
 
     const result = await runtime.recordObservedPrintCompletion({
@@ -839,6 +861,77 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       ["T1A", 3210, true],
       ["T1B", 6543, true],
     ]);
+  });
+
+  it("K2履歴のmaterialUsedSourceCsv保存形式からsource-specific usageへ展開する", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-history-source-csv" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-source-csv" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-history-source-csv",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    data.machines[hostname].printStore.history.at(-1).materialUsedMm = 9753;
+    data.machines[hostname].printStore.history.at(-1).materialUsedTotalObserved = true;
+    data.machines[hostname].printStore.history.at(-1).materialUsedSourceCsv = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-history-source-csv",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.map((segment) => [
+      segment.protocolToolAlias,
+      segment.usedLengthMm,
+      segment.debit.canDebit,
+    ])).toEqual([
+      ["T1A", 3210, true],
+      ["T1B", 6543, true],
+    ]);
+  });
+
+  it("TTL切れのMaterialSource観測ではsource-specific usageをdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-stale-continuity" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-stale-continuity" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-stale-continuity",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-stale-continuity",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.canDebit === false)).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("source-continuity-required"))).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("fresh-topology-required"))).toBe(true);
+    expect(result.ledgerEvents.every((event) => event.authority.canDebitRemaining === false)).toBe(true);
   });
 
   it("完了時のcaller PrintPlan assignment変更ではなく保存済みprint-start snapshot順へusageを帰属する", async () => {

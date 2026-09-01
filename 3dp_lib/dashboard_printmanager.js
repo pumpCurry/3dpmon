@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1595 (PR #440)
+* @version 1.390.1597 (PR #440)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-09-01 19:17:01
+* @lastModified 2026-09-01 19:56:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -94,8 +94,10 @@ import {
 } from "./printer_core/dashboard_capabilities.js";
 import {
   forgetMaterialAccountingPrintStartRequest,
+  markMaterialAccountingPrintStartRequestSubmitted,
   rememberMaterialAccountingPrintStartRequest,
 } from "./printer_core/dashboard_material_accounting_print_binding_live_bridge.js";
+import { createMaterialBindingPlan } from "./printer_core/dashboard_material_binding_plan.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -355,6 +357,26 @@ const MERGE_IGNORE_ZERO_FIELDS = new Set([
   // 使用フィラメント量は印刷途中では 0 になるため保持値を優先
   "materialUsedMm"
 ]);
+
+/**
+ * source別materialUsed CSV候補をlossless保存用に正規化する。
+ *
+ * 【詳細説明】
+ * - K2/CFSはtotal使用量とは別に `materialUsed:"3210,6543"` のようなsource順CSVを返す。
+ * - 空文字や未観測値はnullにし、runtimeが「未観測」と「0mm」を混同しないようにする。
+ *
+ * @private
+ * @function normalizeMaterialUsedSourceCsv
+ * @param {*} value - materialUsed CSV候補
+ * @returns {string|null} 正規化済みCSV、またはnull
+ */
+function normalizeMaterialUsedSourceCsv(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const text = String(value).trim();
+  return text ? text : null;
+}
 
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用、per-host）
 const _lastSavedJsonMap = new Map();
@@ -1383,6 +1405,11 @@ function createK2CfsPrintStartRequestFromUi(options) {
         connectionGeneration: shadowRecord.connectionGeneration ?? shadowRecord.printerCoreV3ConnectionGeneration ?? null,
         uploadGeneration: fileIdentity.uploadGeneration,
         receiptId: null,
+        baselinePrintJobId: String(machine?.printStore?.current?.id || getCurrentPrintID(options.hostname) || "").trim() || null,
+        baselinePrintStartTime: machine?.printStore?.current?.startTime ||
+          machine?.printStore?.current?.firstObservedAt ||
+          machine?.storedData?.printStartTime?.rawValue ||
+          null,
       },
     },
     expectedState: [{
@@ -1397,6 +1424,40 @@ function createK2CfsPrintStartRequestFromUi(options) {
 }
 
 /**
+ * K2/CFS印刷開始の材料割当planをUI選択から構築する。
+ *
+ * 【詳細説明】
+ * - transport requestは実機へ送るremote file identityを持ち、MaterialBindingPlanは3DPmon内の
+ *   source/spool/tool対応をprint-start観測へbindするためだけに保持する。
+ * - 既存remote G-codeではPrintPlan用のG-code content/upload receiptを持てないため、
+ *   `validatePrintPlan()`を弱めず材料割当専用contractへ分離する。
+ *
+ * @private
+ * @function createK2CfsMaterialBindingPlanFromPrintStartRequest
+ * @param {object} request - K2/CFS print-start command request。
+ * @returns {object} MaterialBindingPlan。
+ */
+function createK2CfsMaterialBindingPlanFromPrintStartRequest(request) {
+  const payload = request?.payload || {};
+  return createMaterialBindingPlan({
+    deviceId: request.deviceId,
+    bindingPlanId: payload.printPlanId,
+    asset: {
+      path: payload.asset?.path,
+      fileHash: payload.asset?.fileHash,
+      uploadGeneration: payload.startContext?.uploadGeneration || null,
+    },
+    toolAssignments: payload.toolAssignments || [],
+    startContext: {
+      sessionId: request.sessionId,
+      connectionGeneration: payload.startContext?.connectionGeneration || request.connectionGeneration || null,
+      uploadGeneration: payload.startContext?.uploadGeneration || null,
+    },
+    createdAt: request.createdAt || null,
+  });
+}
+
+/**
  * K2/CFS印刷開始transportを送信する。
  *
  * 【詳細説明】
@@ -1407,15 +1468,20 @@ function createK2CfsPrintStartRequestFromUi(options) {
  * @private
  * @param {string} hostname - 対象ホスト名
  * @param {object} request - Printer Core command request風object
+ * @param {object=} options - 送信直前hook。
+ * @param {Function=} options.onBeforeTransportDispatch - transport plan検証後、実送信前に呼ぶhook。
  * @returns {Promise<object>} transport送信結果
  */
-async function sendK2CfsPrintStartRequest(hostname, request) {
+async function sendK2CfsPrintStartRequest(hostname, request, options = {}) {
   const dispatcher = createBoundPrinterCommandDispatcher({
     getSendTimeContext: (currentRequest) => createK2CfsPrintSendTimeContext(hostname, currentRequest),
     sendTransport: async (currentRequest) => {
       const plan = createK2CfsCommandTransportPlan(currentRequest);
       if (!plan.ok) {
         throw new Error(`k2-cfs-print-plan-rejected:${plan.reason}`);
+      }
+      if (typeof options.onBeforeTransportDispatch === "function") {
+        await options.onBeforeTransportDispatch({ request: currentRequest, transportPlan: plan });
       }
       const transportResponse = await sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
         await sendCommand(frame.method, frame.params, hostname);
@@ -1511,6 +1577,8 @@ function createMaterialPrintContext(hostname) {
  *   startTime:string,
  *   finishTime?:string|null,
  *   materialUsedMm:number,
+ *   materialUsedSourceCsv?:string|null,
+ *   materialUsedTotalObserved?:boolean,
  *   thumbUrl:string,
  *   startway?:number,
  *   size?:number,
@@ -1549,8 +1617,14 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const printfinish    = _finished
     ? (raw.printfinish != null ? Number(raw.printfinish) : (useTimeSec > 0 ? 1 : 0))
     : null;
-  // 材料使用量: 機器報告値をそのまま保持（丸めない）
-  const materialUsedMm = Number(raw.usagematerial || 0);
+  // 材料使用量: total報告とK2/CFS source別CSVは意味が違うため分離して保持する。
+  const materialUsedTotalObserved = raw.usagematerial !== undefined &&
+    raw.usagematerial !== null &&
+    raw.usagematerial !== "";
+  const materialUsedMm = materialUsedTotalObserved ? Number(raw.usagematerial) : 0;
+  const materialUsedSourceCsv = normalizeMaterialUsedSourceCsv(
+    raw.materialUsedSourceCsv ?? raw.materialUsed ?? raw.raw?.materialUsed
+  );
 
   // サムネイルURL: ホスト種別に応じて解決（Moonrakerはメタ/ファイル一覧キャッシュ由来、
   // 不明時はローカル代替。K1は従来の humbnail パス）。
@@ -1587,6 +1661,9 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     finishTime,
     printfinish,
     materialUsedMm,
+    materialUsedSourceCsv,
+    materialUsed: materialUsedSourceCsv,
+    materialUsedTotalObserved,
     thumbUrl,
     startway,
     size,
@@ -1744,6 +1821,9 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
+        ...(job.materialUsedSourceCsv !== undefined && { materialUsedSourceCsv: job.materialUsedSourceCsv }),
+        ...(job.materialUsed !== undefined && { materialUsed: job.materialUsed }),
+        ...(job.materialUsedTotalObserved !== undefined && { materialUsedTotalObserved: job.materialUsedTotalObserved }),
         // ★ printfinish: finishTime(=完了)が無ければ未確定(null)。あれば明示値(1/0)をそのまま。
         //   印刷中ジョブ(finishTime なし)は保存値が誤って 0/1 でも表示で未確定(…)に矯正する
         //   （K1 履歴再取得の早すぎる result / マージ復元によるストアの誤確定を描画側で吸収）。
@@ -3241,6 +3321,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   // 実際にプリントコマンドを送信
   const target = raw.rawFilename ?? raw.filename;
   if (useK2CfsPrintStart && k2CfsAssignmentModel) {
+    let commandIdForCleanup = null;
     try {
       const assignments = readK2CfsPrintAssignmentsFromDialog(k2CfsAssignmentModel);
       const request = createK2CfsPrintStartRequestFromUi({
@@ -3249,15 +3330,32 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
         dialogModel: k2CfsAssignmentModel,
         assignments,
       });
-      rememberMaterialAccountingPrintStartRequest({
-        hostname,
-        commandRequest: request,
-        submittedAt: new Date().toISOString(),
+      commandIdForCleanup = request.commandId;
+      let pendingRegistered = false;
+      let submittedAt = null;
+      await sendK2CfsPrintStartRequest(hostname, request, {
+        onBeforeTransportDispatch: () => {
+          const materialBindingPlan = createK2CfsMaterialBindingPlanFromPrintStartRequest(request);
+          rememberMaterialAccountingPrintStartRequest({
+            hostname,
+            commandRequest: request,
+            materialBindingPlan,
+            preparedAt: new Date().toISOString(),
+          });
+          pendingRegistered = true;
+          submittedAt = new Date().toISOString();
+        },
       });
-      await sendK2CfsPrintStartRequest(hostname, request);
+      if (pendingRegistered) {
+        await markMaterialAccountingPrintStartRequestSubmitted({
+          hostname,
+          commandId: request.commandId,
+          submittedAt,
+        });
+      }
       pushLog("K2/CFS印刷開始: colorMatch → multiColorPrint を送信しました", "send", false, hostname);
     } catch (error) {
-      forgetMaterialAccountingPrintStartRequest({ hostname });
+      forgetMaterialAccountingPrintStartRequest({ hostname, commandId: commandIdForCleanup });
       pushLog(`K2/CFS印刷開始を中止しました: ${error.message}`, "error", false, hostname);
       await showConfirmDialog({
         level: "error",

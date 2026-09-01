@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1595 (PR #440)
+ * @version 1.390.1597 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 19:17:01
+ * @lastModified 2026-09-01 19:56:42
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -30,6 +30,7 @@ import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
 } from "./dashboard_data_schema_v3.js";
+import { validateMaterialBindingPlan } from "./dashboard_material_binding_plan.js";
 import { validatePrintPlan } from "./dashboard_print_plan.js";
 
 /**
@@ -175,6 +176,37 @@ function createOperationDigest(namespace, payload) {
 }
 
 /**
+ * print binding repositoryが受け取れるplan種別を検証する。
+ *
+ * 【詳細説明】
+ * - PrintPlanは従来どおり`validatePrintPlan()`で検証する。
+ * - 既存remote G-code印刷ではG-code content/upload receiptを持てないため、PrintPlanを弱めず、
+ *   材料割当専用のMaterialBindingPlanだけを別validatorで受け取る。
+ *
+ * @private
+ * @function validatePrintBindingPlan
+ * @param {Object|null|undefined} plan - PrintPlanまたはMaterialBindingPlan候補。
+ * @returns {{ok:boolean,errors:string[]}} 検証結果。
+ */
+function validatePrintBindingPlan(plan) {
+  const printPlanValidation = validatePrintPlan(plan);
+  if (printPlanValidation.ok) {
+    return printPlanValidation;
+  }
+  const materialBindingValidation = validateMaterialBindingPlan(plan);
+  if (materialBindingValidation.ok) {
+    return materialBindingValidation;
+  }
+  return {
+    ok: false,
+    errors: [...new Set([
+      ...printPlanValidation.errors,
+      ...materialBindingValidation.errors,
+    ])],
+  };
+}
+
+/**
  * 配列をID mapへ変換する。
  *
  * @private
@@ -195,6 +227,35 @@ function mapById(records, key) {
 }
 
 /**
+ * MaterialSourceをcanonical IDとaliasの両方で検索できるmapへ変換する。
+ *
+ * 【詳細説明】
+ * - UI/adapterは`source:k2:cfs:1a`のような観測aliasをplanへ保持することがある。
+ * - runtimeはaliasからcanonical MaterialSource recordを復元するため、repository側でもalias検索を許可し、
+ *   ただし保存snapshotにはcanonical `materialSourceId` を使う。
+ *
+ * @private
+ * @function mapMaterialSourcesForBinding
+ * @param {Object[]} records - MaterialSource record配列。
+ * @returns {Map<string,Object>} canonical ID/alias map。
+ */
+function mapMaterialSourcesForBinding(records) {
+  const map = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    const ids = [
+      record?.materialSourceId,
+      ...(Array.isArray(record?.aliases) ? record.aliases : []),
+    ].map(toTrimmedString).filter(Boolean);
+    for (const id of ids) {
+      if (!map.has(id)) {
+        map.set(id, record);
+      }
+    }
+  }
+  return map;
+}
+
+/**
  * sourceに対応するprint-start時点のactive open mountを解決する。
  *
  * @private
@@ -206,10 +267,14 @@ function mapById(records, key) {
  */
 function findMountForAssignment(assignment, spoolMounts, capturedAt) {
   const sourceId = toTrimmedString(assignment?.materialSourceId);
+  const sourceIds = new Set([
+    sourceId,
+    ...(Array.isArray(assignment?.materialSourceAliases) ? assignment.materialSourceAliases : []),
+  ].map(toTrimmedString).filter(Boolean));
   const assignmentSpoolId = toTrimmedString(assignment?.spoolId);
   const capturedEpoch = Date.parse(capturedAt);
   const candidateMounts = (Array.isArray(spoolMounts) ? spoolMounts : []).filter((mount) => {
-    if (toTrimmedString(mount?.materialSourceId) !== sourceId) {
+    if (!sourceIds.has(toTrimmedString(mount?.materialSourceId))) {
       return false;
     }
     if (assignmentSpoolId && toTrimmedString(mount?.spoolId) !== assignmentSpoolId) {
@@ -1151,7 +1216,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
    *
    * @function recordPrintStartBindings
    * @param {Object} input - binding入力。
-   * @param {Object} input.printPlan - PrintPlan。
+   * @param {Object} input.printPlan - PrintPlanまたはMaterialBindingPlan。
    * @param {string} input.printJobId - PrintJob ID。
    * @param {Object[]} input.materialSources - MaterialSource配列。
    * @param {Object[]} input.spoolMounts - SpoolMount配列。
@@ -1165,8 +1230,8 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const printJobId = toTrimmedString(input.printJobId);
     const capturedAt = normalizeIsoTime(input.capturedAt);
     const operationId = toTrimmedString(input.bindingOperationId);
-    const planValidation = validatePrintPlan(printPlan);
-    const sourceMap = mapById(input.materialSources, "materialSourceId");
+    const planValidation = validatePrintBindingPlan(printPlan);
+    const sourceMap = mapMaterialSourcesForBinding(input.materialSources);
     const reasons = [];
     if (!planValidation.ok) {
       reasons.push(...planValidation.errors);
@@ -1184,7 +1249,17 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     if (reasons.length === 0) {
       for (const assignment of printPlan.toolAssignments) {
         const source = sourceMap.get(assignment.materialSourceId);
-        const mountResolution = findMountForAssignment(assignment, input.spoolMounts, capturedAt);
+        const canonicalAssignment = source?.materialSourceId
+          ? {
+              ...assignment,
+              materialSourceId: source.materialSourceId,
+              materialSourceAliases: [
+                assignment.materialSourceId,
+                ...(Array.isArray(source.aliases) ? source.aliases : []),
+              ],
+            }
+          : assignment;
+        const mountResolution = findMountForAssignment(canonicalAssignment, input.spoolMounts, capturedAt);
         const mount = mountResolution.mount;
         if (!source || !validateMaterialSource(source).ok) {
           reasons.push("material-source-required");

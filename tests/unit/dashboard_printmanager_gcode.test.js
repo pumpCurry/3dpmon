@@ -217,6 +217,30 @@ describe('resolveHistoryFinishStatus — 印刷中は currentPrintID 一致の�
   });
 });
 
+describe('parseRawHistoryEntry — K2 source-specific materialUsed evidence', () => {
+  it('K2履歴のmaterialUsed CSVをtotal使用量と分離してlosslessに保持する', () => {
+    const job = parseRawHistoryEntry({
+      id: 1785991119,
+      filename: '/mnt/UDISK/printer_data/gcodes/two-color.gcode',
+      starttime: 1798790400,
+      usagetime: 600,
+      usagematerial: 9753,
+      materialUsed: '3210,6543',
+      printfinish: 1,
+    }, 'http://192.168.54.153', 'K2Pro-69E7');
+    const raw = jobsToRaw([job])[0];
+
+    expect(job.materialUsedMm).toBe(9753);
+    expect(job.materialUsedTotalObserved).toBe(true);
+    expect(job.materialUsedSourceCsv).toBe('3210,6543');
+    expect(job.materialUsed).toBe('3210,6543');
+    expect(raw.usagematerial).toBe(9753);
+    expect(raw.materialUsed).toBe('3210,6543');
+    expect(raw.materialUsedSourceCsv).toBe('3210,6543');
+    expect(raw.materialUsedTotalObserved).toBe(true);
+  });
+});
+
 describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定しない（再起動時 誤計上防止）', () => {
   it('parseRawHistoryEntry: 実印刷時間なし(usagetime=0)・終了時刻なし＝印刷中 → null（K1の早すぎるresult=0も無視）', () => {
     // ★ K1 は履歴再取得で印刷中エントリに printfinish=0 を付けて寄越す。完了シグナル

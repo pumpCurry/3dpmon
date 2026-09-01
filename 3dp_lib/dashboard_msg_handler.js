@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1595 (PR #440)
+* @version 1.390.1597 (PR #440)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-09-01 19:17:01
+* @lastModified 2026-09-01 19:56:42
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -125,15 +125,16 @@ function hasK2PrinterCoreShadow(machine) {
  *
  * 【詳細説明】
  * - ここでは成功/失敗をUI状態のauthorityにしない。
- * - pending PrintPlanが無い場合やruntimeがまだ保存できない場合は、bridge/runtimeがfail-closedで返す。
+ * - pending MaterialBindingPlanが無い場合やruntimeがまだ保存できない場合は、bridge/runtimeがfail-closedで返す。
  *
  * @private
  * @function notifyMaterialAccountingPrintStartObserved
  * @param {string} host - 対象ホスト名。
  * @param {number|string|null} printJobId - 実機観測済みPrintJob ID。
+ * @param {string|null=} firstObservedAt - 実機観測済みprint-start時刻。
  * @returns {void}
  */
-function notifyMaterialAccountingPrintStartObserved(host, printJobId) {
+function notifyMaterialAccountingPrintStartObserved(host, printJobId, firstObservedAt = null) {
   const normalizedPrintJobId = String(printJobId ?? "").trim();
   if (!normalizedPrintJobId) {
     return;
@@ -141,6 +142,7 @@ function notifyMaterialAccountingPrintStartObserved(host, printJobId) {
   void recordObservedMaterialAccountingPrintStart({
     hostname: host,
     printJobId: normalizedPrintJobId,
+    firstObservedAt,
     runtime: getMaterialAccountingPrintBindingRuntime(),
   }).catch((error) => {
     pushLog(`PrintBinding開始観測の記録をスキップしました: ${error?.message || error}`, "warn", false, host);
@@ -1112,7 +1114,7 @@ export function processData(data, hostname) {
         scopedById("print-current-container", host), host
       );
       if (hasK2PrinterCoreShadow(machine) && data.printStartTime) {
-        notifyMaterialAccountingPrintStartObserved(host, curJob.id);
+        notifyMaterialAccountingPrintStartObserved(host, curJob.id, curJob.startTime || null);
       }
     }
   }

@@ -26,7 +26,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
-| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests are held as pending PrintPlans, then connected to runtime only after machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence | runtime + durable CAS + live bridge call-site tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
+| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence | runtime + durable CAS + live bridge + MaterialBindingPlan composition tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -108,17 +108,23 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   帰属する。K2/Creality履歴の `materialUsed` CSVは保存済みprint-start snapshotの
   `order` 順に展開し、CSV数とsnapshot数が違う場合はBLOCKする。caller supplied
   `completedAt`、usage payload、continuity objectだけでは完了usage authorityにせず、
-  device/session/generation境界、runtime MaterialSource observation resolver、専用CAS
-  `casApplied:true` を要求する。
+  device/session/generation境界、runtime MaterialSource observation resolver、正式freshness
+  TTL、専用CAS `casApplied:true` を要求する。TTL切れ、provider disconnected、
+  restored last-knownの場合、source-specific segmentは保存してもmanaged remaining debit候補へ
+  昇格しない。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
   `jobs[].filaments[]` へread-only投影する。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
-  Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestを
-  live bridgeへpending登録し、WSで実機 `printStartTime` / `printJobId` を観測した時点で
-  `recordObservedPrintStart()`、完了履歴が `printStore.history` に入った後で
-  `recordObservedPrintCompletion()` へ接続する。transport送信失敗時はpendingを破棄する。
+  Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestとは別に
+  module-attested `MaterialBindingPlan` を生成してlive bridgeへpending登録する。
+  pendingはtransport送信成功前は`prepared`に留め、送信成功後だけ`submittedAt`とcommand IDを
+  固定する。WSで実機 `printStartTime` / `printJobId` を観測した場合は、
+  送信前baseline jobではないこと、観測時刻が`submittedAt`以後であること、
+  session/generationが一致することを満たした時だけ `recordObservedPrintStart()` へ接続する。
+  完了履歴が `printStore.history` に入った後で `recordObservedPrintCompletion()` へ接続し、
+  成功後はpendingを削除する。transport送信失敗時はcommand ID付きでpendingを破棄する。
   saved trusted print-start snapshotには `issuanceEvidence` としてdevice/session/generation/job/timeを残す。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
