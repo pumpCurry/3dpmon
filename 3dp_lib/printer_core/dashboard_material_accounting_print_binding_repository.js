@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1590 (PR #440)
+ * @version 1.390.1593 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 18:41:23
+ * @lastModified 2026-09-01 19:34:24
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -1073,8 +1073,10 @@ function createLedgerEvent(segment, createdAt) {
  *
  * @function createMaterialAccountingPrintBindingRepositoryWithIssuer
  * @param {Object} dependencies - 契約モジュールから注入されるissuer/validator。
- * @param {Function} dependencies.createTrustedSourceSpecificMaterialUsageEvidence - trusted usage issuer。
+ * @param {Function=} dependencies.createSourceSpecificMaterialUsageEvidence - public shadow usage issuer。
+ * @param {Function=} dependencies.createTrustedSourceSpecificMaterialUsageEvidence - trusted usage issuer。
  * @param {Function=} dependencies.createPrintStartMaterialSnapshot - print-start snapshot issuer。
+ * @param {Function=} dependencies.createTrustedResultSetCompletenessEvidence - trusted result-set completeness issuer。
  * @param {Function} dependencies.validateTrustedResultSetCompletenessEvidence - trusted result-set completeness validator。
  * @param {Function} dependencies.evaluateMaterialDebitEligibility - debit eligibility evaluator。
  * @param {Function} dependencies.validateMaterialSource - MaterialSource validator。
@@ -1085,15 +1087,22 @@ function createLedgerEvent(segment, createdAt) {
  * const repository = createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies);
  */
 export function createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies = {}, initialStore = {}) {
-  const createTrustedSourceSpecificMaterialUsageEvidence = dependencies.createTrustedSourceSpecificMaterialUsageEvidence;
+  const createSourceSpecificUsageEvidence = typeof dependencies.createTrustedSourceSpecificMaterialUsageEvidence === "function"
+    ? dependencies.createTrustedSourceSpecificMaterialUsageEvidence
+    : (typeof dependencies.createSourceSpecificMaterialUsageEvidence === "function"
+        ? dependencies.createSourceSpecificMaterialUsageEvidence
+        : createShadowSourceSpecificMaterialUsageEvidence);
   const createPrintStartMaterialSnapshot = typeof dependencies.createPrintStartMaterialSnapshot === "function"
     ? dependencies.createPrintStartMaterialSnapshot
     : createShadowPrintStartMaterialSnapshot;
+  const createTrustedResultSetCompletenessEvidence = typeof dependencies.createTrustedResultSetCompletenessEvidence === "function"
+    ? dependencies.createTrustedResultSetCompletenessEvidence
+    : null;
   const validateTrustedResultSetCompletenessEvidence = dependencies.validateTrustedResultSetCompletenessEvidence;
   const evaluateMaterialDebitEligibility = dependencies.evaluateMaterialDebitEligibility;
   const validateMaterialSource = dependencies.validateMaterialSource;
   const validateSpoolMount = dependencies.validateSpoolMount;
-  if (typeof createTrustedSourceSpecificMaterialUsageEvidence !== "function" ||
+  if (typeof createSourceSpecificUsageEvidence !== "function" ||
       typeof validateTrustedResultSetCompletenessEvidence !== "function" ||
       typeof evaluateMaterialDebitEligibility !== "function" ||
       typeof validateMaterialSource !== "function" ||
@@ -1320,42 +1329,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
         return orderA - orderB;
       });
-    const resultSetCompleteness = requestedResultSetCompleteness === "complete" &&
-      validateTrustedResultSetCompletenessEvidence(input.resultSetCompletenessEvidence, {
-        deviceId: printPlan?.deviceId,
-        printJobId,
-        printPlanId: printPlan?.printPlanId,
-        materialSourceIds: plannedSnapshots.map((snapshot) => snapshot.materialSourceId),
-      })
-      ? "complete"
-      : "partial";
     const totalUsedLengthMm = normalizeNonNegativeMm(input.totalUsedLengthMm);
-    const digest = createOperationDigest("material-usage-attribution-operation", {
-      printJobId,
-      printPlanId: printPlan?.printPlanId || null,
-      completedAt,
-      resultSetCompleteness,
-      materialUsages,
-      totalUsedLengthMm,
-    });
-    const existing = operationRecords.get(operationId);
-    if (existing && existing.digest !== digest) {
-      return createResult({
-        ok: false,
-        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
-        action: "conflict",
-        reasons: ["usage-attribution-operation-payload-conflict"],
-      });
-    }
-    if (existing && existing.digest === digest) {
-      return createResult({
-        ...existing.result,
-        ok: true,
-        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
-        action: "idempotent",
-      });
-    }
-
     const reasons = [];
     if (!printPlan || typeof printPlan !== "object" || Array.isArray(printPlan)) {
       reasons.push("print-plan-required");
@@ -1392,6 +1366,59 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         source: "firmware-total-single-source",
       });
       usageResolution.sourceSpecificTotalMm = totalUsedLengthMm;
+    }
+    const completenessScope = {
+      deviceId: printPlan?.deviceId,
+      printJobId,
+      printPlanId: printPlan?.printPlanId,
+      materialSourceIds: plannedSnapshots.map((snapshot) => snapshot.materialSourceId),
+    };
+    let resultSetCompletenessEvidence = input.resultSetCompletenessEvidence;
+    if (requestedResultSetCompleteness === "complete" &&
+        createTrustedResultSetCompletenessEvidence &&
+        !validateTrustedResultSetCompletenessEvidence(resultSetCompletenessEvidence, completenessScope)) {
+      const observedSourceIds = plannedSnapshots
+        .filter((snapshot) => usageResolution.entriesBySnapshotId.has(snapshot.snapshotId))
+        .map((snapshot) => snapshot.materialSourceId);
+      try {
+        resultSetCompletenessEvidence = createTrustedResultSetCompletenessEvidence({
+          ...completenessScope,
+          observedSourceIds,
+          observedAt: completedAt,
+          source: "trusted-runtime-source-specific-result-set",
+        });
+      } catch {
+        resultSetCompletenessEvidence = input.resultSetCompletenessEvidence;
+      }
+    }
+    const resultSetCompleteness = requestedResultSetCompleteness === "complete" &&
+      validateTrustedResultSetCompletenessEvidence(resultSetCompletenessEvidence, completenessScope)
+      ? "complete"
+      : "partial";
+    const digest = createOperationDigest("material-usage-attribution-operation", {
+      printJobId,
+      printPlanId: printPlan?.printPlanId || null,
+      completedAt,
+      resultSetCompleteness,
+      materialUsages,
+      totalUsedLengthMm,
+    });
+    const existing = operationRecords.get(operationId);
+    if (existing && existing.digest !== digest) {
+      return createResult({
+        ok: false,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
+        action: "conflict",
+        reasons: ["usage-attribution-operation-payload-conflict"],
+      });
+    }
+    if (existing && existing.digest === digest) {
+      return createResult({
+        ...existing.result,
+        ok: true,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
+        action: "idempotent",
+      });
     }
     const hasSourceSpecificUsage = usageResolution.entriesBySnapshotId.size > 0;
     const unattributedUsage = [];
@@ -1447,7 +1474,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         ? entryLength
         : (usageState === "confirmed-unused" ? 0 : null);
       const evidence = usedLengthMm !== null && snapshot
-        ? createShadowSourceSpecificMaterialUsageEvidence({
+        ? createSourceSpecificUsageEvidence({
           materialSourceId: snapshot.materialSourceId,
           mountId: snapshot.mountId,
           snapshotId: snapshot.snapshotId,
@@ -1466,11 +1493,20 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           ]),
         })
         : null;
-      const debit = {
+      let debit = {
         status: "blocked",
         canDebit: false,
         reasons: ["shadow-only-attribution-not-debit-authority"],
       };
+      if (evidence?.trusted === true && snapshot?.trusted === true) {
+        debit = evaluateMaterialDebitEligibility({
+          mount: snapshot.spoolMount,
+          materialSource: snapshot.materialSource,
+          usageEvidence: evidence,
+          printStartSnapshot: snapshot,
+          continuity: input.continuityBySourceId?.[snapshot.materialSourceId] || {},
+        });
+      }
       if (evidence) {
         usageEvidence.push(evidence);
       }

@@ -386,9 +386,26 @@ Gate 18.9I-1:
 
 Gate 18.9I-2:
 
-- completion observation を JobMaterialSegment / shadow ledger event へ接続する。
-- trusted source-specific usage issuer と legacy cutover guard を追加する。
-- K2/CFS first universal-authoritative debit を実機証跡に基づいて有効化する。
+- completion observation runtimeを追加し、実機履歴で完了済みPrintJobとして観測できた場合だけ
+  JobMaterialSegment / shadow ledger eventへ接続する。
+- 完了時もcaller supplied `completedAt` やusage payloadだけをauthorityにせず、対象hostの
+  `printStore.history` 上の完了entry、Printer Core v3 device/session、任意のconnection generation
+  bindingを照合する。
+- K2/Creality履歴の `materialUsed:"3210,6543"` 形式は、print-start時点の
+  PrintPlan tool assignment順へ展開し、`T1A` / `T1B` などのprotocol aliasと
+  historical MaterialSource / SpoolMount snapshotへ対応付ける。
+- runtimeはcontract module内のtrusted print-start / source-specific usage issuer注入済み
+  repositoryを使う。public repositoryは引き続きtrusted usage evidenceやdebit authorityをmintしない。
+- result-set completenessは、同一runtime内で保存済みtrusted print-start snapshotのsource setと
+  完了usage setが一致する場合だけmodule-owned evidenceとして発行できる。caller supplied
+  `complete` やtrusted風booleanだけでは未出現sourceを0mm確定にしない。
+- 同一process内でCAS保存済みtrusted print-start snapshotをJSON cloneから再読した場合は、
+  module-owned attestationを再検証してdebit eligibility候補へ戻せる。restart/import後は
+  process secretが異なるため、再確認されるまでfail-closedに落ちる。
+- source continuity / fresh topologyなどのdebit eligibilityはsegmentへ保存するが、この段階では
+  managed spool残量、legacy `usageHistory`、ItemKeeper projectionへは反映しない。
+- completion writeも専用CAS境界を必須とし、`casApplied:true` が無いpersist結果では
+  runtime storeを進めない。
 
 Gate 19 / 19.5:
 

@@ -34,9 +34,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1590 (PR #440)
+ * @version 1.390.1593 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-09-01 18:41:23
+ * @lastModified 2026-09-01 19:34:24
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -1387,6 +1387,33 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
 }
 
 /**
+ * print-start snapshotが現在processで発行されたtrusted evidenceかを検査する。
+ *
+ * 【詳細説明】
+ * - repository保存時にJSON cloneされたsnapshotはWeakSet object identityを失うため、
+ *   同一process内で生成されたattestationが再計算できる場合だけtrusted rootへ戻す。
+ * - `SOURCE_SPECIFIC_USAGE_EVIDENCE_SECRET`はprocess lifetime secretなので、restart/importを跨いだ
+ *   旧snapshotはここを通過せず、Gate20のrevalidationまで自動debitできない。
+ *
+ * @private
+ * @function isTrustedPrintStartMaterialSnapshot
+ * @param {Object|null|undefined} snapshot - print-start snapshot候補。
+ * @returns {boolean} trusted snapshotとして扱える場合true。
+ */
+function isTrustedPrintStartMaterialSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return false;
+  }
+  if (TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.has(snapshot)) {
+    return true;
+  }
+  return snapshot.trusted === true &&
+    snapshot?.authority?.canBindUsage === true &&
+    snapshot?.provenance?.source === "printer-core-material-binding-repository" &&
+    snapshot?.provenance?.attestation === createPrintStartMaterialSnapshotSignature(snapshot);
+}
+
+/**
  * MaterialSource print binding repositoryを生成する。
  *
  * 【詳細説明】
@@ -1403,7 +1430,7 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
  */
 export function createMaterialAccountingPrintBindingRepository(initialStore = {}) {
   return createMaterialAccountingPrintBindingRepositoryWithIssuer({
-    createTrustedSourceSpecificMaterialUsageEvidence,
+    createSourceSpecificMaterialUsageEvidence,
     validateTrustedResultSetCompletenessEvidence,
     evaluateMaterialDebitEligibility,
     validateMaterialSource,
@@ -1430,6 +1457,7 @@ export function createTrustedPrintStartMaterialAccountingPrintBindingRepository(
   return createMaterialAccountingPrintBindingRepositoryWithIssuer({
     createTrustedSourceSpecificMaterialUsageEvidence,
     createPrintStartMaterialSnapshot: createTrustedPrintStartMaterialSnapshot,
+    createTrustedResultSetCompletenessEvidence,
     validateTrustedResultSetCompletenessEvidence,
     evaluateMaterialDebitEligibility,
     validateMaterialSource,
@@ -1780,12 +1808,7 @@ function validatePrintStartSnapshotForDebit(snapshot, mount, materialSource) {
   if (!snapshotCapturedAt) {
     reasons.push("print-start-snapshot-time-required");
   }
-  if (!TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.has(snapshot)) {
-    reasons.push("untrusted-print-start-snapshot");
-  } else if (
-    snapshot?.provenance?.source !== "printer-core-material-binding-repository" ||
-    snapshot?.provenance?.attestation !== createPrintStartMaterialSnapshotSignature(snapshot)
-  ) {
+  if (!isTrustedPrintStartMaterialSnapshot(snapshot)) {
     reasons.push("untrusted-print-start-snapshot");
   }
   return reasons;

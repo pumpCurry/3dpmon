@@ -12,13 +12,14 @@
  * - 実印刷ジョブID観測後にMaterialSource/SpoolMount snapshotを保存する境界を検証
  * - current mount変更ではなくprint-start時点のsource別mountで後続帰属できることを固定
  * - PrintBinding専用CAS成功後だけruntime storeを進める境界を検証
+ * - Gate 18.9I-2 のcompletion usage runtimeを検証
  *
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1592 (PR #440)
+ * @version 1.390.1593 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:47:47
+ * @lastModified 2026-09-01 19:34:24
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -191,6 +192,70 @@ function attachObservedPrintJob(data, options = {}) {
         history: [],
       },
       runtimeData: {
+        printerCoreV3Shadow: {
+          deviceId,
+          sessionId,
+          ...(connectionGeneration === null ? {} : { connectionGeneration }),
+          family: "k2",
+        },
+      },
+    },
+  };
+  return hostname;
+}
+
+/**
+ * runtime用monitorDataへ実機観測済み完了ジョブを設定する。
+ *
+ * 【詳細説明】
+ * - 完了時runtimeはcaller suppliedな完了時刻やjob IDをauthorityにしないため、
+ *   `printStore.history`に保存された機器観測済み履歴をfixture化する。
+ *
+ * @function attachObservedCompletedPrintJob
+ * @param {Object} data - runtime data。
+ * @param {Object=} options - 観測値オプション。
+ * @param {string=} options.hostname - 対象ホスト名。
+ * @param {string=} options.deviceId - Printer Core v3 device ID。
+ * @param {string=} options.sessionId - Printer Core v3 live shadow session ID。
+ * @param {number|null=} options.connectionGeneration - WebSocket接続世代。
+ * @param {string=} options.printJobId - 完了したPrintJob ID。
+ * @param {string|null=} options.completedAt - 機器で観測した完了時刻。
+ * @param {number=} options.totalUsedLengthMm - 機器で観測した総使用量。
+ * @returns {string} 設定したホスト名。
+ */
+function attachObservedCompletedPrintJob(data, options = {}) {
+  const hostname = options.hostname || "K2Pro-69E7";
+  const deviceId = options.deviceId || "serial:k2";
+  const sessionId = options.sessionId || "session:k2-live";
+  const connectionGeneration = options.connectionGeneration === null
+    ? null
+    : (options.connectionGeneration || 7);
+  const printJobId = options.printJobId || "job:actual-1001";
+  const completedAt = options.completedAt === null
+    ? null
+    : (options.completedAt || "2026-09-01T08:31:00.000Z");
+  data.machines = {
+    ...(data.machines || {}),
+    [hostname]: {
+      ...(data.machines?.[hostname] || {}),
+      storedData: {
+        ...(data.machines?.[hostname]?.storedData || {}),
+        printId: { rawValue: printJobId },
+      },
+      printStore: {
+        ...(data.machines?.[hostname]?.printStore || {}),
+        history: [
+          ...(data.machines?.[hostname]?.printStore?.history || []),
+          {
+            id: printJobId,
+            finishTime: completedAt,
+            printfinish: 1,
+            materialUsedMm: options.totalUsedLengthMm ?? 9753,
+          },
+        ],
+      },
+      runtimeData: {
+        ...(data.machines?.[hostname]?.runtimeData || {}),
         printerCoreV3Shadow: {
           deviceId,
           sessionId,
@@ -660,5 +725,162 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(result.ok).toBe(false);
     expect(result.reasons).toContain("print-binding-persist-failed");
     expect(mockMonitorData.materialAccountingPrintBindingStore).toBe(before);
+  });
+
+  it("完了時のsource-specific usageをtrusted print-start snapshotへ帰属しCAS成功後だけshadow ledgerへ保存する", async () => {
+    const data = createRuntimeData();
+    data.usageHistory = [];
+    data.filamentSpools = [
+      { id: "spool:a", remainingLengthMm: 330000 },
+      { id: "spool:b", remainingLengthMm: 330000 },
+    ];
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:completion-source-specific",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:completion-source-specific",
+    });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:completion-source-specific",
+      completedAt: "2026-09-01T08:31:00.000Z",
+      totalUsedLengthMm: 9753,
+    });
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:completion-source-specific",
+      resultSetCompleteness: "complete",
+      materialUsages: [
+        { protocolToolAlias: "T1A", usedLengthMm: 3210 },
+        { protocolToolAlias: "T1B", usedLengthMm: 6543 },
+      ],
+      continuityBySourceId: Object.fromEntries(plan.toolAssignments.map((assignment) => [
+        assignment.materialSourceId,
+        { sourceContinuity: true, freshTopology: true },
+      ])),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(result.segments.map((segment) => [
+      segment.protocolToolAlias,
+      segment.spoolId,
+      segment.usedLengthMm,
+      segment.debit.canDebit,
+    ])).toEqual([
+      ["T1A", "spool:a", 3210, true],
+      ["T1B", "spool:b", 6543, true],
+    ]);
+    expect(result.usageEvidence.every((evidence) => evidence.trusted === true)).toBe(true);
+    expect(data.materialAccountingPrintBindingStore.ledgerEvents).toHaveLength(2);
+    expect(data.materialAccountingPrintBindingStore.ledgerEvents.every((event) => event.authority.canDebitRemaining === true)).toBe(true);
+    expect(data.usageHistory).toEqual([]);
+    expect(data.filamentSpools.map((spool) => spool.remainingLengthMm)).toEqual([330000, 330000]);
+  });
+
+  it("K2履歴のmaterialUsed文字列をPrintPlan順のsource-specific usageへ展開する", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-history-material-used" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-material-used" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-history-material-used",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-history-material-used",
+      resultSetCompleteness: "complete",
+      continuityBySourceId: Object.fromEntries(plan.toolAssignments.map((assignment) => [
+        assignment.materialSourceId,
+        { sourceContinuity: true, freshTopology: true },
+      ])),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.map((segment) => [
+      segment.protocolToolAlias,
+      segment.usedLengthMm,
+      segment.debit.canDebit,
+    ])).toEqual([
+      ["T1A", 3210, true],
+      ["T1B", 6543, true],
+    ]);
+  });
+
+  it("完了時のCAS未適用ではsource-specific usageをruntime storeへ反映しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:completion-cas-fail" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      if (nextStore.printStartSnapshots.length > 0 && nextStore.jobMaterialSegments.length === 0) {
+        data.materialAccountingPrintBindingStore = nextStore;
+        return { ok: true, casApplied: true, backend: "test" };
+      }
+      return { ok: false, casApplied: false, reason: "cas-mismatch" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:completion-cas-fail" });
+    attachObservedCompletedPrintJob(data, { hostname, printJobId: "job:completion-cas-fail" });
+    const before = data.materialAccountingPrintBindingStore;
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:completion-cas-fail",
+      materialUsages: [{ protocolToolAlias: "T1A", usedLengthMm: 3210 }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("print-binding-persist-failed");
+    expect(data.materialAccountingPrintBindingStore).toBe(before);
+  });
+
+  it("完了履歴が観測できない場合はcaller supplied completedAtだけではusageを保存しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:missing-completion" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:missing-completion" });
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:missing-completion",
+      completedAt: "2026-09-01T08:31:00.000Z",
+      materialUsages: [{ protocolToolAlias: "T1A", usedLengthMm: 3210 }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-print-completion-required");
+    expect(data.materialAccountingPrintBindingStore.jobMaterialSegments).toEqual([]);
   });
 });

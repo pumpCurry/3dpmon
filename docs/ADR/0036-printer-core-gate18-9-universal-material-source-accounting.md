@@ -499,6 +499,17 @@ Gate 18.9 must cover:
   boundary before advancing runtime state. PrintBinding store import uses the
   same CAS boundary, normal shared flush cannot write this key, and restore
   quarantines same-ID payload conflicts instead of picking a silent winner.
+- completion binding accepting source-specific usage only after the completed
+  job is observed in machine history with matching Printer Core v3
+  device/session evidence and any caller-bound connection generation. Caller
+  supplied completion time or usage payload alone is insufficient.
+- K2/Creality `materialUsed` CSV is parsed in PrintPlan tool-assignment order
+  and stored as source-specific JobMaterialSegment / shadow ledger evidence.
+  It does not mutate managed spool remaining, legacy `usageHistory`, or
+  ItemKeeper projection in Gate 18.9I-2.
+- trusted print-start snapshots restored from same-process CAS store may regain
+  debit eligibility only through module-owned attestation validation. Restart
+  or import loses that process-local trust and must revalidate before debit.
 - legacy cutover sealing future jobs out of legacy intervals
 
 ## Consequences

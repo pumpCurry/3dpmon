@@ -103,8 +103,12 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   import時もbase/currentからmerge候補を作り、CAS成功後だけruntimeへ反映する。
   restore時のmergeはsemantic ID単位でdedupeし、同一IDのpayload conflictは
   `retainedUnsupportedEntries` へ隔離する。
-  この段階ではcompletion usage observation、managed spool残量debit、
-  legacy `usageHistory`、ItemKeeper projectionへはまだ接続しない。
+  Gate 18.9I-2では、完了済みPrintJobを `printStore.history` で観測できた場合だけ
+  completion usage runtimeを実行し、保存済みtrusted print-start snapshotへsource-specific usageを
+  帰属する。K2/Creality履歴の `materialUsed` CSVはPrintPlan assignment順に展開して
+  `T1A` / `T1B` などのprotocol aliasへ対応付ける。caller supplied `completedAt` やusage payloadだけでは
+  完了扱いにせず、device/session/generation境界と専用CAS `casApplied:true` を要求する。
+  この段階ではmanaged spool残量debit、legacy `usageHistory`、ItemKeeper projectionへはまだ接続しない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。

@@ -11,16 +11,17 @@
  * - Gate 18.9I のprint-start binding repositoryをmonitorDataへ接続
  * - 実機で観測できたPrintJob IDを条件に、開始時点のMaterialSource/SpoolMount snapshotを保存
  * - CFS/外部スプールのsource別使用量を後続Gateで帰属するためのtrusted print-start証跡を構築
+ * - 印刷完了履歴からsource-specific usageをshadow ledgerへCAS保存
  *
  * 【公開関数一覧】
- * - {@link createMaterialAccountingPrintBindingRuntime}：print-start binding runtimeを生成
+ * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1592 (PR #440)
+ * @version 1.390.1593 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:47:47
+ * @lastModified 2026-09-01 19:34:24
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9J でcompletion usage observation runtimeを接続する
+ * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
  */
 
 "use strict";
@@ -159,6 +160,253 @@ function collectCurrentPrintJobObservationsFromMachine(machine) {
     });
   }
   return Array.from(observationsById.values());
+}
+
+/**
+ * 完了履歴entryが成功完了として扱えるか判定する。
+ *
+ * 【詳細説明】
+ * - K1/K2/IR3互換履歴は`printfinish`、`status`、`finishTime`の揺れを持つ。
+ * - 完了時source usage runtimeでは、履歴上の完了シグナルが無いentryをcaller補完だけで採用しない。
+ *
+ * @private
+ * @function isCompletedHistoryEntry
+ * @param {Object|null|undefined} entry - printStore.history entry候補。
+ * @returns {boolean} 完了履歴として扱える場合true。
+ */
+function isCompletedHistoryEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  if (Number(entry.printfinish) === 1) {
+    return true;
+  }
+  const status = toTrimmedString(entry.status || entry.result || entry.state).toLowerCase();
+  if (["completed", "complete", "success", "succeeded", "done"].includes(status)) {
+    return true;
+  }
+  return !!normalizeObservedTime(entry.finishTime || entry.endTime || entry.completedAt || entry.endtime);
+}
+
+/**
+ * 完了履歴entryからPrintJob IDを解決する。
+ *
+ * @private
+ * @function resolveHistoryPrintJobId
+ * @param {Object|null|undefined} entry - printStore.history entry候補。
+ * @returns {string} PrintJob ID。
+ */
+function resolveHistoryPrintJobId(entry) {
+  return toTrimmedString(entry?.id || entry?.printId || entry?.printStartTime || entry?.starttime);
+}
+
+/**
+ * 完了履歴entryから完了観測時刻を解決する。
+ *
+ * @private
+ * @function resolveHistoryCompletedAt
+ * @param {Object|null|undefined} entry - printStore.history entry候補。
+ * @returns {string|null} 完了時刻。
+ */
+function resolveHistoryCompletedAt(entry) {
+  return normalizeObservedTime(entry?.finishTime || entry?.endTime || entry?.completedAt || entry?.endtime);
+}
+
+/**
+ * MachineDataから完了済みjob観測候補を収集する。
+ *
+ * 【詳細説明】
+ * - 完了時には`printStore.current`が消えている場合があるため、永続履歴の完了entryをauthorityにする。
+ * - device/session/generationは現在接続中のPrinter Core v3 shadow recordから束縛し、別機器履歴の流用を防ぐ。
+ *
+ * @private
+ * @function collectCompletedPrintJobObservationsFromMachine
+ * @param {Object|null|undefined} machine - MachineData候補。
+ * @returns {Array<{printJobId:string,completedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,historyEntry:Object}>} 完了job観測候補。
+ */
+function collectCompletedPrintJobObservationsFromMachine(machine) {
+  const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || {};
+  const deviceId = toTrimmedString(shadowRecord.deviceId || shadowRecord.printerCoreV3ShadowDeviceId);
+  const sessionId = toTrimmedString(shadowRecord.sessionId || shadowRecord.printerCoreV3ShadowSessionId);
+  const connectionGenerationCandidate = Number(
+    shadowRecord.connectionGeneration || shadowRecord.printerCoreV3ConnectionGeneration
+  );
+  const connectionGeneration = Number.isFinite(connectionGenerationCandidate) && connectionGenerationCandidate > 0
+    ? connectionGenerationCandidate
+    : null;
+  const observations = [];
+  for (const entry of Array.isArray(machine?.printStore?.history) ? machine.printStore.history : []) {
+    if (!isCompletedHistoryEntry(entry)) {
+      continue;
+    }
+    const printJobId = resolveHistoryPrintJobId(entry);
+    if (!printJobId) {
+      continue;
+    }
+    observations.push({
+      printJobId,
+      completedAt: resolveHistoryCompletedAt(entry),
+      deviceId,
+      sessionId,
+      connectionGeneration,
+      historyEntry: entry,
+    });
+  }
+  return observations;
+}
+
+/**
+ * 実機観測済み完了PrintJobを解決する。
+ *
+ * 【詳細説明】
+ * - `request.printJobId`は期待値として扱い、履歴に完了済みjobが観測された場合だけ採用する。
+ * - session/generationはprint-start runtimeと同じく、send-time側が束縛した場合に照合する。
+ *
+ * @private
+ * @function resolveObservedCompletedPrintJob
+ * @param {Object} data - monitorData互換データ。
+ * @param {Object} request - runtime request。
+ * @returns {{ok:boolean,printJobId:string,completedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,reasons:string[],observedPrintJobIds:string[],historyEntry:Object|null}} 解決結果。
+ */
+function resolveObservedCompletedPrintJob(data, request) {
+  const requestedPrintJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
+  const hostname = toTrimmedString(request.hostname || request.host);
+  const expectedDeviceId = toTrimmedString(request.printPlan?.deviceId || request.deviceId);
+  const expectedSessionId = toTrimmedString(request.sessionId || request.expectedSessionId);
+  const expectedConnectionGeneration = Number(request.connectionGeneration || request.expectedConnectionGeneration || 0);
+  const machines = data?.machines && typeof data.machines === "object" ? data.machines : {};
+  const machineEntries = hostname
+    ? [[hostname, machines[hostname]]]
+    : Object.entries(machines);
+  const observations = [];
+  for (const [, machine] of machineEntries) {
+    observations.push(...collectCompletedPrintJobObservationsFromMachine(machine));
+  }
+  const observedIds = [...new Set(observations.map((observation) => observation.printJobId))];
+  const validateObservation = (observation) => {
+    if (!observation.deviceId) {
+      return "observed-print-device-required";
+    }
+    if (expectedDeviceId && observation.deviceId !== expectedDeviceId) {
+      return "observed-print-device-mismatch";
+    }
+    if (!observation.sessionId) {
+      return "observed-print-session-required";
+    }
+    if (expectedSessionId && observation.sessionId !== expectedSessionId) {
+      return "observed-print-session-mismatch";
+    }
+    if (expectedConnectionGeneration > 0) {
+      if (observation.connectionGeneration === null) {
+        return "observed-print-connection-generation-required";
+      }
+      if (observation.connectionGeneration !== expectedConnectionGeneration) {
+        return "observed-print-connection-generation-mismatch";
+      }
+    }
+    if (!observation.completedAt) {
+      return "observed-print-completed-time-required";
+    }
+    return null;
+  };
+  const createOkResolution = (observation) => ({
+    ok: true,
+    printJobId: observation.printJobId,
+    completedAt: observation.completedAt,
+    deviceId: observation.deviceId,
+    sessionId: observation.sessionId,
+    connectionGeneration: observation.connectionGeneration,
+    reasons: [],
+    observedPrintJobIds: observedIds,
+    historyEntry: observation.historyEntry,
+  });
+  if (requestedPrintJobId) {
+    const matchingObservations = observations.filter((observation) => observation.printJobId === requestedPrintJobId);
+    for (const observation of matchingObservations) {
+      const rejectionReason = validateObservation(observation);
+      if (!rejectionReason) {
+        return createOkResolution(observation);
+      }
+    }
+    const rejectionReasons = matchingObservations
+      .map((observation) => validateObservation(observation))
+      .filter(Boolean);
+    return {
+      ok: false,
+      printJobId: "",
+      completedAt: null,
+      deviceId: "",
+      sessionId: "",
+      connectionGeneration: null,
+      reasons: observations.length > 0
+        ? (rejectionReasons.length > 0 ? [...new Set(rejectionReasons)] : ["observed-print-completion-required"])
+        : ["observed-print-completion-required"],
+      observedPrintJobIds: observedIds,
+      historyEntry: null,
+    };
+  }
+  const validObservations = [];
+  const rejectionReasons = [];
+  for (const observation of observations) {
+    const rejectionReason = validateObservation(observation);
+    if (rejectionReason) {
+      rejectionReasons.push(rejectionReason);
+      continue;
+    }
+    validObservations.push(observation);
+  }
+  const uniqueValidIds = [...new Set(validObservations.map((observation) => observation.printJobId))];
+  if (uniqueValidIds.length === 1) {
+    const observation = validObservations.find((entry) => entry.printJobId === uniqueValidIds[0]);
+    return createOkResolution(observation);
+  }
+  return {
+    ok: false,
+    printJobId: "",
+    completedAt: null,
+    deviceId: "",
+    sessionId: "",
+    connectionGeneration: null,
+    reasons: uniqueValidIds.length > 1
+      ? ["observed-print-job-id-ambiguous"]
+      : (rejectionReasons.length > 0 ? [...new Set(rejectionReasons)] : ["observed-print-completion-required"]),
+    observedPrintJobIds: observedIds,
+    historyEntry: null,
+  };
+}
+
+/**
+ * K2/Creality形式のsource別使用量文字列をMaterialUsage配列へ変換する。
+ *
+ * 【詳細説明】
+ * - `materialUsed:"3210,6543"` はlogical tool順の使用量として観測されるため、
+ *   print-start時点のPrintPlan assignmentへ対応付けて`protocolToolAlias`を付け直す。
+ * - 空値や不正値は返さず、runtime側で明示`materialUsages`やtotal-onlyへfallbackさせる。
+ *
+ * @private
+ * @function parseMaterialUsagesFromHistoryEntry
+ * @param {Object|null|undefined} historyEntry - printStore.history entry。
+ * @param {Object} printPlan - PrintPlan。
+ * @returns {Object[]} source-specific usage候補。
+ */
+function parseMaterialUsagesFromHistoryEntry(historyEntry, printPlan) {
+  const raw = toTrimmedString(historyEntry?.materialUsed || historyEntry?.raw?.materialUsed);
+  if (!raw) {
+    return [];
+  }
+  const assignments = Array.isArray(printPlan?.toolAssignments) ? printPlan.toolAssignments : [];
+  return raw
+    .split(",")
+    .map((part, index) => ({ part: part.trim(), assignment: assignments[index] }))
+    .filter(({ part, assignment }) => part !== "" && assignment)
+    .map(({ part, assignment }) => ({
+      toolId: assignment.toolId,
+      protocolToolAlias: assignment.protocolToolAlias || assignment.toolAlias,
+      materialSourceId: assignment.materialSourceId,
+      usedLengthMm: Number(part),
+      source: "firmware-source-specific",
+    }))
+    .filter((entry) => Number.isFinite(entry.usedLengthMm) && entry.usedLengthMm >= 0);
 }
 
 /**
@@ -620,7 +868,110 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
     };
   }
 
+  /**
+   * 実機で観測したprint completionをsource-specific usageへ固定する。
+   *
+   * 【詳細説明】
+   * - 保存済みtrusted print-start snapshotを基準にし、完了時点のcurrent mountへ後付け帰属しない。
+   * - 完了履歴が機器から観測できない場合はcaller supplied `completedAt`だけでは保存しない。
+   * - このGateではshadow ledger eventを保存するだけで、既存`usageHistory`やスプール残量は更新しない。
+   *
+   * @function recordObservedPrintCompletion
+   * @param {Object} request - 記録要求。
+   * @param {Object} request.printPlan - 実行したPrintPlan。
+   * @param {string=} request.printJobId - 完了したPrintJob ID。
+   * @param {Object[]=} request.materialUsages - source-specific usage観測。
+   * @param {number=} request.totalUsedLengthMm - total-only usage観測。
+   * @param {"complete"|"partial"=} request.resultSetCompleteness - source-specific結果集合の完全性。
+   * @param {Object<string,Object>=} request.continuityBySourceId - source continuity evidence。
+   * @returns {Promise<Object>} runtime result。
+   */
+  async function recordObservedPrintCompletion(request = {}) {
+    const previousStore = snapshot();
+    const printPlan = request.printPlan;
+    const completionResolution = resolveObservedCompletedPrintJob(data, request);
+    if (!completionResolution.ok) {
+      return createBlockedResult(completionResolution.reasons, previousStore, {
+        observedPrintJobIds: completionResolution.observedPrintJobIds,
+      });
+    }
+    if (Object.prototype.hasOwnProperty.call(request, "completedAt") &&
+        request.completedAt !== null &&
+        request.completedAt !== undefined &&
+        request.completedAt !== "" &&
+        !normalizeObservedTime(request.completedAt)) {
+      return createBlockedResult(["observed-print-completed-time-invalid"], previousStore, {
+        observedPrintJobIds: completionResolution.observedPrintJobIds,
+      });
+    }
+    const printJobId = completionResolution.printJobId;
+    const completedAt = completionResolution.completedAt;
+    const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(previousStore);
+    const materialUsages = Array.isArray(request.materialUsages) && request.materialUsages.length > 0
+      ? request.materialUsages
+      : parseMaterialUsagesFromHistoryEntry(completionResolution.historyEntry, printPlan);
+    const attributionOperationId = toTrimmedString(request.attributionOperationId) ||
+      `usage:${createPrinterCoreV3DeterministicId("material-usage-attribution-runtime", [
+        stableStringifyPrinterCoreV3Value({
+          printJobId,
+          printPlanId: printPlan?.printPlanId || null,
+          deviceId: printPlan?.deviceId || null,
+        }),
+      ])}`;
+    const totalUsedLengthMm = request.totalUsedLengthMm ??
+      completionResolution.historyEntry?.materialUsedMm ??
+      completionResolution.historyEntry?.usagematerial ??
+      completionResolution.historyEntry?.usedMaterialLength;
+    const result = repository.recordUsageAttribution({
+      printPlan,
+      printJobId,
+      completedAt,
+      attributionOperationId,
+      materialUsages,
+      totalUsedLengthMm,
+      resultSetCompleteness: request.resultSetCompleteness,
+      resultSetCompletenessEvidence: request.resultSetCompletenessEvidence,
+      continuityBySourceId: request.continuityBySourceId,
+    });
+    if (!result.ok && result.status !== MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.PENDING) {
+      return {
+        ...result,
+        store: cloneJsonValue(previousStore),
+      };
+    }
+    const nextStore = repository.toJSON();
+    const persistResult = await persist({
+      previousStore,
+      nextStore,
+      result,
+      request: {
+        printPlan,
+        printJobId,
+        completedAt,
+        attributionOperationId,
+        observedDeviceId: completionResolution.deviceId,
+        observedSessionId: completionResolution.sessionId,
+        observedConnectionGeneration: completionResolution.connectionGeneration,
+      },
+    });
+    if (!isPersistOk(persistResult)) {
+      return createBlockedResult(
+        [...(Array.isArray(result.reasons) ? result.reasons : []), "print-binding-persist-failed"],
+        previousStore,
+        { persistResult }
+      );
+    }
+    data.materialAccountingPrintBindingStore =
+      normalizeStoredMaterialAccountingPrintBindingStore(nextStore);
+    return {
+      ...result,
+      persistResult,
+      store: cloneJsonValue(data.materialAccountingPrintBindingStore),
+    };
+  }
+
   return Object.freeze({
+    recordObservedPrintCompletion,
     recordObservedPrintStart,
     snapshot,
   });
