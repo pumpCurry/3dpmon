@@ -16,9 +16,9 @@
  * - {@link parseArgs}：CLI引数を解析
  * - {@link runK2CfsReadOnlyCalibration}：read-only calibrationを実行
  *
- * @version 1.390.1551 (PR #439)
+ * @version 1.390.1611 (PR #440)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:51:15
+ * @lastModified 2026-09-01 22:35:00
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -576,6 +576,9 @@ export async function runK2CfsReadOnlyCalibration(options) {
   }
   const infoOk = !options.requireInfoModel || printerInfo?.modelMatched === true;
   const observedStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "observed").length;
+  const partialStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "partial").length;
+  const timeoutStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "timeout").length;
+  const errorStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "error").length;
   const observedBoxsInfoProbeCount = boxsInfoSeries.filter((probe) => probe.status === "observed").length;
   const failedStatusProbeCount = printerStatusSeries.length - observedStatusProbeCount;
   const failedBoxsInfoProbeCount = boxsInfoSeries.length - observedBoxsInfoProbeCount;
@@ -600,6 +603,9 @@ export async function runK2CfsReadOnlyCalibration(options) {
     boxsInfoSeries,
     statusProbeCount: printerStatusSeries.length,
     observedStatusProbeCount,
+    partialStatusProbeCount,
+    timeoutStatusProbeCount,
+    errorStatusProbeCount,
     failedStatusProbeCount,
     boxsInfoProbeCount: boxsInfoSeries.length,
     observedBoxsInfoProbeCount,

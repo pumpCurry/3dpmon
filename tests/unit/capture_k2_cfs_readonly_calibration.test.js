@@ -4,9 +4,9 @@
  * - K2/F012 live certification前に、/info、printer status、boxsInfoを副作用なしで観測することを検証する。
  * - read-only calibrationがCFS操作frameを送らず、複数probe結果をJSONへ保持することを検証する。
  *
- * @version 1.390.1610 (PR #440)
+ * @version 1.390.1611 (PR #440)
  * @since 1.390.1545 (PR #439)
- * @lastModified 2026-09-01 22:24:00
+ * @lastModified 2026-09-01 22:35:00
  */
 
 import { EventEmitter } from "node:events";
@@ -342,6 +342,9 @@ describe("capture_k2_cfs_readonly_calibration", () => {
       reason: "read-only-calibration-incomplete",
       statusProbeCount: 2,
       observedStatusProbeCount: 0,
+      partialStatusProbeCount: 2,
+      timeoutStatusProbeCount: 0,
+      errorStatusProbeCount: 0,
       failedStatusProbeCount: 2,
       boxsInfoProbeCount: 1,
       observedBoxsInfoProbeCount: 1,
